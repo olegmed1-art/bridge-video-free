@@ -35,9 +35,10 @@ def download_drive_file(service, file_id, dest):
 
 
 def ensure_folder(service, parent_id, name):
+    escaped = name.replace("'", "\\'")
     q = (
         f"'{parent_id}' in parents and trashed=false and "
-        f"mimeType='application/vnd.google-apps.folder' and name='{name.replace(chr(39), chr(92)+chr(39))}'"
+        f"mimeType='application/vnd.google-apps.folder' and name='{escaped}'"
     )
     res = service.files().list(q=q, spaces="drive", fields="files(id,name)", supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
     if res.get("files"):
@@ -62,7 +63,6 @@ def srt_time(seconds):
 
 def main():
     file_id = os.environ["DRIVE_FILE_ID"]
-    output_parent = os.environ["DRIVE_OUTPUT_FOLDER_ID"]
     secret_json = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
     model_name = os.environ.get("WHISPER_MODEL", "small")
 
@@ -75,6 +75,10 @@ def main():
         fields="id,name,mimeType,size,modifiedTime,parents",
         supportsAllDrives=True,
     ).execute()
+    parents = meta.get("parents", [])
+    if not parents:
+        raise RuntimeError("У исходного файла не найден родительский каталог Drive")
+    output_parent = os.environ.get("DRIVE_OUTPUT_FOLDER_ID") or parents[0]
 
     work = pathlib.Path("work")
     work.mkdir(exist_ok=True)
@@ -117,7 +121,7 @@ def main():
             "mime_type": meta.get("mimeType"),
             "size_bytes": int(meta.get("size", 0)),
             "modified_time": meta.get("modifiedTime"),
-            "parent_ids": meta.get("parents", []),
+            "parent_ids": parents,
             "duration_seconds": duration,
         },
         "transcription": {
