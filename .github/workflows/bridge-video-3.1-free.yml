@@ -1,0 +1,76 @@
+name: bridge-video-3.1-free
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: "Opaque deterministic job id"
+        required: true
+        type: string
+  push:
+    paths:
+      - 'run_requests/*.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-${{ github.event_name }}-${{ github.sha }}-${{ inputs.job_id }}
+  cancel-in-progress: false
+
+jobs:
+  free-guard-and-worker:
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+
+    env:
+      BRIDGE_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+      BRIDGE_RUNNER_LABEL: ubuntu-24.04
+      BRIDGE_LARGER_RUNNER: "false"
+      BRIDGE_PAID_CLOUD: "false"
+      BRIDGE_BILLING_FALLBACK: "false"
+      PYTHONUNBUFFERED: "1"
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      WHISPER_MODEL: small
+
+    steps:
+      - name: Checkout public technical code only
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Resolve opaque job id
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            JOB_ID='${{ inputs.job_id }}'
+          else
+            REQUEST_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^run_requests/.*\.txt$' | head -n 1)"
+            test -n "$REQUEST_FILE"
+            JOB_ID="$(basename "$REQUEST_FILE" .txt)"
+          fi
+          test -n "$JOB_ID"
+          echo "BRIDGE_JOB_ID=$JOB_ID" >> "$GITHUB_ENV"
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install free open-source runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+          python -m pip install --disable-pip-version-check \
+            google-auth requests faster-whisper pillow imagehash \
+            opencv-python-headless reportlab pymupdf
+
+      - name: FREE-GUARD
+        run: python bridge_worker_3_1_free.py
+
+      - name: Process one opaque Drive job
+        run: python run_drive_3_1_free.py
+
+      # User media/transcripts are never uploaded as GitHub workflow artifacts.
