@@ -1,0 +1,59 @@
+name: Process bridge video
+
+on:
+  workflow_dispatch:
+    inputs:
+      drive_file_id:
+        description: 'Google Drive file ID'
+        required: true
+        type: string
+      whisper_model:
+        description: 'Whisper model'
+        required: false
+        default: 'small'
+        type: choice
+        options:
+          - small
+          - medium
+
+permissions:
+  contents: read
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      DRIVE_FILE_ID: ${{ inputs.drive_file_id }}
+      WHISPER_MODEL: ${{ inputs.whisper_model }}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Free guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Repository visibility: ${{ github.event.repository.visibility }}"
+          test "${{ github.event.repository.visibility }}" = "public"
+          test -n "$GOOGLE_SERVICE_ACCOUNT_JSON"
+          echo "FREE-GUARD OK: public repository, standard GitHub-hosted runner, no paid inference API."
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Process Drive video
+        run: python scripts/process_drive_video.py
