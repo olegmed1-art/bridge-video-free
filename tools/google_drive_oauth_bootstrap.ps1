@@ -1,5 +1,6 @@
 param(
-    [string]$ClientJsonPath = ""
+    [string]$ClientJsonPath = "",
+    [string]$Repo = "olegmed1-art/bridge-video-free"
 )
 
 $ErrorActionPreference = "Stop"
@@ -8,11 +9,36 @@ function Base64Url([byte[]]$bytes) {
     return [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+','-').Replace('/','_')
 }
 
+function RandomBytes([int]$count) {
+    $bytes = New-Object byte[] $count
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
+    return $bytes
+}
+
+function UrlEncode([string]$value) {
+    return [Uri]::EscapeDataString($value)
+}
+
+function ParseQuery([string]$query) {
+    $result = @{}
+    $q = $query.TrimStart('?')
+    if (-not $q) { return $result }
+    foreach ($pair in $q.Split('&')) {
+        if (-not $pair) { continue }
+        $parts = $pair.Split('=', 2)
+        $key = [Uri]::UnescapeDataString($parts[0].Replace('+',' '))
+        $value = if ($parts.Count -gt 1) { [Uri]::UnescapeDataString($parts[1].Replace('+',' ')) } else { "" }
+        $result[$key] = $value
+    }
+    return $result
+}
+
 if (-not $ClientJsonPath) {
-    $candidates = @(
-        Get-ChildItem -Path $PWD -Filter "client_secret_*.json" -File -ErrorAction SilentlyContinue
-        Get-ChildItem -Path "$HOME\Downloads" -Filter "client_secret_*.json" -File -ErrorAction SilentlyContinue
-    ) | Sort-Object LastWriteTime -Descending
+    $candidates = @()
+    $candidates += Get-ChildItem -Path $PWD -Filter "client_secret_*.json" -File -ErrorAction SilentlyContinue
+    $candidates += Get-ChildItem -Path "$HOME\Downloads" -Filter "client_secret_*.json" -File -ErrorAction SilentlyContinue
+    $candidates = @($candidates | Sort-Object LastWriteTime -Descending)
     if ($candidates.Count -eq 0) {
         throw "OAuth client JSON not found. Pass -ClientJsonPath <path-to-client_secret.json>."
     }
@@ -25,62 +51,62 @@ $clientId = [string]$app.client_id
 $clientSecret = [string]$app.client_secret
 if (-not $clientId -or -not $clientSecret) { throw "client_id/client_secret missing." }
 
-# Reserve an ephemeral localhost port.
-$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+# Reserve an ephemeral loopback port. Desktop OAuth clients support this flow.
+$listener = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
 $listener.Start()
 $port = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
 $redirectUri = "http://127.0.0.1:$port/"
 
-# PKCE + state.
-$verifierBytes = New-Object byte[] 64
-[System.Security.Cryptography.RandomNumberGenerator]::Fill($verifierBytes)
-$verifier = Base64Url $verifierBytes
+# PKCE + CSRF state.
+$verifier = Base64Url (RandomBytes 64)
 $sha = [System.Security.Cryptography.SHA256]::Create()
-$challenge = Base64Url ($sha.ComputeHash([Text.Encoding]::ASCII.GetBytes($verifier)))
-$stateBytes = New-Object byte[] 24
-[System.Security.Cryptography.RandomNumberGenerator]::Fill($stateBytes)
-$state = Base64Url $stateBytes
-
+try { $challenge = Base64Url ($sha.ComputeHash([Text.Encoding]::ASCII.GetBytes($verifier))) } finally { $sha.Dispose() }
+$state = Base64Url (RandomBytes 24)
 $scope = "https://www.googleapis.com/auth/drive"
-$q = [System.Web.HttpUtility]::ParseQueryString("")
-$q["client_id"] = $clientId
-$q["redirect_uri"] = $redirectUri
-$q["response_type"] = "code"
-$q["scope"] = $scope
-$q["access_type"] = "offline"
-$q["prompt"] = "consent"
-$q["include_granted_scopes"] = "true"
-$q["state"] = $state
-$q["code_challenge"] = $challenge
-$q["code_challenge_method"] = "S256"
-$authUrl = "https://accounts.google.com/o/oauth2/v2/auth?" + $q.ToString()
+
+$query = @(
+    "client_id=$(UrlEncode $clientId)",
+    "redirect_uri=$(UrlEncode $redirectUri)",
+    "response_type=code",
+    "scope=$(UrlEncode $scope)",
+    "access_type=offline",
+    "prompt=consent",
+    "include_granted_scopes=true",
+    "state=$(UrlEncode $state)",
+    "code_challenge=$(UrlEncode $challenge)",
+    "code_challenge_method=S256"
+) -join '&'
+$authUrl = "https://accounts.google.com/o/oauth2/v2/auth?$query"
 
 Write-Host "Opening Google authorization in your browser..."
 Start-Process $authUrl
 Write-Host "Waiting for Google authorization callback on localhost..."
 
-$client = $listener.AcceptTcpClient()
-$stream = $client.GetStream()
-$reader = New-Object System.IO.StreamReader($stream)
-$requestLine = $reader.ReadLine()
-while (($line = $reader.ReadLine()) -ne "" -and $null -ne $line) { }
+try {
+    $client = $listener.AcceptTcpClient()
+    $stream = $client.GetStream()
+    $reader = New-Object System.IO.StreamReader($stream)
+    $requestLine = $reader.ReadLine()
+    while (($line = $reader.ReadLine()) -ne "" -and $null -ne $line) { }
 
-if (-not $requestLine -or $requestLine -notmatch '^GET\s+([^\s]+)\s+HTTP/') {
-    throw "Invalid localhost OAuth callback."
+    if (-not $requestLine -or $requestLine -notmatch '^GET\s+([^\s]+)\s+HTTP/') {
+        throw "Invalid localhost OAuth callback."
+    }
+    $target = $matches[1]
+    $callback = [Uri]("http://127.0.0.1:$port" + $target)
+    $params = ParseQuery $callback.Query
+
+    $html = "<html><body style='font-family:sans-serif'><h2>Bridge Video OAuth complete</h2><p>You can close this browser tab and return to PowerShell.</p></body></html>"
+    $body = [Text.Encoding]::UTF8.GetBytes($html)
+    $headers = "HTTP/1.1 200 OK`r`nContent-Type: text/html; charset=utf-8`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n"
+    $head = [Text.Encoding]::ASCII.GetBytes($headers)
+    $stream.Write($head,0,$head.Length)
+    $stream.Write($body,0,$body.Length)
+    $stream.Flush()
+    $client.Close()
+} finally {
+    $listener.Stop()
 }
-$target = $matches[1]
-$callback = [Uri]("http://127.0.0.1:$port" + $target)
-$params = [System.Web.HttpUtility]::ParseQueryString($callback.Query)
-
-$html = "<html><body style='font-family:sans-serif'><h2>Bridge Video OAuth complete</h2><p>You can close this browser tab and return to PowerShell.</p></body></html>"
-$body = [Text.Encoding]::UTF8.GetBytes($html)
-$headers = "HTTP/1.1 200 OK`r`nContent-Type: text/html; charset=utf-8`r`nContent-Length: $($body.Length)`r`nConnection: close`r`n`r`n"
-$head = [Text.Encoding]::ASCII.GetBytes($headers)
-$stream.Write($head,0,$head.Length)
-$stream.Write($body,0,$body.Length)
-$stream.Flush()
-$client.Close()
-$listener.Stop()
 
 if ($params["error"]) { throw "Google OAuth error: $($params['error'])" }
 if ($params["state"] -ne $state) { throw "OAuth state mismatch." }
@@ -110,8 +136,22 @@ Set-Clipboard -Value $packed
 $out = Join-Path $HOME "bridge-drive-oauth-secret.json"
 Set-Content -LiteralPath $out -Value $packed -Encoding UTF8
 
+$gh = Get-Command gh -ErrorAction SilentlyContinue
+$secretSet = $false
+if ($gh) {
+    try {
+        $packed | & gh secret set GOOGLE_DRIVE_OAUTH_JSON --repo $Repo 2>$null
+        if ($LASTEXITCODE -eq 0) { $secretSet = $true }
+    } catch { }
+}
+
 Write-Host ""
-Write-Host "SUCCESS: GOOGLE_DRIVE_OAUTH_JSON is copied to the clipboard."
-Write-Host "A backup was saved to: $out"
-Write-Host "Create one GitHub Actions repository secret named GOOGLE_DRIVE_OAUTH_JSON and paste the clipboard value."
-Write-Host "Do not commit this file or its contents to the repository."
+Write-Host "SUCCESS: Google Drive refresh token obtained."
+if ($secretSet) {
+    Write-Host "GitHub secret GOOGLE_DRIVE_OAUTH_JSON was set automatically for $Repo."
+} else {
+    Write-Host "GOOGLE_DRIVE_OAUTH_JSON is copied to the clipboard."
+    Write-Host "Create one GitHub Actions repository secret named GOOGLE_DRIVE_OAUTH_JSON and paste the clipboard value."
+}
+Write-Host "A local backup was saved to: $out"
+Write-Host "Do not commit the backup or its contents to the repository."
