@@ -19,7 +19,7 @@ import google.auth
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 
-import run_drive_3_1_free as runner
+from run_drive_3_1_free_generic import main as generic_main
 
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
@@ -84,7 +84,5 @@ def drive_token():
     return user_oauth_token() or adc_token()
 
 
-runner.token = drive_token
-
 if __name__ == "__main__":
-    runner.main()
+    generic_main(drive_token)
