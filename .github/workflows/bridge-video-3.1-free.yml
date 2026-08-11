@@ -33,6 +33,7 @@ jobs:
       BRIDGE_BILLING_FALLBACK: "false"
       PYTHONUNBUFFERED: "1"
       WHISPER_MODEL: small
+      GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
 
     steps:
       - name: Checkout public technical code only
@@ -91,10 +92,6 @@ jobs:
           PY
 
       - name: Google Drive user OAuth preflight
-        env:
-          GOOGLE_DRIVE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_DRIVE_OAUTH_CLIENT_ID }}
-          GOOGLE_DRIVE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_DRIVE_OAUTH_CLIENT_SECRET }}
-          GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
@@ -102,7 +99,7 @@ jobs:
           from run_drive_3_1_free_oidc import user_oauth_token
           token = user_oauth_token()
           if not token:
-              raise SystemExit('BLOCKED_ACCESS: Google Drive user OAuth secrets are not configured')
+              raise SystemExit('BLOCKED_ACCESS: GOOGLE_DRIVE_OAUTH_JSON secret is not configured')
           print('Google Drive user OAuth preflight: PASS')
           PY
 
@@ -110,10 +107,6 @@ jobs:
         run: python bridge_worker_3_1_free.py
 
       - name: Process one opaque Drive job
-        env:
-          GOOGLE_DRIVE_OAUTH_CLIENT_ID: ${{ secrets.GOOGLE_DRIVE_OAUTH_CLIENT_ID }}
-          GOOGLE_DRIVE_OAUTH_CLIENT_SECRET: ${{ secrets.GOOGLE_DRIVE_OAUTH_CLIENT_SECRET }}
-          GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN: ${{ secrets.GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN }}
         run: python run_drive_3_1_free_oidc.py
 
       # User media/transcripts are never uploaded as GitHub workflow artifacts.
