@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: bridge-${{ github.event_name }}-${{ github.sha }}-${{ inputs.job_id }}
@@ -31,7 +32,6 @@ jobs:
       BRIDGE_PAID_CLOUD: "false"
       BRIDGE_BILLING_FALLBACK: "false"
       PYTHONUNBUFFERED: "1"
-      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       WHISPER_MODEL: small
 
     steps:
@@ -54,26 +54,14 @@ jobs:
           test -n "$JOB_ID"
           echo "BRIDGE_JOB_ID=$JOB_ID" >> "$GITHUB_ENV"
 
-      - name: Credential preflight
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ -z "${GOOGLE_SERVICE_ACCOUNT_JSON:-}" ]; then
-            echo "BLOCKED_ACCESS: repository secret GOOGLE_SERVICE_ACCOUNT_JSON is missing or empty."
-            exit 78
-          fi
-          python - <<'PY'
-          import json, os
-          raw=os.environ['GOOGLE_SERVICE_ACCOUNT_JSON']
-          obj=json.loads(raw)
-          required={'type','project_id','private_key','client_email','token_uri'}
-          missing=sorted(required-set(obj))
-          if missing:
-              raise SystemExit('BLOCKED_ACCESS: malformed GOOGLE_SERVICE_ACCOUNT_JSON; missing '+','.join(missing))
-          if obj.get('type')!='service_account':
-              raise SystemExit('BLOCKED_ACCESS: credential is not a service_account JSON')
-          print('Google credential preflight: PASS')
-          PY
+      - name: Authenticate to Google Cloud with Workload Identity Federation
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: bridge-video-automation
+          workload_identity_provider: projects/499454355457/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: bridge-video-worker@bridge-video-automation.iam.gserviceaccount.com
+          create_credentials_file: true
 
       - name: Python
         uses: actions/setup-python@v5
@@ -87,6 +75,20 @@ jobs:
           python -m pip install --disable-pip-version-check \
             google-auth requests faster-whisper pillow imagehash \
             opencv-python-headless reportlab pymupdf
+
+      - name: Google ADC preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import google.auth
+          from google.auth.transport.requests import Request
+          creds, project = google.auth.default(scopes=['https://www.googleapis.com/auth/drive'])
+          creds.refresh(Request())
+          if not creds.token:
+              raise SystemExit('BLOCKED_ACCESS: ADC token unavailable')
+          print('Google Workload Identity ADC preflight: PASS')
+          PY
 
       - name: FREE-GUARD
         run: python bridge_worker_3_1_free.py
