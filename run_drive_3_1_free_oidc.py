@@ -2,11 +2,17 @@
 """Authentication adapter for Bridge 3.1 FREE.
 
 GitHub Workload Identity Federation remains the keyless default identity for
-Google Cloud.  For Google Drive file creation in a user's My Drive, the runner
-can instead use a user OAuth refresh token supplied through GitHub Actions
-secrets.  This avoids service-account storage-quota/ownership limitations.
+Google Cloud. For Google Drive file creation in a user's My Drive, the runner
+uses a user OAuth refresh token supplied through one GitHub Actions secret:
+GOOGLE_DRIVE_OAUTH_JSON.
+
+The secret value is JSON with keys:
+  client_id, client_secret, refresh_token
+
+Legacy three-secret variables are still accepted for backward compatibility.
 """
 
+import json
 import os
 
 import google.auth
@@ -19,15 +25,30 @@ DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 
-def user_oauth_token():
-    client_id = os.getenv("GOOGLE_DRIVE_OAUTH_CLIENT_ID", "").strip()
-    client_secret = os.getenv("GOOGLE_DRIVE_OAUTH_CLIENT_SECRET", "").strip()
-    refresh_token = os.getenv("GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN", "").strip()
+def _oauth_parts():
+    packed = os.getenv("GOOGLE_DRIVE_OAUTH_JSON", "").strip()
+    if packed:
+        try:
+            data = json.loads(packed)
+        except json.JSONDecodeError as e:
+            raise RuntimeError("BLOCKED_ACCESS: invalid GOOGLE_DRIVE_OAUTH_JSON") from e
+        client_id = str(data.get("client_id", "")).strip()
+        client_secret = str(data.get("client_secret", "")).strip()
+        refresh_token = str(data.get("refresh_token", "")).strip()
+    else:
+        client_id = os.getenv("GOOGLE_DRIVE_OAUTH_CLIENT_ID", "").strip()
+        client_secret = os.getenv("GOOGLE_DRIVE_OAUTH_CLIENT_SECRET", "").strip()
+        refresh_token = os.getenv("GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN", "").strip()
 
     present = [bool(client_id), bool(client_secret), bool(refresh_token)]
     if any(present) and not all(present):
-        raise RuntimeError("BLOCKED_ACCESS: incomplete Google Drive OAuth secrets")
-    if not all(present):
+        raise RuntimeError("BLOCKED_ACCESS: incomplete Google Drive OAuth credentials")
+    return client_id, client_secret, refresh_token
+
+
+def user_oauth_token():
+    client_id, client_secret, refresh_token = _oauth_parts()
+    if not all([client_id, client_secret, refresh_token]):
         return None
 
     credentials = Credentials(
