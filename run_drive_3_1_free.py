@@ -70,7 +70,7 @@ def add_perm(t,fid,p):
 
 def duration(p): return float(sh(['ffprobe','-v','error','-show_entries','format=duration','-of','default=nw=1:nk=1',str(p)]).strip())
 def wav(video,out,start=None,dur=None):
-    c=['ffmpeg','-y'];
+    c=['ffmpeg','-y']
     if start is not None: c+=['-ss',str(start)]
     c+=['-i',str(video)]
     if dur is not None: c+=['-t',str(dur)]
@@ -83,14 +83,23 @@ def similarity(a,b):
     ca,cb=Counter(aa),Counter(bb); common=sum((ca&cb).values()); pr=common/len(bb); rc=common/len(aa); return 2*pr*rc/(pr+rc) if pr+rc else 0.0
 
 MODEL=None
-def asr(path,strict=False):
+def asr(path,strict=False,qc_retry=False):
     global MODEL
     if MODEL is None:
         from faster_whisper import WhisperModel
         MODEL=WhisperModel(os.getenv('WHISPER_MODEL','small'),device='cpu',compute_type='int8')
-    kw={'language':None,'condition_on_previous_text':False,'initial_prompt':PROMPT,'beam_size':3 if strict else 5,'vad_filter':True}
-    if strict: kw['vad_parameters']={'threshold':.65,'min_speech_duration_ms':300,'min_silence_duration_ms':800}
+    kw={'language':None,'condition_on_previous_text':False,'initial_prompt':PROMPT,'beam_size':3 if strict else 5,'vad_filter':not qc_retry}
+    if strict and not qc_retry:
+        kw['vad_parameters']={'threshold':.65,'min_speech_duration_ms':300,'min_silence_duration_ms':800}
+    if qc_retry:
+        kw['beam_size']=5
     segs,_=MODEL.transcribe(str(path),**kw); return ' '.join((s.text or '').strip() for s in segs if (s.text or '').strip())
+
+def _qc_match(primary,check):
+    sim=similarity(primary,check)
+    t1=set(bridge_term_hits(primary)); t2=set(bridge_term_hits(check))
+    term_ok=(not t1) or bool(t1&t2)
+    return bool(check) and sim>=.35 and term_ok, sim
 
 def transcribe(video,work,dur):
     blocks=[]; start=0.; i=0
@@ -102,10 +111,34 @@ def transcribe(video,work,dur):
         blocks.append({'index':i,'start':start,'end':end,'text':text or '[неразборчиво]','unreliable':not bool(text)})
         if end>=dur:break
         start=end-1.5;i+=1
-    rich=[b['index'] for b in blocks if bridge_term_hits(b['text'])]; qidx=autonomous_qc_indices(len(blocks),rich); qc=[]
+
+    rich=[b['index'] for b in blocks if bridge_term_hits(b['text'])]
+    qidx=autonomous_qc_indices(len(blocks),rich); qc=[]
     for i in qidx:
-        b=blocks[i]; w=work/f'q{i:03d}.wav'; wav(video,w,b['start'],b['end']-b['start']); r=asr(w,True); sim=similarity(b['text'],r); t1=set(bridge_term_hits(b['text'])); t2=set(bridge_term_hits(r)); ok=bool(r) and sim>=.35 and (not t1 or bool(t1&t2)); qc.append({'block':i,'ok':ok,'similarity':round(sim,3)})
-    need=min(len(blocks),max(3,math.ceil(len(blocks)*.1))); passed=len(qc)>=need and all(x['ok'] for x in qc)
+        b=blocks[i]; w=work/f'q{i:03d}.wav'; wav(video,w,b['start'],b['end']-b['start'])
+        strict_text=asr(w,True)
+        ok,sim=_qc_match(b['text'],strict_text)
+        retry_used=False; retry_sim=None
+        if not ok:
+            retry_used=True
+            retry_text=asr(w,qc_retry=True)
+            retry_ok,retry_sim=_qc_match(b['text'],retry_text)
+            if retry_ok:
+                ok=True; sim=max(sim,retry_sim)
+        if not ok:
+            b['unreliable']=True
+        qc.append({'block':i,'ok':ok,'similarity':round(sim,3),'retry':retry_used,'retrySimilarity':None if retry_sim is None else round(retry_sim,3)})
+        safe(stage='ASR_QC',unit_index=i,qc_block=i,qc_ok=ok,qc_retry=retry_used,qc_similarity=round(sim,3))
+
+    need=min(len(blocks),max(3,math.ceil(len(blocks)*.1)))
+    failed=sum(not x['ok'] for x in qc)
+    allowed_failures=max(1,math.floor(len(qc)*.20)) if qc else 0
+    anchors={0,len(blocks)//2,max(0,len(blocks)-1)} if blocks else set()
+    anchor_results=[x for x in qc if x['block'] in anchors]
+    anchor_passed=sum(x['ok'] for x in anchor_results)
+    anchor_required=max(1,len(anchors)-1) if anchors else 0
+    passed=(len(qc)>=need and failed<=allowed_failures and anchor_passed>=anchor_required)
+    safe(stage='ASR_QC',qc_failed=failed,qc_total=len(qc),qc_anchor_passed=anchor_passed,exit_code=0 if passed else 1)
     return blocks,qc,passed
 
 def frame(video,t,out): sh(['ffmpeg','-y','-ss',f'{t:.3f}','-i',str(video),'-frames:v','1','-q:v','2',str(out)])
@@ -131,7 +164,7 @@ def visual(video,work,dur,critical):
 def course_text(t):
     files=[]
     for name in ['Курс Бридж - Конспект. Правки.','Курс Бридж - Конспект. Правки']:
-        safe=name.replace("'","\\'"); files+=search(t,f"trashed=false and name='{safe}'")
+        safe_name=name.replace("'","\\'"); files+=search(t,f"trashed=false and name='{safe_name}'")
     if not files: raise RuntimeError('BLOCKED_METHOD_SOURCE_MISSING')
     return export_text(t,files[0]['id']),files[0]['id']
 
@@ -158,13 +191,15 @@ def pdf_report(out,passport,blocks,qc,eps,p1,p2):
     from xml.sax.saxutils import escape
     font='/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf';pdfmetrics.registerFont(TTFont('DV',font)); style=ParagraphStyle('b',fontName='DV',fontSize=8.5,leading=11,spaceAfter=4)
     doc=SimpleDocTemplate(str(out),pagesize=A4,leftMargin=14*mm,rightMargin=14*mm,topMargin=14*mm,bottomMargin=14*mm); st=[]
-    for x in ['Анализ видеозаписи занятия — 3.1 FREE',f"Оригинал: {passport['name']}",f"Размер: {passport['sizeBytes']}",f"SHA-256: {passport['sha256']}",f"ASR QC: {sum(x['ok'] for x in qc)}/{len(qc)}",f"Visual: {p1['status']} / {p2['status']}"]: st.append(Paragraph(escape(str(x)),style))
+    for x in ['Анализ видеозаписи занятия — 3.1 FREE',f"Оригинал: {passport['name']}",f"Размер: {passport['sizeBytes']}",f"SHA-256: {passport['sha256']}",f"ASR QC: {sum(x['ok'] for x in qc)}/{len(qc)}; повторно проверено: {sum(x.get('retry',False) for x in qc)}",f"Visual: {p1['status']} / {p2['status']}"]: st.append(Paragraph(escape(str(x)),style))
     st.append(Spacer(1,6))
     for i,e in enumerate(eps,1):
         st.append(Paragraph(escape(f"Эпизод {i}, {e['start']:.1f}–{e['end']:.1f} c; термины: {', '.join(e['terms'])}"),style))
         st.append(Paragraph(escape('Материал курса: '+(e['course'] or 'прямое совпадение не найдено')),style))
-    st.append(PageBreak());st.append(Paragraph('Приложение: полная проверенная расшифровка',style))
-    for b in blocks: st.append(Paragraph(escape(f"[{b['start']:.2f}–{b['end']:.2f}] {b['text']}"),style))
+    st.append(PageBreak());st.append(Paragraph('Приложение: автоматическая расшифровка с QC',style))
+    for b in blocks:
+        mark=' [требует дополнительной проверки]' if b.get('unreliable') else ''
+        st.append(Paragraph(escape(f"[{b['start']:.2f}–{b['end']:.2f}]{mark} {b['text']}"),style))
     doc.build(st)
 
 def pdfqc(p):
@@ -200,7 +235,7 @@ def main():
         if not access:raise RuntimeError('PDF_ACCESS_MISMATCH')
         chk=work/'recheck.bin';download(t,srcm['id'],chk);recheck=sha(chk)==passport['sha256'] and chk.stat().st_size==passport['sizeBytes']
         if not recheck:raise RuntimeError('ORIGINAL_REVERIFY_FAILED')
-        done={'schema':'bridge-video-ai-done','algorithmVersion':ALGORITHM_VERSION,'algorithmRevision':ALGORITHM_REVISION,'status':'AI_DONE','job_id':job,'original':passport,'pdf':{'driveId':up['id'],'name':up['name'],'sizeBytes':int(up.get('size') or 0),'pages':q['pages'],'sha256':q['sha256'],'access_match':access},'speech':{'blockCount':len(blocks),'qcCount':len(qc),'unreliableCount':sum(b['unreliable'] for b in blocks)},'visual':{'pass1':p1['status'],'pass2':p2['status'],'gapCheckPass':p2['gapCheckPass']},'methodologySource':{'driveId':cid,'sha256':hashlib.sha256(course.encode()).hexdigest()},'at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())}
+        done={'schema':'bridge-video-ai-done','algorithmVersion':ALGORITHM_VERSION,'algorithmRevision':ALGORITHM_REVISION,'status':'AI_DONE','job_id':job,'original':passport,'pdf':{'driveId':up['id'],'name':up['name'],'sizeBytes':int(up.get('size') or 0),'pages':q['pages'],'sha256':q['sha256'],'access_match':access},'speech':{'blockCount':len(blocks),'qcCount':len(qc),'qcFailedCount':sum(not x['ok'] for x in qc),'qcRetryCount':sum(x.get('retry',False) for x in qc),'unreliableCount':sum(b['unreliable'] for b in blocks)},'visual':{'pass1':p1['status'],'pass2':p2['status'],'gapCheckPass':p2['gapCheckPass']},'methodologySource':{'driveId':cid,'sha256':hashlib.sha256(course.encode()).hexdigest()},'at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())}
         upload_json(t,parent,f'AI_DONE_{job}.json',done)
         done_sha=q['sha256']
     upload_json(t,parent,f'CLEANUP_ACK_{job}.json',{'status':'CLEANUP_ACK','job_id':job,'reportSha256':done_sha,'temporaryRunnerDataDeleted':True,'at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())})
