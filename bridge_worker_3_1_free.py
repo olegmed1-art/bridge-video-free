@@ -11,7 +11,7 @@ import hashlib, json, math, os, time, re
 from typing import Optional, Iterable
 
 ALGORITHM_VERSION = "3.1"
-ALGORITHM_REVISION = "3.1-free-r1"
+ALGORITHM_REVISION = "3.1-free-r2"
 
 STAGES = ["DISCOVERED","QUEUED","FETCHING","TRANSCRIPT_PRIMARY","ASR_QC","VISUAL_PASS_1","VISUAL_PASS_2","REPORT_BUILD","PDF_QC","AI_DONE","CLEANUP_ACK"]
 BLOCKED_STAGES = {"BLOCKED_FREE_GUARD","BLOCKED_FREE_CAPACITY","BLOCKED_FREE_ONLY","BLOCKED_IDENTITY","BLOCKED_ACCESS","BLOCKED_CORRUPT_INPUT","FAILED_UNRECOVERABLE"}
@@ -155,7 +155,7 @@ def vtt_independent_asr_plan(vtt_text: str,duration_seconds: float) -> dict:
     return {"intervals":[{"block_index":idx,"start":idx*300.0,"end":min(float(duration_seconds),(idx+1)*300.0)} for idx in indices],"minimum":min(block_count,max(3,math.ceil(block_count*.10))),"term_rich_block_indices":sorted(term_rich),"human_check_required":False}
 
 def sanitize_public_log(data: dict) -> dict:
-    allowed={"job_id","stage","attempt","exit_code","size_bytes","sha256","duration_seconds","unit_index","error_class"}
+    allowed={"job_id","stage","attempt","exit_code","size_bytes","sha256","duration_seconds","unit_index","error_class","qc_block","qc_ok","qc_retry","qc_similarity","qc_failed","qc_total","qc_anchor_passed"}
     return {k:data[k] for k in allowed if k in data}
 
 def main():
