@@ -1,0 +1,102 @@
+name: drive-upload-diagnostic
+
+on:
+  push:
+    paths:
+      - 'diagnostics/drive-upload-*.txt'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  diagnose-drive-upload:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: bridge-video-automation
+          workload_identity_provider: projects/499454355457/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: bridge-video-worker@bridge-video-automation.iam.gserviceaccount.com
+          create_credentials_file: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --disable-pip-version-check google-auth requests
+      - name: Test tiny file creation in source parent
+        shell: bash
+        run: |
+          set -euo pipefail
+          REQUEST_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^diagnostics/drive-upload-.*\.txt$' | head -n 1)"
+          test -n "$REQUEST_FILE"
+          export BRIDGE_JOB_ID="$(tr -d '[:space:]' < "$REQUEST_FILE")"
+          python - <<'PY'
+          import json, os, requests
+          from bridge_worker_3_1_free import stable_job_id
+          from run_drive_3_1_free_oidc import user_oauth_token
+
+          DRIVE='https://www.googleapis.com/drive/v3'
+          UPLOAD='https://www.googleapis.com/upload/drive/v3/files'
+          job=os.environ['BRIDGE_JOB_ID']
+          token=user_oauth_token()
+          if not token:
+              raise SystemExit('DIAG: user OAuth token unavailable')
+          h={'Authorization':'Bearer '+token}
+
+          r=requests.get(DRIVE+'/files',headers=h,params={
+              'q':"trashed=false and mimeType='video/mp4'",
+              'fields':'files(id,name,parents)', 'pageSize':1000, 'spaces':'drive'
+          },timeout=60)
+          print('DIAG search status:',r.status_code)
+          r.raise_for_status()
+          matches=[f for f in r.json().get('files',[]) if stable_job_id('drive',f['id'])==job]
+          print('DIAG identity matches:',len(matches))
+          if len(matches)!=1: raise SystemExit('DIAG: source identity mismatch')
+          src=matches[0]; parent=(src.get('parents') or [None])[0]
+          if not parent: raise SystemExit('DIAG: source has no parent')
+
+          fr=requests.get(DRIVE+'/files/'+parent,headers=h,params={
+              'fields':'id,name,mimeType,driveId,capabilities(canAddChildren,canEdit,canShare),owners(displayName,emailAddress)'
+          },timeout=30)
+          print('DIAG parent metadata status:',fr.status_code)
+          try:
+              fd=fr.json()
+              if fr.ok:
+                  print('DIAG parent:',json.dumps({k:fd.get(k) for k in ('id','name','mimeType','driveId','capabilities')},ensure_ascii=False))
+              else:
+                  print('DIAG parent error:',json.dumps(fd,ensure_ascii=False))
+          except Exception:
+              print('DIAG parent non-json response')
+          fr.raise_for_status()
+
+          metadata={'name':'bridge-drive-upload-diagnostic.txt','parents':[parent]}
+          boundary='bridgeDiagBoundary'
+          payload=b'diagnostic write test\n'
+          body=(f'--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n'+json.dumps(metadata)+f'\r\n--{boundary}\r\nContent-Type: text/plain\r\n\r\n').encode()+payload+f'\r\n--{boundary}--\r\n'.encode()
+          ur=requests.post(UPLOAD+'?uploadType=multipart&fields=id,name,size,parents',headers={**h,'Content-Type':f'multipart/related; boundary={boundary}'},data=body,timeout=60)
+          print('DIAG upload status:',ur.status_code)
+          try:
+              ud=ur.json()
+          except Exception:
+              ud={'non_json_body':ur.text[:500]}
+          if not ur.ok:
+              err=ud.get('error',{}) if isinstance(ud,dict) else {}
+              reasons=[]
+              for item in err.get('errors',[]) or []:
+                  if isinstance(item,dict) and item.get('reason'): reasons.append(item['reason'])
+              print('DIAG upload error:',json.dumps({'code':err.get('code'),'message':err.get('message'),'reasons':reasons},ensure_ascii=False))
+              raise SystemExit('DIAG_UPLOAD_FAILED')
+          print('DIAG upload created:',json.dumps(ud,ensure_ascii=False))
+          fid=ud['id']
+          dr=requests.delete(DRIVE+'/files/'+fid,headers=h,timeout=30)
+          print('DIAG cleanup delete status:',dr.status_code)
+          if dr.status_code not in (200,204):
+              print('DIAG cleanup warning: test file remains in Drive')
+          print('DIAG_UPLOAD_PASS')
+          PY
