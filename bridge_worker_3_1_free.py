@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
-"""Bridge Video Worker 3.1.3 — free cloud runner analysis core."""
+"""Bridge Video Worker 3.1 FREE — semantic analysis core."""
 from __future__ import annotations
 from dataclasses import dataclass
 import hashlib, json, math, os, time, re
 from typing import Optional, Iterable
 
-ALGORITHM_VERSION = "3.1.3"
-ALGORITHM_REVISION = "3.1.3-semantic-r1"
+ALGORITHM_VERSION = "3.1 FREE"
+ALGORITHM_REVISION = "3.1-free-semantic-r3"
 STAGES=["DISCOVERED","QUEUED","FETCHING","TRANSCRIPT_PRIMARY","ASR_QC","VISUAL_PASS_1","VISUAL_PASS_2","SEMANTIC_ANALYSIS","REPORT_BUILD","PDF_QC","AI_DONE","CLEANUP_ACK"]
 BLOCKED_STAGES={"BLOCKED_FREE_GUARD","BLOCKED_FREE_CAPACITY","BLOCKED_FREE_ONLY","BLOCKED_IDENTITY","BLOCKED_ACCESS","BLOCKED_CORRUPT_INPUT","FAILED_UNRECOVERABLE"}
 PAID_ENDPOINT_MARKERS=("api.openai.com","generativelanguage.googleapis.com","aiplatform.googleapis.com","assemblyai.com","deepgram.com","api.runpod")
 ALLOWED_STANDARD_RUNNER_LABELS={"ubuntu-latest","ubuntu-24.04","ubuntu-22.04"}
-BRIDGE_TERMS=["бридж","торговля","заявка","контракт","козырь","без козыря","первый ход","взятка","импас","экспас","форсинг","гейм","шлем","контра","реконтра","пас","открытие","ответ","ребид","мажор","минор","расклад","разыгрывающий","вистующий","болван","стейман","трансфер","бк"]
+# Vocabulary below is grounded in the school's canonical beginner-course materials.
+BRIDGE_TERMS=[
+    "бридж","сдача","дилер","торговля","заявка","контракт","уровень контракта","козырь","без козыря","бк",
+    "взятка","первый ход","разыгрывающий","вистующий","вистующие","защитник","защита","болван","стол",
+    "мажор","минор","онерные пункты","онеры","баланс","гейм","шлем","фит","расклад",
+    "пас","контра","реконтра","открытие","ответ","ребид","интервенция","призывная контра","конкурентная торговля",
+    "стейман","трансфер","кюбид","импас","экспас","форсинг","биддинг-бокс"
+]
 TEACHER_CUES=["правильно","неправильно","ошибка","почему","нужно","надо","обрати внимание","запомни","повтори","давай еще раз","лучше"]
-DECISION_CUES=["пас","контра","реконтра","открытие","ответ","ребид","контракт","первый ход","импас","взятка","козыр","бк"]
+DECISION_CUES=["пас","контра","реконтра","открытие","ответ","ребид","контракт","первый ход","импас","взятка","козыр","бк","фит","кюбид","интервенция"]
 
 def bridge_term_hits(text):
     low=(text or '').lower(); hits=set()
@@ -85,7 +92,7 @@ def semantic_episode_plan(blocks):
         if not significant: continue
         signature=set(terms+decisions)
         if active and b['start']-active['end']<=8 and (signature & set(active['signature'])):
-            active['end']=b['end']; active['block_indices'].append(b['index']); active['terms']=sorted(set(active['terms'])|set(terms)); active['teacher_cues']=sorted(set(active['teacher_cues'])|set(teacher)); active['decision_cues']=sorted(set(active['decision_cues'])|set(decisions)); active['signature']=sorted(set(active['signature'])|signature)
+            active['end']=b['end']; active['block_indices'].append(b['index']); active['terms']=sorted(set(active['terms'])|set(terms)); active['teacher_cues']=sorted(set(active['teacher_cues'])|set(teacher)); active['decision_cues']=sorted(set(active['decision_cues'])|set(decisions)); active['signature']=sorted(set(active['signature'])|signature); active['unreliable']=active['unreliable'] or bool(b.get('unreliable'))
         else:
             if active: candidates.append(active)
             active={'start':b['start'],'end':b['end'],'block_indices':[b['index']],'terms':terms,'teacher_cues':teacher,'decision_cues':decisions,'signature':sorted(signature),'unreliable':bool(b.get('unreliable'))}
