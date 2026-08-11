@@ -94,6 +94,6 @@ jobs:
         run: python bridge_worker_3_1_free.py
 
       - name: Process one opaque Drive job
-        run: python run_drive_3_1_free.py
+        run: python run_drive_3_1_free_oidc.py
 
       # User media/transcripts are never uploaded as GitHub workflow artifacts.
