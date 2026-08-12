@@ -1,0 +1,75 @@
+name: Bridge School Database Migrate
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'database/**'
+      - '.github/workflows/database-migrate.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-school-database-production
+  cancel-in-progress: false
+
+jobs:
+  migrate-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify secret exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${DATABASE_URL:-}" || { echo 'NEON_DATABASE_URL is not configured'; exit 1; }
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Verify PostgreSQL 18 target
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_num="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'SHOW server_version_num')"
+          echo "Connected to PostgreSQL server_version_num=${version_num}"
+          if [ "$version_num" -lt 180000 ]; then
+            echo 'Expected PostgreSQL 18 or newer'
+            exit 1
+          fi
+
+      - name: Apply migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          for migration in database/migrations/*.sql; do
+            echo "Applying ${migration}"
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$migration"
+          done
+
+      - name: Run invariant smoke tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for test_file in database/tests/*.sql; do
+            echo "Running ${test_file}"
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$test_file"
+          done
+
+      - name: Verify installed migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -X -A -F ',' -v ON_ERROR_STOP=1 \
+            -c "SELECT migration_key, applied_at FROM schema_migration ORDER BY migration_key;"
