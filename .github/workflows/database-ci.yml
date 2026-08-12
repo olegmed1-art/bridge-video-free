@@ -35,7 +35,8 @@ jobs:
           --health-timeout 5s
           --health-retries 12
     env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bridge_school_ci
+      ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bridge_school_ci
+      DATABASE_URL: postgresql://bridge_ci_owner:bridge_ci_owner@localhost:5432/bridge_school_ci
 
     steps:
       - name: Checkout
@@ -48,13 +49,33 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y postgresql-client >/dev/null
 
-      - name: Verify PostgreSQL 18
+      - name: Bootstrap managed-owner-compatible CI role
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$ADMIN_DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE EXTENSION IF NOT EXISTS pgcrypto;
+          CREATE EXTENSION IF NOT EXISTS btree_gist;
+          DO $$
+          BEGIN
+              IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='bridge_ci_owner') THEN
+                  CREATE ROLE bridge_ci_owner LOGIN PASSWORD 'bridge_ci_owner' CREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION;
+              END IF;
+          END $$;
+          ALTER DATABASE bridge_school_ci OWNER TO bridge_ci_owner;
+          ALTER SCHEMA public OWNER TO bridge_ci_owner;
+          SQL
+
+      - name: Verify PostgreSQL 18 and non-superuser migration owner
         shell: bash
         run: |
           set -euo pipefail
           version_num="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'SHOW server_version_num')"
           echo "CI PostgreSQL server_version_num=${version_num}"
           test "$version_num" -ge 180000
+          attrs="$(psql "$DATABASE_URL" -X -A -t -F ',' -v ON_ERROR_STOP=1 -c "SELECT rolsuper, rolcreaterole, rolcreatedb FROM pg_roles WHERE rolname=current_user;")"
+          echo "CI migration owner attributes=${attrs}"
+          test "$attrs" = "f,t,f"
 
       - name: Apply migrations to ephemeral CI database
         shell: bash
