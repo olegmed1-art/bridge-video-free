@@ -19,6 +19,10 @@ schema_table_exists() {
 if schema_table_exists; then
   while IFS= read -r applied_key; do
     [[ -z "$applied_key" ]] && continue
+    if [[ ! "$applied_key" =~ ^[A-Za-z0-9_]+$ ]]; then
+      echo "Invalid migration key stored in database: $applied_key" >&2
+      exit 1
+    fi
     if [[ ! -f "$MIGRATIONS_DIR/${applied_key}.sql" ]]; then
       echo "Applied migration is missing from repository: ${applied_key}.sql" >&2
       exit 1
@@ -31,17 +35,20 @@ for migration in "$MIGRATIONS_DIR"/*.sql; do
   key="$(basename "$migration" .sql)"
   checksum="$(sha256sum "$migration" | awk '{print $1}')"
 
+  [[ "$key" =~ ^[A-Za-z0-9_]+$ ]] || { echo "Unsafe migration key: $key" >&2; exit 1; }
+  [[ "$checksum" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid SHA-256 for $key" >&2; exit 1; }
+
   if schema_table_exists; then
-    applied="$("${PSQL[@]}" -v key="$key" -c "SELECT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key = :'key');")"
+    applied="$("${PSQL[@]}" -c "SELECT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key = '$key');")"
   else
     applied="f"
   fi
 
   if [[ "$applied" == "t" ]]; then
-    stored="$("${PSQL[@]}" -v key="$key" -c "SELECT COALESCE(checksum,'') FROM schema_migration WHERE migration_key = :'key';")"
+    stored="$("${PSQL[@]}" -c "SELECT COALESCE(checksum,'') FROM schema_migration WHERE migration_key = '$key';")"
     if [[ -z "$stored" ]]; then
       echo "Bootstrapping checksum for already-applied migration $key"
-      "${PSQL[@]}" -v key="$key" -v checksum="$checksum" -c "UPDATE schema_migration SET checksum = :'checksum' WHERE migration_key = :'key' AND checksum IS NULL;" >/dev/null
+      "${PSQL[@]}" -c "UPDATE schema_migration SET checksum = '$checksum' WHERE migration_key = '$key' AND checksum IS NULL;" >/dev/null
     elif [[ "$stored" != "$checksum" ]]; then
       echo "Historical migration checksum mismatch: $key" >&2
       echo "Historical migrations are immutable; create a new migration instead of editing an applied one." >&2
@@ -60,14 +67,14 @@ for migration in "$MIGRATIONS_DIR"/*.sql; do
     exit 1
   fi
 
-  registered="$("${PSQL[@]}" -v key="$key" -c "SELECT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key = :'key');")"
+  registered="$("${PSQL[@]}" -c "SELECT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key = '$key');")"
   if [[ "$registered" != "t" ]]; then
     echo "Migration $key committed without registering itself in schema_migration" >&2
     exit 1
   fi
 
-  "${PSQL[@]}" -v key="$key" -v checksum="$checksum" -c "UPDATE schema_migration SET checksum = :'checksum' WHERE migration_key = :'key' AND checksum IS NULL;" >/dev/null
-  stored="$("${PSQL[@]}" -v key="$key" -c "SELECT checksum FROM schema_migration WHERE migration_key = :'key';")"
+  "${PSQL[@]}" -c "UPDATE schema_migration SET checksum = '$checksum' WHERE migration_key = '$key' AND checksum IS NULL;" >/dev/null
+  stored="$("${PSQL[@]}" -c "SELECT checksum FROM schema_migration WHERE migration_key = '$key';")"
   if [[ "$stored" != "$checksum" ]]; then
     echo "Failed to persist checksum for migration $key" >&2
     exit 1
