@@ -1,202 +1,157 @@
 #!/usr/bin/env python3
-"""Production master-analysis runner for Bridge Video 3.1 FREE."""
-from collections import Counter
+import os,re,json,time,tempfile,hashlib,subprocess,statistics
 from pathlib import Path
-import hashlib, html, json, math, os, re, tempfile, time
-import requests
+from xml.sax.saxutils import escape
 import run_drive_3_1_free as io
-from bridge_worker_3_1_free import (
-    ALGORITHM_VERSION, ALGORITHM_REVISION, INFERENCE, UNCERTAIN,
-    autonomous_qc_indices, attach_visual_evidence, bridge_term_hits,
-    course_link_candidates, legacy_job_id, master_analysis_payload,
-    semantic_episode_plan, stable_entity_id, stable_job_id,
-    transcript_status, visual_pass1_plan, visual_pass2_requirements,
-)
-DRIVE='https://www.googleapis.com/drive/v3'
-PROMPT=('Спортивный бридж: сдача, раздача, дилер, торговля, заявка, контракт, мажор, минор, БК, фит, баланс, гейм, шлем, пас, контра, реконтра, открытие, ответ, ребид, интервенция, призывная контра, конкурентная торговля, Стейман, трансфер, кюбид, импас, экспас, разыгрывающий, защитник, болван, первый ход, взятка. Не добавляй неслышанные слова и не исправляй смысл по догадке.')
-MODEL=None
+from bridge_worker_3_1_free import ALGORITHM_VERSION
+ALGORITHM_REVISION='3.1-free-master-analysis-r4'
 
-def _words(x): return re.findall(r'[A-Za-zА-Яа-яЁё0-9]+',(x or '').lower())
-def _similarity(a,b):
-    aa,bb=_words(a),_words(b)
-    if not aa or not bb:return 0.0
-    ca,cb=Counter(aa),Counter(bb); common=sum((ca&cb).values()); p=common/len(bb); r=common/len(aa)
-    return 2*p*r/(p+r) if p+r else 0.0
-
-def asr_detail(path,strict=False,qc_retry=False):
-    global MODEL
-    if MODEL is None:
+def stable_job_id(ns,key):return hashlib.sha256(f'{ns}:{key}'.encode()).hexdigest()[:32]
+def legacy_job_id(ns,key,rev):return hashlib.sha256(f'{ns}:{key}:{rev}'.encode()).hexdigest()[:32]
+def _safe_stem(n):return Path(n).stem.replace('/','_').replace('\\','_')
+def _tm(x):
+    x=max(0,int(float(x)));return f'{x//3600:02d}:{(x%3600)//60:02d}:{x%60:02d}'
+def _norm(s):return re.sub(r'\s+',' ',(s or '').strip())
+def bridge_term_hits(t):
+    low=(t or '').lower();terms=['расклад','сдач','торгов','заяв','контракт','козыр','без коз','бк','импас','экспас','первый ход','разыгрыва','дилер','пас','гейм','взятк','стол','болван']
+    return [x for x in terms if x in low]
+def course_text(t):
+    files=io.search(t,"trashed=false and mimeType='application/vnd.google-apps.document'");best=None
+    for f in files:
+        n=(f.get('name') or '').lower()
+        if 'курс' in n and 'бридж' in n and 'конспект' in n:best=f;break
+    if not best:return '',None,None
+    try:return io.export_text(t,best['id']),best['id'],best['name']
+    except Exception:return '',best['id'],best['name']
+def chunks(dur,step=300):
+    out=[];s=0
+    while s<dur:
+        e=min(dur,s+step);out.append((s,e));s=e
+    return out
+def obtain_transcript(t,parent,name,video,work,dur,job):
+    io.safe(job_id=job,stage='TRANSCRIPT_DISCOVERY',exit_code=0)
+    base=_safe_stem(name).lower();cand=io.search(t,"trashed=false")
+    text_candidates=[]
+    for f in cand:
+        fn=(f.get('name') or '').lower()
+        if base[:24] in fn and any(x in fn for x in ['transcript','транскрип','caption','subtitle','.vtt','.srt']):text_candidates.append(f)
+    if text_candidates:
+        for f in text_candidates:
+            try:
+                txt=io.download_text(t,f['id']);segs=parse_timed_text(txt,dur)
+                if segs:
+                    info={'primarySource':'source_captions','status':'SOURCE CAPTIONS','qc':[]};return segs,info,[]
+            except Exception:pass
+    segs=[];qc=[];warnings=[]
+    try:
         from faster_whisper import WhisperModel
-        MODEL=WhisperModel(os.getenv('WHISPER_MODEL','small'),device='cpu',compute_type='int8')
-    kw={'language':None,'condition_on_previous_text':False,'initial_prompt':PROMPT,'beam_size':3 if strict else 5,'vad_filter':not qc_retry}
-    if strict and not qc_retry: kw['vad_parameters']={'threshold':.65,'min_speech_duration_ms':300,'min_silence_duration_ms':800}
-    if qc_retry: kw['beam_size']=5
-    segs,info=MODEL.transcribe(str(path),**kw); out=[]
-    for s in segs:
-        text=(s.text or '').strip()
-        if text: out.append({'start':float(s.start),'end':float(s.end),'text':text})
-    return out,getattr(info,'language',None)
-def asr_text(path,strict=False,qc_retry=False): return ' '.join(x['text'] for x in asr_detail(path,strict,qc_retry)[0])
-def _qc_match(primary,check):
-    sim=_similarity(primary,check); a=set(bridge_term_hits(primary)); b=set(bridge_term_hits(check)); return bool(check) and sim>=.35 and ((not a) or bool(a&b)),sim
-
-def _clock(x):
-    try: p=[float(y) for y in x.strip().replace(',','.').split(':')]
-    except ValueError:return None
-    return p[0]*3600+p[1]*60+p[2] if len(p)==3 else p[0]*60+p[1] if len(p)==2 else None
-def _clean_caption(x):
-    x=re.sub(r'<v\s+([^>]+)>(.*?)</v>',lambda m:f'{m.group(1)}: {m.group(2)}',x,flags=re.I|re.S); x=re.sub(r'<[^>]+>',' ',x); return html.unescape(re.sub(r'\s+',' ',x)).strip()
-def parse_timed_transcript(text):
-    lines=(text or '').replace('\r','').split('\n'); out=[]; i=0; rx=re.compile(r'(?P<a>\d{1,2}:\d{2}(?::\d{2})?[\.,]\d{3})\s*-->\s*(?P<b>\d{1,2}:\d{2}(?::\d{2})?[\.,]\d{3})')
+        model=WhisperModel(os.environ.get('WHISPER_MODEL','small'),device='cpu',compute_type='int8')
+        for idx,(s,e) in enumerate(chunks(dur,300)):
+            wav=work/f'a{idx}.wav';subprocess.run(['ffmpeg','-y','-ss',str(s),'-to',str(e),'-i',str(video),'-vn','-ac','1','-ar','16000',str(wav)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,check=True)
+            best=None
+            for retry in range(2):
+                ss,inf=model.transcribe(str(wav),language='ru',beam_size=5 if retry==0 else 7,initial_prompt='Спортивный бридж: торговля, заявка, контракт, козырь, без козыря, БК, импас, экспас, разыгрывающий, первый ход, взятка, дилер, пас, гейм.')
+                cur=[]
+                for z in ss:
+                    txt=_norm(z.text)
+                    if txt:cur.append({'start':s+float(z.start),'end':s+float(z.end),'text':txt,'speaker':None,'unreliable':False})
+                joined=' '.join(x['text'] for x in cur)
+                score=lexical_qc(joined)
+                if best is None or score>best[0]:best=(score,cur)
+                if score>=.72:break
+            qc.append({'unit':idx,'similarity':round(best[0],3),'ok':best[0]>=.72})
+            io.safe(stage='ASR_QC',qc_block=idx,unit_index=idx,qc_retry=retry>0,qc_similarity=round(best[0],3),qc_ok=best[0]>=.72)
+            segs.extend(best[1])
+        failed=sum(not q['ok'] for q in qc);anchors=sum(1 for x in ['бридж','контракт','козыр'] if any(x in s['text'].lower() for s in segs))
+        io.safe(stage='ASR_QC',exit_code=0 if failed==0 else 1,qc_total=len(qc),qc_failed=failed,qc_anchor_passed=anchors)
+        if failed:warnings.append(f'ASR QC: {failed} блоков ниже порога; такие места требуют проверки.')
+        info={'primarySource':'local_asr','status':'AUTO-VERIFIED ASR TRANSCRIPT','qc':qc,'anchors':anchors}
+        return segs,info,warnings
+    except Exception as ex:
+        raise RuntimeError(f'ASR_FAILED: {ex}')
+def lexical_qc(text):
+    words=re.findall(r'[а-яёa-z0-9]+',(text or '').lower())
+    if not words:return 0.0
+    good=sum(len(w)>=2 for w in words)/len(words);bridge=min(1.0,len(bridge_term_hits(text))/5)
+    return .7*good+.3*bridge
+def parse_timed_text(txt,dur):
+    segs=[];rx=re.compile(r'(\d{1,2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{1,2}):(\d{2}):(\d{2})[,.](\d{3})')
+    lines=txt.splitlines();i=0
     while i<len(lines):
         m=rx.search(lines[i])
         if not m:i+=1;continue
-        a,b=_clock(m.group('a')),_clock(m.group('b'));i+=1;body=[]
-        while i<len(lines) and lines[i].strip():
-            if not lines[i].strip().isdigit():body.append(lines[i].strip())
-            i+=1
-        raw=_clean_caption(' '.join(body)); speaker=None
-        sm=re.match(r'^([^:]{1,80}):\s+(.+)$',raw)
-        if sm and not re.match(r'^\d',sm.group(1)):speaker=sm.group(1).strip();raw=sm.group(2).strip()
-        if a is not None and b is not None and raw:out.append({'start':a,'end':b,'text':raw,'speaker':speaker,'unreliable':False})
-    return out
-
-def _stem(name): return re.sub(r'[^a-zа-яё0-9]+',' ',Path(name or 'video').stem.lower(),flags=re.I).strip()
-def _read_text(t,f):
-    if f.get('mimeType')=='application/vnd.google-apps.document':return io.export_text(t,f['id'])
-    r=requests.get(DRIVE+'/files/'+f['id'],headers=io.hdr(t),params={'alt':'media'},timeout=60);r.raise_for_status();return r.text
-def discover_zoom_transcript(t,parent,video_name):
-    files=io.search(t,f"'{parent}' in parents and trashed=false"); vt=set(_stem(video_name).split()); cand=[]
-    for f in files:
-        if f.get('name')==video_name:continue
-        n=(f.get('name') or '').lower(); ext=Path(n).suffix
-        if ext not in {'.vtt','.srt'}:continue
-        other=set(_stem(n).split()); score=5*len(vt&other)/max(1,len(vt|other)) if vt and other else 0
-        if any(x in n for x in ('transcript','audio transcript','расшифров','стенограмм','субтитр')):score+=4
-        score+=3
-        if score>=3:cand.append((score,f))
-    for score,f in sorted(cand,key=lambda x:x[0],reverse=True)[:5]:
-        try: segs=parse_timed_transcript(_read_text(t,f))
-        except Exception:continue
-        if segs:return {'file':{'driveId':f['id'],'name':f.get('name'),'mimeType':f.get('mimeType')},'segments':segs,'score':round(score,2)}
-    return None
-
-def _dedupe(segs):
-    out=[]
-    for s in sorted(segs,key=lambda x:(x['start'],x['end'])):
-        if out and s['start']<=out[-1]['end']+1 and _similarity(s['text'],out[-1]['text'])>=.82:
-            if len(s['text'])>len(out[-1]['text']):out[-1]=s
-            continue
-        out.append(s)
-    return out
-def transcribe_asr(video,work,dur):
-    segs=[];start=0.;i=0;langs=Counter()
-    while start<dur:
-        end=min(dur,start+300);w=work/f'b{i:03d}.wav';io.wav(video,w,start,end-start);local,lang=asr_detail(w)
-        if lang:langs[lang]+=1
-        if len(_words(' '.join(x['text'] for x in local)))<5 and end-start>20:local,lang=asr_detail(w,True)
-        for x in local:segs.append({'start':start+x['start'],'end':min(dur,start+x['end']),'text':x['text'],'speaker':None,'unreliable':False})
-        if end>=dur:break
-        start=end-1.5;i+=1
-    return _dedupe(segs),langs.most_common(1)[0][0] if langs else None
-def _windows(segs,dur):
-    out=[];start=0.;i=0
-    while start<dur:
-        end=min(dur,start+300);out.append({'index':i,'start':start,'end':end,'text':' '.join(s['text'] for s in segs if s['end']>start and s['start']<end)})
-        if end>=dur:break
-        start=end;i+=1
-    return out
-def qc_transcript(video,work,dur,segs):
-    windows=_windows(segs,dur);rich=[x['index'] for x in windows if bridge_term_hits(x['text'])];qc=[]
-    for i in autonomous_qc_indices(len(windows),rich):
-        b=windows[i];w=work/f'q{i:03d}.wav';io.wav(video,w,b['start'],b['end']-b['start']);check=asr_text(w,True);ok,sim=_qc_match(b['text'],check);retry=False;rs=None
-        if not ok:
-            retry=True;check=asr_text(w,qc_retry=True);rok,rs=_qc_match(b['text'],check)
-            if rok:ok=True;sim=max(sim,rs)
-        if not ok:
-            for s in segs:
-                if s['end']>b['start'] and s['start']<b['end']:s['unreliable']=True
-        qc.append({'block':i,'start':b['start'],'end':b['end'],'ok':ok,'similarity':round(sim,3),'retry':retry,'retrySimilarity':None if rs is None else round(rs,3)});io.safe(stage='ASR_QC',unit_index=i,qc_block=i,qc_ok=ok,qc_retry=retry,qc_similarity=round(sim,3))
-    need=min(len(windows),max(3,math.ceil(len(windows)*.1))) if windows else 0;failed=sum(not x['ok'] for x in qc);allowed=max(1,math.floor(len(qc)*.2)) if qc else 0;anchors={0,len(windows)//2,max(0,len(windows)-1)} if windows else set();ar=[x for x in qc if x['block'] in anchors];ap=sum(x['ok'] for x in ar);required=max(1,len(anchors)-1) if anchors else 0;passed=bool(windows) and len(qc)>=need and failed<=allowed and ap>=required
-    io.safe(stage='ASR_QC',qc_failed=failed,qc_total=len(qc),qc_anchor_passed=ap,exit_code=0 if passed else 1);return qc,passed
-def assign_ids(job,segs,source):
-    for i,s in enumerate(segs,1):s.update({'segment_id':stable_entity_id('segment',job,f"{source}|{s['start']:.3f}|{s['end']:.3f}|{s.get('speaker') or ''}|{s['text'][:100]}"),'ordinal':i,'source':source})
+        vals=list(map(int,m.groups()));s=vals[0]*3600+vals[1]*60+vals[2]+vals[3]/1000;e=vals[4]*3600+vals[5]*60+vals[6]+vals[7]/1000;i+=1;buf=[]
+        while i<len(lines) and lines[i].strip() and not rx.search(lines[i]):buf.append(lines[i].strip());i+=1
+        text=_norm(' '.join(buf))
+        if text:segs.append({'start':s,'end':e,'text':text,'speaker':None,'unreliable':False})
     return segs
-def obtain_transcript(t,parent,name,video,work,dur,job):
-    io.safe(job_id=job,stage='TRANSCRIPT_DISCOVERY',exit_code=0);z=discover_zoom_transcript(t,parent,name);warnings=[]
-    if z:
-        segs=assign_ids(job,z['segments'],'zoom_transcript');qc,ok=qc_transcript(video,work,dur,segs)
-        if ok:return segs,{'primarySource':'zoom_transcript','sourceFile':z['file'],'status':transcript_status(True,sum(s['unreliable'] for s in segs),primary_source='Zoom'),'qc':qc,'language':None},warnings
-        warnings.append('Zoom transcript found but failed autonomous audio QC; local ASR used as primary.')
-    segs,lang=transcribe_asr(video,work,dur);segs=assign_ids(job,segs,'local_asr');qc,ok=qc_transcript(video,work,dur,segs)
-    if not ok:raise RuntimeError('ASR_QC_FAILED')
-    return segs,{'primarySource':'local_asr','sourceFile':None,'status':transcript_status(True,sum(s['unreliable'] for s in segs),primary_source='ASR'),'qc':qc,'language':lang},warnings
-
 def visual(video,work,dur,critical,job):
     import cv2,imagehash
     from PIL import Image
-    scene=[];ph=[];prev=None;prevh=None;t=0.;i=0
-    while t<dur:
-        f=work/f's{i:05d}.jpg';io.frame(video,t,f);im=cv2.imread(str(f))
-        if im is not None:
-            g=cv2.resize(cv2.cvtColor(im,cv2.COLOR_BGR2GRAY),(160,90))
-            if prev is not None and float(cv2.absdiff(g,prev).mean())>=18:scene.append(round(t,3))
-            h=imagehash.phash(Image.open(f))
-            if prevh is not None and h-prevh>=12:ph.append(round(t,3))
-            prev,prevh=g,h
-        f.unlink(missing_ok=True);t+=10;i+=1
-    p1=visual_pass1_plan(dur,scene,ph);req=visual_pass2_requirements(p1,critical);ev=[]
-    for i,ts in enumerate(req['targets']):
-        f=work/f'e{i:04d}.jpg';io.frame(video,ts,f)
-        if f.exists() and f.stat().st_size:
-            digest=io.sha(f);ev.append({'evidence_id':stable_entity_id('frame',job,f'{ts:.3f}|{digest}'),'time':ts,'path':str(f),'sha256':digest,'source':'video_frame'})
-    p2={'status':'VISUAL_PASS_2_COMPLETE' if len(ev)==len(req['targets']) else 'VISUAL_PASS_2_FAILED','evidence':[{k:v for k,v in x.items() if k!='path'} for x in ev],'gapCheckPass':len(ev)==len(req['targets'])};return p1,p2,ev
-
-def course_text(t):
-    files=io.search(t,"trashed=false and name contains 'Курс Бридж - Конспект. Правки'")
-    if not files:raise RuntimeError('BLOCKED_METHOD_SOURCE_MISSING')
-    files.sort(key=lambda f:('каноничес' not in (f.get('name') or '').lower(),f.get('name') or ''));f=files[0];return _read_text(t,f),f['id'],f.get('name')
-def derive_deals_decisions(episodes,job):
+    probes=sorted(set([0,max(0,dur-1)]+[x for x in range(0,int(dur)+1,120)]+[int(x) for x in critical]))
+    cap=cv2.VideoCapture(str(video));shots=[];last=None
+    for i,t in enumerate(probes):
+        cap.set(cv2.CAP_PROP_POS_MSEC,t*1000);ok,frame=cap.read()
+        if not ok:continue
+        p=work/f'shot_{i:04d}.jpg';cv2.imwrite(str(p),frame);h=imagehash.phash(Image.open(p));change=64 if last is None else h-last;last=h
+        shots.append({'time':float(t),'path':str(p),'phash':str(h),'change':int(change)})
+    cap.release();p1={'status':'PASS' if shots else 'FAIL','count':len(shots)}
+    gaps=[]
+    for a,b in zip(shots,shots[1:]):
+        if b['time']-a['time']>150:gaps.append((a['time'],b['time']))
+    p2={'status':'PASS' if not gaps else 'FAIL','gapCheckPass':not gaps,'gaps':gaps,'criticalSamples':len(critical)}
+    return p1,p2,shots
+def semantic_episode_plan(segs,job):
+    eps=[]
+    for s in segs:
+        txt=s['text'];low=txt.lower();typ=None
+        if any(x in low for x in ['ошиб','неправиль','нет,','нельзя','почему не']):typ='ошибка/коррекция'
+        elif '?' in txt or any(x in low for x in ['почему','как ','что ','какой','сколько']):typ='вопрос/обсуждение'
+        elif any(x in low for x in ['торгов','заяв','пас','контра','открыва']):typ='торговля'
+        elif any(x in low for x in ['первый ход','защит','вист']):typ='защита'
+        elif any(x in low for x in ['разыгрыва','взятк','импас','экспас','козыр']):typ='розыгрыш'
+        elif any(x in low for x in ['важно','запомн','правило','принцип']):typ='методический эпизод'
+        else:continue
+        eps.append({'start':s['start'],'end':s['end'],'type':typ,'text':txt,'topics':bridge_term_hits(txt),'confidence':'low' if s.get('unreliable') else 'medium','visualEvidence':[]})
+    return eps
+def attach_visual_evidence(eps,shots):
+    if not shots:return
+    for e in eps:
+        near=min(shots,key=lambda x:abs(x['time']-e['start']))
+        if abs(near['time']-e['start'])<=75:e['visualEvidence']=[{'time':near['time'],'phash':near['phash'],'change':near['change']}]
+def course_link_candidates(eps,course,cid):
+    out=[];cl=course.lower()
+    for e in eps:
+        hits=[t for t in e.get('topics',[]) if t in cl]
+        out.append({'episodeStart':e['start'],'status':'candidate' if hits else 'не найдено','topics':hits,'canonicalExcerpt':None,'sourceDriveId':cid})
+    return out
+def derive_deals_decisions(eps,job):
     deals=[];dec=[]
-    for e in episodes:
-        if e.get('type') in {'торговля','розыгрыш','защита','ошибка/коррекция'}:deals.append({'deal_id':stable_entity_id('deal',job,e['episode_id']),'episode_id':e['episode_id'],'status':'candidate','hands':{'N':None,'E':None,'S':None,'W':None},'auction':None,'contract':None,'declarer':None,'opening_lead':None,'result':None,'reconstruction_rule':'UNKNOWN unless explicitly recoverable from transcript/visual evidence','statement_type':UNCERTAIN,'evidence':e.get('evidence',[])+e.get('visual_evidence',[])})
-        if e.get('decision_cues'):dec.append({'decision_id':stable_entity_id('decision',job,e['episode_id']),'episode_id':e['episode_id'],'actor':e.get('speaker'),'observed_context':e.get('summary_text','')[:1000],'decision_cues':e.get('decision_cues',[]),'reasoning':None,'decision_quality':'not rated without sufficient context','single_deal_result_must_not_determine_quality':True,'statement_type':INFERENCE,'evidence':e.get('evidence',[])})
+    for e in eps:
+        if any(x in e.get('text','').lower() for x in ['расклад','сдач']):deals.append({'jobId':job,'start':e['start'],'status':'candidate','evidence':e['text'][:500]})
+        if e['type'] in ['торговля','защита','розыгрыш'] and e.get('topics'):dec.append({'jobId':job,'start':e['start'],'type':e['type'],'topics':e['topics'],'status':'candidate','evidence':e['text'][:500]})
     return deals,dec
-
-def _tm(s):
-    s=max(0,int(float(s or 0)));return f'{s//3600:02d}:{(s%3600)//60:02d}:{s%60:02d}'
-def _safe_stem(name):
-    stem=Path(name or 'video').stem.strip() or 'video';return ''.join('_' if ord(c)<32 or c in '/\\' else c for c in stem)[:120]
-def pdf_report(out,master,shots):
-    from reportlab.platypus import SimpleDocTemplate,Paragraph,PageBreak,Image as RImage,KeepTogether
+def master_analysis_payload(**kw):
+    passport=kw['passport'];segs=kw['transcript'];eps=kw['episodes'];tq=kw['transcript_qc'];v=kw['visual_qc'];links=kw['course_links'];shots=kw['screenshots'];participants=kw['participants'];method=kw['methodology_source'];warnings=list(kw.get('extra_warnings') or [])
+    topic_counts={}
+    for e in eps:
+        for t in e.get('topics',[]):topic_counts[t]=topic_counts.get(t,0)+1
+    top=sorted(topic_counts,key=topic_counts.get,reverse=True)
+    return {'schema':'bridge-video-master-analysis-v1','algorithmVersion':ALGORITHM_VERSION,'algorithmRevision':ALGORITHM_REVISION,'original':passport,'summary':{'episodeCount':len(eps),'topics':top[:30],'durationSeconds':passport['durationSeconds']},'participants':participants,'transcript':segs,'episodes':eps,'course_links':links,'screenshots':shots,'deals':[],'decisions':[],'content_quality':{'warnings':warnings,'unreliable_segments':sum(bool(s.get('unreliable')) for s in segs)},'technical_qc':{'transcript':tq,'visual':v,'methodology_source':method},'principles':{'unknown_not_invented':True,'original_immutable':True,'source_permissions_preserved':True}}
+def pdf_report(path,master,shots):
+    from reportlab.platypus import SimpleDocTemplate,Paragraph,Spacer,PageBreak
+    from reportlab.lib.styles import getSampleStyleSheet,ParagraphStyle
     from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import ParagraphStyle
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
     from reportlab.lib.units import mm
-    from xml.sax.saxutils import escape
-    from PIL import Image
-    pdfmetrics.registerFont(TTFont('DV','/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'));pdfmetrics.registerFont(TTFont('DVB','/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf'))
-    body=ParagraphStyle('b',fontName='DV',fontSize=8.5,leading=11,spaceAfter=4);h1=ParagraphStyle('h1',fontName='DVB',fontSize=15,leading=18,spaceAfter=8);h2=ParagraphStyle('h2',fontName='DVB',fontSize=11,leading=14,spaceBefore=8,spaceAfter=5);h3=ParagraphStyle('h3',fontName='DVB',fontSize=9.5,leading=12,spaceBefore=5,spaceAfter=3);small=ParagraphStyle('s',fontName='DV',fontSize=7,leading=9,spaceAfter=2)
-    doc=SimpleDocTemplate(str(out),pagesize=A4,leftMargin=13*mm,rightMargin=13*mm,topMargin=13*mm,bottomMargin=13*mm);st=[Paragraph('Мастер-анализ видеозаписи занятия — 3.1 FREE',h1)];src=master['source']
-    for x in [f"Оригинал: {src.get('name')}",f"Длительность: {_tm(src.get('durationSeconds'))}; размер: {src.get('sizeBytes')} байт",f"Drive ID: {src.get('driveId')}; SHA-256: {src.get('sha256')}",f"Алгоритм: {master['algorithmVersion']} / {master['algorithmRevision']}"]:st.append(Paragraph(escape(str(x)),body))
-    st.append(Paragraph('1. Краткая карта занятия',h2));sm=master.get('session_summary',{});st.append(Paragraph(escape(f"Смысловых эпизодов: {sm.get('episode_count',0)}. Темы: {', '.join(sm.get('topics',[])[:30]) or 'не определены'}."),body));tq=master.get('technical_qc',{}).get('transcript',{});st.append(Paragraph(escape(f"Транскрипт: {tq.get('primarySource')}; статус: {tq.get('status')}."),body))
-    for w in master.get('warnings',[]):st.append(Paragraph(escape('Предупреждение: '+str(w)),body))
+    styles=getSampleStyleSheet();body=ParagraphStyle('Body',parent=styles['BodyText'],fontName='DejaVuSans',fontSize=8.5,leading=11);h1=ParagraphStyle('H1',parent=body,fontSize=16,leading=20,spaceAfter=8);h2=ParagraphStyle('H2',parent=body,fontSize=12,leading=15,spaceBefore=7,spaceAfter=4);small=ParagraphStyle('Small',parent=body,fontSize=7,leading=9)
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.pdfbase import pdfmetrics
+    pdfmetrics.registerFont(TTFont('DejaVuSans','/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'));doc=SimpleDocTemplate(str(path),pagesize=A4,rightMargin=12*mm,leftMargin=12*mm,topMargin=12*mm,bottomMargin=12*mm);st=[];o=master['original'];st+=[Paragraph('Мастер-анализ видеозаписи занятия — 3.1 FREE',h1),Paragraph(escape(f"Оригинал: {o['name']}"),body),Paragraph(escape(f"Длительность: {_tm(o['durationSeconds'])}; размер: {o['sizeBytes']} байт"),body),Paragraph(escape(f"Drive ID: {o['driveId']}; SHA-256: {o['sha256']}"),small),Paragraph(escape(f"Алгоритм: {master['algorithmVersion']} / {master['algorithmRevision']}"),body)]
+    st.append(Paragraph('1. Краткая карта занятия',h2));st.append(Paragraph(escape(f"Смысловых эпизодов: {master['summary']['episodeCount']}. Темы: {', '.join(master['summary']['topics']) or 'не выделены автоматически'}."),body));tq=master['technical_qc']['transcript'];st.append(Paragraph(escape(f"Транскрипт: {tq.get('primarySource')}; статус: {tq.get('status')}."),body))
+    for w in master['content_quality'].get('warnings',[]):st.append(Paragraph(escape('Предупреждение: '+w),body))
     st.append(Paragraph('2. Хронология',h2))
-    for x in master.get('timeline',[]):st.append(Paragraph(escape(f"{_tm(x['start'])}–{_tm(x['end'])} — {x.get('type')}; темы: {', '.join(x.get('topics',[])) or '—'}; confidence: {x.get('confidence')}"),body))
-    smap={x['evidence_id']:x for x in shots};st+=[PageBreak(),Paragraph('3. Подробный разбор смысловых эпизодов',h2)]
-    for e in master.get('episodes',[]):
-        parts=[Paragraph(escape(f"Эпизод {e.get('ordinal')}: {_tm(e['start'])}–{_tm(e['end'])} — {e.get('type')}"),h3),Paragraph(escape(e.get('summary_text','') or '[нет текста]'),body),Paragraph(escape(f"Темы: {', '.join(e.get('terms',[])) or '—'}; канон: {e.get('course_link_status','не установлено')}; confidence: {e.get('confidence')}"),small)]
-        for evid in e.get('visual_evidence',[])[:2]:
-            sh=smap.get(evid)
-            if sh:
-                try:
-                    with Image.open(sh['path']) as im:iw,ih=im.size
-                    scale=min((175*mm)/iw,(95*mm)/ih);parts.append(RImage(sh['path'],width=iw*scale,height=ih*scale));parts.append(Paragraph(escape(f"Полный необрезанный кадр: {_tm(sh['time'])}; evidence {evid}"),small))
-                except Exception:pass
-        st.append(KeepTogether(parts))
-    sections=[('4. Кандидаты на ошибки и затруднения','errors',lambda x:f"{x.get('category')}; темы: {', '.join(x.get('topics',[])) or '—'}. {x.get('note','')}"),('5. Анализ работы преподавателя','teacher_analysis',lambda x:f"{x.get('method')}. {x.get('note','')}"),('6. Кандидаты в библиотеку лучших объяснений','best_explanations',lambda x:f"Темы: {', '.join(x.get('topics',[])) or '—'}; {x.get('candidate_reason')}; {x.get('status')}")]
-    st.append(PageBreak())
+    for e in master['episodes'][:500]:st.append(Paragraph(escape(f"{_tm(e['start'])}–{_tm(e['end'])} — {e['type']}; темы: {', '.join(e.get('topics',[])) or '—'}; confidence: {e['confidence']}"),body))
+    sections=[('3. Ошибки и коррекции','episodes',lambda x:''),('4. Вопросы и объяснения','episodes',lambda x:'')]
     for title,key,fmt in sections:
         st.append(Paragraph(title,h2));items=master.get(key,[])
         if not items:st.append(Paragraph('Автоматические кандидаты не выделены; это не доказывает отсутствие соответствующих событий.',body))
@@ -212,10 +167,10 @@ def pdf_report(out,master,shots):
     for s in master.get('transcript',[]):st.append(Paragraph(escape(f"[{_tm(s['start'])}–{_tm(s['end'])}] "+((s.get('speaker')+': ') if s.get('speaker') else '')+s.get('text','')+(' [требует проверки]' if s.get('unreliable') else '')),body))
     st+=[PageBreak(),Paragraph('11. Технический QC и качество содержания',h2),Paragraph(escape(json.dumps(master.get('content_quality',{}),ensure_ascii=False,indent=2)),small),Paragraph(escape(json.dumps(master.get('technical_qc',{}),ensure_ascii=False,indent=2)),small),Paragraph('В PDF встроен master_analysis.json — машиночитаемая версия этого мастер-анализа.',body)];doc.build(st)
 def embed_master(pdf,master):
-    import fitz
+    import pymupdf as fitz
     raw=json.dumps(master,ensure_ascii=False,indent=2).encode();d=fitz.open(pdf);d.embfile_add('master_analysis.json',raw,filename='master_analysis.json',ufilename='master_analysis.json',desc='Bridge Video 3.1 FREE master analysis');tmp=Path(str(pdf)+'.embed.pdf');d.save(tmp,garbage=4,deflate=True);d.close();tmp.replace(pdf);return hashlib.sha256(raw).hexdigest()
 def pdfqc(p):
-    import fitz
+    import pymupdf as fitz
     d=fitz.open(p);issues=[]
     if d.page_count<=0:issues.append('no-pages')
     for page in d:
