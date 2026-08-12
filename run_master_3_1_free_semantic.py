@@ -9,7 +9,7 @@ import run_master_3_1_free as base
 from bridge_semantic_qc import SEMANTIC_QC_REVISION, semantic_normalize_segments
 
 # Product name stays 3.1 FREE; only the internal revision changes.
-core.ALGORITHM_REVISION = "3.1-free-master-analysis-r5"
+core.ALGORITHM_REVISION = "3.1-free-master-analysis-r6"
 base.ALGORITHM_REVISION = core.ALGORITHM_REVISION
 
 # Give Whisper more bridge-specific acoustic/lexical anchors seen in real lessons.
