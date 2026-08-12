@@ -1,0 +1,13 @@
+{
+  "productVersion": "3.1 FREE",
+  "algorithmRevision": "3.1-free-master-analysis-r4",
+  "status": "stable",
+  "commit": "2c7ba11f22f38a633c1123915bc6a7157f1e5bb7",
+  "archiveBranch": "archive/3.1-free-r4-stable-2026-08-11",
+  "validation": {
+    "workflowRun": 31534386306,
+    "runNumber": 7,
+    "conclusion": "success"
+  },
+  "rollbackReady": true
+}
