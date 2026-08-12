@@ -1,0 +1,17 @@
+{
+  "productVersion": "3.1 FREE",
+  "algorithmRevision": "3.1-free-master-analysis-r5",
+  "status": "candidate-validation",
+  "basedOnStableRevision": "3.1-free-master-analysis-r4",
+  "stableArchiveBranch": "archive/3.1-free-r4-stable-2026-08-11",
+  "changes": [
+    "semantic bridge-language QC after acoustic ASR QC",
+    "raw transcript preserved separately from normalized analysis text",
+    "high-confidence normalization for observed ASR confusions",
+    "critical semantic corrections cannot silently become FACT",
+    "unresolved bridge-meaning candidates are retained for review",
+    "expanded bridge vocabulary from real Sunday lesson and Diana 8 transcription errors"
+  ],
+  "validationTarget": "Бридж по воскресеньям. Занятие 4. 23.04.23",
+  "promotionRule": "Promote to stable only after production comparison against r4 shows no critical regression and improved semantic transcription quality."
+}
