@@ -1,0 +1,19 @@
+{
+  "productVersion": "3.1 FREE",
+  "algorithmRevision": "3.1-free-master-analysis-r5",
+  "status": "stable",
+  "basedOnStableRevision": "3.1-free-master-analysis-r4",
+  "stableArchiveBranch": "archive/3.1-free-r5-stable-2026-08-12",
+  "validatedBy": {
+    "productionRun": 8,
+    "workflowRunId": 31565777521,
+    "result": "success",
+    "asrQc": "25/25 passed, 0 failed, 3/3 anchors passed",
+    "semanticQc": "PASS; 10 recorded semantic corrections; raw ASR preserved",
+    "visual": "passed through master build",
+    "pdfQc": "passed; master_analysis.json embedded",
+    "cleanup": "passed"
+  },
+  "validationTarget": "Бридж по воскресеньям. Занятие 4. 23.04.23",
+  "promotionReason": "Production validation completed without critical regression and semantic post-ASR QC corrected known bridge-language confusions while preserving raw provenance."
+}
