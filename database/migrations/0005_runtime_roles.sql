@@ -4,6 +4,9 @@ BEGIN;
 -- Runtime roles are intentionally NOLOGIN capability roles.
 -- Credentials/login roles will be created separately and granted only the capability they need.
 DO $$
+DECLARE
+    role_name text;
+    r record;
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'bridge_school_reader') THEN
         CREATE ROLE bridge_school_reader NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
@@ -14,11 +17,24 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'bridge_school_worker') THEN
         CREATE ROLE bridge_school_worker NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
     END IF;
-END $$;
 
-ALTER ROLE bridge_school_reader NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
-ALTER ROLE bridge_school_app    NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
-ALTER ROLE bridge_school_worker NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
+    -- A managed PostgreSQL owner such as Neon may have CREATEROLE without true SUPERUSER.
+    -- Do not issue ALTER ROLE ... NOSUPERUSER: PostgreSQL reserves changing the SUPERUSER
+    -- attribute itself to a real superuser even when the target role is already non-superuser.
+    -- Instead, validate the existing/created capability roles and fail closed if any are unsafe.
+    FOREACH role_name IN ARRAY ARRAY['bridge_school_reader','bridge_school_app','bridge_school_worker'] LOOP
+        SELECT rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication
+          INTO r
+          FROM pg_roles
+         WHERE rolname = role_name;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'runtime role missing after provisioning: %', role_name;
+        END IF;
+        IF r.rolcanlogin OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication THEN
+            RAISE EXCEPTION 'existing runtime role has unsafe attributes: %', role_name;
+        END IF;
+    END LOOP;
+END $$;
 
 COMMENT ON ROLE bridge_school_reader IS 'Bridge School read-only runtime capability';
 COMMENT ON ROLE bridge_school_app IS 'Bridge School interactive application write capability; no DELETE or DDL';
