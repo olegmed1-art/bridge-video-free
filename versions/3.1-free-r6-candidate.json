@@ -1,0 +1,9 @@
+{
+  "productVersion": "3.1 FREE",
+  "algorithmRevision": "3.1-free-master-analysis-r6",
+  "status": "candidate",
+  "basedOnStableRevision": "3.1-free-master-analysis-r5",
+  "rollbackArchiveBranch": "archive/3.1-free-r5-pre-r6-2026-08-12",
+  "change": "Replace deprecated fitz import alias with supported pymupdf import in PDF embed/QC path; no ASR, semantic QC, visual analysis, user-facing naming, source handling, permissions, or cleanup logic changed.",
+  "validationTarget": "Бридж по воскресеньям. Занятие 4. 23.04.23"
+}
