@@ -88,9 +88,20 @@ BEGIN
         RAISE EXCEPTION 'app crossed infrastructure/admin write boundary';
     END IF;
 
-    -- Worker may write ingestion/analysis/projection state but still cannot delete.
+    -- Immutable factual streams are INSERT-only for the worker.
+    FOREACH required_table IN ARRAY ARRAY['source_observation','domain_event'] LOOP
+        IF NOT has_table_privilege('bridge_school_worker', required_table, 'INSERT') THEN
+            RAISE EXCEPTION 'worker lacks expected INSERT on append-only table %', required_table;
+        END IF;
+        IF has_table_privilege('bridge_school_worker', required_table, 'UPDATE')
+           OR has_table_privilege('bridge_school_worker', required_table, 'DELETE') THEN
+            RAISE EXCEPTION 'worker can mutate append-only table %', required_table;
+        END IF;
+    END LOOP;
+
+    -- Other worker-managed operational state may be inserted/updated but still not deleted.
     FOREACH required_table IN ARRAY ARRAY[
-        'source_observation','domain_event','outbox_message','ingestion_run','ingestion_item',
+        'outbox_message','ingestion_run','ingestion_item',
         'analysis_run','output_publication','projection_run','student_profile_snapshot',
         'dependency_edge','invalidation_record','version_relation'
     ] LOOP
@@ -109,10 +120,12 @@ BEGIN
         RAISE EXCEPTION 'worker crossed admin/configuration write boundary';
     END IF;
 
-    -- Sensitive publication functions are callable only by the worker capability.
-    IF NOT has_function_privilege('bridge_school_worker','allocate_event_position(text,uuid)','EXECUTE')
-       OR NOT has_function_privilege('bridge_school_worker','publish_outbox_event(uuid)','EXECUTE') THEN
-        RAISE EXCEPTION 'worker lacks guarded publication function privilege';
+    -- Only the guarded publication entry point is callable by the worker.
+    IF NOT has_function_privilege('bridge_school_worker','publish_outbox_event(uuid)','EXECUTE') THEN
+        RAISE EXCEPTION 'worker lacks guarded publish_outbox_event privilege';
+    END IF;
+    IF has_function_privilege('bridge_school_worker','allocate_event_position(text,uuid)','EXECUTE') THEN
+        RAISE EXCEPTION 'worker can bypass outbox guard via allocate_event_position';
     END IF;
     IF has_function_privilege('bridge_school_reader','allocate_event_position(text,uuid)','EXECUTE')
        OR has_function_privilege('bridge_school_app','allocate_event_position(text,uuid)','EXECUTE')
