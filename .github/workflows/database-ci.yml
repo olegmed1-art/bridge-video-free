@@ -1,0 +1,98 @@
+name: Bridge School Database CI
+
+on:
+  pull_request:
+    paths:
+      - 'database/**'
+      - '.github/workflows/database-ci.yml'
+      - '.github/workflows/database-production.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'database/**'
+      - '.github/workflows/database-ci.yml'
+      - '.github/workflows/database-production.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-18-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: bridge_school_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bridge_school_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bridge_school_ci
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Verify PostgreSQL 18
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_num="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'SHOW server_version_num')"
+          echo "CI PostgreSQL server_version_num=${version_num}"
+          test "$version_num" -ge 180000
+
+      - name: Apply migrations to ephemeral CI database
+        shell: bash
+        run: |
+          chmod +x database/scripts/migrate.sh
+          database/scripts/migrate.sh
+
+      - name: Run invariant tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for test_file in database/tests/*.sql; do
+            echo "Running ${test_file}"
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$test_file"
+          done
+
+      - name: Verify migration idempotence
+        shell: bash
+        run: database/scripts/migrate.sh
+
+      - name: Verify checksum guard rejects edited history
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="database/migrations/0001_global_registry.sql"
+          cp "$target" /tmp/0001_global_registry.sql
+          printf '\n-- CI tamper probe\n' >> "$target"
+          if database/scripts/migrate.sh; then
+            echo 'Checksum guard failed to reject modified historical migration' >&2
+            exit 1
+          fi
+          mv /tmp/0001_global_registry.sql "$target"
+
+      - name: Verify migration registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -X -A -F ',' -v ON_ERROR_STOP=1 -c \
+            "SELECT migration_key, checksum IS NOT NULL AS checksum_recorded FROM schema_migration ORDER BY migration_key;"
+          missing="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM schema_migration WHERE checksum IS NULL;")"
+          test "$missing" -eq 0

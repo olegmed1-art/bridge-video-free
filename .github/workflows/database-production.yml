@@ -1,0 +1,111 @@
+name: Bridge School Database Production
+
+on:
+  push:
+    branches: [database-production]
+    paths:
+      - 'database/**'
+      - '.github/workflows/database-production.yml'
+      - '.github/workflows/database-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-school-database-production
+  cancel-in-progress: false
+
+jobs:
+  preflight-postgres-18:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: bridge_school_preflight
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bridge_school_preflight"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bridge_school_preflight
+    steps:
+      - name: Checkout promoted commit
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Apply migrations to ephemeral preflight database
+        shell: bash
+        run: |
+          chmod +x database/scripts/migrate.sh
+          database/scripts/migrate.sh
+
+      - name: Run invariant tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for test_file in database/tests/*.sql; do
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$test_file"
+          done
+
+      - name: Re-run migrations to verify idempotence
+        shell: bash
+        run: database/scripts/migrate.sh
+
+  migrate-neon-production:
+    needs: preflight-postgres-18
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+    steps:
+      - name: Checkout promoted commit
+        uses: actions/checkout@v4
+
+      - name: Verify protected connection secret
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${DATABASE_URL:-}" || { echo 'NEON_DATABASE_URL is not configured'; exit 1; }
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Verify Neon PostgreSQL 18 target
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_num="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'SHOW server_version_num')"
+          echo "Production PostgreSQL server_version_num=${version_num}"
+          test "$version_num" -ge 180000
+
+      - name: Apply only unapplied immutable migrations
+        shell: bash
+        run: |
+          chmod +x database/scripts/migrate.sh
+          database/scripts/migrate.sh
+
+      - name: Verify production migration registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -X -A -F ',' -v ON_ERROR_STOP=1 -c \
+            "SELECT migration_key, applied_at, checksum IS NOT NULL AS checksum_recorded FROM schema_migration ORDER BY migration_key;"
+          missing="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM schema_migration WHERE checksum IS NULL;")"
+          test "$missing" -eq 0
