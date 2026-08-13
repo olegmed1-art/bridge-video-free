@@ -1,0 +1,70 @@
+name: Backfill completed Bridge Video results to Neon
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'database/backfill_requests/*.txt'
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: 'Maximum AI_DONE jobs to import; 0 means all'
+        required: false
+        default: '0'
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+      GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --disable-pip-version-check \
+            'psycopg[binary]' google-auth requests pymupdf
+
+      - name: Verify runtime secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${BRIDGE_WORKER_DATABASE_URL:-}" || { echo 'BRIDGE_WORKER_DATABASE_URL is not configured'; exit 1; }
+          test -n "${GOOGLE_DRIVE_OAUTH_JSON:-}" || { echo 'GOOGLE_DRIVE_OAUTH_JSON is not configured'; exit 1; }
+
+      - name: Verify worker least-privilege access
+        run: python database/runtime_worker_preflight.py
+
+      - name: Resolve backfill limit
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            LIMIT='${{ inputs.limit }}'
+          else
+            REQUEST_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^database/backfill_requests/.*\.txt$' | head -n 1)"
+            test -n "$REQUEST_FILE"
+            LIMIT="$(sed -n 's/^limit=//p' "$REQUEST_FILE" | tail -n 1)"
+            LIMIT="${LIMIT:-0}"
+          fi
+          case "$LIMIT" in
+            ''|*[!0-9]*) echo 'Backfill limit must be a non-negative integer' >&2; exit 2 ;;
+          esac
+          echo "limit=$LIMIT" >> "$GITHUB_OUTPUT"
+
+      - name: Backfill completed AI_DONE jobs
+        run: python -m database.backfill_video_results --limit '${{ steps.request.outputs.limit }}'
