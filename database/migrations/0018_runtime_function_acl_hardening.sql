@@ -1,18 +1,15 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
--- These functions are internal implementation helpers, not runtime APIs.
--- PostgreSQL grants function EXECUTE to PUBLIC by default, so make the
--- intended owner-only boundary explicit.
-REVOKE ALL ON FUNCTION show_db_tree() FROM PUBLIC;
-REVOKE ALL ON FUNCTION prevent_dependency_cycle() FROM PUBLIC;
+-- show_db_tree() exists in production as an untracked administrative helper,
+-- has no database dependencies, and exposes schema metadata to every runtime
+-- principal through PostgreSQL's default PUBLIC EXECUTE grant. Remove the drift.
+DROP FUNCTION IF EXISTS public.show_db_tree();
 
-REVOKE ALL ON FUNCTION show_db_tree() FROM
-    bridge_school_reader,
-    bridge_school_app,
-    bridge_school_worker,
-    bridge_school_health;
-REVOKE ALL ON FUNCTION prevent_dependency_cycle() FROM
+-- The dependency-cycle function is a trigger implementation detail, not a
+-- callable runtime API. Keep the trigger intact but remove direct execution.
+REVOKE ALL ON FUNCTION public.prevent_dependency_cycle() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.prevent_dependency_cycle() FROM
     bridge_school_reader,
     bridge_school_app,
     bridge_school_worker,
