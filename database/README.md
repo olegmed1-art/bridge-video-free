@@ -30,17 +30,23 @@ PostgreSQL 18 migration package for the School of Sports Bridge.
 15. Knowledge identity and knowledge content are separated. A worker may create candidate/versioned knowledge, but it cannot activate school canon.
 16. Canon activation is an explicit administrative record; overlapping active versions for the same knowledge item and scope are rejected.
 17. Media/transcript/evidence provenance is preserved: corrected transcripts are new Transcript objects, evidence locators and transcript segments are append-only runtime facts, and generated Artifact versions preserve their source/knowledge dependencies.
+18. Student profile observations, profile snapshots, profile components, inferences and recommendations are derived append-only history. The current profile is a selected projection generation, not a row that is continually overwritten.
+19. Every selected profile input is recorded explicitly. An observation produced by an `AnalysisRun` can enter a profile only when that exact output has been explicitly published; staging/partial analytical output cannot leak into the current profile.
+20. A tournament-derived Error/SuccessObservation must retain the exact `TournamentIdentityAttribution` and `EntityResolutionDecision` that justified associating the external result with the Student.
+21. Projection generation switching is atomic and guarded. Runtime workers cannot edit the current-generation pointer directly; they can activate only a completed successful `ProjectionRun` through `activate_projection_generation()`.
+22. Recommendations are not facts. Recommendation content and lifecycle are separate append-only records, preserving created/accepted/applied/superseded/expired/rejected/invalidated history.
 
 ## Runtime capability roles
 
 - `bridge_school_reader` — SELECT access across the school schema; no writes.
 - `bridge_school_app` — inherits reader and may INSERT/UPDATE only interactive operational state such as students, groups, partnerships, sessions and student work.
-- `bridge_school_worker` — inherits app and may additionally write ingestion, analysis, projection, generated learning content, homework/tournament state, candidate knowledge, artifacts, transcripts, evidence and quality state.
+- `bridge_school_worker` — inherits app and may additionally write ingestion, analysis, projection, generated learning content, homework/tournament state, candidate knowledge, artifacts, transcripts, evidence, assessments, profile generations and recommendations.
 - `domain_event` and `source_observation` are INSERT-only for runtime worker access.
 - Event publication is exposed to the worker only through guarded `publish_outbox_event()`; direct `allocate_event_position()` execution is not available to runtime roles.
-- Exercise-attempt assessments, tournament result facts, tournament identity-attribution history, transcript segments, evidence/evidence links and quality assessments are append-only for the worker.
+- Exercise-attempt assessments, tournament result facts, tournament identity-attribution history, transcript segments, evidence/evidence links, quality assessments, profile observations/snapshots/components/inferences and recommendation history are append-only for the worker.
 - KnowledgeVersion content is not runtime-rewritable; only lifecycle/review columns may be updated by the worker.
-- CanonActivation and Algorithm/AlgorithmVersion remain administrative/owner-write state.
+- CanonActivation, Algorithm/AlgorithmVersion and ProjectionPolicyVersion remain administrative/owner-write state.
+- Projection generation activation is available to the worker only through `activate_projection_generation()`; direct writes to current/activation tables are denied.
 - Migration history and selected administration/configuration state remain owner-only for writes.
 - These are NOLOGIN roles. Future application login roles will receive only the capability role they need; no database password is stored in this repository.
 
@@ -56,6 +62,8 @@ PostgreSQL 18 migration package for the School of Sports Bridge.
 - `0008_exercises_homework.sql` — versioned exercises, assignments, recipients, submissions, attempts and separate append-only attempt assessments.
 - `0009_tournament_data.sql` — tournaments, entries, source-scoped participant identities, explicit identity attribution, boards and append-only table results with correction lineage.
 - `0010_knowledge_media.sql` — knowledge/version/canon graph, gaps, artifacts, media/transcripts, evidence/quality, algorithm registry and explicit analysis inputs/outputs.
+- `0011_student_profile_projections.sql` — SkillAssessment/MetricObservation/Error/Success observations, immutable profile snapshot components and exact inputs, guarded projection-generation activation, inferences and recommendation history.
+- `0012_tournament_profile_identity_guard.sql` — requires explicit tournament identity attribution/resolution for student-facing learning observations derived from TableResult.
 
 The exact production state is the `schema_migration` registry in Neon, protected by migration checksums.
 
@@ -67,6 +75,7 @@ The exact production state is the `schema_migration` registry in Neon, protected
 - `004_exercises_homework.sql` — exercise/homework relationships, recipient/submission consistency, selected attempts, assessment history and permissions.
 - `005_tournament_data.sql` — tournament/source scope, explicit identity resolution, exact-result dedupe, correction lineage, NS/EW entry scope and runtime permissions.
 - `006_knowledge_media.sql` — knowledge-source scope, canon overlap, artifact/media scope, transcript/evidence provenance, analysis input typing and runtime/admin boundaries.
+- `007_student_profile_projections.sql` — student/metric/skill/topic scope, exact profile inputs, analysis-publication barrier, tournament identity provenance, immutable snapshots, atomic generation activation, recommendation provenance and runtime boundaries.
 
 All tests execute inside transactions and finish with `ROLLBACK`; they leave no test records in production-style databases.
 

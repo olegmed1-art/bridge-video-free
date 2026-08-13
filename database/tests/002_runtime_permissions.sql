@@ -88,8 +88,8 @@ BEGIN
         RAISE EXCEPTION 'app crossed infrastructure/admin write boundary';
     END IF;
 
-    -- Immutable factual streams are INSERT-only for the worker.
-    FOREACH required_table IN ARRAY ARRAY['source_observation','domain_event'] LOOP
+    -- Immutable factual/projection streams are INSERT-only for the worker.
+    FOREACH required_table IN ARRAY ARRAY['source_observation','domain_event','student_profile_snapshot'] LOOP
         IF NOT has_table_privilege('bridge_school_worker', required_table, 'INSERT') THEN
             RAISE EXCEPTION 'worker lacks expected INSERT on append-only table %', required_table;
         END IF;
@@ -102,7 +102,7 @@ BEGIN
     -- Other worker-managed operational state may be inserted/updated but still not deleted.
     FOREACH required_table IN ARRAY ARRAY[
         'outbox_message','ingestion_run','ingestion_item',
-        'analysis_run','output_publication','projection_run','student_profile_snapshot',
+        'analysis_run','output_publication','projection_run',
         'dependency_edge','invalidation_record','version_relation'
     ] LOOP
         IF NOT has_table_privilege('bridge_school_worker', required_table, 'INSERT')
