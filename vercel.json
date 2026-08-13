@@ -1,3 +1,4 @@
 {
-  "regions": ["fra1"]
+  "regions": ["fra1"],
+  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- app.py bridge_school_api pyproject.toml .python-version vercel.json"
 }
