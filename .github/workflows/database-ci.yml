@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'database/**'
+      - 'tests/test_worker_dsn_contract.py'
       - '.github/workflows/database-ci.yml'
       - '.github/workflows/database-production.yml'
       - '.github/workflows/database-app-runtime-smoke.yml'
@@ -11,6 +12,7 @@ on:
     branches: [main]
     paths:
       - 'database/**'
+      - 'tests/test_worker_dsn_contract.py'
       - '.github/workflows/database-ci.yml'
       - '.github/workflows/database-production.yml'
       - '.github/workflows/database-app-runtime-smoke.yml'
@@ -56,7 +58,14 @@ jobs:
             database/runtime_worker_persistence_smoke.py \
             database/backfill_video_results.py \
             bridge_neon_persistence.py \
-            run_master_3_1_free_semantic.py
+            run_master_3_1_free_semantic.py \
+            tests/test_worker_dsn_contract.py
+
+      - name: Install worker DSN test dependency
+        run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+
+      - name: Run worker DSN contract regression tests
+        run: PYTHONPATH=. python tests/test_worker_dsn_contract.py
 
       - name: Install PostgreSQL client
         shell: bash
