@@ -37,6 +37,29 @@ CREATE INDEX IF NOT EXISTS success_observation_resolution_idx
     ON success_observation(entity_resolution_decision_id, student_id, observed_at DESC)
     WHERE entity_resolution_decision_id IS NOT NULL;
 
+-- This guard is deliberately named with an "a_" prefix so it runs before the wider
+-- student_profile_input_guard. Missing identity provenance is a constraint violation;
+-- deeper attribution/scope validation is left to the existing profile-input guard.
+CREATE OR REPLACE FUNCTION validate_student_profile_tournament_identity_presence()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.table_result_id IS NOT NULL
+       AND (NEW.tournament_identity_attribution_id IS NULL OR NEW.entity_resolution_decision_id IS NULL) THEN
+        RAISE EXCEPTION 'tournament profile input requires identity attribution and resolution decision'
+            USING ERRCODE='23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS a_student_profile_tournament_identity_presence_guard ON student_profile_input;
+CREATE TRIGGER a_student_profile_tournament_identity_presence_guard
+BEFORE INSERT OR UPDATE OF table_result_id, tournament_identity_attribution_id, entity_resolution_decision_id
+ON student_profile_input
+FOR EACH ROW EXECUTE FUNCTION validate_student_profile_tournament_identity_presence();
+
 CREATE OR REPLACE FUNCTION validate_learning_observation_scope()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -143,6 +166,9 @@ FOR EACH ROW EXECUTE FUNCTION validate_learning_observation_scope();
 
 -- The new provenance columns are part of append-only observation facts.
 REVOKE UPDATE ON TABLE error_observation, success_observation FROM bridge_school_worker;
+
+REVOKE ALL ON FUNCTION validate_student_profile_tournament_identity_presence() FROM PUBLIC;
+REVOKE EXECUTE ON FUNCTION validate_student_profile_tournament_identity_presence() FROM bridge_school_reader, bridge_school_app, bridge_school_worker;
 
 INSERT INTO schema_migration(migration_key)
 VALUES ('0012_tournament_profile_identity_guard')
