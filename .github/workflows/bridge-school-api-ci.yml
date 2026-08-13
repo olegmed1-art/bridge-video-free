@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - 'bridge_school_api/**'
+      - 'tests/test_api_dsn_contract.py'
       - 'requirements-api.txt'
       - 'Dockerfile.api'
       - '.github/workflows/bridge-school-api-ci.yml'
@@ -11,6 +12,7 @@ on:
     branches: [main]
     paths:
       - 'bridge_school_api/**'
+      - 'tests/test_api_dsn_contract.py'
       - 'requirements-api.txt'
       - 'Dockerfile.api'
       - '.github/workflows/bridge-school-api-ci.yml'
@@ -28,11 +30,13 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       - name: Install API dependencies
         run: python -m pip install --disable-pip-version-check -r requirements-api.txt
       - name: Compile API package
         run: python -m py_compile bridge_school_api/__init__.py bridge_school_api/db.py bridge_school_api/main.py
+      - name: Verify database DSN security contract
+        run: PYTHONPATH=. python tests/test_api_dsn_contract.py
       - name: Import FastAPI application
         run: python -c "from bridge_school_api.main import app; assert app.title == 'Bridge School API'"
       - name: Build API container
@@ -52,7 +56,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
       - name: Install API dependencies
         run: python -m pip install --disable-pip-version-check -r requirements-api.txt
       - name: Verify application database secret exists
