@@ -38,7 +38,9 @@ jobs:
       DATABASE_URL: postgresql://bridge_ci_owner:bridge_ci_owner@localhost:5432/bridge_school_preflight
     steps:
       - name: Checkout promoted commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Install PostgreSQL client
         shell: bash
@@ -97,14 +99,16 @@ jobs:
     needs: preflight-postgres-18
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
     steps:
       - name: Checkout promoted commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Verify protected connection secret
         shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: |
           set -euo pipefail
           test -n "${DATABASE_URL:-}" || { echo 'NEON_DATABASE_URL is not configured'; exit 1; }
@@ -118,6 +122,8 @@ jobs:
 
       - name: Verify Neon PostgreSQL 18 target
         shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: |
           set -euo pipefail
           version_num="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'SHOW server_version_num')"
@@ -126,12 +132,16 @@ jobs:
 
       - name: Apply only unapplied immutable migrations
         shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: |
           chmod +x database/scripts/migrate.sh
           database/scripts/migrate.sh
 
       - name: Verify production migration registry
         shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: |
           set -euo pipefail
           psql "$DATABASE_URL" -X -A -F ',' -v ON_ERROR_STOP=1 -c \
@@ -141,6 +151,8 @@ jobs:
 
       - name: Verify production operational health
         shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: |
           set -euo pipefail
           psql "$DATABASE_URL" -X -A -F ',' -v ON_ERROR_STOP=1 -c \
