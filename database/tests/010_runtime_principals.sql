@@ -116,4 +116,23 @@ BEGIN
     END IF;
 END $$;
 
+-- Any new owner-created function must be private by default. Runtime-callable
+-- functions require an explicit GRANT in the migration that creates them.
+CREATE FUNCTION public.__bridge_test_default_acl()
+RETURNS integer
+LANGUAGE sql
+AS 'SELECT 1';
+
+DO $$
+BEGIN
+    IF has_function_privilege('public', 'public.__bridge_test_default_acl()', 'EXECUTE') THEN
+        RAISE EXCEPTION 'PUBLIC can execute a newly created owner function';
+    END IF;
+    IF has_function_privilege('bridge_school_app_principal', 'public.__bridge_test_default_acl()', 'EXECUTE')
+       OR has_function_privilege('bridge_school_worker_principal', 'public.__bridge_test_default_acl()', 'EXECUTE')
+       OR has_function_privilege('bridge_school_health_principal', 'public.__bridge_test_default_acl()', 'EXECUTE') THEN
+        RAISE EXCEPTION 'runtime principal can execute a newly created owner function without an explicit grant';
+    END IF;
+END $$;
+
 ROLLBACK;
