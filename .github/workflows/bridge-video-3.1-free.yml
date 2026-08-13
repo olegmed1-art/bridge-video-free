@@ -74,9 +74,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
-          python -m pip install --disable-pip-version-check \
-            google-auth requests faster-whisper pillow imagehash \
-            opencv-python-headless reportlab pymupdf 'psycopg[binary]'
+          python -m pip install --disable-pip-version-check -r requirements-worker.txt
 
       - name: Authenticate to Google Cloud with Workload Identity Federation
         id: auth
