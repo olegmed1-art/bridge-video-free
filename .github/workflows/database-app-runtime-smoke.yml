@@ -1,0 +1,38 @@
+name: Bridge School Neon App Runtime Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'database/app_smoke_requests/**'
+
+permissions:
+  contents: read
+
+jobs:
+  app-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BRIDGE_APP_DATABASE_URL: ${{ secrets.BRIDGE_APP_DATABASE_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PostgreSQL client library
+        run: python -m pip install --disable-pip-version-check 'psycopg[binary]'
+
+      - name: Verify dedicated app credential exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${BRIDGE_APP_DATABASE_URL:-}" || { echo 'BRIDGE_APP_DATABASE_URL is not configured'; exit 1; }
+
+      - name: Verify least-privilege interactive app access
+        run: python database/runtime_app_preflight.py
