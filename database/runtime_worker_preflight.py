@@ -5,12 +5,15 @@ from __future__ import annotations
 import os
 import re
 import sys
+from urllib.parse import quote
 
 import psycopg
 
 EXPECTED_PRINCIPAL = "bridge_school_worker_principal"
 EXPECTED_CAPABILITY = "bridge_school_worker"
 EXPECTED_SCHOOL = "Школа спортивного бриджа"
+NEON_HOST = "ep-noisy-pine-b1pe30sf.c-5.eu-central-1.aws.neon.tech"
+NEON_DATABASE = "neondb"
 
 
 def fail(message: str) -> None:
@@ -28,7 +31,7 @@ def safe_db_error(exc: BaseException) -> str:
 
 
 def normalize_dsn(raw: str) -> str:
-    """Accept a bare URI or a copied .env assignment without exposing it."""
+    """Accept a URI, copied .env assignment, or password-only repository secret."""
     value = raw.strip()
     if not value:
         return ""
@@ -41,10 +44,20 @@ def normalize_dsn(raw: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
         value = value[1:-1].strip()
 
-    if not (value.startswith("postgresql://") or value.startswith("postgres://")):
-        fail("BRIDGE_WORKER_DATABASE_URL must contain a PostgreSQL URI, not a variable assignment or password-only value")
+    if value.startswith("postgresql://") or value.startswith("postgres://"):
+        return value
 
-    return value
+    # Neon generated passwords are safe to store independently from endpoint metadata.
+    # If a user copied only the generated password into the GitHub secret, construct
+    # the fixed worker connection URI here without ever printing the password.
+    if value and not any(ch.isspace() for ch in value) and "=" not in value:
+        encoded_password = quote(value, safe="")
+        return (
+            f"postgresql://{EXPECTED_PRINCIPAL}:{encoded_password}@{NEON_HOST}/{NEON_DATABASE}"
+            "?sslmode=require&channel_binding=require"
+        )
+
+    fail("BRIDGE_WORKER_DATABASE_URL is not a supported PostgreSQL URI, .env assignment, or password-only value")
 
 
 def main() -> None:
