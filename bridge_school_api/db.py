@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 from contextlib import contextmanager
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import psycopg
 from psycopg.rows import dict_row
@@ -33,10 +33,24 @@ def normalize_dsn(raw: str) -> str:
         raise RuntimeError("BRIDGE_APP_DATABASE_URL uses an unexpected database principal")
     if not parsed.password:
         raise RuntimeError("BRIDGE_APP_DATABASE_URL does not include a database password")
-    if not parsed.hostname or "-pooler." not in parsed.hostname:
-        raise RuntimeError("BRIDGE_APP_DATABASE_URL must use the Neon pooled endpoint")
+
+    hostname = (parsed.hostname or "").lower()
+    if not hostname.endswith(".neon.tech") or "-pooler." not in hostname:
+        raise RuntimeError("BRIDGE_APP_DATABASE_URL must use a Neon pooled endpoint")
+    if parsed.port not in (None, 5432):
+        raise RuntimeError("BRIDGE_APP_DATABASE_URL uses an unexpected database port")
     if parsed.path != f"/{EXPECTED_DATABASE}":
         raise RuntimeError("BRIDGE_APP_DATABASE_URL targets an unexpected database")
+    if parsed.fragment:
+        raise RuntimeError("BRIDGE_APP_DATABASE_URL must not include a URI fragment")
+
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    sslmodes = query.get("sslmode", [])
+    if len(sslmodes) != 1 or sslmodes[0] not in {"require", "verify-full"}:
+        raise RuntimeError("BRIDGE_APP_DATABASE_URL must require TLS")
+    if query.get("channel_binding", []) != ["require"]:
+        raise RuntimeError("BRIDGE_APP_DATABASE_URL must require channel binding")
+
     return value
 
 
