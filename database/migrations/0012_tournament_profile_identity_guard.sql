@@ -74,6 +74,11 @@ BEGIN
     END IF;
 
     IF NEW.table_result_id IS NOT NULL THEN
+        IF NEW.tournament_identity_attribution_id IS NULL OR NEW.entity_resolution_decision_id IS NULL THEN
+            RAISE EXCEPTION 'tournament learning observation requires identity attribution and resolution decision'
+                USING ERRCODE='23514';
+        END IF;
+
         SELECT school_id, ns_participation_id, ew_participation_id
           INTO v_ref_school, v_ns, v_ew
           FROM table_result WHERE result_id=NEW.table_result_id;
