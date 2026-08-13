@@ -1,7 +1,7 @@
 # Алгоритм безопасного развёртывания и аудита
 
-Версия: 2.2
-Дата: 2026-08-13
+Версия: 2.3
+Дата: 2026-08-14
 
 Этот алгоритм применяется к инфраструктуре Bridge School: GitHub Actions, Neon PostgreSQL и Vercel.
 
@@ -9,9 +9,10 @@
 
 1. Проверить текущие состояния `main`, `database-production`, production Neon и Vercel.
 2. Проверить реестр миграций, отсутствие пропущенных checksum и `operational_health_summary`.
-3. Проверить последние runtime errors.
+3. Проверить последние runtime errors отдельно за короткое актуальное окно и за расширенный период, чтобы не смешивать старые устранённые сбои с текущими.
 4. Определить, какие workflows могут запуститься от изменения. Нерелевантные jobs не должны стартовать побочным эффектом.
 5. Для изменений `vercel.json` и `.vercelignore` обязательно дождаться реального Preview deployment и проверить его build log до merge.
+6. Перед изменением runtime credential contract проверить, что текущий секрет уже соответствует новому контракту отдельным smoke-тестом либо подготовить ротацию до merge.
 
 ## Изменение базы
 
@@ -24,6 +25,8 @@
 7. Для PostgreSQL default function privileges используется глобальное правило owner-role; schema-scoped revoke не считается достаточной защитой.
 8. `SECURITY DEFINER` функции должны иметь фиксированный безопасный `search_path` и не иметь общего runtime-доступа без явного обоснования.
 9. Неучтённые пользовательские функции в production считаются schema drift и должны быть либо внесены в миграции, либо удалены новой миграцией после проверки зависимостей.
+10. Runtime principals не получают `SUPERUSER`, `CREATEROLE`, `CREATEDB`, `REPLICATION`, `BYPASSRLS` или `CREATE` в рабочей схеме.
+11. Опасные табличные привилегии (`DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER`) проверяются отдельно для runtime capability-roles и principals.
 
 ## Runtime-доступ к базе
 
@@ -33,6 +36,10 @@
 4. Если компонент должен сохранять результат в Neon и его database credential настроен как обязательный, ошибка preflight является ошибкой всего задания. Запрещено незаметно продолжать работу и выдавать успешный результат без database persistence.
 5. Отказоустойчивый режим без базы допустим только если он явно объявлен отдельным режимом продукта и результат помечается как неполный; скрытый fallback запрещён.
 6. Пароль, DSN или токен никогда не выводятся в лог. Диагностика ошибок подключения должна быть санитизирована.
+7. Production runtime DSN хранится как полный PostgreSQL URI. Password-only, `.env`-фрагменты и автоматическая сборка URI из захардкоженного host запрещены.
+8. DSN-contract проверяет principal, database, ожидаемый production endpoint, TLS и channel binding до попытки полезной работы.
+9. Для serverless/API и worker используется pooled Neon endpoint, если компонент не требует session-level semantics; исключение должно быть явно задокументировано.
+10. После каждой ротации runtime database credential запускается dedicated smoke-test. Для worker он обязан проверить полный путь persistence с rollback.
 
 ## GitHub Actions
 
@@ -44,8 +51,9 @@
 6. Зависимости устанавливаются до выдачи cloud identity и долгоживущих runtime credentials.
 7. Runtime credential передаётся только тому step, которому он нужен, а не всему job без необходимости.
 8. Production owner DSN передаётся только шагам проверки/миграции/верификации; checkout и установка пакетов его не получают.
-9. Пользовательский ввод сначала передаётся через environment и валидируется до использования.
+9. Пользовательский ввод сначала передаётся через environment и валидируется до использования. Прямая подстановка выражений GitHub в shell-команду запрещена, если значение может содержать пользовательские данные.
 10. Пользовательские медиа и расшифровки не публикуются как GitHub Actions artifacts.
+11. Workflow, который способен записывать результат во внешнюю систему, должен завершаться ошибкой при нарушении обязательной persistence boundary; успешное завершение без записи запрещено.
 
 ## Vercel
 
@@ -54,10 +62,11 @@
 3. Любая оптимизация Ignored Build Step сначала проверяется на Preview. Ошибка ignored-build command считается блокирующей merge.
 4. Нельзя предполагать, что `.git` доступен команде `ignoreCommand`: `.vercelignore` может удалить git metadata до её запуска. Git-based ignore rule применяется только после фактической проверки build log.
 5. Неудачный эксперимент с Vercel-конфигурацией закрывается без merge; production-конфигурация не ослабляется ради уменьшения числа deployments.
+6. После изменения API проверяются `/healthz`, protected endpoint без token, отсутствие OpenAPI docs и отсутствие новых runtime error clusters за актуальное короткое окно.
 
 ## CI gate
 
-До merge должны пройти все проверки, относящиеся к изменению: PostgreSQL 18 clean migration, invariants/permissions, idempotence, checksum tamper guard, Python 3.12 compile/import/contract tests и сборка runtime, где она применима. Failed CI не обходится ручным production-изменением.
+До merge должны пройти все проверки, относящиеся к изменению: PostgreSQL 18 clean migration, invariants/permissions, idempotence, checksum tamper guard, Python 3.12 compile/import/contract tests и сборка runtime, где она применима. Failed CI не обходится ручным production-изменением. Изменение credential contract без regression test считается неполным.
 
 ## Production promotion
 
@@ -74,6 +83,9 @@
 - ожидаемую последнюю миграцию и `checksum missing = 0`;
 - `critical = 0` в operational health;
 - фактические effective privileges runtime principals;
+- отсутствие `SUPERUSER`, `CREATEROLE`, `CREATEDB`, `REPLICATION`, `BYPASSRLS` у runtime principals;
+- отсутствие `CREATE` в рабочей схеме у runtime principals;
+- отсутствие опасных табличных привилегий, которые не требуются компоненту;
 - отсутствие неожиданного `PUBLIC EXECUTE` у пользовательских owner-функций;
 - `/healthz` = 200;
 - защищённый endpoint без bearer token = 401;
@@ -85,6 +97,10 @@
 ## Правило реакции на найденную ошибку
 
 Не ослаблять проверку ради зелёного статуса. Зафиксировать root cause, сделать forward fix, добавить regression test, повторить CI и post-deploy verification. Если дефект показал недостаток процесса, это правило добавляется в следующую версию алгоритма.
+
+## Изменения версии 2.3
+
+Добавлены правила после третьей волны глубокого аудита: обязательный smoke после ротации runtime credentials, запрет password-only и `.env` fallback для production DSN, проверка production endpoint/TLS/channel binding, явная проверка опасных атрибутов ролей и табличных привилегий, а также разделение старых и текущих Vercel runtime errors по временному окну. Worker DSN-contract переведён на fail-closed полный pooled production URI.
 
 ## Изменения версии 2.2
 
