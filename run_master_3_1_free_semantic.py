@@ -4,12 +4,15 @@
 Keeps the proven master-analysis runner intact and adds an evidence-preserving
 normalization layer learned from real school transcripts.
 """
+from pathlib import Path
+import os
+
 import bridge_worker_3_1_free as core
 import run_master_3_1_free as base
 from bridge_semantic_qc import SEMANTIC_QC_REVISION, semantic_normalize_segments
 
 # Product name stays 3.1 FREE; only the internal revision changes.
-core.ALGORITHM_REVISION = "3.1-free-master-analysis-r5"
+core.ALGORITHM_REVISION = "3.1-free-master-analysis-r7"
 base.ALGORITHM_REVISION = core.ALGORITHM_REVISION
 
 # Give Whisper more bridge-specific acoustic/lexical anchors seen in real lessons.
@@ -31,32 +34,18 @@ _original_master_payload = base.master_analysis_payload
 def obtain_transcript_with_semantic_qc(t, parent, name, video, work, dur, job):
     segs, tinfo, warnings = _original_obtain_transcript(t, parent, name, video, work, dur, job)
     segs, semantic = semantic_normalize_segments(segs)
-
-    # Human-readable PDF and semantic analysis use deterministic normalized text.
-    # Original recognizer output remains in raw_text in the embedded master JSON.
     for segment in segs:
         if segment.get("semantic_corrections"):
             segment["text"] = segment.get("analysis_text", segment.get("text", ""))
-
     tinfo = dict(tinfo)
     tinfo["semanticQc"] = semantic
     suffix = " / SEMANTIC-QC PASS" if semantic.get("critical_unresolved", 0) == 0 else " / SEMANTIC-QC WARNINGS"
     tinfo["status"] = (tinfo.get("status") or "TRANSCRIPT") + suffix
-
     if semantic.get("auto_corrections"):
-        warnings = list(warnings) + [
-            f"Semantic post-ASR QC applied {semantic['auto_corrections']} recorded corrections; raw ASR is preserved in master_analysis.json."
-        ]
+        warnings = list(warnings) + [f"Semantic post-ASR QC applied {semantic['auto_corrections']} recorded corrections; raw ASR is preserved in master_analysis.json."]
     if semantic.get("critical_unresolved"):
-        warnings = list(warnings) + [
-            f"Semantic QC left {semantic['critical_unresolved']} critical bridge-language candidates unresolved; they must not be treated as FACT."
-        ]
-    base.io.safe(
-        job_id=job,
-        stage="SEMANTIC_QC",
-        exit_code=0,
-        content_warning_count=int(semantic.get("critical_unresolved", 0)),
-    )
+        warnings = list(warnings) + [f"Semantic QC left {semantic['critical_unresolved']} critical bridge-language candidates unresolved; they must not be treated as FACT."]
+    base.io.safe(job_id=job, stage="SEMANTIC_QC", exit_code=0, content_warning_count=int(semantic.get("critical_unresolved", 0)))
     return segs, tinfo, warnings
 
 
@@ -77,11 +66,33 @@ def master_payload_with_semantic_qc(**kwargs):
     return master
 
 
-# Patch only the extension points used by process_job; all Drive/source-integrity
-# behavior remains in the already-tested production runner.
 base.obtain_transcript = obtain_transcript_with_semantic_qc
 base.master_analysis_payload = master_payload_with_semantic_qc
 
 
+def _source_id_from_request(job_id):
+    """Resolve an exact Drive source ID only from the checked-in request for this job.
+
+    This preserves the opaque stable-ID production path while allowing a request file
+    to pin the exact source object. The source is still revalidated by the base runner.
+    """
+    request = Path("run_requests") / f"{job_id}.txt"
+    if not request.is_file():
+        return None
+    for line in request.read_text(encoding="utf-8").splitlines():
+        if line.startswith("SOURCE_FILE_ID="):
+            value = line.split("=", 1)[1].strip()
+            return value or None
+    return None
+
+
 def process_job(token):
-    return base.process_job(token)
+    requested_job = os.environ.get("BRIDGE_JOB_ID", "")
+    source_id = _source_id_from_request(requested_job)
+    if source_id:
+        os.environ["BRIDGE_JOB_ID"] = core.stable_job_id("drive", source_id)
+    try:
+        return base.process_job(token)
+    finally:
+        if requested_job:
+            os.environ["BRIDGE_JOB_ID"] = requested_job
