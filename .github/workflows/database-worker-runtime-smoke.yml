@@ -1,0 +1,39 @@
+name: Bridge Worker Neon Runtime Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/database-worker-runtime-smoke.yml'
+      - 'database/runtime_worker_preflight.py'
+
+permissions:
+  contents: read
+
+jobs:
+  worker-runtime-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PostgreSQL client library
+        run: python -m pip install --disable-pip-version-check 'psycopg[binary]'
+
+      - name: Verify worker runtime secret exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${BRIDGE_WORKER_DATABASE_URL:-}" || { echo 'BRIDGE_WORKER_DATABASE_URL is not configured'; exit 1; }
+
+      - name: Verify least-privilege Neon worker access
+        run: python database/runtime_worker_preflight.py
