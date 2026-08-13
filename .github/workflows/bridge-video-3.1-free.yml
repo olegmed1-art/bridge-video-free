@@ -16,8 +16,11 @@ permissions:
   contents: read
   id-token: write
 
+# 3.1 FREE processes one heavy Drive job at a time unless a future revision
+# introduces an explicitly proven isolation model. Using the ref rather than
+# commit SHA/job input prevents two pushes/dispatches from processing in parallel.
 concurrency:
-  group: bridge-${{ github.event_name }}-${{ github.sha }}-${{ inputs.job_id }}
+  group: bridge-video-3.1-free-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
