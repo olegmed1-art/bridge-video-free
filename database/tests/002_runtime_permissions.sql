@@ -103,7 +103,7 @@ BEGIN
     FOREACH required_table IN ARRAY ARRAY[
         'outbox_message','ingestion_run','ingestion_item',
         'analysis_run','output_publication','projection_run',
-        'dependency_edge','invalidation_record','version_relation'
+        'dependency_edge','version_relation'
     ] LOOP
         IF NOT has_table_privilege('bridge_school_worker', required_table, 'INSERT')
            OR NOT has_table_privilege('bridge_school_worker', required_table, 'UPDATE') THEN
@@ -114,24 +114,36 @@ BEGIN
         END IF;
     END LOOP;
 
+    -- Invalidation and recompute lifecycle are guarded operations, not direct table writes.
+    IF has_table_privilege('bridge_school_worker','invalidation_record','INSERT')
+       OR has_table_privilege('bridge_school_worker','invalidation_record','UPDATE')
+       OR has_table_privilege('bridge_school_worker','invalidation_record','DELETE') THEN
+        RAISE EXCEPTION 'worker can bypass guarded invalidation workflow';
+    END IF;
+
     IF has_table_privilege('bridge_school_worker','schema_migration','UPDATE')
        OR has_table_privilege('bridge_school_worker','metric_definition','INSERT')
        OR has_table_privilege('bridge_school_worker','projection_policy_version','UPDATE') THEN
         RAISE EXCEPTION 'worker crossed admin/configuration write boundary';
     END IF;
 
-    -- Only the guarded publication entry point is callable by the worker.
+    -- Only guarded event publication/invalidation entry points are callable by the worker.
     IF NOT has_function_privilege('bridge_school_worker','publish_outbox_event(uuid)','EXECUTE') THEN
         RAISE EXCEPTION 'worker lacks guarded publish_outbox_event privilege';
+    END IF;
+    IF NOT has_function_privilege('bridge_school_worker','invalidate_dependency_subgraph(uuid,uuid,text,jsonb,text)','EXECUTE') THEN
+        RAISE EXCEPTION 'worker lacks guarded invalidation privilege';
     END IF;
     IF has_function_privilege('bridge_school_worker','allocate_event_position(text,uuid)','EXECUTE') THEN
         RAISE EXCEPTION 'worker can bypass outbox guard via allocate_event_position';
     END IF;
-    IF has_function_privilege('bridge_school_reader','allocate_event_position(text,uuid)','EXECUTE')
+    IF has_function_privilege('bridge_school_reader','invalidate_dependency_subgraph(uuid,uuid,text,jsonb,text)','EXECUTE')
+       OR has_function_privilege('bridge_school_app','invalidate_dependency_subgraph(uuid,uuid,text,jsonb,text)','EXECUTE')
+       OR has_function_privilege('bridge_school_reader','allocate_event_position(text,uuid)','EXECUTE')
        OR has_function_privilege('bridge_school_app','allocate_event_position(text,uuid)','EXECUTE')
        OR has_function_privilege('bridge_school_reader','publish_outbox_event(uuid)','EXECUTE')
        OR has_function_privilege('bridge_school_app','publish_outbox_event(uuid)','EXECUTE') THEN
-        RAISE EXCEPTION 'publication function leaked to non-worker runtime role';
+        RAISE EXCEPTION 'guarded infrastructure function leaked to non-worker runtime role';
     END IF;
 END $$;
 

@@ -35,6 +35,14 @@ PostgreSQL 18 migration package for the School of Sports Bridge.
 20. A tournament-derived Error/SuccessObservation must retain the exact `TournamentIdentityAttribution` and `EntityResolutionDecision` that justified associating the external result with the Student.
 21. Projection generation switching is atomic and guarded. Runtime workers cannot edit the current-generation pointer directly; they can activate only a completed successful `ProjectionRun` through `activate_projection_generation()`.
 22. Recommendations are not facts. Recommendation content and lifecycle are separate append-only records, preserving created/accepted/applied/superseded/expired/rejected/invalidated history.
+23. Derived-object dependencies are explicit DAG edges. New profile observations, profile inputs, recommendations and session-plan usage automatically register causal `derived_from` / `depends_on` edges instead of relying on hidden application memory.
+24. Invalidation is causal and append-only. One `invalidation_batch` records the root cause and every affected descendant receives an `invalidation_record` with its dependency depth; existing historical generations are never deleted or rewritten.
+25. A current profile may remain readable but explicitly `stale` while recomputation is pending. This avoids silently serving an old projection as if it were fresh and avoids deleting the last usable profile before its replacement exists.
+26. Only current projection generations are queued for recomputation. Historical generations keep their invalidation history but do not consume worker capacity.
+27. Repeated invalidations of the same active projection scope coalesce into one pending/running recompute request while every causal invalidation is preserved in `projection_recompute_cause`.
+28. Recompute claiming uses a durable queue and `FOR UPDATE SKIP LOCKED`; claim/fail/retry/complete transitions are guarded and also preserved as append-only state events.
+29. A recompute request can succeed only after a matching successful `ProjectionRun` has been completed and its generation has already been atomically activated as current.
+30. Runtime workers cannot directly mutate invalidation/recompute tables; they receive only guarded functions for invalidation and queue lifecycle transitions.
 
 ## Runtime capability roles
 
@@ -47,6 +55,9 @@ PostgreSQL 18 migration package for the School of Sports Bridge.
 - KnowledgeVersion content is not runtime-rewritable; only lifecycle/review columns may be updated by the worker.
 - CanonActivation, Algorithm/AlgorithmVersion and ProjectionPolicyVersion remain administrative/owner-write state.
 - Projection generation activation is available to the worker only through `activate_projection_generation()`; direct writes to current/activation tables are denied.
+- Dependency registration for profile/recommendation objects is done by internal trigger functions; those trigger functions are not directly executable by runtime roles.
+- `invalidation_record`, recompute queue rows, causal links and queue-state history cannot be mutated directly by the worker. The worker can only call `invalidate_dependency_subgraph()`, `claim_projection_recompute()`, `complete_projection_recompute()`, `fail_projection_recompute()` and `retry_projection_recompute()`.
+- Readers can inspect `current_student_profile_status`, which exposes the selected current generation together with its latest validated/stale state.
 - Migration history and selected administration/configuration state remain owner-only for writes.
 - These are NOLOGIN roles. Future application login roles will receive only the capability role they need; no database password is stored in this repository.
 
@@ -64,18 +75,20 @@ PostgreSQL 18 migration package for the School of Sports Bridge.
 - `0010_knowledge_media.sql` — knowledge/version/canon graph, gaps, artifacts, media/transcripts, evidence/quality, algorithm registry and explicit analysis inputs/outputs.
 - `0011_student_profile_projections.sql` — SkillAssessment/MetricObservation/Error/Success observations, immutable profile snapshot components and exact inputs, guarded projection-generation activation, inferences and recommendation history.
 - `0012_tournament_profile_identity_guard.sql` — requires explicit tournament identity attribution/resolution for student-facing learning observations derived from TableResult.
+- `0013_projection_invalidation_recompute.sql` — automatic derived-object dependency registration, causal invalidation batches, stale-profile state, current-generation-only recompute scheduling, durable/coalescing recompute queue and guarded claim/fail/retry/complete lifecycle.
 
 The exact production state is the `schema_migration` registry in Neon, protected by migration checksums.
 
 ## Automated tests
 
 - `001_invariants.sql` — core identity, event, ingestion and dependency invariants.
-- `002_runtime_permissions.sql` — least-privilege and append-only runtime permission boundaries.
+- `002_runtime_permissions.sql` — least-privilege and append-only runtime permission boundaries, including guarded invalidation access.
 - `003_learning_context.sql` — groups, partnerships, sessions, participation, plans and episode constraints.
 - `004_exercises_homework.sql` — exercise/homework relationships, recipient/submission consistency, selected attempts, assessment history and permissions.
 - `005_tournament_data.sql` — tournament/source scope, explicit identity resolution, exact-result dedupe, correction lineage, NS/EW entry scope and runtime permissions.
 - `006_knowledge_media.sql` — knowledge-source scope, canon overlap, artifact/media scope, transcript/evidence provenance, analysis input typing and runtime/admin boundaries.
 - `007_student_profile_projections.sql` — student/metric/skill/topic scope, exact profile inputs, analysis-publication barrier, tournament identity provenance, immutable snapshots, atomic generation activation, recommendation provenance and runtime boundaries.
+- `008_projection_invalidation_recompute.sql` — automatic dependency registration, recursive invalidation depth, stale profile state, recommendation/plan invalidation, active-scope queue coalescing, worker claim/fail/retry, activation-before-completion requirement and current-profile read-model switch.
 
 All tests execute inside transactions and finish with `ROLLBACK`; they leave no test records in production-style databases.
 
