@@ -4,6 +4,6 @@ version = "0.1.0"
 description = "Minimal production API runtime for the School of Sports Bridge"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-  "fastapi>=0.115,<1",
-  "psycopg[binary]>=3.2,<4",
+  "fastapi==0.141.1",
+  "psycopg[binary]==3.3.4",
 ]
