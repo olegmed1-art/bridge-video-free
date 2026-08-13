@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from contextlib import contextmanager
 from urllib.parse import urlsplit
 
@@ -9,6 +10,8 @@ from psycopg.rows import dict_row
 
 EXPECTED_PRINCIPAL = "bridge_school_app_principal"
 EXPECTED_DATABASE = "neondb"
+CONNECT_ATTEMPTS = 3
+INITIAL_RETRY_DELAY_SECONDS = 0.25
 
 
 def _unquote(value: str) -> str:
@@ -41,14 +44,28 @@ def database_dsn() -> str:
     return normalize_dsn(os.environ.get("BRIDGE_APP_DATABASE_URL", ""))
 
 
+def _open_connection():
+    dsn = database_dsn()
+    delay = INITIAL_RETRY_DELAY_SECONDS
+    for attempt in range(1, CONNECT_ATTEMPTS + 1):
+        try:
+            return psycopg.connect(
+                dsn,
+                connect_timeout=10,
+                application_name="bridge-school-api",
+                row_factory=dict_row,
+            )
+        except psycopg.OperationalError:
+            if attempt >= CONNECT_ATTEMPTS:
+                raise
+            time.sleep(delay)
+            delay *= 2
+    raise RuntimeError("database connection retry loop exited unexpectedly")
+
+
 @contextmanager
 def connect():
-    conn = psycopg.connect(
-        database_dsn(),
-        connect_timeout=10,
-        application_name="bridge-school-api",
-        row_factory=dict_row,
-    )
+    conn = _open_connection()
     try:
         yield conn
     finally:
