@@ -59,7 +59,6 @@ COMMENT ON ROLE bridge_school_health_principal IS 'Dormant health-monitor princi
 REVOKE CREATE ON SCHEMA public FROM bridge_school_health;
 GRANT USAGE ON SCHEMA public TO bridge_school_health;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM bridge_school_health;
-REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM bridge_school_health;
 GRANT SELECT ON TABLE
     database_runtime_fingerprint,
     operational_health_signal,
