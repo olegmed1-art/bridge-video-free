@@ -137,3 +137,16 @@ jobs:
             "SELECT migration_key, applied_at, checksum IS NOT NULL AS checksum_recorded FROM schema_migration ORDER BY migration_key;"
           missing="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM schema_migration WHERE checksum IS NULL;")"
           test "$missing" -eq 0
+
+      - name: Verify production operational health
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -X -A -F ',' -v ON_ERROR_STOP=1 -c \
+            "SELECT school_name, database_name, server_version_num, migration_count, latest_migration_key, migration_checksum_missing_count FROM database_runtime_fingerprint;"
+          psql "$DATABASE_URL" -X -A -F ',' -v ON_ERROR_STOP=1 -c \
+            "SELECT * FROM operational_health_summary;"
+          psql "$DATABASE_URL" -X -A -F ',' -v ON_ERROR_STOP=1 -c \
+            "SELECT signal_key, severity, current_value, warning_threshold, critical_threshold, oldest_at, details FROM operational_health_issue ORDER BY severity DESC, signal_key;"
+          critical="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM operational_health_issue WHERE severity='critical';")"
+          test "$critical" -eq 0
