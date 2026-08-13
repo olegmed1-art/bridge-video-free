@@ -10,6 +10,12 @@ on:
   push:
     paths:
       - 'run_requests/*.txt'
+      - 'README.md'
+      - '.github/workflows/bridge-video-3.1-free.yml'
+
+env:
+  PUSH_JOB_ID: "044ee8db568a9b4d42faef82b6b70167"
+  PUSH_SEQ: "3"
 
 permissions:
   contents: read
@@ -33,36 +39,41 @@ jobs:
       BRIDGE_BILLING_FALLBACK: "false"
       PYTHONUNBUFFERED: "1"
       WHISPER_MODEL: small
-      GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
 
     steps:
       - name: Checkout public technical code only
         uses: actions/checkout@v4
         with:
           fetch-depth: 2
+          persist-credentials: false
 
       - name: Resolve opaque job id
         shell: bash
+        env:
+          INPUT_JOB_ID: ${{ inputs.job_id }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            JOB_ID='${{ inputs.job_id }}'
+            JOB_ID="$INPUT_JOB_ID"
           else
-            REQUEST_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^run_requests/.*\.txt$' | head -n 1)"
-            test -n "$REQUEST_FILE"
-            JOB_ID="$(basename "$REQUEST_FILE" .txt)"
+            REQUEST_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^(run_requests/.*\.txt|README\.md)$' | head -n 1 || true)"
+            JOB_ID=""
+            if [ -n "$REQUEST_FILE" ]; then
+              JOB_ID="$(sed -n 's/^JOB_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+              if [ -z "$JOB_ID" ] && [[ "$REQUEST_FILE" == run_requests/*.txt ]]; then
+                JOB_ID="$(basename "$REQUEST_FILE" .txt)"
+              fi
+            fi
+            if [ -z "$JOB_ID" ]; then
+              JOB_ID="${PUSH_JOB_ID:-}"
+            fi
           fi
           test -n "$JOB_ID"
+          case "$JOB_ID" in
+            *[!0-9a-f]*) echo "invalid opaque job id" >&2; exit 2 ;;
+          esac
+          test "${#JOB_ID}" -eq 32
           echo "BRIDGE_JOB_ID=$JOB_ID" >> "$GITHUB_ENV"
-
-      - name: Authenticate to Google Cloud with Workload Identity Federation
-        id: auth
-        uses: google-github-actions/auth@v3
-        with:
-          project_id: bridge-video-automation
-          workload_identity_provider: projects/499454355457/locations/global/workloadIdentityPools/github-actions/providers/github
-          service_account: bridge-video-worker@bridge-video-automation.iam.gserviceaccount.com
-          create_credentials_file: true
 
       - name: Python
         uses: actions/setup-python@v5
@@ -76,6 +87,17 @@ jobs:
           python -m pip install --disable-pip-version-check \
             google-auth requests faster-whisper pillow imagehash \
             opencv-python-headless reportlab pymupdf 'psycopg[binary]'
+
+      # Cloud credentials are created only after dependency installation so package
+      # installation hooks cannot inherit a live Google credential file.
+      - name: Authenticate to Google Cloud with Workload Identity Federation
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: bridge-video-automation
+          workload_identity_provider: projects/499454355457/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: bridge-video-worker@bridge-video-automation.iam.gserviceaccount.com
+          create_credentials_file: true
 
       - name: Google ADC preflight
         shell: bash
@@ -93,6 +115,8 @@ jobs:
 
       - name: Google Drive user OAuth preflight
         shell: bash
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -108,19 +132,32 @@ jobs:
         env:
           BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           if [ -z "${BRIDGE_WORKER_DATABASE_URL:-}" ]; then
             echo 'RUNTIME_DB_PREFLIGHT: SKIPPED — BRIDGE_WORKER_DATABASE_URL is not configured'
+            echo 'BRIDGE_DB_READY=0' >> "$GITHUB_ENV"
             exit 0
           fi
-          python database/runtime_worker_preflight.py
+          if python database/runtime_worker_preflight.py; then
+            echo 'BRIDGE_DB_READY=1' >> "$GITHUB_ENV"
+          else
+            echo '::warning::RUNTIME_DB_PREFLIGHT failed; video analysis will continue without Neon persistence.'
+            echo 'BRIDGE_DB_READY=0' >> "$GITHUB_ENV"
+          fi
 
       - name: FREE-GUARD
         run: python bridge_worker_3_1_free.py
 
       - name: Process one opaque Drive job
+        shell: bash
         env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
           BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
-        run: python run_drive_3_1_free_oidc.py
+        run: |
+          set -euo pipefail
+          if [ "${BRIDGE_DB_READY:-0}" != "1" ]; then
+            unset BRIDGE_WORKER_DATABASE_URL
+          fi
+          python run_drive_3_1_free_oidc.py
 
       # User media/transcripts are never uploaded as GitHub workflow artifacts.
