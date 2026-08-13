@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import secrets
 from uuid import UUID
 
@@ -19,6 +18,7 @@ app = FastAPI(
     version="0.1.0",
     docs_url=None,
     redoc_url=None,
+    openapi_url=None,
 )
 
 
@@ -69,19 +69,6 @@ def _database_failure_category(exc: Exception) -> str:
     return "database_error"
 
 
-def _sanitize_database_error(exc: Exception) -> str:
-    text = str(exc).replace("\n", " | ")
-    text = re.sub(
-        r"([a-z][a-z0-9+.-]*://)([^:@/\s]+):([^@/\s]+)@",
-        r"\1***:***@",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(r"(?i)(password\s*=\s*)[^\s|]+", r"\1***", text)
-    text = re.sub(r"(?i)(passfile\s*=\s*)[^\s|]+", r"\1***", text)
-    return text[:700]
-
-
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     try:
@@ -95,11 +82,10 @@ def healthz() -> dict[str, str]:
     except Exception as exc:
         category = _database_failure_category(exc)
         logger.error(
-            "database_health_check_failed category=%s type=%s sqlstate=%s message=%s",
+            "database_health_check_failed category=%s type=%s sqlstate=%s",
             category,
             type(exc).__name__,
             getattr(exc, "sqlstate", None),
-            _sanitize_database_error(exc),
         )
         raise HTTPException(status_code=503, detail=f"database health check failed: {category}") from exc
 

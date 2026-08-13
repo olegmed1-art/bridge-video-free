@@ -35,6 +35,10 @@ A principal may be changed to `LOGIN` only when its credential is created in the
 
 Use a different credential for app, worker and health monitoring. Do not reuse the Neon owner connection string for runtime services.
 
+A runtime database value must be a complete connection URI. Application runtime validation must verify the expected principal, expected database, a Neon host, TLS, and channel binding. Serverless application traffic must use the pooled Neon endpoint. Password-only fallback construction is not permitted in the production application runtime.
+
+Production and Preview must use different Neon branches and separately scoped environment values. A production runtime value must never be attached to a Preview deployment.
+
 ## Intended activation sequence
 
 1. Deploy migration `0016_runtime_principals` and verify CI/production migration checks.
@@ -50,7 +54,7 @@ The health principal deliberately cannot read student/person/source data directl
 
 The current background video worker runs in GitHub Actions via `.github/workflows/bridge-video-3.1-free.yml`. It is therefore the first runtime that should receive an activated database principal.
 
-Its future runtime connection string is stored only as the GitHub Actions secret `BRIDGE_WORKER_DATABASE_URL`. Until that secret exists, the workflow leaves database access disabled and reports the database preflight as skipped.
+Its runtime connection string is stored only as the GitHub Actions secret `BRIDGE_WORKER_DATABASE_URL`. Until that secret exists, the workflow leaves database access disabled and reports the database preflight as skipped.
 
 When the secret is configured, `database/runtime_worker_preflight.py` connects before the worker starts and fails closed unless all of the following are true:
 
@@ -62,3 +66,41 @@ When the secret is configured, `database/runtime_worker_preflight.py` connects b
 - the canonical school seed `Школа спортивного бриджа` exists exactly once.
 
 The preflight never prints the connection string or password.
+
+## Security deployment algorithm v2.0
+
+Every production runtime or database change follows this sequence:
+
+1. Start from the current `main` commit and make the change on a dedicated branch.
+2. Treat workflow files that can use credentials or OIDC as privileged code.
+3. Do not interpolate GitHub event data or workflow inputs directly into shell source; pass them through environment variables and validate them as data.
+4. Expose a secret only to the step that needs it. Install dependencies before cloud credentials are created whenever possible.
+5. Pin third-party GitHub Actions to immutable full commit SHAs where practical.
+6. Run the API on Python 3.12 in CI and production, and execute the DSN contract test before merge.
+7. For a database change, create a new numbered migration; never edit an already-applied migration.
+8. Run the clean PostgreSQL 18 migration suite, invariant tests, permission tests, migration idempotence test, and historical-checksum tamper test.
+9. Merge to `main` only after required checks pass.
+10. Promote the exact tested database commit to `database-production`; the production migration workflow repeats the disposable PostgreSQL 18 preflight before Neon is touched.
+11. Serialize production migrations with the advisory lock, re-check migration state after locking, then verify registry checksums, runtime fingerprint, and operational health.
+12. After deployment, verify the application health endpoint, runtime principal boundary, current migration key, zero missing checksums, zero critical health signals, and recent runtime error clusters.
+13. Before any high-impact migration, verify the available recovery window and an appropriate restore/branch plan.
+
+`main` and `database-production` are security boundaries. They must be protected against force-push and deletion, and production promotion should require pull-request review/status checks. A failure or absence of a required gate stops promotion.
+
+## Recurring security audit checklist
+
+Re-check periodically and after major infrastructure changes:
+
+- branch/ruleset protection on `main` and `database-production`;
+- dependency alerts and available code/secret scanning;
+- mutable GitHub Action tags;
+- shell interpolation of external inputs;
+- step-level secret scope;
+- runtime role attributes and privilege drift;
+- PUBLIC schema/table/function grants;
+- `SECURITY DEFINER` search paths and execute ACLs;
+- production/preview environment isolation;
+- Neon production-branch protection and public-network exposure;
+- API authentication, rate limiting and error disclosure;
+- dependency vulnerabilities;
+- RLS requirements before any direct browser/Data API or multi-tenant database access.

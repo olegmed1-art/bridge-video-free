@@ -39,20 +39,22 @@ jobs:
       BRIDGE_BILLING_FALLBACK: "false"
       PYTHONUNBUFFERED: "1"
       WHISPER_MODEL: small
-      GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
 
     steps:
       - name: Checkout public technical code only
         uses: actions/checkout@v4
         with:
           fetch-depth: 2
+          persist-credentials: false
 
       - name: Resolve opaque job id
         shell: bash
+        env:
+          INPUT_JOB_ID: ${{ inputs.job_id }}
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            JOB_ID='${{ inputs.job_id }}'
+            JOB_ID="$INPUT_JOB_ID"
           else
             REQUEST_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^(run_requests/.*\.txt|README\.md)$' | head -n 1 || true)"
             JOB_ID=""
@@ -73,15 +75,6 @@ jobs:
           test "${#JOB_ID}" -eq 32
           echo "BRIDGE_JOB_ID=$JOB_ID" >> "$GITHUB_ENV"
 
-      - name: Authenticate to Google Cloud with Workload Identity Federation
-        id: auth
-        uses: google-github-actions/auth@v3
-        with:
-          project_id: bridge-video-automation
-          workload_identity_provider: projects/499454355457/locations/global/workloadIdentityPools/github-actions/providers/github
-          service_account: bridge-video-worker@bridge-video-automation.iam.gserviceaccount.com
-          create_credentials_file: true
-
       - name: Python
         uses: actions/setup-python@v5
         with:
@@ -94,6 +87,17 @@ jobs:
           python -m pip install --disable-pip-version-check \
             google-auth requests faster-whisper pillow imagehash \
             opencv-python-headless reportlab pymupdf 'psycopg[binary]'
+
+      # Cloud credentials are created only after dependency installation so package
+      # installation hooks cannot inherit a live Google credential file.
+      - name: Authenticate to Google Cloud with Workload Identity Federation
+        id: auth
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: bridge-video-automation
+          workload_identity_provider: projects/499454355457/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: bridge-video-worker@bridge-video-automation.iam.gserviceaccount.com
+          create_credentials_file: true
 
       - name: Google ADC preflight
         shell: bash
@@ -111,6 +115,8 @@ jobs:
 
       - name: Google Drive user OAuth preflight
         shell: bash
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -145,6 +151,7 @@ jobs:
       - name: Process one opaque Drive job
         shell: bash
         env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
           BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
         run: |
           set -euo pipefail
