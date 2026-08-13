@@ -4,13 +4,16 @@
 Keeps the proven master-analysis runner intact and adds an evidence-preserving
 normalization layer learned from real school transcripts.
 """
+from pathlib import Path
+import os
+
 import bridge_worker_3_1_free as core
 import run_master_3_1_free as base
 from bridge_neon_persistence import persist_completed_drive_job
 from bridge_semantic_qc import SEMANTIC_QC_REVISION, semantic_normalize_segments
 
 # Product name stays 3.1 FREE; only the internal revision changes.
-core.ALGORITHM_REVISION = "3.1-free-master-analysis-r5"
+core.ALGORITHM_REVISION = "3.1-free-master-analysis-r8"
 base.ALGORITHM_REVISION = core.ALGORITHM_REVISION
 
 # Give Whisper more bridge-specific acoustic/lexical anchors seen in real lessons.
@@ -84,7 +87,31 @@ base.obtain_transcript = obtain_transcript_with_semantic_qc
 base.master_analysis_payload = master_payload_with_semantic_qc
 
 
+def _source_id_from_request(job_id):
+    """Resolve an exact Drive source ID only from the checked-in request for this job.
+
+    This preserves the opaque stable-ID production path while allowing a request file
+    to pin the exact source object. The base runner still revalidates that exact source.
+    """
+    request = Path("run_requests") / f"{job_id}.txt"
+    if not request.is_file():
+        return None
+    for line in request.read_text(encoding="utf-8").splitlines():
+        if line.startswith("SOURCE_FILE_ID="):
+            value = line.split("=", 1)[1].strip()
+            return value or None
+    return None
+
+
 def process_job(token):
-    result = base.process_job(token)
-    persist_completed_drive_job(token)
-    return result
+    requested_job = os.environ.get("BRIDGE_JOB_ID", "")
+    source_id = _source_id_from_request(requested_job)
+    if source_id:
+        os.environ["BRIDGE_JOB_ID"] = core.stable_job_id("drive", source_id)
+    try:
+        result = base.process_job(token)
+        persist_completed_drive_job(token)
+        return result
+    finally:
+        if requested_job:
+            os.environ["BRIDGE_JOB_ID"] = requested_job
