@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+from database.runtime_app_preflight import normalize_dsn
+
+GOOD = (
+    "postgresql://bridge_school_app_principal:synthetic-password@"
+    "ep-noisy-pine-b1pe30sf-pooler.c-5.eu-central-1.aws.neon.tech/neondb"
+    "?sslmode=require&channel_binding=require"
+)
+
+
+def expect_reject(value: str) -> None:
+    try:
+        normalize_dsn(value)
+    except SystemExit:
+        return
+    raise AssertionError(f"expected rejection for: {value!r}")
+
+
+def main() -> None:
+    assert normalize_dsn(GOOD) == GOOD
+    assert normalize_dsn(f'"{GOOD}"') == GOOD
+    assert normalize_dsn(GOOD.replace("sslmode=require", "sslmode=verify-full"))
+
+    bad_values = [
+        "synthetic-password",
+        "BRIDGE_APP_DATABASE_URL=" + GOOD,
+        GOOD.replace("bridge_school_app_principal", "bridge_school_worker_principal"),
+        GOOD.replace("-pooler", ""),
+        GOOD.replace("ep-noisy-pine-b1pe30sf-pooler", "ep-wandering-night-b1ej3ow6-pooler"),
+        GOOD.replace("/neondb", "/otherdb"),
+        GOOD.replace("sslmode=require", "sslmode=prefer"),
+        GOOD.replace("channel_binding=require", "channel_binding=prefer"),
+        GOOD.replace(":synthetic-password@", "@"),
+        GOOD + "#fragment",
+    ]
+    for value in bad_values:
+        expect_reject(value)
+
+    print("APP_RUNTIME_DSN_CONTRACT: PASS")
+
+
+if __name__ == "__main__":
+    main()
