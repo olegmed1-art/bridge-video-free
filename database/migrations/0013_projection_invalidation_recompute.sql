@@ -393,9 +393,9 @@ BEGIN
      WHERE ir.invalidation_batch_id=v_batch;
 
     INSERT INTO recommendation_state_event(recommendation_id, state_type, reason, occurred_at)
-    SELECT r.recommendation_id, 'invalidated', p_reason, now()
+    SELECT rec.recommendation_id, 'invalidated', p_reason, now()
       FROM invalidation_record ir
-      JOIN recommendation r ON r.recommendation_id=ir.target_entity_id
+      JOIN recommendation rec ON rec.recommendation_id=ir.target_entity_id
      WHERE ir.invalidation_batch_id=v_batch;
 
     -- Current generations only are scheduled for recomputation. Historical generations
@@ -464,8 +464,8 @@ BEGIN
       FROM projection_recompute_request
      WHERE status='pending'
      ORDER BY priority DESC, requested_at, created_at
-     FOR UPDATE SKIP LOCKED
-     LIMIT 1;
+     LIMIT 1
+     FOR UPDATE SKIP LOCKED;
 
     IF v_request IS NULL THEN
         RETURN NULL;
