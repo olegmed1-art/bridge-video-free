@@ -47,6 +47,7 @@ PostgreSQL 18 migration package for the School of Sports Bridge.
 32. Operational health read models expose only technical metadata/counts/ages; they do not expose database passwords, source payloads or Drive file contents.
 33. Repository-to-database migration checksum drift remains enforced by `migrate.sh`, because PostgreSQL cannot inspect repository bytes. Database health separately reports missing checksums and the runtime migration fingerprint.
 34. An `unknown` asset-location state is not treated as a failure merely because verification has not yet been deployed. Only an explicit `availability_status='unavailable'` is classified as an unavailable-storage fault.
+35. A health-read-model defect is corrected forward by a new migration rather than hidden. `0015_operational_health_checksum_fix` corrects the checksum signal introduced in `0014` and keeps the failed CI diagnosis reproducible in repository history.
 
 ## Runtime capability roles
 
@@ -82,6 +83,7 @@ PostgreSQL 18 migration package for the School of Sports Bridge.
 - `0012_tournament_profile_identity_guard.sql` — requires explicit tournament identity attribution/resolution for student-facing learning observations derived from TableResult.
 - `0013_projection_invalidation_recompute.sql` — automatic derived-object dependency registration, causal invalidation batches, stale-profile state, current-generation-only recompute scheduling, durable/coalescing recompute queue and guarded claim/fail/retry/complete lifecycle.
 - `0014_operational_health.sql` — technical health policy plus read-only database fingerprint/signals/issue/summary views for migration integrity, stuck work, outbox, ingestion/analysis/projection/publication, recompute backlog, stale profiles, pending references and explicit storage unavailability.
+- `0015_operational_health_checksum_fix.sql` — forward correction of the migration-checksum health signal so it counts only rows whose checksum is actually missing; public issue/summary views are rebound to the corrected signal view.
 
 The exact production state is the `schema_migration` registry in Neon, protected by migration checksums.
 
@@ -93,7 +95,9 @@ The exact production state is the `schema_migration` registry in Neon, protected
 
 `operational_health_issue` contains only non-OK signals. `operational_health_summary` rolls them up to one school-level status. Reading these views is safe for a future read-only health endpoint; no source content or credentials are returned.
 
-This migration deliberately does **not** create a scheduled production monitor using the owner connection string. Continuous monitoring should receive a dedicated read-only LOGIN credential when the real backend/worker credential layer is provisioned. The existing production migration job may query these views while it is already connected, but the owner secret is not broadened into a general monitoring credential.
+The first CI execution of `0014` exposed a defect in the migration-checksum signal: the CTE used the total migration count instead of counting only `checksum IS NULL`. `database_runtime_fingerprint` itself was correct. The fix is intentionally recorded as `0015_operational_health_checksum_fix` and is covered by `009_operational_health.sql` before production promotion.
+
+This layer deliberately does **not** create a scheduled production monitor using the owner connection string. Continuous monitoring should receive a dedicated read-only LOGIN credential when the real backend/worker credential layer is provisioned. The existing production migration job may query these views while it is already connected, but the owner secret is not broadened into a general monitoring credential.
 
 ## Automated tests
 
@@ -105,7 +109,7 @@ This migration deliberately does **not** create a scheduled production monitor u
 - `006_knowledge_media.sql` — knowledge-source scope, canon overlap, artifact/media scope, transcript/evidence provenance, analysis input typing and runtime/admin boundaries.
 - `007_student_profile_projections.sql` — student/metric/skill/topic scope, exact profile inputs, analysis-publication barrier, tournament identity provenance, immutable snapshots, atomic generation activation, recommendation provenance and runtime boundaries.
 - `008_projection_invalidation_recompute.sql` — automatic dependency registration, recursive invalidation depth, stale profile state, recommendation/plan invalidation, active-scope queue coalescing, worker claim/fail/retry, activation-before-completion requirement and current-profile read-model switch.
-- `009_operational_health.sql` — runtime fingerprint, baseline signal registry, critical classification for stuck changesets/analysis/recompute/pending references/explicit unavailable storage, roll-up summary and read-only runtime permissions.
+- `009_operational_health.sql` — runtime fingerprint, baseline signal registry including corrected migration-checksum status, critical classification for stuck changesets/analysis/recompute/pending references/explicit unavailable storage, roll-up summary and read-only runtime permissions.
 
 All tests execute inside transactions and finish with `ROLLBACK`; they leave no test records in production-style databases.
 
