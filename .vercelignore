@@ -3,4 +3,5 @@
 !bridge_school_api
 !pyproject.toml
 !.python-version
+!vercel.json
 !.vercelignore
