@@ -6,12 +6,14 @@ on:
       - 'database/**'
       - '.github/workflows/database-ci.yml'
       - '.github/workflows/database-production.yml'
+      - '.github/workflows/database-app-runtime-smoke.yml'
   push:
     branches: [main]
     paths:
       - 'database/**'
       - '.github/workflows/database-ci.yml'
       - '.github/workflows/database-production.yml'
+      - '.github/workflows/database-app-runtime-smoke.yml'
 
 permissions:
   contents: read
@@ -47,6 +49,7 @@ jobs:
           python -m py_compile \
             database/runtime_worker_preflight.py \
             database/runtime_health_preflight.py \
+            database/runtime_app_preflight.py \
             database/video_result_persistence.py \
             database/runtime_worker_persistence_smoke.py \
             database/backfill_video_results.py \
