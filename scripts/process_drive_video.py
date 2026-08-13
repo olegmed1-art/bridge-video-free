@@ -1,6 +1,7 @@
 import json
 import os
 import pathlib
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -11,6 +12,8 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from faster_whisper import WhisperModel
 
 SCOPES = ["https://www.googleapis.com/auth/drive"]
+ALLOWED_MODELS = {"small", "medium"}
+DRIVE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{10,200}$")
 
 
 def run(cmd):
@@ -35,7 +38,7 @@ def download_drive_file(service, file_id, dest):
 
 
 def ensure_folder(service, parent_id, name):
-    escaped = name.replace("'", "\\'")
+    escaped = name.replace("\\", "\\\\").replace("'", "\\'")
     q = (
         f"'{parent_id}' in parents and trashed=false and "
         f"mimeType='application/vnd.google-apps.folder' and name='{escaped}'"
@@ -62,9 +65,14 @@ def srt_time(seconds):
 
 
 def main():
-    file_id = os.environ["DRIVE_FILE_ID"]
+    file_id = os.environ["DRIVE_FILE_ID"].strip()
+    if not DRIVE_ID_RE.fullmatch(file_id):
+        raise RuntimeError("Некорректный идентификатор файла Drive")
+
     secret_json = os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
-    model_name = os.environ.get("WHISPER_MODEL", "small")
+    model_name = os.environ.get("WHISPER_MODEL", "small").strip()
+    if model_name not in ALLOWED_MODELS:
+        raise RuntimeError("Недопустимая модель распознавания")
 
     creds_info = json.loads(secret_json)
     creds = service_account.Credentials.from_service_account_info(creds_info, scopes=SCOPES)
@@ -82,7 +90,15 @@ def main():
 
     work = pathlib.Path("work")
     work.mkdir(exist_ok=True)
-    source = work / meta["name"]
+
+    # A Drive filename is remote data, not a trusted local path. Strip all path
+    # components before creating a local file so names such as ../x cannot escape
+    # the work directory.
+    source_name = pathlib.PurePath(str(meta.get("name") or "source-video")).name
+    if source_name in {"", ".", ".."}:
+        source_name = "source-video"
+    source = work / source_name
+
     download_drive_file(drive, file_id, source)
     duration = ffprobe_duration(source)
 

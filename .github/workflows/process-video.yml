@@ -26,14 +26,17 @@ jobs:
     env:
       DRIVE_FILE_ID: ${{ inputs.drive_file_id }}
       WHISPER_MODEL: ${{ inputs.whisper_model }}
-      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Free guard
         shell: bash
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: |
           set -euo pipefail
           echo "Repository visibility: ${{ github.event.repository.visibility }}"
@@ -42,9 +45,9 @@ jobs:
           echo "FREE-GUARD OK: public repository, standard GitHub-hosted runner, no paid inference API."
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: '3.11'
+          python-version: '3.12'
           cache: 'pip'
 
       - name: Install ffmpeg
@@ -56,4 +59,6 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Process Drive video
+        env:
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: python scripts/process_drive_video.py
