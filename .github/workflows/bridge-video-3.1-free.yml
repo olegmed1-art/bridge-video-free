@@ -116,19 +116,31 @@ jobs:
         env:
           BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           if [ -z "${BRIDGE_WORKER_DATABASE_URL:-}" ]; then
             echo 'RUNTIME_DB_PREFLIGHT: SKIPPED — BRIDGE_WORKER_DATABASE_URL is not configured'
+            echo 'BRIDGE_DB_READY=0' >> "$GITHUB_ENV"
             exit 0
           fi
-          python database/runtime_worker_preflight.py
+          if python database/runtime_worker_preflight.py; then
+            echo 'BRIDGE_DB_READY=1' >> "$GITHUB_ENV"
+          else
+            echo '::warning::RUNTIME_DB_PREFLIGHT failed; video analysis will continue without Neon persistence.'
+            echo 'BRIDGE_DB_READY=0' >> "$GITHUB_ENV"
+          fi
 
       - name: FREE-GUARD
         run: python bridge_worker_3_1_free.py
 
       - name: Process one opaque Drive job
+        shell: bash
         env:
           BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
-        run: python run_drive_3_1_free_oidc.py
+        run: |
+          set -euo pipefail
+          if [ "${BRIDGE_DB_READY:-0}" != "1" ]; then
+            unset BRIDGE_WORKER_DATABASE_URL
+          fi
+          python run_drive_3_1_free_oidc.py
 
       # User media/transcripts are never uploaded as GitHub workflow artifacts.
