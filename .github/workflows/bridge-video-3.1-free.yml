@@ -10,6 +10,7 @@ on:
   push:
     paths:
       - 'run_requests/*.txt'
+      - 'README.md'
 
 permissions:
   contents: read
@@ -48,10 +49,10 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             JOB_ID='${{ inputs.job_id }}'
           else
-            REQUEST_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^run_requests/.*\.txt$' | head -n 1)"
+            REQUEST_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^(run_requests/.*\.txt|README\.md)$' | head -n 1)"
             test -n "$REQUEST_FILE"
             JOB_ID="$(sed -n 's/^JOB_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
-            if [ -z "$JOB_ID" ]; then
+            if [ -z "$JOB_ID" ] && [[ "$REQUEST_FILE" == run_requests/*.txt ]]; then
               JOB_ID="$(basename "$REQUEST_FILE" .txt)"
             fi
           fi
