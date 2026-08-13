@@ -28,7 +28,7 @@ BEGIN
     END IF;
 
     -- A clean signal registry must expose the expected technical dimensions.
-    IF (SELECT count(*) FROM operational_health_signal WHERE school_id=v_school) <> 14 THEN
+    IF (SELECT count(*) FROM operational_health_signal WHERE school_id=v_school) <> 15 THEN
         RAISE EXCEPTION 'unexpected operational health signal count';
     END IF;
     IF NOT EXISTS (
