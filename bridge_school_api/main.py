@@ -7,6 +7,7 @@ from uuid import UUID
 
 import psycopg
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi.responses import JSONResponse
 
 from .db import EXPECTED_PRINCIPAL, connect
 
@@ -70,7 +71,7 @@ def _database_failure_category(exc: Exception) -> str:
 
 
 @app.get("/healthz")
-def healthz() -> dict[str, str]:
+def healthz() -> JSONResponse:
     try:
         with connect() as conn, conn.cursor() as cur:
             cur.execute(
@@ -87,12 +88,18 @@ def healthz() -> dict[str, str]:
             type(exc).__name__,
             getattr(exc, "sqlstate", None),
         )
-        raise HTTPException(status_code=503, detail=f"database health check failed: {category}") from exc
+        raise HTTPException(status_code=503, detail="service unavailable") from exc
 
     if not row or row["principal"] != EXPECTED_PRINCIPAL or row["school_count"] != 1:
         logger.error("database_health_check_failed category=runtime_boundary")
-        raise HTTPException(status_code=503, detail="database runtime boundary is not ready")
-    return {"status": "ok"}
+        raise HTTPException(status_code=503, detail="service unavailable")
+    return JSONResponse(
+        {"status": "ok"},
+        headers={
+            "Cache-Control": "public, max-age=0, must-revalidate",
+            "Vercel-CDN-Cache-Control": "public, max-age=15, stale-while-revalidate=15",
+        },
+    )
 
 
 @app.get("/v1/overview", dependencies=[Depends(require_api_token)])
