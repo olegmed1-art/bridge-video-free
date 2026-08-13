@@ -27,8 +27,28 @@ def safe_db_error(exc: BaseException) -> str:
     return message[:1200] or exc.__class__.__name__
 
 
+def normalize_dsn(raw: str) -> str:
+    """Accept a bare URI or a copied .env assignment without exposing it."""
+    value = raw.strip()
+    if not value:
+        return ""
+
+    for prefix in ("BRIDGE_WORKER_DATABASE_URL=", "DATABASE_URL="):
+        if value.startswith(prefix):
+            value = value[len(prefix):].strip()
+            break
+
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        value = value[1:-1].strip()
+
+    if not (value.startswith("postgresql://") or value.startswith("postgres://")):
+        fail("BRIDGE_WORKER_DATABASE_URL must contain a PostgreSQL URI, not a variable assignment or password-only value")
+
+    return value
+
+
 def main() -> None:
-    dsn = os.environ.get("BRIDGE_WORKER_DATABASE_URL", "").strip()
+    dsn = normalize_dsn(os.environ.get("BRIDGE_WORKER_DATABASE_URL", ""))
     if not dsn:
         fail("BRIDGE_WORKER_DATABASE_URL is not configured")
 
