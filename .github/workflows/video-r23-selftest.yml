@@ -6,6 +6,7 @@ on:
       - 'run_master_3_1_free_semantic.py'
       - 'run_master_3_1_free.py'
       - 'bridge_worker_3_1_free.py'
+      - 'requirements-worker.txt'
       - 'tests/test_video_r23_selftest.py'
       - '.github/workflows/bridge-video-3.1-free.yml'
       - '.github/workflows/video-r23-selftest.yml'
@@ -15,6 +16,7 @@ on:
       - 'run_master_3_1_free_semantic.py'
       - 'run_master_3_1_free.py'
       - 'bridge_worker_3_1_free.py'
+      - 'requirements-worker.txt'
       - 'tests/test_video_r23_selftest.py'
       - '.github/workflows/bridge-video-3.1-free.yml'
       - '.github/workflows/video-r23-selftest.yml'
@@ -25,16 +27,32 @@ permissions:
 jobs:
   synthetic-r23:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
-      - name: Install minimal import dependency
-        run: python -m pip install --disable-pip-version-check requests
+      - name: Install pinned worker dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-worker.txt
+      - name: Verify worker dependency imports
+        run: |
+          python - <<'PY'
+          import google.auth
+          import requests
+          import faster_whisper
+          import PIL
+          import imagehash
+          import cv2
+          import reportlab
+          import pymupdf
+          import psycopg
+          print('WORKER_DEPENDENCY_IMPORTS: PASS')
+          PY
       - name: Compile r23 worker modules
         run: python -m py_compile bridge_worker_3_1_free.py run_master_3_1_free.py run_master_3_1_free_semantic.py tests/test_video_r23_selftest.py
       - name: Run synthetic r23 selftests
