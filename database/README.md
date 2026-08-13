@@ -43,6 +43,10 @@ PostgreSQL 18 migration package for the School of Sports Bridge.
 28. Recompute claiming uses a durable queue and `FOR UPDATE SKIP LOCKED`; claim/fail/retry/complete transitions are guarded and also preserved as append-only state events.
 29. A recompute request can succeed only after a matching successful `ProjectionRun` has been completed and its generation has already been atomically activated as current.
 30. Runtime workers cannot directly mutate invalidation/recompute tables; they receive only guarded functions for invalidation and queue lifecycle transitions.
+31. Operational health thresholds are explicit administrative configuration, separate from application code and separate from bridge pedagogy. Runtime roles can inspect them but cannot relax them.
+32. Operational health read models expose only technical metadata/counts/ages; they do not expose database passwords, source payloads or Drive file contents.
+33. Repository-to-database migration checksum drift remains enforced by `migrate.sh`, because PostgreSQL cannot inspect repository bytes. Database health separately reports missing checksums and the runtime migration fingerprint.
+34. An `unknown` asset-location state is not treated as a failure merely because verification has not yet been deployed. Only an explicit `availability_status='unavailable'` is classified as an unavailable-storage fault.
 
 ## Runtime capability roles
 
@@ -58,6 +62,7 @@ PostgreSQL 18 migration package for the School of Sports Bridge.
 - Dependency registration for profile/recommendation objects is done by internal trigger functions; those trigger functions are not directly executable by runtime roles.
 - `invalidation_record`, recompute queue rows, causal links and queue-state history cannot be mutated directly by the worker. The worker can only call `invalidate_dependency_subgraph()`, `claim_projection_recompute()`, `complete_projection_recompute()`, `fail_projection_recompute()` and `retry_projection_recompute()`.
 - Readers can inspect `current_student_profile_status`, which exposes the selected current generation together with its latest validated/stale state.
+- Readers can inspect `database_runtime_fingerprint`, `operational_health_signal`, `operational_health_issue` and `operational_health_summary`; no runtime capability can edit `operational_health_policy`.
 - Migration history and selected administration/configuration state remain owner-only for writes.
 - These are NOLOGIN roles. Future application login roles will receive only the capability role they need; no database password is stored in this repository.
 
@@ -76,8 +81,19 @@ PostgreSQL 18 migration package for the School of Sports Bridge.
 - `0011_student_profile_projections.sql` — SkillAssessment/MetricObservation/Error/Success observations, immutable profile snapshot components and exact inputs, guarded projection-generation activation, inferences and recommendation history.
 - `0012_tournament_profile_identity_guard.sql` — requires explicit tournament identity attribution/resolution for student-facing learning observations derived from TableResult.
 - `0013_projection_invalidation_recompute.sql` — automatic derived-object dependency registration, causal invalidation batches, stale-profile state, current-generation-only recompute scheduling, durable/coalescing recompute queue and guarded claim/fail/retry/complete lifecycle.
+- `0014_operational_health.sql` — technical health policy plus read-only database fingerprint/signals/issue/summary views for migration integrity, stuck work, outbox, ingestion/analysis/projection/publication, recompute backlog, stale profiles, pending references and explicit storage unavailability.
 
 The exact production state is the `schema_migration` registry in Neon, protected by migration checksums.
+
+## Operational health read models
+
+`database_runtime_fingerprint` reports the actual PostgreSQL server version, database name, migration count/latest migration and whether any registered migration is missing a checksum.
+
+`operational_health_signal` returns one row per technical signal with `severity` (`ok`, `warning`, `critical`), numeric current value, thresholds, oldest affected timestamp and compact diagnostic details. Age values are expressed in seconds. The initial technical thresholds are stored in `operational_health_policy` and can later be tuned by the database owner after real production behavior is observed.
+
+`operational_health_issue` contains only non-OK signals. `operational_health_summary` rolls them up to one school-level status. Reading these views is safe for a future read-only health endpoint; no source content or credentials are returned.
+
+This migration deliberately does **not** create a scheduled production monitor using the owner connection string. Continuous monitoring should receive a dedicated read-only LOGIN credential when the real backend/worker credential layer is provisioned. The existing production migration job may query these views while it is already connected, but the owner secret is not broadened into a general monitoring credential.
 
 ## Automated tests
 
@@ -89,6 +105,7 @@ The exact production state is the `schema_migration` registry in Neon, protected
 - `006_knowledge_media.sql` — knowledge-source scope, canon overlap, artifact/media scope, transcript/evidence provenance, analysis input typing and runtime/admin boundaries.
 - `007_student_profile_projections.sql` — student/metric/skill/topic scope, exact profile inputs, analysis-publication barrier, tournament identity provenance, immutable snapshots, atomic generation activation, recommendation provenance and runtime boundaries.
 - `008_projection_invalidation_recompute.sql` — automatic dependency registration, recursive invalidation depth, stale profile state, recommendation/plan invalidation, active-scope queue coalescing, worker claim/fail/retry, activation-before-completion requirement and current-profile read-model switch.
+- `009_operational_health.sql` — runtime fingerprint, baseline signal registry, critical classification for stuck changesets/analysis/recompute/pending references/explicit unavailable storage, roll-up summary and read-only runtime permissions.
 
 All tests execute inside transactions and finish with `ROLLBACK`; they leave no test records in production-style databases.
 
