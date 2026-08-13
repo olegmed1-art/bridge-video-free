@@ -2,10 +2,8 @@ name: Bridge School Neon Health Monitor
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/health-monitor-smoke-request.txt'
+  schedule:
+    - cron: '17 * * * *'
 
 permissions:
   contents: read
