@@ -6,6 +6,8 @@ DECLARE
     v_school uuid;
     v_asset uuid;
     v_projection_request uuid;
+    v_server_severity text;
+    v_migration_severity text;
 BEGIN
     SELECT school_id INTO v_school FROM school WHERE stable_name='Школа спортивного бриджа';
     IF v_school IS NULL THEN RAISE EXCEPTION 'school seed missing'; END IF;
@@ -31,14 +33,19 @@ BEGIN
     IF (SELECT count(*) FROM operational_health_signal WHERE school_id=v_school) <> 15 THEN
         RAISE EXCEPTION 'unexpected operational health signal count';
     END IF;
-    IF NOT EXISTS (
-        SELECT 1 FROM operational_health_signal
-         WHERE school_id=v_school AND signal_key='database_server_version' AND severity='ok'
-    ) OR NOT EXISTS (
-        SELECT 1 FROM operational_health_signal
-         WHERE school_id=v_school AND signal_key='migration_checksums' AND severity='ok'
-    ) THEN
-        RAISE EXCEPTION 'baseline infrastructure health signals missing';
+
+    SELECT severity INTO v_server_severity
+      FROM operational_health_signal
+     WHERE school_id=v_school AND signal_key='database_server_version';
+    IF v_server_severity IS DISTINCT FROM 'ok' THEN
+        RAISE EXCEPTION 'database_server_version baseline severity is %, expected ok', COALESCE(v_server_severity,'missing');
+    END IF;
+
+    SELECT severity INTO v_migration_severity
+      FROM operational_health_signal
+     WHERE school_id=v_school AND signal_key='migration_checksums';
+    IF v_migration_severity IS DISTINCT FROM 'ok' THEN
+        RAISE EXCEPTION 'migration_checksums baseline severity is %, expected ok', COALESCE(v_migration_severity,'missing');
     END IF;
 
     -- Stuck transaction/change command.
