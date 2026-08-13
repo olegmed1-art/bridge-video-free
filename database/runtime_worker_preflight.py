@@ -30,34 +30,59 @@ def safe_db_error(exc: BaseException) -> str:
     return message[:1200] or exc.__class__.__name__
 
 
+def unquote_env_value(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+        return value[1:-1].strip()
+    return value
+
+
+def build_password_dsn(password: str) -> str:
+    encoded_password = quote(password, safe="")
+    return (
+        f"postgresql://{EXPECTED_PRINCIPAL}:{encoded_password}@{NEON_HOST}/{NEON_DATABASE}"
+        "?sslmode=require&channel_binding=require"
+    )
+
+
 def normalize_dsn(raw: str) -> str:
-    """Accept a URI, copied .env assignment, or password-only repository secret."""
+    """Accept a URI, one env assignment, a full Neon .env file, or password only."""
     value = raw.strip()
     if not value:
         return ""
 
-    for prefix in ("BRIDGE_WORKER_DATABASE_URL=", "DATABASE_URL="):
-        if value.startswith(prefix):
-            value = value[len(prefix):].strip()
-            break
+    # Direct URI.
+    direct = unquote_env_value(value)
+    if direct.startswith("postgresql://") or direct.startswith("postgres://"):
+        return direct
 
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-        value = value[1:-1].strip()
+    # One-line or multi-line .env content. Prefer a database URL; otherwise use
+    # PGPASSWORD/NEON_PASSWORD and combine it with the fixed worker endpoint.
+    env_values: dict[str, str] = {}
+    for raw_line in value.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, item = line.split("=", 1)
+        key = key.strip()
+        item = unquote_env_value(item)
+        env_values[key] = item
 
-    if value.startswith("postgresql://") or value.startswith("postgres://"):
-        return value
+    for key in ("BRIDGE_WORKER_DATABASE_URL", "DATABASE_URL", "POSTGRES_URL", "NEON_DATABASE_URL"):
+        candidate = env_values.get(key, "").strip()
+        if candidate.startswith("postgresql://") or candidate.startswith("postgres://"):
+            return candidate
 
-    # Neon generated passwords are safe to store independently from endpoint metadata.
-    # If a user copied only the generated password into the GitHub secret, construct
-    # the fixed worker connection URI here without ever printing the password.
+    for key in ("PGPASSWORD", "NEON_PASSWORD", "PASSWORD"):
+        password = env_values.get(key, "").strip()
+        if password:
+            return build_password_dsn(password)
+
+    # Neon-generated password copied by itself.
     if value and not any(ch.isspace() for ch in value) and "=" not in value:
-        encoded_password = quote(value, safe="")
-        return (
-            f"postgresql://{EXPECTED_PRINCIPAL}:{encoded_password}@{NEON_HOST}/{NEON_DATABASE}"
-            "?sslmode=require&channel_binding=require"
-        )
+        return build_password_dsn(value)
 
-    fail("BRIDGE_WORKER_DATABASE_URL is not a supported PostgreSQL URI, .env assignment, or password-only value")
+    fail("BRIDGE_WORKER_DATABASE_URL does not contain a usable PostgreSQL URI or Neon password")
 
 
 def main() -> None:
