@@ -17,28 +17,34 @@ jobs:
   worker-runtime-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: Install PostgreSQL client library
-        run: python -m pip install --disable-pip-version-check 'psycopg[binary]'
+        run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
 
       - name: Verify worker runtime secret exists
         shell: bash
+        env:
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
         run: |
           set -euo pipefail
           test -n "${BRIDGE_WORKER_DATABASE_URL:-}" || { echo 'BRIDGE_WORKER_DATABASE_URL is not configured'; exit 1; }
 
       - name: Verify least-privilege Neon worker access
+        env:
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
         run: python database/runtime_worker_preflight.py
 
       - name: Verify full result persistence path with rollback
+        env:
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
         run: python -m database.runtime_worker_persistence_smoke
