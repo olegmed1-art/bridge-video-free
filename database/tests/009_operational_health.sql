@@ -18,12 +18,16 @@ BEGIN
         RAISE EXCEPTION 'operational health policy seed missing';
     END IF;
 
+    -- Fingerprint must describe the migration registry that actually exists now.
+    -- Do not hard-code the latest migration key: future additive migrations must not
+    -- make this operational-health test stale.
     IF NOT EXISTS (
         SELECT 1 FROM database_runtime_fingerprint
          WHERE school_id=v_school
            AND server_version_num >= 180000
+           AND migration_count = (SELECT count(*) FROM schema_migration)
            AND migration_count >= 15
-           AND latest_migration_key='0015_operational_health_checksum_fix'
+           AND latest_migration_key = (SELECT max(migration_key) FROM schema_migration)
            AND migration_checksum_missing_count=0
     ) THEN
         RAISE EXCEPTION 'database runtime fingerprint is incomplete or unhealthy';
