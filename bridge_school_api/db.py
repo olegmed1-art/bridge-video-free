@@ -2,14 +2,13 @@ from __future__ import annotations
 
 import os
 from contextlib import contextmanager
-from urllib.parse import quote
+from urllib.parse import urlsplit
 
 import psycopg
 from psycopg.rows import dict_row
 
 EXPECTED_PRINCIPAL = "bridge_school_app_principal"
-NEON_HOST = "ep-noisy-pine-b1pe30sf.c-5.eu-central-1.aws.neon.tech"
-NEON_DATABASE = "neondb"
+EXPECTED_DATABASE = "neondb"
 
 
 def _unquote(value: str) -> str:
@@ -19,44 +18,23 @@ def _unquote(value: str) -> str:
     return value
 
 
-def build_password_dsn(password: str) -> str:
-    return (
-        f"postgresql://{EXPECTED_PRINCIPAL}:{quote(password, safe='')}@{NEON_HOST}/{NEON_DATABASE}"
-        "?sslmode=require&channel_binding=require"
-    )
-
-
 def normalize_dsn(raw: str) -> str:
-    value = raw.strip()
+    value = _unquote(raw)
     if not value:
         raise RuntimeError("BRIDGE_APP_DATABASE_URL is not configured")
+    if not value.startswith(("postgresql://", "postgres://")):
+        raise RuntimeError("BRIDGE_APP_DATABASE_URL must be a complete PostgreSQL connection URI")
 
-    direct = _unquote(value)
-    if direct.startswith(("postgresql://", "postgres://")):
-        return direct
-
-    env_values: dict[str, str] = {}
-    for raw_line in value.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, item = line.split("=", 1)
-        env_values[key.strip()] = _unquote(item)
-
-    for key in ("BRIDGE_APP_DATABASE_URL", "DATABASE_URL", "POSTGRES_URL", "NEON_DATABASE_URL"):
-        candidate = env_values.get(key, "").strip()
-        if candidate.startswith(("postgresql://", "postgres://")):
-            return candidate
-
-    for key in ("PGPASSWORD", "NEON_PASSWORD", "PASSWORD"):
-        password = env_values.get(key, "").strip()
-        if password:
-            return build_password_dsn(password)
-
-    if value and not any(ch.isspace() for ch in value) and "=" not in value:
-        return build_password_dsn(value)
-
-    raise RuntimeError("BRIDGE_APP_DATABASE_URL does not contain a usable PostgreSQL connection value")
+    parsed = urlsplit(value)
+    if parsed.username != EXPECTED_PRINCIPAL:
+        raise RuntimeError("BRIDGE_APP_DATABASE_URL uses an unexpected database principal")
+    if not parsed.password:
+        raise RuntimeError("BRIDGE_APP_DATABASE_URL does not include a database password")
+    if not parsed.hostname or "-pooler." not in parsed.hostname:
+        raise RuntimeError("BRIDGE_APP_DATABASE_URL must use the Neon pooled endpoint")
+    if parsed.path != f"/{EXPECTED_DATABASE}":
+        raise RuntimeError("BRIDGE_APP_DATABASE_URL targets an unexpected database")
+    return value
 
 
 def database_dsn() -> str:
