@@ -8,14 +8,9 @@ on:
         required: true
         type: string
   push:
+    branches: [main]
     paths:
       - 'run_requests/*.txt'
-      - 'README.md'
-      - '.github/workflows/bridge-video-3.1-free.yml'
-
-env:
-  PUSH_JOB_ID: "044ee8db568a9b4d42faef82b6b70167"
-  PUSH_SEQ: "3"
 
 permissions:
   contents: read
@@ -42,7 +37,7 @@ jobs:
 
     steps:
       - name: Checkout public technical code only
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 2
           persist-credentials: false
@@ -56,16 +51,11 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             JOB_ID="$INPUT_JOB_ID"
           else
-            REQUEST_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^(run_requests/.*\.txt|README\.md)$' | head -n 1 || true)"
-            JOB_ID=""
-            if [ -n "$REQUEST_FILE" ]; then
-              JOB_ID="$(sed -n 's/^JOB_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
-              if [ -z "$JOB_ID" ] && [[ "$REQUEST_FILE" == run_requests/*.txt ]]; then
-                JOB_ID="$(basename "$REQUEST_FILE" .txt)"
-              fi
-            fi
+            REQUEST_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^run_requests/.*\.txt$' | head -n 1 || true)"
+            test -n "$REQUEST_FILE" || { echo "No run request file in triggering commit" >&2; exit 2; }
+            JOB_ID="$(sed -n 's/^JOB_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
             if [ -z "$JOB_ID" ]; then
-              JOB_ID="${PUSH_JOB_ID:-}"
+              JOB_ID="$(basename "$REQUEST_FILE" .txt)"
             fi
           fi
           test -n "$JOB_ID"
@@ -76,9 +66,9 @@ jobs:
           echo "BRIDGE_JOB_ID=$JOB_ID" >> "$GITHUB_ENV"
 
       - name: Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Install free open-source runtime
         run: |
@@ -92,7 +82,7 @@ jobs:
       # installation hooks cannot inherit a live Google credential file.
       - name: Authenticate to Google Cloud with Workload Identity Federation
         id: auth
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           project_id: bridge-video-automation
           workload_identity_provider: projects/499454355457/locations/global/workloadIdentityPools/github-actions/providers/github
