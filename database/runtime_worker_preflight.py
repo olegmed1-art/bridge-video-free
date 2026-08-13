@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 
 import psycopg
@@ -15,6 +16,15 @@ EXPECTED_SCHOOL = "Школа спортивного бриджа"
 def fail(message: str) -> None:
     print(f"RUNTIME_DB_PREFLIGHT: FAIL: {message}", file=sys.stderr)
     raise SystemExit(1)
+
+
+def safe_db_error(exc: BaseException) -> str:
+    """Return useful connection diagnostics without echoing credentials."""
+    message = str(exc).strip().replace("\n", " | ")
+    message = re.sub(r"postgres(?:ql)?://[^\s]+", "postgresql://[redacted]", message, flags=re.IGNORECASE)
+    message = re.sub(r"(?i)(password\s*=\s*)[^\s]+", r"\1[redacted]", message)
+    message = re.sub(r"(?i)(passfile\s*=\s*)[^\s]+", r"\1[redacted]", message)
+    return message[:1200] or exc.__class__.__name__
 
 
 def main() -> None:
@@ -62,7 +72,7 @@ def main() -> None:
             f"principal={EXPECTED_PRINCIPAL} capability={EXPECTED_CAPABILITY} school=verified"
         )
     except psycopg.Error as exc:
-        fail(f"database connection/query failed: {exc.__class__.__name__}")
+        fail(f"database connection/query failed: {exc.__class__.__name__}: {safe_db_error(exc)}")
 
 
 if __name__ == "__main__":
