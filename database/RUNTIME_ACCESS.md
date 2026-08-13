@@ -45,3 +45,20 @@ Use a different credential for app, worker and health monitoring. Do not reuse t
 6. Leave principals for services that do not yet exist as `NOLOGIN`.
 
 The health principal deliberately cannot read student/person/source data directly. It can read only `database_runtime_fingerprint`, `operational_health_signal`, `operational_health_issue` and `operational_health_summary`.
+
+## Current worker runtime
+
+The current background video worker runs in GitHub Actions via `.github/workflows/bridge-video-3.1-free.yml`. It is therefore the first runtime that should receive an activated database principal.
+
+Its future runtime connection string is stored only as the GitHub Actions secret `BRIDGE_WORKER_DATABASE_URL`. Until that secret exists, the workflow leaves database access disabled and reports the database preflight as skipped.
+
+When the secret is configured, `database/runtime_worker_preflight.py` connects before the worker starts and fails closed unless all of the following are true:
+
+- the authenticated database user is exactly `bridge_school_worker_principal`;
+- it inherits `bridge_school_worker`;
+- it can read the school registry;
+- it cannot update operational-health policy;
+- it cannot delete person records;
+- the canonical school seed `Школа спортивного бриджа` exists exactly once.
+
+The preflight never prints the connection string or password.
