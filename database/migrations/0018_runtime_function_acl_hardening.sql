@@ -20,6 +20,25 @@ REVOKE ALL ON FUNCTION public.prevent_dependency_cycle() FROM
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
 REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
 
+DO $$
+DECLARE
+    role_name text;
+BEGIN
+    IF to_regprocedure('public.show_db_tree()') IS NOT NULL THEN
+        RAISE EXCEPTION 'untracked show_db_tree() remains installed';
+    END IF;
+
+    FOREACH role_name IN ARRAY ARRAY[
+        'bridge_school_app_principal',
+        'bridge_school_worker_principal',
+        'bridge_school_health_principal'
+    ] LOOP
+        IF has_function_privilege(role_name, 'public.prevent_dependency_cycle()', 'EXECUTE') THEN
+            RAISE EXCEPTION 'runtime principal can execute trigger helper: %', role_name;
+        END IF;
+    END LOOP;
+END $$;
+
 INSERT INTO schema_migration(migration_key)
 VALUES ('0018_runtime_function_acl_hardening')
 ON CONFLICT DO NOTHING;
