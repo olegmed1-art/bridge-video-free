@@ -50,9 +50,16 @@ jobs:
           else
             REQUEST_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep '^run_requests/.*\.txt$' | head -n 1)"
             test -n "$REQUEST_FILE"
-            JOB_ID="$(basename "$REQUEST_FILE" .txt)"
+            JOB_ID="$(sed -n 's/^JOB_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            if [ -z "$JOB_ID" ]; then
+              JOB_ID="$(basename "$REQUEST_FILE" .txt)"
+            fi
           fi
           test -n "$JOB_ID"
+          case "$JOB_ID" in
+            *[!0-9a-f]*) echo "invalid opaque job id" >&2; exit 2 ;;
+          esac
+          test "${#JOB_ID}" -eq 32
           echo "BRIDGE_JOB_ID=$JOB_ID" >> "$GITHUB_ENV"
 
       - name: Authenticate to Google Cloud with Workload Identity Federation
