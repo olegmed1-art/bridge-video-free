@@ -5,6 +5,7 @@ on:
     paths:
       - 'bridge_school_api/**'
       - 'tests/test_api_dsn_contract.py'
+      - 'tests/test_api_health_contract.py'
       - 'scripts/process_drive_video.py'
       - '.github/workflows/process-video.yml'
       - '.github/workflows/drive-upload-diagnostic.yml'
@@ -17,6 +18,7 @@ on:
     paths:
       - 'bridge_school_api/**'
       - 'tests/test_api_dsn_contract.py'
+      - 'tests/test_api_health_contract.py'
       - 'scripts/process_drive_video.py'
       - '.github/workflows/process-video.yml'
       - '.github/workflows/drive-upload-diagnostic.yml'
@@ -44,8 +46,10 @@ jobs:
       - name: Install API dependencies
         run: python -m pip install --disable-pip-version-check -r requirements-api.txt
       - name: Compile Python entry points
-        run: python -m py_compile bridge_school_api/__init__.py bridge_school_api/db.py bridge_school_api/main.py scripts/process_drive_video.py
+        run: python -m py_compile bridge_school_api/__init__.py bridge_school_api/db.py bridge_school_api/main.py scripts/process_drive_video.py tests/test_api_health_contract.py
       - name: Verify database DSN contract
         run: PYTHONPATH=. python tests/test_api_dsn_contract.py
+      - name: Verify public health endpoint contract
+        run: PYTHONPATH=. python tests/test_api_health_contract.py
       - name: Import FastAPI application
         run: python -c "from bridge_school_api.main import app; assert app.title == 'Bridge School API'"
