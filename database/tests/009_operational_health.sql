@@ -22,8 +22,8 @@ BEGIN
         SELECT 1 FROM database_runtime_fingerprint
          WHERE school_id=v_school
            AND server_version_num >= 180000
-           AND migration_count >= 14
-           AND latest_migration_key='0014_operational_health'
+           AND migration_count >= 15
+           AND latest_migration_key='0015_operational_health_checksum_fix'
            AND migration_checksum_missing_count=0
     ) THEN
         RAISE EXCEPTION 'database runtime fingerprint is incomplete or unhealthy';
