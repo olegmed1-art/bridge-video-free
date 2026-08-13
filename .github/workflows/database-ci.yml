@@ -46,6 +46,7 @@ jobs:
         run: |
           python -m py_compile \
             database/runtime_worker_preflight.py \
+            database/runtime_health_preflight.py \
             database/video_result_persistence.py \
             database/runtime_worker_persistence_smoke.py \
             database/backfill_video_results.py \
