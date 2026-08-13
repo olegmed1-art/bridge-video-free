@@ -61,6 +61,9 @@ jobs:
             run_master_3_1_free_semantic.py \
             tests/test_worker_dsn_contract.py
 
+      - name: Install worker DSN test dependency
+        run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+
       - name: Run worker DSN contract regression tests
         run: PYTHONPATH=. python tests/test_worker_dsn_contract.py
 
