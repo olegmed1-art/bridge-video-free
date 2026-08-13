@@ -31,8 +31,9 @@ def apply_response_security_headers(path: str, response: Response) -> Response:
     if path.startswith("/v1/"):
         response.headers["Cache-Control"] = "private, no-store, max-age=0"
         response.headers["Pragma"] = "no-cache"
-        response.headers.pop("Vercel-CDN-Cache-Control", None)
-        response.headers.pop("CDN-Cache-Control", None)
+        for header_name in ("Vercel-CDN-Cache-Control", "CDN-Cache-Control"):
+            if header_name in response.headers:
+                del response.headers[header_name]
     return response
 
 
