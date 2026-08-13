@@ -10,15 +10,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 
 import run_drive_3_1_free as io
+from bridge_worker_3_1_free import stable_job_id
 from run_drive_3_1_free_oidc import user_oauth_token
 
 from bridge_neon_persistence import _load_embedded_master
 from database.runtime_worker_preflight import normalize_dsn
 from database.video_result_persistence import persist_video_result
+
+JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 
 def _load_done(token: str, item: dict) -> dict | None:
@@ -32,7 +36,8 @@ def _load_done(token: str, item: dict) -> dict | None:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             return None
-    if payload.get("status") != "AI_DONE" or not payload.get("job_id"):
+    job_id = str(payload.get("job_id") or "")
+    if payload.get("status") != "AI_DONE" or not JOB_ID_RE.fullmatch(job_id):
         return None
     if not (payload.get("masterPdf") or {}).get("driveId"):
         return None
@@ -56,10 +61,23 @@ def discover_done(token: str) -> list[tuple[dict, dict]]:
     return sorted(loaded.values(), key=lambda pair: str(pair[0].get("modifiedTime") or ""))
 
 
+def _verify_master_identity(master: dict, job_id: str) -> None:
+    if str(master.get("job_id") or "") != job_id:
+        raise RuntimeError("JOB_ID_MISMATCH")
+    source = master.get("source") or {}
+    source_drive_id = str(source.get("driveId") or "").strip()
+    if not source_drive_id:
+        raise RuntimeError("SOURCE_DRIVE_ID_MISSING")
+    if stable_job_id("drive", source_drive_id) != job_id:
+        raise RuntimeError("SOURCE_JOB_ID_MISMATCH")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--limit", type=int, default=0, help="0 means all discovered completed jobs")
     args = parser.parse_args()
+    if args.limit < 0:
+        parser.error("--limit must be a non-negative integer")
 
     raw_dsn = os.getenv("BRIDGE_WORKER_DATABASE_URL", "").strip()
     if not normalize_dsn(raw_dsn):
@@ -78,8 +96,7 @@ def main() -> None:
         job_id = str(done.get("job_id") or "")
         try:
             master = _load_embedded_master(token, done)
-            if master.get("job_id") != job_id:
-                raise RuntimeError("JOB_ID_MISMATCH")
+            _verify_master_identity(master, job_id)
             persist_video_result(raw_dsn, master, done)
             ok += 1
             print(json.dumps({"stage": "BACKFILL_ITEM", "job_id": job_id, "status": "ok"}))
