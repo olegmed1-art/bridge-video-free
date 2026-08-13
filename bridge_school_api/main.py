@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import secrets
 from uuid import UUID
 
@@ -35,19 +36,50 @@ def require_api_token(authorization: str | None = Header(default=None)) -> None:
 
 def _database_failure_category(exc: Exception) -> str:
     text = str(exc).lower()
-    if "password authentication failed" in text:
+    if "password authentication failed" in text or "authentication failed" in text:
         return "authentication_failed"
+    if "role" in text and "does not exist" in text:
+        return "role_missing"
+    if "database" in text and "does not exist" in text:
+        return "database_missing"
+    if "endpoint id is not specified" in text:
+        return "endpoint_id_missing"
     if "could not translate host name" in text or "name or service not known" in text:
         return "dns_failed"
+    if "network is unreachable" in text:
+        return "network_unreachable"
+    if "no route to host" in text:
+        return "no_route_to_host"
     if "timeout" in text:
         return "connection_timeout"
     if "connection refused" in text:
         return "connection_refused"
+    if "server closed the connection unexpectedly" in text:
+        return "server_closed_connection"
+    if "active endpoints limit exceeded" in text or "concurrently active endpoints" in text:
+        return "active_endpoint_limit"
+    if "remaining connection slots" in text:
+        return "connection_limit"
+    if "channel binding" in text:
+        return "channel_binding_failed"
     if "ssl" in text or "certificate" in text:
         return "tls_failed"
     if isinstance(exc, psycopg.OperationalError):
         return "operational_error"
     return "database_error"
+
+
+def _sanitize_database_error(exc: Exception) -> str:
+    text = str(exc).replace("\n", " | ")
+    text = re.sub(
+        r"([a-z][a-z0-9+.-]*://)([^:@/\s]+):([^@/\s]+)@",
+        r"\1***:***@",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"(?i)(password\s*=\s*)[^\s|]+", r"\1***", text)
+    text = re.sub(r"(?i)(passfile\s*=\s*)[^\s|]+", r"\1***", text)
+    return text[:700]
 
 
 @app.get("/healthz")
@@ -62,7 +94,13 @@ def healthz() -> dict[str, str]:
             row = cur.fetchone()
     except Exception as exc:
         category = _database_failure_category(exc)
-        logger.error("database_health_check_failed category=%s", category)
+        logger.error(
+            "database_health_check_failed category=%s type=%s sqlstate=%s message=%s",
+            category,
+            type(exc).__name__,
+            getattr(exc, "sqlstate", None),
+            _sanitize_database_error(exc),
+        )
         raise HTTPException(status_code=503, detail=f"database health check failed: {category}") from exc
 
     if not row or row["principal"] != EXPECTED_PRINCIPAL or row["school_count"] != 1:
