@@ -15,6 +15,11 @@ REVOKE ALL ON FUNCTION public.prevent_dependency_cycle() FROM
     bridge_school_worker,
     bridge_school_health;
 
+-- Fail closed for future owner-created functions. New callable runtime APIs
+-- must receive an explicit GRANT in the migration that introduces them.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+
 INSERT INTO schema_migration(migration_key)
 VALUES ('0018_runtime_function_acl_hardening')
 ON CONFLICT DO NOTHING;
