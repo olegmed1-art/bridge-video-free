@@ -6,6 +6,7 @@ normalization layer learned from real school transcripts.
 """
 import bridge_worker_3_1_free as core
 import run_master_3_1_free as base
+from bridge_neon_persistence import persist_completed_drive_job
 from bridge_semantic_qc import SEMANTIC_QC_REVISION, semantic_normalize_segments
 
 # Product name stays 3.1 FREE; only the internal revision changes.
@@ -84,4 +85,6 @@ base.master_analysis_payload = master_payload_with_semantic_qc
 
 
 def process_job(token):
-    return base.process_job(token)
+    result = base.process_job(token)
+    persist_completed_drive_job(token)
+    return result

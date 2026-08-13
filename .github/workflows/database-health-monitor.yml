@@ -1,0 +1,36 @@
+name: Bridge School Neon Health Monitor
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 * * * *'
+
+permissions:
+  contents: read
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BRIDGE_HEALTH_DATABASE_URL: ${{ secrets.BRIDGE_HEALTH_DATABASE_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PostgreSQL client library
+        run: python -m pip install --disable-pip-version-check 'psycopg[binary]'
+
+      - name: Verify dedicated health credential exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${BRIDGE_HEALTH_DATABASE_URL:-}" || { echo 'BRIDGE_HEALTH_DATABASE_URL is not configured'; exit 1; }
+
+      - name: Verify least-privilege operational health access
+        run: python database/runtime_health_preflight.py

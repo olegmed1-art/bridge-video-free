@@ -60,7 +60,29 @@ for migration in "$MIGRATIONS_DIR"/*.sql; do
   fi
 
   echo "Applying migration $key"
-  psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$migration"
+  # Serialize migration application at the database level. The session-level advisory
+  # lock survives BEGIN/COMMIT statements inside migration files and is released
+  # automatically if psql exits on an error. Re-checking the registry after acquiring
+  # the lock prevents two independent CI runners from applying the same migration.
+  psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+    -v migration_key="$key" \
+    -v migration_file="$migration" <<'PSQL'
+SELECT pg_advisory_lock(hashtext(current_database()), hashtext('bridge_school_schema_migrations'));
+SELECT to_regclass('public.schema_migration') IS NOT NULL AS registry_exists \gset
+\if :registry_exists
+  SELECT EXISTS (
+      SELECT 1 FROM public.schema_migration WHERE migration_key = :'migration_key'
+  ) AS migration_already_applied \gset
+\else
+  \set migration_already_applied false
+\endif
+\if :migration_already_applied
+  \echo 'Migration' :migration_key 'was applied by another runner while waiting for the database lock; skipping.'
+\else
+  \i :migration_file
+\endif
+SELECT pg_advisory_unlock(hashtext(current_database()), hashtext('bridge_school_schema_migrations'));
+PSQL
 
   if ! schema_table_exists; then
     echo "Migration $key did not create schema_migration" >&2

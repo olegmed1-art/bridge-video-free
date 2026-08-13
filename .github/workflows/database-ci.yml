@@ -6,12 +6,14 @@ on:
       - 'database/**'
       - '.github/workflows/database-ci.yml'
       - '.github/workflows/database-production.yml'
+      - '.github/workflows/database-app-runtime-smoke.yml'
   push:
     branches: [main]
     paths:
       - 'database/**'
       - '.github/workflows/database-ci.yml'
       - '.github/workflows/database-production.yml'
+      - '.github/workflows/database-app-runtime-smoke.yml'
 
 permissions:
   contents: read
@@ -42,6 +44,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Compile video persistence adapters
+        run: |
+          python -m py_compile \
+            database/runtime_worker_preflight.py \
+            database/runtime_health_preflight.py \
+            database/runtime_app_preflight.py \
+            database/video_result_persistence.py \
+            database/runtime_worker_persistence_smoke.py \
+            database/backfill_video_results.py \
+            bridge_neon_persistence.py \
+            run_master_3_1_free_semantic.py
+
       - name: Install PostgreSQL client
         shell: bash
         run: |
@@ -56,6 +70,7 @@ jobs:
           psql "$ADMIN_DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
           CREATE EXTENSION IF NOT EXISTS pgcrypto;
           CREATE EXTENSION IF NOT EXISTS btree_gist;
+          CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
           DO $$
           BEGIN
               IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='bridge_ci_owner') THEN

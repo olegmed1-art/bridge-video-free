@@ -1,0 +1,101 @@
+name: Bridge School API CI
+
+on:
+  pull_request:
+    paths:
+      - 'bridge_school_api/**'
+      - 'requirements-api.txt'
+      - 'Dockerfile.api'
+      - '.github/workflows/bridge-school-api-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'bridge_school_api/**'
+      - 'requirements-api.txt'
+      - 'Dockerfile.api'
+      - '.github/workflows/bridge-school-api-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  api-static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install API dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-api.txt
+      - name: Compile API package
+        run: python -m py_compile bridge_school_api/__init__.py bridge_school_api/db.py bridge_school_api/main.py
+      - name: Import FastAPI application
+        run: python -c "from bridge_school_api.main import app; assert app.title == 'Bridge School API'"
+      - name: Build API container
+        run: docker build -f Dockerfile.api -t bridge-school-api:ci .
+
+  production-smoke:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: api-static
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      BRIDGE_APP_DATABASE_URL: ${{ secrets.BRIDGE_APP_DATABASE_URL }}
+      BRIDGE_API_TOKEN: github-actions-smoke-token
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install API dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-api.txt
+      - name: Verify application database secret exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${BRIDGE_APP_DATABASE_URL:-}" || { echo 'BRIDGE_APP_DATABASE_URL is not configured'; exit 1; }
+      - name: Start API
+        shell: bash
+        run: |
+          set -euo pipefail
+          uvicorn bridge_school_api.main:app --host 127.0.0.1 --port 8000 >/tmp/bridge-school-api.log 2>&1 &
+          echo $! >/tmp/bridge-school-api.pid
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8000/healthz >/tmp/health.json; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/bridge-school-api.log
+          exit 1
+      - name: Verify authenticated production overview
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent \
+            -H "Authorization: Bearer ${BRIDGE_API_TOKEN}" \
+            http://127.0.0.1:8000/v1/overview >/tmp/overview.json
+          python - <<'PY'
+          import json
+          with open('/tmp/overview.json', encoding='utf-8') as fh:
+              data = json.load(fh)
+          assert data['stable_name'] == 'Школа спортивного бриджа'
+          assert int(data['media_assets']) >= 1
+          assert int(data['transcripts']) >= 1
+          assert int(data['analysis_runs']) >= 1
+          assert int(data['artifacts']) >= 1
+          print('BRIDGE_SCHOOL_API: PASS production overview verified')
+          PY
+      - name: Stop API
+        if: always()
+        shell: bash
+        run: |
+          if test -f /tmp/bridge-school-api.pid; then
+            kill "$(cat /tmp/bridge-school-api.pid)" 2>/dev/null || true
+          fi
