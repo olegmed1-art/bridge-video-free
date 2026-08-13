@@ -42,6 +42,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Compile video persistence adapters
+        run: |
+          python -m py_compile \
+            database/runtime_worker_preflight.py \
+            database/video_result_persistence.py \
+            database/runtime_worker_persistence_smoke.py \
+            bridge_neon_persistence.py \
+            run_master_3_1_free_semantic.py
+
       - name: Install PostgreSQL client
         shell: bash
         run: |

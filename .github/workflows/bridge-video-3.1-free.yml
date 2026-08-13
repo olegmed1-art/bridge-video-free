@@ -119,6 +119,8 @@ jobs:
         run: python bridge_worker_3_1_free.py
 
       - name: Process one opaque Drive job
+        env:
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
         run: python run_drive_3_1_free_oidc.py
 
       # User media/transcripts are never uploaded as GitHub workflow artifacts.

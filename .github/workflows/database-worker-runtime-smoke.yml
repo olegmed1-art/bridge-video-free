@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/database-worker-runtime-smoke.yml'
       - 'database/runtime_worker_preflight.py'
+      - 'database/runtime_worker_persistence_smoke.py'
+      - 'database/video_result_persistence.py'
 
 permissions:
   contents: read
@@ -37,3 +39,6 @@ jobs:
 
       - name: Verify least-privilege Neon worker access
         run: python database/runtime_worker_preflight.py
+
+      - name: Verify full result persistence path with rollback
+        run: python database/runtime_worker_persistence_smoke.py
