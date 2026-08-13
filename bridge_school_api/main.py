@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import logging
 import os
 import secrets
 from uuid import UUID
 
+import psycopg
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 
 from .db import EXPECTED_PRINCIPAL, connect
 
 EXPECTED_SCHOOL = "Школа спортивного бриджа"
+logger = logging.getLogger("bridge_school_api")
 
 app = FastAPI(
     title="Bridge School API",
@@ -30,16 +33,40 @@ def require_api_token(authorization: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=403, detail="invalid bearer token")
 
 
+def _database_failure_category(exc: Exception) -> str:
+    text = str(exc).lower()
+    if "password authentication failed" in text:
+        return "authentication_failed"
+    if "could not translate host name" in text or "name or service not known" in text:
+        return "dns_failed"
+    if "timeout" in text:
+        return "connection_timeout"
+    if "connection refused" in text:
+        return "connection_refused"
+    if "ssl" in text or "certificate" in text:
+        return "tls_failed"
+    if isinstance(exc, psycopg.OperationalError):
+        return "operational_error"
+    return "database_error"
+
+
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
-    with connect() as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT current_user AS principal, count(*) AS school_count "
-            "FROM public.school WHERE stable_name = %s GROUP BY current_user",
-            (EXPECTED_SCHOOL,),
-        )
-        row = cur.fetchone()
+    try:
+        with connect() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT current_user AS principal, count(*) AS school_count "
+                "FROM public.school WHERE stable_name = %s GROUP BY current_user",
+                (EXPECTED_SCHOOL,),
+            )
+            row = cur.fetchone()
+    except Exception as exc:
+        category = _database_failure_category(exc)
+        logger.error("database_health_check_failed category=%s", category)
+        raise HTTPException(status_code=503, detail=f"database health check failed: {category}") from exc
+
     if not row or row["principal"] != EXPECTED_PRINCIPAL or row["school_count"] != 1:
+        logger.error("database_health_check_failed category=runtime_boundary")
         raise HTTPException(status_code=503, detail="database runtime boundary is not ready")
     return {"status": "ok"}
 
