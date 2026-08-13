@@ -6,8 +6,9 @@ import secrets
 from uuid import UUID
 
 import psycopg
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
+from starlette.responses import Response
 
 from .db import EXPECTED_PRINCIPAL, connect
 
@@ -21,6 +22,24 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+
+
+def apply_response_security_headers(path: str, response: Response) -> Response:
+    """Set conservative headers for JSON APIs, especially authenticated data."""
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    if path.startswith("/v1/"):
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers.pop("Vercel-CDN-Cache-Control", None)
+        response.headers.pop("CDN-Cache-Control", None)
+    return response
+
+
+@app.middleware("http")
+async def api_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    return apply_response_security_headers(request.url.path, response)
 
 
 def require_api_token(authorization: str | None = Header(default=None)) -> None:
