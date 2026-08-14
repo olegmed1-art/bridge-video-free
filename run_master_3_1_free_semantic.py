@@ -297,6 +297,10 @@ def process_job(token):
     existing = _existing_same_revision_done(token, job_id)
     if existing is not None:
         base.io.safe(job_id=job_id, stage="ALREADY_DONE", exit_code=0)
+        # AI_DONE proves the expensive Drive analysis is complete, but it does not prove
+        # that the final Neon transaction succeeded. Reconcile the idempotent database
+        # persistence before returning so a retry repairs partial completion.
+        persist_completed_drive_job(token)
         return existing
 
     result = base.process_job(token)
