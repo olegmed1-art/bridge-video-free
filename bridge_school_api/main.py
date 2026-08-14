@@ -37,25 +37,10 @@ def apply_response_security_headers(path: str, response: Response) -> Response:
     return response
 
 
-def health_query_is_canonical(query_string: bytes) -> bool:
-    """Only the canonical /healthz URL is allowed to reach the database check."""
-    return not query_string
-
-
 @app.middleware("http")
 async def api_security_headers(request: Request, call_next):
-    path = request.url.path
-    if path == "/healthz" and not health_query_is_canonical(request.scope.get("query_string", b"")):
-        return apply_response_security_headers(
-            path,
-            JSONResponse(
-                {"detail": "not found"},
-                status_code=404,
-                headers={"Cache-Control": "public, max-age=300"},
-            ),
-        )
     response = await call_next(request)
-    return apply_response_security_headers(path, response)
+    return apply_response_security_headers(request.url.path, response)
 
 
 def require_api_token(authorization: str | None = Header(default=None)) -> None:
