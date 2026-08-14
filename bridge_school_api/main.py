@@ -10,7 +10,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
-from .db import EXPECTED_PRINCIPAL, connect
+from .db import DatabaseConfigurationError, EXPECTED_PRINCIPAL, connect
 
 EXPECTED_SCHOOL = "Школа спортивного бриджа"
 logger = logging.getLogger("bridge_school_api")
@@ -37,10 +37,25 @@ def apply_response_security_headers(path: str, response: Response) -> Response:
     return response
 
 
+def health_query_is_canonical(query_string: bytes) -> bool:
+    """Only the canonical /healthz URL is allowed to reach the database check."""
+    return not query_string
+
+
 @app.middleware("http")
 async def api_security_headers(request: Request, call_next):
+    path = request.url.path
+    if path == "/healthz" and not health_query_is_canonical(request.scope.get("query_string", b"")):
+        return apply_response_security_headers(
+            path,
+            JSONResponse(
+                {"detail": "not found"},
+                status_code=404,
+                headers={"Cache-Control": "public, max-age=300"},
+            ),
+        )
     response = await call_next(request)
-    return apply_response_security_headers(request.url.path, response)
+    return apply_response_security_headers(path, response)
 
 
 def require_api_token(authorization: str | None = Header(default=None)) -> None:
@@ -56,6 +71,8 @@ def require_api_token(authorization: str | None = Header(default=None)) -> None:
 
 
 def _database_failure_category(exc: Exception) -> str:
+    if isinstance(exc, DatabaseConfigurationError):
+        return "configuration_error"
     text = str(exc).lower()
     if "password authentication failed" in text or "authentication failed" in text:
         return "authentication_failed"
@@ -88,6 +105,26 @@ def _database_failure_category(exc: Exception) -> str:
     if isinstance(exc, psycopg.OperationalError):
         return "operational_error"
     return "database_error"
+
+
+def database_service_unavailable_response(path: str, exc: Exception) -> JSONResponse:
+    """Return a generic response while logging only a sanitized failure category."""
+    category = _database_failure_category(exc)
+    logger.error(
+        "database_request_failed category=%s type=%s sqlstate=%s path=%s",
+        category,
+        type(exc).__name__,
+        getattr(exc, "sqlstate", None),
+        path,
+    )
+    response = JSONResponse({"detail": "service unavailable"}, status_code=503)
+    return apply_response_security_headers(path, response)  # type: ignore[return-value]
+
+
+@app.exception_handler(psycopg.Error)
+@app.exception_handler(DatabaseConfigurationError)
+async def database_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    return database_service_unavailable_response(request.url.path, exc)
 
 
 @app.get("/healthz")
