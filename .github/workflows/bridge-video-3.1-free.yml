@@ -32,6 +32,7 @@ jobs:
       BRIDGE_LARGER_RUNNER: "false"
       BRIDGE_PAID_CLOUD: "false"
       BRIDGE_BILLING_FALLBACK: "false"
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.1"
       PYTHONUNBUFFERED: "1"
       WHISPER_MODEL: small
 
@@ -113,21 +114,18 @@ jobs:
           print('Google Drive user OAuth preflight: PASS')
           PY
 
-      - name: Optional database runtime preflight
+      - name: Worker database runtime preflight
         shell: bash
         env:
           BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
         run: |
-          set -uo pipefail
-          if [ -z "${BRIDGE_WORKER_DATABASE_URL:-}" ]; then
-            echo 'DATABASE_PERSIST_SKIPPED: BRIDGE_WORKER_DATABASE_URL is not configured'
-            echo 'BRIDGE_WORKER_DATABASE_URL=' >> "$GITHUB_ENV"
-          elif python database/runtime_worker_preflight.py; then
-            echo 'BRIDGE_WORKER_DATABASE_URL='${BRIDGE_WORKER_DATABASE_URL} >> "$GITHUB_ENV"
-          else
-            echo 'DATABASE_PERSIST_SKIPPED: database preflight failed; core video processing will continue' >&2
-            echo 'BRIDGE_WORKER_DATABASE_URL=' >> "$GITHUB_ENV"
-          fi
+          set -euo pipefail
+          test -n "${BRIDGE_WORKER_DATABASE_URL:-}" || {
+            echo 'BLOCKED_DATABASE: BRIDGE_WORKER_DATABASE_URL is not configured' >&2
+            exit 1
+          }
+          python database/runtime_worker_preflight.py
+          echo "BRIDGE_WORKER_DATABASE_URL=${BRIDGE_WORKER_DATABASE_URL}" >> "$GITHUB_ENV"
 
       - name: FREE-GUARD
         run: python bridge_worker_3_1_free.py
