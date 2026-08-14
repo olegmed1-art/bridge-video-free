@@ -92,19 +92,36 @@ def test_same_revision_done_is_detected_before_heavy_processing():
     old_search = r23.base.io.search
     old_read = r23.base._read_text
     try:
-        r23.base.io.search = lambda token, query: [{"id": "done1", "modifiedTime": "2026-08-13T19:00:00Z"}]
+        r23.base.io.search = lambda token, query: ([{"id": "ready1", "modifiedTime": "2026-08-13T19:01:00Z"}]
+            if "METHODOLOGY_READY" in query else [{"id": "done1", "modifiedTime": "2026-08-13T19:00:00Z"}])
         payload = {
             "status": "AI_DONE",
             "job_id": "a" * 32,
             "algorithmRevision": r23.core.ALGORITHM_REVISION,
             "masterPdf": {"driveId": "pdf1"},
         }
-        r23.base._read_text = lambda token, item: json.dumps(payload, ensure_ascii=False)
+        ready = {"status":"METHODOLOGY_READY","job_id":"a"*32,
+                 "algorithmRevision":r23.core.ALGORITHM_REVISION,"masterPdfDriveId":"pdf1"}
+        r23.base._read_text = lambda token, item: json.dumps(ready if item["id"]=="ready1" else payload, ensure_ascii=False)
         found = r23._existing_same_revision_done("token", "a" * 32)
     finally:
         r23.base.io.search = old_search
         r23.base._read_text = old_read
     assert found == payload
+
+
+def test_ai_done_without_methodology_ready_does_not_skip_processing():
+    old_search = r23.base.io.search
+    old_read = r23.base._read_text
+    try:
+        r23.base.io.search = lambda token, query: [] if "METHODOLOGY_READY" in query else [{"id":"done1"}]
+        payload={"status":"AI_DONE","job_id":"c"*32,"algorithmRevision":r23.core.ALGORITHM_REVISION,
+                 "masterPdf":{"driveId":"pdf1"}}
+        r23.base._read_text=lambda token,item:json.dumps(payload)
+        assert r23._existing_same_revision_done("token","c"*32) is None
+    finally:
+        r23.base.io.search=old_search
+        r23.base._read_text=old_read
 
 
 def test_already_done_reconciles_database_without_heavy_reprocessing():
@@ -159,6 +176,7 @@ def main():
         test_all_23_windows_receive_independent_qc,
         test_failed_bridge_block_keeps_evidence_and_becomes_unreliable,
         test_same_revision_done_is_detected_before_heavy_processing,
+        test_ai_done_without_methodology_ready_does_not_skip_processing,
         test_already_done_reconciles_database_without_heavy_reprocessing,
         test_workflow_is_one_shot_and_serialized,
     ]
