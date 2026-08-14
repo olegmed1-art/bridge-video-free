@@ -4,6 +4,12 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '17 * * * *'
+  push:
+    branches: [main]
+    paths:
+      - 'database/runtime_health_preflight.py'
+      - 'tests/test_health_dsn_contract.py'
+      - '.github/workflows/database-health-monitor.yml'
 
 permissions:
   contents: read
