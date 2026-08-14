@@ -1,6 +1,6 @@
 # Алгоритм безопасного развёртывания и аудита
 
-Версия: 2.3
+Версия: 2.4
 Дата: 2026-08-14
 
 Этот алгоритм применяется к инфраструктуре Bridge School: GitHub Actions, Neon PostgreSQL и Vercel.
@@ -36,10 +36,11 @@
 4. Если компонент должен сохранять результат в Neon и его database credential настроен как обязательный, ошибка preflight является ошибкой всего задания. Запрещено незаметно продолжать работу и выдавать успешный результат без database persistence.
 5. Отказоустойчивый режим без базы допустим только если он явно объявлен отдельным режимом продукта и результат помечается как неполный; скрытый fallback запрещён.
 6. Пароль, DSN или токен никогда не выводятся в лог. Диагностика ошибок подключения должна быть санитизирована.
-7. Production runtime DSN хранится как полный PostgreSQL URI. Password-only, `.env`-фрагменты и автоматическая сборка URI из захардкоженного host запрещены.
-8. DSN-contract проверяет principal, database, ожидаемый production endpoint, TLS и channel binding до попытки полезной работы.
-9. Для serverless/API и worker используется pooled Neon endpoint, если компонент не требует session-level semantics; исключение должно быть явно задокументировано.
+7. Все production runtime DSN хранятся только как полный PostgreSQL URI. Password-only, `.env`-фрагменты и автоматическая сборка URI из захардкоженного host запрещены для app, worker и health.
+8. Каждый DSN-contract проверяет dedicated principal, database, ожидаемый production endpoint, допустимый порт, TLS и channel binding до полезной работы.
+9. App и worker используют pooled Neon endpoint. Health может использовать direct или pooled production endpoint, поскольку выполняет короткие read-only проверки; оба варианта должны быть явно ограничены списком production hosts.
 10. После каждой ротации runtime database credential запускается dedicated smoke-test. Для worker он обязан проверить полный путь persistence с rollback.
+11. Изменение любого DSN-parser сопровождается отрицательными regression tests: неверный principal, branch/host, database, TLS, channel binding, отсутствие пароля, password-only и `.env`-assignment должны отклоняться.
 
 ## GitHub Actions
 
@@ -54,6 +55,8 @@
 9. Пользовательский ввод сначала передаётся через environment и валидируется до использования. Прямая подстановка выражений GitHub в shell-команду запрещена, если значение может содержать пользовательские данные.
 10. Пользовательские медиа и расшифровки не публикуются как GitHub Actions artifacts.
 11. Workflow, который способен записывать результат во внешнюю систему, должен завершаться ошибкой при нарушении обязательной persistence boundary; успешное завершение без записи запрещено.
+12. Scheduled security/health workflows подчиняются тем же требованиям, что и production workflows: immutable action SHA, `persist-credentials: false`, pinned dependency versions и step-scoped secrets.
+13. CI path filters обязаны включать regression tests и workflow-файлы соответствующего runtime boundary, чтобы изменение проверки не могло обойти CI.
 
 ## Vercel
 
@@ -66,7 +69,7 @@
 
 ## CI gate
 
-До merge должны пройти все проверки, относящиеся к изменению: PostgreSQL 18 clean migration, invariants/permissions, idempotence, checksum tamper guard, Python 3.12 compile/import/contract tests и сборка runtime, где она применима. Failed CI не обходится ручным production-изменением. Изменение credential contract без regression test считается неполным.
+До merge должны пройти все проверки, относящиеся к изменению: PostgreSQL 18 clean migration, invariants/permissions, idempotence, checksum tamper guard, Python 3.12 compile/import/contract tests и сборка runtime, где она применима. Failed CI не обходится ручным production-изменением. Изменение credential contract без regression test считается неполным. DSN regression tests должны выполняться в общем Database CI, а не только в scheduled runtime workflow.
 
 ## Production promotion
 
@@ -92,11 +95,16 @@
 - отключённые API docs = 404;
 - отсутствие новых необъяснённых Vercel runtime errors;
 - список реально запустившихся GitHub workflows: database promotion не должен запускать обработку видео;
-- для worker, которому требуется persistence, отдельный rollback-smoke должен подтвердить успешное подключение и запись без фактического изменения production-данных.
+- worker rollback-smoke: успешное подключение и полный путь persistence без фактического изменения production-данных;
+- health monitor: строгий DSN-contract, least-privilege read и актуальный operational health должны завершиться PASS.
 
 ## Правило реакции на найденную ошибку
 
 Не ослаблять проверку ради зелёного статуса. Зафиксировать root cause, сделать forward fix, добавить regression test, повторить CI и post-deploy verification. Если дефект показал недостаток процесса, это правило добавляется в следующую версию алгоритма.
+
+## Изменения версии 2.4
+
+Четвёртая волна аудита устраняет последний permissive production DSN-parser у health monitor. Health credential теперь должен быть полным URI с точным dedicated principal, production host, database, TLS и channel binding; password-only и `.env` fallback запрещены. Scheduled health workflow получает immutable action pins, pinned `psycopg`, `persist-credentials: false` и step-scoped secret. DSN regression test health boundary включён в общий Database CI.
 
 ## Изменения версии 2.3
 
