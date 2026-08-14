@@ -1,0 +1,28 @@
+name: Bridge Video r6 ASR QC Selftest
+
+on:
+  push:
+    branches:
+      - algorithm/3.1-free-r6-asr-qc-failclosed
+    paths:
+      - 'bridge_runtime_hardening_r6.py'
+      - 'run_drive_3_1_free_generic.py'
+      - 'tests/test_r6_asr_qc_failclosed.py'
+      - '.github/workflows/video-r6-asr-qc-selftest.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  selftest:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install lightweight test dependencies
+        run: python -m pip install --disable-pip-version-check requests google-auth psycopg[binary]
+      - name: Run r6 Diana 9 regression selftest
+        run: PYTHONPATH=. python tests/test_r6_asr_qc_failclosed.py
