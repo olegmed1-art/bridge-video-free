@@ -1,6 +1,6 @@
 # Алгоритм безопасного развёртывания и аудита
 
-Версия: 2.4
+Версия: 2.5
 Дата: 2026-08-14
 
 Этот алгоритм применяется к инфраструктуре Bridge School: GitHub Actions, Neon PostgreSQL и Vercel.
@@ -41,6 +41,8 @@
 9. App и worker используют pooled Neon endpoint. Health может использовать direct или pooled production endpoint, поскольку выполняет короткие read-only проверки; оба варианта должны быть явно ограничены списком production hosts.
 10. После каждой ротации runtime database credential запускается dedicated smoke-test. Для worker он обязан проверить полный путь persistence с rollback.
 11. Изменение любого DSN-parser сопровождается отрицательными regression tests: неверный principal, branch/host, database, TLS, channel binding, отсутствие пароля, password-only и `.env`-assignment должны отклоняться.
+12. Внешний маркер завершения (`AI_DONE` или аналогичный) подтверждает только завершение того этапа, который его создал, и не считается доказательством успешного выполнения последующих side effects, включая запись в Neon.
+13. Повторный запуск после частичного завершения обязан пропустить уже выполненную тяжёлую работу, но идемпотентно согласовать все обязательные downstream side effects до успешного возврата. Такой recovery path покрывается отдельным regression test.
 
 ## GitHub Actions
 
@@ -96,11 +98,16 @@
 - отсутствие новых необъяснённых Vercel runtime errors;
 - список реально запустившихся GitHub workflows: database promotion не должен запускать обработку видео;
 - worker rollback-smoke: успешное подключение и полный путь persistence без фактического изменения production-данных;
+- retry после уже созданного `AI_DONE` обязан повторно согласовать Neon persistence без повторной обработки медиа;
 - health monitor: строгий DSN-contract, least-privilege read и актуальный operational health должны завершиться PASS.
 
 ## Правило реакции на найденную ошибку
 
 Не ослаблять проверку ради зелёного статуса. Зафиксировать root cause, сделать forward fix, добавить regression test, повторить CI и post-deploy verification. Если дефект показал недостаток процесса, это правило добавляется в следующую версию алгоритма.
+
+## Изменения версии 2.5
+
+Пятая волна аудита закрывает сценарий частичного завершения worker: `AI_DONE` мог быть создан до финальной записи в Neon, поэтому повторный запуск ошибочно считал весь процесс завершённым. Теперь маркер завершения тяжёлого Drive-этапа не заменяет проверку downstream persistence; retry пропускает повторную обработку медиа, но идемпотентно повторяет Neon persistence. Добавлен синтетический regression test этого recovery path.
 
 ## Изменения версии 2.4
 
@@ -108,7 +115,7 @@
 
 ## Изменения версии 2.3
 
-Добавлены правила после третьей волны глубокого аудита: обязательный smoke после ротации runtime credentials, запрет password-only и `.env` fallback для production DSN, проверка production endpoint/TLS/channel binding, явная проверка опасных атрибутов ролей и табличных привилегий, а также разделение старых и текущих Vercel runtime errors по временному окну. Worker DSN-contract переведён на fail-closed полный pooled production URI.
+Добавлены правила после третьей волны глубокого аудита: обязательный smoke после ротации runtime credentials, запрет password-only и `.env` fallback для production DSN, проверка production endpoint/TLS/channel_binding, явная проверка опасных атрибутов ролей и табличных привилегий, а также разделение старых и текущих Vercel runtime errors по временному окну. Worker DSN-contract переведён на fail-closed полный pooled production URI.
 
 ## Изменения версии 2.2
 
