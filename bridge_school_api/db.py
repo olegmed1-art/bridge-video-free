@@ -39,12 +39,22 @@ def _allowed_hosts() -> set[str]:
     return {PRODUCTION_HOST, PREVIEW_HOST}
 
 
-def _canonicalize_known_neon_endpoint(value: str, parsed):
-    pooled_host = {
-        PRODUCTION_DIRECT_HOST: PRODUCTION_HOST,
-        PREVIEW_DIRECT_HOST: PREVIEW_HOST,
-    }.get((parsed.hostname or "").lower())
-    if not pooled_host:
+def _canonicalize_neon_endpoint(value: str, parsed):
+    hostname = (parsed.hostname or "").lower()
+    if not hostname.endswith(".neon.tech"):
+        return value, parsed
+
+    environment = os.environ.get("VERCEL_ENV", "").strip().lower()
+    if environment == "production":
+        pooled_host = PRODUCTION_HOST
+    elif environment == "preview":
+        pooled_host = PREVIEW_HOST
+    else:
+        pooled_host = {
+            PRODUCTION_DIRECT_HOST: PRODUCTION_HOST,
+            PREVIEW_DIRECT_HOST: PREVIEW_HOST,
+        }.get(hostname)
+    if not pooled_host or hostname == pooled_host:
         return value, parsed
 
     userinfo, separator, hostport = parsed.netloc.rpartition("@")
@@ -73,7 +83,7 @@ def normalize_dsn(raw: str) -> str:
     if not parsed.password:
         raise DatabaseConfigurationError("BRIDGE_APP_DATABASE_URL does not include a database password")
 
-    value, parsed = _canonicalize_known_neon_endpoint(value, parsed)
+    value, parsed = _canonicalize_neon_endpoint(value, parsed)
     hostname = (parsed.hostname or "").lower()
     if hostname not in _allowed_hosts():
         raise DatabaseConfigurationError("BRIDGE_APP_DATABASE_URL targets an unexpected Neon endpoint")
