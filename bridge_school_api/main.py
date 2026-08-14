@@ -55,9 +55,35 @@ def require_api_token(authorization: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=403, detail="invalid bearer token")
 
 
+def _configuration_failure_category(exc: DatabaseConfigurationError) -> str:
+    """Map static configuration errors to safe diagnostic categories."""
+    message = str(exc)
+    if "not configured" in message:
+        return "configuration_missing"
+    if "complete PostgreSQL" in message or "valid PostgreSQL" in message:
+        return "configuration_uri_invalid"
+    if "principal" in message:
+        return "configuration_principal"
+    if "password" in message:
+        return "configuration_password_missing"
+    if "Neon endpoint" in message:
+        return "configuration_endpoint"
+    if "port" in message:
+        return "configuration_port"
+    if "database" in message:
+        return "configuration_database"
+    if "fragment" in message:
+        return "configuration_fragment"
+    if "TLS" in message:
+        return "configuration_tls"
+    if "channel binding" in message:
+        return "configuration_channel_binding"
+    return "configuration_error"
+
+
 def _database_failure_category(exc: Exception) -> str:
     if isinstance(exc, DatabaseConfigurationError):
-        return "configuration_error"
+        return _configuration_failure_category(exc)
     text = str(exc).lower()
     if "password authentication failed" in text or "authentication failed" in text:
         return "authentication_failed"

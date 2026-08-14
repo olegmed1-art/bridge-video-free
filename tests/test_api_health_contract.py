@@ -89,6 +89,11 @@ def main() -> None:
     assert db_response.headers["cache-control"] == "private, no-store, max-age=0"
     assert b"synthetic" not in db_response.body
 
+    endpoint_error = api.DatabaseConfigurationError("BRIDGE_APP_DATABASE_URL targets an unexpected Neon endpoint")
+    principal_error = api.DatabaseConfigurationError("BRIDGE_APP_DATABASE_URL uses an unexpected database principal")
+    assert api._database_failure_category(endpoint_error) == "configuration_endpoint"
+    assert api._database_failure_category(principal_error) == "configuration_principal"
+
     print("API_HEALTH_CONTRACT: PASS")
 
 
