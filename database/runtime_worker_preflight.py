@@ -13,7 +13,6 @@ EXPECTED_PRINCIPAL = "bridge_school_worker_principal"
 EXPECTED_CAPABILITY = "bridge_school_worker"
 EXPECTED_SCHOOL = "Школа спортивного бриджа"
 EXPECTED_HOST = "ep-noisy-pine-b1pe30sf-pooler.c-5.eu-central-1.aws.neon.tech"
-DIRECT_HOST = EXPECTED_HOST.replace("-pooler", "")
 EXPECTED_DATABASE = "neondb"
 
 
@@ -38,8 +37,9 @@ def _unquote(value: str) -> str:
     return value
 
 
-def _canonicalize_known_neon_endpoint(value: str, parsed):
-    if (parsed.hostname or "").lower() != DIRECT_HOST:
+def _canonicalize_neon_endpoint(value: str, parsed):
+    hostname = (parsed.hostname or "").lower()
+    if not hostname.endswith(".neon.tech") or hostname == EXPECTED_HOST:
         return value, parsed
 
     userinfo, separator, hostport = parsed.netloc.rpartition("@")
@@ -65,7 +65,7 @@ def normalize_dsn(raw: str) -> str:
     except ValueError:
         fail("BRIDGE_WORKER_DATABASE_URL is not a valid PostgreSQL URI")
 
-    value, parsed = _canonicalize_known_neon_endpoint(value, parsed)
+    value, parsed = _canonicalize_neon_endpoint(value, parsed)
 
     if parsed.username != EXPECTED_PRINCIPAL:
         fail("BRIDGE_WORKER_DATABASE_URL uses the wrong database principal")
