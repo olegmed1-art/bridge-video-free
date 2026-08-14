@@ -21,13 +21,13 @@ def expect_reject(value: str) -> None:
 def main() -> None:
     assert normalize_dsn(GOOD) == GOOD
     assert normalize_dsn(f'"{GOOD}"') == GOOD
+    assert normalize_dsn(GOOD.replace("-pooler", "")) == GOOD
     assert normalize_dsn(GOOD.replace("sslmode=require", "sslmode=verify-full"))
 
     bad_values = [
         "synthetic-password",
         "BRIDGE_APP_DATABASE_URL=" + GOOD,
         GOOD.replace("bridge_school_app_principal", "bridge_school_worker_principal"),
-        GOOD.replace("-pooler", ""),
         GOOD.replace("ep-noisy-pine-b1pe30sf-pooler", "ep-wandering-night-b1ej3ow6-pooler"),
         GOOD.replace("/neondb", "/otherdb"),
         GOOD.replace("sslmode=require", "sslmode=prefer"),
