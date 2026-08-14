@@ -61,6 +61,7 @@ def install(token_func):
     original_upload_file = io.upload_file
     original_perms = io.perms
     original_add_perm = io.add_perm
+    original_download = io.download
 
     def upload_file(_token, parent, path, mime):
         return _fresh_call(original_upload_file, token_func, parent, path, mime)
@@ -71,9 +72,13 @@ def install(token_func):
     def add_perm(_token, fid, permission):
         return _fresh_call(original_add_perm, token_func, fid, permission)
 
+    def download(_token, fid, output):
+        return _fresh_call(original_download, token_func, fid, output)
+
     io.upload_file = upload_file
     io.perms = perms
     io.add_perm = add_perm
+    io.download = download
 
 
 def run(token_func):
