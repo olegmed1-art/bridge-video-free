@@ -32,6 +32,7 @@ def main() -> None:
     preview = make_dsn(PREVIEW_HOST, sslmode="verify-full")
     production_direct = make_dsn(PRODUCTION_DIRECT_HOST)
     preview_direct = make_dsn(PREVIEW_DIRECT_HOST, sslmode="verify-full")
+    stale_neon = make_dsn("ep-stale-branch.c-5.eu-central-1.aws.neon.tech")
 
     original_env = os.environ.get("VERCEL_ENV")
     try:
@@ -44,12 +45,14 @@ def main() -> None:
         os.environ["VERCEL_ENV"] = "production"
         assert normalize_dsn(production) == production
         assert normalize_dsn(production_direct) == production
-        expect_reject(preview)
+        assert normalize_dsn(preview) == make_dsn(PRODUCTION_HOST, sslmode="verify-full")
+        assert normalize_dsn(stale_neon) == production
 
         os.environ["VERCEL_ENV"] = "preview"
         assert normalize_dsn(preview) == preview
         assert normalize_dsn(preview_direct) == preview
-        expect_reject(production)
+        assert normalize_dsn(production) == make_dsn(PREVIEW_HOST)
+        assert normalize_dsn(stale_neon) == make_dsn(PREVIEW_HOST)
 
         os.environ.pop("VERCEL_ENV", None)
         bad_values = [
