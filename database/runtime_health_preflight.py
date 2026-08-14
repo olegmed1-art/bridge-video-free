@@ -5,14 +5,17 @@ from __future__ import annotations
 import os
 import re
 import sys
-from urllib.parse import quote
+from urllib.parse import parse_qs, urlsplit
 
 import psycopg
 
 EXPECTED_PRINCIPAL = "bridge_school_health_principal"
 EXPECTED_CAPABILITY = "bridge_school_health"
-NEON_HOST = "ep-noisy-pine-b1pe30sf.c-5.eu-central-1.aws.neon.tech"
-NEON_DATABASE = "neondb"
+EXPECTED_DATABASE = "neondb"
+EXPECTED_HOSTS = {
+    "ep-noisy-pine-b1pe30sf.c-5.eu-central-1.aws.neon.tech",
+    "ep-noisy-pine-b1pe30sf-pooler.c-5.eu-central-1.aws.neon.tech",
+}
 
 
 def fail(message: str) -> None:
@@ -24,6 +27,7 @@ def safe_db_error(exc: BaseException) -> str:
     message = str(exc).strip().replace("\n", " | ")
     message = re.sub(r"postgres(?:ql)?://[^\s]+", "postgresql://[redacted]", message, flags=re.IGNORECASE)
     message = re.sub(r"(?i)(password\s*=\s*)[^\s]+", r"\1[redacted]", message)
+    message = re.sub(r"(?i)(passfile\s*=\s*)[^\s]+", r"\1[redacted]", message)
     return message[:1200] or exc.__class__.__name__
 
 
@@ -34,40 +38,38 @@ def _unquote(value: str) -> str:
     return value
 
 
-def _password_dsn(password: str) -> str:
-    return (
-        f"postgresql://{EXPECTED_PRINCIPAL}:{quote(password, safe='')}@{NEON_HOST}/{NEON_DATABASE}"
-        "?sslmode=require&channel_binding=require"
-    )
-
-
 def normalize_health_dsn(raw: str) -> str:
-    value = raw.strip()
+    """Require a full production Neon URI for the dedicated health principal."""
+    value = _unquote(raw)
     if not value:
         return ""
-    direct = _unquote(value)
-    if direct.startswith("postgresql://") or direct.startswith("postgres://"):
-        return direct
+    if not value.startswith(("postgresql://", "postgres://")):
+        fail("BRIDGE_HEALTH_DATABASE_URL must be a complete PostgreSQL URI")
 
-    env_values: dict[str, str] = {}
-    for raw_line in value.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, item = line.split("=", 1)
-        env_values[key.strip()] = _unquote(item)
+    try:
+        parsed = urlsplit(value)
+        query = parse_qs(parsed.query, keep_blank_values=True)
+    except ValueError:
+        fail("BRIDGE_HEALTH_DATABASE_URL is not a valid PostgreSQL URI")
 
-    for key in ("BRIDGE_HEALTH_DATABASE_URL", "DATABASE_URL", "POSTGRES_URL", "NEON_DATABASE_URL"):
-        candidate = env_values.get(key, "").strip()
-        if candidate.startswith("postgresql://") or candidate.startswith("postgres://"):
-            return candidate
-    for key in ("PGPASSWORD", "NEON_PASSWORD", "PASSWORD"):
-        password = env_values.get(key, "").strip()
-        if password:
-            return _password_dsn(password)
-    if value and not any(ch.isspace() for ch in value) and "=" not in value:
-        return _password_dsn(value)
-    fail("BRIDGE_HEALTH_DATABASE_URL does not contain a usable PostgreSQL URI or Neon password")
+    if parsed.username != EXPECTED_PRINCIPAL:
+        fail("BRIDGE_HEALTH_DATABASE_URL uses the wrong database principal")
+    if not parsed.password:
+        fail("BRIDGE_HEALTH_DATABASE_URL is missing a password")
+    if parsed.hostname not in EXPECTED_HOSTS:
+        fail("BRIDGE_HEALTH_DATABASE_URL must target the production Neon endpoint")
+    if parsed.port not in (None, 5432):
+        fail("BRIDGE_HEALTH_DATABASE_URL uses an unexpected port")
+    if parsed.path != f"/{EXPECTED_DATABASE}":
+        fail("BRIDGE_HEALTH_DATABASE_URL uses the wrong database")
+    if parsed.fragment:
+        fail("BRIDGE_HEALTH_DATABASE_URL must not include a URI fragment")
+    if query.get("sslmode") not in (["require"], ["verify-full"]):
+        fail("BRIDGE_HEALTH_DATABASE_URL must require TLS")
+    if query.get("channel_binding") != ["require"]:
+        fail("BRIDGE_HEALTH_DATABASE_URL must require channel binding")
+
+    return value
 
 
 def main() -> None:
@@ -86,12 +88,22 @@ def main() -> None:
                         has_table_privilege(current_user, 'public.operational_health_issue', 'SELECT'),
                         has_table_privilege(current_user, 'public.person', 'SELECT'),
                         has_table_privilege(current_user, 'public.source', 'SELECT'),
-                        has_table_privilege(current_user, 'public.operational_health_policy', 'UPDATE')
+                        has_table_privilege(current_user, 'public.operational_health_policy', 'UPDATE'),
+                        has_schema_privilege(current_user, 'public', 'CREATE')
                     """,
                     (EXPECTED_CAPABILITY,),
                 )
                 row = cur.fetchone()
-                principal, is_health, can_summary, can_issue, can_person, can_source, can_policy_update = row
+                (
+                    principal,
+                    is_health,
+                    can_summary,
+                    can_issue,
+                    can_person,
+                    can_source,
+                    can_policy_update,
+                    can_create_schema_objects,
+                ) = row
                 if principal != EXPECTED_PRINCIPAL:
                     fail(f"unexpected principal: {principal}")
                 if not is_health:
@@ -102,6 +114,8 @@ def main() -> None:
                     fail("health principal has forbidden school/source data access")
                 if can_policy_update:
                     fail("health principal can mutate operational health policy")
+                if can_create_schema_objects:
+                    fail("health principal can create schema objects")
 
                 cur.execute(
                     "SELECT overall_severity, critical_signal_count, warning_signal_count, ok_signal_count FROM public.operational_health_summary"
