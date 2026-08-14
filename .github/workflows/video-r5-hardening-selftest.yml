@@ -3,6 +3,7 @@ name: Bridge Video r5 Hardening Selftest
 on:
   push:
     branches:
+      - main
       - algorithm/3.1-free-r5-asr-oauth-hardening
     paths:
       - 'bridge_runtime_hardening_r5.py'
