@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 from contextlib import contextmanager
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import psycopg
 from psycopg.rows import dict_row
@@ -12,6 +12,8 @@ EXPECTED_PRINCIPAL = "bridge_school_app_principal"
 EXPECTED_DATABASE = "neondb"
 PRODUCTION_HOST = "ep-noisy-pine-b1pe30sf-pooler.c-5.eu-central-1.aws.neon.tech"
 PREVIEW_HOST = "ep-wandering-night-b1ej3ow6-pooler.c-5.eu-central-1.aws.neon.tech"
+PRODUCTION_DIRECT_HOST = PRODUCTION_HOST.replace("-pooler", "")
+PREVIEW_DIRECT_HOST = PREVIEW_HOST.replace("-pooler", "")
 CONNECT_ATTEMPTS = 3
 INITIAL_RETRY_DELAY_SECONDS = 0.25
 
@@ -37,6 +39,23 @@ def _allowed_hosts() -> set[str]:
     return {PRODUCTION_HOST, PREVIEW_HOST}
 
 
+def _canonicalize_known_neon_endpoint(value: str, parsed):
+    pooled_host = {
+        PRODUCTION_DIRECT_HOST: PRODUCTION_HOST,
+        PREVIEW_DIRECT_HOST: PREVIEW_HOST,
+    }.get((parsed.hostname or "").lower())
+    if not pooled_host:
+        return value, parsed
+
+    userinfo, separator, hostport = parsed.netloc.rpartition("@")
+    if not separator:
+        return value, parsed
+    _, port_separator, port = hostport.partition(":")
+    canonical_hostport = pooled_host + (f":{port}" if port_separator else "")
+    canonical = urlunsplit(parsed._replace(netloc=f"{userinfo}@{canonical_hostport}"))
+    return canonical, urlsplit(canonical)
+
+
 def normalize_dsn(raw: str) -> str:
     value = _unquote(raw)
     if not value:
@@ -54,6 +73,7 @@ def normalize_dsn(raw: str) -> str:
     if not parsed.password:
         raise DatabaseConfigurationError("BRIDGE_APP_DATABASE_URL does not include a database password")
 
+    value, parsed = _canonicalize_known_neon_endpoint(value, parsed)
     hostname = (parsed.hostname or "").lower()
     if hostname not in _allowed_hosts():
         raise DatabaseConfigurationError("BRIDGE_APP_DATABASE_URL targets an unexpected Neon endpoint")

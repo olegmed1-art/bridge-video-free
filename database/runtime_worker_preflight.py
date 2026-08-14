@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 import sys
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import psycopg
 
@@ -13,6 +13,7 @@ EXPECTED_PRINCIPAL = "bridge_school_worker_principal"
 EXPECTED_CAPABILITY = "bridge_school_worker"
 EXPECTED_SCHOOL = "Школа спортивного бриджа"
 EXPECTED_HOST = "ep-noisy-pine-b1pe30sf-pooler.c-5.eu-central-1.aws.neon.tech"
+DIRECT_HOST = EXPECTED_HOST.replace("-pooler", "")
 EXPECTED_DATABASE = "neondb"
 
 
@@ -37,6 +38,19 @@ def _unquote(value: str) -> str:
     return value
 
 
+def _canonicalize_known_neon_endpoint(value: str, parsed):
+    if (parsed.hostname or "").lower() != DIRECT_HOST:
+        return value, parsed
+
+    userinfo, separator, hostport = parsed.netloc.rpartition("@")
+    if not separator:
+        return value, parsed
+    _, port_separator, port = hostport.partition(":")
+    canonical_hostport = EXPECTED_HOST + (f":{port}" if port_separator else "")
+    canonical = urlunsplit(parsed._replace(netloc=f"{userinfo}@{canonical_hostport}"))
+    return canonical, urlsplit(canonical)
+
+
 def normalize_dsn(raw: str) -> str:
     """Require the full production pooled Neon URI for the worker principal."""
     value = _unquote(raw)
@@ -50,6 +64,8 @@ def normalize_dsn(raw: str) -> str:
         params = parse_qs(parsed.query, keep_blank_values=True)
     except ValueError:
         fail("BRIDGE_WORKER_DATABASE_URL is not a valid PostgreSQL URI")
+
+    value, parsed = _canonicalize_known_neon_endpoint(value, parsed)
 
     if parsed.username != EXPECTED_PRINCIPAL:
         fail("BRIDGE_WORKER_DATABASE_URL uses the wrong database principal")
