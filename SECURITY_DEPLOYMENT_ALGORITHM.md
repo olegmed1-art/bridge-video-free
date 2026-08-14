@@ -1,6 +1,6 @@
 # Алгоритм безопасного развёртывания и аудита
 
-Версия: 2.4
+Версия: 2.5
 Дата: 2026-08-14
 
 Этот алгоритм применяется к инфраструктуре Bridge School: GitHub Actions, Neon PostgreSQL и Vercel.
@@ -37,10 +37,19 @@
 5. Отказоустойчивый режим без базы допустим только если он явно объявлен отдельным режимом продукта и результат помечается как неполный; скрытый fallback запрещён.
 6. Пароль, DSN или токен никогда не выводятся в лог. Диагностика ошибок подключения должна быть санитизирована.
 7. Все production runtime DSN хранятся только как полный PostgreSQL URI. Password-only, `.env`-фрагменты и автоматическая сборка URI из захардкоженного host запрещены для app, worker и health.
-8. Каждый DSN-contract проверяет dedicated principal, database, ожидаемый production endpoint, допустимый порт, TLS и channel binding до полезной работы.
+8. Каждый DSN-contract проверяет dedicated principal, database, ожидаемый endpoint, допустимый порт, TLS и channel binding до полезной работы.
 9. App и worker используют pooled Neon endpoint. Health может использовать direct или pooled production endpoint, поскольку выполняет короткие read-only проверки; оба варианта должны быть явно ограничены списком production hosts.
-10. После каждой ротации runtime database credential запускается dedicated smoke-test. Для worker он обязан проверить полный путь persistence с rollback.
-11. Изменение любого DSN-parser сопровождается отрицательными regression tests: неверный principal, branch/host, database, TLS, channel binding, отсутствие пароля, password-only и `.env`-assignment должны отклоняться.
+10. App дополнительно связывает Vercel environment с конкретной Neon-веткой: `production` принимает только production pooler, `preview` — только preview pooler. Произвольный Neon endpoint запрещён даже при правильном имени principal.
+11. После каждой ротации runtime database credential запускается dedicated smoke-test. Для worker он обязан проверить полный путь persistence с rollback.
+12. Изменение любого DSN-parser сопровождается отрицательными regression tests: неверный principal, branch/host, database, TLS, channel binding, отсутствие пароля, password-only и `.env`-assignment должны отклоняться.
+
+## API boundary
+
+1. Публичный `/healthz` выполняет database check только для канонического URL без query string. Варианты `/healthz?...` отклоняются до обращения к Neon, чтобы случайные query-параметры не обходили CDN cache и не создавали DB-amplification.
+2. Ошибки PostgreSQL и ошибки database configuration на защищённых endpoint не возвращают клиенту исходный exception. Клиент получает только generic `503 service unavailable`; в лог пишутся тип, SQLSTATE и безопасная категория без DSN/пароля.
+3. Защищённые `/v1/*` всегда получают `private, no-store`; CDN cache headers удаляются.
+4. API docs/OpenAPI в production отключены, пока нет отдельной причины публиковать схему.
+5. Изменения database runtime boundary проверяются отдельно в Preview и затем в Production, потому что допустимые Neon endpoints различаются по environment.
 
 ## GitHub Actions
 
@@ -61,15 +70,15 @@
 ## Vercel
 
 1. Production function остаётся в `fra1`, рядом с Neon Frankfurt.
-2. Production и Preview не используют один и тот же database credential.
+2. Production и Preview не используют один и тот же database credential и не имеют права подключаться к Neon-ветке другого environment.
 3. Любая оптимизация Ignored Build Step сначала проверяется на Preview. Ошибка ignored-build command считается блокирующей merge.
 4. Нельзя предполагать, что `.git` доступен команде `ignoreCommand`: `.vercelignore` может удалить git metadata до её запуска. Git-based ignore rule применяется только после фактической проверки build log.
 5. Неудачный эксперимент с Vercel-конфигурацией закрывается без merge; production-конфигурация не ослабляется ради уменьшения числа deployments.
-6. После изменения API проверяются `/healthz`, protected endpoint без token, отсутствие OpenAPI docs и отсутствие новых runtime error clusters за актуальное короткое окно.
+6. После изменения API проверяются `/healthz`, `/healthz` с query string, protected endpoint без token, отсутствие OpenAPI docs и отсутствие новых runtime error clusters за актуальное короткое окно.
 
 ## CI gate
 
-До merge должны пройти все проверки, относящиеся к изменению: PostgreSQL 18 clean migration, invariants/permissions, idempotence, checksum tamper guard, Python 3.12 compile/import/contract tests и сборка runtime, где она применима. Failed CI не обходится ручным production-изменением. Изменение credential contract без regression test считается неполным. DSN regression tests должны выполняться в общем Database CI, а не только в scheduled runtime workflow.
+До merge должны пройти все проверки, относящиеся к изменению: PostgreSQL 18 clean migration, invariants/permissions, idempotence, checksum tamper guard, Python 3.12 compile/import/contract tests и сборка runtime, где она применима. Failed CI не обходится ручным production-изменением. Изменение credential contract без regression test считается неполным. DSN regression tests должны выполняться в общем Database CI либо API CI в зависимости от runtime boundary.
 
 ## Production promotion
 
@@ -91,8 +100,10 @@
 - отсутствие опасных табличных привилегий, которые не требуются компоненту;
 - отсутствие неожиданного `PUBLIC EXECUTE` у пользовательских owner-функций;
 - `/healthz` = 200;
+- `/healthz?probe=...` не обращается к БД и возвращает отказ;
 - защищённый endpoint без bearer token = 401;
 - отключённые API docs = 404;
+- database failure на защищённом endpoint не раскрывает exception text;
 - отсутствие новых необъяснённых Vercel runtime errors;
 - список реально запустившихся GitHub workflows: database promotion не должен запускать обработку видео;
 - worker rollback-smoke: успешное подключение и полный путь persistence без фактического изменения production-данных;
@@ -102,9 +113,13 @@
 
 Не ослаблять проверку ради зелёного статуса. Зафиксировать root cause, сделать forward fix, добавить regression test, повторить CI и post-deploy verification. Если дефект показал недостаток процесса, это правило добавляется в следующую версию алгоритма.
 
+## Изменения версии 2.5
+
+Пятая волна аудита усиливает API runtime boundary: Vercel Production и Preview теперь привязаны к разным точным Neon pooler endpoints; произвольный Neon host больше не принимается. Публичный `/healthz` защищён от query-string cache bypass до обращения к БД. Для защищённых endpoint добавлена единая санитизированная обработка database/configuration failures с generic 503. Эти условия включены в regression tests и post-deploy checklist.
+
 ## Изменения версии 2.4
 
-Четвёртая волна аудита устраняет последний permissive production DSN-parser у health monitor. Health credential теперь должен быть полным URI с точным dedicated principal, production host, database, TLS и channel binding; password-only и `.env` fallback запрещены. Scheduled health workflow получает immutable action pins, pinned `psycopg`, `persist-credentials: false` и step-scoped secret. DSN regression test health boundary включён в общий Database CI.
+Четвёртая волна аудита устраняет permissive production DSN-parser у health monitor. Health credential должен быть полным URI с точным dedicated principal, production host, database, TLS и channel binding; password-only и `.env` fallback запрещены. Scheduled health workflow получает immutable action pins, pinned `psycopg`, `persist-credentials: false` и step-scoped secret. DSN regression test health boundary включён в общий Database CI.
 
 ## Изменения версии 2.3
 
