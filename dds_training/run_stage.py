@@ -19,6 +19,7 @@ from learning import (
     record_skill_check,
     record_task_experience,
 )
+from run_provenance import ensure_run_task_table, record_run_task
 from storage import add_regression_case, connect, record_correction, upsert_prediction, upsert_result
 from tasks import create_blind_tasks, load_locked_predictions
 from variants import create_error_followups
@@ -196,6 +197,7 @@ def cmd_evaluate(args) -> None:
 
     db_path = work / "training.sqlite3"
     db = connect(db_path)
+    ensure_run_task_table(db)
     _register_run(db, args, work, task_path, predictions_path)
     for task in requested:
         upsert_prediction(db, task, predictions[task["task_id"]])
@@ -212,6 +214,26 @@ def cmd_evaluate(args) -> None:
         for task_id in requested_ids
         if task_id in existing_results
     )
+
+    # Reuse is explicitly recorded, but cannot substitute for an original
+    # `evaluated` event when auditing sealed-test provenance.
+    for task in requested:
+        if task["task_id"] not in existing_results:
+            continue
+        evaluated_here = db.execute(
+            "SELECT 1 FROM run_task_events WHERE run_id=? AND task_id=? AND action='evaluated' LIMIT 1",
+            (args.run_id, task["task_id"]),
+        ).fetchone()
+        if not evaluated_here:
+            record_run_task(
+                db,
+                run_id=args.run_id,
+                task=task,
+                action="reused",
+                details={"algorithm_version": ALGORITHM_VERSION},
+            )
+    db.commit()
+
     todo = [t for t in requested if t["task_id"] not in existing_results]
     contract_tasks = [t for t in todo if t["task_type"] == "contract_tricks"]
 
@@ -260,6 +282,14 @@ def cmd_evaluate(args) -> None:
                 result["error_code"] = "F_DEFENSE_OVER_DDS_CLAIM"
 
         upsert_result(db, task, result)
+        record_run_task(
+            db,
+            run_id=args.run_id,
+            task=task,
+            action="evaluated",
+            details={"algorithm_version": ALGORITHM_VERSION},
+        )
+
         can_learn = learning_allowed_for_task(task)
         learned_skills: list[str] = []
         if can_learn:
@@ -440,6 +470,7 @@ def cmd_plan(args) -> None:
 def cmd_audit(args) -> None:
     work = Path(args.work)
     db = connect(work / "training.sqlite3")
+    ensure_run_task_table(db)
     report = audit_database(db)
     if (work / "manifest.jsonl").exists():
         report["manifest"] = audit_manifest(work / "manifest.jsonl")
