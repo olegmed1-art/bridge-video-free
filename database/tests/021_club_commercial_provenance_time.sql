@@ -30,17 +30,19 @@ BEGIN
         v_service,1,100,'ILS',now()-interval '2 days',now()+interval '2 days','active'
     ) RETURNING price_version_id INTO v_service_price_active;
 
+    -- Candidate may overlap the active period because only active versions are excluded;
+    -- this isolates candidate-status rejection from timestamp rejection.
     INSERT INTO service_price_version(
         service_id,version_no,amount,currency_code,effective_from,effective_to,status
     ) VALUES (
-        v_service,2,120,'ILS',now()+interval '3 days',now()+interval '4 days','candidate'
+        v_service,2,120,'ILS',now()-interval '1 day',now()+interval '1 day','candidate'
     ) RETURNING price_version_id INTO v_service_price_candidate;
 
     BEGIN
         INSERT INTO club_charge(
             school_id,person_id,service_id,price_version_id,amount,currency_code,charged_at
         ) VALUES (
-            v_school,v_person,v_service,v_service_price_candidate,120,'ILS',now()+interval '3 days 1 hour'
+            v_school,v_person,v_service,v_service_price_candidate,120,'ILS',now()
         );
         RAISE EXCEPTION 'charge using candidate service price unexpectedly accepted';
     EXCEPTION WHEN OTHERS THEN
@@ -80,7 +82,7 @@ BEGIN
     INSERT INTO club_package_version(
         package_id,version_no,effective_from,effective_to,status
     ) VALUES (
-        v_package,2,now()+interval '3 days',now()+interval '4 days','candidate'
+        v_package,2,now()-interval '1 day',now()+interval '1 day','candidate'
     ) RETURNING package_version_id INTO v_package_version_candidate;
 
     INSERT INTO package_price_version(
@@ -91,14 +93,14 @@ BEGIN
     INSERT INTO package_price_version(
         package_id,version_no,amount,currency_code,effective_from,effective_to,status
     ) VALUES (
-        v_package,2,200,'ILS',now()+interval '3 days',now()+interval '4 days','candidate'
+        v_package,2,200,'ILS',now()-interval '1 day',now()+interval '1 day','candidate'
     ) RETURNING package_price_version_id INTO v_package_price_candidate;
 
     BEGIN
         INSERT INTO person_package_grant(
             school_id,person_id,package_version_id,granted_at
         ) VALUES (
-            v_school,v_person,v_package_version_candidate,now()+interval '3 days 1 hour'
+            v_school,v_person,v_package_version_candidate,now()
         );
         RAISE EXCEPTION 'grant using candidate package version unexpectedly accepted';
     EXCEPTION WHEN OTHERS THEN
@@ -109,7 +111,7 @@ BEGIN
         INSERT INTO person_package_grant(
             school_id,person_id,package_version_id,package_price_version_id,granted_at
         ) VALUES (
-            v_school,v_person,v_package_version_active,v_package_price_candidate,now()+interval '3 days 1 hour'
+            v_school,v_person,v_package_version_active,v_package_price_candidate,now()
         );
         RAISE EXCEPTION 'grant using candidate package price unexpectedly accepted';
     EXCEPTION WHEN OTHERS THEN
