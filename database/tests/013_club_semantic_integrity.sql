@@ -10,6 +10,7 @@ DECLARE
     v_price1 uuid;
     v_package uuid;
     v_package_version uuid;
+    v_package_grant uuid;
     v_entitlement uuid;
     v_usage uuid;
     v_contact uuid;
@@ -53,25 +54,28 @@ BEGIN
 
     INSERT INTO package_service_rule(package_version_id,service_id,quantity)
     VALUES (v_package_version,v_service1,2);
+    INSERT INTO person_package_grant(school_id,person_id,package_version_id)
+    VALUES (v_school,v_person,v_package_version)
+    RETURNING package_grant_id INTO v_package_grant;
 
     BEGIN
-        INSERT INTO person_entitlement(school_id,person_id,service_id,package_version_id,quantity_granted)
-        VALUES (v_school,v_person,v_service2,v_package_version,1);
+        INSERT INTO person_entitlement(school_id,person_id,service_id,package_version_id,package_grant_id,quantity_granted)
+        VALUES (v_school,v_person,v_service2,v_package_version,v_package_grant,1);
         RAISE EXCEPTION 'package entitlement for ungranted service unexpectedly accepted';
     EXCEPTION WHEN OTHERS THEN
         IF SQLERRM='package entitlement for ungranted service unexpectedly accepted' THEN RAISE; END IF;
     END;
 
     BEGIN
-        INSERT INTO person_entitlement(school_id,person_id,service_id,package_version_id,quantity_granted)
-        VALUES (v_school,v_person,v_service1,v_package_version,3);
+        INSERT INTO person_entitlement(school_id,person_id,service_id,package_version_id,package_grant_id,quantity_granted)
+        VALUES (v_school,v_person,v_service1,v_package_version,v_package_grant,3);
         RAISE EXCEPTION 'package entitlement above rule quantity unexpectedly accepted';
     EXCEPTION WHEN OTHERS THEN
         IF SQLERRM='package entitlement above rule quantity unexpectedly accepted' THEN RAISE; END IF;
     END;
 
-    INSERT INTO person_entitlement(school_id,person_id,service_id,package_version_id,quantity_granted)
-    VALUES (v_school,v_person,v_service1,v_package_version,2)
+    INSERT INTO person_entitlement(school_id,person_id,service_id,package_version_id,package_grant_id,quantity_granted)
+    VALUES (v_school,v_person,v_service1,v_package_version,v_package_grant,2)
     RETURNING entitlement_id INTO v_entitlement;
     INSERT INTO entitlement_usage(entitlement_id,quantity_used,reference_type)
     VALUES (v_entitlement,1,'consume') RETURNING entitlement_usage_id INTO v_usage;
