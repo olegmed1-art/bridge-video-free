@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import math
 import sqlite3
-from collections import defaultdict
 
 from config import ALGORITHM_VERSION, SKILL_LIFECYCLE
 
@@ -80,6 +79,10 @@ def _add_evidence(
     run_id: str | None,
     payload: dict,
 ) -> None:
+    if evidence_type not in {"direct", "error_pattern", "transfer", "regression", "counterexample", "symmetry", "perturbation", "real_world"}:
+        raise ValueError(f"Unsupported evidence_type: {evidence_type}")
+    if outcome not in {"success", "error"}:
+        raise ValueError(f"Unsupported outcome: {outcome}")
     _ensure_skill(con, skill_key)
     con.execute(
         """
@@ -92,7 +95,7 @@ def _add_evidence(
             skill_key,
             task["task_id"],
             task["deal_id"],
-            task["split"],
+            task.get("split", "derived"),
             evidence_type,
             outcome,
             regret,
@@ -113,7 +116,7 @@ def record_task_experience(
 ) -> list[str]:
     """Persist append-only learning evidence derived from one evaluated task.
 
-    This never rewrites the locked prediction or DDS fact.  Later re-interpretation
+    This never rewrites the locked prediction or DDS fact. Later re-interpretation
     is represented by correction_events and new evidence, preserving provenance.
     """
     confidence = _confidence_value(prediction)
@@ -178,6 +181,71 @@ def record_task_experience(
     return [x[0] for x in skills]
 
 
+def record_skill_check(
+    con: sqlite3.Connection,
+    *,
+    skill_key: str,
+    task_id: str,
+    deal_id: str,
+    evidence_type: str,
+    success: bool,
+    regret: float | None = None,
+    confidence: str = "unknown",
+    run_id: str | None = None,
+    split: str = "derived",
+    details: dict | None = None,
+) -> str:
+    """Append transfer/regression/counterexample/symmetry/perturbation evidence.
+
+    This is the public path used after an initial error has generated new unseen
+    checks. It never mutates prior evidence.
+    """
+    task = {"task_id": task_id, "deal_id": deal_id, "split": split}
+    _add_evidence(
+        con,
+        skill_key=skill_key,
+        task=task,
+        evidence_type=evidence_type,
+        outcome="success" if success else "error",
+        regret=regret,
+        confidence=confidence,
+        run_id=run_id,
+        payload=details or {},
+    )
+    if evidence_type == "counterexample":
+        con.execute(
+            """
+            INSERT OR IGNORE INTO counterexamples(skill_key,deal_id,task_id,description,result_json)
+            VALUES(?,?,?,?,?)
+            """,
+            (
+                skill_key,
+                deal_id,
+                task_id,
+                (details or {}).get("description"),
+                json.dumps(details or {}, ensure_ascii=False, sort_keys=True),
+            ),
+        )
+    status = recompute_skill_state(con, skill_key)
+    con.execute(
+        """
+        INSERT OR IGNORE INTO experience_events
+          (event_key,event_type,task_id,deal_id,run_id,algorithm_version,payload_json)
+        VALUES(?,?,?,?,?,?,?)
+        """,
+        (
+            f"{ALGORITHM_VERSION}:{task_id}:{evidence_type}:{skill_key}",
+            evidence_type,
+            task_id,
+            deal_id,
+            run_id,
+            ALGORITHM_VERSION,
+            json.dumps({"skill_key": skill_key, "success": success, "status_after": status, "details": details or {}}, ensure_ascii=False, sort_keys=True),
+        ),
+    )
+    return status
+
+
 def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
     rows = con.execute(
         "SELECT evidence_type,outcome,split,confidence,COALESCE(regret,0) FROM skill_evidence WHERE skill_key=?",
@@ -187,14 +255,16 @@ def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
         return "candidate"
 
     total = len(rows)
-    direct = [r for r in rows if r[0] in {"direct", "error_pattern"}]
-    transfer = [r for r in rows if r[0] == "transfer"]
+    transfer = [r for r in rows if r[0] in {"transfer", "symmetry", "perturbation", "real_world"}]
     regression = [r for r in rows if r[0] == "regression"]
     counterexamples = [r for r in rows if r[0] == "counterexample"]
     transfer_pass = sum(r[1] == "success" for r in transfer)
     regression_pass = sum(r[1] == "success" for r in regression)
     regression_fail = sum(r[1] != "success" for r in regression)
     transfer_rate = transfer_pass / len(transfer) if transfer else 0.0
+
+    old = con.execute("SELECT status FROM skill_profiles WHERE skill_key=?", (skill_key,)).fetchone()
+    old_status = old[0] if old else None
 
     new_status = "candidate"
     if total >= SKILL_LIFECYCLE["testing_evidence"]:
@@ -209,11 +279,9 @@ def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
         and regression_fail == 0
     ):
         new_status = "stable"
-    if regression_fail > 0 and new_status == "stable":
+    if old_status == "stable" and regression_fail > 0:
         new_status = "weakened"
 
-    old = con.execute("SELECT status FROM skill_profiles WHERE skill_key=?", (skill_key,)).fetchone()
-    old_status = old[0] if old else None
     con.execute(
         """
         UPDATE skill_profiles
@@ -282,7 +350,7 @@ def build_learning_plan(con: sqlite3.Connection, limit: int = 20) -> list[dict]:
                 "high_confidence_errors": high_conf_errors or 0,
                 "priority": round(priority, 4),
                 "recommended_targeted_tasks": recommended,
-                "purposes": ["transfer", "counterexample", "regression"],
+                "purposes": ["transfer", "counterexample", "regression", "symmetry", "perturbation"],
             }
         )
     plan.sort(key=lambda x: (-x["priority"], x["skill_key"]))
