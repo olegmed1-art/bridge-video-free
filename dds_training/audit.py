@@ -4,6 +4,22 @@ import json
 import sqlite3
 from pathlib import Path
 
+from config import SKILL_LIFECYCLE
+
+
+def _recent_regression_streak(con: sqlite3.Connection, skill_key: str) -> int:
+    rows = con.execute(
+        "SELECT outcome FROM skill_evidence WHERE skill_key=? AND evidence_type='regression' ORDER BY id",
+        (skill_key,),
+    ).fetchall()
+    streak = 0
+    for (outcome,) in reversed(rows):
+        if outcome == "success":
+            streak += 1
+        else:
+            break
+    return streak
+
 
 def audit_database(con: sqlite3.Connection) -> dict:
     issues: list[dict] = []
@@ -22,25 +38,61 @@ def audit_database(con: sqlite3.Connection) -> dict:
     ).fetchone()[0]
     add("ORPHAN_ERROR_EVENT", "error", orphan_errors, "Error event exists without a DDS result")
 
-    bad_sealed = con.execute(
-        "SELECT COUNT(*) FROM dds_results WHERE split='sealed_test'"
+    metadata_mismatch = con.execute(
+        """
+        SELECT COUNT(*) FROM predictions p JOIN dds_results r ON r.task_id=p.task_id
+        WHERE p.deal_id<>r.deal_id OR p.task_type<>r.task_type OR p.split<>r.split
+        """
     ).fetchone()[0]
-    # This is informational because sealed results are legitimate only at final stage.
-    if bad_sealed:
-        issues.append({
-            "code": "SEALED_TEST_OPENED",
-            "severity": "info",
-            "count": int(bad_sealed),
-            "detail": "Sealed-test results exist; verify they were opened only for final evaluation.",
-        })
+    add("PREDICTION_RESULT_METADATA_MISMATCH", "error", metadata_mismatch, "Prediction and DDS result disagree on immutable task metadata")
 
-    stable_without_support = con.execute(
+    # Holdout results may exist, but they must never become learning evidence.
+    validation_learning = con.execute(
         """
-        SELECT COUNT(*) FROM skill_profiles
-        WHERE status='stable' AND (transfer_count<10 OR regression_passes<3 OR counterexample_count<2 OR regression_failures>0)
+        SELECT COUNT(*) FROM skill_evidence se JOIN dds_results r ON r.task_id=se.task_id
+        WHERE r.split='validation'
         """
     ).fetchone()[0]
-    add("UNSUPPORTED_STABLE_SKILL", "error", stable_without_support, "Stable skill lacks transfer/regression/counterexample support")
+    add("VALIDATION_LEARNING_LEAK", "error", validation_learning, "Validation tasks must remain evaluation-only")
+
+    sealed_learning = con.execute(
+        """
+        SELECT COUNT(*) FROM skill_evidence se JOIN dds_results r ON r.task_id=se.task_id
+        WHERE r.split='sealed_test'
+        """
+    ).fetchone()[0]
+    add("SEALED_LEARNING_LEAK", "error", sealed_learning, "Sealed-test tasks must never alter skill/rule memory")
+
+    sealed_results = con.execute("SELECT COUNT(*) FROM dds_results WHERE split='sealed_test'").fetchone()[0]
+    if sealed_results:
+        authorized = 0
+        for opened, splits_json in con.execute("SELECT sealed_opened,requested_splits_json FROM runs WHERE sealed_opened=1"):
+            try:
+                splits = set(json.loads(splits_json or "[]"))
+            except json.JSONDecodeError:
+                splits = set()
+            authorized += int(bool(opened) and splits == {"sealed_test"})
+        if not authorized:
+            add("SEALED_TEST_WITHOUT_AUTHORIZED_RUN", "error", sealed_results, "Sealed results exist without an explicitly authorized sealed-only run")
+        else:
+            issues.append({
+                "code": "SEALED_TEST_OPENED",
+                "severity": "info",
+                "count": int(sealed_results),
+                "detail": "Sealed-test results exist under an explicitly authorized sealed-only run.",
+            })
+
+    stable_issues = 0
+    for skill_key, transfer_count, counterexample_count in con.execute(
+        "SELECT skill_key,transfer_count,counterexample_count FROM skill_profiles WHERE status='stable'"
+    ):
+        if (
+            int(transfer_count) < SKILL_LIFECYCLE["stable_transfer"]
+            or int(counterexample_count) < SKILL_LIFECYCLE["stable_counterexamples"]
+            or _recent_regression_streak(con, skill_key) < SKILL_LIFECYCLE["stable_regression_passes"]
+        ):
+            stable_issues += 1
+    add("UNSUPPORTED_STABLE_SKILL", "error", stable_issues, "Stable skill lacks current transfer/regression/counterexample support")
 
     correction_without_reason = con.execute(
         "SELECT COUNT(*) FROM correction_events WHERE TRIM(reason)=''"
@@ -58,12 +110,29 @@ def audit_database(con: sqlite3.Connection) -> dict:
             "detail": "High-confidence errors should receive priority transfer and counterexample tasks.",
         })
 
+    duplicate_plans = con.execute(
+        """
+        SELECT COUNT(*) FROM (
+          SELECT skill_key,purpose,source_run_id,COUNT(*) n FROM learning_queue
+          WHERE purpose='targeted_transfer'
+          GROUP BY skill_key,purpose,source_run_id HAVING n>1
+        )
+        """
+    ).fetchone()[0]
+    add("DUPLICATE_LEARNING_PLAN", "warning", duplicate_plans, "Same run contains duplicate targeted learning-plan rows")
+
     triggers = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
     required = {
         "predictions_no_update", "predictions_no_delete",
         "dds_results_no_update", "dds_results_no_delete",
         "error_events_no_update", "error_events_no_delete",
         "skill_evidence_no_update", "skill_evidence_no_delete",
+        "experience_events_no_update", "experience_events_no_delete",
+        "correction_events_no_update", "correction_events_no_delete",
+        "counterexamples_no_update", "counterexamples_no_delete",
+        "skill_state_history_no_update", "skill_state_history_no_delete",
+        "audit_events_no_update", "audit_events_no_delete",
+        "checkpoints_no_update", "checkpoints_no_delete",
     }
     missing = required - triggers
     if missing:
@@ -78,7 +147,7 @@ def audit_database(con: sqlite3.Connection) -> dict:
     for table in (
         "predictions", "dds_results", "error_events", "experience_events",
         "skill_profiles", "skill_evidence", "rule_versions", "regression_cases",
-        "counterexamples", "correction_events", "learning_queue",
+        "counterexamples", "correction_events", "learning_queue", "runs", "checkpoints",
     ):
         counts[table] = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
