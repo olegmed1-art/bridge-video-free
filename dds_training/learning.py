@@ -4,7 +4,7 @@ import json
 import math
 import sqlite3
 
-from config import ALGORITHM_VERSION, SKILL_LIFECYCLE
+from config import ALGORITHM_VERSION, EVALUATION_ONLY_SPLITS, LEARNING_SPLITS, SKILL_LIFECYCLE
 from experience_events import schedule_spaced_reviews
 
 
@@ -40,6 +40,20 @@ SKILL_CATALOG = {
         "trigger": "When predicted defensive tricks exceed DDS, locate the declarer mistake implicitly assumed by the line.",
     },
 }
+
+
+def learning_allowed_for_task(task: dict) -> bool:
+    """Return True only when this task is allowed to alter skill/rule memory.
+
+    Validation and sealed-test tasks are strictly evaluation-only. Derived tasks
+    may learn only when their root source was a learning split, preventing a
+    validation/sealed error from being turned into a training follow-up.
+    """
+    split = str(task.get("split", ""))
+    if split not in LEARNING_SPLITS:
+        return False
+    root = str(task.get("source_root_split", split))
+    return root not in EVALUATION_ONLY_SPLITS
 
 
 def _confidence_value(prediction: dict) -> str:
@@ -117,9 +131,12 @@ def record_task_experience(
 ) -> list[str]:
     """Persist append-only learning evidence derived from one evaluated task.
 
-    This never rewrites the locked prediction or DDS fact. Later re-interpretation
-    is represented by correction_events and new evidence, preserving provenance.
+    Holdout tasks must never call this function; callers should use
+    `learning_allowed_for_task` before recording experience.
     """
+    if not learning_allowed_for_task(task):
+        raise ValueError(f"Learning is forbidden for split/root: {task.get('split')}/{task.get('source_root_split')}")
+
     confidence = _confidence_value(prediction)
     error_code = result.get("error_code", "UNKNOWN")
     regret = result.get("dd_regret")
@@ -169,6 +186,7 @@ def record_task_experience(
         "regret": regret,
         "confidence": confidence,
         "skills": [x[0] for x in skills],
+        "source_root_split": task.get("source_root_split", task.get("split")),
     }
     con.execute(
         """
@@ -229,7 +247,7 @@ def record_skill_check(
                 deal_id,
                 task_id,
                 (details or {}).get("description"),
-                json.dumps(details or {}, ensure_ascii=False, sort_keys=True),
+                json.dumps({"success": success, **(details or {})}, ensure_ascii=False, sort_keys=True),
             ),
         )
     status = recompute_skill_state(con, skill_key)
@@ -252,22 +270,36 @@ def record_skill_check(
     return status
 
 
+def _consecutive_successes(rows: list[tuple]) -> int:
+    streak = 0
+    for row in reversed(rows):
+        if row[2] == "success":
+            streak += 1
+        else:
+            break
+    return streak
+
+
 def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
     rows = con.execute(
-        "SELECT evidence_type,outcome,split,confidence,COALESCE(regret,0) FROM skill_evidence WHERE skill_key=?",
+        "SELECT id,evidence_type,outcome,split,confidence,COALESCE(regret,0) FROM skill_evidence WHERE skill_key=? ORDER BY id",
         (skill_key,),
     ).fetchall()
     if not rows:
         return "candidate"
 
     total = len(rows)
-    transfer = [r for r in rows if r[0] in {"transfer", "symmetry", "perturbation", "real_world"}]
-    regression = [r for r in rows if r[0] == "regression"]
-    counterexamples = [r for r in rows if r[0] == "counterexample"]
-    transfer_pass = sum(r[1] == "success" for r in transfer)
-    regression_pass = sum(r[1] == "success" for r in regression)
-    regression_fail = sum(r[1] != "success" for r in regression)
+    transfer = [r for r in rows if r[1] in {"transfer", "symmetry", "perturbation", "real_world"}]
+    regression = [r for r in rows if r[1] == "regression"]
+    counterexamples = [r for r in rows if r[1] == "counterexample"]
+    transfer_pass = sum(r[2] == "success" for r in transfer)
+    regression_pass = sum(r[2] == "success" for r in regression)
+    regression_fail = sum(r[2] != "success" for r in regression)
+    counterexample_pass = sum(r[2] == "success" for r in counterexamples)
+    counterexample_fail = sum(r[2] != "success" for r in counterexamples)
     transfer_rate = transfer_pass / len(transfer) if transfer else 0.0
+    recent_regression_streak = _consecutive_successes(regression)
+    latest_regression_failed = bool(regression and regression[-1][2] != "success")
 
     old = con.execute("SELECT status FROM skill_profiles WHERE skill_key=?", (skill_key,)).fetchone()
     old_status = old[0] if old else None
@@ -277,16 +309,23 @@ def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
         new_status = "testing"
     if len(transfer) >= SKILL_LIFECYCLE["confirmed_transfer"] and transfer_rate >= SKILL_LIFECYCLE["confirmed_rate"]:
         new_status = "confirmed"
-    if (
+
+    stable_ready = (
         len(transfer) >= SKILL_LIFECYCLE["stable_transfer"]
         and transfer_rate >= SKILL_LIFECYCLE["stable_rate"]
-        and regression_pass >= SKILL_LIFECYCLE["stable_regression_passes"]
-        and len(counterexamples) >= SKILL_LIFECYCLE["stable_counterexamples"]
-        and regression_fail == 0
-    ):
+        and recent_regression_streak >= SKILL_LIFECYCLE["stable_regression_passes"]
+        and counterexample_pass >= SKILL_LIFECYCLE["stable_counterexamples"]
+    )
+    if stable_ready:
         new_status = "stable"
-    if old_status == "stable" and regression_fail > 0:
+
+    # A fresh regression failure weakens a previously stable/confirmed skill.
+    # Historical failures do not poison the skill forever: after a new clean
+    # streak and all stability criteria are met, it can return to stable.
+    if latest_regression_failed and old_status in {"stable", "confirmed", "weakened"}:
         new_status = "weakened"
+    elif old_status == "weakened" and stable_ready and recent_regression_streak >= SKILL_LIFECYCLE["recovery_regression_passes"]:
+        new_status = "stable"
 
     con.execute(
         """
@@ -295,7 +334,7 @@ def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
             counterexample_count=?, updated_at=CURRENT_TIMESTAMP
         WHERE skill_key=?
         """,
-        (new_status, total, len(transfer), regression_pass, regression_fail, len(counterexamples), skill_key),
+        (new_status, total, len(transfer), regression_pass, regression_fail, counterexample_pass, skill_key),
     )
     if old_status and old_status != new_status:
         con.execute(
@@ -311,7 +350,9 @@ def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
                         "transfer_rate": transfer_rate,
                         "regression_pass": regression_pass,
                         "regression_fail": regression_fail,
-                        "counterexamples": len(counterexamples),
+                        "recent_regression_streak": recent_regression_streak,
+                        "counterexample_pass": counterexample_pass,
+                        "counterexample_fail": counterexample_fail,
                     },
                     sort_keys=True,
                 ),
@@ -337,6 +378,7 @@ def build_learning_plan(con: sqlite3.Connection, limit: int = 20) -> list[dict]:
                SUM(CASE WHEN outcome!='success' AND confidence='high' THEN 1 ELSE 0 END) AS high_conf_errors
         FROM skill_evidence
         WHERE evidence_type IN ('direct','error_pattern')
+          AND split IN ('train','derived')
         GROUP BY skill_key
         """
     ).fetchall()
@@ -365,6 +407,12 @@ def build_learning_plan(con: sqlite3.Connection, limit: int = 20) -> list[dict]:
 
 def persist_learning_plan(con: sqlite3.Connection, plan: list[dict], run_id: str | None = None) -> None:
     for rank, item in enumerate(plan, 1):
+        existing = con.execute(
+            "SELECT 1 FROM learning_queue WHERE skill_key=? AND purpose='targeted_transfer' AND source_run_id IS ? LIMIT 1",
+            (item["skill_key"], run_id),
+        ).fetchone()
+        if existing:
+            continue
         con.execute(
             """
             INSERT INTO learning_queue
