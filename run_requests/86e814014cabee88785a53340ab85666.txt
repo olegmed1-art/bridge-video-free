@@ -1,4 +1,5 @@
 JOB_ID=86e814014cabee88785a53340ab85666
 ALGORITHM_REVISION=3.1-free-r25.5
 MODE=single-target
-ATTEMPT=3
+ATTEMPT=4
+RECOVERY=quarantine-isolated-asr-qc-disagreement
