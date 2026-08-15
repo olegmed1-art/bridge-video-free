@@ -16,6 +16,10 @@ CREATE TABLE IF NOT EXISTS runs (
   corpus_sha256 TEXT NOT NULL,
   solver_info_json TEXT,
   algorithm_version TEXT,
+  requested_splits_json TEXT,
+  task_file TEXT,
+  predictions_sha256 TEXT,
+  sealed_opened INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL,
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   completed_at TEXT
@@ -200,6 +204,30 @@ CREATE TRIGGER IF NOT EXISTS skill_evidence_no_update
 BEFORE UPDATE ON skill_evidence BEGIN SELECT RAISE(ABORT, 'skill_evidence is append-only; add new evidence or correction'); END;
 CREATE TRIGGER IF NOT EXISTS skill_evidence_no_delete
 BEFORE DELETE ON skill_evidence BEGIN SELECT RAISE(ABORT, 'skill_evidence is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS experience_events_no_update
+BEFORE UPDATE ON experience_events BEGIN SELECT RAISE(ABORT, 'experience_events are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS experience_events_no_delete
+BEFORE DELETE ON experience_events BEGIN SELECT RAISE(ABORT, 'experience_events are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS correction_events_no_update
+BEFORE UPDATE ON correction_events BEGIN SELECT RAISE(ABORT, 'correction_events are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS correction_events_no_delete
+BEFORE DELETE ON correction_events BEGIN SELECT RAISE(ABORT, 'correction_events are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS counterexamples_no_update
+BEFORE UPDATE ON counterexamples BEGIN SELECT RAISE(ABORT, 'counterexamples are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS counterexamples_no_delete
+BEFORE DELETE ON counterexamples BEGIN SELECT RAISE(ABORT, 'counterexamples are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS skill_state_history_no_update
+BEFORE UPDATE ON skill_state_history BEGIN SELECT RAISE(ABORT, 'skill_state_history is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS skill_state_history_no_delete
+BEFORE DELETE ON skill_state_history BEGIN SELECT RAISE(ABORT, 'skill_state_history is append-only'); END;
+CREATE TRIGGER IF NOT EXISTS audit_events_no_update
+BEFORE UPDATE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS audit_events_no_delete
+BEFORE DELETE ON audit_events BEGIN SELECT RAISE(ABORT, 'audit_events are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS checkpoints_no_update
+BEFORE UPDATE ON checkpoints BEGIN SELECT RAISE(ABORT, 'checkpoints are append-only'); END;
+CREATE TRIGGER IF NOT EXISTS checkpoints_no_delete
+BEFORE DELETE ON checkpoints BEGIN SELECT RAISE(ABORT, 'checkpoints are append-only'); END;
 """
 
 
@@ -211,10 +239,18 @@ def connect(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(path)
     con.executescript(SCHEMA)
-    # Safe migration for databases created by v1 before algorithm_version existed.
+    # Safe migrations for databases created by earlier revisions.
     run_cols = {r[1] for r in con.execute("PRAGMA table_info(runs)")}
-    if "algorithm_version" not in run_cols:
-        con.execute("ALTER TABLE runs ADD COLUMN algorithm_version TEXT")
+    migrations = {
+        "algorithm_version": "TEXT",
+        "requested_splits_json": "TEXT",
+        "task_file": "TEXT",
+        "predictions_sha256": "TEXT",
+        "sealed_opened": "INTEGER NOT NULL DEFAULT 0",
+    }
+    for name, decl in migrations.items():
+        if name not in run_cols:
+            con.execute(f"ALTER TABLE runs ADD COLUMN {name} {decl}")
     con.commit()
     return con
 
@@ -227,10 +263,18 @@ def _insert_immutable_json(
     insert_sql: str,
     json_column: str,
     payload: dict,
+    metadata: dict[str, object],
 ) -> None:
-    existing = con.execute(f"SELECT {json_column} FROM {table} WHERE task_id=?", (key,)).fetchone()
+    meta_cols = list(metadata)
+    selected = ",".join(meta_cols + [json_column])
+    existing = con.execute(f"SELECT {selected} FROM {table} WHERE task_id=?", (key,)).fetchone()
     if existing is not None:
-        if _canonical(json.loads(existing[0])) != _canonical(payload):
+        for i, col in enumerate(meta_cols):
+            if existing[i] != metadata[col]:
+                raise ValueError(
+                    f"Immutable {table} metadata mismatch for {key}: {col}={existing[i]!r}, new={metadata[col]!r}"
+                )
+        if _canonical(json.loads(existing[-1])) != _canonical(payload):
             raise ValueError(f"Immutable {table} fact for {key} already exists with different content")
         return
     con.execute(insert_sql, row_values)
@@ -241,35 +285,47 @@ def upsert_prediction(con: sqlite3.Connection, task: dict, prediction: dict) -> 
     if not prediction.get("locked", False):
         raise ValueError(f"Prediction {task['task_id']} must be locked before DDS evaluation")
     payload = dict(prediction)
+    metadata = {
+        "deal_id": task["deal_id"],
+        "task_type": task["task_type"],
+        "split": task["split"],
+    }
     _insert_immutable_json(
         con,
         "predictions",
         task["task_id"],
         (
-            task["task_id"], task["deal_id"], task["task_type"], task["split"],
+            task["task_id"], metadata["deal_id"], metadata["task_type"], metadata["split"],
             json.dumps(payload, ensure_ascii=False, sort_keys=True),
         ),
         "INSERT INTO predictions(task_id,deal_id,task_type,split,prediction_json,locked) VALUES(?,?,?,?,?,1)",
         "prediction_json",
         payload,
+        metadata,
     )
 
 
 def upsert_result(con: sqlite3.Connection, task: dict, result: dict) -> None:
     """Compatibility name; semantics are immutable insert-or-verify, never replace."""
     payload = dict(result)
+    metadata = {
+        "deal_id": task["deal_id"],
+        "task_type": task["task_type"],
+        "split": task["split"],
+    }
     _insert_immutable_json(
         con,
         "dds_results",
         task["task_id"],
         (
-            task["task_id"], task["deal_id"], task["task_type"], task["split"],
+            task["task_id"], metadata["deal_id"], metadata["task_type"], metadata["split"],
             json.dumps(payload, ensure_ascii=False, sort_keys=True),
             result.get("dd_regret"), int(bool(result.get("investigation_required"))),
         ),
         "INSERT INTO dds_results(task_id,deal_id,task_type,split,result_json,dd_regret,investigation_required) VALUES(?,?,?,?,?,?,?)",
         "result_json",
         payload,
+        metadata,
     )
 
 
