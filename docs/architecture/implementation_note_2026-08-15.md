@@ -1,0 +1,1 @@
+Implementation note: Club Operations schema changes are additive and do not import real member data or enable external member authentication. Production promotion should preserve the existing migration checksum history and be verified immediately after deployment.
