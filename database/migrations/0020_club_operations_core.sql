@@ -287,7 +287,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION validate_contact_scope()
+CREATE OR REPLACE FUNCTION validate_contact_method_scope()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
@@ -295,16 +295,31 @@ DECLARE
     v_source_school uuid;
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM school WHERE school_id=NEW.school_id) THEN
-        RAISE EXCEPTION 'contact school missing';
+        RAISE EXCEPTION 'contact method school missing';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM person WHERE person_id=NEW.person_id) THEN
-        RAISE EXCEPTION 'contact person missing';
+        RAISE EXCEPTION 'contact method person missing';
     END IF;
-    IF TG_TABLE_NAME='contact_method' AND NEW.source_id IS NOT NULL THEN
+    IF NEW.source_id IS NOT NULL THEN
         SELECT school_id INTO v_source_school FROM source WHERE source_id=NEW.source_id;
         IF v_source_school IS NULL OR v_source_school <> NEW.school_id THEN
             RAISE EXCEPTION 'contact source belongs to another school or is missing';
         END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION validate_contact_preference_scope()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM school WHERE school_id=NEW.school_id) THEN
+        RAISE EXCEPTION 'contact preference school missing';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM person WHERE person_id=NEW.person_id) THEN
+        RAISE EXCEPTION 'contact preference person missing';
     END IF;
     RETURN NEW;
 END;
@@ -408,11 +423,11 @@ ON club_membership FOR EACH ROW EXECUTE FUNCTION validate_club_membership_scope(
 
 DROP TRIGGER IF EXISTS contact_method_scope_guard ON contact_method;
 CREATE TRIGGER contact_method_scope_guard BEFORE INSERT OR UPDATE OF school_id, person_id, source_id
-ON contact_method FOR EACH ROW EXECUTE FUNCTION validate_contact_scope();
+ON contact_method FOR EACH ROW EXECUTE FUNCTION validate_contact_method_scope();
 
 DROP TRIGGER IF EXISTS contact_preference_scope_guard ON contact_preference;
 CREATE TRIGGER contact_preference_scope_guard BEFORE INSERT OR UPDATE OF school_id, person_id
-ON contact_preference FOR EACH ROW EXECUTE FUNCTION validate_contact_scope();
+ON contact_preference FOR EACH ROW EXECUTE FUNCTION validate_contact_preference_scope();
 
 DROP TRIGGER IF EXISTS service_price_scope_guard ON service_price_version;
 CREATE TRIGGER service_price_scope_guard BEFORE INSERT OR UPDATE OF service_id
@@ -479,7 +494,8 @@ GRANT SELECT ON club_booking_current_state, person_entitlement_balance TO bridge
 
 -- Trigger helpers are not runtime APIs.
 REVOKE ALL ON FUNCTION validate_club_membership_scope() FROM PUBLIC, bridge_school_reader, bridge_school_app, bridge_school_worker, bridge_school_health;
-REVOKE ALL ON FUNCTION validate_contact_scope() FROM PUBLIC, bridge_school_reader, bridge_school_app, bridge_school_worker, bridge_school_health;
+REVOKE ALL ON FUNCTION validate_contact_method_scope() FROM PUBLIC, bridge_school_reader, bridge_school_app, bridge_school_worker, bridge_school_health;
+REVOKE ALL ON FUNCTION validate_contact_preference_scope() FROM PUBLIC, bridge_school_reader, bridge_school_app, bridge_school_worker, bridge_school_health;
 REVOKE ALL ON FUNCTION validate_club_service_scope() FROM PUBLIC, bridge_school_reader, bridge_school_app, bridge_school_worker, bridge_school_health;
 REVOKE ALL ON FUNCTION validate_entitlement_scope() FROM PUBLIC, bridge_school_reader, bridge_school_app, bridge_school_worker, bridge_school_health;
 REVOKE ALL ON FUNCTION validate_club_event_scope() FROM PUBLIC, bridge_school_reader, bridge_school_app, bridge_school_worker, bridge_school_health;
