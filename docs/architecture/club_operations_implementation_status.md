@@ -1,12 +1,12 @@
 # Club Operations implementation status
 
-Status as of 2026-08-15 after six integrity-review passes.
+Status as of 2026-08-16 after seven integrity-review passes.
 
 ## Current candidate state
 
 - Architecture v0.3 remains an extension of the existing School core, not a parallel member database.
 - Google Drive area `Управление клубом` is a document/file layer and is not the operational source of truth.
-- Candidate PostgreSQL migrations `0020–0035` are implemented on `main`.
+- Candidate PostgreSQL migrations `0020–0037` are implemented on `main`.
 - Production Neon has been rechecked directly and still contains only migrations `0001–0019`; no Club Operations migration has been promoted.
 - Production does not contain `club_membership`, `club_payment_refund` or `person_package_grant` tables.
 - Production operational health at the repeat check is `ok`: 0 critical, 0 warning, 15 ok signals.
@@ -53,11 +53,23 @@ Status as of 2026-08-15 after six integrity-review passes.
 - service/package price provenance must be effective at the charge/grant timestamp and cannot reference an unapproved `candidate` version;
 - amount equality between a price version and a charge is intentionally NOT enforced because discount/override policy has not been approved and is not invented by the implementation.
 
+### 0036–0037 — historical boundaries and ledger provenance
+
+- historical entitlement usage is judged by the entitlement validity window at `occurred_at`, rather than by the entitlement's later current lifecycle label;
+- historical message delivery may reference a now-revoked/superseded contact when `queued_at` was inside that contact's former validity window; delivery outside the window remains blocked;
+- package-backed entitlement usage must also fall inside the exact acquired package grant's validity window;
+- closing lifecycle states for membership, contact methods, entitlements and acquired package grants require an explicit `valid_to` boundary where the state means the period actually ended;
+- `valid_to`/`effective_to` cannot later be shortened so that already-recorded entitlement usage, message delivery, package acquisition or charge provenance becomes impossible in hindsight;
+- a charge cannot simultaneously claim both a direct Service and an acquired Package as its primary commercial origin;
+- when a Charge cites both Booking and Service, the Service must agree with the booked ClubEvent service when that event has a service;
+- `PaymentAllocation.allocated_at` cannot precede either the Payment or the Charge it connects.
+
 ## Verification
 
-- Database tests now cover Club Operations tests `011–021` in addition to all legacy database tests.
-- PR #79, #82, #83 and #84 were merged only after their candidate database CI passed.
-- Latest post-merge database CI on `main`: run `31907731704`, conclusion `success`.
+- Database tests now cover Club Operations tests `011–023` in addition to all legacy database tests.
+- PR #79, #82, #83, #84 and #87 were merged only after their candidate database CI passed.
+- Seventh-pass candidate CI: run `31910012398`, conclusion `success`.
+- Latest post-merge database CI on `main`: run `31910114003`, conclusion `success`.
 - Verified steps include PostgreSQL 18 clean install, runtime DSN regression tests, all invariant tests, migration idempotence, immutable-history checksum guard and migration registry verification.
 
 ## Important financial semantics
