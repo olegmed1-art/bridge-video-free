@@ -5,6 +5,7 @@ import json
 import tempfile
 from pathlib import Path
 
+from config import BATCH_SIZE_DD_TABLE
 from corpus import generate_corpus, iter_pbn_records, validate_pbn_corpus
 from dds_engine import engine_info
 
@@ -17,19 +18,31 @@ def run_quick() -> dict:
         generate_corpus(64, root)
         validate_pbn_corpus(root / "raw.pbn", 64)
         recs = list(iter_pbn_records(root / "raw.pbn"))
-        deals = [r["deal"] for r in recs[:8]]
-        assert len(deals) == 8
+        deals = [r["deal"] for r in recs]
+        assert len(deals) == 64
         assert all(d.startswith("N:") and len(d.split()) == 4 for d in deals)
 
-        # DDS3 batch-table smoke test. The Python v3.0.0 binding's
-        # `no_of_boards` metadata is not used as an invariant here; the returned
-        # table list itself is the authoritative payload consumed by our runner.
-        tables = dds3.calc_all_tables_pbn(deals[:4], mode=-1, trump_filter=(0, 0, 0, 0, 0))
-        assert len(tables["tables"]) == 4, tables
+        # Test the actual complete-table batch boundary used by the production
+        # runner, not merely a tiny four-deal smoke. DDS3 v3.0.0 permits 40
+        # complete five-strain tables in one CalcAllTablesPBN call.
+        assert BATCH_SIZE_DD_TABLE == 40
+        tables = dds3.calc_all_tables_pbn(
+            deals[:BATCH_SIZE_DD_TABLE], mode=-1, trump_filter=(0, 0, 0, 0, 0)
+        )
+        assert len(tables["tables"]) == BATCH_SIZE_DD_TABLE, len(tables["tables"])
         for t in tables["tables"]:
             matrix = t["res_table"]
             assert len(matrix) == 5 and all(len(row) == 4 for row in matrix)
             assert all(0 <= int(v) <= 13 for row in matrix for v in row)
+
+        over_limit_blocked = False
+        try:
+            dds3.calc_all_tables_pbn(
+                deals[:BATCH_SIZE_DD_TABLE + 1], mode=-1, trump_filter=(0, 0, 0, 0, 0)
+            )
+        except ValueError:
+            over_limit_blocked = True
+        assert over_limit_blocked, "DDS3 binding unexpectedly accepted 41 complete tables; recheck batch assumptions"
 
         # Context-aware solve smoke test. Reusing a context is required by the
         # training algorithm for repeated branches of the same deal.
@@ -45,6 +58,8 @@ def run_quick() -> dict:
             "ok": True,
             "generated_and_validated": 64,
             "dds_batch_tables": len(tables["tables"]),
+            "dds_batch_limit": BATCH_SIZE_DD_TABLE,
+            "dds_over_limit_blocked": over_limit_blocked,
             "dds_reported_no_of_boards": tables.get("no_of_boards"),
             "context_reuse": True,
             "engine": engine_info(),
