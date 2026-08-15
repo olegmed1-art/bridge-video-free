@@ -70,13 +70,21 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Terminal receipt preflight
+        id: terminal
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: python check_completed_job.py
+
       - name: Install free open-source runtime
+        if: steps.terminal.outputs.already_completed != 'true'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
           python -m pip install --disable-pip-version-check -r requirements-worker.txt
 
       - name: Google Drive OAuth preflight
+        if: steps.terminal.outputs.already_completed != 'true'
         shell: bash
         env:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
@@ -91,15 +99,21 @@ jobs:
           PY
 
       - name: FREE-GUARD
+        if: steps.terminal.outputs.already_completed != 'true'
         run: python bridge_worker_3_1_free.py
 
       - name: Process one opaque Drive job
+        if: steps.terminal.outputs.already_completed != 'true'
         shell: bash
         env:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
         run: |
           set -euo pipefail
           python run_drive_3_1_free_oidc.py
+
+      - name: Completed job no-op
+        if: steps.terminal.outputs.already_completed == 'true'
+        run: echo 'ALREADY_COMPLETED: terminal CLEANUP_ACK exists; heavy runtime skipped.'
 
       # No Google Cloud auth, no Neon/database dependency, no paid fallback.
       # User media/transcripts are never uploaded as GitHub workflow artifacts.
