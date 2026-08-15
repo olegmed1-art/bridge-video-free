@@ -1,45 +1,97 @@
 # Club Operations implementation status
 
-Status as of 2026-08-15 after third-pass review:
+Status as of 2026-08-15 after six integrity-review passes.
 
-- Architecture v0.3 is documented and remains an extension of the existing school core, not a parallel member database.
-- Google Drive area `Управление клубом` exists as a document/file layer; it is not the operational source of truth.
-- Candidate PostgreSQL migrations `0020–0028` are implemented on `main`.
-- The earlier audit corrected integrity gaps in entitlement usage/reversals, member balance semantics, adjustment reversals, contact/delivery routing, commercial-version overlap, package entitlement semantics and price/service consistency.
-- The third-pass audit found two further correction-history defects: entitlement usage reversal was blocked after the entitlement validity window ended, and an incorrect `PaymentAllocation` had no append-only unallocation mechanism. `0027` adds correction semantics; `0028` makes allocation upper-bound guards reversal-aware.
-- `payment_allocation_reversal` now preserves the original allocation while allowing a full reversal followed by corrected allocations. Reconciliation views use only effective allocations; the member account balance still uses actual received payments.
-- Database verification covers legacy invariants plus Club Operations tests `011–014`, clean PostgreSQL 18 migration, idempotence, checksum protection and registry verification.
-- PR #79 passed database CI and was merged to `main`. The post-merge database CI run `31906622297` completed with `success`; all database CI steps passed.
-- Production Neon was rechecked directly and remains on migrations `0001–0019`; Club Operations tables/migrations `0020–0028` have not been promoted there.
-- Production operational health remains `ok` with 0 critical, 0 warning and 15 ok signals at the repeat check.
-- Production currently has no real `Person` or `Student` records, so no member/student data migration has occurred.
-- Machine Knowledge/Canon remains unpopulated and must be ingested under the existing authority/review rules before autonomous Bridge Coach use.
-- Member authentication, object-level authorization, Member API and Club Window remain separate subsequent stages. Public/member access must not be opened before those controls are implemented and verified.
+## Current candidate state
 
-Important semantic distinctions:
+- Architecture v0.3 remains an extension of the existing School core, not a parallel member database.
+- Google Drive area `Управление клубом` is a document/file layer and is not the operational source of truth.
+- Candidate PostgreSQL migrations `0020–0035` are implemented on `main`.
+- Production Neon has been rechecked directly and still contains only migrations `0001–0019`; no Club Operations migration has been promoted.
+- Production does not contain `club_membership`, `club_payment_refund` or `person_package_grant` tables.
+- Production operational health at the repeat check is `ok`: 0 critical, 0 warning, 15 ok signals.
+- No real Person/Student/ClubMember import has been performed.
+- Machine Knowledge/Canon remains unpopulated; Bridge Coach is not ready for autonomous member-facing teaching until controlled ingestion/visibility is implemented.
 
-- `person_financial_balance` is the member account balance and includes all received payments, including not-yet-allocated payments.
-- `person_allocated_receivable_balance` is a reconciliation view showing what charges remain uncovered by currently effective explicit allocations.
-- `PaymentAllocation` explains application of cash to charges; it does not redefine whether the club actually received the payment.
-- An allocation correction is append-only: reverse the mistaken allocation, then append the corrected allocation(s); do not UPDATE/DELETE the historical allocation.
+## Implemented audit corrections
 
-Release-safety finding:
+### 0027–0028 — correction semantics
+
+- entitlement usage can be reversed after entitlement expiry while fresh expired consumption remains blocked;
+- mistaken `PaymentAllocation` is corrected append-only through `payment_allocation_reversal` rather than UPDATE/DELETE;
+- allocation reconciliation uses only effective allocations;
+- allocation upper bounds are reversal-aware.
+
+### 0029–0030 — acquired packages and commercial immutability
+
+- `person_package_grant` distinguishes separate acquisitions/assignments of the same catalog package;
+- `package_price_version` versions package pricing;
+- package-derived entitlements are tied to the exact acquisition instance;
+- package charges can reference the exact acquisition and agreed package price;
+- commercial version amounts/currencies/effective starts/terms/rules cannot be rewritten by runtime finance; changed commercial definitions require new versions.
+
+### 0031–0032 — cash refunds and acquired-package snapshots
+
+- `club_payment_refund` records actual cash refunds separately from accounting adjustments;
+- refund/reversal history is append-only and cannot exceed net unallocated cash;
+- `club_payment_net`, member balance and unallocated-payment projections use net cash after refunds;
+- new allocations cannot exceed payment net of refunds;
+- refund accounting documents can reference the exact payment/refund;
+- package service-rule sets freeze after first acquisition;
+- an acquisition price must have been effective at grant time;
+- later package charges cannot silently switch to another price version.
+
+### 0033–0035 — lifecycle, communication identity and provenance
+
+- ClubMembership status changes are preserved automatically in append-only `club_membership_state_event` history;
+- runtime cannot directly forge membership history rows; status updates are captured by hardened trigger helpers;
+- the one-open-membership invariant is based on membership-period closure (`valid_to`) rather than mutable status;
+- communication/campaign/admin identity fields cannot be rewritten through broad runtime UPDATE grants;
+- campaign audience/template content is frozen after the campaign first leaves draft, even if its status later returns to draft;
+- a closed communication must have a close timestamp;
+- campaign recipient identity/selection is immutable and its communication link can only be assigned once;
+- service/package price provenance must be effective at the charge/grant timestamp and cannot reference an unapproved `candidate` version;
+- amount equality between a price version and a charge is intentionally NOT enforced because discount/override policy has not been approved and is not invented by the implementation.
+
+## Verification
+
+- Database tests now cover Club Operations tests `011–021` in addition to all legacy database tests.
+- PR #79, #82, #83 and #84 were merged only after their candidate database CI passed.
+- Latest post-merge database CI on `main`: run `31907731704`, conclusion `success`.
+- Verified steps include PostgreSQL 18 clean install, runtime DSN regression tests, all invariant tests, migration idempotence, immutable-history checksum guard and migration registry verification.
+
+## Important financial semantics
+
+- `person_financial_balance` is the member account balance and uses actual net cash received after refunds, including not-yet-allocated payments.
+- `person_allocated_receivable_balance` is a reconciliation view showing charges not covered by currently effective explicit allocations.
+- `PaymentAllocation` explains application of cash to charges; it does not redefine whether cash was received.
+- allocation correction is append-only: reverse the mistaken allocation, then append corrected allocation(s).
+- cash refund is a `club_payment_refund`; a `financial_adjustment` alone does not mean money physically left the club.
+
+## Release safety — production promotion remains BLOCKED
 
 - GitHub branch `database-production` is currently unprotected.
-- The workflow currently present on that production branch auto-runs on a qualifying push and can apply migrations to Neon after preflight.
-- A hardened manual production workflow has been implemented and tested on `main` via PR #80: manual dispatch only, exact `database-production` ref, explicit `MIGRATE` confirmation, pre-migration fingerprint and a `database-production` environment boundary.
-- This workflow hardening has NOT been copied to `database-production`; therefore production promotion remains blocked until that release boundary is deliberately hardened and a recovery/checkpoint procedure is confirmed.
+- The workflow currently installed on that branch still auto-runs on qualifying pushes and can apply database migrations to Neon after preflight.
+- A hardened production workflow is present on `main`: manual dispatch only, exact `database-production` ref, explicit `MIGRATE` confirmation, pre-migration fingerprint and `database-production` environment boundary.
+- That hardened workflow has NOT been installed on the actual `database-production` branch.
+- Therefore no `0020+` production promotion should occur until a recovery checkpoint is created, the production release boundary is deliberately hardened, and the production fingerprint is reverified at `0019` immediately before migration.
+- Because `main` and `database-production` are heavily diverged, do not indiscriminately merge all of `main` into `database-production`; promote only reviewed database/release files through the controlled path.
 
-Remaining structural gaps before real club use:
+## Remaining gates before real member use
 
-- a person-specific acquired package/subscription instance is still missing; catalog `club_package_version` is not sufficient to distinguish two separate purchases/grants of the same package;
-- package pricing and the financial link between a package acquisition, its charge and the entitlements generated from it still need a reviewed model;
-- member AuthIdentity/object-level authorization and audit actor context are not implemented;
-- member-facing knowledge visibility/ingestion is not implemented;
-- message-delivery state transition semantics need a provider-neutral policy before they are hardened further;
-- event capacity/waitlist rules and `ContactPreference=unknown` behavior remain policy decisions and are intentionally not invented.
+1. AuthIdentity + object-level authorization/RLS or equivalent fail-closed data isolation.
+2. Actor context/audit identity for user-initiated sensitive changes; current automatic membership events preserve chronology but do not yet know the authenticated member/admin actor.
+3. Controlled Person/Student/ClubMember import and reconciliation.
+4. Knowledge/Canon ingestion plus member/instructor/admin/private visibility policy.
+5. Member API and Club Window only after authorization is verified.
+6. Provider-neutral message-delivery transition policy before stricter state-machine enforcement.
+7. Event capacity/waitlist rules and `ContactPreference=unknown` behavior remain explicit club/business/legal policy decisions and are intentionally not invented.
+8. Recurring subscription/billing semantics are not yet modeled beyond acquired package/grant instances; add them only if the approved service model requires recurrence.
+9. Backup/restore drill, privacy/retention policy, security review and load/cost gates before broad rollout.
 
-Policy intentionally left unresolved rather than invented:
+## Policy intentionally unresolved rather than guessed
 
 - `ContactPreference=denied` is a hard delivery stop in the candidate schema.
-- The required behavior for `ContactPreference=unknown` depends on the club's approved business/legal policy and is not inferred by the implementation.
+- `ContactPreference=unknown` requires an approved policy.
+- discount/override rules determine whether a charge must equal, differ from or derive from a catalog price; the database currently preserves provenance without inventing that policy.
+- event overbooking/waitlist behavior requires an approved club rule before database enforcement.
