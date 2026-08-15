@@ -4,13 +4,17 @@ import json
 import sqlite3
 from pathlib import Path
 
-from config import SKILL_LIFECYCLE
+from config import ALGORITHM_VERSION, SKILL_LIFECYCLE
 
 
 def _recent_regression_streak(con: sqlite3.Connection, skill_key: str) -> int:
     rows = con.execute(
-        "SELECT outcome FROM skill_evidence WHERE skill_key=? AND evidence_type='regression' ORDER BY id",
-        (skill_key,),
+        """
+        SELECT outcome FROM skill_evidence
+        WHERE skill_key=? AND evidence_type='regression' AND algorithm_version=?
+        ORDER BY id
+        """,
+        (skill_key, ALGORITHM_VERSION),
     ).fetchall()
     streak = 0
     for (outcome,) in reversed(rows):
@@ -46,7 +50,6 @@ def audit_database(con: sqlite3.Connection) -> dict:
     ).fetchone()[0]
     add("PREDICTION_RESULT_METADATA_MISMATCH", "error", metadata_mismatch, "Prediction and DDS result disagree on immutable task metadata")
 
-    # Holdout results may exist, but they must never become learning evidence.
     validation_learning = con.execute(
         """
         SELECT COUNT(*) FROM skill_evidence se JOIN dds_results r ON r.task_id=se.task_id
@@ -84,7 +87,11 @@ def audit_database(con: sqlite3.Connection) -> dict:
 
     stable_issues = 0
     for skill_key, transfer_count, counterexample_count in con.execute(
-        "SELECT skill_key,transfer_count,counterexample_count FROM skill_profiles WHERE status='stable'"
+        """
+        SELECT skill_key,transfer_count,counterexample_count FROM skill_profiles
+        WHERE status='stable' AND algorithm_version=?
+        """,
+        (ALGORITHM_VERSION,),
     ):
         if (
             int(transfer_count) < SKILL_LIFECYCLE["stable_transfer"]
@@ -92,7 +99,7 @@ def audit_database(con: sqlite3.Connection) -> dict:
             or _recent_regression_streak(con, skill_key) < SKILL_LIFECYCLE["stable_regression_passes"]
         ):
             stable_issues += 1
-    add("UNSUPPORTED_STABLE_SKILL", "error", stable_issues, "Stable skill lacks current transfer/regression/counterexample support")
+    add("UNSUPPORTED_STABLE_SKILL", "error", stable_issues, "Stable skill lacks current-revision transfer/regression/counterexample support")
 
     correction_without_reason = con.execute(
         "SELECT COUNT(*) FROM correction_events WHERE TRIM(reason)=''"
@@ -100,7 +107,11 @@ def audit_database(con: sqlite3.Connection) -> dict:
     add("CORRECTION_WITHOUT_REASON", "error", correction_without_reason, "Correction event must have an explicit reason")
 
     high_conf_errors = con.execute(
-        "SELECT COUNT(*) FROM skill_evidence WHERE confidence='high' AND outcome!='success'"
+        """
+        SELECT COUNT(*) FROM skill_evidence
+        WHERE algorithm_version=? AND confidence='high' AND outcome!='success'
+        """,
+        (ALGORITHM_VERSION,),
     ).fetchone()[0]
     if high_conf_errors:
         issues.append({
