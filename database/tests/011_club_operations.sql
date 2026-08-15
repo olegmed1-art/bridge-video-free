@@ -96,6 +96,15 @@ BEGIN
     VALUES (v_school,v_person,70,'ILS',now(),'test') RETURNING payment_id INTO v_payment;
     INSERT INTO payment_allocation(school_id,payment_id,charge_id,amount)
     VALUES (v_school,v_payment,v_charge,70);
+
+    BEGIN
+        INSERT INTO payment_allocation(school_id,payment_id,charge_id,amount)
+        VALUES (v_school,v_payment,v_charge,1);
+        RAISE EXCEPTION 'payment over-allocation unexpectedly accepted';
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM='payment over-allocation unexpectedly accepted' THEN RAISE; END IF;
+    END;
+
     INSERT INTO financial_adjustment(school_id,person_id,currency_code,balance_delta,adjustment_type,related_charge_id,reason)
     VALUES (v_school,v_person,'ILS',-10,'discount',v_charge,'test discount');
     SELECT balance_due INTO v_balance FROM person_financial_balance
@@ -144,19 +153,26 @@ BEGIN
     IF NOT has_table_privilege('bridge_school_app','club_membership','INSERT')
        OR has_table_privilege('bridge_school_app','club_service','INSERT')
        OR has_table_privilege('bridge_school_app','club_charge','INSERT')
-       OR has_table_privilege('bridge_school_app','club_membership','DELETE') THEN
+       OR has_table_privilege('bridge_school_app','club_membership','DELETE')
+       OR has_table_privilege('bridge_school_app','club_booking','UPDATE')
+       OR NOT has_column_privilege('bridge_school_app','club_membership','status','UPDATE')
+       OR has_column_privilege('bridge_school_app','club_membership','person_id','UPDATE') THEN
         RAISE EXCEPTION 'application Club Operations permissions outside contract';
     END IF;
 
     IF NOT has_table_privilege('bridge_school_finance','club_charge','INSERT')
        OR has_table_privilege('bridge_school_finance','club_charge','UPDATE')
        OR has_table_privilege('bridge_school_finance','club_charge','DELETE')
-       OR NOT has_table_privilege('bridge_school_finance','service_price_version','INSERT') THEN
+       OR NOT has_table_privilege('bridge_school_finance','service_price_version','INSERT')
+       OR NOT has_table_privilege('bridge_school_finance','person','SELECT')
+       OR has_table_privilege('bridge_school_finance','student_profile_snapshot','SELECT') THEN
         RAISE EXCEPTION 'finance permissions outside contract';
     END IF;
 
     IF NOT has_table_privilege('bridge_school_worker','message_delivery','INSERT')
-       OR NOT has_table_privilege('bridge_school_worker','message_delivery','UPDATE')
+       OR has_table_privilege('bridge_school_worker','message_delivery','UPDATE')
+       OR NOT has_column_privilege('bridge_school_worker','message_delivery','status','UPDATE')
+       OR has_column_privilege('bridge_school_worker','message_delivery','recipient_person_id','UPDATE')
        OR has_table_privilege('bridge_school_worker','message_delivery','DELETE') THEN
         RAISE EXCEPTION 'communication worker permissions outside contract';
     END IF;
