@@ -1,12 +1,12 @@
 name: Bridge School Database Production
 
 on:
-  push:
-    branches: [database-production]
-    paths:
-      - 'database/**'
-      - '.github/workflows/database-production.yml'
-      - '.github/workflows/database-ci.yml'
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type MIGRATE to confirm the database-production promotion'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -16,7 +16,28 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require database-production branch and explicit confirmation
+        shell: bash
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          test "$REF_NAME" = "database-production" || {
+            echo "Production migration workflow must be dispatched from database-production, got: $REF_NAME"
+            exit 1
+          }
+          test "$CONFIRMATION" = "MIGRATE" || {
+            echo "Explicit confirmation MIGRATE was not provided"
+            exit 1
+          }
+
   preflight-postgres-18:
+    needs: release-gate
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -99,6 +120,7 @@ jobs:
     needs: preflight-postgres-18
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment: database-production
     steps:
       - name: Checkout promoted commit
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -129,6 +151,17 @@ jobs:
           version_num="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'SHOW server_version_num')"
           echo "Production PostgreSQL server_version_num=${version_num}"
           test "$version_num" -ge 180000
+
+      - name: Record pre-migration production fingerprint
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -X -A -F ',' -v ON_ERROR_STOP=1 -c \
+            "SELECT school_name, database_name, server_version_num, migration_count, latest_migration_key, migration_checksum_missing_count FROM database_runtime_fingerprint;"
+          psql "$DATABASE_URL" -X -A -F ',' -v ON_ERROR_STOP=1 -c \
+            "SELECT * FROM operational_health_summary;"
 
       - name: Apply only unapplied immutable migrations
         shell: bash
