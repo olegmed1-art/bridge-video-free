@@ -219,7 +219,10 @@ LEFT JOIN charge_totals c USING (school_id, person_id, currency_code)
 LEFT JOIN payment_totals p USING (school_id, person_id, currency_code)
 LEFT JOIN adjustment_totals j USING (school_id, person_id, currency_code);
 
-CREATE OR REPLACE VIEW person_unallocated_payment AS
+-- The prior version has fewer columns. PostgreSQL does not allow CREATE OR REPLACE
+-- VIEW to insert columns in the middle, so recreate this projection explicitly.
+DROP VIEW person_unallocated_payment;
+CREATE VIEW person_unallocated_payment AS
 SELECT
     p.payment_id,
     p.school_id,
