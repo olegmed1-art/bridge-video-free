@@ -192,11 +192,28 @@ def pdf_report(out,master,shots):
     if not observations:st.append(Paragraph('Персональные наблюдения не подтверждены надёжной атрибуцией.',body))
     for x in observations:st.append(Paragraph(escape(f"Задача: {x.get('task')}; действие: {x.get('student_action')}; помощь: {x.get('support_state')}; результат: {x.get('result')}; перенос: {x.get('transfer')}."),body))
     st.append(Paragraph('4. Учебные циклы: действие — вмешательство — результат',h2))
-    for x in master.get('learning_interactions',[]):
-        st.append(Paragraph(escape(f"Задача/ситуация: {x.get('task_or_trigger') or 'не установлена'}"),body))
-        st.append(Paragraph(escape(f"Действие ученика: {x.get('student_action') or 'не установлено'}"),body))
-        st.append(Paragraph(escape(f"Вмешательство преподавателя: {x.get('intervention_type') or 'не установлено'} — {x.get('teacher_intervention') or ''}"),body))
-        st.append(Paragraph(escape(f"Реакция и результат: {x.get('student_response') or 'не установлена'}; {x.get('outcome')}; самостоятельность: {x.get('autonomy')}; перенос: {x.get('transfer')}."),small))
+    cycles=list(master.get('learning_interactions',[]) or [])
+    quality=master.get('content_quality',{}) or {}
+    no_speaker_labels=quality.get('speaker_labels_present') is False or quality.get('actor_attribution_status')=='unavailable_without_speaker_labels'
+    empty_actor_cycles=[
+        x for x in cycles
+        if not x.get('student_action') and not x.get('teacher_intervention') and not x.get('student_response')
+    ]
+    if cycles and no_speaker_labels and len(empty_actor_cycles)==len(cycles):
+        st.append(Paragraph(escape(
+            f"Надёжных меток говорящих нет. Найдено {len(cycles)} возможных учебных ситуаций, "
+            "но действия ученика, вмешательства преподавателя и результат нельзя честно разделить по ролям. "
+            "Повторяющиеся пустые карточки не печатаются; все исходные кандидаты без сокращений сохранены "
+            "во встроенном master_analysis.json."
+        ),body))
+    elif not cycles:
+        st.append(Paragraph('Подтверждённые учебные циклы автоматически не выделены.',body))
+    else:
+        for x in cycles:
+            st.append(Paragraph(escape(f"Задача/ситуация: {x.get('task_or_trigger') or 'не установлена'}"),body))
+            st.append(Paragraph(escape(f"Действие ученика: {x.get('student_action') or 'не установлено'}"),body))
+            st.append(Paragraph(escape(f"Вмешательство преподавателя: {x.get('intervention_type') or 'не установлено'} — {x.get('teacher_intervention') or ''}"),body))
+            st.append(Paragraph(escape(f"Реакция и результат: {x.get('student_response') or 'не установлена'}; {x.get('outcome')}; самостоятельность: {x.get('autonomy')}; перенос: {x.get('transfer')}."),small))
     smap={x['evidence_id']:x for x in shots};st+=[PageBreak(),Paragraph('5. Доказательные эпизоды',h2)]
     selected=[e for e in master.get('episodes',[]) if e.get('episode_id') in important_ids or e.get('visual_evidence')]
     for e in selected:
@@ -217,8 +234,26 @@ def pdf_report(out,master,shots):
         if not items:st.append(Paragraph('Автоматические кандидаты не выделены; это не доказывает отсутствие соответствующих событий.',body))
         for x in items:st.append(Paragraph(escape(fmt(x)),body))
     st.append(Paragraph('10. Связь с каноном и пробелы',h2))
-    for x in master.get('canon_links',[]):
-        if x.get('status')!='не найдено':st.append(Paragraph(escape(f"{x.get('status')} (score {x.get('score')}): {x.get('canonical_excerpt') or ''}"),body))
+    printable=[x for x in (master.get('canon_links',[]) or []) if x.get('status')!='не найдено' and str(x.get('canonical_excerpt') or '').strip()]
+    canon_by_excerpt={}
+    for x in printable:
+        key=re.sub(r'\\W+',' ',str(x.get('canonical_excerpt') or '').casefold()).strip()
+        if not key:continue
+        old=canon_by_excerpt.get(key)
+        try:score=float(x.get('score') or 0)
+        except Exception:score=0.0
+        try:old_score=float(old.get('score') or 0) if old else -1.0
+        except Exception:old_score=-1.0
+        if old is None or score>old_score:canon_by_excerpt[key]=x
+    unique_links=sorted(canon_by_excerpt.values(),key=lambda x:float(x.get('score') or 0),reverse=True)
+    shown=unique_links[:20]
+    st.append(Paragraph(escape(
+        f"Кандидатов связи с каноном: {len(printable)}; уникальных формулировок: {len(unique_links)}; "
+        f"в отчёте показано {len(shown)} наиболее сильных. Повторы и полный список сохранены "
+        "во встроенном master_analysis.json."
+    ),body))
+    if not shown:st.append(Paragraph('Подтверждённые связи с каноном автоматически не выделены.',body))
+    for x in shown:st.append(Paragraph(escape(f"{x.get('status')} (score {x.get('score')}): {x.get('canonical_excerpt') or ''}"),body))
     for x in master.get('knowledge_gaps',[]):st.append(Paragraph(escape(f"Кандидат в пробел: {x.get('question_context')}. Следующий шаг: {x.get('next_action')}"),body))
     st.append(Paragraph('11. Рекомендации и следующее занятие',h2))
     recs=master.get('recommendations',[])
@@ -227,8 +262,61 @@ def pdf_report(out,master,shots):
     st.append(Paragraph('12. Кандидаты раздач и решений',h2));st.append(Paragraph(escape(f"Раздач: {len(master.get('deals',[]))}; решений: {len(master.get('decisions',[]))}. Неизвестное не достраивается по догадке."),body))
     st+=[PageBreak(),Paragraph('13. Полный транскрипт с таймкодами',h2)]
     for s in master.get('transcript',[]):st.append(Paragraph(escape(f"[{_tm(s['start'])}–{_tm(s['end'])}] "+((s.get('speaker')+': ') if s.get('speaker') else '')+s.get('text','')+(' [требует проверки]' if s.get('unreliable') else '')),body))
-    tq=master.get('technical_qc',{}).get('transcript',{})
-    st+=[PageBreak(),Paragraph('14. Технический QC и качество содержания',h2),Paragraph(escape(json.dumps(master.get('content_quality',{}),ensure_ascii=False,indent=2)),small),Paragraph(escape(json.dumps({'primarySource':tq.get('primarySource'),'status':tq.get('status'),'riskSummary':tq.get('riskSummary')},ensure_ascii=False,indent=2)),small),Paragraph('Полные технические данные и исходный master_analysis.json встроены в PDF.',body)];doc.build(st)
+    tq=master.get('technical_qc',{}).get('transcript',{}) or {}
+    cq=master.get('content_quality',{}) or {}
+    risk=tq.get('riskSummary',{}) or {}
+    gate=cq.get('r24Gate',{}) or {}
+    qc_records=list(tq.get('qc',[]) or [])
+    failed_qc=[x for x in qc_records if not bool(x.get('ok'))]
+    hallucination_qc=[
+        x for x in qc_records
+        if 'REPEATED_NONSPEECH_HALLUCINATION' in (x.get('failureReasons') or [])
+    ]
+    transcript=list(master.get('transcript',[]) or [])
+    empty_isolated=0
+    for record in failed_qc:
+        start=float(record.get('start') or 0);end=float(record.get('end') or start)
+        if not any(float(s.get('end') or 0)>start and float(s.get('start') or 0)<end for s in transcript):
+            empty_isolated+=1
+    derived_leaks=int(gate.get('unreliableDerivedEvidenceCount') or 0)
+    st+=[PageBreak(),Paragraph('14. Технический QC и качество содержания',h2)]
+    st.append(Paragraph(escape(
+        f"Итог: semantic QC — {cq.get('semantic_qc_status') or 'не установлен'}; "
+        f"content gate — {'PASS' if gate.get('ok') else 'FAIL/UNKNOWN'}; "
+        f"утечки ненадёжных доказательств в производные выводы — {derived_leaks}."
+    ),body))
+    st.append(Paragraph(escape(
+        f"Контроль ASR: источник {tq.get('primarySource') or 'не установлен'}; сегментов {cq.get('transcript_segments',len(transcript))}; "
+        f"проверено окон {len(qc_records)}; изолировано непрошедших окон {len(failed_qc)}; "
+        f"из них пустых интервалов без первичных речевых сегментов {empty_isolated}; "
+        f"патологических повторяющихся галлюцинаций {len(hallucination_qc)}."
+    ),body))
+    st.append(Paragraph(escape(
+        f"ASR-риск: максимум {risk.get('maxEstimatedErrorRisk')}; средних и выше блоков {risk.get('mediumOrHigherBlocks',0)}; "
+        f"высоких/критических {risk.get('highOrCriticalBlocks',0)}. Это эвристическая диагностика, а не калиброванная вероятность."
+    ),body))
+    st.append(Paragraph(escape(
+        f"Изоляция: ненадёжных сегментов сохранено {cq.get('unreliable_transcript_segments',0)}; "
+        f"для смысловой аналитики использовано {cq.get('semantic_derivation_transcript_segments',0)}; "
+        f"исключение ненадёжных сегментов — {'включено' if cq.get('unreliable_segments_excluded_from_semantic_derivation') else 'не подтверждено'}."
+    ),body))
+    st.append(Paragraph(escape(
+        f"Семантика: эпизодов {cq.get('semantic_episodes',0)}; автоисправлений {cq.get('semantic_auto_corrections',0)}; "
+        f"неразрешённых критических кандидатов {cq.get('semantic_critical_unresolved',0)}; "
+        f"раздач-кандидатов {cq.get('deal_candidates',0)}; решений-кандидатов {cq.get('decision_candidates',0)}."
+    ),body))
+    st.append(Paragraph(escape(
+        f"Разметка ролей: {cq.get('actor_attribution_status') or 'не установлена'}; "
+        f"метки говорящих {'есть' if cq.get('speaker_labels_present') else 'отсутствуют'}; "
+        f"неподтверждённых персональных утверждений исключено {cq.get('actor_specific_claims_excluded',0)}."
+    ),body))
+    st.append(Paragraph(escape(
+        f"Визуальный анализ: доказательств {cq.get('visual_evidence_items',0)}; "
+        f"кадров в отчёте {cq.get('selected_report_visuals',0)}. "
+        f"Канонических связей в master JSON {cq.get('canon_links_found',0)}."
+    ),body))
+    st.append(Paragraph('Полные технические данные, все несвёрнутые учебные циклы, canon links и исходный master_analysis.json встроены в PDF без сокращения.',body))
+    doc.build(st)
 def embed_master(pdf,master):
     import fitz
     raw=json.dumps(master,ensure_ascii=False,indent=2).encode();d=fitz.open(pdf);d.embfile_add('master_analysis.json',raw,filename='master_analysis.json',ufilename='master_analysis.json',desc='Bridge Video 3.1 FREE master analysis');tmp=Path(str(pdf)+'.embed.pdf');d.save(tmp,garbage=4,deflate=True);d.close();tmp.replace(pdf);return hashlib.sha256(raw).hexdigest()
