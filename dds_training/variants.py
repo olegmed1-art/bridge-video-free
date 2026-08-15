@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
+import sqlite3
+from pathlib import Path
 from typing import Iterable
 
 from config import STRAINS
@@ -137,3 +140,62 @@ def create_variants(task: dict) -> list[dict]:
         perturb_task(task, "p1"),
         perturb_task(task, "p2"),
     ]
+
+
+def create_error_followups(
+    base_tasks_path: Path,
+    con: sqlite3.Connection,
+    out_path: Path,
+    max_sources: int = 500,
+) -> dict:
+    """Create blind discrimination tasks from the strongest recorded errors.
+
+    No DDS answer is copied into the derived tasks. They must receive fresh blind
+    predictions before evaluation, so transfer cannot be faked by answer leakage.
+    """
+    base = {}
+    for line in base_tasks_path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            task = json.loads(line)
+            base[task["task_id"]] = task
+
+    source_rows = con.execute(
+        """
+        SELECT e.task_id, MAX(COALESCE(e.magnitude,0)) AS magnitude,
+               MAX(CASE WHEN se.confidence='high' AND se.outcome!='success' THEN 1 ELSE 0 END) AS high_conf
+        FROM error_events e
+        LEFT JOIN skill_evidence se ON se.task_id=e.task_id
+        GROUP BY e.task_id
+        ORDER BY high_conf DESC, magnitude DESC, e.task_id
+        LIMIT ?
+        """,
+        (max_sources,),
+    ).fetchall()
+
+    variants: list[dict] = []
+    skipped = 0
+    for source_id, magnitude, high_conf in source_rows:
+        task = base.get(source_id)
+        if task is None:
+            skipped += 1
+            continue
+        for v in create_variants(task):
+            v["source_error_magnitude"] = float(magnitude or 0)
+            v["source_high_confidence_error"] = bool(high_conf)
+            v["blind"] = True
+            variants.append(v)
+
+    # Deterministic de-duplication keeps the file reproducible across reruns.
+    by_id = {v["task_id"]: v for v in variants}
+    ordered = [by_id[k] for k in sorted(by_id)]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8") as f:
+        for row in ordered:
+            f.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    return {
+        "source_errors": len(source_rows),
+        "source_errors_skipped": skipped,
+        "derived_tasks": len(ordered),
+        "path": str(out_path),
+        "dds_called": False,
+    }
