@@ -39,6 +39,19 @@ def _sort_cards(cards: Iterable[str]) -> str:
     return "".join(sorted(cards, key=lambda r: order[r]))
 
 
+def _root_split(task: dict) -> str:
+    return str(task.get("source_root_split", task.get("split", "unknown")))
+
+
+def _mark_derived(out: dict, source: dict, evidence_type: str) -> None:
+    out["split"] = "derived"
+    out["derived_from_task_id"] = source["task_id"]
+    out["source_split"] = source.get("split")
+    out["source_root_split"] = _root_split(source)
+    out["evidence_type"] = evidence_type
+    out["blind"] = True
+
+
 def rotate_task(task: dict, steps: int = 2) -> dict:
     """Rotate all four seats while preserving the mathematical bridge position."""
     steps %= 4
@@ -51,9 +64,7 @@ def rotate_task(task: dict, steps: int = 2) -> dict:
     out["declarer"] = (int(task["declarer"]) + steps) % 4
     if "leader" in task:
         out["leader"] = (int(task["leader"]) + steps) % 4
-    out["split"] = "derived"
-    out["derived_from_task_id"] = task["task_id"]
-    out["evidence_type"] = "symmetry"
+    _mark_derived(out, task, "symmetry")
     return out
 
 
@@ -79,9 +90,7 @@ def permute_suits_task(task: dict, mapping: tuple[int, int, int, int] = (1, 0, 3
     old_strain = int(task["strain"])
     out["strain"] = 4 if old_strain == 4 else mapping[old_strain]
     out["strain_name"] = STRAINS[out["strain"]]
-    out["split"] = "derived"
-    out["derived_from_task_id"] = task["task_id"]
-    out["evidence_type"] = "symmetry"
+    _mark_derived(out, task, "symmetry")
     return out
 
 
@@ -118,9 +127,7 @@ def perturb_task(task: dict, salt: str = "p1") -> dict:
     out["task_id"] = f"{task['task_id']}-PERT-{salt}"
     out["deal_id"] = f"{task['deal_id']}-PERT-{salt}"
     out["deal"] = _render_deal(new_hands)
-    out["split"] = "derived"
-    out["derived_from_task_id"] = task["task_id"]
-    out["evidence_type"] = "perturbation"
+    _mark_derived(out, task, "perturbation")
     out["perturbation"] = {
         "suit": STRAINS[suit],
         "seat_a": SEATS[a],
@@ -133,13 +140,20 @@ def perturb_task(task: dict, salt: str = "p1") -> dict:
 
 def create_variants(task: dict) -> list[dict]:
     """Standard discrimination set: seat rotation, suit rename and perturbation."""
-    return [
+    variants = [
         rotate_task(task, 1),
         rotate_task(task, 2),
         permute_suits_task(task),
         perturb_task(task, "p1"),
         perturb_task(task, "p2"),
     ]
+    # Different salts can rarely select the same physical rank swap. Remove
+    # duplicate mathematical tasks by position+role, not merely by task id.
+    unique: dict[tuple, dict] = {}
+    for v in variants:
+        key = (v["deal"], v.get("task_type"), v.get("declarer"), v.get("strain"), v.get("leader"))
+        unique.setdefault(key, v)
+    return list(unique.values())
 
 
 def create_error_followups(
@@ -148,10 +162,11 @@ def create_error_followups(
     out_path: Path,
     max_sources: int = 500,
 ) -> dict:
-    """Create blind discrimination tasks from the strongest recorded errors.
+    """Create blind discrimination tasks from TRAIN errors only.
 
-    No DDS answer is copied into the derived tasks. They must receive fresh blind
-    predictions before evaluation, so transfer cannot be faked by answer leakage.
+    Validation and sealed-test errors are deliberately excluded. Their purpose is
+    measurement, not training. No DDS answer is copied into derived tasks; every
+    follow-up must receive a fresh blind prediction before DDS evaluation.
     """
     base = {}
     for line in base_tasks_path.read_text(encoding="utf-8").splitlines():
@@ -164,7 +179,9 @@ def create_error_followups(
         SELECT e.task_id, MAX(COALESCE(e.magnitude,0)) AS magnitude,
                MAX(CASE WHEN se.confidence='high' AND se.outcome!='success' THEN 1 ELSE 0 END) AS high_conf
         FROM error_events e
+        JOIN dds_results r ON r.task_id=e.task_id
         LEFT JOIN skill_evidence se ON se.task_id=e.task_id
+        WHERE r.split='train'
         GROUP BY e.task_id
         ORDER BY high_conf DESC, magnitude DESC, e.task_id
         LIMIT ?
@@ -176,18 +193,24 @@ def create_error_followups(
     skipped = 0
     for source_id, magnitude, high_conf in source_rows:
         task = base.get(source_id)
-        if task is None:
+        if task is None or task.get("split") != "train":
             skipped += 1
             continue
         for v in create_variants(task):
             v["source_error_magnitude"] = float(magnitude or 0)
             v["source_high_confidence_error"] = bool(high_conf)
-            v["blind"] = True
             variants.append(v)
 
-    # Deterministic de-duplication keeps the file reproducible across reruns.
-    by_id = {v["task_id"]: v for v in variants}
-    ordered = [by_id[k] for k in sorted(by_id)]
+    # Deterministic de-duplication by mathematical task fingerprint prevents two
+    # different derived ids from accidentally testing the same position.
+    by_fingerprint: dict[tuple, dict] = {}
+    for v in variants:
+        key = (v["deal"], v.get("task_type"), v.get("declarer"), v.get("strain"), v.get("leader"))
+        current = by_fingerprint.get(key)
+        if current is None or v["task_id"] < current["task_id"]:
+            by_fingerprint[key] = v
+    ordered = sorted(by_fingerprint.values(), key=lambda x: x["task_id"])
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as f:
         for row in ordered:
@@ -196,6 +219,7 @@ def create_error_followups(
         "source_errors": len(source_rows),
         "source_errors_skipped": skipped,
         "derived_tasks": len(ordered),
+        "source_policy": "train_only",
         "path": str(out_path),
         "dds_called": False,
     }
