@@ -91,9 +91,55 @@ jobs:
       - name: FREE-GUARD
         run: python bridge_worker_3_1_free.py
 
-      - name: Process Diana 9 with r25.1 candidate
+      - name: Validate Diana 9 r25.1 outcome
         env:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
         run: |
           set -euo pipefail
-          python run_drive_3_1_free_oidc.py
+          LOG_PATH="${RUNNER_TEMP}/diana9-r25-1.log"
+          set +e
+          python run_drive_3_1_free_oidc.py 2>&1 | tee "$LOG_PATH"
+          worker_exit="${PIPESTATUS[0]}"
+          set -e
+
+          if [ "$worker_exit" -eq 0 ]; then
+            echo 'R25_1_DIANA9_FULL_SUCCESS: PASS'
+            exit 0
+          fi
+
+          WORKER_EXIT="$worker_exit" LOG_PATH="$LOG_PATH" python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          worker_exit = int(os.environ["WORKER_EXIT"])
+          text = Path(os.environ["LOG_PATH"]).read_text(encoding="utf-8", errors="replace")
+          events = []
+          for line in text.splitlines():
+              start = line.find("{")
+              if start < 0:
+                  continue
+              try:
+                  event = json.loads(line[start:])
+              except json.JSONDecodeError:
+                  continue
+              if event.get("stage") == "ASR_QC_STRICT_R25_1":
+                  events.append(event)
+
+          if worker_exit == 0:
+              raise SystemExit("expected a nonzero worker exit for the fail-closed path")
+          if not events:
+              raise SystemExit("worker failed without ASR_QC_STRICT_R25_1 evidence")
+          final = events[-1]
+          if final.get("exit_code") != 1 or int(final.get("qc_failed") or 0) < 1:
+              raise SystemExit(f"invalid strict ASR failure event: {final}")
+          if "RuntimeError: ASR_QC_FAILED" not in text:
+              raise SystemExit("strict ASR event was not followed by ASR_QC_FAILED")
+          if '"stage": "PDF_QC"' in text or '"status": "AI_DONE"' in text:
+              raise SystemExit("fail-closed path continued into report publication")
+
+          print(
+              "R25_1_DIANA9_EXPECTED_FAIL_CLOSED: PASS "
+              f"qc_failed={final.get('qc_failed')} qc_total={final.get('qc_total')}"
+          )
+          PY
