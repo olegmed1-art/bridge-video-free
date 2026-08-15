@@ -7,6 +7,7 @@ from pathlib import Path
 
 from audit import audit_database
 from investigations import open_investigations, sync_required_investigations
+from regression_links import sync_regression_skill_links
 from run_provenance import ensure_run_task_table
 from stage_scope import task_in_stage
 from storage import connect
@@ -20,9 +21,10 @@ def assess_stage(work: Path, stage: str) -> dict:
     """Assess whether a stage is truly complete before report/next-stage work.
 
     This gate is intentionally separate from DDS evaluation. It never calls DDS
-    and never mutates skill memory. It synchronizes the mandatory-investigation
-    ledger, checks fresh stage task coverage and database provenance, then gives
-    one concrete next action for the operator/user.
+    and never changes the meaning of a skill. It synchronizes append-only
+    provenance derived from already recorded facts (investigation ledger and
+    multi-skill regression links), checks fresh stage task coverage/database
+    integrity, then gives one concrete next action for the operator/user.
     """
     task_path = work / "blind_tasks.jsonl"
     if not task_path.exists():
@@ -33,7 +35,8 @@ def assess_stage(work: Path, stage: str) -> dict:
 
     con = connect(work / "training.sqlite3")
     ensure_run_task_table(con)
-    sync_required_investigations(con, run_id=f"stage-gate-{stage}")
+    investigation_sync = sync_required_investigations(con, run_id=f"stage-gate-{stage}")
+    regression_link_sync = sync_regression_skill_links(con)
     con.commit()
 
     evaluated_ids = {
@@ -55,7 +58,8 @@ def assess_stage(work: Path, stage: str) -> dict:
     }
 
     open_items = open_investigations(con)
-    open_stage = [x for x in open_items if x["task_id"] in {t["task_id"] for t in stage_tasks}]
+    stage_ids = {t["task_id"] for t in stage_tasks}
+    open_stage = [x for x in open_items if x["task_id"] in stage_ids]
     audit = audit_database(con)
     report_path = work / f"report_{stage}.md"
 
@@ -85,6 +89,8 @@ def assess_stage(work: Path, stage: str) -> dict:
         "evaluated_by_split": {k: int(actual_by_split[k]) for k in expected_by_split},
         "missing_by_split": missing_by_split,
         "open_mandatory_investigations": len(open_stage),
+        "investigation_sync": investigation_sync,
+        "regression_skill_link_sync": regression_link_sync,
         "audit_status": audit["status"],
         "ready_for_report": ready_for_report,
         "report_exists": report_exists,
