@@ -8,6 +8,10 @@ on:
       - '.github/workflows/dds-training-local-smoke.yml'
   workflow_dispatch:
 
+concurrency:
+  group: dds-training-local-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
