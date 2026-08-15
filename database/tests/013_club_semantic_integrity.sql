@@ -79,7 +79,9 @@ BEGIN
     RETURNING entitlement_id INTO v_entitlement;
     INSERT INTO entitlement_usage(entitlement_id,quantity_used,reference_type)
     VALUES (v_entitlement,1,'consume') RETURNING entitlement_usage_id INTO v_usage;
-    UPDATE person_entitlement SET status='revoked' WHERE entitlement_id=v_entitlement;
+    UPDATE person_entitlement
+       SET status='revoked', valid_to=now()
+     WHERE entitlement_id=v_entitlement;
 
     BEGIN
         INSERT INTO entitlement_usage(entitlement_id,quantity_used,reference_type)
@@ -120,7 +122,9 @@ BEGIN
     VALUES (v_school,v_communication,v_person,'system','Semantic message')
     RETURNING message_id INTO v_message;
 
-    UPDATE contact_method SET status='revoked' WHERE contact_method_id=v_contact;
+    UPDATE contact_method
+       SET status='revoked', valid_to=now()
+     WHERE contact_method_id=v_contact;
     BEGIN
         INSERT INTO message_delivery(school_id,message_id,recipient_person_id,contact_method_id,channel,status)
         VALUES (v_school,v_message,v_person,v_contact,'email','queued');
