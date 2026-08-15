@@ -72,6 +72,27 @@ def generate_report(work: Path, stage: str) -> Path:
     corrections = con.execute("SELECT COUNT(*) FROM correction_events").fetchone()[0]
     regression_cases = con.execute("SELECT COUNT(*) FROM regression_cases WHERE active=1").fetchone()[0]
     experience_events = con.execute("SELECT COUNT(*) FROM experience_events").fetchone()[0]
+    rule_versions = con.execute("SELECT COUNT(*) FROM rule_versions").fetchone()[0]
+    spaced_reviews = con.execute("SELECT COUNT(*) FROM learning_queue WHERE purpose='spaced_review' AND status='planned'").fetchone()[0]
+
+    reasoning_counts = Counter()
+    gross_decl_loss = gross_def_gift = recovered_loss = value_trajectories = 0
+    first_error_counts = Counter()
+    for event_type, payload_json in con.execute(
+        "SELECT event_type,payload_json FROM experience_events WHERE event_type IN ('reasoning_review','value_trajectory')"
+    ):
+        payload = json.loads(payload_json)
+        if event_type == "reasoning_review":
+            reasoning_counts[payload.get("verdict", "unknown")] += 1
+        else:
+            value_trajectories += 1
+            gross_decl_loss += int(payload.get("declarer_gross_loss", 0))
+            gross_def_gift += int(payload.get("defense_gross_gift", 0))
+            recovered_loss += int(payload.get("recovered_declarer_loss", 0))
+            first = payload.get("first_error")
+            if first:
+                first_error_counts[first.get("actor", "unknown")] += 1
+
     audit = audit_database(con)
     plan = build_learning_plan(con, 10)
 
@@ -103,8 +124,10 @@ def generate_report(work: Path, stage: str) -> Path:
         "## Durable experience memory",
         f"- Experience events: {experience_events}",
         f"- Active regression cases: {regression_cases}",
+        f"- Planned spaced reviews: {spaced_reviews}",
         f"- High-confidence errors: {high_conf_errors}",
         f"- Correction events (append-only): {corrections}",
+        f"- Versioned bridge rules: {rule_versions}",
         f"- Skills: candidate {skill_status['candidate']}, testing {skill_status['testing']}, confirmed {skill_status['confirmed']}, stable {skill_status['stable']}, weakened {skill_status['weakened']}",
         "",
         "### Skill states",
@@ -117,6 +140,21 @@ def generate_report(work: Path, stage: str) -> Path:
         )
 
     lines += [
+        "",
+        "## Reasoning quality independent of final result",
+        f"- Reasoning reviews: {sum(reasoning_counts.values())}",
+        f"- Correct result but wrong reasoning: {reasoning_counts['correct_result_wrong_reasoning']}",
+        f"- Correct reasoning: {reasoning_counts['correct']}",
+        f"- Incorrect reasoning: {reasoning_counts['incorrect']}",
+        f"- Needs review: {reasoning_counts['needs_review']}",
+        "",
+        "## DD value trajectories / first-error accounting",
+        f"- Recorded trajectories: {value_trajectories}",
+        f"- First error by declarer: {first_error_counts['declarer']}",
+        f"- First error by defense: {first_error_counts['defense']}",
+        f"- Gross declarer tricks lost: {gross_decl_loss}",
+        f"- Gross tricks gifted by defense: {gross_def_gift}",
+        f"- Previously lost declarer tricks later restored by defense: {recovered_loss}",
         "",
         "## Mandatory investigations",
         f"- Better-than-DDS / defense-over-DDS claims requiring replay: {investigations}",
@@ -135,7 +173,7 @@ def generate_report(work: Path, stage: str) -> Path:
         lines.append(
             f"- `{item['skill_key']}` priority {item['priority']:.4f}: error rate {item['error_rate']:.2%}, "
             f"mean regret {item['mean_regret']:.3f}, high-confidence errors {item['high_confidence_errors']}; "
-            f"recommend {item['recommended_targeted_tasks']} transfer/counterexample/regression tasks."
+            f"recommend {item['recommended_targeted_tasks']} transfer/counterexample/regression/symmetry/perturbation tasks."
         )
 
     lines += [
@@ -152,13 +190,13 @@ def generate_report(work: Path, stage: str) -> Path:
         "",
         "## Learning policy",
         "Locked predictions, DDS results and error events are immutable. A discovered mistake in import, classification or interpretation is appended as a correction event; the original evidence remains auditable.",
-        "A rule is not promoted because DDS contradicted one deal. It must survive unseen transfer deals, counterexamples and regression checks. High-confidence errors receive extra priority because they indicate a likely wrong internal heuristic rather than simple uncertainty.",
+        "A rule is not promoted because DDS contradicted one deal. It must survive unseen transfer deals, symmetry/perturbation checks, counterexamples and regression checks. High-confidence errors receive extra priority because they indicate a likely wrong internal heuristic rather than simple uncertainty.",
         "",
         "## User decision before next stage",
         "Do not expand the corpus mechanically. Review the strongest stable weaknesses and proposed rule changes, then approve whether the next corpus should remain broad or become targeted.",
         "",
         "## Stage completion rule",
-        "A stage is complete only after: train evaluation, validation evaluation, error investigation, experience/skill update, regression pass, counterexample checks, sealed-test evaluation, database audit, and this report.",
+        "A stage is complete only after: train evaluation, validation evaluation, error investigation, experience/skill update, spaced retention checks, regression pass, counterexample checks, sealed-test evaluation, database audit, and this report.",
     ]
 
     out = work / f"report_{stage}.md"
