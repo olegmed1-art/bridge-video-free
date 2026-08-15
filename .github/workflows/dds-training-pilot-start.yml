@@ -1,0 +1,149 @@
+name: DDS pilot 10k — train phase
+
+on:
+  push:
+    branches: [dds-training-local]
+    paths:
+      - '.github/workflows/dds-training-pilot-start.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: dds-pilot-10k-train
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  WORK: dds_training/work/pilot
+  DDS_TRAINING_CONFIRM: YES
+  PYTHONUNBUFFERED: '1'
+
+jobs:
+  train:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Compile training code
+        working-directory: dds_training
+        run: python -m compileall -q .
+
+      - name: Bootstrap local DDS3
+        run: bash dds_training/bootstrap_linux.sh
+
+      - name: Prepare deterministic 10k pilot corpus
+        working-directory: dds_training
+        run: |
+          source .venv/bin/activate
+          python run_stage.py prepare --stage pilot --out work/pilot
+
+      - name: Create locked blind TRAIN predictions without DDS
+        working-directory: dds_training
+        run: |
+          source .venv/bin/activate
+          python baseline_predictor.py \
+            --tasks work/pilot/blind_tasks.jsonl \
+            --out work/pilot/locked_predictions_train.jsonl \
+            --splits train \
+            --predictor-version bridge-baseline-v0.1
+
+      - name: Verify prediction count before DDS exposure
+        working-directory: dds_training
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('work/pilot/locked_predictions_train.jsonl')
+          rows=[json.loads(x) for x in p.read_text(encoding='utf-8').splitlines() if x.strip()]
+          assert len(rows)==14000, len(rows)
+          assert all(r.get('locked') is True for r in rows)
+          assert all(r.get('predictor_version')=='bridge-baseline-v0.1' for r in rows)
+          print({'locked_train_predictions':len(rows),'dds_called':False})
+          PY
+
+      - name: Start DDS learning — TRAIN split only
+        working-directory: dds_training
+        run: |
+          source .venv/bin/activate
+          python run_stage.py evaluate \
+            --stage pilot \
+            --work work/pilot \
+            --predictions work/pilot/locked_predictions_train.jsonl \
+            --splits train \
+            --start \
+            --run-id pilot-train-${{ github.run_id }} \
+            --checkpoint-every 100 \
+            --snapshot-every 1000 \
+            --milestone-every 5000 \
+            --max-followup-sources 500 \
+            | tee work/pilot/train_evaluate.log
+
+      - name: Synchronize mandatory better-than-DDS investigations
+        if: always()
+        working-directory: dds_training
+        run: |
+          source .venv/bin/activate
+          if [ -f work/pilot/training.sqlite3 ]; then
+            python investigations.py --work work/pilot sync --run-id pilot-train-${{ github.run_id }} | tee work/pilot/investigation_sync.json
+            python investigations.py --work work/pilot list-open > work/pilot/open_investigations.json
+          fi
+
+      - name: Record current stage gate status
+        if: always()
+        working-directory: dds_training
+        run: |
+          source .venv/bin/activate
+          if [ -f work/pilot/training.sqlite3 ]; then
+            python stage_gate.py --work work/pilot --stage pilot | tee work/pilot/stage_gate_after_train.json || true
+          fi
+
+      - name: Create train-phase summary
+        if: always()
+        working-directory: dds_training
+        run: |
+          source .venv/bin/activate
+          python - <<'PY'
+          import json, sqlite3
+          from pathlib import Path
+          work=Path('work/pilot')
+          out={'phase':'pilot_train','training_started':True}
+          dbp=work/'training.sqlite3'
+          if dbp.exists():
+              db=sqlite3.connect(dbp)
+              out['predictions']=db.execute("select count(*) from predictions where split='train'").fetchone()[0]
+              out['dds_results']=db.execute("select count(*) from dds_results where split='train'").fetchone()[0]
+              out['errors']=db.execute("select count(*) from error_events").fetchone()[0]
+              out['skill_evidence']=db.execute("select count(*) from skill_evidence").fetchone()[0]
+              try:
+                  out['open_investigations']=db.execute("""
+                    select count(*) from investigation_events i
+                    join (select task_id,max(id) id from investigation_events group by task_id) x on x.id=i.id
+                    where i.event_type in ('opened','reopened')
+                  """).fetchone()[0]
+              except sqlite3.OperationalError:
+                  out['open_investigations']=None
+          (work/'train_phase_summary.json').write_text(json.dumps(out,indent=2),encoding='utf-8')
+          print(json.dumps(out,indent=2))
+          PY
+
+      - name: Package durable pilot state
+        if: always()
+        run: |
+          if [ -d dds_training/work/pilot ]; then
+            tar -czf dds-pilot-10k-train-state.tgz -C dds_training/work pilot
+          fi
+
+      - name: Upload durable pilot state
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dds-pilot-10k-train-state-${{ github.run_id }}
+          path: dds-pilot-10k-train-state.tgz
+          if-no-files-found: warn
+          retention-days: 30
