@@ -179,6 +179,18 @@ def create_variants(task: dict, batch_id: str | None = None) -> list[dict]:
     return list(unique.values())
 
 
+def _default_followup_batch(con: sqlite3.Connection) -> str:
+    """Idempotent until learning progress changes, fresh after new evaluations.
+
+    Manual/automatic repeated generation before any new DDS result returns the
+    same batch. Once more tasks have been evaluated, the progress signature
+    changes and the next reinforcement set receives fresh blind task IDs/salts.
+    """
+    evaluated = int(con.execute("SELECT COUNT(*) FROM dds_results").fetchone()[0])
+    evidence = int(con.execute("SELECT COUNT(*) FROM skill_evidence").fetchone()[0])
+    return f"auto-e{evaluated}-s{evidence}"
+
+
 def create_error_followups(
     base_tasks_path: Path,
     con: sqlite3.Connection,
@@ -189,9 +201,14 @@ def create_error_followups(
     """Create fresh blind discrimination tasks from TRAIN errors only.
 
     Validation and sealed-test errors are deliberately excluded. Their purpose is
-    measurement, not training. No DDS answer is copied into derived tasks; every
-    follow-up receives a fresh blind task ID for the supplied batch.
+    measurement, not training. No DDS answer is copied into derived tasks. If no
+    explicit batch id is supplied, the database learning-progress signature is
+    used: generation is idempotent until new evaluation/evidence appears and then
+    automatically creates a fresh retest batch.
     """
+    if batch_id is None:
+        batch_id = _default_followup_batch(con)
+
     base = {}
     for line in base_tasks_path.read_text(encoding="utf-8").splitlines():
         if line.strip():
