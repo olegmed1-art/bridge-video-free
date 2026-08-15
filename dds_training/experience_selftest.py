@@ -6,8 +6,9 @@ import tempfile
 from pathlib import Path
 
 from audit import audit_database
-from learning import build_learning_plan, record_task_experience
+from learning import build_learning_plan, record_skill_check, record_task_experience
 from storage import add_regression_case, connect, record_correction, upsert_prediction, upsert_result
+from variants import create_variants
 
 
 def main() -> None:
@@ -18,6 +19,10 @@ def main() -> None:
             "deal_id": "SELFTEST-DEAL",
             "task_type": "contract_tricks",
             "split": "train",
+            "deal": "N:QJ6.K652.J85.T98 873.J97.AT764.Q4 K5.T83.KQ9.A7652 AT942.AQ4.32.KJ3",
+            "declarer": 2,
+            "strain": 4,
+            "strain_name": "NT",
         }
         prediction = {
             "task_id": task["task_id"],
@@ -52,6 +57,25 @@ def main() -> None:
             reason="Self-test correction proves append-only correction path.",
             replacement={"note": "original fact remains untouched"},
         )
+
+        variants = create_variants(task)
+        assert len(variants) == 5
+        assert len({v["task_id"] for v in variants}) == 5
+        assert all(v["split"] == "derived" for v in variants)
+        assert any(v["evidence_type"] == "perturbation" for v in variants)
+        assert any(v["evidence_type"] == "symmetry" for v in variants)
+        # Demonstrate the public transfer-evidence path without promoting from one example.
+        transfer_status = record_skill_check(
+            db,
+            skill_key="declarer.overclaim_detection",
+            task_id=variants[0]["task_id"],
+            deal_id=variants[0]["deal_id"],
+            evidence_type="symmetry",
+            success=True,
+            confidence="high",
+            run_id="selftest",
+            details={"source": task["task_id"]},
+        )
         db.commit()
 
         # Idempotent identical insert is allowed; mutation is not.
@@ -85,6 +109,8 @@ def main() -> None:
             "immutable_dds_results": True,
             "append_only_corrections": True,
             "skills_recorded": skills,
+            "transfer_status": transfer_status,
+            "derived_variants": [v["task_id"] for v in variants],
             "learning_plan_top": plan[0],
             "audit": audit,
         }, indent=2))
