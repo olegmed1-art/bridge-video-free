@@ -23,7 +23,8 @@ jobs:
           python-version: '3.14'
 
       - name: Restore DDS3 Bazel disk cache
-        uses: actions/cache@v4
+        id: dds-cache
+        uses: actions/cache/restore@v4
         with:
           path: ~/.cache/bazel-dds3
           key: dds3-v3.0.0-bazel7.6.1-py314-${{ runner.os }}
@@ -56,3 +57,10 @@ jobs:
           assert tasks==20000, tasks
           print({'pilot_deals':s['count'],'splits':s['splits'],'blind_tasks':tasks,'dds_training_started':False})
           PY
+
+      - name: Save DDS3 Bazel disk cache
+        if: always() && steps.dds-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/bazel-dds3
+          key: dds3-v3.0.0-bazel7.6.1-py314-${{ runner.os }}
