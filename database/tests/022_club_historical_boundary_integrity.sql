@@ -13,8 +13,10 @@ DECLARE
     v_package_price uuid;
     v_grant uuid;
     v_entitlement uuid;
+    v_historical_entitlement uuid;
     v_usage uuid;
     v_contact uuid;
+    v_old_contact uuid;
     v_communication uuid;
     v_message uuid;
 BEGIN
@@ -170,6 +172,32 @@ BEGIN
         IF SQLERRM='revoked package grant without valid_to unexpectedly accepted' THEN RAISE; END IF;
     END;
 
+    -- Historical consumption entered after an entitlement is already expired remains
+    -- valid when the business timestamp lies inside the former validity window.
+    INSERT INTO person_entitlement(
+        school_id,person_id,service_id,quantity_granted,valid_from,valid_to,status
+    ) VALUES (
+        v_school,v_person,v_service,2,
+        now()-interval '3 days',now()-interval '1 day','expired'
+    ) RETURNING entitlement_id INTO v_historical_entitlement;
+
+    INSERT INTO entitlement_usage(
+        entitlement_id,quantity_used,occurred_at,reference_type
+    ) VALUES (
+        v_historical_entitlement,1,now()-interval '2 days','historical-consumption-backfill'
+    );
+
+    BEGIN
+        INSERT INTO entitlement_usage(
+            entitlement_id,quantity_used,occurred_at,reference_type
+        ) VALUES (
+            v_historical_entitlement,1,now(),'late-consumption-after-expiry'
+        );
+        RAISE EXCEPTION 'consumption after expired entitlement validity unexpectedly accepted';
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM='consumption after expired entitlement validity unexpectedly accepted' THEN RAISE; END IF;
+    END;
+
     INSERT INTO contact_method(
         school_id,person_id,channel,normalized_value,verification_status,preferred_flag
     ) VALUES (
@@ -206,12 +234,41 @@ BEGIN
     EXCEPTION WHEN OTHERS THEN
         IF SQLERRM='contact validity was moved before recorded delivery' THEN RAISE; END IF;
     END;
+
+    -- A now-revoked contact may still be used to import an older delivery that occurred
+    -- while the contact was valid. A new delivery after valid_to is still rejected.
+    INSERT INTO contact_method(
+        school_id,person_id,channel,normalized_value,verification_status,preferred_flag,
+        valid_from,valid_to,status
+    ) VALUES (
+        v_school,v_person,'email','historical-old@example.invalid','verified',false,
+        now()-interval '3 days',now()-interval '1 day','revoked'
+    ) RETURNING contact_method_id INTO v_old_contact;
+
+    INSERT INTO message_delivery(
+        school_id,message_id,recipient_person_id,contact_method_id,channel,status,queued_at,attempt_no
+    ) VALUES (
+        v_school,v_message,v_person,v_old_contact,'email','queued',now()-interval '2 days',2
+    );
+
+    BEGIN
+        INSERT INTO message_delivery(
+            school_id,message_id,recipient_person_id,contact_method_id,channel,status,queued_at,attempt_no
+        ) VALUES (
+            v_school,v_message,v_person,v_old_contact,'email','queued',now(),3
+        );
+        RAISE EXCEPTION 'delivery after revoked contact validity unexpectedly accepted';
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM='delivery after revoked contact validity unexpectedly accepted' THEN RAISE; END IF;
+    END;
 END $$;
 
 DO $$
 BEGIN
-    IF has_function_privilege('bridge_school_app_principal','validate_entitlement_valid_to_history()','EXECUTE')
+    IF has_function_privilege('bridge_school_app_principal','validate_entitlement_usage_active_status()','EXECUTE')
+       OR has_function_privilege('bridge_school_app_principal','validate_entitlement_valid_to_history()','EXECUTE')
        OR has_function_privilege('bridge_school_finance_principal','validate_package_grant_valid_to_history()','EXECUTE')
+       OR has_function_privilege('bridge_school_worker_principal','validate_delivery_active_contact()','EXECUTE')
        OR has_function_privilege('bridge_school_app_principal','validate_contact_valid_to_history()','EXECUTE')
        OR has_function_privilege('bridge_school_finance_principal','validate_commercial_effective_to_history()','EXECUTE') THEN
         RAISE EXCEPTION 'runtime principal can execute historical-boundary helper directly';
