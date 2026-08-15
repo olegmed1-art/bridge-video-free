@@ -232,6 +232,9 @@ def cmd_evaluate(args) -> None:
             actual = table_values[task["task_id"]]
             guessed = int(pred["tricks"])
             delta = guessed - actual
+            # Analyzer revision is deliberately NOT stored in this immutable fact.
+            # Version/provenance lives in `runs` and `skill_evidence`, so a future
+            # analyzer can reinterpret the same DDS fact without creating a conflict.
             result = {
                 "dds_tricks": actual,
                 "predicted_tricks": guessed,
@@ -240,7 +243,6 @@ def cmd_evaluate(args) -> None:
                 "dd_regret": None,
                 "investigation_required": delta > 0,
                 "error_code": "OK" if delta == 0 else "D_OVER_DDS_CLAIM" if delta > 0 else "D_MISSED_TRICKS",
-                "algorithm_version": ALGORITHM_VERSION,
             }
         else:
             result = evaluate_opening_lead(task["deal"], task["strain"], task["declarer"], pred["card"])
@@ -248,7 +250,6 @@ def cmd_evaluate(args) -> None:
             over_claim = expected is not None and int(expected) > int(result["best_defense_tricks"])
             result["expected_defense_tricks"] = expected
             result["investigation_required"] = bool(over_claim)
-            result["algorithm_version"] = ALGORITHM_VERSION
             if not result["legal_or_equivalent"]:
                 result["error_code"] = "F_ILLEGAL_OR_UNREPRESENTED_LEAD"
             elif result["dd_regret"] == 0:
@@ -353,6 +354,67 @@ def cmd_evaluate(args) -> None:
     }, indent=2))
 
 
+def cmd_reinterpret(args) -> None:
+    """Rebuild current-version experience from immutable stored facts, no DDS call.
+
+    This is used after an analyzer revision so historical predictions/results stay
+    immutable while the new revision can derive a fresh skill interpretation.
+    Holdouts remain excluded.
+    """
+    if not args.apply:
+        raise SystemExit("Experience reinterpretation blocked: add --apply")
+    work = Path(args.work)
+    task_path = _task_path(work, args.tasks_file)
+    tasks = load_jsonl(task_path)
+    if args.limit:
+        tasks = tasks[: args.limit]
+    db = connect(work / "training.sqlite3")
+    predictions = {k: json.loads(v) for k, v in db.execute("SELECT task_id,prediction_json FROM predictions")}
+    results = {k: json.loads(v) for k, v in db.execute("SELECT task_id,result_json FROM dds_results")}
+
+    processed = already_current = holdout_skipped = missing_facts = derived_checks = 0
+    for task in tasks:
+        if not learning_allowed_for_task(task):
+            holdout_skipped += 1
+            continue
+        task_id = task["task_id"]
+        if task_id not in predictions or task_id not in results:
+            missing_facts += 1
+            continue
+        exists = db.execute(
+            "SELECT 1 FROM skill_evidence WHERE task_id=? AND algorithm_version=? LIMIT 1",
+            (task_id, ALGORITHM_VERSION),
+        ).fetchone()
+        if exists:
+            already_current += 1
+            continue
+        pred, result = predictions[task_id], results[task_id]
+        learned_skills = record_task_experience(db, task, pred, result, args.run_id)
+        derived_checks += len(_derived_transfer_evidence(db, task, pred, result, args.run_id))
+        if result.get("error_code") != "OK":
+            add_regression_case(db, task, result, learned_skills[0] if learned_skills else None)
+        processed += 1
+
+    recompute_all_skills(db)
+    plan = build_learning_plan(db)
+    persist_learning_plan(db, plan, args.run_id)
+    audit = audit_database(db)
+    persist_audit(db, audit, args.run_id)
+    db.commit()
+    print(json.dumps({
+        "algorithm_version": ALGORITHM_VERSION,
+        "task_file": str(task_path),
+        "processed": processed,
+        "already_current": already_current,
+        "holdout_skipped": holdout_skipped,
+        "missing_facts": missing_facts,
+        "derived_skill_checks_recorded": derived_checks,
+        "dds_called": False,
+        "learning_plan_top": plan[:5],
+        "audit": audit,
+    }, indent=2))
+
+
 def cmd_followups(args) -> None:
     work = Path(args.work)
     db = connect(work / "training.sqlite3")
@@ -437,6 +499,14 @@ def parser() -> argparse.ArgumentParser:
     q.add_argument("--generate-followups", action=argparse.BooleanOptionalAction, default=True)
     q.add_argument("--max-followup-sources", type=int, default=500)
     q.set_defaults(func=cmd_evaluate)
+
+    q = sp.add_parser("reinterpret", help="Rebuild current-version learning from stored facts; never calls DDS")
+    q.add_argument("--work", required=True)
+    q.add_argument("--tasks-file", help="Task JSONL relative to --work; default blind_tasks.jsonl")
+    q.add_argument("--limit", type=int)
+    q.add_argument("--apply", action="store_true")
+    q.add_argument("--run-id", default=None)
+    q.set_defaults(func=cmd_reinterpret)
 
     q = sp.add_parser("followups", help="Create blind symmetry/perturbation tasks from TRAIN errors only; no DDS call")
     q.add_argument("--work", required=True)
