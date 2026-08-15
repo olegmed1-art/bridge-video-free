@@ -1,1 +1,0 @@
-Candidate manifest: migrations 0020_club_operations_core, 0021_club_financial_ledger, 0022_club_communications_admin, 0023_club_state_order_hardening, 0024_club_runtime_financial_hardening; test 011_club_operations.sql.
