@@ -8,6 +8,27 @@ BEGIN;
 -- validity/effective boundary from being moved before dependent historical facts.
 -- -----------------------------------------------------------------------------
 
+-- Lifecycle labels that mean a validity period has actually ended must carry the
+-- corresponding temporal boundary. `invalid` is intentionally excluded because an
+-- invalid/quarantined row may never have represented a valid period at all.
+ALTER TABLE club_membership
+    ADD CONSTRAINT club_membership_closed_status_requires_valid_to_ck
+    CHECK (status NOT IN ('ended','cancelled') OR valid_to IS NOT NULL) NOT VALID;
+ALTER TABLE club_membership
+    VALIDATE CONSTRAINT club_membership_closed_status_requires_valid_to_ck;
+
+ALTER TABLE contact_method
+    ADD CONSTRAINT contact_method_closed_status_requires_valid_to_ck
+    CHECK (status NOT IN ('superseded','revoked') OR valid_to IS NOT NULL) NOT VALID;
+ALTER TABLE contact_method
+    VALIDATE CONSTRAINT contact_method_closed_status_requires_valid_to_ck;
+
+ALTER TABLE person_entitlement
+    ADD CONSTRAINT person_entitlement_closed_status_requires_valid_to_ck
+    CHECK (status NOT IN ('expired','revoked') OR valid_to IS NOT NULL) NOT VALID;
+ALTER TABLE person_entitlement
+    VALIDATE CONSTRAINT person_entitlement_closed_status_requires_valid_to_ck;
+
 ALTER TABLE person_package_grant
     ADD CONSTRAINT person_package_grant_closed_status_requires_valid_to_ck
     CHECK (status NOT IN ('expired','revoked') OR valid_to IS NOT NULL) NOT VALID;
