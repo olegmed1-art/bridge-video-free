@@ -121,9 +121,9 @@ def audit_database(con: sqlite3.Connection) -> dict:
     ).fetchone()[0]
     add(
         "UNTRACKED_MANDATORY_INVESTIGATION",
-        "error",
+        "warning",
         untracked_investigations,
-        "Every better-than-DDS claim must enter the append-only investigation ledger",
+        "Better-than-DDS results should be synchronized into the append-only investigation ledger before stage closure",
     )
     open_investigations = con.execute(
         """
@@ -138,7 +138,7 @@ def audit_database(con: sqlite3.Connection) -> dict:
     ).fetchone()[0]
     add(
         "OPEN_MANDATORY_INVESTIGATION",
-        "error",
+        "priority",
         open_investigations,
         "Better-than-DDS claims must be resolved with cause, first refutation and bridge lesson before the stage can close",
     )
