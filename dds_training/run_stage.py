@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 
 from audit import audit_database, audit_manifest, persist_audit
+from checkpointing import snapshot_database
 from config import ALGORITHM_VERSION, BATCH_SIZE_DD_TABLE, PROJECT_SEED, STAGES
 from corpus import generate_corpus, validate_pbn_corpus
 from dds_engine import contract_tricks_batch, engine_info, evaluate_opening_lead
@@ -72,6 +73,33 @@ def _task_path(work: Path, value: str | None) -> Path:
     return p if p.is_absolute() else work / p
 
 
+def _corpus_hash(work: Path) -> str:
+    p = work / "corpus_summary.json"
+    if not p.exists():
+        return "unknown"
+    return str(json.loads(p.read_text(encoding="utf-8")).get("raw_sha256", "unknown"))
+
+
+def _register_run(db, args, work: Path) -> None:
+    db.execute(
+        """
+        INSERT OR IGNORE INTO runs
+          (run_id,stage,seed,corpus_sha256,solver_info_json,algorithm_version,status)
+        VALUES(?,?,?,?,?,?,?)
+        """,
+        (
+            args.run_id,
+            args.stage,
+            PROJECT_SEED,
+            _corpus_hash(work),
+            json.dumps(engine_info(), ensure_ascii=False, sort_keys=True),
+            ALGORITHM_VERSION,
+            "running",
+        ),
+    )
+    db.commit()
+
+
 def _derived_transfer_evidence(db, task: dict, pred: dict, result: dict, run_id: str) -> list[str]:
     source_id = task.get("derived_from_task_id")
     evidence_type = task.get("evidence_type")
@@ -123,7 +151,9 @@ def cmd_evaluate(args) -> None:
     if missing:
         raise SystemExit(f"DDS evaluation blocked: {len(missing)} requested tasks lack locked predictions; first={missing[0]}")
 
-    db = connect(work / "training.sqlite3")
+    db_path = work / "training.sqlite3"
+    db = connect(db_path)
+    _register_run(db, args, work)
     for task in requested:
         upsert_prediction(db, task, predictions[task["task_id"]])
     db.commit()
@@ -141,6 +171,7 @@ def cmd_evaluate(args) -> None:
     completed = 0
     error_count = 0
     derived_checks = 0
+    last_snapshot = None
     for task in todo:
         pred = predictions[task["task_id"]]
         if task["task_type"] == "contract_tricks":
@@ -191,6 +222,17 @@ def cmd_evaluate(args) -> None:
                 (args.run_id, completed, error_count, next_id, f"automatic checkpoint; algorithm={ALGORITHM_VERSION}"),
             )
             db.commit()
+            if completed % args.snapshot_every == 0:
+                last_snapshot = snapshot_database(
+                    db,
+                    db_path=db_path,
+                    snapshot_dir=work / "checkpoints",
+                    run_id=args.run_id,
+                    completed_tasks=completed,
+                    errors=error_count,
+                    next_task_id=next_id,
+                    keep_milestone_every=args.milestone_every,
+                )
             print(f"checkpoint: {completed}/{len(todo)}")
 
     recompute_all_skills(db)
@@ -206,7 +248,22 @@ def cmd_evaluate(args) -> None:
         )
     audit = audit_database(db)
     persist_audit(db, audit, args.run_id)
+    db.execute(
+        "UPDATE runs SET status=?, completed_at=CURRENT_TIMESTAMP WHERE run_id=?",
+        ("completed" if audit["status"] == "ok" else "completed_with_audit_error", args.run_id),
+    )
     db.commit()
+    next_id = None
+    last_snapshot = snapshot_database(
+        db,
+        db_path=db_path,
+        snapshot_dir=work / "checkpoints",
+        run_id=args.run_id,
+        completed_tasks=completed,
+        errors=error_count,
+        next_task_id=next_id,
+        keep_milestone_every=args.milestone_every,
+    )
     print(json.dumps({
         "run_id": args.run_id,
         "algorithm_version": ALGORITHM_VERSION,
@@ -218,6 +275,7 @@ def cmd_evaluate(args) -> None:
         "derived_skill_checks_recorded": derived_checks,
         "blind_followups": followups,
         "learning_plan_top": plan[:5],
+        "checkpoint_snapshot": last_snapshot,
         "audit": audit,
         "solver": engine_info(),
     }, indent=2))
@@ -301,6 +359,8 @@ def parser() -> argparse.ArgumentParser:
     q.add_argument("--open-sealed", action="store_true")
     q.add_argument("--limit", type=int)
     q.add_argument("--checkpoint-every", type=int, default=100)
+    q.add_argument("--snapshot-every", type=int, default=1000)
+    q.add_argument("--milestone-every", type=int, default=5000)
     q.add_argument("--run-id", default=None)
     q.add_argument("--generate-followups", action=argparse.BooleanOptionalAction, default=True)
     q.add_argument("--max-followup-sources", type=int, default=500)
