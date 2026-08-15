@@ -20,6 +20,8 @@ Status: candidate architecture on `main`; production remains unchanged on schema
 14. `0033_club_membership_state_history` — append-only membership lifecycle history captured automatically from the existing status-update contract.
 15. `0034_club_communication_identity_hardening` — immutable historical communication/campaign/task identities and campaign content lock after leaving draft.
 16. `0035_club_commercial_provenance_time` — charge/grant provenance must reference a non-candidate commercial version effective at the business timestamp.
+17. `0036_club_historical_boundary_integrity` — business-time historical imports, explicit closure boundaries and protection against retroactively invalidating already-recorded usage/delivery/commercial provenance.
+18. `0037_club_charge_ledger_provenance_integrity` — unambiguous charge origin, Booking/Service consistency and PaymentAllocation business chronology.
 
 ## Verification gates
 
@@ -34,11 +36,14 @@ Status: candidate architecture on `main`; production remains unchanged on schema
 - `019_club_membership_state_history.sql`
 - `020_club_communication_identity_hardening.sql`
 - `021_club_commercial_provenance_time.sql`
+- `022_club_historical_boundary_integrity.sql`
+- `023_club_charge_ledger_provenance_integrity.sql`
 - all legacy database invariant tests.
 
 Required CI gates remain: PostgreSQL 18 clean install, runtime DSN contract tests, all invariant tests, migration idempotence, immutable migration checksum/tamper guard and migration registry verification.
 
-Latest post-merge `main` database CI for the `0020–0035` candidate: run `31907731704`, `success`.
+Seventh-pass candidate CI: run `31910012398`, `success`.
+Latest post-merge `main` database CI for the `0020–0037` candidate: run `31910114003`, `success`.
 
 ## Production promotion boundary
 
