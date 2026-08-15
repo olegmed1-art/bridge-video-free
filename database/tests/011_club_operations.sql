@@ -12,6 +12,7 @@ DECLARE
     v_price uuid;
     v_package uuid;
     v_package_version uuid;
+    v_package_grant uuid;
     v_entitlement uuid;
     v_usage uuid;
     v_event uuid;
@@ -59,9 +60,12 @@ BEGIN
     VALUES (v_package,1,now(),'active') RETURNING package_version_id INTO v_package_version;
     INSERT INTO package_service_rule(package_version_id,service_id,quantity)
     VALUES (v_package_version,v_service,8);
+    INSERT INTO person_package_grant(school_id,person_id,package_version_id)
+    VALUES (v_school,v_person,v_package_version)
+    RETURNING package_grant_id INTO v_package_grant;
 
-    INSERT INTO person_entitlement(school_id,person_id,service_id,package_version_id,quantity_granted)
-    VALUES (v_school,v_person,v_service,v_package_version,8)
+    INSERT INTO person_entitlement(school_id,person_id,service_id,package_version_id,package_grant_id,quantity_granted)
+    VALUES (v_school,v_person,v_service,v_package_version,v_package_grant,8)
     RETURNING entitlement_id INTO v_entitlement;
 
     INSERT INTO entitlement_usage(entitlement_id,quantity_used,reference_type)
