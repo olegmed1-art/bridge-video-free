@@ -9,7 +9,9 @@ This directory contains the bridge DDS-learning loop and its durable experience 
 - Storage: local files + SQLite. No paid DDS API and no per-request DDS charge.
 - Raw PBN is kept free of DDS answers. DDS results are stored separately.
 - Training cannot start accidentally: evaluation requires both `--start` and `DDS_TRAINING_CONFIRM=YES`.
-- Sealed-test data has an additional guard.
+- Sealed-test data has an additional fail-closed guard and must be evaluated alone.
+
+Current analyzer revision: **dds-learning-v2.1**.
 
 ## Stages
 
@@ -27,17 +29,31 @@ DDS is never exposed before the assistant's prediction is locked:
 
 `evaluate` refuses to score a task without a locked prediction.
 
+## Strict holdout isolation
+
+The three corpus splits have different jobs:
+
+- `train` — may change skills, rules, spaced-review queues and regression memory;
+- `validation` — **evaluation only**; its answers may not change skills/rules or generate training follow-ups;
+- `sealed_test` — **final evaluation only**; it never changes learning state and can only be opened explicitly in a sealed-only run.
+
+Derived symmetry/perturbation tasks keep their full ancestry (`source_split`, `source_root_split`). They can update learning only when the root split is `train`. This prevents a validation or sealed-test error from leaking back into training through a derived task.
+
+The database audit treats any validation/sealed skill evidence as an error.
+
 ## Durable experience memory
 
 The database is split conceptually into **immutable evidence** and **evolving interpretation**.
 
-Immutable / append-only evidence includes locked predictions, DDS results, error events and skill evidence. SQLite triggers prevent silent UPDATE/DELETE of these rows. If import, classification or interpretation later proves wrong, the system writes a `correction_event`; it does not erase the original fact.
+Immutable / append-only evidence includes locked predictions, DDS results and error events. Their immutable task metadata (`deal_id`, `task_type`, `split`) is verified on every reuse. SQLite triggers also protect experience/correction/counterexample/history/audit/checkpoint records from silent UPDATE/DELETE.
+
+If import, classification or interpretation later proves wrong, the system writes a `correction_event`; it does not erase the original fact.
 
 Evolving learning state includes:
 
 - `skill_profiles` — candidate / testing / confirmed / stable / weakened skills;
 - `skill_evidence` — direct, transfer, regression, counterexample, symmetry, perturbation and real-world evidence;
-- `skill_state_history` — every lifecycle transition;
+- `skill_state_history` — lifecycle transitions;
 - `rule_versions` — versioned candidate/confirmed rules rather than silent replacement;
 - `regression_cases` — permanent tests created from meaningful failures;
 - `counterexamples` — similar-looking positions where a rule must not be applied;
@@ -46,7 +62,28 @@ Evolving learning state includes:
 - `correction_events` — append-only database corrections;
 - `audit_events` — integrity/provenance audits.
 
-A rule is not promoted merely because DDS contradicted one deal. Confirmation requires successful transfer to unseen positions. Stability additionally requires regression passes and counterexamples. A stable skill that later fails regression is weakened and returns to active training.
+Skill interpretation is analyzer-version aware. Historical evidence remains auditable, but current skill metrics use the current analyzer revision. A stable skill can be weakened by a fresh regression or counterexample failure and later recover only after a new clean success streak plus the full transfer criteria.
+
+## Reinterpreting old experience after an analyzer upgrade
+
+DDS mathematical facts are deliberately separated from the analyzer revision. A new analyzer version can therefore rebuild its own skill interpretation from already locked predictions/results **without rerunning DDS and without rewriting history**:
+
+```bash
+python run_stage.py reinterpret --work work/pilot --apply
+```
+
+`reinterpret` is explicit, skips validation/sealed tasks, does not call DDS, does not change the locked prediction/result, and adds only current-version experience evidence.
+
+## DD value trajectory and first-error accounting
+
+For a played line, value is defined on a constant scale as **projected final declarer tricks under optimal continuation**.
+
+- a declarer error lowers that value;
+- a defense error raises it;
+- zero change may still require reasoning review;
+- the first value-changing error is retained even if the opponent later gives the trick back.
+
+Recovery is temporal: a later defensive gift can restore an earlier declarer loss, but an earlier defensive gift cannot retroactively repair a later declarer error. The system separately stores gross declarer loss, gross defensive gift, restored losses, squandered prior gifts and unrecovered loss/gift. Opposite-direction value changes are flagged as trajectory invariant violations, usually indicating a position/parsing/value-definition error.
 
 ## What receives extra training
 
@@ -58,8 +95,11 @@ Targeted follow-up can use:
 - counterexamples;
 - old regression failures;
 - rotational/suit symmetry checks;
-- one-card perturbations;
+- minimal legal rank-swap perturbations;
+- spaced review;
 - later, real tournament deals as a transfer test.
+
+Follow-up generation uses **train errors only** and deduplicates mathematical task fingerprints so identical derived positions are not counted twice under different IDs.
 
 The goal is to learn the bridge mechanism, not memorize the DDS card.
 
@@ -70,6 +110,12 @@ Defense is a first-class target. Pilot tasks include opening leads; later target
 ## Better-than-DDS claims
 
 If a prediction claims more tricks than DDS, or claims the defense can take more than DDS allows, the case is marked `investigation_required`. It must be replayed against optimal opposition to find the first point where the proposed line relies on an opponent error.
+
+## Crash-safe continuation
+
+Evaluation writes lightweight checkpoints regularly and full SQLite snapshots at larger intervals. Progress after resume is cumulative over the requested task set rather than restarting counters from zero. Each run records stage, seed, corpus hash, solver information, analyzer version, selected splits, task file, prediction-file SHA-256 and whether sealed data was explicitly opened.
+
+Reusing the same `run_id` with different provenance is rejected.
 
 ## Local bootstrap
 
@@ -101,6 +147,8 @@ python run_stage.py evaluate --stage pilot --work work/pilot --predictions locke
 
 No `--start`, no confirmation token, or missing locked predictions => no DDS training.
 
+Sealed evaluation additionally requires `--open-sealed`, and `sealed_test` must be the only requested split in that run.
+
 ## Audit, planning and corrections
 
 These commands do not start DDS evaluation:
@@ -111,6 +159,10 @@ python run_stage.py plan --work work/pilot
 python run_stage.py correct --work work/pilot --target-table skill_evidence --target-key TASK_ID \
   --correction-type classification --reason "reason for correction"
 ```
+
+## Reports and generalization
+
+Reports separate train / derived / validation / sealed metrics and explicitly show train-to-validation gaps. Validation and sealed learning-leak counters must remain zero. This makes it possible to distinguish genuine generalization from improvement caused by learning the benchmark itself.
 
 ## Reproducibility
 
