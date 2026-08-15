@@ -1,0 +1,54 @@
+name: DDS local training smoke
+
+on:
+  push:
+    branches: [dds-training-local]
+    paths:
+      - 'dds_training/**'
+      - '.github/workflows/dds-training-local-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: dds_training/requirements.txt
+
+      - name: Bootstrap local DDS3 and run technical preflight
+        run: bash dds_training/bootstrap_linux.sh
+
+      - name: Verify launch guard blocks accidental training
+        working-directory: dds_training
+        run: |
+          set -euo pipefail
+          python run_stage.py prepare --stage pilot --out /tmp/dds-pilot-prepared
+          if python run_stage.py evaluate --stage pilot --work /tmp/dds-pilot-prepared --predictions /tmp/does-not-exist.jsonl 2>/tmp/guard.err; then
+            echo "ERROR: evaluate unexpectedly ran without --start" >&2
+            exit 1
+          fi
+          grep -q -- "--start was not supplied" /tmp/guard.err
+
+      - name: Check deterministic pilot preparation
+        working-directory: dds_training
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('/tmp/dds-pilot-prepared/corpus_summary.json').read_text())
+          assert s['count']==10000, s
+          assert s['splits']=={'train':7000,'validation':1500,'sealed_test':1500}, s['splits']
+          tasks=sum(1 for _ in Path('/tmp/dds-pilot-prepared/blind_tasks.jsonl').open())
+          assert tasks==20000, tasks
+          print({'pilot_deals':s['count'],'splits':s['splits'],'blind_tasks':tasks,'dds_training_started':False})
+          PY
