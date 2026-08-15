@@ -4,7 +4,7 @@ import json
 import math
 import sqlite3
 
-from config import ALGORITHM_VERSION, EVALUATION_ONLY_SPLITS, LEARNING_SPLITS, SKILL_LIFECYCLE
+from config import ALGORITHM_VERSION, SKILL_LIFECYCLE
 from experience_events import schedule_spaced_reviews
 
 
@@ -43,17 +43,18 @@ SKILL_CATALOG = {
 
 
 def learning_allowed_for_task(task: dict) -> bool:
-    """Return True only when this task is allowed to alter skill/rule memory.
+    """Return True only when this task may alter skill/rule memory.
 
-    Validation and sealed-test tasks are strictly evaluation-only. Derived tasks
-    may learn only when their root source was a learning split, preventing a
-    validation/sealed error from being turned into a training follow-up.
+    Validation and sealed-test tasks are evaluation-only. A derived task may
+    learn only if its root source is the train split, preventing benchmark
+    leakage through follow-up generation.
     """
     split = str(task.get("split", ""))
-    if split not in LEARNING_SPLITS:
-        return False
-    root = str(task.get("source_root_split", split))
-    return root not in EVALUATION_ONLY_SPLITS
+    if split == "train":
+        return True
+    if split == "derived":
+        return str(task.get("source_root_split", "")) == "train"
+    return False
 
 
 def _confidence_value(prediction: dict) -> str:
@@ -129,11 +130,7 @@ def record_task_experience(
     result: dict,
     run_id: str | None = None,
 ) -> list[str]:
-    """Persist append-only learning evidence derived from one evaluated task.
-
-    Holdout tasks must never call this function; callers should use
-    `learning_allowed_for_task` before recording experience.
-    """
+    """Persist append-only learning evidence derived from one evaluated task."""
     if not learning_allowed_for_task(task):
         raise ValueError(f"Learning is forbidden for split/root: {task.get('split')}/{task.get('source_root_split')}")
 
@@ -282,8 +279,12 @@ def _consecutive_successes(rows: list[tuple]) -> int:
 
 def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
     rows = con.execute(
-        "SELECT id,evidence_type,outcome,split,confidence,COALESCE(regret,0) FROM skill_evidence WHERE skill_key=? ORDER BY id",
-        (skill_key,),
+        """
+        SELECT id,evidence_type,outcome,split,confidence,COALESCE(regret,0)
+        FROM skill_evidence
+        WHERE skill_key=? AND algorithm_version=? ORDER BY id
+        """,
+        (skill_key, ALGORITHM_VERSION),
     ).fetchall()
     if not rows:
         return "candidate"
@@ -319,9 +320,6 @@ def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
     if stable_ready:
         new_status = "stable"
 
-    # A fresh regression failure weakens a previously stable/confirmed skill.
-    # Historical failures do not poison the skill forever: after a new clean
-    # streak and all stability criteria are met, it can return to stable.
     if latest_regression_failed and old_status in {"stable", "confirmed", "weakened"}:
         new_status = "weakened"
     elif old_status == "weakened" and stable_ready and recent_regression_streak >= SKILL_LIFECYCLE["recovery_regression_passes"]:
@@ -331,10 +329,10 @@ def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
         """
         UPDATE skill_profiles
         SET status=?, evidence_count=?, transfer_count=?, regression_passes=?, regression_failures=?,
-            counterexample_count=?, updated_at=CURRENT_TIMESTAMP
+            counterexample_count=?, algorithm_version=?, updated_at=CURRENT_TIMESTAMP
         WHERE skill_key=?
         """,
-        (new_status, total, len(transfer), regression_pass, regression_fail, counterexample_pass, skill_key),
+        (new_status, total, len(transfer), regression_pass, regression_fail, counterexample_pass, ALGORITHM_VERSION, skill_key),
     )
     if old_status and old_status != new_status:
         con.execute(
@@ -345,6 +343,7 @@ def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
                 new_status,
                 json.dumps(
                     {
+                        "algorithm_version": ALGORITHM_VERSION,
                         "total": total,
                         "transfer": len(transfer),
                         "transfer_rate": transfer_rate,
@@ -368,7 +367,7 @@ def recompute_all_skills(con: sqlite3.Connection) -> None:
 
 
 def build_learning_plan(con: sqlite3.Connection, limit: int = 20) -> list[dict]:
-    """Rank weaknesses for the next targeted corpus without changing the benchmark."""
+    """Rank current-version weaknesses without using holdout evidence."""
     rows = con.execute(
         """
         SELECT skill_key,
@@ -379,8 +378,10 @@ def build_learning_plan(con: sqlite3.Connection, limit: int = 20) -> list[dict]:
         FROM skill_evidence
         WHERE evidence_type IN ('direct','error_pattern')
           AND split IN ('train','derived')
+          AND algorithm_version=?
         GROUP BY skill_key
-        """
+        """,
+        (ALGORITHM_VERSION,),
     ).fetchall()
     plan = []
     for key, n, errors, mean_regret, high_conf_errors in rows:
