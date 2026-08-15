@@ -3,8 +3,9 @@ BEGIN;
 
 -- -----------------------------------------------------------------------------
 -- ClubMembership lifecycle history.
--- The base row is the stable membership-period identity. Lifecycle changes are
--- append-only state events so pause/resume/end/cancel history is not overwritten.
+-- The base row remains a convenient current-state mirror, while every lifecycle
+-- change is also appended as an immutable state event. This preserves existing app
+-- update semantics without losing pause/resume/end/cancel history.
 -- No transition policy is invented here; this migration only preserves chronology.
 -- -----------------------------------------------------------------------------
 
@@ -51,7 +52,7 @@ BEFORE INSERT ON club_membership_state_event
 FOR EACH ROW EXECUTE FUNCTION validate_club_membership_state_event_scope();
 
 -- If a non-production branch already has membership rows, seed one initial event for
--- each row before switching runtime updates to the append-only lifecycle model.
+-- each row before switching to the lifecycle-history model.
 INSERT INTO club_membership_state_event(
     club_membership_id, state, occurred_at, metadata
 )
@@ -67,8 +68,7 @@ WHERE NOT EXISTS (
      WHERE se.club_membership_id=m.club_membership_id
 );
 
--- Every future membership period gets an initial immutable state event. This keeps old
--- insert callers compatible while making the event stream complete by construction.
+-- Every future membership period gets an initial immutable state event.
 CREATE OR REPLACE FUNCTION seed_club_membership_initial_state()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -91,6 +91,32 @@ CREATE TRIGGER club_membership_initial_state_seed
 AFTER INSERT ON club_membership
 FOR EACH ROW EXECUTE FUNCTION seed_club_membership_initial_state();
 
+-- Existing callers may update the current status column. Capture every actual status
+-- change automatically as an event so that the convenience mirror cannot erase history.
+CREATE OR REPLACE FUNCTION capture_club_membership_status_change()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.status IS DISTINCT FROM OLD.status THEN
+        INSERT INTO club_membership_state_event(
+            club_membership_id, state, occurred_at, metadata
+        ) VALUES (
+            NEW.club_membership_id,
+            NEW.status,
+            now(),
+            jsonb_build_object('source','membership_status_update')
+        );
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS club_membership_status_history ON club_membership;
+CREATE TRIGGER club_membership_status_history
+AFTER UPDATE OF status ON club_membership
+FOR EACH ROW EXECUTE FUNCTION capture_club_membership_status_change();
+
 CREATE OR REPLACE VIEW club_membership_current_state AS
 SELECT DISTINCT ON (m.club_membership_id)
     m.club_membership_id,
@@ -111,18 +137,16 @@ ORDER BY m.club_membership_id,
          se.occurred_at DESC NULLS LAST,
          se.state_sequence DESC NULLS LAST;
 
--- The one-open-period invariant now depends only on the stable period boundary.
--- Lifecycle state lives in events; a new membership period requires the prior period
--- to be closed with valid_to regardless of its last state label.
+-- The one-open-period invariant depends only on the stable period boundary. State can
+-- pause/resume many times; a new membership period requires the prior period to close.
 DROP INDEX IF EXISTS club_membership_one_open_type_uk;
 CREATE UNIQUE INDEX club_membership_one_open_type_uk
     ON club_membership(school_id, person_id, membership_type)
     WHERE valid_to IS NULL;
 
--- Runtime no longer rewrites membership status. End of the membership period may still
--- close valid_to; lifecycle state itself is appended to the event table.
+-- Keep existing runtime status/valid_to update contract, but event history is automatic.
 REVOKE UPDATE ON TABLE club_membership FROM bridge_school_app, bridge_school_worker;
-GRANT UPDATE (valid_to) ON club_membership TO bridge_school_app;
+GRANT UPDATE (valid_to, status) ON club_membership TO bridge_school_app;
 GRANT INSERT ON TABLE club_membership_state_event TO bridge_school_app;
 REVOKE UPDATE, DELETE ON TABLE club_membership_state_event
 FROM bridge_school_reader, bridge_school_app, bridge_school_worker, bridge_school_finance;
@@ -136,6 +160,9 @@ REVOKE ALL ON FUNCTION validate_club_membership_state_event_scope()
 FROM PUBLIC, bridge_school_reader, bridge_school_app, bridge_school_worker,
      bridge_school_health, bridge_school_finance;
 REVOKE ALL ON FUNCTION seed_club_membership_initial_state()
+FROM PUBLIC, bridge_school_reader, bridge_school_app, bridge_school_worker,
+     bridge_school_health, bridge_school_finance;
+REVOKE ALL ON FUNCTION capture_club_membership_status_change()
 FROM PUBLIC, bridge_school_reader, bridge_school_app, bridge_school_worker,
      bridge_school_health, bridge_school_finance;
 
