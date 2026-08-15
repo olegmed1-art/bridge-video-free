@@ -1,0 +1,143 @@
+name: Bridge Video r25.5 PDF Regression
+
+on:
+  push:
+    branches:
+      - algorithm/3.1-free-r25.5-pdf-text-boundaries
+    paths:
+      - '.github/workflows/video-r25-5-pdf-regression.yml'
+      - 'bridge_runtime_hardening_r25_5.py'
+      - 'run_drive_3_1_free_generic.py'
+      - 'tests/test_pdf_text_boundaries_r25_5.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-video-r25-5-pdf-regression
+  cancel-in-progress: false
+
+jobs:
+  pdf-regression:
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: 3.1-free-r25.5
+      GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+      PYTHONUNBUFFERED: '1'
+
+    steps:
+      - name: Checkout r25.5 candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+
+      - name: Install PDF regression runtime
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-dejavu-core
+          python -m pip install --disable-pip-version-check -r requirements-worker.txt
+
+      - name: Run inherited 3.1 FREE guards and r25.5 unit regression
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python tests/test_asr_qc_r25_1.py
+          PYTHONPATH=. python tests/test_semantic_gate_r25_2.py
+          PYTHONPATH=. python tests/test_late_oauth_r25_3.py
+          PYTHONPATH=. python tests/test_unreliable_asr_isolation_r25_4.py
+          PYTHONPATH=. python tests/test_pdf_text_boundaries_r25_5.py
+          python -m py_compile \
+            bridge_runtime_hardening_r25_1.py \
+            bridge_runtime_hardening_r25_2.py \
+            bridge_runtime_hardening_r25_3.py \
+            bridge_runtime_hardening_r25_4.py \
+            bridge_runtime_hardening_r25_5.py \
+            run_drive_3_1_free_generic.py
+
+      - name: Google Drive OAuth preflight
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from run_drive_3_1_free_oidc import user_oauth_token
+          token = user_oauth_token()
+          if not token:
+              raise SystemExit('BLOCKED_ACCESS: GOOGLE_DRIVE_OAUTH_JSON secret is not configured')
+          print('Google Drive OAuth preflight: PASS')
+          PY
+
+      - name: Rebuild known-good Sunday master PDF with r25.5
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import tempfile
+          from pathlib import Path
+
+          import fitz
+
+          import bridge_runtime_hardening_r25_5 as r25_5
+          import run_drive_3_1_free as io
+          import run_master_3_1_free as base
+          from run_drive_3_1_free_oidc import user_oauth_token
+
+          # Confirmed r25.4 control produced from the known-good Sunday lesson.
+          CONTROL_PDF_ID = '1ddMegXm7Yqt9EB3oqYn_U15JEYFzH_4w'
+          token = user_oauth_token()
+          r25_5.install(lambda: token)
+
+          with tempfile.TemporaryDirectory() as td:
+              td = Path(td)
+              old_pdf = td / 'control-r25.4.pdf'
+              new_pdf = td / 'control-r25.5.pdf'
+              io.download(token, CONTROL_PDF_ID, old_pdf)
+
+              old_doc = fitz.open(old_pdf)
+              try:
+                  names = set(old_doc.embfile_names())
+                  if 'master_analysis.json' not in names:
+                      raise SystemExit('control PDF is missing embedded master_analysis.json')
+                  old_text = '\n'.join(page.get_text() for page in old_doc)
+                  master = json.loads(old_doc.embfile_get('master_analysis.json').decode('utf-8'))
+              finally:
+                  old_doc.close()
+
+              old_issues = r25_5.pdf_text_boundary_issues(old_text)
+              if not old_issues:
+                  raise SystemExit('known-good r25.4 control no longer reproduces the confirmed text-boundary defect')
+
+              master['algorithmRevision'] = r25_5.REVISION
+              base.pdf_report(new_pdf, master, [])
+              base.embed_master(new_pdf, master)
+              qc = base.pdfqc(new_pdf)
+              if not qc.get('ok'):
+                  raise SystemExit(f'r25.5 regenerated PDF failed QC: {qc}')
+              if not (qc.get('textBoundaryCheck') or {}).get('ok'):
+                  raise SystemExit(f'r25.5 text boundary check failed: {qc}')
+
+              new_doc = fitz.open(new_pdf)
+              try:
+                  new_text = '\n'.join(page.get_text() for page in new_doc)
+                  if 'master_analysis.json' not in set(new_doc.embfile_names()):
+                      raise SystemExit('r25.5 regenerated PDF is missing embedded master_analysis.json')
+              finally:
+                  new_doc.close()
+
+              new_issues = r25_5.pdf_text_boundary_issues(new_text)
+              if new_issues:
+                  raise SystemExit(f'r25.5 still contains text-boundary defects: {new_issues}')
+              if 'Алгоритм: 3.1 FREE / 3.1-free-r25.5' not in new_text:
+                  raise SystemExit('r25.5 revision marker missing from regenerated PDF')
+
+              print(
+                  'R25_5_KNOWN_GOOD_PDF_REGRESSION: PASS '
+                  f'old_issues={old_issues} new_issues={new_issues} pages={qc.get("pages")}'
+              )
+          PY
