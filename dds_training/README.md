@@ -6,6 +6,7 @@ This directory contains the preparation layer for the bridge DDS-learning loop.
 
 - Primary mathematical engine: **DDS3 v3.0.0**, built locally from the official `dds-bridge/dds` source.
 - Python helper layer: **endplay 0.5.12** for bridge types/PBN utilities when useful.
+- Runtime baseline: **Linux/WSL2 + Python 3.13**. This combination is pinned by our tested bootstrap so the compiled DDS3 extension and the published endplay wheel use the same Python runtime.
 - DDS3 remains the source of truth; endplay's bundled older DDS is not used as the primary training labeler.
 - Storage: local files + SQLite. No paid DDS API and no per-request DDS charge.
 - Raw PBN is kept free of DDS answers. DDS results are written to separate result files/database rows.
@@ -37,7 +38,7 @@ If a prediction claims more tricks than DDS allows, or claims the defense can ta
 
 ## Local bootstrap
 
-Linux / WSL2:
+Linux / WSL2 with Python 3.13:
 
 ```bash
 cd dds_training
@@ -46,7 +47,7 @@ source .venv/bin/activate
 python preflight.py --quick
 ```
 
-Windows users should use WSL2 or a Linux container for DDS3's Python binding. DDS3's Python documentation currently supports Linux/macOS source builds; the school pipeline is therefore pinned to Linux for reproducibility.
+The bootstrap builds DDS3 locally from the pinned official v3.0.0 source and then runs a non-training technical preflight.
 
 ## Preparation only
 
@@ -68,6 +69,8 @@ python run_stage.py evaluate --stage pilot --work work/pilot --predictions locke
 ```
 
 The workflow is intentionally fail-closed: no `--start`, no confirmation variable, or missing locked predictions => no DDS training.
+
+The sealed test has an additional guard and is not opened during training/validation.
 
 ## Reproducibility
 

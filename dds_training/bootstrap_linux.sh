@@ -4,10 +4,13 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$HERE"
 
-PYTHON_BIN="${PYTHON_BIN:-python3.12}"
+# DDS3's current Bazel/Python wheel build links against the modern Python
+# thread-state API. Python 3.13 also has a published endplay 0.5.12 wheel,
+# making it the reproducible intersection for this local stack.
+PYTHON_BIN="${PYTHON_BIN:-python3.13}"
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-  echo "Python 3.12 is required for the reproducible DDS training environment." >&2
-  echo "Install python3.12 (WSL2/Linux) and run again." >&2
+  echo "Python 3.13 is required for the reproducible DDS training environment." >&2
+  echo "Install python3.13 (WSL2/Linux) and run again." >&2
   exit 2
 fi
 
