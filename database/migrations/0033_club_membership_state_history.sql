@@ -50,7 +50,24 @@ CREATE TRIGGER club_membership_state_event_scope_guard
 BEFORE INSERT ON club_membership_state_event
 FOR EACH ROW EXECUTE FUNCTION validate_club_membership_state_event_scope();
 
--- Every new membership period gets an initial immutable state event. This keeps old
+-- If a non-production branch already has membership rows, seed one initial event for
+-- each row before switching runtime updates to the append-only lifecycle model.
+INSERT INTO club_membership_state_event(
+    club_membership_id, state, occurred_at, metadata
+)
+SELECT
+    m.club_membership_id,
+    m.status,
+    m.valid_from,
+    jsonb_build_object('source','membership_state_history_backfill')
+FROM club_membership m
+WHERE NOT EXISTS (
+    SELECT 1
+      FROM club_membership_state_event se
+     WHERE se.club_membership_id=m.club_membership_id
+);
+
+-- Every future membership period gets an initial immutable state event. This keeps old
 -- insert callers compatible while making the event stream complete by construction.
 CREATE OR REPLACE FUNCTION seed_club_membership_initial_state()
 RETURNS trigger
@@ -93,6 +110,14 @@ LEFT JOIN club_membership_state_event se
 ORDER BY m.club_membership_id,
          se.occurred_at DESC NULLS LAST,
          se.state_sequence DESC NULLS LAST;
+
+-- The one-open-period invariant now depends only on the stable period boundary.
+-- Lifecycle state lives in events; a new membership period requires the prior period
+-- to be closed with valid_to regardless of its last state label.
+DROP INDEX IF EXISTS club_membership_one_open_type_uk;
+CREATE UNIQUE INDEX club_membership_one_open_type_uk
+    ON club_membership(school_id, person_id, membership_type)
+    WHERE valid_to IS NULL;
 
 -- Runtime no longer rewrites membership status. End of the membership period may still
 -- close valid_to; lifecycle state itself is appended to the event table.
