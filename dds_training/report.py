@@ -5,6 +5,10 @@ import sqlite3
 from collections import Counter
 from pathlib import Path
 
+from audit import audit_database
+from config import ALGORITHM_VERSION
+from learning import build_learning_plan
+
 
 def _pct(a: int, b: int) -> str:
     return "n/a" if not b else f"{100.0*a/b:.2f}%"
@@ -54,10 +58,28 @@ def generate_report(work: Path, stage: str) -> Path:
     if p.exists():
         corpus_summary = json.loads(p.read_text(encoding="utf-8"))
 
+    skill_rows = con.execute(
+        """
+        SELECT skill_key,status,evidence_count,transfer_count,regression_passes,
+               regression_failures,counterexample_count
+        FROM skill_profiles ORDER BY skill_key
+        """
+    ).fetchall()
+    skill_status = Counter(r[1] for r in skill_rows)
+    high_conf_errors = con.execute(
+        "SELECT COUNT(*) FROM skill_evidence WHERE confidence='high' AND outcome!='success'"
+    ).fetchone()[0]
+    corrections = con.execute("SELECT COUNT(*) FROM correction_events").fetchone()[0]
+    regression_cases = con.execute("SELECT COUNT(*) FROM regression_cases WHERE active=1").fetchone()[0]
+    experience_events = con.execute("SELECT COUNT(*) FROM experience_events").fetchone()[0]
+    audit = audit_database(con)
+    plan = build_learning_plan(con, 10)
+
     lines = [
         f"# DDS learning report — {stage}",
         "",
         "## Corpus / run state",
+        f"- Algorithm version: `{ALGORITHM_VERSION}`",
         f"- Raw deals: {corpus_summary.get('count', 'n/a')}",
         f"- Seed: {corpus_summary.get('seed', 'n/a')}",
         f"- Corpus SHA-256: `{corpus_summary.get('raw_sha256', 'n/a')}`",
@@ -78,25 +100,65 @@ def generate_report(work: Path, stage: str) -> Path:
         f"- Regret >= 2 tricks: {ol_regret_2plus}",
         f"- Illegal/unrepresented lead predictions: {ol_illegal}",
         "",
+        "## Durable experience memory",
+        f"- Experience events: {experience_events}",
+        f"- Active regression cases: {regression_cases}",
+        f"- High-confidence errors: {high_conf_errors}",
+        f"- Correction events (append-only): {corrections}",
+        f"- Skills: candidate {skill_status['candidate']}, testing {skill_status['testing']}, confirmed {skill_status['confirmed']}, stable {skill_status['stable']}, weakened {skill_status['weakened']}",
+        "",
+        "### Skill states",
+    ]
+    if not skill_rows:
+        lines.append("- No skill evidence yet.")
+    for key, status, evidence, transfer, reg_pass, reg_fail, counter in skill_rows:
+        lines.append(
+            f"- `{key}` — {status}; evidence {evidence}, transfer {transfer}, regression {reg_pass}/{reg_fail}, counterexamples {counter}"
+        )
+
+    lines += [
+        "",
         "## Mandatory investigations",
         f"- Better-than-DDS / defense-over-DDS claims requiring replay: {investigations}",
         "- Every such case must be replayed against optimal opposition to find the first point where the proposed line relies on an opponent error.",
+        "- A correct final trick count is not enough if the proposed reasoning or line is wrong.",
         "",
         "## Error codes",
     ]
     for code, count in errors.most_common():
         lines.append(f"- {code}: {count}")
 
+    lines += ["", "## Next targeted learning plan"]
+    if not plan:
+        lines.append("- Not enough evaluated evidence to rank weaknesses.")
+    for item in plan:
+        lines.append(
+            f"- `{item['skill_key']}` priority {item['priority']:.4f}: error rate {item['error_rate']:.2%}, "
+            f"mean regret {item['mean_regret']:.3f}, high-confidence errors {item['high_confidence_errors']}; "
+            f"recommend {item['recommended_targeted_tasks']} transfer/counterexample/regression tasks."
+        )
+
     lines += [
         "",
-        "## Skills and algorithm changes",
-        "This section is completed by the methodological assistant after clustering the error events. A skill is promoted from candidate to confirmed only after transfer to new unseen deals and regression checks.",
+        "## Database audit",
+        f"- Status: **{audit['status']}**",
+    ]
+    if not audit["issues"]:
+        lines.append("- No database-provenance problems detected.")
+    for issue in audit["issues"]:
+        lines.append(f"- {issue['severity'].upper()} `{issue['code']}`: {issue['count']} — {issue['detail']}")
+
+    lines += [
+        "",
+        "## Learning policy",
+        "Locked predictions, DDS results and error events are immutable. A discovered mistake in import, classification or interpretation is appended as a correction event; the original evidence remains auditable.",
+        "A rule is not promoted because DDS contradicted one deal. It must survive unseen transfer deals, counterexamples and regression checks. High-confidence errors receive extra priority because they indicate a likely wrong internal heuristic rather than simple uncertainty.",
         "",
         "## User decision before next stage",
-        "Do not expand the corpus mechanically. Review the report, approve or reject proposed algorithm changes, and choose whether the next corpus should be broad or targeted at the largest stable weakness.",
+        "Do not expand the corpus mechanically. Review the strongest stable weaknesses and proposed rule changes, then approve whether the next corpus should remain broad or become targeted.",
         "",
         "## Stage completion rule",
-        "A stage is complete only after: train evaluation, validation evaluation, error investigation, skill/rule update, regression pass, sealed-test evaluation, and this report.",
+        "A stage is complete only after: train evaluation, validation evaluation, error investigation, experience/skill update, regression pass, counterexample checks, sealed-test evaluation, database audit, and this report.",
     ]
 
     out = work / f"report_{stage}.md"
