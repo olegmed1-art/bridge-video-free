@@ -30,6 +30,10 @@ jobs:
         working-directory: dds_training
         run: python experience_selftest.py
 
+      - name: Test deterministic pilot-to-main corpus expansion
+        working-directory: dds_training
+        run: python corpus_selftest.py
+
       - name: Restore DDS3 Bazel disk cache
         id: dds-cache
         uses: actions/cache/restore@v4
