@@ -26,6 +26,10 @@ jobs:
         with:
           python-version: '3.14'
 
+      - name: Compile all DDS training Python modules
+        working-directory: dds_training
+        run: python -m compileall -q .
+
       - name: Test immutable experience memory, holdouts, and skill recovery
         working-directory: dds_training
         run: python experience_selftest.py
@@ -33,6 +37,10 @@ jobs:
       - name: Test deterministic pilot-to-main corpus expansion
         working-directory: dds_training
         run: python corpus_selftest.py
+
+      - name: Test fresh pilot/main stage scopes
+        working-directory: dds_training
+        run: python stage_scope_selftest.py
 
       - name: Restore DDS3 Bazel disk cache
         id: dds-cache
@@ -99,6 +107,8 @@ jobs:
           assert s['count']==10000, s
           assert s['splits']=={'train':7000,'validation':1500,'sealed_test':1500}, s['splits']
           assert state['manifest_audit']['status']=='ok', state['manifest_audit']
+          assert state['fresh_base_deals_for_stage']==10000, state
+          assert state['fresh_base_tasks_for_stage']==20000, state
           tasks=sum(1 for _ in Path('/tmp/dds-pilot-prepared/blind_tasks.jsonl').open())
           assert tasks==20000, tasks
           print({'pilot_deals':s['count'],'splits':s['splits'],'blind_tasks':tasks,'manifest_audit':'ok','dds_training_started':False})
