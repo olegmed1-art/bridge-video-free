@@ -45,7 +45,6 @@ def _depends_on_unreliable(item: dict, unreliable_ids: set[str]) -> bool:
 
 def sanitize_actor_specific_semantics(master: dict) -> dict:
     """Remove actor-specific claims that the transcript cannot safely support."""
-    transcript = master.get("transcript") or []
     has_speakers = _has_speaker_labels(master)
     unreliable_ids = _unreliable_segment_ids(master)
     excluded = 0
@@ -55,7 +54,7 @@ def sanitize_actor_specific_semantics(master: dict) -> dict:
     cycles = list(master.get("learning_interactions") or [])
 
     if not has_speakers:
-        # Local ASR currently does not diarize speakers.  Role-cue heuristics remain useful
+        # Local ASR currently does not diarize speakers. Role-cue heuristics remain useful
         # for finding generic teaching moments, but they are insufficient to claim that a
         # specific utterance was a student's action or a teacher's intervention.
         old_obs = list(student.get("observations") or [])
@@ -137,16 +136,27 @@ def sanitize_actor_specific_semantics(master: dict) -> dict:
 
 def install(token_func):
     """Install r25.1 runtime protections and add r25.2 semantic confidence gates."""
-    r25_1.install(token_func)
-
-    core.ALGORITHM_REVISION = REVISION
-    base.ALGORITHM_REVISION = REVISION
-
     requested = os.getenv("BRIDGE_REQUESTED_ALGORITHM_REVISION", "").strip()
     if requested and requested != REVISION:
         raise RuntimeError(
             f"ALGORITHM_REVISION_MISMATCH: requested={requested} executing={REVISION}"
         )
+
+    # r25.1 has its own revision-conformity check. Temporarily present the inherited
+    # revision while installing its proven hooks, then restore the caller's r25.2 request.
+    had_requested = "BRIDGE_REQUESTED_ALGORITHM_REVISION" in os.environ
+    saved_requested = os.environ.get("BRIDGE_REQUESTED_ALGORITHM_REVISION")
+    os.environ["BRIDGE_REQUESTED_ALGORITHM_REVISION"] = r25_1.REVISION
+    try:
+        r25_1.install(token_func)
+    finally:
+        if had_requested:
+            os.environ["BRIDGE_REQUESTED_ALGORITHM_REVISION"] = saved_requested or ""
+        else:
+            os.environ.pop("BRIDGE_REQUESTED_ALGORITHM_REVISION", None)
+
+    core.ALGORITHM_REVISION = REVISION
+    base.ALGORITHM_REVISION = REVISION
 
     previous_payload = base.master_analysis_payload
     previous_validate = base.validate_r24_master
@@ -161,7 +171,7 @@ def install(token_func):
         observations = (master.get("student_analysis") or {}).get("observations") or []
 
         # r24 previously forced a non-empty student-analysis section whenever important
-        # episodes existed.  When speaker identity is genuinely unavailable, the safe
+        # episodes existed. When speaker identity is genuinely unavailable, the safe
         # output is an explicit UNKNOWN state, not a fabricated actor attribution.
         if actor_status == "unavailable_without_speaker_labels":
             issues = [x for x in issues if x != "missing-student-analysis"]
