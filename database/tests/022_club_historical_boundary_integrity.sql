@@ -5,6 +5,7 @@ DO $$
 DECLARE
     v_school uuid;
     v_person uuid;
+    v_membership uuid;
     v_service uuid;
     v_price uuid;
     v_package uuid;
@@ -22,6 +23,17 @@ BEGIN
 
     INSERT INTO person(preferred_name) VALUES ('Historical Boundary Test Person')
     RETURNING person_id INTO v_person;
+
+    INSERT INTO club_membership(school_id,person_id,membership_type,status)
+    VALUES (v_school,v_person,'history-boundary','active')
+    RETURNING club_membership_id INTO v_membership;
+    BEGIN
+        UPDATE club_membership SET status='ended', valid_to=NULL
+         WHERE club_membership_id=v_membership;
+        RAISE EXCEPTION 'ended membership without valid_to unexpectedly accepted';
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM='ended membership without valid_to unexpectedly accepted' THEN RAISE; END IF;
+    END;
 
     INSERT INTO club_service(school_id,stable_key,name,service_type)
     VALUES (v_school,'history-boundary-service','History boundary service','lesson')
@@ -103,6 +115,14 @@ BEGIN
     RETURNING entitlement_usage_id INTO v_usage;
 
     BEGIN
+        UPDATE person_entitlement SET status='expired', valid_to=NULL
+         WHERE entitlement_id=v_entitlement;
+        RAISE EXCEPTION 'expired entitlement without valid_to unexpectedly accepted';
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM='expired entitlement without valid_to unexpectedly accepted' THEN RAISE; END IF;
+    END;
+
+    BEGIN
         UPDATE person_entitlement
            SET valid_to=now()-interval '1 minute'
          WHERE entitlement_id=v_entitlement;
@@ -155,6 +175,14 @@ BEGIN
     ) VALUES (
         v_school,v_person,'email','history-boundary@example.invalid','verified',true
     ) RETURNING contact_method_id INTO v_contact;
+
+    BEGIN
+        UPDATE contact_method SET status='revoked', valid_to=NULL
+         WHERE contact_method_id=v_contact;
+        RAISE EXCEPTION 'revoked contact without valid_to unexpectedly accepted';
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM='revoked contact without valid_to unexpectedly accepted' THEN RAISE; END IF;
+    END;
 
     INSERT INTO club_communication(school_id,communication_type,subject,primary_person_id)
     VALUES (v_school,'service','Historical boundary delivery',v_person)
