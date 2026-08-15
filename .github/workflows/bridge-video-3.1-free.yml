@@ -31,7 +31,7 @@ jobs:
       BRIDGE_LARGER_RUNNER: "false"
       BRIDGE_PAID_CLOUD: "false"
       BRIDGE_BILLING_FALLBACK: "false"
-      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.4"
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.4.1"
       PYTHONUNBUFFERED: "1"
       WHISPER_MODEL: small
 
@@ -42,7 +42,7 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
 
-      - name: Resolve opaque job id
+      - name: Resolve opaque job id and revision
         shell: bash
         env:
           INPUT_JOB_ID: ${{ inputs.job_id }}
@@ -54,9 +54,15 @@ jobs:
             REQUEST_FILE="$(git show --pretty='' --name-only "$GITHUB_SHA" | grep -E '^run_requests/.*\.txt$' | head -n 1 || true)"
             test -n "$REQUEST_FILE" || { echo "No run request file in triggering commit" >&2; exit 2; }
             JOB_ID="$(sed -n 's/^JOB_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            REQUEST_REVISION="$(sed -n 's/^ALGORITHM_REVISION=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
             if [ -z "$JOB_ID" ]; then
               JOB_ID="$(basename "$REQUEST_FILE" .txt)"
             fi
+            test -n "$REQUEST_REVISION" || { echo "missing ALGORITHM_REVISION in run request" >&2; exit 2; }
+            test "$REQUEST_REVISION" = "$BRIDGE_REQUESTED_ALGORITHM_REVISION" || {
+              echo "ALGORITHM_REVISION_MISMATCH: queued=$REQUEST_REVISION executing=$BRIDGE_REQUESTED_ALGORITHM_REVISION" >&2
+              exit 2
+            }
           fi
           test -n "$JOB_ID"
           case "$JOB_ID" in
