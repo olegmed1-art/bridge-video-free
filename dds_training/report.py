@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 
 from audit import audit_database
@@ -12,6 +12,29 @@ from learning import build_learning_plan
 
 def _pct(a: int, b: int) -> str:
     return "n/a" if not b else f"{100.0*a/b:.2f}%"
+
+
+def _metrics_by_split(rows: list[tuple[str, str, str]]) -> dict[str, dict]:
+    out: dict[str, dict] = defaultdict(lambda: {
+        "ct_total": 0, "ct_exact": 0, "ct_abs_error": 0.0,
+        "ol_total": 0, "ol_opt": 0, "ol_regret_sum": 0.0,
+    })
+    for task_type, split, result_json in rows:
+        r = json.loads(result_json)
+        m = out[split]
+        if task_type == "contract_tricks":
+            d = int(r["delta_pred_minus_dds"])
+            m["ct_total"] += 1
+            m["ct_exact"] += int(d == 0)
+            m["ct_abs_error"] += abs(d)
+        elif task_type == "opening_lead":
+            m["ol_total"] += 1
+            regret = r.get("dd_regret")
+            if regret is not None:
+                regret = float(regret)
+                m["ol_regret_sum"] += regret
+                m["ol_opt"] += int(regret == 0)
+    return dict(out)
 
 
 def generate_report(work: Path, stage: str) -> Path:
@@ -53,6 +76,7 @@ def generate_report(work: Path, stage: str) -> Path:
                 ol_opt += int(regret == 0)
                 ol_regret_2plus += int(regret >= 2)
 
+    per_split = _metrics_by_split(rows)
     corpus_summary = {}
     p = work / "corpus_summary.json"
     if p.exists():
@@ -62,24 +86,49 @@ def generate_report(work: Path, stage: str) -> Path:
         """
         SELECT skill_key,status,evidence_count,transfer_count,regression_passes,
                regression_failures,counterexample_count
-        FROM skill_profiles ORDER BY skill_key
-        """
+        FROM skill_profiles WHERE algorithm_version=? ORDER BY skill_key
+        """,
+        (ALGORITHM_VERSION,),
     ).fetchall()
     skill_status = Counter(r[1] for r in skill_rows)
     high_conf_errors = con.execute(
-        "SELECT COUNT(*) FROM skill_evidence WHERE confidence='high' AND outcome!='success'"
+        """
+        SELECT COUNT(*) FROM skill_evidence
+        WHERE algorithm_version=? AND confidence='high' AND outcome!='success'
+        """,
+        (ALGORITHM_VERSION,),
     ).fetchone()[0]
     corrections = con.execute("SELECT COUNT(*) FROM correction_events").fetchone()[0]
     regression_cases = con.execute("SELECT COUNT(*) FROM regression_cases WHERE active=1").fetchone()[0]
-    experience_events = con.execute("SELECT COUNT(*) FROM experience_events").fetchone()[0]
+    experience_events = con.execute(
+        "SELECT COUNT(*) FROM experience_events WHERE algorithm_version=?", (ALGORITHM_VERSION,)
+    ).fetchone()[0]
     rule_versions = con.execute("SELECT COUNT(*) FROM rule_versions").fetchone()[0]
     spaced_reviews = con.execute("SELECT COUNT(*) FROM learning_queue WHERE purpose='spaced_review' AND status='planned'").fetchone()[0]
 
+    validation_learning = con.execute(
+        """
+        SELECT COUNT(*) FROM skill_evidence se JOIN dds_results r ON r.task_id=se.task_id
+        WHERE r.split='validation'
+        """
+    ).fetchone()[0]
+    sealed_learning = con.execute(
+        """
+        SELECT COUNT(*) FROM skill_evidence se JOIN dds_results r ON r.task_id=se.task_id
+        WHERE r.split='sealed_test'
+        """
+    ).fetchone()[0]
+
     reasoning_counts = Counter()
-    gross_decl_loss = gross_def_gift = recovered_loss = value_trajectories = 0
+    gross_decl_loss = gross_def_gift = recovered_loss = squandered_gift = value_trajectories = 0
+    invariant_violations = 0
     first_error_counts = Counter()
     for event_type, payload_json in con.execute(
-        "SELECT event_type,payload_json FROM experience_events WHERE event_type IN ('reasoning_review','value_trajectory')"
+        """
+        SELECT event_type,payload_json FROM experience_events
+        WHERE algorithm_version=? AND event_type IN ('reasoning_review','value_trajectory')
+        """,
+        (ALGORITHM_VERSION,),
     ):
         payload = json.loads(payload_json)
         if event_type == "reasoning_review":
@@ -89,6 +138,8 @@ def generate_report(work: Path, stage: str) -> Path:
             gross_decl_loss += int(payload.get("declarer_gross_loss", 0))
             gross_def_gift += int(payload.get("defense_gross_gift", 0))
             recovered_loss += int(payload.get("recovered_declarer_loss", 0))
+            squandered_gift += int(payload.get("squandered_defense_gift", 0))
+            invariant_violations += len(payload.get("invariant_violations", []))
             first = payload.get("first_error")
             if first:
                 first_error_counts[first.get("actor", "unknown")] += 1
@@ -105,16 +156,48 @@ def generate_report(work: Path, stage: str) -> Path:
         f"- Seed: {corpus_summary.get('seed', 'n/a')}",
         f"- Corpus SHA-256: `{corpus_summary.get('raw_sha256', 'n/a')}`",
         f"- DDS-evaluated tasks: {len(rows)}",
-        f"- Train / validation / sealed evaluated: {split_counts['train']} / {split_counts['validation']} / {split_counts['sealed_test']}",
+        f"- Train / validation / sealed / derived evaluated: {split_counts['train']} / {split_counts['validation']} / {split_counts['sealed_test']} / {split_counts['derived']}",
         "",
-        "## Declarer / contract-value tasks",
+        "## Holdout isolation",
+        f"- Validation tasks that leaked into skill evidence: {validation_learning}",
+        f"- Sealed-test tasks that leaked into skill evidence: {sealed_learning}",
+        "- Required invariant: both values must remain zero. Validation and sealed test measure generalization; they never create skills, rules, follow-ups, spaced reviews or regression cases.",
+        "",
+        "## Generalization by split",
+    ]
+    for split in ("train", "derived", "validation", "sealed_test"):
+        m = per_split.get(split, {})
+        ct_n = int(m.get("ct_total", 0))
+        ol_n = int(m.get("ol_total", 0))
+        ct_exact_split = _pct(int(m.get("ct_exact", 0)), ct_n)
+        ct_mae = "n/a" if not ct_n else f"{float(m.get('ct_abs_error', 0.0))/ct_n:.3f}"
+        ol_opt_split = _pct(int(m.get("ol_opt", 0)), ol_n)
+        ol_regret = "n/a" if not ol_n else f"{float(m.get('ol_regret_sum', 0.0))/ol_n:.3f}"
+        lines.append(
+            f"- **{split}** — contract exact {ct_exact_split}, MAE {ct_mae}; opening-lead equal-optimal {ol_opt_split}, mean regret {ol_regret}."
+        )
+
+    train_m = per_split.get("train")
+    val_m = per_split.get("validation")
+    if train_m and val_m and train_m["ct_total"] and val_m["ct_total"]:
+        train_exact = train_m["ct_exact"] / train_m["ct_total"]
+        val_exact = val_m["ct_exact"] / val_m["ct_total"]
+        lines.append(f"- Contract exact train→validation gap: {(train_exact-val_exact)*100:+.2f} percentage points.")
+    if train_m and val_m and train_m["ol_total"] and val_m["ol_total"]:
+        train_opt = train_m["ol_opt"] / train_m["ol_total"]
+        val_opt = val_m["ol_opt"] / val_m["ol_total"]
+        lines.append(f"- Opening-lead optimal train→validation gap: {(train_opt-val_opt)*100:+.2f} percentage points.")
+
+    lines += [
+        "",
+        "## Declarer / contract-value tasks — all evaluated splits",
         f"- Evaluated: {ct_total}",
         f"- Exact trick prediction: {_pct(ct_exact, ct_total)}",
         f"- Mean absolute trick error: {('n/a' if not ct_total else f'{ct_abs_error/ct_total:.3f}')}",
         f"- Claims above DDS: {ct_over}",
         f"- Missed available tricks: {ct_under}",
         "",
-        "## Defense / opening-lead tasks",
+        "## Defense / opening-lead tasks — all evaluated splits",
         f"- Evaluated: {ol_total}",
         f"- Equal-optimal leads: {_pct(ol_opt, ol_total)}",
         f"- Mean DD-regret: {('n/a' if not ol_total else f'{ol_regret_sum/ol_total:.3f}')}",
@@ -122,21 +205,28 @@ def generate_report(work: Path, stage: str) -> Path:
         f"- Illegal/unrepresented lead predictions: {ol_illegal}",
         "",
         "## Durable experience memory",
-        f"- Experience events: {experience_events}",
+        f"- Current-version experience events: {experience_events}",
         f"- Active regression cases: {regression_cases}",
         f"- Planned spaced reviews: {spaced_reviews}",
-        f"- High-confidence errors: {high_conf_errors}",
-        f"- Correction events (append-only): {corrections}",
-        f"- Versioned bridge rules: {rule_versions}",
+        f"- Current-version high-confidence errors: {high_conf_errors}",
+        f"- Correction events (append-only, lifetime): {corrections}",
+        f"- Versioned bridge rules (lifetime): {rule_versions}",
         f"- Skills: candidate {skill_status['candidate']}, testing {skill_status['testing']}, confirmed {skill_status['confirmed']}, stable {skill_status['stable']}, weakened {skill_status['weakened']}",
         "",
         "### Skill states",
     ]
     if not skill_rows:
-        lines.append("- No skill evidence yet.")
+        lines.append("- No current-version skill evidence yet.")
     for key, status, evidence, transfer, reg_pass, reg_fail, counter in skill_rows:
+        failed_counter = con.execute(
+            """
+            SELECT COUNT(*) FROM skill_evidence
+            WHERE skill_key=? AND algorithm_version=? AND evidence_type='counterexample' AND outcome!='success'
+            """,
+            (key, ALGORITHM_VERSION),
+        ).fetchone()[0]
         lines.append(
-            f"- `{key}` — {status}; evidence {evidence}, transfer {transfer}, regression {reg_pass}/{reg_fail}, counterexamples {counter}"
+            f"- `{key}` — {status}; evidence {evidence}, transfer {transfer}, regression lifetime {reg_pass}/{reg_fail}, successful counterexamples {counter}, failed counterexamples {failed_counter}"
         )
 
     lines += [
@@ -154,7 +244,9 @@ def generate_report(work: Path, stage: str) -> Path:
         f"- First error by defense: {first_error_counts['defense']}",
         f"- Gross declarer tricks lost: {gross_decl_loss}",
         f"- Gross tricks gifted by defense: {gross_def_gift}",
-        f"- Previously lost declarer tricks later restored by defense: {recovered_loss}",
+        f"- Earlier declarer losses later restored by defense: {recovered_loss}",
+        f"- Earlier defensive gifts later squandered by declarer: {squandered_gift}",
+        f"- DD-trajectory invariant violations: {invariant_violations}",
         "",
         "## Mandatory investigations",
         f"- Better-than-DDS / defense-over-DDS claims requiring replay: {investigations}",
@@ -168,7 +260,7 @@ def generate_report(work: Path, stage: str) -> Path:
 
     lines += ["", "## Next targeted learning plan"]
     if not plan:
-        lines.append("- Not enough evaluated evidence to rank weaknesses.")
+        lines.append("- Not enough current-version TRAIN/derived evidence to rank weaknesses.")
     for item in plan:
         lines.append(
             f"- `{item['skill_key']}` priority {item['priority']:.4f}: error rate {item['error_rate']:.2%}, "
@@ -190,13 +282,14 @@ def generate_report(work: Path, stage: str) -> Path:
         "",
         "## Learning policy",
         "Locked predictions, DDS results and error events are immutable. A discovered mistake in import, classification or interpretation is appended as a correction event; the original evidence remains auditable.",
-        "A rule is not promoted because DDS contradicted one deal. It must survive unseen transfer deals, symmetry/perturbation checks, counterexamples and regression checks. High-confidence errors receive extra priority because they indicate a likely wrong internal heuristic rather than simple uncertainty.",
+        "Skill state is versioned by the current analyzer revision. Historical failures remain visible but do not poison a recovered skill forever: recovery requires a fresh clean regression streak plus the full transfer/counterexample criteria.",
+        "A rule is not promoted because DDS contradicted one deal. It must survive unseen transfer deals, symmetry/perturbation checks, successful counterexamples and regression checks. High-confidence errors receive extra priority because they indicate a likely wrong internal heuristic rather than simple uncertainty.",
         "",
         "## User decision before next stage",
-        "Do not expand the corpus mechanically. Review the strongest stable weaknesses and proposed rule changes, then approve whether the next corpus should remain broad or become targeted.",
+        "Do not expand the corpus mechanically. Review generalization gaps and the strongest stable weaknesses, then approve whether the next corpus should remain broad or become targeted.",
         "",
         "## Stage completion rule",
-        "A stage is complete only after: train evaluation, validation evaluation, error investigation, experience/skill update, spaced retention checks, regression pass, counterexample checks, sealed-test evaluation, database audit, and this report.",
+        "A stage is complete only after: train evaluation, derived reinforcement, validation evaluation without learning, error investigation, experience/skill update, spaced retention checks, regression pass, counterexample checks, sealed-test evaluation without learning, database audit, and this report.",
     ]
 
     out = work / f"report_{stage}.md"
