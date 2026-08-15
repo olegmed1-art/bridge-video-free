@@ -68,10 +68,14 @@ WHERE NOT EXISTS (
      WHERE se.club_membership_id=m.club_membership_id
 );
 
--- Every future membership period gets an initial immutable state event.
+-- Every future membership period gets an initial immutable state event. SECURITY
+-- DEFINER allows the trigger to append the event without granting direct INSERT on the
+-- event table to the application principal.
 CREATE OR REPLACE FUNCTION seed_club_membership_initial_state()
 RETURNS trigger
 LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
 AS $$
 BEGIN
     INSERT INTO club_membership_state_event(
@@ -92,10 +96,13 @@ AFTER INSERT ON club_membership
 FOR EACH ROW EXECUTE FUNCTION seed_club_membership_initial_state();
 
 -- Existing callers may update the current status column. Capture every actual status
--- change automatically as an event so that the convenience mirror cannot erase history.
+-- change automatically; direct event insertion by runtime is intentionally forbidden so
+-- the event stream cannot diverge from the current-state mirror.
 CREATE OR REPLACE FUNCTION capture_club_membership_status_change()
 RETURNS trigger
 LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, public
 AS $$
 BEGIN
     IF NEW.status IS DISTINCT FROM OLD.status THEN
@@ -147,12 +154,9 @@ CREATE UNIQUE INDEX club_membership_one_open_type_uk
 -- Keep existing runtime status/valid_to update contract, but event history is automatic.
 REVOKE UPDATE ON TABLE club_membership FROM bridge_school_app, bridge_school_worker;
 GRANT UPDATE (valid_to, status) ON club_membership TO bridge_school_app;
-GRANT INSERT ON TABLE club_membership_state_event TO bridge_school_app;
-REVOKE UPDATE, DELETE ON TABLE club_membership_state_event
+REVOKE INSERT, UPDATE, DELETE ON TABLE club_membership_state_event
 FROM bridge_school_reader, bridge_school_app, bridge_school_worker, bridge_school_finance;
-GRANT USAGE, SELECT ON SEQUENCE club_membership_state_event_state_sequence_seq
-TO bridge_school_app;
-REVOKE UPDATE ON SEQUENCE club_membership_state_event_state_sequence_seq
+REVOKE ALL ON SEQUENCE club_membership_state_event_state_sequence_seq
 FROM bridge_school_reader, bridge_school_app, bridge_school_worker, bridge_school_finance;
 GRANT SELECT ON club_membership_current_state TO bridge_school_reader;
 
