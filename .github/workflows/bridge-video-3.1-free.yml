@@ -113,7 +113,8 @@ jobs:
 
       - name: Completed job no-op
         if: steps.terminal.outputs.already_completed == 'true'
-        run: echo 'ALREADY_COMPLETED: terminal CLEANUP_ACK exists; heavy runtime skipped.'
+        run: |
+          echo 'ALREADY_COMPLETED: terminal CLEANUP_ACK exists; heavy runtime skipped.'
 
       # No Google Cloud auth, no Neon/database dependency, no paid fallback.
       # User media/transcripts are never uploaded as GitHub workflow artifacts.
