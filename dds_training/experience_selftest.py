@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 from audit import audit_database
+from checkpointing import sha256_file, snapshot_database
 from experience_events import record_reasoning_review, record_value_trajectory
 from learning import build_learning_plan, record_skill_check, record_task_experience
 from storage import add_regression_case, connect, record_correction, upsert_prediction, upsert_result
@@ -14,7 +15,9 @@ from variants import create_variants
 
 def main() -> None:
     with tempfile.TemporaryDirectory() as td:
-        db = connect(Path(td) / "training.sqlite3")
+        root = Path(td)
+        db_path = root / "training.sqlite3"
+        db = connect(db_path)
         task = {
             "task_id": "SELFTEST-CT",
             "deal_id": "SELFTEST-DEAL",
@@ -59,7 +62,6 @@ def main() -> None:
             replacement={"note": "original fact remains untouched"},
         )
 
-        # A mathematically correct final count can still have a wrong explanation.
         record_reasoning_review(
             db,
             task_id=task["task_id"],
@@ -69,8 +71,6 @@ def main() -> None:
             run_id="selftest",
         )
 
-        # 10 -> 9 is a declarer loss; later 9 -> 10 is a defensive gift that
-        # restores it. The first error must remain visible despite the final value.
         trajectory = record_value_trajectory(
             db,
             task_id=task["task_id"],
@@ -104,7 +104,27 @@ def main() -> None:
         )
         db.commit()
 
-        # Idempotent identical insert is allowed; mutation is not.
+        snapshot = snapshot_database(
+            db,
+            db_path=db_path,
+            snapshot_dir=root / "checkpoints",
+            run_id="selftest",
+            completed_tasks=1000,
+            errors=1,
+            next_task_id="NEXT",
+            keep_milestone_every=1000,
+        )
+        latest_snapshot = Path(snapshot["latest_snapshot"])
+        milestone_snapshot = Path(snapshot["milestone_snapshot"])
+        assert latest_snapshot.exists() and milestone_snapshot.exists()
+        assert sha256_file(latest_snapshot) == snapshot["latest_sha256"]
+        snap_db = sqlite3.connect(latest_snapshot)
+        try:
+            assert snap_db.execute("SELECT COUNT(*) FROM dds_results").fetchone()[0] == 1
+            assert snap_db.execute("SELECT COUNT(*) FROM correction_events").fetchone()[0] == 1
+        finally:
+            snap_db.close()
+
         upsert_prediction(db, task, prediction)
         try:
             changed = dict(result)
@@ -125,7 +145,7 @@ def main() -> None:
         plan = build_learning_plan(db)
         assert plan and plan[0]["high_confidence_errors"] >= 1, plan
         spaced = db.execute("SELECT COUNT(*) FROM learning_queue WHERE purpose='spaced_review'").fetchone()[0]
-        assert spaced == 6, spaced  # two error skills x three delayed reviews
+        assert spaced == 6, spaced
         reasoning = db.execute("SELECT COUNT(*) FROM experience_events WHERE event_type='reasoning_review'").fetchone()[0]
         trajectories = db.execute("SELECT COUNT(*) FROM experience_events WHERE event_type='value_trajectory'").fetchone()[0]
         assert reasoning == 1 and trajectories == 1
@@ -140,6 +160,7 @@ def main() -> None:
             "immutable_predictions": True,
             "immutable_dds_results": True,
             "append_only_corrections": True,
+            "checkpoint_snapshot": snapshot,
             "skills_recorded": skills,
             "transfer_status": transfer_status,
             "derived_variants": [v["task_id"] for v in variants],
