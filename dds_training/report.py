@@ -8,6 +8,8 @@ from pathlib import Path
 from audit import audit_database
 from config import ALGORITHM_VERSION
 from learning import build_learning_plan
+from run_provenance import ensure_run_task_table
+from stage_scope import expected_base_deals
 
 
 def _pct(a: int, b: int) -> str:
@@ -37,12 +39,29 @@ def _metrics_by_split(rows: list[tuple[str, str, str]]) -> dict[str, dict]:
     return dict(out)
 
 
+def _stage_rows(con: sqlite3.Connection, stage: str) -> list[tuple[str, str, str]]:
+    """Return facts originally evaluated in this stage, not historical reuses."""
+    ensure_run_task_table(con)
+    return con.execute(
+        """
+        SELECT r.task_type,r.split,r.result_json
+        FROM dds_results r
+        WHERE EXISTS (
+          SELECT 1 FROM run_task_events e
+          JOIN runs ru ON ru.run_id=e.run_id
+          WHERE e.task_id=r.task_id AND e.action='evaluated' AND ru.stage=?
+        )
+        """,
+        (stage,),
+    ).fetchall()
+
+
 def generate_report(work: Path, stage: str) -> Path:
     db_path = work / "training.sqlite3"
     if not db_path.exists():
         raise FileNotFoundError(db_path)
     con = sqlite3.connect(db_path)
-    rows = con.execute("SELECT task_type,split,result_json FROM dds_results").fetchall()
+    rows = _stage_rows(con, stage)
     errors = Counter()
     split_counts = Counter()
 
@@ -146,24 +165,27 @@ def generate_report(work: Path, stage: str) -> Path:
 
     audit = audit_database(con)
     plan = build_learning_plan(con, 10)
+    fresh_base_deals = expected_base_deals(stage)
 
     lines = [
         f"# DDS learning report — {stage}",
         "",
-        "## Corpus / run state",
+        "## Corpus / stage scope",
         f"- Algorithm version: `{ALGORITHM_VERSION}`",
-        f"- Raw deals: {corpus_summary.get('count', 'n/a')}",
+        f"- Total raw corpus deals currently stored: {corpus_summary.get('count', 'n/a')}",
+        f"- Fresh base deals assigned to this stage: {fresh_base_deals}",
         f"- Seed: {corpus_summary.get('seed', 'n/a')}",
         f"- Corpus SHA-256: `{corpus_summary.get('raw_sha256', 'n/a')}`",
-        f"- DDS-evaluated tasks: {len(rows)}",
-        f"- Train / validation / sealed / derived evaluated: {split_counts['train']} / {split_counts['validation']} / {split_counts['sealed_test']} / {split_counts['derived']}",
+        f"- Tasks originally DDS-evaluated in this stage: {len(rows)}",
+        f"- Train / validation / sealed / derived stage tasks: {split_counts['train']} / {split_counts['validation']} / {split_counts['sealed_test']} / {split_counts['derived']}",
+        "- Stage metrics exclude historical `reused` results. Main-stage validation/sealed metrics therefore use only fresh boards 10001–30000, never the already-opened pilot holdouts.",
         "",
         "## Holdout isolation",
         f"- Validation tasks that leaked into skill evidence: {validation_learning}",
         f"- Sealed-test tasks that leaked into skill evidence: {sealed_learning}",
         "- Required invariant: both values must remain zero. Validation and sealed test measure generalization; they never create skills, rules, follow-ups, spaced reviews or regression cases.",
         "",
-        "## Generalization by split",
+        "## Generalization by split — this stage only",
     ]
     for split in ("train", "derived", "validation", "sealed_test"):
         m = per_split.get(split, {})
@@ -190,21 +212,21 @@ def generate_report(work: Path, stage: str) -> Path:
 
     lines += [
         "",
-        "## Declarer / contract-value tasks — all evaluated splits",
+        "## Declarer / contract-value tasks — this stage",
         f"- Evaluated: {ct_total}",
         f"- Exact trick prediction: {_pct(ct_exact, ct_total)}",
         f"- Mean absolute trick error: {('n/a' if not ct_total else f'{ct_abs_error/ct_total:.3f}')}",
         f"- Claims above DDS: {ct_over}",
         f"- Missed available tricks: {ct_under}",
         "",
-        "## Defense / opening-lead tasks — all evaluated splits",
+        "## Defense / opening-lead tasks — this stage",
         f"- Evaluated: {ol_total}",
         f"- Equal-optimal leads: {_pct(ol_opt, ol_total)}",
         f"- Mean DD-regret: {('n/a' if not ol_total else f'{ol_regret_sum/ol_total:.3f}')}",
         f"- Regret >= 2 tricks: {ol_regret_2plus}",
         f"- Illegal/unrepresented lead predictions: {ol_illegal}",
         "",
-        "## Durable experience memory",
+        "## Cumulative durable experience memory",
         f"- Current-version experience events: {experience_events}",
         f"- Active regression cases: {regression_cases}",
         f"- Planned spaced reviews: {spaced_reviews}",
@@ -231,14 +253,14 @@ def generate_report(work: Path, stage: str) -> Path:
 
     lines += [
         "",
-        "## Reasoning quality independent of final result",
+        "## Reasoning quality independent of final result — cumulative current revision",
         f"- Reasoning reviews: {sum(reasoning_counts.values())}",
         f"- Correct result but wrong reasoning: {reasoning_counts['correct_result_wrong_reasoning']}",
         f"- Correct reasoning: {reasoning_counts['correct']}",
         f"- Incorrect reasoning: {reasoning_counts['incorrect']}",
         f"- Needs review: {reasoning_counts['needs_review']}",
         "",
-        "## DD value trajectories / first-error accounting",
+        "## DD value trajectories / first-error accounting — cumulative current revision",
         f"- Recorded trajectories: {value_trajectories}",
         f"- First error by declarer: {first_error_counts['declarer']}",
         f"- First error by defense: {first_error_counts['defense']}",
@@ -248,12 +270,12 @@ def generate_report(work: Path, stage: str) -> Path:
         f"- Earlier defensive gifts later squandered by declarer: {squandered_gift}",
         f"- DD-trajectory invariant violations: {invariant_violations}",
         "",
-        "## Mandatory investigations",
+        "## Mandatory investigations — this stage",
         f"- Better-than-DDS / defense-over-DDS claims requiring replay: {investigations}",
         "- Every such case must be replayed against optimal opposition to find the first point where the proposed line relies on an opponent error.",
         "- A correct final trick count is not enough if the proposed reasoning or line is wrong.",
         "",
-        "## Error codes",
+        "## Error codes — this stage",
     ]
     for code, count in errors.most_common():
         lines.append(f"- {code}: {count}")
@@ -281,15 +303,15 @@ def generate_report(work: Path, stage: str) -> Path:
     lines += [
         "",
         "## Learning policy",
-        "Locked predictions, DDS results and error events are immutable. A discovered mistake in import, classification or interpretation is appended as a correction event; the original evidence remains auditable.",
-        "Skill state is versioned by the current analyzer revision. Historical failures remain visible but do not poison a recovered skill forever: recovery requires a fresh clean regression streak plus the full transfer/counterexample criteria.",
+        "Locked predictions, DDS results, per-task run provenance and error events are immutable/append-only. A discovered mistake in import, classification or interpretation is appended as a correction event; the original evidence remains auditable.",
+        "Skill state is versioned by analyzer revision. Historical failures remain visible but do not poison a recovered skill forever: recovery requires a fresh clean regression/counterexample streak plus the full transfer criteria.",
         "A rule is not promoted because DDS contradicted one deal. It must survive unseen transfer deals, symmetry/perturbation checks, successful counterexamples and regression checks. High-confidence errors receive extra priority because they indicate a likely wrong internal heuristic rather than simple uncertainty.",
         "",
         "## User decision before next stage",
-        "Do not expand the corpus mechanically. Review generalization gaps and the strongest stable weaknesses, then approve whether the next corpus should remain broad or become targeted.",
+        "Do not expand the corpus mechanically. Review the fresh validation/sealed generalization gap and the strongest stable weaknesses, then approve whether the next stage should remain broad or become targeted.",
         "",
         "## Stage completion rule",
-        "A stage is complete only after: train evaluation, derived reinforcement, validation evaluation without learning, error investigation, experience/skill update, spaced retention checks, regression pass, counterexample checks, sealed-test evaluation without learning, database audit, and this report.",
+        "A stage is complete only after: fresh train evaluation, derived reinforcement, fresh validation evaluation without learning, error investigation, experience/skill update, spaced retention checks, regression pass, counterexample checks, fresh sealed-test evaluation without learning, database audit, and this report.",
     ]
 
     out = work / f"report_{stage}.md"
