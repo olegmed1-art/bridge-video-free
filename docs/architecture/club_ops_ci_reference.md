@@ -1,1 +1,0 @@
-Database CI reference: run 31904700205 completed successfully on PostgreSQL 18 for the Club Operations candidate schema, including invariant tests, idempotence, checksum guard and migration registry verification.
