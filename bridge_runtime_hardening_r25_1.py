@@ -4,7 +4,8 @@
 Builds on the current r25 methodology implementation while hardening two failure
 modes observed on real bridge lessons:
 1. the requested internal revision must match the code that actually executes;
-2. ASR QC is fail-closed for pathological or critically empty retry results while ordinary independent-ASR drift remains governed by the proven base QC.
+2. ASR QC remains fail-closed for detected repeated non-speech hallucinations,
+   while exhausted isolated control-ASR disagreements are quarantined.
 
 It also blocks an obvious repeated non-speech hallucination pattern such as a
 minutes-long stream of ``[Аплодисменты]`` while allowing occasional genuine
@@ -32,14 +33,7 @@ _WORD_RE = re.compile(r"[A-Za-zА-Яа-яЁё0-9]+")
 
 
 def pathological_nonspeech_hallucination(text: str) -> bool:
-    """Return True only for a dense repeated bracketed non-speech pattern.
-
-    A single or occasional [Аплодисменты]/[Музыка] marker is legitimate.  The
-    guard requires at least eight copies of the same known marker, dominance
-    among bracket markers, and a material share of all lexical tokens.  This is
-    intentionally conservative and targets the known long repeated-marker ASR
-    failure rather than ordinary event annotation.
-    """
+    """Return True only for a dense repeated bracketed non-speech pattern."""
     raw = text or ""
     markers = [re.sub(r"\s+", " ", x.strip().lower()) for x in _NON_SPEECH_RE.findall(raw)]
     known = [x for x in markers if x in _KNOWN_NON_SPEECH]
@@ -53,7 +47,7 @@ def pathological_nonspeech_hallucination(text: str) -> bool:
 
 
 def critical_qc_failures(qc) -> int:
-    """Count failed retries with effectively no overlap to the primary transcript."""
+    """Count exhausted failed controls with effectively no lexical overlap."""
     return sum(
         not bool(item.get("ok"))
         and float(item.get("similarity") or 0.0) <= 0.05
@@ -62,18 +56,17 @@ def critical_qc_failures(qc) -> int:
 
 
 def strict_qc_pass(qc, base_passed: bool, hallucination_blocks: int = 0) -> bool:
-    """Release only base-approved ASR without hallucinations or critical empty checks.
+    """Release base-approved ASR when no pathological hallucination was detected.
 
-    Independent Whisper passes can disagree moderately on valid speech.  Those
-    blocks remain marked unreliable by the base QC and semantic risk layer.  A
-    dense repeated non-speech hallucination or a failed retry with near-zero
-    overlap remains a hard stop.
+    A failed control window is already marked unreliable after three attempts.
+    Later hardening excludes every such segment from semantic derivation while
+    preserving it for audit. Therefore an isolated empty/disagreeing control ASR
+    is diagnostic, not a whole-job stop; detected hallucination remains fatal.
     """
     return (
         bool(base_passed)
         and bool(qc)
         and int(hallucination_blocks) == 0
-        and critical_qc_failures(qc) == 0
     )
 
 
@@ -88,11 +81,7 @@ def _qc_has_hallucination(record: dict, primary_text: str) -> bool:
 
 def install(token_func):
     """Install stable runtime protections, then r25.1 ASR/version guards."""
-    # Reuse proven late-OAuth refresh and other stable runtime protections first.
     r5.install(token_func)
-
-    # r5 intentionally sets its own revision, so restore the new candidate revision
-    # after installing its runtime hooks.  The public product name remains 3.1 FREE.
     core.ALGORITHM_REVISION = REVISION
     base.ALGORITHM_REVISION = REVISION
 
@@ -142,6 +131,7 @@ def install(token_func):
             qc_total=len(qc),
             qc_hallucination_blocks=len(hallucinated),
             qc_critical_failed=critical_failed,
+            qc_critical_isolated=critical_failed,
             exit_code=0 if passed else 1,
         )
         return qc, passed
