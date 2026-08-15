@@ -14,7 +14,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: bridge-video-heavy
@@ -32,7 +31,7 @@ jobs:
       BRIDGE_LARGER_RUNNER: "false"
       BRIDGE_PAID_CLOUD: "false"
       BRIDGE_BILLING_FALLBACK: "false"
-      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.1"
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.2"
       PYTHONUNBUFFERED: "1"
       WHISPER_MODEL: small
 
@@ -77,30 +76,7 @@ jobs:
           sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
           python -m pip install --disable-pip-version-check -r requirements-worker.txt
 
-      - name: Authenticate to Google Cloud with Workload Identity Federation
-        id: auth
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
-        with:
-          project_id: bridge-video-automation
-          workload_identity_provider: projects/499454355457/locations/global/workloadIdentityPools/github-actions/providers/github
-          service_account: bridge-video-worker@bridge-video-automation.iam.gserviceaccount.com
-          create_credentials_file: true
-
-      - name: Google ADC preflight
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import google.auth
-          from google.auth.transport.requests import Request
-          creds, project = google.auth.default(scopes=['https://www.googleapis.com/auth/drive'])
-          creds.refresh(Request())
-          if not creds.token:
-              raise SystemExit('BLOCKED_ACCESS: ADC token unavailable')
-          print('Google Workload Identity ADC preflight: PASS')
-          PY
-
-      - name: Google Drive user OAuth preflight
+      - name: Google Drive OAuth preflight
         shell: bash
         env:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
@@ -111,21 +87,8 @@ jobs:
           token = user_oauth_token()
           if not token:
               raise SystemExit('BLOCKED_ACCESS: GOOGLE_DRIVE_OAUTH_JSON secret is not configured')
-          print('Google Drive user OAuth preflight: PASS')
+          print('Google Drive OAuth preflight: PASS')
           PY
-
-      - name: Worker database runtime preflight
-        shell: bash
-        env:
-          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
-        run: |
-          set -euo pipefail
-          test -n "${BRIDGE_WORKER_DATABASE_URL:-}" || {
-            echo 'BLOCKED_DATABASE: BRIDGE_WORKER_DATABASE_URL is not configured' >&2
-            exit 1
-          }
-          python database/runtime_worker_preflight.py
-          echo "BRIDGE_WORKER_DATABASE_URL=${BRIDGE_WORKER_DATABASE_URL}" >> "$GITHUB_ENV"
 
       - name: FREE-GUARD
         run: python bridge_worker_3_1_free.py
@@ -138,4 +101,5 @@ jobs:
           set -euo pipefail
           python run_drive_3_1_free_oidc.py
 
+      # No Google Cloud auth, no Neon/database dependency, no paid fallback.
       # User media/transcripts are never uploaded as GitHub workflow artifacts.
