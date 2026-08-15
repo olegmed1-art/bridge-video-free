@@ -22,6 +22,10 @@ jobs:
         with:
           python-version: '3.14'
 
+      - name: Test immutable experience memory and learning planner
+        working-directory: dds_training
+        run: python experience_selftest.py
+
       - name: Restore DDS3 Bazel disk cache
         id: dds-cache
         uses: actions/cache/restore@v4
@@ -43,7 +47,7 @@ jobs:
           fi
           grep -q -- "--start was not supplied" /tmp/guard.err
 
-      - name: Check deterministic pilot preparation
+      - name: Check deterministic pilot preparation and manifest audit
         working-directory: dds_training
         run: |
           set -euo pipefail
@@ -51,12 +55,20 @@ jobs:
           import json
           from pathlib import Path
           s=json.loads(Path('/tmp/dds-pilot-prepared/corpus_summary.json').read_text())
+          state=json.loads(Path('/tmp/dds-pilot-prepared/state.json').read_text())
           assert s['count']==10000, s
           assert s['splits']=={'train':7000,'validation':1500,'sealed_test':1500}, s['splits']
+          assert state['manifest_audit']['status']=='ok', state['manifest_audit']
           tasks=sum(1 for _ in Path('/tmp/dds-pilot-prepared/blind_tasks.jsonl').open())
           assert tasks==20000, tasks
-          print({'pilot_deals':s['count'],'splits':s['splits'],'blind_tasks':tasks,'dds_training_started':False})
+          print({'pilot_deals':s['count'],'splits':s['splits'],'blind_tasks':tasks,'manifest_audit':'ok','dds_training_started':False})
           PY
+
+      - name: Audit empty prepared database without starting training
+        working-directory: dds_training
+        run: |
+          set -euo pipefail
+          python run_stage.py audit --work /tmp/dds-pilot-prepared --fail-on-error
 
       - name: Save DDS3 Bazel disk cache
         if: always() && steps.dds-cache.outputs.cache-hit != 'true'
