@@ -26,7 +26,7 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Test immutable experience memory and learning planner
+      - name: Test immutable experience memory, holdouts, and skill recovery
         working-directory: dds_training
         run: python experience_selftest.py
 
@@ -40,21 +40,42 @@ jobs:
       - name: Bootstrap local DDS3 and run technical preflight
         run: bash dds_training/bootstrap_linux.sh
 
-      - name: Verify launch guard blocks accidental training
+      - name: Verify DDS-backed symmetry invariants
+        working-directory: dds_training
+        run: |
+          source .venv/bin/activate
+          python variant_dds_selftest.py
+
+      - name: Verify launch and sealed-test guards block accidental training
         working-directory: dds_training
         run: |
           set -euo pipefail
+          source .venv/bin/activate
           python run_stage.py prepare --stage pilot --out /tmp/dds-pilot-prepared
+
           if python run_stage.py evaluate --stage pilot --work /tmp/dds-pilot-prepared --predictions /tmp/does-not-exist.jsonl 2>/tmp/guard.err; then
             echo "ERROR: evaluate unexpectedly ran without --start" >&2
             exit 1
           fi
           grep -q -- "--start was not supplied" /tmp/guard.err
 
+          if DDS_TRAINING_CONFIRM=YES python run_stage.py evaluate --stage pilot --work /tmp/dds-pilot-prepared --predictions /tmp/does-not-exist.jsonl --splits sealed_test --start 2>/tmp/sealed.err; then
+            echo "ERROR: sealed test unexpectedly opened without --open-sealed" >&2
+            exit 1
+          fi
+          grep -q -- "Sealed test blocked" /tmp/sealed.err
+
+          if DDS_TRAINING_CONFIRM=YES python run_stage.py evaluate --stage pilot --work /tmp/dds-pilot-prepared --predictions /tmp/does-not-exist.jsonl --splits train sealed_test --start --open-sealed 2>/tmp/mixed.err; then
+            echo "ERROR: sealed test unexpectedly mixed with train" >&2
+            exit 1
+          fi
+          grep -q -- "Sealed test must run alone" /tmp/mixed.err
+
       - name: Check deterministic pilot preparation and manifest audit
         working-directory: dds_training
         run: |
           set -euo pipefail
+          source .venv/bin/activate
           python - <<'PY'
           import json
           from pathlib import Path
@@ -72,6 +93,7 @@ jobs:
         working-directory: dds_training
         run: |
           set -euo pipefail
+          source .venv/bin/activate
           python run_stage.py audit --work /tmp/dds-pilot-prepared --fail-on-error
 
       - name: Save DDS3 Bazel disk cache
