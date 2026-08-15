@@ -1,0 +1,115 @@
+name: Bridge Video r25.5 Sunday Lesson Good E2E
+
+on:
+  push:
+    branches: [validation/3.1-free-r25.5-asr-isolation-2026-08-15]
+    paths: ['.github/workflows/video-r25-5-sunday-good-e2e.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-video-r25-5-sunday-good-e2e
+  cancel-in-progress: false
+
+jobs:
+  sunday-good-e2e:
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      BRIDGE_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+      BRIDGE_RUNNER_LABEL: ubuntu-24.04
+      BRIDGE_LARGER_RUNNER: "false"
+      BRIDGE_PAID_CLOUD: "false"
+      BRIDGE_BILLING_FALLBACK: "false"
+      BRIDGE_JOB_ID: fb1800d20b82f2e0de94b46599f18fdb
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: 3.1-free-r25.5
+      PYTHONUNBUFFERED: "1"
+      WHISPER_MODEL: small
+    steps:
+      - name: Checkout r25.5 validation
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with: {persist-credentials: false}
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with: {python-version: "3.12"}
+      - name: Install free runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+          python -m pip install --disable-pip-version-check -r requirements-worker.txt
+      - name: Run inherited regression tests
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python tests/test_semantic_gate_r25_2.py
+          PYTHONPATH=. python tests/test_late_oauth_r25_3.py
+          PYTHONPATH=. python tests/test_unreliable_asr_isolation_r25_4.py
+          python -m py_compile bridge_runtime_hardening_r25_1.py bridge_runtime_hardening_r25_4.py run_drive_3_1_free_generic.py
+      - name: Google Drive OAuth preflight
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from run_drive_3_1_free_oidc import user_oauth_token
+          assert user_oauth_token(), 'BLOCKED_ACCESS: Drive OAuth unavailable'
+          print('Google Drive OAuth preflight: PASS')
+          PY
+      - name: FREE-GUARD
+        run: python bridge_worker_3_1_free.py
+      - name: Process known-good Sunday lesson with r25.5
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          python run_drive_3_1_free_oidc.py
+      - name: Validate provenance and ASR isolation
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, tempfile
+          from pathlib import Path
+          import pymupdf
+          import run_drive_3_1_free as io
+          import run_master_3_1_free as base
+          from run_drive_3_1_free_oidc import user_oauth_token
+          job='fb1800d20b82f2e0de94b46599f18fdb'; rev='3.1-free-r25.5'; token=user_oauth_token()
+          files=io.search(token, f"trashed=false and name='AI_DONE_{job}.json'")
+          files.sort(key=lambda x:x.get('modifiedTime') or '', reverse=True)
+          done=None
+          for item in files:
+              try: payload=json.loads(base._read_text(token,item))
+              except Exception: continue
+              if payload.get('status')=='AI_DONE' and payload.get('algorithmRevision')==rev:
+                  done=payload; break
+          if done is None: raise SystemExit('missing AI_DONE for r25.5')
+          pdf_id=(done.get('masterPdf') or {}).get('driveId')
+          if not pdf_id: raise SystemExit('missing master PDF id')
+          with tempfile.TemporaryDirectory() as td:
+              path=Path(td)/'master.pdf'; io.download(token,pdf_id,path); doc=pymupdf.open(path)
+              text='\n'.join(p.get_text() for p in doc)
+              if 'master_analysis.json' not in set(doc.embfile_names()): raise SystemExit('embedded master missing')
+              master=json.loads(doc.embfile_get('master_analysis.json').decode('utf-8')); doc.close()
+          if f'Алгоритм: 3.1 FREE / {rev}' not in text: raise SystemExit('PDF revision mismatch')
+          quality=master.get('content_quality') or {}
+          if quality.get('unreliable_segments_excluded_from_semantic_derivation') is not True:
+              raise SystemExit(f'missing ASR isolation flag: {quality}')
+          unreliable={str(s.get('segment_id')) for s in master.get('transcript') or [] if s.get('unreliable') and s.get('segment_id')}
+          if not unreliable: raise SystemExit('control did not exercise unreliable-segment isolation')
+          derived=set()
+          for key in ('episodes','learning_interactions','errors','strengths','teacher_analysis','best_explanations','deals','decisions','knowledge_gaps'):
+              for item in master.get(key) or []: derived.update(str(x) for x in item.get('evidence') or [] if x)
+          for bucket in ('observations','strengths','difficulties'):
+              for item in (master.get('student_analysis') or {}).get(bucket) or []: derived.update(str(x) for x in item.get('evidence') or [] if x)
+          leak=unreliable & derived
+          if leak: raise SystemExit(f'unreliable transcript leaked into derived analytics: {sorted(leak)[:10]}')
+          semantic=done.get('semantic') or {}
+          if semantic.get('speaker_labels_present') is False:
+              a=text.find('3. Анализ действий ученика'); b=text.find('4. Учебные циклы',a+1)
+              if a >= 0 and b >= 0 and 'Задача:' in text[a:b]: raise SystemExit('unsafe personal attribution returned')
+          print(f'R25_5_SUNDAY_E2E: PASS revision={rev} unreliable_excluded={len(unreliable)} pdf=verified')
+          PY
