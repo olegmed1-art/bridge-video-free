@@ -72,23 +72,27 @@ def _knowledge_status(result: dict, applied: bool) -> dict:
     }
 
 
-def run(token_func):
-    install(token_func)
-    token = token_func()
-    job_id = os.environ["BRIDGE_JOB_ID"]
-    if _already_completed_for_revision(token, job_id):
-        base.io.safe(
-            job_id=job_id,
-            stage="ALREADY_COMPLETED",
-            exit_code=0,
-            terminal_receipt="CLEANUP_ACK",
-            algorithm_revision=REVISION,
-        )
-        return 0
 
-    result = semantic.process_job(token)
-    if not isinstance(result, dict):
-        return result
+def _latest_done_for_revision(token: str, job_id: str) -> dict | None:
+    name = f"AI_DONE_{job_id}.json"
+    escaped = name.replace("'", "\\'")
+    candidates = base.io.search(token, f"trashed=false and name='{escaped}'")
+    candidates.sort(key=lambda item: item.get("modifiedTime") or "", reverse=True)
+    for candidate in candidates:
+        try:
+            payload = json.loads(base._read_text(token, candidate))
+        except Exception:
+            continue
+        if (
+            payload.get("status") == "AI_DONE"
+            and payload.get("job_id") == job_id
+            and payload.get("algorithmRevision") == REVISION
+        ):
+            return payload
+    return None
+
+
+def _publish_knowledge_status(token_func, result: dict) -> dict:
     parent = ((result.get("original") or {}).get("parentFolderId") or "").strip()
     if not parent:
         raise RuntimeError("KNOWLEDGE_STATUS_PARENT_MISSING")
@@ -104,4 +108,32 @@ def run(token_func):
         stage=receipt["status"],
         exit_code=0,
     )
+    return receipt
+
+
+def run(token_func):
+    install(token_func)
+    token = token_func()
+    job_id = os.environ["BRIDGE_JOB_ID"]
+    if _already_completed_for_revision(token, job_id):
+        result = _latest_done_for_revision(token, job_id)
+        if result is None:
+            raise RuntimeError("AI_DONE_MISSING_FOR_COMPLETED_REVISION")
+        # CLEANUP_ACK proves Drive cleanup only. Reconcile database persistence and
+        # publish the explicit knowledge receipt before declaring terminal success.
+        semantic.persist_completed_drive_job(token)
+        _publish_knowledge_status(token_func, result)
+        base.io.safe(
+            job_id=job_id,
+            stage="ALREADY_COMPLETED",
+            exit_code=0,
+            terminal_receipt="CLEANUP_ACK+KNOWLEDGE_STATUS",
+            algorithm_revision=REVISION,
+        )
+        return result
+
+    result = semantic.process_job(token)
+    if not isinstance(result, dict):
+        return result
+    _publish_knowledge_status(token_func, result)
     return result
