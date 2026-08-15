@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 import sys
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import psycopg
 
@@ -36,6 +36,20 @@ def _unquote(value: str) -> str:
     return value
 
 
+def _canonicalize_neon_endpoint(value: str, parsed):
+    hostname = (parsed.hostname or "").lower()
+    if not hostname.endswith(".neon.tech") or hostname == EXPECTED_HOST:
+        return value, parsed
+
+    userinfo, separator, hostport = parsed.netloc.rpartition("@")
+    if not separator:
+        return value, parsed
+    _, port_separator, port = hostport.partition(":")
+    canonical_hostport = EXPECTED_HOST + (f":{port}" if port_separator else "")
+    canonical = urlunsplit(parsed._replace(netloc=f"{userinfo}@{canonical_hostport}"))
+    return canonical, urlsplit(canonical)
+
+
 def normalize_dsn(raw: str) -> str:
     """Require the full pooled production Neon URI for the app principal."""
     value = _unquote(raw)
@@ -49,6 +63,8 @@ def normalize_dsn(raw: str) -> str:
         query = parse_qs(parsed.query, keep_blank_values=True)
     except ValueError:
         fail("BRIDGE_APP_DATABASE_URL is not a valid PostgreSQL URI")
+
+    value, parsed = _canonicalize_neon_endpoint(value, parsed)
 
     if parsed.username != EXPECTED_PRINCIPAL:
         fail("BRIDGE_APP_DATABASE_URL uses the wrong database principal")
