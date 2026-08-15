@@ -4,8 +4,8 @@ BEGIN;
 -- -----------------------------------------------------------------------------
 -- Historical boundary integrity.
 -- Later lifecycle/catalog edits must not make already-recorded facts impossible in
--- hindsight. Corrections remain append-oriented; this migration only prevents a
--- validity/effective boundary from being moved before dependent historical facts.
+-- hindsight. Corrections remain append-oriented. Historical backfill is judged by the
+-- business timestamp and validity window, not merely by the object's current label.
 -- -----------------------------------------------------------------------------
 
 -- Lifecycle labels that mean a validity period has actually ended must carry the
@@ -34,6 +34,38 @@ ALTER TABLE person_package_grant
     CHECK (status NOT IN ('expired','revoked') OR valid_to IS NOT NULL) NOT VALID;
 ALTER TABLE person_package_grant
     VALIDATE CONSTRAINT person_package_grant_closed_status_requires_valid_to_ck;
+
+-- The older active-status helper rejected historical consumption entered after an
+-- entitlement had later expired/revoked. Validity at occurred_at is the authoritative
+-- rule for historical facts; invalid rows remain unusable.
+CREATE OR REPLACE FUNCTION validate_entitlement_usage_active_status()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_status text;
+    v_from timestamptz;
+    v_to timestamptz;
+BEGIN
+    IF NEW.status='applied' AND NEW.reversal_of_usage_id IS NULL THEN
+        SELECT status, valid_from, valid_to
+          INTO v_status, v_from, v_to
+          FROM person_entitlement
+         WHERE entitlement_id=NEW.entitlement_id;
+        IF v_status IS NULL THEN
+            RAISE EXCEPTION 'entitlement usage entitlement missing';
+        END IF;
+        IF v_status='invalid' THEN
+            RAISE EXCEPTION 'cannot consume an invalid entitlement';
+        END IF;
+        IF NEW.occurred_at < v_from
+           OR (v_to IS NOT NULL AND NEW.occurred_at >= v_to) THEN
+            RAISE EXCEPTION 'entitlement usage is outside entitlement business-time validity';
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
 
 CREATE OR REPLACE FUNCTION validate_entitlement_usage_integrity()
 RETURNS trigger
@@ -141,6 +173,41 @@ BEGIN
         END IF;
     END IF;
 
+    RETURN NEW;
+END;
+$$;
+
+-- The older contact helper also used current status as a routing proxy. For historical
+-- imports a revoked/superseded contact is legitimate if queued_at was inside its former
+-- validity window. Real-time routing after valid_to remains blocked.
+CREATE OR REPLACE FUNCTION validate_delivery_active_contact()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_status text;
+    v_from timestamptz;
+    v_to timestamptz;
+BEGIN
+    IF NEW.contact_method_id IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    SELECT status, valid_from, valid_to
+      INTO v_status, v_from, v_to
+      FROM contact_method
+     WHERE contact_method_id=NEW.contact_method_id;
+
+    IF v_status IS NULL THEN
+        RAISE EXCEPTION 'delivery contact method missing';
+    END IF;
+    IF v_status='invalid' THEN
+        RAISE EXCEPTION 'delivery cannot use an invalid contact method';
+    END IF;
+    IF NEW.queued_at < v_from
+       OR (v_to IS NOT NULL AND NEW.queued_at >= v_to) THEN
+        RAISE EXCEPTION 'delivery contact method is outside business-time validity';
+    END IF;
     RETURN NEW;
 END;
 $$;
@@ -282,7 +349,13 @@ CREATE TRIGGER package_version_effective_to_history_guard
 BEFORE UPDATE OF effective_to ON club_package_version
 FOR EACH ROW EXECUTE FUNCTION validate_commercial_effective_to_history();
 
+REVOKE ALL ON FUNCTION validate_entitlement_usage_active_status()
+FROM PUBLIC, bridge_school_reader, bridge_school_app, bridge_school_worker,
+     bridge_school_health, bridge_school_finance;
 REVOKE ALL ON FUNCTION validate_entitlement_usage_integrity()
+FROM PUBLIC, bridge_school_reader, bridge_school_app, bridge_school_worker,
+     bridge_school_health, bridge_school_finance;
+REVOKE ALL ON FUNCTION validate_delivery_active_contact()
 FROM PUBLIC, bridge_school_reader, bridge_school_app, bridge_school_worker,
      bridge_school_health, bridge_school_finance;
 REVOKE ALL ON FUNCTION validate_entitlement_valid_to_history()
