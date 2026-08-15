@@ -27,19 +27,26 @@ def create_blind_tasks(raw_pbn: Path, manifest_jsonl: Path, out_jsonl: Path) -> 
             declarer = x % 4  # N=0,E=1,S=2,W=3
             strain = (x // 4) % 5  # S,H,D,C,NT
 
+            common = {
+                "deal_id": rec["deal_id"],
+                "board": int(meta["board"]),
+                "dealer": meta["dealer"],
+                "vulnerability": meta["vulnerability"],
+                "split": meta["split"],
+                "deal": rec["deal"],
+                "declarer": declarer,
+                "strain": strain,
+                "strain_name": STRAINS[strain],
+                "blind": True,
+            }
+
             # Two independent technical tasks per deal: one declarer-side value
             # estimate and one defense opening-lead choice.
             tasks = [
                 {
+                    **common,
                     "task_id": f"{rec['deal_id']}-CT",
-                    "deal_id": rec["deal_id"],
-                    "split": meta["split"],
                     "task_type": "contract_tricks",
-                    "deal": rec["deal"],
-                    "declarer": declarer,
-                    "strain": strain,
-                    "strain_name": STRAINS[strain],
-                    "blind": True,
                     "prediction_schema": {
                         "tricks": "integer 0..13",
                         "confidence": "low|medium|high",
@@ -48,16 +55,10 @@ def create_blind_tasks(raw_pbn: Path, manifest_jsonl: Path, out_jsonl: Path) -> 
                     },
                 },
                 {
+                    **common,
                     "task_id": f"{rec['deal_id']}-OL",
-                    "deal_id": rec["deal_id"],
-                    "split": meta["split"],
                     "task_type": "opening_lead",
-                    "deal": rec["deal"],
-                    "declarer": declarer,
-                    "strain": strain,
-                    "strain_name": STRAINS[strain],
                     "leader": (declarer + 1) % 4,
-                    "blind": True,
                     "prediction_schema": {
                         "card": "SHDC + rank, e.g. S7 or HA",
                         "expected_defense_tricks": "optional integer 0..13",
