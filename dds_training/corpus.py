@@ -57,15 +57,11 @@ def split_assignment(n: int, seed: int) -> dict[int, str]:
     return result
 
 
-def generate_corpus(n: int, out_dir: Path, seed: int = PROJECT_SEED) -> dict:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    raw_path = out_dir / "raw.pbn"
-    manifest_path = out_dir / "manifest.jsonl"
+def _write_corpus(n: int, raw_path: Path, manifest_path: Path, seed: int) -> dict:
     rng = random.Random(seed)
     split_map = split_assignment(n, seed)
-
     sha = hashlib.sha256()
-    with raw_path.open("w", encoding="utf-8", newline="\n") as pbn, manifest_path.open("w", encoding="utf-8") as mf:
+    with raw_path.open("w", encoding="utf-8", newline="\n") as pbn, manifest_path.open("w", encoding="utf-8", newline="\n") as mf:
         for board in range(1, n + 1):
             cards = list(DECK)
             rng.shuffle(cards)
@@ -93,19 +89,95 @@ def generate_corpus(n: int, out_dir: Path, seed: int = PROJECT_SEED) -> dict:
                 "vulnerability": vul,
                 "split": split_map[board],
             }, ensure_ascii=False) + "\n")
-
-    summary = {
+    return {
         "count": n,
         "seed": seed,
-        "raw_pbn": str(raw_path),
-        "manifest": str(manifest_path),
         "raw_sha256": sha.hexdigest(),
         "splits": {
             name: sum(1 for v in split_map.values() if v == name)
             for name in SPLIT_RATIOS
         },
     }
-    (out_dir / "corpus_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def generate_corpus(n: int, out_dir: Path, seed: int = PROJECT_SEED) -> dict:
+    """Create or safely expand the deterministic raw corpus.
+
+    Existing work is never silently shrunk or regenerated with another seed.
+    Expansion is first built into temporary files, and the old raw PBN/manifest
+    must be exact byte prefixes of the new corpus before atomic replacement.
+    This lets pilot -> main reuse one work directory and keep its SQLite
+    experience/checkpoints while guaranteeing that the original 10k benchmark
+    assignments did not change.
+    """
+    if n < 1:
+        raise ValueError("Corpus size must be positive")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = out_dir / "raw.pbn"
+    manifest_path = out_dir / "manifest.jsonl"
+    summary_path = out_dir / "corpus_summary.json"
+
+    old_summary = None
+    if summary_path.exists() or raw_path.exists() or manifest_path.exists():
+        if not (summary_path.exists() and raw_path.exists() and manifest_path.exists()):
+            raise ValueError("Partial existing corpus detected; restore all raw/manifest/summary files before expansion")
+        old_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        old_n = int(old_summary.get("count", -1))
+        old_seed = int(old_summary.get("seed", -1))
+        if old_seed != seed:
+            raise ValueError(f"Existing corpus seed {old_seed} differs from requested seed {seed}")
+        if n < old_n:
+            raise ValueError(f"Refusing to shrink deterministic corpus from {old_n} to {n}; use a new work directory")
+        validate_pbn_corpus(raw_path, old_n)
+        actual_old_sha = _sha256(raw_path)
+        if actual_old_sha != old_summary.get("raw_sha256"):
+            raise ValueError("Existing raw.pbn SHA-256 does not match corpus_summary.json")
+        if n == old_n:
+            return {
+                **old_summary,
+                "raw_pbn": str(raw_path),
+                "manifest": str(manifest_path),
+                "reused_existing": True,
+            }
+
+    tmp_raw = out_dir / ".raw.pbn.new"
+    tmp_manifest = out_dir / ".manifest.jsonl.new"
+    try:
+        generated = _write_corpus(n, tmp_raw, tmp_manifest, seed)
+        validate_pbn_corpus(tmp_raw, n)
+        if _sha256(tmp_raw) != generated["raw_sha256"]:
+            raise ValueError("New corpus SHA-256 mismatch before commit")
+
+        if old_summary is not None:
+            old_raw_bytes = raw_path.read_bytes()
+            old_manifest_bytes = manifest_path.read_bytes()
+            if not tmp_raw.read_bytes().startswith(old_raw_bytes):
+                raise ValueError("Expanded raw corpus does not preserve the existing corpus byte-for-byte as a prefix")
+            if not tmp_manifest.read_bytes().startswith(old_manifest_bytes):
+                raise ValueError("Expanded split manifest changes an existing assignment; expansion aborted")
+
+        tmp_raw.replace(raw_path)
+        tmp_manifest.replace(manifest_path)
+    finally:
+        tmp_raw.unlink(missing_ok=True)
+        tmp_manifest.unlink(missing_ok=True)
+
+    summary = {
+        **generated,
+        "raw_pbn": str(raw_path),
+        "manifest": str(manifest_path),
+        "reused_existing": False,
+        "expanded_from": None if old_summary is None else int(old_summary["count"]),
+    }
+    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return summary
 
 
