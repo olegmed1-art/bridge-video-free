@@ -213,12 +213,20 @@ def validate_pbn_corpus(path: Path, expected_count: int | None = None) -> dict:
         if len(hands) != 4:
             raise ValueError(f"Wrong hand count in {rec['deal_id']}")
         cards: list[str] = []
-        for hand in hands:
+        for hand_index, hand in enumerate(hands):
             suits = hand.split(".")
             if len(suits) != 4:
                 raise ValueError(f"Wrong suit count in {rec['deal_id']}")
+            hand_cards: list[str] = []
             for suit, ranks in zip(SUITS, suits):
-                cards.extend(suit + r for r in ranks)
+                if any(rank not in RANKS for rank in ranks):
+                    raise ValueError(f"Invalid rank in {rec['deal_id']} hand {hand_index}")
+                hand_cards.extend(suit + r for r in ranks)
+            if len(hand_cards) != 13:
+                raise ValueError(
+                    f"Invalid hand size in {rec['deal_id']} hand {hand_index}: expected 13, got {len(hand_cards)}"
+                )
+            cards.extend(hand_cards)
         if len(cards) != 52 or len(set(cards)) != 52 or set(cards) != set(DECK):
             raise ValueError(f"Invalid 52-card deal: {rec['deal_id']}")
     if expected_count is not None and count != expected_count:
