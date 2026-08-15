@@ -5,6 +5,7 @@ import math
 import sqlite3
 
 from config import ALGORITHM_VERSION, SKILL_LIFECYCLE
+from experience_events import schedule_spaced_reviews
 
 
 SKILL_CATALOG = {
@@ -140,6 +141,7 @@ def record_task_experience(
         if error_code == "F_DEFENSE_OVER_DDS_CLAIM":
             skills.append(("defense.overclaim_detection", "error", "error_pattern"))
 
+    current_evaluations = con.execute("SELECT COUNT(*) FROM dds_results").fetchone()[0]
     for key, outcome, evidence_type in skills:
         _add_evidence(
             con,
@@ -152,6 +154,14 @@ def record_task_experience(
             run_id=run_id,
             payload={"prediction": prediction, "result": result},
         )
+        if outcome == "error":
+            schedule_spaced_reviews(
+                con,
+                skill_key=key,
+                source_task_id=task["task_id"],
+                current_evaluations=current_evaluations,
+                run_id=run_id,
+            )
 
     event_payload = {
         "task_type": task["task_type"],
@@ -195,11 +205,7 @@ def record_skill_check(
     split: str = "derived",
     details: dict | None = None,
 ) -> str:
-    """Append transfer/regression/counterexample/symmetry/perturbation evidence.
-
-    This is the public path used after an initial error has generated new unseen
-    checks. It never mutates prior evidence.
-    """
+    """Append transfer/regression/counterexample/symmetry/perturbation evidence."""
     task = {"task_id": task_id, "deal_id": deal_id, "split": split}
     _add_evidence(
         con,
@@ -350,7 +356,7 @@ def build_learning_plan(con: sqlite3.Connection, limit: int = 20) -> list[dict]:
                 "high_confidence_errors": high_conf_errors or 0,
                 "priority": round(priority, 4),
                 "recommended_targeted_tasks": recommended,
-                "purposes": ["transfer", "counterexample", "regression", "symmetry", "perturbation"],
+                "purposes": ["transfer", "counterexample", "regression", "symmetry", "perturbation", "spaced_review"],
             }
         )
     plan.sort(key=lambda x: (-x["priority"], x["skill_key"]))
