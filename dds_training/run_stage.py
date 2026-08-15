@@ -6,10 +6,12 @@ import os
 import uuid
 from pathlib import Path
 
-from config import BATCH_SIZE_DD_TABLE, PROJECT_SEED, STAGES
+from audit import audit_database, audit_manifest, persist_audit
+from config import ALGORITHM_VERSION, BATCH_SIZE_DD_TABLE, PROJECT_SEED, STAGES
 from corpus import generate_corpus, validate_pbn_corpus
 from dds_engine import contract_tricks_batch, engine_info, evaluate_opening_lead
-from storage import connect, upsert_prediction, upsert_result
+from learning import build_learning_plan, persist_learning_plan, recompute_all_skills, record_task_experience
+from storage import add_regression_case, connect, record_correction, upsert_prediction, upsert_result
 from tasks import create_blind_tasks, load_locked_predictions
 
 CONFIRM_TOKEN = "YES"
@@ -25,11 +27,16 @@ def cmd_prepare(args) -> None:
     work.mkdir(parents=True, exist_ok=True)
     summary = generate_corpus(n, work, PROJECT_SEED)
     validate_pbn_corpus(work / "raw.pbn", n)
+    manifest_audit = audit_manifest(work / "manifest.jsonl")
+    if manifest_audit["status"] != "ok":
+        raise SystemExit(f"Manifest audit failed: {manifest_audit}")
     task_summary = create_blind_tasks(work / "raw.pbn", work / "manifest.jsonl", work / "blind_tasks.jsonl")
     state = {
         "stage": args.stage,
+        "algorithm_version": ALGORITHM_VERSION,
         "status": "prepared_no_dds",
         "corpus": summary,
+        "manifest_audit": manifest_audit,
         "tasks": task_summary,
         "next": "Create and lock blind predictions before any DDS evaluation.",
     }
@@ -95,6 +102,7 @@ def cmd_evaluate(args) -> None:
                 "dd_regret": None,
                 "investigation_required": delta > 0,
                 "error_code": "OK" if delta == 0 else "D_OVER_DDS_CLAIM" if delta > 0 else "D_MISSED_TRICKS",
+                "algorithm_version": ALGORITHM_VERSION,
             }
         else:
             result = evaluate_opening_lead(task["deal"], task["strain"], task["declarer"], pred["card"])
@@ -102,6 +110,7 @@ def cmd_evaluate(args) -> None:
             over_claim = expected is not None and int(expected) > int(result["best_defense_tricks"])
             result["expected_defense_tricks"] = expected
             result["investigation_required"] = bool(over_claim)
+            result["algorithm_version"] = ALGORITHM_VERSION
             if not result["legal_or_equivalent"]:
                 result["error_code"] = "F_ILLEGAL_OR_UNREPRESENTED_LEAD"
             elif result["dd_regret"] == 0:
@@ -112,31 +121,84 @@ def cmd_evaluate(args) -> None:
                 result["error_code"] = "F_DEFENSE_OVER_DDS_CLAIM"
 
         upsert_result(db, task, result)
+        learned_skills = record_task_experience(db, task, pred, result, args.run_id)
         if result.get("error_code") != "OK":
             error_count += 1
             db.execute(
                 "INSERT INTO error_events(task_id,error_code,magnitude,details_json) VALUES(?,?,?,?)",
                 (task["task_id"], result["error_code"], result.get("dd_regret", result.get("prediction_error")), json.dumps(result, ensure_ascii=False)),
             )
+            # Every meaningful failure becomes a permanent regression case.  This
+            # records the old failure without changing the DDS fact itself.
+            add_regression_case(db, task, result, learned_skills[0] if learned_skills else None)
         completed += 1
         if completed % args.checkpoint_every == 0:
             next_id = todo[completed]["task_id"] if completed < len(todo) else None
             db.execute(
                 "INSERT INTO checkpoints(run_id,completed_tasks,errors,next_task_id,note) VALUES(?,?,?,?,?)",
-                (args.run_id, completed, error_count, next_id, "automatic checkpoint"),
+                (args.run_id, completed, error_count, next_id, f"automatic checkpoint; algorithm={ALGORITHM_VERSION}"),
             )
             db.commit()
             print(f"checkpoint: {completed}/{len(todo)}")
 
+    recompute_all_skills(db)
+    plan = build_learning_plan(db)
+    persist_learning_plan(db, plan, args.run_id)
+    audit = audit_database(db)
+    persist_audit(db, audit, args.run_id)
     db.commit()
     print(json.dumps({
         "run_id": args.run_id,
+        "algorithm_version": ALGORITHM_VERSION,
         "evaluated_now": completed,
         "already_done": len(requested) - len(todo),
         "requested": len(requested),
         "errors_now": error_count,
+        "learning_plan_top": plan[:5],
+        "audit": audit,
         "solver": engine_info(),
     }, indent=2))
+
+
+def cmd_plan(args) -> None:
+    db = connect(Path(args.work) / "training.sqlite3")
+    recompute_all_skills(db)
+    plan = build_learning_plan(db, args.limit)
+    if args.persist:
+        persist_learning_plan(db, plan, args.run_id)
+        db.commit()
+    print(json.dumps({"algorithm_version": ALGORITHM_VERSION, "plan": plan}, indent=2))
+
+
+def cmd_audit(args) -> None:
+    work = Path(args.work)
+    db = connect(work / "training.sqlite3")
+    report = audit_database(db)
+    if (work / "manifest.jsonl").exists():
+        report["manifest"] = audit_manifest(work / "manifest.jsonl")
+    persist_audit(db, report, args.run_id)
+    db.commit()
+    print(json.dumps(report, indent=2))
+    if args.fail_on_error and report["status"] != "ok":
+        raise SystemExit(2)
+
+
+def cmd_correct(args) -> None:
+    db = connect(Path(args.work) / "training.sqlite3")
+    replacement = None
+    if args.replacement_json:
+        replacement = json.loads(Path(args.replacement_json).read_text(encoding="utf-8"))
+    correction_id = record_correction(
+        db,
+        target_table=args.target_table,
+        target_key=args.target_key,
+        correction_type=args.correction_type,
+        reason=args.reason,
+        replacement=replacement,
+        supersedes_correction_id=args.supersedes,
+    )
+    db.commit()
+    print(json.dumps({"correction_id": correction_id, "target": f"{args.target_table}:{args.target_key}"}, indent=2))
 
 
 def cmd_report(args) -> None:
@@ -165,6 +227,29 @@ def parser() -> argparse.ArgumentParser:
     q.add_argument("--checkpoint-every", type=int, default=100)
     q.add_argument("--run-id", default=None)
     q.set_defaults(func=cmd_evaluate)
+
+    q = sp.add_parser("plan", help="Rank weaknesses and propose targeted transfer/counterexample/regression work")
+    q.add_argument("--work", required=True)
+    q.add_argument("--limit", type=int, default=20)
+    q.add_argument("--persist", action="store_true")
+    q.add_argument("--run-id", default=None)
+    q.set_defaults(func=cmd_plan)
+
+    q = sp.add_parser("audit", help="Audit database provenance and immutability without running DDS")
+    q.add_argument("--work", required=True)
+    q.add_argument("--fail-on-error", action="store_true")
+    q.add_argument("--run-id", default=None)
+    q.set_defaults(func=cmd_audit)
+
+    q = sp.add_parser("correct", help="Append a correction; never rewrite a locked fact")
+    q.add_argument("--work", required=True)
+    q.add_argument("--target-table", required=True)
+    q.add_argument("--target-key", required=True)
+    q.add_argument("--correction-type", required=True)
+    q.add_argument("--reason", required=True)
+    q.add_argument("--replacement-json")
+    q.add_argument("--supersedes", type=int)
+    q.set_defaults(func=cmd_correct)
 
     q = sp.add_parser("report")
     q.add_argument("--stage", choices=STAGES, required=True)
