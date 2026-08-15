@@ -10,9 +10,16 @@ from audit import audit_database, audit_manifest, persist_audit
 from config import ALGORITHM_VERSION, BATCH_SIZE_DD_TABLE, PROJECT_SEED, STAGES
 from corpus import generate_corpus, validate_pbn_corpus
 from dds_engine import contract_tricks_batch, engine_info, evaluate_opening_lead
-from learning import build_learning_plan, persist_learning_plan, recompute_all_skills, record_task_experience
+from learning import (
+    build_learning_plan,
+    persist_learning_plan,
+    recompute_all_skills,
+    record_skill_check,
+    record_task_experience,
+)
 from storage import add_regression_case, connect, record_correction, upsert_prediction, upsert_result
 from tasks import create_blind_tasks, load_locked_predictions
+from variants import create_error_followups
 
 CONFIRM_TOKEN = "YES"
 
@@ -58,10 +65,56 @@ def _chunks(seq, n):
         yield seq[i:i+n]
 
 
+def _task_path(work: Path, value: str | None) -> Path:
+    if not value:
+        return work / "blind_tasks.jsonl"
+    p = Path(value)
+    return p if p.is_absolute() else work / p
+
+
+def _derived_transfer_evidence(db, task: dict, pred: dict, result: dict, run_id: str) -> list[str]:
+    source_id = task.get("derived_from_task_id")
+    evidence_type = task.get("evidence_type")
+    if not source_id or evidence_type not in {"symmetry", "perturbation", "transfer", "counterexample", "regression", "real_world"}:
+        return []
+    source_skills = [
+        r[0] for r in db.execute(
+            "SELECT DISTINCT skill_key FROM skill_evidence WHERE task_id=? AND outcome!='success'",
+            (source_id,),
+        )
+    ]
+    success = result.get("error_code") == "OK"
+    regret = result.get("dd_regret")
+    if regret is None:
+        regret = result.get("prediction_error")
+    confidence = str(pred.get("confidence", "unknown")).lower()
+    for skill_key in source_skills:
+        record_skill_check(
+            db,
+            skill_key=skill_key,
+            task_id=task["task_id"],
+            deal_id=task["deal_id"],
+            evidence_type=evidence_type,
+            success=success,
+            regret=None if regret is None else float(regret),
+            confidence=confidence,
+            run_id=run_id,
+            split="derived",
+            details={
+                "derived_from_task_id": source_id,
+                "error_code": result.get("error_code"),
+                "prediction": pred,
+                "result": result,
+            },
+        )
+    return source_skills
+
+
 def cmd_evaluate(args) -> None:
     _require_start(args)
     work = Path(args.work)
-    tasks = load_jsonl(work / "blind_tasks.jsonl")
+    task_path = _task_path(work, args.tasks_file)
+    tasks = load_jsonl(task_path)
     predictions = load_locked_predictions(Path(args.predictions))
     requested = [t for t in tasks if t["split"] in set(args.splits)]
     if args.limit:
@@ -79,7 +132,6 @@ def cmd_evaluate(args) -> None:
     todo = [t for t in requested if t["task_id"] not in already]
     contract_tasks = [t for t in todo if t["task_type"] == "contract_tricks"]
 
-    # Batch DD tables for contract-trick tasks.
     table_values: dict[str, int] = {}
     for batch in _chunks(contract_tasks, BATCH_SIZE_DD_TABLE):
         matrices = contract_tricks_batch([t["deal"] for t in batch])
@@ -88,6 +140,7 @@ def cmd_evaluate(args) -> None:
 
     completed = 0
     error_count = 0
+    derived_checks = 0
     for task in todo:
         pred = predictions[task["task_id"]]
         if task["task_type"] == "contract_tricks":
@@ -122,14 +175,13 @@ def cmd_evaluate(args) -> None:
 
         upsert_result(db, task, result)
         learned_skills = record_task_experience(db, task, pred, result, args.run_id)
+        derived_checks += len(_derived_transfer_evidence(db, task, pred, result, args.run_id))
         if result.get("error_code") != "OK":
             error_count += 1
             db.execute(
                 "INSERT INTO error_events(task_id,error_code,magnitude,details_json) VALUES(?,?,?,?)",
                 (task["task_id"], result["error_code"], result.get("dd_regret", result.get("prediction_error")), json.dumps(result, ensure_ascii=False)),
             )
-            # Every meaningful failure becomes a permanent regression case.  This
-            # records the old failure without changing the DDS fact itself.
             add_regression_case(db, task, result, learned_skills[0] if learned_skills else None)
         completed += 1
         if completed % args.checkpoint_every == 0:
@@ -144,20 +196,43 @@ def cmd_evaluate(args) -> None:
     recompute_all_skills(db)
     plan = build_learning_plan(db)
     persist_learning_plan(db, plan, args.run_id)
+    followups = None
+    if args.generate_followups and (work / "blind_tasks.jsonl").exists():
+        followups = create_error_followups(
+            work / "blind_tasks.jsonl",
+            db,
+            work / "derived_blind_tasks.jsonl",
+            max_sources=args.max_followup_sources,
+        )
     audit = audit_database(db)
     persist_audit(db, audit, args.run_id)
     db.commit()
     print(json.dumps({
         "run_id": args.run_id,
         "algorithm_version": ALGORITHM_VERSION,
+        "task_file": str(task_path),
         "evaluated_now": completed,
         "already_done": len(requested) - len(todo),
         "requested": len(requested),
         "errors_now": error_count,
+        "derived_skill_checks_recorded": derived_checks,
+        "blind_followups": followups,
         "learning_plan_top": plan[:5],
         "audit": audit,
         "solver": engine_info(),
     }, indent=2))
+
+
+def cmd_followups(args) -> None:
+    work = Path(args.work)
+    db = connect(work / "training.sqlite3")
+    summary = create_error_followups(
+        work / "blind_tasks.jsonl",
+        db,
+        work / args.out,
+        max_sources=args.max_sources,
+    )
+    print(json.dumps(summary, indent=2))
 
 
 def cmd_plan(args) -> None:
@@ -219,14 +294,23 @@ def parser() -> argparse.ArgumentParser:
     q = sp.add_parser("evaluate", help="Evaluate only locked blind predictions using local DDS3")
     q.add_argument("--stage", choices=STAGES, required=True)
     q.add_argument("--work", required=True)
+    q.add_argument("--tasks-file", help="Task JSONL relative to --work; default blind_tasks.jsonl")
     q.add_argument("--predictions", required=True)
-    q.add_argument("--splits", nargs="+", choices=("train", "validation", "sealed_test"), default=["train"])
+    q.add_argument("--splits", nargs="+", choices=("train", "validation", "sealed_test", "derived"), default=["train"])
     q.add_argument("--start", action="store_true")
     q.add_argument("--open-sealed", action="store_true")
     q.add_argument("--limit", type=int)
     q.add_argument("--checkpoint-every", type=int, default=100)
     q.add_argument("--run-id", default=None)
+    q.add_argument("--generate-followups", action=argparse.BooleanOptionalAction, default=True)
+    q.add_argument("--max-followup-sources", type=int, default=500)
     q.set_defaults(func=cmd_evaluate)
+
+    q = sp.add_parser("followups", help="Create blind symmetry/perturbation tasks from recorded errors; no DDS call")
+    q.add_argument("--work", required=True)
+    q.add_argument("--out", default="derived_blind_tasks.jsonl")
+    q.add_argument("--max-sources", type=int, default=500)
+    q.set_defaults(func=cmd_followups)
 
     q = sp.add_parser("plan", help="Rank weaknesses and propose targeted transfer/counterexample/regression work")
     q.add_argument("--work", required=True)
