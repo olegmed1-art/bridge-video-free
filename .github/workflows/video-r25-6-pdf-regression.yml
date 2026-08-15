@@ -3,7 +3,7 @@ name: Bridge Video r25.6 PDF Presentation Regression
 on:
   push:
     branches:
-      - algorithm/3.1-free-r25.6-pdf-presentation
+      - rollback/3.1-free-r25.6-from-r25.9-2026-08-16
     paths:
       - '.github/workflows/video-r25-6-pdf-regression.yml'
       - 'bridge_runtime_hardening_r25_6.py'
