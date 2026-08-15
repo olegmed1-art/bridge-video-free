@@ -1,1 +1,2 @@
-endplay==0.5.12
+# Core DDS training runtime is dependency-free beyond the locally built DDS3 wheel.
+# endplay is intentionally optional and not part of the primary DDS3 labeler runtime.

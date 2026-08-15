@@ -5,9 +5,8 @@ This directory contains the preparation layer for the bridge DDS-learning loop.
 ## Fixed architecture
 
 - Primary mathematical engine: **DDS3 v3.0.0**, built locally from the official `dds-bridge/dds` source.
-- Python helper layer: **endplay 0.5.12** for bridge types/PBN utilities when useful.
-- Runtime baseline: **Linux/WSL2 + Python 3.13**. This combination is pinned by our tested bootstrap so the compiled DDS3 extension and the published endplay wheel use the same Python runtime.
-- DDS3 remains the source of truth; endplay's bundled older DDS is not used as the primary training labeler.
+- Runtime baseline: **Linux/WSL2 + Python 3.14**. The official v3.0.0 Bazel Python wheel currently resolves its binding toolchain to Python 3.14, so the runtime is pinned to match the compiled extension.
+- `endplay` remains an optional bridge-utility layer, but it is deliberately not part of the primary DDS3 labeler runtime. The core pipeline has its own deterministic PBN generator/parser and talks directly to DDS3.
 - Storage: local files + SQLite. No paid DDS API and no per-request DDS charge.
 - Raw PBN is kept free of DDS answers. DDS results are written to separate result files/database rows.
 - Training cannot start accidentally: evaluation requires an explicit start flag and a confirmation token.
@@ -38,7 +37,7 @@ If a prediction claims more tricks than DDS allows, or claims the defense can ta
 
 ## Local bootstrap
 
-Linux / WSL2 with Python 3.13:
+Linux / WSL2 with Python 3.14:
 
 ```bash
 cd dds_training

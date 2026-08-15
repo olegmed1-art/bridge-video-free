@@ -11,8 +11,6 @@ from dds_engine import engine_info
 
 def run_quick() -> dict:
     import dds3
-    import endplay
-    from endplay.types import Deal
 
     with tempfile.TemporaryDirectory(prefix="dds-preflight-") as td:
         root = Path(td)
@@ -20,14 +18,12 @@ def run_quick() -> dict:
         validate_pbn_corpus(root / "raw.pbn", 64)
         recs = list(iter_pbn_records(root / "raw.pbn"))
         deals = [r["deal"] for r in recs[:8]]
-
-        # Independent parser sanity: endplay must accept our RAW Deal strings.
-        parsed = [Deal(d) for d in deals]
-        assert all(sum(len(hand) for _, hand in deal) == 52 for deal in parsed)
+        assert len(deals) == 8
+        assert all(d.startswith("N:") and len(d.split()) == 4 for d in deals)
 
         # DDS3 batch table smoke test.
         tables = dds3.calc_all_tables_pbn(deals[:4], mode=-1, trump_filter=(0, 0, 0, 0, 0))
-        assert tables["no_of_boards"] == 4
+        assert int(tables["no_of_boards"]) == 4
         assert len(tables["tables"]) == 4
         for t in tables["tables"]:
             matrix = t["res_table"]
@@ -41,7 +37,8 @@ def run_quick() -> dict:
         r1 = dds3.solve_board_pbn(deals[0], trump=4, first=0, solutions=3, context=ctx)
         r2 = dds3.solve_board_pbn(deals[0], trump=4, first=0, solutions=3, context=ctx)
         assert int(r1["cards"]) > 0 and int(r2["cards"]) > 0
-        assert list(r1["score"])[: int(r1["cards"])] == list(r2["score"])[: int(r2["cards"])]
+        n = int(r1["cards"])
+        assert list(r1["score"])[:n] == list(r2["score"])[:n]
 
         return {
             "ok": True,

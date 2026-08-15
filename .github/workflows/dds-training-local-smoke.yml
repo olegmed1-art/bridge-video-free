@@ -20,9 +20,13 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
-          cache: 'pip'
-          cache-dependency-path: dds_training/requirements.txt
+          python-version: '3.14'
+
+      - name: Restore DDS3 Bazel disk cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/bazel-dds3
+          key: dds3-v3.0.0-bazel7.6.1-py314-${{ runner.os }}
 
       - name: Bootstrap local DDS3 and run technical preflight
         run: bash dds_training/bootstrap_linux.sh
