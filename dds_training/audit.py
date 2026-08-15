@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 
 from config import ALGORITHM_VERSION, SKILL_LIFECYCLE
+from run_provenance import ensure_run_task_table
 
 
 def _recent_regression_streak(con: sqlite3.Connection, skill_key: str) -> int:
@@ -26,6 +27,7 @@ def _recent_regression_streak(con: sqlite3.Connection, skill_key: str) -> int:
 
 
 def audit_database(con: sqlite3.Connection) -> dict:
+    ensure_run_task_table(con)
     issues: list[dict] = []
 
     def add(code: str, severity: str, count: int, detail: str) -> None:
@@ -50,6 +52,14 @@ def audit_database(con: sqlite3.Connection) -> dict:
     ).fetchone()[0]
     add("PREDICTION_RESULT_METADATA_MISMATCH", "error", metadata_mismatch, "Prediction and DDS result disagree on immutable task metadata")
 
+    run_task_mismatch = con.execute(
+        """
+        SELECT COUNT(*) FROM run_task_events e JOIN dds_results r ON r.task_id=e.task_id
+        WHERE e.deal_id<>r.deal_id OR e.task_type<>r.task_type OR e.split<>r.split
+        """
+    ).fetchone()[0]
+    add("RUN_TASK_METADATA_MISMATCH", "error", run_task_mismatch, "Run provenance disagrees with immutable DDS task metadata")
+
     validation_learning = con.execute(
         """
         SELECT COUNT(*) FROM skill_evidence se JOIN dds_results r ON r.task_id=se.task_id
@@ -68,21 +78,33 @@ def audit_database(con: sqlite3.Connection) -> dict:
 
     sealed_results = con.execute("SELECT COUNT(*) FROM dds_results WHERE split='sealed_test'").fetchone()[0]
     if sealed_results:
-        authorized = 0
-        for opened, splits_json in con.execute("SELECT sealed_opened,requested_splits_json FROM runs WHERE sealed_opened=1"):
-            try:
-                splits = set(json.loads(splits_json or "[]"))
-            except json.JSONDecodeError:
-                splits = set()
-            authorized += int(bool(opened) and splits == {"sealed_test"})
-        if not authorized:
-            add("SEALED_TEST_WITHOUT_AUTHORIZED_RUN", "error", sealed_results, "Sealed results exist without an explicitly authorized sealed-only run")
-        else:
+        missing_sealed_provenance = con.execute(
+            """
+            SELECT COUNT(*) FROM dds_results r
+            WHERE r.split='sealed_test'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM run_task_events e
+                JOIN runs ru ON ru.run_id=e.run_id
+                WHERE e.task_id=r.task_id
+                  AND e.action='evaluated'
+                  AND ru.sealed_opened=1
+                  AND ru.requested_splits_json='["sealed_test"]'
+              )
+            """
+        ).fetchone()[0]
+        add(
+            "SEALED_TEST_WITHOUT_TASK_PROVENANCE",
+            "error",
+            missing_sealed_provenance,
+            "Each sealed DDS result must have an original evaluated event from an explicitly authorized sealed-only run; later reuse is insufficient",
+        )
+        if not missing_sealed_provenance:
             issues.append({
                 "code": "SEALED_TEST_OPENED",
                 "severity": "info",
                 "count": int(sealed_results),
-                "detail": "Sealed-test results exist under an explicitly authorized sealed-only run.",
+                "detail": "All sealed-test results have per-task provenance from explicitly authorized sealed-only evaluation runs.",
             })
 
     stable_issues = 0
@@ -144,6 +166,7 @@ def audit_database(con: sqlite3.Connection) -> dict:
         "skill_state_history_no_update", "skill_state_history_no_delete",
         "audit_events_no_update", "audit_events_no_delete",
         "checkpoints_no_update", "checkpoints_no_delete",
+        "run_task_events_no_update", "run_task_events_no_delete",
     }
     missing = required - triggers
     if missing:
@@ -158,7 +181,7 @@ def audit_database(con: sqlite3.Connection) -> dict:
     for table in (
         "predictions", "dds_results", "error_events", "experience_events",
         "skill_profiles", "skill_evidence", "rule_versions", "regression_cases",
-        "counterexamples", "correction_events", "learning_queue", "runs", "checkpoints",
+        "counterexamples", "correction_events", "learning_queue", "runs", "run_task_events", "checkpoints",
     ):
         counts[table] = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
 
