@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 
 from config import ALGORITHM_VERSION, SKILL_LIFECYCLE
+from investigations import ensure_investigation_table
 from run_provenance import ensure_run_task_table
 
 
@@ -28,6 +29,7 @@ def _recent_regression_streak(con: sqlite3.Connection, skill_key: str) -> int:
 
 def audit_database(con: sqlite3.Connection) -> dict:
     ensure_run_task_table(con)
+    ensure_investigation_table(con)
     issues: list[dict] = []
 
     def add(code: str, severity: str, count: int, detail: str) -> None:
@@ -107,6 +109,40 @@ def audit_database(con: sqlite3.Connection) -> dict:
                 "detail": "All sealed-test results have per-task provenance from explicitly authorized sealed-only evaluation runs.",
             })
 
+    required_investigations = con.execute(
+        "SELECT COUNT(*) FROM dds_results WHERE investigation_required=1"
+    ).fetchone()[0]
+    untracked_investigations = con.execute(
+        """
+        SELECT COUNT(*) FROM dds_results r
+        WHERE r.investigation_required=1
+          AND NOT EXISTS (SELECT 1 FROM investigation_events i WHERE i.task_id=r.task_id)
+        """
+    ).fetchone()[0]
+    add(
+        "UNTRACKED_MANDATORY_INVESTIGATION",
+        "error",
+        untracked_investigations,
+        "Every better-than-DDS claim must enter the append-only investigation ledger",
+    )
+    open_investigations = con.execute(
+        """
+        SELECT COUNT(*)
+        FROM (
+          SELECT i.task_id,i.event_type
+          FROM investigation_events i
+          JOIN (SELECT task_id,MAX(id) max_id FROM investigation_events GROUP BY task_id) x ON x.max_id=i.id
+        ) latest
+        WHERE latest.event_type IN ('opened','reopened')
+        """
+    ).fetchone()[0]
+    add(
+        "OPEN_MANDATORY_INVESTIGATION",
+        "error",
+        open_investigations,
+        "Better-than-DDS claims must be resolved with cause, first refutation and bridge lesson before the stage can close",
+    )
+
     stable_issues = 0
     for skill_key, transfer_count, counterexample_count in con.execute(
         """
@@ -167,6 +203,7 @@ def audit_database(con: sqlite3.Connection) -> dict:
         "audit_events_no_update", "audit_events_no_delete",
         "checkpoints_no_update", "checkpoints_no_delete",
         "run_task_events_no_update", "run_task_events_no_delete",
+        "investigation_events_no_update", "investigation_events_no_delete",
     }
     missing = required - triggers
     if missing:
@@ -181,9 +218,11 @@ def audit_database(con: sqlite3.Connection) -> dict:
     for table in (
         "predictions", "dds_results", "error_events", "experience_events",
         "skill_profiles", "skill_evidence", "rule_versions", "regression_cases",
-        "counterexamples", "correction_events", "learning_queue", "runs", "run_task_events", "checkpoints",
+        "counterexamples", "correction_events", "learning_queue", "runs", "run_task_events", "investigation_events", "checkpoints",
     ):
         counts[table] = con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+    counts["investigation_required_results"] = int(required_investigations)
+    counts["open_investigations"] = int(open_investigations)
 
     status = "error" if any(x["severity"] == "error" for x in issues) else "ok"
     return {"status": status, "counts": counts, "issues": issues}
