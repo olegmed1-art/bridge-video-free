@@ -1,0 +1,1 @@
+Production promotion scope: database migrations 0020–0024 plus their tests and architecture documentation. No real member roster import, Knowledge/Canon ingestion, member authentication enablement, or external Club Window release is included in this schema promotion.
