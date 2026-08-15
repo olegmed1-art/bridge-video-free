@@ -1,6 +1,7 @@
 name: Bridge Video r25.1 Diana 9 E2E
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - algorithm/3.1-free-r25.1-asr-hallucination-failclosed
