@@ -9,7 +9,8 @@
 - PostgreSQL: 18.4
 - Production schema_migration: `0001–0019`
 - Для всех зарегистрированных production migration записан checksum.
-- Повторная проверка подтверждает: Club Operations `0020–0026` в production еще не применены.
+- Последняя прямая повторная проверка подтверждает: Club Operations `0020–0035` в production не применены.
+- `club_membership`, `club_payment_refund`, `person_package_grant` в production отсутствуют.
 
 Миграции production после исторической фиксации v0.1:
 
@@ -29,7 +30,7 @@ Capability roles остаются NOLOGIN и без superuser/createdb/createrol
 - bridge_school_worker
 - bridge_school_health
 
-Production principals на момент повторной проверки имеют LOGIN, но не административные атрибуты:
+Production principals имеют LOGIN, но не административные атрибуты:
 
 - bridge_school_app_principal
 - bridge_school_worker_principal
@@ -39,7 +40,7 @@ Production principals на момент повторной проверки им
 
 ## Operational health
 
-Повторная production проверка:
+Последняя production проверка:
 
 - overall_severity = ok
 - critical = 0
@@ -48,7 +49,7 @@ Production principals на момент повторной проверки им
 
 ## Фактические данные
 
-На момент повторной проверки:
+Реальный реестр членов/учеников в production еще не импортирован. Ранее подтверждено:
 
 - Person = 0
 - Student = 0
@@ -56,13 +57,13 @@ Production principals на момент повторной проверки им
 - KnowledgeItem = 0
 - Artifact = 10
 
-Ранее зафиксированные media/transcript данные остаются частью существующего media-контура. Реальные члены/ученики и машинный канон еще не загружены.
+Media/transcript данные относятся к существующему media-контуру. Машинный канон знаний еще не загружен.
 
 ## Backend/API
 
 FastAPI service существует в `bridge_school_api` и использует отдельный app principal. Реализованы базовые health/read endpoints; это еще не Member API.
 
-Текущая защита `/v1/` использует общий `BRIDGE_API_TOKEN`; перед внешним многопользовательским доступом требуется персональная AuthIdentity и object-level authorization.
+Текущая защита `/v1/` использует общий `BRIDGE_API_TOKEN`; перед внешним многопользовательским доступом требуется персональная AuthIdentity и object-level authorization/RLS или эквивалентная fail-closed изоляция.
 
 ## Google Drive
 
@@ -81,42 +82,47 @@ FastAPI service существует в `bridge_school_api` и использу�
 
 ## Candidate Club Operations на GitHub main
 
-Кандидат теперь состоит из миграций `0020–0026`:
+Кандидат состоит из миграций `0020–0035`.
 
-- 0020 — membership, contacts/preferences, services/prices, packages/entitlements, events/bookings;
-- 0021 — financial ledger и finance capability;
-- 0022 — communications/campaigns/admin tasks;
-- 0023 — deterministic state ordering;
-- 0024 — runtime/financial hardening;
-- 0025 — entitlement/financial/delivery integrity hardening;
-- 0026 — semantic integrity: commercial-period overlap, package entitlement rules, price/service consistency, active-contact routing and ClubEvent specialization.
+Основные реализованные контуры:
 
-Тесты `011–013` покрывают основной сценарий и негативные integrity/security cases.
+- membership/contact/service/package/event/booking core;
+- financial ledger, payments/allocations/adjustments and dedicated finance capability;
+- communications/campaigns/admin tasks;
+- deterministic state ordering and runtime permission hardening;
+- entitlement and delivery integrity;
+- append-only allocation corrections;
+- person-specific package acquisitions and package prices;
+- immutable commercial version history;
+- append-only cash refunds and refund-aware balances;
+- acquired-package snapshot protection;
+- append-only ClubMembership lifecycle history;
+- communication/campaign/admin identity hardening;
+- commercial provenance validation at charge/grant time.
 
-Последняя проверка кандидата: GitHub Actions run `31905952353`, PostgreSQL 18; clean migration install, all invariant tests, idempotence, checksum tamper guard и registry verification — `success`.
+Database tests `011–021` cover positive and adversarial Club Operations scenarios in addition to all legacy tests.
 
-## Исправления, найденные повторной проверкой
+Latest post-merge candidate verification: GitHub Actions run `31907731704`, PostgreSQL 18 — clean migration install, runtime DSN regression, all invariant tests, idempotence, checksum tamper guard and migration registry verification all `success`.
 
-1. Entitlement нельзя расходовать сверх выданного количества; его реверс должен точно относиться к исходной операции того же Entitlement.
-2. Новый расход требует активного Entitlement, но корректирующий реверс не блокируется после завершения/отзыва.
-3. Entitlement из package обязан соответствовать package_service_rule и не превышать количество правила.
-4. Общий interactive app больше не может сам выдавать Entitlement; выдача вынесена в доверенный finance/admin capability.
-5. `person_financial_balance` теперь отражает все полученные Payments, включая еще не распределенные; `person_allocated_receivable_balance` отдельно показывает сверку начислений по allocations.
-6. Реверс financial adjustment должен точно компенсировать исходную сумму.
-7. PriceVersion в Charge должен принадлежать той же Service.
-8. Активные PriceVersion/PackageVersion не могут иметь неоднозначно перекрывающиеся периоды.
-9. Для Person/channel допускается один предпочтительный активный контакт.
-10. Новая доставка не использует отозванный контакт, несовместимый канал или явный ContactPreference=`denied`; delivery timestamps проверяются на последовательность.
-11. ClubEvent не может одновременно ссылаться и на Session, и на Tournament.
+## Production release boundary
 
-Политика для `ContactPreference=unknown` намеренно не выдумана: это отдельное бизнес/юридическое правило клуба.
+Production promotion is currently intentionally blocked.
 
-## Следующие шаги
+- GitHub branch `database-production` is unprotected.
+- The workflow currently installed on that branch still auto-runs on qualifying pushes and can apply migrations to Neon.
+- A hardened manual workflow exists on `main`, but has not been installed on the actual production branch.
+- `main` and `database-production` are heavily diverged; an indiscriminate merge is prohibited by the current release plan.
 
-1. Выполнить отдельный controlled production promotion `0020–0026` через существующий `database-production` workflow и затем проверить фактическую production schema/permissions/health.
-2. Добавить AuthIdentity и object-level authorization.
-3. Выполнить controlled pilot import первых Person/Student/ClubMember с reconciliation.
-4. Выполнить Knowledge/Canon ingestion + visibility.
-5. Открывать Member API + Club Window только после authorization gates.
-6. Подключить Communication Hub/Admin UI.
-7. Выполнить backup/restore, privacy/security и load gates перед реальными финансовыми и массовыми пользовательскими данными.
+Before promotion: create a recoverable Neon checkpoint, deliberately harden the production release path, verify production still reports `0019`, promote only reviewed database/release files, dispatch migration manually, and verify registry/permissions/health afterward.
+
+## Следующие архитектурные этапы
+
+1. AuthIdentity + object-level authorization/RLS or equivalent fail-closed isolation.
+2. Actor/audit context for sensitive member/admin actions.
+3. Controlled pilot import Person/Student/ClubMember with reconciliation.
+4. Knowledge/Canon ingestion + visibility.
+5. Member API + Club Window only after authorization gates.
+6. Communication adapters/Admin UI after channel policies are approved.
+7. Backup/restore, privacy/retention, security and load/cost gates before real financial and mass-user rollout.
+
+Не утвержденные правила не внедряются автоматически: `ContactPreference=unknown`, event capacity/waitlist, discount/override pricing and recurring subscription semantics remain explicit policy decisions.
