@@ -1,0 +1,166 @@
+name: Bridge Video r25.4.1 Sunday Lesson Good E2E
+
+on:
+  push:
+    branches:
+      - algorithm/3.1-free-r25.4.1-routing-integrity
+    paths:
+      - '.github/workflows/video-r25-4-1-sunday-good-e2e.yml'
+      - 'bridge_runtime_hardening_r25_4_1.py'
+      - 'run_drive_3_1_free_generic.py'
+      - 'tests/test_revision_routing_r25_4_1.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: bridge-video-r25-4-1-sunday-good-e2e
+  cancel-in-progress: false
+
+jobs:
+  sunday-good-e2e:
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      BRIDGE_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+      BRIDGE_RUNNER_LABEL: ubuntu-24.04
+      BRIDGE_LARGER_RUNNER: "false"
+      BRIDGE_PAID_CLOUD: "false"
+      BRIDGE_BILLING_FALLBACK: "false"
+      BRIDGE_JOB_ID: fb1800d20b82f2e0de94b46599f18fdb
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: 3.1-free-r25.4.1
+      PYTHONUNBUFFERED: "1"
+      WHISPER_MODEL: small
+
+    steps:
+      - name: Checkout r25.4.1 candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Install free open-source runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+          python -m pip install --disable-pip-version-check -r requirements-worker.txt
+      - name: Run inherited and routing regression tests
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python tests/test_asr_qc_r25_1.py
+          PYTHONPATH=. python tests/test_semantic_gate_r25_2.py
+          PYTHONPATH=. python tests/test_late_oauth_r25_3.py
+          PYTHONPATH=. python tests/test_unreliable_asr_isolation_r25_4.py
+          PYTHONPATH=. python tests/test_revision_routing_r25_4_1.py
+          python -m py_compile bridge_runtime_hardening_r25_4_1.py run_drive_3_1_free_generic.py
+      - name: Authenticate to Google Cloud with Workload Identity Federation
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        with:
+          project_id: bridge-video-automation
+          workload_identity_provider: projects/499454355457/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: bridge-video-worker@bridge-video-automation.iam.gserviceaccount.com
+          create_credentials_file: true
+      - name: Google Drive user OAuth preflight
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from run_drive_3_1_free_oidc import user_oauth_token
+          assert user_oauth_token(), 'BLOCKED_ACCESS: Drive OAuth unavailable'
+          print('Google Drive user OAuth preflight: PASS')
+          PY
+      - name: Worker database runtime preflight
+        env:
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${BRIDGE_WORKER_DATABASE_URL:-}" || { echo 'BLOCKED_DATABASE: missing worker DSN' >&2; exit 1; }
+          python database/runtime_worker_preflight.py
+          echo "BRIDGE_WORKER_DATABASE_URL=${BRIDGE_WORKER_DATABASE_URL}" >> "$GITHUB_ENV"
+      - name: FREE-GUARD
+        run: python bridge_worker_3_1_free.py
+      - name: Process known-good Sunday lesson with r25.4.1
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          python run_drive_3_1_free_oidc.py
+      - name: Validate r25.4.1 provenance and inherited quality gates
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import tempfile
+          from pathlib import Path
+          import pymupdf
+          import run_drive_3_1_free as io
+          import run_master_3_1_free as base
+          from bridge_neon_persistence import persist_completed_drive_job
+          from run_drive_3_1_free_oidc import user_oauth_token
+
+          job='fb1800d20b82f2e0de94b46599f18fdb'
+          revision='3.1-free-r25.4.1'
+          token=user_oauth_token()
+          files=io.search(token, f"trashed=false and name='AI_DONE_{job}.json'")
+          files.sort(key=lambda x:x.get('modifiedTime') or '', reverse=True)
+          done=None
+          for item in files:
+              try: payload=json.loads(base._read_text(token,item))
+              except Exception: continue
+              if payload.get('status')=='AI_DONE' and payload.get('algorithmRevision')==revision:
+                  done=payload; break
+          if done is None: raise SystemExit('missing AI_DONE for r25.4.1')
+          semantic=done.get('semantic') or {}
+          if semantic.get('actor_attribution_status')!='unavailable_without_speaker_labels':
+              raise SystemExit(f"unexpected actor attribution status: {semantic}")
+          if semantic.get('speaker_labels_present') is not False:
+              raise SystemExit('Sunday local ASR unexpectedly claims speaker labels')
+          pdf_id=(done.get('masterPdf') or {}).get('driveId')
+          if not pdf_id: raise SystemExit('missing master PDF id')
+          with tempfile.TemporaryDirectory() as td:
+              path=Path(td)/'master.pdf'
+              io.download(token,pdf_id,path)
+              doc=pymupdf.open(path)
+              text='\n'.join(page.get_text() for page in doc)
+              if 'master_analysis.json' not in set(doc.embfile_names()):
+                  raise SystemExit('embedded master missing')
+              master=json.loads(doc.embfile_get('master_analysis.json').decode('utf-8'))
+              doc.close()
+          if f'Алгоритм: 3.1 FREE / {revision}' not in text:
+              raise SystemExit('PDF revision mismatch')
+          quality=master.get('content_quality') or {}
+          if quality.get('unreliable_segments_excluded_from_semantic_derivation') is not True:
+              raise SystemExit(f'missing ASR isolation flag: {quality}')
+          unreliable={str(s.get('segment_id')) for s in master.get('transcript') or [] if s.get('unreliable') and s.get('segment_id')}
+          if not unreliable:
+              raise SystemExit('known-good control unexpectedly had no unreliable QC segments; isolation was not exercised')
+          derived=set()
+          for key in ('episodes','learning_interactions','errors','strengths','teacher_analysis','best_explanations','deals','decisions','knowledge_gaps'):
+              for item in master.get(key) or []:
+                  derived.update(str(x) for x in item.get('evidence') or [] if x)
+          for bucket in ('observations','strengths','difficulties'):
+              for item in (master.get('student_analysis') or {}).get(bucket) or []:
+                  derived.update(str(x) for x in item.get('evidence') or [] if x)
+          contaminated=unreliable & derived
+          if contaminated:
+              raise SystemExit(f'unreliable transcript leaked into derived analytics: {sorted(contaminated)[:10]}')
+          a=text.find('3. Анализ действий ученика')
+          b=text.find('4. Учебные циклы', a+1)
+          if a < 0 or b < 0: raise SystemExit('student-analysis section missing')
+          section=text[a:b]
+          if 'Персональные наблюдения не подтверждены надёжной атрибуцией.' not in section:
+              raise SystemExit('PDF did not withhold unsafe student attribution')
+          if 'Задача:' in section:
+              raise SystemExit('PDF still contains attributed student observations')
+          persist_completed_drive_job(user_oauth_token())
+          print(f"R25_4_1_SUNDAY_E2E: PASS revision={revision} unreliable_excluded={len(unreliable)} semantic=guarded pdf=verified database=persisted")
+          PY
