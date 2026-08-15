@@ -31,10 +31,9 @@ jobs:
       BRIDGE_LARGER_RUNNER: "false"
       BRIDGE_PAID_CLOUD: "false"
       BRIDGE_BILLING_FALLBACK: "false"
-      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.9"
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.6"
       PYTHONUNBUFFERED: "1"
-      BRIDGE_REQUESTED_WHISPER_MODEL: medium
-      WHISPER_MODEL: medium
+      WHISPER_MODEL: small
 
     steps:
       - name: Checkout public technical code only
