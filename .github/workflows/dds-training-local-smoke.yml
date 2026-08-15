@@ -38,6 +38,10 @@ jobs:
         working-directory: dds_training
         run: python investigation_selftest.py
 
+      - name: Test stage completion and report gate
+        working-directory: dds_training
+        run: python stage_gate_selftest.py
+
       - name: Test deterministic pilot-to-main corpus expansion
         working-directory: dds_training
         run: python corpus_selftest.py
