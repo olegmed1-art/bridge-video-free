@@ -49,4 +49,8 @@ VUL_CYCLE = (
     "All", "None", "NS", "EW",
 )
 
-BATCH_SIZE_DD_TABLE = 100
+# DDS3 v3.0.0 CalcAllTablesPBN can return at most 40 complete five-strain
+# tables in one call (MAXNOOFTABLES=40). Larger corpora are chunked by the
+# runner. Keeping this at the actual solver boundary prevents a failure on the
+# first 100-deal batch of a real pilot run.
+BATCH_SIZE_DD_TABLE = 40
