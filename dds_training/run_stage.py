@@ -20,6 +20,7 @@ from learning import (
     record_task_experience,
 )
 from run_provenance import ensure_run_task_table, record_run_task
+from stage_scope import expected_base_deals, task_in_stage
 from storage import add_regression_case, connect, record_correction, upsert_prediction, upsert_result
 from tasks import create_blind_tasks, load_locked_predictions
 from variants import create_error_followups
@@ -31,16 +32,38 @@ def load_jsonl(path: Path) -> list[dict]:
     return [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
 
 
+def _prepare_stage_guard(stage: str, work: Path) -> None:
+    if stage == "targeted":
+        raise SystemExit(
+            "Targeted stage cannot be prepared as another random 10k corpus. "
+            "Use the learning plan and derived/targeted generators after the main-stage report."
+        )
+    if stage == "main":
+        summary_path = work / "corpus_summary.json"
+        if not summary_path.exists():
+            raise SystemExit(
+                "Main stage must expand the existing pilot work directory so experience is preserved. "
+                "Use the same --out directory that contains the completed 10k pilot."
+            )
+        old = json.loads(summary_path.read_text(encoding="utf-8"))
+        if int(old.get("count", -1)) not in {10_000, 30_000}:
+            raise SystemExit(f"Main-stage expansion expected an existing 10k/30k corpus, found {old.get('count')}")
+        if not (work / "training.sqlite3").exists():
+            raise SystemExit("Main stage requires the pilot training.sqlite3 in the same work directory; experience DB is missing")
+
+
 def cmd_prepare(args) -> None:
     n = STAGES[args.stage]
     work = Path(args.out)
     work.mkdir(parents=True, exist_ok=True)
+    _prepare_stage_guard(args.stage, work)
     summary = generate_corpus(n, work, PROJECT_SEED)
     validate_pbn_corpus(work / "raw.pbn", n)
     manifest_audit = audit_manifest(work / "manifest.jsonl")
     if manifest_audit["status"] != "ok":
         raise SystemExit(f"Manifest audit failed: {manifest_audit}")
     task_summary = create_blind_tasks(work / "raw.pbn", work / "manifest.jsonl", work / "blind_tasks.jsonl")
+    stage_base_deals = expected_base_deals(args.stage)
     state = {
         "stage": args.stage,
         "algorithm_version": ALGORITHM_VERSION,
@@ -48,7 +71,9 @@ def cmd_prepare(args) -> None:
         "corpus": summary,
         "manifest_audit": manifest_audit,
         "tasks": task_summary,
-        "next": "Create and lock blind predictions before any DDS evaluation.",
+        "fresh_base_deals_for_stage": stage_base_deals,
+        "fresh_base_tasks_for_stage": stage_base_deals * 2,
+        "next": "Create and lock blind predictions for this stage's fresh task scope before any DDS evaluation.",
     }
     (work / "state.json").write_text(json.dumps(state, indent=2), encoding="utf-8")
     print(json.dumps(state, indent=2))
@@ -188,7 +213,10 @@ def cmd_evaluate(args) -> None:
     predictions_path = Path(args.predictions)
     tasks = load_jsonl(task_path)
     predictions = load_locked_predictions(predictions_path)
-    requested = [t for t in tasks if t["split"] in set(args.splits)]
+    requested = [
+        t for t in tasks
+        if t["split"] in set(args.splits) and task_in_stage(t, args.stage)
+    ]
     if args.limit:
         requested = requested[: args.limit]
     missing = [t["task_id"] for t in requested if t["task_id"] not in predictions]
@@ -215,8 +243,6 @@ def cmd_evaluate(args) -> None:
         if task_id in existing_results
     )
 
-    # Reuse is explicitly recorded, but cannot substitute for an original
-    # `evaluated` event when auditing sealed-test provenance.
     for task in requested:
         if task["task_id"] not in existing_results:
             continue
@@ -254,9 +280,6 @@ def cmd_evaluate(args) -> None:
             actual = table_values[task["task_id"]]
             guessed = int(pred["tricks"])
             delta = guessed - actual
-            # Analyzer revision is deliberately NOT stored in this immutable fact.
-            # Version/provenance lives in `runs` and `skill_evidence`, so a future
-            # analyzer can reinterpret the same DDS fact without creating a conflict.
             result = {
                 "dds_tricks": actual,
                 "predicted_tricks": guessed,
@@ -367,6 +390,8 @@ def cmd_evaluate(args) -> None:
     print(json.dumps({
         "run_id": args.run_id,
         "algorithm_version": ALGORITHM_VERSION,
+        "stage": args.stage,
+        "stage_scoped_tasks": len(requested),
         "task_file": str(task_path),
         "evaluated_now": completed,
         "already_done_in_requested_set": already_requested,
@@ -385,12 +410,7 @@ def cmd_evaluate(args) -> None:
 
 
 def cmd_reinterpret(args) -> None:
-    """Rebuild current-version experience from immutable stored facts, no DDS call.
-
-    This is used after an analyzer revision so historical predictions/results stay
-    immutable while the new revision can derive a fresh skill interpretation.
-    Holdouts remain excluded.
-    """
+    """Rebuild current-version experience from immutable stored facts, no DDS call."""
     if not args.apply:
         raise SystemExit("Experience reinterpretation blocked: add --apply")
     work = Path(args.work)
@@ -509,7 +529,7 @@ def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Fail-closed DDS learning runner")
     sp = p.add_subparsers(dest="command", required=True)
 
-    q = sp.add_parser("prepare", help="Generate RAW corpus and blind tasks; does not call DDS")
+    q = sp.add_parser("prepare", help="Generate/expand RAW corpus and blind tasks; does not call DDS")
     q.add_argument("--stage", choices=STAGES, required=True)
     q.add_argument("--out", required=True)
     q.set_defaults(func=cmd_prepare)
