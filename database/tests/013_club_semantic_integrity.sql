@@ -123,11 +123,14 @@ BEGIN
     RETURNING message_id INTO v_message;
 
     UPDATE contact_method
-       SET status='revoked', valid_to=now()
+       SET status='revoked', valid_to=now()+interval '1 second'
      WHERE contact_method_id=v_contact;
     BEGIN
-        INSERT INTO message_delivery(school_id,message_id,recipient_person_id,contact_method_id,channel,status)
-        VALUES (v_school,v_message,v_person,v_contact,'email','queued');
+        INSERT INTO message_delivery(
+            school_id,message_id,recipient_person_id,contact_method_id,channel,status,queued_at
+        ) VALUES (
+            v_school,v_message,v_person,v_contact,'email','queued',now()+interval '2 seconds'
+        );
         RAISE EXCEPTION 'delivery through revoked contact unexpectedly accepted';
     EXCEPTION WHEN OTHERS THEN
         IF SQLERRM='delivery through revoked contact unexpectedly accepted' THEN RAISE; END IF;
