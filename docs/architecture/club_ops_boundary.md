@@ -1,1 +1,0 @@
-Boundary: this implementation adds the Club Operations data model only. External auth, member-level authorization enforcement, Knowledge/Canon ingestion, member API/UI and real-person import remain gated subsequent stages.
