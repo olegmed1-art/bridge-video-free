@@ -79,19 +79,21 @@ BEGIN
     RETURNING entitlement_id INTO v_entitlement;
     INSERT INTO entitlement_usage(entitlement_id,quantity_used,reference_type)
     VALUES (v_entitlement,1,'consume') RETURNING entitlement_usage_id INTO v_usage;
-    UPDATE person_entitlement SET status='revoked' WHERE entitlement_id=v_entitlement;
+    UPDATE person_entitlement
+       SET status='revoked', valid_to=now()+interval '1 second'
+     WHERE entitlement_id=v_entitlement;
 
     BEGIN
-        INSERT INTO entitlement_usage(entitlement_id,quantity_used,reference_type)
-        VALUES (v_entitlement,0.5,'consume-after-revoke');
+        INSERT INTO entitlement_usage(entitlement_id,quantity_used,occurred_at,reference_type)
+        VALUES (v_entitlement,0.5,now()+interval '2 seconds','consume-after-revoke');
         RAISE EXCEPTION 'new usage on revoked entitlement unexpectedly accepted';
     EXCEPTION WHEN OTHERS THEN
         IF SQLERRM='new usage on revoked entitlement unexpectedly accepted' THEN RAISE; END IF;
     END;
 
-    -- A correction/reversal is still allowed after revocation.
-    INSERT INTO entitlement_usage(entitlement_id,quantity_used,reference_type,reversal_of_usage_id)
-    VALUES (v_entitlement,1,'reversal-after-revoke',v_usage);
+    -- A correction/reversal is still allowed after revocation/validity closure.
+    INSERT INTO entitlement_usage(entitlement_id,quantity_used,occurred_at,reference_type,reversal_of_usage_id)
+    VALUES (v_entitlement,1,now()+interval '2 seconds','reversal-after-revoke',v_usage);
 
     BEGIN
         INSERT INTO club_charge(school_id,person_id,service_id,price_version_id,amount,currency_code)
@@ -120,10 +122,15 @@ BEGIN
     VALUES (v_school,v_communication,v_person,'system','Semantic message')
     RETURNING message_id INTO v_message;
 
-    UPDATE contact_method SET status='revoked' WHERE contact_method_id=v_contact;
+    UPDATE contact_method
+       SET status='revoked', valid_to=now()+interval '1 second'
+     WHERE contact_method_id=v_contact;
     BEGIN
-        INSERT INTO message_delivery(school_id,message_id,recipient_person_id,contact_method_id,channel,status)
-        VALUES (v_school,v_message,v_person,v_contact,'email','queued');
+        INSERT INTO message_delivery(
+            school_id,message_id,recipient_person_id,contact_method_id,channel,status,queued_at
+        ) VALUES (
+            v_school,v_message,v_person,v_contact,'email','queued',now()+interval '2 seconds'
+        );
         RAISE EXCEPTION 'delivery through revoked contact unexpectedly accepted';
     EXCEPTION WHEN OTHERS THEN
         IF SQLERRM='delivery through revoked contact unexpectedly accepted' THEN RAISE; END IF;
