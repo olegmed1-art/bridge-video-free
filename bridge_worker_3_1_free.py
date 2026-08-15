@@ -275,7 +275,7 @@ def validate_r24_master(master):
     if master.get("algorithmRevision")!=ALGORITHM_REVISION:issues.append("version-conformity-failure")
     return {"ok":not issues,"issues":issues,"importantEpisodes":important,"learningCycles":len(cycles),"selectedVisuals":len(refs)}
 def sanitize_public_log(data):
-    allowed={"job_id","stage","attempt","exit_code","size_bytes","sha256","duration_seconds","unit_index","error_class","qc_block","qc_ok","qc_retry","qc_similarity","qc_failed","qc_total","qc_anchor_passed","episode_count","transcript_source","master_embedded","content_warning_count"}; return {k:data[k] for k in allowed if k in data}
+    allowed={"job_id","stage","attempt","exit_code","size_bytes","sha256","duration_seconds","unit_index","error_class","qc_block","qc_ok","qc_retry","qc_similarity","qc_failed","qc_total","qc_anchor_passed","qc_hallucination_blocks","qc_critical_failed","episode_count","transcript_source","master_embedded","content_warning_count"}; return {k:data[k] for k in allowed if k in data}
 def main():
     g=free_guard(repository_private=os.environ.get("BRIDGE_REPOSITORY_PRIVATE","true").lower()=="true",runner_label=os.environ.get("BRIDGE_RUNNER_LABEL",""),larger_runner=os.environ.get("BRIDGE_LARGER_RUNNER","false").lower()=="true",paid_cloud_resources=os.environ.get("BRIDGE_PAID_CLOUD","false").lower()=="true",billing_fallback=os.environ.get("BRIDGE_BILLING_FALLBACK","false").lower()=="true")
     print(json.dumps(sanitize_public_log({"job_id":os.environ.get("BRIDGE_JOB_ID",""),"stage":g.stage,"exit_code":0 if g.ok else 78})))

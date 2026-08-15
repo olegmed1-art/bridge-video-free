@@ -4,7 +4,7 @@
 Builds on the current r25 methodology implementation while hardening two failure
 modes observed on real bridge lessons:
 1. the requested internal revision must match the code that actually executes;
-2. ASR QC is fail-closed: after all retries every checked 5-minute window must pass.
+2. ASR QC is fail-closed for pathological or critically empty retry results while ordinary independent-ASR drift remains governed by the proven base QC.
 
 It also blocks an obvious repeated non-speech hallucination pattern such as a
 minutes-long stream of ``[Аплодисменты]`` while allowing occasional genuine
@@ -52,9 +52,29 @@ def pathological_nonspeech_hallucination(text: str) -> bool:
     return count / max(1, len(words)) >= 0.20
 
 
-def strict_qc_pass(qc, base_passed: bool) -> bool:
-    """ASR may continue only if base QC passed and every checked block passed."""
-    return bool(base_passed) and bool(qc) and all(bool(item.get("ok")) for item in qc)
+def critical_qc_failures(qc) -> int:
+    """Count failed retries with effectively no overlap to the primary transcript."""
+    return sum(
+        not bool(item.get("ok"))
+        and float(item.get("similarity") or 0.0) <= 0.05
+        for item in (qc or [])
+    )
+
+
+def strict_qc_pass(qc, base_passed: bool, hallucination_blocks: int = 0) -> bool:
+    """Release only base-approved ASR without hallucinations or critical empty checks.
+
+    Independent Whisper passes can disagree moderately on valid speech.  Those
+    blocks remain marked unreliable by the base QC and semantic risk layer.  A
+    dense repeated non-speech hallucination or a failed retry with near-zero
+    overlap remains a hard stop.
+    """
+    return (
+        bool(base_passed)
+        and bool(qc)
+        and int(hallucination_blocks) == 0
+        and critical_qc_failures(qc) == 0
+    )
 
 
 def _qc_has_hallucination(record: dict, primary_text: str) -> bool:
@@ -114,12 +134,14 @@ def install(token_func):
                             break
 
         failed = sum(not bool(item.get("ok")) for item in qc)
-        passed = strict_qc_pass(qc, base_passed) and not hallucinated
+        critical_failed = critical_qc_failures(qc)
+        passed = strict_qc_pass(qc, base_passed, len(hallucinated))
         io.safe(
             stage="ASR_QC_STRICT_R25_1",
             qc_failed=failed,
             qc_total=len(qc),
             qc_hallucination_blocks=len(hallucinated),
+            qc_critical_failed=critical_failed,
             exit_code=0 if passed else 1,
         )
         return qc, passed
