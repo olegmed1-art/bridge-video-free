@@ -9,8 +9,25 @@ from audit import audit_database
 from checkpointing import sha256_file, snapshot_database
 from experience_events import record_reasoning_review, record_value_trajectory, summarize_value_trajectory
 from learning import build_learning_plan, learning_allowed_for_task, record_skill_check, record_task_experience
+from run_provenance import record_run_task
 from storage import add_regression_case, connect, record_correction, upsert_prediction, upsert_result
 from variants import create_error_followups, create_variants
+
+
+def _insert_test_run(db: sqlite3.Connection, run_id: str, splits: list[str], sealed_opened: int = 0) -> None:
+    db.execute(
+        """
+        INSERT INTO runs
+          (run_id,stage,seed,corpus_sha256,solver_info_json,algorithm_version,
+           requested_splits_json,task_file,predictions_sha256,sealed_opened,status)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            run_id, "pilot", 20260815, "selftest-sha", "{}", "dds-learning-v2.1",
+            json.dumps(sorted(splits), separators=(",", ":")), "selftest.jsonl", "pred-sha",
+            sealed_opened, "completed",
+        ),
+    )
 
 
 def main() -> None:
@@ -56,6 +73,14 @@ def main() -> None:
 
         upsert_prediction(db, task, prediction)
         upsert_result(db, task, result)
+        _insert_test_run(db, "selftest-run", ["train"])
+        record_run_task(
+            db,
+            run_id="selftest-run",
+            task=task,
+            action="evaluated",
+            details={"purpose": "selftest"},
+        )
         skills = record_task_experience(db, task, prediction, result, "selftest")
         db.execute(
             "INSERT INTO error_events(task_id,error_code,magnitude,details_json) VALUES(?,?,?,?)",
@@ -215,10 +240,12 @@ def main() -> None:
         try:
             assert snap_db.execute("SELECT COUNT(*) FROM dds_results").fetchone()[0] == 2
             assert snap_db.execute("SELECT COUNT(*) FROM correction_events").fetchone()[0] == 1
+            assert snap_db.execute("SELECT COUNT(*) FROM run_task_events").fetchone()[0] == 1
         finally:
             snap_db.close()
 
-        # Idempotent identical insert is allowed; fact or metadata mutation is not.
+        # Idempotent identical insert is allowed; fact, metadata, and provenance
+        # mutation are not.
         upsert_prediction(db, task, prediction)
         try:
             changed = dict(result)
@@ -245,6 +272,13 @@ def main() -> None:
         else:
             raise AssertionError("immutability trigger did not block prediction update")
 
+        try:
+            db.execute("UPDATE run_task_events SET split='validation' WHERE run_id='selftest-run'")
+        except sqlite3.IntegrityError:
+            pass
+        else:
+            raise AssertionError("run-task provenance update was not blocked")
+
         plan = build_learning_plan(db)
         assert plan and plan[0]["high_confidence_errors"] >= 1, plan
         spaced = db.execute("SELECT COUNT(*) FROM learning_queue WHERE purpose='spaced_review'").fetchone()[0]
@@ -257,7 +291,28 @@ def main() -> None:
         assert audit["status"] == "ok", audit
         assert audit["counts"]["correction_events"] == 1
         assert audit["counts"]["regression_cases"] == 1
+        assert audit["counts"]["run_task_events"] == 1
         assert correction_id == 1
+
+        # Dedicated sealed provenance test: a sealed result without an original
+        # authorized evaluated mapping is an audit error. A later `reused` event
+        # does not fix it; only an authorized sealed-only `evaluated` event does.
+        sealed_db = connect(root / "sealed.sqlite3")
+        sealed_task = {**task, "task_id": "SELFTEST-SEALED", "deal_id": "SELFTEST-SEALED-DEAL", "split": "sealed_test"}
+        sealed_pred = {**prediction, "task_id": sealed_task["task_id"]}
+        upsert_prediction(sealed_db, sealed_task, sealed_pred)
+        upsert_result(sealed_db, sealed_task, result)
+        assert audit_database(sealed_db)["status"] == "error"
+
+        _insert_test_run(sealed_db, "sealed-reuse", ["sealed_test"], sealed_opened=1)
+        record_run_task(sealed_db, run_id="sealed-reuse", task=sealed_task, action="reused")
+        assert audit_database(sealed_db)["status"] == "error"
+
+        _insert_test_run(sealed_db, "sealed-eval", ["sealed_test"], sealed_opened=1)
+        record_run_task(sealed_db, run_id="sealed-eval", task=sealed_task, action="evaluated")
+        sealed_audit = audit_database(sealed_db)
+        assert sealed_audit["status"] == "ok", sealed_audit
+
         print(json.dumps({
             "ok": True,
             "holdout_isolation": True,
@@ -265,6 +320,8 @@ def main() -> None:
             "immutable_predictions": True,
             "immutable_dds_results": True,
             "immutable_task_metadata": True,
+            "immutable_run_task_provenance": True,
+            "sealed_reuse_cannot_fake_origin": True,
             "append_only_corrections": True,
             "checkpoint_snapshot": snapshot,
             "skills_recorded": skills,
@@ -278,6 +335,7 @@ def main() -> None:
             "reasoning_reviews": reasoning,
             "learning_plan_top": plan[0],
             "audit": audit,
+            "sealed_audit": sealed_audit,
         }, indent=2))
 
 
