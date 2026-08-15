@@ -46,6 +46,17 @@ jobs:
           source .venv/bin/activate
           python variant_dds_selftest.py
 
+      - name: Cross-check DDS3 with independent bridge-solver
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/bridge-solver-independent
+          git clone --quiet https://github.com/macroxue/bridge-solver.git /tmp/bridge-solver-independent
+          git -C /tmp/bridge-solver-independent checkout --quiet --detach dc2d4df68d21822c18fc1688b9f6f183c927c11c
+          g++ -std=c++17 -O2 -o /tmp/bridge-solver-independent/solver-independent /tmp/bridge-solver-independent/solver.cc
+          cd dds_training
+          source .venv/bin/activate
+          python independent_crosscheck.py --solver /tmp/bridge-solver-independent/solver-independent --count 4
+
       - name: Verify launch and sealed-test guards block accidental training
         working-directory: dds_training
         run: |
