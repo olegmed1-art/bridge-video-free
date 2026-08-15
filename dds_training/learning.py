@@ -300,7 +300,9 @@ def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
     counterexample_fail = sum(r[2] != "success" for r in counterexamples)
     transfer_rate = transfer_pass / len(transfer) if transfer else 0.0
     recent_regression_streak = _consecutive_successes(regression)
+    recent_counterexample_streak = _consecutive_successes(counterexamples)
     latest_regression_failed = bool(regression and regression[-1][2] != "success")
+    latest_counterexample_failed = bool(counterexamples and counterexamples[-1][2] != "success")
 
     old = con.execute("SELECT status FROM skill_profiles WHERE skill_key=?", (skill_key,)).fetchone()
     old_status = old[0] if old else None
@@ -315,14 +317,19 @@ def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
         len(transfer) >= SKILL_LIFECYCLE["stable_transfer"]
         and transfer_rate >= SKILL_LIFECYCLE["stable_rate"]
         and recent_regression_streak >= SKILL_LIFECYCLE["stable_regression_passes"]
-        and counterexample_pass >= SKILL_LIFECYCLE["stable_counterexamples"]
+        and recent_counterexample_streak >= SKILL_LIFECYCLE["stable_counterexamples"]
     )
     if stable_ready:
         new_status = "stable"
 
-    if latest_regression_failed and old_status in {"stable", "confirmed", "weakened"}:
+    fresh_failure = latest_regression_failed or latest_counterexample_failed
+    if fresh_failure and old_status in {"stable", "confirmed", "weakened"}:
         new_status = "weakened"
-    elif old_status == "weakened" and stable_ready and recent_regression_streak >= SKILL_LIFECYCLE["recovery_regression_passes"]:
+    elif (
+        old_status == "weakened"
+        and stable_ready
+        and recent_regression_streak >= SKILL_LIFECYCLE["recovery_regression_passes"]
+    ):
         new_status = "stable"
 
     con.execute(
@@ -352,6 +359,7 @@ def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
                         "recent_regression_streak": recent_regression_streak,
                         "counterexample_pass": counterexample_pass,
                         "counterexample_fail": counterexample_fail,
+                        "recent_counterexample_streak": recent_counterexample_streak,
                     },
                     sort_keys=True,
                 ),
