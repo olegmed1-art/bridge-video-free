@@ -51,7 +51,7 @@ jobs:
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             JOB_ID="$INPUT_JOB_ID"
           else
-            REQUEST_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^run_requests/.*\.txt$' | head -n 1 || true)"
+            REQUEST_FILE="$(git show --pretty='' --name-only "$GITHUB_SHA" | grep -E '^run_requests/.*\.txt$' | head -n 1 || true)"
             test -n "$REQUEST_FILE" || { echo "No run request file in triggering commit" >&2; exit 2; }
             JOB_ID="$(sed -n 's/^JOB_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
             if [ -z "$JOB_ID" ]; then
