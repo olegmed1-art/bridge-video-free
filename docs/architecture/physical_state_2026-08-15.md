@@ -1,15 +1,15 @@
 # Физическая архитектура данных — фактическая реализация v0.2
 
-Дата фиксации: 2026-08-15
+Дата фиксации: 2026-08-15; актуализация после седьмой проверки: 2026-08-16
 
 ## Production database
 
 - Neon project: `bridge-school-core`
 - Region: AWS Europe Central 1 (Frankfurt)
-- PostgreSQL: 18.4
+- PostgreSQL: 18.x
 - Production schema_migration: `0001–0019`
 - Для всех зарегистрированных production migration записан checksum.
-- Последняя прямая повторная проверка подтверждает: Club Operations `0020–0035` в production не применены.
+- Последняя прямая повторная проверка подтверждает: Club Operations `0020–0037` в production не применены.
 - `club_membership`, `club_payment_refund`, `person_package_grant` в production отсутствуют.
 
 Миграции production после исторической фиксации v0.1:
@@ -82,7 +82,7 @@ FastAPI service существует в `bridge_school_api` и использу�
 
 ## Candidate Club Operations на GitHub main
 
-Кандидат состоит из миграций `0020–0035`.
+Кандидат состоит из миграций `0020–0037`.
 
 Основные реализованные контуры:
 
@@ -98,11 +98,17 @@ FastAPI service существует в `bridge_school_api` и использу�
 - acquired-package snapshot protection;
 - append-only ClubMembership lifecycle history;
 - communication/campaign/admin identity hardening;
-- commercial provenance validation at charge/grant time.
+- commercial provenance validation at charge/grant time;
+- historical entitlement usage and delivery validation by their original business-time validity windows;
+- explicit lifecycle closure boundaries and protection from retroactive shortening that would invalidate recorded facts;
+- acquired-package validity enforced for package-backed entitlement usage;
+- unambiguous Charge commercial origin and Booking/Service provenance consistency;
+- PaymentAllocation chronology relative to both Payment and Charge.
 
-Database tests `011–021` cover positive and adversarial Club Operations scenarios in addition to all legacy tests.
+Database tests `011–023` cover positive and adversarial Club Operations scenarios in addition to all legacy tests.
 
-Latest post-merge candidate verification: GitHub Actions run `31907731704`, PostgreSQL 18 — clean migration install, runtime DSN regression, all invariant tests, idempotence, checksum tamper guard and migration registry verification all `success`.
+Seventh-pass candidate verification: GitHub Actions run `31910012398`, `success`.
+Latest post-merge candidate verification: GitHub Actions run `31910114003`, PostgreSQL 18 — clean migration install, runtime DSN regression, all invariant tests, idempotence, checksum tamper guard and migration registry verification all `success`.
 
 ## Production release boundary
 
