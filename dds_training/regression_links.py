@@ -24,13 +24,7 @@ def ensure_regression_skill_links(con: sqlite3.Connection) -> None:
 
 
 def link_regression_skills(con: sqlite3.Connection, task_id: str, skill_keys: list[str] | tuple[str, ...]) -> int:
-    """Attach one regression position to every skill implicated by the error.
-
-    `regression_cases` stays one row per mathematical task for compatibility;
-    this append-only link table prevents a multi-skill error (for example both
-    trick estimation and overclaim detection) from being remembered only under
-    the first skill.
-    """
+    """Attach one regression position to every skill implicated by the error."""
     ensure_regression_skill_links(con)
     if con.execute("SELECT 1 FROM regression_cases WHERE task_id=?", (task_id,)).fetchone() is None:
         raise ValueError(f"Regression case {task_id} does not exist")
@@ -45,3 +39,35 @@ def link_regression_skills(con: sqlite3.Connection, task_id: str, skill_keys: li
         )
         added += int(con.total_changes > before)
     return added
+
+
+def sync_regression_skill_links(con: sqlite3.Connection) -> dict:
+    """Backfill all skill associations from append-only error evidence.
+
+    One mathematical regression task can expose several distinct skills. The old
+    compatibility table stores one regression row per task; this link table keeps
+    every current/historical skill association without duplicating the position.
+    The sync is idempotent and never changes the original regression case.
+    """
+    ensure_regression_skill_links(con)
+    rows = con.execute(
+        """
+        SELECT rc.task_id, se.skill_key
+        FROM regression_cases rc
+        JOIN skill_evidence se ON se.task_id=rc.task_id
+        WHERE se.outcome!='success'
+        ORDER BY rc.task_id,se.skill_key
+        """
+    ).fetchall()
+    added = 0
+    for task_id, skill_key in rows:
+        added += link_regression_skills(con, task_id, [skill_key])
+    total = con.execute("SELECT COUNT(*) FROM regression_skill_links").fetchone()[0]
+    multi_skill_cases = con.execute(
+        """
+        SELECT COUNT(*) FROM (
+          SELECT task_id,COUNT(*) n FROM regression_skill_links GROUP BY task_id HAVING n>1
+        )
+        """
+    ).fetchone()[0]
+    return {"candidate_links": len(rows), "added_now": added, "total_links": total, "multi_skill_cases": multi_skill_cases}
