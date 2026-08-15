@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Bridge Video 3.1 FREE internal candidate r25.5.
+"""Bridge Video 3.1 FREE internal candidate r25.4.
 
-r25.5 preserves the validated late-OAuth and semantic attribution protections,
-quarantines exhausted non-hallucinatory ASR disagreements, and excludes every
-unreliable segment from semantic episodes, errors, canon matching and
-recommendations. Detected repeated non-speech hallucination remains a hard stop.
+r25.4 preserves the validated r25.3 late-OAuth, semantic attribution and hard
+ASR stops, and closes one remaining quality gap: ordinary ASR windows that fail
+independent QC may be tolerated by the base coverage gate, but their text must
+not feed semantic episodes, error candidates, canon matching or recommendations.
 
-The full transcript is preserved with unreliable markers for audit. The public
-product name remains exactly ``3.1 FREE``.
+The full transcript is still preserved and visibly marked ``unreliable`` for
+review.  Only derived analytics are built from reliable transcript segments.
+The public product name remains exactly ``3.1 FREE``.
 """
 from __future__ import annotations
 
@@ -17,11 +18,17 @@ import bridge_runtime_hardening_r25_3 as r25_3
 import bridge_worker_3_1_free as core
 import run_master_3_1_free as base
 
-REVISION = "3.1-free-r25.5"
+REVISION = "3.1-free-r25.4"
 
 _DERIVED_KEYS = (
-    "episodes", "learning_interactions", "errors", "strengths",
-    "teacher_analysis", "best_explanations", "deals", "decisions",
+    "episodes",
+    "learning_interactions",
+    "errors",
+    "strengths",
+    "teacher_analysis",
+    "best_explanations",
+    "deals",
+    "decisions",
     "knowledge_gaps",
 )
 
@@ -80,7 +87,7 @@ def install(token_func):
         reliable = [s for s in (segments or []) if not bool(s.get("unreliable"))]
         return previous_episode_plan(reliable, job_id)
 
-    def payload_r25_5(**kwargs):
+    def payload_r25_4(**kwargs):
         master = previous_payload(**kwargs)
         transcript = master.get("transcript") or []
         unreliable = _unreliable_ids(transcript)
@@ -102,7 +109,7 @@ def install(token_func):
             master["warnings"] = list(dict.fromkeys(warnings))
         return master
 
-    def validate_r25_5_master(master):
+    def validate_r25_4_master(master):
         result = dict(previous_validate(master))
         issues = list(result.get("issues") or [])
         contaminated = _unreliable_ids(master.get("transcript")).intersection(
@@ -116,11 +123,12 @@ def install(token_func):
         return result
 
     base.semantic_episode_plan = reliable_semantic_episode_plan
-    base.master_analysis_payload = payload_r25_5
-    base.validate_r24_master = validate_r25_5_master
+    base.master_analysis_payload = payload_r25_4
+    base.validate_r24_master = validate_r25_4_master
 
 
 def run(token_func):
     install(token_func)
+    # r25.3 already refreshes the Drive token independently at final persistence.
     import run_master_3_1_free_semantic as semantic
     return semantic.process_job(token_func())
