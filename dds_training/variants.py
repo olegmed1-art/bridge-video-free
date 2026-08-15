@@ -43,6 +43,12 @@ def _root_split(task: dict) -> str:
     return str(task.get("source_root_split", task.get("split", "unknown")))
 
 
+def _batch_tag(batch_id: str | None) -> str | None:
+    if batch_id is None:
+        return None
+    return hashlib.sha256(str(batch_id).encode("utf-8")).hexdigest()[:10]
+
+
 def _mark_derived(out: dict, source: dict, evidence_type: str) -> None:
     out["split"] = "derived"
     out["derived_from_task_id"] = source["task_id"]
@@ -50,6 +56,15 @@ def _mark_derived(out: dict, source: dict, evidence_type: str) -> None:
     out["source_root_split"] = _root_split(source)
     out["evidence_type"] = evidence_type
     out["blind"] = True
+
+
+def _version_task_attempt(out: dict, tag: str | None) -> dict:
+    if tag is None:
+        return out
+    out["variant_base_task_id"] = out["task_id"]
+    out["task_id"] = f"{out['task_id']}-B{tag}"
+    out["followup_batch"] = tag
+    return out
 
 
 def rotate_task(task: dict, steps: int = 2) -> dict:
@@ -123,12 +138,14 @@ def perturb_task(task: dict, salt: str = "p1") -> dict:
     new_hands[a][suit] = _sort_cards(ca)
     new_hands[b][suit] = _sort_cards(cb)
 
+    safe_salt = hashlib.sha256(salt.encode("utf-8")).hexdigest()[:10]
     out = copy.deepcopy(task)
-    out["task_id"] = f"{task['task_id']}-PERT-{salt}"
-    out["deal_id"] = f"{task['deal_id']}-PERT-{salt}"
+    out["task_id"] = f"{task['task_id']}-PERT-{safe_salt}"
+    out["deal_id"] = f"{task['deal_id']}-PERT-{safe_salt}"
     out["deal"] = _render_deal(new_hands)
     _mark_derived(out, task, "perturbation")
     out["perturbation"] = {
+        "salt_hash": safe_salt,
         "suit": STRAINS[suit],
         "seat_a": SEATS[a],
         "seat_b": SEATS[b],
@@ -138,17 +155,23 @@ def perturb_task(task: dict, salt: str = "p1") -> dict:
     return out
 
 
-def create_variants(task: dict) -> list[dict]:
-    """Standard discrimination set: seat rotation, suit rename and perturbation."""
+def create_variants(task: dict, batch_id: str | None = None) -> list[dict]:
+    """Create a discrimination/retest set with optional unique blind attempt IDs.
+
+    A new `batch_id` creates fresh task IDs even for exact symmetry retests, so a
+    later analyzer state can make a new locked blind prediction without mutating
+    the old prediction. Perturbation salts also vary by batch, producing new
+    nearby positions rather than repeatedly memorizing p1/p2.
+    """
+    tag = _batch_tag(batch_id)
+    perturb_suffix = "base" if tag is None else tag
     variants = [
-        rotate_task(task, 1),
-        rotate_task(task, 2),
-        permute_suits_task(task),
-        perturb_task(task, "p1"),
-        perturb_task(task, "p2"),
+        _version_task_attempt(rotate_task(task, 1), tag),
+        _version_task_attempt(rotate_task(task, 2), tag),
+        _version_task_attempt(permute_suits_task(task), tag),
+        _version_task_attempt(perturb_task(task, f"p1-{perturb_suffix}"), tag),
+        _version_task_attempt(perturb_task(task, f"p2-{perturb_suffix}"), tag),
     ]
-    # Different salts can rarely select the same physical rank swap. Remove
-    # duplicate mathematical tasks by position+role, not merely by task id.
     unique: dict[tuple, dict] = {}
     for v in variants:
         key = (v["deal"], v.get("task_type"), v.get("declarer"), v.get("strain"), v.get("leader"))
@@ -161,12 +184,13 @@ def create_error_followups(
     con: sqlite3.Connection,
     out_path: Path,
     max_sources: int = 500,
+    batch_id: str | None = None,
 ) -> dict:
-    """Create blind discrimination tasks from TRAIN errors only.
+    """Create fresh blind discrimination tasks from TRAIN errors only.
 
     Validation and sealed-test errors are deliberately excluded. Their purpose is
     measurement, not training. No DDS answer is copied into derived tasks; every
-    follow-up must receive a fresh blind prediction before DDS evaluation.
+    follow-up receives a fresh blind task ID for the supplied batch.
     """
     base = {}
     for line in base_tasks_path.read_text(encoding="utf-8").splitlines():
@@ -196,13 +220,11 @@ def create_error_followups(
         if task is None or task.get("split") != "train":
             skipped += 1
             continue
-        for v in create_variants(task):
+        for v in create_variants(task, batch_id=batch_id):
             v["source_error_magnitude"] = float(magnitude or 0)
             v["source_high_confidence_error"] = bool(high_conf)
             variants.append(v)
 
-    # Deterministic de-duplication by mathematical task fingerprint prevents two
-    # different derived ids from accidentally testing the same position.
     by_fingerprint: dict[tuple, dict] = {}
     for v in variants:
         key = (v["deal"], v.get("task_type"), v.get("declarer"), v.get("strain"), v.get("leader"))
@@ -220,6 +242,7 @@ def create_error_followups(
         "source_errors_skipped": skipped,
         "derived_tasks": len(ordered),
         "source_policy": "train_only",
+        "followup_batch": _batch_tag(batch_id),
         "path": str(out_path),
         "dds_called": False,
     }
