@@ -25,7 +25,6 @@ DECLARE
     v_balance numeric;
     v_remaining numeric;
     v_state text;
-    r record;
 BEGIN
     SELECT school_id INTO v_school FROM school WHERE stable_name='Школа спортивного бриджа';
     IF v_school IS NULL THEN RAISE EXCEPTION 'canonical school missing'; END IF;
@@ -126,14 +125,6 @@ BEGIN
     INSERT INTO admin_task_state_event(admin_task_id,state) VALUES (v_task,'completed');
     SELECT state INTO v_state FROM admin_task_current_state WHERE admin_task_id=v_task;
     IF v_state <> 'completed' THEN RAISE EXCEPTION 'admin task current state expected completed, got %', v_state; END IF;
-
-    -- Finance capability and principal must be dormant/non-admin in CI schema.
-    FOREACH r IN ARRAY ARRAY[
-        ROW('bridge_school_finance'::text),
-        ROW('bridge_school_finance_principal'::text)
-    ] LOOP
-        NULL;
-    END LOOP;
 END $$;
 
 DO $$
