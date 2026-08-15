@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 from audit import audit_database
+from experience_events import record_reasoning_review, record_value_trajectory
 from learning import build_learning_plan, record_skill_check, record_task_experience
 from storage import add_regression_case, connect, record_correction, upsert_prediction, upsert_result
 from variants import create_variants
@@ -58,13 +59,38 @@ def main() -> None:
             replacement={"note": "original fact remains untouched"},
         )
 
+        # A mathematically correct final count can still have a wrong explanation.
+        record_reasoning_review(
+            db,
+            task_id=task["task_id"],
+            deal_id=task["deal_id"],
+            verdict="correct_result_wrong_reasoning",
+            details={"why": "self-test separates result from explanation"},
+            run_id="selftest",
+        )
+
+        # 10 -> 9 is a declarer loss; later 9 -> 10 is a defensive gift that
+        # restores it. The first error must remain visible despite the final value.
+        trajectory = record_value_trajectory(
+            db,
+            task_id=task["task_id"],
+            deal_id=task["deal_id"],
+            values=[10, 9, 9, 10],
+            actors=["declarer", "defense", "defense"],
+            run_id="selftest",
+        )
+        assert trajectory["first_error"]["actor"] == "declarer"
+        assert trajectory["declarer_gross_loss"] == 1
+        assert trajectory["defense_gross_gift"] == 1
+        assert trajectory["recovered_declarer_loss"] == 1
+        assert trajectory["unrecovered_declarer_loss"] == 0
+
         variants = create_variants(task)
         assert len(variants) == 5
         assert len({v["task_id"] for v in variants}) == 5
         assert all(v["split"] == "derived" for v in variants)
         assert any(v["evidence_type"] == "perturbation" for v in variants)
         assert any(v["evidence_type"] == "symmetry" for v in variants)
-        # Demonstrate the public transfer-evidence path without promoting from one example.
         transfer_status = record_skill_check(
             db,
             skill_key="declarer.overclaim_detection",
@@ -98,6 +124,12 @@ def main() -> None:
 
         plan = build_learning_plan(db)
         assert plan and plan[0]["high_confidence_errors"] >= 1, plan
+        spaced = db.execute("SELECT COUNT(*) FROM learning_queue WHERE purpose='spaced_review'").fetchone()[0]
+        assert spaced == 6, spaced  # two error skills x three delayed reviews
+        reasoning = db.execute("SELECT COUNT(*) FROM experience_events WHERE event_type='reasoning_review'").fetchone()[0]
+        trajectories = db.execute("SELECT COUNT(*) FROM experience_events WHERE event_type='value_trajectory'").fetchone()[0]
+        assert reasoning == 1 and trajectories == 1
+
         audit = audit_database(db)
         assert audit["status"] == "ok", audit
         assert audit["counts"]["correction_events"] == 1
@@ -111,6 +143,9 @@ def main() -> None:
             "skills_recorded": skills,
             "transfer_status": transfer_status,
             "derived_variants": [v["task_id"] for v in variants],
+            "spaced_reviews": spaced,
+            "trajectory": trajectory,
+            "reasoning_reviews": reasoning,
             "learning_plan_top": plan[0],
             "audit": audit,
         }, indent=2))
