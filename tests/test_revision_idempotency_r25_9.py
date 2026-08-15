@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""Regression tests for revision-aware idempotency r25.9."""
+from pathlib import Path
+
+import bridge_runtime_hardening_r25_9 as runtime
+import check_completed_job as preflight
+
+
+JOB = "86e814014cabee88785a53340ab85666"
+CURRENT = "3.1-free-r25.9"
+
+
+def test_legacy_receipt_does_not_block_new_revision():
+    legacy = {"status": "CLEANUP_ACK", "job_id": JOB}
+    assert not preflight.receipt_matches_revision(legacy, JOB, CURRENT)
+    assert not runtime.receipt_matches_revision(legacy, JOB, CURRENT)
+
+
+def test_same_revision_receipt_is_idempotent():
+    current = {
+        "status": "CLEANUP_ACK",
+        "job_id": JOB,
+        "algorithmRevision": CURRENT,
+    }
+    assert preflight.receipt_matches_revision(current, JOB, CURRENT)
+    assert runtime.receipt_matches_revision(current, JOB, CURRENT)
+
+
+def test_different_revision_can_reprocess():
+    older = {
+        "status": "CLEANUP_ACK",
+        "job_id": JOB,
+        "algorithmRevision": "3.1-free-r25.8",
+    }
+    assert not preflight.receipt_matches_revision(older, JOB, CURRENT)
+    assert not runtime.receipt_matches_revision(older, JOB, CURRENT)
+
+
+def test_receipt_writer_and_entrypoint_are_revision_aware():
+    master = Path("run_master_3_1_free.py").read_text(encoding="utf-8")
+    adapter = Path("run_drive_3_1_free_generic.py").read_text(encoding="utf-8")
+    workflow = Path(".github/workflows/bridge-video-3.1-free.yml").read_text(encoding="utf-8")
+    assert "'algorithmRevision':ALGORITHM_REVISION" in master
+    assert "bridge_runtime_hardening_r25_9" in adapter
+    assert 'BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.9"' in workflow
+    assert "BRIDGE_REQUESTED_WHISPER_MODEL: medium" in workflow
+    assert "WHISPER_MODEL: medium" in workflow
+
+
+if __name__ == "__main__":
+    test_legacy_receipt_does_not_block_new_revision()
+    test_same_revision_receipt_is_idempotent()
+    test_different_revision_can_reprocess()
+    test_receipt_writer_and_entrypoint_are_revision_aware()
+    print("R25_9_REVISION_IDEMPOTENCY: PASS")
