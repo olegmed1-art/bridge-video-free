@@ -60,11 +60,12 @@ END $$;
 
 DO $$
 BEGIN
-    IF NOT has_table_privilege('bridge_school_app','club_membership_state_event','INSERT')
+    IF has_table_privilege('bridge_school_app','club_membership_state_event','INSERT')
        OR has_table_privilege('bridge_school_app','club_membership_state_event','UPDATE')
        OR has_table_privilege('bridge_school_app','club_membership_state_event','DELETE')
        OR NOT has_column_privilege('bridge_school_app','club_membership','status','UPDATE')
-       OR has_column_privilege('bridge_school_app','club_membership','person_id','UPDATE') THEN
+       OR has_column_privilege('bridge_school_app','club_membership','person_id','UPDATE')
+       OR has_sequence_privilege('bridge_school_app','club_membership_state_event_state_sequence_seq','USAGE') THEN
         RAISE EXCEPTION 'membership lifecycle permissions outside contract';
     END IF;
 
