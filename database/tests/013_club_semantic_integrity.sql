@@ -80,20 +80,20 @@ BEGIN
     INSERT INTO entitlement_usage(entitlement_id,quantity_used,reference_type)
     VALUES (v_entitlement,1,'consume') RETURNING entitlement_usage_id INTO v_usage;
     UPDATE person_entitlement
-       SET status='revoked', valid_to=now()
+       SET status='revoked', valid_to=now()+interval '1 second'
      WHERE entitlement_id=v_entitlement;
 
     BEGIN
-        INSERT INTO entitlement_usage(entitlement_id,quantity_used,reference_type)
-        VALUES (v_entitlement,0.5,'consume-after-revoke');
+        INSERT INTO entitlement_usage(entitlement_id,quantity_used,occurred_at,reference_type)
+        VALUES (v_entitlement,0.5,now()+interval '2 seconds','consume-after-revoke');
         RAISE EXCEPTION 'new usage on revoked entitlement unexpectedly accepted';
     EXCEPTION WHEN OTHERS THEN
         IF SQLERRM='new usage on revoked entitlement unexpectedly accepted' THEN RAISE; END IF;
     END;
 
-    -- A correction/reversal is still allowed after revocation.
-    INSERT INTO entitlement_usage(entitlement_id,quantity_used,reference_type,reversal_of_usage_id)
-    VALUES (v_entitlement,1,'reversal-after-revoke',v_usage);
+    -- A correction/reversal is still allowed after revocation/validity closure.
+    INSERT INTO entitlement_usage(entitlement_id,quantity_used,occurred_at,reference_type,reversal_of_usage_id)
+    VALUES (v_entitlement,1,now()+interval '2 seconds','reversal-after-revoke',v_usage);
 
     BEGIN
         INSERT INTO club_charge(school_id,person_id,service_id,price_version_id,amount,currency_code)
