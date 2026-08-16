@@ -1,0 +1,44 @@
+meta_school_version: 0.1
+registry_status: IMPLEMENTED
+status_model: [DESIGNED, IMPLEMENTED, TESTED, OPERATIONAL]
+operational_requires:
+  - reproducible_end_to_end_evidence
+  - run_or_artifact_identity
+  - regression_or_repeat_confirmation
+components:
+  - id: video_analysis
+    name: Video Analysis
+    evidence_hint: VIDEO_ANALYSIS_3_1_FREE.md
+    status: IMPLEMENTED
+    operational: false
+  - id: neon_persistence
+    name: Neon Persistence
+    evidence_hint: bridge_neon_persistence.py
+    status: IMPLEMENTED
+    operational: false
+  - id: runtime_hardening
+    name: Runtime Hardening
+    evidence_hint: bridge_runtime_hardening_r25_3.py
+    status: IMPLEMENTED
+    operational: false
+  - id: dds_core
+    name: DDS Core
+    status: TESTED
+    operational: false
+    note: local golden smoke evidence exists in project inventory; external/reproducible operational evidence still required
+  - id: tournament_analysis
+    name: Tournament Analysis
+    status: IMPLEMENTED
+    operational: false
+  - id: deal_analysis
+    name: Deal Analysis
+    status: IMPLEMENTED
+    operational: false
+rules:
+  no_self_promotion_without_evidence: true
+  teacher_methodology_protected: true
+  unknown_over_invention: true
+  preserve_failed_experiments: true
+  regression_on_material_failure: true
+  new_sql_auto_production: false
+  folder_name_is_identity: false
