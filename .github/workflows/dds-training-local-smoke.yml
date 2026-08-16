@@ -18,7 +18,7 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -30,13 +30,53 @@ jobs:
         working-directory: dds_training
         run: python -m compileall -q .
 
-      - name: Test methodology v2.2 evidence and balanced follow-ups
+      - name: Test corrected evidence roles and balanced follow-ups
         working-directory: dds_training
         run: python methodology_v22_selftest.py
 
       - name: Test skill-profile preservation across analyzer revisions
         working-directory: dds_training
         run: python skill_versions_selftest.py
+
+      - name: Test legal play-line reconstruction
+        working-directory: dds_training
+        run: python playline_selftest.py
+
+      - name: Test blind legal line-bearing predictor
+        working-directory: dds_training
+        run: python line_predictor_selftest.py
+
+      - name: Test declarer and defense continuation tasks
+        working-directory: dds_training
+        run: python continuation_tasks_selftest.py
+
+      - name: Test hidden-hand isolation in human-information mode
+        working-directory: dds_training
+        run: python human_view_selftest.py
+
+      - name: Test family-safe cross-fit folds
+        working-directory: dds_training
+        run: python crossfit_selftest.py
+
+      - name: Test deterministic family-safe shard planning
+        working-directory: dds_training
+        run: python shard_plan_selftest.py
+
+      - name: Test out-of-fold confidence calibration and abstention
+        working-directory: dds_training
+        run: python confidence_calibration_selftest.py
+
+      - name: Test counterexample candidate extraction
+        working-directory: dds_training
+        run: python counterexample_candidates_selftest.py
+
+      - name: Test evidence-gated versioned rule synthesis
+        working-directory: dds_training
+        run: python rule_synthesis_selftest.py
+
+      - name: Test phased Stage 2 readiness gates
+        working-directory: dds_training
+        run: python stage2_readiness_selftest.py
 
       - name: Test immutable experience memory, holdouts, and skill recovery
         working-directory: dds_training
@@ -46,7 +86,7 @@ jobs:
         working-directory: dds_training
         run: python investigation_selftest.py
 
-      - name: Test stage completion and report gate
+      - name: Test stage completion and automatic-expansion guard
         working-directory: dds_training
         run: python stage_gate_selftest.py
 
@@ -67,6 +107,12 @@ jobs:
 
       - name: Bootstrap local DDS3 and run technical preflight
         run: bash dds_training/bootstrap_linux.sh
+
+      - name: Test normalized DDS full-play trajectory
+        working-directory: dds_training
+        run: |
+          source .venv/bin/activate
+          python dds_play_selftest.py
 
       - name: Verify DDS-backed symmetry invariants
         working-directory: dds_training
@@ -90,6 +136,7 @@ jobs:
         run: |
           set -euo pipefail
           source .venv/bin/activate
+          rm -rf /tmp/dds-pilot-prepared
           python run_stage.py prepare --stage pilot --out /tmp/dds-pilot-prepared
 
           if python run_stage.py evaluate --stage pilot --work /tmp/dds-pilot-prepared --predictions /tmp/does-not-exist.jsonl 2>/tmp/guard.err; then
@@ -136,6 +183,36 @@ jobs:
           set -euo pipefail
           source .venv/bin/activate
           python run_stage.py audit --work /tmp/dds-pilot-prepared --fail-on-error
+
+      - name: Expand corpus and execute non-mass Stage 2 readiness preparation
+        working-directory: dds_training
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          python run_stage.py prepare --stage main --out /tmp/dds-pilot-prepared
+          python prepare_stage2.py --work /tmp/dds-pilot-prepared
+          python stage2_readiness.py --work /tmp/dds-pilot-prepared --require main_train
+          python - <<'PY'
+          import json, sqlite3
+          from pathlib import Path
+          root=Path('/tmp/dds-pilot-prepared')
+          ready=json.loads((root/'stage2_readiness.json').read_text())
+          assert ready['main_train']['ready'] is True, ready
+          assert ready['main_train']['actual_total_deals']==30000, ready
+          assert ready['main_train']['actual_fresh_tasks']==40000, ready
+          assert ready['holdout']['ready'] is False, ready
+          assert ready['skill_claim']['ready'] is False, ready
+          db=sqlite3.connect(root/'training.sqlite3')
+          assert db.execute('select count(*) from dds_results').fetchone()[0]==0
+          print({
+            'stage2_main_train_ready':True,
+            'fresh_tasks':ready['main_train']['actual_fresh_tasks'],
+            'holdout_still_closed':True,
+            'stable_skill_claim_still_closed':True,
+            'mass_dds_results':0,
+            'paid_api_used':False,
+          })
+          PY
 
       - name: Save DDS3 Bazel disk cache
         if: always() && steps.dds-cache.outputs.cache-hit != 'true'
