@@ -21,9 +21,18 @@ def main() -> None:
     assert len(analysis["actors"]) == len(cards)
     assert analysis["trajectory"]["value_definition"] == "projected_final_declarer_tricks"
     assert not analysis["trajectory"]["invariant_violations"], analysis["trajectory"]
+    assert analysis["dds_raw"]["method"] == "repeated_solve_board_pbn"
+    assert analysis["decision_errors"], analysis
+    assert all(item["dd_regret"] > 0 for item in analysis["decision_errors"])
+    assert all(item["optimal_cards"] for item in analysis["decision_errors"])
+    assert all(item["chosen_card"] in item["candidate_scores"] for item in analysis["decision_errors"])
+    assert all(item["regret_matches_value_swing"] for item in analysis["decision_errors"]), analysis["decision_errors"]
+
     start = analysis["projected_declarer_values"][0]
     refuted = first_refutation(analysis, start + 1)
     assert refuted["refuted"] is True and refuted["prefix_cards"] == 0
+    if analysis["first_defense_error"]:
+        assert refuted["first_assumed_defense_error"]["optimal_cards"]
     attainable = first_refutation(analysis, min(analysis["projected_declarer_values"]))
     assert attainable["refuted"] is False
 
@@ -33,6 +42,10 @@ def main() -> None:
         "positions": len(analysis["projected_declarer_values"]),
         "start_value": start,
         "first_error": analysis["trajectory"]["first_error"],
+        "decision_errors": len(analysis["decision_errors"]),
+        "first_declarer_error": analysis["first_declarer_error"],
+        "first_defense_error": analysis["first_defense_error"],
+        "all_swings_explained_by_candidate_regret": True,
         "invariant_violations": 0,
         "initial_overclaim_refuted": True,
     }, ensure_ascii=False, indent=2))
