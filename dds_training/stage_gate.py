@@ -7,6 +7,7 @@ from pathlib import Path
 
 from audit import audit_database
 from investigations import open_investigations, sync_required_investigations
+from methodology_audit import audit_methodology
 from regression_links import sync_regression_skill_links
 from run_provenance import ensure_run_task_table
 from stage_scope import task_in_stage
@@ -18,13 +19,12 @@ def _load_tasks(path: Path) -> list[dict]:
 
 
 def assess_stage(work: Path, stage: str) -> dict:
-    """Assess whether a stage is truly complete before report/next-stage work.
+    """Assess technical completion and methodological readiness separately.
 
-    This gate is intentionally separate from DDS evaluation. It never calls DDS
-    and never changes the meaning of a skill. It synchronizes append-only
-    provenance derived from already recorded facts (investigation ledger and
-    multi-skill regression links), checks fresh stage task coverage/database
-    integrity, then gives one concrete next action for the operator/user.
+    Database integrity is necessary but not sufficient. A stage can be fully
+    computed and auditable while still being methodologically unfit for expansion
+    (for example, one-sided follow-ups or same-source probes counted as transfer).
+    This gate therefore reports both states and gives one concrete next action.
     """
     task_path = work / "blind_tasks.jsonl"
     if not task_path.exists():
@@ -61,12 +61,15 @@ def assess_stage(work: Path, stage: str) -> dict:
     stage_ids = {t["task_id"] for t in stage_tasks}
     open_stage = [x for x in open_items if x["task_id"] in stage_ids]
     audit = audit_database(con)
+    methodology = audit_methodology(work)
     report_path = work / f"report_{stage}.md"
 
     all_base_evaluated = all(v == 0 for v in missing_by_split.values())
-    ready_for_report = all_base_evaluated and not open_stage and audit["status"] == "ok"
+    technical_stage_complete = all_base_evaluated and not open_stage and audit["status"] == "ok"
+    ready_for_report = technical_stage_complete
     report_exists = report_path.exists()
-    ready_for_next_stage = ready_for_report and report_exists
+    methodology_ready = bool(methodology.get("advance_allowed"))
+    ready_for_next_stage = technical_stage_complete and report_exists and methodology_ready
 
     if not all_base_evaluated:
         next_action = "Complete the missing fresh blind evaluations shown in missing_by_split."
@@ -75,9 +78,12 @@ def assess_stage(work: Path, stage: str) -> dict:
     elif audit["status"] != "ok":
         next_action = "Fix the database/provenance audit errors before closing the stage."
     elif not report_exists:
-        next_action = f"Generate report_{stage}.md immediately; the stage is otherwise complete."
+        next_action = f"Generate report_{stage}.md immediately; the stage is otherwise technically complete."
+    elif not methodology_ready:
+        blockers = [x["code"] for x in methodology.get("findings", []) if x.get("severity") == "error"]
+        next_action = f"Apply the methodological corrections before expansion: {blockers}."
     elif stage == "pilot":
-        next_action = "Review the pilot report and obtain explicit user approval before expanding the same work directory to the main 30k corpus."
+        next_action = "Review the corrected pilot report and obtain explicit user approval before expanding the same work directory to the main 30k corpus."
     elif stage == "main":
         next_action = "Review the main report and choose targeted weaknesses before generating the next ~10k focused tasks."
     else:
@@ -92,16 +98,21 @@ def assess_stage(work: Path, stage: str) -> dict:
         "investigation_sync": investigation_sync,
         "regression_skill_link_sync": regression_link_sync,
         "audit_status": audit["status"],
+        "methodology_status": methodology["status"],
+        "methodology_findings": methodology["findings"],
+        "technical_stage_complete": technical_stage_complete,
         "ready_for_report": ready_for_report,
         "report_exists": report_exists,
+        "methodology_ready_for_expansion": methodology_ready,
         "ready_for_next_stage": ready_for_next_stage,
+        "explicit_user_approval_required": True,
         "next_action": next_action,
         "dds_called": False,
     }
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="DDS stage-completion gate")
+    p = argparse.ArgumentParser(description="DDS stage-completion and methodology gate")
     p.add_argument("--work", required=True)
     p.add_argument("--stage", choices=("pilot", "main", "targeted"), required=True)
     args = p.parse_args()
