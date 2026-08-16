@@ -7,6 +7,7 @@ from pathlib import Path
 
 from audit import audit_database
 from checkpointing import sha256_file, snapshot_database
+from config import ALGORITHM_VERSION, FOLLOWUP_SOURCE_POLICY
 from experience_events import record_reasoning_review, record_value_trajectory, summarize_value_trajectory
 from learning import build_learning_plan, learning_allowed_for_task, record_skill_check, record_task_experience
 from run_provenance import record_run_task
@@ -23,7 +24,7 @@ def _insert_test_run(db: sqlite3.Connection, run_id: str, splits: list[str], sea
         VALUES(?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
-            run_id, "pilot", 20260815, "selftest-sha", "{}", "dds-learning-v2.1",
+            run_id, "pilot", 20260815, "selftest-sha", "{}", ALGORITHM_VERSION,
             json.dumps(sorted(splits), separators=(",", ":")), "selftest.jsonl", "pred-sha",
             sealed_opened, "completed",
         ),
@@ -133,12 +134,14 @@ def main() -> None:
         assert len(bad_direction["invariant_violations"]) == 1
 
         variants = create_variants(task)
-        assert 4 <= len(variants) <= 5
+        assert 5 <= len(variants) <= 6
         assert len({v["task_id"] for v in variants}) == len(variants)
         assert all(v["split"] == "derived" for v in variants)
         assert all(v["source_root_split"] == "train" for v in variants)
+        assert all(v["transfer_eligible"] is False for v in variants)
         assert any(v["evidence_type"] == "perturbation" for v in variants)
         assert any(v["evidence_type"] == "symmetry" for v in variants)
+        assert any(v["evidence_type"] == "regression" for v in variants)
         transfer_status = record_skill_check(
             db,
             skill_key="declarer.overclaim_detection",
@@ -150,6 +153,10 @@ def main() -> None:
             run_id="selftest",
             details={"source": task["task_id"]},
         )
+        assert db.execute(
+            "SELECT evidence_type FROM skill_evidence WHERE task_id=?",
+            (variants[0]["task_id"],),
+        ).fetchone()[0] == "reinforcement"
 
         # Stable skills can be weakened by a fresh regression/counterexample and
         # later recover only after fresh successful checks.
@@ -215,7 +222,7 @@ def main() -> None:
         followup_path = root / "followups.jsonl"
         followup_summary = create_error_followups(base_tasks, db, followup_path, max_sources=10)
         followup_rows = [json.loads(x) for x in followup_path.read_text().splitlines() if x.strip()]
-        assert followup_summary["source_policy"] == "train_only"
+        assert followup_summary["source_policy"] == FOLLOWUP_SOURCE_POLICY
         assert followup_rows
         assert all(x["source_root_split"] == "train" for x in followup_rows)
         assert all(x["derived_from_task_id"] == task["task_id"] for x in followup_rows)
