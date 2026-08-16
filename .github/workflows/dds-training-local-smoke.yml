@@ -34,6 +34,10 @@ jobs:
         working-directory: dds_training
         run: python methodology_v22_selftest.py
 
+      - name: Test skill-profile preservation across analyzer revisions
+        working-directory: dds_training
+        run: python skill_versions_selftest.py
+
       - name: Test immutable experience memory, holdouts, and skill recovery
         working-directory: dds_training
         run: python experience_selftest.py
