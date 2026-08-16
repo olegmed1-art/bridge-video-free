@@ -6,6 +6,12 @@ import sqlite3
 
 from config import ALGORITHM_VERSION, SKILL_LIFECYCLE, TRANSFER_EVIDENCE_TYPES
 from experience_events import schedule_spaced_reviews
+from skill_versions import (
+    current_skill_version,
+    ensure_skill_version,
+    snapshot_current_legacy_profile,
+    update_skill_version,
+)
 
 
 SKILL_CATALOG = {
@@ -63,23 +69,58 @@ def _confidence_value(prediction: dict) -> str:
 
 
 def _ensure_skill(con: sqlite3.Connection, skill_key: str) -> None:
+    """Ensure both the current compatibility row and versioned profile exist.
+
+    `skill_profiles` remains the current-profile compatibility table. Before a
+    new analyzer revision reuses its row, the old state is snapshotted into
+    `skill_profile_versions`; each revision then accumulates its own metrics.
+    """
     meta = SKILL_CATALOG.get(skill_key, {})
-    con.execute(
-        """
-        INSERT OR IGNORE INTO skill_profiles
-          (skill_key, side, family, title, status, trigger_text, rule_text, algorithm_version)
-        VALUES(?,?,?,?,?,?,?,?)
-        """,
-        (
-            skill_key,
-            meta.get("side", "general"),
-            meta.get("family", "general"),
-            meta.get("title", skill_key),
-            "candidate",
-            meta.get("trigger"),
-            None,
-            ALGORITHM_VERSION,
-        ),
+    side = meta.get("side", "general")
+    family = meta.get("family", "general")
+    title = meta.get("title", skill_key)
+    trigger = meta.get("trigger")
+
+    legacy = con.execute(
+        "SELECT algorithm_version FROM skill_profiles WHERE skill_key=?",
+        (skill_key,),
+    ).fetchone()
+    if legacy is not None and str(legacy[0]) != ALGORITHM_VERSION:
+        snapshot_current_legacy_profile(
+            con,
+            skill_key=skill_key,
+            algorithm_version=str(legacy[0]),
+        )
+        con.execute(
+            """
+            UPDATE skill_profiles
+            SET side=?,family=?,title=?,status='candidate',trigger_text=?,rule_text=NULL,
+                algorithm_version=?,evidence_count=0,transfer_count=0,
+                regression_passes=0,regression_failures=0,counterexample_count=0,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE skill_key=?
+            """,
+            (side, family, title, trigger, ALGORITHM_VERSION, skill_key),
+        )
+    else:
+        con.execute(
+            """
+            INSERT OR IGNORE INTO skill_profiles
+              (skill_key, side, family, title, status, trigger_text, rule_text, algorithm_version)
+            VALUES(?,?,?,?,?,?,?,?)
+            """,
+            (skill_key, side, family, title, "candidate", trigger, None, ALGORITHM_VERSION),
+        )
+
+    ensure_skill_version(
+        con,
+        skill_key=skill_key,
+        algorithm_version=ALGORITHM_VERSION,
+        side=side,
+        family=family,
+        title=title,
+        trigger_text=trigger,
+        rule_text=None,
     )
 
 
@@ -313,6 +354,7 @@ def _consecutive_successes(rows: list[tuple]) -> int:
 
 
 def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
+    _ensure_skill(con, skill_key)
     rows = con.execute(
         """
         SELECT id,evidence_type,outcome,split,confidence,COALESCE(regret,0)
@@ -342,8 +384,8 @@ def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
     latest_regression_failed = bool(regression and regression[-1][2] != "success")
     latest_counterexample_failed = bool(counterexamples and counterexamples[-1][2] != "success")
 
-    old = con.execute("SELECT status FROM skill_profiles WHERE skill_key=?", (skill_key,)).fetchone()
-    old_status = old[0] if old else None
+    current_version = current_skill_version(con, skill_key, ALGORITHM_VERSION)
+    old_status = current_version["status"] if current_version else "candidate"
 
     new_status = "candidate"
     if total >= SKILL_LIFECYCLE["testing_evidence"]:
@@ -370,6 +412,22 @@ def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
     ):
         new_status = "stable"
 
+    metrics = {
+        "total": total,
+        "transfer": len(transfer),
+        "transfer_pass": transfer_pass,
+        "transfer_rate": transfer_rate,
+        "reinforcement": len(reinforcement),
+        "reinforcement_pass": reinforcement_pass,
+        "reinforcement_rate": reinforcement_rate,
+        "regression_pass": regression_pass,
+        "regression_fail": regression_fail,
+        "recent_regression_streak": recent_regression_streak,
+        "counterexample_pass": counterexample_pass,
+        "counterexample_fail": counterexample_fail,
+        "recent_counterexample_streak": recent_counterexample_streak,
+    }
+
     con.execute(
         """
         UPDATE skill_profiles
@@ -379,38 +437,32 @@ def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
         """,
         (new_status, total, len(transfer), regression_pass, regression_fail, counterexample_pass, ALGORITHM_VERSION, skill_key),
     )
-    if old_status and old_status != new_status:
+    update_skill_version(
+        con,
+        skill_key=skill_key,
+        algorithm_version=ALGORITHM_VERSION,
+        status=new_status,
+        evidence_count=total,
+        transfer_count=len(transfer),
+        reinforcement_count=len(reinforcement),
+        regression_passes=regression_pass,
+        regression_failures=regression_fail,
+        counterexample_count=counterexample_pass,
+        metrics=metrics,
+    )
+
+    if old_status != new_status:
         con.execute(
             "INSERT INTO skill_state_history(skill_key,from_status,to_status,reason_json) VALUES(?,?,?,?)",
-            (
-                skill_key,
-                old_status,
-                new_status,
-                json.dumps(
-                    {
-                        "algorithm_version": ALGORITHM_VERSION,
-                        "total": total,
-                        "transfer": len(transfer),
-                        "transfer_rate": transfer_rate,
-                        "reinforcement": len(reinforcement),
-                        "reinforcement_rate": reinforcement_rate,
-                        "regression_pass": regression_pass,
-                        "regression_fail": regression_fail,
-                        "recent_regression_streak": recent_regression_streak,
-                        "counterexample_pass": counterexample_pass,
-                        "counterexample_fail": counterexample_fail,
-                        "recent_counterexample_streak": recent_counterexample_streak,
-                    },
-                    sort_keys=True,
-                ),
-            ),
+            (skill_key, old_status, new_status, json.dumps({"algorithm_version": ALGORITHM_VERSION, **metrics}, sort_keys=True)),
         )
     return new_status
 
 
 def recompute_all_skills(con: sqlite3.Connection) -> None:
-    keys = [r[0] for r in con.execute("SELECT skill_key FROM skill_profiles")]
-    for key in keys:
+    keys = {r[0] for r in con.execute("SELECT DISTINCT skill_key FROM skill_evidence WHERE algorithm_version=?", (ALGORITHM_VERSION,))}
+    keys.update(r[0] for r in con.execute("SELECT skill_key FROM skill_profiles WHERE algorithm_version=?", (ALGORITHM_VERSION,)))
+    for key in sorted(keys):
         recompute_skill_state(con, key)
 
 
