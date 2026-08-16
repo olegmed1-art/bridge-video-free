@@ -1,26 +1,28 @@
-name: DDS methodology v2.3 smoke
+name: DDS test contract (fast)
 
 on:
+  pull_request:
+    paths:
+      - 'dds_training/**'
+      - '.github/workflows/dds-training-v23-smoke.yml'
+      - '.github/workflows/dds-training-local-smoke.yml'
   push:
     branches: [dds-training-local]
     paths:
-      - 'dds_training/v23_core.py'
-      - 'dds_training/v23_runtime.py'
-      - 'dds_training/v23_runtime_selftest.py'
-      - 'dds_training/ALGORITHM_DDS_LEARNING_V2_3_RU.md'
-      - 'dds_training/STAGE2_READINESS_V23.json'
+      - 'dds_training/**'
       - '.github/workflows/dds-training-v23-smoke.yml'
+      - '.github/workflows/dds-training-local-smoke.yml'
   workflow_dispatch:
 
 concurrency:
-  group: dds-methodology-v23-${{ github.ref }}
+  group: dds-test-fast-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  methodology-v23:
+  fast:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -30,54 +32,30 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Compile v2.3 modules
+      - name: Compile DDS Python modules
         working-directory: dds_training
-        run: |
-          python -m py_compile v23_core.py v23_runtime.py v23_runtime_selftest.py
+        run: python -m compileall -q .
 
-      - name: Run v2.3 end-to-end methodology self-test
+      - name: Validate canonical test inventory and coverage contract
         working-directory: dds_training
-        run: python v23_runtime_selftest.py
+        run: python test_runner.py --manifest test_matrix.json --check-only
 
-      - name: Verify readiness manifest remains fail-closed
+      - name: Run isolated fast DDS test suite
         working-directory: dds_training
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-          from v23_runtime import audit_stage2_readiness
+        run: >-
+          python test_runner.py
+          --manifest test_matrix.json
+          --suite fast
+          --report /tmp/dds-test-report-fast.json
 
-          committed=json.loads(Path('STAGE2_READINESS_V23.json').read_text(encoding='utf-8'))
-          runtime=audit_stage2_readiness()
-          assert committed['algorithm_version']==runtime['algorithm_version']=='dds-learning-v2.3'
-          assert committed['status']=='blocked'
-          assert runtime['status']=='blocked'
-          required={x['capability'] for x in runtime['mass_start_blockers']}
-          assert required=={
-              'dds_partial_position_adapter',
-              'full_play_trajectory_integration',
-              'stage2_sharded_workflow',
-          }, required
-          assert committed['mass_training_started'] is False
-          print({'v23_readiness':'blocked_as_designed','mass_start_blockers':sorted(required),'stage2_started':False})
-          PY
+      - name: Verify tests did not modify tracked sources
+        run: git diff --exit-code
 
-      - name: Re-run holdout and immutable-memory regression tests
-        working-directory: dds_training
-        run: |
-          python experience_selftest.py
-          python methodology_v22_selftest.py
-          python skill_versions_selftest.py
-
-      - name: Confirm no paid DDS/API dependency was introduced
-        working-directory: dds_training
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          paths=[Path('v23_core.py'),Path('v23_runtime.py'),Path('v23_runtime_selftest.py')]
-          text='\n'.join(p.read_text(encoding='utf-8') for p in paths).lower()
-          forbidden=['openai.api','anthropic','requests.post(','httpx.post(','paid dds api']
-          found=[token for token in forbidden if token in text]
-          assert not found, found
-          print({'paid_api_dependencies':0,'checked_files':[str(p) for p in paths]})
-          PY
+      - name: Upload machine-readable fast test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dds-test-report-fast-${{ github.run_id }}
+          path: /tmp/dds-test-report-fast.json
+          if-no-files-found: warn
+          retention-days: 14
