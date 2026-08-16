@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-"""DDS-backed value trajectory for a legal proposed card line."""
+"""DDS-backed value trajectory for a legal proposed card line.
+
+DDS3 v3.0.0 documents AnalysePlay in the native library, but its released
+Python wheel exposes `solve_board_pbn` rather than `analyse_play_pbn`.  We
+therefore reconstruct every legal prefix and solve that exact position.  This
+is also the consistency method used by the upstream DDS regression tests.
+"""
 
 import json
-from typing import Iterable
 
 from experience_events import summarize_value_trajectory
-from playline import replay_line
+from playline import RANK_VALUE, SUITS, replay_line
 
 
 def _dds3():
@@ -14,8 +19,76 @@ def _dds3():
     return dds3
 
 
-def _play_string(cards: Iterable[str]) -> str:
-    return "".join(str(card).strip().upper().replace("10", "T") for card in cards)
+def _current_trick_arrays(snapshot: dict) -> tuple[tuple[int, int, int], tuple[int, int, int]]:
+    trick = list(snapshot.get("current_trick", []))
+    if len(trick) > 3:
+        raise RuntimeError(f"DDS current trick has {len(trick)} cards, maximum is 3")
+    suits = []
+    ranks = []
+    for item in trick:
+        token = str(item["card"]).upper().replace("10", "T")
+        if len(token) != 2 or token[0] not in SUITS or token[1] not in RANK_VALUE:
+            raise RuntimeError(f"Invalid card in reconstructed DDS trick: {token!r}")
+        suits.append(SUITS.index(token[0]))
+        ranks.append(int(RANK_VALUE[token[1]]))
+    while len(suits) < 3:
+        suits.append(0)
+        ranks.append(0)
+    return tuple(suits), tuple(ranks)
+
+
+def _solve_prefixes(
+    *,
+    dds,
+    snapshots: list[dict],
+    trump: int,
+    thread_index: int,
+    reuse_context: bool,
+) -> tuple[list[int], dict]:
+    context = None
+    if reuse_context and hasattr(dds, "SolverContext"):
+        context = dds.SolverContext()
+
+    scores: list[int] = []
+    nodes = 0
+    for index, snapshot in enumerate(snapshots):
+        remaining_cards = sum(int(x) for x in snapshot["remaining_card_counts"].values())
+        if remaining_cards == 0:
+            scores.append(0)
+            continue
+
+        current_suits, current_ranks = _current_trick_arrays(snapshot)
+        kwargs = {
+            "remain_cards": snapshot["remaining_deal"],
+            "trump": int(trump),
+            # DDS `first` is the leader of the current trick, not necessarily
+            # the next player when one to three cards have already been played.
+            "first": int(snapshot["trick_leader"]),
+            "current_trick_suit": current_suits,
+            "current_trick_rank": current_ranks,
+            "target": -1,
+            "solutions": 1,
+            # Upstream AnalysePlay consistency tests use mode=1 for an exact
+            # maximum score at every reconstructed prefix.
+            "mode": 1,
+            "thread_index": int(thread_index),
+        }
+        if context is not None:
+            kwargs["context"] = context
+        result = dds.solve_board_pbn(**kwargs)
+        if int(result.get("cards", 0)) < 1 or not result.get("score"):
+            raise RuntimeError(f"DDS returned no score at play prefix {index}: {result}")
+        score = int(result["score"][0])
+        scores.append(score)
+        nodes += int(result.get("nodes", 0))
+
+    return scores, {
+        "method": "repeated_solve_board_pbn",
+        "prefixes_solved": len(scores),
+        "context_reused": context is not None,
+        "nodes": nodes,
+        "python_analyse_play_available": hasattr(dds, "analyse_play_pbn"),
+    }
 
 
 def analyse_line(
@@ -26,13 +99,13 @@ def analyse_line(
     cards: list[str],
     opening_leader: int | None = None,
     thread_index: int = 0,
+    reuse_context: bool = True,
 ) -> dict:
-    """Validate a full/partial line and calculate projected declarer value after every card.
+    """Validate a line and calculate projected declarer value after every card.
 
-    DDS `analyse_play_pbn` reports tricks for the side to play after each prefix.
-    This function converts every prefix to one constant scale: projected final
-    tricks for declarer's partnership.  That makes declarer/defense swings
-    directly comparable and compatible with the first-error accounting module.
+    Each prefix is solved independently on the DDS side-to-play scale and then
+    converted to one constant scale: projected final tricks for declarer's
+    partnership.  This makes declarer losses and defensive gifts comparable.
     """
     first = (int(declarer) + 1) % 4 if opening_leader is None else int(opening_leader)
     legal = replay_line(
@@ -42,16 +115,15 @@ def analyse_line(
         cards=cards,
         opening_leader=first,
     )
-    dds = _dds3()
-    raw = dds.analyse_play_pbn(
-        deal,
-        play=_play_string(cards),
-        trump=int(trump),
-        first=first,
-        thread_index=int(thread_index),
-    )
-    raw_tricks = [int(x) for x in raw["tricks"]]
     snapshots = legal["snapshots"]
+    dds = _dds3()
+    raw_tricks, solver_info = _solve_prefixes(
+        dds=dds,
+        snapshots=snapshots,
+        trump=int(trump),
+        thread_index=int(thread_index),
+        reuse_context=bool(reuse_context),
+    )
     if len(raw_tricks) != len(snapshots):
         raise RuntimeError(
             f"DDS trajectory length {len(raw_tricks)} does not match legal snapshots {len(snapshots)}"
@@ -60,15 +132,18 @@ def analyse_line(
     projected = []
     normalized = []
     for index, (score, snapshot) in enumerate(zip(raw_tricks, snapshots)):
+        # An incomplete current trick is part of the remaining trick count, as
+        # in the upstream SolveBoard/AnalysePlay consistency calculation.
         remaining_tricks = 13 - int(snapshot["completed_tricks"])
         if score < 0 or score > remaining_tricks:
             raise RuntimeError(
                 f"DDS score {score} outside 0..{remaining_tricks} at prefix {index}"
             )
         if snapshot["next_actor"] == "declarer":
-            value = int(snapshot["declarer_tricks"]) + score
+            declarer_remaining = score
         else:
-            value = int(snapshot["declarer_tricks"]) + (remaining_tricks - score)
+            declarer_remaining = remaining_tricks - score
+        value = int(snapshot["declarer_tricks"]) + declarer_remaining
         if value < 0 or value > 13:
             raise RuntimeError(f"Normalized declarer value {value} outside 0..13")
         projected.append(value)
@@ -76,6 +151,8 @@ def analyse_line(
             "prefix_cards": index,
             "dds_side_to_play_tricks": score,
             "side_to_play": snapshot["next_actor"],
+            "next_seat": snapshot["next_seat"],
+            "trick_leader": snapshot["trick_leader"],
             "completed_declarer_tricks": snapshot["declarer_tricks"],
             "remaining_tricks": remaining_tricks,
             "projected_final_declarer_tricks": value,
@@ -89,7 +166,7 @@ def analyse_line(
     summary["completed_tricks_in_line"] = legal["completed_tricks"]
     return {
         "legal_play": legal,
-        "dds_raw": {"number": int(raw["number"]), "tricks": raw_tricks},
+        "dds_raw": {"number": len(raw_tricks), "tricks": raw_tricks, **solver_info},
         "normalized_positions": normalized,
         "projected_declarer_values": projected,
         "actors": actors,
@@ -98,7 +175,7 @@ def analyse_line(
 
 
 def first_refutation(analysis: dict, claimed_tricks: int) -> dict:
-    """Explain the earliest point where a claimed result is no longer attainable."""
+    """Explain the earliest prefix where a claimed result is no longer attainable."""
     values = [int(x) for x in analysis["projected_declarer_values"]]
     claim = int(claimed_tricks)
     if not values:
