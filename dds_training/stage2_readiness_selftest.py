@@ -18,6 +18,10 @@ def write_jsonl(path: Path, rows: list[dict]) -> None:
     path.write_text("".join(json.dumps(x) + "\n" for x in rows), encoding="utf-8")
 
 
+def audit_fixture(work: Path) -> dict:
+    return audit_stage2_readiness(work, expected_total_deals=4, expected_main_tasks=4)
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory() as td:
         work = Path(td)
@@ -26,6 +30,7 @@ def main() -> None:
             base.append({
                 "task_id": f"P{index}-CT",
                 "deal_id": f"P{index}",
+                "board": 10_001 + index,
                 "split": "train",
                 "task_type": "contract_tricks",
                 "deal": DEAL,
@@ -33,6 +38,7 @@ def main() -> None:
                 "strain": 4,
                 "leader": 3,
             })
+        (work / "corpus_summary.json").write_text(json.dumps({"count": 4}), encoding="utf-8")
         write_jsonl(work / "blind_tasks.jsonl", base)
         annotate_file(work / "blind_tasks.jsonl", work / "blind_tasks_crossfit.jsonl", folds=2, seed=7)
         crossfit = [json.loads(x) for x in (work / "blind_tasks_crossfit.jsonl").read_text().splitlines() if x]
@@ -63,21 +69,28 @@ def main() -> None:
             json.dumps({"separate_families": True, "paired_bootstrap": True}), encoding="utf-8"
         )
 
-        report = audit_stage2_readiness(work)
+        report = audit_fixture(work)
         assert report["main_train"]["ready"] is True, report
         assert report["holdout"]["ready"] is False
         assert report["skill_claim"]["ready"] is False
+        assert report["main_train"]["actual_fresh_tasks"] == 4
 
         # OOF calibration closes the holdout gate without affecting skill claims.
         (work / "confidence_calibration_oof.json").write_text(
             json.dumps({"source": "out_of_fold_train_only"}), encoding="utf-8"
         )
-        report2 = audit_stage2_readiness(work)
+        report2 = audit_fixture(work)
         assert report2["holdout"]["ready"] is True, report2
+
+        # A pilot-only corpus must never be accepted as a complete 30k main scope.
+        production_gate = audit_stage2_readiness(work)
+        assert production_gate["main_train"]["ready"] is False
+        assert any(x["code"] == "MAIN_CORPUS_NOT_EXPANDED" for x in production_gate["findings"])
 
         print(json.dumps({
             "ok": True,
-            "main_train_ready": report["main_train"]["ready"],
+            "main_train_ready_for_fixture": report["main_train"]["ready"],
+            "production_30k_requirement_fail_closed": True,
             "holdout_fail_closed_before_oof": True,
             "holdout_ready_after_oof": report2["holdout"]["ready"],
             "skill_claim_still_blocked": not report2["skill_claim"]["ready"],
