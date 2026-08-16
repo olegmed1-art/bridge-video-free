@@ -30,6 +30,10 @@ jobs:
         working-directory: dds_training
         run: python -m compileall -q .
 
+      - name: Test methodology v2.2 evidence and balanced follow-ups
+        working-directory: dds_training
+        run: python methodology_v22_selftest.py
+
       - name: Test immutable experience memory, holdouts, and skill recovery
         working-directory: dds_training
         run: python experience_selftest.py
