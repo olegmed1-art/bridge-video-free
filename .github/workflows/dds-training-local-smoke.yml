@@ -42,7 +42,9 @@ jobs:
           path: |
             dds_training/.wheel-cache/dds3
             ~/.cache/bazel-dds3
-          key: dds3-v3.0.0-bazel7.6.1-py314-${{ runner.os }}
+          key: dds3-wheel-v2-v3.0.0-bazel7.6.1-py314-${{ runner.os }}
+          restore-keys: |
+            dds3-v3.0.0-bazel7.6.1-py314-${{ runner.os }}
 
       - name: Bootstrap local DDS3 and run technical preflight
         run: bash dds_training/bootstrap_linux.sh
@@ -69,7 +71,7 @@ jobs:
           source .venv/bin/activate
           python independent_crosscheck.py \
             --solver /tmp/bridge-solver-independent/solver-independent \
-            --count 4
+            --count 4 | tee /tmp/dds-independent-crosscheck.json
 
       - name: Verify launch and sealed-test guards block accidental training
         working-directory: dds_training
@@ -199,6 +201,7 @@ jobs:
           name: dds-test-report-heavy-${{ github.run_id }}
           path: |
             /tmp/dds-test-report-dds.json
+            /tmp/dds-independent-crosscheck.json
             /tmp/dds-pilot-prepared/stage2_readiness.json
           if-no-files-found: warn
           retention-days: 14
@@ -210,4 +213,4 @@ jobs:
           path: |
             dds_training/.wheel-cache/dds3
             ~/.cache/bazel-dds3
-          key: dds3-v3.0.0-bazel7.6.1-py314-${{ runner.os }}
+          key: dds3-wheel-v2-v3.0.0-bazel7.6.1-py314-${{ runner.os }}
