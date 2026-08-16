@@ -59,14 +59,17 @@ def _download_receipt(token: str, file_id: str) -> dict:
     )
 
 
-def main():
-    job = os.environ["BRIDGE_JOB_ID"]
-    revision = os.environ.get("BRIDGE_REQUESTED_ALGORITHM_REVISION", "").strip()
-    if not revision:
-        raise RuntimeError("ALGORITHM_REVISION_REQUIRED_FOR_IDEMPOTENCY")
-    token = _token()
-    name = f"CLEANUP_ACK_{job}.json"
-    q = f"trashed=false and name='{name}'"
+def knowledge_status_matches_revision(payload: dict, job_id: str, revision: str) -> bool:
+    return (
+        payload.get("status") == "KNOWLEDGE_APPLIED"
+        and payload.get("job_id") == job_id
+        and payload.get("algorithmRevision") == revision
+    )
+
+
+def _matching_named_receipt(token: str, name: str, matcher, job: str, revision: str) -> bool:
+    escaped = name.replace("'", "\\'")
+    q = f"trashed=false and name='{escaped}'"
     params = urllib.parse.urlencode({
         "q": q,
         "fields": "files(id,name,modifiedTime)",
@@ -77,15 +80,33 @@ def main():
         DRIVE_API + "/files?" + params,
         headers={"Authorization": f"Bearer {token}"},
     )
-    completed = False
     for item in out.get("files") or []:
         try:
             payload = _download_receipt(token, item["id"])
         except Exception:
             continue
-        if receipt_matches_revision(payload, job, revision):
-            completed = True
-            break
+        if matcher(payload, job, revision):
+            return True
+    return False
+
+
+def main():
+    job = os.environ["BRIDGE_JOB_ID"]
+    revision = os.environ.get("BRIDGE_REQUESTED_ALGORITHM_REVISION", "").strip()
+    if not revision:
+        raise RuntimeError("ALGORITHM_REVISION_REQUIRED_FOR_IDEMPOTENCY")
+    token = _token()
+    cleanup_ready = _matching_named_receipt(
+        token, f"CLEANUP_ACK_{job}.json", receipt_matches_revision, job, revision
+    )
+    knowledge_ready = cleanup_ready and _matching_named_receipt(
+        token,
+        f"KNOWLEDGE_STATUS_{job}.json",
+        knowledge_status_matches_revision,
+        job,
+        revision,
+    )
+    completed = cleanup_ready and knowledge_ready
 
     output = os.environ.get("GITHUB_OUTPUT")
     if output:
@@ -93,7 +114,9 @@ def main():
             handle.write(f"already_completed={'true' if completed else 'false'}\n")
     print(json.dumps({
         "stage": "TERMINAL_RECEIPT_PREFLIGHT",
-        "status": "ALREADY_COMPLETED" if completed else "NOT_COMPLETED_FOR_REVISION",
+        "status": "ALREADY_COMPLETED" if completed else "TERMINAL_RECEIPTS_INCOMPLETE",
+        "cleanupReady": cleanup_ready,
+        "knowledgeReady": knowledge_ready,
         "job_id": job,
         "algorithmRevision": revision,
     }))
