@@ -1,0 +1,73 @@
+{
+  "algorithm_version": "dds-learning-v2.3",
+  "status": "blocked",
+  "mass_training_started": false,
+  "capabilities": {
+    "family_lineage_and_crossfit": {
+      "status": "ready",
+      "mass_start_required": true,
+      "implementation": "v23_runtime.py"
+    },
+    "legal_line_validation": {
+      "status": "ready",
+      "mass_start_required": true,
+      "implementation": "v23_runtime.py"
+    },
+    "continuation_task_schema": {
+      "status": "ready",
+      "mass_start_required": true,
+      "implementation": "v23_runtime.py"
+    },
+    "human_information_mask": {
+      "status": "ready",
+      "mass_start_required": true,
+      "implementation": "v23_runtime.py"
+    },
+    "confidence_calibration": {
+      "status": "ready",
+      "mass_start_required": true,
+      "implementation": "v23_core.py"
+    },
+    "family_preserving_shards": {
+      "status": "ready",
+      "mass_start_required": true,
+      "implementation": "v23_core.py"
+    },
+    "counterexample_evaluator": {
+      "status": "ready",
+      "mass_start_required": true,
+      "implementation": "v23_core.py"
+    },
+    "versioned_rule_promotion": {
+      "status": "ready",
+      "mass_start_required": true,
+      "implementation": "v23_core.py"
+    },
+    "negative_control_protocol": {
+      "status": "ready",
+      "mass_start_required": true,
+      "implementation": "v23_core.py"
+    },
+    "dds_partial_position_adapter": {
+      "status": "blocked",
+      "mass_start_required": true,
+      "reason": "Нужно интегрировать DDS3 с частичной взяткой и проверить ориентацию/шкалу на фиксированном regression-корпусе."
+    },
+    "full_play_trajectory_integration": {
+      "status": "blocked",
+      "mass_start_required": true,
+      "reason": "Зависит от проверенного partial-position adapter и пакетного AnalysePlay."
+    },
+    "stage2_sharded_workflow": {
+      "status": "blocked",
+      "mass_start_required": true,
+      "reason": "Нужно реализовать автономное сохранение, аудит и возобновление каждого shard без преждевременного открытия holdout."
+    },
+    "real_pbn_play_ingestion": {
+      "status": "blocked",
+      "mass_start_required": false,
+      "reason": "Обязательно до утверждения переноса на реальную турнирную игру."
+    }
+  },
+  "next_action": "Реализовать и проверить три обязательных блокирующих модуля. После зелёного preflight всё равно требуется отдельная явная команда пользователя на этап 2."
+}
