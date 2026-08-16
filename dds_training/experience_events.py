@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 import sqlite3
 
-from config import ALGORITHM_VERSION
+from config import (
+    ALGORITHM_VERSION,
+    SPACED_REVIEW_BUCKET_SIZE,
+    SPACED_REVIEW_MAX_TASKS_PER_BUCKET,
+)
 
 
 def _event(
@@ -197,25 +201,53 @@ def schedule_spaced_reviews(
     run_id: str | None = None,
     offsets: tuple[int, ...] = (100, 1000, 10000),
 ) -> None:
-    """Schedule delayed checks so a corrected error must stay corrected."""
+    """Schedule bounded delayed review batches while retaining source provenance.
+
+    Exact source errors already live in immutable error/regression tables. The
+    operational queue therefore aggregates requests by skill, offset and due
+    evaluation window. This avoids tens of thousands of near-identical queue rows
+    while keeping enough sampled work to verify retention.
+    """
     for offset in offsets:
+        due = int(current_evaluations) + int(offset)
+        bucket = ((due + SPACED_REVIEW_BUCKET_SIZE - 1) // SPACED_REVIEW_BUCKET_SIZE) * SPACED_REVIEW_BUCKET_SIZE
         details = {
-            "source_task_id": source_task_id,
-            "due_after_evaluations": current_evaluations + offset,
-            "offset": offset,
+            "algorithm_version": ALGORITHM_VERSION,
+            "due_after_evaluations_bucket": bucket,
+            "offset": int(offset),
+            "aggregation": "skill_offset_due_bucket",
         }
         details_json = json.dumps(details, ensure_ascii=False, sort_keys=True)
-        exists = con.execute(
-            "SELECT 1 FROM learning_queue WHERE skill_key=? AND purpose='spaced_review' AND details_json=? LIMIT 1",
+        existing = con.execute(
+            """
+            SELECT id,requested_tasks FROM learning_queue
+            WHERE skill_key=? AND purpose='spaced_review' AND details_json=? LIMIT 1
+            """,
             (skill_key, details_json),
         ).fetchone()
-        if exists:
-            continue
-        con.execute(
-            """
-            INSERT INTO learning_queue
-              (skill_key,purpose,priority,requested_tasks,status,source_run_id,details_json)
-            VALUES(?,?,?,?,?,?,?)
-            """,
-            (skill_key, "spaced_review", 1.0 + 1000.0 / offset, 1, "planned", run_id, details_json),
+        if existing:
+            row_id, requested = int(existing[0]), int(existing[1])
+            if requested < SPACED_REVIEW_MAX_TASKS_PER_BUCKET:
+                con.execute(
+                    "UPDATE learning_queue SET requested_tasks=? WHERE id=?",
+                    (min(SPACED_REVIEW_MAX_TASKS_PER_BUCKET, requested + 1), row_id),
+                )
+        else:
+            con.execute(
+                """
+                INSERT INTO learning_queue
+                  (skill_key,purpose,priority,requested_tasks,status,source_run_id,details_json)
+                VALUES(?,?,?,?,?,?,?)
+                """,
+                (skill_key, "spaced_review", 1.0 + 1000.0 / offset, 1, "planned", run_id, details_json),
+            )
+
+        _event(
+            con,
+            event_key=f"{ALGORITHM_VERSION}:{source_task_id}:spaced:{skill_key}:{offset}",
+            event_type="spaced_review_scheduled",
+            task_id=source_task_id,
+            deal_id=None,
+            run_id=run_id,
+            payload={**details, "source_task_id": source_task_id},
         )
