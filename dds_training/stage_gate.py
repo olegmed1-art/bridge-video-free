@@ -10,6 +10,7 @@ from investigations import open_investigations, sync_required_investigations
 from methodology_audit import audit_methodology
 from regression_links import sync_regression_skill_links
 from run_provenance import ensure_run_task_table
+from stage2_readiness import audit_stage2_readiness
 from stage_scope import task_in_stage
 from storage import connect
 
@@ -19,12 +20,11 @@ def _load_tasks(path: Path) -> list[dict]:
 
 
 def assess_stage(work: Path, stage: str) -> dict:
-    """Assess technical completion and methodological readiness separately.
+    """Assess technical completion, methodology and next-phase readiness.
 
-    Database integrity is necessary but not sufficient. A stage can be fully
-    computed and auditable while still being methodologically unfit for expansion
-    (for example, one-sided follow-ups or same-source probes counted as transfer).
-    This gate therefore reports both states and gives one concrete next action.
+    The transition is phased.  A completed pilot needs the Stage-2 TRAIN gate;
+    a completed main stage must also have the holdout gate.  Stable-skill claims
+    are reported separately and never inferred merely because a stage finished.
     """
     task_path = work / "blind_tasks.jsonl"
     if not task_path.exists():
@@ -62,6 +62,7 @@ def assess_stage(work: Path, stage: str) -> dict:
     open_stage = [x for x in open_items if x["task_id"] in stage_ids]
     audit = audit_database(con)
     methodology = audit_methodology(work)
+    stage2 = audit_stage2_readiness(work)
     report_path = work / f"report_{stage}.md"
 
     all_base_evaluated = all(v == 0 for v in missing_by_split.values())
@@ -69,7 +70,15 @@ def assess_stage(work: Path, stage: str) -> dict:
     ready_for_report = technical_stage_complete
     report_exists = report_path.exists()
     methodology_ready = bool(methodology.get("advance_allowed"))
-    ready_for_next_stage = technical_stage_complete and report_exists and methodology_ready
+
+    if stage == "pilot":
+        transition_gate_name = "main_train"
+    elif stage == "main":
+        transition_gate_name = "holdout"
+    else:
+        transition_gate_name = None
+    transition_ready = True if transition_gate_name is None else bool(stage2[transition_gate_name]["ready"])
+    ready_for_next_stage = technical_stage_complete and report_exists and methodology_ready and transition_ready
 
     if not all_base_evaluated:
         next_action = "Complete the missing fresh blind evaluations shown in missing_by_split."
@@ -81,9 +90,15 @@ def assess_stage(work: Path, stage: str) -> dict:
         next_action = f"Generate report_{stage}.md immediately; the stage is otherwise technically complete."
     elif not methodology_ready:
         blockers = [x["code"] for x in methodology.get("findings", []) if x.get("severity") == "error"]
-        next_action = f"Apply the methodological corrections before expansion: {blockers}."
+        next_action = f"Apply the current-revision methodological corrections before expansion: {blockers}."
+    elif not transition_ready:
+        blockers = [
+            x["code"] for x in stage2.get("findings", [])
+            if x.get("gate") == transition_gate_name and x.get("severity") == "error"
+        ]
+        next_action = f"Close the {transition_gate_name} readiness blockers before expansion: {blockers}."
     elif stage == "pilot":
-        next_action = "Review the corrected pilot report and obtain explicit user approval before expanding the same work directory to the main 30k corpus."
+        next_action = "Review the corrected pilot report and obtain explicit user approval before expanding to the main 30k corpus."
     elif stage == "main":
         next_action = "Review the main report and choose targeted weaknesses before generating the next ~10k focused tasks."
     else:
@@ -100,6 +115,10 @@ def assess_stage(work: Path, stage: str) -> dict:
         "audit_status": audit["status"],
         "methodology_status": methodology["status"],
         "methodology_findings": methodology["findings"],
+        "stage2_readiness": stage2,
+        "required_transition_gate": transition_gate_name,
+        "required_transition_gate_ready": transition_ready,
+        "stable_skill_claims_ready": bool(stage2["skill_claim"]["ready"]),
         "technical_stage_complete": technical_stage_complete,
         "ready_for_report": ready_for_report,
         "report_exists": report_exists,
@@ -112,7 +131,7 @@ def assess_stage(work: Path, stage: str) -> dict:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="DDS stage-completion and methodology gate")
+    p = argparse.ArgumentParser(description="DDS stage-completion, methodology and phased-readiness gate")
     p.add_argument("--work", required=True)
     p.add_argument("--stage", choices=("pilot", "main", "targeted"), required=True)
     args = p.parse_args()
