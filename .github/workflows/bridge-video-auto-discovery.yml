@@ -1,48 +1,18 @@
-name: bridge-video-auto-discovery
+name: bridge-video-auto-discovery-disabled
 
-# Current user-approved policy:
-# - automatically process only NEW Zoom recordings created after the cutoff;
-# - never backfill the historical archive automatically;
-# - zero-cost tools only; no paid fallback.
+# 3.1 FREE r25.6 policy: periodic/mass discovery is disabled.
+# Video processing may start only from an explicit opaque job request.
 on:
-  schedule:
-    - cron: "*/15 * * * *"
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/bridge-video-auto-discovery.yml'
-      - 'discover_next_drive_job.py'
 
 permissions:
   contents: read
-  actions: write
-
-concurrency:
-  group: bridge-video-auto-discovery
-  cancel-in-progress: true
 
 jobs:
-  discover:
-    if: ${{ github.event.repository.private == false }}
+  policy-guard:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    env:
-      GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
-      GITHUB_TOKEN: ${{ github.token }}
-      BRIDGE_ZOOM_ROOT_ID: "1W-5gfOFUrSJ0a7XN0zXjU8o8JTUcorP1"
-      AUTO_DISCOVERY_NOT_BEFORE: "2026-08-15T11:30:00Z"
-      AUTO_QUEUE_STALE_HOURS: "8"
+    timeout-minutes: 2
     steps:
-      - name: Checkout public technical code only
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-
-      - name: Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-
-      - name: FREE auto-discovery for new Zoom recordings
-        run: python discover_next_drive_job.py
+      - name: Confirm auto-discovery is disabled
+        run: |
+          echo 'AUTO_DISCOVERY_DISABLED: 3.1 FREE r25.6 requires explicit user-requested jobs.'
