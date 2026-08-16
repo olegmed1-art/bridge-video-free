@@ -200,12 +200,35 @@ def pdf_report(out,master,shots):
         if not x.get('student_action') and not x.get('teacher_intervention') and not x.get('student_response')
     ]
     if cycles and no_speaker_labels and len(empty_actor_cycles)==len(cycles):
+        role_neutral=[
+            x for x in cycles
+            if all((x.get('role_neutral_sequence') or {}).get(k) for k in (
+                'observed_action','instructional_response','observed_followup'
+            ))
+        ]
         st.append(Paragraph(escape(
-            f"Надёжных меток говорящих нет. Найдено {len(cycles)} возможных учебных ситуаций, "
-            "но действия ученика, вмешательства преподавателя и результат нельзя честно разделить по ролям. "
-            "Повторяющиеся пустые карточки не печатаются; все исходные кандидаты без сокращений сохранены "
-            "во встроенном master_analysis.json."
+            f"Надёжных меток говорящих нет, поэтому роли не приписываются. "
+            f"Найдено {len(cycles)} возможных учебных ситуаций; "
+            f"содержательно полных последовательностей без атрибуции ролей — {len(role_neutral)}."
         ),body))
+        for x in role_neutral[:12]:
+            seq=x.get('role_neutral_sequence') or {}
+            st.append(Paragraph(escape(
+                f"Ситуация: {seq.get('trigger_context') or 'контекст не установлен'}"
+            ),body))
+            st.append(Paragraph(escape(
+                f"Наблюдаемое решение/действие: {seq.get('observed_action')}"
+            ),body))
+            st.append(Paragraph(escape(
+                f"Следующее учебное объяснение: {seq.get('instructional_response')}"
+            ),body))
+            st.append(Paragraph(escape(
+                f"Последующая реакция: {seq.get('observed_followup')}"
+            ),small))
+        if len(role_neutral)>12:
+            st.append(Paragraph(escape(
+                f"Ещё {len(role_neutral)-12} последовательностей сохранены во встроенном master_analysis.json."
+            ),small))
     elif not cycles:
         st.append(Paragraph('Подтверждённые учебные циклы автоматически не выделены.',body))
     else:
@@ -259,7 +282,13 @@ def pdf_report(out,master,shots):
     recs=master.get('recommendations',[])
     if not recs:st.append(Paragraph('Рекомендации не сформированы: недостаточно подтверждённых данных.',body))
     for x in recs:st.append(Paragraph(escape(x.get('text','')),body))
-    st.append(Paragraph('12. Кандидаты раздач и решений',h2));st.append(Paragraph(escape(f"Раздач: {len(master.get('deals',[]))}; решений: {len(master.get('decisions',[]))}. Неизвестное не достраивается по догадке."),body))
+    st.append(Paragraph('12. Кандидаты раздач и решений',h2))
+    gate=(master.get('content_quality',{}) or {}).get('r24Gate',{}) or {}
+    st.append(Paragraph(escape(
+        f"Раздач: {len(master.get('deals',[]))}; решений: {len(master.get('decisions',[]))}; "
+        f"решений с подтверждённым действием, контекстом и рассуждением: {gate.get('contentCompleteDecisions',0)}. "
+        "Неизвестное не достраивается по догадке."
+    ),body))
     st+=[PageBreak(),Paragraph('13. Полный транскрипт с таймкодами',h2)]
     for s in master.get('transcript',[]):st.append(Paragraph(escape(f"[{_tm(s['start'])}–{_tm(s['end'])}] "+((s.get('speaker')+': ') if s.get('speaker') else '')+s.get('text','')+(' [требует проверки]' if s.get('unreliable') else '')),body))
     tq=master.get('technical_qc',{}).get('transcript',{}) or {}
