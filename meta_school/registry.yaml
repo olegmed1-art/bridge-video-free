@@ -1,11 +1,44 @@
-meta_school_version: 0.1
+meta_school_version: 0.2
 registry_status: IMPLEMENTED
 status_model: [DESIGNED, IMPLEMENTED, TESTED, OPERATIONAL]
 operational_requires:
   - reproducible_end_to_end_evidence
   - run_or_artifact_identity
   - regression_or_repeat_confirmation
+platform_layers:
+  - online_school
+  - learning_engine
+  - meta_school
+  - school_core
 components:
+  - id: online_school
+    name: Online School
+    status: DESIGNED
+    operational: false
+    depends_on: [identity_provenance, learning_engine, school_knowledge]
+  - id: learning_engine
+    name: Learning Engine
+    status: DESIGNED
+    operational: false
+    depends_on: [identity_provenance, evidence_gate, school_knowledge]
+  - id: ai_bridge_coach
+    name: AI Bridge Coach
+    status: DESIGNED
+    operational: false
+    depends_on: [online_school, learning_engine, school_knowledge, evidence_gate]
+  - id: identity_provenance
+    name: Identity and Provenance
+    status: DESIGNED
+    operational: false
+  - id: evidence_gate
+    name: Evidence Gate
+    status: IMPLEMENTED
+    operational: false
+    evidence_hint: meta_school/evidence.schema.json
+  - id: school_knowledge
+    name: Approved School Knowledge
+    status: DESIGNED
+    operational: false
   - id: video_analysis
     name: Video Analysis
     evidence_hint: VIDEO_ANALYSIS_3_1_FREE.md
@@ -42,3 +75,7 @@ rules:
   regression_on_material_failure: true
   new_sql_auto_production: false
   folder_name_is_identity: false
+  learning_join_requires_resolved_identity: true
+  coach_requires_approved_school_knowledge: true
+  pedagogical_hypothesis_requires_teacher_approval: true
+  online_school_and_learning_engine_are_meta_clients: true
