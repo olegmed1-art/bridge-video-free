@@ -4,8 +4,8 @@ from __future__ import annotations
 
 These checks prevent a green result from a partial or self-modifying test
 system. They validate the canonical manifest, prohibit network/API clients in
-the DDS Python layer, and ensure smoke workflows are read-only consumers of the
-manifest-driven runner.
+the DDS Python layer, enforce a bounded coverage-waiver budget, and ensure smoke
+workflows are read-only consumers of the manifest-driven runner.
 """
 
 import ast
@@ -48,6 +48,13 @@ def main() -> None:
     manifest, specs = load_manifest(manifest_path, root=dds_root)
     assert manifest["schema"] == "dds-test-manifest-v1"
     assert len(specs) >= 20, len(specs)
+    assert {spec.suite for spec in specs} == {"fast", "dds"}
+
+    coverage = manifest["coverage"]
+    waivers = dict(coverage.get("waivers", {}))
+    waiver_budget = int(coverage.get("max_waivers", 0))
+    assert waiver_budget >= 0
+    assert len(waivers) <= waiver_budget, (len(waivers), waiver_budget, sorted(waivers))
 
     network_imports: dict[str, list[str]] = {}
     for path in sorted(dds_root.glob("*.py")):
@@ -73,6 +80,9 @@ def main() -> None:
     assert "pull_request:" in fast
     assert "test_runner.py" in fast and "--suite fast" in fast
     assert "test_runner.py" in heavy and "--suite dds" in heavy
+    assert "--report" in fast and "--report" in heavy
+    assert "actions/upload-artifact@v4" in fast and "actions/upload-artifact@v4" in heavy
+    assert "git diff --exit-code" in fast and "git diff --exit-code" in heavy
     assert "contents: read" in fast and "contents: read" in heavy
 
     unsafe: dict[str, list[str]] = {}
@@ -94,6 +104,8 @@ def main() -> None:
                 "manifest_suites": sorted({spec.suite for spec in specs}),
                 "orphan_selftests": 0,
                 "unmapped_production_modules": 0,
+                "coverage_waivers": sorted(waivers),
+                "coverage_waiver_budget": waiver_budget,
                 "forbidden_network_imports": 0,
                 "unsafe_self_modifying_test_workflows": 0,
                 "canonical_fast_workflow": fast_path.name,
