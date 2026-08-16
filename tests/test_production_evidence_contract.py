@@ -41,8 +41,21 @@ def test_terminal_preflight_matches_r25_6_receipt_contract():
     assert "CLEANUP_ACK" in source
 
 
+def test_periodic_auto_discovery_remains_disabled():
+    source = Path(".github/workflows/bridge-video-auto-discovery.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "schedule:" not in source
+    assert "actions: write" not in source
+    assert "GOOGLE_DRIVE_OAUTH_JSON" not in source
+    assert "discover_next_drive_job.py" not in source
+    assert "workflow_dispatch:" in source
+    assert "AUTO_DISCOVERY_DISABLED" in source
+
+
 if __name__ == "__main__":
     test_production_route_is_confirmed_r25_6()
     test_runtime_does_not_filter_master_canon_evidence()
     test_terminal_preflight_matches_r25_6_receipt_contract()
+    test_periodic_auto_discovery_remains_disabled()
     print("PRODUCTION_R25_6_EVIDENCE_CONTRACT: PASS")

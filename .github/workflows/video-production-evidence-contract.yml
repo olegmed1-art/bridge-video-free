@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/video-production-evidence-contract.yml'
       - '.github/workflows/bridge-video-3.1-free.yml'
+      - '.github/workflows/bridge-video-auto-discovery.yml'
       - 'run_drive_3_1_free_generic.py'
       - 'check_completed_job.py'
       - 'bridge_runtime_hardening_r25_6.py'
@@ -17,6 +18,7 @@ on:
     paths:
       - '.github/workflows/video-production-evidence-contract.yml'
       - '.github/workflows/bridge-video-3.1-free.yml'
+      - '.github/workflows/bridge-video-auto-discovery.yml'
       - 'run_drive_3_1_free_generic.py'
       - 'check_completed_job.py'
       - 'bridge_runtime_hardening_r25_6.py'
