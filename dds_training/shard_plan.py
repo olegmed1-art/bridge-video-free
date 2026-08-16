@@ -31,12 +31,17 @@ def build_shard_plan(
     if not selected:
         raise ValueError("No tasks selected for shard plan")
 
+    by_id: dict[str, dict] = {}
     families: dict[str, list[dict]] = defaultdict(list)
     missing_family = []
     for task in selected:
+        task_id = str(task["task_id"])
+        if task_id in by_id:
+            raise ValueError(f"Duplicate task_id before sharding: {task_id}")
+        by_id[task_id] = task
         family = task.get("root_deal_id")
         if not family:
-            missing_family.append(task.get("task_id"))
+            missing_family.append(task_id)
             continue
         families[str(family)].append(task)
     if missing_family:
@@ -70,6 +75,7 @@ def build_shard_plan(
 
     manifest_shards = []
     all_ids: list[str] = []
+    family_to_shards: dict[str, set[int]] = defaultdict(set)
     for index, shard in enumerate(shards, 1):
         ids = [str(x["task_id"]) for x in shard]
         all_ids.extend(ids)
@@ -77,13 +83,16 @@ def build_shard_plan(
         type_counts = Counter(str(x.get("task_type")) for x in shard)
         fold_counts = Counter(str(x.get("crossfit_fold")) for x in shard)
         family_ids = sorted({str(x["root_deal_id"]) for x in shard})
+        for family in family_ids:
+            family_to_shards[family].add(index)
         shard_id = f"{stage}-shard-{index:04d}"
+        ids_sha = _sha(ids)
         manifest_shards.append({
             "shard_id": shard_id,
             "index": index,
             "task_count": len(ids),
             "family_count": len(family_ids),
-            "task_ids_sha256": _sha(ids),
+            "task_ids_sha256": ids_sha,
             "task_ids": ids,
             "first_task_id": ids[0],
             "last_task_id": ids[-1],
@@ -92,20 +101,15 @@ def build_shard_plan(
             "crossfit_folds": dict(sorted(fold_counts.items())),
             "expected_result_artifact": f"{shard_id}-state.tgz",
             "resume_key": hashlib.sha256(
-                f"{stage}:{index}:{_sha(ids)}".encode("utf-8")
+                f"{stage}:{index}:{ids_sha}".encode("utf-8")
             ).hexdigest()[:24],
         })
 
     if len(set(all_ids)) != len(all_ids):
         raise ValueError("Duplicate task ids across shard plan")
-    if set(all_ids) != {str(x["task_id"]) for x in selected}:
+    if set(all_ids) != set(by_id):
         raise ValueError("Shard plan does not cover exactly the selected tasks")
 
-    family_to_shards: dict[str, set[int]] = defaultdict(set)
-    for shard in manifest_shards:
-        for task_id in shard["task_ids"]:
-            task = next(x for x in selected if str(x["task_id"]) == task_id)
-            family_to_shards[str(task["root_deal_id"])].add(int(shard["index"]))
     split_families = {k: sorted(v) for k, v in family_to_shards.items() if len(v) != 1}
     if split_families:
         raise ValueError(f"Families split across shards: {split_families}")
