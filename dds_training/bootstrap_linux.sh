@@ -23,6 +23,17 @@ fi
 source .venv/bin/activate
 python -m pip install --upgrade pip wheel setuptools
 
+WHEEL_CACHE="${DDS_WHEEL_CACHE:-$HERE/.wheel-cache/dds3}"
+mkdir -p "$WHEEL_CACHE"
+CACHED_WHEEL="$(find "$WHEEL_CACHE" -maxdepth 1 -type f -name 'dds3-*.whl' -print -quit)"
+if [[ -n "$CACHED_WHEEL" ]]; then
+  echo "Installing cached DDS3 wheel: $CACHED_WHEEL"
+  python -m pip install --force-reinstall "$CACHED_WHEEL"
+  python preflight.py --quick
+  echo "DDS local environment restored from wheel cache. No DDS training was started."
+  exit 0
+fi
+
 mkdir -p .tools .build "${HOME}/.cache/bazel-dds3"
 BAZELISK_VERSION="1.29.0"
 BAZELISK="$HERE/.tools/bazelisk"
@@ -49,9 +60,11 @@ if [[ -z "$WHEEL" ]]; then
   echo "DDS3 wheel was not produced." >&2
   exit 3
 fi
-python -m pip install --force-reinstall "$WHEEL"
+cp -f "$WHEEL" "$WHEEL_CACHE/"
+CACHED_WHEEL="$WHEEL_CACHE/$(basename "$WHEEL")"
+python -m pip install --force-reinstall "$CACHED_WHEEL"
 popd >/dev/null
 
 python preflight.py --quick
 
-echo "DDS local environment is technically ready. No DDS training was started."
+echo "DDS local environment is technically ready and wheel-cached. No DDS training was started."
