@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Legal card-play reconstruction for line-bearing DDS tasks.
 
-This module does not call DDS.  Its job is to make a blind proposed line
-machine-checkable before the line is exposed to a solver.  It validates card
+This module does not call DDS. Its job is to make a blind proposed line
+machine-checkable before the line is exposed to a solver. It validates card
 ownership, turn order, follow-suit obligations, trick winners and produces a
-position snapshot after every card.  A later DDS adapter can evaluate those
+position snapshot after every card. A later DDS adapter can evaluate those
 snapshots without inventing a line that the predictor never supplied.
 """
 
@@ -42,17 +42,19 @@ def normalize_card(value: str) -> Card:
     return Card(SUITS.index(text[0]), text[1])
 
 
-def parse_deal(pbn: str) -> dict[int, list[set[str]]]:
+def parse_deal(pbn: str, *, require_full: bool = True) -> dict[int, list[set[str]]]:
+    """Parse a complete deal or a validated partial remaining-card position."""
     text = str(pbn).strip()
     if len(text) < 3 or text[1] != ":" or text[0].upper() not in SEATS:
         raise PlayLineError(f"Bad PBN deal: {pbn!r}")
     start = SEATS.index(text[0].upper())
     raw_hands = text[2:].split()
     if len(raw_hands) != 4:
-        raise PlayLineError("PBN deal must contain four hands")
+        raise PlayLineError("PBN position must contain four hands")
 
     hands: dict[int, list[set[str]]] = {}
     seen: set[str] = set()
+    hand_counts: dict[int, int] = {}
     for offset, raw_hand in enumerate(raw_hands):
         raw_suits = raw_hand.split(".")
         if len(raw_suits) != 4:
@@ -67,16 +69,27 @@ def parse_deal(pbn: str) -> dict[int, list[set[str]]]:
                     raise PlayLineError(f"Bad rank {rank!r} in {raw_hand!r}")
                 token = f"{SUITS[suit]}{rank}"
                 if token in seen:
-                    raise PlayLineError(f"Duplicate card in deal: {token}")
+                    raise PlayLineError(f"Duplicate card in position: {token}")
                 seen.add(token)
                 cards.add(rank)
                 count += 1
             hand.append(cards)
-        if count != 13:
+        if count > 13:
+            raise PlayLineError(f"Seat {SEATS[seat]} has {count} cards, maximum is 13")
+        if require_full and count != 13:
             raise PlayLineError(f"Seat {SEATS[seat]} has {count} cards, expected 13")
+        hand_counts[seat] = count
         hands[seat] = hand
-    if len(seen) != 52:
+
+    if require_full and len(seen) != 52:
         raise PlayLineError(f"Deal contains {len(seen)} unique cards, expected 52")
+    if not require_full and len(seen) > 52:
+        raise PlayLineError(f"Position contains {len(seen)} unique cards, maximum is 52")
+    if not require_full and max(hand_counts.values(), default=0) - min(hand_counts.values(), default=0) > 1:
+        raise PlayLineError(
+            f"Impossible remaining-card counts by seat: "
+            f"{ {SEATS[seat]: count for seat, count in sorted(hand_counts.items())} }"
+        )
     return hands
 
 
@@ -119,6 +132,9 @@ def _snapshot(
     payload = {
         "card_index": card_index,
         "remaining_deal": render_deal(hands),
+        "remaining_card_counts": {
+            SEATS[seat]: sum(len(cards) for cards in hands[seat]) for seat in range(4)
+        },
         "next_seat": next_seat,
         "next_seat_name": SEATS[next_seat],
         "next_actor": _actor(next_seat, declarer),
@@ -149,8 +165,8 @@ def replay_line(
 ) -> dict:
     """Validate and replay a complete or partial card sequence.
 
-    The input is a full play-order sequence, including cards of both sides.  The
-    first player defaults to declarer's LHO.  The returned snapshots include the
+    The input is a full play-order sequence, including cards of both sides. The
+    first player defaults to declarer's LHO. Returned snapshots include the
     initial position and every post-card position.
     """
     declarer = int(declarer)
@@ -160,7 +176,7 @@ def replay_line(
     if trump not in range(5):
         raise PlayLineError("trump must be 0..4 (S,H,D,C,NT)")
 
-    hands = parse_deal(deal)
+    hands = parse_deal(deal, require_full=True)
     next_seat = (declarer + 1) % 4 if opening_leader is None else int(opening_leader)
     if next_seat not in range(4):
         raise PlayLineError("opening_leader must be 0..3")
