@@ -1,0 +1,64 @@
+name: Bridge Video r25.10 Knowledge Contract
+
+on:
+  push:
+    branches:
+      - agent/r25-10-knowledge-content
+    paths:
+      - '.github/workflows/video-r25-10-knowledge-regression.yml'
+      - '.github/workflows/bridge-video-3.1-free.yml'
+      - 'bridge_runtime_hardening_r25_10.py'
+      - 'database/video_result_persistence.py'
+      - 'run_master_3_1_free.py'
+      - 'check_completed_job.py'
+      - 'run_drive_3_1_free_generic.py'
+      - 'tests/test_content_persistence_r25_10.py'
+      - 'tests/test_revision_idempotency_r25_9.py'
+      - 'tests/test_production_evidence_contract.py'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/video-r25-10-knowledge-regression.yml'
+      - '.github/workflows/bridge-video-3.1-free.yml'
+      - 'bridge_runtime_hardening_r25_10.py'
+      - 'database/video_result_persistence.py'
+      - 'run_master_3_1_free.py'
+      - 'check_completed_job.py'
+      - 'run_drive_3_1_free_generic.py'
+      - 'tests/test_content_persistence_r25_10.py'
+      - 'tests/test_revision_idempotency_r25_9.py'
+      - 'tests/test_production_evidence_contract.py'
+
+permissions:
+  contents: read
+
+jobs:
+  knowledge-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: 3.1-free-r25.10
+      BRIDGE_REQUESTED_WHISPER_MODEL: medium
+      WHISPER_MODEL: medium
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: Checkout r25.10 candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install test runtime
+        run: python -m pip install --disable-pip-version-check -r requirements-worker.txt
+      - name: Run r25.10 and inherited regressions
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python tests/test_content_persistence_r25_10.py
+          PYTHONPATH=. python tests/test_revision_idempotency_r25_9.py
+          PYTHONPATH=. python tests/test_production_evidence_contract.py
+          PYTHONPATH=. python tests/test_asr_policy_r25_6.py
+          PYTHONPATH=. python tests/test_unreliable_asr_isolation_r25_4.py
+          PYTHONPATH=. python tests/test_pdf_presentation_r25_6.py
+          python -m py_compile bridge_runtime_hardening_r25_10.py database/video_result_persistence.py run_master_3_1_free.py run_drive_3_1_free_generic.py check_completed_job.py
