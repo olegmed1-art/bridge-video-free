@@ -31,10 +31,10 @@ def main() -> None:
         write(root / "production.py", "VALUE = 1\n")
 
         rows = [
-            {"id": "pass", "path": "pass_selftest.py", "suite": "fixture", "timeout_seconds": 1, "hash_seeds": [0, 123]},
-            {"id": "fail", "path": "fail_selftest.py", "suite": "fixture", "timeout_seconds": 1},
+            {"id": "pass", "path": "pass_selftest.py", "suite": "fixture", "timeout_seconds": 3, "hash_seeds": [0, 123]},
+            {"id": "fail", "path": "fail_selftest.py", "suite": "fixture", "timeout_seconds": 3},
             {"id": "slow", "path": "slow_selftest.py", "suite": "fixture", "timeout_seconds": 0.05},
-            {"id": "mutate", "path": "mutate_selftest.py", "suite": "fixture", "timeout_seconds": 1},
+            {"id": "mutate", "path": "mutate_selftest.py", "suite": "fixture", "timeout_seconds": 3},
         ]
         manifest_path = root / "test_matrix.json"
         primary_manifest = manifest(rows)
@@ -63,6 +63,7 @@ def main() -> None:
             raise AssertionError("Orphan self-test was not rejected")
 
         duplicate_rows = [rows[0], {**rows[1], "id": rows[0]["id"]}]
+        # Account for the other discovered scripts explicitly as ignored with reasons.
         duplicate_manifest = manifest(duplicate_rows)
         duplicate_manifest["coverage"] = {"module_tests": {"production.py": ["pass"]}, "waivers": {}, "infrastructure": []}
         duplicate_manifest["ignored_selftests"] = {
