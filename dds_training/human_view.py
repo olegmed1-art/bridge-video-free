@@ -45,7 +45,7 @@ def build_human_view(
             f"Perspective {SEATS[perspective]} is not on turn; next is {snapshot['next_seat_name']}"
         )
 
-    remaining = parse_deal(snapshot["remaining_deal"])
+    remaining = parse_deal(snapshot["remaining_deal"], require_full=False)
     dummy = (declarer + 2) % 4
     dummy_exposed = len(prefix) >= 1
     visible = {perspective}
