@@ -35,6 +35,7 @@ META School treats Online School and Learning Engine as first-class clients. Cor
 13. Student-facing AI must answer from approved School Knowledge plus verified student context; absence of an approved rule produces UNKNOWN/teacher escalation rather than invented bidding or methodology.
 14. Learning recommendations are not teacher rules. Promotion of a pedagogical hypothesis requires teacher approval.
 15. Student data from different sources may be joined only after identity resolution.
+16. Cost optimization may not bypass protected quality, integrity, identity or methodology gates.
 
 ## Status model
 
@@ -57,17 +58,18 @@ OPERATIONAL requires reproducible end-to-end evidence and a repeated run/regress
 
 1. Constitution + Human Authority
 2. Governor
-3. Identity & Provenance
-4. Registry / Knowledge / Artifact Manifest
-5. Orchestrator over existing production algorithms
-6. Adaptive Quality Engine (L0 code checks -> L1 semantic review -> L2 independent critic -> L3 candidates -> L4 red-team/shadow -> L5 teacher review)
-7. Evidence Gate
-8. Failure Intelligence + Root Cause
-9. Experiment Lab: Stable / Lab / Candidate / Promote / Rollback
-10. Historian + Metrics
-11. Proactive Improvement
-12. Discovery / Watcher
-13. Architect + Complexity Auditor / SIMPLIFY
+3. Cost Governor
+4. Identity & Provenance
+5. Registry / Knowledge / Artifact Manifest
+6. Orchestrator over existing production algorithms
+7. Adaptive Quality Engine (L0 code checks -> L1 semantic review -> L2 independent critic -> L3 candidates -> L4 red-team/shadow -> L5 teacher review)
+8. Evidence Gate
+9. Failure Intelligence + Root Cause
+10. Experiment Lab: Stable / Lab / Candidate / Promote / Rollback
+11. Historian + Metrics
+12. Proactive Improvement
+13. Discovery / Watcher
+14. Architect + Complexity Auditor / SIMPLIFY
 
 ## Online School interfaces
 
@@ -86,13 +88,7 @@ Output passes through the appropriate Quality/Evidence route before becoming dur
 Canonical learning loop:
 Topic -> Lesson -> Exercise -> Homework/Test -> Real play/Tournament -> DDS/analysis where applicable -> Error/Success -> Student Learning Event -> Skill evidence -> recommendation -> teacher/next lesson.
 
-The engine must distinguish:
-- exposure: student was taught/shown a topic;
-- assessment: student was tested;
-- demonstrated performance: student made a decision in a real or controlled deal;
-- error/success classification;
-- intervention: explanation/exercise/homework was provided;
-- later outcome: whether the behavior repeated or improved.
+The engine must distinguish exposure, assessment, demonstrated performance, error/success classification, intervention, and later outcome.
 
 A learning event should preserve StudentID, Topic/SkillID, SourceID, RunID when automated, evidence/provenance, confidence, timestamp and links to relevant artifacts/deals.
 
@@ -134,6 +130,22 @@ Production -> Quality -> Evidence Gate -> Failure/Root Cause when needed -> Lab 
 Online-school feedback adds a second loop:
 Verified Learning Events -> Skill Model -> intervention recommendation -> teacher/student learning activity -> later verified outcome -> effectiveness evidence -> META analysis.
 
+## Cost Governor
+
+Configuration: `meta_school/cost_governor.yaml`.
+
+Cost Governor controls routing depth and discretionary experimentation, not truth. It must:
+- use deterministic checks before paid AI when reliable;
+- reuse verified DDS, transcripts, classifications and evidence instead of recomputing without reason;
+- route routine work through the cheapest reliable level;
+- reserve independent critics, multiple candidates, Red Team and Shadow work for uncertainty/high impact/high risk;
+- track total cost, cost per active student, lesson/tournament/video AI cost, experiment cost, cost per prevented error and cost per verified improvement;
+- calculate cache reuse and marginal improvement per dollar;
+- throttle low-priority Discovery at soft budget limits;
+- stop nonessential paid experiments at the hard limit while preserving integrity and protected quality gates.
+
+Initial planning parameters are targets/ceilings rather than guaranteed bills: META development target around $35/month, soft limit $40, hard automatic limit $50; initial combined online-school technical reserve $100/month; target AI/backend cost <= $2 per active student/month until real usage data replaces estimates.
+
 ## First-stage KPI
 
 The first objective is not maximizing the number of experiments. It is increasing the number of existing school components with reproducible evidence of their actual status and operation.
@@ -154,7 +166,7 @@ Future learning metrics must distinguish content-production quality from educati
 1. Truth Layer: Registry + Identity + Provenance + RunID + ArtifactManifest
 2. Evidence Layer: common status/evidence gates
 3. Quality Layer: regression + Golden Set + Failure Base + dependency graph
-4. Governor: adaptive checks + retry/checkpoint/rollback
+4. Governor + Cost Governor: adaptive checks + retry/checkpoint/rollback + budget routing
 5. Online School identity contracts: StudentID + portal/source mappings
 6. Learning Event schema + Topic/Skill identity
 7. Learning Engine minimal loop using verified events
