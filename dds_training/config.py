@@ -30,6 +30,12 @@ TRANSFER_EVIDENCE_TYPES = frozenset({"transfer", "real_world"})
 REINFORCEMENT_EVIDENCE_TYPES = frozenset({"reinforcement", "symmetry", "perturbation"})
 FOLLOWUP_SOURCE_POLICY = "stratified-error-strain-v2"
 
+# Spaced reviews are queued in aggregate by skill/offset/due window rather than
+# one database row per error. Regression cases keep exact source positions, while
+# the queue remains bounded and operational at 30k/50k scale.
+SPACED_REVIEW_BUCKET_SIZE = 1_000
+SPACED_REVIEW_MAX_TASKS_PER_BUCKET = 250
+
 # Skills are deliberately hard to promote: raw repetition is not enough.
 # Confirmation requires successful transfer to unseen deals; stability also
 # requires a clean recent regression streak and successful counterexamples.
