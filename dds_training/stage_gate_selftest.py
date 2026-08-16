@@ -31,6 +31,7 @@ def main() -> None:
             {"task_id": "T3", "deal_id": "D3", "task_type": "contract_tricks", "split": "sealed_test", "board": 3},
         ]
         (work / "blind_tasks.jsonl").write_text("".join(json.dumps(t) + "\n" for t in tasks), encoding="utf-8")
+        (work / "corpus_summary.json").write_text(json.dumps({"count": 10_000}), encoding="utf-8")
         con = connect(work / "training.sqlite3")
 
         initial = assess_stage(work, "pilot")
@@ -75,14 +76,25 @@ def main() -> None:
 
         (work / "report_pilot.md").write_text("pilot report\n", encoding="utf-8")
         finished = assess_stage(work, "pilot")
-        assert finished["ready_for_next_stage"], finished
+        assert finished["technical_stage_complete"] is True
+        assert finished["report_exists"] is True
+        assert finished["required_transition_gate"] == "main_train"
+        assert finished["required_transition_gate_ready"] is False
+        assert finished["ready_for_next_stage"] is False
+        assert finished["explicit_user_approval_required"] is True
+        assert any(
+            finding["code"] == "MAIN_CORPUS_NOT_EXPANDED"
+            for finding in finished["stage2_readiness"]["findings"]
+        )
 
         print(json.dumps({
             "ok": True,
             "missing_work_blocked": True,
             "open_investigation_blocked": True,
             "report_required": True,
-            "ready_after_report": True,
+            "technical_completion_after_report": True,
+            "stage2_preparation_still_required": True,
+            "automatic_expansion_blocked": True,
         }, indent=2))
 
 
