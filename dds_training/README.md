@@ -41,7 +41,7 @@ RAW PBN
   -> family-safe split/fold
   -> blind task
   -> locked prediction + legal line
-  -> DDS / AnalysePlay
+  -> DDS prefix solving
   -> DD regret and value trajectory
   -> immutable evidence
   -> regression / reinforcement / transfer / counterexample
@@ -67,120 +67,94 @@ evidence count toward `confirmed` / `stable`.
 
 ### Legal line-bearing analysis
 
-`playline.py` validates:
-
-- card ownership;
-- player order;
-- follow-suit obligations;
-- trick winners;
-- remaining position after every card;
-- stable line and position hashes.
+`playline.py` validates card ownership, player order, follow-suit obligations,
+trick winners and the remaining position after every card. It produces stable
+line and position hashes.
 
 `line_predictor.py` provides a deterministic non-DDS baseline that emits a legal
-multi-card principal line before solver exposure. It is intentionally simple;
-its purpose is to make every claim refutable at a concrete card prefix.
+multi-card principal line before solver exposure. Its purpose is experimental:
+every claim can now be refuted at a concrete prefix instead of being dismissed
+only as a structural estimate.
 
 ### Full-play DDS trajectory
 
-`dds_play.py` uses `analyse_play_pbn` after legal validation. DDS values are
-normalized to one constant scale: projected final declarer tricks. The system
-can then record:
+The DDS3 v3.0.0 Python wheel does not export a top-level
+`analyse_play_pbn`. `dds_play.py` therefore reconstructs every legal prefix and
+uses the supported `solve_board_pbn`, matching the approach used by upstream
+DDS consistency tests.
 
-- first declarer loss;
-- first defensive gift;
-- later restoration or squandering;
-- gross and unrecovered damage;
-- integration/value-definition invariant violations;
-- the first prefix that refutes a claimed result.
+The first pass requests only the optimal score at each prefix and reuses a
+`SolverContext`. The more expensive all-card comparison runs only at real value
+swings. Each such error stores:
+
+- chosen card;
+- DD-regret;
+- all equal-optimal cards;
+- score of every represented legal alternative;
+- whether candidate regret equals the observed value swing.
+
+All prefix scores are normalized to projected final declarer tricks, allowing
+one consistent first-error account for both declarer and defense.
 
 ### Mid-play declarer and defense tasks
 
-`continuation_tasks.py` creates blind tasks after selected prefixes for both:
+`continuation_tasks.py` creates blind tasks after selected prefixes for both
+`declarer_continuation` and `defense_continuation`. Defense is no longer reduced
+to the opening lead.
 
-- `declarer_continuation`;
-- `defense_continuation`.
+### Human-information mode
 
-This expands defense beyond the opening lead to switches, continuation, timing,
-unblocking, entries, force and trump control.
+`human_view.py` builds a single-dummy view that physically excludes hidden exact
+hands. The player sees only their own remaining cards, exposed dummy, auction,
+public play and other public metadata. DDS answers remain prohibited.
 
 ### Family-safe cross-fit
 
-`crossfit.py` assigns every base deal and all descendants to the same
+`crossfit.py` keeps every base deal and all descendants under one
 `root_deal_id` and deterministic fold. A model evaluating a transformed
-position must exclude the whole family from training.
+position must exclude that whole family from training.
 
 ### Restartable shards
 
-`shard_plan.py` creates deterministic family-safe shards with:
-
-- task SHA-256;
-- resume key;
-- expected artifact name;
-- split/type/fold counts;
-- exact coverage checks.
-
-One family is never split between shards.
+`shard_plan.py` creates deterministic family-safe shards with task SHA-256,
+resume keys, expected artifact names and exact coverage checks. A family is
+never split across shards.
 
 ### Confidence calibration and abstention
 
-`confidence_calibration.py` fits monotonic calibration from **out-of-fold TRAIN**
-losses. Predictions receive:
+`confidence_calibration.py` fits monotonic calibration from out-of-fold TRAIN
+losses. Predictions receive calibrated exact probability, support sufficiency
+and `requires_human_or_deeper_review` when evidence is inadequate.
 
-- calibrated probability of exact success;
-- support sufficiency;
-- `requires_human_or_deeper_review` when probability or evidence is inadequate.
+### Counterexample candidates and rule versions
 
-### Counterexample candidates
+`counterexample_candidates.py` detects nearby legal positions whose DDS target
+or equal-optimal action set changes. They remain unverified until solved as a
+fresh blind discrimination task.
 
-`counterexample_candidates.py` detects nearby legal perturbations that change:
-
-- the DDS trick target; or
-- the equal-optimal opening-lead set.
-
-They remain unverified candidates until solved as a fresh blind discrimination
-task. The system never calls them learned counterexamples automatically.
+`rule_synthesis.py` stores analyst-supplied technical rule text as a candidate or
+confirmed version only when independent transfer, regression and counterexample
+evidence support it. It does not invent or change the school's bidding system.
 
 ## Balanced follow-ups
 
-Current follow-up source policy is deterministic round-robin across:
-
-1. task type;
-2. error code;
-3. strain.
-
-For each source the system can create exact regression, rotations, suit
-permutation and legal rank-swap perturbations. Derived metrics are marked as a
-targeted/adversarial sample and require a matched baseline.
+Current follow-up source policy is deterministic round-robin across task type,
+error code and strain. Derived metrics are marked as a targeted/adversarial
+sample and require a matched baseline.
 
 ## Model selection
 
-Families are selected separately:
-
-- contract-trick estimation;
-- opening lead;
-- declarer continuation;
-- defense continuation.
-
-Selection uses paired per-task loss and bootstrap 95% intervals. A candidate
-replaces a baseline only when improvement is practically and statistically
-credible. A mixed family ensemble is allowed.
+Contract tricks, opening leads, declarer continuations and defense
+continuations are selected separately. Selection uses paired per-task loss and
+bootstrap 95% intervals. A mixed family ensemble is allowed.
 
 ## Durable versioned memory
 
-Immutable or append-only evidence includes locked predictions, DDS results,
-errors, run/task provenance, investigations, corrections, audits and
-checkpoints.
-
-Learning interpretation is versioned separately through:
-
-- `skill_profile_versions`;
-- skill-state history;
-- rule versions;
-- regression cases and multi-skill links;
-- counterexamples;
-- bounded spaced-review queues.
-
-A new algorithm revision may reinterpret old facts, but it never rewrites them.
+Locked predictions, DDS facts, errors, provenance, investigations, corrections,
+audits and checkpoints are immutable or append-only. Skill profiles, state
+history, rule versions, regressions and counterexamples are stored separately by
+analyzer revision. A new revision may reinterpret old facts but never rewrite
+them.
 
 ## Three phased gates
 
@@ -188,11 +162,10 @@ A new algorithm revision may reinterpret old facts, but it never rewrites them.
 
 Before mass evaluation of boards 10,001–30,000:
 
-- corpus count must be 30,000;
+- the corpus must really contain 30,000 deals;
 - cross-fit must cover all tasks without family leakage;
 - shards must cover exactly the fresh main scope;
-- legal line preflight must pass;
-- DDS full-play normalization must pass;
+- legal line and DDS full-play preflights must pass;
 - both declarer and defense continuation tasks must exist;
 - no paid DDS API may be required.
 
@@ -202,19 +175,21 @@ Before opening main validation:
 
 - all TRAIN shards must be durable;
 - confidence must be calibrated on out-of-fold TRAIN residuals;
-- family-specific paired-bootstrap policy must be present;
+- family-specific paired-bootstrap policy must exist;
 - no validation/sealed leakage may exist.
 
 ### Stable-skill claim gate
 
-Before calling a skill stable:
+Before calling a skill stable, current-version evidence must include passed blind
+counterexamples, a confirmed versioned rule, successful real-world transfer and
+a clean regression streak. A stage can finish technically while this claim gate
+remains closed.
 
-- blind counterexamples must be passed;
-- a versioned rule must be confirmed;
-- real-world transfer must succeed;
-- regression streak and transfer thresholds must pass.
+## Runtime caching
 
-A stage may finish technically while this claim gate remains closed.
+`bootstrap_linux.sh` first installs a cached DDS3 wheel when available. CI saves
+that wheel together with the Bazel disk cache under an OS/Python/version key.
+Subsequent shards therefore avoid repeated multi-minute solver builds.
 
 ## Stage 2 preparation without mass training
 
@@ -224,8 +199,8 @@ After an explicitly authorized corpus expansion to 30,000 deals:
 python prepare_stage2.py --work work/pilot
 ```
 
-This command creates cross-fit metadata, fresh-scope shard manifests, legal line
-preflights, one DDS Play preflight, continuation tasks and readiness reports. It
+This creates cross-fit metadata, fresh-scope shard manifests, legal line
+preflights, a DDS Play preflight, continuation tasks and readiness reports. It
 does **not** launch mass DDS evaluation.
 
 Check gates:
@@ -261,7 +236,7 @@ DDS_TRAINING_CONFIRM=YES python run_stage.py evaluate \
   --start
 ```
 
-Audit database and current methodology:
+Audit database and methodology:
 
 ```bash
 python run_stage.py audit --work work/pilot --fail-on-error
@@ -269,15 +244,15 @@ python methodology_audit.py --work work/pilot --fail-on-error
 python stage_gate.py --work work/pilot --stage pilot
 ```
 
-## Remaining evidence, not software claims
+## Evidence still to be earned
 
-The machinery for lines, trajectories, cross-fit, continuation tasks, shards,
-calibration and counterexample candidates is implemented. The following cannot
-be fabricated by code and must be earned during Stage 2:
+The software for lines, trajectories, cross-fit, continuation tasks, shards,
+calibration, counterexample candidates and rule gating is implemented. The
+following cannot be fabricated by code and must be earned during Stage 2:
 
-- out-of-fold calibration fitted on real Stage-2 TRAIN predictions;
+- out-of-fold calibration fitted on actual Stage-2 TRAIN predictions;
 - verified blind counterexamples;
-- confirmed versioned bridge rules;
+- confirmed technical bridge rules;
 - successful tournament/real-play transfer;
 - stable skill status.
 
