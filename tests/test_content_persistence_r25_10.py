@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Pure regression tests for r25.10 content and terminal contracts."""
+import uuid
+
 import bridge_runtime_hardening_r25_10 as runtime
+from database.video_result_persistence import _domain_rows
 
 
 def episode(episode_id, text, *, decisions=None, teacher=None, errors=None, speaker=None):
@@ -98,6 +101,48 @@ def test_quality_contract_separates_content_from_attribution():
     assert gate["actorAttributedLearningCycles"] == 0
 
 
+
+def test_database_domain_rows_are_deterministic_and_role_neutral():
+    master = {
+        "episodes": [{
+            "episode_id": "e1",
+            "type": "розыгрыш",
+            "start": 10,
+            "end": 20,
+            "summary_text": "Импас обсуждается.",
+            "terms": ["импас"],
+            "evidence": ["segment-1"],
+        }],
+        "learning_interactions": [{
+            "cycle_id": "c1",
+            "focus_episode_id": "e1",
+            "attribution_status": "unavailable_without_speaker_labels",
+            "content_completeness": "FULL",
+            "role_neutral_sequence": {
+                "trigger_context": "Как играть?",
+                "observed_action": "Импас.",
+                "instructional_response": "Проверим торговлю.",
+                "observed_followup": "Дама справа.",
+            },
+        }],
+        "decisions": [{
+            "decision_id": "d1",
+            "action_taken": {"status": "observed_text", "text": "Импас", "cues": ["импас"]},
+            "available_information": {"bridge_terms": ["импас"]},
+            "reasoning": "потому что дама справа",
+            "actor_attribution_status": "unavailable_without_speaker_labels",
+            "content_completeness": "FULL",
+        }],
+    }
+    run_id = uuid.UUID("00000000-0000-0000-0000-000000000001")
+    first = _domain_rows(master, run_id)
+    second = _domain_rows(master, run_id)
+    assert first == second
+    interaction_id, episode_rows, decision_rows, semantic_count, cycle_count = first
+    assert interaction_id and semantic_count == 1 and cycle_count == 1
+    assert len(episode_rows) == 2 and len(decision_rows) == 1
+    assert episode_rows[1][-1]["attribution_status"] == "unavailable_without_speaker_labels"
+
 def test_knowledge_status_requires_confirmed_commit():
     result = {"job_id": "a" * 32, "masterPdf": {"sha256": "b" * 64}}
     missing = runtime._knowledge_status(result, None)
@@ -119,5 +164,6 @@ if __name__ == "__main__":
     test_role_neutral_cycle_does_not_invent_people()
     test_empty_hands_are_not_a_complete_deal()
     test_quality_contract_separates_content_from_attribution()
+    test_database_domain_rows_are_deterministic_and_role_neutral()
     test_knowledge_status_requires_confirmed_commit()
     print("R25_10_CONTENT_PERSISTENCE: PASS")
