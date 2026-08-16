@@ -1,0 +1,74 @@
+version: 0.1
+status: DESIGNED
+purpose: optimize verified educational and system quality per unit cost without sacrificing protected quality or methodology
+currency: USD
+budget:
+  development_meta_target_monthly: 35
+  development_meta_soft_limit_monthly: 40
+  development_meta_hard_limit_monthly: 50
+  online_school_initial_total_reserve_monthly: 100
+  target_ai_backend_cost_per_active_student_monthly: 2.00
+principles:
+  - deterministic_check_before_ai
+  - reuse_verified_results_before_recompute
+  - cache_dds_transcripts_classifications_and_evidence_when_safe
+  - budget_is_ceiling_not_target
+  - escalate_compute_by_uncertainty_impact_and_risk
+  - routine_student_actions_must_not_trigger_full_meta_lab
+  - protected_quality_gates_cannot_be_skipped_to_save_money
+  - methodology_is_never_changed_for_cost_reduction_without_teacher_approval
+routing:
+  L0:
+    method: deterministic_code
+    use_for: objective_validation_integrity_ids_files_layout_checks
+  L1:
+    method: economical_ai_review
+    trigger: semantic_reasoning_required
+  L2:
+    method: independent_critic
+    trigger: medium_uncertainty_or_material_impact
+  L3:
+    method: multi_candidate_experiment
+    trigger: material_failure_or_high_value_improvement
+  L4:
+    method: red_team_or_shadow
+    trigger: high_risk_shared_component_or_major_change
+  L5:
+    method: teacher_review
+    trigger: protected_methodology_or_unresolved_high_impact_decision
+metrics:
+  - total_cost_monthly
+  - cost_per_active_student
+  - ai_cost_per_lesson
+  - ai_cost_per_tournament
+  - ai_cost_per_video_hour
+  - cost_per_meta_experiment
+  - cost_per_prevented_error
+  - cost_per_verified_improvement
+  - cache_reuse_rate
+  - deterministic_check_share
+  - teacher_attention_saved_estimate
+  - marginal_improvement_per_dollar
+actions:
+  on_soft_limit:
+    - pause_low_priority_discovery
+    - increase_cache_reuse
+    - require_higher_expected_value_for_L3_L4
+    - preserve_quality_and_protected_checks
+  on_hard_limit:
+    - stop_nonessential_paid_experiments
+    - continue_deterministic_checks
+    - continue_safety_integrity_and_protected_quality_gates
+    - require_human_authorization_for_additional_discretionary_spend
+  on_low_roi_component:
+    - mark_for_complexity_audit
+    - compare_with_simpler_pipeline
+    - freeze_or_remove_only_after_regression_evidence
+allocation_priority:
+  - correctness_and_data_integrity
+  - student_identity_and_authorization
+  - evidence_quality
+  - prevention_of_repeat_errors
+  - high_impact_learning_analysis
+  - proactive_improvement
+  - discovery
