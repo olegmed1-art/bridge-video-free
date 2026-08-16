@@ -3,7 +3,7 @@ from __future__ import annotations
 PROJECT_SEED = 20260815
 DDS3_TAG = "v3.0.0"
 ENDPLAY_VERSION = "0.5.12"
-ALGORITHM_VERSION = "dds-learning-v2.2"
+ALGORITHM_VERSION = "dds-learning-v2.3"
 
 STAGES = {
     "pilot": 10_000,
@@ -16,6 +16,14 @@ SPLIT_RATIOS = {
     "validation": 0.15,
     "sealed_test": 0.15,
 }
+
+# Stage 2 engineering defaults.  All transformed tasks from one root deal stay
+# in the same fold and shard, preventing source-family leakage.
+CROSSFIT_FOLDS = 5
+STAGE2_SHARD_MAX_TASKS = 2_000
+STAGE2_LINE_CARDS = 16
+STAGE2_PREFLIGHT_TASKS = 4
+CONFIDENCE_REVIEW_THRESHOLD = 0.65
 
 # Only these splits may change the skill/rule memory. Validation and sealed test
 # are evaluation-only so the system cannot learn from its benchmark answers.
