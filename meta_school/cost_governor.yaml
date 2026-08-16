@@ -1,4 +1,4 @@
-version: 0.1
+version: 0.2
 status: DESIGNED
 purpose: optimize verified educational and system quality per unit cost without sacrificing protected quality or methodology
 currency: USD
@@ -6,8 +6,32 @@ budget:
   development_meta_target_monthly: 35
   development_meta_soft_limit_monthly: 40
   development_meta_hard_limit_monthly: 50
+  reliability_emergency_max_overrun_percent: 50
+  reliability_emergency_absolute_cap_from_hard_limit: 75
   online_school_initial_total_reserve_monthly: 100
   target_ai_backend_cost_per_active_student_monthly: 2.00
+reliability_emergency:
+  enabled: true
+  purpose: only to prevent or recover from a material reliability failure
+  allowed_reasons:
+    - prevent_data_loss
+    - verify_or_restore_database_integrity
+    - create_or_verify_recovery_point
+    - resolve_high_risk_identity_or_authorization_failure
+    - recover_critical_production_pipeline
+    - independent_verification_needed_to_avoid_material_false_result
+  forbidden_reasons:
+    - cosmetic_improvement
+    - low_priority_discovery
+    - routine_experiment
+    - convenience
+    - faster_completion_without_reliability_gain
+  requirements:
+    - expected_reliability_gain_must_be_material
+    - cheaper_reliable_path_not_available
+    - event_must_be_logged_with_reason_and_cost
+    - post_action_evidence_required
+    - governor_must_return_to_normal_budget_after_incident
 principles:
   - deterministic_check_before_ai
   - reuse_verified_results_before_recompute
@@ -17,6 +41,7 @@ principles:
   - routine_student_actions_must_not_trigger_full_meta_lab
   - protected_quality_gates_cannot_be_skipped_to_save_money
   - methodology_is_never_changed_for_cost_reduction_without_teacher_approval
+  - reliability_can_override_normal_budget_only_with_evidence
 routing:
   L0:
     method: deterministic_code
@@ -49,6 +74,8 @@ metrics:
   - deterministic_check_share
   - teacher_attention_saved_estimate
   - marginal_improvement_per_dollar
+  - reliability_emergency_spend
+  - reliability_incidents_prevented_or_recovered
 actions:
   on_soft_limit:
     - pause_low_priority_discovery
@@ -59,12 +86,17 @@ actions:
     - stop_nonessential_paid_experiments
     - continue_deterministic_checks
     - continue_safety_integrity_and_protected_quality_gates
-    - require_human_authorization_for_additional_discretionary_spend
+    - allow_reliability_emergency_only_under_reliability_emergency_policy
+  on_reliability_emergency_cap:
+    - stop_discretionary_paid_work
+    - preserve_data_and_recovery_operations
+    - escalate_to_human_authority
   on_low_roi_component:
     - mark_for_complexity_audit
     - compare_with_simpler_pipeline
     - freeze_or_remove_only_after_regression_evidence
 allocation_priority:
+  - prevent_data_loss_and_preserve_recoverability
   - correctness_and_data_integrity
   - student_identity_and_authorization
   - evidence_quality
