@@ -4,7 +4,7 @@ import json
 import math
 import sqlite3
 
-from config import ALGORITHM_VERSION, SKILL_LIFECYCLE
+from config import ALGORITHM_VERSION, SKILL_LIFECYCLE, TRANSFER_EVIDENCE_TYPES
 from experience_events import schedule_spaced_reviews
 
 
@@ -95,7 +95,18 @@ def _add_evidence(
     run_id: str | None,
     payload: dict,
 ) -> None:
-    if evidence_type not in {"direct", "error_pattern", "transfer", "regression", "counterexample", "symmetry", "perturbation", "real_world"}:
+    allowed = {
+        "direct",
+        "error_pattern",
+        "reinforcement",
+        "transfer",
+        "regression",
+        "counterexample",
+        "symmetry",
+        "perturbation",
+        "real_world",
+    }
+    if evidence_type not in allowed:
         raise ValueError(f"Unsupported evidence_type: {evidence_type}")
     if outcome not in {"success", "error"}:
         raise ValueError(f"Unsupported outcome: {outcome}")
@@ -184,6 +195,8 @@ def record_task_experience(
         "confidence": confidence,
         "skills": [x[0] for x in skills],
         "source_root_split": task.get("source_root_split", task.get("split")),
+        "variant_kind": task.get("variant_kind"),
+        "transfer_eligible": bool(task.get("transfer_eligible", False)),
     }
     con.execute(
         """
@@ -220,7 +233,19 @@ def record_skill_check(
     split: str = "derived",
     details: dict | None = None,
 ) -> str:
-    """Append transfer/regression/counterexample/symmetry/perturbation evidence."""
+    """Append independent transfer, regression, counterexample or reinforcement.
+
+    Same-source symmetry and perturbation probes are normalized to
+    `reinforcement`. They remain useful evidence and may expose brittle pattern
+    matching, but they cannot promote a skill to confirmed/stable. Genuine
+    unseen/cross-fit checks must be recorded explicitly as `transfer`.
+    """
+    payload = dict(details or {})
+    original_evidence_type = evidence_type
+    if evidence_type in {"symmetry", "perturbation"}:
+        evidence_type = "reinforcement"
+        payload.setdefault("variant_evidence_type", original_evidence_type)
+        payload.setdefault("transfer_eligible", False)
     task = {"task_id": task_id, "deal_id": deal_id, "split": split}
     _add_evidence(
         con,
@@ -231,7 +256,7 @@ def record_skill_check(
         regret=regret,
         confidence=confidence,
         run_id=run_id,
-        payload=details or {},
+        payload=payload,
     )
     if evidence_type == "counterexample":
         con.execute(
@@ -243,8 +268,8 @@ def record_skill_check(
                 skill_key,
                 deal_id,
                 task_id,
-                (details or {}).get("description"),
-                json.dumps({"success": success, **(details or {})}, ensure_ascii=False, sort_keys=True),
+                payload.get("description"),
+                json.dumps({"success": success, **payload}, ensure_ascii=False, sort_keys=True),
             ),
         )
     status = recompute_skill_state(con, skill_key)
@@ -261,7 +286,17 @@ def record_skill_check(
             deal_id,
             run_id,
             ALGORITHM_VERSION,
-            json.dumps({"skill_key": skill_key, "success": success, "status_after": status, "details": details or {}}, ensure_ascii=False, sort_keys=True),
+            json.dumps(
+                {
+                    "skill_key": skill_key,
+                    "success": success,
+                    "status_after": status,
+                    "original_evidence_type": original_evidence_type,
+                    "details": payload,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
         ),
     )
     return status
@@ -290,15 +325,18 @@ def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
         return "candidate"
 
     total = len(rows)
-    transfer = [r for r in rows if r[1] in {"transfer", "symmetry", "perturbation", "real_world"}]
+    transfer = [r for r in rows if r[1] in TRANSFER_EVIDENCE_TYPES]
+    reinforcement = [r for r in rows if r[1] == "reinforcement"]
     regression = [r for r in rows if r[1] == "regression"]
     counterexamples = [r for r in rows if r[1] == "counterexample"]
     transfer_pass = sum(r[2] == "success" for r in transfer)
+    reinforcement_pass = sum(r[2] == "success" for r in reinforcement)
     regression_pass = sum(r[2] == "success" for r in regression)
     regression_fail = sum(r[2] != "success" for r in regression)
     counterexample_pass = sum(r[2] == "success" for r in counterexamples)
     counterexample_fail = sum(r[2] != "success" for r in counterexamples)
     transfer_rate = transfer_pass / len(transfer) if transfer else 0.0
+    reinforcement_rate = reinforcement_pass / len(reinforcement) if reinforcement else 0.0
     recent_regression_streak = _consecutive_successes(regression)
     recent_counterexample_streak = _consecutive_successes(counterexamples)
     latest_regression_failed = bool(regression and regression[-1][2] != "success")
@@ -354,6 +392,8 @@ def recompute_skill_state(con: sqlite3.Connection, skill_key: str) -> str:
                         "total": total,
                         "transfer": len(transfer),
                         "transfer_rate": transfer_rate,
+                        "reinforcement": len(reinforcement),
+                        "reinforcement_rate": reinforcement_rate,
                         "regression_pass": regression_pass,
                         "regression_fail": regression_fail,
                         "recent_regression_streak": recent_regression_streak,
@@ -375,39 +415,77 @@ def recompute_all_skills(con: sqlite3.Connection) -> None:
 
 
 def build_learning_plan(con: sqlite3.Connection, limit: int = 20) -> list[dict]:
-    """Rank current-version weaknesses without using holdout evidence."""
+    """Rank weaknesses from unbiased TRAIN evidence, with probe diagnostics.
+
+    Targeted derived probes are intentionally adversarial. They influence the
+    recommendation through a separate reinforcement-failure term but do not
+    replace the base TRAIN error rate or masquerade as independent transfer.
+    """
     rows = con.execute(
         """
         SELECT skill_key,
-               COUNT(*) AS n,
-               SUM(CASE WHEN outcome!='success' THEN 1 ELSE 0 END) AS errors,
-               AVG(COALESCE(regret,0)) AS mean_regret,
-               SUM(CASE WHEN outcome!='success' AND confidence='high' THEN 1 ELSE 0 END) AS high_conf_errors
+               SUM(CASE WHEN split='train' AND evidence_type IN ('direct','error_pattern') THEN 1 ELSE 0 END) AS train_n,
+               SUM(CASE WHEN split='train' AND evidence_type IN ('direct','error_pattern') AND outcome!='success' THEN 1 ELSE 0 END) AS train_errors,
+               AVG(CASE WHEN split='train' AND evidence_type IN ('direct','error_pattern') THEN COALESCE(regret,0) END) AS train_mean_regret,
+               SUM(CASE WHEN split='train' AND evidence_type IN ('direct','error_pattern') AND outcome!='success' AND confidence='high' THEN 1 ELSE 0 END) AS high_conf_errors,
+               SUM(CASE WHEN evidence_type='reinforcement' THEN 1 ELSE 0 END) AS reinforcement_n,
+               SUM(CASE WHEN evidence_type='reinforcement' AND outcome!='success' THEN 1 ELSE 0 END) AS reinforcement_errors,
+               SUM(CASE WHEN evidence_type='regression' THEN 1 ELSE 0 END) AS regression_n,
+               SUM(CASE WHEN evidence_type='regression' AND outcome!='success' THEN 1 ELSE 0 END) AS regression_errors
         FROM skill_evidence
-        WHERE evidence_type IN ('direct','error_pattern')
-          AND split IN ('train','derived')
-          AND algorithm_version=?
+        WHERE algorithm_version=?
         GROUP BY skill_key
         """,
         (ALGORITHM_VERSION,),
     ).fetchall()
     plan = []
-    for key, n, errors, mean_regret, high_conf_errors in rows:
-        error_rate = (errors or 0) / n if n else 0.0
-        scarcity = 1.0 / math.sqrt(max(1, n))
-        priority = 4.0 * error_rate + 1.5 * float(mean_regret or 0) + 2.0 * ((high_conf_errors or 0) / max(1, n)) + scarcity
-        recommended = max(50, min(2000, int(100 + 500 * error_rate + 100 * float(mean_regret or 0))))
+    for (
+        key,
+        train_n,
+        train_errors,
+        train_mean_regret,
+        high_conf_errors,
+        reinforcement_n,
+        reinforcement_errors,
+        regression_n,
+        regression_errors,
+    ) in rows:
+        train_n = int(train_n or 0)
+        train_errors = int(train_errors or 0)
+        reinforcement_n = int(reinforcement_n or 0)
+        reinforcement_errors = int(reinforcement_errors or 0)
+        regression_n = int(regression_n or 0)
+        regression_errors = int(regression_errors or 0)
+        if not train_n and not reinforcement_n and not regression_n:
+            continue
+        error_rate = train_errors / train_n if train_n else 0.0
+        reinforcement_error_rate = reinforcement_errors / reinforcement_n if reinforcement_n else 0.0
+        regression_error_rate = regression_errors / regression_n if regression_n else 0.0
+        scarcity = 1.0 / math.sqrt(max(1, train_n))
+        priority = (
+            4.0 * error_rate
+            + 1.5 * float(train_mean_regret or 0)
+            + 2.0 * (int(high_conf_errors or 0) / max(1, train_n))
+            + 1.0 * reinforcement_error_rate
+            + 1.5 * regression_error_rate
+            + scarcity
+        )
+        recommended = max(50, min(2000, int(100 + 500 * error_rate + 100 * float(train_mean_regret or 0))))
         plan.append(
             {
                 "skill_key": key,
-                "observations": n,
-                "errors": errors or 0,
+                "observations": train_n,
+                "errors": train_errors,
                 "error_rate": round(error_rate, 4),
-                "mean_regret": round(float(mean_regret or 0), 4),
-                "high_confidence_errors": high_conf_errors or 0,
+                "mean_regret": round(float(train_mean_regret or 0), 4),
+                "high_confidence_errors": int(high_conf_errors or 0),
+                "reinforcement_observations": reinforcement_n,
+                "reinforcement_error_rate": round(reinforcement_error_rate, 4),
+                "regression_observations": regression_n,
+                "regression_error_rate": round(regression_error_rate, 4),
                 "priority": round(priority, 4),
                 "recommended_targeted_tasks": recommended,
-                "purposes": ["transfer", "counterexample", "regression", "symmetry", "perturbation", "spaced_review"],
+                "purposes": ["regression", "reinforcement", "transfer", "counterexample", "spaced_review"],
             }
         )
     plan.sort(key=lambda x: (-x["priority"], x["skill_key"]))
