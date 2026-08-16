@@ -3,7 +3,7 @@ from __future__ import annotations
 PROJECT_SEED = 20260815
 DDS3_TAG = "v3.0.0"
 ENDPLAY_VERSION = "0.5.12"
-ALGORITHM_VERSION = "dds-learning-v2.1"
+ALGORITHM_VERSION = "dds-learning-v2.2"
 
 STAGES = {
     "pilot": 10_000,
@@ -21,6 +21,14 @@ SPLIT_RATIOS = {
 # are evaluation-only so the system cannot learn from its benchmark answers.
 LEARNING_SPLITS = frozenset({"train", "derived"})
 EVALUATION_ONLY_SPLITS = frozenset({"validation", "sealed_test"})
+
+# Evidence roles are deliberately separated. A symmetry/perturbation generated
+# from a TRAIN error is useful reinforcement, but it is not independent transfer
+# evidence unless the predictor was trained without the source deal (cross-fit)
+# or the task comes from a genuinely fresh corpus.
+TRANSFER_EVIDENCE_TYPES = frozenset({"transfer", "real_world"})
+REINFORCEMENT_EVIDENCE_TYPES = frozenset({"reinforcement", "symmetry", "perturbation"})
+FOLLOWUP_SOURCE_POLICY = "stratified-error-strain-v2"
 
 # Skills are deliberately hard to promote: raw repetition is not enough.
 # Confirmation requires successful transfer to unseen deals; stability also
