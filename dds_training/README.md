@@ -1,305 +1,285 @@
 # DDS Training — local, zero paid DDS API
 
-This directory contains the sports-bridge DDS learning loop, its reproducible
-corpora and its durable experience memory.
+This directory contains the sports-bridge DDS learning loop, reproducible
+corpora, full-play diagnostics and durable experience memory.
 
-Current methodology revision: **`dds-learning-v2.2`**.
+Current algorithm revision: **`dds-learning-v2.3`**.
 
-See [METHODOLOGY_V2_2.md](METHODOLOGY_V2_2.md) for the 10,000-deal pilot
-postmortem, corrected evidence semantics and Stage 2 requirements.
+Canonical Russian specification:
+[ALGORITHM_DDS_LEARNING_V2_3_RU.md](ALGORITHM_DDS_LEARNING_V2_3_RU.md).
+
+Pilot postmortem and the v2.2 evidence correction are preserved in
+[METHODOLOGY_V2_2.md](METHODOLOGY_V2_2.md).
 
 ## Fixed architecture
 
-- Mathematical engine: **DDS3 v3.0.0**, built locally from the official source.
-- Runtime baseline: Linux/WSL2 + Python 3.14.
-- Storage: local files + SQLite.
-- Raw PBN never contains answers exposed before prediction.
+- Mathematical engine: **DDS3 v3.0.0**, built locally from official source.
+- Runtime: Linux/WSL2 + Python 3.14.
+- Storage: local PBN/JSONL + SQLite.
+- Raw PBN never exposes DDS answers before prediction.
 - No paid DDS API and no per-request DDS charge.
-- Evaluation is fail-closed: both `--start` and
-  `DDS_TRAINING_CONFIRM=YES` are required.
-- Sealed test is opened explicitly, alone and only once per benchmark scope.
+- Evaluation is fail-closed: `--start` and `DDS_TRAINING_CONFIRM=YES` are both
+  required.
+- Sealed tests are explicit, isolated and opened once per benchmark scope.
+- A new mass stage always requires a separate user command.
 
 ## Stages
 
 1. `pilot`: 10,000 deals — completed.
-2. `main`: expand the same reproducible corpus to 30,000 total deals.
-3. `targeted`: approximately 10,000 focused positions selected from demonstrated
-   weaknesses after the main report.
+2. `main`: expand the same deterministic corpus to 30,000 total deals; only
+   fresh boards 10,001–30,000 belong to the main evaluation scope.
+3. `targeted`: approximately 10,000 positions chosen from demonstrated weak
+   skills rather than another random corpus.
 
-A stage report is produced immediately after completion. Advancing requires:
+Completing calculations is not enough to claim skill acquisition. Database,
+methodology, transfer and real-play evidence are checked separately.
 
-- full fresh-task coverage;
-- no unresolved better-than-DDS investigations;
-- database/provenance audit `ok`;
-- methodology audit `ok`;
-- report present;
-- explicit user approval.
-
-The code never starts a new mass stage merely because the previous one finished.
-
-## Blind-first rule
+## Blind-first pipeline
 
 ```text
 RAW PBN
-  -> blind tasks
-  -> locked prediction
-  -> DDS
-  -> error/regret analysis
-  -> durable evidence
-  -> regression/reinforcement/transfer
-  -> report
+  -> family-safe split/fold
+  -> blind task
+  -> locked prediction + legal line
+  -> DDS / AnalysePlay
+  -> DD regret and value trajectory
+  -> immutable evidence
+  -> regression / reinforcement / transfer / counterexample
+  -> versioned skill and rule
+  -> report and explicit next-stage decision
 ```
 
-DDS evaluation refuses to score any requested task without a locked prediction.
+## Evidence roles
 
-## Holdout isolation
+- `direct`: ordinary TRAIN result;
+- `error_pattern`: recurring error family;
+- `regression`: fresh blind attempt on the exact known problem;
+- `reinforcement`: same-source rotation, suit rename or nearby perturbation;
+- `transfer`: genuinely unseen or family-excluded cross-fit source;
+- `real_world`: independent tournament/real-play evidence;
+- `counterexample`: similar position where the action or rule must change.
 
-The corpus is split by deal family, not by an individual task:
+Same-source symmetry and perturbation may expose brittleness, but cannot by
+themselves promote a skill. Only independent `transfer` and `real_world`
+evidence count toward `confirmed` / `stable`.
 
-- `train` may update learning state;
-- `validation` measures model choice only;
-- `sealed_test` is final evaluation only;
-- `derived` may learn only when its root source is `train`.
+## Implemented v2.3 modules
 
-Validation and sealed results never create skill evidence, rules, follow-ups,
-spaced-review work or regression cases. The database audit treats any such leak
-as an error.
+### Legal line-bearing analysis
 
-## Evidence roles in v2.2
+`playline.py` validates:
 
-Evidence types have different meanings and may not be combined silently:
+- card ownership;
+- player order;
+- follow-suit obligations;
+- trick winners;
+- remaining position after every card;
+- stable line and position hashes.
 
-- `direct` — ordinary TRAIN result;
-- `error_pattern` — specific repeated error family;
-- `regression` — a fresh blind attempt on the exact known problem position;
-- `reinforcement` — same-source symmetry, suit renaming or nearby perturbation;
-- `transfer` — genuinely unseen or cross-fitted source;
-- `real_world` — independent tournament/real-play transfer;
-- `counterexample` — similar-looking position where the action/rule must change.
+`line_predictor.py` provides a deterministic non-DDS baseline that emits a legal
+multi-card principal line before solver exposure. It is intentionally simple;
+its purpose is to make every claim refutable at a concrete card prefix.
 
-A same-source symmetry or perturbation is useful for testing invariance and
-brittleness, but it is **not independent transfer evidence**. Only `transfer`
-and `real_world` may promote a skill to `confirmed` or `stable`.
+### Full-play DDS trajectory
 
-## Balanced follow-up generation
+`dds_play.py` uses `analyse_play_pbn` after legal validation. DDS values are
+normalized to one constant scale: projected final declarer tricks. The system
+can then record:
 
-Pilot v2.1 selected follow-up sources by one global severity ranking and could
-collapse to one task family. v2.2 selects sources deterministically, round-robin
-across:
+- first declarer loss;
+- first defensive gift;
+- later restoration or squandering;
+- gross and unrecovered damage;
+- integration/value-definition invariant violations;
+- the first prefix that refutes a claimed result.
+
+### Mid-play declarer and defense tasks
+
+`continuation_tasks.py` creates blind tasks after selected prefixes for both:
+
+- `declarer_continuation`;
+- `defense_continuation`.
+
+This expands defense beyond the opening lead to switches, continuation, timing,
+unblocking, entries, force and trump control.
+
+### Family-safe cross-fit
+
+`crossfit.py` assigns every base deal and all descendants to the same
+`root_deal_id` and deterministic fold. A model evaluating a transformed
+position must exclude the whole family from training.
+
+### Restartable shards
+
+`shard_plan.py` creates deterministic family-safe shards with:
+
+- task SHA-256;
+- resume key;
+- expected artifact name;
+- split/type/fold counts;
+- exact coverage checks.
+
+One family is never split between shards.
+
+### Confidence calibration and abstention
+
+`confidence_calibration.py` fits monotonic calibration from **out-of-fold TRAIN**
+losses. Predictions receive:
+
+- calibrated probability of exact success;
+- support sufficiency;
+- `requires_human_or_deeper_review` when probability or evidence is inadequate.
+
+### Counterexample candidates
+
+`counterexample_candidates.py` detects nearby legal perturbations that change:
+
+- the DDS trick target; or
+- the equal-optimal opening-lead set.
+
+They remain unverified candidates until solved as a fresh blind discrimination
+task. The system never calls them learned counterexamples automatically.
+
+## Balanced follow-ups
+
+Current follow-up source policy is deterministic round-robin across:
 
 1. task type;
 2. error code;
 3. strain.
 
-For each selected source it can create:
-
-- exact regression retest;
-- seat rotations;
-- suit permutation;
-- legal same-suit rank-swap perturbations.
-
-Every derived row stores source type, error code, strain, selection group,
-variant kind, root split and transfer eligibility. The output is marked as a
-**targeted/adversarial sample**; its raw percentage must not be compared with a
-random validation sample without a matched baseline.
-
-Seat rotation keeps Dealer and vulnerability metadata consistent with the
-rotated position.
+For each source the system can create exact regression, rotations, suit
+permutation and legal rank-swap perturbations. Derived metrics are marked as a
+targeted/adversarial sample and require a matched baseline.
 
 ## Model selection
 
-Contract-trick estimation and opening-lead selection are different competencies.
-They are selected separately using paired per-task loss:
+Families are selected separately:
 
-- contract loss: absolute DDS trick error;
-- opening-lead loss: DD-regret.
+- contract-trick estimation;
+- opening lead;
+- declarer continuation;
+- defense continuation.
 
-A candidate replaces the baseline for a family only when:
+Selection uses paired per-task loss and bootstrap 95% intervals. A candidate
+replaces a baseline only when improvement is practically and statistically
+credible. A mixed family ensemble is allowed.
 
-- mean improvement reaches the configured practical minimum; and
-- the paired bootstrap 95% upper bound remains below zero.
+## Durable versioned memory
 
-The selected analyzer may be a family ensemble: one model for trick estimation
-and another for opening leads.
+Immutable or append-only evidence includes locked predictions, DDS results,
+errors, run/task provenance, investigations, corrections, audits and
+checkpoints.
 
-## Durable experience and versioning
+Learning interpretation is versioned separately through:
 
-Immutable/append-only evidence includes:
-
-- locked predictions;
-- DDS results;
-- error events;
-- run/task provenance;
-- corrections;
-- investigations;
+- `skill_profile_versions`;
+- skill-state history;
+- rule versions;
+- regression cases and multi-skill links;
 - counterexamples;
-- state-transition history;
-- audits and checkpoints.
+- bounded spaced-review queues.
 
-A discovered mistake creates a correction event. Original facts are never
-silently rewritten or deleted.
+A new algorithm revision may reinterpret old facts, but it never rewrites them.
 
-Learning state includes:
+## Three phased gates
 
-- `skill_evidence`;
-- `skill_profile_versions` — one preserved profile per analyzer revision;
-- current compatibility profile `skill_profiles`;
-- `rule_versions`;
-- `regression_cases` plus multi-skill links;
-- `counterexamples`;
-- `experience_events`;
-- bounded `learning_queue`.
+### Main TRAIN gate
 
-Before a new analyzer revision reuses a current skill row, the previous profile
-is snapshotted under its own `algorithm_version`. Thus v2.2 metrics cannot erase
-v2.1 skill state.
+Before mass evaluation of boards 10,001–30,000:
 
-## Skill lifecycle
+- corpus count must be 30,000;
+- cross-fit must cover all tasks without family leakage;
+- shards must cover exactly the fresh main scope;
+- legal line preflight must pass;
+- DDS full-play normalization must pass;
+- both declarer and defense continuation tasks must exist;
+- no paid DDS API may be required.
 
-```text
-candidate -> testing -> confirmed -> stable
-                         \-> weakened -> stable after recovery
-```
+### Holdout gate
 
-Raw repetition is insufficient. Promotion requires independent transfer.
-Stability additionally requires:
+Before opening main validation:
 
-- high transfer rate;
-- clean recent regression streak;
-- successful counterexamples.
+- all TRAIN shards must be durable;
+- confidence must be calibrated on out-of-fold TRAIN residuals;
+- family-specific paired-bootstrap policy must be present;
+- no validation/sealed leakage may exist.
 
-A fresh regression or counterexample failure can weaken a confirmed/stable
-skill. Recovery requires a new clean streak.
+### Stable-skill claim gate
 
-## Bounded spaced review
+Before calling a skill stable:
 
-Exact source errors remain in immutable error and regression tables. Operational
-spaced review is aggregated by:
+- blind counterexamples must be passed;
+- a versioned rule must be confirmed;
+- real-world transfer must succeed;
+- regression streak and transfer thresholds must pass.
 
-- skill;
-- review offset;
-- due-evaluation bucket.
+A stage may finish technically while this claim gate remains closed.
 
-Requested work per bucket is capped. Source provenance is retained in append-only
-experience events. This prevents queue explosion at 30k/50k scale.
+## Stage 2 preparation without mass training
 
-## Better-than-DDS claims
-
-A prediction above the DDS optimum, or a defensive claim above the DDS maximum,
-creates a mandatory investigation.
-
-Resolution requires:
-
-- cause;
-- first refutation;
-- bridge lesson;
-- supporting evidence.
-
-When the blind prediction did not include a legal card line, the system may
-honestly classify the initial estimate as unsupported, but must not invent a
-card-level refutation. Stage 2 therefore requires line-bearing tasks.
-
-## DD value trajectory
-
-For full Play, value is projected final declarer tricks under optimal
-continuation. After each card:
-
-- declarer error lowers the value;
-- defense error raises it;
-- the first swing is retained;
-- later compensation is recorded separately;
-- impossible-direction movements are integration/value-definition warnings.
-
-The database stores gross losses/gifts, restored losses, squandered earlier
-gifts and unrecovered damage.
-
-## Methodology audit
-
-Database integrity and methodological validity are separate.
-
-`methodology_audit.py` checks, among other things:
-
-- missing task/error families in follow-ups;
-- same-source probes counted as transfer;
-- adversarial-sample interpretation;
-- lack of counterexamples/rule versions;
-- confidence calibration problems;
-- structural-only investigations;
-- absence of full-play trajectories;
-- legacy single-score model selection;
-- spaced-review expansion.
-
-`stage_gate.py` blocks expansion on methodological errors even when every DDS
-calculation completed successfully.
-
-## Reinterpreting immutable facts after an analyzer upgrade
-
-A new analyzer version may build a new interpretation from stored predictions
-and DDS results without rerunning DDS:
+After an explicitly authorized corpus expansion to 30,000 deals:
 
 ```bash
-python run_stage.py reinterpret --work work/pilot --apply
+python prepare_stage2.py --work work/pilot
 ```
 
-Reinterpretation:
+This command creates cross-fit metadata, fresh-scope shard manifests, legal line
+preflights, one DDS Play preflight, continuation tasks and readiness reports. It
+does **not** launch mass DDS evaluation.
 
-- is explicit;
-- skips validation/sealed learning;
-- never changes locked facts;
-- records current-version evidence separately;
-- preserves earlier versioned skill profiles.
+Check gates:
 
-## Technical commands
+```bash
+python stage2_readiness.py --work work/pilot --require main_train
+python stage2_readiness.py --work work/pilot --require holdout
+python stage2_readiness.py --work work/pilot --require skill_claim
+```
 
-Prepare a pilot corpus without DDS exposure:
+## Core commands
+
+Prepare the pilot corpus without DDS exposure:
 
 ```bash
 python run_stage.py prepare --stage pilot --out work/pilot
 ```
 
-Evaluate locked TRAIN predictions:
+Expand the deterministic corpus after explicit approval:
+
+```bash
+python run_stage.py prepare --stage main --out work/pilot
+```
+
+Evaluate already locked predictions:
 
 ```bash
 DDS_TRAINING_CONFIRM=YES python run_stage.py evaluate \
-  --stage pilot \
+  --stage main \
   --work work/pilot \
-  --predictions work/pilot/locked_predictions_train.jsonl \
+  --predictions locked_predictions.jsonl \
   --splits train \
   --start
 ```
 
-Audit database/provenance:
+Audit database and current methodology:
 
 ```bash
 python run_stage.py audit --work work/pilot --fail-on-error
-```
-
-Audit learning methodology:
-
-```bash
 python methodology_audit.py --work work/pilot --fail-on-error
-```
-
-Check stage completion/readiness:
-
-```bash
 python stage_gate.py --work work/pilot --stage pilot
 ```
 
-## Stage 2 requirements
+## Remaining evidence, not software claims
 
-Before claiming acquired declarer/defense skill, the main stage must add:
+The machinery for lines, trajectories, cross-fit, continuation tasks, shards,
+calibration and counterexample candidates is implemented. The following cannot
+be fabricated by code and must be earned during Stage 2:
 
-- legal blind card lines and candidate trees;
-- defense continuation/switch tasks after the opening lead;
-- full Play DD trajectories;
-- cross-fitted and fresh-corpus transfer;
-- verified counterexamples;
-- versioned bridge-rule synthesis;
-- out-of-fold confidence calibration;
-- separate human-information mode;
-- real tournament transfer tests;
-- restartable sharded execution with durable artifact per shard.
+- out-of-fold calibration fitted on real Stage-2 TRAIN predictions;
+- verified blind counterexamples;
+- confirmed versioned bridge rules;
+- successful tournament/real-play transfer;
+- stable skill status.
 
-The goal is not to memorize a DDS card. It is to recognize the bridge mechanism
-on a new position before DDS is revealed.
+The goal is not to memorize a DDS card. It is to recognize and explain the
+bridge mechanism on a new position before DDS is revealed.
