@@ -98,12 +98,14 @@ jobs:
         working-directory: dds_training
         run: python stage_scope_selftest.py
 
-      - name: Restore DDS3 Bazel disk cache
-        id: dds-cache
+      - name: Restore cached DDS3 wheel and Bazel state
+        id: dds-runtime-cache
         uses: actions/cache/restore@v4
         with:
-          path: ~/.cache/bazel-dds3
-          key: dds3-v3.0.0-bazel7.6.1-py314-${{ runner.os }}
+          path: |
+            dds_training/.wheel-cache/dds3
+            ~/.cache/bazel-dds3
+          key: dds3-v3.0.0-wheel1-bazel7.6.1-py314-${{ runner.os }}
 
       - name: Bootstrap local DDS3 and run technical preflight
         run: bash dds_training/bootstrap_linux.sh
@@ -214,9 +216,11 @@ jobs:
           })
           PY
 
-      - name: Save DDS3 Bazel disk cache
-        if: always() && steps.dds-cache.outputs.cache-hit != 'true'
+      - name: Save cached DDS3 wheel and Bazel state
+        if: always() && steps.dds-runtime-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: ~/.cache/bazel-dds3
-          key: dds3-v3.0.0-bazel7.6.1-py314-${{ runner.os }}
+          path: |
+            dds_training/.wheel-cache/dds3
+            ~/.cache/bazel-dds3
+          key: dds3-v3.0.0-wheel1-bazel7.6.1-py314-${{ runner.os }}
