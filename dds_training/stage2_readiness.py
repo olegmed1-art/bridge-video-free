@@ -13,7 +13,7 @@ import sqlite3
 from collections import Counter
 from pathlib import Path
 
-from config import STAGES
+from config import ALGORITHM_VERSION, STAGES
 from crossfit import audit_tasks
 from playline import PlayLineError, validate_prediction_line
 from stage_scope import expected_base_deals, task_in_stage
@@ -32,10 +32,12 @@ def _capabilities() -> dict:
         "line_bearing_predictor": ("line_predictor", "prediction_for"),
         "dds_full_play_trajectory": ("dds_play", "analyse_line"),
         "continuation_task_generator": ("continuation_tasks", "continuation_tasks_from_line"),
+        "human_information_view": ("human_view", "build_human_view"),
         "family_crossfit": ("crossfit", "annotate_file"),
         "restartable_shards": ("shard_plan", "build_shard_plan"),
         "oof_confidence_calibration": ("confidence_calibration", "fit_calibrator"),
         "counterexample_candidate_extraction": ("counterexample_candidates", "extract_candidates"),
+        "evidence_gated_rule_synthesis": ("rule_synthesis", "propose_rule_version"),
     }
     for name, (module_name, attribute) in imports.items():
         try:
@@ -176,10 +178,26 @@ def audit_stage2_readiness(
     if db_path.exists():
         con = sqlite3.connect(db_path)
         try:
-            verified_counterexamples = con.execute("SELECT COUNT(*) FROM counterexamples").fetchone()[0]
-            rules = con.execute("SELECT COUNT(*) FROM rule_versions WHERE status IN ('confirmed','stable')").fetchone()[0]
+            verified_counterexamples = con.execute(
+                """
+                SELECT COUNT(*) FROM skill_evidence
+                WHERE algorithm_version=? AND evidence_type='counterexample' AND outcome='success'
+                """,
+                (ALGORITHM_VERSION,),
+            ).fetchone()[0]
+            rules = con.execute(
+                """
+                SELECT COUNT(*) FROM rule_versions
+                WHERE algorithm_version=? AND status IN ('confirmed','stable')
+                """,
+                (ALGORITHM_VERSION,),
+            ).fetchone()[0]
             real_world = con.execute(
-                "SELECT COUNT(*) FROM skill_evidence WHERE evidence_type='real_world' AND outcome='success'"
+                """
+                SELECT COUNT(*) FROM skill_evidence
+                WHERE algorithm_version=? AND evidence_type='real_world' AND outcome='success'
+                """,
+                (ALGORITHM_VERSION,),
             ).fetchone()[0]
         except sqlite3.OperationalError:
             pass
@@ -195,6 +213,7 @@ def audit_stage2_readiness(
 
     return {
         "schema": "dds-stage2-readiness-v2",
+        "algorithm_version": ALGORITHM_VERSION,
         "capabilities": capabilities,
         "main_train": {
             "ready": gate_ready("main_train"),
