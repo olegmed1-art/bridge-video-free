@@ -1,0 +1,36 @@
+name: DDS v2.3 algorithm review smoke
+
+on:
+  push:
+    branches: [dds-training-local]
+    paths:
+      - 'dds_training/algorithm_review_v23.py'
+      - 'dds_training/algorithm_review_v23_regression.py'
+      - '.github/workflows/dds-algorithm-review-v23-smoke.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: dds-v23-algorithm-review-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  review-engine:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Compile review engine
+        working-directory: dds_training
+        run: python -m py_compile algorithm_review_v23.py algorithm_review_v23_regression.py
+
+      - name: Test evidence-driven improvement proposals and no automatic mutation
+        working-directory: dds_training
+        run: python algorithm_review_v23_regression.py
