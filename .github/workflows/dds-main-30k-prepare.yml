@@ -1,0 +1,277 @@
+name: DDS main 30k — prepare from preserved pilot
+
+on:
+  pull_request:
+    paths:
+      - 'dds_training/**'
+      - '.github/workflows/dds-main-30k-prepare.yml'
+      - '.github/workflows/dds-training-v23-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: dds-main-30k-prepare-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PILOT_RUN_ID: '31909124383'
+  PILOT_ARTIFACT: dds-pilot-10k-complete-state-31909124383
+  PILOT_TGZ_SHA256: f472b1361c879e890ffeab0e9184736a7dcd39cbc3a4c33541eb7156df9176d6
+  PILOT_RAW_SHA256: 8a21cf06ab7ac424ee0f245ccf274e6d6f4f7135fa9b8c4c0e52c595c0da5996
+  PILOT_DB_SHA256: c01cbe9e143198a083df8ab51ea2113ec71688b2f23d93dcfb4b1de9c29f2127
+  PILOT_MODEL_SHA256: d8a02835777449c31f2b29f51121c9698f19ae2f41560ff8b43962b3c69ea269
+  PILOT_TASKS_SHA256: dda1b6ad3b2f4221347caeb2d9d15f7a438f815a619c614971e3dd1f90672c5e
+  WORK: dds_training/work/pilot
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  prepare-main:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout current candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+
+      - name: Compile DDS training code
+        working-directory: dds_training
+        run: python -m compileall -q .
+
+      - name: Restore immutable completed 10k pilot artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/dds-pilot-complete dds_training/work/pilot
+          mkdir -p /tmp/dds-pilot-complete dds_training/work
+          downloaded=0
+          for attempt in $(seq 1 8); do
+            rm -rf /tmp/dds-pilot-complete/*
+            if gh run download "$PILOT_RUN_ID" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name "$PILOT_ARTIFACT" \
+              --dir /tmp/dds-pilot-complete; then
+              downloaded=1
+              break
+            fi
+            echo "pilot artifact download attempt ${attempt}/8 failed; retrying" >&2
+            sleep $((attempt * 5))
+          done
+          test "$downloaded" = 1
+          archive="$(find /tmp/dds-pilot-complete -name 'dds-pilot-10k-complete-state.tgz' -print -quit)"
+          test -n "$archive"
+          echo "$PILOT_TGZ_SHA256  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C dds_training/work
+          test -f "$WORK/training.sqlite3"
+          test -f "$WORK/raw.pbn"
+          test -f "$WORK/blind_tasks.jsonl"
+          test -f "$WORK/adaptive_model_v0.2.json"
+
+      - name: Verify preserved pilot identity and closure evidence
+        working-directory: dds_training
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "$PILOT_RAW_SHA256  work/pilot/raw.pbn" | sha256sum -c -
+          echo "$PILOT_DB_SHA256  work/pilot/training.sqlite3" | sha256sum -c -
+          echo "$PILOT_MODEL_SHA256  work/pilot/adaptive_model_v0.2.json" | sha256sum -c -
+          echo "$PILOT_TASKS_SHA256  work/pilot/blind_tasks.jsonl" | sha256sum -c -
+          python - <<'PY'
+          import json, sqlite3
+          from pathlib import Path
+          root = Path('work/pilot')
+          final = json.loads((root / 'pilot_final_summary.json').read_text(encoding='utf-8'))
+          corpus = json.loads((root / 'corpus_summary.json').read_text(encoding='utf-8'))
+          assert final['stage'] == 'pilot'
+          assert final['deals'] == 10000
+          assert final['audit']['status'] == 'ok'
+          assert final['stage_gate']['ready_for_next_stage'] is True
+          assert final['stage_gate']['open_mandatory_investigations'] == 0
+          assert corpus['count'] == 10000 and corpus['seed'] == 20260815
+          assert corpus['raw_sha256'] == '8a21cf06ab7ac424ee0f245ccf274e6d6f4f7135fa9b8c4c0e52c595c0da5996'
+          db = sqlite3.connect(root / 'training.sqlite3')
+          assert db.execute("select count(*) from dds_results").fetchone()[0] == 22497
+          assert db.execute("select count(*) from dds_results where split='train'").fetchone()[0] == 14000
+          assert db.execute("select count(*) from dds_results where split='validation'").fetchone()[0] == 3000
+          assert db.execute("select count(*) from dds_results where split='sealed_test'").fetchone()[0] == 3000
+          opened = db.execute("select count(*) from investigation_events where event_type='opened'").fetchone()[0]
+          resolved = db.execute("select count(*) from investigation_events where event_type='resolved'").fetchone()[0]
+          assert opened == resolved == 3226, (opened, resolved)
+          print({'pilot_identity_verified': True, 'pilot_deals': 10000, 'pilot_dds_results': 22497, 'investigations_opened_resolved': opened})
+          PY
+
+      - name: Expand deterministic corpus to 30k without DDS exposure
+        working-directory: dds_training
+        shell: bash
+        run: |
+          set -euo pipefail
+          db_before="$(sha256sum work/pilot/training.sqlite3 | awk '{print $1}')"
+          python run_stage.py prepare --stage main --out work/pilot | tee work/pilot/main_prepare.json
+          db_after="$(sha256sum work/pilot/training.sqlite3 | awk '{print $1}')"
+          test "$db_before" = "$db_after"
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('work/pilot')
+          corpus = json.loads((root / 'corpus_summary.json').read_text(encoding='utf-8'))
+          state = json.loads((root / 'state.json').read_text(encoding='utf-8'))
+          assert corpus['count'] == 30000
+          assert corpus['seed'] == 20260815
+          assert corpus['expanded_from'] == 10000
+          assert state['fresh_base_deals_for_stage'] == 20000
+          assert state['fresh_base_tasks_for_stage'] == 40000
+          assert state['status'] == 'prepared_no_dds'
+          print({'corpus_deals': 30000, 'fresh_deals': 20000, 'fresh_tasks': 40000, 'pilot_db_unchanged': True})
+          PY
+
+      - name: Lock fresh main TRAIN predictions before any Stage-2 DDS preflight
+        working-directory: dds_training
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          src = Path('work/pilot/blind_tasks.jsonl')
+          out = Path('work/pilot/blind_tasks_main_train_pre_dds.jsonl')
+          count = 0
+          with src.open(encoding='utf-8') as source, out.open('w', encoding='utf-8') as target:
+              for line in source:
+                  if not line.strip():
+                      continue
+                  task = json.loads(line)
+                  board = int(task['board'])
+                  if 10001 <= board <= 30000 and task.get('split') == 'train':
+                      target.write(json.dumps(task, ensure_ascii=False, sort_keys=True) + '\n')
+                      count += 1
+          assert count == 28000, count
+          print({'fresh_main_train_tasks_locked_scope': count})
+          PY
+          python adaptive_predictor.py predict \
+            --tasks work/pilot/blind_tasks_main_train_pre_dds.jsonl \
+            --model work/pilot/adaptive_model_v0.2.json \
+            --out work/pilot/locked_predictions_main_train_adaptive.jsonl \
+            --splits train \
+            | tee work/pilot/main_train_prediction_lock.json
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          path = Path('work/pilot/locked_predictions_main_train_adaptive.jsonl')
+          rows = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
+          assert len(rows) == 28000
+          assert len({row['task_id'] for row in rows}) == 28000
+          assert all(row.get('locked') is True for row in rows)
+          assert all(row.get('predictor_version') == 'bridge-adaptive-v0.2' for row in rows)
+          digest = hashlib.sha256(path.read_bytes()).hexdigest()
+          Path('work/pilot/main_train_predictions_sha256.txt').write_text(digest + '\n', encoding='utf-8')
+          print({'predictions': 28000, 'locked': True, 'dds_called_during_prediction': False, 'sha256': digest})
+          PY
+
+      - name: Restore verified DDS3 wheel and Bazel state
+        id: dds-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            dds_training/.wheel-cache/dds3
+            ~/.cache/bazel-dds3
+          key: dds3-wheel-v5-${{ runner.os }}-py314-${{ hashFiles('dds_training/bootstrap_linux.sh') }}
+          restore-keys: |
+            dds3-wheel-v5-${{ runner.os }}-py314-
+
+      - name: Bootstrap pinned local DDS3 without mass evaluation
+        run: DDS_RUN_PREFLIGHT=0 bash dds_training/bootstrap_linux.sh
+
+      - name: Build Stage-2 cross-fit shards and preflight evidence
+        working-directory: dds_training
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          db_before="$(sha256sum work/pilot/training.sqlite3 | awk '{print $1}')"
+          python prepare_stage2.py --work work/pilot | tee work/pilot/stage2_prepare_output.json
+          python stage2_readiness.py \
+            --work work/pilot \
+            --out work/pilot/stage2_readiness_main.json \
+            --require main_train
+          db_after="$(sha256sum work/pilot/training.sqlite3 | awk '{print $1}')"
+          test "$db_before" = "$db_after"
+
+      - name: Verify prediction scope, shard coverage and closed holdouts
+        working-directory: dds_training
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          python - <<'PY'
+          import json, sqlite3
+          from pathlib import Path
+          root = Path('work/pilot')
+          tasks = [json.loads(x) for x in (root / 'blind_tasks_crossfit_main.jsonl').read_text(encoding='utf-8').splitlines() if x.strip()]
+          train_ids = {str(t['task_id']) for t in tasks if t.get('split') == 'train'}
+          pred_ids = {str(json.loads(x)['task_id']) for x in (root / 'locked_predictions_main_train_adaptive.jsonl').read_text(encoding='utf-8').splitlines() if x.strip()}
+          assert len(tasks) == 40000
+          assert len(train_ids) == 28000
+          assert pred_ids == train_ids
+          plan = json.loads((root / 'shard_plan_main.json').read_text(encoding='utf-8'))
+          assert plan['task_count'] == 40000
+          assert plan['shard_count'] == 20
+          assert plan['family_safe'] is True and plan['restartable'] is True
+          assert sum(int(s.get('splits', {}).get('train', 0)) for s in plan['shards']) == 28000
+          ready = json.loads((root / 'stage2_readiness_main.json').read_text(encoding='utf-8'))
+          assert ready['main_train']['ready'] is True
+          assert ready['holdout']['ready'] is False
+          assert ready['skill_claim']['ready'] is False
+          db = sqlite3.connect(root / 'training.sqlite3')
+          assert db.execute("select count(*) from dds_results").fetchone()[0] == 22497
+          print({
+              'main_train_ready': True,
+              'fresh_tasks': 40000,
+              'train_tasks': 28000,
+              'shards': 20,
+              'holdout_closed': True,
+              'stable_skill_claim_closed': True,
+              'main_dds_results': 0,
+          })
+          PY
+
+      - name: Package prepared 30k state
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -d dds_training/work/pilot ]; then
+            tar -czf dds-main-30k-prepared-state.tgz -C dds_training/work pilot
+            sha256sum dds-main-30k-prepared-state.tgz > dds-main-30k-prepared-state.sha256
+          fi
+
+      - name: Upload prepared Stage-2 state
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dds-main-30k-prepared-${{ github.run_id }}
+          path: |
+            dds-main-30k-prepared-state.tgz
+            dds-main-30k-prepared-state.sha256
+            dds_training/work/pilot/stage2_readiness_main.json
+            dds_training/work/pilot/shard_plan_main.json
+            dds_training/work/pilot/main_train_predictions_sha256.txt
+            dds_training/work/pilot/main_train_prediction_lock.json
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Save rebuilt verified DDS3 wheel and Bazel state
+        if: always() && steps.dds-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            dds_training/.wheel-cache/dds3
+            ~/.cache/bazel-dds3
+          key: dds3-wheel-v5-${{ runner.os }}-py314-${{ hashFiles('dds_training/bootstrap_linux.sh') }}-${{ github.run_id }}

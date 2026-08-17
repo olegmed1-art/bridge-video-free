@@ -6,9 +6,9 @@ These checks prevent a green result from a partial, self-modifying, supply-chain
 floating, accidentally self-starting, or cache-fragile test system. They validate
 the canonical manifest, prohibit network/API clients in the DDS Python layer,
 enforce measured runtime coverage, verify read-only smoke workflows, keep the
-historical pilot workflows archived/non-executable, and require expensive DDS
-wheel bootstrap to be separable from later evidence gates so verified build
-artifacts can still be cached when a downstream test fails.
+historical pilot workflows archived/non-executable, protect immutable pilot
+restoration for Stage 2, and require expensive DDS wheel bootstrap to be
+separable from later evidence gates.
 """
 
 import ast
@@ -52,6 +52,11 @@ PINNED_ACTIONS = {
     "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
 }
 EXPECTED_DDS_COMMIT = "37c8a79f4c67c55d1a309ccb66dd00cb58af464a"
+PILOT_RUN_ID = "31909124383"
+PILOT_ARTIFACT = "dds-pilot-10k-complete-state-31909124383"
+PILOT_TGZ_SHA256 = "f472b1361c879e890ffeab0e9184736a7dcd39cbc3a4c33541eb7156df9176d6"
+PILOT_RAW_SHA256 = "8a21cf06ab7ac424ee0f245ccf274e6d6f4f7135fa9b8c4c0e52c595c0da5996"
+PILOT_DB_SHA256 = "c01cbe9e143198a083df8ab51ea2113ec71688b2f23d93dcfb4b1de9c29f2127"
 
 
 def imported_roots(path: Path) -> set[str]:
@@ -149,11 +154,14 @@ def main() -> None:
 
     fast_path = workflows / "dds-training-v23-smoke.yml"
     heavy_path = workflows / "dds-training-local-smoke.yml"
-    assert fast_path.is_file() and heavy_path.is_file()
+    prep_path = workflows / "dds-main-30k-prepare.yml"
+    assert fast_path.is_file() and heavy_path.is_file() and prep_path.is_file()
     fast = fast_path.read_text(encoding="utf-8")
     heavy = heavy_path.read_text(encoding="utf-8")
+    prep = prep_path.read_text(encoding="utf-8")
     fast_lower = fast.lower()
     heavy_lower = heavy.lower()
+    prep_lower = prep.lower()
 
     assert "pull_request:" in fast
     assert "test_runner.py" in fast and "--suite fast" in fast
@@ -200,6 +208,25 @@ def main() -> None:
             "executable_training": False,
         }
 
+    # Stage-2 preparation may run as a PR/readiness regression because it never starts
+    # the mass evaluator. It must restore the exact immutable completed pilot artifact,
+    # expand the same deterministic corpus, lock fresh TRAIN predictions before DDS
+    # preflight, keep holdouts closed and upload a durable prepared-state artifact.
+    assert "pull_request:" in prep and "workflow_dispatch:" in prep
+    assert "actions: read" in prep_lower and "contents: read" in prep_lower
+    assert "run_stage.py evaluate" not in prep
+    assert "--start" not in prep
+    for token in (PILOT_RUN_ID, PILOT_ARTIFACT, PILOT_TGZ_SHA256, PILOT_RAW_SHA256, PILOT_DB_SHA256):
+        assert token in prep, token
+    assert "run_stage.py prepare --stage main --out work/pilot" in prep
+    assert "locked_predictions_main_train_adaptive.jsonl" in prep
+    assert prep.index("locked_predictions_main_train_adaptive.jsonl") < prep.index("prepare_stage2.py --work work/pilot")
+    assert "stage2_readiness.py" in prep and "--require main_train" in prep
+    assert "assert ready['holdout']['ready'] is False" in prep
+    assert "assert ready['skill_claim']['ready'] is False" in prep
+    assert "assert db.execute(\"select count(*) from dds_results\").fetchone()[0] == 22497" in prep
+    assert "dds-main-30k-prepared-state.tgz" in prep
+
     bootstrap = (dds_root / "bootstrap_linux.sh").read_text(encoding="utf-8")
     assert EXPECTED_DDS_COMMIT in bootstrap
     assert "DDS_RUN_PREFLIGHT" in bootstrap
@@ -237,6 +264,8 @@ def main() -> None:
                 "unsafe_self_modifying_test_workflows": 0,
                 "floating_dds_action_dependencies": 0,
                 "archived_pilot_workflows": archive_state,
+                "main_30k_preparation_restores_immutable_pilot": True,
+                "main_30k_preparation_mass_evaluation": False,
                 "golden_preflight_repetitions_required": 2,
                 "bootstrap_preflight_deferred_until_evidence_step": True,
                 "verified_wheel_cache_replay_required": True,
@@ -244,6 +273,7 @@ def main() -> None:
                 "pinned_dds_commit": EXPECTED_DDS_COMMIT,
                 "canonical_fast_workflow": fast_path.name,
                 "canonical_dds_workflow": heavy_path.name,
+                "canonical_main_preparation_workflow": prep_path.name,
             },
             ensure_ascii=False,
             indent=2,
