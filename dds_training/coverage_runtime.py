@@ -89,10 +89,16 @@ def _local_trace(frame: FrameType, event: str, arg) -> Callable | None:
         _ARCS[relative].add((previous[1], line))
         _LAST_LINE[frame_id] = (relative, line)
         return _local_trace
-    if event in {"return", "exception"}:
+    if event == "exception":
+        # A Python exception event is not necessarily frame termination; callers may
+        # catch it in the same frame. Keep the local tracer attached so coverage after
+        # the handler is not silently lost.
+        _ARCS[relative].add((previous[1], -1))
+        return _local_trace
+    if event == "return":
         _ARCS[relative].add((previous[1], -1))
         _LAST_LINE.pop(frame_id, None)
-        return None if event == "return" else _local_trace
+        return None
     return _local_trace
 
 
