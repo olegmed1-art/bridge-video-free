@@ -50,9 +50,9 @@ BEGIN
     END IF;
 
     -- Reader can inspect ordinary persistent tables. Authentication/authorization,
-    -- signing secrets, actor audit, source ACL/rights observations and recovery
-    -- checkpoint evidence are explicit protected surfaces and must not leak through the
-    -- broad reader role.
+    -- signing secrets, actor audit, source ACL/rights observations, recovery checkpoint
+    -- evidence and unverified identity-import PII are explicit protected surfaces and
+    -- must not leak through the broad reader role.
     FOR r IN
         SELECT format('%I.%I', n.nspname, c.relname) AS table_name
           FROM pg_class c
@@ -67,7 +67,12 @@ BEGIN
                'actor_context_signing_secret',
                'source_rights_snapshot',
                'recovery_checkpoint',
-               'recovery_verification'
+               'recovery_verification',
+               'identity_import_batch',
+               'identity_import_batch_state_event',
+               'identity_import_item',
+               'identity_import_item_state_event',
+               'identity_import_action'
            )
     LOOP
         IF NOT has_table_privilege('bridge_school_reader', r.table_name, 'SELECT') THEN
@@ -78,7 +83,9 @@ BEGIN
     FOREACH required_table IN ARRAY ARRAY[
         'auth_identity','person_role_assignment','person_access_grant','audit_event',
         'actor_context_signing_secret','source_rights_snapshot',
-        'recovery_checkpoint','recovery_verification'
+        'recovery_checkpoint','recovery_verification',
+        'identity_import_batch','identity_import_batch_state_event','identity_import_item',
+        'identity_import_item_state_event','identity_import_action'
     ] LOOP
         IF has_table_privilege('bridge_school_reader', required_table, 'SELECT') THEN
             RAISE EXCEPTION 'reader unexpectedly has SELECT on protected table %', required_table;
