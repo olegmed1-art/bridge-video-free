@@ -1,0 +1,29 @@
+name: Bridge School DDS Golden Smoke
+
+on:
+  pull_request:
+    paths:
+      - 'dds/**'
+      - '.github/workflows/dds-golden-smoke.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'dds/**'
+      - '.github/workflows/dds-golden-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  golden-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Run patched DDS 3.0.0 golden smoke twice
+        shell: bash
+        run: bash dds/run_golden_smoke.sh
