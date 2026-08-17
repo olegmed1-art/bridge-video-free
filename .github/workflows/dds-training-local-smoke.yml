@@ -1,0 +1,216 @@
+name: DDS integration contract (local solver)
+
+on:
+  push:
+    branches: [dds-training-local]
+    paths:
+      - 'dds_training/**'
+      - '.github/workflows/dds-training-v23-smoke.yml'
+      - '.github/workflows/dds-training-local-smoke.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: dds-test-heavy-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Compile DDS Python modules
+        working-directory: dds_training
+        run: python -m compileall -q .
+
+      - name: Validate canonical test inventory and coverage contract
+        working-directory: dds_training
+        run: python test_runner.py --manifest test_matrix.json --check-only
+
+      - name: Restore cached DDS3 wheel and Bazel state
+        id: dds-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            dds_training/.wheel-cache/dds3
+            ~/.cache/bazel-dds3
+          key: dds3-wheel-v2-v3.0.0-bazel7.6.1-py314-${{ runner.os }}
+          restore-keys: |
+            dds3-v3.0.0-bazel7.6.1-py314-${{ runner.os }}
+
+      - name: Bootstrap local DDS3 and run technical preflight
+        run: bash dds_training/bootstrap_linux.sh
+
+      - name: Run isolated DDS-backed test suite
+        working-directory: dds_training
+        run: |
+          source .venv/bin/activate
+          python test_runner.py \
+            --manifest test_matrix.json \
+            --suite dds \
+            --report /tmp/dds-test-report-dds.json
+
+      - name: Cross-check DDS3 with independent bridge-solver
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/bridge-solver-independent
+          git clone --quiet https://github.com/macroxue/bridge-solver.git /tmp/bridge-solver-independent
+          git -C /tmp/bridge-solver-independent checkout --quiet --detach dc2d4df68d21822c18fc1688b9f6f183c927c11c
+          g++ -std=c++17 -O2 \
+            -o /tmp/bridge-solver-independent/solver-independent \
+            /tmp/bridge-solver-independent/solver.cc
+          cd dds_training
+          source .venv/bin/activate
+          python independent_crosscheck.py \
+            --solver /tmp/bridge-solver-independent/solver-independent \
+            --count 4 | tee /tmp/dds-independent-crosscheck.json
+
+      - name: Verify launch and sealed-test guards block accidental training
+        working-directory: dds_training
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          rm -rf /tmp/dds-pilot-prepared
+          python run_stage.py prepare --stage pilot --out /tmp/dds-pilot-prepared
+
+          if python run_stage.py evaluate \
+            --stage pilot \
+            --work /tmp/dds-pilot-prepared \
+            --predictions /tmp/does-not-exist.jsonl \
+            2>/tmp/guard.err; then
+            echo "ERROR: evaluate unexpectedly ran without --start" >&2
+            exit 1
+          fi
+          grep -q -- "--start was not supplied" /tmp/guard.err
+
+          if DDS_TRAINING_CONFIRM=YES python run_stage.py evaluate \
+            --stage pilot \
+            --work /tmp/dds-pilot-prepared \
+            --predictions /tmp/does-not-exist.jsonl \
+            --splits sealed_test \
+            --start \
+            2>/tmp/sealed.err; then
+            echo "ERROR: sealed test unexpectedly opened without --open-sealed" >&2
+            exit 1
+          fi
+          grep -q -- "Sealed test blocked" /tmp/sealed.err
+
+          if DDS_TRAINING_CONFIRM=YES python run_stage.py evaluate \
+            --stage pilot \
+            --work /tmp/dds-pilot-prepared \
+            --predictions /tmp/does-not-exist.jsonl \
+            --splits train sealed_test \
+            --start \
+            --open-sealed \
+            2>/tmp/mixed.err; then
+            echo "ERROR: sealed test unexpectedly mixed with train" >&2
+            exit 1
+          fi
+          grep -q -- "Sealed test must run alone" /tmp/mixed.err
+
+      - name: Check deterministic pilot preparation and manifest audit
+        working-directory: dds_training
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('/tmp/dds-pilot-prepared')
+          summary = json.loads((root / 'corpus_summary.json').read_text())
+          state = json.loads((root / 'state.json').read_text())
+          assert summary['count'] == 10000, summary
+          assert summary['splits'] == {
+              'train': 7000,
+              'validation': 1500,
+              'sealed_test': 1500,
+          }, summary['splits']
+          assert state['manifest_audit']['status'] == 'ok', state['manifest_audit']
+          assert state['fresh_base_deals_for_stage'] == 10000, state
+          assert state['fresh_base_tasks_for_stage'] == 20000, state
+          tasks = sum(1 for _ in (root / 'blind_tasks.jsonl').open())
+          assert tasks == 20000, tasks
+          print({
+              'pilot_deals': summary['count'],
+              'splits': summary['splits'],
+              'blind_tasks': tasks,
+              'manifest_audit': 'ok',
+              'dds_training_started': False,
+          })
+          PY
+
+      - name: Audit empty prepared database without starting training
+        working-directory: dds_training
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          python run_stage.py audit \
+            --work /tmp/dds-pilot-prepared \
+            --fail-on-error
+
+      - name: Expand corpus and execute non-mass Stage 2 readiness rehearsal
+        working-directory: dds_training
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          python run_stage.py prepare --stage main --out /tmp/dds-pilot-prepared
+          python prepare_stage2.py --work /tmp/dds-pilot-prepared
+          python stage2_readiness.py \
+            --work /tmp/dds-pilot-prepared \
+            --require main_train
+          python - <<'PY'
+          import json
+          import sqlite3
+          from pathlib import Path
+
+          root = Path('/tmp/dds-pilot-prepared')
+          ready = json.loads((root / 'stage2_readiness.json').read_text())
+          assert ready['main_train']['ready'] is True, ready
+          assert ready['main_train']['actual_total_deals'] == 30000, ready
+          assert ready['main_train']['actual_fresh_tasks'] == 40000, ready
+          assert ready['holdout']['ready'] is False, ready
+          assert ready['skill_claim']['ready'] is False, ready
+          database = sqlite3.connect(root / 'training.sqlite3')
+          assert database.execute('select count(*) from dds_results').fetchone()[0] == 0
+          print({
+              'stage2_main_train_ready': True,
+              'fresh_tasks': ready['main_train']['actual_fresh_tasks'],
+              'holdout_still_closed': True,
+              'stable_skill_claim_still_closed': True,
+              'mass_dds_results': 0,
+              'paid_api_used': False,
+          })
+          PY
+
+      - name: Verify tests did not modify tracked sources
+        run: git diff --exit-code
+
+      - name: Upload machine-readable DDS integration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dds-test-report-heavy-${{ github.run_id }}
+          path: |
+            /tmp/dds-test-report-dds.json
+            /tmp/dds-independent-crosscheck.json
+            /tmp/dds-pilot-prepared/stage2_readiness.json
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Save cached DDS3 wheel and Bazel state
+        if: always() && steps.dds-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            dds_training/.wheel-cache/dds3
+            ~/.cache/bazel-dds3
+          key: dds3-wheel-v2-v3.0.0-bazel7.6.1-py314-${{ runner.os }}

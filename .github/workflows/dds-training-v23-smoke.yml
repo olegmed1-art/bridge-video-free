@@ -1,0 +1,61 @@
+name: DDS test contract (fast)
+
+on:
+  pull_request:
+    paths:
+      - 'dds_training/**'
+      - '.github/workflows/dds-training-v23-smoke.yml'
+      - '.github/workflows/dds-training-local-smoke.yml'
+  push:
+    branches: [dds-training-local]
+    paths:
+      - 'dds_training/**'
+      - '.github/workflows/dds-training-v23-smoke.yml'
+      - '.github/workflows/dds-training-local-smoke.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: dds-test-fast-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fast:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Compile DDS Python modules
+        working-directory: dds_training
+        run: python -m compileall -q .
+
+      - name: Validate canonical test inventory and coverage contract
+        working-directory: dds_training
+        run: python test_runner.py --manifest test_matrix.json --check-only
+
+      - name: Run isolated fast DDS test suite
+        working-directory: dds_training
+        run: >-
+          python test_runner.py
+          --manifest test_matrix.json
+          --suite fast
+          --report /tmp/dds-test-report-fast.json
+
+      - name: Verify tests did not modify tracked sources
+        run: git diff --exit-code
+
+      - name: Upload machine-readable fast test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dds-test-report-fast-${{ github.run_id }}
+          path: /tmp/dds-test-report-fast.json
+          if-no-files-found: warn
+          retention-days: 14
