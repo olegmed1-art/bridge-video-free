@@ -42,6 +42,13 @@ components:
     depends_on: [neon_persistence, evidence_gate]
     evidence_hint: docs/architecture/truth_layer_checkpoint_2026-08-17.md
     note: clean PostgreSQL 18 semantic CI and isolated production-snapshot migration evidence exist; final migration identity is 0045 and remains unpromoted to production
+  - id: reliability_foundation
+    name: META Reliability Foundation
+    status: TESTED
+    operational: false
+    depends_on: [truth_layer, evidence_gate, neon_persistence]
+    evidence_hint: docs/architecture/stage1_foundation_checkpoint_2026-08-17.md
+    note: checkpoint/resume, correction-regression gate, protected methodology authority, rights/ACL observations, recovery evidence, actual restore test and Source-to-Deal-to-Run-to-Artifact E2E gate passed; migrations 0046-0048 remain unpromoted to production
   - id: school_knowledge
     name: Approved School Knowledge
     status: DESIGNED
@@ -65,7 +72,7 @@ components:
     name: DDS Core
     status: TESTED
     operational: false
-    note: local golden smoke evidence exists in project inventory; external/reproducible operational evidence still required
+    note: local golden smoke evidence exists in project inventory; live Stage-2 deterministic replay/context-reuse gate still required
   - id: tournament_analysis
     name: Tournament Analysis
     status: IMPLEMENTED
