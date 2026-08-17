@@ -1,11 +1,12 @@
 name: DDS pilot 10k — finish phase
 
 on:
-  push:
-    branches: [dds-training-local]
-    paths:
-      - '.github/workflows/dds-training-pilot-finish.yml'
   workflow_dispatch:
+    inputs:
+      approval_token:
+        description: 'Введите ПИЛОТ-10К-ФИНИШ-ОДОБРЕН для явного продолжения пилота'
+        required: true
+        type: string
 
 concurrency:
   group: dds-pilot-10k-finish
@@ -28,9 +29,20 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     steps:
-      - uses: actions/checkout@v4
+      - name: Verify explicit human authorization for pilot finish
+        env:
+          APPROVAL_TOKEN: ${{ inputs.approval_token }}
+        run: |
+          set -euo pipefail
+          if [ "$APPROVAL_TOKEN" != "ПИЛОТ-10К-ФИНИШ-ОДОБРЕН" ]; then
+            echo "Pilot finish is blocked: explicit approval token is missing." >&2
+            exit 2
+          fi
+          echo '{"pilot_finish_authorized":true,"automatic_trigger":false}'
 
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
 
@@ -92,7 +104,7 @@ jobs:
 
       - name: Restore DDS3 Bazel disk cache
         id: dds-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ~/.cache/bazel-dds3
           key: dds3-v3.0.0-bazel7.6.1-py314-${{ runner.os }}
@@ -354,7 +366,7 @@ jobs:
 
       - name: Upload complete pilot state and reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dds-pilot-10k-complete-state-${{ github.run_id }}
           path: |
@@ -369,7 +381,7 @@ jobs:
 
       - name: Save DDS3 Bazel disk cache
         if: always() && steps.dds-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ~/.cache/bazel-dds3
           key: dds3-v3.0.0-bazel7.6.1-py314-${{ runner.os }}
