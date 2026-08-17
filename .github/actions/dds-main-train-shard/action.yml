@@ -1,0 +1,178 @@
+name: Authorized DDS main TRAIN shard
+description: Restore prior durable state, authorize one shard, evaluate it, audit it, and upload a restartable state artifact.
+
+inputs:
+  shard-id: {required: true}
+  expected-prior-results: {required: true}
+  expected-total-results: {required: true}
+  previous-artifact: {required: false, default: ''}
+  expected-commit: {required: true}
+  approval-phrase: {required: true}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python 3.14
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+      with:
+        python-version: '3.14'
+
+    - name: Restore prepared 30k state for first TRAIN shard
+      if: ${{ inputs.previous-artifact == '' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        test "$GITHUB_EVENT_NAME" = workflow_dispatch
+        test "$GITHUB_REF_NAME" = main
+        test "$GITHUB_SHA" = "${{ inputs.expected-commit }}"
+        rm -rf /tmp/dds-main-prepared dds_training/work/pilot
+        mkdir -p /tmp/dds-main-prepared dds_training/work
+        downloaded=0
+        for attempt in $(seq 1 8); do
+          rm -rf /tmp/dds-main-prepared/*
+          if gh run download 32052220151 --repo "$GITHUB_REPOSITORY" --name dds-main-30k-prepared-32052220151 --dir /tmp/dds-main-prepared; then
+            downloaded=1; break
+          fi
+          sleep $((attempt * 5))
+        done
+        test "$downloaded" = 1
+        archive="$(find /tmp/dds-main-prepared -name 'dds-main-30k-prepared-state.tgz' -print -quit)"
+        test -n "$archive"
+        echo "2ca5015493b263a768611a97fc004aed16bd40926cf4ae0f2bb6202349d7bd74  $archive" | sha256sum -c -
+        tar -xzf "$archive" -C dds_training/work
+
+    - name: Download previous completed shard state
+      if: ${{ inputs.previous-artifact != '' }}
+      uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+      with:
+        name: ${{ inputs.previous-artifact }}
+        path: /tmp/dds-main-previous
+
+    - name: Restore previous completed shard state
+      if: ${{ inputs.previous-artifact != '' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        test "$GITHUB_EVENT_NAME" = workflow_dispatch
+        test "$GITHUB_REF_NAME" = main
+        test "$GITHUB_SHA" = "${{ inputs.expected-commit }}"
+        archive="$(find /tmp/dds-main-previous -name 'dds-main-train-*-state.tgz' -print -quit)"
+        checksum="$(find /tmp/dds-main-previous -name 'dds-main-train-*-state.sha256' -print -quit)"
+        test -n "$archive" && test -n "$checksum"
+        test "$(sha256sum "$archive" | awk '{print $1}')" = "$(awk '{print $1}' "$checksum")"
+        rm -rf dds_training/work/pilot
+        mkdir -p dds_training/work
+        tar -xzf "$archive" -C dds_training/work
+
+    - name: Verify exact prior state and closed holdouts
+      shell: bash
+      working-directory: dds_training
+      run: |
+        set -euo pipefail
+        python - <<'PY'
+        import hashlib,json,sqlite3
+        from pathlib import Path
+        shard_id='${{ inputs.shard-id }}'; prior=int('${{ inputs.expected-prior-results }}'); root=Path('work/pilot')
+        corpus=json.loads((root/'corpus_summary.json').read_text()); ready=json.loads((root/'stage2_readiness_main.json').read_text()); plan=json.loads((root/'shard_plan_main.json').read_text())
+        assert corpus['count']==30000 and corpus['seed']==20260815
+        assert ready['main_train']['ready'] is True and ready['holdout']['ready'] is False and ready['skill_claim']['ready'] is False
+        assert hashlib.sha256((root/'locked_predictions_main_train_adaptive.jsonl').read_bytes()).hexdigest()=='ae946bec73f12bead7ebd6e54947bb6f2d2268798cf08b7b468495f943befe2b'
+        shard=next((x for x in plan['shards'] if x['shard_id']==shard_id),None)
+        assert shard and shard['task_count']==2000 and shard['splits']=={'train':2000}
+        db=sqlite3.connect(root/'training.sqlite3'); result_ids={r[0] for r in db.execute('select task_id from dds_results')}
+        assert len(result_ids)==prior,(len(result_ids),prior)
+        tasks=[json.loads(x) for x in (root/'blind_tasks_crossfit_main.jsonl').read_text().splitlines() if x.strip()]
+        holdout={str(t['task_id']) for t in tasks if t.get('split') in {'validation','sealed_test'}}
+        assert not (result_ids & holdout)
+        print({'shard':shard_id,'prior_results':prior,'holdout_closed':True,'resume_key':shard['resume_key']})
+        PY
+
+    - name: Restore verified DDS3 wheel and Bazel state
+      id: dds-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: |
+          dds_training/.wheel-cache/dds3
+          ~/.cache/bazel-dds3
+        key: dds3-wheel-v5-${{ runner.os }}-py314-${{ hashFiles('dds_training/bootstrap_linux.sh') }}
+        restore-keys: dds3-wheel-v5-${{ runner.os }}-py314-
+
+    - name: Bootstrap pinned local DDS3
+      shell: bash
+      run: DDS_RUN_PREFLIGHT=0 bash dds_training/bootstrap_linux.sh
+
+    - name: Save verified DDS3 cache under exact key
+      if: ${{ steps.dds-cache.outputs.cache-hit != 'true' }}
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: |
+          dds_training/.wheel-cache/dds3
+          ~/.cache/bazel-dds3
+        key: dds3-wheel-v5-${{ runner.os }}-py314-${{ hashFiles('dds_training/bootstrap_linux.sh') }}
+
+    - name: Record shard launch intent
+      shell: bash
+      working-directory: dds_training
+      run: |
+        python - <<'PY'
+        import json
+        from pathlib import Path
+        Path('work/pilot/current_shard_runtime.json').write_text(json.dumps({'schema':'dds-main-shard-runtime-v1','shard_id':'${{ inputs.shard-id }}','status':'not_started','workflow_run_id':'${{ github.run_id }}','workflow_run_attempt':'${{ github.run_attempt }}','commit_sha':'${{ github.sha }}','expected_prior_results':int('${{ inputs.expected-prior-results }}'),'expected_total_results':int('${{ inputs.expected-total-results }}')},indent=2)+'\n')
+        PY
+
+    - name: Authorize and evaluate exactly one TRAIN shard
+      shell: bash
+      working-directory: dds_training
+      run: |
+        set -euo pipefail
+        test "$GITHUB_EVENT_NAME" = workflow_dispatch; test "$GITHUB_REF_NAME" = main; test "$GITHUB_SHA" = "${{ inputs.expected-commit }}"
+        shard='${{ inputs.shard-id }}'; manifest="work/pilot/main_shards/${shard}.jsonl"; test -s "$manifest"
+        nonce="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+        receipt="/tmp/${shard}-receipt.json"; consume="/tmp/${shard}-consumed"; mkdir -p "$consume"
+        python launch_authorization.py issue --out "$receipt" --scope main_train --manifest "$manifest" --nonce "$nonce" --approval-phrase '${{ inputs.approval-phrase }}' --expected-commit '${{ inputs.expected-commit }}'
+        python authorized_run_stage.py --receipt "$receipt" --nonce "$nonce" --scope main_train --manifest "$manifest" --consume-dir "$consume" --stage main --work work/pilot --tasks-file "main_shards/${shard}.jsonl" --predictions work/pilot/locked_predictions_main_train_adaptive.jsonl --run-id "main-${shard}-${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}" --checkpoint-every 100 --snapshot-every 500 --milestone-every 2000 --no-generate-followups | tee "work/pilot/${shard}-evaluate.log"
+
+    - name: Verify shard completion and audit database
+      shell: bash
+      working-directory: dds_training
+      run: |
+        set -euo pipefail
+        source .venv/bin/activate
+        shard='${{ inputs.shard-id }}'
+        python run_stage.py audit --work work/pilot --run-id "main-${shard}-audit-${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}" --fail-on-error | tee "work/pilot/${shard}-audit.json"
+        python - <<'PY'
+        import hashlib,json,sqlite3
+        from pathlib import Path
+        shard_id='${{ inputs.shard-id }}'; expected=int('${{ inputs.expected-total-results }}'); root=Path('work/pilot')
+        plan=json.loads((root/'shard_plan_main.json').read_text()); shard=next(x for x in plan['shards'] if x['shard_id']==shard_id); shard_ids=set(map(str,shard['task_ids']))
+        db=sqlite3.connect(root/'training.sqlite3'); result_ids={r[0] for r in db.execute('select task_id from dds_results')}
+        assert len(result_ids)==expected,(len(result_ids),expected); assert shard_ids<=result_ids and len(shard_ids)==2000
+        tasks=[json.loads(x) for x in (root/'blind_tasks_crossfit_main.jsonl').read_text().splitlines() if x.strip()]; holdout={str(t['task_id']) for t in tasks if t.get('split') in {'validation','sealed_test'}}; assert not (result_ids & holdout)
+        run_id=f"main-{shard_id}-${{ github.run_id }}-a${{ github.run_attempt }}"; row=db.execute('select status from runs where run_id=?',(run_id,)).fetchone(); assert row and row[0]=='completed',row
+        summary={'schema':'dds-main-shard-runtime-v1','shard_id':shard_id,'status':'completed','task_count':2000,'resume_key':shard['resume_key'],'task_ids_sha256':shard['task_ids_sha256'],'total_dds_results':expected,'holdout_closed':True,'run_id':run_id,'workflow_run_id':'${{ github.run_id }}','workflow_run_attempt':'${{ github.run_attempt }}','commit_sha':'${{ github.sha }}','prediction_sha256':hashlib.sha256((root/'locked_predictions_main_train_adaptive.jsonl').read_bytes()).hexdigest()}
+        (root/'current_shard_runtime.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2)+'\n'); (root/f'{shard_id}-summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2)+'\n'); print(json.dumps(summary,indent=2))
+        PY
+
+    - name: Package restartable shard state
+      if: ${{ always() }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        shard='${{ inputs.shard-id }}'; mkdir -p /tmp/dds-shard-output
+        if [ -d dds_training/work/pilot ]; then
+          archive="/tmp/dds-shard-output/dds-main-train-${shard}-state.tgz"; tar -czf "$archive" -C dds_training/work pilot
+          (cd /tmp/dds-shard-output && sha256sum "$(basename "$archive")" > "dds-main-train-${shard}-state.sha256")
+          [ ! -f "dds_training/work/pilot/${shard}-summary.json" ] || cp "dds_training/work/pilot/${shard}-summary.json" /tmp/dds-shard-output/
+          [ ! -f dds_training/work/pilot/current_shard_runtime.json ] || cp dds_training/work/pilot/current_shard_runtime.json /tmp/dds-shard-output/
+        fi
+
+    - name: Upload this shard durable state
+      if: ${{ always() }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      with:
+        name: dds-main-train-${{ inputs.shard-id }}-${{ github.run_id }}-a${{ github.run_attempt }}
+        path: /tmp/dds-shard-output/
+        if-no-files-found: error
+        retention-days: 90
