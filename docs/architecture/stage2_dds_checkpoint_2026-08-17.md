@@ -33,9 +33,9 @@ This is a content identity for the engine regression, not a tournament board num
 
 ## First experiment and failure intelligence
 
-The first live Stage-2 run deliberately checked several context/TT hypotheses. It failed because one hypothesis was too strong and was not the actual production requirement: a sibling `SolverContext` constructed after the solve did not expose the same TT pointer.
+The first live Stage-2 run (`32003749573`) deliberately checked several context/TT hypotheses. It failed because one hypothesis was too strong and was not the actual production requirement: a sibling `SolverContext` constructed after the solve did not expose the same TT pointer.
 
-Important: the failed experiment was retained as useful negative knowledge rather than discarded. In that same failed run the actual production invariants were already visible:
+The failed experiment was retained as negative knowledge. In that same run the actual production invariants were already visible:
 
 - TT was lazy before the first solve;
 - the first solve created a non-null TT;
@@ -43,7 +43,7 @@ Important: the failed experiment was retained as useful negative knowledge rathe
 - semantic `FutureTricks` result was identical;
 - searched nodes changed from `168200` on the first solve to `109` on the second solve.
 
-Therefore the revised gate removed the unrelated sibling-context requirement and strengthened the direct same-context requirement instead.
+The revised gate removed the unrelated sibling-context requirement and strengthened the direct same-context requirement instead.
 
 ## Final Stage-2 gate
 
@@ -77,12 +77,21 @@ Final PR #111 Stage-2 context run:
 - fresh-process replica 1 nodes: `168200 -> 109`
 - fresh-process replica 2 nodes: `168200 -> 109`
 
-The same candidate commit also passed the existing independent DDS golden smoke:
+The same candidate commit also passed the independent DDS golden smoke:
 
-- GitHub Actions run: `32003880896`
+- run `32003880896`
 - conclusion: `success`
 
-This keeps legacy golden-output reproducibility and the new modern-context reuse gate independent.
+## Post-merge confirmation
+
+Merged Stage-2 commit: `1d9fb513a6ec1f9fc454195a330482591a7fd0e5`.
+
+Main-branch confirmation after merge:
+
+- DDS Stage-2 Context Gate run `32004015525`: `success`;
+- independent DDS Golden Smoke run `32004015430`: `success`.
+
+Thus the result is not only PR-merge-ref evidence; the same two gates pass on the merged main commit.
 
 ## Evidence interpretation
 
@@ -100,7 +109,7 @@ Deterministic replay/context-reuse gate: **PASS**.
 
 `dds_core` remains `TESTED`, not `OPERATIONAL`, because production orchestration, corpus-scale persistence/checkpointing and repeated operational runs are separate gates.
 
-Mass DDS training should no longer be blocked by the deterministic engine gate itself, but must still start only through the previously defined staged corpus process with checkpoints and stage reports. The first mass stage remains the 10,000-deal pilot/debug corpus, not the full corpus.
+Mass DDS training is no longer blocked by the deterministic engine gate itself, but it must still start only through the staged corpus process with checkpoints and stage reports. The first mass stage remains the 10,000-deal pilot/debug corpus, not the full corpus.
 
 ## Next ordered work
 
