@@ -1,10 +1,8 @@
 {
   "schema": "dds-test-manifest-v1",
-  "description": "Canonical test inventory for DDS learning v2.3. Every self-test and every production Python module must be listed explicitly.",
+  "description": "Canonical test inventory for DDS learning v2.3 hardening. Every self-test and every production Python module must be listed explicitly.",
   "default_timeout_seconds": 60,
-  "default_hash_seeds": [
-    0
-  ],
+  "default_hash_seeds": [0],
   "ignored_selftests": {},
   "tests": [
     {
@@ -18,8 +16,36 @@
       "id": "test-architecture",
       "path": "test_architecture_selftest.py",
       "suite": "fast",
-      "timeout_seconds": 15,
-      "description": "Manifest completeness, workflow safety and network isolation."
+      "timeout_seconds": 20,
+      "description": "Manifest completeness, workflow safety, pinning and network isolation."
+    },
+    {
+      "id": "source-integrity",
+      "path": "source_integrity_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "description": "Tracked, untracked and ignored repository residue detection."
+    },
+    {
+      "id": "run-authorization",
+      "path": "run_authorization_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "description": "Expiring data-bound approval, sealed permission and solver-entry guard."
+    },
+    {
+      "id": "baseline-predictor",
+      "path": "baseline_predictor_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "description": "Deterministic non-DDS baseline prediction and split filtering."
+    },
+    {
+      "id": "adaptive-predictor",
+      "path": "adaptive_predictor_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "description": "TRAIN-only adaptive model construction and blind validation inference."
     },
     {
       "id": "algorithm-review-v23",
@@ -61,10 +87,7 @@
       "path": "crossfit_selftest.py",
       "suite": "fast",
       "timeout_seconds": 20,
-      "hash_seeds": [
-        0,
-        991
-      ],
+      "hash_seeds": [0, 991],
       "description": "Family-safe folds and leakage detection under two hash seeds."
     },
     {
@@ -128,21 +151,15 @@
       "path": "run_stage_v23_guard_selftest.py",
       "suite": "fast",
       "timeout_seconds": 30,
-      "hash_seeds": [
-        0,
-        991
-      ],
-      "description": "Fail-closed Stage 2 double-confirmation guard."
+      "hash_seeds": [0, 991],
+      "description": "Legacy compatibility launcher remains fail-closed."
     },
     {
       "id": "shard-plan",
       "path": "shard_plan_selftest.py",
       "suite": "fast",
       "timeout_seconds": 20,
-      "hash_seeds": [
-        0,
-        991
-      ],
+      "hash_seeds": [0, 991],
       "description": "Deterministic family-preserving restartable shards."
     },
     {
@@ -157,10 +174,7 @@
       "path": "stage2_readiness_selftest.py",
       "suite": "fast",
       "timeout_seconds": 60,
-      "hash_seeds": [
-        0,
-        991
-      ],
+      "hash_seeds": [0, 991],
       "description": "Independent main/holdout/skill-claim readiness gates."
     },
     {
@@ -182,11 +196,15 @@
       "path": "v23_runtime_selftest.py",
       "suite": "fast",
       "timeout_seconds": 60,
-      "hash_seeds": [
-        0,
-        991
-      ],
+      "hash_seeds": [0, 991],
       "description": "Compatibility runtime: partial positions, lineage, calibration, shards and negative controls."
+    },
+    {
+      "id": "preflight",
+      "path": "preflight_selftest.py",
+      "suite": "dds",
+      "timeout_seconds": 180,
+      "description": "Real DDS batch boundary, context reuse and technical preflight."
     },
     {
       "id": "dds-play",
@@ -208,158 +226,67 @@
       "suite": "dds",
       "timeout_seconds": 240,
       "description": "DDS rotation/suit invariants and complete perturbations."
+    },
+    {
+      "id": "independent-crosscheck",
+      "path": "independent_crosscheck_selftest.py",
+      "suite": "dds",
+      "timeout_seconds": 180,
+      "description": "Pinned independent solver agrees with DDS3 on all 20 DD cells."
     }
   ],
   "coverage": {
-    "max_waivers": 6,
-    "infrastructure": [
-      "test_runner.py"
-    ],
+    "max_waivers": 2,
+    "infrastructure": ["test_runner.py"],
     "module_tests": {
-      "algorithm_review_v23.py": [
-        "algorithm-review-v23"
-      ],
-      "audit.py": [
-        "experience-memory",
-        "stage-gate"
-      ],
-      "checkpointing.py": [
-        "experience-memory"
-      ],
-      "compare_predictors.py": [
-        "methodology-v22"
-      ],
-      "confidence_calibration.py": [
-        "confidence-calibration"
-      ],
-      "config.py": [
-        "stage2-readiness",
-        "stage-scope"
-      ],
-      "continuation_eval.py": [
-        "continuation-eval"
-      ],
-      "continuation_tasks.py": [
-        "continuation-tasks",
-        "continuation-eval"
-      ],
-      "corpus.py": [
-        "corpus"
-      ],
-      "counterexample_candidates.py": [
-        "counterexample-candidates"
-      ],
-      "crossfit.py": [
-        "crossfit",
-        "stage2-readiness"
-      ],
-      "dds_engine.py": [
-        "variant-dds"
-      ],
-      "dds_play.py": [
-        "dds-play",
-        "continuation-eval"
-      ],
-      "experience_events.py": [
-        "experience-memory"
-      ],
-      "human_view.py": [
-        "human-view"
-      ],
-      "investigations.py": [
-        "investigations",
-        "stage-gate"
-      ],
-      "learning.py": [
-        "experience-memory",
-        "regression-links",
-        "methodology-v22"
-      ],
-      "line_predictor.py": [
-        "line-predictor",
-        "stage2-readiness"
-      ],
-      "methodology_audit.py": [
-        "methodology-v22",
-        "stage-gate"
-      ],
-      "playline.py": [
-        "playline",
-        "human-view",
-        "continuation-tasks",
-        "dds-play"
-      ],
-      "prepare_stage2.py": [
-        "stage2-readiness"
-      ],
-      "regression_links.py": [
-        "regression-links",
-        "stage-gate"
-      ],
-      "resolve_investigations_auto.py": [
-        "investigations"
-      ],
-      "rule_synthesis.py": [
-        "rule-synthesis"
-      ],
-      "run_provenance.py": [
-        "experience-memory",
-        "stage-gate"
-      ],
-      "run_stage.py": [
-        "corpus",
-        "experience-memory",
-        "stage-gate"
-      ],
-      "run_stage_v23.py": [
-        "v23-launch-guard"
-      ],
-      "shard_plan.py": [
-        "shard-plan",
-        "stage2-readiness"
-      ],
-      "skill_versions.py": [
-        "skill-versions",
-        "experience-memory"
-      ],
-      "stage2_readiness.py": [
-        "stage2-readiness"
-      ],
-      "stage_gate.py": [
-        "stage-gate"
-      ],
-      "stage_scope.py": [
-        "stage-scope",
-        "stage2-readiness"
-      ],
-      "storage.py": [
-        "experience-memory",
-        "regression-links",
-        "stage-gate"
-      ],
-      "tasks.py": [
-        "corpus",
-        "methodology-v22"
-      ],
-      "v23_core.py": [
-        "v23-runtime"
-      ],
-      "v23_runtime.py": [
-        "v23-runtime",
-        "v23-launch-guard"
-      ],
-      "variants.py": [
-        "methodology-v22",
-        "variant-dds"
-      ]
+      "adaptive_predictor.py": ["adaptive-predictor"],
+      "algorithm_review_v23.py": ["algorithm-review-v23"],
+      "audit.py": ["experience-memory", "stage-gate"],
+      "authorized_run_stage.py": ["run-authorization"],
+      "baseline_predictor.py": ["baseline-predictor"],
+      "checkpointing.py": ["experience-memory", "run-authorization"],
+      "compare_predictors.py": ["methodology-v22"],
+      "confidence_calibration.py": ["confidence-calibration"],
+      "config.py": ["stage2-readiness", "stage-scope", "run-authorization"],
+      "continuation_eval.py": ["continuation-eval"],
+      "continuation_tasks.py": ["continuation-tasks", "continuation-eval"],
+      "corpus.py": ["corpus", "preflight", "independent-crosscheck"],
+      "counterexample_candidates.py": ["counterexample-candidates"],
+      "crossfit.py": ["crossfit", "stage2-readiness"],
+      "dds_engine.py": ["run-authorization", "preflight", "variant-dds", "independent-crosscheck"],
+      "dds_play.py": ["dds-play", "continuation-eval"],
+      "experience_events.py": ["experience-memory"],
+      "human_view.py": ["human-view"],
+      "independent_crosscheck.py": ["independent-crosscheck"],
+      "investigations.py": ["investigations", "stage-gate"],
+      "learning.py": ["experience-memory", "regression-links", "methodology-v22"],
+      "line_predictor.py": ["line-predictor", "stage2-readiness"],
+      "methodology_audit.py": ["methodology-v22", "stage-gate"],
+      "playline.py": ["playline", "human-view", "continuation-tasks", "dds-play"],
+      "preflight.py": ["preflight"],
+      "prepare_stage2.py": ["stage2-readiness"],
+      "regression_links.py": ["regression-links", "stage-gate"],
+      "resolve_investigations_auto.py": ["investigations"],
+      "rule_synthesis.py": ["rule-synthesis"],
+      "run_authorization.py": ["run-authorization"],
+      "run_provenance.py": ["experience-memory", "stage-gate"],
+      "run_stage.py": ["corpus", "experience-memory", "stage-gate", "run-authorization"],
+      "run_stage_v23.py": ["v23-launch-guard"],
+      "shard_plan.py": ["shard-plan", "stage2-readiness"],
+      "skill_versions.py": ["skill-versions", "experience-memory"],
+      "source_integrity.py": ["source-integrity"],
+      "stage2_readiness.py": ["stage2-readiness"],
+      "stage_gate.py": ["stage-gate"],
+      "stage_scope.py": ["stage-scope", "stage2-readiness"],
+      "storage.py": ["experience-memory", "regression-links", "stage-gate"],
+      "tasks.py": ["corpus", "methodology-v22"],
+      "v23_core.py": ["v23-runtime"],
+      "v23_runtime.py": ["v23-runtime", "v23-launch-guard"],
+      "variants.py": ["methodology-v22", "variant-dds"]
     },
     "waivers": {
-      "adaptive_predictor.py": "Legacy pilot predictor is exercised by the archived pilot workflow; a direct unit contract must be added before this waiver can be removed.",
-      "baseline_predictor.py": "Legacy pilot baseline is exercised by the archived pilot workflow; direct unit coverage is still missing.",
-      "independent_crosscheck.py": "Requires the separately compiled independent bridge-solver and is executed in the heavy DDS workflow, outside the Python manifest runner.",
-      "pilot_report_ru.py": "Requires a completed pilot database fixture; covered by the preserved pilot finish workflow, not the fast suite.",
-      "preflight.py": "Executed by bootstrap_linux.sh against a built DDS3 wheel in the heavy workflow.",
-      "report.py": "Requires a completed stage database/report fixture; direct isolated report tests are still pending."
+      "pilot_report_ru.py": "expires=2026-09-30; requires a completed pilot database fixture; report fixture test is scheduled before the next report revision.",
+      "report.py": "expires=2026-09-30; requires a completed stage database fixture; direct isolated report rendering test is scheduled before the next report revision."
     }
   }
 }
