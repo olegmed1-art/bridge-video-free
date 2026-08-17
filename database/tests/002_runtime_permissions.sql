@@ -13,75 +13,61 @@ BEGIN
           INTO r
           FROM pg_roles
          WHERE rolname = role_name;
-        IF NOT FOUND THEN
-            RAISE EXCEPTION 'runtime role missing: %', role_name;
-        END IF;
+        IF NOT FOUND THEN RAISE EXCEPTION 'runtime role missing: %', role_name; END IF;
         IF r.rolcanlogin OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication THEN
             RAISE EXCEPTION 'runtime role has unsafe role attributes: %', role_name;
         END IF;
-        IF NOT has_schema_privilege(role_name, 'public', 'USAGE') THEN
+        IF NOT has_schema_privilege(role_name,'public','USAGE') THEN
             RAISE EXCEPTION 'runtime role lacks public schema USAGE: %', role_name;
         END IF;
-        IF has_schema_privilege(role_name, 'public', 'CREATE') THEN
+        IF has_schema_privilege(role_name,'public','CREATE') THEN
             RAISE EXCEPTION 'runtime role unexpectedly has persistent schema CREATE: %', role_name;
         END IF;
     END LOOP;
 
     IF NOT EXISTS (
-        SELECT 1
-          FROM pg_auth_members m
-          JOIN pg_roles parent ON parent.oid = m.roleid
-          JOIN pg_roles child ON child.oid = m.member
-         WHERE parent.rolname='bridge_school_reader'
-           AND child.rolname='bridge_school_app'
-    ) THEN
-        RAISE EXCEPTION 'bridge_school_app must inherit bridge_school_reader';
-    END IF;
+        SELECT 1 FROM pg_auth_members m
+        JOIN pg_roles parent ON parent.oid=m.roleid
+        JOIN pg_roles child ON child.oid=m.member
+        WHERE parent.rolname='bridge_school_reader' AND child.rolname='bridge_school_app'
+    ) THEN RAISE EXCEPTION 'bridge_school_app must inherit bridge_school_reader'; END IF;
 
     IF NOT EXISTS (
-        SELECT 1
-          FROM pg_auth_members m
-          JOIN pg_roles parent ON parent.oid = m.roleid
-          JOIN pg_roles child ON child.oid = m.member
-         WHERE parent.rolname='bridge_school_app'
-           AND child.rolname='bridge_school_worker'
-    ) THEN
-        RAISE EXCEPTION 'bridge_school_worker must inherit bridge_school_app';
-    END IF;
+        SELECT 1 FROM pg_auth_members m
+        JOIN pg_roles parent ON parent.oid=m.roleid
+        JOIN pg_roles child ON child.oid=m.member
+        WHERE parent.rolname='bridge_school_app' AND child.rolname='bridge_school_worker'
+    ) THEN RAISE EXCEPTION 'bridge_school_worker must inherit bridge_school_app'; END IF;
 
     -- Reader can inspect ordinary persistent tables. Authentication/authorization,
-    -- signing secrets, actor audit, source ACL/rights observations and recovery
-    -- checkpoint evidence are explicit protected surfaces and must not leak through the
-    -- broad reader role.
+    -- signing-secret, source-rights/recovery evidence and unverified import PII are
+    -- explicit protected surfaces.
     FOR r IN
-        SELECT format('%I.%I', n.nspname, c.relname) AS table_name
-          FROM pg_class c
-          JOIN pg_namespace n ON n.oid=c.relnamespace
-         WHERE n.nspname='public'
-           AND c.relkind IN ('r','p')
-           AND c.relname NOT IN (
-               'auth_identity',
-               'person_role_assignment',
-               'person_access_grant',
-               'audit_event',
-               'actor_context_signing_secret',
-               'source_rights_snapshot',
-               'recovery_checkpoint',
-               'recovery_verification'
-           )
+        SELECT format('%I.%I',n.nspname,c.relname) AS table_name
+        FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND c.relkind IN ('r','p')
+          AND c.relname NOT IN (
+              'auth_identity','person_role_assignment','person_access_grant','audit_event',
+              'actor_context_signing_secret','source_rights_snapshot',
+              'recovery_checkpoint','recovery_verification',
+              'identity_import_batch','identity_import_batch_state_event','identity_import_item',
+              'identity_import_item_state_event','identity_import_action'
+          )
     LOOP
-        IF NOT has_table_privilege('bridge_school_reader', r.table_name, 'SELECT') THEN
-            RAISE EXCEPTION 'reader lacks SELECT on %', r.table_name;
+        IF NOT has_table_privilege('bridge_school_reader',r.table_name,'SELECT') THEN
+            RAISE EXCEPTION 'reader lacks SELECT on %',r.table_name;
         END IF;
     END LOOP;
 
     FOREACH required_table IN ARRAY ARRAY[
         'auth_identity','person_role_assignment','person_access_grant','audit_event',
         'actor_context_signing_secret','source_rights_snapshot',
-        'recovery_checkpoint','recovery_verification'
+        'recovery_checkpoint','recovery_verification',
+        'identity_import_batch','identity_import_batch_state_event','identity_import_item',
+        'identity_import_item_state_event','identity_import_action'
     ] LOOP
-        IF has_table_privilege('bridge_school_reader', required_table, 'SELECT') THEN
-            RAISE EXCEPTION 'reader unexpectedly has SELECT on protected table %', required_table;
+        IF has_table_privilege('bridge_school_reader',required_table,'SELECT') THEN
+            RAISE EXCEPTION 'reader unexpectedly has SELECT on protected table %',required_table;
         END IF;
     END LOOP;
 
@@ -96,12 +82,12 @@ BEGIN
         'person','student','learning_interaction','deal','decision',
         'agreement_set','agreement_version','agreement_activation'
     ] LOOP
-        IF NOT has_table_privilege('bridge_school_app', required_table, 'INSERT')
-           OR NOT has_table_privilege('bridge_school_app', required_table, 'UPDATE') THEN
-            RAISE EXCEPTION 'app lacks expected INSERT/UPDATE on %', required_table;
+        IF NOT has_table_privilege('bridge_school_app',required_table,'INSERT')
+           OR NOT has_table_privilege('bridge_school_app',required_table,'UPDATE') THEN
+            RAISE EXCEPTION 'app lacks expected INSERT/UPDATE on %',required_table;
         END IF;
-        IF has_table_privilege('bridge_school_app', required_table, 'DELETE') THEN
-            RAISE EXCEPTION 'app unexpectedly has DELETE on %', required_table;
+        IF has_table_privilege('bridge_school_app',required_table,'DELETE') THEN
+            RAISE EXCEPTION 'app unexpectedly has DELETE on %',required_table;
         END IF;
     END LOOP;
 
@@ -113,31 +99,29 @@ BEGIN
 
     -- Immutable factual/projection streams are INSERT-only for the worker.
     FOREACH required_table IN ARRAY ARRAY['source_observation','domain_event','student_profile_snapshot'] LOOP
-        IF NOT has_table_privilege('bridge_school_worker', required_table, 'INSERT') THEN
-            RAISE EXCEPTION 'worker lacks expected INSERT on append-only table %', required_table;
+        IF NOT has_table_privilege('bridge_school_worker',required_table,'INSERT') THEN
+            RAISE EXCEPTION 'worker lacks expected INSERT on append-only table %',required_table;
         END IF;
-        IF has_table_privilege('bridge_school_worker', required_table, 'UPDATE')
-           OR has_table_privilege('bridge_school_worker', required_table, 'DELETE') THEN
-            RAISE EXCEPTION 'worker can mutate append-only table %', required_table;
+        IF has_table_privilege('bridge_school_worker',required_table,'UPDATE')
+           OR has_table_privilege('bridge_school_worker',required_table,'DELETE') THEN
+            RAISE EXCEPTION 'worker can mutate append-only table %',required_table;
         END IF;
     END LOOP;
 
-    -- Other worker-managed operational state may be inserted/updated but still not deleted.
+    -- Other worker-managed operational state may be inserted/updated but not deleted.
     FOREACH required_table IN ARRAY ARRAY[
-        'outbox_message','ingestion_run','ingestion_item',
-        'analysis_run','output_publication','projection_run',
-        'dependency_edge','version_relation'
+        'outbox_message','ingestion_run','ingestion_item','analysis_run','output_publication',
+        'projection_run','dependency_edge','version_relation'
     ] LOOP
-        IF NOT has_table_privilege('bridge_school_worker', required_table, 'INSERT')
-           OR NOT has_table_privilege('bridge_school_worker', required_table, 'UPDATE') THEN
-            RAISE EXCEPTION 'worker lacks expected INSERT/UPDATE on %', required_table;
+        IF NOT has_table_privilege('bridge_school_worker',required_table,'INSERT')
+           OR NOT has_table_privilege('bridge_school_worker',required_table,'UPDATE') THEN
+            RAISE EXCEPTION 'worker lacks expected INSERT/UPDATE on %',required_table;
         END IF;
-        IF has_table_privilege('bridge_school_worker', required_table, 'DELETE') THEN
-            RAISE EXCEPTION 'worker unexpectedly has DELETE on %', required_table;
+        IF has_table_privilege('bridge_school_worker',required_table,'DELETE') THEN
+            RAISE EXCEPTION 'worker unexpectedly has DELETE on %',required_table;
         END IF;
     END LOOP;
 
-    -- Invalidation and recompute lifecycle are guarded operations, not direct table writes.
     IF has_table_privilege('bridge_school_worker','invalidation_record','INSERT')
        OR has_table_privilege('bridge_school_worker','invalidation_record','UPDATE')
        OR has_table_privilege('bridge_school_worker','invalidation_record','DELETE') THEN
@@ -150,7 +134,6 @@ BEGIN
         RAISE EXCEPTION 'worker crossed admin/configuration write boundary';
     END IF;
 
-    -- Only guarded event publication/invalidation entry points are callable by the worker.
     IF NOT has_function_privilege('bridge_school_worker','publish_outbox_event(uuid)','EXECUTE') THEN
         RAISE EXCEPTION 'worker lacks guarded publish_outbox_event privilege';
     END IF;
