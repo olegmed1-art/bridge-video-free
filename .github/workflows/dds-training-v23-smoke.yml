@@ -6,12 +6,16 @@ on:
       - 'dds_training/**'
       - '.github/workflows/dds-training-v23-smoke.yml'
       - '.github/workflows/dds-training-local-smoke.yml'
+      - '.github/workflows/dds-training-pilot-start.yml'
+      - '.github/workflows/dds-training-pilot-finish.yml'
   push:
     branches: [dds-training-local]
     paths:
       - 'dds_training/**'
       - '.github/workflows/dds-training-v23-smoke.yml'
       - '.github/workflows/dds-training-local-smoke.yml'
+      - '.github/workflows/dds-training-pilot-start.yml'
+      - '.github/workflows/dds-training-pilot-finish.yml'
   workflow_dispatch:
 
 concurrency:
@@ -26,15 +30,23 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
 
       - name: Compile DDS Python modules
         working-directory: dds_training
         run: python -m compileall -q .
+
+      - name: Run fail-closed test-runner guard directly
+        working-directory: dds_training
+        run: python test_runner_selftest.py
+
+      - name: Run fail-closed architecture guard directly
+        working-directory: dds_training
+        run: python test_architecture_selftest.py
 
       - name: Validate canonical test inventory and coverage contract
         working-directory: dds_training
@@ -53,7 +65,7 @@ jobs:
 
       - name: Upload machine-readable fast test report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dds-test-report-fast-${{ github.run_id }}
           path: /tmp/dds-test-report-fast.json
