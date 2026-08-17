@@ -21,9 +21,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
 
@@ -31,23 +31,86 @@ jobs:
         working-directory: dds_training
         run: python -m compileall -q .
 
+      - name: Run fail-closed test-runner guard directly
+        working-directory: dds_training
+        run: python test_runner_selftest.py
+
+      - name: Run fail-closed architecture guard directly
+        working-directory: dds_training
+        run: python test_architecture_selftest.py
+
       - name: Validate canonical test inventory and coverage contract
         working-directory: dds_training
         run: python test_runner.py --manifest test_matrix.json --check-only
 
-      - name: Restore cached DDS3 wheel and Bazel state
+      - name: Restore verified DDS3 wheel and Bazel state
         id: dds-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             dds_training/.wheel-cache/dds3
             ~/.cache/bazel-dds3
-          key: dds3-wheel-v2-v3.0.0-bazel7.6.1-py314-${{ runner.os }}
+          key: dds3-wheel-v4-v3.0.0-bazel7.6.1-py314-${{ runner.os }}-preferred
           restore-keys: |
-            dds3-v3.0.0-bazel7.6.1-py314-${{ runner.os }}
+            dds3-wheel-v4-v3.0.0-bazel7.6.1-py314-${{ runner.os }}-
 
-      - name: Bootstrap local DDS3 and run technical preflight
+      - name: Bootstrap pinned local DDS3 and run technical preflight
         run: bash dds_training/bootstrap_linux.sh
+
+      - name: Record whether DDS wheel cache was rebuilt
+        id: dds-cache-state
+        run: |
+          if [ -f dds_training/.wheel-cache/dds3/.cache_rebuilt ]; then
+            echo "rebuilt=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "rebuilt=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify deterministic DDS golden preflight twice
+        working-directory: dds_training
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          python preflight.py --quick > /tmp/dds-preflight-run-1.json
+          python preflight.py --quick > /tmp/dds-preflight-run-2.json
+          python - <<'PY'
+          from __future__ import annotations
+
+          import hashlib
+          import json
+          from pathlib import Path
+
+          paths = [
+              Path('/tmp/dds-preflight-run-1.json'),
+              Path('/tmp/dds-preflight-run-2.json'),
+          ]
+          payloads = [json.loads(path.read_text(encoding='utf-8')) for path in paths]
+          canonical = [
+              json.dumps(
+                  payload,
+                  ensure_ascii=False,
+                  sort_keys=True,
+                  separators=(',', ':'),
+              ).encode('utf-8')
+              for payload in payloads
+          ]
+          hashes = [hashlib.sha256(item).hexdigest() for item in canonical]
+          assert canonical[0] == canonical[1], (payloads[0], payloads[1])
+          assert hashes[0] == hashes[1], hashes
+          evidence = {
+              'schema': 'dds-golden-repeatability-v1',
+              'repetitions': 2,
+              'identical_canonical_json': True,
+              'canonical_sha256': hashes[0],
+              'run_sha256': hashes,
+              'result': payloads[0],
+          }
+          Path('/tmp/dds-preflight-repeatability.json').write_text(
+              json.dumps(evidence, ensure_ascii=False, indent=2) + '\n',
+              encoding='utf-8',
+          )
+          print(json.dumps(evidence, ensure_ascii=False, indent=2))
+          PY
 
       - name: Run isolated DDS-backed test suite
         working-directory: dds_training
@@ -196,21 +259,23 @@ jobs:
 
       - name: Upload machine-readable DDS integration evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dds-test-report-heavy-${{ github.run_id }}
           path: |
             /tmp/dds-test-report-dds.json
             /tmp/dds-independent-crosscheck.json
+            /tmp/dds-preflight-repeatability.json
+            dds_training/.wheel-cache/dds3/build_provenance.json
             /tmp/dds-pilot-prepared/stage2_readiness.json
           if-no-files-found: warn
           retention-days: 14
 
-      - name: Save cached DDS3 wheel and Bazel state
-        if: always() && steps.dds-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+      - name: Save rebuilt verified DDS3 wheel and Bazel state
+        if: always() && steps.dds-cache-state.outputs.rebuilt == 'true'
+        uses: actions/cache/save@v6
         with:
           path: |
             dds_training/.wheel-cache/dds3
             ~/.cache/bazel-dds3
-          key: dds3-wheel-v2-v3.0.0-bazel7.6.1-py314-${{ runner.os }}
+          key: dds3-wheel-v4-v3.0.0-bazel7.6.1-py314-${{ runner.os }}-${{ github.run_id }}
