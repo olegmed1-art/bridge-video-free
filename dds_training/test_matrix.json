@@ -1,0 +1,479 @@
+{
+  "schema": "dds-test-manifest-v1",
+  "description": "Canonical test inventory for DDS learning v2.3. Every self-test and every production Python module must be listed explicitly.",
+  "default_timeout_seconds": 60,
+  "default_hash_seeds": [
+    0
+  ],
+  "ignored_selftests": {},
+  "tests": [
+    {
+      "id": "test-runner",
+      "path": "test_runner_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 15,
+      "description": "Runner failure isolation, timeout, mutation and manifest contract."
+    },
+    {
+      "id": "test-architecture",
+      "path": "test_architecture_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 15,
+      "description": "Manifest completeness, workflow safety and network isolation."
+    },
+    {
+      "id": "coverage-report",
+      "path": "coverage_report_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "description": "Runtime line/arc coverage aggregation, minimum-threshold enforcement and fail-closed missing-fragment handling."
+    },
+    {
+      "id": "coverage-runtime",
+      "path": "coverage_runtime_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "description": "Dependency-free runtime line/arc collector activation and atomic fragment persistence."
+    },
+    {
+      "id": "launch-authorization",
+      "path": "launch_authorization_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "description": "One-time launch receipt binding, expiry/nonce/actor/commit/manifest checks and authorized wrapper command construction."
+    },
+    {
+      "id": "predictor-pipeline",
+      "path": "predictor_pipeline_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 90,
+      "description": "Direct baseline and adaptive predictor train/predict pipeline with locked predictions and no DDS call during prediction."
+    },
+    {
+      "id": "repo-clean",
+      "path": "repo_clean_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "description": "Tracked/untracked repository contamination detection with explicit runtime-directory allowlist."
+    },
+    {
+      "id": "sitecustomize-guard",
+      "path": "sitecustomize_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "description": "Pre-import mass-evaluation launch guard rejects missing/fake receipts and accepts a consumed commit-bound marker."
+    },
+    {
+      "id": "supply-chain",
+      "path": "supply_chain_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "description": "Pinned DDS/Bazelisk/wheel provenance and full-SHA GitHub Actions dependency contract."
+    },
+    {
+      "id": "algorithm-review-v23",
+      "path": "algorithm_review_v23_regression.py",
+      "suite": "fast",
+      "timeout_seconds": 15,
+      "description": "Evidence-driven post-stage review and no automatic mutation."
+    },
+    {
+      "id": "confidence-calibration",
+      "path": "confidence_calibration_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "description": "OOF calibration monotonicity and abstention."
+    },
+    {
+      "id": "continuation-tasks",
+      "path": "continuation_tasks_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "description": "Declarer/defense mid-play task construction."
+    },
+    {
+      "id": "corpus",
+      "path": "corpus_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 90,
+      "description": "Deterministic pilot-to-main corpus expansion and input guards."
+    },
+    {
+      "id": "counterexample-candidates",
+      "path": "counterexample_candidates_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "description": "Action/value flip candidate extraction."
+    },
+    {
+      "id": "crossfit",
+      "path": "crossfit_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "hash_seeds": [
+        0,
+        991
+      ],
+      "description": "Family-safe folds and leakage detection under two hash seeds."
+    },
+    {
+      "id": "experience-memory",
+      "path": "experience_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 90,
+      "description": "Append-only evidence, holdout isolation, checkpoints and skill recovery."
+    },
+    {
+      "id": "human-view",
+      "path": "human_view_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "description": "Single-dummy hidden-hand isolation."
+    },
+    {
+      "id": "investigations",
+      "path": "investigation_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "description": "Mandatory investigation lifecycle and append-only history."
+    },
+    {
+      "id": "auto-investigation-resolution",
+      "path": "resolve_investigations_auto_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "description": "Production automatic investigation resolver covers contract/defense paths without inventing card-level evidence."
+    },
+    {
+      "id": "line-predictor",
+      "path": "line_predictor_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "description": "Deterministic blind legal line prediction."
+    },
+    {
+      "id": "methodology-v22",
+      "path": "methodology_v22_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 90,
+      "description": "Evidence roles, balanced follow-ups and family model selection."
+    },
+    {
+      "id": "playline",
+      "path": "playline_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "description": "Ownership, turn order, follow-suit and trick winner validation."
+    },
+    {
+      "id": "regression-links",
+      "path": "regression_link_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "description": "Multi-skill regression provenance links."
+    },
+    {
+      "id": "rule-synthesis",
+      "path": "rule_synthesis_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "description": "Evidence-gated versioned technical rules."
+    },
+    {
+      "id": "v23-launch-guard",
+      "path": "run_stage_v23_guard_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "hash_seeds": [
+        0,
+        991
+      ],
+      "description": "Fail-closed Stage 2 double-confirmation guard."
+    },
+    {
+      "id": "shard-plan",
+      "path": "shard_plan_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "hash_seeds": [
+        0,
+        991
+      ],
+      "description": "Deterministic family-preserving restartable shards."
+    },
+    {
+      "id": "skill-versions",
+      "path": "skill_versions_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "description": "Analyzer-version skill profile preservation."
+    },
+    {
+      "id": "stage2-readiness",
+      "path": "stage2_readiness_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 60,
+      "hash_seeds": [
+        0,
+        991
+      ],
+      "description": "Independent main/holdout/skill-claim readiness gates."
+    },
+    {
+      "id": "prepare-stage2",
+      "path": "prepare_stage2_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "description": "Production Stage-2 preparation orchestration writes safety artifacts without starting mass DDS."
+    },
+    {
+      "id": "stage-gate",
+      "path": "stage_gate_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 40,
+      "description": "Completion, report and expansion gate."
+    },
+    {
+      "id": "stage-scope",
+      "path": "stage_scope_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "description": "Fresh pilot/main scopes and targeted random-base prohibition."
+    },
+    {
+      "id": "v23-runtime",
+      "path": "v23_runtime_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 60,
+      "hash_seeds": [
+        0,
+        991
+      ],
+      "description": "Compatibility runtime: partial positions, lineage, calibration, shards and negative controls."
+    },
+    {
+      "id": "preflight",
+      "path": "preflight_selftest.py",
+      "suite": "dds",
+      "timeout_seconds": 180,
+      "description": "Real DDS quick preflight validates corpus generation, batch limit enforcement and SolverContext reuse."
+    },
+    {
+      "id": "dds-play",
+      "path": "dds_play_selftest.py",
+      "suite": "dds",
+      "timeout_seconds": 180,
+      "description": "Real DDS prefix trajectory, value normalization and first error."
+    },
+    {
+      "id": "continuation-eval",
+      "path": "continuation_eval_selftest.py",
+      "suite": "dds",
+      "timeout_seconds": 180,
+      "description": "Real DDS continuation candidate scores, regret and provenance."
+    },
+    {
+      "id": "variant-dds",
+      "path": "variant_dds_selftest.py",
+      "suite": "dds",
+      "timeout_seconds": 240,
+      "description": "DDS rotation/suit invariants and complete perturbations."
+    }
+  ],
+  "coverage": {
+    "max_waivers": 6,
+    "infrastructure": [
+      "test_runner.py"
+    ],
+    "module_tests": {
+      "adaptive_predictor.py": [
+        "predictor-pipeline"
+      ],
+      "algorithm_review_v23.py": [
+        "algorithm-review-v23"
+      ],
+      "audit.py": [
+        "experience-memory",
+        "stage-gate"
+      ],
+      "authorized_run_stage.py": [
+        "launch-authorization"
+      ],
+      "baseline_predictor.py": [
+        "predictor-pipeline"
+      ],
+      "checkpointing.py": [
+        "experience-memory"
+      ],
+      "compare_predictors.py": [
+        "methodology-v22"
+      ],
+      "confidence_calibration.py": [
+        "confidence-calibration"
+      ],
+      "config.py": [
+        "stage2-readiness",
+        "stage-scope"
+      ],
+      "continuation_eval.py": [
+        "continuation-eval"
+      ],
+      "continuation_tasks.py": [
+        "continuation-tasks",
+        "continuation-eval"
+      ],
+      "corpus.py": [
+        "corpus"
+      ],
+      "counterexample_candidates.py": [
+        "counterexample-candidates"
+      ],
+      "coverage_report.py": [
+        "coverage-report"
+      ],
+      "coverage_runtime.py": [
+        "coverage-runtime"
+      ],
+      "crossfit.py": [
+        "crossfit",
+        "stage2-readiness"
+      ],
+      "dds_engine.py": [
+        "variant-dds"
+      ],
+      "dds_play.py": [
+        "dds-play",
+        "continuation-eval"
+      ],
+      "experience_events.py": [
+        "experience-memory"
+      ],
+      "human_view.py": [
+        "human-view"
+      ],
+      "investigations.py": [
+        "investigations",
+        "stage-gate",
+        "auto-investigation-resolution"
+      ],
+      "launch_authorization.py": [
+        "launch-authorization"
+      ],
+      "learning.py": [
+        "experience-memory",
+        "regression-links",
+        "methodology-v22"
+      ],
+      "line_predictor.py": [
+        "line-predictor",
+        "stage2-readiness",
+        "prepare-stage2"
+      ],
+      "methodology_audit.py": [
+        "methodology-v22",
+        "stage-gate"
+      ],
+      "playline.py": [
+        "playline",
+        "human-view",
+        "continuation-tasks",
+        "dds-play"
+      ],
+      "preflight.py": [
+        "preflight"
+      ],
+      "prepare_stage2.py": [
+        "prepare-stage2"
+      ],
+      "regression_links.py": [
+        "regression-links",
+        "stage-gate"
+      ],
+      "repo_clean.py": [
+        "repo-clean"
+      ],
+      "resolve_investigations_auto.py": [
+        "auto-investigation-resolution"
+      ],
+      "rule_synthesis.py": [
+        "rule-synthesis"
+      ],
+      "run_provenance.py": [
+        "experience-memory",
+        "stage-gate"
+      ],
+      "run_stage.py": [
+        "corpus",
+        "experience-memory",
+        "stage-gate"
+      ],
+      "run_stage_v23.py": [
+        "v23-launch-guard"
+      ],
+      "shard_plan.py": [
+        "shard-plan",
+        "stage2-readiness",
+        "prepare-stage2"
+      ],
+      "sitecustomize.py": [
+        "sitecustomize-guard"
+      ],
+      "skill_versions.py": [
+        "skill-versions",
+        "experience-memory"
+      ],
+      "stage2_readiness.py": [
+        "stage2-readiness",
+        "prepare-stage2"
+      ],
+      "stage_gate.py": [
+        "stage-gate"
+      ],
+      "stage_scope.py": [
+        "stage-scope",
+        "stage2-readiness",
+        "prepare-stage2"
+      ],
+      "storage.py": [
+        "experience-memory",
+        "regression-links",
+        "stage-gate",
+        "predictor-pipeline",
+        "auto-investigation-resolution"
+      ],
+      "tasks.py": [
+        "corpus",
+        "methodology-v22",
+        "predictor-pipeline"
+      ],
+      "v23_core.py": [
+        "v23-runtime"
+      ],
+      "v23_runtime.py": [
+        "v23-runtime",
+        "v23-launch-guard"
+      ],
+      "variants.py": [
+        "methodology-v22",
+        "variant-dds"
+      ]
+    },
+    "runtime_coverage": {
+      "fast": {
+        "minimum_overall_percent": 20,
+        "minimum_module_percent": 1,
+        "minimum_module_execution_ratio": 0.8
+      },
+      "dds": {
+        "minimum_overall_percent": 20,
+        "minimum_module_percent": 1,
+        "minimum_module_execution_ratio": 1.0
+      }
+    },
+    "waivers": {
+      "independent_crosscheck.py": "Requires the separately compiled independent bridge-solver and is executed in the heavy DDS workflow, outside the Python manifest runner.",
+      "pilot_report_ru.py": "Requires a completed pilot database fixture; covered by the preserved pilot finish evidence, not the fast suite.",
+      "report.py": "Requires a completed stage database/report fixture; direct isolated report tests are still pending."
+    }
+  }
+}
