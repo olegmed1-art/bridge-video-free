@@ -49,16 +49,39 @@ BEGIN
         RAISE EXCEPTION 'bridge_school_worker must inherit bridge_school_app';
     END IF;
 
-    -- Reader can inspect every persistent table but cannot mutate ordinary business tables.
+    -- Reader can inspect ordinary persistent tables. Authentication/authorization,
+    -- signing secrets, actor audit, source ACL/rights observations and recovery
+    -- checkpoint evidence are explicit protected surfaces and must not leak through the
+    -- broad reader role.
     FOR r IN
         SELECT format('%I.%I', n.nspname, c.relname) AS table_name
           FROM pg_class c
           JOIN pg_namespace n ON n.oid=c.relnamespace
          WHERE n.nspname='public'
            AND c.relkind IN ('r','p')
+           AND c.relname NOT IN (
+               'auth_identity',
+               'person_role_assignment',
+               'person_access_grant',
+               'audit_event',
+               'actor_context_signing_secret',
+               'source_rights_snapshot',
+               'recovery_checkpoint',
+               'recovery_verification'
+           )
     LOOP
         IF NOT has_table_privilege('bridge_school_reader', r.table_name, 'SELECT') THEN
             RAISE EXCEPTION 'reader lacks SELECT on %', r.table_name;
+        END IF;
+    END LOOP;
+
+    FOREACH required_table IN ARRAY ARRAY[
+        'auth_identity','person_role_assignment','person_access_grant','audit_event',
+        'actor_context_signing_secret','source_rights_snapshot',
+        'recovery_checkpoint','recovery_verification'
+    ] LOOP
+        IF has_table_privilege('bridge_school_reader', required_table, 'SELECT') THEN
+            RAISE EXCEPTION 'reader unexpectedly has SELECT on protected table %', required_table;
         END IF;
     END LOOP;
 

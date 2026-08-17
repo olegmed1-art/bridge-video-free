@@ -1,0 +1,63 @@
+name: Bridge Video Production Evidence Contract
+
+on:
+  push:
+    paths:
+      - '.github/workflows/video-production-evidence-contract.yml'
+      - '.github/workflows/bridge-video-3.1-free.yml'
+      - '.github/workflows/bridge-video-auto-discovery.yml'
+      - 'run_drive_3_1_free_generic.py'
+      - 'check_completed_job.py'
+      - 'bridge_runtime_hardening_r25_6.py'
+      - 'run_master_3_1_free.py'
+      - 'tests/test_production_evidence_contract.py'
+      - 'tests/test_asr_policy_r25_6.py'
+      - 'tests/test_pdf_presentation_r25_6.py'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/video-production-evidence-contract.yml'
+      - '.github/workflows/bridge-video-3.1-free.yml'
+      - '.github/workflows/bridge-video-auto-discovery.yml'
+      - 'run_drive_3_1_free_generic.py'
+      - 'check_completed_job.py'
+      - 'bridge_runtime_hardening_r25_6.py'
+      - 'run_master_3_1_free.py'
+      - 'tests/test_production_evidence_contract.py'
+      - 'tests/test_asr_policy_r25_6.py'
+      - 'tests/test_pdf_presentation_r25_6.py'
+
+permissions:
+  contents: read
+
+jobs:
+  evidence-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: 3.1-free-r25.6
+      WHISPER_MODEL: small
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install regression runtime
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq fonts-dejavu-core
+          python -m pip install --disable-pip-version-check -r requirements-worker.txt
+      - name: Verify production route and evidence preservation
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python tests/test_production_evidence_contract.py
+          PYTHONPATH=. python tests/test_asr_policy_r25_6.py
+          PYTHONPATH=. python tests/test_unreliable_asr_isolation_r25_4.py
+          PYTHONPATH=. python tests/test_pdf_presentation_r25_6.py
+          python -m py_compile bridge_runtime_hardening_r25_6.py run_master_3_1_free.py run_drive_3_1_free_generic.py check_completed_job.py
