@@ -3,13 +3,13 @@ from __future__ import annotations
 """Dependency-free runtime coverage collector used by DDS self-tests.
 
 When ``DDS_COVERAGE_ROOT`` and ``DDS_COVERAGE_DIR`` are present, sitecustomize
-activates this collector in every Python process.  Each process writes a unique
+activates this collector in every Python process. Each process writes a unique
 JSON fragment at exit; the test runner merges parent and child fragments.
 
 When ``DDS_COVERAGE_MANIFEST`` and ``DDS_COVERAGE_SUITE`` are also supplied, the
-collector traces only production modules mapped to that suite.  This preserves
-actual line/arc evidence while avoiding pathological tracing overhead in the
-self-test harness itself.
+collector traces only production modules mapped to that suite. Excluded frames
+are rejected at the call boundary, so the collector does not line-trace the test
+harness, stdlib, or unrelated production modules.
 """
 
 import atexit
@@ -77,27 +77,36 @@ def _relative(filename: str) -> str | None:
     return relative_text
 
 
-def _trace(frame: FrameType, event: str, arg) -> Callable | None:
-    relative = _relative(frame.f_code.co_filename)
-    if relative is None:
-        return _trace
+def _local_trace(frame: FrameType, event: str, arg) -> Callable | None:
     frame_id = id(frame)
-    if event == "call":
-        _LAST_LINE[frame_id] = (relative, -1)
-        return _trace
+    previous = _LAST_LINE.get(frame_id)
+    if previous is None:
+        return None
+    relative = previous[0]
     if event == "line":
         line = int(frame.f_lineno)
-        previous = _LAST_LINE.get(frame_id)
         _LINES[relative].add(line)
-        if previous is not None and previous[0] == relative:
-            _ARCS[relative].add((previous[1], line))
+        _ARCS[relative].add((previous[1], line))
         _LAST_LINE[frame_id] = (relative, line)
-        return _trace
+        return _local_trace
     if event in {"return", "exception"}:
-        previous = _LAST_LINE.pop(frame_id, None)
-        if previous is not None and previous[0] == relative:
-            _ARCS[relative].add((previous[1], -1))
-    return _trace
+        _ARCS[relative].add((previous[1], -1))
+        _LAST_LINE.pop(frame_id, None)
+        return None if event == "return" else _local_trace
+    return _local_trace
+
+
+def _global_trace(frame: FrameType, event: str, arg) -> Callable | None:
+    # CPython calls the global trace function for new frames. Returning None here
+    # prevents all subsequent line events in an excluded frame, which is essential
+    # for keeping measured coverage inexpensive enough for the 10k-corpus tests.
+    if event != "call":
+        return None
+    relative = _relative(frame.f_code.co_filename)
+    if relative is None:
+        return None
+    _LAST_LINE[id(frame)] = (relative, -1)
+    return _local_trace
 
 
 def _write_fragment() -> None:
@@ -133,7 +142,7 @@ def activate_from_environment() -> bool:
     _OUT_DIR = Path(out_dir).resolve()
     _INCLUDED_MODULES = _load_included_modules()
     _ACTIVE = True
-    sys.settrace(_trace)
-    threading.settrace(_trace)
+    sys.settrace(_global_trace)
+    threading.settrace(_global_trace)
     atexit.register(_write_fragment)
     return True
