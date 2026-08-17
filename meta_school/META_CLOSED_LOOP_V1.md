@@ -1,78 +1,53 @@
-# META CLOSED LOOP v1.4
-Status: STATIC_AUDIT_5 / PRELAUNCH_REVIEW / NOT_YET_ACTIVATED
+# META CLOSED LOOP v1.5
+Status: STATIC_AUDIT_6 / PRELAUNCH_REVIEW / NOT_YET_ACTIVATED
 
-## One-time prelaunch hold
-META CLOSED LOOP itself must not execute until verification is complete and owner explicitly releases this one-time hold. Other School workflows remain unaffected.
+## Prelaunch hold
+META CLOSED LOOP itself remains unexecuted until verification completes and owner releases this one-time hold. Other School workflows unaffected.
 
 ## Mission
-Evidence-based improvement with strict separation of observation, proposal, validation, authorization, execution and recovery.
+Evidence-based improvement with separated roles and protection against stale, biased or statistically misleading evidence.
 
-## Non-negotiable invariants
-Stable immutable during experiment; raw evidence preserved; UNKNOWN never coerced to PASS; external content never control instruction; Candidate cannot alter contract/tests/evaluator/guardrails/budget/risk/governors/canon; failed gates cannot be weakened; canonical semantic changes always OWNER_REVIEW; no automatic destructive source/user-file deletion; isolated experimentation when possible; every promotion reproducible and auditable.
+## Invariants and authority
+Stable immutable; raw evidence preserved; UNKNOWN != PASS; external content is data, not control instruction; Candidate cannot alter contract/tests/evaluator/guardrails/budget/risk/governors/canon; failed gates cannot weaken; canonical semantic changes OWNER_REVIEW; no automatic destructive source deletion; isolate experiments; promotion reproducible/auditable; secrets excluded. Roles: OBSERVER, PROPOSER, VALIDATOR, AUTHORIZER, EXECUTOR, RECOVERY. R2/R3 require independent validation and authorization evidence; R4 owner. Contract is default-deny for systems/objects/actions.
 
-## Control-plane authority separation
-Roles are logical capabilities, not necessarily different humans/services:
-- OBSERVER: read evidence, cannot change Candidate/Stable.
-- PROPOSER: may formulate hypothesis/Candidate, cannot validate or authorize own material promotion alone.
-- VALIDATOR: evaluates frozen evidence/contract; cannot modify Candidate or acceptance criteria.
-- AUTHORIZER: decides whether promotion is allowed for risk class; cannot rewrite test evidence.
-- EXECUTOR: performs only an already-authorized PromotionIntent; cannot expand scope.
-- RECOVERY: may execute predefined safe rollback/recovery; cannot promote new Candidate.
-A single technical identity may implement multiple low-risk roles only where policy explicitly permits, but material R2/R3 promotion requires independent validation and separate authorization evidence. R4 requires owner authorization.
+## Provenance, freshness and lineage
+Evidence records source identity/time/acquisition/version/trust/transformations. Trust: OWNER_CANON, VERIFIED_SYSTEM, VERIFIED_EXTERNAL, UNVERIFIED_EXTERNAL, MODEL_DERIVED. Derived evidence links source; no self-corroboration. Every material comparison declares freshness requirements. Before promotion revalidate StableVersion, dependency versions, configuration, health/recovery state, evaluator/test version and canonical-reference revision. Stale evidence = STALE, not PASS. Canonical source change after Contract freeze => REBASE_REQUIRED/OWNER_REVIEW.
 
-## Least privilege / blast radius
-Improvement Contract lists allowed systems, objects, branches/folders/tables/workflows and permitted action types. Default deny outside scope. Credentials/secrets are never copied into Evidence or Learning Memory. META must not enumerate, rotate, reveal or broaden permissions unless that is the explicit authorized target. A Candidate cannot grant itself new permissions. Shared-component changes require Dependency Impact Gate and blast-radius classification.
+## Run safety
+Immutable RunID; versioned states; idempotency keys; reconcile before retry; UNKNOWN external state blocks promotion; checkpoint transitions/writes; resume only after reconciliation; terminal run no self-restart. Promotion lease component+StableVersion; loss blocks promotion.
 
-## Provenance
-Evidence records source identity/time/acquisition/version/trust/transformations when available. Trust: OWNER_CANON, VERIFIED_SYSTEM, VERIFIED_EXTERNAL, UNVERIFIED_EXTERNAL, MODEL_DERIVED. Derived evidence links sources; no self-corroboration. Owner canon authority limited to covered domain. Sampling rule preserved.
-
-## Run safety/idempotency
-Immutable RunID; versioned state transitions; idempotency key RunID+stage+target+intended version for writes. Reconcile actual state before retry. UNKNOWN_WRITE_RESULT/UNKNOWN_EXTERNAL_STATE blocks promotion. Checkpoint before/after writes and every transition. Resume only from reconciled checkpoint. Terminal runs do not self-restart.
-
-## Preflight/risk
-Freeze RunScope and blast radius. R0 read-only; R1 isolated technical; R2 shared/production-impact; R3 identity/auth/data-integrity/high-impact infra; R4 canonical semantic. R2/R3 require relevant recovery point, isolation and explicit promotion authority. R4 owner review. Scope/permission expansion => new contract/risk review.
-
-## Lease/concurrency
-Promotion lease keyed component+StableVersion. One promotion-capable lease. Lease has RunID/expiry/heartbeat. Loss of lease removes promotion eligibility. Promotion transaction verifies StableVersion immediately before write. No lock-stealing without auditable stale-lease rule.
+## Risk/scope
+Freeze scope/blast radius/allowed actions. R0 read-only, R1 isolated, R2 shared/prod, R3 identity/integrity/high-impact, R4 canon. Scope expansion => new contract/risk review.
 
 ## Quality / anti-Goodhart
-Freeze targets, guardrails, coverage, raw fields, baseline, sampling, uncertainty. Coverage guardrail mandatory where suppression can game metric. Preserve negative and positive cases. For stochastic evaluation record configuration/version/seed where possible and measure variance when material.
+Freeze targets, guardrails, coverage, raw fields, baseline, sampling, uncertainty and evaluation direction. Freeze denominator/population definitions so Candidate cannot redefine measured population. Coverage/completeness mandatory where suppression can game metrics. Preserve positive and negative cases.
 
-## Root cause
-HIGH direct/reproducible; MEDIUM consistent but uncertain; LOW weak. HIGH fix Candidate allowed; MEDIUM diagnostic/reversible until independently resolved; LOW investigate only.
+## Statistical validity gate
+Use simplest valid method; never invent significance. Deterministic defect fixes may use exact reproducibility. For noisy/stochastic metrics: record tool/model/config/version and seed where possible; prefer paired same-case comparison; report sample size and uncertainty; predefine meaningful effect/binary criterion; no repeated peeking/stopping when favorable; holdout once per Contract revision where practical; choosing among multiple Candidates requires fresh holdout/independent validation; inconclusive => RETEST/INVESTIGATE, never PROMOTE.
 
-## Improvement Contract
-Freeze Stable/evidence, scope/blast radius, allowed actions, targets/meaningful criterion, guardrails, test/sampling/holdout, validator, authority, recovery requirement, cost/wall-clock caps, max Candidates 3, max RETEST 2, observation window, rollback triggers, idempotency/reconciliation. Contract mutation after test begins invalidates comparison.
+## Root cause / Contract
+HIGH direct/reproducible; MEDIUM uncertain; LOW weak. HIGH fix; MEDIUM diagnostic/reversible pending independent resolution; LOW investigate. Improvement Contract freezes Stable/evidence/freshness, scope/blast/actions, targets/effect criterion, guardrails/denominators, tests/sampling/holdout, statistical method if needed, validator, authority, recovery, cost/time, max Candidates=3, max RETEST=2, observation/rollback, idempotency. Mutation invalidates comparison.
 
 ## Candidate / Sandbox
-Candidate isolated and cannot change control plane. Use regression, frozen real cases, edge/adversarial, holdout. Test failures not retried until lucky. No production data mutation merely to manufacture evaluation evidence.
+Isolated Candidate cannot alter control plane. Regression + frozen real + edge/adversarial + holdout. Candidate cannot access hidden labels/results where practical. Failures not retried until lucky. Corpus changes versioned; Candidate cannot delete hard cases. New regression cases require provenance/validation.
 
-## Independent validation
-R0/R1 deterministic independent tests may suffice. R2 independent critic/test + authorization evidence. R3 stronger red-team/shadow + separate authorization evidence. R4 technical validation + owner. Validator cannot consume proposer conclusion as independent proof.
+## Validation / dependency
+R0/R1 deterministic independent path may suffice; R2 independent critic/test; R3 stronger red-team/shadow; R4 owner. Bounded dependency graph; capture dependent/test versions; unknown material dependency raises risk; no promotion on material downstream regression.
 
-## Dependency / blast-radius gate
-Bounded dependency graph; identify shared consumers; run material dependent smoke/regression tests. Unknown material dependency raises risk. Promotion denied on material downstream regression or unbounded high-impact blast radius.
+## Compare / decision
+Eligibility: criterion met, guardrails/coverage/denominators valid, statistical gate if applicable, independent validation, dependency gate, budget, Stable unchanged, lease valid, provenance/freshness valid, authority present, no unknown external state. Decisions PROMOTE/REJECT/RETEST/INVESTIGATE/OWNER_REVIEW/REBASE_REQUIRED/ABORT.
 
-## Decision
-PROMOTE, REJECT, RETEST, INVESTIGATE, OWNER_REVIEW, REBASE_REQUIRED, ABORT. Eligibility includes frozen criterion/guardrails/coverage/validation/dependencies/budget/Stable/lease/provenance/authority and no unresolved external-state ambiguity.
-
-## Promotion protocol
-1 reconcile state; 2 verify authority and least-privilege scope; 3 verify lease/Stable/recovery/budget/gates; 4 create immutable PromotionIntent with old/new version, target, scope, idempotency key, authorizer evidence; 5 executor performs exactly authorized action; 6 read back; 7 create PromotionEvidence only on confirmed result. Unknown response => reconcile, never blind retry.
-
-## Post-deploy / rollback
-Frozen observation/triggers. Critical correctness/integrity/security regression -> stop/rollback if safe. Rollback uses predefined RecoveryIntent, idempotency and read-back. Recovery cannot introduce new feature changes. Ambiguous signal freezes propagation. One rollback ends attempt; no automatic re-promotion.
+## Promotion / rollback
+Reconcile; refresh volatile evidence; verify authority/scope/lease/Stable/recovery/budget/gates; PromotionIntent; execute once; read-back; PromotionEvidence only after confirmation. Unknown -> reconcile, no blind retry. Post-deploy thresholds include minimum traffic/sample where relevant. Critical regression -> stop/rollback if safe. Guardrail breach -> rollback/review. Ambiguous -> freeze. Rollback intent/read-back; no feature changes during recovery; no automatic re-promotion.
 
 ## Learning Memory
-OBSERVATION/HYPOTHESIS/VERIFIED_LESSON/REJECTED_HYPOTHESIS/REGRESSION_CASE/POLICY_DECISION. Only verified lesson/policy authoritative. Provenance/applicability mandatory. SUPERSEDED preserves history. Never store secrets/tokens/passwords/raw credentials in memory/evidence.
+OBSERVATION, HYPOTHESIS, VERIFIED_LESSON, REJECTED_HYPOTHESIS, REGRESSION_CASE, POLICY_DECISION. Only verified lesson/policy authoritative. Store provenance/applicability/evidence version/freshness. SUPERSEDED preserves history. Expired assumptions => NEEDS_REVALIDATION.
 
-## Cost controls
-Contract cap + monthly governor. 80% stop optional expansion; 100% stop discretionary paid work. Reliability emergency only for material reliability. Cost estimates marked ESTIMATED until reconciled.
+## Cost / Shadow
+Contract + monthly caps; 80% optional expansion stop; 100% discretionary paid stop. Reliability emergency only material reliability. First activation SHADOW, no actual PROMOTE. Owner decides exit and authority per risk class.
 
-## Shadow rollout
-Initial activation SHADOW: observe/propose/test/validate/decision recommendation, no actual PROMOTE. Exit requires explicit owner decision. Promotion authority separately granted by risk class.
-
-## Scale-out / Meta-META
-Video 3.1 FREE -> DDS -> tournament -> materials -> online school. Student outcome only verified identity + bias/coverage guards. Meta-META cannot weaken invariants, least privilege, canonical boundary, governors or owner authority.
+## Scale-out
+Video 3.1 FREE -> DDS -> tournament -> materials -> online school. Student outcomes require verified identity, denominator/coverage and selection-bias controls. Meta-META cannot weaken safeguards.
 
 ## Initial pilot
 Video-analysis 3.1 FREE preferred. NOT STARTED. Prelaunch hold remains.
