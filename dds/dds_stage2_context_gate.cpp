@@ -7,7 +7,6 @@
 #include <array>
 #include <cstring>
 #include <iostream>
-#include <stdexcept>
 #include <string>
 
 namespace {
@@ -36,9 +35,7 @@ bool same_result(const CanonicalFutureTricks& a, const CanonicalFutureTricks& b)
   if (a.cards != b.cards) return false;
   for (int i = 0; i < a.cards; ++i) {
     if (a.suit[i] != b.suit[i] || a.rank[i] != b.rank[i] ||
-        a.equals[i] != b.equals[i] || a.score[i] != b.score[i]) {
-      return false;
-    }
+        a.equals[i] != b.equals[i] || a.score[i] != b.score[i]) return false;
   }
   return true;
 }
@@ -71,7 +68,6 @@ int main(int argc, char** argv) {
     std::cerr << "usage: dds_stage2_context_gate <deal_id_sha256> <pbn-deal>\n";
     return 2;
   }
-
   const std::string deal_id = argv[1];
   const std::string pbn = argv[2];
   if (deal_id.size() != 64 || pbn.empty()) {
@@ -79,20 +75,17 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  // DDS uses 0=S,1=H,2=D,3=C,4=NT and hands 0=N,1=E,2=S,3=W.
   Deal deal{};
-  deal.trump = 4;  // NT, chosen only to make this deterministic engine gate concrete.
-  deal.first = 0;  // North to lead.
+  deal.trump = 4;
+  deal.first = 0;
   std::memset(deal.currentTrickSuit, 0, sizeof(deal.currentTrickSuit));
   std::memset(deal.currentTrickRank, 0, sizeof(deal.currentTrickRank));
-
   if (convert_from_pbn(pbn.c_str(), deal.remainCards) != 1) {
     std::cerr << "PBN conversion failed\n";
     return 3;
   }
 
   SetMaxThreads(1);
-
   SolverContext ctx;
   const bool tt_lazy_before_solve = (ctx.maybe_trans_table() == nullptr);
 
@@ -102,7 +95,6 @@ int main(int argc, char** argv) {
     std::cerr << "first solve failed rc=" << rc1 << '\n';
     return 4;
   }
-
   auto* tt_after_first = ctx.maybe_trans_table();
   const bool tt_created_by_solve = (tt_after_first != nullptr);
   const auto first_result = canonicalize(first);
@@ -113,16 +105,12 @@ int main(int argc, char** argv) {
     std::cerr << "second solve failed rc=" << rc2 << '\n';
     return 5;
   }
-
   auto* tt_after_second = ctx.maybe_trans_table();
   const bool same_context_tt_instance =
       tt_after_first != nullptr && tt_after_first == tt_after_second;
   const auto second_result = canonicalize(second);
   const bool repeated_solve_result_equal = same_result(first_result, second_result);
 
-  // Upstream DDS3 defines SolverContext instances created from the same ThreadData as
-  // sharing the same transposition-table registry entry. Verify that property directly
-  // instead of inferring it from timing or node-count changes.
   auto shared_thread = ctx.thread();
   SolverContext sibling{shared_thread};
   const bool sibling_sees_same_tt =
@@ -130,15 +118,24 @@ int main(int argc, char** argv) {
 
   if (!tt_created_by_solve || !same_context_tt_instance || !sibling_sees_same_tt ||
       !repeated_solve_result_equal) {
-    std::cerr << "DDS Stage-2 context/TT invariant failed\n";
+    std::cerr << "DDS Stage-2 context/TT invariant failed"
+              << " lazy_before=" << tt_lazy_before_solve
+              << " created_by_solve=" << tt_created_by_solve
+              << " same_tt=" << same_context_tt_instance
+              << " sibling_same_tt=" << sibling_sees_same_tt
+              << " result_equal=" << repeated_solve_result_equal
+              << " nodes_first=" << first.nodes
+              << " nodes_second=" << second.nodes
+              << " cards_first=" << first.cards
+              << " cards_second=" << second.cards << '\n';
     return 6;
   }
 
   std::cout << '{'
-            << "\"gate_version\":\"stage2-dds-context-v1\"," 
-            << "\"deal_id\":\"" << deal_id << "\"," 
-            << "\"dds_upstream_commit\":\"cdd13cf5b700788ac8c1391501b42445b3129b45\"," 
-            << "\"solver_api\":\"solve_board(SolverContext&)\"," 
+            << "\"gate_version\":\"stage2-dds-context-v1\","
+            << "\"deal_id\":\"" << deal_id << "\","
+            << "\"dds_upstream_commit\":\"cdd13cf5b700788ac8c1391501b42445b3129b45\","
+            << "\"solver_api\":\"solve_board(SolverContext&)\","
             << "\"trump\":4,\"first\":0,\"target\":-1,\"solutions\":3,\"mode\":0,"
             << "\"tt_lazy_before_solve\":" << (tt_lazy_before_solve ? "true" : "false") << ','
             << "\"tt_created_by_solve\":" << (tt_created_by_solve ? "true" : "false") << ','
@@ -150,6 +147,5 @@ int main(int argc, char** argv) {
             << "\"result\":";
   print_result(first_result);
   std::cout << "}\n";
-
   return 0;
 }
