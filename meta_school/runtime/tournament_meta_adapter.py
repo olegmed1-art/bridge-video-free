@@ -9,7 +9,7 @@ class TournamentMetaEvent:
     dealer:Optional[str]=None; vulnerability:Optional[str]=None; contract:Optional[str]=None
     declarer:Optional[str]=None; opening_lead:Optional[str]=None; result:Optional[str]=None
     score:Optional[float]=None; percentage_or_imps:Optional[float]=None
-    auction_evidence_status:str=UNKNOWN; play_evidence_status:str=UNKNOWN
+    trade_evidence_status:str=UNKNOWN; play_evidence_status:str=UNKNOWN
     dds_evidence_ids:tuple=(); interpretation_status:str=UNKNOWN; layout_version:str=UNKNOWN
     qc_status:str=UNKNOWN; evidence_ids:tuple=()
 
@@ -22,10 +22,10 @@ class TournamentMetaEvent:
             raise ValueError('missing identity basis')
         return True
 
-def claim_allowed(*, board_status, claim_type, auction_evidence=False, play_evidence=False, identity_basis=True):
+def claim_allowed(*, board_status, claim_type, trade_evidence=False, play_evidence=False, identity_basis=True):
     if not identity_basis and claim_type in ('PERSONAL_ERROR','STUDENT_ATTRIBUTION'): return False
     if board_status in ('AVERAGE','NOT_PLAYED') and claim_type=='PERSONAL_ERROR': return False
-    if claim_type=='SPECIFIC_BIDDING_ERROR' and not auction_evidence: return False
+    if claim_type=='SPECIFIC_BIDDING_ERROR' and not trade_evidence: return False
     if claim_type=='SPECIFIC_MIDPLAY_ERROR' and not play_evidence: return False
     return True
 
