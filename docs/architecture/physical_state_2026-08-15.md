@@ -1,6 +1,6 @@
 # Физическая архитектура данных — фактическая реализация v0.2
 
-Дата фиксации: 2026-08-15; актуализация после девятой проверки: 2026-08-17
+Дата фиксации: 2026-08-15; актуализация после десятой проверки: 2026-08-17
 
 ## Production database
 
@@ -9,10 +9,10 @@
 - PostgreSQL: 18.4
 - Production schema_migration: `0001–0019`
 - Для всех зарегистрированных production migration записан checksum.
-- Последняя прямая повторная проверка 2026-08-17 подтверждает: Club Operations/Auth/Truth `0020–0044` в production не применены.
+- Последняя прямая повторная проверка 2026-08-17 подтверждает: Club Operations/Auth/Truth `0020–0045` в production не применены.
 - `club_membership`, `auth_identity`, `actor_context_signing_secret` в production отсутствуют.
-- Production Bridge Video `analysis_run`: 11 успешных строк; `algorithm_version_id` пока не заполнен, потому что Truth migration `0044` еще не продвинута в production.
-- `storage_verification` в production пока пуст; это также ожидается до `0044`.
+- Production Bridge Video `analysis_run`: 11 успешных строк; `algorithm_version_id` пока не заполнен, потому что Truth migration `0045` еще не продвинута в production.
+- `storage_verification` в production пока пуст; это также ожидается до `0045`.
 
 Миграции production после исторической фиксации v0.1:
 
@@ -97,7 +97,14 @@ FastAPI service существует в `bridge_school_api` и использу�
 
 ## Candidate Club Operations/Auth/Truth на GitHub main
 
-Кандидат состоит из миграций `0020–0044`.
+Кандидат состоит из миграций `0020–0045`.
+
+Последовательность после устранения concurrent collision:
+
+- `0044_instructor_education_scope.sql` — instructor/object-scoped education access candidate;
+- `0045_truth_storage_provenance.sql` — META Truth Layer provenance/storage candidate.
+
+Truth migration первоначально была временно пронумерована `0044`, но concurrent development занял этот номер instructor-scope migration. Поскольку Truth migration в production не применялась, она была безопасно перенумерована в `0045`, а ее regression test — из `031` в `032`. Migration runner дополнительно переведен в fail-closed режим: повтор одного numeric prefix среди migrations или database tests останавливает процесс до любых миграций.
 
 Основные реализованные контуры:
 
@@ -127,27 +134,29 @@ FastAPI service существует в `bridge_school_api` и использу�
 - separate trusted auth-gateway capability; ordinary member capability cannot select an arbitrary identity context;
 - school-wide role helper cannot silently promote a scoped group/course role;
 - member SECURITY DEFINER function surface is regression-whitelisted;
+- instructor education scope candidate with explicit object/person authorization boundaries;
 - canonical `bridge-video-master-analysis` Algorithm identity;
 - AlgorithmVersion identity registry through `3.1-free-r25.11` without equating registration with quality promotion;
 - fail-closed linkage of Bridge Video AnalysisRun to AlgorithmVersion;
 - append-only StorageVerification evidence linked to AssetLocation and the Asset checksum registry.
 
-Database tests `011–031` cover positive and adversarial Club Operations/Auth/Truth scenarios in addition to all legacy tests.
+Database tests `011–032` cover positive and adversarial Club Operations/Auth/Instructor/Truth scenarios in addition to all legacy tests.
 
 Round-8 core auth post-merge verification: GitHub Actions run `32000018735`, `success`.
 Trusted-gateway candidate verification: run `32000241026`, `success`.
 Auth-gateway post-merge verification: run `32000346201`, PostgreSQL 18, `success`.
-Truth-layer candidate verification: run `32000454269`, PostgreSQL 18 — clean migration install, all invariant/adversarial tests, idempotence, checksum-tamper guard and migration-registry verification all `success`.
+Truth-layer semantic candidate verification before renumbering: run `32000454269`, PostgreSQL 18 — clean migration install, all invariant/adversarial tests, idempotence, checksum-tamper guard and migration-registry verification all `success`.
+Final `0045`/`032` numbering plus duplicate-sequence guard requires a fresh post-renumber CI pass before release evidence is complete.
 
 ### Truth-layer production-snapshot evidence
 
-`0044_truth_storage_provenance` дополнительно проверена не только на пустой CI-базе, но и на изолированной Neon-ветке, созданной из фактического production состояния.
+Truth migration semantics were additionally checked not only on an empty CI database, but also on an isolated Neon branch created from the factual production state. The isolated check was performed before the sequence-only rename; final release identity is `0045_truth_storage_provenance`.
 
-После применения `0044` на этой копии:
+After applying the Truth logic on this copy:
 
 - canonical Bridge Video Algorithm = 1;
 - registered Bridge Video AlgorithmVersion = 9;
-- исторические Bridge Video AnalysisRun = 11;
+- historical Bridge Video AnalysisRun = 11;
 - linked AnalysisRun = 11;
 - unlinked AnalysisRun = 0;
 - AssetLocation = 15;
@@ -166,18 +175,18 @@ Implemented on candidate `main`:
 - narrow member read views;
 - signed transaction-local actor context;
 - actor-aware sensitive-operation audit;
-- trusted database auth-gateway capability boundary.
+- trusted database auth-gateway capability boundary;
+- instructor education-scope database candidate.
 
 Not implemented/deployed yet:
 
 - verification of a real external provider token/session by the production API;
 - member server LOGIN credential provisioning;
 - guarded member/admin write API;
-- instructor-specific object-scoped educational views/functions;
 - real AuthIdentity records;
 - end-to-end browser/phone login flow.
 
-Therefore AuthIdentity/object isolation is a verified database candidate, not a production member login system yet.
+Therefore AuthIdentity/object isolation and instructor scope are database candidates, not a production member login/teacher portal system yet.
 
 ## Production release boundary
 
@@ -201,7 +210,7 @@ Production promotion по-прежнему намеренно заблокиро
 - GitHub branch `database-production` все еще `protected=false`; доступный connector не предоставляет безопасной операции изменения branch-protection settings;
 - GitHub environment `database-production` до этого отсутствовал, поэтому само упоминание environment в workflow не следует считать самостоятельным approval gate без отдельной настройки protection rules;
 - `main` и `database-production` намеренно сильно расходятся; indiscriminate merge по-прежнему запрещен;
-- migration `0020–0044` еще не продвигались в production.
+- migrations `0020–0045` еще не продвигались в production.
 
 ## Recovery / backup boundary
 
@@ -226,7 +235,7 @@ Neon project сейчас имеет `history_retention_seconds=21600`, то е�
 2. Повторно проверить production fingerprint, latest migration=`0019`, checksums и health.
 3. Проверить точный reviewed release set; не делать merge всего `main` в `database-production`.
 4. По возможности включить GitHub branch protection и environment protection для `database-production` — это требует операции уровня настроек владельца репозитория, которой текущий connector не предоставляет.
-5. Продвигать только проверенные database/release files.
+5. Продвигать только проверенные database/release files с уникальными sequence identities.
 6. Запускать production workflow только вручную с `MIGRATE`.
 7. После migration проверить schema_migration, runtime permissions, health, auth boundaries, 11/11 AlgorithmVersion linkage и StorageVerification counts.
 8. Не удалять recovery-ветку до завершения повторной проверки и периода наблюдения.
@@ -236,7 +245,7 @@ Neon project сейчас имеет `history_retention_seconds=21600`, то е�
 
 1. Завершить release/recovery gates и только затем решать вопрос production promotion candidate database stack.
 2. External authentication verifier/gateway integration; database credentials remain server-side.
-3. Guarded member/admin write operations and explicit instructor object scopes.
+3. Guarded member/admin write operations around the already-designed member/instructor scopes.
 4. Controlled pilot import Person/Student/ClubMember/AuthIdentity with reconciliation.
 5. Knowledge/Canon ingestion + visibility.
 6. Member API + Club Window only after end-to-end authorization gates.

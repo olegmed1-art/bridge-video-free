@@ -310,7 +310,7 @@ REVOKE UPDATE, DELETE ON storage_verification FROM bridge_school_worker;
 GRANT INSERT ON storage_verification TO bridge_school_worker;
 
 INSERT INTO schema_migration(migration_key)
-VALUES ('0044_truth_storage_provenance')
+VALUES ('0045_truth_storage_provenance')
 ON CONFLICT DO NOTHING;
 
 COMMIT;
