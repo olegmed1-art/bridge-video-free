@@ -38,25 +38,24 @@ CREATE TABLE identity_import_batch_state_event (
     state_sequence bigint GENERATED ALWAYS AS IDENTITY
         (SEQUENCE NAME identity_import_batch_state_sequence_seq),
     created_at timestamptz NOT NULL DEFAULT now(),
-    CHECK (state IN ('staged','validated','ready','rejected','invalid'))
+    CHECK (state IN ('staged','validated','ready','rejected','applied','invalid'))
 );
 CREATE UNIQUE INDEX identity_import_batch_state_sequence_uk
     ON identity_import_batch_state_event(identity_import_batch_id,state_sequence);
 CREATE INDEX identity_import_batch_state_time_idx
-    ON identity_import_batch_state_event(identity_import_batch_id,state_sequence DESC);
+    ON identity_import_batch_state_event(identity_import_batch_id,occurred_at DESC,state_sequence DESC);
 
 CREATE TABLE identity_import_item (
     identity_import_item_id uuid PRIMARY KEY DEFAULT uuidv7(),
     identity_import_batch_id uuid NOT NULL REFERENCES identity_import_batch(identity_import_batch_id),
     source_record_key text NOT NULL,
     raw_payload jsonb NOT NULL,
-    raw_payload_sha256 text GENERATED ALWAYS AS (
-        encode(digest(convert_to(raw_payload::text,'UTF8'),'sha256'),'hex')
-    ) STORED,
+    raw_payload_hash text NOT NULL,
     normalized_candidate jsonb NOT NULL DEFAULT '{}'::jsonb,
     source_identity_id uuid REFERENCES source_identity(source_identity_id),
     created_at timestamptz NOT NULL DEFAULT now(),
     CHECK (btrim(source_record_key) <> ''),
+    CHECK (btrim(raw_payload_hash) <> ''),
     UNIQUE (identity_import_batch_id,source_record_key)
 );
 CREATE INDEX identity_import_item_source_identity_idx
@@ -74,12 +73,12 @@ CREATE TABLE identity_import_item_state_event (
     state_sequence bigint GENERATED ALWAYS AS IDENTITY
         (SEQUENCE NAME identity_import_item_state_sequence_seq),
     created_at timestamptz NOT NULL DEFAULT now(),
-    CHECK (state IN ('staged','validated','needs_review','ready','rejected','invalid'))
+    CHECK (state IN ('staged','validated','needs_review','ready','rejected','applied','invalid'))
 );
 CREATE UNIQUE INDEX identity_import_item_state_sequence_uk
     ON identity_import_item_state_event(identity_import_item_id,state_sequence);
 CREATE INDEX identity_import_item_state_time_idx
-    ON identity_import_item_state_event(identity_import_item_id,state_sequence DESC);
+    ON identity_import_item_state_event(identity_import_item_id,occurred_at DESC,state_sequence DESC);
 
 CREATE TABLE identity_import_action (
     identity_import_action_id uuid PRIMARY KEY DEFAULT uuidv7(),
@@ -92,8 +91,6 @@ CREATE TABLE identity_import_action (
     reason text,
     decided_at timestamptz NOT NULL DEFAULT now(),
     metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
-    action_sequence bigint GENERATED ALWAYS AS IDENTITY
-        (SEQUENCE NAME identity_import_action_sequence_seq),
     created_at timestamptz NOT NULL DEFAULT now(),
     CHECK (action_type IN ('link_existing_person','create_new_person','reject','defer')),
     CHECK (supersedes_action_id IS NULL OR supersedes_action_id <> identity_import_action_id),
@@ -102,10 +99,8 @@ CREATE TABLE identity_import_action (
         OR (action_type IN ('create_new_person','reject','defer') AND target_person_id IS NULL AND entity_resolution_decision_id IS NULL)
     )
 );
-CREATE UNIQUE INDEX identity_import_action_sequence_uk
-    ON identity_import_action(identity_import_item_id,action_sequence);
 CREATE INDEX identity_import_action_item_time_idx
-    ON identity_import_action(identity_import_item_id,action_sequence DESC);
+    ON identity_import_action(identity_import_item_id,decided_at DESC,identity_import_action_id DESC);
 
 CREATE OR REPLACE FUNCTION validate_identity_import_batch_scope()
 RETURNS trigger
@@ -159,29 +154,21 @@ CREATE OR REPLACE FUNCTION validate_identity_import_state_scope()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
-DECLARE
-    v_created_at timestamptz;
 BEGIN
     IF TG_TABLE_NAME='identity_import_batch_state_event' THEN
-        SELECT created_at INTO v_created_at
-          FROM identity_import_batch
-         WHERE identity_import_batch_id=NEW.identity_import_batch_id
-         FOR UPDATE;
-        IF NOT FOUND THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM identity_import_batch
+             WHERE identity_import_batch_id=NEW.identity_import_batch_id
+        ) THEN
             RAISE EXCEPTION 'identity import batch state target missing';
         END IF;
     ELSE
-        SELECT created_at INTO v_created_at
-          FROM identity_import_item
-         WHERE identity_import_item_id=NEW.identity_import_item_id
-         FOR UPDATE;
-        IF NOT FOUND THEN
+        IF NOT EXISTS (
+            SELECT 1 FROM identity_import_item
+             WHERE identity_import_item_id=NEW.identity_import_item_id
+        ) THEN
             RAISE EXCEPTION 'identity import item state target missing';
         END IF;
-    END IF;
-
-    IF NEW.occurred_at < v_created_at THEN
-        RAISE EXCEPTION 'identity import workflow state cannot precede staged record creation';
     END IF;
     RETURN NEW;
 END;
@@ -198,8 +185,8 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    INSERT INTO identity_import_batch_state_event(identity_import_batch_id,state,occurred_at,metadata)
-    VALUES (NEW.identity_import_batch_id,'staged',NEW.created_at,jsonb_build_object('source','batch_insert'));
+    INSERT INTO identity_import_batch_state_event(identity_import_batch_id,state,metadata)
+    VALUES (NEW.identity_import_batch_id,'staged',jsonb_build_object('source','batch_insert'));
     RETURN NEW;
 END;
 $$;
@@ -212,8 +199,8 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    INSERT INTO identity_import_item_state_event(identity_import_item_id,state,occurred_at,metadata)
-    VALUES (NEW.identity_import_item_id,'staged',NEW.created_at,jsonb_build_object('source','item_insert'));
+    INSERT INTO identity_import_item_state_event(identity_import_item_id,state,metadata)
+    VALUES (NEW.identity_import_item_id,'staged',jsonb_build_object('source','item_insert'));
     RETURN NEW;
 END;
 $$;
@@ -227,24 +214,17 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_item_source_identity uuid;
-    v_item_created_at timestamptz;
     v_resolution_source_identity uuid;
     v_resolution_target uuid;
     v_resolution_type text;
     v_resolution_status text;
     v_sup_item uuid;
 BEGIN
-    SELECT source_identity_id,created_at
-      INTO v_item_source_identity,v_item_created_at
+    SELECT source_identity_id INTO v_item_source_identity
       FROM identity_import_item
-     WHERE identity_import_item_id=NEW.identity_import_item_id
-     FOR UPDATE;
+     WHERE identity_import_item_id=NEW.identity_import_item_id;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'identity import action item missing';
-    END IF;
-
-    IF NEW.decided_at < v_item_created_at THEN
-        RAISE EXCEPTION 'identity import action cannot precede staged item creation';
     END IF;
 
     IF NEW.action_type='link_existing_person' THEN
@@ -320,14 +300,16 @@ SELECT DISTINCT ON (b.identity_import_batch_id)
 FROM identity_import_batch b
 LEFT JOIN identity_import_batch_state_event se
   ON se.identity_import_batch_id=b.identity_import_batch_id
-ORDER BY b.identity_import_batch_id,se.state_sequence DESC NULLS LAST;
+ORDER BY b.identity_import_batch_id,
+         se.occurred_at DESC NULLS LAST,
+         se.state_sequence DESC NULLS LAST;
 
 CREATE VIEW identity_import_item_current_state AS
 SELECT DISTINCT ON (i.identity_import_item_id)
     i.identity_import_item_id,
     i.identity_import_batch_id,
     i.source_record_key,
-    i.raw_payload_sha256,
+    i.raw_payload_hash,
     i.source_identity_id,
     se.state,
     se.occurred_at AS state_occurred_at,
@@ -337,7 +319,9 @@ SELECT DISTINCT ON (i.identity_import_item_id)
 FROM identity_import_item i
 LEFT JOIN identity_import_item_state_event se
   ON se.identity_import_item_id=i.identity_import_item_id
-ORDER BY i.identity_import_item_id,se.state_sequence DESC NULLS LAST;
+ORDER BY i.identity_import_item_id,
+         se.occurred_at DESC NULLS LAST,
+         se.state_sequence DESC NULLS LAST;
 
 CREATE VIEW identity_import_current_action AS
 SELECT DISTINCT ON (a.identity_import_item_id)
@@ -350,10 +334,9 @@ SELECT DISTINCT ON (a.identity_import_item_id)
     a.actor_person_id,
     a.reason,
     a.decided_at,
-    a.action_sequence,
     a.created_at
 FROM identity_import_action a
-ORDER BY a.identity_import_item_id,a.action_sequence DESC;
+ORDER BY a.identity_import_item_id,a.decided_at DESC,a.identity_import_action_id DESC;
 
 CREATE VIEW identity_import_batch_summary AS
 SELECT
@@ -399,8 +382,7 @@ FROM bridge_school_reader,bridge_school_app,bridge_school_worker,
 
 REVOKE ALL ON SEQUENCE
     identity_import_batch_state_sequence_seq,
-    identity_import_item_state_sequence_seq,
-    identity_import_action_sequence_seq
+    identity_import_item_state_sequence_seq
 FROM bridge_school_reader,bridge_school_app,bridge_school_worker,
      bridge_school_health,bridge_school_finance,bridge_school_member,
      bridge_school_member_principal,bridge_school_auth_gateway;
