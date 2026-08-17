@@ -110,6 +110,8 @@ jobs:
         env:
           DDS_COVERAGE_ROOT: ${{ github.workspace }}/dds_training
           DDS_COVERAGE_DIR: /tmp/dds-coverage-heavy
+          DDS_COVERAGE_MANIFEST: ${{ github.workspace }}/dds_training/test_matrix.json
+          DDS_COVERAGE_SUITE: dds
         run: |
           set -euo pipefail
           source .venv/bin/activate
