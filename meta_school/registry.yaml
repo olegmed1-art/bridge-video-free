@@ -73,7 +73,8 @@ components:
     name: DDS Core
     status: TESTED
     operational: false
-    note: local golden smoke evidence exists in project inventory; live Stage-2 deterministic replay/context-reuse gate is still required before mass DDS training
+    evidence_hint: docs/architecture/stage2_dds_checkpoint_2026-08-17.md
+    note: live Stage-2 DealID replay through one modern SolverContext passed; same TT object, identical semantic FutureTricks and repeated node reduction 168200->109 reproduced in two fresh processes; existing golden smoke also passed; corpus-scale production orchestration remains separate
   - id: tournament_analysis
     name: Tournament Analysis
     status: IMPLEMENTED
