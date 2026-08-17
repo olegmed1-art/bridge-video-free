@@ -22,6 +22,9 @@ DECLARE
     v_count_after bigint;
     v_count bigint;
     v_text text;
+    v_hash text;
+    v_expected_hash text;
+    v_item_created_at timestamptz;
 BEGIN
     SELECT school_id INTO v_school FROM school WHERE stable_name='Школа спортивного бриджа';
     IF v_school IS NULL THEN RAISE EXCEPTION 'canonical school missing'; END IF;
@@ -62,26 +65,36 @@ BEGIN
     RETURNING source_identity_id INTO v_other_identity;
 
     INSERT INTO identity_import_item(
-        identity_import_batch_id,source_record_key,raw_payload,raw_payload_hash,
+        identity_import_batch_id,source_record_key,raw_payload,
         normalized_candidate,source_identity_id
     ) VALUES (
         v_batch,'record-link','{"name":"Import Existing Person","email":"pii@example.invalid"}'::jsonb,
-        'hash-link','{"preferred_name":"Import Existing Person"}'::jsonb,v_identity
+        '{"preferred_name":"Import Existing Person"}'::jsonb,v_identity
     ) RETURNING identity_import_item_id INTO v_item_link;
 
     INSERT INTO identity_import_item(
-        identity_import_batch_id,source_record_key,raw_payload,raw_payload_hash,normalized_candidate
+        identity_import_batch_id,source_record_key,raw_payload,normalized_candidate
     ) VALUES (
         v_batch,'record-new','{"name":"Potential New Person"}'::jsonb,
-        'hash-new','{"preferred_name":"Potential New Person"}'::jsonb
+        '{"preferred_name":"Potential New Person"}'::jsonb
     ) RETURNING identity_import_item_id INTO v_item_new;
 
     INSERT INTO identity_import_item(
-        identity_import_batch_id,source_record_key,raw_payload,raw_payload_hash,normalized_candidate
+        identity_import_batch_id,source_record_key,raw_payload,normalized_candidate
     ) VALUES (
-        v_batch,'record-other','{"name":"Other Record"}'::jsonb,
-        'hash-other','{}'::jsonb
+        v_batch,'record-other','{"name":"Other Record"}'::jsonb,'{}'::jsonb
     ) RETURNING identity_import_item_id INTO v_item_other;
+
+    -- Raw evidence hash is generated inside PostgreSQL, not trusted from the importer.
+    SELECT raw_payload_sha256,
+           encode(digest(convert_to(raw_payload::text,'UTF8'),'sha256'),'hex'),
+           created_at
+      INTO v_hash,v_expected_hash,v_item_created_at
+      FROM identity_import_item
+     WHERE identity_import_item_id=v_item_link;
+    IF v_hash IS NULL OR length(v_hash) <> 64 OR v_hash <> v_expected_hash THEN
+        RAISE EXCEPTION 'database-generated raw payload SHA-256 is missing or inconsistent';
+    END IF;
 
     SELECT count(*) INTO v_count
       FROM identity_import_item_state_event
@@ -93,19 +106,43 @@ BEGIN
 
     BEGIN
         INSERT INTO identity_import_item(
-            identity_import_batch_id,source_record_key,raw_payload,raw_payload_hash
-        ) VALUES (v_batch,'record-new','{}'::jsonb,'duplicate-key');
+            identity_import_batch_id,source_record_key,raw_payload
+        ) VALUES (v_batch,'record-new','{}'::jsonb);
         RAISE EXCEPTION 'duplicate source record key unexpectedly accepted';
     EXCEPTION WHEN unique_violation THEN NULL;
     END;
 
     BEGIN
         INSERT INTO identity_import_item(
-            identity_import_batch_id,source_record_key,raw_payload,raw_payload_hash,source_identity_id
-        ) VALUES (v_batch,'wrong-source-identity','{}'::jsonb,'wrong-source-hash',v_other_identity);
+            identity_import_batch_id,source_record_key,raw_payload,source_identity_id
+        ) VALUES (v_batch,'wrong-source-identity','{}'::jsonb,v_other_identity);
         RAISE EXCEPTION 'cross-source source identity unexpectedly accepted';
     EXCEPTION WHEN OTHERS THEN
         IF SQLERRM='cross-source source identity unexpectedly accepted' THEN RAISE; END IF;
+    END;
+
+    -- Workflow chronology is process chronology: state/action events cannot predate the
+    -- immutable staged record, even though later review timestamps may be supplied.
+    BEGIN
+        INSERT INTO identity_import_item_state_event(
+            identity_import_item_id,state,occurred_at,reason
+        ) VALUES (
+            v_item_link,'validated',v_item_created_at-interval '1 second','bad backdate'
+        );
+        RAISE EXCEPTION 'backdated import state unexpectedly accepted';
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM='backdated import state unexpectedly accepted' THEN RAISE; END IF;
+    END;
+
+    BEGIN
+        INSERT INTO identity_import_action(
+            identity_import_item_id,action_type,decided_at,reason
+        ) VALUES (
+            v_item_new,'defer',v_item_created_at-interval '1 second','bad backdate'
+        );
+        RAISE EXCEPTION 'backdated import action unexpectedly accepted';
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM='backdated import action unexpectedly accepted' THEN RAISE; END IF;
     END;
 
     INSERT INTO person(preferred_name) VALUES ('Existing Import Target') RETURNING person_id INTO v_target;
@@ -177,6 +214,14 @@ BEGIN
     IF v_text <> 'needs_review' THEN
         RAISE EXCEPTION 'current import item state did not select latest event';
     END IF;
+
+    -- Staging has no apply operation and therefore cannot falsely claim applied state.
+    BEGIN
+        INSERT INTO identity_import_item_state_event(identity_import_item_id,state,reason)
+        VALUES (v_item_new,'applied','no apply path exists');
+        RAISE EXCEPTION 'staging unexpectedly accepted applied state';
+    EXCEPTION WHEN check_violation THEN NULL;
+    END;
 
     BEGIN
         UPDATE identity_import_item
