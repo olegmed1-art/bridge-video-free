@@ -16,7 +16,13 @@ DECLARE
     v_student2 uuid;
     v_skill uuid;
     v_topic uuid;
-    v_snapshot uuid;
+    v_run_published uuid;
+    v_run_unpublished uuid;
+    v_publication uuid;
+    v_published_assessment uuid;
+    v_unpublished_assessment uuid;
+    v_unpublished_error uuid;
+    v_unpublished_success uuid;
     v_count integer;
 BEGIN
     SELECT school_id INTO v_school FROM school WHERE stable_name='Школа спортивного бриджа';
@@ -62,15 +68,50 @@ BEGIN
     VALUES (v_school,'Instructor scope topic','general')
     RETURNING topic_id INTO v_topic;
 
+    -- Manual/direct educational fact is visible after authorization.
     INSERT INTO skill_assessment(
         school_id,student_id,skill_id,assessment_value,confidence_class,method_version
     ) VALUES (
-        v_school,v_student1,v_skill,'{"level":"learning"}'::jsonb,'HIGH','scope-test-v1'
+        v_school,v_student1,v_skill,'{"level":"manual-visible"}'::jsonb,'HIGH','scope-test-v1'
     );
+    -- Another Student never becomes visible without an explicit Person grant.
     INSERT INTO skill_assessment(
         school_id,student_id,skill_id,assessment_value,confidence_class,method_version
     ) VALUES (
         v_school,v_student2,v_skill,'{"level":"private-other"}'::jsonb,'HIGH','scope-test-v1'
+    );
+
+    INSERT INTO analysis_run(school_id,algorithm_key,algorithm_version,run_status)
+    VALUES (v_school,'instructor-scope-published','1','success')
+    RETURNING analysis_run_id INTO v_run_published;
+    INSERT INTO analysis_run(school_id,algorithm_key,algorithm_version,run_status)
+    VALUES (v_school,'instructor-scope-unpublished','1','success')
+    RETURNING analysis_run_id INTO v_run_unpublished;
+
+    INSERT INTO skill_assessment(
+        school_id,student_id,skill_id,assessment_value,confidence_class,
+        generated_by_analysis_run_id,method_version
+    ) VALUES (
+        v_school,v_student1,v_skill,'{"level":"published-analysis"}'::jsonb,'HIGH',
+        v_run_published,'scope-analysis-v1'
+    ) RETURNING skill_assessment_id INTO v_published_assessment;
+    INSERT INTO skill_assessment(
+        school_id,student_id,skill_id,assessment_value,confidence_class,
+        generated_by_analysis_run_id,method_version
+    ) VALUES (
+        v_school,v_student1,v_skill,'{"level":"unpublished-analysis"}'::jsonb,'LOW',
+        v_run_unpublished,'scope-analysis-v1'
+    ) RETURNING skill_assessment_id INTO v_unpublished_assessment;
+
+    INSERT INTO output_publication(
+        school_id,analysis_run_id,publication_type,manifest,status,published_at
+    ) VALUES (
+        v_school,v_run_published,'instructor_education','{}'::jsonb,'published',now()
+    ) RETURNING publication_id INTO v_publication;
+    INSERT INTO analysis_run_output(
+        analysis_run_id,output_entity_id,output_entity_type,publication_id,output_role,status
+    ) VALUES (
+        v_run_published,v_published_assessment,'skill_assessment',v_publication,'derived','published'
     );
 
     INSERT INTO error_observation(
@@ -78,28 +119,26 @@ BEGIN
     ) VALUES (
         v_school,v_student1,v_skill,v_topic,'education-scope-error','medium','scope-group','MEDIUM'
     );
+    INSERT INTO error_observation(
+        school_id,student_id,skill_id,topic_id,error_type,severity,confidence_class,
+        generated_by_analysis_run_id
+    ) VALUES (
+        v_school,v_student1,v_skill,v_topic,'unpublished-analysis-error','low','LOW',v_run_unpublished
+    ) RETURNING error_observation_id INTO v_unpublished_error;
+
     INSERT INTO success_observation(
         school_id,student_id,skill_id,topic_id,success_type,independence_level,confidence_class
     ) VALUES (
         v_school,v_student1,v_skill,v_topic,'education-scope-success','guided','HIGH'
     );
-
-    INSERT INTO student_profile_snapshot(
-        school_id,student_id,as_of_time,generation_id,computed_profile,status
+    INSERT INTO success_observation(
+        school_id,student_id,skill_id,topic_id,success_type,independence_level,confidence_class,
+        generated_by_analysis_run_id
     ) VALUES (
-        v_school,v_student1,now(),uuidv7(),'{"internal":"not exposed by instructor views"}'::jsonb,'active'
-    ) RETURNING snapshot_id INTO v_snapshot;
-    INSERT INTO recommendation(
-        school_id,student_id,source_snapshot_id,recommendation_type,priority_class,
-        priority_value,rationale,recommendation_payload,target_topic_id,target_skill_id,method_version
-    ) VALUES (
-        v_school,v_student1,v_snapshot,'next_focus','high',0.9,'Repeat approved topic',
-        '{"action":"practice"}'::jsonb,v_topic,v_skill,'scope-rec-v1'
-    );
+        v_school,v_student1,v_skill,v_topic,'unpublished-analysis-success','unknown','LOW',v_run_unpublished
+    ) RETURNING success_observation_id INTO v_unpublished_success;
 
     -- Target student has financial data, but the instructor surface must not expose it.
-    INSERT INTO club_service(school_id,stable_key,name,service_type)
-    VALUES (v_school,'instructor-scope-finance-service','Finance hidden service','lesson');
     INSERT INTO club_charge(school_id,person_id,amount,currency_code,charge_type)
     VALUES (v_school,v_student_person1,777,'ILS','manual');
     INSERT INTO club_payment(school_id,person_id,amount,currency_code,paid_at,payment_method)
@@ -128,21 +167,37 @@ BEGIN
         RAISE EXCEPTION 'instructor student authorization set is wrong';
     END IF;
 
+    -- Manual + exact published analysis output are visible; unpublished output is not.
     SELECT count(*) INTO v_count FROM instructor_student_skill_assessment;
-    IF v_count <> 1 THEN RAISE EXCEPTION 'skill assessment scope expected one row, got %',v_count; END IF;
+    IF v_count <> 2 THEN RAISE EXCEPTION 'skill assessment publication scope expected two rows, got %',v_count; END IF;
     IF EXISTS (
         SELECT 1 FROM instructor_student_skill_assessment
-         WHERE assessment_value @> '{"level":"private-other"}'::jsonb
+         WHERE skill_assessment_id=v_unpublished_assessment
+            OR assessment_value @> '{"level":"private-other"}'::jsonb
     ) THEN
-        RAISE EXCEPTION 'ungranted student skill assessment leaked';
+        RAISE EXCEPTION 'unpublished or ungranted skill assessment leaked';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM instructor_student_skill_assessment
+         WHERE skill_assessment_id=v_published_assessment
+    ) THEN
+        RAISE EXCEPTION 'published analysis assessment was not exposed';
     END IF;
 
     SELECT count(*) INTO v_count FROM instructor_student_error_observation;
-    IF v_count <> 1 THEN RAISE EXCEPTION 'authorized error observation missing'; END IF;
+    IF v_count <> 1 OR EXISTS (
+        SELECT 1 FROM instructor_student_error_observation
+         WHERE error_observation_id=v_unpublished_error
+    ) THEN
+        RAISE EXCEPTION 'error observation publication boundary failed';
+    END IF;
     SELECT count(*) INTO v_count FROM instructor_student_success_observation;
-    IF v_count <> 1 THEN RAISE EXCEPTION 'authorized success observation missing'; END IF;
-    SELECT count(*) INTO v_count FROM instructor_student_recommendation;
-    IF v_count <> 1 THEN RAISE EXCEPTION 'authorized recommendation missing'; END IF;
+    IF v_count <> 1 OR EXISTS (
+        SELECT 1 FROM instructor_student_success_observation
+         WHERE success_observation_id=v_unpublished_success
+    ) THEN
+        RAISE EXCEPTION 'success observation publication boundary failed';
+    END IF;
 
     -- Self-service finance remains bound to the actor, not to an instructor's target.
     SELECT count(*) INTO v_count
@@ -160,17 +215,21 @@ BEGIN
     IF NOT has_table_privilege('bridge_school_member_principal','instructor_authorized_student','SELECT')
        OR NOT has_table_privilege('bridge_school_member_principal','instructor_student_skill_assessment','SELECT')
        OR NOT has_table_privilege('bridge_school_member_principal','instructor_student_error_observation','SELECT')
-       OR NOT has_table_privilege('bridge_school_member_principal','instructor_student_success_observation','SELECT')
-       OR NOT has_table_privilege('bridge_school_member_principal','instructor_student_recommendation','SELECT') THEN
+       OR NOT has_table_privilege('bridge_school_member_principal','instructor_student_success_observation','SELECT') THEN
         RAISE EXCEPTION 'member server principal lacks instructor education views';
+    END IF;
+
+    IF to_regclass('public.instructor_student_recommendation') IS NOT NULL THEN
+        RAISE EXCEPTION 'unrestricted recommendation payload view should not exist before visibility policy';
     END IF;
 
     IF has_table_privilege('bridge_school_member_principal','skill_assessment','SELECT')
        OR has_table_privilege('bridge_school_member_principal','error_observation','SELECT')
        OR has_table_privilege('bridge_school_member_principal','recommendation','SELECT')
+       OR has_table_privilege('bridge_school_member_principal','student_profile_snapshot','SELECT')
        OR has_table_privilege('bridge_school_member_principal','club_charge','SELECT')
        OR has_table_privilege('bridge_school_member_principal','club_payment','SELECT') THEN
-        RAISE EXCEPTION 'member server principal crossed base-table/instructor-finance boundary';
+        RAISE EXCEPTION 'member server principal crossed base-table/instructor-finance/internal-profile boundary';
     END IF;
 END $$;
 
