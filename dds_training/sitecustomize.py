@@ -1,16 +1,20 @@
 from __future__ import annotations
 
-"""Interpreter-start guard for direct DDS evaluation.
+"""Interpreter-start reliability hooks for DDS evaluation and test evidence.
 
-Python imports ``sitecustomize`` during normal startup.  Before ``run_stage.py``
-can load, this guard rejects any ``evaluate --start`` invocation that was not
-created by ``authorized_run_stage.py`` after consuming a one-time receipt.
+Python imports ``sitecustomize`` during normal startup.  When the test runner
+supplies runtime-coverage environment variables, coverage collection is enabled
+before application imports.  Separately, before ``run_stage.py`` can load, the
+launch guard rejects any ``evaluate --start`` invocation that was not created by
+``authorized_run_stage.py`` after consuming a one-time receipt.
 """
 
 import json
 import os
 import sys
 from pathlib import Path
+
+from coverage_runtime import activate_from_environment
 
 EXIT_UNAUTHORIZED_DDS = 86
 
@@ -54,4 +58,8 @@ def _guard() -> None:
         _fail("internal confirmation was not supplied by the wrapper")
 
 
+# Coverage activation is a no-op unless the test runner/workflow explicitly sets
+# DDS_COVERAGE_ROOT and DDS_COVERAGE_DIR.  It is intentionally independent from
+# the launch authorization decision.
+activate_from_environment()
 _guard()
