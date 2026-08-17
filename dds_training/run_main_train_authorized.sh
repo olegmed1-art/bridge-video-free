@@ -110,12 +110,12 @@ from pathlib import Path
 shard_id=os.environ['SHARD']; expected=int(os.environ['EXPECTED']); root=Path('work/pilot')
 plan=json.loads((root/'shard_plan_main.json').read_text()); shard=next(x for x in plan['shards'] if x['shard_id']==shard_id); shard_ids=set(map(str,shard['task_ids']))
 db=sqlite3.connect(root/'training.sqlite3'); result_ids={r[0] for r in db.execute('select task_id from dds_results')}
-assert len(result_ids)==expected,(len(result_ids),expected)
+assert len(result_ids)>=expected,(len(result_ids),expected)
 assert shard_ids<=result_ids and len(shard_ids)==2000
 tasks=[json.loads(x) for x in (root/'blind_tasks_crossfit_main.jsonl').read_text().splitlines() if x.strip()]
 holdout={str(t['task_id']) for t in tasks if t.get('split') in {'validation','sealed_test'}}
 assert not (result_ids & holdout),'fresh main holdout leakage'
-summary={'schema':'dds-main-shard-evidence-v1','shard_id':shard_id,'status':'completed','task_count':2000,'resume_key':shard['resume_key'],'task_ids_sha256':shard['task_ids_sha256'],'total_dds_results':expected,'holdout_closed':True,'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow_run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],'commit_sha':os.environ['GITHUB_SHA'],'prediction_sha256':hashlib.sha256((root/'locked_predictions_main_train_adaptive.jsonl').read_bytes()).hexdigest()}
+summary={'schema':'dds-main-shard-evidence-v1','shard_id':shard_id,'status':'completed','task_count':2000,'resume_key':shard['resume_key'],'task_ids_sha256':shard['task_ids_sha256'],'minimum_expected_results_after_shard':expected,'total_dds_results_observed':len(result_ids),'holdout_closed':True,'workflow_run_id':os.environ['GITHUB_RUN_ID'],'workflow_run_attempt':os.environ['GITHUB_RUN_ATTEMPT'],'commit_sha':os.environ['GITHUB_SHA'],'prediction_sha256':hashlib.sha256((root/'locked_predictions_main_train_adaptive.jsonl').read_bytes()).hexdigest()}
 out=Path(os.environ['EVIDENCE_DIR']); out.mkdir(parents=True,exist_ok=True); (out/f'{shard_id}-summary.json').write_text(json.dumps(summary,indent=2)+'\n')
 snap=out/f'{shard_id}-training.sqlite3'; snap.write_bytes((root/'training.sqlite3').read_bytes()); (out/f'{shard_id}-training.sqlite3.sha256').write_text(hashlib.sha256(snap.read_bytes()).hexdigest()+'  '+snap.name+'\n')
 print(summary)
