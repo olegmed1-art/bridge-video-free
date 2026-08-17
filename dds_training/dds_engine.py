@@ -5,6 +5,13 @@ import importlib.metadata
 import json
 from pathlib import Path
 
+from launch_guard import enforce_mass_evaluate_guard
+
+# Hard fallback: even if Python did not discover the project-level sitecustomize
+# during interpreter startup, run_stage imports dds_engine before any DDS solve.
+# Unauthorized mass evaluation therefore still exits before solver work begins.
+enforce_mass_evaluate_guard()
+
 RANK_CHARS = {
     14: "A",
     13: "K",
