@@ -1,16 +1,17 @@
 # Club Operations implementation status
 
-Status as of 2026-08-16 after seven integrity-review passes.
+Status as of 2026-08-17 after eight integrity/security review passes.
 
 ## Current candidate state
 
 - Architecture v0.3 remains an extension of the existing School core, not a parallel member database.
 - Google Drive area `Управление клубом` is a document/file layer and is not the operational source of truth.
-- Candidate PostgreSQL migrations `0020–0037` are implemented on `main`.
-- Production Neon has been rechecked directly and still contains only migrations `0001–0019`; no Club Operations migration has been promoted.
-- Production does not contain `club_membership`, `club_payment_refund` or `person_package_grant` tables.
+- Candidate PostgreSQL migrations `0020–0043` are implemented on `main`.
+- Production Neon has been rechecked directly on 2026-08-17 and still contains only migrations `0001–0019`; no Club Operations or AuthIdentity migration has been promoted.
+- Production does not contain `club_membership`, `auth_identity` or `actor_context_signing_secret` tables.
+- Production PostgreSQL is 18.4.
 - Production operational health at the repeat check is `ok`: 0 critical, 0 warning, 15 ok signals.
-- No real Person/Student/ClubMember import has been performed.
+- No real Person/Student/ClubMember/AuthIdentity import has been performed.
 - Machine Knowledge/Canon remains unpopulated; Bridge Coach is not ready for autonomous member-facing teaching until controlled ingestion/visibility is implemented.
 
 ## Implemented audit corrections
@@ -64,13 +65,32 @@ Status as of 2026-08-16 after seven integrity-review passes.
 - when a Charge cites both Booking and Service, the Service must agree with the booked ClubEvent service when that event has a service;
 - `PaymentAllocation.allocated_at` cannot precede either the Payment or the Charge it connects.
 
+### 0038–0043 — AuthIdentity, member isolation and verified actor context
+
+- `auth_identity` maps an externally authenticated provider subject to the canonical `Person`; it does not replace Person or ContactMethod;
+- school/context role assignments are stored separately from identity through `person_role_assignment`;
+- cross-person access is explicit through `person_access_grant`; being the target person is not a wildcard for arbitrary permission keys;
+- a separate `bridge_school_member` capability has no broad-reader inheritance and receives only reviewed member-facing projections;
+- self-service views are fail-closed: without a verified actor context they return no member rows, and they isolate membership, bookings, entitlements, balances, charges, payments, contacts and messages by Person/school;
+- member-visible message classes are separated from admin/instructor/internal visibility classes;
+- sensitive membership/contact/entitlement/booking/finance/auth changes create protected audit facts with actor/request attribution when a verified context is present;
+- actor context is transaction-local and HMAC-signed with a protected database secret, bound to the backend and transaction; directly setting `bridge.actor_*` custom settings cannot impersonate another Person;
+- forged or malformed actor settings fail closed and cannot create false audit attribution;
+- ordinary member capability cannot establish an arbitrary AuthIdentity context;
+- context establishment is separated into `bridge_school_auth_gateway`, a NOLOGIN trusted server-side capability intended only after external provider verification;
+- `bridge_school_member_principal` remains dormant/NOLOGIN and combines the narrow member surface with the trusted gateway capability for future server-side API use;
+- the generic one-argument role check recognizes only school-wide role assignments; a scoped group/course role cannot silently become a school-wide privilege;
+- a regression test whitelists the SECURITY DEFINER surface executable by the member/member-server roles so later privileged helper leakage fails CI.
+
+Important boundary: the database candidate validates mappings and authorization after authentication, but it does **not** verify Google/GitHub/phone/other provider tokens itself. External token/session verification is still an application/gateway responsibility and has not yet been wired into the production API.
+
 ## Verification
 
-- Database tests now cover Club Operations tests `011–023` in addition to all legacy database tests.
-- PR #79, #82, #83, #84 and #87 were merged only after their candidate database CI passed.
-- Seventh-pass candidate CI: run `31910012398`, conclusion `success`.
-- Latest post-merge database CI on `main`: run `31910114003`, conclusion `success`.
-- Verified steps include PostgreSQL 18 clean install, runtime DSN regression tests, all invariant tests, migration idempotence, immutable-history checksum guard and migration registry verification.
+- Database tests now cover Club Operations/Auth tests `011–030` in addition to all legacy database tests.
+- Eighth-pass core auth candidate PR #94 was merged after candidate CI passed; its post-merge `main` CI run `32000018735` concluded `success`.
+- Follow-up trusted-gateway PR #96 candidate CI run `32000241026` concluded `success`.
+- Latest post-merge database CI on `main`: run `32000346201`, conclusion `success`.
+- Verified steps include PostgreSQL 18 clean install, runtime DSN regression tests, all invariant/adversarial tests, migration idempotence, immutable-history checksum guard and migration registry verification.
 
 ## Important financial semantics
 
@@ -91,15 +111,17 @@ Status as of 2026-08-16 after seven integrity-review passes.
 
 ## Remaining gates before real member use
 
-1. AuthIdentity + object-level authorization/RLS or equivalent fail-closed data isolation.
-2. Actor context/audit identity for user-initiated sensitive changes; current automatic membership events preserve chronology but do not yet know the authenticated member/admin actor.
-3. Controlled Person/Student/ClubMember import and reconciliation.
-4. Knowledge/Canon ingestion plus member/instructor/admin/private visibility policy.
-5. Member API and Club Window only after authorization is verified.
-6. Provider-neutral message-delivery transition policy before stricter state-machine enforcement.
-7. Event capacity/waitlist rules and `ContactPreference=unknown` behavior remain explicit club/business/legal policy decisions and are intentionally not invented.
-8. Recurring subscription/billing semantics are not yet modeled beyond acquired package/grant instances; add them only if the approved service model requires recurrence.
-9. Backup/restore drill, privacy/retention policy, security review and load/cost gates before broad rollout.
+1. Choose/integrate an external authentication provider or provider-neutral verification gateway and bind verified provider claims to the database AuthIdentity context; do not expose database member credentials to clients.
+2. Provision a dedicated server-side member API credential only after the authentication gateway is implemented and tested; `bridge_school_member_principal` intentionally remains NOLOGIN today.
+3. Add guarded member/admin write operations (booking changes, communication preferences, approved profile/contact flows) instead of granting base-table writes.
+4. Define instructor/object-scoped authorization helpers and views before exposing one student's educational data to another Person/teacher context.
+5. Controlled Person/Student/ClubMember/AuthIdentity import and reconciliation.
+6. Knowledge/Canon ingestion plus member/instructor/admin/private visibility policy.
+7. Member API and Club Window only after the auth gateway and guarded write/read boundaries are verified end-to-end.
+8. Provider-neutral message-delivery transition policy before stricter state-machine enforcement.
+9. Event capacity/waitlist rules and `ContactPreference=unknown` behavior remain explicit club/business/legal policy decisions and are intentionally not invented.
+10. Recurring subscription/billing semantics are not yet modeled beyond acquired package/grant instances; add them only if the approved service model requires recurrence.
+11. Backup/restore drill, privacy/retention policy, security review and load/cost gates before broad rollout.
 
 ## Policy intentionally unresolved rather than guessed
 
