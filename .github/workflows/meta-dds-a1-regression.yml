@@ -1,0 +1,20 @@
+name: META DDS A1 Regression
+on:
+  workflow_dispatch:
+  push:
+    branches: [meta-dds-a1]
+    paths:
+      - 'meta_school/runtime/dds_meta_adapter.py'
+      - 'meta_school/runtime/test_dds_meta_adapter.py'
+      - '.github/workflows/meta-dds-a1-regression.yml'
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: python meta_school/runtime/test_dds_meta_adapter.py
