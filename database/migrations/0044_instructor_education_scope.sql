@@ -8,6 +8,11 @@ BEGIN;
 -- canonical Person. No finance, membership, contact, auth or admin data is exposed.
 -- Scoped instructor roles (group/course/etc.) are deliberately not interpreted here;
 -- they require a separate approved scope-aware authorization helper.
+--
+-- Worker/AI-derived observations are exposed only after their exact output has crossed
+-- the existing publication boundary. Unpublished analysis results and unrestricted
+-- profile/recommendation payloads remain internal until a separate visibility contract
+-- is approved.
 -- -----------------------------------------------------------------------------
 
 CREATE VIEW instructor_authorized_student
@@ -48,7 +53,23 @@ SELECT
 FROM skill_assessment sa
 JOIN instructor_authorized_student ast
   ON ast.school_id=sa.school_id AND ast.student_id=sa.student_id
-JOIN skill sk ON sk.skill_id=sa.skill_id AND sk.school_id=sa.school_id;
+JOIN skill sk ON sk.skill_id=sa.skill_id AND sk.school_id=sa.school_id
+WHERE sa.status='active'
+  AND (
+        sa.generated_by_analysis_run_id IS NULL
+        OR EXISTS (
+            SELECT 1
+              FROM analysis_run_output aro
+              JOIN output_publication op ON op.publication_id=aro.publication_id
+             WHERE aro.analysis_run_id=sa.generated_by_analysis_run_id
+               AND aro.output_entity_id=sa.skill_assessment_id
+               AND aro.output_entity_type='skill_assessment'
+               AND aro.status='published'
+               AND op.school_id=sa.school_id
+               AND op.status='published'
+               AND op.published_at IS NOT NULL
+        )
+      );
 
 CREATE VIEW instructor_student_error_observation
 WITH (security_barrier=true) AS
@@ -78,7 +99,23 @@ FROM error_observation eo
 JOIN instructor_authorized_student ast
   ON ast.school_id=eo.school_id AND ast.student_id=eo.student_id
 LEFT JOIN skill sk ON sk.skill_id=eo.skill_id AND sk.school_id=eo.school_id
-LEFT JOIN topic tp ON tp.topic_id=eo.topic_id AND tp.school_id=eo.school_id;
+LEFT JOIN topic tp ON tp.topic_id=eo.topic_id AND tp.school_id=eo.school_id
+WHERE eo.status='active'
+  AND (
+        eo.generated_by_analysis_run_id IS NULL
+        OR EXISTS (
+            SELECT 1
+              FROM analysis_run_output aro
+              JOIN output_publication op ON op.publication_id=aro.publication_id
+             WHERE aro.analysis_run_id=eo.generated_by_analysis_run_id
+               AND aro.output_entity_id=eo.error_observation_id
+               AND aro.output_entity_type='error_observation'
+               AND aro.status='published'
+               AND op.school_id=eo.school_id
+               AND op.status='published'
+               AND op.published_at IS NOT NULL
+        )
+      );
 
 CREATE VIEW instructor_student_success_observation
 WITH (security_barrier=true) AS
@@ -107,33 +144,27 @@ FROM success_observation so
 JOIN instructor_authorized_student ast
   ON ast.school_id=so.school_id AND ast.student_id=so.student_id
 LEFT JOIN skill sk ON sk.skill_id=so.skill_id AND sk.school_id=so.school_id
-LEFT JOIN topic tp ON tp.topic_id=so.topic_id AND tp.school_id=so.school_id;
+LEFT JOIN topic tp ON tp.topic_id=so.topic_id AND tp.school_id=so.school_id
+WHERE so.status='active'
+  AND (
+        so.generated_by_analysis_run_id IS NULL
+        OR EXISTS (
+            SELECT 1
+              FROM analysis_run_output aro
+              JOIN output_publication op ON op.publication_id=aro.publication_id
+             WHERE aro.analysis_run_id=so.generated_by_analysis_run_id
+               AND aro.output_entity_id=so.success_observation_id
+               AND aro.output_entity_type='success_observation'
+               AND aro.status='published'
+               AND op.school_id=so.school_id
+               AND op.status='published'
+               AND op.published_at IS NOT NULL
+        )
+      );
 
-CREATE VIEW instructor_student_recommendation
-WITH (security_barrier=true) AS
-SELECT
-    r.school_id,
-    r.student_id,
-    ast.person_id,
-    ast.preferred_name,
-    r.recommendation_id,
-    r.source_snapshot_id,
-    r.recommendation_type,
-    r.priority_class,
-    r.priority_value,
-    r.rationale,
-    r.recommendation_payload,
-    r.target_topic_id,
-    tp.name AS target_topic_name,
-    r.target_skill_id,
-    sk.name AS target_skill_name,
-    r.method_version,
-    r.created_at
-FROM recommendation r
-JOIN instructor_authorized_student ast
-  ON ast.school_id=r.school_id AND ast.student_id=r.student_id
-LEFT JOIN topic tp ON tp.topic_id=r.target_topic_id AND tp.school_id=r.school_id
-LEFT JOIN skill sk ON sk.skill_id=r.target_skill_id AND sk.school_id=r.school_id;
+-- Recommendation payloads and computed profile JSON are intentionally not exposed in
+-- this first instructor boundary because they do not yet carry a dedicated member/
+-- instructor visibility contract. Add them only after that visibility is explicit.
 
 -- New views inherit broad internal-reader defaults from earlier migrations. Keep the
 -- external/member authorization surface explicit and narrow instead.
@@ -141,8 +172,7 @@ REVOKE SELECT ON
     instructor_authorized_student,
     instructor_student_skill_assessment,
     instructor_student_error_observation,
-    instructor_student_success_observation,
-    instructor_student_recommendation
+    instructor_student_success_observation
 FROM bridge_school_reader, bridge_school_app, bridge_school_worker,
      bridge_school_health, bridge_school_finance, bridge_school_auth_gateway;
 
@@ -150,8 +180,7 @@ GRANT SELECT ON
     instructor_authorized_student,
     instructor_student_skill_assessment,
     instructor_student_error_observation,
-    instructor_student_success_observation,
-    instructor_student_recommendation
+    instructor_student_success_observation
 TO bridge_school_member;
 
 INSERT INTO schema_migration(migration_key)
