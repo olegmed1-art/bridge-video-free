@@ -50,7 +50,8 @@ BEGIN
     END IF;
 
     -- Reader can inspect ordinary persistent tables, but authentication,
-    -- authorization, signing-secret and actor-audit tables are an explicit protected surface.
+    -- authorization, signing-secret, actor-audit and unverified identity-import PII
+    -- tables are an explicit protected surface.
     FOR r IN
         SELECT format('%I.%I', n.nspname, c.relname) AS table_name
           FROM pg_class c
@@ -62,7 +63,12 @@ BEGIN
                'person_role_assignment',
                'person_access_grant',
                'audit_event',
-               'actor_context_signing_secret'
+               'actor_context_signing_secret',
+               'identity_import_batch',
+               'identity_import_batch_state_event',
+               'identity_import_item',
+               'identity_import_item_state_event',
+               'identity_import_action'
            )
     LOOP
         IF NOT has_table_privilege('bridge_school_reader', r.table_name, 'SELECT') THEN
@@ -72,7 +78,9 @@ BEGIN
 
     FOREACH required_table IN ARRAY ARRAY[
         'auth_identity','person_role_assignment','person_access_grant','audit_event',
-        'actor_context_signing_secret'
+        'actor_context_signing_secret','identity_import_batch',
+        'identity_import_batch_state_event','identity_import_item',
+        'identity_import_item_state_event','identity_import_action'
     ] LOOP
         IF has_table_privilege('bridge_school_reader', required_table, 'SELECT') THEN
             RAISE EXCEPTION 'reader unexpectedly has SELECT on protected table %', required_table;
