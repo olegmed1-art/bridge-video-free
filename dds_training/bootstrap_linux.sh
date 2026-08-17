@@ -7,11 +7,12 @@ cd "$HERE"
 # Canonical DDS Learning v2.3 runtime pins.
 PYTHON_BIN="${PYTHON_BIN:-python3.14}"
 DDS_REPO="${DDS_REPO:-https://github.com/dds-bridge/dds.git}"
-DDS_TAG="${DDS_TAG:-v3.0.0}"
-DDS_COMMIT="${DDS_COMMIT:-37c8a79f4c67c55d1a309ccb66dd00cb58af464a}"
-BAZELISK_VERSION="${BAZELISK_VERSION:-1.29.0}"
-USE_BAZEL_VERSION="${USE_BAZEL_VERSION:-7.6.1}"
+DDS_TAG="v3.0.0"
+DDS_COMMIT="37c8a79f4c67c55d1a309ccb66dd00cb58af464a"
+BAZELISK_VERSION="1.29.0"
+USE_BAZEL_VERSION="7.6.1"
 DDS_REQUIRE_WHEEL_CACHE="${DDS_REQUIRE_WHEEL_CACHE:-0}"
+WHEEL_CACHE_CONTRACT="dds3-wheel-cache-v1"
 
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   echo "Python 3.14 is required for the pinned DDS3 v3.0.0 training runtime." >&2
@@ -34,11 +35,10 @@ mkdir -p "$WHEEL_CACHE"
 rm -f "$REBUILT_MARKER"
 
 validate_cached_wheel() {
-  python - "$WHEEL_CACHE" "$PROVENANCE" "$DDS_COMMIT" "$USE_BAZEL_VERSION" <<'PY'
+  python - "$WHEEL_CACHE" "$PROVENANCE" "$DDS_COMMIT" "$USE_BAZEL_VERSION" "$WHEEL_CACHE_CONTRACT" <<'PY'
 from __future__ import annotations
 import hashlib
 import json
-import platform
 import sys
 from pathlib import Path
 
@@ -46,6 +46,7 @@ cache = Path(sys.argv[1])
 provenance_path = Path(sys.argv[2])
 expected_commit = sys.argv[3]
 expected_bazel = sys.argv[4]
+expected_cache_contract = sys.argv[5]
 if not provenance_path.is_file():
     raise SystemExit(1)
 try:
@@ -53,6 +54,8 @@ try:
 except (OSError, json.JSONDecodeError):
     raise SystemExit(1)
 if provenance.get("schema") != "dds3-wheel-provenance-v1":
+    raise SystemExit(1)
+if provenance.get("cache_contract") != expected_cache_contract:
     raise SystemExit(1)
 if provenance.get("dds_source_commit") != expected_commit:
     raise SystemExit(1)
@@ -165,7 +168,7 @@ CACHED_WHEEL="$WHEEL_CACHE/$(basename "$WHEEL")"
 popd >/dev/null
 
 python - "$CACHED_WHEEL" "$PROVENANCE" "$DDS_REPO" "$DDS_TAG" \
-  "$DDS_COMMIT" "$ACTUAL_DDS_COMMIT" "$USE_BAZEL_VERSION" "$BAZELISK_VERSION" <<'PY'
+  "$DDS_COMMIT" "$ACTUAL_DDS_COMMIT" "$USE_BAZEL_VERSION" "$BAZELISK_VERSION" "$WHEEL_CACHE_CONTRACT" <<'PY'
 from __future__ import annotations
 import hashlib
 import json
@@ -184,6 +187,7 @@ payload = {
     "actual_source_commit": sys.argv[6],
     "bazel_version": sys.argv[7],
     "bazelisk_version": sys.argv[8],
+    "cache_contract": sys.argv[9],
     "wheel": wheel.name,
     "wheel_size": wheel.stat().st_size,
     "wheel_sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
