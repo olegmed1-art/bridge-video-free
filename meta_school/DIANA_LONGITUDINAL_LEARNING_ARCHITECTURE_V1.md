@@ -1,171 +1,124 @@
-# DIANA LONGITUDINAL SCHOOL LEARNING ARCHITECTURE v1.1
+# DIANA LONGITUDINAL SCHOOL LEARNING ARCHITECTURE v1.2
 
-Status: ARCHITECTURE_HARDENED / CORPUS_NOT_YET_BULK_PROCESSED
+Status: ARCHITECTURE_HARDENED / KNOWLEDGE_ACQUISITION_INTEGRATED / CORPUS_NOT_YET_BULK_PROCESSED
 Scope: historical corpus ~250 lesson videos, beginner -> current level.
 
 ## 1. Mission and authority
-Build one provenance-grounded longitudinal knowledge graph from six synchronized views: CANON, CURRICULUM, STUDENT, TEACHER, EVIDENCE, OUTCOME. These are views over shared events/evidence, not six duplicate databases.
+Build one provenance-grounded longitudinal knowledge graph from synchronized views: CANON, CURRICULUM, STUDENT, TEACHER, EVIDENCE, OUTCOME and KNOWLEDGE. Views share typed source events; they are not duplicate databases.
+Authority for School trading/methodology: OWNER_DECISION > VERIFIED_WRITTEN_CANON > VERIFIED_CANON_VERSION > VIDEO_OBSERVATION > MODEL_INFERENCE. Repetition increases evidence support, not authority.
 
-Authority order for School trading/methodology:
-OWNER_DECISION > VERIFIED_WRITTEN_CANON > VERIFIED_CANON_VERSION > VIDEO_OBSERVATION > MODEL_INFERENCE.
-Repeated video evidence increases support but never outranks written/owner canon by repetition alone.
-META coordinates extraction and technical learning; it cannot silently activate canon/methodology or write production Student identity/profile state.
+## 2. Typed graph — single source of truth
+Core immutable/append-only nodes: SourceAsset, TranscriptRevision, LessonSession, EvidenceSpan, Episode, Claim, KnowledgeItem, KnowledgeVersion, CanonItem, CanonVersion, CurriculumTopic, PrerequisiteHypothesis, Skill, Opportunity, StudentResponse, TeacherIntervention, OutcomeObservation, MisconceptionHypothesis, ModelPrediction, GeneratedExercise, LearningDebt, KnowledgeGap, Decision/Review.
+Core edges: EVIDENCES, OCCURS_IN, SUPPORTS, TEACHES, EXEMPLIFIES, CONTRADICTS, SUPERSEDES, REQUIRES, TARGETS_SKILL, RESPONDS_TO, HELPED_BY, VALIDATED_BY, RETESTS, GENERALIZES, TRANSFERS_TO, DERIVED_FROM, PREDICTS, RESOLVES, GENERATED_FROM, DUPLICATE_OF, CLOSES_GAP, HAS_VERSION.
+Derived views reference immutable versions instead of copying authoritative content.
 
-## 2. Typed graph: single source of truth
-Core immutable/append-only nodes:
-- SourceAsset(Video/File/TranscriptRevision);
-- LessonSession;
-- EvidenceSpan(start/end + speaker/provenance/confidence);
-- Episode;
-- Claim;
-- CanonItem + CanonVersion;
-- CurriculumTopic + PrerequisiteHypothesis;
-- Skill;
-- Opportunity;
-- StudentResponse;
-- TeacherIntervention;
-- OutcomeObservation;
-- MisconceptionHypothesis;
-- ModelPrediction;
-- GeneratedExercise;
-- LearningDebt;
-- Decision/Review.
+## 3. Evidence and claim model
+Every Claim has type, authority class, evidence IDs, historical validity when applicable, extraction version, status and separated confidence dimensions: source quality, speaker attribution, extraction confidence, evidence support, authority. Statuses: OBSERVED, HYPOTHESIS, CANDIDATE, VERIFIED, CONFLICTED, SUPERSEDED, REJECTED, UNKNOWN. Never collapse confidence and authority.
 
-Core edges:
-EVIDENCES, OCCURS_IN, TEACHES, EXEMPLIFIES, CONTRADICTS, SUPERSEDES, REQUIRES, TARGETS_SKILL, RESPONDS_TO, HELPED_BY, VALIDATED_BY, RETESTS, GENERALIZES, TRANSFERS_TO, DERIVED_FROM, PREDICTS, RESOLVES, GENERATED_FROM.
+## 4. Knowledge Acquisition & Consolidation Loop
+Sources may include Video, Tournament, DDS, Lesson/Material, verified School document, bridge literature and other explicitly approved evidence sources.
+Pipeline:
+SOURCE -> EvidenceSpan -> Claim -> KNOWLEDGE_CANDIDATE -> entity/semantic matching -> duplicate/near-duplicate detection -> contradiction check -> authority classification -> KnowledgeVersion candidate -> validation/QC -> VERIFIED_KNOWLEDGE or CANON_CANDIDATE/CONFLICT -> graph links -> Gap detection -> downstream use -> Outcome -> META feedback.
 
-Rule: derived views never copy authoritative text when a reference/version link is sufficient.
+### Knowledge authority classes
+- VERIFIED_CANON: owner/verified canonical School trading or methodology version.
+- VERIFIED_KNOWLEDGE: validated factual/educational knowledge not itself canon.
+- CANDIDATE_KNOWLEDGE: useful extraction awaiting sufficient validation.
+- HISTORICAL: prior/superseded knowledge retained for provenance/history.
+- CONFLICTED: unresolved incompatible claims.
+- REJECTED: candidate disproved/not accepted; retained to avoid repeated work.
 
-## 3. Evidence classes and claims
-Every Claim has `claim_type`, `authority_class`, `evidence_ids`, `valid_from/valid_to` when historical, extraction_version, status and confidence-of-evidence.
-Statuses: OBSERVED, HYPOTHESIS, CANDIDATE, VERIFIED, CONFLICTED, SUPERSEDED, REJECTED, UNKNOWN.
+### Consolidation rules
+1. Forty observations of one rule produce one KnowledgeItem/CanonItem with many Evidence links, not forty rules.
+2. Exact duplicates are merged by identity/reference; near-duplicates become candidate SAME_AS links until semantic equivalence is validated.
+3. Scope is first-class: level, context, vulnerability, seat/position, competition context, date/version and prerequisites where relevant. Apparent contradictions with different scopes are not conflicts.
+4. Newer is not automatically better/correct. Historical sequence does not grant authority.
+5. Corrections create new versions; originals remain immutable.
+6. Knowledge used downstream must point to the exact KnowledgeVersion/CanonVersion used.
+7. A KnowledgeVersion records validation basis and known exceptions/limits.
 
-Separate confidence dimensions:
-- source_quality;
-- speaker_attribution_confidence;
-- extraction_confidence;
-- evidence_support;
-- authority_class.
-Never collapse them into one confidence number.
+### Knowledge Gap loop
+Gap types include MISSING_RULE, MISSING_EXPLANATION, MISSING_EXAMPLE, MISSING_COUNTEREXAMPLE, MISSING_EXCEPTION, MISSING_EXERCISE, MISSING_TRANSFER_CHECK, CONFLICT_UNRESOLVED, SOURCE_WEAK, COVERAGE_WEAK.
+A later Evidence/KnowledgeVersion may CLOSES_GAP; gap history is retained. Gap detection creates work candidates, not automatic invented content.
 
-## 4. CANON
-Extract School trading rules, ranges, suit requirements, continuations, intervention/competitive trading, forcing/non-forcing meanings, exceptions, examples and terminology.
-Lifecycle: OBSERVED -> REPEATED/CONSISTENT support -> CANON_CANDIDATE -> VERIFIED_CANON only through existing verified canon or owner decision.
-CANON_CONFLICT stores competing formulations, dates, scope and evidence; no automatic winner.
-CanonVersion is immutable. Later versions SUPERSEDE rather than overwrite older ones.
+### Provenance completeness gate
+No VERIFIED_KNOWLEDGE without resolvable provenance and validation basis. If source locator/revision is missing, status remains CANDIDATE/UNKNOWN. Generated summaries never become the sole provenance of the knowledge they summarize.
+
+### Retrieval/use policy
+Retrieval ranks authority and scope fit before repetition/popularity. Current VERIFIED_CANON is used for School trading. Historical/candidate/conflicted items may be shown for research/audit but cannot silently drive student-facing canonical instruction.
+
+### Knowledge decay/staleness
+Knowledge is not deleted merely because it is old. Mark STALE only when a dependency/version/source changes or explicit review policy requires revalidation. CanonVersion validity is versioned; historical remains queryable.
+
+## 5. CANON
+Extract School trading rules, ranges, suit requirements, continuations, intervention/competitive trading, forcing/non-forcing meanings, exceptions, examples and terminology. Lifecycle: OBSERVED -> support -> CANON_CANDIDATE -> VERIFIED_CANON only through verified canon/owner authority. CANON_CONFLICT stores competing formulations/scopes/evidence; no automatic winner. Later versions SUPERSEDE rather than overwrite.
 Knowledge genealogy: source -> first teaching -> formulations -> examples -> exceptions -> revisions -> exercises -> applications -> current verified version.
 
-## 5. CURRICULUM
-Track introduction, prerequisite hypotheses, order, revisits, exercise types, depth, spacing and transfer checks. A prerequisite edge begins HYPOTHESIS and requires repeated longitudinal/cross-student evidence before VERIFIED curriculum knowledge.
-Coverage view: topic -> canon -> explanation -> example -> counterexample -> exception -> exercise -> typical error -> retention/generalization/transfer evidence.
-Bottlenecks are hypotheses derived from repeated help/reteach/weak-transfer patterns, never automatic methodology changes.
+## 6. CURRICULUM
+Track introductions, prerequisite hypotheses, order, revisits, exercise types, spacing and transfer checks. Prerequisite begins HYPOTHESIS and needs repeated/cross-student validation. Coverage view links topic -> canon/knowledge -> explanation -> example -> counterexample -> exception -> exercise -> error -> retention/generalization/transfer. Bottlenecks remain hypotheses until validated.
 
-## 6. STUDENT longitudinal model
-Opportunity is the denominator. NOT_OBSERVED != FAILED.
-Response state is event-level; skill state is a derived temporal projection, never overwritten fact.
-Observational states may include INTRODUCED, RECOGNIZES_WITH_PROMPT, EXPLAINS, APPLIES_ON_DIRECT_QUESTION, APPLIES_WITH_HINT, INDEPENDENT, RETAINED, GENERALIZED, TRANSFER_CONFIRMED, REGRESSION_AFTER_MASTERY.
-One success != mastery; one failure != lack of knowledge; helped-correct != independent-correct.
-Student trajectory remains multidimensional; no single global score.
+## 7. STUDENT
+Opportunity is denominator; NOT_OBSERVED != FAILED. Response is event-level; skill state is derived temporal projection. Observational states may include INTRODUCED, RECOGNIZES_WITH_PROMPT, EXPLAINS, APPLIES_ON_DIRECT_QUESTION, APPLIES_WITH_HINT, INDEPENDENT, RETAINED, GENERALIZED, TRANSFER_CONFIRMED, REGRESSION_AFTER_MASTERY. One success != mastery; one failure != lack of knowledge; helped correct != independent correct. No global scalar student score.
+Decision Timeline stores available information, choice, stated reasoning, help, correction and later outcome. Cause remains UNKNOWN unless supported. Knowledge Conflict and Misconception hypotheses are separate typed objects.
 
-Decision Timeline stores available information, choice, explicitly stated reasoning, help, correction and later outcome. Cause-of-error remains UNKNOWN unless supported.
-Knowledge Conflict distinguishes wrong-rule-selection from unknown-rule.
-Misconception Graph stores MISCONCEPTION_HYPOTHESIS separately from VERIFIED_MISCONCEPTION and requires multiple causally compatible observations.
+## 8. TEACHER
+Record observed WAIT, QUESTION, DIAGNOSTIC_QUESTION, NEUTRAL_PROMPT, LIGHT_HINT, DIRECTIONAL_HINT, EXPLANATION, DEMONSTRATION, REPLAY, TRANSFER_CHECK plus free-form fallback. Taxonomy is descriptive, not mandatory methodology. Preserve explanation variants, analogies, counterexamples, failed explanations and moments of insight. Help cost is actual intervention sequence; scalar Independence Index remains experimental.
 
-## 7. TEACHER model
-TeacherIntervention records observed WAIT, QUESTION, DIAGNOSTIC_QUESTION, NEUTRAL_PROMPT, LIGHT_HINT, DIRECTIONAL_HINT, EXPLANATION, DEMONSTRATION, REPLAY, TRANSFER_CHECK plus free-form observed intervention when taxonomy does not fit.
-Taxonomy is descriptive, not mandatory methodology.
-Store explanation variants, analogies, counterexamples and MomentOfInsight evidence.
-Help cost is the actual intervention sequence/count; any scalar Independence Index remains EXPERIMENTAL.
+## 9. OUTCOME
+Separate learning from assessment. Link immediate response, delayed retention, changed-case generalization and unfamiliar/tournament transfer. Tournament evidence obeys source/identity/missing-trading/play restrictions. DDS facts are solver-grounded; hidden-information optimum is not automatic human-error proof. Forgetting/regression require later opportunity evidence; latent learning/effectiveness remain causal hypotheses.
 
-## 8. OUTCOME model
-Learning evidence and assessment evidence are separate.
-Outcome levels: immediate response, delayed retention, changed-case generalization, unfamiliar/tournament transfer.
-Tournament evidence obeys tournament provenance/identity and missing-trading/play restrictions. DDS mathematical facts are solver-grounded; DDS hidden-information optimum is not automatically human-error proof.
-Forgetting requires a later failed/reduced-independence opportunity after prior evidence; an unobserved interval alone is not forgetting.
-RegressionAfterMastery requires prior independent/retained evidence and contextual investigation.
-LatentLearning is hypothesis only; temporal sequence does not prove causality.
+## 10. Measurement safeguards
+Confidence x correctness only with explicit/reliably elicited confidence; no tone-based psychology. Latency only with reliable boundaries. Second-order habits remain descriptive unless owner canonizes them. Temporal order != causality; tournament percentage != direct skill measure; model confidence != evidence confidence.
 
-## 9. Measurement safeguards
-Confidence x correctness uses confidence only when explicitly stated/reliably elicited; never infer psychological confidence from tone.
-Decision latency is recorded only with reliable task-start/response boundaries and remains contextual evidence.
-Second-order habits (planning, information gathering, checking, pausing, contradiction detection, revision) remain descriptive unless owner canonizes them.
+## 11. Derived products
+FAQ, typical-error library, contrast/minimal-change cases, teaching-episode library, curriculum/canon/knowledge coverage maps, bottleneck hypotheses, diagnostic-deal ranking, retention/generalization/transfer sets, learning-debt and knowledge-gap queues. Derived products remain versioned and non-canonical unless explicitly promoted.
+GeneratedExercise declares target principle, exact verified Canon/Knowledge versions, changed variables, source evidence and generation version. It never becomes historical evidence by being generated.
 
-## 10. Derived libraries/products
-Non-canonical derived products:
-FAQ from real questions; typical-error library; contrast library; minimal-change cases; teaching-episode library; curriculum/canon coverage maps; bottleneck hypotheses; diagnostic-deal ranking; retention/generalization/transfer sets; learning-debt queue.
-GeneratedExercise always declares target principle, verified canon version, changed variables, source evidence and generation version. It never becomes historical evidence.
-Where useful: retention familiar case -> minimally changed generalization -> unfamiliar transfer.
-DDS validates card-play mathematical properties where applicable; trading correctness uses verified School canon only.
+## 12. Teaching-effectiveness research
+Reconstruct durable-skill chains from explanation through transfer. Outputs are EFFECTIVENESS_HYPOTHESIS for Diana. Cross-student validation + owner decision required for general methodology. Preserve negative/failed episodes.
 
-## 11. Teaching-effectiveness research
-Reconstruct durable-skill chains: first explanation -> partial/failure -> alternative intervention -> exercise -> independent application -> delayed retention -> transfer.
-Output is EFFECTIVENESS_HYPOTHESIS for Diana. General methodology claims require cross-student evidence and owner decision.
-Preserve failed teaching episodes; never filter the corpus to successes only.
+## 13. Digital Student Model
+Read-only experimental prediction, persisted before real outcome and scored afterward. Calibrate by skill/topic/novelty/help, not global accuracy. Prediction is not student fact. Production profile/identity writes remain R3.
 
-## 12. Digital Student Model
-Read-only experimental Digital Twin predicts response/help need. Prediction must be persisted before outcome and scored afterward. Prediction is model output, not student fact.
-Evaluate calibration by skill/topic/novelty/help class, not one global accuracy number.
-Production Student/profile/identity writes remain R3.
+## 14. Teacher briefing / learning debt
+Briefing shows last evidence, independent/helped attempts, elapsed interval, unresolved retention/transfer/conflict/gaps and suggested diagnostic opportunity; suggestions = PROPOSAL. LearningDebt includes LEARNED_NOT_TRANSFER_TESTED, RETENTION_NOT_RECHECKED, CONFLICT_UNRESOLVED, CANON_GAP, MISCONCEPTION_UNRESOLVED.
 
-## 13. Teacher briefing and Learning Debt
-Teacher briefing: evidence-grounded last observation, helped/independent history, elapsed interval, unresolved retention/transfer/conflict and suggested diagnostic opportunity. All suggestions = PROPOSAL.
-LearningDebt types include LEARNED_NOT_TRANSFER_TESTED, RETENTION_NOT_RECHECKED, CONFLICT_UNRESOLVED, CANON_GAP, MISCONCEPTION_UNRESOLVED. Debt is workflow state, not criticism.
+## 15. Privacy/reuse
+Raw source video/transcript protected and immutable. Reuse identifiable clips requires permission/de-identification. Aggregates minimize personal data. Large videos are not duplicated outside Drive unless necessary; free Drive-native copies may be used when operationally useful.
 
-## 14. Privacy and reuse
-Raw video/transcript is protected source evidence. Original sources are immutable. Public/other-student reuse of identifiable clips requires permission/de-identification. Derived aggregate patterns minimize personal data. Large videos are not duplicated outside Drive unless necessary; free Drive-native copies may be used when operationally useful.
+## 16. Optimized staged processing
+A cheap pass: INVENTORY -> CHRONOLOGY -> duplicate/derived relation -> transcript/subtitle coverage -> Source QC.
+B text-first: transcript segmentation -> candidate episodes/claims/topics/opportunities/interventions -> provenance/QC.
+C selective multimodal: only missing cards/visual context, speaker ambiguity, poor transcript, high-value conflict/assessment; store reason.
+D consolidation/linking: entity matching -> knowledge dedupe -> scope normalization -> conflict detection -> Canon/Knowledge candidates -> temporal/student/teacher/outcome links -> Gap/debt detection.
+E QC: deterministic provenance/completeness first, independent/model critic second, owner review for R4/canon conflict/meaningful ambiguity.
+F outputs: graph/projections -> Teacher brief -> Learning Memory -> downstream retrieval.
 
-## 15. Optimized processing pipeline
-### Phase A — cheap corpus pass
-INVENTORY -> CHRONOLOGY -> DUPLICATE/DERIVED_RELATION -> TRANSCRIPT/SUBTITLE COVERAGE -> SOURCE_QC.
-No full video download when metadata/transcript is sufficient.
+## 17. Incrementality/idempotency
+Extraction key = SourceAsset revision/hash + extraction module/version + segment locator. Consolidation key additionally includes normalized candidate identity + scope. Unchanged assets are not reprocessed unless affected module/dependency changes. New video appends T(n+1) and recomputes impacted graph neighborhoods only. Corrections append versions.
 
-### Phase B — text-first extraction
-For videos with reliable transcript/subtitles: segment transcript -> detect candidate episodes -> extract claims/topics/opportunities/interventions -> provenance/QC.
-Do not invoke expensive visual/audio analysis for segments with sufficient evidence.
+## 18. Corpus inventory / episode / opportunity
+Inventory: VideoID, Drive source, recording date/time, lesson order, duration, transcript/subtitle coverage/quality/revision, processing status, duplicate relation, identity basis, source hash, extraction versions, escalation reason, chronology confidence.
+Episode: source/time, topic candidates, Canon/KnowledgeVersion links, Curriculum/Skill links, intervention/opportunity IDs, Evidence IDs/status.
+Opportunity: skill/topic, prompted/unprompted, learning/assessment, available information, novelty, response/correctness basis, help, reliable latency, explicit confidence, DDS/canon evidence, later outcome links.
 
-### Phase C — selective multimodal escalation
-Escalate only when required for: cards/board position not represented in transcript, ambiguous speaker, gesture/visual teaching evidence, missing/low-quality transcript, or high-value conflict/assessment episode.
-Store escalation reason.
+## 19. Cross-system responsibilities
+Video -> Evidence/episodes, never canon authority.
+DDS -> mathematical card-play evidence, never trading/methodology authority.
+Tournament -> independent transfer/outcome evidence within source limits.
+Books/literature -> external knowledge candidates with source/provenance; they do not override School canon.
+Lesson generator -> consumes exact VERIFIED_CANON/VERIFIED_KNOWLEDGE versions + proposals and preserves source links.
+Student Model -> consumes validated/published observations; cannot activate canon/knowledge authority.
+META -> evaluates health, dedupe/conflict/gap queues and technical improvements without authority inheritance.
 
-### Phase D — linking
-CANON_CONFLICT_CHECK -> TEMPORAL_LINKING -> OPPORTUNITY/RESPONSE -> TEACHER_INTERVENTION -> OUTCOME_LINKING -> MISCONCEPTION/PREREQUISITE hypotheses -> LEARNING_DEBT.
+## 20. Knowledge-base health metrics
+Track without inventing arbitrary pass thresholds: duplicate candidate rate, unresolved conflict count/age, provenance completeness, candidate-to-verified conversion, rejected/repeated hypothesis rate, gap coverage, stale dependencies, orphan KnowledgeVersions, downstream usage by version, corrections, retrieval misses and cost/time per verified knowledge addition. Thresholds require evidence/owner policy.
 
-### Phase E — QC
-Deterministic provenance/completeness checks first; model critic second; owner review only for R4/canon conflict/meaningful ambiguity.
+## 21. Multi-student future
+Diana is first reference corpus, not universal truth. Difficulty/prerequisite/bottleneck/effectiveness generalization requires multiple students and explicit validation; use controlled aggregates and do not rank people.
 
-### Phase F — outputs
-Temporal graph -> current Candidate Student projection -> Canon/Curriculum candidates -> Teacher brief -> Learning Memory.
+## 22. First longitudinal Learning Loop
+Historical T0...Tn reconstruction plus prospective: evidence snapshot -> unresolved skill/knowledge/transfer question -> diagnostic task -> pre-registered prediction -> response -> DDS/canon/evidence validation -> Candidate profile/knowledge update -> teaching proposal -> delayed check -> META evaluation -> Learning Memory/Knowledge consolidation.
 
-This staged pipeline avoids repeatedly reprocessing the full 250-video corpus when only a small subset requires multimodal review.
-
-## 16. Incremental processing and idempotency
-Each extraction is keyed by `(SourceAsset revision/hash, extraction_version, segment locator)`.
-Unchanged assets are not reprocessed after algorithm updates unless the affected extraction module/version changes or a dependency invalidates derived results.
-New video processing appends T(n+1) and recomputes only impacted projections/edges.
-Corrections create new Evidence/Claim versions; no destructive rewrite.
-
-## 17. Corpus inventory
-VideoID, DriveID/source, recording date/time, lesson sequence, duration, transcript/subtitle availability and quality, transcript revision, processing status, duplicate/derived relation, participant identity basis, source hash where available, extraction versions, escalation status/reason.
-Chronology confidence is explicit when date/order is uncertain.
-
-## 18. Episode / Opportunity schema
-Episode: EpisodeID, VideoID, start/end, topic candidates, CanonVersion links, CurriculumTopic links, Skill links, intervention links, decision/opportunity IDs, evidence IDs, extraction status.
-Opportunity: OpportunityID, skill/topic, prompted/unprompted, learning_vs_assessment, available information, novelty, response, correctness basis, help sequence, reliable latency, explicit confidence, DDS evidence where applicable, verified-trading-canon evidence, later retention/generalization/transfer links.
-
-## 19. Cross-system links
-Video analysis supplies transcript/episode Evidence; it does not decide canon.
-DDS supplies mathematical card-play Evidence; it does not decide School trading/methodology.
-Tournament analysis supplies independent transfer/outcome Evidence under its source limits.
-Lesson/material generator consumes VERIFIED_CANON + Curriculum/Student proposals and must preserve source links.
-Student Model consumes published/validated observations; it cannot activate canon.
-META evaluates system health/improvements and preserves authority boundaries.
-
-## 20. Multi-student future
-Diana is first longitudinal reference corpus, not universal truth. Cross-student layer uses anonymous/controlled aggregates where possible. Difficulty, prerequisite, bottleneck and teaching-effectiveness generalization require multiple students and explicit validation; do not rank people.
-
-## 21. First longitudinal Learning Loop
-Historical: T0 -> ... -> Tn reconstruction.
-Prospective: current evidence snapshot -> unresolved skill/transfer question -> diagnostic task -> pre-registered prediction -> real response -> DDS/canon/evidence validation -> Candidate profile projection -> teaching proposal -> delayed retention/transfer check -> META evaluation -> Learning Memory.
-
-## 22. Autonomy
-A1 read-only bulk observation/extraction may write isolated Evidence/Candidate artifacts. Canon activation, methodology change, production Student/profile/identity writes remain non-autonomous. Technical deterministic R1 fixes use A2 only where that component separately earned it.
+## 23. Autonomy
+A1 read-only bulk extraction may write isolated Evidence/Candidate/Gap artifacts. VERIFIED_KNOWLEDGE promotion may be automated only where deterministic authority/provenance rules explicitly permit it; School Canon activation, methodology change, production Student/profile/identity writes remain non-autonomous. Technical R1 fixes use A2 only per separately earned component authority.
