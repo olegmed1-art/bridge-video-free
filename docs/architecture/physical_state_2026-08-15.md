@@ -1,6 +1,6 @@
 # Физическая архитектура данных — фактическая реализация v0.2
 
-Дата фиксации: 2026-08-15; актуализация после восьмой проверки: 2026-08-17
+Дата фиксации: 2026-08-15; актуализация после девятой проверки: 2026-08-17
 
 ## Production database
 
@@ -9,8 +9,10 @@
 - PostgreSQL: 18.4
 - Production schema_migration: `0001–0019`
 - Для всех зарегистрированных production migration записан checksum.
-- Последняя прямая повторная проверка 2026-08-17 подтверждает: Club Operations/Auth `0020–0043` в production не применены.
+- Последняя прямая повторная проверка 2026-08-17 подтверждает: Club Operations/Auth/Truth `0020–0044` в production не применены.
 - `club_membership`, `auth_identity`, `actor_context_signing_secret` в production отсутствуют.
+- Production Bridge Video `analysis_run`: 11 успешных строк; `algorithm_version_id` пока не заполнен, потому что Truth migration `0044` еще не продвинута в production.
+- `storage_verification` в production пока пуст; это также ожидается до `0044`.
 
 Миграции production после исторической фиксации v0.1:
 
@@ -46,12 +48,15 @@ Candidate `main` дополнительно определяет, но productio
 
 ## Operational health
 
-Последняя production проверка 2026-08-17:
+Последняя production проверка 2026-08-17 после hardening release path:
 
 - overall_severity = ok
 - critical = 0
 - warning = 0
 - ok = 15
+- migration_count = 19
+- latest_migration = `0019_default_function_acl_fix`
+- missing migration checksums = 0
 
 ## Фактические данные
 
@@ -90,9 +95,9 @@ FastAPI service существует в `bridge_school_api` и использу�
 
 Эта область — файловый слой, не база членов клуба.
 
-## Candidate Club Operations/Auth на GitHub main
+## Candidate Club Operations/Auth/Truth на GitHub main
 
-Кандидат состоит из миграций `0020–0043`.
+Кандидат состоит из миграций `0020–0044`.
 
 Основные реализованные контуры:
 
@@ -121,13 +126,35 @@ FastAPI service существует в `bridge_school_api` и использу�
 - protected actor/request audit history for sensitive operations;
 - separate trusted auth-gateway capability; ordinary member capability cannot select an arbitrary identity context;
 - school-wide role helper cannot silently promote a scoped group/course role;
-- member SECURITY DEFINER function surface is regression-whitelisted.
+- member SECURITY DEFINER function surface is regression-whitelisted;
+- canonical `bridge-video-master-analysis` Algorithm identity;
+- AlgorithmVersion identity registry through `3.1-free-r25.11` without equating registration with quality promotion;
+- fail-closed linkage of Bridge Video AnalysisRun to AlgorithmVersion;
+- append-only StorageVerification evidence linked to AssetLocation and the Asset checksum registry.
 
-Database tests `011–030` cover positive and adversarial Club Operations/Auth scenarios in addition to all legacy tests.
+Database tests `011–031` cover positive and adversarial Club Operations/Auth/Truth scenarios in addition to all legacy tests.
 
 Round-8 core auth post-merge verification: GitHub Actions run `32000018735`, `success`.
 Trusted-gateway candidate verification: run `32000241026`, `success`.
-Latest post-merge candidate verification: GitHub Actions run `32000346201`, PostgreSQL 18 — clean migration install, runtime DSN regression, all invariant/adversarial tests, idempotence, checksum tamper guard and migration registry verification all `success`.
+Auth-gateway post-merge verification: run `32000346201`, PostgreSQL 18, `success`.
+Truth-layer candidate verification: run `32000454269`, PostgreSQL 18 — clean migration install, all invariant/adversarial tests, idempotence, checksum-tamper guard and migration-registry verification all `success`.
+
+### Truth-layer production-snapshot evidence
+
+`0044_truth_storage_provenance` дополнительно проверена не только на пустой CI-базе, но и на изолированной Neon-ветке, созданной из фактического production состояния.
+
+После применения `0044` на этой копии:
+
+- canonical Bridge Video Algorithm = 1;
+- registered Bridge Video AlgorithmVersion = 9;
+- исторические Bridge Video AnalysisRun = 11;
+- linked AnalysisRun = 11;
+- unlinked AnalysisRun = 0;
+- AssetLocation = 15;
+- StorageVerification = 15;
+- locations with verification evidence = 15.
+
+Все 15 проверок хранилища имели `availability_status=available` и были привязаны к checksum из Asset registry. Изолированная тестовая ветка после проверки удалена. Production не изменялся.
 
 ## Authentication/authorization boundary — current factual state
 
@@ -154,23 +181,66 @@ Therefore AuthIdentity/object isolation is a verified database candidate, not a 
 
 ## Production release boundary
 
-Production promotion is currently intentionally blocked.
+Production promotion по-прежнему намеренно заблокирована, но один критический риск release path устранен.
 
-- GitHub branch `database-production` is unprotected.
-- The workflow currently installed on that branch still auto-runs on qualifying pushes and can apply migrations to Neon.
-- A hardened manual workflow exists on `main`, but has not been installed on the actual production branch.
-- `main` and `database-production` are heavily diverged; an indiscriminate merge is prohibited by the current release plan.
+Выполнено 2026-08-17:
 
-Before promotion: create a recoverable Neon checkpoint, deliberately harden the production release path, verify production still reports `0019`, promote only reviewed database/release files, dispatch migration manually, and verify registry/permissions/health afterward.
+- на фактическую ветку `database-production` установлен hardened workflow;
+- автоматический `push -> migrate Neon` удален;
+- production migration теперь возможна только через `workflow_dispatch`;
+- workflow требует явное подтверждение `MIGRATE` и проверяет, что dispatch идет именно с `database-production`;
+- перед Neon migration выполняется PostgreSQL-18 preflight и полный набор invariant tests;
+- production job привязан к GitHub environment `database-production`;
+- перед миграцией записывается production fingerprint;
+- после миграции проверяются registry checksums и operational health;
+- merge hardening workflow не запустил production migration;
+- после hardening production повторно проверена и осталась на `0019`, 15/15 health signals `ok`.
+
+Остающиеся ограничения:
+
+- GitHub branch `database-production` все еще `protected=false`; доступный connector не предоставляет безопасной операции изменения branch-protection settings;
+- GitHub environment `database-production` до этого отсутствовал, поэтому само упоминание environment в workflow не следует считать самостоятельным approval gate без отдельной настройки protection rules;
+- `main` и `database-production` намеренно сильно расходятся; indiscriminate merge по-прежнему запрещен;
+- migration `0020–0044` еще не продвигались в production.
+
+## Recovery / backup boundary
+
+Neon project сейчас имеет `history_retention_seconds=21600`, то есть restore window около 6 часов. Для долговременной защиты этого недостаточно.
+
+Перед будущим production promotion создана отдельная recovery-ветка:
+
+- name: `recovery-prod-0019-20260817`
+- branch ID: `br-bitter-term-b1gkg284`
+- source: текущая production ветка `br-wispy-lab-b1rq54of`
+- verified state before preservation: migration count 19, latest `0019_default_function_acl_fix`, missing checksums 0, health 15/15 `ok`, Bridge Video AnalysisRun 11, AssetLocation 15.
+
+Ветка хранится отдельно от production как дополнительная контрольная точка. Compute у неиспользуемых Neon branches у этого проекта фактически переходит в idle/suspended state; ветка при этом сохраняется.
+
+Это повышает recoverability, но не заменяет полноценную backup policy. На текущем Neon Free v3 проекте snapshot-management action через подключенный инструмент недоступен, а restore window остается около 6 часов.
+
+## Перед production promotion
+
+Обязательная последовательность:
+
+1. Не изменять сохраненную recovery-ветку `recovery-prod-0019-20260817`.
+2. Повторно проверить production fingerprint, latest migration=`0019`, checksums и health.
+3. Проверить точный reviewed release set; не делать merge всего `main` в `database-production`.
+4. По возможности включить GitHub branch protection и environment protection для `database-production` — это требует операции уровня настроек владельца репозитория, которой текущий connector не предоставляет.
+5. Продвигать только проверенные database/release files.
+6. Запускать production workflow только вручную с `MIGRATE`.
+7. После migration проверить schema_migration, runtime permissions, health, auth boundaries, 11/11 AlgorithmVersion linkage и StorageVerification counts.
+8. Не удалять recovery-ветку до завершения повторной проверки и периода наблюдения.
+9. При любом отклонении не объявлять компонент OPERATIONAL; остановить promotion и использовать сохраненное состояние для recovery.
 
 ## Следующие архитектурные этапы
 
-1. External authentication verifier/gateway integration; database credentials remain server-side.
-2. Guarded member/admin write operations and explicit instructor object scopes.
-3. Controlled pilot import Person/Student/ClubMember/AuthIdentity with reconciliation.
-4. Knowledge/Canon ingestion + visibility.
-5. Member API + Club Window only after end-to-end authorization gates.
-6. Communication adapters/Admin UI after channel policies are approved.
-7. Backup/restore, privacy/retention, security and load/cost gates before real financial and mass-user rollout.
+1. Завершить release/recovery gates и только затем решать вопрос production promotion candidate database stack.
+2. External authentication verifier/gateway integration; database credentials remain server-side.
+3. Guarded member/admin write operations and explicit instructor object scopes.
+4. Controlled pilot import Person/Student/ClubMember/AuthIdentity with reconciliation.
+5. Knowledge/Canon ingestion + visibility.
+6. Member API + Club Window only after end-to-end authorization gates.
+7. Communication adapters/Admin UI after channel policies are approved.
+8. Backup/restore, privacy/retention, security and load/cost gates before real financial and mass-user rollout.
 
 Не утвержденные правила не внедряются автоматически: `ContactPreference=unknown`, event capacity/waitlist, discount/override pricing and recurring subscription semantics remain explicit policy decisions.
