@@ -56,8 +56,8 @@ jobs:
           restore-keys: |
             dds3-wheel-v5-${{ runner.os }}-py314-
 
-      - name: Bootstrap pinned local DDS3 and run technical preflight
-        run: bash dds_training/bootstrap_linux.sh
+      - name: Bootstrap pinned local DDS3 without consuming preflight evidence
+        run: DDS_RUN_PREFLIGHT=0 bash dds_training/bootstrap_linux.sh
 
       - name: Record whether DDS wheel cache was rebuilt
         id: dds-cache-state
@@ -72,7 +72,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf dds_training/.venv dds_training/.build/dds3
-          DDS_REQUIRE_WHEEL_CACHE=1 bash dds_training/bootstrap_linux.sh
+          DDS_REQUIRE_WHEEL_CACHE=1 DDS_RUN_PREFLIGHT=0 bash dds_training/bootstrap_linux.sh
           test ! -f dds_training/.wheel-cache/dds3/.cache_rebuilt
 
       - name: Verify deterministic DDS golden preflight twice
