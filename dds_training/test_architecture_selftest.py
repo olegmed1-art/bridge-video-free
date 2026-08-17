@@ -33,6 +33,7 @@ UNSAFE_WORKFLOW_TOKENS = {
     "dds_run_approval_token:",
 }
 CANONICAL_WORKFLOWS = {
+    "dds-golden-smoke.yml",
     "dds-training-v23-smoke.yml",
     "dds-training-local-smoke.yml",
 }
@@ -130,8 +131,6 @@ def main() -> None:
         found = sorted(token for token in UNSAFE_WORKFLOW_TOKENS if token in lower)
         if found:
             unsafe[path.name] = found
-        # Any future mass-run workflow must be introduced as a separate,
-        # manual-only design change.  The current canonical CI is test-only.
         if "authorized_run_stage.py" in lower:
             assert "workflow_dispatch:" in lower
             assert "push:" not in lower and "pull_request:" not in lower and "schedule:" not in lower
