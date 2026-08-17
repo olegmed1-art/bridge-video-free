@@ -22,6 +22,55 @@
       "description": "Manifest completeness, workflow safety and network isolation."
     },
     {
+      "id": "coverage-report",
+      "path": "coverage_report_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "description": "Runtime line/arc coverage aggregation, minimum-threshold enforcement and fail-closed missing-fragment handling."
+    },
+    {
+      "id": "coverage-runtime",
+      "path": "coverage_runtime_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "description": "Dependency-free runtime line/arc collector activation and atomic fragment persistence."
+    },
+    {
+      "id": "launch-authorization",
+      "path": "launch_authorization_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "description": "One-time launch receipt binding, expiry/nonce/actor/commit/manifest checks and authorized wrapper command construction."
+    },
+    {
+      "id": "predictor-pipeline",
+      "path": "predictor_pipeline_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 90,
+      "description": "Direct baseline and adaptive predictor train/predict pipeline with locked predictions and no DDS call during prediction."
+    },
+    {
+      "id": "repo-clean",
+      "path": "repo_clean_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "description": "Tracked/untracked repository contamination detection with explicit runtime-directory allowlist."
+    },
+    {
+      "id": "sitecustomize-guard",
+      "path": "sitecustomize_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "description": "Pre-import mass-evaluation launch guard rejects missing/fake receipts and accepts a consumed commit-bound marker."
+    },
+    {
+      "id": "supply-chain",
+      "path": "supply_chain_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "description": "Pinned DDS/Bazelisk/wheel provenance and full-SHA GitHub Actions dependency contract."
+    },
+    {
       "id": "algorithm-review-v23",
       "path": "algorithm_review_v23_regression.py",
       "suite": "fast",
@@ -189,6 +238,13 @@
       "description": "Compatibility runtime: partial positions, lineage, calibration, shards and negative controls."
     },
     {
+      "id": "preflight",
+      "path": "preflight_selftest.py",
+      "suite": "dds",
+      "timeout_seconds": 180,
+      "description": "Real DDS quick preflight validates corpus generation, batch limit enforcement and SolverContext reuse."
+    },
+    {
       "id": "dds-play",
       "path": "dds_play_selftest.py",
       "suite": "dds",
@@ -216,12 +272,21 @@
       "test_runner.py"
     ],
     "module_tests": {
+      "adaptive_predictor.py": [
+        "predictor-pipeline"
+      ],
       "algorithm_review_v23.py": [
         "algorithm-review-v23"
       ],
       "audit.py": [
         "experience-memory",
         "stage-gate"
+      ],
+      "authorized_run_stage.py": [
+        "launch-authorization"
+      ],
+      "baseline_predictor.py": [
+        "predictor-pipeline"
       ],
       "checkpointing.py": [
         "experience-memory"
@@ -249,6 +314,12 @@
       "counterexample_candidates.py": [
         "counterexample-candidates"
       ],
+      "coverage_report.py": [
+        "coverage-report"
+      ],
+      "coverage_runtime.py": [
+        "coverage-runtime"
+      ],
       "crossfit.py": [
         "crossfit",
         "stage2-readiness"
@@ -270,6 +341,9 @@
         "investigations",
         "stage-gate"
       ],
+      "launch_authorization.py": [
+        "launch-authorization"
+      ],
       "learning.py": [
         "experience-memory",
         "regression-links",
@@ -289,12 +363,18 @@
         "continuation-tasks",
         "dds-play"
       ],
+      "preflight.py": [
+        "preflight"
+      ],
       "prepare_stage2.py": [
         "stage2-readiness"
       ],
       "regression_links.py": [
         "regression-links",
         "stage-gate"
+      ],
+      "repo_clean.py": [
+        "repo-clean"
       ],
       "resolve_investigations_auto.py": [
         "investigations"
@@ -318,6 +398,9 @@
         "shard-plan",
         "stage2-readiness"
       ],
+      "sitecustomize.py": [
+        "sitecustomize-guard"
+      ],
       "skill_versions.py": [
         "skill-versions",
         "experience-memory"
@@ -335,11 +418,13 @@
       "storage.py": [
         "experience-memory",
         "regression-links",
-        "stage-gate"
+        "stage-gate",
+        "predictor-pipeline"
       ],
       "tasks.py": [
         "corpus",
-        "methodology-v22"
+        "methodology-v22",
+        "predictor-pipeline"
       ],
       "v23_core.py": [
         "v23-runtime"
@@ -353,12 +438,21 @@
         "variant-dds"
       ]
     },
+    "runtime_coverage": {
+      "fast": {
+        "minimum_overall_percent": 20,
+        "minimum_module_percent": 1,
+        "minimum_module_execution_ratio": 0.8
+      },
+      "dds": {
+        "minimum_overall_percent": 20,
+        "minimum_module_percent": 1,
+        "minimum_module_execution_ratio": 1.0
+      }
+    },
     "waivers": {
-      "adaptive_predictor.py": "Legacy pilot predictor is exercised by the archived pilot workflow; a direct unit contract must be added before this waiver can be removed.",
-      "baseline_predictor.py": "Legacy pilot baseline is exercised by the archived pilot workflow; direct unit coverage is still missing.",
       "independent_crosscheck.py": "Requires the separately compiled independent bridge-solver and is executed in the heavy DDS workflow, outside the Python manifest runner.",
-      "pilot_report_ru.py": "Requires a completed pilot database fixture; covered by the preserved pilot finish workflow, not the fast suite.",
-      "preflight.py": "Executed by bootstrap_linux.sh against a built DDS3 wheel in the heavy workflow.",
+      "pilot_report_ru.py": "Requires a completed pilot database fixture; covered by the preserved pilot finish evidence, not the fast suite.",
       "report.py": "Requires a completed stage database/report fixture; direct isolated report tests are still pending."
     }
   }
