@@ -3,10 +3,12 @@ from __future__ import annotations
 """Meta-tests for the DDS test architecture itself.
 
 These checks prevent a green result from a partial, self-modifying, supply-chain
-floating, or accidentally self-starting test system. They validate the canonical
-manifest, prohibit network/API clients in the DDS Python layer, enforce measured
-runtime coverage, verify read-only smoke workflows, and keep the historical pilot
-workflows archived and non-executable.
+floating, accidentally self-starting, or cache-fragile test system. They validate
+the canonical manifest, prohibit network/API clients in the DDS Python layer,
+enforce measured runtime coverage, verify read-only smoke workflows, keep the
+historical pilot workflows archived/non-executable, and require expensive DDS
+wheel bootstrap to be separable from later evidence gates so verified build
+artifacts can still be cached when a downstream test fails.
 """
 
 import ast
@@ -198,14 +200,27 @@ def main() -> None:
             "executable_training": False,
         }
 
+    bootstrap = (dds_root / "bootstrap_linux.sh").read_text(encoding="utf-8")
+    assert EXPECTED_DDS_COMMIT in bootstrap
+    assert "DDS_RUN_PREFLIGHT" in bootstrap
+    assert "DDS_REQUIRE_WHEEL_CACHE" in bootstrap
+
+    # Expensive verified wheel construction is intentionally separated from later
+    # preflight/test gates. That lets the workflow record .cache_rebuilt and save the
+    # verified wheel even if a downstream evidence gate later fails.
+    cold_bootstrap = "DDS_RUN_PREFLIGHT=0 bash dds_training/bootstrap_linux.sh"
+    warm_bootstrap = "DDS_REQUIRE_WHEEL_CACHE=1 DDS_RUN_PREFLIGHT=0 bash dds_training/bootstrap_linux.sh"
+    assert cold_bootstrap in heavy
+    assert warm_bootstrap in heavy
+    assert heavy.index(cold_bootstrap) < heavy.index("Record whether DDS wheel cache was rebuilt")
+    assert heavy.index("Record whether DDS wheel cache was rebuilt") < heavy.index("Verify deterministic DDS golden preflight twice")
     assert heavy.count("preflight.py --quick") >= 2
     assert "dds-preflight-repeatability.json" in heavy
     assert "canonical_sha256" in heavy
     assert ".cache_rebuilt" in heavy
     assert "github.run_id" in heavy
-    assert "DDS_REQUIRE_WHEEL_CACHE=1" in heavy
     assert "hashFiles('dds_training/bootstrap_linux.sh')" in heavy
-    assert EXPECTED_DDS_COMMIT in (dds_root / "bootstrap_linux.sh").read_text(encoding="utf-8")
+    assert "if: always() && steps.dds-cache-state.outputs.rebuilt == 'true'" in heavy
 
     print(
         json.dumps(
@@ -223,7 +238,9 @@ def main() -> None:
                 "floating_dds_action_dependencies": 0,
                 "archived_pilot_workflows": archive_state,
                 "golden_preflight_repetitions_required": 2,
+                "bootstrap_preflight_deferred_until_evidence_step": True,
                 "verified_wheel_cache_replay_required": True,
+                "verified_wheel_cache_saved_after_downstream_failure": True,
                 "pinned_dds_commit": EXPECTED_DDS_COMMIT,
                 "canonical_fast_workflow": fast_path.name,
                 "canonical_dds_workflow": heavy_path.name,
