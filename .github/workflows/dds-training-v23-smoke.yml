@@ -30,9 +30,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
         with:
           python-version: '3.14'
 
@@ -52,22 +54,41 @@ jobs:
         working-directory: dds_training
         run: python test_runner.py --manifest test_matrix.json --check-only
 
-      - name: Run isolated fast DDS test suite
+      - name: Run isolated fast DDS test suite with runtime coverage
         working-directory: dds_training
-        run: >-
-          python test_runner.py
-          --manifest test_matrix.json
-          --suite fast
-          --report /tmp/dds-test-report-fast.json
+        env:
+          DDS_COVERAGE_ROOT: ${{ github.workspace }}/dds_training
+          DDS_COVERAGE_DIR: /tmp/dds-coverage-fast
+        run: |
+          set -euo pipefail
+          rm -rf "$DDS_COVERAGE_DIR"
+          mkdir -p "$DDS_COVERAGE_DIR"
+          python test_runner.py \
+            --manifest test_matrix.json \
+            --suite fast \
+            --report /tmp/dds-test-report-fast.json
+
+      - name: Enforce measured fast-suite runtime coverage
+        working-directory: dds_training
+        run: |
+          python coverage_report.py \
+            --root . \
+            --manifest test_matrix.json \
+            --fragments /tmp/dds-coverage-fast \
+            --suite fast \
+            --out /tmp/dds-runtime-coverage-fast.json \
+            --fail-on-error
 
       - name: Verify tests did not modify tracked sources
         run: git diff --exit-code
 
-      - name: Upload machine-readable fast test report
+      - name: Upload machine-readable fast test evidence
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dds-test-report-fast-${{ github.run_id }}
-          path: /tmp/dds-test-report-fast.json
+          path: |
+            /tmp/dds-test-report-fast.json
+            /tmp/dds-runtime-coverage-fast.json
           if-no-files-found: warn
           retention-days: 14
