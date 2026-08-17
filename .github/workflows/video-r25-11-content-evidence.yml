@@ -13,6 +13,7 @@ on:
       - 'run_drive_3_1_free_generic.py'
       - 'tests/test_content_evidence_r25_11.py'
       - 'tests/test_content_persistence_r25_10.py'
+      - 'tests/test_revision_idempotency_r25_9.py'
       - 'tests/test_production_evidence_contract.py'
   pull_request:
     branches: [main]
@@ -25,6 +26,7 @@ on:
       - 'run_drive_3_1_free_generic.py'
       - 'tests/test_content_evidence_r25_11.py'
       - 'tests/test_content_persistence_r25_10.py'
+      - 'tests/test_revision_idempotency_r25_9.py'
       - 'tests/test_production_evidence_contract.py'
 
 permissions:
