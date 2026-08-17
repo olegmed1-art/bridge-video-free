@@ -6,12 +6,23 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from corpus import generate_corpus, validate_pbn_corpus
+from corpus import generate_corpus, iter_pbn_records, validate_pbn_corpus
 from dds_engine import (
     EXPECTED_DDS_SOURCE_COMMIT,
     contract_tricks_batch,
     engine_info,
 )
+
+
+def _semantic_future_tricks(result: dict) -> dict:
+    cards = int(result["cards"])
+    return {
+        "cards": cards,
+        "suit": [int(v) for v in result["suit"][:cards]],
+        "rank": [int(v) for v in result["rank"][:cards]],
+        "equals": [int(v) for v in result["equals"][:cards]],
+        "score": [int(v) for v in result["score"][:cards]],
+    }
 
 
 def check(batch_deals: int = 40, generated: int = 64) -> dict:
@@ -27,16 +38,7 @@ def check(batch_deals: int = 40, generated: int = 64) -> dict:
         assert audit["unique_ids"] == generated
         assert audit["ok"] is True
 
-        deals = []
-        for line in (root / "manifest.jsonl").read_text(encoding="utf-8").splitlines():
-            row = json.loads(line)
-            # Resolve the exact deal by stable board identity from the deterministic
-            # RAW corpus instead of inventing or reconstructing cards from metadata.
-            board = int(row["board"])
-            if board > batch_deals:
-                break
-        # The PBN parser remains the source of card truth for the solver input.
-        from corpus import iter_pbn_records
+        deals: list[str] = []
         for record in iter_pbn_records(root / "raw.pbn"):
             deals.append(record["deal"])
             if len(deals) == batch_deals:
@@ -61,20 +63,34 @@ def check(batch_deals: int = 40, generated: int = 64) -> dict:
         import dds3
 
         context = dds3.SolverContext() if hasattr(dds3, "SolverContext") else None
-        if context is not None:
-            first = dds3.calc_all_tables_pbn(
-                deals[:1],
-                mode=-1,
-                trump_filter=(0, 0, 0, 0, 0),
-                context=context,
-            )
-            second = dds3.calc_all_tables_pbn(
-                deals[:1],
-                mode=-1,
-                trump_filter=(0, 0, 0, 0, 0),
-                context=context,
-            )
-            assert first["tables"][0]["res_table"] == second["tables"][0]["res_table"]
+        assert context is not None, "Pinned DDS3 runtime must expose SolverContext"
+
+        # The pinned v3.0.0 Python API supports context reuse on solve_board_pbn,
+        # not calc_all_tables_pbn. Exercise the supported API twice on the exact
+        # same PBN/context and compare only semantic FutureTricks output.
+        first = dds3.solve_board_pbn(
+            deals[0],
+            trump=4,
+            first=0,
+            target=-1,
+            solutions=3,
+            mode=0,
+            context=context,
+        )
+        second = dds3.solve_board_pbn(
+            deals[0],
+            trump=4,
+            first=0,
+            target=-1,
+            solutions=3,
+            mode=0,
+            context=context,
+        )
+        first_semantic = _semantic_future_tricks(first)
+        second_semantic = _semantic_future_tricks(second)
+        assert first_semantic == second_semantic
+        nodes_first = int(first.get("nodes", 0))
+        nodes_second = int(second.get("nodes", 0))
 
         info = engine_info()
         assert info["solver_context"] is True, info
@@ -95,7 +111,10 @@ def check(batch_deals: int = 40, generated: int = 64) -> dict:
                     trump_filter=(0, 0, 0, 0, 0),
                 )["no_of_boards"]
             ),
-            "context_reuse": context is not None,
+            "context_reuse": True,
+            "context_semantic_repeat_equal": True,
+            "context_nodes_first": nodes_first,
+            "context_nodes_second": nodes_second,
             "corpus_sha256": summary["raw_sha256"],
             "engine": info,
         }
