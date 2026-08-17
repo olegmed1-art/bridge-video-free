@@ -2,11 +2,10 @@ from __future__ import annotations
 
 """Authorized wrapper around ``run_stage.py evaluate``.
 
-Mass/holdout workflows must call this wrapper.  Direct ``run_stage.py evaluate
---start`` is prohibited in GitHub workflow policy tests.  The wrapper verifies
+Mass/holdout workflows must call this wrapper. Direct ``run_stage.py evaluate
+--start`` is prohibited in GitHub workflow policy tests. The wrapper verifies
 and atomically consumes a receipt, validates the requested split against its
-scope, then supplies the legacy internal confirmation variable only to the
-child process.
+scope, then supplies the internal launch proof only to the child process.
 """
 
 import argparse
@@ -89,8 +88,32 @@ def build_command(args: argparse.Namespace) -> list[str]:
     return command
 
 
+def consumed_marker_path(consume_dir: Path, receipt_id: str) -> Path:
+    return consume_dir / f"{receipt_id}.consumed"
+
+
+def build_child_environment(
+    *,
+    base_env: dict[str, str],
+    receipt_id: str,
+    scope: str,
+    consume_dir: Path,
+) -> dict[str, str]:
+    marker = consumed_marker_path(consume_dir, receipt_id)
+    if not marker.is_file():
+        raise AuthorizationError(f"Consumed receipt marker is missing before DDS child launch: {marker}")
+    env = dict(base_env)
+    env["DDS_TRAINING_CONFIRM"] = "YES"
+    env["DDS_AUTHORIZED_LAUNCH"] = "YES"
+    env["DDS_LAUNCH_RECEIPT_ID"] = receipt_id
+    env["DDS_LAUNCH_CONSUMED_MARKER"] = str(marker)
+    env["DDS_LAUNCH_SCOPE"] = scope
+    return env
+
+
 def main() -> None:
     args = parser().parse_args()
+    consume_dir = Path(args.consume_dir)
     try:
         receipt = verify_and_consume(
             receipt_path=Path(args.receipt),
@@ -103,23 +126,26 @@ def main() -> None:
             actor=_required_env("GITHUB_ACTOR"),
             triggering_actor=_required_env("GITHUB_TRIGGERING_ACTOR"),
             event_name=_required_env("GITHUB_EVENT_NAME"),
-            consume_dir=Path(args.consume_dir),
+            consume_dir=consume_dir,
+        )
+        env = build_child_environment(
+            base_env=os.environ.copy(),
+            receipt_id=str(receipt["receipt_id"]),
+            scope=args.scope,
+            consume_dir=consume_dir,
         )
     except AuthorizationError as exc:
         print(json.dumps({"authorized": False, "error": str(exc)}, ensure_ascii=False), file=sys.stderr)
         raise SystemExit(2) from exc
 
     command = build_command(args)
-    env = os.environ.copy()
-    env["DDS_TRAINING_CONFIRM"] = "YES"
-    env["DDS_AUTHORIZED_LAUNCH"] = "YES"
-    env["DDS_LAUNCH_RECEIPT_ID"] = str(receipt["receipt_id"])
     print(json.dumps({
         "authorized": True,
         "receipt_id": receipt["receipt_id"],
         "scope": args.scope,
         "stage": args.stage,
         "splits": list(SCOPE_SPLITS[args.scope]),
+        "consumed_marker": env["DDS_LAUNCH_CONSUMED_MARKER"],
         "command": command,
     }, ensure_ascii=False), flush=True)
     completed = subprocess.run(command, env=env, check=False)
