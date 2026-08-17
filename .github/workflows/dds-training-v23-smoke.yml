@@ -59,6 +59,8 @@ jobs:
         env:
           DDS_COVERAGE_ROOT: ${{ github.workspace }}/dds_training
           DDS_COVERAGE_DIR: /tmp/dds-coverage-fast
+          DDS_COVERAGE_MANIFEST: ${{ github.workspace }}/dds_training/test_matrix.json
+          DDS_COVERAGE_SUITE: fast
         run: |
           set -euo pipefail
           rm -rf "$DDS_COVERAGE_DIR"
