@@ -1,0 +1,96 @@
+name: DDS test contract (fast)
+
+on:
+  pull_request:
+    paths:
+      - 'dds_training/**'
+      - '.github/workflows/dds-training-v23-smoke.yml'
+      - '.github/workflows/dds-training-local-smoke.yml'
+      - '.github/workflows/dds-training-pilot-start.yml'
+      - '.github/workflows/dds-training-pilot-finish.yml'
+  push:
+    branches: [dds-training-local]
+    paths:
+      - 'dds_training/**'
+      - '.github/workflows/dds-training-v23-smoke.yml'
+      - '.github/workflows/dds-training-local-smoke.yml'
+      - '.github/workflows/dds-training-pilot-start.yml'
+      - '.github/workflows/dds-training-pilot-finish.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: dds-test-fast-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fast:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+
+      - name: Compile DDS Python modules
+        working-directory: dds_training
+        run: python -m compileall -q .
+
+      - name: Run fail-closed test-runner guard directly
+        working-directory: dds_training
+        run: python test_runner_selftest.py
+
+      - name: Run fail-closed architecture guard directly
+        working-directory: dds_training
+        run: python test_architecture_selftest.py
+
+      - name: Validate canonical test inventory and coverage contract
+        working-directory: dds_training
+        run: python test_runner.py --manifest test_matrix.json --check-only
+
+      - name: Run isolated fast DDS test suite with runtime coverage
+        working-directory: dds_training
+        env:
+          DDS_COVERAGE_ROOT: ${{ github.workspace }}/dds_training
+          DDS_COVERAGE_DIR: /tmp/dds-coverage-fast
+          DDS_COVERAGE_MANIFEST: ${{ github.workspace }}/dds_training/test_matrix.json
+          DDS_COVERAGE_SUITE: fast
+        run: |
+          set -euo pipefail
+          rm -rf "$DDS_COVERAGE_DIR"
+          mkdir -p "$DDS_COVERAGE_DIR"
+          python test_runner.py \
+            --manifest test_matrix.json \
+            --suite fast \
+            --report /tmp/dds-test-report-fast.json
+
+      - name: Enforce measured fast-suite runtime coverage
+        working-directory: dds_training
+        run: |
+          python coverage_report.py \
+            --root . \
+            --manifest test_matrix.json \
+            --fragments /tmp/dds-coverage-fast \
+            --suite fast \
+            --out /tmp/dds-runtime-coverage-fast.json \
+            --fail-on-error
+
+      - name: Verify tests did not modify tracked sources
+        run: git diff --exit-code
+
+      - name: Upload machine-readable fast test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dds-test-report-fast-${{ github.run_id }}
+          path: |
+            /tmp/dds-test-report-fast.json
+            /tmp/dds-runtime-coverage-fast.json
+          if-no-files-found: warn
+          retention-days: 14
