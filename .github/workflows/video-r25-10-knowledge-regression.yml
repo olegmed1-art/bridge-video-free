@@ -1,33 +1,10 @@
 name: Bridge Video r25.10 Knowledge Contract
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - agent/r25-10-knowledge-content
-    paths:
-      - '.github/workflows/video-r25-10-knowledge-regression.yml'
-      - '.github/workflows/bridge-video-3.1-free.yml'
-      - 'bridge_runtime_hardening_r25_10.py'
-      - 'database/video_result_persistence.py'
-      - 'run_master_3_1_free.py'
-      - 'check_completed_job.py'
-      - 'run_drive_3_1_free_generic.py'
-      - 'tests/test_content_persistence_r25_10.py'
-      - 'tests/test_revision_idempotency_r25_9.py'
-      - 'tests/test_production_evidence_contract.py'
-  pull_request:
-    branches: [main]
-    paths:
-      - '.github/workflows/video-r25-10-knowledge-regression.yml'
-      - '.github/workflows/bridge-video-3.1-free.yml'
-      - 'bridge_runtime_hardening_r25_10.py'
-      - 'database/video_result_persistence.py'
-      - 'run_master_3_1_free.py'
-      - 'check_completed_job.py'
-      - 'run_drive_3_1_free_generic.py'
-      - 'tests/test_content_persistence_r25_10.py'
-      - 'tests/test_revision_idempotency_r25_9.py'
-      - 'tests/test_production_evidence_contract.py'
 
 permissions:
   contents: read

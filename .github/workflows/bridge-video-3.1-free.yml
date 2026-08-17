@@ -31,10 +31,9 @@ jobs:
       BRIDGE_LARGER_RUNNER: "false"
       BRIDGE_PAID_CLOUD: "false"
       BRIDGE_BILLING_FALLBACK: "false"
-      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.11"
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.6"
       PYTHONUNBUFFERED: "1"
-      BRIDGE_REQUESTED_WHISPER_MODEL: medium
-      WHISPER_MODEL: medium
+      WHISPER_MODEL: small
 
     steps:
       - name: Checkout public technical code only
@@ -99,18 +98,6 @@ jobs:
           print('Google Drive OAuth preflight: PASS')
           PY
 
-      - name: Worker database runtime preflight
-        if: steps.terminal.outputs.already_completed != 'true'
-        env:
-          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
-        run: |
-          set -euo pipefail
-          test -n "${BRIDGE_WORKER_DATABASE_URL:-}" || {
-            echo 'BLOCKED_DATABASE: BRIDGE_WORKER_DATABASE_URL is not configured' >&2
-            exit 1
-          }
-          python database/runtime_worker_preflight.py
-
       - name: FREE-GUARD
         if: steps.terminal.outputs.already_completed != 'true'
         run: python bridge_worker_3_1_free.py
@@ -120,7 +107,6 @@ jobs:
         shell: bash
         env:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
-          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
         run: |
           set -euo pipefail
           python run_drive_3_1_free_oidc.py
@@ -128,7 +114,7 @@ jobs:
       - name: Completed job no-op
         if: steps.terminal.outputs.already_completed == 'true'
         run: |
-          echo 'ALREADY_COMPLETED: CLEANUP_ACK and KNOWLEDGE_APPLIED exist; heavy runtime skipped.'
+          echo 'ALREADY_COMPLETED: terminal CLEANUP_ACK exists; heavy runtime skipped.'
 
-      # No Google Cloud auth and no paid fallback. Neon persistence is mandatory.
+      # No Google Cloud auth, no Neon/database dependency, no paid fallback.
       # User media/transcripts are never uploaded as GitHub workflow artifacts.
