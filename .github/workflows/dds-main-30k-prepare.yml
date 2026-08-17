@@ -52,10 +52,20 @@ jobs:
           set -euo pipefail
           rm -rf /tmp/dds-pilot-complete dds_training/work/pilot
           mkdir -p /tmp/dds-pilot-complete dds_training/work
-          gh run download "$PILOT_RUN_ID" \
-            --repo "$GITHUB_REPOSITORY" \
-            --name "$PILOT_ARTIFACT" \
-            --dir /tmp/dds-pilot-complete
+          downloaded=0
+          for attempt in $(seq 1 8); do
+            rm -rf /tmp/dds-pilot-complete/*
+            if gh run download "$PILOT_RUN_ID" \
+              --repo "$GITHUB_REPOSITORY" \
+              --name "$PILOT_ARTIFACT" \
+              --dir /tmp/dds-pilot-complete; then
+              downloaded=1
+              break
+            fi
+            echo "pilot artifact download attempt ${attempt}/8 failed; retrying" >&2
+            sleep $((attempt * 5))
+          done
+          test "$downloaded" = 1
           archive="$(find /tmp/dds-pilot-complete -name 'dds-pilot-10k-complete-state.tgz' -print -quit)"
           test -n "$archive"
           echo "$PILOT_TGZ_SHA256  $archive" | sha256sum -c -
