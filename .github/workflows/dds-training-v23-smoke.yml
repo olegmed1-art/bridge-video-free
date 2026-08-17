@@ -8,6 +8,7 @@ on:
       - '.github/workflows/dds-training-local-smoke.yml'
       - '.github/workflows/dds-training-pilot-start.yml'
       - '.github/workflows/dds-training-pilot-finish.yml'
+      - '.github/workflows/dds-main-30k-prepare.yml'
   push:
     branches: [dds-training-local]
     paths:
@@ -16,6 +17,7 @@ on:
       - '.github/workflows/dds-training-local-smoke.yml'
       - '.github/workflows/dds-training-pilot-start.yml'
       - '.github/workflows/dds-training-pilot-finish.yml'
+      - '.github/workflows/dds-main-30k-prepare.yml'
   workflow_dispatch:
 
 concurrency:
