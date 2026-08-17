@@ -1,16 +1,14 @@
 # META CLOSED LOOP v1.0
 
-Status: DEFINED / VALIDATED-AS-SPEC / DISABLED
+Status: DEFINED / PRELAUNCH_REVIEW / NOT_YET_ACTIVATED
 
-## Hard start rule
+## One-time prelaunch hold
 
-**DO NOT RUN THIS ALGORITHM WITHOUT AN EXPLICIT OWNER COMMAND.**
+**Do not execute META CLOSED LOOP itself until its initial verification is completed and the owner explicitly releases this one-time hold.**
 
-The algorithm is manual-start only. No schedule, webhook, workflow, observer, child process, agent, automation, or other algorithm may initiate a META CLOSED LOOP run implicitly.
+This restriction applies ONLY to META CLOSED LOOP v1.0 during its initial design/verification stage. It is NOT a global rule preventing the School's other algorithms, automations, monitors or normal workflows from running.
 
-Accepted start condition: a direct owner instruction clearly ordering META CLOSED LOOP to start/run for a named scope. Ambiguous requests, normal school work, health checks, monitoring, and background automation are not start authorization.
-
-After a run finishes, the algorithm returns to DISABLED/WAITING_FOR_OWNER_COMMAND. It does not self-repeat.
+Once the owner approves the verified META CLOSED LOOP for activation, this one-time hold is removed. After that, META CLOSED LOOP may operate according to whatever normal trigger/automation policy the owner approves; it is not inherently manual-start-only.
 
 ## Purpose
 
@@ -171,8 +169,6 @@ Recommended rollout after a successful pilot:
 4. lesson/material generation;
 5. online school and Student Model.
 
-This order is a technical rollout recommendation, not authorization to start any run.
-
 ## Stage 16 — Student outcome layer
 
 When online-school evidence exists, support:
@@ -184,12 +180,8 @@ Do not invent student outcomes or use unverified identity mappings.
 
 Only after sufficient closed-loop evidence exists, evaluate the improvement process itself: predictive value of tests, useful metrics, failed experiments, unnecessary checks, and cost per evidenced improvement.
 
-Meta-META is also manual-start unless separately and explicitly authorized by the owner.
+## Runtime state machine after activation
 
-## State machine
-
-DISABLED/WAITING_FOR_OWNER_COMMAND
-  -> (explicit owner START command)
 PREFLIGHT
   -> INVENTORY
   -> OBSERVE
@@ -205,22 +197,20 @@ PREFLIGHT
      -> RETEST -> SANDBOX (bounded; no infinite loop)
      -> OWNER_REVIEW -> WAIT_FOR_OWNER
      -> PROMOTE -> POST_DEPLOYMENT_CONTROL -> RECORD -> STOP
-  -> DISABLED/WAITING_FOR_OWNER_COMMAND
 
 Any reliability/cost/canonical-boundary failure -> STOP/OWNER_REVIEW as appropriate.
 
-## Anti-loop controls
+## Anti-loop and safety controls
 
-- No self-start.
-- No automatic recurring run.
 - No recursive spawning of META CLOSED LOOP.
 - RETEST must be bounded and justified by new evidence/change.
 - A failed gate cannot be bypassed by lowering the gate during the same run.
 - Do not promote based solely on META's own qualitative assertion.
 - Do not modify production merely to create evidence for a candidate.
+- Preserve source materials and prior Stable evidence.
 
 ## Initial pilot
 
 Preferred first pilot: video-analysis algorithm 3.1 FREE because it already has versioned revisions, production executions, QC, regression cases, GitHub/Drive/Neon evidence and rollback practice.
 
-**Pilot remains NOT STARTED until explicit owner command.**
+**Current state: pilot NOT STARTED. META CLOSED LOOP itself remains under the one-time prelaunch hold until verification is completed and the owner explicitly approves activation.**
