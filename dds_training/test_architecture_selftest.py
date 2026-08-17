@@ -40,6 +40,10 @@ CANONICAL_WORKFLOWS = {
 ACTION_PIN_RE = re.compile(r"^\s*-?\s*uses:\s*[^#\s]+@([0-9a-f]{40})(?:\s*#.*)?$", re.MULTILINE)
 ANY_ACTION_RE = re.compile(r"^\s*-?\s*uses:\s*([^#\s]+)@([^\s#]+)", re.MULTILINE)
 WAIVER_EXPIRY_RE = re.compile(r"(?:^|;\s*)expires=(\d{4}-\d{2}-\d{2})(?:;|$)")
+AUTHORIZED_ENTRY_RE = re.compile(
+    r"^\s*python(?:3)?\s+(?:dds_training/)?authorized_run_stage\.py(?:\s|$)",
+    re.MULTILINE,
+)
 
 
 def imported_roots(path: Path) -> set[str]:
@@ -119,11 +123,13 @@ def main() -> None:
     assert "status --porcelain=v1 --untracked-files=all" in fast_lower
     assert "status --porcelain=v1 --untracked-files=all" in heavy_lower
     assert "contents: read" in fast_lower and "contents: read" in heavy_lower
-    assert "authorized_run_stage.py" not in fast_lower and "authorized_run_stage.py" not in heavy_lower
+    assert not AUTHORIZED_ENTRY_RE.search(fast_lower)
+    assert not AUTHORIZED_ENTRY_RE.search(heavy_lower)
     assert "run_stage.py evaluate" not in fast_lower and "run_stage.py evaluate" not in heavy_lower
 
     action_inventory: dict[str, list[str]] = {}
     unsafe: dict[str, list[str]] = {}
+    mass_workflows = []
     for path in workflow_paths:
         text = path.read_text(encoding="utf-8")
         lower = text.lower()
@@ -131,10 +137,12 @@ def main() -> None:
         found = sorted(token for token in UNSAFE_WORKFLOW_TOKENS if token in lower)
         if found:
             unsafe[path.name] = found
-        if "authorized_run_stage.py" in lower:
+        if AUTHORIZED_ENTRY_RE.search(lower):
+            mass_workflows.append(path.name)
             assert "workflow_dispatch:" in lower
             assert "push:" not in lower and "pull_request:" not in lower and "schedule:" not in lower
     assert not unsafe, unsafe
+    assert mass_workflows == [], mass_workflows
 
     bootstrap = (dds_root / "bootstrap_linux.sh").read_text(encoding="utf-8")
     assert "37c8a79f4c67c55d1a309ccb66dd00cb58af464a" in bootstrap
@@ -161,7 +169,7 @@ def main() -> None:
                 "canonical_workflows": sorted(actual_workflows),
                 "pinned_actions": action_inventory,
                 "unsafe_or_self_modifying_workflows": 0,
-                "mass_run_workflows_committed": 0,
+                "mass_run_workflows_committed": len(mass_workflows),
                 "supply_chain_commit_and_checksum_pinned": True,
             },
             ensure_ascii=False,
