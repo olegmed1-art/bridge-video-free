@@ -12,8 +12,13 @@ DDS_COMMIT="37c8a79f4c67c55d1a309ccb66dd00cb58af464a"
 BAZELISK_VERSION="1.29.0"
 USE_BAZEL_VERSION="7.6.1"
 DDS_REQUIRE_WHEEL_CACHE="${DDS_REQUIRE_WHEEL_CACHE:-0}"
+DDS_RUN_PREFLIGHT="${DDS_RUN_PREFLIGHT:-1}"
 WHEEL_CACHE_CONTRACT="dds3-wheel-cache-v1"
 
+if [[ "$DDS_RUN_PREFLIGHT" != "0" && "$DDS_RUN_PREFLIGHT" != "1" ]]; then
+  echo "DDS_RUN_PREFLIGHT must be 0 or 1." >&2
+  exit 2
+fi
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   echo "Python 3.14 is required for the pinned DDS3 v3.0.0 training runtime." >&2
   exit 2
@@ -33,6 +38,14 @@ PROVENANCE="$WHEEL_CACHE/build_provenance.json"
 REBUILT_MARKER="$WHEEL_CACHE/.cache_rebuilt"
 mkdir -p "$WHEEL_CACHE"
 rm -f "$REBUILT_MARKER"
+
+run_preflight_if_requested() {
+  if [[ "$DDS_RUN_PREFLIGHT" == "1" ]]; then
+    python preflight.py --quick
+  else
+    echo "DDS preflight intentionally deferred to the workflow's explicit evidence step."
+  fi
+}
 
 validate_cached_wheel() {
   python - "$WHEEL_CACHE" "$PROVENANCE" "$DDS_COMMIT" "$USE_BAZEL_VERSION" "$WHEEL_CACHE_CONTRACT" <<'PY'
@@ -79,7 +92,7 @@ PY
 if CACHED_WHEEL="$(validate_cached_wheel 2>/dev/null)"; then
   echo "Installing verified cached DDS3 wheel: $CACHED_WHEEL"
   python -m pip install --force-reinstall "$CACHED_WHEEL"
-  python preflight.py --quick
+  run_preflight_if_requested
   echo "DDS local environment restored from verified wheel cache. No DDS training was started."
   exit 0
 fi
@@ -202,6 +215,6 @@ PY
 
 touch "$REBUILT_MARKER"
 python -m pip install --force-reinstall "$CACHED_WHEEL"
-python preflight.py --quick
+run_preflight_if_requested
 
 echo "DDS local environment is technically ready from pinned source and wheel-cached. No DDS training was started."
