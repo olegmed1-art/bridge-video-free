@@ -51,7 +51,9 @@ jobs:
           case "$WORK_FOLDER_ID" in *[!0-9A-Za-z_-]*) exit 2 ;; esac
           echo "BRIDGE_MONITOR_JOB_ID=$JOB_ID" >> "$GITHUB_ENV"
           echo "BRIDGE_MONITOR_WORK_FOLDER_ID=$WORK_FOLDER_ID" >> "$GITHUB_ENV"
-      - run: python -m pip install --disable-pip-version-check 'requests==2.34.2' 'google-auth==2.56.3'
+      - run: |
+          python -m pip install --disable-pip-version-check \
+            'requests==2.34.2' 'google-auth==2.56.3' 'psycopg[binary]==3.3.4'
       - name: Inspect matching runs and publish Drive status
         env:
           GH_TOKEN: ${{ github.token }}
