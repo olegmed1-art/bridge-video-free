@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""Permanent production guard for evidence-preserving 3.1 FREE r25.10."""
+"""Permanent production guard for evidence-preserving 3.1 FREE r25.11."""
 from pathlib import Path
 import os
 
-import bridge_runtime_hardening_r25_10 as runtime
+import bridge_runtime_hardening_r25_11 as runtime
 import run_master_3_1_free as base
 
 
-def test_production_route_is_confirmed_r25_10():
+def test_production_route_is_confirmed_r25_11():
     adapter = Path("run_drive_3_1_free_generic.py").read_text(encoding="utf-8")
     workflow = Path(".github/workflows/bridge-video-3.1-free.yml").read_text(encoding="utf-8")
-    assert "bridge_runtime_hardening_r25_10" in adapter
-    assert 'BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.10"' in workflow
+    assert "bridge_runtime_hardening_r25_11" in adapter
+    assert 'BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.11"' in workflow
     assert "BRIDGE_REQUESTED_WHISPER_MODEL: medium" in workflow
     assert "WHISPER_MODEL: medium" in workflow
     assert "BRIDGE_WORKER_DATABASE_URL" in workflow
@@ -66,8 +66,8 @@ def test_periodic_auto_discovery_remains_disabled():
 
 
 if __name__ == "__main__":
-    test_production_route_is_confirmed_r25_10()
+    test_production_route_is_confirmed_r25_11()
     test_runtime_does_not_filter_master_canon_evidence()
     test_terminal_preflight_requires_applied_knowledge()
     test_periodic_auto_discovery_remains_disabled()
-    print("PRODUCTION_R25_10_EVIDENCE_CONTRACT: PASS")
+    print("PRODUCTION_R25_11_EVIDENCE_CONTRACT: PASS")

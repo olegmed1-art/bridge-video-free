@@ -44,9 +44,71 @@ def _transcript_kind(master: dict[str, Any]) -> tuple[str, str | None]:
 
 
 
-def _domain_rows(master: dict[str, Any], analysis_run_id: uuid.UUID):
+def _evidence_id(transcript_id: uuid.UUID, worker_ref: object) -> uuid.UUID:
+    return _stable_uuid("evidence", transcript_id, str(worker_ref))
+
+
+def _valid_evidence_refs(master: dict[str, Any]) -> set[str]:
+    return {
+        str(segment.get("segment_id"))
+        for segment in (master.get("transcript") or [])
+        if segment.get("segment_id")
+    }
+
+
+def _evidence_ids(master: dict[str, Any], transcript_id: uuid.UUID, refs) -> list[uuid.UUID]:
+    valid = _valid_evidence_refs(master)
+    return [
+        _evidence_id(transcript_id, ref)
+        for ref in dict.fromkeys(str(value) for value in (refs or []) if value)
+        if ref in valid
+    ]
+
+
+def _evidence_rows(
+    master: dict[str, Any],
+    transcript_id: uuid.UUID,
+    source_id: uuid.UUID,
+    source_asset_id: uuid.UUID,
+):
+    """Create one immutable evidence entity for each referenced transcript segment."""
+    requested = set()
+    for item in master.get("episodes") or []:
+        requested.update(str(ref) for ref in item.get("evidence") or [] if ref)
+    for item in master.get("learning_interactions") or []:
+        requested.update(str(ref) for ref in item.get("evidence") or [] if ref)
+    for item in master.get("decisions") or []:
+        requested.update(str(ref) for ref in item.get("evidence") or [] if ref)
+    rows = []
+    for segment in master.get("transcript") or []:
+        worker_ref = str(segment.get("segment_id") or "")
+        if not worker_ref or worker_ref not in requested:
+            continue
+        rows.append((
+            _evidence_id(transcript_id, worker_ref),
+            source_id,
+            source_asset_id,
+            {
+                "transcript_id": str(transcript_id),
+                "worker_segment_id": worker_ref,
+                "source": segment.get("source"),
+            },
+            segment.get("start"),
+            segment.get("end"),
+            "LOW" if segment.get("unreliable") else "UNKNOWN",
+            "unreliable" if segment.get("unreliable") else "accepted",
+        ))
+    return rows
+
+
+def _domain_rows(
+    master: dict[str, Any],
+    analysis_run_id: uuid.UUID,
+    transcript_id: uuid.UUID | None = None,
+):
     """Build deterministic, role-neutral lesson rows without inventing identities."""
     interaction_id = _stable_uuid("learning-interaction", analysis_run_id)
+    transcript_id = transcript_id or _stable_uuid("transcript-for-domain-test", analysis_run_id)
     episodes = list(master.get("episodes") or [])
     cycles = list(master.get("learning_interactions") or [])
     decisions = list(master.get("decisions") or [])
@@ -63,6 +125,7 @@ def _domain_rows(master: dict[str, Any], analysis_run_id: uuid.UUID):
             item.get("start"),
             item.get("end"),
             str(item.get("summary_text") or "")[:4000] or None,
+            _evidence_ids(master, transcript_id, item.get("evidence") or []),
             {
                 "record_kind": "semantic_episode",
                 "worker_episode_id": item.get("episode_id"),
@@ -87,16 +150,22 @@ def _domain_rows(master: dict[str, Any], analysis_run_id: uuid.UUID):
             _stable_uuid("episode", interaction_id, "learning-cycle", worker_id),
             interaction_id,
             sequence_no,
-            "learning_cycle",
+            (
+                "learning_cycle"
+                if item.get("verification_status") == "VERIFIED_ROLE_NEUTRAL_SEQUENCE"
+                else "learning_cycle_candidate"
+            ),
             None,
             None,
             str(summary)[:4000] or None,
+            _evidence_ids(master, transcript_id, item.get("evidence") or []),
             {
                 "record_kind": "learning_cycle",
                 "worker_cycle_id": item.get("cycle_id"),
                 "focus_episode_id": item.get("focus_episode_id"),
                 "attribution_status": item.get("attribution_status"),
                 "content_completeness": item.get("content_completeness"),
+                "verification_status": item.get("verification_status"),
                 "role_neutral_sequence": sequence,
                 "student_action": item.get("student_action"),
                 "teacher_intervention": item.get("teacher_intervention"),
@@ -129,6 +198,7 @@ def _domain_rows(master: dict[str, Any], analysis_run_id: uuid.UUID):
             },
             available,
             item.get("reasoning"),
+            _evidence_ids(master, transcript_id, item.get("evidence") or []),
         ))
     return interaction_id, episode_rows, decision_rows, len(episodes), len(cycles)
 
@@ -197,7 +267,27 @@ def persist_video_result(
         decision_rows,
         semantic_episode_count,
         learning_cycle_count,
-    ) = _domain_rows(master, analysis_run_id)
+    ) = _domain_rows(master, analysis_run_id, transcript_id)
+    evidence_rows = _evidence_rows(master, transcript_id, source_id, source_asset_id)
+    evidence_links = []
+    for row in episode_rows:
+        for evidence_id in row[-2]:
+            evidence_links.append((
+                _stable_uuid("evidence-link", evidence_id, row[0], "episode", "supports"),
+                evidence_id,
+                row[0],
+                "episode",
+                "supports",
+            ))
+    for row in decision_rows:
+        for evidence_id in row[-1]:
+            evidence_links.append((
+                _stable_uuid("evidence-link", evidence_id, row[0], "decision", "supports"),
+                evidence_id,
+                row[0],
+                "decision",
+                "supports",
+            ))
 
     report_asset_id = _stable_uuid("asset", "sha256", report_sha)
     report_location_id = _stable_uuid("asset-location", "google-drive", report_drive_id)
@@ -210,6 +300,8 @@ def persist_video_result(
         "semantic_episodes": semantic_episode_count,
         "learning_cycles": learning_cycle_count,
         "decisions": len(decision_rows),
+        "evidence": len(evidence_rows),
+        "evidence_links": len(evidence_links),
         "analysis_outputs": 1,
     }
     checkpoint = {
@@ -302,8 +394,9 @@ def persist_video_result(
                     """
                     INSERT INTO public.episode
                         (episode_id, interaction_id, sequence_no, episode_type,
-                         start_offset_seconds, end_offset_seconds, summary, metadata)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                         start_offset_seconds, end_offset_seconds, summary,
+                         evidence_ids, metadata)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT DO NOTHING
                     """,
                     [
@@ -317,8 +410,8 @@ def persist_video_result(
                     INSERT INTO public.decision
                         (decision_id, school_id, interaction_id, decision_type,
                          sequence_no, action_taken, available_information,
-                         stated_reasoning)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                         stated_reasoning, evidence_ids)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT DO NOTHING
                     """,
                     [
@@ -331,6 +424,7 @@ def persist_video_result(
                             Jsonb(action_taken),
                             Jsonb(available_information),
                             stated_reasoning,
+                            row_evidence_ids,
                         )
                         for (
                             decision_id,
@@ -340,6 +434,7 @@ def persist_video_result(
                             action_taken,
                             available_information,
                             stated_reasoning,
+                            row_evidence_ids,
                         ) in decision_rows
                     ],
                 )
@@ -522,6 +617,51 @@ def persist_video_result(
                     Jsonb({"source_id": str(source_id), "transcript_id": str(transcript_id)}),
                 ),
             )
+            if evidence_rows:
+                cur.executemany(
+                    """
+                    INSERT INTO public.evidence
+                        (evidence_id, school_id, evidence_type, source_id, asset_id,
+                         locator, start_seconds, end_seconds, confidence_class,
+                         quality_status)
+                    VALUES (%s, %s, 'transcript_segment', %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    [
+                        (
+                            evidence_id,
+                            school_id,
+                            row_source_id,
+                            row_asset_id,
+                            Jsonb(locator),
+                            start_seconds,
+                            end_seconds,
+                            confidence_class,
+                            quality_status,
+                        )
+                        for (
+                            evidence_id,
+                            row_source_id,
+                            row_asset_id,
+                            locator,
+                            start_seconds,
+                            end_seconds,
+                            confidence_class,
+                            quality_status,
+                        ) in evidence_rows
+                    ],
+                )
+            if evidence_links:
+                cur.executemany(
+                    """
+                    INSERT INTO public.evidence_link
+                        (evidence_link_id, evidence_id, target_entity_id,
+                         target_entity_type, relation_type, weight, analysis_run_id)
+                    VALUES (%s, %s, %s, %s, %s, 1, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    [row + (analysis_run_id,) for row in evidence_links],
+                )
 
             cur.execute(
                 """
@@ -606,4 +746,6 @@ def persist_video_result(
         "episodes": semantic_episode_count,
         "learning_cycles": learning_cycle_count,
         "decisions": len(decision_rows),
+        "evidence": len(evidence_rows),
+        "evidence_links": len(evidence_links),
     }
