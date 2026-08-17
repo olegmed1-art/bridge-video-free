@@ -41,7 +41,7 @@ components:
     operational: false
     depends_on: [neon_persistence, evidence_gate]
     evidence_hint: docs/architecture/truth_layer_checkpoint_2026-08-17.md
-    note: clean PostgreSQL 18 CI and isolated production-snapshot migration evidence exist; migration 0044 is not yet applied to production
+    note: clean PostgreSQL 18 semantic CI and isolated production-snapshot migration evidence exist; final migration identity is 0045 and remains unpromoted to production
   - id: school_knowledge
     name: Approved School Knowledge
     status: DESIGNED
