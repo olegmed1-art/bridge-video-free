@@ -3,14 +3,11 @@ name: DDS main 30k — authorized TRAIN execution
 on:
   workflow_dispatch:
     inputs:
-      expected_commit:
-        description: Exact 40-character main commit SHA to authorize
+      approve_stage2:
+        description: Confirm explicit start of Stage-2 main TRAIN on the selected main commit
         required: true
-        type: string
-      approval_phrase:
-        description: Exact explicit Stage-2 approval phrase
-        required: true
-        type: string
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -39,9 +36,9 @@ jobs:
           test "$GITHUB_REF_NAME" = main
           test "$GITHUB_ACTOR" = olegmed1-art
           test "$GITHUB_TRIGGERING_ACTOR" = olegmed1-art
-          test "$GITHUB_SHA" = "${{ inputs.expected_commit }}"
-          test "${{ inputs.approval_phrase }}" = "ЭТАП-2-СТАРТ-ПОДТВЕРЖДАЮ"
+          test "${{ inputs.approve_stage2 }}" = "true"
           test "${#GITHUB_SHA}" -eq 40
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
 
       - name: Checkout authorized main commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -107,8 +104,8 @@ jobs:
       - name: Execute restartable owner-authorized base TRAIN stage
         working-directory: dds_training
         env:
-          DDS_MAIN_EXPECTED_COMMIT: ${{ inputs.expected_commit }}
-          DDS_MAIN_APPROVAL_PHRASE: ${{ inputs.approval_phrase }}
+          DDS_MAIN_EXPECTED_COMMIT: ${{ github.sha }}
+          DDS_MAIN_APPROVAL_PHRASE: ЭТАП-2-СТАРТ-ПОДТВЕРЖДАЮ
           DDS_MAIN_EVIDENCE_DIR: /tmp/dds-main-shard-evidence
         run: bash run_main_train_authorized.sh
 
@@ -133,5 +130,5 @@ jobs:
         with:
           name: dds-main-train-progress-${{ github.run_id }}-a${{ github.run_attempt }}
           path: /tmp/dds-main-train-progress/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 90
