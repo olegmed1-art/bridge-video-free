@@ -1,27 +1,25 @@
-# META Shadow Candidate 001 — Video 3.1 FREE r27
+# META Candidate 001 — Video 3.1 FREE r27
 
-Status: SHADOW_ONLY / NOT_PROMOTED
-Base Stable: Google Doc `1ME-zurRoafluFzQyW7uPgsN62cKkQruhtoy8EkImnzA`, revision observed during Shadow Run 001.
+Status: PROMOTED_A2_R1 / VERIFIED
+Base Stable: Google Doc `1ME-zurRoafluFzQyW7uPgsN62cKkQruhtoy8EkImnzA`.
 
-## Proposed minimal patch
+## Minimal patch
 
 ### Patch A — stale launch revision
-Current section 21:
-`Команда «расшифровка видео <файл>» означает полный запуск актуального алгоритма 3.1-free-r25, а не только получение текста речи.`
-
-Candidate:
-`Команда «расшифровка видео <файл>» означает полный запуск актуального алгоритма 3.1-free-r27, а не только получение текста речи.`
+Changed current section 21 from `3.1-free-r25` to `3.1-free-r27` in the sentence defining the current `расшифровка видео <файл>` launch command.
 
 ### Patch B — exact duplicate
-In the initial status paragraph, keep exactly one occurrence of:
+Removed only the immediately repeated duplicate occurrence of:
 `Предыдущие документы сохраняются как история развития и не являются нормативными для новых обработок.`
 
-Remove only the immediately repeated duplicate occurrence.
-
 ## Explicit non-changes
+No methodology, bidding-system meaning, pipeline stage, evidence rule, privacy rule, cost rule, source-file rule, Mastery rule or pedagogical rule was changed.
 
-No other text is changed. No methodology, bidding-system meaning, pipeline stage, evidence rule, privacy rule, cost rule, source-file rule, Mastery rule or pedagogical rule is changed.
+## A2 promotion
+Owner explicitly authorized A2 on 2026-08-17. Before write, the Stable Google Doc revision was re-read and matched the Shadow baseline revision. A recovery copy was created: Google Doc `1Y5AwstXW9M09yj2bEBnuJqurOuma--NkEdcrSkEC360`.
 
-## Promotion status
+The update used Google Docs requiredRevisionId concurrency control. Result: exactly one stale launch-reference occurrence replaced. The duplicate second occurrence was removed. Post-write read-back verified the r27 launch sentence exists and no second duplicate occurrence remains.
 
-Not promoted. This candidate exists only to validate META CLOSED LOOP Shadow behavior.
+Stable revision after promotion: `AIroW34vezrdLadmEZp_h9PUoujhYep0pPa0czZJRD-h6UOtP3l6th2-5oroxhQthO_sdJ1Ny3W6reT2Q-pIaEEloZrsDFpS7f5FCT69CFc`.
+
+Rollback reference: recovery copy above. Promotion class: deterministic R1 documentation consistency fix.
