@@ -1,11 +1,12 @@
 name: DDS pilot 10k — train phase
 
 on:
-  push:
-    branches: [dds-training-local]
-    paths:
-      - '.github/workflows/dds-training-pilot-start.yml'
   workflow_dispatch:
+    inputs:
+      approval_token:
+        description: 'Введите ПИЛОТ-10К-TRAIN-ОДОБРЕН для явного запуска DDS TRAIN'
+        required: true
+        type: string
 
 concurrency:
   group: dds-pilot-10k-train
@@ -24,9 +25,20 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
+      - name: Verify explicit human authorization for pilot TRAIN
+        env:
+          APPROVAL_TOKEN: ${{ inputs.approval_token }}
+        run: |
+          set -euo pipefail
+          if [ "$APPROVAL_TOKEN" != "ПИЛОТ-10К-TRAIN-ОДОБРЕН" ]; then
+            echo "Pilot TRAIN is blocked: explicit approval token is missing." >&2
+            exit 2
+          fi
+          echo '{"pilot_train_authorized":true,"automatic_trigger":false}'
 
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.14'
 
@@ -141,7 +153,7 @@ jobs:
 
       - name: Upload durable pilot state
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: dds-pilot-10k-train-state-${{ github.run_id }}
           path: dds-pilot-10k-train-state.tgz
