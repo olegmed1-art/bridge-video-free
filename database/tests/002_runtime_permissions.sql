@@ -49,8 +49,10 @@ BEGIN
         RAISE EXCEPTION 'bridge_school_worker must inherit bridge_school_app';
     END IF;
 
-    -- Reader can inspect ordinary persistent tables, but authentication,
-    -- authorization, signing-secret and actor-audit tables are an explicit protected surface.
+    -- Reader can inspect ordinary persistent tables. Authentication/authorization,
+    -- signing secrets, actor audit, source ACL/rights observations and recovery
+    -- checkpoint evidence are explicit protected surfaces and must not leak through the
+    -- broad reader role.
     FOR r IN
         SELECT format('%I.%I', n.nspname, c.relname) AS table_name
           FROM pg_class c
@@ -62,7 +64,10 @@ BEGIN
                'person_role_assignment',
                'person_access_grant',
                'audit_event',
-               'actor_context_signing_secret'
+               'actor_context_signing_secret',
+               'source_rights_snapshot',
+               'recovery_checkpoint',
+               'recovery_verification'
            )
     LOOP
         IF NOT has_table_privilege('bridge_school_reader', r.table_name, 'SELECT') THEN
@@ -72,7 +77,8 @@ BEGIN
 
     FOREACH required_table IN ARRAY ARRAY[
         'auth_identity','person_role_assignment','person_access_grant','audit_event',
-        'actor_context_signing_secret'
+        'actor_context_signing_secret','source_rights_snapshot',
+        'recovery_checkpoint','recovery_verification'
     ] LOOP
         IF has_table_privilege('bridge_school_reader', required_table, 'SELECT') THEN
             RAISE EXCEPTION 'reader unexpectedly has SELECT on protected table %', required_table;
