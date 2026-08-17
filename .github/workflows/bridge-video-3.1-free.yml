@@ -74,6 +74,7 @@ jobs:
           LESSON_NUMBER=""
           LESSON_DATE_CANDIDATE=""
           LESSON_DATE_SOURCE=""
+          PERSIST_DATABASE="false"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             JOB_ID="$INPUT_JOB_ID"
             OUTPUT_FOLDER_ID="$INPUT_OUTPUT_FOLDER_ID"
@@ -90,6 +91,8 @@ jobs:
             LESSON_NUMBER="$(sed -n 's/^LESSON_NUMBER=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
             LESSON_DATE_CANDIDATE="$(sed -n 's/^LESSON_DATE_CANDIDATE=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
             LESSON_DATE_SOURCE="$(sed -n 's/^LESSON_DATE_SOURCE=//p' "$REQUEST_FILE" | tail -n 1)"
+            PERSIST_DATABASE="$(sed -n 's/^PERSIST_DATABASE=//p' "$REQUEST_FILE" | tail -n 1 | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+            PERSIST_DATABASE="${PERSIST_DATABASE:-false}"
             if [ -z "$JOB_ID" ]; then
               JOB_ID="$(basename "$REQUEST_FILE" .txt)"
             fi
@@ -115,6 +118,7 @@ jobs:
               *) echo "lesson date candidate must be YYYY-MM-DD" >&2; exit 2 ;;
             esac
           fi
+          case "$PERSIST_DATABASE" in true|false) ;; *) echo "PERSIST_DATABASE must be true or false" >&2; exit 2 ;; esac
           {
             echo "BRIDGE_JOB_ID=$JOB_ID"
             echo "BRIDGE_OUTPUT_FOLDER_ID=$OUTPUT_FOLDER_ID"
@@ -123,6 +127,7 @@ jobs:
             echo "BRIDGE_LESSON_NUMBER=$LESSON_NUMBER"
             echo "BRIDGE_LESSON_DATE_CANDIDATE=$LESSON_DATE_CANDIDATE"
             echo "BRIDGE_LESSON_DATE_SOURCE=$LESSON_DATE_SOURCE"
+            echo "BRIDGE_PERSIST_DATABASE=$PERSIST_DATABASE"
           } >> "$GITHUB_ENV"
 
       - name: Python
@@ -130,10 +135,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install lightweight Drive and longitudinal dependencies
+      - name: Install lightweight Drive, database and longitudinal dependencies
         run: |
           python -m pip install --disable-pip-version-check \
-            'requests==2.34.2' 'google-auth==2.56.3' 'pymupdf==1.28.2'
+            'requests==2.34.2' 'google-auth==2.56.3' 'pymupdf==1.28.2' \
+            'psycopg[binary]==3.3.4'
 
       - name: Terminal receipt preflight
         id: terminal
@@ -193,6 +199,24 @@ jobs:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
         run: python diana_longitudinal_postprocess.py
 
+      - name: Persist completed raw evidence and analysis to Neon
+        if: always() && env.BRIDGE_PERSIST_DATABASE == 'true'
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+        run: |
+          python - <<'PY'
+          from run_drive_3_1_free_oidc import user_oauth_token
+          from bridge_neon_persistence import persist_completed_drive_job
+          token = user_oauth_token()
+          if not token:
+              raise SystemExit('BLOCKED_ACCESS: Drive OAuth unavailable')
+          if persist_completed_drive_job(token) is None:
+              raise SystemExit('DATABASE_PERSIST_NOT_CONFIGURED')
+          print('DATABASE_PERSIST_COMPLETE')
+          PY
+
       # No Google Cloud auth, no paid AI endpoint, no billing fallback.
       # Source/master media is read-only; derived files are routed separately.
+      # Database persistence is optional, idempotent, and stores raw evidence/analysis only.
       # User media/transcripts are never uploaded as GitHub workflow artifacts.
