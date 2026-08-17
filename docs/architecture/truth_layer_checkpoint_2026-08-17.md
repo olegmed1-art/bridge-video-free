@@ -14,14 +14,16 @@ Direct Neon verification after the candidate work confirmed:
 - PostgreSQL: `18.4`;
 - production `schema_migration`: `0001–0019` only;
 - production operational health: 15 `ok`, 0 warning, 0 critical;
-- production Bridge Video `analysis_run`: 11 successful rows, all still unlinked to `algorithm_version_id` because candidate migration `0044` has not been promoted;
-- production `storage_verification`: 0 rows because candidate migration `0044` has not been promoted.
+- production Bridge Video `analysis_run`: 11 successful rows, all still unlinked to `algorithm_version_id` because candidate Truth migration has not been promoted;
+- production `storage_verification`: 0 rows because candidate Truth migration has not been promoted.
 
 No production database changes were made during this checkpoint.
 
 ## Candidate merged to `main`
 
-Migration `0044_truth_storage_provenance` and regression test `031_truth_storage_provenance.sql` are merged to `main`.
+The Truth candidate is `0045_truth_storage_provenance` with regression test `032_truth_storage_provenance.sql`.
+
+The semantic candidate was first tested while temporarily numbered `0044`. Concurrent development then introduced `0044_instructor_education_scope.sql`. Because neither Truth migration had been promoted to production, the Truth migration was safely renumbered to `0045` and the Truth regression test to `032`; the migration runner was also hardened to reject any future duplicate migration or database-test numeric prefix before applying migrations.
 
 The candidate adds:
 
@@ -38,7 +40,7 @@ Registration of an AlgorithmVersion is identity/provenance only. It does not imp
 
 ## CI evidence
 
-GitHub Actions database candidate run `32000454269` succeeded on PostgreSQL 18.
+The semantic Truth candidate passed GitHub Actions database run `32000454269` on PostgreSQL 18 before the sequence-only renumbering.
 
 Verified gates:
 
@@ -48,9 +50,11 @@ Verified gates:
 - checksum-tamper guard;
 - migration registry verification.
 
+The final `0045`/`032` numbering and duplicate-sequence guard require their own post-renumber CI confirmation before this checkpoint is used as release evidence.
+
 ## Production-snapshot migration evidence
 
-A temporary Neon branch was created from the production database solely to test `0044` against real current data.
+A temporary Neon branch was created from the production database solely to test the Truth migration semantics against real current data.
 
 Temporary branch ID: `br-fragrant-dawn-b11ncyzk`.
 
@@ -66,24 +70,23 @@ After applying the candidate migration on that isolated production snapshot:
 - AssetLocation rows with verification evidence: 15;
 - all 15 verification records were `available` and checksum-bound to the Asset registry.
 
-The only health signal reported as critical on the manual test branch was `migration_checksums`, because the migration was executed directly through the Neon test connector rather than through `database/scripts/migrate.sh`; the manual test inserted the migration key but intentionally did not forge a repository checksum. The normal migration runner already has an independent checksum contract and passed CI.
+The only health signal reported as critical on the manual test branch was `migration_checksums`, because the migration was executed directly through the Neon test connector rather than through `database/scripts/migrate.sh`; the manual test inserted the migration key but intentionally did not forge a repository checksum. The normal migration runner has an independent checksum contract.
 
 The temporary Neon branch was deleted after verification to avoid leaving unnecessary resources.
 
 ## Remaining reliability boundaries
 
-Truth Layer is now a tested repository candidate, not production operational.
+Truth Layer is a tested repository candidate, not production operational.
 
 Before production promotion:
 
-1. keep production at `0019` until the release path is deliberately hardened;
-2. sync the manual-only hardened `database-production` workflow to the actual `database-production` branch;
-3. create a recoverable Neon checkpoint immediately before promotion;
-4. verify production fingerprint/health before migration;
-5. run the full production migration only through the explicit manual release gate;
-6. verify migration checksums, runtime permissions, health, AlgorithmVersion linkage and StorageVerification counts afterward;
-7. preserve the pre-promotion checkpoint until post-release verification is complete.
+1. keep production at `0019` until the complete reviewed release set is deliberately prepared;
+2. preserve the recovery branch `recovery-prod-0019-20260817`;
+3. verify production fingerprint/health immediately before migration;
+4. run the full production migration only through the explicit manual release gate;
+5. verify migration checksums, runtime permissions, health, AlgorithmVersion linkage and StorageVerification counts afterward;
+6. preserve the pre-promotion recovery state until post-release verification and observation are complete.
 
 ## Recovery risk still open
 
-The current Neon project history-retention window is short (approximately 6 hours). This is adequate for immediate rollback experiments but is not, by itself, a long-term backup policy. Backup/restore and retention policy remains an explicit reliability task before financial or mass-user rollout.
+The current Neon project history-retention window is short (approximately 6 hours). A separate recovery branch now preserves the current `0019` production state, improving recoverability, but this is still not a complete long-term backup/restore policy. A restore-test remains required before financial or mass-user rollout.
