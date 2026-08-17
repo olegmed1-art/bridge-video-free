@@ -17,6 +17,7 @@ DEFAULT_ALLOWED_PREFIXES = (
     "dds_training/checkpoints",
     "dds_training/__pycache__",
 )
+MAX_IGNORED_SAMPLE = 100
 
 
 class SourceIntegrityError(RuntimeError):
@@ -66,8 +67,6 @@ def _status_entries(repo: Path) -> list[dict]:
             continue
         status = line[:2]
         raw_path = line[3:] if len(line) >= 4 else ""
-        # A rename/copy is always a mutation. Keep the whole printable path for
-        # evidence; no attempt to waive only one side of it is permitted.
         entries.append({"status": status, "path": raw_path})
     return entries
 
@@ -108,7 +107,9 @@ def audit_repository(
         "allowed_prefixes": list(prefixes),
         "working_tree_entries": status,
         "unexpected_working_tree_entries": unexpected_status,
-        "ignored_files": ignored,
+        "ignored_file_count": len(ignored),
+        "ignored_files_sample": ignored[:MAX_IGNORED_SAMPLE],
+        "ignored_files_sample_truncated": len(ignored) > MAX_IGNORED_SAMPLE,
         "unexpected_ignored_files": unexpected_ignored,
     }
     return report
