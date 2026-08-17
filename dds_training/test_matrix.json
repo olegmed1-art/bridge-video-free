@@ -5,288 +5,91 @@
   "default_hash_seeds": [0],
   "ignored_selftests": {},
   "tests": [
-    {
-      "id": "test-runner",
-      "path": "test_runner_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 15,
-      "description": "Runner failure isolation, timeout, mutation and manifest contract."
-    },
-    {
-      "id": "test-architecture",
-      "path": "test_architecture_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 20,
-      "description": "Manifest completeness, workflow safety, pinning and network isolation."
-    },
-    {
-      "id": "source-integrity",
-      "path": "source_integrity_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 20,
-      "description": "Tracked, untracked and ignored repository residue detection."
-    },
-    {
-      "id": "run-authorization",
-      "path": "run_authorization_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 20,
-      "description": "Expiring data-bound approval, sealed permission and solver-entry guard."
-    },
-    {
-      "id": "baseline-predictor",
-      "path": "baseline_predictor_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 20,
-      "description": "Deterministic non-DDS baseline prediction and split filtering."
-    },
-    {
-      "id": "adaptive-predictor",
-      "path": "adaptive_predictor_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 30,
-      "description": "TRAIN-only adaptive model construction and blind validation inference."
-    },
-    {
-      "id": "algorithm-review-v23",
-      "path": "algorithm_review_v23_regression.py",
-      "suite": "fast",
-      "timeout_seconds": 15,
-      "description": "Evidence-driven post-stage review and no automatic mutation."
-    },
-    {
-      "id": "confidence-calibration",
-      "path": "confidence_calibration_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 20,
-      "description": "OOF calibration monotonicity and abstention."
-    },
-    {
-      "id": "continuation-tasks",
-      "path": "continuation_tasks_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 20,
-      "description": "Declarer/defense mid-play task construction."
-    },
-    {
-      "id": "corpus",
-      "path": "corpus_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 90,
-      "description": "Deterministic pilot-to-main corpus expansion and input guards."
-    },
-    {
-      "id": "counterexample-candidates",
-      "path": "counterexample_candidates_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 20,
-      "description": "Action/value flip candidate extraction."
-    },
-    {
-      "id": "crossfit",
-      "path": "crossfit_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 20,
-      "hash_seeds": [0, 991],
-      "description": "Family-safe folds and leakage detection under two hash seeds."
-    },
-    {
-      "id": "experience-memory",
-      "path": "experience_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 90,
-      "description": "Append-only evidence, holdout isolation, checkpoints and skill recovery."
-    },
-    {
-      "id": "human-view",
-      "path": "human_view_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 20,
-      "description": "Single-dummy hidden-hand isolation."
-    },
-    {
-      "id": "investigations",
-      "path": "investigation_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 20,
-      "description": "Mandatory investigation lifecycle and append-only history."
-    },
-    {
-      "id": "line-predictor",
-      "path": "line_predictor_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 20,
-      "description": "Deterministic blind legal line prediction."
-    },
-    {
-      "id": "methodology-v22",
-      "path": "methodology_v22_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 90,
-      "description": "Evidence roles, balanced follow-ups and family model selection."
-    },
-    {
-      "id": "playline",
-      "path": "playline_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 20,
-      "description": "Ownership, turn order, follow-suit and trick winner validation."
-    },
-    {
-      "id": "regression-links",
-      "path": "regression_link_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 30,
-      "description": "Multi-skill regression provenance links."
-    },
-    {
-      "id": "rule-synthesis",
-      "path": "rule_synthesis_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 30,
-      "description": "Evidence-gated versioned technical rules."
-    },
-    {
-      "id": "v23-launch-guard",
-      "path": "run_stage_v23_guard_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 30,
-      "hash_seeds": [0, 991],
-      "description": "Legacy compatibility launcher remains fail-closed."
-    },
-    {
-      "id": "shard-plan",
-      "path": "shard_plan_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 20,
-      "hash_seeds": [0, 991],
-      "description": "Deterministic family-preserving restartable shards."
-    },
-    {
-      "id": "skill-versions",
-      "path": "skill_versions_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 30,
-      "description": "Analyzer-version skill profile preservation."
-    },
-    {
-      "id": "stage2-readiness",
-      "path": "stage2_readiness_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 60,
-      "hash_seeds": [0, 991],
-      "description": "Independent main/holdout/skill-claim readiness gates."
-    },
-    {
-      "id": "stage-gate",
-      "path": "stage_gate_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 40,
-      "description": "Completion, report and expansion gate."
-    },
-    {
-      "id": "stage-scope",
-      "path": "stage_scope_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 20,
-      "description": "Fresh pilot/main scopes and targeted random-base prohibition."
-    },
-    {
-      "id": "v23-runtime",
-      "path": "v23_runtime_selftest.py",
-      "suite": "fast",
-      "timeout_seconds": 60,
-      "hash_seeds": [0, 991],
-      "description": "Compatibility runtime: partial positions, lineage, calibration, shards and negative controls."
-    },
-    {
-      "id": "preflight",
-      "path": "preflight_selftest.py",
-      "suite": "dds",
-      "timeout_seconds": 180,
-      "description": "Real DDS batch boundary, context reuse and technical preflight."
-    },
-    {
-      "id": "dds-play",
-      "path": "dds_play_selftest.py",
-      "suite": "dds",
-      "timeout_seconds": 180,
-      "description": "Real DDS prefix trajectory, value normalization and first error."
-    },
-    {
-      "id": "continuation-eval",
-      "path": "continuation_eval_selftest.py",
-      "suite": "dds",
-      "timeout_seconds": 180,
-      "description": "Real DDS continuation candidate scores, regret and provenance."
-    },
-    {
-      "id": "variant-dds",
-      "path": "variant_dds_selftest.py",
-      "suite": "dds",
-      "timeout_seconds": 240,
-      "description": "DDS rotation/suit invariants and complete perturbations."
-    },
-    {
-      "id": "independent-crosscheck",
-      "path": "independent_crosscheck_selftest.py",
-      "suite": "dds",
-      "timeout_seconds": 180,
-      "description": "Pinned independent solver agrees with DDS3 on all 20 DD cells."
-    }
+    {"id":"test-runner","path":"test_runner_selftest.py","suite":"fast","timeout_seconds":15,"description":"Runner failure isolation, timeout, mutation and manifest contract."},
+    {"id":"test-architecture","path":"test_architecture_selftest.py","suite":"fast","timeout_seconds":20,"description":"Manifest completeness, workflow safety, pinning and network isolation."},
+    {"id":"source-integrity","path":"source_integrity_selftest.py","suite":"fast","timeout_seconds":20,"description":"Tracked, untracked and ignored repository residue detection."},
+    {"id":"run-authorization","path":"run_authorization_selftest.py","suite":"fast","timeout_seconds":20,"description":"Expiring data-bound approval, sealed permission and solver-entry guard."},
+    {"id":"baseline-predictor","path":"baseline_predictor_selftest.py","suite":"fast","timeout_seconds":20,"description":"Deterministic non-DDS baseline prediction and split filtering."},
+    {"id":"adaptive-predictor","path":"adaptive_predictor_selftest.py","suite":"fast","timeout_seconds":30,"description":"TRAIN-only adaptive model construction and blind validation inference."},
+    {"id":"report-rendering","path":"report_selftest.py","suite":"fast","timeout_seconds":30,"description":"English and Russian report rendering from immutable stage-scoped facts."},
+    {"id":"algorithm-review-v23","path":"algorithm_review_v23_regression.py","suite":"fast","timeout_seconds":15,"description":"Evidence-driven post-stage review and no automatic mutation."},
+    {"id":"confidence-calibration","path":"confidence_calibration_selftest.py","suite":"fast","timeout_seconds":20,"description":"OOF calibration monotonicity and abstention."},
+    {"id":"continuation-tasks","path":"continuation_tasks_selftest.py","suite":"fast","timeout_seconds":20,"description":"Declarer/defense mid-play task construction."},
+    {"id":"corpus","path":"corpus_selftest.py","suite":"fast","timeout_seconds":90,"description":"Deterministic pilot-to-main corpus expansion and input guards."},
+    {"id":"counterexample-candidates","path":"counterexample_candidates_selftest.py","suite":"fast","timeout_seconds":20,"description":"Action/value flip candidate extraction."},
+    {"id":"crossfit","path":"crossfit_selftest.py","suite":"fast","timeout_seconds":20,"hash_seeds":[0,991],"description":"Family-safe folds and leakage detection under two hash seeds."},
+    {"id":"experience-memory","path":"experience_selftest.py","suite":"fast","timeout_seconds":90,"description":"Append-only evidence, holdout isolation, checkpoints and skill recovery."},
+    {"id":"human-view","path":"human_view_selftest.py","suite":"fast","timeout_seconds":20,"description":"Single-dummy hidden-hand isolation."},
+    {"id":"investigations","path":"investigation_selftest.py","suite":"fast","timeout_seconds":20,"description":"Mandatory investigation lifecycle and append-only history."},
+    {"id":"line-predictor","path":"line_predictor_selftest.py","suite":"fast","timeout_seconds":20,"description":"Deterministic blind legal line prediction."},
+    {"id":"methodology-v22","path":"methodology_v22_selftest.py","suite":"fast","timeout_seconds":90,"description":"Evidence roles, balanced follow-ups and family model selection."},
+    {"id":"playline","path":"playline_selftest.py","suite":"fast","timeout_seconds":20,"description":"Ownership, turn order, follow-suit and trick winner validation."},
+    {"id":"regression-links","path":"regression_link_selftest.py","suite":"fast","timeout_seconds":30,"description":"Multi-skill regression provenance links."},
+    {"id":"rule-synthesis","path":"rule_synthesis_selftest.py","suite":"fast","timeout_seconds":30,"description":"Evidence-gated versioned technical rules."},
+    {"id":"v23-launch-guard","path":"run_stage_v23_guard_selftest.py","suite":"fast","timeout_seconds":30,"hash_seeds":[0,991],"description":"Legacy compatibility launcher remains fail-closed."},
+    {"id":"shard-plan","path":"shard_plan_selftest.py","suite":"fast","timeout_seconds":20,"hash_seeds":[0,991],"description":"Deterministic family-preserving restartable shards."},
+    {"id":"skill-versions","path":"skill_versions_selftest.py","suite":"fast","timeout_seconds":30,"description":"Analyzer-version skill profile preservation."},
+    {"id":"stage2-readiness","path":"stage2_readiness_selftest.py","suite":"fast","timeout_seconds":60,"hash_seeds":[0,991],"description":"Independent main/holdout/skill-claim readiness gates."},
+    {"id":"stage-gate","path":"stage_gate_selftest.py","suite":"fast","timeout_seconds":40,"description":"Completion, report and expansion gate."},
+    {"id":"stage-scope","path":"stage_scope_selftest.py","suite":"fast","timeout_seconds":20,"description":"Fresh pilot/main scopes and targeted random-base prohibition."},
+    {"id":"v23-runtime","path":"v23_runtime_selftest.py","suite":"fast","timeout_seconds":60,"hash_seeds":[0,991],"description":"Compatibility runtime: partial positions, lineage, calibration, shards and negative controls."},
+    {"id":"preflight","path":"preflight_selftest.py","suite":"dds","timeout_seconds":180,"description":"Real DDS batch boundary, context reuse and technical preflight."},
+    {"id":"dds-play","path":"dds_play_selftest.py","suite":"dds","timeout_seconds":180,"description":"Real DDS prefix trajectory, value normalization and first error."},
+    {"id":"continuation-eval","path":"continuation_eval_selftest.py","suite":"dds","timeout_seconds":180,"description":"Real DDS continuation candidate scores, regret and provenance."},
+    {"id":"variant-dds","path":"variant_dds_selftest.py","suite":"dds","timeout_seconds":240,"description":"DDS rotation/suit invariants and complete perturbations."},
+    {"id":"independent-crosscheck","path":"independent_crosscheck_selftest.py","suite":"dds","timeout_seconds":180,"description":"Pinned independent solver agrees with DDS3 on all 20 DD cells."}
   ],
   "coverage": {
-    "max_waivers": 2,
+    "max_waivers": 0,
     "infrastructure": ["test_runner.py"],
     "module_tests": {
-      "adaptive_predictor.py": ["adaptive-predictor"],
-      "algorithm_review_v23.py": ["algorithm-review-v23"],
-      "audit.py": ["experience-memory", "stage-gate"],
-      "authorized_run_stage.py": ["run-authorization"],
-      "baseline_predictor.py": ["baseline-predictor"],
-      "checkpointing.py": ["experience-memory", "run-authorization"],
-      "compare_predictors.py": ["methodology-v22"],
-      "confidence_calibration.py": ["confidence-calibration"],
-      "config.py": ["stage2-readiness", "stage-scope", "run-authorization"],
-      "continuation_eval.py": ["continuation-eval"],
-      "continuation_tasks.py": ["continuation-tasks", "continuation-eval"],
-      "corpus.py": ["corpus", "preflight", "independent-crosscheck"],
-      "counterexample_candidates.py": ["counterexample-candidates"],
-      "crossfit.py": ["crossfit", "stage2-readiness"],
-      "dds_engine.py": ["run-authorization", "preflight", "variant-dds", "independent-crosscheck"],
-      "dds_play.py": ["dds-play", "continuation-eval"],
-      "experience_events.py": ["experience-memory"],
-      "human_view.py": ["human-view"],
-      "independent_crosscheck.py": ["independent-crosscheck"],
-      "investigations.py": ["investigations", "stage-gate"],
-      "learning.py": ["experience-memory", "regression-links", "methodology-v22"],
-      "line_predictor.py": ["line-predictor", "stage2-readiness"],
-      "methodology_audit.py": ["methodology-v22", "stage-gate"],
-      "playline.py": ["playline", "human-view", "continuation-tasks", "dds-play"],
-      "preflight.py": ["preflight"],
-      "prepare_stage2.py": ["stage2-readiness"],
-      "regression_links.py": ["regression-links", "stage-gate"],
-      "resolve_investigations_auto.py": ["investigations"],
-      "rule_synthesis.py": ["rule-synthesis"],
-      "run_authorization.py": ["run-authorization"],
-      "run_provenance.py": ["experience-memory", "stage-gate"],
-      "run_stage.py": ["corpus", "experience-memory", "stage-gate", "run-authorization"],
-      "run_stage_v23.py": ["v23-launch-guard"],
-      "shard_plan.py": ["shard-plan", "stage2-readiness"],
-      "skill_versions.py": ["skill-versions", "experience-memory"],
-      "source_integrity.py": ["source-integrity"],
-      "stage2_readiness.py": ["stage2-readiness"],
-      "stage_gate.py": ["stage-gate"],
-      "stage_scope.py": ["stage-scope", "stage2-readiness"],
-      "storage.py": ["experience-memory", "regression-links", "stage-gate"],
-      "tasks.py": ["corpus", "methodology-v22"],
-      "v23_core.py": ["v23-runtime"],
-      "v23_runtime.py": ["v23-runtime", "v23-launch-guard"],
-      "variants.py": ["methodology-v22", "variant-dds"]
+      "adaptive_predictor.py":["adaptive-predictor"],
+      "algorithm_review_v23.py":["algorithm-review-v23"],
+      "audit.py":["experience-memory","stage-gate","report-rendering"],
+      "authorized_run_stage.py":["run-authorization"],
+      "baseline_predictor.py":["baseline-predictor"],
+      "checkpointing.py":["experience-memory","run-authorization"],
+      "compare_predictors.py":["methodology-v22"],
+      "confidence_calibration.py":["confidence-calibration"],
+      "config.py":["stage2-readiness","stage-scope","run-authorization","report-rendering"],
+      "continuation_eval.py":["continuation-eval"],
+      "continuation_tasks.py":["continuation-tasks","continuation-eval"],
+      "corpus.py":["corpus","preflight","independent-crosscheck"],
+      "counterexample_candidates.py":["counterexample-candidates"],
+      "crossfit.py":["crossfit","stage2-readiness"],
+      "dds_engine.py":["run-authorization","preflight","variant-dds","independent-crosscheck"],
+      "dds_play.py":["dds-play","continuation-eval"],
+      "experience_events.py":["experience-memory"],
+      "human_view.py":["human-view"],
+      "independent_crosscheck.py":["independent-crosscheck"],
+      "investigations.py":["investigations","stage-gate","report-rendering"],
+      "learning.py":["experience-memory","regression-links","methodology-v22","report-rendering"],
+      "line_predictor.py":["line-predictor","stage2-readiness"],
+      "methodology_audit.py":["methodology-v22","stage-gate"],
+      "pilot_report_ru.py":["report-rendering"],
+      "playline.py":["playline","human-view","continuation-tasks","dds-play"],
+      "preflight.py":["preflight"],
+      "prepare_stage2.py":["stage2-readiness"],
+      "regression_links.py":["regression-links","stage-gate"],
+      "report.py":["report-rendering"],
+      "resolve_investigations_auto.py":["investigations"],
+      "rule_synthesis.py":["rule-synthesis"],
+      "run_authorization.py":["run-authorization"],
+      "run_provenance.py":["experience-memory","stage-gate","report-rendering"],
+      "run_stage.py":["corpus","experience-memory","stage-gate","run-authorization"],
+      "run_stage_v23.py":["v23-launch-guard"],
+      "shard_plan.py":["shard-plan","stage2-readiness"],
+      "skill_versions.py":["skill-versions","experience-memory"],
+      "source_integrity.py":["source-integrity"],
+      "stage2_readiness.py":["stage2-readiness"],
+      "stage_gate.py":["stage-gate"],
+      "stage_scope.py":["stage-scope","stage2-readiness"],
+      "storage.py":["experience-memory","regression-links","stage-gate","report-rendering"],
+      "tasks.py":["corpus","methodology-v22"],
+      "v23_core.py":["v23-runtime"],
+      "v23_runtime.py":["v23-runtime","v23-launch-guard"],
+      "variants.py":["methodology-v22","variant-dds"]
     },
-    "waivers": {
-      "pilot_report_ru.py": "expires=2026-09-30; requires a completed pilot database fixture; report fixture test is scheduled before the next report revision.",
-      "report.py": "expires=2026-09-30; requires a completed stage database fixture; direct isolated report rendering test is scheduled before the next report revision."
-    }
+    "waivers": {}
   }
 }
