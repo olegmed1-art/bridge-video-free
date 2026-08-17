@@ -1,14 +1,15 @@
 {
-  "schema": "dds-test-manifest-v1",
-  "description": "Canonical test inventory for DDS learning v2.3 hardening. Every self-test and every production Python module must be listed explicitly.",
-  "default_timeout_seconds": 60,
-  "default_hash_seeds": [0],
-  "ignored_selftests": {},
-  "tests": [
+  "schema":"dds-test-manifest-v1",
+  "description":"Canonical test inventory for DDS learning v2.3 hardening. Every self-test and every production Python module must be listed explicitly.",
+  "default_timeout_seconds":60,
+  "default_hash_seeds":[0],
+  "ignored_selftests":{},
+  "tests":[
     {"id":"test-runner","path":"test_runner_selftest.py","suite":"fast","timeout_seconds":15,"description":"Runner failure isolation, timeout, mutation and manifest contract."},
     {"id":"test-architecture","path":"test_architecture_selftest.py","suite":"fast","timeout_seconds":20,"description":"Manifest completeness, workflow safety, pinning and network isolation."},
     {"id":"source-integrity","path":"source_integrity_selftest.py","suite":"fast","timeout_seconds":20,"description":"Tracked, untracked and ignored repository residue detection."},
     {"id":"run-authorization","path":"run_authorization_selftest.py","suite":"fast","timeout_seconds":20,"description":"Expiring data-bound approval, sealed permission and solver-entry guard."},
+    {"id":"run-stage-entry","path":"run_stage_entry_selftest.py","suite":"fast","timeout_seconds":20,"description":"Direct evaluate is blocked before SQLite or work-file creation."},
     {"id":"baseline-predictor","path":"baseline_predictor_selftest.py","suite":"fast","timeout_seconds":20,"description":"Deterministic non-DDS baseline prediction and split filtering."},
     {"id":"adaptive-predictor","path":"adaptive_predictor_selftest.py","suite":"fast","timeout_seconds":30,"description":"TRAIN-only adaptive model construction and blind validation inference."},
     {"id":"report-rendering","path":"report_selftest.py","suite":"fast","timeout_seconds":30,"description":"English and Russian report rendering from immutable stage-scoped facts."},
@@ -39,10 +40,10 @@
     {"id":"variant-dds","path":"variant_dds_selftest.py","suite":"dds","timeout_seconds":240,"description":"DDS rotation/suit invariants and complete perturbations."},
     {"id":"independent-crosscheck","path":"independent_crosscheck_selftest.py","suite":"dds","timeout_seconds":180,"description":"Pinned independent solver agrees with DDS3 on all 20 DD cells."}
   ],
-  "coverage": {
-    "max_waivers": 0,
-    "infrastructure": ["test_runner.py"],
-    "module_tests": {
+  "coverage":{
+    "max_waivers":0,
+    "infrastructure":["test_runner.py"],
+    "module_tests":{
       "adaptive_predictor.py":["adaptive-predictor"],
       "algorithm_review_v23.py":["algorithm-review-v23"],
       "audit.py":["experience-memory","stage-gate","report-rendering"],
@@ -74,10 +75,10 @@
       "report.py":["report-rendering"],
       "resolve_investigations_auto.py":["investigations"],
       "rule_synthesis.py":["rule-synthesis"],
-      "run_authorization.py":["run-authorization"],
+      "run_authorization.py":["run-authorization","run-stage-entry"],
       "run_provenance.py":["experience-memory","stage-gate","report-rendering"],
-      "run_stage.py":["run-authorization","corpus","experience-memory","stage-gate"],
-      "run_stage_impl.py":["run-authorization","corpus","experience-memory","stage-gate"],
+      "run_stage.py":["run-authorization","run-stage-entry","corpus","experience-memory","stage-gate"],
+      "run_stage_impl.py":["run-authorization","run-stage-entry","corpus","experience-memory","stage-gate"],
       "run_stage_v23.py":["v23-launch-guard"],
       "shard_plan.py":["shard-plan","stage2-readiness"],
       "skill_versions.py":["skill-versions","experience-memory"],
@@ -91,6 +92,6 @@
       "v23_runtime.py":["v23-runtime","v23-launch-guard"],
       "variants.py":["methodology-v22","variant-dds"]
     },
-    "waivers": {}
+    "waivers":{}
   }
 }
