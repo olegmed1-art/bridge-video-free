@@ -43,6 +43,95 @@ def _transcript_kind(master: dict[str, Any]) -> tuple[str, str | None]:
     return "raw_asr", transcript_qc.get("language")
 
 
+
+def _domain_rows(master: dict[str, Any], analysis_run_id: uuid.UUID):
+    """Build deterministic, role-neutral lesson rows without inventing identities."""
+    interaction_id = _stable_uuid("learning-interaction", analysis_run_id)
+    episodes = list(master.get("episodes") or [])
+    cycles = list(master.get("learning_interactions") or [])
+    decisions = list(master.get("decisions") or [])
+    episode_rows = []
+    sequence_no = 0
+    for item in episodes:
+        sequence_no += 1
+        worker_id = str(item.get("episode_id") or sequence_no)
+        episode_rows.append((
+            _stable_uuid("episode", interaction_id, "semantic", worker_id),
+            interaction_id,
+            sequence_no,
+            str(item.get("type") or "semantic_episode"),
+            item.get("start"),
+            item.get("end"),
+            str(item.get("summary_text") or "")[:4000] or None,
+            {
+                "record_kind": "semantic_episode",
+                "worker_episode_id": item.get("episode_id"),
+                "terms": item.get("terms") or [],
+                "confidence": item.get("confidence"),
+                "evidence_refs": item.get("evidence") or [],
+                "visual_evidence_refs": item.get("visual_evidence") or [],
+                "statement_type": item.get("statement_type"),
+            },
+        ))
+    for item in cycles:
+        sequence_no += 1
+        worker_id = str(item.get("cycle_id") or sequence_no)
+        sequence = item.get("role_neutral_sequence") or {}
+        summary = (
+            sequence.get("trigger_context")
+            or item.get("task_or_trigger")
+            or item.get("student_action")
+            or ""
+        )
+        episode_rows.append((
+            _stable_uuid("episode", interaction_id, "learning-cycle", worker_id),
+            interaction_id,
+            sequence_no,
+            "learning_cycle",
+            None,
+            None,
+            str(summary)[:4000] or None,
+            {
+                "record_kind": "learning_cycle",
+                "worker_cycle_id": item.get("cycle_id"),
+                "focus_episode_id": item.get("focus_episode_id"),
+                "attribution_status": item.get("attribution_status"),
+                "content_completeness": item.get("content_completeness"),
+                "role_neutral_sequence": sequence,
+                "student_action": item.get("student_action"),
+                "teacher_intervention": item.get("teacher_intervention"),
+                "student_response": item.get("student_response"),
+                "outcome": item.get("outcome"),
+                "evidence_refs": item.get("evidence") or [],
+            },
+        ))
+    decision_rows = []
+    for sequence_no, item in enumerate(decisions, 1):
+        worker_id = str(item.get("decision_id") or sequence_no)
+        action = item.get("action_taken")
+        if not isinstance(action, dict):
+            action = {"status": "text_only", "text": action}
+        available = item.get("available_information")
+        if not isinstance(available, dict):
+            available = {"observed_context": item.get("observed_context")}
+        cues = action.get("cues") or item.get("decision_cues") or []
+        decision_rows.append((
+            _stable_uuid("decision", interaction_id, worker_id),
+            interaction_id,
+            str(cues[0] if cues else "bridge_action_candidate"),
+            sequence_no,
+            {
+                **action,
+                "worker_decision_id": item.get("decision_id"),
+                "actor_attribution_status": item.get("actor_attribution_status"),
+                "content_completeness": item.get("content_completeness"),
+                "alternatives": item.get("alternatives") or [],
+            },
+            available,
+            item.get("reasoning"),
+        ))
+    return interaction_id, episode_rows, decision_rows, len(episodes), len(cycles)
+
 def persist_video_result(
     raw_dsn: str,
     master: dict[str, Any],
@@ -102,6 +191,13 @@ def persist_video_result(
         "analysis-run", job_id, algorithm_revision, transcript_digest, report_sha
     )
     analysis_input_id = _stable_uuid("analysis-input", analysis_run_id, source_asset_id)
+    (
+        interaction_id,
+        episode_rows,
+        decision_rows,
+        semantic_episode_count,
+        learning_cycle_count,
+    ) = _domain_rows(master, analysis_run_id)
 
     report_asset_id = _stable_uuid("asset", "sha256", report_sha)
     report_location_id = _stable_uuid("asset-location", "google-drive", report_drive_id)
@@ -111,7 +207,9 @@ def persist_video_result(
 
     counts = {
         "transcript_segments": len(transcript),
-        "semantic_episodes": len(master.get("episodes") or []),
+        "semantic_episodes": semantic_episode_count,
+        "learning_cycles": learning_cycle_count,
+        "decisions": len(decision_rows),
         "analysis_outputs": 1,
     }
     checkpoint = {
@@ -189,6 +287,62 @@ def persist_video_result(
                     Jsonb([]),
                 ),
             )
+
+            cur.execute(
+                """
+                INSERT INTO public.learning_interaction
+                    (interaction_id, school_id, interaction_type, channel, status)
+                VALUES (%s, %s, 'recorded_lesson_analysis', 'recorded_video', 'completed')
+                ON CONFLICT DO NOTHING
+                """,
+                (interaction_id, school_id),
+            )
+            if episode_rows:
+                cur.executemany(
+                    """
+                    INSERT INTO public.episode
+                        (episode_id, interaction_id, sequence_no, episode_type,
+                         start_offset_seconds, end_offset_seconds, summary, metadata)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    [
+                        row[:-1] + (Jsonb(row[-1]),)
+                        for row in episode_rows
+                    ],
+                )
+            if decision_rows:
+                cur.executemany(
+                    """
+                    INSERT INTO public.decision
+                        (decision_id, school_id, interaction_id, decision_type,
+                         sequence_no, action_taken, available_information,
+                         stated_reasoning)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    [
+                        (
+                            decision_id,
+                            school_id,
+                            row_interaction_id,
+                            decision_type,
+                            sequence_no,
+                            Jsonb(action_taken),
+                            Jsonb(available_information),
+                            stated_reasoning,
+                        )
+                        for (
+                            decision_id,
+                            row_interaction_id,
+                            decision_type,
+                            sequence_no,
+                            action_taken,
+                            available_information,
+                            stated_reasoning,
+                        ) in decision_rows
+                    ],
+                )
 
             cur.execute(
                 """
@@ -448,4 +602,8 @@ def persist_video_result(
         "transcript_id": str(transcript_id),
         "analysis_run_id": str(analysis_run_id),
         "artifact_version_id": str(artifact_version_id),
+        "learning_interaction_id": str(interaction_id),
+        "episodes": semantic_episode_count,
+        "learning_cycles": learning_cycle_count,
+        "decisions": len(decision_rows),
     }
