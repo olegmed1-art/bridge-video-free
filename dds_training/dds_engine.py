@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import importlib.metadata
-from dataclasses import dataclass
+
+from run_authorization import validate_engine_environment
 
 RANK_CHARS = {14: "A", 13: "K", 12: "Q", 11: "J", 10: "T", 9: "9", 8: "8", 7: "7", 6: "6", 5: "5", 4: "4", 3: "3", 2: "2"}
 SUIT_CHARS = {0: "S", 1: "H", 2: "D", 3: "C"}
@@ -10,6 +11,12 @@ SUIT_CHARS = {0: "S", 1: "H", 2: "D", 3: "C"}
 def _dds3():
     import dds3
     return dds3
+
+
+def _require_authorization_if_training() -> None:
+    # Ordinary local bridge analysis remains available.  The extra gate is
+    # activated whenever the mass-training confirmation flag is present.
+    validate_engine_environment()
 
 
 def engine_info() -> dict:
@@ -27,12 +34,14 @@ def engine_info() -> dict:
 
 def contract_tricks(deal_pbn: str, strain: int, declarer: int) -> int:
     """Return DD tricks for declarer (N=0,E=1,S=2,W=3) in strain S,H,D,C,NT=0..4."""
+    _require_authorization_if_training()
     dds3 = _dds3()
     result = dds3.calc_all_tables_pbn([deal_pbn], mode=-1, trump_filter=(0, 0, 0, 0, 0))
     return int(result["tables"][0]["res_table"][strain][declarer])
 
 
 def contract_tricks_batch(deals: list[str]) -> list[list[list[int]]]:
+    _require_authorization_if_training()
     dds3 = _dds3()
     result = dds3.calc_all_tables_pbn(deals, mode=-1, trump_filter=(0, 0, 0, 0, 0))
     return [t["res_table"] for t in result["tables"]]
@@ -53,6 +62,7 @@ def opening_lead_scores(deal_pbn: str, strain: int, declarer: int) -> dict[str, 
     With first=LHO of declarer, higher is better for the defense.
     Equivalent ranks reported through the DDS `equals` mask receive the same score.
     """
+    _require_authorization_if_training()
     dds3 = _dds3()
     first = (declarer + 1) % 4
     context = dds3.SolverContext() if hasattr(dds3, "SolverContext") else None
