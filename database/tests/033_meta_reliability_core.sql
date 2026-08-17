@@ -10,6 +10,7 @@ DECLARE
     v_correction uuid;
     v_method_correction uuid;
     v_regression uuid;
+    v_method_regression uuid;
     v_source uuid;
     v_recovery uuid;
     v_count integer;
@@ -66,7 +67,7 @@ BEGIN
         RAISE EXCEPTION 'analysis_run checkpoint snapshot is not synchronized';
     END IF;
 
-    -- A material correction cannot be resolved until it has a regression case.
+    -- A material correction cannot be resolved until it has a passed regression.
     INSERT INTO correction_record(
         school_id, target_entity_id, target_entity_type,
         correction_class, summary, analysis_run_id
@@ -100,7 +101,7 @@ BEGIN
     );
 
     UPDATE correction_record
-       SET status='resolved', resolution_notes='regression attached'
+       SET status='resolved', resolution_notes='passed regression attached'
      WHERE correction_record_id=v_correction;
 
     IF NOT EXISTS (
@@ -108,11 +109,12 @@ BEGIN
          WHERE correction_record_id=v_correction
            AND status='resolved' AND resolved_at IS NOT NULL
     ) THEN
-        RAISE EXCEPTION 'corrected failure did not reach resolved state after regression';
+        RAISE EXCEPTION 'corrected failure did not reach resolved state after passed regression';
     END IF;
 
     -- Methodology corrections are always protected and default to pending teacher
-    -- approval. A regression alone is insufficient to resolve them.
+    -- approval. Neither teacher approval nor regression evidence may substitute for the
+    -- other: both are required before resolution.
     INSERT INTO correction_record(
         school_id, target_entity_id, target_entity_type,
         correction_class, summary
@@ -132,9 +134,11 @@ BEGIN
     ) VALUES (
         v_school, v_method_correction, 'meta-methodology-protection-test',
         'protected_methodology', 'database/tests/033_meta_reliability_core.sql',
-        '{"teacher_approval_required":true}'::jsonb
-    );
+        '{"teacher_approval_required":true,"passed_regression_required":true}'::jsonb
+    ) RETURNING regression_case_id INTO v_method_regression;
 
+    -- Even with a defined regression case, methodology cannot resolve without teacher
+    -- approval (and later it will still require an actual passed execution).
     BEGIN
         UPDATE correction_record
            SET status='resolved', resolution_notes='should fail without approval'
@@ -149,8 +153,27 @@ BEGIN
            approved_by_person_id=v_person,
            approved_at=now()
      WHERE correction_record_id=v_method_correction;
+
+    BEGIN
+        UPDATE correction_record
+           SET status='resolved', resolution_notes='should fail without passed regression'
+         WHERE correction_record_id=v_method_correction;
+        RAISE EXCEPTION 'approved methodology correction resolved without passed regression';
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM='approved methodology correction resolved without passed regression' THEN RAISE; END IF;
+    END;
+
+    INSERT INTO regression_execution(
+        regression_case_id, analysis_run_id, result, observed_contract
+    ) VALUES (
+        v_method_regression,
+        v_run,
+        'pass',
+        '{"observed":"protected methodology regression passed"}'::jsonb
+    );
+
     UPDATE correction_record
-       SET status='resolved', resolution_notes='approved and regression-covered'
+       SET status='resolved', resolution_notes='teacher-approved and passed-regression-covered'
      WHERE correction_record_id=v_method_correction;
 
     IF NOT EXISTS (
@@ -160,7 +183,7 @@ BEGIN
            AND protected_methodology
            AND teacher_approval_state='approved'
     ) THEN
-        RAISE EXCEPTION 'approved methodology correction did not resolve';
+        RAISE EXCEPTION 'approved methodology correction did not resolve after passed regression';
     END IF;
 
     -- Structured source rights/access evidence is append-only and source-scoped.
