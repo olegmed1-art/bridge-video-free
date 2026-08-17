@@ -6,7 +6,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from corpus import generate_corpus, validate_corpus
+from corpus import generate_corpus, validate_pbn_corpus
 from dds_engine import (
     EXPECTED_DDS_SOURCE_COMMIT,
     contract_tricks_batch,
@@ -17,18 +17,32 @@ from dds_engine import (
 def check(batch_deals: int = 40, generated: int = 64) -> dict:
     if batch_deals < 1 or batch_deals > 40:
         raise ValueError("DDS batch size must be in [1,40]")
+    if generated < batch_deals:
+        raise ValueError("Generated corpus must contain at least batch_deals positions")
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         summary = generate_corpus(generated, root)
-        audit = validate_corpus(root / "raw.pbn", root / "manifest.jsonl")
+        audit = validate_pbn_corpus(root / "raw.pbn", generated)
         assert audit["count"] == generated
+        assert audit["unique_ids"] == generated
+        assert audit["ok"] is True
 
         deals = []
         for line in (root / "manifest.jsonl").read_text(encoding="utf-8").splitlines():
             row = json.loads(line)
-            deals.append(row["deal"])
+            # Resolve the exact deal by stable board identity from the deterministic
+            # RAW corpus instead of inventing or reconstructing cards from metadata.
+            board = int(row["board"])
+            if board > batch_deals:
+                break
+        # The PBN parser remains the source of card truth for the solver input.
+        from corpus import iter_pbn_records
+        for record in iter_pbn_records(root / "raw.pbn"):
+            deals.append(record["deal"])
             if len(deals) == batch_deals:
                 break
+        assert len(deals) == batch_deals
+
         tables = contract_tricks_batch(deals)
         assert len(tables) == batch_deals
         for table in tables:
@@ -87,13 +101,18 @@ def check(batch_deals: int = 40, generated: int = 64) -> dict:
         }
 
 
+def run_quick() -> dict:
+    """Stable programmatic quick preflight API used by the DDS-backed self-test."""
+    return check(batch_deals=40, generated=64)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Preflight local DDS3 environment")
     parser.add_argument("--quick", action="store_true")
     args = parser.parse_args()
     if shutil.which("git") is None:
         raise SystemExit("git is required")
-    report = check(batch_deals=40, generated=64 if args.quick else 200)
+    report = run_quick() if args.quick else check(batch_deals=40, generated=200)
     print(json.dumps(report, indent=2, sort_keys=True))
 
 
