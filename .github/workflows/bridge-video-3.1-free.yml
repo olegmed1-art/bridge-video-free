@@ -11,6 +11,18 @@ on:
         description: "Optional Drive folder for derived outputs; source video is never moved"
         required: false
         type: string
+      work_folder_id:
+        description: "Optional Drive folder for processing receipts"
+        required: false
+        type: string
+      lesson_number:
+        description: "Optional historical lesson number"
+        required: false
+        type: string
+      lesson_date_candidate:
+        description: "Optional ISO lesson-date candidate"
+        required: false
+        type: string
   push:
     branches: [main]
     paths:
@@ -46,22 +58,38 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
 
-      - name: Resolve opaque job id and optional output folder
+      - name: Resolve job and Diana longitudinal context
         shell: bash
         env:
           INPUT_JOB_ID: ${{ inputs.job_id }}
           INPUT_OUTPUT_FOLDER_ID: ${{ inputs.output_folder_id }}
+          INPUT_WORK_FOLDER_ID: ${{ inputs.work_folder_id }}
+          INPUT_LESSON_NUMBER: ${{ inputs.lesson_number }}
+          INPUT_LESSON_DATE_CANDIDATE: ${{ inputs.lesson_date_candidate }}
         run: |
           set -euo pipefail
           OUTPUT_FOLDER_ID=""
+          WORK_FOLDER_ID=""
+          ORIGINAL_SOURCE_DRIVE_ID=""
+          LESSON_NUMBER=""
+          LESSON_DATE_CANDIDATE=""
+          LESSON_DATE_SOURCE=""
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             JOB_ID="$INPUT_JOB_ID"
             OUTPUT_FOLDER_ID="$INPUT_OUTPUT_FOLDER_ID"
+            WORK_FOLDER_ID="$INPUT_WORK_FOLDER_ID"
+            LESSON_NUMBER="$INPUT_LESSON_NUMBER"
+            LESSON_DATE_CANDIDATE="$INPUT_LESSON_DATE_CANDIDATE"
           else
             REQUEST_FILE="$(git show --pretty='' --name-only "$GITHUB_SHA" | grep -E '^run_requests/.*\.txt$' | head -n 1 || true)"
             test -n "$REQUEST_FILE" || { echo "No run request file in triggering commit" >&2; exit 2; }
             JOB_ID="$(sed -n 's/^JOB_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
             OUTPUT_FOLDER_ID="$(sed -n 's/^OUTPUT_FOLDER_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            WORK_FOLDER_ID="$(sed -n 's/^WORK_FOLDER_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            ORIGINAL_SOURCE_DRIVE_ID="$(sed -n 's/^ORIGINAL_SOURCE_DRIVE_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            LESSON_NUMBER="$(sed -n 's/^LESSON_NUMBER=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            LESSON_DATE_CANDIDATE="$(sed -n 's/^LESSON_DATE_CANDIDATE=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            LESSON_DATE_SOURCE="$(sed -n 's/^LESSON_DATE_SOURCE=//p' "$REQUEST_FILE" | tail -n 1)"
             if [ -z "$JOB_ID" ]; then
               JOB_ID="$(basename "$REQUEST_FILE" .txt)"
             fi
@@ -71,23 +99,41 @@ jobs:
             *[!0-9a-f]*) echo "invalid opaque job id" >&2; exit 2 ;;
           esac
           test "${#JOB_ID}" -eq 32
-          if [ -n "$OUTPUT_FOLDER_ID" ]; then
-            case "$OUTPUT_FOLDER_ID" in
-              *[!0-9A-Za-z_-]*) echo "invalid Drive output folder id" >&2; exit 2 ;;
+          for ID_VALUE in "$OUTPUT_FOLDER_ID" "$WORK_FOLDER_ID" "$ORIGINAL_SOURCE_DRIVE_ID"; do
+            if [ -n "$ID_VALUE" ]; then
+              case "$ID_VALUE" in
+                *[!0-9A-Za-z_-]*) echo "invalid Drive id" >&2; exit 2 ;;
+              esac
+            fi
+          done
+          if [ -n "$LESSON_NUMBER" ]; then
+            case "$LESSON_NUMBER" in *[!0-9]*) echo "invalid lesson number" >&2; exit 2 ;; esac
+          fi
+          if [ -n "$LESSON_DATE_CANDIDATE" ]; then
+            case "$LESSON_DATE_CANDIDATE" in
+              ????-??-??) ;;
+              *) echo "lesson date candidate must be YYYY-MM-DD" >&2; exit 2 ;;
             esac
           fi
-          echo "BRIDGE_JOB_ID=$JOB_ID" >> "$GITHUB_ENV"
-          echo "BRIDGE_OUTPUT_FOLDER_ID=$OUTPUT_FOLDER_ID" >> "$GITHUB_ENV"
+          {
+            echo "BRIDGE_JOB_ID=$JOB_ID"
+            echo "BRIDGE_OUTPUT_FOLDER_ID=$OUTPUT_FOLDER_ID"
+            echo "BRIDGE_WORK_FOLDER_ID=$WORK_FOLDER_ID"
+            echo "BRIDGE_ORIGINAL_SOURCE_DRIVE_ID=$ORIGINAL_SOURCE_DRIVE_ID"
+            echo "BRIDGE_LESSON_NUMBER=$LESSON_NUMBER"
+            echo "BRIDGE_LESSON_DATE_CANDIDATE=$LESSON_DATE_CANDIDATE"
+            echo "BRIDGE_LESSON_DATE_SOURCE=$LESSON_DATE_SOURCE"
+          } >> "$GITHUB_ENV"
 
       - name: Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
-      - name: Install lightweight Drive router dependencies
+      - name: Install lightweight Drive and longitudinal dependencies
         run: |
           python -m pip install --disable-pip-version-check \
-            'requests==2.34.2' 'google-auth==2.56.3'
+            'requests==2.34.2' 'google-auth==2.56.3' 'pymupdf==1.28.2'
 
       - name: Terminal receipt preflight
         id: terminal
@@ -141,5 +187,12 @@ jobs:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
         run: python route_drive_job_outputs.py
 
-      # No Google Cloud auth, no Neon/database dependency, no paid fallback.
+      - name: Build Diana longitudinal, knowledge and curriculum candidates
+        if: always() && env.BRIDGE_OUTPUT_FOLDER_ID != '' && env.BRIDGE_LESSON_NUMBER != ''
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: python diana_longitudinal_postprocess.py
+
+      # No Google Cloud auth, no paid AI endpoint, no billing fallback.
+      # Source/master media is read-only; derived files are routed separately.
       # User media/transcripts are never uploaded as GitHub workflow artifacts.
