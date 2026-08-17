@@ -51,8 +51,8 @@ BEGIN
     ) VALUES (
         v_school,v_person,v_other,'education.read'
     );
-    IF NOT bridge_actor_has_person_permission(v_person,'education.read') THEN
-        RAISE EXCEPTION 'self permission must be true';
+    IF bridge_actor_has_person_permission(v_person,'education.read') THEN
+        RAISE EXCEPTION 'self target unexpectedly implied arbitrary person permission';
     END IF;
     IF NOT bridge_actor_has_person_permission(v_other,'education.read') THEN
         RAISE EXCEPTION 'explicit person permission was not recognized';
