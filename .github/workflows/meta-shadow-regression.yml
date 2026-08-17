@@ -1,0 +1,19 @@
+name: META Shadow Regression
+on:
+  workflow_dispatch:
+  push:
+    branches: [meta-regression]
+    paths:
+      - 'meta_school/runtime/**'
+      - '.github/workflows/meta-shadow-regression.yml'
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python meta_school/runtime/test_meta_closed_loop.py
