@@ -9,6 +9,7 @@ on:
       - '.github/workflows/dds-training-pilot-start.yml'
       - '.github/workflows/dds-training-pilot-finish.yml'
       - '.github/workflows/dds-main-30k-prepare.yml'
+      - '.github/workflows/dds-main-30k-train-authorized.yml'
   push:
     branches: [dds-training-local]
     paths:
@@ -18,6 +19,7 @@ on:
       - '.github/workflows/dds-training-pilot-start.yml'
       - '.github/workflows/dds-training-pilot-finish.yml'
       - '.github/workflows/dds-main-30k-prepare.yml'
+      - '.github/workflows/dds-main-30k-train-authorized.yml'
   workflow_dispatch:
 
 concurrency:
@@ -43,6 +45,24 @@ jobs:
       - name: Compile DDS Python modules
         working-directory: dds_training
         run: python -m compileall -q .
+
+      - name: Validate owner-authorized main TRAIN launcher structure
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n dds_training/run_main_train_authorized.sh
+          workflow=.github/workflows/dds-main-30k-train-authorized.yml
+          grep -q '^  workflow_dispatch:' "$workflow"
+          ! grep -Eq '^  (push|pull_request|schedule|repository_dispatch):' "$workflow"
+          grep -q 'expected_commit:' "$workflow"
+          grep -q 'approval_phrase:' "$workflow"
+          grep -q 'ЭТАП-2-СТАРТ-ПОДТВЕРЖДАЮ' "$workflow"
+          grep -q 'PREPARED_RUN_ID.*32052220151' "$workflow"
+          grep -q 'run_main_train_authorized.sh' "$workflow"
+          grep -q 'resolve_investigations_auto.py' dds_training/run_main_train_authorized.sh
+          grep -q 'seq 4 17' dds_training/run_main_train_authorized.sh
+          grep -q -- '--scope main_train' dds_training/run_main_train_authorized.sh
+          ! grep -q -- '--open-sealed' dds_training/run_main_train_authorized.sh
 
       - name: Run fail-closed test-runner guard directly
         working-directory: dds_training
