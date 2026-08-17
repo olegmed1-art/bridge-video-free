@@ -5,7 +5,12 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from authorized_run_stage import build_command, parser as wrapper_parser
+from authorized_run_stage import (
+    build_child_environment,
+    build_command,
+    consumed_marker_path,
+    parser as wrapper_parser,
+)
 from launch_authorization import AuthorizationError, APPROVAL_PHRASE, issue_receipt, verify_and_consume
 
 COMMIT = "a" * 40
@@ -103,9 +108,44 @@ def main() -> None:
         assert accepted["receipt_id"] == receipt["receipt_id"]
         markers = list(consume.glob("*.consumed"))
         assert len(markers) == 1
+        marker = consumed_marker_path(consume, receipt["receipt_id"])
+        assert marker == markers[0]
+
+        # Prove the authorized wrapper passes the exact marker/scope fields that the
+        # interpreter-start sitecustomize guard requires before run_stage can import.
+        base_env = {
+            "GITHUB_EVENT_NAME": "workflow_dispatch",
+            "GITHUB_SHA": COMMIT,
+            "GITHUB_REPOSITORY": "olegmed1-art/bridge-video-free",
+        }
+        child_env = build_child_environment(
+            base_env=base_env,
+            receipt_id=receipt["receipt_id"],
+            scope="main_train",
+            consume_dir=consume,
+        )
+        assert child_env["DDS_TRAINING_CONFIRM"] == "YES"
+        assert child_env["DDS_AUTHORIZED_LAUNCH"] == "YES"
+        assert child_env["DDS_LAUNCH_RECEIPT_ID"] == receipt["receipt_id"]
+        assert child_env["DDS_LAUNCH_CONSUMED_MARKER"] == str(marker)
+        assert child_env["DDS_LAUNCH_SCOPE"] == "main_train"
+        marker_payload = json.loads(marker.read_text(encoding="utf-8"))
+        assert marker_payload["receipt_id"] == child_env["DDS_LAUNCH_RECEIPT_ID"]
+        assert marker_payload["commit_sha"] == child_env["GITHUB_SHA"]
+        assert marker_payload["scope"] == child_env["DDS_LAUNCH_SCOPE"]
+
         expect_failure(
             "already been consumed",
             lambda: verify(receipt_path, manifest, consume),
+        )
+        expect_failure(
+            "Consumed receipt marker is missing",
+            lambda: build_child_environment(
+                base_env=base_env,
+                receipt_id="f" * 64,
+                scope="main_train",
+                consume_dir=consume,
+            ),
         )
 
         args = wrapper_parser().parse_args([
@@ -154,6 +194,8 @@ def main() -> None:
             "push_event_blocked": True,
             "expired_receipt_blocked": True,
             "changed_manifest_blocked": True,
+            "wrapper_binds_consumed_marker_to_preimport_guard": True,
+            "missing_consumed_marker_blocked": True,
             "sealed_scope_adds_open_sealed": True,
         }, ensure_ascii=False, indent=2))
 
