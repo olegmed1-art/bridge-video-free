@@ -2,11 +2,12 @@ from __future__ import annotations
 
 """Manifest-driven isolated test runner for the DDS learning project.
 
-The existing project self-tests intentionally use plain ``assert`` statements.
-This runner therefore refuses optimized Python (``python -O``), validates that
-all self-test scripts are accounted for, executes every case in an isolated
-subprocess with a timeout, detects source-tree mutation, and writes one
-machine-readable report instead of stopping at the first failure.
+The project self-tests intentionally use plain ``assert`` statements.  This
+runner therefore refuses optimized Python (``python -O``), validates that all
+self-test scripts and production modules are accounted for, executes every case
+in an isolated subprocess with a timeout, terminates the whole subprocess group
+on timeout, detects source-tree mutation, and writes one machine-readable
+report instead of stopping at the first failure.
 """
 
 import argparse
@@ -14,6 +15,7 @@ import hashlib
 import json
 import os
 import platform
+import signal
 import subprocess
 import sys
 import tempfile
@@ -26,6 +28,11 @@ from typing import Iterable
 MANIFEST_SCHEMA = "dds-test-manifest-v1"
 REPORT_SCHEMA = "dds-test-report-v1"
 MAX_CAPTURE_CHARS = 200_000
+ALLOWED_SUITES = {"fast", "dds"}
+REQUIRED_CORE_TESTS = {
+    "test-runner": ("test_runner_selftest.py", "fast"),
+    "test-architecture": ("test_architecture_selftest.py", "fast"),
+}
 IGNORED_DIRS = {
     ".git",
     ".venv",
@@ -57,10 +64,6 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _canonical_json(value: object) -> bytes:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-
-
 def _safe_relative_path(root: Path, value: object) -> tuple[Path, str]:
     text = str(value or "").strip().replace("\\", "/")
     if not text:
@@ -76,7 +79,28 @@ def _safe_relative_path(root: Path, value: object) -> tuple[Path, str]:
     return resolved, relative
 
 
-def load_manifest(manifest_path: Path, *, root: Path | None = None) -> tuple[dict, list[TestSpec]]:
+def _is_ignored(root: Path, path: Path) -> bool:
+    try:
+        parts = path.resolve().relative_to(root.resolve()).parts
+    except ValueError:
+        return True
+    return any(part in IGNORED_DIRS for part in parts)
+
+
+def _recursive_files(root: Path, pattern: str) -> list[Path]:
+    return sorted(
+        path.resolve()
+        for path in root.rglob(pattern)
+        if path.is_file() and not _is_ignored(root, path)
+    )
+
+
+def load_manifest(
+    manifest_path: Path,
+    *,
+    root: Path | None = None,
+    enforce_core: bool = True,
+) -> tuple[dict, list[TestSpec]]:
     manifest_path = manifest_path.resolve()
     root = (root or manifest_path.parent).resolve()
     try:
@@ -106,6 +130,8 @@ def load_manifest(manifest_path: Path, *, root: Path | None = None) -> tuple[dic
         suite = str(row.get("suite", "")).strip()
         if not test_id or not suite:
             raise ManifestError(f"tests[{index}] requires non-empty id and suite")
+        if enforce_core and suite not in ALLOWED_SUITES:
+            raise ManifestError(f"Unsupported test suite {suite!r} for {test_id}")
         if test_id in ids:
             raise ManifestError(f"Duplicate test id: {test_id}")
         path, relative = _safe_relative_path(root, row.get("path"))
@@ -127,6 +153,9 @@ def load_manifest(manifest_path: Path, *, root: Path | None = None) -> tuple[dic
             raise ManifestError(f"hash_seeds must contain integers for {test_id}") from exc
         if len(set(seeds)) != len(seeds):
             raise ManifestError(f"Duplicate hash seed for {test_id}: {seeds}")
+        description = str(row.get("description", "")).strip()
+        if enforce_core and not description:
+            raise ManifestError(f"Test requires a non-empty description: {test_id}")
         ids.add(test_id)
         paths.add(relative)
         specs.append(
@@ -137,9 +166,21 @@ def load_manifest(manifest_path: Path, *, root: Path | None = None) -> tuple[dic
                 suite=suite,
                 timeout_seconds=timeout,
                 hash_seeds=seeds,
-                description=str(row.get("description", "")).strip(),
+                description=description,
             )
         )
+
+    if enforce_core:
+        by_id = {spec.test_id: spec for spec in specs}
+        for test_id, (expected_path, expected_suite) in REQUIRED_CORE_TESTS.items():
+            spec = by_id.get(test_id)
+            if spec is None:
+                raise ManifestError(f"Required core test is missing: {test_id}")
+            if (spec.relative_path, spec.suite) != (expected_path, expected_suite):
+                raise ManifestError(
+                    f"Required core test {test_id} must be "
+                    f"{expected_path!r} in suite {expected_suite!r}"
+                )
 
     ignored = data.get("ignored_selftests", {})
     if not isinstance(ignored, dict):
@@ -157,9 +198,8 @@ def load_manifest(manifest_path: Path, *, root: Path | None = None) -> tuple[dic
         ignored_paths.add(relative)
 
     discovered = {
-        path.resolve().relative_to(root).as_posix()
-        for path in root.glob("*_selftest.py")
-        if path.is_file()
+        path.relative_to(root).as_posix()
+        for path in _recursive_files(root, "*_selftest.py")
     }
     orphaned = sorted(discovered - paths - ignored_paths)
     if orphaned:
@@ -176,10 +216,17 @@ def load_manifest(manifest_path: Path, *, root: Path | None = None) -> tuple[dic
     module_tests = coverage.get("module_tests", {})
     waivers = coverage.get("waivers", {})
     infrastructure = coverage.get("infrastructure", [])
+    max_waivers = coverage.get("max_waivers")
     if not isinstance(module_tests, dict) or not isinstance(waivers, dict):
         raise ManifestError("coverage.module_tests and coverage.waivers must be objects")
     if not isinstance(infrastructure, list):
         raise ManifestError("coverage.infrastructure must be a list")
+    if isinstance(max_waivers, bool) or not isinstance(max_waivers, int) or max_waivers < 0:
+        raise ManifestError("coverage.max_waivers must be a non-negative integer")
+    if len(waivers) > max_waivers:
+        raise ManifestError(
+            f"Coverage waiver budget exceeded: {len(waivers)} > {max_waivers}"
+        )
 
     normalized_modules: dict[str, list[str]] = {}
     for raw_module, raw_test_ids in module_tests.items():
@@ -217,8 +264,9 @@ def load_manifest(manifest_path: Path, *, root: Path | None = None) -> tuple[dic
     test_files = paths | ignored_paths
     production = {
         path.relative_to(root).as_posix()
-        for path in root.glob("*.py")
-        if path.is_file() and path.name not in test_files and not path.name.endswith("_selftest.py")
+        for path in _recursive_files(root, "*.py")
+        if path.relative_to(root).as_posix() not in test_files
+        and not path.name.endswith("_selftest.py")
     }
     accounted = set(normalized_modules) | set(normalized_waivers) | normalized_infrastructure
     missing_coverage = sorted(production - accounted)
@@ -234,10 +282,7 @@ def _tree_snapshot(root: Path, *, extra_ignored: Iterable[Path] = ()) -> dict[st
     ignored_resolved = {path.resolve() for path in extra_ignored}
     snapshot: dict[str, str] = {}
     for path in root.rglob("*"):
-        if not path.is_file():
-            continue
-        relative_parts = path.relative_to(root).parts
-        if any(part in IGNORED_DIRS for part in relative_parts):
+        if not path.is_file() or _is_ignored(root, path):
             continue
         if path.resolve() in ignored_resolved:
             continue
@@ -263,6 +308,31 @@ def _trim(text: str) -> str:
     return f"[truncated {len(text) - MAX_CAPTURE_CHARS} chars]\n" + text[-MAX_CAPTURE_CHARS:]
 
 
+def _terminate_process_group(process: subprocess.Popen[str]) -> None:
+    """Terminate the test and all descendants in its process group."""
+
+    if process.poll() is not None:
+        return
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=0.5)
+            return
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            pass
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    else:
+        # Best effort on Windows.  CI runs on Linux, where the whole group is
+        # guaranteed to be terminated above.
+        try:
+            process.kill()
+        except OSError:
+            pass
+
+
 def run_invocation(
     spec: TestSpec,
     *,
@@ -279,6 +349,7 @@ def run_invocation(
     stdout = ""
     stderr = ""
     timeout_message = None
+    process_group_terminated = False
 
     with tempfile.TemporaryDirectory(prefix=f"dds-test-{spec.test_id}-") as temp_dir:
         temp = Path(temp_dir)
@@ -293,40 +364,41 @@ def run_invocation(
                 "TMP": str(temp),
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "PYTHONHASHSEED": str(hash_seed),
-                "PYTHONPATH": str(root) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""),
+                "PYTHONPATH": str(root)
+                + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else ""),
                 "TZ": "UTC",
                 "LC_ALL": "C.UTF-8",
                 "LANG": "C.UTF-8",
                 "DDS_TEST_MODE": "1",
             }
         )
+        process: subprocess.Popen[str] | None = None
         try:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 command,
                 cwd=root,
                 env=env,
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=spec.timeout_seconds,
-                check=False,
+                start_new_session=(os.name == "posix"),
             )
-            returncode = int(completed.returncode)
-            stdout = completed.stdout
-            stderr = completed.stderr
-            status = "passed" if returncode == 0 else "failed"
-        except subprocess.TimeoutExpired as exc:
-            status = "timeout"
-            timeout_message = f"Exceeded {spec.timeout_seconds:.3f} seconds"
-            stdout = exc.stdout or ""
-            stderr = exc.stderr or ""
-            if isinstance(stdout, bytes):
-                stdout = stdout.decode("utf-8", errors="replace")
-            if isinstance(stderr, bytes):
-                stderr = stderr.decode("utf-8", errors="replace")
+            try:
+                stdout, stderr = process.communicate(timeout=spec.timeout_seconds)
+                returncode = int(process.returncode)
+                status = "passed" if returncode == 0 else "failed"
+            except subprocess.TimeoutExpired:
+                status = "timeout"
+                timeout_message = f"Exceeded {spec.timeout_seconds:.3f} seconds"
+                _terminate_process_group(process)
+                process_group_terminated = True
+                stdout, stderr = process.communicate()
+                returncode = process.returncode
         except OSError as exc:
             status = "error"
             stderr = f"{type(exc).__name__}: {exc}"
+            if process is not None:
+                _terminate_process_group(process)
 
     duration = time.monotonic() - started
     after = _tree_snapshot(root, extra_ignored=(() if report_path is None else (report_path,)))
@@ -348,6 +420,7 @@ def run_invocation(
         "duration_seconds": round(duration, 6),
         "timeout_seconds": spec.timeout_seconds,
         "timeout_message": timeout_message,
+        "process_group_terminated": process_group_terminated,
         "source_mutation": mutation,
         "command": command,
         "stdout": _trim(stdout),
@@ -365,14 +438,6 @@ def run_tests(
     report_path: Path | None = None,
     manifest_digest: str | None = None,
 ) -> dict:
-    selected = [
-        spec
-        for spec in specs
-        if (not selected_suites or spec.suite in selected_suites)
-        and (not selected_ids or spec.test_id in selected_ids)
-    ]
-    if not selected:
-        raise ManifestError("No tests matched the requested suite/id filters")
     known_ids = {spec.test_id for spec in specs}
     unknown_ids = sorted((selected_ids or set()) - known_ids)
     if unknown_ids:
@@ -381,6 +446,15 @@ def run_tests(
     unknown_suites = sorted((selected_suites or set()) - known_suites)
     if unknown_suites:
         raise ManifestError(f"Unknown test suites: {unknown_suites}")
+
+    selected = [
+        spec
+        for spec in specs
+        if (not selected_suites or spec.suite in selected_suites)
+        and (not selected_ids or spec.test_id in selected_ids)
+    ]
+    if not selected:
+        raise ManifestError("No tests matched the requested suite/id filters")
 
     started_at = _utc_now()
     results: list[dict] = []
@@ -408,7 +482,10 @@ def run_tests(
         if stopped_early:
             break
 
-    counts = {status: sum(row["status"] == status for row in results) for status in ("passed", "failed", "timeout", "error")}
+    counts = {
+        status: sum(row["status"] == status for row in results)
+        for status in ("passed", "failed", "timeout", "error")
+    }
     failed = counts["failed"] + counts["timeout"] + counts["error"]
     return {
         "schema": REPORT_SCHEMA,
@@ -438,7 +515,10 @@ def run_tests(
 def _write_report(path: Path, report: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
     temporary.replace(path)
 
 
@@ -456,7 +536,9 @@ def parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     if not __debug__:
-        raise SystemExit("DDS self-tests rely on assertions; optimized Python (-O/-OO) is forbidden")
+        raise SystemExit(
+            "DDS self-tests rely on assertions; optimized Python (-O/-OO) is forbidden"
+        )
     args = parser().parse_args()
     manifest_path = Path(args.manifest).resolve()
     root = manifest_path.parent
@@ -510,11 +592,28 @@ def main() -> None:
         )
         if report_path is not None:
             _write_report(report_path, report)
-        print(json.dumps({"status": report["status"], "summary": report["summary"], "report": str(report_path) if report_path else None}, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {
+                    "status": report["status"],
+                    "summary": report["summary"],
+                    "report": str(report_path) if report_path else None,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         if report["status"] != "ok":
             raise SystemExit(1)
     except ManifestError as exc:
-        print(json.dumps({"status": "manifest_error", "error": str(exc)}, ensure_ascii=False, indent=2), file=sys.stderr)
+        print(
+            json.dumps(
+                {"status": "manifest_error", "error": str(exc)},
+                ensure_ascii=False,
+                indent=2,
+            ),
+            file=sys.stderr,
+        )
         raise SystemExit(2) from exc
 
 
