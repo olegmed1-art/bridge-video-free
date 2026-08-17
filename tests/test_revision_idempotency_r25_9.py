@@ -54,11 +54,11 @@ def test_receipt_writer_and_entrypoint_are_revision_aware():
     master = Path("run_master_3_1_free.py").read_text(encoding="utf-8")
     adapter = Path("run_drive_3_1_free_generic.py").read_text(encoding="utf-8")
     workflow = Path(".github/workflows/bridge-video-3.1-free.yml").read_text(encoding="utf-8")
-    runtime_source = Path("bridge_runtime_hardening_r25_10.py").read_text(encoding="utf-8")
+    runtime_source = Path("bridge_runtime_hardening_r25_11.py").read_text(encoding="utf-8")
     assert "'algorithmRevision':ALGORITHM_REVISION" in master
     assert master.rstrip().endswith("return done")
-    assert "bridge_runtime_hardening_r25_10" in adapter
-    assert 'BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.10"' in workflow
+    assert "bridge_runtime_hardening_r25_11" in adapter
+    assert 'BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.11"' in workflow
     assert "BRIDGE_REQUESTED_WHISPER_MODEL: medium" in workflow
     assert "WHISPER_MODEL: medium" in workflow
     assert "CLEANUP_ACK+KNOWLEDGE_APPLIED" in runtime_source
@@ -70,4 +70,4 @@ if __name__ == "__main__":
     test_knowledge_receipt_is_required_and_revision_aware()
     test_different_revision_can_reprocess()
     test_receipt_writer_and_entrypoint_are_revision_aware()
-    print("R25_10_REVISION_IDEMPOTENCY: PASS")
+    print("R25_11_REVISION_IDEMPOTENCY: PASS")
