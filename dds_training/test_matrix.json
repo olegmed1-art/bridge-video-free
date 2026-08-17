@@ -138,6 +138,13 @@
       "description": "Mandatory investigation lifecycle and append-only history."
     },
     {
+      "id": "auto-investigation-resolution",
+      "path": "resolve_investigations_auto_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "description": "Production automatic investigation resolver covers contract/defense paths without inventing card-level evidence."
+    },
+    {
       "id": "line-predictor",
       "path": "line_predictor_selftest.py",
       "suite": "fast",
@@ -211,6 +218,13 @@
         991
       ],
       "description": "Independent main/holdout/skill-claim readiness gates."
+    },
+    {
+      "id": "prepare-stage2",
+      "path": "prepare_stage2_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "description": "Production Stage-2 preparation orchestration writes safety artifacts without starting mass DDS."
     },
     {
       "id": "stage-gate",
@@ -339,7 +353,8 @@
       ],
       "investigations.py": [
         "investigations",
-        "stage-gate"
+        "stage-gate",
+        "auto-investigation-resolution"
       ],
       "launch_authorization.py": [
         "launch-authorization"
@@ -351,7 +366,8 @@
       ],
       "line_predictor.py": [
         "line-predictor",
-        "stage2-readiness"
+        "stage2-readiness",
+        "prepare-stage2"
       ],
       "methodology_audit.py": [
         "methodology-v22",
@@ -367,7 +383,7 @@
         "preflight"
       ],
       "prepare_stage2.py": [
-        "stage2-readiness"
+        "prepare-stage2"
       ],
       "regression_links.py": [
         "regression-links",
@@ -377,7 +393,7 @@
         "repo-clean"
       ],
       "resolve_investigations_auto.py": [
-        "investigations"
+        "auto-investigation-resolution"
       ],
       "rule_synthesis.py": [
         "rule-synthesis"
@@ -396,7 +412,8 @@
       ],
       "shard_plan.py": [
         "shard-plan",
-        "stage2-readiness"
+        "stage2-readiness",
+        "prepare-stage2"
       ],
       "sitecustomize.py": [
         "sitecustomize-guard"
@@ -406,20 +423,23 @@
         "experience-memory"
       ],
       "stage2_readiness.py": [
-        "stage2-readiness"
+        "stage2-readiness",
+        "prepare-stage2"
       ],
       "stage_gate.py": [
         "stage-gate"
       ],
       "stage_scope.py": [
         "stage-scope",
-        "stage2-readiness"
+        "stage2-readiness",
+        "prepare-stage2"
       ],
       "storage.py": [
         "experience-memory",
         "regression-links",
         "stage-gate",
-        "predictor-pipeline"
+        "predictor-pipeline",
+        "auto-investigation-resolution"
       ],
       "tasks.py": [
         "corpus",
