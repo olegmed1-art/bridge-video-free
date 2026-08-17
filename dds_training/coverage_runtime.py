@@ -5,6 +5,11 @@ from __future__ import annotations
 When ``DDS_COVERAGE_ROOT`` and ``DDS_COVERAGE_DIR`` are present, sitecustomize
 activates this collector in every Python process.  Each process writes a unique
 JSON fragment at exit; the test runner merges parent and child fragments.
+
+When ``DDS_COVERAGE_MANIFEST`` and ``DDS_COVERAGE_SUITE`` are also supplied, the
+collector traces only production modules mapped to that suite.  This preserves
+actual line/arc evidence while avoiding pathological tracing overhead in the
+self-test harness itself.
 """
 
 import atexit
@@ -20,9 +25,38 @@ from typing import Callable
 _ACTIVE = False
 _ROOT: Path | None = None
 _OUT_DIR: Path | None = None
+_INCLUDED_MODULES: set[str] | None = None
 _LINES: dict[str, set[int]] = defaultdict(set)
 _ARCS: dict[str, set[tuple[int, int]]] = defaultdict(set)
 _LAST_LINE: dict[int, tuple[str, int]] = {}
+
+
+def _load_included_modules() -> set[str] | None:
+    manifest_text = os.environ.get("DDS_COVERAGE_MANIFEST")
+    suite = os.environ.get("DDS_COVERAGE_SUITE")
+    if not manifest_text and not suite:
+        return None
+    if not manifest_text or not suite:
+        raise RuntimeError("DDS coverage manifest and suite must be supplied together")
+    manifest_path = Path(manifest_text).resolve()
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    tests = data.get("tests", [])
+    suite_ids = {
+        str(row.get("id"))
+        for row in tests
+        if isinstance(row, dict) and row.get("suite") == suite
+    }
+    if not suite_ids:
+        raise RuntimeError(f"DDS coverage suite has no registered tests: {suite!r}")
+    mapping = data.get("coverage", {}).get("module_tests", {})
+    included = {
+        str(module)
+        for module, test_ids in mapping.items()
+        if suite_ids.intersection(str(test_id) for test_id in test_ids)
+    }
+    if not included:
+        raise RuntimeError(f"DDS coverage suite maps no production modules: {suite!r}")
+    return included
 
 
 def _relative(filename: str) -> str | None:
@@ -37,7 +71,10 @@ def _relative(filename: str) -> str | None:
         return None
     if path.suffix != ".py":
         return None
-    return relative.as_posix()
+    relative_text = relative.as_posix()
+    if _INCLUDED_MODULES is not None and relative_text not in _INCLUDED_MODULES:
+        return None
+    return relative_text
 
 
 def _trace(frame: FrameType, event: str, arg) -> Callable | None:
@@ -71,6 +108,7 @@ def _write_fragment() -> None:
         "schema": "dds-runtime-coverage-fragment-v1",
         "pid": os.getpid(),
         "root": str(_ROOT),
+        "included_modules": sorted(_INCLUDED_MODULES) if _INCLUDED_MODULES is not None else None,
         "lines": {name: sorted(values) for name, values in sorted(_LINES.items())},
         "arcs": {
             name: [[start, end] for start, end in sorted(values)]
@@ -84,7 +122,7 @@ def _write_fragment() -> None:
 
 
 def activate_from_environment() -> bool:
-    global _ACTIVE, _ROOT, _OUT_DIR
+    global _ACTIVE, _ROOT, _OUT_DIR, _INCLUDED_MODULES
     if _ACTIVE:
         return True
     root = os.environ.get("DDS_COVERAGE_ROOT")
@@ -93,6 +131,7 @@ def activate_from_environment() -> bool:
         return False
     _ROOT = Path(root).resolve()
     _OUT_DIR = Path(out_dir).resolve()
+    _INCLUDED_MODULES = _load_included_modules()
     _ACTIVE = True
     sys.settrace(_trace)
     threading.settrace(_trace)
