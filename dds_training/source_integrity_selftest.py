@@ -53,7 +53,8 @@ def main() -> None:
         (runtime / "cache.bin").write_bytes(b"allowed runtime residue")
         allowed = require_clean_repository(repo, allowed_prefixes=(".venv",))
         assert allowed["status"] == "ok", allowed
-        assert ".venv/cache.bin" in allowed["ignored_files"]
+        assert allowed["ignored_file_count"] == 1
+        assert ".venv/cache.bin" in allowed["ignored_files_sample"]
 
         try:
             require_clean_repository(repo, allowed_prefixes=())
@@ -70,6 +71,7 @@ def main() -> None:
                     "untracked_binary_detected": True,
                     "unexpected_ignored_file_detected": True,
                     "explicit_runtime_allowlist_tested": True,
+                    "bounded_evidence_sample_tested": True,
                 },
                 indent=2,
             )
