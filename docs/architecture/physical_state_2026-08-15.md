@@ -1,16 +1,16 @@
 # Физическая архитектура данных — фактическая реализация v0.2
 
-Дата фиксации: 2026-08-15; актуализация после седьмой проверки: 2026-08-16
+Дата фиксации: 2026-08-15; актуализация после восьмой проверки: 2026-08-17
 
 ## Production database
 
 - Neon project: `bridge-school-core`
 - Region: AWS Europe Central 1 (Frankfurt)
-- PostgreSQL: 18.x
+- PostgreSQL: 18.4
 - Production schema_migration: `0001–0019`
 - Для всех зарегистрированных production migration записан checksum.
-- Последняя прямая повторная проверка подтверждает: Club Operations `0020–0037` в production не применены.
-- `club_membership`, `club_payment_refund`, `person_package_grant` в production отсутствуют.
+- Последняя прямая повторная проверка 2026-08-17 подтверждает: Club Operations/Auth `0020–0043` в production не применены.
+- `club_membership`, `auth_identity`, `actor_context_signing_secret` в production отсутствуют.
 
 Миграции production после исторической фиксации v0.1:
 
@@ -23,7 +23,7 @@
 
 ## Runtime access
 
-Capability roles остаются NOLOGIN и без superuser/createdb/createrole/replication/bypassrls:
+Production capability roles остаются NOLOGIN и без superuser/createdb/createrole/replication/bypassrls:
 
 - bridge_school_reader
 - bridge_school_app
@@ -36,11 +36,17 @@ Production principals имеют LOGIN, но не административны
 - bridge_school_worker_principal
 - bridge_school_health_principal
 
-Секреты не хранятся в migration files или документации.
+Candidate `main` дополнительно определяет, но production пока не содержит:
+
+- `bridge_school_member` — узкая member-facing capability без наследования broad reader;
+- `bridge_school_member_principal` — будущий server-side principal, намеренно NOLOGIN;
+- `bridge_school_auth_gateway` — NOLOGIN capability для установки actor context только после внешней аутентификации.
+
+Секреты production runtime не хранятся в migration files или документации. Candidate actor-context signing secret создается внутри БД и недоступен runtime-ролям; в production этой таблицы пока нет.
 
 ## Operational health
 
-Последняя production проверка:
+Последняя production проверка 2026-08-17:
 
 - overall_severity = ok
 - critical = 0
@@ -57,13 +63,17 @@ Production principals имеют LOGIN, но не административны
 - KnowledgeItem = 0
 - Artifact = 10
 
+Real AuthIdentity/ClubMember import также не выполнялся.
+
 Media/transcript данные относятся к существующему media-контуру. Машинный канон знаний еще не загружен.
 
 ## Backend/API
 
 FastAPI service существует в `bridge_school_api` и использует отдельный app principal. Реализованы базовые health/read endpoints; это еще не Member API.
 
-Текущая защита `/v1/` использует общий `BRIDGE_API_TOKEN`; перед внешним многопользовательским доступом требуется персональная AuthIdentity и object-level authorization/RLS или эквивалентная fail-closed изоляция.
+Текущая защита `/v1/` по-прежнему использует общий `BRIDGE_API_TOKEN`. Round-8 database candidate добавил AuthIdentity/object-isolation/actor-context primitives, но они еще не подключены к production API и не являются сами по себе проверкой внешнего OAuth/phone/provider token.
+
+До внешнего многопользовательского доступа нужен server-side authentication gateway, который сначала проверяет внешний токен/сессию, затем устанавливает подписанный transaction-local actor context. Клиент не должен получать database credentials.
 
 ## Google Drive
 
@@ -80,9 +90,9 @@ FastAPI service существует в `bridge_school_api` и использу�
 
 Эта область — файловый слой, не база членов клуба.
 
-## Candidate Club Operations на GitHub main
+## Candidate Club Operations/Auth на GitHub main
 
-Кандидат состоит из миграций `0020–0037`.
+Кандидат состоит из миграций `0020–0043`.
 
 Основные реализованные контуры:
 
@@ -103,12 +113,44 @@ FastAPI service существует в `bridge_school_api` и использу�
 - explicit lifecycle closure boundaries and protection from retroactive shortening that would invalidate recorded facts;
 - acquired-package validity enforced for package-backed entitlement usage;
 - unambiguous Charge commercial origin and Booking/Service provenance consistency;
-- PaymentAllocation chronology relative to both Payment and Charge.
+- PaymentAllocation chronology relative to both Payment and Charge;
+- provider-neutral AuthIdentity mapping to canonical Person;
+- school/context role assignment plus explicit person-to-person grants;
+- fail-closed member self-service projections without direct broad base-table reads;
+- signed transaction/backend-bound actor context resistant to forged custom PostgreSQL settings;
+- protected actor/request audit history for sensitive operations;
+- separate trusted auth-gateway capability; ordinary member capability cannot select an arbitrary identity context;
+- school-wide role helper cannot silently promote a scoped group/course role;
+- member SECURITY DEFINER function surface is regression-whitelisted.
 
-Database tests `011–023` cover positive and adversarial Club Operations scenarios in addition to all legacy tests.
+Database tests `011–030` cover positive and adversarial Club Operations/Auth scenarios in addition to all legacy tests.
 
-Seventh-pass candidate verification: GitHub Actions run `31910012398`, `success`.
-Latest post-merge candidate verification: GitHub Actions run `31910114003`, PostgreSQL 18 — clean migration install, runtime DSN regression, all invariant tests, idempotence, checksum tamper guard and migration registry verification all `success`.
+Round-8 core auth post-merge verification: GitHub Actions run `32000018735`, `success`.
+Trusted-gateway candidate verification: run `32000241026`, `success`.
+Latest post-merge candidate verification: GitHub Actions run `32000346201`, PostgreSQL 18 — clean migration install, runtime DSN regression, all invariant/adversarial tests, idempotence, checksum tamper guard and migration registry verification all `success`.
+
+## Authentication/authorization boundary — current factual state
+
+Implemented on candidate `main`:
+
+- identity mapping and validity;
+- school/context role assignments;
+- explicit cross-person permission grants;
+- narrow member read views;
+- signed transaction-local actor context;
+- actor-aware sensitive-operation audit;
+- trusted database auth-gateway capability boundary.
+
+Not implemented/deployed yet:
+
+- verification of a real external provider token/session by the production API;
+- member server LOGIN credential provisioning;
+- guarded member/admin write API;
+- instructor-specific object-scoped educational views/functions;
+- real AuthIdentity records;
+- end-to-end browser/phone login flow.
+
+Therefore AuthIdentity/object isolation is a verified database candidate, not a production member login system yet.
 
 ## Production release boundary
 
@@ -123,11 +165,11 @@ Before promotion: create a recoverable Neon checkpoint, deliberately harden the 
 
 ## Следующие архитектурные этапы
 
-1. AuthIdentity + object-level authorization/RLS or equivalent fail-closed isolation.
-2. Actor/audit context for sensitive member/admin actions.
-3. Controlled pilot import Person/Student/ClubMember with reconciliation.
+1. External authentication verifier/gateway integration; database credentials remain server-side.
+2. Guarded member/admin write operations and explicit instructor object scopes.
+3. Controlled pilot import Person/Student/ClubMember/AuthIdentity with reconciliation.
 4. Knowledge/Canon ingestion + visibility.
-5. Member API + Club Window only after authorization gates.
+5. Member API + Club Window only after end-to-end authorization gates.
 6. Communication adapters/Admin UI after channel policies are approved.
 7. Backup/restore, privacy/retention, security and load/cost gates before real financial and mass-user rollout.
 
