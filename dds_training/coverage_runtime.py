@@ -9,7 +9,8 @@ JSON fragment at exit; the test runner merges parent and child fragments.
 When ``DDS_COVERAGE_MANIFEST`` and ``DDS_COVERAGE_SUITE`` are also supplied, the
 collector traces only production modules mapped to that suite. Excluded frames
 are rejected at the call boundary, so the collector does not line-trace the test
-harness, stdlib, or unrelated production modules.
+harness, stdlib, or unrelated production modules. Filename scope decisions are
+cached because the global call hook sees many calls from the same source file.
 """
 
 import atexit
@@ -26,6 +27,7 @@ _ACTIVE = False
 _ROOT: Path | None = None
 _OUT_DIR: Path | None = None
 _INCLUDED_MODULES: set[str] | None = None
+_FILE_SCOPE_CACHE: dict[str, str | None] = {}
 _LINES: dict[str, set[int]] = defaultdict(set)
 _ARCS: dict[str, set[tuple[int, int]]] = defaultdict(set)
 _LAST_LINE: dict[int, tuple[str, int]] = {}
@@ -60,20 +62,29 @@ def _load_included_modules() -> set[str] | None:
 
 
 def _relative(filename: str) -> str | None:
+    cached = _FILE_SCOPE_CACHE.get(filename, ...)
+    if cached is not ...:
+        return cached
     if _ROOT is None:
+        _FILE_SCOPE_CACHE[filename] = None
         return None
     try:
         path = Path(filename).resolve()
         relative = path.relative_to(_ROOT)
     except (OSError, ValueError):
+        _FILE_SCOPE_CACHE[filename] = None
         return None
     if any(part in {".venv", ".build", ".tools", ".wheel-cache", "__pycache__", "work"} for part in relative.parts):
+        _FILE_SCOPE_CACHE[filename] = None
         return None
     if path.suffix != ".py":
+        _FILE_SCOPE_CACHE[filename] = None
         return None
     relative_text = relative.as_posix()
     if _INCLUDED_MODULES is not None and relative_text not in _INCLUDED_MODULES:
+        _FILE_SCOPE_CACHE[filename] = None
         return None
+    _FILE_SCOPE_CACHE[filename] = relative_text
     return relative_text
 
 
@@ -90,9 +101,6 @@ def _local_trace(frame: FrameType, event: str, arg) -> Callable | None:
         _LAST_LINE[frame_id] = (relative, line)
         return _local_trace
     if event == "exception":
-        # A Python exception event is not necessarily frame termination; callers may
-        # catch it in the same frame. Keep the local tracer attached so coverage after
-        # the handler is not silently lost.
         _ARCS[relative].add((previous[1], -1))
         return _local_trace
     if event == "return":
@@ -103,9 +111,6 @@ def _local_trace(frame: FrameType, event: str, arg) -> Callable | None:
 
 
 def _global_trace(frame: FrameType, event: str, arg) -> Callable | None:
-    # CPython calls the global trace function for new frames. Returning None here
-    # prevents all subsequent line events in an excluded frame, which is essential
-    # for keeping measured coverage inexpensive enough for the 10k-corpus tests.
     if event != "call":
         return None
     relative = _relative(frame.f_code.co_filename)
@@ -147,6 +152,7 @@ def activate_from_environment() -> bool:
     _ROOT = Path(root).resolve()
     _OUT_DIR = Path(out_dir).resolve()
     _INCLUDED_MODULES = _load_included_modules()
+    _FILE_SCOPE_CACHE.clear()
     _ACTIVE = True
     sys.settrace(_global_trace)
     threading.settrace(_global_trace)
