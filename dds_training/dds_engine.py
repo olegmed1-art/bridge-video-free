@@ -5,12 +5,10 @@ import importlib.metadata
 import json
 from pathlib import Path
 
-from launch_guard import enforce_mass_evaluate_guard
-
-# Hard fallback: even if Python did not discover the project-level sitecustomize
-# during interpreter startup, run_stage imports dds_engine before any DDS solve.
-# Unauthorized mass evaluation therefore still exits before solver work begins.
-enforce_mass_evaluate_guard()
+# Hard fallback: if project-level sitecustomize was not discovered during Python
+# startup, importing it here executes the same fail-closed launch guard before
+# any DDS solver module is loaded or called.
+import sitecustomize  # noqa: F401
 
 RANK_CHARS = {
     14: "A",
