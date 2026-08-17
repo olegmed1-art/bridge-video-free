@@ -92,8 +92,10 @@ jobs:
           assert db.execute("select count(*) from dds_results where split='train'").fetchone()[0] == 14000
           assert db.execute("select count(*) from dds_results where split='validation'").fetchone()[0] == 3000
           assert db.execute("select count(*) from dds_results where split='sealed_test'").fetchone()[0] == 3000
-          assert db.execute("select count(*) from investigations where status='open'").fetchone()[0] == 0
-          print({'pilot_identity_verified': True, 'pilot_deals': 10000, 'pilot_dds_results': 22497})
+          opened = db.execute("select count(*) from investigation_events where event_type='opened'").fetchone()[0]
+          resolved = db.execute("select count(*) from investigation_events where event_type='resolved'").fetchone()[0]
+          assert opened == resolved == 3226, (opened, resolved)
+          print({'pilot_identity_verified': True, 'pilot_deals': 10000, 'pilot_dds_results': 22497, 'investigations_opened_resolved': opened})
           PY
 
       - name: Expand deterministic corpus to 30k without DDS exposure
@@ -218,7 +220,7 @@ jobs:
           assert ready['holdout']['ready'] is False
           assert ready['skill_claim']['ready'] is False
           db = sqlite3.connect(root / 'training.sqlite3')
-          assert db.execute("select count(*) from dds_results where stage='main'").fetchone()[0] == 0
+          assert db.execute("select count(*) from dds_results").fetchone()[0] == 22497
           print({
               'main_train_ready': True,
               'fresh_tasks': 40000,
