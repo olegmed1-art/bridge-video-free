@@ -1,0 +1,92 @@
+spec_version: '2.0'
+status: PRELAUNCH_DRY_VALIDATED
+activation:
+  prelaunch_hold: true
+  first_mode: SHADOW
+  shadow_write_policy: READ_ONLY_TO_STABLE_AND_PRODUCTION
+  promotion_authority: NONE
+risk_classes:
+  R0: {name: read_only_observation, production_write: false, owner_review: false}
+  R1: {name: isolated_technical_candidate, production_write: false, owner_review: false}
+  R2: {name: shared_or_production_impacting_technical_change, production_write: possible_after_shadow, independent_validation: required}
+  R3: {name: identity_authorization_integrity_or_high_impact_infrastructure, production_write: possible_after_shadow, independent_validation: strong, separate_authorization: required}
+  R4: {name: canonical_bidding_teaching_or_methodology_change, owner_review: always_required, autonomous_promotion: forbidden}
+objects:
+  Run:
+    required: [run_id, spec_version, mode, state, target_component, stable_version, risk_class, contract_id, created_at]
+  ImprovementContract:
+    required: [contract_id, run_id, revision, pinned_governance, scope, allowed_actions, target_metrics, guardrails, acceptance, tests, validator_policy, cost_cap, wall_clock_cap, max_candidates, max_retests, recovery_requirement]
+    immutable_after_evaluation_start: true
+    defaults: {max_candidates: 3, max_retests: 2}
+  Evidence:
+    required: [evidence_id, run_id, evidence_type, source_class, source_identity, observed_at, trust_class, status]
+    statuses: [PASS, FAIL, UNKNOWN, STALE, CONFLICTED]
+  Lease:
+    required: [lease_id, run_id, component, stable_version, acquired_at, expires_at, status]
+  Candidate:
+    required: [candidate_id, run_id, problem_id, hypothesis_id, base_stable_version, isolated_location, created_at]
+  Decision:
+    required: [decision_id, run_id, decision, gate_results, evidence_ids, created_at]
+  PromotionIntent:
+    required: [intent_id, run_id, old_version, new_version, target, exact_action, scope, idempotency_key, authorization_evidence_id]
+  RecoveryIntent:
+    required: [intent_id, run_id, target, restore_reference, exact_action, idempotency_key, trigger_evidence_id]
+independence:
+  material_change:
+    proposer_and_validator_same_reasoning_context: forbidden
+    validator_must_use_frozen_contract: true
+    validator_must_not_treat_proposer_conclusion_as_evidence: true
+  R2: independent_test_or_critic_required
+  R3: independent_red_team_or_shadow_plus_separate_authorization_required
+  R4: owner_authorization_required
+gates:
+  preflight: [spec_pinned, stable_identified, scope_frozen, risk_class_set, cost_policy_available, reliability_policy_available]
+  candidate: [contract_frozen, lease_valid_if_promotion_capable, evidence_snapshot_recorded]
+  comparison: [tests_complete, guardrails_evaluated, coverage_evaluated, validator_passed_if_required, dependency_gate_passed, cost_within_cap, stable_unchanged, governance_unchanged, evidence_not_unknown_stale_or_conflicted]
+  promotion: [all_comparison_gates_pass, authority_valid, recovery_requirement_pass, lease_valid, intent_persisted, no_unknown_external_state]
+  shadow_promotion_override: ALWAYS_DENY
+risk_policy:
+  escalation_only_without_owner: true
+  automatic_risk_downgrade: forbidden
+  downgrade_requires: OWNER_REVIEW
+state_machine:
+  initial: PREFLIGHT
+  transitions:
+    PREFLIGHT: {pass: LEASE_OR_INVENTORY, fail: BLOCKED}
+    LEASE_OR_INVENTORY: {pass: INVENTORY, fail: BLOCKED}
+    INVENTORY: {pass: OBSERVE, fail: BLOCKED}
+    OBSERVE: {pass: EVALUATE, fail: BLOCKED}
+    EVALUATE: {finding: ROOT_CAUSE, no_finding: COMPLETED}
+    ROOT_CAUSE: {high_or_medium: CONTRACT, low: INVESTIGATE}
+    CONTRACT: {pass: CANDIDATE, fail: BLOCKED}
+    CANDIDATE: {pass: SANDBOX, limit_exceeded: OWNER_REVIEW}
+    SANDBOX: {pass: VALIDATE, fail: DECIDE_REJECT_OR_RETEST}
+    VALIDATE: {pass: DEPENDENCY, fail: DECIDE_REJECT_OR_RETEST}
+    DEPENDENCY: {pass: COMPARE, fail: REJECT}
+    COMPARE: {eligible: DECISION, stale: REBASE_REQUIRED, inconclusive: RETEST}
+    DECISION: {shadow_promote: SHADOW_RECOMMENDATION, reject: REJECTED, owner: OWNER_REVIEW}
+    SHADOW_RECOMMENDATION: {next: COMPLETED}
+terminal_states: [COMPLETED, REJECTED, BLOCKED, OWNER_REVIEW, ABORTED, ROLLED_BACK, UNKNOWN_EXTERNAL_STATE]
+write_protocol:
+  steps: [PERSIST_INTENT, EXECUTE_ONCE, READ_BACK, CONFIRM]
+  lost_response: UNKNOWN_EXTERNAL_STATE
+  blind_retry: forbidden
+shadow_permissions:
+  stable: READ_ONLY
+  production_database: READ_ONLY
+  production_code: READ_ONLY
+  canonical_materials: READ_ONLY
+  candidate_sandbox: WRITE_ALLOWED
+  evidence_store: APPEND_ONLY
+  temporary_test_artifacts: WRITE_ALLOWED
+  destructive_actions: FORBIDDEN
+dry_validation:
+  requirements:
+    - every_nonterminal_state_has_exit
+    - every_write_has_intent_and_readback
+    - every_promotion_path_crosses_all_required_gates
+    - shadow_has_no_promotion_transition
+    - R4_has_no_autonomous_promotion
+    - unknown_external_state_has_no_write_transition
+    - retest_is_bounded
+    - risk_cannot_auto_downgrade
