@@ -7,16 +7,18 @@ class GateError(RuntimeError): pass
 class FrozenContract:
  run_id:str; stable_version:str; risk:Risk; max_candidates:int=3; max_retests:int=2
 class MetaClosedLoop:
- def __init__(self,mode:Mode,promotion_authority=False):
+ def __init__(self,mode:Mode,promotion_authority=False,a2_r1_only=True):
   if mode is Mode.SHADOW and promotion_authority: raise GateError('shadow cannot have promotion authority')
-  self.mode=mode; self.promotion_authority=promotion_authority
+  self.mode=mode; self.promotion_authority=promotion_authority; self.a2_r1_only=a2_r1_only
  def classify_risk(self,current:Risk,proposed:Risk)->Risk:
   order=list(Risk)
   if order.index(proposed)<order.index(current): raise GateError('automatic risk downgrade forbidden')
   return proposed
- def promotion_allowed(self,gates:dict)->bool:
+ def promotion_allowed(self,gates:dict,risk:Risk=Risk.R1,deterministic:bool=True,semantic_change:bool=False)->bool:
   if self.mode is Mode.SHADOW or not self.promotion_authority:return False
-  req=('criterion','guardrails','validator','dependency','budget','stable','governance','recovery','lease','evidence')
+  if self.a2_r1_only and risk is not Risk.R1:return False
+  if not deterministic or semantic_change:return False
+  req=('criterion','guardrails','validator','dependency','budget','stable','governance','recovery','lease','evidence','readback_plan')
   return all(gates.get(k) is True for k in req)
  def decide(self,*,finding,confidence,canonical_change,stale=False,inconclusive=False,dependency_ok=True,cost_ok=True,validator_ok=True):
   if canonical_change:return 'OWNER_REVIEW'
@@ -29,4 +31,4 @@ class MetaClosedLoop:
  def write_protocol(intent_persisted,response_known,readback_matches):
   if not intent_persisted:return 'BLOCKED'
   if not response_known:return 'UNKNOWN_EXTERNAL_STATE'
-  return 'CONFIRMED' if readback_matches else 'UNKNOWN_EXTERNAL_STATE'
+  return 'CONFIRMED' if readback_matches else 'ROLLBACK_REQUIRED'
