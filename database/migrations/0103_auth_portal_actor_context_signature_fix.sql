@@ -92,6 +92,6 @@ GRANT EXECUTE ON FUNCTION bridge_establish_verified_actor_context(uuid,uuid,uuid
 TO bridge_school_auth_gateway;
 
 INSERT INTO schema_migration(migration_key)
-VALUES ('0103_portal_actor_context_signature_fix')
+VALUES ('0103_auth_portal_actor_context_signature_fix')
 ON CONFLICT DO NOTHING;
 COMMIT;
