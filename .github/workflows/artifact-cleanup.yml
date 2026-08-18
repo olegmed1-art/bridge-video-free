@@ -13,6 +13,14 @@ on:
         required: true
         type: boolean
         default: false
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/github_actions_artifact_cleanup.py'
+      - 'tests/test_github_actions_artifact_cleanup.py'
+      - 'tests/test_artifact_cleanup_workflow_contract.py'
+      - '.github/workflows/artifact-cleanup.yml'
+      - 'docs/architecture/data_lifecycle_policy_v1_0.md'
   push:
     branches: [main]
     paths:
@@ -24,16 +32,17 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 concurrency:
-  group: bridge-school-lifecycle-artifact-cleanup
+  group: bridge-school-lifecycle-artifact-cleanup-${{ github.event_name }}
   cancel-in-progress: false
 
 jobs:
-  cleanup:
+  contract:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -45,12 +54,31 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Run fail-closed cleanup unit tests before credentials
+      - name: Run fail-closed cleanup unit and workflow contract tests
         run: |
           python tests/test_github_actions_artifact_cleanup.py
           python tests/test_artifact_cleanup_workflow_contract.py
 
-      - name: Install pinned PostgreSQL client after tests
+  cleanup:
+    if: github.event_name != 'pull_request'
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+
+      - name: Install pinned PostgreSQL client after contract tests
         run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
 
       - name: Verify least-privilege worker database boundary
