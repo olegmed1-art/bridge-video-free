@@ -94,6 +94,7 @@ jobs:
         working-directory: dds_training
         run: |
           set -euo pipefail
+          mkdir -p work/stage2b
           python stage2b_prepare.py \
             --work work/pilot \
             --tasks \
