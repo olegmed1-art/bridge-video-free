@@ -1,6 +1,6 @@
 {
   "schema": "dds-test-manifest-v1",
-  "description": "Canonical test inventory for DDS learning v2.3. Every self-test and every production Python module must be listed explicitly.",
+  "description": "Canonical test inventory for DDS learning v2.3 stable plus v2.4 Stage-2B candidate. Every self-test and every production Python module must be listed explicitly.",
   "default_timeout_seconds": 60,
   "default_hash_seeds": [
     0
@@ -110,11 +110,11 @@
       "path": "crossfit_selftest.py",
       "suite": "fast",
       "timeout_seconds": 20,
+      "description": "Family-safe folds and leakage detection under two hash seeds.",
       "hash_seeds": [
         0,
         991
-      ],
-      "description": "Family-safe folds and leakage detection under two hash seeds."
+      ]
     },
     {
       "id": "experience-memory",
@@ -184,22 +184,22 @@
       "path": "run_stage_v23_guard_selftest.py",
       "suite": "fast",
       "timeout_seconds": 30,
+      "description": "Fail-closed Stage 2 double-confirmation guard.",
       "hash_seeds": [
         0,
         991
-      ],
-      "description": "Fail-closed Stage 2 double-confirmation guard."
+      ]
     },
     {
       "id": "shard-plan",
       "path": "shard_plan_selftest.py",
       "suite": "fast",
       "timeout_seconds": 20,
+      "description": "Deterministic family-preserving restartable shards.",
       "hash_seeds": [
         0,
         991
-      ],
-      "description": "Deterministic family-preserving restartable shards."
+      ]
     },
     {
       "id": "skill-versions",
@@ -213,11 +213,11 @@
       "path": "stage2_readiness_selftest.py",
       "suite": "fast",
       "timeout_seconds": 60,
+      "description": "Independent main/holdout/skill-claim readiness gates.",
       "hash_seeds": [
         0,
         991
-      ],
-      "description": "Independent main/holdout/skill-claim readiness gates."
+      ]
     },
     {
       "id": "prepare-stage2",
@@ -245,11 +245,32 @@
       "path": "v23_runtime_selftest.py",
       "suite": "fast",
       "timeout_seconds": 60,
+      "description": "Compatibility runtime: partial positions, lineage, calibration, shards and negative controls.",
       "hash_seeds": [
         0,
         991
-      ],
-      "description": "Compatibility runtime: partial positions, lineage, calibration, shards and negative controls."
+      ]
+    },
+    {
+      "id": "stage2b-blueprint",
+      "path": "stage2b_blueprint_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "description": "Family-safe 20-cell multi-contract blueprint requires locked pre-DDS prediction and stays unauthorized for DDS."
+    },
+    {
+      "id": "stage2b-v24-core",
+      "path": "stage2b_v24_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "description": "Stage 2B segmented OOF calibration, Wilson bounds, shrinkage, lead families, queue aggregation and state manifest."
+    },
+    {
+      "id": "stage2b-prepare",
+      "path": "stage2b_prepare_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 120,
+      "description": "End-to-end Stage 2B OOF candidate preparation on synthetic immutable TRAIN facts without DDS or holdout access."
     },
     {
       "id": "preflight",
@@ -433,6 +454,16 @@
         "stage-scope",
         "stage2-readiness",
         "prepare-stage2"
+      ],
+      "stage2b_blueprint.py": [
+        "stage2b-blueprint"
+      ],
+      "stage2b_v24.py": [
+        "stage2b-v24-core",
+        "stage2b-prepare"
+      ],
+      "stage2b_prepare.py": [
+        "stage2b-prepare"
       ],
       "storage.py": [
         "experience-memory",
