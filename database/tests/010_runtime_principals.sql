@@ -35,7 +35,6 @@ BEGIN
         RAISE EXCEPTION 'health capability lacks public schema USAGE';
     END IF;
 
-    -- Health capability is intentionally much narrower than bridge_school_reader.
     IF NOT has_table_privilege('bridge_school_health','database_runtime_fingerprint','SELECT')
        OR NOT has_table_privilege('bridge_school_health','operational_health_signal','SELECT')
        OR NOT has_table_privilege('bridge_school_health','operational_health_issue','SELECT')
@@ -49,7 +48,6 @@ BEGIN
         RAISE EXCEPTION 'health capability leaked broad school-data access';
     END IF;
 
-    -- Each dormant principal has exactly one direct capability membership.
     IF NOT EXISTS (
         SELECT 1 FROM pg_auth_members m
         JOIN pg_roles parent ON parent.oid=m.roleid
@@ -98,17 +96,18 @@ BEGIN
         RAISE EXCEPTION 'runtime principal has unexpected direct role membership';
     END IF;
 
-    -- Effective permissions must match the inherited capability boundaries.
-    IF NOT has_table_privilege('bridge_school_app_principal','person','INSERT')
+    IF has_table_privilege('bridge_school_app_principal','person','INSERT')
+       OR NOT has_table_privilege('bridge_school_app_principal','person','UPDATE')
        OR has_table_privilege('bridge_school_app_principal','source_observation','INSERT')
        OR has_table_privilege('bridge_school_app_principal','person','DELETE') THEN
-        RAISE EXCEPTION 'application principal effective permissions are outside contract';
+        RAISE EXCEPTION 'application principal effective permissions are outside controlled-onboarding contract';
     END IF;
 
-    IF NOT has_table_privilege('bridge_school_worker_principal','source_observation','INSERT')
+    IF has_table_privilege('bridge_school_worker_principal','person','INSERT')
+       OR NOT has_table_privilege('bridge_school_worker_principal','source_observation','INSERT')
        OR has_table_privilege('bridge_school_worker_principal','source_observation','UPDATE')
        OR has_table_privilege('bridge_school_worker_principal','source_observation','DELETE') THEN
-        RAISE EXCEPTION 'worker principal effective append-only permissions are outside contract';
+        RAISE EXCEPTION 'worker principal effective append-only/onboarding permissions are outside contract';
     END IF;
 
     IF NOT has_table_privilege('bridge_school_health_principal','operational_health_summary','SELECT')
@@ -118,8 +117,6 @@ BEGIN
     END IF;
 END $$;
 
--- Any new owner-created function must be private by default. Runtime-callable
--- functions require an explicit GRANT in the migration that creates them.
 CREATE FUNCTION public.__bridge_test_default_acl()
 RETURNS integer
 LANGUAGE sql
