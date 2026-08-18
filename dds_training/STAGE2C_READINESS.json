@@ -1,0 +1,16 @@
+{
+  "schema": "dds-stage2c-readiness-v1",
+  "stage": "2C",
+  "status": "prepared",
+  "dds_calls_started": false,
+  "validation_opened": false,
+  "sealed_opened": false,
+  "inputs": {
+    "continuations": 2000,
+    "declarer": 1000,
+    "defense": 1000,
+    "counterexample_candidates": 441,
+    "multicontract_blueprint": 10000
+  },
+  "next_gate": "locked_predictions_before_dds"
+}
