@@ -1,0 +1,181 @@
+name: DDS Stage 2B — OOF and curriculum preparation
+
+on:
+  workflow_dispatch:
+    inputs:
+      approve_stage2b_preparation:
+        description: 'Prepare OOF candidate, line wave, continuations and counterexamples; no DDS/validation/sealed execution'
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: dds-stage2b-prepare-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  TRAIN_RUN_ID: '32060398288'
+  TRAIN_ARTIFACT_ID: '9302550154'
+  TRAIN_ARTIFACT: dds-main-train-progress-32060398288-a1
+  TRAIN_ARTIFACT_ZIP_SHA256: c46cda2fb127371cbc1ab836c74580b25f0a0bb8ab358dfaab97cf591dd8a246
+  WORK: dds_training/work/pilot
+  OUT: dds_training/work/stage2b
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  prepare-stage2b:
+    if: ${{ inputs.approve_stage2b_preparation == true }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Require owner, main and explicit preparation approval
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${GITHUB_ACTOR}" = 'olegmed1-art'
+          test "${GITHUB_TRIGGERING_ACTOR}" = 'olegmed1-art'
+          test "${GITHUB_REF_NAME}" = 'main'
+          test "${{ inputs.approve_stage2b_preparation }}" = 'true'
+
+      - name: Checkout exact main commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+
+      - name: Compile and run Stage 2B regression contracts
+        working-directory: dds_training
+        run: |
+          set -euo pipefail
+          python -m compileall -q .
+          python stage2b_v24_selftest.py
+          python stage2b_prepare_selftest.py
+
+      - name: Restore exact completed 30k TRAIN artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/dds-main-train "$WORK" "$OUT"
+          mkdir -p /tmp/dds-main-train dds_training/work
+          gh api \
+            -H 'Accept: application/vnd.github+json' \
+            "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${TRAIN_ARTIFACT_ID}/zip" \
+            > /tmp/dds-main-train/artifact.zip
+          echo "$TRAIN_ARTIFACT_ZIP_SHA256  /tmp/dds-main-train/artifact.zip" | sha256sum -c -
+          unzip -q /tmp/dds-main-train/artifact.zip -d /tmp/dds-main-train/extracted
+          test -f /tmp/dds-main-train/extracted/dds-main-train-progress-state.tgz
+          test -f /tmp/dds-main-train/extracted/dds-main-train-progress-state.sha256
+          (cd /tmp/dds-main-train/extracted && sha256sum -c dds-main-train-progress-state.sha256)
+          tar -xzf /tmp/dds-main-train/extracted/dds-main-train-progress-state.tgz -C dds_training/work
+          test -f "$WORK/training.sqlite3"
+          test -f "$WORK/blind_tasks_crossfit.jsonl"
+          test -f "$WORK/blind_tasks_crossfit_main.jsonl"
+
+      - name: Verify immutable TRAIN closure and closed holdouts
+        working-directory: dds_training
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sqlite3
+          from pathlib import Path
+          db = sqlite3.connect(Path('work/pilot/training.sqlite3'))
+          counts = dict(db.execute('select split,count(*) from dds_results group by split'))
+          assert counts == {'derived': 2497, 'sealed_test': 3000, 'train': 42000, 'validation': 3000}, counts
+          assert db.execute('select count(*) from dds_results').fetchone()[0] == 50497
+          events = dict(db.execute('select event_type,count(*) from investigation_events group by event_type'))
+          assert events == {'opened': 8140, 'resolved': 8140}, events
+          print({'dds_results': 50497, 'train': 42000, 'validation_unchanged': 3000, 'sealed_unchanged': 3000, 'open_investigations': 0})
+          PY
+          sha256sum work/pilot/training.sqlite3 > /tmp/stage2b-db-before.sha256
+
+      - name: Prepare Stage 2B from TRAIN facts only
+        working-directory: dds_training
+        run: |
+          set -euo pipefail
+          python stage2b_prepare.py \
+            --work work/pilot \
+            --tasks \
+              work/pilot/blind_tasks_crossfit.jsonl \
+              work/pilot/blind_tasks_crossfit_main.jsonl \
+              work/pilot/derived_blind_tasks.jsonl \
+            --out work/stage2b \
+            --line-sources 500 \
+            --continuations 2000 \
+            --line-cards 16 \
+            | tee work/stage2b/stage2b_prepare.log
+
+      - name: Verify Stage 2B evidence and unchanged database
+        working-directory: dds_training
+        run: |
+          set -euo pipefail
+          sha256sum -c /tmp/stage2b-db-before.sha256
+          python - <<'PY'
+          import json, sqlite3
+          from pathlib import Path
+          root = Path('work/stage2b')
+          summary = json.loads((root / 'stage2b_summary.json').read_text(encoding='utf-8'))
+          ready = summary['readiness']
+          assert ready['train_rows'] == 42000, ready
+          assert ready['oof_rows'] == 42000, ready
+          assert ready['continuation_tasks'] == 2000, ready
+          assert sum(ready['continuation_by_actor'].values()) == 2000, ready
+          assert ready['continuation_by_actor'].get('declarer', 0) > 0
+          assert ready['continuation_by_actor'].get('defense', 0) > 0
+          assert ready['dds_called'] is False
+          assert ready['mass_training_started'] is False
+          assert ready['validation_opened'] is False
+          assert ready['sealed_opened'] is False
+          manifest = json.loads((root / 'CURRENT_STAGE_MANIFEST.json').read_text(encoding='utf-8'))
+          assert manifest['holdout_status'] == 'closed'
+          assert manifest['sealed_status'] == 'closed'
+          assert manifest['metadata']['dds_results'] == 50497
+          db = sqlite3.connect(Path('work/pilot/training.sqlite3'))
+          counts = dict(db.execute('select split,count(*) from dds_results group by split'))
+          assert counts == {'derived': 2497, 'sealed_test': 3000, 'train': 42000, 'validation': 3000}, counts
+          print({
+              'stage2b_prepared': True,
+              'oof_rows': ready['oof_rows'],
+              'continuations': ready['continuation_tasks'],
+              'counterexample_candidates': ready['counterexample_candidates'],
+              'database_unchanged': True,
+              'paid_api_used': False,
+          })
+          PY
+          test -f work/stage2b/dds-stage2b-prepared-compact.tgz
+          test -f work/stage2b/dds-stage2b-prepared-compact.tgz.sha256
+          (cd work/stage2b && sha256sum -c dds-stage2b-prepared-compact.tgz.sha256)
+
+      - name: Verify repository sources remained unchanged
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=all | grep -v '^?? dds_training/work/' || true)"
+
+      - name: Upload compact Stage 2B preparation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dds-stage2b-prepared-${{ github.run_id }}
+          path: |
+            dds_training/work/stage2b/stage2b_summary.json
+            dds_training/work/stage2b/stage2b_readiness.json
+            dds_training/work/stage2b/CURRENT_STAGE_MANIFEST.json
+            dds_training/work/stage2b/oof_comparison_v03_vs_v02.json
+            dds_training/work/stage2b/oof_calibration_v2.json
+            dds_training/work/stage2b/candidate_model_v03.json
+            dds_training/work/stage2b/continuation_curriculum.jsonl
+            dds_training/work/stage2b/counterexample_candidates.jsonl
+            dds_training/work/stage2b/investigation_resolution_classes.json
+            dds_training/work/stage2b/review_queue_projection.json
+            dds_training/work/stage2b/dds-stage2b-prepared-compact.tgz
+            dds_training/work/stage2b/dds-stage2b-prepared-compact.tgz.sha256
+          if-no-files-found: warn
+          retention-days: 30
