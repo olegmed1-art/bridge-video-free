@@ -24,6 +24,7 @@ required = [
     'test "$GITHUB_ACTOR" = olegmed1-art',
     'test "$GITHUB_TRIGGERING_ACTOR" = olegmed1-art',
     'args+=(--execute)',
+    'do not bind safe cleanup to a particular runtime actor identity.',
     'python tools/github_actions_artifact_cleanup.py',
 ]
 for item in required:
@@ -40,6 +41,11 @@ for forbidden in [
 
 # Pull requests receive no database secret because the cleanup job is skipped.
 assert text.index("if: github.event_name != 'pull_request'") < text.index('BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}')
-# Scheduled cleanup is automatic; direct manual delete remains owner-gated.
-assert text.index('schedule)') < text.index('args+=(--execute)')
+# Owner identity checks must remain in manual workflow_dispatch handling, not push handling.
+push_block = text[text.index('push)'):text.index('workflow_dispatch)')]
+assert 'GITHUB_ACTOR' not in push_block
+assert 'GITHUB_TRIGGERING_ACTOR' not in push_block
+manual_block = text[text.index('workflow_dispatch)'):text.index('*)')]
+assert 'test "$GITHUB_ACTOR" = olegmed1-art' in manual_block
+assert 'test "$GITHUB_TRIGGERING_ACTOR" = olegmed1-art' in manual_block
 print('ARTIFACT_CLEANUP_WORKFLOW_CONTRACT: PASS')
