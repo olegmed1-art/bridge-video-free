@@ -99,7 +99,9 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF_NAME" = main
 
-          args=(--max-artifacts 200 --verification-max-age-hours 12 --completion-grace-minutes 30)
+          # Ten API pages are cheap enough for a periodic maintenance run and prevent
+          # an older eligible artifact from being permanently hidden behind a busy CI backlog.
+          args=(--max-artifacts 1000 --verification-max-age-hours 12 --completion-grace-minutes 30)
           if [ -n "${CLEANUP_ARTIFACT_ID:-}" ]; then
             [[ "$CLEANUP_ARTIFACT_ID" =~ ^[0-9]+$ ]]
             args+=(--artifact-id "$CLEANUP_ARTIFACT_ID")
