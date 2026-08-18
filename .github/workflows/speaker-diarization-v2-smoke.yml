@@ -1,0 +1,40 @@
+name: Speaker Diarization v2 Smoke
+
+on:
+  pull_request:
+    paths:
+      - 'bridge_speaker_diarization.py'
+      - 'bridge_speaker_diarization_v2.py'
+      - 'bridge_runtime_hardening_r25_14.py'
+      - 'run_drive_3_1_free_generic.py'
+      - 'requirements-worker.txt'
+      - 'speaker_diarization_v2_smoke.py'
+      - 'tests/test_speaker_diarization_v2.py'
+      - '.github/workflows/speaker-diarization-v2-smoke.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit-and-live-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install focused zero-cost diarization runtime
+        run: |
+          python -m pip install --disable-pip-version-check \
+            'numpy==2.2.6' 'pytest==8.4.2' \
+            'sherpa-onnx==1.13.4' 'sherpa-onnx-bin==1.13.4'
+      - name: Unit contracts
+        run: python -m pytest -q tests/test_speaker_diarization_v2.py
+      - name: Live public-model smoke
+        run: python speaker_diarization_v2_smoke.py
