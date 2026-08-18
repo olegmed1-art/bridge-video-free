@@ -13,6 +13,8 @@ on:
         required: true
         type: boolean
         default: false
+  schedule:
+    - cron: '47 */3 * * *'
   pull_request:
     branches: [main]
     paths:
@@ -34,7 +36,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: bridge-school-lifecycle-artifact-cleanup-${{ github.event_name }}
+  group: bridge-school-lifecycle-artifact-cleanup
   cancel-in-progress: false
 
 jobs:
@@ -103,12 +105,26 @@ jobs:
             args+=(--artifact-id "$CLEANUP_ARTIFACT_ID")
           fi
 
-          # Push is deliberately dry-run during deployment validation.
-          # workflow_dispatch may delete only after explicit owner confirmation.
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "${CLEANUP_EXECUTE:-false}" = true ]; then
-            test "$GITHUB_ACTOR" = olegmed1-art
-            test "$GITHUB_TRIGGERING_ACTOR" = olegmed1-art
-            args+=(--execute)
-          fi
+          case "$GITHUB_EVENT_NAME" in
+            schedule)
+              args+=(--execute)
+              ;;
+            push)
+              test "$GITHUB_ACTOR" = olegmed1-art
+              test "$GITHUB_TRIGGERING_ACTOR" = olegmed1-art
+              args+=(--execute)
+              ;;
+            workflow_dispatch)
+              if [ "${CLEANUP_EXECUTE:-false}" = true ]; then
+                test "$GITHUB_ACTOR" = olegmed1-art
+                test "$GITHUB_TRIGGERING_ACTOR" = olegmed1-art
+                args+=(--execute)
+              fi
+              ;;
+            *)
+              echo "Unsupported event for cleanup execution: $GITHUB_EVENT_NAME" >&2
+              exit 2
+              ;;
+          esac
 
           python tools/github_actions_artifact_cleanup.py "${args[@]}"
