@@ -56,6 +56,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m compileall -q .
+          python stage2b_blueprint_selftest.py
           python stage2b_v24_selftest.py
           python stage2b_prepare_selftest.py
 
@@ -78,6 +79,7 @@ jobs:
           test -f "$WORK/training.sqlite3"
           test -f "$WORK/blind_tasks_crossfit.jsonl"
           test -f "$WORK/blind_tasks_crossfit_main.jsonl"
+          test -f "$WORK/derived_blind_tasks.jsonl"
 
       - name: Verify immutable TRAIN closure and closed holdouts
         working-directory: dds_training
@@ -100,6 +102,7 @@ jobs:
         working-directory: dds_training
         run: |
           set -euo pipefail
+          mkdir -p work/stage2b
           python stage2b_prepare.py \
             --work work/pilot \
             --tasks \
