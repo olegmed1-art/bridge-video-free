@@ -252,6 +252,13 @@
       ]
     },
     {
+      "id": "stage2b-blueprint",
+      "path": "stage2b_blueprint_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 20,
+      "description": "Family-safe 20-cell multi-contract blueprint requires locked pre-DDS prediction and stays unauthorized for DDS."
+    },
+    {
       "id": "stage2b-v24-core",
       "path": "stage2b_v24_selftest.py",
       "suite": "fast",
@@ -447,6 +454,9 @@
         "stage-scope",
         "stage2-readiness",
         "prepare-stage2"
+      ],
+      "stage2b_blueprint.py": [
+        "stage2b-blueprint"
       ],
       "stage2b_v24.py": [
         "stage2b-v24-core",
