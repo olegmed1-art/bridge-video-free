@@ -17,6 +17,7 @@ required = [
     'BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}',
     'GITHUB_TOKEN: ${{ github.token }}',
     'test "$GITHUB_REF_NAME" = main',
+    '--max-artifacts 1000',
     'case "$GITHUB_EVENT_NAME" in',
     'schedule)',
     'push)',
@@ -36,6 +37,7 @@ for forbidden in [
     'permissions: write-all',
     'persist-credentials: true',
     'Push is deliberately dry-run during deployment validation.',
+    '--max-artifacts 200',
 ]:
     assert forbidden not in text, forbidden
 
