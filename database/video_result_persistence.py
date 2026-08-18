@@ -294,6 +294,9 @@ def persist_video_result(
     artifact_id = _stable_uuid("artifact", job_id, algorithm_revision, report_sha)
     artifact_version_id = _stable_uuid("artifact-version", artifact_id, 1, report_sha)
     analysis_output_id = _stable_uuid("analysis-output", analysis_run_id, artifact_version_id)
+    changeset_id = _stable_uuid("changeset", "video-result-recorded", analysis_run_id)
+    command_id = _stable_uuid("command", "video-result-recorded", analysis_run_id)
+    technical_event_id = _stable_uuid("event", "video-result-recorded", analysis_run_id)
 
     counts = {
         "transcript_segments": len(transcript),
@@ -308,7 +311,7 @@ def persist_video_result(
         "job_id": job_id,
         "source_drive_id": source_drive_id,
         "report_drive_id": report_drive_id,
-        "database_persistence": "complete",
+        "database_persistence": "technically_recorded",
     }
     transcript_provenance = {
         "job_id": job_id,
@@ -345,6 +348,19 @@ def persist_video_result(
         "algorithm_version": algorithm_version,
         "algorithm_revision": algorithm_revision,
     }
+    technical_event_payload = {
+        "analysis_run_id": str(analysis_run_id),
+        "job_id": job_id,
+        "algorithm_revision": algorithm_revision,
+        "source_sha256": source_sha,
+        "report_sha256": report_sha,
+        "transcript_sha256": transcript_digest,
+        "technical_record_status": "rolled_back" if rollback else "recorded",
+        "quality_confirmation_status": "pending",
+        "publication_authorization_status": "blocked",
+    }
+    technical_event_hash = _canonical_json_digest(technical_event_payload)
+    candidate_requires_meta = algorithm_revision == "3.1-free-r25.12-meta"
 
     with psycopg.connect(
         dsn,
@@ -360,6 +376,34 @@ def persist_video_result(
             if len(rows) != 1:
                 raise RuntimeError("expected exactly one bridge school registry row")
             school_id = rows[0][0]
+
+            cur.execute(
+                """
+                SELECT av.algorithm_version_id
+                  FROM public.algorithm a
+                  JOIN public.algorithm_version av ON av.algorithm_id=a.algorithm_id
+                 WHERE a.school_id=%s
+                   AND a.stable_key='bridge-video-master-analysis'
+                   AND av.version_label=%s
+                """,
+                (school_id, algorithm_revision),
+            )
+            version_rows = cur.fetchall()
+            if len(version_rows) != 1 or version_rows[0][0] is None:
+                raise RuntimeError(
+                    f"registered algorithm_version_id required for {algorithm_revision}"
+                )
+            algorithm_version_id = version_rows[0][0]
+
+            cur.execute(
+                """
+                INSERT INTO public.changeset
+                    (changeset_id, command_id, school_id, status, correlation_id)
+                VALUES (%s, %s, %s, 'started', %s)
+                ON CONFLICT (school_id, command_id) DO NOTHING
+                """,
+                (changeset_id, command_id, school_id, changeset_id),
+            )
 
             cur.execute(
                 """
@@ -589,15 +633,23 @@ def persist_video_result(
                 """
                 INSERT INTO public.analysis_run
                     (analysis_run_id, school_id, algorithm_key, algorithm_version,
-                     completed_at, run_status, parameters_snapshot, qc_summary, checkpoint)
-                VALUES (%s, %s, 'bridge-video-master-analysis', %s,
-                        now(), 'success', %s, %s, %s)
+                     algorithm_version_id, completed_at, run_status,
+                     parameters_snapshot, qc_summary, checkpoint,
+                     technical_record_status, quality_confirmation_status,
+                     publication_authorization_status)
+                VALUES (%s, %s, 'bridge-video-master-analysis', %s, %s,
+                        CASE WHEN %s THEN NULL ELSE now() END,
+                        CASE WHEN %s THEN 'running' ELSE 'success' END,
+                        %s, %s, %s, 'recorded', 'pending', 'blocked')
                 ON CONFLICT DO NOTHING
                 """,
                 (
                     analysis_run_id,
                     school_id,
                     algorithm_revision,
+                    algorithm_version_id,
+                    candidate_requires_meta,
+                    candidate_requires_meta,
                     Jsonb(analysis_parameters),
                     Jsonb(analysis_qc),
                     Jsonb(checkpoint),
@@ -688,10 +740,11 @@ def persist_video_result(
                 """
                 INSERT INTO public.artifact
                     (artifact_id, school_id, artifact_type, title, status)
-                VALUES (%s, %s, 'lesson_master_analysis_pdf', %s, 'active')
+                VALUES (%s, %s, 'lesson_master_analysis_pdf', %s,
+                        CASE WHEN %s THEN 'staging' ELSE 'active' END)
                 ON CONFLICT DO NOTHING
                 """,
-                (artifact_id, school_id, report_name),
+                (artifact_id, school_id, report_name, candidate_requires_meta),
             )
             cur.execute(
                 """
@@ -728,6 +781,57 @@ def persist_video_result(
                 ),
             )
 
+            cur.execute(
+                "SELECT payload_hash FROM public.domain_event WHERE event_id=%s",
+                (technical_event_id,),
+            )
+            existing_event = cur.fetchone()
+            if existing_event and existing_event[0] != technical_event_hash:
+                raise RuntimeError(
+                    "technical persistence idempotency key reused with different payload"
+                )
+            cur.execute(
+                """
+                INSERT INTO public.domain_event(
+                    event_id, school_id, partition_key, event_type,
+                    aggregate_id, aggregate_type, aggregate_version,
+                    changeset_id, correlation_id, idempotency_namespace,
+                    idempotency_key, payload_hash, payload)
+                VALUES (
+                    %s, %s, 'bridge-video-technical', 'BridgeVideoResultRecorded',
+                    %s, 'analysis_run', 1, %s, %s,
+                    'bridge-video-result-persistence', %s, %s, %s)
+                ON CONFLICT (event_id) DO NOTHING
+                """,
+                (
+                    technical_event_id,
+                    school_id,
+                    analysis_run_id,
+                    changeset_id,
+                    changeset_id,
+                    str(analysis_run_id),
+                    technical_event_hash,
+                    Jsonb(technical_event_payload),
+                ),
+            )
+            cur.execute(
+                """
+                INSERT INTO public.outbox_message(changeset_id,event_id)
+                VALUES (%s,%s)
+                ON CONFLICT (event_id) DO NOTHING
+                """,
+                (changeset_id, technical_event_id),
+            )
+            cur.execute(
+                """
+                UPDATE public.changeset
+                   SET status='committed', committed_at=COALESCE(committed_at,now())
+                 WHERE changeset_id=%s
+                   AND status IN ('started','committed')
+                """,
+                (changeset_id,),
+            )
+
         if rollback:
             conn.rollback()
         else:
@@ -741,6 +845,11 @@ def persist_video_result(
         "source_asset_id": str(source_asset_id),
         "transcript_id": str(transcript_id),
         "analysis_run_id": str(analysis_run_id),
+        "algorithm_version_id": str(algorithm_version_id),
+        "changeset_id": str(changeset_id),
+        "technical_record_status": "recorded",
+        "quality_confirmation_status": "pending",
+        "publication_authorization_status": "blocked",
         "artifact_version_id": str(artifact_version_id),
         "learning_interaction_id": str(interaction_id),
         "episodes": semantic_episode_count,
