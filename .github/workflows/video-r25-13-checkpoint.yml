@@ -1,0 +1,45 @@
+name: Bridge Video r25.13 checkpoint contract
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'bridge_runtime_hardening_r25_13_checkpoint.py'
+      - 'diagnose_asr_block_r25_13.py'
+      - 'tests/test_asr_checkpoint_r25_13.py'
+      - '.github/workflows/video-r25-13-checkpoint.yml'
+      - '.github/workflows/video-r25-13-block11-diagnostic.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  checkpoint-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install regression runtime
+        run: python -m pip install --disable-pip-version-check -r requirements-worker.txt
+      - name: Verify fail-closed checkpoint and inherited gates
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python tests/test_asr_checkpoint_r25_13.py
+          PYTHONPATH=. python tests/test_meta_asr_gate_r25_12.py
+          PYTHONPATH=. python tests/test_asr_policy_r25_6.py
+          PYTHONPATH=. python tests/test_unreliable_asr_isolation_r25_4.py
+          python -m py_compile bridge_runtime_hardening_r25_13_checkpoint.py diagnose_asr_block_r25_13.py
+      - name: Verify production baseline is unchanged
+        run: |
+          set -euo pipefail
+          grep -F 'BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.7"' .github/workflows/bridge-video-3.1-free.yml
+          grep -F 'bridge_runtime_hardening_r25_7' run_drive_3_1_free_generic.py
+

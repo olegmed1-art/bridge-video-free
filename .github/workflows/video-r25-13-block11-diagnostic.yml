@@ -1,0 +1,71 @@
+name: Bridge Video r25.13 block 11 targeted diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'run_requests/2026-08-18-logic-bridge-r25-13-block11.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-video-heavy
+  cancel-in-progress: false
+
+jobs:
+  targeted-diagnostic:
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      PYTHONUNBUFFERED: "1"
+      WHISPER_MODEL: medium
+      BRIDGE_JOB_ID: "86e814014cabee88785a53340ab85666"
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.13-checkpoint"
+      BRIDGE_SOURCE_DRIVE_ID: "1rGX92YskXRtXHc53lyj9JMU3g24H5vCI"
+      BRIDGE_OUTPUT_FOLDER_ID: "1EaSsILmc_xJXXzSQup7Hy3-oTsMGKxKF"
+      BRIDGE_EXPECTED_SOURCE_SHA256: "fa053465e27662225c223218d88e6c4c9623319e8a830eed8e5b9ac54e610ab0"
+      BRIDGE_DIAGNOSTIC_BLOCK: "11"
+      BRIDGE_DIAGNOSTIC_START: "3300"
+      BRIDGE_DIAGNOSTIC_DURATION: "300"
+      BRIDGE_DIAGNOSTIC_MODELS: "medium,small"
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Verify immutable request
+        run: |
+          set -euo pipefail
+          grep -Fx 'JOB_ID=86e814014cabee88785a53340ab85666' run_requests/2026-08-18-logic-bridge-r25-13-block11.txt
+          grep -Fx 'REVISION=3.1-free-r25.13-checkpoint' run_requests/2026-08-18-logic-bridge-r25-13-block11.txt
+          grep -Fx 'SOURCE_DRIVE_ID=1rGX92YskXRtXHc53lyj9JMU3g24H5vCI' run_requests/2026-08-18-logic-bridge-r25-13-block11.txt
+          grep -Fx 'BLOCK=11' run_requests/2026-08-18-logic-bridge-r25-13-block11.txt
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install free diagnostic runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          python -m pip install --disable-pip-version-check -r requirements-worker.txt
+          python -m pip install --disable-pip-version-check 'requests==2.34.2' 'google-auth==2.56.3'
+      - name: Access preflight
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          test -n "${GOOGLE_DRIVE_OAUTH_JSON:-}"
+          python - <<'PY'
+          from run_drive_3_1_free_oidc import drive_token
+          if not drive_token():
+              raise SystemExit("BLOCKED_ACCESS: Drive OAuth unavailable")
+          print("DRIVE_PREFLIGHT: PASS")
+          PY
+      - name: Run only block 11 diagnostic and save evidence
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: python diagnose_asr_block_r25_13.py
+
