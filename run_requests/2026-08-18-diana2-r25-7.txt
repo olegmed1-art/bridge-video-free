@@ -12,3 +12,4 @@ LESSON_DATE_SOURCE=original Drive modifiedTime 2021-02-28 plus Zoom invitation a
 LESSON_DATE_EVIDENCE_JSON=[{"source_type":"zoom_invitation","value":"2021-02-28","strength":"HIGH","independence_group":"zoom_meeting_2021-02-28","locator":{"gmail_message_id":"177e957f1343a132","subject":"Ссылка на Зум","topic_candidate":"Техника","scheduled_time":"18:00 Иерусалим"}},{"source_type":"zoom_cloud_recording","value":"2021-02-28","strength":"HIGH","independence_group":"zoom_meeting_2021-02-28","locator":{"gmail_message_id":"177e9a6bc68fad2e","subject":"Теперь доступны облачные записи","recording_time":"17:57 Иерусалим"}},{"source_type":"original_drive_metadata","value":"2021-02-28","strength":"MEDIUM","independence_group":"original_drive_metadata","locator":{"file_id":"18l8AvNDUeX4VF_E0SXjl6st6EizWglZ-","modifiedTime":"2021-02-28T08:33:47.000Z"}}]
 PERSIST_DATABASE=true
 COST_POLICY=zero-paid-ai
+MONITOR_V1_RETRIGGER=2026-08-18T17:27:00+03:00
