@@ -43,7 +43,7 @@ jobs:
           python -m unittest \
             tests.test_diana_longitudinal_postprocess \
             tests.test_diana_longitudinal_quality_v2 -v
-      - name: Commit verified implementation
+      - name: Commit verified implementation code
         shell: bash
         run: |
           set -euo pipefail
@@ -57,13 +57,11 @@ jobs:
             database/migrations/0014_analysis_candidate_staging.sql \
             database/video_candidate_persistence.py \
             tests/test_diana_longitudinal_postprocess.py \
-            tests/test_diana_longitudinal_quality_v2.py \
-            .github/workflows/bridge-video-3.1-free.yml \
-            .github/workflows/diana-semantic-refinement.yml \
-            .github/workflows/diana-longitudinal-regression.yml
+            tests/test_diana_longitudinal_quality_v2.py
           if git diff --cached --quiet; then
-            echo 'QUALITY_V2_ALREADY_MATERIALIZED'
+            echo 'QUALITY_V2_CODE_ALREADY_MATERIALIZED'
             exit 0
           fi
           git commit -m 'Implement Diana video analysis quality-first v2'
           git push origin HEAD:candidate/diana-video-analysis-v2
+          echo 'WORKFLOW_FILES_REQUIRE_CONNECTOR_COMMIT_BY_DESIGN'
