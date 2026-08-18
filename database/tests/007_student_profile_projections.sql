@@ -55,8 +55,8 @@ BEGIN
     INSERT INTO person(preferred_name) VALUES ('CI profile other student') RETURNING person_id INTO v_other_person;
     INSERT INTO student(school_id, person_id) VALUES (v_other_school, v_other_person) RETURNING student_id INTO v_other_student;
 
-    INSERT INTO skill(school_id, name, description)
-    VALUES (v_school, 'CI profile skill', 'Projection test skill')
+    INSERT INTO skill(school_id, stable_key, name, description)
+    VALUES (v_school, 'ci-profile-skill', 'CI profile skill', 'Projection test skill')
     RETURNING skill_id INTO v_skill;
     INSERT INTO topic(school_id, name, domain)
     VALUES (v_school, 'CI profile topic', 'general')
