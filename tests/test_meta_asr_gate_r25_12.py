@@ -81,6 +81,7 @@ def test_candidate_persistence_is_fail_closed_and_evented():
     assert "CASE WHEN %s THEN 'running' ELSE 'success' END" in source
     assert "algorithm_version_id" in source
     assert "BridgeVideoResultRecorded" in source
+    assert '"meta_evidence_gate": master.get("meta_evidence_gate") or {}' in source
     assert "INSERT INTO public.changeset" in source
     assert '"publication_authorization_status": "blocked"' in source
 
