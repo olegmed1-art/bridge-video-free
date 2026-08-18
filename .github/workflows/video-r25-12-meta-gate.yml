@@ -1,0 +1,53 @@
+name: Bridge Video r25.12 META Evidence Gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'bridge_runtime_hardening_r25_12_meta.py'
+      - 'database/**'
+      - 'tests/fixtures/asr_block_11_r25_11.json'
+      - 'tests/test_meta_asr_gate_r25_12.py'
+      - '.github/workflows/video-r25-12-meta-gate.yml'
+  push:
+    branches:
+      - agent/video-meta-evidence-r25-12
+
+permissions:
+  contents: read
+
+jobs:
+  candidate-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install regression runtime
+        run: python -m pip install --disable-pip-version-check -r requirements-worker.txt
+      - name: Verify candidate and inherited evidence contracts
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python tests/test_meta_asr_gate_r25_12.py
+          PYTHONPATH=. python tests/test_asr_policy_r25_6.py
+          PYTHONPATH=. python tests/test_unreliable_asr_isolation_r25_4.py
+          PYTHONPATH=. python tests/test_pdf_presentation_r25_6.py
+          PYTHONPATH=. python tests/test_content_persistence_r25_10.py
+          python -m py_compile \
+            bridge_runtime_hardening_r25_12_meta.py \
+            database/video_result_persistence.py
+      - name: Verify production remains pinned to r25.6
+        run: |
+          set -euo pipefail
+          grep -F 'BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.6"' \
+            .github/workflows/bridge-video-3.1-free.yml
+          grep -F 'bridge_runtime_hardening_r25_6' run_drive_3_1_free_generic.py
