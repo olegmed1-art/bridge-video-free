@@ -1,38 +1,53 @@
 #!/usr/bin/env python3
-"""Permanent production guard for the evidence-preserving 3.1 FREE r25.7 route.
+"""Permanent production guard for the evidence-preserving 3.1 FREE r25.14 route.
 
-r25.7 is accepted only when it demonstrably inherits the proven r25.6 media,
-ASR, semantic-QC and source-integrity path, while adding quality-first
-readiness and diarization without filtering master canon evidence.
+r25.14 is accepted only when it demonstrably remains a thin descendant of the
+proven r25.7 -> r25.6 media/ASR/evidence route and changes only the local
+speaker-diarization layer. The guard must not be weakened to bypass an older
+revision assertion.
 """
 from pathlib import Path
 import os
 
-import bridge_runtime_hardening_r25_7 as runtime
+import bridge_runtime_hardening_r25_14 as runtime
 import run_master_3_1_free as base
 
 
-def test_production_route_is_confirmed_r25_7_with_r25_6_inheritance():
+def test_production_route_is_confirmed_r25_14_with_r25_7_and_r25_6_inheritance():
     adapter = Path("run_drive_3_1_free_generic.py").read_text(encoding="utf-8")
     workflow = Path(".github/workflows/bridge-video-3.1-free.yml").read_text(encoding="utf-8")
-    runtime_source = Path("bridge_runtime_hardening_r25_7.py").read_text(encoding="utf-8")
+    runtime_source = Path("bridge_runtime_hardening_r25_14.py").read_text(encoding="utf-8")
+    r25_7_source = Path("bridge_runtime_hardening_r25_7.py").read_text(encoding="utf-8")
     semantic_v2 = Path("run_master_3_1_free_semantic_v2.py").read_text(encoding="utf-8")
+    diarization_v2 = Path("bridge_speaker_diarization_v2.py").read_text(encoding="utf-8")
 
-    assert "bridge_runtime_hardening_r25_7" in adapter
-    assert "bridge_runtime_hardening_r25_9" not in adapter
-    assert 'BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.7"' in workflow
+    assert "bridge_runtime_hardening_r25_14" in adapter
+    assert 'BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.14"' in workflow
     assert 'BRIDGE_DIARIZATION_ENABLED: "true"' in workflow
     assert "WHISPER_MODEL: small" in workflow
     assert "BRIDGE_REQUESTED_WHISPER_MODEL: medium" not in workflow
     assert 'BRIDGE_PAID_CLOUD: "false"' in workflow
     assert 'BRIDGE_BILLING_FALLBACK: "false"' in workflow
 
-    # r25.7 must remain a thin, explicit extension of the proven r25.6 path.
-    assert "import bridge_runtime_hardening_r25_6 as previous" in runtime_source
+    # r25.14 must inherit r25.7 rather than replace the proven media/ASR path.
+    assert "import bridge_runtime_hardening_r25_7 as previous" in runtime_source
     assert "previous.install(token_func)" in runtime_source
+    assert "bridge_speaker_diarization_v2" in runtime_source
+    # r25.7 itself remains a thin extension of r25.6.
+    assert "import bridge_runtime_hardening_r25_6 as previous" in r25_7_source
+    assert "previous.install(token_func)" in r25_7_source
     assert "import run_master_3_1_free_semantic as previous" in semantic_v2
     assert "METHODOLOGY_PARTIAL" in semantic_v2
     assert "technical_ready_does_not_imply_methodology_ready" in semantic_v2
+
+    # New diarization is local, anonymous and fail-soft; authority guards remain elsewhere.
+    assert "sherpa-onnx" in diarization_v2
+    assert "fallback.diarize_transcript" in diarization_v2
+    assert '"real_person_identity_claimed": False' in diarization_v2
+    assert '"voice_embedding_persisted": False' in diarization_v2
+    assert '"cross_lesson_voice_profile_persisted": False' in diarization_v2
+    assert '"paid_api": 0' in diarization_v2
+    assert '"paid_cloud": 0' in diarization_v2
 
 
 def test_runtime_does_not_filter_master_canon_evidence():
@@ -72,8 +87,8 @@ def test_periodic_auto_discovery_remains_disabled():
 
 
 if __name__ == "__main__":
-    test_production_route_is_confirmed_r25_7_with_r25_6_inheritance()
+    test_production_route_is_confirmed_r25_14_with_r25_7_and_r25_6_inheritance()
     test_runtime_does_not_filter_master_canon_evidence()
     test_terminal_preflight_matches_revision_receipt_contract()
     test_periodic_auto_discovery_remains_disabled()
-    print("PRODUCTION_R25_7_EVIDENCE_CONTRACT: PASS")
+    print("PRODUCTION_R25_14_EVIDENCE_CONTRACT: PASS")
