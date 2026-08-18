@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry2.txt'
+      - 'candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry3.txt'
 
 permissions:
   contents: read
@@ -38,10 +38,10 @@ jobs:
       - name: Verify immutable request
         run: |
           set -euo pipefail
-          grep -Fx 'JOB_ID=86e814014cabee88785a53340ab85666' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry2.txt
-          grep -Fx 'REVISION=3.1-free-r25.13-checkpoint' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry2.txt
-          grep -Fx 'SOURCE_DRIVE_ID=1rGX92YskXRtXHc53lyj9JMU3g24H5vCI' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry2.txt
-          grep -Fx 'ASR_DIAGNOSTIC_RECEIPT_ID=1aw5OSpDP48DsNX--WuOdDl8uhf893Taa' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry2.txt
+          grep -Fx 'JOB_ID=86e814014cabee88785a53340ab85666' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry3.txt
+          grep -Fx 'REVISION=3.1-free-r25.13-checkpoint' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry3.txt
+          grep -Fx 'SOURCE_DRIVE_ID=1rGX92YskXRtXHc53lyj9JMU3g24H5vCI' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry3.txt
+          grep -Fx 'ASR_DIAGNOSTIC_RECEIPT_ID=1aw5OSpDP48DsNX--WuOdDl8uhf893Taa' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry3.txt
       - name: Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
