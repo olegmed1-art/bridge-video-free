@@ -1,0 +1,114 @@
+name: Bridge School lifecycle artifact cleanup
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_id:
+        description: Optional GitHub Actions artifact ID; blank scans recent artifacts
+        required: false
+        type: string
+        default: ''
+      execute_delete:
+        description: Execute deletion after the Deletion Gate passes
+        required: true
+        type: boolean
+        default: false
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/github_actions_artifact_cleanup.py'
+      - 'tests/test_github_actions_artifact_cleanup.py'
+      - 'tests/test_artifact_cleanup_workflow_contract.py'
+      - '.github/workflows/artifact-cleanup.yml'
+      - 'docs/architecture/data_lifecycle_policy_v1_0.md'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/github_actions_artifact_cleanup.py'
+      - 'tests/test_github_actions_artifact_cleanup.py'
+      - 'tests/test_artifact_cleanup_workflow_contract.py'
+      - '.github/workflows/artifact-cleanup.yml'
+      - 'docs/architecture/data_lifecycle_policy_v1_0.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-school-lifecycle-artifact-cleanup-${{ github.event_name }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+
+      - name: Run fail-closed cleanup unit and workflow contract tests
+        run: |
+          python tests/test_github_actions_artifact_cleanup.py
+          python tests/test_artifact_cleanup_workflow_contract.py
+
+  cleanup:
+    if: github.event_name != 'pull_request'
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+
+      - name: Install pinned PostgreSQL client after contract tests
+        run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+
+      - name: Verify least-privilege worker database boundary
+        env:
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+        run: python database/runtime_worker_preflight.py
+
+      - name: Evaluate lifecycle Deletion Gate
+        shell: bash
+        env:
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+          GITHUB_TOKEN: ${{ github.token }}
+          CLEANUP_ARTIFACT_ID: ${{ inputs.artifact_id }}
+          CLEANUP_EXECUTE: ${{ inputs.execute_delete }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_NAME" = main
+
+          args=(--max-artifacts 200 --verification-max-age-hours 12 --completion-grace-minutes 30)
+          if [ -n "${CLEANUP_ARTIFACT_ID:-}" ]; then
+            [[ "$CLEANUP_ARTIFACT_ID" =~ ^[0-9]+$ ]]
+            args+=(--artifact-id "$CLEANUP_ARTIFACT_ID")
+          fi
+
+          # Push is deliberately dry-run during deployment validation.
+          # workflow_dispatch may delete only after explicit owner confirmation.
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "${CLEANUP_EXECUTE:-false}" = true ]; then
+            test "$GITHUB_ACTOR" = olegmed1-art
+            test "$GITHUB_TRIGGERING_ACTOR" = olegmed1-art
+            args+=(--execute)
+          fi
+
+          python tools/github_actions_artifact_cleanup.py "${args[@]}"
