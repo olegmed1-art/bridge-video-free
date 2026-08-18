@@ -65,7 +65,8 @@ BEGIN
           FROM identity_import_current_action
          WHERE identity_import_item_id=NEW.identity_import_item_id;
 
-        IF v_action_type NOT IN ('link_existing_person','create_new_person') THEN
+        IF v_action_type IS NULL
+           OR v_action_type NOT IN ('link_existing_person','create_new_person') THEN
             RAISE EXCEPTION 'identity import item cannot become ready without a resolvable current action';
         END IF;
 
@@ -96,6 +97,7 @@ BEGIN
          WHERE i.identity_import_batch_id=NEW.identity_import_batch_id
            AND (
              s.state IS DISTINCT FROM 'ready'
+             OR a.action_type IS NULL
              OR a.action_type NOT IN ('link_existing_person','create_new_person')
              OR (a.action_type='link_existing_person'
                  AND (erd.decision_type IS DISTINCT FROM 'link' OR erd.status IS DISTINCT FROM 'active'))
