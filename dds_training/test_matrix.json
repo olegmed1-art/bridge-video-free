@@ -1,6 +1,6 @@
 {
   "schema": "dds-test-manifest-v1",
-  "description": "Canonical test inventory for DDS learning v2.3 stable plus v2.4 Stage-2B candidate. Every self-test and every production Python module must be listed explicitly.",
+  "description": "Canonical test inventory for DDS learning v2.3 stable plus Stage-2B v2.4/v2.5 candidates. Every self-test and every production Python module must be listed explicitly.",
   "default_timeout_seconds": 60,
   "default_hash_seeds": [
     0
@@ -273,6 +273,20 @@
       "description": "End-to-end Stage 2B OOF candidate preparation on synthetic immutable TRAIN facts without DDS or holdout access."
     },
     {
+      "id": "stage2b-v25-core",
+      "path": "stage2b_v25_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 45,
+      "description": "Support-aware confidence, predictor-stratified paired OOF comparison, family selection and exact 50/50 curriculum."
+    },
+    {
+      "id": "stage2b-prepare-v25",
+      "path": "stage2b_prepare_v25_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 150,
+      "description": "End-to-end refined Stage 2B preparation with balanced continuations, multicontract blueprint and enriched queue."
+    },
+    {
       "id": "preflight",
       "path": "preflight_selftest.py",
       "suite": "dds",
@@ -464,6 +478,13 @@
       ],
       "stage2b_prepare.py": [
         "stage2b-prepare"
+      ],
+      "stage2b_v25.py": [
+        "stage2b-v25-core",
+        "stage2b-prepare-v25"
+      ],
+      "stage2b_prepare_v25.py": [
+        "stage2b-prepare-v25"
       ],
       "storage.py": [
         "experience-memory",
