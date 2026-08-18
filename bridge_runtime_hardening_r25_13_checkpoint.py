@@ -318,4 +318,11 @@ def install(token_func):
 def run(token_func):
     install(token_func)
     import run_master_3_1_free_semantic_v2 as semantic
+
+    # semantic_v2 is the production r25.7 adapter and sets module constants at
+    # import time.  The candidate must stamp its own revision after that import
+    # so the embedded master, Drive receipts, and Neon analysis_run all agree.
+    core.ALGORITHM_REVISION = REVISION
+    base.ALGORITHM_REVISION = REVISION
+    semantic.REVISION = REVISION
     return semantic.process_job(token_func())
