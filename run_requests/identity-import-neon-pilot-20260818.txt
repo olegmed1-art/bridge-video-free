@@ -1,0 +1,5 @@
+PILOT=identity-import-neon-e2e
+NEON_BRANCH_ID=br-tiny-hat-b1wqfdlt
+TARGET_HOST=ep-delicate-silence-b1kubo3r.c-5.eu-central-1.aws.neon.tech
+PRODUCTION_CHANGE=false
+REAL_USER_IMPORT=false
