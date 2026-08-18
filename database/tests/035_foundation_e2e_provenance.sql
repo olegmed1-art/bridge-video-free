@@ -64,6 +64,7 @@ BEGIN
 
     INSERT INTO deal(
         school_id,
+        stable_key,
         canonical_pbn,
         dealer,
         vulnerability,
@@ -72,6 +73,7 @@ BEGIN
         source_id
     ) VALUES (
         v_school,
+        'ci-foundation-e2e-deal',
         'N:AKQJ.T987.654.32 T987.654.32.AKQJ 654.32.AKQJ.T987 32.AKQJ.T987.654',
         'N',
         'None',
