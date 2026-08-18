@@ -65,7 +65,7 @@ PostgreSQL 18 migration package for the School of Sports Bridge.
 - Readers can inspect `current_student_profile_status`, which exposes the selected current generation together with its latest validated/stale state.
 - Readers can inspect `database_runtime_fingerprint`, `operational_health_signal`, `operational_health_issue` and `operational_health_summary`; no runtime capability can edit `operational_health_policy`.
 - Migration history and selected administration/configuration state remain owner-only for writes.
-- These are NOLOGIN roles. Future application login roles will receive only the capability role they need; no database password is stored in this repository.
+- Runtime principals are created as NOLOGIN roles. After an external credential is explicitly provisioned, the same narrowly scoped principal may be changed to LOGIN without receiving administrative attributes. No database password is stored in this repository.
 
 ## Migration order in the repository
 
