@@ -9,8 +9,10 @@ on:
       - 'run_drive_3_1_free_generic.py'
       - 'requirements-worker.txt'
       - 'speaker_diarization_v2_smoke.py'
+      - 'speaker_diarization_v2_probe.py'
       - 'tests/test_speaker_diarization_v2.py'
       - '.github/workflows/speaker-diarization-v2-smoke.yml'
+      - '.github/workflows/diana-speaker-v2-probe.yml'
   workflow_dispatch:
 
 permissions:
@@ -34,7 +36,9 @@ jobs:
           python -m pip install --disable-pip-version-check \
             'numpy==2.2.6' 'pytest==8.4.2' \
             'sherpa-onnx==1.13.4' 'sherpa-onnx-bin==1.13.4'
-      - name: Unit contracts
-        run: python -m pytest -q tests/test_speaker_diarization_v2.py
+      - name: Unit contracts and probe syntax
+        run: |
+          python -m pytest -q tests/test_speaker_diarization_v2.py
+          python -m py_compile speaker_diarization_v2_probe.py
       - name: Live public-model smoke
         run: python speaker_diarization_v2_smoke.py
