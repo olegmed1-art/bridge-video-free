@@ -62,7 +62,7 @@ GRANT INSERT, UPDATE ON public.analysis_candidate TO bridge_school_worker;
 REVOKE DELETE ON public.analysis_candidate FROM bridge_school_reader, bridge_school_app, bridge_school_worker;
 
 INSERT INTO public.schema_migration(migration_key)
-VALUES ('0014_analysis_candidate_staging')
+VALUES ('0049_analysis_candidate_staging')
 ON CONFLICT DO NOTHING;
 
 COMMIT;

@@ -37,7 +37,7 @@ def persist_quality_candidates(raw_dsn: str, payload: Mapping[str, Any]) -> dict
     """Insert immutable candidate rows transactionally and idempotently.
 
     This function intentionally cannot write knowledge/canon/curriculum/student
-    profile tables.  It returns ``SCHEMA_NOT_READY`` when migration 0014 has not
+    profile tables. It returns ``SCHEMA_NOT_READY`` when migration 0049 has not
     yet been applied so an already completed media-analysis job is not lost.
     """
     dsn = normalize_dsn(raw_dsn)
@@ -63,7 +63,7 @@ def persist_quality_candidates(raw_dsn: str, payload: Mapping[str, Any]) -> dict
     ) as connection:
         with connection.cursor() as cursor:
             if not _table_exists(cursor):
-                return {"status": "SCHEMA_NOT_READY", "required_migration": "0014_analysis_candidate_staging"}
+                return {"status": "SCHEMA_NOT_READY", "required_migration": "0049_analysis_candidate_staging"}
             cursor.execute(
                 "SELECT school_id FROM public.school WHERE stable_name = %s",
                 (SCHOOL_STABLE_NAME,),

@@ -10,7 +10,7 @@ on:
       - 'run_master_3_1_free_semantic_v2.py'
       - 'bridge_runtime_hardening_r25_7.py'
       - 'database/video_candidate_persistence.py'
-      - 'database/migrations/0014_analysis_candidate_staging.sql'
+      - 'database/migrations/0049_analysis_candidate_staging.sql'
       - 'tests/test_diana_longitudinal*.py'
       - '.github/workflows/diana-longitudinal-regression.yml'
   push:
@@ -24,7 +24,7 @@ on:
       - 'run_master_3_1_free_semantic_v2.py'
       - 'bridge_runtime_hardening_r25_7.py'
       - 'database/video_candidate_persistence.py'
-      - 'database/migrations/0014_analysis_candidate_staging.sql'
+      - 'database/migrations/0049_analysis_candidate_staging.sql'
       - 'tests/test_diana_longitudinal*.py'
       - '.github/workflows/diana-longitudinal-regression.yml'
 
