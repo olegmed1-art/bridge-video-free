@@ -336,6 +336,7 @@ def persist_video_result(
     }
     analysis_qc = {
         "content_quality": master.get("content_quality") or {},
+        "meta_evidence_gate": master.get("meta_evidence_gate") or {},
         "transcript": ((master.get("technical_qc") or {}).get("transcript") or {}),
         "visual": ((master.get("technical_qc") or {}).get("visual") or {}),
     }
