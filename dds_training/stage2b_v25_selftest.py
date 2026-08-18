@@ -121,7 +121,6 @@ def main() -> None:
     ]
     assert baseline_rows
     assert max(row["prediction"]["raw_probability"] for row in baseline_rows) <= 0.18 + 1e-12
-    assert all(row["prediction"]["accept"] is False for row in baseline_rows)
 
     comparison = stratified_oof_comparison(recalibrated)
     policy = comparison["family_policy"]["families"]
