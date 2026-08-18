@@ -1,20 +1,38 @@
 #!/usr/bin/env python3
-"""Permanent production guard for the evidence-preserving 3.1 FREE r25.6 route."""
+"""Permanent production guard for the evidence-preserving 3.1 FREE r25.7 route.
+
+r25.7 is accepted only when it demonstrably inherits the proven r25.6 media,
+ASR, semantic-QC and source-integrity path, while adding quality-first
+readiness and diarization without filtering master canon evidence.
+"""
 from pathlib import Path
 import os
 
-import bridge_runtime_hardening_r25_6 as runtime
+import bridge_runtime_hardening_r25_7 as runtime
 import run_master_3_1_free as base
 
 
-def test_production_route_is_confirmed_r25_6():
+def test_production_route_is_confirmed_r25_7_with_r25_6_inheritance():
     adapter = Path("run_drive_3_1_free_generic.py").read_text(encoding="utf-8")
     workflow = Path(".github/workflows/bridge-video-3.1-free.yml").read_text(encoding="utf-8")
-    assert "bridge_runtime_hardening_r25_6" in adapter
+    runtime_source = Path("bridge_runtime_hardening_r25_7.py").read_text(encoding="utf-8")
+    semantic_v2 = Path("run_master_3_1_free_semantic_v2.py").read_text(encoding="utf-8")
+
+    assert "bridge_runtime_hardening_r25_7" in adapter
     assert "bridge_runtime_hardening_r25_9" not in adapter
-    assert 'BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.6"' in workflow
+    assert 'BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.7"' in workflow
+    assert 'BRIDGE_DIARIZATION_ENABLED: "true"' in workflow
     assert "WHISPER_MODEL: small" in workflow
     assert "BRIDGE_REQUESTED_WHISPER_MODEL: medium" not in workflow
+    assert 'BRIDGE_PAID_CLOUD: "false"' in workflow
+    assert 'BRIDGE_BILLING_FALLBACK: "false"' in workflow
+
+    # r25.7 must remain a thin, explicit extension of the proven r25.6 path.
+    assert "import bridge_runtime_hardening_r25_6 as previous" in runtime_source
+    assert "previous.install(token_func)" in runtime_source
+    assert "import run_master_3_1_free_semantic as previous" in semantic_v2
+    assert "METHODOLOGY_PARTIAL" in semantic_v2
+    assert "technical_ready_does_not_imply_methodology_ready" in semantic_v2
 
 
 def test_runtime_does_not_filter_master_canon_evidence():
@@ -30,11 +48,11 @@ def test_runtime_does_not_filter_master_canon_evidence():
             os.environ["BRIDGE_REQUESTED_ALGORITHM_REVISION"] = previous
     assert base.course_link_candidates is raw_candidate_builder, (
         "production runtime replaced the master canon-link producer; "
-        "deduplication must remain PDF-only"
+        "retrieval classification must not erase the original evidence set"
     )
 
 
-def test_terminal_preflight_matches_r25_6_receipt_contract():
+def test_terminal_preflight_matches_revision_receipt_contract():
     source = Path("check_completed_job.py").read_text(encoding="utf-8")
     assert "receipt_matches_revision" in source
     assert "knowledge_status_matches_revision" not in source
@@ -54,8 +72,8 @@ def test_periodic_auto_discovery_remains_disabled():
 
 
 if __name__ == "__main__":
-    test_production_route_is_confirmed_r25_6()
+    test_production_route_is_confirmed_r25_7_with_r25_6_inheritance()
     test_runtime_does_not_filter_master_canon_evidence()
-    test_terminal_preflight_matches_r25_6_receipt_contract()
+    test_terminal_preflight_matches_revision_receipt_contract()
     test_periodic_auto_discovery_remains_disabled()
-    print("PRODUCTION_R25_6_EVIDENCE_CONTRACT: PASS")
+    print("PRODUCTION_R25_7_EVIDENCE_CONTRACT: PASS")
