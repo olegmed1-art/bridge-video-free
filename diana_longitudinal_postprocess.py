@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Create longitudinal School-learning candidate artifacts from one completed video job.
+"""Create quality-first longitudinal artifacts from one completed lesson video.
 
-This is a conservative postprocessor over the already evidence-linked
-``master_analysis.json``.  It never changes the source video, never activates
-School canon/curriculum, and never writes a production Student profile.
+The postprocessor reuses the embedded master analysis.  It does not download or
+transcribe the original video, does not alter MASTER media and does not activate
+School canon, curriculum, methodology or a production student profile.
 """
 from __future__ import annotations
 
@@ -15,17 +15,28 @@ import os
 from pathlib import Path
 import re
 import tempfile
-from typing import Any
+from typing import Any, Mapping
 
 import fitz
 import requests
 
 import run_drive_3_1_free as io
+from diana_longitudinal_quality_v2 import (
+    QUALITY_METHOD_VERSION,
+    QUALITY_SCHEMA_VERSION,
+    build_quality_layer,
+)
 from run_drive_3_1_free_oidc import user_oauth_token
 
 DRIVE = "https://www.googleapis.com/drive/v3"
 SCHEMA = "diana-longitudinal-extraction"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+MONTHS = {
+    "января": 1, "февраля": 2, "марта": 3, "апреля": 4,
+    "мая": 5, "июня": 6, "июля": 7, "августа": 8,
+    "сентября": 9, "октября": 10, "ноября": 11, "декабря": 12,
+}
 
 
 def _sha_bytes(raw: bytes) -> str:
@@ -41,7 +52,7 @@ def _norm(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
-def _read_json_file(token: str, item: dict) -> dict | None:
+def _read_json_file(token: str, item: Mapping[str, Any]) -> dict[str, Any] | None:
     with tempfile.TemporaryDirectory(prefix="diana-longitudinal-json-") as td:
         path = Path(td) / "payload.json"
         io.download(token, item["id"], path)
@@ -51,7 +62,7 @@ def _read_json_file(token: str, item: dict) -> dict | None:
             return None
 
 
-def _latest_done(token: str, job_id: str) -> tuple[dict, dict]:
+def _latest_done(token: str, job_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
     name = f"AI_DONE_{job_id}.json"
     candidates = io.search(token, f"trashed=false and name='{name}'")
     candidates.sort(key=lambda item: item.get("modifiedTime") or "", reverse=True)
@@ -62,7 +73,7 @@ def _latest_done(token: str, job_id: str) -> tuple[dict, dict]:
     raise RuntimeError("LONGITUDINAL_AI_DONE_NOT_FOUND")
 
 
-def _load_master(token: str, done: dict) -> tuple[dict, dict]:
+def _load_master(token: str, done: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     meta = done.get("masterPdf") or {}
     pdf_id = str(meta.get("driveId") or "")
     expected_pdf_sha = str(meta.get("sha256") or "").lower()
@@ -92,12 +103,13 @@ def _load_master(token: str, done: dict) -> tuple[dict, dict]:
     return master, {
         "drive_id": pdf_id,
         "name": meta.get("name"),
+        "size_bytes": int(meta.get("sizeBytes") or 0),
         "pdf_sha256": actual_pdf_sha,
         "master_json_sha256": actual_master_sha,
     }
 
 
-def _drive_metadata(token: str, file_id: str) -> dict:
+def _drive_metadata(token: str, file_id: str) -> dict[str, Any]:
     response = requests.get(
         f"{DRIVE}/files/{file_id}",
         headers=io.hdr(token),
@@ -111,56 +123,181 @@ def _drive_metadata(token: str, file_id: str) -> dict:
     return response.json()
 
 
-def _date_from_name(name: str) -> tuple[str | None, str | None]:
-    patterns = (
-        (r"(?<!\d)(\d{1,2})[.\-/](\d{1,2})[.\-/](20\d{2}|\d{2})(?!\d)", "dmy"),
-        (r"(?<!\d)(20\d{2})[.\-/](\d{1,2})[.\-/](\d{1,2})(?!\d)", "ymd"),
-    )
-    for pattern, order in patterns:
-        match = re.search(pattern, name or "")
-        if not match:
-            continue
-        try:
-            if order == "dmy":
-                day, month, year = match.groups()
-            else:
-                year, month, day = match.groups()
-            if len(year) == 2:
-                year = "20" + year
-            value = datetime(int(year), int(month), int(day), tzinfo=timezone.utc).date().isoformat()
-            return value, match.group(0)
-        except ValueError:
-            continue
-    return None, None
+def _iso_date(year: str, month: str | int, day: str) -> str | None:
+    try:
+        if len(str(year)) == 2:
+            year = "20" + str(year)
+        return datetime(int(year), int(month), int(day), tzinfo=timezone.utc).date().isoformat()
+    except (TypeError, ValueError):
+        return None
 
 
-def _lesson_identity(master: dict, source_meta: dict, original_meta: dict | None) -> dict:
+def _date_from_text(text: str) -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    for match in re.finditer(r"(?<!\d)(\d{1,2})[.\-/](\d{1,2})[.\-/](20\d{2}|\d{2})(?!\d)", text or ""):
+        value = _iso_date(match.group(3), match.group(2), match.group(1))
+        if value:
+            found.append((value, match.group(0)))
+    for match in re.finditer(r"(?<!\d)(20\d{2})[.\-/](\d{1,2})[.\-/](\d{1,2})(?!\d)", text or ""):
+        value = _iso_date(match.group(1), match.group(2), match.group(3))
+        if value:
+            found.append((value, match.group(0)))
+    month_names = "|".join(MONTHS)
+    for match in re.finditer(rf"(?<!\d)(\d{{1,2}})\s+({month_names})\s+(20\d{{2}})(?!\d)", (text or "").casefold()):
+        value = _iso_date(match.group(3), MONTHS[match.group(2)], match.group(1))
+        if value:
+            found.append((value, match.group(0)))
+    return list(dict.fromkeys(found))
+
+
+def _date_part(timestamp: object) -> str | None:
+    value = str(timestamp or "")
+    return value[:10] if re.fullmatch(r"20\d{2}-\d{2}-\d{2}", value[:10]) else None
+
+
+def _spoken_date_evidence(master: Mapping[str, Any]) -> list[dict[str, Any]]:
+    evidence = []
+    for segment in master.get("transcript") or []:
+        if not isinstance(segment, Mapping):
+            continue
+        for value, raw in _date_from_text(str(segment.get("text") or "")):
+            evidence.append({
+                "source_type": "spoken_explicit_date",
+                "value": value,
+                "strength": "HIGH",
+                "independence_group": "transcript_spoken_date",
+                "locator": {
+                    "segment_id": segment.get("segment_id"),
+                    "start": segment.get("start"),
+                    "end": segment.get("end"),
+                    "raw": raw,
+                },
+            })
+    return evidence
+
+
+def _lesson_identity(
+    master: Mapping[str, Any],
+    source_meta: Mapping[str, Any],
+    original_meta: Mapping[str, Any] | None,
+) -> dict[str, Any]:
     source_name = str(source_meta.get("name") or (master.get("source") or {}).get("name") or "")
-    explicit_date, explicit_text = _date_from_name(source_name)
+    evidence: list[dict[str, Any]] = []
+    for value, raw in _date_from_text(source_name):
+        evidence.append({
+            "source_type": "explicit_source_filename",
+            "value": value,
+            "strength": "HIGH",
+            "independence_group": "filename",
+            "locator": {"file_id": source_meta.get("id"), "raw": raw},
+        })
+    evidence.extend(_spoken_date_evidence(master))
+
     env_date = os.getenv("BRIDGE_LESSON_DATE_CANDIDATE", "").strip()
     env_source = os.getenv("BRIDGE_LESSON_DATE_SOURCE", "").strip()
-    if explicit_date:
-        lesson_date = explicit_date
+    if re.fullmatch(r"20\d{2}-\d{2}-\d{2}", env_date):
+        evidence.append({
+            "source_type": env_source or "externally_supplied_candidate",
+            "value": env_date,
+            "strength": "MEDIUM",
+            "independence_group": "external_candidate",
+            "locator": None,
+        })
+
+    # Orchestrators may supply independent Zoom, Calendar, email or chat
+    # evidence without coupling this deterministic extractor to account APIs.
+    # Example: [{"source_type":"zoom_metadata","value":"2021-02-22",
+    #            "strength":"HIGH","locator":{"meeting_id":"..."}}]
+    external_raw = os.getenv("BRIDGE_LESSON_DATE_EVIDENCE_JSON", "").strip()
+    if external_raw:
+        try:
+            external_items = json.loads(external_raw)
+        except json.JSONDecodeError:
+            external_items = []
+        if isinstance(external_items, list):
+            for position, item in enumerate(external_items):
+                if not isinstance(item, Mapping):
+                    continue
+                value = str(item.get("value") or "")
+                if not re.fullmatch(r"20\d{2}-\d{2}-\d{2}", value):
+                    continue
+                source_type = str(item.get("source_type") or "external_date_evidence")
+                strength = str(item.get("strength") or "MEDIUM").upper()
+                if strength not in {"HIGH", "MEDIUM", "LOW"}:
+                    strength = "MEDIUM"
+                evidence.append({
+                    "source_type": source_type,
+                    "value": value,
+                    "strength": strength,
+                    "independence_group": str(item.get("independence_group") or f"external:{source_type}:{position}"),
+                    "locator": item.get("locator"),
+                })
+
+    original = dict(original_meta or {})
+    original_dates = {
+        value for value in (
+            _date_part(original.get("createdTime")),
+            _date_part(original.get("modifiedTime")),
+        ) if value
+    }
+    for value in sorted(original_dates):
+        evidence.append({
+            "source_type": "original_drive_metadata",
+            "value": value,
+            "strength": "MEDIUM",
+            "independence_group": "original_drive_metadata",
+            "locator": {
+                "file_id": original.get("id"),
+                "createdTime": original.get("createdTime"),
+                "modifiedTime": original.get("modifiedTime"),
+            },
+        })
+
+    master_date = _date_part(source_meta.get("createdTime"))
+    if master_date:
+        evidence.append({
+            "source_type": "master_copy_drive_metadata",
+            "value": master_date,
+            "strength": "LOW",
+            "independence_group": "master_copy_metadata",
+            "locator": {"file_id": source_meta.get("id"), "createdTime": source_meta.get("createdTime")},
+        })
+
+    by_value: dict[str, list[dict[str, Any]]] = {}
+    for item in evidence:
+        by_value.setdefault(str(item["value"]), []).append(item)
+    ranked = sorted(
+        by_value.items(),
+        key=lambda pair: (
+            len({item["independence_group"] for item in pair[1] if item["strength"] in {"HIGH", "MEDIUM"}}),
+            sum({"HIGH": 3, "MEDIUM": 2, "LOW": 1}[item["strength"]] for item in pair[1]),
+        ),
+        reverse=True,
+    )
+    lesson_date = ranked[0][0] if ranked else None
+    supporting = ranked[0][1] if ranked else []
+    independent_groups = {item["independence_group"] for item in supporting if item["strength"] in {"HIGH", "MEDIUM"}}
+    strengths = {item["strength"] for item in supporting}
+    if len(independent_groups) >= 2 and ("HIGH" in strengths or len(supporting) >= 2):
+        date_status = "CONFIRMED"
+    elif "HIGH" in strengths:
         date_status = "CANDIDATE_HIGH"
-        date_source = f"explicit_source_filename:{explicit_text}"
-    elif env_date:
-        lesson_date = env_date
+    elif "MEDIUM" in strengths:
         date_status = "CANDIDATE_MEDIUM"
-        date_source = env_source or "externally_supplied_source_metadata_candidate"
+    elif lesson_date:
+        date_status = "CANDIDATE_LOW"
     else:
-        lesson_date = None
         date_status = "UNKNOWN"
-        date_source = None
 
     number_raw = os.getenv("BRIDGE_LESSON_NUMBER", "").strip()
     lesson_number = int(number_raw) if number_raw.isdigit() else None
-    original = original_meta or {}
     return {
         "lesson_id": _stable_id("lesson", master.get("job_id"), lesson_number or "unknown"),
         "lesson_number": lesson_number,
         "lesson_date": lesson_date,
         "lesson_date_status": date_status,
-        "lesson_date_source": date_source,
+        "lesson_date_source": [item["source_type"] for item in supporting],
+        "date_evidence": evidence,
         "chronology_position": lesson_number,
         "master_source_drive_id": source_meta.get("id"),
         "master_source_created_at": source_meta.get("createdTime"),
@@ -169,160 +306,19 @@ def _lesson_identity(master: dict, source_meta: dict, original_meta: dict | None
         "original_source_created_at": original.get("createdTime"),
         "original_source_modified_at": original.get("modifiedTime"),
         "date_warning": (
-            None if date_status == "CANDIDATE_HIGH"
-            else "Дата занятия является кандидатом, а не подтверждённым фактом; дата Drive хранится отдельно."
+            None if date_status == "CONFIRMED"
+            else "Дата занятия остаётся кандидатом; даты Drive хранятся отдельно и не подменяют фактическую дату занятия."
         ),
     }
 
 
-def _episode_map(master: dict) -> dict[str, dict]:
-    return {
-        str(item.get("episode_id")): item
-        for item in (master.get("episodes") or [])
-        if item.get("episode_id")
-    }
-
-
-def _canon_candidates(master: dict, episodes: dict[str, dict]) -> list[dict]:
-    out = []
-    for index, link in enumerate(master.get("canon_links") or [], 1):
-        if link.get("status") == "не найдено" or not _norm(link.get("canonical_excerpt")):
-            continue
-        episode_id = str(link.get("episode_id") or "")
-        episode = episodes.get(episode_id, {})
-        out.append({
-            "canon_observation_id": _stable_id("canonobs", master.get("job_id"), episode_id, index),
-            "status": "CANON_MATCH_CANDIDATE",
-            "activation_allowed": False,
-            "episode_id": episode_id or None,
-            "observed_lesson_text": _norm(episode.get("summary_text"))[:1600] or None,
-            "candidate_canonical_excerpt": _norm(link.get("canonical_excerpt"))[:1600],
-            "match_status": link.get("status"),
-            "match_score": link.get("score"),
-            "evidence_refs": episode.get("evidence") or [],
-            "authority_note": "Видео и тематическое совпадение не активируют канон автоматически.",
-        })
-    return out
-
-
-def _knowledge_candidates(master: dict) -> list[dict]:
-    out = []
-    seen: set[str] = set()
-    for episode in master.get("episodes") or []:
-        summary = _norm(episode.get("summary_text"))
-        terms = sorted({_norm(term) for term in (episode.get("terms") or []) if _norm(term)})
-        if not summary or not terms:
-            continue
-        key = hashlib.sha256(("|".join(terms) + "|" + summary.casefold()).encode("utf-8")).hexdigest()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append({
-            "knowledge_candidate_id": _stable_id("knowledge", master.get("job_id"), key),
-            "status": "CANDIDATE_KNOWLEDGE",
-            "knowledge_type": episode.get("type") or "lesson_episode",
-            "title_candidates": terms,
-            "content": summary[:2400],
-            "scope": {"single_lesson": True, "lesson_stage": "historical"},
-            "episode_id": episode.get("episode_id"),
-            "evidence_refs": episode.get("evidence") or [],
-            "visual_evidence_refs": episode.get("visual_evidence") or [],
-            "confidence_class": episode.get("confidence"),
-            "dedupe_key": key,
-            "verification_required": True,
-        })
-    return out
-
-
-def _reusable_assets(master: dict, episodes: dict[str, dict]) -> list[dict]:
-    specs = (
-        ("EXPLANATION_CANDIDATE", master.get("best_explanations") or [], "explanation_id"),
-        ("TYPICAL_ERROR_CANDIDATE", master.get("errors") or [], "error_id"),
-        ("POSITIVE_DECISION_CANDIDATE", master.get("strengths") or [], "strength_id"),
-        ("TEACHER_INTERVENTION_CANDIDATE", master.get("teacher_analysis") or [], "observation_id"),
-    )
-    out = []
-    for asset_type, items, id_field in specs:
-        for item in items:
-            episode_id = str(item.get("episode_id") or "")
-            episode = episodes.get(episode_id, {})
-            out.append({
-                "asset_id": str(item.get(id_field) or _stable_id("asset", asset_type, episode_id)),
-                "asset_type": asset_type,
-                "status": "CANDIDATE",
-                "episode_id": episode_id or None,
-                "content": item,
-                "source_excerpt": _norm(episode.get("summary_text"))[:1600] or None,
-                "evidence_refs": list(dict.fromkeys((item.get("evidence") or []) + (episode.get("evidence") or []))),
-                "reuse_authority": "NON_CANONICAL_CANDIDATE",
-            })
-    return out
-
-
-def _student_opportunities(master: dict) -> list[dict]:
-    out = []
-    for item in ((master.get("student_analysis") or {}).get("observations") or []):
-        out.append({
-            "opportunity_id": str(item.get("observation_id") or _stable_id("opportunity", json.dumps(item, sort_keys=True))),
-            "status": "CANDIDATE_OBSERVATION",
-            "learning_vs_assessment": "learning",
-            "task": item.get("task"),
-            "observed_response": item.get("student_action"),
-            "help_state": item.get("support_state"),
-            "result": item.get("result"),
-            "transfer": item.get("transfer"),
-            "evidence_refs": item.get("evidence") or [],
-            "profile_write_allowed": False,
-        })
-    for item in master.get("decisions") or []:
-        out.append({
-            "opportunity_id": str(item.get("decision_id") or _stable_id("decisionop", json.dumps(item, sort_keys=True))),
-            "status": "OBSERVED_DECISION_CANDIDATE",
-            "learning_vs_assessment": "unknown",
-            "task": item.get("observed_context"),
-            "observed_response": item.get("action_taken"),
-            "reasoning": item.get("reasoning"),
-            "actor_attribution_status": item.get("actor_attribution_status"),
-            "evidence_refs": item.get("evidence") or [],
-            "profile_write_allowed": False,
-        })
-    return out
-
-
-def _teacher_observations(master: dict) -> list[dict]:
-    out = []
-    for item in master.get("teacher_analysis") or []:
-        out.append({
-            "teacher_observation_id": item.get("observation_id"),
-            "status": "DESCRIPTIVE_CANDIDATE",
-            "method_label": item.get("method"),
-            "note": item.get("note"),
-            "episode_id": item.get("episode_id"),
-            "evidence_refs": item.get("evidence") or [],
-            "methodology_activation_allowed": False,
-        })
-    for item in master.get("learning_interactions") or []:
-        out.append({
-            "teacher_observation_id": item.get("cycle_id"),
-            "status": item.get("verification_status") or "CANDIDATE_CYCLE",
-            "method_label": item.get("intervention_type"),
-            "teacher_intervention": item.get("teacher_intervention"),
-            "observed_followup": item.get("student_response"),
-            "outcome": item.get("outcome"),
-            "evidence_refs": item.get("evidence") or [],
-            "methodology_activation_allowed": False,
-        })
-    return out
-
-
-def _curriculum(master: dict, lesson: dict) -> dict:
+def _curriculum(master: Mapping[str, Any], lesson: Mapping[str, Any], quality: Mapping[str, Any]) -> dict[str, Any]:
     session = master.get("session_summary") or {}
     topic_counts = session.get("top_topic_counts") or []
     if not topic_counts:
         topic_counts = Counter(
             term for episode in (master.get("episodes") or []) for term in (episode.get("terms") or [])
         ).most_common(50)
-    domains = Counter(str(episode.get("type") or "не классифицировано") for episode in master.get("episodes") or [])
     modules = []
     for position, pair in enumerate(topic_counts, 1):
         if isinstance(pair, (list, tuple)) and len(pair) >= 2:
@@ -337,6 +333,7 @@ def _curriculum(master: dict, lesson: dict) -> dict:
             "historical_lesson_date": lesson.get("lesson_date"),
             "proposed_school_stage": None,
             "status": "HISTORICAL_OBSERVATION_AND_CURRICULUM_CANDIDATE",
+            "activation_allowed": False,
         })
     return {
         "historical_curriculum": {
@@ -344,7 +341,7 @@ def _curriculum(master: dict, lesson: dict) -> dict:
             "lesson_number": lesson.get("lesson_number"),
             "lesson_date": lesson.get("lesson_date"),
             "topic_order": [item.get("topic") for item in modules],
-            "domain_episode_counts": dict(domains),
+            "section_candidates": (quality.get("hierarchy") or {}).get("sections") or [],
             "source_episode_count": len(master.get("episodes") or []),
         },
         "candidate_school_curriculum": {
@@ -360,8 +357,9 @@ def _safe_filename(value: str) -> str:
     return re.sub(r"[\\/:*?\"<>|]+", "_", value).strip()[:160]
 
 
-def _upload_immutable(token: str, parent: str, path: Path, mime: str) -> dict:
-    existing = io.search(token, f"'{parent}' in parents and trashed=false and name='{path.name.replace(chr(39), chr(92)+chr(39))}'")
+def _upload_immutable(token: str, parent: str, path: Path, mime: str) -> dict[str, Any]:
+    escaped = path.name.replace("'", "\\'")
+    existing = io.search(token, f"'{parent}' in parents and trashed=false and name='{escaped}'")
     if existing:
         existing.sort(key=lambda item: item.get("modifiedTime") or "", reverse=True)
         return {"id": existing[0]["id"], "name": existing[0].get("name"), "status": "already_exists"}
@@ -369,54 +367,132 @@ def _upload_immutable(token: str, parent: str, path: Path, mime: str) -> dict:
     return {"id": uploaded["id"], "name": uploaded.get("name"), "status": "uploaded"}
 
 
-def _markdown(payload: dict) -> str:
+def _teacher_brief_markdown(payload: Mapping[str, Any]) -> str:
     lesson = payload["lesson_identity"]
-    counts = payload["counts"]
+    quality = payload["quality_v2"]
+    brief = quality["teacher_brief"]
+    readiness = quality["readiness"]
     lines = [
-        "# Диана 1 — продольное извлечение",
+        f"# {brief.get('title')}",
+        "",
+        f"- Дата занятия: **{lesson.get('lesson_date') or 'не установлена'}** ({lesson.get('lesson_date_status')})",
+        f"- Статус методического анализа: **{readiness.get('methodology_status')}**",
+        f"- Полных доказательных учебных циклов: **{readiness.get('complete_learning_interactions', 0)}**",
+        f"- Роли участников: **{(readiness.get('speaker_summary') or {}).get('status')}**",
+        "",
+        "## Темы-кандидаты",
+        "",
+    ]
+    for topic in brief.get("topic_candidates") or []:
+        lines.append(f"- {topic}")
+    lines += ["", "## Проверенные наблюдения об обучении", ""]
+    observations = brief.get("student_conclusions") or []
+    if not observations:
+        lines.append("Надёжных персональных выводов об ответах Дианы пока недостаточно.")
+    for index, item in enumerate(observations, 1):
+        lines += [
+            f"### Наблюдение {index}",
+            f"- Задача: {item.get('task') or 'не установлена'}",
+            f"- Действие ученицы: {item.get('action') or 'не установлено'}",
+            f"- Помощь: {item.get('help') or 'не установлена'}",
+            f"- Наблюдаемый результат: {item.get('result') or 'не установлен'}",
+            f"- Evidence: {', '.join(item.get('evidence_refs') or []) or 'нет'}",
+            "",
+        ]
+    lines += ["## Лучшие переиспользуемые кандидаты", ""]
+    assets = brief.get("reusable_asset_candidates") or []
+    if not assets:
+        lines.append("Активные переиспользуемые материалы не прошли Value Gate.")
+    for item in assets:
+        lines.append(
+            f"- **{item.get('asset_type')}** — {', '.join(item.get('topics') or []) or 'тема не установлена'}; "
+            f"{item.get('value_reason') or 'ценность требует проверки'}"
+        )
+    lines += ["", "## Следующие проверки", ""]
+    for probe in brief.get("pending_probes") or []:
+        lines.append(f"- **{probe.get('topic_candidate')}**: {probe.get('future_probe')}")
+    lines += ["", "## Ограничения", ""]
+    for issue in brief.get("limitations") or []:
+        lines.append(f"- {issue}")
+    lines += [
+        "",
+        f"> {brief.get('teacher_message')}",
+        "",
+        "Канон, нормативный курс и производственный профиль ученицы автоматически не изменялись.",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _cards_markdown(payload: Mapping[str, Any]) -> str:
+    cards = (payload.get("quality_v2") or {}).get("learning_cards") or []
+    lines = ["# Учебные карточки — Диана", ""]
+    if not cards:
+        lines.append("Карточки не созданы: данных недостаточно, и алгоритм не производит искусственные материалы.")
+        return "\n".join(lines) + "\n"
+    for index, card in enumerate(cards, 1):
+        lines += [
+            f"## Карточка {index}: {card.get('card_type')}",
+            "",
+            f"- Время: {card.get('time_range') or 'по Evidence'}",
+            f"- Темы: {', '.join(card.get('topic_candidates') or []) or 'не установлены'}",
+            f"- Ситуация/задача: {card.get('task') or 'не установлена'}",
+            f"- Действие ученицы: {card.get('student_action') or 'не атрибутировано'}",
+            f"- Вмешательство преподавателя: {card.get('teacher_intervention') or 'не атрибутировано'}",
+            f"- Наблюдаемый результат: {card.get('observed_result') or 'не установлен'}",
+            f"- Следующая проверка: {card.get('next_probe') or 'не назначена'}",
+            f"- Evidence: {', '.join(card.get('evidence_refs') or []) or 'нет'}",
+            f"- Статус: {card.get('status')}",
+            "",
+        ]
+    return "\n".join(lines) + "\n"
+
+
+def _summary_markdown(payload: Mapping[str, Any]) -> str:
+    lesson = payload["lesson_identity"]
+    counts = payload["quality_v2"]["counts"]
+    readiness = payload["quality_v2"]["readiness"]
+    return "\n".join([
+        "# Диана — продольное извлечение v2",
         "",
         f"- Job ID: `{payload['job_id']}`",
         f"- Дата занятия: **{lesson.get('lesson_date') or 'не установлена'}** ({lesson.get('lesson_date_status')})",
-        f"- Основание даты: {lesson.get('lesson_date_source') or 'нет'}",
-        f"- Источник MASTER: `{lesson.get('master_source_drive_id')}` — только чтение",
-        f"- Версия видеоанализа: `{payload.get('algorithm_revision')}`",
-        "- Канон автоматически не активировался; профиль ученицы автоматически не изменялся.",
+        f"- TECHNICAL: **{readiness.get('technical_status')}**",
+        f"- CONTENT: **{readiness.get('content_status')}**",
+        f"- METHODOLOGY: **{readiness.get('methodology_status')}**",
+        "- MASTER-источник использован только для чтения.",
+        "- Тяжёлая повторная обработка видео не выполнялась этим слоем.",
         "",
-        "## Что извлечено",
+        "## Quality-first counts",
         "",
-    ]
-    for label, key in (
-        ("Смысловые эпизоды", "episodes"),
-        ("Наблюдения связи с каноном", "canon_candidates"),
-        ("Кандидаты знаний", "knowledge_candidates"),
-        ("Переиспользуемые материалы", "reusable_assets"),
-        ("Учебные возможности/решения", "student_opportunities"),
-        ("Наблюдения работы преподавателя", "teacher_observations"),
-        ("Пробелы базы знаний", "knowledge_gaps"),
-    ):
-        lines.append(f"- {label}: **{counts.get(key, 0)}**")
-    lines += [
-        "",
-        "## Темы первого занятия",
-        "",
-    ]
-    for module in payload["curriculum"]["candidate_school_curriculum"]["modules"][:30]:
-        count = module.get("observed_episode_count")
-        lines.append(f"- {module.get('topic')}" + (f" — {count} эпизод(а)" if count is not None else ""))
-    lines += [
-        "",
-        "## Ограничения",
-        "",
-        "- Все содержательные элементы остаются кандидатами до проверки Evidence и канона школы.",
-        "- Одно видео не доказывает устойчивый навык, причинность педагогического приёма или место темы в общем многолетнем курсе.",
-        "- `NOT_OBSERVED` не трактуется как ошибка или отсутствие знания.",
+        *(f"- {key}: **{value}**" for key, value in counts.items()),
         "",
         "## Cost Gate",
         "",
         "- Платные AI API: **0**.",
-        "- Использован существующий бесплатный локальный ASR-путь GitHub Actions; тяжёлые постоянные рабочие копии не создавались.",
-    ]
-    return "\n".join(lines) + "\n"
+        f"- Повторное скачивание/ASR оригинального видео: **{payload['cost']['heavy_video_reprocessed']}**.",
+        f"- Повторно использован master PDF размером {payload['provenance']['master_pdf'].get('size_bytes', 0)} байт.",
+        "",
+    ]) + "\n"
+
+
+def _persist_staging_if_configured(payload: Mapping[str, Any]) -> dict[str, Any]:
+    raw_dsn = os.getenv("BRIDGE_WORKER_DATABASE_URL", "").strip()
+    requested = os.getenv("BRIDGE_PERSIST_DATABASE", "false").strip().casefold() == "true"
+    if not requested:
+        return {"status": "NOT_REQUESTED"}
+    if not raw_dsn:
+        return {"status": "SKIPPED_DATABASE_URL_MISSING"}
+    try:
+        from database.video_candidate_persistence import persist_quality_candidates
+        return persist_quality_candidates(raw_dsn, payload)
+    except Exception as exc:
+        # Candidate persistence must not invalidate already completed immutable
+        # media evidence.  The receipt records the real blocker for retry.
+        return {
+            "status": "SKIPPED_OR_FAILED",
+            "error_class": type(exc).__name__,
+            "detail": str(exc)[:400],
+        }
 
 
 def main() -> int:
@@ -439,25 +515,22 @@ def main() -> int:
     original_id = os.environ.get("BRIDGE_ORIGINAL_SOURCE_DRIVE_ID", "").strip()
     original_meta = _drive_metadata(token, original_id) if original_id else None
     lesson = _lesson_identity(master, source_meta, original_meta)
-    episodes = _episode_map(master)
-    canon = _canon_candidates(master, episodes)
-    knowledge = _knowledge_candidates(master)
-    assets = _reusable_assets(master, episodes)
-    opportunities = _student_opportunities(master)
-    teachers = _teacher_observations(master)
-    curriculum = _curriculum(master, lesson)
+    quality = build_quality_layer(master, lesson)
+    curriculum = _curriculum(master, lesson, quality)
     gaps = list(master.get("knowledge_gaps") or [])
-    if lesson.get("lesson_date_status") != "CANDIDATE_HIGH":
+    if lesson.get("lesson_date_status") != "CONFIRMED":
         gaps.append({
             "gap_id": _stable_id("gap", job_id, "lesson-date-confirmation"),
             "gap_type": "SOURCE_WEAK",
             "status": "OPEN",
-            "question": "Подтвердить фактическую дату занятия Диана 1 независимо от даты загрузки Drive.",
+            "question": "Подтвердить фактическую дату занятия независимым источником.",
+            "date_evidence": lesson.get("date_evidence") or [],
         })
 
-    payload = {
+    payload: dict[str, Any] = {
         "schema": SCHEMA,
         "schema_version": SCHEMA_VERSION,
+        "quality_method_version": QUALITY_METHOD_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "job_id": job_id,
         "algorithm_version": master.get("algorithmVersion"),
@@ -466,6 +539,7 @@ def main() -> int:
             "canon_activation": "DENY",
             "curriculum_activation": "DENY",
             "student_profile_production_write": "DENY",
+            "methodology_activation": "DENY",
             "artifact_status": "A1_CANDIDATE_EVIDENCE",
         },
         "provenance": {
@@ -475,72 +549,69 @@ def main() -> int:
             "source_read_only": True,
         },
         "lesson_identity": lesson,
-        "session_summary": master.get("session_summary") or {},
-        "timeline": master.get("timeline") or [],
-        "canon_candidates": canon,
-        "knowledge_candidates": knowledge,
-        "reusable_assets": assets,
-        "student_opportunities": opportunities,
-        "teacher_observations": teachers,
-        "outcome_candidates": {
-            "strengths": master.get("strengths") or [],
-            "learning_interactions": master.get("learning_interactions") or [],
-            "retention": "NOT_OBSERVED_IN_SINGLE_LESSON_UNLESS_EXPLICITLY_LINKED",
-            "generalization": "NOT_CONFIRMED",
-            "transfer": "NOT_CONFIRMED",
-        },
+        "quality_v2": quality,
         "curriculum": curriculum,
         "knowledge_gaps": gaps,
         "technical_qc": master.get("technical_qc") or {},
-        "content_quality": master.get("content_quality") or {},
         "warnings": master.get("warnings") or [],
         "cost": {
             "paid_ai_api_cost": 0,
             "paid_cloud_fallback_used": False,
             "source_size_bytes": int(source_meta.get("size") or 0),
+            "heavy_video_reprocessed": False,
             "persistent_heavy_working_video_copy_created": False,
-            "cost_note": "Standard public GitHub runner and local open-source ASR path; actual provider quota/plan accounting is external.",
+            "reused_master_pdf_bytes": master_pdf.get("size_bytes", 0),
+            "cost_note": "Semantic-only refinement reuses embedded master analysis; provider plan accounting remains external.",
         },
     }
-    payload["counts"] = {
-        "episodes": len(master.get("episodes") or []),
-        "transcript_segments": len(master.get("transcript") or []),
-        "canon_candidates": len(canon),
-        "knowledge_candidates": len(knowledge),
-        "reusable_assets": len(assets),
-        "student_opportunities": len(opportunities),
-        "teacher_observations": len(teachers),
-        "knowledge_gaps": len(gaps),
-        "decisions": len(master.get("decisions") or []),
-        "deals": len(master.get("deals") or []),
-    }
+    payload["database_staging"] = _persist_staging_if_configured(payload)
 
     raw = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8")
     digest = _sha_bytes(raw)[:12]
-    base = _safe_filename(f"Диана 1 — longitudinal {digest}")
+    lesson_label = lesson.get("lesson_number") or "?"
+    base = _safe_filename(f"Диана {lesson_label} — longitudinal v2 {digest}")
     with tempfile.TemporaryDirectory(prefix="diana-longitudinal-output-") as td:
         td_path = Path(td)
         json_path = td_path / f"{base}.json"
-        md_path = td_path / f"{base}.md"
-        receipt_path = td_path / f"LONGITUDINAL_DONE_{job_id}_{digest}.json"
+        summary_path = td_path / f"{base} — summary.md"
+        teacher_path = td_path / f"Диана {lesson_label} — Teacher Brief v2 {digest}.md"
+        cards_path = td_path / f"Диана {lesson_label} — Learning Cards v2 {digest}.md"
+        staging_path = td_path / f"Диана {lesson_label} — Candidate Staging v2 {digest}.json"
+        receipt_path = td_path / f"LONGITUDINAL_V2_DONE_{job_id}_{digest}.json"
+
         json_path.write_bytes(raw)
-        md_path.write_text(_markdown(payload), encoding="utf-8")
+        summary_path.write_text(_summary_markdown(payload), encoding="utf-8")
+        teacher_path.write_text(_teacher_brief_markdown(payload), encoding="utf-8")
+        cards_path.write_text(_cards_markdown(payload), encoding="utf-8")
+        staging_path.write_text(
+            json.dumps(quality.get("candidate_staging_records") or [], ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
         receipt = {
-            "status": "LONGITUDINAL_DONE",
+            "status": "LONGITUDINAL_V2_DONE",
             "job_id": job_id,
             "digest": digest,
             "schema_version": SCHEMA_VERSION,
+            "quality_method_version": QUALITY_METHOD_VERSION,
+            "readiness": quality.get("readiness") or {},
+            "counts": quality.get("counts") or {},
             "master_pdf_drive_id": master_pdf["drive_id"],
             "source_drive_id": source_id,
             "source_untouched": True,
+            "heavy_video_reprocessed": False,
             "canon_activated": False,
             "student_profile_written": False,
+            "curriculum_activated": False,
+            "database_staging": payload.get("database_staging"),
             "created_at": payload["created_at"],
         }
         receipt_path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2), encoding="utf-8")
         uploads = [
             _upload_immutable(token, result_folder, json_path, "application/json"),
-            _upload_immutable(token, result_folder, md_path, "text/markdown"),
+            _upload_immutable(token, result_folder, summary_path, "text/markdown"),
+            _upload_immutable(token, result_folder, teacher_path, "text/markdown"),
+            _upload_immutable(token, result_folder, cards_path, "text/markdown"),
+            _upload_immutable(token, result_folder, staging_path, "application/json"),
             _upload_immutable(token, work_folder or result_folder, receipt_path, "application/json"),
         ]
 
@@ -549,12 +620,15 @@ def main() -> int:
         raise RuntimeError("LONGITUDINAL_SOURCE_MOVED_TO_WORK_OR_RESULT")
 
     print(json.dumps({
-        "stage": "DIANA_LONGITUDINAL_POSTPROCESS",
+        "stage": "DIANA_LONGITUDINAL_POSTPROCESS_V2",
         "status": "DONE",
         "job_id": job_id,
         "digest": digest,
         "source_untouched": True,
-        "counts": payload["counts"],
+        "heavy_video_reprocessed": False,
+        "readiness": quality.get("readiness"),
+        "counts": quality.get("counts"),
+        "database_staging": payload.get("database_staging"),
         "uploads": uploads,
     }, ensure_ascii=False))
     return 0
