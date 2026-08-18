@@ -96,7 +96,7 @@ def test_r25_13_workflow_recovers_stalled_runtime_install_without_parallel_data_
         / "video-r25-13-production-candidate.yml"
     ).read_text(encoding="utf-8")
     assert "cancel-in-progress: true" in workflow
-    assert "candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry2.txt" in workflow
+    assert "candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry3.txt" in workflow
     assert "timeout-minutes: 20" in workflow
     assert "timeout 180s apt-get update -qq" in workflow
     assert "APT_RUNTIME_INSTALL_FAILED_AFTER_RETRIES" in workflow
@@ -108,6 +108,44 @@ def test_r25_13_workflow_recovers_stalled_runtime_install_without_parallel_data_
     assert 'BRIDGE_BILLING_FALLBACK: "false"' in workflow
 
 
+def test_run_restamps_candidate_revision_after_semantic_adapter_import():
+    import run_master_3_1_free_semantic_v2 as semantic
+
+    original_install = candidate.install
+    original_process = semantic.process_job
+    original_core_revision = candidate.core.ALGORITHM_REVISION
+    original_base_revision = candidate.base.ALGORITHM_REVISION
+    original_semantic_revision = semantic.REVISION
+    seen = {}
+
+    def fake_process(token):
+        seen["token"] = token
+        seen["core_revision"] = candidate.core.ALGORITHM_REVISION
+        seen["base_revision"] = candidate.base.ALGORITHM_REVISION
+        seen["semantic_revision"] = semantic.REVISION
+        return seen
+
+    try:
+        candidate.install = lambda token_func: None
+        semantic.process_job = fake_process
+        candidate.core.ALGORITHM_REVISION = "3.1-free-r25.7"
+        candidate.base.ALGORITHM_REVISION = "3.1-free-r25.7"
+        semantic.REVISION = "3.1-free-r25.7"
+
+        result = candidate.run(lambda: "drive-token")
+
+        assert result["token"] == "drive-token"
+        assert result["core_revision"] == candidate.REVISION
+        assert result["base_revision"] == candidate.REVISION
+        assert result["semantic_revision"] == candidate.REVISION
+    finally:
+        candidate.install = original_install
+        semantic.process_job = original_process
+        candidate.core.ALGORITHM_REVISION = original_core_revision
+        candidate.base.ALGORITHM_REVISION = original_base_revision
+        semantic.REVISION = original_semantic_revision
+
+
 if __name__ == "__main__":
     test_checkpoint_preserves_failed_qc_and_targets_first_failed_block()
     test_targeted_diagnostic_hallucination_is_quarantined()
@@ -115,4 +153,5 @@ if __name__ == "__main__":
     test_exact_zero_pcm_rejects_forced_asr_hallucinations_without_publication()
     test_r25_13_full_result_is_staging_only_until_meta_pass()
     test_r25_13_workflow_recovers_stalled_runtime_install_without_parallel_data_work()
+    test_run_restamps_candidate_revision_after_semantic_adapter_import()
     print("R25_13_ASR_CHECKPOINT: PASS")
