@@ -77,7 +77,9 @@ def test_candidate_persistence_is_fail_closed_and_evented():
     source = (Path(__file__).parents[1] / "database" / "video_result_persistence.py").read_text(
         encoding="utf-8"
     )
-    assert 'candidate_requires_meta = algorithm_revision == "3.1-free-r25.12-meta"' in source
+    assert "candidate_requires_meta = algorithm_revision in {" in source
+    assert '"3.1-free-r25.12-meta"' in source
+    assert '"3.1-free-r25.13-checkpoint"' in source
     assert "CASE WHEN %s THEN 'running' ELSE 'success' END" in source
     assert "algorithm_version_id" in source
     assert "BridgeVideoResultRecorded" in source
