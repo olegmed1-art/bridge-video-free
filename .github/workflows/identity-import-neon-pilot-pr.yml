@@ -1,0 +1,108 @@
+name: Identity Import Neon Pilot Gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'database/migrations/0100_identity_import_staging.sql'
+      - 'database/migrations/0101_identity_import_schema_and_readiness_hardening.sql'
+      - 'database/tests/090_identity_import_staging.sql'
+      - 'database/tests/091_identity_import_resolution.sql'
+      - 'database/tests/092_identity_import_readiness_hardening.sql'
+      - 'database/tests/093_identity_import_neon_e2e.sql'
+      - 'database/scripts/migrate.sh'
+      - '.github/workflows/identity-import-neon-pilot-pr.yml'
+      - 'run_requests/identity-import-neon-pilot-20260818.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: identity-import-neon-pilot-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  neon-branch-pilot:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      TARGET_NEON_HOST: ep-delicate-silence-b1kubo3r.c-5.eu-central-1.aws.neon.tech
+      EXPECTED_BRANCH_ID: br-tiny-hat-b1wqfdlt
+    steps:
+      - name: Checkout candidate merge
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Derive isolated branch DSN
+        env:
+          SOURCE_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${SOURCE_DATABASE_URL:-}" || { echo 'NEON_DATABASE_URL is not configured'; exit 1; }
+          python - <<'PY'
+          import os
+          from urllib.parse import urlsplit, urlunsplit
+          p = urlsplit(os.environ['SOURCE_DATABASE_URL'])
+          userinfo = p.netloc.rsplit('@',1)[0] + '@' if '@' in p.netloc else ''
+          port = f':{p.port}' if p.port else ''
+          branch = urlunsplit((p.scheme, userinfo + os.environ['TARGET_NEON_HOST'] + port, p.path, p.query, p.fragment))
+          with open(os.environ['GITHUB_ENV'],'a',encoding='utf-8') as fh:
+              fh.write('BRANCH_DATABASE_URL=' + branch + '\n')
+          print('Using isolated Neon branch ' + os.environ['EXPECTED_BRANCH_ID'])
+          PY
+
+      - name: Verify branch baseline or already-migrated test state
+        run: |
+          set -euo pipefail
+          db="$(psql "$BRANCH_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'SELECT current_database();')"
+          test "$db" = "neondb"
+          count="$(psql "$BRANCH_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'SELECT count(*) FROM schema_migration;')"
+          test "$count" -eq 52 -o "$count" -eq 54
+          echo "NEON_BRANCH_PRE_MIGRATION_COUNT=${count}"
+
+      - name: Apply migrations using production migrate.sh
+        env:
+          DATABASE_URL: ${{ env.BRANCH_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          chmod +x database/scripts/migrate.sh
+          database/scripts/migrate.sh
+
+      - name: Verify migrated Neon schema
+        run: |
+          set -euo pipefail
+          test "$(psql "$BRANCH_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'SELECT count(*) FROM schema_migration;')" -eq 54
+          test "$(psql "$BRANCH_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c \"SELECT count(*) FROM schema_migration WHERE migration_key IN ('0100_identity_import_staging','0101_identity_import_schema_and_readiness_hardening') AND checksum IS NOT NULL;\")" -eq 2
+          test "$(psql "$BRANCH_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c \"SELECT to_regclass('identity_staging.identity_import_item') IS NOT NULL;\")" = "t"
+          test "$(psql "$BRANCH_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c \"SELECT to_regclass('public.identity_import_item') IS NULL;\")" = "t"
+          echo 'NEON_MIGRATION_INTEGRATION: PASS'
+
+      - name: Run identity regression and end-to-end suite on Neon
+        run: |
+          set -euo pipefail
+          for test_file in \
+            database/tests/090_identity_import_staging.sql \
+            database/tests/091_identity_import_resolution.sql \
+            database/tests/092_identity_import_readiness_hardening.sql \
+            database/tests/093_identity_import_neon_e2e.sql; do
+            echo "Running ${test_file}"
+            psql "$BRANCH_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$test_file"
+          done
+          echo 'IDENTITY_IMPORT_NEON_E2E: PASS'
+
+      - name: Verify migration idempotence
+        env:
+          DATABASE_URL: ${{ env.BRANCH_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          database/scripts/migrate.sh
+          test "$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'SELECT count(*) FROM schema_migration;')" -eq 54
+          echo 'NEON_MIGRATION_IDEMPOTENCE: PASS'
