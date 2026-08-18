@@ -32,8 +32,8 @@ BEGIN
 
     INSERT INTO person(preferred_name) VALUES ('CI invalidation student') RETURNING person_id INTO v_person;
     INSERT INTO student(school_id, person_id) VALUES (v_school, v_person) RETURNING student_id INTO v_student;
-    INSERT INTO skill(school_id, name, description)
-    VALUES (v_school, 'CI invalidation skill', 'Dependency invalidation test')
+    INSERT INTO skill(school_id, stable_key, name, description)
+    VALUES (v_school, 'ci-invalidation-skill', 'CI invalidation skill', 'Dependency invalidation test')
     RETURNING skill_id INTO v_skill;
     INSERT INTO topic(school_id, name, domain)
     VALUES (v_school, 'CI invalidation topic', 'general')
