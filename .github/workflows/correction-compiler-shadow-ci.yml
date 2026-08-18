@@ -1,0 +1,48 @@
+name: META Correction Compiler Shadow CI
+
+on:
+  pull_request:
+    paths:
+      - 'tools/correction_compiler_shadow.py'
+      - 'tests/test_correction_compiler_shadow.py'
+      - 'meta_school/AUTONOMOUS_LEARNING_LOOPS_V1.yaml'
+      - 'meta_school/evidence/CORRECTION_COMPILER_PREFLIGHT_20260818.md'
+      - '.github/workflows/correction-compiler-shadow-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/correction_compiler_shadow.py'
+      - 'tests/test_correction_compiler_shadow.py'
+      - 'meta_school/AUTONOMOUS_LEARNING_LOOPS_V1.yaml'
+      - '.github/workflows/correction-compiler-shadow-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  shadow-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Compile candidate
+        run: python -m py_compile tools/correction_compiler_shadow.py tests/test_correction_compiler_shadow.py
+      - name: Run fail-closed regression suite
+        run: PYTHONPATH=. python tests/test_correction_compiler_shadow.py
+      - name: Verify no database client dependency
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('tools/correction_compiler_shadow.py').read_text(encoding='utf-8').lower()
+          forbidden = ['psycopg', 'postgresql://', 'insert into ', 'update ', 'delete from ', 'alter table ', 'drop table ']
+          found = [token for token in forbidden if token in text]
+          assert not found, f'production-write surface detected: {found}'
+          print('SHADOW_NO_DB_WRITE_SURFACE: PASS')
+          PY
