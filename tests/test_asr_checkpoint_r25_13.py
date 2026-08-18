@@ -88,10 +88,26 @@ def test_r25_13_full_result_is_staging_only_until_meta_pass():
     assert '"3.1-free-r25.13-checkpoint"' in source
 
 
+def test_r25_13_workflow_recovers_stalled_runtime_install_without_parallel_data_work():
+    workflow = (
+        Path(__file__).parents[1]
+        / ".github"
+        / "workflows"
+        / "video-r25-13-production-candidate.yml"
+    ).read_text(encoding="utf-8")
+    assert "cancel-in-progress: true" in workflow
+    assert "candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry1.txt" in workflow
+    assert "timeout-minutes: 20" in workflow
+    assert "timeout 180s apt-get update -qq" in workflow
+    assert "APT_RUNTIME_INSTALL_FAILED_AFTER_RETRIES" in workflow
+    assert "--timeout 60 --retries 8 -r requirements-worker.txt" in workflow
+
+
 if __name__ == "__main__":
     test_checkpoint_preserves_failed_qc_and_targets_first_failed_block()
     test_targeted_diagnostic_hallucination_is_quarantined()
     test_cross_model_convergence_is_only_a_candidate()
     test_exact_zero_pcm_rejects_forced_asr_hallucinations_without_publication()
     test_r25_13_full_result_is_staging_only_until_meta_pass()
+    test_r25_13_workflow_recovers_stalled_runtime_install_without_parallel_data_work()
     print("R25_13_ASR_CHECKPOINT: PASS")
