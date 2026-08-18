@@ -65,6 +65,14 @@ def test_public_product_name_is_unchanged():
     assert core.ALGORITHM_VERSION == "3.1 FREE"
 
 
+def test_candidate_extends_current_r25_7_quality_first_baseline():
+    source = (Path(__file__).parents[1] / "bridge_runtime_hardening_r25_12_meta.py").read_text(
+        encoding="utf-8"
+    )
+    assert "import bridge_runtime_hardening_r25_7 as stable" in source
+    assert "import run_master_3_1_free_semantic_v2 as semantic" in source
+
+
 def test_candidate_persistence_is_fail_closed_and_evented():
     source = (Path(__file__).parents[1] / "database" / "video_result_persistence.py").read_text(
         encoding="utf-8"
@@ -82,5 +90,6 @@ if __name__ == "__main__":
     test_isolated_zero_without_hallucination_is_quarantined_not_erased()
     test_unreliable_derived_evidence_is_always_a_stop()
     test_public_product_name_is_unchanged()
+    test_candidate_extends_current_r25_7_quality_first_baseline()
     test_candidate_persistence_is_fail_closed_and_evented()
     print("R25_12_META_ASR_GATE: PASS")

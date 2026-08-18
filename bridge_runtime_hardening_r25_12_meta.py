@@ -2,7 +2,7 @@
 """Bridge Video 3.1 FREE r25.12 META-gated candidate.
 
 This module is intentionally *not* the production entrypoint.  It preserves the
-confirmed r25.6 runtime and adds a fail-closed ASR evidence classifier for the
+current confirmed r25.7 quality-first runtime and adds a fail-closed ASR evidence classifier for the
 next independently assessed candidate.  A worker-side result is preliminary;
 only the database META gate may authorize publication.
 """
@@ -13,7 +13,7 @@ import os
 import re
 
 import bridge_runtime_hardening_r25_1 as asr
-import bridge_runtime_hardening_r25_6 as stable
+import bridge_runtime_hardening_r25_7 as stable
 import bridge_worker_3_1_free as core
 import run_master_3_1_free as base
 
@@ -175,5 +175,5 @@ def install(token_func):
 
 def run(token_func):
     install(token_func)
-    import run_master_3_1_free_semantic as semantic
+    import run_master_3_1_free_semantic_v2 as semantic
     return semantic.process_job(token_func())
