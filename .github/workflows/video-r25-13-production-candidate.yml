@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry1.txt'
+      - 'candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry2.txt'
 
 permissions:
   contents: read
@@ -25,6 +25,11 @@ jobs:
       BRIDGE_JOB_ID: "86e814014cabee88785a53340ab85666"
       BRIDGE_SOURCE_DRIVE_ID: "1rGX92YskXRtXHc53lyj9JMU3g24H5vCI"
       BRIDGE_ASR_DIAGNOSTIC_RECEIPT_ID: "1aw5OSpDP48DsNX--WuOdDl8uhf893Taa"
+      BRIDGE_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+      BRIDGE_RUNNER_LABEL: "ubuntu-24.04"
+      BRIDGE_LARGER_RUNNER: "false"
+      BRIDGE_PAID_CLOUD: "false"
+      BRIDGE_BILLING_FALLBACK: "false"
     steps:
       - name: Checkout exact candidate
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -33,10 +38,10 @@ jobs:
       - name: Verify immutable request
         run: |
           set -euo pipefail
-          grep -Fx 'JOB_ID=86e814014cabee88785a53340ab85666' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry1.txt
-          grep -Fx 'REVISION=3.1-free-r25.13-checkpoint' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry1.txt
-          grep -Fx 'SOURCE_DRIVE_ID=1rGX92YskXRtXHc53lyj9JMU3g24H5vCI' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry1.txt
-          grep -Fx 'ASR_DIAGNOSTIC_RECEIPT_ID=1aw5OSpDP48DsNX--WuOdDl8uhf893Taa' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry1.txt
+          grep -Fx 'JOB_ID=86e814014cabee88785a53340ab85666' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry2.txt
+          grep -Fx 'REVISION=3.1-free-r25.13-checkpoint' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry2.txt
+          grep -Fx 'SOURCE_DRIVE_ID=1rGX92YskXRtXHc53lyj9JMU3g24H5vCI' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry2.txt
+          grep -Fx 'ASR_DIAGNOSTIC_RECEIPT_ID=1aw5OSpDP48DsNX--WuOdDl8uhf893Taa' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry2.txt
       - name: Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
