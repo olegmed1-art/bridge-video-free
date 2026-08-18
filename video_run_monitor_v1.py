@@ -35,7 +35,8 @@ def main() -> None:
         raise SystemExit("MONITOR_V1_DRIVE_OAUTH_UNAVAILABLE")
 
     safe_run = run_id or "unknown"
-    name = f"MONITOR_V1_{status}_{job_id}_run_{safe_run}.json"
+    safe_attempt = run_attempt or "1"
+    name = f"MONITOR_V1_{status}_{job_id}_run_{safe_run}_attempt_{safe_attempt}.json"
     existing = io.search(
         token,
         f"'{work_folder_id}' in parents and trashed=false and name='{name}'",
@@ -61,7 +62,10 @@ def main() -> None:
         "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
     item = io.upload_json(token, work_folder_id, name, payload)
-    print(f"MONITOR_V1_RECEIPT {status} {item.get('id')} run={safe_run}")
+    print(
+        f"MONITOR_V1_RECEIPT {status} {item.get('id')} "
+        f"run={safe_run} attempt={safe_attempt}"
+    )
 
 
 if __name__ == "__main__":
