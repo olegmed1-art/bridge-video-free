@@ -1,8 +1,8 @@
 # META CLOSED LOOP v1.6
-Status: FIVE_AUDIT_PRELAUNCH_PASS / NOT_YET_ACTIVATED
+Status: SHADOW_ACTIVE / FIRST_PILOT_PASS / ZERO_PROMOTION_AUTHORITY
 
-## Prelaunch hold
-META CLOSED LOOP itself remains unexecuted. The one-time hold remains until the owner explicitly authorizes the first Shadow Pilot. Other School algorithms and automations are unaffected.
+## Shadow activation
+The owner explicitly authorized the first Shadow Pilot on 2026-08-18. The one-time prelaunch hold is released only for SHADOW operation. META may observe, propose and validate in isolation but retains zero Stable/production promotion authority. Exiting Shadow Mode still requires a second, separate explicit owner decision. Evidence: `meta_school/evidence/META_FIRST_SHADOW_PILOT_20260818.md`.
 
 ## Mission
 Evidence-based improvement with fail-closed governance, bounded autonomy, independent validation, statistical discipline, recoverability and auditable learning.
