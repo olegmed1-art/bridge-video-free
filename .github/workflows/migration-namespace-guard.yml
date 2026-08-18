@@ -1,0 +1,60 @@
+name: Migration Namespace Guard
+
+on:
+  pull_request:
+    paths:
+      - 'database/migrations/**'
+      - 'database/tests/**'
+      - 'database/MIGRATION_NAMESPACES.md'
+      - '.github/workflows/migration-namespace-guard.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'database/migrations/**'
+      - 'database/tests/**'
+      - 'database/MIGRATION_NAMESPACES.md'
+      - '.github/workflows/migration-namespace-guard.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  namespace-guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Enforce reserved Club/Identity ranges
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          for path in database/migrations/01??_*.sql; do
+            base="$(basename "$path" .sql)"
+            suffix="${base#*_}"
+            case "$suffix" in
+              identity_*|club_*|member_*|auth_*) ;;
+              *)
+                echo "Reserved migration range 0100-0199 is Club/Member/Identity/Auth only: $path" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          for path in database/tests/09?_*.sql; do
+            base="$(basename "$path" .sql)"
+            suffix="${base#*_}"
+            case "$suffix" in
+              identity_*|club_*|member_*|auth_*) ;;
+              *)
+                echo "Reserved SQL-test range 090-099 is Club/Member/Identity/Auth only: $path" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          echo 'Reserved migration/test namespaces verified.'
