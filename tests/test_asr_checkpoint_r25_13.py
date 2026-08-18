@@ -96,11 +96,16 @@ def test_r25_13_workflow_recovers_stalled_runtime_install_without_parallel_data_
         / "video-r25-13-production-candidate.yml"
     ).read_text(encoding="utf-8")
     assert "cancel-in-progress: true" in workflow
-    assert "candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry1.txt" in workflow
+    assert "candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry2.txt" in workflow
     assert "timeout-minutes: 20" in workflow
     assert "timeout 180s apt-get update -qq" in workflow
     assert "APT_RUNTIME_INSTALL_FAILED_AFTER_RETRIES" in workflow
     assert "--timeout 60 --retries 8 -r requirements-worker.txt" in workflow
+    assert "BRIDGE_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}" in workflow
+    assert 'BRIDGE_RUNNER_LABEL: "ubuntu-24.04"' in workflow
+    assert 'BRIDGE_LARGER_RUNNER: "false"' in workflow
+    assert 'BRIDGE_PAID_CLOUD: "false"' in workflow
+    assert 'BRIDGE_BILLING_FALLBACK: "false"' in workflow
 
 
 if __name__ == "__main__":
