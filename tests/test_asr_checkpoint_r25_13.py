@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from pathlib import Path
 
 import bridge_runtime_hardening_r25_13_checkpoint as candidate
 
@@ -43,7 +44,7 @@ def test_targeted_diagnostic_hallucination_is_quarantined():
             {"passId": "medium:no-vad", "model": "medium", "text": "you " * 12},
             {"passId": "small:strict-vad", "model": "small", "text": ""},
         ],
-        {"activeFrameRatio": 0.2},
+        {"frameCount": 1000, "activeFrameRatio": 0.2, "meanRms": 100, "peakAbsoluteSample": 1000},
     )
     assert result["status"] == "QUARANTINED_HALLUCINATION"
     assert result["publicationAllowed"] is False
@@ -55,29 +56,42 @@ def test_cross_model_convergence_is_only_a_candidate():
             {"passId": "medium:strict-vad", "model": "medium", "text": "контракт три без козыря первый ход"},
             {"passId": "small:strict-vad", "model": "small", "text": "контракт три без козыря и первый ход"},
         ],
-        {"activeFrameRatio": 0.15},
+        {"frameCount": 1000, "activeFrameRatio": 0.15, "meanRms": 100, "peakAbsoluteSample": 1000},
     )
     assert result["status"] == "SPEECH_RECOVERABLE_CANDIDATE_REQUIRES_META"
     assert result["independentAssessmentRequired"] is True
     assert result["publicationAllowed"] is False
 
 
-def test_empty_low_energy_is_not_declared_proven_silence():
+def test_exact_zero_pcm_rejects_forced_asr_hallucinations_without_publication():
     result = candidate.classify_targeted_diagnostic(
         [
             {"passId": "medium:strict-vad", "model": "medium", "text": ""},
+            {"passId": "medium:no-vad", "model": "medium", "text": "you " * 12},
             {"passId": "small:strict-vad", "model": "small", "text": ""},
+            {"passId": "small:no-vad", "model": "small", "text": "you " * 10},
         ],
-        {"activeFrameRatio": 0.0},
+        {"frameCount": 10000, "activeFrameRatio": 0.0, "meanRms": 0.0, "peakAbsoluteSample": 0},
     )
-    assert result["status"] == "NO_SPEECH_CANDIDATE_REQUIRES_META"
-    assert "NO_SPEECH_NOT_INDEPENDENTLY_CONFIRMED" in result["failureReasons"]
+    assert result["status"] == "DIGITAL_SILENCE_CONFIRMED_ASR_HALLUCINATIONS_REJECTED_REQUIRES_META"
+    assert result["digitalSilenceConfirmed"] is True
+    assert result["hallucinationPasses"] == ["medium:no-vad", "small:no-vad"]
+    assert result["publicationAllowed"] is False
+
+
+def test_r25_13_full_result_is_staging_only_until_meta_pass():
+    source = (Path(__file__).parents[1] / "database" / "video_result_persistence.py").read_text(
+        encoding="utf-8"
+    )
+    assert "candidate_requires_meta = algorithm_revision in {" in source
+    assert '"3.1-free-r25.12-meta"' in source
+    assert '"3.1-free-r25.13-checkpoint"' in source
 
 
 if __name__ == "__main__":
     test_checkpoint_preserves_failed_qc_and_targets_first_failed_block()
     test_targeted_diagnostic_hallucination_is_quarantined()
     test_cross_model_convergence_is_only_a_candidate()
-    test_empty_low_energy_is_not_declared_proven_silence()
+    test_exact_zero_pcm_rejects_forced_asr_hallucinations_without_publication()
+    test_r25_13_full_result_is_staging_only_until_meta_pass()
     print("R25_13_ASR_CHECKPOINT: PASS")
-

@@ -10,6 +10,9 @@ on:
       - 'tests/test_asr_checkpoint_r25_13.py'
       - '.github/workflows/video-r25-13-checkpoint.yml'
       - '.github/workflows/video-r25-13-block11-diagnostic.yml'
+      - '.github/workflows/video-r25-13-production-candidate.yml'
+      - 'candidate_requests/2026-08-18-logic-bridge-r25-13-full.txt'
+      - 'database/video_result_persistence.py'
 
 permissions:
   contents: read
@@ -42,4 +45,3 @@ jobs:
           set -euo pipefail
           grep -F 'BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.7"' .github/workflows/bridge-video-3.1-free.yml
           grep -F 'bridge_runtime_hardening_r25_7' run_drive_3_1_free_generic.py
-
