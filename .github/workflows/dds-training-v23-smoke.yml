@@ -10,6 +10,7 @@ on:
       - '.github/workflows/dds-training-pilot-finish.yml'
       - '.github/workflows/dds-main-30k-prepare.yml'
       - '.github/workflows/dds-main-30k-train-authorized.yml'
+      - '.github/workflows/dds-stage2b-prepare.yml'
   push:
     branches: [dds-training-local]
     paths:
@@ -20,6 +21,7 @@ on:
       - '.github/workflows/dds-training-pilot-finish.yml'
       - '.github/workflows/dds-main-30k-prepare.yml'
       - '.github/workflows/dds-main-30k-train-authorized.yml'
+      - '.github/workflows/dds-stage2b-prepare.yml'
   workflow_dispatch:
 
 concurrency:
