@@ -1,10 +1,10 @@
-name: DDS Stage 2B — OOF and curriculum preparation
+name: DDS Stage 2B — refined OOF and curriculum preparation
 
 on:
   workflow_dispatch:
     inputs:
       approve_stage2b_preparation:
-        description: 'Prepare OOF candidate, line wave, continuations and counterexamples; no DDS/validation/sealed execution'
+        description: 'Prepare refined OOF candidate, exact balanced continuations and multicontract blueprint; no DDS/validation/sealed execution'
         required: true
         type: boolean
         default: false
@@ -23,7 +23,7 @@ env:
   TRAIN_ARTIFACT: dds-main-train-progress-32060398288-a1
   TRAIN_ARTIFACT_ZIP_SHA256: c46cda2fb127371cbc1ab836c74580b25f0a0bb8ab358dfaab97cf591dd8a246
   WORK: dds_training/work/pilot
-  OUT: dds_training/work/stage2b
+  OUT: dds_training/work/stage2b-v25
   GH_TOKEN: ${{ github.token }}
 
 jobs:
@@ -59,6 +59,9 @@ jobs:
           python stage2b_blueprint_selftest.py
           python stage2b_v24_selftest.py
           python stage2b_prepare_selftest.py
+          python stage2b_v25_selftest.py
+          python stage2b_prepare_v25_selftest.py
+          python test_runner.py --manifest test_matrix.json --check-only
 
       - name: Restore exact completed 30k TRAIN artifact
         shell: bash
@@ -98,24 +101,26 @@ jobs:
           PY
           sha256sum work/pilot/training.sqlite3 > /tmp/stage2b-db-before.sha256
 
-      - name: Prepare Stage 2B from TRAIN facts only
+      - name: Prepare refined Stage 2B from TRAIN facts only
         working-directory: dds_training
         run: |
           set -euo pipefail
-          mkdir -p work/stage2b
-          python stage2b_prepare.py \
+          mkdir -p work/stage2b-v25
+          python stage2b_prepare_v25.py \
             --work work/pilot \
             --tasks \
               work/pilot/blind_tasks_crossfit.jsonl \
               work/pilot/blind_tasks_crossfit_main.jsonl \
               work/pilot/derived_blind_tasks.jsonl \
-            --out work/stage2b \
-            --line-sources 500 \
-            --continuations 2000 \
+            --main-tasks work/pilot/blind_tasks_crossfit_main.jsonl \
+            --out work/stage2b-v25 \
+            --line-sources 650 \
+            --continuations-per-actor 1000 \
             --line-cards 16 \
-            | tee work/stage2b/stage2b_prepare.log
+            --blueprint-families 500 \
+            | tee work/stage2b-v25/stage2b_prepare_v25.log
 
-      - name: Verify Stage 2B evidence and unchanged database
+      - name: Verify refined evidence and unchanged database
         working-directory: dds_training
         run: |
           set -euo pipefail
@@ -123,38 +128,58 @@ jobs:
           python - <<'PY'
           import json, sqlite3
           from pathlib import Path
-          root = Path('work/stage2b')
-          summary = json.loads((root / 'stage2b_summary.json').read_text(encoding='utf-8'))
+          root = Path('work/stage2b-v25')
+          summary = json.loads((root / 'stage2b_summary_v25.json').read_text(encoding='utf-8'))
           ready = summary['readiness']
           assert ready['train_rows'] == 42000, ready
           assert ready['oof_rows'] == 42000, ready
           assert ready['continuation_tasks'] == 2000, ready
-          assert sum(ready['continuation_by_actor'].values()) == 2000, ready
-          assert ready['continuation_by_actor'].get('declarer', 0) > 0
-          assert ready['continuation_by_actor'].get('defense', 0) > 0
+          assert ready['continuation_by_actor'] == {'declarer': 1000, 'defense': 1000}, ready
+          assert ready['multi_contract_blueprint']['families'] == 500, ready
+          assert ready['multi_contract_blueprint']['tasks'] == 10000, ready
+          assert ready['multi_contract_blueprint']['dds_called'] is False, ready
+          assert ready['multi_contract_blueprint']['predictions_locked'] is False, ready
+          assert ready['family_selection']['contract_suit'] == 'candidate_v0.3', ready
+          assert ready['family_selection']['opening_lead_suit'] == 'candidate_v0.3', ready
+          assert ready['family_selection']['contract_nt'] == 'source_v0.2_fallback', ready
+          assert ready['family_selection']['opening_lead_nt'] == 'source_v0.2_fallback', ready
+          assert 'NT' in ready['review_queue_strains'], ready
           assert ready['dds_called'] is False
           assert ready['mass_training_started'] is False
           assert ready['validation_opened'] is False
           assert ready['sealed_opened'] is False
+
+          diagnostics = json.loads((root / 'calibration_diagnostics_v25.json').read_text(encoding='utf-8'))
+          baseline_groups = [v for k,v in diagnostics['groups'].items() if k.startswith('contract_') and k.endswith(':baseline')]
+          assert baseline_groups, diagnostics
+          assert max(group['mean_raw_probability'] for group in baseline_groups) <= 0.18 + 1e-12
+
           manifest = json.loads((root / 'CURRENT_STAGE_MANIFEST.json').read_text(encoding='utf-8'))
+          assert manifest['current_algorithm'] == 'dds-learning-v2.5-stage2b-candidate'
           assert manifest['holdout_status'] == 'closed'
           assert manifest['sealed_status'] == 'closed'
           assert manifest['metadata']['dds_results'] == 50497
+          assert manifest['metadata']['multi_contract_blueprint_tasks'] == 10000
+
           db = sqlite3.connect(Path('work/pilot/training.sqlite3'))
           counts = dict(db.execute('select split,count(*) from dds_results group by split'))
           assert counts == {'derived': 2497, 'sealed_test': 3000, 'train': 42000, 'validation': 3000}, counts
           print({
-              'stage2b_prepared': True,
+              'stage2b_v25_prepared': True,
               'oof_rows': ready['oof_rows'],
-              'continuations': ready['continuation_tasks'],
+              'continuation_by_actor': ready['continuation_by_actor'],
+              'blueprint_tasks': ready['multi_contract_blueprint']['tasks'],
+              'family_selection': ready['family_selection'],
               'counterexample_candidates': ready['counterexample_candidates'],
+              'structural_investigations': ready['investigations']['structural'],
+              'card_level_investigations': ready['investigations']['card_level'],
               'database_unchanged': True,
               'paid_api_used': False,
           })
           PY
-          test -f work/stage2b/dds-stage2b-prepared-compact.tgz
-          test -f work/stage2b/dds-stage2b-prepared-compact.tgz.sha256
-          (cd work/stage2b && sha256sum -c dds-stage2b-prepared-compact.tgz.sha256)
+          test -f work/stage2b-v25/dds-stage2b-v25-prepared-compact.tgz
+          test -f work/stage2b-v25/dds-stage2b-v25-prepared-compact.tgz.sha256
+          (cd work/stage2b-v25 && sha256sum -c dds-stage2b-v25-prepared-compact.tgz.sha256)
 
       - name: Verify repository sources remained unchanged
         run: |
@@ -162,23 +187,26 @@ jobs:
           git diff --exit-code
           test -z "$(git status --porcelain=v1 --untracked-files=all | grep -v '^?? dds_training/work/' || true)"
 
-      - name: Upload compact Stage 2B preparation evidence
+      - name: Upload compact refined Stage 2B evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: dds-stage2b-prepared-${{ github.run_id }}
+          name: dds-stage2b-v25-prepared-${{ github.run_id }}
           path: |
-            dds_training/work/stage2b/stage2b_summary.json
-            dds_training/work/stage2b/stage2b_readiness.json
-            dds_training/work/stage2b/CURRENT_STAGE_MANIFEST.json
-            dds_training/work/stage2b/oof_comparison_v03_vs_v02.json
-            dds_training/work/stage2b/oof_calibration_v2.json
-            dds_training/work/stage2b/candidate_model_v03.json
-            dds_training/work/stage2b/continuation_curriculum.jsonl
-            dds_training/work/stage2b/counterexample_candidates.jsonl
-            dds_training/work/stage2b/investigation_resolution_classes.json
-            dds_training/work/stage2b/review_queue_projection.json
-            dds_training/work/stage2b/dds-stage2b-prepared-compact.tgz
-            dds_training/work/stage2b/dds-stage2b-prepared-compact.tgz.sha256
+            dds_training/work/stage2b-v25/stage2b_summary_v25.json
+            dds_training/work/stage2b-v25/stage2b_readiness_v25.json
+            dds_training/work/stage2b-v25/CURRENT_STAGE_MANIFEST.json
+            dds_training/work/stage2b-v25/oof_comparison_v03_stratified.json
+            dds_training/work/stage2b-v25/family_selection_policy.json
+            dds_training/work/stage2b-v25/oof_calibration_v25.json
+            dds_training/work/stage2b-v25/calibration_diagnostics_v25.json
+            dds_training/work/stage2b-v25/candidate_model_v03_refined.json
+            dds_training/work/stage2b-v25/continuation_curriculum_balanced.jsonl
+            dds_training/work/stage2b-v25/counterexample_candidates.jsonl
+            dds_training/work/stage2b-v25/multi_contract_blueprint.jsonl
+            dds_training/work/stage2b-v25/investigation_resolution_classes.json
+            dds_training/work/stage2b-v25/review_queue_projection_enriched.json
+            dds_training/work/stage2b-v25/dds-stage2b-v25-prepared-compact.tgz
+            dds_training/work/stage2b-v25/dds-stage2b-v25-prepared-compact.tgz.sha256
           if-no-files-found: warn
           retention-days: 30
