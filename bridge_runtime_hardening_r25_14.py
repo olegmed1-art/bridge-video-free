@@ -36,7 +36,7 @@ def install(token_func):
             os.environ.pop("BRIDGE_REQUESTED_ALGORITHM_REVISION", None)
 
     import run_master_3_1_free_semantic_v2 as semantic_v2
-    from bridge_speaker_diarization_v2 import diarize_transcript
+    from bridge_speaker_diarization_v2_observable import diarize_transcript
 
     semantic_v2.diarize_transcript = diarize_transcript
     semantic_v2.REVISION = REVISION
