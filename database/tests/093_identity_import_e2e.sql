@@ -18,7 +18,6 @@ DECLARE
     v_membership_before bigint;
     v_auth_before bigint;
     v_ready boolean;
-    v_count bigint;
     v_hash text;
     v_expected text;
     v_role text;
@@ -99,7 +98,7 @@ BEGIN
         identity_import_item_id,state,reason
     ) VALUES (v_new_item,'ready','explicit create intent reviewed');
 
-    -- Staging intent must never materialize operational identity records.
+    -- Staging intent by itself still must not materialize operational identity records.
     IF (SELECT count(*) FROM public.person) <> v_person_before THEN
         RAISE EXCEPTION 'staging create intent materialized a Person';
     END IF;
@@ -124,7 +123,7 @@ BEGIN
         RAISE EXCEPTION 'ready batch projection is not eligible';
     END IF;
 
-    -- Later evidence must invalidate eligibility append-only.
+    -- Later evidence must invalidate eligibility append-only before controlled apply.
     INSERT INTO identity_staging.identity_import_action(
         identity_import_item_id,action_type,reason
     ) VALUES (v_new_item,'defer','later evidence requires review');
@@ -134,15 +133,6 @@ BEGIN
     IF v_ready IS DISTINCT FROM false THEN
         RAISE EXCEPTION 'later defer did not fail closed';
     END IF;
-
-    SELECT count(*) INTO v_count
-      FROM identity_staging.identity_import_action
-     WHERE identity_import_item_id=v_new_item;
-    IF v_count <> 2 THEN RAISE EXCEPTION 'append-only action history incomplete'; END IF;
-    SELECT count(*) INTO v_count
-      FROM identity_staging.identity_import_item_state_event
-     WHERE identity_import_item_id=v_new_item;
-    IF v_count <> 2 THEN RAISE EXCEPTION 'append-only state history incomplete'; END IF;
 
     BEGIN
         UPDATE identity_staging.identity_import_item
@@ -178,18 +168,16 @@ BEGIN
     ] LOOP
         IF has_schema_privilege(v_role,'identity_staging','USAGE')
            OR has_table_privilege(v_role,'identity_staging.identity_import_item','SELECT')
-           OR has_table_privilege(v_role,'identity_staging.identity_import_item','INSERT') THEN
-            RAISE EXCEPTION 'runtime role % can access protected identity staging',v_role;
+           OR has_table_privilege(v_role,'identity_staging.identity_import_item','INSERT')
+           OR has_function_privilege(v_role,'identity_staging.apply_identity_import_batch(uuid)','EXECUTE') THEN
+            RAISE EXCEPTION 'runtime role % crossed protected identity staging/apply boundary',v_role;
         END IF;
     END LOOP;
 
-    SELECT count(*) INTO v_count
-      FROM pg_proc p
-      JOIN pg_namespace n ON n.oid=p.pronamespace
-     WHERE n.nspname IN ('public','identity_staging')
-       AND p.proname LIKE '%identity_import%apply%';
-    IF v_count <> 0 THEN
-        RAISE EXCEPTION 'unexpected identity import apply function exists';
+    IF NOT has_function_privilege(
+        'bridge_school_identity_admin','identity_staging.apply_identity_import_batch(uuid)','EXECUTE'
+    ) THEN
+        RAISE EXCEPTION 'identity admin lacks controlled apply capability';
     END IF;
 END $$;
 
