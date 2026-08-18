@@ -6,9 +6,11 @@ import secrets
 from uuid import UUID
 
 import psycopg
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
+from starlette.responses import Response
 
-from .db import EXPECTED_PRINCIPAL, connect
+from .db import DatabaseConfigurationError, EXPECTED_PRINCIPAL, connect
 
 EXPECTED_SCHOOL = "Школа спортивного бриджа"
 logger = logging.getLogger("bridge_school_api")
@@ -20,6 +22,25 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
+
+
+def apply_response_security_headers(path: str, response: Response) -> Response:
+    """Set conservative headers for JSON APIs, especially authenticated data."""
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    if path.startswith("/v1/"):
+        response.headers["Cache-Control"] = "private, no-store, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        for header_name in ("Vercel-CDN-Cache-Control", "CDN-Cache-Control"):
+            if header_name in response.headers:
+                del response.headers[header_name]
+    return response
+
+
+@app.middleware("http")
+async def api_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    return apply_response_security_headers(request.url.path, response)
 
 
 def require_api_token(authorization: str | None = Header(default=None)) -> None:
@@ -34,7 +55,35 @@ def require_api_token(authorization: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=403, detail="invalid bearer token")
 
 
+def _configuration_failure_category(exc: DatabaseConfigurationError) -> str:
+    """Map static configuration errors to safe diagnostic categories."""
+    message = str(exc)
+    if "not configured" in message:
+        return "configuration_missing"
+    if "complete PostgreSQL" in message or "valid PostgreSQL" in message:
+        return "configuration_uri_invalid"
+    if "principal" in message:
+        return "configuration_principal"
+    if "password" in message:
+        return "configuration_password_missing"
+    if "Neon endpoint" in message:
+        return "configuration_endpoint"
+    if "port" in message:
+        return "configuration_port"
+    if "database" in message:
+        return "configuration_database"
+    if "fragment" in message:
+        return "configuration_fragment"
+    if "TLS" in message:
+        return "configuration_tls"
+    if "channel binding" in message:
+        return "configuration_channel_binding"
+    return "configuration_error"
+
+
 def _database_failure_category(exc: Exception) -> str:
+    if isinstance(exc, DatabaseConfigurationError):
+        return _configuration_failure_category(exc)
     text = str(exc).lower()
     if "password authentication failed" in text or "authentication failed" in text:
         return "authentication_failed"
@@ -69,8 +118,28 @@ def _database_failure_category(exc: Exception) -> str:
     return "database_error"
 
 
+def database_service_unavailable_response(path: str, exc: Exception) -> JSONResponse:
+    """Return a generic response while logging only a sanitized failure category."""
+    category = _database_failure_category(exc)
+    logger.error(
+        "database_request_failed category=%s type=%s sqlstate=%s path=%s",
+        category,
+        type(exc).__name__,
+        getattr(exc, "sqlstate", None),
+        path,
+    )
+    response = JSONResponse({"detail": "service unavailable"}, status_code=503)
+    return apply_response_security_headers(path, response)  # type: ignore[return-value]
+
+
+@app.exception_handler(psycopg.Error)
+@app.exception_handler(DatabaseConfigurationError)
+async def database_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    return database_service_unavailable_response(request.url.path, exc)
+
+
 @app.get("/healthz")
-def healthz() -> dict[str, str]:
+def healthz() -> JSONResponse:
     try:
         with connect() as conn, conn.cursor() as cur:
             cur.execute(
@@ -87,12 +156,18 @@ def healthz() -> dict[str, str]:
             type(exc).__name__,
             getattr(exc, "sqlstate", None),
         )
-        raise HTTPException(status_code=503, detail=f"database health check failed: {category}") from exc
+        raise HTTPException(status_code=503, detail="service unavailable") from exc
 
     if not row or row["principal"] != EXPECTED_PRINCIPAL or row["school_count"] != 1:
         logger.error("database_health_check_failed category=runtime_boundary")
-        raise HTTPException(status_code=503, detail="database runtime boundary is not ready")
-    return {"status": "ok"}
+        raise HTTPException(status_code=503, detail="service unavailable")
+    return JSONResponse(
+        {"status": "ok"},
+        headers={
+            "Cache-Control": "public, max-age=0, must-revalidate",
+            "Vercel-CDN-Cache-Control": "public, max-age=15, stale-while-revalidate=15",
+        },
+    )
 
 
 @app.get("/v1/overview", dependencies=[Depends(require_api_token)])

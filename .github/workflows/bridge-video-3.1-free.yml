@@ -7,6 +7,26 @@ on:
         description: "Opaque deterministic job id"
         required: true
         type: string
+      output_folder_id:
+        description: "Optional Drive folder for derived outputs; source video is never moved"
+        required: false
+        type: string
+      work_folder_id:
+        description: "Optional Drive folder for processing receipts"
+        required: false
+        type: string
+      lesson_number:
+        description: "Optional historical lesson number"
+        required: false
+        type: string
+      lesson_date_candidate:
+        description: "Optional ISO lesson-date candidate"
+        required: false
+        type: string
+      lesson_date_evidence_json:
+        description: "Optional JSON array of independent Zoom/Calendar/email/chat date evidence"
+        required: false
+        type: string
   push:
     branches: [main]
     paths:
@@ -14,7 +34,6 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 concurrency:
   group: bridge-video-heavy
@@ -32,6 +51,8 @@ jobs:
       BRIDGE_LARGER_RUNNER: "false"
       BRIDGE_PAID_CLOUD: "false"
       BRIDGE_BILLING_FALLBACK: "false"
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.7"
+      BRIDGE_DIARIZATION_ENABLED: "true"
       PYTHONUNBUFFERED: "1"
       WHISPER_MODEL: small
 
@@ -42,18 +63,45 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
 
-      - name: Resolve opaque job id
+      - name: Resolve job and Diana longitudinal context
         shell: bash
         env:
           INPUT_JOB_ID: ${{ inputs.job_id }}
+          INPUT_OUTPUT_FOLDER_ID: ${{ inputs.output_folder_id }}
+          INPUT_WORK_FOLDER_ID: ${{ inputs.work_folder_id }}
+          INPUT_LESSON_NUMBER: ${{ inputs.lesson_number }}
+          INPUT_LESSON_DATE_CANDIDATE: ${{ inputs.lesson_date_candidate }}
+          INPUT_LESSON_DATE_EVIDENCE_JSON: ${{ inputs.lesson_date_evidence_json }}
         run: |
           set -euo pipefail
+          OUTPUT_FOLDER_ID=""
+          WORK_FOLDER_ID=""
+          ORIGINAL_SOURCE_DRIVE_ID=""
+          LESSON_NUMBER=""
+          LESSON_DATE_CANDIDATE=""
+          LESSON_DATE_SOURCE=""
+          LESSON_DATE_EVIDENCE_JSON=""
+          PERSIST_DATABASE="false"
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             JOB_ID="$INPUT_JOB_ID"
+            OUTPUT_FOLDER_ID="$INPUT_OUTPUT_FOLDER_ID"
+            WORK_FOLDER_ID="$INPUT_WORK_FOLDER_ID"
+            LESSON_NUMBER="$INPUT_LESSON_NUMBER"
+            LESSON_DATE_CANDIDATE="$INPUT_LESSON_DATE_CANDIDATE"
+            LESSON_DATE_EVIDENCE_JSON="$INPUT_LESSON_DATE_EVIDENCE_JSON"
           else
-            REQUEST_FILE="$(git diff-tree --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^run_requests/.*\.txt$' | head -n 1 || true)"
+            REQUEST_FILE="$(git show --pretty='' --name-only "$GITHUB_SHA" | grep -E '^run_requests/.*\.txt$' | head -n 1 || true)"
             test -n "$REQUEST_FILE" || { echo "No run request file in triggering commit" >&2; exit 2; }
             JOB_ID="$(sed -n 's/^JOB_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            OUTPUT_FOLDER_ID="$(sed -n 's/^OUTPUT_FOLDER_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            WORK_FOLDER_ID="$(sed -n 's/^WORK_FOLDER_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            ORIGINAL_SOURCE_DRIVE_ID="$(sed -n 's/^ORIGINAL_SOURCE_DRIVE_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            LESSON_NUMBER="$(sed -n 's/^LESSON_NUMBER=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            LESSON_DATE_CANDIDATE="$(sed -n 's/^LESSON_DATE_CANDIDATE=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            LESSON_DATE_SOURCE="$(sed -n 's/^LESSON_DATE_SOURCE=//p' "$REQUEST_FILE" | tail -n 1)"
+            LESSON_DATE_EVIDENCE_JSON="$(sed -n 's/^LESSON_DATE_EVIDENCE_JSON=//p' "$REQUEST_FILE" | tail -n 1)"
+            PERSIST_DATABASE="$(sed -n 's/^PERSIST_DATABASE=//p' "$REQUEST_FILE" | tail -n 1 | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+            PERSIST_DATABASE="${PERSIST_DATABASE:-false}"
             if [ -z "$JOB_ID" ]; then
               JOB_ID="$(basename "$REQUEST_FILE" .txt)"
             fi
@@ -63,45 +111,74 @@ jobs:
             *[!0-9a-f]*) echo "invalid opaque job id" >&2; exit 2 ;;
           esac
           test "${#JOB_ID}" -eq 32
-          echo "BRIDGE_JOB_ID=$JOB_ID" >> "$GITHUB_ENV"
+          for ID_VALUE in "$OUTPUT_FOLDER_ID" "$WORK_FOLDER_ID" "$ORIGINAL_SOURCE_DRIVE_ID"; do
+            if [ -n "$ID_VALUE" ]; then
+              case "$ID_VALUE" in
+                *[!0-9A-Za-z_-]*) echo "invalid Drive id" >&2; exit 2 ;;
+              esac
+            fi
+          done
+          if [ -n "$LESSON_NUMBER" ]; then
+            case "$LESSON_NUMBER" in *[!0-9]*) echo "invalid lesson number" >&2; exit 2 ;; esac
+          fi
+          if [ -n "$LESSON_DATE_CANDIDATE" ]; then
+            case "$LESSON_DATE_CANDIDATE" in
+              ????-??-??) ;;
+              *) echo "lesson date candidate must be YYYY-MM-DD" >&2; exit 2 ;;
+            esac
+          fi
+          if [ -n "$LESSON_DATE_EVIDENCE_JSON" ]; then
+            LESSON_DATE_EVIDENCE_JSON="$LESSON_DATE_EVIDENCE_JSON" python - <<'PY'
+          import json, os
+          value=json.loads(os.environ['LESSON_DATE_EVIDENCE_JSON'])
+          if not isinstance(value,list): raise SystemExit('lesson date evidence must be a JSON array')
+          PY
+          fi
+          case "$PERSIST_DATABASE" in true|false) ;; *) echo "PERSIST_DATABASE must be true or false" >&2; exit 2 ;; esac
+          {
+            echo "BRIDGE_JOB_ID=$JOB_ID"
+            echo "BRIDGE_OUTPUT_FOLDER_ID=$OUTPUT_FOLDER_ID"
+            echo "BRIDGE_WORK_FOLDER_ID=$WORK_FOLDER_ID"
+            echo "BRIDGE_ORIGINAL_SOURCE_DRIVE_ID=$ORIGINAL_SOURCE_DRIVE_ID"
+            echo "BRIDGE_LESSON_NUMBER=$LESSON_NUMBER"
+            echo "BRIDGE_LESSON_DATE_CANDIDATE=$LESSON_DATE_CANDIDATE"
+            echo "BRIDGE_LESSON_DATE_SOURCE=$LESSON_DATE_SOURCE"
+            echo "BRIDGE_PERSIST_DATABASE=$PERSIST_DATABASE"
+          } >> "$GITHUB_ENV"
+          if [ -n "$LESSON_DATE_EVIDENCE_JSON" ]; then
+            {
+              echo 'BRIDGE_LESSON_DATE_EVIDENCE_JSON<<BRIDGE_DATE_EOF'
+              echo "$LESSON_DATE_EVIDENCE_JSON"
+              echo 'BRIDGE_DATE_EOF'
+            } >> "$GITHUB_ENV"
+          fi
 
       - name: Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
 
+      - name: Install lightweight Drive, database and longitudinal dependencies
+        run: |
+          python -m pip install --disable-pip-version-check \
+            'requests==2.34.2' 'google-auth==2.56.3' 'pymupdf==1.28.2' \
+            'psycopg[binary]==3.3.4' 'numpy==2.2.6'
+
+      - name: Terminal receipt preflight
+        id: terminal
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: python check_completed_job.py
+
       - name: Install free open-source runtime
+        if: steps.terminal.outputs.already_completed != 'true'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
-          python -m pip install --disable-pip-version-check \
-            google-auth requests faster-whisper pillow imagehash \
-            opencv-python-headless reportlab pymupdf 'psycopg[binary]'
+          python -m pip install --disable-pip-version-check -r requirements-worker.txt
 
-      - name: Authenticate to Google Cloud with Workload Identity Federation
-        id: auth
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
-        with:
-          project_id: bridge-video-automation
-          workload_identity_provider: projects/499454355457/locations/global/workloadIdentityPools/github-actions/providers/github
-          service_account: bridge-video-worker@bridge-video-automation.iam.gserviceaccount.com
-          create_credentials_file: true
-
-      - name: Google ADC preflight
-        shell: bash
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import google.auth
-          from google.auth.transport.requests import Request
-          creds, project = google.auth.default(scopes=['https://www.googleapis.com/auth/drive'])
-          creds.refresh(Request())
-          if not creds.token:
-              raise SystemExit('BLOCKED_ACCESS: ADC token unavailable')
-          print('Google Workload Identity ADC preflight: PASS')
-          PY
-
-      - name: Google Drive user OAuth preflight
+      - name: Google Drive OAuth preflight
+        if: steps.terminal.outputs.already_completed != 'true'
         shell: bash
         env:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
@@ -112,40 +189,59 @@ jobs:
           token = user_oauth_token()
           if not token:
               raise SystemExit('BLOCKED_ACCESS: GOOGLE_DRIVE_OAUTH_JSON secret is not configured')
-          print('Google Drive user OAuth preflight: PASS')
+          print('Google Drive OAuth preflight: PASS')
           PY
 
-      - name: Worker database runtime preflight
-        shell: bash
-        env:
-          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
-        run: |
-          set -uo pipefail
-          if [ -z "${BRIDGE_WORKER_DATABASE_URL:-}" ]; then
-            echo 'RUNTIME_DB_PREFLIGHT: SKIPPED — BRIDGE_WORKER_DATABASE_URL is not configured'
-            echo 'BRIDGE_DB_READY=0' >> "$GITHUB_ENV"
-            exit 0
-          fi
-          if python database/runtime_worker_preflight.py; then
-            echo 'BRIDGE_DB_READY=1' >> "$GITHUB_ENV"
-          else
-            echo '::warning::RUNTIME_DB_PREFLIGHT failed; video analysis will continue without Neon persistence.'
-            echo 'BRIDGE_DB_READY=0' >> "$GITHUB_ENV"
-          fi
-
       - name: FREE-GUARD
+        if: steps.terminal.outputs.already_completed != 'true'
         run: python bridge_worker_3_1_free.py
 
       - name: Process one opaque Drive job
+        if: steps.terminal.outputs.already_completed != 'true'
         shell: bash
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          python run_drive_3_1_free_oidc.py
+
+      - name: Completed job no-op
+        if: steps.terminal.outputs.already_completed == 'true'
+        run: |
+          echo 'ALREADY_COMPLETED: terminal CLEANUP_ACK exists; heavy runtime skipped.'
+
+      - name: Route derived outputs away from master media
+        if: always() && env.BRIDGE_OUTPUT_FOLDER_ID != ''
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: python route_drive_job_outputs.py
+
+      - name: Build quality-first Diana longitudinal candidates
+        if: always() && env.BRIDGE_OUTPUT_FOLDER_ID != '' && env.BRIDGE_LESSON_NUMBER != ''
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+        run: python diana_longitudinal_postprocess.py
+
+      - name: Persist completed raw evidence and analysis to Neon
+        if: always() && env.BRIDGE_PERSIST_DATABASE == 'true'
         env:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
           BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
         run: |
-          set -euo pipefail
-          if [ "${BRIDGE_DB_READY:-0}" != "1" ]; then
-            unset BRIDGE_WORKER_DATABASE_URL
-          fi
-          python run_drive_3_1_free_oidc.py
+          python - <<'PY'
+          from run_drive_3_1_free_oidc import user_oauth_token
+          from bridge_neon_persistence import persist_completed_drive_job
+          token = user_oauth_token()
+          if not token:
+              raise SystemExit('BLOCKED_ACCESS: Drive OAuth unavailable')
+          if persist_completed_drive_job(token) is None:
+              raise SystemExit('DATABASE_PERSIST_NOT_CONFIGURED')
+          print('DATABASE_PERSIST_COMPLETE')
+          PY
 
+      # No Google Cloud auth, no paid AI endpoint, no billing fallback.
+      # Source/master media is read-only; derived files are routed separately.
+      # TECHNICAL_READY, CONTENT_EXTRACTED and METHODOLOGY_READY/PARTIAL are separate receipts.
+      # Candidate database writes go only to the staging layer and never activate canon/profile/course.
       # User media/transcripts are never uploaded as GitHub workflow artifacts.

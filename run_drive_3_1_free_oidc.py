@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
 """Authentication adapter for Bridge 3.1 FREE.
 
-GitHub Workload Identity Federation remains the keyless default identity for
-Google Cloud. For Google Drive file creation in a user's My Drive, the runner
-uses a user OAuth refresh token supplied through one GitHub Actions secret:
-GOOGLE_DRIVE_OAUTH_JSON.
+Zero-cost invariant:
+- Google Drive access uses only the user's OAuth refresh token stored in
+  GOOGLE_DRIVE_OAUTH_JSON (or the legacy three OAuth secret variables).
+- There is NO Google Cloud Workload Identity / ADC fallback.
+- There is NO service-account or billable-cloud dependency in the worker path.
 
-The secret value is JSON with keys:
+The heavy video runtime is imported lazily so lightweight Drive/status tools can
+reuse ``user_oauth_token`` without importing ASR and database dependencies.
+
+GOOGLE_DRIVE_OAUTH_JSON must contain:
   client_id, client_secret, refresh_token
-
-Legacy three-secret variables are still accepted for backward compatibility.
 """
 
 import json
 import os
 
-import google.auth
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
-
-from run_drive_3_1_free_generic import main as generic_main
 
 DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
@@ -65,24 +64,20 @@ def user_oauth_token():
     return credentials.token
 
 
-def adc_token():
-    credentials, _ = google.auth.default(scopes=[DRIVE_SCOPE])
-    if hasattr(credentials, "with_scopes"):
-        try:
-            credentials = credentials.with_scopes([DRIVE_SCOPE])
-        except (AttributeError, TypeError):
-            pass
-    credentials.refresh(Request())
-    if not credentials.token:
-        raise RuntimeError("BLOCKED_ACCESS: Workload Identity ADC token unavailable")
-    return credentials.token
-
-
 def drive_token():
-    # User OAuth is required for creating files owned by the user in My Drive.
-    # ADC remains a safe fallback for read-only diagnostics before OAuth setup.
-    return user_oauth_token() or adc_token()
+    token = user_oauth_token()
+    if not token:
+        raise RuntimeError(
+            "BLOCKED_ACCESS: GOOGLE_DRIVE_OAUTH_JSON is required; paid/cloud fallback is forbidden"
+        )
+    return token
+
+
+def main() -> None:
+    from run_drive_3_1_free_generic import main as generic_main
+
+    generic_main(drive_token)
 
 
 if __name__ == "__main__":
-    generic_main(drive_token)
+    main()

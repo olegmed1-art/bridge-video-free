@@ -1,0 +1,84 @@
+{
+  "schema": "dds-stage2-readiness-v23",
+  "algorithm_version": "dds-learning-v2.3",
+  "scope": "legacy_compatibility_guard",
+  "canonical_pipeline": {
+    "stage_runner": "run_stage.py",
+    "readiness_gate": "stage2_readiness.py",
+    "preparation": "prepare_stage2.py",
+    "test_manifest": "test_matrix.json"
+  },
+  "status": "blocked",
+  "mass_training_started": false,
+  "capabilities": {
+    "family_lineage_and_crossfit": {
+      "status": "ready",
+      "mass_start_required": true,
+      "implementation": "v23_runtime.py"
+    },
+    "legal_line_validation": {
+      "status": "ready",
+      "mass_start_required": true,
+      "implementation": "v23_runtime.py"
+    },
+    "continuation_task_schema": {
+      "status": "ready",
+      "mass_start_required": true,
+      "implementation": "v23_runtime.py"
+    },
+    "human_information_mask": {
+      "status": "ready",
+      "mass_start_required": true,
+      "implementation": "v23_runtime.py"
+    },
+    "confidence_calibration": {
+      "status": "ready",
+      "mass_start_required": true,
+      "implementation": "v23_core.py"
+    },
+    "family_preserving_shards": {
+      "status": "ready",
+      "mass_start_required": true,
+      "implementation": "v23_core.py"
+    },
+    "counterexample_evaluator": {
+      "status": "ready",
+      "mass_start_required": true,
+      "implementation": "v23_core.py"
+    },
+    "versioned_rule_promotion": {
+      "status": "ready",
+      "mass_start_required": true,
+      "implementation": "v23_core.py"
+    },
+    "negative_control_protocol": {
+      "status": "ready",
+      "mass_start_required": true,
+      "implementation": "v23_core.py"
+    },
+    "dds_partial_position_adapter": {
+      "status": "blocked",
+      "mass_start_required": true,
+      "reason": "The legacy run_stage_v23 compatibility launcher remains intentionally blocked. The canonical modular partial-position adapter is dds_play.py and is exercised by the DDS suite.",
+      "action": "Use prepare_stage2.py plus stage2_readiness.py; do not authorize this legacy wrapper."
+    },
+    "full_play_trajectory_integration": {
+      "status": "blocked",
+      "mass_start_required": true,
+      "reason": "The compatibility launcher does not own the canonical trajectory implementation. The production implementation is dds_play.py and is covered by dds_play_selftest.py.",
+      "action": "Keep this legacy gate blocked and rely on canonical modular readiness evidence."
+    },
+    "stage2_sharded_workflow": {
+      "status": "blocked",
+      "mass_start_required": true,
+      "reason": "The legacy launcher has no authority to start the 30k stage. Family-safe shard preparation exists in the canonical modular pipeline, but mass execution still requires a separate explicit user command.",
+      "action": "Use shard_plan.py artifacts with the canonical runner only after explicit approval."
+    },
+    "real_pbn_play_ingestion": {
+      "status": "blocked",
+      "mass_start_required": false,
+      "reason": "Required before claiming transfer to real tournament play."
+    }
+  },
+  "next_action": "Use the canonical modular Stage 2 readiness report. Keep this compatibility launcher blocked; any mass run still requires a separate explicit user command."
+}

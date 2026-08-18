@@ -1,0 +1,23 @@
+name: DDS pilot 10k — archived finish phase
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dds-pilot-10k-finish-archive
+  cancel-in-progress: false
+
+jobs:
+  archived:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Preserve historical pilot completion route as non-executable evidence
+        run: |
+          set -euo pipefail
+          echo 'The legacy 10k pilot completion workflow is archived and intentionally non-executable.'
+          echo 'Historical pilot artifacts and reports are preserved; this workflow cannot reopen validation or sealed evidence.'
+          echo '{"archived":true,"training_started":false,"sealed_test_opened":false,"historical_results_preserved":true}'

@@ -16,7 +16,7 @@ from bridge_neon_persistence import persist_completed_drive_job
 from bridge_semantic_qc import SEMANTIC_QC_REVISION, semantic_normalize_segments
 
 # Product name stays 3.1 FREE; only the internal implementation revision changes.
-core.ALGORITHM_REVISION = "3.1-free-master-analysis-r6"
+core.ALGORITHM_REVISION = "3.1-free-r25"
 base.ALGORITHM_REVISION = core.ALGORITHM_REVISION
 
 # Give Whisper bridge-specific acoustic/lexical anchors seen in real lessons.
@@ -149,6 +149,9 @@ def qc_transcript_r6(video, work, dur, segs):
             "primaryTerms": cmp["primaryTerms"],
             "controlTerms": cmp["checkTerms"],
             "termOk": cmp["termOk"],
+            "primaryWordCount": len(base._words(b["text"])),
+            "primaryTextEmpty": len(base._words(b["text"])) == 0,
+            "controlWordCount": len(base._words(best["text"])),
             "failureReasons": cmp["reasons"],
             "estimatedErrorRisk": risk,
             "riskBand": _risk_band(risk),
@@ -288,7 +291,19 @@ def _existing_same_revision_done(token, job_id):
             and payload.get("job_id") == job_id
             and payload.get("algorithmRevision") == core.ALGORITHM_REVISION
         ):
-            return payload
+            ready_name = f"METHODOLOGY_READY_{job_id}.json"
+            ready_candidates = base.io.search(token, f"trashed=false and name='{ready_name}'")
+            ready_candidates.sort(key=lambda item: item.get("modifiedTime") or "", reverse=True)
+            for ready_candidate in ready_candidates:
+                try:
+                    ready = json.loads(base._read_text(token, ready_candidate))
+                except Exception:
+                    continue
+                if (ready.get("status") == "METHODOLOGY_READY" and
+                    ready.get("job_id") == job_id and
+                    ready.get("algorithmRevision") == core.ALGORITHM_REVISION and
+                    ready.get("masterPdfDriveId") == (payload.get("masterPdf") or {}).get("driveId")):
+                    return payload
     return None
 
 
@@ -297,6 +312,10 @@ def process_job(token):
     existing = _existing_same_revision_done(token, job_id)
     if existing is not None:
         base.io.safe(job_id=job_id, stage="ALREADY_DONE", exit_code=0)
+        # AI_DONE proves the expensive Drive analysis is complete, but it does not prove
+        # that the final Neon transaction succeeded. Reconcile the idempotent database
+        # persistence before returning so a retry repairs partial completion.
+        persist_completed_drive_job(token)
         return existing
 
     result = base.process_job(token)

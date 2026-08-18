@@ -1,0 +1,106 @@
+version: 0.2
+status: IMPLEMENTED_AS_POLICY
+objectives:
+  critical_structured_data_rpo_minutes: 60
+  critical_service_rto_minutes: 120
+  backup_definition: restore_test_plus_integrity_evidence
+current_baseline:
+  neon_project: bridge-school-core
+  neon_project_id: misty-poetry-18012774
+  production_branch_id: br-wispy-lab-b1rq54of
+  observed_history_retention_seconds: 2592000
+  production_protected_observed: true
+  current_recovery_state: INTEGRITY_VERIFIED
+  current_state_evidence_branch_id: br-weathered-silence-b11nrc37
+  historical_recovery_branch_id: br-raspy-fog-b1l6rbbv
+  historical_recovery_parent_timestamp: '2026-08-17T06:47:57Z'
+  historical_recovery_verified: true
+  drive_recovery_snapshot_folder_id: 1GapHc20IiBToLtTbX5h9MC4sDS0AaiWH
+  drive_representative_copy_test: passed
+  current_application_health: passed
+  recovery_ready: false
+  recovery_ready_blockers:
+    - fresh_arbitrary_timestamp_or_lsn_branch_creation_not_exercised
+    - restored_branch_application_smoke_not_exercised
+    - off_drive_recovery_for_large_irreplaceable_media_not_proven
+recovery_states:
+  - UNVERIFIED_BACKUP
+  - RESTORE_TESTED
+  - INTEGRITY_VERIFIED
+  - RECOVERY_READY
+gates:
+  production_launch:
+    require:
+      - verified_identity_and_authorization
+      - database_restore_test
+      - critical_integrity_checks
+      - artifact_recovery_test
+      - versioned_migrations
+      - documented_runbook
+  recovery_ready:
+    require:
+      - isolated_current_state_restore_or_branch_test
+      - historical_recovery_point_test
+      - fresh_arbitrary_timestamp_or_lsn_recovery_test
+      - restored_branch_application_smoke
+      - representative_artifact_recovery_test
+      - independent_large_irreplaceable_media_recovery_path
+      - measured_rpo_rto
+      - recovery_evidence_record
+  destructive_change:
+    require:
+      - recovery_point_before_change
+      - isolated_test_when_possible
+      - evidence_after_change
+  database_migration:
+    require:
+      - temporary_branch
+      - schema_verification
+      - regression_checks
+      - explicit_promotion_workflow
+checks:
+  database:
+    - branch_and_project_health
+    - schema_integrity
+    - critical_table_invariants
+    - identity_evidence_link_integrity
+    - retention_window_vs_policy
+    - recovery_point_age
+  artifacts:
+    - stable_file_identity
+    - provenance
+    - checksum_or_equivalent_integrity_sampling
+    - reference_integrity
+    - independent_copy_or_export_path_for_irreplaceable_sources
+  code:
+    - versioned_migrations
+    - stable_commit_traceability
+    - regression_status
+    - no_secrets_in_repo
+incidents:
+  severity:
+    P0: data_loss_or_corruption_or_identity_security_failure
+    P1: critical_service_unavailable_or_recovery_uncertain
+    P2: degraded_noncritical_pipeline
+  actions:
+    P0:
+      - freeze_nonessential_writes
+      - preserve_current_state
+      - create_recovery_evidence
+      - use_reliability_budget_override_if_material
+      - restore_in_isolation_before_cutover
+    P1:
+      - preserve_recovery_points
+      - diagnose
+      - test_recovery_path
+    P2:
+      - retry_or_fallback
+      - log_failure
+      - create_regression_test_if_material
+budget:
+  normal_hard_limit_usd: 50
+  reliability_max_overrun_percent: 50
+  reliability_absolute_cap_usd: 75
+  override_requires_material_reliability_gain: true
+promotion:
+  rule: never_label_RECOVERY_READY_without_all_recovery_ready_gates

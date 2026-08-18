@@ -7,7 +7,9 @@ DECLARE
     r record;
     unexpected_membership_count integer;
 BEGIN
-    -- Health capability and dormant principals must be non-login/non-admin roles.
+    -- Runtime principals may be NOLOGIN while dormant or LOGIN after a credential
+    -- is explicitly provisioned. LOGIN alone is operational state, not an admin
+    -- capability. Administrative attributes remain forbidden in either state.
     FOREACH role_name IN ARRAY ARRAY[
         'bridge_school_health',
         'bridge_school_app_principal',
@@ -21,7 +23,7 @@ BEGIN
         IF NOT FOUND THEN
             RAISE EXCEPTION 'runtime access role missing: %', role_name;
         END IF;
-        IF r.rolcanlogin OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls THEN
+        IF r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls THEN
             RAISE EXCEPTION 'runtime access role has unsafe attributes: %', role_name;
         END IF;
         IF has_schema_privilege(role_name,'public','CREATE') THEN

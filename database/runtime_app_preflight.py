@@ -5,15 +5,15 @@ from __future__ import annotations
 import os
 import re
 import sys
-from urllib.parse import quote
+from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 import psycopg
 
 EXPECTED_PRINCIPAL = "bridge_school_app_principal"
 EXPECTED_CAPABILITY = "bridge_school_app"
 EXPECTED_SCHOOL = "Школа спортивного бриджа"
-NEON_HOST = "ep-noisy-pine-b1pe30sf.c-5.eu-central-1.aws.neon.tech"
-NEON_DATABASE = "neondb"
+EXPECTED_HOST = "ep-noisy-pine-b1pe30sf-pooler.c-5.eu-central-1.aws.neon.tech"
+EXPECTED_DATABASE = "neondb"
 
 
 def fail(message: str) -> None:
@@ -29,53 +29,61 @@ def safe_db_error(exc: BaseException) -> str:
     return message[:1200] or exc.__class__.__name__
 
 
-def unquote_env_value(value: str) -> str:
+def _unquote(value: str) -> str:
     value = value.strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
         return value[1:-1].strip()
     return value
 
 
-def build_password_dsn(password: str) -> str:
-    encoded_password = quote(password, safe="")
-    return (
-        f"postgresql://{EXPECTED_PRINCIPAL}:{encoded_password}@{NEON_HOST}/{NEON_DATABASE}"
-        "?sslmode=require&channel_binding=require"
-    )
+def _canonicalize_neon_endpoint(value: str, parsed):
+    hostname = (parsed.hostname or "").lower()
+    if not hostname.endswith(".neon.tech") or hostname == EXPECTED_HOST:
+        return value, parsed
+
+    userinfo, separator, hostport = parsed.netloc.rpartition("@")
+    if not separator:
+        return value, parsed
+    _, port_separator, port = hostport.partition(":")
+    canonical_hostport = EXPECTED_HOST + (f":{port}" if port_separator else "")
+    canonical = urlunsplit(parsed._replace(netloc=f"{userinfo}@{canonical_hostport}"))
+    return canonical, urlsplit(canonical)
 
 
 def normalize_dsn(raw: str) -> str:
-    """Accept a URI, one env assignment, a full Neon .env file, or password only."""
-    value = raw.strip()
+    """Require the full pooled production Neon URI for the app principal."""
+    value = _unquote(raw)
     if not value:
         return ""
+    if not value.startswith(("postgresql://", "postgres://")):
+        fail("BRIDGE_APP_DATABASE_URL must be a complete PostgreSQL URI")
 
-    direct = unquote_env_value(value)
-    if direct.startswith("postgresql://") or direct.startswith("postgres://"):
-        return direct
+    try:
+        parsed = urlsplit(value)
+        query = parse_qs(parsed.query, keep_blank_values=True)
+    except ValueError:
+        fail("BRIDGE_APP_DATABASE_URL is not a valid PostgreSQL URI")
 
-    env_values: dict[str, str] = {}
-    for raw_line in value.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, item = line.split("=", 1)
-        env_values[key.strip()] = unquote_env_value(item)
+    value, parsed = _canonicalize_neon_endpoint(value, parsed)
 
-    for key in ("BRIDGE_APP_DATABASE_URL", "DATABASE_URL", "POSTGRES_URL", "NEON_DATABASE_URL"):
-        candidate = env_values.get(key, "").strip()
-        if candidate.startswith("postgresql://") or candidate.startswith("postgres://"):
-            return candidate
+    if parsed.username != EXPECTED_PRINCIPAL:
+        fail("BRIDGE_APP_DATABASE_URL uses the wrong database principal")
+    if not parsed.password:
+        fail("BRIDGE_APP_DATABASE_URL is missing a password")
+    if parsed.hostname != EXPECTED_HOST:
+        fail("BRIDGE_APP_DATABASE_URL must target the production Neon pooled endpoint")
+    if parsed.port not in (None, 5432):
+        fail("BRIDGE_APP_DATABASE_URL uses an unexpected port")
+    if parsed.path != f"/{EXPECTED_DATABASE}":
+        fail("BRIDGE_APP_DATABASE_URL uses the wrong database")
+    if parsed.fragment:
+        fail("BRIDGE_APP_DATABASE_URL must not include a URI fragment")
+    if query.get("sslmode") not in (["require"], ["verify-full"]):
+        fail("BRIDGE_APP_DATABASE_URL must require TLS")
+    if query.get("channel_binding") != ["require"]:
+        fail("BRIDGE_APP_DATABASE_URL must require channel binding")
 
-    for key in ("PGPASSWORD", "NEON_PASSWORD", "PASSWORD"):
-        password = env_values.get(key, "").strip()
-        if password:
-            return build_password_dsn(password)
-
-    if value and not any(ch.isspace() for ch in value) and "=" not in value:
-        return build_password_dsn(value)
-
-    fail("BRIDGE_APP_DATABASE_URL does not contain a usable PostgreSQL URI or Neon password")
+    return value
 
 
 def main() -> None:

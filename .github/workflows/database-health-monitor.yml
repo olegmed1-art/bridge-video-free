@@ -4,6 +4,17 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '17 * * * *'
+  push:
+    branches: [main]
+    paths:
+      - 'bridge_school_api/db.py'
+      - 'database/runtime_app_http_preflight.py'
+      - 'database/runtime_health_preflight.py'
+      - 'database/runtime_worker_preflight.py'
+      - 'tests/test_app_http_health_contract.py'
+      - 'tests/test_health_dsn_contract.py'
+      - 'tests/test_health_monitor_workflow_contract.py'
+      - '.github/workflows/database-health-monitor.yml'
 
 permissions:
   contents: read
@@ -12,25 +23,55 @@ jobs:
   health:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    env:
-      BRIDGE_HEALTH_DATABASE_URL: ${{ secrets.BRIDGE_HEALTH_DATABASE_URL }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
 
       - name: Install PostgreSQL client library
-        run: python -m pip install --disable-pip-version-check 'psycopg[binary]'
+        run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+
+      - name: Run health monitoring contract regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python tests/test_health_dsn_contract.py
+          PYTHONPATH=. python tests/test_app_http_health_contract.py
+          PYTHONPATH=. python tests/test_health_monitor_workflow_contract.py
+
+      - name: Verify production application database path
+        env:
+          BRIDGE_APP_HEALTH_URL: https://bridge-video-free.vercel.app/healthz
+        run: python database/runtime_app_http_preflight.py
+
+      - name: Verify worker runtime secret exists
+        shell: bash
+        env:
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${BRIDGE_WORKER_DATABASE_URL:-}" || { echo 'BRIDGE_WORKER_DATABASE_URL is not configured'; exit 1; }
+
+      - name: Verify least-privilege worker database access
+        env:
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+        run: python database/runtime_worker_preflight.py
 
       - name: Verify dedicated health credential exists
         shell: bash
+        env:
+          BRIDGE_HEALTH_DATABASE_URL: ${{ secrets.BRIDGE_HEALTH_DATABASE_URL }}
         run: |
           set -euo pipefail
           test -n "${BRIDGE_HEALTH_DATABASE_URL:-}" || { echo 'BRIDGE_HEALTH_DATABASE_URL is not configured'; exit 1; }
 
       - name: Verify least-privilege operational health access
+        env:
+          BRIDGE_HEALTH_DATABASE_URL: ${{ secrets.BRIDGE_HEALTH_DATABASE_URL }}
         run: python database/runtime_health_preflight.py

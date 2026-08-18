@@ -1,0 +1,7 @@
+.venv/
+.build/
+.tools/
+work/
+*.sqlite3
+__pycache__/
+*.pyc

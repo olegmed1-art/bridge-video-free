@@ -9,7 +9,7 @@ from bridge_worker_3_1_free import (
     ALGORITHM_VERSION, ALGORITHM_REVISION, INFERENCE, UNCERTAIN,
     autonomous_qc_indices, attach_visual_evidence, bridge_term_hits,
     course_link_candidates, legacy_job_id, master_analysis_payload,
-    semantic_episode_plan, stable_entity_id, stable_job_id,
+    semantic_episode_plan, stable_entity_id, stable_job_id, validate_r24_master,
     transcript_status, visual_pass1_plan, visual_pass2_requirements,
 )
 DRIVE='https://www.googleapis.com/drive/v3'
@@ -182,35 +182,141 @@ def pdf_report(out,master,shots):
     for x in [f"Оригинал: {src.get('name')}",f"Длительность: {_tm(src.get('durationSeconds'))}; размер: {src.get('sizeBytes')} байт",f"Drive ID: {src.get('driveId')}; SHA-256: {src.get('sha256')}",f"Алгоритм: {master['algorithmVersion']} / {master['algorithmRevision']}"]:st.append(Paragraph(escape(str(x)),body))
     st.append(Paragraph('1. Краткая карта занятия',h2));sm=master.get('session_summary',{});st.append(Paragraph(escape(f"Смысловых эпизодов: {sm.get('episode_count',0)}. Темы: {', '.join(sm.get('topics',[])[:30]) or 'не определены'}."),body));tq=master.get('technical_qc',{}).get('transcript',{});st.append(Paragraph(escape(f"Транскрипт: {tq.get('primarySource')}; статус: {tq.get('status')}."),body))
     for w in master.get('warnings',[]):st.append(Paragraph(escape('Предупреждение: '+str(w)),body))
-    st.append(Paragraph('2. Хронология',h2))
-    for x in master.get('timeline',[]):st.append(Paragraph(escape(f"{_tm(x['start'])}–{_tm(x['end'])} — {x.get('type')}; темы: {', '.join(x.get('topics',[])) or '—'}; confidence: {x.get('confidence')}"),body))
-    smap={x['evidence_id']:x for x in shots};st+=[PageBreak(),Paragraph('3. Подробный разбор смысловых эпизодов',h2)]
-    for e in master.get('episodes',[]):
+    st.append(Paragraph('2. Карта ключевых учебных событий',h2))
+    important_ids={x.get('focus_episode_id') for x in master.get('learning_interactions',[])}
+    timeline=[x for x in master.get('timeline',[]) if x.get('episode_id') in important_ids]
+    for x in timeline:st.append(Paragraph(escape(f"{_tm(x['start'])}–{_tm(x['end'])} — {x.get('type')}; темы: {', '.join(x.get('topics',[])) or '—'}; confidence: {x.get('confidence')}"),body))
+    if not timeline:st.append(Paragraph('Ключевые учебные события автоматически не подтверждены.',body))
+    st.append(Paragraph('3. Анализ действий ученика',h2))
+    observations=master.get('student_analysis',{}).get('observations',[])
+    if not observations:st.append(Paragraph('Персональные наблюдения не подтверждены надёжной атрибуцией.',body))
+    for x in observations:st.append(Paragraph(escape(f"Задача: {x.get('task')}; действие: {x.get('student_action')}; помощь: {x.get('support_state')}; результат: {x.get('result')}; перенос: {x.get('transfer')}."),body))
+    st.append(Paragraph('4. Учебные циклы: действие — вмешательство — результат',h2))
+    cycles=list(master.get('learning_interactions',[]) or [])
+    quality=master.get('content_quality',{}) or {}
+    no_speaker_labels=quality.get('speaker_labels_present') is False or quality.get('actor_attribution_status')=='unavailable_without_speaker_labels'
+    empty_actor_cycles=[
+        x for x in cycles
+        if not x.get('student_action') and not x.get('teacher_intervention') and not x.get('student_response')
+    ]
+    if cycles and no_speaker_labels and len(empty_actor_cycles)==len(cycles):
+        st.append(Paragraph(escape(
+            f"Надёжных меток говорящих нет. Найдено {len(cycles)} возможных учебных ситуаций, "
+            "но действия ученика, вмешательства преподавателя и результат нельзя честно разделить по ролям. "
+            "Повторяющиеся пустые карточки не печатаются; все исходные кандидаты без сокращений сохранены "
+            "во встроенном master_analysis.json."
+        ),body))
+    elif not cycles:
+        st.append(Paragraph('Подтверждённые учебные циклы автоматически не выделены.',body))
+    else:
+        for x in cycles:
+            st.append(Paragraph(escape(f"Задача/ситуация: {x.get('task_or_trigger') or 'не установлена'}"),body))
+            st.append(Paragraph(escape(f"Действие ученика: {x.get('student_action') or 'не установлено'}"),body))
+            st.append(Paragraph(escape(f"Вмешательство преподавателя: {x.get('intervention_type') or 'не установлено'} — {x.get('teacher_intervention') or ''}"),body))
+            st.append(Paragraph(escape(f"Реакция и результат: {x.get('student_response') or 'не установлена'}; {x.get('outcome')}; самостоятельность: {x.get('autonomy')}; перенос: {x.get('transfer')}."),small))
+    smap={x['evidence_id']:x for x in shots};st+=[PageBreak(),Paragraph('5. Доказательные эпизоды',h2)]
+    selected=[e for e in master.get('episodes',[]) if e.get('episode_id') in important_ids or e.get('visual_evidence')]
+    for e in selected:
         parts=[Paragraph(escape(f"Эпизод {e.get('ordinal')}: {_tm(e['start'])}–{_tm(e['end'])} — {e.get('type')}"),h3),Paragraph(escape(e.get('summary_text','') or '[нет текста]'),body),Paragraph(escape(f"Темы: {', '.join(e.get('terms',[])) or '—'}; канон: {e.get('course_link_status','не установлено')}; confidence: {e.get('confidence')}"),small)]
-        for evid in e.get('visual_evidence',[])[:2]:
+        roles={x.get('evidence_id'):x for x in e.get('visual_sequence',[])}
+        for evid in e.get('visual_evidence',[])[:3]:
             sh=smap.get(evid)
             if sh:
                 try:
                     with Image.open(sh['path']) as im:iw,ih=im.size
-                    scale=min((175*mm)/iw,(95*mm)/ih);parts.append(RImage(sh['path'],width=iw*scale,height=ih*scale));parts.append(Paragraph(escape(f"Полный необрезанный кадр: {_tm(sh['time'])}; evidence {evid}"),small))
+                    scale=min((175*mm)/iw,(95*mm)/ih);parts.append(RImage(sh['path'],width=iw*scale,height=ih*scale));meta=roles.get(evid,{});parts.append(Paragraph(escape(f"{meta.get('role','EVIDENCE')} — {_tm(sh['time'])}: {meta.get('caption','полный необрезанный доказательный кадр')}; evidence {evid}"),small))
                 except Exception:pass
         st.append(KeepTogether(parts))
-    sections=[('4. Кандидаты на ошибки и затруднения','errors',lambda x:f"{x.get('category')}; темы: {', '.join(x.get('topics',[])) or '—'}. {x.get('note','')}"),('5. Анализ работы преподавателя','teacher_analysis',lambda x:f"{x.get('method')}. {x.get('note','')}"),('6. Кандидаты в библиотеку лучших объяснений','best_explanations',lambda x:f"Темы: {', '.join(x.get('topics',[])) or '—'}; {x.get('candidate_reason')}; {x.get('status')}")]
+    sections=[('6. Кандидаты на ошибки и затруднения','errors',lambda x:f"{x.get('category')}; темы: {', '.join(x.get('topics',[])) or '—'}. {x.get('note','')}"),('7. Подтверждённые сильные решения','strengths',lambda x:f"{x.get('description')}; темы: {', '.join(x.get('topics',[])) or '—'}; самостоятельность: {x.get('autonomy')}"),('8. Анализ работы преподавателя','teacher_analysis',lambda x:f"{x.get('method')}. {x.get('note','')}"),('9. Кандидаты в библиотеку лучших объяснений','best_explanations',lambda x:f"Темы: {', '.join(x.get('topics',[])) or '—'}; {x.get('candidate_reason')}; {x.get('status')}")]
     st.append(PageBreak())
     for title,key,fmt in sections:
         st.append(Paragraph(title,h2));items=master.get(key,[])
         if not items:st.append(Paragraph('Автоматические кандидаты не выделены; это не доказывает отсутствие соответствующих событий.',body))
         for x in items:st.append(Paragraph(escape(fmt(x)),body))
-    st.append(Paragraph('7. Связь с каноном и пробелы',h2))
-    for x in master.get('canon_links',[]):
-        if x.get('status')!='не найдено':st.append(Paragraph(escape(f"{x.get('status')} (score {x.get('score')}): {x.get('canonical_excerpt') or ''}"),body))
+    st.append(Paragraph('10. Связь с каноном и пробелы',h2))
+    printable=[x for x in (master.get('canon_links',[]) or []) if x.get('status')!='не найдено' and str(x.get('canonical_excerpt') or '').strip()]
+    canon_by_excerpt={}
+    for x in printable:
+        key=re.sub(r'\\W+',' ',str(x.get('canonical_excerpt') or '').casefold()).strip()
+        if not key:continue
+        old=canon_by_excerpt.get(key)
+        try:score=float(x.get('score') or 0)
+        except Exception:score=0.0
+        try:old_score=float(old.get('score') or 0) if old else -1.0
+        except Exception:old_score=-1.0
+        if old is None or score>old_score:canon_by_excerpt[key]=x
+    unique_links=sorted(canon_by_excerpt.values(),key=lambda x:float(x.get('score') or 0),reverse=True)
+    shown=unique_links[:20]
+    st.append(Paragraph(escape(
+        f"Кандидатов связи с каноном: {len(printable)}; уникальных формулировок: {len(unique_links)}; "
+        f"в отчёте показано {len(shown)} наиболее сильных. Повторы и полный список сохранены "
+        "во встроенном master_analysis.json."
+    ),body))
+    if not shown:st.append(Paragraph('Подтверждённые связи с каноном автоматически не выделены.',body))
+    for x in shown:st.append(Paragraph(escape(f"{x.get('status')} (score {x.get('score')}): {x.get('canonical_excerpt') or ''}"),body))
     for x in master.get('knowledge_gaps',[]):st.append(Paragraph(escape(f"Кандидат в пробел: {x.get('question_context')}. Следующий шаг: {x.get('next_action')}"),body))
-    st.append(Paragraph('8. Рекомендации и следующее занятие',h2))
-    for x in master.get('recommendations',[]):st.append(Paragraph(escape(x.get('text','')),body))
-    st.append(Paragraph('9. Кандидаты раздач и решений',h2));st.append(Paragraph(escape(f"Раздач: {len(master.get('deals',[]))}; решений: {len(master.get('decisions',[]))}. Неизвестное не достраивается по догадке."),body))
-    st+=[PageBreak(),Paragraph('10. Полный транскрипт с таймкодами',h2)]
+    st.append(Paragraph('11. Рекомендации и следующее занятие',h2))
+    recs=master.get('recommendations',[])
+    if not recs:st.append(Paragraph('Рекомендации не сформированы: недостаточно подтверждённых данных.',body))
+    for x in recs:st.append(Paragraph(escape(x.get('text','')),body))
+    st.append(Paragraph('12. Кандидаты раздач и решений',h2));st.append(Paragraph(escape(f"Раздач: {len(master.get('deals',[]))}; решений: {len(master.get('decisions',[]))}. Неизвестное не достраивается по догадке."),body))
+    st+=[PageBreak(),Paragraph('13. Полный транскрипт с таймкодами',h2)]
     for s in master.get('transcript',[]):st.append(Paragraph(escape(f"[{_tm(s['start'])}–{_tm(s['end'])}] "+((s.get('speaker')+': ') if s.get('speaker') else '')+s.get('text','')+(' [требует проверки]' if s.get('unreliable') else '')),body))
-    st+=[PageBreak(),Paragraph('11. Технический QC и качество содержания',h2),Paragraph(escape(json.dumps(master.get('content_quality',{}),ensure_ascii=False,indent=2)),small),Paragraph(escape(json.dumps(master.get('technical_qc',{}),ensure_ascii=False,indent=2)),small),Paragraph('В PDF встроен master_analysis.json — машиночитаемая версия этого мастер-анализа.',body)];doc.build(st)
+    tq=master.get('technical_qc',{}).get('transcript',{}) or {}
+    cq=master.get('content_quality',{}) or {}
+    risk=tq.get('riskSummary',{}) or {}
+    gate=cq.get('r24Gate',{}) or {}
+    qc_records=list(tq.get('qc',[]) or [])
+    failed_qc=[x for x in qc_records if not bool(x.get('ok'))]
+    hallucination_qc=[
+        x for x in qc_records
+        if 'REPEATED_NONSPEECH_HALLUCINATION' in (x.get('failureReasons') or [])
+    ]
+    transcript=list(master.get('transcript',[]) or [])
+    empty_isolated=0
+    for record in failed_qc:
+        start=float(record.get('start') or 0);end=float(record.get('end') or start)
+        if not any(float(s.get('end') or 0)>start and float(s.get('start') or 0)<end for s in transcript):
+            empty_isolated+=1
+    derived_leaks=int(gate.get('unreliableDerivedEvidenceCount') or 0)
+    st+=[PageBreak(),Paragraph('14. Технический QC и качество содержания',h2)]
+    st.append(Paragraph(escape(
+        f"Итог: semantic QC — {cq.get('semantic_qc_status') or 'не установлен'}; "
+        f"content gate — {'PASS' if gate.get('ok') else 'FAIL/UNKNOWN'}; "
+        f"утечки ненадёжных доказательств в производные выводы — {derived_leaks}."
+    ),body))
+    st.append(Paragraph(escape(
+        f"Контроль ASR: источник {tq.get('primarySource') or 'не установлен'}; сегментов {cq.get('transcript_segments',len(transcript))}; "
+        f"проверено окон {len(qc_records)}; изолировано непрошедших окон {len(failed_qc)}; "
+        f"из них пустых интервалов без первичных речевых сегментов {empty_isolated}; "
+        f"патологических повторяющихся галлюцинаций {len(hallucination_qc)}."
+    ),body))
+    st.append(Paragraph(escape(
+        f"ASR-риск: максимум {risk.get('maxEstimatedErrorRisk')}; средних и выше блоков {risk.get('mediumOrHigherBlocks',0)}; "
+        f"высоких/критических {risk.get('highOrCriticalBlocks',0)}. Это эвристическая диагностика, а не калиброванная вероятность."
+    ),body))
+    st.append(Paragraph(escape(
+        f"Изоляция: ненадёжных сегментов сохранено {cq.get('unreliable_transcript_segments',0)}; "
+        f"для смысловой аналитики использовано {cq.get('semantic_derivation_transcript_segments',0)}; "
+        f"исключение ненадёжных сегментов — {'включено' if cq.get('unreliable_segments_excluded_from_semantic_derivation') else 'не подтверждено'}."
+    ),body))
+    st.append(Paragraph(escape(
+        f"Семантика: эпизодов {cq.get('semantic_episodes',0)}; автоисправлений {cq.get('semantic_auto_corrections',0)}; "
+        f"неразрешённых критических кандидатов {cq.get('semantic_critical_unresolved',0)}; "
+        f"раздач-кандидатов {cq.get('deal_candidates',0)}; решений-кандидатов {cq.get('decision_candidates',0)}."
+    ),body))
+    st.append(Paragraph(escape(
+        f"Разметка ролей: {cq.get('actor_attribution_status') or 'не установлена'}; "
+        f"метки говорящих {'есть' if cq.get('speaker_labels_present') else 'отсутствуют'}; "
+        f"неподтверждённых персональных утверждений исключено {cq.get('actor_specific_claims_excluded',0)}."
+    ),body))
+    st.append(Paragraph(escape(
+        f"Визуальный анализ: доказательств {cq.get('visual_evidence_items',0)}; "
+        f"кадров в отчёте {cq.get('selected_report_visuals',0)}. "
+        f"Канонических связей в master JSON {cq.get('canon_links_found',0)}."
+    ),body))
+    st.append(Paragraph('Полные технические данные, все несвёрнутые учебные циклы, canon links и исходный master_analysis.json встроены в PDF без сокращения.',body))
+    doc.build(st)
 def embed_master(pdf,master):
     import fitz
     raw=json.dumps(master,ensure_ascii=False,indent=2).encode();d=fitz.open(pdf);d.embfile_add('master_analysis.json',raw,filename='master_analysis.json',ufilename='master_analysis.json',desc='Bridge Video 3.1 FREE master analysis');tmp=Path(str(pdf)+'.embed.pdf');d.save(tmp,garbage=4,deflate=True);d.close();tmp.replace(pdf);return hashlib.sha256(raw).hexdigest()
@@ -242,7 +348,8 @@ def process_job(t):
         course,cid,cname=course_text(t);segs,tinfo,warnings=obtain_transcript(t,parent,src['name'],video,work,dur,job);participants=sorted({s.get('speaker') for s in segs if s.get('speaker')});critical=[s['start'] for s in segs if bridge_term_hits(s['text'])];p1,p2,shots=visual(video,work,dur,critical,job)
         if not p2['gapCheckPass']:raise RuntimeError('VISUAL_GAP_CHECK_FAILED')
         eps=semantic_episode_plan(segs,job);attach_visual_evidence(eps,shots);links=course_link_candidates(eps,course,cid);deals,decisions=derive_deals_decisions(eps,job);pubshots=[{k:v for k,v in x.items() if k!='path'} for x in shots]
-        master=master_analysis_payload(job_id=job,passport=passport,transcript=segs,transcript_qc=tinfo,visual_qc={'pass1':p1,'pass2':p2},episodes=eps,course_links=links,screenshots=pubshots,participants=[{'name':x,'role':'unknown until confirmed'} for x in participants],methodology_source={'driveId':cid,'name':cname,'sha256':hashlib.sha256(course.encode()).hexdigest(),'status':'canonical-first'},extra_warnings=warnings);master['deals']=deals;master['decisions']=decisions;master['content_quality']['deal_candidates']=len(deals);master['content_quality']['decision_candidates']=len(decisions);io.safe(job_id=job,stage='MASTER_ANALYSIS_BUILD',exit_code=0,episode_count=len(eps),content_warning_count=len(warnings))
+        master=master_analysis_payload(job_id=job,passport=passport,transcript=segs,transcript_qc=tinfo,visual_qc={'pass1':p1,'pass2':p2},episodes=eps,course_links=links,screenshots=pubshots,participants=[{'name':x,'role':'unknown until confirmed'} for x in participants],methodology_source={'driveId':cid,'name':cname,'sha256':hashlib.sha256(course.encode()).hexdigest(),'status':'canonical-first'},extra_warnings=warnings);master['deals']=deals;master['decisions']=decisions;master['content_quality']['deal_candidates']=len(deals);master['content_quality']['decision_candidates']=len(decisions);r24=validate_r24_master(master);master['content_quality']['r24Gate']=r24;io.safe(job_id=job,stage='MASTER_ANALYSIS_BUILD',exit_code=0 if r24['ok'] else 1,episode_count=len(eps),content_warning_count=len(warnings))
+        if not r24['ok']:raise RuntimeError('R24_CONTENT_GATE_FAILED:'+','.join(r24['issues']))
         report=work/f"{_safe_stem(src['name'])} — мастер-анализ 3.1 FREE.pdf";pdf_report(report,master,shots);msha=embed_master(report,master);q=pdfqc(report);io.safe(job_id=job,stage='PDF_QC',exit_code=0 if q['ok'] else 1,master_embedded=q['masterEmbedded'])
         if not q['ok']:raise RuntimeError('PDF_QC_FAILED')
         up=io.upload_file(t,parent,report,'application/pdf');have={io.pkey(x) for x in io.perms(t,up['id']) if x.get('role')!='owner'}
@@ -252,5 +359,6 @@ def process_job(t):
         if not access:raise RuntimeError('PDF_ACCESS_MISMATCH')
         chk=work/'recheck.bin';io.download(t,src['id'],chk)
         if io.sha(chk)!=passport['sha256'] or chk.stat().st_size!=passport['sizeBytes']:raise RuntimeError('ORIGINAL_REVERIFY_FAILED')
-        done={'schema':'bridge-video-ai-done','algorithmVersion':ALGORITHM_VERSION,'algorithmRevision':ALGORITHM_REVISION,'status':'AI_DONE','job_id':job,'original':passport,'masterPdf':{'driveId':up['id'],'name':up['name'],'sizeBytes':int(up.get('size') or 0),'pages':q['pages'],'sha256':q['sha256'],'masterJsonEmbedded':q['masterEmbedded'],'masterJsonSha256':msha,'access_match':access},'speech':{'primarySource':tinfo.get('primarySource'),'segmentCount':len(segs),'qcCount':len(tinfo.get('qc') or []),'unreliableCount':sum(bool(s.get('unreliable')) for s in segs)},'visual':{'pass1':p1['status'],'pass2':p2['status'],'gapCheckPass':p2['gapCheckPass'],'evidenceCount':len(shots)},'semantic':master.get('content_quality',{}),'methodologySource':master['technical_qc']['methodology_source'],'at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())};io.upload_json(t,parent,f'AI_DONE_{job}.json',done);done_sha=q['sha256']
-    io.upload_json(t,parent,f'CLEANUP_ACK_{job}.json',{'status':'CLEANUP_ACK','job_id':job,'reportSha256':done_sha,'temporaryRunnerDataDeleted':True,'at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())});io.safe(job_id=job,stage='CLEANUP_ACK',exit_code=0)
+        done={'schema':'bridge-video-ai-done','algorithmVersion':ALGORITHM_VERSION,'algorithmRevision':ALGORITHM_REVISION,'status':'AI_DONE','job_id':job,'original':passport,'masterPdf':{'driveId':up['id'],'name':up['name'],'sizeBytes':int(up.get('size') or 0),'pages':q['pages'],'sha256':q['sha256'],'masterJsonEmbedded':q['masterEmbedded'],'masterJsonSha256':msha,'access_match':access},'speech':{'primarySource':tinfo.get('primarySource'),'segmentCount':len(segs),'qcCount':len(tinfo.get('qc') or []),'unreliableCount':sum(bool(s.get('unreliable')) for s in segs)},'visual':{'pass1':p1['status'],'pass2':p2['status'],'gapCheckPass':p2['gapCheckPass'],'evidenceCount':len(shots)},'semantic':master.get('content_quality',{}),'methodologySource':master['technical_qc']['methodology_source'],'at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())};io.upload_json(t,parent,f'AI_DONE_{job}.json',done);io.upload_json(t,parent,f'METHODOLOGY_READY_{job}.json',{'schema':'bridge-video-methodology-ready','status':'METHODOLOGY_READY','job_id':job,'algorithmVersion':ALGORITHM_VERSION,'algorithmRevision':ALGORITHM_REVISION,'contentGate':r24,'masterPdfDriveId':up['id'],'masterPdfSha256':q['sha256'],'at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())});done_sha=q['sha256']
+    io.upload_json(t,parent,f'CLEANUP_ACK_{job}.json',{'status':'CLEANUP_ACK','job_id':job,'algorithmRevision':ALGORITHM_REVISION,'reportSha256':done_sha,'temporaryRunnerDataDeleted':True,'at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())});io.safe(job_id=job,stage='CLEANUP_ACK',exit_code=0)
+    return done

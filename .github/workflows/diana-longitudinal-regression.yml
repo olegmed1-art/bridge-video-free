@@ -1,0 +1,82 @@
+name: Diana Longitudinal Regression
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'diana_longitudinal_postprocess.py'
+      - 'diana_longitudinal_quality_v2.py'
+      - 'bridge_speaker_diarization.py'
+      - 'run_master_3_1_free_semantic_v2.py'
+      - 'bridge_runtime_hardening_r25_7.py'
+      - 'database/video_candidate_persistence.py'
+      - 'database/migrations/0049_analysis_candidate_staging.sql'
+      - 'tests/test_diana_longitudinal*.py'
+      - '.github/workflows/diana-longitudinal-regression.yml'
+  push:
+    branches:
+      - main
+      - 'candidate/**'
+    paths:
+      - 'diana_longitudinal_postprocess.py'
+      - 'diana_longitudinal_quality_v2.py'
+      - 'bridge_speaker_diarization.py'
+      - 'run_master_3_1_free_semantic_v2.py'
+      - 'bridge_runtime_hardening_r25_7.py'
+      - 'database/video_candidate_persistence.py'
+      - 'database/migrations/0049_analysis_candidate_staging.sql'
+      - 'tests/test_diana_longitudinal*.py'
+      - '.github/workflows/diana-longitudinal-regression.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  quality-first-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install deterministic test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check \
+            'requests==2.34.2' 'google-auth==2.56.3' 'pymupdf==1.28.2' \
+            'psycopg[binary]==3.3.4' 'numpy==2.2.6'
+      - name: Compile changed runtime
+        run: |
+          python -m py_compile \
+            diana_longitudinal_quality_v2.py \
+            diana_longitudinal_postprocess.py \
+            bridge_speaker_diarization.py \
+            run_master_3_1_free_semantic_v2.py \
+            bridge_runtime_hardening_r25_7.py \
+            database/video_candidate_persistence.py
+      - name: Quality-first unit regression
+        run: |
+          python -m unittest \
+            tests.test_diana_longitudinal_postprocess \
+            tests.test_diana_longitudinal_quality_v2 -v
+      - name: Assert no automatic authority escalation
+        run: |
+          python - <<'PY'
+          from diana_longitudinal_quality_v2 import build_quality_layer
+          master={
+            'job_id':'0'*32,
+            'content_quality':{'semantic_qc_status':'PASS','semantic_critical_unresolved':0},
+            'technical_qc':{'visual':{'pass1':{'status':'VISUAL_PASS_1_COMPLETE'},'pass2':{'status':'VISUAL_PASS_2_COMPLETE'}}},
+            'transcript':[{'segment_id':'s','start':0,'end':2,'text':'Сегодня поговорим про торговлю.'}],
+            'episodes':[{'episode_id':'e','ordinal':1,'start':0,'end':2,'type':'торговля','summary_text':'Сегодня поговорим про торговлю.','terms':['торговля'],'evidence':['s']}],
+            'learning_interactions':[], 'canon_links':[], 'deals':[],
+          }
+          q=build_quality_layer(master)
+          assert q['authority']['canon_activation']=='DENY'
+          assert q['authority']['curriculum_activation']=='DENY'
+          assert q['authority']['student_profile_production_write']=='DENY'
+          assert q['readiness']['methodology_status']!='METHODOLOGY_READY'
+          print('AUTHORITY_GUARD_PASS')
+          PY

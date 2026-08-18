@@ -11,6 +11,36 @@ if [[ ! -d "$MIGRATIONS_DIR" ]]; then
   exit 1
 fi
 
+assert_unique_numeric_prefixes() {
+  local directory="$1"
+  local label="$2"
+  local -A seen=()
+  local file prefix
+
+  [[ -d "$directory" ]] || return 0
+
+  while IFS= read -r file; do
+    [[ -z "$file" ]] && continue
+    prefix="${file%%_*}"
+    if [[ -n "${seen[$prefix]:-}" ]]; then
+      echo "Duplicate ${label} sequence prefix ${prefix}: ${seen[$prefix]} and ${file}" >&2
+      echo "Sequence numbers are unique release identities; renumber the newer unpromoted file before continuing." >&2
+      exit 1
+    fi
+    seen[$prefix]="$file"
+  done < <(
+    find "$directory" -maxdepth 1 -type f -name '[0-9][0-9][0-9][0-9]_*.sql' -printf '%f\n' | sort
+  )
+}
+
+# Catch sequence collisions before connecting migration ordering to durable state. This
+# also checks SQL regression-test numbering when the tests directory is present in the
+# checkout, because duplicate test identities make evidence and failure attribution
+# ambiguous even though PostgreSQL itself could execute both files.
+assert_unique_numeric_prefixes "$MIGRATIONS_DIR" "migration"
+TESTS_DIR="$(dirname "$MIGRATIONS_DIR")/tests"
+assert_unique_numeric_prefixes "$TESTS_DIR" "database-test"
+
 schema_table_exists() {
   [[ "$("${PSQL[@]}" -c "SELECT to_regclass('public.schema_migration') IS NOT NULL;")" == "t" ]]
 }

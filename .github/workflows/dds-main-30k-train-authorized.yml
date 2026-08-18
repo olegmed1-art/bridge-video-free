@@ -1,0 +1,134 @@
+name: DDS main 30k — authorized TRAIN execution
+
+on:
+  workflow_dispatch:
+    inputs:
+      approve_stage2:
+        description: Confirm explicit start of Stage-2 main TRAIN on the selected main commit
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: dds-main-30k-authorized-train
+  cancel-in-progress: false
+
+env:
+  PREPARED_RUN_ID: '32052220151'
+  PREPARED_ARTIFACT: dds-main-30k-prepared-32052220151
+  PREPARED_TGZ_SHA256: 2ca5015493b263a768611a97fc004aed16bd40926cf4ae0f2bb6202349d7bd74
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  train:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Enforce explicit owner authorization boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF_NAME" = main
+          test "$GITHUB_ACTOR" = olegmed1-art
+          test "$GITHUB_TRIGGERING_ACTOR" = olegmed1-art
+          test "${{ inputs.approve_stage2 }}" = "true"
+          test "${#GITHUB_SHA}" -eq 40
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Checkout authorized main commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+
+      - name: Restore prepared state or prior failed-attempt progress
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/dds-restore dds_training/work/pilot
+          mkdir -p /tmp/dds-restore dds_training/work
+          if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ]; then
+            previous_attempt=$((GITHUB_RUN_ATTEMPT - 1))
+            artifact="dds-main-train-progress-${GITHUB_RUN_ID}-a${previous_attempt}"
+            gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$artifact" --dir /tmp/dds-restore
+            archive="$(find /tmp/dds-restore -name 'dds-main-train-progress-state.tgz' -print -quit)"
+            checksum="$(find /tmp/dds-restore -name 'dds-main-train-progress-state.sha256' -print -quit)"
+            test -n "$archive" && test -n "$checksum"
+            test "$(sha256sum "$archive" | awk '{print $1}')" = "$(awk '{print $1}' "$checksum")"
+            tar -xzf "$archive" -C dds_training/work
+          else
+            downloaded=0
+            for attempt in $(seq 1 8); do
+              rm -rf /tmp/dds-restore/*
+              if gh run download "$PREPARED_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$PREPARED_ARTIFACT" --dir /tmp/dds-restore; then downloaded=1; break; fi
+              sleep $((attempt * 5))
+            done
+            test "$downloaded" = 1
+            archive="$(find /tmp/dds-restore -name 'dds-main-30k-prepared-state.tgz' -print -quit)"
+            test -n "$archive"
+            echo "$PREPARED_TGZ_SHA256  $archive" | sha256sum -c -
+            tar -xzf "$archive" -C dds_training/work
+          fi
+
+      - name: Restore verified DDS3 wheel and Bazel state
+        id: dds-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            dds_training/.wheel-cache/dds3
+            ~/.cache/bazel-dds3
+          key: dds3-wheel-v5-${{ runner.os }}-py314-${{ hashFiles('dds_training/bootstrap_linux.sh') }}
+          restore-keys: dds3-wheel-v5-${{ runner.os }}-py314-
+
+      - name: Bootstrap pinned local DDS3 without extra preflight
+        run: DDS_RUN_PREFLIGHT=0 bash dds_training/bootstrap_linux.sh
+
+      - name: Save verified DDS3 cache under exact key
+        if: ${{ steps.dds-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            dds_training/.wheel-cache/dds3
+            ~/.cache/bazel-dds3
+          key: dds3-wheel-v5-${{ runner.os }}-py314-${{ hashFiles('dds_training/bootstrap_linux.sh') }}
+
+      - name: Execute restartable owner-authorized base TRAIN stage
+        working-directory: dds_training
+        env:
+          DDS_MAIN_EXPECTED_COMMIT: ${{ github.sha }}
+          DDS_MAIN_APPROVAL_PHRASE: ЭТАП-2-СТАРТ-ПОДТВЕРЖДАЮ
+          DDS_MAIN_EVIDENCE_DIR: /tmp/dds-main-shard-evidence
+        run: bash run_main_train_authorized.sh
+
+      - name: Package progress state and per-shard evidence
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/dds-main-train-progress
+          if [ -d dds_training/work/pilot ]; then
+            tar -czf /tmp/dds-main-train-progress/dds-main-train-progress-state.tgz -C dds_training/work pilot
+            (cd /tmp/dds-main-train-progress && sha256sum dds-main-train-progress-state.tgz > dds-main-train-progress-state.sha256)
+          fi
+          if [ -d /tmp/dds-main-shard-evidence ]; then
+            tar -czf /tmp/dds-main-train-progress/dds-main-train-shard-evidence.tgz -C /tmp dds-main-shard-evidence
+            (cd /tmp/dds-main-train-progress && sha256sum dds-main-train-shard-evidence.tgz > dds-main-train-shard-evidence.sha256)
+          fi
+
+      - name: Upload restartable progress state
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dds-main-train-progress-${{ github.run_id }}-a${{ github.run_attempt }}
+          path: /tmp/dds-main-train-progress/
+          if-no-files-found: warn
+          retention-days: 90

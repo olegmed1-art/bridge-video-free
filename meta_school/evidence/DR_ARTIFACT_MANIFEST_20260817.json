@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "drill_date": "2026-08-17",
+  "drive_recovery_folder_id": "1GapHc20IiBToLtTbX5h9MC4sDS0AaiWH",
+  "artifacts": [
+    {
+      "kind": "native_document",
+      "purpose": "current_video_analysis_algorithm",
+      "source_file_id": "1ME-zurRoafluFzQyW7uPgsN62cKkQruhtoy8EkImnzA",
+      "recovery_file_id": "1zeUX_Ijt_hLaiOPFRwj5VmaKboEweJZFUOoQC53WF8Q",
+      "source_text_export_bytes": 143202,
+      "recovery_text_export_bytes": 143202,
+      "provider_copy": "PASS",
+      "readable_export": "PASS"
+    },
+    {
+      "kind": "native_document",
+      "purpose": "current_tournament_analysis_layout_algorithm",
+      "source_file_id": "1POfiJKz3bZBsWJ8KwSbMaiSgSPbnNH8nVZrUlVbwtpk",
+      "recovery_file_id": "1WYQSHw7cM69ScvkHkBx8in_4a-lIgLxLb5HzQk1gnQ4",
+      "source_text_export_bytes": 47624,
+      "recovery_text_export_bytes": 47624,
+      "provider_copy": "PASS",
+      "readable_export": "PASS"
+    },
+    {
+      "kind": "video_mp4",
+      "purpose": "representative_irreplaceable_source_lesson",
+      "source_file_id": "1rGX92YskXRtXHc53lyj9JMU3g24H5vCI",
+      "recovery_file_id": "134m-MIMziO05BkvLvArWQtGT_zNDcRhY",
+      "source_bytes": 1699568400,
+      "recovery_bytes": 1699568400,
+      "provider_copy": "PASS",
+      "independent_raw_download": "NOT_VERIFIED",
+      "independent_raw_download_blocker": "connected_drive_download_limit_268435456_bytes"
+    }
+  ],
+  "production_sources_modified": false,
+  "production_sources_deleted": false,
+  "whole_school_recovery_ready": false
+}

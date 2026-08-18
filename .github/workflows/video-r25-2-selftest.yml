@@ -1,0 +1,50 @@
+name: Bridge Video r25.2 Selftest
+
+on:
+  push:
+    branches:
+      - algorithm/3.1-free-r25.2-semantic-confidence-gate
+    paths:
+      - '.github/workflows/video-r25-2-selftest.yml'
+      - 'bridge_runtime_hardening_r25_2.py'
+      - 'bridge_runtime_hardening_r25_1.py'
+      - 'run_drive_3_1_free_generic.py'
+      - 'tests/test_semantic_gate_r25_2.py'
+      - 'tests/test_asr_qc_r25_1.py'
+
+permissions:
+  contents: read
+
+jobs:
+  r25-2-selftest:
+    runs-on: ubuntu-24.04
+    env:
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: 3.1-free-r25.2
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install test runtime
+        run: python -m pip install --disable-pip-version-check -r requirements-worker.txt
+      - name: Run r25.1 inherited and r25.2 semantic regression tests
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python tests/test_asr_qc_r25_1.py
+          PYTHONPATH=. python tests/test_semantic_gate_r25_2.py
+          python -m py_compile bridge_runtime_hardening_r25_2.py run_drive_3_1_free_generic.py tests/test_semantic_gate_r25_2.py
+      - name: Verify revision install contract
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import bridge_runtime_hardening_r25_2 as r252
+          import bridge_worker_3_1_free as core
+          import run_master_3_1_free as base
+          r252.install(lambda: 'unused')
+          assert core.ALGORITHM_VERSION == '3.1 FREE'
+          assert core.ALGORITHM_REVISION == '3.1-free-r25.2'
+          assert base.ALGORITHM_REVISION == '3.1-free-r25.2'
+          print('R25_2_REVISION_INSTALL: PASS')
+          PY
