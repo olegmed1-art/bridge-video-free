@@ -1,0 +1,14 @@
+JOB_ID=41daa4ca6e09d13e366c578b7c53ae31
+SOURCE_DRIVE_ID=1ACfY5ksRaYPKsUfd23cvcoSQbCe6GJr8
+ORIGINAL_SOURCE_DRIVE_ID=18l8AvNDUeX4VF_E0SXjl6st6EizWglZ-
+ALGORITHM_REQUESTED=3.1-free-r25.7
+MODE=diana-longitudinal-complete
+MASTER_READ_ONLY=true
+OUTPUT_FOLDER_ID=1-N-OGCsrrZuk4gsFoe89KwVF7VegMNGP
+WORK_FOLDER_ID=1n2hLtQ3XlZbvG2mCGbaMrR4Tt4-Oh6m7
+LESSON_NUMBER=2
+LESSON_DATE_CANDIDATE=2021-02-28
+LESSON_DATE_SOURCE=original Drive modifiedTime 2021-02-28 plus Zoom invitation and cloud-recording metadata; content must confirm topic
+LESSON_DATE_EVIDENCE_JSON=[{"source_type":"zoom_invitation","value":"2021-02-28","strength":"HIGH","independence_group":"zoom_meeting_2021-02-28","locator":{"gmail_message_id":"177e957f1343a132","subject":"Ссылка на Зум","topic_candidate":"Техника","scheduled_time":"18:00 Иерусалим"}},{"source_type":"zoom_cloud_recording","value":"2021-02-28","strength":"HIGH","independence_group":"zoom_meeting_2021-02-28","locator":{"gmail_message_id":"177e9a6bc68fad2e","subject":"Теперь доступны облачные записи","recording_time":"17:57 Иерусалим"}},{"source_type":"original_drive_metadata","value":"2021-02-28","strength":"MEDIUM","independence_group":"original_drive_metadata","locator":{"file_id":"18l8AvNDUeX4VF_E0SXjl6st6EizWglZ-","modifiedTime":"2021-02-28T08:33:47.000Z"}}]
+PERSIST_DATABASE=true
+COST_POLICY=zero-paid-ai
