@@ -18,6 +18,28 @@ OBSERVE -> HEALTH_CHECK -> FINDING -> ROOT_CAUSE -> CANDIDATE_OR_NO_CHANGE -> SA
 
 No finding is a valid outcome. META must not create work merely to keep the loop active.
 
+## Adaptive process observation
+
+Observation depth is selected before a run and recorded in its frozen contract. The objective is to learn from real execution without spending full diagnostic resources on every stable repetition.
+
+### Observation profiles
+- **FULL** — for a new component or algorithm, the first run after a material change, migrations/recovery drills, unstable or previously failed flows, expensive/long-running jobs and any R2-R4 work. Capture stage timing, retries, errors, resource/cost signals, outputs, guardrails and relevant logs.
+- **SELECTIVE** — for established stable flows. Capture identity/version, start/end/result, key health and quality metrics, cost where available, warnings/errors and final verification.
+- **TRIGGERED_FULL** — temporarily escalates a SELECTIVE run to full diagnostics when a frozen trigger fires: error/retry, guardrail or quality regression, unusual duration/resource use, changed dependency, incomplete evidence or UNKNOWN/STALE/CONFLICTED state.
+
+### Baseline non-interference
+During a valid baseline observation, OBSERVER is read-only and does not tune, retry, repair or otherwise alter the running process. Intervention is allowed only to prevent credible data loss, security/integrity harm, irreversible damage, budget-cap breach, or when the process cannot physically continue. Every intervention is recorded and the run is marked **INTERVENED**; its measurements cannot be treated as an untouched baseline.
+
+### Adaptive resource rule
+- Start FULL when required by profile criteria; otherwise use SELECTIVE.
+- Reduce FULL to SELECTIVE only after repeated comparable successful runs show stable results and no unresolved P0/P1/P2 finding. The required run count or observation window must be frozen from evidence or owner policy; META must not invent a convenient threshold after seeing results.
+- Return immediately to TRIGGERED_FULL after a material change, anomaly, regression, incident, dependency drift or evidence gap.
+- Deep re-analysis is performed only when a trigger fires or enough new evidence exists to test a defined hypothesis.
+- Observation has explicit cost and wall-clock caps. Optional diagnostics stop when their expected information value no longer justifies their resource cost; mandatory safety/evidence gates remain fail-closed.
+
+### Post-run learning
+After every observed run, record either a finding or **NO_CHANGE**, plus observation profile, interventions, evidence completeness, resource use and conclusion. Analyze result and process separately. Root cause and improvement proposals are created only after the observed run ends, except for permitted safety intervention. Proposed changes use SANDBOX and REGRESSION gates; only verified lessons enter authoritative Learning Memory.
+
 ## Scheduler priority
 P0 reliability/data-integrity/security/canonical-boundary incident.
 P1 confirmed regression affecting current School work.
