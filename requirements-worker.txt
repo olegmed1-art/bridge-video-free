@@ -7,3 +7,5 @@ opencv-python-headless==5.0.0.93
 reportlab==5.0.0
 pymupdf==1.28.2
 psycopg[binary]==3.3.4
+sherpa-onnx==1.13.4
+sherpa-onnx-bin==1.13.4
