@@ -192,6 +192,13 @@ jobs:
           print('Google Drive OAuth preflight: PASS')
           PY
 
+      - name: Monitor v1 worker-start receipt
+        if: steps.terminal.outputs.already_completed != 'true' && env.BRIDGE_WORK_FOLDER_ID != ''
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+          MONITOR_V1_STATUS: WORKER_STARTED
+        run: python video_run_monitor_v1.py
+
       - name: FREE-GUARD
         if: steps.terminal.outputs.already_completed != 'true'
         run: python bridge_worker_3_1_free.py
@@ -240,8 +247,17 @@ jobs:
           print('DATABASE_PERSIST_COMPLETE')
           PY
 
+      - name: Monitor v1 final receipt
+        if: always() && env.BRIDGE_WORK_FOLDER_ID != ''
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+          MONITOR_V1_STATUS: RUN_FINISHED
+          MONITOR_V1_JOB_STATUS: ${{ job.status }}
+        run: python video_run_monitor_v1.py
+
       # No Google Cloud auth, no paid AI endpoint, no billing fallback.
       # Source/master media is read-only; derived files are routed separately.
       # TECHNICAL_READY, CONTENT_EXTRACTED and METHODOLOGY_READY/PARTIAL are separate receipts.
       # Candidate database writes go only to the staging layer and never activate canon/profile/course.
+      # Monitor v1 receipts expose the real GitHub run identity without adding an orchestrator.
       # User media/transcripts are never uploaded as GitHub workflow artifacts.
