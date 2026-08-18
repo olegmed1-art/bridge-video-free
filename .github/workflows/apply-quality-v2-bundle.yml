@@ -1,0 +1,69 @@
+name: Apply reviewed Diana quality-v2 bundle
+
+on:
+  push:
+    branches:
+      - 'candidate/diana-video-analysis-v2'
+    paths:
+      - 'tools/apply_quality_v2_bundle.py'
+      - 'tools/quality_v2_bundle/**'
+      - '.github/workflows/apply-quality-v2-bundle.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  materialize-test-commit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 2
+          persist-credentials: true
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Materialize reviewed files
+        run: python tools/apply_quality_v2_bundle.py
+      - name: Install deterministic test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check \
+            'requests==2.34.2' 'google-auth==2.56.3' 'pymupdf==1.28.2' \
+            'psycopg[binary]==3.3.4' 'numpy==2.2.6'
+      - name: Compile and test before committing
+        run: |
+          python -m py_compile \
+            diana_longitudinal_quality_v2.py \
+            diana_longitudinal_postprocess.py \
+            bridge_speaker_diarization.py \
+            run_master_3_1_free_semantic_v2.py \
+            bridge_runtime_hardening_r25_7.py \
+            database/video_candidate_persistence.py
+          python -m unittest \
+            tests.test_diana_longitudinal_postprocess \
+            tests.test_diana_longitudinal_quality_v2 -v
+      - name: Commit verified implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            diana_longitudinal_quality_v2.py \
+            bridge_speaker_diarization.py \
+            run_master_3_1_free_semantic_v2.py \
+            diana_longitudinal_postprocess.py \
+            database/migrations/0014_analysis_candidate_staging.sql \
+            database/video_candidate_persistence.py \
+            tests/test_diana_longitudinal_postprocess.py \
+            tests/test_diana_longitudinal_quality_v2.py \
+            .github/workflows/bridge-video-3.1-free.yml \
+            .github/workflows/diana-semantic-refinement.yml \
+            .github/workflows/diana-longitudinal-regression.yml
+          if git diff --cached --quiet; then
+            echo 'QUALITY_V2_ALREADY_MATERIALIZED'
+            exit 0
+          fi
+          git commit -m 'Implement Diana video analysis quality-first v2'
+          git push origin HEAD:candidate/diana-video-analysis-v2
