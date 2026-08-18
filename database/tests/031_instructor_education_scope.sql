@@ -61,8 +61,8 @@ BEGIN
     INSERT INTO person_access_grant(school_id,grantee_person_id,target_person_id,permission_key)
     VALUES (v_school,v_scoped_person,v_student_person1,'education.read');
 
-    INSERT INTO skill(school_id,name,description)
-    VALUES (v_school,'Instructor scope skill','education-only authorization test')
+    INSERT INTO skill(school_id,stable_key,name,description)
+    VALUES (v_school,'ci-instructor-scope-skill','Instructor scope skill','education-only authorization test')
     RETURNING skill_id INTO v_skill;
     INSERT INTO topic(school_id,name,domain)
     VALUES (v_school,'Instructor scope topic','general')
