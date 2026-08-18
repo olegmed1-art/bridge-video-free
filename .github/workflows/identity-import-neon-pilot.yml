@@ -1,0 +1,325 @@
+name: Identity Import Neon Branch Pilot
+
+on:
+  push:
+    branches: [identity-import-neon-pilot-20260818]
+    paths:
+      - 'run_requests/identity-import-neon-pilot-20260818.txt'
+      - '.github/workflows/identity-import-neon-pilot.yml'
+      - 'database/migrations/0100_identity_import_staging.sql'
+      - 'database/migrations/0101_identity_import_schema_and_readiness_hardening.sql'
+      - 'database/tests/090_identity_import_staging.sql'
+      - 'database/tests/091_identity_import_resolution.sql'
+      - 'database/tests/092_identity_import_readiness_hardening.sql'
+      - 'database/scripts/migrate.sh'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: identity-import-neon-pilot-20260818
+  cancel-in-progress: false
+
+jobs:
+  neon-branch-pilot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      TARGET_NEON_HOST: ep-delicate-silence-b1kubo3r.c-5.eu-central-1.aws.neon.tech
+      EXPECTED_BRANCH_ID: br-tiny-hat-b1wqfdlt
+    steps:
+      - name: Checkout exact pilot branch
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Derive isolated branch DSN without exposing credentials
+        shell: bash
+        env:
+          SOURCE_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${SOURCE_DATABASE_URL:-}" || { echo 'NEON_DATABASE_URL is not configured'; exit 1; }
+          python - <<'PY'
+          import os
+          from urllib.parse import urlsplit, urlunsplit
+          src = os.environ['SOURCE_DATABASE_URL']
+          target = os.environ['TARGET_NEON_HOST']
+          p = urlsplit(src)
+          userinfo = ''
+          if '@' in p.netloc:
+              userinfo = p.netloc.rsplit('@', 1)[0] + '@'
+          port = f':{p.port}' if p.port else ''
+          branch = urlunsplit((p.scheme, userinfo + target + port, p.path, p.query, p.fragment))
+          with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as fh:
+              fh.write('BRANCH_DATABASE_URL=' + branch + '\n')
+          print('TARGET_NEON_HOST=' + target)
+          print('EXPECTED_BRANCH_ID=' + os.environ['EXPECTED_BRANCH_ID'])
+          PY
+
+      - name: Verify untouched branch baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          db="$(psql "$BRANCH_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'SELECT current_database();')"
+          test "$db" = "neondb"
+          count="$(psql "$BRANCH_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'SELECT count(*) FROM schema_migration;')"
+          test "$count" -eq 52
+          latest="$(psql "$BRANCH_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'SELECT max(migration_key) FROM schema_migration;')"
+          test "$latest" = "0052_deal_stable_key_nonempty_constraint"
+          test "$(psql "$BRANCH_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c \"SELECT to_regclass('identity_staging.identity_import_item') IS NULL;\")" = "t"
+          test "$(psql "$BRANCH_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c \"SELECT to_regclass('public.identity_import_item') IS NULL;\")" = "t"
+          echo 'NEON_BRANCH_BASELINE: PASS'
+
+      - name: Apply immutable migrations with production migrate.sh
+        shell: bash
+        env:
+          DATABASE_URL: ${{ env.BRANCH_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          chmod +x database/scripts/migrate.sh
+          database/scripts/migrate.sh
+
+      - name: Verify migration registry and schema placement
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(psql "$BRANCH_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'SELECT count(*) FROM schema_migration;')" -eq 54
+          test "$(psql "$BRANCH_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c \"SELECT count(*) FROM schema_migration WHERE migration_key IN ('0100_identity_import_staging','0101_identity_import_schema_and_readiness_hardening') AND checksum IS NOT NULL;\")" -eq 2
+          test "$(psql "$BRANCH_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c \"SELECT to_regclass('identity_staging.identity_import_item') IS NOT NULL;\")" = "t"
+          test "$(psql "$BRANCH_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c \"SELECT to_regclass('public.identity_import_item') IS NULL;\")" = "t"
+          echo 'NEON_MIGRATION_INTEGRATION: PASS'
+
+      - name: Run identity regression suite on real Neon branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          for test_file in \
+            database/tests/090_identity_import_staging.sql \
+            database/tests/091_identity_import_resolution.sql \
+            database/tests/092_identity_import_readiness_hardening.sql; do
+            echo "Running ${test_file}"
+            psql "$BRANCH_DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$test_file"
+          done
+          echo 'IDENTITY_REGRESSION_ON_NEON: PASS'
+
+      - name: Execute persistent synthetic end-to-end pilot
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$BRANCH_DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE
+              v_school uuid;
+              v_source uuid;
+              v_batch uuid;
+              v_bad_batch uuid;
+              v_link_item uuid;
+              v_new_item uuid;
+              v_bad_item uuid;
+              v_source_identity uuid;
+              v_target uuid;
+              v_resolution uuid;
+              v_person_before bigint;
+              v_student_before bigint;
+              v_membership_before bigint;
+              v_auth_before bigint;
+              v_ready boolean;
+              v_count bigint;
+              v_hash text;
+              v_expected text;
+              v_role text;
+          BEGIN
+              SELECT school_id INTO v_school
+                FROM public.school
+               WHERE stable_name='Школа спортивного бриджа';
+              IF v_school IS NULL THEN RAISE EXCEPTION 'canonical school missing'; END IF;
+
+              INSERT INTO public.source(school_id,source_type,title)
+              VALUES (v_school,'manual_import','Synthetic identity Neon pilot 20260818')
+              RETURNING source_id INTO v_source;
+
+              -- One explicit pre-existing target is seeded only to exercise canonical linking.
+              INSERT INTO public.person(preferred_name)
+              VALUES ('Synthetic Existing Identity Pilot 20260818')
+              RETURNING person_id INTO v_target;
+
+              SELECT count(*) INTO v_person_before FROM public.person;
+              SELECT count(*) INTO v_student_before FROM public.student;
+              SELECT count(*) INTO v_membership_before FROM public.club_membership;
+              SELECT count(*) INTO v_auth_before FROM public.auth_identity;
+
+              INSERT INTO public.source_identity(source_id,source_native_key,display_name)
+              VALUES (v_source,'pilot-existing-001','Synthetic Existing Identity Pilot 20260818')
+              RETURNING source_identity_id INTO v_source_identity;
+
+              INSERT INTO public.entity_resolution_decision(
+                  source_identity_id,target_person_id,decision_type,confidence_class,status
+              ) VALUES (
+                  v_source_identity,v_target,'link','HIGH','active'
+              ) RETURNING resolution_id INTO v_resolution;
+
+              INSERT INTO identity_staging.identity_import_batch(
+                  school_id,source_id,external_batch_key,import_label,provenance
+              ) VALUES (
+                  v_school,v_source,'pilot-ready-20260818','Synthetic ready pilot',
+                  jsonb_build_object('test','neon-branch-e2e','branch_id','br-tiny-hat-b1wqfdlt')
+              ) RETURNING identity_import_batch_id INTO v_batch;
+
+              INSERT INTO identity_staging.identity_import_item(
+                  identity_import_batch_id,source_record_key,raw_payload,source_identity_id,normalized_candidate
+              ) VALUES (
+                  v_batch,'existing-record',
+                  jsonb_build_object('name','Synthetic Existing Identity Pilot 20260818','email','synthetic-existing@example.invalid'),
+                  v_source_identity,jsonb_build_object('preferred_name','Synthetic Existing Identity Pilot 20260818')
+              ) RETURNING identity_import_item_id INTO v_link_item;
+
+              INSERT INTO identity_staging.identity_import_item(
+                  identity_import_batch_id,source_record_key,raw_payload,normalized_candidate
+              ) VALUES (
+                  v_batch,'new-record',
+                  jsonb_build_object('name','Synthetic New Identity Pilot 20260818','email','synthetic-new@example.invalid'),
+                  jsonb_build_object('preferred_name','Synthetic New Identity Pilot 20260818')
+              ) RETURNING identity_import_item_id INTO v_new_item;
+
+              SELECT raw_payload_sha256,encode(digest(raw_payload::text,'sha256'),'hex')
+                INTO v_hash,v_expected
+                FROM identity_staging.identity_import_item
+               WHERE identity_import_item_id=v_link_item;
+              IF v_hash IS DISTINCT FROM v_expected THEN
+                  RAISE EXCEPTION 'database evidence hash mismatch';
+              END IF;
+
+              INSERT INTO identity_staging.identity_import_action(
+                  identity_import_item_id,action_type,target_person_id,entity_resolution_decision_id,reason
+              ) VALUES (
+                  v_link_item,'link_existing_person',v_target,v_resolution,'synthetic canonical link review'
+              );
+              INSERT INTO identity_staging.identity_import_item_state_event(
+                  identity_import_item_id,state,reason
+              ) VALUES (v_link_item,'ready','canonical link reviewed');
+
+              INSERT INTO identity_staging.identity_import_action(
+                  identity_import_item_id,action_type,reason
+              ) VALUES (v_new_item,'create_new_person','synthetic explicit create intent only');
+              INSERT INTO identity_staging.identity_import_item_state_event(
+                  identity_import_item_id,state,reason
+              ) VALUES (v_new_item,'ready','explicit create intent reviewed');
+
+              -- Staging intent must not materialize operational identities.
+              IF (SELECT count(*) FROM public.person) <> v_person_before THEN
+                  RAISE EXCEPTION 'staging create intent materialized a Person';
+              END IF;
+              IF (SELECT count(*) FROM public.student) <> v_student_before THEN
+                  RAISE EXCEPTION 'staging materialized a Student';
+              END IF;
+              IF (SELECT count(*) FROM public.club_membership) <> v_membership_before THEN
+                  RAISE EXCEPTION 'staging materialized a ClubMembership';
+              END IF;
+              IF (SELECT count(*) FROM public.auth_identity) <> v_auth_before THEN
+                  RAISE EXCEPTION 'staging materialized an AuthIdentity';
+              END IF;
+
+              INSERT INTO identity_staging.identity_import_batch_state_event(
+                  identity_import_batch_id,state,reason
+              ) VALUES (v_batch,'ready','all synthetic items reviewed');
+
+              SELECT eligible_for_future_apply INTO v_ready
+                FROM identity_staging.identity_import_batch_future_apply_readiness
+               WHERE identity_import_batch_id=v_batch;
+              IF v_ready IS DISTINCT FROM true THEN
+                  RAISE EXCEPTION 'ready batch projection is not eligible';
+              END IF;
+
+              -- Later evidence invalidates readiness append-only, without rewriting prior history.
+              INSERT INTO identity_staging.identity_import_action(
+                  identity_import_item_id,action_type,reason
+              ) VALUES (v_new_item,'defer','later synthetic evidence requires review');
+              SELECT eligible_for_future_apply INTO v_ready
+                FROM identity_staging.identity_import_batch_future_apply_readiness
+               WHERE identity_import_batch_id=v_batch;
+              IF v_ready IS DISTINCT FROM false THEN
+                  RAISE EXCEPTION 'later defer did not fail closed';
+              END IF;
+
+              SELECT count(*) INTO v_count
+                FROM identity_staging.identity_import_action
+               WHERE identity_import_item_id=v_new_item;
+              IF v_count <> 2 THEN RAISE EXCEPTION 'append-only action audit history incomplete'; END IF;
+              SELECT count(*) INTO v_count
+                FROM identity_staging.identity_import_item_state_event
+               WHERE identity_import_item_id=v_new_item;
+              IF v_count <> 2 THEN RAISE EXCEPTION 'append-only state audit history incomplete'; END IF;
+
+              BEGIN
+                  UPDATE identity_staging.identity_import_item
+                     SET normalized_candidate='{}'::jsonb
+                   WHERE identity_import_item_id=v_new_item;
+                  RAISE EXCEPTION 'append-only staging item unexpectedly mutable';
+              EXCEPTION WHEN OTHERS THEN
+                  IF SQLERRM='append-only staging item unexpectedly mutable' THEN RAISE; END IF;
+              END;
+
+              -- Independent fail-closed case: unresolved item cannot become ready.
+              INSERT INTO identity_staging.identity_import_batch(
+                  school_id,source_id,external_batch_key,import_label
+              ) VALUES (v_school,v_source,'pilot-unresolved-20260818','Synthetic unresolved pilot')
+              RETURNING identity_import_batch_id INTO v_bad_batch;
+              INSERT INTO identity_staging.identity_import_item(
+                  identity_import_batch_id,source_record_key,raw_payload
+              ) VALUES (v_bad_batch,'unresolved-record',jsonb_build_object('name','Synthetic Unresolved'))
+              RETURNING identity_import_item_id INTO v_bad_item;
+              BEGIN
+                  INSERT INTO identity_staging.identity_import_item_state_event(
+                      identity_import_item_id,state,reason
+                  ) VALUES (v_bad_item,'ready','must fail');
+                  RAISE EXCEPTION 'unresolved item unexpectedly became ready';
+              EXCEPTION WHEN OTHERS THEN
+                  IF SQLERRM='unresolved item unexpectedly became ready' THEN RAISE; END IF;
+              END;
+
+              FOREACH v_role IN ARRAY ARRAY[
+                  'bridge_school_reader','bridge_school_app','bridge_school_worker',
+                  'bridge_school_health','bridge_school_finance','bridge_school_member',
+                  'bridge_school_member_principal','bridge_school_auth_gateway'
+              ] LOOP
+                  IF has_schema_privilege(v_role,'identity_staging','USAGE')
+                     OR has_table_privilege(v_role,'identity_staging.identity_import_item','SELECT')
+                     OR has_table_privilege(v_role,'identity_staging.identity_import_item','INSERT') THEN
+                      RAISE EXCEPTION 'runtime role % can access protected identity staging',v_role;
+                  END IF;
+              END LOOP;
+
+              SELECT count(*) INTO v_count
+                FROM pg_proc p
+                JOIN pg_namespace n ON n.oid=p.pronamespace
+               WHERE n.nspname IN ('public','identity_staging')
+                 AND p.proname LIKE '%identity_import%apply%';
+              IF v_count <> 0 THEN
+                  RAISE EXCEPTION 'unexpected identity import apply function exists';
+              END IF;
+          END $$;
+          SQL
+
+          psql "$BRANCH_DATABASE_URL" -X -A -F ',' -v ON_ERROR_STOP=1 -c \
+            "SELECT b.external_batch_key,bs.state,br.item_count,br.eligible_item_count,br.eligible_for_future_apply FROM identity_staging.identity_import_batch b JOIN identity_staging.identity_import_batch_current_state bs USING(identity_import_batch_id) JOIN identity_staging.identity_import_batch_future_apply_readiness br USING(identity_import_batch_id) WHERE b.external_batch_key LIKE 'pilot-%-20260818' ORDER BY b.external_batch_key;"
+          psql "$BRANCH_DATABASE_URL" -X -A -F ',' -v ON_ERROR_STOP=1 -c \
+            "SELECT i.source_record_key,s.state,a.action_type,a.reason FROM identity_staging.identity_import_item i JOIN identity_staging.identity_import_item_current_state s USING(identity_import_item_id) LEFT JOIN identity_staging.identity_import_current_action a USING(identity_import_item_id) JOIN identity_staging.identity_import_batch b USING(identity_import_batch_id) WHERE b.external_batch_key='pilot-ready-20260818' ORDER BY i.source_record_key;"
+          echo 'IDENTITY_IMPORT_NEON_E2E: PASS'
+
+      - name: Verify migration idempotence on Neon branch
+        shell: bash
+        env:
+          DATABASE_URL: ${{ env.BRANCH_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          database/scripts/migrate.sh
+          test "$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'SELECT count(*) FROM schema_migration;')" -eq 54
+          echo 'NEON_MIGRATION_IDEMPOTENCE: PASS'
