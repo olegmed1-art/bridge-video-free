@@ -10,10 +10,12 @@ on:
       - 'check_completed_job.py'
       - 'bridge_runtime_hardening_r25_6.py'
       - 'bridge_runtime_hardening_r25_7.py'
+      - 'bridge_runtime_hardening_r25_14.py'
       - 'run_master_3_1_free.py'
       - 'run_master_3_1_free_semantic.py'
       - 'run_master_3_1_free_semantic_v2.py'
       - 'bridge_speaker_diarization.py'
+      - 'bridge_speaker_diarization_v2.py'
       - 'diana_longitudinal_quality_v2.py'
       - 'tests/test_production_evidence_contract.py'
       - 'tests/test_asr_policy_r25_6.py'
@@ -28,10 +30,12 @@ on:
       - 'check_completed_job.py'
       - 'bridge_runtime_hardening_r25_6.py'
       - 'bridge_runtime_hardening_r25_7.py'
+      - 'bridge_runtime_hardening_r25_14.py'
       - 'run_master_3_1_free.py'
       - 'run_master_3_1_free_semantic.py'
       - 'run_master_3_1_free_semantic_v2.py'
       - 'bridge_speaker_diarization.py'
+      - 'bridge_speaker_diarization_v2.py'
       - 'diana_longitudinal_quality_v2.py'
       - 'tests/test_production_evidence_contract.py'
       - 'tests/test_asr_policy_r25_6.py'
@@ -45,7 +49,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
-      BRIDGE_REQUESTED_ALGORITHM_REVISION: 3.1-free-r25.7
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: 3.1-free-r25.14
       WHISPER_MODEL: small
       PYTHONUNBUFFERED: '1'
     steps:
@@ -68,17 +72,19 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPATH=. python tests/test_production_evidence_contract.py
-          # r25.7 inherits these proven r25.6 policies; retain their regressions.
+          # r25.14 inherits r25.7, which inherits these proven r25.6 policies.
           PYTHONPATH=. python tests/test_asr_policy_r25_6.py
           PYTHONPATH=. python tests/test_unreliable_asr_isolation_r25_4.py
           PYTHONPATH=. python tests/test_pdf_presentation_r25_6.py
           python -m py_compile \
             bridge_runtime_hardening_r25_6.py \
             bridge_runtime_hardening_r25_7.py \
+            bridge_runtime_hardening_r25_14.py \
             run_master_3_1_free.py \
             run_master_3_1_free_semantic.py \
             run_master_3_1_free_semantic_v2.py \
             bridge_speaker_diarization.py \
+            bridge_speaker_diarization_v2.py \
             diana_longitudinal_quality_v2.py \
             run_drive_3_1_free_generic.py \
             check_completed_job.py
