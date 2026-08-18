@@ -4,14 +4,14 @@ on:
   push:
     branches: [main]
     paths:
-      - 'candidate_requests/2026-08-18-logic-bridge-r25-13-full.txt'
+      - 'candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry1.txt'
 
 permissions:
   contents: read
 
 concurrency:
   group: bridge-video-heavy
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   full-candidate:
@@ -33,20 +33,31 @@ jobs:
       - name: Verify immutable request
         run: |
           set -euo pipefail
-          grep -Fx 'JOB_ID=86e814014cabee88785a53340ab85666' candidate_requests/2026-08-18-logic-bridge-r25-13-full.txt
-          grep -Fx 'REVISION=3.1-free-r25.13-checkpoint' candidate_requests/2026-08-18-logic-bridge-r25-13-full.txt
-          grep -Fx 'SOURCE_DRIVE_ID=1rGX92YskXRtXHc53lyj9JMU3g24H5vCI' candidate_requests/2026-08-18-logic-bridge-r25-13-full.txt
-          grep -Fx 'ASR_DIAGNOSTIC_RECEIPT_ID=1aw5OSpDP48DsNX--WuOdDl8uhf893Taa' candidate_requests/2026-08-18-logic-bridge-r25-13-full.txt
+          grep -Fx 'JOB_ID=86e814014cabee88785a53340ab85666' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry1.txt
+          grep -Fx 'REVISION=3.1-free-r25.13-checkpoint' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry1.txt
+          grep -Fx 'SOURCE_DRIVE_ID=1rGX92YskXRtXHc53lyj9JMU3g24H5vCI' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry1.txt
+          grep -Fx 'ASR_DIAGNOSTIC_RECEIPT_ID=1aw5OSpDP48DsNX--WuOdDl8uhf893Taa' candidate_requests/2026-08-18-logic-bridge-r25-13-full-retry1.txt
       - name: Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12'
       - name: Install free candidate runtime
+        timeout-minutes: 20
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
-          python -m pip install --disable-pip-version-check -r requirements-worker.txt
-          python -m pip install --disable-pip-version-check 'requests==2.34.2' 'google-auth==2.56.3' 'pymupdf==1.28.2' 'psycopg[binary]==3.3.4' 'numpy==2.2.6'
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if sudo env DEBIAN_FRONTEND=noninteractive timeout 180s apt-get update -qq \
+              && sudo env DEBIAN_FRONTEND=noninteractive timeout 180s apt-get install -y -qq ffmpeg fonts-dejavu-core; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "APT_RUNTIME_INSTALL_FAILED_AFTER_RETRIES" >&2
+              exit 1
+            fi
+            sleep "$((attempt * 10))"
+          done
+          python -m pip install --disable-pip-version-check --timeout 60 --retries 8 -r requirements-worker.txt
+          python -m pip install --disable-pip-version-check --timeout 60 --retries 8 'requests==2.34.2' 'google-auth==2.56.3' 'pymupdf==1.28.2' 'psycopg[binary]==3.3.4' 'numpy==2.2.6'
       - name: Access, database, and independent gate preflight
         env:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
