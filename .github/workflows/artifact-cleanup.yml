@@ -110,8 +110,8 @@ jobs:
               args+=(--execute)
               ;;
             push)
-              test "$GITHUB_ACTOR" = olegmed1-art
-              test "$GITHUB_TRIGGERING_ACTOR" = olegmed1-art
+              # A main push can be produced by a reviewed PR merge through GitHub/App tooling;
+              # do not bind safe cleanup to a particular runtime actor identity.
               args+=(--execute)
               ;;
             workflow_dispatch)
