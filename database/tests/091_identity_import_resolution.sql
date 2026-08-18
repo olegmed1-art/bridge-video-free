@@ -51,11 +51,14 @@ BEGIN
   SELECT count(*) INTO v_after FROM public.person;
   IF v_after<>v_before THEN RAISE EXCEPTION 'staging create-new intent created a real Person'; END IF;
 
+  -- `applied` exists only after migration 0102, but ordinary staging review still
+  -- cannot claim it. Only the controlled apply function sets the guarded context.
   BEGIN
     INSERT INTO identity_import_item_state_event(identity_import_item_id,state,reason)
-    VALUES (v_item,'applied','no apply operation exists');
-    RAISE EXCEPTION 'staging unexpectedly accepted applied state';
-  EXCEPTION WHEN check_violation THEN NULL;
+    VALUES (v_item,'applied','manual applied claim must fail');
+    RAISE EXCEPTION 'manual staging unexpectedly accepted applied state';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM='manual staging unexpectedly accepted applied state' THEN RAISE; END IF;
   END;
 END $$;
 ROLLBACK;
