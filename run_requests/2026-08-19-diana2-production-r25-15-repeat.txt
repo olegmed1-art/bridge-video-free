@@ -6,3 +6,4 @@ LESSON_NUMBER=2
 LESSON_DATE_CANDIDATE=2021-02-28
 LESSON_DATE_SOURCE=confirmed historical Zoom invitation/cloud recording and original Drive metadata; content must remain evidence-controlled
 PERSIST_DATABASE=false
+# TRIGGER_ATTEMPT=2 — verify true production r25.15 processing after output-scoped idempotency fix
