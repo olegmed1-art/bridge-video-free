@@ -90,7 +90,11 @@ def _export_private_json(token: str, file_id: str) -> dict[str, Any]:
             timeout=60,
         )
     response.raise_for_status()
-    payload = json.loads(response.text.lstrip("\ufeff"))
+    # Drive may return UTF-8 JSON without a charset header. requests can then
+    # decode .text as ISO-8859-1, turning an actual UTF-8 BOM into visible
+    # mojibake. Decode the raw bytes as utf-8-sig so both BOM and no-BOM files
+    # are handled deterministically.
+    payload = json.loads(response.content.decode("utf-8-sig"))
     if not isinstance(payload, dict):
         raise RuntimeError("PRIVATE_EVIDENCE_JSON_INVALID")
     return payload
