@@ -11,6 +11,7 @@ import os
 import bridge_runtime_hardening_r25_15 as runtime
 import check_completed_job as preflight
 import run_master_3_1_free as base
+import run_master_3_1_free_semantic_v2 as semantic_v2
 
 
 def test_production_route_is_confirmed_r25_15_with_inheritance_chain():
@@ -19,7 +20,7 @@ def test_production_route_is_confirmed_r25_15_with_inheritance_chain():
     runtime_source = Path("bridge_runtime_hardening_r25_15.py").read_text(encoding="utf-8")
     r25_14_source = Path("bridge_runtime_hardening_r25_14.py").read_text(encoding="utf-8")
     r25_7_source = Path("bridge_runtime_hardening_r25_7.py").read_text(encoding="utf-8")
-    semantic_v2 = Path("run_master_3_1_free_semantic_v2.py").read_text(encoding="utf-8")
+    semantic_v2_source = Path("run_master_3_1_free_semantic_v2.py").read_text(encoding="utf-8")
     diarization_v3 = Path("bridge_speaker_diarization_v3.py").read_text(encoding="utf-8")
     diarization_core = Path("bridge_speaker_diarization_v3_core.py").read_text(encoding="utf-8")
     diarization_repair = Path("bridge_speaker_diarization_v3_repair.py").read_text(encoding="utf-8")
@@ -43,9 +44,9 @@ def test_production_route_is_confirmed_r25_15_with_inheritance_chain():
     assert "previous.install(token_func)" in r25_14_source
     assert "import bridge_runtime_hardening_r25_6 as previous" in r25_7_source
     assert "previous.install(token_func)" in r25_7_source
-    assert "import run_master_3_1_free_semantic as previous" in semantic_v2
-    assert "METHODOLOGY_PARTIAL" in semantic_v2
-    assert "technical_ready_does_not_imply_methodology_ready" in semantic_v2
+    assert "import run_master_3_1_free_semantic as previous" in semantic_v2_source
+    assert "METHODOLOGY_PARTIAL" in semantic_v2_source
+    assert "technical_ready_does_not_imply_methodology_ready" in semantic_v2_source
 
     # Collapse repair must be explicit and identity-safe.
     combined = "\n".join((diarization_v3, diarization_core, diarization_repair))
@@ -98,6 +99,21 @@ def test_terminal_preflight_scopes_same_revision_to_output_generation():
         raise AssertionError("invalid Drive id must fail closed")
 
 
+def test_semantic_runtime_scopes_already_done_to_output_generation():
+    name = "AI_DONE_41daa4ca6e09d13e366c578b7c53ae31.json"
+    global_query = semantic_v2._generation_search_query(name)
+    scoped_query = semantic_v2._generation_search_query(name, "1ProdRepeatOutputFolder")
+    assert " in parents" not in global_query
+    assert "'1ProdRepeatOutputFolder' in parents" in scoped_query
+    assert name in scoped_query
+    try:
+        semantic_v2._generation_search_query(name, "bad folder/id")
+    except RuntimeError as exc:
+        assert "INVALID_OUTPUT_FOLDER_ID" in str(exc)
+    else:
+        raise AssertionError("invalid Drive id must fail closed")
+
+
 def test_periodic_auto_discovery_remains_disabled():
     source = Path(".github/workflows/bridge-video-auto-discovery.yml").read_text(
         encoding="utf-8"
@@ -115,5 +131,6 @@ if __name__ == "__main__":
     test_runtime_does_not_filter_master_canon_evidence()
     test_terminal_preflight_matches_revision_receipt_contract()
     test_terminal_preflight_scopes_same_revision_to_output_generation()
+    test_semantic_runtime_scopes_already_done_to_output_generation()
     test_periodic_auto_discovery_remains_disabled()
     print("PRODUCTION_R25_15_EVIDENCE_CONTRACT: PASS")
