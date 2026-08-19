@@ -137,6 +137,36 @@ class IntegratedR29StageTests(unittest.TestCase):
         self.assertEqual(result["status"], "SPEAKER_MAPPING_OPERATIONAL")
         r29_main.assert_called_once_with()
 
+    def test_private_autodiscovery_requires_exact_source_when_source_is_known(self):
+        items = [{"id": "privateDoc123", "modifiedTime": "2026-01-01"}]
+        with mock.patch.object(stage.io, "search", return_value=items), \
+             mock.patch.object(stage.r29, "_export_private_json", return_value={"job_id": JOB}):
+            self.assertEqual(
+                stage._candidate_private_docs("token", "r29_identity_evidence_", JOB, SOURCE),
+                [],
+            )
+        with mock.patch.object(stage.io, "search", return_value=items), \
+             mock.patch.object(stage.r29, "_export_private_json", return_value={"job_id": JOB, "source_drive_id": "otherSource"}):
+            self.assertEqual(
+                stage._candidate_private_docs("token", "r29_identity_evidence_", JOB, SOURCE),
+                [],
+            )
+        with mock.patch.object(stage.io, "search", return_value=items), \
+             mock.patch.object(stage.r29, "_export_private_json", return_value={"job_id": JOB, "source_drive_id": SOURCE}):
+            self.assertEqual(
+                stage._candidate_private_docs("token", "r29_identity_evidence_", JOB, SOURCE),
+                ["privateDoc123"],
+            )
+
+    def test_private_autodiscovery_always_requires_exact_job(self):
+        items = [{"id": "privateDoc123", "modifiedTime": "2026-01-01"}]
+        with mock.patch.object(stage.io, "search", return_value=items), \
+             mock.patch.object(stage.r29, "_export_private_json", return_value={"job_id": "0" * 32, "source_drive_id": SOURCE}):
+            self.assertEqual(
+                stage._candidate_private_docs("token", "r29_identity_evidence_", JOB, SOURCE),
+                [],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
