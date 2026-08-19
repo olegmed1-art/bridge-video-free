@@ -64,6 +64,10 @@ external_checksum_for() {
   ' "$EXTERNAL_HISTORY_FILE"
 }
 
+# Catch sequence collisions before connecting migration ordering to durable state. This
+# also checks SQL regression-test numbering when the tests directory is present in the
+# checkout, because duplicate test identities make evidence and failure attribution
+# ambiguous even though PostgreSQL itself could execute both files.
 assert_unique_numeric_prefixes "$MIGRATIONS_DIR" "migration"
 TESTS_DIR="$(dirname "$MIGRATIONS_DIR")/tests"
 assert_unique_numeric_prefixes "$TESTS_DIR" "database-test"
@@ -73,6 +77,10 @@ schema_table_exists() {
   [[ "$("${PSQL[@]}" -c "SELECT to_regclass('public.schema_migration') IS NOT NULL;")" == "t" ]]
 }
 
+# Once migration history exists, every recorded migration must either still exist on
+# disk or be an explicitly audited historical exception with an exact immutable
+# checksum. External-history entries are never executed; a numbered forward migration
+# must restore fresh-database schema parity.
 if schema_table_exists; then
   while IFS=$'\t' read -r applied_key stored_checksum; do
     [[ -z "$applied_key" ]] && continue
@@ -134,6 +142,10 @@ for migration in "$MIGRATIONS_DIR"/*.sql; do
   fi
 
   echo "Applying migration $key"
+  # Serialize migration application at the database level. The session-level advisory
+  # lock survives BEGIN/COMMIT statements inside migration files and is released
+  # automatically if psql exits on an error. Re-checking the registry after acquiring
+  # the lock prevents two independent CI runners from applying the same migration.
   psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
     -v migration_key="$key" \
     -v migration_file="$migration" <<'PSQL'
