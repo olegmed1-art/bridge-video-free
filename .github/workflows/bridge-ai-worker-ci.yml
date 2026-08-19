@@ -1,0 +1,49 @@
+name: Bridge AI Worker CI
+
+on:
+  pull_request:
+    paths:
+      - 'bridge_ai_compute_worker.py'
+      - 'Dockerfile.ai-worker'
+      - '.github/workflows/bridge-ai-worker-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'bridge_ai_compute_worker.py'
+      - 'Dockerfile.ai-worker'
+      - '.github/workflows/bridge-ai-worker-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  worker-static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Compile worker
+        run: python -m py_compile bridge_ai_compute_worker.py
+      - name: Verify fail-closed configuration
+        run: |
+          python - <<'PY'
+          import os
+          import bridge_ai_compute_worker as worker
+          os.environ.pop('BRIDGE_API_BASE_URL', None)
+          os.environ.pop('BRIDGE_API_TOKEN', None)
+          try:
+              worker.load_config()
+          except RuntimeError:
+              print('PASS: missing credentials fail closed')
+          else:
+              raise SystemExit('worker accepted missing credentials')
+          PY
+      - name: Build worker container
+        run: docker build -f Dockerfile.ai-worker -t bridge-ai-worker:ci .
