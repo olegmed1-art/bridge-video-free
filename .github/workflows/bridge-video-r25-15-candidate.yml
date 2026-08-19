@@ -1,0 +1,138 @@
+name: bridge-video-r25-15-candidate
+
+on:
+  push:
+    branches: [speaker-r25-15-collapse-repair]
+    paths:
+      - 'run_requests_r25_15/*.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-video-heavy
+  cancel-in-progress: false
+
+jobs:
+  field-candidate:
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      BRIDGE_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+      BRIDGE_RUNNER_LABEL: ubuntu-24.04
+      BRIDGE_LARGER_RUNNER: "false"
+      BRIDGE_PAID_CLOUD: "false"
+      BRIDGE_BILLING_FALLBACK: "false"
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.15"
+      BRIDGE_DIARIZATION_ENABLED: "true"
+      PYTHONUNBUFFERED: "1"
+      WHISPER_MODEL: small
+
+    steps:
+      - name: Checkout candidate branch
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Resolve opaque candidate request
+        shell: bash
+        run: |
+          set -euo pipefail
+          REQUEST_FILE="$(git show --pretty='' --name-only "$GITHUB_SHA" | grep -E '^run_requests_r25_15/.*\.txt$' | head -n 1 || true)"
+          test -n "$REQUEST_FILE" || { echo "No r25.15 request file in triggering commit" >&2; exit 2; }
+          JOB_ID="$(sed -n 's/^JOB_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+          OUTPUT_FOLDER_ID="$(sed -n 's/^OUTPUT_FOLDER_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+          WORK_FOLDER_ID="$(sed -n 's/^WORK_FOLDER_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+          ORIGINAL_SOURCE_DRIVE_ID="$(sed -n 's/^ORIGINAL_SOURCE_DRIVE_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+          test "${#JOB_ID}" -eq 32
+          case "$JOB_ID" in *[!0-9a-f]*) echo "invalid opaque job id" >&2; exit 2 ;; esac
+          for ID_VALUE in "$OUTPUT_FOLDER_ID" "$WORK_FOLDER_ID" "$ORIGINAL_SOURCE_DRIVE_ID"; do
+            test -n "$ID_VALUE"
+            case "$ID_VALUE" in *[!0-9A-Za-z_-]*) echo "invalid Drive id" >&2; exit 2 ;; esac
+          done
+          {
+            echo "BRIDGE_JOB_ID=$JOB_ID"
+            echo "BRIDGE_OUTPUT_FOLDER_ID=$OUTPUT_FOLDER_ID"
+            echo "BRIDGE_WORK_FOLDER_ID=$WORK_FOLDER_ID"
+            echo "BRIDGE_ORIGINAL_SOURCE_DRIVE_ID=$ORIGINAL_SOURCE_DRIVE_ID"
+            echo "BRIDGE_PERSIST_DATABASE=false"
+          } >> "$GITHUB_ENV"
+
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install lightweight dependencies
+        run: |
+          python -m pip install --disable-pip-version-check \
+            'requests==2.34.2' 'google-auth==2.56.3' 'pymupdf==1.28.2' \
+            'psycopg[binary]==3.3.4' 'numpy==2.2.6'
+
+      - name: Candidate unit tests
+        run: |
+          python -m pip install --disable-pip-version-check pytest
+          python -m pytest -q tests/test_speaker_diarization_v2.py tests/test_speaker_diarization_v3.py
+
+      - name: Terminal receipt preflight
+        id: terminal
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: python check_completed_job.py
+
+      - name: Install free open-source runtime
+        if: steps.terminal.outputs.already_completed != 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+          python -m pip install --disable-pip-version-check -r requirements-worker.txt
+
+      - name: Google Drive OAuth preflight
+        if: steps.terminal.outputs.already_completed != 'true'
+        shell: bash
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from run_drive_3_1_free_oidc import user_oauth_token
+          if not user_oauth_token():
+              raise SystemExit('BLOCKED_ACCESS: GOOGLE_DRIVE_OAUTH_JSON is not configured')
+          print('Google Drive OAuth preflight: PASS')
+          PY
+
+      - name: Monitor candidate start
+        if: steps.terminal.outputs.already_completed != 'true'
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+          MONITOR_V1_STATUS: WORKER_STARTED
+        run: python video_run_monitor_v1.py
+
+      - name: FREE-GUARD
+        if: steps.terminal.outputs.already_completed != 'true'
+        run: python bridge_worker_3_1_free.py
+
+      - name: Process r25.15 field candidate
+        if: steps.terminal.outputs.already_completed != 'true'
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: python run_drive_3_1_free_oidc.py
+
+      - name: Route candidate outputs
+        if: always()
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: python route_drive_job_outputs.py
+
+      - name: Monitor candidate finish
+        if: always()
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+          MONITOR_V1_STATUS: RUN_FINISHED
+          MONITOR_V1_JOB_STATUS: ${{ job.status }}
+        run: python video_run_monitor_v1.py
+
+      # Candidate only: no production promotion, no Neon persistence, no paid AI.
+      # Named identity remains outside this acoustic candidate and requires r29 evidence.
