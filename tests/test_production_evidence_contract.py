@@ -41,6 +41,7 @@ def test_production_route_is_confirmed_r25_15_with_inheritance_chain():
     assert "bridge_speaker_diarization_v3" in runtime_source
     assert "bridge_output_scoped_idempotency" in runtime_source
     assert "existing_same_revision_done" in runtime_source
+    assert "semantic_v2.previous.process_job = base.process_job" in runtime_source
     assert "import bridge_runtime_hardening_r25_7 as previous" in r25_14_source
     assert "previous.install(token_func)" in r25_14_source
     assert "import bridge_runtime_hardening_r25_6 as previous" in r25_7_source
