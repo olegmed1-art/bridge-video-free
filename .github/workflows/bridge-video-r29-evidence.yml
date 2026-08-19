@@ -40,7 +40,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install focused test runtime
-        run: python -m pip install --disable-pip-version-check 'pytest==9.1.1' 'requests==2.34.2' 'pymupdf==1.28.2'
+        run: python -m pip install --disable-pip-version-check 'pytest==9.1.1' 'requests==2.34.2' 'pymupdf==1.28.2' 'google-auth==2.56.3'
       - name: Compile and run r29 mapping regressions
         run: |
           set -euo pipefail
