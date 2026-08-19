@@ -6,9 +6,11 @@ r25.14 -> r25.7 -> r25.6 and changes only the local anonymous speaker-separation
 layer. Identity, privacy, methodology and zero-paid-AI guards remain intact.
 """
 from pathlib import Path
+from types import SimpleNamespace
 import os
 
 import bridge_runtime_hardening_r25_15 as runtime
+from bridge_output_scoped_idempotency import existing_same_revision_done
 import check_completed_job as preflight
 import run_master_3_1_free as base
 
@@ -31,14 +33,14 @@ def test_production_route_is_confirmed_r25_15_with_inheritance_chain():
     assert "BRIDGE_REQUESTED_WHISPER_MODEL: medium" not in workflow
     assert 'BRIDGE_PAID_CLOUD: "false"' in workflow
     assert 'BRIDGE_BILLING_FALLBACK: "false"' in workflow
-    # Push-triggered request resolution must work for both ordinary commits and merge commits.
     assert 'git diff-tree --no-commit-id --name-only -r -m "$GITHUB_SHA"' in workflow
     assert "Expected exactly one run request in triggering commit" in workflow
 
-    # r25.15 must inherit the already validated production chain.
     assert "import bridge_runtime_hardening_r25_14 as previous" in runtime_source
     assert "previous.install(token_func)" in runtime_source
     assert "bridge_speaker_diarization_v3" in runtime_source
+    assert "bridge_output_scoped_idempotency" in runtime_source
+    assert "existing_same_revision_done" in runtime_source
     assert "import bridge_runtime_hardening_r25_7 as previous" in r25_14_source
     assert "previous.install(token_func)" in r25_14_source
     assert "import bridge_runtime_hardening_r25_6 as previous" in r25_7_source
@@ -47,7 +49,6 @@ def test_production_route_is_confirmed_r25_15_with_inheritance_chain():
     assert "METHODOLOGY_PARTIAL" in semantic_v2
     assert "technical_ready_does_not_imply_methodology_ready" in semantic_v2
 
-    # Collapse repair must be explicit and identity-safe.
     combined = "\n".join((diarization_v3, diarization_core, diarization_repair))
     assert "cluster_collapse" in combined
     assert "recluster" in combined.lower()
@@ -98,6 +99,79 @@ def test_terminal_preflight_scopes_same_revision_to_output_generation():
         raise AssertionError("invalid Drive id must fail closed")
 
 
+def test_runtime_same_revision_done_is_scoped_to_requested_output_folder():
+    job = "41daa4ca6e09d13e366c578b7c53ae31"
+    revision = runtime.REVISION
+    done_item = {"id": "done", "modifiedTime": "2026-08-19T13:00:00Z"}
+    receipt_item = {"id": "method", "modifiedTime": "2026-08-19T13:00:01Z"}
+    payloads = {
+        "done": {
+            "status": "AI_DONE",
+            "algorithmRevision": revision,
+            "masterPdf": {"driveId": "pdf-new"},
+        },
+        "method": {
+            "status": "METHODOLOGY_READY",
+            "algorithmRevision": revision,
+            "masterPdfDriveId": "pdf-new",
+        },
+    }
+    queries = []
+
+    def search(_token, query):
+        queries.append(query)
+        if "'targetOutput' in parents" not in query:
+            return []
+        if f"AI_DONE_{job}.json" in query:
+            return [done_item]
+        if f"METHODOLOGY_READY_{job}.json" in query:
+            return [receipt_item]
+        return []
+
+    fake = SimpleNamespace(
+        base=SimpleNamespace(io=SimpleNamespace(search=search)),
+        _read_json=lambda _token, item: payloads.get(item.get("id")),
+    )
+    previous_output = os.environ.get("BRIDGE_OUTPUT_FOLDER_ID")
+    os.environ["BRIDGE_OUTPUT_FOLDER_ID"] = "targetOutput"
+    try:
+        found = existing_same_revision_done(fake, "token", job, revision)
+    finally:
+        if previous_output is None:
+            os.environ.pop("BRIDGE_OUTPUT_FOLDER_ID", None)
+        else:
+            os.environ["BRIDGE_OUTPUT_FOLDER_ID"] = previous_output
+
+    assert found == payloads["done"]
+    assert queries
+    assert all("'targetOutput' in parents" in query for query in queries)
+
+    foreign_queries = []
+
+    def foreign_only_search(_token, query):
+        foreign_queries.append(query)
+        # Simulate a valid same-job result existing elsewhere on Drive only.
+        if " in parents" not in query and f"AI_DONE_{job}.json" in query:
+            return [done_item]
+        if " in parents" not in query and f"METHODOLOGY_READY_{job}.json" in query:
+            return [receipt_item]
+        return []
+
+    fake.base.io.search = foreign_only_search
+    os.environ["BRIDGE_OUTPUT_FOLDER_ID"] = "freshOutput"
+    try:
+        found_foreign = existing_same_revision_done(fake, "token", job, revision)
+    finally:
+        if previous_output is None:
+            os.environ.pop("BRIDGE_OUTPUT_FOLDER_ID", None)
+        else:
+            os.environ["BRIDGE_OUTPUT_FOLDER_ID"] = previous_output
+
+    assert found_foreign is None
+    assert foreign_queries
+    assert all("'freshOutput' in parents" in query for query in foreign_queries)
+
+
 def test_periodic_auto_discovery_remains_disabled():
     source = Path(".github/workflows/bridge-video-auto-discovery.yml").read_text(
         encoding="utf-8"
@@ -115,5 +189,6 @@ if __name__ == "__main__":
     test_runtime_does_not_filter_master_canon_evidence()
     test_terminal_preflight_matches_revision_receipt_contract()
     test_terminal_preflight_scopes_same_revision_to_output_generation()
+    test_runtime_same_revision_done_is_scoped_to_requested_output_folder()
     test_periodic_auto_discovery_remains_disabled()
     print("PRODUCTION_R25_15_EVIDENCE_CONTRACT: PASS")
