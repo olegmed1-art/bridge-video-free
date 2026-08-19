@@ -1,0 +1,292 @@
+name: DDS Stage 2C.2 — TRAIN-only card evaluation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/dds-stage2c2-dds-train.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: dds-stage2c2-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+env:
+  STAGE2C1_ARTIFACT_ID: '9352498937'
+  STAGE2B_ARTIFACT_ID: '9318545935'
+  TRAIN_ARTIFACT_ID: '9302550154'
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  dds-train-only:
+    if: >-
+      github.actor == 'olegmed1-art' &&
+      github.event.pull_request.head.ref == 'dds-stage2c2-dds-train-20260819'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Checkout exact PR merge commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+
+      - name: Restore locked predictions, Stage 2B tasks and immutable TRAIN state
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/s2c1 /tmp/s2b /tmp/train dds_training/work/stage2c2
+          mkdir -p /tmp/s2c1 /tmp/s2b /tmp/train dds_training/work/stage2c2
+          gh api -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${STAGE2C1_ARTIFACT_ID}/zip" > /tmp/s2c1/artifact.zip
+          unzip -q /tmp/s2c1/artifact.zip -d /tmp/s2c1/files
+          test -f /tmp/s2c1/files/locked_predictions_continuations.jsonl
+          test -f /tmp/s2c1/files/locked_predictions_counterexamples.jsonl
+          test -f /tmp/s2c1/files/locked_predictions_multicontract.jsonl
+          test -f /tmp/s2c1/files/stage2c1_locked_summary.json
+
+          gh api -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${STAGE2B_ARTIFACT_ID}/zip" > /tmp/s2b/artifact.zip
+          unzip -q /tmp/s2b/artifact.zip -d /tmp/s2b/files
+          test -f /tmp/s2b/files/continuation_curriculum_balanced.jsonl
+          test -f /tmp/s2b/files/multi_contract_blueprint.jsonl
+          test -f /tmp/s2b/files/counterexample_candidates.jsonl
+
+          gh api -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${TRAIN_ARTIFACT_ID}/zip" > /tmp/train/artifact.zip
+          unzip -q /tmp/train/artifact.zip -d /tmp/train/files
+          state="$(find /tmp/train/files -name 'dds-main-train-progress-state.tgz' -print -quit)"
+          test -n "$state"
+          mkdir -p /tmp/train/state
+          tar -xzf "$state" -C /tmp/train/state
+
+      - name: Verify locked-prediction identity and TRAIN-only scope
+        working-directory: dds_training
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          c1=Path('/tmp/s2c1/files')
+          s=json.loads((c1/'stage2c1_locked_summary.json').read_text(encoding='utf-8'))
+          assert s['status']=='locked_complete'
+          assert s['total_locked_records']==12882
+          assert s['dds_called'] is False and s['validation_opened'] is False and s['sealed_opened'] is False
+          for name,digest in s['digests'].items():
+              p=c1/name
+              assert hashlib.sha256(p.read_bytes()).hexdigest()==digest, name
+          def rows(p): return [json.loads(x) for x in Path(p).read_text(encoding='utf-8').splitlines() if x.strip()]
+          cont=rows('/tmp/s2b/files/continuation_curriculum_balanced.jsonl')
+          multi=rows('/tmp/s2b/files/multi_contract_blueprint.jsonl')
+          assert len(cont)==2000 and all(str(x.get('source_root_split'))=='train' for x in cont)
+          assert len(multi)==10000 and all(str(x.get('source_root_split'))=='train' for x in multi)
+          assert all(str(x.get('split'))=='derived' for x in multi)
+          print({'locked_identity_verified':True,'continuations':len(cont),'multicontract':len(multi),'holdouts_opened':False})
+          PY
+
+      - name: Restore verified DDS3 wheel and Bazel state
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            dds_training/.wheel-cache/dds3
+            ~/.cache/bazel-dds3
+          key: dds3-wheel-v5-${{ runner.os }}-py314-${{ hashFiles('dds_training/bootstrap_linux.sh') }}
+          restore-keys: |
+            dds3-wheel-v5-${{ runner.os }}-py314-
+
+      - name: Bootstrap pinned local DDS3
+        run: DDS_RUN_PREFLIGHT=0 bash dds_training/bootstrap_linux.sh
+
+      - name: Evaluate Stage 2C.2 TRAIN-only locked predictions with DDS
+        working-directory: dds_training
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          python - <<'PY'
+          import hashlib, json, statistics
+          from collections import Counter, defaultdict
+          from pathlib import Path
+          from continuation_eval import evaluate_continuation
+          from dds_engine import contract_tricks_batch, evaluate_opening_lead
+
+          out=Path('work/stage2c2'); out.mkdir(parents=True,exist_ok=True)
+          s2b=Path('/tmp/s2b/files'); c1=Path('/tmp/s2c1/files')
+          def rows(path):
+              return [json.loads(x) for x in Path(path).read_text(encoding='utf-8').splitlines() if x.strip()]
+          def write_jsonl(path,data):
+              with Path(path).open('w',encoding='utf-8') as f:
+                  for r in data: f.write(json.dumps(r,ensure_ascii=False,sort_keys=True)+'\n')
+          def taskmap_from_state():
+              m={}
+              for p in Path('/tmp/train/state').rglob('*.jsonl'):
+                  if 'task' not in p.name.lower(): continue
+                  try:
+                      for line in p.open(encoding='utf-8'):
+                          if not line.strip(): continue
+                          t=json.loads(line); tid=t.get('task_id')
+                          if tid: m.setdefault(str(tid),t)
+                  except Exception:
+                      pass
+              return m
+
+          # Continuations: exact card-level DDS regret.
+          cont_tasks={str(x['task_id']):x for x in rows(s2b/'continuation_curriculum_balanced.jsonl')}
+          cont_preds=rows(c1/'locked_predictions_continuations.jsonl')
+          assert len(cont_tasks)==len(cont_preds)==2000
+          cont_results=[]
+          for i,p in enumerate(cont_preds,1):
+              t=cont_tasks[str(p['task_id'])]
+              assert str(t.get('source_root_split'))=='train'
+              r=evaluate_continuation(t,p)
+              cont_results.append({'task_id':p['task_id'],'family_id':p.get('family_id'),'actor':t['actor'],'prediction':p,'dds_result':r})
+              if i%250==0: print({'continuations_completed':i})
+          write_jsonl(out/'stage2c2_continuation_results.jsonl',cont_results)
+
+          # Counterexample source/variant decisions: evaluate each locked decision independently.
+          taskmap=taskmap_from_state()
+          ce_preds=rows(c1/'locked_predictions_counterexamples.jsonl'); assert len(ce_preds)==882
+          ce_results=[]
+          for i,p in enumerate(ce_preds,1):
+              t=taskmap[str(p['task_id'])]
+              root=str(t.get('source_root_split',t.get('split')))
+              assert root in {'train','derived'}
+              if t['task_type']=='contract_tricks':
+                  dd=contract_tricks_batch([t['deal']])[0]
+                  actual=int(dd[int(t['strain'])][int(t['declarer'])])
+                  pred=int(p['tricks']); r={'dds_tricks':actual,'prediction_error':pred-actual,'absolute_error':abs(pred-actual),'exact':pred==actual}
+              elif t['task_type']=='opening_lead':
+                  r=evaluate_opening_lead(t['deal'],int(t['strain']),int(t['declarer']),str(p['card']))
+              else:
+                  raise RuntimeError(t['task_type'])
+              ce_results.append({'task_id':p['task_id'],'pair_id':p['counterexample_pair_id'],'role':p['counterexample_role'],'task_type':t['task_type'],'prediction':p,'dds_result':r})
+              if i%200==0: print({'counterexample_decisions_completed':i})
+          write_jsonl(out/'stage2c2_counterexample_results.jsonl',ce_results)
+
+          # Pair-level blind discrimination audit.
+          by_pair=defaultdict(list)
+          for x in ce_results: by_pair[x['pair_id']].append(x)
+          pair_rows=[]
+          for pair,items in sorted(by_pair.items()):
+              assert len(items)==2
+              src=next(x for x in items if x['role']=='source'); var=next(x for x in items if x['role']=='variant')
+              if src['task_type']=='contract_tricks':
+                  sdd=int(src['dds_result']['dds_tricks']); vdd=int(var['dds_result']['dds_tricks'])
+                  sp=int(src['prediction']['tricks']); vp=int(var['prediction']['tricks'])
+                  truth_changed=sdd!=vdd
+                  prediction_changed=sp!=vp
+                  direction_ok=(sp-vp)*(sdd-vdd)>0 if truth_changed and prediction_changed else False
+                  pass_pair=bool(truth_changed and prediction_changed and direction_ok)
+                  detail={'source_dds':sdd,'variant_dds':vdd,'source_prediction':sp,'variant_prediction':vp,'truth_changed':truth_changed,'prediction_changed':prediction_changed,'direction_ok':direction_ok}
+              else:
+                  sr=src['dds_result'].get('dd_regret'); vr=var['dds_result'].get('dd_regret')
+                  sc=str(src['prediction']['card']); vc=str(var['prediction']['card'])
+                  pass_pair=(sr==0 and vr==0)
+                  detail={'source_card':sc,'variant_card':vc,'prediction_changed':sc!=vc,'source_regret':sr,'variant_regret':vr,'both_equal_optimal':pass_pair}
+              pair_rows.append({'pair_id':pair,'task_type':src['task_type'],'blind_pair_pass':bool(pass_pair),**detail})
+          write_jsonl(out/'stage2c2_counterexample_pair_audit.jsonl',pair_rows)
+
+          # Multi-contract: batch by 40 complete deals, preserving one DDS table per deal family.
+          multi_tasks=rows(s2b/'multi_contract_blueprint.jsonl'); multi_preds=rows(c1/'locked_predictions_multicontract.jsonl')
+          assert len(multi_tasks)==len(multi_preds)==10000
+          pmap={str(x['task_id']):x for x in multi_preds}
+          # group 20 cells per unique family/deal and compute one DD table for each family.
+          families={}
+          for t in multi_tasks:
+              assert str(t.get('source_root_split'))=='train'
+              fam=str(t.get('root_deal_id') or t['deal_id'])
+              families.setdefault(fam,{'deal':t['deal'],'tasks':[]})['tasks'].append(t)
+          fam_items=list(families.items()); tables={}
+          for start in range(0,len(fam_items),40):
+              chunk=fam_items[start:start+40]
+              mats=contract_tricks_batch([x[1]['deal'] for x in chunk])
+              for (fam,_),mat in zip(chunk,mats): tables[fam]=mat
+              print({'multicontract_families_completed':min(start+len(chunk),len(fam_items)),'of':len(fam_items)})
+          multi_results=[]
+          for t in multi_tasks:
+              p=pmap[str(t['task_id'])]; fam=str(t.get('root_deal_id') or t['deal_id'])
+              actual=int(tables[fam][int(t['strain'])][int(t['declarer'])]); pred=int(p['tricks'])
+              multi_results.append({'task_id':t['task_id'],'family_id':fam,'strain':int(t['strain']),'declarer':int(t['declarer']),'prediction':pred,'dds_tricks':actual,'error':pred-actual,'absolute_error':abs(pred-actual),'exact':pred==actual})
+          write_jsonl(out/'stage2c2_multicontract_results.jsonl',multi_results)
+
+          def regret_stats(items):
+              vals=[x['dds_result'].get('dd_regret') for x in items if x['dds_result'].get('dd_regret') is not None]
+              return {'n':len(vals),'optimal':sum(v==0 for v in vals),'optimal_rate':sum(v==0 for v in vals)/len(vals) if vals else None,'mean_regret':statistics.fmean(vals) if vals else None,'regret_2plus':sum(v>=2 for v in vals)}
+          cont_by_actor={a:regret_stats([x for x in cont_results if x['actor']==a]) for a in ('declarer','defense')}
+          ce_contract=[x for x in ce_results if x['task_type']=='contract_tricks']; ce_lead=[x for x in ce_results if x['task_type']=='opening_lead']
+          ce_contract_abs=[x['dds_result']['absolute_error'] for x in ce_contract]
+          ce_summary={
+              'decisions':len(ce_results),'pairs':len(pair_rows),'pair_passes':sum(x['blind_pair_pass'] for x in pair_rows),'pair_pass_rate':sum(x['blind_pair_pass'] for x in pair_rows)/len(pair_rows),
+              'contract_decisions':len(ce_contract),'contract_exact':sum(x['dds_result']['exact'] for x in ce_contract),'contract_mae':statistics.fmean(ce_contract_abs) if ce_contract_abs else None,
+              'opening_lead':regret_stats(ce_lead)
+          }
+          m_abs=[x['absolute_error'] for x in multi_results]
+          multi_summary={'tasks':len(multi_results),'families':len(families),'exact':sum(x['exact'] for x in multi_results),'exact_rate':sum(x['exact'] for x in multi_results)/len(multi_results),'mae':statistics.fmean(m_abs),'errors_2plus':sum(x>=2 for x in m_abs)}
+          card_errors=[x for x in cont_results if (x['dds_result'].get('dd_regret') or 0)>0]
+          card_errors += [x for x in ce_lead if (x['dds_result'].get('dd_regret') or 0)>0]
+          summary={
+              'schema':'dds-stage2c2-train-results-v1','stage':'2C.2','status':'dds_train_complete',
+              'locked_records_evaluated':12882,'dds_called':True,'scope':'TRAIN-owned only',
+              'validation_opened':False,'sealed_opened':False,'historical_database_mutated':False,
+              'continuations':{'total':len(cont_results),'by_actor':cont_by_actor},
+              'counterexamples':ce_summary,'multicontract':multi_summary,
+              'card_level_error_positions':len(card_errors),
+              'next_gate':'card_level_investigation_regression_methodology_audit'
+          }
+          (out/'stage2c2_summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          # Content digests.
+          digests={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(out.glob('*')) if p.is_file()}
+          (out/'stage2c2_digests.json').write_text(json.dumps(digests,indent=2,sort_keys=True)+'\n',encoding='utf-8')
+          print(json.dumps(summary,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Verify Stage 2C.2 gates
+        working-directory: dds_training
+        shell: bash
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('work/stage2c2')
+          s=json.loads((root/'stage2c2_summary.json').read_text(encoding='utf-8'))
+          assert s['status']=='dds_train_complete'
+          assert s['locked_records_evaluated']==12882
+          assert s['scope']=='TRAIN-owned only'
+          assert s['validation_opened'] is False and s['sealed_opened'] is False
+          assert s['historical_database_mutated'] is False
+          assert s['continuations']['total']==2000
+          assert s['counterexamples']['decisions']==882 and s['counterexamples']['pairs']==441
+          assert s['multicontract']['tasks']==10000 and s['multicontract']['families']==500
+          assert s['next_gate']=='card_level_investigation_regression_methodology_audit'
+          print({'stage2c2_verified':True,'validation_closed':True,'sealed_closed':True,'historical_db_unchanged':True})
+          PY
+
+      - name: Package Stage 2C.2 evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf dds-stage2c2-train-results.tgz -C dds_training/work stage2c2
+          sha256sum dds-stage2c2-train-results.tgz > dds-stage2c2-train-results.tgz.sha256
+
+      - name: Upload Stage 2C.2 DDS TRAIN evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dds-stage2c2-train-${{ github.run_id }}
+          path: |
+            dds_training/work/stage2c2/stage2c2_summary.json
+            dds_training/work/stage2c2/stage2c2_digests.json
+            dds_training/work/stage2c2/stage2c2_continuation_results.jsonl
+            dds_training/work/stage2c2/stage2c2_counterexample_results.jsonl
+            dds_training/work/stage2c2/stage2c2_counterexample_pair_audit.jsonl
+            dds_training/work/stage2c2/stage2c2_multicontract_results.jsonl
+            dds-stage2c2-train-results.tgz
+            dds-stage2c2-train-results.tgz.sha256
+          if-no-files-found: error
+          retention-days: 30
