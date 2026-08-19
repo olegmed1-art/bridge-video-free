@@ -195,8 +195,23 @@ def _read_json(token, item):
         return None
 
 
+def _generation_search_query(name: str, output_folder_id: str | None = None) -> str:
+    """Search terminal evidence inside one output generation when available."""
+    query = f"trashed=false and name='{name}'"
+    folder_id = (output_folder_id or "").strip()
+    if folder_id:
+        if not all(ch.isalnum() or ch in "_-" for ch in folder_id):
+            raise RuntimeError("INVALID_OUTPUT_FOLDER_ID")
+        query += f" and '{folder_id}' in parents"
+    return query
+
+
 def _existing_same_revision_done(token, job_id):
-    done_candidates = base.io.search(token, f"trashed=false and name='AI_DONE_{job_id}.json'")
+    output_folder_id = os.getenv("BRIDGE_OUTPUT_FOLDER_ID", "").strip()
+    done_candidates = base.io.search(
+        token,
+        _generation_search_query(f"AI_DONE_{job_id}.json", output_folder_id),
+    )
     done_candidates.sort(key=lambda item: item.get("modifiedTime") or "", reverse=True)
     for candidate in done_candidates:
         done = _read_json(token, candidate)
@@ -207,7 +222,10 @@ def _existing_same_revision_done(token, job_id):
             ("METHODOLOGY_READY", "METHODOLOGY_READY"),
             ("METHODOLOGY_PARTIAL", "METHODOLOGY_PARTIAL"),
         ):
-            receipts = base.io.search(token, f"trashed=false and name='{prefix}_{job_id}.json'")
+            receipts = base.io.search(
+                token,
+                _generation_search_query(f"{prefix}_{job_id}.json", output_folder_id),
+            )
             receipts.sort(key=lambda item: item.get("modifiedTime") or "", reverse=True)
             for receipt_item in receipts:
                 receipt = _read_json(token, receipt_item)
@@ -237,5 +255,6 @@ __all__ = [
     "master_payload_with_quality_v2",
     "validate_with_readiness_v2",
     "upload_json_with_readiness_v2",
+    "_generation_search_query",
     "process_job",
 ]
