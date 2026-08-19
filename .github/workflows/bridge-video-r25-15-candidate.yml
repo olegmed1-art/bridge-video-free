@@ -118,7 +118,12 @@ jobs:
         if: steps.terminal.outputs.already_completed != 'true'
         env:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
-        run: python run_drive_3_1_free_oidc.py
+        run: |
+          python - <<'PY'
+          from run_drive_3_1_free_oidc import user_oauth_token
+          import bridge_runtime_hardening_r25_15 as runtime
+          runtime.run(user_oauth_token)
+          PY
 
       - name: Route candidate outputs
         if: always()
