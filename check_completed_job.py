@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Fast revision-aware Drive check for terminal CLEANUP_ACK receipts."""
+"""Fast revision-aware Drive check for terminal CLEANUP_ACK receipts.
+
+When BRIDGE_OUTPUT_FOLDER_ID is supplied, idempotency is scoped to that output
+generation. This allows a fresh controlled production repeat of the same opaque
+source/revision without being suppressed by a prior candidate run whose receipt
+was routed to a different output folder.
+"""
 from __future__ import annotations
 
 import json
@@ -51,6 +57,17 @@ def receipt_matches_revision(payload: dict, job_id: str, revision: str) -> bool:
     )
 
 
+def receipt_search_query(job_id: str, output_folder_id: str = "") -> str:
+    name = f"CLEANUP_ACK_{job_id}.json"
+    q = f"trashed=false and name='{name}'"
+    folder = (output_folder_id or "").strip()
+    if folder:
+        if any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-" for ch in folder):
+            raise RuntimeError("INVALID_OUTPUT_FOLDER_ID_FOR_IDEMPOTENCY_SCOPE")
+        q += f" and '{folder}' in parents"
+    return q
+
+
 def _download_receipt(token: str, file_id: str) -> dict:
     params = urllib.parse.urlencode({"alt": "media", "supportsAllDrives": "true"})
     return _json_request(
@@ -64,12 +81,12 @@ def main():
     revision = os.environ.get("BRIDGE_REQUESTED_ALGORITHM_REVISION", "").strip()
     if not revision:
         raise RuntimeError("ALGORITHM_REVISION_REQUIRED_FOR_IDEMPOTENCY")
+    output_folder = os.environ.get("BRIDGE_OUTPUT_FOLDER_ID", "").strip()
     token = _token()
-    name = f"CLEANUP_ACK_{job}.json"
-    q = f"trashed=false and name='{name}'"
+    q = receipt_search_query(job, output_folder)
     params = urllib.parse.urlencode({
         "q": q,
-        "fields": "files(id,name,modifiedTime)",
+        "fields": "files(id,name,modifiedTime,parents)",
         "pageSize": "100",
         "orderBy": "modifiedTime desc",
     })
@@ -96,6 +113,7 @@ def main():
         "status": "ALREADY_COMPLETED" if completed else "NOT_COMPLETED_FOR_REVISION",
         "job_id": job,
         "algorithmRevision": revision,
+        "outputFolderScope": output_folder or None,
     }))
     return 0
 
