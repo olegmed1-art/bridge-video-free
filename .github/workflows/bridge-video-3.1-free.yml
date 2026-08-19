@@ -90,8 +90,10 @@ jobs:
             LESSON_DATE_CANDIDATE="$INPUT_LESSON_DATE_CANDIDATE"
             LESSON_DATE_EVIDENCE_JSON="$INPUT_LESSON_DATE_EVIDENCE_JSON"
           else
-            REQUEST_FILE="$(git show --pretty='' --name-only "$GITHUB_SHA" | grep -E '^run_requests/.*\.txt$' | head -n 1 || true)"
-            test -n "$REQUEST_FILE" || { echo "No run request file in triggering commit" >&2; exit 2; }
+            REQUEST_FILES="$(git diff-tree --no-commit-id --name-only -r -m "$GITHUB_SHA" | sort -u | grep -E '^run_requests/.*\.txt$' || true)"
+            REQUEST_COUNT="$(printf '%s\n' "$REQUEST_FILES" | sed '/^$/d' | wc -l | tr -d '[:space:]')"
+            test "$REQUEST_COUNT" -eq 1 || { echo "Expected exactly one run request in triggering commit; found $REQUEST_COUNT" >&2; exit 2; }
+            REQUEST_FILE="$(printf '%s\n' "$REQUEST_FILES" | head -n 1)"
             JOB_ID="$(sed -n 's/^JOB_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
             OUTPUT_FOLDER_ID="$(sed -n 's/^OUTPUT_FOLDER_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
             WORK_FOLDER_ID="$(sed -n 's/^WORK_FOLDER_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
