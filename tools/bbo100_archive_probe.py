@@ -12,6 +12,7 @@ BASE = "https://webutil.bridgebase.com/v2/"
 ROBOT_ARCHIVE = "https://webutil.bridgebase.com/v2/tarchive.php?d=bbombadmin&h=bbombadmin&m=h"
 OUT = Path("bbo100_probe")
 OUT.mkdir(exist_ok=True)
+PROBE_VERSION = 2
 
 
 def links_from_html(html: str, base: str):
@@ -42,6 +43,7 @@ def main():
         tviews = list(dict.fromkeys(re.findall(r"https?://[^\"'<>\s]*tview\.php\?[^\"'<>\s]+", archive_html)))
 
     manifest = {
+        "probe_version": PROBE_VERSION,
         "archive_url": ROBOT_ARCHIVE,
         "post_url": r.url,
         "status": r.status_code,
