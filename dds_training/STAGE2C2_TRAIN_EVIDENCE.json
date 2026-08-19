@@ -1,0 +1,72 @@
+{
+  "schema": "dds-stage2c2-train-evidence-v1",
+  "recorded_at": "2026-08-19",
+  "stage": "2C.2",
+  "status": "dds_train_complete",
+  "source_locked_predictions": {
+    "workflow_run_id": 32216446264,
+    "artifact_id": 9352498937,
+    "locked_records": 12882,
+    "dds_called_before_lock": false
+  },
+  "execution": {
+    "workflow_run_id": 32217687615,
+    "workflow_name": "DDS Stage 2C.2 — TRAIN-only card evaluation v2",
+    "conclusion": "success",
+    "artifact_id": 9352988318,
+    "artifact_name": "dds-stage2c2-train-v2-32217687615",
+    "artifact_size_bytes": 718740,
+    "artifact_digest": "sha256:1fd61be6816df747824467266167dc22e6a88ae4a62794643f14fd176e566da2",
+    "dds_called": true,
+    "scope": "TRAIN-owned only",
+    "validation_opened": false,
+    "sealed_opened": false,
+    "historical_database_mutated": false
+  },
+  "continuations": {
+    "total": 2000,
+    "declarer": {
+      "n": 1000,
+      "optimal": 768,
+      "optimal_rate": 0.768,
+      "mean_regret": 0.4,
+      "regret_2plus": 83
+    },
+    "defense": {
+      "n": 1000,
+      "optimal": 645,
+      "optimal_rate": 0.645,
+      "mean_regret": 0.664,
+      "regret_2plus": 149
+    }
+  },
+  "counterexamples": {
+    "decisions": 882,
+    "pairs": 441,
+    "pair_passes": 72,
+    "pair_pass_rate": 0.16326530612244897,
+    "opening_lead_decisions": 882,
+    "opening_lead_optimal": 268,
+    "opening_lead_optimal_rate": 0.30385487528344673,
+    "opening_lead_mean_regret": 1.129251700680272,
+    "opening_lead_regret_2plus": 282,
+    "contract_decisions": 0
+  },
+  "multicontract": {
+    "tasks": 10000,
+    "families": 500,
+    "exact": 1762,
+    "exact_rate": 0.1762,
+    "mae": 1.6039,
+    "errors_2plus": 4839
+  },
+  "card_level_error_positions": 1201,
+  "interpretation": {
+    "declarer_continuations_stronger_than_defense": true,
+    "defense_requires_priority_training": true,
+    "counterexample_transfer_is_weak": true,
+    "multicontract_structural_estimator_is_not_ready_for_confident_use": true,
+    "automatic_skill_promotion": false
+  },
+  "next_gate": "card_level_investigation_regression_methodology_audit"
+}
