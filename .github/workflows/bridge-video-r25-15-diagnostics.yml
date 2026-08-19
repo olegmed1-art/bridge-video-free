@@ -29,20 +29,14 @@ jobs:
       - name: Extract and store sanitized acoustic diagnostics
         env:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+          PDF_ID: 1NusI0alCWpij1fYqCnJmHrbC4P9bZT-7
+          OUTPUT_FOLDER_ID: 1BIyvSE3CWs5CitkbNsjmPq79vJwuMEVs
+          JOB_ID: 41daa4ca6e09d13e366c578b7c53ae31
         shell: bash
         run: |
           set -euo pipefail
-          REQUEST_FILE="$(git diff --name-only origin/${{ github.base_ref || 'main' }}...HEAD 2>/dev/null | grep -E '^diagnostic_requests_r25_15/.*\.txt$' | tail -n 1 || true)"
-          if [ -z "$REQUEST_FILE" ]; then
-            REQUEST_FILE="$(git show --pretty='' --name-only "$GITHUB_SHA" | grep -E '^diagnostic_requests_r25_15/.*\.txt$' | head -n 1 || true)"
-          fi
-          test -n "$REQUEST_FILE"
-          PDF_ID="$(sed -n 's/^PDF_ID=//p' "$REQUEST_FILE" | tail -n1 | tr -d '[:space:]')"
-          OUTPUT_FOLDER_ID="$(sed -n 's/^OUTPUT_FOLDER_ID=//p' "$REQUEST_FILE" | tail -n1 | tr -d '[:space:]')"
-          JOB_ID="$(sed -n 's/^JOB_ID=//p' "$REQUEST_FILE" | tail -n1 | tr -d '[:space:]')"
-          test -n "$PDF_ID"; test -n "$OUTPUT_FOLDER_ID"; test -n "$JOB_ID"
-          PDF_ID="$PDF_ID" OUTPUT_FOLDER_ID="$OUTPUT_FOLDER_ID" JOB_ID="$JOB_ID" python - <<'PY'
-          import json, os, pathlib, traceback
+          python - <<'PY'
+          import json, os, pathlib
           import requests, pymupdf
           from run_drive_3_1_free_oidc import user_oauth_token
 
