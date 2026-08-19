@@ -26,7 +26,7 @@ SELECT
     nv.algorithm_id,
     nv.version_no,
     '3.1-free-r25.13-checkpoint',
-    '{"registration_basis":"meta_diagnostic_checkpoint","runtime_module":"bridge_runtime_hardening_r25_13.py","production_allowed":false,"meta_pass_allowed":false}'::jsonb,
+    '{"registration_basis":"meta_diagnostic_checkpoint","runtime_module":"bridge_runtime_hardening_r25_13_checkpoint.py","production_allowed":false,"meta_pass_allowed":false}'::jsonb,
     'candidate'
 FROM next_version nv
 WHERE NOT EXISTS (
