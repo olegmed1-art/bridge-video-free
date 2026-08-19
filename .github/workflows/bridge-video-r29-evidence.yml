@@ -7,6 +7,7 @@ on:
       - 'r29_identity_overlay_probe.py'
       - 'tests/test_speaker_mapping_r29.py'
       - 'tests/test_r29_private_json_bom.py'
+      - 'docs/evidence/r29_operational_*.md'
       - '.github/workflows/bridge-video-r29-evidence.yml'
       - '.github/workflows/bridge-video-r29-field.yml'
   pull_request:
@@ -16,6 +17,7 @@ on:
       - 'r29_identity_overlay_probe.py'
       - 'tests/test_speaker_mapping_r29.py'
       - 'tests/test_r29_private_json_bom.py'
+      - 'docs/evidence/r29_operational_*.md'
       - '.github/workflows/bridge-video-r29-evidence.yml'
       - '.github/workflows/bridge-video-r29-field.yml'
 
@@ -52,6 +54,7 @@ jobs:
           set -euo pipefail
           ! grep -R -n -E 'Diana Vexler|Oleg Medvedev|Диана Векслер|Олег Медведев' \
             bridge_speaker_mapping_r29.py r29_identity_overlay_probe.py tests/test_speaker_mapping_r29.py tests/test_r29_private_json_bom.py \
+            docs/evidence/r29_operational_*.md \
             .github/workflows/bridge-video-r29-evidence.yml .github/workflows/bridge-video-r29-field.yml
           grep -q 'kind == "interaction"' bridge_speaker_mapping_r29.py
           grep -q 'Semantic function cannot create a named identity candidate' bridge_speaker_mapping_r29.py
