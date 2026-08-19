@@ -1,0 +1,60 @@
+name: Bridge Video r29 Identity Evidence Contract
+
+on:
+  push:
+    paths:
+      - 'bridge_speaker_mapping_r29.py'
+      - 'r29_identity_overlay_probe.py'
+      - 'tests/test_speaker_mapping_r29.py'
+      - '.github/workflows/bridge-video-r29-evidence.yml'
+      - '.github/workflows/bridge-video-r29-field.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'bridge_speaker_mapping_r29.py'
+      - 'r29_identity_overlay_probe.py'
+      - 'tests/test_speaker_mapping_r29.py'
+      - '.github/workflows/bridge-video-r29-evidence.yml'
+      - '.github/workflows/bridge-video-r29-field.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  r29-evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PYTHONUNBUFFERED: '1'
+      BRIDGE_PAID_CLOUD: 'false'
+      BRIDGE_BILLING_FALLBACK: 'false'
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install focused test runtime
+        run: python -m pip install --disable-pip-version-check 'pytest==9.1.1'
+      - name: Compile and run r29 mapping regressions
+        run: |
+          set -euo pipefail
+          python -m py_compile bridge_speaker_mapping_r29.py r29_identity_overlay_probe.py
+          PYTHONPATH=. python -m pytest -q tests/test_speaker_mapping_r29.py
+      - name: Privacy and identity-boundary contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R -n -E 'Diana Vexler|Oleg Medvedev|Диана Векслер|Олег Медведев' \
+            bridge_speaker_mapping_r29.py r29_identity_overlay_probe.py tests/test_speaker_mapping_r29.py \
+            .github/workflows/bridge-video-r29-evidence.yml .github/workflows/bridge-video-r29-field.yml
+          grep -q 'kind == "interaction"' bridge_speaker_mapping_r29.py
+          grep -q 'Semantic function cannot create a named identity candidate' bridge_speaker_mapping_r29.py
+          grep -q 'speaker_embeddings_persisted.*False' bridge_speaker_mapping_r29.py
+          grep -q 'temporary_audio_anchors_persisted.*False' bridge_speaker_mapping_r29.py
+          grep -q 'heavy_video_reprocessed.*False' r29_identity_overlay_probe.py
+          grep -q 'realNamesLogged.*False' r29_identity_overlay_probe.py
+          grep -q 'R29_BLOCKED_CLUSTER_COLLAPSE' r29_identity_overlay_probe.py
