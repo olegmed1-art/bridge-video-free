@@ -14,6 +14,7 @@ import os
 import bridge_runtime_hardening_r25_14 as previous
 import bridge_worker_3_1_free as core
 import run_master_3_1_free as base
+from bridge_output_scoped_idempotency import existing_same_revision_done
 
 REVISION = "3.1-free-r25.15"
 
@@ -41,6 +42,13 @@ def install(token_func):
 
     semantic_v2.diarize_transcript = diarize_transcript
     semantic_v2.REVISION = REVISION
+    # A completed result in another output folder is evidence, not permission to
+    # suppress an explicitly requested fresh verification generation.
+    semantic_v2._existing_same_revision_done = (
+        lambda token, job_id: existing_same_revision_done(
+            semantic_v2, token, job_id, REVISION
+        )
+    )
     core.ALGORITHM_REVISION = REVISION
     base.ALGORITHM_REVISION = REVISION
 
