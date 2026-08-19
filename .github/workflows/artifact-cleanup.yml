@@ -20,6 +20,7 @@ on:
     branches: [main]
     paths:
       - 'tools/github_actions_artifact_cleanup.py'
+      - 'tools/run_artifact_cleanup_canonical.py'
       - 'tests/test_github_actions_artifact_cleanup.py'
       - 'tests/test_artifact_cleanup_workflow_contract.py'
       - '.github/workflows/artifact-cleanup.yml'
@@ -28,6 +29,7 @@ on:
     branches: [main]
     paths:
       - 'tools/github_actions_artifact_cleanup.py'
+      - 'tools/run_artifact_cleanup_canonical.py'
       - 'tests/test_github_actions_artifact_cleanup.py'
       - 'tests/test_artifact_cleanup_workflow_contract.py'
       - '.github/workflows/artifact-cleanup.yml'
@@ -134,4 +136,4 @@ jobs:
               ;;
           esac
 
-          python tools/github_actions_artifact_cleanup.py "${args[@]}"
+          python tools/run_artifact_cleanup_canonical.py "${args[@]}"
