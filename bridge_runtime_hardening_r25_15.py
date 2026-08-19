@@ -49,6 +49,12 @@ def install(token_func):
             semantic_v2, token, job_id, REVISION
         )
     )
+    # The inherited r25 semantic adapter has its own older global job+revision
+    # ALREADY_DONE check.  Once r25.15's generation-scoped check has decided the
+    # requested output generation is fresh, continue through the already-patched
+    # base heavy processor directly; otherwise the legacy guard can still reuse a
+    # completed candidate generation from another Drive folder.
+    semantic_v2.previous.process_job = base.process_job
     core.ALGORITHM_REVISION = REVISION
     base.ALGORITHM_REVISION = REVISION
 
