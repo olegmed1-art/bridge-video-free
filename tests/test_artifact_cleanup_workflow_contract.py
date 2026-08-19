@@ -26,7 +26,8 @@ required = [
     'test "$GITHUB_TRIGGERING_ACTOR" = olegmed1-art',
     'args+=(--execute)',
     'do not bind safe cleanup to a particular runtime actor identity.',
-    'python tools/github_actions_artifact_cleanup.py',
+    "'tools/run_artifact_cleanup_canonical.py'",
+    'python tools/run_artifact_cleanup_canonical.py',
 ]
 for item in required:
     assert item in text, item
@@ -38,6 +39,7 @@ for forbidden in [
     'persist-credentials: true',
     'Push is deliberately dry-run during deployment validation.',
     '--max-artifacts 200',
+    'python tools/github_actions_artifact_cleanup.py "${args[@]}"',
 ]:
     assert forbidden not in text, forbidden
 
