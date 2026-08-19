@@ -10,6 +10,7 @@ from pathlib import Path
 
 import run_drive_3_1_free as io
 
+from database.outbox_publisher import publish_changeset_outbox
 from database.video_result_persistence import persist_video_result
 
 
@@ -95,10 +96,13 @@ def persist_completed_drive_job(token: str):
         raise RuntimeError("DATABASE_PERSIST_MASTER_REVISION_MISMATCH")
 
     result = persist_video_result(raw_dsn, master, done)
+    outbox = publish_changeset_outbox(raw_dsn, str(result["changeset_id"]))
+    result["outbox"] = outbox
     io.safe(
         job_id=job_id,
         stage="DATABASE_PERSIST",
         exit_code=0,
         episode_count=len(master.get("episodes") or []),
+        outbox_published=outbox["published_count"],
     )
     return result
