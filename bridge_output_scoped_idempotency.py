@@ -7,6 +7,7 @@ Retries inside the same output generation remain idempotent.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from typing import Any
@@ -29,6 +30,20 @@ def receipt_search_query(name: str, output_folder_id: str | None = None) -> str:
     return f"'{folder}' in parents and {base}" if folder else base
 
 
+def _json_reader(semantic_module: Any):
+    reader = getattr(semantic_module, "_read_json", None)
+    if callable(reader):
+        return reader
+
+    def read_json(token, item):
+        try:
+            return json.loads(semantic_module.base._read_text(token, item))
+        except Exception:
+            return None
+
+    return read_json
+
+
 def existing_same_revision_done(
     semantic_module: Any,
     token: str,
@@ -43,7 +58,7 @@ def existing_same_revision_done(
     """
     output_folder_id = _output_folder_id()
     search = semantic_module.base.io.search
-    read_json = semantic_module._read_json
+    read_json = _json_reader(semantic_module)
 
     done_name = f"AI_DONE_{job_id}.json"
     done_candidates = search(token, receipt_search_query(done_name, output_folder_id))
@@ -51,7 +66,12 @@ def existing_same_revision_done(
 
     for candidate in done_candidates:
         done = read_json(token, candidate)
-        if not done or done.get("status") != "AI_DONE" or done.get("algorithmRevision") != revision:
+        if (
+            not done
+            or done.get("status") != "AI_DONE"
+            or done.get("job_id") not in (None, job_id)
+            or done.get("algorithmRevision") != revision
+        ):
             continue
         pdf_id = (done.get("masterPdf") or {}).get("driveId")
         for prefix, accepted_status in (
@@ -66,6 +86,7 @@ def existing_same_revision_done(
                 if (
                     receipt
                     and receipt.get("status") == accepted_status
+                    and receipt.get("job_id") in (None, job_id)
                     and receipt.get("algorithmRevision") == revision
                     and receipt.get("masterPdfDriveId") == pdf_id
                 ):

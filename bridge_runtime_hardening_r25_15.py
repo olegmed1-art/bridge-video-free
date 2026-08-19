@@ -42,13 +42,21 @@ def install(token_func):
 
     semantic_v2.diarize_transcript = diarize_transcript
     semantic_v2.REVISION = REVISION
-    # A completed result in another output folder is evidence, not permission to
-    # suppress an explicitly requested fresh verification generation.
+
+    # There are two historical no-op gates in the inherited semantic stack.
+    # Both must be scoped to this output generation, otherwise the inner r25
+    # adapter can still accept an AI_DONE stored elsewhere on Drive.
     semantic_v2._existing_same_revision_done = (
         lambda token, job_id: existing_same_revision_done(
             semantic_v2, token, job_id, REVISION
         )
     )
+    semantic_v2.previous._existing_same_revision_done = (
+        lambda token, job_id: existing_same_revision_done(
+            semantic_v2.previous, token, job_id, REVISION
+        )
+    )
+
     core.ALGORITHM_REVISION = REVISION
     base.ALGORITHM_REVISION = REVISION
 
