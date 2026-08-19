@@ -41,6 +41,12 @@ def install(token_func):
 
     semantic_v2.diarize_transcript = diarize_transcript
     semantic_v2.REVISION = REVISION
+    # r25's legacy semantic adapter owns a global job+revision idempotency guard.
+    # r25.15 performs its own output-generation-scoped terminal check first, so
+    # continuing through the inherited path must call the base heavy processor
+    # directly or a prior candidate generation can suppress a fresh production
+    # generation of the same source/revision.
+    semantic_v2.previous.process_job = base.process_job
     core.ALGORITHM_REVISION = REVISION
     base.ALGORITHM_REVISION = REVISION
 
