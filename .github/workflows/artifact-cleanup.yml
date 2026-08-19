@@ -14,7 +14,6 @@ on:
         type: boolean
         default: false
   schedule:
-    - cron: '*/5 * * * *' # temporary live-canary cadence; refreshed 2026-08-20 after round-trip verification
     - cron: '47 */3 * * *'
   pull_request:
     branches: [main]
@@ -98,7 +97,6 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           CLEANUP_ARTIFACT_ID: ${{ inputs.artifact_id }}
           CLEANUP_EXECUTE: ${{ inputs.execute_delete }}
-          CLEANUP_CANARY_ARTIFACT_ID: '9302550154'
         run: |
           set -euo pipefail
           test "$GITHUB_REF_NAME" = main
@@ -109,9 +107,6 @@ jobs:
           if [ -n "${CLEANUP_ARTIFACT_ID:-}" ]; then
             [[ "$CLEANUP_ARTIFACT_ID" =~ ^[0-9]+$ ]]
             args+=(--artifact-id "$CLEANUP_ARTIFACT_ID")
-          elif [ "$GITHUB_EVENT_NAME" = schedule ] || [ "$GITHUB_EVENT_NAME" = push ]; then
-            [[ "$CLEANUP_CANARY_ARTIFACT_ID" =~ ^[0-9]+$ ]]
-            args+=(--artifact-id "$CLEANUP_CANARY_ARTIFACT_ID")
           fi
 
           case "$GITHUB_EVENT_NAME" in
