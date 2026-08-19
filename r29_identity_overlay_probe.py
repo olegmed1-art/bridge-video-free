@@ -90,7 +90,7 @@ def _export_private_json(token: str, file_id: str) -> dict[str, Any]:
             timeout=60,
         )
     response.raise_for_status()
-    payload = json.loads(response.text)
+    payload = json.loads(response.text.lstrip("\ufeff"))
     if not isinstance(payload, dict):
         raise RuntimeError("PRIVATE_EVIDENCE_JSON_INVALID")
     return payload
