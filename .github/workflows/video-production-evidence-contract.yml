@@ -6,40 +6,56 @@ on:
       - '.github/workflows/video-production-evidence-contract.yml'
       - '.github/workflows/bridge-video-3.1-free.yml'
       - '.github/workflows/bridge-video-auto-discovery.yml'
+      - '.github/workflows/bridge-video-r25-15-candidate.yml'
+      - '.github/workflows/bridge-video-r25-15-diagnostics.yml'
       - 'run_drive_3_1_free_generic.py'
       - 'check_completed_job.py'
       - 'bridge_runtime_hardening_r25_6.py'
       - 'bridge_runtime_hardening_r25_7.py'
       - 'bridge_runtime_hardening_r25_14.py'
+      - 'bridge_runtime_hardening_r25_15.py'
       - 'run_master_3_1_free.py'
       - 'run_master_3_1_free_semantic.py'
       - 'run_master_3_1_free_semantic_v2.py'
       - 'bridge_speaker_diarization.py'
       - 'bridge_speaker_diarization_v2.py'
+      - 'bridge_speaker_diarization_v3.py'
+      - 'bridge_speaker_diarization_v3_core.py'
+      - 'bridge_speaker_diarization_v3_repair.py'
       - 'diana_longitudinal_quality_v2.py'
       - 'tests/test_production_evidence_contract.py'
       - 'tests/test_asr_policy_r25_6.py'
       - 'tests/test_pdf_presentation_r25_6.py'
+      - 'tests/test_speaker_diarization_v2.py'
+      - 'tests/test_speaker_diarization_v3.py'
   pull_request:
     branches: [main]
     paths:
       - '.github/workflows/video-production-evidence-contract.yml'
       - '.github/workflows/bridge-video-3.1-free.yml'
       - '.github/workflows/bridge-video-auto-discovery.yml'
+      - '.github/workflows/bridge-video-r25-15-candidate.yml'
+      - '.github/workflows/bridge-video-r25-15-diagnostics.yml'
       - 'run_drive_3_1_free_generic.py'
       - 'check_completed_job.py'
       - 'bridge_runtime_hardening_r25_6.py'
       - 'bridge_runtime_hardening_r25_7.py'
       - 'bridge_runtime_hardening_r25_14.py'
+      - 'bridge_runtime_hardening_r25_15.py'
       - 'run_master_3_1_free.py'
       - 'run_master_3_1_free_semantic.py'
       - 'run_master_3_1_free_semantic_v2.py'
       - 'bridge_speaker_diarization.py'
       - 'bridge_speaker_diarization_v2.py'
+      - 'bridge_speaker_diarization_v3.py'
+      - 'bridge_speaker_diarization_v3_core.py'
+      - 'bridge_speaker_diarization_v3_repair.py'
       - 'diana_longitudinal_quality_v2.py'
       - 'tests/test_production_evidence_contract.py'
       - 'tests/test_asr_policy_r25_6.py'
       - 'tests/test_pdf_presentation_r25_6.py'
+      - 'tests/test_speaker_diarization_v2.py'
+      - 'tests/test_speaker_diarization_v3.py'
 
 permissions:
   contents: read
@@ -67,7 +83,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq fonts-dejavu-core
           python -m pip install --disable-pip-version-check -r requirements-worker.txt
-          python -m pip install --disable-pip-version-check 'numpy==2.2.6'
+          python -m pip install --disable-pip-version-check 'numpy==2.2.6' 'pytest==9.1.1'
       - name: Verify production route and evidence preservation
         run: |
           set -euo pipefail
@@ -76,15 +92,22 @@ jobs:
           PYTHONPATH=. python tests/test_asr_policy_r25_6.py
           PYTHONPATH=. python tests/test_unreliable_asr_isolation_r25_4.py
           PYTHONPATH=. python tests/test_pdf_presentation_r25_6.py
+          # r25.15 is candidate-only: require its speaker regression suite while
+          # keeping the production adapter/evidence contract pinned to r25.14.
+          PYTHONPATH=. python -m pytest -q tests/test_speaker_diarization_v2.py tests/test_speaker_diarization_v3.py
           python -m py_compile \
             bridge_runtime_hardening_r25_6.py \
             bridge_runtime_hardening_r25_7.py \
             bridge_runtime_hardening_r25_14.py \
+            bridge_runtime_hardening_r25_15.py \
             run_master_3_1_free.py \
             run_master_3_1_free_semantic.py \
             run_master_3_1_free_semantic_v2.py \
             bridge_speaker_diarization.py \
             bridge_speaker_diarization_v2.py \
+            bridge_speaker_diarization_v3.py \
+            bridge_speaker_diarization_v3_core.py \
+            bridge_speaker_diarization_v3_repair.py \
             diana_longitudinal_quality_v2.py \
             run_drive_3_1_free_generic.py \
             check_completed_job.py
