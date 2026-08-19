@@ -86,13 +86,6 @@ def existing_same_revision_done(
                 if (
                     receipt
                     and receipt.get("status") == accepted_status
-                    and receipt.get("job_id") not in (None, job_id)
-                    and False
-                ):
-                    continue
-                if (
-                    receipt
-                    and receipt.get("status") == accepted_status
                     and receipt.get("job_id") in (None, job_id)
                     and receipt.get("algorithmRevision") == revision
                     and receipt.get("masterPdfDriveId") == pdf_id
