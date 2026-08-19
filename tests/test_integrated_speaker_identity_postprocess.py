@@ -12,6 +12,7 @@ JOB = "41daa4ca6e09d13e366c578b7c53ae31"
 OUTPUT = "outputFolder123"
 WORK = "workFolder123"
 MASTER = "masterPdf123"
+SOURCE = "sourceVideo123"
 
 
 def done_payload():
@@ -19,6 +20,7 @@ def done_payload():
         "status": "AI_DONE",
         "job_id": JOB,
         "algorithmRevision": stage.R25_REVISION,
+        "original": {"driveId": SOURCE},
         "masterPdf": {"driveId": MASTER},
     }
 
@@ -48,10 +50,12 @@ class IntegratedR29StageTests(unittest.TestCase):
         uploaded = []
         with mock.patch.object(stage.io, "search", return_value=[{"id": "done1", "modifiedTime": "2026-01-01"}]), \
              mock.patch.object(stage.io, "download", side_effect=self.fake_download), \
+             mock.patch.object(stage, "_autodiscover_private_ids", return_value=("", "", "IDENTITY_EVIDENCE_NOT_FOUND")), \
              mock.patch.object(stage.io, "upload_json", side_effect=lambda t, p, n, o: uploaded.append((p, n, o)) or {"id": "receipt"}), \
              mock.patch.object(stage.r29, "main") as r29_main:
             result = stage.run("token")
         self.assertEqual(result["status"], "SPEAKER_MAPPING_ANONYMOUS_ONLY")
+        self.assertEqual(result["reason"], "IDENTITY_EVIDENCE_NOT_FOUND")
         self.assertFalse(result["named_attribution"])
         self.assertEqual(len(uploaded), 1)
         self.assertFalse(uploaded[0][2]["namedAttributionAllowed"])
@@ -83,6 +87,22 @@ class IntegratedR29StageTests(unittest.TestCase):
         self.assertEqual(result["status"], "SPEAKER_MAPPING_OPERATIONAL")
         self.assertTrue(result["named_attribution"])
         self.assertEqual(os.environ["BRIDGE_MASTER_PDF_DRIVE_ID"], MASTER)
+        self.assertEqual(os.environ["BRIDGE_R29_IDENTITY_EVIDENCE_DOC_ID"], "evidence123")
+        r29_main.assert_called_once_with()
+
+    def test_autodiscovered_private_config_invokes_validated_r29_overlay(self):
+        searches = [
+            [{"id": "done1", "modifiedTime": "2026-01-01"}],
+            [],
+        ]
+        with mock.patch.object(stage.io, "search", side_effect=searches), \
+             mock.patch.object(stage.io, "download", side_effect=self.fake_download), \
+             mock.patch.object(stage, "_autodiscover_private_ids", return_value=("autoEvidence123", "autoRegistry123", None)), \
+             mock.patch.object(stage.r29, "main") as r29_main:
+            result = stage.run("token")
+        self.assertTrue(result["named_attribution"])
+        self.assertEqual(os.environ["BRIDGE_R29_IDENTITY_EVIDENCE_DOC_ID"], "autoEvidence123")
+        self.assertEqual(os.environ["BRIDGE_R29_PARTICIPANT_REGISTRY_DOC_ID"], "autoRegistry123")
         r29_main.assert_called_once_with()
 
     def test_existing_operational_map_is_idempotent(self):
@@ -107,6 +127,15 @@ class IntegratedR29StageTests(unittest.TestCase):
             result = stage.run("token")
         self.assertEqual(result["status"], "SPEAKER_MAPPING_ALREADY_OPERATIONAL")
         r29_main.assert_not_called()
+
+    def test_done_override_allows_overlay_before_or_without_global_ai_done_search(self):
+        os.environ["BRIDGE_R29_IDENTITY_EVIDENCE_DOC_ID"] = "evidence123"
+        os.environ["BRIDGE_R29_PARTICIPANT_REGISTRY_DOC_ID"] = "registry123"
+        with mock.patch.object(stage.io, "search", return_value=[]), \
+             mock.patch.object(stage.r29, "main") as r29_main:
+            result = stage.run("token", done_override=done_payload())
+        self.assertEqual(result["status"], "SPEAKER_MAPPING_OPERATIONAL")
+        r29_main.assert_called_once_with()
 
 
 if __name__ == "__main__":
