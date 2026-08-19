@@ -9,6 +9,7 @@ from pathlib import Path
 import os
 
 import bridge_runtime_hardening_r25_15 as runtime
+import check_completed_job as preflight
 import run_master_3_1_free as base
 
 
@@ -79,6 +80,21 @@ def test_terminal_preflight_matches_revision_receipt_contract():
     assert "CLEANUP_ACK" in source
 
 
+def test_terminal_preflight_scopes_same_revision_to_output_generation():
+    job = "41daa4ca6e09d13e366c578b7c53ae31"
+    global_query = preflight.receipt_search_query(job)
+    scoped_query = preflight.receipt_search_query(job, "1ProdRepeatOutputFolder")
+    assert " in parents" not in global_query
+    assert "'1ProdRepeatOutputFolder' in parents" in scoped_query
+    assert f"CLEANUP_ACK_{job}.json" in scoped_query
+    try:
+        preflight.receipt_search_query(job, "bad folder/id")
+    except RuntimeError as exc:
+        assert "INVALID_OUTPUT_FOLDER_ID" in str(exc)
+    else:
+        raise AssertionError("invalid Drive id must fail closed")
+
+
 def test_periodic_auto_discovery_remains_disabled():
     source = Path(".github/workflows/bridge-video-auto-discovery.yml").read_text(
         encoding="utf-8"
@@ -95,5 +111,6 @@ if __name__ == "__main__":
     test_production_route_is_confirmed_r25_15_with_inheritance_chain()
     test_runtime_does_not_filter_master_canon_evidence()
     test_terminal_preflight_matches_revision_receipt_contract()
+    test_terminal_preflight_scopes_same_revision_to_output_generation()
     test_periodic_auto_discovery_remains_disabled()
     print("PRODUCTION_R25_15_EVIDENCE_CONTRACT: PASS")
