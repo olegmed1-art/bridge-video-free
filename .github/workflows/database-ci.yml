@@ -130,6 +130,24 @@ jobs:
         shell: bash
         run: database/scripts/migrate.sh
 
+      - name: Verify audited external-history guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          external_key='2026-08-20-ai-decision-layer-v1'
+          external_checksum='5b87f7a2cb3491fb60b88238482b35c1aefb3f500253432b6b87de1e94daa9bb'
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+            "INSERT INTO schema_migration(migration_key,checksum) VALUES ('${external_key}','${external_checksum}');"
+          database/scripts/migrate.sh
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+            "UPDATE schema_migration SET checksum=repeat('0',64) WHERE migration_key='${external_key}';"
+          if database/scripts/migrate.sh; then
+            echo 'External-history guard accepted a mismatched checksum' >&2
+            exit 1
+          fi
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+            "DELETE FROM schema_migration WHERE migration_key='${external_key}';"
+
       - name: Verify checksum guard rejects edited history
         shell: bash
         run: |
