@@ -7,6 +7,12 @@ on:
     paths:
       - 'tools/bbo100_archive_probe.py'
       - '.github/workflows/bbo100-archive-probe.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'tools/bbo100_archive_probe.py'
+      - '.github/workflows/bbo100-archive-probe.yml'
   workflow_dispatch:
 
 permissions:
