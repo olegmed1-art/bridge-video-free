@@ -1,9 +1,9 @@
 JOB_ID=41daa4ca6e09d13e366c578b7c53ae31
-OUTPUT_FOLDER_ID=1S8v9YmqaqyDfK9NsPc0ti7IRcIJ2BhnW
-WORK_FOLDER_ID=1MkNWChsEtYhMNXanmbD-wl0Sr9KcYIp1
+OUTPUT_FOLDER_ID=1_Kr-gdZ1c-iprrpc-h_3z2UHBP7e7MBH
+WORK_FOLDER_ID=1wRg7Lv1GOyuTqgRGgGwpInvhWm9UgSIb
 ORIGINAL_SOURCE_DRIVE_ID=18l8AvNDUeX4VF_E0SXjl6st6EizWglZ-
 LESSON_NUMBER=2
 LESSON_DATE_CANDIDATE=2021-02-28
 LESSON_DATE_SOURCE=confirmed historical Zoom invitation/cloud recording and original Drive metadata; content must remain evidence-controlled
 PERSIST_DATABASE=false
-# TRIGGER_ATTEMPT=2 — verify true production r25.15 processing after output-scoped idempotency fix
+# TRIGGER_ATTEMPT=3 — fresh output/work generation for true production r25.15 verification
