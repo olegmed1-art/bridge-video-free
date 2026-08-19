@@ -34,6 +34,7 @@ on:
       - 'tests/test_speaker_diarization_v3.py'
       - 'tests/test_speaker_mapping_r29.py'
       - 'tests/test_integrated_speaker_identity_postprocess.py'
+      - 'tests/test_r29_pipeline_integration_contract.py'
   pull_request:
     branches: [main]
     paths:
@@ -68,6 +69,7 @@ on:
       - 'tests/test_speaker_diarization_v3.py'
       - 'tests/test_speaker_mapping_r29.py'
       - 'tests/test_integrated_speaker_identity_postprocess.py'
+      - 'tests/test_r29_pipeline_integration_contract.py'
 
 permissions:
   contents: read
@@ -110,7 +112,10 @@ jobs:
           # r29 is now a standard post-transcription identity overlay. It must
           # remain evidence-gated, idempotent, privacy-safe, and optional when
           # private identity evidence does not exist.
-          PYTHONPATH=. python -m pytest -q tests/test_speaker_mapping_r29.py tests/test_integrated_speaker_identity_postprocess.py
+          PYTHONPATH=. python -m pytest -q \
+            tests/test_speaker_mapping_r29.py \
+            tests/test_integrated_speaker_identity_postprocess.py \
+            tests/test_r29_pipeline_integration_contract.py
           python -m py_compile \
             bridge_runtime_hardening_r25_6.py \
             bridge_runtime_hardening_r25_7.py \
