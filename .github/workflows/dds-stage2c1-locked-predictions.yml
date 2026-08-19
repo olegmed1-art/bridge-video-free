@@ -1,0 +1,232 @@
+name: DDS Stage 2C.1 — locked predictions
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/dds-stage2c1-locked-predictions.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: dds-stage2c1-lock-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+env:
+  STAGE2B_ARTIFACT_ID: '9318545935'
+  TRAIN_ARTIFACT_ID: '9302550154'
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  lock-predictions:
+    if: >-
+      github.actor == 'olegmed1-art' &&
+      github.event.pull_request.head.ref == 'dds-stage2c1-locked-predictions-20260819'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact PR merge commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+
+      - name: Restore Stage 2B v2.5 prepared evidence and completed TRAIN state
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/stage2b /tmp/train dds_training/work/stage2c1
+          mkdir -p /tmp/stage2b /tmp/train dds_training/work/stage2c1
+          gh api -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${STAGE2B_ARTIFACT_ID}/zip" > /tmp/stage2b/artifact.zip
+          unzip -q /tmp/stage2b/artifact.zip -d /tmp/stage2b/files
+          test -f /tmp/stage2b/files/continuation_curriculum_balanced.jsonl
+          test -f /tmp/stage2b/files/counterexample_candidates.jsonl
+          test -f /tmp/stage2b/files/multi_contract_blueprint.jsonl
+          gh api -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${TRAIN_ARTIFACT_ID}/zip" > /tmp/train/artifact.zip
+          unzip -q /tmp/train/artifact.zip -d /tmp/train/files
+          state="$(find /tmp/train/files -name 'dds-main-train-progress-state.tgz' -print -quit)"
+          test -n "$state"
+          mkdir -p /tmp/train/state
+          tar -xzf "$state" -C /tmp/train/state
+
+      - name: Generate immutable blind locked predictions
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, math
+          from pathlib import Path
+          from collections import Counter
+
+          S='SHDC'; R='AKQJT98765432'; RV={r:14-i for i,r in enumerate(R)}
+          out=Path('dds_training/work/stage2c1'); out.mkdir(parents=True,exist_ok=True)
+          s2=Path('/tmp/stage2b/files')
+
+          def rows(path):
+              return [json.loads(x) for x in Path(path).read_text(encoding='utf-8').splitlines() if x.strip()]
+          def parse_deal(pbn):
+              seats='NESW'; start=seats.index(pbn[0]); hs=pbn[2:].split(); d={}
+              for i,h in enumerate(hs): d[(start+i)%4]=h.split('.')
+              return d
+          def cards_of(hand):
+              return [(s,r) for s,h in enumerate(hand) for r in h]
+          def token(c): return S[c[0]]+c[1]
+          def legal_from(hand,current):
+              allc=cards_of(hand)
+              if current:
+                  led=S.index(current[0]['card'][0])
+                  same=[c for c in allc if c[0]==led]
+                  if same: return same
+              return allc
+          def winner(current, add, trump):
+              cs=[(x['seat'],S.index(x['card'][0]),x['card'][1]) for x in current]+[(add[0],add[1][0],add[1][1])]
+              led=cs[0][1]; eligible=[x for x in cs if trump!=4 and x[1]==trump] or [x for x in cs if x[1]==led]
+              return max(eligible,key=lambda x:RV[x[2]])[0]
+          def cont_pred(t):
+              hands=parse_deal(t['remaining_deal']); seat=int(t['next_seat']); hand=hands[seat]; cur=t.get('current_trick') or []
+              legal=legal_from(hand,cur); trump=int(t['strain'])
+              scored=[]
+              for c in legal:
+                  win=0
+                  if cur:
+                      win=int(winner(cur,(seat,c),trump)==seat)
+                  length=len(hand[c[0]])
+                  seq=int(c[1] in 'AKQJT9' and any(RV.get(x,0)==RV[c[1]]-1 for x in hand[c[0]]))
+                  score=(2.0*win)+(0.18*length)+(0.20*seq)-(0.015*RV[c[1]])-(0.35 if trump!=4 and c[0]==trump and not cur else 0)
+                  scored.append((score,c))
+              scored.sort(key=lambda x:(-x[0],x[1][0],-RV[x[1][1]]))
+              best=scored[0]; alts=[token(c) for _,c in scored[1:4]]
+              gap=best[0]-(scored[1][0] if len(scored)>1 else best[0])
+              conf='medium' if gap>=0.35 else 'low'
+              return {'task_id':t['task_id'],'card':token(best[1]),'alternatives':alts,'confidence':conf,'reason':'Blind human-view continuation heuristic using only actor remaining hand and public trick; no DDS or hidden-hand scoring.','continuation_plan':[],'predictor_version':'bridge-stage2c1-continuation-blind-v1','locked':True,'dds_called':False,'family_id':t.get('root_deal_id'),'position_id':t.get('position_id'),'actor':t.get('actor')}
+          def hcp(hand): return sum({'A':4,'K':3,'Q':2,'J':1}.get(r,0) for h in hand for r in h)
+          def contract_pred(t, pair_id=None, role=None):
+              d=parse_deal(t['deal']); dec=int(t['declarer']); dum=(dec+2)%4; strain=int(t['strain']); a=d[dec]; b=d[dum]
+              pts=hcp(a)+hcp(b); base=6+(pts-20)/3; lens=[len(a[s])+len(b[s]) for s in range(4)]
+              shape=0.0
+              if strain==4:
+                  shape+=0.18*sum(max(0,x-7) for x in lens)
+              else:
+                  shape+=0.45*max(0,lens[strain]-8)
+                  for hand in (a,b):
+                      for s in range(4):
+                          if s==strain: continue
+                          shape+=0.45 if len(hand[s])==0 else 0.22 if len(hand[s])==1 else 0
+              tricks=max(0,min(13,int(math.floor(base+shape-0.10))))
+              z={'task_id':t['task_id'],'tricks':tricks,'confidence':'low','reason':'Blind declarer+dummy structural estimate only; opponents hidden and DDS unavailable.','line':[],'predictor_version':'bridge-stage2c1-contract-blind-v1','locked':True,'dds_called':False,'family_id':t.get('root_deal_id') or t.get('deal_id')}
+              if pair_id: z.update(counterexample_pair_id=pair_id,counterexample_role=role)
+              return z
+          def lead_pred(t,pair_id=None,role=None):
+              d=parse_deal(t['deal']); leader=int(t['leader']); hand=d[leader]; strain=int(t['strain']); scored=[]
+              for s,h in enumerate(hand):
+                  for r in h:
+                      seq=int(any(x+y in h for x,y in zip('AKQJT98','KQJT987')) and r==h[0])
+                      score=0.28*len(h)+0.65*seq-(0.45 if strain!=4 and s==strain else 0)-(0.012*RV[r])
+                      scored.append((score,(s,r)))
+              scored.sort(key=lambda x:(-x[0],x[1][0],-RV[x[1][1]])); best=scored[0]
+              z={'task_id':t['task_id'],'card':token(best[1]),'alternatives':[token(c) for _,c in scored[1:4]],'confidence':'low','reason':'Blind opening-lead heuristic using leader hand and contract only; no DDS.','line':[token(best[1])],'predictor_version':'bridge-stage2c1-lead-blind-v1','locked':True,'dds_called':False,'family_id':t.get('root_deal_id') or t.get('deal_id')}
+              if pair_id: z.update(counterexample_pair_id=pair_id,counterexample_role=role)
+              return z
+
+          cont=rows(s2/'continuation_curriculum_balanced.jsonl'); assert len(cont)==2000
+          cp=[cont_pred(t) for t in cont]
+          assert Counter(x['actor'] for x in cp)=={'declarer':1000,'defense':1000}
+
+          blueprint=rows(s2/'multi_contract_blueprint.jsonl'); assert len(blueprint)==10000
+          bp=[contract_pred(t) for t in blueprint]
+
+          # Rebuild task definitions from immutable completed TRAIN artifact; never copy DDS target fields from candidate rows into predictions.
+          taskmap={}
+          for p in Path('/tmp/train/state').rglob('*.jsonl'):
+              if 'task' not in p.name.lower(): continue
+              try:
+                  for line in p.open(encoding='utf-8'):
+                      if not line.strip(): continue
+                      t=json.loads(line); tid=t.get('task_id')
+                      if tid: taskmap.setdefault(str(tid),t)
+              except Exception:
+                  pass
+          candidates=rows(s2/'counterexample_candidates.jsonl'); assert len(candidates)==441
+          ce=[]; missing=[]
+          for c in candidates:
+              pair=str(c['candidate_id']); a=taskmap.get(str(c['source_task_id'])); b=taskmap.get(str(c['variant_task_id']))
+              if not a or not b:
+                  missing.append(pair); continue
+              fn=lead_pred if c['task_type']=='opening_lead' else contract_pred
+              ce.append(fn(a,pair,'source')); ce.append(fn(b,pair,'variant'))
+          assert not missing, missing[:10]
+          assert len(ce)==882
+
+          files={
+            'locked_predictions_continuations.jsonl':cp,
+            'locked_predictions_counterexamples.jsonl':ce,
+            'locked_predictions_multicontract.jsonl':bp,
+          }
+          digests={}
+          for name,data in files.items():
+              p=out/name
+              with p.open('w',encoding='utf-8') as f:
+                  for r in data: f.write(json.dumps(r,ensure_ascii=False,sort_keys=True)+'\n')
+              digests[name]=hashlib.sha256(p.read_bytes()).hexdigest()
+          summary={
+            'schema':'dds-stage2c1-locked-predictions-v1','stage':'2C.1','status':'locked_complete',
+            'continuations':len(cp),'continuation_by_actor':dict(Counter(x['actor'] for x in cp)),
+            'counterexample_pairs':len(candidates),'counterexample_locked_decisions':len(ce),
+            'multicontract':len(bp),'total_locked_records':len(cp)+len(ce)+len(bp),
+            'dds_called':False,'validation_opened':False,'sealed_opened':False,
+            'hidden_dds_targets_used_for_prediction':False,
+            'digests':digests,'next_gate':'owner_authorized_dds_train_only'
+          }
+          (out/'stage2c1_locked_summary.json').write_text(json.dumps(summary,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(summary,ensure_ascii=False,indent=2))
+          PY
+
+      - name: Verify immutability and leakage guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('dds_training/work/stage2c1')
+          s=json.loads((root/'stage2c1_locked_summary.json').read_text())
+          assert s['status']=='locked_complete'
+          assert s['continuations']==2000 and s['continuation_by_actor']=={'declarer':1000,'defense':1000}
+          assert s['counterexample_pairs']==441 and s['counterexample_locked_decisions']==882
+          assert s['multicontract']==10000 and s['total_locked_records']==12882
+          assert s['dds_called'] is False and s['validation_opened'] is False and s['sealed_opened'] is False
+          assert s['hidden_dds_targets_used_for_prediction'] is False
+          for p in root.glob('locked_predictions_*.jsonl'):
+              rows=[json.loads(x) for x in p.read_text().splitlines() if x.strip()]
+              assert rows and all(x.get('locked') is True and x.get('dds_called') is False for x in rows)
+              forbidden=('dds_tricks','optimal_cards','variant_optimal_cards','source_optimal_cards','dd_regret')
+              assert all(not any(k in x for k in forbidden) for x in rows)
+          print({'locked_predictions_verified':True,'total':12882,'dds_called':False,'holdouts_opened':False})
+          PY
+
+      - name: Package and upload locked prediction evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -czf dds-stage2c1-locked-predictions.tgz -C dds_training/work stage2c1
+          sha256sum dds-stage2c1-locked-predictions.tgz > dds-stage2c1-locked-predictions.tgz.sha256
+
+      - name: Upload Stage 2C.1 locked predictions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dds-stage2c1-locked-${{ github.run_id }}
+          path: |
+            dds_training/work/stage2c1/stage2c1_locked_summary.json
+            dds_training/work/stage2c1/locked_predictions_continuations.jsonl
+            dds_training/work/stage2c1/locked_predictions_counterexamples.jsonl
+            dds_training/work/stage2c1/locked_predictions_multicontract.jsonl
+            dds-stage2c1-locked-predictions.tgz
+            dds-stage2c1-locked-predictions.tgz.sha256
+          if-no-files-found: error
+          retention-days: 30
