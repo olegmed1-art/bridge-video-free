@@ -5,6 +5,7 @@ set -euo pipefail
 
 PSQL=(psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -A -t)
 MIGRATIONS_DIR="${MIGRATIONS_DIR:-database/migrations}"
+EXTERNAL_HISTORY_FILE="${EXTERNAL_HISTORY_FILE:-database/external_migration_history.tsv}"
 
 if [[ ! -d "$MIGRATIONS_DIR" ]]; then
   echo "Migration directory not found: $MIGRATIONS_DIR" >&2
@@ -33,31 +34,74 @@ assert_unique_numeric_prefixes() {
   )
 }
 
-# Catch sequence collisions before connecting migration ordering to durable state. This
-# also checks SQL regression-test numbering when the tests directory is present in the
-# checkout, because duplicate test identities make evidence and failure attribution
-# ambiguous even though PostgreSQL itself could execute both files.
+validate_external_history() {
+  [[ -f "$EXTERNAL_HISTORY_FILE" ]] || return 0
+  local -A seen=()
+  local key checksum provenance
+  while IFS=$'\t' read -r key checksum provenance; do
+    [[ -z "$key" || "$key" == \#* ]] && continue
+    if [[ ! "$key" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+      echo "Unsafe external migration key in $EXTERNAL_HISTORY_FILE: $key" >&2
+      exit 1
+    fi
+    if [[ ! "$checksum" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "Invalid external migration SHA-256 for $key" >&2
+      exit 1
+    fi
+    if [[ -n "${seen[$key]:-}" ]]; then
+      echo "Duplicate external migration history key: $key" >&2
+      exit 1
+    fi
+    seen[$key]="$checksum"
+  done < "$EXTERNAL_HISTORY_FILE"
+}
+
+external_checksum_for() {
+  local requested_key="$1"
+  [[ -f "$EXTERNAL_HISTORY_FILE" ]] || return 0
+  awk -F '\t' -v wanted="$requested_key" '
+    $0 !~ /^#/ && $1 == wanted { print $2; exit }
+  ' "$EXTERNAL_HISTORY_FILE"
+}
+
 assert_unique_numeric_prefixes "$MIGRATIONS_DIR" "migration"
 TESTS_DIR="$(dirname "$MIGRATIONS_DIR")/tests"
 assert_unique_numeric_prefixes "$TESTS_DIR" "database-test"
+validate_external_history
 
 schema_table_exists() {
   [[ "$("${PSQL[@]}" -c "SELECT to_regclass('public.schema_migration') IS NOT NULL;")" == "t" ]]
 }
 
-# Once migration history exists, every recorded migration must still exist on disk.
 if schema_table_exists; then
-  while IFS= read -r applied_key; do
+  while IFS=$'\t' read -r applied_key stored_checksum; do
     [[ -z "$applied_key" ]] && continue
+
+    if [[ "$applied_key" =~ ^[A-Za-z0-9_]+$ && -f "$MIGRATIONS_DIR/${applied_key}.sql" ]]; then
+      continue
+    fi
+
+    external_checksum="$(external_checksum_for "$applied_key")"
+    if [[ -n "$external_checksum" ]]; then
+      if [[ -z "$stored_checksum" ]]; then
+        echo "External migration history lacks a stored database checksum: $applied_key" >&2
+        exit 1
+      fi
+      if [[ "$stored_checksum" != "$external_checksum" ]]; then
+        echo "External migration checksum mismatch: $applied_key" >&2
+        exit 1
+      fi
+      echo "Verified audited external migration history: $applied_key"
+      continue
+    fi
+
     if [[ ! "$applied_key" =~ ^[A-Za-z0-9_]+$ ]]; then
       echo "Invalid migration key stored in database: $applied_key" >&2
       exit 1
     fi
-    if [[ ! -f "$MIGRATIONS_DIR/${applied_key}.sql" ]]; then
-      echo "Applied migration is missing from repository: ${applied_key}.sql" >&2
-      exit 1
-    fi
-  done < <("${PSQL[@]}" -c "SELECT migration_key FROM schema_migration ORDER BY migration_key;")
+    echo "Applied migration is missing from repository: ${applied_key}.sql" >&2
+    exit 1
+  done < <("${PSQL[@]}" -F $'\t' -c "SELECT migration_key, COALESCE(checksum,'') FROM schema_migration ORDER BY migration_key;")
 fi
 
 for migration in "$MIGRATIONS_DIR"/*.sql; do
@@ -90,10 +134,6 @@ for migration in "$MIGRATIONS_DIR"/*.sql; do
   fi
 
   echo "Applying migration $key"
-  # Serialize migration application at the database level. The session-level advisory
-  # lock survives BEGIN/COMMIT statements inside migration files and is released
-  # automatically if psql exits on an error. Re-checking the registry after acquiring
-  # the lock prevents two independent CI runners from applying the same migration.
   psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
     -v migration_key="$key" \
     -v migration_file="$migration" <<'PSQL'
