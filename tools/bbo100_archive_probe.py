@@ -8,11 +8,27 @@ import requests
 
 OUT = Path("bbo100_probe")
 OUT.mkdir(exist_ok=True)
-PROBE_VERSION = 7
+PROBE_VERSION = 8
 TIMEOUT = 45
 BASE = "https://www.bridgebase.com/myhands/fetchlin.php"
 MBTID = "36084-1787145301"
 USERNAME = "azat1_"
+
+
+def fetch(s, board, t0, label):
+    url = f"{BASE}?mbtid={MBTID}&board={board}&username={USERNAME}"
+    r = s.get(url, timeout=TIMEOUT, allow_redirects=True)
+    row = {
+        "label": label,
+        "elapsed_sec": round(time.monotonic() - t0, 3),
+        "board": board,
+        "status": r.status_code,
+        "bytes": len(r.content),
+        "retry_after": r.headers.get("Retry-After"),
+        "body_prefix": r.text[:180],
+    }
+    print(json.dumps(row, ensure_ascii=False), flush=True)
+    return row
 
 
 def main():
@@ -22,24 +38,19 @@ def main():
         "Accept-Language": "en-US,en;q=0.8",
         "Referer": f"https://www.bridgebase.com/myhands/mbthands.php?tourney={MBTID}-&username={USERNAME}",
     })
-    rows = []
-    for board in range(1, 9):
-        url = f"{BASE}?mbtid={MBTID}&board={board}&username={USERNAME}"
-        r = s.get(url, timeout=TIMEOUT, allow_redirects=True)
-        row = {
-            "board": board,
-            "status": r.status_code,
-            "bytes": len(r.content),
-            "retry_after": r.headers.get("Retry-After"),
-            "server": r.headers.get("Server"),
-            "content_type": r.headers.get("Content-Type"),
-            "cache_control": r.headers.get("Cache-Control"),
-            "body_prefix": r.text[:240],
-        }
-        rows.append(row)
-        print(json.dumps(row, ensure_ascii=False))
-        time.sleep(1.0)
-    (OUT / "rate_probe.json").write_text(json.dumps({"probe_version": PROBE_VERSION, "rows": rows}, indent=2, ensure_ascii=False), encoding="utf-8")
+    rows=[]; t0=time.monotonic()
+    for board in range(1,6):
+        rows.append(fetch(s, board, t0, f"initial_{board}"))
+        time.sleep(0.5)
+    rows.append(fetch(s, 6, t0, "limit_confirmation"))
+    time.sleep(30)
+    rows.append(fetch(s, 6, t0, "after_30s"))
+    if rows[-1]["status"] == 429:
+        time.sleep(31)
+        rows.append(fetch(s, 6, t0, "after_61s_total"))
+    if rows[-1]["status"] == 429:
+        time.sleep(60)
+        rows.append(fetch(s, 6, t0, "after_121s_total"))
+    (OUT/"rate_window_probe.json").write_text(json.dumps({"probe_version":PROBE_VERSION,"rows":rows},indent=2,ensure_ascii=False),encoding="utf-8")
 
-if __name__ == "__main__":
-    main()
+if __name__=="__main__": main()
