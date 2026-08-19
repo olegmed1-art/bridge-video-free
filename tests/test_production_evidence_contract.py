@@ -31,6 +31,9 @@ def test_production_route_is_confirmed_r25_15_with_inheritance_chain():
     assert "BRIDGE_REQUESTED_WHISPER_MODEL: medium" not in workflow
     assert 'BRIDGE_PAID_CLOUD: "false"' in workflow
     assert 'BRIDGE_BILLING_FALLBACK: "false"' in workflow
+    # Push-triggered request resolution must work for both ordinary commits and merge commits.
+    assert 'git diff-tree --no-commit-id --name-only -r -m "$GITHUB_SHA"' in workflow
+    assert "Expected exactly one run request in triggering commit" in workflow
 
     # r25.15 must inherit the already validated production chain.
     assert "import bridge_runtime_hardening_r25_14 as previous" in runtime_source
