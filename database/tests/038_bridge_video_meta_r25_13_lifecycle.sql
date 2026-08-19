@@ -26,8 +26,10 @@ BEGIN
            AND a.stable_key='bridge-video-master-analysis'
            AND av.version_label='3.1-free-r25.13-checkpoint'
            AND av.status='candidate'
+           AND av.configuration->>'runtime_module'='bridge_runtime_hardening_r25_13_checkpoint.py'
+           AND COALESCE((av.configuration->>'production_allowed')::boolean,true)=false
     ) THEN
-        RAISE EXCEPTION 'r25.13 checkpoint candidate is not registered';
+        RAISE EXCEPTION 'r25.13 checkpoint candidate provenance is not registered correctly';
     END IF;
 
     INSERT INTO source(
