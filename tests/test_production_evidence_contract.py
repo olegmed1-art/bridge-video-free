@@ -7,6 +7,7 @@ layer. Identity, privacy, methodology and zero-paid-AI guards remain intact.
 """
 from pathlib import Path
 from types import SimpleNamespace
+import json
 import os
 
 import bridge_runtime_hardening_r25_15 as runtime
@@ -40,7 +41,8 @@ def test_production_route_is_confirmed_r25_15_with_inheritance_chain():
     assert "previous.install(token_func)" in runtime_source
     assert "bridge_speaker_diarization_v3" in runtime_source
     assert "bridge_output_scoped_idempotency" in runtime_source
-    assert "existing_same_revision_done" in runtime_source
+    assert "semantic_v2._existing_same_revision_done" in runtime_source
+    assert "semantic_v2.previous._existing_same_revision_done" in runtime_source
     assert "import bridge_runtime_hardening_r25_7 as previous" in r25_14_source
     assert "previous.install(token_func)" in r25_14_source
     assert "import bridge_runtime_hardening_r25_6 as previous" in r25_7_source
@@ -107,11 +109,13 @@ def test_runtime_same_revision_done_is_scoped_to_requested_output_folder():
     payloads = {
         "done": {
             "status": "AI_DONE",
+            "job_id": job,
             "algorithmRevision": revision,
             "masterPdf": {"driveId": "pdf-new"},
         },
         "method": {
             "status": "METHODOLOGY_READY",
+            "job_id": job,
             "algorithmRevision": revision,
             "masterPdfDriveId": "pdf-new",
         },
@@ -150,7 +154,6 @@ def test_runtime_same_revision_done_is_scoped_to_requested_output_folder():
 
     def foreign_only_search(_token, query):
         foreign_queries.append(query)
-        # Simulate a valid same-job result existing elsewhere on Drive only.
         if " in parents" not in query and f"AI_DONE_{job}.json" in query:
             return [done_item]
         if " in parents" not in query and f"METHODOLOGY_READY_{job}.json" in query:
@@ -170,6 +173,38 @@ def test_runtime_same_revision_done_is_scoped_to_requested_output_folder():
     assert found_foreign is None
     assert foreign_queries
     assert all("'freshOutput' in parents" in query for query in foreign_queries)
+
+    # The inherited r25 semantic adapter has no _read_json helper. Its scoped
+    # gate must therefore use base._read_text without falling back to global search.
+    text_queries = []
+
+    def text_search(_token, query):
+        text_queries.append(query)
+        if "'nestedOutput' in parents" not in query:
+            return []
+        if f"AI_DONE_{job}.json" in query:
+            return [done_item]
+        if f"METHODOLOGY_READY_{job}.json" in query:
+            return [receipt_item]
+        return []
+
+    nested = SimpleNamespace(
+        base=SimpleNamespace(
+            io=SimpleNamespace(search=text_search),
+            _read_text=lambda _token, item: json.dumps(payloads[item["id"]]),
+        )
+    )
+    os.environ["BRIDGE_OUTPUT_FOLDER_ID"] = "nestedOutput"
+    try:
+        nested_found = existing_same_revision_done(nested, "token", job, revision)
+    finally:
+        if previous_output is None:
+            os.environ.pop("BRIDGE_OUTPUT_FOLDER_ID", None)
+        else:
+            os.environ["BRIDGE_OUTPUT_FOLDER_ID"] = previous_output
+    assert nested_found == payloads["done"]
+    assert text_queries
+    assert all("'nestedOutput' in parents" in query for query in text_queries)
 
 
 def test_periodic_auto_discovery_remains_disabled():
