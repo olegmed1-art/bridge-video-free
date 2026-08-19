@@ -9,6 +9,10 @@ on:
       - '.github/workflows/bridge-video-r25-15-candidate.yml'
       - '.github/workflows/bridge-video-r25-15-diagnostics.yml'
       - 'run_drive_3_1_free_generic.py'
+      - 'route_drive_job_outputs.py'
+      - 'bridge_speaker_identity_postprocess.py'
+      - 'r29_identity_overlay_probe.py'
+      - 'bridge_speaker_mapping_r29.py'
       - 'check_completed_job.py'
       - 'bridge_runtime_hardening_r25_6.py'
       - 'bridge_runtime_hardening_r25_7.py'
@@ -28,6 +32,8 @@ on:
       - 'tests/test_pdf_presentation_r25_6.py'
       - 'tests/test_speaker_diarization_v2.py'
       - 'tests/test_speaker_diarization_v3.py'
+      - 'tests/test_speaker_mapping_r29.py'
+      - 'tests/test_integrated_speaker_identity_postprocess.py'
   pull_request:
     branches: [main]
     paths:
@@ -37,6 +43,10 @@ on:
       - '.github/workflows/bridge-video-r25-15-candidate.yml'
       - '.github/workflows/bridge-video-r25-15-diagnostics.yml'
       - 'run_drive_3_1_free_generic.py'
+      - 'route_drive_job_outputs.py'
+      - 'bridge_speaker_identity_postprocess.py'
+      - 'r29_identity_overlay_probe.py'
+      - 'bridge_speaker_mapping_r29.py'
       - 'check_completed_job.py'
       - 'bridge_runtime_hardening_r25_6.py'
       - 'bridge_runtime_hardening_r25_7.py'
@@ -56,6 +66,8 @@ on:
       - 'tests/test_pdf_presentation_r25_6.py'
       - 'tests/test_speaker_diarization_v2.py'
       - 'tests/test_speaker_diarization_v3.py'
+      - 'tests/test_speaker_mapping_r29.py'
+      - 'tests/test_integrated_speaker_identity_postprocess.py'
 
 permissions:
   contents: read
@@ -92,9 +104,13 @@ jobs:
           PYTHONPATH=. python tests/test_asr_policy_r25_6.py
           PYTHONPATH=. python tests/test_unreliable_asr_isolation_r25_4.py
           PYTHONPATH=. python tests/test_pdf_presentation_r25_6.py
-          # Speaker repair is now part of production; preserve both v2 compatibility
+          # Speaker repair is part of production; preserve both v2 compatibility
           # and the v3 collapse-repair regression suite.
           PYTHONPATH=. python -m pytest -q tests/test_speaker_diarization_v2.py tests/test_speaker_diarization_v3.py
+          # r29 is now a standard post-transcription identity overlay. It must
+          # remain evidence-gated, idempotent, privacy-safe, and optional when
+          # private identity evidence does not exist.
+          PYTHONPATH=. python -m pytest -q tests/test_speaker_mapping_r29.py tests/test_integrated_speaker_identity_postprocess.py
           python -m py_compile \
             bridge_runtime_hardening_r25_6.py \
             bridge_runtime_hardening_r25_7.py \
@@ -108,6 +124,10 @@ jobs:
             bridge_speaker_diarization_v3.py \
             bridge_speaker_diarization_v3_core.py \
             bridge_speaker_diarization_v3_repair.py \
+            bridge_speaker_mapping_r29.py \
+            r29_identity_overlay_probe.py \
+            bridge_speaker_identity_postprocess.py \
+            route_drive_job_outputs.py \
             diana_longitudinal_quality_v2.py \
             run_drive_3_1_free_generic.py \
             check_completed_job.py
