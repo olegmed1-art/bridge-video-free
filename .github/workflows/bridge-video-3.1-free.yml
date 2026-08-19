@@ -51,7 +51,7 @@ jobs:
       BRIDGE_LARGER_RUNNER: "false"
       BRIDGE_PAID_CLOUD: "false"
       BRIDGE_BILLING_FALLBACK: "false"
-      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.14"
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.15"
       BRIDGE_DIARIZATION_ENABLED: "true"
       PYTHONUNBUFFERED: "1"
       WHISPER_MODEL: small
@@ -260,5 +260,5 @@ jobs:
       # TECHNICAL_READY, CONTENT_EXTRACTED and METHODOLOGY_READY/PARTIAL are separate receipts.
       # Candidate database writes go only to the staging layer and never activate canon/profile/course.
       # Monitor v1 receipts expose the real GitHub run identity without adding an orchestrator.
-      # Speaker diarization v2 runs locally through sherpa-onnx; no gated model token is required.
+      # Speaker diarization v3 runs locally with collapse detection/repair; no gated model token is required.
       # User media/transcripts are never uploaded as GitHub workflow artifacts.
