@@ -115,7 +115,7 @@ def _candidate_private_docs(
         if str(payload.get("job_id") or "") != job_id:
             continue
         candidate_source = str(payload.get("source_drive_id") or "")
-        if source_drive_id and candidate_source and candidate_source != source_drive_id:
+        if source_drive_id and candidate_source != source_drive_id:
             continue
         matches.append(file_id)
     return matches
