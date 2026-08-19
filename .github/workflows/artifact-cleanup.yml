@@ -135,3 +135,40 @@ jobs:
           esac
 
           python tools/github_actions_artifact_cleanup.py "${args[@]}"
+
+  canary-diagnostic:
+    if: github.event_name == 'pull_request' && github.actor == 'olegmed1-art'
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+
+      - name: Install pinned PostgreSQL client
+        run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+
+      - name: Verify worker secret and runtime boundary
+        env:
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${BRIDGE_WORKER_DATABASE_URL:-}" || { echo 'DIAGNOSTIC: BRIDGE_WORKER_DATABASE_URL missing'; exit 1; }
+          python database/runtime_worker_preflight.py
+
+      - name: Evaluate target canary gate without deletion
+        env:
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python tools/github_actions_artifact_cleanup.py --artifact-id 9302550154 --verification-max-age-hours 12 --completion-grace-minutes 30
