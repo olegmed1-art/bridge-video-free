@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Move derived Bridge Video outputs to an explicit Drive result folder.
+"""Route validated Bridge Video outputs and apply the r29 identity overlay.
 
 The source/master video is never renamed, moved, modified, copied, or deleted.
-This post-step is idempotent and acts only on output IDs proved by AI_DONE.
+The routing step is generation-aware and moves only output IDs proved by the
+matching AI_DONE.  After routing, the standard transcription path invokes the
+r29 speaker-identity postprocess.  Missing identity evidence preserves an
+anonymous transcript; named attribution is never guessed.
 """
 from __future__ import annotations
 
@@ -24,13 +27,16 @@ def _read_json(token: str, item: dict) -> dict | None:
         path = Path(td) / "payload.json"
         io.download(token, item["id"], path)
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            return json.loads(path.read_text(encoding="utf-8-sig"))
         except (UnicodeDecodeError, json.JSONDecodeError):
             return None
 
 
-def _latest_named(token: str, name: str) -> tuple[dict, dict] | None:
-    items = io.search(token, f"trashed=false and name='{name}'")
+def _latest_named(token: str, name: str, parent: str | None = None) -> tuple[dict, dict] | None:
+    query = f"trashed=false and name='{name}'"
+    if parent:
+        query += f" and '{parent}' in parents"
+    items = io.search(token, query)
     items.sort(key=lambda item: item.get("modifiedTime") or "", reverse=True)
     for item in items:
         payload = _read_json(token, item)
@@ -64,6 +70,30 @@ def _move(token: str, file_id: str, target_parent: str) -> str:
     return "moved"
 
 
+def _run_identity_overlay(token: str) -> dict | None:
+    work = os.environ.get("BRIDGE_WORK_FOLDER_ID", "").strip()
+    if not work:
+        return None
+    from bridge_speaker_identity_postprocess import run as run_identity
+    try:
+        return run_identity(token)
+    except RuntimeError as exc:
+        # A truthful r29 Evidence Gate failure must not erase an otherwise valid
+        # anonymous transcript. The r29 probe has already written its BLOCKED
+        # receipt before raising this specific error. Configuration/runtime
+        # defects remain hard failures.
+        if str(exc).startswith("R29_EVIDENCE_GATE_FAILED:"):
+            result = {
+                "stage": "R29_IDENTITY_OVERLAY",
+                "status": "SPEAKER_MAPPING_BLOCKED",
+                "reason": "R29_EVIDENCE_GATE_FAILED",
+                "named_attribution": False,
+            }
+            print(json.dumps(result, ensure_ascii=False))
+            return result
+        raise
+
+
 def main() -> int:
     job_id = os.environ.get("BRIDGE_JOB_ID", "").strip()
     target = os.environ.get("BRIDGE_OUTPUT_FOLDER_ID", "").strip()
@@ -77,7 +107,11 @@ def main() -> int:
     if not token:
         raise RuntimeError("BLOCKED_ACCESS: Drive OAuth unavailable")
 
-    done_found = _latest_named(token, f"AI_DONE_{job_id}.json")
+    # On an idempotent repeat, the canonical completion is already in target.
+    # On a fresh run it still sits beside the source until this routing step.
+    done_found = _latest_named(token, f"AI_DONE_{job_id}.json", target)
+    if done_found is None:
+        done_found = _latest_named(token, f"AI_DONE_{job_id}.json")
     if done_found is None:
         print(json.dumps({"stage": "OUTPUT_ROUTE", "job_id": job_id, "status": "AI_DONE_NOT_FOUND"}))
         return 0
@@ -90,12 +124,17 @@ def main() -> int:
     if not source_id or not report_id:
         raise RuntimeError("OUTPUT_ROUTE_METADATA_INCOMPLETE")
 
+    done_parents = [str(value) for value in (done_item.get("parents") or []) if value]
+    generation_parent = done_parents[0] if len(done_parents) == 1 else None
     file_ids: list[tuple[str, str]] = [("master_pdf", report_id), ("ai_done", done_item["id"])]
     for label, name, expected_status in (
         ("methodology_ready", f"METHODOLOGY_READY_{job_id}.json", "METHODOLOGY_READY"),
+        ("methodology_partial", f"METHODOLOGY_PARTIAL_{job_id}.json", "METHODOLOGY_PARTIAL"),
         ("cleanup_ack", f"CLEANUP_ACK_{job_id}.json", "CLEANUP_ACK"),
     ):
-        found = _latest_named(token, name)
+        found = _latest_named(token, name, generation_parent) if generation_parent else None
+        if found is None and target == generation_parent:
+            found = _latest_named(token, name, target)
         if found is None:
             continue
         item, payload = found
@@ -113,12 +152,14 @@ def main() -> int:
     if target in (source.get("parents") or []):
         raise RuntimeError("OUTPUT_ROUTE_SOURCE_IN_RESULT_FOLDER")
 
+    identity = _run_identity_overlay(token)
     print(json.dumps({
         "stage": "OUTPUT_ROUTE",
         "job_id": job_id,
         "status": "ROUTED",
         "target_folder_id": target,
         "source_untouched": True,
+        "identity_overlay_status": (identity or {}).get("status") if identity else "NOT_CONFIGURED",
         "results": results,
     }, ensure_ascii=False))
     return 0
