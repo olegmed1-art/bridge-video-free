@@ -1,5 +1,10 @@
 """Vercel entry point for the Bridge School FastAPI service."""
 
-from bridge_school_api.main import app
+from fastapi import Depends
+
+from bridge_school_api.ai import router as ai_router
+from bridge_school_api.main import app, require_api_token
+
+app.include_router(ai_router, dependencies=[Depends(require_api_token)])
 
 __all__ = ["app"]
