@@ -3,8 +3,62 @@ BEGIN;
 
 -- Extend the existing independent Bridge Video META evidence gate to the
 -- r25.13 checkpoint candidate. r25.13 remains diagnostic-only: independent
--- META may fail/quarantine it, but PASS/publication authority stays disabled
--- because r25.14 is the production line.
+-- META may fail/quarantine it, but PASS/publication authority stays disabled.
+
+-- Register the checkpoint identity before allowing AnalysisRun rows to target it.
+-- Registration is provenance only; candidate status does not activate production.
+WITH target_algorithm AS (
+    SELECT a.algorithm_id
+      FROM algorithm a
+      JOIN school s USING (school_id)
+     WHERE s.stable_name='Школа спортивного бриджа'
+       AND a.stable_key='bridge-video-master-analysis'
+), next_version AS (
+    SELECT ta.algorithm_id, COALESCE(max(av.version_no),0)+1 AS version_no
+      FROM target_algorithm ta
+      LEFT JOIN algorithm_version av USING (algorithm_id)
+     GROUP BY ta.algorithm_id
+)
+INSERT INTO algorithm_version(
+    algorithm_id, version_no, version_label, configuration, status
+)
+SELECT
+    nv.algorithm_id,
+    nv.version_no,
+    '3.1-free-r25.13-checkpoint',
+    '{"registration_basis":"meta_diagnostic_checkpoint","runtime_module":"bridge_runtime_hardening_r25_13.py","production_allowed":false,"meta_pass_allowed":false}'::jsonb,
+    'candidate'
+FROM next_version nv
+WHERE NOT EXISTS (
+    SELECT 1
+      FROM algorithm_version av
+     WHERE av.algorithm_id=nv.algorithm_id
+       AND av.version_label='3.1-free-r25.13-checkpoint'
+)
+ON CONFLICT DO NOTHING;
+
+DO $$
+DECLARE
+    v_algorithm uuid;
+    v_count integer;
+BEGIN
+    SELECT a.algorithm_id INTO v_algorithm
+      FROM algorithm a
+      JOIN school s USING (school_id)
+     WHERE s.stable_name='Школа спортивного бриджа'
+       AND a.stable_key='bridge-video-master-analysis';
+    IF v_algorithm IS NULL THEN
+        RAISE EXCEPTION 'canonical Bridge Video algorithm registry row missing';
+    END IF;
+    SELECT count(*) INTO v_count
+      FROM algorithm_version
+     WHERE algorithm_id=v_algorithm
+       AND version_label='3.1-free-r25.13-checkpoint'
+       AND status='candidate';
+    IF v_count <> 1 THEN
+        RAISE EXCEPTION 'r25.13 checkpoint candidate registration is not unique';
+    END IF;
+END $$;
 
 CREATE OR REPLACE FUNCTION guard_bridge_video_analysis_state()
 RETURNS trigger LANGUAGE plpgsql AS $$
