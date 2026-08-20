@@ -1,0 +1,64 @@
+name: diana-longitudinal-v4-regression
+
+on:
+  pull_request:
+    paths:
+      - 'diana_longitudinal_quality_v4.py'
+      - 'diana_longitudinal_postprocess_v3.py'
+      - 'tests/test_diana_longitudinal_quality_v4.py'
+      - '.github/workflows/diana-longitudinal-v4-regression.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  v4-regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout public technical code only
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Compile v2/v3/v4 semantic layers
+        run: |
+          python -m py_compile \
+            diana_longitudinal_quality_v2.py \
+            diana_longitudinal_quality_v3.py \
+            diana_longitudinal_quality_v4.py \
+            diana_longitudinal_postprocess_v3.py
+      - name: Run longitudinal regressions
+        run: |
+          python -m unittest \
+            tests.test_diana_longitudinal_quality_v3 \
+            tests.test_diana_longitudinal_quality_v4 -v
+      - name: Fail closed on authority or cost regression
+        run: |
+          python - <<'PY'
+          from diana_longitudinal_quality_v4 import build_quality_layer
+          master={
+            'job_id':'0'*32,
+            'content_quality':{'semantic_qc_status':'PASS','semantic_critical_unresolved':0},
+            'technical_qc':{'visual':{
+              'pass1':{'status':'VISUAL_PASS_1_COMPLETE'},
+              'pass2':{'status':'VISUAL_PASS_2_COMPLETE'},
+            }},
+            'transcript':[], 'episodes':[], 'learning_interactions':[],
+            'canon_links':[], 'deals':[],
+          }
+          q=build_quality_layer(master, {'lesson_id':'test','lesson_number':0})
+          assert q['authority']['canon_activation']=='DENY'
+          assert q['authority']['curriculum_activation']=='DENY'
+          assert q['authority']['student_profile_production_write']=='DENY'
+          assert q['authority']['person_specific_learning_conclusion']=='DENY'
+          assert q['authority']['database_destination']=='STAGING_ONLY'
+          assert q['incremental_processing']['heavy_video_reprocessing_required'] is False
+          assert q['incremental_processing']['raw_asr_mutated'] is False
+          assert q['cost_gate']['paid_ai_api_required'] is False
+          assert q['cost_gate']['paid_cloud_required'] is False
+          print('V4_AUTHORITY_COST_GUARD_PASS')
+          PY
