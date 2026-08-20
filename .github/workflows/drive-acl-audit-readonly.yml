@@ -7,6 +7,12 @@ on:
     paths:
       - 'tools/drive_acl_audit_readonly.py'
       - '.github/workflows/drive-acl-audit-readonly.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'tools/drive_acl_audit_readonly.py'
+      - '.github/workflows/drive-acl-audit-readonly.yml'
 
 permissions:
   contents: read
@@ -17,6 +23,7 @@ concurrency:
 
 jobs:
   audit:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
