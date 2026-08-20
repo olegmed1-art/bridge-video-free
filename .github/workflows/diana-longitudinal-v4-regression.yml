@@ -6,8 +6,10 @@ on:
       - 'diana_longitudinal_quality_v4.py'
       - 'diana_longitudinal_quality_v4_1.py'
       - 'diana_longitudinal_postprocess_v3.py'
+      - 'diana_longitudinal_postprocess_v4_1.py'
       - 'tests/test_diana_longitudinal_quality_v4.py'
       - 'tests/test_diana_longitudinal_quality_v4_1.py'
+      - 'tests/test_diana_longitudinal_postprocess_v4_1.py'
       - '.github/workflows/diana-longitudinal-v4-regression.yml'
 
 permissions:
@@ -26,6 +28,8 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
           python-version: '3.12'
+      - name: Install deterministic wrapper dependency
+        run: python -m pip install --disable-pip-version-check PyMuPDF requests
       - name: Compile v2/v3/v4/v4.1 semantic layers
         run: |
           python -m py_compile \
@@ -33,13 +37,15 @@ jobs:
             diana_longitudinal_quality_v3.py \
             diana_longitudinal_quality_v4.py \
             diana_longitudinal_quality_v4_1.py \
-            diana_longitudinal_postprocess_v3.py
+            diana_longitudinal_postprocess_v3.py \
+            diana_longitudinal_postprocess_v4_1.py
       - name: Run longitudinal regressions
         run: |
           python -m unittest \
             tests.test_diana_longitudinal_quality_v3 \
             tests.test_diana_longitudinal_quality_v4 \
-            tests.test_diana_longitudinal_quality_v4_1 -v
+            tests.test_diana_longitudinal_quality_v4_1 \
+            tests.test_diana_longitudinal_postprocess_v4_1 -v
       - name: Fail closed on authority or cost regression
         run: |
           python - <<'PY'
