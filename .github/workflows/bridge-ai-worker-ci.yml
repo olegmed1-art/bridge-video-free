@@ -4,12 +4,14 @@ on:
   pull_request:
     paths:
       - 'bridge_ai_compute_worker.py'
+      - 'tests/test_ai_worker_contract.py'
       - 'Dockerfile.ai-worker'
       - '.github/workflows/bridge-ai-worker-ci.yml'
   push:
     branches: [main]
     paths:
       - 'bridge_ai_compute_worker.py'
+      - 'tests/test_ai_worker_contract.py'
       - 'Dockerfile.ai-worker'
       - '.github/workflows/bridge-ai-worker-ci.yml'
 
@@ -29,21 +31,11 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
       - name: Compile worker
         run: python -m py_compile bridge_ai_compute_worker.py
-      - name: Verify fail-closed configuration
-        run: |
-          python - <<'PY'
-          import os
-          import bridge_ai_compute_worker as worker
-          os.environ.pop('BRIDGE_API_BASE_URL', None)
-          os.environ.pop('BRIDGE_API_TOKEN', None)
-          try:
-              worker.load_config()
-          except RuntimeError:
-              print('PASS: missing credentials fail closed')
-          else:
-              raise SystemExit('worker accepted missing credentials')
-          PY
+      - name: Verify worker contracts
+        run: PYTHONPATH=. pytest -q tests/test_ai_worker_contract.py
       - name: Build worker container
         run: docker build -f Dockerfile.ai-worker -t bridge-ai-worker:ci .

@@ -33,6 +33,7 @@ def test_no_engine_fails_closed():
 def test_ben_context_normalization():
     assert worker._ben_context("1H – 1S") == "1H1S"
     assert worker._ben_context("1NT PASS 2C X") == "1N--2CDb"
+    assert worker._ben_context(["PASS", "PASS"]) == "----"
 
 
 def test_policy_score_is_not_promoted_to_search_ev():
@@ -42,6 +43,9 @@ def test_policy_score_is_not_promoted_to_search_ev():
     teacher = worker.teacher_payload("ben", result)
     assert teacher["action"] == "2H"
     assert teacher["candidate_scores"]["2H"] == 0.61
+    policy = worker.policy_payload("ben", teacher)
+    assert policy["distribution"]["2H"] == 0.61
+    assert policy["model_version"] == "NOT_SPECIFIED"
 
 
 def test_explicit_ben_simulation_metrics_become_search_evidence():

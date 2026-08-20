@@ -1,0 +1,112 @@
+name: Bridge AI BEN E2E
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'bridge_ai_compute_worker.py'
+      - 'bridge_school_api/ai_policy.py'
+      - 'bridge_school_api/ai_teacher.py'
+      - 'bridge_school_api/ai_worker.py'
+      - 'bridge_school_api/ai_decision.py'
+      - 'scripts/bridge_ai_e2e_canary.py'
+      - '.github/workflows/bridge-ai-e2e-ben.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-ai-ben-e2e-production
+  cancel-in-progress: false
+
+jobs:
+  ben-production-canary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      BRIDGE_APP_DATABASE_URL: ${{ secrets.BRIDGE_APP_DATABASE_URL }}
+      BRIDGE_API_TOKEN: github-actions-ben-e2e-token
+      BRIDGE_API_BASE_URL: http://127.0.0.1:8000
+      BEN_API_URL: http://127.0.0.1:8085
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install API dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-api.txt
+
+      - name: Verify production database credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${BRIDGE_APP_DATABASE_URL:-}" || { echo 'BRIDGE_APP_DATABASE_URL is not configured'; exit 1; }
+
+      - name: Start Bridge School API
+        shell: bash
+        run: |
+          set -euo pipefail
+          uvicorn app:app --host 127.0.0.1 --port 8000 >/tmp/bridge-ai-api.log 2>&1 &
+          echo $! >/tmp/bridge-ai-api.pid
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8000/healthz >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/bridge-ai-api.log
+          exit 1
+
+      - name: Start BEN container
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull ghcr.io/lorserker/ben:latest
+          docker run -d --name bridge-ben -p 8085:8085 ghcr.io/lorserker/ben:latest
+          for attempt in $(seq 1 180); do
+            code=$(curl -s -o /tmp/ben-ready.json -w '%{http_code}' \
+              'http://127.0.0.1:8085/bid?hand=AK97543.K.T3.AK7&seat=S&dealer=N&vul=&ctx=----&details=true' || true)
+            if test "$code" = "200"; then
+              cat /tmp/ben-ready.json
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs bridge-ben || true
+          exit 1
+
+      - name: Seed complete production canary
+        run: python scripts/bridge_ai_e2e_canary.py seed
+
+      - name: Run provider-neutral worker against BEN
+        env:
+          BRIDGE_WORKER_ONCE: 'true'
+        run: python bridge_ai_compute_worker.py
+
+      - name: Verify final decision and cache end to end
+        run: python scripts/bridge_ai_e2e_canary.py verify
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        shell: bash
+        run: |
+          echo '--- API LOG ---'
+          cat /tmp/bridge-ai-api.log 2>/dev/null || true
+          echo '--- BEN LOG ---'
+          docker logs bridge-ben 2>/dev/null || true
+
+      - name: Stop services
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f bridge-ben 2>/dev/null || true
+          if test -f /tmp/bridge-ai-api.pid; then
+            kill "$(cat /tmp/bridge-ai-api.pid)" 2>/dev/null || true
+          fi
