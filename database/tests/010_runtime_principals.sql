@@ -98,17 +98,22 @@ BEGIN
         RAISE EXCEPTION 'runtime principal has unexpected direct role membership';
     END IF;
 
-    -- Effective permissions must match the inherited capability boundaries.
-    IF NOT has_table_privilege('bridge_school_app_principal','person','INSERT')
+    -- Effective app permissions must reflect controlled onboarding: the application
+    -- principal can edit an existing Person but cannot create/delete Person rows or
+    -- cross the infrastructure/source-observation write boundary.
+    IF has_table_privilege('bridge_school_app_principal','person','INSERT')
+       OR NOT has_table_privilege('bridge_school_app_principal','person','UPDATE')
        OR has_table_privilege('bridge_school_app_principal','source_observation','INSERT')
        OR has_table_privilege('bridge_school_app_principal','person','DELETE') THEN
-        RAISE EXCEPTION 'application principal effective permissions are outside contract';
+        RAISE EXCEPTION 'application principal effective permissions are outside controlled-onboarding contract';
     END IF;
 
-    IF NOT has_table_privilege('bridge_school_worker_principal','source_observation','INSERT')
+    -- Worker inherits app, so it also must not bypass automatic Person onboarding.
+    IF has_table_privilege('bridge_school_worker_principal','person','INSERT')
+       OR NOT has_table_privilege('bridge_school_worker_principal','source_observation','INSERT')
        OR has_table_privilege('bridge_school_worker_principal','source_observation','UPDATE')
        OR has_table_privilege('bridge_school_worker_principal','source_observation','DELETE') THEN
-        RAISE EXCEPTION 'worker principal effective append-only permissions are outside contract';
+        RAISE EXCEPTION 'worker principal effective append-only/onboarding permissions are outside contract';
     END IF;
 
     IF NOT has_table_privilege('bridge_school_health_principal','operational_health_summary','SELECT')
