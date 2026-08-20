@@ -7,6 +7,7 @@ on:
       - 'tests/test_api_dsn_contract.py'
       - 'tests/test_ai_api_routes.py'
       - 'tests/test_ai_final_decision_contract.py'
+      - 'tests/test_ai_policy_contract.py'
       - 'requirements-api.txt'
       - 'Dockerfile.api'
       - '.github/workflows/bridge-school-api-ci.yml'
@@ -17,6 +18,7 @@ on:
       - 'tests/test_api_dsn_contract.py'
       - 'tests/test_ai_api_routes.py'
       - 'tests/test_ai_final_decision_contract.py'
+      - 'tests/test_ai_policy_contract.py'
       - 'requirements-api.txt'
       - 'Dockerfile.api'
       - '.github/workflows/bridge-school-api-ci.yml'
@@ -42,13 +44,13 @@ jobs:
           python -m pip install --disable-pip-version-check -r requirements-api.txt
           python -m pip install --disable-pip-version-check pytest
       - name: Compile API package
-        run: python -m py_compile bridge_school_api/__init__.py bridge_school_api/db.py bridge_school_api/main.py bridge_school_api/ai_decision.py
+        run: python -m py_compile bridge_school_api/__init__.py bridge_school_api/db.py bridge_school_api/main.py bridge_school_api/ai_policy.py bridge_school_api/ai_decision.py
       - name: Verify database DSN security contract
         run: PYTHONPATH=. python tests/test_api_dsn_contract.py
-      - name: Verify AI final decision contracts
-        run: PYTHONPATH=. pytest -q tests/test_ai_api_routes.py tests/test_ai_final_decision_contract.py
+      - name: Verify AI decision and policy contracts
+        run: PYTHONPATH=. pytest -q tests/test_ai_api_routes.py tests/test_ai_final_decision_contract.py tests/test_ai_policy_contract.py
       - name: Import FastAPI application
-        run: python -c "from bridge_school_api.main import app; assert app.title == 'Bridge School API'"
+        run: python -c "from app import app; assert app.title == 'Bridge School API'"
       - name: Build API container
         run: docker build -f Dockerfile.api -t bridge-school-api:ci .
 
@@ -82,7 +84,7 @@ jobs:
           BRIDGE_API_TOKEN: github-actions-smoke-token
         run: |
           set -euo pipefail
-          uvicorn bridge_school_api.main:app --host 127.0.0.1 --port 8000 >/tmp/bridge-school-api.log 2>&1 &
+          uvicorn app:app --host 127.0.0.1 --port 8000 >/tmp/bridge-school-api.log 2>&1 &
           echo $! >/tmp/bridge-school-api.pid
           for attempt in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:8000/healthz >/tmp/health.json; then
