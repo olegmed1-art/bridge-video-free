@@ -116,6 +116,7 @@ for migration in "$MIGRATIONS_DIR"/*.sql; do
   [[ -e "$migration" ]] || { echo "No migration files found" >&2; exit 1; }
   key="$(basename "$migration" .sql)"
   checksum="$(sha256sum "$migration" | awk '{print $1}')"
+  echo "MIGRATION_SHA256 ${key} ${checksum}"
 
   [[ "$key" =~ ^[A-Za-z0-9_]+$ ]] || { echo "Unsafe migration key: $key" >&2; exit 1; }
   [[ "$checksum" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid SHA-256 for $key" >&2; exit 1; }
