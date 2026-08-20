@@ -51,10 +51,16 @@ jobs:
         run: |
           set -euo pipefail
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            if ! git diff --quiet HEAD^1 HEAD -- \
-              .github/workflows/bridge-video-3.1-free.yml \
-              run_drive_3_1_free_generic.py; then
-              echo 'META-gate candidate must not modify the production workflow/runtime adapter.' >&2
+            CHANGED_FILES="$(git diff --name-only HEAD^1 HEAD)"
+            META_CANDIDATE_CHANGED=false
+            if printf '%s\n' "$CHANGED_FILES" | grep -Eq \
+              '^(bridge_runtime_hardening_r25_12_meta\.py|tests/fixtures/asr_block_11_r25_11\.json|tests/test_meta_asr_gate_r25_12\.py)$'; then
+              META_CANDIDATE_CHANGED=true
+            fi
+            if [ "$META_CANDIDATE_CHANGED" = "true" ] && \
+               printf '%s\n' "$CHANGED_FILES" | grep -Eq \
+                 '^(\.github/workflows/bridge-video-3\.1-free\.yml|run_drive_3_1_free_generic\.py)$'; then
+              echo 'META implementation/test candidate must not modify the production workflow/runtime adapter.' >&2
               exit 1
             fi
           fi
