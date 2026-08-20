@@ -124,14 +124,14 @@ class DianaLongitudinalQualityV4Tests(unittest.TestCase):
         master = base_master()
         master["episodes"] = master["episodes"][:1]
         extra = {
-            "segment_id": "s0", "start": -4, "end": -1,
+            "segment_id": "s0", "start": -9, "end": -5,
             "text": "Посмотри на контракт. Сколько здесь верхних взяток?",
             "speaker": "SPEAKER_A", "speaker_role_candidate": "teacher",
             "speaker_role_confidence": 0.95,
         }
         master["transcript"].insert(0, extra)
         master["episodes"].insert(0, {
-            "episode_id": "e0", "ordinal": 0, "start": -4, "end": -1,
+            "episode_id": "e0", "ordinal": 0, "start": -9, "end": -5,
             "type": "planning", "summary_text": extra["text"],
             "terms": ["контракт", "взятка"], "evidence": ["s0"],
         })
