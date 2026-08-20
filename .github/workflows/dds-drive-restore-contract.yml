@@ -1,0 +1,49 @@
+name: DDS Drive restore contract
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/restore_drive_split_artifact.py'
+      - 'tests/test_restore_drive_split_artifact.py'
+      - 'dds_training/artifact_locations/**'
+      - '.github/workflows/dds-stage2b-prepare.yml'
+      - '.github/workflows/dds-drive-restore-contract.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/restore_drive_split_artifact.py'
+      - 'tests/test_restore_drive_split_artifact.py'
+      - 'dds_training/artifact_locations/**'
+      - '.github/workflows/dds-stage2b-prepare.yml'
+      - '.github/workflows/dds-drive-restore-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+      - name: Install restore helper dependencies
+        run: python -m pip install --disable-pip-version-check 'requests==2.32.5' 'google-auth==2.40.3'
+      - name: Run fail-closed local restore tests
+        run: |
+          set -euo pipefail
+          python -m compileall -q tools/restore_drive_split_artifact.py tests/test_restore_drive_split_artifact.py
+          PYTHONPATH=. python tests/test_restore_drive_split_artifact.py
+          PYTHONPATH=. python tools/restore_drive_split_artifact.py \
+            --locator dds_training/artifact_locations/dds-main-train-32060398288.json \
+            --output /tmp/unused.zip \
+            --validate-only
+          grep -F 'GOOGLE_DRIVE_OAUTH_JSON' .github/workflows/dds-stage2b-prepare.yml
+          ! grep -F '/actions/artifacts/${TRAIN_ARTIFACT_ID}/zip' .github/workflows/dds-stage2b-prepare.yml

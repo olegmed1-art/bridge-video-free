@@ -11,7 +11,6 @@ on:
 
 permissions:
   contents: read
-  actions: read
 
 concurrency:
   group: dds-stage2b-prepare-${{ github.ref }}
@@ -22,9 +21,9 @@ env:
   TRAIN_ARTIFACT_ID: '9302550154'
   TRAIN_ARTIFACT: dds-main-train-progress-32060398288-a1
   TRAIN_ARTIFACT_ZIP_SHA256: c46cda2fb127371cbc1ab836c74580b25f0a0bb8ab358dfaab97cf591dd8a246
+  TRAIN_DRIVE_LOCATOR: dds_training/artifact_locations/dds-main-train-32060398288.json
   WORK: dds_training/work/pilot
   OUT: dds_training/work/stage2b-v25
-  GH_TOKEN: ${{ github.token }}
 
 jobs:
   prepare-stage2b:
@@ -63,16 +62,29 @@ jobs:
           python stage2b_prepare_v25_selftest.py
           python test_runner.py --manifest test_matrix.json --check-only
 
-      - name: Restore exact completed 30k TRAIN artifact
+      - name: Validate Drive restore contract before credentials
         shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'requests==2.32.5' 'google-auth==2.40.3'
+          PYTHONPATH=. python tests/test_restore_drive_split_artifact.py
+          PYTHONPATH=. python tools/restore_drive_split_artifact.py \
+            --locator "$TRAIN_DRIVE_LOCATOR" \
+            --output /tmp/unused-dds-main-train.zip \
+            --validate-only
+
+      - name: Restore exact completed 30k TRAIN state from verified Google Drive copy
+        shell: bash
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
         run: |
           set -euo pipefail
           rm -rf /tmp/dds-main-train "$WORK" "$OUT"
           mkdir -p /tmp/dds-main-train dds_training/work
-          gh api \
-            -H 'Accept: application/vnd.github+json' \
-            "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${TRAIN_ARTIFACT_ID}/zip" \
-            > /tmp/dds-main-train/artifact.zip
+          PYTHONPATH=. python tools/restore_drive_split_artifact.py \
+            --locator "$TRAIN_DRIVE_LOCATOR" \
+            --output /tmp/dds-main-train/artifact.zip \
+            --work-dir /tmp/dds-main-train/parts
           echo "$TRAIN_ARTIFACT_ZIP_SHA256  /tmp/dds-main-train/artifact.zip" | sha256sum -c -
           unzip -q /tmp/dds-main-train/artifact.zip -d /tmp/dds-main-train/extracted
           test -f /tmp/dds-main-train/extracted/dds-main-train-progress-state.tgz
