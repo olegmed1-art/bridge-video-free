@@ -73,3 +73,130 @@ jobs:
           assert q['method_version']=='diana-quality-v4.1'
           print('V41_AUTHORITY_COST_GUARD_PASS')
           PY
+
+  v41-field-evidence:
+    needs: v4-regression
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      BRIDGE_JOB_ID: 005ebee4db6f76823cd9058fa66d01ba
+      BRIDGE_FIELD_WORK_FOLDER_ID: 1ZtcZwmeEsZWqkkDwyBGgwuGXMiIV1Kxj
+    steps:
+      - name: Checkout candidate technical code only
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install semantic-only Drive dependencies
+        run: python -m pip install --disable-pip-version-check requests PyMuPDF google-auth google-auth-oauthlib
+      - name: Completed-master field Evidence Gate
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import tempfile
+
+          import diana_longitudinal_postprocess as post
+          import run_drive_3_1_free as io
+          from diana_longitudinal_quality_v4_1 import build_quality_layer
+          from run_drive_3_1_free_oidc import user_oauth_token
+
+          job_id = os.environ['BRIDGE_JOB_ID']
+          work_folder = os.environ['BRIDGE_FIELD_WORK_FOLDER_ID']
+          token = user_oauth_token()
+          if not token:
+              raise RuntimeError('BLOCKED_ACCESS: Drive OAuth unavailable')
+
+          _, done = post._latest_done(token, job_id)
+          master, master_pdf = post._load_master(token, done)
+          if master.get('job_id') != job_id:
+              raise RuntimeError('FIELD_JOB_ID_MISMATCH')
+          source_id = str((master.get('source') or {}).get('driveId') or '')
+          source_before = post._drive_metadata(token, source_id)
+
+          quality = build_quality_layer(master, {'lesson_id': f'field-{job_id}', 'lesson_number': 3})
+          interactions = [x for x in (quality.get('learning_interactions') or []) if isinstance(x, dict)]
+          v41 = [x for x in interactions if x.get('source') == 'transcript_decision_window_v4_1' and x.get('status') == 'COMPLETE_EVIDENCE_CANDIDATE']
+          cores = []
+          for item in v41:
+              window = item.get('decision_window') or {}
+              core = (window.get('teacher_intervention_turn_id'), window.get('student_followup_turn_id'))
+              cores.append(core)
+              assert item.get('actor_attribution_status') == 'EXPLICIT_ACOUSTIC_ROLE_SUPPORTED'
+              assert item.get('outcome_correctness_verified') is False
+              assert window.get('task_action_bridge_alignment') is True
+              assert len(item.get('evidence_refs') or []) >= 4
+          assert len(cores) == len(set(cores)), 'FIELD_DUPLICATE_INTERACTION_CORE'
+          assert 1 <= len(v41) <= 6, f'FIELD_V41_COUNT_OUT_OF_EXPECTED_BOUND:{len(v41)}'
+
+          authority = quality.get('authority') or {}
+          for key in ('canon_activation','curriculum_activation','student_profile_production_write','methodology_activation'):
+              assert authority.get(key) == 'DENY', f'FIELD_AUTHORITY_REGRESSION:{key}'
+          assert authority.get('database_destination') == 'STAGING_ONLY'
+          incremental = quality.get('incremental_processing') or {}
+          cost = quality.get('cost_gate') or {}
+          assert incremental.get('heavy_video_reprocessing_required') is False
+          assert incremental.get('raw_asr_mutated') is False
+          assert cost.get('paid_ai_api_required') is False
+          assert cost.get('paid_cloud_required') is False
+
+          source_after = post._drive_metadata(token, source_id)
+          source_untouched = all(source_before.get(k) == source_after.get(k) for k in ('id','size','modifiedTime','parents'))
+          assert source_untouched, 'FIELD_SOURCE_CHANGED'
+
+          speaker = (quality.get('readiness') or {}).get('speaker_summary') or {}
+          receipt = {
+              'schema': 'bridge.video.longitudinal.v4_1.field_validation',
+              'status': 'FIELD_VALIDATION_PASS',
+              'job_id': job_id,
+              'quality_method_version': quality.get('method_version'),
+              'master_pdf_drive_id': master_pdf.get('drive_id'),
+              'master_pdf_sha256': master_pdf.get('pdf_sha256'),
+              'source_untouched': source_untouched,
+              'heavy_video_reprocessed': False,
+              'raw_asr_mutated': False,
+              'paid_ai_api': 0,
+              'paid_cloud': 0,
+              'methodology_status': (quality.get('readiness') or {}).get('methodology_status'),
+              'complete_learning_interactions_total': (quality.get('readiness') or {}).get('complete_learning_interactions'),
+              'v4_1_complete_decision_windows': len(v41),
+              'partial_learning_interactions': (quality.get('readiness') or {}).get('partial_learning_interactions'),
+              'speaker_summary': {
+                  'status': speaker.get('status'),
+                  'transcript_segments': speaker.get('transcript_segments'),
+                  'speaker_labeled_segments': speaker.get('speaker_labeled_segments'),
+                  'acoustic_role_mapped_segments': speaker.get('acoustic_role_mapped_segments'),
+                  'semantic_fallback_role_segments': speaker.get('semantic_fallback_role_segments'),
+                  'role_without_acoustic_speaker_segments': speaker.get('role_without_acoustic_speaker_segments'),
+              },
+              'board_counts': {
+                  'verified_full_boards': (quality.get('counts') or {}).get('verified_full_boards'),
+                  'partial_boards': (quality.get('counts') or {}).get('partial_boards'),
+                  'unknown_boards': (quality.get('counts') or {}).get('unknown_boards'),
+              },
+              'interaction_windows': [
+                  {
+                      'start': item.get('start'),
+                      'end': item.get('end'),
+                      'evidence_count': len(item.get('evidence_refs') or []),
+                      'outcome_correctness_verified': item.get('outcome_correctness_verified'),
+                      'actor_attribution_status': item.get('actor_attribution_status'),
+                  }
+                  for item in v41
+              ],
+              'authority': authority,
+          }
+          with tempfile.TemporaryDirectory(prefix='v41-field-') as td:
+              path = Path(td) / f'V41_FIELD_VALIDATION_{job_id}.json'
+              path.write_text(json.dumps(receipt, ensure_ascii=False, indent=2, sort_keys=True), encoding='utf-8')
+              uploaded = io.upload_file(token, work_folder, path, 'application/json')
+              receipt['receipt_drive_id'] = uploaded.get('id')
+          print(json.dumps(receipt, ensure_ascii=False, sort_keys=True))
+          PY
