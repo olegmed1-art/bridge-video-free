@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'dds_training/**'
+      - 'tools/restore_drive_split_artifact.py'
+      - 'tests/test_restore_drive_split_artifact.py'
       - '.github/workflows/dds-training-v23-smoke.yml'
       - '.github/workflows/dds-training-local-smoke.yml'
       - '.github/workflows/dds-training-pilot-start.yml'
@@ -11,10 +13,13 @@ on:
       - '.github/workflows/dds-main-30k-prepare.yml'
       - '.github/workflows/dds-main-30k-train-authorized.yml'
       - '.github/workflows/dds-stage2b-prepare.yml'
+      - '.github/workflows/dds-drive-restore-contract.yml'
   push:
     branches: [dds-training-local]
     paths:
       - 'dds_training/**'
+      - 'tools/restore_drive_split_artifact.py'
+      - 'tests/test_restore_drive_split_artifact.py'
       - '.github/workflows/dds-training-v23-smoke.yml'
       - '.github/workflows/dds-training-local-smoke.yml'
       - '.github/workflows/dds-training-pilot-start.yml'
@@ -22,6 +27,7 @@ on:
       - '.github/workflows/dds-main-30k-prepare.yml'
       - '.github/workflows/dds-main-30k-train-authorized.yml'
       - '.github/workflows/dds-stage2b-prepare.yml'
+      - '.github/workflows/dds-drive-restore-contract.yml'
   workflow_dispatch:
 
 concurrency:
@@ -64,12 +70,29 @@ jobs:
           grep -q 'DDS_MAIN_EXPECTED_COMMIT:' "$workflow"
           ! grep -q 'DDS_MAIN_EXPECTED_COMMIT:.*inputs' "$workflow"
           grep -q 'ЭТАП-2-СТАРТ-ПОДТВЕРЖДАЮ' "$workflow"
-          grep -q 'PREPARED_RUN_ID.*32052220151' "$workflow"
+          grep -q 'PREPARED_DRIVE_LOCATOR.*dds-main-30k-prepared-32052220151.json' "$workflow"
+          grep -q 'PREPARED_ZIP_SHA256.*f29a20457b1ac9e302dae3165fd6048b19b5005d4bda2a7c4bbefc38f5f3cf7c' "$workflow"
+          grep -q 'GOOGLE_DRIVE_OAUTH_JSON.*secrets.GOOGLE_DRIVE_OAUTH_JSON' "$workflow"
+          grep -q 'tools/restore_drive_split_artifact.py' "$workflow"
+          ! grep -q 'PREPARED_RUN_ID' "$workflow"
+          ! grep -q 'PREPARED_ARTIFACT:' "$workflow"
+          grep -q 'github.run_attempt > 1' "$workflow"
+          grep -q 'gh run download.*GITHUB_RUN_ID' "$workflow"
           grep -q 'run_main_train_authorized.sh' "$workflow"
           grep -q 'resolve_investigations_auto.py' dds_training/run_main_train_authorized.sh
           grep -q 'seq 4 17' dds_training/run_main_train_authorized.sh
           grep -q -- '--scope main_train' dds_training/run_main_train_authorized.sh
           ! grep -q -- '--open-sealed' dds_training/run_main_train_authorized.sh
+
+      - name: Run Drive artifact restore helper regression
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'requests==2.32.5' 'google-auth==2.40.3'
+          PYTHONPATH=. python tests/test_restore_drive_split_artifact.py
+          PYTHONPATH=. python tools/restore_drive_split_artifact.py \
+            --locator dds_training/artifact_locations/dds-main-30k-prepared-32052220151.json \
+            --output /tmp/unused-prepared.zip \
+            --validate-only
 
       - name: Run fail-closed test-runner guard directly
         working-directory: dds_training
