@@ -1,0 +1,96 @@
+name: Bridge AI Live E2E Verification
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/bridge-ai-e2e-live-verification.yml'
+      - 'bridge_ai_compute_worker.py'
+      - 'bridge_school_api/ai_*.py'
+      - 'scripts/bridge_ai_e2e_canary.py'
+
+permissions:
+  contents: read
+
+jobs:
+  live-ben-canary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      BRIDGE_APP_DATABASE_URL: ${{ secrets.BRIDGE_APP_DATABASE_URL }}
+      BRIDGE_API_TOKEN: github-actions-live-ben-canary
+      BRIDGE_API_BASE_URL: http://127.0.0.1:8000
+      BEN_API_URL: http://127.0.0.1:8085
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install API dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-api.txt
+
+      - name: Require production DB credential
+        run: test -n "${BRIDGE_APP_DATABASE_URL:-}"
+
+      - name: Start local production API code
+        shell: bash
+        run: |
+          set -euo pipefail
+          uvicorn app:app --host 127.0.0.1 --port 8000 >/tmp/api.log 2>&1 &
+          echo $! >/tmp/api.pid
+          for n in $(seq 1 60); do
+            curl --fail --silent http://127.0.0.1:8000/healthz >/dev/null && exit 0
+            sleep 1
+          done
+          cat /tmp/api.log
+          exit 1
+
+      - name: Start real BEN image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull ghcr.io/lorserker/ben:latest
+          docker run -d --name bridge-ben -p 8085:8085 ghcr.io/lorserker/ben:latest
+          for n in $(seq 1 180); do
+            code=$(curl -s -o /tmp/ben.json -w '%{http_code}' \
+              'http://127.0.0.1:8085/bid?hand=AK97543.K.T3.AK7&seat=S&dealer=N&vul=&ctx=----&details=true' || true)
+            if test "$code" = "200"; then
+              cat /tmp/ben.json
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs bridge-ben || true
+          exit 1
+
+      - name: Seed isolated canary
+        run: python scripts/bridge_ai_e2e_canary.py seed
+
+      - name: Execute provider-neutral worker
+        env:
+          BRIDGE_WORKER_ONCE: 'true'
+        run: python bridge_ai_compute_worker.py
+
+      - name: Verify decision and cache
+        run: python scripts/bridge_ai_e2e_canary.py verify
+
+      - name: Diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          echo '--- API ---'
+          cat /tmp/api.log 2>/dev/null || true
+          echo '--- BEN ---'
+          docker logs bridge-ben 2>/dev/null || true
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f bridge-ben 2>/dev/null || true
+          if test -f /tmp/api.pid; then kill "$(cat /tmp/api.pid)" 2>/dev/null || true; fi
