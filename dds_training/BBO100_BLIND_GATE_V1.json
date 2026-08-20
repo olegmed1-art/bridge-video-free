@@ -1,0 +1,43 @@
+{
+  "schema": "bbo100-blind-gate-v1",
+  "status": "TASK_PACKET_LOCKED_PREDICTIONS_NOT_YET_RECORDED",
+  "source_archive_sha256": "18bcbc66e4aa79bb44907dd598046a5d755c3791e70e2497e82e3fae89d000dc",
+  "holdout_manifest_sha256": "0c500c0d323a855f55664e08bb3af4159d792e7e307a1bef0012e2bd5021b8cc",
+  "ordered_holdout_id_sha256": "4d0e38f51fb15b77dda061eac4bc86e06f7e61a56a7dbb54b510cf1060a63802",
+  "blind_task_packet_sha256": "4ee99c708bb997f28101c03367ef74eaf8c7242a413d1869685723d7b6b46c0f",
+  "blind_task_packet_bytes": 54720,
+  "task_count": 20,
+  "family_counts": {
+    "opening_lead": 7,
+    "declarer_continuation": 7,
+    "defense_continuation": 6
+  },
+  "fallback_count": 0,
+  "selection_rule": {
+    "ordinal_cycle": [
+      "opening_lead",
+      "declarer_continuation",
+      "defense_continuation"
+    ],
+    "opening_lead": "first card-play decision",
+    "declarer_continuation": "first declarer card-play decision after the opening lead with more than one legal card",
+    "defense_continuation": "first defender card-play decision after the opening lead with more than one legal card",
+    "fallback": "only if requested family is unavailable"
+  },
+  "blindness_contract": {
+    "dds_called_before_predictions": false,
+    "recorded_action_in_task_packet": false,
+    "future_play_in_task_packet": false,
+    "opponent_hidden_hands_in_task_packet": false,
+    "opening_lead_dummy_visible": false,
+    "post_lead_dummy_visible": true,
+    "allowed_information": "auction, contract, vulnerability, own remaining hand, exposed dummy when applicable, completed/public play history, current trick, legal cards",
+    "prediction_requirement": "choose exactly one legal card per task before opening the sealed labels or running DDS"
+  },
+  "authority": {
+    "canon_write": "DENY",
+    "methodology_write": "DENY",
+    "student_profile_write": "DENY",
+    "bbo_gib_bidding_as_school_standard": "DENY"
+  }
+}
