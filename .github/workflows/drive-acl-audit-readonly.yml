@@ -50,7 +50,7 @@ jobs:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
         run: |
           set -euo pipefail
-          python tools/drive_acl_audit_readonly.py > "$RUNNER_TEMP/drive-acl-audit-receipt-line.json"
+          PYTHONPATH=. python tools/drive_acl_audit_readonly.py > "$RUNNER_TEMP/drive-acl-audit-receipt-line.json"
           python - <<'PY'
           import json, os
           from pathlib import Path
