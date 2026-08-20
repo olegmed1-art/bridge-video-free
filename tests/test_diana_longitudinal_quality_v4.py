@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import unittest
 
+import diana_longitudinal_quality_v2 as v2
 from diana_longitudinal_quality_v4 import (
+    _task_excerpts,
+    _transcript_decision_interactions,
+    _transcript_turns,
     build_quality_layer,
     deal_reconstruction_gate_v4,
     speaker_summary_v4,
@@ -79,13 +83,22 @@ def base_master() -> dict:
 
 class DianaLongitudinalQualityV4Tests(unittest.TestCase):
     def test_explicit_turn_window_builds_complete_interaction_without_claiming_correctness(self):
-        quality = build_quality_layer(base_master(), {"lesson_id": "lesson-3", "lesson_number": 3})
+        master = base_master()
+        turns = _transcript_turns(master)
+        self.assertEqual([item["role"] for item in turns], ["teacher", "student", "teacher", "student"])
+        self.assertTrue(_task_excerpts(turns[0]["text"]))
+        events = v2.build_atomic_events(master)
+        sections = v2.build_sections(events, master["job_id"])
+        raw = _transcript_decision_interactions(master, events, sections)
+        self.assertEqual(len(raw), 1, raw)
+
+        quality = build_quality_layer(master, {"lesson_id": "lesson-3", "lesson_number": 3})
         complete = [
             item for item in quality["learning_interactions"]
             if item.get("source") == "transcript_decision_window_v4"
             and item.get("status") == "COMPLETE_EVIDENCE_CANDIDATE"
         ]
-        self.assertEqual(len(complete), 1)
+        self.assertEqual(len(complete), 1, quality.get("interaction_reconstruction_v4"))
         item = complete[0]
         self.assertEqual(item["actor_attribution_status"], "EXPLICIT_ACOUSTIC_ROLE_SUPPORTED")
         self.assertFalse(item["outcome_correctness_verified"])
@@ -119,6 +132,13 @@ class DianaLongitudinalQualityV4Tests(unittest.TestCase):
             "type": "planning", "summary_text": extra["text"],
             "terms": ["контракт", "взятка"], "evidence": ["s0"],
         })
+        turns = _transcript_turns(master)
+        self.assertEqual(turns[0]["role"], "teacher")
+        events = v2.build_atomic_events(master)
+        sections = v2.build_sections(events, master["job_id"])
+        raw = _transcript_decision_interactions(master, events, sections)
+        self.assertEqual(len(raw), 1, raw)
+
         quality = build_quality_layer(master, {"lesson_id": "lesson-3", "lesson_number": 3})
         complete = [
             item for item in quality["learning_interactions"]
