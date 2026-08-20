@@ -5,8 +5,8 @@ import unittest
 
 
 class DianaLongitudinalPostprocessV41Tests(unittest.TestCase):
-    def test_wrapper_installs_v41_quality_layer_without_authority_escalation(self):
-        module = importlib.import_module('diana_longitudinal_postprocess_v4_1')
+    def test_production_compat_wrapper_installs_v41_without_authority_escalation(self):
+        module = importlib.import_module('diana_longitudinal_postprocess_v3')
         self.assertEqual(module.base.QUALITY_METHOD_VERSION, 'diana-quality-v4.1')
         self.assertEqual(module.base.QUALITY_SCHEMA_VERSION, 4)
         self.assertEqual(module.base.SCHEMA_VERSION, 4)
