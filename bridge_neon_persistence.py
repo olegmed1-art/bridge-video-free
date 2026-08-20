@@ -11,6 +11,8 @@ from pathlib import Path
 import run_drive_3_1_free as io
 
 from database.outbox_publisher import publish_changeset_outbox
+from database.run_checkpoint_persistence import record_checkpoint
+from database.source_identity_persistence import ensure_drive_source_identity
 from database.video_result_persistence import persist_video_result
 
 
@@ -96,8 +98,33 @@ def persist_completed_drive_job(token: str):
         raise RuntimeError("DATABASE_PERSIST_MASTER_REVISION_MISMATCH")
 
     result = persist_video_result(raw_dsn, master, done)
+
+    source = master.get("source") or {}
+    source_drive_id = str(source.get("driveId") or "").strip()
+    if not source_drive_id:
+        raise RuntimeError("DATABASE_PERSIST_SOURCE_DRIVE_ID_MISSING")
+    source_identity = ensure_drive_source_identity(
+        raw_dsn,
+        source_drive_id=source_drive_id,
+        display_name=str(source.get("name") or "") or None,
+        job_id=job_id,
+    )
+    result["source_identity"] = source_identity
+
     outbox = publish_changeset_outbox(raw_dsn, str(result["changeset_id"]))
     result["outbox"] = outbox
+    checkpoint = record_checkpoint(
+        raw_dsn,
+        job_id=job_id,
+        stage_key="database_persist",
+        checkpoint_state="completed",
+        details={
+            "source_identity_id": source_identity["source_identity_id"],
+            "changeset_id": str(result["changeset_id"]),
+            "outbox_published": outbox["published_count"],
+        },
+    )
+    result["checkpoint"] = checkpoint
     io.safe(
         job_id=job_id,
         stage="DATABASE_PERSIST",
