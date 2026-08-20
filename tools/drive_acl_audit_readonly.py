@@ -4,7 +4,6 @@ import collections
 import hashlib
 import json
 import os
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,6 +14,7 @@ from run_drive_3_1_free_oidc import user_oauth_token
 FOLDER_MIME = "application/vnd.google-apps.folder"
 DRIVE_API = "https://www.googleapis.com/drive/v3"
 UPLOAD_API = "https://www.googleapis.com/upload/drive/v3/files"
+WRITE_ROLES = {"writer", "organizer", "fileOrganizer"}
 
 
 def _get(session: requests.Session, url: str, **params):
@@ -107,6 +107,40 @@ def _upload_private(session: requests.Session, folder_id: str, path: Path, mime:
     return r.json()
 
 
+def _count_item_permissions(totals: collections.Counter, risks: list[dict], grantees: set):
+    anyone = [r for r in risks if r["category"] == "ANYONE"]
+    domain = [r for r in risks if r["category"] == "DOMAIN"]
+    named = [r for r in risks if r["category"] == "NAMED_EXTERNAL_OR_COLLABORATOR"]
+
+    if anyone:
+        totals["anyone_items"] += 1
+        if any(r.get("role") == "reader" for r in anyone):
+            totals["anyone_reader_items"] += 1
+        if any(r.get("role") in WRITE_ROLES for r in anyone):
+            totals["anyone_write_items"] += 1
+        if any(not r.get("inherited") for r in anyone):
+            totals["anyone_direct_items"] += 1
+        if all(r.get("inherited") for r in anyone):
+            totals["anyone_inherited_only_items"] += 1
+
+    if domain:
+        totals["domain_items"] += 1
+        if any(r.get("role") in WRITE_ROLES for r in domain):
+            totals["domain_write_items"] += 1
+
+    if named:
+        totals["named_collaborator_items"] += 1
+        if any(r.get("role") == "reader" for r in named):
+            totals["named_reader_items"] += 1
+        if any(r.get("role") in WRITE_ROLES for r in named):
+            totals["named_writer_items"] += 1
+        if any(r.get("role") == "owner" for r in named):
+            totals["external_owner_items"] += 1
+        for risk in named:
+            key = (risk.get("type"), (risk.get("emailAddress") or "").lower(), risk.get("role"))
+            grantees.add(key)
+
+
 def audit_root(session: requests.Session, root_id: str, root_label: str, owner_email: str):
     root_meta = _metadata(session, root_id)
     queue = collections.deque([(root_id, root_label)])
@@ -122,15 +156,15 @@ def audit_root(session: requests.Session, root_id: str, root_label: str, owner_e
         seen.add(folder_id)
         totals["folders_scanned"] += 1
         if folder_id == root_id:
-            meta = root_meta
-            risks = _risk_permissions(meta, owner_email)
+            risks = _risk_permissions(root_meta, owner_email)
             if risks:
+                _count_item_permissions(totals, risks, grantees)
                 detail.append(
                     {
                         "id": folder_id,
                         "path": path,
-                        "mimeType": meta.get("mimeType"),
-                        "shared": meta.get("shared"),
+                        "mimeType": root_meta.get("mimeType"),
+                        "shared": root_meta.get("shared"),
                         "permissions": risks,
                     }
                 )
@@ -147,20 +181,7 @@ def audit_root(session: requests.Session, root_id: str, root_label: str, owner_e
             risks = _risk_permissions(meta, owner_email)
             if not risks:
                 continue
-            categories = {r["category"] for r in risks}
-            roles = {str(r.get("role") or "") for r in risks}
-            if "ANYONE" in categories:
-                totals["anyone_items"] += 1
-                if "writer" in roles or "organizer" in roles or "fileOrganizer" in roles:
-                    totals["anyone_write_items"] += 1
-            if "DOMAIN" in categories:
-                totals["domain_items"] += 1
-            if "NAMED_EXTERNAL_OR_COLLABORATOR" in categories:
-                totals["named_collaborator_items"] += 1
-            for risk in risks:
-                if risk["category"] == "NAMED_EXTERNAL_OR_COLLABORATOR":
-                    key = (risk.get("type"), (risk.get("emailAddress") or "").lower(), risk.get("role"))
-                    grantees.add(key)
+            _count_item_permissions(totals, risks, grantees)
             detail.append(
                 {
                     "id": item["id"],
@@ -185,18 +206,18 @@ def audit_root(session: requests.Session, root_id: str, root_label: str, owner_e
 
 def safe_root_summary(root: dict):
     t = root["totals"]
+    keys = [
+        "folders_scanned", "files_scanned", "objects_scanned", "shared_flag_items",
+        "anyone_items", "anyone_reader_items", "anyone_write_items",
+        "anyone_direct_items", "anyone_inherited_only_items",
+        "domain_items", "domain_write_items",
+        "named_collaborator_items", "named_reader_items", "named_writer_items",
+        "external_owner_items", "distinct_named_grants",
+    ]
     return {
         "root_label": root["root_label"],
         "root_shared": root["root_shared"],
-        "folders_scanned": t.get("folders_scanned", 0),
-        "files_scanned": t.get("files_scanned", 0),
-        "objects_scanned": t.get("objects_scanned", 0),
-        "shared_flag_items": t.get("shared_flag_items", 0),
-        "anyone_items": t.get("anyone_items", 0),
-        "anyone_write_items": t.get("anyone_write_items", 0),
-        "domain_items": t.get("domain_items", 0),
-        "named_collaborator_items": t.get("named_collaborator_items", 0),
-        "distinct_named_grants": t.get("distinct_named_grants", 0),
+        **{key: t.get(key, 0) for key in keys},
     }
 
 
@@ -219,7 +240,7 @@ def main():
     finished = datetime.now(timezone.utc)
 
     detail = {
-        "schema": "bridge-drive-acl-audit-v1",
+        "schema": "bridge-drive-acl-audit-v1.1",
         "status": "READ_ONLY_AUDIT_COMPLETE",
         "started_at": started.isoformat().replace("+00:00", "Z"),
         "finished_at": finished.isoformat().replace("+00:00", "Z"),
@@ -227,17 +248,22 @@ def main():
         "roots": results,
     }
     safe = {
-        "schema": "bridge-drive-acl-audit-safe-summary-v1",
+        "schema": "bridge-drive-acl-audit-safe-summary-v1.1",
         "status": "READ_ONLY_AUDIT_COMPLETE",
         "write_operations_to_existing_items": 0,
         "roots": [safe_root_summary(x) for x in results],
     }
+    aggregate_keys = [
+        "folders_scanned", "files_scanned", "objects_scanned", "shared_flag_items",
+        "anyone_items", "anyone_reader_items", "anyone_write_items",
+        "anyone_direct_items", "anyone_inherited_only_items",
+        "domain_items", "domain_write_items",
+        "named_collaborator_items", "named_reader_items", "named_writer_items",
+        "external_owner_items",
+    ]
     safe["aggregate"] = {
         key: sum(int(root.get(key, 0)) for root in safe["roots"])
-        for key in [
-            "folders_scanned", "files_scanned", "objects_scanned", "shared_flag_items",
-            "anyone_items", "anyone_write_items", "domain_items", "named_collaborator_items"
-        ]
+        for key in aggregate_keys
     }
     safe["aggregate"]["roots_shared"] = sum(bool(root["root_shared"]) for root in safe["roots"])
 
