@@ -13,7 +13,10 @@ unrelated student remark.  v4.1 tightens only that semantic linking layer:
 * task and student action must share bridge context, except for a compact pure
   numeric answer to a count question;
 * nested prompts sharing the same teacher intervention and student follow-up are
-  de-duplicated by keeping the closest student action/task.
+  de-duplicated by keeping the closest student action/task;
+* when adjacent teacher segments were merged into one acoustic turn, the chosen
+  task is anchored back to the latest matching source segment rather than the
+  start of the whole merged turn.
 
 All authority, identity, source-read-only and zero-paid-AI gates remain inherited
 from v4/v3/v2.  Raw ASR is never changed.
@@ -134,6 +137,51 @@ def _task_action_aligned(task: object, action: object) -> bool:
     return False
 
 
+def _task_anchor_segment(
+    master: Mapping[str, Any],
+    task_turn: Mapping[str, Any],
+    task: object,
+) -> dict[str, Any]:
+    """Return the latest source segment supporting the selected task clause.
+
+    Acoustic turn coalescing can merge adjacent teacher prompts.  The interaction
+    time/evidence should follow the selected prompt, not the first prompt in the
+    merged turn.  Matching is deliberately local to segment IDs already present
+    in that acoustic turn; it never searches unrelated transcript regions.
+    """
+    segment_map = {
+        str(item.get("segment_id")): item
+        for item in (master.get("transcript") or [])
+        if isinstance(item, Mapping) and item.get("segment_id")
+    }
+    task_low = v4._low(task)
+    best: dict[str, Any] | None = None
+    for segment_id in task_turn.get("segment_ids") or []:
+        segment = segment_map.get(str(segment_id))
+        if not segment:
+            continue
+        text = segment.get("text") or segment.get("analysis_text") or ""
+        excerpts = _task_excerpts_v41(text)
+        supported = any(
+            v4._low(excerpt) == task_low
+            or task_low in v4._low(excerpt)
+            or v4._low(excerpt) in task_low
+            for excerpt in excerpts
+        )
+        if not supported:
+            continue
+        if best is None or float(segment.get("start") or 0) >= float(best.get("start") or 0):
+            best = dict(segment)
+    if best is not None:
+        return best
+    return {
+        "segment_id": (task_turn.get("segment_ids") or [task_turn.get("turn_id")])[-1],
+        "start": task_turn.get("start"),
+        "end": task_turn.get("end"),
+        "text": task_turn.get("text"),
+    }
+
+
 def _transcript_decision_interactions_v41(
     master: Mapping[str, Any],
     events: Sequence[Mapping[str, Any]],
@@ -183,21 +231,23 @@ def _transcript_decision_interactions_v41(
             continue
         _, followup_turn = followup_hit
 
+        task_anchor = _task_anchor_segment(master, task_turn, task)
+        task_segment_id = str(task_anchor.get("segment_id") or "")
         evidence = v4._dedupe(
-            list(task_turn.get("segment_ids") or [])
+            ([task_segment_id] if task_segment_id else [])
             + list(student_turn.get("segment_ids") or [])
             + list(teacher_turn.get("segment_ids") or [])
             + list(followup_turn.get("segment_ids") or [])
         )
         if len(evidence) < 4:
             continue
-        start = float(task_turn.get("start") or 0)
+        start = float(task_anchor.get("start") or task_turn.get("start") or 0)
         end = float(followup_turn.get("end") or followup_turn.get("start") or start)
         candidates.append({
             "interaction_id": v4._stable_id(
                 "interactionv41",
                 job_id,
-                task_turn.get("turn_id"),
+                task_segment_id or task_turn.get("turn_id"),
                 student_turn.get("turn_id"),
                 teacher_turn.get("turn_id"),
                 followup_turn.get("turn_id"),
@@ -226,6 +276,7 @@ def _transcript_decision_interactions_v41(
             "visual_evidence_refs": [],
             "decision_window": {
                 "task_turn_id": task_turn.get("turn_id"),
+                "task_anchor_segment_id": task_segment_id or None,
                 "student_turn_id": student_turn.get("turn_id"),
                 "teacher_intervention_turn_id": teacher_turn.get("turn_id"),
                 "student_followup_turn_id": followup_turn.get("turn_id"),
@@ -241,8 +292,6 @@ def _transcript_decision_interactions_v41(
             "methodology_activation_allowed": False,
         })
 
-    # Nested questions can share the same eventual intervention/follow-up.  Keep
-    # the closest pre-intervention student action, then the closest task.
     best_by_core: dict[tuple[str, str], dict[str, Any]] = {}
     for item in candidates:
         window = item.get("decision_window") or {}
@@ -297,6 +346,7 @@ def build_quality_layer(
         "punctuationless_question_must_be_short_and_not_self_answered": True,
         "task_action_bridge_alignment_required": True,
         "nested_prompt_deduplication": "teacher_intervention+student_followup core",
+        "merged_turn_task_reanchored_to_latest_matching_source_segment": True,
         "correctness_inferred_from_followup": False,
     }
     counts = quality.setdefault("counts", {})
@@ -315,6 +365,7 @@ __all__ = [
     "_task_excerpts_v41",
     "_meaningful_student_action_v41",
     "_task_action_aligned",
+    "_task_anchor_segment",
     "_transcript_decision_interactions_v41",
     "build_quality_layer",
 ]
