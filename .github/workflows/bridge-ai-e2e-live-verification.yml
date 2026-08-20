@@ -71,6 +71,31 @@ jobs:
       - name: Seed isolated canary
         run: python scripts/bridge_ai_e2e_canary.py seed
 
+      - name: Re-route canary through autonomous process endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os, urllib.request, psycopg
+          from psycopg.rows import dict_row
+          with psycopg.connect(os.environ['BRIDGE_APP_DATABASE_URL'], row_factory=dict_row) as conn, conn.cursor() as cur:
+              cur.execute("SELECT position_id FROM ai.decision_position WHERE stable_key='E2E-BEN-CANARY-0001' ORDER BY created_at DESC LIMIT 1")
+              position_id = cur.fetchone()['position_id']
+              cur.execute("DELETE FROM ai.search_run WHERE position_id=%s", (position_id,))
+              conn.commit()
+          req = urllib.request.Request(
+              f"{os.environ['BRIDGE_API_BASE_URL']}/v1/ai/positions/{position_id}/process",
+              data=b'{}',
+              method='POST',
+              headers={'Content-Type':'application/json','Authorization':f"Bearer {os.environ['BRIDGE_API_TOKEN']}"},
+          )
+          with urllib.request.urlopen(req, timeout=60) as response:
+              payload = json.loads(response.read().decode('utf-8'))
+          assert payload['status'] == 'QUEUED', payload
+          assert payload['queued'] is True, payload
+          print(json.dumps({'orchestrator':'PASS','position_id':str(position_id),'search_run_id':str(payload['search_run']['search_run_id'])}))
+          PY
+
       - name: Execute provider-neutral worker
         env:
           BRIDGE_WORKER_ONCE: 'true'
