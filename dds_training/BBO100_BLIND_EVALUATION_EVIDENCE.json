@@ -1,0 +1,103 @@
+{
+  "aggregate": {
+    "by_family": {
+      "declarer_continuation": {
+        "assistant_better_than_recorded": 0,
+        "assistant_equal_to_recorded": 7,
+        "assistant_worse_than_recorded": 0,
+        "exact_match_rate": 1.0,
+        "exact_match_recorded": 7,
+        "max_dd_regret": 0,
+        "mean_dd_regret": 0.0,
+        "mean_recorded_dd_regret": 0.0,
+        "median_dd_regret": 0,
+        "regret_2plus": 0,
+        "tasks": 7,
+        "zero_dd_regret": 7,
+        "zero_dd_regret_rate": 1.0
+      },
+      "defense_continuation": {
+        "assistant_better_than_recorded": 0,
+        "assistant_equal_to_recorded": 6,
+        "assistant_worse_than_recorded": 0,
+        "exact_match_rate": 1.0,
+        "exact_match_recorded": 6,
+        "max_dd_regret": 0,
+        "mean_dd_regret": 0.0,
+        "mean_recorded_dd_regret": 0.0,
+        "median_dd_regret": 0.0,
+        "regret_2plus": 0,
+        "tasks": 6,
+        "zero_dd_regret": 6,
+        "zero_dd_regret_rate": 1.0
+      },
+      "opening_lead": {
+        "assistant_better_than_recorded": 1,
+        "assistant_equal_to_recorded": 5,
+        "assistant_worse_than_recorded": 1,
+        "exact_match_rate": 0.2857142857142857,
+        "exact_match_recorded": 2,
+        "max_dd_regret": 2,
+        "mean_dd_regret": 0.5714285714285714,
+        "mean_recorded_dd_regret": 0.5714285714285714,
+        "median_dd_regret": 0,
+        "regret_2plus": 1,
+        "tasks": 7,
+        "zero_dd_regret": 4,
+        "zero_dd_regret_rate": 0.5714285714285714
+      }
+    },
+    "overall": {
+      "assistant_better_than_recorded": 1,
+      "assistant_equal_to_recorded": 18,
+      "assistant_worse_than_recorded": 1,
+      "exact_match_rate": 0.75,
+      "exact_match_recorded": 15,
+      "max_dd_regret": 2,
+      "mean_dd_regret": 0.2,
+      "mean_recorded_dd_regret": 0.2,
+      "median_dd_regret": 0.0,
+      "regret_2plus": 1,
+      "tasks": 20,
+      "zero_dd_regret": 17,
+      "zero_dd_regret_rate": 0.85
+    }
+  },
+  "blind_task_packet_sha256": "4ee99c708bb997f28101c03367ef74eaf8c7242a413d1869685723d7b6b46c0f",
+  "dds": {
+    "oracle_opened_only_after_prediction_commit": true,
+    "solver_context_reused": true,
+    "source_commit_pin": "37c8a79f4c67c55d1a309ccb66dd00cb58af464a",
+    "version_pin": "3.0.0"
+  },
+  "durable_outputs": {
+    "drive_json_id": "1Kllgriz9SFUyJX3ew1TmEfN59QkXRL_J",
+    "drive_report_id": "1sAOO-1gaFaNgsbgfNIrvHigOChkrabco",
+    "full_json_bytes": 24037,
+    "full_json_sha256": "fcc65f14cdc22dc8936b0dad5bcbd9c9df44fb9088edc6badcd03dd0f5a5640c",
+    "report_bytes": 3464,
+    "report_sha256": "aec0abc8e6ce11fdf0bf0a5c7e1f3182f00eba903871067a91012a9af523d92c"
+  },
+  "holdout_manifest_sha256": "0c500c0d323a855f55664e08bb3af4159d792e7e307a1bef0012e2bd5021b8cc",
+  "holdout_raw_sha256": "1d6e02dffab607011090a4de1908af520aa5d359cfab04619119de5ca10e87f7",
+  "interpretation": {
+    "bbo_gib_bidding_is_school_standard": false,
+    "canon_write": "DENY",
+    "dds_is_double_dummy_only": true,
+    "equal_optimal_moves_preserved": true,
+    "methodology_write": "DENY",
+    "recorded_bbo_action_is_truth": false,
+    "sample_size_warning": "N=20; descriptive transfer evidence only",
+    "single_dummy_correctness_proven": false,
+    "student_profile_write": "DENY"
+  },
+  "model": "GPT-5.6 Sol",
+  "ordered_holdout_id_sha256": "4d0e38f51fb15b77dda061eac4bc86e06f7e61a56a7dbb54b510cf1060a63802",
+  "prediction_commit": "2426531ab1cc02bf94ee6a4178a56a6874abb1aa",
+  "prediction_gate_commit": "5a6c0f015effc7a9a916591f52da100110fa7beb",
+  "schema": "bbo100-blind-dds-evidence-v1",
+  "source_archive_sha256": "18bcbc66e4aa79bb44907dd598046a5d755c3791e70e2497e82e3fae89d000dc",
+  "source_run_id": 32392200131,
+  "status": "BLIND_EVALUATION_COMPLETE",
+  "task_count": 20
+}
