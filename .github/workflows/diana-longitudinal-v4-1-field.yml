@@ -29,7 +29,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install deterministic semantic-only dependencies
-        run: python -m pip install --disable-pip-version-check requests PyMuPDF
+        run: python -m pip install --disable-pip-version-check requests PyMuPDF google-auth google-auth-oauthlib
       - name: Unit preflight
         run: |
           python -m py_compile diana_longitudinal_quality_v2.py diana_longitudinal_quality_v3.py diana_longitudinal_quality_v4.py diana_longitudinal_quality_v4_1.py
