@@ -2,6 +2,7 @@ from decimal import Decimal
 
 from bridge_school_api.ai_decision import (
     POLICY_MIN_MARGIN,
+    POLICY_SINGLE_MIN_SCORE,
     _forced_choice,
     _metric_for_scoring,
     _policy_choice,
@@ -16,14 +17,7 @@ def test_scoring_metric_is_explicit():
 
 
 def test_search_requires_two_real_evaluations():
-    one = [{
-        "search_run_id": "r1",
-        "action": "2H",
-        "imp_ev": 1.2,
-        "robustness": 0.8,
-        "sample_quality": 0.9,
-        "effective_sample_size": 100,
-    }]
+    one = [{"search_run_id": "r1", "action": "2H", "imp_ev": 1.2, "robustness": 0.8, "sample_quality": 0.9, "effective_sample_size": 100}]
     assert _search_choice(one, "imps") is None
 
 
@@ -52,22 +46,24 @@ def test_policy_requires_margin_and_allowed_candidate():
         {"candidate_id": "c1", "action": "2H", "legal": True, "system_compatible": True, "hard_rule_status": None},
         {"candidate_id": "c2", "action": "3H", "legal": True, "system_compatible": True, "hard_rule_status": None},
     ]
-    weak = {
-        "policy_run_id": "p1", "model_key": "test", "model_version": "v1",
-        "distribution_json": {"2H": 0.52, "3H": 0.48}, "top_action": "2H",
-        "margin": str(POLICY_MIN_MARGIN - Decimal("0.01")), "entropy": None,
-    }
+    weak = {"policy_run_id": "p1", "model_key": "test", "model_version": "v1", "distribution_json": {"2H": 0.52, "3H": 0.48}, "top_action": "2H", "margin": str(POLICY_MIN_MARGIN - Decimal("0.01")), "entropy": None}
     strong = dict(weak, margin=str(POLICY_MIN_MARGIN), distribution_json={"2H": 0.70, "3H": 0.30})
     assert _policy_choice(weak, candidates) is None
     assert _policy_choice(strong, candidates)["chosen_action"] == "2H"
 
 
+def test_single_policy_candidate_requires_explicit_high_score():
+    candidates = [{"candidate_id": "c1", "action": "1S", "legal": True, "system_compatible": None, "hard_rule_status": None}]
+    weak = {"policy_run_id": "p1", "model_key": "ben", "model_version": "v", "distribution_json": {"1S": float(POLICY_SINGLE_MIN_SCORE - Decimal("0.01"))}, "top_action": "1S", "margin": None, "entropy": None}
+    strong = dict(weak, distribution_json={"1S": float(POLICY_SINGLE_MIN_SCORE)})
+    assert _policy_choice(weak, candidates) is None
+    choice = _policy_choice(strong, candidates)
+    assert choice["chosen_action"] == "1S"
+    assert choice["evidence"][0]["gate"] == "SINGLE_SCORE"
+
+
 def test_policy_cannot_choose_vetoed_candidate():
-    policy = {
-        "policy_run_id": "p1", "model_key": "test", "model_version": "v1",
-        "distribution_json": {"2H": 0.9, "PASS": 0.1}, "top_action": "2H",
-        "margin": 0.8, "entropy": None,
-    }
+    policy = {"policy_run_id": "p1", "model_key": "test", "model_version": "v1", "distribution_json": {"2H": 0.9, "PASS": 0.1}, "top_action": "2H", "margin": 0.8, "entropy": None}
     candidates = [
         {"candidate_id": "c1", "action": "2H", "legal": True, "system_compatible": True, "hard_rule_status": "VETO"},
         {"candidate_id": "c2", "action": "PASS", "legal": True, "system_compatible": True, "hard_rule_status": None},
