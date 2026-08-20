@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from database.run_checkpoint_persistence import ingestion_run_id
+from database.run_checkpoint_persistence import VALID_STATES, ingestion_run_id
 from database.source_identity_persistence import (
     drive_source_id,
     drive_source_native_key,
@@ -12,6 +12,10 @@ from transcript_stage_checkpoint_v1 import _checkpoint_name, _valid_segments
 def test_ingestion_run_id_matches_video_persistence_contract():
     job_id = "0123456789abcdef0123456789abcdef"
     assert ingestion_run_id(job_id) == _stable_uuid("ingestion-run", job_id)
+
+
+def test_checkpoint_state_contract_matches_database_constraint():
+    assert VALID_STATES == {"started", "progress", "completed", "failed", "cancelled"}
 
 
 def test_drive_source_id_matches_video_persistence_contract():
