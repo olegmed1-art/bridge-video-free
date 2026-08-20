@@ -1,0 +1,157 @@
+name: BBO100 blind HOLDOUT DDS evaluation
+
+on:
+  push:
+    branches:
+      - bbo100-blind-eval-20260820
+    paths:
+      - 'dds_training/BBO100_BLIND_GATE_V1.json'
+      - 'dds_training/BBO100_BLIND_PREDICTIONS_GPT56_SOL_V1.json'
+      - 'dds_training/bbo100_blind_evaluate.py'
+      - '.github/workflows/bbo100-blind-holdout-eval.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bbo100-blind-holdout-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  evaluate-after-lock:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      BBO100_ARCHIVE_DRIVE_ID: 1JM4VzdXJnFwkTKkPJ4XK_5NtDM9jYq8j
+      BBO100_ARCHIVE_SHA256: 18bcbc66e4aa79bb44907dd598046a5d755c3791e70e2497e82e3fae89d000dc
+      PREDICTION_COMMIT: 2426531ab1cc02bf94ee6a4178a56a6874abb1aa
+    steps:
+      - name: Checkout locked candidate branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Verify prediction lock is an ancestor
+        shell: bash
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor "$PREDICTION_COMMIT" HEAD
+          test "$(git show "$PREDICTION_COMMIT:dds_training/BBO100_BLIND_PREDICTIONS_GPT56_SOL_V1.json" | python -c 'import json,sys; d=json.load(sys.stdin); print(d["task_count"], d["dds_used"], d["hidden_hands_inspected"], d["recorded_actions_inspected"])')" = "20 False False False"
+
+      - name: Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+
+      - name: Install Drive auth dependency
+        run: python -m pip install --disable-pip-version-check 'requests==2.32.5' 'google-auth==2.40.3'
+
+      - name: Restore verified DDS3 wheel and Bazel state
+        id: dds-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            dds_training/.wheel-cache/dds3
+            ~/.cache/bazel-dds3
+          key: dds3-wheel-v5-${{ runner.os }}-py314-${{ hashFiles('dds_training/bootstrap_linux.sh') }}
+          restore-keys: |
+            dds3-wheel-v5-${{ runner.os }}-py314-
+
+      - name: Bootstrap pinned DDS3 v3.0.0
+        run: DDS_RUN_PREFLIGHT=0 bash dds_training/bootstrap_linux.sh
+
+      - name: Golden DDS preflight before opening HOLDOUT
+        working-directory: dds_training
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          python preflight.py --quick > /tmp/bbo100-dds-preflight.json
+
+      - name: Download exact sealed archive from private Drive
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          import requests
+          from run_drive_3_1_free_oidc import user_oauth_token
+
+          token = user_oauth_token()
+          if not token:
+              raise SystemExit('BLOCKED_ACCESS: Google Drive OAuth unavailable')
+          file_id = os.environ['BBO100_ARCHIVE_DRIVE_ID']
+          expected = os.environ['BBO100_ARCHIVE_SHA256']
+          out = Path('/tmp/BBO100_public_archive_probe_2026-08-19.zip')
+          with requests.get(
+              f'https://www.googleapis.com/drive/v3/files/{file_id}?alt=media',
+              headers={'Authorization': f'Bearer {token}'},
+              stream=True,
+              timeout=120,
+          ) as response:
+              response.raise_for_status()
+              with out.open('wb') as handle:
+                  for block in response.iter_content(1024 * 1024):
+                      if block:
+                          handle.write(block)
+          actual = hashlib.sha256(out.read_bytes()).hexdigest()
+          if actual != expected:
+              raise SystemExit(f'ARCHIVE_SHA_MISMATCH:{actual}')
+          print(json.dumps({'archive_verified': True, 'bytes': out.stat().st_size, 'sha256': actual}, sort_keys=True))
+          PY
+
+      - name: Open HOLDOUT and evaluate locked predictions with DDS
+        working-directory: dds_training
+        env:
+          DDS_TRAINING_CONFIRM: YES
+        run: |
+          set -euo pipefail
+          source .venv/bin/activate
+          python bbo100_blind_evaluate.py \
+            --archive /tmp/BBO100_public_archive_probe_2026-08-19.zip \
+            --predictions BBO100_BLIND_PREDICTIONS_GPT56_SOL_V1.json \
+            --out-json /tmp/BBO100_BLIND_EVALUATION_GPT56_SOL_V1.json \
+            --out-md /tmp/BBO100_BLIND_EVALUATION_GPT56_SOL_V1.md \
+            | tee /tmp/bbo100-blind-eval-summary.json
+
+      - name: Verify output contains no raw deals
+        run: |
+          set -euo pipefail
+          ! grep -q 'source_url' /tmp/BBO100_BLIND_EVALUATION_GPT56_SOL_V1.json
+          ! grep -q 'HOLDOUT_20_DO_NOT_DDS' /tmp/BBO100_BLIND_EVALUATION_GPT56_SOL_V1.md
+          python - <<'PY'
+          import json
+          d=json.load(open('/tmp/BBO100_BLIND_EVALUATION_GPT56_SOL_V1.json',encoding='utf-8'))
+          assert d['status']=='BLIND_EVALUATION_COMPLETE'
+          assert d['task_count']==20
+          assert d['dds']['oracle_opened_only_after_prediction_commit'] is True
+          assert d['interpretation']['canon_write']=='DENY'
+          assert d['interpretation']['methodology_write']=='DENY'
+          assert d['interpretation']['student_profile_write']=='DENY'
+          print('BBO100_BLIND_EVIDENCE_GATE: PASS')
+          PY
+
+      - name: Upload post-blind evidence only
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: bbo100-blind-evaluation-${{ github.run_id }}
+          path: |
+            /tmp/BBO100_BLIND_EVALUATION_GPT56_SOL_V1.json
+            /tmp/BBO100_BLIND_EVALUATION_GPT56_SOL_V1.md
+            /tmp/bbo100-blind-eval-summary.json
+            /tmp/bbo100-dds-preflight.json
+            dds_training/.wheel-cache/dds3/build_provenance.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Save rebuilt verified DDS3 wheel cache
+        if: always() && steps.dds-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            dds_training/.wheel-cache/dds3
+            ~/.cache/bazel-dds3
+          key: dds3-wheel-v5-${{ runner.os }}-py314-${{ hashFiles('dds_training/bootstrap_linux.sh') }}-${{ github.run_id }}
