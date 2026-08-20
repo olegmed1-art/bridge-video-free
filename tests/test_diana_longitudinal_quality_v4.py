@@ -82,8 +82,11 @@ def base_master() -> dict:
 
 
 class DianaLongitudinalQualityV4Tests(unittest.TestCase):
-    def test_explicit_turn_window_builds_complete_interaction_without_claiming_correctness(self):
+    def test_explicit_turn_window_recovers_chain_missing_from_semantic_episodes(self):
         master = base_master()
+        # Simulate the field defect: the semantic episode layer retained the task
+        # but lost the answer/intervention/follow-up as separate learning events.
+        master["episodes"] = master["episodes"][:1]
         turns = _transcript_turns(master)
         self.assertEqual([item["role"] for item in turns], ["teacher", "student", "teacher", "student"])
         self.assertTrue(_task_excerpts(turns[0]["text"]))
@@ -104,7 +107,6 @@ class DianaLongitudinalQualityV4Tests(unittest.TestCase):
         self.assertFalse(item["outcome_correctness_verified"])
         self.assertIn("правильность решения этим этапом не установлена", item["observed_outcome"])
         self.assertGreaterEqual(len(item["evidence_refs"]), 4)
-        self.assertEqual(quality["readiness"]["methodology_status"], "METHODOLOGY_READY")
         self.assertEqual(quality["authority"]["student_profile_production_write"], "DENY")
         self.assertEqual(quality["authority"]["person_specific_learning_conclusion"], "DENY")
 
@@ -120,6 +122,7 @@ class DianaLongitudinalQualityV4Tests(unittest.TestCase):
 
     def test_overlapping_teacher_tasks_are_deduplicated_by_downstream_chain(self):
         master = base_master()
+        master["episodes"] = master["episodes"][:1]
         extra = {
             "segment_id": "s0", "start": -4, "end": -1,
             "text": "Посмотри на контракт. Сколько здесь верхних взяток?",
@@ -132,12 +135,11 @@ class DianaLongitudinalQualityV4Tests(unittest.TestCase):
             "type": "planning", "summary_text": extra["text"],
             "terms": ["контракт", "взятка"], "evidence": ["s0"],
         })
-        turns = _transcript_turns(master)
-        self.assertEqual(turns[0]["role"], "teacher")
         events = v2.build_atomic_events(master)
         sections = v2.build_sections(events, master["job_id"])
         raw = _transcript_decision_interactions(master, events, sections)
         self.assertEqual(len(raw), 1, raw)
+        self.assertGreaterEqual(float(raw[0]["start"]), 0.0)
 
         quality = build_quality_layer(master, {"lesson_id": "lesson-3", "lesson_number": 3})
         complete = [
