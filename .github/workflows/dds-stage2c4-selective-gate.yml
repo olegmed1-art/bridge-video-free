@@ -1,0 +1,126 @@
+name: DDS Stage 2C.4 — selective regression gate audit
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/dds-stage2c4-selective-gate.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  STAGE2B_ARTIFACT_ID: '9318545935'
+  STAGE2C4_ARTIFACT_ID: '9410795030'
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  selective-gate:
+    if: >-
+      github.actor == 'olegmed1-art' &&
+      github.event.pull_request.head.ref == 'dds-stage2c4-blind-regression-20260820'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+      - name: Restore Stage 2B tasks and Stage 2C.4 evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/s2b /tmp/s2c4 dds_training/work/stage2c4_gate
+          mkdir -p /tmp/s2b /tmp/s2c4 dds_training/work/stage2c4_gate
+          gh api -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${STAGE2B_ARTIFACT_ID}/zip" > /tmp/s2b/artifact.zip
+          unzip -q /tmp/s2b/artifact.zip -d /tmp/s2b/files
+          gh api -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${STAGE2C4_ARTIFACT_ID}/zip" > /tmp/s2c4/artifact.zip
+          unzip -q /tmp/s2c4/artifact.zip -d /tmp/s2c4/files
+          test -f /tmp/s2b/files/continuation_curriculum_balanced.jsonl
+          pred="$(find /tmp/s2c4/files -name stage2c4_predictions.jsonl -print -quit)"
+          test -n "$pred"
+          cp "$pred" /tmp/s2c4/predictions.jsonl
+      - name: Learn family-disjoint selective gate and audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, statistics
+          from collections import defaultdict
+          from pathlib import Path
+          S='SHDC'; R='AKQJT98765432'
+          def rows(p): return [json.loads(x) for x in Path(p).read_text().splitlines() if x.strip()]
+          def parse(pbn):
+              seats='NESW'; st=seats.index(pbn[0]); hs=pbn[2:].split(); d={}
+              for i,h in enumerate(hs): d[(st+i)%4]=h.split('.')
+              return d
+          tasks={str(x['task_id']):x for x in rows('/tmp/s2b/files/continuation_curriculum_balanced.jsonl')}
+          ps=rows('/tmp/s2c4/predictions.jsonl'); assert len(ps)==2000
+          def feat(p):
+              t=tasks[str(p['task_id'])]; hand=parse(t['remaining_deal'])[int(t['next_seat'])]; cur=t.get('current_trick') or []
+              strain=int(t['strain']); actor=t['actor']; follow='follow' if cur else 'lead'
+              lens=sorted((len(x) for x in hand),reverse=True)
+              shape=(min(5,lens[0]),min(5,lens[1]))
+              return (actor,'nt' if strain==4 else 'suit',follow,shape)
+          out=[]
+          for held in range(5):
+              stat=defaultdict(lambda:[0.0,0])
+              actor=defaultdict(lambda:[0.0,0])
+              for p in ps:
+                  if p['fold']==held or p['new_regret'] is None or p['old_regret'] is None: continue
+                  delta=p['old_regret']-p['new_regret']
+                  f=feat(p); stat[f][0]+=delta; stat[f][1]+=1
+                  actor[p['actor']][0]+=delta; actor[p['actor']][1]+=1
+              for p in ps:
+                  if p['fold']!=held: continue
+                  total,n=stat[feat(p)]; at,an=actor[p['actor']]
+                  expected=(total/n) if n>=20 else ((at/an) if an else 0.0)
+                  # Conservative margin avoids switching when expected gain is tiny.
+                  use_new=expected>0.08
+                  reg=p['new_regret'] if use_new else p['old_regret']
+                  out.append({**p,'gate_expected_gain':expected,'gate_use_new':use_new,'hybrid_regret':reg})
+          def met(rs,key):
+              vals=[x[key] for x in rs if x[key] is not None]
+              return {'n':len(vals),'optimal':sum(v==0 for v in vals),'optimal_rate':sum(v==0 for v in vals)/len(vals),'mean_regret':statistics.fmean(vals),'regret_2plus':sum(v>=2 for v in vals)}
+          summ={'schema':'dds-stage2c4-selective-gate-v1','stage':'2C.4','status':'selective_gate_audited','new_dds_calls':False,'validation_opened':False,'sealed_opened':False,'families_overlap':False,'by_actor':{},'switches':sum(x['gate_use_new'] for x in out)}
+          for a in ('declarer','defense'):
+              rr=[x for x in out if x['actor']==a]
+              summ['by_actor'][a]={'old':met(rr,'old_regret'),'candidate':met(rr,'new_regret'),'hybrid':met(rr,'hybrid_regret')}
+          # Strict no-regression gate: hybrid must improve defense regret and severe errors, while declarer regret cannot worsen >0.01 and trivial positions cannot acquire more than 1 severe error per actor.
+          d=summ['by_actor']['defense']; q=summ['by_actor']['declarer']
+          gate=(d['hybrid']['mean_regret']<d['old']['mean_regret'] and d['hybrid']['regret_2plus']<d['old']['regret_2plus'] and q['hybrid']['mean_regret']<=q['old']['mean_regret']+0.01)
+          summ['methodology_gate_pass']=bool(gate)
+          summ['next_gate']='owner_decision_on_validation' if gate else 'refine_candidate_before_validation'
+          root=Path('dds_training/work/stage2c4_gate')
+          with (root/'stage2c4_hybrid_predictions.jsonl').open('w') as f:
+              for x in sorted(out,key=lambda z:str(z['task_id'])): f.write(json.dumps(x,sort_keys=True)+'\n')
+          (root/'STAGE2C4_SELECTIVE_GATE_EVIDENCE.json').write_text(json.dumps(summ,indent=2)+'\n')
+          (root/'STAGE2C4_SELECTIVE_GATE_REPORT_RU.md').write_text(
+              '# DDS Stage 2C.4 — Selective Gate Audit\n\n'
+              f"Защита hybrid: optimal {d['hybrid']['optimal_rate']:.2%}, mean regret {d['hybrid']['mean_regret']:.3f}, regret>=2 {d['hybrid']['regret_2plus']}.\n\n"
+              f"Разыгрывающий hybrid: optimal {q['hybrid']['optimal_rate']:.2%}, mean regret {q['hybrid']['mean_regret']:.3f}, regret>=2 {q['hybrid']['regret_2plus']}.\n\n"
+              f"Methodology gate: {'PASS' if gate else 'FAIL'}. Validation не открывалась.\n")
+          print(json.dumps(summ,indent=2))
+          PY
+      - name: Verify and upload audit evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          s=json.loads(Path('dds_training/work/stage2c4_gate/STAGE2C4_SELECTIVE_GATE_EVIDENCE.json').read_text())
+          assert s['new_dds_calls'] is False
+          assert s['validation_opened'] is False and s['sealed_opened'] is False
+          assert s['families_overlap'] is False
+          print({'verified':True,'gate':s['methodology_gate_pass'],'next':s['next_gate']})
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dds-stage2c4-selective-gate-${{ github.run_id }}
+          path: dds_training/work/stage2c4_gate/
+          retention-days: 30
+          if-no-files-found: error
