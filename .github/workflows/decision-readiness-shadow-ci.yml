@@ -1,0 +1,43 @@
+name: META Decision Readiness Shadow CI
+
+on:
+  pull_request:
+    paths:
+      - 'tools/decision_readiness_shadow.py'
+      - 'tests/test_decision_readiness_shadow.py'
+      - '.github/workflows/decision-readiness-shadow-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/decision_readiness_shadow.py'
+      - 'tests/test_decision_readiness_shadow.py'
+      - '.github/workflows/decision-readiness-shadow-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  readiness-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Compile candidate
+        run: python -m py_compile tools/decision_readiness_shadow.py tests/test_decision_readiness_shadow.py
+      - name: Run fail-closed readiness suite
+        run: PYTHONPATH=. python tests/test_decision_readiness_shadow.py
+      - name: Verify readiness audit never emits correctness labels
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('tools/decision_readiness_shadow.py').read_text(encoding='utf-8')
+          assert '"correctness_label": None' in text
+          print('NO_AUTONOMOUS_CORRECTNESS_LABEL: PASS')
+          PY
