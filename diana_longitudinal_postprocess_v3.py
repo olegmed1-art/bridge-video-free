@@ -1,48 +1,53 @@
 #!/usr/bin/env python3
-"""Run the existing longitudinal Drive postprocessor with quality-v3 learning logic.
+"""Run the mature Drive postprocessor with quality-v4 semantic refinement.
 
-The outer v2 artifact envelope is intentionally kept for backward compatibility
-with current Drive/Neon consumers.  The embedded quality layer, method version,
-schema version and staging candidates are upgraded to v3.
+The filename stays ``postprocess_v3`` for workflow compatibility.  The outer
+artifact envelope is reused, while the embedded quality schema/method are v4.
+No media, ASR or identity evidence is reprocessed by this wrapper.
 """
 from __future__ import annotations
 
 import diana_longitudinal_postprocess as base
-from diana_longitudinal_quality_v3 import (
+from diana_longitudinal_quality_v4 import (
     QUALITY_METHOD_VERSION,
     QUALITY_SCHEMA_VERSION,
     build_quality_layer,
 )
 
-# Reuse the mature Drive/Neon routing code, but replace only the semantic quality
-# layer.  This keeps source-read-only, FREE and staging-only gates unchanged.
+# Reuse mature Drive/Neon routing and replace only the semantic quality layer.
+# Source-read-only, FREE, identity and staging-only authority gates are preserved.
 base.build_quality_layer = build_quality_layer
 base.QUALITY_METHOD_VERSION = QUALITY_METHOD_VERSION
 base.QUALITY_SCHEMA_VERSION = QUALITY_SCHEMA_VERSION
-base.SCHEMA_VERSION = 3
+base.SCHEMA_VERSION = 4
 
 _legacy_summary_markdown = base._summary_markdown
 
 
-def _summary_markdown_v3(payload):
+def _summary_markdown_v4(payload):
     text = _legacy_summary_markdown(payload)
     text = text.replace(
         "# Диана — продольное извлечение v2",
-        "# Диана — продольное извлечение v3",
+        "# Диана — продольное извлечение v4",
     )
     marker = "## Quality-first counts"
     dynamic_note = "\n".join([
-        "## Dynamic learning v3",
+        "## Evidence-linked learning v4",
         "",
-        "- Skill-state, hypothesis, counterevidence and next-probe objects are candidate-only.",
+        "- Complete interactions require observed task → student action → teacher intervention → substantive student follow-up.",
+        "- A follow-up never proves correctness by itself; correctness remains separately evidence-gated.",
+        "- Acoustic speaker coverage and semantic role fallback are reported separately.",
+        "- Structured board fragments merge only under an exact explicit board identity; board number/time/topic alone never merge.",
+        "- Knowledge candidates are review-only; the legacy word 'promotable' is a deprecated compatibility alias.",
         "- Stable skill state is forbidden from one lesson alone.",
-        "- Person-specific conclusions remain forbidden without operational identity mapping.",
+        "- Person-specific conclusions remain forbidden without a separate operational r29 identity mapping.",
+        "- This is a semantic-only rebuild; raw ASR and source media remain unchanged.",
         "",
     ])
     return text.replace(marker, dynamic_note + marker)
 
 
-base._summary_markdown = _summary_markdown_v3
+base._summary_markdown = _summary_markdown_v4
 
 
 if __name__ == "__main__":
