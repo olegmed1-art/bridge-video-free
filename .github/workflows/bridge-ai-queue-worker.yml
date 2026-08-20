@@ -2,6 +2,14 @@ name: Bridge AI Queue Worker
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'bridge_ai_compute_worker.py'
+      - 'bridge_school_api/ai_orchestrator.py'
+      - 'bridge_school_api/ai_policy.py'
+      - 'bridge_school_api/ai_decision.py'
+      - '.github/workflows/bridge-ai-queue-worker.yml'
   schedule:
     - cron: '*/15 * * * *'
 
