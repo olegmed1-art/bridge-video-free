@@ -1,12 +1,11 @@
 """Standalone Hybrid Cloud compute worker for Bridge Decision Engine.
 
 Provider-neutral worker. It claims queued search jobs from the Bridge School API,
-invokes configured external engines, records teacher/policy evidence separately from
-search evidence, and posts only explicit simulation metrics as candidate evaluations.
+invokes configured external engines, stores policy/teacher evidence separately from
+search evidence, and posts only explicit simulation metrics as search evaluation.
 
-The worker never manufactures bridge EV. If an engine returns only policy scores,
-those are preserved as teacher evidence and the heavy search run is marked FAILED so
-it cannot masquerade as a completed search evaluation.
+The worker never manufactures bridge EV. Policy scores may produce POLICY_ONLY
+finalization through the finalizer, but are never relabeled as search EV.
 """
 from __future__ import annotations
 
@@ -51,15 +50,22 @@ def request_json(url: str, *, token: str | None = None, method: str = "GET", pay
     if token:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req, timeout=120) as resp:
+    with urllib.request.urlopen(req, timeout=180) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def _ben_context(auction: str) -> str:
-    """Normalize common stored auction text to BEN's compact 2-char ctx encoding."""
-    text = (auction or "").replace("–", " ").replace("—", " ").replace("-", " ")
-    tokens = [t.strip().upper() for t in text.split() if t.strip()]
-    mapping = {"PASS": "--", "P": "--", "X": "Db", "DBL": "Db", "XX": "Rd", "RDBL": "Rd"}
+def _ben_context(auction: Any) -> str:
+    """Normalize stored auction data to BEN's compact 2-character ctx encoding."""
+    if isinstance(auction, (list, tuple)):
+        tokens = [str(item).strip().upper() for item in auction if str(item).strip()]
+    else:
+        text = str(auction or "").replace("–", " ").replace("—", " ")
+        tokens = [t.strip().upper() for t in text.split() if t.strip()]
+    mapping = {
+        "PASS": "--", "P": "--", "--": "--",
+        "X": "Db", "DBL": "Db", "DOUBLE": "Db",
+        "XX": "Rd", "RDBL": "Rd", "REDOUBLE": "Rd",
+    }
     return "".join(mapping.get(token, token.replace("NT", "N")) for token in tokens)
 
 
@@ -68,7 +74,9 @@ def ben_bid(config: Config, position: dict[str, Any]) -> dict[str, Any] | None:
     if not config.ben_url:
         return None
     hand = position.get("hand_pbn")
-    auction = position.get("auction") or ""
+    auction = position.get("auction_json")
+    if auction is None:
+        auction = position.get("auction") or []
     seat = position.get("seat")
     dealer = position.get("dealer")
     vul = position.get("vulnerability")
@@ -112,7 +120,8 @@ def teacher_payload(engine_key: str, engine_result: dict[str, Any]) -> dict[str,
         score = item.get("insta_score")
         if score is None:
             score = item.get("score")
-        scores[action] = score
+        if score is not None:
+            scores[action] = score
     return {
         "teacher_key": engine_key,
         "teacher_version": str(engine_result.get("version") or engine_result.get("model_version") or "") or None,
@@ -122,6 +131,19 @@ def teacher_payload(engine_key: str, engine_result: dict[str, Any]) -> dict[str,
         "candidate_scores": scores,
         "explanation": None,
         "raw_output": engine_result,
+    }
+
+
+def policy_payload(engine_key: str, teacher: dict[str, Any]) -> dict[str, Any] | None:
+    scores = teacher.get("candidate_scores") or {}
+    if not scores:
+        return None
+    return {
+        "model_key": engine_key,
+        "model_version": teacher.get("teacher_version") or "NOT_SPECIFIED",
+        "distribution": scores,
+        "top_action": teacher.get("action"),
+        "entropy": None,
     }
 
 
@@ -138,7 +160,6 @@ def search_evaluations(job: dict[str, Any], engine_key: str, engine_result: dict
         expected_score = item.get("expected_score_sd")
         expected_tricks = item.get("expected_tricks_sd")
         p_make = item.get("p_make_contract")
-        # No explicit simulation evidence => this is teacher/policy evidence only.
         if expected_score is None and expected_tricks is None and p_make is None:
             continue
         out.append({
@@ -172,24 +193,37 @@ def process_one(config: Config) -> bool:
     position_id = run["position_id"]
     try:
         engine_key, result = choose_engine(config, claim)
-        # Always preserve the engine's recommendation as teacher evidence.
+        teacher = teacher_payload(engine_key, result)
         request_json(
             f"{config.api_base}/v1/ai/positions/{position_id}/teacher-evidence",
             token=config.api_token,
             method="POST",
-            payload=teacher_payload(engine_key, result),
+            payload=teacher,
         )
-        evaluations = search_evaluations(claim, engine_key, result)
+
+        eval_job = dict(claim)
+        policy = policy_payload(engine_key, teacher)
+        if policy is not None:
+            policy_result = request_json(
+                f"{config.api_base}/v1/ai/positions/{position_id}/policy-evidence",
+                token=config.api_token,
+                method="POST",
+                payload=policy,
+            )
+            eval_job["candidates"] = policy_result.get("candidates") or claim.get("candidates") or []
+
+        evaluations = search_evaluations(eval_job, engine_key, result)
         if evaluations:
+            samples = result.get("samples") or []
             completion = {
                 "status": "COMPLETED",
-                "samples_generated": len(result.get("samples") or []) or None,
-                "samples_accepted": len(result.get("samples") or []) or None,
+                "samples_generated": len(samples) or None,
+                "samples_accepted": len(samples) or None,
                 "evaluations": evaluations,
             }
         else:
             print(
-                f"search_run {run_id}: engine produced teacher evidence but no explicit simulation metrics",
+                f"search_run {run_id}: policy evidence recorded; no explicit simulation metrics",
                 file=sys.stderr,
             )
             completion = {"status": "FAILED", "evaluations": []}
