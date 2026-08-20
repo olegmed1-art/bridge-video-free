@@ -28,3 +28,36 @@ def test_no_engine_fails_closed():
         pass
     else:
         raise AssertionError("worker fabricated a result without an engine")
+
+
+def test_ben_context_normalization():
+    assert worker._ben_context("1H – 1S") == "1H1S"
+    assert worker._ben_context("1NT PASS 2C X") == "1N--2CDb"
+
+
+def test_policy_score_is_not_promoted_to_search_ev():
+    job = {"candidates": [{"candidate_id": "c1", "action": "2H"}]}
+    result = {"bid": "2H", "candidates": [{"call": "2H", "insta_score": 0.61}]}
+    assert worker.search_evaluations(job, "ben", result) == []
+    teacher = worker.teacher_payload("ben", result)
+    assert teacher["action"] == "2H"
+    assert teacher["candidate_scores"]["2H"] == 0.61
+
+
+def test_explicit_ben_simulation_metrics_become_search_evidence():
+    job = {"candidates": [{"candidate_id": "c1", "action": "2H"}]}
+    result = {
+        "bid": "2H",
+        "candidates": [{
+            "call": "2H",
+            "insta_score": 0.61,
+            "expected_score_sd": 118,
+            "expected_tricks_sd": 8.4,
+            "p_make_contract": 0.73,
+        }],
+    }
+    evaluations = worker.search_evaluations(job, "ben", result)
+    assert len(evaluations) == 1
+    assert evaluations[0]["raw_score_ev"] == 118
+    assert evaluations[0]["make_probability"] == 0.73
+    assert evaluations[0]["metrics_json"]["evidence_class"] == "BEN_SIMULATION"
