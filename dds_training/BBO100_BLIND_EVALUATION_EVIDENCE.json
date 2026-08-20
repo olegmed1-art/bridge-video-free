@@ -78,6 +78,13 @@
     "report_bytes": 3464,
     "report_sha256": "aec0abc8e6ce11fdf0bf0a5c7e1f3182f00eba903871067a91012a9af523d92c"
   },
+  "execution_provenance": {
+    "evaluator_first_commit": "ac2c6a23694762509555797e6f3f0953d07e45d8",
+    "workflow_last_commit_used_for_successful_run": "039e720001a5e8aebc768423b6a10fafb1bf8e48",
+    "source_run_id": 32392200131,
+    "one_off_evaluator_retained_in_pr_history": true,
+    "one_off_evaluator_promoted_to_stable_runtime": false
+  },
   "holdout_manifest_sha256": "0c500c0d323a855f55664e08bb3af4159d792e7e307a1bef0012e2bd5021b8cc",
   "holdout_raw_sha256": "1d6e02dffab607011090a4de1908af520aa5d359cfab04619119de5ca10e87f7",
   "interpretation": {
