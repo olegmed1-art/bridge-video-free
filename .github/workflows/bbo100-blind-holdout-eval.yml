@@ -23,6 +23,7 @@ jobs:
     timeout-minutes: 45
     env:
       BBO100_ARCHIVE_DRIVE_ID: 1JM4VzdXJnFwkTKkPJ4XK_5NtDM9jYq8j
+      BBO100_EVIDENCE_FOLDER_ID: 1xfM2Ee3wJ3h8GH7h6gkAuHOlouiPU4I9
       BBO100_ARCHIVE_SHA256: 18bcbc66e4aa79bb44907dd598046a5d755c3791e70e2497e82e3fae89d000dc
       PREDICTION_COMMIT: 2426531ab1cc02bf94ee6a4178a56a6874abb1aa
     steps:
@@ -133,6 +134,45 @@ jobs:
           print('BBO100_BLIND_EVIDENCE_GATE: PASS')
           PY
 
+      - name: Copy safe post-blind evidence to private Drive
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          import requests
+          from run_drive_3_1_free_oidc import user_oauth_token
+
+          token=user_oauth_token()
+          if not token:
+              raise SystemExit('BLOCKED_ACCESS: Google Drive OAuth unavailable')
+          folder=os.environ['BBO100_EVIDENCE_FOLDER_ID']
+          run_id=os.environ['GITHUB_RUN_ID']
+          headers={'Authorization': f'Bearer {token}'}
+          uploaded=[]
+          for path,mime in [
+              (Path('/tmp/BBO100_BLIND_EVALUATION_GPT56_SOL_V1.json'),'application/json'),
+              (Path('/tmp/BBO100_BLIND_EVALUATION_GPT56_SOL_V1.md'),'text/markdown'),
+          ]:
+              name=f'{path.stem}_{run_id}{path.suffix}'
+              metadata={'name':name,'parents':[folder]}
+              files={
+                  'metadata':('metadata',json.dumps(metadata),'application/json; charset=UTF-8'),
+                  'file':(name,path.read_bytes(),mime),
+              }
+              r=requests.post(
+                  'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,size,webViewLink',
+                  headers=headers, files=files, timeout=120,
+              )
+              r.raise_for_status()
+              uploaded.append(r.json())
+          receipt={'schema':'bbo100-blind-drive-copy-v1','run_id':run_id,'files':uploaded}
+          Path('/tmp/bbo100-blind-drive-copy.json').write_text(json.dumps(receipt,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
+          print(json.dumps(receipt,ensure_ascii=False,sort_keys=True))
+          PY
+
       - name: Upload post-blind evidence only
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -142,6 +182,7 @@ jobs:
             /tmp/BBO100_BLIND_EVALUATION_GPT56_SOL_V1.json
             /tmp/BBO100_BLIND_EVALUATION_GPT56_SOL_V1.md
             /tmp/bbo100-blind-eval-summary.json
+            /tmp/bbo100-blind-drive-copy.json
             /tmp/bbo100-dds-preflight.json
             dds_training/.wheel-cache/dds3/build_provenance.json
           if-no-files-found: error
