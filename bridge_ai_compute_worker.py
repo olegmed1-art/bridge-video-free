@@ -1,11 +1,12 @@
 """Standalone Hybrid Cloud compute worker for Bridge Decision Engine.
 
-This process is intentionally provider-neutral. It claims queued search jobs from the
-Bridge School API, invokes configured external engines, and posts structured results
-back. It can run in any container/VM/serverless environment with outbound HTTPS.
+Provider-neutral worker. It claims queued search jobs from the Bridge School API,
+invokes configured external engines, records teacher/policy evidence separately from
+search evidence, and posts only explicit simulation metrics as candidate evaluations.
 
-The worker never invents bridge results. If no engine endpoint is configured, it
-reports the job as FAILED with diagnostics rather than fabricating evaluations.
+The worker never manufactures bridge EV. If an engine returns only policy scores,
+those are preserved as teacher evidence and the heavy search run is marked FAILED so
+it cannot masquerade as a completed search evaluation.
 """
 from __future__ import annotations
 
@@ -54,8 +55,16 @@ def request_json(url: str, *, token: str | None = None, method: str = "GET", pay
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _ben_context(auction: str) -> str:
+    """Normalize common stored auction text to BEN's compact 2-char ctx encoding."""
+    text = (auction or "").replace("–", " ").replace("—", " ").replace("-", " ")
+    tokens = [t.strip().upper() for t in text.split() if t.strip()]
+    mapping = {"PASS": "--", "P": "--", "X": "Db", "DBL": "Db", "XX": "Rd", "RDBL": "Rd"}
+    return "".join(mapping.get(token, token.replace("NT", "N")) for token in tokens)
+
+
 def ben_bid(config: Config, position: dict[str, Any]) -> dict[str, Any] | None:
-    """Ask a BEN REST service for a bidding recommendation when configured."""
+    """Ask BEN for a detailed bidding recommendation when configured."""
     if not config.ben_url:
         return None
     hand = position.get("hand_pbn")
@@ -63,12 +72,26 @@ def ben_bid(config: Config, position: dict[str, Any]) -> dict[str, Any] | None:
     seat = position.get("seat")
     dealer = position.get("dealer")
     vul = position.get("vulnerability")
+    scoring = position.get("scoring")
     if not all((hand, seat, dealer)):
         return None
     from urllib.parse import urlencode
 
-    query = urlencode({"hand": hand, "seat": seat, "dealer": dealer, "vul": vul or "", "ctx": auction})
-    return request_json(f"{config.ben_url}/bid?{query}")
+    params = {
+        "hand": hand,
+        "seat": seat,
+        "dealer": dealer,
+        "vul": vul or "",
+        "ctx": _ben_context(auction),
+        "details": "true",
+    }
+    if scoring:
+        normalized = str(scoring).lower()
+        if normalized in {"mp", "matchpoint", "matchpoints"}:
+            params["tournament"] = "mp"
+        elif normalized in {"imp", "imps"}:
+            params["tournament"] = "imps"
+    return request_json(f"{config.ben_url}/bid?{urlencode(params)}")
 
 
 def choose_engine(config: Config, job: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -79,44 +102,98 @@ def choose_engine(config: Config, job: dict[str, Any]) -> tuple[str, dict[str, A
     raise RuntimeError("no configured decision engine could evaluate this job")
 
 
-def evaluation_from_teacher(job: dict[str, Any], engine_key: str, engine_result: dict[str, Any]) -> list[dict[str, Any]]:
-    """Map only explicit engine candidate scores; do not manufacture search EV."""
+def teacher_payload(engine_key: str, engine_result: dict[str, Any]) -> dict[str, Any]:
+    candidates = engine_result.get("candidates") or []
+    scores: dict[str, Any] = {}
+    for item in candidates:
+        action = str(item.get("call") or item.get("bid") or item.get("action") or "")
+        if not action:
+            continue
+        score = item.get("insta_score")
+        if score is None:
+            score = item.get("score")
+        scores[action] = score
+    return {
+        "teacher_key": engine_key,
+        "teacher_version": str(engine_result.get("version") or engine_result.get("model_version") or "") or None,
+        "teacher_system": str(engine_result.get("system") or "") or None,
+        "action": engine_result.get("bid") or engine_result.get("call"),
+        "confidence": None,
+        "candidate_scores": scores,
+        "explanation": None,
+        "raw_output": engine_result,
+    }
+
+
+def search_evaluations(job: dict[str, Any], engine_key: str, engine_result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Map only explicit BEN simulation/search metrics, never policy scores as EV."""
     candidates = job.get("candidates") or []
     by_action = {str(c.get("action")): c for c in candidates}
-    raw_candidates = engine_result.get("candidates") or []
     out: list[dict[str, Any]] = []
-    for item in raw_candidates:
-        action = str(item.get("bid") or item.get("call") or item.get("action") or "")
+    for item in engine_result.get("candidates") or []:
+        action = str(item.get("call") or item.get("bid") or item.get("action") or "")
         candidate = by_action.get(action)
         if not candidate:
             continue
-        score = item.get("score")
-        if score is None:
-            score = item.get("insta_score")
+        expected_score = item.get("expected_score_sd")
+        expected_tricks = item.get("expected_tricks_sd")
+        p_make = item.get("p_make_contract")
+        # No explicit simulation evidence => this is teacher/policy evidence only.
+        if expected_score is None and expected_tricks is None and p_make is None:
+            continue
         out.append({
             "candidate_id": candidate["candidate_id"],
             "rollout_policy": engine_key,
-            "metrics_json": {"engine_candidate_score": score, "engine_raw": item},
+            "raw_score_ev": expected_score,
+            "make_probability": p_make,
+            "metrics_json": {
+                "expected_tricks_sd": expected_tricks,
+                "expected_score_sd": expected_score,
+                "p_make_contract": p_make,
+                "insta_score": item.get("insta_score"),
+                "engine_raw": item,
+                "evidence_class": "BEN_SIMULATION",
+            },
         })
     return out
 
 
 def process_one(config: Config) -> bool:
-    claim = request_json(f"{config.api_base}/v1/ai/search-runs/claim", token=config.api_token, method="POST", payload={})
+    claim = request_json(
+        f"{config.api_base}/v1/ai/search-runs/claim",
+        token=config.api_token,
+        method="POST",
+        payload={},
+    )
     if not claim.get("claimed"):
         return False
     run = claim["search_run"]
     run_id = run["search_run_id"]
+    position_id = run["position_id"]
     try:
         engine_key, result = choose_engine(config, claim)
-        evaluations = evaluation_from_teacher(claim, engine_key, result)
-        if not evaluations:
-            raise RuntimeError("engine returned no candidate results matching the queued position")
-        completion = {
-            "status": "COMPLETED",
-            "evaluations": evaluations,
-        }
-    except Exception as exc:  # worker must always close the claimed job
+        # Always preserve the engine's recommendation as teacher evidence.
+        request_json(
+            f"{config.api_base}/v1/ai/positions/{position_id}/teacher-evidence",
+            token=config.api_token,
+            method="POST",
+            payload=teacher_payload(engine_key, result),
+        )
+        evaluations = search_evaluations(claim, engine_key, result)
+        if evaluations:
+            completion = {
+                "status": "COMPLETED",
+                "samples_generated": len(result.get("samples") or []) or None,
+                "samples_accepted": len(result.get("samples") or []) or None,
+                "evaluations": evaluations,
+            }
+        else:
+            print(
+                f"search_run {run_id}: engine produced teacher evidence but no explicit simulation metrics",
+                file=sys.stderr,
+            )
+            completion = {"status": "FAILED", "evaluations": []}
+    except Exception as exc:
         print(f"search_run {run_id} failed: {exc}", file=sys.stderr)
         completion = {"status": "FAILED", "evaluations": []}
     request_json(
