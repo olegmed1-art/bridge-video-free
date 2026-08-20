@@ -1,0 +1,41 @@
+name: DDS PR-safe Drive preparation attestation
+
+on:
+  workflow_run:
+    workflows:
+      - 'DDS main 30k — prepare from preserved pilot'
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  attest:
+    if: >-
+      ${{
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'pull_request_target' &&
+        github.event.workflow_run.actor.login == 'olegmed1-art' &&
+        github.event.workflow_run.pull_requests[0].head.repo.full_name == github.repository
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Publish fixed success attestation without candidate checkout
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          HEAD_SHA: ${{ github.event.workflow_run.pull_requests[0].head.sha }}
+          PREP_RUN_ID: ${{ github.event.workflow_run.id }}
+          PILOT_ZIP_SHA256: ef126c6842dda691b08325392b9d7fe5319acdba34b2db6b8981f03d56f8e130
+        run: |
+          set -euo pipefail
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PREP_RUN_ID" =~ ^[0-9]+$ ]]
+          body="DDS_PRSAFE_DRIVE_PREPARE_PASS run_id=${PREP_RUN_ID} head_sha=${HEAD_SHA} pilot_zip_sha256=${PILOT_ZIP_SHA256}"
+          gh api --method POST \
+            "/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            -f body="$body"
