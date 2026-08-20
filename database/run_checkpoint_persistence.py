@@ -17,7 +17,13 @@ from typing import Any
 import psycopg
 from psycopg.types.json import Jsonb
 
-from database.runtime_worker_preflight import normalize_dsn
+# Support both module execution (python -m database.run_checkpoint_persistence)
+# and direct script execution used by the production workflow.  Direct script
+# execution puts database/ rather than the repository root on sys.path.
+try:
+    from database.runtime_worker_preflight import normalize_dsn
+except ModuleNotFoundError:
+    from runtime_worker_preflight import normalize_dsn
 
 SCHOOL_STABLE_NAME = "Школа спортивного бриджа"
 RUN_TYPE = "ingestion"
