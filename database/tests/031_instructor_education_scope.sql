@@ -34,6 +34,9 @@ BEGIN
     RETURNING auth_identity_id INTO v_instructor_identity;
     INSERT INTO person_role_assignment(school_id,person_id,role_key)
     VALUES (v_school,v_instructor_person,'instructor');
+    -- Personal-cabinet authentication is a separate dimension from instructor status.
+    INSERT INTO person_role_assignment(school_id,person_id,role_key,scope_type,scope_id)
+    VALUES (v_school,v_instructor_person,'member','school',NULL);
 
     INSERT INTO person(preferred_name) VALUES ('Non Instructor With Grant') RETURNING person_id INTO v_member_person;
     INSERT INTO auth_identity(person_id,provider_key,provider_subject)
@@ -48,6 +51,9 @@ BEGIN
     RETURNING auth_identity_id INTO v_scoped_identity;
     INSERT INTO person_role_assignment(school_id,person_id,role_key,scope_type,scope_id)
     VALUES (v_school,v_scoped_person,'instructor','group',uuidv7());
+    -- Portal permission allows actor context but does not broaden the scoped instructor role.
+    INSERT INTO person_role_assignment(school_id,person_id,role_key,scope_type,scope_id)
+    VALUES (v_school,v_scoped_person,'member','school',NULL);
 
     INSERT INTO person(preferred_name) VALUES ('Authorized Student') RETURNING person_id INTO v_student_person1;
     INSERT INTO student(school_id,person_id) VALUES (v_school,v_student_person1) RETURNING student_id INTO v_student1;

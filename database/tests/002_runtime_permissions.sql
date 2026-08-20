@@ -50,9 +50,8 @@ BEGIN
     END IF;
 
     -- Reader can inspect ordinary persistent tables. Authentication/authorization,
-    -- signing secrets, actor audit, source ACL/rights observations and recovery
-    -- checkpoint evidence are explicit protected surfaces and must not leak through the
-    -- broad reader role.
+    -- signing secrets, actor audit, source ACL/rights observations, identity onboarding
+    -- access history and recovery checkpoint evidence are protected surfaces.
     FOR r IN
         SELECT format('%I.%I', n.nspname, c.relname) AS table_name
           FROM pg_class c
@@ -63,6 +62,7 @@ BEGIN
                'auth_identity',
                'person_role_assignment',
                'person_access_grant',
+               'person_ecosystem_access_event',
                'audit_event',
                'actor_context_signing_secret',
                'source_rights_snapshot',
@@ -76,7 +76,7 @@ BEGIN
     END LOOP;
 
     FOREACH required_table IN ARRAY ARRAY[
-        'auth_identity','person_role_assignment','person_access_grant','audit_event',
+        'auth_identity','person_role_assignment','person_access_grant','person_ecosystem_access_event','audit_event',
         'actor_context_signing_secret','source_rights_snapshot',
         'recovery_checkpoint','recovery_verification'
     ] LOOP
@@ -91,9 +91,20 @@ BEGIN
         RAISE EXCEPTION 'reader unexpectedly has write access to person';
     END IF;
 
-    -- Interactive app may write only student-facing operational tables.
+    -- A new Person is now a controlled onboarding operation. Ordinary app/worker
+    -- capabilities may update an existing Person, but cannot create one directly.
+    IF has_table_privilege('bridge_school_app','person','INSERT')
+       OR has_table_privilege('bridge_school_worker','person','INSERT') THEN
+        RAISE EXCEPTION 'runtime can bypass automatic Student+Membership+portal onboarding by inserting Person directly';
+    END IF;
+    IF NOT has_table_privilege('bridge_school_app','person','UPDATE')
+       OR has_table_privilege('bridge_school_app','person','DELETE') THEN
+        RAISE EXCEPTION 'app person edit boundary is inconsistent';
+    END IF;
+
+    -- Interactive app may write the remaining student-facing operational tables.
     FOREACH required_table IN ARRAY ARRAY[
-        'person','student','learning_interaction','deal','decision',
+        'student','learning_interaction','deal','decision',
         'agreement_set','agreement_version','agreement_activation'
     ] LOOP
         IF NOT has_table_privilege('bridge_school_app', required_table, 'INSERT')
