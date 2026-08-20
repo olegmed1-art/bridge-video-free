@@ -160,6 +160,25 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Deterministic source identity preflight
+        if: env.BRIDGE_ORIGINAL_SOURCE_DRIVE_ID != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          from bridge_worker_3_1_free import stable_job_id
+
+          source_id = os.environ["BRIDGE_ORIGINAL_SOURCE_DRIVE_ID"].strip()
+          job_id = os.environ["BRIDGE_JOB_ID"].strip()
+          expected = stable_job_id("drive", source_id)
+          if job_id != expected:
+              raise SystemExit(
+                  "BLOCKED_IDENTITY_PREFLIGHT: BRIDGE_JOB_ID does not match deterministic Drive source identity"
+              )
+          print("Deterministic source identity preflight: PASS")
+          PY
+
       - name: Install lightweight Drive, database and longitudinal dependencies
         run: |
           python -m pip install --disable-pip-version-check \
@@ -206,6 +225,7 @@ jobs:
         run: python bridge_worker_3_1_free.py
 
       - name: Process one opaque Drive job
+        id: process
         if: steps.terminal.outputs.already_completed != 'true'
         shell: bash
         env:
@@ -226,14 +246,14 @@ jobs:
         run: python route_drive_job_outputs.py
 
       - name: Build quality-first Diana longitudinal candidates (dynamic-learning v3)
-        if: always() && env.BRIDGE_OUTPUT_FOLDER_ID != '' && env.BRIDGE_LESSON_NUMBER != ''
+        if: always() && (steps.process.outcome == 'success' || steps.terminal.outputs.already_completed == 'true') && env.BRIDGE_OUTPUT_FOLDER_ID != '' && env.BRIDGE_LESSON_NUMBER != ''
         env:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
           BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
         run: python diana_longitudinal_postprocess_v3.py
 
       - name: Persist completed raw evidence and analysis to Neon
-        if: always() && env.BRIDGE_PERSIST_DATABASE == 'true'
+        if: always() && (steps.process.outcome == 'success' || steps.terminal.outputs.already_completed == 'true') && env.BRIDGE_PERSIST_DATABASE == 'true'
         env:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
           BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
