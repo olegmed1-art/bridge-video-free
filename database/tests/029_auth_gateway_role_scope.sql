@@ -15,13 +15,24 @@ BEGIN
     INSERT INTO auth_identity(person_id,provider_key,provider_subject)
     VALUES (v_person,'gateway-provider','gateway-person') RETURNING auth_identity_id INTO v_identity;
 
-    -- A scoped role is sufficient to establish that this Person belongs to the school,
-    -- but it must not become a school-wide role through bridge_actor_has_role().
+    -- A non-portal scoped role is not enough to enter the personal cabinet.
+    -- It also must not become a school-wide role through bridge_actor_has_role().
     INSERT INTO person_role_assignment(
         school_id,person_id,role_key,scope_type,scope_id
     ) VALUES (
         v_school,v_person,'student','group',uuidv7()
     );
+
+    BEGIN
+        PERFORM bridge_establish_verified_actor_context(v_identity,v_school,uuidv7());
+        RAISE EXCEPTION 'actor context unexpectedly established without portal/member authorization';
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM='actor context unexpectedly established without portal/member authorization' THEN RAISE; END IF;
+    END;
+
+    -- Personal-cabinet entry is explicitly represented by a school-scoped member role.
+    INSERT INTO person_role_assignment(school_id,person_id,role_key,scope_type,scope_id)
+    VALUES (v_school,v_person,'member','school',NULL);
 
     v_resolved := bridge_establish_verified_actor_context(v_identity,v_school,uuidv7());
     IF v_resolved <> v_person THEN
