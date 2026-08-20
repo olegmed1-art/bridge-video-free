@@ -142,13 +142,7 @@ def _task_anchor_segment(
     task_turn: Mapping[str, Any],
     task: object,
 ) -> dict[str, Any]:
-    """Return the latest source segment supporting the selected task clause.
-
-    Acoustic turn coalescing can merge adjacent teacher prompts.  The interaction
-    time/evidence should follow the selected prompt, not the first prompt in the
-    merged turn.  Matching is deliberately local to segment IDs already present
-    in that acoustic turn; it never searches unrelated transcript regions.
-    """
+    """Return the latest source segment supporting the selected task clause."""
     segment_map = {
         str(item.get("segment_id")): item
         for item in (master.get("transcript") or [])
@@ -198,10 +192,7 @@ def _transcript_decision_interactions_v41(
         if not excerpts:
             continue
         student_hit = v4._find_next(
-            turns,
-            task_index,
-            v4.ROLE_STUDENT,
-            _meaningful_student_action_v41,
+            turns, task_index, v4.ROLE_STUDENT, _meaningful_student_action_v41,
             float(task_turn.get("end") or 0),
         )
         if not student_hit:
@@ -211,20 +202,14 @@ def _transcript_decision_interactions_v41(
         if not _task_action_aligned(task, student_turn.get("text")):
             continue
         teacher_hit = v4._find_next(
-            turns,
-            student_index,
-            v4.ROLE_TEACHER,
-            v4._teacher_intervention,
+            turns, student_index, v4.ROLE_TEACHER, v4._teacher_intervention,
             float(student_turn.get("end") or 0),
         )
         if not teacher_hit:
             continue
         teacher_index, teacher_turn = teacher_hit
         followup_hit = v4._find_next(
-            turns,
-            teacher_index,
-            v4.ROLE_STUDENT,
-            v4._substantive_followup,
+            turns, teacher_index, v4.ROLE_STUDENT, v4._substantive_followup,
             float(teacher_turn.get("end") or 0),
         )
         if not followup_hit:
@@ -241,15 +226,18 @@ def _transcript_decision_interactions_v41(
         )
         if len(evidence) < 4:
             continue
-        start = float(task_anchor.get("start") or task_turn.get("start") or 0)
-        end = float(followup_turn.get("end") or followup_turn.get("start") or start)
+        anchor_start = task_anchor.get("start")
+        if anchor_start is None:
+            anchor_start = task_turn.get("start")
+        start = float(0 if anchor_start is None else anchor_start)
+        followup_end = followup_turn.get("end")
+        if followup_end is None:
+            followup_end = followup_turn.get("start")
+        end = float(start if followup_end is None else followup_end)
         candidates.append({
             "interaction_id": v4._stable_id(
-                "interactionv41",
-                job_id,
-                task_segment_id or task_turn.get("turn_id"),
-                student_turn.get("turn_id"),
-                teacher_turn.get("turn_id"),
+                "interactionv41", job_id, task_segment_id or task_turn.get("turn_id"),
+                student_turn.get("turn_id"), teacher_turn.get("turn_id"),
                 followup_turn.get("turn_id"),
             ),
             "status": "COMPLETE_EVIDENCE_CANDIDATE",
@@ -330,10 +318,7 @@ def build_quality_layer(
 
     quality["schema_version"] = QUALITY_SCHEMA_VERSION
     quality["method_version"] = QUALITY_METHOD_VERSION
-    interactions = [
-        item for item in (quality.get("learning_interactions") or [])
-        if isinstance(item, Mapping)
-    ]
+    interactions = [item for item in (quality.get("learning_interactions") or []) if isinstance(item, Mapping)]
     v41 = [
         item for item in interactions
         if item.get("source") == "transcript_decision_window_v4_1"
