@@ -225,12 +225,12 @@ jobs:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
         run: python route_drive_job_outputs.py
 
-      - name: Build quality-first Diana longitudinal candidates
+      - name: Build quality-first Diana longitudinal candidates (dynamic-learning v3)
         if: always() && env.BRIDGE_OUTPUT_FOLDER_ID != '' && env.BRIDGE_LESSON_NUMBER != ''
         env:
           GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
           BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
-        run: python diana_longitudinal_postprocess.py
+        run: python diana_longitudinal_postprocess_v3.py
 
       - name: Persist completed raw evidence and analysis to Neon
         if: always() && env.BRIDGE_PERSIST_DATABASE == 'true'

@@ -5,7 +5,9 @@ on:
   pull_request:
     paths:
       - 'diana_longitudinal_postprocess.py'
+      - 'diana_longitudinal_postprocess_v3.py'
       - 'diana_longitudinal_quality_v2.py'
+      - 'diana_longitudinal_quality_v3.py'
       - 'bridge_speaker_diarization.py'
       - 'run_master_3_1_free_semantic_v2.py'
       - 'bridge_runtime_hardening_r25_7.py'
@@ -19,7 +21,9 @@ on:
       - 'candidate/**'
     paths:
       - 'diana_longitudinal_postprocess.py'
+      - 'diana_longitudinal_postprocess_v3.py'
       - 'diana_longitudinal_quality_v2.py'
+      - 'diana_longitudinal_quality_v3.py'
       - 'bridge_speaker_diarization.py'
       - 'run_master_3_1_free_semantic_v2.py'
       - 'bridge_runtime_hardening_r25_7.py'
@@ -51,7 +55,9 @@ jobs:
         run: |
           python -m py_compile \
             diana_longitudinal_quality_v2.py \
+            diana_longitudinal_quality_v3.py \
             diana_longitudinal_postprocess.py \
+            diana_longitudinal_postprocess_v3.py \
             bridge_speaker_diarization.py \
             run_master_3_1_free_semantic_v2.py \
             bridge_runtime_hardening_r25_7.py \
@@ -60,11 +66,12 @@ jobs:
         run: |
           python -m unittest \
             tests.test_diana_longitudinal_postprocess \
-            tests.test_diana_longitudinal_quality_v2 -v
+            tests.test_diana_longitudinal_quality_v2 \
+            tests.test_diana_longitudinal_quality_v3 -v
       - name: Assert no automatic authority escalation
         run: |
           python - <<'PY'
-          from diana_longitudinal_quality_v2 import build_quality_layer
+          from diana_longitudinal_quality_v3 import build_quality_layer
           master={
             'job_id':'0'*32,
             'content_quality':{'semantic_qc_status':'PASS','semantic_critical_unresolved':0},
@@ -77,6 +84,9 @@ jobs:
           assert q['authority']['canon_activation']=='DENY'
           assert q['authority']['curriculum_activation']=='DENY'
           assert q['authority']['student_profile_production_write']=='DENY'
+          assert q['authority']['student_skill_state_production_write']=='DENY'
+          assert q['authority']['person_specific_learning_conclusion']=='DENY'
           assert q['readiness']['methodology_status']!='METHODOLOGY_READY'
-          print('AUTHORITY_GUARD_PASS')
+          assert q['history_gate']['single_lesson_stable_state_allowed'] is False
+          print('AUTHORITY_GUARD_V3_PASS')
           PY
