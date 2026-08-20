@@ -12,7 +12,12 @@
 - Manifest/digest evidence сохранён в `dds_training/BBO100_CORPUS_EVIDENCE.json`.
 - Исследовательский PR #163 закрыт без merge, как и требовал его контракт.
 - Архив долговременно сохранён в private Drive: folder `1xfM2Ee3wJ3h8GH7h6gkAuHOlouiPU4I9`, archive file `1JM4VzdXJnFwkTKkPJ4XK_5NtDM9jYq8j`.
-- HOLDOUT-20 остаётся sealed: запрещены DDS и просмотр скрытых рук до заранее записанного blind-decision шага.
+- HOLDOUT-20 пройден по blind-first Evidence Gate: до открытия DDS/скрытых рук отдельным коммитом `2426531ab1cc02bf94ee6a4178a56a6874abb1aa` зафиксированы 20 карточных решений GPT-5.6 Sol; task-packet gate — `5a6c0f015effc7a9a916591f52da100110fa7beb`.
+- Post-blind run `32392200131` завершён: 17/20 решений имеют нулевой DD-regret (85%), средний regret 0.20 взятки, медиана 0, максимум 2; declarer continuation 7/7, defense continuation 6/6, opening lead 4/7.
+- Safe machine evidence сохранён в private Drive `1Kllgriz9SFUyJX3ew1TmEfN59QkXRL_J`, отчёт — `1sAOO-1gaFaNgsbgfNIrvHigOChkrabco`.
+- PR #207 прошёл общий fast architecture/test gate и DDS main preparation gate и смержен в `main` merge commit `b50a397888029974a464557f54b69ac956b3d5fb`.
+- Одноразовый evaluator/workflow удалены из стабильного `main` после успешного evidence-run; их точный provenance сохранён в истории ветки/PR и в `dds_training/BBO100_BLIND_EVALUATION_EVIDENCE.json`.
+- DDS здесь остаётся double-dummy oracle; N=20 — диагностическое transfer evidence, а не основание автоматически объявлять навык стабильным или менять канон/методику/Student Profile.
 
 ### DDS Stage 2C
 - Старый preparation-only PR #138 закрыт как superseded.
@@ -73,9 +78,6 @@ Drive-слой `LEARNING INTELLIGENCE — Реестр активов знани
 ### Neon identity onboarding 0100–0104
 Миграции подготовлены и проверены в controlled branch, но production execution требует отдельной owner-authorized границы `MIGRATE`. До явного подтверждения владельца не применять напрямую через SQL и не обходить workflow.
 
-### BBO HOLDOUT-20
-Не открывать до изолированного blind-decision шага. Это Evidence Gate, а не технический долг.
-
 ### Person-specific Student Profile / production skill state
 v4.1 Field Gate намеренно сохраняет production writes = DENY. Продвижение разрешается только при достаточной identity/evidence binding и соответствующем authority gate.
 
@@ -96,4 +98,4 @@ BEN adapter реализован и fail-closed отделяет policy/teacher 
 - никакой робот не получает authority менять авторскую систему торговли или методику школы.
 
 ## Итог
-Инженерные процессы, которые можно было закрыть без нарушения evidence/owner/teacher gates, закрыты или подтверждены как уже operational. Оставшиеся пункты — явные authority/input/interface gates, а не процессы, которые следует «добивать» обходом защиты.
+Инженерные процессы, которые можно было закрыть без нарушения evidence/owner/teacher gates, закрыты или подтверждены как уже operational. BBO-100, включая HOLDOUT-20 blind Evidence Gate, закрыт. Оставшиеся пункты — явные authority/input/interface gates, а не процессы, которые следует «добивать» обходом защиты.
