@@ -8,3 +8,4 @@ def test_ai_routes_are_registered():
     assert "/v1/ai/positions/{position_id}" in paths
     assert "/v1/ai/rules" in paths
     assert "/v1/ai/work-queue" in paths
+    assert "/v1/ai/positions/{position_id}/finalize" in paths
