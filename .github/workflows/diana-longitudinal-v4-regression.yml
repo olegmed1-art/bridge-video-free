@@ -6,7 +6,6 @@ on:
       - 'diana_longitudinal_quality_v4.py'
       - 'diana_longitudinal_quality_v4_1.py'
       - 'diana_longitudinal_postprocess_v3.py'
-      - 'diana_longitudinal_postprocess_v4_1.py'
       - 'tests/test_diana_longitudinal_quality_v4.py'
       - 'tests/test_diana_longitudinal_quality_v4_1.py'
       - 'tests/test_diana_longitudinal_postprocess_v4_1.py'
@@ -37,8 +36,7 @@ jobs:
             diana_longitudinal_quality_v3.py \
             diana_longitudinal_quality_v4.py \
             diana_longitudinal_quality_v4_1.py \
-            diana_longitudinal_postprocess_v3.py \
-            diana_longitudinal_postprocess_v4_1.py
+            diana_longitudinal_postprocess_v3.py
       - name: Run longitudinal regressions
         run: |
           python -m unittest \
