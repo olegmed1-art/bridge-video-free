@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Restore a lifecycle P2/P3 artifact from verified Google Drive parts.
+"""Restore a lifecycle P2/P3 artifact from verified Google Drive storage.
+
+Supported layouts:
+- single-file: one Drive file whose bytes are the logical artifact;
+- split-concatenate: ordered Drive parts concatenated byte-for-byte.
 
 The locator contains only non-secret immutable identity: Drive file IDs, sizes and SHA-256.
 OAuth credentials remain in GOOGLE_DRIVE_OAUTH_JSON and are consumed via the existing
@@ -47,10 +51,24 @@ def validate_locator(data: dict) -> list[dict]:
         logical_size = int(logical["size"])
     except Exception as exc:
         raise RestoreError("logical size missing or invalid") from exc
-    if logical_size <= 0 or not _valid_sha(logical.get("sha256")):
+    logical_sha = str(logical.get("sha256") or "").lower()
+    if logical_size <= 0 or not _valid_sha(logical_sha):
         raise RestoreError("logical identity invalid")
+
     storage = data.get("storage") or {}
-    if storage.get("provider") != "google_drive" or storage.get("layout") != "split-concatenate":
+    if storage.get("provider") != "google_drive":
+        raise RestoreError("unsupported storage provider")
+    layout = storage.get("layout")
+
+    if layout == "single-file":
+        file_id = str(storage.get("drive_file_id") or "")
+        size = int(storage.get("size") or logical_size)
+        digest = str(storage.get("sha256") or logical_sha).lower()
+        if not file_id or size != logical_size or digest != logical_sha:
+            raise RestoreError("single-file identity must match logical identity exactly")
+        return [{"index": 1, "drive_file_id": file_id, "size": size, "sha256": digest}]
+
+    if layout != "split-concatenate":
         raise RestoreError("unsupported storage layout")
     parts = storage.get("parts")
     if not isinstance(parts, list) or not parts:

@@ -34,6 +34,22 @@ with tempfile.TemporaryDirectory() as td:
     assert out.read_bytes() == logical
     assert sha256_file(out) == sha(logical)
 
+    single = {
+        'schema': 'bridge-school-drive-artifact-v1',
+        'lifecycle_class': 'P2',
+        'logical_file': {'name': 'one.zip', 'size': len(logical), 'sha256': sha(logical)},
+        'storage': {
+            'provider': 'google_drive',
+            'layout': 'single-file',
+            'drive_file_id': 'single-id',
+            'size': len(logical),
+            'sha256': sha(logical),
+        },
+    }
+    assert validate_locator(single) == [
+        {'index': 1, 'drive_file_id': 'single-id', 'size': len(logical), 'sha256': sha(logical)}
+    ]
+
     broken = json.loads(json.dumps(locator))
     broken['storage']['parts'][1]['size'] += 1
     try:
@@ -42,5 +58,14 @@ with tempfile.TemporaryDirectory() as td:
         pass
     else:
         raise AssertionError('broken locator must fail closed')
+
+    broken_single = json.loads(json.dumps(single))
+    broken_single['storage']['sha256'] = '0' * 64
+    try:
+        validate_locator(broken_single)
+    except RestoreError:
+        pass
+    else:
+        raise AssertionError('mismatched single-file identity must fail closed')
 
 print('RESTORE_DRIVE_SPLIT_ARTIFACT_TEST: PASS')

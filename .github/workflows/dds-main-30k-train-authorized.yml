@@ -18,8 +18,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PREPARED_RUN_ID: '32052220151'
-  PREPARED_ARTIFACT: dds-main-30k-prepared-32052220151
+  PREPARED_DRIVE_LOCATOR: dds_training/artifact_locations/dds-main-30k-prepared-32052220151.json
+  PREPARED_ZIP_SHA256: f29a20457b1ac9e302dae3165fd6048b19b5005d4bda2a7c4bbefc38f5f3cf7c
   PREPARED_TGZ_SHA256: 2ca5015493b263a768611a97fc004aed16bd40926cf4ae0f2bb6202349d7bd74
   GH_TOKEN: ${{ github.token }}
 
@@ -50,34 +50,54 @@ jobs:
         with:
           python-version: '3.14'
 
-      - name: Restore prepared state or prior failed-attempt progress
+      - name: Validate Drive restore contract before credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'requests==2.32.5' 'google-auth==2.40.3'
+          PYTHONPATH=. python tests/test_restore_drive_split_artifact.py
+          PYTHONPATH=. python tools/restore_drive_split_artifact.py \
+            --locator "$PREPARED_DRIVE_LOCATOR" \
+            --output /tmp/unused-dds-main-prepared.zip \
+            --validate-only
+
+      - name: Restore prior failed-attempt progress for restart/resume
+        if: ${{ github.run_attempt > 1 }}
         shell: bash
         run: |
           set -euo pipefail
           rm -rf /tmp/dds-restore dds_training/work/pilot
           mkdir -p /tmp/dds-restore dds_training/work
-          if [ "$GITHUB_RUN_ATTEMPT" -gt 1 ]; then
-            previous_attempt=$((GITHUB_RUN_ATTEMPT - 1))
-            artifact="dds-main-train-progress-${GITHUB_RUN_ID}-a${previous_attempt}"
-            gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$artifact" --dir /tmp/dds-restore
-            archive="$(find /tmp/dds-restore -name 'dds-main-train-progress-state.tgz' -print -quit)"
-            checksum="$(find /tmp/dds-restore -name 'dds-main-train-progress-state.sha256' -print -quit)"
-            test -n "$archive" && test -n "$checksum"
-            test "$(sha256sum "$archive" | awk '{print $1}')" = "$(awk '{print $1}' "$checksum")"
-            tar -xzf "$archive" -C dds_training/work
-          else
-            downloaded=0
-            for attempt in $(seq 1 8); do
-              rm -rf /tmp/dds-restore/*
-              if gh run download "$PREPARED_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$PREPARED_ARTIFACT" --dir /tmp/dds-restore; then downloaded=1; break; fi
-              sleep $((attempt * 5))
-            done
-            test "$downloaded" = 1
-            archive="$(find /tmp/dds-restore -name 'dds-main-30k-prepared-state.tgz' -print -quit)"
-            test -n "$archive"
-            echo "$PREPARED_TGZ_SHA256  $archive" | sha256sum -c -
-            tar -xzf "$archive" -C dds_training/work
-          fi
+          previous_attempt=$((GITHUB_RUN_ATTEMPT - 1))
+          artifact="dds-main-train-progress-${GITHUB_RUN_ID}-a${previous_attempt}"
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name "$artifact" --dir /tmp/dds-restore
+          archive="$(find /tmp/dds-restore -name 'dds-main-train-progress-state.tgz' -print -quit)"
+          checksum="$(find /tmp/dds-restore -name 'dds-main-train-progress-state.sha256' -print -quit)"
+          test -n "$archive" && test -n "$checksum"
+          test "$(sha256sum "$archive" | awk '{print $1}')" = "$(awk '{print $1}' "$checksum")"
+          tar -xzf "$archive" -C dds_training/work
+
+      - name: Restore prepared base state from verified Google Drive copy
+        if: ${{ github.run_attempt == 1 }}
+        shell: bash
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/dds-restore dds_training/work/pilot
+          mkdir -p /tmp/dds-restore dds_training/work
+          PYTHONPATH=. python tools/restore_drive_split_artifact.py \
+            --locator "$PREPARED_DRIVE_LOCATOR" \
+            --output /tmp/dds-restore/prepared-artifact.zip \
+            --work-dir /tmp/dds-restore/parts
+          echo "$PREPARED_ZIP_SHA256  /tmp/dds-restore/prepared-artifact.zip" | sha256sum -c -
+          unzip -q /tmp/dds-restore/prepared-artifact.zip -d /tmp/dds-restore/extracted
+          archive="$(find /tmp/dds-restore/extracted -name 'dds-main-30k-prepared-state.tgz' -print -quit)"
+          checksum="$(find /tmp/dds-restore/extracted -name 'dds-main-30k-prepared-state.sha256' -print -quit)"
+          test -n "$archive" && test -n "$checksum"
+          echo "$PREPARED_TGZ_SHA256  $archive" | sha256sum -c -
+          test "$(sha256sum "$archive" | awk '{print $1}')" = "$(awk '{print $1}' "$checksum")"
+          tar -xzf "$archive" -C dds_training/work
 
       - name: Restore verified DDS3 wheel and Bazel state
         id: dds-cache
