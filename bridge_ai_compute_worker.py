@@ -70,7 +70,6 @@ def _ben_context(auction: Any) -> str:
 
 
 def ben_bid(config: Config, position: dict[str, Any]) -> dict[str, Any] | None:
-    """Ask BEN for a detailed bidding recommendation when configured."""
     if not config.ben_url:
         return None
     hand = position.get("hand_pbn")
@@ -103,17 +102,15 @@ def ben_bid(config: Config, position: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def choose_engine(config: Config, job: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    position = job.get("position") or {}
-    ben = ben_bid(config, position)
+    ben = ben_bid(config, job.get("position") or {})
     if ben is not None:
         return "ben", ben
     raise RuntimeError("no configured decision engine could evaluate this job")
 
 
 def teacher_payload(engine_key: str, engine_result: dict[str, Any]) -> dict[str, Any]:
-    candidates = engine_result.get("candidates") or []
     scores: dict[str, Any] = {}
-    for item in candidates:
+    for item in engine_result.get("candidates") or []:
         action = str(item.get("call") or item.get("bid") or item.get("action") or "")
         if not action:
             continue
@@ -148,7 +145,6 @@ def policy_payload(engine_key: str, teacher: dict[str, Any]) -> dict[str, Any] |
 
 
 def search_evaluations(job: dict[str, Any], engine_key: str, engine_result: dict[str, Any]) -> list[dict[str, Any]]:
-    """Map only explicit BEN simulation/search metrics, never policy scores as EV."""
     candidates = job.get("candidates") or []
     by_action = {str(c.get("action")): c for c in candidates}
     out: list[dict[str, Any]] = []
@@ -222,20 +218,31 @@ def process_one(config: Config) -> bool:
                 "evaluations": evaluations,
             }
         else:
-            print(
-                f"search_run {run_id}: policy evidence recorded; no explicit simulation metrics",
-                file=sys.stderr,
-            )
+            print(f"search_run {run_id}: policy evidence recorded; no explicit simulation metrics", file=sys.stderr)
             completion = {"status": "FAILED", "evaluations": []}
     except Exception as exc:
         print(f"search_run {run_id} failed: {exc}", file=sys.stderr)
         completion = {"status": "FAILED", "evaluations": []}
+
     request_json(
         f"{config.api_base}/v1/ai/search-runs/{run_id}/complete",
         token=config.api_token,
         method="POST",
         payload=completion,
     )
+
+    # Finalization is part of the worker transaction boundary at the application level:
+    # a search may fail while valid policy evidence still authorizes POLICY_ONLY.
+    try:
+        finalized = request_json(
+            f"{config.api_base}/v1/ai/positions/{position_id}/finalize",
+            token=config.api_token,
+            method="POST",
+            payload={},
+        )
+        print(json.dumps({"position_id": position_id, "finalizer": finalized.get("status")}, ensure_ascii=False))
+    except Exception as exc:
+        print(f"position {position_id} finalization failed: {exc}", file=sys.stderr)
     return True
 
 
