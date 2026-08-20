@@ -1,0 +1,41 @@
+{
+  "schema": "dds-stage2c4-blind-regression-v1",
+  "stage": "2C.4",
+  "status": "blind_regression_complete",
+  "workflow_run_id": 32380533183,
+  "artifact_id": 9410795030,
+  "artifact_name": "dds-stage2c4-blind-regression-32380533183",
+  "artifact_digest": "sha256:a2bc363fe9309232f1a8377961a4e19eabc72b911c94497b3c896a9d1f4d4bbd",
+  "method": "5-fold family-disjoint empirical card-loss cross-fit",
+  "families_overlap_across_train_test": false,
+  "new_dds_calls": false,
+  "validation_opened": false,
+  "sealed_opened": false,
+  "continuations": {
+    "declarer": {
+      "old": {"n":1000,"optimal":768,"optimal_rate":0.768,"mean_regret":0.4,"regret_2plus":83},
+      "candidate": {"n":1000,"optimal":762,"optimal_rate":0.762,"mean_regret":0.39,"regret_2plus":78},
+      "critical_1_2_candidate": {"n":249,"optimal":192,"optimal_rate":0.7710843373493976,"mean_regret":0.3493975903614458,"regret_2plus":19},
+      "constrained_3_4_candidate": {"n":226,"optimal":148,"optimal_rate":0.6548672566371682,"mean_regret":0.6106194690265486,"regret_2plus":29}
+    },
+    "defense": {
+      "old": {"n":1000,"optimal":645,"optimal_rate":0.645,"mean_regret":0.664,"regret_2plus":149},
+      "candidate": {"n":1000,"optimal":687,"optimal_rate":0.687,"mean_regret":0.553,"regret_2plus":109},
+      "critical_1_2_candidate": {"n":130,"optimal":39,"optimal_rate":0.3,"mean_regret":1.4153846153846155,"regret_2plus":40},
+      "constrained_3_4_candidate": {"n":165,"optimal":71,"optimal_rate":0.4303030303030303,"mean_regret":1.0242424242424242,"regret_2plus":37}
+    }
+  },
+  "regression_subset": {
+    "n": 587,
+    "old_mean_regret": 1.8126064735945486,
+    "candidate_mean_regret": 0.9948892674616695,
+    "old_regret_2plus": 232,
+    "candidate_regret_2plus": 120,
+    "improved": 298,
+    "worsened": 31,
+    "candidate_optimal": 269,
+    "candidate_optimal_rate": 0.45826235093696766
+  },
+  "promotion_allowed": false,
+  "next_gate": "methodology_audit_then_owner_decision_on_validation"
+}
