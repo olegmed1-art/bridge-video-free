@@ -1,40 +1,70 @@
 name: DDS main 30k — prepare from preserved pilot
 
 on:
-  pull_request:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened]
     paths:
       - 'dds_training/**'
       - '.github/workflows/dds-main-30k-prepare.yml'
       - '.github/workflows/dds-training-v23-smoke.yml'
+      - '.github/workflows/dds-drive-restore-contract.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
-  actions: read
 
 concurrency:
-  group: dds-main-30k-prepare-${{ github.ref }}
+  group: dds-main-30k-prepare-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 env:
-  PILOT_RUN_ID: '31909124383'
-  PILOT_ARTIFACT: dds-pilot-10k-complete-state-31909124383
+  PILOT_DRIVE_LOCATOR: dds_training/artifact_locations/dds-pilot-10k-complete-31909124383.json
+  PILOT_ZIP_SHA256: ef126c6842dda691b08325392b9d7fe5319acdba34b2db6b8981f03d56f8e130
   PILOT_TGZ_SHA256: f472b1361c879e890ffeab0e9184736a7dcd39cbc3a4c33541eb7156df9176d6
   PILOT_RAW_SHA256: 8a21cf06ab7ac424ee0f245ccf274e6d6f4f7135fa9b8c4c0e52c595c0da5996
   PILOT_DB_SHA256: c01cbe9e143198a083df8ab51ea2113ec71688b2f23d93dcfb4b1de9c29f2127
   PILOT_MODEL_SHA256: d8a02835777449c31f2b29f51121c9698f19ae2f41560ff8b43962b3c69ea269
   PILOT_TASKS_SHA256: dda1b6ad3b2f4221347caeb2d9d15f7a438f815a619c614971e3dd1f90672c5e
   WORK: dds_training/work/pilot
-  GH_TOKEN: ${{ github.token }}
 
 jobs:
   prepare-main:
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (
+          github.event_name == 'pull_request_target' &&
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.event.pull_request.user.login == 'olegmed1-art'
+        )
+      }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - name: Checkout current candidate
+      - name: Enforce trusted owner and same-repository boundary
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = 'pull_request_target' ]; then
+            test "$PR_HEAD_REPO" = "$GITHUB_REPOSITORY"
+            test "$PR_AUTHOR" = 'olegmed1-art'
+            test "$PR_BASE_REF" = 'main'
+          else
+            test "$EVENT_NAME" = 'workflow_dispatch'
+            test "$GITHUB_ACTOR" = 'olegmed1-art'
+            test "$GITHUB_REF_NAME" = 'main'
+          fi
+
+      - name: Checkout trusted base before Drive credential exposure
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
 
       - name: Set up Python 3.14
@@ -42,30 +72,40 @@ jobs:
         with:
           python-version: '3.14'
 
+      - name: Install trusted Drive restore dependencies
+        run: python -m pip install --disable-pip-version-check 'requests==2.32.5' 'google-auth==2.40.3'
+
+      - name: Restore exact pilot ZIP from Drive using trusted base code
+        shell: bash
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/dds-pilot-drive /tmp/dds-pilot-10k.zip
+          PYTHONPATH=. python tools/restore_drive_split_artifact.py \
+            --locator "$PILOT_DRIVE_LOCATOR" \
+            --output /tmp/dds-pilot-10k.zip \
+            --work-dir /tmp/dds-pilot-drive
+          echo "$PILOT_ZIP_SHA256  /tmp/dds-pilot-10k.zip" | sha256sum -c -
+
+      - name: Checkout exact candidate after Drive secret scope has ended
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+          clean: true
+
       - name: Compile DDS training code
         working-directory: dds_training
         run: python -m compileall -q .
 
-      - name: Restore immutable completed 10k pilot artifact
+      - name: Restore immutable completed 10k pilot from verified ZIP
         shell: bash
         run: |
           set -euo pipefail
           rm -rf /tmp/dds-pilot-complete dds_training/work/pilot
           mkdir -p /tmp/dds-pilot-complete dds_training/work
-          downloaded=0
-          for attempt in $(seq 1 8); do
-            rm -rf /tmp/dds-pilot-complete/*
-            if gh run download "$PILOT_RUN_ID" \
-              --repo "$GITHUB_REPOSITORY" \
-              --name "$PILOT_ARTIFACT" \
-              --dir /tmp/dds-pilot-complete; then
-              downloaded=1
-              break
-            fi
-            echo "pilot artifact download attempt ${attempt}/8 failed; retrying" >&2
-            sleep $((attempt * 5))
-          done
-          test "$downloaded" = 1
+          unzip -q /tmp/dds-pilot-10k.zip -d /tmp/dds-pilot-complete
           archive="$(find /tmp/dds-pilot-complete -name 'dds-pilot-10k-complete-state.tgz' -print -quit)"
           test -n "$archive"
           echo "$PILOT_TGZ_SHA256  $archive" | sha256sum -c -
@@ -231,29 +271,32 @@ jobs:
           assert ready['skill_claim']['ready'] is False
           db = sqlite3.connect(root / 'training.sqlite3')
           assert db.execute("select count(*) from dds_results").fetchone()[0] == 22497
-          print({
-              'main_train_ready': True,
-              'fresh_tasks': 40000,
-              'train_tasks': 28000,
-              'shards': 20,
-              'holdout_closed': True,
-              'stable_skill_claim_closed': True,
-              'main_dds_results': 0,
-          })
+          print({'main_train_ready': True, 'fresh_tasks': 40000, 'train_tasks': 28000, 'shards': 20, 'holdout_closed': True, 'stable_skill_claim_closed': True, 'main_dds_results': 0})
           PY
 
-      - name: Package prepared 30k state
-        if: always()
+      - name: Package prepared 30k state for explicit manual handoff
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
         run: |
           set -euo pipefail
-          if [ -d dds_training/work/pilot ]; then
-            tar -czf dds-main-30k-prepared-state.tgz -C dds_training/work pilot
-            sha256sum dds-main-30k-prepared-state.tgz > dds-main-30k-prepared-state.sha256
-          fi
+          tar -czf dds-main-30k-prepared-state.tgz -C dds_training/work pilot
+          sha256sum dds-main-30k-prepared-state.tgz > dds-main-30k-prepared-state.sha256
 
-      - name: Upload prepared Stage-2 state
-        if: always()
+      - name: Upload compact PR preparation evidence
+        if: ${{ always() && github.event_name == 'pull_request_target' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dds-main-30k-pr-evidence-${{ github.run_id }}
+          path: |
+            dds_training/work/pilot/stage2_readiness_main.json
+            dds_training/work/pilot/shard_plan_main.json
+            dds_training/work/pilot/main_train_predictions_sha256.txt
+            dds_training/work/pilot/main_train_prediction_lock.json
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Upload manual prepared Stage-2 state
+        if: ${{ always() && github.event_name == 'workflow_dispatch' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dds-main-30k-prepared-${{ github.run_id }}
@@ -265,10 +308,10 @@ jobs:
             dds_training/work/pilot/main_train_predictions_sha256.txt
             dds_training/work/pilot/main_train_prediction_lock.json
           if-no-files-found: warn
-          retention-days: 90
+          retention-days: 7
 
       - name: Save rebuilt verified DDS3 wheel and Bazel state
-        if: always() && steps.dds-cache.outputs.cache-hit != 'true'
+        if: ${{ always() && steps.dds-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |

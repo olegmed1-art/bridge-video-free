@@ -28,10 +28,10 @@ FORBIDDEN_NETWORK_IMPORTS = {
 }
 UNSAFE_WORKFLOW_TOKENS = {
     "contents: write",
+    "actions: write",
     "git push",
     "git commit",
     "rm -f .github/workflows",
-    "pull_request_target:",
 }
 FORBIDDEN_AUTOMATIC_TRIGGERS = {
     "push",
@@ -44,6 +44,9 @@ ARCHIVED_PILOT_WORKFLOWS = {
     "dds-training-pilot-start.yml",
     "dds-training-pilot-finish.yml",
 }
+ALLOWED_PULL_REQUEST_TARGET_WORKFLOWS = {
+    "dds-main-30k-prepare.yml",
+}
 PINNED_ACTIONS = {
     "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",
     "actions/setup-python": "5fda3b95a4ea91299a34e894583c3862153e4b97",
@@ -52,8 +55,8 @@ PINNED_ACTIONS = {
     "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
 }
 EXPECTED_DDS_COMMIT = "37c8a79f4c67c55d1a309ccb66dd00cb58af464a"
-PILOT_RUN_ID = "31909124383"
-PILOT_ARTIFACT = "dds-pilot-10k-complete-state-31909124383"
+PILOT_DRIVE_LOCATOR = "dds-pilot-10k-complete-31909124383.json"
+PILOT_ZIP_SHA256 = "ef126c6842dda691b08325392b9d7fe5319acdba34b2db6b8981f03d56f8e130"
 PILOT_TGZ_SHA256 = "f472b1361c879e890ffeab0e9184736a7dcd39cbc3a4c33541eb7156df9176d6"
 PILOT_RAW_SHA256 = "8a21cf06ab7ac424ee0f245ccf274e6d6f4f7135fa9b8c4c0e52c595c0da5996"
 PILOT_DB_SHA256 = "c01cbe9e143198a083df8ab51ea2113ec71688b2f23d93dcfb4b1de9c29f2127"
@@ -105,6 +108,34 @@ def assert_pinned_actions(path: Path) -> None:
         assert "persist-credentials: false" in text, path.name
 
 
+def assert_trusted_pull_request_target(path: Path, text: str) -> None:
+    header = workflow_header(text)
+    triggers = asserted_trigger_names(header)
+    if "pull_request_target" not in triggers:
+        return
+    assert path.name in ALLOWED_PULL_REQUEST_TARGET_WORKFLOWS, (path.name, sorted(triggers))
+    lower = text.lower()
+    assert "contents: read" in lower, path.name
+    assert "contents: write" not in lower, path.name
+    assert "actions: write" not in lower, path.name
+    assert "github.event.pull_request.head.repo.full_name == github.repository" in text, path.name
+    assert "github.event.pull_request.user.login == 'olegmed1-art'" in text, path.name
+    assert "github.event.pull_request.base.ref" in text, path.name
+    assert "github.event.pull_request.base.sha" in text, path.name
+    assert "github.event.pull_request.head.sha" in text, path.name
+    assert "secrets.GOOGLE_DRIVE_OAUTH_JSON" in text, path.name
+    assert "Checkout trusted base before Drive credential exposure" in text, path.name
+    assert "Restore exact pilot ZIP from Drive using trusted base code" in text, path.name
+    assert "Checkout exact candidate after Drive secret scope has ended" in text, path.name
+    base_checkout = text.index("Checkout trusted base before Drive credential exposure")
+    secret = text.index("secrets.GOOGLE_DRIVE_OAUTH_JSON")
+    candidate_checkout = text.index("Checkout exact candidate after Drive secret scope has ended")
+    assert base_checkout < secret < candidate_checkout, path.name
+    assert "secrets.GOOGLE_DRIVE_OAUTH_JSON" not in text[candidate_checkout:], path.name
+    assert "gh run download" not in text, path.name
+    assert "PILOT_RUN_ID" not in text, path.name
+
+
 def main() -> None:
     dds_root = Path(__file__).resolve().parent
     repo_root = dds_root.parent
@@ -144,13 +175,19 @@ def main() -> None:
 
     dds_workflows = sorted([*workflows.glob("dds*.yml"), *workflows.glob("dds*.yaml")])
     unsafe: dict[str, list[str]] = {}
+    pr_target_workflows: list[str] = []
     for path in dds_workflows:
-        text = path.read_text(encoding="utf-8").lower()
+        original = path.read_text(encoding="utf-8")
+        text = original.lower()
         found = sorted(token for token in UNSAFE_WORKFLOW_TOKENS if token in text)
         if found:
             unsafe[path.name] = found
+        if "pull_request_target" in asserted_trigger_names(workflow_header(original)):
+            pr_target_workflows.append(path.name)
+        assert_trusted_pull_request_target(path, original)
         assert_pinned_actions(path)
     assert not unsafe, unsafe
+    assert set(pr_target_workflows) <= ALLOWED_PULL_REQUEST_TARGET_WORKFLOWS, pr_target_workflows
 
     fast_path = workflows / "dds-training-v23-smoke.yml"
     heavy_path = workflows / "dds-training-local-smoke.yml"
@@ -208,16 +245,25 @@ def main() -> None:
             "executable_training": False,
         }
 
-    # Stage-2 preparation may run as a PR/readiness regression because it never starts
-    # the mass evaluator. It must restore the exact immutable completed pilot artifact,
-    # expand the same deterministic corpus, lock fresh TRAIN predictions before DDS
-    # preflight, keep holdouts closed and upload a durable prepared-state artifact.
-    assert "pull_request:" in prep and "workflow_dispatch:" in prep
-    assert "actions: read" in prep_lower and "contents: read" in prep_lower
+    # Stage-2 preparation may run as a same-repository owner PR/readiness regression
+    # because it never starts the mass evaluator. The Drive secret is exposed only to
+    # trusted base code before the exact candidate commit is checked out. Candidate
+    # code receives no Drive credential. The exact immutable pilot ZIP and its inner
+    # state are verified before the same deterministic 10k->30k preparation checks.
+    assert "pull_request_target:" in prep and "workflow_dispatch:" in prep
+    assert "actions: read" not in prep_lower and "contents: read" in prep_lower
     assert "run_stage.py evaluate" not in prep
     assert "--start" not in prep
-    for token in (PILOT_RUN_ID, PILOT_ARTIFACT, PILOT_TGZ_SHA256, PILOT_RAW_SHA256, PILOT_DB_SHA256):
+    for token in (PILOT_DRIVE_LOCATOR, PILOT_ZIP_SHA256, PILOT_TGZ_SHA256, PILOT_RAW_SHA256, PILOT_DB_SHA256):
         assert token in prep, token
+    assert "tools/restore_drive_split_artifact.py" in prep
+    assert "secrets.GOOGLE_DRIVE_OAUTH_JSON" in prep
+    assert "PILOT_RUN_ID" not in prep and "gh run download" not in prep
+    assert "github.event.pull_request.head.repo.full_name == github.repository" in prep
+    assert "github.event.pull_request.user.login == 'olegmed1-art'" in prep
+    assert prep.index("Checkout trusted base before Drive credential exposure") < prep.index("secrets.GOOGLE_DRIVE_OAUTH_JSON")
+    assert prep.index("secrets.GOOGLE_DRIVE_OAUTH_JSON") < prep.index("Checkout exact candidate after Drive secret scope has ended")
+    assert "secrets.GOOGLE_DRIVE_OAUTH_JSON" not in prep[prep.index("Checkout exact candidate after Drive secret scope has ended"):]
     assert "run_stage.py prepare --stage main --out work/pilot" in prep
     assert "locked_predictions_main_train_adaptive.jsonl" in prep
     assert prep.index("locked_predictions_main_train_adaptive.jsonl") < prep.index("prepare_stage2.py --work work/pilot")
@@ -225,7 +271,9 @@ def main() -> None:
     assert "assert ready['holdout']['ready'] is False" in prep
     assert "assert ready['skill_claim']['ready'] is False" in prep
     assert "assert db.execute(\"select count(*) from dds_results\").fetchone()[0] == 22497" in prep
-    assert "dds-main-30k-prepared-state.tgz" in prep
+    assert "Upload compact PR preparation evidence" in prep
+    assert "Package prepared 30k state for explicit manual handoff" in prep
+    assert "retention-days: 7" in prep
 
     bootstrap = (dds_root / "bootstrap_linux.sh").read_text(encoding="utf-8")
     assert EXPECTED_DDS_COMMIT in bootstrap
@@ -262,9 +310,12 @@ def main() -> None:
                 "runtime_coverage_suites": sorted(runtime_coverage),
                 "forbidden_network_imports": 0,
                 "unsafe_self_modifying_test_workflows": 0,
+                "trusted_pull_request_target_workflows": sorted(pr_target_workflows),
                 "floating_dds_action_dependencies": 0,
                 "archived_pilot_workflows": archive_state,
                 "main_30k_preparation_restores_immutable_pilot": True,
+                "main_30k_preparation_pr_safe_drive_restore": True,
+                "main_30k_preparation_candidate_secret_exposure": False,
                 "main_30k_preparation_mass_evaluation": False,
                 "golden_preflight_repetitions_required": 2,
                 "bootstrap_preflight_deferred_until_evidence_step": True,

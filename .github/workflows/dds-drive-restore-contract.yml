@@ -7,6 +7,7 @@ on:
       - 'tools/restore_drive_split_artifact.py'
       - 'tests/test_restore_drive_split_artifact.py'
       - 'dds_training/artifact_locations/**'
+      - '.github/workflows/dds-main-30k-prepare.yml'
       - '.github/workflows/dds-main-30k-train-authorized.yml'
       - '.github/workflows/dds-stage2b-prepare.yml'
       - '.github/workflows/dds-training-v23-smoke.yml'
@@ -17,6 +18,7 @@ on:
       - 'tools/restore_drive_split_artifact.py'
       - 'tests/test_restore_drive_split_artifact.py'
       - 'dds_training/artifact_locations/**'
+      - '.github/workflows/dds-main-30k-prepare.yml'
       - '.github/workflows/dds-main-30k-train-authorized.yml'
       - '.github/workflows/dds-stage2b-prepare.yml'
       - '.github/workflows/dds-training-v23-smoke.yml'
@@ -58,9 +60,36 @@ jobs:
 
           stage2b=.github/workflows/dds-stage2b-prepare.yml
           train=.github/workflows/dds-main-30k-train-authorized.yml
+          prepare=.github/workflows/dds-main-30k-prepare.yml
+
           grep -F 'GOOGLE_DRIVE_OAUTH_JSON' "$stage2b"
           ! grep -F '/actions/artifacts/${TRAIN_ARTIFACT_ID}/zip' "$stage2b"
           grep -F 'PREPARED_DRIVE_LOCATOR' "$train"
           grep -F 'GOOGLE_DRIVE_OAUTH_JSON' "$train"
           grep -F 'gh run download "$GITHUB_RUN_ID"' "$train"
           ! grep -F 'PREPARED_RUN_ID' "$train"
+
+          grep -F 'pull_request_target:' "$prepare"
+          ! grep -Eq '^  pull_request:$' "$prepare"
+          grep -F 'PILOT_DRIVE_LOCATOR' "$prepare"
+          grep -F "github.event.pull_request.head.repo.full_name == github.repository" "$prepare"
+          grep -F "github.event.pull_request.user.login == 'olegmed1-art'" "$prepare"
+          grep -F 'github.event.pull_request.base.sha' "$prepare"
+          grep -F 'github.event.pull_request.head.sha' "$prepare"
+          grep -F 'GOOGLE_DRIVE_OAUTH_JSON' "$prepare"
+          ! grep -F 'PILOT_RUN_ID' "$prepare"
+          ! grep -F 'gh run download' "$prepare"
+          ! grep -F 'actions: read' "$prepare"
+
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('.github/workflows/dds-main-30k-prepare.yml').read_text(encoding='utf-8')
+          base_checkout = text.index('Checkout trusted base before Drive credential exposure')
+          secret = text.index('secrets.GOOGLE_DRIVE_OAUTH_JSON')
+          candidate_checkout = text.index('Checkout exact candidate after Drive secret scope has ended')
+          assert base_checkout < secret < candidate_checkout
+          assert 'secrets.GOOGLE_DRIVE_OAUTH_JSON' not in text[candidate_checkout:]
+          assert 'pull_request_target' in text
+          assert 'retention-days: 7' in text
+          print('DDS_PRSAFE_DRIVE_BOUNDARY: PASS')
+          PY
