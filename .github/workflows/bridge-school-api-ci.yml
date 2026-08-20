@@ -5,6 +5,8 @@ on:
     paths:
       - 'bridge_school_api/**'
       - 'tests/test_api_dsn_contract.py'
+      - 'tests/test_ai_api_routes.py'
+      - 'tests/test_ai_final_decision_contract.py'
       - 'requirements-api.txt'
       - 'Dockerfile.api'
       - '.github/workflows/bridge-school-api-ci.yml'
@@ -13,6 +15,8 @@ on:
     paths:
       - 'bridge_school_api/**'
       - 'tests/test_api_dsn_contract.py'
+      - 'tests/test_ai_api_routes.py'
+      - 'tests/test_ai_final_decision_contract.py'
       - 'requirements-api.txt'
       - 'Dockerfile.api'
       - '.github/workflows/bridge-school-api-ci.yml'
@@ -34,11 +38,15 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install API dependencies
-        run: python -m pip install --disable-pip-version-check -r requirements-api.txt
+        run: |
+          python -m pip install --disable-pip-version-check -r requirements-api.txt
+          python -m pip install --disable-pip-version-check pytest
       - name: Compile API package
-        run: python -m py_compile bridge_school_api/__init__.py bridge_school_api/db.py bridge_school_api/main.py
+        run: python -m py_compile bridge_school_api/__init__.py bridge_school_api/db.py bridge_school_api/main.py bridge_school_api/ai_decision.py
       - name: Verify database DSN security contract
         run: PYTHONPATH=. python tests/test_api_dsn_contract.py
+      - name: Verify AI final decision contracts
+        run: PYTHONPATH=. pytest -q tests/test_ai_api_routes.py tests/test_ai_final_decision_contract.py
       - name: Import FastAPI application
         run: python -c "from bridge_school_api.main import app; assert app.title == 'Bridge School API'"
       - name: Build API container
