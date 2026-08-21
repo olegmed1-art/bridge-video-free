@@ -4,6 +4,8 @@ on:
     paths:
       - 'dds/**'
       - 'bridge_school_api/dds3/**'
+      - 'dds3_runtime/**'
+      - 'dds3_cli/**'
       - 'Dockerfile.dds3'
       - '.github/workflows/dds3-module.yml'
   workflow_dispatch:
@@ -37,7 +39,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Image transcription, clockwise from North: N E S W.
           DEAL='N:K54.7654.875432. Q972.AT82.J.KQT7 8.KQJ3.AQT96.943 AJT63.9.K.AJ8652'
           docker run --rm bridge-school-dds3 N None "$DEAL" | tee board16.json
           python3 - <<'PY'
@@ -47,6 +48,35 @@ jobs:
           assert set(d['dd_table'])=={'S','H','D','C','NT'}
           print('BOARD16_DDS3_PASS', json.dumps(d, sort_keys=True))
           PY
+      - name: Build production DDS3 runtime container
+        run: docker build -f dds3_runtime/Dockerfile -t bridge-school-dds3-runtime:test .
+      - name: Start production runtime
+        run: docker run -d --rm --name dds3-runtime -p 18080:8080 -e DDS3_RUNTIME_TOKEN=ci-secret bridge-school-dds3-runtime:test
+      - name: Require real DDS3 readiness
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/readyz > runtime-ready.json; then cat runtime-ready.json; exit 0; fi
+            sleep 1
+          done
+          docker logs dds3-runtime
+          exit 1
+      - name: Golden computation through embeddable HTTP runtime
+        run: |
+          curl -fsS -H 'Authorization: Bearer ci-secret' -H 'Content-Type: application/json' \
+            -d '{"operation":"dd_table","pbn":"N:QJ6.K652.J85.T98 873.J97.AT764.Q4 K5.T83.KQ9.A7652 AT942.AQ4.32.KJ3","dealer":"N","vulnerability":"None"}' \
+            http://127.0.0.1:18080/v1/compute > runtime-result.json
+          python3 - <<'PY'
+          import json
+          r=json.load(open('runtime-result.json'))
+          assert r['engine']=='DDS3'
+          assert r['fallback_used'] is False
+          assert r['par_score_ns']==-110
+          assert r['dd_table']=={'S':[7,6,7,6],'H':[8,5,8,5],'D':[6,7,6,7],'C':[8,5,8,5],'NT':[7,6,7,6]}
+          print('DDS3_RUNTIME_HTTP_PASS')
+          PY
+      - name: Runtime logs on failure
+        if: failure()
+        run: docker logs dds3-runtime || true
       - uses: actions/upload-artifact@v4
         with:
           name: dds3-integration-results
@@ -54,3 +84,5 @@ jobs:
             run1.json
             run2.json
             board16.json
+            runtime-ready.json
+            runtime-result.json
