@@ -17,6 +17,7 @@ from pathlib import Path
 
 import fitz
 from PIL import Image
+import pytesseract
 
 from bridge_school_api.dds3.image_ingress import _extract_local_observation
 from bridge_school_api.dds3.vision_appeals_cross import (
@@ -105,14 +106,7 @@ def _deal_clip(page: fitz.Page) -> fitz.Rect:
     words = [row["word"] for row in rows]
     y0 = min(word[1] for word in words)
     y1 = max(word[3] for word in words)
-    # Include the explicit Board/Dealer/Vulnerability lines above the hand diagram and
-    # the full cross/compass horizontally. No source truth is taken from OCR pixels.
-    return fitz.Rect(
-        0,
-        max(0, y0 - 105),
-        page.rect.width,
-        min(page.rect.height, y1 + 30),
-    )
+    return fitz.Rect(0, max(0, y0 - 105), page.rect.width, min(page.rect.height, y1 + 30))
 
 
 def _observation_hands(observation) -> dict[str, str]:
@@ -121,7 +115,6 @@ def _observation_hands(observation) -> dict[str, str]:
 
 def _negative_crop(image_bytes: bytes) -> bytes:
     image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    # Cut through the South-hand area. This must not be accepted as a complete deal.
     cropped = image.crop((0, 0, image.width, max(1, int(image.height * 0.78))))
     buf = io.BytesIO(); cropped.save(buf, format="PNG")
     return buf.getvalue()
@@ -146,23 +139,17 @@ def main() -> int:
         pix = page.get_pixmap(matrix=fitz.Matrix(args.dpi/72, args.dpi/72), clip=clip, alpha=False)
         image_bytes = pix.tobytes("png")
         image_sha = hashlib.sha256(image_bytes).hexdigest()
+        raster_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        raster_ocr = pytesseract.image_to_string(raster_image, config="--psm 6")[:1600]
 
         result: dict[str, object]
         try:
-            observed = extract_appeals_cross_observation(
-                image_bytes, media_type="image/png", filename="ebu-appeals-2001-board-2.png"
-            )
-            routed = _extract_local_observation(
-                image_bytes, media_type="image/png", filename="ebu-appeals-2001-board-2.png"
-            )
+            observed = extract_appeals_cross_observation(image_bytes, media_type="image/png", filename="ebu-appeals-2001-board-2.png")
+            routed = _extract_local_observation(image_bytes, media_type="image/png", filename="ebu-appeals-2001-board-2.png")
             observed_hands = _observation_hands(observed)
             routed_source = routed.extra_metadata["vision_extractor"].value
             hands_exact = observed_hands == truth_hands
-            metadata_exact = (
-                int(observed.board_number.value) == board
-                and str(observed.dealer.value) == dealer
-                and str(observed.vulnerability.value) == vulnerability
-            )
+            metadata_exact = (int(observed.board_number.value) == board and str(observed.dealer.value) == dealer and str(observed.vulnerability.value) == vulnerability)
             routing_exact = routed_source == "local_tesseract_appeals_cross_v1"
             status = "exact" if hands_exact and metadata_exact and routing_exact else "wrong_accept"
             result = {
@@ -177,15 +164,13 @@ def main() -> int:
                 "observed_hands": observed_hands,
             }
         except AppealsCrossVisionError as exc:
-            result = {"status":"rejected", "reason":str(exc), "source_sha256":source_sha, "image_sha256":image_sha, "truth_hands":truth_hands}
+            result = {"status":"rejected", "reason":str(exc), "source_sha256":source_sha, "image_sha256":image_sha, "truth_hands":truth_hands, "raster_ocr":raster_ocr}
         except Exception as exc:
-            result = {"status":"field_error", "reason":f"{type(exc).__name__}:{exc}", "source_sha256":source_sha, "image_sha256":image_sha, "truth_hands":truth_hands}
+            result = {"status":"field_error", "reason":f"{type(exc).__name__}:{exc}", "source_sha256":source_sha, "image_sha256":image_sha, "truth_hands":truth_hands, "raster_ocr":raster_ocr}
 
         negative_status = "not_run"
         try:
-            _extract_local_observation(
-                _negative_crop(image_bytes), media_type="image/png", filename="ebu-appeals-2001-board-2-crop.png"
-            )
+            _extract_local_observation(_negative_crop(image_bytes), media_type="image/png", filename="ebu-appeals-2001-board-2-crop.png")
             negative_status = "wrong_accept"
         except Exception:
             negative_status = "rejected"
