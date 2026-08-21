@@ -1,4 +1,5 @@
-"""Bridge School DDS3 public API."""
-from .service import DDS3Config, DDSUnavailable, solve_table
+"""Bridge School DDS3 public computation boundary."""
+from .model import BridgeDeal, DealValidationError
+from .service import DDS3Config, DDSUnavailable, compute, solve_deal, solve_table
 
-__all__ = ["DDS3Config", "DDSUnavailable", "solve_table"]
+__all__ = ["BridgeDeal", "DealValidationError", "DDS3Config", "DDSUnavailable", "compute", "solve_deal", "solve_table"]
