@@ -7,9 +7,11 @@ on:
       - 'diana_longitudinal_quality_v4_2.py'
       - 'diana_longitudinal_postprocess_v4_2.py'
       - 'diana_longitudinal_postprocess_v3.py'
+      - 'route_drive_job_outputs.py'
       - 'tests/test_bridge_report_board_reconstruction.py'
       - 'tests/test_diana_longitudinal_quality_v4_2.py'
       - 'tests/test_diana_longitudinal_postprocess_v4_2.py'
+      - 'tests/test_r29_status_file_idempotency.py'
       - '.github/workflows/diana-longitudinal-v42-regression.yml'
 
 permissions:
@@ -33,7 +35,7 @@ jobs:
           python -m pip install --disable-pip-version-check
           PyMuPDF requests google-auth google-auth-oauthlib numpy Pillow
           opencv-python-headless
-      - name: Compile current semantic and board layers
+      - name: Compile current semantic, board and routing layers
         run: |
           python -m py_compile \
             bridge_report_board_reconstruction.py \
@@ -41,15 +43,17 @@ jobs:
             diana_longitudinal_quality_v4_1.py \
             diana_longitudinal_quality_v4_2.py \
             diana_longitudinal_postprocess_v4_2.py \
-            diana_longitudinal_postprocess_v3.py
-      - name: Run v4.2 regressions
+            diana_longitudinal_postprocess_v3.py \
+            route_drive_job_outputs.py
+      - name: Run v4.2 and file-idempotency regressions
         run: |
           python -m unittest \
             tests.test_bridge_report_board_reconstruction \
             tests.test_diana_longitudinal_quality_v4_1 \
             tests.test_diana_longitudinal_quality_v4_2 \
             tests.test_diana_longitudinal_postprocess_v4_1 \
-            tests.test_diana_longitudinal_postprocess_v4_2 -v
+            tests.test_diana_longitudinal_postprocess_v4_2 \
+            tests.test_r29_status_file_idempotency -v
       - name: Fail closed on authority and full-board inference
         run: |
           python - <<'PY'
