@@ -42,7 +42,8 @@ jobs:
           assert 'local_tesseract_named_quadrant_v1' in named
           assert 'DECK_VALIDATION_FAILED' in named
           assert 'derive_board_metadata' not in named
-          assert 'deck-complement' in named or 'deck complement' in named
+          normalized=' '.join(named.split())
+          assert 'deck-complement' in named or 'deck complement' in normalized
           assert 'startswith("UNSUPPORTED_LAYOUT_")' in ingress
           assert 'fallback_used' in ingress
           print('DDS3_NAMED_QUADRANT_CONTRACT_PASS')
