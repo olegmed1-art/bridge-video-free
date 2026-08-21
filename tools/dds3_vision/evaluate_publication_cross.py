@@ -231,12 +231,15 @@ def _evaluate_sample(sample: Sample, root: Path, dpi: int) -> dict:
         meta_ok = int(observed.board_number.value) == board and str(observed.dealer.value) == dealer and str(observed.vulnerability.value) == vulnerability
         hands_ok = observed_hands == truth_hands
 
+        # Severe negative: remove enough of the rendered deal to cut through the
+        # South-hand rows. The previous 82% crop still contained all 52 cards in this
+        # publication layout, so accepting it was not a meaningful crop failure.
         negative_status = "not_run"
         try:
             from PIL import Image
             import io
             pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-            cropped = pil.crop((0, 0, pil.width, max(1, int(pil.height * 0.82))))
+            cropped = pil.crop((0, 0, pil.width, max(1, int(pil.height * 0.72))))
             buffer = io.BytesIO(); cropped.save(buffer, format="PNG")
             extract_publication_cross_observation(buffer.getvalue(), media_type="image/png", filename=f"{sample.source_id}-cropped.png")
             negative_status = "wrong_accept"
@@ -289,7 +292,7 @@ def main() -> int:
     print(text)
     if args.output:
         args.output.write_text(text + "\n", encoding="utf-8")
-    return 0 if wrong == 0 and exact >= 1 else 3
+    return 0 if wrong == 0 and exact >= 1 and negative_pass >= exact else 3
 
 
 if __name__ == "__main__":
