@@ -48,8 +48,6 @@ def _read_row(image, *, x0: float, cy: float, span: float, pytesseract, cv2):
                 group.append(_clean_rank_text(raw))
         grouped.append(group)
 
-    # Require the same exact holding from at least two independent resize groups. If
-    # more than one conflicting holding has such cross-scale support, fail closed.
     supported: dict[str, set[int]] = {}
     flat: list[str] = []
     for group_index, group in enumerate(grouped):
@@ -61,16 +59,19 @@ def _read_row(image, *, x0: float, cy: float, span: float, pytesseract, cv2):
     if not cross_scale:
         raise AppealsCrossVisionError(f"APPEALS_ROW_NO_CROSS_SCALE_CONSENSUS:{flat}")
 
-    # Prefer the value with the strongest total OCR support, but only if it is unique.
     counts = {value: flat.count(value) for value in cross_scale}
     best_count = max(counts.values())
     best = [value for value, count in counts.items() if count == best_count]
     if len(best) != 1:
         raise AppealsCrossVisionError(f"AMBIGUOUS_APPEALS_CARD_OCR:{counts}")
     winner = best[0]
-    # A materially different cross-scale-supported alternative is evidence of ambiguity,
-    # not permission to repair a missing/extra rank from the rest of the deck.
-    alternatives = [value for value in cross_scale if value != winner and counts[value] >= max(2, best_count // 2)]
+    # A conflicting cross-scale reading remains terminal unless the winning exact text
+    # has a clear >3:2 OCR-support margin. This is an OCR-consensus threshold only: it
+    # does not inspect other hands, deck inventory, Board number, or bridge semantics.
+    alternatives = [
+        value for value in cross_scale
+        if value != winner and counts[value] * 3 >= best_count * 2
+    ]
     if alternatives:
         raise AppealsCrossVisionError(f"AMBIGUOUS_APPEALS_CARD_OCR:{counts}")
     confidence = min(0.92, 0.62 + 0.03 * best_count)
@@ -84,8 +85,6 @@ def _extract_hands(image, compass, pytesseract, cv2):
         raise AppealsCrossVisionError("APPEALS_COMPASS_SPAN_INVALID")
     axis_x = (n[0] + s[0]) / 2
     center_y = (n[1] + s[1]) / 2
-    # These starts are to the right of the visible suit-glyph column. They are pure
-    # layout geometry measured from the OCR-observed compass, not card inference.
     starts = {
         "N": axis_x - 0.80 * span,
         "S": axis_x - 0.80 * span,
