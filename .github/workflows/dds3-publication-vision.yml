@@ -47,6 +47,8 @@ jobs:
           print('DDS3_PUBLICATION_DISPATCH_CONTRACT_PASS')
           PY
       - name: Run real public-source field gate
+        env:
+          PYTHONPATH: .
         run: |
           python tools/dds3_vision/evaluate_publication_cross.py --output publication-field.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
