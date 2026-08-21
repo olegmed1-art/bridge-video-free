@@ -64,6 +64,12 @@ jobs:
           with tempfile.TemporaryDirectory(prefix='dds3-named-diag-') as temp:
               pdf=Path(temp)/'source.pdf'; _download(pdf)
               page=fitz.open(pdf)[0]; clip=_deal_clip(page)
+              words=[]
+              for word in page.get_text('words'):
+                  rect=fitz.Rect(word[:4])
+                  if rect.intersects(clip):
+                      words.append((round(word[0]-clip.x0,1),round(word[1]-clip.y0,1),round(word[2]-clip.x0,1),round(word[3]-clip.y0,1),word[4]))
+              print('DIAG_VECTOR_WORDS',words)
               pix=page.get_pixmap(matrix=fitz.Matrix(440/72,440/72),clip=clip,alpha=False)
               cv2,np,pytesseract=_deps(); image=_decode_named(pix.tobytes('png'),cv2,np)
               print('DIAG_SHAPE', image.shape[:2], 'CLIP', tuple(round(v,2) for v in clip))
