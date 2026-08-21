@@ -39,9 +39,8 @@ jobs:
         run: |
           set -euo pipefail
           git clone --quiet --branch v2.9.0 https://github.com/dds-bridge/dds.git /tmp/classic-dds
-          cmake -S /tmp/classic-dds -B /tmp/classic-dds/build -DCMAKE_BUILD_TYPE=Release
-          cmake --build /tmp/classic-dds/build -j2
-          g++ -std=c++17 -O2 -I/tmp/classic-dds/include tmp_dds_compare/classic_dds_cli.cpp -L/tmp/classic-dds/build -ldds -Wl,-rpath,/tmp/classic-dds/build -o /tmp/classic_dds_cli
+          make -C /tmp/classic-dds/src -f Makefiles/Makefile_linux_shared linux -j2 THREADING= THREAD_COMPILE= THREAD_LINK=
+          g++ -std=c++17 -O2 -I/tmp/classic-dds/include tmp_dds_compare/classic_dds_cli.cpp -L/tmp/classic-dds/src -ldds -Wl,-rpath,/tmp/classic-dds/src -o /tmp/classic_dds_cli
       - name: Classic DDS - same deals, no modification of DDS3 results
         shell: bash
         run: |
@@ -61,9 +60,11 @@ jobs:
               print(i, 'MATCH' if a==b else 'DIFF', a, b)
           PY
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: dds3-vs-dds-10-results
           path: |
             deals.txt
             out/*.json
             out/dds3-frozen.sha256
+          if-no-files-found: error
