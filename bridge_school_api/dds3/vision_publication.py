@@ -148,7 +148,7 @@ def _median(values:list[float])->float:
 def _filtered_holding(row:list[dict[str,Any]], *, rank_start:float, width:int)->tuple[str,float]:
     if not row:
         return "",0.75
-    aligned=[token for token in row if token["x"] >= rank_start-6 and token["x"] <= rank_start+width*0.24]
+    aligned=[token for token in row if token["x"] >= rank_start-1 and token["x"] <= rank_start+width*0.24]
     aligned.sort(key=lambda token:token["x"])
     if not aligned:
         return "",0.75
