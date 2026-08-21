@@ -1,0 +1,12 @@
+{
+  "schema": "a11-trigger-request-v1",
+  "request_id": "a11-10k-20260821-01",
+  "target": 10000,
+  "authority": "EVIDENCE_ONLY",
+  "requested_by": "repository-owner",
+  "requested_at": "2026-08-21T10:56:00+03:00",
+  "allowed_promotions": [],
+  "forbidden_promotions": ["canon", "curriculum", "methodology", "mastery", "student_profile"],
+  "require_verified_corpus": true,
+  "require_verified_evaluator": true
+}
