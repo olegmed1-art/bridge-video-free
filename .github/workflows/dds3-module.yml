@@ -73,6 +73,33 @@ jobs:
           assert r['dd_table']=={'S':[5,8,5,8],'H':[6,6,6,6],'D':[5,7,5,7],'C':[7,5,7,5],'NT':[6,6,6,6]}
           print('DDS3_RUNTIME_HTTP_PASS')
           PY
+      - name: Persistent position all-moves and TT reuse through HTTP runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          BODY='{"operation":"position_all_moves","position":{"pbn":"N:QJ6.K652.J85.T98 873.J97.AT764.Q4 K5.T83.KQ9.A7652 AT942.AQ4.32.KJ3","trump":"NT","first":"N","current_trick":[]}}'
+          curl -fsS -H 'Authorization: Bearer ci-secret' -H 'Content-Type: application/json' -d "$BODY" \
+            http://127.0.0.1:18080/v1/compute > position1.json
+          curl -fsS -H 'Authorization: Bearer ci-secret' -H 'Content-Type: application/json' -d "$BODY" \
+            http://127.0.0.1:18080/v1/compute > position2.json
+          python3 - <<'PY'
+          import json
+          a=json.load(open('position1.json')); b=json.load(open('position2.json'))
+          for r in (a,b):
+              assert r['engine']=='DDS3' and r['fallback_used'] is False
+              assert r['operation']=='position_all_moves'
+              assert 0 <= r['best_tricks'] <= 13
+              assert r['moves'] and r['optimal_cards']
+              assert all(m['regret'] >= 0 and m['regret_class'] in {'0','1','2+'} for m in r['moves'])
+          assert a['moves']==b['moves']
+          assert a['solver_context']['request_seq']==1
+          assert b['solver_context']['request_seq']==2
+          assert b['solver_context']['tt_present_before'] is True
+          assert b['solver_context']['tt_present_after'] is True
+          assert b['solver_context']['same_tt_instance'] is True
+          assert a['nodes'] > b['nodes'] >= 0
+          print('DDS3_POSITION_TT_REUSE_PASS', a['nodes'], '->', b['nodes'])
+          PY
       - name: Runtime logs on failure
         if: failure()
         run: docker logs dds3-runtime || true
@@ -85,3 +112,5 @@ jobs:
             board16.json
             runtime-ready.json
             runtime-result.json
+            position1.json
+            position2.json
