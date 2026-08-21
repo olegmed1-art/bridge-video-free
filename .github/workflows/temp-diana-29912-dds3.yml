@@ -1,0 +1,94 @@
+name: TEMP Diana 29912 DDS3 analysis
+
+on:
+  pull_request:
+    paths:
+      - 'data/tournaments/tournament_29912_round6_diana_facts_v2.json'
+      - 'scripts/temp_diana_29912_dds3_analysis.py'
+      - '.github/workflows/temp-diana-29912-dds3.yml'
+      - 'bridge_school_api/dds3/**'
+      - 'dds/**'
+      - 'dds3_runtime/**'
+      - 'Dockerfile.dds3'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Validate script
+        run: python3 -m py_compile scripts/temp_diana_29912_dds3_analysis.py
+      - name: Build pinned canonical DDS3 core
+        run: docker build -f Dockerfile.dds3 -t bridge-school-dds3 .
+      - name: Build canonical DDS3 runtime
+        run: docker build -f dds3_runtime/Dockerfile -t bridge-school-dds3-runtime:diana29912 .
+      - name: Start runtime
+        run: docker run -d --rm --name dds3-diana29912 -p 18080:8080 -e DDS3_RUNTIME_TOKEN=diana29912-secret bridge-school-dds3-runtime:diana29912
+      - name: Require DDS3 ready / no fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/readyz > diana29912-ready.json; then
+              cat diana29912-ready.json
+              python3 - <<'PY'
+          import json
+          r=json.load(open('diana29912-ready.json'))
+          assert r['status']=='ready'
+          assert r['engine']=='DDS3'
+          assert r['fallback_used'] is False
+          PY
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs dds3-diana29912
+          exit 1
+      - name: Analyze all 21 boards through actual DDS3
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/temp_diana_29912_dds3_analysis.py \
+            --facts data/tournaments/tournament_29912_round6_diana_facts_v2.json \
+            --base-url http://127.0.0.1:18080 \
+            --token diana29912-secret \
+            --out-json diana-29912-round6-dds3-analysis.json \
+            --out-md diana-29912-round6-dds3-analysis.md
+          cat diana-29912-round6-dds3-analysis.md
+      - name: Evidence gate
+        run: |
+          python3 - <<'PY'
+          import json
+          r=json.load(open('diana-29912-round6-dds3-analysis.json'))
+          assert r['policy']['dds3_only'] is True
+          assert r['policy']['no_site_dd_used'] is True
+          assert r['summary']['boards']==21
+          assert r['summary']['engine']=='DDS3'
+          assert r['summary']['fallback_used'] is False
+          assert len(r['summary']['diana_declarer_boards'])==8
+          assert len(r['summary']['diana_opening_lead_boards'])==4
+          assert all(b['dds3']['engine']=='DDS3' and b['dds3']['fallback_used'] is False for b in r['boards'])
+          print('DIANA_29912_DDS3_PASS')
+          PY
+      - name: Runtime logs on failure
+        if: failure()
+        run: docker logs dds3-diana29912 || true
+      - name: Upload DDS3 evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: diana-29912-round6-dds3-analysis
+          path: |
+            diana29912-ready.json
+            diana-29912-round6-dds3-analysis.json
+            diana-29912-round6-dds3-analysis.md
+          if-no-files-found: error
+          retention-days: 30
