@@ -8,6 +8,7 @@ metadata, bridge inference repair, paid/cloud vision, or alternate solver is use
 from __future__ import annotations
 
 import hashlib
+import itertools
 import re
 from typing import Any
 
@@ -18,7 +19,6 @@ from .vision_publication import (
     _decode,
     _deps,
     _extract_hands,
-    _ocr_compass,
 )
 
 
@@ -93,6 +93,90 @@ def _dedicated_dealer_read(image: Any, pytesseract: Any, cv2: Any) -> str | None
     return best
 
 
+def _ocr_appeals_compass(image: Any, pytesseract: Any) -> dict[str, tuple[float, float, float]]:
+    """Locate a visible N/W/E/S compass from pixels using redundant OCR passes.
+
+    Unlike the generic publication extractor, appeals pages contain surrounding prose and
+    a very small compass. We collect only exact one-letter N/W/E/S OCR tokens and accept a
+    unique compact cardinal geometry. No seat is inferred from hand contents or metadata.
+    """
+    labels: dict[str, list[tuple[float, float, float]]] = {seat: [] for seat in "NWES"}
+    seen: set[tuple[str, int, int]] = set()
+    for psm in (6, 11, 12):
+        data = pytesseract.image_to_data(
+            image,
+            config=f"--psm {psm} -c tessedit_char_whitelist=NWES",
+            output_type=pytesseract.Output.DICT,
+        )
+        for index, raw in enumerate(data["text"]):
+            text = raw.strip().upper()
+            if text not in labels:
+                continue
+            try:
+                conf = max(0.0, min(1.0, float(data["conf"][index]) / 100.0))
+            except (TypeError, ValueError):
+                conf = 0.0
+            if conf < 0.05:
+                continue
+            x = int(data["left"][index]); y = int(data["top"][index])
+            w = int(data["width"][index]); h = int(data["height"][index])
+            cx = x + w / 2; cy = y + h / 2
+            key = (text, round(cx), round(cy))
+            if key in seen:
+                continue
+            seen.add(key)
+            labels[text].append((cx, cy, conf))
+    if any(not labels[seat] for seat in "NWES"):
+        raise AppealsCrossVisionError(
+            "UNSUPPORTED_LAYOUT_NO_APPEALS_COMPASS:" + ",".join(
+                f"{seat}={len(labels[seat])}" for seat in "NWES"
+            )
+        )
+
+    height, width = image.shape[:2]
+    candidates: list[tuple[float, dict[str, tuple[float, float, float]]]] = []
+    for n, w, e, s in itertools.product(labels["N"], labels["W"], labels["E"], labels["S"]):
+        span_x = e[0] - w[0]; span_y = s[1] - n[1]
+        if not (n[1] < s[1] and w[0] < e[0]):
+            continue
+        if not (12 <= span_x <= width * 0.22 and 12 <= span_y <= height * 0.22):
+            continue
+        cx = (n[0] + s[0] + w[0] + e[0]) / 4
+        cy = (n[1] + s[1] + w[1] + e[1]) / 4
+        # Cardinal letters must make one compact cross: N/S share x, W/E share y,
+        # and horizontal/vertical radii are approximately balanced.
+        x_alignment = abs(n[0] - s[0])
+        y_alignment = abs(w[1] - e[1])
+        horizontal_balance = abs((cx - w[0]) - (e[0] - cx))
+        vertical_balance = abs((cy - n[1]) - (s[1] - cy))
+        if x_alignment > max(14.0, span_x * 0.35):
+            continue
+        if y_alignment > max(14.0, span_y * 0.35):
+            continue
+        if horizontal_balance > max(18.0, span_x * 0.45):
+            continue
+        if vertical_balance > max(18.0, span_y * 0.45):
+            continue
+        score = (
+            x_alignment
+            + y_alignment
+            + horizontal_balance
+            + vertical_balance
+            - 12 * min(n[2], w[2], e[2], s[2])
+        )
+        candidates.append((score, {"N": n, "W": w, "E": e, "S": s}))
+    if not candidates:
+        raise AppealsCrossVisionError("UNSUPPORTED_LAYOUT_NO_APPEALS_COMPASS_CLUSTER")
+    candidates.sort(key=lambda item: item[0])
+    if len(candidates) > 1 and candidates[1][0] <= candidates[0][0] + 1.0:
+        # Near-tied geometrically distinct compass clusters are ambiguous. Duplicate OCR
+        # passes at the same coordinates were already deduplicated above.
+        first, second = candidates[0][1], candidates[1][1]
+        if any(abs(first[seat][0] - second[seat][0]) > 4 or abs(first[seat][1] - second[seat][1]) > 4 for seat in "NWES"):
+            raise AppealsCrossVisionError("AMBIGUOUS_APPEALS_COMPASS_CLUSTER")
+    return candidates[0][1]
+
+
 def _extract_appeals_metadata(
     image: Any, pytesseract: Any, cv2: Any
 ) -> tuple[int, str, str, float]:
@@ -138,7 +222,7 @@ def extract_appeals_cross_observation(
         image, pytesseract, cv2
     )
     try:
-        compass = _ocr_compass(image, pytesseract)
+        compass = _ocr_appeals_compass(image, pytesseract)
         hands, hand_confidence = _extract_hands(image, compass, pytesseract, cv2)
     except Exception as exc:
         raise AppealsCrossVisionError(str(exc)) from exc
