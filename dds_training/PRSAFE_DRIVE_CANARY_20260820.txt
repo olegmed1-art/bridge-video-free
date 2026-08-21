@@ -1,2 +1,3 @@
 PR-safe Drive restore canary. No runtime or methodology change.
 Attestation canary synchronize trigger.
+Retrigger against current trusted main for final closure.
