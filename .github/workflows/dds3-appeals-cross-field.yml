@@ -44,8 +44,9 @@ jobs:
           ingress=Path('bridge_school_api/dds3/image_ingress.py').read_text(encoding='utf-8')
           assert 'UNSUPPORTED_LAYOUT_APPEALS_HEADER' in base
           assert 'deck complement' in base
-          assert 'No card is completed from the deck' in appeals
-          assert 'standard-deck gate' in appeals
+          assert 'No card is completed' in appeals
+          assert 'len(cards) != 52 or len(set(cards)) != 52' in appeals
+          assert 'set(cards) != expected' in appeals
           assert 'local_tesseract_appeals_cross_v4' in appeals
           assert 'extract_appeals_cross_observation' in ingress
           assert 'startswith("UNSUPPORTED_LAYOUT_")' in ingress
