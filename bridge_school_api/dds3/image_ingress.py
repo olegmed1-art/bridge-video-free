@@ -87,6 +87,19 @@ def _extract_local_observation(
             image_bytes, media_type=media_type, filename=filename
         )
     except PublicationVisionError as exc:
+        if not str(exc).startswith("UNSUPPORTED_LAYOUT_"):
+            raise ImageIngressError(str(exc)) from exc
+
+    from .vision_publication_grid import (
+        PublicationGridVisionError,
+        extract_publication_grid_observation,
+    )
+
+    try:
+        return extract_publication_grid_observation(
+            image_bytes, media_type=media_type, filename=filename
+        )
+    except PublicationGridVisionError as exc:
         raise ImageIngressError(str(exc)) from exc
 
 
