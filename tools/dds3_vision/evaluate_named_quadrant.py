@@ -93,11 +93,6 @@ def _looks_like_rank_word(text: str) -> bool:
 
 
 def _deal_clip(page: fitz.Page) -> fitz.Rect:
-    """Crop the explicit metadata header plus all four named hand columns.
-
-    The old 105-point lower margin cut off two suit rows. This uses vector geometry only
-    to construct the test image; no vector card value is passed to the extractor.
-    """
     words = page.get_text("words")
     seat_words = [w for w in words if w[4].strip().lower() in {"north", "west", "east", "south"}]
     chosen = {}
@@ -171,7 +166,7 @@ def _evaluate_page(page: fitz.Page, page_index: int, source_sha: str, dpi: int) 
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(); parser.add_argument("--output", type=Path); parser.add_argument("--dpi", type=int, default=220); args = parser.parse_args()
+    parser = argparse.ArgumentParser(); parser.add_argument("--output", type=Path); parser.add_argument("--dpi", type=int, default=440); args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="dds3-vubridge-field-") as temp:
         pdf = Path(temp) / "vubridge.pdf"; _download(pdf); source_sha = hashlib.sha256(pdf.read_bytes()).hexdigest(); document = fitz.open(pdf)
         results = []
@@ -183,7 +178,7 @@ def main() -> int:
             except Exception as exc:
                 results.append({"page": index + 1, "status": "field_error", "reason": f"{type(exc).__name__}:{exc}", "source_sha256": source_sha})
     exact = sum(item.get("status") == "exact" for item in results); wrong = sum(item.get("status") == "wrong_accept" for item in results); negative = sum(item.get("negative_crop") == "rejected" for item in results)
-    report = {"layout_family": "named_quadrant_vubridge", "extractor": "local_tesseract_named_quadrant_v1", "real_public_sources": 1, "real_board_pages": len(results), "exact": exact, "wrong_accepts": wrong, "negative_crop_rejected": negative, "truth_source": "embedded source PDF vector text", "dds3_used_for_truth": False, "paid_or_cloud_vision": False, "bridge_inference_repair": False, "results": results}
+    report = {"layout_family": "named_quadrant_vubridge", "extractor": "local_tesseract_named_quadrant_v1", "real_public_sources": 1, "real_board_pages": len(results), "exact": exact, "wrong_accepts": wrong, "negative_crop_rejected": negative, "truth_source": "embedded source PDF vector text", "dds3_used_for_truth": False, "paid_or_cloud_vision": False, "bridge_inference_repair": False, "render_dpi": args.dpi, "results": results}
     text = json.dumps(report, indent=2, sort_keys=True); print(text)
     if args.output: args.output.write_text(text + "\n", encoding="utf-8")
     return 0 if exact >= 1 and wrong == 0 and negative >= exact else 3
