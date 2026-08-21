@@ -9,7 +9,6 @@ SHA-verified Drive artifact idempotency.  Source video and raw ASR stay read-onl
 from __future__ import annotations
 
 import diana_longitudinal_postprocess as base
-from diana_longitudinal_postprocess_v4_2 import main
 from diana_longitudinal_quality_v4_2 import (
     QUALITY_METHOD_VERSION,
     QUALITY_SCHEMA_VERSION,
@@ -21,6 +20,13 @@ base.build_quality_layer = build_quality_layer
 base.QUALITY_METHOD_VERSION = QUALITY_METHOD_VERSION
 base.QUALITY_SCHEMA_VERSION = QUALITY_SCHEMA_VERSION
 base.SCHEMA_VERSION = 5
+
+
+def main() -> int:
+    # Keep OpenCV/Pillow report parsing out of import-time compatibility tests;
+    # production execution imports the current runtime only when main() is called.
+    from diana_longitudinal_postprocess_v4_2 import main as current_main
+    return current_main()
 
 
 if __name__ == "__main__":
