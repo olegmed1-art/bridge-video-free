@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - 'bridge_school_api/dds3/vision_appeals_cross.py'
+      - 'bridge_school_api/dds3/vision_appeals_cross_v4.py'
       - 'bridge_school_api/dds3/image_ingress.py'
       - 'tools/dds3_vision/evaluate_appeals_cross.py'
       - 'requirements-dds3-vision.txt'
@@ -31,18 +32,21 @@ jobs:
       - name: Compile bounded appeals layout code
         run: |
           python -m py_compile bridge_school_api/dds3/vision_appeals_cross.py
+          python -m py_compile bridge_school_api/dds3/vision_appeals_cross_v4.py
           python -m py_compile bridge_school_api/dds3/image_ingress.py
           python -m py_compile tools/dds3_vision/evaluate_appeals_cross.py
       - name: Enforce fail-closed appeals contract
         run: |
           python - <<'PY'
           from pathlib import Path
-          appeals=Path('bridge_school_api/dds3/vision_appeals_cross.py').read_text(encoding='utf-8')
+          base=Path('bridge_school_api/dds3/vision_appeals_cross.py').read_text(encoding='utf-8')
+          appeals=Path('bridge_school_api/dds3/vision_appeals_cross_v4.py').read_text(encoding='utf-8')
           ingress=Path('bridge_school_api/dds3/image_ingress.py').read_text(encoding='utf-8')
-          assert 'local_tesseract_appeals_cross_v1' in appeals
-          assert 'UNSUPPORTED_LAYOUT_APPEALS_HEADER' in appeals
-          assert 'deck complement' in appeals
-          assert 'board-derived' in appeals
+          assert 'UNSUPPORTED_LAYOUT_APPEALS_HEADER' in base
+          assert 'deck complement' in base
+          assert 'No card is completed from the deck' in appeals
+          assert 'standard-deck gate' in appeals
+          assert 'local_tesseract_appeals_cross_v4' in appeals
           assert 'extract_appeals_cross_observation' in ingress
           assert 'startswith("UNSUPPORTED_LAYOUT_")' in ingress
           print('DDS3_APPEALS_CROSS_CONTRACT_PASS')
