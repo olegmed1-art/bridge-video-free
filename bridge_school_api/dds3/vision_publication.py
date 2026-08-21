@@ -78,6 +78,7 @@ def _clean_rank_text(text:str)->str:
 
 
 def _rank_tokens(image:Any,pytesseract:Any)->list[dict[str,Any]]:
+    """Loose character pass used only to locate the four suit rows around the compass."""
     height=image.shape[0]
     boxes=pytesseract.image_to_boxes(image,config="--psm 11 -c tessedit_char_whitelist=AKQJT9876543210")
     tokens=[]
@@ -112,6 +113,13 @@ def _row_center(row:list[dict[str,Any]])->float:
 
 
 def _glyph_column(rows:list[list[dict[str,Any]]])->float:
+    """Locate the repeated left-side suit-glyph column from pixel OCR geometry.
+
+    Publication fonts are frequently misread by rank-only OCR: e.g. a heart glyph can
+    appear as a leading `9`. We do not treat that character as a card. Instead the
+    repeated leftmost column is used only as a geometric mask boundary and each holding
+    is OCRed again from pixels to its right. No card is supplied from deck inventory.
+    """
     left=[float(min(token["x"] for token in row)) for row in rows if row]
     if len(left)<2: raise PublicationVisionError("UNSTABLE_SUIT_GLYPH_COLUMN")
     med=float(statistics.median(left))
@@ -120,10 +128,16 @@ def _glyph_column(rows:list[list[dict[str,Any]]])->float:
     return float(statistics.median(inliers))
 
 
-def _ocr_holding_crop(image:Any,cy:float,x0:int,pytesseract:Any,cv2:Any,*,y_radius:int=17)->tuple[str,float]:
+def _ocr_holding_row(image:Any,row:list[dict[str,Any]],glyph_x:float,pytesseract:Any,cv2:Any)->tuple[str,float]:
+    if not row: return "",0.70
     height,width=image.shape[:2]
-    y0=max(0,int(cy-y_radius)); y1=min(height,int(cy+y_radius+1)); x1=min(width,int(x0+width*0.30))
-    crop=image[y0:y1,max(0,x0):x1]
+    cy=_row_center(row)
+    y0=max(0,int(cy-17)); y1=min(height,int(cy+18))
+    # Mask the recurrent suit-symbol column. In the tested publication layout the
+    # actual holding starts immediately to its right; the 18px guard is scale-stable
+    # because input is normalized to 700px width.
+    x0=max(0,int(glyph_x+18)); x1=min(width,int(x0+width*0.30))
+    crop=image[y0:y1,x0:x1]
     if not crop.size: raise PublicationVisionError("EMPTY_HOLDING_CROP")
     crop=cv2.resize(crop,None,fx=3,fy=3,interpolation=cv2.INTER_CUBIC)
     gray=cv2.cvtColor(crop,cv2.COLOR_BGR2GRAY)
@@ -134,51 +148,14 @@ def _ocr_holding_crop(image:Any,cy:float,x0:int,pytesseract:Any,cv2:Any,*,y_radi
             text=_clean_rank_text(pytesseract.image_to_string(source,config=f"--psm {psm} -c tessedit_char_whitelist=AKQJT9876543210"))
             candidates.append(text)
     nonempty=[value for value in candidates if value]
-    if not nonempty: return "",0.70
+    if not nonempty:
+        return "",0.70
     counts={value:nonempty.count(value) for value in set(nonempty)}
     best=max(counts,key=counts.get)
-    if len(counts)>1 and counts[best]<2: raise PublicationVisionError(f"AMBIGUOUS_CARD_OCR:{candidates}")
+    # Require repeat evidence whenever two different non-empty readings exist.
+    if len(counts)>1 and counts[best]<2:
+        raise PublicationVisionError(f"AMBIGUOUS_CARD_OCR:{candidates}")
     return best,0.70 if len(counts)==1 else 0.62
-
-
-def _ocr_holding_row(image:Any,row:list[dict[str,Any]],glyph_x:float,pytesseract:Any,cv2:Any)->tuple[str,float]:
-    if not row: return "",0.70
-    return _ocr_holding_crop(image,_row_center(row),max(0,int(glyph_x+18)),pytesseract,cv2)
-
-
-def _retry_hand_from_token_rows(rows:list[list[dict[str,Any]]],glyph_x:float)->tuple[list[str],list[float]]:
-    """Use the rank-only OCR boxes themselves when the recrop loses real ranks.
-
-    A suit glyph can be misclassified as a rank at the repeated glyph column. We drop
-    only a first token whose x coordinate actually coincides with that visible column;
-    otherwise every recognized rank token is retained. This is direct pixel OCR, not
-    deck completion or ambiguity repair.
-    """
-    holdings=[]
-    for row in rows:
-        ordered=sorted(row,key=lambda token:token["x"])
-        if not ordered:
-            return [],[]
-        if abs(float(ordered[0]["x"])-glyph_x)<=5.0:
-            ordered=ordered[1:]
-        value="".join(str(token["text"]) for token in ordered)
-        holdings.append(value)
-    return holdings,[0.58,0.58,0.58,0.58]
-
-
-def _retry_hand_from_rank_start(image:Any,rows:list[list[dict[str,Any]]],pytesseract:Any,cv2:Any)->tuple[list[str],list[float]]:
-    starts=[float(min(token["x"] for token in row)) for row in rows if row]
-    if len(starts)<2: raise PublicationVisionError("UNSTABLE_RANK_START_COLUMN")
-    med=float(statistics.median(starts))
-    inliers=[value for value in starts if abs(value-med)<=14.0]
-    if len(inliers)<2: raise PublicationVisionError("UNSTABLE_RANK_START_COLUMN")
-    start=float(statistics.median(inliers))
-    holdings=[]; confs=[]
-    for row in rows:
-        if not row: return [],[]
-        value,conf=_ocr_holding_crop(image,_row_center(row),max(0,int(start+9)),pytesseract,cv2,y_radius=7)
-        holdings.append(value); confs.append(min(conf,0.66))
-    return holdings,confs
 
 
 def _extract_hands(image:Any,compass:dict[str,tuple[float,float,float]],pytesseract:Any,cv2:Any)->tuple[dict[str,dict[str,str]],dict[str,dict[str,float]]]:
@@ -210,17 +187,6 @@ def _extract_hands(image:Any,compass:dict[str,tuple[float,float,float]],pytesser
         for row in raw_rows[hand]:
             value,conf=_ocr_holding_row(image,row,glyph_x[hand],pytesseract,cv2)
             holdings.append(value); row_conf.append(conf)
-        if sum(len(value) for value in holdings)!=13:
-            token_holdings,token_conf=_retry_hand_from_token_rows(raw_rows[hand],glyph_x[hand])
-            if token_holdings and sum(len(value) for value in token_holdings)==13:
-                holdings,row_conf=token_holdings,token_conf
-        if sum(len(value) for value in holdings)!=13:
-            try:
-                retry_holdings,retry_conf=_retry_hand_from_rank_start(image,raw_rows[hand],pytesseract,cv2)
-            except PublicationVisionError:
-                retry_holdings,retry_conf=[],[]
-            if retry_holdings and sum(len(value) for value in retry_holdings)==13:
-                holdings,row_conf=retry_holdings,retry_conf
         if sum(len(value) for value in holdings)!=13:
             raise PublicationVisionError(f"INCOMPLETE_HAND:{hand}:{'.'.join(holdings)}")
         hands[hand]=dict(zip("SHDC",holdings,strict=True)); confidence[hand]=dict(zip("SHDC",row_conf,strict=True))
