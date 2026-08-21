@@ -86,19 +86,28 @@ std::vector<std::string> split_tabs(const std::string& line) {
   return fields;
 }
 
-void set_current_trick(Deal& deal, const std::string& encoded) {
+int set_current_trick(Deal& deal, const std::string& encoded) {
   std::memset(deal.currentTrickSuit, 0, sizeof(deal.currentTrickSuit));
   std::memset(deal.currentTrickRank, 0, sizeof(deal.currentTrickRank));
-  if (encoded.empty() || encoded == "-") return;
+  if (encoded.empty() || encoded == "-") return 0;
   std::stringstream ss(encoded);
   std::string token;
-  int index = 0;
+  int count = 0;
   while (std::getline(ss, token, ',')) {
-    if (++index > 3) throw std::runtime_error("current trick has more than three cards");
+    if (++count > 3) throw std::runtime_error("current trick has more than three cards");
     if (token.size() < 2) throw std::runtime_error("invalid current trick card");
-    deal.currentTrickSuit[index - 1] = parse_suit(token[0]);
-    deal.currentTrickRank[index - 1] = parse_rank(token.substr(1));
+    deal.currentTrickSuit[count - 1] = parse_suit(token[0]);
+    deal.currentTrickRank[count - 1] = parse_rank(token.substr(1));
   }
+  return count;
+}
+
+int count_remaining_cards(const Deal& deal) {
+  int total = 0;
+  for (int hand = 0; hand < 4; ++hand)
+    for (int suit = 0; suit < 4; ++suit)
+      total += __builtin_popcount(deal.remainCards[hand][suit]);
+  return total;
 }
 
 void print_error(const std::string& code) {
@@ -106,7 +115,7 @@ void print_error(const std::string& code) {
             << code << "\"}\n" << std::flush;
 }
 
-void print_moves(const FutureTricks& fut, std::size_t request_seq,
+void print_moves(const FutureTricks& fut, std::size_t request_seq, int tricks_remaining,
                  bool tt_present_before, bool tt_present_after, bool same_tt) {
   struct Row { std::string card; int tricks; bool equivalent; std::string representative; };
   std::vector<Row> rows;
@@ -131,6 +140,7 @@ void print_moves(const FutureTricks& fut, std::size_t request_seq,
   std::cout << "{\"ok\":true,\"engine\":\"DDS3\",\"fallback_used\":false,"
             << "\"operation\":\"position_all_moves\","
             << "\"request_seq\":" << request_seq << ','
+            << "\"tricks_remaining\":" << tricks_remaining << ','
             << "\"nodes\":" << fut.nodes << ','
             << "\"tt_present_before\":" << (tt_present_before ? "true" : "false") << ','
             << "\"tt_present_after\":" << (tt_present_after ? "true" : "false") << ','
@@ -161,9 +171,15 @@ int main() {
       Deal deal{};
       deal.trump = parse_trump(fields[1]);
       deal.first = parse_hand(fields[2]);
-      set_current_trick(deal, fields[3]);
+      const int current_trick_count = set_current_trick(deal, fields[3]);
       if (fields[4].empty() || convert_from_pbn(fields[4].c_str(), deal.remainCards) != 1)
         throw std::runtime_error("PBN conversion failed");
+      const int cards_in_hands = count_remaining_cards(deal);
+      if ((cards_in_hands + current_trick_count) % 4 != 0)
+        throw std::runtime_error("position card count is inconsistent");
+      const int tricks_remaining = (cards_in_hands + current_trick_count) / 4;
+      if (tricks_remaining < 1 || tricks_remaining > 13)
+        throw std::runtime_error("invalid tricks remaining");
 
       auto* before = context.maybe_trans_table();
       FutureTricks fut{};
@@ -183,7 +199,7 @@ int main() {
       }
       auto* after = context.maybe_trans_table();
       ++request_seq;
-      print_moves(fut, request_seq, before != nullptr, after != nullptr,
+      print_moves(fut, request_seq, tricks_remaining, before != nullptr, after != nullptr,
                   before != nullptr && before == after);
     } catch (const std::exception& exc) {
       print_error(exc.what());
