@@ -20,7 +20,8 @@ from PIL import Image
 import pytesseract
 
 from bridge_school_api.dds3.image_ingress import _extract_local_observation
-from bridge_school_api.dds3.vision_appeals_cross import AppealsCrossVisionError, extract_appeals_cross_observation
+from bridge_school_api.dds3.vision_appeals_cross import AppealsCrossVisionError
+from bridge_school_api.dds3.vision_appeals_cross_v2 import extract_appeals_cross_observation
 from tools.dds3_vision.evaluate_publication_cross import SUIT_GLYPHS, _cluster_rows
 
 SOURCE_URL = "https://www.bridge.is/files/EBUAppeals2001_1575249453.pdf"
@@ -122,7 +123,7 @@ def main()->int:
             observed_hands=_observation_hands(observed); routed_source=routed.extra_metadata["vision_extractor"].value
             hands_exact=observed_hands==truth_hands
             metadata_exact=(int(observed.board_number.value)==board and str(observed.dealer.value)==dealer and str(observed.vulnerability.value)==vulnerability)
-            routing_exact=routed_source=="local_tesseract_appeals_cross_v1"; status="exact" if hands_exact and metadata_exact and routing_exact else "wrong_accept"
+            routing_exact=routed_source=="local_tesseract_appeals_cross_v2"; status="exact" if hands_exact and metadata_exact and routing_exact else "wrong_accept"
             result={"status":status,"hands_exact":hands_exact,"metadata_exact":metadata_exact,"production_routing_exact":routing_exact,"board":board,"source_sha256":source_sha,"image_sha256":image_sha,"truth_hands":truth_hands,"observed_hands":observed_hands}
         except AppealsCrossVisionError as exc:
             result={"status":"rejected","reason":str(exc),"source_sha256":source_sha,"image_sha256":image_sha,"truth_hands":truth_hands,"raster_ocr":raster_ocr,"raster_tokens":raster_tokens}
@@ -133,7 +134,7 @@ def main()->int:
         except Exception: negative_status="rejected"
         result["negative_crop"]=negative_status
     exact=int(result.get("status")=="exact"); wrong=int(result.get("status")=="wrong_accept"); negative_pass=int(result.get("negative_crop")=="rejected")
-    report={"extractor":"local_tesseract_appeals_cross_v1","layout_family":"ebu_appeals_form_cross","real_public_sources":1,"real_board_pages":1,"exact":exact,"wrong_accepts":wrong,"negative_crop_rejected":negative_pass,"truth_source":"embedded source PDF vector text","dds3_used_for_truth":False,"bridge_inference_repair":False,"paid_or_cloud_vision":False,"result":result}
+    report={"extractor":"local_tesseract_appeals_cross_v2","layout_family":"ebu_appeals_form_cross","real_public_sources":1,"real_board_pages":1,"exact":exact,"wrong_accepts":wrong,"negative_crop_rejected":negative_pass,"truth_source":"embedded source PDF vector text","dds3_used_for_truth":False,"bridge_inference_repair":False,"paid_or_cloud_vision":False,"result":result}
     text=json.dumps(report,ensure_ascii=False,indent=2,sort_keys=True); print(text)
     if args.output: args.output.write_text(text+"\n",encoding="utf-8")
     return 0 if exact==1 and wrong==0 and negative_pass==1 else 3
