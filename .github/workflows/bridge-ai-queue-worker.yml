@@ -1,0 +1,133 @@
+# Autonomous Hybrid Cloud pilot queue worker
+name: Bridge AI Queue Worker
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'bridge_ai_compute_worker.py'
+      - 'bridge_school_api/ai_orchestrator.py'
+      - 'bridge_school_api/ai_policy.py'
+      - 'bridge_school_api/ai_decision.py'
+      - '.github/workflows/bridge-ai-queue-worker.yml'
+  schedule:
+    - cron: '*/15 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-ai-production-queue-worker
+  cancel-in-progress: false
+
+jobs:
+  drain-production-queue:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      BRIDGE_APP_DATABASE_URL: ${{ secrets.BRIDGE_APP_DATABASE_URL }}
+      BRIDGE_API_TOKEN: github-actions-bridge-queue-worker
+      BRIDGE_API_BASE_URL: http://127.0.0.1:8000
+      BEN_API_URL: http://127.0.0.1:8085
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install API dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-api.txt
+
+      - name: Verify production database credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${BRIDGE_APP_DATABASE_URL:-}" || { echo 'BRIDGE_APP_DATABASE_URL is not configured'; exit 1; }
+
+      - name: Check whether work exists
+        id: queue
+        shell: bash
+        run: |
+          python - <<'PY' > /tmp/queue-count.txt
+          import os, psycopg
+          with psycopg.connect(os.environ['BRIDGE_APP_DATABASE_URL']) as conn, conn.cursor() as cur:
+              cur.execute("SELECT count(*) FROM ai.search_run s JOIN ai.decision_position p USING(position_id) WHERE s.status='QUEUED' AND p.input_status='COMPLETE'")
+              print(cur.fetchone()[0])
+          PY
+          count=$(cat /tmp/queue-count.txt)
+          echo "queued=$count" >> "$GITHUB_OUTPUT"
+          echo "Queued jobs: $count"
+
+      - name: Start Bridge School API
+        if: steps.queue.outputs.queued != '0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          uvicorn app:app --host 127.0.0.1 --port 8000 >/tmp/bridge-ai-api.log 2>&1 &
+          echo $! >/tmp/bridge-ai-api.pid
+          for attempt in $(seq 1 60); do
+            curl --fail --silent http://127.0.0.1:8000/healthz >/dev/null && exit 0
+            sleep 1
+          done
+          cat /tmp/bridge-ai-api.log
+          exit 1
+
+      - name: Start BEN
+        if: steps.queue.outputs.queued != '0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull ghcr.io/lorserker/ben:latest
+          docker run -d --name bridge-ben -p 8085:8085 ghcr.io/lorserker/ben:latest
+          for attempt in $(seq 1 180); do
+            code=$(curl -s -o /tmp/ben-ready.json -w '%{http_code}' \
+              'http://127.0.0.1:8085/bid?hand=AK97543.K.T3.AK7&seat=S&dealer=N&vul=&ctx=----&details=true' || true)
+            if test "$code" = "200"; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs bridge-ben || true
+          exit 1
+
+      - name: Drain up to 10 queued jobs
+        if: steps.queue.outputs.queued != '0'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for n in $(seq 1 10); do
+            BRIDGE_WORKER_ONCE=true python bridge_ai_compute_worker.py
+          done
+
+      - name: Queue summary
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, psycopg, json
+          with psycopg.connect(os.environ['BRIDGE_APP_DATABASE_URL']) as conn, conn.cursor() as cur:
+              cur.execute("SELECT status, count(*) FROM ai.search_run GROUP BY status ORDER BY status")
+              print(json.dumps(dict(cur.fetchall()), ensure_ascii=False))
+          PY
+
+      - name: Diagnostics on failure
+        if: failure()
+        shell: bash
+        run: |
+          cat /tmp/bridge-ai-api.log 2>/dev/null || true
+          docker logs bridge-ben 2>/dev/null || true
+
+      - name: Stop services
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f bridge-ben 2>/dev/null || true
+          if test -f /tmp/bridge-ai-api.pid; then
+            kill "$(cat /tmp/bridge-ai-api.pid)" 2>/dev/null || true
+          fi

@@ -38,6 +38,7 @@ def install(token_func):
             os.environ.pop("BRIDGE_REQUESTED_ALGORITHM_REVISION", None)
 
     import run_master_3_1_free_semantic_v2 as semantic_v2
+    import transcript_stage_checkpoint_v1
     from bridge_speaker_diarization_v3 import diarize_transcript
 
     semantic_v2.diarize_transcript = diarize_transcript
@@ -56,6 +57,10 @@ def install(token_func):
             semantic_v2.previous, token, job_id, REVISION
         )
     )
+
+    # Wrap the fully-installed transcript+speaker path, not the older r25.6 ASR
+    # function. Reuse is allowed only after exact source/revision/SHA validation.
+    transcript_stage_checkpoint_v1.install(base, REVISION)
 
     core.ALGORITHM_REVISION = REVISION
     base.ALGORITHM_REVISION = REVISION
