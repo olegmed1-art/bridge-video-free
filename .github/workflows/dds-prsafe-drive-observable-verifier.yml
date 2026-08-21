@@ -48,10 +48,11 @@ jobs:
               "/repos/${GITHUB_REPOSITORY}/actions/workflows/${SOURCE_WORKFLOW}/runs?event=pull_request_target&per_page=50" \
               > "$RUNNER_TEMP/source-runs.json"
 
+            set +e
             RUNNER_TEMP="$RUNNER_TEMP" PR_NUMBER="$PR_NUMBER" HEAD_SHA="$HEAD_SHA" \
             EXPECTED_OWNER="$EXPECTED_OWNER" EXPECTED_PILOT_ZIP_SHA256="$EXPECTED_PILOT_ZIP_SHA256" \
             GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GH_TOKEN="$GH_TOKEN" python - <<'PY'
-          import json, os, pathlib, subprocess, sys, tempfile, zipfile
+          import json, os, pathlib, subprocess, zipfile
 
           root = pathlib.Path(os.environ['RUNNER_TEMP'])
           pr_number = int(os.environ['PR_NUMBER'])
@@ -87,8 +88,7 @@ jobs:
               zpath.write_bytes(data)
               try:
                   with zipfile.ZipFile(zpath) as zf:
-                      names = zf.namelist()
-                      if 'context.json' not in names:
+                      if 'context.json' not in zf.namelist():
                           continue
                       ctx = json.loads(zf.read('context.json').decode('utf-8'))
               except (zipfile.BadZipFile, json.JSONDecodeError, UnicodeDecodeError):
@@ -127,6 +127,7 @@ jobs:
           raise SystemExit(3)
           PY
             rc=$?
+            set -e
             if [ "$rc" -eq 0 ] && [ -s "$evidence" ]; then
               break
             fi
