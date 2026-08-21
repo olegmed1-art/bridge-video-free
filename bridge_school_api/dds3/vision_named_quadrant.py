@@ -2,10 +2,9 @@
 
 This bounded family has explicit ``North``, ``West``, ``East`` and ``South`` headings
 above four suit rows for each hand plus an explicit Board/Dealer/Vulnerable header.
-The printed seat labels may be arranged either as a classic cross or as a strict vertical
-N→W→E→S publication stack; seat identity always comes from those detected labels.
-Cards are read from pixels and must form the exact standard 52-card deck; no
-deck-complement or bridge inference repair is permitted.
+Seat placement comes only from the detected printed headings and each selected heading
+must have four nearby pixel-OCR holding rows. Cards must form the exact standard
+52-card deck; no deck-complement or bridge inference repair is permitted.
 """
 from __future__ import annotations
 
@@ -57,66 +56,55 @@ def _heading_candidates(image: Any, pytesseract: Any) -> dict[str, list[tuple[fl
 
 
 def _seat_headings(image: Any, pytesseract: Any) -> dict[str, tuple[float, float, float]]:
+    """Select the printed seat label that is locally supported by four holding rows.
+
+    Real publication generators do not agree on whether the four named hands are laid out
+    as a cross, a two-column grid, or a vertical stack. Geometry is therefore not used to
+    infer a seat. The literal OCR word supplies the seat identity, while nearby rank-row
+    evidence distinguishes a hand heading from incidental words such as ``Dealer: North``.
+    Exact 52-card validation remains the authoritative acceptance gate later in the path.
+    """
     labels = _heading_candidates(image, pytesseract)
     if any(not labels[seat] for seat in "NWES"):
         raise NamedQuadrantVisionError("UNSUPPORTED_LAYOUT_NAMED_QUADRANT_NO_HEADINGS")
 
+    tokens = _rank_tokens(image, pytesseract)
     height, width = image.shape[:2]
-    best: tuple[float, dict[str, tuple[float, float, float]]] | None = None
-    for north in labels["N"]:
-        for west in labels["W"]:
-            for east in labels["E"]:
-                for south in labels["S"]:
-                    candidate = {"N": north, "W": west, "E": east, "S": south}
-                    min_conf = min(north[2], west[2], east[2], south[2])
-
-                    # Geometry A: conventional cross, N above W/E and S below them.
-                    if (
-                        north[1] < west[1]
-                        and north[1] < east[1]
-                        and south[1] > west[1]
-                        and south[1] > east[1]
-                        and west[0] < east[0]
-                    ):
-                        center_x = (west[0] + east[0]) / 2
-                        if (
-                            abs(north[0] - center_x) <= width * 0.25
-                            and abs(south[0] - center_x) <= width * 0.25
-                            and abs(west[1] - east[1]) <= height * 0.16
-                            and east[0] - west[0] >= width * 0.20
-                        ):
-                            score = (
-                                abs(north[0] - south[0])
-                                + abs(west[1] - east[1])
-                                + 0.25 * abs((north[1] + south[1]) / 2 - (west[1] + east[1]) / 2)
-                                - 20.0 * min_conf
-                            )
-                            if best is None or score < best[0]:
-                                best = (score, candidate)
-
-                    # Geometry B: legacy VuBridge HTML/PDF stack. The four complete
-                    # hands are printed in strict N→W→E→S order down one narrow column.
-                    # This is still fail-closed: all four labels must be explicit, nearly
-                    # column-aligned, separated vertically, and the later deck gate must
-                    # independently prove all 52 standard cards.
-                    ys = [north[1], west[1], east[1], south[1]]
-                    xs = [north[0], west[0], east[0], south[0]]
-                    gaps = [ys[i + 1] - ys[i] for i in range(3)]
-                    if (
-                        ys == sorted(ys)
-                        and min(gaps) >= height * 0.08
-                        and max(xs) - min(xs) <= width * 0.20
-                    ):
-                        mean_x = sum(xs) / 4
-                        alignment = sum(abs(x - mean_x) for x in xs)
-                        gap_spread = max(gaps) - min(gaps)
-                        score = 1000.0 + alignment + 0.20 * gap_spread - 20.0 * min_conf
-                        if best is None or score < best[0]:
-                            best = (score, candidate)
-
-    if best is None:
-        raise NamedQuadrantVisionError("UNSUPPORTED_LAYOUT_NAMED_QUADRANT_GEOMETRY")
-    return best[1]
+    selected: dict[str, tuple[float, float, float]] = {}
+    for seat in "NWES":
+        best: tuple[float, tuple[float, float, float]] | None = None
+        for heading in labels[seat]:
+            hx, hy, conf = heading
+            nearby = [
+                token
+                for token in tokens
+                if abs(token["cx"] - hx) <= width * 0.28
+                and hy - height * 0.02 <= token["cy"] <= hy + height * 0.32
+            ]
+            rows = _cluster_rows(nearby, tolerance=max(12.0, width * 0.018))
+            rows = [
+                row for row in rows
+                if _row_center(row) >= hy - height * 0.02
+            ]
+            if len(rows) < 4:
+                continue
+            closest = sorted(rows, key=lambda row: abs(_row_center(row) - hy))[:4]
+            closest.sort(key=_row_center)
+            centers = [_row_center(row) for row in closest]
+            span = centers[-1] - centers[0]
+            # Four suit rows must be visibly distinct and local to this heading. This
+            # blocks incidental metadata labels while remaining layout-orientation neutral.
+            if span < max(18.0, height * 0.025) or span > height * 0.28:
+                continue
+            score = sum(abs(center - hy) for center in centers) - 35.0 * conf
+            if best is None or score < best[0]:
+                best = (score, heading)
+        if best is None:
+            raise NamedQuadrantVisionError(
+                f"UNSUPPORTED_LAYOUT_NAMED_QUADRANT_GEOMETRY:{seat}"
+            )
+        selected[seat] = best[1]
+    return selected
 
 
 def _rows_for_heading(
@@ -138,7 +126,6 @@ def _rows_for_heading(
     rows.sort(key=lambda row: (_row_center(row), min(item["x"] for item in row)))
     if len(rows) < 4:
         raise NamedQuadrantVisionError("INCOMPLETE_NAMED_HAND_ROWS")
-    # The four suit rows are the four closest row clusters below the seat heading.
     rows = sorted(rows, key=lambda row: abs(_row_center(row) - hy))[:4]
     rows.sort(key=_row_center)
     if len(rows) != 4:
