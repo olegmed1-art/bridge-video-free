@@ -1,0 +1,51 @@
+{
+  "schema": "bridge-tournament-facts-v2",
+  "source": {
+    "event_url": "https://www.bridge.co.il/viewer/total.php?event=29912",
+    "session_url": "https://www.bridge.co.il/viewer/session.php?event=29912&round=6",
+    "personal_url": "https://www.bridge.co.il/viewer/personal.php?event=29912&round=6&seat=4",
+    "retrieved_via": "GitHub Actions direct HTTPS fetch"
+  },
+  "tournament": {
+    "event": 29912,
+    "round": 6,
+    "date": "2026-08-19",
+    "series": "Bridge’t Wednesday July-September 2026",
+    "pair": ["Anna Petrenko", "Diana Veksler"],
+    "seat": "A4",
+    "rank": 2,
+    "field_size": 8,
+    "session_score": 51.0,
+    "boards_played": 21
+  },
+  "policy": {
+    "mode": "FACTS_ONLY",
+    "play_record_available": false,
+    "auction_record_available": false,
+    "target_player_compass_rule": "pair second name is S when NS and W when EW; prior Diana reports confirm W when EW",
+    "dds_source": "canonical DDS3 only"
+  },
+  "boards": [
+    {"board":1,"dealer":"N","vulnerability":"None","hands":{"N":"J9642.5.AJT.AK43","E":"KQ3.T9832.75.J92","S":"T75.Q4.98642.Q85","W":"A8.AKJ76.KQ3.T76"},"pbn":"N:J9642.5.AJT.AK43 KQ3.T9832.75.J92 T75.Q4.98642.Q85 A8.AKJ76.KQ3.T76","pair_direction":"EW","contract":"1H","declarer":"W","result_delta":3,"opening_lead":"CA","ns_score":-170,"pair_score":170,"pair_matchpoints":-3.0},
+    {"board":2,"dealer":"E","vulnerability":"NS","hands":{"N":"AQJ86542.86.83.4","E":"-.AQJ732.AQJ7.Q65","S":"9.KT95.K642.JT72","W":"KT73.4.T95.AK983"},"pbn":"N:AQJ86542.86.83.4 -.AQJ732.AQJ7.Q65 9.KT95.K642.JT72 KT73.4.T95.AK983","pair_direction":"EW","contract":"3NT","declarer":"W","result_delta":0,"opening_lead":"D3","ns_score":-400,"pair_score":400,"pair_matchpoints":9.0},
+    {"board":3,"dealer":"S","vulnerability":"EW","hands":{"N":"QJ83.KQT.J98.Q53","E":"T64.AJ82.T64.KT4","S":"K75.9653.AQ53.97","W":"A92.74.K72.AJ862"},"pbn":"N:QJ83.KQT.J98.Q53 T64.AJ82.T64.KT4 K75.9653.AQ53.97 A92.74.K72.AJ862","pair_direction":"EW","contract":"1NT","declarer":"W","result_delta":4,"opening_lead":"S3","ns_score":-210,"pair_score":210,"pair_matchpoints":3.0},
+    {"board":4,"dealer":"W","vulnerability":"Both","hands":{"N":"AK954.AT943.98.6","E":"QJ3.86.A4.KT9532","S":"862.KQJ2.532.QJ7","W":"T7.75.KQJT76.A84"},"pbn":"N:AK954.AT943.98.6 QJ3.86.A4.KT9532 862.KQJ2.532.QJ7 T7.75.KQJT76.A84","pair_direction":"NS","contract":"2S","declarer":"N","result_delta":1,"opening_lead":"SQ","ns_score":140,"pair_score":140,"pair_matchpoints":5.0},
+    {"board":5,"dealer":"N","vulnerability":"NS","hands":{"N":"8.AK6.986532.842","E":"Q7543.J42.-.JT653","S":"AJT6.T98.AK7.AK7","W":"K92.Q753.QJT4.Q9"},"pbn":"N:8.AK6.986532.842 Q7543.J42.-.JT653 AJT6.T98.AK7.AK7 K92.Q753.QJT4.Q9","pair_direction":"NS","contract":"3NT","declarer":"S","result_delta":1,"opening_lead":"D4","ns_score":630,"pair_score":630,"pair_matchpoints":11.0},
+    {"board":6,"dealer":"E","vulnerability":"EW","hands":{"N":"54.964.KQ95.8642","E":"K97.Q82.AJ843.JT","S":"AT632.AK7.7.KQ93","W":"QJ8.JT53.T62.A75"},"pbn":"N:54.964.KQ95.8642 K97.Q82.AJ843.JT AT632.AK7.7.KQ93 QJ8.JT53.T62.A75","pair_direction":"NS","contract":"1S","declarer":"S","result_delta":0,"opening_lead":"CA","ns_score":80,"pair_score":80,"pair_matchpoints":4.0},
+    {"board":7,"dealer":"S","vulnerability":"Both","hands":{"N":"AT42.Q.962.KQ642","E":"65.A9753.A87543.-","S":"73.JT86.T.AJT853","W":"KQJ98.K42.KQJ.97"},"pbn":"N:AT42.Q.962.KQ642 65.A9753.A87543.- 73.JT86.T.AJT853 KQJ98.K42.KQJ.97","pair_direction":"NS","contract":"5D","declarer":"W","result_delta":-3,"opening_lead":"HQ","ns_score":300,"pair_score":300,"pair_matchpoints":8.0},
+    {"board":8,"dealer":"W","vulnerability":"None","hands":{"N":"AQ2.QT865.7.A632","E":"T654.AK93.AKQ.T8","S":"973.2.T98532.KJ5","W":"KJ8.J74.J64.Q974"},"pbn":"N:AQ2.QT865.7.A632 T654.AK93.AKQ.T8 973.2.T98532.KJ5 KJ8.J74.J64.Q974","pair_direction":"NS","contract":"2NT","declarer":"E","result_delta":-3,"opening_lead":"DT","ns_score":150,"pair_score":150,"pair_matchpoints":4.0},
+    {"board":9,"dealer":"N","vulnerability":"EW","hands":{"N":"84.QT96.KJT943.7","E":"A.AJ852.Q87.J643","S":"JT765.43.652.A98","W":"KQ932.K7.A.KQT52"},"pbn":"N:84.QT96.KJT943.7 A.AJ852.Q87.J643 JT765.43.652.A98 KQ932.K7.A.KQT52","pair_direction":"NS","contract":"3H","declarer":"E","result_delta":0,"opening_lead":"D6","ns_score":-140,"pair_score":-140,"pair_matchpoints":-1.0},
+    {"board":10,"dealer":"E","vulnerability":"Both","hands":{"N":"KT83.A543.8752.5","E":"Q9754.J86.J6.Q87","S":"AJ2.QT2.A93.AJT6","W":"6.K97.KQT4.K9432"},"pbn":"N:KT83.A543.8752.5 Q9754.J86.J6.Q87 AJ2.QT2.A93.AJT6 6.K97.KQT4.K9432","pair_direction":"EW","contract":"2NT","declarer":"S","result_delta":-1,"opening_lead":"C3","ns_score":-100,"pair_score":100,"pair_matchpoints":4.0},
+    {"board":11,"dealer":"S","vulnerability":"None","hands":{"N":"Q97.T653.JT854.2","E":"T63.AQ9.963.AQJ3","S":"AKJ8.K7.AKQ2.T86","W":"542.J842.7.K9754"},"pbn":"N:Q97.T653.JT854.2 T63.AQ9.963.AQJ3 AKJ8.K7.AKQ2.T86 542.J842.7.K9754","pair_direction":"EW","contract":"2NT","declarer":"S","result_delta":2,"opening_lead":"H2","ns_score":180,"pair_score":-180,"pair_matchpoints":-2.0},
+    {"board":12,"dealer":"W","vulnerability":"NS","hands":{"N":"JT93.63.2.AJ8752","E":"K8764.QJ5.Q5.QT9","S":"A2.942.K9843.K64","W":"Q5.AKT87.AJT76.3"},"pbn":"N:JT93.63.2.AJ8752 K8764.QJ5.Q5.QT9 A2.942.K9843.K64 Q5.AKT87.AJT76.3","pair_direction":"EW","contract":"4H","declarer":"W","result_delta":-1,"opening_lead":"D2","ns_score":50,"pair_score":-50,"pair_matchpoints":-5.0},
+    {"board":13,"dealer":"N","vulnerability":"Both","hands":{"N":"542.J.AQ8743.JT7","E":"KJ3.Q653.-.KQ9832","S":"AQ986.T92.KJT6.6","W":"T7.AK874.952.A54"},"pbn":"N:542.J.AQ8743.JT7 KJ3.Q653.-.KQ9832 AQ986.T92.KJT6.6 T7.AK874.952.A54","pair_direction":"EW","contract":"4H","declarer":"W","result_delta":0,"opening_lead":"DA","ns_score":-620,"pair_score":620,"pair_matchpoints":6.0},
+    {"board":14,"dealer":"E","vulnerability":"None","hands":{"N":"J6.AKT53.J5.A982","E":"QT53.J94.K982.K5","S":"K842.Q82.Q74.QT3","W":"A97.76.AT63.J764"},"pbn":"N:J6.AKT53.J5.A982 QT53.J94.K982.K5 K842.Q82.Q74.QT3 A97.76.AT63.J764","pair_direction":"EW","contract":"3H","declarer":"N","result_delta":-1,"opening_lead":"S3","ns_score":-50,"pair_score":50,"pair_matchpoints":3.0},
+    {"board":15,"dealer":"S","vulnerability":"NS","hands":{"N":"7.QJT.AJT732.KJ5","E":"Q4.K92.K4.Q97642","S":"98652.A5.Q965.AT","W":"AKJT3.87643.8.83"},"pbn":"N:7.QJT.AJT732.KJ5 Q4.K92.K4.Q97642 98652.A5.Q965.AT AKJT3.87643.8.83","pair_direction":"EW","contract":"2NT","declarer":"N","result_delta":-2,"opening_lead":"C6","ns_score":-200,"pair_score":200,"pair_matchpoints":7.0},
+    {"board":16,"dealer":"W","vulnerability":"EW","hands":{"N":"K54.7654.875432.-","E":"Q972.AT82.J.KQT7","S":"8.KQJ3.AQT96.943","W":"AJT63.9.K.AJ8652"},"pbn":"N:K54.7654.875432.- Q972.AT82.J.KQT7 8.KQJ3.AQT96.943 AJT63.9.K.AJ8652","pair_direction":"EW","contract":"5S","declarer":"W","result_delta":-2,"opening_lead":"H4","ns_score":200,"pair_score":-200,"pair_matchpoints":-13.0},
+    {"board":17,"dealer":"N","vulnerability":"None","hands":{"N":"T64.964.-.AT98743","E":"QJ73.QT82.KQJ3.2","S":"A8.KJ5.T854.KQ65","W":"K952.A73.A9762.J"},"pbn":"N:T64.964.-.AT98743 QJ73.QT82.KQJ3.2 A8.KJ5.T854.KQ65 K952.A73.A9762.J","pair_direction":"EW","contract":"3C","declarer":"N","result_delta":1,"opening_lead":"DK","ns_score":130,"pair_score":-130,"pair_matchpoints":-1.0},
+    {"board":18,"dealer":"E","vulnerability":"NS","hands":{"N":"AKQJ6.K95.J.KJ92","E":"97.Q863.QT72.AQ8","S":"852.A72.AK853.43","W":"T43.JT4.964.T765"},"pbn":"N:AKQJ6.K95.J.KJ92 97.Q863.QT72.AQ8 852.A72.AK853.43 T43.JT4.964.T765","pair_direction":"EW","contract":"3NT","declarer":"N","result_delta":1,"opening_lead":"H3","ns_score":630,"pair_score":-630,"pair_matchpoints":0.0},
+    {"board":19,"dealer":"S","vulnerability":"EW","hands":{"N":"6.54.AJ9732.KT82","E":"AQJ2.JT72.T86.65","S":"K853.9.KQ54.Q943","W":"T974.AKQ863.-.AJ7"},"pbn":"N:6.54.AJ9732.KT82 AQJ2.JT72.T86.65 K853.9.KQ54.Q943 T974.AKQ863.-.AJ7","pair_direction":"NS","contract":"3H","declarer":"W","result_delta":1,"opening_lead":"S6","ns_score":-170,"pair_score":-170,"pair_matchpoints":1.0},
+    {"board":20,"dealer":"W","vulnerability":"Both","hands":{"N":"QJ54.3.AKJ83.986","E":"6.K8762.Q52.QJT4","S":"8732.T4.976.A732","W":"AKT9.AQJ95.T4.K5"},"pbn":"N:QJ54.3.AKJ83.986 6.K8762.Q52.QJT4 8732.T4.976.A732 AKT9.AQJ95.T4.K5","pair_direction":"NS","contract":"2H","declarer":"W","result_delta":2,"opening_lead":"DA","ns_score":-170,"pair_score":-170,"pair_matchpoints":2.0},
+    {"board":21,"dealer":"N","vulnerability":"NS","hands":{"N":"QJ9764.T.JT.A963","E":"5.AK762.Q7542.KQ","S":"KT83.94.A963.J74","W":"A2.QJ853.K8.T852"},"pbn":"N:QJ9764.T.JT.A963 5.AK762.Q7542.KQ KT83.94.A963.J74 A2.QJ853.K8.T852","pair_direction":"NS","contract":"2S","declarer":"N","result_delta":1,"opening_lead":"D2","ns_score":140,"pair_score":140,"pair_matchpoints":9.0}
+  ]
+}
