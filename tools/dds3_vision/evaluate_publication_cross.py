@@ -89,15 +89,12 @@ def _find_clip(page: fitz.Page, title: str) -> fitz.Rect | None:
     blocks = page.get_text("blocks")
     matches = [block for block in blocks if wanted in _norm(block[4]).lower()]
     if not matches:
-        # Some PDFs vary N/S vs NS spacing. Use board/dealer prefix as a conservative locator.
         prefix = _norm(title).split(" Vul", 1)[0].lower()
         matches = [block for block in blocks if prefix in _norm(block[4]).lower()]
     if not matches:
         return None
     block = min(matches, key=lambda item: item[1])
     x0, y0, x1, y1 = block[:4]
-    # If the source block already contains the full deal, keep it. Otherwise extend within
-    # the same publication column. No OCR geometry is used for canonical truth.
     block_text = block[4]
     suit_count = sum(block_text.count(symbol) for symbol in SUIT_GLYPHS)
     if suit_count >= 12 and y1 - y0 > 80:
@@ -110,7 +107,7 @@ def _find_clip(page: fitz.Page, title: str) -> fitz.Rect | None:
             left, right = half - 12, page.rect.width
         else:
             left, right = 0, page.rect.width
-        rect = fitz.Rect(left, max(0, y0 - 5), right, min(page.rect.height, y0 + 210))
+        rect = fitz.Rect(left, max(0, y0 - 5), right, min(page.rect.height, y0 + 230))
     return rect & page.rect
 
 
@@ -163,16 +160,34 @@ def _truth_hands(page: fitz.Page, clip: fitz.Rect) -> dict[str, str]:
             if cleaned:
                 rank_words.append((cx, cy, cleaned, word))
     if len(suit_words) != 16:
-        raise ValueError(f"source has {len(suit_words)} suit rows, expected 16")
+        raw_symbols = sorted({word[4].strip() for word in words if len(word[4].strip()) == 1 and not word[4].strip().isalnum()})
+        raise ValueError(f"source has {len(suit_words)} suit rows, expected 16; symbols={raw_symbols[:20]}")
+
+    # Every source suit row owns only the rank tokens to its right up to the next suit
+    # symbol on the same visual row. This prevents West rank text leaking into East when
+    # two hands are printed side-by-side. The boundary is source-vector geometry only.
     rows = []
     for suit_x, suit_y, suit, suit_word in suit_words:
+        same_row_suits = [
+            other for other in suit_words
+            if other[3][0] > suit_word[0] and abs(other[1] - suit_y) <= 5.5
+        ]
+        right_boundary = suit_word[2] + 115
+        if same_row_suits:
+            nearest = min(same_row_suits, key=lambda item: item[3][0])
+            right_boundary = min(right_boundary, (suit_word[2] + nearest[3][0]) / 2)
         pieces = []
         for _, rank_y, text, rank_word in rank_words:
-            if rank_word[0] >= suit_word[2] - 1 and rank_word[0] - suit_word[2] <= 110 and abs(rank_y - suit_y) <= 5.5:
+            if (
+                rank_word[0] >= suit_word[2] - 0.5
+                and rank_word[0] < right_boundary
+                and abs(rank_y - suit_y) <= 5.5
+            ):
                 pieces.append((rank_word[0], text))
         pieces.sort()
         holding = "".join(piece[1] for piece in pieces)
         rows.append({"x": suit_x, "y": suit_y, "suit": suit, "holding": holding})
+
     grouped = _cluster_rows(rows)
     hands: dict[str, str] = {}
     cards: list[str] = []
@@ -217,8 +232,6 @@ def _evaluate_sample(sample: Sample, root: Path, dpi: int) -> dict:
         meta_ok = int(observed.board_number.value) == board and str(observed.dealer.value) == dealer and str(observed.vulnerability.value) == vulnerability
         hands_ok = observed_hands == truth_hands
 
-        # Negative derived from the same real pixels: a severe bottom crop must fail closed.
-        image = fitz.Pixmap(pix)
         negative_status = "not_run"
         try:
             from PIL import Image
@@ -277,8 +290,6 @@ def main() -> int:
     print(text)
     if args.output:
         args.output.write_text(text + "\n", encoding="utf-8")
-    # Field gate is fail-closed: any wrong accept fails. At least one exact positive is
-    # required before this layout family may be considered supported.
     return 0 if wrong == 0 and exact >= 1 else 3
 
 
