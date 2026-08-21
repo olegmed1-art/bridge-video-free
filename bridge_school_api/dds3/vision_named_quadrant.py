@@ -11,14 +11,18 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections import Counter
 from typing import Any
 
 from .screenshot import ObservedField, ScreenshotDealObservation
 from .vision_publication import (
     PublicationVisionError,
     _clean_rank_text,
+    _cluster_rows,
     _deps,
     _extract_metadata,
+    _rank_tokens,
+    _row_center,
 )
 
 
@@ -27,7 +31,6 @@ class NamedQuadrantVisionError(ValueError):
 
 
 def _decode_named(image_bytes: bytes, cv2: Any, np: Any) -> Any:
-    """Decode this dense four-column family at a deterministic high working resolution."""
     if not image_bytes:
         raise NamedQuadrantVisionError("EMPTY_IMAGE")
     image = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
@@ -36,9 +39,6 @@ def _decode_named(image_bytes: bytes, cv2: Any, np: Any) -> Any:
     height, width = image.shape[:2]
     if width < 250 or height < 180:
         raise NamedQuadrantVisionError("IMAGE_TOO_SMALL")
-    # The generic publication extractor normalizes to 700px because it contains one
-    # central cross. This family contains four independent hands side-by-side; keeping
-    # twice that width preserves enough literal glyph detail for local OCR.
     target_width = 1400
     if width != target_width:
         scale = target_width / float(width)
@@ -108,31 +108,80 @@ def _column_bounds(headings: dict[str, tuple[float, float, float]], width: int) 
     return out
 
 
-def _rank_lines_from_crop(crop: Any, pytesseract: Any, cv2: Any) -> list[str]:
-    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    candidates: list[tuple[str, ...]] = []
-    for source in (gray, binary):
-        for psm in (6, 11, 12):
-            raw = pytesseract.image_to_string(
-                source,
-                config=f"--psm {psm} -c tessedit_char_whitelist=AKQJT9876543210",
-            )
-            lines = []
-            for line in raw.splitlines():
-                value = _clean_rank_text(line)
+def _global_rank_rows(
+    image: Any,
+    headings: dict[str, tuple[float, float, float]],
+    pytesseract: Any,
+) -> list[float]:
+    """Find the four visible suit-row bands from pixel OCR geometry only."""
+    height = image.shape[0]
+    heading_y = sum(value[1] for value in headings.values()) / 4.0
+    tokens = [
+        token
+        for token in _rank_tokens(image, pytesseract)
+        if heading_y + height * 0.025 <= token["cy"] <= heading_y + height * 0.58
+    ]
+    rows = _cluster_rows(tokens, tolerance=max(16.0, image.shape[1] * 0.018))
+    centers = [_row_center(row) for row in rows if row]
+    # The bounded family has four suit rows. If OCR sees extra noise, retain the earliest
+    # four separated bands beneath the heading; metadata is below this hand region.
+    selected: list[float] = []
+    for center in sorted(centers):
+        if selected and center - selected[-1] < height * 0.035:
+            continue
+        selected.append(center)
+        if len(selected) == 4:
+            break
+    if len(selected) != 4:
+        raise NamedQuadrantVisionError(f"INCOMPLETE_NAMED_HAND_ROWS:{len(selected)}")
+    return selected
+
+
+def _ocr_rank_row(
+    image: Any,
+    *,
+    x0: int,
+    x1: int,
+    center_y: float,
+    pytesseract: Any,
+    cv2: Any,
+) -> tuple[str, float]:
+    """OCR one isolated holding row, masking possible suit-glyph contamination."""
+    height, width = image.shape[:2]
+    half = max(24, int(height * 0.024))
+    y0 = max(0, int(center_y - half)); y1 = min(height, int(center_y + half))
+    column_width = x1 - x0
+    readings: list[str] = []
+    # The suit glyph is on the left of each holding. Try several conservative left masks;
+    # only repeated identical rank readings can win if alternatives conflict.
+    for left_fraction in (0.00, 0.08, 0.14, 0.20):
+        rx0 = min(x1 - 1, x0 + int(column_width * left_fraction))
+        crop = image[y0:y1, rx0:x1]
+        if crop.size == 0:
+            continue
+        crop = cv2.resize(crop, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        for source in (gray, binary):
+            for psm in (7, 13):
+                value = _clean_rank_text(
+                    pytesseract.image_to_string(
+                        source,
+                        config=f"--psm {psm} -c tessedit_char_whitelist=AKQJT9876543210",
+                    )
+                )
                 if value:
-                    lines.append(value)
-            if len(lines) >= 4:
-                candidate = tuple(lines[:4])
-                if sum(len(value) for value in candidate) == 13:
-                    candidates.append(candidate)
-    unique = sorted(set(candidates))
-    if not unique:
-        raise NamedQuadrantVisionError("INCOMPLETE_NAMED_HAND_ROWS")
-    if len(unique) != 1:
-        raise NamedQuadrantVisionError(f"AMBIGUOUS_CARD_OCR:{unique}")
-    return list(unique[0])
+                    readings.append(value)
+    if not readings:
+        raise NamedQuadrantVisionError("INCOMPLETE_NAMED_HAND_ROW")
+    counts = Counter(readings)
+    best, support = counts.most_common(1)[0]
+    if len(counts) > 1 and support < 2:
+        raise NamedQuadrantVisionError(f"AMBIGUOUS_CARD_OCR:{sorted(counts)}")
+    # A single repeated character caused by a suit glyph is not accepted as a holding
+    # unless the later 13-card/52-card gates make the entire hand and deck coherent.
+    confidence = min(0.92, 0.58 + 0.04 * support)
+    return best, confidence
 
 
 def _extract_four_column_hands(
@@ -141,22 +190,31 @@ def _extract_four_column_hands(
     pytesseract: Any,
     cv2: Any,
 ) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, float]]]:
-    height, width = image.shape[:2]
+    _, width = image.shape[:2]
     bounds = _column_bounds(headings, width)
+    row_centers = _global_rank_rows(image, headings, pytesseract)
     hands: dict[str, dict[str, str]] = {}
     confidence: dict[str, dict[str, float]] = {}
     cards: list[str] = []
     for seat in "NESW":
-        _, hy, _ = headings[seat]
         x0, x1 = bounds[seat]
-        y0 = max(0, int(hy + height * 0.020))
-        y1 = min(height, int(hy + height * 0.620))
-        crop = image[y0:y1, x0:x1]
-        if crop.size == 0:
-            raise NamedQuadrantVisionError(f"EMPTY_HAND_CROP:{seat}")
-        holdings = _rank_lines_from_crop(crop, pytesseract, cv2)
+        holdings: list[str] = []
+        row_confidence: list[float] = []
+        for center_y in row_centers:
+            holding, conf = _ocr_rank_row(
+                image,
+                x0=x0,
+                x1=x1,
+                center_y=center_y,
+                pytesseract=pytesseract,
+                cv2=cv2,
+            )
+            holdings.append(holding)
+            row_confidence.append(conf)
+        if sum(len(value) for value in holdings) != 13:
+            raise NamedQuadrantVisionError(f"INCOMPLETE_HAND:{seat}:{'.'.join(holdings)}")
         hands[seat] = dict(zip("SHDC", holdings, strict=True))
-        confidence[seat] = {suit: 0.66 for suit in "SHDC"}
+        confidence[seat] = dict(zip("SHDC", row_confidence, strict=True))
         for suit, ranks in zip("SHDC", holdings, strict=True):
             cards.extend(suit + rank for rank in ranks)
 
