@@ -146,14 +146,27 @@ def _ocr_holding_row(image:Any,row:list[dict[str,Any]],glyph_x:float,pytesseract
     return _ocr_holding_crop(image,_row_center(row),max(0,int(glyph_x+18)),pytesseract,cv2)
 
 
-def _retry_hand_from_rank_start(image:Any,rows:list[list[dict[str,Any]]],pytesseract:Any,cv2:Any)->tuple[list[str],list[float]]:
-    """Retry a failed hand from visible rank geometry without deck completion.
+def _retry_hand_from_token_rows(rows:list[list[dict[str,Any]]],glyph_x:float)->tuple[list[str],list[float]]:
+    """Use the rank-only OCR boxes themselves when the recrop loses real ranks.
 
-    The retry uses a narrow single-row crop so neighbouring suit rows cannot supply
-    characters. A small positive offset removes a visible suit glyph when rank-only box
-    OCR has mistaken it for a rank. The retry is used only after the normal 13-card count
-    fails, and still requires independent OCR agreement plus final 52-unique validation.
+    A suit glyph can be misclassified as a rank at the repeated glyph column. We drop
+    only a first token whose x coordinate actually coincides with that visible column;
+    otherwise every recognized rank token is retained. This is direct pixel OCR, not
+    deck completion or ambiguity repair.
     """
+    holdings=[]
+    for row in rows:
+        ordered=sorted(row,key=lambda token:token["x"])
+        if not ordered:
+            return [],[]
+        if abs(float(ordered[0]["x"])-glyph_x)<=5.0:
+            ordered=ordered[1:]
+        value="".join(str(token["text"]) for token in ordered)
+        holdings.append(value)
+    return holdings,[0.58,0.58,0.58,0.58]
+
+
+def _retry_hand_from_rank_start(image:Any,rows:list[list[dict[str,Any]]],pytesseract:Any,cv2:Any)->tuple[list[str],list[float]]:
     starts=[float(min(token["x"] for token in row)) for row in rows if row]
     if len(starts)<2: raise PublicationVisionError("UNSTABLE_RANK_START_COLUMN")
     med=float(statistics.median(starts))
@@ -197,6 +210,10 @@ def _extract_hands(image:Any,compass:dict[str,tuple[float,float,float]],pytesser
         for row in raw_rows[hand]:
             value,conf=_ocr_holding_row(image,row,glyph_x[hand],pytesseract,cv2)
             holdings.append(value); row_conf.append(conf)
+        if sum(len(value) for value in holdings)!=13:
+            token_holdings,token_conf=_retry_hand_from_token_rows(raw_rows[hand],glyph_x[hand])
+            if token_holdings and sum(len(value) for value in token_holdings)==13:
+                holdings,row_conf=token_holdings,token_conf
         if sum(len(value) for value in holdings)!=13:
             try:
                 retry_holdings,retry_conf=_retry_hand_from_rank_start(image,raw_rows[hand],pytesseract,cv2)
