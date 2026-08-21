@@ -5,6 +5,7 @@ on:
     paths:
       - 'data/tournaments/tournament_29912_round6_diana_facts_v2.json'
       - 'scripts/temp_diana_29912_dds3_analysis.py'
+      - 'scripts/temp_diana_29912_opening_leads.py'
       - '.github/workflows/temp-diana-29912-dds3.yml'
       - 'bridge_school_api/dds3/**'
       - 'dds/**'
@@ -24,8 +25,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Validate script
-        run: python3 -m py_compile scripts/temp_diana_29912_dds3_analysis.py
+      - name: Validate scripts
+        run: python3 -m py_compile scripts/temp_diana_29912_dds3_analysis.py scripts/temp_diana_29912_opening_leads.py
       - name: Build pinned canonical DDS3 core
         run: docker build -f Dockerfile.dds3 -t bridge-school-dds3 .
       - name: Build canonical DDS3 runtime
@@ -63,11 +64,21 @@ jobs:
             --out-json diana-29912-round6-dds3-analysis.json \
             --out-md diana-29912-round6-dds3-analysis.md
           cat diana-29912-round6-dds3-analysis.md
+      - name: Evaluate all recorded opening leads
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/temp_diana_29912_opening_leads.py \
+            --facts data/tournaments/tournament_29912_round6_diana_facts_v2.json \
+            --base-url http://127.0.0.1:18080 \
+            --token diana29912-secret \
+            --out diana-29912-round6-opening-leads-dds3.json
       - name: Evidence gate
         run: |
           python3 - <<'PY'
           import json
           r=json.load(open('diana-29912-round6-dds3-analysis.json'))
+          l=json.load(open('diana-29912-round6-opening-leads-dds3.json'))
           assert r['policy']['dds3_only'] is True
           assert r['policy']['no_site_dd_used'] is True
           assert r['summary']['boards']==21
@@ -76,6 +87,7 @@ jobs:
           assert len(r['summary']['diana_declarer_boards'])==8
           assert len(r['summary']['diana_opening_lead_boards'])==4
           assert all(b['dds3']['engine']=='DDS3' and b['dds3']['fallback_used'] is False for b in r['boards'])
+          assert l['engine']=='DDS3' and l['fallback_used'] is False and len(l['rows'])==21
           print('DIANA_29912_DDS3_PASS')
           PY
       - name: Runtime logs on failure
@@ -90,5 +102,6 @@ jobs:
             diana29912-ready.json
             diana-29912-round6-dds3-analysis.json
             diana-29912-round6-dds3-analysis.md
+            diana-29912-round6-opening-leads-dds3.json
           if-no-files-found: error
           retention-days: 30
