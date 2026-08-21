@@ -1,0 +1,56 @@
+name: DDS3 module integration
+on:
+  pull_request:
+    paths:
+      - 'dds/**'
+      - 'bridge_school_api/dds3/**'
+      - 'Dockerfile.dds3'
+      - '.github/workflows/dds3-module.yml'
+  workflow_dispatch:
+
+jobs:
+  golden:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned DDS3 container
+        run: docker build -f Dockerfile.dds3 -t bridge-school-dds3 .
+      - name: Golden deterministic run
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEAL='N:QJ6.K652.J85.T98 873.J97.AT764.Q4 K5.T83.KQ9.A7652 AT942.AQ4.32.KJ3'
+          docker run --rm bridge-school-dds3 N None "$DEAL" > run1.json
+          docker run --rm bridge-school-dds3 N None "$DEAL" > run2.json
+          cmp run1.json run2.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('run1.json'))
+          assert d['hand_order']==['N','E','S','W']
+          assert d['strain_order']==['S','H','D','C','NT']
+          assert d['par_score_ns']==-110
+          assert d['par_contracts']==['2S-EW']
+          assert all(len(v)==4 and all(0<=x<=13 for x in v) for v in d['dd_table'].values())
+          print(json.dumps(d, sort_keys=True))
+          PY
+      - name: Board 16 end-to-end DD table
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Image transcription, clockwise from North: N E S W.
+          DEAL='N:K54.7654.875432. Q972.AT82.J.KQT7 8.KQJ3.AQT96.943 AJT63.9.K.AJ8652'
+          docker run --rm bridge-school-dds3 N None "$DEAL" | tee board16.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('board16.json'))
+          assert d['hand_order']==['N','E','S','W']
+          assert set(d['dd_table'])=={'S','H','D','C','NT'}
+          print('BOARD16_DDS3_PASS', json.dumps(d, sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dds3-integration-results
+          path: |
+            run1.json
+            run2.json
+            board16.json
