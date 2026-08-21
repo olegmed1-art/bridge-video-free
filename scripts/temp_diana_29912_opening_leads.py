@@ -25,13 +25,22 @@ def main():
         first=leader(b['declarer'])
         p=post(a.base_url,a.token,{'operation':'position_all_moves','position':{'pbn':b['pbn'],'trump':strain(b['contract']),'first':first,'current_trick':[]}})
         moves={m['card']:m for m in p['moves']}; card=b['opening_lead']
-        if card not in moves: raise RuntimeError(f"board {b['board']}: {card} not legal")
         if side(first)==b['pair_direction']:
             owner='Diana' if first==diana_seat(b['pair_direction']) else 'Anna'
         else: owner='Opponent'
-        rows.append({'board':b['board'],'contract':b['contract'],'declarer':b['declarer'],'leader':first,'owner':owner,'lead':card,'lead_move':moves[card],'optimal_cards':p['optimal_cards'],'best_tricks_for_defending_side_to_play':p['best_tricks'],'pair_matchpoints':b['pair_matchpoints']})
+        row={'board':b['board'],'contract':b['contract'],'declarer':b['declarer'],'leader':first,'owner':owner,'lead':card,'optimal_cards':p['optimal_cards'],'best_tricks_for_defending_side_to_play':p['best_tricks'],'pair_matchpoints':b['pair_matchpoints']}
+        if card in moves:
+            row['lead_move']=moves[card]
+            row['lead_mapping']='exact'
+        else:
+            row['lead_move']=None
+            row['lead_mapping']='recorded lead not returned as a DDS3 move; no regret claimed'
+        rows.append(row)
     out={'schema':'diana-29912-opening-leads-dds3-v1','engine':'DDS3','fallback_used':False,'rows':rows}
     a.out.write_text(json.dumps(out,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     for r in rows:
-        print(r['board'],r['owner'],r['lead'],'regret',r['lead_move']['regret'],'optimal',','.join(r['optimal_cards']))
+        if r['lead_move']:
+            print(r['board'],r['owner'],r['lead'],'regret',r['lead_move']['regret'],'optimal',','.join(r['optimal_cards']))
+        else:
+            print(r['board'],r['owner'],r['lead'],'UNMAPPED','optimal',','.join(r['optimal_cards']))
 if __name__=='__main__': main()
