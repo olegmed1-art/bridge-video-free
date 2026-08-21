@@ -26,7 +26,60 @@ class AppealsCrossVisionError(ValueError):
     pass
 
 
-def _extract_appeals_metadata(image: Any, pytesseract: Any) -> tuple[int, str, str, float]:
+def _dedicated_dealer_read(image: Any, pytesseract: Any, cv2: Any) -> str | None:
+    """Read the word immediately to the right of the explicit Dealer label.
+
+    This is OCR redundancy, not semantic repair: only exact dealer tokens from a bounded
+    pixel crop are accepted. Fuzzy spell correction such as ``Bast -> East`` is forbidden.
+    """
+    data = pytesseract.image_to_data(
+        image, config="--psm 11", output_type=pytesseract.Output.DICT
+    )
+    height, width = image.shape[:2]
+    candidates: list[str] = []
+    for index, raw in enumerate(data["text"]):
+        if re.sub(r"[^A-Za-z]", "", raw).upper() != "DEALER":
+            continue
+        try:
+            conf = float(data["conf"][index])
+        except (TypeError, ValueError):
+            conf = -1
+        if conf < 15:
+            continue
+        left = int(data["left"][index]); top = int(data["top"][index])
+        w = int(data["width"][index]); h = int(data["height"][index])
+        x0 = max(0, left + w + 2)
+        x1 = min(width, x0 + max(120, int(width * 0.22)))
+        y0 = max(0, top - max(8, h // 2))
+        y1 = min(height, top + h + max(8, h // 2))
+        crop = image[y0:y1, x0:x1]
+        if not crop.size:
+            continue
+        crop = cv2.resize(crop, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        for source in (gray, binary):
+            for psm in (7, 11, 13):
+                text = pytesseract.image_to_string(
+                    source,
+                    config=f"--psm {psm} -c tessedit_char_whitelist=NorthEastSouthWestNESW",
+                )
+                token = re.sub(r"[^A-Za-z]", "", text).upper()
+                if token in DEALER_MAP:
+                    candidates.append(DEALER_MAP[token])
+    if not candidates:
+        return None
+    counts = {value: candidates.count(value) for value in set(candidates)}
+    best = max(counts, key=counts.get)
+    # Require two independent render/config reads if more than one value appears.
+    if len(counts) > 1 and counts[best] < 2:
+        raise AppealsCrossVisionError(f"APPEALS_DEALER_OCR_AMBIGUOUS:{candidates}")
+    return best
+
+
+def _extract_appeals_metadata(
+    image: Any, pytesseract: Any, cv2: Any
+) -> tuple[int, str, str, float]:
     text = pytesseract.image_to_string(image, config="--psm 6").replace("\n", " ")
     header = re.search(r"\bBoard\s*(?:no|number)\b", text, re.IGNORECASE)
     if header is None:
@@ -43,15 +96,17 @@ def _extract_appeals_metadata(image: Any, pytesseract: Any) -> tuple[int, str, s
         text,
         re.IGNORECASE,
     )
-    if not board_match or not dealer_match or not vul_match:
+    if not board_match or not vul_match:
         raise AppealsCrossVisionError(f"APPEALS_METADATA_OCR_FAILED:{text[:240]!r}")
 
-    dealer = DEALER_MAP.get(dealer_match.group(1).upper())
+    dealer = DEALER_MAP.get(dealer_match.group(1).upper()) if dealer_match else None
+    if dealer is None:
+        dealer = _dedicated_dealer_read(image, pytesseract, cv2)
     vul_key = re.sub(r"\s+", "", vul_match.group(1).upper())
     vulnerability = VUL_MAP.get(vul_key)
     if dealer is None or vulnerability is None:
-        raise AppealsCrossVisionError("APPEALS_METADATA_OCR_INVALID")
-    return int(board_match.group(1)), dealer, vulnerability, 0.80
+        raise AppealsCrossVisionError(f"APPEALS_METADATA_OCR_FAILED:{text[:240]!r}")
+    return int(board_match.group(1)), dealer, vulnerability, 0.78
 
 
 def extract_appeals_cross_observation(
@@ -64,7 +119,7 @@ def extract_appeals_cross_observation(
     # can continue to their own bounded extractor. Once this family is recognized,
     # card/metadata ambiguity fails closed rather than falling through.
     board, dealer, vulnerability, metadata_confidence = _extract_appeals_metadata(
-        image, pytesseract
+        image, pytesseract, cv2
     )
     try:
         compass = _ocr_compass(image, pytesseract)
