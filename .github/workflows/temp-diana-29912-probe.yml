@@ -1,0 +1,78 @@
+name: TEMP Diana 29912 source probe
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/temp-diana-29912-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Fetch event and sessions
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p probe29912
+          UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140 Safari/537.36'
+          curl -L --retry 3 --connect-timeout 15 --max-time 45 -A "$UA" -sS -D probe29912/total.headers 'https://www.bridge.co.il/viewer/total.php?event=29912' -o probe29912/total.html || true
+          for r in $(seq 1 10); do
+            curl -L --retry 2 --connect-timeout 15 --max-time 45 -A "$UA" -sS -D "probe29912/round${r}.headers" "https://www.bridge.co.il/viewer/session.php?event=29912&round=${r}" -o "probe29912/round${r}.html" || true
+          done
+          wc -c probe29912/* || true
+      - name: Inspect Diana and personal links
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import html, re, json
+          roots=[]
+          needles=['דיאנה','דינה','וקסלר','ווקסלר','diana','veksler','vexler','wexler']
+          out=[]
+          for p in sorted(Path('probe29912').glob('*.html')):
+              raw=p.read_bytes()
+              text=None
+              used=None
+              for enc in ('utf-8','windows-1255','iso-8859-8','latin-1'):
+                  try:
+                      cand=raw.decode(enc)
+                  except UnicodeDecodeError:
+                      continue
+                  score=sum(cand.lower().count(n) for n in needles)
+                  if text is None or score>sum(text.lower().count(n) for n in needles):
+                      text=cand; used=enc
+              text=html.unescape(text or '')
+              compact=re.sub(r'\s+',' ',text)
+              links=sorted(set(re.findall(r'href=["\']([^"\']*(?:personal|session|board)\.php[^"\']*)', text, re.I)))
+              matches=[]
+              low=compact.lower()
+              for n in needles:
+                  start=0
+                  while True:
+                      i=low.find(n,start)
+                      if i<0: break
+                      matches.append(compact[max(0,i-400):i+500])
+                      start=i+len(n)
+              rec={'file':p.name,'bytes':len(raw),'encoding':used,'matches':matches[:20],'links':links[:200]}
+              out.append(rec)
+              print('\n###',p.name,'bytes',len(raw),'encoding',used,'matches',len(matches),'links',len(links))
+              for m in matches[:8]: print('MATCH',m)
+              for l in links[:50]: print('LINK',l)
+          Path('probe29912/index.json').write_text(json.dumps(out,ensure_ascii=False,indent=2),encoding='utf-8')
+          PY
+      - name: Upload probe
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: diana-29912-source-probe
+          path: probe29912/
+          if-no-files-found: error
+          retention-days: 7
