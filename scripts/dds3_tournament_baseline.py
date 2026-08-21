@@ -3,9 +3,9 @@
 
 This runner is deliberately facts-only. It computes a full-deal DDS3 baseline for
 all boards and, when an actual contract/result is present, compares the observed
-trick result with the DDS3 game-theoretic value for the same strain/declarer.
-It does not infer a card-level mistake without a real play record and does not
-write student skill/error observations.
+trick result with the DDS3 game-theoretic value for the same strain/declarer and
+the target-pair score with DDS3 Par. It does not infer a card-level mistake
+without a real play record and does not write student skill/error observations.
 """
 from __future__ import annotations
 
@@ -140,6 +140,21 @@ def run(data_path: Path, base_url: str, token: str) -> dict[str, Any]:
             },
         }
 
+        if row["status"] == "played" and row["pair_score"]:
+            target_side = _pair_side(row["pair_direction"])
+            target_par_score = int(dds["par_score_ns"]) if target_side == "NS" else -int(dds["par_score_ns"])
+            actual_pair_score = int(row["pair_score"])
+            item["dd_par_comparison"] = {
+                "target_pair_side": target_side,
+                "actual_pair_score": actual_pair_score,
+                "dds3_par_score_target_pair": target_par_score,
+                "actual_pair_score_minus_dds3_par": actual_pair_score - target_par_score,
+                "interpretation": (
+                    "positive means the target pair's observed board score exceeded DDS3 Par; negative means it was below DDS3 Par. "
+                    "This combines auction and play outcome and is not a card-level skill attribution."
+                ),
+            }
+
         if row["status"] == "played" and row["contract"] and row["declarer"] and row["result_delta"]:
             level, strain, multiplier = _parse_contract(row["contract"])
             declarer = row["declarer"].upper()
@@ -178,6 +193,15 @@ def run(data_path: Path, base_url: str, token: str) -> dict[str, Any]:
         key=lambda r: (r["same_contract_dd_comparison"]["target_pair_delta_vs_dd_tricks"], r["board"]),
     )
 
+    par_comparisons = [r for r in results if "dd_par_comparison" in r]
+    below_par = [r for r in par_comparisons if r["dd_par_comparison"]["actual_pair_score_minus_dds3_par"] < 0]
+    at_par = [r for r in par_comparisons if r["dd_par_comparison"]["actual_pair_score_minus_dds3_par"] == 0]
+    above_par = [r for r in par_comparisons if r["dd_par_comparison"]["actual_pair_score_minus_dds3_par"] > 0]
+    below_par_sorted = sorted(
+        below_par,
+        key=lambda r: (r["dd_par_comparison"]["actual_pair_score_minus_dds3_par"], r["board"]),
+    )
+
     return {
         "schema": "bridge-dds3-tournament-baseline-v1",
         "mode": "FACTS_ONLY_DDS3_BASELINE",
@@ -200,6 +224,11 @@ def run(data_path: Path, base_url: str, token: str) -> dict[str, Any]:
             "target_pair_at_dd_equilibrium": len(zeros),
             "target_pair_above_dd_equilibrium": len(positives),
             "boards_below_dd_equilibrium": [r["board"] for r in negative_sorted],
+            "played_scores_compared_to_par": len(par_comparisons),
+            "target_pair_below_dd_par": len(below_par),
+            "target_pair_at_dd_par": len(at_par),
+            "target_pair_above_dd_par": len(above_par),
+            "boards_below_dd_par": [r["board"] for r in below_par_sorted],
         },
         "boards": results,
     }
@@ -219,31 +248,36 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Полных DDS3 baseline: {summary['dds3_baselines_computed']}",
         f"- Сыгранных контрактов с result-level сравнением: {summary['played_contracts_compared']}",
         "",
-        "## Result-level сравнение с DDS3 для того же контракта",
+        "## Result-level сравнение с DDS3",
         "",
-        "Положительное значение в колонке Δ пары означает, что наблюдаемый результат был лучше для пары Дианы относительно DDS3-значения той же масти/разыгрывающего; отрицательное — хуже. Это не приписывается конкретной карте, поскольку play record отсутствует.",
+        "Δ пары — сравнение фактических взяток с DDS3-значением того же контракта/разыгрывающего с точки зрения пары Дианы. Δ score vs Par — фактический score пары минус DDS3 Par для её стороны. Положительные значения благоприятны для пары, отрицательные — неблагоприятны. Ни один показатель не приписывается конкретной карте без play record.",
         "",
-        "| Сдача | Пара | Контракт | Разыгр. | Факт взяток | DDS3 | Δ пары | % пары |",
-        "|---:|:---:|:---:|:---:|---:|---:|---:|---:|",
+        "| Сдача | Пара | Контракт | Разыгр. | Факт взяток | DDS3 | Δ пары | Score | DDS3 Par | Δ score vs Par | % пары |",
+        "|---:|:---:|:---:|:---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for board in report["boards"]:
         cmp = board.get("same_contract_dd_comparison")
-        if not cmp:
+        par = board.get("dd_par_comparison")
+        if not cmp or not par:
             continue
         lines.append(
             f"| {board['board']} | {board['pair_direction']} | {board['contract']} | {board['declarer']} | "
             f"{cmp['actual_tricks']} | {cmp['dds3_tricks_same_strain_declarer']} | "
-            f"{cmp['target_pair_delta_vs_dd_tricks']:+d} | {board['pair_percentage']:.1f} |"
+            f"{cmp['target_pair_delta_vs_dd_tricks']:+d} | {par['actual_pair_score']} | "
+            f"{par['dds3_par_score_target_pair']} | {par['actual_pair_score_minus_dds3_par']:+d} | "
+            f"{board['pair_percentage']:.1f} |"
         )
     lines.extend(
         [
             "",
             "## Сводка",
             "",
-            f"- Ниже DDS3 equilibrium для пары: {summary['target_pair_below_dd_equilibrium']} сдач.",
-            f"- Ровно DDS3 equilibrium: {summary['target_pair_at_dd_equilibrium']} сдач.",
-            f"- Выше DDS3 equilibrium для пары: {summary['target_pair_above_dd_equilibrium']} сдач.",
+            f"- Ниже DDS3 equilibrium по взяткам для пары: {summary['target_pair_below_dd_equilibrium']} сдач.",
+            f"- Ровно DDS3 equilibrium по взяткам: {summary['target_pair_at_dd_equilibrium']} сдач.",
+            f"- Выше DDS3 equilibrium по взяткам для пары: {summary['target_pair_above_dd_equilibrium']} сдач.",
             f"- Сдачи с отрицательной Δ пары: {summary['boards_below_dd_equilibrium']}.",
+            f"- Ниже DDS3 Par по score: {summary['target_pair_below_dd_par']} сдач; на Par: {summary['target_pair_at_dd_par']}; выше Par: {summary['target_pair_above_dd_par']}.",
+            f"- Сдачи ниже DDS3 Par: {summary['boards_below_dd_par']}.",
             "",
             "Точный поиск first swing, regret конкретного хода и final unrecovered damage не выполнялся: в исходных данных нет покарточной записи розыгрыша.",
         ]
