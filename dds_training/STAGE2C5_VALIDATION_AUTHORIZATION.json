@@ -1,0 +1,29 @@
+{
+  "schema": "dds-stage2c5-validation-authorization-v1",
+  "stage": "2C.5",
+  "status": "OWNER_AUTHORIZED",
+  "authorized_at": "2026-08-21T19:58:00+03:00",
+  "authority": "EVIDENCE_ONLY",
+  "prerequisite": {
+    "train_shadow_status": "train_shadow_complete",
+    "train_gate_pass": true,
+    "methodology_gate_pass": true,
+    "locked_train_shadow_prediction_sha256": "a7afde6d2409e302464ad93ea4acd4b7ed96f8621015ec81cc62312fb73c1583"
+  },
+  "validation_scope": {
+    "split": "validation",
+    "predictions_must_be_locked_before_dds": true,
+    "candidate_policy": "defense_learned__declarer_baseline",
+    "candidate_fit_scope": "TRAIN-only",
+    "validation_learning_allowed": false,
+    "validation_gate_tuning_allowed": false,
+    "historical_database_mutation_allowed": false,
+    "automatic_promotion_allowed": false
+  },
+  "sealed": {
+    "access_allowed": false,
+    "reuse_prior_sealed_for_tuning": false
+  },
+  "next_gate_if_pass": "owner_decision_on_new_sealed",
+  "next_gate_if_fail": "return_to_train_new_candidate"
+}
