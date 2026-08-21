@@ -16,16 +16,8 @@ from .screenshot import ObservedField, ScreenshotDealObservation
 
 RANKS = set("AKQJT98765432")
 VUL_MAP = {
-    "NONE": "None",
-    "LOVE": "None",
-    "NS": "NS",
-    "N/S": "NS",
-    "N-S": "NS",
-    "EW": "EW",
-    "E/W": "EW",
-    "E-W": "EW",
-    "BOTH": "Both",
-    "ALL": "Both",
+    "NONE": "None", "LOVE": "None", "NS": "NS", "N/S": "NS", "N-S": "NS",
+    "EW": "EW", "E/W": "EW", "E-W": "EW", "BOTH": "Both", "ALL": "Both",
 }
 DEALER_MAP = {"N": "N", "NORTH": "N", "E": "E", "EAST": "E", "S": "S", "SOUTH": "S", "W": "W", "WEST": "W"}
 
@@ -60,11 +52,7 @@ def _decode(image_bytes: bytes, cv2: Any, np: Any) -> Any:
 
 
 def _ocr_compass(image: Any, pytesseract: Any) -> dict[str, tuple[float, float, float]]:
-    data = pytesseract.image_to_data(
-        image,
-        config="--psm 11 -c tessedit_char_whitelist=NWES",
-        output_type=pytesseract.Output.DICT,
-    )
+    data = pytesseract.image_to_data(image, config="--psm 11 -c tessedit_char_whitelist=NWES", output_type=pytesseract.Output.DICT)
     labels: dict[str, list[tuple[float, float, float]]] = {seat: [] for seat in "NWES"}
     for i, raw in enumerate(data["text"]):
         text = raw.strip().upper()
@@ -77,15 +65,13 @@ def _ocr_compass(image: Any, pytesseract: Any) -> dict[str, tuple[float, float, 
         labels[text].append((x + w / 2, y + h / 2, conf))
     if any(not labels[seat] for seat in "NWES"):
         raise PublicationVisionError("UNSUPPORTED_LAYOUT_NO_COMPASS")
-
     best: tuple[float, dict[str, tuple[float, float, float]]] | None = None
     for n, w, e, s in itertools.product(labels["N"], labels["W"], labels["E"], labels["S"]):
         if not (n[1] < s[1] and w[0] < e[0]):
             continue
         center_x = (n[0] + s[0] + w[0] + e[0]) / 4
         center_y = (n[1] + s[1] + w[1] + e[1]) / 4
-        vertical = abs(n[0] - s[0])
-        horizontal = abs(w[1] - e[1])
+        vertical = abs(n[0] - s[0]); horizontal = abs(w[1] - e[1])
         symmetry = abs((center_y - n[1]) - (s[1] - center_y)) + abs((center_x - w[0]) - (e[0] - center_x))
         span_x = e[0] - w[0]; span_y = s[1] - n[1]
         if not (10 <= span_x <= image.shape[1] * 0.35 and 10 <= span_y <= image.shape[0] * 0.35):
@@ -100,7 +86,6 @@ def _ocr_compass(image: Any, pytesseract: Any) -> dict[str, tuple[float, float, 
 
 
 def _clean_rank_text(text: str) -> str:
-    """Accept only tokens made entirely of visible rank notation."""
     value = re.sub(r"\s+", "", text.upper()).replace("10", "T")
     if not value or any(ch not in RANKS for ch in value):
         return ""
@@ -108,11 +93,7 @@ def _clean_rank_text(text: str) -> str:
 
 
 def _rank_tokens(image: Any, pytesseract: Any) -> list[dict[str, Any]]:
-    data = pytesseract.image_to_data(
-        image,
-        config="--psm 11 -c tessedit_char_whitelist=AKQJT9876543210",
-        output_type=pytesseract.Output.DICT,
-    )
+    data = pytesseract.image_to_data(image, config="--psm 11 -c tessedit_char_whitelist=AKQJT9876543210", output_type=pytesseract.Output.DICT)
     tokens: list[dict[str, Any]] = []
     for i, raw in enumerate(data["text"]):
         text = _clean_rank_text(raw)
@@ -120,7 +101,7 @@ def _rank_tokens(image: Any, pytesseract: Any) -> list[dict[str, Any]]:
             continue
         conf = max(0.0, min(1.0, float(data["conf"][i]) / 100.0))
         x = int(data["left"][i]); y = int(data["top"][i]); w = int(data["width"][i]); h = int(data["height"][i])
-        tokens.append({"text": text, "confidence": conf, "x": x, "y": y, "cx": x + w / 2, "cy": y + h / 2})
+        tokens.append({"text": text, "confidence": conf, "x": x, "y": y, "right": x + w, "cx": x + w / 2, "cy": y + h / 2})
     return tokens
 
 
@@ -144,24 +125,48 @@ def _row_center(row: list[dict[str, Any]]) -> float:
     return sum(token["cy"] for token in row) / len(row)
 
 
-def _holding(row: list[dict[str, Any]]) -> tuple[str, float]:
-    if not row:
+def _median(values: list[float]) -> float:
+    if not values:
+        raise PublicationVisionError("NO_RANK_START_EVIDENCE")
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2
+
+
+def _ocr_rank_row(image: Any, pytesseract: Any, *, y: float, x0: float, x1: float) -> tuple[str, float]:
+    height, width = image.shape[:2]
+    left = max(0, int(round(x0))); right = min(width, int(round(x1)))
+    top = max(0, int(round(y - 12))); bottom = min(height, int(round(y + 12)))
+    if right <= left or bottom <= top:
+        raise PublicationVisionError("INVALID_RANK_ROW_CROP")
+    crop = image[top:bottom, left:right]
+    data = pytesseract.image_to_data(crop, config="--psm 7 -c tessedit_char_whitelist=AKQJT9876543210", output_type=pytesseract.Output.DICT)
+    pieces: list[tuple[int, str, float]] = []
+    for i, raw in enumerate(data["text"]):
+        value = _clean_rank_text(raw)
+        if not value:
+            continue
+        conf = max(0.0, min(1.0, float(data["conf"][i]) / 100.0))
+        pieces.append((int(data["left"][i]), value, conf))
+    pieces.sort()
+    if not pieces:
         return "", 0.75
-    value = _clean_rank_text("".join(token["text"] for token in sorted(row, key=lambda token: token["x"])))
+    value = _clean_rank_text("".join(piece[1] for piece in pieces))
     if not value:
         raise PublicationVisionError("AMBIGUOUS_RANK_ROW")
-    return value, min(token["confidence"] for token in row)
+    return value, min(piece[2] for piece in pieces)
 
 
 def _extract_hands(image: Any, compass: dict[str, tuple[float, float, float]], pytesseract: Any) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, float]]]:
-    """Read four visible rank rows per hand without deck-complement repair.
+    """Read four supported S/H/D/C rows, excluding the printed suit-symbol column.
 
-    West/East share a printed four-row grid. A void on one side is accepted only when the
-    opposite side visibly establishes that row, so an absent rank string is tied to an
-    observed row rather than inferred from missing cards. If both lateral hands omit the
-    same row, the grid has fewer than four supported rows and the image is rejected.
-    North/South require four directly observed rank rows and therefore fail closed on a
-    void until a future suit-symbol detector can prove the empty row from pixels.
+    The first OCR pass is used only to locate row geometry. A second narrow OCR pass starts
+    at the median visible rank-column x coordinate, which excludes suit glyphs that a
+    rank-whitelisted OCR may otherwise misread as a digit. West/East share the same four
+    visible row y-levels; a one-sided void is therefore represented by an observed empty
+    cell on a row established by the opposite hand. No missing card is filled from the deck.
     """
     tokens = _rank_tokens(image, pytesseract)
     height, width = image.shape[:2]
@@ -170,36 +175,17 @@ def _extract_hands(image: Any, compass: dict[str, tuple[float, float, float]], p
     span_x = max(value[0] for value in compass.values()) - min(value[0] for value in compass.values())
     side_gap = max(32.0, span_x * 0.80)
 
-    # North: closest four central rows immediately above compass N.
-    north_tokens = [
-        token for token in tokens
-        if token["cy"] < compass["N"][1]
-        and center_x - width * 0.18 < token["cx"] < center_x + width * 0.18
-        and compass["N"][1] - token["cy"] < height * 0.34
-    ]
-    north_rows = _cluster_rows(north_tokens)
-    north_rows = north_rows[-4:]
+    north_tokens = [t for t in tokens if t["cy"] < compass["N"][1] and abs(t["cx"] - center_x) < width * 0.18 and compass["N"][1] - t["cy"] < height * 0.34]
+    north_rows = _cluster_rows(north_tokens)[-4:]
     if len(north_rows) != 4:
         raise PublicationVisionError(f"INCOMPLETE_HAND_ROWS:N:{len(north_rows)}")
 
-    # South: closest four central rows immediately below compass S.
-    south_tokens = [
-        token for token in tokens
-        if token["cy"] > compass["S"][1]
-        and center_x - width * 0.18 < token["cx"] < center_x + width * 0.18
-        and token["cy"] - compass["S"][1] < height * 0.34
-    ]
-    south_rows = _cluster_rows(south_tokens)
-    south_rows = south_rows[:4]
+    south_tokens = [t for t in tokens if t["cy"] > compass["S"][1] and abs(t["cx"] - center_x) < width * 0.18 and t["cy"] - compass["S"][1] < height * 0.34]
+    south_rows = _cluster_rows(south_tokens)[:4]
     if len(south_rows) != 4:
         raise PublicationVisionError(f"INCOMPLETE_HAND_ROWS:S:{len(south_rows)}")
 
-    # Lateral rank text from both W and E establishes one shared S/H/D/C row grid.
-    lateral_tokens = [
-        token for token in tokens
-        if abs(token["cx"] - center_x) > side_gap
-        and abs(token["cy"] - center_y) < height * 0.24
-    ]
+    lateral_tokens = [t for t in tokens if abs(t["cx"] - center_x) > side_gap and abs(t["cy"] - center_y) < height * 0.24]
     lateral_rows = _cluster_rows(lateral_tokens)
     if len(lateral_rows) < 4:
         raise PublicationVisionError(f"INCOMPLETE_LATERAL_GRID:{len(lateral_rows)}")
@@ -213,6 +199,20 @@ def _extract_hands(image: Any, compass: dict[str, tuple[float, float, float]], p
         "E": [[token for token in row if token["cx"] > center_x] for row in lateral_rows],
     }
 
+    rank_starts: dict[str, float] = {}
+    for hand, rows in raw_rows.items():
+        starts = [min(token["x"] for token in row) for row in rows if row]
+        # A suit glyph misread by the rank-only locator is normally one left-side outlier.
+        # Median start therefore stays on the actual rank column without using card/deck logic.
+        rank_starts[hand] = _median([float(value) for value in starts])
+
+    row_right = {
+        "N": center_x + width * 0.18,
+        "S": center_x + width * 0.18,
+        "W": compass["W"][0] - 6,
+        "E": min(width, rank_starts["E"] + width * 0.22),
+    }
+
     hands: dict[str, dict[str, str]] = {}
     confidence: dict[str, dict[str, float]] = {}
     cards: list[str] = []
@@ -220,7 +220,7 @@ def _extract_hands(image: Any, compass: dict[str, tuple[float, float, float]], p
         holdings: list[str] = []
         row_conf: list[float] = []
         for row in raw_rows[hand]:
-            value, conf = _holding(row)
+            value, conf = _ocr_rank_row(image, pytesseract, y=_row_center(row if row else lateral_rows[len(holdings)]), x0=rank_starts[hand] - 1, x1=row_right[hand])
             holdings.append(value)
             row_conf.append(conf)
         if sum(len(value) for value in holdings) != 13:
@@ -248,8 +248,7 @@ def _extract_metadata(image: Any, pytesseract: Any) -> tuple[int, str, str, floa
     if not board_match or not dealer_match or not vul_match:
         raise PublicationVisionError(f"METADATA_OCR_FAILED:{text[:240]!r}")
     board = int(board_match.group(1))
-    dealer_key = dealer_match.group(1).upper()
-    dealer = DEALER_MAP.get(dealer_key)
+    dealer = DEALER_MAP.get(dealer_match.group(1).upper())
     vul_key = re.sub(r"\s+", "", vul_match.group(1).upper())
     vulnerability = VUL_MAP.get(vul_key)
     if dealer is None or vulnerability is None:
@@ -258,7 +257,6 @@ def _extract_metadata(image: Any, pytesseract: Any) -> tuple[int, str, str, floa
 
 
 def extract_publication_cross_observation(image_bytes: bytes, *, media_type: str, filename: str | None = None) -> ScreenshotDealObservation:
-    """Extract a full classic publication cross diagram from actual image bytes."""
     cv2, np, pytesseract = _deps()
     image = _decode(image_bytes, cv2, np)
     compass = _ocr_compass(image, pytesseract)
