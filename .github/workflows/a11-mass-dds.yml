@@ -1,0 +1,78 @@
+name: A11 Mass DDS
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Mass gate size'
+        required: true
+        type: choice
+        options: ['10000', '30000', '40000']
+      corpus_path:
+        description: 'Immutable corpus path already restored into workspace'
+        required: true
+        type: string
+      evaluator:
+        description: 'Verified repository evaluator command'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: a11-mass-dds-${{ inputs.target }}
+  cancel-in-progress: false
+
+jobs:
+  mass-dds:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Context/TT prerequisite gate
+        shell: bash
+        run: bash dds/run_stage2_context_gate.sh
+
+      - name: Enforce staged progression
+        shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+          case "$TARGET" in
+            10000) ;;
+            30000) test -f dds_training/evidence/a11-10000.PASS ;;
+            40000) test -f dds_training/evidence/a11-30000.PASS ;;
+            *) exit 64 ;;
+          esac
+
+      - name: Run guarded A11 orchestration
+        shell: bash
+        env:
+          TARGET: ${{ inputs.target }}
+          CORPUS: ${{ inputs.corpus_path }}
+          EVALUATOR: ${{ inputs.evaluator }}
+        run: |
+          set -euo pipefail
+          mkdir -p dds_training/evidence
+          python dds_training/a11_mass_dds_runner.py \
+            --target "$TARGET" \
+            --corpus "$CORPUS" \
+            --checkpoint "dds_training/evidence/a11-${TARGET}.checkpoint.json" \
+            --evidence "dds_training/evidence/a11-${TARGET}.evidence.json" \
+            --evaluator "$EVALUATOR" --resume
+          touch "dds_training/evidence/a11-${TARGET}.PASS"
+
+      - name: Upload A11 evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a11-${{ inputs.target }}-evidence
+          path: dds_training/evidence/a11-${{ inputs.target }}.*
+          if-no-files-found: error
+          retention-days: 30
