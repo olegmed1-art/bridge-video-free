@@ -6,6 +6,11 @@ The routing step is generation-aware and moves only output IDs proved by the
 matching AI_DONE.  After routing, the standard transcription path invokes the
 r29 speaker-identity postprocess.  Missing identity evidence preserves an
 anonymous transcript; named attribution is never guessed.
+
+Repeated production routing is file-idempotent for stable r29 status receipts:
+an identical same-named receipt in the same work folder is reused; a conflicting
+same-named receipt fails closed. Run-specific monitor receipts remain separate
+audit events by design.
 """
 from __future__ import annotations
 
@@ -13,6 +18,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from typing import Any, Callable
 
 import requests
 
@@ -70,28 +76,86 @@ def _move(token: str, file_id: str, target_parent: str) -> str:
     return "moved"
 
 
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _r29_idempotent_upload_wrapper(
+    original_upload: Callable[[str, str, str, Any], Any],
+) -> Callable[[str, str, str, Any], Any]:
+    """Wrap ``io.upload_json`` only for stable r29 status receipt names.
+
+    Historical duplicates are not deleted.  If all existing same-named receipts
+    are semantically identical, the newest one is reused.  Any conflicting
+    content under the same stable name is treated as a hard integrity failure.
+    Other JSON uploads (including operational evidence produced by the validated
+    r29 probe) retain their original behavior.
+    """
+    def guarded(token: str, parent: str, name: str, payload: Any):
+        if not str(name).startswith("R29_IDENTITY_STATUS_"):
+            return original_upload(token, parent, name, payload)
+        escaped = str(name).replace("'", "\\'")
+        query = f"trashed=false and name='{escaped}' and '{parent}' in parents"
+        items = io.search(token, query)
+        items.sort(key=lambda item: item.get("modifiedTime") or "", reverse=True)
+        if not items:
+            return original_upload(token, parent, name, payload)
+        wanted = _canonical_json(payload)
+        verified: list[dict] = []
+        for item in items:
+            existing = _read_json(token, dict(item))
+            if existing is None or _canonical_json(existing) != wanted:
+                raise RuntimeError("R29_STATUS_EXISTING_ARTIFACT_CONTENT_MISMATCH")
+            verified.append(dict(item))
+        chosen = verified[0]
+        result = dict(chosen)
+        result["idempotency_status"] = "already_exists_verified"
+        print(json.dumps({
+            "stage": "R29_STATUS_FILE_IDEMPOTENCY",
+            "status": "ALREADY_EXISTS_VERIFIED",
+            "name": name,
+            "file_id": chosen.get("id"),
+            "historical_identical_count": len(verified),
+        }, ensure_ascii=False))
+        return result
+    return guarded
+
+
 def _run_identity_overlay(token: str) -> dict | None:
     work = os.environ.get("BRIDGE_WORK_FOLDER_ID", "").strip()
     if not work:
         return None
-    from bridge_speaker_identity_postprocess import run as run_identity
+    import bridge_speaker_identity_postprocess as identity_module
+
+    # bridge_speaker_identity_postprocess imports the same run_drive_3_1_free
+    # module object. Temporarily wrap only stable status-receipt writes so the
+    # identity discovery/gate itself still executes on every run and can promote
+    # a previously anonymous lesson if new independent evidence appears.
+    original_upload = io.upload_json
+    guarded_upload = _r29_idempotent_upload_wrapper(original_upload)
+    io.upload_json = guarded_upload
+    identity_module.io.upload_json = guarded_upload
     try:
-        return run_identity(token)
-    except RuntimeError as exc:
-        # A truthful r29 Evidence Gate failure must not erase an otherwise valid
-        # anonymous transcript. The r29 probe has already written its BLOCKED
-        # receipt before raising this specific error. Configuration/runtime
-        # defects remain hard failures.
-        if str(exc).startswith("R29_EVIDENCE_GATE_FAILED:"):
-            result = {
-                "stage": "R29_IDENTITY_OVERLAY",
-                "status": "SPEAKER_MAPPING_BLOCKED",
-                "reason": "R29_EVIDENCE_GATE_FAILED",
-                "named_attribution": False,
-            }
-            print(json.dumps(result, ensure_ascii=False))
-            return result
-        raise
+        try:
+            return identity_module.run(token)
+        except RuntimeError as exc:
+            # A truthful r29 Evidence Gate failure must not erase an otherwise valid
+            # anonymous transcript. The r29 probe has already written its BLOCKED
+            # receipt before raising this specific error. Configuration/runtime
+            # defects remain hard failures.
+            if str(exc).startswith("R29_EVIDENCE_GATE_FAILED:"):
+                result = {
+                    "stage": "R29_IDENTITY_OVERLAY",
+                    "status": "SPEAKER_MAPPING_BLOCKED",
+                    "reason": "R29_EVIDENCE_GATE_FAILED",
+                    "named_attribution": False,
+                }
+                print(json.dumps(result, ensure_ascii=False))
+                return result
+            raise
+    finally:
+        io.upload_json = original_upload
+        identity_module.io.upload_json = original_upload
 
 
 def main() -> int:
