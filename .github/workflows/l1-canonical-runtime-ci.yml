@@ -1,0 +1,32 @@
+name: L1 canonical runtime
+
+on:
+  pull_request:
+    paths:
+      - 'bridge_school_api/l1_canonical_runtime.py'
+      - 'tests/test_l1_canonical_runtime.py'
+      - '.github/workflows/l1-canonical-runtime-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'bridge_school_api/l1_canonical_runtime.py'
+      - 'tests/test_l1_canonical_runtime.py'
+      - '.github/workflows/l1-canonical-runtime-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Run L1 canonical regression
+        run: python -m pytest -q tests/test_l1_canonical_runtime.py
