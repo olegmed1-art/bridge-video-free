@@ -29,12 +29,14 @@ class AppealsCrossVisionError(ValueError):
 def _dedicated_dealer_read(image: Any, pytesseract: Any, cv2: Any) -> str | None:
     """Read the word immediately to the right of the explicit Dealer label.
 
-    This is OCR redundancy, not semantic repair: only exact dealer tokens from a bounded
-    pixel crop are accepted. Fuzzy spell correction such as ``Bast -> East`` is forbidden.
+    This is OCR redundancy, not semantic repair. A full dealer word must appear exactly
+    as a contiguous substring in at least two bounded crop reads; fuzzy spell correction
+    such as ``Bast -> East`` and board-derived metadata are forbidden.
     """
     height, width = image.shape[:2]
     candidates: list[str] = []
     diagnostics: list[str] = []
+    full_dealers = {"NORTH": "N", "EAST": "E", "SOUTH": "S", "WEST": "W"}
     for detector_psm in (6, 11):
         data = pytesseract.image_to_data(
             image,
@@ -73,6 +75,9 @@ def _dedicated_dealer_read(image: Any, pytesseract: Any, cv2: Any) -> str | None
                         diagnostics.append(token)
                     if token in DEALER_MAP:
                         candidates.append(DEALER_MAP[token])
+                    for word, seat in full_dealers.items():
+                        if word in token:
+                            candidates.append(seat)
     if not candidates:
         if diagnostics:
             raise AppealsCrossVisionError(
@@ -80,10 +85,11 @@ def _dedicated_dealer_read(image: Any, pytesseract: Any, cv2: Any) -> str | None
             )
         return None
     counts = {value: candidates.count(value) for value in set(candidates)}
-    best = max(counts, key=counts.get)
-    # Require two independent render/config reads if more than one value appears.
-    if len(counts) > 1 and counts[best] < 2:
+    if len(counts) != 1:
         raise AppealsCrossVisionError(f"APPEALS_DEALER_OCR_AMBIGUOUS:{candidates}")
+    best = next(iter(counts))
+    if counts[best] < 2:
+        raise AppealsCrossVisionError(f"APPEALS_DEALER_OCR_INSUFFICIENT:{candidates}")
     return best
 
 
