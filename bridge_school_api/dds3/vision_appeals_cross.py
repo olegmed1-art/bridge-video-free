@@ -227,7 +227,11 @@ def _extract_appeals_hands(image: Any, compass: dict[str, tuple[float, float, fl
         "N": axis_x - 0.80 * span,
         "S": axis_x - 0.80 * span,
         "W": axis_x - 3.10 * span,
-        "E": axis_x + 1.50 * span,
+        # The appeals form places the East rank text about 1.25 vertical compass spans
+        # to the right of the N/S axis. Starting at 1.50 clips the leading rank glyph
+        # on the real EBU sample (e.g. the club Q in KQ863). This remains pure layout
+        # geometry: no missing card is supplied from deck complement or bridge logic.
+        "E": axis_x + 1.25 * span,
     }
     rows = {
         "N": [n[1] - factor * span for factor in (1.53, 1.16, 0.80, 0.43)],
