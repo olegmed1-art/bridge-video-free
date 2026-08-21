@@ -187,6 +187,24 @@ def _global_rank_rows(
     )
 
 
+def _canonical_rank_order(value: str) -> bool:
+    """Accept only a literal printed holding in standard descending rank order.
+
+    This is a syntax check on an OCR candidate, not a repair rule: no rank is inserted,
+    deleted, reordered, or inferred from the rest of the deck. It lets us reject the
+    common Tesseract artefact where the suit glyph is hallucinated as a leading digit
+    (for example ``2AT97`` or ``4Q853``) while preserving genuine low-card holdings.
+    """
+    order = "AKQJT98765432"
+    if not value or len(set(value)) != len(value):
+        return False
+    try:
+        positions = [order.index(char) for char in value]
+    except ValueError:
+        return False
+    return positions == sorted(positions)
+
+
 def _ocr_rank_row(
     image: Any,
     *,
@@ -198,18 +216,18 @@ def _ocr_rank_row(
 ) -> tuple[str, float]:
     """OCR one isolated holding row after the printed suit-glyph column.
 
-    In this bounded VuBridge family the seat-local window deliberately starts well left
-    of the suit glyph. Pixel diagnostics show the holding itself begins around 30% into
-    that window. Starting the OCR to the right of that stable glyph zone prevents a suit
-    symbol from being hallucinated as a rank; no missing rank is supplied from deck
-    inventory and the final 13-card/52-card gates remain authoritative.
+    Multiple slightly shifted crops are read independently. Only literal OCR candidates
+    that already form a standard descending holding are eligible; the extractor never
+    edits an OCR string or supplies a missing rank from deck inventory. The longest
+    independently observed legal candidate is preferred so a crop that merely chops the
+    first real rank cannot win over the complete printed holding.
     """
     height, _ = image.shape[:2]
     half = max(24, int(height * 0.024))
     y0 = max(0, int(center_y - half)); y1 = min(height, int(center_y + half))
     column_width = x1 - x0
     readings: list[str] = []
-    for left_fraction in (0.28, 0.30, 0.32, 0.34):
+    for left_fraction in (0.28, 0.30, 0.32, 0.34, 0.36, 0.38, 0.40, 0.42, 0.44):
         rx0 = min(x1 - 1, x0 + int(column_width * left_fraction))
         crop = image[y0:y1, rx0:x1]
         if crop.size == 0:
@@ -225,12 +243,16 @@ def _ocr_rank_row(
                         config=f"--psm {psm} -c tessedit_char_whitelist=AKQJT9876543210",
                     )
                 )
-                if value:
+                if value and _canonical_rank_order(value):
                     readings.append(value)
     if not readings:
         raise NamedQuadrantVisionError("INCOMPLETE_NAMED_HAND_ROW")
     counts = Counter(readings)
-    best, support = counts.most_common(1)[0]
+    max_length = max(len(value) for value in counts)
+    longest = {value: support for value, support in counts.items() if len(value) == max_length}
+    best, support = max(longest.items(), key=lambda item: (item[1], item[0]))
+    if len(longest) > 1 and support < 2:
+        raise NamedQuadrantVisionError(f"AMBIGUOUS_CARD_OCR:{sorted(longest)}")
     if len(counts) > 1 and support < 2:
         raise NamedQuadrantVisionError(f"AMBIGUOUS_CARD_OCR:{sorted(counts)}")
     confidence = min(0.92, 0.58 + 0.04 * support)
