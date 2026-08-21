@@ -79,7 +79,11 @@ jobs:
           grep -F "github.event.pull_request.user.login == 'olegmed1-art'" "$prepare"
           grep -F 'github.event.pull_request.base.sha' "$prepare"
           grep -F 'github.event.pull_request.head.sha' "$prepare"
+          grep -F 'github.event.pull_request.number' "$prepare"
           grep -F 'GOOGLE_DRIVE_OAUTH_JSON' "$prepare"
+          grep -F 'Write trusted PR attestation context' "$prepare"
+          grep -F 'dds-prsafe-drive-attestation-context-v1' "$prepare"
+          grep -F 'dds-prsafe-attestation-' "$prepare"
           ! grep -F 'PILOT_RUN_ID' "$prepare"
           ! grep -F 'gh run download' "$prepare"
           ! grep -F 'actions: read' "$prepare"
@@ -89,9 +93,13 @@ jobs:
           grep -F "github.event.workflow_run.conclusion == 'success'" "$attest"
           grep -F "github.event.workflow_run.event == 'pull_request_target'" "$attest"
           grep -F "github.event.workflow_run.actor.login == 'olegmed1-art'" "$attest"
-          grep -F 'github.event.workflow_run.pull_requests[0].head.repo.full_name == github.repository' "$attest"
+          grep -F 'actions: read' "$attest"
           grep -F 'issues: write' "$attest"
+          grep -F '/actions/runs/${PREP_RUN_ID}/artifacts?per_page=100' "$attest"
+          grep -F 'dds-prsafe-attestation-${PREP_RUN_ID}' "$attest"
+          grep -F '/pulls/${PR_NUMBER}' "$attest"
           grep -F 'DDS_PRSAFE_DRIVE_PREPARE_PASS' "$attest"
+          ! grep -F 'github.event.workflow_run.pull_requests[0]' "$attest"
           ! grep -F 'secrets.' "$attest"
 
           python - <<'PY'
@@ -100,21 +108,32 @@ jobs:
           base_checkout = text.index('Checkout trusted base before Drive credential exposure')
           secret = text.index('secrets.GOOGLE_DRIVE_OAUTH_JSON')
           candidate_checkout = text.index('Checkout exact candidate after Drive secret scope has ended')
-          assert base_checkout < secret < candidate_checkout
+          verify = text.index('Verify prediction scope, shard coverage and closed holdouts')
+          context = text.index('Write trusted PR attestation context')
+          context_upload = text.index('Upload trusted PR attestation context')
+          assert base_checkout < secret < candidate_checkout < verify < context < context_upload
           assert 'secrets.GOOGLE_DRIVE_OAUTH_JSON' not in text[candidate_checkout:]
           assert 'pull_request_target' in text
+          assert 'dds-prsafe-drive-attestation-context-v1' in text
+          assert 'dds-prsafe-attestation-' in text
           assert 'retention-days: 7' in text
 
           att = Path('.github/workflows/dds-prsafe-drive-attestation.yml').read_text(encoding='utf-8')
           checkout_ref = 'uses:' + ' actions/checkout'
           forbidden_write = [('contents:' + ' write'), ('actions:' + ' write')]
           assert 'workflow_run:' in att
+          assert 'actions: read' in att
           assert 'issues: write' in att
           assert checkout_ref not in att
           assert 'secrets.' not in att
           assert all(token not in att for token in forbidden_write)
-          assert 'github.event.workflow_run.pull_requests[0].number' in att
-          assert 'github.event.workflow_run.pull_requests[0].head.sha' in att
+          assert 'github.event.workflow_run.pull_requests[0]' not in att
+          assert '/actions/runs/${PREP_RUN_ID}/artifacts?per_page=100' in att
+          assert 'dds-prsafe-attestation-${PREP_RUN_ID}' in att
+          assert '/pulls/${PR_NUMBER}' in att
+          assert "pr.get('head')" in att
+          assert "pr.get('base')" in att
+          assert "pr.get('user')" in att
           assert 'needs.' not in att
           print('DDS_PRSAFE_DRIVE_BOUNDARY: PASS')
           PY
