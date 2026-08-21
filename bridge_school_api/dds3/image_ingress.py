@@ -100,6 +100,19 @@ def _extract_local_observation(
             image_bytes, media_type=media_type, filename=filename
         )
     except PublicationGridVisionError as exc:
+        if not str(exc).startswith("UNSUPPORTED_LAYOUT_"):
+            raise ImageIngressError(str(exc)) from exc
+
+    from .vision_named_quadrant import (
+        NamedQuadrantVisionError,
+        extract_named_quadrant_observation,
+    )
+
+    try:
+        return extract_named_quadrant_observation(
+            image_bytes, media_type=media_type, filename=filename
+        )
+    except NamedQuadrantVisionError as exc:
         raise ImageIngressError(str(exc)) from exc
 
 
