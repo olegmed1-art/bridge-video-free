@@ -13,11 +13,9 @@ from typing import Any
 
 from .screenshot import ObservedField, ScreenshotDealObservation
 from .vision_publication import (
-    PublicationVisionError,
     _clean_rank_text,
     _cluster_rows,
     _deps,
-    _extract_metadata,
     _rank_tokens,
     _row_center,
 )
@@ -148,7 +146,6 @@ def _global_rank_rows(image: Any, headings: dict[str, tuple[float, float, float]
 
 
 def _canonical_rank_order(value: str) -> bool:
-    """Syntax-only rank order check; never edits or infers a card."""
     order = "AKQJT98765432"
     if not value or len(set(value)) != len(value):
         return False
@@ -219,7 +216,6 @@ def _ocr_rank_row(
     pytesseract: Any,
     cv2: Any,
 ) -> tuple[str, float]:
-    """Prefer repeated character-box OCR; word OCR is bounded fallback only."""
     crops = _row_crops(image, x0=x0, x1=x1, center_y=center_y, cv2=cv2)
     box_readings = [_box_rank_text(crop, pytesseract=pytesseract) for crop in crops]
     box_choice = _choose_repeated_literal(box_readings, channel="BOX")
@@ -278,6 +274,29 @@ def _extract_four_column_hands(
     return hands, confidence
 
 
+def _extract_named_metadata(image: Any, pytesseract: Any) -> tuple[int, str, str, float]:
+    """Read only explicit VuBridge header labels from image pixels."""
+    texts = [
+        pytesseract.image_to_string(image, config="--psm 6"),
+        pytesseract.image_to_string(image, config="--psm 11"),
+    ]
+    dealer_map = {"N":"N","NORTH":"N","E":"E","EAST":"E","S":"S","SOUTH":"S","W":"W","WEST":"W"}
+    vul_map = {"NONE":"None","LOVE":"None","NS":"NS","N/S":"NS","N-S":"NS","EW":"EW","E/W":"EW","E-W":"EW","BOTH":"Both","ALL":"Both"}
+    for raw in texts:
+        text = raw.replace("\n", " ")
+        board_match = re.search(r"\bBoard\s*(?:#\s*)?[:.]?\s*(\d{1,3})\b", text, re.IGNORECASE)
+        dealer_match = re.search(r"\bDealer\s*[:.]?\s*(North|East|South|West|[NESW])\b", text, re.IGNORECASE)
+        vul_match = re.search(r"\bVul(?:nerable|nerability)?\s*[:.]?\s*(None|Love|N\s*[-/]?\s*S|E\s*[-/]?\s*W|Both|All)\b", text, re.IGNORECASE)
+        if not board_match or not dealer_match or not vul_match:
+            continue
+        board = int(board_match.group(1))
+        dealer = dealer_map.get(dealer_match.group(1).upper())
+        vulnerability = vul_map.get(re.sub(r"\s+", "", vul_match.group(1).upper()))
+        if dealer is not None and vulnerability is not None:
+            return board, dealer, vulnerability, 0.80
+    raise NamedQuadrantVisionError("UNSUPPORTED_LAYOUT_NAMED_QUADRANT_NO_METADATA_HEADER")
+
+
 def extract_named_quadrant_observation(
     image_bytes: bytes, *, media_type: str, filename: str | None = None
 ) -> ScreenshotDealObservation:
@@ -285,13 +304,7 @@ def extract_named_quadrant_observation(
     image = _decode_named(image_bytes, cv2, np)
     headings = _four_column_headings(image, pytesseract)
     hands, hand_confidence = _extract_four_column_hands(image, headings, pytesseract, cv2)
-    try:
-        board, dealer, vulnerability, metadata_confidence = _extract_metadata(image, pytesseract)
-    except PublicationVisionError as exc:
-        message = str(exc)
-        if message.startswith("METADATA_OCR_FAILED"):
-            raise NamedQuadrantVisionError("UNSUPPORTED_LAYOUT_NAMED_QUADRANT_NO_METADATA_HEADER") from exc
-        raise NamedQuadrantVisionError(message) from exc
+    board, dealer, vulnerability, metadata_confidence = _extract_named_metadata(image, pytesseract)
 
     image_sha256 = hashlib.sha256(image_bytes).hexdigest()
     source = "local_tesseract_named_quadrant_v1"
