@@ -78,7 +78,6 @@ def _clean_rank_text(text:str)->str:
 
 
 def _rank_tokens(image:Any,pytesseract:Any)->list[dict[str,Any]]:
-    """Loose character pass used only to locate the four suit rows around the compass."""
     height=image.shape[0]
     boxes=pytesseract.image_to_boxes(image,config="--psm 11 -c tessedit_char_whitelist=AKQJT9876543210")
     tokens=[]
@@ -113,7 +112,6 @@ def _row_center(row:list[dict[str,Any]])->float:
 
 
 def _glyph_column(rows:list[list[dict[str,Any]]])->float:
-    """Locate the repeated left-side suit-glyph column from pixel OCR geometry."""
     left=[float(min(token["x"] for token in row)) for row in rows if row]
     if len(left)<2: raise PublicationVisionError("UNSTABLE_SUIT_GLYPH_COLUMN")
     med=float(statistics.median(left))
@@ -122,9 +120,9 @@ def _glyph_column(rows:list[list[dict[str,Any]]])->float:
     return float(statistics.median(inliers))
 
 
-def _ocr_holding_crop(image:Any,cy:float,x0:int,pytesseract:Any,cv2:Any)->tuple[str,float]:
+def _ocr_holding_crop(image:Any,cy:float,x0:int,pytesseract:Any,cv2:Any,*,y_radius:int=17)->tuple[str,float]:
     height,width=image.shape[:2]
-    y0=max(0,int(cy-17)); y1=min(height,int(cy+18)); x1=min(width,int(x0+width*0.30))
+    y0=max(0,int(cy-y_radius)); y1=min(height,int(cy+y_radius+1)); x1=min(width,int(x0+width*0.30))
     crop=image[y0:y1,max(0,x0):x1]
     if not crop.size: raise PublicationVisionError("EMPTY_HOLDING_CROP")
     crop=cv2.resize(crop,None,fx=3,fy=3,interpolation=cv2.INTER_CUBIC)
@@ -149,13 +147,12 @@ def _ocr_holding_row(image:Any,row:list[dict[str,Any]],glyph_x:float,pytesseract
 
 
 def _retry_hand_from_rank_start(image:Any,rows:list[list[dict[str,Any]]],pytesseract:Any,cv2:Any)->tuple[list[str],list[float]]:
-    """Retry a failed hand when rank OCR did not expose a separate suit-glyph column.
+    """Retry a failed hand from visible rank geometry without deck completion.
 
-    Some publication fonts keep the suit glyph outside Tesseract's rank whitelist, so
-    the repeated leftmost rank-token column is already the holding start. The normal
-    +18px suit mask then removes real cards. This retry is activated only after the
-    normal hand has failed its 13-card count. It rereads the same visible pixels from a
-    consensus rank-start x coordinate. It never fills missing cards from deck inventory.
+    The retry uses a narrow single-row crop so neighbouring suit rows cannot supply
+    characters. A small positive offset removes a visible suit glyph when rank-only box
+    OCR has mistaken it for a rank. The retry is used only after the normal 13-card count
+    fails, and still requires independent OCR agreement plus final 52-unique validation.
     """
     starts=[float(min(token["x"] for token in row)) for row in rows if row]
     if len(starts)<2: raise PublicationVisionError("UNSTABLE_RANK_START_COLUMN")
@@ -166,7 +163,7 @@ def _retry_hand_from_rank_start(image:Any,rows:list[list[dict[str,Any]]],pytesse
     holdings=[]; confs=[]
     for row in rows:
         if not row: return [],[]
-        value,conf=_ocr_holding_crop(image,_row_center(row),max(0,int(start-4)),pytesseract,cv2)
+        value,conf=_ocr_holding_crop(image,_row_center(row),max(0,int(start+9)),pytesseract,cv2,y_radius=7)
         holdings.append(value); confs.append(min(conf,0.66))
     return holdings,confs
 
@@ -201,7 +198,10 @@ def _extract_hands(image:Any,compass:dict[str,tuple[float,float,float]],pytesser
             value,conf=_ocr_holding_row(image,row,glyph_x[hand],pytesseract,cv2)
             holdings.append(value); row_conf.append(conf)
         if sum(len(value) for value in holdings)!=13:
-            retry_holdings,retry_conf=_retry_hand_from_rank_start(image,raw_rows[hand],pytesseract,cv2)
+            try:
+                retry_holdings,retry_conf=_retry_hand_from_rank_start(image,raw_rows[hand],pytesseract,cv2)
+            except PublicationVisionError:
+                retry_holdings,retry_conf=[],[]
             if retry_holdings and sum(len(value) for value in retry_holdings)==13:
                 holdings,row_conf=retry_holdings,retry_conf
         if sum(len(value) for value in holdings)!=13:
