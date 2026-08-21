@@ -56,22 +56,21 @@ jobs:
           from pathlib import Path
           import fitz
           from tools.dds3_vision.evaluate_named_quadrant import _download, _deal_clip
-          from bridge_school_api.dds3.vision_publication import _decode, _deps
-          from bridge_school_api.dds3.vision_named_quadrant import _heading_candidates, _four_column_headings, _column_bounds
+          from bridge_school_api.dds3.vision_publication import _deps
+          from bridge_school_api.dds3.vision_named_quadrant import _decode_named, _heading_candidates, _four_column_headings, _column_bounds
           with tempfile.TemporaryDirectory(prefix='dds3-named-diag-') as temp:
               pdf=Path(temp)/'source.pdf'; _download(pdf)
               page=fitz.open(pdf)[0]; clip=_deal_clip(page)
-              pix=page.get_pixmap(matrix=fitz.Matrix(220/72,220/72),clip=clip,alpha=False)
-              cv2,np,pytesseract=_deps(); image=_decode(pix.tobytes('png'),cv2,np)
+              pix=page.get_pixmap(matrix=fitz.Matrix(440/72,440/72),clip=clip,alpha=False)
+              cv2,np,pytesseract=_deps(); image=_decode_named(pix.tobytes('png'),cv2,np)
               print('DIAG_SHAPE', image.shape[:2], 'CLIP', tuple(round(v,2) for v in clip))
               print('DIAG_HEADINGS_RAW', _heading_candidates(image,pytesseract))
               headings=_four_column_headings(image,pytesseract); print('DIAG_HEADINGS', headings)
               bounds=_column_bounds(headings,image.shape[1])
               for seat in 'NESW':
                   _,hy,_=headings[seat]; x0,x1=bounds[seat]
-                  y0=max(0,int(hy+image.shape[0]*0.025)); y1=min(image.shape[0],int(hy+image.shape[0]*0.46))
+                  y0=max(0,int(hy+image.shape[0]*0.020)); y1=min(image.shape[0],int(hy+image.shape[0]*0.620))
                   crop=image[y0:y1,x0:x1]
-                  crop=cv2.resize(crop,None,fx=3,fy=3,interpolation=cv2.INTER_CUBIC)
                   gray=cv2.cvtColor(crop,cv2.COLOR_BGR2GRAY)
                   _,binary=cv2.threshold(gray,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
                   print('DIAG_CROP',seat,(x0,x1,y0,y1),crop.shape[:2])
