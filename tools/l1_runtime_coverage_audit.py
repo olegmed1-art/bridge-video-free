@@ -5,6 +5,7 @@ import json
 from bridge_school_api.l1_canonical_registry import ACTIVE_DOMAIN_RULE_IDS
 from bridge_school_api.l1_canonical_runtime_v2 import evaluate as evaluate_v2
 from bridge_school_api.l1_canonical_runtime_v3 import EXTRA_SOURCE_EXPLICIT_RULE_IDS
+from bridge_school_api.l1_canonical_runtime_v4 import EXTRA_PROCEDURAL_RULE_IDS
 
 
 def v2_bounded_rule_ids() -> tuple[str, ...]:
@@ -23,18 +24,23 @@ def coverage_snapshot() -> dict[str, object]:
     active = set(ACTIVE_DOMAIN_RULE_IDS)
     v2 = set(v2_bounded_rule_ids())
     v3_extra = set(EXTRA_SOURCE_EXPLICIT_RULE_IDS)
-    executable = v2 | v3_extra
+    v4_extra = set(EXTRA_PROCEDURAL_RULE_IDS)
+    executable = v2 | v3_extra | v4_extra
     remaining = active - executable
-    overlap = v2 & v3_extra
+    overlaps = {
+        "v2_v3": sorted(v2 & v3_extra),
+        "v2_v4": sorted(v2 & v4_extra),
+        "v3_v4": sorted(v3_extra & v4_extra),
+    }
     return {
         "active_domain_rules": len(active),
         "v2_bounded_rules": len(v2),
         "v3_extra_source_explicit_rules": len(v3_extra),
-        "v2_v3_overlap": len(overlap),
-        "v3_total_bounded_rules": len(executable),
+        "v4_extra_procedural_rules": len(v4_extra),
+        "v4_total_bounded_rules": len(executable),
         "remaining_known_unbounded_rules": len(remaining),
         "remaining_rule_ids": sorted(remaining),
-        "overlap_rule_ids": sorted(overlap),
+        "overlap_rule_ids": overlaps,
     }
 
 
