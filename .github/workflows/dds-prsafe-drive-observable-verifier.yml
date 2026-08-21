@@ -1,0 +1,160 @@
+name: DDS PR-safe Drive observable verifier
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'dds_training/**'
+      - '.github/workflows/dds-main-30k-prepare.yml'
+      - '.github/workflows/dds-prsafe-drive-observable-verifier.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: dds-prsafe-drive-observable-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    if: >-
+      ${{
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.user.login == 'olegmed1-art'
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      EXPECTED_OWNER: olegmed1-art
+      EXPECTED_PILOT_ZIP_SHA256: ef126c6842dda691b08325392b9d7fe5319acdba34b2db6b8981f03d56f8e130
+      SOURCE_WORKFLOW: dds-main-30k-prepare.yml
+    steps:
+      - name: Wait for and independently verify matching trusted preparation
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          evidence="$RUNNER_TEMP/dds-prsafe-observable-evidence.json"
+          rm -f "$evidence"
+
+          for attempt in $(seq 1 60); do
+            gh api \
+              "/repos/${GITHUB_REPOSITORY}/actions/workflows/${SOURCE_WORKFLOW}/runs?event=pull_request_target&per_page=50" \
+              > "$RUNNER_TEMP/source-runs.json"
+
+            RUNNER_TEMP="$RUNNER_TEMP" PR_NUMBER="$PR_NUMBER" HEAD_SHA="$HEAD_SHA" \
+            EXPECTED_OWNER="$EXPECTED_OWNER" EXPECTED_PILOT_ZIP_SHA256="$EXPECTED_PILOT_ZIP_SHA256" \
+            GITHUB_REPOSITORY="$GITHUB_REPOSITORY" GH_TOKEN="$GH_TOKEN" python - <<'PY'
+          import json, os, pathlib, subprocess, sys, tempfile, zipfile
+
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          pr_number = int(os.environ['PR_NUMBER'])
+          head_sha = os.environ['HEAD_SHA']
+          expected_owner = os.environ['EXPECTED_OWNER']
+          expected_pilot = os.environ['EXPECTED_PILOT_ZIP_SHA256']
+          repo = os.environ['GITHUB_REPOSITORY']
+          runs = json.loads((root / 'source-runs.json').read_text(encoding='utf-8')).get('workflow_runs') or []
+
+          def gh_json(path: str):
+              p = subprocess.run(['gh', 'api', path], check=True, stdout=subprocess.PIPE, text=True)
+              return json.loads(p.stdout)
+
+          def gh_bytes(path: str) -> bytes:
+              p = subprocess.run(['gh', 'api', path], check=True, stdout=subprocess.PIPE)
+              return p.stdout
+
+          for run in runs:
+              if run.get('event') != 'pull_request_target':
+                  continue
+              if run.get('status') != 'completed' or run.get('conclusion') != 'success':
+                  continue
+              if ((run.get('actor') or {}).get('login')) != expected_owner:
+                  continue
+              run_id = int(run['id'])
+              artifact_name = f'dds-prsafe-attestation-{run_id}'
+              artifacts = gh_json(f'/repos/{repo}/actions/runs/{run_id}/artifacts?per_page=100').get('artifacts') or []
+              matches = [a for a in artifacts if a.get('name') == artifact_name and not a.get('expired')]
+              if len(matches) != 1:
+                  continue
+              data = gh_bytes(f"/repos/{repo}/actions/artifacts/{int(matches[0]['id'])}/zip")
+              zpath = root / f'attestation-{run_id}.zip'
+              zpath.write_bytes(data)
+              try:
+                  with zipfile.ZipFile(zpath) as zf:
+                      names = zf.namelist()
+                      if 'context.json' not in names:
+                          continue
+                      ctx = json.loads(zf.read('context.json').decode('utf-8'))
+              except (zipfile.BadZipFile, json.JSONDecodeError, UnicodeDecodeError):
+                  continue
+              if ctx.get('schema') != 'dds-prsafe-drive-attestation-context-v1':
+                  continue
+              if int(ctx.get('pr_number') or 0) != pr_number:
+                  continue
+              if str(ctx.get('head_sha') or '') != head_sha:
+                  continue
+              if int(ctx.get('source_run_id') or 0) != run_id:
+                  continue
+              if str(ctx.get('pilot_zip_sha256') or '') != expected_pilot:
+                  continue
+              evidence = {
+                  'schema': 'dds-prsafe-drive-observable-evidence-v1',
+                  'status': 'passed',
+                  'authority': 'EVIDENCE_ONLY',
+                  'pr_number': pr_number,
+                  'head_sha': head_sha,
+                  'source_run_id': run_id,
+                  'source_event': run.get('event'),
+                  'source_conclusion': run.get('conclusion'),
+                  'source_actor': (run.get('actor') or {}).get('login'),
+                  'pilot_zip_sha256': expected_pilot,
+                  'attestation_artifact_id': int(matches[0]['id']),
+                  'candidate_secret_exposure': False,
+                  'verified_by': 'pull_request_observer_without_drive_secrets',
+              }
+              (root / 'dds-prsafe-observable-evidence.json').write_text(
+                  json.dumps(evidence, sort_keys=True) + '\n', encoding='utf-8'
+              )
+              print(json.dumps(evidence, sort_keys=True))
+              raise SystemExit(0)
+
+          raise SystemExit(3)
+          PY
+            rc=$?
+            if [ "$rc" -eq 0 ] && [ -s "$evidence" ]; then
+              break
+            fi
+            if [ "$attempt" -eq 60 ]; then
+              echo "No matching successful pull_request_target preparation attestation found for PR ${PR_NUMBER} head ${HEAD_SHA}" >&2
+              exit 1
+            fi
+            sleep 30
+          done
+
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          path = Path(os.environ['RUNNER_TEMP']) / 'dds-prsafe-observable-evidence.json'
+          d = json.loads(path.read_text(encoding='utf-8'))
+          assert d['status'] == 'passed'
+          assert d['authority'] == 'EVIDENCE_ONLY'
+          assert d['pr_number'] == int(os.environ['PR_NUMBER'])
+          assert d['head_sha'] == os.environ['HEAD_SHA']
+          assert d['pilot_zip_sha256'] == os.environ['EXPECTED_PILOT_ZIP_SHA256']
+          assert d['candidate_secret_exposure'] is False
+          print('DDS_PRSAFE_DRIVE_OBSERVABLE_VERIFIER: PASS')
+          PY
+
+      - name: Upload independently observable verification evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dds-prsafe-drive-observable-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          path: ${{ runner.temp }}/dds-prsafe-observable-evidence.json
+          if-no-files-found: error
+          retention-days: 7
