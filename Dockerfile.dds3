@@ -1,0 +1,24 @@
+FROM debian:bookworm-slim AS build
+RUN apt-get update && apt-get install -y --no-install-recommends git g++ ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+ARG DDS_TAG=v3.0.0
+ARG DDS_FIX_COMMIT=cdd13cf5b700788ac8c1391501b42445b3129b45
+RUN git clone --quiet --branch "$DDS_TAG" https://github.com/dds-bridge/dds.git dds && \
+    git -C dds fetch --quiet origin "$DDS_FIX_COMMIT" && \
+    git -C dds -c user.name=bridge-school-ci -c user.email=ci@invalid.example cherry-pick --no-commit "$DDS_FIX_COMMIT"
+COPY dds/dds_pbn_cli.cpp /src/dds_pbn_cli.cpp
+WORKDIR /src/dds
+RUN g++ -std=c++20 -O3 -fPIC -shared -pthread -I library/src \
+    library/src/*.cpp library/src/heuristic_sorting/*.cpp \
+    library/src/lookup_tables/*.cpp library/src/moves/*.cpp \
+    library/src/solver_context/*.cpp library/src/system/*.cpp \
+    library/src/trans_table/*.cpp library/src/utility/*.cpp -o libdds3.so && \
+    g++ -std=c++20 -O3 -pthread -I library/src /src/dds_pbn_cli.cpp -L. -ldds3 -o dds_pbn_cli
+
+FROM debian:bookworm-slim
+WORKDIR /opt/bridge-school-dds3
+COPY --from=build /src/dds/libdds3.so ./libdds3.so
+COPY --from=build /src/dds/dds_pbn_cli ./dds_pbn_cli
+ENV LD_LIBRARY_PATH=/opt/bridge-school-dds3
+ENV DDS3_CLI=/opt/bridge-school-dds3/dds_pbn_cli
+ENTRYPOINT ["/opt/bridge-school-dds3/dds_pbn_cli"]
