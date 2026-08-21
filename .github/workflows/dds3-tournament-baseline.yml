@@ -27,6 +27,9 @@ jobs:
       - name: Compile tournament runner
         run: python3 -m py_compile scripts/dds3_tournament_baseline.py
 
+      - name: Build pinned DDS3 core
+        run: docker build -f Dockerfile.dds3 -t bridge-school-dds3 .
+
       - name: Build production DDS3 runtime
         run: docker build -f dds3_runtime/Dockerfile -t bridge-school-dds3-runtime:tournament .
 
