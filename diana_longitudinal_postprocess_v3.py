@@ -2,9 +2,9 @@
 """Workflow-compatibility entry point for the current v4.2 semantic layer.
 
 The historical filename stays ``postprocess_v3`` so production workflow wiring
-does not fork.  v4.2 preserves v4.1 Learning Interaction behavior and adds only
+does not fork. v4.2 preserves v4.1 Learning Interaction behavior and adds only
 conservative report-visual partial-board reconstruction plus content-addressed,
-SHA-verified Drive artifact idempotency.  Source video and raw ASR stay read-only.
+SHA-verified Drive artifact idempotency. Source video and raw ASR stay read-only.
 """
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from diana_longitudinal_quality_v4_2 import (
     QUALITY_SCHEMA_VERSION,
     build_quality_layer,
 )
+from diana_longitudinal_summary_v4_2 import render_summary
 
 # Compatibility values for code/tests that import the historical wrapper.
 base.build_quality_layer = build_quality_layer
@@ -27,13 +28,7 @@ base.SCHEMA_VERSION = 5
 
 
 def _ensure_report_runtime() -> None:
-    """Install pinned FREE report-image dependencies only when heavy runtime was skipped.
-
-    The production workflow intentionally skips requirements-worker.txt for an
-    already-completed media job.  v4.2 must still be able to perform a semantic-
-    only rerun from the master PDF.  Keep this bootstrap explicit, pinned and
-    fail-closed rather than forcing a new heavy video/ASR pass.
-    """
+    """Install pinned FREE report-image dependencies only when heavy runtime was skipped."""
     missing = []
     if importlib.util.find_spec('cv2') is None:
         missing.append('opencv-python-headless==5.0.0.93')
@@ -49,8 +44,12 @@ def _ensure_report_runtime() -> None:
 
 def main() -> int:
     _ensure_report_runtime()
-    from diana_longitudinal_postprocess_v4_2 import main as current_main
-    return current_main()
+    import diana_longitudinal_postprocess_v4_2 as current
+
+    # Reporting-only remediation from the D3/D4/D5 production audit. The
+    # evidence payload, quality builder and all authority gates remain intact.
+    current._summary_markdown = render_summary
+    return current.main()
 
 
 if __name__ == "__main__":
