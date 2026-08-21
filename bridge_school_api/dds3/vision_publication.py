@@ -135,38 +135,37 @@ def _median(values: list[float]) -> float:
     return (ordered[middle - 1] + ordered[middle]) / 2
 
 
-def _ocr_rank_row(image: Any, pytesseract: Any, *, y: float, x0: float, x1: float) -> tuple[str, float]:
-    height, width = image.shape[:2]
-    left = max(0, int(round(x0))); right = min(width, int(round(x1)))
-    top = max(0, int(round(y - 12))); bottom = min(height, int(round(y + 12)))
-    if right <= left or bottom <= top:
-        raise PublicationVisionError("INVALID_RANK_ROW_CROP")
-    crop = image[top:bottom, left:right]
-    data = pytesseract.image_to_data(crop, config="--psm 7 -c tessedit_char_whitelist=AKQJT9876543210", output_type=pytesseract.Output.DICT)
-    pieces: list[tuple[int, str, float]] = []
-    for i, raw in enumerate(data["text"]):
-        value = _clean_rank_text(raw)
-        if not value:
-            continue
-        conf = max(0.0, min(1.0, float(data["conf"][i]) / 100.0))
-        pieces.append((int(data["left"][i]), value, conf))
-    pieces.sort()
-    if not pieces:
+def _filtered_holding(row: list[dict[str, Any]], *, rank_start: float, width: int) -> tuple[str, float]:
+    """Use only rank tokens aligned with the observed rank-text column.
+
+    Publication suit glyphs can be misread by rank-whitelisted OCR as a single digit to
+    the left of every actual holding. The median x-start across the four observed rows is
+    a layout/typography measurement, not bridge/deck inference. Tokens materially left of
+    that column are ignored. If the remaining OCR is incomplete, the 13-card/52-unique
+    gates reject the diagram rather than repair it.
+    """
+    if not row:
         return "", 0.75
-    value = _clean_rank_text("".join(piece[1] for piece in pieces))
+    aligned = [
+        token for token in row
+        if token["x"] >= rank_start - 6
+        and token["x"] <= rank_start + width * 0.24
+    ]
+    aligned.sort(key=lambda token: token["x"])
+    if not aligned:
+        return "", 0.75
+    value = _clean_rank_text("".join(token["text"] for token in aligned))
     if not value:
         raise PublicationVisionError("AMBIGUOUS_RANK_ROW")
-    return value, min(piece[2] for piece in pieces)
+    return value, min(token["confidence"] for token in aligned)
 
 
 def _extract_hands(image: Any, compass: dict[str, tuple[float, float, float]], pytesseract: Any) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, float]]]:
-    """Read four supported S/H/D/C rows, excluding the printed suit-symbol column.
+    """Read four supported S/H/D/C rows without deck-complement repair.
 
-    The first OCR pass is used only to locate row geometry. A second narrow OCR pass starts
-    at the median visible rank-column x coordinate, which excludes suit glyphs that a
-    rank-whitelisted OCR may otherwise misread as a digit. West/East share the same four
-    visible row y-levels; a one-sided void is therefore represented by an observed empty
-    cell on a row established by the opposite hand. No missing card is filled from the deck.
+    West/East share the same four visible row y-levels; a one-sided void is represented
+    by an empty cell only because the opposite hand visibly establishes that row. North
+    and South require four observed OCR rows. Any incomplete/duplicate deck fails closed.
     """
     tokens = _rank_tokens(image, pytesseract)
     height, width = image.shape[:2]
@@ -202,16 +201,7 @@ def _extract_hands(image: Any, compass: dict[str, tuple[float, float, float]], p
     rank_starts: dict[str, float] = {}
     for hand, rows in raw_rows.items():
         starts = [min(token["x"] for token in row) for row in rows if row]
-        # A suit glyph misread by the rank-only locator is normally one left-side outlier.
-        # Median start therefore stays on the actual rank column without using card/deck logic.
         rank_starts[hand] = _median([float(value) for value in starts])
-
-    row_right = {
-        "N": center_x + width * 0.18,
-        "S": center_x + width * 0.18,
-        "W": compass["W"][0] - 6,
-        "E": min(width, rank_starts["E"] + width * 0.22),
-    }
 
     hands: dict[str, dict[str, str]] = {}
     confidence: dict[str, dict[str, float]] = {}
@@ -220,7 +210,7 @@ def _extract_hands(image: Any, compass: dict[str, tuple[float, float, float]], p
         holdings: list[str] = []
         row_conf: list[float] = []
         for row in raw_rows[hand]:
-            value, conf = _ocr_rank_row(image, pytesseract, y=_row_center(row if row else lateral_rows[len(holdings)]), x0=rank_starts[hand] - 1, x1=row_right[hand])
+            value, conf = _filtered_holding(row, rank_start=rank_starts[hand], width=width)
             holdings.append(value)
             row_conf.append(conf)
         if sum(len(value) for value in holdings) != 13:
