@@ -1,11 +1,10 @@
-"""Local/free fail-closed extractor for VuBridge named four-column diagrams.
+"""Local/free fail-closed extractor for VuBridge named-quadrant diagrams.
 
-The supported family has explicit ``West``, ``North``, ``East`` and ``South`` printed
-headings on one horizontal band, four suit rows below each heading, and an explicit
-Board/Dealer/Vulnerable header. Seat identity is taken only from the printed word; the
-horizontal order is not used to rename seats. Suit-row order S/H/D/C is a visible layout
-contract of this publication family. Cards must form the exact standard 52-card deck;
-no deck-complement, board-derived metadata, or bridge inference repair is permitted.
+The supported family prints the full seat names around the deal: North above, West/East
+on the middle band, and South below. Each seat has four visible S/H/D/C holding rows and
+the page has an explicit Board/Dealer/Vulnerable header. Seat identity is taken only
+from the printed word. Cards must form the exact standard 52-card deck; no deck
+complement, board-derived metadata, or bridge inference repair is permitted.
 """
 from __future__ import annotations
 
@@ -71,6 +70,13 @@ def _heading_candidates(image: Any, pytesseract: Any) -> dict[str, list[tuple[fl
 
 
 def _four_column_headings(image: Any, pytesseract: Any) -> dict[str, tuple[float, float, float]]:
+    """Resolve the four printed seat headings by named-quadrant geometry.
+
+    The historical function name is kept for compatibility with the field diagnostic,
+    but this family is a cross/quadrant layout, not four headings on one horizontal row.
+    Metadata text such as ``Dealer: North`` or ``By: East`` is deliberately rejected by
+    requiring the complete N-above / W-E-middle / S-below geometry.
+    """
     labels = _heading_candidates(image, pytesseract)
     if any(not labels[seat] for seat in "NWES"):
         raise NamedQuadrantVisionError("UNSUPPORTED_LAYOUT_NAMED_QUADRANT_NO_HEADINGS")
@@ -80,16 +86,33 @@ def _four_column_headings(image: Any, pytesseract: Any) -> dict[str, tuple[float
         for w in labels["W"]:
             for e in labels["E"]:
                 for s in labels["S"]:
+                    middle_y = (w[1] + e[1]) / 2.0
+                    center_x = (n[0] + s[0]) / 2.0
+                    if abs(w[1] - e[1]) > height * 0.075:
+                        continue
+                    if abs(n[0] - s[0]) > width * 0.075:
+                        continue
+                    if not (n[1] < middle_y - height * 0.10):
+                        continue
+                    if not (s[1] > middle_y + height * 0.10):
+                        continue
+                    if not (w[0] < center_x - width * 0.12):
+                        continue
+                    if not (e[0] > center_x + width * 0.12):
+                        continue
+                    if not (w[0] < n[0] < e[0] and w[0] < s[0] < e[0]):
+                        continue
+                    min_conf = min(n[2], w[2], e[2], s[2])
+                    horizontal_balance = abs((center_x - w[0]) - (e[0] - center_x))
+                    vertical_balance = abs((middle_y - n[1]) - (s[1] - middle_y))
+                    score = (
+                        abs(w[1] - e[1])
+                        + abs(n[0] - s[0])
+                        + 0.20 * horizontal_balance
+                        + 0.10 * vertical_balance
+                        - 25 * min_conf
+                    )
                     group = {"N": n, "W": w, "E": e, "S": s}
-                    ys = [v[1] for v in group.values()]
-                    xs = sorted(v[0] for v in group.values())
-                    if max(ys) - min(ys) > height * 0.045:
-                        continue
-                    gaps = [xs[i + 1] - xs[i] for i in range(3)]
-                    if min(gaps) < width * 0.12:
-                        continue
-                    min_conf = min(v[2] for v in group.values())
-                    score = (max(ys) - min(ys)) + 0.15 * (max(gaps) - min(gaps)) - 25 * min_conf
                     if best is None or score < best[0]:
                         best = (score, group)
     if best is None:
@@ -98,14 +121,54 @@ def _four_column_headings(image: Any, pytesseract: Any) -> dict[str, tuple[float
 
 
 def _column_bounds(headings: dict[str, tuple[float, float, float]], width: int) -> dict[str, tuple[int, int]]:
-    ordered = sorted(((value[0], seat) for seat, value in headings.items()))
+    """Return conservative seat-local horizontal windows.
+
+    North and South intentionally share the center column, so ordinary four-column
+    midpoint partitioning is invalid. Width is instead bounded by the distance from the
+    seat to the nearest lateral/central neighbour and never spans another hand.
+    """
     out: dict[str, tuple[int, int]] = {}
-    for index, (x, seat) in enumerate(ordered):
-        left = 0 if index == 0 else int((ordered[index - 1][0] + x) / 2)
-        right = width if index == len(ordered) - 1 else int((x + ordered[index + 1][0]) / 2)
-        gutter = max(3, int(width * 0.006))
-        out[seat] = (max(0, left + gutter), min(width, right - gutter))
+    for seat in "NESW":
+        x = headings[seat][0]
+        if seat in "NS":
+            neighbour_distance = min(abs(x - headings["W"][0]), abs(headings["E"][0] - x))
+        else:
+            neighbour_distance = min(abs(x - headings["N"][0]), abs(x - headings["S"][0]))
+        half = max(width * 0.075, min(width * 0.18, neighbour_distance * 0.44))
+        out[seat] = (max(0, int(x - half)), min(width, int(x + half)))
     return out
+
+
+def _seat_rank_rows(
+    image: Any,
+    *,
+    seat: str,
+    headings: dict[str, tuple[float, float, float]],
+    bounds: dict[str, tuple[int, int]],
+    pytesseract: Any,
+) -> list[float]:
+    """Locate four holding rows directly below one printed seat heading."""
+    height, width = image.shape[:2]
+    x0, x1 = bounds[seat]
+    heading_y = headings[seat][1]
+    tokens = [
+        token
+        for token in _rank_tokens(image, pytesseract)
+        if x0 <= token["cx"] <= x1
+        and heading_y + height * 0.015 <= token["cy"] <= heading_y + height * 0.20
+    ]
+    rows = _cluster_rows(tokens, tolerance=max(14.0, width * 0.014))
+    centers = [_row_center(row) for row in rows if row]
+    selected: list[float] = []
+    for center in sorted(centers):
+        if selected and center - selected[-1] < height * 0.025:
+            continue
+        selected.append(center)
+        if len(selected) == 4:
+            break
+    if len(selected) != 4:
+        raise NamedQuadrantVisionError(f"INCOMPLETE_NAMED_HAND_ROWS:{seat}:{len(selected)}")
+    return selected
 
 
 def _global_rank_rows(
@@ -113,28 +176,15 @@ def _global_rank_rows(
     headings: dict[str, tuple[float, float, float]],
     pytesseract: Any,
 ) -> list[float]:
-    """Find the four visible suit-row bands from pixel OCR geometry only."""
-    height = image.shape[0]
-    heading_y = sum(value[1] for value in headings.values()) / 4.0
-    tokens = [
-        token
-        for token in _rank_tokens(image, pytesseract)
-        if heading_y + height * 0.025 <= token["cy"] <= heading_y + height * 0.58
-    ]
-    rows = _cluster_rows(tokens, tolerance=max(16.0, image.shape[1] * 0.018))
-    centers = [_row_center(row) for row in rows if row]
-    # The bounded family has four suit rows. If OCR sees extra noise, retain the earliest
-    # four separated bands beneath the heading; metadata is below this hand region.
-    selected: list[float] = []
-    for center in sorted(centers):
-        if selected and center - selected[-1] < height * 0.035:
-            continue
-        selected.append(center)
-        if len(selected) == 4:
-            break
-    if len(selected) != 4:
-        raise NamedQuadrantVisionError(f"INCOMPLETE_NAMED_HAND_ROWS:{len(selected)}")
-    return selected
+    """Compatibility diagnostic: return North's four detected holding rows."""
+    bounds = _column_bounds(headings, image.shape[1])
+    return _seat_rank_rows(
+        image,
+        seat="N",
+        headings=headings,
+        bounds=bounds,
+        pytesseract=pytesseract,
+    )
 
 
 def _ocr_rank_row(
@@ -147,14 +197,12 @@ def _ocr_rank_row(
     cv2: Any,
 ) -> tuple[str, float]:
     """OCR one isolated holding row, masking possible suit-glyph contamination."""
-    height, width = image.shape[:2]
+    height, _ = image.shape[:2]
     half = max(24, int(height * 0.024))
     y0 = max(0, int(center_y - half)); y1 = min(height, int(center_y + half))
     column_width = x1 - x0
     readings: list[str] = []
-    # The suit glyph is on the left of each holding. Try several conservative left masks;
-    # only repeated identical rank readings can win if alternatives conflict.
-    for left_fraction in (0.00, 0.08, 0.14, 0.20):
+    for left_fraction in (0.00, 0.08, 0.14, 0.20, 0.26):
         rx0 = min(x1 - 1, x0 + int(column_width * left_fraction))
         crop = image[y0:y1, rx0:x1]
         if crop.size == 0:
@@ -178,8 +226,6 @@ def _ocr_rank_row(
     best, support = counts.most_common(1)[0]
     if len(counts) > 1 and support < 2:
         raise NamedQuadrantVisionError(f"AMBIGUOUS_CARD_OCR:{sorted(counts)}")
-    # A single repeated character caused by a suit glyph is not accepted as a holding
-    # unless the later 13-card/52-card gates make the entire hand and deck coherent.
     confidence = min(0.92, 0.58 + 0.04 * support)
     return best, confidence
 
@@ -192,12 +238,18 @@ def _extract_four_column_hands(
 ) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, float]]]:
     _, width = image.shape[:2]
     bounds = _column_bounds(headings, width)
-    row_centers = _global_rank_rows(image, headings, pytesseract)
     hands: dict[str, dict[str, str]] = {}
     confidence: dict[str, dict[str, float]] = {}
     cards: list[str] = []
     for seat in "NESW":
         x0, x1 = bounds[seat]
+        row_centers = _seat_rank_rows(
+            image,
+            seat=seat,
+            headings=headings,
+            bounds=bounds,
+            pytesseract=pytesseract,
+        )
         holdings: list[str] = []
         row_confidence: list[float] = []
         for center_y in row_centers:
@@ -251,7 +303,7 @@ def extract_named_quadrant_observation(
         hand_confidence=hand_confidence,
         extra_metadata={
             "vision_extractor": ObservedField(source, confidence=1.0, source="runtime"),
-            "layout_family": ObservedField("named_four_column", confidence=1.0, source="runtime"),
+            "layout_family": ObservedField("named_quadrant", confidence=1.0, source="runtime"),
             "image_sha256": ObservedField(image_sha256, confidence=1.0, source="runtime"),
             "filename": ObservedField(filename, confidence=1.0, source="runtime"),
             "media_type": ObservedField(media_type, confidence=1.0, source="runtime"),
