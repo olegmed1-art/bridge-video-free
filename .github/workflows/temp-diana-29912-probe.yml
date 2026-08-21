@@ -17,56 +17,61 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - name: Fetch event and sessions
+      - name: Fetch event, sessions and Diana round 6
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p probe29912
+          mkdir -p probe29912/boards
           UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140 Safari/537.36'
-          curl -L --retry 3 --connect-timeout 15 --max-time 45 -A "$UA" -sS -D probe29912/total.headers 'https://www.bridge.co.il/viewer/total.php?event=29912' -o probe29912/total.html || true
-          for r in $(seq 1 10); do
-            curl -L --retry 2 --connect-timeout 15 --max-time 45 -A "$UA" -sS -D "probe29912/round${r}.headers" "https://www.bridge.co.il/viewer/session.php?event=29912&round=${r}" -o "probe29912/round${r}.html" || true
+          curl -L --retry 3 --connect-timeout 15 --max-time 45 -A "$UA" -sS 'https://www.bridge.co.il/viewer/total.php?event=29912' -o probe29912/total.html
+          for r in $(seq 1 6); do
+            curl -L --retry 2 --connect-timeout 15 --max-time 45 -A "$UA" -sS "https://www.bridge.co.il/viewer/session.php?event=29912&round=${r}" -o "probe29912/round${r}.html"
           done
-          wc -c probe29912/* || true
-      - name: Inspect Diana and personal links
+          curl -L --retry 3 --connect-timeout 15 --max-time 45 -A "$UA" -sS 'https://www.bridge.co.il/viewer/personal.php?event=29912&round=6&seat=4' -o probe29912/personal-r6-seat4.html
+          python3 - <<'PY'
+          from pathlib import Path
+          import html,re
+          p=Path('probe29912/personal-r6-seat4.html')
+          text=html.unescape(p.read_text('utf-8'))
+          links=[]
+          for href in re.findall(r'href=["\']([^"\']+)["\']', text, re.I):
+              if 'board.php' in href:
+                  links.append(href.replace('&amp;','&'))
+          links=list(dict.fromkeys(links))
+          print('BOARD_LINK_COUNT',len(links))
+          for i,href in enumerate(links,1): print('BOARD_LINK',href)
+          Path('probe29912/board-links.txt').write_text('\n'.join(links)+'\n',encoding='utf-8')
+          PY
+          n=0
+          while IFS= read -r href; do
+            test -n "$href" || continue
+            n=$((n+1))
+            url="$href"
+            case "$url" in http*) ;; *) url="https://www.bridge.co.il/viewer/$url";; esac
+            curl -L --retry 2 --connect-timeout 15 --max-time 45 -A "$UA" -sS "$url" -o "probe29912/boards/board-${n}.html"
+          done < probe29912/board-links.txt
+          wc -c probe29912/personal-r6-seat4.html probe29912/boards/* || true
+      - name: Inspect Diana source
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import html, re, json
-          roots=[]
-          needles=['דיאנה','דינה','וקסלר','ווקסלר','diana','veksler','vexler','wexler']
-          out=[]
-          for p in sorted(Path('probe29912').glob('*.html')):
-              raw=p.read_bytes()
-              text=None
-              used=None
-              for enc in ('utf-8','windows-1255','iso-8859-8','latin-1'):
-                  try:
-                      cand=raw.decode(enc)
-                  except UnicodeDecodeError:
-                      continue
-                  score=sum(cand.lower().count(n) for n in needles)
-                  if text is None or score>sum(text.lower().count(n) for n in needles):
-                      text=cand; used=enc
-              text=html.unescape(text or '')
-              compact=re.sub(r'\s+',' ',text)
-              links=sorted(set(re.findall(r'href=["\']([^"\']*(?:personal|session|board)\.php[^"\']*)', text, re.I)))
-              matches=[]
-              low=compact.lower()
-              for n in needles:
-                  start=0
-                  while True:
-                      i=low.find(n,start)
-                      if i<0: break
-                      matches.append(compact[max(0,i-400):i+500])
-                      start=i+len(n)
-              rec={'file':p.name,'bytes':len(raw),'encoding':used,'matches':matches[:20],'links':links[:200]}
-              out.append(rec)
-              print('\n###',p.name,'bytes',len(raw),'encoding',used,'matches',len(matches),'links',len(links))
-              for m in matches[:8]: print('MATCH',m)
-              for l in links[:50]: print('LINK',l)
-          Path('probe29912/index.json').write_text(json.dumps(out,ensure_ascii=False,indent=2),encoding='utf-8')
+          from html.parser import HTMLParser
+          import html,re,json
+          class T(HTMLParser):
+              def __init__(self): super().__init__(); self.parts=[]
+              def handle_data(self,d):
+                  d=d.strip()
+                  if d:self.parts.append(d)
+          out={}
+          for p in [Path('probe29912/total.html'),Path('probe29912/round6.html'),Path('probe29912/personal-r6-seat4.html'),*sorted(Path('probe29912/boards').glob('*.html'))]:
+              raw=p.read_text('utf-8')
+              t=T(); t.feed(raw)
+              text=' '.join(t.parts)
+              out[str(p)]={'bytes':p.stat().st_size,'text':text}
+              print('\n###',p,'bytes',p.stat().st_size)
+              print(text[:12000])
+          Path('probe29912/text.json').write_text(json.dumps(out,ensure_ascii=False,indent=2),encoding='utf-8')
           PY
       - name: Upload probe
         if: always()
