@@ -4,13 +4,21 @@ on:
   pull_request:
     paths:
       - 'bridge_school_api/l1_canonical_runtime.py'
+      - 'bridge_school_api/l1_canonical_runtime_v2.py'
+      - 'bridge_school_api/l1_canonical_registry.py'
       - 'tests/test_l1_canonical_runtime.py'
+      - 'tests/test_l1_canonical_registry.py'
+      - 'docs/L1_CANONICAL_RUNTIME_V2.md'
       - '.github/workflows/l1-canonical-runtime-ci.yml'
   push:
     branches: [main]
     paths:
       - 'bridge_school_api/l1_canonical_runtime.py'
+      - 'bridge_school_api/l1_canonical_runtime_v2.py'
+      - 'bridge_school_api/l1_canonical_registry.py'
       - 'tests/test_l1_canonical_runtime.py'
+      - 'tests/test_l1_canonical_registry.py'
+      - 'docs/L1_CANONICAL_RUNTIME_V2.md'
       - '.github/workflows/l1-canonical-runtime-ci.yml'
   workflow_dispatch:
 
@@ -28,5 +36,8 @@ jobs:
           python-version: '3.12'
       - name: Install test dependency
         run: python -m pip install --disable-pip-version-check pytest
-      - name: Run L1 canonical regression
-        run: python -m pytest -q tests/test_l1_canonical_runtime.py
+      - name: Run L1 canonical regression and registry integrity
+        run: |
+          python -m pytest -q \
+            tests/test_l1_canonical_runtime.py \
+            tests/test_l1_canonical_registry.py
