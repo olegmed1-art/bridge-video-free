@@ -13,6 +13,7 @@ from starlette.responses import Response
 
 from .db import DatabaseConfigurationError, EXPECTED_PRINCIPAL, connect
 from .dds3 import DDSUnavailable, solve_table
+from .dds3.readiness import engine_readiness
 
 EXPECTED_SCHOOL = "Школа спортивного бриджа"
 logger = logging.getLogger("bridge_school_api")
@@ -53,6 +54,12 @@ class DDS3TableRequest(BaseModel):
     pbn: str = Field(min_length=1, max_length=512)
     dealer: str = Field(default="N", pattern="^[NESWnesw]$")
     vulnerability: str = Field(default="None", max_length=8)
+
+
+@app.get("/dds3/readyz")
+def dds3_readyz() -> JSONResponse:
+    result = engine_readiness()
+    return JSONResponse(result, status_code=200 if result["status"] == "ready" else 503, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/v1/dds3/table", dependencies=[Depends(require_api_token)])
