@@ -57,7 +57,10 @@ jobs:
           import fitz
           from tools.dds3_vision.evaluate_named_quadrant import _download, _deal_clip
           from bridge_school_api.dds3.vision_publication import _deps
-          from bridge_school_api.dds3.vision_named_quadrant import _decode_named, _heading_candidates, _four_column_headings, _column_bounds
+          from bridge_school_api.dds3.vision_named_quadrant import (
+              _decode_named, _heading_candidates, _four_column_headings,
+              _column_bounds, _global_rank_rows, _ocr_rank_row,
+          )
           with tempfile.TemporaryDirectory(prefix='dds3-named-diag-') as temp:
               pdf=Path(temp)/'source.pdf'; _download(pdf)
               page=fitz.open(pdf)[0]; clip=_deal_clip(page)
@@ -67,17 +70,16 @@ jobs:
               print('DIAG_HEADINGS_RAW', _heading_candidates(image,pytesseract))
               headings=_four_column_headings(image,pytesseract); print('DIAG_HEADINGS', headings)
               bounds=_column_bounds(headings,image.shape[1])
+              rows=_global_rank_rows(image,headings,pytesseract); print('DIAG_ROWS',rows)
               for seat in 'NESW':
-                  _,hy,_=headings[seat]; x0,x1=bounds[seat]
-                  y0=max(0,int(hy+image.shape[0]*0.020)); y1=min(image.shape[0],int(hy+image.shape[0]*0.620))
-                  crop=image[y0:y1,x0:x1]
-                  gray=cv2.cvtColor(crop,cv2.COLOR_BGR2GRAY)
-                  _,binary=cv2.threshold(gray,0,255,cv2.THRESH_BINARY+cv2.THRESH_OTSU)
-                  print('DIAG_CROP',seat,(x0,x1,y0,y1),crop.shape[:2])
-                  for label,source in [('gray',gray),('binary',binary)]:
-                      for psm in (6,11,12,13):
-                          raw=pytesseract.image_to_string(source,config=f'--psm {psm} -c tessedit_char_whitelist=AKQJT9876543210')
-                          print('DIAG_OCR',seat,label,psm,repr(raw))
+                  x0,x1=bounds[seat]
+                  values=[]
+                  for center in rows:
+                      try:
+                          values.append(_ocr_rank_row(image,x0=x0,x1=x1,center_y=center,pytesseract=pytesseract,cv2=cv2))
+                      except Exception as exc:
+                          values.append((f'ERR:{type(exc).__name__}:{exc}',0.0))
+                  print('DIAG_ROW_OCR',seat,values)
           PY
       - name: Run real named-quadrant field gate
         env:
