@@ -112,6 +112,7 @@ def compute(request: dict[str, Any], *, config: DDS3Config | None = None) -> dic
             board_number=_field(raw.get("board_number")),
             dealer=_field(raw.get("dealer")),
             vulnerability=_field(raw.get("vulnerability")),
+            hand_confidence=raw.get("hand_confidence", {}),
             extra_metadata={k: v for k, v in extra.items() if v is not None},
         )
         return solve_screenshot_observation(obs, config=config)
