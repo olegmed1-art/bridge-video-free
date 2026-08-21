@@ -100,8 +100,14 @@ def _ocr_compass(image: Any, pytesseract: Any) -> dict[str, tuple[float, float, 
 
 
 def _clean_rank_text(text: str) -> str:
+    """Accept only tokens made entirely of visible rank notation.
+
+    Filtering arbitrary OCR words (for example ``Dealer`` -> ``A``) would create
+    fabricated cards, so any non-rank character makes the token unusable.
+    """
     value = re.sub(r"\s+", "", text.upper()).replace("10", "T")
-    value = "".join(ch for ch in value if ch in RANKS)
+    if not value or any(ch not in RANKS for ch in value):
+        return ""
     return value
 
 
