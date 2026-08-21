@@ -1,0 +1,104 @@
+name: DDS3 named quadrant vision field gate
+on:
+  pull_request:
+    paths:
+      - 'bridge_school_api/dds3/vision_named_quadrant.py'
+      - 'bridge_school_api/dds3/image_ingress.py'
+      - 'tools/dds3_vision/evaluate_named_quadrant.py'
+      - 'requirements-dds3-vision.txt'
+      - '.github/workflows/dds3-publication-named-field.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  named-quadrant-field:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install local/free vision runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tesseract-ocr
+          python -m pip install --disable-pip-version-check -r requirements-dds3-vision.txt
+      - name: Compile bounded layout code
+        run: |
+          python -m py_compile bridge_school_api/dds3/vision_named_quadrant.py
+          python -m py_compile bridge_school_api/dds3/image_ingress.py
+          python -m py_compile tools/dds3_vision/evaluate_named_quadrant.py
+      - name: Enforce fail-closed source contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          ingress=Path('bridge_school_api/dds3/image_ingress.py').read_text(encoding='utf-8')
+          named=Path('bridge_school_api/dds3/vision_named_quadrant.py').read_text(encoding='utf-8')
+          assert 'local_tesseract_named_quadrant_v1' in named
+          assert 'DECK_VALIDATION_FAILED' in named
+          assert 'derive_board_metadata' not in named
+          normalized=' '.join(named.split())
+          assert 'deck-complement' in named or 'deck complement' in normalized
+          assert 'startswith("UNSUPPORTED_LAYOUT_")' in ingress
+          assert 'fallback_used' in ingress
+          print('DDS3_NAMED_QUADRANT_CONTRACT_PASS')
+          PY
+      - name: Diagnostic OCR for first real board
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import tempfile
+          from pathlib import Path
+          import fitz
+          from tools.dds3_vision.evaluate_named_quadrant import _download, _deal_clip
+          from bridge_school_api.dds3.vision_publication import _deps, _rank_tokens
+          from bridge_school_api.dds3.vision_named_quadrant import (
+              _decode_named, _heading_candidates, _four_column_headings,
+              _column_bounds, _seat_rank_rows, _ocr_rank_row,
+          )
+          with tempfile.TemporaryDirectory(prefix='dds3-named-diag-') as temp:
+              pdf=Path(temp)/'source.pdf'; _download(pdf)
+              page=fitz.open(pdf)[0]; clip=_deal_clip(page)
+              words=[]
+              for word in page.get_text('words'):
+                  rect=fitz.Rect(word[:4])
+                  if rect.intersects(clip):
+                      words.append((round(word[0]-clip.x0,1),round(word[1]-clip.y0,1),round(word[2]-clip.x0,1),round(word[3]-clip.y0,1),word[4]))
+              print('DIAG_VECTOR_WORDS',words)
+              pix=page.get_pixmap(matrix=fitz.Matrix(440/72,440/72),clip=clip,alpha=False)
+              cv2,np,pytesseract=_deps(); image=_decode_named(pix.tobytes('png'),cv2,np)
+              print('DIAG_SHAPE', image.shape[:2], 'CLIP', tuple(round(v,2) for v in clip))
+              print('DIAG_HEADINGS_RAW', _heading_candidates(image,pytesseract))
+              headings=_four_column_headings(image,pytesseract); print('DIAG_HEADINGS', headings)
+              bounds=_column_bounds(headings,image.shape[1]); print('DIAG_BOUNDS',bounds)
+              tokens=_rank_tokens(image,pytesseract)
+              for seat in 'NESW':
+                  x0,x1=bounds[seat]
+                  rows=_seat_rank_rows(image,seat=seat,headings=headings,bounds=bounds,pytesseract=pytesseract)
+                  print('DIAG_ROWS',seat,rows)
+                  values=[]
+                  for center in rows:
+                      row_tokens=[(t['text'],round(t['x'],1),round(t['cx'],1),round(t['cy'],1)) for t in tokens if x0 <= t['cx'] <= x1 and abs(t['cy']-center)<=24]
+                      print('DIAG_ROW_TOKENS',seat,round(center,1),row_tokens)
+                      try:
+                          values.append(_ocr_rank_row(image,x0=x0,x1=x1,center_y=center,pytesseract=pytesseract,cv2=cv2))
+                      except Exception as exc:
+                          values.append((f'ERR:{type(exc).__name__}:{exc}',0.0))
+                  print('DIAG_ROW_OCR',seat,values)
+          PY
+      - name: Run real named-quadrant field gate
+        env:
+          PYTHONPATH: .
+        run: python tools/dds3_vision/evaluate_named_quadrant.py --output named-quadrant-field.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: dds3-named-quadrant-field
+          path: named-quadrant-field.json
+          if-no-files-found: warn
