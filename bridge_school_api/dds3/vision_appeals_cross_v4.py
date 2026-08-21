@@ -1,14 +1,15 @@
 """Bounded EBU appeals extractor with redundant per-row pixel OCR.
 
 The geometry is fixed by the visible N/W/E/S compass. Every holding is read directly
-from its bounded row with multiple local Tesseract segmentation modes and image
-preprocessings. No card is completed from the deck, and Board/dealer/vulnerability are
-read only from the explicit appeals header. A recognized ambiguous/incomplete row fails
-closed before the strict 52-unique-card gate.
+from its bounded row with multiple local Tesseract segmentations. No card is completed
+from the deck, and Board/dealer/vulnerability are read only from the explicit appeals
+header. A recognized ambiguous/incomplete row fails closed before the strict 52-unique
+standard-deck gate.
 """
 from __future__ import annotations
 
 import hashlib
+import re
 
 from .screenshot import ObservedField, ScreenshotDealObservation
 from .vision_appeals_cross import (
@@ -19,7 +20,92 @@ from .vision_appeals_cross import (
 from .vision_publication import _clean_rank_text, _decode, _deps
 
 
-def _read_row(image, *, x0: float, cy: float, span: float, pytesseract, cv2):
+def _context_tokens(image, pytesseract):
+    """One independent page-context OCR pass used only as an ambiguity tie-breaker."""
+    data = pytesseract.image_to_data(
+        image, config="--psm 6", output_type=pytesseract.Output.DICT
+    )
+    rows = []
+    for index, raw in enumerate(data["text"]):
+        text = raw.strip()
+        if not text:
+            continue
+        try:
+            conf = float(data["conf"][index])
+        except (TypeError, ValueError):
+            conf = -1.0
+        if conf < 0:
+            continue
+        rows.append(
+            {
+                "text": text,
+                "x": float(data["left"][index]),
+                "y": float(data["top"][index]),
+                "w": float(data["width"][index]),
+                "h": float(data["height"][index]),
+                "conf": conf,
+            }
+        )
+    return rows
+
+
+def _context_row_candidate(tokens, *, x0: float, cy: float, span: float) -> str | None:
+    """Recover the rank substring whose glyph box begins at the expected rank x.
+
+    The offset is derived only from OCR bounding-box geometry. It may discard a leading
+    suit-glyph surrogate that Tesseract merged into the same token, but it never inspects
+    another hand or deck inventory to decide which rank is missing.
+    """
+    candidates: list[tuple[float, str]] = []
+    y_tol = max(5.0, span * 0.22)
+    for token in tokens:
+        center_y = token["y"] + token["h"] / 2
+        if abs(center_y - cy) > y_tol:
+            continue
+        left = token["x"]
+        right = left + token["w"]
+        if right < x0 + max(2.0, span * 0.08):
+            continue
+        if left > x0 + span * 0.45:
+            continue
+        compact = re.sub(r"\s+", "", token["text"].upper())
+        if not compact:
+            continue
+        char_width = token["w"] / max(1, len(compact))
+        estimated_drop = int(round(max(0.0, x0 - left) / max(1.0, char_width)))
+        local: set[str] = set()
+        for drop in {max(0, estimated_drop - 1), estimated_drop, estimated_drop + 1}:
+            if drop >= len(compact):
+                continue
+            suffix = compact[drop:]
+            # Drop punctuation/suit-surrogate characters only at the boundary. Internal
+            # non-rank characters invalidate the candidate.
+            suffix = re.sub(r"^[^AKQJT9876543210]+", "", suffix)
+            value = _clean_rank_text(suffix)
+            if value:
+                local.add(value)
+        for value in local:
+            x_distance = abs(left + estimated_drop * char_width - x0)
+            score = abs(center_y - cy) + x_distance - min(20.0, token["conf"] / 5.0)
+            candidates.append((score, value))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    best_score = candidates[0][0]
+    best_values = {value for score, value in candidates if score <= best_score + 0.75}
+    return next(iter(best_values)) if len(best_values) == 1 else None
+
+
+def _read_row(
+    image,
+    *,
+    x0: float,
+    cy: float,
+    span: float,
+    pytesseract,
+    cv2,
+    context_tokens,
+):
     height, width = image.shape[:2]
     radius = max(6, int(span * 0.18))
     left = max(0, int(x0))
@@ -65,15 +151,24 @@ def _read_row(image, *, x0: float, cy: float, span: float, pytesseract, cv2):
     if len(best) != 1:
         raise AppealsCrossVisionError(f"AMBIGUOUS_APPEALS_CARD_OCR:{counts}")
     winner = best[0]
-    # A conflicting cross-scale reading remains terminal unless the winning exact text
-    # has a clear >3:2 OCR-support margin. This is an OCR-consensus threshold only: it
-    # does not inspect other hands, deck inventory, Board number, or bridge semantics.
-    alternatives = [
-        value for value in cross_scale
-        if value != winner and counts[value] * 3 >= best_count * 2
-    ]
+    alternatives = sorted(
+        (value for value in cross_scale if value != winner),
+        key=lambda value: counts[value],
+        reverse=True,
+    )
     if alternatives:
-        raise AppealsCrossVisionError(f"AMBIGUOUS_APPEALS_CARD_OCR:{counts}")
+        runner_up = alternatives[0]
+        # A >3:2 row-crop margin is independently decisive. Nearer contests require
+        # agreement from the separate full-page segmentation and still never use deck
+        # complement or bridge semantics.
+        if counts[runner_up] * 3 >= best_count * 2:
+            context = _context_row_candidate(
+                context_tokens, x0=x0, cy=cy, span=span
+            )
+            if context != winner or context not in cross_scale:
+                raise AppealsCrossVisionError(
+                    f"AMBIGUOUS_APPEALS_CARD_OCR:{counts}:context={context}"
+                )
     confidence = min(0.92, 0.62 + 0.03 * best_count)
     return winner, confidence
 
@@ -97,6 +192,7 @@ def _extract_hands(image, compass, pytesseract, cv2):
         "W": [center_y + factor * span for factor in (-0.55, -0.18, 0.18, 0.55)],
         "E": [center_y + factor * span for factor in (-0.55, -0.18, 0.18, 0.55)],
     }
+    context_tokens = _context_tokens(image, pytesseract)
     hands = {}
     confidence = {}
     cards: list[str] = []
@@ -111,6 +207,7 @@ def _extract_hands(image, compass, pytesseract, cv2):
                 span=span,
                 pytesseract=pytesseract,
                 cv2=cv2,
+                context_tokens=context_tokens,
             )
             holdings.append(value)
             confs.append(conf)
