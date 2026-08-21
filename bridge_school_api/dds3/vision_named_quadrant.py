@@ -196,13 +196,20 @@ def _ocr_rank_row(
     pytesseract: Any,
     cv2: Any,
 ) -> tuple[str, float]:
-    """OCR one isolated holding row, masking possible suit-glyph contamination."""
+    """OCR one isolated holding row after the printed suit-glyph column.
+
+    In this bounded VuBridge family the seat-local window deliberately starts well left
+    of the suit glyph. Pixel diagnostics show the holding itself begins around 30% into
+    that window. Starting the OCR to the right of that stable glyph zone prevents a suit
+    symbol from being hallucinated as a rank; no missing rank is supplied from deck
+    inventory and the final 13-card/52-card gates remain authoritative.
+    """
     height, _ = image.shape[:2]
     half = max(24, int(height * 0.024))
     y0 = max(0, int(center_y - half)); y1 = min(height, int(center_y + half))
     column_width = x1 - x0
     readings: list[str] = []
-    for left_fraction in (0.00, 0.08, 0.14, 0.20, 0.26):
+    for left_fraction in (0.28, 0.30, 0.32, 0.34):
         rx0 = min(x1 - 1, x0 + int(column_width * left_fraction))
         crop = image[y0:y1, rx0:x1]
         if crop.size == 0:
