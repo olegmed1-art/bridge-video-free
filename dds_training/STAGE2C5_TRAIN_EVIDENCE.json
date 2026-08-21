@@ -1,0 +1,74 @@
+{
+  "authority": "EVIDENCE_ONLY",
+  "automatic_promotion": false,
+  "by_actor": {
+    "declarer": {
+      "learned": {
+        "mean_regret": 0.354,
+        "n": 1000,
+        "optimal": 751,
+        "optimal_rate": 0.751,
+        "regret_2plus": 58
+      },
+      "old": {
+        "mean_regret": 0.298,
+        "n": 1000,
+        "optimal": 785,
+        "optimal_rate": 0.785,
+        "regret_2plus": 57
+      },
+      "policy": {
+        "mean_regret": 0.298,
+        "n": 1000,
+        "optimal": 785,
+        "optimal_rate": 0.785,
+        "regret_2plus": 57
+      },
+      "policy_switches": 0
+    },
+    "defense": {
+      "learned": {
+        "mean_regret": 0.429,
+        "n": 1000,
+        "optimal": 682,
+        "optimal_rate": 0.682,
+        "regret_2plus": 80
+      },
+      "old": {
+        "mean_regret": 0.486,
+        "n": 1000,
+        "optimal": 667,
+        "optimal_rate": 0.667,
+        "regret_2plus": 99
+      },
+      "policy": {
+        "mean_regret": 0.429,
+        "n": 1000,
+        "optimal": 682,
+        "optimal_rate": 0.682,
+        "regret_2plus": 80
+      },
+      "policy_switches": 1000
+    }
+  },
+  "families": 646,
+  "historical_database_mutated": false,
+  "learning_mutated": false,
+  "locked_prediction_sha256": "a7afde6d2409e302464ad93ea4acd4b7ed96f8621015ec81cc62312fb73c1583",
+  "methodology_checks": {
+    "blind_predictions_locked_before_dds": true,
+    "candidate_fit_and_shadow_family_disjoint": true,
+    "declarer_policy_identical_to_old": true,
+    "validation_and_sealed_excluded": true
+  },
+  "methodology_gate_pass": true,
+  "next_gate": "owner_decision_on_validation",
+  "positions": 2000,
+  "predictions_locked_before_dds": true,
+  "schema": "dds-stage2c5-train-shadow-v1-result",
+  "sealed_accessed": false,
+  "stage": "2C.5",
+  "status": "train_shadow_complete",
+  "train_gate_pass": true,
+  "validation_accessed": false
+}
