@@ -73,26 +73,31 @@ def _context_row_candidate(tokens, *, x0: float, cy: float, span: float) -> str 
             continue
         char_width = token["w"] / max(1, len(compact))
         estimated_drop = int(round(max(0.0, x0 - left) / max(1.0, char_width)))
-        local: set[str] = set()
-        for drop in {max(0, estimated_drop - 1), estimated_drop, estimated_drop + 1}:
+        for drop in sorted({max(0, estimated_drop - 1), estimated_drop, estimated_drop + 1}):
             if drop >= len(compact):
                 continue
             suffix = compact[drop:]
-            # Drop punctuation/suit-surrogate characters only at the boundary. Internal
-            # non-rank characters invalidate the candidate.
             suffix = re.sub(r"^[^AKQJT9876543210]+", "", suffix)
             value = _clean_rank_text(suffix)
-            if value:
-                local.add(value)
-        for value in local:
-            x_distance = abs(left + estimated_drop * char_width - x0)
-            score = abs(center_y - cy) + x_distance - min(20.0, token["conf"] / 5.0)
+            if not value:
+                continue
+            # Score the actual boundary used for this suffix. Earlier versions scored
+            # every neighbouring suffix at the estimated boundary, making 4J10985 yield
+            # three artificial ties (4JT985/JT985/T985) instead of letting the pixel x
+            # coordinate identify the rank start.
+            x_distance = abs(left + drop * char_width - x0)
+            score = (
+                abs(center_y - cy)
+                + x_distance
+                + 0.35 * abs(drop - estimated_drop)
+                - min(20.0, token["conf"] / 5.0)
+            )
             candidates.append((score, value))
     if not candidates:
         return None
     candidates.sort(key=lambda item: item[0])
     best_score = candidates[0][0]
-    best_values = {value for score, value in candidates if score <= best_score + 0.75}
+    best_values = {value for score, value in candidates if score <= best_score + 0.35}
     return next(iter(best_values)) if len(best_values) == 1 else None
 
 
@@ -158,18 +163,24 @@ def _read_row(
     )
     if alternatives:
         runner_up = alternatives[0]
-        # A >3:2 row-crop margin is independently decisive. Nearer contests require
-        # agreement from the separate full-page segmentation and still never use deck
-        # complement or bridge semantics.
         if counts[runner_up] * 3 >= best_count * 2:
             context = _context_row_candidate(
                 context_tokens, x0=x0, cy=cy, span=span
             )
-            if context != winner or context not in cross_scale:
+            # For a close local contest, page-context segmentation may select either the
+            # local winner or a nearly tied alternative, but only when that exact text
+            # itself has broad cross-scale row support (>=80% of the local maximum).
+            # This is independent OCR evidence, not deck completion.
+            if (
+                context is None
+                or context not in cross_scale
+                or counts[context] * 5 < best_count * 4
+            ):
                 raise AppealsCrossVisionError(
                     f"AMBIGUOUS_APPEALS_CARD_OCR:{counts}:context={context}"
                 )
-    confidence = min(0.92, 0.62 + 0.03 * best_count)
+            winner = context
+    confidence = min(0.92, 0.62 + 0.03 * counts[winner])
     return winner, confidence
 
 
