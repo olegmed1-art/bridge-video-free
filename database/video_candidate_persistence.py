@@ -94,7 +94,7 @@ def persist_quality_candidates(raw_dsn: str, payload: Mapping[str, Any]) -> dict
                       FROM public.source s
                       JOIN public.source_identity si ON si.source_id = s.source_id
                      WHERE si.source_native_key = %s
-                     ORDER BY si.created_at DESC
+                     ORDER BY si.last_seen_at DESC, si.first_seen_at DESC
                      LIMIT 1
                     """,
                     (str(run_row[1]),),
