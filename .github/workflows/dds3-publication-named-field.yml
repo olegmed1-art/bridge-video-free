@@ -57,7 +57,7 @@ jobs:
           from pathlib import Path
           import fitz
           from tools.dds3_vision.evaluate_named_quadrant import _download, _deal_clip
-          from bridge_school_api.dds3.vision_publication import _deps
+          from bridge_school_api.dds3.vision_publication import _deps, _rank_tokens
           from bridge_school_api.dds3.vision_named_quadrant import (
               _decode_named, _heading_candidates, _four_column_headings,
               _column_bounds, _seat_rank_rows, _ocr_rank_row,
@@ -77,12 +77,15 @@ jobs:
               print('DIAG_HEADINGS_RAW', _heading_candidates(image,pytesseract))
               headings=_four_column_headings(image,pytesseract); print('DIAG_HEADINGS', headings)
               bounds=_column_bounds(headings,image.shape[1]); print('DIAG_BOUNDS',bounds)
+              tokens=_rank_tokens(image,pytesseract)
               for seat in 'NESW':
                   x0,x1=bounds[seat]
                   rows=_seat_rank_rows(image,seat=seat,headings=headings,bounds=bounds,pytesseract=pytesseract)
                   print('DIAG_ROWS',seat,rows)
                   values=[]
                   for center in rows:
+                      row_tokens=[(t['text'],round(t['x'],1),round(t['cx'],1),round(t['cy'],1)) for t in tokens if x0 <= t['cx'] <= x1 and abs(t['cy']-center)<=24]
+                      print('DIAG_ROW_TOKENS',seat,round(center,1),row_tokens)
                       try:
                           values.append(_ocr_rank_row(image,x0=x0,x1=x1,center_y=center,pytesseract=pytesseract,cv2=cv2))
                       except Exception as exc:
