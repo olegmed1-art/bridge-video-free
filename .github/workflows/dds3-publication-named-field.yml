@@ -42,7 +42,7 @@ jobs:
           assert 'local_tesseract_named_quadrant_v1' in named
           assert 'DECK_VALIDATION_FAILED' in named
           assert 'derive_board_metadata' not in named
-          assert 'deck-complement' in named
+          assert 'deck-complement' in named or 'deck complement' in named
           assert 'startswith("UNSUPPORTED_LAYOUT_")' in ingress
           assert 'fallback_used' in ingress
           print('DDS3_NAMED_QUADRANT_CONTRACT_PASS')
@@ -59,7 +59,7 @@ jobs:
           from bridge_school_api.dds3.vision_publication import _deps
           from bridge_school_api.dds3.vision_named_quadrant import (
               _decode_named, _heading_candidates, _four_column_headings,
-              _column_bounds, _global_rank_rows, _ocr_rank_row,
+              _column_bounds, _seat_rank_rows, _ocr_rank_row,
           )
           with tempfile.TemporaryDirectory(prefix='dds3-named-diag-') as temp:
               pdf=Path(temp)/'source.pdf'; _download(pdf)
@@ -75,10 +75,11 @@ jobs:
               print('DIAG_SHAPE', image.shape[:2], 'CLIP', tuple(round(v,2) for v in clip))
               print('DIAG_HEADINGS_RAW', _heading_candidates(image,pytesseract))
               headings=_four_column_headings(image,pytesseract); print('DIAG_HEADINGS', headings)
-              bounds=_column_bounds(headings,image.shape[1])
-              rows=_global_rank_rows(image,headings,pytesseract); print('DIAG_ROWS',rows)
+              bounds=_column_bounds(headings,image.shape[1]); print('DIAG_BOUNDS',bounds)
               for seat in 'NESW':
                   x0,x1=bounds[seat]
+                  rows=_seat_rank_rows(image,seat=seat,headings=headings,bounds=bounds,pytesseract=pytesseract)
+                  print('DIAG_ROWS',seat,rows)
                   values=[]
                   for center in rows:
                       try:
