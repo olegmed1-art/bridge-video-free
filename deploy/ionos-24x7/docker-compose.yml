@@ -1,0 +1,82 @@
+name: bridge-school-ionos-24x7
+
+services:
+  gateway:
+    image: ${GATEWAY_IMAGE:?set an immutable pinned gateway image}
+    restart: unless-stopped
+    environment:
+      COMPUTE_HOST: ${COMPUTE_HOST:?set COMPUTE_HOST}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - edge
+      - compute
+    depends_on:
+      dds3:
+        condition: service_healthy
+    cpu_shares: 1024
+    mem_limit: 512m
+
+  dds3:
+    image: ${DDS3_IMAGE:?set an immutable pinned DDS3 image}
+    restart: unless-stopped
+    environment:
+      DDS3_RUNTIME_TOKEN: ${DDS3_RUNTIME_TOKEN:?set DDS3_RUNTIME_TOKEN}
+    expose:
+      - "8080"
+    networks:
+      - compute
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8080/readyz',timeout=5)); assert d['status']=='ready' and d['engine']=='DDS3' and d['fallback_used'] is False"
+      interval: 10s
+      timeout: 6s
+      retries: 6
+      start_period: 15s
+    cpu_shares: 4096
+    mem_limit: 8g
+    volumes:
+      - /srv/bridge/cache/dds3:/srv/bridge/cache/dds3
+      - /srv/bridge/work/dds3:/srv/bridge/work/dds3
+
+  ben:
+    image: ${BEN_IMAGE:?set an immutable pinned BEN image}
+    restart: unless-stopped
+    expose:
+      - "8085"
+    networks:
+      - compute
+    cpu_shares: 3072
+    mem_limit: 8g
+
+  ai-worker:
+    image: ${AI_WORKER_IMAGE:?set an immutable pinned Bridge AI worker image}
+    restart: unless-stopped
+    environment:
+      BRIDGE_API_BASE_URL: ${BRIDGE_API_BASE_URL:?set BRIDGE_API_BASE_URL}
+      BRIDGE_API_TOKEN: ${BRIDGE_API_TOKEN:?set BRIDGE_API_TOKEN}
+      BRIDGE_WORKER_POLL_SECONDS: ${BRIDGE_WORKER_POLL_SECONDS:-5}
+      BEN_API_URL: http://ben:8085
+    networks:
+      - compute
+    depends_on:
+      - ben
+      - dds3
+    cpu_shares: 2048
+    mem_limit: 2g
+
+networks:
+  edge: {}
+  compute: {}
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}
