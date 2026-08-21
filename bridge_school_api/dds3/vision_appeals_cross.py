@@ -32,42 +32,52 @@ def _dedicated_dealer_read(image: Any, pytesseract: Any, cv2: Any) -> str | None
     This is OCR redundancy, not semantic repair: only exact dealer tokens from a bounded
     pixel crop are accepted. Fuzzy spell correction such as ``Bast -> East`` is forbidden.
     """
-    data = pytesseract.image_to_data(
-        image, config="--psm 11", output_type=pytesseract.Output.DICT
-    )
     height, width = image.shape[:2]
     candidates: list[str] = []
-    for index, raw in enumerate(data["text"]):
-        if re.sub(r"[^A-Za-z]", "", raw).upper() != "DEALER":
-            continue
-        try:
-            conf = float(data["conf"][index])
-        except (TypeError, ValueError):
-            conf = -1
-        if conf < 15:
-            continue
-        left = int(data["left"][index]); top = int(data["top"][index])
-        w = int(data["width"][index]); h = int(data["height"][index])
-        x0 = max(0, left + w + 2)
-        x1 = min(width, x0 + max(120, int(width * 0.22)))
-        y0 = max(0, top - max(8, h // 2))
-        y1 = min(height, top + h + max(8, h // 2))
-        crop = image[y0:y1, x0:x1]
-        if not crop.size:
-            continue
-        crop = cv2.resize(crop, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        for source in (gray, binary):
-            for psm in (7, 11, 13):
-                text = pytesseract.image_to_string(
-                    source,
-                    config=f"--psm {psm} -c tessedit_char_whitelist=NorthEastSouthWestNESW",
-                )
-                token = re.sub(r"[^A-Za-z]", "", text).upper()
-                if token in DEALER_MAP:
-                    candidates.append(DEALER_MAP[token])
+    diagnostics: list[str] = []
+    for detector_psm in (6, 11):
+        data = pytesseract.image_to_data(
+            image,
+            config=f"--psm {detector_psm}",
+            output_type=pytesseract.Output.DICT,
+        )
+        for index, raw in enumerate(data["text"]):
+            if re.sub(r"[^A-Za-z]", "", raw).upper() != "DEALER":
+                continue
+            try:
+                conf = float(data["conf"][index])
+            except (TypeError, ValueError):
+                conf = -1
+            if conf < 5:
+                continue
+            left = int(data["left"][index]); top = int(data["top"][index])
+            w = int(data["width"][index]); h = int(data["height"][index])
+            x0 = max(0, left + w + 1)
+            x1 = min(width, x0 + max(150, int(width * 0.25)))
+            y0 = max(0, top - max(10, h))
+            y1 = min(height, top + h + max(10, h))
+            crop = image[y0:y1, x0:x1]
+            if not crop.size:
+                continue
+            crop = cv2.resize(crop, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC)
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            for source in (gray, binary):
+                for psm in (7, 8, 11, 13):
+                    text = pytesseract.image_to_string(
+                        source,
+                        config=f"--psm {psm} -c tessedit_char_whitelist=NorthEastSouthWestNESW",
+                    )
+                    token = re.sub(r"[^A-Za-z]", "", text).upper()
+                    if token:
+                        diagnostics.append(token)
+                    if token in DEALER_MAP:
+                        candidates.append(DEALER_MAP[token])
     if not candidates:
+        if diagnostics:
+            raise AppealsCrossVisionError(
+                f"APPEALS_DEALER_EXACT_OCR_FAILED:{diagnostics[:16]}"
+            )
         return None
     counts = {value: candidates.count(value) for value in set(candidates)}
     best = max(counts, key=counts.get)
