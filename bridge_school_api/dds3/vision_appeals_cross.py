@@ -93,39 +93,98 @@ def _dedicated_dealer_read(image: Any, pytesseract: Any, cv2: Any) -> str | None
     return best
 
 
-def _ocr_appeals_compass(image: Any, pytesseract: Any) -> dict[str, tuple[float, float, float]]:
+def _ocr_appeals_compass(
+    image: Any, pytesseract: Any, cv2: Any
+) -> dict[str, tuple[float, float, float]]:
     """Locate a visible N/W/E/S compass from pixels using redundant OCR passes.
 
-    Unlike the generic publication extractor, appeals pages contain surrounding prose and
-    a very small compass. We collect only exact one-letter N/W/E/S OCR tokens and accept a
-    unique compact cardinal geometry. No seat is inferred from hand contents or metadata.
+    Appeals pages contain surrounding prose and a small sparse compass. The first pass
+    collects exact one-letter N/W/E/S tokens. If the vertical N/S axis is visible but a
+    horizontal letter is missed, a second bounded pixel crop is centered strictly from
+    the observed N/S coordinates and reread at high scale for exact W/E glyphs. This is
+    OCR redundancy over visible compass pixels, not hand-position or bridge inference.
     """
     labels: dict[str, list[tuple[float, float, float]]] = {seat: [] for seat in "NWES"}
     seen: set[tuple[str, int, int]] = set()
-    for psm in (6, 11, 12):
-        data = pytesseract.image_to_data(
-            image,
-            config=f"--psm {psm} -c tessedit_char_whitelist=NWES",
-            output_type=pytesseract.Output.DICT,
-        )
-        for index, raw in enumerate(data["text"]):
-            text = raw.strip().upper()
-            if text not in labels:
+
+    def add_label(text: str, cx: float, cy: float, conf: float) -> None:
+        text = text.strip().upper()
+        if text not in labels:
+            return
+        key = (text, round(cx), round(cy))
+        if key in seen:
+            return
+        seen.add(key)
+        labels[text].append((cx, cy, conf))
+
+    def collect(source: Any, *, scale: float = 1.0, offset_x: float = 0.0,
+                offset_y: float = 0.0, whitelist: str = "NWES",
+                psms: tuple[int, ...] = (6, 11, 12), min_conf: float = 0.05) -> None:
+        for psm in psms:
+            data = pytesseract.image_to_data(
+                source,
+                config=f"--psm {psm} -c tessedit_char_whitelist={whitelist}",
+                output_type=pytesseract.Output.DICT,
+            )
+            for index, raw in enumerate(data["text"]):
+                text = raw.strip().upper()
+                if text not in labels:
+                    continue
+                try:
+                    conf = max(0.0, min(1.0, float(data["conf"][index]) / 100.0))
+                except (TypeError, ValueError):
+                    conf = 0.0
+                if conf < min_conf:
+                    continue
+                x = float(data["left"][index]); y = float(data["top"][index])
+                w = float(data["width"][index]); h = float(data["height"][index])
+                cx = offset_x + (x + w / 2) / scale
+                cy = offset_y + (y + h / 2) / scale
+                add_label(text, cx, cy, conf)
+
+    collect(image)
+
+    # Small W/E labels on appeals forms are often missed by a whole-page OCR pass even
+    # when N and S are read. Use only the already-observed N/S pixels to define a narrow
+    # horizontal compass band, then reread exact W/E glyphs at higher scale.
+    if labels["N"] and labels["S"] and (not labels["W"] or not labels["E"]):
+        height, width = image.shape[:2]
+        for n, s in itertools.product(labels["N"], labels["S"]):
+            span_y = s[1] - n[1]
+            if span_y <= 12 or abs(n[0] - s[0]) > max(16.0, span_y * 0.4):
                 continue
-            try:
-                conf = max(0.0, min(1.0, float(data["conf"][index]) / 100.0))
-            except (TypeError, ValueError):
-                conf = 0.0
-            if conf < 0.05:
+            cx = (n[0] + s[0]) / 2
+            cy = (n[1] + s[1]) / 2
+            half_width = max(50.0, span_y * 1.35)
+            half_height = max(18.0, span_y * 0.28)
+            x0 = max(0, int(cx - half_width)); x1 = min(width, int(cx + half_width))
+            y0 = max(0, int(cy - half_height)); y1 = min(height, int(cy + half_height))
+            crop = image[y0:y1, x0:x1]
+            if not crop.size:
                 continue
-            x = int(data["left"][index]); y = int(data["top"][index])
-            w = int(data["width"][index]); h = int(data["height"][index])
-            cx = x + w / 2; cy = y + h / 2
-            key = (text, round(cx), round(cy))
-            if key in seen:
-                continue
-            seen.add(key)
-            labels[text].append((cx, cy, conf))
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            variants = [gray]
+            _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            variants.append(binary)
+            adaptive = cv2.adaptiveThreshold(
+                gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY, 31, 11,
+            )
+            variants.append(adaptive)
+            for variant in variants:
+                scaled = cv2.resize(
+                    variant, None, fx=4, fy=4, interpolation=cv2.INTER_CUBIC
+                )
+                collect(
+                    scaled,
+                    scale=4.0,
+                    offset_x=float(x0),
+                    offset_y=float(y0),
+                    whitelist="WE",
+                    psms=(6, 7, 11, 12, 13),
+                    min_conf=0.01,
+                )
+
     if any(not labels[seat] for seat in "NWES"):
         raise AppealsCrossVisionError(
             "UNSUPPORTED_LAYOUT_NO_APPEALS_COMPASS:" + ",".join(
@@ -143,8 +202,6 @@ def _ocr_appeals_compass(image: Any, pytesseract: Any) -> dict[str, tuple[float,
             continue
         cx = (n[0] + s[0] + w[0] + e[0]) / 4
         cy = (n[1] + s[1] + w[1] + e[1]) / 4
-        # Cardinal letters must make one compact cross: N/S share x, W/E share y,
-        # and horizontal/vertical radii are approximately balanced.
         x_alignment = abs(n[0] - s[0])
         y_alignment = abs(w[1] - e[1])
         horizontal_balance = abs((cx - w[0]) - (e[0] - cx))
@@ -169,8 +226,6 @@ def _ocr_appeals_compass(image: Any, pytesseract: Any) -> dict[str, tuple[float,
         raise AppealsCrossVisionError("UNSUPPORTED_LAYOUT_NO_APPEALS_COMPASS_CLUSTER")
     candidates.sort(key=lambda item: item[0])
     if len(candidates) > 1 and candidates[1][0] <= candidates[0][0] + 1.0:
-        # Near-tied geometrically distinct compass clusters are ambiguous. Duplicate OCR
-        # passes at the same coordinates were already deduplicated above.
         first, second = candidates[0][1], candidates[1][1]
         if any(abs(first[seat][0] - second[seat][0]) > 4 or abs(first[seat][1] - second[seat][1]) > 4 for seat in "NWES"):
             raise AppealsCrossVisionError("AMBIGUOUS_APPEALS_COMPASS_CLUSTER")
@@ -215,14 +270,11 @@ def extract_appeals_cross_observation(
     cv2, np, pytesseract = _deps()
     image = _decode(image_bytes, cv2, np)
 
-    # Header recognition happens before card extraction so unrelated publication layouts
-    # can continue to their own bounded extractor. Once this family is recognized,
-    # card/metadata ambiguity fails closed rather than falling through.
     board, dealer, vulnerability, metadata_confidence = _extract_appeals_metadata(
         image, pytesseract, cv2
     )
     try:
-        compass = _ocr_appeals_compass(image, pytesseract)
+        compass = _ocr_appeals_compass(image, pytesseract, cv2)
         hands, hand_confidence = _extract_hands(image, compass, pytesseract, cv2)
     except Exception as exc:
         raise AppealsCrossVisionError(str(exc)) from exc
