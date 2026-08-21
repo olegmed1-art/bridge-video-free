@@ -15,7 +15,18 @@ from .position_runtime import (
     solve_position_trajectory,
 )
 from .screenshot import ObservedField, ScreenshotDealObservation, derive_board_metadata
-from .service import DDS3Config, DDSUnavailable, compute, solve_deal, solve_screenshot_observation, solve_table
+from .service import (
+    DDS3Config,
+    DDSUnavailable,
+    compute,
+    solve_deal,
+    solve_screenshot_observation,
+    solve_table,
+)
+from .vision_bridgecourse import (
+    BridgeCourseVisionError,
+    extract_bridgecourse_observation,
+)
 from .vision_local import LocalVisionError, extract_federation_yellow_observation
 
 __all__ = [
@@ -26,6 +37,8 @@ __all__ = [
     "validate_image_payload",
     "LocalVisionError",
     "extract_federation_yellow_observation",
+    "BridgeCourseVisionError",
+    "extract_bridgecourse_observation",
     "BridgeDeal",
     "DealValidationError",
     "ObservedField",
