@@ -47,6 +47,29 @@ jobs:
           assert 'startswith("UNSUPPORTED_LAYOUT_")' in ingress
           print('DDS3_APPEALS_CROSS_CONTRACT_PASS')
           PY
+      - name: Diagnose EBU source vector encoding
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import tempfile, urllib.request
+          from pathlib import Path
+          import fitz
+          url='https://www.bridge.is/files/EBUAppeals2001_1575249453.pdf'
+          with tempfile.TemporaryDirectory(prefix='dds3-appeals-diag-') as temp:
+              path=Path(temp)/'source.pdf'
+              req=urllib.request.Request(url,headers={'User-Agent':'bridge-school-dds3-field-gate/1.0'})
+              with urllib.request.urlopen(req,timeout=45) as response, path.open('wb') as output:
+                  output.write(response.read())
+              page=fitz.open(path)[7]
+              text=page.get_text('text')
+              words=page.get_text('words')
+              print('APPEALS_PAGE_TEXT_REPR',repr(text[:5000]))
+              print('APPEALS_WORDS_COUNT',len(words))
+              print('APPEALS_WORDS',[(round(w[0],1),round(w[1],1),round(w[2],1),round(w[3],1),repr(w[4])) for w in words[:220]])
+              singles=sorted({w[4] for w in words if len(w[4].strip())<=2})
+              print('APPEALS_SHORT_TOKENS',[(repr(x),[hex(ord(c)) for c in x]) for x in singles[:200]])
+          PY
       - name: Run real EBU appeals field gate
         env:
           PYTHONPATH: .
