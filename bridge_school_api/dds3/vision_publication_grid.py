@@ -15,7 +15,6 @@ from .screenshot import ObservedField, ScreenshotDealObservation
 from .vision_publication import (
     PublicationVisionError,
     _cluster_rows,
-    _decode,
     _deps,
     _extract_metadata,
     _glyph_column,
@@ -29,17 +28,45 @@ class PublicationGridVisionError(ValueError):
     pass
 
 
+def _decode_grid(image_bytes: bytes, cv2: Any, np: Any) -> Any:
+    if not image_bytes:
+        raise PublicationGridVisionError("EMPTY_IMAGE")
+    image = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        raise PublicationGridVisionError("IMAGE_DECODE_FAILED")
+    height, width = image.shape[:2]
+    if width < 250 or height < 180:
+        raise PublicationGridVisionError("IMAGE_TOO_SMALL")
+    # Keep the native high-resolution publication crop whenever practical. The older
+    # cross-family normalizer intentionally targets 700px, but this print font loses
+    # small terminal ranks at that scale. This is a pixel-resolution choice only; no
+    # card value is inferred from layout or deck inventory.
+    if width < 600:
+        scale = 700.0 / width
+        image = cv2.resize(
+            image,
+            (700, max(1, round(height * scale))),
+            interpolation=cv2.INTER_CUBIC,
+        )
+    elif width > 1200:
+        scale = 1000.0 / width
+        image = cv2.resize(
+            image,
+            (1000, max(1, round(height * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
+    return image
+
+
 def _grid_rows(image: Any, pytesseract: Any) -> dict[str, list[list[dict[str, Any]]]]:
     tokens = _rank_tokens(image, pytesseract)
     height, width = image.shape[:2]
 
-    # The normalized family has N/S centered and the two lateral hands outside it.
     center_tokens = [
         token for token in tokens
         if width * 0.30 <= token["cx"] <= width * 0.62 and token["cy"] > height * 0.07
     ]
-    center_rows = _cluster_rows(center_tokens, tolerance=14.0)
-    # Drop an accidental header row, but never invent a missing suit row.
+    center_rows = _cluster_rows(center_tokens, tolerance=max(14.0, width * 0.02))
     center_rows = [row for row in center_rows if _row_center(row) > height * 0.08]
     if len(center_rows) != 8:
         raise PublicationGridVisionError(f"UNSUPPORTED_LAYOUT_GRID_CENTER_ROWS:{len(center_rows)}")
@@ -53,10 +80,10 @@ def _grid_rows(image: Any, pytesseract: Any) -> dict[str, list[list[dict[str, An
 
     lateral_tokens = [
         token for token in tokens
-        if north_bottom + 8 < token["cy"] < south_top - 8
+        if north_bottom + width * 0.01 < token["cy"] < south_top - width * 0.01
         and (token["cx"] < width * 0.36 or token["cx"] > width * 0.66)
     ]
-    lateral_rows = _cluster_rows(lateral_tokens, tolerance=14.0)
+    lateral_rows = _cluster_rows(lateral_tokens, tolerance=max(14.0, width * 0.02))
     if len(lateral_rows) != 4:
         raise PublicationGridVisionError(f"UNSUPPORTED_LAYOUT_GRID_LATERAL_ROWS:{len(lateral_rows)}")
 
@@ -98,9 +125,7 @@ def _extract_grid_hands(
         for suit, ranks in zip("SHDC", holdings, strict=True):
             cards.extend(suit + rank for rank in ranks)
 
-    expected = {
-        suit + rank for suit in "SHDC" for rank in "AKQJT98765432"
-    }
+    expected = {suit + rank for suit in "SHDC" for rank in "AKQJT98765432"}
     if len(cards) != 52 or len(set(cards)) != 52:
         raise PublicationGridVisionError(
             f"DECK_VALIDATION_FAILED:{len(cards)}/{len(set(cards))}"
@@ -114,8 +139,8 @@ def extract_publication_grid_observation(
     image_bytes: bytes, *, media_type: str, filename: str | None = None
 ) -> ScreenshotDealObservation:
     cv2, np, pytesseract = _deps()
+    image = _decode_grid(image_bytes, cv2, np)
     try:
-        image = _decode(image_bytes, cv2, np)
         board, dealer, vulnerability, metadata_confidence = _extract_metadata(
             image, pytesseract
         )
@@ -130,12 +155,8 @@ def extract_publication_grid_observation(
     source = "local_tesseract_publication_grid_v1"
     return ScreenshotDealObservation(
         hands=hands,
-        board_number=ObservedField(
-            board, confidence=metadata_confidence, source=source
-        ),
-        dealer=ObservedField(
-            dealer, confidence=metadata_confidence, source=source
-        ),
+        board_number=ObservedField(board, confidence=metadata_confidence, source=source),
+        dealer=ObservedField(dealer, confidence=metadata_confidence, source=source),
         vulnerability=ObservedField(
             vulnerability, confidence=metadata_confidence, source=source
         ),
@@ -149,8 +170,6 @@ def extract_publication_grid_observation(
                 image_sha256, confidence=1.0, source="runtime"
             ),
             "filename": ObservedField(filename, confidence=1.0, source="runtime"),
-            "media_type": ObservedField(
-                media_type, confidence=1.0, source="runtime"
-            ),
+            "media_type": ObservedField(media_type, confidence=1.0, source="runtime"),
         },
     )
