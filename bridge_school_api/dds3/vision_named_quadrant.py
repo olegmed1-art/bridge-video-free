@@ -2,9 +2,10 @@
 
 This bounded family has explicit ``North``, ``West``, ``East`` and ``South`` headings
 above four suit rows for each hand plus an explicit Board/Dealer/Vulnerable header.
-Seat placement comes only from the detected printed headings. Cards are read from pixels
-and must form the exact standard 52-card deck; no deck-complement or bridge inference
-repair is permitted.
+The printed seat labels may be arranged either as a classic cross or as a strict vertical
+N→W→E→S publication stack; seat identity always comes from those detected labels.
+Cards are read from pixels and must form the exact standard 52-card deck; no
+deck-complement or bridge inference repair is permitted.
 """
 from __future__ import annotations
 
@@ -66,30 +67,53 @@ def _seat_headings(image: Any, pytesseract: Any) -> dict[str, tuple[float, float
         for west in labels["W"]:
             for east in labels["E"]:
                 for south in labels["S"]:
-                    if not (north[1] < west[1] and north[1] < east[1]):
-                        continue
-                    if not (south[1] > west[1] and south[1] > east[1]):
-                        continue
-                    if not west[0] < east[0]:
-                        continue
-                    center_x = (west[0] + east[0]) / 2
-                    if abs(north[0] - center_x) > width * 0.25:
-                        continue
-                    if abs(south[0] - center_x) > width * 0.25:
-                        continue
-                    if abs(west[1] - east[1]) > height * 0.16:
-                        continue
-                    if east[0] - west[0] < width * 0.20:
-                        continue
-                    score = (
-                        abs(north[0] - south[0])
-                        + abs(west[1] - east[1])
-                        + 0.25 * abs((north[1] + south[1]) / 2 - (west[1] + east[1]) / 2)
-                        - 20.0 * min(north[2], west[2], east[2], south[2])
-                    )
                     candidate = {"N": north, "W": west, "E": east, "S": south}
-                    if best is None or score < best[0]:
-                        best = (score, candidate)
+                    min_conf = min(north[2], west[2], east[2], south[2])
+
+                    # Geometry A: conventional cross, N above W/E and S below them.
+                    if (
+                        north[1] < west[1]
+                        and north[1] < east[1]
+                        and south[1] > west[1]
+                        and south[1] > east[1]
+                        and west[0] < east[0]
+                    ):
+                        center_x = (west[0] + east[0]) / 2
+                        if (
+                            abs(north[0] - center_x) <= width * 0.25
+                            and abs(south[0] - center_x) <= width * 0.25
+                            and abs(west[1] - east[1]) <= height * 0.16
+                            and east[0] - west[0] >= width * 0.20
+                        ):
+                            score = (
+                                abs(north[0] - south[0])
+                                + abs(west[1] - east[1])
+                                + 0.25 * abs((north[1] + south[1]) / 2 - (west[1] + east[1]) / 2)
+                                - 20.0 * min_conf
+                            )
+                            if best is None or score < best[0]:
+                                best = (score, candidate)
+
+                    # Geometry B: legacy VuBridge HTML/PDF stack. The four complete
+                    # hands are printed in strict N→W→E→S order down one narrow column.
+                    # This is still fail-closed: all four labels must be explicit, nearly
+                    # column-aligned, separated vertically, and the later deck gate must
+                    # independently prove all 52 standard cards.
+                    ys = [north[1], west[1], east[1], south[1]]
+                    xs = [north[0], west[0], east[0], south[0]]
+                    gaps = [ys[i + 1] - ys[i] for i in range(3)]
+                    if (
+                        ys == sorted(ys)
+                        and min(gaps) >= height * 0.08
+                        and max(xs) - min(xs) <= width * 0.20
+                    ):
+                        mean_x = sum(xs) / 4
+                        alignment = sum(abs(x - mean_x) for x in xs)
+                        gap_spread = max(gaps) - min(gaps)
+                        score = 1000.0 + alignment + 0.20 * gap_spread - 20.0 * min_conf
+                        if best is None or score < best[0]:
+                            best = (score, candidate)
+
     if best is None:
         raise NamedQuadrantVisionError("UNSUPPORTED_LAYOUT_NAMED_QUADRANT_GEOMETRY")
     return best[1]
