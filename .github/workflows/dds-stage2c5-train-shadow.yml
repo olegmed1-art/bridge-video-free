@@ -1,0 +1,239 @@
+name: DDS Stage 2C.5 — independent TRAIN shadow gate
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'dds_training/stage2c4_train_helpers.py'
+      - 'dds_training/stage2c5_train_shadow.py'
+      - '.github/workflows/dds-stage2c5-train-shadow.yml'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: dds-stage2c5-train-shadow-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+env:
+  STAGE2B_ARTIFACT_ID: '9318545935'
+  STAGE2B_ARTIFACT_NAME: 'dds-stage2b-v25-prepared-evidence-32121009819'
+  STAGE2B_ARTIFACT_DIGEST: 'sha256:efdd62ab9a2643f231d3faea5c9475fe519cbd5b2e94dc9a764ca6087c043604'
+  STAGE2C2_ARTIFACT_ID: '9352988318'
+  STAGE2C2_ARTIFACT_NAME: 'dds-stage2c2-train-v2-32217687615'
+  STAGE2C2_ARTIFACT_DIGEST: 'sha256:1fd61be6816df747824467266167dc22e6a88ae4a62794643f14fd176e566da2'
+  TRAIN_DRIVE_LOCATOR: 'dds_training/artifact_locations/dds-main-train-32060398288.json'
+  TRAIN_ARTIFACT_ZIP_SHA256: 'c46cda2fb127371cbc1ab836c74580b25f0a0bb8ab358dfaab97cf591dd8a246'
+  GH_TOKEN: ${{ github.token }}
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  train-shadow:
+    if: >-
+      github.actor == 'olegmed1-art' &&
+      github.event.pull_request.head.ref == 'dds-stage2c5-train-shadow-20260821'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Checkout exact PR merge commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+
+      - name: Verify TRAIN-only policy prerequisite
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPYCACHEPREFIX=/tmp/pycache python -m py_compile \
+            dds_training/stage2c4_train_helpers.py \
+            dds_training/stage2c5_train_shadow.py
+          PYTHONPATH=dds_training python - <<'PY'
+          from pathlib import Path
+          from stage2c5_train_shadow import verify_train_policy_prerequisite
+          e=verify_train_policy_prerequisite(Path('dds_training/STAGE2C4_BLIND_REGRESSION_EVIDENCE.json'))
+          assert e['validation_opened'] is False and e['sealed_opened'] is False
+          print({'train_prerequisite':'PASS','validation_accessed':False,'sealed_accessed':False})
+          PY
+
+      - name: Validate Drive restore contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'requests==2.32.5' 'google-auth==2.40.3'
+          PYTHONPATH=. python tests/test_restore_drive_split_artifact.py
+          PYTHONPATH=. python tools/restore_drive_split_artifact.py \
+            --locator "$TRAIN_DRIVE_LOCATOR" \
+            --output /tmp/unused-dds-main-train.zip \
+            --validate-only
+
+      - name: Restore immutable TRAIN evidence artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/s2b /tmp/s2c2
+          mkdir -p /tmp/s2b/files /tmp/s2c2/files
+          verify_artifact() {
+            local id="$1" expected_name="$2" expected_digest="$3" meta="$4"
+            gh api -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}" > "$meta"
+            python - "$meta" "$expected_name" "$expected_digest" <<'PY'
+          import json,sys
+          p,name,digest=sys.argv[1:]
+          m=json.load(open(p,encoding='utf-8'))
+          assert m['name']==name,(m['name'],name)
+          assert m.get('digest')==digest,(m.get('digest'),digest)
+          assert not m.get('expired',False),m
+          print({'artifact_id':m['id'],'name':m['name'],'digest':m['digest'],'expired':False})
+          PY
+          }
+          verify_artifact "$STAGE2B_ARTIFACT_ID" "$STAGE2B_ARTIFACT_NAME" "$STAGE2B_ARTIFACT_DIGEST" /tmp/s2b/meta.json
+          verify_artifact "$STAGE2C2_ARTIFACT_ID" "$STAGE2C2_ARTIFACT_NAME" "$STAGE2C2_ARTIFACT_DIGEST" /tmp/s2c2/meta.json
+          gh api -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${STAGE2B_ARTIFACT_ID}/zip" > /tmp/s2b/artifact.zip
+          gh api -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${STAGE2C2_ARTIFACT_ID}/zip" > /tmp/s2c2/artifact.zip
+          unzip -q /tmp/s2b/artifact.zip -d /tmp/s2b/files
+          unzip -q /tmp/s2c2/artifact.zip -d /tmp/s2c2/files
+          test -f /tmp/s2b/files/continuation_curriculum_balanced.jsonl
+          s2c2_tgz="$(find /tmp/s2c2/files -name '*.tgz' -print -quit)"
+          test -n "$s2c2_tgz"
+          mkdir -p /tmp/s2c2/extracted
+          tar -xzf "$s2c2_tgz" -C /tmp/s2c2/extracted
+          test -n "$(find /tmp/s2c2/extracted -name stage2c2_continuation_results.jsonl -print -quit)"
+
+      - name: Restore exact completed main corpus from verified Drive copy
+        shell: bash
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/main-train /tmp/train-state
+          mkdir -p /tmp/main-train /tmp/train-state
+          PYTHONPATH=. python tools/restore_drive_split_artifact.py \
+            --locator "$TRAIN_DRIVE_LOCATOR" \
+            --output /tmp/main-train/artifact.zip \
+            --work-dir /tmp/main-train/parts
+          echo "$TRAIN_ARTIFACT_ZIP_SHA256  /tmp/main-train/artifact.zip" | sha256sum -c -
+          unzip -q /tmp/main-train/artifact.zip -d /tmp/main-train/extracted
+          state="$(find /tmp/main-train/extracted -name 'dds-main-train-progress-state.tgz' -print -quit)"
+          test -n "$state"
+          tar -xzf "$state" -C /tmp/train-state
+          test -n "$(find /tmp/train-state -name blind_tasks_crossfit_main.jsonl -print -quit)"
+          test -n "$(find /tmp/train-state -name training.sqlite3 -print -quit)"
+
+      - name: Lock independent TRAIN shadow predictions before DDS
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dds_training/work/stage2c5-train
+          mkdir -p dds_training/work/stage2c5-train/prepared dds_training/work/stage2c5-train/result
+          main_tasks="$(find /tmp/train-state -name blind_tasks_crossfit_main.jsonl -print -quit)"
+          s2c2="$(find /tmp/s2c2/extracted -name stage2c2_continuation_results.jsonl -print -quit)"
+          test -n "$main_tasks" && test -n "$s2c2"
+          PYTHONPATH=dds_training python dds_training/stage2c5_train_shadow.py prepare \
+            --main-tasks "$main_tasks" \
+            --stage2b /tmp/s2b/files \
+            --stage2c2 "$s2c2" \
+            --train-policy-evidence dds_training/STAGE2C4_BLIND_REGRESSION_EVIDENCE.json \
+            --out dds_training/work/stage2c5-train/prepared \
+            --source-total 650 \
+            --per-actor 1000 \
+            --line-cards 16 \
+            | tee dds_training/work/stage2c5-train/prepared/prepare.log
+
+      - name: Verify pre-DDS isolation and lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dds_training/work/stage2c5-train/prepared && sha256sum -c locked_train_shadow_predictions.sha256)
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('dds_training/work/stage2c5-train/prepared')
+          e=json.loads((root/'STAGE2C5_TRAIN_PREOPEN_EVIDENCE.json').read_text())
+          assert e['status']=='train_shadow_predictions_locked'
+          assert e['authority']=='EVIDENCE_ONLY'
+          assert e['fit_shadow_family_overlap']==0
+          assert e['curriculum']['selected_by_actor']=={'declarer':1000,'defense':1000}
+          assert e['predictions_locked_before_dds'] is True and e['dds_called'] is False
+          assert e['validation_accessed'] is False and e['sealed_accessed'] is False
+          assert e['learning_mutated'] is False and e['automatic_promotion'] is False
+          print({'status':'LOCKED','positions':e['curriculum']['selected_total'],'family_overlap':0})
+          PY
+
+      - name: Restore verified DDS3 cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            dds_training/.wheel-cache/dds3
+            ~/.cache/bazel-dds3
+          key: dds3-wheel-v5-${{ runner.os }}-py314-${{ hashFiles('dds_training/bootstrap_linux.sh') }}
+          restore-keys: |
+            dds3-wheel-v5-${{ runner.os }}-py314-
+
+      - name: Bootstrap pinned local DDS3
+        run: DDS_RUN_PREFLIGHT=0 bash dds_training/bootstrap_linux.sh
+
+      - name: Evaluate locked TRAIN shadow with DDS
+        shell: bash
+        run: |
+          set -euo pipefail
+          source dds_training/.venv/bin/activate
+          PYTHONPATH=dds_training python dds_training/stage2c5_train_shadow.py evaluate \
+            --prepared dds_training/work/stage2c5-train/prepared \
+            --out dds_training/work/stage2c5-train/result \
+            | tee dds_training/work/stage2c5-train/result/evaluate.log
+
+      - name: Verify TRAIN methodology gate and authority boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          p=Path('dds_training/work/stage2c5-train/result/STAGE2C5_TRAIN_EVIDENCE.json')
+          e=json.loads(p.read_text())
+          assert e['status']=='train_shadow_complete'
+          assert e['positions']==2000
+          assert e['predictions_locked_before_dds'] is True
+          assert e['validation_accessed'] is False and e['sealed_accessed'] is False
+          assert e['learning_mutated'] is False and e['historical_database_mutated'] is False
+          assert e['automatic_promotion'] is False
+          assert e['methodology_checks']['candidate_fit_and_shadow_family_disjoint'] is True
+          assert e['next_gate'] in {'owner_decision_on_validation','return_to_train_new_candidate'}
+          print({'train_gate_pass':e['train_gate_pass'],'methodology_gate_pass':e['methodology_gate_pass'],'next_gate':e['next_gate']})
+          PY
+
+      - name: Verify repository sources remained unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          test -z "$(git status --porcelain=v1 --untracked-files=all | grep -v '^?? dds_training/work/' || true)"
+
+      - name: Package TRAIN shadow evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test -d dds_training/work/stage2c5-train; then
+            tar -czf dds-stage2c5-train-shadow.tgz -C dds_training/work stage2c5-train
+            sha256sum dds-stage2c5-train-shadow.tgz > dds-stage2c5-train-shadow.tgz.sha256
+          fi
+
+      - name: Upload TRAIN shadow evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dds-stage2c5-train-shadow-${{ github.run_id }}
+          path: |
+            dds_training/work/stage2c5-train/prepared/STAGE2C5_TRAIN_PREOPEN_EVIDENCE.json
+            dds_training/work/stage2c5-train/prepared/locked_train_shadow_predictions.sha256
+            dds_training/work/stage2c5-train/result/STAGE2C5_TRAIN_EVIDENCE.json
+            dds_training/work/stage2c5-train/result/stage2c5_train_shadow_results.jsonl
+            dds-stage2c5-train-shadow.tgz
+            dds-stage2c5-train-shadow.tgz.sha256
+          if-no-files-found: warn
