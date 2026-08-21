@@ -1,0 +1,3 @@
+DDS PR-safe Drive observable verifier v1.
+Purpose: independently observe pull_request_target preparation success without Drive secrets or candidate checkout.
+No methodology, bidding, DDS result, holdout, or teacher-authority change.
