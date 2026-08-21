@@ -1,0 +1,256 @@
+name: DDS Stage 2C.5 — validation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/dds-stage2c5-validation.yml'
+      - '.github/scripts/stage2c5_validation.py'
+      - '.github/scripts/stage2c4_train_helpers.py'
+      - 'dds_training/STAGE2C5_VALIDATION_AUTHORIZATION.json'
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: dds-stage2c5-validation-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+env:
+  STAGE2B_ARTIFACT_ID: '9318545935'
+  STAGE2B_ARTIFACT_NAME: 'dds-stage2b-v25-prepared-evidence-32121009819'
+  STAGE2B_ARTIFACT_DIGEST: 'sha256:efdd62ab9a2643f231d3faea5c9475fe519cbd5b2e94dc9a764ca6087c043604'
+  STAGE2C2_ARTIFACT_ID: '9352988318'
+  STAGE2C2_ARTIFACT_NAME: 'dds-stage2c2-train-v2-32217687615'
+  STAGE2C2_ARTIFACT_DIGEST: 'sha256:1fd61be6816df747824467266167dc22e6a88ae4a62794643f14fd176e566da2'
+  TRAIN_DRIVE_LOCATOR: 'dds_training/artifact_locations/dds-main-train-32060398288.json'
+  TRAIN_ARTIFACT_ZIP_SHA256: 'c46cda2fb127371cbc1ab836c74580b25f0a0bb8ab358dfaab97cf591dd8a246'
+  GH_TOKEN: ${{ github.token }}
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  validation:
+    if: >-
+      github.actor == 'olegmed1-art' &&
+      github.event.pull_request.head.ref == 'dds-stage2c5-validation-20260821'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Checkout exact PR merge commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.14'
+
+      - name: Verify owner authority and TRAIN prerequisite
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          a=json.load(open('dds_training/STAGE2C5_VALIDATION_AUTHORIZATION.json',encoding='utf-8'))
+          t=json.load(open('dds_training/STAGE2C5_TRAIN_EVIDENCE.json',encoding='utf-8'))
+          assert a['status']=='OWNER_AUTHORIZED' and a['authority']=='EVIDENCE_ONLY'
+          assert a['validation_scope']['candidate_policy']=='defense_learned__declarer_baseline'
+          assert a['sealed']['access_allowed'] is False
+          assert t['status']=='train_shadow_complete'
+          assert t['train_gate_pass'] is True and t['methodology_gate_pass'] is True
+          assert t['validation_accessed'] is False and t['sealed_accessed'] is False
+          assert t['automatic_promotion'] is False
+          assert t['next_gate']=='owner_decision_on_validation'
+          assert t['locked_prediction_sha256']==a['prerequisite']['locked_train_shadow_prediction_sha256']
+          print({'owner_validation_authorized':True,'train_gate_pass':True,'sealed_access_allowed':False})
+          PY
+
+      - name: Compile runner and validate Drive restore contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile .github/scripts/stage2c4_train_helpers.py .github/scripts/stage2c5_validation.py
+          python -m pip install --disable-pip-version-check 'requests==2.32.5' 'google-auth==2.40.3'
+          PYTHONPATH=. python tests/test_restore_drive_split_artifact.py
+          PYTHONPATH=. python tools/restore_drive_split_artifact.py \
+            --locator "$TRAIN_DRIVE_LOCATOR" \
+            --output /tmp/unused-dds-main-train.zip \
+            --validate-only
+
+      - name: Restore and verify immutable TRAIN evidence artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/s2b /tmp/s2c2
+          mkdir -p /tmp/s2b /tmp/s2c2
+          verify_artifact() {
+            local id="$1" expected_name="$2" expected_digest="$3" meta="$4"
+            gh api -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}" > "$meta"
+            python - "$meta" "$expected_name" "$expected_digest" <<'PY'
+          import json,sys
+          p,name,digest=sys.argv[1:]
+          m=json.load(open(p,encoding='utf-8'))
+          assert m['name']==name,(m['name'],name)
+          assert m.get('digest')==digest,(m.get('digest'),digest)
+          assert not m.get('expired',False),m
+          print({'artifact_id':m['id'],'name':m['name'],'digest':m['digest'],'expired':False})
+          PY
+          }
+          verify_artifact "$STAGE2B_ARTIFACT_ID" "$STAGE2B_ARTIFACT_NAME" "$STAGE2B_ARTIFACT_DIGEST" /tmp/s2b/meta.json
+          verify_artifact "$STAGE2C2_ARTIFACT_ID" "$STAGE2C2_ARTIFACT_NAME" "$STAGE2C2_ARTIFACT_DIGEST" /tmp/s2c2/meta.json
+          gh api -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${STAGE2B_ARTIFACT_ID}/zip" > /tmp/s2b/artifact.zip
+          gh api -H 'Accept: application/vnd.github+json' "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${STAGE2C2_ARTIFACT_ID}/zip" > /tmp/s2c2/artifact.zip
+          unzip -q /tmp/s2b/artifact.zip -d /tmp/s2b/files
+          unzip -q /tmp/s2c2/artifact.zip -d /tmp/s2c2/files
+          test -f /tmp/s2b/files/continuation_curriculum_balanced.jsonl
+          test -n "$(find /tmp/s2c2/files -name stage2c2_continuation_results.jsonl -print -quit)"
+
+      - name: Restore exact completed main corpus from verified Drive copy
+        shell: bash
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/main-train /tmp/train-state
+          mkdir -p /tmp/main-train /tmp/train-state
+          PYTHONPATH=. python tools/restore_drive_split_artifact.py \
+            --locator "$TRAIN_DRIVE_LOCATOR" \
+            --output /tmp/main-train/artifact.zip \
+            --work-dir /tmp/main-train/parts
+          echo "$TRAIN_ARTIFACT_ZIP_SHA256  /tmp/main-train/artifact.zip" | sha256sum -c -
+          unzip -q /tmp/main-train/artifact.zip -d /tmp/main-train/extracted
+          state="$(find /tmp/main-train/extracted -name 'dds-main-train-progress-state.tgz' -print -quit)"
+          test -n "$state"
+          tar -xzf "$state" -C /tmp/train-state
+          test -n "$(find /tmp/train-state -name blind_tasks_crossfit_main.jsonl -print -quit)"
+          test -n "$(find /tmp/train-state -name training.sqlite3 -print -quit)"
+
+      - name: Lock fresh validation predictions before DDS
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf dds_training/work/stage2c5-validation
+          mkdir -p dds_training/work/stage2c5-validation/prepared dds_training/work/stage2c5-validation/result
+          main_tasks="$(find /tmp/train-state -name blind_tasks_crossfit_main.jsonl -print -quit)"
+          s2c2="$(find /tmp/s2c2/files -name stage2c2_continuation_results.jsonl -print -quit)"
+          test -n "$main_tasks" && test -n "$s2c2"
+          PYTHONPATH=dds_training:.github/scripts python .github/scripts/stage2c5_validation.py prepare \
+            --main-tasks "$main_tasks" \
+            --stage2b /tmp/s2b/files \
+            --stage2c2 "$s2c2" \
+            --train-evidence dds_training/STAGE2C5_TRAIN_EVIDENCE.json \
+            --authorization dds_training/STAGE2C5_VALIDATION_AUTHORIZATION.json \
+            --out dds_training/work/stage2c5-validation/prepared \
+            --source-total 650 \
+            --per-actor 1000 \
+            --line-cards 16 \
+            | tee dds_training/work/stage2c5-validation/prepared/prepare.log
+
+      - name: Verify pre-open validation boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dds_training/work/stage2c5-validation/prepared && sha256sum -c locked_validation_predictions.sha256)
+          python - <<'PY'
+          import json,sqlite3
+          from pathlib import Path
+          root=Path('dds_training/work/stage2c5-validation/prepared')
+          e=json.loads((root/'STAGE2C5_VALIDATION_PREOPEN_EVIDENCE.json').read_text())
+          assert e['owner_validation_authorized'] is True
+          assert e['validation_opened'] is True and e['validation_completed'] is False
+          assert e['sealed_accessed'] is False
+          assert e['dds_called'] is False
+          assert e['learning_allowed'] is False and e['learning_mutated'] is False
+          assert e['source_selection']['pairwise_family_overlap']=={'train_validation':0,'train_sealed':0,'validation_sealed':0}
+          assert e['source_selection']['prior_validation_source_families_excluded']==650
+          assert e['source_selection']['prior_new_validation_family_overlap']==0
+          assert e['curriculum']['selected_by_actor']=={'declarer':1000,'defense':1000}
+          tasks=[json.loads(x) for x in (root/'validation_tasks.jsonl').read_text().splitlines() if x.strip()]
+          assert len(tasks)==2000 and all(t['source_root_split']=='validation' for t in tasks)
+          source_ids={str(t['derived_from_task_id']) for t in tasks}
+          derived_ids={str(t['task_id']) for t in tasks}
+          db_path=next(Path('/tmp/train-state').rglob('training.sqlite3'))
+          con=sqlite3.connect(db_path)
+          result_ids={str(x[0]) for x in con.execute('select task_id from dds_results')}
+          con.close()
+          assert not (source_ids & result_ids), 'fresh validation source already has historical DDS result'
+          assert not (derived_ids & result_ids), 'fresh validation continuation already has historical DDS result'
+          print({'validation_predictions_locked':True,'positions':2000,'prior_validation_overlap':0,'sealed_accessed':False})
+          PY
+
+      - name: Restore verified DDS3 cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            dds_training/.wheel-cache/dds3
+            ~/.cache/bazel-dds3
+          key: dds3-wheel-v5-${{ runner.os }}-py314-${{ hashFiles('dds_training/bootstrap_linux.sh') }}
+          restore-keys: |
+            dds3-wheel-v5-${{ runner.os }}-py314-
+
+      - name: Bootstrap pinned local DDS3
+        run: DDS_RUN_PREFLIGHT=0 bash dds_training/bootstrap_linux.sh
+
+      - name: Evaluate locked validation predictions with DDS
+        shell: bash
+        run: |
+          set -euo pipefail
+          source dds_training/.venv/bin/activate
+          PYTHONPATH=dds_training:.github/scripts python .github/scripts/stage2c5_validation.py evaluate \
+            --prepared dds_training/work/stage2c5-validation/prepared \
+            --out dds_training/work/stage2c5-validation/result \
+            | tee dds_training/work/stage2c5-validation/result/evaluate.log
+
+      - name: Verify validation evidence and protected boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          root=Path('dds_training/work/stage2c5-validation')
+          pre=json.loads((root/'prepared/STAGE2C5_VALIDATION_PREOPEN_EVIDENCE.json').read_text())
+          res=json.loads((root/'result/STAGE2C5_VALIDATION_EVIDENCE.json').read_text())
+          assert res['status']=='validation_complete'
+          assert res['owner_validation_authorized'] is True
+          assert res['positions']==2000
+          assert res['predictions_locked_before_dds'] is True
+          assert res['locked_prediction_sha256']==pre['locked_prediction_sha256']
+          assert res['validation_used_for_learning'] is False
+          assert res['validation_used_for_gate_tuning'] is False
+          assert res['sealed_accessed'] is False
+          assert res['learning_mutated'] is False
+          assert res['historical_database_mutated'] is False
+          assert res['automatic_promotion'] is False
+          assert res['by_actor']['declarer']['old']['n']==1000
+          assert res['by_actor']['defense']['old']['n']==1000
+          assert res['next_gate'] in {'owner_decision_on_new_sealed','return_to_train_new_candidate'}
+          print({'validation_complete':True,'validation_gate_pass':res['validation_gate_pass'],'next_gate':res['next_gate'],'sealed_accessed':False})
+          PY
+
+      - name: Verify tracked repository sources remained unchanged
+        run: git diff --exit-code
+
+      - name: Package validation evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          if test -d dds_training/work/stage2c5-validation; then
+            tar -czf dds-stage2c5-validation.tgz -C dds_training/work stage2c5-validation
+            sha256sum dds-stage2c5-validation.tgz > dds-stage2c5-validation.tgz.sha256
+          fi
+
+      - name: Upload Stage 2C.5 validation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dds-stage2c5-validation-${{ github.run_id }}
+          path: |
+            dds_training/work/stage2c5-validation/
+            dds-stage2c5-validation.tgz
+            dds-stage2c5-validation.tgz.sha256
+          retention-days: 30
+          if-no-files-found: warn
