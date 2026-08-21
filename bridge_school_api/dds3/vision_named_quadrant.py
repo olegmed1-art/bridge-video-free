@@ -56,13 +56,13 @@ def _heading_candidates(image: Any, pytesseract: Any) -> dict[str, list[tuple[fl
 
 
 def _seat_headings(image: Any, pytesseract: Any) -> dict[str, tuple[float, float, float]]:
-    """Select the printed seat label that is locally supported by four holding rows.
+    """Select literal seat labels that each have four nearby holding rows.
 
-    Real publication generators do not agree on whether the four named hands are laid out
-    as a cross, a two-column grid, or a vertical stack. Geometry is therefore not used to
-    infer a seat. The literal OCR word supplies the seat identity, while nearby rank-row
-    evidence distinguishes a hand heading from incidental words such as ``Dealer: North``.
-    Exact 52-card validation remains the authoritative acceptance gate later in the path.
+    VuBridge prints the four named hands as horizontally separated columns. We do not
+    infer seat from horizontal order: the OCR word itself names the seat. The narrow
+    local rank window only proves that this occurrence is a hand heading rather than an
+    incidental metadata word such as ``Dealer: North``. Final acceptance still requires
+    the exact standard 52-card deck and explicit metadata OCR.
     """
     labels = _heading_candidates(image, pytesseract)
     if any(not labels[seat] for seat in "NWES"):
@@ -78,23 +78,18 @@ def _seat_headings(image: Any, pytesseract: Any) -> dict[str, tuple[float, float
             nearby = [
                 token
                 for token in tokens
-                if abs(token["cx"] - hx) <= width * 0.28
-                and hy - height * 0.02 <= token["cy"] <= hy + height * 0.32
+                if abs(token["cx"] - hx) <= width * 0.10
+                and hy - height * 0.02 <= token["cy"] <= hy + height * 0.46
             ]
-            rows = _cluster_rows(nearby, tolerance=max(12.0, width * 0.018))
-            rows = [
-                row for row in rows
-                if _row_center(row) >= hy - height * 0.02
-            ]
+            rows = _cluster_rows(nearby, tolerance=max(10.0, width * 0.014))
+            rows = [row for row in rows if _row_center(row) >= hy - height * 0.02]
             if len(rows) < 4:
                 continue
             closest = sorted(rows, key=lambda row: abs(_row_center(row) - hy))[:4]
             closest.sort(key=_row_center)
             centers = [_row_center(row) for row in closest]
             span = centers[-1] - centers[0]
-            # Four suit rows must be visibly distinct and local to this heading. This
-            # blocks incidental metadata labels while remaining layout-orientation neutral.
-            if span < max(18.0, height * 0.025) or span > height * 0.28:
+            if span < max(18.0, height * 0.025) or span > height * 0.42:
                 continue
             score = sum(abs(center - hy) for center in centers) - 35.0 * conf
             if best is None or score < best[0]:
@@ -118,18 +113,16 @@ def _rows_for_heading(
     candidates = [
         token
         for token in tokens
-        if abs(token["cx"] - hx) <= image_width * 0.22
-        and hy - image_height * 0.025 <= token["cy"] <= hy + image_height * 0.25
+        if abs(token["cx"] - hx) <= image_width * 0.10
+        and hy - image_height * 0.02 <= token["cy"] <= hy + image_height * 0.46
     ]
-    rows = _cluster_rows(candidates, tolerance=max(12.0, image_width * 0.018))
-    rows = [row for row in rows if _row_center(row) >= hy - image_height * 0.025]
+    rows = _cluster_rows(candidates, tolerance=max(10.0, image_width * 0.014))
+    rows = [row for row in rows if _row_center(row) >= hy - image_height * 0.02]
     rows.sort(key=lambda row: (_row_center(row), min(item["x"] for item in row)))
     if len(rows) < 4:
         raise NamedQuadrantVisionError("INCOMPLETE_NAMED_HAND_ROWS")
     rows = sorted(rows, key=lambda row: abs(_row_center(row) - hy))[:4]
     rows.sort(key=_row_center)
-    if len(rows) != 4:
-        raise NamedQuadrantVisionError("INCOMPLETE_NAMED_HAND_ROWS")
     return rows
 
 
@@ -208,31 +201,15 @@ def extract_named_quadrant_observation(
     source = "local_tesseract_named_quadrant_v1"
     return ScreenshotDealObservation(
         hands=hands,
-        board_number=ObservedField(
-            board, confidence=metadata_confidence, source=source
-        ),
-        dealer=ObservedField(
-            dealer, confidence=metadata_confidence, source=source
-        ),
-        vulnerability=ObservedField(
-            vulnerability, confidence=metadata_confidence, source=source
-        ),
+        board_number=ObservedField(board, confidence=metadata_confidence, source=source),
+        dealer=ObservedField(dealer, confidence=metadata_confidence, source=source),
+        vulnerability=ObservedField(vulnerability, confidence=metadata_confidence, source=source),
         hand_confidence=hand_confidence,
         extra_metadata={
-            "vision_extractor": ObservedField(
-                source, confidence=1.0, source="runtime"
-            ),
-            "layout_family": ObservedField(
-                "named_quadrant", confidence=1.0, source="runtime"
-            ),
-            "image_sha256": ObservedField(
-                image_sha256, confidence=1.0, source="runtime"
-            ),
-            "filename": ObservedField(
-                filename, confidence=1.0, source="runtime"
-            ),
-            "media_type": ObservedField(
-                media_type, confidence=1.0, source="runtime"
-            ),
+            "vision_extractor": ObservedField(source, confidence=1.0, source="runtime"),
+            "layout_family": ObservedField("named_quadrant", confidence=1.0, source="runtime"),
+            "image_sha256": ObservedField(image_sha256, confidence=1.0, source="runtime"),
+            "filename": ObservedField(filename, confidence=1.0, source="runtime"),
+            "media_type": ObservedField(media_type, confidence=1.0, source="runtime"),
         },
     )
