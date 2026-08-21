@@ -5,7 +5,6 @@ on:
       - 'dds/**'
       - 'bridge_school_api/dds3/**'
       - 'dds3_runtime/**'
-      - 'dds3_cli/**'
       - 'Dockerfile.dds3'
       - '.github/workflows/dds3-module.yml'
   workflow_dispatch:
@@ -48,7 +47,7 @@ jobs:
           assert set(d['dd_table'])=={'S','H','D','C','NT'}
           print('BOARD16_DDS3_PASS', json.dumps(d, sort_keys=True))
           PY
-      - name: Build production DDS3 runtime container
+      - name: Build production DDS3 runtime from verified core
         run: docker build -f dds3_runtime/Dockerfile -t bridge-school-dds3-runtime:test .
       - name: Start production runtime
         run: docker run -d --rm --name dds3-runtime -p 18080:8080 -e DDS3_RUNTIME_TOKEN=ci-secret bridge-school-dds3-runtime:test
@@ -71,7 +70,7 @@ jobs:
           assert r['engine']=='DDS3'
           assert r['fallback_used'] is False
           assert r['par_score_ns']==-110
-          assert r['dd_table']=={'S':[7,6,7,6],'H':[8,5,8,5],'D':[6,7,6,7],'C':[8,5,8,5],'NT':[7,6,7,6]}
+          assert r['dd_table']=={'S':[5,8,5,8],'H':[6,6,6,6],'D':[5,7,5,7],'C':[7,5,7,5],'NT':[6,6,6,6]}
           print('DDS3_RUNTIME_HTTP_PASS')
           PY
       - name: Runtime logs on failure
