@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Real field gate for the named VuBridge hand-diagram layout.
 
-Canonical truth is parsed from embedded source-PDF vector text. Vector geometry is used
-only to choose the temporary rendered test crop; the production extractor receives PNG
-pixels only. DDS3 is never used to create truth and vector card values are never used to
-repair OCR output.
+Canonical truth is parsed from embedded source-PDF vector text. PDF vector geometry is
+used only to locate the temporary hand-diagram/header crop that is rendered to PNG; the
+production extractor receives pixels only. Vector card values never repair OCR output,
+and DDS3 is never used to create truth.
 """
 from __future__ import annotations
 
@@ -55,8 +55,6 @@ def _metadata_truth(text: str) -> tuple[int, str, str]:
 
 
 def _hand_truth(lines: list[str], seat: str) -> str:
-    # Source text can also contain auction headings with the same seat words. Select the
-    # occurrence whose following source lines actually contain the four printed suit rows.
     starts = [i for i, line in enumerate(lines) if line.strip().lower() == seat.lower()]
     for start in starts:
         rows: dict[str, str] = {}
@@ -89,70 +87,36 @@ def _truth(page: fitz.Page) -> tuple[int, str, str, dict[str, str]]:
     return board, dealer, vulnerability, hands
 
 
-def _looks_like_rank_word(text: str) -> bool:
-    cleaned = re.sub(r"\s+", "", text.upper()).replace("10", "T")
-    return bool(cleaned) and all(char in RANKS for char in cleaned)
-
-
-def _near_hand_words(words, heading):
-    cx0 = (heading[0] + heading[2]) / 2
-    return [
-        word for word in words
-        if heading[1] - 5 <= (word[1] + word[3]) / 2 <= heading[3] + 190
-        and abs((word[0] + word[2]) / 2 - cx0) <= 105
-    ]
-
-
-def _select_hand_heading(words, seat: str):
-    candidates = [word for word in words if word[4].strip().lower() == seat]
-    if not candidates:
-        raise ValueError(f"source seat heading missing for crop: {seat}")
-    scored = []
-    for heading in candidates:
-        nearby = _near_hand_words(words, heading)
-        suit_words = [word for word in nearby if word[4].strip() and word[4].strip()[0] in SUITS]
-        suit_kinds = {word[4].strip()[0] for word in suit_words}
-        rank_words = [word for word in nearby if _looks_like_rank_word(word[4].strip())]
-        # Auction column labels have no four-suit hand beneath them. The actual hand
-        # heading must be locally supported by at least three distinct printed suit glyphs
-        # and several rank strings; the exact 52-card truth gate remains independent.
-        if len(suit_kinds) >= 3 and len(rank_words) >= 3:
-            score = 100 * len(suit_kinds) + 10 * len(rank_words) - heading[1] * 0.001
-            scored.append((score, heading))
-    if not scored:
-        raise ValueError(f"source hand heading lacks suit-row evidence: {seat}")
-    scored.sort(key=lambda item: item[0], reverse=True)
-    return scored[0][1]
+def _hand_block(page: fitz.Page, seat: str):
+    matches = []
+    for block in page.get_text("blocks"):
+        text = str(block[4])
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not any(line.lower() == seat for line in lines):
+            continue
+        suit_count = sum(1 for line in lines if line and line[0] in SUITS)
+        if suit_count >= 3:
+            matches.append(block)
+    if not matches:
+        raise ValueError(f"source hand block missing for crop: {seat}")
+    # Prefer the tightest block with the four visible suit rows; this excludes narrative
+    # blocks that happen to mention a seat and a card symbol.
+    return min(matches, key=lambda block: (block[2] - block[0]) * (block[3] - block[1]))
 
 
 def _deal_clip(page: fitz.Page) -> fitz.Rect:
-    words = page.get_text("words")
-    chosen = {seat: _select_hand_heading(words, seat) for seat in ("north", "west", "east", "south")}
-
-    relevant = list(chosen.values())
-    for heading in chosen.values():
-        for word in _near_hand_words(words, heading):
-            text = word[4].strip()
-            if text and (text[0] in SUITS or _looks_like_rank_word(text)):
-                relevant.append(word)
-
-    # Include explicit metadata labels and the complete vector words on their lines so
-    # the rendered image contains Board/Dealer/Vulnerable exactly as a user screenshot can.
-    metadata_labels = [
-        word for word in words
-        if word[4].strip().lower().rstrip(":#") in {"board", "dealer", "vulnerable"}
+    blocks = [_hand_block(page, seat) for seat in ("north", "west", "east", "south")]
+    metadata = [
+        block for block in page.get_text("blocks")
+        if re.search(r"Board\s*#\s*:\s*\d+", str(block[4]), re.I)
+        or re.search(r"Dealer\s*:\s*(North|East|South|West)", str(block[4]), re.I)
+        or re.search(r"Vulnerable\s*:", str(block[4]), re.I)
     ]
-    for label in metadata_labels:
-        cy = (label[1] + label[3]) / 2
-        relevant.extend(
-            word for word in words
-            if abs((word[1] + word[3]) / 2 - cy) <= 8
-            and word[0] <= label[2] + 180
-            and word[2] >= label[0] - 20
-        )
-
-    x0 = min(word[0] for word in relevant); y0 = min(word[1] for word in relevant)
-    x1 = max(word[2] for word in relevant); y1 = max(word[3] for word in relevant)
+    if not metadata:
+        raise ValueError("source metadata block missing for crop")
+    relevant = blocks + metadata
+    x0 = min(block[0] for block in relevant); y0 = min(block[1] for block in relevant)
+    x1 = max(block[2] for block in relevant); y1 = max(block[3] for block in relevant)
     return fitz.Rect(max(0, x0 - 18), max(0, y0 - 16), min(page.rect.width, x1 + 18), min(page.rect.height, y1 + 22))
 
 
