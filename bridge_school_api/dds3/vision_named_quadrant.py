@@ -17,7 +17,6 @@ from .screenshot import ObservedField, ScreenshotDealObservation
 from .vision_publication import (
     PublicationVisionError,
     _clean_rank_text,
-    _decode,
     _deps,
     _extract_metadata,
 )
@@ -25,6 +24,30 @@ from .vision_publication import (
 
 class NamedQuadrantVisionError(ValueError):
     pass
+
+
+def _decode_named(image_bytes: bytes, cv2: Any, np: Any) -> Any:
+    """Decode this dense four-column family at a deterministic high working resolution."""
+    if not image_bytes:
+        raise NamedQuadrantVisionError("EMPTY_IMAGE")
+    image = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        raise NamedQuadrantVisionError("IMAGE_DECODE_FAILED")
+    height, width = image.shape[:2]
+    if width < 250 or height < 180:
+        raise NamedQuadrantVisionError("IMAGE_TOO_SMALL")
+    # The generic publication extractor normalizes to 700px because it contains one
+    # central cross. This family contains four independent hands side-by-side; keeping
+    # twice that width preserves enough literal glyph detail for local OCR.
+    target_width = 1400
+    if width != target_width:
+        scale = target_width / float(width)
+        image = cv2.resize(
+            image,
+            (target_width, max(1, round(height * scale))),
+            interpolation=cv2.INTER_CUBIC if scale >= 1 else cv2.INTER_AREA,
+        )
+    return image
 
 
 def _heading_candidates(image: Any, pytesseract: Any) -> dict[str, list[tuple[float, float, float]]]:
@@ -52,8 +75,6 @@ def _four_column_headings(image: Any, pytesseract: Any) -> dict[str, tuple[float
     if any(not labels[seat] for seat in "NWES"):
         raise NamedQuadrantVisionError("UNSUPPORTED_LAYOUT_NAMED_QUADRANT_NO_HEADINGS")
     height, width = image.shape[:2]
-    # The hand-heading occurrence is the set of one label per seat lying on the same
-    # horizontal publication band. Incidental metadata labels occur elsewhere.
     best: tuple[float, dict[str, tuple[float, float, float]]] | None = None
     for n in labels["N"]:
         for w in labels["W"]:
@@ -82,19 +103,17 @@ def _column_bounds(headings: dict[str, tuple[float, float, float]], width: int) 
     for index, (x, seat) in enumerate(ordered):
         left = 0 if index == 0 else int((ordered[index - 1][0] + x) / 2)
         right = width if index == len(ordered) - 1 else int((x + ordered[index + 1][0]) / 2)
-        # Keep a small inner gutter so letters from adjacent columns cannot leak in.
-        gutter = max(2, int(width * 0.006))
+        gutter = max(3, int(width * 0.006))
         out[seat] = (max(0, left + gutter), min(width, right - gutter))
     return out
 
 
 def _rank_lines_from_crop(crop: Any, pytesseract: Any, cv2: Any) -> list[str]:
-    crop = cv2.resize(crop, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     candidates: list[tuple[str, ...]] = []
     for source in (gray, binary):
-        for psm in (6, 11):
+        for psm in (6, 11, 12):
             raw = pytesseract.image_to_string(
                 source,
                 config=f"--psm {psm} -c tessedit_char_whitelist=AKQJT9876543210",
@@ -104,7 +123,6 @@ def _rank_lines_from_crop(crop: Any, pytesseract: Any, cv2: Any) -> list[str]:
                 value = _clean_rank_text(line)
                 if value:
                     lines.append(value)
-            # This bounded family has exactly four visible S/H/D/C holding rows.
             if len(lines) >= 4:
                 candidate = tuple(lines[:4])
                 if sum(len(value) for value in candidate) == 13:
@@ -129,10 +147,10 @@ def _extract_four_column_hands(
     confidence: dict[str, dict[str, float]] = {}
     cards: list[str] = []
     for seat in "NESW":
-        hx, hy, _ = headings[seat]
+        _, hy, _ = headings[seat]
         x0, x1 = bounds[seat]
-        y0 = max(0, int(hy + height * 0.025))
-        y1 = min(height, int(hy + height * 0.46))
+        y0 = max(0, int(hy + height * 0.020))
+        y1 = min(height, int(hy + height * 0.620))
         crop = image[y0:y1, x0:x1]
         if crop.size == 0:
             raise NamedQuadrantVisionError(f"EMPTY_HAND_CROP:{seat}")
@@ -154,7 +172,7 @@ def extract_named_quadrant_observation(
     image_bytes: bytes, *, media_type: str, filename: str | None = None
 ) -> ScreenshotDealObservation:
     cv2, np, pytesseract = _deps()
-    image = _decode(image_bytes, cv2, np)
+    image = _decode_named(image_bytes, cv2, np)
     headings = _four_column_headings(image, pytesseract)
     hands, hand_confidence = _extract_four_column_hands(image, headings, pytesseract, cv2)
     try:
