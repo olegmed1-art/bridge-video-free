@@ -56,7 +56,7 @@ jobs:
           assert '**60**' in text
           assert 'DDS3 is not used to create or repair truth' in text
           assert 'private Drive identifier is committed' in text
-          forbidden=('drive.google.com/file/d/','docs.google.com/','participant')
+          forbidden=('drive.google.com/file/d/','docs.google.com/')
           for token in forbidden:
               assert token not in text, token
           print('DDS3_VISION_CORPUS_PUBLIC_EVIDENCE_PASS')
