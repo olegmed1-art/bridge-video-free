@@ -1,1 +1,80 @@
-__TO_BE_FILLED__
+{
+  "schema": "bridge-tournament-facts-v1",
+  "source": {
+    "drive_id": "1RQ__9B-vyQ8qUb7Q959PE7PFsHJSgudH",
+    "sha256": "9285e27c56906bdc18f729045927c9bbbcc45146127d99420bdd4e1834264e9f",
+    "size_bytes": 307707,
+    "title": "Разбор_турнира_30041_для_Дианы_Векслер_v1.2 (1).pptx",
+    "official_session_url": "https://www.bridge.co.il/viewer/session.php?event=30041&round=2",
+    "official_personal_url": "https://www.bridge.co.il/viewer/personal.php?event=30041&round=2&seat=112"
+  },
+  "tournament": {
+    "provider_native_key": "bridge.co.il:event:30041:round:2",
+    "date": "2026-08-15",
+    "location": "Петах-Тиква",
+    "scoring": "MP",
+    "pair_key": "bridge.co.il:event:30041:round:2:seat:112",
+    "pair_number": "112",
+    "members": [
+      "Борис Гольдштейн",
+      "Диана Векслер"
+    ],
+    "final_percentage": 54.57,
+    "rank": 8,
+    "field_size": 23,
+    "counted_results": 22,
+    "played_boards": 21,
+    "average_results": 1,
+    "unplayed_boards": 2
+  },
+  "policy": {
+    "mode": "FACTS_ONLY",
+    "normative_algorithm": "1.4",
+    "student_observation_writes_allowed": false,
+    "reason": "Historical report has recommended auctions and no play record; RESULT != SKILL and ONE-BOARD RULE apply."
+  },
+  "columns": [
+    "board",
+    "slide",
+    "dealer",
+    "vulnerability",
+    "N",
+    "E",
+    "S",
+    "W",
+    "pair_direction",
+    "status",
+    "contract",
+    "declarer",
+    "result_delta",
+    "opening_lead",
+    "pair_score",
+    "pair_percentage"
+  ],
+  "rows": [
+    "1|3|N|None|9.AT2.JT2.Q98643|K762.Q5.AK64.AKT|AQJ8.K976.Q75.J7|T543.J843.983.52|E–W|average||||||60.0",
+    "2|4|E|NS|A73.Q8753.J2.642|T95.J94.K9876.KJ|KQ84.K2.AQ.AT753|J62.AT6.T543.Q98|E–W|played|3NT|S|0|S2|-600|33.5",
+    "3|5|S|EW|K.AT76.74.AQJT83|T6.95.AKQ9832.42|AQJ432.K8.T6.K96|9875.QJ432.J5.75|E–W|played|4S|S|1|DJ|-450|22.5",
+    "4|6|W|Both|3.AT9852.A54.JT4|Q5.6.KQT9862.K52|AJT8762.J3.J7.63|K94.KQ74.3.AQ987|E–W|played|3S|S|-3|D3|300|66.5",
+    "5|7|N|NS|T8.AQ964.Q74.K82|K653.532.AK8.J95|QJ9742.JT.J3.764|A.K87.T9652.AQT3|E–W|played|3S|S|-2|D9|200|88.5",
+    "6|8|E|EW|AQJ76.AJ86.Q53.J|952.K32.KJT94.A2|K843.QT5.A.KT975|T.974.8762.Q8643|E–W|played|4S|N|1|DJ|-450|22.5",
+    "7|9|S|Both|A43.AK.K2.KQJ876|QJ52.QT3.43.T532|K987.J875.AJ987.-|T6.9642.QT65.A94|E–W|played|3C|N|1|SQ|-130|88.5",
+    "8|10|W|None|KJ72.AQ5.KJT8.A8|8543.873.AQ2.K95|Q6.K62.76543.QT3|AT9.JT94.9.J7642|E–W|played|2NT|S|-2|HJ|100|88.5",
+    "9|11|N|EW|Q974.75.742.Q876|J83.AK842.6.AKT4|KT2.63.KJT853.52|A65.QJT9.AQ9.J93|E–W|played|6H|E|0|C5|1430|99.5",
+    "10|12|E|Both|KJ642.T97.A95.A6|AQT7.54.J2.Q8543|9853.QJ83.K64.K9|-.AK62.QT873.JT72|E–W|played|3S|N|-2|H5|200|83.0",
+    "11|13|S|None|J74.KT963.94.752|T9853.4.Q2.AK863|6.QJ75.JT76.JT94|AKQ2.A82.AK853.Q|E–W|played|4S|E|3|HQ|510|44.5",
+    "12|14|W|NS|Q876.963.T32.A96|KJ9.Q8.Q875.KT75|543.AKT754.A64.2|AT2.J2.KJ9.QJ843|E–W|played|4HX|S|-1|CQ|200|77.5",
+    "13|15|N|Both|J3.QT62.A43.AK54|KQT86.J4.KT65.QJ|95.K9753.Q7.T632|A742.A8.J982.987|N–S|played|2S|E|0|C6|-110|28.0",
+    "14|16|E|None|J865.98.K65.J653|AT3.AQJ542.QT2.9|4.K3.AJ743.AQT84|KQ972.T76.98.K72|N–S|played|4H|E|0|S4|-420|6.0",
+    "15|17|S|NS|Q3.Q9.A82.J98753|KJ6.AJ87632.43.6|AT94.5.9765.KQ42|8752.KT4.KQJT.AT|E–W|played|3H|E|2|CK|200|0.5",
+    "16|18|W|EW|8.T74.T87542.987|KQJT6.K93.Q96.AT|A432.Q8.KJ3.KQ64|975.AJ652.A.J532|E–W|played|4S|E|0|DK|620|50.0",
+    "17|19|N|None|KJ7.74.AQ7543.K5|42.A5.T96.A87642|AQ9653.Q92.82.QJ|T8.KJT863.KJ.T93|N–S|played|4S|S|0|C9|420|70.0",
+    "18|20|E|NS|A9876.J43.AKQ3.Q|K532.T986.T.K652|QJ.AQ72.98642.84|T4.K5.J75.AJT973|N–S|played|3D|N|0|C2|110|60.0",
+    "19|21|S|EW|QT95.KJ876.AJ7.7|AJ72.AT5.K65.A53|K643.Q93.T832.86|8.42.Q94.KQJT942|E–W|played|3H|N|0|CA|-140|6.0",
+    "20|22|W|Both|QT9843.KJ.AT4.A7|-.T75.KQJ7.QJ8653|A2.A64.985.KT942|KJ765.Q9832.632.-|E–W|played|3SX|N|-1|DK|200|66.5",
+    "21|23|N|NS|9864.8.K84.97432|A72.KJ973.93.AK6|K3.Q62.AQJ765.Q8|QJT5.AT54.T2.JT5||unplayed||||||",
+    "22|24|E|EW|KJ9852.J65.9.Q82|743.KQT73.KQT.K9|AQ6.-.J76432.AJ63|T.A9842.A85.T754||unplayed||||||",
+    "23|25|S|Both|QT.J93.Q876.T873|AJ72.AKQ652.2.A2|98653.-.AT54.KQ65|K4.T874.KJ93.J94|E–W|played|4H|E|1|CK|650|39.0",
+    "24|26|W|None|Q.KJ8765.KJ.AK53|A9.AQT.AQ9653.J4|KT43.9.8742.Q986|J87652.432.T.T72|E–W|played|4CX|N|-4|SA|800|99.5"
+  ]
+}
