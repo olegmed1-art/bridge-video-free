@@ -16,6 +16,10 @@ on:
         description: 'Verified repository evaluator command'
         required: true
         type: string
+      prior_pass_path:
+        description: 'For 30k/40k: restored prior-stage checkpoint JSON'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -42,12 +46,24 @@ jobs:
         shell: bash
         env:
           TARGET: ${{ inputs.target }}
+          PRIOR_PASS: ${{ inputs.prior_pass_path }}
         run: |
           set -euo pipefail
           case "$TARGET" in
             10000) ;;
-            30000) test -f dds_training/evidence/a11-10000.PASS ;;
-            40000) test -f dds_training/evidence/a11-30000.PASS ;;
+            30000|40000)
+              test -n "$PRIOR_PASS"
+              test -f "$PRIOR_PASS"
+              python - "$TARGET" "$PRIOR_PASS" <<'PY'
+          import json, sys
+          target=int(sys.argv[1]); p=sys.argv[2]
+          d=json.load(open(p,encoding='utf-8'))
+          expected=10000 if target==30000 else 30000
+          assert d.get('status')=='passed'
+          assert d.get('target')==expected
+          assert d.get('authority')=='EVIDENCE_ONLY'
+          PY
+              ;;
             *) exit 64 ;;
           esac
 
@@ -66,13 +82,12 @@ jobs:
             --checkpoint "dds_training/evidence/a11-${TARGET}.checkpoint.json" \
             --evidence "dds_training/evidence/a11-${TARGET}.evidence.json" \
             --evaluator "$EVALUATOR" --resume
-          touch "dds_training/evidence/a11-${TARGET}.PASS"
 
       - name: Upload A11 evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: a11-${{ inputs.target }}-evidence
-          path: dds_training/evidence/a11-${{ inputs.target }}.*
+          path: dds_training/evidence/a11-${{ inputs.target }}.*.json
           if-no-files-found: error
           retention-days: 30
