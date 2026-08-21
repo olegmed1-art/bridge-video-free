@@ -1,0 +1,59 @@
+name: DDS3 publication cross vision field gate
+on:
+  pull_request:
+    paths:
+      - 'bridge_school_api/dds3/vision_publication.py'
+      - 'bridge_school_api/dds3/image_ingress.py'
+      - 'tools/dds3_vision/evaluate_publication_cross.py'
+      - 'requirements-dds3-vision.txt'
+      - '.github/workflows/dds3-publication-vision.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publication-cross-field:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install local/free vision runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tesseract-ocr
+          python -m pip install --disable-pip-version-check -r requirements-dds3-vision.txt
+      - name: Compile bounded layout code
+        run: |
+          python -m py_compile bridge_school_api/dds3/vision_publication.py
+          python -m py_compile bridge_school_api/dds3/image_ingress.py
+          python -m py_compile tools/dds3_vision/evaluate_publication_cross.py
+      - name: Enforce fail-closed dispatch source contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          ingress=Path('bridge_school_api/dds3/image_ingress.py').read_text(encoding='utf-8')
+          publication=Path('bridge_school_api/dds3/vision_publication.py').read_text(encoding='utf-8')
+          assert 'startswith("UNSUPPORTED_LAYOUT_")' in ingress
+          assert 'DECK_VALIDATION_FAILED' in publication
+          assert 'derive_board_metadata' not in publication
+          assert 'local_tesseract_publication_cross_v1' in publication
+          assert 'fallback_used' in ingress
+          print('DDS3_PUBLICATION_DISPATCH_CONTRACT_PASS')
+          PY
+      - name: Run real public-source field gate
+        env:
+          PYTHONPATH: .
+        run: |
+          python tools/dds3_vision/evaluate_publication_cross.py --output publication-field.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: dds3-publication-cross-field
+          path: publication-field.json
+          if-no-files-found: warn
