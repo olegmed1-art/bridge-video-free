@@ -35,6 +35,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Build pinned DDS3 base image
+        run: docker build -f Dockerfile.dds3 -t bridge-school-dds3:latest .
       - name: Build pinned DDS3 runtime image
         run: docker build -f dds3_runtime/Dockerfile -t bridge-school-dds3-runtime:manual .
       - name: Start runtime
