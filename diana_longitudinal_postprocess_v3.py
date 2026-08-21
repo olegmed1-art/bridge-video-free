@@ -1,58 +1,57 @@
 #!/usr/bin/env python3
-"""Run the mature Drive postprocessor with quality-v4.1 semantic refinement.
+"""Workflow-compatibility entry point for the current v4.2 semantic layer.
 
-The filename stays ``postprocess_v3`` for workflow compatibility.  The outer
-artifact envelope is reused, while the embedded quality schema is v4 and the
-method revision is v4.1.  No media, ASR or identity evidence is reprocessed by
-this wrapper.
+The historical filename stays ``postprocess_v3`` so production workflow wiring
+does not fork.  v4.2 preserves v4.1 Learning Interaction behavior and adds only
+conservative report-visual partial-board reconstruction plus content-addressed,
+SHA-verified Drive artifact idempotency.  Source video and raw ASR stay read-only.
 """
 from __future__ import annotations
 
+import importlib.util
+import subprocess
+import sys
+
 import diana_longitudinal_postprocess as base
-from diana_longitudinal_quality_v4_1 import (
+from diana_longitudinal_quality_v4_2 import (
     QUALITY_METHOD_VERSION,
     QUALITY_SCHEMA_VERSION,
     build_quality_layer,
 )
 
-# Reuse mature Drive/Neon routing and replace only the semantic quality layer.
-# Source-read-only, FREE, identity and staging-only authority gates are preserved.
+# Compatibility values for code/tests that import the historical wrapper.
 base.build_quality_layer = build_quality_layer
 base.QUALITY_METHOD_VERSION = QUALITY_METHOD_VERSION
 base.QUALITY_SCHEMA_VERSION = QUALITY_SCHEMA_VERSION
-base.SCHEMA_VERSION = 4
-
-_legacy_summary_markdown = base._summary_markdown
+base.SCHEMA_VERSION = 5
 
 
-def _summary_markdown_v41(payload):
-    text = _legacy_summary_markdown(payload)
-    text = text.replace(
-        "# Диана — продольное извлечение v2",
-        "# Диана — продольное извлечение v4.1",
-    )
-    marker = "## Quality-first counts"
-    dynamic_note = "\n".join([
-        "## Evidence-linked learning v4.1",
-        "",
-        "- Complete interactions require observed task → student action → teacher intervention → substantive student follow-up.",
-        "- Weak interrogative cues without a real question do not create a decision window.",
-        "- Task and student action must share bridge context, except a compact numeric answer to an explicit count question.",
-        "- Nested prompts sharing one intervention/follow-up core are deduplicated and re-anchored to the latest matching source segment.",
-        "- A follow-up never proves correctness by itself; correctness remains separately evidence-gated.",
-        "- Acoustic speaker coverage and semantic role fallback are reported separately.",
-        "- Structured board fragments merge only under an exact explicit board identity; board number/time/topic alone never merge.",
-        "- Knowledge candidates are review-only; the legacy word 'promotable' is a deprecated compatibility alias.",
-        "- Stable skill state is forbidden from one lesson alone.",
-        "- Person-specific conclusions remain forbidden without a separate operational r29 identity mapping.",
-        "- This is a semantic-only rebuild; raw ASR and source media remain unchanged.",
-        "",
+def _ensure_report_runtime() -> None:
+    """Install pinned FREE report-image dependencies only when heavy runtime was skipped.
+
+    The production workflow intentionally skips requirements-worker.txt for an
+    already-completed media job.  v4.2 must still be able to perform a semantic-
+    only rerun from the master PDF.  Keep this bootstrap explicit, pinned and
+    fail-closed rather than forcing a new heavy video/ASR pass.
+    """
+    missing = []
+    if importlib.util.find_spec('cv2') is None:
+        missing.append('opencv-python-headless==5.0.0.93')
+    if importlib.util.find_spec('PIL') is None:
+        missing.append('Pillow==12.3.0')
+    if not missing:
+        return
+    print('V42_REPORT_RUNTIME_BOOTSTRAP: installing pinned FREE dependencies: ' + ', '.join(missing))
+    subprocess.check_call([
+        sys.executable, '-m', 'pip', 'install', '--disable-pip-version-check', *missing,
     ])
-    return text.replace(marker, dynamic_note + marker)
 
 
-base._summary_markdown = _summary_markdown_v41
+def main() -> int:
+    _ensure_report_runtime()
+    from diana_longitudinal_postprocess_v4_2 import main as current_main
+    return current_main()
 
 
 if __name__ == "__main__":
-    raise SystemExit(base.main())
+    raise SystemExit(main())
