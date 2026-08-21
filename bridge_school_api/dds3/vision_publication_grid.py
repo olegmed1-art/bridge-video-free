@@ -14,11 +14,11 @@ from typing import Any
 from .screenshot import ObservedField, ScreenshotDealObservation
 from .vision_publication import (
     PublicationVisionError,
+    _clean_rank_text,
     _cluster_rows,
     _deps,
     _extract_metadata,
     _glyph_column,
-    _ocr_holding_row,
     _rank_tokens,
     _row_center,
 )
@@ -37,10 +37,6 @@ def _decode_grid(image_bytes: bytes, cv2: Any, np: Any) -> Any:
     height, width = image.shape[:2]
     if width < 250 or height < 180:
         raise PublicationGridVisionError("IMAGE_TOO_SMALL")
-    # Keep the native high-resolution publication crop whenever practical. The older
-    # cross-family normalizer intentionally targets 700px, but this print font loses
-    # small terminal ranks at that scale. This is a pixel-resolution choice only; no
-    # card value is inferred from layout or deck inventory.
     if width < 600:
         scale = 700.0 / width
         image = cv2.resize(
@@ -95,6 +91,67 @@ def _grid_rows(image: Any, pytesseract: Any) -> dict[str, list[list[dict[str, An
     return {"N": north_rows, "E": east_rows, "S": south_rows, "W": west_rows}
 
 
+def _ocr_grid_holding_row(
+    image: Any,
+    row: list[dict[str, Any]],
+    glyph_x: float,
+    pytesseract: Any,
+    cv2: Any,
+) -> tuple[str, float]:
+    """Read only the printed holding, excluding the suit-glyph column by geometry.
+
+    The print family has a stable ~5.5% image-width gap from the left edge of the suit
+    glyph to the first rank. Starting after that gap avoids the OCR failure where the
+    suit symbol and first rank are fused into one pseudo-character. Candidate readings
+    come from independent grayscale/binary + PSM passes. No deck state is consulted.
+    """
+    if not row:
+        return "", 0.0
+    height, width = image.shape[:2]
+    cy = _row_center(row)
+    y0 = max(0, int(cy - max(20.0, width * 0.028)))
+    y1 = min(height, int(cy + max(20.0, width * 0.028)))
+    x0 = max(0, int(glyph_x + width * 0.055))
+    x1 = min(width, int(x0 + width * 0.30))
+    crop = image[y0:y1, x0:x1]
+    if not crop.size:
+        raise PublicationGridVisionError("EMPTY_HOLDING_CROP")
+
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    candidates: list[str] = []
+    for source in (gray, binary):
+        for scale in (2, 3):
+            enlarged = cv2.resize(
+                source, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC
+            )
+            for psm in (7, 8, 13):
+                raw = pytesseract.image_to_string(
+                    enlarged,
+                    config=(
+                        f"--psm {psm} "
+                        "-c tessedit_char_whitelist=AKQJT9876543210"
+                    ),
+                )
+                cleaned = _clean_rank_text(raw)
+                if cleaned:
+                    candidates.append(cleaned)
+
+    if not candidates:
+        return "", 0.55
+    counts = {value: candidates.count(value) for value in set(candidates)}
+    ordered = sorted(counts.items(), key=lambda item: (-item[1], -len(item[0]), item[0]))
+    best, votes = ordered[0]
+    # Pixel/OCR ambiguity stops here. We never select a reading because it fills the
+    # missing card in the deck. Require repeated agreement across preprocessing passes.
+    if votes < 2:
+        raise PublicationGridVisionError(f"AMBIGUOUS_CARD_OCR:{ordered}")
+    if len(ordered) > 1 and ordered[1][1] == votes and ordered[1][0] != best:
+        raise PublicationGridVisionError(f"AMBIGUOUS_CARD_OCR:{ordered}")
+    confidence = min(0.92, 0.58 + 0.04 * votes)
+    return best, confidence
+
+
 def _extract_grid_hands(
     image: Any, pytesseract: Any, cv2: Any
 ) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, float]]]:
@@ -108,12 +165,9 @@ def _extract_grid_hands(
         holdings: list[str] = []
         row_confidence: list[float] = []
         for row in rows[hand]:
-            try:
-                value, conf = _ocr_holding_row(
-                    image, row, glyph_x[hand], pytesseract, cv2
-                )
-            except PublicationVisionError as exc:
-                raise PublicationGridVisionError(str(exc)) from exc
+            value, conf = _ocr_grid_holding_row(
+                image, row, glyph_x[hand], pytesseract, cv2
+            )
             holdings.append(value)
             row_confidence.append(conf)
         if sum(len(value) for value in holdings) != 13:
