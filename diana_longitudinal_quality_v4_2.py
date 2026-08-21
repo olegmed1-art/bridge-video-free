@@ -6,6 +6,11 @@ zero-paid-AI gates.  Its only semantic addition is to admit independently parsed
 report-visual card observations as ordinary deal candidates.  Those candidates
 remain PARTIAL_BOARD unless the inherited 52-unique-card gate actually proves a
 full deal; hidden cards are never inferred by complement.
+
+The v4.1/v2 builder historically stamps wall-clock ``created_at`` on every
+semantic rebuild. v4.2 deliberately overwrites that volatile field with a
+stable master-derived timestamp so identical evidence produces identical
+content-addressed Drive artifacts on repeat runs.
 """
 from __future__ import annotations
 
@@ -17,6 +22,16 @@ import diana_longitudinal_quality_v4_1 as v41
 QUALITY_SCHEMA = v41.QUALITY_SCHEMA
 QUALITY_SCHEMA_VERSION = 5
 QUALITY_METHOD_VERSION = "diana-quality-v4.2"
+
+
+def _stable_quality_created_at(master: Mapping[str, Any]) -> str:
+    for key in ("createdAt", "created_at"):
+        value = str(master.get(key) or "").strip()
+        if value:
+            return value
+    # Deterministic fail-closed fallback. A rebuild timestamp is metadata about
+    # execution, not evidence content, and therefore must not change identity.
+    return "1970-01-01T00:00:00Z"
 
 
 def build_quality_layer(
@@ -39,6 +54,7 @@ def build_quality_layer(
     quality = deepcopy(v41.build_quality_layer(working, lesson_identity))
     quality["schema_version"] = QUALITY_SCHEMA_VERSION
     quality["method_version"] = QUALITY_METHOD_VERSION
+    quality["created_at"] = _stable_quality_created_at(working)
 
     reconstruction = working.get("report_visual_board_reconstruction")
     if not isinstance(reconstruction, Mapping):
@@ -109,5 +125,6 @@ __all__ = [
     "QUALITY_SCHEMA",
     "QUALITY_SCHEMA_VERSION",
     "QUALITY_METHOD_VERSION",
+    "_stable_quality_created_at",
     "build_quality_layer",
 ]
