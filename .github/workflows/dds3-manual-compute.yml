@@ -19,6 +19,10 @@ on:
         default: 'None'
         type: choice
         options: [None, NS, EW, Both]
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/dds3-manual-compute.yml'
 
 permissions:
   contents: read
@@ -48,9 +52,9 @@ jobs:
           exit 1
       - name: Compute DD table with pure DDS3
         env:
-          PBN: ${{ inputs.pbn }}
-          DEALER: ${{ inputs.dealer }}
-          VULNERABILITY: ${{ inputs.vulnerability }}
+          PBN: ${{ github.event_name == 'pull_request' && 'N:AT732.K82.QT9.K4 QJ4.QJ973.AJ4.Q8 K85.A4.K752.J732 96.T65.863.AT965' || inputs.pbn }}
+          DEALER: ${{ github.event_name == 'pull_request' && 'N' || inputs.dealer }}
+          VULNERABILITY: ${{ github.event_name == 'pull_request' && 'None' || inputs.vulnerability }}
         run: |
           python - <<'PY'
           import json, os
