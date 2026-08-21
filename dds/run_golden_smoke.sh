@@ -16,9 +16,9 @@ EOF
 git clone --quiet --branch v3.0.0 https://github.com/dds-bridge/dds.git "$WORK_DIR/dds3"; git -C "$WORK_DIR/dds3" fetch --quiet origin cdd13cf5b700788ac8c1391501b42445b3129b45; git -C "$WORK_DIR/dds3" -c user.name=bridge-school-ci -c user.email=ci@invalid.example cherry-pick --no-commit cdd13cf5b700788ac8c1391501b42445b3129b45
 cd "$WORK_DIR/dds3"; g++ -std=c++20 -O3 -fPIC -shared -pthread -I library/src library/src/*.cpp library/src/heuristic_sorting/*.cpp library/src/lookup_tables/*.cpp library/src/moves/*.cpp library/src/solver_context/*.cpp library/src/system/*.cpp library/src/trans_table/*.cpp library/src/utility/*.cpp -o libdds3.so; g++ -std=c++20 -O3 -pthread -I library/src "$REPO_ROOT/dds/dds_pbn_cli.cpp" -L. -ldds3 -o dds_pbn_cli
 export LD_LIBRARY_PATH="$PWD"; mkdir -p "$WORK_DIR/out"; i=0; while IFS= read -r deal; do i=$((i+1)); ./dds_pbn_cli N None "$deal" > "$WORK_DIR/out/dds3-$i.json"; done < "$WORK_DIR/deals.txt"; cd "$WORK_DIR"; sha256sum out/dds3-*.json > out/dds3-frozen.sha256
-# Only now build and run classic DDS 2.9.
-git clone --quiet --branch v2.9.0 https://github.com/dds-bridge/dds.git "$WORK_DIR/dds"
-make -C "$WORK_DIR/dds/src" -f Makefiles/Makefile_linux_shared >/dev/null
+# Classic DDS is not built or run until the DDS3 files above are frozen.
+sudo apt-get update -qq; sudo apt-get install -y libboost-thread-dev >/dev/null
+git clone --quiet --branch v2.9.0 https://github.com/dds-bridge/dds.git "$WORK_DIR/dds"; make -C "$WORK_DIR/dds/src" -f Makefiles/Makefile_linux_shared >/dev/null
 g++ -std=c++17 -O2 -I"$WORK_DIR/dds/include" "$REPO_ROOT/tmp_dds_compare/classic_dds_cli.cpp" -L"$WORK_DIR/dds/src" -ldds -Wl,-rpath,"$WORK_DIR/dds/src" -o "$WORK_DIR/classic_dds_cli"
 sha256sum -c out/dds3-frozen.sha256 >/dev/null; i=0; while IFS= read -r deal; do i=$((i+1)); ./classic_dds_cli "$deal" > "out/dds-$i.json"; done < deals.txt; sha256sum -c out/dds3-frozen.sha256 >/dev/null
 python3 - <<'PY'
