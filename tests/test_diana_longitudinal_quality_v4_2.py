@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import unittest
 
 from diana_longitudinal_quality_v4_2 import build_quality_layer
@@ -9,6 +10,7 @@ def base_master() -> dict:
     return {
         'job_id': '6' * 32,
         'algorithmRevision': 'test-r25.15',
+        'createdAt': '2026-01-02T03:04:05Z',
         'content_quality': {'semantic_qc_status': 'PASS', 'semantic_critical_unresolved': 0},
         'technical_qc': {'visual': {'pass1': {'status': 'VISUAL_PASS_1_COMPLETE'}, 'pass2': {'status': 'VISUAL_PASS_2_COMPLETE'}}},
         'transcript': [],
@@ -67,6 +69,23 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
         self.assertFalse(quality['incremental_processing']['raw_asr_mutated'])
         self.assertFalse(quality['cost_gate']['paid_ai_api_required'])
         self.assertFalse(quality['cost_gate']['paid_cloud_required'])
+
+    def test_quality_created_at_is_master_derived_and_repeat_stable(self):
+        master = base_master()
+        first = build_quality_layer(master, {'lesson_id': 'lesson-test', 'lesson_number': 5})
+        time.sleep(0.01)
+        second = build_quality_layer(master, {'lesson_id': 'lesson-test', 'lesson_number': 5})
+        self.assertEqual(first['created_at'], '2026-01-02T03:04:05Z')
+        self.assertEqual(second['created_at'], first['created_at'])
+        self.assertEqual(first, second)
+
+    def test_missing_master_timestamp_has_deterministic_fallback(self):
+        master = base_master()
+        master.pop('createdAt')
+        first = build_quality_layer(master, {'lesson_id': 'lesson-test', 'lesson_number': 5})
+        second = build_quality_layer(master, {'lesson_id': 'lesson-test', 'lesson_number': 5})
+        self.assertEqual(first['created_at'], '1970-01-01T00:00:00Z')
+        self.assertEqual(first, second)
 
 
 if __name__ == '__main__':
