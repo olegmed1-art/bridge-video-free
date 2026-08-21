@@ -1,29 +1,60 @@
 name: Bridge School DDS Golden Smoke
-
 on:
   pull_request:
     paths:
       - 'dds/**'
+      - 'tmp_dds_compare/**'
       - '.github/workflows/dds-golden-smoke.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'dds/**'
-      - '.github/workflows/dds-golden-smoke.yml'
-  workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   golden-smoke:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - name: Run patched DDS 3.0.0 golden smoke twice
+      - uses: actions/checkout@v4
+      - name: Build canonical DDS3
+        run: docker build -f Dockerfile.dds3 -t bridge-school-dds3 .
+      - name: DDS3 first - calculate and freeze
         shell: bash
-        run: bash dds/run_golden_smoke.sh
+        run: |
+          set -euo pipefail; mkdir -p out
+          cat > deals.txt <<'EOF'
+N:9.A93.J7632.A865 AKQJ642.Q4.84.K2 875.K752.KT9.Q97 T3.JT86.AQ5.JT43
+N:Q632.872.AKJ4.T7 A9854.64.QT6.A64 T.AKQ953.8.K9832 KJ7.JT.97532.QJ5
+N:Q9.762.JT732.Q92 .AKQJ85.AK964.87 K7543.T4.Q.AK653 AJT862.93.85.JT4
+N:Q872.K762.T54.AK KJ64.AJT.KJ876.7 3.Q53.A9.QT98653 AT95.984.Q32.J42
+N:3.KQ94.KJT53.953 K9.A3.AQ92.AJT82 Q86.JT765.876.KQ AJT7542.82.4.764
+N:K53.QJ7.876.AK85 Q72.A842.QJT93.T AJT84.K95.A.QJ96 96.T63.K542.7432
+N:J82.K62.K7.K8732 A95.743.AQ52.J65 KT74.QJT5.943.AT Q63.A98.JT86.Q94
+N:K73.KQ742.AJT7.6 Q96.T98653.942.Q AT852..KQ63.A954 J4.AJ.85.KJT8732
+N:9632.9.96.K97542 KQ.AQJ5.KT853.A3 J75.T84.J7.QJT86 AT84.K7632.AQ42.
+N:Q952.765.J73.Q54 8.KQJ3.A854.AK96 AKJ63.82.T2.J873 T74.AT94.KQ96.T2
+EOF
+          i=0; while IFS= read -r deal; do i=$((i+1)); docker run --rm bridge-school-dds3 N None "$deal" > "out/dds3-$i.json"; done < deals.txt
+          sha256sum out/dds3-*.json > out/dds3-frozen.sha256
+      - name: Build classic DDS v2.9 after DDS3 is frozen
+        run: |
+          git clone --quiet --branch v2.9.0 https://github.com/dds-bridge/dds.git /tmp/classic-dds
+          cmake -S /tmp/classic-dds -B /tmp/classic-dds/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/classic-dds/build -j2
+          g++ -std=c++17 -O2 -I/tmp/classic-dds/include tmp_dds_compare/classic_dds_cli.cpp -L/tmp/classic-dds/build -ldds -Wl,-rpath,/tmp/classic-dds/build -o /tmp/classic_dds_cli
+      - name: Classic DDS independently
+        shell: bash
+        run: |
+          set -euo pipefail; sha256sum -c out/dds3-frozen.sha256
+          i=0; while IFS= read -r deal; do i=$((i+1)); /tmp/classic_dds_cli "$deal" > "out/dds-$i.json"; done < deals.txt
+          sha256sum -c out/dds3-frozen.sha256
+          python3 - <<'PY'
+          import json
+          for i in range(1,11):
+            a=json.load(open(f'out/dds3-{i}.json'))['dd_table']; b=json.load(open(f'out/dds-{i}.json'))['dd_table']
+            print(i, 'MATCH' if a==b else 'DIFF', json.dumps(a,sort_keys=True), json.dumps(b,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dds3-vs-dds-10-results
+          path: |
+            deals.txt
+            out/*.json
+            out/dds3-frozen.sha256

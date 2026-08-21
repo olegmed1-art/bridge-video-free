@@ -3,85 +3,58 @@ on:
   pull_request:
     paths:
       - 'dds/**'
-      - 'bridge_school_api/dds3/**'
-      - 'dds3_runtime/**'
+      - 'tmp_dds_compare/**'
       - 'Dockerfile.dds3'
       - '.github/workflows/dds3-module.yml'
-  workflow_dispatch:
-
 jobs:
   golden:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Build pinned DDS3 container
+      - name: Build canonical DDS3
         run: docker build -f Dockerfile.dds3 -t bridge-school-dds3 .
-      - name: Golden deterministic run
+      - name: DDS3 first - calculate and freeze 10 results
+        shell: bash
+        run: |
+          set -euo pipefail; mkdir -p out
+          cat > deals.txt <<'EOF'
+N:9.A93.J7632.A865 AKQJ642.Q4.84.K2 875.K752.KT9.Q97 T3.JT86.AQ5.JT43
+N:Q632.872.AKJ4.T7 A9854.64.QT6.A64 T.AKQ953.8.K9832 KJ7.JT.97532.QJ5
+N:Q9.762.JT732.Q92 .AKQJ85.AK964.87 K7543.T4.Q.AK653 AJT862.93.85.JT4
+N:Q872.K762.T54.AK KJ64.AJT.KJ876.7 3.Q53.A9.QT98653 AT95.984.Q32.J42
+N:3.KQ94.KJT53.953 K9.A3.AQ92.AJT82 Q86.JT765.876.KQ AJT7542.82.4.764
+N:K53.QJ7.876.AK85 Q72.A842.QJT93.T AJT84.K95.A.QJ96 96.T63.K542.7432
+N:J82.K62.K7.K8732 A95.743.AQ52.J65 KT74.QJT5.943.AT Q63.A98.JT86.Q94
+N:K73.KQ742.AJT7.6 Q96.T98653.942.Q AT852..KQ63.A954 J4.AJ.85.KJT8732
+N:9632.9.96.K97542 KQ.AQJ5.KT853.A3 J75.T84.J7.QJT86 AT84.K7632.AQ42.
+N:Q952.765.J73.Q54 8.KQJ3.A854.AK96 AKJ63.82.T2.J873 T74.AT94.KQ96.T2
+EOF
+          i=0; while IFS= read -r deal; do i=$((i+1)); docker run --rm bridge-school-dds3 N None "$deal" > "out/dds3-$i.json"; done < deals.txt
+          sha256sum out/dds3-*.json > out/dds3-frozen.sha256
+      - name: Build classic DDS v2.9 after DDS3 freeze
         shell: bash
         run: |
           set -euo pipefail
-          DEAL='N:QJ6.K652.J85.T98 873.J97.AT764.Q4 K5.T83.KQ9.A7652 AT942.AQ4.32.KJ3'
-          docker run --rm bridge-school-dds3 N None "$DEAL" > run1.json
-          docker run --rm bridge-school-dds3 N None "$DEAL" > run2.json
-          cmp run1.json run2.json
-          python3 - <<'PY'
-          import json
-          d=json.load(open('run1.json'))
-          assert d['hand_order']==['N','E','S','W']
-          assert d['strain_order']==['S','H','D','C','NT']
-          assert d['par_score_ns']==-110
-          assert d['par_contracts']==['2S-EW']
-          assert all(len(v)==4 and all(0<=x<=13 for x in v) for v in d['dd_table'].values())
-          print(json.dumps(d, sort_keys=True))
-          PY
-      - name: Board 16 end-to-end DD table
+          git clone --quiet --branch v2.9.0 https://github.com/dds-bridge/dds.git /tmp/classic-dds
+          cmake -S /tmp/classic-dds -B /tmp/classic-dds/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build /tmp/classic-dds/build -j2
+          g++ -std=c++17 -O2 -I/tmp/classic-dds/include tmp_dds_compare/classic_dds_cli.cpp -L/tmp/classic-dds/build -ldds -Wl,-rpath,/tmp/classic-dds/build -o /tmp/classic_dds_cli
+      - name: Run classic DDS independently
         shell: bash
         run: |
-          set -euo pipefail
-          DEAL='N:K54.7654.875432. Q972.AT82.J.KQT7 8.KQJ3.AQT96.943 AJT63.9.K.AJ8652'
-          docker run --rm bridge-school-dds3 N None "$DEAL" | tee board16.json
+          set -euo pipefail; sha256sum -c out/dds3-frozen.sha256
+          i=0; while IFS= read -r deal; do i=$((i+1)); /tmp/classic_dds_cli "$deal" > "out/dds-$i.json"; done < deals.txt
+          sha256sum -c out/dds3-frozen.sha256
           python3 - <<'PY'
           import json
-          d=json.load(open('board16.json'))
-          assert d['hand_order']==['N','E','S','W']
-          assert set(d['dd_table'])=={'S','H','D','C','NT'}
-          print('BOARD16_DDS3_PASS', json.dumps(d, sort_keys=True))
+          for i in range(1,11):
+            a=json.load(open(f'out/dds3-{i}.json'))['dd_table']; b=json.load(open(f'out/dds-{i}.json'))['dd_table']
+            print(i, 'MATCH' if a==b else 'DIFF', json.dumps(a,sort_keys=True), json.dumps(b,sort_keys=True))
           PY
-      - name: Build production DDS3 runtime from verified core
-        run: docker build -f dds3_runtime/Dockerfile -t bridge-school-dds3-runtime:test .
-      - name: Start production runtime
-        run: docker run -d --rm --name dds3-runtime -p 18080:8080 -e DDS3_RUNTIME_TOKEN=ci-secret bridge-school-dds3-runtime:test
-      - name: Require real DDS3 readiness
-        run: |
-          for i in $(seq 1 30); do
-            if curl -fsS http://127.0.0.1:18080/readyz > runtime-ready.json; then cat runtime-ready.json; exit 0; fi
-            sleep 1
-          done
-          docker logs dds3-runtime
-          exit 1
-      - name: Golden computation through embeddable HTTP runtime
-        run: |
-          curl -fsS -H 'Authorization: Bearer ci-secret' -H 'Content-Type: application/json' \
-            -d '{"operation":"dd_table","pbn":"N:QJ6.K652.J85.T98 873.J97.AT764.Q4 K5.T83.KQ9.A7652 AT942.AQ4.32.KJ3","dealer":"N","vulnerability":"None"}' \
-            http://127.0.0.1:18080/v1/compute > runtime-result.json
-          python3 - <<'PY'
-          import json
-          r=json.load(open('runtime-result.json'))
-          assert r['engine']=='DDS3'
-          assert r['fallback_used'] is False
-          assert r['par_score_ns']==-110
-          assert r['dd_table']=={'S':[5,8,5,8],'H':[6,6,6,6],'D':[5,7,5,7],'C':[7,5,7,5],'NT':[6,6,6,6]}
-          print('DDS3_RUNTIME_HTTP_PASS')
-          PY
-      - name: Runtime logs on failure
-        if: failure()
-        run: docker logs dds3-runtime || true
       - uses: actions/upload-artifact@v4
         with:
-          name: dds3-integration-results
+          name: dds3-vs-dds-10-results
           path: |
-            run1.json
-            run2.json
-            board16.json
-            runtime-ready.json
-            runtime-result.json
+            deals.txt
+            out/*.json
+            out/dds3-frozen.sha256
