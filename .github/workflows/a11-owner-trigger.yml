@@ -1,0 +1,58 @@
+name: A11 Owner-Controlled Trigger
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'dds_training/a11_trigger_request.json'
+
+permissions:
+  contents: read
+
+env:
+  REQUEST: dds_training/a11_trigger_request.json
+
+jobs:
+  validate-request:
+    runs-on: ubuntu-24.04
+    outputs:
+      target: ${{ steps.req.outputs.target }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - id: req
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          p='dds_training/a11_trigger_request.json'
+          d=json.load(open(p,encoding='utf-8'))
+          assert d.get('schema')=='a11-trigger-request-v1'
+          assert d.get('authority')=='EVIDENCE_ONLY'
+          assert d.get('target') in (10000,30000,40000)
+          assert d.get('allowed_promotions')==[]
+          assert d.get('require_verified_corpus') is True
+          assert d.get('require_verified_evaluator') is True
+          print(f"target={d['target']}")
+          PY
+
+  run-a11-10k:
+    needs: validate-request
+    if: needs.validate-request.outputs.target == '10000'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Prerequisite SolverContext/TT gate
+        run: bash dds/run_stage2_context_gate.sh
+      - name: Resolve verified execution contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo 'FAIL_CLOSED: A11 owner trigger is installed, but main does not yet contain a verified corpus-restore + evaluator execution contract consumable by this workflow.' >&2
+          echo 'Do not substitute a synthetic corpus or invent a DDS endpoint.' >&2
+          exit 78
