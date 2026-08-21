@@ -100,11 +100,7 @@ def _ocr_compass(image: Any, pytesseract: Any) -> dict[str, tuple[float, float, 
 
 
 def _clean_rank_text(text: str) -> str:
-    """Accept only tokens made entirely of visible rank notation.
-
-    Filtering arbitrary OCR words (for example ``Dealer`` -> ``A``) would create
-    fabricated cards, so any non-rank character makes the token unusable.
-    """
+    """Accept only tokens made entirely of visible rank notation."""
     value = re.sub(r"\s+", "", text.upper()).replace("10", "T")
     if not value or any(ch not in RANKS for ch in value):
         return ""
@@ -144,55 +140,96 @@ def _cluster_rows(tokens: list[dict[str, Any]], tolerance: float = 13.0) -> list
     return clusters
 
 
-def _pick_four_rows(hand: str, tokens: list[dict[str, Any]], compass: dict[str, tuple[float, float, float]], width: int, height: int) -> list[list[dict[str, Any]]]:
-    center_x = sum(value[0] for value in compass.values()) / 4
-    center_y = sum(value[1] for value in compass.values()) / 4
-    span_x = max(value[0] for value in compass.values()) - min(value[0] for value in compass.values())
-    span_y = max(value[1] for value in compass.values()) - min(value[1] for value in compass.values())
-    margin_x = max(20.0, span_x * 0.55)
-    margin_y = max(20.0, span_y * 0.55)
+def _row_center(row: list[dict[str, Any]]) -> float:
+    return sum(token["cy"] for token in row) / len(row)
 
-    if hand == "N":
-        subset = [t for t in tokens if t["cy"] < center_y - margin_y * 0.15 and abs(t["cx"] - center_x) < width * 0.22]
-        rows = _cluster_rows(subset)
-        rows = [row for row in rows if center_y - sum(t["cy"] for t in row) / len(row) < height * 0.38]
-        rows = rows[-4:]
-    elif hand == "S":
-        subset = [t for t in tokens if t["cy"] > center_y + margin_y * 0.15 and abs(t["cx"] - center_x) < width * 0.22]
-        rows = _cluster_rows(subset)
-        rows = [row for row in rows if sum(t["cy"] for t in row) / len(row) - center_y < height * 0.38]
-        rows = rows[:4]
-    elif hand == "W":
-        subset = [t for t in tokens if t["cx"] < center_x - margin_x * 0.15 and abs(t["cy"] - center_y) < height * 0.24]
-        rows = _cluster_rows(subset)[:4]
-    else:
-        subset = [t for t in tokens if t["cx"] > center_x + margin_x * 0.15 and abs(t["cy"] - center_y) < height * 0.24]
-        rows = _cluster_rows(subset)[:4]
-    if len(rows) != 4:
-        raise PublicationVisionError(f"INCOMPLETE_HAND_ROWS:{hand}:{len(rows)}")
-    return rows
+
+def _holding(row: list[dict[str, Any]]) -> tuple[str, float]:
+    if not row:
+        return "", 0.75
+    value = _clean_rank_text("".join(token["text"] for token in sorted(row, key=lambda token: token["x"])))
+    if not value:
+        raise PublicationVisionError("AMBIGUOUS_RANK_ROW")
+    return value, min(token["confidence"] for token in row)
 
 
 def _extract_hands(image: Any, compass: dict[str, tuple[float, float, float]], pytesseract: Any) -> tuple[dict[str, dict[str, str]], dict[str, dict[str, float]]]:
+    """Read four visible rank rows per hand without deck-complement repair.
+
+    West/East share a printed four-row grid. A void on one side is accepted only when the
+    opposite side visibly establishes that row, so an absent rank string is tied to an
+    observed row rather than inferred from missing cards. If both lateral hands omit the
+    same row, the grid has fewer than four supported rows and the image is rejected.
+    North/South require four directly observed rank rows and therefore fail closed on a
+    void until a future suit-symbol detector can prove the empty row from pixels.
+    """
     tokens = _rank_tokens(image, pytesseract)
     height, width = image.shape[:2]
+    center_x = sum(value[0] for value in compass.values()) / 4
+    center_y = sum(value[1] for value in compass.values()) / 4
+    span_x = max(value[0] for value in compass.values()) - min(value[0] for value in compass.values())
+    side_gap = max(32.0, span_x * 0.80)
+
+    # North: closest four central rows immediately above compass N.
+    north_tokens = [
+        token for token in tokens
+        if token["cy"] < compass["N"][1]
+        and center_x - width * 0.18 < token["cx"] < center_x + width * 0.18
+        and compass["N"][1] - token["cy"] < height * 0.34
+    ]
+    north_rows = _cluster_rows(north_tokens)
+    north_rows = north_rows[-4:]
+    if len(north_rows) != 4:
+        raise PublicationVisionError(f"INCOMPLETE_HAND_ROWS:N:{len(north_rows)}")
+
+    # South: closest four central rows immediately below compass S.
+    south_tokens = [
+        token for token in tokens
+        if token["cy"] > compass["S"][1]
+        and center_x - width * 0.18 < token["cx"] < center_x + width * 0.18
+        and token["cy"] - compass["S"][1] < height * 0.34
+    ]
+    south_rows = _cluster_rows(south_tokens)
+    south_rows = south_rows[:4]
+    if len(south_rows) != 4:
+        raise PublicationVisionError(f"INCOMPLETE_HAND_ROWS:S:{len(south_rows)}")
+
+    # Lateral rank text from both W and E establishes one shared S/H/D/C row grid.
+    lateral_tokens = [
+        token for token in tokens
+        if abs(token["cx"] - center_x) > side_gap
+        and abs(token["cy"] - center_y) < height * 0.24
+    ]
+    lateral_rows = _cluster_rows(lateral_tokens)
+    if len(lateral_rows) < 4:
+        raise PublicationVisionError(f"INCOMPLETE_LATERAL_GRID:{len(lateral_rows)}")
+    lateral_rows = sorted(lateral_rows, key=lambda row: abs(_row_center(row) - center_y))[:4]
+    lateral_rows.sort(key=_row_center)
+
+    raw_rows: dict[str, list[list[dict[str, Any]]]] = {
+        "N": north_rows,
+        "S": south_rows,
+        "W": [[token for token in row if token["cx"] < center_x] for row in lateral_rows],
+        "E": [[token for token in row if token["cx"] > center_x] for row in lateral_rows],
+    }
+
     hands: dict[str, dict[str, str]] = {}
     confidence: dict[str, dict[str, float]] = {}
     cards: list[str] = []
     for hand in "NESW":
-        rows = _pick_four_rows(hand, tokens, compass, width, height)
         holdings: list[str] = []
         row_conf: list[float] = []
-        for row in rows:
-            value = _clean_rank_text("".join(token["text"] for token in row))
+        for row in raw_rows[hand]:
+            value, conf = _holding(row)
             holdings.append(value)
-            row_conf.append(min(token["confidence"] for token in row) if row else 0.0)
+            row_conf.append(conf)
         if sum(len(value) for value in holdings) != 13:
             raise PublicationVisionError(f"INCOMPLETE_HAND:{hand}:{'.'.join(holdings)}")
         hands[hand] = dict(zip("SHDC", holdings, strict=True))
         confidence[hand] = dict(zip("SHDC", row_conf, strict=True))
         for suit, ranks in zip("SHDC", holdings, strict=True):
             cards.extend(suit + rank for rank in ranks)
+
     expected = {suit + rank for suit in "SHDC" for rank in "AKQJT98765432"}
     if len(cards) != 52 or len(set(cards)) != 52:
         raise PublicationVisionError(f"DECK_VALIDATION_FAILED:{len(cards)}/{len(set(cards))}")
