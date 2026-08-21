@@ -91,6 +91,75 @@ def _grid_rows(image: Any, pytesseract: Any) -> dict[str, list[list[dict[str, An
     return {"N": north_rows, "E": east_rows, "S": south_rows, "W": west_rows}
 
 
+def _component_holding_candidate(
+    gray: Any, cv2: Any, pytesseract: Any
+) -> tuple[str, float] | None:
+    """Read separated printed rank glyphs independently from pixels.
+
+    Whole-row OCR can make a systematic single-glyph substitution even when the glyphs
+    are visually separated. This path segments connected ink components and requires
+    strong repeated OCR agreement for every rank before using the component sequence.
+    It does not inspect deck inventory, other hands, or canonical truth. Rows containing
+    typography that cannot be represented by one connected rank glyph (for example a
+    printed two-character ``10``) simply fall back to the independent whole-row pass.
+    """
+    _, inverted = cv2.threshold(
+        gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+    )
+    count, _labels, stats, _centroids = cv2.connectedComponentsWithStats(inverted, 8)
+    components: list[tuple[int, int, int, int, int]] = []
+    min_height = max(8, int(gray.shape[0] * 0.25))
+    for index in range(1, count):
+        x, y, width, height, area = (int(value) for value in stats[index])
+        if area < 20 or height < min_height or width < 2:
+            continue
+        components.append((x, y, width, height, area))
+    components.sort(key=lambda item: item[0])
+    if not components or len(components) > 13:
+        return None
+
+    chars: list[str] = []
+    strengths: list[int] = []
+    for x, y, width, height, _area in components:
+        pad = 5
+        part = gray[
+            max(0, y - pad):min(gray.shape[0], y + height + pad),
+            max(0, x - pad):min(gray.shape[1], x + width + pad),
+        ]
+        votes: list[str] = []
+        for scale in (3, 5):
+            enlarged = cv2.resize(
+                part, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC
+            )
+            for psm in (10, 13):
+                raw = pytesseract.image_to_string(
+                    enlarged,
+                    config=(
+                        f"--psm {psm} "
+                        "-c tessedit_char_whitelist=AKQJT9876543210"
+                    ),
+                )
+                cleaned = _clean_rank_text(raw)
+                if len(cleaned) == 1:
+                    votes.append(cleaned)
+        if not votes:
+            return None
+        frequencies = {value: votes.count(value) for value in set(votes)}
+        ordered = sorted(frequencies.items(), key=lambda item: (-item[1], item[0]))
+        best, best_votes = ordered[0]
+        if best_votes < 3:
+            return None
+        if len(ordered) > 1 and ordered[1][1] == best_votes:
+            raise PublicationGridVisionError(f"AMBIGUOUS_COMPONENT_OCR:{ordered}")
+        chars.append(best)
+        strengths.append(best_votes)
+
+    if not chars:
+        return None
+    confidence = min(0.96, 0.78 + 0.04 * min(strengths))
+    return "".join(chars), confidence
+
+
 def _ocr_grid_holding_row(
     image: Any,
     row: list[dict[str, Any]],
@@ -103,7 +172,7 @@ def _ocr_grid_holding_row(
     The print family has a stable ~5.5% image-width gap from the left edge of the suit
     glyph to the first rank. Starting after that gap avoids the OCR failure where the
     suit symbol and first rank are fused into one pseudo-character. Candidate readings
-    come from independent grayscale/binary + PSM passes. No deck state is consulted.
+    come from independent pixel paths. No deck state is consulted.
     """
     if not row:
         return "", 0.0
@@ -118,6 +187,10 @@ def _ocr_grid_holding_row(
         raise PublicationGridVisionError("EMPTY_HOLDING_CROP")
 
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    component = _component_holding_candidate(gray, cv2, pytesseract)
+    if component is not None:
+        return component
+
     _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     candidates: list[str] = []
     for source in (gray, binary):
@@ -142,8 +215,6 @@ def _ocr_grid_holding_row(
     counts = {value: candidates.count(value) for value in set(candidates)}
     ordered = sorted(counts.items(), key=lambda item: (-item[1], -len(item[0]), item[0]))
     best, votes = ordered[0]
-    # Pixel/OCR ambiguity stops here. We never select a reading because it fills the
-    # missing card in the deck. Require repeated agreement across preprocessing passes.
     if votes < 2:
         raise PublicationGridVisionError(f"AMBIGUOUS_CARD_OCR:{ordered}")
     if len(ordered) > 1 and ordered[1][1] == votes and ordered[1][0] != best:
