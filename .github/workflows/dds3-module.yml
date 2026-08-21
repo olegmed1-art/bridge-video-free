@@ -2,6 +2,7 @@ name: DDS3 module integration
 on:
   pull_request:
     paths:
+      - 'dds/**'
       - 'tmp_dds_compare/**'
       - '.github/workflows/dds3-module.yml'
 jobs:
