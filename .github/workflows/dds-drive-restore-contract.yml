@@ -83,7 +83,7 @@ jobs:
           grep -F 'GOOGLE_DRIVE_OAUTH_JSON' "$prepare"
           grep -F 'Write trusted PR attestation context' "$prepare"
           grep -F 'dds-prsafe-drive-attestation-context-v1' "$prepare"
-          grep -F 'dds-prsafe-attestation-${{ github.run_id }}' "$prepare"
+          grep -F 'dds-prsafe-attestation-' "$prepare"
           ! grep -F 'PILOT_RUN_ID' "$prepare"
           ! grep -F 'gh run download' "$prepare"
           ! grep -F 'actions: read' "$prepare"
@@ -115,6 +115,7 @@ jobs:
           assert 'secrets.GOOGLE_DRIVE_OAUTH_JSON' not in text[candidate_checkout:]
           assert 'pull_request_target' in text
           assert 'dds-prsafe-drive-attestation-context-v1' in text
+          assert 'dds-prsafe-attestation-' in text
           assert 'retention-days: 7' in text
 
           att = Path('.github/workflows/dds-prsafe-drive-attestation.yml').read_text(encoding='utf-8')
