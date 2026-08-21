@@ -81,7 +81,9 @@ def _norm(text: str) -> str:
 
 def _clean_rank_token(text: str) -> str:
     value = re.sub(r"\s+", "", text.upper()).replace("10", "T")
-    return "".join(ch for ch in value if ch in RANKS)
+    if not value or any(ch not in RANKS for ch in value):
+        return ""
+    return value
 
 
 def _find_clip(page: fitz.Page, title: str) -> fitz.Rect | None:
@@ -163,9 +165,6 @@ def _truth_hands(page: fitz.Page, clip: fitz.Rect) -> dict[str, str]:
         raw_symbols = sorted({word[4].strip() for word in words if len(word[4].strip()) == 1 and not word[4].strip().isalnum()})
         raise ValueError(f"source has {len(suit_words)} suit rows, expected 16; symbols={raw_symbols[:20]}")
 
-    # Every source suit row owns only the rank tokens to its right up to the next suit
-    # symbol on the same visual row. This prevents West rank text leaking into East when
-    # two hands are printed side-by-side. The boundary is source-vector geometry only.
     rows = []
     for suit_x, suit_y, suit, suit_word in suit_words:
         same_row_suits = [
