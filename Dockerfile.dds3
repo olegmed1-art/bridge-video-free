@@ -5,7 +5,8 @@ ARG DDS_TAG=v3.0.0
 ARG DDS_FIX_COMMIT=cdd13cf5b700788ac8c1391501b42445b3129b45
 RUN git clone --quiet --branch "$DDS_TAG" https://github.com/dds-bridge/dds.git dds && \
     git -C dds fetch --quiet origin "$DDS_FIX_COMMIT" && \
-    git -C dds -c user.name=bridge-school-ci -c user.email=ci@invalid.example cherry-pick --no-commit "$DDS_FIX_COMMIT"
+    git -C dds -c user.name=bridge-school-ci -c user.email=ci@invalid.example cherry-pick --no-commit "$DDS_FIX_COMMIT" && \
+    grep -q '#include <iomanip>' dds/library/src/init.cpp || sed -i '1i#include <iomanip>' dds/library/src/init.cpp
 COPY dds/dds_pbn_cli.cpp /src/dds_pbn_cli.cpp
 WORKDIR /src/dds
 RUN g++ -std=c++20 -O3 -fPIC -shared -pthread -I library/src \
