@@ -23,7 +23,7 @@ from bridge_school_api.dds3.vision_appeals_cross import (
     AppealsCrossVisionError,
     extract_appeals_cross_observation,
 )
-from tools.dds3_vision.evaluate_publication_cross import SUIT_GLYPHS, _truth_hands
+from tools.dds3_vision.evaluate_publication_cross import SUIT_GLYPHS, _cluster_rows
 
 SOURCE_URL = "https://www.bridge.is/files/EBUAppeals2001_1575249453.pdf"
 PAGE_INDEX = 7
@@ -58,15 +58,53 @@ def _truth_metadata(page: fitz.Page) -> tuple[int, str, str]:
     return board, dealer, vulnerability
 
 
+def _source_hand_rows(page: fitz.Page) -> list[dict]:
+    rows: list[dict] = []
+    for word in page.get_text("words"):
+        raw = word[4].strip()
+        if len(raw) < 1 or raw[0] not in SUIT_GLYPHS:
+            continue
+        suit = SUIT_GLYPHS[raw[0]]
+        holding = re.sub(r"\s+", "", raw[1:].upper()).replace("10", "T")
+        if any(char not in RANKS for char in holding):
+            continue
+        rows.append({
+            "x": (word[0] + word[2]) / 2,
+            "y": (word[1] + word[3]) / 2,
+            "suit": suit,
+            "holding": holding,
+            "word": word,
+        })
+    if len(rows) != 16:
+        raise ValueError(f"expected 16 combined suit/holding vector rows, got {len(rows)}")
+    return rows
+
+
+def _truth_hands(page: fitz.Page) -> dict[str, str]:
+    grouped = _cluster_rows(_source_hand_rows(page))
+    hands: dict[str, str] = {}
+    cards: list[str] = []
+    for hand, hand_rows in grouped.items():
+        suits = {row["suit"]: row["holding"] for row in hand_rows}
+        if set(suits) != set("SHDC"):
+            raise ValueError(f"source missing suit row for {hand}")
+        holding = ".".join(suits[suit] for suit in "SHDC")
+        if sum(len(part) for part in holding.split(".")) != 13:
+            raise ValueError(f"source hand {hand} is not 13 cards: {holding}")
+        hands[hand] = holding
+        for suit, ranks in zip("SHDC", holding.split("."), strict=True):
+            cards.extend(suit + rank for rank in ranks)
+    expected = {suit + rank for suit in "SHDC" for rank in "AKQJT98765432"}
+    if len(cards) != 52 or len(set(cards)) != 52 or set(cards) != expected:
+        raise ValueError(f"source deck invalid: {len(cards)}/{len(set(cards))}")
+    return hands
+
+
 def _deal_clip(page: fitz.Page) -> fitz.Rect:
-    words = page.get_text("words")
-    suit_words = [word for word in words if word[4].strip() in SUIT_GLYPHS]
-    if len(suit_words) != 16:
-        raise ValueError(f"expected 16 source suit rows, got {len(suit_words)}")
-    x0 = min(word[0] for word in suit_words)
-    x1 = max(word[2] for word in suit_words)
-    y0 = min(word[1] for word in suit_words)
-    y1 = max(word[3] for word in suit_words)
+    rows = _source_hand_rows(page)
+    words = [row["word"] for row in rows]
+    y0 = min(word[1] for word in words)
+    y1 = max(word[3] for word in words)
     # Include the explicit Board/Dealer/Vulnerability lines above the hand diagram and
     # the full cross/compass horizontally. No source truth is taken from OCR pixels.
     return fitz.Rect(
@@ -103,7 +141,7 @@ def main() -> int:
         doc = fitz.open(pdf)
         page = doc[PAGE_INDEX]
         clip = _deal_clip(page)
-        truth_hands = _truth_hands(page, page.rect)
+        truth_hands = _truth_hands(page)
         board, dealer, vulnerability = _truth_metadata(page)
         pix = page.get_pixmap(matrix=fitz.Matrix(args.dpi/72, args.dpi/72), clip=clip, alpha=False)
         image_bytes = pix.tobytes("png")
@@ -135,11 +173,13 @@ def main() -> int:
                 "board": board,
                 "source_sha256": source_sha,
                 "image_sha256": image_sha,
+                "truth_hands": truth_hands,
+                "observed_hands": observed_hands,
             }
         except AppealsCrossVisionError as exc:
-            result = {"status":"rejected", "reason":str(exc), "source_sha256":source_sha, "image_sha256":image_sha}
+            result = {"status":"rejected", "reason":str(exc), "source_sha256":source_sha, "image_sha256":image_sha, "truth_hands":truth_hands}
         except Exception as exc:
-            result = {"status":"field_error", "reason":f"{type(exc).__name__}:{exc}", "source_sha256":source_sha, "image_sha256":image_sha}
+            result = {"status":"field_error", "reason":f"{type(exc).__name__}:{exc}", "source_sha256":source_sha, "image_sha256":image_sha, "truth_hands":truth_hands}
 
         negative_status = "not_run"
         try:
