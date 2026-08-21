@@ -5,7 +5,6 @@ on:
       - 'bridge_school_api/dds3/vision_publication.py'
       - 'bridge_school_api/dds3/image_ingress.py'
       - 'tools/dds3_vision/evaluate_publication_cross.py'
-      - 'tools/dds3_vision/debug_publication_wbf.py'
       - 'requirements-dds3-vision.txt'
       - '.github/workflows/dds3-publication-vision.yml'
   workflow_dispatch:
@@ -34,7 +33,6 @@ jobs:
           python -m py_compile bridge_school_api/dds3/vision_publication.py
           python -m py_compile bridge_school_api/dds3/image_ingress.py
           python -m py_compile tools/dds3_vision/evaluate_publication_cross.py
-          python -m py_compile tools/dds3_vision/debug_publication_wbf.py
       - name: Enforce fail-closed dispatch source contract
         run: |
           python - <<'PY'
@@ -48,10 +46,6 @@ jobs:
           assert 'fallback_used' in ingress
           print('DDS3_PUBLICATION_DISPATCH_CONTRACT_PASS')
           PY
-      - name: Debug real WBF OCR geometry
-        env:
-          PYTHONPATH: .
-        run: python tools/dds3_vision/debug_publication_wbf.py
       - name: Run real public-source field gate
         env:
           PYTHONPATH: .
