@@ -1,0 +1,63 @@
+name: DDS3 real vision corpus contract
+on:
+  pull_request:
+    paths:
+      - 'tools/dds3_vision/**'
+      - 'requirements-dds3-vision.txt'
+      - 'docs/dds3-vision-corpus-field-evidence-*.md'
+      - '.github/workflows/dds3-vision-corpus.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  corpus-builder-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install local corpus dependencies
+        run: pip install --disable-pip-version-check -r requirements-dds3-vision.txt
+      - name: Compile corpus builder
+        run: python -m py_compile tools/dds3_vision/build_federation_corpus.py
+      - name: Fail-closed geometry contract
+        run: |
+          python - <<'PY'
+          import importlib.util
+          import numpy as np
+          spec=importlib.util.spec_from_file_location('builder','tools/dds3_vision/build_federation_corpus.py')
+          m=importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+          # One real-style board panel is split into two yellow halves by a black compass.
+          image=np.zeros((360,380,3),dtype=np.uint8)
+          image[:]=255
+          image[0:356,0:115]=[255,255,0]
+          image[0:356,116:374]=[255,255,0]
+          panels=m.detect_yellow_board_panels(image)
+          assert len(panels)==1, panels
+          x,y,w,h,_=panels[0]
+          assert (x,y)==(0,0) and w>=374 and h==356, panels[0]
+          # No yellow evidence means no board candidate; the builder must not invent one.
+          blank=np.full((360,380,3),255,dtype=np.uint8)
+          assert m.detect_yellow_board_panels(blank)==[]
+          print('DDS3_VISION_CORPUS_CONTRACT_PASS')
+          PY
+      - name: Public evidence privacy contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('docs/dds3-vision-corpus-field-evidence-20260821.md')
+          text=p.read_text(encoding='utf-8')
+          assert '**60**' in text
+          assert 'DDS3 is not used to create or repair truth' in text
+          assert 'private Drive identifier is committed' in text
+          forbidden=('drive.google.com/file/d/','docs.google.com/')
+          for token in forbidden:
+              assert token not in text, token
+          print('DDS3_VISION_CORPUS_PUBLIC_EVIDENCE_PASS')
+          PY
