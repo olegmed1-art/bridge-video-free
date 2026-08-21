@@ -193,7 +193,7 @@ def _canonical_rank_order(value: str) -> bool:
     This is a syntax check on an OCR candidate, not a repair rule: no rank is inserted,
     deleted, reordered, or inferred from the rest of the deck. It lets us reject the
     common Tesseract artefact where the suit glyph is hallucinated as a leading digit
-    (for example ``2AT97`` or ``4Q853``) while preserving genuine low-card holdings.
+    while preserving genuine low-card holdings.
     """
     order = "AKQJT98765432"
     if not value or len(set(value)) != len(value):
@@ -205,6 +205,45 @@ def _canonical_rank_order(value: str) -> bool:
     return positions == sorted(positions)
 
 
+def _box_rank_text(source: Any, *, pytesseract: Any, psm: int) -> str:
+    """Read literal rank characters from one already suit-masked row crop."""
+    try:
+        boxes = pytesseract.image_to_boxes(
+            source,
+            config=f"--psm {psm} -c tessedit_char_whitelist=AKQJT9876543210",
+        )
+    except Exception:
+        return ""
+    chars: list[tuple[int, str]] = []
+    for line in boxes.splitlines():
+        fields = line.split()
+        if len(fields) < 5:
+            continue
+        char = fields[0].upper()
+        try:
+            left = int(fields[1])
+        except ValueError:
+            continue
+        chars.append((left, char))
+    raw = "".join(char for _, char in sorted(chars, key=lambda item: item[0]))
+    return _clean_rank_text(raw)
+
+
+def _choose_repeated_literal(readings: list[str], *, channel: str) -> tuple[str, int] | None:
+    legal = [value for value in readings if value and _canonical_rank_order(value)]
+    if not legal:
+        return None
+    counts = Counter(legal)
+    max_length = max(len(value) for value in counts)
+    longest = {value: support for value, support in counts.items() if len(value) == max_length}
+    best, support = max(longest.items(), key=lambda item: (item[1], item[0]))
+    if len(longest) > 1 and support < 2:
+        raise NamedQuadrantVisionError(f"AMBIGUOUS_CARD_OCR_{channel}:{sorted(longest)}")
+    if support < 2:
+        return None
+    return best, support
+
+
 def _ocr_rank_row(
     image: Any,
     *,
@@ -214,20 +253,23 @@ def _ocr_rank_row(
     pytesseract: Any,
     cv2: Any,
 ) -> tuple[str, float]:
-    """OCR one isolated holding row after the printed suit-glyph column.
+    """OCR one isolated holding row using repeated literal pixel readings.
 
-    Multiple slightly shifted crops are read independently. Only literal OCR candidates
-    that already form a standard descending holding are eligible; the extractor never
-    edits an OCR string or supplies a missing rank from deck inventory. The longest
-    independently observed legal candidate is preferred so a crop that merely chops the
-    first real rank cannot win over the complete printed holding.
+    The crop boundary is shifted across the printed suit-glyph zone. Two independent
+    Tesseract representations are collected: whole-row text and character boxes. A
+    candidate is accepted only if that exact literal rank sequence is observed at least
+    twice in one channel and is already in legal descending rank order. Character-box
+    OCR is preferred because on this real family it preserves J/T distinctions that the
+    word recognizer can collapse. No candidate is edited, completed, reordered, or
+    selected from deck inventory; the downstream exact 52-card gate remains final.
     """
     height, _ = image.shape[:2]
     half = max(24, int(height * 0.024))
     y0 = max(0, int(center_y - half)); y1 = min(height, int(center_y + half))
     column_width = x1 - x0
-    readings: list[str] = []
-    for left_fraction in (0.28, 0.30, 0.32, 0.34, 0.36, 0.38, 0.40, 0.42, 0.44):
+    text_readings: list[str] = []
+    box_readings: list[str] = []
+    for left_fraction in (0.30, 0.34, 0.38, 0.42, 0.44):
         rx0 = min(x1 - 1, x0 + int(column_width * left_fraction))
         crop = image[y0:y1, rx0:x1]
         if crop.size == 0:
@@ -237,25 +279,25 @@ def _ocr_rank_row(
         _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         for source in (gray, binary):
             for psm in (7, 13):
-                value = _clean_rank_text(
+                text_value = _clean_rank_text(
                     pytesseract.image_to_string(
                         source,
                         config=f"--psm {psm} -c tessedit_char_whitelist=AKQJT9876543210",
                     )
                 )
-                if value and _canonical_rank_order(value):
-                    readings.append(value)
-    if not readings:
+                if text_value:
+                    text_readings.append(text_value)
+                box_value = _box_rank_text(source, pytesseract=pytesseract, psm=psm)
+                if box_value:
+                    box_readings.append(box_value)
+
+    box_choice = _choose_repeated_literal(box_readings, channel="BOX")
+    text_choice = _choose_repeated_literal(text_readings, channel="TEXT")
+    chosen = box_choice or text_choice
+    if chosen is None:
         raise NamedQuadrantVisionError("INCOMPLETE_NAMED_HAND_ROW")
-    counts = Counter(readings)
-    max_length = max(len(value) for value in counts)
-    longest = {value: support for value, support in counts.items() if len(value) == max_length}
-    best, support = max(longest.items(), key=lambda item: (item[1], item[0]))
-    if len(longest) > 1 and support < 2:
-        raise NamedQuadrantVisionError(f"AMBIGUOUS_CARD_OCR:{sorted(longest)}")
-    if len(counts) > 1 and support < 2:
-        raise NamedQuadrantVisionError(f"AMBIGUOUS_CARD_OCR:{sorted(counts)}")
-    confidence = min(0.92, 0.58 + 0.04 * support)
+    best, support = chosen
+    confidence = min(0.92, 0.60 + 0.04 * support)
     return best, confidence
 
 
