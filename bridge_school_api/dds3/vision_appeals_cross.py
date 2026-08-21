@@ -204,8 +204,7 @@ def _read_rank_row(image: Any, *, x0: float, cy: float, span: float, pytesseract
             value = _clean_rank_text(pytesseract.image_to_string(source, config=f"--psm {psm} -c tessedit_char_whitelist=AKQJT9876543210"))
             readings.append(value)
     nonempty = [value for value in readings if value]
-    if not nonempty:
-        return "", 0.60
+    if not nonempty: return "", 0.60
     counts = {value: nonempty.count(value) for value in set(nonempty)}
     best = max(counts, key=counts.get)
     if len(counts) > 1 and counts[best] < 2:
@@ -225,10 +224,10 @@ def _extract_appeals_hands(image: Any, compass: dict[str, tuple[float, float, fl
     if span <= 12: raise AppealsCrossVisionError("APPEALS_COMPASS_SPAN_INVALID")
     axis_x = (n[0] + s[0]) / 2; center_y = (n[1] + s[1]) / 2
     starts = {
-        "N": axis_x - 1.03 * span + 11.0,
-        "S": axis_x - 1.03 * span + 11.0,
-        "W": w[0] - 2.47 * span + 11.0,
-        "E": e[0] + 0.39 * span + 11.0,
+        "N": axis_x - 0.80 * span,
+        "S": axis_x - 0.80 * span,
+        "W": axis_x - 3.10 * span,
+        "E": axis_x + 1.50 * span,
     }
     rows = {
         "N": [n[1] - factor * span for factor in (1.53, 1.16, 0.80, 0.43)],
