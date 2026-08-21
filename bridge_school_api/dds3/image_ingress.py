@@ -61,6 +61,35 @@ def solve_image_envelope(
     return result
 
 
+def _extract_local_observation(
+    image_bytes: bytes, *, media_type: str, filename: str | None
+) -> ScreenshotDealObservation:
+    """Try bounded local extractors only when the preceding layout is unsupported.
+
+    Once a layout is recognized, an OCR/deck/metadata ambiguity fails closed and is not
+    reinterpreted by a different extractor. This prevents layout fallback from becoming
+    hidden bridge-inference repair.
+    """
+    from .vision_local import LocalVisionError, extract_federation_yellow_observation
+
+    try:
+        return extract_federation_yellow_observation(
+            image_bytes, media_type=media_type, filename=filename
+        )
+    except LocalVisionError as exc:
+        if not str(exc).startswith("UNSUPPORTED_LAYOUT_"):
+            raise ImageIngressError(str(exc)) from exc
+
+    from .vision_publication import PublicationVisionError, extract_publication_cross_observation
+
+    try:
+        return extract_publication_cross_observation(
+            image_bytes, media_type=media_type, filename=filename
+        )
+    except PublicationVisionError as exc:
+        raise ImageIngressError(str(exc)) from exc
+
+
 def solve_raw_image(
     image_bytes: bytes,
     *,
@@ -70,24 +99,22 @@ def solve_raw_image(
 ) -> dict[str, Any]:
     """Raw pixels -> bounded local/free vision -> strict validation -> DDS3.
 
-    The local extractor is deliberately fail-closed and currently supports the
-    federation yellow-panel layout family. Unsupported/ambiguous images do not fall
-    back to a web solver, paid model, bridge inference, or a second numerical engine.
+    Supported layout families are explicit and local. Unsupported/ambiguous images do not
+    fall back to a web solver, paid model, bridge inference, or a second numerical engine.
     """
     image = validate_image_payload(image_bytes, media_type=media_type, filename=filename)
-    from .vision_local import LocalVisionError, extract_federation_yellow_observation
-
-    try:
-        observation = extract_federation_yellow_observation(
-            image_bytes, media_type=media_type, filename=filename
-        )
-    except LocalVisionError as exc:
-        raise ImageIngressError(str(exc)) from exc
+    observation = _extract_local_observation(
+        image_bytes, media_type=media_type, filename=filename
+    )
     result = solve_screenshot_observation(observation, config=config)
     result["image"] = image
     result["pipeline"] = "image->local_free_vision->52_card_validation->DDS3"
+    extractor = "unknown_local_extractor"
+    field = observation.extra_metadata.get("vision_extractor")
+    if field is not None and field.value:
+        extractor = str(field.value)
     result["vision"] = {
-        "extractor": "local_tesseract_federation_yellow_v1",
+        "extractor": extractor,
         "fallback_used": False,
     }
     return result
