@@ -145,8 +145,8 @@ def _rank_row(
     pytesseract: Any,
 ) -> tuple[str, float]:
     height = image.shape[0]
-    y0 = max(0, int(center_y - spacing * 0.42))
-    y1 = min(height, int(center_y + spacing * 0.42))
+    y0 = max(0, int(center_y - spacing * 0.48))
+    y1 = min(height, int(center_y + spacing * 0.48))
     row = image[y0:y1, int(x0):x1]
     if not row.size:
         raise BridgeCourseVisionError("BRIDGECOURSE_EMPTY_RANK_REGION")
