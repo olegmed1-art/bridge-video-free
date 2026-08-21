@@ -274,6 +274,44 @@ jobs:
           print({'main_train_ready': True, 'fresh_tasks': 40000, 'train_tasks': 28000, 'shards': 20, 'holdout_closed': True, 'stable_skill_claim_closed': True, 'main_dds_results': 0})
           PY
 
+      - name: Write trusted PR attestation context
+        if: ${{ github.event_name == 'pull_request_target' }}
+        shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PREP_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PREP_RUN_ID" =~ ^[0-9]+$ ]]
+          mkdir -p "$RUNNER_TEMP/dds-prsafe-attestation"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          payload = {
+              'schema': 'dds-prsafe-drive-attestation-context-v1',
+              'pr_number': int(os.environ['PR_NUMBER']),
+              'head_sha': os.environ['HEAD_SHA'],
+              'source_run_id': int(os.environ['PREP_RUN_ID']),
+              'pilot_zip_sha256': os.environ['PILOT_ZIP_SHA256'],
+              'boundary': 'trusted_event_context_after_successful_prepare',
+          }
+          out = Path(os.environ['RUNNER_TEMP']) / 'dds-prsafe-attestation' / 'context.json'
+          out.write_text(json.dumps(payload, sort_keys=True) + '\n', encoding='utf-8')
+          print(json.dumps(payload, sort_keys=True))
+          PY
+
+      - name: Upload trusted PR attestation context
+        if: ${{ github.event_name == 'pull_request_target' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dds-prsafe-attestation-${{ github.run_id }}
+          path: ${{ runner.temp }}/dds-prsafe-attestation/context.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Package prepared 30k state for explicit manual handoff
         if: ${{ github.event_name == 'workflow_dispatch' }}
         shell: bash
