@@ -4,8 +4,8 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - 'dds_training/stage2c4_train_helpers.py'
-      - 'dds_training/stage2c5_train_shadow.py'
+      - '.github/scripts/stage2c4_train_helpers.py'
+      - '.github/scripts/stage2c5_train_shadow.py'
       - '.github/workflows/dds-stage2c5-train-shadow.yml'
 
 permissions:
@@ -51,9 +51,9 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPYCACHEPREFIX=/tmp/pycache python -m py_compile \
-            dds_training/stage2c4_train_helpers.py \
-            dds_training/stage2c5_train_shadow.py
-          PYTHONPATH=dds_training python - <<'PY'
+            .github/scripts/stage2c4_train_helpers.py \
+            .github/scripts/stage2c5_train_shadow.py
+          PYTHONPATH=.github/scripts:dds_training python - <<'PY'
           from pathlib import Path
           from stage2c5_train_shadow import verify_train_policy_prerequisite
           e=verify_train_policy_prerequisite(Path('dds_training/STAGE2C4_BLIND_REGRESSION_EVIDENCE.json'))
@@ -133,7 +133,7 @@ jobs:
           main_tasks="$(find /tmp/train-state -name blind_tasks_crossfit_main.jsonl -print -quit)"
           s2c2="$(find /tmp/s2c2/extracted -name stage2c2_continuation_results.jsonl -print -quit)"
           test -n "$main_tasks" && test -n "$s2c2"
-          PYTHONPATH=dds_training python dds_training/stage2c5_train_shadow.py prepare \
+          PYTHONPATH=.github/scripts:dds_training python .github/scripts/stage2c5_train_shadow.py prepare \
             --main-tasks "$main_tasks" \
             --stage2b /tmp/s2b/files \
             --stage2c2 "$s2c2" \
@@ -182,7 +182,7 @@ jobs:
         run: |
           set -euo pipefail
           source dds_training/.venv/bin/activate
-          PYTHONPATH=dds_training python dds_training/stage2c5_train_shadow.py evaluate \
+          PYTHONPATH=.github/scripts:dds_training python .github/scripts/stage2c5_train_shadow.py evaluate \
             --prepared dds_training/work/stage2c5-train/prepared \
             --out dds_training/work/stage2c5-train/result \
             | tee dds_training/work/stage2c5-train/result/evaluate.log
