@@ -38,6 +38,7 @@ class ScreenshotDealObservation:
     board_number: ObservedField | None = None
     dealer: ObservedField | None = None
     vulnerability: ObservedField | None = None
+    hand_confidence: dict[str, dict[str, float]] = field(default_factory=dict)
     extra_metadata: dict[str, ObservedField] = field(default_factory=dict)
 
     def canonicalize(self) -> tuple[BridgeDeal, dict[str, Any]]:
@@ -63,10 +64,31 @@ class ScreenshotDealObservation:
         provenance = {
             "input_kind":"screenshot_observation",
             "board_number":board,
-            "dealer":{"value":dealer,"observed":self.dealer is not None,"derived_from_board":self.dealer is None and board is not None},
-            "vulnerability":{"value":vul,"observed":self.vulnerability is not None,"derived_from_board":self.vulnerability is None and board is not None},
+            "dealer":{
+                "value":dealer,
+                "observed":self.dealer is not None,
+                "derived_from_board":self.dealer is None and board is not None,
+                "confidence":self.dealer.confidence if self.dealer is not None else None,
+                "source":self.dealer.source if self.dealer is not None else None,
+            },
+            "vulnerability":{
+                "value":vul,
+                "observed":self.vulnerability is not None,
+                "derived_from_board":self.vulnerability is None and board is not None,
+                "confidence":self.vulnerability.confidence if self.vulnerability is not None else None,
+                "source":self.vulnerability.source if self.vulnerability is not None else None,
+            },
+            "board_number_observation":{
+                "confidence":self.board_number.confidence if self.board_number is not None else None,
+                "source":self.board_number.source if self.board_number is not None else None,
+            },
             "warnings":warnings,
-            "recognition":{"cards_complete":True,"unique_cards":52,"metadata_status":"validated_with_warnings" if warnings else "validated"},
+            "recognition":{
+                "cards_complete":True,
+                "unique_cards":52,
+                "metadata_status":"validated_with_warnings" if warnings else "validated",
+                "hand_confidence":self.hand_confidence,
+            },
             "extra_metadata":{k:{"value":v.value,"confidence":v.confidence,"source":v.source} for k,v in self.extra_metadata.items()},
         }
         return deal, provenance
