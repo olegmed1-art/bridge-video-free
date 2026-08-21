@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Real field gate for the named four-column VuBridge publication layout.
+"""Real field gate for the named VuBridge hand-diagram layout.
 
-Canonical truth is parsed from embedded source-PDF vector text. The production extractor
-sees only a rendered PNG crop. DDS3 is never used to create truth and source geometry is
-never used to repair OCR output.
+Canonical truth is parsed from embedded source-PDF vector text. Vector geometry is used
+only to choose the temporary rendered test crop; the production extractor receives PNG
+pixels only. DDS3 is never used to create truth and vector card values are never used to
+repair OCR output.
 """
 from __future__ import annotations
 
@@ -54,25 +55,26 @@ def _metadata_truth(text: str) -> tuple[int, str, str]:
 
 
 def _hand_truth(lines: list[str], seat: str) -> str:
-    start = next(i for i, line in enumerate(lines) if line.strip().lower() == seat.lower())
-    rows: dict[str, str] = {}
-    for raw in lines[start + 1 : start + 12]:
-        line = raw.strip()
-        if not line:
-            continue
-        match = re.match(r"^([♠♥♦♣])\s*(.+)$", line)
-        if match:
-            rows[SUITS[match.group(1)]] = _clean_ranks(match.group(2))
-            if len(rows) == 4:
+    # Source text can also contain auction headings with the same seat words. Select the
+    # occurrence whose following source lines actually contain the four printed suit rows.
+    starts = [i for i, line in enumerate(lines) if line.strip().lower() == seat.lower()]
+    for start in starts:
+        rows: dict[str, str] = {}
+        for raw in lines[start + 1 : start + 14]:
+            line = raw.strip()
+            if not line:
+                continue
+            match = re.match(r"^([♠♥♦♣])\s*(.+)$", line)
+            if match:
+                rows[SUITS[match.group(1)]] = _clean_ranks(match.group(2))
+                if len(rows) == 4:
+                    holding = ".".join(rows[suit] for suit in "SHDC")
+                    if sum(len(part) for part in holding.split(".")) == 13:
+                        return holding
+                    break
+            elif line.lower() in {"north", "west", "east", "south"} and rows:
                 break
-        elif line.lower() in {"north", "west", "east", "south"}:
-            break
-    if set(rows) != set("SHDC"):
-        raise ValueError(f"source hand incomplete for {seat}: {rows}")
-    holding = ".".join(rows[suit] for suit in "SHDC")
-    if sum(len(part) for part in holding.split(".")) != 13:
-        raise ValueError(f"source hand not 13 cards: {seat}:{holding}")
-    return holding
+    raise ValueError(f"source hand incomplete for {seat}")
 
 
 def _truth(page: fitz.Page) -> tuple[int, str, str, dict[str, str]]:
@@ -92,37 +94,65 @@ def _looks_like_rank_word(text: str) -> bool:
     return bool(cleaned) and all(char in RANKS for char in cleaned)
 
 
+def _near_hand_words(words, heading):
+    cx0 = (heading[0] + heading[2]) / 2
+    return [
+        word for word in words
+        if heading[1] - 5 <= (word[1] + word[3]) / 2 <= heading[3] + 190
+        and abs((word[0] + word[2]) / 2 - cx0) <= 105
+    ]
+
+
+def _select_hand_heading(words, seat: str):
+    candidates = [word for word in words if word[4].strip().lower() == seat]
+    if not candidates:
+        raise ValueError(f"source seat heading missing for crop: {seat}")
+    scored = []
+    for heading in candidates:
+        nearby = _near_hand_words(words, heading)
+        suit_words = [word for word in nearby if word[4].strip() and word[4].strip()[0] in SUITS]
+        suit_kinds = {word[4].strip()[0] for word in suit_words}
+        rank_words = [word for word in nearby if _looks_like_rank_word(word[4].strip())]
+        # Auction column labels have no four-suit hand beneath them. The actual hand
+        # heading must be locally supported by at least three distinct printed suit glyphs
+        # and several rank strings; the exact 52-card truth gate remains independent.
+        if len(suit_kinds) >= 3 and len(rank_words) >= 3:
+            score = 100 * len(suit_kinds) + 10 * len(rank_words) - heading[1] * 0.001
+            scored.append((score, heading))
+    if not scored:
+        raise ValueError(f"source hand heading lacks suit-row evidence: {seat}")
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return scored[0][1]
+
+
 def _deal_clip(page: fitz.Page) -> fitz.Rect:
     words = page.get_text("words")
-    seat_words = [w for w in words if w[4].strip().lower() in {"north", "west", "east", "south"}]
-    chosen = {}
-    for seat in ("north", "west", "east", "south"):
-        matches = [w for w in seat_words if w[4].strip().lower() == seat]
-        if not matches:
-            raise ValueError(f"source seat heading missing for crop: {seat}")
-        chosen[seat] = min(matches, key=lambda w: w[1])
+    chosen = {seat: _select_hand_heading(words, seat) for seat in ("north", "west", "east", "south")}
 
     relevant = list(chosen.values())
     for heading in chosen.values():
-        cx0 = (heading[0] + heading[2]) / 2
-        for word in words:
+        for word in _near_hand_words(words, heading):
             text = word[4].strip()
-            if not text:
-                continue
-            cy = (word[1] + word[3]) / 2
-            cx = (word[0] + word[2]) / 2
-            if heading[1] - 4 <= cy <= heading[3] + 185 and abs(cx - cx0) <= 80:
-                if text[0] in SUITS or _looks_like_rank_word(text):
-                    relevant.append(word)
+            if text and (text[0] in SUITS or _looks_like_rank_word(text)):
+                relevant.append(word)
 
-    north_y = chosen["north"][1]
-    for word in words:
-        text = word[4].strip().lower().rstrip(":#")
-        if text in {"board", "dealer", "vulnerable", "none", "north", "east", "south", "west"} and word[1] < north_y + 12:
-            relevant.append(word)
+    # Include explicit metadata labels and the complete vector words on their lines so
+    # the rendered image contains Board/Dealer/Vulnerable exactly as a user screenshot can.
+    metadata_labels = [
+        word for word in words
+        if word[4].strip().lower().rstrip(":#") in {"board", "dealer", "vulnerable"}
+    ]
+    for label in metadata_labels:
+        cy = (label[1] + label[3]) / 2
+        relevant.extend(
+            word for word in words
+            if abs((word[1] + word[3]) / 2 - cy) <= 8
+            and word[0] <= label[2] + 180
+            and word[2] >= label[0] - 20
+        )
 
-    x0 = min(w[0] for w in relevant); y0 = min(w[1] for w in relevant)
-    x1 = max(w[2] for w in relevant); y1 = max(w[3] for w in relevant)
+    x0 = min(word[0] for word in relevant); y0 = min(word[1] for word in relevant)
+    x1 = max(word[2] for word in relevant); y1 = max(word[3] for word in relevant)
     return fitz.Rect(max(0, x0 - 18), max(0, y0 - 16), min(page.rect.width, x1 + 18), min(page.rect.height, y1 + 22))
 
 
@@ -166,7 +196,7 @@ def _evaluate_page(page: fitz.Page, page_index: int, source_sha: str, dpi: int) 
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(); parser.add_argument("--output", type=Path); parser.add_argument("--dpi", type=int, default=440); args = parser.parse_args()
+    parser = argparse.ArgumentParser(); parser.add_argument("--output", type=Path); parser.add_argument("--dpi", type=int, default=300); args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="dds3-vubridge-field-") as temp:
         pdf = Path(temp) / "vubridge.pdf"; _download(pdf); source_sha = hashlib.sha256(pdf.read_bytes()).hexdigest(); document = fitz.open(pdf)
         results = []
@@ -178,7 +208,7 @@ def main() -> int:
             except Exception as exc:
                 results.append({"page": index + 1, "status": "field_error", "reason": f"{type(exc).__name__}:{exc}", "source_sha256": source_sha})
     exact = sum(item.get("status") == "exact" for item in results); wrong = sum(item.get("status") == "wrong_accept" for item in results); negative = sum(item.get("negative_crop") == "rejected" for item in results)
-    report = {"layout_family": "named_quadrant_vubridge", "extractor": "local_tesseract_named_quadrant_v1", "real_public_sources": 1, "real_board_pages": len(results), "exact": exact, "wrong_accepts": wrong, "negative_crop_rejected": negative, "truth_source": "embedded source PDF vector text", "dds3_used_for_truth": False, "paid_or_cloud_vision": False, "bridge_inference_repair": False, "render_dpi": args.dpi, "results": results}
+    report = {"layout_family": "named_vubridge", "extractor": "local_tesseract_named_quadrant_v1", "real_public_sources": 1, "real_board_pages": len(results), "exact": exact, "wrong_accepts": wrong, "negative_crop_rejected": negative, "truth_source": "embedded source PDF vector text", "dds3_used_for_truth": False, "paid_or_cloud_vision": False, "bridge_inference_repair": False, "render_dpi": args.dpi, "results": results}
     text = json.dumps(report, indent=2, sort_keys=True); print(text)
     if args.output: args.output.write_text(text + "\n", encoding="utf-8")
     return 0 if exact >= 1 and wrong == 0 and negative >= exact else 3
