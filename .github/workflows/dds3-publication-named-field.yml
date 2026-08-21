@@ -47,6 +47,32 @@ jobs:
           assert 'fallback_used' in ingress
           print('DDS3_NAMED_QUADRANT_CONTRACT_PASS')
           PY
+      - name: Diagnostic pixel geometry for first real board
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import tempfile
+          from pathlib import Path
+          import fitz
+          from tools.dds3_vision.evaluate_named_quadrant import _download, _deal_clip
+          from bridge_school_api.dds3.vision_publication import _decode, _deps, _rank_tokens, _cluster_rows, _row_center
+          from bridge_school_api.dds3.vision_named_quadrant import _heading_candidates
+          with tempfile.TemporaryDirectory(prefix='dds3-named-diag-') as temp:
+              pdf=Path(temp)/'source.pdf'; _download(pdf)
+              page=fitz.open(pdf)[0]; clip=_deal_clip(page)
+              pix=page.get_pixmap(matrix=fitz.Matrix(220/72,220/72),clip=clip,alpha=False)
+              cv2,np,pytesseract=_deps(); image=_decode(pix.tobytes('png'),cv2,np)
+              print('DIAG_SHAPE', image.shape[:2], 'CLIP', tuple(round(v,2) for v in clip))
+              headings=_heading_candidates(image,pytesseract); print('DIAG_HEADINGS', headings)
+              tokens=_rank_tokens(image,pytesseract)
+              for seat,cands in headings.items():
+                  for h in cands:
+                      hx,hy,conf=h
+                      near=[t for t in tokens if abs(t['cx']-hx)<=image.shape[1]*0.35 and hy-image.shape[0]*0.20<=t['cy']<=hy+image.shape[0]*0.40]
+                      rows=_cluster_rows(near,tolerance=max(10.0,image.shape[1]*0.018))
+                      print('DIAG_SEAT',seat,'HEADING',tuple(round(x,1) for x in h),'ROWS',[(round(_row_center(r),1),''.join(t['text'] for t in r),round(min(t['x'] for t in r),1),round(max(t['right'] for t in r),1)) for r in rows])
+          PY
       - name: Run real named-quadrant field gate
         env:
           PYTHONPATH: .
