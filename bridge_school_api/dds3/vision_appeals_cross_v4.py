@@ -52,9 +52,10 @@ def _context_tokens(image, pytesseract):
 def _context_row_candidate(tokens, *, x0: float, cy: float, span: float) -> str | None:
     """Recover the rank substring whose glyph box begins at the expected rank x.
 
-    The offset is derived only from OCR bounding-box geometry. It may discard a leading
-    suit-glyph surrogate that Tesseract merged into the same token, but it never inspects
-    another hand or deck inventory to decide which rank is missing.
+    The boundary is selected only from OCR bounding-box geometry. If Tesseract merges the
+    suit glyph into a token (for example ``4J10985``), only the geometrically estimated
+    prefix length is removed. Neighbouring suffixes are deliberately not tried: doing so
+    would create text alternatives that are not independently supported by pixels.
     """
     candidates: list[tuple[float, str]] = []
     y_tol = max(5.0, span * 0.22)
@@ -72,27 +73,17 @@ def _context_row_candidate(tokens, *, x0: float, cy: float, span: float) -> str 
         if not compact:
             continue
         char_width = token["w"] / max(1, len(compact))
-        estimated_drop = int(round(max(0.0, x0 - left) / max(1.0, char_width)))
-        for drop in sorted({max(0, estimated_drop - 1), estimated_drop, estimated_drop + 1}):
-            if drop >= len(compact):
-                continue
-            suffix = compact[drop:]
-            suffix = re.sub(r"^[^AKQJT9876543210]+", "", suffix)
-            value = _clean_rank_text(suffix)
-            if not value:
-                continue
-            # Score the actual boundary used for this suffix. Earlier versions scored
-            # every neighbouring suffix at the estimated boundary, making 4J10985 yield
-            # three artificial ties (4JT985/JT985/T985) instead of letting the pixel x
-            # coordinate identify the rank start.
-            x_distance = abs(left + drop * char_width - x0)
-            score = (
-                abs(center_y - cy)
-                + x_distance
-                + 0.35 * abs(drop - estimated_drop)
-                - min(20.0, token["conf"] / 5.0)
-            )
-            candidates.append((score, value))
+        drop = int(round(max(0.0, x0 - left) / max(1.0, char_width)))
+        if drop >= len(compact):
+            continue
+        suffix = compact[drop:]
+        suffix = re.sub(r"^[^AKQJT9876543210]+", "", suffix)
+        value = _clean_rank_text(suffix)
+        if not value:
+            continue
+        x_distance = abs(left + drop * char_width - x0)
+        score = abs(center_y - cy) + x_distance - min(20.0, token["conf"] / 5.0)
+        candidates.append((score, value))
     if not candidates:
         return None
     candidates.sort(key=lambda item: item[0])
@@ -167,10 +158,6 @@ def _read_row(
             context = _context_row_candidate(
                 context_tokens, x0=x0, cy=cy, span=span
             )
-            # For a close local contest, page-context segmentation may select either the
-            # local winner or a nearly tied alternative, but only when that exact text
-            # itself has broad cross-scale row support (>=80% of the local maximum).
-            # This is independent OCR evidence, not deck completion.
             if (
                 context is None
                 or context not in cross_scale
