@@ -28,7 +28,9 @@ class VercelOIDCConfig:
 
     @property
     def jwks_url(self) -> str:
-        return f"{self.issuer}/.well-known/jwks"
+        # Vercel's Team issuer is team-scoped, but its JWKS is served from the
+        # OIDC origin root. Do not append the team slug to the JWKS path.
+        return "https://oidc.vercel.com/.well-known/jwks"
 
     @property
     def audience(self) -> str:
