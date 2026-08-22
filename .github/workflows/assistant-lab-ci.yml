@@ -1,0 +1,36 @@
+name: Assistant Lab v1 CI
+
+on:
+  pull_request:
+    paths:
+      - 'assistant_lab/**'
+      - 'tests/test_assistant_lab_contract.py'
+      - '.github/workflows/assistant-lab-ci.yml'
+      - 'deploy/oracle-assistant-lab/**'
+      - 'ops/oracle_assistant_lab_preflight.sh'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  assistant-lab-contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install bounded test dependencies
+        run: python -m pip install --disable-pip-version-check 'pytest>=8,<9' 'psycopg[binary]>=3.2,<3.3'
+      - name: Compile Assistant Lab
+        run: python -m compileall -q assistant_lab
+      - name: Run Assistant Lab contract tests
+        run: pytest -q tests/test_assistant_lab_contract.py
+      - name: Verify no production activation is embedded
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -RniE 'CREATE[[:space:]]+ROLE|ALTER[[:space:]]+ROLE|DROP[[:space:]]+SCHEMA' assistant_lab/schema.sql
+          ! grep -RniE 'public\.skill|ai\.system_rule|student_profile' assistant_lab/schema.sql

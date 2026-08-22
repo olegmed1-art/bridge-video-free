@@ -1,0 +1,26 @@
+[Unit]
+Description=Bridge School Assistant Lab v1 worker
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/bridge-school/bridge-video-free
+Environment=PYTHONDONTWRITEBYTECODE=1
+EnvironmentFile=/opt/bridge-school/assistant-lab/assistant-lab.env
+EnvironmentFile=-/opt/bridge-school/dds3-runtime.env
+ExecStart=/opt/bridge-school/assistant-lab/.venv/bin/python -m assistant_lab.worker
+Restart=always
+RestartSec=2
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/bridge-school/assistant-lab
+
+[Install]
+WantedBy=multi-user.target
