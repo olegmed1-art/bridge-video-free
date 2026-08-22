@@ -2,7 +2,7 @@
 
 Канонический double-dummy вычислительный модуль проекта «Школа спортивного бриджа».
 
-Актуализировано по аудиту системы 2026-08-21.
+Актуализировано по финальному аудиту issue #236 2026-08-22.
 
 ## Каноническое ядро
 
@@ -50,15 +50,29 @@ Persistent worker сообщает telemetry `worker_generation`, `worker_reques
 
 Важно: валидация позиции подтверждает внутреннюю корректность текущего состояния, но сама по себе не доказывает историческую последовательность всех ранее сыгранных карт. Для точной атрибуции ошибки по ходу нужен реальный card-by-card replay.
 
-### Скриншоты
+### Raw screenshots / images
 
 Структурированный контракт наблюдения: `bridge_dds3_screenshot_observation/v1`.
 
 Пакетный контракт: `bridge_dds3_screenshot_batch/v1`.
 
-Core DDS3 **не выполняет распознавание пикселей** и не угадывает карты. Vision-слой должен сначала получить из изображения структурированное наблюдение, после чего DDS3 валидирует сдачу и считает численные DD-значения. Неуверенные/конфликтующие карты нельзя «исправлять» бриджевой логикой.
+Production raw-image operation принимает фактические JPEG/PNG/WebP bytes без ручного структурирования сделки. `solve_raw_image()` автоматически пробует только явно поддерживаемые local/free layout extractors и останавливается fail-closed после того, как распознанный layout дал неоднозначность/ошибку; другой extractor не используется как скрытый repair.
 
-На момент этого аудита production raw-image extractor и фактически наполненный корпус из >=50 реальных скриншотов с метриками extraction ещё не завершены. Спецификация корпуса существует, но это остаётся открытым пунктом улучшения.
+На 2026-08-22 положительно field-proven пять layout families:
+
+- Israel Bridge Federation yellow panel;
+- publication cross;
+- publication grid;
+- named quadrant;
+- EBU appeals-form cross.
+
+Raw-image gate требует **до DDS3**: явные Board/Dealer/Vulnerability, все четыре руки, confidence для каждого metadata/hand-suit field, identity extractor, SHA-256 конкретных входных bytes и затем ровно 52 уникальные стандартные карты / 13 на руку. Недостающая/неоднозначная карта, конфликтный или неподдерживаемый layout не ремонтируются дополнением колоды или бриджевой логикой.
+
+Канонический regression foundation содержит 60 реальных federation board images из трёх независимых source PDFs с отдельной vector-text truth. Для первого layout measured result: 42/60 exact deal + exact metadata, wrong accepts 0, accepted precision 42/42=100%, real-pixel negative cases 5/5 rejected. Четыре дополнительные семьи имеют отдельные реальные field gates и per-family exact/rejection metrics. Полный audit: [`docs/dds3-issue236-final-evidence-20260822.md`](../../docs/dds3-issue236-final-evidence-20260822.md).
+
+Это не обещание распознавать любой ранее неизвестный графический дизайн. Неизвестный layout должен быть добавлен и доказан отдельно; пока этого нет, корректный результат — vision rejection. Такое ограничение является fail-closed safety boundary, а не разрешением угадывать данные.
+
+Core DDS3 сам не выполняет OCR и не угадывает карты. Vision-layer строит `ScreenshotDealObservation`; только после evidence/52-card validation математический DDS3 получает структурированную сдачу.
 
 ## Runtime API
 
@@ -67,7 +81,8 @@ Standalone runtime `dds3_runtime/app.py` предоставляет:
 - `/readyz` — отдельная readiness-проверка настоящего DDS3;
 - `/v1/compute` — аутентифицированный вычислительный endpoint;
 - `operation=dd_table` — полная таблица;
-- `operation=position` / `position_all_moves` — произвольная позиция и все legal moves.
+- `operation=position` / `position_all_moves` — произвольная позиция и все legal moves;
+- raw-image operation — image bytes -> local/free vision -> strict validation -> DDS3.
 
 Неисправность DDS3 не должна ломать общий health/API школы: DDS-зависимые операции изолированы.
 
@@ -88,6 +103,8 @@ DDS3 и DDS 2.9.0 имеют общую кодовую родословную, �
 ## CI / evidence gate
 
 `.github/workflows/dds3-module.yml` проверяет реальный pinned DDS3, deterministic golden, Board 16, настоящий position worker, повторное использование context/TT, negative position case, production runtime readiness, HTTP `dd_table` и HTTP `position_all_moves`.
+
+Vision workflows отдельно проверяют 60-image real corpus contract и пять field-proven layout families, включая severe-crop / ambiguity rejection. Canonical image truth строится независимо от DDS3; ошибка extraction не маскируется как ошибка solver.
 
 Численный DD-результат считается доказанным только если он фактически получен DDS3. Unit/mock tests могут проверять контракт и нормализацию, но не заменяют реальный DDS3 integration gate.
 
