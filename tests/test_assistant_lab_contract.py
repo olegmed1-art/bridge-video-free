@@ -11,6 +11,7 @@ from assistant_lab.contract import (
     validate_priority,
     verify_dds3_result,
 )
+from assistant_lab.dispatch import dispatch_nonce_sha256, verify_dispatch_nonce
 from assistant_lab.worker import validate_local_dds3_url, validate_neon_dsn
 
 
@@ -68,6 +69,17 @@ def test_dds3_provenance_is_fail_closed():
         verify_dds3_result(good, expected_operation="position_all_moves")
 
 
+def test_dispatch_capability_is_hashed_and_fail_closed():
+    nonce = "ab" * 32
+    digest = dispatch_nonce_sha256(nonce)
+    assert len(digest) == 64
+    assert verify_dispatch_nonce(digest, nonce) is True
+    assert verify_dispatch_nonce(digest, "cd" * 32) is False
+    assert verify_dispatch_nonce(None, nonce) is False
+    with pytest.raises(LabContractError):
+        dispatch_nonce_sha256("short")
+
+
 def test_worker_dsn_is_neon_tls_channel_bound(monkeypatch):
     monkeypatch.setenv("ASSISTANT_LAB_EXPECTED_DB_USER", "assistant_lab_worker_principal")
     good = (
@@ -96,15 +108,26 @@ def test_worker_dds3_endpoint_is_localhost_only():
         validate_local_dds3_url("http://127.0.0.1:8080/anything")
 
 
-def test_schema_is_isolated_and_not_role_provisioning():
+def test_schema_is_isolated_and_dispatch_is_update_only_for_app():
     schema = Path("assistant_lab/schema.sql").read_text(encoding="utf-8")
     lowered = schema.lower()
     assert "create schema if not exists assistant_lab" in lowered
+    assert "dispatch_nonce_sha256" in lowered
+    assert "grant select, update on assistant_lab.job to bridge_school_app" in lowered
+    assert "grant insert" not in lowered
     assert "create role" not in lowered
     assert "alter role" not in lowered
     assert "drop schema" not in lowered
     assert "public.skill" not in lowered
     assert "ai.system_rule" not in lowered
+
+
+def test_capability_route_cannot_accept_payload_in_url():
+    main = Path("bridge_school_api/main.py").read_text(encoding="utf-8")
+    assert '/v1/assistant-lab/jobs/{job_id}/dispatch' in main
+    assert "verify_dispatch_nonce" in main
+    assert "validate_job_payload(row[\"kind\"], row[\"payload_json\"])" in main
+    assert "payload:" not in main.split('def dispatch_assistant_lab_job', 1)[1].split('def _configuration_failure_category', 1)[0]
 
 
 def test_oracle_service_is_fail_closed_and_not_public_network_worker():
