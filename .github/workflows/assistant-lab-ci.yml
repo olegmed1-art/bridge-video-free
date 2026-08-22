@@ -8,6 +8,7 @@ on:
       - '.github/workflows/assistant-lab-ci.yml'
       - 'deploy/oracle-assistant-lab/**'
       - 'ops/oracle_assistant_lab_preflight.sh'
+      - 'ops/oracle_assistant_lab_install.sh'
   workflow_dispatch:
 
 permissions:
@@ -28,6 +29,12 @@ jobs:
         run: python -m pip install --disable-pip-version-check 'pytest>=8,<9' 'psycopg[binary]>=3.2,<3.3'
       - name: Compile Assistant Lab
         run: python -m compileall -q assistant_lab
+      - name: Validate Oracle scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/oracle_assistant_lab_preflight.sh
+          bash -n ops/oracle_assistant_lab_install.sh
       - name: Run Assistant Lab contract tests
         run: python -m pytest -q tests/test_assistant_lab_contract.py
       - name: Verify no production activation is embedded
@@ -36,3 +43,6 @@ jobs:
           set -euo pipefail
           ! grep -RniE 'CREATE[[:space:]]+ROLE|ALTER[[:space:]]+ROLE|DROP[[:space:]]+SCHEMA' assistant_lab/schema.sql
           ! grep -RniE 'public\.skill|ai\.system_rule|student_profile' assistant_lab/schema.sql
+      - name: Record schema checksum
+        shell: bash
+        run: sha256sum assistant_lab/schema.sql
