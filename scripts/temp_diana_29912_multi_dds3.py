@@ -63,7 +63,8 @@ def analyze_board(base,token,b):
     after_h=remove_card(b['hands'],leader,b['opening_lead'])
     nxt=next_seat(leader)
     if side(nxt)!=side(decl): raise RuntimeError('next seat after opening leader is not declarer side')
-    after=post(base,token,{'operation':'position_all_moves','position':{'pbn':pbn(after_h),'trump':strain,'first':nxt,'current_trick':[b['opening_lead']]}})
+    # DDS Deal.first remains the leader of the current trick; current_trick length determines who plays next.
+    after=post(base,token,{'operation':'position_all_moves','position':{'pbn':pbn(after_h),'trump':strain,'first':leader,'current_trick':[b['opening_lead']]}})
     defender_best=int(start['best_tricks'])
     declarer_after=int(after['best_tricks'])
     defender_after=int(after['tricks_remaining'])-declarer_after
