@@ -1,0 +1,29 @@
+name: TEMP Assistant Lab production NOOP canary
+
+on:
+  push:
+    branches:
+      - assistant-lab-prod-canary
+
+permissions:
+  contents: read
+
+jobs:
+  noop-canary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Dispatch pre-created bounded NOOP job
+        shell: bash
+        run: |
+          set -euo pipefail
+          url='https://bridge-video-free.vercel.app/v1/assistant-lab/jobs/48dfb0d3-f832-4d28-af18-9a5df14dedf8/dispatch?nonce=337f23b775457827d9e84dc7cb91501ab424a93f45d1139ab747238bf1010f96'
+          curl --fail-with-body --silent --show-error --max-time 45 "$url" | tee /tmp/result.json
+          python - <<'PY'
+          import json
+          d=json.load(open('/tmp/result.json'))
+          assert d['status']=='COMPLETED', d
+          assert d['result']['kind']=='NOOP', d
+          assert d['result']['contract']=='assistant-lab-v1', d
+          print('ASSISTANT_LAB_PRODUCTION_NOOP_PASS')
+          PY
