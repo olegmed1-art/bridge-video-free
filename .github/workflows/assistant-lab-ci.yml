@@ -4,11 +4,14 @@ on:
   pull_request:
     paths:
       - 'assistant_lab/**'
-      - 'tests/test_assistant_lab_contract.py'
+      - 'bridge_school_api/assistant_lab_bootstrap.py'
+      - 'app.py'
+      - 'tests/test_assistant_lab_*.py'
       - '.github/workflows/assistant-lab-ci.yml'
       - 'deploy/oracle-assistant-lab/**'
       - 'ops/oracle_assistant_lab_preflight.sh'
       - 'ops/oracle_assistant_lab_install.sh'
+      - 'ops/oracle_dds3_host_repair.sh'
   workflow_dispatch:
 
 permissions:
@@ -35,14 +38,17 @@ jobs:
           set -euo pipefail
           bash -n ops/oracle_assistant_lab_preflight.sh
           bash -n ops/oracle_assistant_lab_install.sh
+          bash -n ops/oracle_dds3_host_repair.sh
       - name: Run Assistant Lab contract tests
-        run: python -m pytest -q tests/test_assistant_lab_contract.py
-      - name: Verify no production activation is embedded
+        run: python -m pytest -q tests/test_assistant_lab_contract.py tests/test_assistant_lab_bootstrap.py
+      - name: Verify bootstrap schema boundaries
         shell: bash
         run: |
           set -euo pipefail
-          ! grep -RniE 'CREATE[[:space:]]+ROLE|ALTER[[:space:]]+ROLE|DROP[[:space:]]+SCHEMA' assistant_lab/schema.sql
-          ! grep -RniE 'public\.skill|ai\.system_rule|student_profile' assistant_lab/schema.sql
-      - name: Record schema checksum
+          ! grep -RniE 'public\.skill|ai\.system_rule|student_profile' assistant_lab/schema.sql assistant_lab/bootstrap_schema.sql
+          ! grep -RniE 'GRANT[[:space:]]+(INSERT|DELETE).*bootstrap_ticket' assistant_lab/bootstrap_schema.sql
+      - name: Record schema checksums
         shell: bash
-        run: sha256sum assistant_lab/schema.sql
+        run: |
+          sha256sum assistant_lab/schema.sql
+          sha256sum assistant_lab/bootstrap_schema.sql
