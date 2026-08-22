@@ -10,6 +10,7 @@ on:
       - 'requirements-dds3-vision.txt'
       - 'docs/dds3-vision-corpus-field-evidence-*.md'
       - 'docs/dds3-local-vision-field-evidence-*.md'
+      - 'docs/dds3-issue236-final-evidence-*.md'
       - '.github/workflows/dds3-vision-corpus.yml'
   workflow_dispatch:
 
@@ -67,6 +68,10 @@ jobs:
           assert 'local_tesseract_federation_yellow_v1' in source
           assert 'image->local_free_vision->52_card_validation->DDS3' in ingress
           assert 'fallback' in ingress and 'paid' in ingress
+          assert '_require_raw_vision_evidence' in ingress
+          assert 'RAW_VISION_METADATA_MISSING' in ingress
+          assert 'RAW_VISION_HAND_CONFIDENCE_MISSING' in ingress
+          assert 'RAW_VISION_IMAGE_SHA256_MISMATCH' in ingress
           print('DDS3_LOCAL_VISION_SOURCE_CONTRACT_PASS')
           PY
       - name: Public evidence privacy and metric contract
@@ -75,15 +80,31 @@ jobs:
           from pathlib import Path
           corpus=Path('docs/dds3-vision-corpus-field-evidence-20260821.md').read_text(encoding='utf-8')
           local=Path('docs/dds3-local-vision-field-evidence-20260821.md').read_text(encoding='utf-8')
+          final=Path('docs/dds3-issue236-final-evidence-20260822.md').read_text(encoding='utf-8')
           assert '**60**' in corpus
           assert 'DDS3 is not used to create or repair truth' in corpus
           assert '42/60 (70.0%)' in local
           assert 'Accepted but wrong | **0**' in local
           assert '42/42 (100%)' in local
           assert '5/5 were rejected' in local
-          assert 'does **not** close' in local
+          for family in (
+              'federation yellow panel',
+              'publication cross',
+              'publication grid',
+              'named quadrant',
+              'EBU appeals cross',
+          ):
+              assert family in final, family
+          for marker in (
+              'Raw image -> vision -> validation -> DDS3 without manual deal structuring: PASS',
+              'Stable table + position/all-moves API: PASS',
+              'DDS3 provenance / no fallback: PASS',
+              'Real golden + position/TT + image negative CI: PASS',
+              'Real regression corpus and vision metrics separate from solver: PASS',
+          ):
+              assert marker in final, marker
           forbidden=('drive.google.com/file/d/','docs.google.com/')
-          for text in (corpus,local):
+          for text in (corpus,local,final):
               for token in forbidden:
                   assert token not in text, token
           print('DDS3_VISION_PUBLIC_EVIDENCE_PASS')
