@@ -70,7 +70,7 @@ jobs:
           c=_oidc_config()
           assert c.enabled is True
           assert c.issuer=='https://oidc.vercel.com/example-team'
-          assert c.jwks_url=='https://oidc.vercel.com/example-team/.well-known/jwks'
+          assert c.jwks_url=='https://oidc.vercel.com/.well-known/jwks'
           assert c.audience=='https://vercel.com/example-team'
           assert c.subject=='owner:example-team:project:example-project:environment:production'
           assert c.team_id=='team_test' and c.project_id=='prj_test'
