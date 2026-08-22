@@ -1,0 +1,66 @@
+name: DDS3 Chat Runner
+
+on:
+  workflow_dispatch:
+    inputs:
+      trump:
+        description: 'Trump: S H D C NT'
+        required: true
+        default: 'NT'
+      first:
+        description: 'Side to play: N E S W'
+        required: true
+        default: 'N'
+      current_trick:
+        description: 'Current trick, e.g. SA,H7 or -'
+        required: true
+        default: '-'
+      pbn:
+        description: 'Remaining cards in PBN format'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  solve:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Build DDS3
+        run: docker build -f Dockerfile.dds3 -t bridge-dds3 .
+
+      - name: Solve position with all legal moves
+        env:
+          DDS_TRUMP: ${{ inputs.trump }}
+          DDS_FIRST: ${{ inputs.first }}
+          DDS_CURRENT_TRICK: ${{ inputs.current_trick }}
+          DDS_PBN: ${{ inputs.pbn }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'POSITION\t%s\t%s\t%s\t%s\n' \
+            "$DDS_TRUMP" "$DDS_FIRST" "$DDS_CURRENT_TRICK" "$DDS_PBN" \
+            | docker run --rm -i --entrypoint /opt/bridge-school-dds3/dds_position_worker bridge-dds3 \
+            | tee dds3-result.jsonl
+
+      - name: Verify DDS3 result
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q '"ok":true' dds3-result.jsonl
+          grep -q '"engine":"DDS3"' dds3-result.jsonl
+          grep -q '"fallback_used":false' dds3-result.jsonl
+
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: dds3-chat-result
+          path: dds3-result.jsonl
+          if-no-files-found: error
+          retention-days: 7
