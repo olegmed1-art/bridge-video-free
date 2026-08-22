@@ -2,7 +2,6 @@
 
 import base64
 import json
-import logging
 import os
 
 from fastapi import Depends, Request
@@ -15,8 +14,6 @@ from bridge_school_api.ai_teacher import router as ai_teacher_router
 from bridge_school_api.ai_worker import router as ai_worker_router
 from bridge_school_api.assistant_lab_bootstrap import router as assistant_lab_bootstrap_router
 from bridge_school_api.main import app, require_api_token
-
-logger = logging.getLogger("bridge_school_api.oidc_diag")
 
 
 def _replace_vercel_oidc_header(headers: list[tuple[bytes, bytes]], token: str) -> list[tuple[bytes, bytes]]:
@@ -43,11 +40,18 @@ def _safe_oidc_claims(token: str) -> dict[str, object]:
 
 @app.middleware("http")
 async def vercel_oidc_context(request: Request, call_next):
-    token = os.getenv("VERCEL_OIDC_TOKEN", "").strip()
-    if token:
-        request.scope["headers"] = _replace_vercel_oidc_header(list(request.scope.get("headers", [])), token)
-        if request.url.path == "/dds3/readyz":
-            logger.warning("vercel_oidc_safe_claims=%s", json.dumps(_safe_oidc_claims(token), sort_keys=True))
+    env_token = os.getenv("VERCEL_OIDC_TOKEN", "").strip()
+    incoming_token = request.headers.get("x-vercel-oidc-token", "").strip()
+    if request.url.path == "/dds3/readyz":
+        diagnostic = {
+            "env_present": bool(env_token),
+            "incoming_present": bool(incoming_token),
+            "env_claims": _safe_oidc_claims(env_token) if env_token else None,
+            "incoming_claims": _safe_oidc_claims(incoming_token) if incoming_token else None,
+        }
+        print("VERCEL_OIDC_DIAG_V2 " + json.dumps(diagnostic, sort_keys=True), flush=True)
+    if env_token:
+        request.scope["headers"] = _replace_vercel_oidc_header(list(request.scope.get("headers", [])), env_token)
     return await call_next(request)
 
 
