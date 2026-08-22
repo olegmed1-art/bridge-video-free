@@ -35,13 +35,39 @@ oci network security-list update --security-list-id "$SECURITY_LIST_ID" --ingres
 SSH=(ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$PUBLIC_IP")
 "${SSH[@]}" 'echo SSH_OK' >/dev/null || die "SSH unreachable"
 
-log "Repair host listeners, certificate, nginx, health timer"
+log "Repair OCI host firewall, listeners, certificate, nginx, health timer"
 "${SSH[@]}" "sudo PUBLIC_IP='$PUBLIC_IP' bash -s" <<'REMOTE'
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y --no-install-recommends nginx curl python3 python3-venv ca-certificates >/dev/null
+apt-get install -y --no-install-recommends nginx curl python3 python3-venv ca-certificates iptables >/dev/null
 systemctl enable --now nginx docker >/dev/null
+
+# OCI-provided images can enforce a host firewall independently of VCN security lists.
+# Add only the two web ports; do not flush or reload OCI's existing iptables rules.
+cat >/usr/local/sbin/dds3-open-web-ports <<'EOF'
+#!/bin/sh
+set -eu
+iptables -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p tcp --dport 80 -j ACCEPT
+iptables -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -p tcp --dport 443 -j ACCEPT
+EOF
+chmod 755 /usr/local/sbin/dds3-open-web-ports
+cat >/etc/systemd/system/dds3-host-firewall.service <<'EOF'
+[Unit]
+Description=Allow Bridge School DDS3 HTTP/HTTPS through OCI host firewall
+After=network-pre.target
+Before=nginx.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/dds3-open-web-ports
+RemainAfterExit=yes
+[Install]
+WantedBy=multi-user.target
+EOF
+systemctl daemon-reload
+systemctl enable --now dds3-host-firewall.service >/dev/null
+iptables -C INPUT -p tcp --dport 80 -j ACCEPT
+iptables -C INPUT -p tcp --dport 443 -j ACCEPT
 
 # Do not expose container directly; assert localhost runtime is healthy.
 docker inspect bridge-school-dds3-runtime >/dev/null
@@ -62,7 +88,6 @@ ln -sfn /etc/nginx/sites-available/dds3 /etc/nginx/sites-enabled/dds3
 nginx -t
 systemctl reload nginx
 
-# Verify kernel listeners locally before ACME.
 ss -ltnp | grep -E ':(80|8080)\b' || true
 
 echo acme-ok >/var/www/certbot/.well-known/acme-challenge/bridge-school-probe
@@ -113,7 +138,7 @@ printf 'SERVER_TRANSPORT_REPAIR_PASS\n'
 cat /tmp/dds3-https-ready.json
 REMOTE
 
-log "Verify from Cloud Shell"
+log "Verify from Cloud Shell public path"
 curl -fsS --max-time 20 "http://$PUBLIC_IP/readyz" >/tmp/remote-http.json
 curl -fsS --max-time 20 "https://$PUBLIC_IP/readyz" | tee /tmp/remote-https.json
 printf '\nTRANSPORT_REPAIR_COMPLETE https://%s/readyz\n' "$PUBLIC_IP"
