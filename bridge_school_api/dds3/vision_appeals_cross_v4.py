@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections import Counter
 
 from .screenshot import ObservedField, ScreenshotDealObservation
 from .vision_appeals_cross import (
@@ -93,15 +94,20 @@ def _context_row_candidate(tokens, *, x0: float, cy: float, span: float) -> str 
 
 
 def _context_consensus(token_sets, *, x0: float, cy: float, span: float) -> str | None:
-    """Require two independent page segmentations to read the same bounded holding."""
+    """Require a 2-of-3 majority of independent page segmentations for one row."""
     values = [
         _context_row_candidate(tokens, x0=x0, cy=cy, span=span)
         for tokens in token_sets
     ]
-    supported = [value for value in values if value]
-    if len(supported) < 2 or len(set(supported)) != 1:
+    counts = Counter(value for value in values if value)
+    if not counts:
         return None
-    return supported[0]
+    value, votes = counts.most_common(1)[0]
+    if votes < 2:
+        return None
+    if len(counts) > 1 and counts.most_common(2)[1][1] == votes:
+        return None
+    return value
 
 
 def _near_tie_extension(counts: dict[str, int], best_count: int) -> str | None:
@@ -219,9 +225,9 @@ def _read_row(
                         )
                     winner = context
 
-    # A pair of independent whole-page segmentations is a second direct pixel reading,
-    # not deck inference. It may replace a contaminated narrow-crop reading only when the
-    # two segmentations agree exactly on the geometrically bounded row.
+    # A majority of three independent whole-page segmentations is a second direct pixel
+    # reading, not deck inference. It may replace a contaminated narrow-crop reading only
+    # when at least two segmentations agree on the geometrically bounded row.
     context = _context_consensus(context_token_sets, x0=x0, cy=cy, span=span)
     if context is not None and context != winner:
         winner = context
@@ -251,7 +257,7 @@ def _extract_hands(image, compass, pytesseract, cv2):
         "E": [center_y + factor * span for factor in (-0.55, -0.18, 0.18, 0.55)],
     }
     context_token_sets = [
-        _context_tokens(image, pytesseract, psm=psm) for psm in (6, 11)
+        _context_tokens(image, pytesseract, psm=psm) for psm in (3, 6, 11)
     ]
     hands = {}
     confidence = {}
