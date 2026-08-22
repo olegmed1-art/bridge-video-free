@@ -7,6 +7,7 @@ on:
       - 'tests/test_api_dsn_contract.py'
       - 'tests/test_api_health_contract.py'
       - 'tests/test_api_response_headers.py'
+      - 'tests/test_dds3_remote.py'
       - 'scripts/process_drive_video.py'
       - '.github/workflows/process-video.yml'
       - '.github/workflows/drive-upload-diagnostic.yml'
@@ -21,6 +22,7 @@ on:
       - 'tests/test_api_dsn_contract.py'
       - 'tests/test_api_health_contract.py'
       - 'tests/test_api_response_headers.py'
+      - 'tests/test_dds3_remote.py'
       - 'scripts/process_drive_video.py'
       - '.github/workflows/process-video.yml'
       - '.github/workflows/drive-upload-diagnostic.yml'
@@ -48,12 +50,14 @@ jobs:
       - name: Install API dependencies
         run: python -m pip install --disable-pip-version-check -r requirements-api.txt
       - name: Compile Python entry points
-        run: python -m py_compile bridge_school_api/__init__.py bridge_school_api/db.py bridge_school_api/main.py scripts/process_drive_video.py tests/test_api_health_contract.py tests/test_api_response_headers.py
+        run: python -m py_compile bridge_school_api/__init__.py bridge_school_api/db.py bridge_school_api/main.py bridge_school_api/dds3/remote.py scripts/process_drive_video.py tests/test_api_health_contract.py tests/test_api_response_headers.py tests/test_dds3_remote.py
       - name: Verify database DSN contract
         run: PYTHONPATH=. python tests/test_api_dsn_contract.py
       - name: Verify public health endpoint contract
         run: PYTHONPATH=. python tests/test_api_health_contract.py
       - name: Verify protected API response headers
         run: PYTHONPATH=. python tests/test_api_response_headers.py
+      - name: Verify remote DDS3 fail-closed transport contract
+        run: PYTHONPATH=. python tests/test_dds3_remote.py
       - name: Import FastAPI application
         run: python -c "from bridge_school_api.main import app; assert app.title == 'Bridge School API'"
