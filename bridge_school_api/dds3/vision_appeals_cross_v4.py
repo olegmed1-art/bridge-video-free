@@ -128,8 +128,11 @@ def _read_row(
 ):
     height, width = image.shape[:2]
     radius = max(6, int(span * 0.18))
-    left = max(0, int(x0))
-    right = min(width, int(left + max(90.0, span * 2.55)))
+    # Preserve a small antialias margin before the expected rank origin. This is purely
+    # pixel geometry: it prevents a single leading glyph from being clipped at the crop
+    # edge while the right boundary stays anchored to the same expected rank origin.
+    left = max(0, int(x0 - span * 0.08))
+    right = min(width, int(x0 + max(90.0, span * 2.55)))
     top = max(0, int(cy - radius))
     bottom = min(height, int(cy + radius + 1))
     crop = image[top:bottom, left:right]
