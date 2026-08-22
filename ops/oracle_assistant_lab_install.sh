@@ -21,6 +21,7 @@ SERVICE_DST="/etc/systemd/system/$SERVICE_NAME"
 DDS3_ENV="${DDS3_RUNTIME_ENV_FILE:-/opt/bridge-school/dds3-runtime.env}"
 EXPECTED_DB_USER="${ASSISTANT_LAB_EXPECTED_DB_USER:-assistant_lab_worker_principal}"
 ACTIVATE="${ASSISTANT_LAB_ACTIVATE:-0}"
+PSYCOPG_VERSION="${ASSISTANT_LAB_PSYCOPG_VERSION:-3.2.13}"
 
 log(){ printf '\n[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
@@ -28,6 +29,7 @@ die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$(id -u)" -eq 0 ]] || die "run as root on the existing Oracle DDS3 host"
 [[ -n "${ASSISTANT_LAB_DATABASE_URL:-}" ]] || die "ASSISTANT_LAB_DATABASE_URL is required as protected input"
 [[ "$ACTIVATE" =~ ^[01]$ ]] || die "ASSISTANT_LAB_ACTIVATE must be 0 or 1"
+[[ "$PSYCOPG_VERSION" =~ ^3\.2\.[0-9]+$ ]] || die "Assistant Lab psycopg must stay on the CI-verified 3.2.x line"
 [[ -d "$REPO_DIR/.git" ]] || die "expected repository checkout not found at $REPO_DIR"
 [[ -f "$REPO_DIR/assistant_lab/worker.py" ]] || die "Assistant Lab worker code missing from repository checkout"
 [[ -f "$SERVICE_SRC" ]] || die "systemd unit template missing: $SERVICE_SRC"
@@ -35,6 +37,8 @@ die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 command -v curl >/dev/null 2>&1 || die "curl is required"
 command -v python3 >/dev/null 2>&1 || die "python3 is required"
 command -v systemctl >/dev/null 2>&1 || die "systemd is required"
+command -v runuser >/dev/null 2>&1 || die "runuser is required"
+command -v systemd-analyze >/dev/null 2>&1 || die "systemd-analyze is required"
 
 log "Verify hot localhost DDS3 before installing worker"
 READY_JSON="$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)" || die "local DDS3 /readyz is unavailable"
@@ -58,7 +62,7 @@ install -d -m 0750 -o "$LAB_USER" -g "$LAB_GROUP" "$LAB_DIR"
 log "Create bounded Python runtime"
 python3 -m venv "$LAB_DIR/.venv"
 "$LAB_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir \
-  'psycopg[binary]==3.3.4' >/dev/null
+  "psycopg[binary]==$PSYCOPG_VERSION" >/dev/null
 chown -R "$LAB_USER:$LAB_GROUP" "$LAB_DIR/.venv"
 
 log "Validate dedicated Neon DSN before persisting it"
@@ -115,7 +119,8 @@ if [[ "$ACTIVATE" == "1" ]]; then
   }
   printf 'ASSISTANT_LAB_INSTALL_PASS activated=1\n'
 else
-  log "Stage complete; service intentionally not enabled"
-  systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
-  printf 'ASSISTANT_LAB_INSTALL_PASS activated=0\n'
+  # Idempotency rule: staging must never stop/disable an already-running worker.
+  CURRENT_STATE="$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)"
+  log "Stage complete; service state left unchanged (${CURRENT_STATE:-unknown})"
+  printf 'ASSISTANT_LAB_INSTALL_PASS activated=0 state_unchanged=1\n'
 fi
