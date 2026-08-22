@@ -1,0 +1,30 @@
+name: TEMP Assistant Lab bootstrap route canary
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap-route:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Redeem fake bootstrap ticket
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          out=$(mktemp)
+          code=$(curl -sS --max-time 30 -o "$out" -w '%{http_code}' -X POST \
+            -H 'Authorization: Bearer hVnweIFx0M2Pjo7RXBDg-QbzwmE0wkL55sSNdkrgv5ratxexcvWEUS7ZJHUhvdL6' \
+            https://bridge-video-free.vercel.app/v1/assistant-lab/bootstrap)
+          test "$code" = 200
+          grep -q '^#!/usr/bin/env bash' "$out"
+          grep -q 'ASSISTANT_LAB_OCI_BOOTSTRAP_PASS' "$out"
+          grep -q 'oracle_dds3_host_repair.sh' "$out"
+          grep -q 'ec10910e28cc7c011a7ab3d4be0c1a2dbed97d26' "$out"
+          grep -q 'assistant_lab_worker_principal:test@' "$out"
+          ! grep -q 'hVnweIFx0M2Pjo7RXBDg-QbzwmE0wkL55sSNdkrgv5ratxexcvWEUS7ZJHUhvdL6' "$out"
+          echo ASSISTANT_LAB_BOOTSTRAP_ROUTE_PASS
