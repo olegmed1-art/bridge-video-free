@@ -130,6 +130,12 @@ def test_capability_route_cannot_accept_payload_in_url():
     assert "payload:" not in main.split('def dispatch_assistant_lab_job', 1)[1].split('def _configuration_failure_category', 1)[0]
 
 
+def test_vercel_runtime_package_includes_assistant_lab():
+    rules = Path(".vercelignore").read_text(encoding="utf-8").splitlines()
+    assert "!assistant_lab" in rules
+    assert "!bridge_school_api" in rules
+
+
 def test_oracle_service_is_fail_closed_and_not_public_network_worker():
     unit = Path("deploy/oracle-assistant-lab/assistant-lab.service").read_text(encoding="utf-8")
     assert "NoNewPrivileges=true" in unit
