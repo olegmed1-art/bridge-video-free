@@ -215,10 +215,6 @@ def _read_row(
             value for value in alternatives if counts[value] * 3 >= counts[winner] * 2
         ]
         if high_alternatives:
-            # When the dominant full holding has strictly more direct OCR votes and every
-            # competing high-vote reading is only a clipped contiguous fragment of that
-            # same observed string, keep the full direct reading. No missing card is
-            # reconstructed and no deck state is consulted.
             dominant_full = (
                 all(value in winner for value in high_alternatives)
                 and all(counts[winner] > counts[value] for value in high_alternatives)
@@ -231,20 +227,28 @@ def _read_row(
                     context = _context_consensus(
                         context_token_sets, x0=x0, cy=cy, span=span
                     )
-                    # Context is only a second independent reading. It can resolve a
-                    # disputed crop row only if that exact value was also directly seen
-                    # in at least two crop scales; otherwise fail closed.
                     if context is None or context not in cross_scale:
                         raise AppealsCrossVisionError(
                             f"AMBIGUOUS_APPEALS_CARD_OCR:{counts}:context={context}"
                         )
                     winner = context
 
-    # Do not let a weaker whole-page segmentation overwrite an already resolved bounded
-    # crop reading. Context is used only above to break an actual crop ambiguity. This
-    # prevents direct holdings such as AK732/JT985 from being changed to glyph-confused
-    # AKT32/7T985 while preserving the independent-evidence tie resolution for KQ86.
-    confidence = min(0.92, 0.62 + 0.03 * counts[winner])
+    # Whole-page OCR is useful for very short rows where a narrow crop can be dominated
+    # by a neighbouring glyph. Restrict that override to holdings of at most two ranks,
+    # require a 2-of-3 page consensus, and use exactly the directly read context value.
+    # Longer holdings stay anchored to the multi-scale bounded crop because page-level
+    # segmentation has empirically confused interior J/7/T glyphs on this layout.
+    context = _context_consensus(context_token_sets, x0=x0, cy=cy, span=span)
+    if (
+        context is not None
+        and context != winner
+        and len(context) <= 2
+        and len(winner) <= 2
+    ):
+        winner = context
+        confidence = 0.80
+    else:
+        confidence = min(0.92, 0.62 + 0.03 * counts[winner])
     return winner, confidence
 
 
