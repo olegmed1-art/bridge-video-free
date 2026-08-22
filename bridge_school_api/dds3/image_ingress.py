@@ -127,6 +127,65 @@ def _extract_local_observation(
         raise ImageIngressError(str(exc)) from exc
 
 
+def _require_raw_vision_evidence(
+    observation: ScreenshotDealObservation, *, image_sha256: str
+) -> str:
+    """Fail closed unless a raw-image extractor produced complete pixel evidence.
+
+    Structured callers may still use the more permissive screenshot-observation contract,
+    including board-derived metadata when that is explicitly intended. The *raw image*
+    path is stricter: Board, Dealer and Vulnerability must all be directly emitted by the
+    extractor with confidence, every hand/suit field must carry confidence, and the
+    observation must be cryptographically bound to the exact input bytes. This prevents
+    a future extractor from silently turning board-number inference or an unbound OCR
+    object into a production DDS3 input.
+    """
+
+    for name in ("board_number", "dealer", "vulnerability"):
+        field = getattr(observation, name)
+        if field is None or field.value is None or str(field.value).strip() == "":
+            raise ImageIngressError(f"RAW_VISION_METADATA_MISSING:{name}")
+        try:
+            confidence = float(field.confidence) if field.confidence is not None else None
+        except (TypeError, ValueError) as exc:
+            raise ImageIngressError(f"RAW_VISION_CONFIDENCE_INVALID:{name}") from exc
+        if confidence is None or not 0.0 <= confidence <= 1.0:
+            raise ImageIngressError(f"RAW_VISION_CONFIDENCE_MISSING:{name}")
+        if not field.source:
+            raise ImageIngressError(f"RAW_VISION_SOURCE_MISSING:{name}")
+
+    if set(observation.hands) != set("NESW"):
+        raise ImageIngressError("RAW_VISION_HANDS_INCOMPLETE")
+    for seat in "NESW":
+        if set(observation.hands[seat]) != set("SHDC"):
+            raise ImageIngressError(f"RAW_VISION_HAND_INCOMPLETE:{seat}")
+        confidence_by_suit = observation.hand_confidence.get(seat)
+        if confidence_by_suit is None or set(confidence_by_suit) != set("SHDC"):
+            raise ImageIngressError(f"RAW_VISION_HAND_CONFIDENCE_MISSING:{seat}")
+        for suit in "SHDC":
+            try:
+                confidence = float(confidence_by_suit[suit])
+            except (TypeError, ValueError) as exc:
+                raise ImageIngressError(
+                    f"RAW_VISION_HAND_CONFIDENCE_INVALID:{seat}:{suit}"
+                ) from exc
+            if not 0.0 <= confidence <= 1.0:
+                raise ImageIngressError(
+                    f"RAW_VISION_HAND_CONFIDENCE_INVALID:{seat}:{suit}"
+                )
+
+    digest_field = observation.extra_metadata.get("image_sha256")
+    if digest_field is None or str(digest_field.value) != image_sha256:
+        raise ImageIngressError("RAW_VISION_IMAGE_SHA256_MISMATCH")
+    if digest_field.confidence is None or float(digest_field.confidence) != 1.0:
+        raise ImageIngressError("RAW_VISION_IMAGE_SHA256_UNVERIFIED")
+
+    extractor_field = observation.extra_metadata.get("vision_extractor")
+    if extractor_field is None or not extractor_field.value:
+        raise ImageIngressError("RAW_VISION_EXTRACTOR_MISSING")
+    return str(extractor_field.value)
+
+
 def solve_raw_image(
     image_bytes: bytes,
     *,
@@ -138,18 +197,19 @@ def solve_raw_image(
 
     Supported layout families are explicit and local. Unsupported/ambiguous images do not
     fall back to a web solver, paid model, bridge inference, or a second numerical engine.
+    The raw path additionally requires explicit Board/Dealer/Vulnerability, confidence for
+    every extracted field, and an exact SHA-256 binding to the received image bytes.
     """
     image = validate_image_payload(image_bytes, media_type=media_type, filename=filename)
     observation = _extract_local_observation(
         image_bytes, media_type=media_type, filename=filename
     )
+    extractor = _require_raw_vision_evidence(
+        observation, image_sha256=str(image["sha256"])
+    )
     result = solve_screenshot_observation(observation, config=config)
     result["image"] = image
     result["pipeline"] = "image->local_free_vision->52_card_validation->DDS3"
-    extractor = "unknown_local_extractor"
-    field = observation.extra_metadata.get("vision_extractor")
-    if field is not None and field.value:
-        extractor = str(field.value)
     result["vision"] = {
         "extractor": extractor,
         "fallback_used": False,
