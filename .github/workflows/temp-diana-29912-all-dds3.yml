@@ -1,0 +1,116 @@
+name: TEMP Diana 29912 cross-session DDS3
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/temp-diana-29912-all-dds3.yml'
+      - 'scripts/temp_diana_29912_extract_sources.py'
+      - 'scripts/temp_diana_29912_multi_dds3.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Fetch completed event 29912 source evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p probe29912all
+          UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140 Safari/537.36'
+          curl -L --retry 2 --connect-timeout 15 --max-time 45 -A "$UA" -sS 'https://www.bridge.co.il/viewer/session.php?event=29912&round=3' -o probe29912all/round3.html
+          if grep -q '43624' probe29912all/round3.html; then echo 'Diana unexpectedly present in round 3'; exit 1; else echo 'ROUND3_DIANA_ABSENT'; fi
+          for spec in '1 4' '2 6' '4 6' '5 8' '6 4'; do
+            set -- $spec; r="$1"; seat="$2"; dir="probe29912all/r${r}"
+            mkdir -p "$dir/boards"
+            curl -L --retry 3 --connect-timeout 15 --max-time 45 -A "$UA" -sS "https://www.bridge.co.il/viewer/personal.php?event=29912&round=${r}&seat=${seat}" -o "$dir/personal.html"
+            python3 - "$dir" <<'PY'
+          import html,re,sys
+          from pathlib import Path
+          d=Path(sys.argv[1]); text=html.unescape((d/'personal.html').read_text('utf-8'))
+          links=[]
+          for href in re.findall(r'href=["\']([^"\']+)["\']',text,re.I):
+              if 'board.php' in href: links.append(href.replace('&amp;','&'))
+          links=list(dict.fromkeys(links)); (d/'board-links.txt').write_text('\n'.join(links)+'\n')
+          print(d,'BOARD_LINK_COUNT',len(links))
+          PY
+            n=0
+            while IFS= read -r href; do
+              test -n "$href" || continue; n=$((n+1)); url="$href"; case "$url" in http*) ;; *) url="https://www.bridge.co.il/viewer/$url";; esac
+              curl -L --retry 2 --connect-timeout 15 --max-time 45 -A "$UA" -sS "$url" -o "$dir/boards/board-${n}.html"
+            done < "$dir/board-links.txt"
+          done
+      - name: Extract validated source facts without site DD
+        run: |
+          python3 -m pip install --quiet beautifulsoup4==4.13.5
+          python3 scripts/temp_diana_29912_extract_sources.py --root probe29912all --out-dir facts29912
+          python3 - <<'PY'
+          import json,glob
+          total=0
+          for f in glob.glob('facts29912/*.json'):
+              x=json.load(open(f)); total+=len(x['boards']); assert x['source']['site_dd_used'] is False
+          assert total==100,total
+          print('SOURCE_FACTS_PASS',total)
+          PY
+      - name: Build pinned canonical DDS3 core
+        run: docker build -f Dockerfile.dds3 -t bridge-school-dds3 .
+      - name: Build canonical DDS3 runtime
+        run: docker build -f dds3_runtime/Dockerfile -t bridge-school-dds3-runtime:diana29912all .
+      - name: Start runtime
+        run: docker run -d --rm --name dds3-diana29912all -p 18080:8080 -e DDS3_RUNTIME_TOKEN=diana29912all-secret bridge-school-dds3-runtime:diana29912all
+      - name: Require DDS3 ready / no fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/readyz > diana29912all-ready.json; then
+              cat diana29912all-ready.json
+              python3 - <<'PY'
+          import json
+          r=json.load(open('diana29912all-ready.json'))
+          assert r['status']=='ready' and r['engine']=='DDS3' and r['fallback_used'] is False and r['position_solver']=='ready'
+          PY
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs dds3-diana29912all; exit 1
+      - name: Run actual DDS3 over all 100 played boards
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/temp_diana_29912_multi_dds3.py --facts-dir facts29912 --base-url http://127.0.0.1:18080 --token diana29912all-secret --out-json diana-29912-cross-session-dds3.json --out-md diana-29912-cross-session-dds3.md
+          cat diana-29912-cross-session-dds3.md
+      - name: Evidence gate
+        run: |
+          python3 - <<'PY'
+          import json
+          r=json.load(open('diana-29912-cross-session-dds3.json'))
+          assert r['policy']['engine']=='DDS3' and r['policy']['fallback_used'] is False and r['policy']['site_dd_used'] is False
+          assert r['aggregate']['sessions']==[1,2,4,5,6]
+          assert r['aggregate']['played_boards']==100
+          assert all(b['dds3']['engine']=='DDS3' and b['dds3']['fallback_used'] is False for s in r['sessions'] for b in s['boards'])
+          print('DIANA_29912_CROSS_SESSION_DDS3_PASS')
+          PY
+      - name: Runtime logs on failure
+        if: failure()
+        run: docker logs dds3-diana29912all || true
+      - name: Upload final evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: diana-29912-cross-session-dds3
+          path: |
+            diana29912all-ready.json
+            facts29912/
+            diana-29912-cross-session-dds3.json
+            diana-29912-cross-session-dds3.md
+          if-no-files-found: error
+          retention-days: 30
