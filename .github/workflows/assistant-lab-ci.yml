@@ -17,6 +17,8 @@ jobs:
   assistant-lab-contract:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      PYTHONPATH: .
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,7 +29,7 @@ jobs:
       - name: Compile Assistant Lab
         run: python -m compileall -q assistant_lab
       - name: Run Assistant Lab contract tests
-        run: pytest -q tests/test_assistant_lab_contract.py
+        run: python -m pytest -q tests/test_assistant_lab_contract.py
       - name: Verify no production activation is embedded
         shell: bash
         run: |
