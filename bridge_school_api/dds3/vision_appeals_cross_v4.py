@@ -231,21 +231,20 @@ def _read_row(
                     context = _context_consensus(
                         context_token_sets, x0=x0, cy=cy, span=span
                     )
-                    if context is None:
+                    # Context is only a second independent reading. It can resolve a
+                    # disputed crop row only if that exact value was also directly seen
+                    # in at least two crop scales; otherwise fail closed.
+                    if context is None or context not in cross_scale:
                         raise AppealsCrossVisionError(
                             f"AMBIGUOUS_APPEALS_CARD_OCR:{counts}:context={context}"
                         )
                     winner = context
 
-    # A majority of three independent whole-page segmentations is a second direct pixel
-    # reading, not deck inference. It may replace a contaminated narrow-crop reading only
-    # when at least two segmentations agree on the geometrically bounded row.
-    context = _context_consensus(context_token_sets, x0=x0, cy=cy, span=span)
-    if context is not None and context != winner:
-        winner = context
-        confidence = 0.80
-    else:
-        confidence = min(0.92, 0.62 + 0.03 * counts[winner])
+    # Do not let a weaker whole-page segmentation overwrite an already resolved bounded
+    # crop reading. Context is used only above to break an actual crop ambiguity. This
+    # prevents direct holdings such as AK732/JT985 from being changed to glyph-confused
+    # AKT32/7T985 while preserving the independent-evidence tie resolution for KQ86.
+    confidence = min(0.92, 0.62 + 0.03 * counts[winner])
     return winner, confidence
 
 
