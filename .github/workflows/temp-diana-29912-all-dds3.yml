@@ -85,10 +85,15 @@ jobs:
           python3 - <<'PY'
           import json
           r=json.load(open('diana-29912-cross-session-dds3.json'))
+          assert r['schema']=='diana-29912-multi-session-dds3-v2'
           assert r['policy']['engine']=='DDS3' and r['policy']['fallback_used'] is False and r['policy']['site_dd_used'] is False
           assert r['aggregate']['sessions']==[1,2,4,5,6]
           assert r['aggregate']['played_boards']==100
+          assert r['aggregate']['decision_analyzable_boards']==99
+          bad=r['aggregate']['source_inconsistencies']
+          assert len(bad)==1 and bad[0]['round']==1 and bad[0]['board']==5,bad
           assert all(b['dds3']['engine']=='DDS3' and b['dds3']['fallback_used'] is False for s in r['sessions'] for b in s['boards'])
+          assert sum(1 for s in r['sessions'] for b in s['boards'] if not b['source_consistency']['ok'])==1
           print('DIANA_29912_CROSS_SESSION_DDS3_PASS')
           PY
       - name: Runtime logs on failure
