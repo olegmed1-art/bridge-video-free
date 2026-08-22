@@ -11,12 +11,16 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.responses import Response
 
+from assistant_lab.contract import CONTRACT_VERSION, LabContractError, validate_job_payload, verify_dds3_result
+from assistant_lab.dispatch import verify_dispatch_nonce
+
 from .db import DatabaseConfigurationError, EXPECTED_PRINCIPAL, connect
 from .dds3 import DDSUnavailable, solve_table
 from .dds3.readiness import engine_readiness
 from .dds3.remote import RemoteDDS3Config, compute_remote, remote_engine_readiness
 
 EXPECTED_SCHOOL = "Школа спортивного бриджа"
+ASSISTANT_LAB_DISPATCHER = "vercel-capability-v1"
 logger = logging.getLogger("bridge_school_api")
 
 app = FastAPI(title="Bridge School API", version="0.2.0", docs_url=None, redoc_url=None, openapi_url=None)
@@ -105,6 +109,169 @@ def dds3_table(request: DDS3TableRequest, http_request: Request) -> dict:
     except DDSUnavailable as exc:
         logger.error("dds3_request_failed category=dds_unavailable")
         raise HTTPException(status_code=503, detail="DDS_UNAVAILABLE") from exc
+
+
+def _assistant_lab_finish(
+    job_id: UUID,
+    *,
+    status: str,
+    result: dict | None = None,
+    error_text: str | None = None,
+    requeue: bool = False,
+) -> None:
+    provenance = {
+        "assistant_lab_contract": CONTRACT_VERSION,
+        "dispatcher": ASSISTANT_LAB_DISPATCHER,
+        "execution_path": "vercel_oidc_to_oracle_dds3" if result and result.get("engine") == "DDS3" else "vercel_noop",
+    }
+    with connect() as conn, conn.cursor() as cur:
+        if requeue:
+            cur.execute(
+                """
+                UPDATE assistant_lab.job
+                SET status='QUEUED', claimed_by=NULL, claimed_at=NULL, heartbeat_at=NULL,
+                    error_text=%s, not_before=now() + interval '2 seconds',
+                    provenance_json=provenance_json || %s::jsonb
+                WHERE job_id=%s AND status='RUNNING' AND claimed_by=%s
+                """,
+                (error_text, psycopg.types.json.Jsonb(provenance), job_id, ASSISTANT_LAB_DISPATCHER),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE assistant_lab.job
+                SET status=%s, result_json=%s, error_text=%s, completed_at=now(),
+                    heartbeat_at=now(), dispatch_nonce_sha256=NULL,
+                    provenance_json=provenance_json || %s::jsonb
+                WHERE job_id=%s AND status='RUNNING' AND claimed_by=%s
+                """,
+                (
+                    status,
+                    psycopg.types.json.Jsonb(result) if result is not None else None,
+                    error_text,
+                    psycopg.types.json.Jsonb(provenance),
+                    job_id,
+                    ASSISTANT_LAB_DISPATCHER,
+                ),
+            )
+        if cur.rowcount != 1:
+            raise HTTPException(status_code=409, detail="assistant-lab dispatch ownership changed")
+        conn.commit()
+
+
+@app.get("/v1/assistant-lab/jobs/{job_id}/dispatch")
+def dispatch_assistant_lab_job(
+    job_id: UUID,
+    request: Request,
+    nonce: str = Query(min_length=48, max_length=128),
+) -> JSONResponse:
+    """Capability-dispatch exactly one pre-created bounded lab job.
+
+    This GET is intentionally idempotent/bounded so the connected Vercel fetch tool
+    can trigger an interactive computation without exposing the general application
+    API token. Possessing the 256-bit nonce is the capability; the database stores
+    only its SHA-256 digest. The endpoint cannot create jobs or accept job payloads.
+    """
+    with connect() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT job_id, kind, payload_json, status, result_json, error_text,
+                   dispatch_nonce_sha256, deadline_at, attempts, max_attempts
+            FROM assistant_lab.job
+            WHERE job_id=%s
+            FOR UPDATE
+            """,
+            (job_id,),
+        )
+        row = cur.fetchone()
+        if not row or not verify_dispatch_nonce(row["dispatch_nonce_sha256"], nonce):
+            raise HTTPException(status_code=404, detail="assistant-lab job not found")
+        if row["status"] == "COMPLETED":
+            return JSONResponse({"job_id": str(job_id), "status": "COMPLETED", "result": row["result_json"]})
+        if row["status"] in {"FAILED", "CANCELLED"}:
+            return JSONResponse(
+                {"job_id": str(job_id), "status": row["status"], "detail": "assistant-lab job terminal"},
+                status_code=409,
+            )
+        if row["status"] == "RUNNING":
+            return JSONResponse({"job_id": str(job_id), "status": "RUNNING"}, status_code=202)
+        if row["deadline_at"] is not None:
+            cur.execute("SELECT now() >= %s AS expired", (row["deadline_at"],))
+            if cur.fetchone()["expired"]:
+                cur.execute(
+                    """
+                    UPDATE assistant_lab.job
+                    SET status='CANCELLED', error_text='DISPATCH_DEADLINE_EXPIRED',
+                        completed_at=now(), dispatch_nonce_sha256=NULL
+                    WHERE job_id=%s AND status='QUEUED'
+                    """,
+                    (job_id,),
+                )
+                conn.commit()
+                raise HTTPException(status_code=410, detail="assistant-lab dispatch expired")
+        try:
+            payload = validate_job_payload(row["kind"], row["payload_json"])
+        except LabContractError as exc:
+            cur.execute(
+                """
+                UPDATE assistant_lab.job
+                SET status='FAILED', error_text='INVALID_LAB_CONTRACT', completed_at=now(),
+                    dispatch_nonce_sha256=NULL
+                WHERE job_id=%s AND status='QUEUED'
+                """,
+                (job_id,),
+            )
+            conn.commit()
+            raise HTTPException(status_code=422, detail="invalid assistant-lab job") from exc
+        cur.execute(
+            """
+            UPDATE assistant_lab.job
+            SET status='RUNNING', claimed_by=%s, claimed_at=now(), heartbeat_at=now(),
+                attempts=attempts+1, error_text=NULL, completed_at=NULL
+            WHERE job_id=%s AND status='QUEUED'
+            RETURNING attempts, max_attempts
+            """,
+            (ASSISTANT_LAB_DISPATCHER, job_id),
+        )
+        claimed = cur.fetchone()
+        if not claimed:
+            conn.rollback()
+            return JSONResponse({"job_id": str(job_id), "status": "RACE_RETRY"}, status_code=409)
+        conn.commit()
+
+    try:
+        if row["kind"] == "NOOP":
+            result = {"ok": True, "kind": "NOOP", "echo": payload, "contract": CONTRACT_VERSION}
+        else:
+            remote = _remote_dds3_config()
+            if remote is None:
+                raise DDSUnavailable("DDS3_REMOTE_URL_MISSING")
+            operation = str(payload.get("operation") or "dd_table")
+            result = compute_remote(
+                payload,
+                bearer_token=_vercel_oidc_token(request),
+                config=remote,
+            )
+            result = verify_dds3_result(result, expected_operation=operation)
+    except DDSUnavailable as exc:
+        retryable = int(claimed["attempts"]) < int(claimed["max_attempts"])
+        _assistant_lab_finish(
+            job_id,
+            status="FAILED",
+            error_text=f"DDS_UNAVAILABLE:{str(exc)[:256]}",
+            requeue=retryable,
+        )
+        logger.warning("assistant_lab_dispatch_dds_unavailable job_id=%s retryable=%s", job_id, retryable)
+        return JSONResponse(
+            {"job_id": str(job_id), "status": "QUEUED" if retryable else "FAILED", "detail": "DDS_UNAVAILABLE"},
+            status_code=503,
+        )
+    except (LabContractError, ValueError) as exc:
+        _assistant_lab_finish(job_id, status="FAILED", error_text=f"CONTRACT_ERROR:{str(exc)[:256]}")
+        raise HTTPException(status_code=422, detail="assistant-lab computation rejected") from exc
+
+    _assistant_lab_finish(job_id, status="COMPLETED", result=result)
+    return JSONResponse({"job_id": str(job_id), "status": "COMPLETED", "result": result})
 
 
 def _configuration_failure_category(exc: DatabaseConfigurationError) -> str:
