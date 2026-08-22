@@ -1,5 +1,8 @@
 """Vercel entry point for the Bridge School FastAPI service."""
 
+import base64
+import json
+import logging
 import os
 
 from fastapi import Depends, Request
@@ -13,6 +16,8 @@ from bridge_school_api.ai_worker import router as ai_worker_router
 from bridge_school_api.assistant_lab_bootstrap import router as assistant_lab_bootstrap_router
 from bridge_school_api.main import app, require_api_token
 
+logger = logging.getLogger("bridge_school_api.oidc_diag")
+
 
 def _replace_vercel_oidc_header(headers: list[tuple[bytes, bytes]], token: str) -> list[tuple[bytes, bytes]]:
     """Trust only Vercel's deployment-scoped OIDC token, never a client-supplied copy."""
@@ -22,11 +27,27 @@ def _replace_vercel_oidc_header(headers: list[tuple[bytes, bytes]], token: str) 
     return clean
 
 
+def _safe_oidc_claims(token: str) -> dict[str, object]:
+    """Decode only non-secret routing claims for temporary production diagnostics."""
+    try:
+        payload = token.split(".", 2)[1]
+        payload += "=" * (-len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload.encode("ascii")))
+        return {
+            key: claims.get(key)
+            for key in ("iss", "aud", "sub", "owner_id", "project_id", "environment")
+        }
+    except Exception:
+        return {"parse": "failed"}
+
+
 @app.middleware("http")
 async def vercel_oidc_context(request: Request, call_next):
     token = os.getenv("VERCEL_OIDC_TOKEN", "").strip()
     if token:
         request.scope["headers"] = _replace_vercel_oidc_header(list(request.scope.get("headers", [])), token)
+        if request.url.path == "/dds3/readyz":
+            logger.warning("vercel_oidc_safe_claims=%s", json.dumps(_safe_oidc_claims(token), sort_keys=True))
     return await call_next(request)
 
 
