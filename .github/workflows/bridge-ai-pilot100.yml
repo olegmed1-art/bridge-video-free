@@ -2,6 +2,14 @@ name: Bridge AI Pilot-100
 
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/bridge_ai_pilot100.py'
+      - '.github/workflows/bridge-ai-pilot100.yml'
+      - 'bridge_ai_compute_worker.py'
+      - 'bridge_school_api/ai_orchestrator.py'
+      - 'bridge_school_api/ai_policy.py'
+      - 'bridge_school_api/ai_decision.py'
   push:
     branches: [main]
     paths:
