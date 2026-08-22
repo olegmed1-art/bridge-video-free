@@ -27,10 +27,21 @@ class VercelOIDCConfig:
         return f"https://oidc.vercel.com/{self.team_slug}"
 
     @property
+    def allowed_issuers(self) -> tuple[str, ...]:
+        team = f"https://oidc.vercel.com/{self.team_slug}"
+        if self.issuer_mode == "global":
+            return ("https://oidc.vercel.com",)
+        if self.issuer_mode == "team":
+            return (team,)
+        return (team, "https://oidc.vercel.com")
+
+    @property
     def jwks_url(self) -> str:
-        # Vercel's Team issuer is team-scoped, but its JWKS is served from the
-        # OIDC origin root. Do not append the team slug to the JWKS path.
-        return "https://oidc.vercel.com/.well-known/jwks"
+        return f"{self.issuer}/.well-known/jwks"
+
+    @staticmethod
+    def jwks_url_for_issuer(issuer: str) -> str:
+        return f"{issuer.rstrip('/')}/.well-known/jwks"
 
     @property
     def audience(self) -> str:
@@ -50,7 +61,7 @@ def _truthy(value: str | None) -> bool:
 
 def _oidc_config() -> VercelOIDCConfig:
     mode = os.getenv("DDS3_VERCEL_ISSUER_MODE", "team").strip().lower()
-    if mode not in {"team", "global"}:
+    if mode not in {"team", "global", "auto"}:
         mode = "invalid"
     return VercelOIDCConfig(
         enabled=_truthy(os.getenv("DDS3_TRUST_VERCEL_OIDC")),
@@ -76,20 +87,30 @@ def _verify_vercel_oidc(token: str, cfg: VercelOIDCConfig) -> None:
         cfg.project_id,
         cfg.environment,
     )
-    if not cfg.enabled or cfg.issuer_mode not in {"team", "global"} or not all(required):
+    if not cfg.enabled or cfg.issuer_mode not in {"team", "global", "auto"} or not all(required):
         raise HTTPException(status_code=503, detail="runtime OIDC trust is not configured")
 
     try:
         header = jwt.get_unverified_header(token)
         if header.get("alg") != "RS256":
             raise jwt.InvalidAlgorithmError("unexpected algorithm")
-        signing_key = _jwk_client(cfg.jwks_url).get_signing_key_from_jwt(token).key
+        unverified = jwt.decode(
+            token,
+            options={"verify_signature": False},
+            algorithms=["RS256"],
+        )
+        issuer = unverified.get("iss")
+        if issuer not in cfg.allowed_issuers:
+            raise jwt.InvalidIssuerError("unexpected issuer")
+        signing_key = _jwk_client(
+            cfg.jwks_url_for_issuer(issuer)
+        ).get_signing_key_from_jwt(token).key
         claims = jwt.decode(
             token,
             signing_key,
             algorithms=["RS256"],
             audience=cfg.audience,
-            issuer=cfg.issuer,
+            issuer=issuer,
             leeway=30,
             options={"require": ["exp", "iat", "iss", "aud", "sub"]},
         )

@@ -66,20 +66,28 @@ git checkout --quiet --detach "$TARGET_SHA"
 python3 - <<'PY'
 from pathlib import Path
 p=Path('dds3_runtime/auth.py').read_text()
-assert 'return "https://oidc.vercel.com/.well-known/jwks"' in p
-assert 'return f"{self.issuer}/.well-known/jwks"' not in p
+assert '"team", "global", "auto"' in p
+assert 'jwks_url_for_issuer' in p
 print('JWKS_SOURCE_CONTRACT_PASS')
 PY
 
+CANARY_ENV=/tmp/dds3-runtime-oidc-auto.env
+cp -a "$ENV_FILE" "$CANARY_ENV"
+if grep -q '^DDS3_VERCEL_ISSUER_MODE=' "$CANARY_ENV"; then
+  sed -i 's/^DDS3_VERCEL_ISSUER_MODE=.*/DDS3_VERCEL_ISSUER_MODE=auto/' "$CANARY_ENV"
+else
+  printf '\nDDS3_VERCEL_ISSUER_MODE=auto\n' >>"$CANARY_ENV"
+fi
+
 for expected in \
   'DDS3_TRUST_VERCEL_OIDC=true' \
-  'DDS3_VERCEL_ISSUER_MODE=team' \
+  'DDS3_VERCEL_ISSUER_MODE=auto' \
   'DDS3_VERCEL_TEAM_SLUG=olegmed1-4368s-projects' \
   'DDS3_VERCEL_PROJECT_NAME=bridge-video-free' \
   'DDS3_VERCEL_TEAM_ID=team_qXr2smag8blW1WWeS10CDRXb' \
   'DDS3_VERCEL_PROJECT_ID=prj_oF4SA0gA1PX6BuJEmJ1BiHVBXUGP' \
   'DDS3_VERCEL_ENVIRONMENT=production'; do
-  grep -Fqx "$expected" "$ENV_FILE" || fail "strict OIDC env mismatch: ${expected%%=*}"
+  grep -Fqx "$expected" "$CANARY_ENV" || fail "strict OIDC env mismatch: ${expected%%=*}"
 done
 STATIC_TOKEN="$(sed -n 's/^DDS3_RUNTIME_TOKEN=//p' "$ENV_FILE" | head -n1)"
 [[ -n "$STATIC_TOKEN" ]] || fail "static local/admin runtime token missing"
@@ -90,12 +98,17 @@ if ! docker image inspect bridge-school-dds3 >/dev/null 2>&1; then
 fi
 
 docker build -f dds3_runtime/Dockerfile -t "$NEW_IMAGE" .
-docker run --rm -i --entrypoint python --env-file "$ENV_FILE" "$NEW_IMAGE" - <<'PY'
+docker run --rm -i --entrypoint python --env-file "$CANARY_ENV" "$NEW_IMAGE" - <<'PY'
 from dds3_runtime.auth import _oidc_config
 c=_oidc_config()
 assert c.enabled is True
-assert c.issuer == 'https://oidc.vercel.com/olegmed1-4368s-projects'
-assert c.jwks_url == 'https://oidc.vercel.com/.well-known/jwks'
+assert c.issuer_mode == 'auto'
+assert c.allowed_issuers == (
+    'https://oidc.vercel.com/olegmed1-4368s-projects',
+    'https://oidc.vercel.com',
+)
+assert c.jwks_url_for_issuer(c.allowed_issuers[0]) == 'https://oidc.vercel.com/olegmed1-4368s-projects/.well-known/jwks'
+assert c.jwks_url_for_issuer(c.allowed_issuers[1]) == 'https://oidc.vercel.com/.well-known/jwks'
 assert c.audience == 'https://vercel.com/olegmed1-4368s-projects'
 assert c.subject == 'owner:olegmed1-4368s-projects:project:bridge-video-free:environment:production'
 assert c.team_id == 'team_qXr2smag8blW1WWeS10CDRXb'
@@ -109,7 +122,7 @@ docker run -d --rm \
   --name "$CANARY" \
   --security-opt no-new-privileges:true \
   --log-opt max-size=10m --log-opt max-file=2 \
-  --env-file "$ENV_FILE" \
+  --env-file "$CANARY_ENV" \
   -p 127.0.0.1:18081:8080 \
   "$NEW_IMAGE" >/dev/null
 cleanup_canary(){ docker rm -f "$CANARY" >/dev/null 2>&1 || true; }
@@ -140,6 +153,18 @@ OLD_IMAGE_ID="$(docker inspect -f '{{.Image}}' bridge-school-dds3-runtime 2>/dev
 [[ -n "$OLD_IMAGE_ID" ]] || fail "existing production DDS3 container missing"
 docker tag "$OLD_IMAGE_ID" "$ROLLBACK_IMAGE"
 
+ENV_BACKUP="${ENV_FILE}.pre-oidc-auto"
+cp -a "$ENV_FILE" "$ENV_BACKUP"
+cp -a "$CANARY_ENV" "$ENV_FILE"
+chmod 600 "$ENV_FILE"
+ENV_COMMITTED=0
+restore_env_on_exit(){
+  if [[ "$ENV_COMMITTED" != 1 && -f "$ENV_BACKUP" ]]; then
+    cp -a "$ENV_BACKUP" "$ENV_FILE"
+  fi
+}
+trap restore_env_on_exit EXIT
+
 start_runtime(){
   local image="$1"
   docker rm -f bridge-school-dds3-runtime >/dev/null 2>&1 || true
@@ -155,6 +180,7 @@ start_runtime(){
 
 rollback(){
   printf 'New runtime failed; rolling back previous image.\n' >&2
+  cp -a "$ENV_BACKUP" "$ENV_FILE"
   start_runtime "$ROLLBACK_IMAGE"
   for _ in $(seq 1 30); do
     if curl -fsS --max-time 5 http://127.0.0.1:8080/readyz >/dev/null 2>&1; then
@@ -208,6 +234,8 @@ if [[ "$PUBLIC_OK" != 1 ]]; then
 fi
 printf 'JWKS_PUBLIC_READINESS_PASS\n'
 
+ENV_COMMITTED=1
+trap - EXIT
 printf '%s\n' "$TARGET_SHA" >/opt/bridge-school/dds3-runtime-git-sha
 printf 'OIDC_JWKS_RUNTIME_REPAIR_PASS target_sha=%s\n' "$TARGET_SHA"
 REMOTE
