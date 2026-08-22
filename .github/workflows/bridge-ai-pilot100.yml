@@ -1,0 +1,120 @@
+name: Bridge AI Pilot-100
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/bridge_ai_pilot100.py'
+      - '.github/workflows/bridge-ai-pilot100.yml'
+      - 'bridge_ai_compute_worker.py'
+      - 'bridge_school_api/ai_orchestrator.py'
+      - 'bridge_school_api/ai_policy.py'
+      - 'bridge_school_api/ai_decision.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-ai-pilot100-production
+  cancel-in-progress: false
+
+jobs:
+  pilot100:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      BRIDGE_APP_DATABASE_URL: ${{ secrets.BRIDGE_APP_DATABASE_URL }}
+      BRIDGE_API_TOKEN: github-actions-pilot100
+      BRIDGE_API_BASE_URL: http://127.0.0.1:8000
+      BEN_API_URL: http://127.0.0.1:8085
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install API dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements-api.txt
+
+      - name: Require production database credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${BRIDGE_APP_DATABASE_URL:-}" || { echo 'BRIDGE_APP_DATABASE_URL is not configured'; exit 1; }
+
+      - name: Start Bridge School API
+        shell: bash
+        run: |
+          set -euo pipefail
+          uvicorn app:app --host 127.0.0.1 --port 8000 >/tmp/pilot100-api.log 2>&1 &
+          echo $! >/tmp/pilot100-api.pid
+          for attempt in $(seq 1 60); do
+            curl --fail --silent http://127.0.0.1:8000/healthz >/dev/null && exit 0
+            sleep 1
+          done
+          cat /tmp/pilot100-api.log
+          exit 1
+
+      - name: Start real BEN container
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull ghcr.io/lorserker/ben:latest
+          docker run -d --name bridge-ben -p 8085:8085 ghcr.io/lorserker/ben:latest
+          for attempt in $(seq 1 180); do
+            code=$(curl -s -o /tmp/ben-ready.json -w '%{http_code}' \
+              'http://127.0.0.1:8085/bid?hand=AK97543.K.T3.AK7&seat=S&dealer=N&vul=&ctx=----&details=true' || true)
+            if test "$code" = "200"; then
+              cat /tmp/ben-ready.json
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs bridge-ben || true
+          exit 1
+
+      - name: Seed and queue exactly 100 verified-deal benchmark positions
+        run: python scripts/bridge_ai_pilot100.py seed | tee /tmp/pilot100-seed.json
+
+      - name: Drain Pilot-100 compute queue
+        shell: bash
+        run: |
+          set -euo pipefail
+          for n in $(seq 1 110); do
+            echo "Pilot-100 worker iteration $n"
+            BRIDGE_WORKER_ONCE=true python bridge_ai_compute_worker.py
+          done
+
+      - name: Verify terminal Pilot-100 results
+        run: python scripts/bridge_ai_pilot100.py verify | tee /tmp/pilot100-result.json
+
+      - name: Diagnostics on failure
+        if: failure()
+        shell: bash
+        run: |
+          echo '--- API LOG ---'
+          cat /tmp/pilot100-api.log 2>/dev/null || true
+          echo '--- BEN LOG ---'
+          docker logs bridge-ben 2>/dev/null || true
+          echo '--- PILOT DB STATE ---'
+          python - <<'PY'
+          import os, psycopg, json
+          with psycopg.connect(os.environ['BRIDGE_APP_DATABASE_URL']) as conn, conn.cursor() as cur:
+              cur.execute("SELECT s.status, count(*) FROM ai.search_run s JOIN ai.decision_position p USING(position_id) WHERE p.stable_key LIKE 'PILOT100-20260822-%' GROUP BY s.status ORDER BY s.status")
+              print(json.dumps(dict(cur.fetchall()), ensure_ascii=False))
+          PY
+
+      - name: Cleanup services
+        if: always()
+        shell: bash
+        run: |
+          docker rm -f bridge-ben 2>/dev/null || true
+          if test -f /tmp/pilot100-api.pid; then
+            kill "$(cat /tmp/pilot100-api.pid)" 2>/dev/null || true
+          fi
