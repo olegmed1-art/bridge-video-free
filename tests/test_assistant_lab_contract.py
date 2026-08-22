@@ -113,6 +113,9 @@ def test_schema_is_isolated_and_dispatch_is_update_only_for_app():
     lowered = schema.lower()
     assert "create schema if not exists assistant_lab" in lowered
     assert "dispatch_nonce_sha256" in lowered
+    assert "normalize_dispatch_provenance" in lowered
+    assert "vercel_oidc_to_oracle_dds3" in lowered
+    assert "revoke all on all tables in schema assistant_lab from public" in lowered
     assert "grant select, update on assistant_lab.job to bridge_school_app" in lowered
     assert "grant insert" not in lowered
     assert "create role" not in lowered
@@ -136,9 +139,23 @@ def test_vercel_runtime_package_includes_assistant_lab():
     assert "!bridge_school_api" in rules
 
 
-def test_oracle_service_is_fail_closed_and_not_public_network_worker():
+def test_oracle_service_uses_dedicated_unix_identity_and_hardening():
     unit = Path("deploy/oracle-assistant-lab/assistant-lab.service").read_text(encoding="utf-8")
+    assert "User=assistant-lab" in unit
+    assert "Group=assistant-lab" in unit
     assert "NoNewPrivileges=true" in unit
     assert "ProtectSystem=strict" in unit
+    assert "PrivateDevices=true" in unit
     assert "EnvironmentFile=/opt/bridge-school/assistant-lab/assistant-lab.env" in unit
     assert "ExecStart=" in unit and "-m assistant_lab.worker" in unit
+
+
+def test_oracle_installer_is_fail_closed_and_secret_safe():
+    installer = Path("ops/oracle_assistant_lab_install.sh").read_text(encoding="utf-8")
+    assert "ASSISTANT_LAB_DATABASE_URL is required" in installer
+    assert "http://127.0.0.1:8080/readyz" in installer
+    assert "assistant_lab_worker_principal" in installer
+    assert "ASSISTANT_LAB_INSTALL_PASS" in installer
+    assert "ASSISTANT_LAB_ACTIVATE" in installer
+    assert "echo $ASSISTANT_LAB_DATABASE_URL" not in installer
+    assert "set -x" not in installer
