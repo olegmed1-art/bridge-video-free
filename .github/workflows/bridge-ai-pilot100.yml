@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: bridge-ai-pilot100-production
+  group: bridge-ai-pilot100-observable-run-285
   cancel-in-progress: false
 
 jobs:
