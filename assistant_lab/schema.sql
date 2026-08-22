@@ -1,6 +1,7 @@
 -- Assistant Lab v1: isolated, non-canonical experiment/compute queue.
--- This file is intentionally NOT auto-applied by CI or deployment.
--- It does not create users/roles, change school canon, or touch production tables outside assistant_lab.
+-- This file does not create users/roles, change school canon, or touch production
+-- tables outside assistant_lab. The existing application role receives only the
+-- minimal job-table rights required for one-job capability dispatch.
 
 CREATE SCHEMA IF NOT EXISTS assistant_lab;
 
@@ -18,6 +19,9 @@ CREATE TABLE IF NOT EXISTS assistant_lab.job (
     provenance_json jsonb NOT NULL DEFAULT '{}'::jsonb,
     error_text text,
     idempotency_key text NOT NULL UNIQUE,
+    dispatch_nonce_sha256 text CHECK (
+        dispatch_nonce_sha256 IS NULL OR dispatch_nonce_sha256 ~ '^[0-9a-f]{64}$'
+    ),
     not_before timestamptz NOT NULL DEFAULT now(),
     deadline_at timestamptz,
     claimed_by text,
@@ -114,7 +118,8 @@ CREATE OR REPLACE FUNCTION assistant_lab.enqueue_job(
     p_idempotency_key text,
     p_source text DEFAULT 'CHATGPT',
     p_provenance jsonb DEFAULT '{}'::jsonb,
-    p_deadline_at timestamptz DEFAULT NULL
+    p_deadline_at timestamptz DEFAULT NULL,
+    p_dispatch_nonce_sha256 text DEFAULT NULL
 )
 RETURNS assistant_lab.job
 LANGUAGE plpgsql
@@ -123,9 +128,11 @@ DECLARE
     v_row assistant_lab.job;
 BEGIN
     INSERT INTO assistant_lab.job (
-        kind, payload_json, priority, idempotency_key, source, provenance_json, deadline_at
+        kind, payload_json, priority, idempotency_key, source, provenance_json,
+        deadline_at, dispatch_nonce_sha256
     ) VALUES (
-        upper(p_kind), p_payload, p_priority, p_idempotency_key, p_source, p_provenance, p_deadline_at
+        upper(p_kind), p_payload, p_priority, p_idempotency_key, p_source,
+        p_provenance, p_deadline_at, p_dispatch_nonce_sha256
     )
     ON CONFLICT (idempotency_key) DO UPDATE
        SET idempotency_key = EXCLUDED.idempotency_key
@@ -136,3 +143,9 @@ $$;
 
 COMMENT ON SCHEMA assistant_lab IS
 'Experimental Assistant Lab. Non-canonical; no automatic promotion to school canon or production behavior.';
+
+-- Existing Vercel application role: only enough access to atomically claim and
+-- finish a pre-created lab job. It cannot write experiments/regression cases and
+-- cannot touch any additional school objects through these grants.
+GRANT USAGE ON SCHEMA assistant_lab TO bridge_school_app;
+GRANT SELECT, UPDATE ON assistant_lab.job TO bridge_school_app;
