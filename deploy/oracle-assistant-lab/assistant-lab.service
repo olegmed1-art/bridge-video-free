@@ -6,10 +6,11 @@ Requires=docker.service
 
 [Service]
 Type=simple
-User=ubuntu
-Group=ubuntu
+User=assistant-lab
+Group=assistant-lab
 WorkingDirectory=/opt/bridge-school/bridge-video-free
 Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=/opt/bridge-school/assistant-lab/assistant-lab.env
 EnvironmentFile=-/opt/bridge-school/dds3-runtime.env
 ExecStart=/opt/bridge-school/assistant-lab/.venv/bin/python -m assistant_lab.worker
@@ -18,8 +19,16 @@ RestartSec=2
 TimeoutStopSec=15
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
 ProtectHome=true
 ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
 ReadWritePaths=/opt/bridge-school/assistant-lab
 
 [Install]

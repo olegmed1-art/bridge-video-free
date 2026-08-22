@@ -111,6 +111,37 @@ CREATE TRIGGER assistant_lab_job_notify
 AFTER INSERT OR UPDATE OF status ON assistant_lab.job
 FOR EACH ROW EXECUTE FUNCTION assistant_lab.notify_queued_job();
 
+CREATE OR REPLACE FUNCTION assistant_lab.normalize_dispatch_provenance()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.provenance_json ->> 'dispatcher' = 'vercel-capability-v1' THEN
+        IF NEW.kind = 'DDS3_COMPUTE' THEN
+            NEW.provenance_json := jsonb_set(
+                NEW.provenance_json,
+                '{execution_path}',
+                to_jsonb('vercel_oidc_to_oracle_dds3'::text),
+                true
+            );
+        ELSIF NEW.kind = 'NOOP' THEN
+            NEW.provenance_json := jsonb_set(
+                NEW.provenance_json,
+                '{execution_path}',
+                to_jsonb('vercel_noop'::text),
+                true
+            );
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS assistant_lab_job_provenance ON assistant_lab.job;
+CREATE TRIGGER assistant_lab_job_provenance
+BEFORE INSERT OR UPDATE OF provenance_json, kind ON assistant_lab.job
+FOR EACH ROW EXECUTE FUNCTION assistant_lab.normalize_dispatch_provenance();
+
 CREATE OR REPLACE FUNCTION assistant_lab.enqueue_job(
     p_kind text,
     p_payload jsonb,
@@ -143,6 +174,9 @@ $$;
 
 COMMENT ON SCHEMA assistant_lab IS
 'Experimental Assistant Lab. Non-canonical; no automatic promotion to school canon or production behavior.';
+
+REVOKE ALL ON ALL TABLES IN SCHEMA assistant_lab FROM PUBLIC;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA assistant_lab FROM PUBLIC;
 
 -- Existing Vercel application role: only enough access to atomically claim and
 -- finish a pre-created lab job. It cannot write experiments/regression cases and
