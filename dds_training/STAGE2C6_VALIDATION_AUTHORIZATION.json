@@ -1,0 +1,17 @@
+{
+  "schema": "dds-stage2c6-validation-authorization-v1",
+  "status": "OWNER_AUTHORIZED",
+  "authority": "EVIDENCE_ONLY",
+  "authorized_at": "2026-08-22",
+  "authorization_basis": "direct owner instruction to correct the post-sealed candidate without reusing sealed outcomes",
+  "candidate_policy": "defense_suit_learned__defense_nt_baseline__declarer_baseline",
+  "locked_train_prediction_sha256": "84c3c6e78fd0a4d1a4699c34fc6cb92c5dd97b99496edffc91bc9bf4cc28a92e",
+  "validation_scope": "fresh family-disjoint validation wave excluding Stage 2C.4 and Stage 2C.5 validation source families",
+  "validation_learning_allowed": false,
+  "validation_gate_tuning_allowed": false,
+  "historical_database_mutation_allowed": false,
+  "automatic_promotion_allowed": false,
+  "sealed_access_allowed": false,
+  "pass_next_gate": "owner_decision_on_new_sealed",
+  "fail_next_gate": "return_to_train_new_candidate"
+}
