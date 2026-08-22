@@ -150,12 +150,15 @@ def test_oracle_service_uses_dedicated_unix_identity_and_hardening():
     assert "ExecStart=" in unit and "-m assistant_lab.worker" in unit
 
 
-def test_oracle_installer_is_fail_closed_and_secret_safe():
+def test_oracle_installer_is_fail_closed_secret_safe_and_stage_idempotent():
     installer = Path("ops/oracle_assistant_lab_install.sh").read_text(encoding="utf-8")
     assert "ASSISTANT_LAB_DATABASE_URL is required" in installer
     assert "http://127.0.0.1:8080/readyz" in installer
     assert "assistant_lab_worker_principal" in installer
     assert "ASSISTANT_LAB_INSTALL_PASS" in installer
     assert "ASSISTANT_LAB_ACTIVATE" in installer
+    assert "ASSISTANT_LAB_PSYCOPG_VERSION:-3.2.13" in installer
+    assert "state_unchanged=1" in installer
+    assert "systemctl disable --now" not in installer
     assert "echo $ASSISTANT_LAB_DATABASE_URL" not in installer
     assert "set -x" not in installer
