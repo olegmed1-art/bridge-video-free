@@ -95,11 +95,12 @@ def _context_row_candidate(tokens, *, x0: float, cy: float, span: float) -> str 
 def _near_tie_extension(counts: dict[str, int], best_count: int) -> str | None:
     """Resolve only a strong OCR near-tie where the longer reading is directly supported.
 
-    Tesseract sometimes clips the first glyph at a bounded crop edge, producing both a
-    full holding and one or more suffixes of that same holding. This helper never invents
-    a rank and never consults the deck: it may choose the unique longest *observed* value
-    only when it has at least 90% of the top vote count and every other near-top value is
-    a strict suffix of it. Otherwise ambiguity remains fail-closed.
+    Tesseract can clip or isolate one or more glyphs at a bounded crop edge, producing a
+    full holding together with shorter contiguous fragments of that same holding. This
+    helper never invents a rank and never consults the deck: it may choose the unique
+    longest *observed* value only when it has at least 90% of the top vote count and every
+    other near-top value is a contiguous substring of it. Otherwise ambiguity remains
+    fail-closed.
     """
     threshold = best_count * 0.90
     near = [value for value, count in counts.items() if count >= threshold]
@@ -110,7 +111,7 @@ def _near_tie_extension(counts: dict[str, int], best_count: int) -> str | None:
     if len(longest) != 1:
         return None
     candidate = longest[0]
-    if all(value == candidate or candidate.endswith(value) for value in near):
+    if all(value == candidate or value in candidate for value in near):
         return candidate
     return None
 
