@@ -1,0 +1,74 @@
+name: TEMP Diana 29912 all completed sources
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/temp-diana-29912-all-sources.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Fetch Diana personal pages and board pages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p probe29912all
+          UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140 Safari/537.36'
+          for spec in '1 4' '2 6' '4 6' '5 8'; do
+            set -- $spec; r="$1"; seat="$2"
+            dir="probe29912all/r${r}"
+            mkdir -p "$dir/boards"
+            curl -L --retry 3 --connect-timeout 15 --max-time 45 -A "$UA" -sS "https://www.bridge.co.il/viewer/personal.php?event=29912&round=${r}&seat=${seat}" -o "$dir/personal.html"
+            python3 - "$dir" <<'PY'
+          import html,re,sys
+          from pathlib import Path
+          d=Path(sys.argv[1]); text=html.unescape((d/'personal.html').read_text('utf-8'))
+          links=[]
+          for href in re.findall(r'href=["\']([^"\']+)["\']', text, re.I):
+              if 'board.php' in href:
+                  links.append(href.replace('&amp;','&'))
+          links=list(dict.fromkeys(links))
+          (d/'board-links.txt').write_text('\n'.join(links)+'\n',encoding='utf-8')
+          print(d, 'BOARD_LINK_COUNT', len(links))
+          PY
+            n=0
+            while IFS= read -r href; do
+              test -n "$href" || continue
+              n=$((n+1))
+              url="$href"; case "$url" in http*) ;; *) url="https://www.bridge.co.il/viewer/$url";; esac
+              curl -L --retry 2 --connect-timeout 15 --max-time 45 -A "$UA" -sS "$url" -o "$dir/boards/board-${n}.html"
+            done < "$dir/board-links.txt"
+          done
+      - name: Source integrity summary
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          out={}
+          for r in [1,2,4,5]:
+              d=Path(f'probe29912all/r{r}')
+              links=[x for x in (d/'board-links.txt').read_text().splitlines() if x]
+              out[str(r)]={'personal_bytes':(d/'personal.html').stat().st_size,'board_links':len(links),'board_files':len(list((d/'boards').glob('*.html')))}
+              assert out[str(r)]['personal_bytes']>5000
+              assert out[str(r)]['board_links']>=18
+              assert out[str(r)]['board_files']==out[str(r)]['board_links']
+          Path('probe29912all/summary.json').write_text(json.dumps(out,indent=2)+'\n')
+          print(json.dumps(out,indent=2))
+          PY
+      - name: Upload source evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: diana-29912-all-completed-sources
+          path: probe29912all/
+          if-no-files-found: error
+          retention-days: 7
