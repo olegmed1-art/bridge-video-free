@@ -92,6 +92,29 @@ def _context_row_candidate(tokens, *, x0: float, cy: float, span: float) -> str 
     return next(iter(best_values)) if len(best_values) == 1 else None
 
 
+def _near_tie_extension(counts: dict[str, int], best_count: int) -> str | None:
+    """Resolve only a strong OCR near-tie where the longer reading is directly supported.
+
+    Tesseract sometimes clips the first glyph at a bounded crop edge, producing both a
+    full holding and one or more suffixes of that same holding. This helper never invents
+    a rank and never consults the deck: it may choose the unique longest *observed* value
+    only when it has at least 90% of the top vote count and every other near-top value is
+    a strict suffix of it. Otherwise ambiguity remains fail-closed.
+    """
+    threshold = best_count * 0.90
+    near = [value for value, count in counts.items() if count >= threshold]
+    if len(near) < 2:
+        return None
+    longest_len = max(len(value) for value in near)
+    longest = [value for value in near if len(value) == longest_len]
+    if len(longest) != 1:
+        return None
+    candidate = longest[0]
+    if all(value == candidate or candidate.endswith(value) for value in near):
+        return candidate
+    return None
+
+
 def _read_row(
     image,
     *,
@@ -145,8 +168,12 @@ def _read_row(
     best_count = max(counts.values())
     best = [value for value, count in counts.items() if count == best_count]
     if len(best) != 1:
-        raise AppealsCrossVisionError(f"AMBIGUOUS_APPEALS_CARD_OCR:{counts}")
-    winner = best[0]
+        extension = _near_tie_extension(counts, best_count)
+        if extension is None:
+            raise AppealsCrossVisionError(f"AMBIGUOUS_APPEALS_CARD_OCR:{counts}")
+        winner = extension
+    else:
+        winner = best[0]
     alternatives = sorted(
         (value for value in cross_scale if value != winner),
         key=lambda value: counts[value],
@@ -154,19 +181,23 @@ def _read_row(
     )
     if alternatives:
         runner_up = alternatives[0]
-        if counts[runner_up] * 3 >= best_count * 2:
-            context = _context_row_candidate(
-                context_tokens, x0=x0, cy=cy, span=span
-            )
-            if (
-                context is None
-                or context not in cross_scale
-                or counts[context] * 5 < best_count * 4
-            ):
-                raise AppealsCrossVisionError(
-                    f"AMBIGUOUS_APPEALS_CARD_OCR:{counts}:context={context}"
+        if counts[runner_up] * 3 >= counts[winner] * 2:
+            extension = _near_tie_extension(counts, max(counts.values()))
+            if extension is not None:
+                winner = extension
+            else:
+                context = _context_row_candidate(
+                    context_tokens, x0=x0, cy=cy, span=span
                 )
-            winner = context
+                if (
+                    context is None
+                    or context not in cross_scale
+                    or counts[context] * 5 < counts[winner] * 4
+                ):
+                    raise AppealsCrossVisionError(
+                        f"AMBIGUOUS_APPEALS_CARD_OCR:{counts}:context={context}"
+                    )
+                winner = context
     confidence = min(0.92, 0.62 + 0.03 * counts[winner])
     return winner, confidence
 
