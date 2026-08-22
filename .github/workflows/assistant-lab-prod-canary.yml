@@ -1,4 +1,4 @@
-name: TEMP Assistant Lab production NOOP canary
+name: TEMP Assistant Lab production DDS3 canary
 
 on:
   pull_request:
@@ -9,21 +9,25 @@ permissions:
   contents: read
 
 jobs:
-  noop-canary:
+  dds3-canary:
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - name: Dispatch pre-created bounded NOOP job
+      - name: Dispatch pre-created bounded DDS3 golden job
         shell: bash
         run: |
           set -euo pipefail
-          url='https://bridge-video-free.vercel.app/v1/assistant-lab/jobs/48dfb0d3-f832-4d28-af18-9a5df14dedf8/dispatch?nonce=337f23b775457827d9e84dc7cb91501ab424a93f45d1139ab747238bf1010f96'
-          curl --fail-with-body --silent --show-error --max-time 45 "$url" | tee /tmp/result.json
+          url='https://bridge-video-free.vercel.app/v1/assistant-lab/jobs/2ffc8cf2-da04-48f0-bb03-832898790897/dispatch?nonce=6ded0eb18a84f3b1758157499d74353351f4224dc8d883a3ecc0bbd76a000ef1'
+          curl --fail-with-body --silent --show-error --max-time 60 "$url" | tee /tmp/result.json
           python - <<'PY'
           import json
           d=json.load(open('/tmp/result.json'))
           assert d['status']=='COMPLETED', d
-          assert d['result']['kind']=='NOOP', d
-          assert d['result']['contract']=='assistant-lab-v1', d
-          print('ASSISTANT_LAB_PRODUCTION_NOOP_PASS')
+          r=d['result']
+          assert r['engine']=='DDS3' and r['fallback_used'] is False, r
+          assert r['operation']=='dd_table', r
+          assert r['par_score_ns']==-110, r
+          assert r['par_contracts']==['2S-EW'], r
+          assert r['dd_table']=={'S':[5,8,5,8],'H':[6,6,6,6],'D':[5,7,5,7],'C':[7,5,7,5],'NT':[6,6,6,6]}, r
+          print('ASSISTANT_LAB_PRODUCTION_DDS3_PASS')
           PY
