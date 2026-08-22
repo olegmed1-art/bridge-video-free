@@ -80,6 +80,17 @@ def _extract_local_observation(
         if not str(exc).startswith("UNSUPPORTED_LAYOUT_"):
             raise ImageIngressError(str(exc)) from exc
 
+    from .vision_appeals_cross import AppealsCrossVisionError
+    from .vision_appeals_cross_v4 import extract_appeals_cross_observation
+
+    try:
+        return extract_appeals_cross_observation(
+            image_bytes, media_type=media_type, filename=filename
+        )
+    except AppealsCrossVisionError as exc:
+        if not str(exc).startswith("UNSUPPORTED_LAYOUT_"):
+            raise ImageIngressError(str(exc)) from exc
+
     from .vision_publication import PublicationVisionError, extract_publication_cross_observation
 
     try:

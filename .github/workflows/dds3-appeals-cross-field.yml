@@ -1,0 +1,87 @@
+name: DDS3 appeals cross vision field gate
+on:
+  pull_request:
+    paths:
+      - 'bridge_school_api/dds3/vision_appeals_cross.py'
+      - 'bridge_school_api/dds3/vision_appeals_cross_v4.py'
+      - 'bridge_school_api/dds3/image_ingress.py'
+      - 'tools/dds3_vision/evaluate_appeals_cross.py'
+      - 'requirements-dds3-vision.txt'
+      - '.github/workflows/dds3-appeals-cross-field.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  appeals-cross-field:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install local/free vision runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends tesseract-ocr
+          python -m pip install --disable-pip-version-check -r requirements-dds3-vision.txt
+      - name: Compile bounded appeals layout code
+        run: |
+          python -m py_compile bridge_school_api/dds3/vision_appeals_cross.py
+          python -m py_compile bridge_school_api/dds3/vision_appeals_cross_v4.py
+          python -m py_compile bridge_school_api/dds3/image_ingress.py
+          python -m py_compile tools/dds3_vision/evaluate_appeals_cross.py
+      - name: Enforce fail-closed appeals contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          base=Path('bridge_school_api/dds3/vision_appeals_cross.py').read_text(encoding='utf-8')
+          appeals=Path('bridge_school_api/dds3/vision_appeals_cross_v4.py').read_text(encoding='utf-8')
+          ingress=Path('bridge_school_api/dds3/image_ingress.py').read_text(encoding='utf-8')
+          assert 'UNSUPPORTED_LAYOUT_APPEALS_HEADER' in base
+          assert 'deck complement' in base
+          assert 'No card is completed' in appeals
+          assert 'len(cards) != 52 or len(set(cards)) != 52' in appeals
+          assert 'set(cards) != expected' in appeals
+          assert 'local_tesseract_appeals_cross_v4' in appeals
+          assert 'extract_appeals_cross_observation' in ingress
+          assert 'startswith("UNSUPPORTED_LAYOUT_")' in ingress
+          print('DDS3_APPEALS_CROSS_CONTRACT_PASS')
+          PY
+      - name: Diagnose EBU source vector encoding
+        env:
+          PYTHONPATH: .
+        run: |
+          python - <<'PY'
+          import tempfile, urllib.request
+          from pathlib import Path
+          import fitz
+          url='https://www.bridge.is/files/EBUAppeals2001_1575249453.pdf'
+          with tempfile.TemporaryDirectory(prefix='dds3-appeals-diag-') as temp:
+              path=Path(temp)/'source.pdf'
+              req=urllib.request.Request(url,headers={'User-Agent':'bridge-school-dds3-field-gate/1.0'})
+              with urllib.request.urlopen(req,timeout=45) as response, path.open('wb') as output:
+                  output.write(response.read())
+              page=fitz.open(path)[7]
+              text=page.get_text('text')
+              words=page.get_text('words')
+              print('APPEALS_PAGE_TEXT_REPR',repr(text[:5000]))
+              print('APPEALS_WORDS_COUNT',len(words))
+              print('APPEALS_WORDS',[(round(w[0],1),round(w[1],1),round(w[2],1),round(w[3],1),repr(w[4])) for w in words[:220]])
+              singles=sorted({w[4] for w in words if len(w[4].strip())<=2})
+              print('APPEALS_SHORT_TOKENS',[(repr(x),[hex(ord(c)) for c in x]) for x in singles[:200]])
+          PY
+      - name: Run real EBU appeals field gate
+        env:
+          PYTHONPATH: .
+        run: python tools/dds3_vision/evaluate_appeals_cross.py --output appeals-cross-field.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: dds3-appeals-cross-field
+          path: appeals-cross-field.json
+          if-no-files-found: warn
