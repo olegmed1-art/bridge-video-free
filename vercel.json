@@ -1,6 +1,10 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "regions": ["fra1"],
+  "env": {
+    "DDS3_REMOTE_URL": "https://158.180.47.161",
+    "DDS3_REMOTE_TIMEOUT_SECONDS": "25"
+  },
   "git": {
     "deploymentEnabled": {
       "main": true,
