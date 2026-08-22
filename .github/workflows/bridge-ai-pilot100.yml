@@ -2,8 +2,7 @@ name: Bridge AI Pilot-100
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
+  pull_request:
     paths:
       - 'scripts/bridge_ai_pilot100.py'
       - '.github/workflows/bridge-ai-pilot100.yml'
@@ -16,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: bridge-ai-pilot100-production
+  group: bridge-ai-pilot100-observable-run-285-v4
   cancel-in-progress: false
 
 jobs:
@@ -28,6 +27,7 @@ jobs:
       BRIDGE_API_TOKEN: github-actions-pilot100
       BRIDGE_API_BASE_URL: http://127.0.0.1:8000
       BEN_API_URL: http://127.0.0.1:8085
+      PILOT100_PREFIX: PILOT100-20260822-RUN7-
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -80,7 +80,10 @@ jobs:
           exit 1
 
       - name: Seed and queue exactly 100 verified-deal benchmark positions
-        run: python scripts/bridge_ai_pilot100.py seed | tee /tmp/pilot100-seed.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/bridge_ai_pilot100.py seed | tee /tmp/pilot100-seed.json
 
       - name: Drain Pilot-100 compute queue
         shell: bash
@@ -92,7 +95,10 @@ jobs:
           done
 
       - name: Verify terminal Pilot-100 results
-        run: python scripts/bridge_ai_pilot100.py verify | tee /tmp/pilot100-result.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/bridge_ai_pilot100.py verify | tee /tmp/pilot100-result.json
 
       - name: Diagnostics on failure
         if: failure()
@@ -105,9 +111,14 @@ jobs:
           echo '--- PILOT DB STATE ---'
           python - <<'PY'
           import os, psycopg, json
+          prefix = os.environ['PILOT100_PREFIX'] + '%'
           with psycopg.connect(os.environ['BRIDGE_APP_DATABASE_URL']) as conn, conn.cursor() as cur:
-              cur.execute("SELECT s.status, count(*) FROM ai.search_run s JOIN ai.decision_position p USING(position_id) WHERE p.stable_key LIKE 'PILOT100-20260822-%' GROUP BY s.status ORDER BY s.status")
-              print(json.dumps(dict(cur.fetchall()), ensure_ascii=False))
+              cur.execute("SELECT count(*) FROM ai.decision_position WHERE stable_key LIKE %s", (prefix,))
+              print('positions', cur.fetchone()[0])
+              cur.execute("SELECT s.status, count(*) FROM ai.search_run s JOIN ai.decision_position p USING(position_id) WHERE p.stable_key LIKE %s GROUP BY s.status ORDER BY s.status", (prefix,))
+              print('search', json.dumps(dict(cur.fetchall()), ensure_ascii=False))
+              cur.execute("SELECT count(DISTINCT f.position_id) FROM ai.final_decision f JOIN ai.decision_position p USING(position_id) WHERE p.stable_key LIKE %s", (prefix,))
+              print('finalized', cur.fetchone()[0])
           PY
 
       - name: Cleanup services

@@ -11,7 +11,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-PREFIX = "PILOT100-20260822-"
+PREFIX = os.environ.get("PILOT100_PREFIX", "PILOT100-20260822-")
 EXPECTED_POSITIONS = 100
 SEATS = "NESW"
 
@@ -72,20 +72,14 @@ def configurations(rows):
         if dealer not in SEATS:
             raise RuntimeError(f"unsupported dealer {dealer!r} on {row['deal_key']}")
         start = SEATS.index(dealer)
-        hands = {
-            "N": row["hand_n"],
-            "E": row["hand_e"],
-            "S": row["hand_s"],
-            "W": row["hand_w"],
-        }
+        hands = {"N": row["hand_n"], "E": row["hand_e"], "S": row["hand_s"], "W": row["hand_w"]}
         board = int(row["board_sequence_no"])
         for offset in range(4):
             seat = SEATS[(start + offset) % 4]
             auction = ["PASS"] * offset
-            stable_key = f"{PREFIX}B{board:02d}-{seat}-MP"
             out.append({
-                "stable_key": stable_key,
-                "decision_type": "BIDDING_COUNTERFACTUAL_OPENING_ROUND",
+                "stable_key": f"{PREFIX}B{board:02d}-{seat}-MP",
+                "decision_type": "BIDDING",
                 "seat": seat,
                 "dealer": dealer,
                 "vulnerability": row["vulnerability"],
@@ -98,15 +92,13 @@ def configurations(rows):
                 "provenance": "VERIFIED_DEAL_COUNTERFACTUAL_PRIOR_PASSES",
             })
 
-    # Four scoring-sensitivity controls. Same verified deals and actual dealer/hand,
-    # but evaluated under IMP scoring to test scoring routing independently of deal data.
     for row in rows[:4]:
         dealer = row["dealer"].upper()
         hands = {"N": row["hand_n"], "E": row["hand_e"], "S": row["hand_s"], "W": row["hand_w"]}
         board = int(row["board_sequence_no"])
         out.append({
             "stable_key": f"{PREFIX}B{board:02d}-{dealer}-IMP",
-            "decision_type": "BIDDING_SCORING_SENSITIVITY_CONTROL",
+            "decision_type": "BIDDING",
             "seat": dealer,
             "dealer": dealer,
             "vulnerability": row["vulnerability"],
@@ -132,17 +124,11 @@ def seed() -> None:
             raise RuntimeError("school row not found")
         rows = load_source_deals(cur)
         configs = configurations(rows)
-
-        # Idempotent isolated benchmark namespace; children cascade by schema contract.
         cur.execute("DELETE FROM ai.decision_position WHERE school_id=%s AND stable_key LIKE %s", (school["school_id"], PREFIX + "%"))
 
         position_ids = []
         for cfg in configs:
-            meta = {
-                "source_deal": cfg["source_deal"],
-                "provenance": cfg["provenance"],
-                "benchmark": "PILOT100-20260822",
-            }
+            meta = {"source_deal": cfg["source_deal"], "provenance": cfg["provenance"], "benchmark": "PILOT100-20260822"}
             fp = fingerprint(cfg["source_deal"], cfg["seat"], cfg["dealer"], cfg["vulnerability"], cfg["scoring"], cfg["hand"], cfg["auction"], cfg["system_us"], meta)
             cur.execute(
                 """
@@ -275,16 +261,16 @@ def verify() -> None:
         )
         scoring = [dict(row) for row in cur.fetchall()]
 
-    output = {
+    print(json.dumps({
         "verified": True,
         "benchmark": "PILOT100-20260822",
+        "prefix": PREFIX,
         "summary": {key: int(value) for key, value in summary.items()},
         "decision_paths": paths,
         "chosen_actions": actions,
         "scoring_breakdown": scoring,
         "interpretation": "Terminal processing is required; non-finalized positions are retained as insufficient-evidence outcomes, not fabricated decisions.",
-    }
-    print(json.dumps(output, ensure_ascii=False, default=str))
+    }, ensure_ascii=False, default=str))
 
 
 def main() -> None:

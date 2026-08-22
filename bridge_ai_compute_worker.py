@@ -69,6 +69,19 @@ def _ben_context(auction: Any) -> str:
     return "".join(mapping.get(token, token.replace("NT", "N")) for token in tokens)
 
 
+def _ben_hand(hand: Any) -> str:
+    """Normalize a school PBN hand to BEN's PBN parser contract.
+
+    The school corpus uses '-' for a void suit. BEN expects the standard empty PBN
+    suit segment, e.g. ``K987.J875.AJ987.`` rather than ``K987.J875.AJ987.-``.
+    """
+    text = str(hand or "").strip().replace("_", ".")
+    parts = text.split(".")
+    if len(parts) != 4:
+        return text
+    return ".".join("" if part.strip() in {"-", "—"} else part.strip() for part in parts)
+
+
 def ben_bid(config: Config, position: dict[str, Any]) -> dict[str, Any] | None:
     if not config.ben_url:
         return None
@@ -85,7 +98,7 @@ def ben_bid(config: Config, position: dict[str, Any]) -> dict[str, Any] | None:
     from urllib.parse import urlencode
 
     params = {
-        "hand": hand,
+        "hand": _ben_hand(hand),
         "seat": seat,
         "dealer": dealer,
         "vul": vul or "",
@@ -231,8 +244,6 @@ def process_one(config: Config) -> bool:
         payload=completion,
     )
 
-    # Finalization is part of the worker transaction boundary at the application level:
-    # a search may fail while valid policy evidence still authorizes POLICY_ONLY.
     try:
         finalized = request_json(
             f"{config.api_base}/v1/ai/positions/{position_id}/finalize",
