@@ -14,6 +14,7 @@ from starlette.responses import Response
 from .db import DatabaseConfigurationError, EXPECTED_PRINCIPAL, connect
 from .dds3 import DDSUnavailable, solve_table
 from .dds3.readiness import engine_readiness
+from .dds3.remote import RemoteDDS3Config, compute_remote, remote_engine_readiness
 
 EXPECTED_SCHOOL = "Школа спортивного бриджа"
 logger = logging.getLogger("bridge_school_api")
@@ -56,15 +57,48 @@ class DDS3TableRequest(BaseModel):
     vulnerability: str = Field(default="None", max_length=8)
 
 
+def _remote_dds3_config() -> RemoteDDS3Config | None:
+    url = os.getenv("DDS3_REMOTE_URL", "").strip().rstrip("/")
+    if not url:
+        return None
+    return RemoteDDS3Config(
+        base_url=url,
+        timeout_seconds=float(os.getenv("DDS3_REMOTE_TIMEOUT_SECONDS", "25")),
+    )
+
+
+def _vercel_oidc_token(request: Request) -> str:
+    return request.headers.get("x-vercel-oidc-token", "").strip()
+
+
 @app.get("/dds3/readyz")
-def dds3_readyz() -> JSONResponse:
-    result = engine_readiness()
+def dds3_readyz(request: Request) -> JSONResponse:
+    remote = _remote_dds3_config()
+    if remote is None:
+        result = engine_readiness()
+    else:
+        result = remote_engine_readiness(
+            bearer_token=_vercel_oidc_token(request),
+            config=remote,
+        )
     return JSONResponse(result, status_code=200 if result["status"] == "ready" else 503, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/v1/dds3/table", dependencies=[Depends(require_api_token)])
-def dds3_table(request: DDS3TableRequest) -> dict:
+def dds3_table(request: DDS3TableRequest, http_request: Request) -> dict:
     try:
+        remote = _remote_dds3_config()
+        if remote is not None:
+            return compute_remote(
+                {
+                    "operation": "dd_table",
+                    "pbn": request.pbn,
+                    "dealer": request.dealer,
+                    "vulnerability": request.vulnerability,
+                },
+                bearer_token=_vercel_oidc_token(http_request),
+                config=remote,
+            )
         return solve_table(pbn=request.pbn, dealer=request.dealer, vulnerability=request.vulnerability)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
