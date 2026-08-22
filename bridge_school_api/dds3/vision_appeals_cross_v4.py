@@ -193,20 +193,31 @@ def _read_row(
         reverse=True,
     )
     if alternatives:
-        runner_up = alternatives[0]
-        if counts[runner_up] * 3 >= counts[winner] * 2:
-            extension = _near_tie_extension(counts, max(counts.values()))
-            if extension is not None:
-                winner = extension
-            else:
-                context = _context_consensus(
-                    context_token_sets, x0=x0, cy=cy, span=span
-                )
-                if context is None:
-                    raise AppealsCrossVisionError(
-                        f"AMBIGUOUS_APPEALS_CARD_OCR:{counts}:context={context}"
+        high_alternatives = [
+            value for value in alternatives if counts[value] * 3 >= counts[winner] * 2
+        ]
+        if high_alternatives:
+            # When the dominant full holding has strictly more direct OCR votes and every
+            # competing high-vote reading is only a clipped contiguous fragment of that
+            # same observed string, keep the full direct reading. No missing card is
+            # reconstructed and no deck state is consulted.
+            dominant_full = (
+                all(value in winner for value in high_alternatives)
+                and all(counts[winner] > counts[value] for value in high_alternatives)
+            )
+            if not dominant_full:
+                extension = _near_tie_extension(counts, max(counts.values()))
+                if extension is not None:
+                    winner = extension
+                else:
+                    context = _context_consensus(
+                        context_token_sets, x0=x0, cy=cy, span=span
                     )
-                winner = context
+                    if context is None:
+                        raise AppealsCrossVisionError(
+                            f"AMBIGUOUS_APPEALS_CARD_OCR:{counts}:context={context}"
+                        )
+                    winner = context
 
     # A pair of independent whole-page segmentations is a second direct pixel reading,
     # not deck inference. It may replace a contaminated narrow-crop reading only when the
