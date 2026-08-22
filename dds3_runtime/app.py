@@ -3,32 +3,21 @@ from __future__ import annotations
 
 import base64
 import binascii
-import os
-import secrets
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from bridge_school_api.dds3 import DDSUnavailable, ImageIngressError, compute, solve_raw_image
 from bridge_school_api.dds3.readiness import engine_readiness
+from dds3_runtime.auth import auth
 
 app = FastAPI(
     title="Bridge School DDS3 Runtime",
-    version="1.2.0",
+    version="1.3.0",
     docs_url=None,
     redoc_url=None,
     openapi_url=None,
 )
-
-
-def auth(authorization: str | None = Header(default=None)) -> None:
-    token = os.getenv("DDS3_RUNTIME_TOKEN", "")
-    if not token:
-        raise HTTPException(503, "runtime token not configured")
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(401, "missing bearer token")
-    if not secrets.compare_digest(authorization[7:], token):
-        raise HTTPException(403, "invalid bearer token")
 
 
 class ComputeRequest(BaseModel):
