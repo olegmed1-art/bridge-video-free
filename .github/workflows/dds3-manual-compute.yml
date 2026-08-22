@@ -1,0 +1,103 @@
+name: DDS3 manual compute
+
+on:
+  workflow_dispatch:
+    inputs:
+      pbn:
+        description: 'Full four-hand PBN, e.g. N:...'
+        required: true
+        type: string
+      dealer:
+        description: 'Dealer (N/E/S/W)'
+        required: true
+        default: 'N'
+        type: choice
+        options: [N, E, S, W]
+      vulnerability:
+        description: 'Vulnerability'
+        required: true
+        default: 'None'
+        type: choice
+        options: [None, NS, EW, Both]
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/dds3-manual-compute.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  pure-dds3:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Build pinned DDS3 base image
+        run: docker build -f Dockerfile.dds3 -t bridge-school-dds3:latest .
+      - name: Build pinned DDS3 runtime image
+        run: docker build -f dds3_runtime/Dockerfile -t bridge-school-dds3-runtime:manual .
+      - name: Start runtime
+        run: docker run -d --rm --name dds3-runtime -p 18080:8080 -e DDS3_RUNTIME_TOKEN=manual-secret bridge-school-dds3-runtime:manual
+      - name: Wait for real DDS3 readiness
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/readyz > ready.json; then
+              cat ready.json
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs dds3-runtime
+          exit 1
+      - name: Compute DD table with pure DDS3
+        env:
+          PBN: ${{ github.event_name == 'pull_request' && 'N:AT732.K82.QT9.K4 QJ4.QJ973.AJ4.Q8 K85.A4.K752.J732 96.T65.863.AT965' || inputs.pbn }}
+          DEALER: ${{ github.event_name == 'pull_request' && 'N' || inputs.dealer }}
+          VULNERABILITY: ${{ github.event_name == 'pull_request' && 'None' || inputs.vulnerability }}
+        run: |
+          python - <<'PY'
+          import json, os
+          payload = {
+              'operation': 'dd_table',
+              'pbn': os.environ['PBN'],
+              'dealer': os.environ['DEALER'],
+              'vulnerability': os.environ['VULNERABILITY'],
+          }
+          with open('request.json', 'w') as f:
+              json.dump(payload, f)
+          PY
+          curl -fsS \
+            -H 'Authorization: Bearer manual-secret' \
+            -H 'Content-Type: application/json' \
+            --data-binary @request.json \
+            http://127.0.0.1:18080/v1/compute > result.json
+      - name: Enforce pure DDS3 and print 4x5 table
+        run: |
+          python - <<'PY'
+          import json
+          r = json.load(open('result.json'))
+          assert r.get('engine') == 'DDS3', r
+          assert r.get('fallback_used') is False, r
+          t = r['dd_table']
+          print('PURE_DDS3: PASS')
+          print('par_score_ns:', r.get('par_score_ns'))
+          print('      NT  S  H  D  C')
+          for i, seat in enumerate(['N','E','S','W']):
+              print(f"{seat:>2}    {t['NT'][i]:>2} {t['S'][i]:>2} {t['H'][i]:>2} {t['D'][i]:>2} {t['C'][i]:>2}")
+          PY
+      - name: Upload raw DDS3 result
+        uses: actions/upload-artifact@v4
+        with:
+          name: pure-dds3-result
+          path: |
+            request.json
+            result.json
+            ready.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Runtime logs on failure
+        if: failure()
+        run: docker logs dds3-runtime || true
