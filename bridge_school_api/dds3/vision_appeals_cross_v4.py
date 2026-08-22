@@ -189,8 +189,20 @@ def _read_row(
     if len(best) != 1:
         extension = _near_tie_extension(counts, best_count)
         if extension is None:
-            raise AppealsCrossVisionError(f"AMBIGUOUS_APPEALS_CARD_OCR:{counts}")
-        winner = extension
+            # A crop-level tie can only be broken by an independent whole-page pixel
+            # majority, and only when that context reading is itself one of the tied
+            # direct crop readings. This keeps the decision evidence-only: no rank is
+            # inserted from deck state, metadata, or neighbouring holdings.
+            context = _context_consensus(
+                context_token_sets, x0=x0, cy=cy, span=span
+            )
+            if context is None or context not in best:
+                raise AppealsCrossVisionError(
+                    f"AMBIGUOUS_APPEALS_CARD_OCR:{counts}:context={context}"
+                )
+            winner = context
+        else:
+            winner = extension
     else:
         winner = best[0]
     alternatives = sorted(
