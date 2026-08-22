@@ -1,9 +1,9 @@
 """Low-latency Oracle worker for the isolated Assistant Lab v1 queue.
 
 The worker is deliberately bounded:
-- reads only assistant_lab.job;
+- reads/writes only assistant_lab.job;
 - executes only allow-listed v1 job kinds;
-- DDS3 calls go to the already-hot localhost runtime;
+- DDS3 calls go only to the already-hot localhost runtime;
 - no shell execution, arbitrary code execution, canon writes, or student-profile writes.
 """
 from __future__ import annotations
@@ -11,20 +11,23 @@ from __future__ import annotations
 import json
 import os
 import socket
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterator
 
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from .contract import LabContractError, LabJob, validate_job_payload, validate_priority, verify_dds3_result
+from .contract import CONTRACT_VERSION, LabContractError, LabJob, validate_job_payload, validate_priority, verify_dds3_result
 
 CHANNEL = "assistant_lab_jobs"
+LOCAL_DDS3_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
 class RetryableLabError(RuntimeError):
@@ -39,7 +42,8 @@ class WorkerConfig:
     dds3_token: str
     dds3_timeout_seconds: float = 25.0
     wake_timeout_seconds: float = 2.0
-    stale_after_seconds: int = 300
+    stale_after_seconds: int = 900
+    heartbeat_interval_seconds: int = 30
 
 
 def _require_env(name: str) -> str:
@@ -54,28 +58,58 @@ def validate_neon_dsn(raw: str) -> str:
     parsed = urllib.parse.urlsplit(value)
     if parsed.scheme not in {"postgresql", "postgres"}:
         raise RuntimeError("assistant-lab DSN must be PostgreSQL")
+    if not parsed.username or not parsed.password:
+        raise RuntimeError("assistant-lab DSN must include a dedicated login and password")
     if not (parsed.hostname or "").lower().endswith(".neon.tech"):
         raise RuntimeError("assistant-lab DSN must target Neon")
     if parsed.path != "/neondb":
         raise RuntimeError("assistant-lab DSN must target neondb")
-    query = urllib.parse.parse_qs(parsed.query)
+    if parsed.fragment:
+        raise RuntimeError("assistant-lab DSN must not contain a fragment")
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
     if query.get("sslmode", [""])[0] not in {"require", "verify-full"}:
         raise RuntimeError("assistant-lab DSN must require TLS")
+    if query.get("channel_binding") != ["require"]:
+        raise RuntimeError("assistant-lab DSN must require channel binding")
     expected_user = os.getenv("ASSISTANT_LAB_EXPECTED_DB_USER", "").strip()
     if expected_user and parsed.username != expected_user:
         raise RuntimeError("assistant-lab DSN uses an unexpected principal")
     return value
 
 
+def validate_local_dds3_url(raw: str) -> str:
+    value = raw.strip()
+    parsed = urllib.parse.urlsplit(value)
+    if parsed.scheme != "http" or (parsed.hostname or "").lower() not in LOCAL_DDS3_HOSTS:
+        raise RuntimeError("assistant-lab DDS3 endpoint must be localhost HTTP")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise RuntimeError("assistant-lab DDS3 endpoint contains forbidden URL components")
+    if parsed.port != 8080 or parsed.path != "/v1/compute":
+        raise RuntimeError("assistant-lab DDS3 endpoint must be localhost:8080/v1/compute")
+    return value
+
+
 def load_config() -> WorkerConfig:
+    worker_id = os.getenv("ASSISTANT_LAB_WORKER_ID", f"{socket.gethostname()}:{os.getpid()}").strip()
+    if not worker_id:
+        raise RuntimeError("ASSISTANT_LAB_WORKER_ID must not be empty")
+    stale_after = int(os.getenv("ASSISTANT_LAB_STALE_AFTER_SECONDS", "900"))
+    heartbeat_interval = int(os.getenv("ASSISTANT_LAB_HEARTBEAT_INTERVAL_SECONDS", "30"))
+    if stale_after < 120:
+        raise RuntimeError("assistant-lab stale timeout is too small")
+    if heartbeat_interval < 5 or heartbeat_interval * 3 >= stale_after:
+        raise RuntimeError("assistant-lab heartbeat interval is inconsistent with stale timeout")
     return WorkerConfig(
         dsn=validate_neon_dsn(_require_env("ASSISTANT_LAB_DATABASE_URL")),
-        worker_id=os.getenv("ASSISTANT_LAB_WORKER_ID", f"{socket.gethostname()}:{os.getpid()}").strip(),
-        dds3_url=os.getenv("ASSISTANT_LAB_DDS3_URL", "http://127.0.0.1:8080/v1/compute").strip(),
+        worker_id=worker_id,
+        dds3_url=validate_local_dds3_url(
+            os.getenv("ASSISTANT_LAB_DDS3_URL", "http://127.0.0.1:8080/v1/compute")
+        ),
         dds3_token=_require_env("DDS3_RUNTIME_TOKEN"),
         dds3_timeout_seconds=float(os.getenv("ASSISTANT_LAB_DDS3_TIMEOUT_SECONDS", "25")),
         wake_timeout_seconds=float(os.getenv("ASSISTANT_LAB_WAKE_TIMEOUT_SECONDS", "2")),
-        stale_after_seconds=int(os.getenv("ASSISTANT_LAB_STALE_AFTER_SECONDS", "300")),
+        stale_after_seconds=stale_after,
+        heartbeat_interval_seconds=heartbeat_interval,
     )
 
 
@@ -156,6 +190,44 @@ def claim_one(config: WorkerConfig) -> LabJob | None:
     )
 
 
+def heartbeat_job(job: LabJob, config: WorkerConfig) -> bool:
+    with _connect(config.dsn) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE assistant_lab.job
+            SET heartbeat_at=now()
+            WHERE job_id=%s::uuid AND status='RUNNING' AND claimed_by=%s
+            """,
+            (job.job_id, config.worker_id),
+        )
+        owned = cur.rowcount == 1
+        conn.commit()
+        return owned
+
+
+@contextmanager
+def keep_lease_alive(job: LabJob, config: WorkerConfig) -> Iterator[None]:
+    stop = threading.Event()
+
+    def _loop() -> None:
+        while not stop.wait(config.heartbeat_interval_seconds):
+            try:
+                if not heartbeat_job(job, config):
+                    return
+            except psycopg.Error:
+                # Completion remains ownership-checked; transient DB heartbeat failure
+                # must not fabricate a successful job or kill a valid DDS3 compute.
+                continue
+
+    thread = threading.Thread(target=_loop, name="assistant-lab-heartbeat", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=2)
+
+
 def _post_json(url: str, payload: dict[str, Any], *, token: str, timeout: float) -> dict[str, Any]:
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     request = urllib.request.Request(
@@ -187,7 +259,7 @@ def _post_json(url: str, payload: dict[str, Any], *, token: str, timeout: float)
 
 def execute_job(job: LabJob, config: WorkerConfig) -> dict[str, Any]:
     if job.kind == "NOOP":
-        return {"ok": True, "kind": "NOOP", "echo": job.payload}
+        return {"ok": True, "kind": "NOOP", "echo": job.payload, "contract": CONTRACT_VERSION}
     if job.kind != "DDS3_COMPUTE":
         raise LabContractError("unsupported assistant-lab job kind")
     operation = str(job.payload.get("operation") or "dd_table")
@@ -201,14 +273,21 @@ def execute_job(job: LabJob, config: WorkerConfig) -> dict[str, Any]:
 
 
 def mark_completed(job: LabJob, result: dict[str, Any], config: WorkerConfig) -> None:
+    provenance = {
+        "assistant_lab_contract": CONTRACT_VERSION,
+        "worker_id": config.worker_id,
+        "execution_path": "oracle_local_dds3" if job.kind == "DDS3_COMPUTE" else "oracle_noop",
+    }
     with _connect(config.dsn) as conn, conn.cursor() as cur:
         cur.execute(
             """
             UPDATE assistant_lab.job
-            SET status='COMPLETED', result_json=%s, completed_at=now(), heartbeat_at=now()
+            SET status='COMPLETED', result_json=%s,
+                provenance_json=provenance_json || %s,
+                completed_at=now(), heartbeat_at=now()
             WHERE job_id=%s::uuid AND status='RUNNING' AND claimed_by=%s
             """,
-            (Jsonb(result), job.job_id, config.worker_id),
+            (Jsonb(result), Jsonb(provenance), job.job_id, config.worker_id),
         )
         if cur.rowcount != 1:
             raise RuntimeError("assistant-lab completion ownership mismatch")
@@ -249,7 +328,8 @@ def process_one(config: WorkerConfig) -> bool:
     if job is None:
         return False
     try:
-        result = execute_job(job, config)
+        with keep_lease_alive(job, config):
+            result = execute_job(job, config)
     except RetryableLabError as exc:
         mark_failed(job, exc, config, retryable=True)
     except Exception as exc:
