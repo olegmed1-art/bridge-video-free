@@ -1,9 +1,9 @@
 name: TEMP Assistant Lab production NOOP canary
 
 on:
-  push:
+  pull_request:
     branches:
-      - assistant-lab-prod-canary
+      - main
 
 permissions:
   contents: read
