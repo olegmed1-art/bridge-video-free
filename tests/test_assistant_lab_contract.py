@@ -11,6 +11,7 @@ from assistant_lab.contract import (
     validate_priority,
     verify_dds3_result,
 )
+from assistant_lab.worker import validate_local_dds3_url, validate_neon_dsn
 
 
 def test_priority_contract_is_stable():
@@ -67,6 +68,34 @@ def test_dds3_provenance_is_fail_closed():
         verify_dds3_result(good, expected_operation="position_all_moves")
 
 
+def test_worker_dsn_is_neon_tls_channel_bound(monkeypatch):
+    monkeypatch.setenv("ASSISTANT_LAB_EXPECTED_DB_USER", "assistant_lab_worker_principal")
+    good = (
+        "postgresql://assistant_lab_worker_principal:secret@"
+        "ep-example-pooler.eu-central-1.aws.neon.tech/neondb"
+        "?sslmode=require&channel_binding=require"
+    )
+    assert validate_neon_dsn(good) == good
+    with pytest.raises(RuntimeError):
+        validate_neon_dsn(good.replace("channel_binding=require", "channel_binding=disable"))
+    with pytest.raises(RuntimeError):
+        validate_neon_dsn(good.replace("assistant_lab_worker_principal", "bridge_school_worker_principal"))
+    with pytest.raises(RuntimeError):
+        validate_neon_dsn(good.replace("neon.tech", "example.com"))
+
+
+def test_worker_dds3_endpoint_is_localhost_only():
+    good = "http://127.0.0.1:8080/v1/compute"
+    assert validate_local_dds3_url(good) == good
+    assert validate_local_dds3_url("http://localhost:8080/v1/compute") == "http://localhost:8080/v1/compute"
+    with pytest.raises(RuntimeError):
+        validate_local_dds3_url("https://example.com/v1/compute")
+    with pytest.raises(RuntimeError):
+        validate_local_dds3_url("http://127.0.0.1:8081/v1/compute")
+    with pytest.raises(RuntimeError):
+        validate_local_dds3_url("http://127.0.0.1:8080/anything")
+
+
 def test_schema_is_isolated_and_not_role_provisioning():
     schema = Path("assistant_lab/schema.sql").read_text(encoding="utf-8")
     lowered = schema.lower()
@@ -76,3 +105,11 @@ def test_schema_is_isolated_and_not_role_provisioning():
     assert "drop schema" not in lowered
     assert "public.skill" not in lowered
     assert "ai.system_rule" not in lowered
+
+
+def test_oracle_service_is_fail_closed_and_not_public_network_worker():
+    unit = Path("deploy/oracle-assistant-lab/assistant-lab.service").read_text(encoding="utf-8")
+    assert "NoNewPrivileges=true" in unit
+    assert "ProtectSystem=strict" in unit
+    assert "EnvironmentFile=/opt/bridge-school/assistant-lab/assistant-lab.env" in unit
+    assert "ExecStart=" in unit and "-m assistant_lab.worker" in unit
