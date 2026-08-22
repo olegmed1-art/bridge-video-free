@@ -11,7 +11,7 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-PREFIX = "PILOT100-20260822-"
+PREFIX = os.environ.get("PILOT100_PREFIX", "PILOT100-20260822-")
 EXPECTED_POSITIONS = 100
 SEATS = "NESW"
 
@@ -98,8 +98,6 @@ def configurations(rows):
                 "provenance": "VERIFIED_DEAL_COUNTERFACTUAL_PRIOR_PASSES",
             })
 
-    # Four scoring-sensitivity controls. Same verified deals and actual dealer/hand,
-    # but evaluated under IMP scoring to test scoring routing independently of deal data.
     for row in rows[:4]:
         dealer = row["dealer"].upper()
         hands = {"N": row["hand_n"], "E": row["hand_e"], "S": row["hand_s"], "W": row["hand_w"]}
@@ -132,8 +130,6 @@ def seed() -> None:
             raise RuntimeError("school row not found")
         rows = load_source_deals(cur)
         configs = configurations(rows)
-
-        # Idempotent isolated benchmark namespace; children cascade by schema contract.
         cur.execute("DELETE FROM ai.decision_position WHERE school_id=%s AND stable_key LIKE %s", (school["school_id"], PREFIX + "%"))
 
         position_ids = []
@@ -278,6 +274,7 @@ def verify() -> None:
     output = {
         "verified": True,
         "benchmark": "PILOT100-20260822",
+        "prefix": PREFIX,
         "summary": {key: int(value) for key, value in summary.items()},
         "decision_paths": paths,
         "chosen_actions": actions,
