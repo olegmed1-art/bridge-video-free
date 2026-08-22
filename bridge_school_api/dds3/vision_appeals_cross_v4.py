@@ -20,10 +20,10 @@ from .vision_appeals_cross import (
 from .vision_publication import _clean_rank_text, _decode, _deps
 
 
-def _context_tokens(image, pytesseract):
-    """One independent page-context OCR pass used only as an ambiguity tie-breaker."""
+def _context_tokens(image, pytesseract, *, psm: int):
+    """Independent page-context OCR tokens for one segmentation mode."""
     data = pytesseract.image_to_data(
-        image, config="--psm 6", output_type=pytesseract.Output.DICT
+        image, config=f"--psm {psm}", output_type=pytesseract.Output.DICT
     )
     rows = []
     for index, raw in enumerate(data["text"]):
@@ -92,6 +92,18 @@ def _context_row_candidate(tokens, *, x0: float, cy: float, span: float) -> str 
     return next(iter(best_values)) if len(best_values) == 1 else None
 
 
+def _context_consensus(token_sets, *, x0: float, cy: float, span: float) -> str | None:
+    """Require two independent page segmentations to read the same bounded holding."""
+    values = [
+        _context_row_candidate(tokens, x0=x0, cy=cy, span=span)
+        for tokens in token_sets
+    ]
+    supported = [value for value in values if value]
+    if len(supported) < 2 or len(set(supported)) != 1:
+        return None
+    return supported[0]
+
+
 def _near_tie_extension(counts: dict[str, int], best_count: int) -> str | None:
     """Resolve only a strong OCR near-tie where the longer reading is directly supported.
 
@@ -124,15 +136,12 @@ def _read_row(
     span: float,
     pytesseract,
     cv2,
-    context_tokens,
+    context_token_sets,
 ):
     height, width = image.shape[:2]
     radius = max(6, int(span * 0.18))
-    # Preserve a small antialias margin before the expected rank origin. This is purely
-    # pixel geometry: it prevents a single leading glyph from being clipped at the crop
-    # edge while the right boundary stays anchored to the same expected rank origin.
-    left = max(0, int(x0 - span * 0.08))
-    right = min(width, int(x0 + max(90.0, span * 2.55)))
+    left = max(0, int(x0))
+    right = min(width, int(left + max(90.0, span * 2.55)))
     top = max(0, int(cy - radius))
     bottom = min(height, int(cy + radius + 1))
     crop = image[top:bottom, left:right]
@@ -190,19 +199,24 @@ def _read_row(
             if extension is not None:
                 winner = extension
             else:
-                context = _context_row_candidate(
-                    context_tokens, x0=x0, cy=cy, span=span
+                context = _context_consensus(
+                    context_token_sets, x0=x0, cy=cy, span=span
                 )
-                if (
-                    context is None
-                    or context not in cross_scale
-                    or counts[context] * 5 < counts[winner] * 4
-                ):
+                if context is None:
                     raise AppealsCrossVisionError(
                         f"AMBIGUOUS_APPEALS_CARD_OCR:{counts}:context={context}"
                     )
                 winner = context
-    confidence = min(0.92, 0.62 + 0.03 * counts[winner])
+
+    # A pair of independent whole-page segmentations is a second direct pixel reading,
+    # not deck inference. It may replace a contaminated narrow-crop reading only when the
+    # two segmentations agree exactly on the geometrically bounded row.
+    context = _context_consensus(context_token_sets, x0=x0, cy=cy, span=span)
+    if context is not None and context != winner:
+        winner = context
+        confidence = 0.80
+    else:
+        confidence = min(0.92, 0.62 + 0.03 * counts[winner])
     return winner, confidence
 
 
@@ -225,7 +239,9 @@ def _extract_hands(image, compass, pytesseract, cv2):
         "W": [center_y + factor * span for factor in (-0.55, -0.18, 0.18, 0.55)],
         "E": [center_y + factor * span for factor in (-0.55, -0.18, 0.18, 0.55)],
     }
-    context_tokens = _context_tokens(image, pytesseract)
+    context_token_sets = [
+        _context_tokens(image, pytesseract, psm=psm) for psm in (6, 11)
+    ]
     hands = {}
     confidence = {}
     cards: list[str] = []
@@ -240,7 +256,7 @@ def _extract_hands(image, compass, pytesseract, cv2):
                 span=span,
                 pytesseract=pytesseract,
                 cv2=cv2,
-                context_tokens=context_tokens,
+                context_token_sets=context_token_sets,
             )
             holdings.append(value)
             confs.append(conf)
