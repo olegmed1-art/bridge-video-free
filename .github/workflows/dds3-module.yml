@@ -4,8 +4,12 @@ on:
     paths:
       - 'dds/**'
       - 'bridge_school_api/dds3/**'
+      - 'bridge_school_api/main.py'
       - 'dds3_runtime/**'
       - 'Dockerfile.dds3'
+      - 'requirements-dds3-runtime.txt'
+      - 'vercel.json'
+      - 'tests/test_dds3_remote.py'
       - '.github/workflows/dds3-module.yml'
   workflow_dispatch:
 
@@ -51,6 +55,27 @@ jobs:
           PY
       - name: Build production DDS3 runtime from verified core
         run: docker build -f dds3_runtime/Dockerfile -t bridge-school-dds3-runtime:test .
+      - name: Verify Vercel OIDC trust configuration shape
+        run: |
+          docker run --rm -i --entrypoint python \
+            -e DDS3_TRUST_VERCEL_OIDC=true \
+            -e DDS3_VERCEL_ISSUER_MODE=team \
+            -e DDS3_VERCEL_TEAM_SLUG=example-team \
+            -e DDS3_VERCEL_PROJECT_NAME=example-project \
+            -e DDS3_VERCEL_TEAM_ID=team_test \
+            -e DDS3_VERCEL_PROJECT_ID=prj_test \
+            -e DDS3_VERCEL_ENVIRONMENT=production \
+            bridge-school-dds3-runtime:test - <<'PY'
+          from dds3_runtime.auth import _oidc_config
+          c=_oidc_config()
+          assert c.enabled is True
+          assert c.issuer=='https://oidc.vercel.com/example-team'
+          assert c.jwks_url=='https://oidc.vercel.com/example-team/.well-known/jwks'
+          assert c.audience=='https://vercel.com/example-team'
+          assert c.subject=='owner:example-team:project:example-project:environment:production'
+          assert c.team_id=='team_test' and c.project_id=='prj_test'
+          print('DDS3_VERCEL_OIDC_CONFIG_PASS')
+          PY
       - name: Start production runtime
         run: docker run -d --rm --name dds3-runtime -p 18080:8080 -e DDS3_RUNTIME_TOKEN=ci-secret bridge-school-dds3-runtime:test
       - name: Require real DDS3 readiness
