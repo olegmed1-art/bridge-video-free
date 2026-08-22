@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   analyze:
@@ -19,45 +20,36 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Fetch completed event 29912 source evidence
+      - name: Restore pinned verified event 29912 source facts
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p probe29912all
-          UA='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/140 Safari/537.36'
-          curl -L --retry 2 --connect-timeout 15 --max-time 45 -A "$UA" -sS 'https://www.bridge.co.il/viewer/session.php?event=29912&round=3' -o probe29912all/round3.html
-          if grep -q '43624' probe29912all/round3.html; then echo 'Diana unexpectedly present in round 3'; exit 1; else echo 'ROUND3_DIANA_ABSENT'; fi
-          for spec in '1 4' '2 6' '4 6' '5 8' '6 4'; do
-            set -- $spec; r="$1"; seat="$2"; dir="probe29912all/r${r}"
-            mkdir -p "$dir/boards"
-            curl -L --retry 3 --connect-timeout 15 --max-time 45 -A "$UA" -sS "https://www.bridge.co.il/viewer/personal.php?event=29912&round=${r}&seat=${seat}" -o "$dir/personal.html"
-            python3 - "$dir" <<'PY'
-          import html,re,sys
-          from pathlib import Path
-          d=Path(sys.argv[1]); text=html.unescape((d/'personal.html').read_text('utf-8'))
-          links=[]
-          for href in re.findall(r'href=["\']([^"\']+)["\']',text,re.I):
-              if 'board.php' in href: links.append(href.replace('&amp;','&'))
-          links=list(dict.fromkeys(links)); (d/'board-links.txt').write_text('\n'.join(links)+'\n')
-          print(d,'BOARD_LINK_COUNT',len(links))
-          PY
-            n=0
-            while IFS= read -r href; do
-              test -n "$href" || continue; n=$((n+1)); url="$href"; case "$url" in http*) ;; *) url="https://www.bridge.co.il/viewer/$url";; esac
-              curl -L --retry 2 --connect-timeout 15 --max-time 45 -A "$UA" -sS "$url" -o "$dir/boards/board-${n}.html"
-            done < "$dir/board-links.txt"
-          done
-      - name: Extract validated source facts without site DD
-        run: |
-          python3 -m pip install --quiet beautifulsoup4==4.13.5
-          python3 scripts/temp_diana_29912_extract_sources.py --root probe29912all --out-dir facts29912
+          curl -fL --retry 3 \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/olegmed1-art/bridge-video-free/actions/artifacts/9470920077/zip" \
+            -o source-facts.zip
+          unzip -q source-facts.zip
+          test -d facts29912
+          sha256sum -c <<'EOF'
+          34fe5c59d901686b712c2384078aac618a191a4528c694db2ea8c6af2ae51073  facts29912/tournament_29912_round1_diana_facts.json
+          806ed04726195fefb3b941d0ca2a132822cb24de514ae424c52b6330fa81fc27  facts29912/tournament_29912_round2_diana_facts.json
+          7cc1822cc64ed6464b99dce0937fc6c5a64efbeee2a6a5e8f9596500a3dde637  facts29912/tournament_29912_round4_diana_facts.json
+          432d386551745509218911075c099230e1fbb1d4f485832d99ee0f9aa6954e67  facts29912/tournament_29912_round5_diana_facts.json
+          ebc064b8921560e56829409f65e3add3a192206dd62971a91664df116e94c7dd  facts29912/tournament_29912_round6_diana_facts.json
+          EOF
           python3 - <<'PY'
           import json,glob
           total=0
+          sessions=[]
           for f in glob.glob('facts29912/*.json'):
-              x=json.load(open(f)); total+=len(x['boards']); assert x['source']['site_dd_used'] is False
+              x=json.load(open(f)); total+=len(x['boards']); sessions.append(x['source']['round']); assert x['source']['site_dd_used'] is False
           assert total==100,total
-          print('SOURCE_FACTS_PASS',total)
+          assert sorted(sessions)==[1,2,4,5,6],sessions
+          print('PINNED_SOURCE_FACTS_PASS',total,sorted(sessions))
           PY
       - name: Build pinned canonical DDS3 core
         run: docker build -f Dockerfile.dds3 -t bridge-school-dds3 .
