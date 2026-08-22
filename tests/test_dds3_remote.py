@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import ssl
+import urllib.error
 import urllib.request
 
 from bridge_school_api.dds3.remote import (
@@ -76,6 +78,34 @@ def main() -> None:
                 config=RemoteDDS3Config(base_url="https://203.0.113.10", timeout_seconds=1),
             ),
             "DDS3_REMOTE_ENGINE_MISMATCH",
+        )
+
+        def refused(*args, **kwargs):
+            raise urllib.error.URLError(ConnectionRefusedError(111, "refused"))
+
+        urllib.request.urlopen = refused
+        expect_unavailable(
+            lambda: compute_remote(
+                {"operation": "dd_table", "pbn": "N:A... ... ... ..."},
+                bearer_token="token",
+                config=RemoteDDS3Config(base_url="https://203.0.113.10", timeout_seconds=1),
+            ),
+            "DDS3_REMOTE_CONNECTION_REFUSED",
+        )
+
+        cert_error = ssl.SSLCertVerificationError(1, "certificate verify failed")
+
+        def bad_cert(*args, **kwargs):
+            raise urllib.error.URLError(cert_error)
+
+        urllib.request.urlopen = bad_cert
+        expect_unavailable(
+            lambda: compute_remote(
+                {"operation": "dd_table", "pbn": "N:A... ... ... ..."},
+                bearer_token="token",
+                config=RemoteDDS3Config(base_url="https://203.0.113.10", timeout_seconds=1),
+            ),
+            "DDS3_REMOTE_TLS_CERTIFICATE_ERROR",
         )
 
         missing = remote_engine_readiness(
