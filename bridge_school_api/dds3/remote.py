@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import ssl
@@ -37,6 +38,28 @@ def _validate_base_url(base_url: str) -> str:
     return base_url.rstrip("/")
 
 
+def _transport_failure_reason(exc: BaseException) -> str:
+    reason: BaseException | object = exc
+    if isinstance(exc, urllib.error.URLError):
+        reason = exc.reason
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return "DDS3_REMOTE_TLS_CERTIFICATE_ERROR"
+    if isinstance(reason, ssl.SSLError):
+        return "DDS3_REMOTE_TLS_ERROR"
+    if isinstance(reason, (TimeoutError,)):
+        return "DDS3_REMOTE_TIMEOUT"
+    if isinstance(reason, ConnectionRefusedError):
+        return "DDS3_REMOTE_CONNECTION_REFUSED"
+    if isinstance(reason, OSError):
+        if reason.errno == errno.ECONNREFUSED:
+            return "DDS3_REMOTE_CONNECTION_REFUSED"
+        if reason.errno in {errno.ETIMEDOUT}:
+            return "DDS3_REMOTE_TIMEOUT"
+        if reason.errno in {errno.ENETUNREACH, errno.EHOSTUNREACH}:
+            return "DDS3_REMOTE_NETWORK_UNREACHABLE"
+    return "DDS3_REMOTE_UNREACHABLE"
+
+
 def _request_json(
     *,
     url: str,
@@ -64,8 +87,8 @@ def _request_json(
             raw = response.read(4_000_000)
     except urllib.error.HTTPError as exc:
         raise DDSUnavailable(f"DDS3_REMOTE_HTTP_{exc.code}") from exc
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise DDSUnavailable("DDS3_REMOTE_UNREACHABLE") from exc
+    except (urllib.error.URLError, TimeoutError, OSError, ssl.SSLError) as exc:
+        raise DDSUnavailable(_transport_failure_reason(exc)) from exc
     try:
         data = json.loads(raw)
     except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as exc:
