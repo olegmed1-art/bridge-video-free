@@ -1,0 +1,40 @@
+name: Bridge AI Pilot-100 DB Diagnostic
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/bridge-ai-pilot100-dbdiag.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  dbdiag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      BRIDGE_APP_DATABASE_URL: ${{ secrets.BRIDGE_APP_DATABASE_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Set up Python 3.12
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install psycopg
+        run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+      - name: Print safe DB identity and Pilot-100 state
+        run: |
+          python - <<'PY'
+          import os, json, psycopg
+          url = os.environ['BRIDGE_APP_DATABASE_URL']
+          with psycopg.connect(url) as conn, conn.cursor() as cur:
+              cur.execute("SELECT current_database(), current_user, current_setting('neon.project_id', true), current_setting('neon.branch_id', true)")
+              print('DB_IDENTITY', json.dumps(cur.fetchone(), default=str))
+              cur.execute("SELECT count(*), count(*) FILTER (WHERE input_status='COMPLETE') FROM ai.decision_position WHERE stable_key LIKE 'PILOT100-20260822-%'")
+              print('PILOT_POSITIONS', json.dumps(cur.fetchone(), default=str))
+              cur.execute("SELECT status, count(*) FROM ai.search_run s JOIN ai.decision_position p USING(position_id) WHERE p.stable_key LIKE 'PILOT100-20260822-%' GROUP BY status ORDER BY status")
+              print('PILOT_SEARCH', json.dumps(cur.fetchall(), default=str))
+          PY
