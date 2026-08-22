@@ -1,6 +1,11 @@
 name: DDS3 Chat Runner
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/dds3-chat-run.yml'
+      - 'Dockerfile.dds3'
+      - 'dds/dds_position_worker.cpp'
   workflow_dispatch:
     inputs:
       trump:
@@ -37,28 +42,49 @@ jobs:
 
       - name: Solve position with all legal moves
         env:
-          DDS_TRUMP: ${{ inputs.trump }}
-          DDS_FIRST: ${{ inputs.first }}
-          DDS_CURRENT_TRICK: ${{ inputs.current_trick }}
-          DDS_PBN: ${{ inputs.pbn }}
+          DDS_TRUMP: ${{ github.event_name == 'workflow_dispatch' && inputs.trump || 'NT' }}
+          DDS_FIRST: ${{ github.event_name == 'workflow_dispatch' && inputs.first || 'N' }}
+          DDS_CURRENT_TRICK: ${{ github.event_name == 'workflow_dispatch' && inputs.current_trick || '-' }}
+          DDS_PBN: ${{ github.event_name == 'workflow_dispatch' && inputs.pbn || 'N:QJ6.K652.J85.T98 873.J97.AT764.Q4 K5.T83.KQ9.A7652 AT942.AQ4.32.KJ3' }}
         shell: bash
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          import os
+          values = {name: os.environ[name] for name in ('DDS_TRUMP', 'DDS_FIRST', 'DDS_CURRENT_TRICK', 'DDS_PBN')}
+          assert values['DDS_TRUMP'] in {'S', 'H', 'D', 'C', 'NT'}, 'invalid trump'
+          assert values['DDS_FIRST'] in {'N', 'E', 'S', 'W'}, 'invalid first hand'
+          assert all(not any(ch in value for ch in '\\t\\r\\n') for value in values.values()), 'control character in input'
+          assert 0 < len(values['DDS_PBN']) <= 512, 'invalid PBN length'
+          PY
           printf 'POSITION\t%s\t%s\t%s\t%s\n' \
             "$DDS_TRUMP" "$DDS_FIRST" "$DDS_CURRENT_TRICK" "$DDS_PBN" \
             | docker run --rm -i --entrypoint /opt/bridge-school-dds3/dds_position_worker bridge-dds3 \
             | tee dds3-result.jsonl
 
-      - name: Verify DDS3 result
+      - name: Verify and canonicalize DDS3 result
         shell: bash
         run: |
           set -euo pipefail
-          grep -q '"ok":true' dds3-result.jsonl
-          grep -q '"engine":"DDS3"' dds3-result.jsonl
-          grep -q '"fallback_used":false' dds3-result.jsonl
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path('dds3-result.jsonl')
+          lines = path.read_text(encoding='utf-8').splitlines()
+          assert len(lines) == 1, f'expected one JSONL record, got {len(lines)}'
+          result = json.loads(lines[0])
+          assert result.get('ok') is True
+          assert result.get('engine') == 'DDS3'
+          assert result.get('fallback_used') is False
+          assert result.get('operation') == 'position_all_moves'
+          assert isinstance(result.get('moves'), list) and result['moves']
+          path.write_text(json.dumps(result, separators=(',', ':'), sort_keys=True) + '\\n', encoding='utf-8')
+          print('DDS3_CHAT_RUNNER_E2E: PASS')
+          PY
 
       - name: Upload result
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dds3-chat-result
           path: dds3-result.jsonl
