@@ -36,6 +36,12 @@ def validate_hands(h):
         if n!=13: raise ValueError((seat,n,h[seat]))
     if len(cards)!=52 or len(set(cards))!=52: raise ValueError('not 52 unique cards')
 
+def card_in_hand(hand,card):
+    suit,rank=card[0],card[1:]
+    if rank=='10': rank='T'
+    st=hand.split('.')[SUITS.index(suit)]
+    return rank in ('' if st=='-' else st)
+
 def remove_card(hands,seat,card):
     suit,rank=card[0],card[1:]
     if rank=='10': rank='T'
@@ -55,9 +61,17 @@ def analyze_board(base,token,b):
     dd=post(base,token,{'operation':'dd_table','pbn':b['pbn'],'dealer':b['dealer'],'vulnerability':b['vulnerability']})
     if dd.get('operation')!='dd_table' or dd.get('input_validated') is not True: raise RuntimeError('bad DD provenance')
     level,strain=contract_parts(b['contract']); decl=b['declarer']; act=actual_tricks(b)
-    dd_tricks=int(dd['dd_table'][strain][SEATS.index(decl)])
     target=b['pair_direction']; target_par=int(dd['par_score_ns']) if target=='NS' else -int(dd['par_score_ns'])
-    diana=b['diana_seat']; leader=opening_leader(decl); actor=actor_for_leader(diana,leader)
+    diana=b['diana_seat']; leader=opening_leader(decl)
+
+    if not card_in_hand(b['hands'][leader],b['opening_lead']):
+        return {**b,'dds3':dd,
+                'source_consistency':{'ok':False,'reason':'recorded opening lead is not in inferred opening leader hand','inferred_opening_leader':leader,'recorded_opening_lead':b['opening_lead']},
+                'same_contract':None,'par_for_pair':target_par,'pair_score_minus_par':int(b['pair_score'])-target_par,
+                'diana_declarer':None,'diana_opening_leader':None,'opening_leader':leader,'opening_lead_dds3':None}
+
+    dd_tricks=int(dd['dd_table'][strain][SEATS.index(decl)])
+    actor=actor_for_leader(diana,leader)
     start=post(base,token,{'operation':'position_all_moves','position':{'pbn':b['pbn'],'trump':strain,'first':leader,'current_trick':[]}})
     if side(leader)==side(decl): raise RuntimeError('opening leader on declarer side')
     after_h=remove_card(b['hands'],leader,b['opening_lead'])
@@ -73,7 +87,8 @@ def analyze_board(base,token,b):
     mapped={m['card']:m for m in start['moves']}.get(b['opening_lead'])
     if mapped is not None and int(mapped['regret'])!=regret:
         raise RuntimeError(f'mapped vs explicit regret mismatch board {b["board"]}: {mapped["regret"]} != {regret}')
-    return {**b,'dds3':dd,'same_contract':{'actual_tricks':act,'dds3_tricks':dd_tricks,'actual_minus_dd_declarer':act-dd_tricks},
+    return {**b,'dds3':dd,'source_consistency':{'ok':True},
+            'same_contract':{'actual_tricks':act,'dds3_tricks':dd_tricks,'actual_minus_dd_declarer':act-dd_tricks},
             'par_for_pair':target_par,'pair_score_minus_par':int(b['pair_score'])-target_par,
             'diana_declarer':decl==diana,'diana_opening_leader':leader==diana,'opening_leader':leader,
             'opening_lead_dds3':{'actor':actor,'recorded_lead':b['opening_lead'],'regret':regret,
@@ -92,12 +107,16 @@ def main():
             ev=r['dds3'].get('engine_version')
             if engine_version is None: engine_version=ev
             elif ev!=engine_version: raise RuntimeError('engine changed during run')
-        ddecl=[r for r in rows if r['diana_declarer']]
-        dleads=[r for r in rows if r['diana_opening_leader']]
+        consistent=[r for r in rows if r['source_consistency']['ok']]
+        source_bad=[r for r in rows if not r['source_consistency']['ok']]
+        ddecl=[r for r in consistent if r['diana_declarer']]
+        dleads=[r for r in consistent if r['diana_opening_leader']]
         ses={
           'round':f['source']['round'],'tournament':f['tournament'],'boards':rows,
           'summary':{
             'played_boards':len(rows),
+            'decision_analyzable_boards':len(consistent),
+            'source_inconsistent_boards':[r['board'] for r in source_bad],
             'diana_declarer_boards':[r['board'] for r in ddecl],
             'diana_declarer_shortfalls':[{'board':r['board'],'tricks_lost':-r['same_contract']['actual_minus_dd_declarer']} for r in ddecl if r['same_contract']['actual_minus_dd_declarer']<0],
             'diana_declarer_post_lead_shortfalls':[{'board':r['board'],'tricks_below_post_lead_ceiling':r['opening_lead_dds3']['declarer_ceiling_after_recorded_lead']-r['same_contract']['actual_tricks']} for r in ddecl if r['same_contract']['actual_tricks']<r['opening_lead_dds3']['declarer_ceiling_after_recorded_lead']],
@@ -107,9 +126,12 @@ def main():
           }
         }
         sessions.append(ses)
+    inconsistencies=[{'round':s['round'],'board':b['board'],'reason':b['source_consistency']['reason']} for s in sessions for b in s['boards'] if not b['source_consistency']['ok']]
     aggregate={
       'sessions':[s['round'] for s in sessions],
       'played_boards':sum(s['summary']['played_boards'] for s in sessions),
+      'decision_analyzable_boards':sum(s['summary']['decision_analyzable_boards'] for s in sessions),
+      'source_inconsistencies':inconsistencies,
       'diana_declarer_count':sum(len(s['summary']['diana_declarer_boards']) for s in sessions),
       'diana_declarer_shortfall_events':sum(len(s['summary']['diana_declarer_shortfalls']) for s in sessions),
       'diana_declarer_tricks_lost_vs_initial_dd':sum(x['tricks_lost'] for s in sessions for x in s['summary']['diana_declarer_shortfalls']),
@@ -119,23 +141,27 @@ def main():
       'opponent_opening_lead_gift_events_to_diana':sum(len(s['summary']['opponent_opening_lead_gifts_to_diana']) for s in sessions),
       'opponent_opening_lead_gift_tricks_to_diana':sum(x['gift_tricks'] for s in sessions for x in s['summary']['opponent_opening_lead_gifts_to_diana']),
     }
-    report={'schema':'diana-29912-multi-session-dds3-v1','policy':{'engine':'DDS3','engine_version':engine_version,'fallback_used':False,'site_dd_used':False,'full_play_records_available':False,'auction_records_available':False},'aggregate':aggregate,'sessions':sessions}
+    report={'schema':'diana-29912-multi-session-dds3-v2','policy':{'engine':'DDS3','engine_version':engine_version,'fallback_used':False,'site_dd_used':False,'full_play_records_available':False,'auction_records_available':False,'source_inconsistency_policy':'fail_closed_for_player/contract/lead conclusions; full-deal DD retained'},'aggregate':aggregate,'sessions':sessions}
     a.out_json.write_text(json.dumps(report,ensure_ascii=False,indent=2)+'\n')
     lines=['# Диана Векслер — event 29912 — сквозной DDS3-разбор','',f'DDS3: {engine_version}; fallback=false; DD сайта не использовался.','',
-           f"Завершённые сессии с Дианой: {', '.join(map(str,aggregate['sessions']))}. Сыгранных/валидных для анализа сдач: {aggregate['played_boards']}.",'']
-    lines += ['## Сводка по сессиям','', '| Сессия | Дата | Партнёр | Место | Score | Разыгрывает | Недоборы DD | Первые ходы | Ошибки хода | Подарки на первом ходе соперника |','|---:|:---:|:---|---:|---:|---:|---:|---:|---:|---:|']
+           f"Завершённые сессии с Дианой: {', '.join(map(str,aggregate['sessions']))}. Полных валидных раскладов: {aggregate['played_boards']}; сдач с согласованными контрактом/первым ходом: {aggregate['decision_analyzable_boards']}.",'']
+    lines += ['## Сводка по сессиям','', '| Сессия | Дата | Партнёр | Место | Score | Разыгрывает | Недоборы DD | Первые ходы | Ошибки хода | Подарки соперника | Источник: исключено |','|---:|:---:|:---|---:|---:|---:|---:|---:|---:|---:|---:|']
     for s in sessions:
         t=s['tournament']; q=s['summary']
-        lines.append(f"| {s['round']} | {t['date']} | {t['partner']} | {t['rank']}/{t['field_size']} | {t['session_score']:+.1f} | {len(q['diana_declarer_boards'])} | {len(q['diana_declarer_shortfalls'])} | {len(q['diana_opening_leads'])} | {len(q['diana_opening_lead_errors'])} | {len(q['opponent_opening_lead_gifts_to_diana'])} |")
+        lines.append(f"| {s['round']} | {t['date']} | {t['partner']} | {t['rank']}/{t['field_size']} | {t['session_score']:+.1f} | {len(q['diana_declarer_boards'])} | {len(q['diana_declarer_shortfalls'])} | {len(q['diana_opening_leads'])} | {len(q['diana_opening_lead_errors'])} | {len(q['opponent_opening_lead_gifts_to_diana'])} | {len(q['source_inconsistent_boards'])} |")
+    if inconsistencies:
+        lines += ['', '## Противоречия исходного сайта — исключены из персональных выводов','']
+        for x in inconsistencies: lines.append(f"- Сессия {x['round']}, сдача {x['board']}: {x['reason']}.")
     lines += ['', '## Подтверждённые недоборы Дианы как разыгрывающей','', '| Сессия | № | Контракт | Факт | DD до хода | Regret первого хода защиты | Потолок после хода | Недобор после хода | MP |','|---:|---:|:---:|---:|---:|---:|---:|---:|---:|']
     for s in sessions:
       for r in s['boards']:
-        if r['diana_declarer'] and r['same_contract']['actual_tricks']<r['opening_lead_dds3']['declarer_ceiling_after_recorded_lead']:
+        if r['source_consistency']['ok'] and r['diana_declarer'] and r['same_contract']['actual_tricks']<r['opening_lead_dds3']['declarer_ceiling_after_recorded_lead']:
           l=r['opening_lead_dds3']; c=r['same_contract']
           lines.append(f"| {s['round']} | {r['board']} | {r['contract']} {r['declarer']} | {c['actual_tricks']} | {c['dds3_tricks']} | {l['regret']} | {l['declarer_ceiling_after_recorded_lead']} | {l['declarer_ceiling_after_recorded_lead']-c['actual_tricks']} | {r['pair_matchpoints']:+.1f} |")
     lines += ['', '## Первые ходы Дианы с DDS3-regret > 0','', '| Сессия | № | Контракт | Ход | Regret | Оптимальные ходы | MP |','|---:|---:|:---:|:---:|---:|:---|---:|']
     for s in sessions:
       for r in s['boards']:
+        if not r['source_consistency']['ok']: continue
         l=r['opening_lead_dds3']
         if r['diana_opening_leader'] and l['regret']>0:
           lines.append(f"| {s['round']} | {r['board']} | {r['contract']} {r['declarer']} | {r['opening_lead']} | {l['regret']} | {', '.join(l['optimal_leads'])} | {r['pair_matchpoints']:+.1f} |")
