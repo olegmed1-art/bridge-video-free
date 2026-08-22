@@ -90,7 +90,7 @@ if ! docker image inspect bridge-school-dds3 >/dev/null 2>&1; then
 fi
 
 docker build -f dds3_runtime/Dockerfile -t "$NEW_IMAGE" .
-docker run --rm --entrypoint python --env-file "$ENV_FILE" "$NEW_IMAGE" - <<'PY'
+docker run --rm -i --entrypoint python --env-file "$ENV_FILE" "$NEW_IMAGE" - <<'PY'
 from dds3_runtime.auth import _oidc_config
 c=_oidc_config()
 assert c.enabled is True
@@ -157,9 +157,13 @@ rollback(){
   printf 'New runtime failed; rolling back previous image.\n' >&2
   start_runtime "$ROLLBACK_IMAGE"
   for _ in $(seq 1 30); do
-    curl -fsS --max-time 5 http://127.0.0.1:8080/readyz >/dev/null 2>&1 && break
+    if curl -fsS --max-time 5 http://127.0.0.1:8080/readyz >/dev/null 2>&1; then
+      printf 'ROLLBACK_READY_PASS\n' >&2
+      return 0
+    fi
     sleep 2
   done
+  return 1
 }
 
 start_runtime "$NEW_IMAGE"
@@ -170,31 +174,39 @@ for _ in $(seq 1 45); do
 done
 if [[ "$READY" != 1 ]]; then
   docker logs --tail 100 bridge-school-dds3-runtime >&2 || true
-  rollback
+  rollback || fail "new runtime failed and rollback readiness also failed"
   fail "new production runtime readiness failed; rollback completed"
 fi
 
-curl -fsS --max-time 30 \
+POST_OK=1
+if ! curl -fsS --max-time 30 \
   -H "Authorization: Bearer $STATIC_TOKEN" \
   -H 'Content-Type: application/json' \
   -d "{\"operation\":\"dd_table\",\"pbn\":\"$DEAL\",\"dealer\":\"N\",\"vulnerability\":\"None\"}" \
-  http://127.0.0.1:8080/v1/compute >/tmp/dds3-jwks-prod-golden.json
-python3 - <<'PY'
-import json
-r=json.load(open('/tmp/dds3-jwks-prod-golden.json'))
-assert r['engine']=='DDS3' and r['fallback_used'] is False
-assert r['par_score_ns']==-110
-assert r['dd_table']=={'S':[5,8,5,8],'H':[6,6,6,6],'D':[5,7,5,7],'C':[7,5,7,5],'NT':[6,6,6,6]}
-print('JWKS_PRODUCTION_LOCAL_GOLDEN_PASS')
-PY
+  http://127.0.0.1:8080/v1/compute >/tmp/dds3-jwks-prod-golden.json; then
+  POST_OK=0
+fi
+if [[ "$POST_OK" == 1 ]] && ! python3 -c "import json; r=json.load(open('/tmp/dds3-jwks-prod-golden.json')); assert r['engine']=='DDS3' and r['fallback_used'] is False; assert r['par_score_ns']==-110; assert r['dd_table']=={'S':[5,8,5,8],'H':[6,6,6,6],'D':[5,7,5,7],'C':[7,5,7,5],'NT':[6,6,6,6]}"; then
+  POST_OK=0
+fi
+if [[ "$POST_OK" != 1 ]]; then
+  rollback || fail "golden validation failed and rollback readiness also failed"
+  fail "new production runtime golden validation failed; rollback completed"
+fi
+printf 'JWKS_PRODUCTION_LOCAL_GOLDEN_PASS\n'
 
-curl -fsS --max-time 12 "https://$PUBLIC_IP/readyz" >/tmp/dds3-jwks-public-ready.json
-python3 - <<'PY'
-import json
-r=json.load(open('/tmp/dds3-jwks-public-ready.json'))
-assert r['status']=='ready' and r['engine']=='DDS3' and r['fallback_used'] is False
-print('JWKS_PUBLIC_READINESS_PASS')
-PY
+PUBLIC_OK=1
+if ! curl -fsS --max-time 12 "https://$PUBLIC_IP/readyz" >/tmp/dds3-jwks-public-ready.json; then
+  PUBLIC_OK=0
+fi
+if [[ "$PUBLIC_OK" == 1 ]] && ! python3 -c "import json; r=json.load(open('/tmp/dds3-jwks-public-ready.json')); assert r['status']=='ready' and r['engine']=='DDS3' and r['fallback_used'] is False"; then
+  PUBLIC_OK=0
+fi
+if [[ "$PUBLIC_OK" != 1 ]]; then
+  rollback || fail "public readiness failed and rollback readiness also failed"
+  fail "new production runtime public readiness failed; rollback completed"
+fi
+printf 'JWKS_PUBLIC_READINESS_PASS\n'
 
 printf '%s\n' "$TARGET_SHA" >/opt/bridge-school/dds3-runtime-git-sha
 printf 'OIDC_JWKS_RUNTIME_REPAIR_PASS target_sha=%s\n' "$TARGET_SHA"
