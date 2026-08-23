@@ -153,6 +153,18 @@ assert x.get("target-type") == "COMPARTMENT", x
 assert x.get("targets") == [os.environ["TARGET"]], x
 '
 ALERTS_JSON="$(oci budgets budget alert-rule list --budget-id "$BUDGET_ID" --all --output json | normalize_list_json)"
+wait_alert_active(){
+  local alert_rule_id="$1" state=""
+  for _ in $(seq 1 30); do
+    state="$(oci budgets budget alert-rule get \\
+      --budget-id "$BUDGET_ID" \\
+      --alert-rule-id "$alert_rule_id" \\
+      --query data.state --raw-output 2>/dev/null || true)"
+    [[ "$state" == "ACTIVE" ]] && return 0
+    sleep 2
+  done
+  die "Alert rule $alert_rule_id did not reach ACTIVE (last state: ${state:-unknown})"
+}
 ensure_alert(){
   local alert_type="$1" threshold="$2" display_name="$3"
   local alert_id alert_count
@@ -160,30 +172,31 @@ ensure_alert(){
   [[ "$alert_count" == "0" || "$alert_count" == "1" ]] || die "Duplicate budget alert name: $display_name"
   alert_id="$(printf '%s' "$ALERTS_JSON" | ALERT_NAME="$display_name" python3 -c 'import json,sys,os; name=os.environ["ALERT_NAME"]; xs=[x for x in json.load(sys.stdin).get("data",[]) if x.get("display-name")==name]; print(xs[0].get("id","") if xs else "")')"
   if nullish "$alert_id"; then
-    oci budgets budget alert-rule create \
-      --budget-id "$BUDGET_ID" \
-      --display-name "$display_name" \
-      --description "Bridge School Oracle guard $display_name" \
-      --threshold "$threshold" \
-      --threshold-type PERCENTAGE \
-      --type "$alert_type" \
-      --recipients "$BUDGET_EMAIL" \
-      --message "OCI Bridge School budget alert: $display_name" \
-      --wait-for-state ACTIVE >/dev/null
+    alert_id="$(oci budgets budget alert-rule create \\
+      --budget-id "$BUDGET_ID" \\
+      --display-name "$display_name" \\
+      --description "Bridge School Oracle guard $display_name" \\
+      --threshold "$threshold" \\
+      --threshold-type PERCENTAGE \\
+      --type "$alert_type" \\
+      --recipients "$BUDGET_EMAIL" \\
+      --message "OCI Bridge School budget alert: $display_name" \\
+      --query data.id --raw-output)"
+    nullish "$alert_id" && die "Created alert $display_name without an ID"
   else
-    oci budgets budget alert-rule update \
-      --budget-id "$BUDGET_ID" \
-      --alert-rule-id "$alert_id" \
-      --display-name "$display_name" \
-      --description "Bridge School Oracle guard $display_name" \
-      --threshold "$threshold" \
-      --threshold-type PERCENTAGE \
-      --type "$alert_type" \
-      --recipients "$BUDGET_EMAIL" \
-      --message "OCI Bridge School budget alert: $display_name" \
-      --force \
-      --wait-for-state ACTIVE >/dev/null
+    oci budgets budget alert-rule update \\
+      --budget-id "$BUDGET_ID" \\
+      --alert-rule-id "$alert_id" \\
+      --display-name "$display_name" \\
+      --description "Bridge School Oracle guard $display_name" \\
+      --threshold "$threshold" \\
+      --threshold-type PERCENTAGE \\
+      --type "$alert_type" \\
+      --recipients "$BUDGET_EMAIL" \\
+      --message "OCI Bridge School budget alert: $display_name" \\
+      --force >/dev/null
   fi
+  wait_alert_active "$alert_id"
 }
 ensure_alert ACTUAL 50 actual-50
 ensure_alert ACTUAL 75 actual-75
