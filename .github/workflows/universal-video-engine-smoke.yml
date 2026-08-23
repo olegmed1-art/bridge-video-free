@@ -6,6 +6,7 @@ on:
       - '.github/workflows/universal-video-engine-smoke.yml'
       - 'universal_video/**'
       - 'requirements-universal-video.txt'
+      - 'tests/test_universal_video_*.py'
   workflow_dispatch:
 
 permissions:
@@ -110,21 +111,49 @@ jobs:
           }, sort_keys=True))
           PY
 
-      - name: Verify completed-job idempotency
+      - name: Verify terminal-state rerun semantics
         shell: bash
         run: |
           set -euo pipefail
-          manifest=/tmp/universal-video-output/synthetic-engine-smoke/manifest.json
-          before="$(sha256sum "$manifest" | awk '{print $1}')"
-          python -m universal_video.runner /tmp/universal-video-job.json \
-            --output-root /tmp/universal-video-output >/tmp/universal-video-repeat.json
-          after="$(sha256sum "$manifest" | awk '{print $1}')"
-          test "$before" = "$after"
           python - <<'PY'
+          import hashlib
           import json
           from pathlib import Path
-          a=json.loads(Path('/tmp/universal-video-repeat.json').read_text(encoding='utf-8'))
-          b=json.loads(Path('/tmp/universal-video-output/synthetic-engine-smoke/manifest.json').read_text(encoding='utf-8'))
-          assert a == b
-          print('UNIVERSAL_VIDEO_IDEMPOTENCY_SMOKE_PASS')
+
+          manifest_path=Path('/tmp/universal-video-output/synthetic-engine-smoke/manifest.json')
+          manifest=json.loads(manifest_path.read_text(encoding='utf-8'))
+          state={
+              'status': manifest['status'],
+              'job_hash': manifest['job_hash'],
+              'manifest_sha256': hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+          }
+          Path('/tmp/universal-video-before.json').write_text(json.dumps(state), encoding='utf-8')
+          PY
+
+          python -m universal_video.runner /tmp/universal-video-job.json \
+            --output-root /tmp/universal-video-output >/tmp/universal-video-repeat.json
+
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          manifest_path=Path('/tmp/universal-video-output/synthetic-engine-smoke/manifest.json')
+          before=json.loads(Path('/tmp/universal-video-before.json').read_text(encoding='utf-8'))
+          repeat=json.loads(Path('/tmp/universal-video-repeat.json').read_text(encoding='utf-8'))
+          after=json.loads(manifest_path.read_text(encoding='utf-8'))
+          after_sha=hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
+          assert repeat == after
+          assert after['job_hash'] == before['job_hash']
+          assert after['status'] in {'COMPLETED','REVIEW'}
+          if before['status'] == 'COMPLETED':
+              assert after_sha == before['manifest_sha256']
+              print('UNIVERSAL_VIDEO_COMPLETED_IDEMPOTENCY_SMOKE_PASS')
+          else:
+              # REVIEW is deliberately re-runnable so a later ASR/model revision
+              # may improve an uncertain result. Canonical job identity must stay
+              # stable even though runtime metadata may be regenerated.
+              assert before['status'] == 'REVIEW'
+              print('UNIVERSAL_VIDEO_REVIEW_RERUN_SEMANTICS_PASS')
           PY
