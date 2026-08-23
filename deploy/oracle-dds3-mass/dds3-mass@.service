@@ -12,7 +12,7 @@ Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONUNBUFFERED=1
 Environment=DDS3_MASS_STATE_ROOT=/opt/bridge-school/dds3-mass-validation
 Environment=BRIDGE_SCHOOL_REPO_ROOT=/opt/bridge-school/bridge-video-free
-ExecStart=/usr/bin/python3 /opt/bridge-school/bridge-video-free/dds_training/oracle_mass_dispatch.py --target %i
+ExecStart=/opt/bridge-school/bridge-video-free/dds_training/.venv/bin/python /opt/bridge-school/bridge-video-free/dds_training/oracle_mass_dispatch.py --target %i
 Nice=10
 IOSchedulingClass=idle
 CPUQuota=600%
