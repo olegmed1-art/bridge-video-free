@@ -13,6 +13,7 @@ SOURCE_DIR="${UNIVERSAL_VIDEO_SOURCE_DIR:-/opt/bridge-school/universal-video-src
 SERVICE_NAME="${UNIVERSAL_VIDEO_SERVICE_NAME:-universal-video.service}"
 SERVICE_SRC="$SOURCE_DIR/deploy/oracle-universal-video/universal-video.service"
 SERVICE_DST="/etc/systemd/system/$SERVICE_NAME"
+SECRETS_FILE="${UNIVERSAL_VIDEO_SECRETS_FILE:-$BASE_DIR/universal-video-secrets.env}"
 ACTIVATE="${UNIVERSAL_VIDEO_ACTIVATE:-1}"
 MODEL="${UNIVERSAL_VIDEO_WHISPER_MODEL:-small}"
 THREADS="${UNIVERSAL_VIDEO_ASR_THREADS:-6}"
@@ -59,6 +60,19 @@ for d in "$BASE_DIR" "$BASE_DIR/spool" "$BASE_DIR/spool/inbox" "$BASE_DIR/spool/
   install -d -m 0750 -o "$USER_NAME" -g "$GROUP_NAME" "$d"
 done
 
+log "Prepare isolated secret boundary for optional Google Drive sources"
+if [[ ! -e "$SECRETS_FILE" ]]; then
+  install -m 0640 -o root -g "$GROUP_NAME" /dev/null "$SECRETS_FILE"
+else
+  chown root:"$GROUP_NAME" "$SECRETS_FILE"
+  chmod 0640 "$SECRETS_FILE"
+fi
+if grep -Eq '^(GOOGLE_DRIVE_OAUTH_JSON|GOOGLE_DRIVE_OAUTH_CLIENT_ID|GOOGLE_SERVICE_ACCOUNT_JSON)=' "$SECRETS_FILE"; then
+  echo 'UNIVERSAL_VIDEO_DRIVE_SECRET=CONFIGURED'
+else
+  echo 'UNIVERSAL_VIDEO_DRIVE_SECRET=NOT_CONFIGURED_LOCAL_PATH_ONLY'
+fi
+
 log "Build isolated Python runtime"
 python3 -m venv "$BASE_DIR/.venv"
 "$BASE_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --upgrade pip >/dev/null
@@ -68,6 +82,7 @@ chown -R "$USER_NAME:$GROUP_NAME" "$BASE_DIR/.venv"
 log "Verify runtime imports"
 PYTHONPATH="$SOURCE_DIR" "$BASE_DIR/.venv/bin/python" - <<'PY'
 from universal_video.contract import validate_job
+from universal_video.drive_adapter import access_token
 from universal_video.profiles import PROFILES
 from faster_whisper import WhisperModel
 assert 'transcript_only' in PROFILES
@@ -107,7 +122,15 @@ install -m 0644 -o root -g root "$SERVICE_SRC" "$SERVICE_DST"
 systemctl daemon-reload
 systemd-analyze verify "$SERVICE_DST" >/dev/null
 if [[ "$ACTIVATE" == "1" ]]; then
-  systemctl enable --now "$SERVICE_NAME"
+  systemctl enable "$SERVICE_NAME" >/dev/null
+  if systemctl is-active --quiet "$SERVICE_NAME"; then
+    if find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit | grep -q .; then
+      die "universal-video has a running job; refusing to restart for upgrade"
+    fi
+    systemctl restart "$SERVICE_NAME"
+  else
+    systemctl start "$SERVICE_NAME"
+  fi
   sleep 2
   systemctl is-active --quiet "$SERVICE_NAME" || {
     journalctl -u "$SERVICE_NAME" -n 60 --no-pager >&2 || true
