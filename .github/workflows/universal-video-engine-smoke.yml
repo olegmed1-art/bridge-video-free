@@ -1,0 +1,159 @@
+name: Universal Video Engine Smoke
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/universal-video-engine-smoke.yml'
+      - 'universal_video/**'
+      - 'requirements-universal-video.txt'
+      - 'tests/test_universal_video_*.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  synthetic-engine-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      UNIVERSAL_VIDEO_MEDIA_ROOT: /tmp/universal-video-media
+      UNIVERSAL_VIDEO_WHISPER_MODEL: tiny
+      UNIVERSAL_VIDEO_ASR_THREADS: '2'
+      UNIVERSAL_VIDEO_MAX_SOURCE_BYTES: '104857600'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install media and Python runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          python -m pip install --disable-pip-version-check -r requirements-universal-video.txt
+
+      - name: Generate bounded synthetic video
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$UNIVERSAL_VIDEO_MEDIA_ROOT" /tmp/universal-video-output
+          ffmpeg -hide_banner -loglevel error -y \
+            -f lavfi -i color=c=black:s=320x180:d=3 \
+            -f lavfi -i sine=frequency=440:duration=3 \
+            -shortest -c:v mpeg4 -q:v 10 -pix_fmt yuv420p -c:a aac \
+            "$UNIVERSAL_VIDEO_MEDIA_ROOT/smoke.mp4"
+          test -s "$UNIVERSAL_VIDEO_MEDIA_ROOT/smoke.mp4"
+          cat >/tmp/universal-video-job.json <<'JSON'
+          {
+            "job_id": "synthetic-engine-smoke",
+            "profile": "transcript_only",
+            "project": "infrastructure-smoke",
+            "source": {
+              "kind": "local_path",
+              "path": "/tmp/universal-video-media/smoke.mp4"
+            },
+            "metadata": {
+              "synthetic": true,
+              "purpose": "engine-smoke"
+            },
+            "options": {
+              "max_duration_seconds": 10,
+              "chunk_seconds": 60,
+              "max_source_bytes": 104857600
+            }
+          }
+          JSON
+
+      - name: Run real ffmpeg and faster-whisper pipeline
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m universal_video.runner /tmp/universal-video-job.json \
+            --output-root /tmp/universal-video-output \
+            > /tmp/universal-video-result.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root=Path('/tmp/universal-video-output/synthetic-engine-smoke')
+          result=json.loads(Path('/tmp/universal-video-result.json').read_text(encoding='utf-8'))
+          manifest=json.loads((root/'manifest.json').read_text(encoding='utf-8'))
+          assert result == manifest
+          assert manifest['contract'] == 'universal-video-v1'
+          assert manifest['job_id'] == 'synthetic-engine-smoke'
+          assert manifest['profile'] == 'transcript_only'
+          assert manifest['status'] in {'COMPLETED','REVIEW'}
+          assert 2.5 <= manifest['media']['duration_seconds'] <= 3.5
+          assert manifest['media']['size_bytes'] > 0
+          assert len(manifest['media']['sha256']) == 64
+          assert manifest['transcript']['qc_blocks'] == 1
+          assert manifest['transcript']['qc_allowed_failed'] == 0
+          assert manifest['deferred_analysis'] == []
+          assert (root/'transcript.jsonl').exists()
+          assert (root/'transcript.txt').exists()
+          assert (root/'transcript_qc.json').exists()
+          print('UNIVERSAL_VIDEO_REAL_ENGINE_SMOKE_PASS')
+          print(json.dumps({
+              'status': manifest['status'],
+              'duration_seconds': manifest['media']['duration_seconds'],
+              'qc_blocks': manifest['transcript']['qc_blocks'],
+              'qc_failed': manifest['transcript']['qc_failed'],
+              'words': manifest['transcript']['words'],
+              'whisper_model': manifest['runtime']['whisper_model'],
+          }, sort_keys=True))
+          PY
+
+      - name: Verify terminal-state rerun semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          manifest_path=Path('/tmp/universal-video-output/synthetic-engine-smoke/manifest.json')
+          manifest=json.loads(manifest_path.read_text(encoding='utf-8'))
+          state={
+              'status': manifest['status'],
+              'job_hash': manifest['job_hash'],
+              'manifest_sha256': hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+          }
+          Path('/tmp/universal-video-before.json').write_text(json.dumps(state), encoding='utf-8')
+          PY
+
+          python -m universal_video.runner /tmp/universal-video-job.json \
+            --output-root /tmp/universal-video-output >/tmp/universal-video-repeat.json
+
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          manifest_path=Path('/tmp/universal-video-output/synthetic-engine-smoke/manifest.json')
+          before=json.loads(Path('/tmp/universal-video-before.json').read_text(encoding='utf-8'))
+          repeat=json.loads(Path('/tmp/universal-video-repeat.json').read_text(encoding='utf-8'))
+          after=json.loads(manifest_path.read_text(encoding='utf-8'))
+          after_sha=hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+
+          assert repeat == after
+          assert after['job_hash'] == before['job_hash']
+          assert after['status'] in {'COMPLETED','REVIEW'}
+          if before['status'] == 'COMPLETED':
+              assert after_sha == before['manifest_sha256']
+              print('UNIVERSAL_VIDEO_COMPLETED_IDEMPOTENCY_SMOKE_PASS')
+          else:
+              # REVIEW is deliberately re-runnable so a later ASR/model revision
+              # may improve an uncertain result. Canonical job identity must stay
+              # stable even though runtime metadata may be regenerated.
+              assert before['status'] == 'REVIEW'
+              print('UNIVERSAL_VIDEO_REVIEW_RERUN_SEMANTICS_PASS')
+          PY
