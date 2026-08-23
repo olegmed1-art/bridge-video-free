@@ -12,6 +12,7 @@ on:
       - 'ops/oracle_assistant_lab_preflight.sh'
       - 'ops/oracle_assistant_lab_install.sh'
       - 'ops/oracle_assistant_lab_observer_install.sh'
+      - 'ops/cloud_shell_activate_assistant_lab_observer.sh'
       - 'ops/oracle_dds3_host_repair.sh'
       - 'ops/oracle_dds3_operational_gate.sh'
   workflow_dispatch:
@@ -41,10 +42,12 @@ jobs:
           bash -n ops/oracle_assistant_lab_preflight.sh
           bash -n ops/oracle_assistant_lab_install.sh
           bash -n ops/oracle_assistant_lab_observer_install.sh
+          bash -n ops/cloud_shell_activate_assistant_lab_observer.sh
           bash -n ops/oracle_dds3_host_repair.sh
           bash -n ops/oracle_dds3_operational_gate.sh
           python - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path("ops/oracle_dds3_operational_gate.sh")
           text = path.read_text()
@@ -54,6 +57,17 @@ jobs:
           assert 'x.get("lifecycle-state") == "ACTIVE"' in text
           assert "--retry-all-errors" not in text
           assert "curl_json_retry" in text
+
+          activation = Path("ops/cloud_shell_activate_assistant_lab_observer.sh").read_text()
+          assert "bridge-school-dds3-frankfurt" in activation
+          assert "eu-frankfurt-1" in activation
+          assert "9004a2db02fcb70d5f1747b67858c9a9dc6b28ff" in activation
+          assert "oci instance-agent command create" in activation
+          assert "ASSISTANT_LAB_OBSERVER_HOST_ACTIVATION_PASS" in activation
+          assert "arbitrary_shell" in activation
+          assert "video_analyzer_result_access" in activation
+          assert "other_oracle_result_access" in activation
+          assert not re.search(r"(?m)^\s*ssh\b", activation)
           PY
       - name: Run Assistant Lab contract tests
         run: python -m pytest -q tests/test_assistant_lab_contract.py tests/test_assistant_lab_bootstrap.py tests/test_assistant_lab_observer.py tests/test_assistant_lab_control_api.py
