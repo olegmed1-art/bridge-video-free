@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 # Bounded OCI Cloud Shell launcher for the existing Oracle Universal Video
 # sidecar. It has no arbitrary host/user/command inputs and never processes a
-# real school video. Modes: probe, status, activate, smoke.
+# real school video. Modes: probe, status, activate, smoke, bootstrap.
 
 readonly ORACLE_HOST='158.180.47.161'
 readonly ORACLE_USER='ubuntu'
@@ -22,10 +22,11 @@ usage() {
 Usage: bash cloud_shell_activate_universal_video.sh MODE
 
 MODE must be exactly one of:
-  probe     verify pinned host identity, SSH key, sudo, Assistant Lab and DDS3
-  status    read sidecar/Assistant Lab/DDS3 state without changing the host
-  activate  install and start the sidecar; no video job and no synthetic smoke
-  smoke     repeat idempotent activation and run one bounded 3-second synthetic job
+  probe      verify pinned host identity, SSH key, sudo, Assistant Lab and DDS3
+  status     read sidecar/Assistant Lab/DDS3 state without changing the host
+  activate   install and start the sidecar; no video job and no synthetic smoke
+  smoke      repeat idempotent activation and run one bounded 3-second synthetic job
+  bootstrap  gated one-step sequence: probe -> activate -> status -> synthetic smoke
 
 The host, user, SSH key path, source commit and remote payload are fixed.
 No real video is submitted by this launcher.
@@ -35,7 +36,7 @@ USAGE
 [[ "$#" -eq 1 ]] || { usage >&2; exit 64; }
 readonly MODE="$1"
 case "$MODE" in
-  probe|status|activate|smoke) ;;
+  probe|status|activate|smoke|bootstrap) ;;
   *) usage >&2; die "unsupported mode: $MODE" ;;
 esac
 
@@ -182,21 +183,115 @@ activate_sidecar() {
   [[ "$smoke" == '0' ]] || echo ORACLE_UNIVERSAL_VIDEO_CLOUD_SHELL_SMOKE_PASS
 }
 
+status_gate() {
+  log 'Read Universal Video, Assistant Lab and DDS3 status'
+  local status_output
+  status_output="$(remote_read_only_status)"
+  printf '%s\n' "$status_output"
+  grep -F 'assistant_lab=active' <<<"$status_output" >/dev/null \
+    || die "Assistant Lab is not active"
+  grep -F 'universal_video_enabled=enabled' <<<"$status_output" >/dev/null \
+    || die "Universal Video is not enabled"
+  grep -F 'universal_video_active=active' <<<"$status_output" >/dev/null \
+    || die "Universal Video is not active"
+  external_dds3_check
+  echo ORACLE_UNIVERSAL_VIDEO_CLOUD_SHELL_STATUS_PASS
+}
+
+run_synthetic_smoke_only() {
+  log 'Run one bounded 3-second synthetic smoke without reinstalling the sidecar'
+  local smoke_output
+  smoke_output="$(ssh "${SSH_OPTIONS[@]}" "$ORACLE_USER@$ORACLE_HOST" 'sudo -n nice -n 10 bash -s' <<'REMOTE_SMOKE'
+set -Eeuo pipefail
+base='/opt/bridge-school/universal-video'
+media="$base/media/universal-video-smoke.mp4"
+job="$base/spool/inbox/universal-video-smoke.json"
+done_file="$base/spool/done/universal-video-smoke.json"
+failed_file="$base/spool/failed/universal-video-smoke.json"
+
+[[ "$(systemctl is-active assistant-lab.service)" == active ]]
+[[ "$(systemctl is-enabled universal-video.service 2>/dev/null || true)" == enabled ]]
+[[ "$(systemctl is-active universal-video.service 2>/dev/null || true)" == active ]]
+ready_json="$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)"
+READY_JSON="$ready_json" python3 - <<'PY'
+import json, os
+x=json.loads(os.environ['READY_JSON'])
+assert x.get('status') == 'ready', x
+assert x.get('engine') == 'DDS3', x
+assert x.get('fallback_used') is False, x
+assert x.get('position_solver') == 'ready', x
+PY
+
+rm -f "$done_file" "$failed_file" "$job" "$job.tmp"
+ffmpeg -hide_banner -loglevel error -y \
+  -f lavfi -i color=c=black:s=320x180:d=3 \
+  -f lavfi -i sine=frequency=440:duration=3 \
+  -shortest -c:v mpeg4 -q:v 10 -pix_fmt yuv420p -c:a aac "$media"
+chown universal-video:universal-video "$media"
+cat >"$job.tmp" <<EOF
+{"job_id":"universal-video-smoke","profile":"transcript_only","project":"infrastructure-smoke","source":{"kind":"local_path","path":"$media"},"metadata":{"synthetic":true},"options":{"max_duration_seconds":10,"chunk_seconds":60}}
+EOF
+chown universal-video:universal-video "$job.tmp"
+mv "$job.tmp" "$job"
+
+deadline=$((SECONDS + 300))
+while (( SECONDS < deadline )); do
+  if [[ -f "$done_file" ]]; then
+    cat "$done_file"
+    echo UNIVERSAL_VIDEO_SYNTHETIC_SMOKE_PASS
+    break
+  fi
+  if [[ -f "$failed_file" ]]; then
+    cat "$failed_file" >&2
+    exit 1
+  fi
+  sleep 2
+done
+[[ -f "$done_file" ]] || { echo 'synthetic smoke timed out' >&2; exit 1; }
+
+[[ "$(systemctl is-active assistant-lab.service)" == active ]]
+ready_json="$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)"
+READY_JSON="$ready_json" python3 - <<'PY'
+import json, os
+x=json.loads(os.environ['READY_JSON'])
+assert x.get('status') == 'ready', x
+assert x.get('engine') == 'DDS3', x
+assert x.get('fallback_used') is False, x
+assert x.get('position_solver') == 'ready', x
+print('DDS3_AFTER_SYNTHETIC_SMOKE_PASS')
+PY
+REMOTE_SMOKE
+)"
+  printf '%s\n' "$smoke_output"
+  grep -F 'UNIVERSAL_VIDEO_SYNTHETIC_SMOKE_PASS' <<<"$smoke_output" >/dev/null \
+    || die "bounded synthetic smoke marker is missing"
+  grep -F 'DDS3_AFTER_SYNTHETIC_SMOKE_PASS' <<<"$smoke_output" >/dev/null \
+    || die "DDS3 post-smoke marker is missing"
+  remote_read_only_status
+  external_dds3_check
+  echo ORACLE_UNIVERSAL_VIDEO_CLOUD_SHELL_SMOKE_PASS
+}
+
 case "$MODE" in
   probe)
     probe_control_path
     ;;
   status)
-    log 'Read Universal Video, Assistant Lab and DDS3 status'
-    remote_read_only_status
-    external_dds3_check
-    echo ORACLE_UNIVERSAL_VIDEO_CLOUD_SHELL_STATUS_PASS
+    status_gate
     ;;
   activate)
     activate_sidecar 0
     ;;
   smoke)
     activate_sidecar 1
+    ;;
+  bootstrap)
+    log 'Begin fail-closed one-step Universal Video bootstrap'
+    probe_control_path
+    activate_sidecar 0
+    status_gate
+    run_synthetic_smoke_only
+    echo ORACLE_UNIVERSAL_VIDEO_CLOUD_SHELL_BOOTSTRAP_PASS
     ;;
 esac
 
