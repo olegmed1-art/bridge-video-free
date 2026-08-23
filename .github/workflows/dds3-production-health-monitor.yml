@@ -4,9 +4,13 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '47 * * * *'
+  pull_request:
+    paths:
+      - '.github/workflows/dds3-production-health-monitor.yml'
 
 permissions:
   contents: read
+  issues: write
 
 concurrency:
   group: dds3-production-health-monitor
@@ -31,6 +35,7 @@ jobs:
           import json
           import os
           import time
+          from datetime import UTC, datetime
           import urllib.request
 
 
@@ -75,5 +80,44 @@ jobs:
           assert routed.get("transport") == "remote_https", routed
           assert routed.get("authenticated_compute") == "ready", routed
 
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("## DDS3 production health\n\n")
+              summary.write(f"- Checked: `{datetime.now(UTC).isoformat()}`\n")
+              summary.write(f"- Oracle: `ready`, `{oracle.get('engine_version', 'unknown')}`\n")
+              summary.write("- Vercel app: `ok`\n")
+              summary.write("- Authenticated route: `ready`\n")
+              summary.write("- Fallback used: `false`\n")
+
           print("DDS3_PRODUCTION_MONITOR_PASS")
           PY
+
+      - name: Open or update production health incident
+        if: ${{ failure() && github.event_name != 'pull_request' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title='[Monitor] DDS3 production health failure'
+          number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)"
+          body="DDS3 production monitoring failed at $(date -u +'%Y-%m-%dT%H:%M:%SZ'). Run: $RUN_URL"
+          if [[ -n "$number" ]]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
+
+      - name: Close recovered production health incident
+        if: ${{ success() && github.event_name != 'pull_request' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title='[Monitor] DDS3 production health failure'
+          number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)"
+          if [[ -n "$number" ]]; then
+            gh issue close "$number" --repo "$GITHUB_REPOSITORY" --comment "DDS3 production health recovered at $(date -u +'%Y-%m-%dT%H:%M:%SZ'). Passing run: $RUN_URL"
+          fi
