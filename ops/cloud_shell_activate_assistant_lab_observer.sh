@@ -7,8 +7,9 @@ set -Eeuo pipefail
 readonly REGION='eu-frankfurt-1'
 readonly INSTANCE_NAME='bridge-school-dds3-frankfurt'
 readonly REPOSITORY='olegmed1-art/bridge-video-free'
-readonly RUNTIME_COMMIT='9004a2db02fcb70d5f1747b67858c9a9dc6b28ff'
+readonly RUNTIME_COMMIT='97f20e5a4ad5d6229d2d55db0558aa7edf1f3f99'
 readonly REPO_DIR='/opt/bridge-school/bridge-video-free'
+readonly ARCHIVE_DIR='/srv/assistant-lab-observer-archive'
 readonly ISSUE_NUMBER='336'
 
 log(){ printf '\n[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
@@ -116,11 +117,14 @@ git cat-file -e '$RUNTIME_COMMIT^{commit}'
 git checkout --quiet main
 git merge --ff-only '$RUNTIME_COMMIT'
 [[ \"\$(git rev-parse HEAD)\" == '$RUNTIME_COMMIT' ]]
-sudo -n env ASSISTANT_LAB_OBSERVER_ACTIVATE=1 ASSISTANT_LAB_REPO_DIR='$REPO_DIR' bash '$REPO_DIR/ops/oracle_assistant_lab_observer_install.sh'
+sudo -n env ASSISTANT_LAB_OBSERVER_ACTIVATE=1 ASSISTANT_LAB_OBSERVER_ARCHIVE_ROOT='$ARCHIVE_DIR' ASSISTANT_LAB_REPO_DIR='$REPO_DIR' bash '$REPO_DIR/ops/oracle_assistant_lab_observer_install.sh'
+sudo -n env ASSISTANT_LAB_CONTROL_BRIDGE_ACTIVATE=1 ASSISTANT_LAB_REPO_DIR='$REPO_DIR' bash '$REPO_DIR/ops/oracle_assistant_lab_control_bridge_install.sh'
 [[ \"\$(sudo -n systemctl is-enabled assistant-lab-observer.service)\" == enabled ]]
 [[ \"\$(sudo -n systemctl is-active assistant-lab-observer.service)\" == active ]]
 [[ \"\$(sudo -n systemctl is-enabled assistant-lab-control.service)\" == enabled ]]
 [[ \"\$(sudo -n systemctl is-active assistant-lab-control.service)\" == active ]]
+[[ \"\$(sudo -n systemctl is-enabled assistant-lab-control-bridge.service)\" == enabled ]]
+[[ \"\$(sudo -n systemctl is-active assistant-lab-control-bridge.service)\" == active ]]
 ss -ltn | grep -Eq '\''127\\.0\\.0\\.1:8765[[:space:]]'\''
 ! ss -ltn | grep -Eq '\''(^|[[:space:]])0\\.0\\.0\\.0:8765|\\[::\\]:8765'\''
 token=\"\$(sudo -n sed -n '\''s/^ASSISTANT_LAB_CONTROL_TOKEN=//p'\'' /opt/bridge-school/assistant-lab-observer/control.env)\"
@@ -144,6 +148,7 @@ print('observer_smoke=pass')
 PY
 echo observer=active
 echo control=active_localhost_only
+echo bridge=active_outbound_only
 echo assistant_lab=active
 echo dds3=ready_real_no_fallback
 echo ASSISTANT_LAB_OBSERVER_HOST_ACTIVATION_PASS"
