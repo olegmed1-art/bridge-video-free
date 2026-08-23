@@ -4,6 +4,8 @@ set -Eeuo pipefail
 # Install the outbound Neon-backed bridge that links ChatGPT's Neon connector to
 # the localhost-only Assistant Lab Control API. No public Oracle port is opened.
 # Requires the control_command schema to already exist in Neon.
+# The bridge deliberately reuses the canonical Assistant Lab DB environment file
+# instead of creating a second copy of the Neon credential.
 
 OBS_USER="${ASSISTANT_LAB_OBSERVER_UNIX_USER:-assistant-lab-observer}"
 OBS_GROUP="${ASSISTANT_LAB_OBSERVER_UNIX_GROUP:-assistant-lab-observer}"
@@ -32,6 +34,13 @@ systemctl is-active --quiet assistant-lab-control.service || die "control API se
 command -v python3 >/dev/null 2>&1 || die "python3 is required"
 command -v systemctl >/dev/null 2>&1 || die "systemd is required"
 command -v systemd-analyze >/dev/null 2>&1 || die "systemd-analyze is required"
+
+# Fail closed if the canonical credential source is broadly readable.
+mode="$(stat -c '%a' "$SOURCE_ENV")"
+case "$mode" in
+  600|640) ;;
+  *) die "canonical Assistant Lab environment must be mode 600 or 640, got $mode" ;;
+esac
 
 DB_URL="$(sed -n 's/^ASSISTANT_LAB_DATABASE_URL=//p' "$SOURCE_ENV" | head -n1)"
 [[ -n "$DB_URL" ]] || die "ASSISTANT_LAB_DATABASE_URL not found in existing Assistant Lab environment"
@@ -62,16 +71,8 @@ with psycopg.connect(os.environ["ASSISTANT_LAB_DATABASE_URL"], connect_timeout=1
 print("ASSISTANT_LAB_CONTROL_BRIDGE_DB_PREFLIGHT_PASS")
 PY
 
-log "Write root-owned bridge environment without printing credentials"
-umask 077
-cat >"$OBS_DIR/control-bridge.env" <<EOF
-ASSISTANT_LAB_DATABASE_URL=$DB_URL
-ASSISTANT_LAB_CONTROL_BRIDGE_ID=oracle-assistant-lab-control-bridge-1
-ASSISTANT_LAB_CONTROL_POLL_SECONDS=1
-ASSISTANT_LAB_CONTROL_STALE_SECONDS=900
-EOF
-chown root:"$OBS_GROUP" "$OBS_DIR/control-bridge.env"
-chmod 0640 "$OBS_DIR/control-bridge.env"
+# Remove the obsolete duplicate secret file from earlier drafts, if present.
+rm -f "$OBS_DIR/control-bridge.env"
 
 log "Compile and install hardened resident bridge"
 PYTHONPATH="$REPO_DIR" "$OBS_DIR/.venv/bin/python" -m py_compile "$REPO_DIR/assistant_lab/control_bridge.py"
@@ -87,8 +88,8 @@ if [[ "$ACTIVATE" == "1" ]]; then
     journalctl -u "$SERVICE_NAME" -n 60 --no-pager >&2 || true
     die "control bridge failed to become active"
   }
-  printf 'ASSISTANT_LAB_CONTROL_BRIDGE_INSTALL_PASS activated=1 public_port=none\n'
+  printf 'ASSISTANT_LAB_CONTROL_BRIDGE_INSTALL_PASS activated=1 public_port=none duplicate_db_secret=none\n'
 else
   state="$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)"
-  printf 'ASSISTANT_LAB_CONTROL_BRIDGE_INSTALL_PASS activated=0 state=%s\n' "${state:-unknown}"
+  printf 'ASSISTANT_LAB_CONTROL_BRIDGE_INSTALL_PASS activated=0 state=%s duplicate_db_secret=none\n' "${state:-unknown}"
 fi
