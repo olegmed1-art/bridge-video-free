@@ -147,6 +147,8 @@ The compute path is live. The following OCI account/host protections remain requ
 - perform one planned full host reboot after backup, then repeat external and resident canaries;
 - confirm the first scheduled hourly external monitor run.
 
+The fail-closed Cloud Shell implementation is `ops/oracle_dds3_operational_gate.sh`. It targets the single existing Frankfurt instance, reuses an AVAILABLE same-day backup when present, preserves any existing backup-policy assignment, and refuses the planned reboot unless it can prove a changed host boot ID over SSH.
+
 Until these gates are recorded, keep BEN, video processing, bulk DDS, and mass background stages disabled.
 
 ## First experiments
