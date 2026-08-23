@@ -12,7 +12,9 @@ on:
       - 'ops/oracle_assistant_lab_preflight.sh'
       - 'ops/oracle_assistant_lab_install.sh'
       - 'ops/oracle_assistant_lab_observer_install.sh'
+      - 'ops/oracle_assistant_lab_control_bridge_install.sh'
       - 'ops/cloud_shell_activate_assistant_lab_observer.sh'
+      - 'ops/cloud_shell_activate_assistant_lab_control_bridge.sh'
       - 'ops/oracle_dds3_host_repair.sh'
       - 'ops/oracle_dds3_operational_gate.sh'
   workflow_dispatch:
@@ -42,7 +44,9 @@ jobs:
           bash -n ops/oracle_assistant_lab_preflight.sh
           bash -n ops/oracle_assistant_lab_install.sh
           bash -n ops/oracle_assistant_lab_observer_install.sh
+          bash -n ops/oracle_assistant_lab_control_bridge_install.sh
           bash -n ops/cloud_shell_activate_assistant_lab_observer.sh
+          bash -n ops/cloud_shell_activate_assistant_lab_control_bridge.sh
           bash -n ops/oracle_dds3_host_repair.sh
           bash -n ops/oracle_dds3_operational_gate.sh
           python - <<'PY'
@@ -61,15 +65,21 @@ jobs:
           activation = Path("ops/cloud_shell_activate_assistant_lab_observer.sh").read_text()
           assert "bridge-school-dds3-frankfurt" in activation
           assert "eu-frankfurt-1" in activation
-          assert "792bfad82835ba91fb32ab40d4be2757760cb02d" in activation
-          assert "ASSISTANT_LAB_OBSERVER_ARCHIVE_ROOT" in activation
-          assert "bubblewrap" in activation
           assert "oci instance-agent command create" in activation
           assert "ASSISTANT_LAB_OBSERVER_HOST_ACTIVATION_PASS" in activation
           assert "arbitrary_shell" in activation
           assert "video_analyzer_result_access" in activation
           assert "other_oracle_result_access" in activation
           assert not re.search(r"(?m)^\s*ssh\b", activation)
+
+          bridge = Path("ops/cloud_shell_activate_assistant_lab_control_bridge.sh").read_text()
+          assert "bridge-school-dds3-frankfurt" in bridge
+          assert "eu-frankfurt-1" in bridge
+          assert "3fe5874699d5d5cbc2bffb324dee458bdc5b0fce" in bridge
+          assert "oci instance-agent command create" in bridge
+          assert "ASSISTANT_LAB_DIRECT_CONTROL_ACTIVATION_PASS" in bridge
+          assert "assistant-lab-control-bridge.service" in bridge
+          assert not re.search(r"(?m)^\s*ssh\b", bridge)
           PY
       - name: Run Assistant Lab contract tests
         run: python -m pytest -q tests/test_assistant_lab_contract.py tests/test_assistant_lab_bootstrap.py tests/test_assistant_lab_observer.py tests/test_assistant_lab_control_api.py
@@ -77,8 +87,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ! grep -RniE 'public\.skill|ai\.system_rule|student_profile' assistant_lab/schema.sql assistant_lab/bootstrap_schema.sql
+          ! grep -RniE 'public\.skill|ai\.system_rule|student_profile' assistant_lab/schema.sql assistant_lab/bootstrap_schema.sql assistant_lab/control_schema.sql
           ! grep -RniE 'GRANT[[:space:]]+(INSERT|DELETE).*bootstrap_ticket' assistant_lab/bootstrap_schema.sql
+          ! grep -RniE 'GRANT[[:space:]]+INSERT.*control_command.*assistant_lab_worker' assistant_lab/control_schema.sql
       - name: Verify observer/control isolation contract
         shell: bash
         run: |
@@ -90,12 +101,14 @@ jobs:
           grep -q 'other_oracle_result_access.*False' assistant_lab/control_api.py
           grep -q 'User=assistant-lab-observer' deploy/oracle-assistant-lab/assistant-lab-observer.service
           grep -q 'User=assistant-lab-observer' deploy/oracle-assistant-lab/assistant-lab-control.service
+          grep -q 'User=assistant-lab-observer' deploy/oracle-assistant-lab/assistant-lab-control-bridge.service
           grep -q -- '--host 127.0.0.1 --port 8765' deploy/oracle-assistant-lab/assistant-lab-control.service
-          grep -q 'NoNewPrivileges=true' deploy/oracle-assistant-lab/assistant-lab-control.service
-          grep -q 'ReadWritePaths=/opt/bridge-school/assistant-lab-observer' deploy/oracle-assistant-lab/assistant-lab-control.service
+          grep -q 'ASSISTANT_LAB_CONTROL_URL=http://127.0.0.1:8765' deploy/oracle-assistant-lab/assistant-lab-control-bridge.service
+          grep -q 'NoNewPrivileges=true' deploy/oracle-assistant-lab/assistant-lab-control-bridge.service
           ! grep -q -- '--host 0.0.0.0' deploy/oracle-assistant-lab/assistant-lab-control.service
       - name: Record schema checksums
         shell: bash
         run: |
           sha256sum assistant_lab/schema.sql
           sha256sum assistant_lab/bootstrap_schema.sql
+          sha256sum assistant_lab/control_schema.sql
