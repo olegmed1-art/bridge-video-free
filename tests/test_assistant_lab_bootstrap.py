@@ -59,6 +59,16 @@ def test_vercel_entrypoint_registers_bootstrap_without_general_api_dependency():
     assert "app.include_router(assistant_lab_bootstrap_router, dependencies=" not in app
 
 
+def test_bootstrap_redemption_persists_capability_claim():
+    source = Path("bridge_school_api/assistant_lab_bootstrap.py").read_text(encoding="utf-8")
+    claim = 'cur.execute("SELECT assistant_lab.claim_bootstrap_ticket(%s) AS payload", (digest,))'
+    claim_index = source.index(claim)
+    fetch_index = source.index("row = cur.fetchone()", claim_index)
+    commit_index = source.index("conn.commit()", fetch_index)
+    response_index = source.index("return PlainTextResponse(", commit_index)
+    assert claim_index < fetch_index < commit_index < response_index
+
+
 def test_host_local_repair_does_not_require_oci_cli_or_ssh():
     repair = Path("ops/oracle_dds3_host_repair.sh").read_text(encoding="utf-8")
     assert "oci " not in repair

@@ -30,6 +30,9 @@ def assistant_lab_bootstrap(authorization: str | None = Header(default=None)) ->
     with connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT assistant_lab.claim_bootstrap_ticket(%s) AS payload", (digest,))
         row = cur.fetchone()
+        # connect() deliberately closes without an implicit commit. Persist the
+        # one-time capability claim before returning any secret-bearing script.
+        conn.commit()
     if not row or not isinstance(row.get("payload"), dict):
         raise HTTPException(status_code=404, detail="bootstrap ticket not found")
     try:
