@@ -105,12 +105,13 @@ def test_runbook_exposes_one_manual_command_and_preserves_explicit_gates():
     text = RUNBOOK.read_text(encoding="utf-8")
     assert " bootstrap" in text
     assert "одна ручная команда" in text.lower()
-    positions = [
-        text.index(" probe"),
-        text.index(" activate"),
-        text.index(" status"),
-        text.index(" smoke"),
+    headings = [
+        "### 1. Безопасный probe",
+        "### 2. Активация без задания",
+        "### 3. Повторная read-only проверка status",
+        "### 4. Ограниченный synthetic smoke",
     ]
+    positions = [text.index(heading) for heading in headings]
     assert positions == sorted(positions)
     assert "реальное видео не запускается" in text.lower()
     assert "~/.ssh/bridge_school_dds3_oracle" in text
