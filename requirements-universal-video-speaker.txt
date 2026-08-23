@@ -1,0 +1,4 @@
+# Optional speaker/diarization runtime. Not installed by the Universal Video core service.
+-r requirements-universal-video.txt
+sherpa-onnx==1.13.4
+sherpa-onnx-bin==1.13.4
