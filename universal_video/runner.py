@@ -30,7 +30,7 @@ from .contract import (
     canonical_job_hash,
     validate_from_env,
 )
-from .drive_adapter import access_token, download_file
+from .drive_adapter import access_token, download_file, file_metadata
 from .profiles import resolve_profile
 
 WORD_RE = re.compile(r"[A-Za-zА-Яа-яЁё0-9]+")
@@ -52,6 +52,11 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _fingerprint(payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _words(text: str) -> list[str]:
@@ -118,7 +123,92 @@ def _qc_summary(transcript: list[dict[str, Any]], qc: list[dict[str, Any]]) -> t
     return passed, failed, allowed_failed
 
 
-def media_probe(path: Path) -> dict[str, Any]:
+def _inspect_source(job: VideoJob, *, max_source_bytes: int) -> dict[str, Any]:
+    """Inspect source identity before allowing a COMPLETED result to be reused.
+
+    Local sources use a full SHA-256. Binary Drive files normally expose a
+    content checksum in Drive metadata, which makes a cheap pre-download reuse
+    decision possible. If Drive supplies no content checksum, reuse is disabled
+    for safety and the job is recomputed.
+    """
+
+    if job.source["kind"] == "local_path":
+        path = Path(job.source["path"])
+        if not path.is_file():
+            raise RuntimeError("local video source does not exist")
+        size = path.stat().st_size
+        if size <= 0:
+            raise RuntimeError("local video source is empty")
+        if size > max_source_bytes:
+            raise RuntimeError("local video exceeds configured source-size limit")
+        sha256 = _sha256(path)
+        fingerprint_payload = {
+            "kind": "local_path",
+            "size_bytes": size,
+            "sha256": sha256,
+        }
+        return {
+            "kind": "local_path",
+            "fingerprint": _fingerprint(fingerprint_payload),
+            "fingerprint_basis": "sha256+size",
+            "reuse_safe": True,
+            "known_sha256": sha256,
+            "path": path,
+        }
+
+    token = access_token()
+    meta = file_metadata(job.source["file_id"], token)
+    mime = str(meta.get("mimeType") or "")
+    if mime.startswith("application/vnd.google-apps."):
+        raise RuntimeError("native Google Workspace files are not video sources")
+    try:
+        size = int(meta.get("size") or 0)
+    except (TypeError, ValueError):
+        size = 0
+    if size > max_source_bytes:
+        raise RuntimeError("Google Drive video exceeds configured source-size limit")
+
+    checksum_key = None
+    checksum_value = None
+    for key in ("sha256Checksum", "md5Checksum", "sha1Checksum"):
+        value = str(meta.get(key) or "").strip().lower()
+        if value:
+            checksum_key = key
+            checksum_value = value
+            break
+
+    if checksum_key:
+        fingerprint_payload = {
+            "kind": "google_drive",
+            "file_id": job.source["file_id"],
+            "size_bytes": size,
+            "checksum_kind": checksum_key,
+            "checksum": checksum_value,
+        }
+        reuse_safe = True
+        basis = f"{checksum_key}+size+file_id"
+    else:
+        # Keep a diagnostic fingerprint but do not use it for idempotent reuse.
+        fingerprint_payload = {
+            "kind": "google_drive",
+            "file_id": job.source["file_id"],
+            "size_bytes": size,
+            "modifiedTime": meta.get("modifiedTime"),
+        }
+        reuse_safe = False
+        basis = "metadata-only-not-reuse-safe"
+
+    return {
+        "kind": "google_drive",
+        "fingerprint": _fingerprint(fingerprint_payload),
+        "fingerprint_basis": basis,
+        "reuse_safe": reuse_safe,
+        "token": token,
+        "metadata": meta,
+    }
+
+
+def media_probe(path: Path, *, known_sha256: str | None = None) -> dict[str, Any]:
     raw = _run(
         [
             "ffprobe",
@@ -141,7 +231,7 @@ def media_probe(path: Path) -> dict[str, Any]:
         "size_bytes": int((data.get("format") or {}).get("size") or path.stat().st_size),
         "format_name": (data.get("format") or {}).get("format_name"),
         "streams": data.get("streams") or [],
-        "sha256": _sha256(path),
+        "sha256": known_sha256 or _sha256(path),
     }
 
 
@@ -345,31 +435,54 @@ def extract_keyframes(
 def _materialize_source(
     job: VideoJob,
     work: Path,
+    inspection: dict[str, Any],
     *,
     max_source_bytes: int,
-) -> tuple[Path, dict[str, Any]]:
+) -> tuple[Path, dict[str, Any], str | None]:
     if job.source["kind"] == "local_path":
-        path = Path(job.source["path"])
-        if not path.is_file():
-            raise RuntimeError("local video source does not exist")
-        if path.stat().st_size > max_source_bytes:
-            raise RuntimeError("local video exceeds configured source-size limit")
-        return path, {"kind": "local_path", "path": str(path)}
-    token = access_token()
-    name = str(job.source.get("name") or f"drive-{job.source['file_id']}.video")
-    safe_name = re.sub(r"[^A-Za-zА-Яа-яЁё0-9._ -]+", "_", Path(name).name)[:180] or "source.video"
+        path = inspection["path"]
+        return path, {
+            "kind": "local_path",
+            "path": str(path),
+            "fingerprint": inspection["fingerprint"],
+            "fingerprint_basis": inspection["fingerprint_basis"],
+        }, inspection.get("known_sha256")
+
+    meta = inspection["metadata"]
+    token = inspection["token"]
+    source_name = str(meta.get("name") or job.source.get("name") or f"drive-{job.source['file_id']}.video")
+    safe_name = re.sub(r"[^A-Za-zА-Яа-яЁё0-9._ -]+", "_", Path(source_name).name)[:180] or "source.video"
     path = work / safe_name
-    meta = download_file(job.source["file_id"], path, token, max_bytes=max_source_bytes)
+    downloaded = download_file(
+        job.source["file_id"],
+        path,
+        token,
+        max_bytes=max_source_bytes,
+        metadata=meta,
+    )
     return path, {
         "kind": "google_drive",
         "file_id": job.source["file_id"],
-        "name": meta.get("name"),
-        "mimeType": meta.get("mimeType"),
-        "modifiedTime": meta.get("modifiedTime"),
-    }
+        "name": downloaded.get("name"),
+        "mimeType": downloaded.get("mimeType"),
+        "size": downloaded.get("size"),
+        "modifiedTime": downloaded.get("modifiedTime"),
+        "md5Checksum": downloaded.get("md5Checksum"),
+        "sha1Checksum": downloaded.get("sha1Checksum"),
+        "sha256Checksum": downloaded.get("sha256Checksum"),
+        "fingerprint": inspection["fingerprint"],
+        "fingerprint_basis": inspection["fingerprint_basis"],
+        "reuse_safe": inspection["reuse_safe"],
+    }, str(downloaded.get("_download_sha256") or "") or None
 
 
-def _prepare_job_dir(output_root: Path, job: VideoJob) -> tuple[Path, str, dict[str, Any] | None]:
+def _prepare_job_dir(
+    output_root: Path,
+    job: VideoJob,
+    *,
+    source_fingerprint: str | None = None,
+    source_reuse_safe: bool = False,
+) -> tuple[Path, str, dict[str, Any] | None]:
     job_hash = canonical_job_hash(job)
     job_dir = output_root / job.job_id
     manifest_path = job_dir / "manifest.json"
@@ -378,7 +491,14 @@ def _prepare_job_dir(output_root: Path, job: VideoJob) -> tuple[Path, str, dict[
             existing = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             existing = None
-        if existing and existing.get("job_hash") == job_hash and existing.get("status") == "COMPLETED":
+        if (
+            source_reuse_safe
+            and source_fingerprint
+            and existing
+            and existing.get("job_hash") == job_hash
+            and existing.get("source_fingerprint") == source_fingerprint
+            and existing.get("status") == "COMPLETED"
+        ):
             return job_dir, job_hash, existing
     if job_dir.exists():
         shutil.rmtree(job_dir)
@@ -391,20 +511,27 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
     job = validate_from_env(payload)
     profile = resolve_profile(job.profile)
     output_root.mkdir(parents=True, exist_ok=True)
-    job_dir, job_hash, existing = _prepare_job_dir(output_root, job)
+    source_limit = _effective_source_limit(job)
+    inspection = _inspect_source(job, max_source_bytes=source_limit)
+    job_dir, job_hash, existing = _prepare_job_dir(
+        output_root,
+        job,
+        source_fingerprint=inspection.get("fingerprint"),
+        source_reuse_safe=bool(inspection.get("reuse_safe")),
+    )
     if existing is not None:
         return existing
     manifest_path = job_dir / "manifest.json"
-    source_limit = _effective_source_limit(job)
 
     with tempfile.TemporaryDirectory(prefix="universal-video-") as temp:
         work = Path(temp)
-        source, source_provenance = _materialize_source(
+        source, source_provenance, known_sha256 = _materialize_source(
             job,
             work,
+            inspection,
             max_source_bytes=source_limit,
         )
-        media = media_probe(source)
+        media = media_probe(source, known_sha256=known_sha256)
         _enforce_media_bounds(media, job, source_limit)
         chunk_seconds = int(job.options.get("chunk_seconds") or 300)
         initial_prompt = str(job.options.get("initial_prompt") or "").strip() or None
@@ -445,6 +572,9 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
             "status": "COMPLETED" if qc_pass else "REVIEW",
             "job_id": job.job_id,
             "job_hash": job_hash,
+            "source_fingerprint": inspection.get("fingerprint"),
+            "source_fingerprint_basis": inspection.get("fingerprint_basis"),
+            "source_reuse_safe": bool(inspection.get("reuse_safe")),
             "profile": job.profile,
             "project": job.project,
             "domain_plugin": profile.domain_plugin,
