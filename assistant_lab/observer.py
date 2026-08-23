@@ -302,10 +302,6 @@ def run_experiment(config: ObserverConfig, job: dict[str, Any]) -> dict[str, Any
         hidden_roots.append(config.archive_root)
     if any(str(root.resolve()) in argument for root in hidden_roots for argument in job["command"]):
         raise RuntimeError("command may not reference observer result stores")
-    sandbox = shutil.which(config.sandbox_binary)
-    if sandbox is None:
-        raise RuntimeError("bubblewrap is required for experiment filesystem isolation")
-
     dirs = {
         name: exp / name
         for name in ("input", "oracle_tool", "observer", "output", "telemetry", "logs", "knowledge", "tmp")
@@ -314,6 +310,9 @@ def run_experiment(config: ObserverConfig, job: dict[str, Any]) -> dict[str, Any
         path.mkdir(parents=True, exist_ok=True)
 
     isolated_source = _prepare_source(config, job, dirs["input"])
+    sandbox = shutil.which(config.sandbox_binary)
+    if sandbox is None:
+        raise RuntimeError("bubblewrap is required for experiment filesystem isolation")
 
     manifest = {
         "schema": "assistant-lab-observer/v0.2",

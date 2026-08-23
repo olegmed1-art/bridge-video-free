@@ -25,10 +25,13 @@ def valid_job(source: Path, digest: str) -> dict:
 
 
 def require_working_bwrap() -> None:
-    probe = subprocess.run(
-        ["bwrap", "--die-with-parent", "--ro-bind", "/", "/", "--", "true"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
-    )
+    try:
+        probe = subprocess.run(
+            ["bwrap", "--die-with-parent", "--ro-bind", "/", "/", "--", "true"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+        )
+    except FileNotFoundError:
+        pytest.skip("bubblewrap is not installed")
     if probe.returncode != 0:
         pytest.skip("this container does not permit bubblewrap namespaces")
 
