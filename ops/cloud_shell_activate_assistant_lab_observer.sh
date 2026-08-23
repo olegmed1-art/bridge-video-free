@@ -7,8 +7,9 @@ set -Eeuo pipefail
 readonly REGION='eu-frankfurt-1'
 readonly INSTANCE_NAME='bridge-school-dds3-frankfurt'
 readonly REPOSITORY='olegmed1-art/bridge-video-free'
-readonly RUNTIME_COMMIT='9004a2db02fcb70d5f1747b67858c9a9dc6b28ff'
+readonly RUNTIME_COMMIT='792bfad82835ba91fb32ab40d4be2757760cb02d'
 readonly REPO_DIR='/opt/bridge-school/bridge-video-free'
+readonly ARCHIVE_DIR='/opt/bridge-school/assistant-lab-observer-archive'
 readonly ISSUE_NUMBER='336'
 
 log(){ printf '\n[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
@@ -116,7 +117,11 @@ git cat-file -e '$RUNTIME_COMMIT^{commit}'
 git checkout --quiet main
 git merge --ff-only '$RUNTIME_COMMIT'
 [[ \"\$(git rev-parse HEAD)\" == '$RUNTIME_COMMIT' ]]
-sudo -n env ASSISTANT_LAB_OBSERVER_ACTIVATE=1 ASSISTANT_LAB_REPO_DIR='$REPO_DIR' bash '$REPO_DIR/ops/oracle_assistant_lab_observer_install.sh'
+if ! command -v bwrap >/dev/null 2>&1; then
+  sudo -n apt-get update -qq
+  sudo -n apt-get install -y -qq bubblewrap
+fi
+sudo -n env ASSISTANT_LAB_OBSERVER_ACTIVATE=1 ASSISTANT_LAB_REPO_DIR='$REPO_DIR' ASSISTANT_LAB_OBSERVER_ARCHIVE_ROOT='$ARCHIVE_DIR' bash '$REPO_DIR/ops/oracle_assistant_lab_observer_install.sh'
 [[ \"\$(sudo -n systemctl is-enabled assistant-lab-observer.service)\" == enabled ]]
 [[ \"\$(sudo -n systemctl is-active assistant-lab-observer.service)\" == active ]]
 [[ \"\$(sudo -n systemctl is-enabled assistant-lab-control.service)\" == enabled ]]
@@ -131,6 +136,7 @@ READY=\"\$ready\" python3 -c '\''import json,os; x=json.loads(os.environ["READY"
 [[ \"\$(sudo -n systemctl is-active assistant-lab.service)\" == active ]]
 latest=\"\$(find /opt/bridge-school/assistant-lab-observer/experiments -maxdepth 1 -mindepth 1 -type d -name '\''INSTALL-SMOKE-*'\'' | sort | tail -n1)\"
 [[ -n \"\$latest\" && -f \"\$latest/observer/observer_report.json\" && -f \"\$latest/manifest.json\" ]]
+[[ -f '$ARCHIVE_DIR'/\"\$(basename \"\$latest\")\"/SEALED.json ]]
 python3 - \"\$latest\" <<'PY'
 import json,sys,pathlib
 p=pathlib.Path(sys.argv[1])
