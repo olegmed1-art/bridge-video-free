@@ -1,0 +1,8 @@
+{
+  "request_id": "observer-apparmor-probe-20260824-001",
+  "mode": "probe",
+  "git_ref": "97f20e5a4ad5d6229d2d55db0558aa7edf1f3f99",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}
