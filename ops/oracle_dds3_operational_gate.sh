@@ -50,6 +50,18 @@ print(json.dumps({"data": data}, separators=(",", ":")))
 '
 }
 
+curl_json_retry(){
+  local url="$1" body=""
+  for _ in $(seq 1 12); do
+    if body="$(curl -fsS --max-time 20 "$url" 2>/dev/null)"; then
+      printf '%s' "$body"
+      return 0
+    fi
+    sleep 10
+  done
+  die "Readiness request failed after 12 attempts: $url"
+}
+
 RUN_AGENT_TEXT=""
 run_agent_command(){
   local display_name="$1" script_text="$2"
@@ -315,8 +327,8 @@ if [[ "$ALLOW_REBOOT" == "1" ]]; then
 fi
 
 log "Final external Oracle and Vercel checks"
-READY_AFTER="$(curl -fsS --retry 12 --retry-all-errors --retry-delay 10 --max-time 20 "https://$PUBLIC_IP/readyz")"
-ROUTED_AFTER="$(curl -fsS --retry 12 --retry-all-errors --retry-delay 10 --max-time 20 'https://bridge-video-free.vercel.app/dds3/readyz')"
+READY_AFTER="$(curl_json_retry "https://$PUBLIC_IP/readyz")"
+ROUTED_AFTER="$(curl_json_retry 'https://bridge-video-free.vercel.app/dds3/readyz')"
 printf '%s' "$READY_AFTER" | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x.get("status")=="ready" and x.get("engine")=="DDS3" and x.get("fallback_used") is False, x'
 printf '%s' "$ROUTED_AFTER" | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x.get("status")=="ready" and x.get("engine")=="DDS3" and x.get("authenticated_compute")=="ready" and x.get("fallback_used") is False, x'
 
