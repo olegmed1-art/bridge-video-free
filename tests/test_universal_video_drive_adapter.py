@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import pytest
@@ -113,4 +114,76 @@ def test_streaming_size_limit_removes_partial_download(monkeypatch, tmp_path):
     destination = tmp_path / "video.mp4"
     with pytest.raises(RuntimeError, match="download exceeded"):
         download_file("file-id-12345", destination, "token", max_bytes=10)
+    assert not destination.exists()
+
+
+def test_download_verifies_drive_checksum_and_returns_stream_digest(monkeypatch, tmp_path):
+    payload = b"verified-video-bytes"
+    md5 = hashlib.md5(payload, usedforsecurity=False).hexdigest()
+    sha256 = hashlib.sha256(payload).hexdigest()
+    meta = {
+        "mimeType": "video/mp4",
+        "size": str(len(payload)),
+        "md5Checksum": md5,
+        "sha256Checksum": sha256,
+    }
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size):
+            yield payload
+
+    monkeypatch.setattr(drive_adapter.requests, "get", lambda *args, **kwargs: Response())
+    destination = tmp_path / "video.mp4"
+    result = download_file(
+        "file-id-12345",
+        destination,
+        "token",
+        max_bytes=1000,
+        metadata=meta,
+    )
+    assert destination.read_bytes() == payload
+    assert result["_download_sha256"] == sha256
+    assert result["_download_md5"] == md5
+
+
+def test_checksum_mismatch_removes_download(monkeypatch, tmp_path):
+    payload = b"corrupted-or-stale-content"
+    meta = {
+        "mimeType": "video/mp4",
+        "size": str(len(payload)),
+        "md5Checksum": "0" * 32,
+    }
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size):
+            yield payload
+
+    monkeypatch.setattr(drive_adapter.requests, "get", lambda *args, **kwargs: Response())
+    destination = tmp_path / "video.mp4"
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        download_file(
+            "file-id-12345",
+            destination,
+            "token",
+            max_bytes=1000,
+            metadata=meta,
+        )
     assert not destination.exists()
