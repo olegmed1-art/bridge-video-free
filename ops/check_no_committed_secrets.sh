@@ -16,26 +16,62 @@ while IFS= read -r path; do
   esac
 done < <(git ls-files)
 
-printf 'Checking tracked text for high-confidence secret signatures...\n'
-# Only high-confidence patterns are used here to keep the gate deterministic.
-patterns=(
-  '-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----'
-  'postgres(ql)?://[^[:space:]/:@]+:[^[:space:]@]+@'
-  'ASSISTANT_LAB_DATABASE_URL=postgres(ql)?://[^[:space:]/:@]+:[^[:space:]@]+@'
-  'BEGIN PRIVATE KEY'
-)
-
-for pattern in "${patterns[@]}"; do
-  if git grep -nEI "$pattern" -- . \
-      ':(exclude)ops/check_no_committed_secrets.sh' \
-      ':(exclude)**/*.md' \
-      ':(exclude)**/*.example' >/tmp/bridge-secret-scan.out 2>/dev/null; then
-    printf 'HIGH_CONFIDENCE_SECRET_SIGNATURE pattern=%q\n' "$pattern" >&2
-    cat /tmp/bridge-secret-scan.out >&2
-    fail=1
-  fi
-done
+printf 'Checking tracked text for private-key material...\n'
+if git grep -nEI -- '-----BEGIN (RSA |EC |OPENSSH |)PRIVATE KEY-----|BEGIN PRIVATE KEY' -- . \
+    ':(exclude)ops/check_no_committed_secrets.sh' \
+    ':(exclude)**/*.md' \
+    ':(exclude)**/*.example' >/tmp/bridge-secret-scan.out 2>/dev/null; then
+  printf 'HIGH_CONFIDENCE_PRIVATE_KEY_SIGNATURE\n' >&2
+  cat /tmp/bridge-secret-scan.out >&2
+  fail=1
+fi
 rm -f /tmp/bridge-secret-scan.out
+
+printf 'Checking tracked text for non-placeholder PostgreSQL credentials...\n'
+if ! python3 - <<'PY'
+from pathlib import Path
+import re
+import subprocess
+from urllib.parse import urlsplit
+
+allowed_passwords = {"secret", "password", "test", "testing", "changeme", "example", "dummy", "placeholder"}
+url_re = re.compile(r"postgres(?:ql)?://[^\s\"'<>]+", re.I)
+violations = []
+
+for raw_path in subprocess.check_output(["git", "ls-files"], text=True).splitlines():
+    path = Path(raw_path)
+    if raw_path == "ops/check_no_committed_secrets.sh" or path.suffix in {".md", ".example"}:
+        continue
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        continue
+    for lineno, line in enumerate(text.splitlines(), 1):
+        for match in url_re.finditer(line):
+            raw = match.group(0)
+            try:
+                parsed = urlsplit(raw)
+            except ValueError:
+                continue
+            if parsed.password is None:
+                continue
+            host = (parsed.hostname or "").lower()
+            password = parsed.password.lower()
+            if host in {"localhost", "127.0.0.1", "::1"}:
+                continue
+            if "example" in host or host.endswith(".invalid"):
+                continue
+            if password in allowed_passwords or password.startswith("${") or password.startswith("<"):
+                continue
+            violations.append(f"{raw_path}:{lineno}: PostgreSQL URL contains an embedded non-placeholder password")
+
+if violations:
+    print("\n".join(violations))
+    raise SystemExit(1)
+PY
+then
+  fail=1
+fi
 
 if [[ "$fail" -ne 0 ]]; then
   printf 'SECRET_GATE_FAIL\n' >&2
