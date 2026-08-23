@@ -38,6 +38,22 @@ def test_invalid_scene_strategy_fails_closed(tmp_path: Path):
         )
 
 
+def test_zero_scene_sensitivity_is_preserved_as_explicit_disable(tmp_path: Path):
+    media = tmp_path / "lesson.mp4"
+    media.write_bytes(b"x")
+    job = validate_job(
+        {
+            "job_id": "no-scenes",
+            "profile": "educational",
+            "source": {"kind": "local_path", "path": str(media)},
+            "options": {"frame_strategy": "hybrid", "scene_sensitivity": 0},
+        },
+        allowed_local_root=str(tmp_path),
+    )
+    assert job.options["scene_sensitivity"] == 0
+    assert runner._scene_timestamps(media, sensitivity=0, min_scene_seconds=5) == []
+
+
 def test_provider_comparison_routes_disagreement_to_review():
     result = compare_transcripts(
         [{"start": 0, "end": 4, "text": "контракт четыре пики"}],

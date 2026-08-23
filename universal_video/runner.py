@@ -865,7 +865,9 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
                 media["duration_seconds"],
                 interval_seconds=int(job.options.get("frame_interval_seconds") or 120),
                 strategy=str(job.options.get("frame_strategy") or "hybrid"),
-                scene_sensitivity=int(job.options.get("scene_sensitivity") or 50),
+                scene_sensitivity=int(
+                    job.options["scene_sensitivity"] if "scene_sensitivity" in job.options else 50
+                ),
                 min_scene_seconds=int(job.options.get("min_scene_seconds") or 5),
             )
 
