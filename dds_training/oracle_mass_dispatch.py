@@ -34,17 +34,19 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _require_root_controlled(path: Path) -> None:
     st = path.stat()
-    # Production requests are configuration, not user input. They must be owned
-    # by root and cannot be writable by group/other.
     if st.st_uid != 0 or st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
         raise SystemExit(f"FAIL_CLOSED: request is not root-controlled: {path}")
 
 
-def _resolve_existing(path_value: str, *, kind: str) -> Path:
+def _resolve_existing(path_value: str, *, kind: str, allowed_root: Path) -> Path:
     p = Path(path_value)
     if not p.is_absolute():
         raise SystemExit(f"FAIL_CLOSED: {kind} path must be absolute")
     p = p.resolve()
+    try:
+        p.relative_to(allowed_root.resolve())
+    except ValueError as exc:
+        raise SystemExit(f"FAIL_CLOSED: {kind} path escapes Oracle mass state root") from exc
     if kind == "work":
         if not p.is_dir():
             raise SystemExit(f"FAIL_CLOSED: work directory missing: {p}")
@@ -67,22 +69,43 @@ def _require_prior_pass(state_root: Path, target: int) -> None:
         raise SystemExit("FAIL_CLOSED: prior stage was not proven Oracle DDS3 compute")
 
 
-def _build_run_stage_argv(repo_root: Path, req: dict[str, Any], target: int) -> tuple[list[str], Path]:
-    work = _resolve_existing(str(req.get("work_dir", "")), kind="work")
-    predictions = _resolve_existing(str(req.get("predictions_path", "")), kind="predictions")
+def _build_run_stage_argv(
+    repo_root: Path,
+    state_root: Path,
+    req: dict[str, Any],
+    target: int,
+) -> tuple[list[str], Path]:
+    work = _resolve_existing(str(req.get("work_dir", "")), kind="work", allowed_root=state_root)
+    predictions = _resolve_existing(
+        str(req.get("predictions_path", "")), kind="predictions", allowed_root=state_root
+    )
     stage = str(req.get("stage", ""))
     if stage not in {"pilot", "main"}:
         raise SystemExit("FAIL_CLOSED: stage must be pilot or main")
+    if target == 10_000 and stage != "pilot":
+        raise SystemExit("FAIL_CLOSED: 10k target must use pilot stage")
+    if target in {30_000, 40_000} and stage != "main":
+        raise SystemExit("FAIL_CLOSED: 30k/40k targets must use main stage")
+
     splits = req.get("splits")
     if not isinstance(splits, list) or not splits or not all(x in {"train", "validation"} for x in splits):
-        raise SystemExit("FAIL_CLOSED: splits must be a non-empty train/validation list; sealed_test is never opened by mass dispatch")
+        raise SystemExit(
+            "FAIL_CLOSED: splits must be a non-empty train/validation list; sealed_test is never opened by mass dispatch"
+        )
     run_id = str(req.get("run_id", "")).strip()
-    if not run_id or len(run_id) > 128 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_." for c in run_id):
+    if not run_id or len(run_id) > 128 or any(
+        c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_." for c in run_id
+    ):
         raise SystemExit("FAIL_CLOSED: invalid run_id")
 
     script = (repo_root / "dds_training" / "run_stage.py").resolve()
+    try:
+        script.relative_to(repo_root.resolve())
+    except ValueError as exc:
+        raise SystemExit("FAIL_CLOSED: run_stage.py escaped repository root") from exc
     if not script.is_file():
         raise SystemExit("FAIL_CLOSED: verified run_stage.py missing")
+
     argv = [
         sys.executable,
         str(script),
@@ -103,7 +126,7 @@ def _build_run_stage_argv(repo_root: Path, req: dict[str, Any], target: int) -> 
     ]
     tasks_file = req.get("tasks_file")
     if tasks_file:
-        tasks = _resolve_existing(str(tasks_file), kind="tasks")
+        tasks = _resolve_existing(str(tasks_file), kind="tasks", allowed_root=state_root)
         argv += ["--tasks-file", str(tasks)]
     return argv, work
 
@@ -118,6 +141,8 @@ def _write_evidence(path: Path, data: dict[str, Any]) -> None:
 def run(target: int, state_root: Path, repo_root: Path) -> int:
     if target not in ALLOWED_TARGETS:
         raise SystemExit("FAIL_CLOSED: target must be 10000, 30000, or 40000")
+    state_root = state_root.resolve()
+    repo_root = repo_root.resolve()
     request_path = state_root / "requests" / f"{target}.json"
     if not request_path.is_file():
         raise SystemExit(f"FAIL_CLOSED: staged request missing: {request_path}")
@@ -130,14 +155,16 @@ def run(target: int, state_root: Path, repo_root: Path) -> int:
     if req.get("engine") != "DDS3" or req.get("fallback_used") is not False:
         raise SystemExit("FAIL_CLOSED: request must require engine=DDS3 and fallback_used=false")
 
-    corpus = _resolve_existing(str(req.get("corpus_path", "")), kind="corpus")
+    corpus = _resolve_existing(
+        str(req.get("corpus_path", "")), kind="corpus", allowed_root=state_root
+    )
     expected_sha = str(req.get("corpus_sha256", ""))
     actual_sha = _sha256(corpus)
     if len(expected_sha) != 64 or expected_sha != actual_sha:
         raise SystemExit("FAIL_CLOSED: immutable corpus SHA-256 mismatch")
 
     _require_prior_pass(state_root, target)
-    argv, work = _build_run_stage_argv(repo_root, req, target)
+    argv, work = _build_run_stage_argv(repo_root, state_root, req, target)
     evidence_path = state_root / "evidence" / f"{target}.json"
     log_path = state_root / "logs" / f"{target}.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -153,7 +180,7 @@ def run(target: int, state_root: Path, repo_root: Path) -> int:
         "fallback_used": False,
         "corpus_path": str(corpus),
         "corpus_sha256": actual_sha,
-        "repo_root": str(repo_root.resolve()),
+        "repo_root": str(repo_root),
         "run_id": req["run_id"],
         "work_dir": str(work),
         "forbidden_promotions": ["canon", "curriculum", "methodology", "mastery", "student_profile"],
@@ -185,10 +212,18 @@ def run(target: int, state_root: Path, repo_root: Path) -> int:
 def main() -> int:
     p = argparse.ArgumentParser(description="Bounded Oracle-only DDS3 mass dispatcher")
     p.add_argument("--target", type=int, required=True, choices=ALLOWED_TARGETS)
-    p.add_argument("--state-root", type=Path, default=Path(os.environ.get("DDS3_MASS_STATE_ROOT", DEFAULT_STATE_ROOT)))
-    p.add_argument("--repo-root", type=Path, default=Path(os.environ.get("BRIDGE_SCHOOL_REPO_ROOT", "/opt/bridge-school/bridge-video-free")))
+    p.add_argument(
+        "--state-root",
+        type=Path,
+        default=Path(os.environ.get("DDS3_MASS_STATE_ROOT", DEFAULT_STATE_ROOT)),
+    )
+    p.add_argument(
+        "--repo-root",
+        type=Path,
+        default=Path(os.environ.get("BRIDGE_SCHOOL_REPO_ROOT", "/opt/bridge-school/bridge-video-free")),
+    )
     args = p.parse_args()
-    return run(args.target, args.state_root.resolve(), args.repo_root.resolve())
+    return run(args.target, args.state_root, args.repo_root)
 
 
 if __name__ == "__main__":
