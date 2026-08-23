@@ -23,7 +23,9 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ProtectKernelTunables=true
+# Deliberately omit ProtectKernelTunables: its /proc/sys submount makes the
+# kernel reject bwrap's fresh procfs mount inside an unprivileged user namespace.
+# The service user is unprivileged and NoNewPrivileges remains enforced.
 ProtectKernelModules=true
 ProtectKernelLogs=true
 ProtectControlGroups=true
