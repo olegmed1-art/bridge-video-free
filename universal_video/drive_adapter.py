@@ -9,6 +9,7 @@ written by this module.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -118,15 +119,19 @@ def file_metadata(file_id: str, token: str) -> dict:
     response = requests.get(
         f"{DRIVE}/files/{file_id}",
         headers={"Authorization": f"Bearer {token}"},
-        params={"fields": "id,name,mimeType,size,modifiedTime,parents"},
+        params={
+            "fields": (
+                "id,name,mimeType,size,modifiedTime,parents,"
+                "md5Checksum,sha1Checksum,sha256Checksum"
+            )
+        },
         timeout=30,
     )
     response.raise_for_status()
     return response.json()
 
 
-def download_file(file_id: str, destination: Path, token: str, *, max_bytes: int | None = None) -> dict:
-    meta = file_metadata(file_id, token)
+def _validate_binary_metadata(meta: dict, *, max_bytes: int | None) -> None:
     mime = str(meta.get("mimeType") or "")
     if mime.startswith("application/vnd.google-apps."):
         raise RuntimeError("native Google Workspace files are not video sources")
@@ -138,8 +143,22 @@ def download_file(file_id: str, destination: Path, token: str, *, max_bytes: int
         if declared > max_bytes:
             raise RuntimeError("Google Drive video exceeds configured source-size limit")
 
+
+def download_file(
+    file_id: str,
+    destination: Path,
+    token: str,
+    *,
+    max_bytes: int | None = None,
+    metadata: dict | None = None,
+) -> dict:
+    meta = dict(metadata) if metadata is not None else file_metadata(file_id, token)
+    _validate_binary_metadata(meta, max_bytes=max_bytes)
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     written = 0
+    sha256 = hashlib.sha256()
+    md5 = hashlib.md5(usedforsecurity=False)
     try:
         with requests.get(
             f"{DRIVE}/files/{file_id}",
@@ -156,10 +175,24 @@ def download_file(file_id: str, destination: Path, token: str, *, max_bytes: int
                     written += len(chunk)
                     if max_bytes is not None and written > max_bytes:
                         raise RuntimeError("Google Drive download exceeded configured source-size limit")
+                    sha256.update(chunk)
+                    md5.update(chunk)
                     handle.write(chunk)
+
+        actual_sha256 = sha256.hexdigest()
+        actual_md5 = md5.hexdigest()
+        expected_sha256 = str(meta.get("sha256Checksum") or "").strip().lower()
+        expected_md5 = str(meta.get("md5Checksum") or "").strip().lower()
+        if expected_sha256 and actual_sha256.lower() != expected_sha256:
+            raise RuntimeError("Google Drive SHA-256 checksum mismatch after download")
+        if expected_md5 and actual_md5.lower() != expected_md5:
+            raise RuntimeError("Google Drive MD5 checksum mismatch after download")
     except Exception:
         destination.unlink(missing_ok=True)
         raise
+
+    meta["_download_sha256"] = actual_sha256
+    meta["_download_md5"] = actual_md5
     return meta
 
 
