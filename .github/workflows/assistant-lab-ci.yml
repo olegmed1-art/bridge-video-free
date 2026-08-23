@@ -15,6 +15,7 @@ on:
       - 'ops/cloud_shell_activate_assistant_lab_observer.sh'
       - 'ops/oracle_dds3_host_repair.sh'
       - 'ops/oracle_dds3_operational_gate.sh'
+      - 'ops/dds3_local_concurrency_probe.py'
   workflow_dispatch:
 
 permissions:
@@ -83,6 +84,37 @@ jobs:
           grep -q -- '-m assistant_lab.worker' deploy/oracle-assistant-lab/assistant-lab.service
           grep -q 'Neon assistant_lab.job -> Oracle assistant-lab.service -> hot localhost DDS3' assistant_lab/DDS3_DIRECT_PATH.md
           grep -q 'DDS3 jobs MUST NOT be routed through the Assistant Lab Control API or Observer' assistant_lab/DDS3_DIRECT_PATH.md
+      - name: Validate bounded DDS3 concurrency probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile ops/dds3_local_concurrency_probe.py
+          python - <<'PY'
+          from pathlib import Path
+          import importlib.util
+
+          path = Path('ops/dds3_local_concurrency_probe.py')
+          spec = importlib.util.spec_from_file_location('dds3_probe', path)
+          module = importlib.util.module_from_spec(spec)
+          assert spec.loader is not None
+          spec.loader.exec_module(module)
+          assert module.validate_url('http://127.0.0.1:8080/v1/compute').startswith('http://127.0.0.1:8080')
+          try:
+              module.validate_url('https://example.com/v1/compute')
+          except ValueError:
+              pass
+          else:
+              raise AssertionError('remote DDS3 probe endpoint must be rejected')
+          assert module.parse_levels('1,2,4') == [1, 2, 4]
+          try:
+              module.parse_levels('16')
+          except ValueError:
+              pass
+          else:
+              raise AssertionError('unbounded concurrency must be rejected')
+          assert module.MAX_CONCURRENCY == 8
+          assert module.MAX_REQUESTS == 200
+          PY
       - name: Verify bootstrap schema boundaries
         shell: bash
         run: |
