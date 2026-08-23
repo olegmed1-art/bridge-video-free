@@ -50,6 +50,8 @@ jobs:
           assert not bad, f"double backslash line continuations at lines: {bad}"
           assert "--query 'data.\"lifecycle-state\"'" in text
           assert 'x.get("lifecycle-state") == "ACTIVE"' in text
+          assert "--retry-all-errors" not in text
+          assert "curl_json_retry" in text
           PY
       - name: Run Assistant Lab contract tests
         run: python -m pytest -q tests/test_assistant_lab_contract.py tests/test_assistant_lab_bootstrap.py
