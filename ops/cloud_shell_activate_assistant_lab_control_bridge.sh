@@ -6,7 +6,7 @@ set -Eeuo pipefail
 
 readonly REGION='eu-frankfurt-1'
 readonly INSTANCE_NAME='bridge-school-dds3-frankfurt'
-readonly RUNTIME_COMMIT='32eed77de0184ab7099249187f916ab42c35a3e7'
+readonly RUNTIME_COMMIT='3fe5874699d5d5cbc2bffb324dee458bdc5b0fce'
 readonly REPOSITORY='olegmed1-art/bridge-video-free'
 
 export OCI_CLI_REGION="$REGION"
@@ -57,7 +57,7 @@ REPO=/opt/bridge-school/bridge-video-free
 cd "$REPO"
 [[ -z "$(git status --porcelain)" ]] || { echo REPO_DIRTY; exit 1; }
 git fetch --quiet origin
-TARGET='32eed77de0184ab7099249187f916ab42c35a3e7'
+TARGET='3fe5874699d5d5cbc2bffb324dee458bdc5b0fce'
 git cat-file -e "$TARGET^{commit}"
 git checkout --detach "$TARGET" >/dev/null
 [[ "$(git rev-parse HEAD)" == "$TARGET" ]]
