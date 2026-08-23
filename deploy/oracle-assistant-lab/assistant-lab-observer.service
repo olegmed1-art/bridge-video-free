@@ -1,0 +1,32 @@
+[Unit]
+Description=Bridge School Assistant Lab Oracle Observer v0.1
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=assistant-lab-observer
+Group=assistant-lab-observer
+WorkingDirectory=/opt/bridge-school/bridge-video-free
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=ASSISTANT_LAB_OBSERVER_STATE_ROOT=/opt/bridge-school/assistant-lab-observer
+ExecStart=/opt/bridge-school/assistant-lab-observer/.venv/bin/python -m assistant_lab.observer daemon
+Restart=always
+RestartSec=2
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+ReadWritePaths=/opt/bridge-school/assistant-lab-observer
+
+[Install]
+WantedBy=multi-user.target

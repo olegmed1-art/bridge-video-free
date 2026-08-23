@@ -53,7 +53,24 @@ The v1 implementation deliberately supports only:
 - `DDS3_COMPUTE` for bounded `dd_table`, `position_all_moves`, and `position_trajectory` calls;
 - `NOOP` for queue/worker acceptance tests.
 
-There is no arbitrary shell/code executor.
+There is no arbitrary shell/code executor in the production Assistant Lab queue.
+
+## Oracle Observer experimental contour
+
+`Assistant Lab Observer v0.1` is a separate host-side experimental service. It is deliberately not part of the Universal Video Analyzer and is not a new production queue capability.
+
+Its contract is:
+
+- launch one explicitly submitted local experiment under the unprivileged `assistant-lab-observer` identity without a shell;
+- create an experiment directory with separate `oracle_tool/`, `output/`, `observer/`, `telemetry/`, and `logs/` areas;
+- record process-tree CPU/RAM samples, network connections visible to the observer identity, target working-directory file changes, stdout/stderr, exit code, duration, timeout, and final artifact SHA-256 inventory;
+- write append-only JSONL telemetry plus a separate `observer_report.json`;
+- record in the manifest that Video Analyzer results and results of other Oracle tools were not consumed by the experiment;
+- never treat observer output as the Oracle tool's own result.
+
+The observer's local spool is host-side only; it is not wired to the Neon production queue. Installation is fail-closed through `ops/oracle_assistant_lab_observer_install.sh`. The installer creates a separate Unix identity and state root, validates the systemd unit, and runs an isolated smoke experiment before optional activation. `ASSISTANT_LAB_OBSERVER_ACTIVATE=1` is required to enable/start the resident service.
+
+Observer repository code or CI success is not proof of server activation. Activation is proven only by host-side `systemctl is-active assistant-lab-observer.service` plus a successful persisted smoke experiment/report on the Oracle host.
 
 ## Priority contract
 
@@ -100,7 +117,7 @@ Assistant Lab may create and evaluate experimental artifacts, but v1 must not:
 - write or modify the school canon;
 - alter L1/tournament rule semantics;
 - write person-specific student/profile skill state;
-- execute arbitrary shell or repository code from a queue payload;
+- execute arbitrary shell or repository code from a production queue payload;
 - automatically run mass DDS stages;
 - run BEN, video processing, or bulk workloads without a separate explicit activation decision;
 - silently promote an experiment into school methodology.
