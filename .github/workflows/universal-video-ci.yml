@@ -1,0 +1,42 @@
+name: Universal Video Analyzer CI
+
+on:
+  pull_request:
+    paths:
+      - 'universal_video/**'
+      - 'requirements-universal-video.txt'
+      - 'deploy/oracle-universal-video/**'
+      - 'ops/oracle_universal_video_*.sh'
+      - 'tests/test_universal_video_*.py'
+      - '.github/workflows/universal-video-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install -q pytest requests google-auth
+      - name: Syntax-check host scripts
+        run: |
+          bash -n ops/oracle_universal_video_preflight.sh
+          bash -n ops/oracle_universal_video_install.sh
+      - name: Validate systemd boundaries
+        run: |
+          grep -q '^User=universal-video$' deploy/oracle-universal-video/universal-video.service
+          grep -q '^Nice=10$' deploy/oracle-universal-video/universal-video.service
+          grep -q '^CPUQuota=600%$' deploy/oracle-universal-video/universal-video.service
+          ! grep -RniE 'systemctl +(stop|restart|disable).*assistant-lab|docker +(stop|rm|restart).*dds3' ops/oracle_universal_video_install.sh deploy/oracle-universal-video
+      - name: Run contract tests
+        run: python -m pytest -q tests/test_universal_video_contract.py
+      - name: Compile Python modules
+        run: python -m compileall -q universal_video
+      - name: Record requirements checksum
+        run: sha256sum requirements-universal-video.txt
