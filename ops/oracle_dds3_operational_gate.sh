@@ -165,6 +165,24 @@ wait_alert_active(){
   done
   die "Alert rule $alert_rule_id did not reach ACTIVE (last state: ${state:-unknown})"
 }
+verify_alert_config(){
+  local alert_rule_id="$1" alert_type="$2" threshold="$3" display_name="$4"
+  oci budgets budget alert-rule get \\
+    --budget-id "$BUDGET_ID" \\
+    --alert-rule-id "$alert_rule_id" \\
+    --output json | \\
+    EXPECTED_TYPE="$alert_type" EXPECTED_THRESHOLD="$threshold" EXPECTED_NAME="$display_name" EXPECTED_EMAIL="$BUDGET_EMAIL" python3 -c '
+import json, os, re, sys
+x=json.load(sys.stdin)["data"]
+assert x.get("display-name") == os.environ["EXPECTED_NAME"], x
+assert x.get("type") == os.environ["EXPECTED_TYPE"], x
+assert x.get("threshold-type") == "PERCENTAGE", x
+assert float(x.get("threshold", -1)) == float(os.environ["EXPECTED_THRESHOLD"]), x
+recipients={p for p in re.split(r"[,;\\s]+", str(x.get("recipients") or "")) if p}
+assert os.environ["EXPECTED_EMAIL"] in recipients, x
+assert x.get("state") == "ACTIVE", x
+'
+}
 ensure_alert(){
   local alert_type="$1" threshold="$2" display_name="$3"
   local alert_id alert_count
@@ -183,20 +201,9 @@ ensure_alert(){
       --message "OCI Bridge School budget alert: $display_name" \\
       --query data.id --raw-output)"
     nullish "$alert_id" && die "Created alert $display_name without an ID"
-  else
-    oci budgets budget alert-rule update \\
-      --budget-id "$BUDGET_ID" \\
-      --alert-rule-id "$alert_id" \\
-      --display-name "$display_name" \\
-      --description "Bridge School Oracle guard $display_name" \\
-      --threshold "$threshold" \\
-      --threshold-type PERCENTAGE \\
-      --type "$alert_type" \\
-      --recipients "$BUDGET_EMAIL" \\
-      --message "OCI Bridge School budget alert: $display_name" \\
-      --force >/dev/null
+    wait_alert_active "$alert_id"
   fi
-  wait_alert_active "$alert_id"
+  verify_alert_config "$alert_id" "$alert_type" "$threshold" "$display_name"
 }
 ensure_alert ACTUAL 50 actual-50
 ensure_alert ACTUAL 75 actual-75
