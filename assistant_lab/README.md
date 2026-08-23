@@ -57,18 +57,23 @@ There is no arbitrary shell/code executor in the production Assistant Lab queue.
 
 ## Oracle Observer experimental contour
 
-`Assistant Lab Observer v0.1` is a separate host-side experimental service. It is deliberately not part of the Universal Video Analyzer and is not a new production queue capability.
+`Assistant Lab Observer v0.2` is a separate host-side experimental service. It is deliberately not part of the Universal Video Analyzer and is not a new production queue capability.
 
 Its contract is:
 
-- launch one explicitly submitted local experiment under the unprivileged `assistant-lab-observer` identity without a shell;
-- create an experiment directory with separate `oracle_tool/`, `output/`, `observer/`, `telemetry/`, and `logs/` areas;
+- accept one named tool and one explicit absolute source path pinned by SHA-256, copy it from a dedicated source root, and expose only that isolated copy to the command;
+- launch one explicitly submitted local experiment under the unprivileged `assistant-lab-observer` identity without a shell and with a sanitized environment;
+- create an experiment directory with separate `input/`, `oracle_tool/`, `output/`, `observer/`, `telemetry/`, `logs/`, and `knowledge/` areas;
 - record process-tree CPU/RAM samples, network connections visible to the observer identity, target working-directory file changes, stdout/stderr, exit code, duration, timeout, and final artifact SHA-256 inventory;
-- write append-only JSONL telemetry plus a separate `observer_report.json`;
+- write append-only JSONL telemetry plus a separate `observer_report.json`, checksum manifest, and immutable-intent `SEALED.json` record;
+- copy every completed experiment to the configured durable archive and verify every archived artifact against the checksum manifest; activation fails closed if no durable archive root is configured;
+- preserve research notes separately by evidence level: `DOCUMENTED`, `OBSERVED`, `INFERRED`, `CONFIRMED`, or `UNKNOWN`, always with evidence references and limitations;
 - record in the manifest that Video Analyzer results and results of other Oracle tools were not consumed by the experiment;
 - never treat observer output as the Oracle tool's own result.
 
-The observer's local spool is host-side only; it is not wired to the Neon production queue. Installation is fail-closed through `ops/oracle_assistant_lab_observer_install.sh`. The installer creates a separate Unix identity and state root, validates the systemd unit, and runs an isolated smoke experiment before optional activation. `ASSISTANT_LAB_OBSERVER_ACTIVATE=1` is required to enable/start the resident service.
+The observer is not wired to the Neon production queue. Installation is fail-closed through `ops/oracle_assistant_lab_observer_install.sh`. The installer creates a separate Unix identity and state root, validates the systemd unit, and runs an isolated smoke experiment before optional activation. `ASSISTANT_LAB_OBSERVER_ACTIVATE=1` and an explicit `ASSISTANT_LAB_OBSERVER_ARCHIVE_ROOT` on durable storage are required to enable/start the resident service.
+
+The observer can establish externally visible behavior, resource use, file/network activity, logs, and repeatable input/output relationships. It cannot reveal proprietary source code, model weights, or managed-service internals that the tool does not expose; such hypotheses must remain `INFERRED` or `UNKNOWN`, never be presented as observed fact.
 
 Observer repository code or CI success is not proof of server activation. Activation is proven only by host-side `systemctl is-active assistant-lab-observer.service` plus a successful persisted smoke experiment/report on the Oracle host.
 

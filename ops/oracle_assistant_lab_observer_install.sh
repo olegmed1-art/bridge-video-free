@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Install/stage Assistant Lab Oracle Observer v0.1 plus its localhost-only Control API.
+# Install/stage Assistant Lab Oracle Observer v0.2 plus its localhost-only Control API.
 # Neither service changes production routing, DDS3, the Universal Video Analyzer, or school canon.
 # Optional: ASSISTANT_LAB_OBSERVER_ACTIVATE=1 enables/starts both services after preflight.
 
@@ -19,12 +19,19 @@ ACTIVATE="${ASSISTANT_LAB_OBSERVER_ACTIVATE:-0}"
 PSUTIL_VERSION="${ASSISTANT_LAB_OBSERVER_PSUTIL_VERSION:-7.0.0}"
 FASTAPI_VERSION="${ASSISTANT_LAB_CONTROL_FASTAPI_VERSION:-0.116.1}"
 UVICORN_VERSION="${ASSISTANT_LAB_CONTROL_UVICORN_VERSION:-0.35.0}"
+SOURCE_DIR="${ASSISTANT_LAB_OBSERVER_SOURCE_ROOT:-$OBS_DIR/sources}"
+ARCHIVE_DIR="${ASSISTANT_LAB_OBSERVER_ARCHIVE_ROOT:-}"
 
 log(){ printf '\n[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
 [[ "$(id -u)" -eq 0 ]] || die "run as root on the existing Oracle host"
 [[ "$ACTIVATE" =~ ^[01]$ ]] || die "ASSISTANT_LAB_OBSERVER_ACTIVATE must be 0 or 1"
+[[ "$SOURCE_DIR" == /* && "$SOURCE_DIR" != *[[:space:]]* ]] || die "source root must be an absolute path without whitespace"
+[[ -z "$ARCHIVE_DIR" || ( "$ARCHIVE_DIR" == /* && "$ARCHIVE_DIR" != *[[:space:]]* ) ]] || die "archive root must be an absolute path without whitespace"
+if [[ "$ACTIVATE" == "1" && -z "$ARCHIVE_DIR" ]]; then
+  die "activation requires ASSISTANT_LAB_OBSERVER_ARCHIVE_ROOT on durable storage"
+fi
 [[ -d "$REPO_DIR/.git" ]] || die "expected repository checkout not found at $REPO_DIR"
 [[ -f "$REPO_DIR/assistant_lab/observer.py" ]] || die "observer code missing from repository checkout"
 [[ -f "$REPO_DIR/assistant_lab/control_api.py" ]] || die "control API code missing from repository checkout"
@@ -34,6 +41,7 @@ command -v python3 >/dev/null 2>&1 || die "python3 is required"
 command -v systemctl >/dev/null 2>&1 || die "systemd is required"
 command -v systemd-analyze >/dev/null 2>&1 || die "systemd-analyze is required"
 command -v curl >/dev/null 2>&1 || die "curl is required"
+command -v bwrap >/dev/null 2>&1 || die "bubblewrap (bwrap) is required for filesystem isolation"
 
 log "Create isolated observer Unix identity"
 if ! getent group "$OBS_GROUP" >/dev/null 2>&1; then
@@ -44,7 +52,11 @@ if ! id "$OBS_USER" >/dev/null 2>&1; then
 fi
 install -d -m 0750 -o "$OBS_USER" -g "$OBS_GROUP" "$OBS_DIR"
 install -d -m 0750 -o "$OBS_USER" -g "$OBS_GROUP" \
-  "$OBS_DIR/jobs/pending" "$OBS_DIR/jobs/running" "$OBS_DIR/jobs/done" "$OBS_DIR/jobs/failed" "$OBS_DIR/experiments"
+  "$OBS_DIR/jobs/pending" "$OBS_DIR/jobs/running" "$OBS_DIR/jobs/done" "$OBS_DIR/jobs/failed" \
+  "$OBS_DIR/experiments" "$OBS_DIR/work" "$OBS_DIR/quarantine" "$OBS_DIR/knowledge-updates" "$SOURCE_DIR"
+if [[ -n "$ARCHIVE_DIR" ]]; then
+  install -d -m 0750 -o "$OBS_USER" -g "$OBS_GROUP" "$ARCHIVE_DIR"
+fi
 
 log "Create bounded observer/control Python runtime"
 python3 -m venv "$OBS_DIR/.venv"
@@ -59,6 +71,22 @@ runuser -u "$OBS_USER" -- test -r "$REPO_DIR/assistant_lab/observer.py" || die "
 runuser -u "$OBS_USER" -- test -r "$REPO_DIR/assistant_lab/control_api.py" || die "observer user cannot read control API code"
 runuser -u "$OBS_USER" -- test -w "$OBS_DIR/jobs/pending" || die "observer user cannot write pending queue"
 runuser -u "$OBS_USER" -- test -w "$OBS_DIR/experiments" || die "observer user cannot write experiment archive"
+runuser -u "$OBS_USER" -- test -w "$SOURCE_DIR" || die "observer user cannot write source staging root"
+if [[ -n "$ARCHIVE_DIR" ]]; then
+  runuser -u "$OBS_USER" -- test -w "$ARCHIVE_DIR" || die "observer user cannot write durable archive"
+fi
+
+log "Write fail-closed observer configuration"
+ENV_FILE="$OBS_DIR/observer.env"
+{
+  printf 'ASSISTANT_LAB_OBSERVER_SOURCE_ROOT=%s\n' "$SOURCE_DIR"
+  if [[ -n "$ARCHIVE_DIR" ]]; then
+    printf 'ASSISTANT_LAB_OBSERVER_ARCHIVE_ROOT=%s\n' "$ARCHIVE_DIR"
+  fi
+  printf 'ASSISTANT_LAB_OBSERVER_REQUIRE_ARCHIVE=1\n'
+} > "$ENV_FILE"
+chown root:"$OBS_GROUP" "$ENV_FILE"
+chmod 0640 "$ENV_FILE"
 
 log "Install root-controlled tool registry and bearer secret"
 cat >"$OBS_DIR/tool_registry.json" <<'JSON'
@@ -89,15 +117,32 @@ chmod 0640 "$OBS_DIR/control.env"
 log "Install hardened observer and localhost-only control systemd units"
 install -m 0644 -o root -g root "$SERVICE_SRC" "$SERVICE_DST"
 install -m 0644 -o root -g root "$CONTROL_SERVICE_SRC" "$CONTROL_SERVICE_DST"
+DROPIN_DIR="/etc/systemd/system/$SERVICE_NAME.d"
+install -d -m 0755 -o root -g root "$DROPIN_DIR"
+if [[ -n "$ARCHIVE_DIR" ]]; then
+  printf '[Service]\nReadWritePaths=%s\n' "$ARCHIVE_DIR" > "$DROPIN_DIR/archive.conf"
+  chmod 0644 "$DROPIN_DIR/archive.conf"
+else
+  rm -f "$DROPIN_DIR/archive.conf"
+fi
 systemctl daemon-reload
 systemd-analyze verify "$SERVICE_DST" "$CONTROL_SERVICE_DST" >/dev/null
 
 log "Run isolated observer smoke experiment before activation"
 SMOKE_ID="INSTALL-SMOKE-$(date -u +%Y%m%d%H%M%S)"
-runuser -u "$OBS_USER" -- env PYTHONPATH="$REPO_DIR" ASSISTANT_LAB_OBSERVER_STATE_ROOT="$OBS_DIR" \
-  "$OBS_DIR/.venv/bin/python" -m assistant_lab.observer submit --experiment-id "$SMOKE_ID" --timeout 30 --label install-smoke -- \
+SMOKE_SOURCE="$SOURCE_DIR/$SMOKE_ID.bin"
+printf 'observer-v02-smoke' > "$SMOKE_SOURCE"
+chown "$OBS_USER:$OBS_GROUP" "$SMOKE_SOURCE"
+SMOKE_SHA="$(sha256sum "$SMOKE_SOURCE" | awk '{print $1}')"
+COMMON_ENV=(PYTHONPATH="$REPO_DIR" ASSISTANT_LAB_OBSERVER_STATE_ROOT="$OBS_DIR" ASSISTANT_LAB_OBSERVER_SOURCE_ROOT="$SOURCE_DIR")
+if [[ -n "$ARCHIVE_DIR" ]]; then
+  COMMON_ENV+=(ASSISTANT_LAB_OBSERVER_ARCHIVE_ROOT="$ARCHIVE_DIR" ASSISTANT_LAB_OBSERVER_REQUIRE_ARCHIVE=1)
+fi
+runuser -u "$OBS_USER" -- env "${COMMON_ENV[@]}" \
+  "$OBS_DIR/.venv/bin/python" -m assistant_lab.observer submit --experiment-id "$SMOKE_ID" --timeout 30 \
+  --label install-smoke --tool-id installer-smoke --source "$SMOKE_SOURCE" --source-sha256 "$SMOKE_SHA" -- \
   "$OBS_DIR/.venv/bin/python" -c "from pathlib import Path; Path('smoke.txt').write_text('observer-ok')"
-runuser -u "$OBS_USER" -- env PYTHONPATH="$REPO_DIR" ASSISTANT_LAB_OBSERVER_STATE_ROOT="$OBS_DIR" \
+runuser -u "$OBS_USER" -- env "${COMMON_ENV[@]}" \
   "$OBS_DIR/.venv/bin/python" -m assistant_lab.observer daemon --once
 SMOKE_REPORT="$OBS_DIR/experiments/$SMOKE_ID/observer/observer_report.json"
 [[ -f "$SMOKE_REPORT" ]] || die "observer smoke report missing"
@@ -107,7 +152,8 @@ with open(sys.argv[1], encoding="utf-8") as fh:
     x=json.load(fh)
 assert x["exit_code"] == 0, x
 assert x["timed_out"] is False, x
-assert x["schema"] == "assistant-lab-observer-report/v0.1", x
+assert x["schema"] == "assistant-lab-observer-report/v0.2", x
+assert x["sealed"] is True, x
 print("ASSISTANT_LAB_OBSERVER_SMOKE_PASS")
 PY
 

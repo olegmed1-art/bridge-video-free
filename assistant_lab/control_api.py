@@ -18,6 +18,8 @@ _TOOL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
 class RunRequest(BaseModel):
     tool_id: str = Field(min_length=1, max_length=64)
+    source_path: str = Field(min_length=1, max_length=4096)
+    source_sha256: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
     experiment_id: str | None = Field(default=None, max_length=128)
     timeout_seconds: int = Field(default=3600, ge=1, le=86400)
     label: str = Field(default="", max_length=256)
@@ -25,6 +27,17 @@ class RunRequest(BaseModel):
 
 def _state_root() -> Path:
     return Path(os.getenv("ASSISTANT_LAB_OBSERVER_STATE_ROOT", "/opt/bridge-school/assistant-lab-observer"))
+
+
+def _observer_config() -> ObserverConfig:
+    source_root = os.getenv("ASSISTANT_LAB_OBSERVER_SOURCE_ROOT")
+    archive_root = os.getenv("ASSISTANT_LAB_OBSERVER_ARCHIVE_ROOT")
+    return ObserverConfig(
+        _state_root(),
+        source_root=Path(source_root) if source_root else None,
+        archive_root=Path(archive_root) if archive_root else None,
+        require_archive=os.getenv("ASSISTANT_LAB_OBSERVER_REQUIRE_ARCHIVE", "0") == "1",
+    )
 
 
 def _registry_path() -> Path:
@@ -113,7 +126,7 @@ app = FastAPI(
 @app.get("/healthz")
 def healthz(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _authorize(authorization)
-    config = ObserverConfig(_state_root())
+    config = _observer_config()
     registry = _load_registry()
     return {
         "status": "ready",
@@ -130,7 +143,7 @@ def healthz(authorization: str | None = Header(default=None)) -> dict[str, Any]:
 @app.get("/v1/status")
 def status(authorization: str | None = Header(default=None)) -> dict[str, Any]:
     _authorize(authorization)
-    config = ObserverConfig(_state_root())
+    config = _observer_config()
     return {
         "schema": "assistant-lab-control-status/v0.1",
         "queue": _queue_counts(config),
@@ -143,7 +156,7 @@ def experiments(authorization: str | None = Header(default=None), limit: int = 2
     _authorize(authorization)
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=422, detail="limit must be 1..100")
-    config = ObserverConfig(_state_root())
+    config = _observer_config()
     config.ensure()
     paths = sorted((p for p in config.experiments.iterdir() if p.is_dir()), key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
     return {"schema": "assistant-lab-control-experiments/v0.1", "experiments": [_experiment_summary(p) for p in paths]}
@@ -154,7 +167,7 @@ def experiment(experiment_id: str, authorization: str | None = Header(default=No
     _authorize(authorization)
     if not _ID_RE.fullmatch(experiment_id):
         raise HTTPException(status_code=404, detail="experiment not found")
-    path = ObserverConfig(_state_root()).experiments / experiment_id
+    path = _observer_config().experiments / experiment_id
     if not path.is_dir():
         raise HTTPException(status_code=404, detail="experiment not found")
     return _experiment_summary(path)
@@ -171,9 +184,13 @@ def run(request: RunRequest, authorization: str | None = Header(default=None)) -
     argv = registry.get(request.tool_id)
     if argv is None:
         raise HTTPException(status_code=404, detail="tool not found")
-    config = ObserverConfig(_state_root())
+    config = _observer_config()
     try:
-        queued = submit_job(config, argv, request.experiment_id, request.timeout_seconds, request.label or request.tool_id)
+        queued = submit_job(
+            config, argv, request.experiment_id, request.timeout_seconds,
+            request.label or request.tool_id, request.tool_id,
+            request.source_path, request.source_sha256,
+        )
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {
