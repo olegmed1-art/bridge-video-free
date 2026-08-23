@@ -75,7 +75,7 @@ jobs:
           bridge = Path("ops/cloud_shell_activate_assistant_lab_control_bridge.sh").read_text()
           assert "bridge-school-dds3-frankfurt" in bridge
           assert "eu-frankfurt-1" in bridge
-          assert "3fe5874699d5d5cbc2bffb324dee458bdc5b0fce" in bridge
+          assert "32eed77de0184ab7099249187f916ab42c35a3e7" in bridge
           assert "oci instance-agent command create" in bridge
           assert "ASSISTANT_LAB_DIRECT_CONTROL_ACTIVATION_PASS" in bridge
           assert "assistant-lab-control-bridge.service" in bridge
