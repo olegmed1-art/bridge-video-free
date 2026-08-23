@@ -21,9 +21,9 @@ def test_launcher_has_fixed_identity_key_and_runtime_pins():
     assert "git hash-object" in text
 
 
-def test_launcher_accepts_only_four_bounded_modes():
+def test_launcher_accepts_only_five_bounded_modes():
     text = _text()
-    assert "probe|status|activate|smoke" in text
+    assert "probe|status|activate|smoke|bootstrap" in text
     assert '[[ "$#" -eq 1 ]]' in text
     assert "unsupported mode" in text
     assert "--host" not in text
@@ -59,6 +59,28 @@ def test_activation_is_pinned_side_by_side_and_has_acceptance_markers():
     assert "ORACLE_DDS3_EXTERNAL_NONREGRESSION_PASS" in text
 
 
+def test_bootstrap_sequence_is_fail_closed_and_does_not_reinstall_for_smoke():
+    text = _text()
+    bootstrap = text.split("  bootstrap)\n", 1)[1].split("    ;;", 1)[0]
+    assert bootstrap.index("probe_control_path") < bootstrap.index("activate_sidecar 0")
+    assert bootstrap.index("activate_sidecar 0") < bootstrap.index("status_gate")
+    assert bootstrap.index("status_gate") < bootstrap.index("run_synthetic_smoke_only")
+    assert "activate_sidecar 1" not in bootstrap
+    assert "ORACLE_UNIVERSAL_VIDEO_CLOUD_SHELL_BOOTSTRAP_PASS" in bootstrap
+    assert "set -Eeuo pipefail" in text
+
+
+def test_smoke_only_is_fixed_synthetic_media_and_rechecks_dds3():
+    text = _text()
+    assert "run_synthetic_smoke_only()" in text
+    assert "color=c=black:s=320x180:d=3" in text
+    assert "sine=frequency=440:duration=3" in text
+    assert '"project":"infrastructure-smoke"' in text
+    assert '"synthetic":true' in text
+    assert "DDS3_AFTER_SYNTHETIC_SMOKE_PASS" in text
+    assert "ORACLE_UNIVERSAL_VIDEO_CLOUD_SHELL_SMOKE_PASS" in text
+
+
 def test_launcher_does_not_control_protected_services_or_real_video():
     text = _text()
     forbidden = [
@@ -76,11 +98,13 @@ def test_launcher_does_not_control_protected_services_or_real_video():
     for token in forbidden:
         assert token not in text
     assert "No real video is submitted" in text
-    assert "3-second synthetic job" in text
+    assert "3-second synthetic" in text
 
 
-def test_runbook_preserves_probe_then_activate_then_status_then_smoke_order():
+def test_runbook_exposes_one_manual_command_and_preserves_explicit_gates():
     text = RUNBOOK.read_text(encoding="utf-8")
+    assert " bootstrap" in text
+    assert "одна ручная команда" in text.lower()
     positions = [
         text.index(" probe"),
         text.index(" activate"),
