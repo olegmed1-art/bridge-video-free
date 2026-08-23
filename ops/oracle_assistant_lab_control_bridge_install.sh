@@ -81,7 +81,8 @@ systemctl daemon-reload
 systemd-analyze verify "$SERVICE_DST" >/dev/null
 
 if [[ "$ACTIVATE" == "1" ]]; then
-  systemctl enable --now "$SERVICE_NAME"
+  systemctl enable "$SERVICE_NAME"
+  systemctl restart "$SERVICE_NAME"
   sleep 2
   systemctl is-enabled --quiet "$SERVICE_NAME" || die "control bridge is not enabled"
   systemctl is-active --quiet "$SERVICE_NAME" || {

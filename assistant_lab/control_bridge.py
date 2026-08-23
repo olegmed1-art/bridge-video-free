@@ -152,6 +152,21 @@ def _execute(config: BridgeConfig, row: dict[str, Any]) -> dict[str, Any]:
             continue
         report = summary.get("observer_report")
         if isinstance(report, dict):
+            exit_code = report.get("exit_code")
+            archive_status = report.get("archive_status")
+            if exit_code != 0:
+                raise RuntimeError(
+                    f"observer experiment {experiment_id} failed "
+                    f"(exit_code={exit_code}, archive_status={archive_status})"
+                )
+            if archive_status == "PENDING":
+                time.sleep(config.poll_seconds)
+                continue
+            if archive_status != "COPIED":
+                raise RuntimeError(
+                    f"observer experiment {experiment_id} archive failed "
+                    f"(archive_status={archive_status})"
+                )
             return {
                 "schema": "assistant-lab-control-bridge-result/v0.1",
                 "experiment_id": experiment_id,

@@ -159,8 +159,8 @@ PY
 
 if [[ "$ACTIVATE" == "1" ]]; then
   log "Enable resident Assistant Lab Observer and localhost Control API"
-  systemctl enable --now "$SERVICE_NAME"
-  systemctl enable --now "$CONTROL_SERVICE_NAME"
+  systemctl enable "$SERVICE_NAME" "$CONTROL_SERVICE_NAME"
+  systemctl restart "$SERVICE_NAME" "$CONTROL_SERVICE_NAME"
   sleep 2
   systemctl is-active --quiet "$SERVICE_NAME" || {
     journalctl -u "$SERVICE_NAME" -n 60 --no-pager >&2 || true
