@@ -125,24 +125,41 @@ def file_metadata(file_id: str, token: str) -> dict:
     return response.json()
 
 
-def download_file(file_id: str, destination: Path, token: str) -> dict:
+def download_file(file_id: str, destination: Path, token: str, *, max_bytes: int | None = None) -> dict:
     meta = file_metadata(file_id, token)
     mime = str(meta.get("mimeType") or "")
     if mime.startswith("application/vnd.google-apps."):
         raise RuntimeError("native Google Workspace files are not video sources")
+    if max_bytes is not None:
+        try:
+            declared = int(meta.get("size") or 0)
+        except (TypeError, ValueError):
+            declared = 0
+        if declared > max_bytes:
+            raise RuntimeError("Google Drive video exceeds configured source-size limit")
+
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with requests.get(
-        f"{DRIVE}/files/{file_id}",
-        headers={"Authorization": f"Bearer {token}"},
-        params={"alt": "media"},
-        stream=True,
-        timeout=180,
-    ) as response:
-        response.raise_for_status()
-        with destination.open("wb") as handle:
-            for chunk in response.iter_content(8 * 1024 * 1024):
-                if chunk:
+    written = 0
+    try:
+        with requests.get(
+            f"{DRIVE}/files/{file_id}",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"alt": "media"},
+            stream=True,
+            timeout=180,
+        ) as response:
+            response.raise_for_status()
+            with destination.open("wb") as handle:
+                for chunk in response.iter_content(8 * 1024 * 1024):
+                    if not chunk:
+                        continue
+                    written += len(chunk)
+                    if max_bytes is not None and written > max_bytes:
+                        raise RuntimeError("Google Drive download exceeded configured source-size limit")
                     handle.write(chunk)
+    except Exception:
+        destination.unlink(missing_ok=True)
+        raise
     return meta
 
 
