@@ -1,6 +1,6 @@
+# Universal Video core runtime only.
+# Optional domain/persistence/speaker components must keep their dependencies
+# outside this file so the Oracle resident core remains small and auditable.
 google-auth==2.56.3
 requests==2.34.2
 faster-whisper==1.2.1
-psycopg[binary]==3.3.4
-sherpa-onnx==1.13.4
-sherpa-onnx-bin==1.13.4
