@@ -1,5 +1,5 @@
 [Unit]
-Description=Bridge School Assistant Lab Oracle Observer v0.1
+Description=Bridge School Assistant Lab Oracle Observer v0.2
 After=network-online.target
 Wants=network-online.target
 
@@ -11,6 +11,7 @@ WorkingDirectory=/opt/bridge-school/bridge-video-free
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONUNBUFFERED=1
 Environment=ASSISTANT_LAB_OBSERVER_STATE_ROOT=/opt/bridge-school/assistant-lab-observer
+EnvironmentFile=/opt/bridge-school/assistant-lab-observer/observer.env
 ExecStart=/opt/bridge-school/assistant-lab-observer/.venv/bin/python -m assistant_lab.observer daemon
 Restart=always
 RestartSec=2
