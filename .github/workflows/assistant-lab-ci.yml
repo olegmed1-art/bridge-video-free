@@ -31,7 +31,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install bounded test dependencies
-        run: python -m pip install --disable-pip-version-check 'pytest>=8,<9' 'psycopg[binary]>=3.2,<3.3' 'psutil>=7,<8'
+        run: python -m pip install --disable-pip-version-check 'pytest>=8,<9' 'psycopg[binary]>=3.2,<3.3' 'psutil>=7,<8' 'fastapi>=0.116,<0.117'
       - name: Compile Assistant Lab
         run: python -m compileall -q assistant_lab
       - name: Validate Oracle scripts
@@ -56,22 +56,28 @@ jobs:
           assert "curl_json_retry" in text
           PY
       - name: Run Assistant Lab contract tests
-        run: python -m pytest -q tests/test_assistant_lab_contract.py tests/test_assistant_lab_bootstrap.py tests/test_assistant_lab_observer.py
+        run: python -m pytest -q tests/test_assistant_lab_contract.py tests/test_assistant_lab_bootstrap.py tests/test_assistant_lab_observer.py tests/test_assistant_lab_control_api.py
       - name: Verify bootstrap schema boundaries
         shell: bash
         run: |
           set -euo pipefail
           ! grep -RniE 'public\.skill|ai\.system_rule|student_profile' assistant_lab/schema.sql assistant_lab/bootstrap_schema.sql
           ! grep -RniE 'GRANT[[:space:]]+(INSERT|DELETE).*bootstrap_ticket' assistant_lab/bootstrap_schema.sql
-      - name: Verify observer isolation contract
+      - name: Verify observer/control isolation contract
         shell: bash
         run: |
           set -euo pipefail
           grep -q 'video_analyzer_result_consumed.*False' assistant_lab/observer.py
           grep -q 'other_oracle_tool_results_consumed.*False' assistant_lab/observer.py
+          grep -q 'arbitrary_shell.*False' assistant_lab/control_api.py
+          grep -q 'video_analyzer_result_access.*False' assistant_lab/control_api.py
+          grep -q 'other_oracle_result_access.*False' assistant_lab/control_api.py
           grep -q 'User=assistant-lab-observer' deploy/oracle-assistant-lab/assistant-lab-observer.service
-          grep -q 'NoNewPrivileges=true' deploy/oracle-assistant-lab/assistant-lab-observer.service
-          grep -q 'ReadWritePaths=/opt/bridge-school/assistant-lab-observer' deploy/oracle-assistant-lab/assistant-lab-observer.service
+          grep -q 'User=assistant-lab-observer' deploy/oracle-assistant-lab/assistant-lab-control.service
+          grep -q -- '--host 127.0.0.1 --port 8765' deploy/oracle-assistant-lab/assistant-lab-control.service
+          grep -q 'NoNewPrivileges=true' deploy/oracle-assistant-lab/assistant-lab-control.service
+          grep -q 'ReadWritePaths=/opt/bridge-school/assistant-lab-observer' deploy/oracle-assistant-lab/assistant-lab-control.service
+          ! grep -q -- '--host 0.0.0.0' deploy/oracle-assistant-lab/assistant-lab-control.service
       - name: Record schema checksums
         shell: bash
         run: |
