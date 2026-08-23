@@ -28,12 +28,26 @@ jobs:
         run: |
           bash -n ops/oracle_universal_video_preflight.sh
           bash -n ops/oracle_universal_video_install.sh
+          bash -n ops/oracle_universal_video_run_command.sh
       - name: Validate systemd boundaries
         run: |
-          grep -q '^User=universal-video$' deploy/oracle-universal-video/universal-video.service
-          grep -q '^Nice=10$' deploy/oracle-universal-video/universal-video.service
-          grep -q '^CPUQuota=600%$' deploy/oracle-universal-video/universal-video.service
-          ! grep -RniE 'systemctl +(stop|restart|disable).*assistant-lab|docker +(stop|rm|restart).*dds3' ops/oracle_universal_video_install.sh deploy/oracle-universal-video
+          unit=deploy/oracle-universal-video/universal-video.service
+          grep -q '^User=universal-video$' "$unit"
+          grep -q '^Nice=10$' "$unit"
+          grep -q '^CPUQuota=600%$' "$unit"
+          grep -q '^WorkingDirectory=/opt/bridge-school/universal-video-src$' "$unit"
+          grep -q '^ReadOnlyPaths=/opt/bridge-school/universal-video-src$' "$unit"
+          ! grep -q '/opt/bridge-school/bridge-video-free' "$unit"
+          ! grep -q '^Requires=assistant-lab.service$' "$unit"
+          ! grep -RniE 'systemctl +(stop|restart|disable).*assistant-lab|docker +(stop|rm|restart).*dds3' \
+            ops/oracle_universal_video_install.sh ops/oracle_universal_video_run_command.sh deploy/oracle-universal-video
+      - name: Validate isolated checkout contract
+        run: |
+          grep -q 'UNIVERSAL_VIDEO_SOURCE_DIR' ops/oracle_universal_video_install.sh
+          grep -q 'universal-video-src' ops/oracle_universal_video_run_command.sh
+          grep -q 'DDS3_BEFORE_PASS' ops/oracle_universal_video_run_command.sh
+          grep -q 'DDS3_AFTER_PASS' ops/oracle_universal_video_run_command.sh
+          grep -q 'UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS' ops/oracle_universal_video_run_command.sh
       - name: Run contract tests
         run: python -m pytest -q tests/test_universal_video_contract.py
       - name: Compile Python modules
