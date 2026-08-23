@@ -2,7 +2,8 @@ import json
 
 import pytest
 
-from universal_video.drive_adapter import _oauth_parts
+from universal_video import drive_adapter
+from universal_video.drive_adapter import _oauth_parts, download_file
 
 
 ENV_KEYS = (
@@ -70,3 +71,46 @@ def test_incomplete_oauth_fails_closed(monkeypatch):
     )
     with pytest.raises(RuntimeError, match="incomplete"):
         _oauth_parts()
+
+
+def test_drive_declared_size_is_rejected_before_download(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        drive_adapter,
+        "file_metadata",
+        lambda file_id, token: {"mimeType": "video/mp4", "size": "1001"},
+    )
+
+    def unexpected_get(*args, **kwargs):
+        pytest.fail("download request must not start for declared oversize source")
+
+    monkeypatch.setattr(drive_adapter.requests, "get", unexpected_get)
+    with pytest.raises(RuntimeError, match="source-size limit"):
+        download_file("file-id-12345", tmp_path / "video.mp4", "token", max_bytes=1000)
+
+
+def test_streaming_size_limit_removes_partial_download(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        drive_adapter,
+        "file_metadata",
+        lambda file_id, token: {"mimeType": "video/mp4", "size": "0"},
+    )
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size):
+            yield b"123456"
+            yield b"abcdef"
+
+    monkeypatch.setattr(drive_adapter.requests, "get", lambda *args, **kwargs: Response())
+    destination = tmp_path / "video.mp4"
+    with pytest.raises(RuntimeError, match="download exceeded"):
+        download_file("file-id-12345", destination, "token", max_bytes=10)
+    assert not destination.exists()

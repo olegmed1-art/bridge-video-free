@@ -14,6 +14,10 @@ from .profiles import resolve_profile
 CONTRACT_VERSION = "universal-video-v1"
 MAX_JOB_BYTES = 256 * 1024
 MAX_VIDEO_SECONDS = 12 * 3600
+MAX_SOURCE_BYTES = 64 * 1024**3
+MIN_SOURCE_BYTES = 1024**2
+MIN_FRAME_INTERVAL_SECONDS = 15
+MAX_FRAME_INTERVAL_SECONDS = 3600
 ALLOWED_SOURCE_KINDS = frozenset({"local_path", "google_drive"})
 ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,160}$")
 DRIVE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{10,200}$")
@@ -53,13 +57,14 @@ def _validate_local_path(source: dict[str, Any], *, allowed_root: str | None) ->
     path = Path(raw)
     if not path.is_absolute():
         raise VideoContractError("local_path source must be absolute")
+    resolved = path.resolve()
     if allowed_root:
         root = Path(allowed_root).resolve()
         try:
-            path.resolve().relative_to(root)
+            resolved.relative_to(root)
         except ValueError as exc:
             raise VideoContractError("local_path escapes configured media root") from exc
-    return {"kind": "local_path", "path": str(path)}
+    return {"kind": "local_path", "path": str(resolved)}
 
 
 def _validate_drive(source: dict[str, Any]) -> dict[str, Any]:
@@ -71,6 +76,18 @@ def _validate_drive(source: dict[str, Any]) -> dict[str, Any]:
     if name:
         out["name"] = name[:500]
     return out
+
+
+def _bounded_int(options: dict[str, Any], key: str, minimum: int, maximum: int) -> None:
+    if key not in options:
+        return
+    try:
+        value = int(options[key])
+    except (TypeError, ValueError) as exc:
+        raise VideoContractError(f"{key} must be an integer") from exc
+    if not minimum <= value <= maximum:
+        raise VideoContractError(f"{key} outside bounded range")
+    options[key] = value
 
 
 def validate_job(payload: Any, *, allowed_local_root: str | None = None) -> VideoJob:
@@ -109,14 +126,15 @@ def validate_job(payload: Any, *, allowed_local_root: str | None = None) -> Vide
         if not 1 <= value <= MAX_VIDEO_SECONDS:
             raise VideoContractError("max_duration_seconds outside bounded range")
         options["max_duration_seconds"] = value
-    if "chunk_seconds" in options:
-        try:
-            chunk = int(options["chunk_seconds"])
-        except (TypeError, ValueError) as exc:
-            raise VideoContractError("chunk_seconds must be an integer") from exc
-        if not 60 <= chunk <= 900:
-            raise VideoContractError("chunk_seconds outside bounded range")
-        options["chunk_seconds"] = chunk
+
+    _bounded_int(options, "chunk_seconds", 60, 900)
+    _bounded_int(
+        options,
+        "frame_interval_seconds",
+        MIN_FRAME_INTERVAL_SECONDS,
+        MAX_FRAME_INTERVAL_SECONDS,
+    )
+    _bounded_int(options, "max_source_bytes", MIN_SOURCE_BYTES, MAX_SOURCE_BYTES)
 
     return VideoJob(
         job_id=job_id,
@@ -149,7 +167,11 @@ def validate_from_env(payload: Any) -> VideoJob:
 
 __all__ = [
     "CONTRACT_VERSION",
+    "MAX_FRAME_INTERVAL_SECONDS",
+    "MAX_SOURCE_BYTES",
     "MAX_VIDEO_SECONDS",
+    "MIN_FRAME_INTERVAL_SECONDS",
+    "MIN_SOURCE_BYTES",
     "VideoContractError",
     "VideoJob",
     "canonical_job_hash",
