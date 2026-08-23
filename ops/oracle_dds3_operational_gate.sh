@@ -23,6 +23,15 @@ export BACKUP_NAME BACKUP_POLICY_NAME
 log(){ printf '\n[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 nullish(){ [[ -z "${1:-}" || "${1:-}" == "null" || "${1:-}" == "None" ]]; }
+normalize_list_json(){
+  local raw
+  raw="$(cat)"
+  if [[ -z "${raw//[[:space:]]/}" ]]; then
+    printf '%s\\n' '{"data":[]}'
+  else
+    printf '%s\\n' "$raw"
+  fi
+}
 
 for command_name in oci python3 curl ssh; do
   command -v "$command_name" >/dev/null 2>&1 || die "$command_name is required"
@@ -61,7 +70,7 @@ printf 'Instance: %s\nShape: %s\nOCPU/RAM: %s / %s GB\nBoot volume: %s GB\nPubli
   "$INSTANCE_ID" "$SHAPE" "$OCPU" "$MEMORY_GB" "$BOOT_VOLUME_SIZE_GB" "$PUBLIC_IP"
 
 log "Create or reuse today's AVAILABLE full boot-volume backup"
-BACKUPS_JSON="$(oci bv boot-volume-backup list -c "$COMPARTMENT_ID" --boot-volume-id "$BOOT_VOLUME_ID" --all --output json)"
+BACKUPS_JSON="$(oci bv boot-volume-backup list -c "$COMPARTMENT_ID" --boot-volume-id "$BOOT_VOLUME_ID" --all --output json | normalize_list_json)"
 BACKUP_ID="$(printf '%s' "$BACKUPS_JSON" | python3 -c 'import json,sys,os; name=os.environ["BACKUP_NAME"]; xs=[x for x in json.load(sys.stdin).get("data",[]) if x.get("display-name")==name and x.get("lifecycle-state")=="AVAILABLE" and x.get("type")=="FULL"]; xs.sort(key=lambda x:x.get("time-created",""),reverse=True); print(xs[0].get("id","") if xs else "")')"
 if nullish "$BACKUP_ID"; then
   BACKUP_JSON="$(oci bv boot-volume-backup create \
@@ -78,7 +87,7 @@ BACKUP_STATE="$(oci bv boot-volume-backup get --boot-volume-backup-id "$BACKUP_I
 [[ "$BACKUP_STATE" == "AVAILABLE" ]] || die "Backup state is $BACKUP_STATE"
 
 log "Ensure a recurring boot-volume backup policy is assigned"
-ASSIGNMENT_JSON="$(oci bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment --asset-id "$BOOT_VOLUME_ID" --output json)"
+ASSIGNMENT_JSON="$(oci bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment --asset-id "$BOOT_VOLUME_ID" --output json | normalize_list_json)"
 ASSIGNED_POLICY_ID="$(printf '%s' "$ASSIGNMENT_JSON" | python3 -c 'import json,sys; xs=json.load(sys.stdin).get("data",[]); print(xs[0].get("policy-id","") if xs else "")')"
 if nullish "$ASSIGNED_POLICY_ID"; then
   POLICIES_JSON="$(oci bv volume-backup-policy list --all --output json)"
@@ -94,7 +103,7 @@ if [[ -z "$BUDGET_EMAIL" ]]; then
   read -r -p 'Email for OCI budget alerts: ' BUDGET_EMAIL
 fi
 [[ "$BUDGET_EMAIL" == *@*.* ]] || die "BUDGET_EMAIL is required"
-BUDGETS_JSON="$(oci budgets budget budget list -c "$TENANCY_ID" --display-name "$BUDGET_NAME" --all --output json)"
+BUDGETS_JSON="$(oci budgets budget budget list -c "$TENANCY_ID" --display-name "$BUDGET_NAME" --all --output json | normalize_list_json)"
 BUDGET_ID="$(printf '%s' "$BUDGETS_JSON" | python3 -c 'import json,sys; xs=json.load(sys.stdin).get("data",[]); xs.sort(key=lambda x:x.get("time-created",""),reverse=True); print(xs[0].get("id","") if xs else "")')"
 if nullish "$BUDGET_ID"; then
   BUDGET_ID="$(oci budgets budget budget create \
@@ -127,7 +136,7 @@ assert x.get("reset-period") == "MONTHLY", x
 assert x.get("target-type") == "COMPARTMENT", x
 assert x.get("targets") == [os.environ["TARGET"]], x
 '
-ALERTS_JSON="$(oci budgets budget alert-rule list --budget-id "$BUDGET_ID" --all --output json)"
+ALERTS_JSON="$(oci budgets budget alert-rule list --budget-id "$BUDGET_ID" --all --output json | normalize_list_json)"
 ensure_alert(){
   local alert_type="$1" threshold="$2" display_name="$3"
   local alert_id alert_count
