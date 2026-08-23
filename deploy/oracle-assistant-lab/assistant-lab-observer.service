@@ -16,6 +16,9 @@ ExecStart=/opt/bridge-school/assistant-lab-observer/.venv/bin/python -m assistan
 Restart=always
 RestartSec=2
 TimeoutStopSec=20
+# Start directly inside the dedicated bwrap AppArmor profile so that
+# NoNewPrivileges remains enabled while bubblewrap can create user namespaces.
+AppArmorProfile=bwrap
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
