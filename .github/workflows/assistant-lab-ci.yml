@@ -92,11 +92,13 @@ jobs:
           python - <<'PY'
           from pathlib import Path
           import importlib.util
+          import sys
 
           path = Path('ops/dds3_local_concurrency_probe.py')
           spec = importlib.util.spec_from_file_location('dds3_probe', path)
           module = importlib.util.module_from_spec(spec)
           assert spec.loader is not None
+          sys.modules[spec.name] = module
           spec.loader.exec_module(module)
           assert module.validate_url('http://127.0.0.1:8080/v1/compute').startswith('http://127.0.0.1:8080')
           try:
