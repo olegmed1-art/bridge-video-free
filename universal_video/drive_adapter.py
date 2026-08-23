@@ -1,9 +1,11 @@
 """Minimal Google Drive adapter for universal-video sources.
 
 The preferred credential boundary is the existing user OAuth refresh-token
-bundle (GOOGLE_DRIVE_OAUTH_JSON). A service account is supported only as an
-explicit alternative. Credentials are read from the process environment and
-are never persisted by this module.
+bundle. GitHub Actions may supply it directly through GOOGLE_DRIVE_OAUTH_JSON;
+Oracle should normally use GOOGLE_DRIVE_OAUTH_JSON_FILE so the JSON secret stays
+in a dedicated protected file instead of a systemd environment file. A service
+account is supported only as an explicit alternative. Credentials are never
+written by this module.
 """
 from __future__ import annotations
 
@@ -18,13 +20,34 @@ DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 
+def _read_json_secret() -> str:
+    direct = os.getenv("GOOGLE_DRIVE_OAUTH_JSON", "").strip()
+    if direct:
+        return direct
+    file_name = os.getenv("GOOGLE_DRIVE_OAUTH_JSON_FILE", "").strip()
+    if not file_name:
+        return ""
+    path = Path(file_name)
+    if not path.is_absolute():
+        raise RuntimeError("GOOGLE_DRIVE_OAUTH_JSON_FILE must be an absolute path")
+    try:
+        raw = path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise RuntimeError("cannot read GOOGLE_DRIVE_OAUTH_JSON_FILE") from exc
+    if not raw:
+        raise RuntimeError("GOOGLE_DRIVE_OAUTH_JSON_FILE is empty")
+    return raw
+
+
 def _oauth_parts() -> tuple[str, str, str]:
-    packed = os.getenv("GOOGLE_DRIVE_OAUTH_JSON", "").strip()
+    packed = _read_json_secret()
     if packed:
         try:
             data = json.loads(packed)
         except json.JSONDecodeError as exc:
-            raise RuntimeError("invalid GOOGLE_DRIVE_OAUTH_JSON") from exc
+            raise RuntimeError("invalid Google Drive OAuth JSON") from exc
+        if not isinstance(data, dict):
+            raise RuntimeError("Google Drive OAuth JSON must be an object")
         client_id = str(data.get("client_id") or "").strip()
         client_secret = str(data.get("client_secret") or "").strip()
         refresh_token = str(data.get("refresh_token") or "").strip()
@@ -68,6 +91,8 @@ def _service_account_token() -> str | None:
         info = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise RuntimeError("invalid GOOGLE_SERVICE_ACCOUNT_JSON") from exc
+    if not isinstance(info, dict):
+        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON must be an object")
     creds = service_account.Credentials.from_service_account_info(
         info,
         scopes=["https://www.googleapis.com/auth/drive.readonly"],
@@ -84,8 +109,8 @@ def access_token() -> str:
     if token:
         return token
     raise RuntimeError(
-        "Google Drive credentials are not configured; use GOOGLE_DRIVE_OAUTH_JSON "
-        "or GOOGLE_SERVICE_ACCOUNT_JSON"
+        "Google Drive credentials are not configured; use GOOGLE_DRIVE_OAUTH_JSON, "
+        "GOOGLE_DRIVE_OAUTH_JSON_FILE or GOOGLE_SERVICE_ACCOUNT_JSON"
     )
 
 
