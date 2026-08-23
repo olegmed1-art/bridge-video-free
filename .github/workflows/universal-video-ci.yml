@@ -29,6 +29,7 @@ jobs:
           bash -n ops/oracle_universal_video_preflight.sh
           bash -n ops/oracle_universal_video_install.sh
           bash -n ops/oracle_universal_video_run_command.sh
+          bash -n ops/oracle_universal_video_drive_secret_install.sh
       - name: Validate systemd boundaries
         run: |
           unit=deploy/oracle-universal-video/universal-video.service
@@ -37,19 +38,31 @@ jobs:
           grep -q '^CPUQuota=600%$' "$unit"
           grep -q '^WorkingDirectory=/opt/bridge-school/universal-video-src$' "$unit"
           grep -q '^ReadOnlyPaths=/opt/bridge-school/universal-video-src$' "$unit"
+          grep -q '^EnvironmentFile=-/opt/bridge-school/universal-video/universal-video-secrets.env$' "$unit"
           ! grep -q '/opt/bridge-school/bridge-video-free' "$unit"
           ! grep -q '^Requires=assistant-lab.service$' "$unit"
           ! grep -RniE 'systemctl +(stop|restart|disable).*assistant-lab|docker +(stop|rm|restart).*dds3' \
-            ops/oracle_universal_video_install.sh ops/oracle_universal_video_run_command.sh deploy/oracle-universal-video
-      - name: Validate isolated checkout contract
+            ops/oracle_universal_video_install.sh \
+            ops/oracle_universal_video_run_command.sh \
+            ops/oracle_universal_video_drive_secret_install.sh \
+            deploy/oracle-universal-video
+      - name: Validate isolated checkout and secret contract
         run: |
           grep -q 'UNIVERSAL_VIDEO_SOURCE_DIR' ops/oracle_universal_video_install.sh
           grep -q 'universal-video-src' ops/oracle_universal_video_run_command.sh
           grep -q 'DDS3_BEFORE_PASS' ops/oracle_universal_video_run_command.sh
           grep -q 'DDS3_AFTER_PASS' ops/oracle_universal_video_run_command.sh
           grep -q 'UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS' ops/oracle_universal_video_run_command.sh
+          grep -q 'GOOGLE_DRIVE_OAUTH_JSON_FILE' universal_video/drive_adapter.py
+          grep -q 'GOOGLE_DRIVE_OAUTH_JSON_FILE' ops/oracle_universal_video_install.sh
+          grep -q 'chmod 0640' ops/oracle_universal_video_drive_secret_install.sh
+          grep -q 'UNIVERSAL_VIDEO_DRIVE_SECRET_INSTALL_PASS' ops/oracle_universal_video_drive_secret_install.sh
+          ! grep -q 'set -x' ops/oracle_universal_video_drive_secret_install.sh
+      - name: Enforce student-agnostic core
+        run: |
+          ! grep -Rni 'Diana' universal_video tests/test_universal_video_*.py
       - name: Run contract tests
-        run: python -m pytest -q tests/test_universal_video_contract.py
+        run: python -m pytest -q tests/test_universal_video_*.py
       - name: Compile Python modules
         run: python -m compileall -q universal_video
       - name: Record requirements checksum
