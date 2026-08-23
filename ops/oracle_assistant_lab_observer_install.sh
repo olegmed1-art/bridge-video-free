@@ -13,6 +13,8 @@ SERVICE_NAME="${ASSISTANT_LAB_OBSERVER_SERVICE_NAME:-assistant-lab-observer.serv
 CONTROL_SERVICE_NAME="${ASSISTANT_LAB_CONTROL_SERVICE_NAME:-assistant-lab-control.service}"
 SERVICE_SRC="$REPO_DIR/deploy/oracle-assistant-lab/assistant-lab-observer.service"
 CONTROL_SERVICE_SRC="$REPO_DIR/deploy/oracle-assistant-lab/assistant-lab-control.service"
+APPARMOR_PROFILE_SRC="$REPO_DIR/deploy/oracle-assistant-lab/bwrap.apparmor"
+APPARMOR_PROFILE_DST="/etc/apparmor.d/bwrap"
 SERVICE_DST="/etc/systemd/system/$SERVICE_NAME"
 CONTROL_SERVICE_DST="/etc/systemd/system/$CONTROL_SERVICE_NAME"
 ACTIVATE="${ASSISTANT_LAB_OBSERVER_ACTIVATE:-0}"
@@ -37,11 +39,13 @@ fi
 [[ -f "$REPO_DIR/assistant_lab/control_api.py" ]] || die "control API code missing from repository checkout"
 [[ -f "$SERVICE_SRC" ]] || die "observer systemd unit missing: $SERVICE_SRC"
 [[ -f "$CONTROL_SERVICE_SRC" ]] || die "control systemd unit missing: $CONTROL_SERVICE_SRC"
+[[ -f "$APPARMOR_PROFILE_SRC" ]] || die "bubblewrap AppArmor profile missing: $APPARMOR_PROFILE_SRC"
 command -v python3 >/dev/null 2>&1 || die "python3 is required"
 command -v systemctl >/dev/null 2>&1 || die "systemd is required"
 command -v systemd-analyze >/dev/null 2>&1 || die "systemd-analyze is required"
 command -v curl >/dev/null 2>&1 || die "curl is required"
 command -v bwrap >/dev/null 2>&1 || die "bubblewrap (bwrap) is required for filesystem isolation"
+command -v apparmor_parser >/dev/null 2>&1 || die "apparmor_parser is required for user-namespace isolation"
 
 log "Create isolated observer Unix identity"
 if ! getent group "$OBS_GROUP" >/dev/null 2>&1; then
@@ -113,6 +117,10 @@ PY
 fi
 chown root:"$OBS_GROUP" "$OBS_DIR/control.env"
 chmod 0640 "$OBS_DIR/control.env"
+
+log "Install dedicated bubblewrap AppArmor profile"
+install -m 0644 -o root -g root "$APPARMOR_PROFILE_SRC" "$APPARMOR_PROFILE_DST"
+apparmor_parser -r "$APPARMOR_PROFILE_DST"
 
 log "Install hardened observer and localhost-only control systemd units"
 install -m 0644 -o root -g root "$SERVICE_SRC" "$SERVICE_DST"

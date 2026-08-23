@@ -1,0 +1,9 @@
+abi <abi/4.0>,
+include <tunables/global>
+
+# Ubuntu 24.04 restricts unprivileged user namespaces. The Observer service
+# enters this profile before NoNewPrivileges is applied, allowing bubblewrap
+# to create its isolated user namespace without relaxing the systemd sandbox.
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+}
