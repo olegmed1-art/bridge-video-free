@@ -49,7 +49,7 @@ PROFILES: dict[str, ProcessingProfile] = {
             "package",
         ),
         domain_plugin="bridge",
-        description="Bridge lesson/individual session. Diana videos use this profile without special-case code.",
+        description="Bridge lesson or individual bridge session.",
     ),
     "bridge_lecture": ProcessingProfile(
         "bridge_lecture",
