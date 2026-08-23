@@ -9,6 +9,7 @@
 - сервер `158.180.47.161` и пользователя `ubuntu`;
 - ключ Cloud Shell `~/.ssh/bridge_school_dds3_oracle`;
 - ED25519 fingerprint сервера;
+- control commit `bd7b13ad25238ee736954e892ac58e6e38a0bd26`;
 - runtime commit `59377de601c1586ae9914a51a340dc72ac2007ce`;
 - единственный разрешённый payload `ops/oracle_universal_video_run_command.sh`.
 
@@ -18,10 +19,10 @@ Launcher не принимает произвольный host, user или remo
 
 Работа выполняется в OCI Cloud Shell того же аккаунта, где ранее был создан ключ `~/.ssh/bridge_school_dds3_oracle`. Приватный ключ не копируется в чат, GitHub, Google Drive или журнал выполнения.
 
-После merge текущего control PR сюда будет записан точный control commit. Скачать launcher по этому commit и проверить синтаксис:
+Скачать launcher по точному control commit и проверить синтаксис:
 
 ```bash
-CONTROL_COMMIT='<CONTROL_COMMIT_SHA>'
+CONTROL_COMMIT='bd7b13ad25238ee736954e892ac58e6e38a0bd26'
 curl -fsSL "https://raw.githubusercontent.com/olegmed1-art/bridge-video-free/${CONTROL_COMMIT}/ops/cloud_shell_activate_universal_video.sh" \
   -o /tmp/cloud_shell_activate_universal_video.sh
 bash -n /tmp/cloud_shell_activate_universal_video.sh
