@@ -12,8 +12,11 @@ WorkingDirectory=/opt/bridge-school/bridge-video-free
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONUNBUFFERED=1
 Environment=ASSISTANT_LAB_CONTROL_URL=http://127.0.0.1:8765
+Environment=ASSISTANT_LAB_CONTROL_BRIDGE_ID=oracle-assistant-lab-control-bridge-1
+Environment=ASSISTANT_LAB_CONTROL_POLL_SECONDS=1
+Environment=ASSISTANT_LAB_CONTROL_STALE_SECONDS=900
 EnvironmentFile=/opt/bridge-school/assistant-lab-observer/control.env
-EnvironmentFile=/opt/bridge-school/assistant-lab-observer/control-bridge.env
+EnvironmentFile=/opt/bridge-school/assistant-lab/assistant-lab.env
 ExecStart=/opt/bridge-school/assistant-lab-observer/.venv/bin/python -m assistant_lab.control_bridge
 Restart=always
 RestartSec=2
@@ -30,6 +33,7 @@ ProtectControlGroups=true
 LockPersonality=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
+ReadOnlyPaths=/opt/bridge-school/assistant-lab/assistant-lab.env
 ReadWritePaths=/opt/bridge-school/assistant-lab-observer
 
 [Install]
