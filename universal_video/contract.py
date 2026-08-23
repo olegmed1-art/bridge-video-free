@@ -90,6 +90,15 @@ def _bounded_int(options: dict[str, Any], key: str, minimum: int, maximum: int) 
     options[key] = value
 
 
+def _bounded_choice(options: dict[str, Any], key: str, choices: frozenset[str]) -> None:
+    if key not in options:
+        return
+    value = str(options[key] or "").strip().lower()
+    if value not in choices:
+        raise VideoContractError(f"{key} must be one of {sorted(choices)}")
+    options[key] = value
+
+
 def validate_job(payload: Any, *, allowed_local_root: str | None = None) -> VideoJob:
     data = _mapping(payload, "job")
     encoded = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -135,6 +144,9 @@ def validate_job(payload: Any, *, allowed_local_root: str | None = None) -> Vide
         MAX_FRAME_INTERVAL_SECONDS,
     )
     _bounded_int(options, "max_source_bytes", MIN_SOURCE_BYTES, MAX_SOURCE_BYTES)
+    _bounded_int(options, "scene_sensitivity", 0, 100)
+    _bounded_int(options, "min_scene_seconds", 1, 300)
+    _bounded_choice(options, "frame_strategy", frozenset({"interval", "scene", "hybrid"}))
 
     return VideoJob(
         job_id=job_id,

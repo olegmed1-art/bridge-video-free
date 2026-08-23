@@ -21,8 +21,10 @@ class Priority(IntEnum):
     BACKGROUND = 30
 
 
-ALLOWED_KINDS = frozenset({"DDS3_COMPUTE", "NOOP"})
+ALLOWED_KINDS = frozenset({"DDS3_COMPUTE", "NOOP", "VIDEO_EVAL_CANARY"})
 ALLOWED_DDS3_OPERATIONS = frozenset({"dd_table", "position_all_moves", "position_trajectory"})
+VIDEO_EVAL_ROUTES = ("local", "oci")
+MAX_VIDEO_OBJECT_NAME_LENGTH = 1024
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,32 @@ def validate_job_payload(kind: str, payload: Any) -> dict[str, Any]:
 
     if normalized_kind == "NOOP":
         return data
+
+    if normalized_kind == "VIDEO_EVAL_CANARY":
+        allowed_fields = {"source", "routes", "purpose"}
+        if set(data) - allowed_fields:
+            raise LabContractError("VIDEO_EVAL_CANARY contains unsupported fields")
+        source = _require_mapping(data.get("source"), "source")
+        if set(source) != {"namespace", "bucket", "object_name", "sha256"}:
+            raise LabContractError("VIDEO_EVAL_CANARY requires one exact immutable OCI object source")
+        for field in ("namespace", "bucket", "object_name"):
+            value = str(source.get(field) or "").strip()
+            if not value or any(character in value for character in ("*", "?", "[", "]", "\x00")):
+                raise LabContractError(f"source.{field} must be an explicit value")
+            source[field] = value
+        if len(source["object_name"]) > MAX_VIDEO_OBJECT_NAME_LENGTH:
+            raise LabContractError("source.object_name exceeds bounded canary contract")
+        digest = str(source.get("sha256") or "").strip().lower()
+        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+            raise LabContractError("source.sha256 must pin the exact video bytes")
+        source["sha256"] = digest
+        routes = data.get("routes", list(VIDEO_EVAL_ROUTES))
+        if not isinstance(routes, list) or tuple(routes) != VIDEO_EVAL_ROUTES:
+            raise LabContractError("VIDEO_EVAL_CANARY requires exactly local and oci routes")
+        purpose = str(data.get("purpose") or "").strip()
+        if purpose != "shadow_compare":
+            raise LabContractError("VIDEO_EVAL_CANARY purpose must be shadow_compare")
+        return {"source": source, "routes": list(VIDEO_EVAL_ROUTES), "purpose": purpose}
 
     operation = str(data.get("operation") or "dd_table").strip()
     if operation not in ALLOWED_DDS3_OPERATIONS:

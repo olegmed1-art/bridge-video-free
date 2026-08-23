@@ -12,7 +12,14 @@ from assistant_lab.contract import (
     verify_dds3_result,
 )
 from assistant_lab.dispatch import dispatch_nonce_sha256, verify_dispatch_nonce
-from assistant_lab.worker import validate_local_dds3_url, validate_neon_dsn
+from assistant_lab.contract import LabJob
+from assistant_lab.worker import (
+    WorkerConfig,
+    execute_job,
+    validate_local_dds3_url,
+    validate_local_video_eval_url,
+    validate_neon_dsn,
+)
 
 
 def test_priority_contract_is_stable():
@@ -49,6 +56,73 @@ def test_arbitrary_job_and_dds3_operations_are_rejected():
         validate_job_payload("SHELL", {"command": "id"})
     with pytest.raises(LabContractError):
         validate_job_payload("DDS3_COMPUTE", {"operation": "image_dd_table"})
+
+
+def _video_canary_payload():
+    return {
+        "source": {
+            "namespace": "schoolns",
+            "bucket": "video-canary",
+            "object_name": "explicit/test-001.mp4",
+            "sha256": "a" * 64,
+        },
+        "routes": ["local", "oci"],
+        "purpose": "shadow_compare",
+    }
+
+
+def test_video_eval_canary_requires_one_explicit_immutable_source():
+    assert validate_job_payload("VIDEO_EVAL_CANARY", _video_canary_payload()) == _video_canary_payload()
+    for mutation in (
+        {"source": {**_video_canary_payload()["source"], "object_name": "*.mp4"}},
+        {"source": {**_video_canary_payload()["source"], "sha256": "unknown"}},
+        {"source": {**_video_canary_payload()["source"], "url": "https://example.com/video"}},
+        {"command": "ffmpeg ..."},
+        {"source": _video_canary_payload()["source"], "routes": ["local"], "purpose": "shadow_compare"},
+    ):
+        payload = {**_video_canary_payload(), **mutation}
+        with pytest.raises(LabContractError):
+            validate_job_payload("VIDEO_EVAL_CANARY", payload)
+
+
+def test_video_eval_canary_fails_closed_until_executor_is_configured():
+    payload = _video_canary_payload()
+    job = LabJob("job", "VIDEO_EVAL_CANARY", payload, 20, 1, 1)
+    config = WorkerConfig("unused", "worker", "http://127.0.0.1:8080/v1/compute", "unused")
+    with pytest.raises(LabContractError, match="NOT_CONFIGURED"):
+        execute_job(job, config)
+
+
+def test_video_eval_canary_calls_bounded_local_executor(monkeypatch):
+    payload = _video_canary_payload()
+    job = LabJob("job", "VIDEO_EVAL_CANARY", payload, 20, 1, 1)
+    config = WorkerConfig(
+        "unused", "worker", "http://127.0.0.1:8080/v1/compute", "unused",
+        video_eval_url="http://127.0.0.1:8090/v1/video-eval-canary",
+        video_eval_token="secret",
+    )
+    proven = {
+        "kind": "VIDEO_EVAL_CANARY", "status": "COMPLETED", "source": payload["source"],
+        "routes": {"local": {"status": "COMPLETED"}, "oci": {"status": "COMPLETED"}},
+        "comparison": {"status": "COMPLETED"},
+    }
+    called = {}
+    def fake_post(url, body, *, token, timeout):
+        called.update(url=url, body=body, token=token, timeout=timeout)
+        return proven
+    monkeypatch.setattr("assistant_lab.worker._post_json", fake_post)
+    assert execute_job(job, config) == proven
+    assert called["url"] == config.video_eval_url
+    assert called["body"] == payload
+
+
+def test_video_eval_endpoint_is_strictly_loopback():
+    good = "http://127.0.0.1:8090/v1/video-eval-canary"
+    assert validate_local_video_eval_url(good) == good
+    with pytest.raises(RuntimeError):
+        validate_local_video_eval_url("https://example.com/v1/video-eval-canary")
+    with pytest.raises(RuntimeError):
+        validate_local_video_eval_url("http://127.0.0.1:8090/arbitrary")
 
 
 def test_idempotency_key_is_deterministic_and_versioned():
@@ -131,6 +205,8 @@ def test_capability_route_cannot_accept_payload_in_url():
     assert "verify_dispatch_nonce" in main
     assert "validate_job_payload(row[\"kind\"], row[\"payload_json\"])" in main
     assert "payload:" not in main.split('def dispatch_assistant_lab_job', 1)[1].split('def _configuration_failure_category', 1)[0]
+    assert 'row["kind"] == "VIDEO_EVAL_CANARY"' in main
+    assert '"execution_path": "ORACLE_RESIDENT_ONLY"' in main
 
 
 def test_vercel_runtime_package_includes_assistant_lab():

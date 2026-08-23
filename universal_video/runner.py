@@ -332,6 +332,7 @@ def _asr(
         "condition_on_previous_text": False,
         "beam_size": 3 if strict else 5,
         "vad_filter": not retry,
+        "word_timestamps": True,
     }
     if initial_prompt:
         kwargs["initial_prompt"] = initial_prompt[:2000]
@@ -346,7 +347,36 @@ def _asr(
     for segment in segments:
         text = (segment.text or "").strip()
         if text:
-            out.append({"start": float(segment.start), "end": float(segment.end), "text": text})
+            item: dict[str, Any] = {
+                "start": float(segment.start),
+                "end": float(segment.end),
+                "text": text,
+            }
+            words = []
+            for word in getattr(segment, "words", None) or []:
+                token = str(getattr(word, "word", "") or "")
+                if not token.strip():
+                    continue
+                words.append(
+                    {
+                        "start": float(getattr(word, "start", segment.start)),
+                        "end": float(getattr(word, "end", segment.end)),
+                        "text": token,
+                        "confidence": round(float(getattr(word, "probability", 0.0)), 6),
+                    }
+                )
+            if words:
+                item["words"] = words
+                item["confidence"] = round(sum(x["confidence"] for x in words) / len(words), 6)
+            for source_name, output_name in (
+                ("avg_logprob", "avg_logprob"),
+                ("no_speech_prob", "no_speech_probability"),
+                ("compression_ratio", "compression_ratio"),
+            ):
+                value = getattr(segment, source_name, None)
+                if value is not None:
+                    item[output_name] = round(float(value), 6)
+            out.append(item)
 
     def _number(name: str) -> float | None:
         value = getattr(info, name, None)
@@ -562,15 +592,23 @@ def transcribe(
         if language and not qc.get("no_speech"):
             languages[language] += 1
         for segment in segments:
-            timeline.append(
-                {
-                    "start": round(start + segment["start"], 3),
-                    "end": round(min(duration, start + segment["end"]), 3),
-                    "text": segment["text"],
-                    "chunk": index,
-                    "unreliable": not qc["ok"],
-                }
-            )
+            item = {
+                **segment,
+                "start": round(start + segment["start"], 3),
+                "end": round(min(duration, start + segment["end"]), 3),
+                "chunk": index,
+                "unreliable": not qc["ok"],
+            }
+            if segment.get("words"):
+                item["words"] = [
+                    {
+                        **word,
+                        "start": round(start + float(word["start"]), 3),
+                        "end": round(min(duration, start + float(word["end"])), 3),
+                    }
+                    for word in segment["words"]
+                ]
+            timeline.append(item)
         qcs.append({"chunk": index, "start": round(start, 3), "end": round(end, 3), **qc})
         wav.unlink(missing_ok=True)
         if end >= duration:
@@ -582,21 +620,79 @@ def transcribe(
     return timeline, qcs, language, deduplicated
 
 
+def _scene_timestamps(video: Path, *, sensitivity: int, min_scene_seconds: int) -> list[float]:
+    """Return bounded scene changes using FFmpeg's content-difference score.
+
+    OCI exposes a 0..100 scene-sensitivity control but not its proprietary
+    threshold mapping.  This local equivalent maps higher sensitivity to a
+    lower FFmpeg scene threshold and then applies a minimum-distance guard.
+    """
+
+    if sensitivity <= 0:
+        return []
+    threshold = 0.55 - (0.50 * (sensitivity / 100.0))
+    proc = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel",
+            "info",
+            "-i",
+            str(video),
+            "-vf",
+            f"select='gt(scene,{threshold:.4f})',showinfo",
+            "-an",
+            "-f",
+            "null",
+            "-",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=3600,
+    )
+    if proc.returncode:
+        raise RuntimeError(f"scene detection failed rc={proc.returncode}: {(proc.stderr or '')[-2000:]}")
+    raw = [float(value) for value in re.findall(r"pts_time:([0-9]+(?:\.[0-9]+)?)", proc.stderr or "")]
+    selected: list[float] = []
+    for timestamp in raw:
+        if not selected or timestamp - selected[-1] >= min_scene_seconds:
+            selected.append(timestamp)
+    return selected
+
+
 def extract_keyframes(
     video: Path,
     output_dir: Path,
     duration: float,
     *,
     interval_seconds: int = 120,
+    strategy: str = "hybrid",
+    scene_sensitivity: int = 50,
+    min_scene_seconds: int = 5,
 ) -> list[dict[str, Any]]:
     if not MIN_FRAME_INTERVAL_SECONDS <= interval_seconds <= MAX_FRAME_INTERVAL_SECONDS:
         raise RuntimeError("frame interval outside hard safety range")
     output_dir.mkdir(parents=True, exist_ok=True)
-    timestamps = {0.0, max(0.0, duration - 0.5)}
-    t = float(interval_seconds)
-    while t < duration:
-        timestamps.add(t)
-        t += interval_seconds
+    if strategy not in {"interval", "scene", "hybrid"}:
+        raise RuntimeError("unknown frame strategy")
+    timestamps: dict[float, set[str]] = {
+        0.0: {"boundary"},
+        max(0.0, duration - 0.5): {"boundary"},
+    }
+    if strategy in {"interval", "hybrid"}:
+        t = float(interval_seconds)
+        while t < duration:
+            timestamps.setdefault(t, set()).add("interval")
+            t += interval_seconds
+    if strategy in {"scene", "hybrid"}:
+        for timestamp in _scene_timestamps(
+            video,
+            sensitivity=scene_sensitivity,
+            min_scene_seconds=min_scene_seconds,
+        ):
+            if 0 < timestamp < duration:
+                timestamps.setdefault(timestamp, set()).add("scene")
     frames: list[dict[str, Any]] = []
     for index, ts in enumerate(sorted(timestamps)):
         path = output_dir / f"frame-{index:04d}-{int(ts):06d}.jpg"
@@ -620,7 +716,14 @@ def extract_keyframes(
             timeout=120,
         )
         if path.exists() and path.stat().st_size:
-            frames.append({"time": round(ts, 3), "file": path.name, "sha256": _sha256(path)})
+            frames.append(
+                {
+                    "time": round(ts, 3),
+                    "file": path.name,
+                    "sha256": _sha256(path),
+                    "reasons": sorted(timestamps[ts]),
+                }
+            )
     return frames
 
 
@@ -761,6 +864,9 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
                 job_dir / "frames",
                 media["duration_seconds"],
                 interval_seconds=int(job.options.get("frame_interval_seconds") or 120),
+                strategy=str(job.options.get("frame_strategy") or "hybrid"),
+                scene_sensitivity=int(job.options.get("scene_sensitivity") or 50),
+                min_scene_seconds=int(job.options.get("min_scene_seconds") or 5),
             )
 
         manifest = {
@@ -778,6 +884,14 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
             "source": source_provenance,
             "media": media,
             "transcript": {
+                "engine": {
+                    "provider": "local",
+                    "family": "whisper",
+                    "implementation": "faster-whisper",
+                    "word_timestamps": True,
+                    "word_confidence": True,
+                    "diarization": False,
+                },
                 "language": language,
                 "segments": len(transcript),
                 "words": transcript_words,

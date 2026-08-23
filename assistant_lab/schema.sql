@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS assistant_lab.job (
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     source text NOT NULL DEFAULT 'CHATGPT',
-    kind text NOT NULL CHECK (kind IN ('DDS3_COMPUTE', 'NOOP')),
+    kind text NOT NULL CONSTRAINT job_kind_check
+        CHECK (kind IN ('DDS3_COMPUTE', 'NOOP', 'VIDEO_EVAL_CANARY')),
     priority smallint NOT NULL DEFAULT 20 CHECK (priority IN (0, 10, 20, 30)),
     status text NOT NULL DEFAULT 'QUEUED'
         CHECK (status IN ('QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED')),
@@ -31,6 +32,11 @@ CREATE TABLE IF NOT EXISTS assistant_lab.job (
     attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     max_attempts smallint NOT NULL DEFAULT 2 CHECK (max_attempts BETWEEN 1 AND 5)
 );
+
+-- Upgrade an already-created v1 queue without broadening any database grants.
+ALTER TABLE assistant_lab.job DROP CONSTRAINT IF EXISTS job_kind_check;
+ALTER TABLE assistant_lab.job ADD CONSTRAINT job_kind_check
+    CHECK (kind IN ('DDS3_COMPUTE', 'NOOP', 'VIDEO_EVAL_CANARY'));
 
 CREATE INDEX IF NOT EXISTS assistant_lab_job_queue_idx
     ON assistant_lab.job (priority, created_at)
@@ -129,6 +135,13 @@ BEGIN
                 NEW.provenance_json,
                 '{execution_path}',
                 to_jsonb('vercel_noop'::text),
+                true
+            );
+        ELSIF NEW.kind = 'VIDEO_EVAL_CANARY' THEN
+            NEW.provenance_json := jsonb_set(
+                NEW.provenance_json,
+                '{execution_path}',
+                to_jsonb('oracle_local_video_eval_executor'::text),
                 true
             );
         END IF;

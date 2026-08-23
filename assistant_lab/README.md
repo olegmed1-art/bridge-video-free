@@ -1,5 +1,14 @@
 # Assistant Lab v1
 
+## Bounded video evaluation canary
+
+`VIDEO_EVAL_CANARY` accepts exactly one immutable OCI Object Storage object,
+pinned by namespace, bucket, full object name, and SHA-256. It rejects wildcard
+discovery, URLs, shell commands, extra fields, and single-route runs. The worker
+calls only an authenticated loopback executor at the exact configured endpoint.
+Missing configuration, incomplete routes, an absent comparison, or mismatched
+source SHA-256 fails the job closed instead of fabricating a completed result.
+
 Status: **activated / production queue, capability dispatch, and resident Oracle worker proven**.
 
 `assistant_lab` is an isolated compute-and-evaluation contour for improving the assistant's project workflows. It is not a second school canon, not a student-profile writer, and not a mechanism for silently changing bridge methodology.

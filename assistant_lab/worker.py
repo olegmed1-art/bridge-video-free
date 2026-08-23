@@ -44,6 +44,9 @@ class WorkerConfig:
     wake_timeout_seconds: float = 2.0
     stale_after_seconds: int = 900
     heartbeat_interval_seconds: int = 30
+    video_eval_url: str | None = None
+    video_eval_token: str | None = None
+    video_eval_timeout_seconds: float = 1800.0
 
 
 def _require_env(name: str) -> str:
@@ -89,6 +92,18 @@ def validate_local_dds3_url(raw: str) -> str:
     return value
 
 
+def validate_local_video_eval_url(raw: str) -> str:
+    value = raw.strip()
+    parsed = urllib.parse.urlsplit(value)
+    if parsed.scheme != "http" or (parsed.hostname or "").lower() not in LOCAL_DDS3_HOSTS:
+        raise RuntimeError("assistant-lab video evaluator must be localhost HTTP")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise RuntimeError("assistant-lab video evaluator contains forbidden URL components")
+    if parsed.port != 8090 or parsed.path != "/v1/video-eval-canary":
+        raise RuntimeError("assistant-lab video evaluator must be localhost:8090/v1/video-eval-canary")
+    return value
+
+
 def load_config() -> WorkerConfig:
     worker_id = os.getenv("ASSISTANT_LAB_WORKER_ID", f"{socket.gethostname()}:{os.getpid()}").strip()
     if not worker_id:
@@ -99,6 +114,10 @@ def load_config() -> WorkerConfig:
         raise RuntimeError("assistant-lab stale timeout is too small")
     if heartbeat_interval < 5 or heartbeat_interval * 3 >= stale_after:
         raise RuntimeError("assistant-lab heartbeat interval is inconsistent with stale timeout")
+    video_eval_url_raw = os.getenv("ASSISTANT_LAB_VIDEO_EVAL_URL", "").strip()
+    video_eval_token = os.getenv("ASSISTANT_LAB_VIDEO_EVAL_TOKEN", "").strip()
+    if bool(video_eval_url_raw) != bool(video_eval_token):
+        raise RuntimeError("assistant-lab video evaluator URL and token must be configured together")
     return WorkerConfig(
         dsn=validate_neon_dsn(_require_env("ASSISTANT_LAB_DATABASE_URL")),
         worker_id=worker_id,
@@ -110,7 +129,29 @@ def load_config() -> WorkerConfig:
         wake_timeout_seconds=float(os.getenv("ASSISTANT_LAB_WAKE_TIMEOUT_SECONDS", "2")),
         stale_after_seconds=stale_after,
         heartbeat_interval_seconds=heartbeat_interval,
+        video_eval_url=validate_local_video_eval_url(video_eval_url_raw) if video_eval_url_raw else None,
+        video_eval_token=video_eval_token or None,
+        video_eval_timeout_seconds=float(os.getenv("ASSISTANT_LAB_VIDEO_EVAL_TIMEOUT_SECONDS", "1800")),
     )
+
+
+def verify_video_eval_result(result: Any, *, expected_sha256: str) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        raise LabContractError("video evaluator result must be an object")
+    if result.get("kind") != "VIDEO_EVAL_CANARY" or result.get("status") != "COMPLETED":
+        raise LabContractError("video evaluator did not prove completed canary execution")
+    source = result.get("source")
+    if not isinstance(source, dict) or source.get("sha256") != expected_sha256:
+        raise LabContractError("video evaluator source provenance mismatch")
+    routes = result.get("routes")
+    if not isinstance(routes, dict) or set(routes) != {"local", "oci"}:
+        raise LabContractError("video evaluator must report exactly local and oci routes")
+    if any(not isinstance(routes[name], dict) or routes[name].get("status") != "COMPLETED" for name in routes):
+        raise LabContractError("video evaluator route did not complete")
+    comparison = result.get("comparison")
+    if not isinstance(comparison, dict) or comparison.get("status") != "COMPLETED":
+        raise LabContractError("video evaluator comparison did not complete")
+    return result
 
 
 def _connect(dsn: str, *, autocommit: bool = False):
@@ -260,6 +301,16 @@ def _post_json(url: str, payload: dict[str, Any], *, token: str, timeout: float)
 def execute_job(job: LabJob, config: WorkerConfig) -> dict[str, Any]:
     if job.kind == "NOOP":
         return {"ok": True, "kind": "NOOP", "echo": job.payload, "contract": CONTRACT_VERSION}
+    if job.kind == "VIDEO_EVAL_CANARY":
+        if not config.video_eval_url or not config.video_eval_token:
+            raise LabContractError("VIDEO_EVAL_EXECUTOR_NOT_CONFIGURED")
+        result = _post_json(
+            config.video_eval_url,
+            job.payload,
+            token=config.video_eval_token,
+            timeout=config.video_eval_timeout_seconds,
+        )
+        return verify_video_eval_result(result, expected_sha256=job.payload["source"]["sha256"])
     if job.kind != "DDS3_COMPUTE":
         raise LabContractError("unsupported assistant-lab job kind")
     operation = str(job.payload.get("operation") or "dd_table")
@@ -276,7 +327,13 @@ def mark_completed(job: LabJob, result: dict[str, Any], config: WorkerConfig) ->
     provenance = {
         "assistant_lab_contract": CONTRACT_VERSION,
         "worker_id": config.worker_id,
-        "execution_path": "oracle_local_dds3" if job.kind == "DDS3_COMPUTE" else "oracle_noop",
+        "execution_path": (
+            "oracle_local_dds3"
+            if job.kind == "DDS3_COMPUTE"
+            else "oracle_local_video_eval_executor"
+            if job.kind == "VIDEO_EVAL_CANARY"
+            else "oracle_noop"
+        ),
     }
     with _connect(config.dsn) as conn, conn.cursor() as cur:
         cur.execute(

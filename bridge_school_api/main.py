@@ -223,6 +223,15 @@ def dispatch_assistant_lab_job(
             )
             conn.commit()
             raise HTTPException(status_code=422, detail="invalid assistant-lab job") from exc
+        if row["kind"] == "VIDEO_EVAL_CANARY":
+            # Video evaluation is resident-only. Never reinterpret this typed
+            # job as DDS3 in the public capability-dispatch path; leave it
+            # queued for the authenticated loopback executor on Oracle.
+            conn.rollback()
+            return JSONResponse(
+                {"job_id": str(job_id), "status": "QUEUED", "execution_path": "ORACLE_RESIDENT_ONLY"},
+                status_code=202,
+            )
         cur.execute(
             """
             UPDATE assistant_lab.job
