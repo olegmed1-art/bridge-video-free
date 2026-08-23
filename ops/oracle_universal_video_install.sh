@@ -3,13 +3,15 @@ set -Eeuo pipefail
 
 # Side-by-side installer for the universal educational video analyzer.
 # It must not stop/restart assistant-lab.service or DDS3 and starts no video job.
+# The analyzer runs from its own read-only source checkout so updates never touch
+# the checkout used by Assistant Lab.
 
 USER_NAME="${UNIVERSAL_VIDEO_UNIX_USER:-universal-video}"
 GROUP_NAME="${UNIVERSAL_VIDEO_UNIX_GROUP:-universal-video}"
 BASE_DIR="${UNIVERSAL_VIDEO_DIR:-/opt/bridge-school/universal-video}"
-REPO_DIR="${UNIVERSAL_VIDEO_REPO_DIR:-/opt/bridge-school/bridge-video-free}"
+SOURCE_DIR="${UNIVERSAL_VIDEO_SOURCE_DIR:-/opt/bridge-school/universal-video-src}"
 SERVICE_NAME="${UNIVERSAL_VIDEO_SERVICE_NAME:-universal-video.service}"
-SERVICE_SRC="$REPO_DIR/deploy/oracle-universal-video/universal-video.service"
+SERVICE_SRC="$SOURCE_DIR/deploy/oracle-universal-video/universal-video.service"
 SERVICE_DST="/etc/systemd/system/$SERVICE_NAME"
 ACTIVATE="${UNIVERSAL_VIDEO_ACTIVATE:-1}"
 MODEL="${UNIVERSAL_VIDEO_WHISPER_MODEL:-small}"
@@ -23,13 +25,17 @@ die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$ACTIVATE" =~ ^[01]$ ]] || die "UNIVERSAL_VIDEO_ACTIVATE must be 0 or 1"
 [[ "$PREWARM" =~ ^[01]$ ]] || die "UNIVERSAL_VIDEO_PREWARM_MODEL must be 0 or 1"
 [[ "$THREADS" =~ ^[1-9][0-9]*$ ]] || die "UNIVERSAL_VIDEO_ASR_THREADS must be positive"
-[[ -d "$REPO_DIR/.git" ]] || die "repository checkout missing at $REPO_DIR"
-[[ -f "$REPO_DIR/universal_video/runner.py" ]] || die "universal video code missing"
-[[ -f "$REPO_DIR/requirements-universal-video.txt" ]] || die "requirements file missing"
+[[ -d "$SOURCE_DIR/.git" ]] || die "isolated source checkout missing at $SOURCE_DIR"
+[[ -f "$SOURCE_DIR/universal_video/runner.py" ]] || die "universal video code missing"
+[[ -f "$SOURCE_DIR/requirements-universal-video.txt" ]] || die "requirements file missing"
 [[ -f "$SERVICE_SRC" ]] || die "systemd unit missing"
 
+SOURCE_COMMIT="$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || true)"
+[[ -n "$SOURCE_COMMIT" ]] || die "cannot resolve isolated source commit"
+log "Universal-video source commit: $SOURCE_COMMIT"
+
 log "Read-only protection gate for currently running compute"
-bash "$REPO_DIR/ops/oracle_universal_video_preflight.sh"
+bash "$SOURCE_DIR/ops/oracle_universal_video_preflight.sh"
 BEFORE_ASSISTANT="$(systemctl is-active assistant-lab.service)"
 BEFORE_READY="$(curl -fsS --max-time 8 http://127.0.0.1:8080/readyz)"
 
@@ -56,15 +62,17 @@ done
 log "Build isolated Python runtime"
 python3 -m venv "$BASE_DIR/.venv"
 "$BASE_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --upgrade pip >/dev/null
-"$BASE_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir -r "$REPO_DIR/requirements-universal-video.txt"
+"$BASE_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir -r "$SOURCE_DIR/requirements-universal-video.txt"
 chown -R "$USER_NAME:$GROUP_NAME" "$BASE_DIR/.venv"
 
 log "Verify runtime imports"
-PYTHONPATH="$REPO_DIR" "$BASE_DIR/.venv/bin/python" - <<'PY'
+PYTHONPATH="$SOURCE_DIR" "$BASE_DIR/.venv/bin/python" - <<'PY'
 from universal_video.contract import validate_job
 from universal_video.profiles import PROFILES
 from faster_whisper import WhisperModel
 assert 'transcript_only' in PROFILES
+assert 'educational' in PROFILES
+assert 'bridge_lesson' in PROFILES
 validate_job({'job_id':'install-smoke','profile':'transcript_only','source':{'kind':'local_path','path':'/opt/bridge-school/universal-video/media/test.mp4'}}, allowed_local_root='/opt/bridge-school/universal-video/media')
 print('UNIVERSAL_VIDEO_IMPORTS_PASS')
 PY
@@ -89,6 +97,7 @@ UNIVERSAL_VIDEO_MEDIA_ROOT=$BASE_DIR/media
 UNIVERSAL_VIDEO_WHISPER_MODEL=$MODEL
 UNIVERSAL_VIDEO_ASR_THREADS=$THREADS
 UNIVERSAL_VIDEO_POLL_SECONDS=2
+UNIVERSAL_VIDEO_SOURCE_COMMIT=$SOURCE_COMMIT
 EOF
 chown root:root "$BASE_DIR/universal-video.env"
 chmod 0644 "$BASE_DIR/universal-video.env"
@@ -119,4 +128,4 @@ for x in (before,after):
 print('CURRENT_COMPUTE_NONREGRESSION_PASS')
 PY
 
-printf 'UNIVERSAL_VIDEO_INSTALL_PASS activated=%s model=%s threads=%s\n' "$ACTIVATE" "$MODEL" "$THREADS"
+printf 'UNIVERSAL_VIDEO_INSTALL_PASS activated=%s model=%s threads=%s source_commit=%s\n' "$ACTIVATE" "$MODEL" "$THREADS" "$SOURCE_COMMIT"
