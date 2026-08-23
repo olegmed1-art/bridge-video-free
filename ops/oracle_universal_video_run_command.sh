@@ -71,8 +71,18 @@ printf 'source_commit=%s\n' "$RESOLVED_COMMIT"
 printf 'assistant_lab=%s\n' "$(systemctl is-active assistant-lab.service)"
 printf 'universal_video_enabled=%s\n' "$(systemctl is-enabled universal-video.service 2>/dev/null || true)"
 printf 'universal_video_active=%s\n' "$(systemctl is-active universal-video.service 2>/dev/null || true)"
-secrets_file="$BASE_DIR/universal-video-secrets.env"
-if [[ -f "$secrets_file" ]] && grep -Eq '^(GOOGLE_DRIVE_OAUTH_JSON|GOOGLE_DRIVE_OAUTH_CLIENT_ID|GOOGLE_SERVICE_ACCOUNT_JSON)=' "$secrets_file"; then
+drive_file="$BASE_DIR/secrets/google-drive-oauth.json"
+if [[ -f "$drive_file" ]] && DRIVE_OAUTH_FILE="$drive_file" python3 - <<'PY'
+import json, os
+from pathlib import Path
+try:
+    x=json.loads(Path(os.environ['DRIVE_OAUTH_FILE']).read_text(encoding='utf-8'))
+    ok=isinstance(x, dict) and all(isinstance(x.get(k), str) and x[k].strip() for k in ('client_id','client_secret','refresh_token'))
+except Exception:
+    ok=False
+raise SystemExit(0 if ok else 1)
+PY
+then
   echo 'universal_video_drive_auth=CONFIGURED'
 else
   echo 'universal_video_drive_auth=NOT_CONFIGURED_LOCAL_PATH_ONLY'
