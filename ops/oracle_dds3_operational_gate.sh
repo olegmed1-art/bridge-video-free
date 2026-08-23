@@ -201,9 +201,9 @@ ALERTS_JSON="$(oci budgets budget alert-rule list --budget-id "$BUDGET_ID" --all
 wait_alert_active(){
   local alert_rule_id="$1" state=""
   for _ in $(seq 1 30); do
-    state="$(oci budgets budget alert-rule get \\
-      --budget-id "$BUDGET_ID" \\
-      --alert-rule-id "$alert_rule_id" \\
+    state="$(oci budgets budget alert-rule get \
+      --budget-id "$BUDGET_ID" \
+      --alert-rule-id "$alert_rule_id" \
       --query data.state --raw-output 2>/dev/null || true)"
     [[ "$state" == "ACTIVE" ]] && return 0
     sleep 2
@@ -212,10 +212,10 @@ wait_alert_active(){
 }
 verify_alert_config(){
   local alert_rule_id="$1" alert_type="$2" threshold="$3" display_name="$4"
-  oci budgets budget alert-rule get \\
-    --budget-id "$BUDGET_ID" \\
-    --alert-rule-id "$alert_rule_id" \\
-    --output json | \\
+  oci budgets budget alert-rule get \
+    --budget-id "$BUDGET_ID" \
+    --alert-rule-id "$alert_rule_id" \
+    --output json | \
     EXPECTED_TYPE="$alert_type" EXPECTED_THRESHOLD="$threshold" EXPECTED_NAME="$display_name" EXPECTED_EMAIL="$BUDGET_EMAIL" python3 -c '
 import json, os, re, sys
 x=json.load(sys.stdin)["data"]
@@ -223,7 +223,7 @@ assert x.get("display-name") == os.environ["EXPECTED_NAME"], x
 assert x.get("type") == os.environ["EXPECTED_TYPE"], x
 assert x.get("threshold-type") == "PERCENTAGE", x
 assert float(x.get("threshold", -1)) == float(os.environ["EXPECTED_THRESHOLD"]), x
-recipients={p for p in re.split(r"[,;\\s]+", str(x.get("recipients") or "")) if p}
+recipients={p for p in re.split(r"[,;\s]+", str(x.get("recipients") or "")) if p}
 assert os.environ["EXPECTED_EMAIL"] in recipients, x
 assert x.get("state") == "ACTIVE", x
 '
@@ -235,15 +235,15 @@ ensure_alert(){
   [[ "$alert_count" == "0" || "$alert_count" == "1" ]] || die "Duplicate budget alert name: $display_name"
   alert_id="$(printf '%s' "$ALERTS_JSON" | ALERT_NAME="$display_name" python3 -c 'import json,sys,os; name=os.environ["ALERT_NAME"]; xs=[x for x in json.load(sys.stdin).get("data",[]) if x.get("display-name")==name]; print(xs[0].get("id","") if xs else "")')"
   if nullish "$alert_id"; then
-    alert_id="$(oci budgets budget alert-rule create \\
-      --budget-id "$BUDGET_ID" \\
-      --display-name "$display_name" \\
-      --description "Bridge School Oracle guard $display_name" \\
-      --threshold "$threshold" \\
-      --threshold-type PERCENTAGE \\
-      --type "$alert_type" \\
-      --recipients "$BUDGET_EMAIL" \\
-      --message "OCI Bridge School budget alert: $display_name" \\
+    alert_id="$(oci budgets budget alert-rule create \
+      --budget-id "$BUDGET_ID" \
+      --display-name "$display_name" \
+      --description "Bridge School Oracle guard $display_name" \
+      --threshold "$threshold" \
+      --threshold-type PERCENTAGE \
+      --type "$alert_type" \
+      --recipients "$BUDGET_EMAIL" \
+      --message "OCI Bridge School budget alert: $display_name" \
       --query data.id --raw-output)"
     nullish "$alert_id" && die "Created alert $display_name without an ID"
     wait_alert_active "$alert_id"
