@@ -11,6 +11,7 @@ on:
       - 'deploy/oracle-assistant-lab/**'
       - 'ops/oracle_assistant_lab_preflight.sh'
       - 'ops/oracle_assistant_lab_install.sh'
+      - 'ops/oracle_assistant_lab_observer_install.sh'
       - 'ops/oracle_dds3_host_repair.sh'
       - 'ops/oracle_dds3_operational_gate.sh'
   workflow_dispatch:
@@ -30,7 +31,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install bounded test dependencies
-        run: python -m pip install --disable-pip-version-check 'pytest>=8,<9' 'psycopg[binary]>=3.2,<3.3'
+        run: python -m pip install --disable-pip-version-check 'pytest>=8,<9' 'psycopg[binary]>=3.2,<3.3' 'psutil>=7,<8'
       - name: Compile Assistant Lab
         run: python -m compileall -q assistant_lab
       - name: Validate Oracle scripts
@@ -39,6 +40,7 @@ jobs:
           set -euo pipefail
           bash -n ops/oracle_assistant_lab_preflight.sh
           bash -n ops/oracle_assistant_lab_install.sh
+          bash -n ops/oracle_assistant_lab_observer_install.sh
           bash -n ops/oracle_dds3_host_repair.sh
           bash -n ops/oracle_dds3_operational_gate.sh
           python - <<'PY'
@@ -54,13 +56,22 @@ jobs:
           assert "curl_json_retry" in text
           PY
       - name: Run Assistant Lab contract tests
-        run: python -m pytest -q tests/test_assistant_lab_contract.py tests/test_assistant_lab_bootstrap.py
+        run: python -m pytest -q tests/test_assistant_lab_contract.py tests/test_assistant_lab_bootstrap.py tests/test_assistant_lab_observer.py
       - name: Verify bootstrap schema boundaries
         shell: bash
         run: |
           set -euo pipefail
           ! grep -RniE 'public\.skill|ai\.system_rule|student_profile' assistant_lab/schema.sql assistant_lab/bootstrap_schema.sql
           ! grep -RniE 'GRANT[[:space:]]+(INSERT|DELETE).*bootstrap_ticket' assistant_lab/bootstrap_schema.sql
+      - name: Verify observer isolation contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'video_analyzer_result_consumed.*False' assistant_lab/observer.py
+          grep -q 'other_oracle_tool_results_consumed.*False' assistant_lab/observer.py
+          grep -q 'User=assistant-lab-observer' deploy/oracle-assistant-lab/assistant-lab-observer.service
+          grep -q 'NoNewPrivileges=true' deploy/oracle-assistant-lab/assistant-lab-observer.service
+          grep -q 'ReadWritePaths=/opt/bridge-school/assistant-lab-observer' deploy/oracle-assistant-lab/assistant-lab-observer.service
       - name: Record schema checksums
         shell: bash
         run: |
