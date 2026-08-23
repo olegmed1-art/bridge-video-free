@@ -42,6 +42,7 @@ if ! command -v git >/dev/null 2>&1; then
 fi
 mkdir -p "$(dirname "$SOURCE_DIR")"
 if [[ -d "$SOURCE_DIR/.git" ]]; then
+  chmod -R u+w "$SOURCE_DIR"
   current_origin="$(git -C "$SOURCE_DIR" remote get-url origin 2>/dev/null || true)"
   [[ "$current_origin" == "$REPO_URL" ]] || die "unexpected origin in isolated source checkout: $current_origin"
   [[ -z "$(git -C "$SOURCE_DIR" status --porcelain)" ]] || die "isolated source checkout is dirty"
@@ -97,7 +98,7 @@ if [[ "$RUN_SMOKE" == "1" ]]; then
   ffmpeg -hide_banner -loglevel error -y \
     -f lavfi -i color=c=black:s=320x180:d=3 \
     -f lavfi -i sine=frequency=440:duration=3 \
-    -shortest -c:v libx264 -pix_fmt yuv420p -c:a aac "$media"
+    -shortest -c:v mpeg4 -q:v 10 -pix_fmt yuv420p -c:a aac "$media"
   chown universal-video:universal-video "$media"
   cat >"$job.tmp" <<EOF
 {"job_id":"universal-video-smoke","profile":"transcript_only","project":"infrastructure-smoke","source":{"kind":"local_path","path":"$media"},"metadata":{"synthetic":true},"options":{"max_duration_seconds":10,"chunk_seconds":60}}
