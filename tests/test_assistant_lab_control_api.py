@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi import HTTPException
 
-from assistant_lab.control_api import RunRequest, healthz, run
+from assistant_lab.control_api import RunRequest, experiment, healthz, run
 
 
 def _configure(monkeypatch, tmp_path: Path):
@@ -66,3 +66,33 @@ def test_unknown_tool_cannot_become_arbitrary_command(monkeypatch, tmp_path):
                        experiment_id="CTRL-TEST-2"), f"Bearer {token}")
     assert exc.value.status_code == 404
     assert not (tmp_path / "jobs" / "pending" / "CTRL-TEST-2.json").exists()
+
+
+def test_experiment_prefers_checksum_verified_final_report(monkeypatch, tmp_path):
+    token, _, _ = _configure(monkeypatch, tmp_path)
+    experiment_id = "CTRL-FINAL-1"
+    experiment_dir = tmp_path / "experiments" / experiment_id
+    observer_dir = experiment_dir / "observer"
+    observer_dir.mkdir(parents=True)
+    sealed_report = {
+        "schema": "assistant-lab-observer-report/v0.2",
+        "experiment_id": experiment_id,
+        "tool_id": "health.noop",
+        "source_sha256": "a" * 64,
+        "exit_code": 0,
+        "archive_status": "PENDING",
+        "archive_location": str(tmp_path / "archive" / experiment_id),
+    }
+    (observer_dir / "observer_report.json").write_text(json.dumps(sealed_report), encoding="utf-8")
+
+    archive_dir = tmp_path / "archive" / experiment_id
+    archive_dir.mkdir(parents=True)
+    done_dir = tmp_path / "jobs" / "done"
+    done_dir.mkdir(parents=True)
+    final_report = {**sealed_report, "archive_status": "COPIED"}
+    (done_dir / f"{experiment_id}.result.json").write_text(json.dumps(final_report), encoding="utf-8")
+
+    result = experiment(experiment_id, f"Bearer {token}")
+
+    assert result["observer_report"]["exit_code"] == 0
+    assert result["observer_report"]["archive_status"] == "COPIED"
