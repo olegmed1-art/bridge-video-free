@@ -6,21 +6,21 @@ from universal_video.contract import VideoContractError, canonical_job_hash, val
 from universal_video.profiles import PROFILES
 
 
-def test_diana_is_project_metadata_not_a_special_profile(tmp_path: Path):
+def test_project_metadata_does_not_create_special_profile(tmp_path: Path):
     media = tmp_path / "lesson.mp4"
     media.write_bytes(b"placeholder")
     job = validate_job(
         {
-            "job_id": "diana-004",
+            "job_id": "series-004",
             "profile": "bridge_lesson",
-            "project": "diana_250",
+            "project": "training_series",
             "source": {"kind": "local_path", "path": str(media)},
         },
         allowed_local_root=str(tmp_path),
     )
     assert job.profile == "bridge_lesson"
-    assert job.project == "diana_250"
-    assert "diana_250" not in PROFILES
+    assert job.project == "training_series"
+    assert "training_series" not in PROFILES
 
 
 def test_local_path_cannot_escape_media_root(tmp_path: Path):

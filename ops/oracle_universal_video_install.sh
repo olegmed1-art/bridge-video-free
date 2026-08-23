@@ -13,6 +13,9 @@ SOURCE_DIR="${UNIVERSAL_VIDEO_SOURCE_DIR:-/opt/bridge-school/universal-video-src
 SERVICE_NAME="${UNIVERSAL_VIDEO_SERVICE_NAME:-universal-video.service}"
 SERVICE_SRC="$SOURCE_DIR/deploy/oracle-universal-video/universal-video.service"
 SERVICE_DST="/etc/systemd/system/$SERVICE_NAME"
+SECRETS_DIR="${UNIVERSAL_VIDEO_SECRETS_DIR:-$BASE_DIR/secrets}"
+SECRETS_ENV_FILE="${UNIVERSAL_VIDEO_SECRETS_ENV_FILE:-$BASE_DIR/universal-video-secrets.env}"
+DRIVE_OAUTH_FILE="${UNIVERSAL_VIDEO_DRIVE_OAUTH_FILE:-$SECRETS_DIR/google-drive-oauth.json}"
 ACTIVATE="${UNIVERSAL_VIDEO_ACTIVATE:-1}"
 MODEL="${UNIVERSAL_VIDEO_WHISPER_MODEL:-small}"
 THREADS="${UNIVERSAL_VIDEO_ASR_THREADS:-6}"
@@ -58,6 +61,30 @@ fi
 for d in "$BASE_DIR" "$BASE_DIR/spool" "$BASE_DIR/spool/inbox" "$BASE_DIR/spool/running" "$BASE_DIR/spool/done" "$BASE_DIR/spool/failed" "$BASE_DIR/spool/results" "$BASE_DIR/model-cache" "$BASE_DIR/media" "$BASE_DIR/output"; do
   install -d -m 0750 -o "$USER_NAME" -g "$GROUP_NAME" "$d"
 done
+install -d -m 0750 -o root -g "$GROUP_NAME" "$SECRETS_DIR"
+
+log "Prepare file-backed secret boundary for optional Google Drive sources"
+if [[ ! -e "$SECRETS_ENV_FILE" ]]; then
+  printf 'GOOGLE_DRIVE_OAUTH_JSON_FILE=%s\n' "$DRIVE_OAUTH_FILE" >"$SECRETS_ENV_FILE"
+fi
+chown root:"$GROUP_NAME" "$SECRETS_ENV_FILE"
+chmod 0640 "$SECRETS_ENV_FILE"
+if [[ -f "$DRIVE_OAUTH_FILE" ]]; then
+  chown root:"$GROUP_NAME" "$DRIVE_OAUTH_FILE"
+  chmod 0640 "$DRIVE_OAUTH_FILE"
+  DRIVE_OAUTH_FILE="$DRIVE_OAUTH_FILE" python3 - <<'PY'
+import json, os
+from pathlib import Path
+p=Path(os.environ['DRIVE_OAUTH_FILE'])
+x=json.loads(p.read_text(encoding='utf-8'))
+assert isinstance(x, dict)
+for key in ('client_id','client_secret','refresh_token'):
+    assert isinstance(x.get(key), str) and x[key].strip(), key
+print('UNIVERSAL_VIDEO_DRIVE_SECRET=CONFIGURED')
+PY
+else
+  echo 'UNIVERSAL_VIDEO_DRIVE_SECRET=NOT_CONFIGURED_LOCAL_PATH_ONLY'
+fi
 
 log "Build isolated Python runtime"
 python3 -m venv "$BASE_DIR/.venv"
@@ -68,6 +95,7 @@ chown -R "$USER_NAME:$GROUP_NAME" "$BASE_DIR/.venv"
 log "Verify runtime imports"
 PYTHONPATH="$SOURCE_DIR" "$BASE_DIR/.venv/bin/python" - <<'PY'
 from universal_video.contract import validate_job
+from universal_video.drive_adapter import access_token
 from universal_video.profiles import PROFILES
 from faster_whisper import WhisperModel
 assert 'transcript_only' in PROFILES
@@ -107,7 +135,15 @@ install -m 0644 -o root -g root "$SERVICE_SRC" "$SERVICE_DST"
 systemctl daemon-reload
 systemd-analyze verify "$SERVICE_DST" >/dev/null
 if [[ "$ACTIVATE" == "1" ]]; then
-  systemctl enable --now "$SERVICE_NAME"
+  systemctl enable "$SERVICE_NAME" >/dev/null
+  if systemctl is-active --quiet "$SERVICE_NAME"; then
+    if find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit | grep -q .; then
+      die "universal-video has a running job; refusing to restart for upgrade"
+    fi
+    systemctl restart "$SERVICE_NAME"
+  else
+    systemctl start "$SERVICE_NAME"
+  fi
   sleep 2
   systemctl is-active --quiet "$SERVICE_NAME" || {
     journalctl -u "$SERVICE_NAME" -n 60 --no-pager >&2 || true

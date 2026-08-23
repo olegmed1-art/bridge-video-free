@@ -9,6 +9,7 @@ User=universal-video
 Group=universal-video
 WorkingDirectory=/opt/bridge-school/universal-video-src
 EnvironmentFile=/opt/bridge-school/universal-video/universal-video.env
+EnvironmentFile=-/opt/bridge-school/universal-video/universal-video-secrets.env
 Environment=PYTHONPATH=/opt/bridge-school/universal-video-src
 Environment=HF_HOME=/opt/bridge-school/universal-video/model-cache
 ExecStart=/opt/bridge-school/universal-video/.venv/bin/python -m universal_video.spool_worker

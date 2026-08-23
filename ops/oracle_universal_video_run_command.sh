@@ -71,6 +71,22 @@ printf 'source_commit=%s\n' "$RESOLVED_COMMIT"
 printf 'assistant_lab=%s\n' "$(systemctl is-active assistant-lab.service)"
 printf 'universal_video_enabled=%s\n' "$(systemctl is-enabled universal-video.service 2>/dev/null || true)"
 printf 'universal_video_active=%s\n' "$(systemctl is-active universal-video.service 2>/dev/null || true)"
+drive_file="$BASE_DIR/secrets/google-drive-oauth.json"
+if [[ -f "$drive_file" ]] && DRIVE_OAUTH_FILE="$drive_file" python3 - <<'PY'
+import json, os
+from pathlib import Path
+try:
+    x=json.loads(Path(os.environ['DRIVE_OAUTH_FILE']).read_text(encoding='utf-8'))
+    ok=isinstance(x, dict) and all(isinstance(x.get(k), str) and x[k].strip() for k in ('client_id','client_secret','refresh_token'))
+except Exception:
+    ok=False
+raise SystemExit(0 if ok else 1)
+PY
+then
+  echo 'universal_video_drive_auth=CONFIGURED'
+else
+  echo 'universal_video_drive_auth=NOT_CONFIGURED_LOCAL_PATH_ONLY'
+fi
 ffmpeg -version | head -1
 "$BASE_DIR/.venv/bin/python" --version
 runuser -u universal-video -- env HF_HOME="$BASE_DIR/model-cache" "$BASE_DIR/.venv/bin/python" - <<'PY'
