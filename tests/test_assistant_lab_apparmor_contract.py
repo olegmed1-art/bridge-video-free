@@ -14,6 +14,7 @@ def test_observer_enters_bwrap_profile_without_disabling_no_new_privileges():
     assert "NoNewPrivileges=false" not in text
     assert "ProtectSystem=strict" in text
     assert "ProtectKernelTunables=true" not in text
+    assert "ProtectKernelLogs=true" not in text
     assert "ProtectKernelModules=true" in text
 
 

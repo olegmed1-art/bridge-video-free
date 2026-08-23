@@ -26,8 +26,10 @@ ProtectSystem=strict
 # Deliberately omit ProtectKernelTunables: its /proc/sys submount makes the
 # kernel reject bwrap's fresh procfs mount inside an unprivileged user namespace.
 # The service user is unprivileged and NoNewPrivileges remains enforced.
+# ProtectKernelLogs is also deliberately omitted: masking /proc/kmsg creates
+# another submount that prevents bwrap from mounting its isolated procfs.
+# This unprivileged service has no CAP_SYSLOG and keeps NoNewPrivileges enabled.
 ProtectKernelModules=true
-ProtectKernelLogs=true
 ProtectControlGroups=true
 LockPersonality=true
 RestrictRealtime=true
