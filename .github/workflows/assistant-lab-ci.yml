@@ -41,6 +41,13 @@ jobs:
           bash -n ops/oracle_assistant_lab_install.sh
           bash -n ops/oracle_dds3_host_repair.sh
           bash -n ops/oracle_dds3_operational_gate.sh
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("ops/oracle_dds3_operational_gate.sh")
+          bad = [number for number, line in enumerate(path.read_text().splitlines(), 1) if line.endswith("\\\\")]
+          assert not bad, f"double backslash line continuations at lines: {bad}"
+          PY
       - name: Run Assistant Lab contract tests
         run: python -m pytest -q tests/test_assistant_lab_contract.py tests/test_assistant_lab_bootstrap.py
       - name: Verify bootstrap schema boundaries
