@@ -13,7 +13,9 @@ SOURCE_DIR="${UNIVERSAL_VIDEO_SOURCE_DIR:-/opt/bridge-school/universal-video-src
 SERVICE_NAME="${UNIVERSAL_VIDEO_SERVICE_NAME:-universal-video.service}"
 SERVICE_SRC="$SOURCE_DIR/deploy/oracle-universal-video/universal-video.service"
 SERVICE_DST="/etc/systemd/system/$SERVICE_NAME"
-SECRETS_FILE="${UNIVERSAL_VIDEO_SECRETS_FILE:-$BASE_DIR/universal-video-secrets.env}"
+SECRETS_DIR="${UNIVERSAL_VIDEO_SECRETS_DIR:-$BASE_DIR/secrets}"
+SECRETS_ENV_FILE="${UNIVERSAL_VIDEO_SECRETS_ENV_FILE:-$BASE_DIR/universal-video-secrets.env}"
+DRIVE_OAUTH_FILE="${UNIVERSAL_VIDEO_DRIVE_OAUTH_FILE:-$SECRETS_DIR/google-drive-oauth.json}"
 ACTIVATE="${UNIVERSAL_VIDEO_ACTIVATE:-1}"
 MODEL="${UNIVERSAL_VIDEO_WHISPER_MODEL:-small}"
 THREADS="${UNIVERSAL_VIDEO_ASR_THREADS:-6}"
@@ -59,16 +61,27 @@ fi
 for d in "$BASE_DIR" "$BASE_DIR/spool" "$BASE_DIR/spool/inbox" "$BASE_DIR/spool/running" "$BASE_DIR/spool/done" "$BASE_DIR/spool/failed" "$BASE_DIR/spool/results" "$BASE_DIR/model-cache" "$BASE_DIR/media" "$BASE_DIR/output"; do
   install -d -m 0750 -o "$USER_NAME" -g "$GROUP_NAME" "$d"
 done
+install -d -m 0750 -o root -g "$GROUP_NAME" "$SECRETS_DIR"
 
-log "Prepare isolated secret boundary for optional Google Drive sources"
-if [[ ! -e "$SECRETS_FILE" ]]; then
-  install -m 0640 -o root -g "$GROUP_NAME" /dev/null "$SECRETS_FILE"
-else
-  chown root:"$GROUP_NAME" "$SECRETS_FILE"
-  chmod 0640 "$SECRETS_FILE"
+log "Prepare file-backed secret boundary for optional Google Drive sources"
+if [[ ! -e "$SECRETS_ENV_FILE" ]]; then
+  printf 'GOOGLE_DRIVE_OAUTH_JSON_FILE=%s\n' "$DRIVE_OAUTH_FILE" >"$SECRETS_ENV_FILE"
 fi
-if grep -Eq '^(GOOGLE_DRIVE_OAUTH_JSON|GOOGLE_DRIVE_OAUTH_CLIENT_ID|GOOGLE_SERVICE_ACCOUNT_JSON)=' "$SECRETS_FILE"; then
-  echo 'UNIVERSAL_VIDEO_DRIVE_SECRET=CONFIGURED'
+chown root:"$GROUP_NAME" "$SECRETS_ENV_FILE"
+chmod 0640 "$SECRETS_ENV_FILE"
+if [[ -f "$DRIVE_OAUTH_FILE" ]]; then
+  chown root:"$GROUP_NAME" "$DRIVE_OAUTH_FILE"
+  chmod 0640 "$DRIVE_OAUTH_FILE"
+  DRIVE_OAUTH_FILE="$DRIVE_OAUTH_FILE" python3 - <<'PY'
+import json, os
+from pathlib import Path
+p=Path(os.environ['DRIVE_OAUTH_FILE'])
+x=json.loads(p.read_text(encoding='utf-8'))
+assert isinstance(x, dict)
+for key in ('client_id','client_secret','refresh_token'):
+    assert isinstance(x.get(key), str) and x[key].strip(), key
+print('UNIVERSAL_VIDEO_DRIVE_SECRET=CONFIGURED')
+PY
 else
   echo 'UNIVERSAL_VIDEO_DRIVE_SECRET=NOT_CONFIGURED_LOCAL_PATH_ONLY'
 fi
