@@ -102,11 +102,29 @@ def _queue_counts(config: ObserverConfig) -> dict[str, int]:
     }
 
 
-def _experiment_summary(path: Path) -> dict[str, Any]:
+def _experiment_summary(config: ObserverConfig, path: Path) -> dict[str, Any]:
     manifest_path = path / "manifest.json"
     report_path = path / "observer" / "observer_report.json"
     manifest = _read_json(manifest_path) if manifest_path.exists() else None
     report = _read_json(report_path) if report_path.exists() else None
+
+    # The sealed experiment report records PENDING before the durable archive copy.
+    # The daemon writes the authoritative final report only after the copy is
+    # checksum-verified. Prefer that root-controlled result once it exists.
+    result_path = config.done / f"{path.name}.result.json"
+    if result_path.exists():
+        final_report = _read_json(result_path)
+        if not isinstance(report, dict) or not isinstance(final_report, dict):
+            raise HTTPException(status_code=503, detail="observer report invalid")
+        identity_fields = ("schema", "experiment_id", "tool_id", "source_sha256")
+        if any(final_report.get(field) != report.get(field) for field in identity_fields):
+            raise HTTPException(status_code=503, detail="observer final report identity mismatch")
+        if final_report.get("archive_status") == "COPIED":
+            archive_location = final_report.get("archive_location")
+            if not isinstance(archive_location, str) or not Path(archive_location).is_dir():
+                raise HTTPException(status_code=503, detail="observer durable archive unavailable")
+        report = final_report
+
     return {
         "experiment_id": path.name,
         "manifest": manifest,
@@ -159,7 +177,7 @@ def experiments(authorization: str | None = Header(default=None), limit: int = 2
     config = _observer_config()
     config.ensure()
     paths = sorted((p for p in config.experiments.iterdir() if p.is_dir()), key=lambda p: p.stat().st_mtime, reverse=True)[:limit]
-    return {"schema": "assistant-lab-control-experiments/v0.1", "experiments": [_experiment_summary(p) for p in paths]}
+    return {"schema": "assistant-lab-control-experiments/v0.1", "experiments": [_experiment_summary(config, p) for p in paths]}
 
 
 @app.get("/v1/experiments/{experiment_id}")
@@ -167,10 +185,11 @@ def experiment(experiment_id: str, authorization: str | None = Header(default=No
     _authorize(authorization)
     if not _ID_RE.fullmatch(experiment_id):
         raise HTTPException(status_code=404, detail="experiment not found")
-    path = _observer_config().experiments / experiment_id
+    config = _observer_config()
+    path = config.experiments / experiment_id
     if not path.is_dir():
         raise HTTPException(status_code=404, detail="experiment not found")
-    return _experiment_summary(path)
+    return _experiment_summary(config, path)
 
 
 @app.post("/v1/run", status_code=202)
