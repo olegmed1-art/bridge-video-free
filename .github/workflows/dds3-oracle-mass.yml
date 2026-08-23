@@ -1,0 +1,39 @@
+name: DDS3 Oracle Mass Boundary
+
+on:
+  pull_request:
+    paths:
+      - 'dds_training/oracle_mass_dispatch.py'
+      - 'ops/oracle_dds3_mass_install.sh'
+      - 'deploy/oracle-dds3-mass/**'
+      - 'tests/test_oracle_dds3_mass_dispatch.py'
+      - '.github/workflows/dds3-oracle-mass.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check pytest
+      - run: python -m pytest -q tests/test_oracle_dds3_mass_dispatch.py
+      - name: Static fail-closed contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/oracle_dds3_mass_install.sh
+          python -m py_compile dds_training/oracle_mass_dispatch.py
+          grep -q 'CPUQuota=600%' deploy/oracle-dds3-mass/dds3-mass@.service
+          grep -q 'PrivateNetwork=true' deploy/oracle-dds3-mass/dds3-mass@.service
+          grep -q 'ReadWritePaths=/opt/bridge-school/dds3-mass-validation' deploy/oracle-dds3-mass/dds3-mass@.service
+          grep -q 'shell=False' dds_training/oracle_mass_dispatch.py
+          grep -q 'compute_plane.*oracle' dds_training/oracle_mass_dispatch.py
+          ! grep -qE 'runs-on:.*self-hosted' .github/workflows/dds3-oracle-mass.yml
