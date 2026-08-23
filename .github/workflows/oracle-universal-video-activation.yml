@@ -1,0 +1,304 @@
+name: Oracle Universal Video Activation
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-universal-video-activation.yml'
+      - 'ops/oracle_universal_video_*.sh'
+      - 'ops/oracle-universal-video-request.schema.json'
+      - 'tests/test_oracle_universal_video_activation_contract.py'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-universal-video-requests/*.json'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'probe, activate, or smoke'
+        required: true
+        type: choice
+        options: [probe, activate, smoke]
+      git_ref:
+        description: 'Pinned 40-character runtime commit'
+        required: true
+        type: string
+      expected_host_fingerprint:
+        description: 'Required for activate/smoke: SHA256 SSH host fingerprint'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oracle-universal-video-activation
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate fail-closed contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/oracle_universal_video_preflight.sh
+          bash -n ops/oracle_universal_video_install.sh
+          bash -n ops/oracle_universal_video_run_command.sh
+          python - <<'PY'
+          import runpy
+          scope = runpy.run_path('tests/test_oracle_universal_video_activation_contract.py')
+          for name, value in sorted(scope.items()):
+              if name.startswith('test_') and callable(value):
+                  value()
+          print('ORACLE_UNIVERSAL_VIDEO_ACTIVATION_CONTRACT_PASS')
+          PY
+
+  activate:
+    if: ${{ github.event_name != 'pull_request' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      ISSUE_NUMBER: '318'
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Resolve bounded request
+        id: request
+        shell: bash
+        env:
+          DISPATCH_MODE: ${{ inputs.mode }}
+          DISPATCH_GIT_REF: ${{ inputs.git_ref }}
+          DISPATCH_FINGERPRINT: ${{ inputs.expected_host_fingerprint }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            REQUEST_JSON="$(python - <<'PY'
+          import json, os
+          print(json.dumps({
+              'request_id': f"dispatch-{os.environ['GITHUB_RUN_ID']}",
+              'mode': os.environ.get('DISPATCH_MODE', ''),
+              'git_ref': os.environ.get('DISPATCH_GIT_REF', ''),
+              'expected_host_fingerprint': os.environ.get('DISPATCH_FINGERPRINT', ''),
+              'host': os.environ['ORACLE_HOST'],
+              'user': os.environ['ORACLE_USER'],
+              'issue': int(os.environ['ISSUE_NUMBER']),
+          }))
+          PY
+          )"
+          else
+            mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+              | grep -E '^ops/oracle-universal-video-requests/[^/]+\.json$' | sort -u)
+            [[ ${#files[@]} -eq 1 ]] || {
+              echo "Expected exactly one bounded request; found ${#files[@]}" >&2
+              exit 1
+            }
+            REQUEST_JSON="$(cat "${files[0]}")"
+          fi
+
+          REQUEST_JSON="$REQUEST_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          x = json.loads(os.environ['REQUEST_JSON'])
+          required = {'request_id', 'mode', 'git_ref', 'host', 'user', 'issue'}
+          allowed = required | {'expected_host_fingerprint'}
+          assert required <= set(x), f"missing={sorted(required-set(x))}"
+          assert set(x) <= allowed, f"unknown={sorted(set(x)-allowed)}"
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
+          assert x['mode'] in {'probe', 'activate', 'smoke'}
+          assert re.fullmatch(r'[0-9a-f]{40}', str(x['git_ref']))
+          assert x['host'] == '158.180.47.161'
+          assert x['user'] == 'ubuntu'
+          assert x['issue'] == 318
+          fp = str(x.get('expected_host_fingerprint') or '')
+          if x['mode'] in {'activate', 'smoke'}:
+              assert re.fullmatch(r'SHA256:[A-Za-z0-9+/]{43}', fp), 'fingerprint pin required'
+          elif fp:
+              assert re.fullmatch(r'SHA256:[A-Za-z0-9+/]{43}', fp)
+          print(f"request_id={x['request_id']}")
+          print(f"mode={x['mode']}")
+          print(f"git_ref={x['git_ref']}")
+          print(f"expected_fingerprint={fp}")
+          PY
+
+      - name: Verify pinned source
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref='${{ steps.request.outputs.git_ref }}'
+          git cat-file -e "$ref^{commit}"
+          for path in \
+            ops/oracle_universal_video_run_command.sh \
+            ops/oracle_universal_video_install.sh \
+            universal_video/runner.py; do
+            git show "$ref:$path" >/dev/null
+          done
+          git show "$ref:ops/oracle_universal_video_run_command.sh" \
+            > "$RUNNER_TEMP/oracle-universal-video-payload.sh"
+          echo UNIVERSAL_VIDEO_PINNED_SOURCE_PASS
+
+      - name: Collect Oracle SSH host keys
+        id: hostkey
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v ssh-keyscan >/dev/null
+          mkdir -p "$RUNNER_TEMP/oracle-ssh"
+          known="$RUNNER_TEMP/oracle-ssh/known_hosts"
+          : > "$known"
+          for attempt in 1 2 3; do
+            ssh-keyscan -T 10 -t ed25519,ecdsa,rsa "$ORACLE_HOST" >> "$known" 2>/dev/null || true
+            [[ -s "$known" ]] && break
+            sleep $((attempt * 2))
+          done
+          sort -u -o "$known" "$known"
+          [[ -s "$known" ]] || { echo ORACLE_SSH_HOST_KEY_UNAVAILABLE >&2; exit 1; }
+          ssh-keygen -lf "$known" | tee "$RUNNER_TEMP/oracle-ssh/fingerprints.txt"
+          fps="$(awk '{print $2}' "$RUNNER_TEMP/oracle-ssh/fingerprints.txt" | sort -u | paste -sd, -)"
+          echo "fingerprints=$fps" >> "$GITHUB_OUTPUT"
+          echo "known_hosts=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Probe host-control readiness without logging in
+        if: ${{ steps.request.outputs.mode == 'probe' }}
+        id: probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          selected=NONE
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          state=NOT_CONFIGURED
+          [[ "$selected" != NONE ]] && state=CONFIGURED
+          echo "key_state=$state" >> "$GITHUB_OUTPUT"
+          echo "key_source=$selected" >> "$GITHUB_OUTPUT"
+          echo "ORACLE_SSH_CREDENTIAL_PATH=$state"
+          echo ORACLE_UNIVERSAL_VIDEO_HOSTKEY_PROBE_PASS
+
+      - name: Report probe
+        if: ${{ steps.request.outputs.mode == 'probe' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FINGERPRINTS: ${{ steps.hostkey.outputs.fingerprints }}
+          KEY_STATE: ${{ steps.probe.outputs.key_state }}
+          KEY_SOURCE: ${{ steps.probe.outputs.key_source }}
+        run: |
+          set -euo pipefail
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+            "Oracle Universal Video probe PASS. Request: \`${{ steps.request.outputs.request_id }}\`. SSH fingerprints: \`$FINGERPRINTS\`. Repository credential: \`$KEY_STATE\` (slot \`$KEY_SOURCE\`). No login, host command, or service change occurred. Run: $RUN_URL"
+          {
+            echo '## Oracle Universal Video host-control probe'
+            echo "- Fingerprints: \`$FINGERPRINTS\`"
+            echo "- Repository credential: \`$KEY_STATE\`"
+            echo '- Host commands executed: `0`'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify pinned identity and SSH access
+        if: ${{ steps.request.outputs.mode != 'probe' }}
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected='${{ steps.request.outputs.expected_fingerprint }}'
+          awk '{print $2}' "$RUNNER_TEMP/oracle-ssh/fingerprints.txt" | grep -Fx "$expected" >/dev/null \
+            || { echo "ORACLE_SSH_HOST_FINGERPRINT_MISMATCH expected=$expected" >&2; exit 1; }
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]] || { echo ORACLE_SSH_PRIVATE_KEY_NOT_CONFIGURED >&2; exit 1; }
+          key="$RUNNER_TEMP/oracle-ssh/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.hostkey.outputs.known_hosts }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+          echo ORACLE_SSH_AUTH_AND_SUDO_PASS
+
+      - name: Activate sidecar or run bounded smoke
+        if: ${{ steps.request.outputs.mode != 'probe' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke=0
+          [[ '${{ steps.request.outputs.mode }}' == smoke ]] && smoke=1
+          log="$RUNNER_TEMP/oracle-universal-video.log"
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.hostkey.outputs.known_hosts }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env UNIVERSAL_VIDEO_GIT_REF='${{ steps.request.outputs.git_ref }}' UNIVERSAL_VIDEO_RUN_SMOKE='$smoke' UNIVERSAL_VIDEO_ACTIVATE=1 UNIVERSAL_VIDEO_PREWARM_MODEL=1 bash -s" \
+            < "$RUNNER_TEMP/oracle-universal-video-payload.sh" 2>&1 | tee "$log"
+          grep -Fx UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS "$log" >/dev/null
+          grep -F assistant_lab=active "$log" >/dev/null
+          grep -F universal_video_enabled=enabled "$log" >/dev/null
+          grep -F universal_video_active=active "$log" >/dev/null
+          grep -F DDS3_AFTER_PASS "$log" >/dev/null
+          if [[ "$smoke" == 1 ]]; then
+            grep -F UNIVERSAL_VIDEO_SYNTHETIC_SMOKE_PASS "$log" >/dev/null
+          fi
+          echo ORACLE_UNIVERSAL_VIDEO_REMOTE_ACCEPTANCE_PASS
+
+      - name: Verify external DDS3 non-regression
+        if: ${{ steps.request.outputs.mode != 'probe' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          READY_JSON="$(curl -fsS --retry 3 --retry-delay 3 --max-time 20 "https://$ORACLE_HOST/readyz")" \
+            python - <<'PY'
+          import json, os
+          x = json.loads(os.environ['READY_JSON'])
+          assert x.get('status') == 'ready', x
+          assert x.get('engine') == 'DDS3', x
+          assert x.get('fallback_used') is False, x
+          assert x.get('position_solver') == 'ready', x
+          print('ORACLE_DDS3_EXTERNAL_NONREGRESSION_PASS')
+          PY
+
+      - name: Report successful activation
+        if: ${{ success() && steps.request.outputs.mode != 'probe' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+            "Oracle Universal Video \`${{ steps.request.outputs.mode }}\` PASS for commit \`${{ steps.request.outputs.git_ref }}\`: sidecar active+enabled, Assistant Lab unchanged, DDS3 ready/real/fallback=false. Request: \`${{ steps.request.outputs.request_id }}\`. Run: $RUN_URL"
+
+      - name: Report failure without exposing secrets
+        if: ${{ failure() && github.event_name != 'pull_request' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+        run: |
+          set -euo pipefail
+          request="${REQUEST_ID:-unresolved}"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+            "Oracle Universal Video request \`$request\` failed closed. No completion claim. Protected run: $RUN_URL"
