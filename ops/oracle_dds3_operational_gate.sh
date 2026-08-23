@@ -204,7 +204,7 @@ wait_alert_active(){
     state="$(oci budgets budget alert-rule get \
       --budget-id "$BUDGET_ID" \
       --alert-rule-id "$alert_rule_id" \
-      --query data.state --raw-output 2>/dev/null || true)"
+      --query 'data."lifecycle-state"' --raw-output 2>/dev/null || true)"
     [[ "$state" == "ACTIVE" ]] && return 0
     sleep 2
   done
@@ -225,7 +225,7 @@ assert x.get("threshold-type") == "PERCENTAGE", x
 assert float(x.get("threshold", -1)) == float(os.environ["EXPECTED_THRESHOLD"]), x
 recipients={p for p in re.split(r"[,;\s]+", str(x.get("recipients") or "")) if p}
 assert os.environ["EXPECTED_EMAIL"] in recipients, x
-assert x.get("state") == "ACTIVE", x
+assert x.get("lifecycle-state") == "ACTIVE", x
 '
 }
 ensure_alert(){
