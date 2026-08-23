@@ -71,6 +71,12 @@ printf 'source_commit=%s\n' "$RESOLVED_COMMIT"
 printf 'assistant_lab=%s\n' "$(systemctl is-active assistant-lab.service)"
 printf 'universal_video_enabled=%s\n' "$(systemctl is-enabled universal-video.service 2>/dev/null || true)"
 printf 'universal_video_active=%s\n' "$(systemctl is-active universal-video.service 2>/dev/null || true)"
+secrets_file="$BASE_DIR/universal-video-secrets.env"
+if [[ -f "$secrets_file" ]] && grep -Eq '^(GOOGLE_DRIVE_OAUTH_JSON|GOOGLE_DRIVE_OAUTH_CLIENT_ID|GOOGLE_SERVICE_ACCOUNT_JSON)=' "$secrets_file"; then
+  echo 'universal_video_drive_auth=CONFIGURED'
+else
+  echo 'universal_video_drive_auth=NOT_CONFIGURED_LOCAL_PATH_ONLY'
+fi
 ffmpeg -version | head -1
 "$BASE_DIR/.venv/bin/python" --version
 runuser -u universal-video -- env HF_HOME="$BASE_DIR/model-cache" "$BASE_DIR/.venv/bin/python" - <<'PY'
