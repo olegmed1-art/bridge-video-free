@@ -118,8 +118,20 @@ def _finish(conn: psycopg.Connection[Any], command_id: Any, status: str, *, resu
 
 
 def _execute(config: BridgeConfig, row: dict[str, Any]) -> dict[str, Any]:
+    source_path = row.get("source_path")
+    source_sha256 = row.get("source_sha256")
+    if not isinstance(source_path, str) or not source_path or len(source_path) > 4096:
+        raise RuntimeError("control command source_path is missing or invalid")
+    if (
+        not isinstance(source_sha256, str)
+        or len(source_sha256) != 64
+        or any(ch not in "0123456789abcdefABCDEF" for ch in source_sha256)
+    ):
+        raise RuntimeError("control command source_sha256 is missing or invalid")
     payload = {
         "tool_id": row["tool_id"],
+        "source_path": source_path,
+        "source_sha256": source_sha256.lower(),
         "experiment_id": row.get("experiment_id") or None,
         "timeout_seconds": int(row.get("timeout_seconds") or 3600),
         "label": row.get("label") or row["tool_id"],

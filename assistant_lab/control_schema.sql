@@ -1,6 +1,6 @@
--- Assistant Lab Control Bridge v0.1.
+-- Assistant Lab Control Bridge v0.2.
 -- Separate queue for ChatGPT/Neon -> Oracle localhost Control API.
--- Payload is intentionally limited to a registered tool_id and bounded metadata.
+-- Payload is limited to a registered tool_id, bounded metadata, and verified source identity.
 
 CREATE TABLE IF NOT EXISTS assistant_lab.control_command (
     command_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS assistant_lab.control_command (
     updated_at timestamptz NOT NULL DEFAULT now(),
     source text NOT NULL DEFAULT 'CHATGPT',
     tool_id text NOT NULL CHECK (tool_id ~ '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$'),
+    source_path text,
+    source_sha256 text,
     experiment_id text CHECK (experiment_id IS NULL OR experiment_id ~ '^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$'),
     timeout_seconds integer NOT NULL DEFAULT 3600 CHECK (timeout_seconds BETWEEN 1 AND 86400),
     label text NOT NULL DEFAULT '' CHECK (length(label) <= 256),
@@ -22,6 +24,22 @@ CREATE TABLE IF NOT EXISTS assistant_lab.control_command (
     attempts smallint NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     max_attempts smallint NOT NULL DEFAULT 2 CHECK (max_attempts BETWEEN 1 AND 3)
 );
+
+ALTER TABLE assistant_lab.control_command
+    ADD COLUMN IF NOT EXISTS source_path text,
+    ADD COLUMN IF NOT EXISTS source_sha256 text;
+
+ALTER TABLE assistant_lab.control_command
+    DROP CONSTRAINT IF EXISTS assistant_lab_control_command_source_contract;
+ALTER TABLE assistant_lab.control_command
+    ADD CONSTRAINT assistant_lab_control_command_source_contract CHECK (
+        status NOT IN ('QUEUED', 'RUNNING')
+        OR (
+            source_path IS NOT NULL
+            AND length(source_path) BETWEEN 1 AND 4096
+            AND source_sha256 ~ '^[0-9a-fA-F]{64}$'
+        )
+    );
 
 CREATE INDEX IF NOT EXISTS assistant_lab_control_command_queue_idx
     ON assistant_lab.control_command (created_at)
@@ -53,9 +71,13 @@ CREATE TRIGGER assistant_lab_control_command_notify
 AFTER INSERT OR UPDATE OF status ON assistant_lab.control_command
 FOR EACH ROW EXECUTE FUNCTION assistant_lab.notify_queued_control_command();
 
+DROP FUNCTION IF EXISTS assistant_lab.enqueue_control_command(text,text,text,integer,text,text);
+
 CREATE OR REPLACE FUNCTION assistant_lab.enqueue_control_command(
     p_tool_id text,
     p_idempotency_key text,
+    p_source_path text,
+    p_source_sha256 text,
     p_experiment_id text DEFAULT NULL,
     p_timeout_seconds integer DEFAULT 3600,
     p_label text DEFAULT '',
@@ -68,9 +90,11 @@ DECLARE
     v_row assistant_lab.control_command;
 BEGIN
     INSERT INTO assistant_lab.control_command (
-        tool_id, idempotency_key, experiment_id, timeout_seconds, label, source
+        tool_id, idempotency_key, source_path, source_sha256,
+        experiment_id, timeout_seconds, label, source
     ) VALUES (
-        p_tool_id, p_idempotency_key, p_experiment_id, p_timeout_seconds, p_label, p_source
+        p_tool_id, p_idempotency_key, p_source_path, lower(p_source_sha256),
+        p_experiment_id, p_timeout_seconds, p_label, p_source
     )
     ON CONFLICT (idempotency_key) DO UPDATE
        SET idempotency_key = EXCLUDED.idempotency_key
@@ -80,7 +104,7 @@ END;
 $$;
 
 REVOKE ALL ON assistant_lab.control_command FROM PUBLIC;
-REVOKE ALL ON FUNCTION assistant_lab.enqueue_control_command(text,text,text,integer,text,text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION assistant_lab.enqueue_control_command(text,text,text,text,text,integer,text,text) FROM PUBLIC;
 
 -- The existing Oracle worker principal can claim and finish commands but cannot insert them.
 GRANT SELECT, UPDATE ON assistant_lab.control_command TO assistant_lab_worker;
