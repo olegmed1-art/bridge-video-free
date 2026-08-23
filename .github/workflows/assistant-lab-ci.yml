@@ -71,6 +71,18 @@ jobs:
           PY
       - name: Run Assistant Lab contract tests
         run: python -m pytest -q tests/test_assistant_lab_contract.py tests/test_assistant_lab_bootstrap.py tests/test_assistant_lab_observer.py tests/test_assistant_lab_control_api.py
+      - name: Guard direct Neon to DDS3 resident path
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'FROM assistant_lab.job' assistant_lab/worker.py
+          grep -q '_post_json(' assistant_lab/worker.py
+          grep -q 'config.dds3_url' assistant_lab/worker.py
+          grep -q '127.0.0.1:8080/v1/compute' assistant_lab/worker.py
+          ! grep -qE 'control_api|control_bridge' assistant_lab/worker.py
+          grep -q -- '-m assistant_lab.worker' deploy/oracle-assistant-lab/assistant-lab.service
+          grep -q 'Neon assistant_lab.job -> Oracle assistant-lab.service -> hot localhost DDS3' assistant_lab/DDS3_DIRECT_PATH.md
+          grep -q 'DDS3 jobs MUST NOT be routed through the Assistant Lab Control API or Observer' assistant_lab/DDS3_DIRECT_PATH.md
       - name: Verify bootstrap schema boundaries
         shell: bash
         run: |
