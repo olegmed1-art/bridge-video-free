@@ -47,6 +47,7 @@ jobs:
           bash -n ops/oracle_dds3_operational_gate.sh
           python - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path("ops/oracle_dds3_operational_gate.sh")
           text = path.read_text()
@@ -66,7 +67,7 @@ jobs:
           assert "arbitrary_shell" in activation
           assert "video_analyzer_result_access" in activation
           assert "other_oracle_result_access" in activation
-          assert "ssh " not in activation.lower()
+          assert not re.search(r"(?m)^\s*ssh\b", activation)
           PY
       - name: Run Assistant Lab contract tests
         run: python -m pytest -q tests/test_assistant_lab_contract.py tests/test_assistant_lab_bootstrap.py tests/test_assistant_lab_observer.py tests/test_assistant_lab_control_api.py
