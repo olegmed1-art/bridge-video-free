@@ -3,7 +3,12 @@ from pathlib import Path
 
 import pytest
 
-from universal_video.contract import MAX_VIDEO_SECONDS, VideoContractError, validate_job
+from universal_video.contract import (
+    MAX_VIDEO_SECONDS,
+    VideoContractError,
+    canonical_job_hash,
+    validate_job,
+)
 from universal_video.runner import _enforce_media_bounds, _prepare_job_dir, _qc_summary
 from universal_video.spool_worker import recover_orphaned_jobs
 
@@ -63,6 +68,28 @@ def test_twenty_percent_qc_tolerance_starts_at_five_blocks():
     assert passed is True
     assert failed == 1
     assert allowed == 1
+
+
+def test_completed_same_hash_is_reused_without_touching_artifacts(tmp_path: Path):
+    job = _job(tmp_path)
+    output_root = tmp_path / "output"
+    job_dir = output_root / job.job_id
+    job_dir.mkdir(parents=True)
+    artifact = job_dir / "transcript.txt"
+    artifact.write_text("canonical transcript", encoding="utf-8")
+    expected = {
+        "status": "COMPLETED",
+        "job_hash": canonical_job_hash(job),
+        "job_id": job.job_id,
+    }
+    (job_dir / "manifest.json").write_text(json.dumps(expected), encoding="utf-8")
+
+    prepared, job_hash, existing = _prepare_job_dir(output_root, job)
+
+    assert prepared == job_dir
+    assert job_hash == expected["job_hash"]
+    assert existing == expected
+    assert artifact.read_text(encoding="utf-8") == "canonical transcript"
 
 
 def test_changed_job_hash_cleans_stale_output(tmp_path: Path):
