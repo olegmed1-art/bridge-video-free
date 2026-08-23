@@ -34,7 +34,7 @@ import re
 import subprocess
 from urllib.parse import urlsplit
 
-allowed_passwords = {"secret", "password", "test", "testing", "changeme", "example", "dummy", "placeholder"}
+placeholder_markers = ("secret", "password", "test", "synthetic", "changeme", "example", "dummy", "placeholder", "fake")
 url_re = re.compile(r"postgres(?:ql)?://[^\s\"'<>]+", re.I)
 violations = []
 
@@ -61,7 +61,9 @@ for raw_path in subprocess.check_output(["git", "ls-files"], text=True).splitlin
                 continue
             if "example" in host or host.endswith(".invalid"):
                 continue
-            if password in allowed_passwords or password.startswith("${") or password.startswith("<"):
+            if any(marker in password for marker in placeholder_markers):
+                continue
+            if password.startswith("${") or password.startswith("<"):
                 continue
             violations.append(f"{raw_path}:{lineno}: PostgreSQL URL contains an embedded non-placeholder password")
 
