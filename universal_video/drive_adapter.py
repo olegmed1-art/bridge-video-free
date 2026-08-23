@@ -1,7 +1,9 @@
 """Minimal Google Drive adapter for universal-video sources.
 
-Uses the same service-account secret boundary as the existing video pipeline.
-No credentials are persisted by this module.
+The preferred credential boundary is the existing user OAuth refresh-token
+bundle (GOOGLE_DRIVE_OAUTH_JSON). A service account is supported only as an
+explicit alternative. Credentials are read from the process environment and
+are never persisted by this module.
 """
 from __future__ import annotations
 
@@ -12,22 +14,79 @@ from pathlib import Path
 import requests
 
 DRIVE = "https://www.googleapis.com/drive/v3"
+DRIVE_SCOPE = "https://www.googleapis.com/auth/drive"
+TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 
-def access_token() -> str:
+def _oauth_parts() -> tuple[str, str, str]:
+    packed = os.getenv("GOOGLE_DRIVE_OAUTH_JSON", "").strip()
+    if packed:
+        try:
+            data = json.loads(packed)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("invalid GOOGLE_DRIVE_OAUTH_JSON") from exc
+        client_id = str(data.get("client_id") or "").strip()
+        client_secret = str(data.get("client_secret") or "").strip()
+        refresh_token = str(data.get("refresh_token") or "").strip()
+    else:
+        client_id = os.getenv("GOOGLE_DRIVE_OAUTH_CLIENT_ID", "").strip()
+        client_secret = os.getenv("GOOGLE_DRIVE_OAUTH_CLIENT_SECRET", "").strip()
+        refresh_token = os.getenv("GOOGLE_DRIVE_OAUTH_REFRESH_TOKEN", "").strip()
+    present = [bool(client_id), bool(client_secret), bool(refresh_token)]
+    if any(present) and not all(present):
+        raise RuntimeError("incomplete Google Drive OAuth credentials")
+    return client_id, client_secret, refresh_token
+
+
+def _user_oauth_token() -> str | None:
+    client_id, client_secret, refresh_token = _oauth_parts()
+    if not all((client_id, client_secret, refresh_token)):
+        return None
+    from google.auth.transport.requests import Request
+    from google.oauth2.credentials import Credentials
+
+    creds = Credentials(
+        token=None,
+        refresh_token=refresh_token,
+        token_uri=TOKEN_URI,
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=[DRIVE_SCOPE],
+    )
+    creds.refresh(Request())
+    return str(creds.token) if creds.token else None
+
+
+def _service_account_token() -> str | None:
     raw = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
     if not raw:
-        raise RuntimeError("GOOGLE_SERVICE_ACCOUNT_JSON is required for google_drive sources")
+        return None
     from google.auth.transport.requests import Request
     from google.oauth2 import service_account
 
-    info = json.loads(raw)
+    try:
+        info = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("invalid GOOGLE_SERVICE_ACCOUNT_JSON") from exc
     creds = service_account.Credentials.from_service_account_info(
         info,
         scopes=["https://www.googleapis.com/auth/drive.readonly"],
     )
     creds.refresh(Request())
-    return str(creds.token)
+    return str(creds.token) if creds.token else None
+
+
+def access_token() -> str:
+    token = _user_oauth_token()
+    if token:
+        return token
+    token = _service_account_token()
+    if token:
+        return token
+    raise RuntimeError(
+        "Google Drive credentials are not configured; use GOOGLE_DRIVE_OAUTH_JSON "
+        "or GOOGLE_SERVICE_ACCOUNT_JSON"
+    )
 
 
 def file_metadata(file_id: str, token: str) -> dict:
