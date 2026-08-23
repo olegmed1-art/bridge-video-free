@@ -4,7 +4,8 @@ set -Eeuo pipefail
 # Complete the remaining operational gate for the existing Oracle DDS3 VM.
 # Run only from an authenticated Oracle Cloud Shell. The script is idempotent,
 # never creates a second VM, and refuses to reboot without an AVAILABLE full
-# boot-volume backup plus an SSH path that can prove the boot ID changed.
+# boot-volume backup plus a proven SSH or OCI Run Command control path that can
+# verify service health and prove that the boot ID changed.
 
 REGION="${REGION:-eu-frankfurt-1}"
 INSTANCE_NAME="${INSTANCE_NAME:-bridge-school-dds3-frankfurt}"
@@ -49,7 +50,50 @@ print(json.dumps({"data": data}, separators=(",", ":")))
 '
 }
 
-for command_name in oci python3 curl ssh; do
+RUN_AGENT_TEXT=""
+run_agent_command(){
+  local display_name="$1" script_text="$2"
+  local content_json target_json command_id execution_json state exit_code
+  content_json="$(SCRIPT_TEXT="$script_text" python3 -c '
+import json, os
+print(json.dumps({
+    "source": {"sourceType": "TEXT", "text": os.environ["SCRIPT_TEXT"]},
+    "output": {"outputType": "TEXT"},
+}, separators=(",", ":")))
+')"
+  target_json="$(python3 -c 'import json,os; print(json.dumps({"instanceId":os.environ["INSTANCE_ID"]},separators=(",",":")))')"
+  command_id="$(oci instance-agent command create \
+    --compartment-id "$COMPARTMENT_ID" \
+    --content "$content_json" \
+    --target "$target_json" \
+    --timeout-in-seconds 180 \
+    --display-name "$display_name" \
+    --query data.id --raw-output)"
+  nullish "$command_id" && die "Run Command $display_name was created without an ID"
+
+  execution_json=""
+  state=""
+  for _ in $(seq 1 90); do
+    execution_json="$(oci instance-agent command-execution get \
+      --command-id "$command_id" \
+      --instance-id "$INSTANCE_ID" \
+      --output json 2>/dev/null || true)"
+    if [[ -n "$execution_json" ]]; then
+      state="$(printf '%s' "$execution_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state",""))')"
+      case "$state" in
+        SUCCEEDED) break ;;
+        FAILED|CANCELED|TIMED_OUT) die "Run Command $display_name ended in $state" ;;
+      esac
+    fi
+    sleep 5
+  done
+  [[ "$state" == "SUCCEEDED" ]] || die "Run Command $display_name did not complete (last state: ${state:-unknown})"
+  exit_code="$(printf '%s' "$execution_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("content",{}).get("exit-code",""))')"
+  RUN_AGENT_TEXT="$(printf '%s' "$execution_json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("content",{}).get("text","") or "")')"
+  [[ "$exit_code" == "0" ]] || die "Run Command $display_name returned exit code ${exit_code:-unknown}"
+}
+
+for command_name in oci python3 curl; do
   command -v "$command_name" >/dev/null 2>&1 || die "$command_name is required"
 done
 [[ "$REGION" == "eu-frankfurt-1" ]] || die "Refusing non-Frankfurt region: $REGION"
@@ -64,6 +108,7 @@ INSTANCES_JSON="$(oci compute instance list -c "$COMPARTMENT_ID" --display-name 
 INSTANCE_COUNT="$(printf '%s' "$INSTANCES_JSON" | python3 -c 'import json,sys; xs=[x for x in json.load(sys.stdin).get("data",[]) if x.get("lifecycle-state") not in {"TERMINATED","TERMINATING"}]; print(len(xs))')"
 [[ "$INSTANCE_COUNT" == "1" ]] || die "Expected exactly one live $INSTANCE_NAME instance, found $INSTANCE_COUNT"
 INSTANCE_ID="$(printf '%s' "$INSTANCES_JSON" | python3 -c 'import json,sys; xs=[x for x in json.load(sys.stdin).get("data",[]) if x.get("lifecycle-state") not in {"TERMINATED","TERMINATING"}]; print(xs[0]["id"])')"
+export INSTANCE_ID
 INSTANCE_JSON="$(oci compute instance get --instance-id "$INSTANCE_ID" --output json)"
 STATE="$(printf '%s' "$INSTANCE_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"].get("lifecycle-state",""))')"
 [[ "$STATE" == "RUNNING" ]] || die "Instance state is $STATE, expected RUNNING"
@@ -220,26 +265,52 @@ BOOT_ID_BEFORE=""
 BOOT_ID_AFTER=""
 HOST_DISK="not-collected"
 HOST_MEMORY="not-collected"
+CONTROL_PATH="not-used"
 if [[ "$ALLOW_REBOOT" == "1" ]]; then
-  [[ -f "$SSH_KEY" ]] || die "Reboot refused: SSH key not found at $SSH_KEY"
-  chmod 600 "$SSH_KEY"
-  SSH=(ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$PUBLIC_IP")
-  BOOT_ID_BEFORE="$("${SSH[@]}" 'cat /proc/sys/kernel/random/boot_id')"
-  HOST_DISK="$("${SSH[@]}" 'df -h / | tail -n 1')"
-  HOST_MEMORY="$("${SSH[@]}" "free -h | sed -n '2p'")"
-  "${SSH[@]}" 'sudo systemctl is-active --quiet assistant-lab.service nginx docker dds3-healthcheck.timer dds3-cert-renew.timer'
+  if [[ -f "$SSH_KEY" ]]; then
+    command -v ssh >/dev/null 2>&1 || die "ssh is required when SSH_KEY is present"
+    CONTROL_PATH="ssh"
+    chmod 600 "$SSH_KEY"
+    SSH=(ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new "ubuntu@$PUBLIC_IP")
+    BOOT_ID_BEFORE="$("${SSH[@]}" 'cat /proc/sys/kernel/random/boot_id')"
+    HOST_DISK="$("${SSH[@]}" 'df -h / | tail -n 1')"
+    HOST_MEMORY="$("${SSH[@]}" "free -h | sed -n '2p'")"
+    "${SSH[@]}" 'sudo systemctl is-active --quiet assistant-lab.service nginx docker dds3-healthcheck.timer dds3-cert-renew.timer'
+  else
+    PLUGINS_JSON="$(oci instance-agent plugin list \
+      --compartment-id "$COMPARTMENT_ID" \
+      --instanceagent-id "$INSTANCE_ID" \
+      --all --output json)"
+    RUN_COMMAND_STATUS="$(printf '%s' "$PLUGINS_JSON" | python3 -c 'import json,sys; xs=json.load(sys.stdin).get("data",[]); print(next((x.get("status","") for x in xs if "Run Command" in str(x.get("name",""))),""))')"
+    [[ "$RUN_COMMAND_STATUS" == "RUNNING" ]] || die "Reboot refused: no SSH key and Run Command status is ${RUN_COMMAND_STATUS:-unknown}"
+    CONTROL_PATH="oci-run-command"
+    run_agent_command "bridge-dds3-pre-reboot-$(date -u +%Y%m%d%H%M%S)" $'set -Eeuo pipefail\nsystemctl is-active --quiet assistant-lab.service nginx docker dds3-healthcheck.timer dds3-cert-renew.timer\nprintf "BOOT_ID=%s\\n" "$(cat /proc/sys/kernel/random/boot_id)"\nprintf "HOST_DISK=%s\\n" "$(df -h / | tail -n 1)"\nprintf "HOST_MEMORY=%s\\n" "$(free -h | sed -n "2p")"'
+    BOOT_ID_BEFORE="$(printf '%s\n' "$RUN_AGENT_TEXT" | sed -n 's/^BOOT_ID=//p' | head -n 1)"
+    HOST_DISK="$(printf '%s\n' "$RUN_AGENT_TEXT" | sed -n 's/^HOST_DISK=//p' | head -n 1)"
+    HOST_MEMORY="$(printf '%s\n' "$RUN_AGENT_TEXT" | sed -n 's/^HOST_MEMORY=//p' | head -n 1)"
+    [[ -n "$BOOT_ID_BEFORE" ]] || die "Run Command preflight returned no boot ID"
+  fi
 
   log "Perform OCI SOFTRESET only after backup and preflight success"
   oci compute instance action --instance-id "$INSTANCE_ID" --action SOFTRESET >/dev/null
-  sleep 20
-  for _ in $(seq 1 90); do
-    if BOOT_ID_AFTER="$("${SSH[@]}" 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null)" && [[ -n "$BOOT_ID_AFTER" && "$BOOT_ID_AFTER" != "$BOOT_ID_BEFORE" ]]; then
-      break
-    fi
-    sleep 10
-  done
+  if [[ "$CONTROL_PATH" == "ssh" ]]; then
+    sleep 20
+    for _ in $(seq 1 90); do
+      if BOOT_ID_AFTER="$("${SSH[@]}" 'cat /proc/sys/kernel/random/boot_id' 2>/dev/null)" && [[ -n "$BOOT_ID_AFTER" && "$BOOT_ID_AFTER" != "$BOOT_ID_BEFORE" ]]; then
+        break
+      fi
+      sleep 10
+    done
+    "${SSH[@]}" 'sudo systemctl is-active --quiet assistant-lab.service nginx docker dds3-healthcheck.timer dds3-cert-renew.timer'
+  else
+    for _ in $(seq 1 90); do
+      curl -fsS --max-time 10 "https://$PUBLIC_IP/readyz" >/dev/null 2>&1 && break
+      sleep 10
+    done
+    run_agent_command "bridge-dds3-post-reboot-$(date -u +%Y%m%d%H%M%S)" $'set -Eeuo pipefail\nsystemctl is-active --quiet assistant-lab.service nginx docker dds3-healthcheck.timer dds3-cert-renew.timer\nprintf "BOOT_ID=%s\\n" "$(cat /proc/sys/kernel/random/boot_id)"'
+    BOOT_ID_AFTER="$(printf '%s\n' "$RUN_AGENT_TEXT" | sed -n 's/^BOOT_ID=//p' | head -n 1)"
+  fi
   [[ -n "$BOOT_ID_AFTER" && "$BOOT_ID_AFTER" != "$BOOT_ID_BEFORE" ]] || die "Could not prove a completed reboot by boot_id"
-  "${SSH[@]}" 'sudo systemctl is-active --quiet assistant-lab.service nginx docker dds3-healthcheck.timer dds3-cert-renew.timer'
   REBOOTED=true
 fi
 
@@ -250,14 +321,14 @@ printf '%s' "$READY_AFTER" | python3 -c 'import json,sys; x=json.load(sys.stdin)
 printf '%s' "$ROUTED_AFTER" | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x.get("status")=="ready" and x.get("engine")=="DDS3" and x.get("authenticated_compute")=="ready" and x.get("fallback_used") is False, x'
 
 export INSTANCE_ID SHAPE OCPU MEMORY_GB BOOT_VOLUME_ID BOOT_VOLUME_SIZE_GB BACKUP_ID BACKUP_STATE
-export ASSIGNED_POLICY_ID BUDGET_ID BUDGET_AMOUNT REBOOTED BOOT_ID_BEFORE BOOT_ID_AFTER HOST_DISK HOST_MEMORY
+export ASSIGNED_POLICY_ID BUDGET_ID BUDGET_AMOUNT REBOOTED BOOT_ID_BEFORE BOOT_ID_AFTER HOST_DISK HOST_MEMORY CONTROL_PATH
 python3 - <<'PY' >"$EVIDENCE_FILE"
 import json, os
 keys = [
     "INSTANCE_ID", "SHAPE", "OCPU", "MEMORY_GB", "BOOT_VOLUME_ID",
     "BOOT_VOLUME_SIZE_GB", "BACKUP_ID", "BACKUP_STATE", "ASSIGNED_POLICY_ID",
     "BUDGET_ID", "BUDGET_AMOUNT", "REBOOTED", "BOOT_ID_BEFORE", "BOOT_ID_AFTER",
-    "HOST_DISK", "HOST_MEMORY",
+    "HOST_DISK", "HOST_MEMORY", "CONTROL_PATH",
 ]
 print(json.dumps({"status": "PASS", **{k.lower(): os.environ.get(k, "") for k in keys}}, indent=2, sort_keys=True))
 PY
