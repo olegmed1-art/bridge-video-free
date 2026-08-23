@@ -61,7 +61,9 @@ jobs:
           activation = Path("ops/cloud_shell_activate_assistant_lab_observer.sh").read_text()
           assert "bridge-school-dds3-frankfurt" in activation
           assert "eu-frankfurt-1" in activation
-          assert "9004a2db02fcb70d5f1747b67858c9a9dc6b28ff" in activation
+          assert "792bfad82835ba91fb32ab40d4be2757760cb02d" in activation
+          assert "ASSISTANT_LAB_OBSERVER_ARCHIVE_ROOT" in activation
+          assert "bubblewrap" in activation
           assert "oci instance-agent command create" in activation
           assert "ASSISTANT_LAB_OBSERVER_HOST_ACTIVATION_PASS" in activation
           assert "arbitrary_shell" in activation
