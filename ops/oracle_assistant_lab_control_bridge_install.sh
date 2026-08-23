@@ -35,6 +35,7 @@ command -v python3 >/dev/null 2>&1 || die "python3 is required"
 command -v systemctl >/dev/null 2>&1 || die "systemd is required"
 command -v systemd-analyze >/dev/null 2>&1 || die "systemd-analyze is required"
 
+# Fail closed if the canonical credential source is broadly readable.
 mode="$(stat -c '%a' "$SOURCE_ENV")"
 case "$mode" in
   600|640) ;;
@@ -70,6 +71,7 @@ with psycopg.connect(os.environ["ASSISTANT_LAB_DATABASE_URL"], connect_timeout=1
 print("ASSISTANT_LAB_CONTROL_BRIDGE_DB_PREFLIGHT_PASS")
 PY
 
+# Remove the obsolete duplicate secret file from earlier drafts, if present.
 rm -f "$OBS_DIR/control-bridge.env"
 
 log "Compile and install hardened resident bridge"
