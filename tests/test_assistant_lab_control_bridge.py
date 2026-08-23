@@ -17,7 +17,7 @@ def test_execute_forwards_source_integrity(monkeypatch):
         calls.append((method, path, payload))
         if path == "/v1/run":
             return {"experiment_id": "CTRL-SOURCE-1"}
-        return {"observer_report": {"exit_code": 0}}
+        return {"observer_report": {"exit_code": 0, "archive_status": "COPIED"}}
 
     monkeypatch.setattr("assistant_lab.control_bridge._request", fake_request)
     result = _execute(_config(), {
@@ -50,3 +50,25 @@ def test_execute_rejects_missing_source_before_http(monkeypatch):
         assert "source_path" in str(exc)
     else:
         raise AssertionError("missing source metadata must fail closed")
+
+
+def test_execute_rejects_failed_observer_report(monkeypatch):
+    def fake_request(config, method, path, payload=None):
+        if path == "/v1/run":
+            return {"experiment_id": "CTRL-FAILED-1"}
+        return {"observer_report": {"exit_code": 1, "archive_status": "PENDING"}}
+
+    monkeypatch.setattr("assistant_lab.control_bridge._request", fake_request)
+    try:
+        _execute(_config(), {
+            "tool_id": "health.noop",
+            "source_path": "/opt/bridge-school/assistant-lab-observer/sources/canary.bin",
+            "source_sha256": "a" * 64,
+            "experiment_id": "CTRL-FAILED-1",
+            "timeout_seconds": 30,
+            "label": "failed-observer",
+        })
+    except RuntimeError as exc:
+        assert "exit_code=1" in str(exc)
+    else:
+        raise AssertionError("failed observer report must fail the control command")
