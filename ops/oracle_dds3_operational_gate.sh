@@ -108,12 +108,33 @@ if nullish "$BUDGET_ID"; then
     --query data.id --raw-output)"
 fi
 nullish "$BUDGET_ID" && die "Budget is missing"
+BUDGET_JSON="$(oci budgets budget budget get --budget-id "$BUDGET_ID" --output json)"
+BUDGET_AMOUNT_MATCH="$(printf '%s' "$BUDGET_JSON" | EXPECTED="$BUDGET_AMOUNT" python3 -c 'import json,sys,os; actual=float(json.load(sys.stdin)["data"].get("amount",-1)); expected=float(os.environ["EXPECTED"]); print("1" if actual==expected else "0")')"
+if [[ "$BUDGET_AMOUNT_MATCH" == "0" ]]; then
+  oci budgets budget budget update \
+    --budget-id "$BUDGET_ID" \
+    --amount "$BUDGET_AMOUNT" \
+    --reset-period MONTHLY \
+    --force \
+    --wait-for-state ACTIVE >/dev/null
+  BUDGET_JSON="$(oci budgets budget budget get --budget-id "$BUDGET_ID" --output json)"
+fi
+printf '%s' "$BUDGET_JSON" | EXPECTED="$BUDGET_AMOUNT" TARGET="$COMPARTMENT_ID" python3 -c '
+import json, os, sys
+x=json.load(sys.stdin)["data"]
+assert float(x.get("amount",-1)) == float(os.environ["EXPECTED"]), x
+assert x.get("reset-period") == "MONTHLY", x
+assert x.get("target-type") == "COMPARTMENT", x
+assert x.get("targets") == [os.environ["TARGET"]], x
+'
 ALERTS_JSON="$(oci budgets budget alert-rule list --budget-id "$BUDGET_ID" --all --output json)"
 ensure_alert(){
   local alert_type="$1" threshold="$2" display_name="$3"
-  local present
-  present="$(printf '%s' "$ALERTS_JSON" | ALERT_NAME="$display_name" python3 -c 'import json,sys,os; name=os.environ["ALERT_NAME"]; xs=json.load(sys.stdin).get("data",[]); print("1" if any(x.get("display-name")==name for x in xs) else "0")')"
-  if [[ "$present" == "0" ]]; then
+  local alert_id alert_count
+  alert_count="$(printf '%s' "$ALERTS_JSON" | ALERT_NAME="$display_name" python3 -c 'import json,sys,os; name=os.environ["ALERT_NAME"]; xs=[x for x in json.load(sys.stdin).get("data",[]) if x.get("display-name")==name]; print(len(xs))')"
+  [[ "$alert_count" == "0" || "$alert_count" == "1" ]] || die "Duplicate budget alert name: $display_name"
+  alert_id="$(printf '%s' "$ALERTS_JSON" | ALERT_NAME="$display_name" python3 -c 'import json,sys,os; name=os.environ["ALERT_NAME"]; xs=[x for x in json.load(sys.stdin).get("data",[]) if x.get("display-name")==name]; print(xs[0].get("id","") if xs else "")')"
+  if nullish "$alert_id"; then
     oci budgets budget alert-rule create \
       --budget-id "$BUDGET_ID" \
       --display-name "$display_name" \
@@ -123,6 +144,19 @@ ensure_alert(){
       --type "$alert_type" \
       --recipients "$BUDGET_EMAIL" \
       --message "OCI Bridge School budget alert: $display_name" \
+      --wait-for-state ACTIVE >/dev/null
+  else
+    oci budgets budget alert-rule update \
+      --budget-id "$BUDGET_ID" \
+      --alert-rule-id "$alert_id" \
+      --display-name "$display_name" \
+      --description "Bridge School Oracle guard $display_name" \
+      --threshold "$threshold" \
+      --threshold-type PERCENTAGE \
+      --type "$alert_type" \
+      --recipients "$BUDGET_EMAIL" \
+      --message "OCI Bridge School budget alert: $display_name" \
+      --force \
       --wait-for-state ACTIVE >/dev/null
   fi
 }
