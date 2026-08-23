@@ -19,11 +19,22 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from .contract import CONTRACT_VERSION, VideoJob, canonical_job_hash, validate_from_env
+from .contract import (
+    CONTRACT_VERSION,
+    MAX_FRAME_INTERVAL_SECONDS,
+    MAX_SOURCE_BYTES,
+    MAX_VIDEO_SECONDS,
+    MIN_FRAME_INTERVAL_SECONDS,
+    MIN_SOURCE_BYTES,
+    VideoJob,
+    canonical_job_hash,
+    validate_from_env,
+)
 from .drive_adapter import access_token, download_file
 from .profiles import resolve_profile
 
 WORD_RE = re.compile(r"[A-Za-zА-Яа-яЁё0-9]+")
+DEFAULT_SERVER_MAX_SOURCE_BYTES = 16 * 1024**3
 _MODEL = None
 
 
@@ -65,6 +76,46 @@ def _repetition_ratio(text: str) -> float:
     counts = Counter(words)
     repeated = sum(count - 1 for count in counts.values() if count > 1)
     return repeated / len(words)
+
+
+def _server_source_limit() -> int:
+    raw = os.getenv("UNIVERSAL_VIDEO_MAX_SOURCE_BYTES", str(DEFAULT_SERVER_MAX_SOURCE_BYTES)).strip()
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError("UNIVERSAL_VIDEO_MAX_SOURCE_BYTES must be an integer") from exc
+    if not MIN_SOURCE_BYTES <= value <= MAX_SOURCE_BYTES:
+        raise RuntimeError("UNIVERSAL_VIDEO_MAX_SOURCE_BYTES outside hard safety range")
+    return value
+
+
+def _effective_source_limit(job: VideoJob) -> int:
+    server_limit = _server_source_limit()
+    requested = int(job.options.get("max_source_bytes") or server_limit)
+    return min(server_limit, requested)
+
+
+def _enforce_media_bounds(media: dict[str, Any], job: VideoJob, source_limit: int) -> None:
+    duration = float(media.get("duration_seconds") or 0)
+    if duration <= 0:
+        raise RuntimeError("media duration is unavailable")
+    if duration > MAX_VIDEO_SECONDS + 0.01:
+        raise RuntimeError("video exceeds universal hard duration limit")
+    requested_duration = job.options.get("max_duration_seconds")
+    if requested_duration is not None and duration > float(requested_duration) + 0.01:
+        raise RuntimeError("video exceeds job max_duration_seconds")
+    size_bytes = int(media.get("size_bytes") or 0)
+    if size_bytes <= 0:
+        raise RuntimeError("media size is unavailable")
+    if size_bytes > source_limit:
+        raise RuntimeError("video exceeds configured source-size limit")
+
+
+def _qc_summary(transcript: list[dict[str, Any]], qc: list[dict[str, Any]]) -> tuple[bool, int, int]:
+    failed = sum(not item.get("ok", False) for item in qc)
+    allowed_failed = math.floor(len(qc) * 0.20)
+    passed = bool(transcript) and bool(qc) and failed <= allowed_failed
+    return passed, failed, allowed_failed
 
 
 def media_probe(path: Path) -> dict[str, Any]:
@@ -127,11 +178,22 @@ def _load_model():
         from faster_whisper import WhisperModel
 
         model_name = os.getenv("UNIVERSAL_VIDEO_WHISPER_MODEL", os.getenv("WHISPER_MODEL", "small"))
-        _MODEL = WhisperModel(model_name, device="cpu", compute_type="int8", cpu_threads=max(1, int(os.getenv("UNIVERSAL_VIDEO_ASR_THREADS", "8"))))
+        _MODEL = WhisperModel(
+            model_name,
+            device="cpu",
+            compute_type="int8",
+            cpu_threads=max(1, int(os.getenv("UNIVERSAL_VIDEO_ASR_THREADS", "8"))),
+        )
     return _MODEL
 
 
-def _asr(path: Path, *, strict: bool = False, retry: bool = False, initial_prompt: str | None = None) -> tuple[list[dict[str, Any]], str | None]:
+def _asr(
+    path: Path,
+    *,
+    strict: bool = False,
+    retry: bool = False,
+    initial_prompt: str | None = None,
+) -> tuple[list[dict[str, Any]], str | None]:
     model = _load_model()
     kwargs: dict[str, Any] = {
         "language": None,
@@ -156,7 +218,11 @@ def _asr(path: Path, *, strict: bool = False, retry: bool = False, initial_promp
     return out, getattr(info, "language", None)
 
 
-def _transcribe_chunk(audio: Path, *, initial_prompt: str | None) -> tuple[list[dict[str, Any]], str | None, dict[str, Any]]:
+def _transcribe_chunk(
+    audio: Path,
+    *,
+    initial_prompt: str | None,
+) -> tuple[list[dict[str, Any]], str | None, dict[str, Any]]:
     primary, language = _asr(audio, initial_prompt=initial_prompt)
     primary_text = " ".join(x["text"] for x in primary)
     strict, _ = _asr(audio, strict=True, initial_prompt=initial_prompt)
@@ -174,16 +240,32 @@ def _transcribe_chunk(audio: Path, *, initial_prompt: str | None) -> tuple[list[
         retry_segments, _ = _asr(audio, retry=True, initial_prompt=initial_prompt)
         retry_text = " ".join(x["text"] for x in retry_segments)
         retry_similarity = _similarity(primary_text or strict_text, retry_text)
-        qc.update({"retry_used": True, "retry_similarity": round(retry_similarity, 4), "retry_words": len(_words(retry_text))})
+        qc.update(
+            {
+                "retry_used": True,
+                "retry_similarity": round(retry_similarity, 4),
+                "retry_words": len(_words(retry_text)),
+            }
+        )
         candidates = [(primary, primary_text), (strict, strict_text), (retry_segments, retry_text)]
-        candidates.sort(key=lambda item: (len(_words(item[1])), -_repetition_ratio(item[1])), reverse=True)
+        candidates.sort(
+            key=lambda item: (len(_words(item[1])), -_repetition_ratio(item[1])),
+            reverse=True,
+        )
         primary, primary_text = candidates[0]
         ok = bool(primary_text) and _repetition_ratio(primary_text) < 0.80
     qc["ok"] = ok
     return primary, language, qc
 
 
-def transcribe(video: Path, work: Path, duration: float, *, chunk_seconds: int, initial_prompt: str | None) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str | None]:
+def transcribe(
+    video: Path,
+    work: Path,
+    duration: float,
+    *,
+    chunk_seconds: int,
+    initial_prompt: str | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str | None]:
     timeline: list[dict[str, Any]] = []
     qcs: list[dict[str, Any]] = []
     languages: Counter[str] = Counter()
@@ -218,7 +300,15 @@ def transcribe(video: Path, work: Path, duration: float, *, chunk_seconds: int, 
     return timeline, qcs, language
 
 
-def extract_keyframes(video: Path, output_dir: Path, duration: float, *, interval_seconds: int = 120) -> list[dict[str, Any]]:
+def extract_keyframes(
+    video: Path,
+    output_dir: Path,
+    duration: float,
+    *,
+    interval_seconds: int = 120,
+) -> list[dict[str, Any]]:
+    if not MIN_FRAME_INTERVAL_SECONDS <= interval_seconds <= MAX_FRAME_INTERVAL_SECONDS:
+        raise RuntimeError("frame interval outside hard safety range")
     output_dir.mkdir(parents=True, exist_ok=True)
     timestamps = {0.0, max(0.0, duration - 0.5)}
     t = float(interval_seconds)
@@ -252,62 +342,109 @@ def extract_keyframes(video: Path, output_dir: Path, duration: float, *, interva
     return frames
 
 
-def _materialize_source(job: VideoJob, work: Path) -> tuple[Path, dict[str, Any]]:
+def _materialize_source(
+    job: VideoJob,
+    work: Path,
+    *,
+    max_source_bytes: int,
+) -> tuple[Path, dict[str, Any]]:
     if job.source["kind"] == "local_path":
         path = Path(job.source["path"])
         if not path.is_file():
             raise RuntimeError("local video source does not exist")
+        if path.stat().st_size > max_source_bytes:
+            raise RuntimeError("local video exceeds configured source-size limit")
         return path, {"kind": "local_path", "path": str(path)}
     token = access_token()
     name = str(job.source.get("name") or f"drive-{job.source['file_id']}.video")
     safe_name = re.sub(r"[^A-Za-zА-Яа-яЁё0-9._ -]+", "_", Path(name).name)[:180] or "source.video"
     path = work / safe_name
-    meta = download_file(job.source["file_id"], path, token)
-    return path, {"kind": "google_drive", "file_id": job.source["file_id"], "name": meta.get("name"), "mimeType": meta.get("mimeType"), "modifiedTime": meta.get("modifiedTime")}
+    meta = download_file(job.source["file_id"], path, token, max_bytes=max_source_bytes)
+    return path, {
+        "kind": "google_drive",
+        "file_id": job.source["file_id"],
+        "name": meta.get("name"),
+        "mimeType": meta.get("mimeType"),
+        "modifiedTime": meta.get("modifiedTime"),
+    }
+
+
+def _prepare_job_dir(output_root: Path, job: VideoJob) -> tuple[Path, str, dict[str, Any] | None]:
+    job_hash = canonical_job_hash(job)
+    job_dir = output_root / job.job_id
+    manifest_path = job_dir / "manifest.json"
+    if manifest_path.exists():
+        try:
+            existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            existing = None
+        if existing and existing.get("job_hash") == job_hash and existing.get("status") == "COMPLETED":
+            return job_dir, job_hash, existing
+    if job_dir.exists():
+        shutil.rmtree(job_dir)
+    job_dir.mkdir(parents=True, exist_ok=False)
+    return job_dir, job_hash, None
 
 
 def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
     started = time.time()
     job = validate_from_env(payload)
     profile = resolve_profile(job.profile)
-    job_dir = output_root / job.job_id
-    job_dir.mkdir(parents=True, exist_ok=True)
+    output_root.mkdir(parents=True, exist_ok=True)
+    job_dir, job_hash, existing = _prepare_job_dir(output_root, job)
+    if existing is not None:
+        return existing
     manifest_path = job_dir / "manifest.json"
-    if manifest_path.exists():
-        existing = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if existing.get("job_hash") == canonical_job_hash(job) and existing.get("status") == "COMPLETED":
-            return existing
+    source_limit = _effective_source_limit(job)
 
     with tempfile.TemporaryDirectory(prefix="universal-video-") as temp:
         work = Path(temp)
-        source, source_provenance = _materialize_source(job, work)
+        source, source_provenance = _materialize_source(
+            job,
+            work,
+            max_source_bytes=source_limit,
+        )
         media = media_probe(source)
-        max_duration = float(job.options.get("max_duration_seconds") or media["duration_seconds"])
-        if media["duration_seconds"] > max_duration + 0.01:
-            raise RuntimeError("video exceeds job max_duration_seconds")
+        _enforce_media_bounds(media, job, source_limit)
         chunk_seconds = int(job.options.get("chunk_seconds") or 300)
         initial_prompt = str(job.options.get("initial_prompt") or "").strip() or None
-        transcript, qc, language = transcribe(source, work, media["duration_seconds"], chunk_seconds=chunk_seconds, initial_prompt=initial_prompt)
+        transcript, qc, language = transcribe(
+            source,
+            work,
+            media["duration_seconds"],
+            chunk_seconds=chunk_seconds,
+            initial_prompt=initial_prompt,
+        )
         transcript_words = sum(len(_words(item["text"])) for item in transcript)
-        failed_qc = sum(not item.get("ok", False) for item in qc)
-        qc_pass = bool(transcript) and failed_qc <= max(1, math.floor(len(qc) * 0.20))
+        qc_pass, failed_qc, allowed_failed_qc = _qc_summary(transcript, qc)
 
         transcript_jsonl = job_dir / "transcript.jsonl"
-        transcript_jsonl.write_text("".join(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n" for item in transcript), encoding="utf-8")
+        transcript_jsonl.write_text(
+            "".join(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n" for item in transcript),
+            encoding="utf-8",
+        )
         transcript_txt = job_dir / "transcript.txt"
-        transcript_txt.write_text("\n".join(f"[{item['start']:.1f}-{item['end']:.1f}] {item['text']}" for item in transcript), encoding="utf-8")
+        transcript_txt.write_text(
+            "\n".join(f"[{item['start']:.1f}-{item['end']:.1f}] {item['text']}" for item in transcript),
+            encoding="utf-8",
+        )
         qc_path = job_dir / "transcript_qc.json"
         qc_path.write_text(json.dumps(qc, ensure_ascii=False, indent=2), encoding="utf-8")
 
         frames: list[dict[str, Any]] = []
         if "keyframes" in profile.stages:
-            frames = extract_keyframes(source, job_dir / "frames", media["duration_seconds"], interval_seconds=int(job.options.get("frame_interval_seconds") or 120))
+            frames = extract_keyframes(
+                source,
+                job_dir / "frames",
+                media["duration_seconds"],
+                interval_seconds=int(job.options.get("frame_interval_seconds") or 120),
+            )
 
         manifest = {
             "contract": CONTRACT_VERSION,
             "status": "COMPLETED" if qc_pass else "REVIEW",
             "job_id": job.job_id,
-            "job_hash": canonical_job_hash(job),
+            "job_hash": job_hash,
             "profile": job.profile,
             "project": job.project,
             "domain_plugin": profile.domain_plugin,
@@ -320,6 +457,7 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
                 "words": transcript_words,
                 "qc_blocks": len(qc),
                 "qc_failed": failed_qc,
+                "qc_allowed_failed": allowed_failed_qc,
                 "qc_pass": qc_pass,
                 "jsonl": transcript_jsonl.name,
                 "text": transcript_txt.name,
@@ -330,14 +468,26 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
                 stage
                 for stage in profile.stages
                 if stage
-                not in {"media_preflight", "audio_extract", "transcribe", "transcript_qc", "timeline", "keyframes", "package"}
+                not in {
+                    "media_preflight",
+                    "audio_extract",
+                    "transcribe",
+                    "transcript_qc",
+                    "timeline",
+                    "keyframes",
+                    "package",
+                }
             ],
             "metadata": job.metadata,
             "runtime": {
                 "elapsed_seconds": round(time.time() - started, 3),
                 "hostname": os.uname().nodename,
                 "cpu_count": os.cpu_count(),
-                "whisper_model": os.getenv("UNIVERSAL_VIDEO_WHISPER_MODEL", os.getenv("WHISPER_MODEL", "small")),
+                "whisper_model": os.getenv(
+                    "UNIVERSAL_VIDEO_WHISPER_MODEL",
+                    os.getenv("WHISPER_MODEL", "small"),
+                ),
+                "max_source_bytes": source_limit,
             },
         }
         manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -349,7 +499,16 @@ def main() -> None:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("job_json", type=Path)
-    parser.add_argument("--output-root", type=Path, default=Path(os.getenv("UNIVERSAL_VIDEO_OUTPUT_ROOT", "/opt/bridge-school/universal-video/output")))
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=Path(
+            os.getenv(
+                "UNIVERSAL_VIDEO_OUTPUT_ROOT",
+                "/opt/bridge-school/universal-video/output",
+            )
+        ),
+    )
     args = parser.parse_args()
     payload = json.loads(args.job_json.read_text(encoding="utf-8"))
     result = run_job(payload, args.output_root)
