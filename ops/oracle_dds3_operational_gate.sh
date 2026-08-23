@@ -24,13 +24,29 @@ log(){ printf '\n[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 nullish(){ [[ -z "${1:-}" || "${1:-}" == "null" || "${1:-}" == "None" ]]; }
 normalize_list_json(){
-  local raw
-  raw="$(cat)"
-  if [[ -z "${raw//[[:space:]]/}" ]]; then
-    printf '%s\\n' '{"data":[]}'
-  else
-    printf '%s\\n' "$raw"
-  fi
+  python3 -c '
+import json, sys
+raw=sys.stdin.read()
+decoder=json.JSONDecoder()
+pos=0
+data=[]
+while True:
+    while pos < len(raw) and raw[pos].isspace():
+        pos += 1
+    if pos >= len(raw):
+        break
+    value, pos = decoder.raw_decode(raw, pos)
+    if isinstance(value, dict):
+        page=value.get("data", [])
+    elif isinstance(value, list):
+        page=value
+    else:
+        raise ValueError("unexpected OCI list JSON document")
+    if not isinstance(page, list):
+        raise ValueError("unexpected OCI data payload")
+    data.extend(page)
+print(json.dumps({"data": data}, separators=(",", ":")))
+'
 }
 
 for command_name in oci python3 curl ssh; do
