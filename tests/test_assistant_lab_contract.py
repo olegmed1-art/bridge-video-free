@@ -142,6 +142,16 @@ def test_worker_executes_world_generation_without_network():
     assert result["accepted"] == 2
 
 
+def test_worker_rejects_unknown_kind_inside_execution_boundary():
+    job = LabJob(
+        job_id="00000000-0000-0000-0000-000000000002",
+        kind="FUTURE_UNKNOWN_KIND", payload={}, priority=20, attempts=1, max_attempts=2,
+    )
+    config = WorkerConfig("unused", "test", "http://127.0.0.1:8080/v1/compute", "token")
+    with pytest.raises(LabContractError):
+        execute_job(job, config)
+
+
 def test_schema_is_isolated_and_dispatch_is_update_only_for_app():
     schema = Path("assistant_lab/schema.sql").read_text(encoding="utf-8")
     lowered = schema.lower()

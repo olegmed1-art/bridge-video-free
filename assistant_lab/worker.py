@@ -156,7 +156,7 @@ def claim_one(config: WorkerConfig) -> LabJob | None:
     if not row:
         return None
     return LabJob(job_id=row["job_id"], kind=row["kind"],
-        payload=validate_job_payload(row["kind"], row["payload_json"]),
+        payload=row["payload_json"],
         priority=validate_priority(row["priority"]), attempts=int(row["attempts"]), max_attempts=int(row["max_attempts"]))
 
 
@@ -203,19 +203,23 @@ def _post_json(url: str, payload: dict[str, Any], *, token: str, timeout: float)
 
 
 def execute_job(job: LabJob, config: WorkerConfig) -> dict[str, Any]:
+    # Validation deliberately happens after claim and inside process_one's error
+    # boundary.  A newly introduced or malformed job can then be terminalized
+    # instead of remaining RUNNING until stale recovery.
+    payload = validate_job_payload(job.kind, job.payload)
     if job.kind == "NOOP":
-        return {"ok": True, "kind": "NOOP", "echo": job.payload, "contract": CONTRACT_VERSION}
+        return {"ok": True, "kind": "NOOP", "echo": payload, "contract": CONTRACT_VERSION}
     if job.kind == "BEN_COMPUTE":
         try:
-            return compute_ben_policy(config.ben_url, job.payload, timeout=config.ben_timeout_seconds)
+            return compute_ben_policy(config.ben_url, payload, timeout=config.ben_timeout_seconds)
         except RetryableBenError as exc:
             raise RetryableLabError(str(exc)) from exc
     if job.kind == "DDS3_COMPUTE":
-        operation = str(job.payload.get("operation") or "dd_table")
-        result = _post_json(config.dds3_url, job.payload, token=config.dds3_token, timeout=config.dds3_timeout_seconds)
+        operation = str(payload.get("operation") or "dd_table")
+        result = _post_json(config.dds3_url, payload, token=config.dds3_token, timeout=config.dds3_timeout_seconds)
         return verify_dds3_result(result, expected_operation=operation)
     if job.kind == "WORLD_GENERATE":
-        return generate_worlds(**job.payload)
+        return generate_worlds(**payload)
     raise LabContractError("unsupported assistant-lab job kind")
 
 
