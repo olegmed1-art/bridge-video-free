@@ -7,6 +7,9 @@ on:
       - 'assistant_lab/worker.py'
       - 'assistant_lab/ben_runtime.py'
       - 'assistant_lab/contract.py'
+  pull_request_target:
+    paths:
+      - 'ops/oracle-assistant-lab-worker-requests/*.json'
   push:
     branches: [main]
     paths:
@@ -21,6 +24,7 @@ concurrency:
 
 jobs:
   contract:
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -42,7 +46,7 @@ jobs:
           PY
 
   rollout:
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ always() && (github.event_name == 'push' || github.event_name == 'pull_request_target') && (needs.contract.result == 'success' || needs.contract.result == 'skipped') }}
     needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -60,15 +64,28 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
 
       - name: Resolve one bounded request
         id: request
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
-          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^ops/oracle-assistant-lab-worker-requests/[^/]+\.json$' | sort -u)
-          [[ ${#files[@]} -eq 1 ]]
-          REQUEST_JSON="$(cat "${files[0]}")" python - <<'PY' >> "$GITHUB_OUTPUT"
+          if [[ "$EVENT_NAME" == "pull_request_target" ]]; then
+            git fetch --quiet origin "$PR_HEAD_SHA"
+            mapfile -t files < <(git diff --name-only "$PR_BASE_SHA" "$PR_HEAD_SHA" | grep -E '^ops/oracle-assistant-lab-worker-requests/[^/]+\.json$' | sort -u)
+            [[ ${#files[@]} -eq 1 ]]
+            REQUEST_JSON="$(git show "$PR_HEAD_SHA:${files[0]}")"
+          else
+            mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^ops/oracle-assistant-lab-worker-requests/[^/]+\.json$' | sort -u)
+            [[ ${#files[@]} -eq 1 ]]
+            REQUEST_JSON="$(cat "${files[0]}")"
+          fi
+          REQUEST_JSON="$REQUEST_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os, re
           x=json.loads(os.environ['REQUEST_JSON'])
           required={'request_id','git_ref','expected_host_fingerprint','host','user'}
@@ -82,9 +99,11 @@ jobs:
           PY
 
       - name: Verify pinned source
+        shell: bash
         run: |
           set -euo pipefail
           ref='${{ steps.request.outputs.git_ref }}'
+          git fetch --quiet origin "$ref"
           git cat-file -e "$ref^{commit}"
           git show "$ref:assistant_lab/worker.py" | grep -F 'BEN_COMPUTE' >/dev/null
           git show "$ref:assistant_lab/ben_runtime.py" | grep -F 'POLICY_ONLY' >/dev/null
