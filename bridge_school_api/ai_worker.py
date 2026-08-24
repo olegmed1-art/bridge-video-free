@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Literal
 from uuid import UUID
 
@@ -45,6 +46,25 @@ class SearchCompletion(BaseModel):
     sample_quality: float | None = None
     worlds_object_uri: str | None = None
     evaluations: list[CandidateEvaluation] = Field(default_factory=list)
+
+
+def _has_explicit_search_provenance(evaluation: CandidateEvaluation) -> bool:
+    metrics = evaluation.metrics_json
+    provenance = (metrics.get("evidence_class"), metrics.get("engine"))
+    numeric_evidence = (
+        evaluation.raw_score_ev,
+        evaluation.imp_ev,
+        evaluation.mp_ev,
+        evaluation.make_probability,
+    )
+    return (
+        provenance in {
+            ("DDS3_DOUBLE_DUMMY", "DDS3"),
+            ("BEN_SIMULATION", "BEN"),
+        }
+        and metrics.get("fallback_used") is False
+        and any(value is not None and math.isfinite(value) for value in numeric_evidence)
+    )
 
 
 @router.get("/positions/{position_id}/route")
@@ -207,6 +227,13 @@ def complete_search_run(search_run_id: UUID, result: SearchCompletion) -> dict:
             raise HTTPException(status_code=409, detail="search run is not completable")
         if result.status == "COMPLETED" and not result.evaluations:
             raise HTTPException(status_code=409, detail="completed search requires explicit candidate evaluations")
+        if result.status == "COMPLETED" and not all(
+            _has_explicit_search_provenance(evaluation) for evaluation in result.evaluations
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="completed search requires explicit DDS3 or BEN simulation provenance",
+            )
 
         if result.status == "COMPLETED":
             for evaluation in result.evaluations:

@@ -18,6 +18,7 @@ class PolicyEvidence(BaseModel):
     distribution: dict = Field(default_factory=dict)
     top_action: str | None = None
     entropy: float | None = None
+    search_top_n: int = Field(default=5, ge=1, le=20)
 
 
 def _rank_distribution(distribution: dict) -> tuple[str | None, Decimal | None]:
@@ -40,6 +41,20 @@ def _rank_distribution(distribution: dict) -> tuple[str | None, Decimal | None]:
     return top, margin
 
 
+def _search_actions(distribution: dict, limit: int) -> set[str]:
+    """Return a deterministic finite-score Top-N candidate set for heavy search."""
+    ranked: list[tuple[str, Decimal]] = []
+    for action, value in distribution.items():
+        try:
+            numeric = Decimal(str(value))
+        except (InvalidOperation, ValueError):
+            continue
+        if numeric.is_finite():
+            ranked.append((str(action), numeric))
+    ranked.sort(key=lambda item: (-item[1], item[0]))
+    return {action for action, _ in ranked[:limit]}
+
+
 @router.post("/positions/{position_id}/policy-evidence")
 def record_policy_evidence(position_id: UUID, evidence: PolicyEvidence) -> dict:
     """Persist explicit policy scores and create candidate rows without inventing EV/confidence."""
@@ -51,6 +66,7 @@ def record_policy_evidence(position_id: UUID, evidence: PolicyEvidence) -> dict:
         action for action, value in evidence.distribution.items()
         if _rank_distribution({action: value})[0] is not None
     }
+    search_actions = _search_actions(evidence.distribution, evidence.search_top_n)
     if str(top_action) not in {str(action) for action in numeric_actions}:
         raise HTTPException(status_code=422, detail="policy top_action has no finite numeric score")
 
@@ -96,12 +112,14 @@ def record_policy_evidence(position_id: UUID, evidence: PolicyEvidence) -> dict:
                     position_id, policy_run_id, action, legal,
                     system_compatible, hard_rule_status,
                     policy_score, search_included
-                ) VALUES (%s,%s,%s,true,NULL,NULL,%s,false)
+                ) VALUES (%s,%s,%s,true,NULL,NULL,%s,%s)
                 ON CONFLICT (position_id, policy_run_id, action)
-                DO UPDATE SET policy_score=EXCLUDED.policy_score
+                DO UPDATE SET policy_score=EXCLUDED.policy_score,
+                              search_included=EXCLUDED.search_included
                 RETURNING *
                 """,
-                (position_id, policy["policy_run_id"], str(action), numeric_score),
+                (position_id, policy["policy_run_id"], str(action), numeric_score,
+                 str(action) in search_actions),
             )
             created_candidates.append(cur.fetchone())
 

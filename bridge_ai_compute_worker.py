@@ -32,6 +32,7 @@ class Config:
     poll_seconds: float
     ben_attempts: int = 3
     ben_retry_seconds: float = 1.0
+    ben_search_top_n: int = 5
 
 
 def load_config() -> Config:
@@ -47,6 +48,7 @@ def load_config() -> Config:
         poll_seconds=float(os.environ.get("BRIDGE_WORKER_POLL_SECONDS", "5")),
         ben_attempts=max(1, int(os.environ.get("BEN_MAX_ATTEMPTS", "3"))),
         ben_retry_seconds=max(0.0, float(os.environ.get("BEN_RETRY_SECONDS", "1"))),
+        ben_search_top_n=min(20, max(1, int(os.environ.get("BEN_SEARCH_TOP_N", "5")))),
     )
 
 
@@ -206,7 +208,12 @@ def teacher_payload(engine_key: str, engine_result: dict[str, Any]) -> dict[str,
     }
 
 
-def policy_payload(engine_key: str, teacher: dict[str, Any]) -> dict[str, Any] | None:
+def policy_payload(
+    engine_key: str,
+    teacher: dict[str, Any],
+    *,
+    search_top_n: int = 5,
+) -> dict[str, Any] | None:
     scores = teacher.get("candidate_scores") or {}
     if not scores:
         return None
@@ -216,12 +223,17 @@ def policy_payload(engine_key: str, teacher: dict[str, Any]) -> dict[str, Any] |
         "distribution": scores,
         "top_action": teacher.get("action"),
         "entropy": None,
+        "search_top_n": search_top_n,
     }
 
 
 def search_evaluations(job: dict[str, Any], engine_key: str, engine_result: dict[str, Any]) -> list[dict[str, Any]]:
     candidates = job.get("candidates") or []
-    by_action = {str(c.get("action")): c for c in candidates}
+    by_action = {
+        str(c.get("action")): c
+        for c in candidates
+        if c.get("search_included") is True
+    }
     out: list[dict[str, Any]] = []
     for item in engine_result.get("candidates") or []:
         action = str(item.get("call") or item.get("bid") or item.get("action") or "")
@@ -245,6 +257,8 @@ def search_evaluations(job: dict[str, Any], engine_key: str, engine_result: dict
                 "insta_score": item.get("insta_score"),
                 "engine_raw": item,
                 "evidence_class": "BEN_SIMULATION",
+                "engine": "BEN",
+                "fallback_used": False,
             },
         })
     return out
@@ -273,7 +287,7 @@ def process_one(config: Config) -> bool:
         )
 
         eval_job = dict(claim)
-        policy = policy_payload(engine_key, teacher)
+        policy = policy_payload(engine_key, teacher, search_top_n=config.ben_search_top_n)
         if policy is not None:
             policy_result = request_json(
                 f"{config.api_base}/v1/ai/positions/{position_id}/policy-evidence",
