@@ -28,6 +28,10 @@ Vercel is not a compute scheduler and must not execute DDS3/BEN/video batch work
 
 Automatic research output does not silently modify the teaching canon. Canonical promotion remains a separate reviewed action.
 
+## Gate acceptance
+
+A documentation-only merge is used as the production canary for the Ignored Build Step. It must pass GitHub CI while producing no new Vercel build. This validates that non-web repository activity is separated from web deployment activity.
+
 ## Evolution path
 
 The current monorepo remains canonical. Logical boundaries should converge toward `apps/web`, `services/*` and shared contracts without forcing a premature multi-repository split. A controlled Release Controller may later replace direct platform Git deployment once the current path-aware deployment gate has been proven in production.
