@@ -59,7 +59,10 @@ def test_cloud_shell_bootstrap_is_single_fixed_host_path():
     assert "ops/install_assistant_lab_ocarun_admin.sh" in CLOUD
     assert "ops/install_universal_video_ocarun_admin.sh" in CLOUD
     assert "ORACLE_BOUNDED_OCARUN_ADMIN_BOOTSTRAP_PASS" in CLOUD
-    assert "$1" not in CLOUD
+    # Positional parameters are used only inside the private fetch_installer helper
+    # and awk. The Cloud Shell user-facing contract itself is env-only.
+    assert 'case "$1"' not in CLOUD
+    assert '[[ $#' not in CLOUD
     assert "eval " not in CLOUD
 
 
