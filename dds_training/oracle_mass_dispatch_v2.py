@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -23,6 +24,32 @@ def _count_jsonl(path: Path, *, split: str | None = None) -> int:
             if split is None or row.get("split") == split:
                 n += 1
     return n
+
+
+def _safe_log_tail(path: Path, *, lines: int = 40, max_chars: int = 6000) -> list[str]:
+    """Return a bounded, sanitized diagnostic tail suitable for evidence."""
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:]
+    except OSError as exc:
+        return [f"log_tail_unavailable:{type(exc).__name__}"]
+    safe: list[str] = []
+    patterns = (
+        (re.compile(r"postgres(?:ql)?://\S+", re.I), "[REDACTED_DSN]"),
+        (re.compile(r"Bearer\s+\S+", re.I), "Bearer [REDACTED]"),
+        (re.compile(r"(?i)(token|password|secret|api[_-]?key|dsn)=\S+"), r"\1=[REDACTED]"),
+    )
+    used = 0
+    for line in raw:
+        text = line
+        for pattern, replacement in patterns:
+            text = pattern.sub(replacement, text)
+        remaining = max_chars - used
+        if remaining <= 0:
+            break
+        text = text[:remaining]
+        safe.append(text)
+        used += len(text) + 1
+    return safe
 
 
 def run_pilot(state_root: Path, repo_root: Path) -> int:
@@ -103,6 +130,8 @@ def run_pilot(state_root: Path, repo_root: Path) -> int:
     final["returncode"] = proc.returncode
     final["log_sha256"] = base._sha256(log_path)
     final["status"] = "train_passed" if proc.returncode == 0 else "failed"
+    if proc.returncode != 0:
+        final["failure_tail"] = _safe_log_tail(log_path)
     base._write_evidence(evidence_path, final)
     return proc.returncode
 
