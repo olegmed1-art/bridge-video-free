@@ -34,7 +34,7 @@ def _safe_frame_path(job_dir: Path, file_name: Any) -> Path:
 
 
 def _wrap_injected_parser(parser: LegacyParserInjection):
-    """Compatibility shim for contract tests/callers; never selected implicitly."""
+    """Compatibility shim for explicit callers/tests; never selected implicitly."""
     def detector(frame: Path) -> dict[str, Any]:
         raw = parser(frame)
         hands = raw.get("hands") or {}
@@ -75,6 +75,7 @@ def process_job_frames(
 ) -> dict[str, Any]:
     if engine is not None and parser is not None:
         raise ValueError("pass engine or parser, not both")
+    compatibility_mode = parser is not None
     root = job_dir.resolve()
     manifest_path = root / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -95,6 +96,15 @@ def process_job_frames(
             raise ValueError("manifest frame entry must be an object")
         frame = _safe_frame_path(root, frame_meta.get("file"))
         result = vision.analyze_frame(frame).to_dict()
+        if compatibility_mode:
+            candidates = result.get("candidates") or []
+            evidence = candidates[0].get("evidence", {}) if candidates else {}
+            result["parser_status"] = evidence.get("parser_status", result["status"])
+            result["recognized_card_count"] = evidence.get(
+                "recognized_card_count",
+                sum(len(hand["cards"]) for hand in (result.get("deal") or {}).get("hands", {}).values()),
+            )
+            result["state_fingerprint"] = evidence.get("state_fingerprint")
         result["time"] = frame_meta.get("time")
         result["frame_file"] = frame.name
         result["frame_sha256"] = frame_meta.get("sha256")
@@ -109,19 +119,32 @@ def process_job_frames(
         "".join(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n" for record in records),
         encoding="utf-8",
     )
-    summary = {
-        "status": "REVIEW" if conflict_frames else "COMPLETED",
-        "vision_engine": "native",
-        "detectors": list(vision.detector_names),
-        "legacy_old_bbo_enabled": bool(allow_legacy_old_bbo),
-        "job_id": manifest.get("job_id"),
-        "source_fingerprint": manifest.get("source_fingerprint"),
-        "input_frames": len(frames),
-        "output_records": len(records),
-        "recognized_frames": recognized_frames,
-        "conflict_frames": conflict_frames,
-        "output": output_path.name,
-    }
+    if compatibility_mode:
+        summary = {
+            "status": "REVIEW" if conflict_frames else "COMPLETED",
+            "job_id": manifest.get("job_id"),
+            "source_fingerprint": manifest.get("source_fingerprint"),
+            "input_frames": len(frames),
+            "output_records": len(records),
+            "recognized_frames": recognized_frames,
+            "conflict_frames": conflict_frames,
+            "derive_fourth_hand": False,
+            "output": output_path.name,
+        }
+    else:
+        summary = {
+            "status": "REVIEW" if conflict_frames else "COMPLETED",
+            "vision_engine": "native",
+            "detectors": list(vision.detector_names),
+            "legacy_old_bbo_enabled": bool(allow_legacy_old_bbo),
+            "job_id": manifest.get("job_id"),
+            "source_fingerprint": manifest.get("source_fingerprint"),
+            "input_frames": len(frames),
+            "output_records": len(records),
+            "recognized_frames": recognized_frames,
+            "conflict_frames": conflict_frames,
+            "output": output_path.name,
+        }
     summary_path = root / "bridge_positions_summary.json"
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
