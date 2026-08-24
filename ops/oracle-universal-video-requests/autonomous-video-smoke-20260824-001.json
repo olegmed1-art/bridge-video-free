@@ -1,0 +1,9 @@
+{
+  "request_id": "autonomous-video-smoke-20260824-001",
+  "mode": "smoke",
+  "git_ref": "438696895954700ad064433255f08f892618ad2f",
+  "expected_host_fingerprint": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/Ecf0xu0WPk",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}
