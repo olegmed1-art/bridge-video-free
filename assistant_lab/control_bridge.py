@@ -74,25 +74,7 @@ def _request(config: BridgeConfig, method: str, path: str, payload: dict[str, An
 def _claim(conn: psycopg.Connection[Any], config: BridgeConfig) -> dict[str, Any] | None:
     with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
-            """
-            WITH candidate AS (
-                SELECT command_id
-                FROM assistant_lab.control_command
-                WHERE status = 'QUEUED'
-                ORDER BY created_at
-                FOR UPDATE SKIP LOCKED
-                LIMIT 1
-            )
-            UPDATE assistant_lab.control_command AS c
-               SET status = 'RUNNING',
-                   claimed_by = %s,
-                   claimed_at = now(),
-                   updated_at = now(),
-                   attempts = attempts + 1
-              FROM candidate
-             WHERE c.command_id = candidate.command_id
-         RETURNING c.*
-            """,
+            "SELECT * FROM assistant_lab.claim_control_command(%s)",
             (config.worker_id,),
         )
         row = cur.fetchone()
@@ -100,21 +82,34 @@ def _claim(conn: psycopg.Connection[Any], config: BridgeConfig) -> dict[str, Any
     return dict(row) if row else None
 
 
-def _finish(conn: psycopg.Connection[Any], command_id: Any, status: str, *, result: Any = None, error: str | None = None) -> None:
+def _finish(
+    conn: psycopg.Connection[Any],
+    config: BridgeConfig,
+    command_id: Any,
+    status: str,
+    *,
+    result: Any = None,
+    error: str | None = None,
+) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
-            UPDATE assistant_lab.control_command
-               SET status = %s,
-                   result_json = %s,
-                   error_text = %s,
-                   completed_at = now(),
-                   updated_at = now()
-             WHERE command_id = %s
+            SELECT assistant_lab.finish_control_command(
+                %s, %s, %s, %s::jsonb, %s
+            )
             """,
-            (status, json.dumps(result) if result is not None else None, error, command_id),
+            (
+                command_id,
+                config.worker_id,
+                status,
+                json.dumps(result) if result is not None else None,
+                error,
+            ),
         )
+        row = cur.fetchone()
     conn.commit()
+    if not row or row[0] is not True:
+        raise RuntimeError("control command terminal transition rejected")
 
 
 def _execute(config: BridgeConfig, row: dict[str, Any]) -> dict[str, Any]:
@@ -181,17 +176,7 @@ def _execute(config: BridgeConfig, row: dict[str, Any]) -> dict[str, Any]:
 def _recover_stale(conn: psycopg.Connection[Any], config: BridgeConfig) -> None:
     with conn.cursor() as cur:
         cur.execute(
-            """
-            UPDATE assistant_lab.control_command
-               SET status = CASE WHEN attempts < max_attempts THEN 'QUEUED' ELSE 'FAILED' END,
-                   error_text = CASE WHEN attempts < max_attempts THEN error_text ELSE 'stale control bridge claim exhausted retries' END,
-                   claimed_by = NULL,
-                   claimed_at = NULL,
-                   updated_at = now(),
-                   completed_at = CASE WHEN attempts < max_attempts THEN completed_at ELSE now() END
-             WHERE status = 'RUNNING'
-               AND claimed_at < now() - (%s * interval '1 second')
-            """,
+            "SELECT assistant_lab.recover_stale_control_commands(%s)",
             (config.stale_after_seconds,),
         )
     conn.commit()
@@ -210,9 +195,9 @@ def run_forever(config: BridgeConfig) -> None:
                     try:
                         result = _execute(config, row)
                     except Exception as exc:
-                        _finish(conn, row["command_id"], "FAILED", error=f"{type(exc).__name__}: {exc}"[:4000])
+                        _finish(conn, config, row["command_id"], "FAILED", error=f"{type(exc).__name__}: {exc}"[:4000])
                     else:
-                        _finish(conn, row["command_id"], "COMPLETED", result=result)
+                        _finish(conn, config, row["command_id"], "COMPLETED", result=result)
         except Exception:
             time.sleep(max(config.poll_seconds, 2.0))
 
