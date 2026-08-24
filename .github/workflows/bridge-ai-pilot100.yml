@@ -73,19 +73,19 @@ jobs:
             if test "$code" = "200"; then
               cat /tmp/ben-ready.json
               python - <<'PY'
-import json
-from pathlib import Path
+          import json
+          from pathlib import Path
 
-payload = json.loads(Path("/tmp/ben-ready.json").read_text())
-if not payload.get("bid"):
-    raise SystemExit("BEN canary returned no bid")
-candidates = payload.get("candidates") or []
-if not candidates:
-    raise SystemExit("BEN canary returned no candidates")
-if not any(item.get("insta_score") is not None for item in candidates):
-    raise SystemExit("BEN canary returned no policy scores")
-print("BEN_CONTRACT_OK", payload["bid"], len(candidates))
-PY
+          payload = json.loads(Path("/tmp/ben-ready.json").read_text())
+          if not payload.get("bid"):
+              raise SystemExit("BEN canary returned no bid")
+          candidates = payload.get("candidates") or []
+          if not candidates:
+              raise SystemExit("BEN canary returned no candidates")
+          if not any(item.get("insta_score") is not None for item in candidates):
+              raise SystemExit("BEN canary returned no policy scores")
+          print("BEN_CONTRACT_OK", payload["bid"], len(candidates))
+          PY
               exit 0
             fi
             sleep 2
