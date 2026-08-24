@@ -29,6 +29,7 @@ jobs:
           set -euo pipefail
           ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" .github/workflows/oracle-operator-v2.yml
           grep -F '/oracle-v2 rollout-worker' .github/workflows/oracle-operator-v2.yml >/dev/null
+          grep -F '/oracle-v2 canary-worlds' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '/oracle-v2 rollout-ben' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '127.0.0.1:8085:8085' .github/workflows/oracle-operator-v2.yml >/dev/null
 
@@ -36,7 +37,9 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.comment.user.login == 'olegmed1-art' &&
-      (github.event.comment.body == '/oracle-v2 rollout-worker' || github.event.comment.body == '/oracle-v2 rollout-ben')
+      (github.event.comment.body == '/oracle-v2 rollout-worker' ||
+       github.event.comment.body == '/oracle-v2 canary-worlds' ||
+       github.event.comment.body == '/oracle-v2 rollout-ben')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -178,6 +181,109 @@ jobs:
           systemctl is-active --quiet assistant-lab.service
           REMOTE
 
+      - name: Run unique Oracle WORLDS canary
+        id: worlds
+        if: ${{ env.COMMAND == '/oracle-v2 canary-worlds' }}
+        env:
+          CANARY_RUN_ID: ${{ github.run_id }}
+          CANARY_RUN_ATTEMPT: ${{ github.run_attempt }}
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$NEON_DATABASE_URL" ]]
+          python -m pip install --disable-pip-version-check --no-input --quiet 'psycopg[binary]==3.3.4'
+          python - <<'PY'
+          import os
+          import time
+
+          import psycopg
+          from psycopg.rows import dict_row
+          from psycopg.types.json import Jsonb
+
+          from assistant_lab.contract import canonical_idempotency_key, validate_job_payload
+
+          count = 4
+          run_id = int(os.environ["CANARY_RUN_ID"])
+          run_attempt = int(os.environ["CANARY_RUN_ATTEMPT"])
+          payload = validate_job_payload("WORLD_GENERATE", {
+              "known_seat": "N",
+              "known_hand_pbn": "AKQJ.T98.765.432",
+              "constraints": None,
+              "count": count,
+              "seed": (run_id % 200_000_000) * 10 + run_attempt,
+          })
+          idempotency_key = canonical_idempotency_key("WORLD_GENERATE", payload)
+          provenance = {
+              "dispatcher": "github-oracle-v2-worlds-canary",
+              "github_run_id": str(run_id),
+              "github_run_attempt": run_attempt,
+          }
+
+          with psycopg.connect(os.environ["NEON_DATABASE_URL"], autocommit=True, row_factory=dict_row) as conn:
+              with conn.cursor() as cur:
+                  cur.execute(
+                      """SELECT * FROM assistant_lab.enqueue_job(
+                          %s, %s, %s::smallint, %s, %s, %s,
+                          now() + interval '5 minutes', NULL
+                      )""",
+                      (
+                          "WORLD_GENERATE",
+                          Jsonb(payload),
+                          10,
+                          idempotency_key,
+                          "GITHUB_ORACLE_V2_WORLDS_CANARY",
+                          Jsonb(provenance),
+                      ),
+                  )
+                  job = cur.fetchone()
+
+              deadline = time.monotonic() + 180
+              while job["status"] not in {"COMPLETED", "FAILED", "CANCELLED"}:
+                  if time.monotonic() >= deadline:
+                      raise TimeoutError("WORLDS canary did not reach a terminal state")
+                  time.sleep(2)
+                  with conn.cursor() as cur:
+                      cur.execute("SELECT * FROM assistant_lab.job WHERE job_id = %s", (job["job_id"],))
+                      job = cur.fetchone()
+
+          if job["status"] != "COMPLETED":
+              raise RuntimeError(f"WORLDS canary ended with {job['status']}: {job['error_text']}")
+          if job["attempts"] != 1 or job["claimed_by"] != "oracle-assistant-lab-1":
+              raise RuntimeError("WORLDS canary worker/attempt provenance mismatch")
+
+          result = dict(job["result_json"] or {})
+          provenance = dict(job["provenance_json"] or {})
+          if not (
+              result.get("engine") == "WORLD_GENERATOR"
+              and result.get("fallback_used") is False
+              and result.get("complete") is True
+              and result.get("requested") == count
+              and result.get("accepted") == count
+              and len(result.get("worlds") or []) == count
+          ):
+              raise RuntimeError("WORLDS canary result contract mismatch")
+          if not (
+              provenance.get("worker_id") == "oracle-assistant-lab-1"
+              and provenance.get("execution_path") == "oracle_local_world_generator"
+          ):
+              raise RuntimeError("WORLDS canary execution provenance mismatch")
+
+          for world in result["worlds"]:
+              cards = []
+              for hand in world["hands"].values():
+                  for suit, ranks in zip("SHDC", hand.split(".")):
+                      cards.extend(suit + rank for rank in ranks)
+              if len(cards) != 52 or len(set(cards)) != 52:
+                  raise RuntimeError("WORLDS canary produced an invalid 52-card deal")
+              if world["hands"]["N"] != payload["known_hand_pbn"]:
+                  raise RuntimeError("WORLDS canary did not preserve the known hand")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"job_id={job['job_id']}\n")
+          print(f"WORLDS_CANARY_PASS job_id={job['job_id']} worlds={count} attempts=1")
+          PY
+
       - name: Publish result
         if: always()
         env:
@@ -186,7 +292,10 @@ jobs:
           SSH_OUTCOME: ${{ steps.ssh.outcome }}
           WORKER_OUTCOME: ${{ steps.worker.outcome }}
           BEN_OUTCOME: ${{ steps.ben.outcome }}
+          WORLDS_OUTCOME: ${{ steps.worlds.outcome }}
+          WORLDS_JOB_ID: ${{ steps.worlds.outputs.job_id }}
         shell: bash
         run: |
           set -euo pipefail
-          gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -f body="Oracle v2 **${COMMAND}**: ssh=${SSH_OUTCOME}, worker=${WORKER_OUTCOME}, ben=${BEN_OUTCOME}" >/dev/null
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="Oracle v2 **${COMMAND}**: ssh=${SSH_OUTCOME}, worker=${WORKER_OUTCOME}, ben=${BEN_OUTCOME}, worlds=${WORLDS_OUTCOME}, worlds_job=${WORLDS_JOB_ID:-none}" >/dev/null
