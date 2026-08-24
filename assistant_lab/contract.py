@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any, Mapping
@@ -162,27 +163,32 @@ def verify_ben_result(result: Any) -> dict[str, Any]:
         raise LabContractError("BEN result has no selected bid")
     if not isinstance(candidates, list) or not candidates:
         raise LabContractError("BEN result has no candidates")
+    selected = bid.strip()
     actions: set[str] = set()
-    scored = 0
+    selected_scored = False
     for candidate in candidates:
         item = _require_mapping(candidate, "BEN candidate")
         action = item.get("call") or item.get("bid") or item.get("action")
         if not isinstance(action, str) or not action.strip():
             raise LabContractError("BEN candidate has no action")
-        actions.add(action.strip())
+        normalized_action = action.strip()
+        actions.add(normalized_action)
         score = item.get("insta_score", item.get("score"))
         if score is not None:
+            if isinstance(score, bool):
+                raise LabContractError("BEN candidate score is not numeric")
             try:
                 numeric = float(score)
             except (TypeError, ValueError) as exc:
                 raise LabContractError("BEN candidate score is not numeric") from exc
-            if numeric != numeric or numeric in {float("inf"), float("-inf")}:
+            if not math.isfinite(numeric):
                 raise LabContractError("BEN candidate score is not finite")
-            scored += 1
-    if scored == 0:
-        raise LabContractError("BEN result has no finite policy score")
-    if bid.strip() not in actions:
+            if normalized_action == selected:
+                selected_scored = True
+    if selected not in actions:
         raise LabContractError("BEN selected bid is absent from candidates")
+    if not selected_scored:
+        raise LabContractError("BEN selected bid has no finite policy score")
     result_copy = dict(data)
     result_copy.setdefault("engine", "BEN")
     result_copy["evidence_class"] = "POLICY_ONLY"
