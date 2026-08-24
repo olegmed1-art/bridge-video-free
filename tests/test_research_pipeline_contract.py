@@ -23,12 +23,13 @@ def test_dds3_research_job_maps_to_existing_resident_worker_contract():
     assert "oracle_local_dds3" in plan.execution_boundary
 
 
-def test_ben_is_registered_but_fails_closed_until_queue_kind_exists():
-    plan = plan_execution(ResearchKind.BEN, {"hand": "AKQJ..."})
+def test_ben_maps_to_bounded_resident_worker_contract():
+    payload = {"hand": "AKQJ.T98.765.432", "seat": "N", "dealer": "N", "vul": "", "auction": []}
+    plan = plan_execution(ResearchKind.BEN, payload)
     assert plan.capability == "ben.compute"
-    assert plan.assistant_lab_kind is None
-    assert plan.assistant_lab_payload is None
-    assert plan.execution_boundary == "resident_worker_required_ben_adapter"
+    assert plan.assistant_lab_kind == "BEN_COMPUTE"
+    assert plan.assistant_lab_payload == payload
+    assert plan.execution_boundary == "assistant_lab_resident_worker_to_oracle_local_ben"
 
 
 def test_research_key_is_deterministic_and_kind_scoped():
