@@ -1,0 +1,165 @@
+name: Oracle Operator v2
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-operator-v2.yml'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: |
+          set -euo pipefail
+          grep -F '/oracle-v2 rollout-worker' .github/workflows/oracle-operator-v2.yml >/dev/null
+          grep -F '/oracle-v2 rollout-ben' .github/workflows/oracle-operator-v2.yml >/dev/null
+
+  operate:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.comment.user.login == 'olegmed1-art' &&
+      (github.event.comment.body == '/oracle-v2 rollout-worker' || github.event.comment.body == '/oracle-v2 rollout-ben')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+      COMMAND: ${{ github.event.comment.body }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Resolve host and a working SSH key
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/oracle-v2"; mkdir -p "$work"
+          known="$work/known_hosts"; : > "$known"
+          for attempt in 1 2 3; do
+            ssh-keyscan -T 10 -t ed25519,ecdsa,rsa "$ORACLE_HOST" >> "$known" 2>/dev/null || true
+            [[ -s "$known" ]] && break
+            sleep $((attempt * 2))
+          done
+          sort -u -o "$known" "$known"
+          ssh-keygen -lf "$known" | awk '{print $2}' | grep -Fx "$EXPECTED_FINGERPRINT" >/dev/null
+          selected=''
+          selected_name=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            value="${!name:-}"
+            [[ -n "$value" ]] || continue
+            candidate="$work/$name"
+            printf '%s\n' "$value" > "$candidate"
+            chmod 0600 "$candidate"
+            ssh-keygen -y -f "$candidate" >/dev/null 2>&1 || continue
+            if ssh -i "$candidate" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=12 "$ORACLE_USER@$ORACLE_HOST" 'true' >/dev/null 2>&1; then
+              selected="$candidate"; selected_name="$name"; break
+            fi
+          done
+          [[ -n "$selected" ]]
+          echo "key=$selected" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "selected_name=$selected_name" >> "$GITHUB_OUTPUT"
+
+      - name: Roll out reviewed main worker
+        id: worker
+        if: ${{ env.COMMAND == '/oracle-v2 rollout-worker' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref="$(git rev-parse HEAD)"
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" "sudo -n env WORKER_GIT_REF='$ref' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          repo=/opt/bridge-school/bridge-video-free
+          git -C "$repo" fetch --quiet origin "$WORKER_GIT_REF"
+          git -C "$repo" cat-file -e "$WORKER_GIT_REF^{commit}"
+          git -C "$repo" checkout --force --quiet --detach "$WORKER_GIT_REF"
+          /opt/bridge-school/assistant-lab/.venv/bin/python -m py_compile "$repo/assistant_lab/worker.py" "$repo/assistant_lab/ben_runtime.py" "$repo/assistant_lab/contract.py"
+          systemctl restart assistant-lab.service
+          sleep 3
+          systemctl is-active --quiet assistant-lab.service
+          curl -fsS --max-time 5 http://127.0.0.1:8080/readyz >/dev/null
+          REMOTE
+
+      - name: Roll out localhost BEN runtime
+        id: ben
+        if: ${{ env.COMMAND == '/oracle-v2 rollout-ben' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          command -v docker >/dev/null
+          systemctl is-active --quiet docker
+          docker pull ghcr.io/lorserker/ben:latest >/tmp/bridge-ben-pull.log
+          digest="$(docker image inspect ghcr.io/lorserker/ben:latest --format '{{index .RepoDigests 0}}')"
+          [[ "$digest" == ghcr.io/lorserker/ben@sha256:* ]]
+          install -d -m 0755 /opt/bridge-school/ben-runtime
+          printf '%s\n' "$digest" > /opt/bridge-school/ben-runtime/image-digest
+          cat >/etc/systemd/system/bridge-ben.service <<EOF
+          [Unit]
+          Description=Bridge BEN policy runtime
+          After=docker.service network-online.target
+          Requires=docker.service
+
+          [Service]
+          Type=simple
+          Restart=on-failure
+          RestartSec=3
+          ExecStartPre=-/usr/bin/docker rm -f bridge-ben
+          ExecStart=/usr/bin/docker run --rm --name bridge-ben -p 127.0.0.1:8085:8085 $digest
+          ExecStop=/usr/bin/docker stop -t 10 bridge-ben
+          TimeoutStartSec=180
+          TimeoutStopSec=30
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          systemctl daemon-reload
+          systemctl enable --now bridge-ben.service
+          for attempt in $(seq 1 90); do
+            code="$(curl -sS -o /tmp/bridge-ben-ready.json -w '%{http_code}' --max-time 5 'http://127.0.0.1:8085/bid?hand=AK97543.K.T3.AK7&seat=S&dealer=N&vul=&ctx=----&details=true' || true)"
+            [[ "$code" == 200 ]] && break
+            sleep 2
+          done
+          [[ "${code:-}" == 200 ]]
+          ss -ltn | grep -Eq '127\.0\.0\.1:8085[[:space:]]'
+          ! ss -ltn | grep -Eq '(^|[[:space:]])0\.0\.0\.0:8085|\[::\]:8085'
+          systemctl restart assistant-lab.service
+          sleep 3
+          systemctl is-active --quiet assistant-lab.service
+          REMOTE
+
+      - name: Publish result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          SSH_OUTCOME: ${{ steps.ssh.outcome }}
+          WORKER_OUTCOME: ${{ steps.worker.outcome }}
+          BEN_OUTCOME: ${{ steps.ben.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -f body="Oracle v2 **${COMMAND}**: ssh=${SSH_OUTCOME}, worker=${WORKER_OUTCOME}, ben=${BEN_OUTCOME}" >/dev/null
