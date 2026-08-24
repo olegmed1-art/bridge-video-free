@@ -6,6 +6,7 @@ on:
       - '.github/workflows/oracle-universal-video-admin.yml'
       - 'ops/universal_video_oci_admin_entrypoint.sh'
       - 'ops/install_universal_video_ocarun_admin.sh'
+      - 'ops/cloud_shell_install_bounded_oci_admin.sh'
       - 'tests/test_universal_video_oci_admin_contract.py'
   push:
     branches: [main]
@@ -35,6 +36,8 @@ jobs:
           set -euo pipefail
           bash -n ops/universal_video_oci_admin_entrypoint.sh
           bash -n ops/install_universal_video_ocarun_admin.sh
+          bash -n ops/cloud_shell_install_bounded_oci_admin.sh
+          python -m pip install --disable-pip-version-check -q pytest
           python -m pytest -q tests/test_universal_video_oci_admin_contract.py
 
   execute:
