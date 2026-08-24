@@ -38,7 +38,7 @@ class CandidateEvaluation(BaseModel):
 
 
 class SearchCompletion(BaseModel):
-    status: Literal["COMPLETED", "FAILED"]
+    status: Literal["COMPLETED", "NO_SEARCH_EVIDENCE", "FAILED"]
     samples_generated: int | None = None
     samples_accepted: int | None = None
     effective_sample_size: float | None = None
@@ -203,7 +203,7 @@ def complete_search_run(search_run_id: UUID, result: SearchCompletion) -> dict:
         if search_run["status"] == "COMPLETED":
             cur.execute("SELECT * FROM ai.search_run WHERE search_run_id=%s", (search_run_id,))
             return {"updated": False, "search_run": cur.fetchone()}
-        if search_run["status"] not in {"QUEUED", "RUNNING", "FAILED"}:
+        if search_run["status"] not in {"QUEUED", "RUNNING", "NO_SEARCH_EVIDENCE", "FAILED"}:
             raise HTTPException(status_code=409, detail="search run is not completable")
         if result.status == "COMPLETED" and not result.evaluations:
             raise HTTPException(status_code=409, detail="completed search requires explicit candidate evaluations")
