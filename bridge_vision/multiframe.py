@@ -1,7 +1,7 @@
 """Evidence-based multi-frame bridge deal reconstruction.
 
 Frames are NEVER linked because they are close in time. A frame may join an
-existing deal track only through explicit board identity or sufficiently strong
+existing deal track only through scoped explicit identity or sufficiently strong
 seat+card overlap with no cross-seat conflict. Ambiguous matches remain review
 items instead of being guessed into a deal.
 """
@@ -13,7 +13,7 @@ from typing import Any, Iterable, Mapping
 
 from bridge_contracts.video_deal import SEATS, canonicalize_video_deal
 
-MULTIFRAME_VERSION = "bridge-vision-multiframe-v1"
+MULTIFRAME_VERSION = "bridge-vision-multiframe-v2"
 
 
 class MultiFrameError(ValueError):
@@ -47,10 +47,17 @@ def _cross_seat_conflict(a: set[tuple[str, str]], b: set[tuple[str, str]]) -> bo
 
 
 def _explicit_board_key(record: Mapping[str, Any]) -> str | None:
-    for key in ("board_id", "board_number", "deal_key"):
+    # board_id/deal_key are assumed to be source-stable identifiers. A bare
+    # board_number is not globally unique and can repeat later in one video, so
+    # it becomes strong identity only when accompanied by an explicit scope.
+    for key in ("board_id", "deal_key"):
         value = record.get(key)
         if value is not None and str(value).strip():
             return f"{key}:{str(value).strip()}"
+    board_number = record.get("board_number")
+    scope = record.get("board_scope") or record.get("source_deal_scope")
+    if board_number is not None and str(board_number).strip() and scope is not None and str(scope).strip():
+        return f"board_number:{str(scope).strip()}:{str(board_number).strip()}"
     return None
 
 
@@ -70,6 +77,7 @@ class DealTrack:
     explicit_board_key: str | None = None
     frame_indices: list[int] = field(default_factory=list)
     frame_files: list[str] = field(default_factory=list)
+    frame_identities: set[str] = field(default_factory=set)
     observed_pairs: set[tuple[str, str]] = field(default_factory=set)
     conflicts: list[dict[str, Any]] = field(default_factory=list)
 
@@ -115,9 +123,12 @@ def _score(track: DealTrack, record: Mapping[str, Any], *, min_shared_cards: int
         return None
 
     board_key = _explicit_board_key(record)
-    if board_key is not None or track.explicit_board_key is not None:
-        return 1000.0 if board_key is not None and board_key == track.explicit_board_key else None
+    if board_key is not None and track.explicit_board_key is not None:
+        return 1000.0 if board_key == track.explicit_board_key else None
 
+    # If only one side has strong identity, evidence overlap may still bind the
+    # frame. This avoids fragmenting a deal when a UI identifier disappears on
+    # later frames, while never letting a mismatching explicit key through.
     shared = len(track.observed_pairs & pairs)
     smaller = min(len(track.observed_pairs), len(pairs))
     if smaller == 0 or shared < min_shared_cards:
@@ -142,6 +153,7 @@ def reconstruct_deals(
 
     tracks: list[DealTrack] = []
     review: list[dict[str, Any]] = []
+    seen_frames: dict[str, str] = {}
 
     for index, record in enumerate(records):
         if not isinstance(record, Mapping):
@@ -149,6 +161,17 @@ def reconstruct_deals(
         pairs = _pairs(record)
         if not pairs:
             review.append({"frame_index": index, "reason": "NO_CARD_EVIDENCE", "frame_file": record.get("frame_file")})
+            continue
+
+        identity = _frame_identity(record)
+        prior_deal = seen_frames.get(identity)
+        if prior_deal is not None:
+            review.append({
+                "frame_index": index,
+                "reason": "DUPLICATE_FRAME_EVIDENCE",
+                "deal_id": prior_deal,
+                "frame_file": record.get("frame_file"),
+            })
             continue
 
         matches: list[tuple[float, DealTrack]] = []
@@ -169,26 +192,30 @@ def reconstruct_deals(
 
         if matches:
             track = matches[0][1]
-            if _cross_seat_conflict(track.observed_pairs, pairs):
-                review.append({"frame_index": index, "reason": "CROSS_SEAT_CONFLICT", "deal_id": track.deal_id})
-                continue
+            board_key = _explicit_board_key(record)
+            if board_key is not None and track.explicit_board_key is None:
+                track.explicit_board_key = board_key
             track.observed_pairs |= pairs
             track.frame_indices.append(index)
+            track.frame_identities.add(identity)
+            seen_frames[identity] = track.deal_id
             if record.get("frame_file"):
                 track.frame_files.append(str(record.get("frame_file")))
             continue
 
-        # A new deal track may be created from explicit board identity or enough
-        # independent card evidence. Time is deliberately not consulted.
+        # A new deal track may be created from strong scoped board identity or
+        # enough independent card evidence. Bare board_number and time are not
+        # anchors because both can repeat.
         board_key = _explicit_board_key(record)
         if board_key is None and len(pairs) < min_shared_cards:
             review.append({"frame_index": index, "reason": "INSUFFICIENT_ANCHOR_EVIDENCE", "frame_file": record.get("frame_file")})
             continue
-        anchor = _frame_identity(record)
-        deal_id = "deal-" + sha256(anchor.encode("utf-8")).hexdigest()[:16]
-        track = DealTrack(deal_id=deal_id, anchor_identity=anchor, explicit_board_key=board_key)
+        deal_id = "deal-" + sha256(identity.encode("utf-8")).hexdigest()[:16]
+        track = DealTrack(deal_id=deal_id, anchor_identity=identity, explicit_board_key=board_key)
         track.observed_pairs |= pairs
         track.frame_indices.append(index)
+        track.frame_identities.add(identity)
+        seen_frames[identity] = deal_id
         if record.get("frame_file"):
             track.frame_files.append(str(record.get("frame_file")))
         tracks.append(track)
