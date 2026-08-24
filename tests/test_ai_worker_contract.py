@@ -49,7 +49,7 @@ def test_policy_score_is_not_promoted_to_search_ev():
 
 
 def test_explicit_ben_simulation_metrics_become_search_evidence():
-    job = {"candidates": [{"candidate_id": "c1", "action": "2H"}]}
+    job = {"candidates": [{"candidate_id": "c1", "action": "2H", "search_included": True}]}
     result = {
         "bid": "2H",
         "candidates": [{
@@ -65,6 +65,17 @@ def test_explicit_ben_simulation_metrics_become_search_evidence():
     assert evaluations[0]["raw_score_ev"] == 118
     assert evaluations[0]["make_probability"] == 0.73
     assert evaluations[0]["metrics_json"]["evidence_class"] == "BEN_SIMULATION"
+    assert evaluations[0]["metrics_json"]["engine"] == "BEN"
+    assert evaluations[0]["metrics_json"]["fallback_used"] is False
+
+
+def test_simulation_metrics_ignore_candidates_outside_top_n():
+    job = {"candidates": [{"candidate_id": "c1", "action": "2H", "search_included": False}]}
+    result = {
+        "bid": "2H",
+        "candidates": [{"call": "2H", "insta_score": 0.61, "expected_score_sd": 118}],
+    }
+    assert worker.search_evaluations(job, "ben", result) == []
 
 
 def test_ben_policy_only_status_does_not_claim_search_completion():
