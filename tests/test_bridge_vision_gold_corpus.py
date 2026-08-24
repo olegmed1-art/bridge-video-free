@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -26,10 +27,17 @@ def test_gold_jsonl_rejects_duplicate_frame_sha(tmp_path: Path):
         load_jsonl(p)
 
 
-def test_gold_frames_must_exist(tmp_path: Path):
-    case = validate_case({"frame": "x.jpg", "frame_sha256": "c" * 64, "human_verified": True, "hands": {"S": ["KH"]}})
+def test_gold_frames_must_exist_and_match_bytes(tmp_path: Path):
+    frame = tmp_path / "x.jpg"
+    frame.write_bytes(b"frame")
+    digest = hashlib.sha256(frame.read_bytes()).hexdigest()
+    case = validate_case({"frame": "x.jpg", "frame_sha256": digest, "human_verified": True, "hands": {"S": ["KH"]}})
+    frame.unlink()
     with pytest.raises(GoldCorpusError, match="missing"):
         to_detector_cases([case], tmp_path)
-    (tmp_path / "x.jpg").write_bytes(b"frame")
+    frame.write_bytes(b"frame")
     converted = to_detector_cases([case], tmp_path)
     assert converted[0]["hands"]["S"] == ["KH"]
+    frame.write_bytes(b"tampered")
+    with pytest.raises(GoldCorpusError, match="hash mismatch"):
+        to_detector_cases([case], tmp_path)

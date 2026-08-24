@@ -1,6 +1,7 @@
 """Human-verified gold corpus contract for native Bridge Vision training/evaluation."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -9,11 +10,19 @@ from typing import Any, Iterable, Mapping
 from bridge_contracts.video_deal import SEATS, canonicalize_video_deal
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-GOLD_CORPUS_VERSION = "bridge-vision-gold-v1"
+GOLD_CORPUS_VERSION = "bridge-vision-gold-v2"
 
 
 class GoldCorpusError(ValueError):
     pass
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def validate_case(case: Mapping[str, Any]) -> dict[str, Any]:
@@ -41,6 +50,7 @@ def validate_case(case: Mapping[str, Any]) -> dict[str, Any]:
         "source_id": str(case.get("source_id") or "").strip() or None,
         "human_verified": True,
         "hands": {seat: canonical[seat]["cards"] for seat in SEATS},
+        "reviewer": str(case.get("reviewer") or "").strip() or None,
         "notes": str(case.get("notes") or "").strip() or None,
     }
 
@@ -68,15 +78,18 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
 
 def to_detector_cases(cases: Iterable[Mapping[str, Any]], frames_dir: Path) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
+    frames_root = frames_dir.resolve()
     for raw in cases:
         case = validate_case(raw)
-        frame_path = (frames_dir / case["frame"]).resolve()
+        frame_path = (frames_root / case["frame"]).resolve()
         try:
-            frame_path.relative_to(frames_dir.resolve())
+            frame_path.relative_to(frames_root)
         except ValueError as exc:
             raise GoldCorpusError("frame escapes gold frames directory") from exc
         if not frame_path.is_file():
             raise GoldCorpusError(f"gold frame missing: {case['frame']}")
+        if _sha256(frame_path) != case["frame_sha256"]:
+            raise GoldCorpusError(f"gold frame hash mismatch: {case['frame']}")
         out.append({"frame": str(frame_path), "hands": case["hands"]})
     return out
 
