@@ -13,6 +13,8 @@ readonly REPOSITORY='olegmed1-art/bridge-video-free'
 readonly PILOT_DRIVE_FILE_ID='1CVInlmO73-BvdIpJM1ZGvoUegiKTnjYU'
 readonly PILOT_ZIP_SHA256='ef126c6842dda691b08325392b9d7fe5319acdba34b2db6b8981f03d56f8e130'
 readonly PILOT_RAW_SHA256='8a21cf06ab7ac424ee0f245ccf274e6d6f4f7135fa9b8c4c0e52c595c0da5996'
+readonly PYTHON_VERSION='3.14.7'
+readonly PYTHON_XZ_SHA256='3b48dac8fb59f62eaa67ac83c1eb12bda1b7a08406dd286e252c11a66be27f81'
 
 log(){ printf '\n[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
@@ -92,12 +94,42 @@ cd "\$repo"
 git status --porcelain | grep -q . && { echo 'dirty repository; refusing install' >&2; exit 2; } || true
 git fetch --quiet origin '$RUNTIME_COMMIT'
 git checkout --quiet --detach '$RUNTIME_COMMIT'
+
+# Ubuntu 24.04 does not ship the canonical Python 3.14 runtime. Build one
+# side-by-side from the official python.org source tarball, pinned by SHA-256.
+python_prefix="/opt/bridge-school/python-$PYTHON_VERSION"
+python_bin="\$python_prefix/bin/python3.14"
+if [[ ! -x "\$python_bin" ]]; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -qq
+  apt-get install -y --no-install-recommends \
+    build-essential ca-certificates curl xz-utils \
+    libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
+    libffi-dev liblzma-dev libgdbm-dev libncursesw5-dev uuid-dev
+  tmp="\$(mktemp -d /tmp/python314.XXXXXX)"
+  trap 'rm -rf "\$tmp"' EXIT
+  tarball="\$tmp/Python-$PYTHON_VERSION.tar.xz"
+  curl -fsSL --retry 3 --connect-timeout 20 \
+    "https://www.python.org/ftp/python/$PYTHON_VERSION/Python-$PYTHON_VERSION.tar.xz" \
+    -o "\$tarball"
+  echo "$PYTHON_XZ_SHA256  \$tarball" | sha256sum -c -
+  tar -xJf "\$tarball" -C "\$tmp"
+  cd "\$tmp/Python-$PYTHON_VERSION"
+  ./configure --prefix="\$python_prefix" --with-ensurepip=install
+  make -j6
+  make altinstall
+  "\$python_bin" -c 'import ssl,sqlite3,bz2,lzma; print("PYTHON_3_14_RUNTIME_PASS")'
+  cd "\$repo"
+fi
+
+export PYTHON_BIN="\$python_bin"
+"\$PYTHON_BIN" --version
 bash ops/oracle_dds3_mass_install.sh
 systemctl show dds3-mass@10000.service -p LoadState --value | grep -Fx loaded
 systemctl is-active --quiet assistant-lab.service
 curl -fsS --max-time 10 http://127.0.0.1:8080/readyz | python3 -c "import json,sys; x=json.load(sys.stdin); assert x.get('status')=='ready' and x.get('engine')=='DDS3' and x.get('fallback_used') is False"
 ! systemctl is-active --quiet dds3-mass@10000.service
-printf 'DDS3_MASS_ORACLE_INSTALL_PASS auto_started=0\n'
+printf 'DDS3_MASS_ORACLE_INSTALL_PASS auto_started=0 python=%s\n' "\$PYTHON_BIN"
 REMOTE_INSTALL
     remote_status
     echo DDS3_MASS_CLOUD_SHELL_INSTALL_PASS
