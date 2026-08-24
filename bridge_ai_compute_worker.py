@@ -101,7 +101,8 @@ def _validate_ben_result(result: Any) -> dict[str, Any]:
     candidates = result.get("candidates")
     if not isinstance(candidates, list) or not candidates:
         raise RuntimeError("BEN response contains no candidates")
-    scored = 0
+    selected = bid.strip()
+    selected_scored = False
     actions: set[str] = set()
     for item in candidates:
         if not isinstance(item, dict):
@@ -109,7 +110,8 @@ def _validate_ben_result(result: Any) -> dict[str, Any]:
         action = item.get("call") or item.get("bid") or item.get("action")
         if not isinstance(action, str) or not action.strip():
             raise RuntimeError("BEN candidate contains no action")
-        actions.add(action.strip())
+        normalized_action = action.strip()
+        actions.add(normalized_action)
         score = item.get("insta_score")
         if score is None:
             score = item.get("score")
@@ -122,11 +124,12 @@ def _validate_ben_result(result: Any) -> dict[str, Any]:
                 raise RuntimeError("BEN candidate score is not numeric") from exc
             if not math.isfinite(numeric):
                 raise RuntimeError("BEN candidate score is not finite")
-            scored += 1
-    if scored == 0:
-        raise RuntimeError("BEN response contains no policy scores")
-    if bid.strip() not in actions:
+            if normalized_action == selected:
+                selected_scored = True
+    if selected not in actions:
         raise RuntimeError("BEN selected bid is absent from candidates")
+    if not selected_scored:
+        raise RuntimeError("BEN selected bid has no finite policy score")
     return result
 
 
