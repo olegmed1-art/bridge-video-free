@@ -1,6 +1,7 @@
 import os
 
 import bridge_ai_compute_worker as worker
+from bridge_school_api.ai_worker import SearchCompletion
 
 
 def test_missing_credentials_fail_closed():
@@ -65,3 +66,9 @@ def test_explicit_ben_simulation_metrics_become_search_evidence():
     assert evaluations[0]["raw_score_ev"] == 118
     assert evaluations[0]["make_probability"] == 0.73
     assert evaluations[0]["metrics_json"]["evidence_class"] == "BEN_SIMULATION"
+
+
+def test_ben_policy_only_is_terminal_without_fabricated_search_evidence():
+    completion = SearchCompletion(status="NO_SEARCH_EVIDENCE", evaluations=[])
+    assert completion.status == "NO_SEARCH_EVIDENCE"
+    assert completion.evaluations == []
