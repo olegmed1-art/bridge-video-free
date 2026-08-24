@@ -9,7 +9,7 @@ set -Eeuo pipefail
 # Historical unsafe runtime pin kept only as a non-executable audit marker:
 # 3fe5874699d5d5cbc2bffb324dee458bdc5b0fce
 
-readonly CANONICAL_LAUNCHER_COMMIT='53ae1c3fd6f10f1ba290b7539efaaaf0cc111e54'
+readonly CANONICAL_LAUNCHER_COMMIT='b47be399c683d3f8a050ebff530ed3cadbe45750'
 readonly CANONICAL_PATH='ops/cloud_shell_activate_assistant_lab_stack.sh'
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
