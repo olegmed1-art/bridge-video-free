@@ -200,6 +200,8 @@ REVOKE ALL ON assistant_lab.control_command FROM assistant_lab_worker;
 REVOKE ALL ON FUNCTION assistant_lab.claim_control_command(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION assistant_lab.finish_control_command(uuid,text,text,jsonb,text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION assistant_lab.recover_stale_control_commands(integer) FROM PUBLIC;
+-- Schema USAGE is required to invoke schema-qualified RPCs but grants no table access.
+GRANT USAGE ON SCHEMA assistant_lab TO assistant_lab_worker;
 GRANT EXECUTE ON FUNCTION assistant_lab.claim_control_command(text) TO assistant_lab_worker;
 GRANT EXECUTE ON FUNCTION assistant_lab.finish_control_command(uuid,text,text,jsonb,text) TO assistant_lab_worker;
 GRANT EXECUTE ON FUNCTION assistant_lab.recover_stale_control_commands(integer) TO assistant_lab_worker;
