@@ -9,9 +9,11 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from bridge_vision import BridgeVisionEngine
+
+LegacyParserInjection = Callable[[Path], dict[str, Any]]
 
 
 def _safe_frame_path(job_dir: Path, file_name: Any) -> Path:
@@ -31,6 +33,27 @@ def _safe_frame_path(job_dir: Path, file_name: Any) -> Path:
     return frame
 
 
+def _wrap_injected_parser(parser: LegacyParserInjection):
+    """Compatibility shim for contract tests/callers; never selected implicitly."""
+    def detector(frame: Path) -> dict[str, Any]:
+        raw = parser(frame)
+        hands = raw.get("hands") or {}
+        count = sum(len(cards) for cards in hands.values())
+        status = str(raw.get("status") or "").upper()
+        confidence = 1.0 if hands and status not in {"CONFLICT", "UNAVAILABLE"} else 0.0
+        return {
+            "hands": hands,
+            "confidence": confidence,
+            "evidence": {
+                "adapter": "explicit-injected-parser",
+                "parser_status": status,
+                "recognized_card_count": raw.get("recognized_card_count", count),
+                "state_fingerprint": raw.get("state_fingerprint"),
+            },
+        }
+    return detector
+
+
 def build_engine(*, allow_legacy_old_bbo: bool = False) -> BridgeVisionEngine:
     engine = BridgeVisionEngine()
     # Native detector families are registered here as they graduate from their
@@ -47,8 +70,11 @@ def process_job_frames(
     job_dir: Path,
     *,
     engine: BridgeVisionEngine | None = None,
+    parser: LegacyParserInjection | None = None,
     allow_legacy_old_bbo: bool = False,
 ) -> dict[str, Any]:
+    if engine is not None and parser is not None:
+        raise ValueError("pass engine or parser, not both")
     root = job_dir.resolve()
     manifest_path = root / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -56,7 +82,10 @@ def process_job_frames(
     if not isinstance(frames, list):
         raise ValueError("manifest frames must be an array")
 
-    vision = engine or build_engine(allow_legacy_old_bbo=allow_legacy_old_bbo)
+    if parser is not None:
+        vision = BridgeVisionEngine({"explicit-injected-parser": _wrap_injected_parser(parser)})
+    else:
+        vision = engine or build_engine(allow_legacy_old_bbo=allow_legacy_old_bbo)
     records: list[dict[str, Any]] = []
     recognized_frames = 0
     conflict_frames = 0
