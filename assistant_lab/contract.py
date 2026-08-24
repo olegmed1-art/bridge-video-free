@@ -21,7 +21,7 @@ class Priority(IntEnum):
     BACKGROUND = 30
 
 
-ALLOWED_KINDS = frozenset({"DDS3_COMPUTE", "BEN_COMPUTE", "NOOP"})
+ALLOWED_KINDS = frozenset({"DDS3_COMPUTE", "BEN_COMPUTE", "WORLD_GENERATE", "NOOP"})
 ALLOWED_DDS3_OPERATIONS = frozenset({"dd_table", "position_all_moves", "position_trajectory"})
 
 
@@ -70,6 +70,36 @@ def _validate_ben_payload(data: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _validate_world_payload(data: dict[str, Any]) -> dict[str, Any]:
+    from bridge_school_api.ai_worlds import WorldConstraints, parse_hand_pbn
+
+    seat = str(data.get("known_seat") or "").strip().upper()
+    hand = str(data.get("known_hand_pbn") or "").strip()
+    count = data.get("count", 128)
+    seed = data.get("seed")
+    if seat not in {"N", "E", "S", "W"}:
+        raise LabContractError("WORLD_GENERATE requires known_seat N/E/S/W")
+    try:
+        parse_hand_pbn(hand)
+        constraints = data.get("constraints")
+        WorldConstraints.parse(constraints)
+    except ValueError as exc:
+        raise LabContractError(str(exc)) from exc
+    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 1000:
+        raise LabContractError("WORLD_GENERATE count must be between 1 and 1000")
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise LabContractError("WORLD_GENERATE requires integer seed")
+    max_attempts = data.get("max_attempts")
+    if max_attempts is not None and (
+        isinstance(max_attempts, bool) or not isinstance(max_attempts, int)
+        or max_attempts < count or max_attempts > 1_000_000
+    ):
+        raise LabContractError("WORLD_GENERATE max_attempts is invalid")
+    result = dict(data)
+    result.update({"known_seat": seat, "known_hand_pbn": hand, "count": count, "seed": seed})
+    return result
+
+
 def validate_job_payload(kind: str, payload: Any) -> dict[str, Any]:
     normalized_kind = str(kind or "").strip().upper()
     if normalized_kind not in ALLOWED_KINDS:
@@ -79,6 +109,8 @@ def validate_job_payload(kind: str, payload: Any) -> dict[str, Any]:
         return data
     if normalized_kind == "BEN_COMPUTE":
         return _validate_ben_payload(data)
+    if normalized_kind == "WORLD_GENERATE":
+        return _validate_world_payload(data)
     operation = str(data.get("operation") or "dd_table").strip()
     if operation not in ALLOWED_DDS3_OPERATIONS:
         raise LabContractError("unsupported DDS3 operation for assistant-lab v1")

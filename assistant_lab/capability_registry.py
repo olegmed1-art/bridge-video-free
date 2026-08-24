@@ -46,6 +46,7 @@ _DEFAULT_CAPABILITIES: tuple[Capability, ...] = (
     Capability("neon.write", ExecutionChannel.NATIVE_CONNECTOR, mutating=True, description="Perform bounded database writes."),
     Capability("dds3.compute", ExecutionChannel.RESIDENT_WORKER, description="Run real DDS3 jobs through the resident Assistant Lab worker."),
     Capability("ben.compute", ExecutionChannel.RESIDENT_WORKER, description="Run BEN jobs through the approved server worker."),
+    Capability("worlds.generate", ExecutionChannel.RESIDENT_WORKER, description="Generate bounded full deal worlds from explicit hard constraints."),
     Capability("observer.execute", ExecutionChannel.RESIDENT_WORKER, mutating=True, description="Execute allowlisted Observer tools through Control Bridge/Control API."),
     Capability("oracle.audit", ExecutionChannel.OCI_INSTANCE_AGENT, description="Read-only Oracle host/service audit through OCI Instance Agent."),
     Capability("oracle.repair", ExecutionChannel.OCI_INSTANCE_AGENT, mutating=True, description="Bounded Assistant Lab repair through root-owned admin wrapper."),

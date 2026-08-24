@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS assistant_lab.job (
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     source text NOT NULL DEFAULT 'CHATGPT',
-    kind text NOT NULL CHECK (kind IN ('DDS3_COMPUTE', 'NOOP')),
+    kind text NOT NULL CHECK (kind IN ('DDS3_COMPUTE', 'BEN_COMPUTE', 'WORLD_GENERATE', 'NOOP')),
     priority smallint NOT NULL DEFAULT 20 CHECK (priority IN (0, 10, 20, 30)),
     status text NOT NULL DEFAULT 'QUEUED'
         CHECK (status IN ('QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED')),
@@ -122,6 +122,13 @@ BEGIN
                 NEW.provenance_json,
                 '{execution_path}',
                 to_jsonb('vercel_oidc_to_oracle_dds3'::text),
+                true
+            );
+        ELSIF NEW.kind = 'WORLD_GENERATE' THEN
+            NEW.provenance_json := jsonb_set(
+                NEW.provenance_json,
+                '{execution_path}',
+                to_jsonb('vercel_to_oracle_world_generator'::text),
                 true
             );
         ELSIF NEW.kind = 'NOOP' THEN

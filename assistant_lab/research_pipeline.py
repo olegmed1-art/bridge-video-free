@@ -28,6 +28,7 @@ class ResearchKind(str, Enum):
     BEN = "BEN"
     VIDEO = "VIDEO"
     COMPOSITE = "COMPOSITE"
+    WORLDS = "WORLDS"
 
 
 _ALLOWED_TRANSITIONS = {
@@ -91,6 +92,11 @@ def plan_execution(kind: ResearchKind | str, payload: Any) -> ExecutionPlan:
         lab_payload = validate_job_payload("BEN_COMPUTE", data)
         return ExecutionPlan("ben.compute", "BEN_COMPUTE", lab_payload,
             canonical_idempotency_key("BEN_COMPUTE", lab_payload), "assistant_lab_resident_worker_to_oracle_local_ben")
+    if normalized_kind is ResearchKind.WORLDS:
+        lab_payload = validate_job_payload("WORLD_GENERATE", data)
+        return ExecutionPlan("worlds.generate", "WORLD_GENERATE", lab_payload,
+            canonical_idempotency_key("WORLD_GENERATE", lab_payload),
+            "assistant_lab_resident_worker_to_oracle_world_generator")
     if normalized_kind is ResearchKind.VIDEO:
         return ExecutionPlan("oracle.audit", None, None, research_key, "universal_video_pipeline")
     return ExecutionPlan("research.composite", None, None, research_key, "research_orchestrator")
@@ -103,6 +109,13 @@ def validate_compute_result(kind: ResearchKind | str, result: Any, payload: Any)
         return verify_dds3_result(result, expected_operation=operation)
     if normalized_kind is ResearchKind.BEN:
         return verify_ben_result(result)
+    if normalized_kind is ResearchKind.WORLDS:
+        data = _mapping(result, "world generator result")
+        if data.get("engine") != "WORLD_GENERATOR" or data.get("fallback_used") is not False:
+            raise LabContractError("world generator provenance mismatch")
+        if data.get("complete") is not True or data.get("accepted") != data.get("requested"):
+            raise LabContractError("world generator returned an incomplete sample")
+        return data
     raise LabContractError("compute result validation is defined only for DDS3/BEN")
 
 
