@@ -145,3 +145,19 @@ def test_ben_rejects_selected_bid_missing_from_candidates():
         pass
     else:
         raise AssertionError("worker accepted a BEN bid absent from candidates")
+
+
+def test_ben_rejects_selected_bid_without_its_own_score():
+    payload = {
+        "bid": "2H",
+        "candidates": [
+            {"call": "2H"},
+            {"call": "PASS", "insta_score": 0.4},
+        ],
+    }
+    try:
+        worker._validate_ben_result(payload)
+    except RuntimeError as exc:
+        assert "selected bid has no finite" in str(exc)
+    else:
+        raise AssertionError("worker accepted an unscored selected BEN bid")
