@@ -1,0 +1,191 @@
+name: Oracle Universal Video bounded admin
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-universal-video-admin.yml'
+      - 'ops/universal_video_oci_admin_entrypoint.sh'
+      - 'ops/install_universal_video_ocarun_admin.sh'
+      - 'ops/cloud_shell_install_bounded_oci_admin.sh'
+      - 'tests/test_universal_video_oci_admin_contract.py'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-universal-video-admin-requests/*.json'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oracle-universal-video-bounded-admin
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Validate bounded root surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/universal_video_oci_admin_entrypoint.sh
+          bash -n ops/install_universal_video_ocarun_admin.sh
+          bash -n ops/cloud_shell_install_bounded_oci_admin.sh
+          python -m pip install --disable-pip-version-check -q pytest
+          python -m pytest -q tests/test_universal_video_oci_admin_contract.py
+
+  execute:
+    if: ${{ github.event_name == 'push' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      ISSUE_NUMBER: '371'
+      INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      OCI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Validate one bounded request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+            | grep -E '^ops/oracle-universal-video-admin-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]] || { echo "expected exactly one Universal Video admin request" >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          x=json.load(open(os.environ['REQUEST_FILE'], encoding='utf-8'))
+          assert set(x)=={'request_id','operation','instance_id'}, x
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
+          assert x['operation'] in {'audit','productionize'}
+          assert x['instance_id']==os.environ['INSTANCE_ID']
+          print('request_id='+x['request_id'])
+          print('operation='+x['operation'])
+          PY
+
+      - name: Configure OCI CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q oci-cli
+          mkdir -p "$HOME/.oci"
+          printf '%s\n' "$OCI_KEY" > "$HOME/.oci/key.pem"
+          chmod 600 "$HOME/.oci/key.pem"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$OCI_USER
+          fingerprint=$OCI_FINGERPRINT
+          tenancy=$OCI_TENANCY
+          region=$OCI_REGION
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+          oci iam region list --output json >/dev/null
+          echo UNIVERSAL_VIDEO_OCI_API_AUTH_PASS
+
+      - name: Execute exact installed admin operation
+        id: remote
+        shell: bash
+        env:
+          OPERATION: ${{ steps.request.outputs.operation }}
+        run: |
+          set -euo pipefail
+          compartment="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."compartment-id"' --raw-output)"
+          state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
+          [[ "$state" == RUNNING ]]
+          case "$OPERATION" in
+            audit) remote='sudo -n /usr/local/sbin/universal-video-oci-admin audit' ;;
+            productionize) remote='sudo -n /usr/local/sbin/universal-video-oci-admin productionize' ;;
+            *) exit 64 ;;
+          esac
+          content="$(SCRIPT_TEXT="$remote" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":"set -Eeuo pipefail\n"+os.environ["SCRIPT_TEXT"]+"\n"},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
+          target="$(python -c 'import json,os; print(json.dumps({"instanceId":os.environ["INSTANCE_ID"]},separators=(",",":")))')"
+          command_id="$(oci instance-agent command create \
+            --compartment-id "$compartment" \
+            --content "$content" \
+            --target "$target" \
+            --timeout-in-seconds 3600 \
+            --display-name "universal-video-${OPERATION}-${GITHUB_RUN_ID}" \
+            --query data.id --raw-output)"
+          execution=''
+          lifecycle=''
+          for _ in $(seq 1 720); do
+            execution="$(oci instance-agent command-execution get --command-id "$command_id" --instance-id "$INSTANCE_ID" --output json 2>/dev/null || true)"
+            [[ -n "$execution" ]] || { sleep 5; continue; }
+            lifecycle="$(printf '%s' "$execution" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state",""))')"
+            case "$lifecycle" in SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break;; esac
+            sleep 5
+          done
+          printf 'state=%s\n' "$lifecycle" >> "$GITHUB_OUTPUT"
+          printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("text","") or "")' > "$RUNNER_TEMP/uv-admin-raw.txt"
+
+          # Publish/log only an explicit allow-list. Raw command output is never echoed.
+          grep -E '^(universal_video=|source_head=|memory_high=|memory_max=|maintenance_timer_active=|maintenance_timer_enabled=|drive_oauth=|protected_services=|dds3=|runtime_commit=|source_commit=|assistant_lab=|universal_video_enabled=|universal_video_active=|universal_video_drive_auth=|DDS3_(BEFORE|AFTER)_PASS$|UNIVERSAL_VIDEO_DRIVE_OAUTH=CONFIGURED$|UNIVERSAL_VIDEO_[A-Z0-9_]+PASS([[:space:]].*)?$)' \
+            "$RUNNER_TEMP/uv-admin-raw.txt" > "$RUNNER_TEMP/uv-admin-safe.txt" || true
+          cat "$RUNNER_TEMP/uv-admin-safe.txt"
+          [[ "$lifecycle" == SUCCEEDED ]] || { echo "Universal Video OCI admin failed closed: state=$lifecycle" >&2; exit 1; }
+          if [[ "$OPERATION" == audit ]]; then
+            grep -Fx UNIVERSAL_VIDEO_OCI_ADMIN_AUDIT_PASS "$RUNNER_TEMP/uv-admin-safe.txt" >/dev/null
+          else
+            grep -Fx UNIVERSAL_VIDEO_OCI_ADMIN_PRODUCTIONIZE_PASS "$RUNNER_TEMP/uv-admin-safe.txt" >/dev/null
+            grep -F UNIVERSAL_VIDEO_DRIVE_SOURCE_NO_ASR_PASS "$RUNNER_TEMP/uv-admin-safe.txt" >/dev/null
+            grep -F UNIVERSAL_VIDEO_DDS3_NONREGRESSION_PASS "$RUNNER_TEMP/uv-admin-safe.txt" >/dev/null
+          fi
+          echo UNIVERSAL_VIDEO_OCI_ADMIN_REMOTE_PASS
+
+      - name: External DDS3 non-regression
+        if: ${{ success() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          READY="$(curl -fsS --retry 3 --retry-delay 3 --max-time 20 https://158.180.47.161/readyz)" \
+            python - <<'PY'
+          import json, os
+          x=json.loads(os.environ['READY'])
+          assert x.get('status')=='ready', x
+          assert x.get('engine')=='DDS3', x
+          assert x.get('fallback_used') is False, x
+          assert x.get('position_solver')=='ready', x
+          print('UNIVERSAL_VIDEO_OCI_ADMIN_EXTERNAL_DDS3_PASS')
+          PY
+
+      - name: Publish sanitized result
+        if: ${{ always() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+          OPERATION: ${{ steps.request.outputs.operation }}
+          REMOTE_STATE: ${{ steps.remote.outputs.state }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          body="$RUNNER_TEMP/body.md"
+          {
+            echo "Universal Video OCI bounded admin: **${REMOTE_STATE:-UNKNOWN}**"
+            echo "Request: \`${REQUEST_ID:-unresolved}\`; operation: \`${OPERATION:-unresolved}\`."
+            if [[ -s "$RUNNER_TEMP/uv-admin-safe.txt" ]]; then
+              echo
+              echo '```text'
+              cat "$RUNNER_TEMP/uv-admin-safe.txt"
+              echo '```'
+            fi
+            echo
+            echo "No OAuth value/raw command output was published. No arbitrary shell operation is exposed. Run: $RUN_URL"
+          } > "$body"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body"
