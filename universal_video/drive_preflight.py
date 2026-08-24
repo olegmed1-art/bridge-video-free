@@ -136,6 +136,12 @@ def probe_drive_source(
         raise RuntimeError("Drive source size is unavailable")
     if declared_size > max_source_bytes:
         raise RuntimeError("Drive source exceeds configured source-size limit")
+    has_verifiable_checksum = any(
+        str(meta.get(key) or "").strip()
+        for key in ("sha256Checksum", "md5Checksum")
+    )
+    if not has_verifiable_checksum:
+        raise RuntimeError("Drive source lacks a verifiable content checksum")
 
     with tempfile.TemporaryDirectory(prefix="universal-video-drive-probe-") as temp:
         destination = Path(temp) / "source.video"
