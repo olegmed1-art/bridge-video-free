@@ -38,7 +38,6 @@ def test_illegal_auctions_fail_closed(calls):
 def test_rollout_completes_each_world_without_claiming_dds_evidence():
     worlds = [{
         "world_index": 0,
-        "fingerprint": "abc",
         "hands": {
             "N": "AKQJT98765432...",
             "E": ".AKQJT98765432..",
@@ -62,9 +61,12 @@ def test_rollout_completes_each_world_without_claiming_dds_evidence():
     )
     assert result["complete"] is True
     assert result["evidence_class"] == "BEN_AUCTION_ROLLOUT"
+    assert result["vulnerability"] == "NONE"
     assert result["dds_evaluated"] is False
     assert result["worlds"][0]["contract"] == "1N"
     assert result["worlds"][0]["declarer"] == "N"
+    assert len(result["worlds"][0]["world_fingerprint"]) == 64
+    assert len(result["worlds"][0]["deal_pbn_sha256"]) == 64
 
 
 def test_rollout_rejects_wrong_turn_bad_ben_contract_and_call_overrun():
@@ -90,3 +92,28 @@ def test_rollout_rejects_wrong_turn_bad_ben_contract_and_call_overrun():
     with pytest.raises(AuctionRolloutError, match="call limit"):
         rollout_worlds(worlds=[world], dealer="N", auction=[], decision_seat="N",
                        candidate_call="1C", ben_bidder=endless, max_calls_per_world=2)
+
+
+def test_rollout_rejects_unscored_selected_call_and_duplicate_worlds():
+    world = {"hands": {
+        "N": "AKQJT98765432...",
+        "E": ".AKQJT98765432..",
+        "S": "..AKQJT98765432.",
+        "W": "...AKQJT98765432",
+    }}
+
+    with pytest.raises(AuctionRolloutError, match="finite candidate score"):
+        rollout_worlds(
+            worlds=[world], dealer="N", auction=[], decision_seat="N",
+            candidate_call="1C",
+            ben_bidder=lambda *_: {"bid": "PASS", "candidates": [{"call": "PASS"}]},
+        )
+
+    with pytest.raises(AuctionRolloutError, match="duplicate"):
+        rollout_worlds(
+            worlds=[world, dict(world)], dealer="N", auction=[], decision_seat="N",
+            candidate_call="PASS",
+            ben_bidder=lambda *_: {
+                "bid": "PASS", "candidates": [{"call": "PASS", "insta_score": 1.0}],
+            },
+        )
