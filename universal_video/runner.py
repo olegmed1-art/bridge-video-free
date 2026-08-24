@@ -76,6 +76,37 @@ def _fingerprint(payload: dict[str, Any]) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _whisper_model_name() -> str:
+    return os.getenv("UNIVERSAL_VIDEO_WHISPER_MODEL", os.getenv("WHISPER_MODEL", "small")).strip() or "small"
+
+
+def _processing_identity() -> dict[str, str]:
+    """Semantic runtime identity used to decide whether COMPLETED is reusable.
+
+    Oracle always exports UNIVERSAL_VIDEO_SOURCE_COMMIT from its isolated
+    checkout. GitHub Actions contributes GITHUB_SHA. The Whisper model name is
+    included because changing the ASR model can legitimately change output even
+    when the job JSON and source video are identical.
+    """
+
+    revision = (
+        os.getenv("UNIVERSAL_VIDEO_SOURCE_COMMIT", "").strip()
+        or os.getenv("GITHUB_SHA", "").strip()
+        or "development"
+    )
+    model = _whisper_model_name()
+    payload = {
+        "contract": CONTRACT_VERSION,
+        "source_revision": revision,
+        "whisper_model": model,
+    }
+    return {
+        "source_revision": revision,
+        "whisper_model": model,
+        "fingerprint": _fingerprint(payload),
+    }
+
+
 def _words(text: str) -> list[str]:
     return WORD_RE.findall((text or "").lower())
 
@@ -92,12 +123,7 @@ def _similarity(a: str, b: str) -> float:
 
 
 def _repetition_ratio(text: str, *, ngram: int = 4) -> float:
-    """Conservative phrase-loop score rather than common-word repetition.
-
-    The previous unigram ratio penalised ordinary long speech because common
-    words naturally repeat. Repeated 4-grams target the actual ASR loop failure
-    mode while allowing normal vocabulary reuse.
-    """
+    """Conservative phrase-loop score rather than common-word repetition."""
 
     words = _words(text)
     if len(words) < max(12, ngram * 2):
@@ -109,11 +135,7 @@ def _repetition_ratio(text: str, *, ngram: int = 4) -> float:
 
 
 def pathological_nonspeech_hallucination(text: str) -> bool:
-    """Detect the proven dense repeated bracketed non-speech hallucination.
-
-    Occasional [Аплодисменты]/[Музыка] markers remain valid. The guard is
-    deliberately conservative and requires a repeated known marker to dominate.
-    """
+    """Detect the proven dense repeated bracketed non-speech hallucination."""
 
     raw = text or ""
     markers = [re.sub(r"\s+", " ", x.strip().lower()) for x in _NON_SPEECH_RE.findall(raw)]
@@ -309,9 +331,8 @@ def _load_model():
     if _MODEL is None:
         from faster_whisper import WhisperModel
 
-        model_name = os.getenv("UNIVERSAL_VIDEO_WHISPER_MODEL", os.getenv("WHISPER_MODEL", "small"))
         _MODEL = WhisperModel(
-            model_name,
+            _whisper_model_name(),
             device="cpu",
             compute_type="int8",
             cpu_threads=max(1, int(os.getenv("UNIVERSAL_VIDEO_ASR_THREADS", "8"))),
@@ -355,11 +376,10 @@ def _asr(
         except (TypeError, ValueError):
             return None
 
-    info_meta = {
+    return out, getattr(info, "language", None), {
         "duration_after_vad": _number("duration_after_vad"),
         "language_probability": _number("language_probability"),
     }
-    return out, getattr(info, "language", None), info_meta
 
 
 def _confirmed_no_speech(
@@ -674,6 +694,7 @@ def _prepare_job_dir(
     *,
     source_fingerprint: str | None = None,
     source_reuse_safe: bool = False,
+    processing_fingerprint: str | None = None,
 ) -> tuple[Path, str, dict[str, Any] | None]:
     job_hash = canonical_job_hash(job)
     job_dir = output_root / job.job_id
@@ -686,9 +707,11 @@ def _prepare_job_dir(
         if (
             source_reuse_safe
             and source_fingerprint
+            and processing_fingerprint
             and existing
             and existing.get("job_hash") == job_hash
             and existing.get("source_fingerprint") == source_fingerprint
+            and existing.get("processing_fingerprint") == processing_fingerprint
             and existing.get("status") == "COMPLETED"
         ):
             return job_dir, job_hash, existing
@@ -702,6 +725,7 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
     started = time.time()
     job = validate_from_env(payload)
     profile = resolve_profile(job.profile)
+    processing = _processing_identity()
     output_root.mkdir(parents=True, exist_ok=True)
     source_limit = _effective_source_limit(job)
     inspection = _inspect_source(job, max_source_bytes=source_limit)
@@ -710,6 +734,7 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
         job,
         source_fingerprint=inspection.get("fingerprint"),
         source_reuse_safe=bool(inspection.get("reuse_safe")),
+        processing_fingerprint=processing["fingerprint"],
     )
     if existing is not None:
         return existing
@@ -768,6 +793,9 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
             "status": "COMPLETED" if qc_pass else "REVIEW",
             "job_id": job.job_id,
             "job_hash": job_hash,
+            "processing_fingerprint": processing["fingerprint"],
+            "processing_revision": processing["source_revision"],
+            "processing_whisper_model": processing["whisper_model"],
             "source_fingerprint": inspection.get("fingerprint"),
             "source_fingerprint_basis": inspection.get("fingerprint_basis"),
             "source_reuse_safe": bool(inspection.get("reuse_safe")),
@@ -814,10 +842,8 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
                 "elapsed_seconds": round(time.time() - started, 3),
                 "hostname": os.uname().nodename,
                 "cpu_count": os.cpu_count(),
-                "whisper_model": os.getenv(
-                    "UNIVERSAL_VIDEO_WHISPER_MODEL",
-                    os.getenv("WHISPER_MODEL", "small"),
-                ),
+                "whisper_model": processing["whisper_model"],
+                "source_revision": processing["source_revision"],
                 "max_source_bytes": source_limit,
             },
         }
