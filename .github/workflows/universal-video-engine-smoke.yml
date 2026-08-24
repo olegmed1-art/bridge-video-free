@@ -81,6 +81,7 @@ jobs:
             > /tmp/universal-video-result.json
           python - <<'PY'
           import json
+          import os
           from pathlib import Path
 
           root=Path('/tmp/universal-video-output/synthetic-engine-smoke')
@@ -98,6 +99,9 @@ jobs:
           assert manifest['source_fingerprint_basis'] == 'sha256+size'
           assert manifest['source_reuse_safe'] is True
           assert manifest['source']['fingerprint'] == manifest['source_fingerprint']
+          assert len(manifest['processing_fingerprint']) == 64
+          assert manifest['processing_revision'] == os.environ['GITHUB_SHA']
+          assert manifest['processing_whisper_model'] == 'tiny'
           assert manifest['transcript']['qc_blocks'] == 1
           assert manifest['transcript']['qc_allowed_failed'] == 0
           assert manifest['deferred_analysis'] == []
@@ -113,6 +117,7 @@ jobs:
               'words': manifest['transcript']['words'],
               'whisper_model': manifest['runtime']['whisper_model'],
               'source_reuse_safe': manifest['source_reuse_safe'],
+              'processing_revision': manifest['processing_revision'],
           }, sort_keys=True))
           PY
 
@@ -131,6 +136,7 @@ jobs:
               'status': manifest['status'],
               'job_hash': manifest['job_hash'],
               'source_fingerprint': manifest['source_fingerprint'],
+              'processing_fingerprint': manifest['processing_fingerprint'],
               'manifest_sha256': hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
           }
           Path('/tmp/universal-video-before.json').write_text(json.dumps(state), encoding='utf-8')
@@ -153,14 +159,12 @@ jobs:
           assert repeat == after
           assert after['job_hash'] == before['job_hash']
           assert after['source_fingerprint'] == before['source_fingerprint']
+          assert after['processing_fingerprint'] == before['processing_fingerprint']
           assert after['status'] in {'COMPLETED','REVIEW'}
           if before['status'] == 'COMPLETED':
               assert after_sha == before['manifest_sha256']
               print('UNIVERSAL_VIDEO_COMPLETED_IDEMPOTENCY_SMOKE_PASS')
           else:
-              # REVIEW is deliberately re-runnable so a later ASR/model revision
-              # may improve an uncertain result. Canonical job and source identity
-              # must stay stable even though runtime metadata may be regenerated.
               assert before['status'] == 'REVIEW'
               print('UNIVERSAL_VIDEO_REVIEW_RERUN_SEMANTICS_PASS')
           PY
