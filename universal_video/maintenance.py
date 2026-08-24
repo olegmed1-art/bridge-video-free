@@ -29,6 +29,7 @@ class RetentionPolicy:
     done_ttl_seconds: int = 14 * DAY
     failed_ttl_seconds: int = 30 * DAY
     results_ttl_seconds: int = 30 * DAY
+    abandoned_results_ttl_seconds: int = 7 * DAY
     media_ttl_seconds: int = 7 * DAY
     max_receipts_per_bucket: int = 500
     max_result_dirs: int = 200
@@ -65,6 +66,7 @@ def policy_from_env() -> RetentionPolicy:
         done_ttl_seconds=_env_int("UNIVERSAL_VIDEO_RETENTION_DONE_DAYS", 14, 1, 365) * DAY,
         failed_ttl_seconds=_env_int("UNIVERSAL_VIDEO_RETENTION_FAILED_DAYS", 30, 1, 365) * DAY,
         results_ttl_seconds=_env_int("UNIVERSAL_VIDEO_RETENTION_RESULTS_DAYS", 30, 1, 365) * DAY,
+        abandoned_results_ttl_seconds=_env_int("UNIVERSAL_VIDEO_RETENTION_ABANDONED_RESULTS_DAYS", 7, 1, 90) * DAY,
         media_ttl_seconds=_env_int("UNIVERSAL_VIDEO_RETENTION_MEDIA_DAYS", 7, 1, 90) * DAY,
         max_receipts_per_bucket=_env_int("UNIVERSAL_VIDEO_MAX_RECEIPTS", 500, 10, 100000),
         max_result_dirs=_env_int("UNIVERSAL_VIDEO_MAX_RESULT_DIRS", 200, 5, 10000),
@@ -194,7 +196,7 @@ def build_cleanup_plan(
     results_root = spool_root / "results"
     if results_root.is_dir():
         for path in results_root.iterdir():
-            if path.name in active_job_ids or not _terminal_result_dir(path):
+            if path.name in active_job_ids or path.is_symlink() or not path.is_dir():
                 continue
             size = _tree_size_no_links(path)
             if size is None:
@@ -202,6 +204,11 @@ def build_cleanup_plan(
             try:
                 mtime = path.lstat().st_mtime
             except OSError:
+                continue
+            age = now - mtime
+            if not _terminal_result_dir(path):
+                if age >= policy.abandoned_results_ttl_seconds:
+                    candidates.append(Candidate(path, "results", mtime, size, "abandoned_ttl"))
                 continue
             result_dirs.append((mtime, path, size))
     result_dirs.sort(key=lambda item: (item[0], item[1].name))
