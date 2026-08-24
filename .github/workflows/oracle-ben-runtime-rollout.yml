@@ -1,0 +1,171 @@
+name: Oracle BEN Runtime Rollout
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-ben-runtime-rollout.yml'
+  pull_request_target:
+    paths:
+      - 'ops/oracle-ben-runtime-requests/*.json'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-ben-runtime-requests/*.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-ben-runtime-rollout
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Validate trusted rollout workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'ghcr.io/lorserker/ben:latest' .github/workflows/oracle-ben-runtime-rollout.yml >/dev/null
+          grep -F '127.0.0.1:8085:8085' .github/workflows/oracle-ben-runtime-rollout.yml >/dev/null
+          grep -F 'EXPECTED_FINGERPRINT' .github/workflows/oracle-ben-runtime-rollout.yml >/dev/null
+
+  rollout:
+    if: ${{ github.event_name == 'pull_request_target' || github.event_name == 'push' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Resolve one bounded request
+        id: request
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [[ '${{ github.event_name }}' == 'pull_request_target' ]]; then
+            git fetch --quiet origin "$PR_HEAD_SHA"
+            mapfile -t files < <(git diff --name-only '${{ github.event.pull_request.base.sha }}' "$PR_HEAD_SHA" | grep -E '^ops/oracle-ben-runtime-requests/[^/]+\.json$' | sort -u)
+            [[ ${#files[@]} -eq 1 ]]
+            REQUEST_JSON="$(git show "$PR_HEAD_SHA:${files[0]}")"
+          else
+            mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^ops/oracle-ben-runtime-requests/[^/]+\.json$' | sort -u)
+            [[ ${#files[@]} -eq 1 ]]
+            REQUEST_JSON="$(cat "${files[0]}")"
+          fi
+          REQUEST_JSON="$REQUEST_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          x=json.loads(os.environ['REQUEST_JSON'])
+          required={'request_id','host','user','expected_host_fingerprint'}
+          assert set(x)==required, x
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', x['request_id'])
+          assert x['host']=='158.180.47.161'
+          assert x['user']=='ubuntu'
+          assert x['expected_host_fingerprint']=='SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk'
+          print('request_id='+x['request_id'])
+          PY
+
+      - name: Verify host key and SSH credential
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/oracle-ben"
+          mkdir -p "$work"
+          known="$work/known_hosts"; : > "$known"
+          for attempt in 1 2 3; do
+            ssh-keyscan -T 10 -t ed25519,ecdsa,rsa "$ORACLE_HOST" >> "$known" 2>/dev/null || true
+            [[ -s "$known" ]] && break
+            sleep $((attempt * 2))
+          done
+          sort -u -o "$known" "$known"
+          ssh-keygen -lf "$known" | awk '{print $2}' | grep -Fx "$EXPECTED_FINGERPRINT" >/dev/null
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$work/id_oracle"; printf '%s\n' "${!selected}" > "$key"; chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Install pinned BEN localhost runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            'sudo -n bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          command -v docker >/dev/null
+          systemctl is-active --quiet docker
+          docker pull ghcr.io/lorserker/ben:latest >/tmp/bridge-ben-pull.log
+          digest="$(docker image inspect ghcr.io/lorserker/ben:latest --format '{{index .RepoDigests 0}}')"
+          [[ "$digest" == ghcr.io/lorserker/ben@sha256:* ]]
+          install -d -m 0755 /opt/bridge-school/ben-runtime
+          printf '%s\n' "$digest" > /opt/bridge-school/ben-runtime/image-digest
+          cat >/etc/systemd/system/bridge-ben.service <<EOF
+          [Unit]
+          Description=Bridge BEN policy runtime
+          After=docker.service network-online.target
+          Requires=docker.service
+
+          [Service]
+          Type=simple
+          Restart=on-failure
+          RestartSec=3
+          ExecStartPre=-/usr/bin/docker rm -f bridge-ben
+          ExecStart=/usr/bin/docker run --rm --name bridge-ben -p 127.0.0.1:8085:8085 $digest
+          ExecStop=/usr/bin/docker stop -t 10 bridge-ben
+          TimeoutStartSec=180
+          TimeoutStopSec=30
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          systemctl daemon-reload
+          systemctl enable --now bridge-ben.service
+          for attempt in $(seq 1 90); do
+            code="$(curl -sS -o /tmp/bridge-ben-ready.json -w '%{http_code}' --max-time 5 'http://127.0.0.1:8085/bid?hand=AK97543.K.T3.AK7&seat=S&dealer=N&vul=&ctx=----&details=true' || true)"
+            if [[ "$code" == 200 ]]; then break; fi
+            sleep 2
+          done
+          [[ "${code:-}" == 200 ]]
+          ss -ltn | grep -Eq '127\.0\.0\.1:8085[[:space:]]'
+          ! ss -ltn | grep -Eq '(^|[[:space:]])0\.0\.0\.0:8085|\[::\]:8085'
+          python3 - <<'PY'
+          import json
+          with open('/tmp/bridge-ben-ready.json','r',encoding='utf-8') as f:
+              x=json.load(f)
+          assert isinstance(x, dict)
+          assert x
+          PY
+          systemctl is-active --quiet bridge-ben.service
+          systemctl restart assistant-lab.service
+          sleep 3
+          systemctl is-active --quiet assistant-lab.service
+          echo ORACLE_BEN_RUNTIME_ROLLOUT_PASS
+          echo "ben_image=$digest"
+          REMOTE
