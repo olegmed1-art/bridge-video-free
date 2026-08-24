@@ -6,7 +6,7 @@ from bridge_vision.multiframe import reconstruct_deals
 from tools.bridge_video_deals import reconstruct_job
 
 
-def rec(cards, *, frame, time=0, board_id=None):
+def rec(cards, *, frame, time=0, board_id=None, board_number=None, board_scope=None):
     hands = {seat: values for seat, values in cards.items()}
     out = {
         "status": "PARTIAL_BOARD_OBSERVATION",
@@ -17,6 +17,10 @@ def rec(cards, *, frame, time=0, board_id=None):
     }
     if board_id is not None:
         out["board_id"] = board_id
+    if board_number is not None:
+        out["board_number"] = board_number
+    if board_scope is not None:
+        out["board_scope"] = board_scope
     return out
 
 
@@ -58,6 +62,46 @@ def test_explicit_board_identity_can_link_without_card_overlap():
     result = reconstruct_deals(records).to_dict()
     assert result["deal_count"] == 1
     assert result["deals"][0]["explicit_board_key"] == "board_id:17"
+
+
+def test_explicit_identity_may_disappear_when_card_evidence_is_strong():
+    records = [
+        rec({"N": ["AS", "KS", "QS", "JS"]}, frame="a.jpg", board_id="17"),
+        rec({"N": ["AS", "KS", "QS", "JS", "TS"]}, frame="b.jpg"),
+    ]
+    result = reconstruct_deals(records).to_dict()
+    assert result["deal_count"] == 1
+    assert result["deals"][0]["explicit_board_key"] == "board_id:17"
+
+
+def test_bare_board_number_is_not_strong_identity():
+    records = [
+        rec({"N": ["AS"]}, frame="a.jpg", board_number="1"),
+        rec({"S": ["KH"]}, frame="b.jpg", board_number="1"),
+    ]
+    result = reconstruct_deals(records).to_dict()
+    assert result["deal_count"] == 0
+    assert result["review_frame_count"] == 2
+
+
+def test_scoped_board_number_is_strong_identity():
+    records = [
+        rec({"N": ["AS"]}, frame="a.jpg", board_number="1", board_scope="session-a"),
+        rec({"S": ["KH"]}, frame="b.jpg", board_number="1", board_scope="session-a"),
+    ]
+    result = reconstruct_deals(records).to_dict()
+    assert result["deal_count"] == 1
+    assert result["deals"][0]["explicit_board_key"] == "board_number:session-a:1"
+
+
+def test_duplicate_frame_evidence_is_not_counted_twice():
+    first = rec({"N": ["AS", "KS", "QS", "JS"]}, frame="a.jpg")
+    duplicate = dict(first)
+    duplicate["time"] = 999
+    result = reconstruct_deals([first, duplicate]).to_dict()
+    assert result["deal_count"] == 1
+    assert result["deals"][0]["frame_indices"] == [0]
+    assert result["review_frames"][0]["reason"] == "DUPLICATE_FRAME_EVIDENCE"
 
 
 def test_job_tool_writes_compact_deals_artifact(tmp_path: Path):
