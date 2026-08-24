@@ -35,8 +35,15 @@ actual_fingerprint="$(ssh-keygen -lf "$known_hosts" | awk 'NR==1 {print $2}')"
 [[ "$actual_fingerprint" == "$EXPECTED_ED25519_FINGERPRINT" ]] || die "Oracle host fingerprint mismatch"
 
 readonly -a SSH_OPTIONS=(
-  -i "$SSH_KEY_PATH" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
-  -o "UserKnownHostsFile=$known_hosts" -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3
+  -i "$SSH_KEY_PATH"
+  -o BatchMode=yes
+  -o IdentitiesOnly=yes
+  -o StrictHostKeyChecking=yes
+  -o HostKeyAlgorithms=ssh-ed25519
+  -o "UserKnownHostsFile=$known_hosts"
+  -o ConnectTimeout=15
+  -o ServerAliveInterval=15
+  -o ServerAliveCountMax=3
 )
 
 remote_status() {
