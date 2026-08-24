@@ -181,6 +181,8 @@ productionize(){
   [[ "$(state assistant-lab-control-bridge.service)" == "$before_bridge" ]] || fail 'control bridge state changed'
   verify_dds3
   verify_sidecar
+  rm -rf "$work"
+  trap - EXIT INT TERM
   echo UNIVERSAL_VIDEO_OCI_ADMIN_PRODUCTIONIZE_PASS
 }
 
