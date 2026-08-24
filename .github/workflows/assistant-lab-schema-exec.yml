@@ -1,0 +1,105 @@
+name: Assistant Lab schema execution
+
+on:
+  pull_request:
+    paths:
+      - 'assistant_lab/**'
+      - 'ops/cloud_shell_activate_assistant_lab_*.sh'
+      - '.github/workflows/assistant-lab-schema-exec.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  schema-exec:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: assistant_lab_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d assistant_lab_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGDATABASE: assistant_lab_ci
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Verify canonical Oracle runtime pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin="$(tr -d '\r\n' < assistant_lab/ORACLE_RUNTIME_PIN)"
+          [[ "$pin" =~ ^[0-9a-f]{40}$ ]]
+          grep -F "readonly RUNTIME_COMMIT='$pin'" ops/cloud_shell_activate_assistant_lab_stack.sh >/dev/null
+          grep -F "CANONICAL_LAUNCHER_COMMIT='ae1e77952bde2f8409e8ed2bb28014d2c3ffd57d'" ops/cloud_shell_activate_assistant_lab_observer.sh >/dev/null
+          grep -F "CANONICAL_LAUNCHER_COMMIT='ae1e77952bde2f8409e8ed2bb28014d2c3ffd57d'" ops/cloud_shell_activate_assistant_lab_control_bridge.sh >/dev/null
+          bash -n ops/cloud_shell_activate_assistant_lab_stack.sh
+          bash -n ops/cloud_shell_activate_assistant_lab_observer.sh
+          bash -n ops/cloud_shell_activate_assistant_lab_control_bridge.sh
+
+      - name: Create only roles required by schema files
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE bridge_school_app NOLOGIN;
+          CREATE ROLE assistant_lab_worker NOLOGIN;
+          SQL
+
+      - name: Execute Assistant Lab schema from source of truth
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 -f assistant_lab/schema.sql
+          psql -v ON_ERROR_STOP=1 -f assistant_lab/control_schema.sql
+          # Re-apply to prove the checked-in schema remains idempotent.
+          psql -v ON_ERROR_STOP=1 -f assistant_lab/schema.sql
+          psql -v ON_ERROR_STOP=1 -f assistant_lab/control_schema.sql
+
+      - name: Verify least-privilege RPC contract in real PostgreSQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 -At <<'SQL' | tee /tmp/assistant-lab-privileges.txt
+          SELECT 'schema_usage=' || has_schema_privilege('assistant_lab_worker','assistant_lab','USAGE');
+          SELECT 'table_select=' || has_table_privilege('assistant_lab_worker','assistant_lab.control_command','SELECT');
+          SELECT 'table_update=' || has_table_privilege('assistant_lab_worker','assistant_lab.control_command','UPDATE');
+          SELECT 'table_insert=' || has_table_privilege('assistant_lab_worker','assistant_lab.control_command','INSERT');
+          SELECT 'table_delete=' || has_table_privilege('assistant_lab_worker','assistant_lab.control_command','DELETE');
+          SELECT 'rpc_claim=' || has_function_privilege('assistant_lab_worker','assistant_lab.claim_control_command(text)','EXECUTE');
+          SELECT 'rpc_finish=' || has_function_privilege('assistant_lab_worker','assistant_lab.finish_control_command(uuid,text,text,jsonb,text)','EXECUTE');
+          SELECT 'rpc_recover=' || has_function_privilege('assistant_lab_worker','assistant_lab.recover_stale_control_commands(integer)','EXECUTE');
+          SELECT 'rpc_security_definer=' || bool_and(p.prosecdef)
+          FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+          WHERE n.nspname='assistant_lab'
+            AND p.proname IN ('claim_control_command','finish_control_command','recover_stale_control_commands');
+          SELECT 'rpc_fixed_search_path=' || bool_and(array_to_string(p.proconfig, ',') LIKE '%search_path=pg_catalog, assistant_lab%')
+          FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+          WHERE n.nspname='assistant_lab'
+            AND p.proname IN ('claim_control_command','finish_control_command','recover_stale_control_commands');
+          SQL
+          grep -Fx 'schema_usage=true' /tmp/assistant-lab-privileges.txt
+          grep -Fx 'table_select=false' /tmp/assistant-lab-privileges.txt
+          grep -Fx 'table_update=false' /tmp/assistant-lab-privileges.txt
+          grep -Fx 'table_insert=false' /tmp/assistant-lab-privileges.txt
+          grep -Fx 'table_delete=false' /tmp/assistant-lab-privileges.txt
+          grep -Fx 'rpc_claim=true' /tmp/assistant-lab-privileges.txt
+          grep -Fx 'rpc_finish=true' /tmp/assistant-lab-privileges.txt
+          grep -Fx 'rpc_recover=true' /tmp/assistant-lab-privileges.txt
+          grep -Fx 'rpc_security_definer=true' /tmp/assistant-lab-privileges.txt
+          grep -Fx 'rpc_fixed_search_path=true' /tmp/assistant-lab-privileges.txt
