@@ -3,6 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ENTRY = (ROOT / "ops/universal_video_oci_admin_entrypoint.sh").read_text(encoding="utf-8")
 INSTALL = (ROOT / "ops/install_universal_video_ocarun_admin.sh").read_text(encoding="utf-8")
+CLOUD = (ROOT / "ops/cloud_shell_install_bounded_oci_admin.sh").read_text(encoding="utf-8")
 WORKFLOW = (ROOT / ".github/workflows/oracle-universal-video-admin.yml").read_text(encoding="utf-8")
 
 
@@ -40,6 +41,26 @@ def test_sudoers_surface_is_exact_and_not_broad():
     assert "sudo -u ocarun sudo -n \"$TARGET\" audit" in INSTALL
     assert "bash -c" not in INSTALL
     assert "eval " not in INSTALL
+
+
+def test_cloud_shell_bootstrap_is_single_fixed_host_path():
+    assert "readonly ORACLE_HOST='158.180.47.161'" in CLOUD
+    assert "readonly ORACLE_USER='ubuntu'" in CLOUD
+    assert 'readonly SSH_KEY_PATH="$HOME/.ssh/bridge_school_dds3_oracle"' in CLOUD
+    assert '[[ "$remote_main" == "$SOURCE_COMMIT" ]]' in CLOUD
+    assert "SOURCE_COMMIT must equal current main" in CLOUD
+    for fingerprint in (
+        "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
+        "SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc",
+        "SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64",
+    ):
+        assert fingerprint in CLOUD
+    assert "cmp -s \"$actual\" \"$expected\"" in CLOUD
+    assert "ops/install_assistant_lab_ocarun_admin.sh" in CLOUD
+    assert "ops/install_universal_video_ocarun_admin.sh" in CLOUD
+    assert "ORACLE_BOUNDED_OCARUN_ADMIN_BOOTSTRAP_PASS" in CLOUD
+    assert "$1" not in CLOUD
+    assert "eval " not in CLOUD
 
 
 def test_workflow_accepts_only_two_operations_and_one_instance():
