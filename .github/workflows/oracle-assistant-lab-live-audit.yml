@@ -9,10 +9,11 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   live-audit:
-    # pull_request_target deliberately executes only the trusted base-branch workflow.
+    # pull_request_target executes only the trusted base-branch workflow.
     # It never checks out or executes PR-head code.
     runs-on: ubuntu-24.04
     timeout-minutes: 12
@@ -61,12 +62,15 @@ jobs:
           echo "known=$known" >> "$GITHUB_OUTPUT"
 
       - name: Read-only host, Control API and production DB audit
+        id: audit
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          out="$RUNNER_TEMP/assistant-lab-live-audit.txt"
+          set +e
           ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
-            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'bash -s' <<'REMOTE'
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'bash -s' <<'REMOTE' | tee "$out"
           set -Eeuo pipefail
           sudo -n true
           repo=/opt/bridge-school/bridge-video-free
@@ -139,3 +143,33 @@ jobs:
           PY
           echo ASSISTANT_LAB_LIVE_AUDIT_PASS
           REMOTE
+          rc=${PIPESTATUS[0]}
+          set -e
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Publish sanitized audit result on request PR
+        if: ${{ github.event_name == 'pull_request_target' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          AUDIT_RC: ${{ steps.audit.outputs.rc }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/assistant-lab-live-audit.txt"
+          status=PASS
+          [[ "$AUDIT_RC" == 0 ]] || status=FAIL
+          body="$RUNNER_TEMP/audit-comment.md"
+          {
+            printf 'Assistant Lab live audit: **%s**\n\n' "$status"
+            printf '```text\n'
+            sed -n '1,120p' "$out"
+            printf '```\n'
+          } > "$body"
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="$(cat "$body")" >/dev/null
+
+      - name: Enforce audit result
+        env:
+          AUDIT_RC: ${{ steps.audit.outputs.rc }}
+        run: test "$AUDIT_RC" = 0
