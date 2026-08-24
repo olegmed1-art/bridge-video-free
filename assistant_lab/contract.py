@@ -21,7 +21,7 @@ class Priority(IntEnum):
     BACKGROUND = 30
 
 
-ALLOWED_KINDS = frozenset({"DDS3_COMPUTE", "NOOP"})
+ALLOWED_KINDS = frozenset({"DDS3_COMPUTE", "BEN_COMPUTE", "NOOP"})
 ALLOWED_DDS3_OPERATIONS = frozenset({"dd_table", "position_all_moves", "position_trajectory"})
 
 
@@ -49,20 +49,40 @@ def _require_mapping(value: Any, field: str) -> dict[str, Any]:
     return dict(value)
 
 
+def _validate_ben_payload(data: dict[str, Any]) -> dict[str, Any]:
+    hand = str(data.get("hand") or "").strip()
+    seat = str(data.get("seat") or "").strip().upper()
+    dealer = str(data.get("dealer") or "").strip().upper()
+    if not hand or len(hand) > 80:
+        raise LabContractError("BEN_COMPUTE requires bounded hand")
+    if seat not in {"N", "E", "S", "W"}:
+        raise LabContractError("BEN_COMPUTE requires seat N/E/S/W")
+    if dealer not in {"N", "E", "S", "W"}:
+        raise LabContractError("BEN_COMPUTE requires dealer N/E/S/W")
+    auction = data.get("auction", [])
+    if not isinstance(auction, list) or len(auction) > 80 or any(not isinstance(call, str) or len(call) > 16 for call in auction):
+        raise LabContractError("BEN_COMPUTE auction exceeds bounded contract")
+    vul = str(data.get("vul") or "").strip().upper()
+    if vul not in {"", "NONE", "NS", "EW", "BOTH", "ALL"}:
+        raise LabContractError("BEN_COMPUTE vulnerability is invalid")
+    result = dict(data)
+    result.update({"hand": hand, "seat": seat, "dealer": dealer, "auction": auction, "vul": vul})
+    return result
+
+
 def validate_job_payload(kind: str, payload: Any) -> dict[str, Any]:
     normalized_kind = str(kind or "").strip().upper()
     if normalized_kind not in ALLOWED_KINDS:
         raise LabContractError("unsupported assistant-lab job kind")
     data = _require_mapping(payload, "payload")
-
     if normalized_kind == "NOOP":
         return data
-
+    if normalized_kind == "BEN_COMPUTE":
+        return _validate_ben_payload(data)
     operation = str(data.get("operation") or "dd_table").strip()
     if operation not in ALLOWED_DDS3_OPERATIONS:
         raise LabContractError("unsupported DDS3 operation for assistant-lab v1")
     data["operation"] = operation
-
     if operation == "dd_table":
         pbn = str(data.get("pbn") or "").strip()
         if not pbn:
@@ -87,12 +107,7 @@ def validate_job_payload(kind: str, payload: Any) -> dict[str, Any]:
 def canonical_idempotency_key(kind: str, payload: Any) -> str:
     normalized_kind = str(kind or "").strip().upper()
     normalized_payload = validate_job_payload(normalized_kind, payload)
-    encoded = json.dumps(
-        {"contract": CONTRACT_VERSION, "kind": normalized_kind, "payload": normalized_payload},
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
+    encoded = json.dumps({"contract": CONTRACT_VERSION, "kind": normalized_kind, "payload": normalized_payload}, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return f"{CONTRACT_VERSION}:{hashlib.sha256(encoded).hexdigest()}"
 
 
@@ -105,3 +120,39 @@ def verify_dds3_result(result: Any, *, expected_operation: str | None = None) ->
     if expected_operation is not None and data.get("operation") != expected_operation:
         raise LabContractError("DDS3 operation provenance mismatch")
     return data
+
+
+def verify_ben_result(result: Any) -> dict[str, Any]:
+    data = _require_mapping(result, "BEN result")
+    bid = data.get("bid") or data.get("call")
+    candidates = data.get("candidates")
+    if not isinstance(bid, str) or not bid.strip():
+        raise LabContractError("BEN result has no selected bid")
+    if not isinstance(candidates, list) or not candidates:
+        raise LabContractError("BEN result has no candidates")
+    actions: set[str] = set()
+    scored = 0
+    for candidate in candidates:
+        item = _require_mapping(candidate, "BEN candidate")
+        action = item.get("call") or item.get("bid") or item.get("action")
+        if not isinstance(action, str) or not action.strip():
+            raise LabContractError("BEN candidate has no action")
+        actions.add(action.strip())
+        score = item.get("insta_score", item.get("score"))
+        if score is not None:
+            try:
+                numeric = float(score)
+            except (TypeError, ValueError) as exc:
+                raise LabContractError("BEN candidate score is not numeric") from exc
+            if numeric != numeric or numeric in {float("inf"), float("-inf")}:
+                raise LabContractError("BEN candidate score is not finite")
+            scored += 1
+    if scored == 0:
+        raise LabContractError("BEN result has no finite policy score")
+    if bid.strip() not in actions:
+        raise LabContractError("BEN selected bid is absent from candidates")
+    result_copy = dict(data)
+    result_copy.setdefault("engine", "BEN")
+    result_copy["evidence_class"] = "POLICY_ONLY"
+    result_copy["dds_search_evidence"] = False
+    return result_copy
