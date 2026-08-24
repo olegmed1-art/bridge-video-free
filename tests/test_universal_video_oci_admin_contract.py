@@ -48,7 +48,7 @@ def test_cloud_shell_bootstrap_is_single_fixed_host_path():
     assert "readonly ORACLE_USER='ubuntu'" in CLOUD
     assert 'readonly SSH_KEY_PATH="$HOME/.ssh/bridge_school_dds3_oracle"' in CLOUD
     assert '[[ "$remote_main" == "$SOURCE_COMMIT" ]]' in CLOUD
-    assert "SOURCE_COMMIT must equal current main" in CLOUD
+    assert "SOURCE_COMMIT is not current main" in CLOUD
     for fingerprint in (
         "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
         "SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc",
