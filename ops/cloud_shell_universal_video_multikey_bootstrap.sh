@@ -94,5 +94,15 @@ Path(sys.argv[2]).write_text(patched, encoding='utf-8')
 PY
 
 bash -n "$patched_file"
+grep -F 'ssh-keyscan -T 10 -t ed25519,ecdsa,rsa' "$patched_file" >/dev/null
+grep -F 'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' "$patched_file" >/dev/null
+grep -F 'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' "$patched_file" >/dev/null
+grep -F 'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64' "$patched_file" >/dev/null
+
+if [[ "${UNIVERSAL_VIDEO_MULTIKEY_PATCH_ONLY:-0}" == '1' ]]; then
+  echo ORACLE_UNIVERSAL_VIDEO_MULTIKEY_PATCH_CONTRACT_PASS
+  exit 0
+fi
+
 export USER="${USER:-$(id -un)}"
 env USER="$USER" bash "$patched_file" "$MODE"
