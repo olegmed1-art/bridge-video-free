@@ -65,7 +65,7 @@ secret_state(){
     echo NOT_CONFIGURED
     return
   fi
-  DRIVE_OAUTH_FILE="$OAUTH_FILE" python3 - <<'PY'
+  if DRIVE_OAUTH_FILE="$OAUTH_FILE" python3 - <<'PY'
 import json, os
 from pathlib import Path
 try:
@@ -75,7 +75,11 @@ except Exception:
     ok=False
 raise SystemExit(0 if ok else 1)
 PY
-  if [[ $? -eq 0 ]]; then echo CONFIGURED; else echo NOT_CONFIGURED; fi
+  then
+    echo CONFIGURED
+  else
+    echo NOT_CONFIGURED
+  fi
 }
 
 audit(){
@@ -128,7 +132,7 @@ productionize(){
 
   local work activation production log_file
   work="$(mktemp -d -t uv-oci-admin.XXXXXX)"
-  trap 'rm -rf "${work:-}"' RETURN
+  trap 'rm -rf "${work:-}"' EXIT INT TERM
   activation="$work/activate.sh"
   production="$work/productionize.sh"
   log_file="$work/productionize.log"
