@@ -1,0 +1,136 @@
+name: Oracle Assistant Lab Worker Rollout
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-assistant-lab-worker-rollout.yml'
+      - 'assistant_lab/worker.py'
+      - 'assistant_lab/ben_runtime.py'
+      - 'assistant_lab/contract.py'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-assistant-lab-worker-requests/*.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-assistant-lab-worker-rollout
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate worker sources
+        env:
+          PYTHONPATH: .
+        run: |
+          set -euo pipefail
+          python -m py_compile assistant_lab/worker.py assistant_lab/ben_runtime.py assistant_lab/contract.py
+          python - <<'PY'
+          from assistant_lab.contract import ALLOWED_KINDS
+          assert ALLOWED_KINDS == {'DDS3_COMPUTE','BEN_COMPUTE','NOOP'}
+          from assistant_lab.ben_runtime import validate_local_ben_url
+          assert validate_local_ben_url('http://127.0.0.1:8085') == 'http://127.0.0.1:8085'
+          PY
+
+  rollout:
+    if: ${{ github.event_name == 'push' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Resolve one bounded request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^ops/oracle-assistant-lab-worker-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]]
+          REQUEST_JSON="$(cat "${files[0]}")" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          x=json.loads(os.environ['REQUEST_JSON'])
+          required={'request_id','git_ref','expected_host_fingerprint','host','user'}
+          assert set(x)==required
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}',x['request_id'])
+          assert re.fullmatch(r'[0-9a-f]{40}',x['git_ref'])
+          assert re.fullmatch(r'SHA256:[A-Za-z0-9+/]{43}',x['expected_host_fingerprint'])
+          assert x['host']=='158.180.47.161' and x['user']=='ubuntu'
+          print('git_ref='+x['git_ref'])
+          print('expected_fingerprint='+x['expected_host_fingerprint'])
+          PY
+
+      - name: Verify pinned source
+        run: |
+          set -euo pipefail
+          ref='${{ steps.request.outputs.git_ref }}'
+          git cat-file -e "$ref^{commit}"
+          git show "$ref:assistant_lab/worker.py" | grep -F 'BEN_COMPUTE' >/dev/null
+          git show "$ref:assistant_lab/ben_runtime.py" | grep -F 'POLICY_ONLY' >/dev/null
+
+      - name: Verify host key and SSH credential
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/oracle-worker"
+          known="$RUNNER_TEMP/oracle-worker/known_hosts"; : > "$known"
+          for attempt in 1 2 3; do
+            ssh-keyscan -T 10 -t ed25519,ecdsa,rsa "$ORACLE_HOST" >> "$known" 2>/dev/null || true
+            [[ -s "$known" ]] && break
+            sleep $((attempt * 2))
+          done
+          sort -u -o "$known" "$known"
+          ssh-keygen -lf "$known" > "$RUNNER_TEMP/oracle-worker/fingerprints.txt"
+          awk '{print $2}' "$RUNNER_TEMP/oracle-worker/fingerprints.txt" | grep -Fx '${{ steps.request.outputs.expected_fingerprint }}' >/dev/null
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/oracle-worker/id_oracle"; printf '%s\n' "${!selected}" > "$key"; chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "key=$key" >> "$GITHUB_OUTPUT"; echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Roll out pinned resident worker
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env WORKER_GIT_REF='${{ steps.request.outputs.git_ref }}' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          repo=/opt/bridge-school/bridge-video-free
+          [[ "$(git -C "$repo" remote get-url origin)" == "https://github.com/olegmed1-art/bridge-video-free.git" ]]
+          git -C "$repo" fetch --quiet origin "$WORKER_GIT_REF"
+          git -C "$repo" cat-file -e "$WORKER_GIT_REF^{commit}"
+          git -C "$repo" checkout --quiet --detach "$WORKER_GIT_REF"
+          [[ "$(git -C "$repo" rev-parse HEAD)" == "$WORKER_GIT_REF" ]]
+          /opt/bridge-school/assistant-lab/.venv/bin/python -m py_compile "$repo/assistant_lab/worker.py" "$repo/assistant_lab/ben_runtime.py" "$repo/assistant_lab/contract.py"
+          systemctl restart assistant-lab.service
+          sleep 3
+          systemctl is-active --quiet assistant-lab.service
+          curl -fsS --max-time 5 http://127.0.0.1:8080/readyz >/dev/null
+          echo ASSISTANT_LAB_WORKER_ROLLOUT_PASS
+          REMOTE
