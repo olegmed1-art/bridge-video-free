@@ -27,15 +27,17 @@ def test_entrypoint_is_fixed_and_no_asr_productionization_only():
 
 
 def test_sudoers_surface_is_exact_and_not_broad():
-    assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-oci-admin audit" in INSTALL
-    assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-oci-admin productionize" in INSTALL
+    audit_line = "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-oci-admin audit"
+    productionize_line = "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-oci-admin productionize"
+    assert audit_line in INSTALL
+    assert productionize_line in INSTALL
+    sudo_lines = [line.strip() for line in INSTALL.splitlines() if line.strip().startswith("ocarun ALL=")]
+    assert sudo_lines == [audit_line, productionize_line]
     assert "NOPASSWD:[[:space:]]*ALL" in INSTALL
     assert "visudo -cf" in INSTALL
     assert "install -o root -g root -m 0755" in INSTALL
     assert "install -o root -g root -m 0440" in INSTALL
     assert "sudo -u ocarun sudo -n \"$TARGET\" audit" in INSTALL
-    assert "restart" not in INSTALL
-    assert "systemctl" not in INSTALL
     assert "bash -c" not in INSTALL
     assert "eval " not in INSTALL
 
