@@ -10,6 +10,7 @@ finalization through the finalizer, but are never relabeled as search EV.
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 import time
@@ -29,6 +30,8 @@ class Config:
     ben_url: str | None
     pons_url: str | None
     poll_seconds: float
+    ben_attempts: int = 3
+    ben_retry_seconds: float = 1.0
 
 
 def load_config() -> Config:
@@ -42,6 +45,8 @@ def load_config() -> Config:
         ben_url=(os.environ.get("BEN_API_URL") or "").rstrip("/") or None,
         pons_url=(os.environ.get("PONS_API_URL") or "").rstrip("/") or None,
         poll_seconds=float(os.environ.get("BRIDGE_WORKER_POLL_SECONDS", "5")),
+        ben_attempts=max(1, int(os.environ.get("BEN_MAX_ATTEMPTS", "3"))),
+        ben_retry_seconds=max(0.0, float(os.environ.get("BEN_RETRY_SECONDS", "1"))),
     )
 
 
@@ -85,6 +90,60 @@ def _ben_hand(hand: Any) -> str:
     return ".".join("" if part.strip() in {"-", "—"} else part.strip() for part in parts)
 
 
+def _validate_ben_result(result: Any) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        raise RuntimeError("BEN returned a non-object response")
+    bid = result.get("bid") or result.get("call")
+    if not isinstance(bid, str) or not bid.strip():
+        raise RuntimeError("BEN response contains no bid")
+    candidates = result.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        raise RuntimeError("BEN response contains no candidates")
+    scored = 0
+    actions: set[str] = set()
+    for item in candidates:
+        if not isinstance(item, dict):
+            raise RuntimeError("BEN candidate is not an object")
+        action = item.get("call") or item.get("bid") or item.get("action")
+        if not isinstance(action, str) or not action.strip():
+            raise RuntimeError("BEN candidate contains no action")
+        actions.add(action.strip())
+        score = item.get("insta_score")
+        if score is None:
+            score = item.get("score")
+        if score is not None:
+            if isinstance(score, bool):
+                raise RuntimeError("BEN candidate score is not numeric")
+            try:
+                numeric = float(score)
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError("BEN candidate score is not numeric") from exc
+            if not math.isfinite(numeric):
+                raise RuntimeError("BEN candidate score is not finite")
+            scored += 1
+    if scored == 0:
+        raise RuntimeError("BEN response contains no policy scores")
+    if bid.strip() not in actions:
+        raise RuntimeError("BEN selected bid is absent from candidates")
+    return result
+
+
+def _ben_request(config: Config, url: str) -> dict[str, Any]:
+    for attempt in range(1, config.ben_attempts + 1):
+        try:
+            return _validate_ben_result(request_json(url))
+        except urllib.error.HTTPError as exc:
+            retryable = exc.code == 429 or exc.code >= 500
+            if not retryable or attempt == config.ben_attempts:
+                raise
+        except (urllib.error.URLError, TimeoutError):
+            if attempt == config.ben_attempts:
+                raise
+        if config.ben_retry_seconds:
+            time.sleep(config.ben_retry_seconds * attempt)
+    raise RuntimeError("BEN retry loop exhausted")
+
+
 def ben_bid(config: Config, position: dict[str, Any]) -> dict[str, Any] | None:
     if not config.ben_url:
         return None
@@ -114,7 +173,7 @@ def ben_bid(config: Config, position: dict[str, Any]) -> dict[str, Any] | None:
             params["tournament"] = "mp"
         elif normalized in {"imp", "imps"}:
             params["tournament"] = "imps"
-    return request_json(f"{config.ben_url}/bid?{urlencode(params)}")
+    return _ben_request(config, f"{config.ben_url}/bid?{urlencode(params)}")
 
 
 def choose_engine(config: Config, job: dict[str, Any]) -> tuple[str, dict[str, Any]]:

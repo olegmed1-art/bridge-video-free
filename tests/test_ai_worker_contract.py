@@ -69,3 +69,68 @@ def test_explicit_ben_simulation_metrics_become_search_evidence():
 
 def test_ben_policy_only_status_does_not_claim_search_completion():
     assert worker.BEN_POLICY_ONLY_STATUS == "NO_SEARCH_EVIDENCE"
+
+
+def test_ben_response_contract_rejects_missing_policy_evidence():
+    for payload in ({}, {"bid": "1S"}, {"bid": "1S", "candidates": []}):
+        try:
+            worker._validate_ben_result(payload)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError(f"worker accepted invalid BEN payload: {payload!r}")
+
+
+def test_ben_response_contract_accepts_real_shape():
+    payload = {
+        "bid": "1S",
+        "candidates": [{"call": "1S", "insta_score": 1.168}],
+    }
+    assert worker._validate_ben_result(payload) is payload
+
+
+def test_ben_retries_transient_network_error(monkeypatch):
+    calls = []
+    payload = {"bid": "PASS", "candidates": [{"call": "PASS", "insta_score": 0.5}]}
+
+    def fake_request(url):
+        calls.append(url)
+        if len(calls) == 1:
+            raise worker.urllib.error.URLError("temporary")
+        return payload
+
+    monkeypatch.setattr(worker, "request_json", fake_request)
+    config = worker.Config("https://api.invalid", "token", "https://ben.invalid", None, 5.0, 2, 0.0)
+    assert worker._ben_request(config, "https://ben.invalid/bid") == payload
+    assert len(calls) == 2
+
+
+def test_ben_does_not_retry_invalid_contract(monkeypatch):
+    calls = []
+
+    def fake_request(url):
+        calls.append(url)
+        return {}
+
+    monkeypatch.setattr(worker, "request_json", fake_request)
+    config = worker.Config("https://api.invalid", "token", "https://ben.invalid", None, 5.0, 3, 0.0)
+    try:
+        worker._ben_request(config, "https://ben.invalid/bid")
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("worker accepted invalid BEN contract")
+    assert len(calls) == 1
+
+
+def test_ben_rejects_selected_bid_missing_from_candidates():
+    payload = {
+        "bid": "2H",
+        "candidates": [{"call": "PASS", "insta_score": 0.4}],
+    }
+    try:
+        worker._validate_ben_result(payload)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("worker accepted a BEN bid absent from candidates")

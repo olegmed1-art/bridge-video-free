@@ -17,3 +17,9 @@ def test_policy_ignores_non_numeric_scores():
     top, margin = _rank_distribution({"1S": "bad", "PASS": 0.2, "1N": 0.1})
     assert top == "PASS"
     assert str(margin) == "0.1"
+
+
+def test_policy_ignores_non_finite_scores():
+    top, margin = _rank_distribution({"1S": "NaN", "PASS": "Infinity", "1N": 0.1})
+    assert top == "1N"
+    assert margin is None

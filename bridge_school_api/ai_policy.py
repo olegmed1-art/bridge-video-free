@@ -26,9 +26,12 @@ def _rank_distribution(distribution: dict) -> tuple[str | None, Decimal | None]:
         if value is None:
             continue
         try:
-            ranked.append((str(action), Decimal(str(value))))
+            numeric = Decimal(str(value))
         except (InvalidOperation, ValueError):
             continue
+        if not numeric.is_finite():
+            continue
+        ranked.append((str(action), numeric))
     ranked.sort(key=lambda item: item[1], reverse=True)
     if not ranked:
         return None, None
@@ -44,6 +47,12 @@ def record_policy_evidence(position_id: UUID, evidence: PolicyEvidence) -> dict:
     top_action = evidence.top_action or computed_top
     if top_action is None:
         raise HTTPException(status_code=422, detail="policy distribution contains no numeric candidate scores")
+    numeric_actions = {
+        action for action, value in evidence.distribution.items()
+        if _rank_distribution({action: value})[0] is not None
+    }
+    if str(top_action) not in {str(action) for action in numeric_actions}:
+        raise HTTPException(status_code=422, detail="policy top_action has no finite numeric score")
 
     with connect() as conn, conn.cursor() as cur:
         cur.execute("SELECT input_status FROM ai.decision_position WHERE position_id=%s", (position_id,))
@@ -78,6 +87,8 @@ def record_policy_evidence(position_id: UUID, evidence: PolicyEvidence) -> dict:
             try:
                 numeric_score = Decimal(str(score))
             except (InvalidOperation, ValueError):
+                continue
+            if not numeric_score.is_finite():
                 continue
             cur.execute(
                 """
