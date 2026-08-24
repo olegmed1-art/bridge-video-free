@@ -14,9 +14,9 @@ readonly ARCHIVE_DIR='/srv/assistant-lab-observer-archive'
 log(){ printf '\n[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
-[[ "$#" -eq 1 ]] || die 'usage: cloud_shell_activate_assistant_lab_stack.sh probe|status|activate'
+[[ "$#" -eq 1 ]] || die 'usage: cloud_shell_activate_assistant_lab_stack.sh probe|status|rollout|activate'
 readonly MODE="$1"
-case "$MODE" in probe|status|activate) ;; *) die "unsupported mode: $MODE" ;; esac
+case "$MODE" in probe|status|rollout|activate) ;; *) die "unsupported mode: $MODE" ;; esac
 for c in oci python3 curl; do command -v "$c" >/dev/null 2>&1 || die "$c is required"; done
 export OCI_CLI_REGION="$REGION"
 
@@ -85,6 +85,44 @@ case "$MODE" in
   status)
     run_command assistant-lab-stack-status "$COMMON_READ_ONLY"
     echo ASSISTANT_LAB_STACK_STATUS_PASS
+    ;;
+  rollout)
+    ROLLOUT_SCRIPT=$(cat <<REMOTE
+set -Eeuo pipefail
+sudo -n true
+repo='$REPO_DIR'
+python_bin='/opt/bridge-school/assistant-lab-observer/.venv/bin/python'
+systemctl is-active --quiet assistant-lab.service
+ready_before="\$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)"
+READY="\$ready_before" python3 -c 'import json,os; x=json.loads(os.environ["READY"]); assert x.get("status")=="ready" and x.get("engine")=="DDS3" and x.get("fallback_used") is False'
+cd "\$repo"
+[[ -d .git ]]
+origin="\$(git remote get-url origin)"
+case "\$origin" in
+  https://github.com/olegmed1-art/bridge-video-free|https://github.com/olegmed1-art/bridge-video-free.git|git@github.com:olegmed1-art/bridge-video-free.git) ;;
+  *) echo unexpected_origin; exit 42 ;;
+esac
+[[ -z "\$(git status --porcelain --untracked-files=no)" ]] || { echo repo_tracked_files_dirty; exit 40; }
+git fetch --quiet origin '$RUNTIME_COMMIT'
+git cat-file -e '$RUNTIME_COMMIT^{commit}'
+git checkout --quiet --detach '$RUNTIME_COMMIT'
+[[ "\$(git rev-parse HEAD)" == '$RUNTIME_COMMIT' ]]
+grep -Fq 'assistant_lab.claim_control_command' assistant_lab/control_bridge.py
+grep -Fq 'assistant_lab.finish_control_command' assistant_lab/control_bridge.py
+"\$python_bin" -m py_compile assistant_lab/control_bridge.py
+sudo -n systemctl restart assistant-lab-control-bridge.service
+for svc in assistant-lab.service assistant-lab-observer.service assistant-lab-control.service assistant-lab-control-bridge.service; do systemctl is-active --quiet "\$svc"; done
+systemctl is-enabled --quiet assistant-lab-control-bridge.service
+ready_after="\$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)"
+READY="\$ready_after" python3 -c 'import json,os; x=json.loads(os.environ["READY"]); assert x.get("status")=="ready" and x.get("engine")=="DDS3" and x.get("fallback_used") is False'
+echo repo_head='$RUNTIME_COMMIT'
+echo bridge=active_rpc_client
+echo dds3=ready_real_no_fallback
+echo ASSISTANT_LAB_CONTROL_RPC_ROLLOUT_PASS
+REMOTE
+)
+    run_command assistant-lab-control-rpc-rollout "$ROLLOUT_SCRIPT"
+    echo ASSISTANT_LAB_CONTROL_RPC_CLOUD_SHELL_ROLLOUT_PASS
     ;;
   activate)
     ACTIVATE_SCRIPT=$(cat <<REMOTE
