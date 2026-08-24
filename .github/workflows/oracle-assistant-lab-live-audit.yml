@@ -1,8 +1,9 @@
 name: Oracle Assistant Lab live audit
 
 on:
-  pull_request:
+  pull_request_target:
     paths:
+      - 'ops/oracle-assistant-lab-audit-requests/*.json'
       - '.github/workflows/oracle-assistant-lab-live-audit.yml'
   workflow_dispatch:
 
@@ -11,6 +12,8 @@ permissions:
 
 jobs:
   live-audit:
+    # pull_request_target deliberately executes only the trusted base-branch workflow.
+    # It never checks out or executes PR-head code.
     runs-on: ubuntu-24.04
     timeout-minutes: 12
     env:
@@ -27,6 +30,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
 
       - name: Verify host key and select existing credential
         id: ssh
