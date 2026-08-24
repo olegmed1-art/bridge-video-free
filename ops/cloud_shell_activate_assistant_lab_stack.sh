@@ -35,6 +35,7 @@ printf 'instance_id=%s\ninstance_state=%s\nruntime_commit=%s\n' "$INSTANCE_ID" "
 run_command(){
   local display_name="$1" script_text="$2"
   local content target command_id execution state exit_code output
+  script_text="$(printf 'if ! sudo -n true 2>/dev/null; then echo OCARUN_SUDO_NOT_CONFIGURED; exit 77; fi\nexec sudo -n bash -c %q\n' "$script_text")"
   content="$(SCRIPT_TEXT="$script_text" python3 -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":os.environ["SCRIPT_TEXT"]},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
   target="$(python3 -c 'import json,os; print(json.dumps({"instanceId":os.environ["INSTANCE_ID"]},separators=(",",":")))')"
   command_id="$(oci instance-agent command create --compartment-id "$COMPARTMENT_ID" --content "$content" --target "$target" --timeout-in-seconds 600 --display-name "$display_name" --query data.id --raw-output)"
