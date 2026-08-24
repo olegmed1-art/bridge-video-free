@@ -12,10 +12,15 @@ permissions:
   issues: write
   pull-requests: write
 
+concurrency:
+  group: oracle-operator-v2-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
+
 jobs:
   contract:
     if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -24,6 +29,7 @@ jobs:
           set -euo pipefail
           grep -F '/oracle-v2 rollout-worker' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '/oracle-v2 rollout-ben' .github/workflows/oracle-operator-v2.yml >/dev/null
+          grep -F '127.0.0.1:8085:8085' .github/workflows/oracle-operator-v2.yml >/dev/null
 
   operate:
     if: >-
@@ -50,7 +56,7 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           fetch-depth: 0
 
-      - name: Resolve host and a working SSH key
+      - name: Resolve host and a normalized working SSH key
         id: ssh
         shell: bash
         run: |
@@ -64,21 +70,41 @@ jobs:
           done
           sort -u -o "$known" "$known"
           ssh-keygen -lf "$known" | awk '{print $2}' | grep -Fx "$EXPECTED_FINGERPRINT" >/dev/null
+
           selected=''
           selected_name=''
+          idx=0
           for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
-            value="${!name:-}"
-            [[ -n "$value" ]] || continue
-            candidate="$work/$name"
-            printf '%s\n' "$value" > "$candidate"
-            chmod 0600 "$candidate"
-            ssh-keygen -y -f "$candidate" >/dev/null 2>&1 || continue
-            if ssh -i "$candidate" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=12 "$ORACLE_USER@$ORACLE_HOST" 'true' >/dev/null 2>&1; then
-              selected="$candidate"; selected_name="$name"; break
-            fi
+            raw="${!name:-}"
+            [[ -n "$raw" ]] || continue
+            idx=$((idx+1))
+            base="$work/key-$idx"
+            candidates=("$base.raw" "$base.crlf" "$base.escaped")
+            printf '%s\n' "$raw" > "${candidates[0]}"
+            tr -d '\r' < "${candidates[0]}" > "${candidates[1]}"
+            python - "$raw" "${candidates[2]}" <<'PY'
+import sys
+raw=sys.argv[1]
+path=sys.argv[2]
+if '\\n' in raw and '\n' not in raw:
+    raw=raw.replace('\\r','').replace('\\n','\n')
+with open(path,'w',newline='\n') as f:
+    f.write(raw)
+    if not raw.endswith('\n'):
+        f.write('\n')
+PY
+            for key in "${candidates[@]}"; do
+              chmod 0600 "$key"
+              ssh-keygen -y -f "$key" >/dev/null 2>&1 || continue
+              if ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+                   -o UserKnownHostsFile="$known" -o ConnectTimeout=10 "$ORACLE_USER@$ORACLE_HOST" true >/dev/null 2>&1; then
+                selected="$key"; selected_name="$name"; break 2
+              fi
+            done
           done
           [[ -n "$selected" ]]
-          echo "key=$selected" >> "$GITHUB_OUTPUT"
+          cp "$selected" "$work/id_oracle"; chmod 0600 "$work/id_oracle"
+          echo "key=$work/id_oracle" >> "$GITHUB_OUTPUT"
           echo "known=$known" >> "$GITHUB_OUTPUT"
           echo "selected_name=$selected_name" >> "$GITHUB_OUTPUT"
 
