@@ -178,10 +178,13 @@ def test_capability_route_cannot_accept_payload_in_url():
     assert "payload:" not in main.split('def dispatch_assistant_lab_job', 1)[1].split('def _configuration_failure_category', 1)[0]
 
 
-def test_vercel_runtime_package_includes_assistant_lab():
+def test_vercel_runtime_excludes_compute_package_and_keeps_shared_contracts():
     rules = Path(".vercelignore").read_text(encoding="utf-8").splitlines()
-    assert "!assistant_lab" in rules
+    assert "!assistant_lab" not in rules
     assert "!bridge_school_api" in rules
+    assert "!bridge_contracts" in rules
+    bootstrap_route = Path("bridge_school_api/assistant_lab_bootstrap.py").read_text(encoding="utf-8")
+    assert "from bridge_contracts.bootstrap import" in bootstrap_route
 
 
 def test_oracle_service_uses_dedicated_unix_identity_and_hardening():
