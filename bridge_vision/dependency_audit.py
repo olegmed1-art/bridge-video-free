@@ -18,7 +18,10 @@ REGISTRY_PATH = ROOT / "bridge_vision" / "decision_dependencies.json"
 CRITICAL_PATHS = (
     ROOT / "bridge_vision",
     ROOT / "universal_video",
+    ROOT / "bridge_contracts",
     ROOT / "tools" / "bridge_video_positions.py",
+    ROOT / "tools" / "bridge_video_deals.py",
+    ROOT / "tools" / "bridge_vision_seed_corpus.py",
 )
 
 ALLOWED_KINDS = {"infrastructure", "model", "oracle", "legacy"}
@@ -61,10 +64,14 @@ def _imports(path: Path) -> set[str]:
 
 def load_registry() -> dict[str, dict[str, str]]:
     raw = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+    if raw.get("schema") != "bridge-decision-dependencies-v1":
+        raise DependencyAuditError("unsupported decision dependency registry schema")
     deps = raw.get("dependencies")
     if not isinstance(deps, dict):
         raise DependencyAuditError("decision dependency registry must contain dependencies object")
     for name, entry in deps.items():
+        if not isinstance(name, str) or not name.strip():
+            raise DependencyAuditError("dependency registry contains invalid name")
         if not isinstance(entry, dict) or entry.get("kind") not in ALLOWED_KINDS:
             raise DependencyAuditError(f"invalid dependency registry entry: {name}")
         if not str(entry.get("policy") or "").strip():
@@ -77,7 +84,8 @@ def audit() -> dict[str, object]:
     repo_roots = _repo_roots()
     stdlib = set(sys.stdlib_module_names)
     external: dict[str, list[str]] = {}
-    for path in _python_files(CRITICAL_PATHS):
+    audited_files = _python_files(CRITICAL_PATHS)
+    for path in audited_files:
         for root in sorted(_imports(path)):
             if root in stdlib or root in repo_roots:
                 continue
@@ -90,6 +98,7 @@ def audit() -> dict[str, object]:
 
     return {
         "status": "PASS",
+        "audited_file_count": len(audited_files),
         "registered": sorted(registry),
         "observed_external": {name: sorted(paths) for name, paths in sorted(external.items())},
     }
