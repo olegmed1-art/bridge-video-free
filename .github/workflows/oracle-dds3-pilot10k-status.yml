@@ -13,12 +13,7 @@ permissions:
 jobs:
   status:
     if: >-
-      ${{
-        github.event.pull_request.head.repo.full_name == github.repository &&
-        github.event.pull_request.user.login == 'olegmed1-art' &&
-        github.event.pull_request.base.ref == 'main' &&
-        github.event.pull_request.changed_files == 1
-      }}
+      ${{ github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == 'olegmed1-art' && github.event.pull_request.base.ref == 'main' && github.event.pull_request.changed_files == 1 }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -32,14 +27,14 @@ jobs:
       SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
       SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
     steps:
-      - name: Checkout trusted base only
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
       - name: Select credential and verify host
         id: ssh
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -62,6 +57,8 @@ jobs:
 
       - name: Read live Pilot-10k state
         id: audit
+        if: ${{ steps.ssh.outcome == 'success' }}
+        continue-on-error: true
         shell: bash
         run: |
           set -euo pipefail
@@ -76,36 +73,28 @@ jobs:
           echo "unit_load=$(sudo -n systemctl show dds3-mass@10000.service -p LoadState --value 2>/dev/null || true)"
           echo "assistant_lab=$(sudo -n systemctl is-active assistant-lab.service 2>/dev/null || true)"
           ready="$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)"
-          READY="$ready" python3 - <<'PY'
-          import json,os
-          x=json.loads(os.environ['READY'])
-          print('dds3_status='+str(x.get('status')))
-          print('dds3_engine='+str(x.get('engine')))
-          print('dds3_fallback_used='+str(x.get('fallback_used')).lower())
-          PY
+          READY="$ready" python3 -c 'import json,os; x=json.loads(os.environ["READY"]); print("dds3_status="+str(x.get("status"))); print("dds3_engine="+str(x.get("engine"))); print("dds3_fallback_used="+str(x.get("fallback_used")).lower())'
           if [[ -f "$state/evidence/10000.json" ]]; then
-            echo 'evidence_present=true'
-            python3 - "$state/evidence/10000.json" <<'PY'
-          import json,sys
-          x=json.load(open(sys.argv[1]))
-          for k in ('schema','target','status','compute_plane','compute_host','engine','fallback_used','corpus_sha256','corpus_deals','expected_train_tasks','returncode','log_sha256'):
-              if k in x: print(f'{k}={x[k]}')
-          PY
+            echo evidence_present=true
+            python3 -c 'import json; x=json.load(open("/opt/bridge-school/dds3-mass-validation/evidence/10000.json")); [print(f"{k}={x[k]}") for k in ("schema","target","status","compute_plane","compute_host","engine","fallback_used","corpus_sha256","corpus_deals","expected_train_tasks","returncode","log_sha256") if k in x]'
           else
-            echo 'evidence_present=false'
+            echo evidence_present=false
           fi
           if [[ -f "$state/logs/10000.log" ]]; then
             echo "log_bytes=$(stat -c %s "$state/logs/10000.log")"
-            echo 'log_tail_begin'
+            echo log_tail_begin
             tail -n 12 "$state/logs/10000.log" | sed -E 's/(token|password|secret|key)=[^[:space:]]+/\1=[REDACTED]/Ig'
-            echo 'log_tail_end'
+            echo log_tail_end
           fi
           REMOTE
 
       - name: Publish live status
+        if: ${{ always() }}
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          SSH_OUTCOME: ${{ steps.ssh.outcome }}
+          AUDIT_OUTCOME: ${{ steps.audit.outcome }}
         shell: bash
         run: |
           set -euo pipefail
@@ -114,8 +103,11 @@ jobs:
           {
             echo 'Oracle DDS3 Pilot-10k live status:'
             echo
+            echo "ssh_step=$SSH_OUTCOME"
+            echo "audit_step=$AUDIT_OUTCOME"
+            echo
             echo '```text'
-            sed -n '1,120p' "$out"
+            if [[ -f "$out" ]]; then sed -n '1,120p' "$out"; else echo 'No live status payload was produced.'; fi
             echo '```'
           } > "$body"
           gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="$(cat "$body")" >/dev/null
