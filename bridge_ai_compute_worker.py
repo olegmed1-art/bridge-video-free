@@ -100,12 +100,14 @@ def _validate_ben_result(result: Any) -> dict[str, Any]:
     if not isinstance(candidates, list) or not candidates:
         raise RuntimeError("BEN response contains no candidates")
     scored = 0
+    actions: set[str] = set()
     for item in candidates:
         if not isinstance(item, dict):
             raise RuntimeError("BEN candidate is not an object")
         action = item.get("call") or item.get("bid") or item.get("action")
         if not isinstance(action, str) or not action.strip():
             raise RuntimeError("BEN candidate contains no action")
+        actions.add(action.strip())
         score = item.get("insta_score")
         if score is None:
             score = item.get("score")
@@ -121,6 +123,8 @@ def _validate_ben_result(result: Any) -> dict[str, Any]:
             scored += 1
     if scored == 0:
         raise RuntimeError("BEN response contains no policy scores")
+    if bid.strip() not in actions:
+        raise RuntimeError("BEN selected bid is absent from candidates")
     return result
 
 
