@@ -106,5 +106,100 @@ $$;
 REVOKE ALL ON assistant_lab.control_command FROM PUBLIC;
 REVOKE ALL ON FUNCTION assistant_lab.enqueue_control_command(text,text,text,text,text,integer,text,text) FROM PUBLIC;
 
--- The existing Oracle worker principal can claim and finish commands but cannot insert them.
-GRANT SELECT, UPDATE ON assistant_lab.control_command TO assistant_lab_worker;
+-- The Oracle principal has no direct table privileges. All state transitions are
+-- constrained by SECURITY DEFINER RPCs owned by the schema owner.
+CREATE OR REPLACE FUNCTION assistant_lab.claim_control_command(p_worker_id text)
+RETURNS SETOF assistant_lab.control_command
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, assistant_lab
+AS $
+BEGIN
+    IF p_worker_id IS NULL OR length(p_worker_id) NOT BETWEEN 1 AND 256 THEN
+        RAISE EXCEPTION 'invalid worker id';
+    END IF;
+    RETURN QUERY
+    WITH candidate AS (
+        SELECT command_id
+        FROM assistant_lab.control_command
+        WHERE status = 'QUEUED'
+        ORDER BY created_at
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+    )
+    UPDATE assistant_lab.control_command AS c
+       SET status = 'RUNNING',
+           claimed_by = p_worker_id,
+           claimed_at = now(),
+           attempts = attempts + 1
+      FROM candidate
+     WHERE c.command_id = candidate.command_id
+    RETURNING c.*;
+END;
+$;
+
+CREATE OR REPLACE FUNCTION assistant_lab.finish_control_command(
+    p_command_id uuid,
+    p_worker_id text,
+    p_status text,
+    p_result_json jsonb DEFAULT NULL,
+    p_error_text text DEFAULT NULL
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, assistant_lab
+AS $
+BEGIN
+    IF p_status NOT IN ('COMPLETED', 'FAILED') THEN
+        RAISE EXCEPTION 'invalid terminal status';
+    END IF;
+    UPDATE assistant_lab.control_command
+       SET status = p_status,
+           result_json = p_result_json,
+           error_text = left(p_error_text, 4000),
+           completed_at = now()
+     WHERE command_id = p_command_id
+       AND status = 'RUNNING'
+       AND claimed_by = p_worker_id;
+    RETURN FOUND;
+END;
+$;
+
+CREATE OR REPLACE FUNCTION assistant_lab.recover_stale_control_commands(
+    p_stale_after_seconds integer
+)
+RETURNS bigint
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, assistant_lab
+AS $
+DECLARE
+    v_count bigint;
+BEGIN
+    IF p_stale_after_seconds NOT BETWEEN 60 AND 86400 THEN
+        RAISE EXCEPTION 'invalid stale interval';
+    END IF;
+    UPDATE assistant_lab.control_command
+       SET status = CASE WHEN attempts < max_attempts THEN 'QUEUED' ELSE 'FAILED' END,
+           error_text = CASE
+               WHEN attempts < max_attempts THEN error_text
+               ELSE 'stale control bridge claim exhausted retries'
+           END,
+           claimed_by = NULL,
+           claimed_at = NULL,
+           completed_at = CASE WHEN attempts < max_attempts THEN completed_at ELSE now() END
+     WHERE status = 'RUNNING'
+       AND claimed_at < now() - (p_stale_after_seconds * interval '1 second');
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count;
+END;
+$;
+
+REVOKE ALL ON assistant_lab.control_command FROM assistant_lab_worker;
+REVOKE ALL ON FUNCTION assistant_lab.claim_control_command(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION assistant_lab.finish_control_command(uuid,text,text,jsonb,text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION assistant_lab.recover_stale_control_commands(integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION assistant_lab.claim_control_command(text) TO assistant_lab_worker;
+GRANT EXECUTE ON FUNCTION assistant_lab.finish_control_command(uuid,text,text,jsonb,text) TO assistant_lab_worker;
+GRANT EXECUTE ON FUNCTION assistant_lab.recover_stale_control_commands(integer) TO assistant_lab_worker;
