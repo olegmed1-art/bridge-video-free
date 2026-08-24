@@ -83,7 +83,7 @@ jobs:
           assert not re.search(r"(?m)^\s*ssh\b", bridge)
           PY
       - name: Run Assistant Lab contract tests
-        run: python -m pytest -q tests/test_assistant_lab_contract.py tests/test_assistant_lab_bootstrap.py tests/test_assistant_lab_observer.py tests/test_assistant_lab_control_api.py
+        run: python -m pytest -q tests/test_assistant_lab_contract.py tests/test_assistant_lab_bootstrap.py tests/test_assistant_lab_observer.py tests/test_assistant_lab_control_api.py tests/test_assistant_lab_control_schema.py
       - name: Guard direct Neon to DDS3 resident path
         shell: bash
         run: |
