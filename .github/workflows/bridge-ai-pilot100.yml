@@ -8,6 +8,7 @@ on:
       - '.github/workflows/bridge-ai-pilot100.yml'
       - 'bridge_ai_compute_worker.py'
       - 'bridge_school_api/ai_orchestrator.py'
+      - 'bridge_school_api/ai_worker.py'
       - 'bridge_school_api/ai_policy.py'
       - 'bridge_school_api/ai_decision.py'
 
@@ -15,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: bridge-ai-ben-policy-evidence-run8
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -27,7 +28,8 @@ jobs:
       BRIDGE_API_TOKEN: github-actions-pilot100
       BRIDGE_API_BASE_URL: http://127.0.0.1:8000
       BEN_API_URL: http://127.0.0.1:8085
-      PILOT100_PREFIX: PILOT100-20260824-BEN-RUN8-
+      BEN_IMAGE: ghcr.io/lorserker/ben@sha256:474065d99c796a54e32cab4a83dee09685749cff2fbde5edc84ab2b961ba514d
+      PILOT100_PREFIX: PILOT100-${{ github.run_id }}-${{ github.run_attempt }}-BEN-
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -65,8 +67,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker pull ghcr.io/lorserker/ben:latest
-          docker run -d --name bridge-ben -p 8085:8085 ghcr.io/lorserker/ben:latest
+          case "$BEN_IMAGE" in
+            *@sha256:*) ;;
+            *) echo "BEN_IMAGE must be pinned by digest"; exit 1 ;;
+          esac
+          docker pull "$BEN_IMAGE"
+          docker run -d --name bridge-ben -p 8085:8085 "$BEN_IMAGE"
           for attempt in $(seq 1 180); do
             code=$(curl -s -o /tmp/ben-ready.json -w '%{http_code}' \
               'http://127.0.0.1:8085/bid?hand=AK97543.K.T3.AK7&seat=S&dealer=N&vul=&ctx=----&details=true' || true)
