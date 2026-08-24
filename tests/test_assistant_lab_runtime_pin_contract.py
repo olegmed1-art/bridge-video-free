@@ -30,3 +30,13 @@ def test_stack_preserves_control_boundaries():
     assert "other_oracle_result_access" in STACK
     assert "assistant-lab-control-bridge.service" in STACK
     assert "git merge-base --is-ancestor" in STACK
+
+
+def test_stack_has_bounded_rpc_only_rollout_mode():
+    assert "probe|status|rollout|activate" in STACK
+    assert "assistant-lab-control-rpc-rollout" in STACK
+    assert "git status --porcelain --untracked-files=no" in STACK
+    assert "assistant_lab.claim_control_command" in STACK
+    assert "assistant_lab.finish_control_command" in STACK
+    assert "systemctl restart assistant-lab-control-bridge.service" in STACK
+    assert "ASSISTANT_LAB_CONTROL_RPC_ROLLOUT_PASS" in STACK
