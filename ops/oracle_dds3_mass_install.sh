@@ -29,10 +29,13 @@ if ! getent group "$MASS_GROUP" >/dev/null 2>&1; then groupadd --system "$MASS_G
 if ! id "$MASS_USER" >/dev/null 2>&1; then
   useradd --system --gid "$MASS_GROUP" --home-dir "$STATE_ROOT" --shell /usr/sbin/nologin "$MASS_USER"
 fi
-install -d -m 0750 -o "$MASS_USER" -g "$MASS_GROUP" "$STATE_ROOT"
+# The state root and evidence directory are traversable/readable so the bounded
+# operator can publish sanitized evidence without privileged file reads. Inputs,
+# work state and raw logs remain group-confined.
+install -d -m 0755 -o "$MASS_USER" -g "$MASS_GROUP" "$STATE_ROOT"
 install -d -m 0750 -o root -g "$MASS_GROUP" "$STATE_ROOT/requests"
-install -d -m 0750 -o "$MASS_USER" -g "$MASS_GROUP" \
-  "$STATE_ROOT/work" "$STATE_ROOT/evidence" "$STATE_ROOT/logs"
+install -d -m 0750 -o "$MASS_USER" -g "$MASS_GROUP" "$STATE_ROOT/work" "$STATE_ROOT/logs"
+install -d -m 0755 -o "$MASS_USER" -g "$MASS_GROUP" "$STATE_ROOT/evidence"
 
 if [[ "$BOOTSTRAP" == "1" ]]; then
   log "Bootstrap pinned DDS3 v3 training runtime without starting mass evaluation"
@@ -43,6 +46,9 @@ PYTHON="$REPO_ROOT/dds_training/.venv/bin/python"
 
 log "Compile dispatcher and verify canonical engine import"
 "$PYTHON" -m py_compile "$REPO_ROOT/dds_training/oracle_mass_dispatch.py" "$REPO_ROOT/dds_training/run_stage.py"
+if [[ -f "$REPO_ROOT/dds_training/oracle_mass_dispatch_v2.py" ]]; then
+  "$PYTHON" -m py_compile "$REPO_ROOT/dds_training/oracle_mass_dispatch_v2.py"
+fi
 (
   cd "$REPO_ROOT/dds_training"
   "$PYTHON" - <<'PY'
@@ -55,9 +61,19 @@ print('DDS3_MASS_ENGINE_IMPORT_PASS')
 PY
 )
 
+log "Verify service identity can reach the pinned runtime before installation"
+sudo -u "$MASS_USER" test -x "$PYTHON" || die "mass service identity cannot execute pinned Python"
+sudo -u "$MASS_USER" test -r "$REPO_ROOT/dds_training/oracle_mass_dispatch_v2.py" || die "mass service identity cannot read v2 dispatcher"
+sudo -u "$MASS_USER" test -r "$REPO_ROOT/dds_training/run_stage.py" || die "mass service identity cannot read canonical run_stage.py"
+sudo -u "$MASS_USER" "$PYTHON" - <<PY
+import sys
+sys.path.insert(0, '$REPO_ROOT/dds_training')
+import oracle_mass_dispatch_v2
+print('DDS3_MASS_SERVICE_IDENTITY_IMPORT_PASS')
+PY
+
 log "Install hardened Oracle-only systemd template"
 install -m 0644 -o root -g root "$UNIT_SRC" "$UNIT_DST"
-# The unit template is intentionally fixed to the production paths above.
 [[ "$STATE_ROOT" == "/opt/bridge-school/dds3-mass-validation" ]] || die "custom state root is unsupported by the fixed unit template"
 [[ "$REPO_ROOT" == "/opt/bridge-school/bridge-video-free" ]] || die "custom repo root is unsupported by the fixed unit template"
 systemctl daemon-reload
@@ -66,10 +82,10 @@ systemd-analyze verify "$UNIT_DST" >/dev/null
 log "Verify mass targets are bounded and production DDS3 is not modified"
 for target in 10000 30000 40000; do
   systemctl show "dds3-mass@${target}.service" -p FragmentPath >/dev/null
- done
+done
 ! grep -qE 'systemctl +(stop|restart|disable).*dds3' "$REPO_ROOT/dds_training/oracle_mass_dispatch.py" || die "dispatcher may not stop/restart DDS3"
 
 if [[ "$ACTIVATE" == "1" ]]; then
   log "Activation is installation-only; no mass stage is auto-started"
 fi
-printf 'DDS3_MASS_INSTALL_PASS state_root=%s auto_started=0 targets=10000,30000,40000\n' "$STATE_ROOT"
+printf 'DDS3_MASS_INSTALL_PASS state_root=%s auto_started=0 targets=10000,30000,40000 evidence_readable=1\n' "$STATE_ROOT"
