@@ -1,0 +1,9 @@
+{
+  "kind": "DDS3",
+  "payload": {
+    "operation": "dd_table",
+    "pbn": "N:AKQJ.T98.765.432 9876.AKQ.JT9.876 5432.7654.AKQ.95 T.J32.8432.AKQJT"
+  },
+  "source": "M1_GOLDEN_FIXTURE",
+  "priority": 10
+}
