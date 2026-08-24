@@ -9,6 +9,7 @@ from assistant_lab.contract import (
     canonical_idempotency_key,
     validate_job_payload,
     validate_priority,
+    verify_ben_result,
     verify_dds3_result,
     LabJob,
 )
@@ -85,6 +86,24 @@ def test_dds3_provenance_is_fail_closed():
         verify_dds3_result({"engine": "DDS3", "fallback_used": True, "operation": "dd_table"})
     with pytest.raises(LabContractError):
         verify_dds3_result(good, expected_operation="position_all_moves")
+
+
+def test_ben_selected_bid_requires_its_own_finite_policy_score():
+    good = {"bid": "1S", "candidates": [{"call": "1S", "insta_score": 1.2}]}
+    assert verify_ben_result(good)["evidence_class"] == "POLICY_ONLY"
+    with pytest.raises(LabContractError, match="selected bid has no finite"):
+        verify_ben_result({
+            "bid": "1S",
+            "candidates": [
+                {"call": "1S"},
+                {"call": "PASS", "insta_score": 0.4},
+            ],
+        })
+    with pytest.raises(LabContractError, match="not numeric"):
+        verify_ben_result({
+            "bid": "1S",
+            "candidates": [{"call": "1S", "insta_score": True}],
+        })
 
 
 def test_dispatch_capability_is_hashed_and_fail_closed():
