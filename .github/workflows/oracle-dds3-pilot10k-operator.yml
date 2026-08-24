@@ -1,0 +1,253 @@
+name: Oracle DDS3 Pilot-10k operator
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: oracle-dds3-pilot10k-operator
+  cancel-in-progress: false
+
+env:
+  ORACLE_HOST: 158.180.47.161
+  ORACLE_USER: ubuntu
+  EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+  PILOT_DRIVE_LOCATOR: dds_training/artifact_locations/dds-pilot-10k-complete-31909124383.json
+  PILOT_ZIP_SHA256: ef126c6842dda691b08325392b9d7fe5319acdba34b2db6b8981f03d56f8e130
+  PILOT_TGZ_SHA256: f472b1361c879e890ffeab0e9184736a7dcd39cbc3a4c33541eb7156df9176d6
+  PILOT_RAW_SHA256: 8a21cf06ab7ac424ee0f245ccf274e6d6f4f7135fa9b8c4c0e52c595c0da5996
+  PILOT_PRED_SHA256: 241915a12457a709e77b76c26bb45b4fd6d074dd135fa747966074d381e10d7f
+
+jobs:
+  operate:
+    if: >-
+      github.event.comment.user.login == 'olegmed1-art' &&
+      (github.event.comment.body == '/dds3-pilot10k start' ||
+       github.event.comment.body == '/dds3-pilot10k status')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      COMMAND: ${{ github.event.comment.body }}
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - name: Checkout trusted main
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Resolve verified Oracle SSH credential
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/oracle-pilot10k"; mkdir -p "$work"
+          known="$work/known_hosts"; : > "$known"
+          for attempt in 1 2 3; do
+            ssh-keyscan -T 10 -t ed25519,ecdsa,rsa "$ORACLE_HOST" >> "$known" 2>/dev/null || true
+            [[ -s "$known" ]] && break
+            sleep $((attempt * 2))
+          done
+          sort -u -o "$known" "$known"
+          ssh-keygen -lf "$known" | awk '{print $2}' | grep -Fx "$EXPECTED_FINGERPRINT" >/dev/null
+          selected=''; idx=0
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            raw="${!name:-}"; [[ -n "$raw" ]] || continue
+            idx=$((idx+1)); base="$work/key-$idx"
+            printf '%s\n' "$raw" > "$base.raw"
+            tr -d '\r' < "$base.raw" > "$base.crlf"
+            RAW_KEY="$raw" OUT_KEY="$base.escaped" python - <<'PY'
+          import os
+          raw=os.environ['RAW_KEY']
+          if '\\n' in raw and '\n' not in raw:
+              raw=raw.replace('\\r','').replace('\\n','\n')
+          with open(os.environ['OUT_KEY'],'w',newline='\n') as f:
+              f.write(raw)
+              if not raw.endswith('\n'): f.write('\n')
+          PY
+            for key in "$base.raw" "$base.crlf" "$base.escaped"; do
+              chmod 0600 "$key"
+              ssh-keygen -y -f "$key" >/dev/null 2>&1 || continue
+              if ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+                   -o UserKnownHostsFile="$known" -o ConnectTimeout=10 "$ORACLE_USER@$ORACLE_HOST" true >/dev/null 2>&1; then
+                selected="$key"; break 2
+              fi
+            done
+          done
+          [[ -n "$selected" ]]
+          cp "$selected" "$work/id_oracle"; chmod 0600 "$work/id_oracle"
+          echo "key=$work/id_oracle" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Restore immutable Pilot-10k inputs
+        if: ${{ env.COMMAND == '/dds3-pilot10k start' }}
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'requests==2.32.5' 'google-auth==2.40.3'
+          PYTHONPATH=. python tools/restore_drive_split_artifact.py \
+            --locator "$PILOT_DRIVE_LOCATOR" \
+            --output /tmp/dds-pilot-10k.zip \
+            --work-dir /tmp/dds-pilot-drive
+          echo "$PILOT_ZIP_SHA256  /tmp/dds-pilot-10k.zip" | sha256sum -c -
+          rm -rf /tmp/pilot-artifact /tmp/pilot-state
+          mkdir -p /tmp/pilot-artifact /tmp/pilot-state
+          unzip -q /tmp/dds-pilot-10k.zip -d /tmp/pilot-artifact
+          tgz=/tmp/pilot-artifact/dds-pilot-10k-complete-state.tgz
+          echo "$PILOT_TGZ_SHA256  $tgz" | sha256sum -c -
+          tar -xzf "$tgz" -C /tmp/pilot-state pilot/locked_predictions_train.jsonl pilot/raw.pbn
+          echo "$PILOT_RAW_SHA256  /tmp/pilot-state/pilot/raw.pbn" | sha256sum -c -
+          echo "$PILOT_PRED_SHA256  /tmp/pilot-state/pilot/locked_predictions_train.jsonl" | sha256sum -c -
+
+      - name: Start Pilot-10k on Oracle
+        if: ${{ env.COMMAND == '/dds3-pilot10k start' }}
+        id: start
+        shell: bash
+        run: |
+          set -euo pipefail
+          key='${{ steps.ssh.outputs.key }}'; known='${{ steps.ssh.outputs.known }}'
+          opts=(-i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$known" -o ConnectTimeout=15)
+          scp "${opts[@]}" /tmp/pilot-state/pilot/locked_predictions_train.jsonl "$ORACLE_USER@$ORACLE_HOST:/tmp/pilot10k-predictions.jsonl"
+          ref="$(git rev-parse HEAD)"
+          ssh "${opts[@]}" "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env RUNTIME_COMMIT='$ref' PILOT_RAW_SHA256='$PILOT_RAW_SHA256' PILOT_PRED_SHA256='$PILOT_PRED_SHA256' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          repo=/opt/bridge-school/bridge-video-free
+          state=/opt/bridge-school/dds3-mass-validation
+          work="$state/work/pilot-replay"
+          pred="$work/locked_predictions_train.jsonl"
+          req="$state/requests/10000.json"
+
+          systemctl is-active --quiet assistant-lab.service
+          ready="$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)"
+          READY="$ready" python3 -c 'import json,os; x=json.loads(os.environ["READY"]); assert x.get("status")=="ready" and x.get("engine")=="DDS3" and x.get("fallback_used") is False'
+          if systemctl is-active --quiet dds3-mass@10000.service; then
+            echo 'Pilot-10k already running; refusing duplicate start'
+            exit 3
+          fi
+
+          git -C "$repo" fetch --quiet origin "$RUNTIME_COMMIT"
+          git -C "$repo" checkout --force --quiet --detach "$RUNTIME_COMMIT"
+          DDS3_MASS_BOOTSTRAP=0 DDS3_MASS_ACTIVATE=1 bash "$repo/ops/oracle_dds3_mass_install.sh"
+          "$repo/dds_training/.venv/bin/python" -m py_compile "$repo/dds_training/oracle_mass_dispatch_v2.py"
+
+          rm -rf "$work"
+          install -d -m 0750 -o dds3-mass -g dds3-mass "$work"
+          sudo -u dds3-mass "$repo/dds_training/.venv/bin/python" "$repo/dds_training/run_stage.py" prepare --stage pilot --out "$work" >/tmp/pilot10k-prepare.log
+          echo "$PILOT_RAW_SHA256  $work/raw.pbn" | sha256sum -c -
+          mv /tmp/pilot10k-predictions.jsonl "$pred"
+          chown dds3-mass:dds3-mass "$pred"; chmod 0640 "$pred"
+          echo "$PILOT_PRED_SHA256  $pred" | sha256sum -c -
+
+          python3 - <<PY
+          import json
+          from pathlib import Path
+          work=Path('$work')
+          tasks=[json.loads(x) for x in (work/'blind_tasks.jsonl').read_text().splitlines() if x.strip()]
+          preds=[json.loads(x) for x in (work/'locked_predictions_train.jsonl').read_text().splitlines() if x.strip()]
+          summary=json.loads((work/'corpus_summary.json').read_text())
+          assert summary['count'] == 10000
+          assert summary['raw_sha256'] == '$PILOT_RAW_SHA256'
+          assert len([x for x in tasks if x.get('split')=='train']) == 14000
+          assert len(preds) == 14000
+          PY
+
+          install -d -m 0750 -o root -g dds3-mass "$state/requests"
+          cat > "$req.tmp" <<JSON
+          {
+            "schema": "bridge-school-dds3-mass-request/v1",
+            "target": 10000,
+            "stage": "pilot",
+            "splits": ["train"],
+            "compute_plane": "oracle",
+            "engine": "DDS3",
+            "fallback_used": false,
+            "corpus_path": "$work/raw.pbn",
+            "corpus_sha256": "$PILOT_RAW_SHA256",
+            "work_dir": "$work",
+            "predictions_path": "$pred",
+            "tasks_file": "$work/blind_tasks.jsonl",
+            "run_id": "oracle-pilot10k-train-20260824"
+          }
+          JSON
+          chown root:dds3-mass "$req.tmp"; chmod 0640 "$req.tmp"; mv "$req.tmp" "$req"
+          rm -f "$state/evidence/10000.json"
+          systemctl start --no-block dds3-mass@10000.service
+          for _ in $(seq 1 20); do
+            [[ -f "$state/evidence/10000.json" ]] && break
+            sleep 1
+          done
+          test -f "$state/evidence/10000.json"
+          python3 - "$state/evidence/10000.json" <<'PY'
+          import json,sys
+          x=json.load(open(sys.argv[1]))
+          assert x['compute_plane']=='oracle'
+          assert x['engine']=='DDS3'
+          assert x['fallback_used'] is False
+          assert x['corpus_deals']==10000
+          assert x['expected_train_tasks']==14000
+          assert x['status'] in ('running','train_passed')
+          print('ORACLE_DDS3_PILOT10K_LAUNCHED status='+x['status'])
+          PY
+          REMOTE
+
+      - name: Read live status
+        id: status
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          key='${{ steps.ssh.outputs.key }}'; known='${{ steps.ssh.outputs.known }}'
+          out="$RUNNER_TEMP/pilot10k-status.txt"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'bash -s' <<'REMOTE' | tee "$out"
+          set -Eeuo pipefail
+          state=/opt/bridge-school/dds3-mass-validation
+          echo "service=$(sudo -n systemctl is-active dds3-mass@10000.service 2>/dev/null || true)"
+          if [[ -f "$state/evidence/10000.json" ]]; then
+            echo 'evidence_present=true'
+            python3 - "$state/evidence/10000.json" <<'PY'
+          import json,sys
+          x=json.load(open(sys.argv[1]))
+          for k in ('target','status','compute_plane','compute_host','engine','fallback_used','corpus_sha256','corpus_deals','expected_train_tasks','returncode','log_sha256'):
+              if k in x: print(f'{k}={x[k]}')
+          PY
+          else
+            echo 'evidence_present=false'
+          fi
+          if [[ -f "$state/logs/10000.log" ]]; then
+            echo "log_bytes=$(stat -c %s "$state/logs/10000.log")"
+            tail -n 8 "$state/logs/10000.log" | sed -E 's/(token|password|secret|key)=[^[:space:]]+/\1=[REDACTED]/Ig'
+          fi
+          REMOTE
+          {
+            echo 'status<<EOF'
+            sed -n '1,80p' "$out"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          START_OUTCOME: ${{ steps.start.outcome }}
+          STATUS_TEXT: ${{ steps.status.outputs.status }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="Oracle DDS3 Pilot-10k operator: command=${COMMAND}, start=${START_OUTCOME:-not_requested}\n\n\`\`\`text\n${STATUS_TEXT:-no_status}\n\`\`\`"
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -f body="$body" >/dev/null
