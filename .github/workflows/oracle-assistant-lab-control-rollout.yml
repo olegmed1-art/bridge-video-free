@@ -1,0 +1,144 @@
+name: Oracle Assistant Lab Control Bridge Rollout
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-assistant-lab-control-rollout.yml'
+      - 'assistant_lab/control_bridge.py'
+      - 'assistant_lab/control_schema.sql'
+      - 'ops/oracle_assistant_lab_control_bridge_install.sh'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-assistant-lab-requests/*.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-assistant-lab-control-rollout
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate rollout sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/oracle_assistant_lab_control_bridge_install.sh
+          python -m py_compile assistant_lab/control_bridge.py
+          grep -F 'SECURITY DEFINER' assistant_lab/control_schema.sql >/dev/null
+          grep -F 'SELECT * FROM assistant_lab.claim_control_command' assistant_lab/control_bridge.py >/dev/null
+
+  rollout:
+    if: ${{ github.event_name == 'push' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Resolve one bounded request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+            | grep -E '^ops/oracle-assistant-lab-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]]
+          REQUEST_JSON="$(cat "${files[0]}")"
+          REQUEST_JSON="$REQUEST_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          x=json.loads(os.environ["REQUEST_JSON"])
+          required={"request_id","git_ref","expected_host_fingerprint","host","user"}
+          assert set(x)==required, x
+          assert re.fullmatch(r"[A-Za-z0-9._-]{1,80}", x["request_id"])
+          assert re.fullmatch(r"[0-9a-f]{40}", x["git_ref"])
+          assert re.fullmatch(r"SHA256:[A-Za-z0-9+/]{43}", x["expected_host_fingerprint"])
+          assert x["host"]=="158.180.47.161"
+          assert x["user"]=="ubuntu"
+          print("git_ref="+x["git_ref"])
+          print("expected_fingerprint="+x["expected_host_fingerprint"])
+          PY
+
+      - name: Verify pinned source
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref='${{ steps.request.outputs.git_ref }}'
+          git cat-file -e "$ref^{commit}"
+          git show "$ref:assistant_lab/control_bridge.py" | grep -F 'claim_control_command' >/dev/null
+          git show "$ref:assistant_lab/control_schema.sql" | grep -F 'SECURITY DEFINER' >/dev/null
+
+      - name: Verify host key and SSH credential
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/oracle-control"
+          known="$RUNNER_TEMP/oracle-control/known_hosts"
+          : > "$known"
+          for attempt in 1 2 3; do
+            ssh-keyscan -T 10 -t ed25519,ecdsa,rsa "$ORACLE_HOST" >> "$known" 2>/dev/null || true
+            [[ -s "$known" ]] && break
+            sleep $((attempt * 2))
+          done
+          sort -u -o "$known" "$known"
+          ssh-keygen -lf "$known" > "$RUNNER_TEMP/oracle-control/fingerprints.txt"
+          awk '{print $2}' "$RUNNER_TEMP/oracle-control/fingerprints.txt" \
+            | grep -Fx '${{ steps.request.outputs.expected_fingerprint }}' >/dev/null
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/oracle-control/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Roll out pinned bridge client
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env CONTROL_GIT_REF='${{ steps.request.outputs.git_ref }}' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          repo=/opt/bridge-school/bridge-video-free
+          [[ "$(git -C "$repo" remote get-url origin)" == "https://github.com/olegmed1-art/bridge-video-free.git" ]]
+          git -C "$repo" fetch --quiet origin "$CONTROL_GIT_REF"
+          git -C "$repo" cat-file -e "$CONTROL_GIT_REF^{commit}"
+          git -C "$repo" checkout --quiet --detach "$CONTROL_GIT_REF"
+          [[ "$(git -C "$repo" rev-parse HEAD)" == "$CONTROL_GIT_REF" ]]
+          /opt/bridge-school/assistant-lab-observer/.venv/bin/python -m py_compile "$repo/assistant_lab/control_bridge.py"
+          systemctl restart assistant-lab-control-bridge.service
+          sleep 2
+          systemctl is-active --quiet assistant-lab.service
+          systemctl is-active --quiet assistant-lab-observer.service
+          systemctl is-active --quiet assistant-lab-control.service
+          systemctl is-active --quiet assistant-lab-control-bridge.service
+          echo ASSISTANT_LAB_CONTROL_ROLLOUT_PASS
+          REMOTE

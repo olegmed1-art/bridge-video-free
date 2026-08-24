@@ -62,12 +62,19 @@ with psycopg.connect(os.environ["ASSISTANT_LAB_DATABASE_URL"], connect_timeout=1
                to_regclass('assistant_lab.control_command') IS NOT NULL,
                has_table_privilege(current_user,'assistant_lab.control_command','SELECT'),
                has_table_privilege(current_user,'assistant_lab.control_command','UPDATE'),
-               has_table_privilege(current_user,'assistant_lab.control_command','INSERT')
+               has_table_privilege(current_user,'assistant_lab.control_command','INSERT'),
+               has_table_privilege(current_user,'assistant_lab.control_command','DELETE'),
+               has_function_privilege(current_user,'assistant_lab.claim_control_command(text)','EXECUTE'),
+               has_function_privilege(current_user,'assistant_lab.finish_control_command(uuid,text,text,jsonb,text)','EXECUTE'),
+               has_function_privilege(current_user,'assistant_lab.recover_stale_control_commands(integer)','EXECUTE')
         """)
-        user, exists, can_select, can_update, can_insert = cur.fetchone()
+        user, exists, can_select, can_update, can_insert, can_delete, can_claim, can_finish, can_recover = cur.fetchone()
         assert user == os.environ["EXPECTED_DB_USER"], (user, os.environ["EXPECTED_DB_USER"])
         assert exists, "assistant_lab.control_command missing"
-        assert can_select and can_update and not can_insert, (can_select, can_update, can_insert)
+        assert not any((can_select, can_update, can_insert, can_delete)), (
+            can_select, can_update, can_insert, can_delete
+        )
+        assert all((can_claim, can_finish, can_recover)), (can_claim, can_finish, can_recover)
 print("ASSISTANT_LAB_CONTROL_BRIDGE_DB_PREFLIGHT_PASS")
 PY
 
