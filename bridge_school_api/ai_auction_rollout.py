@@ -5,11 +5,15 @@ call the double-dummy engine: DDS3 evaluation is a separate downstream stage.
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import math
 import re
 from dataclasses import dataclass
 from typing import Any, Callable
 
 from .ai_worlds import parse_hand_pbn
+from .ai_auction_scoring import normalize_vulnerability
 
 
 SEATS = ("N", "E", "S", "W")
@@ -112,13 +116,29 @@ def _validated_ben_call(result: Any) -> str:
     candidates = result.get("candidates")
     if not isinstance(candidates, list) or not candidates:
         raise AuctionRolloutError("BEN returned no candidates")
-    actions = {
-        normalize_call(item.get("call") or item.get("bid") or item.get("action"))
-        for item in candidates if isinstance(item, dict)
-    }
-    if selected not in actions:
-        raise AuctionRolloutError("BEN selected call is absent from candidates")
+    selected_score: float | None = None
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        action = normalize_call(item.get("call") or item.get("bid") or item.get("action"))
+        if action != selected:
+            continue
+        raw_score = item.get("insta_score", item.get("score"))
+        try:
+            score = float(raw_score)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(score):
+            selected_score = score
+            break
+    if selected_score is None:
+        raise AuctionRolloutError("BEN selected call has no finite candidate score")
     return selected
+
+
+def _world_fingerprint(hands: dict[str, str]) -> str:
+    canonical = json.dumps(hands, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def rollout_worlds(
@@ -129,6 +149,7 @@ def rollout_worlds(
     decision_seat: str,
     candidate_call: Any,
     ben_bidder: BenBidder,
+    vulnerability: str = "NONE",
     max_worlds: int = 200,
     max_calls_per_world: int = 40,
 ) -> dict[str, Any]:
@@ -143,8 +164,13 @@ def rollout_worlds(
         raise AuctionRolloutError("decision seat is not next to call")
     candidate = normalize_call(candidate_call)
     seeded = analyze_auction(dealer, [*initial.calls, candidate])
+    try:
+        normalized_vulnerability = normalize_vulnerability(vulnerability)
+    except ValueError as exc:
+        raise AuctionRolloutError("vulnerability is invalid") from exc
 
     results: list[dict[str, Any]] = []
+    seen_worlds: set[str] = set()
     for index, world in enumerate(worlds):
         if not isinstance(world, dict) or not isinstance(world.get("hands"), dict):
             raise AuctionRolloutError("world is missing complete hands")
@@ -158,6 +184,15 @@ def rollout_worlds(
         all_cards = [card for cards in parsed_hands.values() for card in cards]
         if len(set(all_cards)) != 52:
             raise AuctionRolloutError("world does not contain one complete unique deck")
+        fingerprint = _world_fingerprint(hands)
+        supplied_fingerprint = world.get("fingerprint")
+        if supplied_fingerprint is not None and supplied_fingerprint != fingerprint:
+            raise AuctionRolloutError("world fingerprint does not match complete hands")
+        if fingerprint in seen_worlds:
+            raise AuctionRolloutError("world rollout contains a duplicate deal")
+        seen_worlds.add(fingerprint)
+        deal_pbn = "N:" + " ".join(hands[candidate] for candidate in SEATS)
+        deal_pbn_sha256 = hashlib.sha256(deal_pbn.encode("utf-8")).hexdigest()
         state = seeded
         generated = 0
         while not state.complete:
@@ -171,7 +206,8 @@ def rollout_worlds(
             generated += 1
         results.append({
             "world_index": world.get("world_index", index),
-            "world_fingerprint": world.get("fingerprint"),
+            "world_fingerprint": fingerprint,
+            "deal_pbn_sha256": deal_pbn_sha256,
             "auction": list(state.calls),
             "contract": state.contract,
             "declarer": state.declarer,
@@ -183,6 +219,7 @@ def rollout_worlds(
         "fallback_used": False,
         "evidence_class": "BEN_AUCTION_ROLLOUT",
         "candidate_call": candidate,
+        "vulnerability": normalized_vulnerability,
         "requested_worlds": len(worlds),
         "completed_worlds": len(results),
         "complete": True,
