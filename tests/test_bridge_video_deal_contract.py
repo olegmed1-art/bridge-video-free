@@ -7,6 +7,14 @@ from bridge_contracts.video_deal import (
 )
 
 
+def three_complete_suit_hands():
+    return {
+        "N": ["AS", "KS", "QS", "JS", "TS", "9S", "8S", "7S", "6S", "5S", "4S", "3S", "2S"],
+        "E": ["AH", "KH", "QH", "JH", "TH", "9H", "8H", "7H", "6H", "5H", "4H", "3H", "2H"],
+        "S": ["AD", "KD", "QD", "JD", "TD", "9D", "8D", "7D", "6D", "5D", "4D", "3D", "2D"],
+    }
+
+
 def test_partial_video_deal_preserves_only_observed_cards():
     deal = canonicalize_video_deal(
         {"hands": {"N": ["AS", "10h"], "E": ["2C"], "S": []}}
@@ -17,20 +25,16 @@ def test_partial_video_deal_preserves_only_observed_cards():
     assert deal["hands"]["E"] == {"cards": ["2C"], "unknown_count": 12}
     assert deal["hands"]["S"] == {"cards": [], "unknown_count": 13}
     assert deal["hands"]["W"] == {"cards": [], "unknown_count": 13}
+    assert deal["derivations"] == []
 
 
-def test_missing_fourth_hand_is_not_completed_from_remaining_deck():
-    payload = {
-        "hands": {
-            "N": ["AS", "KS", "QS", "JS", "TS", "9S", "8S", "7S", "6S", "5S", "4S", "3S", "2S"],
-            "E": ["AH", "KH", "QH", "JH", "TH", "9H", "8H", "7H", "6H", "5H", "4H", "3H", "2H"],
-            "S": ["AD", "KD", "QD", "JD", "TD", "9D", "8D", "7D", "6D", "5D", "4D", "3D", "2D"],
-        }
-    }
+def test_missing_fourth_hand_stays_unknown_without_explicit_derivation():
+    payload = {"hands": three_complete_suit_hands()}
 
     deal = canonicalize_video_deal(payload).to_dict()
 
     assert deal["hands"]["W"] == {"cards": [], "unknown_count": 13}
+    assert deal["derivations"] == []
     known = {
         card
         for seat in ("N", "E", "S", "W")
@@ -38,6 +42,54 @@ def test_missing_fourth_hand_is_not_completed_from_remaining_deck():
     }
     assert len(known) == 39
     assert "AC" not in known
+
+
+def test_explicit_fourth_hand_derivation_is_complete_and_auditable():
+    payload = {"hands": three_complete_suit_hands()}
+
+    deal = canonicalize_video_deal(payload, derive_fourth_hand=True).to_dict()
+
+    assert deal["hands"]["W"] == {
+        "cards": ["AC", "KC", "QC", "JC", "TC", "9C", "8C", "7C", "6C", "5C", "4C", "3C", "2C"],
+        "unknown_count": 0,
+    }
+    assert deal["derivations"] == [
+        {
+            "seat": "W",
+            "method": "deck_subtraction_from_three_complete_hands",
+            "from_seats": ["N", "E", "S"],
+            "observed_cards_preserved": [],
+            "computed_cards": ["AC", "KC", "QC", "JC", "TC", "9C", "8C", "7C", "6C", "5C", "4C", "3C", "2C"],
+        }
+    ]
+
+
+def test_partial_fourth_hand_observation_is_preserved_inside_explicit_derivation():
+    hands = three_complete_suit_hands()
+    hands["W"] = ["AC", "2C"]
+
+    deal = canonicalize_video_deal(
+        {"hands": hands},
+        derive_fourth_hand=True,
+    ).to_dict()
+
+    derivation = deal["derivations"][0]
+    assert derivation["seat"] == "W"
+    assert derivation["observed_cards_preserved"] == ["AC", "2C"]
+    assert "AC" not in derivation["computed_cards"]
+    assert "2C" not in derivation["computed_cards"]
+    assert len(derivation["computed_cards"]) == 11
+    assert deal["hands"]["W"]["unknown_count"] == 0
+
+
+def test_derivation_does_nothing_without_three_complete_hands():
+    deal = canonicalize_video_deal(
+        {"hands": {"N": ["AS"], "E": ["KH"], "S": ["QD"]}},
+        derive_fourth_hand=True,
+    ).to_dict()
+
+    assert deal["hands"]["W"] == {"cards": [], "unknown_count": 13}
+    assert deal["derivations"] == []
 
 
 def test_duplicate_card_across_hands_fails_closed():
