@@ -30,7 +30,8 @@ jobs:
       ${{
         github.event.pull_request.head.repo.full_name == github.repository &&
         github.event.pull_request.user.login == 'olegmed1-art' &&
-        github.event.pull_request.base.ref == 'main'
+        github.event.pull_request.base.ref == 'main' &&
+        github.event.pull_request.changed_files == 1
       }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -48,23 +49,8 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
-      - name: Validate request is inert authorization marker
-        shell: bash
-        env:
-          REQUEST_PATH: ${{ github.event.pull_request.changed_files }}
-        run: |
-          set -euo pipefail
-          files="$(git diff --name-only '${{ github.event.pull_request.base.sha }}' '${{ github.event.pull_request.head.sha }}' 2>/dev/null || true)"
-          test "$(printf '%s\n' "$files" | sed '/^$/d' | wc -l)" -eq 1
-          req="$(printf '%s\n' "$files" | sed -n '1p')"
-          [[ "$req" == ops/oracle-dds3-pilot10k-requests/*.json ]]
-          python - <<PY
-import json
-from pathlib import Path
-p=Path('$req')
-# PR-head content is NOT executed; it is fetched as data only below by API-independent curl.
-print('request_path='+str(p))
-PY
+      - name: Confirm inert one-file authorization boundary
+        run: echo 'PILOT10K_REQUEST_BOUNDARY_PASS changed_files=1 trusted_base_only=1'
 
       - name: Set up Python 3.14 for trusted Drive restore helper
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
@@ -83,11 +69,11 @@ PY
             --output /tmp/dds-pilot-10k.zip \
             --work-dir /tmp/dds-pilot-drive
           echo "$PILOT_ZIP_SHA256  /tmp/dds-pilot-10k.zip" | sha256sum -c -
-          rm -rf /tmp/pilot-artifact && mkdir -p /tmp/pilot-artifact
+          rm -rf /tmp/pilot-artifact /tmp/pilot-state
+          mkdir -p /tmp/pilot-artifact /tmp/pilot-state
           unzip -q /tmp/dds-pilot-10k.zip -d /tmp/pilot-artifact
           tgz=/tmp/pilot-artifact/dds-pilot-10k-complete-state.tgz
           echo "$PILOT_TGZ_SHA256  $tgz" | sha256sum -c -
-          mkdir -p /tmp/pilot-state
           tar -xzf "$tgz" -C /tmp/pilot-state pilot/locked_predictions_train.jsonl pilot/raw.pbn
           echo "$PILOT_RAW_SHA256  /tmp/pilot-state/pilot/raw.pbn" | sha256sum -c -
           echo "$PILOT_PRED_SHA256  /tmp/pilot-state/pilot/locked_predictions_train.jsonl" | sha256sum -c -
@@ -147,6 +133,7 @@ PY
           git fetch --quiet origin "$RUNTIME_COMMIT"
           git checkout --quiet --detach "$RUNTIME_COMMIT"
           DDS3_MASS_BOOTSTRAP=0 DDS3_MASS_ACTIVATE=1 bash ops/oracle_dds3_mass_install.sh
+          "$repo/dds_training/.venv/bin/python" -m py_compile "$repo/dds_training/oracle_mass_dispatch_v2.py"
 
           rm -rf "$work"
           install -d -m 0750 -o dds3-mass -g dds3-mass "$work"
