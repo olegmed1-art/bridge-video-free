@@ -8,7 +8,7 @@ set -Eeuo pipefail
 # ASSISTANT_LAB_OBSERVER_HOST_ACTIVATION_PASS
 # arbitrary_shell / video_analyzer_result_access / other_oracle_result_access
 
-readonly CANONICAL_LAUNCHER_COMMIT='ae1e77952bde2f8409e8ed2bb28014d2c3ffd57d'
+readonly CANONICAL_LAUNCHER_COMMIT='53ae1c3fd6f10f1ba290b7539efaaaf0cc111e54'
 readonly CANONICAL_PATH='ops/cloud_shell_activate_assistant_lab_stack.sh'
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
