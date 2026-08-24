@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from universal_video.contract import (
+    MAX_JOB_BYTES,
     MAX_VIDEO_SECONDS,
     VideoContractError,
     canonical_job_hash,
@@ -14,9 +15,10 @@ from universal_video.runner import (
     _enforce_media_bounds,
     _inspect_source,
     _prepare_job_dir,
+    _processing_identity,
     _qc_summary,
 )
-from universal_video.spool_worker import recover_orphaned_jobs
+from universal_video.spool_worker import process_one, recover_orphaned_jobs
 
 
 def _job(tmp_path: Path, **overrides):
@@ -29,6 +31,21 @@ def _job(tmp_path: Path, **overrides):
     }
     payload.update(overrides)
     return validate_job(payload, allowed_local_root=str(tmp_path))
+
+
+def test_reserved_path_job_ids_are_forbidden(tmp_path: Path):
+    source = tmp_path / "lesson.mp4"
+    source.write_bytes(b"video")
+    for job_id in (".", ".."):
+        with pytest.raises(VideoContractError, match="invalid job_id"):
+            validate_job(
+                {
+                    "job_id": job_id,
+                    "profile": "transcript_only",
+                    "source": {"kind": "local_path", "path": str(source)},
+                },
+                allowed_local_root=str(tmp_path),
+            )
 
 
 def test_frame_interval_is_bounded(tmp_path: Path):
@@ -76,9 +93,12 @@ def test_twenty_percent_qc_tolerance_starts_at_five_blocks():
     assert allowed == 1
 
 
-def test_completed_same_hash_and_source_fingerprint_is_reused(tmp_path: Path):
+def test_completed_same_hash_source_and_processing_fingerprint_is_reused(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("UNIVERSAL_VIDEO_SOURCE_COMMIT", "revision-a")
+    monkeypatch.setenv("UNIVERSAL_VIDEO_WHISPER_MODEL", "small")
     job = _job(tmp_path)
     inspection = _inspect_source(job, max_source_bytes=1024)
+    processing = _processing_identity()
     output_root = tmp_path / "output"
     job_dir = output_root / job.job_id
     job_dir.mkdir(parents=True)
@@ -89,6 +109,7 @@ def test_completed_same_hash_and_source_fingerprint_is_reused(tmp_path: Path):
         "job_hash": canonical_job_hash(job),
         "job_id": job.job_id,
         "source_fingerprint": inspection["fingerprint"],
+        "processing_fingerprint": processing["fingerprint"],
     }
     (job_dir / "manifest.json").write_text(json.dumps(expected), encoding="utf-8")
 
@@ -97,6 +118,7 @@ def test_completed_same_hash_and_source_fingerprint_is_reused(tmp_path: Path):
         job,
         source_fingerprint=inspection["fingerprint"],
         source_reuse_safe=inspection["reuse_safe"],
+        processing_fingerprint=processing["fingerprint"],
     )
 
     assert prepared == job_dir
@@ -105,9 +127,58 @@ def test_completed_same_hash_and_source_fingerprint_is_reused(tmp_path: Path):
     assert artifact.read_text(encoding="utf-8") == "canonical transcript"
 
 
-def test_same_job_path_with_changed_source_content_is_not_reused(tmp_path: Path):
+def test_engine_revision_change_invalidates_completed_reuse(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("UNIVERSAL_VIDEO_SOURCE_COMMIT", "revision-a")
+    monkeypatch.setenv("UNIVERSAL_VIDEO_WHISPER_MODEL", "small")
+    job = _job(tmp_path)
+    inspection = _inspect_source(job, max_source_bytes=1024)
+    first_processing = _processing_identity()
+    output_root = tmp_path / "output"
+    job_dir = output_root / job.job_id
+    job_dir.mkdir(parents=True)
+    (job_dir / "old.txt").write_text("old", encoding="utf-8")
+    (job_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "status": "COMPLETED",
+                "job_hash": canonical_job_hash(job),
+                "source_fingerprint": inspection["fingerprint"],
+                "processing_fingerprint": first_processing["fingerprint"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("UNIVERSAL_VIDEO_SOURCE_COMMIT", "revision-b")
+    second_processing = _processing_identity()
+    assert second_processing["fingerprint"] != first_processing["fingerprint"]
+    prepared, _, existing = _prepare_job_dir(
+        output_root,
+        job,
+        source_fingerprint=inspection["fingerprint"],
+        source_reuse_safe=True,
+        processing_fingerprint=second_processing["fingerprint"],
+    )
+    assert existing is None
+    assert prepared.is_dir()
+    assert not (prepared / "old.txt").exists()
+
+
+def test_whisper_model_change_invalidates_completed_reuse(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("UNIVERSAL_VIDEO_SOURCE_COMMIT", "same-revision")
+    monkeypatch.setenv("UNIVERSAL_VIDEO_WHISPER_MODEL", "small")
+    first = _processing_identity()
+    monkeypatch.setenv("UNIVERSAL_VIDEO_WHISPER_MODEL", "medium")
+    second = _processing_identity()
+    assert first["source_revision"] == second["source_revision"]
+    assert first["fingerprint"] != second["fingerprint"]
+
+
+def test_same_job_path_with_changed_source_content_is_not_reused(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("UNIVERSAL_VIDEO_SOURCE_COMMIT", "revision-a")
     job = _job(tmp_path)
     first = _inspect_source(job, max_source_bytes=1024)
+    processing = _processing_identity()
     output_root = tmp_path / "output"
     job_dir = output_root / job.job_id
     job_dir.mkdir(parents=True)
@@ -118,6 +189,7 @@ def test_same_job_path_with_changed_source_content_is_not_reused(tmp_path: Path)
                 "status": "COMPLETED",
                 "job_hash": canonical_job_hash(job),
                 "source_fingerprint": first["fingerprint"],
+                "processing_fingerprint": processing["fingerprint"],
             }
         ),
         encoding="utf-8",
@@ -132,15 +204,18 @@ def test_same_job_path_with_changed_source_content_is_not_reused(tmp_path: Path)
         job,
         source_fingerprint=second["fingerprint"],
         source_reuse_safe=second["reuse_safe"],
+        processing_fingerprint=processing["fingerprint"],
     )
     assert existing is None
     assert prepared.is_dir()
     assert not (prepared / "old-frame.jpg").exists()
 
 
-def test_changed_job_hash_cleans_stale_output(tmp_path: Path):
+def test_changed_job_hash_cleans_stale_output(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("UNIVERSAL_VIDEO_SOURCE_COMMIT", "revision-a")
     job = _job(tmp_path)
     inspection = _inspect_source(job, max_source_bytes=1024)
+    processing = _processing_identity()
     output_root = tmp_path / "output"
     stale = output_root / job.job_id
     stale.mkdir(parents=True)
@@ -151,6 +226,7 @@ def test_changed_job_hash_cleans_stale_output(tmp_path: Path):
                 "status": "COMPLETED",
                 "job_hash": "different",
                 "source_fingerprint": inspection["fingerprint"],
+                "processing_fingerprint": processing["fingerprint"],
             }
         ),
         encoding="utf-8",
@@ -160,6 +236,7 @@ def test_changed_job_hash_cleans_stale_output(tmp_path: Path):
         job,
         source_fingerprint=inspection["fingerprint"],
         source_reuse_safe=inspection["reuse_safe"],
+        processing_fingerprint=processing["fingerprint"],
     )
     assert existing is None
     assert job_dir.is_dir()
@@ -224,7 +301,7 @@ def test_spool_startup_recovers_orphaned_running_job(tmp_path: Path):
     payload = running / "job.json"
     payload.write_text('{"job_id":"x"}', encoding="utf-8")
     result = recover_orphaned_jobs(tmp_path)
-    assert result == {"recovered": 1, "deduplicated": 0, "conflicts": 0}
+    assert result == {"recovered": 1, "deduplicated": 0, "conflicts": 0, "rejected": 0}
     assert (tmp_path / "inbox" / "job.json").exists()
     assert not payload.exists()
 
@@ -237,5 +314,33 @@ def test_spool_recovery_deduplicates_identical_inbox_payload(tmp_path: Path):
     (running / "job.json").write_text('{"job_id":"x"}', encoding="utf-8")
     (inbox / "job.json").write_text('{"job_id":"x"}', encoding="utf-8")
     result = recover_orphaned_jobs(tmp_path)
-    assert result == {"recovered": 0, "deduplicated": 1, "conflicts": 0}
+    assert result == {"recovered": 0, "deduplicated": 1, "conflicts": 0, "rejected": 0}
     assert not (running / "job.json").exists()
+
+
+def test_spool_rejects_symlink_payload_without_following_it(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir(parents=True)
+    target = tmp_path / "outside.json"
+    target.write_text('{"job_id":"do-not-read"}', encoding="utf-8")
+    link = inbox / "job.json"
+    link.symlink_to(target)
+
+    assert process_one(tmp_path) is True
+    assert not link.exists()
+    failure = json.loads((tmp_path / "failed" / "job.json").read_text(encoding="utf-8"))
+    assert failure["error_type"] == "INVALID_SPOOL_PAYLOAD"
+    assert "symlink" in failure["error"]
+    assert target.read_text(encoding="utf-8") == '{"job_id":"do-not-read"}'
+
+
+def test_spool_rejects_oversized_payload_before_json_read(tmp_path: Path):
+    inbox = tmp_path / "inbox"
+    inbox.mkdir(parents=True)
+    payload = inbox / "oversize.json"
+    payload.write_bytes(b"x" * (MAX_JOB_BYTES + 1))
+
+    assert process_one(tmp_path) is True
+    failure = json.loads((tmp_path / "failed" / "oversize.json").read_text(encoding="utf-8"))
+    assert failure["error_type"] == "INVALID_SPOOL_PAYLOAD"
+    assert "bounded contract" in failure["error"]
