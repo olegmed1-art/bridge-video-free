@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import universal_video.drive_preflight as drive_preflight
 from universal_video.drive_preflight import credential_boundary_status
 from universal_video.drive_results import collect_compact_artifacts
 from universal_video.maintenance import RetentionPolicy, apply_cleanup_plan, build_cleanup_plan
@@ -59,6 +60,24 @@ def test_retention_never_deletes_pending_or_running_artifacts(tmp_path: Path):
     assert stale_result in paths
 
 
+def test_abandoned_result_directory_is_bounded_after_grace(tmp_path: Path):
+    now = 2_000_000_000.0
+    base = tmp_path / "uv"
+    for name in ("inbox", "running", "done", "failed", "results"):
+        (base / "spool" / name).mkdir(parents=True, exist_ok=True)
+    (base / "media").mkdir(parents=True)
+    abandoned = base / "spool" / "results" / "abandoned-job"
+    abandoned.mkdir()
+    (abandoned / "partial.tmp").write_bytes(b"partial")
+    old = now - 8 * DAY
+    os.utime(abandoned / "partial.tmp", (old, old))
+    os.utime(abandoned, (old, old))
+
+    plan = build_cleanup_plan(base, policy=RetentionPolicy(), now=now)
+    item = next(candidate for candidate in plan if candidate.path == abandoned)
+    assert item.reason == "abandoned_ttl"
+
+
 def test_retention_apply_removes_only_planned_managed_paths(tmp_path: Path):
     now = 2_000_000_000.0
     base = tmp_path / "uv"
@@ -98,6 +117,22 @@ def test_drive_file_boundary_rejects_symlink(monkeypatch, tmp_path: Path):
     link.symlink_to(target)
     monkeypatch.setenv("GOOGLE_DRIVE_OAUTH_JSON_FILE", str(link))
     assert credential_boundary_status() == "NOT_CONFIGURED"
+
+
+def test_drive_source_probe_requires_verifiable_provider_checksum(monkeypatch):
+    monkeypatch.setattr(drive_preflight, "credential_boundary_status", lambda: "CONFIGURED")
+    monkeypatch.setattr(drive_preflight, "access_token", lambda: "token")
+    monkeypatch.setattr(
+        drive_preflight,
+        "file_metadata",
+        lambda file_id, token: {"id": file_id, "mimeType": "video/mp4", "size": "1048576"},
+    )
+    with pytest.raises(RuntimeError, match="verifiable content checksum"):
+        drive_preflight.probe_drive_source(
+            "1AbCdEfGhIjKlMnOpQrStUvWxYz",
+            max_source_bytes=1024**2,
+            max_duration_seconds=3600,
+        )
 
 
 def test_compact_result_router_excludes_raw_media_and_caps_keyframes(tmp_path: Path):
