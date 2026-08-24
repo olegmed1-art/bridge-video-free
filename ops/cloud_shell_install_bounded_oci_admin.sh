@@ -17,7 +17,7 @@ readonly VIDEO_INSTALLER='ops/install_universal_video_ocarun_admin.sh'
 fail(){ echo "ERROR: $*" >&2; exit 1; }
 : "${SOURCE_COMMIT:?SOURCE_COMMIT is required and must equal current main}"
 [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail 'SOURCE_COMMIT must be a 40-hex commit'
-for c in curl git ssh ssh-keygen ssh-keyscan; do command -v "$c" >/dev/null 2>&1 || fail "$c is required"; done
+for c in bash curl git ssh ssh-keygen ssh-keyscan stat; do command -v "$c" >/dev/null 2>&1 || fail "$c is required"; done
 
 remote_main="$(git ls-remote "$REPO_URL" refs/heads/main | awk 'NR==1 {print $1}')"
 [[ "$remote_main" == "$SOURCE_COMMIT" ]] || fail "SOURCE_COMMIT is not current main"
