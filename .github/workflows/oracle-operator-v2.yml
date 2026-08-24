@@ -32,6 +32,7 @@ jobs:
           grep -F '/oracle-v2 canary-worlds' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '/oracle-v2 rollout-ben' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '/oracle-v2 canary-ben' .github/workflows/oracle-operator-v2.yml >/dev/null
+          grep -F '/oracle-v2 canary-ben-dds3' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '127.0.0.1:8085:8085' .github/workflows/oracle-operator-v2.yml >/dev/null
 
   operate:
@@ -41,7 +42,8 @@ jobs:
       (github.event.comment.body == '/oracle-v2 rollout-worker' ||
        github.event.comment.body == '/oracle-v2 canary-worlds' ||
        github.event.comment.body == '/oracle-v2 rollout-ben' ||
-       github.event.comment.body == '/oracle-v2 canary-ben')
+       github.event.comment.body == '/oracle-v2 canary-ben' ||
+       github.event.comment.body == '/oracle-v2 canary-ben-dds3')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -378,6 +380,30 @@ jobs:
           print(f"BEN_CANARY_PASS job_id={job['job_id']} attempts=1 evidence=POLICY_ONLY")
           PY
 
+      - name: Run bounded Oracle BEN to DDS3 scoring canary
+        id: ben_dds3_canary
+        if: ${{ env.COMMAND == '/oracle-v2 canary-ben-dds3' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          repo=/opt/bridge-school/bridge-video-free
+          env_file=/opt/bridge-school/assistant-lab/assistant-lab.env
+          [[ -r "$env_file" ]]
+          [[ -f "$repo/bridge_school_api/ai_ben_dds3_canary.py" ]]
+          systemctl is-active --quiet assistant-lab.service
+          systemctl is-active --quiet bridge-ben.service
+          curl -fsS --max-time 5 http://127.0.0.1:8080/readyz >/dev/null
+          set -a
+          . "$env_file"
+          set +a
+          cd "$repo"
+          runuser --user assistant-lab --preserve-environment -- \
+            /opt/bridge-school/assistant-lab/.venv/bin/python \
+            -m bridge_school_api.ai_ben_dds3_canary
+          REMOTE
+
       - name: Publish result
         if: always()
         env:
@@ -390,8 +416,9 @@ jobs:
           WORLDS_JOB_ID: ${{ steps.worlds.outputs.job_id }}
           BEN_CANARY_OUTCOME: ${{ steps.ben_canary.outcome }}
           BEN_CANARY_JOB_ID: ${{ steps.ben_canary.outputs.job_id }}
+          BEN_DDS3_CANARY_OUTCOME: ${{ steps.ben_dds3_canary.outcome }}
         shell: bash
         run: |
           set -euo pipefail
           gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
-            -f body="Oracle v2 **${COMMAND}**: ssh=${SSH_OUTCOME}, worker=${WORKER_OUTCOME}, ben=${BEN_OUTCOME}, worlds=${WORLDS_OUTCOME}, worlds_job=${WORLDS_JOB_ID:-none}, ben_canary=${BEN_CANARY_OUTCOME}, ben_job=${BEN_CANARY_JOB_ID:-none}" >/dev/null
+            -f body="Oracle v2 **${COMMAND}**: ssh=${SSH_OUTCOME}, worker=${WORKER_OUTCOME}, ben=${BEN_OUTCOME}, worlds=${WORLDS_OUTCOME}, worlds_job=${WORLDS_JOB_ID:-none}, ben_canary=${BEN_CANARY_OUTCOME}, ben_job=${BEN_CANARY_JOB_ID:-none}, ben_dds3_canary=${BEN_DDS3_CANARY_OUTCOME}" >/dev/null
