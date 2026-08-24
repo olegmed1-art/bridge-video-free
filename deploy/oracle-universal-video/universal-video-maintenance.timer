@@ -1,0 +1,12 @@
+[Unit]
+Description=Hourly bounded retention for Bridge School Universal Video
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+Persistent=true
+Unit=universal-video-maintenance.service
+
+[Install]
+WantedBy=timers.target
