@@ -207,6 +207,7 @@ def verify() -> None:
               (SELECT count(*) FROM p) AS positions,
               (SELECT count(*) FROM p WHERE input_status='COMPLETE') AS complete_positions,
               (SELECT count(*) FROM latest_search WHERE status='COMPLETED') AS search_completed,
+              (SELECT count(*) FROM latest_search WHERE status='NO_SEARCH_EVIDENCE') AS search_no_evidence,
               (SELECT count(*) FROM latest_search WHERE status='FAILED') AS search_failed,
               (SELECT count(*) FROM latest_search WHERE status IN ('QUEUED','RUNNING')) AS search_pending,
               (SELECT count(DISTINCT position_id) FROM ai.teacher_output WHERE position_id IN (SELECT position_id FROM p)) AS teacher_positions,
@@ -223,6 +224,13 @@ def verify() -> None:
             raise RuntimeError(f"not all Pilot-100 positions are COMPLETE: {summary}")
         if int(summary["search_pending"]) != 0:
             raise RuntimeError(f"Pilot-100 still has pending search jobs: {summary}")
+        if int(summary["search_failed"]) != 0:
+            raise RuntimeError(f"BEN failed on Pilot-100 positions: {summary}")
+        if int(summary["search_no_evidence"]) != EXPECTED_POSITIONS:
+            raise RuntimeError(f"BEN policy-only terminal status missing: {summary}")
+        for evidence_key in ("teacher_positions", "policy_positions", "candidate_positions", "finalized_positions"):
+            if int(summary[evidence_key]) != EXPECTED_POSITIONS:
+                raise RuntimeError(f"BEN evidence gate failed for {evidence_key}: {summary}")
 
         cur.execute(
             """
@@ -269,7 +277,7 @@ def verify() -> None:
         "decision_paths": paths,
         "chosen_actions": actions,
         "scoring_breakdown": scoring,
-        "interpretation": "Terminal processing is required; non-finalized positions are retained as insufficient-evidence outcomes, not fabricated decisions.",
+        "interpretation": "BEN policy evidence completed for every position. BEN /bid exposes policy scores, not double-dummy EV; search status is NO_SEARCH_EVIDENCE and no score is fabricated.",
     }, ensure_ascii=False, default=str))
 
 

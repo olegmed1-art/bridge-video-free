@@ -65,3 +65,7 @@ def test_explicit_ben_simulation_metrics_become_search_evidence():
     assert evaluations[0]["raw_score_ev"] == 118
     assert evaluations[0]["make_probability"] == 0.73
     assert evaluations[0]["metrics_json"]["evidence_class"] == "BEN_SIMULATION"
+
+
+def test_ben_policy_only_status_does_not_claim_search_completion():
+    assert worker.BEN_POLICY_ONLY_STATUS == "NO_SEARCH_EVIDENCE"

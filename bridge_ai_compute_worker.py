@@ -19,6 +19,9 @@ from dataclasses import dataclass
 from typing import Any
 
 
+BEN_POLICY_ONLY_STATUS = "NO_SEARCH_EVIDENCE"
+
+
 @dataclass(frozen=True)
 class Config:
     api_base: str
@@ -231,8 +234,12 @@ def process_one(config: Config) -> bool:
                 "evaluations": evaluations,
             }
         else:
-            print(f"search_run {run_id}: policy evidence recorded; no explicit simulation metrics", file=sys.stderr)
-            completion = {"status": "FAILED", "evaluations": []}
+            print(
+                f"search_run {run_id}: BEN policy evidence recorded; "
+                "no explicit simulation metrics",
+                file=sys.stderr,
+            )
+            completion = {"status": BEN_POLICY_ONLY_STATUS, "evaluations": []}
     except Exception as exc:
         print(f"search_run {run_id} failed: {exc}", file=sys.stderr)
         completion = {"status": "FAILED", "evaluations": []}

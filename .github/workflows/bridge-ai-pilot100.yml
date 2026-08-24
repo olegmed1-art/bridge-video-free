@@ -15,7 +15,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: bridge-ai-pilot100-observable-run-285-v4
+  group: bridge-ai-ben-policy-evidence-run8
   cancel-in-progress: false
 
 jobs:
@@ -27,7 +27,7 @@ jobs:
       BRIDGE_API_TOKEN: github-actions-pilot100
       BRIDGE_API_BASE_URL: http://127.0.0.1:8000
       BEN_API_URL: http://127.0.0.1:8085
-      PILOT100_PREFIX: PILOT100-20260822-RUN7-
+      PILOT100_PREFIX: PILOT100-20260824-BEN-RUN8-
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -72,6 +72,20 @@ jobs:
               'http://127.0.0.1:8085/bid?hand=AK97543.K.T3.AK7&seat=S&dealer=N&vul=&ctx=----&details=true' || true)
             if test "$code" = "200"; then
               cat /tmp/ben-ready.json
+              python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("/tmp/ben-ready.json").read_text())
+          if not payload.get("bid"):
+              raise SystemExit("BEN canary returned no bid")
+          candidates = payload.get("candidates") or []
+          if not candidates:
+              raise SystemExit("BEN canary returned no candidates")
+          if not any(item.get("insta_score") is not None for item in candidates):
+              raise SystemExit("BEN canary returned no policy scores")
+          print("BEN_CONTRACT_OK", payload["bid"], len(candidates))
+          PY
               exit 0
             fi
             sleep 2
