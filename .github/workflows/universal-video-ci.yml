@@ -30,23 +30,31 @@ jobs:
           bash -n ops/oracle_universal_video_install.sh
           bash -n ops/oracle_universal_video_run_command.sh
           bash -n ops/oracle_universal_video_drive_secret_install.sh
+          bash -n ops/oracle_universal_video_productionize.sh
       - name: Validate systemd boundaries
         run: |
           unit=deploy/oracle-universal-video/universal-video.service
           grep -q '^User=universal-video$' "$unit"
           grep -q '^Nice=10$' "$unit"
           grep -q '^CPUQuota=600%$' "$unit"
+          grep -q '^MemoryAccounting=true$' "$unit"
+          grep -q '^MemoryHigh=12G$' "$unit"
+          grep -q '^MemoryMax=16G$' "$unit"
           grep -q '^WorkingDirectory=/opt/bridge-school/universal-video-src$' "$unit"
           grep -q '^ReadOnlyPaths=/opt/bridge-school/universal-video-src$' "$unit"
           grep -q '^EnvironmentFile=-/opt/bridge-school/universal-video/universal-video-secrets.env$' "$unit"
+          grep -q 'universal_video.maintenance' deploy/oracle-universal-video/universal-video-maintenance.service
+          grep -q '^OnUnitActiveSec=1h$' deploy/oracle-universal-video/universal-video-maintenance.timer
+          grep -q '^Persistent=true$' deploy/oracle-universal-video/universal-video-maintenance.timer
           ! grep -q '/opt/bridge-school/bridge-video-free' "$unit"
           ! grep -q '^Requires=assistant-lab.service$' "$unit"
           ! grep -RniE 'systemctl +(stop|restart|disable).*assistant-lab|docker +(stop|rm|restart).*dds3' \
             ops/oracle_universal_video_install.sh \
             ops/oracle_universal_video_run_command.sh \
             ops/oracle_universal_video_drive_secret_install.sh \
+            ops/oracle_universal_video_productionize.sh \
             deploy/oracle-universal-video
-      - name: Validate isolated checkout and secret contract
+      - name: Validate isolated checkout, retention and Drive boundaries
         run: |
           grep -q 'UNIVERSAL_VIDEO_SOURCE_DIR' ops/oracle_universal_video_install.sh
           grep -q 'universal-video-src' ops/oracle_universal_video_run_command.sh
@@ -57,7 +65,12 @@ jobs:
           grep -q 'GOOGLE_DRIVE_OAUTH_JSON_FILE' ops/oracle_universal_video_install.sh
           grep -q 'chmod 0640' ops/oracle_universal_video_drive_secret_install.sh
           grep -q 'UNIVERSAL_VIDEO_DRIVE_SECRET_INSTALL_PASS' ops/oracle_universal_video_drive_secret_install.sh
+          grep -q 'UNIVERSAL_VIDEO_DRIVE_SOURCE_NO_ASR_PASS' ops/oracle_universal_video_productionize.sh
+          grep -q 'UNIVERSAL_VIDEO_RESULT_ROUTING_PASS' ops/oracle_universal_video_productionize.sh
+          grep -q 'raw_media_included' universal_video/drive_results.py
+          grep -q 'active_job_ids' universal_video/maintenance.py
           ! grep -q 'set -x' ops/oracle_universal_video_drive_secret_install.sh
+          ! grep -q 'set -x' ops/oracle_universal_video_productionize.sh
       - name: Enforce student-agnostic core
         run: |
           ! grep -Rni 'Diana' universal_video tests/test_universal_video_*.py
