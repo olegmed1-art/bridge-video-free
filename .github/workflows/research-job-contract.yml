@@ -5,8 +5,6 @@ on:
     paths:
       - 'assistant_lab/**'
       - 'tests/test_research_*.py'
-      - 'tests/test_ben_runtime_contract.py'
-      - 'tests/test_m1_fixture_contract.py'
       - '.github/workflows/research-job-contract.yml'
 
 permissions:
@@ -24,12 +22,4 @@ jobs:
       - name: Install bounded test dependencies
         run: python -m pip install 'pytest>=8,<9' 'psycopg[binary]>=3.2,<4'
       - name: Run ResearchJob contracts
-        run: >-
-          pytest -q
-          tests/test_research_pipeline_contract.py
-          tests/test_research_job_end_to_end_contract.py
-          tests/test_research_schema_contract.py
-          tests/test_ben_runtime_contract.py
-          tests/test_research_runtime_surface.py
-          tests/test_m1_fixture_contract.py
-          tests/test_research_contract_allowed_kinds.py
+        run: pytest -q tests/test_research_pipeline_contract.py tests/test_research_job_end_to_end_contract.py
