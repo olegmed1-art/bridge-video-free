@@ -40,3 +40,8 @@ def test_stack_has_bounded_rpc_only_rollout_mode():
     assert "assistant_lab.finish_control_command" in STACK
     assert "systemctl restart assistant-lab-control-bridge.service" in STACK
     assert "ASSISTANT_LAB_CONTROL_RPC_ROLLOUT_PASS" in STACK
+
+
+def test_oci_run_command_uses_one_privileged_root_context():
+    assert "OCARUN_SUDO_NOT_CONFIGURED" in STACK
+    assert "exec sudo -n bash -c %q" in STACK
