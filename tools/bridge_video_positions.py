@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
-"""Post-process Universal Video keyframes with the existing bridge image parser.
+"""Post-process Universal Video keyframes through the school-owned Bridge Vision engine.
 
-The resident Universal Video core remains dependency-light. This optional bridge
-stage lazily imports `bridge_report_board_reconstruction.parse_image` and writes
-only compact canonical frame observations. It does not alter the source video,
-manifest, transcript, or production routing.
+Native Bridge Vision is the default. The old BBO screenshot parser remains an
+explicit opt-in legacy adapter only; it is never silently selected.
 """
 from __future__ import annotations
 
@@ -13,9 +11,9 @@ import json
 from pathlib import Path
 from typing import Any, Callable
 
-from bridge_contracts.video_frame import canonicalize_frame_recognition
+from bridge_vision import BridgeVisionEngine
 
-FrameParser = Callable[[Path], dict[str, Any]]
+LegacyParserInjection = Callable[[Path], dict[str, Any]]
 
 
 def _safe_frame_path(job_dir: Path, file_name: Any) -> Path:
@@ -35,19 +33,49 @@ def _safe_frame_path(job_dir: Path, file_name: Any) -> Path:
     return frame
 
 
-def _default_parser() -> FrameParser:
-    # Heavy CV dependencies remain outside the resident Universal Video core.
-    from bridge_report_board_reconstruction import parse_image
+def _wrap_injected_parser(parser: LegacyParserInjection):
+    """Compatibility shim for explicit callers/tests; never selected implicitly."""
+    def detector(frame: Path) -> dict[str, Any]:
+        raw = parser(frame)
+        hands = raw.get("hands") or {}
+        count = sum(len(cards) for cards in hands.values())
+        status = str(raw.get("status") or "").upper()
+        confidence = 1.0 if hands and status not in {"CONFLICT", "UNAVAILABLE"} else 0.0
+        return {
+            "hands": hands,
+            "confidence": confidence,
+            "evidence": {
+                "adapter": "explicit-injected-parser",
+                "parser_status": status,
+                "recognized_card_count": raw.get("recognized_card_count", count),
+                "state_fingerprint": raw.get("state_fingerprint"),
+            },
+        }
+    return detector
 
-    return parse_image
+
+def build_engine(*, allow_legacy_old_bbo: bool = False) -> BridgeVisionEngine:
+    engine = BridgeVisionEngine()
+    # Native detector families are registered here as they graduate from their
+    # gold-set gates. Until then, native analysis fails closed rather than
+    # pretending the legacy BBO parser is universal.
+    if allow_legacy_old_bbo:
+        from bridge_vision.legacy import old_bbo_report_parser
+
+        engine.register("old-bbo-compat", old_bbo_report_parser)
+    return engine
 
 
 def process_job_frames(
     job_dir: Path,
     *,
-    parser: FrameParser | None = None,
-    derive_fourth_hand: bool = False,
+    engine: BridgeVisionEngine | None = None,
+    parser: LegacyParserInjection | None = None,
+    allow_legacy_old_bbo: bool = False,
 ) -> dict[str, Any]:
+    if engine is not None and parser is not None:
+        raise ValueError("pass engine or parser, not both")
+    compatibility_mode = parser is not None
     root = job_dir.resolve()
     manifest_path = root / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -55,7 +83,10 @@ def process_job_frames(
     if not isinstance(frames, list):
         raise ValueError("manifest frames must be an array")
 
-    parse = parser or _default_parser()
+    if parser is not None:
+        vision = BridgeVisionEngine({"explicit-injected-parser": _wrap_injected_parser(parser)})
+    else:
+        vision = engine or build_engine(allow_legacy_old_bbo=allow_legacy_old_bbo)
     records: list[dict[str, Any]] = []
     recognized_frames = 0
     conflict_frames = 0
@@ -64,18 +95,23 @@ def process_job_frames(
         if not isinstance(frame_meta, dict):
             raise ValueError("manifest frame entry must be an object")
         frame = _safe_frame_path(root, frame_meta.get("file"))
-        recognition = parse(frame)
-        canonical = canonicalize_frame_recognition(
-            recognition,
-            time=frame_meta.get("time"),
-            frame_file=frame.name,
-            frame_sha256=frame_meta.get("sha256"),
-            derive_fourth_hand=derive_fourth_hand,
-        ).to_dict()
-        records.append(canonical)
-        if canonical["recognized_card_count"]:
+        result = vision.analyze_frame(frame).to_dict()
+        if compatibility_mode:
+            candidates = result.get("candidates") or []
+            evidence = candidates[0].get("evidence", {}) if candidates else {}
+            result["parser_status"] = evidence.get("parser_status", result["status"])
+            result["recognized_card_count"] = evidence.get(
+                "recognized_card_count",
+                sum(len(hand["cards"]) for hand in (result.get("deal") or {}).get("hands", {}).values()),
+            )
+            result["state_fingerprint"] = evidence.get("state_fingerprint")
+        result["time"] = frame_meta.get("time")
+        result["frame_file"] = frame.name
+        result["frame_sha256"] = frame_meta.get("sha256")
+        records.append(result)
+        if result["deal"] is not None:
             recognized_frames += 1
-        if canonical["parser_status"] == "CONFLICT":
+        if result["status"] == "CONFLICT":
             conflict_frames += 1
 
     output_path = root / "bridge_positions.jsonl"
@@ -83,17 +119,32 @@ def process_job_frames(
         "".join(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n" for record in records),
         encoding="utf-8",
     )
-    summary = {
-        "status": "REVIEW" if conflict_frames else "COMPLETED",
-        "job_id": manifest.get("job_id"),
-        "source_fingerprint": manifest.get("source_fingerprint"),
-        "input_frames": len(frames),
-        "output_records": len(records),
-        "recognized_frames": recognized_frames,
-        "conflict_frames": conflict_frames,
-        "derive_fourth_hand": bool(derive_fourth_hand),
-        "output": output_path.name,
-    }
+    if compatibility_mode:
+        summary = {
+            "status": "REVIEW" if conflict_frames else "COMPLETED",
+            "job_id": manifest.get("job_id"),
+            "source_fingerprint": manifest.get("source_fingerprint"),
+            "input_frames": len(frames),
+            "output_records": len(records),
+            "recognized_frames": recognized_frames,
+            "conflict_frames": conflict_frames,
+            "derive_fourth_hand": False,
+            "output": output_path.name,
+        }
+    else:
+        summary = {
+            "status": "REVIEW" if conflict_frames else "COMPLETED",
+            "vision_engine": "native",
+            "detectors": list(vision.detector_names),
+            "legacy_old_bbo_enabled": bool(allow_legacy_old_bbo),
+            "job_id": manifest.get("job_id"),
+            "source_fingerprint": manifest.get("source_fingerprint"),
+            "input_frames": len(frames),
+            "output_records": len(records),
+            "recognized_frames": recognized_frames,
+            "conflict_frames": conflict_frames,
+            "output": output_path.name,
+        }
     summary_path = root / "bridge_positions_summary.json"
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
@@ -102,11 +153,15 @@ def process_job_frames(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("job_dir", type=Path)
-    parser.add_argument("--derive-fourth-hand", action="store_true")
+    parser.add_argument(
+        "--allow-legacy-old-bbo",
+        action="store_true",
+        help="explicitly enable the old layout-specific BBO compatibility parser",
+    )
     args = parser.parse_args()
     summary = process_job_frames(
         args.job_dir,
-        derive_fourth_hand=args.derive_fourth_hand,
+        allow_legacy_old_bbo=args.allow_legacy_old_bbo,
     )
     print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
 
