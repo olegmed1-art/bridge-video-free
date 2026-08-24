@@ -3,7 +3,7 @@ import json
 from bridge_contracts.video_deal import canonicalize_video_deal
 
 
-def test_recognizer_payload_to_canonical_json_never_invents_cards():
+def test_recognizer_payload_to_canonical_json_never_invents_cards_by_default():
     recognizer_output = {
         "hands": {
             "N": ["AS", "KH", "7D"],
@@ -29,6 +29,33 @@ def test_recognizer_payload_to_canonical_json_never_invents_cards():
         for card in hand["cards"]
     }
     assert emitted == observed
-    assert tuple(artifact["hands"]) == ("E", "N", "S", "W") or set(artifact["hands"]) == {"N", "E", "S", "W"}
+    assert set(artifact["hands"]) == {"N", "E", "S", "W"}
     assert artifact["hands"]["W"] == {"cards": [], "unknown_count": 13}
+    assert artifact["derivations"] == []
     assert sum(hand["unknown_count"] for hand in artifact["hands"].values()) == 46
+
+
+def test_reconstruction_payload_to_canonical_json_marks_computed_fourth_hand():
+    payload = {
+        "hands": {
+            "N": ["AS", "KS", "QS", "JS", "TS", "9S", "8S", "7S", "6S", "5S", "4S", "3S", "2S"],
+            "E": ["AH", "KH", "QH", "JH", "TH", "9H", "8H", "7H", "6H", "5H", "4H", "3H", "2H"],
+            "S": ["AD", "KD", "QD", "JD", "TD", "9D", "8D", "7D", "6D", "5D", "4D", "3D", "2D"],
+        }
+    }
+    observed = {card for cards in payload["hands"].values() for card in cards}
+
+    artifact = json.loads(
+        json.dumps(
+            canonicalize_video_deal(payload, derive_fourth_hand=True).to_dict(),
+            sort_keys=True,
+        )
+    )
+
+    emitted = {card for hand in artifact["hands"].values() for card in hand["cards"]}
+    computed = set(artifact["derivations"][0]["computed_cards"])
+    assert emitted == observed | computed
+    assert len(emitted) == 52
+    assert len(computed) == 13
+    assert artifact["derivations"][0]["method"] == "deck_subtraction_from_three_complete_hands"
+    assert artifact["derivations"][0]["seat"] == "W"
