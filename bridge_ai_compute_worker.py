@@ -231,8 +231,12 @@ def process_one(config: Config) -> bool:
                 "evaluations": evaluations,
             }
         else:
-            print(f"search_run {run_id}: policy evidence recorded; no explicit simulation metrics", file=sys.stderr)
-            completion = {"status": "FAILED", "evaluations": []}
+            print(
+                f"search_run {run_id}: BEN policy evidence recorded; "
+                "no explicit simulation metrics",
+                file=sys.stderr,
+            )
+            completion = {"status": "NO_SEARCH_EVIDENCE", "evaluations": []}
     except Exception as exc:
         print(f"search_run {run_id} failed: {exc}", file=sys.stderr)
         completion = {"status": "FAILED", "evaluations": []}
