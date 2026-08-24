@@ -10,6 +10,14 @@ from .contract import (
     validate_priority,
     verify_dds3_result,
 )
+from .capability_registry import (
+    Capability,
+    CapabilityRegistry,
+    CapabilityState,
+    ExecutionChannel,
+    default_registry,
+)
+from .autonomy_router import AutonomyRouter, RouteDecision, RouteDisposition
 
 __all__ = [
     "ALLOWED_DDS3_OPERATIONS",
@@ -22,4 +30,12 @@ __all__ = [
     "validate_job_payload",
     "validate_priority",
     "verify_dds3_result",
+    "Capability",
+    "CapabilityRegistry",
+    "CapabilityState",
+    "ExecutionChannel",
+    "default_registry",
+    "AutonomyRouter",
+    "RouteDecision",
+    "RouteDisposition",
 ]
