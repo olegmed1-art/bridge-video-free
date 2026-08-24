@@ -30,6 +30,7 @@ jobs:
       BRIDGE_API_TOKEN: github-actions-bridge-queue-worker
       BRIDGE_API_BASE_URL: http://127.0.0.1:8000
       BEN_API_URL: http://127.0.0.1:8085
+      BEN_SEARCH_TOP_N: "5"
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
