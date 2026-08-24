@@ -129,7 +129,13 @@ jobs:
           git -C "$repo" fetch --quiet origin "$WORKER_GIT_REF"
           git -C "$repo" cat-file -e "$WORKER_GIT_REF^{commit}"
           git -C "$repo" checkout --force --quiet --detach "$WORKER_GIT_REF"
-          /opt/bridge-school/assistant-lab/.venv/bin/python -m py_compile "$repo/assistant_lab/worker.py" "$repo/assistant_lab/ben_runtime.py" "$repo/assistant_lab/contract.py"
+          /opt/bridge-school/assistant-lab/.venv/bin/python -m py_compile \
+            "$repo/assistant_lab/worker.py" \
+            "$repo/assistant_lab/ben_runtime.py" \
+            "$repo/assistant_lab/contract.py" \
+            "$repo/bridge_school_api/ai_auction_rollout.py" \
+            "$repo/bridge_school_api/ai_auction_scoring.py" \
+            "$repo/bridge_school_api/ai_ben_dds3_canary.py"
           systemctl restart assistant-lab.service
           sleep 3
           systemctl is-active --quiet assistant-lab.service
@@ -386,7 +392,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n bash -s' <<'REMOTE'
+          detail="$RUNNER_TEMP/ben-dds3-canary.log"
+          set +e
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n bash -s' >"$detail" 2>&1 <<'REMOTE'
           set -Eeuo pipefail
           repo=/opt/bridge-school/bridge-video-free
           env_file=/opt/bridge-school/assistant-lab/assistant-lab.env
@@ -403,6 +411,20 @@ jobs:
             /opt/bridge-school/assistant-lab/.venv/bin/python \
             -m bridge_school_api.ai_ben_dds3_canary
           REMOTE
+          rc=$?
+          set -e
+          python - "$detail" >> "$GITHUB_OUTPUT" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          raw = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+          raw = re.sub(r"postgres(?:ql)?://\S+", "[REDACTED_DSN]", raw, flags=re.IGNORECASE)
+          raw = re.sub(r"Bearer\s+\S+", "Bearer [REDACTED]", raw, flags=re.IGNORECASE)
+          safe = re.sub(r"\s+", " ", raw).strip()[-900:]
+          print(f"detail={safe or 'no diagnostic output'}")
+          PY
+          exit "$rc"
 
       - name: Publish result
         if: always()
@@ -417,8 +439,9 @@ jobs:
           BEN_CANARY_OUTCOME: ${{ steps.ben_canary.outcome }}
           BEN_CANARY_JOB_ID: ${{ steps.ben_canary.outputs.job_id }}
           BEN_DDS3_CANARY_OUTCOME: ${{ steps.ben_dds3_canary.outcome }}
+          BEN_DDS3_CANARY_DETAIL: ${{ steps.ben_dds3_canary.outputs.detail }}
         shell: bash
         run: |
           set -euo pipefail
           gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
-            -f body="Oracle v2 **${COMMAND}**: ssh=${SSH_OUTCOME}, worker=${WORKER_OUTCOME}, ben=${BEN_OUTCOME}, worlds=${WORLDS_OUTCOME}, worlds_job=${WORLDS_JOB_ID:-none}, ben_canary=${BEN_CANARY_OUTCOME}, ben_job=${BEN_CANARY_JOB_ID:-none}, ben_dds3_canary=${BEN_DDS3_CANARY_OUTCOME}" >/dev/null
+            -f body="Oracle v2 **${COMMAND}**: ssh=${SSH_OUTCOME}, worker=${WORKER_OUTCOME}, ben=${BEN_OUTCOME}, worlds=${WORLDS_OUTCOME}, worlds_job=${WORLDS_JOB_ID:-none}, ben_canary=${BEN_CANARY_OUTCOME}, ben_job=${BEN_CANARY_JOB_ID:-none}, ben_dds3_canary=${BEN_DDS3_CANARY_OUTCOME}, detail=${BEN_DDS3_CANARY_DETAIL:-none}" >/dev/null
