@@ -7,6 +7,7 @@ on:
       - 'assistant_lab/worker.py'
       - 'assistant_lab/ben_runtime.py'
       - 'assistant_lab/contract.py'
+      - 'bridge_school_api/ai_worlds.py'
   pull_request_target:
     paths:
       - 'ops/oracle-assistant-lab-worker-requests/*.json'
@@ -37,10 +38,10 @@ jobs:
           PYTHONPATH: .
         run: |
           set -euo pipefail
-          python -m py_compile assistant_lab/worker.py assistant_lab/ben_runtime.py assistant_lab/contract.py
+          python -m py_compile assistant_lab/worker.py assistant_lab/ben_runtime.py assistant_lab/contract.py bridge_school_api/ai_worlds.py
           python - <<'PY'
           from assistant_lab.contract import ALLOWED_KINDS
-          assert ALLOWED_KINDS == {'DDS3_COMPUTE','BEN_COMPUTE','NOOP'}
+          assert ALLOWED_KINDS == {'DDS3_COMPUTE','BEN_COMPUTE','WORLD_GENERATE','NOOP'}
           from assistant_lab.ben_runtime import validate_local_ben_url
           assert validate_local_ben_url('http://127.0.0.1:8085') == 'http://127.0.0.1:8085'
           PY
