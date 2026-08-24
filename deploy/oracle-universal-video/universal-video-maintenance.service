@@ -1,27 +1,19 @@
 [Unit]
-Description=Bridge School Universal Video Analyzer sidecar
-After=network-online.target
-Wants=network-online.target
+Description=Bridge School Universal Video bounded retention maintenance
+After=universal-video.service
+ConditionPathExists=/opt/bridge-school/universal-video/universal-video.env
 
 [Service]
-Type=simple
+Type=oneshot
 User=universal-video
 Group=universal-video
 WorkingDirectory=/opt/bridge-school/universal-video-src
 EnvironmentFile=/opt/bridge-school/universal-video/universal-video.env
-EnvironmentFile=-/opt/bridge-school/universal-video/universal-video-secrets.env
 Environment=PYTHONPATH=/opt/bridge-school/universal-video-src
-Environment=HF_HOME=/opt/bridge-school/universal-video/model-cache
-ExecStart=/opt/bridge-school/universal-video/.venv/bin/python -m universal_video.spool_worker
-Restart=on-failure
-RestartSec=3
-TimeoutStopSec=30
-Nice=10
-CPUQuota=600%
-MemoryAccounting=true
-MemoryHigh=12G
-MemoryMax=16G
-TasksMax=512
+ExecStart=/opt/bridge-school/universal-video/.venv/bin/python -m universal_video.maintenance --base-dir /opt/bridge-school/universal-video --apply
+Nice=15
+CPUQuota=50%
+MemoryMax=256M
 IOSchedulingClass=idle
 NoNewPrivileges=true
 PrivateTmp=true
@@ -39,6 +31,3 @@ SystemCallArchitectures=native
 ReadOnlyPaths=/opt/bridge-school/universal-video-src
 ReadWritePaths=/opt/bridge-school/universal-video
 UMask=0027
-
-[Install]
-WantedBy=multi-user.target
