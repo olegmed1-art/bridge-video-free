@@ -9,6 +9,8 @@
 - сервер `158.180.47.161` и пользователя `ubuntu`;
 - ключ Cloud Shell `~/.ssh/bridge_school_dds3_oracle`;
 - ED25519 fingerprint сервера;
+- control commit `775dd6a88ede5672c3df5f42589e71a16146e2f4`;
+- launcher blob `96f5d0245c85865f20de715d783034a369912623`;
 - runtime commit `59377de601c1586ae9914a51a340dc72ac2007ce`;
 - единственный разрешённый payload `ops/oracle_universal_video_run_command.sh`.
 
@@ -35,13 +37,13 @@ Launcher не принимает произвольный host, user или remo
 
 ## Рекомендуемый режим: одна вставка
 
-После merge audit-hardening PR сюда записываются точные `CONTROL_COMMIT` и `LAUNCHER_BLOB`. В интерактивную Cloud Shell вставляется **один блок**, без `set -u`:
+В интерактивную Cloud Shell вставляется **один блок**, без `set -u`:
 
 ```bash
 set +u
 export USER="$(id -un)"
-CONTROL_COMMIT='<CONTROL_COMMIT_SHA>'
-LAUNCHER_BLOB='<LAUNCHER_BLOB_SHA1>'
+CONTROL_COMMIT='775dd6a88ede5672c3df5f42589e71a16146e2f4'
+LAUNCHER_BLOB='96f5d0245c85865f20de715d783034a369912623'
 F='/tmp/cloud_shell_activate_universal_video.sh'
 curl -fsSL "https://raw.githubusercontent.com/olegmed1-art/bridge-video-free/${CONTROL_COMMIT}/ops/cloud_shell_activate_universal_video.sh" -o "$F" &&
 test "$(git hash-object "$F")" = "$LAUNCHER_BLOB" &&
