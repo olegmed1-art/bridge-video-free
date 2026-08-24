@@ -3,8 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import PlainTextResponse
 
-from assistant_lab.bootstrap_contract import BootstrapContractError, build_bootstrap_script, token_digest
-
+from .bootstrap_contract import BootstrapContractError, build_bootstrap_script, token_digest
 from .db import connect
 
 router = APIRouter()
