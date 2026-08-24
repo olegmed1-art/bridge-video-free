@@ -1,0 +1,69 @@
+name: Deployment architecture contract
+
+on:
+  pull_request:
+    paths:
+      - 'app.py'
+      - 'bridge_school_api/**'
+      - 'bridge_contracts/**'
+      - 'assistant_lab/bootstrap_contract.py'
+      - '.vercelignore'
+      - 'vercel.json'
+      - 'scripts/vercel_ignore_build.sh'
+      - 'docs/architecture/**'
+      - '.github/workflows/deployment-architecture-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'app.py'
+      - 'bridge_school_api/**'
+      - 'bridge_contracts/**'
+      - 'assistant_lab/bootstrap_contract.py'
+      - '.vercelignore'
+      - 'vercel.json'
+      - 'scripts/vercel_ignore_build.sh'
+      - 'docs/architecture/**'
+      - '.github/workflows/deployment-architecture-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Validate Vercel boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          bash -n scripts/vercel_ignore_build.sh
+          python -m json.tool vercel.json >/dev/null
+          grep -F 'ignoreCommand' vercel.json >/dev/null
+          grep -F '!bridge_school_api' .vercelignore >/dev/null
+          grep -F '!bridge_contracts' .vercelignore >/dev/null
+          if grep -Fx '!assistant_lab' .vercelignore >/dev/null; then
+            echo 'assistant_lab compute package must not be bundled by Vercel' >&2
+            exit 1
+          fi
+
+      - name: Validate shared bootstrap contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m py_compile bridge_contracts/bootstrap.py assistant_lab/bootstrap_contract.py bridge_school_api/assistant_lab_bootstrap.py
+          grep -F 'from bridge_contracts.bootstrap import' assistant_lab/bootstrap_contract.py >/dev/null
+          grep -F 'from bridge_contracts.bootstrap import' bridge_school_api/assistant_lab_bootstrap.py >/dev/null
+
+      - name: Validate architecture guardrails
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          grep -F 'MUST NOT by itself create a Vercel deployment' docs/architecture/deployment.md >/dev/null
+          grep -F 'Do not store raw media bytes in Neon' docs/architecture/video-data-policy.md >/dev/null
+          grep -F 'must not become an unnecessary media proxy' docs/architecture/video-data-policy.md >/dev/null

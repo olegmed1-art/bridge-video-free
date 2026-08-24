@@ -1,7 +1,9 @@
 /*
 !app.py
 !bridge_school_api
-!assistant_lab
+!bridge_contracts
 !pyproject.toml
 !.python-version
 !.vercelignore
+!vercel.json
+!scripts/vercel_ignore_build.sh

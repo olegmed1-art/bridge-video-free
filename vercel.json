@@ -11,5 +11,6 @@
       "preview": true,
       "*": false
     }
-  }
+  },
+  "ignoreCommand": "bash scripts/vercel_ignore_build.sh"
 }
