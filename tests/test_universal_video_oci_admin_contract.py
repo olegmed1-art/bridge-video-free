@@ -47,8 +47,9 @@ def test_cloud_shell_bootstrap_is_single_fixed_host_path():
     assert "readonly ORACLE_HOST='158.180.47.161'" in CLOUD
     assert "readonly ORACLE_USER='ubuntu'" in CLOUD
     assert 'readonly SSH_KEY_PATH="$HOME/.ssh/bridge_school_dds3_oracle"' in CLOUD
-    assert '[[ "$remote_main" == "$SOURCE_COMMIT" ]]' in CLOUD
-    assert "SOURCE_COMMIT is not current main" in CLOUD
+    assert "readonly BOOTSTRAP_COMMIT='deb9746f0c4088ee27fd03bff9b698524448074a'" in CLOUD
+    assert "SOURCE_COMMIT is not current main" not in CLOUD
+    assert "git ls-remote" not in CLOUD
     for fingerprint in (
         "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
         "SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc",
@@ -58,9 +59,11 @@ def test_cloud_shell_bootstrap_is_single_fixed_host_path():
     assert "cmp -s \"$actual\" \"$expected\"" in CLOUD
     assert "ops/install_assistant_lab_ocarun_admin.sh" in CLOUD
     assert "ops/install_universal_video_ocarun_admin.sh" in CLOUD
+    assert "ORACLE_BOUNDED_ADMIN_PIN_PASS" in CLOUD
     assert "ORACLE_BOUNDED_OCARUN_ADMIN_BOOTSTRAP_PASS" in CLOUD
+    assert "SOURCE_COMMIT='$BOOTSTRAP_COMMIT'" in CLOUD
     # Positional parameters are used only inside the private fetch_installer helper
-    # and awk. The Cloud Shell user-facing contract itself is env-only.
+    # and awk. The Cloud Shell user-facing contract itself takes no arguments.
     assert 'case "$1"' not in CLOUD
     assert '[[ $#' not in CLOUD
     assert "eval " not in CLOUD

@@ -4,23 +4,18 @@ umask 077
 
 # One-time OCI Cloud Shell bootstrap for the two separate bounded ocarun admin
 # entrypoints (Assistant Lab and Universal Video). No arbitrary host/user/command.
-# SOURCE_COMMIT must equal the repository's current main head at invocation time.
+# The installer source is pinned to the reviewed #382 merge commit.
 
 readonly ORACLE_HOST='158.180.47.161'
 readonly ORACLE_USER='ubuntu'
 readonly SSH_KEY_PATH="$HOME/.ssh/bridge_school_dds3_oracle"
 readonly REPOSITORY='olegmed1-art/bridge-video-free'
-readonly REPO_URL="https://github.com/${REPOSITORY}.git"
+readonly BOOTSTRAP_COMMIT='deb9746f0c4088ee27fd03bff9b698524448074a'
 readonly ASSISTANT_INSTALLER='ops/install_assistant_lab_ocarun_admin.sh'
 readonly VIDEO_INSTALLER='ops/install_universal_video_ocarun_admin.sh'
 
 fail(){ echo "ERROR: $*" >&2; exit 1; }
-: "${SOURCE_COMMIT:?SOURCE_COMMIT is required and must equal current main}"
-[[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail 'SOURCE_COMMIT must be a 40-hex commit'
-for c in bash curl git ssh ssh-keygen ssh-keyscan stat; do command -v "$c" >/dev/null 2>&1 || fail "$c is required"; done
-
-remote_main="$(git ls-remote "$REPO_URL" refs/heads/main | awk 'NR==1 {print $1}')"
-[[ "$remote_main" == "$SOURCE_COMMIT" ]] || fail "SOURCE_COMMIT is not current main"
+for c in bash curl ssh ssh-keygen ssh-keyscan stat; do command -v "$c" >/dev/null 2>&1 || fail "$c is required"; done
 
 [[ -f "$SSH_KEY_PATH" && ! -L "$SSH_KEY_PATH" ]] || fail 'fixed Oracle private key is missing or unsafe'
 key_mode="$(stat -c '%a' "$SSH_KEY_PATH")"
@@ -67,7 +62,7 @@ echo ORACLE_BOUNDED_ADMIN_SSH_SUDO_PASS
 fetch_installer(){
   local path="$1" destination="$2" marker="$3"
   curl -fsSL --retry 3 --retry-delay 2 \
-    "https://raw.githubusercontent.com/$REPOSITORY/$SOURCE_COMMIT/$path" -o "$destination"
+    "https://raw.githubusercontent.com/$REPOSITORY/$BOOTSTRAP_COMMIT/$path" -o "$destination"
   bash -n "$destination"
   grep -Fq "$marker" "$destination" || fail "unexpected installer contract: $path"
   chmod 0400 "$destination"
@@ -78,13 +73,16 @@ video_installer="$work/video-install.sh"
 fetch_installer "$ASSISTANT_INSTALLER" "$assistant_installer" 'ASSISTANT_LAB_OCARUN_BOUNDED_ADMIN_BOOTSTRAP_PASS'
 fetch_installer "$VIDEO_INSTALLER" "$video_installer" 'UNIVERSAL_VIDEO_OCARUN_BOUNDED_ADMIN_BOOTSTRAP_PASS'
 
+echo "bootstrap_commit=$BOOTSTRAP_COMMIT"
+echo ORACLE_BOUNDED_ADMIN_PIN_PASS
+
 echo 'Installing Assistant Lab bounded OCI admin surface'
 ssh "${SSH_OPTIONS[@]}" "$ORACLE_USER@$ORACLE_HOST" \
-  "sudo -n env SOURCE_COMMIT='$SOURCE_COMMIT' bash -s" < "$assistant_installer"
+  "sudo -n env SOURCE_COMMIT='$BOOTSTRAP_COMMIT' bash -s" < "$assistant_installer"
 
 echo 'Installing Universal Video bounded OCI admin surface'
 ssh "${SSH_OPTIONS[@]}" "$ORACLE_USER@$ORACLE_HOST" \
-  "sudo -n env SOURCE_COMMIT='$SOURCE_COMMIT' bash -s" < "$video_installer"
+  "sudo -n env SOURCE_COMMIT='$BOOTSTRAP_COMMIT' bash -s" < "$video_installer"
 
 # Final exact-path audits. No general sudo check is granted to ocarun.
 ssh "${SSH_OPTIONS[@]}" "$ORACLE_USER@$ORACLE_HOST" \
