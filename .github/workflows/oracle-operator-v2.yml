@@ -27,6 +27,7 @@ jobs:
           persist-credentials: false
       - run: |
           set -euo pipefail
+          ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" .github/workflows/oracle-operator-v2.yml
           grep -F '/oracle-v2 rollout-worker' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '/oracle-v2 rollout-ben' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '127.0.0.1:8085:8085' .github/workflows/oracle-operator-v2.yml >/dev/null
@@ -83,16 +84,16 @@ jobs:
             printf '%s\n' "$raw" > "${candidates[0]}"
             tr -d '\r' < "${candidates[0]}" > "${candidates[1]}"
             python - "$raw" "${candidates[2]}" <<'PY'
-import sys
-raw=sys.argv[1]
-path=sys.argv[2]
-if '\\n' in raw and '\n' not in raw:
-    raw=raw.replace('\\r','').replace('\\n','\n')
-with open(path,'w',newline='\n') as f:
-    f.write(raw)
-    if not raw.endswith('\n'):
-        f.write('\n')
-PY
+          import sys
+          raw=sys.argv[1]
+          path=sys.argv[2]
+          if '\\n' in raw and '\n' not in raw:
+              raw=raw.replace('\\r','').replace('\\n','\n')
+          with open(path,'w',newline='\n') as f:
+              f.write(raw)
+              if not raw.endswith('\n'):
+                  f.write('\n')
+          PY
             for key in "${candidates[@]}"; do
               chmod 0600 "$key"
               ssh-keygen -y -f "$key" >/dev/null 2>&1 || continue
