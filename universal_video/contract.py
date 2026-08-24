@@ -21,6 +21,7 @@ MAX_FRAME_INTERVAL_SECONDS = 3600
 ALLOWED_SOURCE_KINDS = frozenset({"local_path", "google_drive"})
 ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,160}$")
 DRIVE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{10,200}$")
+RESERVED_PATH_IDS = frozenset({".", ".."})
 
 
 class VideoContractError(ValueError):
@@ -97,7 +98,7 @@ def validate_job(payload: Any, *, allowed_local_root: str | None = None) -> Vide
         raise VideoContractError("job payload exceeds bounded contract")
 
     job_id = _bounded_text(data.get("job_id"), "job_id", max_len=160)
-    if not ID_RE.fullmatch(job_id):
+    if not ID_RE.fullmatch(job_id) or job_id in RESERVED_PATH_IDS:
         raise VideoContractError("invalid job_id")
 
     profile = _bounded_text(data.get("profile"), "profile", max_len=80).lower()
@@ -168,10 +169,12 @@ def validate_from_env(payload: Any) -> VideoJob:
 __all__ = [
     "CONTRACT_VERSION",
     "MAX_FRAME_INTERVAL_SECONDS",
+    "MAX_JOB_BYTES",
     "MAX_SOURCE_BYTES",
     "MAX_VIDEO_SECONDS",
     "MIN_FRAME_INTERVAL_SECONDS",
     "MIN_SOURCE_BYTES",
+    "RESERVED_PATH_IDS",
     "VideoContractError",
     "VideoJob",
     "canonical_job_hash",
