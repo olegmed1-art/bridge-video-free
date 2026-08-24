@@ -10,6 +10,7 @@ from assistant_lab.research_pipeline import (
     canonical_research_key,
     plan_execution,
     transition,
+    validate_compute_result,
 )
 
 
@@ -30,6 +31,27 @@ def test_ben_maps_to_bounded_resident_worker_contract():
     assert plan.assistant_lab_kind == "BEN_COMPUTE"
     assert plan.assistant_lab_payload == payload
     assert plan.execution_boundary == "assistant_lab_resident_worker_to_oracle_local_ben"
+
+
+def test_world_generation_maps_to_oracle_resident_worker():
+    payload = {
+        "known_seat": "N",
+        "known_hand_pbn": "AKQJ.T98.765.432",
+        "constraints": {},
+        "count": 2,
+        "seed": 7,
+    }
+    plan = plan_execution(ResearchKind.WORLDS, payload)
+    assert plan.capability == "worlds.generate"
+    assert plan.assistant_lab_kind == "WORLD_GENERATE"
+    assert "oracle_world_generator" in plan.execution_boundary
+    completed = dict(
+        engine="WORLD_GENERATOR", fallback_used=False, complete=True,
+        requested=2, accepted=2, worlds=[{}, {}],
+    )
+    assert validate_compute_result(ResearchKind.WORLDS, completed, payload) == completed
+    with pytest.raises(LabContractError):
+        validate_compute_result(ResearchKind.WORLDS, dict(completed, complete=False), payload)
 
 
 def test_research_key_is_deterministic_and_kind_scoped():

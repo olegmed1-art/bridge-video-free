@@ -26,6 +26,7 @@ from psycopg.types.json import Jsonb
 
 from .ben_runtime import RetryableBenError, compute_ben_policy, validate_local_ben_url
 from .contract import CONTRACT_VERSION, LabContractError, LabJob, validate_job_payload, validate_priority, verify_dds3_result
+from bridge_school_api.ai_worlds import generate_worlds
 
 CHANNEL = "assistant_lab_jobs"
 LOCAL_DDS3_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
@@ -213,6 +214,8 @@ def execute_job(job: LabJob, config: WorkerConfig) -> dict[str, Any]:
         operation = str(job.payload.get("operation") or "dd_table")
         result = _post_json(config.dds3_url, job.payload, token=config.dds3_token, timeout=config.dds3_timeout_seconds)
         return verify_dds3_result(result, expected_operation=operation)
+    if job.kind == "WORLD_GENERATE":
+        return generate_worlds(**job.payload)
     raise LabContractError("unsupported assistant-lab job kind")
 
 
@@ -220,6 +223,7 @@ def mark_completed(job: LabJob, result: dict[str, Any], config: WorkerConfig) ->
     path = "oracle_noop"
     if job.kind == "DDS3_COMPUTE": path = "oracle_local_dds3"
     elif job.kind == "BEN_COMPUTE": path = "oracle_local_ben_policy"
+    elif job.kind == "WORLD_GENERATE": path = "oracle_local_world_generator"
     provenance = {"assistant_lab_contract": CONTRACT_VERSION, "worker_id": config.worker_id, "execution_path": path}
     with _connect(config.dsn) as conn, conn.cursor() as cur:
         cur.execute("""UPDATE assistant_lab.job SET status='COMPLETED', result_json=%s,

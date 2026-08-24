@@ -10,9 +10,10 @@ from assistant_lab.contract import (
     validate_job_payload,
     validate_priority,
     verify_dds3_result,
+    LabJob,
 )
 from assistant_lab.dispatch import dispatch_nonce_sha256, verify_dispatch_nonce
-from assistant_lab.worker import validate_local_dds3_url, validate_neon_dsn
+from assistant_lab.worker import WorkerConfig, execute_job, validate_local_dds3_url, validate_neon_dsn
 
 
 def test_priority_contract_is_stable():
@@ -49,6 +50,23 @@ def test_arbitrary_job_and_dds3_operations_are_rejected():
         validate_job_payload("SHELL", {"command": "id"})
     with pytest.raises(LabContractError):
         validate_job_payload("DDS3_COMPUTE", {"operation": "image_dd_table"})
+
+
+def test_world_generation_job_is_bounded_and_explicit():
+    payload = {
+        "known_seat": "n",
+        "known_hand_pbn": "AKQJ.T98.765.432",
+        "constraints": {"seats": {"E": {"hcp": [10, 12]}}},
+        "count": 32,
+        "seed": 17,
+    }
+    validated = validate_job_payload("WORLD_GENERATE", payload)
+    assert validated["known_seat"] == "N"
+    assert validated["count"] == 32
+    with pytest.raises(LabContractError):
+        validate_job_payload("WORLD_GENERATE", dict(payload, count=1001))
+    with pytest.raises(LabContractError):
+        validate_job_payload("WORLD_GENERATE", dict(payload, seed=None))
 
 
 def test_idempotency_key_is_deterministic_and_versioned():
@@ -108,6 +126,22 @@ def test_worker_dds3_endpoint_is_localhost_only():
         validate_local_dds3_url("http://127.0.0.1:8080/anything")
 
 
+def test_worker_executes_world_generation_without_network():
+    job = LabJob(
+        job_id="00000000-0000-0000-0000-000000000001",
+        kind="WORLD_GENERATE",
+        payload=validate_job_payload("WORLD_GENERATE", {
+            "known_seat": "N", "known_hand_pbn": "AKQJ.T98.765.432",
+            "constraints": {}, "count": 2, "seed": 3,
+        }),
+        priority=20, attempts=1, max_attempts=2,
+    )
+    config = WorkerConfig("unused", "test", "http://127.0.0.1:8080/v1/compute", "token")
+    result = execute_job(job, config)
+    assert result["engine"] == "WORLD_GENERATOR"
+    assert result["accepted"] == 2
+
+
 def test_schema_is_isolated_and_dispatch_is_update_only_for_app():
     schema = Path("assistant_lab/schema.sql").read_text(encoding="utf-8")
     lowered = schema.lower()
@@ -115,6 +149,7 @@ def test_schema_is_isolated_and_dispatch_is_update_only_for_app():
     assert "dispatch_nonce_sha256" in lowered
     assert "normalize_dispatch_provenance" in lowered
     assert "vercel_oidc_to_oracle_dds3" in lowered
+    assert "world_generate" in lowered
     assert "revoke all on all tables in schema assistant_lab from public" in lowered
     assert "grant select, update on assistant_lab.job to bridge_school_app" in lowered
     assert "grant insert" not in lowered
