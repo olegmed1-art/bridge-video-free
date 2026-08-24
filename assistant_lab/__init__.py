@@ -18,6 +18,18 @@ from .capability_registry import (
     default_registry,
 )
 from .autonomy_router import AutonomyRouter, RouteDecision, RouteDisposition
+from .research_pipeline import (
+    ExecutionPlan,
+    RESEARCH_CONTRACT_VERSION,
+    ResearchJob,
+    ResearchKind,
+    ResearchStage,
+    build_artifact_manifest,
+    build_methodical_input,
+    canonical_research_key,
+    plan_execution,
+    transition,
+)
 
 __all__ = [
     "ALLOWED_DDS3_OPERATIONS",
@@ -38,4 +50,14 @@ __all__ = [
     "AutonomyRouter",
     "RouteDecision",
     "RouteDisposition",
+    "ExecutionPlan",
+    "RESEARCH_CONTRACT_VERSION",
+    "ResearchJob",
+    "ResearchKind",
+    "ResearchStage",
+    "build_artifact_manifest",
+    "build_methodical_input",
+    "canonical_research_key",
+    "plan_execution",
+    "transition",
 ]
