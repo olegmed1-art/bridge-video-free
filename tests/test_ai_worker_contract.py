@@ -121,3 +121,16 @@ def test_ben_does_not_retry_invalid_contract(monkeypatch):
     else:
         raise AssertionError("worker accepted invalid BEN contract")
     assert len(calls) == 1
+
+
+def test_ben_rejects_selected_bid_missing_from_candidates():
+    payload = {
+        "bid": "2H",
+        "candidates": [{"call": "PASS", "insta_score": 0.4}],
+    }
+    try:
+        worker._validate_ben_result(payload)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("worker accepted a BEN bid absent from candidates")
