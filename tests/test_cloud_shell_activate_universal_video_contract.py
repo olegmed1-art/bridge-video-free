@@ -19,6 +19,7 @@ def test_launcher_has_fixed_identity_key_and_runtime_pins():
     assert "59377de601c1586ae9914a51a340dc72ac2007ce" in text
     assert "bbf4dc5779726fca415f641b90d017a802daaabf" in text
     assert "git hash-object" in text
+    assert 'grep -Fx "source_commit=$RUNTIME_COMMIT"' in text
 
 
 def test_launcher_accepts_only_five_bounded_modes():
@@ -42,6 +43,19 @@ def test_launcher_is_strict_about_host_identity_and_ssh():
     assert "private key must not be accessible by group or others" in text
 
 
+def test_resource_gate_is_read_only_and_bounded():
+    text = _text()
+    assert "MIN_AVAILABLE_MEMORY_BYTES=$((4 * 1024 * 1024 * 1024))" in text
+    assert "MIN_FREE_DISK_BYTES=$((6 * 1024 * 1024 * 1024))" in text
+    assert "host_resource_gate()" in text
+    assert "MemAvailable:" in text
+    assert "shutil.disk_usage" in text
+    assert "os.getloadavg" in text
+    assert "ORACLE_UNIVERSAL_VIDEO_RESOURCE_GATE_PASS" in text
+    probe = text.split("probe_control_path()", 1)[1].split("download_pinned_payload()", 1)[0]
+    assert "host_resource_gate" in probe
+
+
 def test_activation_is_pinned_side_by_side_and_has_acceptance_markers():
     text = _text()
     assert "raw.githubusercontent.com/$REPOSITORY/$RUNTIME_COMMIT/$PAYLOAD_PATH" in text
@@ -59,24 +73,39 @@ def test_activation_is_pinned_side_by_side_and_has_acceptance_markers():
     assert "ORACLE_DDS3_EXTERNAL_NONREGRESSION_PASS" in text
 
 
+def test_optional_assistant_lab_resident_services_are_state_preserved():
+    text = _text()
+    assert "assistant-lab-observer.service" in text
+    assert "assistant-lab-control.service" in text
+    assert "optional_resident_states()" in text
+    assert "activate_sidecar_protected()" in text
+    assert "run_synthetic_smoke_protected()" in text
+    assert "ORACLE_OPTIONAL_RESIDENT_SERVICES_NONREGRESSION_PASS" in text
+    assert "ORACLE_OPTIONAL_RESIDENT_SERVICES_POST_SMOKE_PASS" in text
+    assert "optional Assistant Lab resident service state changed" in text
+
+
 def test_bootstrap_sequence_is_fail_closed_and_does_not_reinstall_for_smoke():
     text = _text()
     bootstrap = text.split("  bootstrap)\n", 1)[1].split("    ;;", 1)[0]
-    assert bootstrap.index("probe_control_path") < bootstrap.index("activate_sidecar 0")
-    assert bootstrap.index("activate_sidecar 0") < bootstrap.index("status_gate")
-    assert bootstrap.index("status_gate") < bootstrap.index("run_synthetic_smoke_only")
+    assert bootstrap.index("probe_control_path") < bootstrap.index("activate_sidecar_protected 0")
+    assert bootstrap.index("activate_sidecar_protected 0") < bootstrap.index("status_gate")
+    assert bootstrap.index("status_gate") < bootstrap.index("run_synthetic_smoke_protected")
     assert "activate_sidecar 1" not in bootstrap
     assert "ORACLE_UNIVERSAL_VIDEO_CLOUD_SHELL_BOOTSTRAP_PASS" in bootstrap
     assert "set -Eeuo pipefail" in text
 
 
-def test_smoke_only_is_fixed_synthetic_media_and_rechecks_dds3():
+def test_smoke_only_is_fixed_synthetic_media_and_validates_fail_closed_result():
     text = _text()
     assert "run_synthetic_smoke_only()" in text
     assert "color=c=black:s=320x180:d=3" in text
     assert "sine=frequency=440:duration=3" in text
     assert '"project":"infrastructure-smoke"' in text
     assert '"synthetic":true' in text
+    assert "assert x.get('status') == 'REVIEW'" in text
+    assert "assert transcript.get('qc_pass') is False" in text
+    assert "UNIVERSAL_VIDEO_SYNTHETIC_RESULT_CONTRACT_PASS" in text
     assert "DDS3_AFTER_SYNTHETIC_SMOKE_PASS" in text
     assert "ORACLE_UNIVERSAL_VIDEO_CLOUD_SHELL_SMOKE_PASS" in text
 
@@ -104,7 +133,9 @@ def test_launcher_does_not_control_protected_services_or_real_video():
 def test_runbook_exposes_one_manual_command_and_preserves_explicit_gates():
     text = RUNBOOK.read_text(encoding="utf-8")
     assert " bootstrap" in text
-    assert "одна ручная команда" in text.lower()
+    assert "одна вставка" in text.lower()
+    assert "set -u" in text
+    assert "не включ" in text.lower()
     headings = [
         "### 1. Безопасный probe",
         "### 2. Активация без задания",
