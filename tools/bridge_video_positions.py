@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
-"""Post-process Universal Video keyframes with the existing bridge image parser.
+"""Post-process Universal Video keyframes through the school-owned Bridge Vision engine.
 
-The resident Universal Video core remains dependency-light. This optional bridge
-stage lazily imports `bridge_report_board_reconstruction.parse_image` and writes
-only compact canonical frame observations. It does not alter the source video,
-manifest, transcript, or production routing.
+Native Bridge Vision is the default. The old BBO screenshot parser remains an
+explicit opt-in legacy adapter only; it is never silently selected.
 """
 from __future__ import annotations
 
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from bridge_contracts.video_frame import canonicalize_frame_recognition
-
-FrameParser = Callable[[Path], dict[str, Any]]
+from bridge_vision import BridgeVisionEngine
 
 
 def _safe_frame_path(job_dir: Path, file_name: Any) -> Path:
@@ -35,18 +31,23 @@ def _safe_frame_path(job_dir: Path, file_name: Any) -> Path:
     return frame
 
 
-def _default_parser() -> FrameParser:
-    # Heavy CV dependencies remain outside the resident Universal Video core.
-    from bridge_report_board_reconstruction import parse_image
+def build_engine(*, allow_legacy_old_bbo: bool = False) -> BridgeVisionEngine:
+    engine = BridgeVisionEngine()
+    # Native detector families are registered here as they graduate from their
+    # gold-set gates. Until then, native analysis fails closed rather than
+    # pretending the legacy BBO parser is universal.
+    if allow_legacy_old_bbo:
+        from bridge_vision.legacy import old_bbo_report_parser
 
-    return parse_image
+        engine.register("old-bbo-compat", old_bbo_report_parser)
+    return engine
 
 
 def process_job_frames(
     job_dir: Path,
     *,
-    parser: FrameParser | None = None,
-    derive_fourth_hand: bool = False,
+    engine: BridgeVisionEngine | None = None,
+    allow_legacy_old_bbo: bool = False,
 ) -> dict[str, Any]:
     root = job_dir.resolve()
     manifest_path = root / "manifest.json"
@@ -55,7 +56,7 @@ def process_job_frames(
     if not isinstance(frames, list):
         raise ValueError("manifest frames must be an array")
 
-    parse = parser or _default_parser()
+    vision = engine or build_engine(allow_legacy_old_bbo=allow_legacy_old_bbo)
     records: list[dict[str, Any]] = []
     recognized_frames = 0
     conflict_frames = 0
@@ -64,18 +65,14 @@ def process_job_frames(
         if not isinstance(frame_meta, dict):
             raise ValueError("manifest frame entry must be an object")
         frame = _safe_frame_path(root, frame_meta.get("file"))
-        recognition = parse(frame)
-        canonical = canonicalize_frame_recognition(
-            recognition,
-            time=frame_meta.get("time"),
-            frame_file=frame.name,
-            frame_sha256=frame_meta.get("sha256"),
-            derive_fourth_hand=derive_fourth_hand,
-        ).to_dict()
-        records.append(canonical)
-        if canonical["recognized_card_count"]:
+        result = vision.analyze_frame(frame).to_dict()
+        result["time"] = frame_meta.get("time")
+        result["frame_file"] = frame.name
+        result["frame_sha256"] = frame_meta.get("sha256")
+        records.append(result)
+        if result["deal"] is not None:
             recognized_frames += 1
-        if canonical["parser_status"] == "CONFLICT":
+        if result["status"] == "CONFLICT":
             conflict_frames += 1
 
     output_path = root / "bridge_positions.jsonl"
@@ -85,13 +82,15 @@ def process_job_frames(
     )
     summary = {
         "status": "REVIEW" if conflict_frames else "COMPLETED",
+        "vision_engine": "native",
+        "detectors": list(vision.detector_names),
+        "legacy_old_bbo_enabled": bool(allow_legacy_old_bbo),
         "job_id": manifest.get("job_id"),
         "source_fingerprint": manifest.get("source_fingerprint"),
         "input_frames": len(frames),
         "output_records": len(records),
         "recognized_frames": recognized_frames,
         "conflict_frames": conflict_frames,
-        "derive_fourth_hand": bool(derive_fourth_hand),
         "output": output_path.name,
     }
     summary_path = root / "bridge_positions_summary.json"
@@ -102,11 +101,15 @@ def process_job_frames(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("job_dir", type=Path)
-    parser.add_argument("--derive-fourth-hand", action="store_true")
+    parser.add_argument(
+        "--allow-legacy-old-bbo",
+        action="store_true",
+        help="explicitly enable the old layout-specific BBO compatibility parser",
+    )
     args = parser.parse_args()
     summary = process_job_frames(
         args.job_dir,
-        derive_fourth_hand=args.derive_fourth_hand,
+        allow_legacy_old_bbo=args.allow_legacy_old_bbo,
     )
     print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
 
