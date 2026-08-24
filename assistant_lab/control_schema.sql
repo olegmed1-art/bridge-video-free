@@ -113,7 +113,7 @@ RETURNS SETOF assistant_lab.control_command
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, assistant_lab
-AS $
+AS $$
 BEGIN
     IF p_worker_id IS NULL OR length(p_worker_id) NOT BETWEEN 1 AND 256 THEN
         RAISE EXCEPTION 'invalid worker id';
@@ -136,7 +136,7 @@ BEGIN
      WHERE c.command_id = candidate.command_id
     RETURNING c.*;
 END;
-$;
+$$;
 
 CREATE OR REPLACE FUNCTION assistant_lab.finish_control_command(
     p_command_id uuid,
@@ -149,7 +149,7 @@ RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, assistant_lab
-AS $
+AS $$
 BEGIN
     IF p_status NOT IN ('COMPLETED', 'FAILED') THEN
         RAISE EXCEPTION 'invalid terminal status';
@@ -164,7 +164,7 @@ BEGIN
        AND claimed_by = p_worker_id;
     RETURN FOUND;
 END;
-$;
+$$;
 
 CREATE OR REPLACE FUNCTION assistant_lab.recover_stale_control_commands(
     p_stale_after_seconds integer
@@ -173,7 +173,7 @@ RETURNS bigint
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = pg_catalog, assistant_lab
-AS $
+AS $$
 DECLARE
     v_count bigint;
 BEGIN
@@ -194,7 +194,7 @@ BEGIN
     GET DIAGNOSTICS v_count = ROW_COUNT;
     RETURN v_count;
 END;
-$;
+$$;
 
 REVOKE ALL ON assistant_lab.control_command FROM assistant_lab_worker;
 REVOKE ALL ON FUNCTION assistant_lab.claim_control_command(text) FROM PUBLIC;
