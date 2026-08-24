@@ -403,11 +403,16 @@ jobs:
           systemctl is-active --quiet assistant-lab.service
           systemctl is-active --quiet bridge-ben.service
           curl -fsS --max-time 5 http://127.0.0.1:8080/readyz >/dev/null
-          set -a
-          . "$env_file"
-          set +a
-          cd "$repo"
-          runuser --user assistant-lab --preserve-environment -- \
+          [[ -r /opt/bridge-school/dds3-runtime.env ]]
+          systemd-run --quiet --wait --pipe --collect --service-type=exec \
+            --property=User=assistant-lab \
+            --property=Group=assistant-lab \
+            --property=WorkingDirectory="$repo" \
+            --property=EnvironmentFile="$env_file" \
+            --property=EnvironmentFile=/opt/bridge-school/dds3-runtime.env \
+            --property=NoNewPrivileges=yes \
+            --property=PrivateTmp=yes \
+            --property=ProtectHome=yes \
             /opt/bridge-school/assistant-lab/.venv/bin/python \
             -m bridge_school_api.ai_ben_dds3_canary
           REMOTE
