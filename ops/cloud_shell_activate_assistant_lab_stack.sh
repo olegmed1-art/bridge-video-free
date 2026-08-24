@@ -7,7 +7,7 @@ set -Eeuo pipefail
 
 readonly REGION='eu-frankfurt-1'
 readonly INSTANCE_NAME='bridge-school-dds3-frankfurt'
-readonly RUNTIME_COMMIT='53ae1c3fd6f10f1ba290b7539efaaaf0cc111e54'
+readonly RUNTIME_COMMIT='b47be399c683d3f8a050ebff530ed3cadbe45750'
 readonly REPO_DIR='/opt/bridge-school/bridge-video-free'
 readonly ARCHIVE_DIR='/srv/assistant-lab-observer-archive'
 
