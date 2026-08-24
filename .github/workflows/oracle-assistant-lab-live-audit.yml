@@ -1,0 +1,141 @@
+name: Oracle Assistant Lab live audit
+
+on:
+  pull_request_target:
+    paths:
+      - 'ops/oracle-assistant-lab-audit-requests/*.json'
+      - '.github/workflows/oracle-assistant-lab-live-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-audit:
+    # pull_request_target deliberately executes only the trusted base-branch workflow.
+    # It never checks out or executes PR-head code.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Verify host key and select existing credential
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/assistant-lab-live-audit"
+          mkdir -p "$work"
+          known="$work/known_hosts"
+          : > "$known"
+          for attempt in 1 2 3; do
+            ssh-keyscan -T 10 -t ed25519,ecdsa,rsa "$ORACLE_HOST" >> "$known" 2>/dev/null || true
+            [[ -s "$known" ]] && break
+            sleep $((attempt * 2))
+          done
+          sort -u -o "$known" "$known"
+          ssh-keygen -lf "$known" | awk '{print $2}' | grep -Fx "$EXPECTED_FINGERPRINT" >/dev/null
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$work/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Read-only host, Control API and production DB audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          sudo -n true
+          repo=/opt/bridge-school/bridge-video-free
+          envfile=/opt/bridge-school/assistant-lab/assistant-lab.env
+          observer_env=/opt/bridge-school/assistant-lab-observer/control.env
+          [[ -d "$repo/.git" ]]
+          [[ -f "$envfile" ]]
+          [[ -f "$observer_env" ]]
+          printf 'repo_head=%s\n' "$(git -C "$repo" rev-parse HEAD)"
+          printf 'repo_dirty=%s\n' "$(if [[ -n "$(git -C "$repo" status --porcelain)" ]]; then echo yes; else echo no; fi)"
+          for svc in assistant-lab.service assistant-lab-observer.service assistant-lab-control.service assistant-lab-control-bridge.service; do
+            printf '%s=%s\n' "$svc" "$(systemctl is-active "$svc" 2>/dev/null || true)"
+          done
+          systemctl is-active --quiet assistant-lab.service
+          systemctl is-active --quiet assistant-lab-observer.service
+          systemctl is-active --quiet assistant-lab-control.service
+          systemctl is-active --quiet assistant-lab-control-bridge.service
+          ready="$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)"
+          READY="$ready" python3 -c 'import json,os; x=json.loads(os.environ["READY"]); assert x.get("status")=="ready" and x.get("engine")=="DDS3" and x.get("fallback_used") is False'
+          token="$(sudo -n sed -n 's/^ASSISTANT_LAB_CONTROL_TOKEN=//p' "$observer_env")"
+          [[ ${#token} -ge 32 ]]
+          health="$(curl -fsS --max-time 5 -H "Authorization: Bearer $token" http://127.0.0.1:8765/healthz)"
+          HEALTH="$health" python3 -c 'import json,os; x=json.loads(os.environ["HEALTH"]); assert x.get("status")=="ready"; assert x.get("arbitrary_shell") is False; assert x.get("video_analyzer_result_access") is False; assert x.get("other_oracle_result_access") is False'
+          ss -ltn | grep -Eq '127\.0\.0\.1:8765[[:space:]]'
+          ! ss -ltn | grep -Eq '(^|[[:space:]])0\.0\.0\.0:8765|\[::\]:8765'
+          printf 'observer_no_new_privileges=%s\n' "$(systemctl show assistant-lab-observer.service -p NoNewPrivileges --value)"
+          printf 'observer_apparmor=%s\n' "$(systemctl show assistant-lab-observer.service -p AppArmorProfile --value 2>/dev/null || true)"
+          [[ "$(systemctl show assistant-lab-observer.service -p NoNewPrivileges --value)" == yes ]]
+          [[ -d /srv/assistant-lab-observer-archive ]]
+          db_url="$(sudo -n sed -n 's/^ASSISTANT_LAB_DATABASE_URL=//p' "$envfile" | head -n1)"
+          [[ -n "$db_url" ]]
+          ASSISTANT_LAB_DATABASE_URL="$db_url" /opt/bridge-school/assistant-lab-observer/.venv/bin/python - <<'PY'
+          import os
+          import psycopg
+          with psycopg.connect(os.environ['ASSISTANT_LAB_DATABASE_URL'], connect_timeout=10, application_name='assistant-lab-live-audit') as conn:
+              with conn.cursor() as cur:
+                  cur.execute("""
+                  SELECT current_user,
+                         has_schema_privilege(current_user,'assistant_lab','USAGE'),
+                         has_table_privilege(current_user,'assistant_lab.control_command','SELECT'),
+                         has_table_privilege(current_user,'assistant_lab.control_command','UPDATE'),
+                         has_table_privilege(current_user,'assistant_lab.control_command','INSERT'),
+                         has_table_privilege(current_user,'assistant_lab.control_command','DELETE'),
+                         has_function_privilege(current_user,'assistant_lab.claim_control_command(text)','EXECUTE'),
+                         has_function_privilege(current_user,'assistant_lab.finish_control_command(uuid,text,text,jsonb,text)','EXECUTE'),
+                         has_function_privilege(current_user,'assistant_lab.recover_stale_control_commands(integer)','EXECUTE')
+                  """)
+                  row=cur.fetchone()
+                  user, schema_usage, sel, upd, ins, dele, claim, finish, recover = row
+                  assert user == 'assistant_lab_worker_principal', user
+                  assert schema_usage is True, row
+                  assert not any((sel, upd, ins, dele)), row
+                  assert all((claim, finish, recover)), row
+                  cur.execute("""
+                  SELECT count(*)=3,
+                         bool_and(p.prosecdef),
+                         bool_and(array_to_string(p.proconfig, ',') LIKE '%search_path=pg_catalog, assistant_lab%')
+                  FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                  WHERE n.nspname='assistant_lab'
+                    AND p.proname IN ('claim_control_command','finish_control_command','recover_stale_control_commands')
+                  """)
+                  count_ok, secdef_ok, path_ok = cur.fetchone()
+                  assert count_ok and secdef_ok and path_ok, (count_ok, secdef_ok, path_ok)
+                  print('db_user=assistant_lab_worker_principal')
+                  print('db_schema_usage=true')
+                  print('db_direct_table_privileges=false')
+                  print('db_bounded_rpc_privileges=true')
+                  print('db_rpc_security_definer=true')
+                  print('db_rpc_fixed_search_path=true')
+          PY
+          echo ASSISTANT_LAB_LIVE_AUDIT_PASS
+          REMOTE
