@@ -6,4 +6,5 @@
 !.python-version
 !.vercelignore
 !vercel.json
+!scripts
 !scripts/vercel_ignore_build.sh
