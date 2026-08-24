@@ -1,0 +1,9 @@
+{
+  "schema": "bridge-school-oracle-dds3-pilot10k-request/v1",
+  "authorized_by": "owner",
+  "target_deals": 10000,
+  "compute_plane": "oracle",
+  "engine": "DDS3",
+  "fallback_used": false,
+  "purpose": "launch immutable Pilot-10k TRAIN phase"
+}
