@@ -1,0 +1,199 @@
+"""Evidence-based multi-frame bridge deal reconstruction.
+
+Frames are NEVER linked because they are close in time. A frame may join an
+existing deal track only through explicit board identity or sufficiently strong
+seat+card overlap with no cross-seat conflict. Ambiguous matches remain review
+items instead of being guessed into a deal.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from hashlib import sha256
+from typing import Any, Iterable, Mapping
+
+from bridge_contracts.video_deal import SEATS, canonicalize_video_deal
+
+MULTIFRAME_VERSION = "bridge-vision-multiframe-v1"
+
+
+class MultiFrameError(ValueError):
+    pass
+
+
+def _pairs(record: Mapping[str, Any]) -> set[tuple[str, str]]:
+    deal = record.get("deal")
+    if not isinstance(deal, Mapping):
+        return set()
+    hands = deal.get("hands")
+    if not isinstance(hands, Mapping):
+        return set()
+    out: set[tuple[str, str]] = set()
+    for seat in SEATS:
+        hand = hands.get(seat) or {}
+        if not isinstance(hand, Mapping):
+            continue
+        cards = hand.get("cards") or []
+        if not isinstance(cards, (list, tuple)):
+            raise MultiFrameError("deal hand cards must be an array")
+        for card in cards:
+            out.add((seat, str(card)))
+    return out
+
+
+def _cross_seat_conflict(a: set[tuple[str, str]], b: set[tuple[str, str]]) -> bool:
+    aa = {card: seat for seat, card in a}
+    bb = {card: seat for seat, card in b}
+    return any(card in bb and bb[card] != seat for card, seat in aa.items())
+
+
+def _explicit_board_key(record: Mapping[str, Any]) -> str | None:
+    for key in ("board_id", "board_number", "deal_key"):
+        value = record.get(key)
+        if value is not None and str(value).strip():
+            return f"{key}:{str(value).strip()}"
+    return None
+
+
+def _frame_identity(record: Mapping[str, Any]) -> str:
+    for key in ("frame_sha256", "frame_file"):
+        value = record.get(key)
+        if value is not None and str(value).strip():
+            return f"{key}:{str(value).strip()}"
+    pairs = sorted(_pairs(record))
+    return "pairs:" + repr(pairs)
+
+
+@dataclass
+class DealTrack:
+    deal_id: str
+    anchor_identity: str
+    explicit_board_key: str | None = None
+    frame_indices: list[int] = field(default_factory=list)
+    frame_files: list[str] = field(default_factory=list)
+    observed_pairs: set[tuple[str, str]] = field(default_factory=set)
+    conflicts: list[dict[str, Any]] = field(default_factory=list)
+
+    def canonical_deal(self) -> dict[str, Any]:
+        hands = {seat: [] for seat in SEATS}
+        for seat, card in sorted(self.observed_pairs):
+            hands[seat].append(card)
+        return canonicalize_video_deal({"hands": hands}).to_dict()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": MULTIFRAME_VERSION,
+            "deal_id": self.deal_id,
+            "explicit_board_key": self.explicit_board_key,
+            "frame_indices": list(self.frame_indices),
+            "frame_files": list(self.frame_files),
+            "observed_card_count": len(self.observed_pairs),
+            "deal": self.canonical_deal(),
+            "conflicts": list(self.conflicts),
+        }
+
+
+@dataclass(frozen=True)
+class ReconstructionResult:
+    tracks: tuple[DealTrack, ...]
+    review_frames: tuple[dict[str, Any], ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "version": MULTIFRAME_VERSION,
+            "deal_count": len(self.tracks),
+            "review_frame_count": len(self.review_frames),
+            "deals": [track.to_dict() for track in self.tracks],
+            "review_frames": list(self.review_frames),
+        }
+
+
+def _score(track: DealTrack, record: Mapping[str, Any], *, min_shared_cards: int, min_overlap_ratio: float) -> float | None:
+    pairs = _pairs(record)
+    if not pairs:
+        return None
+    if _cross_seat_conflict(track.observed_pairs, pairs):
+        return None
+
+    board_key = _explicit_board_key(record)
+    if board_key is not None or track.explicit_board_key is not None:
+        return 1000.0 if board_key is not None and board_key == track.explicit_board_key else None
+
+    shared = len(track.observed_pairs & pairs)
+    smaller = min(len(track.observed_pairs), len(pairs))
+    if smaller == 0 or shared < min_shared_cards:
+        return None
+    ratio = shared / smaller
+    if ratio < min_overlap_ratio:
+        return None
+    return ratio + shared / 100.0
+
+
+def reconstruct_deals(
+    records: Iterable[Mapping[str, Any]],
+    *,
+    min_shared_cards: int = 4,
+    min_overlap_ratio: float = 0.60,
+) -> ReconstructionResult:
+    """Fuse frame observations into stable deals without time-only matching."""
+    if min_shared_cards < 1:
+        raise ValueError("min_shared_cards must be positive")
+    if not 0.0 < min_overlap_ratio <= 1.0:
+        raise ValueError("min_overlap_ratio outside (0,1]")
+
+    tracks: list[DealTrack] = []
+    review: list[dict[str, Any]] = []
+
+    for index, record in enumerate(records):
+        if not isinstance(record, Mapping):
+            raise MultiFrameError("frame record must be an object")
+        pairs = _pairs(record)
+        if not pairs:
+            review.append({"frame_index": index, "reason": "NO_CARD_EVIDENCE", "frame_file": record.get("frame_file")})
+            continue
+
+        matches: list[tuple[float, DealTrack]] = []
+        for track in tracks:
+            score = _score(track, record, min_shared_cards=min_shared_cards, min_overlap_ratio=min_overlap_ratio)
+            if score is not None:
+                matches.append((score, track))
+        matches.sort(key=lambda item: item[0], reverse=True)
+
+        if len(matches) >= 2 and abs(matches[0][0] - matches[1][0]) < 1e-12:
+            review.append({
+                "frame_index": index,
+                "reason": "AMBIGUOUS_DEAL_MATCH",
+                "candidate_deal_ids": [matches[0][1].deal_id, matches[1][1].deal_id],
+                "frame_file": record.get("frame_file"),
+            })
+            continue
+
+        if matches:
+            track = matches[0][1]
+            if _cross_seat_conflict(track.observed_pairs, pairs):
+                review.append({"frame_index": index, "reason": "CROSS_SEAT_CONFLICT", "deal_id": track.deal_id})
+                continue
+            track.observed_pairs |= pairs
+            track.frame_indices.append(index)
+            if record.get("frame_file"):
+                track.frame_files.append(str(record.get("frame_file")))
+            continue
+
+        # A new deal track may be created from explicit board identity or enough
+        # independent card evidence. Time is deliberately not consulted.
+        board_key = _explicit_board_key(record)
+        if board_key is None and len(pairs) < min_shared_cards:
+            review.append({"frame_index": index, "reason": "INSUFFICIENT_ANCHOR_EVIDENCE", "frame_file": record.get("frame_file")})
+            continue
+        anchor = _frame_identity(record)
+        deal_id = "deal-" + sha256(anchor.encode("utf-8")).hexdigest()[:16]
+        track = DealTrack(deal_id=deal_id, anchor_identity=anchor, explicit_board_key=board_key)
+        track.observed_pairs |= pairs
+        track.frame_indices.append(index)
+        if record.get("frame_file"):
+            track.frame_files.append(str(record.get("frame_file")))
+        tracks.append(track)
+
+    return ReconstructionResult(tuple(tracks), tuple(review))
+
+
+__all__ = ["MULTIFRAME_VERSION", "DealTrack", "MultiFrameError", "ReconstructionResult", "reconstruct_deals"]
