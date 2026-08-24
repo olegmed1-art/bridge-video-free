@@ -1,0 +1,85 @@
+name: Oracle SSH Probe
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-ssh-probe.yml'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: grep -F '/oracle probe-ssh' .github/workflows/oracle-ssh-probe.yml >/dev/null
+
+  probe:
+    if: ${{ github.event_name == 'issue_comment' && github.event.comment.user.login == 'olegmed1-art' && github.event.comment.body == '/oracle probe-ssh' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - name: Probe host fingerprint
+        id: host
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"; : > "$known"
+          ssh-keyscan -T 10 -t ed25519,ecdsa,rsa "$ORACLE_HOST" >> "$known" 2>/dev/null
+          sort -u -o "$known" "$known"
+          ssh-keygen -lf "$known" | awk '{print $2}' | grep -Fx "$EXPECTED_FINGERPRINT" >/dev/null
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Probe configured SSH secret
+        id: key
+        shell: bash
+        run: |
+          set -euo pipefail
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Probe SSH login
+        id: login
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.key.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.host.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'printf SSH_LOGIN_OK'
+
+      - name: Publish probe
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          HOST_OUTCOME: ${{ steps.host.outcome }}
+          KEY_OUTCOME: ${{ steps.key.outcome }}
+          LOGIN_OUTCOME: ${{ steps.login.outcome }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -f body="Oracle SSH probe: host=${HOST_OUTCOME}, key=${KEY_OUTCOME}, login=${LOGIN_OUTCOME}" >/dev/null
