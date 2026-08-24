@@ -1,0 +1,183 @@
+name: Oracle Operator v3
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-operator-v3.yml'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: oracle-operator-v3-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: |
+          set -euo pipefail
+          grep -F '/oracle-v3 rollout-worker' .github/workflows/oracle-operator-v3.yml >/dev/null
+          grep -F '/oracle-v3 rollout-ben' .github/workflows/oracle-operator-v3.yml >/dev/null
+          grep -F '127.0.0.1:8085:8085' .github/workflows/oracle-operator-v3.yml >/dev/null
+
+  operate:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.comment.user.login == 'olegmed1-art' &&
+      (github.event.comment.body == '/oracle-v3 rollout-worker' || github.event.comment.body == '/oracle-v3 rollout-ben')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+      COMMAND: ${{ github.event.comment.body }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Verify host and resolve usable SSH credential
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/oracle-v3"; mkdir -p "$work"
+          known="$work/known_hosts"; : > "$known"
+          for attempt in 1 2 3; do
+            ssh-keyscan -T 10 -t ed25519,ecdsa,rsa "$ORACLE_HOST" >> "$known" 2>/dev/null || true
+            [[ -s "$known" ]] && break
+            sleep $((attempt * 2))
+          done
+          sort -u -o "$known" "$known"
+          ssh-keygen -lf "$known" | awk '{print $2}' | grep -Fx "$EXPECTED_FINGERPRINT" >/dev/null
+
+          selected=''
+          selected_name=''
+          idx=0
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            raw="${!name:-}"
+            [[ -n "$raw" ]] || continue
+            idx=$((idx+1))
+            base="$work/key-$idx"
+            candidates=("$base.raw" "$base.crlf" "$base.escaped")
+            printf '%s\n' "$raw" > "${candidates[0]}"
+            tr -d '\r' < "${candidates[0]}" > "${candidates[1]}"
+            python - "$raw" "${candidates[2]}" <<'PY'
+import sys
+raw=sys.argv[1]
+path=sys.argv[2]
+if '\\n' in raw and '\n' not in raw:
+    raw=raw.replace('\\r','').replace('\\n','\n')
+with open(path,'w',newline='\n') as f:
+    f.write(raw)
+    if not raw.endswith('\n'):
+        f.write('\n')
+PY
+            for key in "${candidates[@]}"; do
+              chmod 0600 "$key"
+              ssh-keygen -y -f "$key" >/dev/null 2>&1 || continue
+              if ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+                   -o UserKnownHostsFile="$known" -o ConnectTimeout=10 "$ORACLE_USER@$ORACLE_HOST" true >/dev/null 2>&1; then
+                selected="$key"; selected_name="$name"; break 2
+              fi
+            done
+          done
+          [[ -n "$selected" ]]
+          cp "$selected" "$work/id_oracle"; chmod 0600 "$work/id_oracle"
+          echo "key=$work/id_oracle" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "selected_name=$selected_name" >> "$GITHUB_OUTPUT"
+
+      - name: Execute bounded operation
+        id: operate
+        shell: bash
+        run: |
+          set -euo pipefail
+          key='${{ steps.ssh.outputs.key }}'; known='${{ steps.ssh.outputs.known }}'
+          if [[ "$COMMAND" == '/oracle-v3 rollout-worker' ]]; then
+            ref="$(git rev-parse HEAD)"
+            ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+              "sudo -n env WORKER_GIT_REF='$ref' bash -s" <<'REMOTE'
+            set -Eeuo pipefail
+            repo=/opt/bridge-school/bridge-video-free
+            git -C "$repo" fetch --quiet origin "$WORKER_GIT_REF"
+            git -C "$repo" cat-file -e "$WORKER_GIT_REF^{commit}"
+            git -C "$repo" checkout --quiet --detach "$WORKER_GIT_REF"
+            /opt/bridge-school/assistant-lab/.venv/bin/python -m py_compile "$repo/assistant_lab/worker.py" "$repo/assistant_lab/ben_runtime.py" "$repo/assistant_lab/contract.py"
+            systemctl restart assistant-lab.service
+            sleep 3
+            systemctl is-active --quiet assistant-lab.service
+            curl -fsS --max-time 5 http://127.0.0.1:8080/readyz >/dev/null
+            REMOTE
+          else
+            ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n bash -s' <<'REMOTE'
+            set -Eeuo pipefail
+            command -v docker >/dev/null
+            systemctl is-active --quiet docker
+            docker pull ghcr.io/lorserker/ben:latest >/tmp/bridge-ben-pull.log
+            digest="$(docker image inspect ghcr.io/lorserker/ben:latest --format '{{index .RepoDigests 0}}')"
+            [[ "$digest" == ghcr.io/lorserker/ben@sha256:* ]]
+            cat >/etc/systemd/system/bridge-ben.service <<EOF
+            [Unit]
+            Description=Bridge BEN policy runtime
+            After=docker.service network-online.target
+            Requires=docker.service
+            [Service]
+            Type=simple
+            Restart=on-failure
+            RestartSec=3
+            ExecStartPre=-/usr/bin/docker rm -f bridge-ben
+            ExecStart=/usr/bin/docker run --rm --name bridge-ben -p 127.0.0.1:8085:8085 $digest
+            ExecStop=/usr/bin/docker stop -t 10 bridge-ben
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+            systemctl daemon-reload
+            systemctl enable --now bridge-ben.service
+            for attempt in $(seq 1 90); do
+              code="$(curl -sS -o /tmp/bridge-ben-ready.json -w '%{http_code}' --max-time 5 'http://127.0.0.1:8085/bid?hand=AK97543.K.T3.AK7&seat=S&dealer=N&vul=&ctx=----&details=true' || true)"
+              [[ "$code" == 200 ]] && break
+              sleep 2
+            done
+            [[ "${code:-}" == 200 ]]
+            ss -ltn | grep -Eq '127\.0\.0\.1:8085[[:space:]]'
+            ! ss -ltn | grep -Eq '(^|[[:space:]])0\.0\.0\.0:8085|\[::\]:8085'
+            systemctl restart assistant-lab.service
+            REMOTE
+          fi
+
+      - name: Publish result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          SSH_OUTCOME: ${{ steps.ssh.outcome }}
+          OPERATE_OUTCOME: ${{ steps.operate.outcome }}
+          COMMAND_VALUE: ${{ github.event.comment.body }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="Oracle v3 **${COMMAND_VALUE}**: ssh=${SSH_OUTCOME}, operation=${OPERATE_OUTCOME}" >/dev/null
