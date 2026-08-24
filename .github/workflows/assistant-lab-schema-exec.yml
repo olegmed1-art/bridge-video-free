@@ -46,8 +46,8 @@ jobs:
           pin="$(tr -d '\r\n' < assistant_lab/ORACLE_RUNTIME_PIN)"
           [[ "$pin" =~ ^[0-9a-f]{40}$ ]]
           grep -F "readonly RUNTIME_COMMIT='$pin'" ops/cloud_shell_activate_assistant_lab_stack.sh >/dev/null
-          grep -F "CANONICAL_LAUNCHER_COMMIT='ae1e77952bde2f8409e8ed2bb28014d2c3ffd57d'" ops/cloud_shell_activate_assistant_lab_observer.sh >/dev/null
-          grep -F "CANONICAL_LAUNCHER_COMMIT='ae1e77952bde2f8409e8ed2bb28014d2c3ffd57d'" ops/cloud_shell_activate_assistant_lab_control_bridge.sh >/dev/null
+          grep -F "CANONICAL_LAUNCHER_COMMIT='$pin'" ops/cloud_shell_activate_assistant_lab_observer.sh >/dev/null
+          grep -F "CANONICAL_LAUNCHER_COMMIT='$pin'" ops/cloud_shell_activate_assistant_lab_control_bridge.sh >/dev/null
           bash -n ops/cloud_shell_activate_assistant_lab_stack.sh
           bash -n ops/cloud_shell_activate_assistant_lab_observer.sh
           bash -n ops/cloud_shell_activate_assistant_lab_control_bridge.sh
