@@ -14,6 +14,8 @@ readonly PAYLOAD_BLOB_SHA1='bbf4dc5779726fca415f641b90d017a802daaabf'
 readonly REPOSITORY='olegmed1-art/bridge-video-free'
 readonly PAYLOAD_PATH='ops/oracle_universal_video_run_command.sh'
 readonly ISSUE_NUMBER='318'
+readonly MIN_AVAILABLE_MEMORY_BYTES=$((4 * 1024 * 1024 * 1024))
+readonly MIN_FREE_DISK_BYTES=$((6 * 1024 * 1024 * 1024))
 
 log() { printf '\n[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 die() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
@@ -22,7 +24,7 @@ usage() {
 Usage: bash cloud_shell_activate_universal_video.sh MODE
 
 MODE must be exactly one of:
-  probe      verify pinned host identity, SSH key, sudo, Assistant Lab and DDS3
+  probe      verify pinned host identity, SSH key, sudo, protected services and capacity
   status     read sidecar/Assistant Lab/DDS3 state without changing the host
   activate   install and start the sidecar; no video job and no synthetic smoke
   smoke      repeat idempotent activation and run one bounded 3-second synthetic job
@@ -117,6 +119,52 @@ echo ORACLE_UNIVERSAL_VIDEO_READ_ONLY_STATUS_PASS
 REMOTE_STATUS
 }
 
+optional_resident_states() {
+  ssh "${SSH_OPTIONS[@]}" "$ORACLE_USER@$ORACLE_HOST" 'bash -s' <<'REMOTE_OPTIONAL'
+set -Eeuo pipefail
+for service in assistant-lab-observer.service assistant-lab-control.service; do
+  load="$(sudo -n systemctl show "$service" -p LoadState --value 2>/dev/null || true)"
+  active="$(sudo -n systemctl is-active "$service" 2>/dev/null || true)"
+  enabled="$(sudo -n systemctl is-enabled "$service" 2>/dev/null || true)"
+  [[ -n "$load" ]] || load='not-found'
+  [[ -n "$active" ]] || active='unknown'
+  [[ -n "$enabled" ]] || enabled='unknown'
+  printf '%s|load=%s|active=%s|enabled=%s\n' "$service" "$load" "$active" "$enabled"
+done
+REMOTE_OPTIONAL
+}
+
+host_resource_gate() {
+  ssh "${SSH_OPTIONS[@]}" "$ORACLE_USER@$ORACLE_HOST" \
+    "sudo -n env MIN_AVAILABLE_MEMORY_BYTES='$MIN_AVAILABLE_MEMORY_BYTES' MIN_FREE_DISK_BYTES='$MIN_FREE_DISK_BYTES' python3 -" <<'PY'
+import os
+import shutil
+from pathlib import Path
+
+mem_available_kib = 0
+for line in Path('/proc/meminfo').read_text(encoding='utf-8').splitlines():
+    if line.startswith('MemAvailable:'):
+        mem_available_kib = int(line.split()[1])
+        break
+mem_available = mem_available_kib * 1024
+mount = '/opt' if Path('/opt').exists() else '/'
+free_disk = shutil.disk_usage(mount).free
+cpus = os.cpu_count() or 1
+load1 = os.getloadavg()[0]
+min_mem = int(os.environ['MIN_AVAILABLE_MEMORY_BYTES'])
+min_disk = int(os.environ['MIN_FREE_DISK_BYTES'])
+max_load = max(4.0, cpus * 1.5)
+print(f'host_capacity_cpus={cpus}')
+print(f'host_capacity_load1={load1:.2f}')
+print(f'host_capacity_mem_available_bytes={mem_available}')
+print(f'host_capacity_disk_free_bytes={free_disk}')
+assert mem_available >= min_mem, f'insufficient available memory: {mem_available} < {min_mem}'
+assert free_disk >= min_disk, f'insufficient free disk: {free_disk} < {min_disk}'
+assert load1 <= max_load, f'host load too high for bootstrap: {load1:.2f} > {max_load:.2f}'
+print('ORACLE_UNIVERSAL_VIDEO_RESOURCE_GATE_PASS')
+PY
+}
+
 external_dds3_check() {
   local ready_json
   ready_json="$(curl -fsS --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 20 \
@@ -133,9 +181,11 @@ PY
 }
 
 probe_control_path() {
-  log 'Probe the fixed SSH/sudo control path and protected services'
+  log 'Probe the fixed SSH/sudo control path, protected services and host capacity'
   ssh "${SSH_OPTIONS[@]}" "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
   remote_read_only_status
+  optional_resident_states
+  host_resource_gate
   echo ORACLE_UNIVERSAL_VIDEO_CLOUD_SHELL_PROBE_PASS
 }
 
@@ -164,6 +214,8 @@ activate_sidecar() {
 
   grep -Fx 'UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS' "$output_log" >/dev/null \
     || die "remote activation completion marker is missing"
+  grep -Fx "source_commit=$RUNTIME_COMMIT" "$output_log" >/dev/null \
+    || die "remote source commit does not match the pinned runtime"
   grep -F 'assistant_lab=active' "$output_log" >/dev/null \
     || die "Assistant Lab acceptance marker is missing"
   grep -F 'universal_video_enabled=enabled' "$output_log" >/dev/null \
@@ -183,6 +235,20 @@ activate_sidecar() {
   [[ "$smoke" == '0' ]] || echo ORACLE_UNIVERSAL_VIDEO_CLOUD_SHELL_SMOKE_PASS
 }
 
+activate_sidecar_protected() {
+  local smoke="$1"
+  local before_optional after_optional
+  before_optional="$(optional_resident_states)"
+  activate_sidecar "$smoke"
+  after_optional="$(optional_resident_states)"
+  if [[ "$before_optional" != "$after_optional" ]]; then
+    printf 'optional_resident_before:\n%s\noptional_resident_after:\n%s\n' "$before_optional" "$after_optional" >&2
+    die "optional Assistant Lab resident service state changed"
+  fi
+  printf '%s\n' "$after_optional"
+  echo ORACLE_OPTIONAL_RESIDENT_SERVICES_NONREGRESSION_PASS
+}
+
 status_gate() {
   log 'Read Universal Video, Assistant Lab and DDS3 status'
   local status_output
@@ -194,6 +260,7 @@ status_gate() {
     || die "Universal Video is not enabled"
   grep -F 'universal_video_active=active' <<<"$status_output" >/dev/null \
     || die "Universal Video is not active"
+  optional_resident_states
   external_dds3_check
   echo ORACLE_UNIVERSAL_VIDEO_CLOUD_SHELL_STATUS_PASS
 }
@@ -238,6 +305,20 @@ deadline=$((SECONDS + 300))
 while (( SECONDS < deadline )); do
   if [[ -f "$done_file" ]]; then
     cat "$done_file"
+    RESULT_FILE="$done_file" python3 - <<'PY'
+import json, os
+from pathlib import Path
+x=json.loads(Path(os.environ['RESULT_FILE']).read_text(encoding='utf-8'))
+assert x.get('status') == 'REVIEW', x
+assert x.get('profile') == 'transcript_only', x
+assert x.get('project') == 'infrastructure-smoke', x
+assert (x.get('metadata') or {}).get('synthetic') is True, x
+transcript=x.get('transcript') or {}
+assert transcript.get('qc_pass') is False, x
+media=x.get('media') or {}
+assert 0 < float(media.get('duration_seconds') or 0) <= 10, x
+print('UNIVERSAL_VIDEO_SYNTHETIC_RESULT_CONTRACT_PASS')
+PY
     echo UNIVERSAL_VIDEO_SYNTHETIC_SMOKE_PASS
     break
   fi
@@ -263,6 +344,8 @@ PY
 REMOTE_SMOKE
 )"
   printf '%s\n' "$smoke_output"
+  grep -F 'UNIVERSAL_VIDEO_SYNTHETIC_RESULT_CONTRACT_PASS' <<<"$smoke_output" >/dev/null \
+    || die "synthetic result contract marker is missing"
   grep -F 'UNIVERSAL_VIDEO_SYNTHETIC_SMOKE_PASS' <<<"$smoke_output" >/dev/null \
     || die "bounded synthetic smoke marker is missing"
   grep -F 'DDS3_AFTER_SYNTHETIC_SMOKE_PASS' <<<"$smoke_output" >/dev/null \
@@ -270,6 +353,19 @@ REMOTE_SMOKE
   remote_read_only_status
   external_dds3_check
   echo ORACLE_UNIVERSAL_VIDEO_CLOUD_SHELL_SMOKE_PASS
+}
+
+run_synthetic_smoke_protected() {
+  local before_optional after_optional
+  before_optional="$(optional_resident_states)"
+  run_synthetic_smoke_only
+  after_optional="$(optional_resident_states)"
+  if [[ "$before_optional" != "$after_optional" ]]; then
+    printf 'optional_resident_before:\n%s\noptional_resident_after:\n%s\n' "$before_optional" "$after_optional" >&2
+    die "optional Assistant Lab resident service state changed during smoke"
+  fi
+  printf '%s\n' "$after_optional"
+  echo ORACLE_OPTIONAL_RESIDENT_SERVICES_POST_SMOKE_PASS
 }
 
 case "$MODE" in
@@ -280,17 +376,19 @@ case "$MODE" in
     status_gate
     ;;
   activate)
-    activate_sidecar 0
+    host_resource_gate
+    activate_sidecar_protected 0
     ;;
   smoke)
-    activate_sidecar 1
+    host_resource_gate
+    activate_sidecar_protected 1
     ;;
   bootstrap)
     log 'Begin fail-closed one-step Universal Video bootstrap'
     probe_control_path
-    activate_sidecar 0
+    activate_sidecar_protected 0
     status_gate
-    run_synthetic_smoke_only
+    run_synthetic_smoke_protected
     echo ORACLE_UNIVERSAL_VIDEO_CLOUD_SHELL_BOOTSTRAP_PASS
     ;;
 esac
