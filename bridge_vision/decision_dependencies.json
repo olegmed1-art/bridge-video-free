@@ -1,0 +1,17 @@
+{
+  "schema": "bridge-decision-dependencies-v1",
+  "dependencies": {
+    "faster_whisper": {
+      "kind": "model",
+      "policy": "Allowed only as raw ASR base. Bridge semantics, corrections and canonical facts must be produced by school-owned post-processing and evidence rules."
+    },
+    "google": {
+      "kind": "infrastructure",
+      "policy": "Authentication and Google Drive transport only; must not make bridge-content decisions."
+    },
+    "requests": {
+      "kind": "infrastructure",
+      "policy": "HTTP transport only; must not make bridge-content decisions."
+    }
+  }
+}
