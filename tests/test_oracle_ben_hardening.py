@@ -40,6 +40,7 @@ def test_ben_runtime_is_resource_bounded_and_has_watchdog():
         "--security-opt=no-new-privileges:true",
         "--pids-limit=256",
         "--memory=6g",
+        "--tmpfs /logs:rw,nosuid,nodev,noexec,size=64m",
         "127.0.0.1:8085:8085",
         "bridge-ben-healthcheck.timer",
     ):
