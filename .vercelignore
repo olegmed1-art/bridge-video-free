@@ -2,6 +2,7 @@
 !app.py
 !bridge_school_api
 !bridge_contracts
+!assistant_lab
 !pyproject.toml
 !.python-version
 !.vercelignore
