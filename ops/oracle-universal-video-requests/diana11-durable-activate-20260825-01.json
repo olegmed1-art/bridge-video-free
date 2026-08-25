@@ -1,0 +1,9 @@
+{
+  "request_id": "diana11-durable-activate-20260825-01",
+  "mode": "activate",
+  "git_ref": "dec203171812e5b8ac5774a1a005cde7ce922f76",
+  "expected_host_fingerprint": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}
