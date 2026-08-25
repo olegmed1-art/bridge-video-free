@@ -1,0 +1,98 @@
+name: Tournament Analyzer v3 Real Evidence
+
+on:
+  pull_request:
+    paths:
+      - "bridge_school_api/tournament_real_sources_v3.py"
+      - "tools/tournament_real_longitudinal_v3.py"
+      - "tests/test_tournament_real_sources_v3.py"
+      - "data/tournaments/tournament_30041_round2_diana_facts_v1.json"
+      - ".github/workflows/tournament-analyzer-v3-real-evidence.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  real-evidence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Compile real evidence layer
+        run: |
+          python -m py_compile bridge_school_api/tournament_real_sources_v3.py
+          python -m py_compile tools/tournament_real_longitudinal_v3.py
+      - name: Run v3 core, stage2, and real-source contracts
+        run: |
+          python -m pytest -q \
+            tests/test_tournament_analyzer_v3.py \
+            tests/test_tournament_analyzer_v3_stage2.py \
+            tests/test_tournament_real_sources_v3.py
+      - name: Restore exact historical DDS3 evidence artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/30041 evidence/29912
+          curl -fsSL --retry 3 \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/9463631738/zip" \
+            -o /tmp/30041.zip
+          curl -fsSL --retry 3 \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/9471054929/zip" \
+            -o /tmp/29912.zip
+          unzip -q /tmp/30041.zip -d evidence/30041
+          unzip -q /tmp/29912.zip -d evidence/29912
+          test -n "$(find evidence/30041 -type f -name 'diana-30041-round2-dds3.json' -print -quit)"
+          test -n "$(find evidence/29912 -type f -name 'diana-29912-cross-session-dds3.json' -print -quit)"
+      - name: Build first real longitudinal report
+        run: |
+          set -euo pipefail
+          DDS30041="$(find evidence/30041 -type f -name 'diana-30041-round2-dds3.json' -print -quit)"
+          DDS29912="$(find evidence/29912 -type f -name 'diana-29912-cross-session-dds3.json' -print -quit)"
+          python tools/tournament_real_longitudinal_v3.py \
+            --facts-30041 data/tournaments/tournament_30041_round2_diana_facts_v1.json \
+            --dds3-30041 "$DDS30041" \
+            --dds3-29912 "$DDS29912" \
+            --out-json tournament-longitudinal-real-evidence.json \
+            --out-md tournament-longitudinal-real-evidence.md
+      - name: Real evidence gate
+        run: |
+          python - <<'PY'
+          import json
+          p=json.load(open('tournament-longitudinal-real-evidence.json', encoding='utf-8'))
+          assert p['schema']=='tournament-longitudinal-real-evidence-v1'
+          assert set(p['events'])=={'29912','30041'}
+          assert p['sources']['30041']['deals']==24
+          assert p['sources']['30041']['played_contracts_compared']==21
+          assert p['sources']['29912']['deals']==100
+          assert p['sources']['29912']['decision_analyzable_boards']==99
+          assert [(x['round'],x['board']) for x in p['sources']['29912']['source_inconsistencies']]==[(1,5)]
+          all_findings=[f for e in p['events'].values() for f in e['findings']]
+          forbidden={'SYSTEM_RULE','MODEL_OPINION'}
+          assert not any(ev['kind'] in forbidden for f in all_findings for ev in f['evidence'])
+          persistent={c['repeat_key']:c for c in p['longitudinal']['persistent']}
+          assert 'DDS3_PAIR_SAME_CONTRACT_DELTA_V1' in persistent
+          assert persistent['DDS3_PAIR_SAME_CONTRACT_DELTA_V1']['tournament_count']==2
+          assert not any(f['deal_id']=='29912:round-1:5' for f in all_findings)
+          print('TOURNAMENT_REAL_EVIDENCE_PASS', len(all_findings), persistent['DDS3_PAIR_SAME_CONTRACT_DELTA_V1'])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tournament-analyzer-v3-first-longitudinal
+          path: |
+            tournament-longitudinal-real-evidence.json
+            tournament-longitudinal-real-evidence.md
+          if-no-files-found: error
+          retention-days: 30
