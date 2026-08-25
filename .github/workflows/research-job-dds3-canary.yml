@@ -1,0 +1,228 @@
+name: ResearchJob DDS3 idempotency canary
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/research-job-dds3-canary.yml'
+      - 'assistant_lab/research_*.py'
+      - 'assistant_lab/research_schema.sql'
+      - 'bridge_contracts/assistant_lab.py'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: research-job-dds3-canary-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Verify canary contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" .github/workflows/research-job-dds3-canary.yml
+          grep -F '/research-job canary-dds3-idempotency' .github/workflows/research-job-dds3-canary.yml >/dev/null
+          grep -F 'environment: database-production' .github/workflows/research-job-dds3-canary.yml >/dev/null
+          grep -F 'engine") == "DDS3"' .github/workflows/research-job-dds3-canary.yml >/dev/null
+          grep -F 'fallback_used") is False' .github/workflows/research-job-dds3-canary.yml >/dev/null
+          grep -F 'child["attempts"] != 1' .github/workflows/research-job-dds3-canary.yml >/dev/null
+          grep -F 'second["research_id"] != first["research_id"]' .github/workflows/research-job-dds3-canary.yml >/dev/null
+          python -m py_compile assistant_lab/research_pipeline.py assistant_lab/research_runtime.py
+
+  canary:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.comment.user.login == 'olegmed1-art' &&
+      github.event.comment.body == '/research-job canary-dds3-idempotency'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: database-production
+    env:
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Install PostgreSQL Python client
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${DATABASE_URL:-}"
+          python -m pip install --disable-pip-version-check --no-input --quiet 'psycopg[binary]==3.3.4'
+
+      - name: Allow migration principal to assume app role for bounded canary
+        id: canary_role
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import psycopg
+
+          with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as conn:
+              with conn.cursor() as cur:
+                  cur.execute("SELECT session_user")
+                  executor = cur.fetchone()[0]
+                  cur.execute(f'GRANT bridge_school_app TO "{executor.replace(chr(34), chr(34) * 2)}"')
+          PY
+
+      - name: Run known DDS3 ResearchJob and prove replay idempotency
+        id: canary
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import time
+
+          import psycopg
+          from psycopg.rows import dict_row
+
+          from assistant_lab.research_pipeline import verify_artifact_manifest
+          from assistant_lab.research_runtime import enqueue, finalize
+
+          payload = {
+              "operation": "dd_table",
+              "pbn": "N:QJ6.K652.J85.T98 873.J97.AT764.Q4 K5.T83.KQ9.A7652 AT942.AQ4.32.KJ3",
+              "dealer": "N",
+              "vulnerability": "None",
+          }
+          expected_table = {
+              "S": [7, 6, 7, 6],
+              "H": [8, 5, 8, 5],
+              "D": [6, 7, 6, 7],
+              "C": [8, 5, 8, 5],
+              "NT": [7, 6, 7, 6],
+          }
+
+          with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row) as conn:
+              conn.execute("SET ROLE bridge_school_app")
+              conn.commit()
+
+              first = enqueue(conn, kind="DDS3", payload=payload, source="GITHUB_DDS3_RESEARCH_CANARY", priority=10)
+              second = enqueue(conn, kind="DDS3", payload=payload, source="GITHUB_DDS3_RESEARCH_CANARY_REPLAY", priority=10)
+              if second["research_id"] != first["research_id"]:
+                  raise RuntimeError("ResearchJob replay created a duplicate research envelope")
+              if second["child_job_id"] != first["child_job_id"]:
+                  raise RuntimeError("ResearchJob replay created duplicate DDS3 compute")
+
+              deadline = time.monotonic() + 240
+              research = first
+              while True:
+                  research = finalize(conn, str(first["research_id"]))
+                  if research["stage"] in {"COMPLETED", "FAILED", "CANCELLED"}:
+                      break
+                  if time.monotonic() >= deadline:
+                      raise TimeoutError("DDS3 ResearchJob canary did not reach a terminal state")
+                  time.sleep(2)
+
+              if research["stage"] != "COMPLETED":
+                  raise RuntimeError(f"DDS3 ResearchJob ended with {research['stage']}: {research.get('error_text')}")
+
+              third = enqueue(conn, kind="DDS3", payload=payload, source="GITHUB_DDS3_RESEARCH_CANARY_POST_COMPLETION_REPLAY", priority=10)
+              if third["research_id"] != first["research_id"] or third["child_job_id"] != first["child_job_id"]:
+                  raise RuntimeError("post-completion replay broke ResearchJob idempotency")
+
+              artifact = verify_artifact_manifest(research["artifact_json"])
+              validation = dict(research["validation_json"] or {})
+              provenance = dict(research["provenance_json"] or {})
+              methodical = dict(research["methodical_json"] or {})
+              compute = dict(artifact.get("compute_result") or {})
+
+              if not (
+                  validation.get("validated") is True
+                  and validation.get("kind") == "DDS3"
+                  and validation.get("engine") == "DDS3"
+                  and validation.get("fallback_used") is False
+                  and validation.get("evidence_class") == "DDS"
+              ):
+                  raise RuntimeError("DDS3 ResearchJob validation boundary mismatch")
+              if not (
+                  provenance.get("worker_id") == "oracle-assistant-lab-1"
+                  and provenance.get("execution_path") == "oracle_local_dds3"
+              ):
+                  raise RuntimeError("DDS3 ResearchJob Oracle provenance mismatch")
+              if compute.get("engine") != "DDS3" or compute.get("fallback_used") is not False:
+                  raise RuntimeError("artifact does not contain proven DDS3 evidence")
+              if compute.get("par_score_ns") != -110 or compute.get("dd_table") != expected_table:
+                  raise RuntimeError("known DDS3 golden result mismatch")
+              if not (
+                  research["canonical_promotion"] is False
+                  and research["artifact_sha256"] == artifact["sha256"]
+                  and methodical.get("canonical_promotion") is False
+                  and methodical.get("evidence_sha256") == artifact["sha256"]
+              ):
+                  raise RuntimeError("DDS3 artifact/methodical binding mismatch")
+
+              conn.execute("RESET ROLE")
+              conn.commit()
+              child = conn.execute(
+                  "SELECT attempts, claimed_by, status FROM assistant_lab.job WHERE job_id=%s",
+                  (research["child_job_id"],),
+              ).fetchone()
+              if child is None or child["status"] != "COMPLETED":
+                  raise RuntimeError("DDS3 child evidence is missing or non-terminal")
+              if child["attempts"] != 1:
+                  raise RuntimeError(f"DDS3 child executed {child['attempts']} times; expected exactly one")
+              if child["claimed_by"] != "oracle-assistant-lab-1":
+                  raise RuntimeError("DDS3 child was not processed by the Oracle resident worker")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"research_id={research['research_id']}\n")
+              output.write(f"child_job_id={research['child_job_id']}\n")
+              output.write(f"artifact_sha256={research['artifact_sha256']}\n")
+
+          print(
+              "RESEARCH_JOB_DDS3_IDEMPOTENCY_PASS "
+              f"research_id={research['research_id']} child_job_id={research['child_job_id']} "
+              f"artifact_sha256={research['artifact_sha256']} attempts=1 engine=DDS3 fallback_used=false"
+          )
+          PY
+
+      - name: Remove temporary app-role membership
+        if: ${{ always() && steps.canary_role.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import psycopg
+
+          with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as conn:
+              with conn.cursor() as cur:
+                  cur.execute("SELECT session_user")
+                  executor = cur.fetchone()[0]
+                  cur.execute(f'REVOKE bridge_school_app FROM "{executor.replace(chr(34), chr(34) * 2)}"')
+                  cur.execute("SELECT NOT pg_has_role(session_user, 'bridge_school_app', 'SET')")
+                  if cur.fetchone()[0] is not True:
+                      raise RuntimeError("temporary app-role membership was not removed")
+          PY
+
+      - name: Publish result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          CANARY_OUTCOME: ${{ steps.canary.outcome }}
+          RESEARCH_ID: ${{ steps.canary.outputs.research_id }}
+          CHILD_JOB_ID: ${{ steps.canary.outputs.child_job_id }}
+          ARTIFACT_SHA256: ${{ steps.canary.outputs.artifact_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="ResearchJob DDS3 idempotency canary: canary=${CANARY_OUTCOME}, research_id=${RESEARCH_ID:-none}, child_job_id=${CHILD_JOB_ID:-none}, artifact_sha256=${ARTIFACT_SHA256:-none}, engine=DDS3, fallback_used=false, canonical_promotion=false" >/dev/null
