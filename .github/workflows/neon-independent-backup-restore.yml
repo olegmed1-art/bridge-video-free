@@ -6,6 +6,11 @@ on:
       - '.github/workflows/neon-independent-backup-restore.yml'
       - 'tests/test_neon_independent_backup_contract.py'
       - 'ops/reliability/NEON_INDEPENDENT_BACKUP_V1.md'
+  push:
+    branches:
+      - 'recovery/neon-backup-restore-run'
+    paths:
+      - 'ops/reliability/neon-backup-restore-trigger.txt'
   schedule:
     - cron: '17 2 * * *'
   issue_comment:
@@ -37,6 +42,7 @@ jobs:
   backup:
     if: >-
       github.event_name == 'schedule' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/recovery/neon-backup-restore-run') ||
       (github.event_name == 'issue_comment' &&
        github.event.comment.user.login == 'olegmed1-art' &&
        github.event.comment.body == '/recovery neon-backup-restore')
