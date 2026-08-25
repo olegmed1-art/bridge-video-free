@@ -27,6 +27,7 @@ EXPECTED_JOB_HASH = "a43e11beb0765aa91551d4c4a69767f02c4dcb3b5e485cd5bb0f2996e73
 RUNTIME_ENV = Path("/opt/bridge-school/universal-video/universal-video.env")
 SOURCE_DIR = Path("/opt/bridge-school/universal-video-src")
 SPOOL_ROOT = Path("/opt/bridge-school/universal-video/spool")
+DEFAULT_WHISPER_MODEL = "small"
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 
 JOB_PAYLOAD: dict[str, Any] = {
@@ -62,9 +63,20 @@ def parse_env(path: Path) -> dict[str, str]:
         if "=" not in line:
             raise RuntimeError("invalid runtime environment line")
         key, value = line.split("=", 1)
-        if key in {"UNIVERSAL_VIDEO_SOURCE_COMMIT", "UNIVERSAL_VIDEO_WHISPER_MODEL"}:
+        if key in {"UNIVERSAL_VIDEO_SOURCE_COMMIT", "UNIVERSAL_VIDEO_WHISPER_MODEL", "WHISPER_MODEL"}:
             values[key] = value.strip()
     return values
+
+
+def runtime_model(env: dict[str, str]) -> str:
+    # Match universal_video.runner._whisper_model_name() exactly: explicit
+    # UNIVERSAL_VIDEO_WHISPER_MODEL, then WHISPER_MODEL, then the literal
+    # runtime default "small".
+    return (
+        env.get("UNIVERSAL_VIDEO_WHISPER_MODEL", "").strip()
+        or env.get("WHISPER_MODEL", "").strip()
+        or DEFAULT_WHISPER_MODEL
+    )
 
 
 def git_text(source_dir: Path, *args: str) -> str:
@@ -98,11 +110,11 @@ def run_preflight(runtime_env: Path, source_dir: Path, spool_root: Path) -> list
 
     env = parse_env(runtime_env)
     revision = env.get("UNIVERSAL_VIDEO_SOURCE_COMMIT", "")
-    model = env.get("UNIVERSAL_VIDEO_WHISPER_MODEL", "")
+    model = runtime_model(env)
     if not HEX40.fullmatch(revision):
         raise RuntimeError("runtime processing revision is not pinned")
     if not model or len(model) > 80 or any(ch.isspace() for ch in model):
-        raise RuntimeError("runtime Whisper model is not pinned")
+        raise RuntimeError("runtime Whisper model is invalid")
 
     head = git_text(source_dir, "rev-parse", "HEAD")
     if head != revision:
