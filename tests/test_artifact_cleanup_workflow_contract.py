@@ -6,7 +6,7 @@ text = p.read_text(encoding='utf-8')
 
 required = [
     'schedule:',
-    "cron: '47 */3 * * *'",
+    "cron: '47 */6 * * *'",
     'pull_request:',
     "if: github.event_name != 'pull_request'",
     'actions: write',
@@ -43,9 +43,7 @@ for forbidden in [
 ]:
     assert forbidden not in text, forbidden
 
-# Pull requests receive no database secret because the cleanup job is skipped.
 assert text.index("if: github.event_name != 'pull_request'") < text.index('BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}')
-# Owner identity checks must remain in manual workflow_dispatch handling, not push handling.
 push_block = text[text.index('push)'):text.index('workflow_dispatch)')]
 assert 'GITHUB_ACTOR' not in push_block
 assert 'GITHUB_TRIGGERING_ACTOR' not in push_block
