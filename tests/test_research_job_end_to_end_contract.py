@@ -15,3 +15,25 @@ def test_artifact_checksum_and_methodical_derivative_are_bound():
     assert verify_artifact_manifest(artifact)["sha256"]==artifact["sha256"]
     result=build_methodical_result(research_id="r-1",artifact_manifest=artifact)
     assert result["canonical_promotion"] is False
+
+
+def test_research_runtime_supports_all_resident_compute_kinds_and_validates_before_completion():
+    from pathlib import Path
+
+    runtime = Path("assistant_lab/research_runtime.py").read_text(encoding="utf-8")
+    assert "ResearchKind.WORLDS" in runtime
+    assert "ResearchStage.VALIDATING" in runtime
+    assert "artifact_sha256=%s" in runtime
+    assert "canonical_promotion=false" not in runtime
+
+
+def test_research_schema_is_rpc_only_and_terminal_evidence_is_immutable():
+    from pathlib import Path
+
+    schema = Path("assistant_lab/research_schema.sql").read_text(encoding="utf-8")
+    assert "SECURITY DEFINER" in schema
+    assert "SET search_path = pg_catalog, assistant_lab" in schema
+    assert "REVOKE ALL ON assistant_lab.research_job FROM bridge_school_app" in schema
+    assert "GRANT UPDATE (" in schema
+    assert "terminal ResearchJob rows are immutable" in schema
+    assert "GRANT SELECT,INSERT,UPDATE" not in schema
