@@ -12,6 +12,8 @@ import oracle_mass_dispatch as base
 
 PILOT_DEALS = 10_000
 PILOT_TRAIN_TASKS = 14_000
+PILOT_SCOPE = "pilot_train"
+PILOT_COMMAND = "/dds3-pilot10k start"
 
 
 def _count_jsonl(path: Path, *, split: str | None = None) -> int:
@@ -52,6 +54,36 @@ def _safe_log_tail(path: Path, *, lines: int = 40, max_chars: int = 6000) -> lis
     return safe
 
 
+def _authorization(req: dict, state_root: Path) -> tuple[Path, str, dict[str, str]]:
+    auth = req.get("authorization")
+    if not isinstance(auth, dict):
+        raise SystemExit("FAIL_CLOSED: Pilot-10k requires one-time launch authorization")
+    if auth.get("scope") != PILOT_SCOPE:
+        raise SystemExit("FAIL_CLOSED: Pilot-10k authorization scope must be pilot_train")
+    if auth.get("event_name") != "issue_comment" or auth.get("command") != PILOT_COMMAND:
+        raise SystemExit("FAIL_CLOSED: Pilot-10k authorization must come from the exact owner start command")
+    if auth.get("actor") != "olegmed1-art" or auth.get("triggering_actor") != "olegmed1-art":
+        raise SystemExit("FAIL_CLOSED: Pilot-10k authorization actor mismatch")
+    receipt = base._resolve_existing(str(auth.get("receipt_path", "")), kind="authorization receipt", allowed_root=state_root)
+    nonce = str(auth.get("nonce", ""))
+    if len(nonce) < 32 or len(nonce) > 128 or not re.fullmatch(r"[A-Za-z0-9_-]+", nonce):
+        raise SystemExit("FAIL_CLOSED: invalid Pilot-10k authorization nonce")
+    metadata = {
+        "GITHUB_REPOSITORY": str(auth.get("repository", "")),
+        "GITHUB_REF_NAME": str(auth.get("ref_name", "")),
+        "GITHUB_SHA": str(auth.get("commit_sha", "")),
+        "GITHUB_ACTOR": str(auth.get("actor", "")),
+        "GITHUB_TRIGGERING_ACTOR": str(auth.get("triggering_actor", "")),
+        "GITHUB_EVENT_NAME": str(auth.get("event_name", "")),
+        "DDS_AUTHORIZATION_COMMAND": str(auth.get("command", "")),
+    }
+    if not metadata["GITHUB_REPOSITORY"] or not metadata["GITHUB_REF_NAME"]:
+        raise SystemExit("FAIL_CLOSED: incomplete Pilot-10k authorization metadata")
+    if not re.fullmatch(r"[0-9a-f]{40}", metadata["GITHUB_SHA"]):
+        raise SystemExit("FAIL_CLOSED: invalid authorized runtime commit")
+    return receipt, nonce, metadata
+
+
 def run_pilot(state_root: Path, repo_root: Path) -> int:
     target = PILOT_DEALS
     state_root = state_root.resolve()
@@ -89,16 +121,24 @@ def run_pilot(state_root: Path, repo_root: Path) -> int:
     if not run_id or len(run_id) > 128 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_." for c in run_id):
         raise SystemExit("FAIL_CLOSED: invalid run_id")
 
-    script = repo_root / "dds_training" / "run_stage.py"
+    receipt, nonce, auth_env = _authorization(req, state_root)
+    wrapper = repo_root / "dds_training" / "authorized_run_stage.py"
+    if not wrapper.is_file():
+        raise SystemExit("FAIL_CLOSED: authorized_run_stage.py is missing")
+    consume_dir = state_root / "authorization-consumed"
     argv = [
-        sys.executable, str(script), "evaluate",
+        sys.executable, str(wrapper),
+        "--receipt", str(receipt),
+        "--nonce", nonce,
+        "--scope", PILOT_SCOPE,
+        "--manifest", str(tasks),
+        "--consume-dir", str(consume_dir),
         "--stage", "pilot",
         "--work", str(work),
         "--predictions", str(predictions),
-        "--splits", "train",
         "--run-id", run_id,
         "--tasks-file", str(tasks),
-        "--start",
+        "--no-generate-followups",
     ]
     evidence_path = state_root / "evidence" / "10000.json"
     log_path = state_root / "logs" / "10000.log"
@@ -107,7 +147,8 @@ def run_pilot(state_root: Path, repo_root: Path) -> int:
         "target": target,
         "phase": "train",
         "status": "running",
-        "authority": "EVIDENCE_ONLY",
+        "authority": "ONE_TIME_AUTHORIZED_WRAPPER",
+        "authorization_event": auth_env["GITHUB_EVENT_NAME"],
         "compute_plane": "oracle",
         "compute_host": socket.gethostname(),
         "engine": "DDS3",
@@ -120,7 +161,7 @@ def run_pilot(state_root: Path, repo_root: Path) -> int:
     }
     base._write_evidence(evidence_path, base_evidence)
     env = os.environ.copy()
-    env["DDS_TRAINING_CONFIRM"] = "YES"
+    env.update(auth_env)
     env["BRIDGE_SCHOOL_COMPUTE_PLANE"] = "oracle"
     env["BRIDGE_SCHOOL_DDS3_FALLBACK_ALLOWED"] = "0"
     log_path.parent.mkdir(parents=True, exist_ok=True)
