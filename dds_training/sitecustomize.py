@@ -7,6 +7,11 @@ supplies runtime-coverage environment variables, coverage collection is enabled
 before application imports. Separately, before ``run_stage.py`` can load, the
 launch guard rejects any ``evaluate --start`` invocation that was not created by
 ``authorized_run_stage.py`` after consuming a one-time receipt.
+
+Normal mass DDS execution remains workflow_dispatch-only. The only additional
+accepted event is the owner-only, one-time-authorized Pilot-10k operator command
+``/dds3-pilot10k start`` with scope ``pilot_train``. The same consumed-receipt
+marker, commit binding and internal confirmation checks still apply below.
 """
 
 import json
@@ -17,6 +22,9 @@ from pathlib import Path
 from coverage_runtime import activate_from_environment
 
 EXIT_UNAUTHORIZED_DDS = 86
+PILOT_SCOPE = "pilot_train"
+PILOT_COMMAND = "/dds3-pilot10k start"
+PILOT_OWNER = "olegmed1-art"
 
 
 def _is_mass_evaluate(argv: list[str]) -> bool:
@@ -32,13 +40,27 @@ def _fail(detail: str) -> None:
     os._exit(EXIT_UNAUTHORIZED_DDS)
 
 
+def _event_is_authorized() -> bool:
+    event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+    if event_name == "workflow_dispatch":
+        return True
+    if event_name != "issue_comment":
+        return False
+    return (
+        os.environ.get("DDS_LAUNCH_SCOPE") == PILOT_SCOPE
+        and os.environ.get("DDS_AUTHORIZATION_COMMAND") == PILOT_COMMAND
+        and os.environ.get("GITHUB_ACTOR") == PILOT_OWNER
+        and os.environ.get("GITHUB_TRIGGERING_ACTOR") == PILOT_OWNER
+    )
+
+
 def _guard() -> None:
     if not _is_mass_evaluate(sys.argv):
         return
     if os.environ.get("DDS_AUTHORIZED_LAUNCH") != "YES":
         _fail("DDS_AUTHORIZED_LAUNCH=YES was not supplied by the authorization wrapper")
-    if os.environ.get("GITHUB_EVENT_NAME") != "workflow_dispatch":
-        _fail("mass DDS execution is restricted to workflow_dispatch")
+    if not _event_is_authorized():
+        _fail("mass DDS execution requires workflow_dispatch or the exact authorized owner Pilot-10k command")
     receipt_id = os.environ.get("DDS_LAUNCH_RECEIPT_ID", "")
     marker_text = os.environ.get("DDS_LAUNCH_CONSUMED_MARKER", "")
     if len(receipt_id) != 64 or not marker_text:
