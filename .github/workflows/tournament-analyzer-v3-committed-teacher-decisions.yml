@@ -5,6 +5,7 @@ on:
     paths:
       - "bridge_school_api/tournament_committed_teacher_decisions_v3.py"
       - "bridge_school_api/tournament_teacher_confirmed_portfolio_longitudinal_v3.py"
+      - "bridge_school_api/tournament_portfolio_episode_scoring_v3.py"
       - "tests/test_tournament_committed_teacher_decisions_v3.py"
       - "data/tournaments/teacher_decisions/**"
       - ".github/workflows/tournament-analyzer-v3-committed-teacher-decisions.yml"
@@ -27,10 +28,12 @@ jobs:
           python -m pip install --disable-pip-version-check pytest
           python -m py_compile \
             bridge_school_api/tournament_committed_teacher_decisions_v3.py \
-            bridge_school_api/tournament_teacher_confirmed_portfolio_longitudinal_v3.py
+            bridge_school_api/tournament_teacher_confirmed_portfolio_longitudinal_v3.py \
+            bridge_school_api/tournament_portfolio_episode_scoring_v3.py
           python -m pytest -q \
             tests/test_tournament_committed_teacher_decisions_v3.py \
             tests/test_tournament_teacher_confirmed_portfolio_longitudinal_v3.py \
+            tests/test_tournament_portfolio_episode_scoring_v3.py \
             tests/test_tournament_analyzer_v3_stage2.py
 
       - name: Restore exact portfolio evidence
@@ -69,6 +72,10 @@ jobs:
 
           from bridge_school_api.tournament_committed_teacher_decisions_v3 import (
               sync_committed_board_decisions_into_portfolio_intake,
+          )
+          from bridge_school_api.tournament_portfolio_episode_scoring_v3 import (
+              apply_portfolio_episode_scoring_intake,
+              build_portfolio_episode_scoring_template,
           )
           from bridge_school_api.tournament_teacher_confirmed_portfolio_longitudinal_v3 import (
               build_portfolio_teacher_confirmed_longitudinal_report,
@@ -163,10 +170,50 @@ jobs:
           assert longitudinal['automatic_student_error_attribution_allowed'] is False
           assert longitudinal['causal_error_attribution_allowed'] is False
 
+          scoring_template = build_portfolio_episode_scoring_template(
+              portfolio, bundles, result
+          )
+          assert scoring_template['review_item_count'] == 21
+          assert scoring_template['confirmed_technical_count'] == 1
+          assert scoring_template['dismissed_count'] == 0
+          assert scoring_template['unresolved_teacher_review_count'] == 20
+          assert scoring_template['automatic_episode_scoring_allowed'] is False
+          pending_scoring = [
+              row for row in scoring_template['rows']
+              if row['status'] == 'PENDING_EPISODE_SCORING'
+          ]
+          assert len(pending_scoring) == 1
+          score_row = pending_scoring[0]
+          assert score_row['event_id'] == '30041'
+          assert score_row['deal_id'] == '30041:round-2:19'
+          assert score_row['category'] == 'dds3_pair_same_contract_delta'
+          assert score_row['explicit_episode_adjudication'] is False
+          assert score_row['impact_score'] is None
+          assert score_row['transferability_score'] is None
+          assert score_row['reliability_score'] is None
+          assert score_row['score_actor'] is None
+          assert score_row['score_provenance'] is None
+
+          scoring_result = apply_portfolio_episode_scoring_intake(
+              portfolio, bundles, result, scoring_template
+          )
+          assert scoring_result['explicitly_scored_count'] == 0
+          assert scoring_result['confirmed_unscored_count'] == 1
+          assert scoring_result['dismissed_count'] == 0
+          assert scoring_result['unresolved_teacher_review_count'] == 20
+          assert scoring_result['portfolio_episode_scoring_complete'] is False
+          assert scoring_result['scored_items'] == []
+          assert scoring_result['automatic_episode_scoring_used'] is False
+          assert scoring_result['automatic_methodology_mapping_used'] is False
+          assert scoring_result['automatic_student_error_attribution_used'] is False
+          assert scoring_result['causal_error_attribution_allowed'] is False
+
           json.dump(sync, open('tournament-30041-committed-decision-sync.json', 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
           json.dump(result, open('tournament-30041-portfolio-decision-result.json', 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
           json.dump(gate, open('tournament-30041-teacher-review-release-gate.json', 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
           json.dump(longitudinal, open('tournament-30041-confirmed-longitudinal.json', 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
+          json.dump(scoring_template, open('tournament-30041-portfolio-scoring-intake.json', 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
+          json.dump(scoring_result, open('tournament-30041-portfolio-scoring-result.json', 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
           print('TOURNAMENT_30041_COMMITTED_TEACHER_DECISIONS_REAL_PASS')
           print('applied', sync['applied_count'], 'blocked', sync['blocked_count'])
           print('portfolio_decided', result['decided_count'], 'portfolio_pending', result['pending_count'])
@@ -174,6 +221,8 @@ jobs:
           print('event_pending', gate['status_counts']['PENDING'], 'event_unresolved', gate['unresolved_review_count'])
           print('longitudinal_confirmed', len(longitudinal['confirmed_items']))
           print('longitudinal_clusters', len(longitudinal['clusters']), 'persistent', len(longitudinal['persistent_clusters']))
+          print('confirmed_unscored', scoring_result['confirmed_unscored_count'])
+          print('explicit_scores', scoring_result['explicitly_scored_count'], 'scoring_complete', scoring_result['portfolio_episode_scoring_complete'])
           PY
 
       - name: Upload decision-sync evidence
@@ -185,5 +234,7 @@ jobs:
             tournament-30041-portfolio-decision-result.json
             tournament-30041-teacher-review-release-gate.json
             tournament-30041-confirmed-longitudinal.json
+            tournament-30041-portfolio-scoring-intake.json
+            tournament-30041-portfolio-scoring-result.json
           if-no-files-found: error
           retention-days: 30
