@@ -36,6 +36,8 @@ jobs:
           ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" .github/workflows/research-job-dds3-canary.yml
           grep -F '/research-job canary-dds3-idempotency' .github/workflows/research-job-dds3-canary.yml >/dev/null
           grep -F 'environment: database-production' .github/workflows/research-job-dds3-canary.yml >/dev/null
+          grep -F 'CANARY_RUN_ID:' .github/workflows/research-job-dds3-canary.yml >/dev/null
+          grep -F '"canary_marker": f"github:' .github/workflows/research-job-dds3-canary.yml >/dev/null
           grep -F 'validation.get("engine") == "DDS3"' .github/workflows/research-job-dds3-canary.yml >/dev/null
           grep -F 'validation.get("fallback_used") is False' .github/workflows/research-job-dds3-canary.yml >/dev/null
           grep -F 'compute.get("input_validated") is True' .github/workflows/research-job-dds3-canary.yml >/dev/null
@@ -83,6 +85,9 @@ jobs:
 
       - name: Run known DDS3 ResearchJob and prove replay idempotency
         id: canary
+        env:
+          CANARY_RUN_ID: ${{ github.run_id }}
+          CANARY_RUN_ATTEMPT: ${{ github.run_attempt }}
         shell: bash
         run: |
           set -euo pipefail
@@ -99,6 +104,7 @@ jobs:
               "pbn": "N:QJ6.K652.J85.T98 873.J97.AT764.Q4 K5.T83.KQ9.A7652 AT942.AQ4.32.KJ3",
               "dealer": "N",
               "vulnerability": "None",
+              "canary_marker": f"github:{os.environ['CANARY_RUN_ID']}:{os.environ['CANARY_RUN_ATTEMPT']}",
           }
 
           with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row) as conn:
