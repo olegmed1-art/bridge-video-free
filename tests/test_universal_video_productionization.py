@@ -164,8 +164,10 @@ def test_oracle_service_and_rollout_define_resource_and_no_asr_gates():
     unit = (root / "deploy/oracle-universal-video/universal-video.service").read_text(encoding="utf-8")
     assert "MemoryHigh=12G" in unit
     assert "MemoryMax=16G" in unit
-    assert "CPUQuota=600%" in unit
+    assert "CPUQuota=400%" in unit
+    assert "CPUWeight=20" in unit
     assert "IOSchedulingClass=idle" in unit
+    assert "IOWeight=20" in unit
 
     maintenance = (root / "deploy/oracle-universal-video/universal-video-maintenance.service").read_text(encoding="utf-8")
     timer = (root / "deploy/oracle-universal-video/universal-video-maintenance.timer").read_text(encoding="utf-8")
