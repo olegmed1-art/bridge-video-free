@@ -1,0 +1,164 @@
+name: Oracle operational safety gate
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-operational-safety-gate.yml'
+      - 'ops/oracle_dds3_operational_gate.sh'
+      - 'tests/test_oracle_operational_acceptance.py'
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Safe operation to execute
+        required: true
+        type: choice
+        options: [preflight, reboot]
+        default: preflight
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oracle-operational-safety-gate
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Validate fail-closed gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" .github/workflows/oracle-operational-safety-gate.yml
+          bash -n ops/oracle_dds3_operational_gate.sh
+          grep -F 'oci compute instance action --instance-id "$INSTANCE_ID" --action SOFTRESET' ops/oracle_dds3_operational_gate.sh >/dev/null
+          grep -F 'bridge-ben-healthcheck.timer' ops/oracle_dds3_operational_gate.sh >/dev/null
+          grep -F 'BACKUP_STATE' ops/oracle_dds3_operational_gate.sh >/dev/null
+
+  operate:
+    if: >-
+      (github.event_name == 'issue_comment' &&
+       github.event.comment.user.login == 'olegmed1-art' &&
+       (github.event.comment.body == '/oracle-ops preflight' ||
+        github.event.comment.body == '/oracle-ops reboot')) ||
+      github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      OCI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      BUDGET_EMAIL: ${{ secrets.OCI_BUDGET_EMAIL || secrets.BUDGET_EMAIL }}
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_NUMBER: '265'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Resolve exact operation
+        id: operation
+        shell: bash
+        env:
+          COMMENT: ${{ github.event.comment.body }}
+          DISPATCH_OPERATION: ${{ inputs.operation }}
+        run: |
+          set -euo pipefail
+          operation="${DISPATCH_OPERATION:-}"
+          if [[ -z "$operation" ]]; then
+            case "$COMMENT" in
+              '/oracle-ops preflight') operation=preflight ;;
+              '/oracle-ops reboot') operation=reboot ;;
+              *) exit 20 ;;
+            esac
+          fi
+          [[ "$operation" == preflight || "$operation" == reboot ]]
+          echo "operation=$operation" >> "$GITHUB_OUTPUT"
+
+      - name: Configure pinned OCI CLI credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          for value in OCI_USER OCI_TENANCY OCI_FINGERPRINT OCI_KEY OCI_REGION; do
+            [[ -n "${!value:-}" ]] || { echo "$value is not configured" >&2; exit 21; }
+          done
+          python -m pip install --disable-pip-version-check -q 'oci-cli==3.90.3'
+          install -d -m 0700 "$HOME/.oci"
+          printf '%s' "$OCI_KEY" | python -c '
+          import sys
+          raw = sys.stdin.read().replace("\\r", "").replace("\\n", "\n")
+          if not raw.endswith("\n"):
+              raw += "\n"
+          open(sys.argv[1], "w", encoding="utf-8", newline="\n").write(raw)
+          ' "$HOME/.oci/key.pem"
+          chmod 0600 "$HOME/.oci/key.pem"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$OCI_USER
+          fingerprint=$OCI_FINGERPRINT
+          tenancy=$OCI_TENANCY
+          region=$OCI_REGION
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 0600 "$HOME/.oci/config"
+          oci iam region list --output json >/dev/null
+
+      - name: Execute backup, budget and optional reboot gate
+        id: gate
+        shell: bash
+        env:
+          OPERATION: ${{ steps.operation.outputs.operation }}
+        run: |
+          set -euo pipefail
+          export REGION="$OCI_REGION"
+          export ALLOW_REBOOT=0
+          [[ "$OPERATION" == reboot ]] && export ALLOW_REBOOT=1
+          export NONINTERACTIVE=1
+          export SSH_KEY="$RUNNER_TEMP/no-ssh-control-key"
+          export EVIDENCE_FILE="$RUNNER_TEMP/oracle-operational-evidence.json"
+          bash ops/oracle_dds3_operational_gate.sh
+
+      - name: Publish sanitized evidence
+        if: ${{ always() }}
+        shell: bash
+        env:
+          OPERATION: ${{ steps.operation.outputs.operation }}
+          GATE_OUTCOME: ${{ steps.gate.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/oracle-operational-evidence.json"
+          body="$RUNNER_TEMP/oracle-operational-report.md"
+          EVIDENCE="$evidence" python - <<'PY' > "$body"
+          import json
+          import os
+          from pathlib import Path
+
+          path = Path(os.environ["EVIDENCE"])
+          print(f"Oracle operational gate **{os.environ.get('OPERATION') or 'unknown'}**: **{os.environ['GATE_OUTCOME'].upper()}**")
+          print()
+          if path.is_file():
+              x = json.loads(path.read_text(encoding="utf-8"))
+              for key in (
+                  "status", "shape", "ocpu", "memory_gb", "boot_volume_size_gb",
+                  "backup_state", "budget_amount", "budget_email_configured",
+                  "rebooted", "host_disk", "host_memory", "control_path",
+              ):
+                  print(f"- `{key}`: `{x.get(key, 'unknown')}`")
+          else:
+              print("- Evidence file was not produced; the gate stopped fail-closed before acceptance.")
+          print(f"- Run: {os.environ['RUN_URL']}")
+          PY
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body"
