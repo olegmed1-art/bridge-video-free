@@ -7,6 +7,7 @@ on:
       - 'assistant_lab/control_bridge.py'
       - 'assistant_lab/control_schema.sql'
       - 'ops/oracle_assistant_lab_control_bridge_install.sh'
+      - 'ops/oracle_known_hosts_from_scan.sh'
   push:
     branches: [main]
     paths:
@@ -96,16 +97,8 @@ jobs:
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/oracle-control"
           known="$RUNNER_TEMP/oracle-control/known_hosts"
-          : > "$known"
-          for attempt in 1 2 3; do
-            ssh-keyscan -T 10 -t ed25519,ecdsa,rsa "$ORACLE_HOST" >> "$known" 2>/dev/null || true
-            [[ -s "$known" ]] && break
-            sleep $((attempt * 2))
-          done
-          sort -u -o "$known" "$known"
-          ssh-keygen -lf "$known" > "$RUNNER_TEMP/oracle-control/fingerprints.txt"
-          awk '{print $2}' "$RUNNER_TEMP/oracle-control/fingerprints.txt" \
-            | grep -Fx '${{ steps.request.outputs.expected_fingerprint }}' >/dev/null
+          ops/oracle_known_hosts_from_scan.sh \
+            "$ORACLE_HOST" '${{ steps.request.outputs.expected_fingerprint }}' "$known"
           selected=''
           for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
             if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi

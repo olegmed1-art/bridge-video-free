@@ -29,6 +29,7 @@ jobs:
       BRIDGE_API_TOKEN: github-actions-ben-e2e-token
       BRIDGE_API_BASE_URL: http://127.0.0.1:8000
       BEN_API_URL: http://127.0.0.1:8085
+      BEN_IMAGE: ghcr.io/lorserker/ben@sha256:474065d99c796a54e32cab4a83dee09685749cff2fbde5edc84ab2b961ba514d
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -68,8 +69,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          docker pull ghcr.io/lorserker/ben:latest
-          docker run -d --name bridge-ben -p 8085:8085 ghcr.io/lorserker/ben:latest
+          [[ "$BEN_IMAGE" == ghcr.io/lorserker/ben@sha256:* ]]
+          docker pull "$BEN_IMAGE"
+          docker run -d --name bridge-ben -p 8085:8085 "$BEN_IMAGE"
           for attempt in $(seq 1 180); do
             code=$(curl -s -o /tmp/ben-ready.json -w '%{http_code}' \
               'http://127.0.0.1:8085/bid?hand=AK97543.K.T3.AK7&seat=S&dealer=N&vul=&ctx=----&details=true' || true)

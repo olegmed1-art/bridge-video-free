@@ -221,8 +221,8 @@ jobs:
         run: |
           set -euo pipefail
           expected='${{ steps.request.outputs.expected_fingerprint }}'
-          awk '{print $2}' "$RUNNER_TEMP/oracle-ssh/fingerprints.txt" | grep -Fx "$expected" >/dev/null \
-            || { echo "ORACLE_SSH_HOST_FINGERPRINT_MISMATCH expected=$expected" >&2; exit 1; }
+          ops/oracle_known_hosts_from_scan.sh \
+            "$ORACLE_HOST" "$expected" "$RUNNER_TEMP/oracle-ssh/known_hosts"
           selected=''
           for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
             if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi

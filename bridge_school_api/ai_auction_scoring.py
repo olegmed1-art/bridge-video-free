@@ -12,6 +12,14 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
+from .dds3.service import (
+    DDS3_HAND_ORDER,
+    DDS3_STRAIN_ORDER,
+    DDS_UPSTREAM,
+    canonical_dds3_table_request,
+    dds3_table_request_sha256,
+)
+
 
 SEATS = ("N", "E", "S", "W")
 _CONTRACT = re.compile(r"^([1-7])([CDHSN])((?:XX|X)?)$")
@@ -212,21 +220,38 @@ def score_rollout_with_dds3(
             continue
 
         envelope = _mapping(dds3_results[fingerprint], "DDS3 result envelope")
-        if (
-            envelope.get("world_fingerprint") != fingerprint
-            or envelope.get("deal_pbn_sha256") != deal_pbn_sha256
-        ):
+        if envelope.get("world_fingerprint") != fingerprint:
             raise AuctionScoringError("DDS3 result is not bound to the BEN deal")
+        raw_request = _mapping(envelope.get("request"), "DDS3 request")
+        try:
+            dds_request = canonical_dds3_table_request(
+                pbn=raw_request.get("pbn", ""),
+                dealer=raw_request.get("dealer", "N"),
+                vulnerability=raw_request.get("vulnerability", "None"),
+            )
+        except ValueError as exc:
+            raise AuctionScoringError("DDS3 request is invalid") from exc
+        if raw_request != dds_request:
+            raise AuctionScoringError("DDS3 request is not canonical")
+        request_deal_sha256 = hashlib.sha256(dds_request["pbn"].encode("utf-8")).hexdigest()
+        if request_deal_sha256 != deal_pbn_sha256:
+            raise AuctionScoringError("DDS3 request is not bound to the BEN deal")
         dds = _mapping(envelope.get("result"), "DDS3 result")
         if not (
             dds.get("engine") == "DDS3"
             and dds.get("fallback_used") is False
             and dds.get("operation") == "dd_table"
+            and dds.get("engine_version") == DDS_UPSTREAM
+            and dds.get("input_validated") is True
+            and dds.get("deal_pbn_sha256") == deal_pbn_sha256
+            and dds.get("request_sha256") == dds3_table_request_sha256(dds_request)
         ):
             raise AuctionScoringError("DDS3 provenance is invalid")
         hand_order = dds.get("hand_order")
-        if hand_order != list(SEATS):
+        if hand_order != list(DDS3_HAND_ORDER):
             raise AuctionScoringError("DDS3 hand order is invalid")
+        if dds.get("strain_order") != list(DDS3_STRAIN_ORDER):
+            raise AuctionScoringError("DDS3 strain order is invalid")
         table = _mapping(dds.get("dd_table"), "DDS3 table")
         level, strain, _ = _contract_parts(row.get("contract"))
         declarer = str(row.get("declarer") or "").upper()

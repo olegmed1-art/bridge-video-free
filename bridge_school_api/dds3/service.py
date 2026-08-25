@@ -1,6 +1,7 @@
 """Universal fail-closed Bridge School DDS3 computation service."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -12,10 +13,53 @@ from .position_runtime import PositionWorkerUnavailable, solve_position_all_move
 from .screenshot import ObservedField, ScreenshotDealObservation
 
 DDS_UPSTREAM = "v3.0.0+cdd13cf5b700788ac8c1391501b42445b3129b45"
+DDS3_HAND_ORDER = ("N", "E", "S", "W")
+DDS3_STRAIN_ORDER = ("S", "H", "D", "C", "NT")
 
 
 class DDSUnavailable(RuntimeError):
     pass
+
+
+def canonical_dds3_table_request(
+    *, pbn: str, dealer: str = "N", vulnerability: str = "None"
+) -> dict[str, str]:
+    normalized_pbn = str(pbn or "").strip()
+    if not normalized_pbn:
+        raise ValueError("pbn is required")
+    normalized_dealer = str(dealer or "").strip().upper()
+    if normalized_dealer not in DDS3_HAND_ORDER:
+        raise ValueError("dealer is invalid")
+    raw_vulnerability = str(vulnerability or "").strip().upper().replace("-", "").replace("_", "")
+    vulnerability_aliases = {
+        "": "None",
+        "NONE": "None",
+        "LOVE": "None",
+        "NS": "NS",
+        "EW": "EW",
+        "BOTH": "Both",
+        "ALL": "Both",
+    }
+    try:
+        normalized_vulnerability = vulnerability_aliases[raw_vulnerability]
+    except KeyError as exc:
+        raise ValueError("vulnerability is invalid") from exc
+    return {
+        "operation": "dd_table",
+        "pbn": normalized_pbn,
+        "dealer": normalized_dealer,
+        "vulnerability": normalized_vulnerability,
+    }
+
+
+def dds3_table_request_sha256(request: dict[str, Any]) -> str:
+    canonical = canonical_dds3_table_request(
+        pbn=request.get("pbn", ""),
+        dealer=request.get("dealer", "N"),
+        vulnerability=request.get("vulnerability", "None"),
+    )
+    encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -26,11 +70,10 @@ class DDS3Config:
 
 def solve_table(*, pbn: str, dealer: str = "N", vulnerability: str = "None", config: DDS3Config | None = None) -> dict[str, Any]:
     cfg = config or DDS3Config()
-    if not pbn or not pbn.strip():
-        raise ValueError("pbn is required")
+    request = canonical_dds3_table_request(pbn=pbn, dealer=dealer, vulnerability=vulnerability)
     try:
         proc = subprocess.run(
-            [cfg.executable, dealer, vulnerability, pbn],
+            [cfg.executable, request["dealer"], request["vulnerability"], request["pbn"]],
             check=False,
             capture_output=True,
             text=True,
@@ -51,6 +94,8 @@ def solve_table(*, pbn: str, dealer: str = "N", vulnerability: str = "None", con
             "operation": "dd_table",
             "input_validated": True,
             "fallback_used": False,
+            "deal_pbn_sha256": hashlib.sha256(request["pbn"].encode("utf-8")).hexdigest(),
+            "request_sha256": dds3_table_request_sha256(request),
         }
     )
     return result
@@ -128,3 +173,10 @@ def compute(request: dict[str, Any], *, config: DDS3Config | None = None) -> dic
         vulnerability=request.get("vulnerability", "None"),
         config=config,
     )
+
+
+__all__ = [
+    "DDS3Config", "DDS3_HAND_ORDER", "DDS3_STRAIN_ORDER", "DDSUnavailable", "DDS_UPSTREAM",
+    "canonical_dds3_table_request", "compute", "dds3_table_request_sha256", "solve_deal",
+    "solve_screenshot_observation", "solve_table",
+]

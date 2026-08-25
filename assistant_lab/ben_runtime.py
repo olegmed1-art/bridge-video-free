@@ -10,6 +10,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
+from bridge_school_api.ai_auction_rollout import ben_request_sha256
+
 from .contract import LabContractError, verify_ben_result
 
 LOCAL_BEN_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
@@ -62,4 +64,6 @@ def compute_ben_policy(base_url: str, payload: dict[str, Any], *, timeout: float
         raise RetryableBenError("BEN_LOCAL_TRANSPORT_FAILED") from exc
     except json.JSONDecodeError as exc:
         raise RetryableBenError("BEN_LOCAL_INVALID_JSON") from exc
-    return verify_ben_result(result)
+    verified = verify_ben_result(result)
+    verified["request_sha256"] = ben_request_sha256(payload)
+    return verified
