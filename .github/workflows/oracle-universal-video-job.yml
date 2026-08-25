@@ -25,13 +25,12 @@ jobs:
       request_id: ${{ steps.request.outputs.request_id }}
       issue: ${{ steps.request.outputs.issue }}
       job_id: ${{ steps.request.outputs.job_id }}
-      job_json_b64: ${{ steps.request.outputs.job_json_b64 }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
           fetch-depth: 2
-      - name: Validate one bounded request
+      - name: Validate exact Diana 11 request
         id: request
         if: ${{ github.event_name == 'push' }}
         shell: bash
@@ -39,39 +38,21 @@ jobs:
           set -euo pipefail
           mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
             | grep -E '^ops/oracle-universal-video-job-requests/[^/]+\.json$' | sort -u)
-          [[ ${#files[@]} -eq 1 ]] || { echo "expected exactly one Universal Video job request" >&2; exit 1; }
+          [[ ${#files[@]} -eq 1 ]] || { echo "expected exactly one job request" >&2; exit 1; }
           REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
-          import base64, json, os, re
-          path=os.environ['REQUEST_FILE']
-          x=json.load(open(path, encoding='utf-8'))
+          import json, os, re
+          x=json.load(open(os.environ['REQUEST_FILE'], encoding='utf-8'))
           assert set(x)=={'request_id','issue','job'}, x
           assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
-          assert isinstance(x['issue'], int) and 1 <= x['issue'] <= 10_000_000
+          assert x['issue']==441
           job=x['job']
-          assert isinstance(job, dict)
-          assert set(job) <= {'job_id','profile','source','project','metadata','options'}
-          assert {'job_id','profile','source'} <= set(job)
-          assert re.fullmatch(r'[A-Za-z0-9._:-]{1,160}', str(job['job_id']))
-          assert job['profile']=='transcript_only'
-          src=job['source']
-          assert isinstance(src, dict) and set(src) <= {'kind','file_id','name'}
-          assert src.get('kind')=='google_drive'
-          assert re.fullmatch(r'[A-Za-z0-9_-]{10,200}', str(src.get('file_id') or ''))
-          opts=job.get('options') or {}
-          assert isinstance(opts, dict)
-          assert set(opts) <= {'chunk_seconds','max_source_bytes','max_duration_seconds'}
-          if 'chunk_seconds' in opts:
-              assert 60 <= int(opts['chunk_seconds']) <= 900
-          if 'max_source_bytes' in opts:
-              assert 1024**2 <= int(opts['max_source_bytes']) <= 64*1024**3
-          if 'max_duration_seconds' in opts:
-              assert 1 <= float(opts['max_duration_seconds']) <= 12*3600
-          raw=json.dumps(job, ensure_ascii=False, separators=(',',':')).encode()
-          assert len(raw) <= 256*1024
+          assert job.get('job_id')=='diana11-transcript-20260825-01'
+          assert job.get('profile')=='transcript_only'
+          assert job.get('source',{}).get('kind')=='google_drive'
+          assert job.get('source',{}).get('file_id')=='1PGRLozLJKG8tl-JYGPTCcS_lT-nn-T7C'
           print('request_id='+x['request_id'])
-          print('issue='+str(x['issue']))
-          print('job_id='+job['job_id'])
-          print('job_json_b64='+base64.b64encode(raw).decode())
+          print('issue=441')
+          print('job_id=diana11-transcript-20260825-01')
           PY
       - name: Contract-only PR validation
         if: ${{ github.event_name == 'pull_request' }}
@@ -94,12 +75,13 @@ jobs:
       OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
       OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
-      REQUEST_ID: ${{ needs.validate.outputs.request_id }}
       ISSUE_NUMBER: ${{ needs.validate.outputs.issue }}
       JOB_ID: ${{ needs.validate.outputs.job_id }}
-      JOB_JSON_B64: ${{ needs.validate.outputs.job_json_b64 }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
       - name: Configure OCI CLI
         shell: bash
         run: |
@@ -122,16 +104,15 @@ jobs:
           [[ "$state" == RUNNING ]]
           echo ORACLE_UNIVERSAL_VIDEO_JOB_OCI_PASS
 
-      - name: Submit and monitor resident Universal Video job
+      - name: Submit and monitor exact resident job
         shell: bash
         run: |
           set -euo pipefail
           compartment="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."compartment-id"' --raw-output)"
-
           run_remote() {
-            local display="$1" text="$2" timeout="${3:-300}"
+            local display="$1" command="$2" timeout="${3:-180}"
             local content target cid execution lifecycle
-            content="$(SCRIPT_TEXT="$text" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":"set -Eeuo pipefail\n"+os.environ["SCRIPT_TEXT"]+"\n"},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
+            content="$(SCRIPT_TEXT="$command" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":"set -Eeuo pipefail\n"+os.environ["SCRIPT_TEXT"]+"\n"},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
             target="$(python -c 'import json,os; print(json.dumps({"instanceId":os.environ["INSTANCE_ID"]},separators=(",",":")))')"
             cid="$(oci instance-agent command create --compartment-id "$compartment" --content "$content" --target "$target" --timeout-in-seconds "$timeout" --display-name "$display" --query data.id --raw-output)"
             execution=''; lifecycle=''
@@ -146,75 +127,29 @@ jobs:
             printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("text","") or "")'
           }
 
-          submit_script="$(cat <<'EOF'
-          test "$(systemctl is-active universal-video.service)" = active
-          root=/opt/bridge-school/universal-video/spool
-          job="$JOB_ID.json"
-          for d in inbox running done failed; do
-            if test -e "$root/$d/$job"; then echo "UV_STATE=${d^^}"; exit 0; fi
-          done
-          tmp="$root/inbox/.$job.$RANDOM.tmp"
-          printf '%s' "$JOB_JSON_B64" | base64 -d > "$tmp"
-          chown universal-video:universal-video "$tmp"
-          chmod 0640 "$tmp"
-          mv "$tmp" "$root/inbox/$job"
-          echo UV_STATE=QUEUED
-          EOF
-          )"
-          submit_script="JOB_ID=$(printf %q "$JOB_ID") JOB_JSON_B64=$(printf %q "$JOB_JSON_B64") $submit_script"
-          initial="$(run_remote "uv-submit-${GITHUB_RUN_ID}" "$submit_script" 300)"
+          initial="$(run_remote "diana11-submit-${GITHUB_RUN_ID}" 'sudo -n /usr/local/sbin/universal-video-diana11 submit')"
           state="$(printf '%s\n' "$initial" | sed -n 's/^UV_STATE=//p' | tail -n1)"
-          [[ -n "$state" ]] || state=UNKNOWN
-          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Universal Video `\`$JOB_ID\``: **SUBMITTED / $state** on Oracle. Source remains in Drive; compute is on resident Oracle sidecar. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          [[ "$state" =~ ^(QUEUED|RUNNING|COMPLETED|FAILED)$ ]] || { echo "unsafe submit state: $state" >&2; exit 1; }
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус «Диана 11»: **SUBMITTED → $state**. Oracle resident sidecar принял exact bounded job. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           last="$state"
 
-          status_script="$(cat <<'EOF'
-          root=/opt/bridge-school/universal-video/spool
-          job="$JOB_ID.json"
-          if test -e "$root/done/$job"; then
-            echo UV_STATE=COMPLETED
-            python3 - "$root/done/$job" <<'PY'
-          import json,sys
-          x=json.load(open(sys.argv[1], encoding='utf-8'))
-          print('UV_RESULT_STATUS='+str(x.get('status') or ''))
-          print('UV_RESULT_DIR='+str(x.get('result_dir') or x.get('output_dir') or ''))
-          PY
-          elif test -e "$root/failed/$job"; then
-            echo UV_STATE=FAILED
-            python3 - "$root/failed/$job" <<'PY'
-          import json,sys
-          x=json.load(open(sys.argv[1], encoding='utf-8'))
-          print('UV_ERROR_TYPE='+str(x.get('error_type') or '')[:120])
-          print('UV_ERROR='+str(x.get('error') or '').replace('\n',' ')[:500])
-          PY
-          elif test -e "$root/running/$job"; then echo UV_STATE=RUNNING
-          elif test -e "$root/inbox/$job"; then echo UV_STATE=QUEUED
-          else echo UV_STATE=MISSING
-          fi
-          EOF
-          )"
-          status_script="JOB_ID=$(printf %q "$JOB_ID") $status_script"
-
           for _ in $(seq 1 300); do
+            case "$last" in COMPLETED) echo ORACLE_UNIVERSAL_VIDEO_JOB_COMPLETED; exit 0;; FAILED) exit 1;; esac
             sleep 60
-            out="$(run_remote "uv-status-${GITHUB_RUN_ID}" "$status_script" 180)"
+            out="$(run_remote "diana11-status-${GITHUB_RUN_ID}" 'sudo -n /usr/local/sbin/universal-video-diana11 status')"
             state="$(printf '%s\n' "$out" | sed -n 's/^UV_STATE=//p' | tail -n1)"
-            [[ -n "$state" ]] || state=UNKNOWN
+            [[ "$state" =~ ^(QUEUED|RUNNING|COMPLETED|FAILED)$ ]] || { echo "unsafe status: $state" >&2; exit 1; }
             if [[ "$state" != "$last" ]]; then
               safe="$(printf '%s\n' "$out" | grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|ERROR_TYPE|ERROR)=' | head -n 8)"
-              gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Universal Video `\`$JOB_ID\`` status changed: **$last → $state**.\n\n\`\`\`text\n$safe\n\`\`\`\nRun: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус «Диана 11»: **$last → $state**.\n\n\`\`\`text\n$safe\n\`\`\`\nRun: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
               last="$state"
             fi
-            case "$state" in
-              COMPLETED) echo ORACLE_UNIVERSAL_VIDEO_JOB_COMPLETED; exit 0 ;;
-              FAILED|MISSING) echo "Universal Video terminal state: $state" >&2; exit 1 ;;
-            esac
           done
-          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Universal Video `\`$JOB_ID\`` remains **$last** after bounded 5-hour monitor window. The resident job was not stopped; monitoring workflow timed out cleanly."
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "«Диана 11» остаётся **$last** после 5-часового окна наблюдения; resident job не остановлен."
           exit 2
 
-      - name: Report operator failure
+      - name: Report failure
         if: ${{ failure() }}
         shell: bash
         run: |
-          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Universal Video operator for `\`$JOB_ID\`` failed closed before a successful terminal result. No completion claim. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Оператор «Диана 11» завершился fail-closed до подтверждённого COMPLETED. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
