@@ -37,6 +37,7 @@ jobs:
           grep -F '/oracle-v2 rollout-dds3-runtime' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '/oracle-v2 canary-worlds' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '/oracle-v2 rollout-ben' .github/workflows/oracle-operator-v2.yml >/dev/null
+          grep -F '/oracle-v2 diagnose-ben' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '/oracle-v2 canary-ben' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '/oracle-v2 canary-ben-dds3' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '/oracle-v2 benchmark-ben-100-500' .github/workflows/oracle-operator-v2.yml >/dev/null
@@ -54,6 +55,7 @@ jobs:
        github.event.comment.body == '/oracle-v2 rollout-dds3-runtime' ||
        github.event.comment.body == '/oracle-v2 canary-worlds' ||
        github.event.comment.body == '/oracle-v2 rollout-ben' ||
+       github.event.comment.body == '/oracle-v2 diagnose-ben' ||
        github.event.comment.body == '/oracle-v2 canary-ben' ||
        github.event.comment.body == '/oracle-v2 canary-ben-dds3' ||
        github.event.comment.body == '/oracle-v2 benchmark-ben-100-500')
@@ -168,6 +170,50 @@ jobs:
           set -euo pipefail
           ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
             "sudo -n env BEN_IMAGE='$BEN_IMAGE' bash -s" < ops/install_ben_runtime.sh
+
+      - name: Diagnose localhost BEN runtime without mutation
+        id: ben_diagnostic
+        if: ${{ env.COMMAND == '/oracle-v2 diagnose-ben' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          detail="$RUNNER_TEMP/ben-diagnostic.log"
+          set +e
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n bash -s' >"$detail" 2>&1 <<'REMOTE'
+          set +e
+          echo '=== systemd active ==='
+          systemctl is-active bridge-ben.service bridge-ben-healthcheck.timer
+          echo '=== systemd status ==='
+          systemctl status bridge-ben.service --no-pager -l
+          echo '=== recent journal ==='
+          journalctl -u bridge-ben.service -n 160 --no-pager -o short-iso
+          echo '=== bounded Docker state ==='
+          docker ps -a --filter 'name=^/bridge-ben$' --no-trunc
+          docker inspect --format 'status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{json .State.Error}} restart={{.RestartCount}}' bridge-ben
+          echo '=== listener and probe ==='
+          ss -ltn '( sport = :8085 )'
+          code="$(curl -sS -o /tmp/bridge-ben-diagnostic.json -w '%{http_code}' --max-time 20 \
+            'http://127.0.0.1:8085/bid?hand=AK97543.K.T3.AK7&seat=S&dealer=N&vul=&ctx=----&details=true')"
+          echo "probe_http=$code"
+          service_state="$(systemctl is-active bridge-ben.service 2>/dev/null)"
+          container_state="$(docker inspect --format '{{.State.Status}}' bridge-ben 2>/dev/null)"
+          [[ "$service_state" == active && "$container_state" == running && "$code" == 200 ]]
+          REMOTE
+          rc=$?
+          set -e
+          cat "$detail"
+          python - "$detail" >> "$GITHUB_OUTPUT" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          raw = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+          safe = re.sub(r"\s+", " ", raw).strip()[-1200:]
+          print(f"detail={safe or 'no diagnostic output'}")
+          PY
+          exit "$rc"
 
       - name: Run unique Oracle WORLDS canary
         id: worlds
@@ -471,6 +517,8 @@ jobs:
           SSH_OUTCOME: ${{ steps.ssh.outcome }}
           WORKER_OUTCOME: ${{ steps.worker.outcome }}
           BEN_OUTCOME: ${{ steps.ben.outcome }}
+          BEN_DIAGNOSTIC_OUTCOME: ${{ steps.ben_diagnostic.outcome }}
+          BEN_DIAGNOSTIC_DETAIL: ${{ steps.ben_diagnostic.outputs.detail }}
           DDS3_OUTCOME: ${{ steps.dds3.outcome }}
           WORLDS_OUTCOME: ${{ steps.worlds.outcome }}
           WORLDS_JOB_ID: ${{ steps.worlds.outputs.job_id }}
@@ -484,4 +532,4 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
-            -f body="Oracle v2 **${COMMAND}**: ssh=${SSH_OUTCOME}, worker=${WORKER_OUTCOME}, dds3=${DDS3_OUTCOME}, ben=${BEN_OUTCOME}, worlds=${WORLDS_OUTCOME}, worlds_job=${WORLDS_JOB_ID:-none}, ben_canary=${BEN_CANARY_OUTCOME}, ben_job=${BEN_CANARY_JOB_ID:-none}, ben_dds3_canary=${BEN_DDS3_CANARY_OUTCOME}, canary_detail=${BEN_DDS3_CANARY_DETAIL:-none}, ben_benchmark=${BEN_BENCHMARK_OUTCOME}, benchmark_detail=${BEN_BENCHMARK_DETAIL:-none}" >/dev/null
+            -f body="Oracle v2 **${COMMAND}**: ssh=${SSH_OUTCOME}, worker=${WORKER_OUTCOME}, dds3=${DDS3_OUTCOME}, ben=${BEN_OUTCOME}, ben_diagnostic=${BEN_DIAGNOSTIC_OUTCOME}, diagnostic_detail=${BEN_DIAGNOSTIC_DETAIL:-none}, worlds=${WORLDS_OUTCOME}, worlds_job=${WORLDS_JOB_ID:-none}, ben_canary=${BEN_CANARY_OUTCOME}, ben_job=${BEN_CANARY_JOB_ID:-none}, ben_dds3_canary=${BEN_DDS3_CANARY_OUTCOME}, canary_detail=${BEN_DDS3_CANARY_DETAIL:-none}, ben_benchmark=${BEN_BENCHMARK_OUTCOME}, benchmark_detail=${BEN_BENCHMARK_DETAIL:-none}" >/dev/null
