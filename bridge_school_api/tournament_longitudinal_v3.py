@@ -156,3 +156,32 @@ def build_longitudinal_provenance_receipt(
         "receipt_id": _sha256(identity),
         "content_addressed": True,
     }
+
+
+def verify_longitudinal_provenance_receipt(
+    analyses: Sequence[TournamentAnalysis],
+    report: LongitudinalReport,
+    receipt: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Verify a persisted receipt against exact upstream analyses and report.
+
+    JSON round-tripping converts tuples to lists, so verification compares the
+    deterministic JSON-safe representation rather than Python container types. Any
+    changed evidence, report field, digest, safety boundary, or receipt marker fails
+    closed by differing from a freshly rebuilt receipt.
+    """
+    if not isinstance(receipt, Mapping):
+        raise ValueError("longitudinal provenance receipt must be a mapping")
+
+    expected = build_longitudinal_provenance_receipt(analyses, report)
+    if _jsonable(receipt) != _jsonable(expected):
+        raise ValueError("longitudinal provenance receipt does not match supplied evidence")
+
+    return {
+        "schema": "tournament-longitudinal-provenance-verification-v1",
+        "receipt_id": expected["receipt_id"],
+        "report_sha256": expected["report_sha256"],
+        "status": "PASS",
+        "exact_upstream_evidence_verified": True,
+        "longitudinal_safety_boundaries_verified": True,
+    }
