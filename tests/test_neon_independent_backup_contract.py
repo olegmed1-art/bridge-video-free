@@ -44,3 +44,14 @@ def test_backup_and_restore_use_distinct_jobs():
     assert '\n  restore:\n' in workflow
     assert 'needs: backup' in workflow
     assert 'Download encrypted backup from independent artifact store' in workflow
+
+
+def main():
+    test_neon_independent_backup_restore_is_fail_closed()
+    test_raw_dump_is_not_uploaded()
+    test_backup_and_restore_use_distinct_jobs()
+    print('NEON_INDEPENDENT_BACKUP_CONTRACT_PASS')
+
+
+if __name__ == '__main__':
+    main()
