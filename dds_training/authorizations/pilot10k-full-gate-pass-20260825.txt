@@ -1,0 +1,12 @@
+PILOT10K_FULL_GATE_PASS
+source_issue=379
+oracle_status=train_passed
+oracle_returncode=0
+engine=DDS3
+fallback_used=false
+corpus_deals=10000
+corpus_sha256=8a21cf06ab7ac424ee0f245ccf274e6d6f4f7135fa9b8c4c0e52c595c0da5996
+historical_full_closure=PASS
+open_mandatory_investigations=0
+sealed_test_reopened=false
+ready_for_30k_prepare=true
