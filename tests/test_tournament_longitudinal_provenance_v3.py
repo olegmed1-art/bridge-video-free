@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -14,6 +15,7 @@ from bridge_school_api.tournament_analyzer_v3 import (
 from bridge_school_api.tournament_longitudinal_v3 import (
     build_longitudinal_provenance_receipt,
     build_longitudinal_report,
+    verify_longitudinal_provenance_receipt,
 )
 
 
@@ -101,3 +103,48 @@ def test_longitudinal_receipt_rejects_stale_or_caller_modified_report():
     stale = build_longitudinal_report((analyses[0],))
     with pytest.raises(ValueError, match="does not match"):
         build_longitudinal_provenance_receipt(analyses, stale)
+
+
+def test_longitudinal_receipt_verifier_accepts_json_round_trip():
+    analyses = (_analysis("30041", impact=2.5), _analysis("29912", impact=1.0))
+    report = build_longitudinal_report(analyses)
+    receipt = build_longitudinal_provenance_receipt(analyses, report)
+    persisted = json.loads(json.dumps(receipt))
+
+    verification = verify_longitudinal_provenance_receipt(analyses, report, persisted)
+
+    assert verification["schema"] == "tournament-longitudinal-provenance-verification-v1"
+    assert verification["receipt_id"] == receipt["receipt_id"]
+    assert verification["report_sha256"] == receipt["report_sha256"]
+    assert verification["status"] == "PASS"
+    assert verification["exact_upstream_evidence_verified"] is True
+    assert verification["longitudinal_safety_boundaries_verified"] is True
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("automatic_methodology_mapping_used", True),
+        ("content_addressed", False),
+        ("receipt_id", "0" * 64),
+    ],
+)
+def test_longitudinal_receipt_verifier_rejects_tampering(field: str, value: object):
+    analyses = (_analysis("30041", impact=2.5), _analysis("29912", impact=1.0))
+    report = build_longitudinal_report(analyses)
+    receipt = json.loads(json.dumps(build_longitudinal_provenance_receipt(analyses, report)))
+    receipt[field] = value
+
+    with pytest.raises(ValueError, match="does not match supplied evidence"):
+        verify_longitudinal_provenance_receipt(analyses, report, receipt)
+
+
+def test_longitudinal_receipt_verifier_rejects_changed_upstream_evidence():
+    analyses = (_analysis("30041", impact=2.5), _analysis("29912", impact=1.0))
+    report = build_longitudinal_report(analyses)
+    receipt = build_longitudinal_provenance_receipt(analyses, report)
+    changed = (_analysis("30041", impact=2.5), _analysis("29912", impact=3.0))
+    changed_report = build_longitudinal_report(changed)
+
+    with pytest.raises(ValueError, match="does not match supplied evidence"):
+        verify_longitudinal_provenance_receipt(changed, changed_report, receipt)
