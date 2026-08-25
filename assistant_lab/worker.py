@@ -183,6 +183,13 @@ def keep_lease_alive(job: LabJob, config: WorkerConfig) -> Iterator[None]:
         stop.set(); thread.join(timeout=2)
 
 
+def _raise_dds3_transport_error(exc: Exception) -> None:
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    if isinstance(reason, ConnectionRefusedError):
+        raise LabContractError("DDS3_LOCAL_RUNTIME_UNAVAILABLE") from exc
+    raise RetryableLabError("DDS3_LOCAL_TRANSPORT_FAILED") from exc
+
+
 def _post_json(url: str, payload: dict[str, Any], *, token: str, timeout: float) -> dict[str, Any]:
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     request = urllib.request.Request(url, data=body, method="POST", headers={
@@ -197,7 +204,7 @@ def _post_json(url: str, payload: dict[str, Any], *, token: str, timeout: float)
         if exc.code >= 500: raise RetryableLabError(f"DDS3_HTTP_{exc.code}: {detail}") from exc
         raise LabContractError(f"DDS3_HTTP_{exc.code}: {detail}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise RetryableLabError("DDS3_LOCAL_TRANSPORT_FAILED") from exc
+        _raise_dds3_transport_error(exc)
     except json.JSONDecodeError as exc:
         raise RetryableLabError("DDS3_LOCAL_INVALID_JSON") from exc
 
