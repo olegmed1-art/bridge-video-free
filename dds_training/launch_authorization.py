@@ -8,9 +8,9 @@ and high-entropy nonce. Verification consumes the receipt atomically, so
 accidental retries cannot silently repeat an expensive or sealed operation.
 
 Normal DDS execution remains workflow_dispatch-only. The sole exception is the
-owner-only Pilot-10k operator command ``/dds3-pilot10k start``; that command may
-issue a ``pilot_train`` receipt from an ``issue_comment`` event. No other scope
-may use issue_comment authorization.
+owner-only bounded Oracle operator commands may issue receipts from exact
+``issue_comment`` commands: Pilot-10k ``pilot_train`` and Main-30k ``main_train``.
+No other scope or command may use issue_comment authorization.
 """
 
 import argparse
@@ -28,6 +28,7 @@ APPROVAL_PHRASE = "ЭТАП-2-СТАРТ-ПОДТВЕРЖДАЮ"
 DEFAULT_ACTOR = "olegmed1-art"
 ALLOWED_SCOPES = {"pilot_train", "derived", "main_train", "validation", "sealed_test"}
 PILOT_ISSUE_COMMAND = "/dds3-pilot10k start"
+MAIN30K_ISSUE_COMMAND = "/dds3-main30k start"
 NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
 
 
@@ -85,10 +86,14 @@ def _validate_event(scope: str, event_name: str, authorization_command: str) -> 
             raise AuthorizationError("workflow_dispatch authorization must not carry an issue command")
         return
     if event_name == "issue_comment":
-        if scope != "pilot_train":
-            raise AuthorizationError("issue_comment authorization is restricted to pilot_train")
-        if authorization_command != PILOT_ISSUE_COMMAND:
-            raise AuthorizationError("issue_comment Pilot-10k authorization command mismatch")
+        allowed = {
+            "pilot_train": PILOT_ISSUE_COMMAND,
+            "main_train": MAIN30K_ISSUE_COMMAND,
+        }
+        if scope not in allowed:
+            raise AuthorizationError("issue_comment authorization is restricted to bounded Oracle TRAIN scopes")
+        if authorization_command != allowed[scope]:
+            raise AuthorizationError("issue_comment Oracle TRAIN authorization command mismatch")
         return
     raise AuthorizationError(f"DDS execution is not allowed from event {event_name!r}")
 

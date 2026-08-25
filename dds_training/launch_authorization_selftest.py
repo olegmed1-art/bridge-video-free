@@ -185,6 +185,49 @@ def main() -> None:
             ),
         )
 
+        main_path = root / "main30k.json"
+        main_receipt = issue_receipt(
+            out_path=main_path,
+            repository="olegmed1-art/bridge-video-free",
+            ref_name="main",
+            commit_sha=COMMIT,
+            expected_commit_sha=COMMIT,
+            actor="olegmed1-art",
+            triggering_actor="olegmed1-art",
+            scope="main_train",
+            manifest_path=manifest,
+            nonce=NONCE,
+            approval_phrase=APPROVAL_PHRASE,
+            now=NOW,
+            event_name="issue_comment",
+            authorization_command="/dds3-main30k start",
+        )
+        accepted_main = verify(
+            main_path, manifest, root / "consume-main30k",
+            ref_name="main", event_name="issue_comment",
+            authorization_command="/dds3-main30k start",
+        )
+        assert accepted_main["receipt_id"] == main_receipt["receipt_id"]
+        expect_failure(
+            "command mismatch",
+            lambda: issue_receipt(
+                out_path=root / "main30k-wrong.json",
+                repository="olegmed1-art/bridge-video-free",
+                ref_name="main",
+                commit_sha=COMMIT,
+                expected_commit_sha=COMMIT,
+                actor="olegmed1-art",
+                triggering_actor="olegmed1-art",
+                scope="main_train",
+                manifest_path=manifest,
+                nonce=NONCE,
+                approval_phrase=APPROVAL_PHRASE,
+                now=NOW,
+                event_name="issue_comment",
+                authorization_command="/dds3-main30k status",
+            ),
+        )
+
         print(json.dumps({
             "ok": True,
             "one_time_receipt": True,
@@ -197,6 +240,7 @@ def main() -> None:
             "wrapper_binds_consumed_marker_to_preimport_guard": True,
             "missing_consumed_marker_blocked": True,
             "sealed_scope_adds_open_sealed": True,
+            "main30k_exact_owner_command_authorized": True,
         }, ensure_ascii=False, indent=2))
 
 
