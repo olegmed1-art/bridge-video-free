@@ -4,7 +4,9 @@ on:
   pull_request:
     paths:
       - "bridge_school_api/tournament_episode_coverage_handoff_v3.py"
+      - "bridge_school_api/tournament_episode_scoring_authority_v3.py"
       - "bridge_school_api/tournament_episode_scoring_intake_v3.py"
+      - "bridge_school_api/tournament_teacher_decisions_v3.py"
       - "bridge_school_api/tournament_coverage_release_v3.py"
       - "tests/test_tournament_episode_coverage_handoff_v3.py"
       - ".github/workflows/tournament-analyzer-v3-episode-coverage-handoff.yml"
@@ -26,8 +28,12 @@ jobs:
         run: python -m pip install --disable-pip-version-check pytest
       - name: Compile and test
         run: |
-          python -m py_compile bridge_school_api/tournament_episode_coverage_handoff_v3.py
-          python -m pytest -q tests/test_tournament_episode_scoring_intake_v3.py tests/test_tournament_episode_coverage_handoff_v3.py
+          python -m py_compile \
+            bridge_school_api/tournament_episode_scoring_authority_v3.py \
+            bridge_school_api/tournament_episode_coverage_handoff_v3.py
+          python -m pytest -q \
+            tests/test_tournament_episode_scoring_intake_v3.py \
+            tests/test_tournament_episode_coverage_handoff_v3.py
       - name: Restore exact historical tournament evidence
         env:
           GH_TOKEN: ${{ github.token }}
@@ -54,7 +60,7 @@ jobs:
           echo "DDS30041=$DDS30041" >> "$GITHUB_ENV"
           echo "DDS29912=$DDS29912" >> "$GITHUB_ENV"
           echo "FACTS29912=$FACTS29912" >> "$GITHUB_ENV"
-      - name: Rebuild real 30041 candidate inventory
+      - name: Rebuild real 30041 candidate inventory and pending teacher ledger
         run: |
           set -euo pipefail
           PYTHONPATH="$PWD" python tools/tournament_teacher_review_queue_v3.py \
@@ -71,27 +77,30 @@ jobs:
             --facts data/tournaments/tournament_30041_round2_diana_facts_v1.json \
             --dossier dossier.json --event-id 30041 \
             --out-json inventory.json --out-md /tmp/inventory.md
-      - name: Prove pending real scoring cannot release coverage
+      - name: Prove raw scoring cannot bypass pending teacher decisions
         run: |
           PYTHONPATH="$PWD" python - <<'PY'
+          import copy
           import json
+          from bridge_school_api.tournament_episode_scoring_authority_v3 import TournamentEpisodeScoringAuthorityError
           from bridge_school_api.tournament_episode_scoring_intake_v3 import build_episode_scoring_template
           from bridge_school_api.tournament_episode_coverage_handoff_v3 import build_episode_coverage_handoff
 
           source=json.load(open('data/tournaments/tournament_30041_round2_diana_facts_v1.json', encoding='utf-8'))
           inventory=json.load(open('inventory.json', encoding='utf-8'))
+          ledger=json.load(open('ledger.json', encoding='utf-8'))
           intake=build_episode_scoring_template(inventory)
-          handoff=build_episode_coverage_handoff(source, inventory, intake)
-
-          json.dump(intake, open('tournament-30041-episode-scoring-intake.json','w',encoding='utf-8'), ensure_ascii=False, indent=2, sort_keys=True)
-          json.dump(handoff, open('tournament-30041-episode-coverage-handoff.json','w',encoding='utf-8'), ensure_ascii=False, indent=2, sort_keys=True)
+          handoff=build_episode_coverage_handoff(source, inventory, intake, ledger)
 
           assert handoff['candidate_count']==7
-          assert handoff['explicitly_scored_count']==0
-          assert handoff['pending_scoring_count']==7
-          assert handoff['episode_scoring_complete'] is False
+          assert handoff['pending_decision_count']==7
+          assert handoff['confirmed_decision_count']==0
+          assert handoff['authorized_scored_count']==0
+          assert handoff['episode_adjudication_complete'] is False
+          assert handoff['v1_4_episode_inventory_complete'] is False
           assert handoff['coverage_episode_count']==0
           assert handoff['handoff_ready'] is False
+          assert handoff['teacher_decision_gate_enforced'] is True
           assert handoff['automatic_episode_scoring_used'] is False
           assert handoff['automatic_methodology_mapping_used'] is False
           assert handoff['automatic_student_error_attribution_used'] is False
@@ -100,16 +109,37 @@ jobs:
           assert manifest['planned_deck_slide_count']==24
           assert manifest['significant_episode_count']==0
           assert manifest['coverage_plan_release_ready'] is False
-          assert 'EPISODE_INVENTORY_NOT_COMPLETE' in handoff['handoff_blockers']
-          assert 'EPISODE_SCORING_NOT_COMPLETE' in handoff['handoff_blockers']
-          print('TOURNAMENT_30041_EPISODE_COVERAGE_HANDOFF_PASS')
+          assert 'TEACHER_DECISION_PENDING' in handoff['handoff_blockers']
+          assert 'NON_DDS_EPISODE_COVERAGE_NOT_ESTABLISHED' in handoff['handoff_blockers']
+
+          bypass=copy.deepcopy(intake)
+          row=bypass['rows'][0]
+          row.update({
+              'explicit_episode_adjudication': True,
+              'impact_score': 2,
+              'transferability_score': 2,
+              'reliability_score': 2,
+              'score_actor': 'forbidden-ci-probe',
+              'score_provenance': {'source': 'forbidden-ci-probe'},
+              'status': 'SCORED_EXPLICITLY',
+          })
+          try:
+              build_episode_coverage_handoff(source, inventory, bypass, ledger)
+          except TournamentEpisodeScoringAuthorityError:
+              pass
+          else:
+              raise AssertionError('pending teacher decision was bypassed by raw episode score')
+
+          json.dump(intake, open('tournament-30041-episode-scoring-intake.json','w',encoding='utf-8'), ensure_ascii=False, indent=2, sort_keys=True)
+          json.dump(handoff, open('tournament-30041-episode-coverage-handoff.json','w',encoding='utf-8'), ensure_ascii=False, indent=2, sort_keys=True)
+          print('TOURNAMENT_30041_TEACHER_SCORING_AUTHORITY_PASS')
           print('candidate_count', handoff['candidate_count'])
-          print('pending_scoring_count', handoff['pending_scoring_count'])
-          print('planned_deck_slide_count', manifest['planned_deck_slide_count'])
+          print('pending_decision_count', handoff['pending_decision_count'])
+          print('authorized_scored_count', handoff['authorized_scored_count'])
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: tournament-analyzer-v3-30041-episode-coverage-handoff
+          name: tournament-analyzer-v3-30041-teacher-scoring-authority
           path: |
             tournament-30041-episode-scoring-intake.json
             tournament-30041-episode-coverage-handoff.json
