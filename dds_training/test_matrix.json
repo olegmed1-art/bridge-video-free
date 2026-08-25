@@ -526,7 +526,9 @@
       "a11_mass_dds_runner.py": "Covered by dedicated tests/test_a11_mass_dds_runner.py in the A11 Runner CI workflow; the guarded CLI orchestration is exercised outside the canonical DDS selftest runner.",
       "independent_crosscheck.py": "Requires the separately compiled independent bridge-solver and is executed in the heavy DDS workflow, outside the Python manifest runner.",
       "pilot_report_ru.py": "Requires a completed pilot database fixture; covered by the preserved pilot finish evidence, not the fast suite.",
-      "report.py": "Requires a completed stage database/report fixture; direct isolated report tests are still pending."
+      "report.py": "Requires a completed stage database/report fixture; direct isolated report tests are still pending.",
+      "oracle_mass_dispatch.py": "Root-controlled Oracle systemd dispatcher is exercised by the dedicated Oracle mass install/status acceptance gates; it must not execute from the GitHub fast-suite sandbox.",
+      "oracle_mass_dispatch_v2.py": "Owner-authorized Pilot-10k Oracle dispatcher is covered by immutable corpus, one-time authorization, live train_passed evidence and full-gate workflows; executing it in the fast suite would cross the host boundary."
     }
   }
 }

@@ -1,4 +1,4 @@
-name: DDS main 30k — authorized TRAIN execution
+name: DDS main 30k — legacy GitHub compute blocked
 
 on:
   workflow_dispatch:
@@ -25,6 +25,10 @@ env:
 
 jobs:
   train:
+    # Canonical mass DDS compute runs only on the existing Oracle host.
+    # Keep this historical workflow fail-closed so workflow_dispatch cannot
+    # consume GitHub-hosted compute or bypass the Oracle cost/evidence gate.
+    if: ${{ false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 360
     steps:
