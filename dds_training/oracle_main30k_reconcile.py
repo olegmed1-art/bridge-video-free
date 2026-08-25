@@ -7,7 +7,7 @@ from pathlib import Path
 
 from audit import audit_database, persist_audit
 from config import ALGORITHM_VERSION
-from investigations import sync_required_investigations
+from investigations import resolve_investigation, sync_required_investigations
 from learning import build_learning_plan, persist_learning_plan, recompute_all_skills
 from storage import connect
 
@@ -37,12 +37,80 @@ def _sealed_provenance(con) -> list[dict]:
     ]
 
 
+
+def _resolve_deterministic_investigations(con, run_id: str) -> dict:
+    rows = con.execute(
+        """
+        SELECT e.task_id,r.task_type,r.result_json
+        FROM investigation_events e
+        JOIN (SELECT task_id,MAX(id) max_id FROM investigation_events GROUP BY task_id) x
+          ON x.max_id=e.id
+        JOIN dds_results r ON r.task_id=e.task_id
+        WHERE e.event_type IN ('opened','reopened')
+        ORDER BY e.task_id
+        """
+    ).fetchall()
+    resolved = 0
+    unsupported = 0
+    by_code: dict[str, int] = {}
+    for task_id, task_type, raw in rows:
+        result = json.loads(raw)
+        code = str(result.get("error_code", ""))
+        if code == "D_OVER_DDS_CLAIM":
+            predicted = result.get("predicted_tricks")
+            optimum = result.get("dds_tricks")
+            if not isinstance(predicted, int) or not isinstance(optimum, int) or predicted <= optimum:
+                unsupported += 1
+                continue
+            cause = f"Locked declarer prediction claimed {predicted} tricks, above the immutable DDS optimum of {optimum}."
+            refutation = f"Optimal defence holds declarer to {optimum} tricks; the first contradiction is the {predicted}>{optimum} DDS bound."
+            lesson = "Do not claim a declarer result above the double-dummy optimum; create transfer and counterexample tasks around the over-claim pattern."
+        elif code == "F_DEFENSE_OVER_DDS_CLAIM":
+            predicted = result.get("expected_defense_tricks")
+            optimum = result.get("best_defense_tricks")
+            if not isinstance(predicted, int) or not isinstance(optimum, int) or predicted <= optimum:
+                unsupported += 1
+                continue
+            cause = f"Locked defence prediction claimed {predicted} tricks, above the immutable DDS optimum of {optimum}."
+            refutation = f"Double-dummy play limits the defence to {optimum} tricks; the first contradiction is the {predicted}>{optimum} DDS bound."
+            lesson = "Do not claim more defensive tricks than the DDS optimum; prioritize counterexamples for the responsible lead/defence skill."
+        else:
+            unsupported += 1
+            continue
+        resolve_investigation(
+            con,
+            task_id=task_id,
+            cause=cause,
+            first_refutation=refutation,
+            lesson=lesson,
+            run_id=run_id,
+            evidence={
+                "method": "immutable-dds-bound-reconciliation/v1",
+                "task_type": task_type,
+                "error_code": code,
+                "dds_recomputed": False,
+            },
+        )
+        resolved += 1
+        by_code[code] = by_code.get(code, 0) + 1
+    return {"resolved_now": resolved, "unsupported_open": unsupported, "resolved_by_code": by_code}
+
+
 def reconcile(work: Path, run_id: str, plan_limit: int = 64) -> dict:
     con = connect(work / "training.sqlite3")
     sync = sync_required_investigations(con, run_id)
+    resolution = _resolve_deterministic_investigations(con, run_id)
+    sync["open_total"] = sync_required_investigations(con, run_id)["open_total"]
     recompute_all_skills(con)
     plan = build_learning_plan(con, plan_limit)
-    persist_learning_plan(con, plan, run_id)
+    existing_plan_rows = con.execute(
+        "SELECT COUNT(*) FROM learning_queue WHERE source_run_id=?", (run_id,)
+    ).fetchone()[0]
+    if not existing_plan_rows:
+        persist_learning_plan(con, plan, run_id)
+        plan_rows_persisted = len(plan)
+    else:
+        plan_rows_persisted = int(existing_plan_rows)
     audit = audit_database(con)
     persist_audit(con, audit, run_id)
     high_confidence = con.execute(
@@ -70,8 +138,9 @@ def reconcile(work: Path, run_id: str, plan_limit: int = 64) -> dict:
         "sealed_test_opened": False,
         "run_id": run_id,
         "investigations": sync,
+        "deterministic_resolution": resolution,
         "high_confidence_errors": int(high_confidence),
-        "priority_plan_rows_persisted": len(plan),
+        "priority_plan_rows_persisted": plan_rows_persisted,
         "sealed_results_present": int(sealed_results),
         "sealed_learning_leaks": int(sealed_learning),
         "sealed_provenance": _sealed_provenance(con),
@@ -100,6 +169,8 @@ def main() -> None:
         "MAIN30K_RECONCILE_PASS "
         f"opened_now={result['investigations']['opened_now']} "
         f"open_total={result['investigations']['open_total']} "
+        f"resolved_now={result['deterministic_resolution']['resolved_now']} "
+        f"unsupported_open={result['deterministic_resolution']['unsupported_open']} "
         f"high_confidence_errors={result['high_confidence_errors']} "
         f"priority_plan_rows={result['priority_plan_rows_persisted']} "
         f"sealed_results={result['sealed_results_present']} "
