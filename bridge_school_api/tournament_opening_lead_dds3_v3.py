@@ -14,6 +14,7 @@ class TournamentOpeningLeadDDS3Error(ValueError):
 
 
 _CONTRACT_RE = re.compile(r"^[1-7](NT|[CDHS])(?:XX|X)?$")
+_PROVIDER_RE = re.compile(r"^bridge\.co\.il:event:([0-9]+):round:([0-9]+)$")
 _SEATS = ("N", "E", "S", "W")
 
 
@@ -36,6 +37,17 @@ def _rows(source: Mapping[str, Any]) -> list[dict[str, str]]:
             raise TournamentOpeningLeadDDS3Error("facts row width does not match columns")
         out.append(dict(zip(names, values, strict=True)))
     return out
+
+
+def _provider_identity(source: Mapping[str, Any]) -> tuple[str, str, str]:
+    tournament = source.get("tournament")
+    if not isinstance(tournament, Mapping):
+        raise TournamentOpeningLeadDDS3Error("tournament metadata is required")
+    provider_key = str(tournament.get("provider_native_key") or "").strip()
+    match = _PROVIDER_RE.fullmatch(provider_key)
+    if not match:
+        raise TournamentOpeningLeadDDS3Error("unsupported or unscoped bridge.co.il provider identity")
+    return provider_key, match.group(1), f"round-{match.group(2)}"
 
 
 def _contract_trump(contract: str) -> str:
@@ -97,6 +109,7 @@ def analyze_opening_leads(
     pair; it is not automatically a student error, a causal explanation of the board
     result, or a methodology statement.
     """
+    provider_key, event_id, session_id = _provider_identity(source)
     structure = validate_tournament_structure(source)
     if not structure.get("all_structural_checks_pass"):
         raise TournamentOpeningLeadDDS3Error("source structure must pass before opening-lead DDS3 analysis")
@@ -141,7 +154,7 @@ def analyze_opening_leads(
         target_pair_made_lead = leader_side == target_side
         item = {
             "board_number": board,
-            "deal_id": f"{source['tournament']['provider_native_key']}:{board}",
+            "deal_id": f"{event_id}:{session_id}:{board}",
             "contract": str(row.get("contract") or ""),
             "declarer": declarer,
             "opening_leader": leader,
@@ -178,7 +191,9 @@ def analyze_opening_leads(
     return {
         "schema": "tournament-opening-lead-dds3-v1",
         "normative_algorithm_version": "1.4",
-        "provider_native_key": source["tournament"]["provider_native_key"],
+        "provider_native_key": provider_key,
+        "event_id": event_id,
+        "session_id": session_id,
         "played_leads_analyzed": len(results),
         "target_pair_opening_leads_analyzed": sum(bool(row["target_pair_made_opening_lead"]) for row in results),
         "dd_optimal_actual_leads": sum(bool(row["actual_lead_dd_optimal"]) for row in results),
