@@ -34,6 +34,11 @@ assert x.get('fallback_used') is False, x
 print('DDS3_BEFORE_PASS')
 PY
 
+if systemctl is-active --quiet universal-video.service 2>/dev/null \
+  && find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null | grep -q .; then
+  die "universal-video has a running job; refusing source upgrade"
+fi
+
 log "Prepare dedicated universal-video source checkout"
 if ! command -v git >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
@@ -41,29 +46,60 @@ if ! command -v git >/dev/null 2>&1; then
   apt-get install -y --no-install-recommends git ca-certificates >/dev/null
 fi
 mkdir -p "$(dirname "$SOURCE_DIR")"
-if [[ -d "$SOURCE_DIR/.git" ]]; then
-  chmod -R u+w "$SOURCE_DIR"
-  current_origin="$(git -C "$SOURCE_DIR" remote get-url origin 2>/dev/null || true)"
-  [[ "$current_origin" == "$REPO_URL" ]] || die "unexpected origin in isolated source checkout: $current_origin"
-  [[ -z "$(git -C "$SOURCE_DIR" status --porcelain)" ]] || die "isolated source checkout is dirty"
-else
-  [[ ! -e "$SOURCE_DIR" || -z "$(ls -A "$SOURCE_DIR" 2>/dev/null)" ]] || die "source directory exists and is not an empty git checkout"
-  rm -rf "$SOURCE_DIR"
-  git clone --quiet --no-tags --filter=blob:none "$REPO_URL" "$SOURCE_DIR"
-fi
 
-git -C "$SOURCE_DIR" fetch --quiet --prune origin "$GIT_REF"
-git -C "$SOURCE_DIR" checkout --quiet --detach FETCH_HEAD
-RESOLVED_COMMIT="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
+# Always build and verify the requested revision in a fresh sibling checkout.
+# The current checkout is never reset or cleaned in-place: if it is dirty, it
+# is preserved verbatim for diagnosis instead of risking loss of local state.
+STAGING_DIR="$(mktemp -d "$(dirname "$SOURCE_DIR")/.universal-video-src.next.XXXXXX")"
+rmdir "$STAGING_DIR"
+cleanup_staging(){
+  if [[ -n "${STAGING_DIR:-}" && -e "$STAGING_DIR" ]]; then rm -rf "$STAGING_DIR"; fi
+}
+trap cleanup_staging EXIT
+
+git clone --quiet --no-tags --filter=blob:none "$REPO_URL" "$STAGING_DIR"
+git -C "$STAGING_DIR" fetch --quiet --prune origin "$GIT_REF"
+git -C "$STAGING_DIR" checkout --quiet --detach FETCH_HEAD
+[[ -z "$(git -C "$STAGING_DIR" status --porcelain)" ]] || die "fresh staged source checkout is unexpectedly dirty"
+RESOLVED_COMMIT="$(git -C "$STAGING_DIR" rev-parse HEAD)"
 log "Resolved universal-video source: $RESOLVED_COMMIT"
+
+OLD_DIR=""
+OLD_DIRTY=0
+if [[ -e "$SOURCE_DIR" ]]; then
+  if [[ -d "$SOURCE_DIR/.git" ]]; then
+    current_origin="$(git -C "$SOURCE_DIR" remote get-url origin 2>/dev/null || true)"
+    [[ "$current_origin" == "$REPO_URL" ]] || die "unexpected origin in isolated source checkout: $current_origin"
+    if [[ -n "$(git -C "$SOURCE_DIR" status --porcelain)" ]]; then OLD_DIRTY=1; fi
+  elif [[ -n "$(ls -A "$SOURCE_DIR" 2>/dev/null)" ]]; then
+    OLD_DIRTY=1
+  fi
+  OLD_DIR="${SOURCE_DIR}.previous.$(date -u +%Y%m%dT%H%M%SZ).$$"
+  mv "$SOURCE_DIR" "$OLD_DIR"
+fi
+mv "$STAGING_DIR" "$SOURCE_DIR"
+STAGING_DIR=""
 chown -R root:root "$SOURCE_DIR"
 chmod -R a-w "$SOURCE_DIR"
+
+if [[ "$OLD_DIRTY" == "1" ]]; then
+  PRESERVED_DIR="${SOURCE_DIR}.preserved.$(date -u +%Y%m%dT%H%M%SZ)"
+  mv "$OLD_DIR" "$PRESERVED_DIR"
+  OLD_DIR="$PRESERVED_DIR"
+  echo "UNIVERSAL_VIDEO_PREVIOUS_DIR=PRESERVED_DIRTY"
+  log "Previous dirty checkout preserved without modification: $PRESERVED_DIR"
+elif [[ -n "$OLD_DIR" ]]; then
+  # Keep the prior clean tree until the installer has successfully restarted the
+  # service; removal happens only after the post-install non-regression gate.
+  echo "UNIVERSAL_VIDEO_PREVIOUS_DIR=STAGED_CLEAN"
+fi
 
 log "Run side-by-side installer"
 UNIVERSAL_VIDEO_SOURCE_DIR="$SOURCE_DIR" \
 UNIVERSAL_VIDEO_DIR="$BASE_DIR" \
 UNIVERSAL_VIDEO_ACTIVATE="$ACTIVATE" \
 UNIVERSAL_VIDEO_PREWARM_MODEL="$PREWARM" \
+PYTHONDONTWRITEBYTECODE=1 \
   bash "$SOURCE_DIR/ops/oracle_universal_video_install.sh"
 
 log "Activation evidence"
@@ -89,7 +125,7 @@ else
 fi
 ffmpeg -version | head -1
 "$BASE_DIR/.venv/bin/python" --version
-runuser -u universal-video -- env HF_HOME="$BASE_DIR/model-cache" "$BASE_DIR/.venv/bin/python" - <<'PY'
+runuser -u universal-video -- env HF_HOME="$BASE_DIR/model-cache" PYTHONDONTWRITEBYTECODE=1 "$BASE_DIR/.venv/bin/python" - <<'PY'
 import faster_whisper
 print('faster_whisper_import=PASS')
 PY
@@ -105,6 +141,13 @@ assert x.get('engine') == 'DDS3', x
 assert x.get('fallback_used') is False, x
 print('DDS3_AFTER_PASS')
 PY
+
+# Only a previously clean source tree is disposable. A dirty checkout remains
+# preserved for operator inspection and is never silently deleted by rollout.
+if [[ "$OLD_DIRTY" == "0" && -n "$OLD_DIR" && -e "$OLD_DIR" ]]; then
+  rm -rf "$OLD_DIR"
+  OLD_DIR=""
+fi
 
 if [[ "$RUN_SMOKE" == "1" ]]; then
   log "Run bounded synthetic local smoke job"
