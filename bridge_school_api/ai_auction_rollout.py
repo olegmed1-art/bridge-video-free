@@ -106,12 +106,34 @@ def analyze_auction(dealer: str, calls: list[Any] | tuple[Any, ...]) -> AuctionS
     return AuctionState(dealer, tuple(normalized), complete, next_seat, contract, declarer)
 
 
-BenBidder = Callable[[str, str, tuple[str, ...]], dict[str, Any]]
+BenBidder = Callable[[dict[str, Any]], dict[str, Any]]
 
 
-def _validated_ben_call(result: Any) -> str:
+def ben_request_sha256(request: Any) -> str:
+    """Hash the exact bounded request handed to the trusted BEN adapter."""
+    if not isinstance(request, dict):
+        raise AuctionRolloutError("BEN request must be an object")
+    auction = request.get("auction")
+    if not isinstance(auction, (list, tuple)) or any(not isinstance(call, str) for call in auction):
+        raise AuctionRolloutError("BEN request auction is invalid")
+    canonical = {
+        "hand": str(request.get("hand") or ""),
+        "seat": str(request.get("seat") or "").upper(),
+        "dealer": str(request.get("dealer") or "").upper(),
+        "vul": str(request.get("vul") or "").upper(),
+        "auction": list(auction),
+    }
+    if request.get("scoring") is not None:
+        canonical["scoring"] = str(request["scoring"])
+    encoded = json.dumps(canonical, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _validated_ben_call(result: Any, *, expected_request_sha256: str) -> str:
     if not isinstance(result, dict):
         raise AuctionRolloutError("BEN returned a non-object response")
+    if result.get("request_sha256") != expected_request_sha256:
+        raise AuctionRolloutError("BEN result is not bound to the rollout request")
     selected = normalize_call(result.get("bid") or result.get("call"))
     candidates = result.get("candidates")
     if not isinstance(candidates, list) or not candidates:
@@ -124,6 +146,8 @@ def _validated_ben_call(result: Any) -> str:
         if action != selected:
             continue
         raw_score = item.get("insta_score", item.get("score"))
+        if isinstance(raw_score, bool):
+            continue
         try:
             score = float(raw_score)
         except (TypeError, ValueError):
@@ -195,13 +219,26 @@ def rollout_worlds(
         deal_pbn_sha256 = hashlib.sha256(deal_pbn.encode("utf-8")).hexdigest()
         state = seeded
         generated = 0
+        ben_request_hashes: list[str] = []
         while not state.complete:
             if generated >= max_calls_per_world:
                 raise AuctionRolloutError("BEN auction rollout exceeded call limit")
             acting = state.next_seat
             if acting is None:
                 raise AuctionRolloutError("auction state has no next seat")
-            selected = _validated_ben_call(ben_bidder(acting, hands[acting], state.calls))
+            ben_request = {
+                "hand": hands[acting],
+                "seat": acting,
+                "dealer": initial.dealer,
+                "vul": "" if normalized_vulnerability == "NONE" else normalized_vulnerability,
+                "auction": list(state.calls),
+            }
+            request_sha256 = ben_request_sha256(ben_request)
+            selected = _validated_ben_call(
+                ben_bidder(dict(ben_request)),
+                expected_request_sha256=request_sha256,
+            )
+            ben_request_hashes.append(request_sha256)
             state = analyze_auction(dealer, [*state.calls, selected])
             generated += 1
         results.append({
@@ -213,6 +250,7 @@ def rollout_worlds(
             "declarer": state.declarer,
             "passed_out": state.contract is None,
             "ben_calls_generated": generated,
+            "ben_request_sha256s": ben_request_hashes,
         })
     return {
         "engine": "BEN",
@@ -229,5 +267,6 @@ def rollout_worlds(
 
 
 __all__ = [
-    "AuctionRolloutError", "AuctionState", "analyze_auction", "normalize_call", "rollout_worlds",
+    "AuctionRolloutError", "AuctionState", "analyze_auction", "ben_request_sha256",
+    "normalize_call", "rollout_worlds",
 ]

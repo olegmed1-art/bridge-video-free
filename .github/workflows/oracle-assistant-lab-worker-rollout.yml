@@ -8,6 +8,7 @@ on:
       - 'assistant_lab/ben_runtime.py'
       - 'assistant_lab/contract.py'
       - 'bridge_school_api/ai_worlds.py'
+      - 'ops/oracle_known_hosts_from_scan.sh'
   pull_request_target:
     paths:
       - 'ops/oracle-assistant-lab-worker-requests/*.json'
@@ -115,15 +116,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/oracle-worker"
-          known="$RUNNER_TEMP/oracle-worker/known_hosts"; : > "$known"
-          for attempt in 1 2 3; do
-            ssh-keyscan -T 10 -t ed25519,ecdsa,rsa "$ORACLE_HOST" >> "$known" 2>/dev/null || true
-            [[ -s "$known" ]] && break
-            sleep $((attempt * 2))
-          done
-          sort -u -o "$known" "$known"
-          ssh-keygen -lf "$known" > "$RUNNER_TEMP/oracle-worker/fingerprints.txt"
-          awk '{print $2}' "$RUNNER_TEMP/oracle-worker/fingerprints.txt" | grep -Fx '${{ steps.request.outputs.expected_fingerprint }}' >/dev/null
+          known="$RUNNER_TEMP/oracle-worker/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh \
+            "$ORACLE_HOST" '${{ steps.request.outputs.expected_fingerprint }}' "$known"
           selected=''
           for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
             if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi

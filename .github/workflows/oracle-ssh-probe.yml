@@ -37,15 +37,17 @@ jobs:
       SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
       SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
     steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
       - name: Probe host fingerprint
         id: host
         shell: bash
         run: |
           set -euo pipefail
-          known="$RUNNER_TEMP/known_hosts"; : > "$known"
-          ssh-keyscan -T 10 -t ed25519,ecdsa,rsa "$ORACLE_HOST" >> "$known" 2>/dev/null
-          sort -u -o "$known" "$known"
-          ssh-keygen -lf "$known" | awk '{print $2}' | grep -Fx "$EXPECTED_FINGERPRINT" >/dev/null
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
           echo "known=$known" >> "$GITHUB_OUTPUT"
 
       - name: Probe configured SSH secret

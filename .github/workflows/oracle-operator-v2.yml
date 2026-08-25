@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - '.github/workflows/oracle-operator-v2.yml'
+      - 'ops/install_ben_runtime.sh'
+      - 'ops/install_dds3_runtime.sh'
+      - 'ops/oracle_known_hosts_from_scan.sh'
   issue_comment:
     types: [created]
 
@@ -29,17 +32,22 @@ jobs:
           set -euo pipefail
           ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" .github/workflows/oracle-operator-v2.yml
           grep -F '/oracle-v2 rollout-worker' .github/workflows/oracle-operator-v2.yml >/dev/null
+          grep -F '/oracle-v2 rollout-dds3-runtime' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '/oracle-v2 canary-worlds' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '/oracle-v2 rollout-ben' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '/oracle-v2 canary-ben' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '/oracle-v2 canary-ben-dds3' .github/workflows/oracle-operator-v2.yml >/dev/null
-          grep -F '127.0.0.1:8085:8085' .github/workflows/oracle-operator-v2.yml >/dev/null
+          bash -n ops/install_ben_runtime.sh ops/install_dds3_runtime.sh ops/oracle_known_hosts_from_scan.sh
+          grep -F 'ghcr.io/lorserker/ben@sha256:' .github/workflows/oracle-operator-v2.yml >/dev/null
+          grep -F '127.0.0.1:8085:8085' ops/install_ben_runtime.sh >/dev/null
+          grep -F -- '--read-only' ops/install_ben_runtime.sh >/dev/null
 
   operate:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.comment.user.login == 'olegmed1-art' &&
       (github.event.comment.body == '/oracle-v2 rollout-worker' ||
+       github.event.comment.body == '/oracle-v2 rollout-dds3-runtime' ||
        github.event.comment.body == '/oracle-v2 canary-worlds' ||
        github.event.comment.body == '/oracle-v2 rollout-ben' ||
        github.event.comment.body == '/oracle-v2 canary-ben' ||
@@ -50,6 +58,7 @@ jobs:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
       EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      BEN_IMAGE: ghcr.io/lorserker/ben@sha256:474065d99c796a54e32cab4a83dee09685749cff2fbde5edc84ab2b961ba514d
       SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
       SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
       SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
@@ -70,14 +79,8 @@ jobs:
         run: |
           set -euo pipefail
           work="$RUNNER_TEMP/oracle-v2"; mkdir -p "$work"
-          known="$work/known_hosts"; : > "$known"
-          for attempt in 1 2 3; do
-            ssh-keyscan -T 10 -t ed25519,ecdsa,rsa "$ORACLE_HOST" >> "$known" 2>/dev/null || true
-            [[ -s "$known" ]] && break
-            sleep $((attempt * 2))
-          done
-          sort -u -o "$known" "$known"
-          ssh-keygen -lf "$known" | awk '{print $2}' | grep -Fx "$EXPECTED_FINGERPRINT" >/dev/null
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
 
           selected=''
           selected_name=''
@@ -90,17 +93,17 @@ jobs:
             candidates=("$base.raw" "$base.crlf" "$base.escaped")
             printf '%s\n' "$raw" > "${candidates[0]}"
             tr -d '\r' < "${candidates[0]}" > "${candidates[1]}"
-            python - "$raw" "${candidates[2]}" <<'PY'
+            printf '%s' "$raw" | python -c '
           import sys
-          raw=sys.argv[1]
-          path=sys.argv[2]
-          if '\\n' in raw and '\n' not in raw:
-              raw=raw.replace('\\r','').replace('\\n','\n')
-          with open(path,'w',newline='\n') as f:
-              f.write(raw)
-              if not raw.endswith('\n'):
-                  f.write('\n')
-          PY
+          raw = sys.stdin.read()
+          path = sys.argv[1]
+          if "\\n" in raw and "\n" not in raw:
+              raw = raw.replace("\\r", "").replace("\\n", "\n")
+          with open(path, "w", newline="\n") as handle:
+              handle.write(raw)
+              if not raw.endswith("\n"):
+                  handle.write("\n")
+          ' "${candidates[2]}"
             for key in "${candidates[@]}"; do
               chmod 0600 "$key"
               ssh-keygen -y -f "$key" >/dev/null 2>&1 || continue
@@ -142,54 +145,24 @@ jobs:
           curl -fsS --max-time 5 http://127.0.0.1:8080/readyz >/dev/null
           REMOTE
 
+      - name: Roll out reviewed localhost DDS3 runtime
+        id: dds3
+        if: ${{ env.COMMAND == '/oracle-v2 rollout-dds3-runtime' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref="$(git rev-parse HEAD)"
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env DDS3_GIT_REF='$ref' bash -s" < ops/install_dds3_runtime.sh
+
       - name: Roll out localhost BEN runtime
         id: ben
         if: ${{ env.COMMAND == '/oracle-v2 rollout-ben' }}
         shell: bash
         run: |
           set -euo pipefail
-          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n bash -s' <<'REMOTE'
-          set -Eeuo pipefail
-          command -v docker >/dev/null
-          systemctl is-active --quiet docker
-          docker pull ghcr.io/lorserker/ben:latest >/tmp/bridge-ben-pull.log
-          digest="$(docker image inspect ghcr.io/lorserker/ben:latest --format '{{index .RepoDigests 0}}')"
-          [[ "$digest" == ghcr.io/lorserker/ben@sha256:* ]]
-          install -d -m 0755 /opt/bridge-school/ben-runtime
-          printf '%s\n' "$digest" > /opt/bridge-school/ben-runtime/image-digest
-          cat >/etc/systemd/system/bridge-ben.service <<EOF
-          [Unit]
-          Description=Bridge BEN policy runtime
-          After=docker.service network-online.target
-          Requires=docker.service
-
-          [Service]
-          Type=simple
-          Restart=on-failure
-          RestartSec=3
-          ExecStartPre=-/usr/bin/docker rm -f bridge-ben
-          ExecStart=/usr/bin/docker run --rm --name bridge-ben -p 127.0.0.1:8085:8085 $digest
-          ExecStop=/usr/bin/docker stop -t 10 bridge-ben
-          TimeoutStartSec=180
-          TimeoutStopSec=30
-
-          [Install]
-          WantedBy=multi-user.target
-          EOF
-          systemctl daemon-reload
-          systemctl enable --now bridge-ben.service
-          for attempt in $(seq 1 90); do
-            code="$(curl -sS -o /tmp/bridge-ben-ready.json -w '%{http_code}' --max-time 5 'http://127.0.0.1:8085/bid?hand=AK97543.K.T3.AK7&seat=S&dealer=N&vul=&ctx=----&details=true' || true)"
-            [[ "$code" == 200 ]] && break
-            sleep 2
-          done
-          [[ "${code:-}" == 200 ]]
-          ss -ltn | grep -Eq '127\.0\.0\.1:8085[[:space:]]'
-          ! ss -ltn | grep -Eq '(^|[[:space:]])0\.0\.0\.0:8085|\[::\]:8085'
-          systemctl restart assistant-lab.service
-          sleep 3
-          systemctl is-active --quiet assistant-lab.service
-          REMOTE
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env BEN_IMAGE='$BEN_IMAGE' bash -s" < ops/install_ben_runtime.sh
 
       - name: Run unique Oracle WORLDS canary
         id: worlds
@@ -439,6 +412,7 @@ jobs:
           SSH_OUTCOME: ${{ steps.ssh.outcome }}
           WORKER_OUTCOME: ${{ steps.worker.outcome }}
           BEN_OUTCOME: ${{ steps.ben.outcome }}
+          DDS3_OUTCOME: ${{ steps.dds3.outcome }}
           WORLDS_OUTCOME: ${{ steps.worlds.outcome }}
           WORLDS_JOB_ID: ${{ steps.worlds.outputs.job_id }}
           BEN_CANARY_OUTCOME: ${{ steps.ben_canary.outcome }}
@@ -449,4 +423,4 @@ jobs:
         run: |
           set -euo pipefail
           gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
-            -f body="Oracle v2 **${COMMAND}**: ssh=${SSH_OUTCOME}, worker=${WORKER_OUTCOME}, ben=${BEN_OUTCOME}, worlds=${WORLDS_OUTCOME}, worlds_job=${WORLDS_JOB_ID:-none}, ben_canary=${BEN_CANARY_OUTCOME}, ben_job=${BEN_CANARY_JOB_ID:-none}, ben_dds3_canary=${BEN_DDS3_CANARY_OUTCOME}, detail=${BEN_DDS3_CANARY_DETAIL:-none}" >/dev/null
+            -f body="Oracle v2 **${COMMAND}**: ssh=${SSH_OUTCOME}, worker=${WORKER_OUTCOME}, dds3=${DDS3_OUTCOME}, ben=${BEN_OUTCOME}, worlds=${WORLDS_OUTCOME}, worlds_job=${WORLDS_JOB_ID:-none}, ben_canary=${BEN_CANARY_OUTCOME}, ben_job=${BEN_CANARY_JOB_ID:-none}, ben_dds3_canary=${BEN_DDS3_CANARY_OUTCOME}, detail=${BEN_DDS3_CANARY_DETAIL:-none}" >/dev/null

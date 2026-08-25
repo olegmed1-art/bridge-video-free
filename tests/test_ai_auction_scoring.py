@@ -1,3 +1,5 @@
+import hashlib
+
 import pytest
 
 from bridge_school_api.ai_auction_scoring import (
@@ -6,6 +8,16 @@ from bridge_school_api.ai_auction_scoring import (
     score_duplicate_contract,
     score_rollout_with_dds3,
 )
+from bridge_school_api.dds3.service import (
+    DDS_UPSTREAM,
+    canonical_dds3_table_request,
+    dds3_table_request_sha256,
+)
+
+
+TEST_PBN = "N:AKQJT98765432... .AKQJT98765432.. ..AKQJT98765432. ...AKQJT98765432"
+TEST_PBN_SHA256 = hashlib.sha256(TEST_PBN.encode("utf-8")).hexdigest()
+ALT_PBN = "N:AKQJT9876543.2.. .AKQJT9876543.2. ..AKQJT9876543.2 2..AKQJT9876543"
 
 
 def test_duplicate_scoring_covers_game_slam_doubles_and_ns_sign():
@@ -27,6 +39,37 @@ def test_duplicate_scoring_covers_game_slam_doubles_and_ns_sign():
     assert score_duplicate_contract(
         contract="6H", declarer="W", tricks=12, vulnerability="NONE"
     )["score_ns"] == -980
+
+
+@pytest.mark.parametrize(("contract", "tricks", "vulnerability", "expected"), [
+    ("1C", 7, "NONE", 70),
+    ("2D", 8, "BOTH", 90),
+    ("2H", 8, "NONE", 110),
+    ("3S", 9, "NS", 140),
+    ("1N", 7, "NONE", 90),
+    ("2N", 8, "NS", 120),
+    ("3N", 9, "NONE", 400),
+    ("3N", 9, "NS", 600),
+    ("4H", 10, "NONE", 420),
+    ("4S", 10, "NS", 620),
+    ("5C", 11, "NONE", 400),
+    ("5D", 11, "NS", 600),
+    ("6N", 12, "NONE", 990),
+    ("6N", 12, "NS", 1440),
+    ("7N", 13, "NONE", 1520),
+    ("7N", 13, "NS", 2220),
+    ("2SX", 8, "NONE", 470),
+    ("2SXX", 8, "NONE", 640),
+    ("4SX", 11, "NONE", 690),
+    ("3N", 10, "NS", 630),
+])
+def test_duplicate_scoring_golden_matrix(contract, tricks, vulnerability, expected):
+    assert score_duplicate_contract(
+        contract=contract,
+        declarer="N",
+        tricks=tricks,
+        vulnerability=vulnerability,
+    )["score_ns"] == expected
 
 
 def test_vulnerability_and_contract_inputs_fail_closed():
@@ -55,7 +98,7 @@ def _rollout(*, passed_out=False, vulnerability="NONE"):
         "worlds": [{
             "world_index": 0,
             "world_fingerprint": fingerprint,
-            "deal_pbn_sha256": "b" * 64,
+            "deal_pbn_sha256": TEST_PBN_SHA256,
             "auction": ["4S", "PASS", "PASS", "PASS"],
             "contract": None if passed_out else "4S",
             "declarer": None if passed_out else "N",
@@ -65,14 +108,18 @@ def _rollout(*, passed_out=False, vulnerability="NONE"):
     }
 
 
-def _dds(*, fallback=False):
+def _dds(*, request, fallback=False, engine_version=DDS_UPSTREAM, input_validated=True,
+         strain_order=None, request_sha256=None, deal_pbn_sha256=None):
     return {
         "engine": "DDS3",
-        "engine_version": "v3-test",
+        "engine_version": engine_version,
         "operation": "dd_table",
+        "input_validated": input_validated,
         "fallback_used": fallback,
         "hand_order": ["N", "E", "S", "W"],
-        "strain_order": ["S", "H", "D", "C", "NT"],
+        "strain_order": strain_order or ["S", "H", "D", "C", "NT"],
+        "deal_pbn_sha256": deal_pbn_sha256 or hashlib.sha256(request["pbn"].encode("utf-8")).hexdigest(),
+        "request_sha256": request_sha256 or dds3_table_request_sha256(request),
         "dd_table": {
             "S": [10, 3, 10, 3],
             "H": [9, 4, 9, 4],
@@ -83,11 +130,12 @@ def _dds(*, fallback=False):
     }
 
 
-def _dds_envelope(*, fallback=False, fingerprint=None, deal_pbn_sha256=None):
+def _dds_envelope(*, fallback=False, fingerprint=None, pbn=TEST_PBN, **dds_overrides):
+    request = canonical_dds3_table_request(pbn=pbn, dealer="N", vulnerability="None")
     return {
         "world_fingerprint": fingerprint or "a" * 64,
-        "deal_pbn_sha256": deal_pbn_sha256 or "b" * 64,
-        "result": _dds(fallback=fallback),
+        "request": request,
+        "result": _dds(request=request, fallback=fallback, **dds_overrides),
     }
 
 
@@ -159,7 +207,23 @@ def test_rollout_binding_rejects_mislabeled_dds3_deal():
         score_rollout_with_dds3(
             rollout=_rollout(),
             dds3_results={
-                "a" * 64: _dds_envelope(deal_pbn_sha256="c" * 64),
+                "a" * 64: _dds_envelope(pbn=ALT_PBN),
             },
+            vulnerability="NONE",
+        )
+
+
+@pytest.mark.parametrize("overrides", [
+    {"engine_version": "v3-unreviewed"},
+    {"input_validated": False},
+    {"strain_order": ["C", "D", "H", "S", "NT"]},
+    {"request_sha256": "0" * 64},
+    {"deal_pbn_sha256": "0" * 64},
+])
+def test_rollout_binding_rejects_incomplete_dds3_provenance(overrides):
+    with pytest.raises(AuctionScoringError, match="DDS3"):
+        score_rollout_with_dds3(
+            rollout=_rollout(),
+            dds3_results={"a" * 64: _dds_envelope(**overrides)},
             vulnerability="NONE",
         )

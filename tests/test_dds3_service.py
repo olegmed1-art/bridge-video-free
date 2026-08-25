@@ -1,10 +1,17 @@
 import json
+import hashlib
 import os
 import stat
 
 import pytest
 
-from bridge_school_api.dds3 import DDS3Config, DDSUnavailable, solve_table
+from bridge_school_api.dds3 import (
+    DDS3Config,
+    DDSUnavailable,
+    canonical_dds3_table_request,
+    dds3_table_request_sha256,
+    solve_table,
+)
 
 
 def _exe(tmp_path, body):
@@ -20,6 +27,10 @@ def test_returns_dds_result_without_fallback(tmp_path):
     result = solve_table(pbn="N:A... ... ... ...", config=DDS3Config(executable=exe))
     assert result["engine"] == "DDS3"
     assert result["fallback_used"] is False
+    assert result["input_validated"] is True
+    assert result["deal_pbn_sha256"] == hashlib.sha256(b"N:A... ... ... ...").hexdigest()
+    request = canonical_dds3_table_request(pbn="N:A... ... ... ...")
+    assert result["request_sha256"] == dds3_table_request_sha256(request)
 
 
 def test_missing_dds_is_fail_closed():

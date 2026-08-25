@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any, Mapping
 
+from bridge_school_api.dds3.service import DDS3_HAND_ORDER, DDS3_STRAIN_ORDER, DDS_UPSTREAM
+
 CONTRACT_VERSION = "assistant-lab-v1"
 
 
@@ -152,6 +154,19 @@ def verify_dds3_result(result: Any, *, expected_operation: str | None = None) ->
         raise LabContractError("assistant-lab rejects DDS3 fallback results")
     if expected_operation is not None and data.get("operation") != expected_operation:
         raise LabContractError("DDS3 operation provenance mismatch")
+    if data.get("engine_version") != DDS_UPSTREAM:
+        raise LabContractError("DDS3 engine version provenance mismatch")
+    if data.get("operation") == "dd_table":
+        if data.get("input_validated") is not True:
+            raise LabContractError("DDS3 input validation provenance is missing")
+        if data.get("hand_order") != list(DDS3_HAND_ORDER):
+            raise LabContractError("DDS3 hand order provenance mismatch")
+        if data.get("strain_order") != list(DDS3_STRAIN_ORDER):
+            raise LabContractError("DDS3 strain order provenance mismatch")
+        for field in ("deal_pbn_sha256", "request_sha256"):
+            value = data.get(field)
+            if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+                raise LabContractError(f"DDS3 {field} provenance is invalid")
     return data
 
 

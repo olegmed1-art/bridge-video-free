@@ -15,6 +15,7 @@ from assistant_lab.contract import (
 )
 from assistant_lab.dispatch import dispatch_nonce_sha256, verify_dispatch_nonce
 from assistant_lab.worker import WorkerConfig, execute_job, validate_local_dds3_url, validate_neon_dsn
+from bridge_school_api.dds3.service import DDS_UPSTREAM
 
 
 def test_priority_contract_is_stable():
@@ -78,7 +79,17 @@ def test_idempotency_key_is_deterministic_and_versioned():
 
 
 def test_dds3_provenance_is_fail_closed():
-    good = {"engine": "DDS3", "fallback_used": False, "operation": "dd_table"}
+    good = {
+        "engine": "DDS3",
+        "engine_version": DDS_UPSTREAM,
+        "fallback_used": False,
+        "operation": "dd_table",
+        "input_validated": True,
+        "hand_order": ["N", "E", "S", "W"],
+        "strain_order": ["S", "H", "D", "C", "NT"],
+        "deal_pbn_sha256": "a" * 64,
+        "request_sha256": "b" * 64,
+    }
     assert verify_dds3_result(good, expected_operation="dd_table") == good
     with pytest.raises(LabContractError):
         verify_dds3_result({"engine": "DDS", "fallback_used": False, "operation": "dd_table"})
@@ -86,6 +97,12 @@ def test_dds3_provenance_is_fail_closed():
         verify_dds3_result({"engine": "DDS3", "fallback_used": True, "operation": "dd_table"})
     with pytest.raises(LabContractError):
         verify_dds3_result(good, expected_operation="position_all_moves")
+    with pytest.raises(LabContractError, match="engine version"):
+        verify_dds3_result(dict(good, engine_version="unreviewed"), expected_operation="dd_table")
+    with pytest.raises(LabContractError, match="input validation"):
+        verify_dds3_result(dict(good, input_validated=False), expected_operation="dd_table")
+    with pytest.raises(LabContractError, match="request_sha256"):
+        verify_dds3_result(dict(good, request_sha256="not-a-hash"), expected_operation="dd_table")
 
 
 def test_ben_selected_bid_requires_its_own_finite_policy_score():

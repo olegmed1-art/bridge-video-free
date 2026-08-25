@@ -6,6 +6,7 @@ on:
       - '.github/workflows/oracle-diana11-operator-bootstrap.yml'
       - 'ops/universal_video_diana11_operator.sh'
       - 'ops/install_universal_video_diana11_operator.sh'
+      - 'ops/oracle_known_hosts_from_scan.sh'
   push:
     branches: [main]
     paths:
@@ -37,6 +38,7 @@ jobs:
           set -euo pipefail
           bash -n ops/universal_video_diana11_operator.sh
           bash -n ops/install_universal_video_diana11_operator.sh
+          bash -n ops/oracle_known_hosts_from_scan.sh
           grep -Fq "diana11-transcript-20260825-01" ops/universal_video_diana11_operator.sh
           grep -Fq "1PGRLozLJKG8tl-JYGPTCcS_lT-nn-T7C" ops/universal_video_diana11_operator.sh
       - name: Validate request
@@ -85,10 +87,15 @@ jobs:
           ssh-keygen -y -f "$key" >/dev/null
           known="$RUNNER_TEMP/known_hosts"
           : > "$known"
-          for _ in 1 2 3; do
-            ssh-keyscan -T 10 -t ed25519,ecdsa,rsa "$ORACLE_HOST" >> "$known" 2>/dev/null || true
-            test -s "$known" && break
-            sleep 2
+          index=0
+          for expected in \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64'; do
+            part="$RUNNER_TEMP/known_hosts.$index"
+            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$expected" "$part"
+            cat "$part" >> "$known"
+            index=$((index + 1))
           done
           sort -u -o "$known" "$known"
           test -s "$known"
