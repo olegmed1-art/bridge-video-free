@@ -7,6 +7,8 @@ on:
       - 'ops/install_ben_runtime.sh'
       - 'ops/install_dds3_runtime.sh'
       - 'ops/oracle_known_hosts_from_scan.sh'
+      - 'ops/oracle_ben_benchmark.py'
+      - 'tests/test_oracle_ben_benchmark.py'
   issue_comment:
     types: [created]
 
@@ -37,7 +39,9 @@ jobs:
           grep -F '/oracle-v2 rollout-ben' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '/oracle-v2 canary-ben' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '/oracle-v2 canary-ben-dds3' .github/workflows/oracle-operator-v2.yml >/dev/null
+          grep -F '/oracle-v2 benchmark-ben-100-500' .github/workflows/oracle-operator-v2.yml >/dev/null
           bash -n ops/install_ben_runtime.sh ops/install_dds3_runtime.sh ops/oracle_known_hosts_from_scan.sh
+          python -m py_compile ops/oracle_ben_benchmark.py
           grep -F 'ghcr.io/lorserker/ben@sha256:' .github/workflows/oracle-operator-v2.yml >/dev/null
           grep -F '127.0.0.1:8085:8085' ops/install_ben_runtime.sh >/dev/null
           grep -F -- '--read-only' ops/install_ben_runtime.sh >/dev/null
@@ -51,7 +55,8 @@ jobs:
        github.event.comment.body == '/oracle-v2 canary-worlds' ||
        github.event.comment.body == '/oracle-v2 rollout-ben' ||
        github.event.comment.body == '/oracle-v2 canary-ben' ||
-       github.event.comment.body == '/oracle-v2 canary-ben-dds3')
+       github.event.comment.body == '/oracle-v2 canary-ben-dds3' ||
+       github.event.comment.body == '/oracle-v2 benchmark-ben-100-500')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -404,6 +409,60 @@ jobs:
           PY
           exit "$rc"
 
+      - name: Run Oracle BEN Pilot-100 then Pilot-500 benchmark
+        id: ben_benchmark
+        if: ${{ env.COMMAND == '/oracle-v2 benchmark-ben-100-500' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          remote_script="/tmp/oracle-ben-benchmark-${GITHUB_RUN_ID}.py"
+          detail="$RUNNER_TEMP/oracle-ben-benchmark.jsonl"
+          scp -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 ops/oracle_ben_benchmark.py \
+            "$ORACLE_USER@$ORACLE_HOST:$remote_script"
+          set +e
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env BEN_P95_LIMIT_MS=5000 python3 '$remote_script'; rc=\$?; sudo -n rm -f '$remote_script'; exit \$rc" \
+            >"$detail" 2>&1
+          rc=$?
+          set -e
+          cat "$detail"
+          python - "$detail" >> "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          report = None
+          for line in reversed(Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()):
+              try:
+                  candidate = json.loads(line)
+              except json.JSONDecodeError:
+                  continue
+              if candidate.get("benchmark") == "oracle-ben-pilot-100-500-v1":
+                  report = candidate
+                  break
+          if report is None:
+              print("detail=benchmark report missing")
+          else:
+              b100 = report.get("ben", {}).get("100", {})
+              b500 = report.get("ben", {}).get("500", {})
+              before = report.get("dds3", {}).get("before", {}).get("latency_ms", {})
+              after = report.get("dds3", {}).get("after", {}).get("latency_ms", {})
+              memory = report.get("memory", {})
+              detail = (
+                  f"pass={report.get('passed')} "
+                  f"ben100={b100.get('successes')}/100 p50={b100.get('latency_ms', {}).get('p50')}ms p95={b100.get('latency_ms', {}).get('p95')}ms "
+                  f"ben500={b500.get('successes')}/500 p50={b500.get('latency_ms', {}).get('p50')}ms p95={b500.get('latency_ms', {}).get('p95')}ms "
+                  f"memory_delta={memory.get('delta_bytes')}B memory_pass={memory.get('passed')} "
+                  f"dds3_p95={before.get('p95')}->{after.get('p95')}ms dds3_pass={report.get('dds3', {}).get('passed')}"
+              )
+              print(f"detail={detail}")
+          PY
+          exit "$rc"
+
       - name: Publish result
         if: always()
         env:
@@ -419,8 +478,10 @@ jobs:
           BEN_CANARY_JOB_ID: ${{ steps.ben_canary.outputs.job_id }}
           BEN_DDS3_CANARY_OUTCOME: ${{ steps.ben_dds3_canary.outcome }}
           BEN_DDS3_CANARY_DETAIL: ${{ steps.ben_dds3_canary.outputs.detail }}
+          BEN_BENCHMARK_OUTCOME: ${{ steps.ben_benchmark.outcome }}
+          BEN_BENCHMARK_DETAIL: ${{ steps.ben_benchmark.outputs.detail }}
         shell: bash
         run: |
           set -euo pipefail
           gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
-            -f body="Oracle v2 **${COMMAND}**: ssh=${SSH_OUTCOME}, worker=${WORKER_OUTCOME}, dds3=${DDS3_OUTCOME}, ben=${BEN_OUTCOME}, worlds=${WORLDS_OUTCOME}, worlds_job=${WORLDS_JOB_ID:-none}, ben_canary=${BEN_CANARY_OUTCOME}, ben_job=${BEN_CANARY_JOB_ID:-none}, ben_dds3_canary=${BEN_DDS3_CANARY_OUTCOME}, detail=${BEN_DDS3_CANARY_DETAIL:-none}" >/dev/null
+            -f body="Oracle v2 **${COMMAND}**: ssh=${SSH_OUTCOME}, worker=${WORKER_OUTCOME}, dds3=${DDS3_OUTCOME}, ben=${BEN_OUTCOME}, worlds=${WORLDS_OUTCOME}, worlds_job=${WORLDS_JOB_ID:-none}, ben_canary=${BEN_CANARY_OUTCOME}, ben_job=${BEN_CANARY_JOB_ID:-none}, ben_dds3_canary=${BEN_DDS3_CANARY_OUTCOME}, canary_detail=${BEN_DDS3_CANARY_DETAIL:-none}, ben_benchmark=${BEN_BENCHMARK_OUTCOME}, benchmark_detail=${BEN_BENCHMARK_DETAIL:-none}" >/dev/null
