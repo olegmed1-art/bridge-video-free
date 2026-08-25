@@ -1,0 +1,126 @@
+name: Tournament Analyzer v3 Opening Lead Review Handoff
+
+on:
+  pull_request:
+    paths:
+      - "bridge_school_api/tournament_opening_lead_review_handoff_v3.py"
+      - "tools/tournament_opening_lead_review_handoff_v3.py"
+      - "tests/test_tournament_opening_lead_review_handoff_v3.py"
+      - "bridge_school_api/tournament_opening_lead_dds3_v3.py"
+      - "bridge_school_api/tournament_teacher_review_queue_v3.py"
+      - "bridge_school_api/tournament_teacher_decisions_v3.py"
+      - "bridge_school_api/tournament_teacher_review_dossier_v3.py"
+      - "bridge_school_api/tournament_episode_inventory_v3.py"
+      - "data/tournaments/tournament_30041_round2_diana_facts_v1.json"
+      - "bridge_school_api/dds3/**"
+      - "dds/dds_position_worker.cpp"
+      - "Dockerfile.dds3"
+      - "dds3_runtime/**"
+      - ".github/workflows/tournament-analyzer-v3-opening-lead-review-handoff.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-30041-handoff:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Unit tests and compile
+        run: |
+          python -m pip install --disable-pip-version-check pytest
+          python -m py_compile bridge_school_api/tournament_opening_lead_review_handoff_v3.py tools/tournament_opening_lead_review_handoff_v3.py
+          python -m pytest -q tests/test_tournament_opening_lead_review_handoff_v3.py
+      - name: Build pinned DDS3
+        run: |
+          docker build -f Dockerfile.dds3 -t bridge-school-dds3 .
+          docker build -f dds3_runtime/Dockerfile -t bridge-school-dds3-runtime:opening-lead-handoff .
+      - name: Start isolated DDS3 runtime
+        run: |
+          docker run -d --rm --name dds3-opening-lead-handoff-runtime \
+            -p 18080:8080 \
+            -e DDS3_RUNTIME_TOKEN=opening-lead-handoff-ci-secret \
+            bridge-school-dds3-runtime:opening-lead-handoff
+      - name: Require canonical DDS3 readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 45); do
+            if curl -fsS http://127.0.0.1:18080/readyz > dds3-opening-lead-handoff-ready.json; then
+              python - <<'PY'
+          import json
+          r=json.load(open('dds3-opening-lead-handoff-ready.json', encoding='utf-8'))
+          assert r['status']=='ready'
+          assert r['engine']=='DDS3'
+          assert r['fallback_used'] is False
+          PY
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs dds3-opening-lead-handoff-runtime
+          exit 1
+      - name: Recompute real opening-lead DDS3 evidence
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$PWD" python tools/tournament_opening_lead_dds3_v3.py \
+            --facts data/tournaments/tournament_30041_round2_diana_facts_v1.json \
+            --base-url http://127.0.0.1:18080 \
+            --token opening-lead-handoff-ci-secret \
+            --out-json tournament-30041-opening-lead-dds3.json \
+            --out-md tournament-30041-opening-lead-dds3.md
+      - name: Build additive teacher-review handoff
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$PWD" python tools/tournament_opening_lead_review_handoff_v3.py \
+            --facts data/tournaments/tournament_30041_round2_diana_facts_v1.json \
+            --opening-lead-report tournament-30041-opening-lead-dds3.json \
+            --out tournament-30041-opening-lead-review-handoff.json
+      - name: Enforce real handoff evidence boundary
+        run: |
+          python - <<'PY'
+          import json
+          h=json.load(open('tournament-30041-opening-lead-review-handoff.json', encoding='utf-8'))
+          assert h['schema']=='tournament-opening-lead-review-handoff-v1'
+          assert h['candidate_count']==4
+          q=h['queue']
+          assert q['schema']=='tournament-teacher-review-queue-v1'
+          assert len(q['lanes'])==1 and len(q['lanes'][0]['items'])==4
+          assert {x['category'] for x in q['lanes'][0]['items']}=={'opening_lead_dds3'}
+          assert all(x['causal_link']=='NOT_ESTABLISHED' for x in q['lanes'][0]['items'])
+          assert all(x['student_error_attribution_allowed'] is False for x in q['lanes'][0]['items'])
+          ledger=h['decision_ledger']
+          assert len(ledger['decisions'])==4
+          assert all(x['status']=='PENDING' for x in ledger['decisions'])
+          assert ledger['automatic_decisions_allowed'] is False
+          dossier=h['dossier']
+          assert len(dossier['items'])==4
+          assert all(x['methodology_mapping'] is None and x['student_error_attribution'] is None for x in dossier['items'])
+          inventory=h['episode_candidate_inventory']
+          assert inventory['technical_candidate_count']==4
+          assert inventory['coverage_episode_inputs']==[]
+          assert inventory['v1_4_episode_inventory_complete'] is False
+          assert all(x['impact_score'] is None and x['coverage_eligible'] is False for x in inventory['technical_candidates'])
+          assert h['historical_review_batch_mutation_allowed'] is False
+          print('TOURNAMENT_30041_OPENING_LEAD_REVIEW_HANDOFF_PASS')
+          print('candidate_deals', [x['deal_id'] for x in q['lanes'][0]['items']])
+          PY
+      - name: Runtime logs on failure
+        if: failure()
+        run: docker logs dds3-opening-lead-handoff-runtime || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tournament-analyzer-v3-30041-opening-lead-review-handoff
+          path: |
+            dds3-opening-lead-handoff-ready.json
+            tournament-30041-opening-lead-dds3.json
+            tournament-30041-opening-lead-dds3.md
+            tournament-30041-opening-lead-review-handoff.json
+          if-no-files-found: error
+          retention-days: 30
