@@ -15,7 +15,7 @@ on:
         default: false
   schedule:
     # 2026-08-21 reviewed no-op trigger: PILOT-10k duplicate is eligible only if the existing Deletion Gate passes.
-    - cron: '47 */3 * * *'
+    - cron: '47 */6 * * *'
   pull_request:
     branches: [main]
     paths:
