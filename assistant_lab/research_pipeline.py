@@ -116,7 +116,7 @@ def validate_compute_result(kind: ResearchKind | str, result: Any, payload: Any)
         if data.get("complete") is not True or data.get("accepted") != data.get("requested"):
             raise LabContractError("world generator returned an incomplete sample")
         return data
-    raise LabContractError("compute result validation is defined only for DDS3/BEN")
+    raise LabContractError("compute result validation is defined only for DDS3/BEN/WORLDS")
 
 
 def build_artifact_manifest(*, research_id: str, compute_result: Any, provenance: Any, artifact_type: str = "json") -> dict[str, Any]:
