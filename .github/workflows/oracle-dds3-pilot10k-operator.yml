@@ -153,6 +153,60 @@ jobs:
             sed -n '1,80p' "$out"
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
+      - name: Stage and preflight Main-30k on Oracle without compute
+        if: ${{ env.COMMAND == '/dds3-main30k stage' }}
+        id: stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          key='${{ steps.ssh.outputs.key }}'; known='${{ steps.ssh.outputs.known }}'
+          opts=(-i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$known" -o ConnectTimeout=15)
+          scp "${opts[@]}" /tmp/dds-main30k-state.tgz "$ORACLE_USER$@ORACLE_HOST:/tmp/dds-main30k-state.tgz"
+          out="$RUNNER_TEMP/main30k-stage.txt"
+          ref="$(git rev-parse HEAD)"
+          ssh "${opts[@]}" "$ORACLE_USER$@ORACLE_HOST" \
+            "sudo -n env RUNTIME_COMMIT='$ref' MAIN30K_TGZ_SHA256='$MAIN30K_TGZ_SHA256' bash -s" <<'REMOTE' | tee "$out"
+          set -Eeuo pipefail
+          repo=/opt/bridge-school/bridge-video-free
+          state=/opt/bridge-school/dds3-mass-validation
+          work="$state/work/main30k"
+          unpack="$state/staged/main30k"
+          if systemctl is-active --quiet dds3-mass@30000.service; then exit 3; fi
+          test "$(git -C "$repo" rev-parse HEAD)" = "$RUNTIME_COMMIT"
+          echo "$MAIN30K_TGZ_SHA256  /tmp/dds-main30k-state.tgz" | sha256sum -c -
+          rm -rf "$unpack" "$work"
+          install -d -m 0750 -o root -g dds3-mass "$unpack"
+          tar -xzf /tmp/dds-main30k-state.tgz -C "$unpack"
+          test -d "$unpack/pilot"
+          mv "$unpack/pilot" "$work"
+          chown -R dds3-mass:dds3-mass "$work"
+          rm -f /tmp/dds-main30k-state.tgz
+          install -d -m 0750 -o root -g dds3-mass "$state/evidence"
+          PYTHONPATH="$repo/dds_training" WORK="$work" STATE="$state" "$repo/dds_training/.venv/bin/python" - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          from oracle_main_30k_dispatch import validate_pilot_gate, validate_train_identity
+          work=Path(os.environ["WORK"]); state=Path(os.environ["STATE"])
+          summary=json.loads((work/"corpus_summary.json").read_text())
+          raw=work/"raw.pbn"; digest=hashlib.sha256(raw.read_bytes()).hexdigest()
+          assert summary.get("count")==30000 and summary.get("raw_sha256")==digest
+          count=validate_train_identity(work/"blind_tasks_crossfit_main.jsonl",work/"locked_predictions_main_train_adaptive.jsonl")
+          validate_pilot_gate(work,state)
+          evidence={"schema":"bridge-school-dds3-main30k-preflight/v1","status":"preflight_passed","compute_started":False,"target":30000,"corpus_deals":30000,"corpus_sha256":digest,"train_tasks":count,"splits":["train"],"validation_opened":False,"sealed_test_opened":False,"max_runtime_seconds":10800,"max_cost_usd":2.0}
+          out=state/"evidence"/"30000-preflight.json"; tmp=out.with_suffix(".json.tmp")
+          tmp.write_text(json.dumps(evidence,sort_keys=True,indent=2)+"\n"); os.replace(tmp,out)
+          print("MAIN30K_STAGE_PASS corpus_deals=30000 train_tasks=28000 compute_started=false validation_opened=false sealed_test_opened=false")
+          PY
+          chown root:dds3-mass "$state/evidence/30000-preflight.json"
+          chmod 0640 "$state/evidence/30000-preflight.json"
+          echo "MAIN30K_ARTIFACT_STAGE_PASS commit=$RUNTIME_COMMIT service_active=false auto_started=false"
+          REMOTE
+          {
+            echo 'stage<<EOF'
+            sed -n '1,100p' "$out"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Restore immutable Pilot-10k inputs
         if: ${{ env.COMMAND == '/dds3-pilot10k start' }}
         env:
