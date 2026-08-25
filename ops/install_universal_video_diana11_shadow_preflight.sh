@@ -14,6 +14,7 @@ fail(){ echo "ERROR: $*" >&2; exit 1; }
 python3 -m py_compile "$SOURCE_FILE"
 grep -Fq 'JOB_ID = "diana11-shadow-20260826-001"' "$SOURCE_FILE" || fail 'unexpected fresh job id'
 grep -Fq 'EXPECTED_JOB_HASH = "a43e11beb0765aa91551d4c4a69767f02c4dcb3b5e485cd5bb0f2996e734d73d"' "$SOURCE_FILE" || fail 'unexpected fresh job hash'
+grep -Fq 'DEFAULT_WHISPER_MODEL = "small"' "$SOURCE_FILE" || fail 'Whisper default mismatch'
 grep -Fq 'UV003_EXECUTION_AUTHORIZED=NO' "$SOURCE_FILE" || fail 'execution guard missing'
 grep -Fq 'UV003_PUBLICATION_AUTHORIZED=NO' "$SOURCE_FILE" || fail 'publication guard missing'
 grep -Fq 'len(sys.argv) != 1' "$SOURCE_FILE" || fail 'no-argument guard missing'
@@ -43,10 +44,13 @@ for raw in Path(os.environ['RUNTIME_ENV']).read_text(encoding='utf-8').splitline
     if not line or line.startswith('#') or '=' not in line:
         continue
     key,value=line.split('=',1)
-    if key in {'UNIVERSAL_VIDEO_SOURCE_COMMIT','UNIVERSAL_VIDEO_WHISPER_MODEL'}:
+    if key in {'UNIVERSAL_VIDEO_SOURCE_COMMIT','UNIVERSAL_VIDEO_WHISPER_MODEL','WHISPER_MODEL'}:
         values[key]=value.strip()
 assert values.get('UNIVERSAL_VIDEO_SOURCE_COMMIT') == os.environ['EXPECTED_RUNTIME_COMMIT']
-model=values.get('UNIVERSAL_VIDEO_WHISPER_MODEL','')
+# Keep this exactly aligned with universal_video.runner._whisper_model_name().
+model=(values.get('UNIVERSAL_VIDEO_WHISPER_MODEL','').strip()
+       or values.get('WHISPER_MODEL','').strip()
+       or 'small')
 assert model and len(model) <= 80 and not any(ch.isspace() for ch in model)
 PY
 
