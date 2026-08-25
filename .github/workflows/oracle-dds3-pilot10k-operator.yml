@@ -295,17 +295,17 @@ jobs:
           request="$state/requests/10000.json"
           evidence="$state/evidence/10000.json"
           log="$state/logs/10000.log"
-          if [[ -f "$request" && -f "$evidence" ]]; then
-            request_ts="$(stat -c %Y "$request")"
-            evidence_ts="$(stat -c %Y "$evidence")"
+          if sudo -n test -f "$request" && sudo -n test -f "$evidence"; then
+            request_ts="$(sudo -n stat -c %Y "$request")"
+            evidence_ts="$(sudo -n stat -c %Y "$evidence")"
             if [[ "$evidence_ts" -ge "$request_ts" ]]; then
               echo "wall_elapsed_seconds=$((evidence_ts-request_ts))"
               echo "request_mtime_epoch=$request_ts"
               echo "evidence_mtime_epoch=$evidence_ts"
             fi
           fi
-          if [[ -f "$log" ]]; then
-            echo "log_bytes=$(stat -c %s "$log")"
+          if sudo -n test -f "$log"; then
+            echo "log_bytes=$(sudo -n stat -c %s "$log")"
           fi
           if [[ -f "$state/evidence/10000.json" ]]; then
             echo 'evidence_present=true'
