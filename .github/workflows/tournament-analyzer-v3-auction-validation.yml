@@ -1,0 +1,38 @@
+name: Tournament Analyzer v3 Auction Validation
+
+on:
+  pull_request:
+    paths:
+      - "bridge_school_api/tournament_auction_validation_v3.py"
+      - "tests/test_tournament_auction_validation_v3.py"
+      - "bridge_school_api/tournament_preanalysis_gate_v3.py"
+      - "data/tournaments/tournament_30041_round2_diana_facts_v1.json"
+      - ".github/workflows/tournament-analyzer-v3-auction-validation.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  auction-laws-and-real-evidence-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Compile auction validator
+        run: python -m py_compile bridge_school_api/tournament_auction_validation_v3.py
+      - name: Run auction contracts and real 30041 absence gate
+        run: python -m pytest -q tests/test_tournament_auction_validation_v3.py
+      - name: Enforce no fabricated 30041 auction
+        run: |
+          python - <<'PY'
+          import json
+          p=json.load(open('data/tournaments/tournament_30041_round2_diana_facts_v1.json', encoding='utf-8'))
+          assert 'auction' not in p['columns']
+          assert p['policy']['mode']=='FACTS_ONLY'
+          print('TOURNAMENT_30041_ACTUAL_AUCTION_ABSENT_GATE_PASS')
+          PY
