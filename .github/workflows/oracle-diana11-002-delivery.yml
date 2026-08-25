@@ -4,8 +4,8 @@ on:
   pull_request:
     paths:
       - '.github/workflows/oracle-diana11-002-delivery.yml'
-      - 'ops/universal_video_diana11_operator.sh'
-      - 'ops/install_universal_video_diana11_operator.sh'
+      - 'ops/universal_video_diana11_002_operator.sh'
+      - 'ops/install_universal_video_diana11_002_operator.sh'
       - 'universal_video/result_conformance.py'
       - 'universal_video/drive_results.py'
   push:
@@ -38,10 +38,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          bash -n ops/universal_video_diana11_operator.sh
-          grep -Fq "readonly BRIDGE_JOB_HASH='e53fa37ce69d97bc9d8c995bc8f416b0e7b5ad42610cda4d75faa2385bcf60fc'" ops/universal_video_diana11_operator.sh
-          grep -Fq 'UV_BRIDGE_PRODUCTION_READY=NO' ops/universal_video_diana11_operator.sh
-          grep -Fq 'UNIVERSAL_VIDEO_DIANA11_PUBLISH_VERIFIED_PASS' ops/universal_video_diana11_operator.sh
+          bash -n ops/universal_video_diana11_002_operator.sh
+          grep -Fq "readonly BRIDGE_JOB_HASH='e53fa37ce69d97bc9d8c995bc8f416b0e7b5ad42610cda4d75faa2385bcf60fc'" ops/universal_video_diana11_002_operator.sh
+          grep -Fq 'UV_BRIDGE_PRODUCTION_READY=NO' ops/universal_video_diana11_002_operator.sh
+          grep -Fq 'UNIVERSAL_VIDEO_DIANA11_PUBLISH_VERIFIED_PASS' ops/universal_video_diana11_002_operator.sh
           python -m py_compile universal_video/result_conformance.py universal_video/drive_results.py
           python -m pip install --disable-pip-version-check -q pytest
           python -m pytest -q tests/test_exact_delivery_contract.py
