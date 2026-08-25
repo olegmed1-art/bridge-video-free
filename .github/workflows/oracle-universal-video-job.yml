@@ -25,6 +25,7 @@ jobs:
       request_id: ${{ steps.request.outputs.request_id }}
       issue: ${{ steps.request.outputs.issue }}
       job_id: ${{ steps.request.outputs.job_id }}
+      mode: ${{ steps.request.outputs.mode }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -46,13 +47,19 @@ jobs:
           assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
           assert x['issue']==441
           job=x['job']
-          assert job.get('job_id')=='diana11-transcript-20260825-01'
-          assert job.get('profile')=='transcript_only'
+          jid=job.get('job_id')
+          profile=job.get('profile')
+          allowed={
+            ('diana11-transcript-20260825-01','transcript_only'):'transcript',
+            ('diana11-bridge-20260825-01','bridge_lesson'):'bridge',
+          }
+          assert (jid, profile) in allowed, (jid, profile)
           assert job.get('source',{}).get('kind')=='google_drive'
           assert job.get('source',{}).get('file_id')=='1PGRLozLJKG8tl-JYGPTCcS_lT-nn-T7C'
           print('request_id='+x['request_id'])
           print('issue=441')
-          print('job_id=diana11-transcript-20260825-01')
+          print('job_id='+jid)
+          print('mode='+allowed[(jid,profile)])
           PY
       - name: Contract-only PR validation
         if: ${{ github.event_name == 'pull_request' }}
@@ -77,6 +84,7 @@ jobs:
       OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
       ISSUE_NUMBER: ${{ needs.validate.outputs.issue }}
       JOB_ID: ${{ needs.validate.outputs.job_id }}
+      MODE: ${{ needs.validate.outputs.mode }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -127,29 +135,39 @@ jobs:
             printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("text","") or "")'
           }
 
-          initial="$(run_remote "diana11-submit-${GITHUB_RUN_ID}" 'sudo -n /usr/local/sbin/universal-video-diana11 submit')"
+          if [[ "$MODE" == bridge ]]; then
+            submit_cmd='sudo -n /usr/local/sbin/universal-video-diana11 submit-bridge'
+            status_cmd='sudo -n /usr/local/sbin/universal-video-diana11 status-bridge'
+            label='Диана 11 / bridge_lesson'
+          else
+            submit_cmd='sudo -n /usr/local/sbin/universal-video-diana11 submit'
+            status_cmd='sudo -n /usr/local/sbin/universal-video-diana11 status'
+            label='Диана 11 / transcript_only'
+          fi
+
+          initial="$(run_remote "diana11-submit-${GITHUB_RUN_ID}" "$submit_cmd")"
           state="$(printf '%s\n' "$initial" | sed -n 's/^UV_STATE=//p' | tail -n1)"
           [[ "$state" =~ ^(QUEUED|RUNNING|COMPLETED|FAILED)$ ]] || { echo "unsafe submit state: $state" >&2; exit 1; }
-          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус «Диана 11»: **SUBMITTED → $state**. Oracle resident sidecar принял exact bounded job. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус **$label**: **SUBMITTED → $state**. Oracle resident sidecar принял exact bounded job. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           last="$state"
 
           for _ in $(seq 1 300); do
             case "$last" in COMPLETED) echo ORACLE_UNIVERSAL_VIDEO_JOB_COMPLETED; exit 0;; FAILED) exit 1;; esac
             sleep 60
-            out="$(run_remote "diana11-status-${GITHUB_RUN_ID}" 'sudo -n /usr/local/sbin/universal-video-diana11 status')"
+            out="$(run_remote "diana11-status-${GITHUB_RUN_ID}" "$status_cmd")"
             state="$(printf '%s\n' "$out" | sed -n 's/^UV_STATE=//p' | tail -n1)"
             [[ "$state" =~ ^(QUEUED|RUNNING|COMPLETED|FAILED)$ ]] || { echo "unsafe status: $state" >&2; exit 1; }
             if [[ "$state" != "$last" ]]; then
               safe="$(printf '%s\n' "$out" | grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|ERROR_TYPE|ERROR)=' | head -n 8)"
-              gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус «Диана 11»: **$last → $state**.\n\n\`\`\`text\n$safe\n\`\`\`\nRun: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус **$label**: **$last → $state**.\n\n\`\`\`text\n$safe\n\`\`\`\nRun: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
               last="$state"
             fi
           done
-          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "«Диана 11» остаётся **$last** после 5-часового окна наблюдения; resident job не остановлен."
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "**$label** остаётся **$last** после 5-часового окна наблюдения; resident job не остановлен."
           exit 2
 
       - name: Report failure
         if: ${{ failure() }}
         shell: bash
         run: |
-          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Оператор «Диана 11» завершился fail-closed до подтверждённого COMPLETED. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Оператор **Диана 11 / $MODE** завершился fail-closed до подтверждённого COMPLETED. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
