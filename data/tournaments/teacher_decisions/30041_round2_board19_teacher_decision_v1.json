@@ -1,0 +1,17 @@
+{
+  "schema": "bridge-school-teacher-decision-v1",
+  "event_id": "30041",
+  "session_id": "round-2",
+  "board_number": 19,
+  "decision": "ERROR_CONFIRMED_BY_TEACHER",
+  "teacher_statement": "ошибка",
+  "scope": "board-level teacher adjudication",
+  "student_error_attribution": "TEACHER_CONFIRMED_AT_BOARD_LEVEL",
+  "specific_card_or_cause_attribution": null,
+  "methodology_mapping": null,
+  "notes": "Teacher explicitly confirmed that this review position is an error. No specific card, cause, player action, or methodology category is inferred because the source lacks a full card-by-card play record.",
+  "provenance": {
+    "source": "interactive teacher review in ChatGPT",
+    "recorded_date": "2026-08-25"
+  }
+}
