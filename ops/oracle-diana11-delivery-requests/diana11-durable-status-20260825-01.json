@@ -1,0 +1,7 @@
+{
+  "request_id": "diana11-durable-status-20260825-01",
+  "issue": 547,
+  "operation": "inspect-status-bridge",
+  "job_id": "diana11-bridge-20260825-01",
+  "expected_job_hash": "c80f34c4018c0861c5ba85d9ab0efac63e84027eca755783d15206d416f2d7f6"
+}
