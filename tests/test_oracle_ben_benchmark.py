@@ -43,3 +43,11 @@ def test_github_operator_exposes_only_the_exact_bounded_benchmark():
     assert "ops/oracle_ben_benchmark.py" in workflow
     assert 'BEN_P95_LIMIT_MS=5000' in workflow
     assert "ben_benchmark=${BEN_BENCHMARK_OUTCOME}" in workflow
+
+
+def test_benchmark_emits_fail_closed_diagnostics_for_preflight_failures():
+    source = Path("ops/oracle_ben_benchmark.py").read_text(encoding="utf-8")
+    assert '"bridge-ben-healthcheck.timer"' in source
+    assert '"dds3-healthcheck.timer"' in source
+    assert 'report["error"]' in source
+    assert 'type(exc).__name__' in source
