@@ -43,6 +43,13 @@
       "description": "One-time launch receipt binding, expiry/nonce/actor/commit/manifest checks and authorized wrapper command construction."
     },
     {
+      "id": "oracle-cost-gate",
+      "path": "oracle_cost_gate_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 15,
+      "description": "Fail-closed Oracle 30k runtime and retail-cost ceiling validation."
+    },
+    {
       "id": "predictor-pipeline",
       "path": "predictor_pipeline_selftest.py",
       "suite": "fast",
@@ -508,6 +515,9 @@
       "variants.py": [
         "methodology-v22",
         "variant-dds"
+      ],
+      "oracle_cost_gate.py": [
+        "oracle-cost-gate"
       ]
     },
     "runtime_coverage": {
@@ -519,7 +529,7 @@
       "dds": {
         "minimum_overall_percent": 20,
         "minimum_module_percent": 1,
-        "minimum_module_execution_ratio": 1.0
+        "minimum_module_execution_ratio": 1
       }
     },
     "waivers": {
