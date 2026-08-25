@@ -41,6 +41,8 @@ def test_ben_runtime_is_resource_bounded_and_has_watchdog():
         "--pids-limit=256",
         "--memory=6g",
         "--tmpfs /logs:rw,nosuid,nodev,noexec,size=64m",
+        "failed BEN rollout diagnostics (before rollback)",
+        "mounts={{json .Mounts}}",
         "127.0.0.1:8085:8085",
         "bridge-ben-healthcheck.timer",
     ):
