@@ -28,6 +28,7 @@ jobs:
     outputs:
       request_id: ${{ steps.request.outputs.request_id }}
       issue: ${{ steps.request.outputs.issue }}
+      operation: ${{ steps.request.outputs.operation }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -59,11 +60,12 @@ jobs:
           assert set(x)=={'request_id','issue','operation','job_id','expected_job_hash'}, x
           assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
           assert x['issue']==547
-          assert x['operation']=='conform-publish-bridge'
+          assert x['operation'] in {'inspect-status-bridge','conform-publish-bridge'}
           assert x['job_id']=='diana11-bridge-20260825-01'
           assert x['expected_job_hash']=='c80f34c4018c0861c5ba85d9ab0efac63e84027eca755783d15206d416f2d7f6'
           print('request_id='+x['request_id'])
           print('issue=547')
+          print('operation='+x['operation'])
           PY
 
   deliver:
@@ -79,6 +81,7 @@ jobs:
       OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
       ISSUE_NUMBER: ${{ needs.validate.outputs.issue }}
+      OPERATION: ${{ needs.validate.outputs.operation }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -104,18 +107,30 @@ jobs:
           oci iam region list --output json >/dev/null
           [[ "$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)" == RUNNING ]]
           echo ORACLE_DIANA11_DELIVERY_OCI_PASS
-      - name: Conform and publish existing exact result
+      - name: Inspect status or conform and publish exact result
         id: remote
         shell: bash
         run: |
           set -euo pipefail
           compartment="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."compartment-id"' --raw-output)"
-          command='sudo -n /usr/local/sbin/universal-video-diana11 publish-bridge'
+          case "$OPERATION" in
+            inspect-status-bridge)
+              command='sudo -n /usr/local/sbin/universal-video-diana11 status-bridge'
+              timeout=180
+              display="diana11-status-${GITHUB_RUN_ID}"
+              ;;
+            conform-publish-bridge)
+              command='sudo -n /usr/local/sbin/universal-video-diana11 publish-bridge'
+              timeout=1800
+              display="diana11-delivery-${GITHUB_RUN_ID}"
+              ;;
+            *) echo 'unsupported operation after validation' >&2; exit 64;;
+          esac
           content="$(SCRIPT_TEXT="$command" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":"set -Eeuo pipefail\n"+os.environ["SCRIPT_TEXT"]+"\n"},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
           target="$(python -c 'import json,os; print(json.dumps({"instanceId":os.environ["INSTANCE_ID"]},separators=(",",":")))')"
           command_id="$(oci instance-agent command create \
             --compartment-id "$compartment" --content "$content" --target "$target" \
-            --timeout-in-seconds 1800 --display-name "diana11-delivery-${GITHUB_RUN_ID}" \
+            --timeout-in-seconds "$timeout" --display-name "$display" \
             --query data.id --raw-output)"
           execution=''; lifecycle=''
           for _ in $(seq 1 360); do
@@ -127,15 +142,49 @@ jobs:
           done
           printf 'state=%s\n' "$lifecycle" >> "$GITHUB_OUTPUT"
           printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("text","") or "")' > "$RUNNER_TEMP/diana11-delivery-raw.txt"
-          grep -E '^(UV_(PUBLICATION_STATE|PUBLICATION_BUNDLE_SHA256|PUBLICATION_FOLDER_ID|DOMAIN_ANALYSIS_STATUS|BRIDGE_PRODUCTION_READY|PEDAGOGICAL_STATUS)=|UNIVERSAL_VIDEO_DIANA11_PUBLISH_VERIFIED_PASS$)' \
-            "$RUNNER_TEMP/diana11-delivery-raw.txt" > "$RUNNER_TEMP/diana11-delivery-safe.txt" || true
+          python - "$RUNNER_TEMP/diana11-delivery-raw.txt" "$RUNNER_TEMP/diana11-delivery-safe.txt" <<'PY'
+          import re,sys
+          patterns=[
+              r'UV_STATE=(?:MISSING|CONFLICT|NONCONFORMANT|FAILED|RUNNING|QUEUED|REVIEW|TECHNICAL_CONFORMANT)',
+              r'UV_RESULT_STATUS=(?:COMPLETED|REVIEW)',
+              r'UV_CONFORMANCE_STATE=PASS',
+              r'UV_ATTESTATION_MODE=(?:POST_HOC_OBSERVATION|REUSE_OBSERVATION|GENERATION_FINALIZATION)',
+              r'UV_(?:ARTIFACT_SET_SHA256|MANIFEST_SHA256|PUBLICATION_BUNDLE_SHA256)=[0-9a-f]{64}',
+              r'UV_(?:ARTIFACT_COUNT|TOTAL_BYTES)=[0-9]{1,20}',
+              r'UV_DOMAIN_ANALYSIS_STATUS=DEFERRED',
+              r'UV_(?:TECHNICAL_BUNDLE_READY|BRIDGE_PRODUCTION_READY)=(?:YES|NO)',
+              r'UV_PEDAGOGICAL_STATUS=NOT_EVALUATED',
+              r'UV_PUBLICATION_STATE=(?:NOT_PUBLISHED|FAILED|NOT_CURRENTLY_VERIFIABLE|STALE_LOCAL_MISMATCH|PUBLISHED_VERIFIED)',
+              r'UV_PUBLICATION_FOLDER_ID=[A-Za-z0-9_-]{10,128}',
+              r'UV_ERROR_TYPE=(?:MULTIPLE_SPOOL_STATES|UNSAFE_SPOOL_RECEIPT|UNSAFE_FAILED_RECEIPT|DONE_RECEIPT_IDENTITY_MISMATCH|UNEXPECTED_DONE_STATUS|RESULT_CONFORMANCE_FAILED)',
+              r'UNIVERSAL_VIDEO_DIANA11_BRIDGE_STATUS_PASS',
+              r'UNIVERSAL_VIDEO_DIANA11_PUBLISH_VERIFIED_PASS',
+          ]
+          safe=[]
+          with open(sys.argv[1],encoding='utf-8') as source:
+              for line in source:
+                  line=line.rstrip('\r\n')
+                  if any(re.fullmatch(pattern,line) for pattern in patterns) and line not in safe:
+                      safe.append(line)
+          with open(sys.argv[2],'w',encoding='utf-8') as target:
+              target.write(''.join(line+'\n' for line in safe))
+          PY
           cat "$RUNNER_TEMP/diana11-delivery-safe.txt"
           [[ "$lifecycle" == SUCCEEDED ]]
-          grep -Fx 'UV_PUBLICATION_STATE=PUBLISHED_VERIFIED' "$RUNNER_TEMP/diana11-delivery-safe.txt"
-          grep -Fx 'UV_DOMAIN_ANALYSIS_STATUS=DEFERRED' "$RUNNER_TEMP/diana11-delivery-safe.txt"
-          grep -Fx 'UV_BRIDGE_PRODUCTION_READY=NO' "$RUNNER_TEMP/diana11-delivery-safe.txt"
-          grep -Fx 'UV_PEDAGOGICAL_STATUS=NOT_EVALUATED' "$RUNNER_TEMP/diana11-delivery-safe.txt"
-          grep -Fx 'UNIVERSAL_VIDEO_DIANA11_PUBLISH_VERIFIED_PASS' "$RUNNER_TEMP/diana11-delivery-safe.txt"
+          if [[ "$OPERATION" == inspect-status-bridge ]]; then
+            [[ "$(grep -c '^UV_STATE=' "$RUNNER_TEMP/diana11-delivery-safe.txt")" == 1 ]]
+            grep -Eq '^UV_STATE=(MISSING|CONFLICT|NONCONFORMANT|FAILED|RUNNING|QUEUED|REVIEW|TECHNICAL_CONFORMANT)$' \
+              "$RUNNER_TEMP/diana11-delivery-safe.txt"
+            grep -Fx 'UNIVERSAL_VIDEO_DIANA11_BRIDGE_STATUS_PASS' "$RUNNER_TEMP/diana11-delivery-safe.txt"
+            echo 'publication_attempted=false' >> "$GITHUB_OUTPUT"
+          else
+            grep -Fx 'UV_PUBLICATION_STATE=PUBLISHED_VERIFIED' "$RUNNER_TEMP/diana11-delivery-safe.txt"
+            grep -Fx 'UV_DOMAIN_ANALYSIS_STATUS=DEFERRED' "$RUNNER_TEMP/diana11-delivery-safe.txt"
+            grep -Fx 'UV_BRIDGE_PRODUCTION_READY=NO' "$RUNNER_TEMP/diana11-delivery-safe.txt"
+            grep -Fx 'UV_PEDAGOGICAL_STATUS=NOT_EVALUATED' "$RUNNER_TEMP/diana11-delivery-safe.txt"
+            grep -Fx 'UNIVERSAL_VIDEO_DIANA11_PUBLISH_VERIFIED_PASS' "$RUNNER_TEMP/diana11-delivery-safe.txt"
+            echo 'publication_attempted=true' >> "$GITHUB_OUTPUT"
+          fi
           echo 'validated=true' >> "$GITHUB_OUTPUT"
       - name: Verify DDS3 non-regression
         id: dds3
@@ -157,6 +206,7 @@ jobs:
         env:
           REMOTE_STATE: ${{ steps.remote.outputs.state }}
           REMOTE_VALIDATED: ${{ steps.remote.outputs.validated }}
+          PUBLICATION_ATTEMPTED: ${{ steps.remote.outputs.publication_attempted }}
           REMOTE_OUTCOME: ${{ steps.remote.outcome }}
           DDS3_OUTCOME: ${{ steps.dds3.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -164,7 +214,11 @@ jobs:
           set -euo pipefail
           body="$RUNNER_TEMP/experiment-result.md"
           {
-            echo "[COORDINATOR] Delivery step: **${REMOTE_OUTCOME:-UNKNOWN}** (OCI state: ${REMOTE_STATE:-UNKNOWN})."
+            if [[ "$OPERATION" == inspect-status-bridge ]]; then
+              echo "[OBSERVATORY] Read-only bridge status: **${REMOTE_OUTCOME:-UNKNOWN}** (OCI state: ${REMOTE_STATE:-UNKNOWN})."
+            else
+              echo "[COORDINATOR] Delivery step: **${REMOTE_OUTCOME:-UNKNOWN}** (OCI state: ${REMOTE_STATE:-UNKNOWN})."
+            fi
             if [[ -s "$RUNNER_TEMP/diana11-delivery-safe.txt" ]]; then
               echo
               echo '```text'
@@ -172,7 +226,9 @@ jobs:
               echo '```'
             fi
             echo
-            if [[ "${REMOTE_VALIDATED:-}" == true ]]; then
+            if [[ "$OPERATION" == inspect-status-bridge && "${REMOTE_VALIDATED:-}" == true ]]; then
+              echo 'Exact status was read without submit, ASR/media processing, or publication. This observation makes no new conformance, methodology, or production claim.'
+            elif [[ "${REMOTE_VALIDATED:-}" == true && "${PUBLICATION_ATTEMPTED:-}" == true ]]; then
               echo 'Validated evidence: post-hoc technical bundle and verified Drive transfer. Domain analysis remains DEFERRED; methodology is NOT_EVALUATED; production promotion is BLOCKED.'
             else
               echo '**No conformance or publication claim is established by this run.** The remote output did not pass every required marker assertion.'
