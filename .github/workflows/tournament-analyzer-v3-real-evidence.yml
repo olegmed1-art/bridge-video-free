@@ -4,8 +4,10 @@ on:
   pull_request:
     paths:
       - "bridge_school_api/tournament_real_sources_v3.py"
+      - "bridge_school_api/tournament_scoring_context_29912_v3.py"
       - "tools/tournament_real_longitudinal_v3.py"
       - "tests/test_tournament_real_sources_v3.py"
+      - "tests/test_tournament_scoring_context_29912_v3.py"
       - "data/tournaments/tournament_30041_round2_diana_facts_v1.json"
       - ".github/workflows/tournament-analyzer-v3-real-evidence.yml"
   workflow_dispatch:
@@ -27,19 +29,21 @@ jobs:
       - name: Compile real evidence layer
         run: |
           python -m py_compile bridge_school_api/tournament_real_sources_v3.py
+          python -m py_compile bridge_school_api/tournament_scoring_context_29912_v3.py
           python -m py_compile tools/tournament_real_longitudinal_v3.py
       - name: Run v3 core, stage2, and real-source contracts
         run: |
           python -m pytest -q \
             tests/test_tournament_analyzer_v3.py \
             tests/test_tournament_analyzer_v3_stage2.py \
-            tests/test_tournament_real_sources_v3.py
-      - name: Restore exact historical DDS3 evidence artifacts
+            tests/test_tournament_real_sources_v3.py \
+            tests/test_tournament_scoring_context_29912_v3.py
+      - name: Restore exact historical DDS3 and 29912 source evidence artifacts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p evidence/30041 evidence/29912
+          mkdir -p evidence/30041 evidence/29912 evidence/29912-source
           curl -fsSL --retry 3 \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
@@ -52,19 +56,29 @@ jobs:
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/9471054929/zip" \
             -o /tmp/29912.zip
+          curl -fsSL --retry 3 \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/9470920077/zip" \
+            -o /tmp/29912-source.zip
           unzip -q /tmp/30041.zip -d evidence/30041
           unzip -q /tmp/29912.zip -d evidence/29912
+          unzip -q /tmp/29912-source.zip -d evidence/29912-source
           test -n "$(find evidence/30041 -type f -name 'diana-30041-round2-dds3.json' -print -quit)"
           test -n "$(find evidence/29912 -type f -name 'diana-29912-cross-session-dds3.json' -print -quit)"
+          test -n "$(find evidence/29912-source -type d -name facts29912 -print -quit)"
       - name: Build first real longitudinal report
         run: |
           set -euo pipefail
           DDS30041="$(find evidence/30041 -type f -name 'diana-30041-round2-dds3.json' -print -quit)"
           DDS29912="$(find evidence/29912 -type f -name 'diana-29912-cross-session-dds3.json' -print -quit)"
+          FACTS29912="$(find evidence/29912-source -type d -name facts29912 -print -quit)"
           PYTHONPATH="$PWD" python tools/tournament_real_longitudinal_v3.py \
             --facts-30041 data/tournaments/tournament_30041_round2_diana_facts_v1.json \
             --dds3-30041 "$DDS30041" \
             --dds3-29912 "$DDS29912" \
+            --facts-dir-29912 "$FACTS29912" \
             --out-json tournament-longitudinal-real-evidence.json \
             --out-md tournament-longitudinal-real-evidence.md
       - name: Real evidence gate
@@ -86,6 +100,19 @@ jobs:
           assert 'DDS3_PAIR_SAME_CONTRACT_DELTA_V1' in persistent
           assert persistent['DDS3_PAIR_SAME_CONTRACT_DELTA_V1']['tournament_count']==2
           assert not any(f['deal_id']=='29912:round-1:5' for f in all_findings)
+
+          score=p['scoring_context']['29912']
+          assert score['schema']=='tournament-29912-source-score-context-v1'
+          assert len(score['outcomes'])==100
+          assert score['source_score_additivity_verified_rounds']==[1,2,4,6]
+          assert score['source_score_additivity_unverified_rounds']==[5]
+          assert score['percentage_conversion_available'] is False
+          assert score['dd_to_score_conversion_available'] is False
+          assert score['causal_error_attribution_allowed'] is False
+          assert score['pedagogically_recoverable_result_estimated'] is False
+          assert score['student_error_attribution_allowed'] is False
+          assert all(x['causal_link']=='NOT_ESTABLISHED' for x in score['technical_finding_context'])
+          assert p['provenance']['input_file_sha256']['source_facts_29912']==p['provenance']['29912']['source_fact_sha256']
           print('TOURNAMENT_REAL_EVIDENCE_PASS', len(all_findings), persistent['DDS3_PAIR_SAME_CONTRACT_DELTA_V1'])
           PY
       - uses: actions/upload-artifact@v4

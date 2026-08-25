@@ -4,8 +4,10 @@ on:
   pull_request:
     paths:
       - "bridge_school_api/tournament_scoring_context_v3.py"
+      - "bridge_school_api/tournament_scoring_context_29912_v3.py"
       - "tools/tournament_real_longitudinal_v3.py"
       - "tests/test_tournament_scoring_context_v3.py"
+      - "tests/test_tournament_scoring_context_29912_v3.py"
       - "data/tournaments/tournament_30041_round2_diana_facts_v1.json"
       - ".github/workflows/tournament-analyzer-v3-scoring-context.yml"
   workflow_dispatch:
@@ -27,6 +29,7 @@ jobs:
       - name: Compile scoring/report modules
         run: |
           python -m py_compile bridge_school_api/tournament_scoring_context_v3.py
+          python -m py_compile bridge_school_api/tournament_scoring_context_29912_v3.py
           python -m py_compile tools/tournament_real_longitudinal_v3.py
       - name: Run scoring context contracts
         run: |
@@ -34,13 +37,14 @@ jobs:
             tests/test_tournament_analyzer_v3.py \
             tests/test_tournament_analyzer_v3_stage2.py \
             tests/test_tournament_real_sources_v3.py \
-            tests/test_tournament_scoring_context_v3.py
-      - name: Restore exact historical DDS3 evidence artifacts
+            tests/test_tournament_scoring_context_v3.py \
+            tests/test_tournament_scoring_context_29912_v3.py
+      - name: Restore exact historical DDS3 and 29912 source evidence artifacts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p evidence/30041 evidence/29912
+          mkdir -p evidence/30041 evidence/29912 evidence/29912-source
           curl -fsSL --retry 3 \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
@@ -53,19 +57,29 @@ jobs:
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/9471054929/zip" \
             -o /tmp/29912.zip
+          curl -fsSL --retry 3 \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/9470920077/zip" \
+            -o /tmp/29912-source.zip
           unzip -q /tmp/30041.zip -d evidence/30041
           unzip -q /tmp/29912.zip -d evidence/29912
-      - name: Build longitudinal report with MP context
+          unzip -q /tmp/29912-source.zip -d evidence/29912-source
+      - name: Build longitudinal report with both real scoring contexts
         run: |
           set -euo pipefail
           DDS30041="$(find evidence/30041 -type f -name 'diana-30041-round2-dds3.json' -print -quit)"
           DDS29912="$(find evidence/29912 -type f -name 'diana-29912-cross-session-dds3.json' -print -quit)"
+          FACTS29912="$(find evidence/29912-source -type d -name facts29912 -print -quit)"
           test -n "$DDS30041"
           test -n "$DDS29912"
+          test -n "$FACTS29912"
           PYTHONPATH="$PWD" python tools/tournament_real_longitudinal_v3.py \
             --facts-30041 data/tournaments/tournament_30041_round2_diana_facts_v1.json \
             --dds3-30041 "$DDS30041" \
             --dds3-29912 "$DDS29912" \
+            --facts-dir-29912 "$FACTS29912" \
             --out-json tournament-longitudinal-scoring-context.json \
             --out-md tournament-longitudinal-scoring-context.md
       - name: Evidence-only scoring gate
@@ -73,6 +87,7 @@ jobs:
           python - <<'PY'
           import json
           p=json.load(open('tournament-longitudinal-scoring-context.json', encoding='utf-8'))
+
           mp=p['scoring_context']['30041']
           assert mp['schema']=='tournament-mp-outcome-context-v1'
           assert mp['event_id']=='30041' and mp['session_id']=='round-2'
@@ -87,8 +102,32 @@ jobs:
           assert len(mp['technical_finding_context'])==p['events']['30041']['finding_count']
           assert all(x['causal_link']=='NOT_ESTABLISHED' for x in mp['technical_finding_context'])
           assert all(x['dd_to_mp_conversion_available'] is False for x in mp['technical_finding_context'])
-          assert p['scoring_context']['29912']['status']=='UNAVAILABLE_IN_CURRENT_EVIDENCE'
-          print('TOURNAMENT_MP_SCORING_CONTEXT_PASS', len(mp['technical_finding_context']))
+
+          score=p['scoring_context']['29912']
+          assert score['schema']=='tournament-29912-source-score-context-v1'
+          assert score['event_id']=='29912'
+          assert len(score['outcomes'])==100
+          assert score['source_score_additivity_verified'] is False
+          assert score['source_score_additivity_verified_rounds']==[1,2,4,6]
+          assert score['source_score_additivity_unverified_rounds']==[5]
+          round5=next(x for x in score['session_additivity'] if x['round_no']==5)
+          assert round5['analyzed_board_sum']==18.0
+          assert round5['reported_session_score']==21.0
+          assert round5['unexplained_remainder']==3.0
+          assert score['percentage_conversion_available'] is False
+          assert score['dd_to_score_conversion_available'] is False
+          assert score['causal_error_attribution_allowed'] is False
+          assert score['pedagogically_recoverable_result_estimated'] is False
+          assert score['student_error_attribution_allowed'] is False
+          assert len(score['technical_finding_context'])==p['events']['29912']['finding_count']
+          assert all(x['causal_link']=='NOT_ESTABLISHED' for x in score['technical_finding_context'])
+          assert all(x['source_consistency_ok'] is True for x in score['technical_finding_context'])
+
+          facts_sha=p['provenance']['input_file_sha256']['source_facts_29912']
+          assert facts_sha==p['provenance']['29912']['source_fact_sha256']
+          assert sorted(facts_sha)==['round-1','round-2','round-4','round-5','round-6']
+          assert all(len(x)==64 for x in facts_sha.values())
+          print('TOURNAMENT_LONGITUDINAL_SCORING_CONTEXT_PASS', len(mp['technical_finding_context']), len(score['technical_finding_context']))
           PY
       - uses: actions/upload-artifact@v4
         with:
