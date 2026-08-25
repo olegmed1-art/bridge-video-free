@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Mapping
 
 
 class TournamentReleaseProvenanceError(ValueError):
     pass
+
+
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 def _canonical_sha256(value: Mapping[str, Any]) -> str:
@@ -18,6 +22,13 @@ def _required_text(value: Any, field: str) -> str:
     text = str(value or "").strip()
     if not text:
         raise TournamentReleaseProvenanceError(f"{field} is required")
+    return text
+
+
+def _sha256_text(value: Any, field: str) -> str:
+    text = _required_text(value, field).lower()
+    if not _SHA256_RE.fullmatch(text):
+        raise TournamentReleaseProvenanceError(f"{field} must be a lowercase SHA-256 digest")
     return text
 
 
@@ -82,7 +93,7 @@ def build_release_provenance_receipt(
     render = artifact_derived_release_gate.get("render_release_evidence")
     if not isinstance(render, Mapping) or render.get("render_evidence_gate_pass") is not True or render.get("visual_qa_evidence_gate_pass") is not True:
         raise TournamentReleaseProvenanceError("validated render/QA evidence missing from final release gate")
-    render_sha256 = _required_text(render.get("render_artifact_sha256"), "render_artifact_sha256")
+    render_sha256 = _sha256_text(render.get("render_artifact_sha256"), "render_artifact_sha256")
     render_size = int(render.get("render_artifact_size_bytes") or 0)
     if render_size <= 0:
         raise TournamentReleaseProvenanceError("render artifact size missing")
@@ -129,9 +140,50 @@ def build_release_provenance_receipt(
 def verify_release_provenance_receipt(receipt: Mapping[str, Any]) -> dict[str, Any]:
     if receipt.get("schema") != "tournament-v1.4-release-provenance-receipt-v1":
         raise TournamentReleaseProvenanceError("unsupported release provenance receipt schema")
+    if receipt.get("normative_algorithm_version") != "1.4":
+        raise TournamentReleaseProvenanceError("release provenance normative version mismatch")
+    if receipt.get("final_report_release_ready") is not True:
+        raise TournamentReleaseProvenanceError("receipt does not represent a release-ready report")
+    for field in (
+        "automatic_teacher_decisions_used",
+        "automatic_episode_scoring_used",
+        "automatic_methodology_mapping_used",
+        "automatic_student_error_attribution_used",
+        "causal_error_attribution_allowed",
+    ):
+        if receipt.get(field) is not False:
+            raise TournamentReleaseProvenanceError(f"release receipt boundary weakened: {field}")
+
+    _required_text(receipt.get("provider_native_key"), "provider_native_key")
+    _required_text(receipt.get("event_id"), "event_id")
+    _required_text(receipt.get("portfolio_id"), "portfolio_id")
+    render = receipt.get("render_artifact")
+    if not isinstance(render, Mapping):
+        raise TournamentReleaseProvenanceError("render artifact metadata missing")
+    _sha256_text(render.get("sha256"), "render_artifact.sha256")
+    if int(render.get("size_bytes") or 0) <= 0 or int(render.get("page_count") or 0) <= 0:
+        raise TournamentReleaseProvenanceError("render artifact size/page count invalid")
+
+    component_digests = receipt.get("component_digests")
+    required_components = {
+        "preanalysis_gate_sha256",
+        "coverage_manifest_sha256",
+        "mp_availability_sha256",
+        "event_teacher_review_gate_sha256",
+        "portfolio_episode_coverage_handoff_sha256",
+        "artifact_derived_release_gate_sha256",
+    }
+    if not isinstance(component_digests, Mapping) or set(component_digests) != required_components:
+        raise TournamentReleaseProvenanceError("release component digest set mismatch")
+    for key, value in component_digests.items():
+        _sha256_text(value, f"component_digests.{key}")
+    provenance = receipt.get("provenance")
+    if not isinstance(provenance, Mapping) or not provenance:
+        raise TournamentReleaseProvenanceError("release provenance missing")
+
     identity = {key: value for key, value in receipt.items() if key not in {"release_id", "content_addressed_release_receipt"}}
     expected = _canonical_sha256(identity)
-    if _required_text(receipt.get("release_id"), "release_id") != expected:
+    if _sha256_text(receipt.get("release_id"), "release_id") != expected:
         raise TournamentReleaseProvenanceError("release provenance receipt digest mismatch")
     if receipt.get("content_addressed_release_receipt") is not True:
         raise TournamentReleaseProvenanceError("content-addressed receipt marker missing")
@@ -140,4 +192,5 @@ def verify_release_provenance_receipt(receipt: Mapping[str, Any]) -> dict[str, A
         "release_id": expected,
         "status": "PASS",
         "content_addressed_release_receipt": True,
+        "release_safety_boundaries_verified": True,
     }
