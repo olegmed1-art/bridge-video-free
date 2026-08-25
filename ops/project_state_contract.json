@@ -1,0 +1,69 @@
+{
+  "schema": "bridge-school-project-state-contract-v1",
+  "purpose": "Provide a small reconciled index over primary operational evidence so autonomous work never relies on stale chat or remembered workflow state.",
+  "source_of_truth": {
+    "project_state_is_index_not_authority": true,
+    "primary_sources_win": true,
+    "chat_history_is_not_operational_state": true,
+    "critical_action_requires_fresh_primary_check": true
+  },
+  "freshness": {
+    "critical_action_max_state_age_minutes": 15,
+    "active_compute_heartbeat_minutes": 30,
+    "subsystem_reconcile_interval_minutes": 180,
+    "deep_reconcile_interval_hours": 24
+  },
+  "risk_rules": {
+    "fail_closed_if_evidence_conflicts": true,
+    "fail_closed_if_code_newer_than_required_evidence": true,
+    "unknown_state_blocks_mutating_action": true,
+    "read_only_diagnostics_allowed_when_stale": true
+  },
+  "subsystems": [
+    {
+      "id": "dds3",
+      "critical": true,
+      "paths": ["dds_training", "ops/oracle_dds3_mass_dispatch_v2.py", "ops/cloud_shell_bootstrap_dds3_mass.sh", ".github/workflows/dds-main-30k-prepare.yml"],
+      "evidence_issues": [379],
+      "markers": {
+        "PILOT10K_FULL_GATE_PASS": "PILOT10K_FULL_PASS",
+        "status=train_passed": "PILOT10K_TRAIN_PASS"
+      }
+    },
+    {
+      "id": "ben",
+      "critical": true,
+      "paths": ["ops/install_ben_runtime.sh", ".github/workflows/bridge-ai-e2e-ben.yml", ".github/workflows/bridge-ai-pilot100.yml"],
+      "evidence_issues": [],
+      "markers": {}
+    },
+    {
+      "id": "oracle_compute",
+      "critical": true,
+      "paths": ["ops/oracle_compute_policy.json", "ops/oracle_compute_scheduler.py", "ops/assistant_lab_oci_admin_entrypoint.sh"],
+      "evidence_issues": [530],
+      "markers": {}
+    },
+    {
+      "id": "video",
+      "critical": false,
+      "paths": ["ops/cloud_shell_activate_universal_video.sh", ".github/workflows/bridge-video-3.1-free.yml", ".github/workflows/bridge-video-auto-discovery.yml"],
+      "evidence_issues": [],
+      "markers": {}
+    },
+    {
+      "id": "tournament_analyzer",
+      "critical": false,
+      "paths": ["tournament", ".github/workflows"],
+      "evidence_issues": [],
+      "markers": {}
+    },
+    {
+      "id": "research_lab",
+      "critical": false,
+      "paths": ["assistant_lab", "ops/assistant_lab_oci_admin_entrypoint.sh", ".github/workflows/assistant-lab-ci.yml"],
+      "evidence_issues": [],
+      "markers": {}
+    }
+  ]
+}
