@@ -191,20 +191,27 @@ def run_main(state_root: Path, repo_root: Path) -> int:
     env["BRIDGE_SCHOOL_DDS3_FALLBACK_ALLOWED"] = "0"
     log_path.parent.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
-    with log_path.open("ab") as log:
-        proc = subprocess.run(
-            argv, cwd=str(repo_root / "dds_training"), env=env,
-            stdout=log, stderr=subprocess.STDOUT, shell=False, check=False,
-            timeout=budget.max_runtime_seconds,
-        )
+    timed_out = False
+    returncode = 124
+    try:
+        with log_path.open("ab") as log:
+            proc = subprocess.run(
+                argv, cwd=str(repo_root / "dds_training"), env=env,
+                stdout=log, stderr=subprocess.STDOUT, shell=False, check=False,
+                timeout=budget.max_runtime_seconds,
+            )
+        returncode = proc.returncode
+    except subprocess.TimeoutExpired:
+        timed_out = True
     elapsed = round(time.monotonic() - started, 3)
     final = dict(evidence)
     final.update({
-        "returncode": proc.returncode,
+        "returncode": returncode,
+        "timed_out": timed_out,
         "wall_elapsed_seconds": elapsed,
         "estimated_retail_cost_usd": round(elapsed / 3600 * budget.hourly_retail_usd, 6),
         "log_sha256": base._sha256(log_path),
-        "status": "train_passed" if proc.returncode == 0 else "failed",
+        "status": "train_passed" if returncode == 0 else "failed",
     })
     base._write_evidence(evidence_path, final)
-    return proc.returncode
+    return returncode
