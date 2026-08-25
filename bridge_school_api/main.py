@@ -26,6 +26,7 @@ from .dds3.remote import RemoteDDS3Config, compute_remote, remote_engine_readine
 
 EXPECTED_SCHOOL = "Школа спортивного бриджа"
 ASSISTANT_LAB_DISPATCHER = "vercel-capability-v1"
+VERCEL_DEFAULT_DDS3_REMOTE_URL = "https://158.180.47.161"
 logger = logging.getLogger("bridge_school_api")
 
 app = FastAPI(title="Bridge School API", version="0.2.0", docs_url=None, redoc_url=None, openapi_url=None)
@@ -68,6 +69,11 @@ class DDS3TableRequest(BaseModel):
 
 def _remote_dds3_config() -> RemoteDDS3Config | None:
     url = os.getenv("DDS3_REMOTE_URL", "").strip().rstrip("/")
+    if not url and os.getenv("VERCEL_ENV", "").strip().lower() in {"production", "preview"}:
+        # API-created deployments do not always inherit vercel.json `env`.
+        # Keep Vercel fail-closed on the canonical TLS Oracle endpoint instead
+        # of falling through to a local DDS3 executable that cannot exist there.
+        url = VERCEL_DEFAULT_DDS3_REMOTE_URL
     if not url:
         return None
     return RemoteDDS3Config(
