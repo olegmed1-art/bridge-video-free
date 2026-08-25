@@ -54,9 +54,10 @@ jobs:
           }
           assert (jid, profile) in allowed, (jid, profile)
           assert job.get('source',{}).get('kind')=='google_drive'
-          assert job.get('source',{}).get('file_id')=='1PGRLozLJKG8tl-JYGPTCcS_lT-nn-T7C'\n          assert x['request_id']=='uv-diana11-durable-002-go-01'
+          assert job.get('source',{}).get('file_id')=='1PGRLozLJKG8tl-JYGPTCcS_lT-nn-T7C'
+          assert x['request_id']=='uv-diana11-durable-002-go-01'
           print('request_id='+x['request_id'])
-          print('issue=441')
+          print('issue=562')
           print('job_id='+jid)
           print('mode='+allowed[(jid,profile)])
           PY
