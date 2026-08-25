@@ -1,5 +1,5 @@
 schema_version: 1
-updated_at_utc: "2026-08-25T13:20:00Z"
+updated_at_utc: "2026-08-25T13:24:00Z"
 policy: docs/TECHNICAL_GOVERNANCE.md
 whole_school_recovery:
   target_status: RECOVERY_PROVEN_V1
@@ -29,6 +29,13 @@ components:
     independent_backup: required
     backup_status: unproven
     restore_status: unproven
+    internal_checkpoint:
+      branch_id: br-nameless-leaf-b108v431
+      branch_name: recovery-governance-baseline-20260825
+      created_from: production
+      read_test: proven
+      observed_public_tables: 194
+      note: internal_neon_checkpoint_is_not_an_independent_backup
     fail_condition: backup_or_restore_evidence_stale
 
   oracle_frankfurt:
