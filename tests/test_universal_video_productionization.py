@@ -5,8 +5,9 @@ from pathlib import Path
 import pytest
 
 import universal_video.drive_preflight as drive_preflight
+import universal_video.drive_results as drive_results
 from universal_video.drive_preflight import credential_boundary_status
-from universal_video.drive_results import collect_compact_artifacts
+from universal_video.drive_results import PublishArtifact, collect_compact_artifacts, publish_result
 from universal_video.maintenance import RetentionPolicy, apply_cleanup_plan, build_cleanup_plan
 
 DAY = 24 * 3600
@@ -139,7 +140,17 @@ def test_compact_result_router_excludes_raw_media_and_caps_keyframes(tmp_path: P
     job = tmp_path / "lesson-job"
     frames = job / "frames"
     frames.mkdir(parents=True)
-    (job / "manifest.json").write_text(json.dumps({"status": "COMPLETED"}), encoding="utf-8")
+    (job / "manifest.json").write_text(
+        json.dumps(
+            {
+                "status": "COMPLETED",
+                "job_id": "lesson-job",
+                "job_hash": "a" * 64,
+                "profile": "bridge_lesson",
+            }
+        ),
+        encoding="utf-8",
+    )
     (job / "transcript.jsonl").write_text('{"text":"ok"}\n', encoding="utf-8")
     (job / "transcript.txt").write_text("ok", encoding="utf-8")
     (job / "transcript_qc.json").write_text("[]", encoding="utf-8")
@@ -157,6 +168,223 @@ def test_compact_result_router_excludes_raw_media_and_caps_keyframes(tmp_path: P
     (frames / "frame-002.jpg").write_bytes(b"jpeg")
     with pytest.raises(RuntimeError, match="keyframe count"):
         collect_compact_artifacts(job, max_frames=1)
+
+
+def test_compact_result_router_rejects_review_and_incomplete_identity(tmp_path: Path):
+    job = tmp_path / "review-job"
+    job.mkdir()
+    for name in ("transcript.jsonl", "transcript.txt", "transcript_qc.json"):
+        (job / name).write_text("[]" if name.endswith(".json") else "ok", encoding="utf-8")
+    (job / "manifest.json").write_text(json.dumps({"status": "REVIEW"}), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="not technical COMPLETED"):
+        collect_compact_artifacts(job)
+
+    (job / "manifest.json").write_text(json.dumps({"status": "COMPLETED"}), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="identity is incomplete"):
+        collect_compact_artifacts(job)
+
+
+def test_remote_artifact_verification_rejects_same_name_wrong_content(tmp_path: Path):
+    path = tmp_path / "artifact.txt"
+    path.write_text("expected", encoding="utf-8")
+    artifact = PublishArtifact(
+        path,
+        "artifact.txt",
+        path.stat().st_size,
+        drive_results._sha256(path),
+        drive_results._md5(path),
+    )
+    remote = {
+        "id": "remote-id",
+        "size": str(path.stat().st_size),
+        "md5Checksum": "0" * 32,
+        "appProperties": {"sha256": artifact.sha256},
+    }
+    with pytest.raises(RuntimeError, match="checksum mismatch"):
+        drive_results._verify_remote_artifact(remote, artifact)
+
+    public_remote = {
+        "id": "remote-id",
+        "size": str(path.stat().st_size),
+        "md5Checksum": artifact.md5,
+        "appProperties": {"sha256": artifact.sha256},
+        "permissions": [{"type": "anyone", "role": "reader"}],
+    }
+    with pytest.raises(RuntimeError, match="broad ACL"):
+        drive_results._verify_remote_artifact(public_remote, artifact)
+
+
+def test_drive_upload_uses_multipart_related_metadata_first(tmp_path: Path, monkeypatch):
+    path = tmp_path / "artifact.txt"
+    path.write_text("expected media", encoding="utf-8")
+    artifact = PublishArtifact(
+        path,
+        "artifact.txt",
+        path.stat().st_size,
+        drive_results._sha256(path),
+        drive_results._md5(path),
+    )
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"id": "created-id"}
+
+    def post(url, **kwargs):
+        captured.update({"url": url, **kwargs})
+        return Response()
+
+    monkeypatch.setattr(drive_results, "_find_existing_file", lambda parent, name, token: None)
+    monkeypatch.setattr(
+        drive_results,
+        "_get_file_metadata",
+        lambda file_id, token: {
+            "id": file_id,
+            "size": str(artifact.size_bytes),
+            "md5Checksum": artifact.md5,
+            "appProperties": {"sha256": artifact.sha256},
+            "permissions": [{"type": "user", "role": "owner"}],
+        },
+    )
+    monkeypatch.setattr(drive_results.requests, "post", post)
+
+    receipt = drive_results._upload_or_verify_file("parent", artifact, "token")
+    content_type = captured["headers"]["Content-Type"]
+    assert content_type.startswith("multipart/related; boundary=")
+    assert "files" not in captured
+    assert captured["params"]["uploadType"] == "multipart"
+    assert captured["params"]["supportsAllDrives"] is True
+    body = captured["data"]
+    assert body.index(b"Content-Type: application/json; charset=UTF-8") < body.index(b"Content-Type: text/plain")
+    assert body.endswith(b"--\r\n")
+    assert receipt["file_id"] == "created-id"
+
+
+def test_drive_folder_with_broad_acl_fails_closed(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "id": "child",
+                "mimeType": "application/vnd.google-apps.folder",
+                "parents": ["parent"],
+                "capabilities": {"canAddChildren": True},
+                "permissions": [
+                    {"type": "user", "role": "owner"},
+                    {"type": "anyone", "role": "reader"},
+                ],
+            }
+
+    monkeypatch.setattr(drive_results.requests, "get", lambda *args, **kwargs: Response())
+    with pytest.raises(RuntimeError, match="broad ACL"):
+        drive_results._verify_folder("child", "token", expected_parent_id="parent", require_writable=True)
+
+
+def test_publish_writes_marker_last_and_is_deterministic_on_retry(tmp_path: Path, monkeypatch):
+    job = tmp_path / "publish-job"
+    job.mkdir()
+    manifest = {
+        "status": "COMPLETED",
+        "job_id": "publish-job",
+        "job_hash": "a" * 64,
+        "profile": "transcript_only",
+        "source_fingerprint": "b" * 64,
+        "processing_fingerprint": "c" * 64,
+    }
+    (job / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (job / "transcript.jsonl").write_text('{"text":"ok"}\n', encoding="utf-8")
+    (job / "transcript.txt").write_text("ok", encoding="utf-8")
+    (job / "transcript_qc.json").write_text("[]", encoding="utf-8")
+
+    monkeypatch.setattr(drive_results, "access_token", lambda: "token")
+    monkeypatch.setattr(drive_results, "probe_destination", lambda folder, token: {"status": "PASS"})
+    monkeypatch.setattr(drive_results, "_find_child_folder", lambda parent, name, token: "child-id")
+    monkeypatch.setattr(drive_results, "_verify_folder", lambda *args, **kwargs: {"status": "PASS"})
+    expected_bundle = drive_results.artifact_set_sha256(collect_compact_artifacts(job))
+    monkeypatch.setattr(
+        drive_results,
+        "verify_result",
+        lambda *args, **kwargs: {
+            "state": "PASS",
+            "artifact_set_sha256": expected_bundle,
+            "domain_analysis_status": "NOT_APPLICABLE",
+        },
+    )
+    calls: list[tuple[str, str]] = []
+
+    def upload(parent, artifact, token):
+        calls.append((artifact.relative_name, artifact.sha256))
+        return {"relative_name": artifact.relative_name, "file_id": "id", "sha256": artifact.sha256}
+
+    monkeypatch.setattr(drive_results, "_upload_or_verify_file", upload)
+    inventories: list[list[str]] = []
+
+    def verify_inventory(child, artifacts, token):
+        inventories.append([item.relative_name for item in artifacts])
+        return [{"relative_name": item.relative_name, "sha256": item.sha256} for item in artifacts]
+
+    monkeypatch.setattr(drive_results, "_verify_remote_inventory", verify_inventory)
+
+    exact = {
+        "expected_job_id": "publish-job",
+        "expected_profile": "transcript_only",
+        "expected_job_hash": "a" * 64,
+        "expected_source_file_id": None,
+        "expected_artifact_set_sha256": expected_bundle,
+    }
+    first = publish_result(job, "parent", **exact)
+    first_calls = list(calls)
+    calls.clear()
+    second = publish_result(job, "parent", **exact)
+    assert first["status"] == "PUBLISHED_VERIFIED"
+    assert first_calls[-1][0] == "PUBLICATION_COMPLETE.json"
+    assert calls[-1][0] == "PUBLICATION_COMPLETE.json"
+    assert "PUBLICATION_COMPLETE.json" not in inventories[0]
+    assert "PUBLICATION_COMPLETE.json" in inventories[1]
+    assert first["artifact_set_sha256"] == second["artifact_set_sha256"]
+    assert first["publication_marker_sha256"] == second["publication_marker_sha256"]
+
+
+def test_publish_fails_before_network_when_approved_bundle_changes(tmp_path: Path, monkeypatch):
+    job = tmp_path / "exact-job"
+    job.mkdir()
+    manifest = {
+        "status": "COMPLETED",
+        "job_id": "exact-job",
+        "job_hash": "a" * 64,
+        "profile": "transcript_only",
+    }
+    (job / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (job / "transcript.jsonl").write_text('{"text":"ok"}\n', encoding="utf-8")
+    (job / "transcript.txt").write_text("changed after approval", encoding="utf-8")
+    (job / "transcript_qc.json").write_text("[]", encoding="utf-8")
+    network_calls: list[str] = []
+    monkeypatch.setattr(drive_results, "access_token", lambda: network_calls.append("token"))
+
+    def reject_changed_bundle(*args, **kwargs):
+        assert kwargs["expected_job_id"] == "exact-job"
+        assert kwargs["expected_profile"] == "transcript_only"
+        assert kwargs["expected_job_hash"] == "a" * 64
+        assert kwargs["expected_artifact_set_sha256"] == "f" * 64
+        raise drive_results.ResultConformanceError("artifact set hash mismatch")
+
+    monkeypatch.setattr(drive_results, "verify_result", reject_changed_bundle)
+    with pytest.raises(drive_results.ResultConformanceError, match="artifact set hash mismatch"):
+        publish_result(
+            job,
+            "parent",
+            expected_job_id="exact-job",
+            expected_profile="transcript_only",
+            expected_job_hash="a" * 64,
+            expected_source_file_id=None,
+            expected_artifact_set_sha256="f" * 64,
+        )
+    assert network_calls == []
 
 
 def test_oracle_service_and_rollout_define_resource_and_no_asr_gates():

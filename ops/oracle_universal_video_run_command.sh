@@ -34,9 +34,17 @@ assert x.get('fallback_used') is False, x
 print('DDS3_BEFORE_PASS')
 PY
 
-if systemctl is-active --quiet universal-video.service 2>/dev/null \
-  && find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null | grep -q .; then
-  die "universal-video has a running job; refusing source upgrade"
+VIDEO_WAS_ACTIVE=0
+if systemctl is-active --quiet universal-video.service 2>/dev/null; then
+  if runuser -u universal-video -- find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null | grep -q .; then
+    die "universal-video has a running job; refusing source upgrade"
+  fi
+  systemctl stop universal-video.service
+  systemctl is-active --quiet universal-video.service 2>/dev/null && die "universal-video failed to stop"
+  VIDEO_WAS_ACTIVE=1
+  if runuser -u universal-video -- find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null | grep -q .; then
+    die "universal-video accepted a job while stopping; leaving sidecar stopped"
+  fi
 fi
 
 log "Prepare dedicated universal-video source checkout"
@@ -99,6 +107,7 @@ UNIVERSAL_VIDEO_SOURCE_DIR="$SOURCE_DIR" \
 UNIVERSAL_VIDEO_DIR="$BASE_DIR" \
 UNIVERSAL_VIDEO_ACTIVATE="$ACTIVATE" \
 UNIVERSAL_VIDEO_PREWARM_MODEL="$PREWARM" \
+UNIVERSAL_VIDEO_PREVIOUSLY_ACTIVE="$VIDEO_WAS_ACTIVE" \
 PYTHONDONTWRITEBYTECODE=1 \
   bash "$SOURCE_DIR/ops/oracle_universal_video_install.sh"
 
@@ -124,7 +133,7 @@ else
   echo 'universal_video_drive_auth=NOT_CONFIGURED_LOCAL_PATH_ONLY'
 fi
 ffmpeg -version | head -1
-"$BASE_DIR/.venv/bin/python" --version
+runuser -u universal-video -- "$BASE_DIR/.venv/bin/python" --version
 runuser -u universal-video -- env HF_HOME="$BASE_DIR/model-cache" PYTHONDONTWRITEBYTECODE=1 "$BASE_DIR/.venv/bin/python" - <<'PY'
 import faster_whisper
 print('faster_whisper_import=PASS')
@@ -153,26 +162,44 @@ if [[ "$RUN_SMOKE" == "1" ]]; then
   log "Run bounded synthetic local smoke job"
   media="$BASE_DIR/media/universal-video-smoke.mp4"
   job="$BASE_DIR/spool/inbox/universal-video-smoke.json"
-  rm -f "$BASE_DIR/spool/done/universal-video-smoke.json" "$BASE_DIR/spool/failed/universal-video-smoke.json"
-  ffmpeg -hide_banner -loglevel error -y \
+  runuser -u universal-video -- rm -f -- \
+    "$BASE_DIR/spool/done/universal-video-smoke.json" \
+    "$BASE_DIR/spool/failed/universal-video-smoke.json" \
+    "$job.tmp"
+  runuser -u universal-video -- ffmpeg -hide_banner -loglevel error -y \
     -f lavfi -i color=c=black:s=320x180:d=3 \
     -f lavfi -i sine=frequency=440:duration=3 \
     -shortest -c:v mpeg4 -q:v 10 -pix_fmt yuv420p -c:a aac "$media"
-  chown universal-video:universal-video "$media"
-  cat >"$job.tmp" <<EOF
-{"job_id":"universal-video-smoke","profile":"transcript_only","project":"infrastructure-smoke","source":{"kind":"local_path","path":"$media"},"metadata":{"synthetic":true},"options":{"max_duration_seconds":10,"chunk_seconds":60}}
-EOF
-  chown universal-video:universal-video "$job.tmp"
-  mv "$job.tmp" "$job"
+  runuser -u universal-video -- env JOB_TMP="$job.tmp" JOB_PATH="$job" MEDIA_PATH="$media" /usr/bin/python3 - <<'PY'
+import json, os
+payload={
+    'job_id':'universal-video-smoke',
+    'profile':'transcript_only',
+    'project':'infrastructure-smoke',
+    'source':{'kind':'local_path','path':os.environ['MEDIA_PATH']},
+    'metadata':{'synthetic':True},
+    'options':{'max_duration_seconds':10,'chunk_seconds':60},
+}
+flags=os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC|getattr(os,'O_NOFOLLOW',0)
+fd=os.open(os.environ['JOB_TMP'],flags,0o640)
+try:
+    with os.fdopen(fd,'w',encoding='utf-8') as handle:
+        json.dump(payload,handle,separators=(',',':'))
+        handle.write('\n'); handle.flush(); os.fsync(handle.fileno())
+    os.link(os.environ['JOB_TMP'],os.environ['JOB_PATH'])
+finally:
+    try: os.unlink(os.environ['JOB_TMP'])
+    except FileNotFoundError: pass
+PY
   deadline=$((SECONDS + 300))
   while (( SECONDS < deadline )); do
     if [[ -f "$BASE_DIR/spool/done/universal-video-smoke.json" ]]; then
-      cat "$BASE_DIR/spool/done/universal-video-smoke.json"
+      runuser -u universal-video -- /bin/cat "$BASE_DIR/spool/done/universal-video-smoke.json"
       echo UNIVERSAL_VIDEO_SYNTHETIC_SMOKE_PASS
       break
     fi
     if [[ -f "$BASE_DIR/spool/failed/universal-video-smoke.json" ]]; then
-      cat "$BASE_DIR/spool/failed/universal-video-smoke.json" >&2
+      runuser -u universal-video -- /bin/cat "$BASE_DIR/spool/failed/universal-video-smoke.json" >&2
       die "synthetic smoke job failed"
     fi
     sleep 2

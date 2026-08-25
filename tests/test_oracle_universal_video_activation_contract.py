@@ -15,6 +15,8 @@ def test_activation_workflow_is_fixed_scope_and_fail_closed():
     assert "StrictHostKeyChecking=no" not in text
     assert "sudo -n env UNIVERSAL_VIDEO_GIT_REF=" in text
     assert "ops/oracle_universal_video_run_command.sh" in text
+    assert "ops/oracle_universal_video_spool_guard.sh" in text
+    assert "ops/universal_video_receipt_reader.py" in text
     assert "UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS" in text
     assert "UNIVERSAL_VIDEO_SYNTHETIC_SMOKE_PASS" in text
     assert "assistant_lab=active" in text

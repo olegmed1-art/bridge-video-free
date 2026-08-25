@@ -6,6 +6,10 @@ on:
       - '.github/workflows/oracle-diana11-operator-bootstrap.yml'
       - 'ops/universal_video_diana11_operator.sh'
       - 'ops/install_universal_video_diana11_operator.sh'
+      - 'ops/oracle_universal_video_spool_guard.sh'
+      - 'ops/universal_video_receipt_reader.py'
+      - 'universal_video/result_conformance.py'
+      - 'universal_video/drive_results.py'
       - 'ops/oracle_known_hosts_from_scan.sh'
   push:
     branches: [main]
@@ -27,6 +31,7 @@ jobs:
     outputs:
       issue: ${{ steps.request.outputs.issue }}
       request_id: ${{ steps.request.outputs.request_id }}
+      expected_runtime_commit: ${{ steps.request.outputs.expected_runtime_commit }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -38,9 +43,13 @@ jobs:
           set -euo pipefail
           bash -n ops/universal_video_diana11_operator.sh
           bash -n ops/install_universal_video_diana11_operator.sh
+          bash -n ops/oracle_universal_video_spool_guard.sh
           bash -n ops/oracle_known_hosts_from_scan.sh
           grep -Fq "diana11-transcript-20260825-01" ops/universal_video_diana11_operator.sh
           grep -Fq "1PGRLozLJKG8tl-JYGPTCcS_lT-nn-T7C" ops/universal_video_diana11_operator.sh
+          grep -Fq "c80f34c4018c0861c5ba85d9ab0efac63e84027eca755783d15206d416f2d7f6" ops/universal_video_diana11_operator.sh
+          grep -Fq "publish-bridge" ops/install_universal_video_diana11_operator.sh
+          python -m py_compile universal_video/result_conformance.py universal_video/drive_results.py ops/universal_video_receipt_reader.py
       - name: Validate request
         id: request
         if: ${{ github.event_name == 'push' }}
@@ -53,11 +62,13 @@ jobs:
           REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os, re
           x=json.load(open(os.environ['REQUEST_FILE'], encoding='utf-8'))
-          assert set(x)=={'request_id','issue'}
+          assert set(x)=={'request_id','issue','expected_runtime_commit'}
           assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
-          assert x['issue']==441
+          assert x['issue'] in {441,547}
+          assert re.fullmatch(r'[0-9a-f]{40}', str(x['expected_runtime_commit']))
           print('request_id='+x['request_id'])
-          print('issue=441')
+          print('issue='+str(x['issue']))
+          print('expected_runtime_commit='+x['expected_runtime_commit'])
           PY
 
   bootstrap:
@@ -115,14 +126,14 @@ jobs:
           "${ssh_cmd[@]}" 'sudo -n true'
           cat ops/universal_video_diana11_operator.sh | "${ssh_cmd[@]}" 'cat > /tmp/universal_video_diana11_operator.sh && chmod 0600 /tmp/universal_video_diana11_operator.sh'
           cat ops/install_universal_video_diana11_operator.sh | "${ssh_cmd[@]}" 'cat > /tmp/install_universal_video_diana11_operator.sh && chmod 0600 /tmp/install_universal_video_diana11_operator.sh'
-          "${ssh_cmd[@]}" 'sudo -n env SOURCE_FILE=/tmp/universal_video_diana11_operator.sh bash /tmp/install_universal_video_diana11_operator.sh'
+          "${ssh_cmd[@]}" "sudo -n env SOURCE_FILE=/tmp/universal_video_diana11_operator.sh EXPECTED_RUNTIME_COMMIT='${{ needs.validate.outputs.expected_runtime_commit }}' bash /tmp/install_universal_video_diana11_operator.sh"
           "${ssh_cmd[@]}" 'sudo -n /usr/local/sbin/universal-video-diana11 status'
           echo ORACLE_DIANA11_OPERATOR_BOOTSTRAP_PASS
       - name: Report status
         if: ${{ success() }}
         shell: bash
         run: |
-          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус «Диана 11»: **FIX_IN_REVIEW → OPERATOR_INSTALLED**. Exact submit/status operator установлен на существующем Oracle; следующий шаг — enqueue transcript-only job. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус «Диана 11»: **OPERATOR_INSTALLED**. Exact submit/status/conformance/publish operator установлен на существующем Oracle; job не запускался. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
       - name: Report failure
         if: ${{ failure() }}
         shell: bash

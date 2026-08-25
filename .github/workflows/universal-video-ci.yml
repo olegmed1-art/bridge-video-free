@@ -13,6 +13,7 @@ on:
       - 'requirements-universal-video.txt'
       - 'deploy/oracle-universal-video/**'
       - 'ops/oracle_universal_video_*.sh'
+      - 'ops/universal_video_receipt_reader.py'
       - 'tests/test_universal_video_*.py'
       - 'tests/test_bridge_video_*.py'
       - 'tests/test_bridge_vision_*.py'
@@ -36,9 +37,11 @@ jobs:
         run: |
           bash -n ops/oracle_universal_video_preflight.sh
           bash -n ops/oracle_universal_video_install.sh
+          bash -n ops/oracle_universal_video_spool_guard.sh
           bash -n ops/oracle_universal_video_run_command.sh
           bash -n ops/oracle_universal_video_drive_secret_install.sh
           bash -n ops/oracle_universal_video_productionize.sh
+          python -m py_compile ops/universal_video_receipt_reader.py
       - name: Validate systemd boundaries
         run: |
           unit=deploy/oracle-universal-video/universal-video.service

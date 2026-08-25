@@ -11,9 +11,11 @@ import os
 import stat
 import time
 from pathlib import Path
+from typing import Any
 
-from .contract import MAX_JOB_BYTES
+from .contract import MAX_JOB_BYTES, canonical_job_hash, validate_from_env
 from .finops_observation import build_video_finops_observation, directory_bytes
+from .result_conformance import verify_result
 from .runner import run_job
 from .runtime_preflight import validate_video_runtime
 
@@ -23,6 +25,26 @@ def _dirs(root: Path) -> dict[str, Path]:
     for path in out.values():
         path.mkdir(parents=True, exist_ok=True)
     return out
+
+
+def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+    """Write a receipt/manifest without exposing a partially-written JSON file."""
+
+    temp = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        with temp.open("w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+        directory_fd = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def _regular_payload(path: Path) -> tuple[bool, str | None]:
@@ -194,25 +216,58 @@ def process_one(spool_root: Path) -> bool:
             raise RuntimeError(reason or "invalid claimed spool payload")
         payload = json.loads(claimed.read_text(encoding="utf-8"))
         validate_video_runtime()
+        validated_job = validate_from_env(payload)
         result = run_job(payload, paths["results"])
         result_dir = paths["results"] / str(result.get("job_id") or "")
         media = result.get("media") or {}
         processing_model = result.get("processing_whisper_model") or (result.get("runtime") or {}).get("whisper_model")
         source_info = result.get("source") or {}
-        result["finops_observation"] = build_video_finops_observation(
-            status=str(result.get("status") or "COMPLETED"),
-            elapsed_seconds=time.monotonic() - started,
-            input_bytes=media.get("size_bytes"),
-            output_bytes=directory_bytes(result_dir),
-            video_seconds=media.get("duration_seconds"),
-            whisper_model=processing_model,
-            source_kind=source_info.get("kind"),
-        )
+        reused_finalized_result = isinstance(result.get("finops_observation"), dict)
+        if not reused_finalized_result:
+            runtime = result.get("runtime") if isinstance(result.get("runtime"), dict) else {}
+            elapsed = runtime.get("elapsed_seconds") or (time.monotonic() - started)
+            result["finops_observation"] = build_video_finops_observation(
+                status=str(result.get("status") or "COMPLETED"),
+                elapsed_seconds=float(elapsed),
+                input_bytes=media.get("size_bytes"),
+                output_bytes=directory_bytes(result_dir),
+                video_seconds=media.get("duration_seconds"),
+                whisper_model=processing_model,
+                source_kind=source_info.get("kind"),
+            )
         manifest_path = result_dir / "manifest.json"
-        if manifest_path.exists():
-            manifest_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        if manifest_path.exists() and not reused_finalized_result:
+            _atomic_write_json(manifest_path, result)
+        if str(result.get("status") or "") == "COMPLETED":
+            conformance = verify_result(
+                result_dir,
+                expected_job_id=validated_job.job_id,
+                expected_profile=validated_job.profile,
+                expected_job_hash=canonical_job_hash(validated_job),
+                expected_source_file_id=(
+                    str(validated_job.source.get("file_id"))
+                    if validated_job.source.get("kind") == "google_drive"
+                    else None
+                ),
+                evidence_phase=("REUSE_OBSERVATION" if reused_finalized_result else "GENERATION_FINALIZATION"),
+            )
+        else:
+            conformance = {
+                "schema": "universal-video-result-conformance-v1",
+                "state": "NOT_ELIGIBLE",
+                "reason": "MANIFEST_REVIEW",
+                "technical_bundle_ready": False,
+                "bridge_production_ready": False,
+                "pedagogical_status": "NOT_EVALUATED",
+            }
+        receipt_payload = dict(result)
+        receipt_payload["receipt_version"] = "universal-video-compute-receipt-v1"
+        receipt_payload["compute_status"] = str(result.get("status") or "")
+        receipt_payload["result_dir"] = str(result_dir)
+        receipt_payload["result_locator"] = {"kind": "local_directory", "path": str(result_dir)}
+        receipt_payload["result_conformance"] = conformance
         receipt = paths["done"] / source.name
-        receipt.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        _atomic_write_json(receipt, receipt_payload)
         claimed.unlink(missing_ok=True)
     except Exception as exc:
         source_kind = None
@@ -230,10 +285,7 @@ def process_one(spool_root: Path) -> bool:
                 error_class=type(exc).__name__,
             ),
         }
-        (paths["failed"] / source.name).write_text(
-            json.dumps(failure, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        _atomic_write_json(paths["failed"] / source.name, failure)
         claimed.unlink(missing_ok=True)
     return True
 
