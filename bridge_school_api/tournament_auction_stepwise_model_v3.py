@@ -11,6 +11,7 @@ class AuctionModelError(ValueError):
 PROVENANCE_CLASSES = {"CANON", "MODEL", "UNKNOWN"}
 SEATS = ("N", "E", "S", "W")
 SUITS = ("S", "H", "D", "C")
+FIT_MIN_COMBINED_LENGTH = 8
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,29 @@ def _required_text(value: Any, field: str) -> str:
     if not text:
         raise AuctionModelError(f"missing required field: {field}")
     return text
+
+
+def guaranteed_fit_state(*, actor_length: int, partner_promised_minimum: int) -> dict[str, Any]:
+    """Return the fit state available to the acting player at that moment.
+
+    School definition: a fit exists when the partnership is known to hold at least
+    eight cards in the suit. The calculation is therefore based on the acting
+    player's actual length plus the minimum length promised by partner's public call,
+    not on partner's hidden actual holding.
+    """
+    actor_length = int(actor_length)
+    partner_promised_minimum = int(partner_promised_minimum)
+    if actor_length < 0 or partner_promised_minimum < 0:
+        raise AuctionModelError("fit lengths must be non-negative")
+    combined = actor_length + partner_promised_minimum
+    return {
+        "actor_length": actor_length,
+        "partner_promised_minimum": partner_promised_minimum,
+        "guaranteed_combined_length": combined,
+        "fit_established": combined >= FIT_MIN_COMBINED_LENGTH,
+        "fit_threshold": FIT_MIN_COMBINED_LENGTH,
+        "uses_partner_hidden_actual_length": False,
+    }
 
 
 def build_stepwise_auction_model(
@@ -123,6 +147,8 @@ def build_stepwise_auction_model(
             "build_direction": "FORWARD_ONE_CALL_AT_A_TIME",
             "use_final_contract_to_backsolve": False,
             "hidden_hand_access_allowed_for_call_selection": False,
+            "fit_definition": "GUARANTEED_COMBINED_LENGTH_AT_LEAST_8",
+            "fit_uses_public_promises_not_hidden_actual_length": True,
             "canon_gap_policy": "MARK_MODEL_OR_UNKNOWN_DO_NOT_INVENT_CANON",
             "automatic_student_error_attribution_allowed": False,
         },
@@ -130,23 +156,17 @@ def build_stepwise_auction_model(
 
 
 def board15_verified_prefix() -> dict[str, Any]:
-    """Verified modelling prefix for tournament 30041 board 15.
-
-    Only the first two non-pass calls are encoded. 1D is an opening hypothesis based
-    on the current school system context; 1H is explicitly constrained to 4+ hearts.
-    The continuation is intentionally not invented here until the relevant rebid and
-    game-forcing rules are present in canonical school evidence.
-    """
+    """Verified modelling prefix for tournament 30041 board 15."""
     hands = {
         "N": "Q3.Q9.A82.J98753",
         "E": "KJ6.AJ87632.43.6",
         "S": "AT94.5.9765.KQ42",
         "W": "8752.KT4.KQJT.AT",
     }
-    return build_stepwise_auction_model(
+    out = build_stepwise_auction_model(
         dealer="S",
         hands=hands,
-        canon_revision="bridge-school-canon-2026-08-25",
+        canon_revision="bridge-school-canon-2026-08-26",
         steps=[
             {"seat": "S", "call": "P", "provenance": "MODEL", "reason": "9 HCP hand; pass retained as modelling hypothesis"},
             {"seat": "W", "call": "1D", "provenance": "MODEL", "reason": "13 HCP, 4-3-4-2; 1NT 15-17 is excluded; exact minor-opening priority requires canon binding"},
@@ -162,3 +182,13 @@ def board15_verified_prefix() -> dict[str, Any]:
             },
         ],
     )
+    # At West's next turn only the public minimum 4+ hearts from 1H may be used.
+    # West has three hearts, so the guaranteed combined length is 7: no fit yet.
+    out["next_actor_fit_check"] = {
+        "seat": "W",
+        "suit": "H",
+        **guaranteed_fit_state(actor_length=3, partner_promised_minimum=4),
+        "teacher_rule_evidence": "teacher-confirmed-in-chat-2026-08-26",
+        "support_as_known_fit_allowed": False,
+    }
+    return out

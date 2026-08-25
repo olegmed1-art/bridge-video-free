@@ -4,6 +4,7 @@ from bridge_school_api.tournament_auction_stepwise_model_v3 import (
     AuctionModelError,
     board15_verified_prefix,
     build_stepwise_auction_model,
+    guaranteed_fit_state,
 )
 
 
@@ -21,6 +22,7 @@ def test_board15_prefix_is_forward_and_hidden_hand_safe():
     assert out["public_auction"] == ["P", "1D", "P", "1H"]
     assert out["policy"]["build_direction"] == "FORWARD_ONE_CALL_AT_A_TIME"
     assert out["policy"]["use_final_contract_to_backsolve"] is False
+    assert out["policy"]["fit_definition"] == "GUARANTEED_COMBINED_LENGTH_AT_LEAST_8"
     for step in out["steps"]:
         ctx = step["decision_context"]
         assert ctx["hidden_hand_access_allowed"] is False
@@ -31,6 +33,25 @@ def test_board15_prefix_is_forward_and_hidden_hand_safe():
     assert east["call"] == "1H"
     assert east["decision_context"]["actor_lengths"]["H"] == 7
     assert east["decision_context"]["actor_hcp"] == 9
+
+
+def test_board15_west_does_not_have_known_heart_fit_after_1h():
+    out = board15_verified_prefix()
+    fit = out["next_actor_fit_check"]
+    assert fit["seat"] == "W"
+    assert fit["suit"] == "H"
+    assert fit["actor_length"] == 3
+    assert fit["partner_promised_minimum"] == 4
+    assert fit["guaranteed_combined_length"] == 7
+    assert fit["fit_established"] is False
+    assert fit["support_as_known_fit_allowed"] is False
+    assert fit["uses_partner_hidden_actual_length"] is False
+
+
+def test_fit_is_established_at_guaranteed_eight_cards():
+    fit = guaranteed_fit_state(actor_length=4, partner_promised_minimum=4)
+    assert fit["guaranteed_combined_length"] == 8
+    assert fit["fit_established"] is True
 
 
 def test_public_history_grows_one_call_at_a_time():
