@@ -47,6 +47,8 @@ def test_ben_runtime_is_resource_bounded_and_has_watchdog():
         "bridge-ben-healthcheck.timer",
     ):
         assert required in text
+    assert "systemctl enable bridge-ben.service\\nsystemctl restart bridge-ben.service" in text
+    assert "systemctl enable --now bridge-ben.service" not in text
 
 
 def test_dds3_runtime_rollout_is_commit_pinned_and_rollback_safe():
