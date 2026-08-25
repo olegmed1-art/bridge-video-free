@@ -33,7 +33,8 @@ jobs:
       (github.event.comment.body == '/dds3-pilot10k start' ||
        github.event.comment.body == '/dds3-pilot10k status' ||
        github.event.comment.body == '/dds3-main30k deploy' ||
-       github.event.comment.body == '/dds3-main30k stage')
+       github.event.comment.body == '/dds3-main30k stage' ||
+       github.event.comment.body == '/dds3-main30k start')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -203,6 +204,101 @@ jobs:
           REMOTE
           {
             echo 'stage<<EOF'
+            sed -n '1,100p' "$out"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Authorize and start Oracle Main-30k TRAIN
+        if: ${{ env.COMMAND == '/dds3-main30k start' }}
+        id: main_start
+        shell: bash
+        run: |
+          set -euo pipefail
+          key='${{ steps.ssh.outputs.key }}'; known='${{ steps.ssh.outputs.known }}'
+          out="$RUNNER_TEMP/main30k-start.txt"
+          ref="$(git rev-parse HEAD)"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$known" -o ConnectTimeout=15 "$ORACLE_USER$@ORACLE_HOST" \
+            "sudo -n env RUNTIME_COMMIT='$ref' bash -s" <<'REMOTE' | tee "$out"
+          set -Eeuo pipefail
+          repo=/opt/bridge-school/bridge-video-free
+          state=/opt/bridge-school/dds3-mass-validation
+          work="$state/work/main30k"
+          tasks="$work/blind_tasks_main_train_pre_dds.jsonl"
+          predictions="$work/locked_predictions_main_train_adaptive.jsonl"
+          authdir="$state/authorizations"
+          auth="$authdir/main30k.json"
+          req="$state/requests/30000.json"
+          preflight="$state/evidence/30000-preflight.json"
+          if systemctl is-active --quiet dds3-mass@30000.service; then exit 3; fi
+          test "$(git -C "$repo" rev-parse HEAD)" = "$RUNTIME_COMMIT"
+          test -f "$preflight" -a -f "$tasks" -a -f "$predictions"
+          PREFLIGHT="$preflight" python3 - <<'PY'
+          import json,os
+          x=json.load(open(os.environ["PREFLIGHT"]))
+          assert x["status"]=="preflight_passed" and x["compute_started"] is False
+          assert x["target"]==30000 and x["train_tasks"]==28000
+          assert x["validation_opened"] is False and x["sealed_test_opened"] is False
+          assert x["max_runtime_seconds"]==10800 and float(x["max_cost_usd"])==2.0
+          PY
+          corpus_sha="$(sha256sum "$work/raw.pbn" | awk '{print $1}')"
+          install -d -m 0750 -o root -g dds3-mass "$state/requests" "$authdir"
+          install -d -m 0750 -o dds3-mass -g dds3-mass "$state/authorization-consumed"
+          nonce="$("$repo/dds_training/.venv/bin/python" -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          GITHUB_REPOSITORY='olegmed1-art/bridge-video-free' \
+          GITHUB_REF_NAME='main' GITHUB_SHA="$RUNTIME_COMMIT" \
+          GITHUB_ACTOR='olegmed1-art' GITHUB_TRIGGERING_ACTOR='olegmed1-art' \
+          GITHUB_EVENT_NAME='issue_comment' DDS_AUTHORIZATION_COMMAND='/dds3-main30k start' \
+          "$repo/dds_training/.venv/bin/python" "$repo/dds_training/launch_authorization.py" issue \
+            --out "$auth.tmp" --scope main_train --manifest "$tasks" --nonce "$nonce" \
+            --approval-phrase 'ЭТАП-2-СТАРТ-ПОДТВЕРЖДАЮ' \
+            --expected-commit "$RUNTIME_COMMIT" --ttl-minutes 20
+          chown root:dds3-mass "$auth.tmp"; chmod 0640 "$auth.tmp"; mv "$auth.tmp" "$auth"
+          cat > "$req.tmp" <<JSON
+          {
+            "schema":"bridge-school-dds3-mass-request/v1",
+            "target":30000,
+            "stage":"main",
+            "splits":["train"],
+            "compute_plane":"oracle",
+            "engine":"DDS3",
+            "fallback_used":false,
+            "corpus_path":"$work/raw.pbn",
+            "corpus_sha256":"$corpus_sha",
+            "work_dir":"$work",
+            "predictions_path":"$predictions",
+            "tasks_file":"$tasks",
+            "run_id":"oracle-main30k-train-20260825",
+            "budget":{"max_runtime_seconds":10800,"max_cost_usd":2.0},
+            "authorization":{
+              "receipt_path":"$auth","nonce":"$nonce","scope":"main_train",
+              "repository":"olegmed1-art/bridge-video-free","ref_name":"main",
+              "commit_sha":"$RUNTIME_COMMIT","actor":"olegmed1-art",
+              "triggering_actor":"olegmed1-art","event_name":"issue_comment",
+              "command":"/dds3-main30k start"
+            }
+          }
+          JSON
+          chown root:dds3-mass "$req.tmp"; chmod 0640 "$req.tmp"; mv "$req.tmp" "$req"
+          rm -f "$state/evidence/30000.json"
+          systemctl start --no-block dds3-mass@30000.service
+          for _ in $(seq 1 20); do
+            test -f "$state/evidence/30000.json" && break
+            sleep 1
+          done
+          test -f "$state/evidence/30000.json"
+          python3 - "$state/evidence/30000.json" <<'PY'
+          import json,sys
+          x=json.load(open(sys.argv[1]))
+          assert x["status"] in ("running","train_passed")
+          assert x["target"]==30000 and x["expected_train_tasks"]==28000
+          assert x["splits"]==["train"] and x["validation_opened"] is False
+          assert x["sealed_test_opened"] is False and x["fallback_used"] is False
+          print("MAIN30K_LAUNCH_PASS status="+x["status"]+" expected_train_tasks=28000")
+          PY
+          REMOTE
+          {
+            echo 'main_start<<EOF'
             sed -n '1,100p' "$out"
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
@@ -486,8 +582,10 @@ jobs:
           DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
           STAGE_TEXT: ${{ steps.stage.outputs.stage }}
           STAGE_OUTCOME: ${{ steps.stage.outcome }}
+          MAIN_START_TEXT: ${{ steps.main_start.outputs.main_start }}
+          MAIN_START_OUTCOME: ${{ steps.main_start.outcome }}
         shell: bash
         run: |
           set -euo pipefail
-          body="Oracle DDS3 operator: command=${COMMAND}, deploy=${DEPLOY_OUTCOME:-not_requested}, stage=${STAGE_OUTCOME:-not_requested}, start=${START_OUTCOME:-not_requested}\n\n\`\`\`text\n${DEPLOY_TEXT:-}${STAGE_TEXT:-}${STATUS_TEXT:-no_status}\n\`\`\`"
+          body="Oracle DDS3 operator: command=${COMMAND}, deploy=${DEPLOY_OUTCOME:-not_requested}, stage=${STAGE_OUTCOME:-not_requested}, main_start=${MAIN_START_OUTCOME:-not_requested}, pilot_start=${START_OUTCOME:-not_requested}\n\n\`\`\`text\n${DEPLOY_TEXT:-}${STAGE_TEXT:-}${MAIN_START_TEXT:-}${STATUS_TEXT:-no_status}\n\`\`\`"
           gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -f body="$body" >/dev/null
