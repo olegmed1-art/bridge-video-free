@@ -37,6 +37,8 @@ jobs:
           grep -F '/research-job migrate-neon-and-canary' .github/workflows/research-job-neon-operator.yml >/dev/null
           grep -F 'environment: database-production' .github/workflows/research-job-neon-operator.yml >/dev/null
           grep -F 'SET ROLE bridge_school_app' .github/workflows/research-job-neon-operator.yml >/dev/null
+          grep -F 'GRANT bridge_school_app TO %I' .github/workflows/research-job-neon-operator.yml >/dev/null
+          grep -F 'REVOKE bridge_school_app FROM %I' .github/workflows/research-job-neon-operator.yml >/dev/null
           python -m py_compile assistant_lab/research_pipeline.py assistant_lab/research_runtime.py assistant_lab/research_api.py
 
   migrate-and-canary:
@@ -102,6 +104,20 @@ jobs:
           grep -Fx 'rpc=true' /tmp/research-schema-evidence.txt
           grep -Fx 'rpc_security_definer=true' /tmp/research-schema-evidence.txt
           grep -Fx 'rpc_fixed_search_path=true' /tmp/research-schema-evidence.txt
+
+      - name: Allow the migration principal to assume the app role for canary
+        id: canary_role
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE executor_role name := session_user;
+          BEGIN
+            EXECUTE format('GRANT bridge_school_app TO %I', executor_role);
+          END
+          $$;
+          SQL
 
       - name: Run production BEN ResearchJob through the Oracle resident worker
         id: canary
@@ -183,6 +199,23 @@ jobs:
               f"artifact_sha256={research['artifact_sha256']} evidence=POLICY_ONLY"
           )
           PY
+
+      - name: Remove temporary app-role membership
+        if: ${{ always() && steps.canary_role.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE executor_role name := session_user;
+          BEGIN
+            EXECUTE format('REVOKE bridge_school_app FROM %I', executor_role);
+          END
+          $$;
+          SQL
+          removed="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c \
+            "SELECT NOT pg_has_role(session_user, 'bridge_school_app', 'MEMBER')")"
+          test "$removed" = t
 
       - name: Publish result
         if: always()
