@@ -37,6 +37,13 @@ def _auction_context(auction: list[str]) -> str:
     return "-".join(call.strip() for call in auction) if auction else "----"
 
 
+def _raise_ben_transport_error(exc: Exception) -> None:
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    if isinstance(reason, ConnectionRefusedError):
+        raise LabContractError("BEN_LOCAL_RUNTIME_UNAVAILABLE") from exc
+    raise RetryableBenError("BEN_LOCAL_TRANSPORT_FAILED") from exc
+
+
 def compute_ben_policy(base_url: str, payload: dict[str, Any], *, timeout: float = 25.0) -> dict[str, Any]:
     params = {
         "hand": payload["hand"],
@@ -61,7 +68,7 @@ def compute_ben_policy(base_url: str, payload: dict[str, Any], *, timeout: float
             raise RetryableBenError(f"BEN_HTTP_{exc.code}") from exc
         raise LabContractError(f"BEN_HTTP_{exc.code}") from exc
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise RetryableBenError("BEN_LOCAL_TRANSPORT_FAILED") from exc
+        _raise_ben_transport_error(exc)
     except json.JSONDecodeError as exc:
         raise RetryableBenError("BEN_LOCAL_INVALID_JSON") from exc
     verified = verify_ben_result(result)
