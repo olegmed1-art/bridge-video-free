@@ -1,4 +1,6 @@
 import copy
+import hashlib
+import json
 
 import pytest
 
@@ -91,6 +93,16 @@ def _build(*, mutate=None):
     )
 
 
+def _recalculate_release_id(receipt):
+    identity = {
+        key: value
+        for key, value in receipt.items()
+        if key not in {"release_id", "content_addressed_release_receipt"}
+    }
+    raw = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def test_builds_deterministic_content_addressed_release_receipt():
     first = _build()
     second = _build()
@@ -101,6 +113,7 @@ def test_builds_deterministic_content_addressed_release_receipt():
     verified = verify_release_provenance_receipt(first)
     assert verified["status"] == "PASS"
     assert verified["release_id"] == first["release_id"]
+    assert verified["release_safety_boundaries_verified"] is True
 
 
 def test_rejects_unready_release():
@@ -134,3 +147,12 @@ def test_detects_tampered_receipt():
 
     with pytest.raises(TournamentReleaseProvenanceError, match="digest mismatch"):
         verify_release_provenance_receipt(tampered)
+
+
+def test_verifier_rejects_self_consistent_but_weakened_receipt():
+    forged = copy.deepcopy(_build())
+    forged["automatic_methodology_mapping_used"] = True
+    forged["release_id"] = _recalculate_release_id(forged)
+
+    with pytest.raises(TournamentReleaseProvenanceError, match="boundary weakened"):
+        verify_release_provenance_receipt(forged)
