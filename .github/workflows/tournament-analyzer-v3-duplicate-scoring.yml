@@ -1,0 +1,61 @@
+name: Tournament Analyzer v3 Duplicate Scoring
+
+on:
+  pull_request:
+    paths:
+      - "bridge_school_api/tournament_duplicate_scoring_v3.py"
+      - "tools/tournament_duplicate_scoring_v3.py"
+      - "tests/test_tournament_duplicate_scoring_v3.py"
+      - "data/tournaments/tournament_30041_round2_diana_facts_v1.json"
+      - ".github/workflows/tournament-analyzer-v3-duplicate-scoring.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-30041-score-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Compile modules
+        run: |
+          python -m py_compile bridge_school_api/tournament_duplicate_scoring_v3.py
+          python -m py_compile tools/tournament_duplicate_scoring_v3.py
+      - name: Run scoring contracts
+        run: python -m pytest -q tests/test_tournament_duplicate_scoring_v3.py
+      - name: Independently recalculate real 30041 played scores
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$PWD" python tools/tournament_duplicate_scoring_v3.py \
+            --facts data/tournaments/tournament_30041_round2_diana_facts_v1.json \
+            --out tournament-30041-score-validation.json
+      - name: Enforce v1.4 score boundary
+        run: |
+          python - <<'PY'
+          import json
+          p=json.load(open('tournament-30041-score-validation.json', encoding='utf-8'))
+          assert p['schema']=='tournament-duplicate-score-validation-v1'
+          assert p['played_scores_checked']==21
+          assert p['skipped_nonplayed']==3
+          assert p['all_published_scores_match'] is True
+          assert p['mismatches']==[]
+          assert p['administrative_results_recalculated'] is False
+          by_board={x['board_number']:x for x in p['checks']}
+          assert by_board[2]['published_score']==-600 and by_board[2]['recalculated_score']==-600
+          assert by_board[9]['published_score']==1430 and by_board[9]['recalculated_score']==1430
+          assert by_board[12]['published_score']==200 and by_board[12]['recalculated_score']==200
+          assert by_board[24]['published_score']==800 and by_board[24]['recalculated_score']==800
+          print('TOURNAMENT_30041_DUPLICATE_SCORE_V14_GATE_PASS')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tournament-analyzer-v3-30041-score-validation
+          path: tournament-30041-score-validation.json
+          if-no-files-found: error
+          retention-days: 30
