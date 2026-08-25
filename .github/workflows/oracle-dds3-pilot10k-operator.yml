@@ -190,7 +190,7 @@ jobs:
           summary=json.loads((work/"corpus_summary.json").read_text())
           raw=work/"raw.pbn"; digest=hashlib.sha256(raw.read_bytes()).hexdigest()
           assert summary.get("count")==30000 and summary.get("raw_sha256")==digest
-          count=validate_train_identity(work/"blind_tasks_crossfit_main.jsonl",work/"locked_predictions_main_train_adaptive.jsonl")
+          count=validate_train_identity(work/"blind_tasks_main_train_pre_dds.jsonl",work/"locked_predictions_main_train_adaptive.jsonl")
           validate_pilot_gate(work,state)
           evidence={"schema":"bridge-school-dds3-main30k-preflight/v1","status":"preflight_passed","compute_started":False,"target":30000,"corpus_deals":30000,"corpus_sha256":digest,"train_tasks":count,"splits":["train"],"validation_opened":False,"sealed_test_opened":False,"max_runtime_seconds":10800,"max_cost_usd":2.0}
           out=state/"evidence"/"30000-preflight.json"; tmp=out.with_suffix(".json.tmp")
@@ -462,8 +462,13 @@ jobs:
           if sudo -n test -f "$log"; then
             echo "log_bytes=$(sudo -n stat -c %s "$log")"
           fi
-          if [[ -f "$state/evidence/10000.json" ]]; then
+          if sudo -n test -f "$state/evidence/10000.json"; then
             echo 'evidence_present=true'
+            sudo -n cat "$state/evidence/10000.json" | python3 -c 'import json,sys; x=json.load(sys.stdin); [print(f"{k}={x[k]}") for k in ("target","status","authority","authorization_event","compute_plane","compute_host","engine","fallback_used","corpus_sha256","corpus_deals","expected_train_tasks","returncode","log_sha256") if k in x]'
+          else
+            echo 'evidence_present=false'
+          fi
+          : <<'DISABLED_OLD_EVIDENCE_READER'
             python3 - "$state/evidence/10000.json" <<'PY'
           import json,sys
           x=json.load(open(sys.argv[1]))
@@ -473,6 +478,7 @@ jobs:
           else
             echo 'evidence_present=false'
           fi
+          DISABLED_OLD_EVIDENCE_READER
           REMOTE
           {
             echo 'status<<EOF'
