@@ -162,8 +162,8 @@ def test_compact_result_router_excludes_raw_media_and_caps_keyframes(tmp_path: P
 def test_oracle_service_and_rollout_define_resource_and_no_asr_gates():
     root = Path(__file__).resolve().parents[1]
     unit = (root / "deploy/oracle-universal-video/universal-video.service").read_text(encoding="utf-8")
-    assert "MemoryHigh=12G" in unit
-    assert "MemoryMax=16G" in unit
+    assert "MemoryHigh=6G" in unit
+    assert "MemoryMax=8G" in unit
     assert "CPUQuota=400%" in unit
     assert "CPUWeight=20" in unit
     assert "IOSchedulingClass=idle" in unit
