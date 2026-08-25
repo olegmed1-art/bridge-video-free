@@ -214,7 +214,7 @@ jobs:
           $$;
           SQL
           removed="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c \
-            "SELECT NOT pg_has_role(session_user, 'bridge_school_app', 'MEMBER')")"
+            "SELECT NOT pg_has_role(session_user, 'bridge_school_app', 'SET')")"
           test "$removed" = t
 
       - name: Publish result
