@@ -17,23 +17,32 @@ def _source():
     return json.loads(FACTS.read_text(encoding="utf-8"))
 
 
-def _candidate(*, deal_id="30041:round-2:2", regret=2.0):
+def _candidate(*, deal_id="30041:round-2:2", regret=2):
     return {
         "deal_id": deal_id,
         "board_number": int(deal_id.rsplit(":", 1)[1]),
-        "actual_lead": "S2",
-        "optimal_leads": ["C2", "H2"],
-        "best_tricks_for_side_to_lead": 7,
-        "actual_lead_tricks_for_side_to_lead": 5,
-        "regret_tricks": regret,
+        "contract": "3NT",
+        "declarer": "S",
+        "opening_leader": "W",
+        "opening_leader_side": "EW",
+        "target_pair_side": "EW",
+        "target_pair_made_opening_lead": True,
+        "actual_opening_lead": "S2",
+        "actual_lead_tricks_for_opening_side": 5,
+        "best_tricks_for_opening_side": 7,
+        "lead_regret_tricks": regret,
+        "regret_class": "0" if regret == 0 else "1" if regret == 1 else "2+",
+        "actual_lead_dd_optimal": regret == 0,
+        "optimal_opening_leads": ["C2", "H2"],
         "position_sha256": "a" * 64,
         "engine": "DDS3",
         "engine_version": "v3.0.0+cdd13cf5b700788ac8c1391501b42445b3129b45",
         "fallback_used": False,
-        "target_pair_made_opening_lead": True,
+        "evidence_kind": "DDS_FACT",
         "causal_error_attribution": "NOT_ESTABLISHED",
         "student_error_attribution": None,
         "methodology_mapping": None,
+        "candidate_kind": "DDS3_OPENING_LEAD_REGRET",
         "teacher_review_required": True,
         "coverage_eligible": False,
     }
@@ -43,6 +52,7 @@ def _report(candidates=None):
     candidates = list(candidates or [_candidate()])
     return {
         "schema": "tournament-opening-lead-dds3-v1",
+        "normative_algorithm_version": "1.4",
         "provider_native_key": "bridge.co.il:event:30041:round:2",
         "event_id": "30041",
         "session_id": "round-2",
@@ -98,7 +108,8 @@ def test_finding_is_dds_fact_not_student_error():
     assert finding.trick_loss == 2.0
     assert finding.repeat_key == "DDS3_OPENING_LEAD_REGRET_V1"
     assert finding.evidence[0].kind.value == "DDS_FACT"
-    assert finding.evidence[0].provenance["actual_lead"] == "S2"
+    assert finding.evidence[0].provenance["actual_opening_lead"] == "S2"
+    assert finding.evidence[0].provenance["lead_regret_tricks"] == 2
 
 
 def test_causal_or_pedagogical_attribution_fails_closed():
@@ -119,6 +130,13 @@ def test_non_target_or_zero_regret_candidate_fails_closed():
     with pytest.raises(OpeningLeadReviewHandoffError):
         build_opening_lead_review_handoff(_source(), _report([candidate]))
 
-    candidate = _candidate(regret=0.0)
+    candidate = _candidate(regret=0)
+    with pytest.raises(OpeningLeadReviewHandoffError):
+        build_opening_lead_review_handoff(_source(), _report([candidate]))
+
+
+def test_wrong_evidence_kind_fails_closed():
+    candidate = _candidate()
+    candidate["evidence_kind"] = "MODEL_OPINION"
     with pytest.raises(OpeningLeadReviewHandoffError):
         build_opening_lead_review_handoff(_source(), _report([candidate]))
