@@ -52,6 +52,8 @@ def test_dds3_runtime_rollout_is_commit_pinned_and_rollback_safe():
     assert "bridge-school-dds3-runtime:rollback-last" in text
     assert "trap rollback ERR" in text
     assert "deal_pbn_sha256" in text
+    assert "dds3-healthcheck.timer" in text
+    assert "docker restart bridge-school-dds3-runtime" in text
     workflow = Path(".github/workflows/oracle-operator-v2.yml").read_text(encoding="utf-8")
     assert "/oracle-v2 rollout-dds3-runtime" in workflow
     assert "ops/install_dds3_runtime.sh" in workflow
