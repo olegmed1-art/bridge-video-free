@@ -216,11 +216,14 @@ def test_capability_route_cannot_accept_payload_in_url():
 
 def test_vercel_runtime_excludes_compute_package_and_keeps_shared_contracts():
     rules = Path(".vercelignore").read_text(encoding="utf-8").splitlines()
-    assert "!assistant_lab" not in rules
+    assert not any(line.lstrip("!").startswith("assistant_lab/") for line in rules)
     assert "!bridge_school_api" in rules
     assert "!bridge_contracts" in rules
     bootstrap_route = Path("bridge_school_api/assistant_lab_bootstrap.py").read_text(encoding="utf-8")
     assert "from bridge_contracts.bootstrap import" in bootstrap_route
+    api_runtime = Path("bridge_school_api/main.py").read_text(encoding="utf-8")
+    assert "from bridge_contracts.assistant_lab import" in api_runtime
+    assert "from assistant_lab" not in api_runtime
 
 
 def test_oracle_service_uses_dedicated_unix_identity_and_hardening():

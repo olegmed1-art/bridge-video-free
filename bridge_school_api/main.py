@@ -11,8 +11,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from starlette.responses import Response
 
-from assistant_lab.contract import CONTRACT_VERSION, LabContractError, validate_job_payload, verify_dds3_result
-from assistant_lab.dispatch import verify_dispatch_nonce
+from bridge_contracts.assistant_lab import (
+    CONTRACT_VERSION,
+    LabContractError,
+    validate_job_payload,
+    verify_dds3_result,
+    verify_dispatch_nonce,
+)
 
 from .db import DatabaseConfigurationError, EXPECTED_PRINCIPAL, connect
 from .dds3 import DDSUnavailable, solve_table
