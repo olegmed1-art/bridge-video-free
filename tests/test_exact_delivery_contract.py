@@ -69,9 +69,8 @@ def test_delivery_workflow_is_one_exact_experiment():
     diagnostic = operation_case.split("inspect-status-bridge)", 1)[1].split(";;", 1)[0]
     assert "command='sudo -n /usr/local/sbin/universal-video-diana11 status-bridge'" in diagnostic
     assert "timeout=180" in diagnostic
-    assert "submit" not in diagnostic
-    assert "publish" not in diagnostic
-    assert "drive_results" not in diagnostic
+    for forbidden in ("submit", "publish", "conform", "drive_results", "GOOGLE_DRIVE"):
+        assert forbidden not in diagnostic
     assert "production promotion is BLOCKED" in workflow
     assert "REMOTE_VALIDATED" in workflow
     assert "No conformance or publication claim is established" in workflow
