@@ -28,7 +28,8 @@ jobs:
     if: >-
       github.event.comment.user.login == 'olegmed1-art' &&
       (github.event.comment.body == '/dds3-pilot10k start' ||
-       github.event.comment.body == '/dds3-pilot10k status')
+       github.event.comment.body == '/dds3-pilot10k status' ||
+       github.event.comment.body == '/dds3-main30k deploy')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -84,6 +85,50 @@ jobs:
           echo "key=$work/id_oracle" >> "$GITHUB_OUTPUT"
           echo "known=$known" >> "$GITHUB_OUTPUT"
 
+      - name: Deploy 30k operator to Oracle without starting compute
+        if: ${{ env.COMMAND == '/dds3-main30k deploy' }}
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          key='${{ steps.ssh.outputs.key }}'; known='${{ steps.ssh.outputs.known }}'
+          out="$RUNNER_TEMP/main30k-deploy.txt"
+          ref="$(git rev-parse HEAD)"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env RUNTIME_COMMIT='$ref' bash -s" <<'REMOTE' | tee "$out"
+          set -Eeuo pipefail
+          repo=/opt/bridge-school/bridge-video-free
+          systemctl is-active --quiet assistant-lab.service
+          if systemctl is-active --quiet dds3-mass@30000.service; then
+            echo 'DEPLOY_FAIL 30k service is active'
+            exit 3
+          fi
+          git -C "$repo" fetch --quiet origin "$RUNTIME_COMMIT"
+          git -C "$repo" checkout --force --quiet --detach "$RUNTIME_COMMIT"
+          DDS3_MASS_BOOTSTRAP=0 DDS3_MASS_ACTIVATE=1 bash "$repo/ops/oracle_dds3_mass_install.sh"
+          "$repo/dds_training/.venv/bin/python" -m py_compile \
+            "$repo/dds_training/oracle_mass_dispatch_v2.py" \
+            "$repo/dds_training/oracle_main_30k_dispatch.py" \
+            "$repo/dds_training/oracle_cost_gate.py" \
+            "$repo/dds_training/launch_authorization.py" \
+            "$repo/dds_training/authorized_run_stage.py"
+          systemctl daemon-reload
+          fragment="$(systemctl show dds3-mass@30000.service -p FragmentPath --value)"
+          test "$fragment" = /etc/systemd/system/dds3-mass@.service
+          grep -Fqx 'RuntimeMaxSec=3h' "$fragment"
+          grep -Fqx 'TimeoutStartSec=3h' "$fragment"
+          grep -Fqx 'PrivateNetwork=true' "$fragment"
+          grep -Fqx 'CPUQuota=600%' "$fragment"
+          installed="$(git -C "$repo" rev-parse HEAD)"
+          test "$installed" = "$RUNTIME_COMMIT"
+          echo "MAIN30K_OPERATOR_DEPLOY_PASS commit=$installed service_active=false auto_started=false runtime_max=3h max_cost_usd=2.00"
+          REMOTE
+          {
+            echo 'deploy<<EOF'
+            sed -n '1,80p' "$out"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
       - name: Restore immutable Pilot-10k inputs
         if: ${{ env.COMMAND == '/dds3-pilot10k start' }}
         env:
@@ -350,6 +395,7 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           START_OUTCOME: ${{ steps.start.outcome }}
           STATUS_TEXT: ${{ steps.status.outputs.status }}
+          DEPLOY_TEXT: ${{ steps.deploy.outputs.deploy }}
         shell: bash
         run: |
           set -euo pipefail
