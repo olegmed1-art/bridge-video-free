@@ -50,6 +50,13 @@
       "description": "Fail-closed Oracle 30k runtime and retail-cost ceiling validation."
     },
     {
+      "id": "oracle-main-30k",
+      "path": "oracle_main_30k_dispatch_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "description": "Oracle-only 30k TRAIN task/prediction identity, locked-input and holdout boundary."
+    },
+    {
       "id": "predictor-pipeline",
       "path": "predictor_pipeline_selftest.py",
       "suite": "fast",
@@ -518,6 +525,9 @@
       ],
       "oracle_cost_gate.py": [
         "oracle-cost-gate"
+      ],
+      "oracle_main_30k_dispatch.py": [
+        "oracle-main-30k"
       ]
     },
     "runtime_coverage": {
