@@ -34,7 +34,8 @@ jobs:
        github.event.comment.body == '/dds3-pilot10k status' ||
        github.event.comment.body == '/dds3-main30k deploy' ||
        github.event.comment.body == '/dds3-main30k stage' ||
-       github.event.comment.body == '/dds3-main30k start')
+       github.event.comment.body == '/dds3-main30k start' ||
+       github.event.comment.body == '/dds3-main30k reconcile')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -468,6 +469,59 @@ jobs:
           PY
           REMOTE
 
+      - name: Reconcile Main-30k evidence without DDS
+        if: ${{ env.COMMAND == '/dds3-main30k reconcile' }}
+        id: reconcile
+        shell: bash
+        run: |
+          set -euo pipefail
+          key='${{ steps.ssh.outputs.key }}'; known='${{ steps.ssh.outputs.known }}'
+          out="$RUNNER_TEMP/main30k-reconcile.txt"
+          ref="$(git rev-parse HEAD)"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env RUNTIME_COMMIT='$ref' bash -s" <<'REMOTE' | tee "$out"
+          set -Eeuo pipefail
+          repo=/opt/bridge-school/bridge-video-free
+          state=/opt/bridge-school/dds3-mass-validation
+          work="$state/work/main30k"
+          if systemctl is-active --quiet dds3-mass@30000.service; then
+            echo 'RECONCILE_FAIL 30k service is active'
+            exit 3
+          fi
+          git -C "$repo" fetch --quiet origin "$RUNTIME_COMMIT"
+          git -C "$repo" checkout --force --quiet --detach "$RUNTIME_COMMIT"
+          "$repo/dds_training/.venv/bin/python" -m py_compile \
+            "$repo/dds_training/oracle_main30k_reconcile.py"
+          install -d -m 0770 -o root -g dds3-mass "$state/evidence"
+          sudo -u dds3-mass env PYTHONPATH="$repo/dds_training" \
+            "$repo/dds_training/.venv/bin/python" \
+            "$repo/dds_training/oracle_main30k_reconcile.py" \
+            --work "$work" \
+            --run-id oracle-main30k-reconcile-20260825 \
+            --plan-limit 64 \
+            --out "$state/evidence/30000-reconciliation.json"
+          chown root:dds3-mass "$state/evidence/30000-reconciliation.json"
+          chmod 0640 "$state/evidence/30000-reconciliation.json"
+          python3 - "$state/evidence/30000-reconciliation.json" <<'PY'
+          import json,sys
+          x=json.load(open(sys.argv[1]))
+          assert x["status"]=="reconciled" and x["dds_called"] is False
+          assert x["validation_opened"] is False and x["sealed_test_opened"] is False
+          assert x["sealed_learning_leaks"]==0
+          print("MAIN30K_RECONCILIATION_EVIDENCE_PASS provenance_runs=%d audit_status=%s" % (len(x["sealed_provenance"]),x["audit_status"]))
+          for row in x["sealed_provenance"]:
+              print("sealed_provenance run_id=%s splits=%s opened=%s tasks=%s status=%s" % (
+                  row["run_id"], ",".join(row["requested_splits"]), row["sealed_opened"],
+                  row["evaluated_sealed_tasks"], row["status"]))
+          PY
+          REMOTE
+          {
+            echo 'reconcile<<EOF'
+            sed -n '1,100p' "$out"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Read live status
         id: status
         if: always()
@@ -602,9 +656,11 @@ jobs:
           STAGE_TEXT: ${{ steps.stage.outputs.stage }}
           STAGE_OUTCOME: ${{ steps.stage.outcome }}
           MAIN_START_TEXT: ${{ steps.main_start.outputs.main_start }}
+          RECONCILE_TEXT: ${{ steps.reconcile.outputs.reconcile }}
           MAIN_START_OUTCOME: ${{ steps.main_start.outcome }}
+          RECONCILE_OUTCOME: ${{ steps.reconcile.outcome }}
         shell: bash
         run: |
           set -euo pipefail
-          body="Oracle DDS3 operator: command=${COMMAND}, deploy=${DEPLOY_OUTCOME:-not_requested}, stage=${STAGE_OUTCOME:-not_requested}, main_start=${MAIN_START_OUTCOME:-not_requested}, pilot_start=${START_OUTCOME:-not_requested}\n\n\`\`\`text\n${DEPLOY_TEXT:-}${STAGE_TEXT:-}${MAIN_START_TEXT:-}${STATUS_TEXT:-no_status}\n\`\`\`"
+          body="Oracle DDS3 operator: command=${COMMAND}, deploy=${DEPLOY_OUTCOME:-not_requested}, stage=${STAGE_OUTCOME:-not_requested}, main_start=${MAIN_START_OUTCOME:-not_requested}, reconcile=${RECONCILE_OUTCOME:-not_requested}, pilot_start=${START_OUTCOME:-not_requested}\n\n\`\`\`text\n${DEPLOY_TEXT:-}${STAGE_TEXT:-}${MAIN_START_TEXT:-}${RECONCILE_TEXT:-}${STATUS_TEXT:-no_status}\n\`\`\`"
           gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -f body="$body" >/dev/null
