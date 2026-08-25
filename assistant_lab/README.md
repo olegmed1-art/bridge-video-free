@@ -142,6 +142,16 @@ Production hardening includes:
 - the used bootstrap ticket was revoked after acceptance;
 - the bootstrap endpoint commits the atomic claim before returning credentials, covered by regression tests.
 
+ResearchJob orchestration is a separate non-canonical envelope over the same
+resident queue. `assistant_lab/research_schema.sql` binds each DDS3, BEN, or
+world-generation request to exactly one child job through a fixed-search-path
+`SECURITY DEFINER` RPC. The application role has no direct ResearchJob INSERT,
+cannot change request identity/child binding/canonical-promotion fields, and may
+update only lifecycle/evidence columns. Completion is accepted only after a
+`VALIDATING` transition with a checksum-bound artifact and methodical derivative;
+terminal rows are immutable. The owner-gated production command is
+`/research-job migrate-neon-and-canary`.
+
 The schema checksum is emitted by CI and recorded in `public.schema_migration`.
 
 ## Oracle resident worker activation

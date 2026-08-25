@@ -67,9 +67,11 @@ jobs:
           set -euo pipefail
           psql -v ON_ERROR_STOP=1 -f assistant_lab/schema.sql
           psql -v ON_ERROR_STOP=1 -f assistant_lab/control_schema.sql
+          psql -v ON_ERROR_STOP=1 -f assistant_lab/research_schema.sql
           # Re-apply to prove the checked-in schema remains idempotent.
           psql -v ON_ERROR_STOP=1 -f assistant_lab/schema.sql
           psql -v ON_ERROR_STOP=1 -f assistant_lab/control_schema.sql
+          psql -v ON_ERROR_STOP=1 -f assistant_lab/research_schema.sql
 
       - name: Verify least-privilege RPC contract in real PostgreSQL
         shell: bash
@@ -92,6 +94,19 @@ jobs:
           FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
           WHERE n.nspname='assistant_lab'
             AND p.proname IN ('claim_control_command','finish_control_command','recover_stale_control_commands');
+          SELECT 'research_select=' || has_table_privilege('bridge_school_app','assistant_lab.research_job','SELECT');
+          SELECT 'research_insert=' || has_table_privilege('bridge_school_app','assistant_lab.research_job','INSERT');
+          SELECT 'research_delete=' || has_table_privilege('bridge_school_app','assistant_lab.research_job','DELETE');
+          SELECT 'research_stage_update=' || has_column_privilege('bridge_school_app','assistant_lab.research_job','stage','UPDATE');
+          SELECT 'research_key_update=' || has_column_privilege('bridge_school_app','assistant_lab.research_job','research_key','UPDATE');
+          SELECT 'research_worker_select=' || has_table_privilege('assistant_lab_worker','assistant_lab.research_job','SELECT');
+          SELECT 'research_rpc=' || has_function_privilege('bridge_school_app','assistant_lab.enqueue_research_job(text,jsonb,text,text,jsonb,text,smallint,text)','EXECUTE');
+          SELECT 'research_rpc_security_definer=' || p.prosecdef
+          FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+          WHERE n.nspname='assistant_lab' AND p.proname='enqueue_research_job';
+          SELECT 'research_rpc_fixed_search_path=' || (array_to_string(p.proconfig, ',') LIKE '%search_path=pg_catalog, assistant_lab%')
+          FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+          WHERE n.nspname='assistant_lab' AND p.proname='enqueue_research_job';
           SQL
           grep -Fx 'schema_usage=true' /tmp/assistant-lab-privileges.txt
           grep -Fx 'table_select=false' /tmp/assistant-lab-privileges.txt
@@ -103,3 +118,12 @@ jobs:
           grep -Fx 'rpc_recover=true' /tmp/assistant-lab-privileges.txt
           grep -Fx 'rpc_security_definer=true' /tmp/assistant-lab-privileges.txt
           grep -Fx 'rpc_fixed_search_path=true' /tmp/assistant-lab-privileges.txt
+          grep -Fx 'research_select=true' /tmp/assistant-lab-privileges.txt
+          grep -Fx 'research_insert=false' /tmp/assistant-lab-privileges.txt
+          grep -Fx 'research_delete=false' /tmp/assistant-lab-privileges.txt
+          grep -Fx 'research_stage_update=true' /tmp/assistant-lab-privileges.txt
+          grep -Fx 'research_key_update=false' /tmp/assistant-lab-privileges.txt
+          grep -Fx 'research_worker_select=false' /tmp/assistant-lab-privileges.txt
+          grep -Fx 'research_rpc=true' /tmp/assistant-lab-privileges.txt
+          grep -Fx 'research_rpc_security_definer=true' /tmp/assistant-lab-privileges.txt
+          grep -Fx 'research_rpc_fixed_search_path=true' /tmp/assistant-lab-privileges.txt
