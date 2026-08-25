@@ -26,6 +26,7 @@ from psycopg.types.json import Jsonb
 
 from .ben_runtime import RetryableBenError, compute_ben_policy, validate_local_ben_url
 from .contract import CONTRACT_VERSION, LabContractError, LabJob, validate_job_payload, validate_priority, verify_dds3_result
+from .finops_runtime import record_missing_terminal_usage
 from bridge_school_api.ai_worlds import generate_worlds
 
 CHANNEL = "assistant_lab_jobs"
@@ -261,13 +262,16 @@ def mark_failed(job: LabJob, error: Exception, config: WorkerConfig, *, retryabl
 
 
 def process_one(config: WorkerConfig) -> bool:
-    recover_stale(config); job = claim_one(config)
+    recover_stale(config)
+    record_missing_terminal_usage(config.dsn)
+    job = claim_one(config)
     if job is None: return False
     try:
         with keep_lease_alive(job, config): result = execute_job(job, config)
     except RetryableLabError as exc: mark_failed(job, exc, config, retryable=True)
     except Exception as exc: mark_failed(job, exc, config, retryable=False)
     else: mark_completed(job, result, config)
+    record_missing_terminal_usage(config.dsn)
     return True
 
 
