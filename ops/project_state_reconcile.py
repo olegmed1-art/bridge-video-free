@@ -126,7 +126,11 @@ def self_test() -> None:
     assert contract["source_of_truth"]["chat_history_is_not_operational_state"] is True
     assert contract["freshness"]["critical_action_max_state_age_minutes"] <= 15
     ids = [x["id"] for x in contract["subsystems"]]
-    assert len(ids) == len(set(ids)) and "dds3" in ids and "ben" in ids and "oracle_compute" in ids
+    assert len(ids) == len(set(ids))
+    assert {"dds3_pilot10k", "dds3_main30k", "ben", "oracle_compute"}.issubset(ids)
+    main30k = next(x for x in contract["subsystems"] if x["id"] == "dds3_main30k")
+    assert main30k["critical"] is True
+    assert main30k["evidence_issues"] == []  # fail closed until a dedicated primary locator is wired
     print("PROJECT_STATE_SELF_TEST_PASS")
 
 
