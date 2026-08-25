@@ -157,7 +157,7 @@ jobs:
               r'UV_PUBLICATION_STATE=(?:NOT_PUBLISHED|FAILED|NOT_CURRENTLY_VERIFIABLE|STALE_LOCAL_MISMATCH|PUBLISHED_VERIFIED)',
               r'UV_PUBLICATION_FOLDER_ID=[A-Za-z0-9_-]{10,128}',
               r'UV_ERROR_TYPE=(?:MULTIPLE_SPOOL_STATES|UNSAFE_SPOOL_RECEIPT|UNSAFE_FAILED_RECEIPT|DONE_RECEIPT_IDENTITY_MISMATCH|UNEXPECTED_DONE_STATUS|RESULT_CONFORMANCE_FAILED)',
-              r'UNIVERSAL_VIDEO_DIANA11_BRIDGE_STATUS_PASS',
+              r'UNIVERSAL_VIDEO_DIANA11_002_STATUS_PASS',
               r'UNIVERSAL_VIDEO_DIANA11_PUBLISH_VERIFIED_PASS',
           ]
           safe=[]
@@ -175,7 +175,7 @@ jobs:
             [[ "$(grep -c '^UV_STATE=' "$RUNNER_TEMP/diana11-delivery-safe.txt")" == 1 ]]
             grep -Eq '^UV_STATE=(MISSING|CONFLICT|NONCONFORMANT|FAILED|RUNNING|QUEUED|REVIEW|TECHNICAL_CONFORMANT)$' \
               "$RUNNER_TEMP/diana11-delivery-safe.txt"
-            grep -Fx 'UNIVERSAL_VIDEO_DIANA11_BRIDGE_STATUS_PASS' "$RUNNER_TEMP/diana11-delivery-safe.txt"
+            grep -Fx 'UNIVERSAL_VIDEO_DIANA11_002_STATUS_PASS' "$RUNNER_TEMP/diana11-delivery-safe.txt"
             echo 'publication_attempted=false' >> "$GITHUB_OUTPUT"
           else
             grep -Fx 'UV_PUBLICATION_STATE=PUBLISHED_VERIFIED' "$RUNNER_TEMP/diana11-delivery-safe.txt"
