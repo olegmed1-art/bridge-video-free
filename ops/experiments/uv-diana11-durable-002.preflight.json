@@ -12,10 +12,10 @@
   "runtime": {
     "provider": "oracle",
     "existing_compute_only": true,
-    "source_revision": "5ff4a192d794efd22ba4bd919f016e18e953157d",
+    "source_revision": "6a4e8248eedd00f849fcefd1bf41a51b26f5e7c6",
     "whisper_model": "small",
     "contract": "universal-video-v1",
-    "expected_processing_fingerprint": "0f889f374b60268f274d8530f62bab328f99b7a707e4dcfd3c9e2864dc448276"
+    "expected_processing_fingerprint": "371661d2a1858e576e2f618ddf504da724edc30089a9af88f9dd3a140ca30951"
   },
   "job": {
     "job_id": "diana11-durable-002-20260826-01",
