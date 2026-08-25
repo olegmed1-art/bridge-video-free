@@ -6,6 +6,8 @@ def test_dds3_research_canary_is_fail_closed_and_idempotent():
     required = [
         '/research-job canary-dds3-idempotency',
         'environment: database-production',
+        'CANARY_RUN_ID:',
+        '"canary_marker": f"github:',
         'kind="DDS3"',
         'second["research_id"] != first["research_id"]',
         'third["research_id"] != first["research_id"]',
