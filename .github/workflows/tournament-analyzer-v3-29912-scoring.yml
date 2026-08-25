@@ -60,39 +60,6 @@ jobs:
           test -n "$FACTS29912"
           echo "DDS29912=$DDS29912" >> "$GITHUB_ENV"
           echo "FACTS29912=$FACTS29912" >> "$GITHUB_ENV"
-      - name: Diagnose preserved signed score contributions
-        run: |
-          python - <<'PY'
-          import glob, json, os
-          p=json.load(open(os.environ['DDS29912'], encoding='utf-8'))
-          for s in p['sessions']:
-              r=int(s['round'])
-              vals=[float(b['pair_matchpoints']) for b in s['boards']]
-              src=glob.glob(os.path.join(os.environ['FACTS29912'], f'tournament_29912_round{r}_diana_facts.json'))
-              assert len(src)==1, (r, src)
-              facts=json.load(open(src[0], encoding='utf-8'))
-              skipped=[]
-              for row in facts.get('skipped_rows', []):
-                  raw=row.get('row') or []
-                  value=None
-                  if len(raw)>4:
-                      try: value=float(raw[4])
-                      except (TypeError, ValueError): pass
-                  skipped.append((row.get('board'), value, raw))
-              skipped_numeric=sum(v for _,v,_ in skipped if v is not None)
-              print(
-                  'SIGNED_SCORE_DIAG',
-                  'round=',r,
-                  'boards=',len(vals),
-                  'reported=',s['tournament']['session_score'],
-                  'min=',min(vals),
-                  'max=',max(vals),
-                  'analyzed_sum=',sum(vals),
-                  'skipped=',[(b,v) for b,v,_ in skipped],
-                  'skipped_numeric_sum=',skipped_numeric,
-                  'all_known_sum=',sum(vals)+skipped_numeric,
-              )
-          PY
       - name: Verify source scoring context
         run: |
           set -euo pipefail
@@ -109,11 +76,19 @@ jobs:
           p=json.load(open('tournament-29912-score-context.json', encoding='utf-8'))
           assert p['schema']=='tournament-29912-source-score-context-v1'
           assert p['event_id']=='29912'
-          assert [x['round_no'] for x in p['session_additivity']]==[1,2,4,5,6]
+          sessions=p['session_additivity']
+          assert [x['round_no'] for x in sessions]==[1,2,4,5,6]
           assert len(p['outcomes'])==100
-          assert all(x['verified'] is True for x in p['session_additivity'])
-          assert all(x['absolute_difference'] <= 1e-9 for x in p['session_additivity'])
-          assert p['source_score_additivity_verified'] is True
+          assert p['source_score_additivity_verified'] is False
+          assert p['source_score_additivity_verified_rounds']==[1,2,4,6]
+          assert p['source_score_additivity_unverified_rounds']==[5]
+          round5=next(x for x in sessions if x['round_no']==5)
+          assert round5['analyzed_board_sum']==18.0
+          assert round5['reported_session_score']==21.0
+          assert round5['unexplained_remainder']==3.0
+          round1=next(x for x in sessions if x['round_no']==1)
+          assert round1['skipped_numeric_sum']==2.0
+          assert round1['known_source_sum']==11.0
           assert p['percentage_conversion_available'] is False
           assert p['dd_to_score_conversion_available'] is False
           assert p['causal_error_attribution_allowed'] is False
