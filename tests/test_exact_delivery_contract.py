@@ -64,8 +64,14 @@ def test_delivery_workflow_is_one_exact_experiment():
     assert "Exact status was read without submit, ASR/media processing, or publication" in workflow
     assert "re.fullmatch(pattern,line)" in workflow
     assert "UV_ERROR_TYPE=(?:MULTIPLE_SPOOL_STATES|UNSAFE_SPOOL_RECEIPT|UNSAFE_FAILED_RECEIPT|DONE_RECEIPT_IDENTITY_MISMATCH|UNEXPECTED_DONE_STATUS|RESULT_CONFORMANCE_FAILED)" in workflow
-    diagnostic = workflow.split("inspect-status-bridge)", 1)[1].split("conform-publish-bridge)", 1)[0]
+    assert "grep -Fx 'UNIVERSAL_VIDEO_DIANA11_BRIDGE_STATUS_PASS'" in workflow
+    operation_case = workflow.split('case "$OPERATION" in', 1)[1]
+    diagnostic = operation_case.split("inspect-status-bridge)", 1)[1].split(";;", 1)[0]
+    assert "command='sudo -n /usr/local/sbin/universal-video-diana11 status-bridge'" in diagnostic
+    assert "timeout=180" in diagnostic
     assert "submit" not in diagnostic
+    assert "publish" not in diagnostic
+    assert "drive_results" not in diagnostic
     assert "production promotion is BLOCKED" in workflow
     assert "REMOTE_VALIDATED" in workflow
     assert "No conformance or publication claim is established" in workflow
