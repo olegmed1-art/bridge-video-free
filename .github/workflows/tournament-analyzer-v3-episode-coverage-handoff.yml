@@ -1,0 +1,117 @@
+name: Tournament Analyzer v3 Episode Coverage Handoff
+
+on:
+  pull_request:
+    paths:
+      - "bridge_school_api/tournament_episode_coverage_handoff_v3.py"
+      - "bridge_school_api/tournament_episode_scoring_intake_v3.py"
+      - "bridge_school_api/tournament_coverage_release_v3.py"
+      - "tests/test_tournament_episode_coverage_handoff_v3.py"
+      - ".github/workflows/tournament-analyzer-v3-episode-coverage-handoff.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  real-coverage-handoff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Compile and test
+        run: |
+          python -m py_compile bridge_school_api/tournament_episode_coverage_handoff_v3.py
+          python -m pytest -q tests/test_tournament_episode_scoring_intake_v3.py tests/test_tournament_episode_coverage_handoff_v3.py
+      - name: Restore exact historical tournament evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/30041 evidence/29912 evidence/29912-source
+          for spec in \
+            "9463631738:/tmp/30041.zip:evidence/30041" \
+            "9471054929:/tmp/29912-dds3.zip:evidence/29912" \
+            "9470920077:/tmp/29912-source.zip:evidence/29912-source"; do
+            IFS=: read -r aid zip dest <<< "$spec"
+            curl -fsSL --retry 3 \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${aid}/zip" \
+              -o "$zip"
+            unzip -q "$zip" -d "$dest"
+          done
+          DDS30041="$(find evidence/30041 -type f -name 'diana-30041-round2-dds3.json' -print -quit)"
+          DDS29912="$(find evidence/29912 -type f -name 'diana-29912-cross-session-dds3.json' -print -quit)"
+          FACTS29912="$(find evidence/29912-source -type d -name facts29912 -print -quit)"
+          test -n "$DDS30041" && test -n "$DDS29912" && test -n "$FACTS29912"
+          echo "DDS30041=$DDS30041" >> "$GITHUB_ENV"
+          echo "DDS29912=$DDS29912" >> "$GITHUB_ENV"
+          echo "FACTS29912=$FACTS29912" >> "$GITHUB_ENV"
+      - name: Rebuild real 30041 candidate inventory
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$PWD" python tools/tournament_teacher_review_queue_v3.py \
+            --facts-30041 data/tournaments/tournament_30041_round2_diana_facts_v1.json \
+            --dds3-30041 "$DDS30041" --dds3-29912 "$DDS29912" --facts-29912-dir "$FACTS29912" \
+            --per-event-limit 10 --out-json queue.json --out-md /tmp/queue.md
+          PYTHONPATH="$PWD" python tools/tournament_teacher_decisions_v3.py --queue queue.json --out ledger.json
+          PYTHONPATH="$PWD" python tools/tournament_teacher_review_dossier_v3.py \
+            --queue queue.json --ledger ledger.json \
+            --facts-30041 data/tournaments/tournament_30041_round2_diana_facts_v1.json \
+            --dds3-30041 "$DDS30041" --dds3-29912 "$DDS29912" \
+            --out-json dossier.json --out-md /tmp/dossier.md
+          PYTHONPATH="$PWD" python tools/tournament_episode_inventory_v3.py \
+            --facts data/tournaments/tournament_30041_round2_diana_facts_v1.json \
+            --dossier dossier.json --event-id 30041 \
+            --out-json inventory.json --out-md /tmp/inventory.md
+      - name: Prove pending real scoring cannot release coverage
+        run: |
+          PYTHONPATH="$PWD" python - <<'PY'
+          import json
+          from bridge_school_api.tournament_episode_scoring_intake_v3 import build_episode_scoring_template
+          from bridge_school_api.tournament_episode_coverage_handoff_v3 import build_episode_coverage_handoff
+
+          source=json.load(open('data/tournaments/tournament_30041_round2_diana_facts_v1.json', encoding='utf-8'))
+          inventory=json.load(open('inventory.json', encoding='utf-8'))
+          intake=build_episode_scoring_template(inventory)
+          handoff=build_episode_coverage_handoff(source, inventory, intake)
+
+          json.dump(intake, open('tournament-30041-episode-scoring-intake.json','w',encoding='utf-8'), ensure_ascii=False, indent=2, sort_keys=True)
+          json.dump(handoff, open('tournament-30041-episode-coverage-handoff.json','w',encoding='utf-8'), ensure_ascii=False, indent=2, sort_keys=True)
+
+          assert handoff['candidate_count']==7
+          assert handoff['explicitly_scored_count']==0
+          assert handoff['pending_scoring_count']==7
+          assert handoff['episode_scoring_complete'] is False
+          assert handoff['coverage_episode_count']==0
+          assert handoff['handoff_ready'] is False
+          assert handoff['automatic_episode_scoring_used'] is False
+          assert handoff['automatic_methodology_mapping_used'] is False
+          assert handoff['automatic_student_error_attribution_used'] is False
+          manifest=handoff['coverage_manifest']
+          assert manifest['status_counts']=={'played':21,'average':1,'unplayed':2}
+          assert manifest['planned_deck_slide_count']==24
+          assert manifest['significant_episode_count']==0
+          assert manifest['coverage_plan_release_ready'] is False
+          assert 'EPISODE_INVENTORY_NOT_COMPLETE' in handoff['handoff_blockers']
+          assert 'EPISODE_SCORING_NOT_COMPLETE' in handoff['handoff_blockers']
+          print('TOURNAMENT_30041_EPISODE_COVERAGE_HANDOFF_PASS')
+          print('candidate_count', handoff['candidate_count'])
+          print('pending_scoring_count', handoff['pending_scoring_count'])
+          print('planned_deck_slide_count', manifest['planned_deck_slide_count'])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tournament-analyzer-v3-30041-episode-coverage-handoff
+          path: |
+            tournament-30041-episode-scoring-intake.json
+            tournament-30041-episode-coverage-handoff.json
+          if-no-files-found: error
+          retention-days: 30
