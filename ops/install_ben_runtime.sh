@@ -66,7 +66,7 @@ Type=simple
 Restart=on-failure
 RestartSec=3
 ExecStartPre=-/usr/bin/docker rm -f bridge-ben
-ExecStart=/usr/bin/docker run --rm --name bridge-ben --pull=never --read-only --cap-drop=ALL --security-opt=no-new-privileges:true --pids-limit=256 --memory=6g --memory-swap=6g --cpus=2.0 --shm-size=512m --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m -p 127.0.0.1:8085:8085 $BEN_IMAGE
+ExecStart=/usr/bin/docker run --rm --name bridge-ben --pull=never --read-only --cap-drop=ALL --security-opt=no-new-privileges:true --pids-limit=256 --memory=6g --memory-swap=6g --cpus=2.0 --shm-size=512m --tmpfs /tmp:rw,nosuid,nodev,noexec,size=256m --tmpfs /logs:rw,nosuid,nodev,noexec,size=64m -p 127.0.0.1:8085:8085 $BEN_IMAGE
 ExecStop=/usr/bin/docker stop -t 10 bridge-ben
 TimeoutStartSec=240
 TimeoutStopSec=30
