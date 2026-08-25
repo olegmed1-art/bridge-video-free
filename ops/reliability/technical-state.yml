@@ -1,14 +1,19 @@
 schema_version: 1
-updated_at_utc: "2026-08-25T13:24:00Z"
+updated_at_utc: "2026-08-25T18:33:00Z"
 policy: docs/TECHNICAL_GOVERNANCE.md
 whole_school_recovery:
   target_status: RECOVERY_PROVEN_V1
   current_status: PARTIAL
   blockers:
     - independent_neon_backup_restore_not_proven
-    - oci_backup_and_reboot_recovery_not_proven
+    - independent_large_irreplaceable_media_backup_not_proven
+    - restored_database_application_smoke_not_proven
+    - oci_boot_volume_restore_not_proven
     - full_end_to_end_restore_drill_not_proven
+    - recovery_registry_evidence_not_populated
     - explicit_rpo_rto_not_fully_verified
+    - video_result_deletion_durable_copy_gate_not_proven
+    - dds3_runtime_container_ci_not_executing_jobs
 
 components:
   github:
@@ -45,7 +50,9 @@ components:
     rpo_target_hours: 24
     rto_target_hours: 4
     backup_required: true
-    backup_status: unproven
+    backup_status: partial
+    backup_evidence: one_available_boot_volume_backup_and_recurring_policy_observed
+    restore_status: unproven
     reboot_recovery_status: unproven
     unique_durable_data_allowed: false
 
@@ -89,6 +96,100 @@ components:
     health: expansion_gate
     backup_required: false
     unique_durable_data_allowed: false
+
+audit_snapshots:
+  factual_resilience_2026_08_25:
+    overall_status: CROSS_SERVICE_PARTIAL
+    whole_school_recovery_ready: false
+    neon_current_state_branch_restore: proven
+    neon_off_provider_backup_restore: unproven
+    neon_recovery_checkpoint_rows_observed: 0
+    neon_recovery_verification_rows_observed: 0
+    neon_org_mfa_observed: disabled
+    oracle_boot_backup_observed: available
+    oracle_recurring_backup_policy_observed: assigned
+    oracle_boot_volume_restore: unproven
+    large_drive_raw_export:
+      source_size_bytes: 1699568400
+      result: blocked
+      connector_limit_bytes: 268435456
+    independent_large_media_backup: unproven
+    restored_database_application_smoke: unproven
+    dds3_runtime_container_workflow:
+      conclusion: failure
+      jobs_observed: 0
+    vercel_snapshot:
+      production_healthy: true
+      production_behind_main_commits: 4
+      deployment_rate_limited: true
+    drive_acl_snapshot_2026_08_20:
+      objects_scanned: 3130
+      shared_flag_items: 349
+      anyone_reader_items: 63
+      anyone_writer_items: 0
+    evidence_runs:
+      neon_health: 32839810693
+      dds3_production_health: 32845019060
+      oracle_ben_dds3_health: 32835192297
+      oci_finops_backup_observation: 32820354158
+      drive_acl_main: 32415116012
+
+work_queue:
+  policy:
+    canonical_governance_issue: 523
+    wip_limit: 1
+    duplicate_rule: update_existing_tracker_before_creating_new_issue
+  active:
+    - id: independent_neon_backup_restore
+      priority: P0
+      status: open
+      tracking_issue: 526
+  queued:
+    - id: neon_org_mfa
+      priority: P0
+      status: owner_action_required
+      tracking_issue: 523
+    - id: independent_large_irreplaceable_media_backup
+      priority: P0
+      status: queued
+      tracking_issue: 523
+    - id: video_result_durable_copy_before_cleanup
+      priority: P0
+      status: active_experiment
+      tracking_issue: 547
+      related_issue: 371
+    - id: dds3_runtime_container_ci_execution
+      priority: P0
+      status: queued
+      tracking_issue: 523
+    - id: oracle_boot_volume_restore_drill
+      priority: P1
+      status: queued
+      tracking_issue: 265
+    - id: restored_database_application_smoke
+      priority: P1
+      status: queued
+      tracking_issue: 523
+    - id: recovery_registry_population_and_rpo_rto
+      priority: P1
+      status: queued
+      tracking_issue: 523
+    - id: vercel_deploy_freshness_and_quota
+      priority: P1
+      status: queued
+      tracking_issue: 523
+    - id: scheduled_drive_acl_diff_audit
+      priority: P1
+      status: queued
+      tracking_issue: 523
+    - id: github_main_protection
+      priority: P1
+      status: queued
+      tracking_issue: 523
+    - id: independent_external_health_alert
+      priority: P2
+      status: queued
+      tracking_issue: 523
 
 cadence:
   critical_health: continuous
