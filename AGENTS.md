@@ -75,6 +75,23 @@ A backup is not considered reliable until restoration has been tested. Monitor a
 
 Never commit secrets, tokens, passwords, private student data, or production credentials. Use scoped secret storage and least privilege.
 
+## Operational freshness and reconciliation
+
+Conversation history, remembered status, old plans, and previous summaries are context, not authoritative mutable operational state.
+
+Before every material mutation, merge, compute launch, migration, production change, or stage transition:
+
+1. reconcile the relevant subsystem against its current primary sources;
+2. verify current `main` and the latest affected code/evidence;
+3. fail closed if required evidence is missing, contradictory, or older than code that could change the conclusion;
+4. perform a last-second primary-source check immediately before the mutation.
+
+Use the repository project-state layer as a compact index over primary evidence, never as a substitute for GitHub, Oracle, Neon, Drive, service state, or immutable evidence. Unknown or stale state may permit read-only diagnostics but must not authorize a mutating action.
+
+Default cadence: event-driven reconciliation on meaningful changes; heartbeat checks for active long-running compute; subsystem reconciliation at least every three hours during active autonomous work; deeper cross-system reconciliation at least daily. A critical action requires a fresh check regardless of the periodic cadence.
+
+Autonomy increases the obligation to verify state. Detect and repair stale-state drift without waiting for the director to notice it.
+
 ## Change records
 
 Log significant canonical, architectural, operational, pedagogical, and cost-affecting changes with:
