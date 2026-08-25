@@ -1,0 +1,9 @@
+{
+  "request_id": "finops-video-smoke-20260825-02",
+  "mode": "smoke",
+  "git_ref": "9b6a61cccabbafcd04b4f10d08338698b250bc9b",
+  "expected_host_fingerprint": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}
