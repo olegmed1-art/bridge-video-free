@@ -387,6 +387,16 @@ jobs:
           echo "main30k_service=$(sudo -n systemctl is-active dds3-mass@30000.service 2>/dev/null || true)"
           echo "main30k_installed_commit=$(git -C "$repo" rev-parse HEAD 2>/dev/null || true)"
           echo "main30k_runtime_max=$(sudo -n systemctl show dds3-mass@30000.service -p RuntimeMaxUSec --value 2>/dev/null || true)"
+          if [[ -f "$state/evidence/30000-preflight.json" ]]; then
+            python3 - "$state/evidence/30000-preflight.json" <<'PY'
+          import json,sys
+          x=json.load(open(sys.argv[1]))
+          for k in ("status","compute_started","target","corpus_deals","corpus_sha256","train_tasks","validation_opened","sealed_test_opened","max_runtime_seconds","max_cost_usd"):
+              print("main30k_preflight_%s=%s" % (k,x.get(k)))
+          PY
+          else
+            echo "main30k_preflight_status=missing"
+          fi
           echo "service=$(sudo -n systemctl is-active dds3-mass@10000.service 2>/dev/null || true)"
           metrics="$(sudo -n systemctl show dds3-mass@10000.service --no-pager \
             -p ExecMainStartTimestampMonotonic -p ExecMainExitTimestampMonotonic \
@@ -479,8 +489,10 @@ jobs:
           STATUS_TEXT: ${{ steps.status.outputs.status }}
           DEPLOY_TEXT: ${{ steps.deploy.outputs.deploy }}
           DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          STAGE_TEXT: ${{ steps.stage.outputs.stage }}
+          STAGE_OUTCOME: ${{ steps.stage.outcome }}
         shell: bash
         run: |
           set -euo pipefail
-          body="Oracle DDS3 operator: command=${COMMAND}, deploy=${DEPLOY_OUTCOME:-not_requested}, start=${START_OUTCOME:-not_requested}\n\n\`\`\`text\n${DEPLOY_TEXT:-}${STATUS_TEXT:-no_status}\n\`\`\`"
+          body="Oracle DDS3 operator: command=${COMMAND}, deploy=${DEPLOY_OUTCOME:-not_requested}, stage=${STAGE_OUTCOME:-not_requested}, start=${START_OUTCOME:-not_requested}\n\n\`\`\`text\n${DEPLOY_TEXT:-}${STAGE_TEXT:-}${STATUS_TEXT:-no_status}\n\`\`\`"
           gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -f body="$body" >/dev/null
