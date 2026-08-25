@@ -290,7 +290,7 @@ jobs:
           test -f "$state/evidence/30000.json"
           python3 - "$state/evidence/30000.json" <<'PY'
           import json,sys
-          x=json.load(sys.stdin)
+          x=json.load(open(sys.argv[1]))
           assert x["status"] in ("running","train_passed")
           assert x["target"]==30000 and x["expected_train_tasks"]==28000
           assert x["splits"]==["train"] and x["validation_opened"] is False
@@ -487,7 +487,7 @@ jobs:
           if sudo -n test -f "$state/evidence/30000-preflight.json"; then
             sudo -n cat "$state/evidence/30000-preflight.json" | python3 - <<'PY'
           import json,sys
-          x=json.load(open(sys.argv[1]))
+          x=json.load(sys.stdin)
           for k in ("status","compute_started","target","corpus_deals","corpus_sha256","train_tasks","validation_opened","sealed_test_opened","max_runtime_seconds","max_cost_usd"):
               print("main30k_preflight_%s=%s" % (k,x.get(k)))
           PY
