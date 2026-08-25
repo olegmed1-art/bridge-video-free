@@ -47,7 +47,14 @@ jobs:
         run: |
           set -Eeuo pipefail
           bash -n scripts/vercel_ignore_build.sh
+          grep -F 'VERCEL_GIT_COMMIT_REF' scripts/vercel_ignore_build.sh >/dev/null
           grep -F 'assistant_lab/(__init__|contract|dispatch)' scripts/vercel_ignore_build.sh >/dev/null
+          VERCEL_GIT_COMMIT_REF=feature/should-never-build \
+            bash scripts/vercel_ignore_build.sh > "$RUNNER_TEMP/vercel-non-main.log"
+          grep -F 'non-main ref' "$RUNNER_TEMP/vercel-non-main.log" >/dev/null
+          VERCEL_GIT_COMMIT_REF='' \
+            bash scripts/vercel_ignore_build.sh > "$RUNNER_TEMP/vercel-missing-ref.log"
+          grep -F "non-main ref 'unknown'; skip" "$RUNNER_TEMP/vercel-missing-ref.log" >/dev/null
           python -m json.tool vercel.json >/dev/null
           python - <<'PY'
           import json
