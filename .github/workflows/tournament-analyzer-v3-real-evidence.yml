@@ -61,7 +61,7 @@ jobs:
           set -euo pipefail
           DDS30041="$(find evidence/30041 -type f -name 'diana-30041-round2-dds3.json' -print -quit)"
           DDS29912="$(find evidence/29912 -type f -name 'diana-29912-cross-session-dds3.json' -print -quit)"
-          python tools/tournament_real_longitudinal_v3.py \
+          PYTHONPATH="$PWD" python tools/tournament_real_longitudinal_v3.py \
             --facts-30041 data/tournaments/tournament_30041_round2_diana_facts_v1.json \
             --dds3-30041 "$DDS30041" \
             --dds3-29912 "$DDS29912" \
