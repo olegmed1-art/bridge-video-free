@@ -1,0 +1,116 @@
+name: Oracle DDS3 Pilot-10k robust tail
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  read:
+    if: ${{ github.event.comment.user.login == 'olegmed1-art' && github.event.comment.body == '/dds3-pilot10k robust-tail' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - name: Resolve verified Oracle SSH credential
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/oracle-pilot10k-tail"; mkdir -p "$work"
+          known="$work/known_hosts"; : > "$known"
+          for attempt in 1 2 3; do
+            ssh-keyscan -T 10 -t ed25519,ecdsa,rsa "$ORACLE_HOST" >> "$known" 2>/dev/null || true
+            [[ -s "$known" ]] && break
+            sleep $((attempt * 2))
+          done
+          sort -u -o "$known" "$known"
+          ssh-keygen -lf "$known" | awk '{print $2}' | grep -Fx "$EXPECTED_FINGERPRINT" >/dev/null
+          selected=''; idx=0
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            raw="${!name:-}"; [[ -n "$raw" ]] || continue
+            idx=$((idx+1)); base="$work/key-$idx"
+            printf '%s\n' "$raw" > "$base.raw"
+            tr -d '\r' < "$base.raw" > "$base.crlf"
+            RAW_KEY="$raw" OUT_KEY="$base.escaped" python - <<'PY'
+          import os
+          raw=os.environ['RAW_KEY']
+          if '\\n' in raw and '\n' not in raw:
+              raw=raw.replace('\\r','').replace('\\n','\n')
+          with open(os.environ['OUT_KEY'],'w',newline='\n') as f:
+              f.write(raw)
+              if not raw.endswith('\n'): f.write('\n')
+          PY
+            for key in "$base.raw" "$base.crlf" "$base.escaped"; do
+              chmod 0600 "$key"
+              ssh-keygen -y -f "$key" >/dev/null 2>&1 || continue
+              if ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+                   -o UserKnownHostsFile="$known" -o ConnectTimeout=10 "$ORACLE_USER@$ORACLE_HOST" true >/dev/null 2>&1; then
+                selected="$key"; break 2
+              fi
+            done
+          done
+          [[ -n "$selected" ]]
+          cp "$selected" "$work/id_oracle"; chmod 0600 "$work/id_oracle"
+          echo "key=$work/id_oracle" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Read privileged Pilot-10k failure evidence
+        id: tail
+        shell: bash
+        run: |
+          set -euo pipefail
+          key='${{ steps.ssh.outputs.key }}'; known='${{ steps.ssh.outputs.known }}'
+          out="$RUNNER_TEMP/pilot10k-tail.txt"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o "UserKnownHostsFile=$known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n bash -s' <<'REMOTE' | tee "$out"
+          set -Eeuo pipefail
+          state=/opt/bridge-school/dds3-mass-validation
+          ev="$state/evidence/10000.json"
+          log="$state/logs/10000.log"
+          python3 - "$ev" <<'PY'
+          import json,sys
+          x=json.load(open(sys.argv[1]))
+          print('status='+str(x.get('status')))
+          print('returncode='+str(x.get('returncode')))
+          print('failure_tail_begin')
+          for line in x.get('failure_tail', []): print(line)
+          print('failure_tail_end')
+          PY
+          echo "log_exists=$([[ -f "$log" ]] && echo true || echo false)"
+          if [[ -f "$log" ]]; then
+            echo "log_bytes=$(stat -c %s "$log")"
+            echo 'raw_tail_begin'
+            tail -n 40 "$log" | sed -E 's#(postgres(ql)?://)[^[:space:]]+#\1[REDACTED]#Ig; s#(token|password|secret|api[_-]?key|private[_-]?key)[=:][^[:space:]]+#\1=[REDACTED]#Ig'
+            echo 'raw_tail_end'
+          fi
+          REMOTE
+          {
+            echo 'text<<EOF'
+            sed -n '1,120p' "$out"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          TEXT: ${{ steps.tail.outputs.text }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          body="Pilot-10k robust diagnostic:\n\n\`\`\`text\n${TEXT:-diagnostic_failed_before_tail}\n\`\`\`"
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -f body="$body" >/dev/null
