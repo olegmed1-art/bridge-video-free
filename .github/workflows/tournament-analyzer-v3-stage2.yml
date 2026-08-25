@@ -6,6 +6,7 @@ on:
       - "bridge_school_api/tournament_adapters_v3.py"
       - "bridge_school_api/tournament_longitudinal_v3.py"
       - "tests/test_tournament_analyzer_v3_stage2.py"
+      - "tests/test_tournament_longitudinal_provenance_v3.py"
       - ".github/workflows/tournament-analyzer-v3-stage2.yml"
   workflow_dispatch:
 
@@ -25,4 +26,8 @@ jobs:
       - name: Compile stage2 modules
         run: python -m py_compile bridge_school_api/tournament_adapters_v3.py bridge_school_api/tournament_longitudinal_v3.py
       - name: Run Tournament Analyzer stage2 tests
-        run: python -m pytest -q tests/test_tournament_analyzer_v3.py tests/test_tournament_analyzer_v3_stage2.py
+        run: |
+          python -m pytest -q \
+            tests/test_tournament_analyzer_v3.py \
+            tests/test_tournament_analyzer_v3_stage2.py \
+            tests/test_tournament_longitudinal_provenance_v3.py
