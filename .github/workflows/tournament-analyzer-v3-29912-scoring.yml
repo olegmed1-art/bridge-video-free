@@ -34,85 +34,103 @@ jobs:
             tests/test_tournament_analyzer_v3_stage2.py \
             tests/test_tournament_real_sources_v3.py \
             tests/test_tournament_scoring_context_29912_v3.py
-      - name: Restore exact historical 29912 DDS3 evidence
+      - name: Restore exact historical 29912 evidence
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p evidence/29912
+          mkdir -p evidence/29912 evidence/29912-source
           curl -fsSL --retry 3 \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/9471054929/zip" \
-            -o /tmp/29912.zip
-          unzip -q /tmp/29912.zip -d evidence/29912
+            -o /tmp/29912-dds3.zip
+          unzip -q /tmp/29912-dds3.zip -d evidence/29912
+          curl -fsSL --retry 3 \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/9470920077/zip" \
+            -o /tmp/29912-source.zip
+          unzip -q /tmp/29912-source.zip -d evidence/29912-source
           DDS29912="$(find evidence/29912 -type f -name 'diana-29912-cross-session-dds3.json' -print -quit)"
+          FACTS29912="$(find evidence/29912-source -type d -name facts29912 -print -quit)"
           test -n "$DDS29912"
+          test -n "$FACTS29912"
           echo "DDS29912=$DDS29912" >> "$GITHUB_ENV"
-      - name: Diagnose preserved raw MP scale
+          echo "FACTS29912=$FACTS29912" >> "$GITHUB_ENV"
+      - name: Diagnose preserved signed score contributions
         run: |
           python - <<'PY'
-          import json, os
+          import glob, json, os
           p=json.load(open(os.environ['DDS29912'], encoding='utf-8'))
           for s in p['sessions']:
               r=int(s['round'])
-              f=int(s['tournament']['field_size'])
-              top=2*(f-1)
               vals=[float(b['pair_matchpoints']) for b in s['boards']]
-              n=len(vals)
-              direct=100*sum(vals)/(n*top)
-              centered=50+direct
+              src=glob.glob(os.path.join(os.environ['FACTS29912'], f'tournament_29912_round{r}_diana_facts.json'))
+              assert len(src)==1, (r, src)
+              facts=json.load(open(src[0], encoding='utf-8'))
+              skipped=[]
+              for row in facts.get('skipped_rows', []):
+                  raw=row.get('row') or []
+                  value=None
+                  if len(raw)>4:
+                      try: value=float(raw[4])
+                      except (TypeError, ValueError): pass
+                  skipped.append((row.get('board'), value, raw))
+              skipped_numeric=sum(v for _,v,_ in skipped if v is not None)
               print(
-                  'MP_SCALE_DIAG',
+                  'SIGNED_SCORE_DIAG',
                   'round=',r,
-                  'field=',f,
-                  'boards=',n,
+                  'boards=',len(vals),
                   'reported=',s['tournament']['session_score'],
                   'min=',min(vals),
                   'max=',max(vals),
-                  'sum=',sum(vals),
-                  'direct_pct=',round(direct,6),
-                  'centered_offset_pct=',round(centered,6),
+                  'analyzed_sum=',sum(vals),
+                  'skipped=',[(b,v) for b,v,_ in skipped],
+                  'skipped_numeric_sum=',skipped_numeric,
+                  'all_known_sum=',sum(vals)+skipped_numeric,
               )
           PY
-      - name: Verify raw MP scale and build context
+      - name: Verify source scoring context
         run: |
           set -euo pipefail
           PYTHONPATH="$PWD" python tools/tournament_29912_scoring_context_v3.py \
             --dds3-29912 "$DDS29912" \
-            --out-json tournament-29912-mp-context.json \
-            --out-md tournament-29912-mp-context.md
-          cat tournament-29912-mp-context.md
+            --facts-dir "$FACTS29912" \
+            --out-json tournament-29912-score-context.json \
+            --out-md tournament-29912-score-context.md
+          cat tournament-29912-score-context.md
       - name: Real evidence gate
         run: |
           python - <<'PY'
           import json
-          p=json.load(open('tournament-29912-mp-context.json', encoding='utf-8'))
-          assert p['schema']=='tournament-29912-mp-outcome-context-v1'
+          p=json.load(open('tournament-29912-score-context.json', encoding='utf-8'))
+          assert p['schema']=='tournament-29912-source-score-context-v1'
           assert p['event_id']=='29912'
-          assert [x['round_no'] for x in p['session_scales']]==[1,2,4,5,6]
+          assert [x['round_no'] for x in p['session_additivity']]==[1,2,4,5,6]
           assert len(p['outcomes'])==100
-          assert all(x['verified'] is True for x in p['session_scales'])
-          assert all(x['absolute_difference'] <= 0.11 for x in p['session_scales'])
-          assert p['mp_scale_verified_against_reported_session_scores'] is True
-          assert p['dd_to_mp_conversion_available'] is False
+          assert all(x['verified'] is True for x in p['session_additivity'])
+          assert all(x['absolute_difference'] <= 1e-9 for x in p['session_additivity'])
+          assert p['source_score_additivity_verified'] is True
+          assert p['percentage_conversion_available'] is False
+          assert p['dd_to_score_conversion_available'] is False
           assert p['causal_error_attribution_allowed'] is False
           assert p['pedagogically_recoverable_result_estimated'] is False
           assert p['student_error_attribution_allowed'] is False
           assert all(x['causal_link']=='NOT_ESTABLISHED' for x in p['technical_finding_context'])
           assert all(x['source_consistency_ok'] is True for x in p['technical_finding_context'])
-          print('TOURNAMENT_29912_MP_CONTEXT_PASS')
-          print('cross_session_mean', round(p['cross_session_observed_mean_percentage'], 4))
-          print('below_neutral_mass', round(p['total_below_neutral_mass_percentage_points'], 4))
-          print('neutralized_mean', round(p['counterfactual_mean_if_all_below_neutral_were_neutral'], 4))
+          print('TOURNAMENT_29912_SOURCE_SCORE_CONTEXT_PASS')
+          print('analyzed_score_sum', p['analyzed_board_score_contribution_sum'])
+          print('negative_mass', p['negative_score_contribution_mass'])
           print('technical_findings', len(p['technical_finding_context']))
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: tournament-analyzer-v3-29912-scoring-context
+          name: tournament-analyzer-v3-29912-score-context
           path: |
-            tournament-29912-mp-context.json
-            tournament-29912-mp-context.md
+            tournament-29912-score-context.json
+            tournament-29912-score-context.md
           if-no-files-found: error
           retention-days: 30
