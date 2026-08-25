@@ -1,0 +1,17 @@
+{
+  "schema": "bridge-school-teacher-decision-v1",
+  "event_id": "30041",
+  "session_id": "round-2",
+  "board_number": 14,
+  "decision": "NEEDS_CONTEXT",
+  "teacher_statement": "нужно разобраться",
+  "scope": "board-level teacher adjudication",
+  "student_error_attribution": null,
+  "specific_card_or_cause_attribution": null,
+  "methodology_mapping": null,
+  "notes": "Teacher explicitly marked this review position as requiring further analysis. No error attribution, cause, specific card, player action, or methodology category is inferred at this stage.",
+  "provenance": {
+    "source": "interactive teacher review in ChatGPT",
+    "recorded_date": "2026-08-25"
+  }
+}
