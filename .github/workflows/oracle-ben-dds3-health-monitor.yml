@@ -1,0 +1,140 @@
+name: Oracle BEN DDS3 health monitor
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 */4 * * *'
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-ben-dds3-health-monitor.yml'
+      - 'bridge_school_api/ai_ben_dds3_canary.py'
+      - 'ops/oracle_known_hosts_from_scan.sh'
+      - 'tests/test_oracle_operational_acceptance.py'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oracle-ben-dds3-health-monitor
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Validate monitor contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" .github/workflows/oracle-ben-dds3-health-monitor.yml
+          grep -F 'bridge-ben-healthcheck.timer' .github/workflows/oracle-ben-dds3-health-monitor.yml >/dev/null
+          grep -F 'ops/oracle_known_hosts_from_scan.sh' .github/workflows/oracle-ben-dds3-health-monitor.yml >/dev/null
+          grep -F 'worlds") == 4' .github/workflows/oracle-ben-dds3-health-monitor.yml >/dev/null
+
+  monitor:
+    if: ${{ github.event_name != 'pull_request' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Verify exact host identity and SSH credential
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$SSH_KEY" ]]
+          work="$RUNNER_TEMP/oracle-ben-dds3-monitor"
+          mkdir -p "$work"
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          key="$work/id_oracle"
+          printf '%s\n' "$SSH_KEY" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Run bounded four-world live canary
+        id: canary
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/ben-dds3-health.json"
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n bash -s' > "$out" <<'REMOTE'
+          set -Eeuo pipefail
+          repo=/opt/bridge-school/bridge-video-free
+          systemctl is-active --quiet assistant-lab.service bridge-ben.service bridge-ben-healthcheck.timer
+          curl -fsS --max-time 8 http://127.0.0.1:8080/readyz >/dev/null
+          systemd-run --quiet --wait --pipe --collect --service-type=exec \
+            --property=User=assistant-lab \
+            --property=Group=assistant-lab \
+            --property=WorkingDirectory="$repo" \
+            --property=EnvironmentFile=/opt/bridge-school/assistant-lab/assistant-lab.env \
+            --property=EnvironmentFile=/opt/bridge-school/dds3-runtime.env \
+            --property=NoNewPrivileges=yes \
+            --property=PrivateTmp=yes \
+            --property=ProtectHome=yes \
+            /opt/bridge-school/assistant-lab/.venv/bin/python \
+            -m bridge_school_api.ai_ben_dds3_canary
+          REMOTE
+          OUT="$out" python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          lines = [line for line in Path(os.environ["OUT"]).read_text().splitlines() if line.startswith("{")]
+          assert lines, "canary returned no JSON evidence"
+          x = json.loads(lines[-1])
+          assert x.get("status") == "PASS", x
+          assert x.get("worlds") == 4, x
+          assert x.get("dds_required_worlds") == 4, x
+          assert x.get("fallback_used") is False, x
+          print(json.dumps(x, sort_keys=True))
+          PY
+
+      - name: Open or update BEN DDS3 incident
+        if: ${{ failure() }}
+        shell: bash
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title='[Monitor] Oracle BEN DDS3 health failure'
+          number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)"
+          body="Oracle BEN+DDS3 four-world canary failed at $(date -u +'%Y-%m-%dT%H:%M:%SZ'). Run: $RUN_URL"
+          if [[ -n "$number" ]]; then
+            gh issue comment "$number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
+
+      - name: Close recovered BEN DDS3 incident
+        if: ${{ success() }}
+        shell: bash
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title='[Monitor] Oracle BEN DDS3 health failure'
+          number="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json number,title --jq ".[] | select(.title == \"$title\") | .number" | head -n 1)"
+          if [[ -n "$number" ]]; then
+            gh issue close "$number" --repo "$GITHUB_REPOSITORY" --comment "Oracle BEN+DDS3 health recovered. Passing run: $RUN_URL"
+          fi

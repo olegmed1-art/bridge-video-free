@@ -13,6 +13,7 @@ BACKUP_POLICY_NAME="${BACKUP_POLICY_NAME:-Bronze}"
 BUDGET_NAME="${BUDGET_NAME:-bridge-school-dds3-trial-guard}"
 BUDGET_AMOUNT="${BUDGET_AMOUNT:-250}"
 BUDGET_EMAIL="${BUDGET_EMAIL:-}"
+NONINTERACTIVE="${NONINTERACTIVE:-0}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/bridge_school_dds3_oracle}"
 ALLOW_REBOOT="${ALLOW_REBOOT:-0}"
 BACKUP_NAME="${BACKUP_NAME:-bridge-school-dds3-pre-reboot-$(date -u +%Y%m%d)}"
@@ -172,10 +173,6 @@ fi
 nullish "$ASSIGNED_POLICY_ID" && die "Backup policy assignment is missing"
 
 log "Ensure monthly budget and five alert rules"
-if [[ -z "$BUDGET_EMAIL" ]]; then
-  read -r -p 'Email for OCI budget alerts: ' BUDGET_EMAIL
-fi
-[[ "$BUDGET_EMAIL" == *@*.* ]] || die "BUDGET_EMAIL is required"
 BUDGETS_JSON="$(oci budgets budget budget list -c "$TENANCY_ID" --display-name "$BUDGET_NAME" --all --output json | normalize_list_json)"
 BUDGET_ID="$(printf '%s' "$BUDGETS_JSON" | python3 -c 'import json,sys; xs=json.load(sys.stdin).get("data",[]); xs.sort(key=lambda x:x.get("time-created",""),reverse=True); print(xs[0].get("id","") if xs else "")')"
 if nullish "$BUDGET_ID"; then
@@ -210,6 +207,21 @@ assert x.get("target-type") == "COMPARTMENT", x
 assert x.get("targets") == [os.environ["TARGET"]], x
 '
 ALERTS_JSON="$(oci budgets budget alert-rule list --budget-id "$BUDGET_ID" --all --output json | normalize_list_json)"
+if [[ -z "$BUDGET_EMAIL" ]]; then
+  BUDGET_EMAIL="$(printf '%s' "$ALERTS_JSON" | python3 -c '
+import json, re, sys
+emails=set()
+for rule in json.load(sys.stdin).get("data", []):
+    for item in re.split(r"[,;\s]+", str(rule.get("recipients") or "")):
+        if re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", item):
+            emails.add(item)
+print(next(iter(emails)) if len(emails) == 1 else "")
+')"
+fi
+if [[ -z "$BUDGET_EMAIL" && "$NONINTERACTIVE" != "1" && -t 0 ]]; then
+  read -r -p 'Email for OCI budget alerts: ' BUDGET_EMAIL
+fi
+[[ "$BUDGET_EMAIL" == *@*.* ]] || die "A unique BUDGET_EMAIL secret or existing OCI alert recipient is required"
 wait_alert_active(){
   local alert_rule_id="$1" state=""
   for _ in $(seq 1 30); do
@@ -278,6 +290,20 @@ BOOT_ID_AFTER=""
 HOST_DISK="not-collected"
 HOST_MEMORY="not-collected"
 CONTROL_PATH="not-used"
+if [[ "$ALLOW_REBOOT" != "1" ]]; then
+  PLUGINS_JSON="$(oci instance-agent plugin list \
+    --compartment-id "$COMPARTMENT_ID" \
+    --instanceagent-id "$INSTANCE_ID" \
+    --all --output json)"
+  RUN_COMMAND_STATUS="$(printf '%s' "$PLUGINS_JSON" | python3 -c 'import json,sys; xs=json.load(sys.stdin).get("data",[]); print(next((x.get("status","") for x in xs if "Run Command" in str(x.get("name",""))),""))')"
+  [[ "$RUN_COMMAND_STATUS" == "RUNNING" ]] || die "Preflight refused: OCI Run Command status is ${RUN_COMMAND_STATUS:-unknown}"
+  CONTROL_PATH="oci-run-command"
+  run_agent_command "bridge-dds3-operational-preflight-$(date -u +%Y%m%d%H%M%S)" $'set -Eeuo pipefail\nsystemctl is-active --quiet assistant-lab.service bridge-ben.service bridge-ben-healthcheck.timer nginx docker dds3-healthcheck.timer dds3-cert-renew.timer\ncurl -fsS --max-time 8 http://127.0.0.1:8080/readyz >/dev/null\ncurl -fsS --max-time 15 "http://127.0.0.1:8085/bid?hand=AK97543.K.T3.AK7&seat=S&dealer=N&vul=&ctx=----&details=true" >/dev/null\nprintf "BOOT_ID=%s\\n" "$(cat /proc/sys/kernel/random/boot_id)"\nprintf "HOST_DISK=%s\\n" "$(df -h / | tail -n 1)"\nprintf "HOST_MEMORY=%s\\n" "$(free -h | sed -n "2p")"'
+  BOOT_ID_BEFORE="$(printf '%s\n' "$RUN_AGENT_TEXT" | sed -n 's/^BOOT_ID=//p' | head -n 1)"
+  HOST_DISK="$(printf '%s\n' "$RUN_AGENT_TEXT" | sed -n 's/^HOST_DISK=//p' | head -n 1)"
+  HOST_MEMORY="$(printf '%s\n' "$RUN_AGENT_TEXT" | sed -n 's/^HOST_MEMORY=//p' | head -n 1)"
+  [[ -n "$BOOT_ID_BEFORE" && -n "$HOST_DISK" && -n "$HOST_MEMORY" ]] || die "Run Command preflight returned incomplete capacity evidence"
+fi
 if [[ "$ALLOW_REBOOT" == "1" ]]; then
   if [[ -f "$SSH_KEY" ]]; then
     command -v ssh >/dev/null 2>&1 || die "ssh is required when SSH_KEY is present"
@@ -287,7 +313,7 @@ if [[ "$ALLOW_REBOOT" == "1" ]]; then
     BOOT_ID_BEFORE="$("${SSH[@]}" 'cat /proc/sys/kernel/random/boot_id')"
     HOST_DISK="$("${SSH[@]}" 'df -h / | tail -n 1')"
     HOST_MEMORY="$("${SSH[@]}" "free -h | sed -n '2p'")"
-    "${SSH[@]}" 'sudo systemctl is-active --quiet assistant-lab.service nginx docker dds3-healthcheck.timer dds3-cert-renew.timer'
+    "${SSH[@]}" 'sudo systemctl is-active --quiet assistant-lab.service bridge-ben.service bridge-ben-healthcheck.timer nginx docker dds3-healthcheck.timer dds3-cert-renew.timer; curl -fsS --max-time 8 http://127.0.0.1:8080/readyz >/dev/null; curl -fsS --max-time 15 "http://127.0.0.1:8085/bid?hand=AK97543.K.T3.AK7&seat=S&dealer=N&vul=&ctx=----&details=true" >/dev/null'
   else
     PLUGINS_JSON="$(oci instance-agent plugin list \
       --compartment-id "$COMPARTMENT_ID" \
@@ -296,7 +322,7 @@ if [[ "$ALLOW_REBOOT" == "1" ]]; then
     RUN_COMMAND_STATUS="$(printf '%s' "$PLUGINS_JSON" | python3 -c 'import json,sys; xs=json.load(sys.stdin).get("data",[]); print(next((x.get("status","") for x in xs if "Run Command" in str(x.get("name",""))),""))')"
     [[ "$RUN_COMMAND_STATUS" == "RUNNING" ]] || die "Reboot refused: no SSH key and Run Command status is ${RUN_COMMAND_STATUS:-unknown}"
     CONTROL_PATH="oci-run-command"
-    run_agent_command "bridge-dds3-pre-reboot-$(date -u +%Y%m%d%H%M%S)" $'set -Eeuo pipefail\nsystemctl is-active --quiet assistant-lab.service nginx docker dds3-healthcheck.timer dds3-cert-renew.timer\nprintf "BOOT_ID=%s\\n" "$(cat /proc/sys/kernel/random/boot_id)"\nprintf "HOST_DISK=%s\\n" "$(df -h / | tail -n 1)"\nprintf "HOST_MEMORY=%s\\n" "$(free -h | sed -n "2p")"'
+    run_agent_command "bridge-dds3-pre-reboot-$(date -u +%Y%m%d%H%M%S)" $'set -Eeuo pipefail\nsystemctl is-active --quiet assistant-lab.service bridge-ben.service bridge-ben-healthcheck.timer nginx docker dds3-healthcheck.timer dds3-cert-renew.timer\ncurl -fsS --max-time 8 http://127.0.0.1:8080/readyz >/dev/null\ncurl -fsS --max-time 15 "http://127.0.0.1:8085/bid?hand=AK97543.K.T3.AK7&seat=S&dealer=N&vul=&ctx=----&details=true" >/dev/null\nprintf "BOOT_ID=%s\\n" "$(cat /proc/sys/kernel/random/boot_id)"\nprintf "HOST_DISK=%s\\n" "$(df -h / | tail -n 1)"\nprintf "HOST_MEMORY=%s\\n" "$(free -h | sed -n "2p")"'
     BOOT_ID_BEFORE="$(printf '%s\n' "$RUN_AGENT_TEXT" | sed -n 's/^BOOT_ID=//p' | head -n 1)"
     HOST_DISK="$(printf '%s\n' "$RUN_AGENT_TEXT" | sed -n 's/^HOST_DISK=//p' | head -n 1)"
     HOST_MEMORY="$(printf '%s\n' "$RUN_AGENT_TEXT" | sed -n 's/^HOST_MEMORY=//p' | head -n 1)"
@@ -313,13 +339,13 @@ if [[ "$ALLOW_REBOOT" == "1" ]]; then
       fi
       sleep 10
     done
-    "${SSH[@]}" 'sudo systemctl is-active --quiet assistant-lab.service nginx docker dds3-healthcheck.timer dds3-cert-renew.timer'
+    "${SSH[@]}" 'sudo systemctl is-active --quiet assistant-lab.service bridge-ben.service bridge-ben-healthcheck.timer nginx docker dds3-healthcheck.timer dds3-cert-renew.timer; curl -fsS --max-time 8 http://127.0.0.1:8080/readyz >/dev/null; curl -fsS --max-time 15 "http://127.0.0.1:8085/bid?hand=AK97543.K.T3.AK7&seat=S&dealer=N&vul=&ctx=----&details=true" >/dev/null'
   else
     for _ in $(seq 1 90); do
       curl -fsS --max-time 10 "https://$PUBLIC_IP/readyz" >/dev/null 2>&1 && break
       sleep 10
     done
-    run_agent_command "bridge-dds3-post-reboot-$(date -u +%Y%m%d%H%M%S)" $'set -Eeuo pipefail\nsystemctl is-active --quiet assistant-lab.service nginx docker dds3-healthcheck.timer dds3-cert-renew.timer\nprintf "BOOT_ID=%s\\n" "$(cat /proc/sys/kernel/random/boot_id)"'
+    run_agent_command "bridge-dds3-post-reboot-$(date -u +%Y%m%d%H%M%S)" $'set -Eeuo pipefail\nsystemctl is-active --quiet assistant-lab.service bridge-ben.service bridge-ben-healthcheck.timer nginx docker dds3-healthcheck.timer dds3-cert-renew.timer\ncurl -fsS --max-time 8 http://127.0.0.1:8080/readyz >/dev/null\ncurl -fsS --max-time 15 "http://127.0.0.1:8085/bid?hand=AK97543.K.T3.AK7&seat=S&dealer=N&vul=&ctx=----&details=true" >/dev/null\nprintf "BOOT_ID=%s\\n" "$(cat /proc/sys/kernel/random/boot_id)"'
     BOOT_ID_AFTER="$(printf '%s\n' "$RUN_AGENT_TEXT" | sed -n 's/^BOOT_ID=//p' | head -n 1)"
   fi
   [[ -n "$BOOT_ID_AFTER" && "$BOOT_ID_AFTER" != "$BOOT_ID_BEFORE" ]] || die "Could not prove a completed reboot by boot_id"
@@ -334,13 +360,14 @@ printf '%s' "$ROUTED_AFTER" | python3 -c 'import json,sys; x=json.load(sys.stdin
 
 export INSTANCE_ID SHAPE OCPU MEMORY_GB BOOT_VOLUME_ID BOOT_VOLUME_SIZE_GB BACKUP_ID BACKUP_STATE
 export ASSIGNED_POLICY_ID BUDGET_ID BUDGET_AMOUNT REBOOTED BOOT_ID_BEFORE BOOT_ID_AFTER HOST_DISK HOST_MEMORY CONTROL_PATH
+export BUDGET_EMAIL_CONFIGURED=true
 python3 - <<'PY' >"$EVIDENCE_FILE"
 import json, os
 keys = [
     "INSTANCE_ID", "SHAPE", "OCPU", "MEMORY_GB", "BOOT_VOLUME_ID",
     "BOOT_VOLUME_SIZE_GB", "BACKUP_ID", "BACKUP_STATE", "ASSIGNED_POLICY_ID",
     "BUDGET_ID", "BUDGET_AMOUNT", "REBOOTED", "BOOT_ID_BEFORE", "BOOT_ID_AFTER",
-    "HOST_DISK", "HOST_MEMORY", "CONTROL_PATH",
+    "HOST_DISK", "HOST_MEMORY", "CONTROL_PATH", "BUDGET_EMAIL_CONFIGURED",
 ]
 print(json.dumps({"status": "PASS", **{k.lower(): os.environ.get(k, "") for k in keys}}, indent=2, sort_keys=True))
 PY
