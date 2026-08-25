@@ -470,8 +470,9 @@ jobs:
           set +e
           ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ServerAliveInterval=30 -o ServerAliveCountMax=20 \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n env BEN_P95_LIMIT_MS=5000 BEN_MIN_INTERVAL_SECONDS=0.65 python3 '$remote_script'; rc=\$?; sudo -n rm -f '$remote_script'; exit \$rc" \
+            "sudo -n env BEN_P95_LIMIT_MS=5000 BEN_MIN_INTERVAL_SECONDS=0.65 flock --exclusive --nonblock /run/lock/oracle-ben-benchmark.lock python3 '$remote_script'; rc=\$?; sudo -n rm -f '$remote_script'; exit \$rc" \
             >"$detail" 2>&1
           rc=$?
           set -e
