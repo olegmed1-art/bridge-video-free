@@ -100,7 +100,7 @@ def main() -> int:
         source_30041,
         dds3_30041,
         dds3_29912,
-        source_30041_sha256=source_sha,
+        source_30041_json_sha256=source_sha,
     )
     report = serialize_real_evidence(evidence)
     report["provenance"] = {
