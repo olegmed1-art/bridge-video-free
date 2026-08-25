@@ -278,7 +278,7 @@ jobs:
                   return None
           start = integer("ExecMainStartTimestampMonotonic")
           end = integer("ExecMainExitTimestampMonotonic")
-          if start is not None and end is not None and end >= start:
+          if start is not None and end is not None and start > 0 and end > start:
               print(f"runtime_seconds={(end-start)/1_000_000:.3f}")
           cpu = integer("CPUUsageNSec")
           if cpu is not None:
@@ -292,6 +292,21 @@ jobs:
               if value is not None:
                   print(f"{target}={value}")
           PY
+          request="$state/requests/10000.json"
+          evidence="$state/evidence/10000.json"
+          log="$state/logs/10000.log"
+          if [[ -f "$request" && -f "$evidence" ]]; then
+            request_ts="$(stat -c %Y "$request")"
+            evidence_ts="$(stat -c %Y "$evidence")"
+            if [[ "$evidence_ts" -ge "$request_ts" ]]; then
+              echo "wall_elapsed_seconds=$((evidence_ts-request_ts))"
+              echo "request_mtime_epoch=$request_ts"
+              echo "evidence_mtime_epoch=$evidence_ts"
+            fi
+          fi
+          if [[ -f "$log" ]]; then
+            echo "log_bytes=$(stat -c %s "$log")"
+          fi
           if [[ -f "$state/evidence/10000.json" ]]; then
             echo 'evidence_present=true'
             python3 - "$state/evidence/10000.json" <<'PY'
