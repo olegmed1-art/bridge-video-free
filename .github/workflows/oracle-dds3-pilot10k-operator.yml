@@ -182,7 +182,7 @@ jobs:
           mv "$unpack/pilot" "$work"
           chown -R dds3-mass:dds3-mass "$work"
           rm -f /tmp/dds-main30k-state.tgz
-          install -d -m 0750 -o root -g dds3-mass "$state/evidence"
+          install -d -m 0770 -o root -g dds3-mass "$state/evidence"
           PYTHONPATH="$repo/dds_training" WORK="$work" STATE="$state" "$repo/dds_training/.venv/bin/python" - <<'PY'
           import hashlib, json, os
           from pathlib import Path
@@ -280,6 +280,7 @@ jobs:
           }
           JSON
           chown root:dds3-mass "$req.tmp"; chmod 0640 "$req.tmp"; mv "$req.tmp" "$req"
+          install -d -m 0770 -o root -g dds3-mass "$state/evidence"
           rm -f "$state/evidence/30000.json"
           systemctl start --no-block dds3-mass@30000.service
           for _ in $(seq 1 20); do
