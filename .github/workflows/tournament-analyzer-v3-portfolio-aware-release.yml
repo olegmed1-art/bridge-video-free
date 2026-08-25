@@ -4,7 +4,12 @@ on:
   pull_request:
     paths:
       - "bridge_school_api/tournament_portfolio_release_gate_v3.py"
+      - "bridge_school_api/tournament_portfolio_episode_coverage_handoff_v3.py"
+      - "bridge_school_api/tournament_portfolio_episode_scoring_v3.py"
+      - "bridge_school_api/tournament_episode_source_census_v3.py"
+      - "bridge_school_api/tournament_teacher_review_release_gate_v3.py"
       - "tests/test_tournament_portfolio_release_gate_v3.py"
+      - "tests/test_tournament_portfolio_episode_coverage_handoff_v3.py"
       - ".github/workflows/tournament-analyzer-v3-portfolio-aware-release.yml"
   workflow_dispatch:
 
@@ -23,8 +28,18 @@ jobs:
       - name: Unit tests and compile
         run: |
           python -m pip install --disable-pip-version-check pytest
-          python -m py_compile bridge_school_api/tournament_portfolio_release_gate_v3.py
-          python -m pytest -q tests/test_tournament_portfolio_release_gate_v3.py tests/test_tournament_coverage_release_v3.py
+          python -m py_compile \
+            bridge_school_api/tournament_portfolio_release_gate_v3.py \
+            bridge_school_api/tournament_portfolio_episode_coverage_handoff_v3.py \
+            bridge_school_api/tournament_portfolio_episode_scoring_v3.py \
+            bridge_school_api/tournament_episode_source_census_v3.py \
+            bridge_school_api/tournament_teacher_review_release_gate_v3.py
+          python -m pytest -q \
+            tests/test_tournament_portfolio_release_gate_v3.py \
+            tests/test_tournament_portfolio_episode_coverage_handoff_v3.py \
+            tests/test_tournament_portfolio_episode_scoring_v3.py \
+            tests/test_tournament_teacher_review_release_gate_v3.py \
+            tests/test_tournament_coverage_release_v3.py
       - name: Build current real 30041 base checkpoint
         env:
           ALGORITHM_REVISION_ID: "AIroW35dhYwaAOQ1dDxMCkYjVKitrJKTII3Zx0IS7RNHuQDBE8iXBw-l2Ux9qF42DTU1gUWmWDu3kn9XVb1ne2cTls8HTLvblELsTAZRRuY"
@@ -36,54 +51,144 @@ jobs:
             --algorithm-revision-id "$ALGORITHM_REVISION_ID" \
             --output-json base-release-checkpoint.json \
             --output-md base-release-checkpoint.md
-      - name: Restore merged event review gate evidence
+      - name: Restore exact portfolio and source review batches
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          curl -fsSL --retry 3 \
-            -H "Authorization: Bearer ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/9574598887/zip" \
-            -o /tmp/event-review-gates.zip
-          unzip -q /tmp/event-review-gates.zip -d evidence
-          test -f evidence/event-teacher-review-release-gates.json
-      - name: Prove full portfolio blocks current 30041 release
+          set -euo pipefail
+          mkdir -p evidence/portfolio evidence/historical evidence/opening
+          for spec in \
+            "9569845552:/tmp/portfolio.zip:evidence/portfolio" \
+            "9558677983:/tmp/historical.zip:evidence/historical" \
+            "9569379785:/tmp/opening.zip:evidence/opening"; do
+            IFS=: read -r aid zip dest <<< "$spec"
+            curl -fsSL --retry 3 \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${aid}/zip" \
+              -o "$zip"
+            unzip -q "$zip" -d "$dest"
+          done
+          PORTFOLIO="$(find evidence/portfolio -type f -name 'tournament-teacher-review-portfolio.json' -print -quit)"
+          HISTORICAL="$(find evidence/historical -type f -name 'tournament-teacher-review-bundle.json' -print -quit)"
+          OPENING="$(find evidence/opening -type f -name 'tournament-30041-opening-lead-review-handoff.json' -print -quit)"
+          test -n "$PORTFOLIO" && test -n "$HISTORICAL" && test -n "$OPENING"
+          echo "PORTFOLIO=$PORTFOLIO" >> "$GITHUB_ENV"
+          echo "HISTORICAL=$HISTORICAL" >> "$GITHUB_ENV"
+          echo "OPENING=$OPENING" >> "$GITHUB_ENV"
+      - name: Rebuild exact portfolio decisions scoring coverage and release
         run: |
           PYTHONPATH="$PWD" python - <<'PY'
-          import json
+          import json, os
+          from bridge_school_api.tournament_teacher_review_bundle_v3 import build_teacher_review_bundle, verify_teacher_review_bundle
+          from bridge_school_api.tournament_teacher_review_portfolio_intake_v3 import (
+              build_portfolio_teacher_decision_template,
+              apply_portfolio_teacher_decision_intake,
+          )
+          from bridge_school_api.tournament_teacher_review_release_gate_v3 import build_event_teacher_review_release_gate
+          from bridge_school_api.tournament_portfolio_episode_scoring_v3 import (
+              build_portfolio_episode_scoring_template,
+              apply_portfolio_episode_scoring_intake,
+          )
+          from bridge_school_api.tournament_episode_source_census_v3 import build_episode_source_census
+          from bridge_school_api.tournament_portfolio_episode_coverage_handoff_v3 import build_portfolio_episode_coverage_handoff
           from bridge_school_api.tournament_portfolio_release_gate_v3 import build_portfolio_aware_release_gate
-          base=json.load(open('base-release-checkpoint.json', encoding='utf-8'))
-          gates=json.load(open('evidence/event-teacher-review-release-gates.json', encoding='utf-8'))
-          g=gates['30041']
-          out=build_portfolio_aware_release_gate(
+
+          source=json.load(open('data/tournaments/tournament_30041_round2_diana_facts_v1.json',encoding='utf-8'))
+          base=json.load(open('base-release-checkpoint.json',encoding='utf-8'))
+          portfolio=json.load(open(os.environ['PORTFOLIO'],encoding='utf-8'))
+          historical=json.load(open(os.environ['HISTORICAL'],encoding='utf-8'))
+          opening_handoff=json.load(open(os.environ['OPENING'],encoding='utf-8'))
+          opening=build_teacher_review_bundle(
+              opening_handoff['queue'], opening_handoff['decision_ledger'], opening_handoff['dossier']
+          )
+          verify_teacher_review_bundle(opening)
+          bundles=[historical, opening]
+
+          decision_template=build_portfolio_teacher_decision_template(portfolio,bundles)
+          decisions=apply_portfolio_teacher_decision_intake(portfolio,bundles,decision_template)
+          assert portfolio['item_count']==21
+          assert decisions['pending_count']==21 and decisions['decided_count']==0
+
+          event_gate=build_event_teacher_review_release_gate(portfolio,bundles,decisions,event_id='30041')
+          assert event_gate['review_item_count']==11
+          assert event_gate['unresolved_review_count']==11
+          assert event_gate['teacher_review_release_ready'] is False
+
+          scoring_template=build_portfolio_episode_scoring_template(portfolio,bundles,decisions)
+          scoring=apply_portfolio_episode_scoring_intake(portfolio,bundles,decisions,scoring_template)
+          assert scoring['explicitly_scored_count']==0
+          assert scoring['unresolved_teacher_review_count']==21
+          assert scoring['portfolio_episode_scoring_complete'] is False
+
+          census=build_episode_source_census(source)
+          assert census['non_dd_episode_source_census_complete'] is True
+          assert census['actual_auction_board_count']==0
+          assert census['actual_full_play_board_count']==0
+          assert census['opening_lead_source_board_count']==21
+
+          handoff=build_portfolio_episode_coverage_handoff(
+              source, portfolio, bundles, decisions, scoring, source_census=census
+          )
+          assert handoff['event_id']=='30041'
+          assert handoff['event_review_item_count']==11
+          assert handoff['event_pending_decision_count']==11
+          assert handoff['event_explicitly_scored_count']==0
+          assert handoff['coverage_episode_count']==0
+          assert handoff['non_dd_source_census_complete'] is True
+          assert handoff['v1_4_episode_inventory_complete'] is False
+          assert handoff['handoff_ready'] is False
+          assert 'TEACHER_DECISION_PENDING' in handoff['handoff_blockers']
+          assert 'EVENT_EPISODE_ADJUDICATION_NOT_COMPLETE' in handoff['handoff_blockers']
+
+          release=build_portfolio_aware_release_gate(
               preanalysis_gate=base['preanalysis'],
-              coverage_manifest=base['coverage'],
+              coverage_manifest=handoff['coverage_manifest'],
               mp_availability=base['mp_recalculation'],
-              event_teacher_review_gate=g,
+              event_teacher_review_gate=event_gate,
+              portfolio_episode_coverage_handoff=handoff,
               rendered_slide_keys=None,
               visual_qa_pass=None,
           )
-          assert g['review_item_count']==11 and g['unresolved_review_count']==11
-          assert out['teacher_review_item_count']==11
-          assert out['teacher_review_unresolved_count']==11
-          assert out['teacher_review_release_ready'] is False
-          assert out['final_report_release_ready'] is False
-          assert 'TEACHER_REVIEW_PORTFOLIO_UNRESOLVED' in out['hard_stop_conditions']
-          assert 'EPISODE_INVENTORY_NOT_COMPLETE' in out['hard_stop_conditions']
-          assert 'RENDERED_SLIDE_COVERAGE_NOT_PROVIDED' in out['hard_stop_conditions']
-          assert 'VISUAL_QA_NOT_PASSED' in out['hard_stop_conditions']
-          assert out['automatic_episode_scoring_allowed'] is False
-          assert out['automatic_student_error_attribution_allowed'] is False
-          assert out['automatic_methodology_invention_allowed'] is False
-          json.dump(out,open('tournament-30041-portfolio-aware-release.json','w',encoding='utf-8'),ensure_ascii=False,indent=2)
-          print('TOURNAMENT_30041_PORTFOLIO_AWARE_RELEASE_REAL_PASS')
-          print('review_items',out['teacher_review_item_count'],'unresolved',out['teacher_review_unresolved_count'])
-          print('release_ready',out['final_report_release_ready'])
+          assert release['schema']=='tournament-v1.4-portfolio-aware-release-gate-v2'
+          assert release['teacher_review_item_count']==11
+          assert release['teacher_review_unresolved_count']==11
+          assert release['portfolio_episode_coverage_handoff_supplied'] is True
+          assert release['portfolio_episode_coverage_ready'] is False
+          assert release['final_report_release_ready'] is False
+          for blocker in (
+              'TEACHER_REVIEW_PORTFOLIO_UNRESOLVED',
+              'TEACHER_DECISION_PENDING',
+              'EVENT_EPISODE_ADJUDICATION_NOT_COMPLETE',
+              'EPISODE_INVENTORY_NOT_COMPLETE',
+              'RENDERED_SLIDE_COVERAGE_NOT_PROVIDED',
+              'VISUAL_QA_NOT_PASSED',
+          ):
+              assert blocker in release['hard_stop_conditions'], blocker
+          assert release['automatic_episode_scoring_allowed'] is False
+          assert release['automatic_student_error_attribution_allowed'] is False
+          assert release['automatic_methodology_invention_allowed'] is False
+
+          json.dump(decisions,open('portfolio-decision-result.json','w',encoding='utf-8'),ensure_ascii=False,indent=2)
+          json.dump(scoring,open('portfolio-episode-scoring.json','w',encoding='utf-8'),ensure_ascii=False,indent=2)
+          json.dump(census,open('tournament-30041-non-dd-census.json','w',encoding='utf-8'),ensure_ascii=False,indent=2)
+          json.dump(handoff,open('tournament-30041-portfolio-episode-coverage.json','w',encoding='utf-8'),ensure_ascii=False,indent=2)
+          json.dump(release,open('tournament-30041-portfolio-aware-release.json','w',encoding='utf-8'),ensure_ascii=False,indent=2)
+          print('TOURNAMENT_30041_PORTFOLIO_RELEASE_REAL_E2E_PASS')
+          print('portfolio_items',portfolio['item_count'],'event_reviews',handoff['event_review_item_count'])
+          print('event_pending',handoff['event_pending_decision_count'],'coverage_episodes',handoff['coverage_episode_count'])
+          print('non_dd_census_complete',handoff['non_dd_source_census_complete'])
+          print('release_ready',release['final_report_release_ready'])
           PY
       - uses: actions/upload-artifact@v4
         with:
           name: tournament-30041-portfolio-aware-release
-          path: tournament-30041-portfolio-aware-release.json
+          path: |
+            portfolio-decision-result.json
+            portfolio-episode-scoring.json
+            tournament-30041-non-dd-census.json
+            tournament-30041-portfolio-episode-coverage.json
+            tournament-30041-portfolio-aware-release.json
           if-no-files-found: error
           retention-days: 30
