@@ -12,6 +12,11 @@ from bridge_school_api.tournament_real_sources_v3 import (
     build_real_evidence,
     serialize_real_evidence,
 )
+from bridge_school_api.tournament_scoring_context_v3 import (
+    build_30041_mp_context,
+    join_findings_with_mp_context,
+    serialize_mp_context,
+)
 
 PROVENANCE = {
     "30041": {
@@ -43,6 +48,12 @@ def render_markdown(report: dict[str, Any]) -> str:
     sources = report["sources"]
     clusters = report["longitudinal"]["clusters"]
     persistent = report["longitudinal"]["persistent"]
+    mp = report["scoring_context"]["30041"]
+    review = [
+        item
+        for item in mp["technical_finding_context"]
+        if (item.get("observed_gap_to_neutral") or 0.0) > 0.0
+    ]
     lines = [
         "# Tournament Analyzer v3 — первый реальный longitudinal report",
         "",
@@ -66,6 +77,34 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"| {cluster['repeat_key']} | {cluster['tournament_count']} | {cluster['finding_count']} | "
             f"{cluster['total_trick_loss']:.1f} | {status} |"
         )
+
+    lines.extend(
+        [
+            "",
+            "## MP outcome context — event 30041",
+            "",
+            f"- Фактический итог пары: {mp['final_percentage']:.2f}%, место {mp['rank']}/{mp['field_size']}; в итог вошло {mp['counted_results']} результатов.",
+            f"- Сумма только наблюдаемых дефицитов относительно нейтральных 50%: {mp['total_below_neutral_mass']:.1f} MP-процентных пунктов по отдельным сдачам.",
+            f"- Чисто арифметический сценарий «все результаты ниже 50% заменить ровно на 50%» дал бы {mp['counterfactual_final_percentage_if_all_below_neutral_were_neutral']:.2f}%.",
+            "- Это НЕ оценка того, сколько можно вернуть обучением, и НЕ перевод DDS3-взяток в MP.",
+            "",
+            "### Сдачи для преподавательского просмотра: технический DDS3-факт + фактический результат ниже 50%",
+            "",
+            "Совпадение двух фактов используется только для приоритизации просмотра. Причинная связь между DDS3-отклонением и MP-результатом не установлена.",
+            "",
+            "| Раздача | DD mass | Факт MP% | Дефицит до 50% | Вклад в итог при замене на 50% |",
+            "|:---|---:|---:|---:|---:|",
+        ]
+    )
+    for item in review:
+        lines.append(
+            f"| {item['deal_id']} | {float(item.get('technical_trick_loss') or 0.0):.1f} | "
+            f"{float(item['observed_pair_percentage']):.1f} | {float(item['observed_gap_to_neutral']):.1f} | "
+            f"{float(item['final_percentage_uplift_if_neutral']):.3f} п.п. |"
+        )
+    if not review:
+        lines.append("| — | — | — | — | — |")
+
     pair = next((c for c in persistent if c["repeat_key"] == PAIR_SAME_CONTRACT_REPEAT_KEY), None)
     lines.extend(["", "## Интерпретационная граница", ""])
     if pair:
@@ -77,6 +116,7 @@ def render_markdown(report: dict[str, Any]) -> str:
             "- Для 29912 первый ход наблюдаем, поэтому его DDS3-regret можно фиксировать как технический факт; методическое правило из него не выводится.",
             "- Без полного покарточного протокола последующие конкретные ходы не атрибутируются.",
             "- Без аукциона торговые ошибки конкретным заявкам не приписываются.",
+            "- MP-контекст не выполняет DDS3→MP conversion и не создаёт причинную атрибуцию ошибки.",
             "- SYSTEM_RULE и MODEL_OPINION этим слоем не создаются; L1/BEN/DDS3 семантика не меняется.",
         ]
     )
@@ -103,6 +143,19 @@ def main() -> int:
         source_30041_json_sha256=source_sha,
     )
     report = serialize_real_evidence(evidence)
+    mp_context = build_30041_mp_context(source_30041)
+    joined = join_findings_with_mp_context(evidence.analysis_30041, mp_context)
+    report["scoring_context"] = {
+        "30041": serialize_mp_context(mp_context, joined),
+        "29912": {
+            "status": "UNAVAILABLE_IN_CURRENT_EVIDENCE",
+            "reason": (
+                "The preserved 29912 DDS3 artifact does not provide a validated board-level "
+                "MP/IMP outcome series suitable for tournament-impact arithmetic. No scoring "
+                "context is reconstructed from missing data."
+            ),
+        },
+    }
     report["provenance"] = {
         **PROVENANCE,
         "input_file_sha256": {
@@ -119,6 +172,8 @@ def main() -> int:
         "findings_29912": report["events"]["29912"]["finding_count"],
         "findings_30041": report["events"]["30041"]["finding_count"],
         "persistent_clusters": len(report["longitudinal"]["persistent"]),
+        "mp_context_30041": True,
+        "mp_context_29912": False,
     }, sort_keys=True))
     return 0
 
