@@ -124,7 +124,8 @@ WantedBy=timers.target
 EOF
 
 systemctl daemon-reload
-systemctl enable --now bridge-ben.service
+systemctl enable bridge-ben.service
+systemctl restart bridge-ben.service
 for attempt in $(seq 1 120); do
   code="$(curl -sS -o /tmp/bridge-ben-ready.json -w '%{http_code}' --max-time 5 \
     'http://127.0.0.1:8085/bid?hand=AK97543.K.T3.AK7&seat=S&dealer=N&vul=&ctx=----&details=true' || true)"
