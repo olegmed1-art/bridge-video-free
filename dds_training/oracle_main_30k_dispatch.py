@@ -16,6 +16,7 @@ from oracle_cost_gate import CostGateError, validate_30k_budget
 TARGET = 30_000
 TRAIN_TASKS = 28_000
 SCOPE = "main_train"
+START_COMMAND = "/dds3-main30k start"
 
 
 def _rows(path: Path) -> list[dict[str, Any]]:
@@ -77,8 +78,13 @@ def _authorization(req: dict[str, Any], state_root: Path) -> tuple[Path, str, di
     auth = req.get("authorization")
     if not isinstance(auth, dict) or auth.get("scope") != SCOPE:
         raise SystemExit("FAIL_CLOSED: 30k requires one-time main_train authorization")
-    if auth.get("event_name") != "workflow_dispatch" or auth.get("command"):
-        raise SystemExit("FAIL_CLOSED: 30k authorization must be workflow_dispatch without issue command")
+    event_name = str(auth.get("event_name", ""))
+    command = str(auth.get("command", ""))
+    if not (
+        (event_name == "workflow_dispatch" and command == "")
+        or (event_name == "issue_comment" and command == START_COMMAND)
+    ):
+        raise SystemExit("FAIL_CLOSED: 30k authorization event/command mismatch")
     if auth.get("actor") != "olegmed1-art" or auth.get("triggering_actor") != "olegmed1-art":
         raise SystemExit("FAIL_CLOSED: 30k authorization actor mismatch")
     receipt = base._resolve_existing(
@@ -93,8 +99,8 @@ def _authorization(req: dict[str, Any], state_root: Path) -> tuple[Path, str, di
         "GITHUB_SHA": str(auth.get("commit_sha", "")),
         "GITHUB_ACTOR": str(auth.get("actor", "")),
         "GITHUB_TRIGGERING_ACTOR": str(auth.get("triggering_actor", "")),
-        "GITHUB_EVENT_NAME": "workflow_dispatch",
-        "DDS_AUTHORIZATION_COMMAND": "",
+        "GITHUB_EVENT_NAME": event_name,
+        "DDS_AUTHORIZATION_COMMAND": command,
     }
     if env["GITHUB_REPOSITORY"] != "olegmed1-art/bridge-video-free":
         raise SystemExit("FAIL_CLOSED: 30k authorization repository mismatch")
