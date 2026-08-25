@@ -1,0 +1,89 @@
+name: Tournament Analyzer v3 Portfolio-aware Release
+
+on:
+  pull_request:
+    paths:
+      - "bridge_school_api/tournament_portfolio_release_gate_v3.py"
+      - "tests/test_tournament_portfolio_release_gate_v3.py"
+      - ".github/workflows/tournament-analyzer-v3-portfolio-aware-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  real-30041-portfolio-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Unit tests and compile
+        run: |
+          python -m pip install --disable-pip-version-check pytest
+          python -m py_compile bridge_school_api/tournament_portfolio_release_gate_v3.py
+          python -m pytest -q tests/test_tournament_portfolio_release_gate_v3.py tests/test_tournament_coverage_release_v3.py
+      - name: Build current real 30041 base checkpoint
+        env:
+          ALGORITHM_REVISION_ID: "AIroW35dhYwaAOQ1dDxMCkYjVKitrJKTII3Zx0IS7RNHuQDBE8iXBw-l2Ux9qF42DTU1gUWmWDu3kn9XVb1ne2cTls8HTLvblELsTAZRRuY"
+        run: |
+          PYTHONPATH=. python scripts/tournament_v3_release_checkpoint.py \
+            --facts data/tournaments/tournament_30041_round2_diana_facts_v1.json \
+            --received-at 2026-08-21T11:05:01Z \
+            --receipt-commit 0158e506-repository-ingestion \
+            --algorithm-revision-id "$ALGORITHM_REVISION_ID" \
+            --output-json base-release-checkpoint.json \
+            --output-md base-release-checkpoint.md
+      - name: Restore merged event review gate evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl -fsSL --retry 3 \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/9574598887/zip" \
+            -o /tmp/event-review-gates.zip
+          unzip -q /tmp/event-review-gates.zip -d evidence
+          test -f evidence/event-teacher-review-release-gates.json
+      - name: Prove full portfolio blocks current 30041 release
+        run: |
+          PYTHONPATH="$PWD" python - <<'PY'
+          import json
+          from bridge_school_api.tournament_portfolio_release_gate_v3 import build_portfolio_aware_release_gate
+          base=json.load(open('base-release-checkpoint.json', encoding='utf-8'))
+          gates=json.load(open('evidence/event-teacher-review-release-gates.json', encoding='utf-8'))
+          g=gates['30041']
+          out=build_portfolio_aware_release_gate(
+              preanalysis_gate=base['preanalysis'],
+              coverage_manifest=base['coverage'],
+              mp_availability=base['mp_recalculation'],
+              event_teacher_review_gate=g,
+              rendered_slide_keys=None,
+              visual_qa_pass=None,
+          )
+          assert g['review_item_count']==11 and g['unresolved_review_count']==11
+          assert out['teacher_review_item_count']==11
+          assert out['teacher_review_unresolved_count']==11
+          assert out['teacher_review_release_ready'] is False
+          assert out['final_report_release_ready'] is False
+          assert 'TEACHER_REVIEW_PORTFOLIO_UNRESOLVED' in out['hard_stop_conditions']
+          assert 'EPISODE_INVENTORY_NOT_COMPLETE' in out['hard_stop_conditions']
+          assert 'RENDERED_SLIDE_COVERAGE_NOT_PROVIDED' in out['hard_stop_conditions']
+          assert 'VISUAL_QA_NOT_PASSED' in out['hard_stop_conditions']
+          assert out['automatic_episode_scoring_allowed'] is False
+          assert out['automatic_student_error_attribution_allowed'] is False
+          assert out['automatic_methodology_invention_allowed'] is False
+          json.dump(out,open('tournament-30041-portfolio-aware-release.json','w',encoding='utf-8'),ensure_ascii=False,indent=2)
+          print('TOURNAMENT_30041_PORTFOLIO_AWARE_RELEASE_REAL_PASS')
+          print('review_items',out['teacher_review_item_count'],'unresolved',out['teacher_review_unresolved_count'])
+          print('release_ready',out['final_report_release_ready'])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tournament-30041-portfolio-aware-release
+          path: tournament-30041-portfolio-aware-release.json
+          if-no-files-found: error
+          retention-days: 30
