@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Mapping, Sequence
 
 from .tournament_duplicate_scoring_v3 import validate_tournament_fact_scores
@@ -8,6 +10,11 @@ from .tournament_structural_validation_v3 import validate_tournament_structure
 
 class TournamentEpisodeSourceCensusError(ValueError):
     pass
+
+
+def source_facts_sha256(source: Mapping[str, Any]) -> str:
+    raw = json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _rows(source: Mapping[str, Any]) -> tuple[list[str], list[dict[str, str]]]:
@@ -139,6 +146,7 @@ def build_episode_source_census(source: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "schema": "tournament-episode-source-census-v1",
         "normative_algorithm_version": "1.4",
+        "source_facts_sha256": source_facts_sha256(source),
         "provider_native_key": provider_key,
         "board_count": len(rows),
         "played_board_count": len(played),
