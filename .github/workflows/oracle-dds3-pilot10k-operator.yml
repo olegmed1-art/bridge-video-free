@@ -305,6 +305,10 @@ jobs:
             -o "UserKnownHostsFile=$known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'bash -s' <<'REMOTE' | tee "$out"
           set -Eeuo pipefail
           state=/opt/bridge-school/dds3-mass-validation
+          repo=/opt/bridge-school/bridge-video-free
+          echo "main30k_service=$(sudo -n systemctl is-active dds3-mass@30000.service 2>/dev/null || true)"
+          echo "main30k_installed_commit=$(git -C "$repo" rev-parse HEAD 2>/dev/null || true)"
+          echo "main30k_runtime_max=$(sudo -n systemctl show dds3-mass@30000.service -p RuntimeMaxUSec --value 2>/dev/null || true)"
           echo "service=$(sudo -n systemctl is-active dds3-mass@10000.service 2>/dev/null || true)"
           metrics="$(sudo -n systemctl show dds3-mass@10000.service --no-pager \
             -p ExecMainStartTimestampMonotonic -p ExecMainExitTimestampMonotonic \
@@ -396,8 +400,9 @@ jobs:
           START_OUTCOME: ${{ steps.start.outcome }}
           STATUS_TEXT: ${{ steps.status.outputs.status }}
           DEPLOY_TEXT: ${{ steps.deploy.outputs.deploy }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
         shell: bash
         run: |
           set -euo pipefail
-          body="Oracle DDS3 Pilot-10k operator: command=${COMMAND}, start=${START_OUTCOME:-not_requested}\n\n\`\`\`text\n${STATUS_TEXT:-no_status}\n\`\`\`"
+          body="Oracle DDS3 operator: command=${COMMAND}, deploy=${DEPLOY_OUTCOME:-not_requested}, start=${START_OUTCOME:-not_requested}\n\n\`\`\`text\n${DEPLOY_TEXT:-}${STATUS_TEXT:-no_status}\n\`\`\`"
           gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -f body="$body" >/dev/null
