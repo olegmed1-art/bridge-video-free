@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from .contract import MAX_JOB_BYTES
+from .finops_observation import build_video_finops_observation, directory_bytes
 from .runner import run_job
 from .runtime_preflight import validate_video_runtime
 
@@ -185,6 +186,8 @@ def process_one(spool_root: Path) -> bool:
     except FileNotFoundError:
         return False
 
+    started = time.monotonic()
+    payload: dict | None = None
     try:
         valid, reason = _regular_payload(claimed)
         if not valid:
@@ -192,15 +195,40 @@ def process_one(spool_root: Path) -> bool:
         payload = json.loads(claimed.read_text(encoding="utf-8"))
         validate_video_runtime()
         result = run_job(payload, paths["results"])
+        result_dir = paths["results"] / str(result.get("job_id") or "")
+        media = result.get("media") or {}
+        processing_model = result.get("processing_whisper_model") or (result.get("runtime") or {}).get("whisper_model")
+        source_info = result.get("source") or {}
+        result["finops_observation"] = build_video_finops_observation(
+            status=str(result.get("status") or "COMPLETED"),
+            elapsed_seconds=time.monotonic() - started,
+            input_bytes=media.get("size_bytes"),
+            output_bytes=directory_bytes(result_dir),
+            video_seconds=media.get("duration_seconds"),
+            whisper_model=processing_model,
+            source_kind=source_info.get("kind"),
+        )
+        manifest_path = result_dir / "manifest.json"
+        if manifest_path.exists():
+            manifest_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         receipt = paths["done"] / source.name
         receipt.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         claimed.unlink(missing_ok=True)
     except Exception as exc:
+        source_kind = None
+        if isinstance(payload, dict):
+            source_kind = str((payload.get("source") or {}).get("kind") or "") or None
         failure = {
             "status": "FAILED",
             "job_file": source.name,
             "error_type": type(exc).__name__,
             "error": str(exc)[:4000],
+            "finops_observation": build_video_finops_observation(
+                status="FAILED",
+                elapsed_seconds=time.monotonic() - started,
+                source_kind=source_kind,
+                error_class=type(exc).__name__,
+            ),
         }
         (paths["failed"] / source.name).write_text(
             json.dumps(failure, ensure_ascii=False, indent=2),
