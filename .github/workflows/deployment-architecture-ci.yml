@@ -7,6 +7,8 @@ on:
       - 'bridge_school_api/**'
       - 'bridge_contracts/**'
       - 'assistant_lab/bootstrap_contract.py'
+      - 'assistant_lab/contract.py'
+      - 'assistant_lab/dispatch.py'
       - '.vercelignore'
       - 'vercel.json'
       - 'scripts/vercel_ignore_build.sh'
@@ -19,6 +21,8 @@ on:
       - 'bridge_school_api/**'
       - 'bridge_contracts/**'
       - 'assistant_lab/bootstrap_contract.py'
+      - 'assistant_lab/contract.py'
+      - 'assistant_lab/dispatch.py'
       - '.vercelignore'
       - 'vercel.json'
       - 'scripts/vercel_ignore_build.sh'
@@ -45,12 +49,20 @@ jobs:
           bash -n scripts/vercel_ignore_build.sh
           python -m json.tool vercel.json >/dev/null
           grep -F 'ignoreCommand' vercel.json >/dev/null
-          grep -F '!bridge_school_api' .vercelignore >/dev/null
-          grep -F '!bridge_contracts' .vercelignore >/dev/null
+          grep -Fx '!bridge_school_api' .vercelignore >/dev/null
+          grep -Fx '!bridge_contracts' .vercelignore >/dev/null
           if grep -Fx '!assistant_lab' .vercelignore >/dev/null; then
             echo 'assistant_lab compute package must not be bundled by Vercel' >&2
             exit 1
           fi
+          grep -Fx '!assistant_lab/' .vercelignore >/dev/null
+          grep -Fx 'assistant_lab/**' .vercelignore >/dev/null
+          grep -Fx '!assistant_lab/__init__.py' .vercelignore >/dev/null
+          grep -Fx '!assistant_lab/contract.py' .vercelignore >/dev/null
+          grep -Fx '!assistant_lab/dispatch.py' .vercelignore >/dev/null
+          grep -F 'from bridge_contracts.assistant_lab import' assistant_lab/contract.py >/dev/null
+          grep -F 'from bridge_contracts.assistant_lab import' assistant_lab/dispatch.py >/dev/null
+          python -m py_compile bridge_contracts/assistant_lab.py assistant_lab/contract.py assistant_lab/dispatch.py bridge_school_api/main.py
 
       - name: Validate shared bootstrap contract
         shell: bash
