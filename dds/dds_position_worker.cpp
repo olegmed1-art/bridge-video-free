@@ -125,8 +125,11 @@ void print_moves(const FutureTricks& fut, std::size_t request_seq, int tricks_re
     if (seen.insert(representative).second)
       rows.push_back({representative, fut.score[i], false, representative});
     const int equals = fut.equals[i];
+    // DDS public holding masks use the absolute rank as the bit index. The
+    // solver stores MoveType::sequence in the internal rank-2 layout and
+    // restores the public layout as `sequence << 2` in FutureTricks.equals.
     for (int rank = 2; rank <= 14; ++rank) {
-      if ((equals & (1 << (rank - 1))) == 0) continue;
+      if ((equals & (1 << rank)) == 0) continue;
       const auto equal_card = card_text(fut.suit[i], rank);
       if (seen.insert(equal_card).second)
         rows.push_back({equal_card, fut.score[i], true, representative});
