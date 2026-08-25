@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/oracle-diana11-oauth-repair.yml'
       - 'ops/universal_video_diana11_oauth_repair.sh'
+      - 'ops/oracle_universal_video_drive_secret_install.sh'
       - 'ops/oracle_known_hosts_from_scan.sh'
   push:
     branches: [main]
@@ -34,6 +35,7 @@ jobs:
         run: |
           set -euo pipefail
           bash -n ops/universal_video_diana11_oauth_repair.sh
+          bash -n ops/oracle_universal_video_drive_secret_install.sh
           grep -Fq 'cannot read GOOGLE_DRIVE_OAUTH_JSON_FILE' ops/universal_video_diana11_oauth_repair.sh
           grep -Fq 'DIANA11_OAUTH_REPAIR_AND_RETRY_PASS' ops/universal_video_diana11_oauth_repair.sh
       - name: Validate exact request
@@ -44,9 +46,11 @@ jobs:
           mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^ops/oracle-diana11-oauth-repair-requests/[^/]+\.json$' | sort -u)
           [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one OAuth repair request' >&2; exit 1; }
           REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json,os
+          import json,os,re
           x=json.load(open(os.environ['REQUEST_FILE'],encoding='utf-8'))
-          assert x=={'request_id':'diana11-oauth-repair-20260825-01','issue':441}
+          assert set(x)=={'request_id','issue'}
+          assert re.fullmatch(r'diana11-oauth-repair-20260825-0[12]', str(x['request_id']))
+          assert x['issue']==441
           print('issue=441')
           PY
 
@@ -59,6 +63,7 @@ jobs:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
       SSH_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
       GH_TOKEN: ${{ github.token }}
       ISSUE_NUMBER: ${{ needs.validate.outputs.issue }}
     steps:
@@ -71,6 +76,7 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$SSH_KEY"
+          test -n "$GOOGLE_DRIVE_OAUTH_JSON"
           key="$RUNNER_TEMP/id_oracle"; printf '%s\n' "$SSH_KEY" > "$key"; chmod 0600 "$key"; ssh-keygen -y -f "$key" >/dev/null
           known="$RUNNER_TEMP/known_hosts"; : > "$known"
           index=0
@@ -84,12 +90,18 @@ jobs:
           done
           sort -u -o "$known" "$known"
           echo "key=$key" >> "$GITHUB_OUTPUT"; echo "known=$known" >> "$GITHUB_OUTPUT"
-      - name: Repair OAuth boundary and retry exact job
+      - name: Provision protected OAuth file, repair boundary and retry exact job
         shell: bash
         run: |
           set -euo pipefail
           ssh_cmd=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          cat ops/oracle_universal_video_drive_secret_install.sh | "${ssh_cmd[@]}" 'cat > /tmp/oracle_universal_video_drive_secret_install.sh && chmod 0600 /tmp/oracle_universal_video_drive_secret_install.sh'
           cat ops/universal_video_diana11_oauth_repair.sh | "${ssh_cmd[@]}" 'cat > /tmp/universal_video_diana11_oauth_repair.sh && chmod 0600 /tmp/universal_video_diana11_oauth_repair.sh'
+          # Send the existing GitHub Actions OAuth bundle only through stdin to the
+          # protected installer. The secret is masked and never echoed or persisted
+          # on the runner beyond the Actions environment.
+          printf '%s' "$GOOGLE_DRIVE_OAUTH_JSON" | "${ssh_cmd[@]}" 'sudo -n bash /tmp/oracle_universal_video_drive_secret_install.sh -' >/tmp/oauth-install.out
+          grep -Fx 'UNIVERSAL_VIDEO_DRIVE_SECRET_INSTALL_PASS' /tmp/oauth-install.out
           out="$("${ssh_cmd[@]}" 'sudo -n bash /tmp/universal_video_diana11_oauth_repair.sh')"
           printf '%s\n' "$out"
           grep -Fx 'DIANA11_OAUTH_REPAIR_AND_RETRY_PASS' <<<"$out"
@@ -97,8 +109,8 @@ jobs:
       - name: Report retry queued
         if: ${{ success() }}
         run: |
-          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус «Диана 11»: **FAILED → REPAIRED → QUEUED**. Исправлена protected OAuth file boundary, сервис безопасно перезапущен для перечитывания EnvironmentFile, runtime identity и service environment проверены, тот же exact job повторно поставлен в очередь."
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус «Диана 11»: **FAILED → OAUTH_PROVISIONED → REPAIRED → QUEUED**. Восстановлен protected OAuth-файл из существующего GitHub Actions secret без вывода значений, runtime-read и service environment проверены, тот же exact job повторно поставлен в очередь."
       - name: Report repair failure
         if: ${{ failure() }}
         run: |
-          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "OAuth repair для «Диана 11» завершился fail-closed. Исходный failure сохранён; ложный QUEUED/RUNNING не публикуем. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "OAuth provision/repair для «Диана 11» завершился fail-closed. Секрет не публиковался; ложный QUEUED/RUNNING не заявляем. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
