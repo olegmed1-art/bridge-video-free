@@ -1,0 +1,201 @@
+name: ResearchJob Neon operator
+
+on:
+  pull_request:
+    paths:
+      - 'assistant_lab/research_*.py'
+      - 'assistant_lab/research_schema.sql'
+      - '.github/workflows/assistant-lab-schema-exec.yml'
+      - '.github/workflows/research-job-neon-operator.yml'
+      - 'tests/test_research_*.py'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: research-job-neon-${{ github.event.issue.number || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Verify operator contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" .github/workflows/research-job-neon-operator.yml
+          grep -F '/research-job migrate-neon-and-canary' .github/workflows/research-job-neon-operator.yml >/dev/null
+          grep -F 'environment: database-production' .github/workflows/research-job-neon-operator.yml >/dev/null
+          grep -F 'SET ROLE bridge_school_app' .github/workflows/research-job-neon-operator.yml >/dev/null
+          python -m py_compile assistant_lab/research_pipeline.py assistant_lab/research_runtime.py assistant_lab/research_api.py
+
+  migrate-and-canary:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.comment.user.login == 'olegmed1-art' &&
+      github.event.comment.body == '/research-job migrate-neon-and-canary'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: database-production
+    env:
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Install PostgreSQL and Python clients
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${DATABASE_URL:-}"
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+          python -m pip install --disable-pip-version-check --no-input --quiet 'psycopg[binary]==3.3.4'
+
+      - name: Apply idempotent ResearchJob schema and reconcile terminal children
+        id: schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_num="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'SHOW server_version_num')"
+          test "$version_num" -ge 180000
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f assistant_lab/research_schema.sql
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          UPDATE assistant_lab.research_job AS research
+             SET stage = CASE child.status WHEN 'FAILED' THEN 'FAILED' ELSE 'CANCELLED' END,
+                 error_text = coalesce(child.error_text, 'child job ended with ' || child.status),
+                 completed_at = coalesce(child.completed_at, now())
+            FROM assistant_lab.job AS child
+           WHERE child.job_id = research.child_job_id
+             AND research.stage IN ('QUEUED','ACCEPTED','RUNNING','CHECKPOINTED','VALIDATING')
+             AND child.status IN ('FAILED','CANCELLED');
+          SQL
+          psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 <<'SQL' | tee /tmp/research-schema-evidence.txt
+          SELECT 'insert=' || has_table_privilege('bridge_school_app','assistant_lab.research_job','INSERT');
+          SELECT 'delete=' || has_table_privilege('bridge_school_app','assistant_lab.research_job','DELETE');
+          SELECT 'stage_update=' || has_column_privilege('bridge_school_app','assistant_lab.research_job','stage','UPDATE');
+          SELECT 'key_update=' || has_column_privilege('bridge_school_app','assistant_lab.research_job','research_key','UPDATE');
+          SELECT 'rpc=' || has_function_privilege('bridge_school_app','assistant_lab.enqueue_research_job(text,jsonb,text,text,jsonb,text,smallint,text)','EXECUTE');
+          SELECT 'rpc_security_definer=' || p.prosecdef
+            FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+           WHERE n.nspname='assistant_lab' AND p.proname='enqueue_research_job';
+          SELECT 'rpc_fixed_search_path=' || (array_to_string(p.proconfig, ',') LIKE '%search_path=pg_catalog, assistant_lab%')
+            FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+           WHERE n.nspname='assistant_lab' AND p.proname='enqueue_research_job';
+          SQL
+          grep -Fx 'insert=false' /tmp/research-schema-evidence.txt
+          grep -Fx 'delete=false' /tmp/research-schema-evidence.txt
+          grep -Fx 'stage_update=true' /tmp/research-schema-evidence.txt
+          grep -Fx 'key_update=false' /tmp/research-schema-evidence.txt
+          grep -Fx 'rpc=true' /tmp/research-schema-evidence.txt
+          grep -Fx 'rpc_security_definer=true' /tmp/research-schema-evidence.txt
+          grep -Fx 'rpc_fixed_search_path=true' /tmp/research-schema-evidence.txt
+
+      - name: Run production BEN ResearchJob through the Oracle resident worker
+        id: canary
+        env:
+          CANARY_RUN_ID: ${{ github.run_id }}
+          CANARY_RUN_ATTEMPT: ${{ github.run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import time
+
+          import psycopg
+          from psycopg.rows import dict_row
+
+          from assistant_lab.research_pipeline import verify_artifact_manifest
+          from assistant_lab.research_runtime import enqueue, finalize
+
+          payload = {
+              "hand": "AK97543.K.T3.AK7",
+              "seat": "S",
+              "dealer": "N",
+              "vul": "",
+              "auction": [],
+              "canary_marker": f"github:{os.environ['CANARY_RUN_ID']}:{os.environ['CANARY_RUN_ATTEMPT']}",
+          }
+          with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row) as conn:
+              conn.execute("SET ROLE bridge_school_app")
+              conn.commit()
+              research = enqueue(
+                  conn,
+                  kind="BEN",
+                  payload=payload,
+                  source="GITHUB_RESEARCH_JOB_CANARY",
+                  priority=10,
+              )
+              deadline = time.monotonic() + 240
+              while True:
+                  research = finalize(conn, str(research["research_id"]))
+                  if research["stage"] in {"COMPLETED", "FAILED", "CANCELLED"}:
+                      break
+                  if time.monotonic() >= deadline:
+                      raise TimeoutError("ResearchJob canary did not reach a terminal state")
+                  time.sleep(2)
+
+          if research["stage"] != "COMPLETED":
+              raise RuntimeError(f"ResearchJob canary ended with {research['stage']}: {research.get('error_text')}")
+          artifact = verify_artifact_manifest(research["artifact_json"])
+          validation = dict(research["validation_json"] or {})
+          provenance = dict(research["provenance_json"] or {})
+          methodical = dict(research["methodical_json"] or {})
+          if not (
+              validation.get("validated") is True
+              and validation.get("kind") == "BEN"
+              and validation.get("engine") == "BEN"
+              and validation.get("evidence_class") == "POLICY_ONLY"
+          ):
+              raise RuntimeError("ResearchJob validation boundary mismatch")
+          if not (
+              provenance.get("worker_id") == "oracle-assistant-lab-1"
+              and provenance.get("execution_path") == "oracle_local_ben_policy"
+          ):
+              raise RuntimeError("ResearchJob Oracle provenance mismatch")
+          if not (
+              research["canonical_promotion"] is False
+              and research["artifact_sha256"] == artifact["sha256"]
+              and methodical.get("canonical_promotion") is False
+              and methodical.get("evidence_sha256") == artifact["sha256"]
+          ):
+              raise RuntimeError("ResearchJob artifact/methodical binding mismatch")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write(f"research_id={research['research_id']}\n")
+              output.write(f"child_job_id={research['child_job_id']}\n")
+              output.write(f"artifact_sha256={research['artifact_sha256']}\n")
+          print(
+              "RESEARCH_JOB_CANARY_PASS "
+              f"research_id={research['research_id']} child_job_id={research['child_job_id']} "
+              f"artifact_sha256={research['artifact_sha256']} evidence=POLICY_ONLY"
+          )
+          PY
+
+      - name: Publish result
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          SCHEMA_OUTCOME: ${{ steps.schema.outcome }}
+          CANARY_OUTCOME: ${{ steps.canary.outcome }}
+          RESEARCH_ID: ${{ steps.canary.outputs.research_id }}
+          CHILD_JOB_ID: ${{ steps.canary.outputs.child_job_id }}
+          ARTIFACT_SHA256: ${{ steps.canary.outputs.artifact_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="ResearchJob Neon migration: schema=${SCHEMA_OUTCOME}, canary=${CANARY_OUTCOME}, research_id=${RESEARCH_ID:-none}, child_job_id=${CHILD_JOB_ID:-none}, artifact_sha256=${ARTIFACT_SHA256:-none}, canonical_promotion=false" >/dev/null
