@@ -501,6 +501,17 @@ jobs:
               | tail -40
             echo 'main30k_failure_diagnostics_end'
           fi
+          if sudo -n test -f "$state/evidence/30000.json"; then
+            echo 'main30k_evidence_begin'
+            sudo -n cat "$state/evidence/30000.json" | python3 -c 'import json,sys; x=json.load(sys.stdin); [print(f"{k}={x[k]}") for k in ("target","phase","status","compute_plane","engine","fallback_used","splits","validation_opened","sealed_test_opened","expected_train_tasks","returncode","timed_out","wall_elapsed_seconds","estimated_retail_cost_usd","log_sha256") if k in x]'
+            echo 'main30k_evidence_end'
+          fi
+          if sudo -n test -f "$state/logs/30000.log"; then
+            echo 'main30k_log_tail_begin'
+            sudo -n tail -40 "$state/logs/30000.log" \
+              | sed -E 's#(postgres(ql)?://)[^[:space:]]+#\\1[REDACTED]#Ig; s#(Bearer )[[:graph:]]+#\\1[REDACTED]#Ig; s#((token|password|secret|api[_-]?key|dsn)=)[^[:space:]]+#\\1[REDACTED]#Ig'
+            echo 'main30k_log_tail_end'
+          fi
           echo "service=$(sudo -n systemctl is-active dds3-mass@10000.service 2>/dev/null || true)"
           metrics="$(sudo -n systemctl show dds3-mass@10000.service --no-pager \
             -p ExecMainStartTimestampMonotonic -p ExecMainExitTimestampMonotonic \
