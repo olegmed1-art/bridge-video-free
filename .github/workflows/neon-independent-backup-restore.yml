@@ -121,62 +121,17 @@ jobs:
           SOURCE_RESEARCH_JOBS: ${{ steps.source_stats.outputs.source_research_jobs }}
         run: |
           set -euo pipefail
-          ts="$(date -u +%Y%m%dT%H%M%SZ)"
+          ts_file="$(date -u +%Y%m%dT%H%M%SZ)"
+          ts_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           sha="$(sha256sum neon.dump.enc | awk '{print $1}')"
           bytes="$(stat -c %s neon.dump.enc)"
-          artifact="${BACKUP_ARTIFACT_PREFIX}-${ts}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          artifact="${BACKUP_ARTIFACT_PREFIX}-${ts_file}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           if [ "$(date -u +%d)" = "01" ]; then monthly=true; else monthly=false; fi
-          python - <<'PY'
-          import json, os
-          manifest = {
-              "schema": "bridge-school-neon-backup-manifest-v1",
-              "created_at_utc": os.environ["TS"],
-              "source_provider": "Neon",
-              "source_database": "neondb",
-              "postgres_major": 18,
-              "dump_format": "pg_dump_custom",
-              "encrypted": True,
-              "encryption": "AES-256-CBC/PBKDF2-SHA256",
-              "encrypted_sha256": os.environ["SHA"],
-              "encrypted_bytes": int(os.environ["BYTES"]),
-              "source_table_count": int(os.environ["SOURCE_TABLES"]),
-              "source_schema_count": int(os.environ["SOURCE_SCHEMAS"]),
-              "source_assistant_lab_job_count": int(os.environ["SOURCE_JOBS"]),
-              "source_research_job_count": int(os.environ["SOURCE_RESEARCH_JOBS"]),
-              "raw_dump_uploaded": False,
-              "canonical_promotion": False,
-          }
-          with open("backup-manifest.json", "w", encoding="utf-8") as fh:
-              json.dump(manifest, fh, indent=2, sort_keys=True)
-              fh.write("\n")
-          PY
-          echo "artifact_name=$artifact" >> "$GITHUB_OUTPUT"
-          echo "backup_sha256=$sha" >> "$GITHUB_OUTPUT"
-          echo "backup_bytes=$bytes" >> "$GITHUB_OUTPUT"
-          echo "monthly=$monthly" >> "$GITHUB_OUTPUT"
-        env:
-          TS: ${{ env.__unused }}
-          SHA: ${{ env.__unused }}
-          BYTES: ${{ env.__unused }}
-          SOURCE_TABLES: ${{ steps.source_stats.outputs.source_tables }}
-          SOURCE_SCHEMAS: ${{ steps.source_stats.outputs.source_schemas }}
-          SOURCE_JOBS: ${{ steps.source_stats.outputs.source_jobs }}
-          SOURCE_RESEARCH_JOBS: ${{ steps.source_stats.outputs.source_research_jobs }}
+          python - "$ts_iso" "$sha" "$bytes" <<'PY'
+          import json
+          import os
+          import sys
 
-      - name: Repair manifest environment and verify
-        shell: bash
-        env:
-          SOURCE_TABLES: ${{ steps.source_stats.outputs.source_tables }}
-          SOURCE_SCHEMAS: ${{ steps.source_stats.outputs.source_schemas }}
-          SOURCE_JOBS: ${{ steps.source_stats.outputs.source_jobs }}
-          SOURCE_RESEARCH_JOBS: ${{ steps.source_stats.outputs.source_research_jobs }}
-        run: |
-          set -euo pipefail
-          sha="$(sha256sum neon.dump.enc | awk '{print $1}')"
-          bytes="$(stat -c %s neon.dump.enc)"
-          ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          python - "$ts" "$sha" "$bytes" <<'PY'
-          import json, sys, os
           ts, sha, size = sys.argv[1:]
           manifest = {
               "schema": "bridge-school-neon-backup-manifest-v1",
@@ -201,6 +156,10 @@ jobs:
               fh.write("\n")
           PY
           test "$(python -c 'import json; print(json.load(open("backup-manifest.json"))["encrypted_sha256"])')" = "$sha"
+          echo "artifact_name=$artifact" >> "$GITHUB_OUTPUT"
+          echo "backup_sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "backup_bytes=$bytes" >> "$GITHUB_OUTPUT"
+          echo "monthly=$monthly" >> "$GITHUB_OUTPUT"
 
       - name: Upload encrypted daily backup
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -322,7 +281,6 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          ISSUE_NUMBER: ${{ github.event.issue.number || '526' }}
           BACKUP_SHA: ${{ needs.backup.outputs.backup_sha256 }}
           BACKUP_BYTES: ${{ needs.backup.outputs.backup_bytes }}
           SOURCE_TABLES: ${{ needs.backup.outputs.source_tables }}
