@@ -292,6 +292,24 @@ jobs:
               if value is not None:
                   print(f"{target}={value}")
           PY
+          instance_meta="$(curl -fsS --max-time 3 -H 'Authorization: Bearer Oracle' http://169.254.169.254/opc/v2/instance/ 2>/dev/null || true)"
+          INSTANCE_META="$instance_meta" python3 - <<'PY'
+          import json, os
+          try:
+              data = json.loads(os.environ.get("INSTANCE_META", ""))
+          except (TypeError, json.JSONDecodeError):
+              data = {}
+          shape = data.get("shape")
+          config = data.get("shapeConfig") if isinstance(data.get("shapeConfig"), dict) else {}
+          if isinstance(shape, str) and 1 <= len(shape) <= 80:
+              print(f"oci_shape={shape}")
+          for source, target in (("ocpus", "oci_ocpus"), ("memoryInGBs", "oci_memory_gb"), ("memoryInGB", "oci_memory_gb")):
+              value = config.get(source)
+              if isinstance(value, (int, float)) and value > 0:
+                  print(f"{target}={value}")
+                  if target == "oci_memory_gb":
+                      break
+          PY
           request="$state/requests/10000.json"
           evidence="$state/evidence/10000.json"
           log="$state/logs/10000.log"
