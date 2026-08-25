@@ -139,7 +139,12 @@ def ben_url(case: dict[str, Any]) -> str:
     return f"{BEN_URL}/bid?{query}"
 
 
-def run_ben_stage(count: int, *, p95_limit_ms: float) -> dict[str, Any]:
+def run_ben_stage(
+    count: int,
+    *,
+    p95_limit_ms: float,
+    min_interval_seconds: float,
+) -> dict[str, Any]:
     if not 1 <= count <= MAX_STAGE:
         raise ValueError(f"BEN stage must be between 1 and {MAX_STAGE}")
     cases = deterministic_cases()
@@ -147,7 +152,13 @@ def run_ben_stage(count: int, *, p95_limit_ms: float) -> dict[str, Any]:
     bids: dict[str, int] = {}
     failures: list[str] = []
     started = time.perf_counter()
+    next_request_at = time.monotonic()
     for index in range(count):
+        wait_seconds = next_request_at - time.monotonic()
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+        request_started = time.monotonic()
+        next_request_at = request_started + min_interval_seconds
         try:
             data, elapsed_ms = request_json(ben_url(cases[index % len(cases)]), timeout=30.0)
             selected = verify_ben_payload(data)
@@ -170,6 +181,8 @@ def run_ben_stage(count: int, *, p95_limit_ms: float) -> dict[str, Any]:
         "throughput_rps": round(len(latencies) / elapsed, 3) if elapsed else 0.0,
         "latency_ms": summary,
         "p95_limit_ms": p95_limit_ms,
+        "min_interval_seconds": min_interval_seconds,
+        "target_requests_per_minute": round(60.0 / min_interval_seconds, 3),
         "selected_bids": dict(sorted(bids.items())),
         "errors": failures,
     }
@@ -251,6 +264,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--stages", default="100,500")
     parser.add_argument("--ben-p95-limit-ms", type=float, default=float(os.getenv("BEN_P95_LIMIT_MS", "5000")))
+    parser.add_argument(
+        "--ben-min-interval-seconds",
+        type=float,
+        default=float(os.getenv("BEN_MIN_INTERVAL_SECONDS", "0.65")),
+    )
     parser.add_argument("--ben-memory-limit-bytes", type=int, default=6 * 1024**3)
     parser.add_argument("--ben-memory-delta-limit-bytes", type=int, default=512 * 1024**2)
     parser.add_argument("--dds3-impact-floor-ms", type=float, default=500.0)
@@ -259,6 +277,8 @@ def main() -> int:
     stages = [int(value) for value in args.stages.split(",") if value.strip()]
     if stages != [100, 500]:
         raise SystemExit("operational acceptance requires exact stages 100,500")
+    if not 0.60 <= args.ben_min_interval_seconds <= 5.0:
+        raise SystemExit("BEN capacity acceptance must respect the production 100 requests/minute limit")
 
     report: dict[str, Any] = {
         "benchmark": "oracle-ben-pilot-100-500-v1",
@@ -275,7 +295,11 @@ def main() -> int:
         dds3_before = run_dds3_probe(token)
         ben_stages: dict[str, Any] = {}
         for stage in stages:
-            ben_stages[str(stage)] = run_ben_stage(stage, p95_limit_ms=args.ben_p95_limit_ms)
+            ben_stages[str(stage)] = run_ben_stage(
+                stage,
+                p95_limit_ms=args.ben_p95_limit_ms,
+                min_interval_seconds=args.ben_min_interval_seconds,
+            )
             if not ben_stages[str(stage)]["passed"]:
                 break
         dds3_after = run_dds3_probe(token)
