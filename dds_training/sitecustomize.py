@@ -25,6 +25,8 @@ EXIT_UNAUTHORIZED_DDS = 86
 PILOT_SCOPE = "pilot_train"
 PILOT_COMMAND = "/dds3-pilot10k start"
 PILOT_OWNER = "olegmed1-art"
+MAIN_SCOPE = "main_train"
+MAIN_COMMAND = "/dds3-main30k start"
 
 
 def _is_mass_evaluate(argv: list[str]) -> bool:
@@ -47,8 +49,8 @@ def _event_is_authorized() -> bool:
     if event_name != "issue_comment":
         return False
     return (
-        os.environ.get("DDS_LAUNCH_SCOPE") == PILOT_SCOPE
-        and os.environ.get("DDS_AUTHORIZATION_COMMAND") == PILOT_COMMAND
+        (os.environ.get("DDS_LAUNCH_SCOPE"), os.environ.get("DDS_AUTHORIZATION_COMMAND"))
+        in {(PILOT_SCOPE, PILOT_COMMAND), (MAIN_SCOPE, MAIN_COMMAND)}
         and os.environ.get("GITHUB_ACTOR") == PILOT_OWNER
         and os.environ.get("GITHUB_TRIGGERING_ACTOR") == PILOT_OWNER
     )
