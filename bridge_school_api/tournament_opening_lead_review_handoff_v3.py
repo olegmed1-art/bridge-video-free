@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 from typing import Any, Mapping, Sequence
 
 from .tournament_analyzer_v3 import AnalysisFinding, Evidence, EvidenceKind, Observability
@@ -90,11 +89,13 @@ def _validate_report(report: Mapping[str, Any]) -> Sequence[Mapping[str, Any]]:
         seen.add(deal_id)
         if raw.get("target_pair_made_opening_lead") is not True:
             raise OpeningLeadReviewHandoffError("non-target opening lead entered review handoff")
-        regret = raw.get("regret_tricks")
-        if isinstance(regret, bool) or not isinstance(regret, (int, float)) or float(regret) <= 0:
-            raise OpeningLeadReviewHandoffError("review candidate must have positive DDS3 regret")
+        regret = raw.get("lead_regret_tricks")
+        if isinstance(regret, bool) or not isinstance(regret, int) or regret <= 0:
+            raise OpeningLeadReviewHandoffError("review candidate must have positive integer DDS3 lead regret")
         if raw.get("engine") != "DDS3" or raw.get("fallback_used") is not False:
             raise OpeningLeadReviewHandoffError("candidate DDS3 provenance boundary failed")
+        if raw.get("evidence_kind") != "DDS_FACT":
+            raise OpeningLeadReviewHandoffError("candidate evidence kind must remain DDS_FACT")
         if raw.get("causal_error_attribution") != "NOT_ESTABLISHED":
             raise OpeningLeadReviewHandoffError("candidate causal boundary was weakened")
         if raw.get("student_error_attribution") is not None or raw.get("methodology_mapping") is not None:
@@ -108,18 +109,19 @@ def findings_from_opening_lead_report(report: Mapping[str, Any]) -> tuple[Analys
     candidates = _validate_report(report)
     findings: list[AnalysisFinding] = []
     for raw in candidates:
-        regret = float(raw["regret_tricks"])
+        regret = float(raw["lead_regret_tricks"])
         provenance = {
             "operation": "position_all_moves",
             "engine": raw.get("engine"),
             "engine_version": raw.get("engine_version"),
             "fallback_used": raw.get("fallback_used"),
             "position_sha256": raw.get("position_sha256"),
-            "actual_lead": raw.get("actual_lead"),
-            "optimal_leads": list(raw.get("optimal_leads") or []),
-            "best_tricks_for_side_to_lead": raw.get("best_tricks_for_side_to_lead"),
-            "actual_lead_tricks_for_side_to_lead": raw.get("actual_lead_tricks_for_side_to_lead"),
-            "regret_tricks": regret,
+            "actual_opening_lead": raw.get("actual_opening_lead"),
+            "optimal_opening_leads": list(raw.get("optimal_opening_leads") or []),
+            "best_tricks_for_opening_side": raw.get("best_tricks_for_opening_side"),
+            "actual_lead_tricks_for_opening_side": raw.get("actual_lead_tricks_for_opening_side"),
+            "lead_regret_tricks": int(raw["lead_regret_tricks"]),
+            "regret_class": raw.get("regret_class"),
         }
         findings.append(
             AnalysisFinding(
