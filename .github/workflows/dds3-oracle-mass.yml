@@ -39,7 +39,7 @@ jobs:
           grep -Fqx 'RuntimeMaxSec=3h' deploy/oracle-dds3-mass/dds3-mass@.service
           grep -Fq 'shell=False' dds_training/oracle_mass_dispatch.py
           grep -Fq 'req.get("compute_plane") != "oracle"' dds_training/oracle_mass_dispatch.py
-          if grep -qE 'runs-on:.*self-hosted' .github/workflows/dds3-oracle-mass.yml; then
+          if grep -qE '^[[:space:]]*runs-on:.*self-hosted' .github/workflows/dds3-oracle-mass.yml; then
             echo 'GitHub self-hosted mass compute is forbidden' >&2
             exit 1
           fi
