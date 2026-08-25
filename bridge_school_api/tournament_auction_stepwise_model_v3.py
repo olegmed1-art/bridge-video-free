@@ -92,8 +92,6 @@ def build_stepwise_auction_model(
         if not isinstance(constraints, Sequence) or isinstance(constraints, (str, bytes)):
             raise AuctionModelError("constraints_checked must be a sequence")
 
-        # The audit payload intentionally contains only actor-hand facts and public history.
-        # Exact hidden partner/opponent hands are never included in the decision context.
         decision_context = {
             "actor": seat,
             "actor_hcp": actor.hcp,
@@ -150,7 +148,7 @@ def board15_verified_prefix() -> dict[str, Any]:
         hands=hands,
         canon_revision="bridge-school-canon-2026-08-25",
         steps=[
-            {"seat": "S", "call": "P", "provenance": "MODEL", "reason": "11 HCP hand; pass retained as modelling hypothesis"},
+            {"seat": "S", "call": "P", "provenance": "MODEL", "reason": "9 HCP hand; pass retained as modelling hypothesis"},
             {"seat": "W", "call": "1D", "provenance": "MODEL", "reason": "13 HCP, 4-3-4-2; 1NT 15-17 is excluded; exact minor-opening priority requires canon binding"},
             {"seat": "N", "call": "P", "provenance": "MODEL", "reason": "pass retained as modelling hypothesis"},
             {
