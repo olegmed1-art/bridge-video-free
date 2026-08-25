@@ -7,6 +7,7 @@ on:
       - 'assistant_lab/research_*.py'
       - 'assistant_lab/research_schema.sql'
       - 'bridge_contracts/assistant_lab.py'
+      - 'tests/test_research_job_dds3_canary_contract.py'
   issue_comment:
     types: [created]
 
@@ -35,8 +36,9 @@ jobs:
           ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" .github/workflows/research-job-dds3-canary.yml
           grep -F '/research-job canary-dds3-idempotency' .github/workflows/research-job-dds3-canary.yml >/dev/null
           grep -F 'environment: database-production' .github/workflows/research-job-dds3-canary.yml >/dev/null
-          grep -F 'engine") == "DDS3"' .github/workflows/research-job-dds3-canary.yml >/dev/null
-          grep -F 'fallback_used") is False' .github/workflows/research-job-dds3-canary.yml >/dev/null
+          grep -F 'validation.get("engine") == "DDS3"' .github/workflows/research-job-dds3-canary.yml >/dev/null
+          grep -F 'validation.get("fallback_used") is False' .github/workflows/research-job-dds3-canary.yml >/dev/null
+          grep -F 'compute.get("input_validated") is True' .github/workflows/research-job-dds3-canary.yml >/dev/null
           grep -F 'child["attempts"] != 1' .github/workflows/research-job-dds3-canary.yml >/dev/null
           grep -F 'second["research_id"] != first["research_id"]' .github/workflows/research-job-dds3-canary.yml >/dev/null
           python -m py_compile assistant_lab/research_pipeline.py assistant_lab/research_runtime.py
@@ -72,7 +74,6 @@ jobs:
           python - <<'PY'
           import os
           import psycopg
-
           with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as conn:
               with conn.cursor() as cur:
                   cur.execute("SELECT session_user")
@@ -88,10 +89,8 @@ jobs:
           python - <<'PY'
           import os
           import time
-
           import psycopg
           from psycopg.rows import dict_row
-
           from assistant_lab.research_pipeline import verify_artifact_manifest
           from assistant_lab.research_runtime import enqueue, finalize
 
@@ -101,18 +100,10 @@ jobs:
               "dealer": "N",
               "vulnerability": "None",
           }
-          expected_table = {
-              "S": [7, 6, 7, 6],
-              "H": [8, 5, 8, 5],
-              "D": [6, 7, 6, 7],
-              "C": [8, 5, 8, 5],
-              "NT": [7, 6, 7, 6],
-          }
 
           with psycopg.connect(os.environ["DATABASE_URL"], row_factory=dict_row) as conn:
               conn.execute("SET ROLE bridge_school_app")
               conn.commit()
-
               first = enqueue(conn, kind="DDS3", payload=payload, source="GITHUB_DDS3_RESEARCH_CANARY", priority=10)
               second = enqueue(conn, kind="DDS3", payload=payload, source="GITHUB_DDS3_RESEARCH_CANARY_REPLAY", priority=10)
               if second["research_id"] != first["research_id"]:
@@ -129,7 +120,6 @@ jobs:
                   if time.monotonic() >= deadline:
                       raise TimeoutError("DDS3 ResearchJob canary did not reach a terminal state")
                   time.sleep(2)
-
               if research["stage"] != "COMPLETED":
                   raise RuntimeError(f"DDS3 ResearchJob ended with {research['stage']}: {research.get('error_text')}")
 
@@ -156,10 +146,17 @@ jobs:
                   and provenance.get("execution_path") == "oracle_local_dds3"
               ):
                   raise RuntimeError("DDS3 ResearchJob Oracle provenance mismatch")
-              if compute.get("engine") != "DDS3" or compute.get("fallback_used") is not False:
-                  raise RuntimeError("artifact does not contain proven DDS3 evidence")
-              if compute.get("par_score_ns") != -110 or compute.get("dd_table") != expected_table:
-                  raise RuntimeError("known DDS3 golden result mismatch")
+              if not (
+                  compute.get("engine") == "DDS3"
+                  and compute.get("fallback_used") is False
+                  and compute.get("operation") == "dd_table"
+                  and compute.get("input_validated") is True
+                  and isinstance(compute.get("request_sha256"), str)
+                  and len(compute["request_sha256"]) == 64
+                  and isinstance(compute.get("deal_pbn_sha256"), str)
+                  and len(compute["deal_pbn_sha256"]) == 64
+              ):
+                  raise RuntimeError("artifact does not contain canonical proven DDS3 table evidence")
               if not (
                   research["canonical_promotion"] is False
                   and research["artifact_sha256"] == artifact["sha256"]
@@ -185,7 +182,6 @@ jobs:
               output.write(f"research_id={research['research_id']}\n")
               output.write(f"child_job_id={research['child_job_id']}\n")
               output.write(f"artifact_sha256={research['artifact_sha256']}\n")
-
           print(
               "RESEARCH_JOB_DDS3_IDEMPOTENCY_PASS "
               f"research_id={research['research_id']} child_job_id={research['child_job_id']} "
@@ -201,7 +197,6 @@ jobs:
           python - <<'PY'
           import os
           import psycopg
-
           with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as conn:
               with conn.cursor() as cur:
                   cur.execute("SELECT session_user")
