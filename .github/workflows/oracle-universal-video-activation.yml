@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/oracle-universal-video-activation.yml'
       - 'ops/oracle_universal_video_*.sh'
+      - 'ops/universal_video_receipt_reader.py'
       - 'ops/oracle-universal-video-request.schema.json'
       - 'tests/test_oracle_universal_video_activation_contract.py'
   push:
@@ -51,7 +52,9 @@ jobs:
           set -euo pipefail
           bash -n ops/oracle_universal_video_preflight.sh
           bash -n ops/oracle_universal_video_install.sh
+          bash -n ops/oracle_universal_video_spool_guard.sh
           bash -n ops/oracle_universal_video_run_command.sh
+          python -m py_compile ops/universal_video_receipt_reader.py
           python - <<'PY'
           import runpy
           scope = runpy.run_path('tests/test_oracle_universal_video_activation_contract.py')
@@ -149,6 +152,8 @@ jobs:
           for path in \
             ops/oracle_universal_video_run_command.sh \
             ops/oracle_universal_video_install.sh \
+            ops/oracle_universal_video_spool_guard.sh \
+            ops/universal_video_receipt_reader.py \
             universal_video/runner.py; do
             git show "$ref:$path" >/dev/null
           done

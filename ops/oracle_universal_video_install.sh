@@ -20,6 +20,7 @@ ACTIVATE="${UNIVERSAL_VIDEO_ACTIVATE:-1}"
 MODEL="${UNIVERSAL_VIDEO_WHISPER_MODEL:-small}"
 THREADS="${UNIVERSAL_VIDEO_ASR_THREADS:-6}"
 PREWARM="${UNIVERSAL_VIDEO_PREWARM_MODEL:-1}"
+PREVIOUSLY_ACTIVE="${UNIVERSAL_VIDEO_PREVIOUSLY_ACTIVE:-0}"
 
 log(){ printf '\n[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
@@ -27,6 +28,7 @@ die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$(id -u)" -eq 0 ]] || die "run as root on the existing Oracle host"
 [[ "$ACTIVATE" =~ ^[01]$ ]] || die "UNIVERSAL_VIDEO_ACTIVATE must be 0 or 1"
 [[ "$PREWARM" =~ ^[01]$ ]] || die "UNIVERSAL_VIDEO_PREWARM_MODEL must be 0 or 1"
+[[ "$PREVIOUSLY_ACTIVE" =~ ^[01]$ ]] || die "UNIVERSAL_VIDEO_PREVIOUSLY_ACTIVE must be 0 or 1"
 [[ "$THREADS" =~ ^[1-9][0-9]*$ ]] || die "UNIVERSAL_VIDEO_ASR_THREADS must be positive"
 [[ -d "$SOURCE_DIR/.git" ]] || die "isolated source checkout missing at $SOURCE_DIR"
 [[ -f "$SOURCE_DIR/universal_video/runner.py" ]] || die "universal video code missing"
@@ -41,6 +43,7 @@ log "Read-only protection gate for currently running compute"
 bash "$SOURCE_DIR/ops/oracle_universal_video_preflight.sh"
 BEFORE_ASSISTANT="$(systemctl is-active assistant-lab.service)"
 BEFORE_READY="$(curl -fsS --max-time 8 http://127.0.0.1:8080/readyz)"
+VIDEO_WAS_ACTIVE="$PREVIOUSLY_ACTIVE"
 
 log "Install host media prerequisites if absent"
 if ! command -v ffmpeg >/dev/null 2>&1 || ! command -v ffprobe >/dev/null 2>&1 || ! python3 -m venv --help >/dev/null 2>&1; then
@@ -51,17 +54,48 @@ fi
 command -v ffmpeg >/dev/null || die "ffmpeg installation failed"
 command -v ffprobe >/dev/null || die "ffprobe installation failed"
 
-log "Create isolated Unix identity and directories"
+log "Create isolated Unix identity and protected directory chain"
 if ! getent group "$GROUP_NAME" >/dev/null 2>&1; then
   groupadd --system "$GROUP_NAME"
 fi
 if ! id "$USER_NAME" >/dev/null 2>&1; then
   useradd --system --gid "$GROUP_NAME" --home-dir "$BASE_DIR" --shell /usr/sbin/nologin "$USER_NAME"
 fi
-for d in "$BASE_DIR" "$BASE_DIR/spool" "$BASE_DIR/spool/inbox" "$BASE_DIR/spool/running" "$BASE_DIR/spool/done" "$BASE_DIR/spool/failed" "$BASE_DIR/spool/results" "$BASE_DIR/model-cache" "$BASE_DIR/media" "$BASE_DIR/output"; do
-  install -d -m 0750 -o "$USER_NAME" -g "$GROUP_NAME" "$d"
+
+# The worker owns the spool leaves and virtualenv. Quiesce it before root
+# validates or changes that path chain; on any later failure it deliberately
+# remains stopped rather than reopening a partially migrated boundary.
+if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+  if runuser -u "$USER_NAME" -- find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null | grep -q .; then
+    die "universal-video has a running job; refusing runtime upgrade"
+  fi
+  systemctl stop "$SERVICE_NAME"
+  systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null && die "universal-video failed to stop"
+  VIDEO_WAS_ACTIVE=1
+  if runuser -u "$USER_NAME" -- find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null | grep -q .; then
+    die "universal-video accepted a job while stopping; leaving sidecar stopped"
+  fi
+fi
+
+ensure_real_dir(){
+  local path="$1" owner="$2" group="$3" mode="$4"
+  if [[ -e "$path" || -L "$path" ]]; then
+    [[ -d "$path" && ! -L "$path" ]] || die "unsafe directory path: $path"
+  fi
+  install -d -m "$mode" -o "$owner" -g "$group" "$path"
+}
+
+ensure_real_dir "$BASE_DIR" root "$GROUP_NAME" 0750
+ensure_real_dir "$BASE_DIR/spool" root "$GROUP_NAME" 0750
+for d in inbox running done failed results; do
+  ensure_real_dir "$BASE_DIR/spool/$d" "$USER_NAME" "$GROUP_NAME" 0750
 done
-install -d -m 0750 -o root -g "$GROUP_NAME" "$SECRETS_DIR"
+for d in model-cache media output; do
+  ensure_real_dir "$BASE_DIR/$d" "$USER_NAME" "$GROUP_NAME" 0750
+done
+ensure_real_dir "$SECRETS_DIR" root "$GROUP_NAME" 0750
+bash "$SOURCE_DIR/ops/oracle_universal_video_spool_guard.sh" \
+  verify "$BASE_DIR" root "$USER_NAME" "$GROUP_NAME"
 
 log "Prepare file-backed secret boundary for optional Google Drive sources"
 if [[ ! -e "$SECRETS_ENV_FILE" ]]; then
@@ -87,13 +121,18 @@ else
 fi
 
 log "Build isolated Python runtime"
-python3 -m venv "$BASE_DIR/.venv"
-"$BASE_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --upgrade pip >/dev/null
-"$BASE_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir -r "$SOURCE_DIR/requirements-universal-video.txt"
-chown -R "$USER_NAME:$GROUP_NAME" "$BASE_DIR/.venv"
+if [[ -e "$BASE_DIR/.venv" || -L "$BASE_DIR/.venv" ]]; then
+  [[ -d "$BASE_DIR/.venv" && ! -L "$BASE_DIR/.venv" ]] || die 'unsafe virtualenv path'
+else
+  /usr/bin/python3 -m venv "$BASE_DIR/.venv"
+  chown -R "$USER_NAME:$GROUP_NAME" "$BASE_DIR/.venv"
+fi
+runuser -u "$USER_NAME" -- "$BASE_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --upgrade pip >/dev/null
+runuser -u "$USER_NAME" -- "$BASE_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir -r "$SOURCE_DIR/requirements-universal-video.txt"
 
 log "Verify runtime imports"
-PYTHONPATH="$SOURCE_DIR" "$BASE_DIR/.venv/bin/python" - <<'PY'
+runuser -u "$USER_NAME" -- env PYTHONPATH="$SOURCE_DIR" PYTHONDONTWRITEBYTECODE=1 \
+  "$BASE_DIR/.venv/bin/python" - <<'PY'
 from universal_video.contract import validate_job
 from universal_video.drive_adapter import access_token
 from universal_video.profiles import PROFILES
@@ -136,19 +175,18 @@ systemctl daemon-reload
 systemd-analyze verify "$SERVICE_DST" >/dev/null
 if [[ "$ACTIVATE" == "1" ]]; then
   systemctl enable "$SERVICE_NAME" >/dev/null
-  if systemctl is-active --quiet "$SERVICE_NAME"; then
-    if find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit | grep -q .; then
-      die "universal-video has a running job; refusing to restart for upgrade"
-    fi
-    systemctl restart "$SERVICE_NAME"
-  else
-    systemctl start "$SERVICE_NAME"
-  fi
+  systemctl start "$SERVICE_NAME"
   sleep 2
   systemctl is-active --quiet "$SERVICE_NAME" || {
     journalctl -u "$SERVICE_NAME" -n 60 --no-pager >&2 || true
     die "universal video sidecar failed to become active"
   }
+  VIDEO_WAS_ACTIVE=0
+elif (( VIDEO_WAS_ACTIVE == 1 )); then
+  systemctl start "$SERVICE_NAME"
+  sleep 2
+  systemctl is-active --quiet "$SERVICE_NAME" || die "universal video sidecar failed to restore its prior active state"
+  VIDEO_WAS_ACTIVE=0
 fi
 
 log "Post-install non-regression gate"

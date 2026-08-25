@@ -147,18 +147,22 @@ jobs:
 
           initial="$(run_remote "diana11-submit-${GITHUB_RUN_ID}" "$submit_cmd")"
           state="$(printf '%s\n' "$initial" | sed -n 's/^UV_STATE=//p' | tail -n1)"
-          [[ "$state" =~ ^(QUEUED|RUNNING|COMPLETED|FAILED)$ ]] || { echo "unsafe submit state: $state" >&2; exit 1; }
-          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус **$label**: **SUBMITTED → $state**. Oracle resident sidecar принял exact bounded job. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          [[ "$state" =~ ^(QUEUED|RUNNING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]] || { echo "unsafe submit state: $state" >&2; exit 1; }
+          initial_safe="$(printf '%s\n' "$initial" | grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|CONFORMANCE_STATE|ATTESTATION_MODE|ARTIFACT_SET_SHA256|MANIFEST_SHA256|ARTIFACT_COUNT|TOTAL_BYTES|DOMAIN_ANALYSIS_STATUS|TECHNICAL_BUNDLE_READY|BRIDGE_PRODUCTION_READY|PEDAGOGICAL_STATUS|PUBLICATION_STATE|ERROR_TYPE|ERROR)=' | head -n 20 || true)"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус **$label**: **SUBMITTED → $state**.\n\n\`\`\`text\n$initial_safe\n\`\`\`\nТехническая готовность не означает предметную или педагогическую готовность. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           last="$state"
 
           for _ in $(seq 1 300); do
-            case "$last" in COMPLETED) echo ORACLE_UNIVERSAL_VIDEO_JOB_COMPLETED; exit 0;; FAILED) exit 1;; esac
+            case "$last" in
+              TECHNICAL_CONFORMANT) echo ORACLE_UNIVERSAL_VIDEO_JOB_TECHNICAL_CONFORMANCE_PASS; exit 0;;
+              REVIEW|NONCONFORMANT|CONFLICT|FAILED) exit 1;;
+            esac
             sleep 60
             out="$(run_remote "diana11-status-${GITHUB_RUN_ID}" "$status_cmd")"
             state="$(printf '%s\n' "$out" | sed -n 's/^UV_STATE=//p' | tail -n1)"
-            [[ "$state" =~ ^(QUEUED|RUNNING|COMPLETED|FAILED)$ ]] || { echo "unsafe status: $state" >&2; exit 1; }
+            [[ "$state" =~ ^(QUEUED|RUNNING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]] || { echo "unsafe status: $state" >&2; exit 1; }
             if [[ "$state" != "$last" ]]; then
-              safe="$(printf '%s\n' "$out" | grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|ERROR_TYPE|ERROR)=' | head -n 8)"
+              safe="$(printf '%s\n' "$out" | grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|CONFORMANCE_STATE|ATTESTATION_MODE|ARTIFACT_SET_SHA256|MANIFEST_SHA256|ARTIFACT_COUNT|TOTAL_BYTES|DOMAIN_ANALYSIS_STATUS|TECHNICAL_BUNDLE_READY|BRIDGE_PRODUCTION_READY|PEDAGOGICAL_STATUS|PUBLICATION_STATE|ERROR_TYPE|ERROR)=' | head -n 20)"
               gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус **$label**: **$last → $state**.\n\n\`\`\`text\n$safe\n\`\`\`\nRun: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
               last="$state"
             fi
