@@ -22,6 +22,9 @@ env:
   PILOT_TGZ_SHA256: f472b1361c879e890ffeab0e9184736a7dcd39cbc3a4c33541eb7156df9176d6
   PILOT_RAW_SHA256: 8a21cf06ab7ac424ee0f245ccf274e6d6f4f7135fa9b8c4c0e52c595c0da5996
   PILOT_PRED_SHA256: 241915a12457a709e77b76c26bb45b4fd6d074dd135fa747966074d381e10d7f
+  MAIN30K_DRIVE_LOCATOR: dds_training/artifact_locations/dds-main-30k-prepared-32052220151.json
+  MAIN30K_ZIP_SHA256: f29a20457b1ac9e302dae3165fd6048b19b5005d4bda2a7c4bbefc38f5f3cf7c
+  MAIN30K_TGZ_SHA256: 2ca5015493b263a768611a97fc004aed16bd40926cf4ae0f2bb6202349d7bd74
 
 jobs:
   operate:
@@ -29,7 +32,8 @@ jobs:
       github.event.comment.user.login == 'olegmed1-art' &&
       (github.event.comment.body == '/dds3-pilot10k start' ||
        github.event.comment.body == '/dds3-pilot10k status' ||
-       github.event.comment.body == '/dds3-main30k deploy')
+       github.event.comment.body == '/dds3-main30k deploy' ||
+       github.event.comment.body == '/dds3-main30k stage')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -84,6 +88,26 @@ jobs:
           cp "$selected" "$work/id_oracle"; chmod 0600 "$work/id_oracle"
           echo "key=$work/id_oracle" >> "$GITHUB_OUTPUT"
           echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Restore immutable prepared Main-30k artifact
+        if: ${ env.COMMAND == '/dds3-main30k stage' }}
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'requests==2.32.5' 'google-auth==2.40.3'
+          rm -rf /tmp/dds-main30k-drive /tmp/dds-main30k.zip /tmp/dds-main30k-artifact
+          PYTHONPATH=. python tools/restore_drive_split_artifact.py \
+            --locator "$MAIN30K_DRIVE_LOCATOR" --output /tmp/dds-main30k.zip \
+            --work-dir /tmp/dds-main30k-drive
+          echo "$MAIN30K_ZIP_SHA256  /tmp/dds-main30k.zip" | sha256sum -c -
+          mkdir -p /tmp/dds-main30k-artifact
+          unzip -q /tmp/dds-main30k.zip -d /tmp/dds-main30k-artifact
+          tgz="$(find /tmp/dds-main30k-artifact -name 'dds-main-30k-prepared-state.tgz' -print -quit)"
+          test -n "$tgz"
+          echo "$MAIN30K_TGZ_SHA256  $tgz" | sha256sum -c -
+          cp "$tgz" /tmp/dds-main30k-state.tgz
 
       - name: Deploy 30k operator to Oracle without starting compute
         if: ${{ env.COMMAND == '/dds3-main30k deploy' }}
