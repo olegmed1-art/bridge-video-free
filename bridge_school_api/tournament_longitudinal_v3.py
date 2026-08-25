@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Mapping, Sequence
+import hashlib
+import json
+from dataclasses import dataclass, fields, is_dataclass
+from enum import Enum
+from typing import Any, Mapping, Sequence
 
 from .tournament_analyzer_v3 import AnalysisFinding, TournamentAnalysis
 
@@ -86,3 +89,70 @@ def category_recoverable_loss(analysis: TournamentAnalysis) -> Mapping[str, floa
         tricks = abs(float(totals.get("trick_loss", 0.0)))
         out[category] = impact or score or tricks
     return out
+
+
+def _jsonable(value: Any) -> Any:
+    """Convert analysis dataclasses/enums into deterministic JSON-safe values."""
+    if isinstance(value, Enum):
+        return value.value
+    if is_dataclass(value) and not isinstance(value, type):
+        return {field.name: _jsonable(getattr(value, field.name)) for field in fields(value)}
+    if isinstance(value, Mapping):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    raise TypeError(f"unsupported longitudinal provenance value: {type(value).__name__}")
+
+
+def _sha256(value: Any) -> str:
+    raw = json.dumps(
+        _jsonable(value),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def build_longitudinal_provenance_receipt(
+    analyses: Sequence[TournamentAnalysis],
+    report: LongitudinalReport,
+) -> dict[str, Any]:
+    """Bind a longitudinal report to the exact upstream TournamentAnalysis values.
+
+    This receipt is technical provenance only. It does not promote a repeat_key to a
+    school methodology rule, attribute a student error, or claim causal/recoverable
+    training effect. The supplied report must equal a fresh deterministic rebuild
+    from the supplied analyses, so a stale or caller-modified report fails closed.
+    """
+    rebuilt = build_longitudinal_report(analyses)
+    if report != rebuilt:
+        raise ValueError("longitudinal report does not match supplied analyses")
+
+    analysis_digests = tuple(
+        {
+            "event_id": analysis.event_id,
+            "sha256": _sha256(analysis),
+        }
+        for analysis in analyses
+    )
+    identity = {
+        "schema": "tournament-longitudinal-provenance-receipt-v1",
+        "analysis_digests": analysis_digests,
+        "report_sha256": _sha256(report),
+        "event_ids": tuple(sorted({analysis.event_id for analysis in analyses})),
+        "analysis_count": len(analyses),
+        "cluster_count": len(report.clusters),
+        "persistent_cluster_count": len(report.persistent),
+        "automatic_methodology_mapping_used": False,
+        "automatic_student_error_attribution_used": False,
+        "causal_training_effect_claimed": False,
+        "recoverable_loss_guarantee_claimed": False,
+    }
+    return {
+        **identity,
+        "receipt_id": _sha256(identity),
+        "content_addressed": True,
+    }
