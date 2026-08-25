@@ -21,14 +21,20 @@
   },
   "subsystems": [
     {
-      "id": "dds3",
+      "id": "dds3_pilot10k",
       "critical": true,
-      "paths": ["dds_training", "ops/oracle_dds3_mass_dispatch_v2.py", "ops/cloud_shell_bootstrap_dds3_mass.sh", ".github/workflows/dds-main-30k-prepare.yml"],
+      "paths": ["dds_training", "ops/oracle_dds3_mass_dispatch_v2.py", "ops/cloud_shell_bootstrap_dds3_mass.sh"],
       "evidence_issues": [379],
       "markers": {
-        "PILOT10K_FULL_GATE_PASS": "PILOT10K_FULL_PASS",
-        "status=train_passed": "PILOT10K_TRAIN_PASS"
+        "PILOT10K_FULL_GATE_PASS": "PILOT10K_FULL_PASS"
       }
+    },
+    {
+      "id": "dds3_main30k",
+      "critical": true,
+      "paths": ["dds_training", ".github/workflows/dds-main-30k-prepare.yml", ".github/workflows/dds-main-30k-train-authorized.yml"],
+      "evidence_issues": [],
+      "markers": {}
     },
     {
       "id": "ben",
@@ -54,7 +60,7 @@
     {
       "id": "tournament_analyzer",
       "critical": false,
-      "paths": ["tournament", ".github/workflows"],
+      "paths": ["tournament"],
       "evidence_issues": [],
       "markers": {}
     },
