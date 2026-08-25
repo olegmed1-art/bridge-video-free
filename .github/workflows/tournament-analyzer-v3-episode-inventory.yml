@@ -1,0 +1,125 @@
+name: Tournament Analyzer v3 Episode Inventory
+
+on:
+  pull_request:
+    paths:
+      - "bridge_school_api/tournament_episode_inventory_v3.py"
+      - "tools/tournament_episode_inventory_v3.py"
+      - "tests/test_tournament_episode_inventory_v3.py"
+      - ".github/workflows/tournament-analyzer-v3-episode-inventory.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  real-episode-inventory:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Compile modules
+        run: |
+          python -m py_compile bridge_school_api/tournament_episode_inventory_v3.py
+          python -m py_compile tools/tournament_episode_inventory_v3.py
+      - name: Run focused contracts
+        run: python -m pytest -q tests/test_tournament_episode_inventory_v3.py
+      - name: Restore exact historical tournament evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/30041 evidence/29912 evidence/29912-source
+          for spec in \
+            "9463631738:/tmp/30041.zip:evidence/30041" \
+            "9471054929:/tmp/29912-dds3.zip:evidence/29912" \
+            "9470920077:/tmp/29912-source.zip:evidence/29912-source"; do
+            IFS=: read -r aid zip dest <<< "$spec"
+            curl -fsSL --retry 3 \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/artifacts/${aid}/zip" \
+              -o "$zip"
+            unzip -q "$zip" -d "$dest"
+          done
+          DDS30041="$(find evidence/30041 -type f -name 'diana-30041-round2-dds3.json' -print -quit)"
+          DDS29912="$(find evidence/29912 -type f -name 'diana-29912-cross-session-dds3.json' -print -quit)"
+          FACTS29912="$(find evidence/29912-source -type d -name facts29912 -print -quit)"
+          test -n "$DDS30041" && test -n "$DDS29912" && test -n "$FACTS29912"
+          echo "DDS30041=$DDS30041" >> "$GITHUB_ENV"
+          echo "DDS29912=$DDS29912" >> "$GITHUB_ENV"
+          echo "FACTS29912=$FACTS29912" >> "$GITHUB_ENV"
+      - name: Rebuild exact evidence-bound teacher dossier
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$PWD" python tools/tournament_teacher_review_queue_v3.py \
+            --facts-30041 data/tournaments/tournament_30041_round2_diana_facts_v1.json \
+            --dds3-30041 "$DDS30041" \
+            --dds3-29912 "$DDS29912" \
+            --facts-29912-dir "$FACTS29912" \
+            --per-event-limit 10 \
+            --out-json tournament-teacher-review-queue.json \
+            --out-md /tmp/tournament-teacher-review-queue.md
+          PYTHONPATH="$PWD" python tools/tournament_teacher_decisions_v3.py \
+            --queue tournament-teacher-review-queue.json \
+            --out tournament-teacher-decision-ledger.json
+          PYTHONPATH="$PWD" python tools/tournament_teacher_review_dossier_v3.py \
+            --queue tournament-teacher-review-queue.json \
+            --ledger tournament-teacher-decision-ledger.json \
+            --facts-30041 data/tournaments/tournament_30041_round2_diana_facts_v1.json \
+            --dds3-30041 "$DDS30041" \
+            --dds3-29912 "$DDS29912" \
+            --out-json tournament-teacher-review-dossier.json \
+            --out-md /tmp/tournament-teacher-review-dossier.md
+      - name: Build real 30041 evidence episode candidate inventory
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$PWD" python tools/tournament_episode_inventory_v3.py \
+            --facts data/tournaments/tournament_30041_round2_diana_facts_v1.json \
+            --dossier tournament-teacher-review-dossier.json \
+            --event-id 30041 \
+            --out-json tournament-30041-episode-candidate-inventory.json \
+            --out-md tournament-30041-episode-candidate-inventory.md
+          cat tournament-30041-episode-candidate-inventory.md
+      - name: Real evidence gate
+        run: |
+          python - <<'PY'
+          import json
+          p=json.load(open('tournament-30041-episode-candidate-inventory.json', encoding='utf-8'))
+          assert p['schema']=='tournament-evidence-episode-candidate-inventory-v1'
+          assert p['normative_algorithm_version']=='1.4'
+          assert p['event_id']=='30041'
+          assert p['played_board_count']==21
+          assert p['technical_candidate_count']==7
+          assert 1 <= p['technical_candidate_board_count'] <= 7
+          assert p['evidence_candidate_inventory_complete'] is True
+          assert p['v1_4_episode_inventory_complete'] is False
+          assert p['coverage_episode_inputs']==[]
+          assert p['automatic_episode_scoring_allowed'] is False
+          assert p['automatic_transferability_judgment_allowed'] is False
+          assert p['automatic_methodology_mapping_allowed'] is False
+          assert p['automatic_student_error_attribution_allowed'] is False
+          assert p['release_ready'] is False
+          assert 'EXPLICIT_EPISODE_SCORING_NOT_AVAILABLE' in p['release_blockers']
+          assert 'NON_DDS_EPISODE_COVERAGE_NOT_ESTABLISHED' in p['release_blockers']
+          assert all(x['review_status']=='PENDING_TEACHER_REVIEW' for x in p['technical_candidates'])
+          assert all(x['impact_score'] is None and x['transferability_score'] is None and x['reliability_score'] is None for x in p['technical_candidates'])
+          print('TOURNAMENT_30041_EVIDENCE_EPISODE_INVENTORY_PASS')
+          print('technical_candidates', p['technical_candidate_count'])
+          print('candidate_boards', p['technical_candidate_board_count'])
+          print('candidate_board_numbers', sorted({x['board_number'] for x in p['technical_candidates']}))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tournament-analyzer-v3-30041-episode-candidate-inventory
+          path: |
+            tournament-30041-episode-candidate-inventory.json
+            tournament-30041-episode-candidate-inventory.md
+          if-no-files-found: error
+          retention-days: 30
