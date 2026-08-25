@@ -90,9 +90,9 @@ jobs:
           echo "known=$known" >> "$GITHUB_OUTPUT"
 
       - name: Restore immutable prepared Main-30k artifact
-        if: ${ env.COMMAND == '/dds3-main30k stage' }}
+        if: ${{ env.COMMAND == '/dds3-main30k stage' }}
         env:
-          GOOGLE_DRIVE_OAUTH_JSON: ${ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
         shell: bash
         run: |
           set -euo pipefail
@@ -161,10 +161,10 @@ jobs:
           set -euo pipefail
           key='${{ steps.ssh.outputs.key }}'; known='${{ steps.ssh.outputs.known }}'
           opts=(-i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$known" -o ConnectTimeout=15)
-          scp "${opts[@]}" /tmp/dds-main30k-state.tgz "$ORACLE_USER$@ORACLE_HOST:/tmp/dds-main30k-state.tgz"
+          scp "${opts[@]}" /tmp/dds-main30k-state.tgz "$ORACLE_USER@$ORACLE_HOST:/tmp/dds-main30k-state.tgz"
           out="$RUNNER_TEMP/main30k-stage.txt"
           ref="$(git rev-parse HEAD)"
-          ssh "${opts[@]}" "$ORACLE_USER$@ORACLE_HOST" \
+          ssh "${opts[@]}" "$ORACLE_USER@$ORACLE_HOST" \
             "sudo -n env RUNTIME_COMMIT='$ref' MAIN30K_TGZ_SHA256='$MAIN30K_TGZ_SHA256' bash -s" <<'REMOTE' | tee "$out"
           set -Eeuo pipefail
           repo=/opt/bridge-school/bridge-video-free
