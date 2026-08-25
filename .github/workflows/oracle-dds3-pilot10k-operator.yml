@@ -218,7 +218,7 @@ jobs:
           out="$RUNNER_TEMP/main30k-start.txt"
           ref="$(git rev-parse HEAD)"
           ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            -o "UserKnownHostsFile=$known" -o ConnectTimeout=15 "$ORACLE_USER$@ORACLE_HOST" \
+            -o "UserKnownHostsFile=$known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
             "sudo -n env RUNTIME_COMMIT='$ref' bash -s" <<'REMOTE' | tee "$out"
           set -Eeuo pipefail
           repo=/opt/bridge-school/bridge-video-free
