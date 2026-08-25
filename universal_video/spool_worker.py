@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .contract import MAX_JOB_BYTES
 from .runner import run_job
+from .runtime_preflight import validate_video_runtime
 
 
 def _dirs(root: Path) -> dict[str, Path]:
@@ -189,6 +190,7 @@ def process_one(spool_root: Path) -> bool:
         if not valid:
             raise RuntimeError(reason or "invalid claimed spool payload")
         payload = json.loads(claimed.read_text(encoding="utf-8"))
+        validate_video_runtime()
         result = run_job(payload, paths["results"])
         receipt = paths["done"] / source.name
         receipt.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
