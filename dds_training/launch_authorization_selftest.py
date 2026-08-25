@@ -83,7 +83,7 @@ def main() -> None:
             lambda: verify(receipt_path, manifest, root / "consume-actor", actor="someone-else"),
         )
         expect_failure(
-            "workflow_dispatch",
+            "not allowed from event",
             lambda: verify(receipt_path, manifest, root / "consume-event", event_name="push"),
         )
         expect_failure(
