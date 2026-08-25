@@ -25,8 +25,9 @@ printf '%s\n' "$changed"
 
 # Only the thin web/API runtime is deployable on Vercel. Compute, Research Lab,
 # DDS3, BEN, video workers, database migrations, docs, tests, and operational
-# workflows are intentionally not deployment triggers.
-if printf '%s\n' "$changed" | grep -Eq '^(app\.py$|bridge_school_api/|bridge_contracts/|pyproject\.toml$|\.python-version$|\.vercelignore$|vercel\.json$|scripts/vercel_ignore_build\.sh$)'; then
+# workflows are intentionally not deployment triggers. The only Assistant Lab
+# files allowed to trigger Vercel are the three thin web contract wrappers.
+if printf '%s\n' "$changed" | grep -Eq '^(app\.py$|bridge_school_api/|bridge_contracts/|assistant_lab/(__init__|contract|dispatch)\.py$|pyproject\.toml$|\.python-version$|\.vercelignore$|vercel\.json$|scripts/vercel_ignore_build\.sh$)'; then
   echo "vercel-gate: web/API runtime changed; build"
   exit 1
 fi
