@@ -106,6 +106,60 @@ assert result['par_score_ns'] == -110
 assert result['par_contracts'] == ['2S-EW']
 PY
 
+cat >/usr/local/sbin/dds3-healthcheck <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ready_url=http://127.0.0.1:8080/readyz
+if curl -fsS --max-time 8 "$ready_url" >/dev/null; then
+  exit 0
+fi
+
+logger -t dds3-healthcheck 'DDS3 readiness failed; restarting bridge-school-dds3-runtime'
+docker restart bridge-school-dds3-runtime >/dev/null
+for attempt in $(seq 1 30); do
+  curl -fsS --max-time 8 "$ready_url" >/dev/null && exit 0
+  sleep 2
+done
+curl -fsS --max-time 8 "$ready_url" >/dev/null
+EOF
+chmod 0755 /usr/local/sbin/dds3-healthcheck
+
+cat >/etc/systemd/system/dds3-healthcheck.service <<'EOF'
+[Unit]
+Description=Probe and recover the localhost Bridge DDS3 runtime
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/dds3-healthcheck
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+EOF
+
+cat >/etc/systemd/system/dds3-healthcheck.timer <<'EOF'
+[Unit]
+Description=Periodic Bridge DDS3 runtime watchdog
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+RandomizedDelaySec=10s
+Persistent=true
+Unit=dds3-healthcheck.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now dds3-healthcheck.timer
+systemctl start dds3-healthcheck.service
+systemctl is-active --quiet dds3-healthcheck.timer
+
 systemctl restart assistant-lab.service
 sleep 3
 systemctl is-active --quiet assistant-lab.service
