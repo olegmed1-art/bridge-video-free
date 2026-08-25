@@ -57,9 +57,15 @@ def test_enqueue_never_root_opens_worker_writable_predictable_temp_path():
 def test_delivery_workflow_is_one_exact_experiment():
     workflow = (ROOT / ".github/workflows/oracle-diana11-delivery.yml").read_text(encoding="utf-8")
     assert "x['issue']==547" in workflow
-    assert "x['operation']=='conform-publish-bridge'" in workflow
+    assert "{'inspect-status-bridge','conform-publish-bridge'}" in workflow
     assert "x['job_id']=='diana11-bridge-20260825-01'" in workflow
     assert "sudo -n /usr/local/sbin/universal-video-diana11 publish-bridge" in workflow
+    assert "sudo -n /usr/local/sbin/universal-video-diana11 status-bridge" in workflow
+    assert "Exact status was read without submit, ASR/media processing, or publication" in workflow
+    assert "re.fullmatch(pattern,line)" in workflow
+    assert "UV_ERROR_TYPE=(?:MULTIPLE_SPOOL_STATES|UNSAFE_SPOOL_RECEIPT|UNSAFE_FAILED_RECEIPT|DONE_RECEIPT_IDENTITY_MISMATCH|UNEXPECTED_DONE_STATUS|RESULT_CONFORMANCE_FAILED)" in workflow
+    diagnostic = workflow.split("inspect-status-bridge)", 1)[1].split("conform-publish-bridge)", 1)[0]
+    assert "submit" not in diagnostic
     assert "production promotion is BLOCKED" in workflow
     assert "REMOTE_VALIDATED" in workflow
     assert "No conformance or publication claim is established" in workflow
