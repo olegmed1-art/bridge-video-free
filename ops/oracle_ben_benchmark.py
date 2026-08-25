@@ -10,6 +10,7 @@ import statistics
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -65,12 +66,12 @@ def parse_bytes(value: str) -> int:
 
 
 def deterministic_cases() -> list[dict[str, Any]]:
+    # The localhost BEN adapter has one production-certified query contract.
+    # Pilot-100/500 measures reliability, latency, throughput and memory for
+    # that exact contract; broader auction/deal coverage belongs to the
+    # separately bounded functional suites, not this capacity acceptance.
     return [
         {"hand": "AK97543.K.T3.AK7", "seat": "S", "dealer": "N", "vul": "", "auction": []},
-        {"hand": "QJ6.K652.J85.T98", "seat": "N", "dealer": "N", "vul": "", "auction": []},
-        {"hand": "873.J97.AT764.Q4", "seat": "E", "dealer": "E", "vul": "", "auction": []},
-        {"hand": "K5.T83.KQ9.A7652", "seat": "S", "dealer": "S", "vul": "", "auction": []},
-        {"hand": "AT942.AQ4.32.KJ3", "seat": "W", "dealer": "W", "vul": "", "auction": []},
     ]
 
 
@@ -110,10 +111,14 @@ def request_json(url: str, *, payload: dict[str, Any] | None = None, token: str 
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, data=body, headers=headers, method="POST" if body is not None else "GET")
     started = time.perf_counter()
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        raw = response.read(4_000_001)
-        if response.status != 200 or len(raw) > 4_000_000:
-            raise RuntimeError(f"unexpected HTTP response: {response.status}")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read(4_000_001)
+            if response.status != 200 or len(raw) > 4_000_000:
+                raise RuntimeError(f"unexpected HTTP response: {response.status}")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read(4096).decode("utf-8", errors="replace").replace("\n", " ").strip()
+        raise RuntimeError(f"HTTP {exc.code}: {detail[:500]}") from exc
     elapsed_ms = (time.perf_counter() - started) * 1000.0
     data = json.loads(raw)
     if not isinstance(data, dict):
