@@ -36,6 +36,12 @@ rollback_required=1
 rollback() {
   rc=$?
   trap - ERR
+  echo "=== failed BEN rollout diagnostics (before rollback) ===" >&2
+  systemctl cat bridge-ben.service --no-pager >&2 || true
+  systemctl status bridge-ben.service --no-pager -l >&2 || true
+  journalctl -u bridge-ben.service -n 200 --no-pager -o short-iso >&2 || true
+  docker ps -a --filter 'name=^/bridge-ben$' --no-trunc >&2 || true
+  docker inspect --format 'status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{json .State.Error}} mounts={{json .Mounts}}' bridge-ben >&2 || true
   echo "BEN rollout failed; restoring previous systemd service" >&2
   systemctl disable --now bridge-ben-healthcheck.timer >/dev/null 2>&1 || true
   if [[ "$had_previous_unit" == 1 ]]; then
