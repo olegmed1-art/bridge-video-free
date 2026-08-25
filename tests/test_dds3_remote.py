@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import ssl
 import urllib.error
 import urllib.request
@@ -13,6 +14,7 @@ from bridge_school_api.dds3.remote import (
     remote_engine_readiness,
 )
 from bridge_school_api.dds3.service import DDSUnavailable
+import bridge_school_api.main as api
 
 
 class _Response:
@@ -40,6 +42,36 @@ def expect_unavailable(fn, reason: str) -> None:
 
 
 def main() -> None:
+    with open("vercel.json", encoding="utf-8") as fh:
+        deployed_config = json.load(fh)
+    assert deployed_config["env"]["DDS3_REMOTE_URL"] == api.VERCEL_DEFAULT_DDS3_REMOTE_URL
+
+    original_remote_url = os.environ.get("DDS3_REMOTE_URL")
+    original_vercel_env = os.environ.get("VERCEL_ENV")
+    try:
+        os.environ.pop("DDS3_REMOTE_URL", None)
+        os.environ.pop("VERCEL_ENV", None)
+        assert api._remote_dds3_config() is None
+
+        os.environ["VERCEL_ENV"] = "production"
+        production = api._remote_dds3_config()
+        assert production is not None
+        assert production.base_url == api.VERCEL_DEFAULT_DDS3_REMOTE_URL
+
+        os.environ["DDS3_REMOTE_URL"] = "https://203.0.113.10/"
+        configured = api._remote_dds3_config()
+        assert configured is not None
+        assert configured.base_url == "https://203.0.113.10"
+    finally:
+        if original_remote_url is None:
+            os.environ.pop("DDS3_REMOTE_URL", None)
+        else:
+            os.environ["DDS3_REMOTE_URL"] = original_remote_url
+        if original_vercel_env is None:
+            os.environ.pop("VERCEL_ENV", None)
+        else:
+            os.environ["VERCEL_ENV"] = original_vercel_env
+
     original = urllib.request.urlopen
     try:
         seen = {}
