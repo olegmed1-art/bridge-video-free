@@ -55,14 +55,10 @@ jobs:
             echo 'assistant_lab compute package must not be bundled by Vercel' >&2
             exit 1
           fi
-          grep -Fx '!assistant_lab/' .vercelignore >/dev/null
-          grep -Fx 'assistant_lab/**' .vercelignore >/dev/null
-          grep -Fx '!assistant_lab/__init__.py' .vercelignore >/dev/null
-          grep -Fx '!assistant_lab/contract.py' .vercelignore >/dev/null
-          grep -Fx '!assistant_lab/dispatch.py' .vercelignore >/dev/null
-          grep -F 'from bridge_contracts.assistant_lab import' assistant_lab/contract.py >/dev/null
-          grep -F 'from bridge_contracts.assistant_lab import' assistant_lab/dispatch.py >/dev/null
-          python -m py_compile bridge_contracts/assistant_lab.py assistant_lab/contract.py assistant_lab/dispatch.py bridge_school_api/main.py
+          ! grep -E '^!?assistant_lab(/|$)' .vercelignore
+          grep -F 'from bridge_contracts.assistant_lab import' bridge_school_api/main.py >/dev/null
+          ! grep -F 'from assistant_lab' bridge_school_api/main.py
+          python -m py_compile bridge_contracts/assistant_lab.py bridge_school_api/main.py
 
       - name: Validate shared bootstrap contract
         shell: bash
