@@ -20,9 +20,11 @@ def test_percentile_and_memory_parsing_are_deterministic():
     assert parse_bytes("256MiB") == 256 * 1024**2
 
 
-def test_fixed_cases_are_real_13_card_hands():
+def test_capacity_benchmark_uses_only_the_certified_production_query():
     cases = deterministic_cases()
-    assert len(cases) == 5
+    assert cases == [
+        {"hand": "AK97543.K.T3.AK7", "seat": "S", "dealer": "N", "vul": "", "auction": []}
+    ]
     for case in cases:
         assert sum(len(suit) for suit in case["hand"].split(".")) == 13
         assert case["seat"] in "NESW"
