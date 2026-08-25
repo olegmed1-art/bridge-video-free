@@ -1,0 +1,73 @@
+{
+  "schema": "universal-video-experiment-preflight-v1",
+  "experiment_id": "UV-DIANA11-DURABLE-002",
+  "issue": 562,
+  "state": "PREPARED_NOT_AUTHORIZED_TO_RUN",
+  "execution_authorized": false,
+  "production_promotion": "BLOCKED",
+  "wip": 1,
+  "max_fresh_jobs": 1,
+  "automatic_retries": 0,
+  "incremental_cost_cap_eur": 3,
+  "runtime": {
+    "provider": "oracle",
+    "existing_compute_only": true,
+    "source_revision": "5ff4a192d794efd22ba4bd919f016e18e953157d",
+    "whisper_model": "small",
+    "contract": "universal-video-v1",
+    "expected_processing_fingerprint": "0f889f374b60268f274d8530f62bab328f99b7a707e4dcfd3c9e2864dc448276"
+  },
+  "job": {
+    "job_id": "diana11-durable-002-20260826-01",
+    "profile": "bridge_lesson",
+    "source": {
+      "kind": "google_drive",
+      "file_id": "1PGRLozLJKG8tl-JYGPTCcS_lT-nn-T7C",
+      "name": "Диана 11",
+      "resolved_name": "Диана 73. Игра в защите .avi",
+      "size_bytes": 740292560,
+      "mime_type": "video/avi"
+    },
+    "project": "Школа спортивного бриджа",
+    "metadata": {
+      "purpose": "fresh provenance shadow result UV-DIANA11-DURABLE-002",
+      "human_requested": true
+    },
+    "options": {
+      "chunk_seconds": 600,
+      "max_source_bytes": 2147483648,
+      "max_duration_seconds": 43200.0
+    },
+    "expected_canonical_job_hash": "e53fa37ce69d97bc9d8c995bc8f416b0e7b5ad42610cda4d75faa2385bcf60fc"
+  },
+  "destination": {
+    "folder_id": "1I8cSuA-p0MpaZIbA33slks19KyvfJDMK",
+    "resolved_name": "06 — Результаты обработки",
+    "required_visibility": "PRIVATE_MY_DRIVE_OWNER_ONLY",
+    "raw_media_allowed": false,
+    "observed_empty_at_preflight": true
+  },
+  "required_provenance": [
+    "processing_fingerprint",
+    "processing_revision",
+    "processing_whisper_model"
+  ],
+  "evidence_phase": "GENERATION_FINALIZATION",
+  "preflight_only": {
+    "submit_allowed": false,
+    "asr_allowed": false,
+    "publication_allowed": false,
+    "drive_write_allowed": false,
+    "oracle_mutation_allowed": false
+  },
+  "terminal_dimensions": {
+    "domain_analysis": "DEFERRED",
+    "methodology": "NOT_EVALUATED",
+    "production_promotion": "BLOCKED"
+  },
+  "notes": [
+    "This file freezes identity and expected hashes; it is not a job request.",
+    "A later explicit GO and a separate guarded execution artifact are required before submit.",
+    "The legacy result from issue 547 must not be reused or backfilled."
+  ]
+}
