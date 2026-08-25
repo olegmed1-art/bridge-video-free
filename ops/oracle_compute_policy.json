@@ -1,0 +1,66 @@
+{
+  "schema": "bridge-school-oracle-compute-policy-v1",
+  "window_days": 28,
+  "objective": "maximize useful compute utilization during Oracle credit window without weakening production, DDS3 holdout, or cost safety gates",
+  "principles": {
+    "production_priority": true,
+    "useful_compute_not_raw_cpu": true,
+    "idle_is_allowed_when_no_evidence_bound_work": true,
+    "no_sealed_test_background_compute": true,
+    "no_methodology_invention": true,
+    "no_unbounded_jobs": true
+  },
+  "classes": [
+    {
+      "id": "P0",
+      "name": "foreground_research_compute",
+      "examples": ["DDS3 staged TRAIN gates", "approved bounded tournament DDS jobs"],
+      "target_share_min": 0.40,
+      "target_share_max": 0.60,
+      "preempts": ["P1", "P2"]
+    },
+    {
+      "id": "P1",
+      "name": "research_and_media",
+      "examples": ["BEN benchmark/research", "video analysis backlog", "targeted DDS discrepancy sets"],
+      "target_share_min": 0.25,
+      "target_share_max": 0.45,
+      "preempts": ["P2"]
+    },
+    {
+      "id": "P2",
+      "name": "background_quality",
+      "examples": ["regression", "determinism checks", "integrity audits", "performance baselines"],
+      "target_share_min": 0.05,
+      "target_share_max": 0.15,
+      "preempts": []
+    }
+  ],
+  "resource_rules": {
+    "foreground_reserved_ocpu": 1,
+    "minimum_free_memory_gib": 2,
+    "background_nice_min": 10,
+    "background_io_class": "idle",
+    "background_network_default": "disabled",
+    "single_heavy_job_family_lock": true
+  },
+  "admission": {
+    "required_fields": ["job_id", "class", "family", "bounded_runtime_seconds", "evidence_output", "compute_value"],
+    "compute_value_allowed": ["ground_truth", "benchmark", "research", "media_processing", "quality_assurance"],
+    "reject_if": [
+      "unbounded_runtime",
+      "unknown_output_provenance",
+      "sealed_or_holdout_scope_without_explicit_gate",
+      "production_restart_required",
+      "paid_external_dependency_without_budget_gate"
+    ]
+  },
+  "four_week_sequence": [
+    "finish currently authorized DDS3 staged work",
+    "establish useful-compute accounting and idle detection",
+    "fill safe spare capacity with BEN benchmark and video backlog",
+    "prioritize targeted DDS discrepancy/counterexample queues over blind volume",
+    "run nightly low-priority regression and integrity work",
+    "review utilization and research yield daily; rebalance weekly"
+  ]
+}
