@@ -186,7 +186,10 @@ def main() -> int:
     args = p.parse_args()
     if args.target == PILOT_DEALS:
         return run_pilot(args.state_root, args.repo_root)
-    raise SystemExit("FAIL_CLOSED: 30k/40k remain blocked until full Pilot-10k gate is completed")
+    if args.target == 30_000:
+        from oracle_main_30k_dispatch import run_main
+        return run_main(args.state_root, args.repo_root)
+    raise SystemExit("FAIL_CLOSED: 40k remains blocked until the Oracle 30k TRAIN gate passes")
 
 
 if __name__ == "__main__":
