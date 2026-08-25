@@ -31,9 +31,15 @@ jobs:
           set -euo pipefail
           bash -n ops/oracle_dds3_mass_install.sh
           python -m py_compile dds_training/oracle_mass_dispatch.py
-          grep -q 'CPUQuota=600%' deploy/oracle-dds3-mass/dds3-mass@.service
-          grep -q 'PrivateNetwork=true' deploy/oracle-dds3-mass/dds3-mass@.service
-          grep -q 'ReadWritePaths=/opt/bridge-school/dds3-mass-validation' deploy/oracle-dds3-mass/dds3-mass@.service
-          grep -q 'shell=False' dds_training/oracle_mass_dispatch.py
-          grep -q 'compute_plane.*oracle' dds_training/oracle_mass_dispatch.py
-          ! grep -qE 'runs-on:.*self-hosted' .github/workflows/dds3-oracle-mass.yml
+          python -m py_compile dds_training/oracle_cost_gate.py
+          grep -Fqx 'CPUQuota=600%' deploy/oracle-dds3-mass/dds3-mass@.service
+          grep -Fqx 'PrivateNetwork=true' deploy/oracle-dds3-mass/dds3-mass@.service
+          grep -Fqx 'ReadWritePaths=/opt/bridge-school/dds3-mass-validation' deploy/oracle-dds3-mass/dds3-mass@.service
+          grep -Fqx 'TimeoutStartSec=3h' deploy/oracle-dds3-mass/dds3-mass@.service
+          grep -Fqx 'RuntimeMaxSec=3h' deploy/oracle-dds3-mass/dds3-mass@.service
+          grep -Fq 'shell=False' dds_training/oracle_mass_dispatch.py
+          grep -Fq 'req.get("compute_plane") != "oracle"' dds_training/oracle_mass_dispatch.py
+          if grep -qE 'runs-on:.*self-hosted' .github/workflows/dds3-oracle-mass.yml; then
+            echo 'GitHub self-hosted mass compute is forbidden' >&2
+            exit 1
+          fi
