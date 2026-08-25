@@ -22,6 +22,9 @@ env:
   PILOT_TGZ_SHA256: f472b1361c879e890ffeab0e9184736a7dcd39cbc3a4c33541eb7156df9176d6
   PILOT_RAW_SHA256: 8a21cf06ab7ac424ee0f245ccf274e6d6f4f7135fa9b8c4c0e52c595c0da5996
   PILOT_PRED_SHA256: 241915a12457a709e77b76c26bb45b4fd6d074dd135fa747966074d381e10d7f
+  MAIN30K_DRIVE_LOCATOR: dds_training/artifact_locations/dds-main-30k-prepared-32052220151.json
+  MAIN30K_ZIP_SHA256: f29a20457b1ac9e302dae3165fd6048b19b5005d4bda2a7c4bbefc38f5f3cf7c
+  MAIN30K_TGZ_SHA256: 2ca5015493b263a768611a97fc004aed16bd40926cf4ae0f2bb6202349d7bd74
 
 jobs:
   operate:
@@ -29,7 +32,8 @@ jobs:
       github.event.comment.user.login == 'olegmed1-art' &&
       (github.event.comment.body == '/dds3-pilot10k start' ||
        github.event.comment.body == '/dds3-pilot10k status' ||
-       github.event.comment.body == '/dds3-main30k deploy')
+       github.event.comment.body == '/dds3-main30k deploy' ||
+       github.event.comment.body == '/dds3-main30k stage')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -85,6 +89,26 @@ jobs:
           echo "key=$work/id_oracle" >> "$GITHUB_OUTPUT"
           echo "known=$known" >> "$GITHUB_OUTPUT"
 
+      - name: Restore immutable prepared Main-30k artifact
+        if: ${ env.COMMAND == '/dds3-main30k stage' }}
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check 'requests==2.32.5' 'google-auth==2.40.3'
+          rm -rf /tmp/dds-main30k-drive /tmp/dds-main30k.zip /tmp/dds-main30k-artifact
+          PYTHONPATH=. python tools/restore_drive_split_artifact.py \
+            --locator "$MAIN30K_DRIVE_LOCATOR" --output /tmp/dds-main30k.zip \
+            --work-dir /tmp/dds-main30k-drive
+          echo "$MAIN30K_ZIP_SHA256  /tmp/dds-main30k.zip" | sha256sum -c -
+          mkdir -p /tmp/dds-main30k-artifact
+          unzip -q /tmp/dds-main30k.zip -d /tmp/dds-main30k-artifact
+          tgz="$(find /tmp/dds-main30k-artifact -name 'dds-main-30k-prepared-state.tgz' -print -quit)"
+          test -n "$tgz"
+          echo "$MAIN30K_TGZ_SHA256  $tgz" | sha256sum -c -
+          cp "$tgz" /tmp/dds-main30k-state.tgz
+
       - name: Deploy 30k operator to Oracle without starting compute
         if: ${{ env.COMMAND == '/dds3-main30k deploy' }}
         id: deploy
@@ -129,6 +153,60 @@ jobs:
             sed -n '1,80p' "$out"
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
+      - name: Stage and preflight Main-30k on Oracle without compute
+        if: ${{ env.COMMAND == '/dds3-main30k stage' }}
+        id: stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          key='${{ steps.ssh.outputs.key }}'; known='${{ steps.ssh.outputs.known }}'
+          opts=(-i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$known" -o ConnectTimeout=15)
+          scp "${opts[@]}" /tmp/dds-main30k-state.tgz "$ORACLE_USER$@ORACLE_HOST:/tmp/dds-main30k-state.tgz"
+          out="$RUNNER_TEMP/main30k-stage.txt"
+          ref="$(git rev-parse HEAD)"
+          ssh "${opts[@]}" "$ORACLE_USER$@ORACLE_HOST" \
+            "sudo -n env RUNTIME_COMMIT='$ref' MAIN30K_TGZ_SHA256='$MAIN30K_TGZ_SHA256' bash -s" <<'REMOTE' | tee "$out"
+          set -Eeuo pipefail
+          repo=/opt/bridge-school/bridge-video-free
+          state=/opt/bridge-school/dds3-mass-validation
+          work="$state/work/main30k"
+          unpack="$state/staged/main30k"
+          if systemctl is-active --quiet dds3-mass@30000.service; then exit 3; fi
+          test "$(git -C "$repo" rev-parse HEAD)" = "$RUNTIME_COMMIT"
+          echo "$MAIN30K_TGZ_SHA256  /tmp/dds-main30k-state.tgz" | sha256sum -c -
+          rm -rf "$unpack" "$work"
+          install -d -m 0750 -o root -g dds3-mass "$unpack"
+          tar -xzf /tmp/dds-main30k-state.tgz -C "$unpack"
+          test -d "$unpack/pilot"
+          mv "$unpack/pilot" "$work"
+          chown -R dds3-mass:dds3-mass "$work"
+          rm -f /tmp/dds-main30k-state.tgz
+          install -d -m 0750 -o root -g dds3-mass "$state/evidence"
+          PYTHONPATH="$repo/dds_training" WORK="$work" STATE="$state" "$repo/dds_training/.venv/bin/python" - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          from oracle_main_30k_dispatch import validate_pilot_gate, validate_train_identity
+          work=Path(os.environ["WORK"]); state=Path(os.environ["STATE"])
+          summary=json.loads((work/"corpus_summary.json").read_text())
+          raw=work/"raw.pbn"; digest=hashlib.sha256(raw.read_bytes()).hexdigest()
+          assert summary.get("count")==30000 and summary.get("raw_sha256")==digest
+          count=validate_train_identity(work/"blind_tasks_crossfit_main.jsonl",work/"locked_predictions_main_train_adaptive.jsonl")
+          validate_pilot_gate(work,state)
+          evidence={"schema":"bridge-school-dds3-main30k-preflight/v1","status":"preflight_passed","compute_started":False,"target":30000,"corpus_deals":30000,"corpus_sha256":digest,"train_tasks":count,"splits":["train"],"validation_opened":False,"sealed_test_opened":False,"max_runtime_seconds":10800,"max_cost_usd":2.0}
+          out=state/"evidence"/"30000-preflight.json"; tmp=out.with_suffix(".json.tmp")
+          tmp.write_text(json.dumps(evidence,sort_keys=True,indent=2)+"\n"); os.replace(tmp,out)
+          print("MAIN30K_STAGE_PASS corpus_deals=30000 train_tasks=28000 compute_started=false validation_opened=false sealed_test_opened=false")
+          PY
+          chown root:dds3-mass "$state/evidence/30000-preflight.json"
+          chmod 0640 "$state/evidence/30000-preflight.json"
+          echo "MAIN30K_ARTIFACT_STAGE_PASS commit=$RUNTIME_COMMIT service_active=false auto_started=false"
+          REMOTE
+          {
+            echo 'stage<<EOF'
+            sed -n '1,100p' "$out"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Restore immutable Pilot-10k inputs
         if: ${{ env.COMMAND == '/dds3-pilot10k start' }}
         env:
@@ -309,6 +387,16 @@ jobs:
           echo "main30k_service=$(sudo -n systemctl is-active dds3-mass@30000.service 2>/dev/null || true)"
           echo "main30k_installed_commit=$(git -C "$repo" rev-parse HEAD 2>/dev/null || true)"
           echo "main30k_runtime_max=$(sudo -n systemctl show dds3-mass@30000.service -p RuntimeMaxUSec --value 2>/dev/null || true)"
+          if [[ -f "$state/evidence/30000-preflight.json" ]]; then
+            python3 - "$state/evidence/30000-preflight.json" <<'PY'
+          import json,sys
+          x=json.load(open(sys.argv[1]))
+          for k in ("status","compute_started","target","corpus_deals","corpus_sha256","train_tasks","validation_opened","sealed_test_opened","max_runtime_seconds","max_cost_usd"):
+              print("main30k_preflight_%s=%s" % (k,x.get(k)))
+          PY
+          else
+            echo "main30k_preflight_status=missing"
+          fi
           echo "service=$(sudo -n systemctl is-active dds3-mass@10000.service 2>/dev/null || true)"
           metrics="$(sudo -n systemctl show dds3-mass@10000.service --no-pager \
             -p ExecMainStartTimestampMonotonic -p ExecMainExitTimestampMonotonic \
@@ -401,8 +489,10 @@ jobs:
           STATUS_TEXT: ${{ steps.status.outputs.status }}
           DEPLOY_TEXT: ${{ steps.deploy.outputs.deploy }}
           DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          STAGE_TEXT: ${{ steps.stage.outputs.stage }}
+          STAGE_OUTCOME: ${{ steps.stage.outcome }}
         shell: bash
         run: |
           set -euo pipefail
-          body="Oracle DDS3 operator: command=${COMMAND}, deploy=${DEPLOY_OUTCOME:-not_requested}, start=${START_OUTCOME:-not_requested}\n\n\`\`\`text\n${DEPLOY_TEXT:-}${STATUS_TEXT:-no_status}\n\`\`\`"
+          body="Oracle DDS3 operator: command=${COMMAND}, deploy=${DEPLOY_OUTCOME:-not_requested}, stage=${STAGE_OUTCOME:-not_requested}, start=${START_OUTCOME:-not_requested}\n\n\`\`\`text\n${DEPLOY_TEXT:-}${STAGE_TEXT:-}${STATUS_TEXT:-no_status}\n\`\`\`"
           gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -f body="$body" >/dev/null
