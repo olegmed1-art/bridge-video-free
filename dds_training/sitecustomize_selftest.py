@@ -76,6 +76,22 @@ def main() -> None:
         assert passed_guard.returncode != EXIT_UNAUTHORIZED_DDS, passed_guard.stderr
         assert "DDS launch blocked before run_stage import" not in passed_guard.stderr
 
+        main_issue = dict(authorized)
+        main_issue.update({
+            "GITHUB_EVENT_NAME": "issue_comment",
+            "DDS_AUTHORIZATION_COMMAND": "/dds3-main30k start",
+            "GITHUB_ACTOR": "olegmed1-art",
+            "GITHUB_TRIGGERING_ACTOR": "olegmed1-art",
+        })
+        main_passed_guard = run(main_issue)
+        assert main_passed_guard.returncode != EXIT_UNAUTHORIZED_DDS, main_passed_guard.stderr
+
+        wrong_main_command = dict(main_issue)
+        wrong_main_command["DDS_AUTHORIZATION_COMMAND"] = "/dds3-main30k status"
+        wrong_result = run(wrong_main_command)
+        assert wrong_result.returncode == EXIT_UNAUTHORIZED_DDS
+        assert "exact authorized owner" in wrong_result.stderr
+
     print(json.dumps({
         "ok": True,
         "direct_run_stage_blocked": True,
