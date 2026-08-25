@@ -1,0 +1,102 @@
+schema_version: 1
+updated_at_utc: "2026-08-25T13:20:00Z"
+policy: docs/TECHNICAL_GOVERNANCE.md
+whole_school_recovery:
+  target_status: RECOVERY_PROVEN_V1
+  current_status: PARTIAL
+  blockers:
+    - independent_neon_backup_restore_not_proven
+    - oci_backup_and_reboot_recovery_not_proven
+    - full_end_to_end_restore_drill_not_proven
+    - explicit_rpo_rto_not_fully_verified
+
+components:
+  github:
+    role: source_ci_evidence
+    criticality: high
+    health: observed
+    backup_required: false
+    recovery_method: git_repository_and_remote_history
+    evidence_status: partial
+
+  neon:
+    role: canonical_durable_state
+    criticality: critical
+    health: observed
+    rpo_target_hours: 24
+    rto_target_hours: 4
+    backup_required: true
+    independent_backup: required
+    backup_status: unproven
+    restore_status: unproven
+    fail_condition: backup_or_restore_evidence_stale
+
+  oracle_frankfurt:
+    role: deterministic_compute
+    criticality: high
+    health: observed
+    rpo_target_hours: 24
+    rto_target_hours: 4
+    backup_required: true
+    backup_status: unproven
+    reboot_recovery_status: unproven
+    unique_durable_data_allowed: false
+
+  vercel:
+    role: public_api_control
+    criticality: high
+    health: observed
+    backup_required: false
+    recovery_method: redeploy_from_git_and_environment
+    evidence_status: partial
+
+  google_drive:
+    role: source_archive_boundary
+    criticality: high
+    health: observed
+    backup_required: true
+    independent_backup_scope: irreproducible_sources_and_final_evidence
+    backup_status: partial
+
+  dds3:
+    role: deterministic_bridge_compute
+    criticality: critical
+    health: proven_on_golden_case
+    acceptance_requirements:
+      engine: DDS3
+      fallback_used: false
+      expected_result_required: true
+      evidence_retained: true
+    recovery_status: partial
+
+  ben:
+    role: bounded_bridge_compute
+    criticality: medium
+    health: expansion_gate
+    backup_required: false
+    recovery_method: reinstall_from_code_and_models
+
+  video_worker:
+    role: media_preprocessing
+    criticality: medium
+    health: expansion_gate
+    backup_required: false
+    unique_durable_data_allowed: false
+
+cadence:
+  critical_health: continuous
+  backup_freshness: daily
+  ci_regression: every_change
+  technical_health: weekly
+  reliability_dr: monthly
+  security: monthly_and_after_material_architecture_change
+  financial: monthly
+  architecture: quarterly_and_after_major_change
+  full_system: quarterly
+
+safety_invariants:
+  - no_unique_durable_evidence_only_on_oracle
+  - no_backup_marked_proven_without_restore_test
+  - no_dds3_marked_proven_without_real_no_fallback_request
+  - actual_state_overrides_documentation
+  - owner_only_actions_are_minimized
