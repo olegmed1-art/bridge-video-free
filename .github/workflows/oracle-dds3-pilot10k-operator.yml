@@ -261,6 +261,37 @@ jobs:
           set -Eeuo pipefail
           state=/opt/bridge-school/dds3-mass-validation
           echo "service=$(sudo -n systemctl is-active dds3-mass@10000.service 2>/dev/null || true)"
+          metrics="$(sudo -n systemctl show dds3-mass@10000.service --no-pager \
+            -p ExecMainStartTimestampMonotonic -p ExecMainExitTimestampMonotonic \
+            -p CPUUsageNSec -p MemoryPeak -p IOReadBytes -p IOWriteBytes 2>/dev/null || true)"
+          METRICS="$metrics" python3 - <<'PY'
+          import os
+          rows = {}
+          for line in os.environ.get("METRICS", "").splitlines():
+              key, sep, value = line.partition("=")
+              if sep:
+                  rows[key] = value
+          def integer(name):
+              try:
+                  return int(rows.get(name, ""))
+              except ValueError:
+                  return None
+          start = integer("ExecMainStartTimestampMonotonic")
+          end = integer("ExecMainExitTimestampMonotonic")
+          if start is not None and end is not None and end >= start:
+              print(f"runtime_seconds={(end-start)/1_000_000:.3f}")
+          cpu = integer("CPUUsageNSec")
+          if cpu is not None:
+              print(f"cpu_usage_seconds={cpu/1_000_000_000:.3f}")
+          for source, target in (
+              ("MemoryPeak", "memory_peak_bytes"),
+              ("IOReadBytes", "io_read_bytes"),
+              ("IOWriteBytes", "io_write_bytes"),
+          ):
+              value = integer(source)
+              if value is not None:
+                  print(f"{target}={value}")
+          PY
           if [[ -f "$state/evidence/10000.json" ]]; then
             echo 'evidence_present=true'
             python3 - "$state/evidence/10000.json" <<'PY'
