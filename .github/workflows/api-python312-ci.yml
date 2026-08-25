@@ -5,6 +5,9 @@ on:
     paths:
       - 'app.py'
       - 'bridge_school_api/**'
+      - 'bridge_contracts/**'
+      - 'assistant_lab/contract.py'
+      - 'assistant_lab/dispatch.py'
       - 'tests/test_api_dsn_contract.py'
       - 'tests/test_api_health_contract.py'
       - 'tests/test_api_response_headers.py'
@@ -15,6 +18,7 @@ on:
       - '.github/workflows/drive-upload-diagnostic.yml'
       - 'pyproject.toml'
       - '.python-version'
+      - '.vercelignore'
       - 'vercel.json'
       - '.github/workflows/api-python312-ci.yml'
   push:
@@ -22,6 +26,9 @@ on:
     paths:
       - 'app.py'
       - 'bridge_school_api/**'
+      - 'bridge_contracts/**'
+      - 'assistant_lab/contract.py'
+      - 'assistant_lab/dispatch.py'
       - 'tests/test_api_dsn_contract.py'
       - 'tests/test_api_health_contract.py'
       - 'tests/test_api_response_headers.py'
@@ -32,6 +39,7 @@ on:
       - '.github/workflows/drive-upload-diagnostic.yml'
       - 'pyproject.toml'
       - '.python-version'
+      - '.vercelignore'
       - 'vercel.json'
       - '.github/workflows/api-python312-ci.yml'
 
@@ -53,8 +61,19 @@ jobs:
           python-version: '3.12'
       - name: Install API dependencies
         run: python -m pip install --disable-pip-version-check -r requirements-api.txt
+      - name: Verify Vercel bundle includes only Assistant Lab web wrappers
+        run: |
+          set -euo pipefail
+          grep -Fx '!bridge_school_api' .vercelignore
+          grep -Fx '!bridge_contracts' .vercelignore
+          grep -Fx '!assistant_lab/' .vercelignore
+          grep -Fx 'assistant_lab/**' .vercelignore
+          grep -Fx '!assistant_lab/__init__.py' .vercelignore
+          grep -Fx '!assistant_lab/contract.py' .vercelignore
+          grep -Fx '!assistant_lab/dispatch.py' .vercelignore
+          ! grep -Fx '!assistant_lab' .vercelignore
       - name: Compile Python entry points
-        run: python -m py_compile app.py bridge_school_api/__init__.py bridge_school_api/db.py bridge_school_api/main.py bridge_school_api/dds3/remote.py scripts/process_drive_video.py tests/test_api_health_contract.py tests/test_api_response_headers.py tests/test_dds3_remote.py tests/test_vercel_oidc_context.py
+        run: python -m py_compile app.py bridge_school_api/__init__.py bridge_school_api/db.py bridge_school_api/main.py bridge_school_api/dds3/remote.py bridge_contracts/assistant_lab.py assistant_lab/__init__.py assistant_lab/contract.py assistant_lab/dispatch.py scripts/process_drive_video.py tests/test_api_health_contract.py tests/test_api_response_headers.py tests/test_dds3_remote.py tests/test_vercel_oidc_context.py
       - name: Verify database DSN contract
         run: PYTHONPATH=. python tests/test_api_dsn_contract.py
       - name: Verify public health endpoint contract
