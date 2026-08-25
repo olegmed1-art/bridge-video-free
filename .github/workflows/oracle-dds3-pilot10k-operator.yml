@@ -157,17 +157,30 @@ jobs:
           chown dds3-mass:dds3-mass "$pred"; chmod 0640 "$pred"
           echo "$PILOT_PRED_SHA256  $pred" | sha256sum -c -
 
-          python3 - <<PY
-          import json
+          PILOT_WORK="$work" EXPECTED_RAW_SHA="$PILOT_RAW_SHA256" python3 - <<'PY'
+          import json, os
           from pathlib import Path
-          work=Path('$work')
+          work=Path(os.environ['PILOT_WORK'])
           tasks=[json.loads(x) for x in (work/'blind_tasks.jsonl').read_text().splitlines() if x.strip()]
           preds=[json.loads(x) for x in (work/'locked_predictions_train.jsonl').read_text().splitlines() if x.strip()]
           summary=json.loads((work/'corpus_summary.json').read_text())
-          assert summary['count'] == 10000
-          assert summary['raw_sha256'] == '$PILOT_RAW_SHA256'
-          assert len([x for x in tasks if x.get('split')=='train']) == 14000
-          assert len(preds) == 14000
+          train=[x for x in tasks if x.get('split') == 'train']
+          train_ids={x.get('task_id') for x in train}
+          pred_ids={x.get('task_id') for x in preds}
+          print('PILOT_PRECHECK count={} raw_sha={} train_tasks={} predictions={} train_ids={} prediction_ids={} overlap={}'.format(
+              summary.get('count'), summary.get('raw_sha256'), len(train), len(preds), len(train_ids), len(pred_ids), len(train_ids & pred_ids)
+          ), flush=True)
+          if summary.get('count') != 10000:
+              raise SystemExit(f"PILOT_PRECHECK_FAIL corpus_count={summary.get('count')}")
+          if summary.get('raw_sha256') != os.environ['EXPECTED_RAW_SHA']:
+              raise SystemExit(f"PILOT_PRECHECK_FAIL raw_sha={summary.get('raw_sha256')}")
+          if len(train) != 14000:
+              raise SystemExit(f"PILOT_PRECHECK_FAIL train_tasks={len(train)}")
+          if len(preds) != 14000:
+              raise SystemExit(f"PILOT_PRECHECK_FAIL predictions={len(preds)}")
+          if len(train_ids) != 14000 or len(pred_ids) != 14000 or train_ids != pred_ids:
+              raise SystemExit('PILOT_PRECHECK_FAIL prediction_task_id_alignment')
+          print('PILOT_PRECHECK_PASS', flush=True)
           PY
 
           install -d -m 0750 -o root -g dds3-mass "$state/requests" "$authdir"
