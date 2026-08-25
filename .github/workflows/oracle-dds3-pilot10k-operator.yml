@@ -484,15 +484,22 @@ jobs:
           echo "main30k_service=$(sudo -n systemctl is-active dds3-mass@30000.service 2>/dev/null || true)"
           echo "main30k_installed_commit=$(git -C "$repo" rev-parse HEAD 2>/dev/null || true)"
           echo "main30k_runtime_max=$(sudo -n systemctl show dds3-mass@30000.service -p RuntimeMaxUSec --value 2>/dev/null || true)"
-          if [[ -f "$state/evidence/30000-preflight.json" ]]; then
-            python3 - "$state/evidence/30000-preflight.json" <<'PY'
+          if sudo -n test -f "$state/evidence/30000-preflight.json"; then
+            sudo -n cat "$state/evidence/30000-preflight.json" | python3 - <<'PY'
           import json,sys
-          x=json.load(open(sys.argv[1]))
+          x=json.load(sys.stdin)
           for k in ("status","compute_started","target","corpus_deals","corpus_sha256","train_tasks","validation_opened","sealed_test_opened","max_runtime_seconds","max_cost_usd"):
               print("main30k_preflight_%s=%s" % (k,x.get(k)))
           PY
           else
             echo "main30k_preflight_status=missing"
+          fi
+          if [[ "$(sudo -n systemctl is-failed dds3-mass@30000.service 2>/dev/null || true)" == failed ]]; then
+            echo 'main30k_failure_diagnostics_begin'
+            sudo -n journalctl -u dds3-mass@30000.service -n 40 --no-pager 2>/dev/null \
+              | sed -E 's#(postgres(ql)?://)[^[:space:]]+#\\1[REDACTED]#Ig; s#(Bearer )[[:graph:]]+#\\1[REDACTED]#Ig; s#((token|password|secret|api[_-]?key|dsn)=)[^[:space:]]+#\\1[REDACTED]#Ig' \
+              | tail -40
+            echo 'main30k_failure_diagnostics_end'
           fi
           echo "service=$(sudo -n systemctl is-active dds3-mass@10000.service 2>/dev/null || true)"
           metrics="$(sudo -n systemctl show dds3-mass@10000.service --no-pager \
