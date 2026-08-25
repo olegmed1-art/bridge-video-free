@@ -1,0 +1,294 @@
+name: Neon independent backup and restore
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/neon-independent-backup-restore.yml'
+      - 'tests/test_neon_independent_backup_contract.py'
+      - 'ops/reliability/NEON_INDEPENDENT_BACKUP_V1.md'
+  schedule:
+    - cron: '17 2 * * *'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  BACKUP_ARTIFACT_PREFIX: neon-independent-backup-v1
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Validate workflow contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" .github/workflows/neon-independent-backup-restore.yml
+          python tests/test_neon_independent_backup_contract.py
+
+  backup:
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'issue_comment' &&
+       github.event.comment.user.login == 'olegmed1-art' &&
+       github.event.comment.body == '/recovery neon-backup-restore')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: database-production
+    env:
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      BACKUP_PASSPHRASE: ${{ secrets.NEON_BACKUP_PASSPHRASE }}
+    outputs:
+      artifact_name: ${{ steps.meta.outputs.artifact_name }}
+      backup_sha256: ${{ steps.meta.outputs.backup_sha256 }}
+      backup_bytes: ${{ steps.meta.outputs.backup_bytes }}
+      source_tables: ${{ steps.source_stats.outputs.source_tables }}
+      source_schemas: ${{ steps.source_stats.outputs.source_schemas }}
+      source_jobs: ${{ steps.source_stats.outputs.source_jobs }}
+      source_research_jobs: ${{ steps.source_stats.outputs.source_research_jobs }}
+      monthly: ${{ steps.meta.outputs.monthly }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Fail closed on missing recovery secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${DATABASE_URL:-}" || { echo 'NEON_DATABASE_URL is not configured'; exit 10; }
+          test -n "${BACKUP_PASSPHRASE:-}" || { echo 'NEON_BACKUP_PASSPHRASE is not configured'; exit 11; }
+          if [ "${#BACKUP_PASSPHRASE}" -lt 24 ]; then
+            echo 'NEON_BACKUP_PASSPHRASE must be at least 24 characters'
+            exit 12
+          fi
+
+      - name: Read sanitized source statistics
+        id: source_stats
+        shell: bash
+        run: |
+          set -euo pipefail
+          query="SELECT (SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema'))::text || '|' || (SELECT count(*) FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema'))::text || '|' || (SELECT count(*) FROM assistant_lab.job)::text || '|' || (SELECT count(*) FROM assistant_lab.research_job)::text;"
+          stats="$(docker run --rm -e DATABASE_URL postgres:18 psql "$DATABASE_URL" -XAtv ON_ERROR_STOP=1 -c "$query")"
+          IFS='|' read -r tables schemas jobs research_jobs <<<"$stats"
+          [[ "$tables" =~ ^[0-9]+$ && "$schemas" =~ ^[0-9]+$ && "$jobs" =~ ^[0-9]+$ && "$research_jobs" =~ ^[0-9]+$ ]]
+          echo "source_tables=$tables" >> "$GITHUB_OUTPUT"
+          echo "source_schemas=$schemas" >> "$GITHUB_OUTPUT"
+          echo "source_jobs=$jobs" >> "$GITHUB_OUTPUT"
+          echo "source_research_jobs=$research_jobs" >> "$GITHUB_OUTPUT"
+
+      - name: Create consistent logical backup
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          docker run --rm -e DATABASE_URL postgres:18 \
+            pg_dump "$DATABASE_URL" \
+              --format=custom \
+              --compress=9 \
+              --no-owner \
+              --no-privileges \
+              --file=/dev/stdout > neon.dump
+          test -s neon.dump
+
+      - name: Encrypt backup before durable upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 250000 -md sha256 \
+            -pass env:BACKUP_PASSPHRASE \
+            -in neon.dump -out neon.dump.enc
+          rm -f neon.dump
+          test -s neon.dump.enc
+
+      - name: Build non-sensitive backup manifest
+        id: meta
+        shell: bash
+        env:
+          SOURCE_TABLES: ${{ steps.source_stats.outputs.source_tables }}
+          SOURCE_SCHEMAS: ${{ steps.source_stats.outputs.source_schemas }}
+          SOURCE_JOBS: ${{ steps.source_stats.outputs.source_jobs }}
+          SOURCE_RESEARCH_JOBS: ${{ steps.source_stats.outputs.source_research_jobs }}
+        run: |
+          set -euo pipefail
+          ts_file="$(date -u +%Y%m%dT%H%M%SZ)"
+          ts_iso="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          sha="$(sha256sum neon.dump.enc | awk '{print $1}')"
+          bytes="$(stat -c %s neon.dump.enc)"
+          artifact="${BACKUP_ARTIFACT_PREFIX}-${ts_file}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if [ "$(date -u +%d)" = "01" ]; then monthly=true; else monthly=false; fi
+          python - "$ts_iso" "$sha" "$bytes" <<'PY'
+          import json
+          import os
+          import sys
+
+          ts, sha, size = sys.argv[1:]
+          manifest = {
+              "schema": "bridge-school-neon-backup-manifest-v1",
+              "created_at_utc": ts,
+              "source_provider": "Neon",
+              "source_database": "neondb",
+              "postgres_major": 18,
+              "dump_format": "pg_dump_custom",
+              "encrypted": True,
+              "encryption": "AES-256-CBC/PBKDF2-SHA256",
+              "encrypted_sha256": sha,
+              "encrypted_bytes": int(size),
+              "source_table_count": int(os.environ["SOURCE_TABLES"]),
+              "source_schema_count": int(os.environ["SOURCE_SCHEMAS"]),
+              "source_assistant_lab_job_count": int(os.environ["SOURCE_JOBS"]),
+              "source_research_job_count": int(os.environ["SOURCE_RESEARCH_JOBS"]),
+              "raw_dump_uploaded": False,
+              "canonical_promotion": False,
+          }
+          with open("backup-manifest.json", "w", encoding="utf-8") as fh:
+              json.dump(manifest, fh, indent=2, sort_keys=True)
+              fh.write("\n")
+          PY
+          test "$(python -c 'import json; print(json.load(open("backup-manifest.json"))["encrypted_sha256"])')" = "$sha"
+          echo "artifact_name=$artifact" >> "$GITHUB_OUTPUT"
+          echo "backup_sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "backup_bytes=$bytes" >> "$GITHUB_OUTPUT"
+          echo "monthly=$monthly" >> "$GITHUB_OUTPUT"
+
+      - name: Upload encrypted daily backup
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ${{ steps.meta.outputs.artifact_name }}
+          path: |
+            neon.dump.enc
+            backup-manifest.json
+          if-no-files-found: error
+          retention-days: 35
+          compression-level: 0
+
+      - name: Upload longer-lived monthly generation
+        if: ${{ steps.meta.outputs.monthly == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: monthly-${{ steps.meta.outputs.artifact_name }}
+          path: |
+            neon.dump.enc
+            backup-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
+
+  restore:
+    needs: backup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: database-production
+    env:
+      BACKUP_PASSPHRASE: ${{ secrets.NEON_BACKUP_PASSPHRASE }}
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: recovery-only
+          POSTGRES_DB: recovery
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d recovery"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Download encrypted backup from independent artifact store
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: ${{ needs.backup.outputs.artifact_name }}
+          path: restore-input
+
+      - name: Verify encrypted artifact checksum
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ needs.backup.outputs.backup_sha256 }}
+        run: |
+          set -euo pipefail
+          test -s restore-input/neon.dump.enc
+          actual="$(sha256sum restore-input/neon.dump.enc | awk '{print $1}')"
+          test "$actual" = "$EXPECTED_SHA"
+
+      - name: Decrypt only inside isolated restore job
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "${BACKUP_PASSPHRASE:-}"
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 250000 -md sha256 \
+            -pass env:BACKUP_PASSPHRASE \
+            -in restore-input/neon.dump.enc -out neon.restore.dump
+          test -s neon.restore.dump
+
+      - name: Restore into isolated PostgreSQL 18 target
+        shell: bash
+        env:
+          PGPASSWORD: recovery-only
+        run: |
+          set -euo pipefail
+          docker run --rm --network host \
+            -v "$PWD/neon.restore.dump:/backup.dump:ro" \
+            -e PGPASSWORD \
+            postgres:18 pg_restore \
+              --host=127.0.0.1 --port=5432 --username=postgres --dbname=recovery \
+              --no-owner --no-privileges --exit-on-error /backup.dump
+          rm -f neon.restore.dump
+
+      - name: Verify restored schema and critical read paths
+        id: verify
+        shell: bash
+        env:
+          PGPASSWORD: recovery-only
+          EXPECTED_TABLES: ${{ needs.backup.outputs.source_tables }}
+          EXPECTED_SCHEMAS: ${{ needs.backup.outputs.source_schemas }}
+          EXPECTED_JOBS: ${{ needs.backup.outputs.source_jobs }}
+          EXPECTED_RESEARCH_JOBS: ${{ needs.backup.outputs.source_research_jobs }}
+        run: |
+          set -euo pipefail
+          psql_base=(psql -h 127.0.0.1 -p 5432 -U postgres -d recovery -XAtv ON_ERROR_STOP=1)
+          tables="$("${psql_base[@]}" -c "SELECT count(*) FROM information_schema.tables WHERE table_schema NOT IN ('pg_catalog','information_schema');")"
+          schemas="$("${psql_base[@]}" -c "SELECT count(*) FROM information_schema.schemata WHERE schema_name NOT IN ('pg_catalog','information_schema');")"
+          jobs="$("${psql_base[@]}" -c "SELECT count(*) FROM assistant_lab.job;")"
+          research_jobs="$("${psql_base[@]}" -c "SELECT count(*) FROM assistant_lab.research_job;")"
+          checkpoint_exists="$("${psql_base[@]}" -c "SELECT to_regclass('public.recovery_checkpoint') IS NOT NULL;")"
+          verification_exists="$("${psql_base[@]}" -c "SELECT to_regclass('public.recovery_verification') IS NOT NULL;")"
+          test "$tables" = "$EXPECTED_TABLES"
+          test "$schemas" = "$EXPECTED_SCHEMAS"
+          test "$jobs" = "$EXPECTED_JOBS"
+          test "$research_jobs" = "$EXPECTED_RESEARCH_JOBS"
+          test "$checkpoint_exists" = "t"
+          test "$verification_exists" = "t"
+          echo "restored_tables=$tables" >> "$GITHUB_OUTPUT"
+          echo "restored_schemas=$schemas" >> "$GITHUB_OUTPUT"
+          echo "restored_jobs=$jobs" >> "$GITHUB_OUTPUT"
+          echo "restored_research_jobs=$research_jobs" >> "$GITHUB_OUTPUT"
+
+      - name: Publish non-sensitive recovery evidence
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKUP_SHA: ${{ needs.backup.outputs.backup_sha256 }}
+          BACKUP_BYTES: ${{ needs.backup.outputs.backup_bytes }}
+          SOURCE_TABLES: ${{ needs.backup.outputs.source_tables }}
+          SOURCE_SCHEMAS: ${{ needs.backup.outputs.source_schemas }}
+          RESTORE_OUTCOME: ${{ job.status }}
+          RESTORED_TABLES: ${{ steps.verify.outputs.restored_tables }}
+          RESTORED_SCHEMAS: ${{ steps.verify.outputs.restored_schemas }}
+        run: |
+          set -euo pipefail
+          body="Neon independent backup/restore v1: restore=${RESTORE_OUTCOME}, encrypted_backup_sha256=${BACKUP_SHA}, encrypted_bytes=${BACKUP_BYTES}, source_tables=${SOURCE_TABLES}, restored_tables=${RESTORED_TABLES:-none}, source_schemas=${SOURCE_SCHEMAS}, restored_schemas=${RESTORED_SCHEMAS:-none}, raw_dump_uploaded=false, target=isolated_postgres18, run_id=${GITHUB_RUN_ID}."
+          gh api "repos/${GITHUB_REPOSITORY}/issues/526/comments" -f body="$body" >/dev/null
