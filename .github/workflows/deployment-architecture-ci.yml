@@ -48,6 +48,14 @@ jobs:
           set -Eeuo pipefail
           bash -n scripts/vercel_ignore_build.sh
           python -m json.tool vercel.json >/dev/null
+          python - <<'PY'
+          import json
+          x=json.load(open('vercel.json', encoding='utf-8'))
+          deployment=(x.get('git') or {}).get('deploymentEnabled') or {}
+          assert deployment.get('main') is True, deployment
+          assert deployment.get('preview') is False, deployment
+          assert deployment.get('*') is False, deployment
+          PY
           grep -F 'ignoreCommand' vercel.json >/dev/null
           grep -Fx '!bridge_school_api' .vercelignore >/dev/null
           grep -Fx '!bridge_contracts' .vercelignore >/dev/null
