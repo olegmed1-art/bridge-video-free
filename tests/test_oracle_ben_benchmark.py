@@ -44,6 +44,7 @@ def test_github_operator_exposes_only_the_exact_bounded_benchmark():
     assert workflow.count("/oracle-v2 benchmark-ben-100-500") >= 3
     assert "ops/oracle_ben_benchmark.py" in workflow
     assert 'BEN_P95_LIMIT_MS=5000' in workflow
+    assert 'BEN_MIN_INTERVAL_SECONDS=0.65' in workflow
     assert "ben_benchmark=${BEN_BENCHMARK_OUTCOME}" in workflow
 
 
@@ -53,3 +54,4 @@ def test_benchmark_emits_fail_closed_diagnostics_for_preflight_failures():
     assert '"dds3-healthcheck.timer"' in source
     assert 'report["error"]' in source
     assert 'type(exc).__name__' in source
+    assert 'production 100 requests/minute limit' in source
