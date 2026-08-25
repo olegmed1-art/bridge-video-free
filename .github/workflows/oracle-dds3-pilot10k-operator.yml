@@ -468,17 +468,6 @@ jobs:
           else
             echo 'evidence_present=false'
           fi
-          : <<'DISABLED_OLD_EVIDENCE_READER'
-            python3 - "$state/evidence/10000.json" <<'PY'
-          import json,sys
-          x=json.load(open(sys.argv[1]))
-          for k in ('target','status','authority','authorization_event','compute_plane','compute_host','engine','fallback_used','corpus_sha256','corpus_deals','expected_train_tasks','returncode','log_sha256'):
-              if k in x: print(f'{k}={x[k]}')
-          PY
-          else
-            echo 'evidence_present=false'
-          fi
-          DISABLED_OLD_EVIDENCE_READER
           REMOTE
           {
             echo 'status<<EOF'
