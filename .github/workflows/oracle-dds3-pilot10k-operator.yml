@@ -130,6 +130,8 @@ jobs:
           work="$state/work/pilot-replay"
           pred="$work/locked_predictions_train.jsonl"
           req="$state/requests/10000.json"
+          authdir="$state/authorizations"
+          auth="$authdir/pilot10k.json"
 
           systemctl is-active --quiet assistant-lab.service
           ready="$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)"
@@ -142,7 +144,10 @@ jobs:
           git -C "$repo" fetch --quiet origin "$RUNTIME_COMMIT"
           git -C "$repo" checkout --force --quiet --detach "$RUNTIME_COMMIT"
           DDS3_MASS_BOOTSTRAP=0 DDS3_MASS_ACTIVATE=1 bash "$repo/ops/oracle_dds3_mass_install.sh"
-          "$repo/dds_training/.venv/bin/python" -m py_compile "$repo/dds_training/oracle_mass_dispatch_v2.py"
+          "$repo/dds_training/.venv/bin/python" -m py_compile \
+            "$repo/dds_training/oracle_mass_dispatch_v2.py" \
+            "$repo/dds_training/launch_authorization.py" \
+            "$repo/dds_training/authorized_run_stage.py"
 
           rm -rf "$work"
           install -d -m 0750 -o dds3-mass -g dds3-mass "$work"
@@ -165,7 +170,26 @@ jobs:
           assert len(preds) == 14000
           PY
 
-          install -d -m 0750 -o root -g dds3-mass "$state/requests"
+          install -d -m 0750 -o root -g dds3-mass "$state/requests" "$authdir"
+          install -d -m 0750 -o dds3-mass -g dds3-mass "$state/authorization-consumed"
+          nonce="$($repo/dds_training/.venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          GITHUB_REPOSITORY='olegmed1-art/bridge-video-free' \
+          GITHUB_REF_NAME='main' \
+          GITHUB_SHA="$RUNTIME_COMMIT" \
+          GITHUB_ACTOR='olegmed1-art' \
+          GITHUB_TRIGGERING_ACTOR='olegmed1-art' \
+          GITHUB_EVENT_NAME='issue_comment' \
+          DDS_AUTHORIZATION_COMMAND='/dds3-pilot10k start' \
+          "$repo/dds_training/.venv/bin/python" "$repo/dds_training/launch_authorization.py" issue \
+            --out "$auth.tmp" \
+            --scope pilot_train \
+            --manifest "$work/blind_tasks.jsonl" \
+            --nonce "$nonce" \
+            --approval-phrase 'ЭТАП-2-СТАРТ-ПОДТВЕРЖДАЮ' \
+            --expected-commit "$RUNTIME_COMMIT" \
+            --ttl-minutes 20 >/tmp/pilot10k-auth.log
+          chown root:dds3-mass "$auth.tmp"; chmod 0640 "$auth.tmp"; mv "$auth.tmp" "$auth"
+
           cat > "$req.tmp" <<JSON
           {
             "schema": "bridge-school-dds3-mass-request/v1",
@@ -180,7 +204,19 @@ jobs:
             "work_dir": "$work",
             "predictions_path": "$pred",
             "tasks_file": "$work/blind_tasks.jsonl",
-            "run_id": "oracle-pilot10k-train-20260824"
+            "run_id": "oracle-pilot10k-train-20260825",
+            "authorization": {
+              "receipt_path": "$auth",
+              "nonce": "$nonce",
+              "scope": "pilot_train",
+              "repository": "olegmed1-art/bridge-video-free",
+              "ref_name": "main",
+              "commit_sha": "$RUNTIME_COMMIT",
+              "actor": "olegmed1-art",
+              "triggering_actor": "olegmed1-art",
+              "event_name": "issue_comment",
+              "command": "/dds3-pilot10k start"
+            }
           }
           JSON
           chown root:dds3-mass "$req.tmp"; chmod 0640 "$req.tmp"; mv "$req.tmp" "$req"
@@ -199,6 +235,7 @@ jobs:
           assert x['fallback_used'] is False
           assert x['corpus_deals']==10000
           assert x['expected_train_tasks']==14000
+          assert x['authority']=='ONE_TIME_AUTHORIZED_WRAPPER'
           assert x['status'] in ('running','train_passed')
           print('ORACLE_DDS3_PILOT10K_LAUNCHED status='+x['status'])
           PY
@@ -222,15 +259,11 @@ jobs:
             python3 - "$state/evidence/10000.json" <<'PY'
           import json,sys
           x=json.load(open(sys.argv[1]))
-          for k in ('target','status','compute_plane','compute_host','engine','fallback_used','corpus_sha256','corpus_deals','expected_train_tasks','returncode','log_sha256'):
+          for k in ('target','status','authority','authorization_event','compute_plane','compute_host','engine','fallback_used','corpus_sha256','corpus_deals','expected_train_tasks','returncode','log_sha256'):
               if k in x: print(f'{k}={x[k]}')
           PY
           else
             echo 'evidence_present=false'
-          fi
-          if [[ -f "$state/logs/10000.log" ]]; then
-            echo "log_bytes=$(stat -c %s "$state/logs/10000.log")"
-            tail -n 8 "$state/logs/10000.log" | sed -E 's/(token|password|secret|key)=[^[:space:]]+/\1=[REDACTED]/Ig'
           fi
           REMOTE
           {

@@ -2,15 +2,15 @@ from __future__ import annotations
 
 """Fail-closed, one-time authorization receipts for any DDS execution.
 
-The receipt is deliberately separate from the workflow file.  It binds one
-explicit workflow_dispatch request to one repository, actor, commit, scope,
-manifest hash and high-entropy nonce.  Verification consumes the receipt
-atomically, so accidental retries cannot silently repeat an expensive or sealed
-operation.
+The receipt is deliberately separate from the workflow file. It binds one
+explicit launch request to one repository, actor, commit, scope, manifest hash
+and high-entropy nonce. Verification consumes the receipt atomically, so
+accidental retries cannot silently repeat an expensive or sealed operation.
 
-This is an accidental-execution control, not a substitute for GitHub account
-security.  A malicious repository administrator can always change repository
-code; that threat is outside this local runner's trust boundary.
+Normal DDS execution remains workflow_dispatch-only. The sole exception is the
+owner-only Pilot-10k operator command ``/dds3-pilot10k start``; that command may
+issue a ``pilot_train`` receipt from an ``issue_comment`` event. No other scope
+may use issue_comment authorization.
 """
 
 import argparse
@@ -19,8 +19,6 @@ import hmac
 import json
 import os
 import re
-import tempfile
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -29,6 +27,7 @@ SCHEMA = "dds-launch-authorization-v1"
 APPROVAL_PHRASE = "ЭТАП-2-СТАРТ-ПОДТВЕРЖДАЮ"
 DEFAULT_ACTOR = "olegmed1-art"
 ALLOWED_SCOPES = {"pilot_train", "derived", "main_train", "validation", "sealed_test"}
+PILOT_ISSUE_COMMAND = "/dds3-pilot10k start"
 NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
 
 
@@ -80,6 +79,20 @@ def _validate_scope(scope: str) -> None:
         raise AuthorizationError(f"Unsupported authorization scope: {scope!r}")
 
 
+def _validate_event(scope: str, event_name: str, authorization_command: str) -> None:
+    if event_name == "workflow_dispatch":
+        if authorization_command:
+            raise AuthorizationError("workflow_dispatch authorization must not carry an issue command")
+        return
+    if event_name == "issue_comment":
+        if scope != "pilot_train":
+            raise AuthorizationError("issue_comment authorization is restricted to pilot_train")
+        if authorization_command != PILOT_ISSUE_COMMAND:
+            raise AuthorizationError("issue_comment Pilot-10k authorization command mismatch")
+        return
+    raise AuthorizationError(f"DDS execution is not allowed from event {event_name!r}")
+
+
 def issue_receipt(
     *,
     out_path: Path,
@@ -96,9 +109,12 @@ def issue_receipt(
     ttl_minutes: int = 20,
     now: datetime | None = None,
     expected_actor: str = DEFAULT_ACTOR,
+    event_name: str = "workflow_dispatch",
+    authorization_command: str = "",
 ) -> dict[str, Any]:
     _validate_scope(scope)
     _validate_nonce(nonce)
+    _validate_event(scope, event_name, authorization_command)
     if approval_phrase != APPROVAL_PHRASE:
         raise AuthorizationError("Exact explicit approval phrase is missing")
     if actor != expected_actor or triggering_actor != expected_actor:
@@ -130,7 +146,8 @@ def issue_receipt(
         "nonce_sha256": _sha256_bytes(nonce.encode("utf-8")),
         "issued_at": _iso(issued),
         "expires_at": _iso(issued + timedelta(minutes=ttl_minutes)),
-        "event_name": "workflow_dispatch",
+        "event_name": event_name,
+        "authorization_command": authorization_command,
     }
     payload["receipt_id"] = _sha256_bytes(_canonical(payload))
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -171,9 +188,11 @@ def verify_and_consume(
     consume_dir: Path,
     now: datetime | None = None,
     expected_actor: str = DEFAULT_ACTOR,
+    authorization_command: str = "",
 ) -> dict[str, Any]:
     _validate_scope(scope)
     _validate_nonce(nonce)
+    _validate_event(scope, event_name, authorization_command)
     receipt = load_receipt(receipt_path)
     checks = {
         "repository": repository,
@@ -183,6 +202,7 @@ def verify_and_consume(
         "triggering_actor": triggering_actor,
         "scope": scope,
         "event_name": event_name,
+        "authorization_command": authorization_command,
     }
     for key, actual in checks.items():
         expected = str(receipt.get(key, ""))
@@ -190,8 +210,6 @@ def verify_and_consume(
             raise AuthorizationError(f"Receipt {key} mismatch: expected {expected!r}, got {actual!r}")
     if actor != expected_actor or triggering_actor != expected_actor:
         raise AuthorizationError("DDS launch actor is not the configured repository owner")
-    if event_name != "workflow_dispatch":
-        raise AuthorizationError("DDS execution is allowed only from workflow_dispatch")
     if not hmac.compare_digest(receipt["nonce_sha256"], _sha256_bytes(nonce.encode("utf-8"))):
         raise AuthorizationError("Authorization nonce does not match the receipt")
     manifest_hash = file_sha256(manifest_path)
@@ -218,6 +236,7 @@ def verify_and_consume(
             "consumed_at": _iso(current),
             "scope": scope,
             "commit_sha": commit_sha,
+            "event_name": event_name,
         }, sort_keys=True) + "\n")
     return receipt
 
@@ -227,6 +246,17 @@ def _env(name: str) -> str:
     if not value:
         raise AuthorizationError(f"Required environment value is missing: {name}")
     return value
+
+
+def _event_command(event_name: str) -> str:
+    if event_name != "issue_comment":
+        return ""
+    path = Path(_env("GITHUB_EVENT_PATH"))
+    try:
+        event = json.loads(path.read_text(encoding="utf-8"))
+        return str(event["comment"]["body"])
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise AuthorizationError("Cannot resolve issue_comment authorization command") from exc
 
 
 def parser() -> argparse.ArgumentParser:
@@ -254,6 +284,8 @@ def parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = parser().parse_args()
     try:
+        event_name = _env("GITHUB_EVENT_NAME")
+        command = os.environ.get("DDS_AUTHORIZATION_COMMAND", "") or _event_command(event_name)
         if args.command == "issue":
             result = issue_receipt(
                 out_path=Path(args.out),
@@ -268,6 +300,8 @@ def main() -> None:
                 nonce=args.nonce,
                 approval_phrase=args.approval_phrase,
                 ttl_minutes=args.ttl_minutes,
+                event_name=event_name,
+                authorization_command=command,
             )
         else:
             result = verify_and_consume(
@@ -280,7 +314,8 @@ def main() -> None:
                 commit_sha=_env("GITHUB_SHA"),
                 actor=_env("GITHUB_ACTOR"),
                 triggering_actor=_env("GITHUB_TRIGGERING_ACTOR"),
-                event_name=_env("GITHUB_EVENT_NAME"),
+                event_name=event_name,
+                authorization_command=command,
                 consume_dir=Path(args.consume_dir),
             )
         print(json.dumps({
@@ -289,6 +324,7 @@ def main() -> None:
             "scope": result["scope"],
             "commit_sha": result["commit_sha"],
             "expires_at": result["expires_at"],
+            "event_name": result["event_name"],
         }, ensure_ascii=False, indent=2))
     except AuthorizationError as exc:
         print(json.dumps({"ok": False, "error": str(exc)}, ensure_ascii=False), file=os.sys.stderr)

@@ -126,6 +126,7 @@ def main() -> None:
             actor=_required_env("GITHUB_ACTOR"),
             triggering_actor=_required_env("GITHUB_TRIGGERING_ACTOR"),
             event_name=_required_env("GITHUB_EVENT_NAME"),
+            authorization_command=os.environ.get("DDS_AUTHORIZATION_COMMAND", ""),
             consume_dir=consume_dir,
         )
         env = build_child_environment(
@@ -145,6 +146,7 @@ def main() -> None:
         "scope": args.scope,
         "stage": args.stage,
         "splits": list(SCOPE_SPLITS[args.scope]),
+        "event_name": receipt["event_name"],
         "consumed_marker": env["DDS_LAUNCH_CONSUMED_MARKER"],
         "command": command,
     }, ensure_ascii=False), flush=True)
