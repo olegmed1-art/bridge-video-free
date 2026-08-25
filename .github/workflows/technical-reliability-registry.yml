@@ -1,0 +1,49 @@
+name: Technical reliability registry
+
+on:
+  pull_request:
+    paths:
+      - 'docs/TECHNICAL_GOVERNANCE.md'
+      - 'ops/reliability/**'
+      - '.github/workflows/technical-reliability-registry.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'docs/TECHNICAL_GOVERNANCE.md'
+      - 'ops/reliability/**'
+      - '.github/workflows/technical-reliability-registry.yml'
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: technical-reliability-registry-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install validator dependency
+        run: python -m pip install --disable-pip-version-check --no-cache-dir 'PyYAML==6.0.2'
+      - name: Validate technical governance registry
+        run: python ops/reliability/validate_technical_state.py
+      - name: Publish registry snapshot
+        if: always()
+        run: |
+          {
+            echo '## Technical reliability registry'
+            echo
+            echo '- Canonical policy: `docs/TECHNICAL_GOVERNANCE.md`'
+            echo '- Registry: `ops/reliability/technical-state.yml`'
+            echo '- Validation is structural and fail-closed.'
+            echo '- Runtime evidence is never upgraded by this workflow.'
+          } >> "$GITHUB_STEP_SUMMARY"
