@@ -168,6 +168,8 @@ def run_ben_stage(
             failures.append(f"{type(exc).__name__}:{str(exc)[:180]}")
             if len(failures) >= 10:
                 break
+        if (index + 1) % 25 == 0 or index + 1 == count:
+            print(f"BEN_PROGRESS stage={count} completed={index + 1}/{count}", flush=True)
     elapsed = time.perf_counter() - started
     summary = latency_summary(latencies)
     passed = len(latencies) == count and not failures and summary["p95"] <= p95_limit_ms
