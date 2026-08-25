@@ -14,7 +14,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: oracle-universal-video-job
+  group: oracle-diana11-002-job
   cancel-in-progress: false
 
 jobs:
@@ -135,15 +135,10 @@ jobs:
             printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("text","") or "")'
           }
 
-          if [[ "$MODE" == bridge ]]; then
-            submit_cmd='sudo -n /usr/local/sbin/universal-video-diana11-002 submit-bridge'
-            status_cmd='sudo -n /usr/local/sbin/universal-video-diana11-002 status-bridge'
-            label='Диана 11 / bridge_lesson'
-          else
-            submit_cmd='sudo -n /usr/local/sbin/universal-video-diana11 submit'
-            status_cmd='sudo -n /usr/local/sbin/universal-video-diana11 status'
-            label='Диана 11 / transcript_only'
-          fi
+          [[ "$MODE" == bridge ]] || { echo 'unexpected mode after validation' >&2; exit 64; }
+          submit_cmd='sudo -n /usr/local/sbin/universal-video-diana11-002 submit-bridge'
+          status_cmd='sudo -n /usr/local/sbin/universal-video-diana11-002 status-bridge'
+          label='UV-DIANA11-DURABLE-002 / bridge_lesson'
 
           initial="$(run_remote "diana11-submit-${GITHUB_RUN_ID}" "$submit_cmd")"
           state="$(printf '%s\n' "$initial" | sed -n 's/^UV_STATE=//p' | tail -n1)"
