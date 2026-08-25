@@ -220,9 +220,26 @@ def docker_memory() -> dict[str, Any]:
     }
 
 
-def require_services() -> None:
-    for unit in ("bridge-ben.service", "assistant-lab.service", "dds3-healthcheck.timer"):
-        subprocess.run(["systemctl", "is-active", "--quiet", unit], check=True, timeout=10)
+def require_services() -> dict[str, str]:
+    states: dict[str, str] = {}
+    for unit in (
+        "bridge-ben.service",
+        "bridge-ben-healthcheck.timer",
+        "assistant-lab.service",
+        "dds3-healthcheck.timer",
+    ):
+        completed = subprocess.run(
+            ["systemctl", "is-active", unit],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        state = completed.stdout.strip() or completed.stderr.strip() or f"exit-{completed.returncode}"
+        states[unit] = state
+        if completed.returncode != 0 or state != "active":
+            raise RuntimeError(f"required systemd unit is not active: {unit}={state}")
+    return states
 
 
 def main() -> int:
@@ -238,57 +255,64 @@ def main() -> int:
     if stages != [100, 500]:
         raise SystemExit("operational acceptance requires exact stages 100,500")
 
-    require_services()
-    token = load_dds3_token(DDS3_ENV)
-    memory_before = docker_memory()
-    dds3_before = run_dds3_probe(token)
-    ben_stages: dict[str, Any] = {}
-    for stage in stages:
-        ben_stages[str(stage)] = run_ben_stage(stage, p95_limit_ms=args.ben_p95_limit_ms)
-        if not ben_stages[str(stage)]["passed"]:
-            break
-    dds3_after = run_dds3_probe(token)
-    memory_after = docker_memory()
-    require_services()
-
-    memory_delta = memory_after["usage_bytes"] - memory_before["usage_bytes"]
-    dds3_impact_limit = max(args.dds3_impact_floor_ms, dds3_before["latency_ms"]["p95"] * 2.0)
-    memory_passed = (
-        memory_after["usage_bytes"] <= args.ben_memory_limit_bytes
-        and memory_delta <= args.ben_memory_delta_limit_bytes
-    )
-    dds3_passed = (
-        dds3_before["passed"]
-        and dds3_after["passed"]
-        and dds3_after["latency_ms"]["p95"] <= dds3_impact_limit
-    )
-    passed = (
-        set(ben_stages) == {"100", "500"}
-        and all(stage["passed"] for stage in ben_stages.values())
-        and memory_passed
-        and dds3_passed
-    )
-    report = {
+    report: dict[str, Any] = {
         "benchmark": "oracle-ben-pilot-100-500-v1",
-        "passed": passed,
-        "ben": ben_stages,
-        "memory": {
+        "passed": False,
+        "ben": {},
+        "memory": {},
+        "dds3": {},
+        "services": {},
+    }
+    try:
+        report["services"]["before"] = require_services()
+        token = load_dds3_token(DDS3_ENV)
+        memory_before = docker_memory()
+        dds3_before = run_dds3_probe(token)
+        ben_stages: dict[str, Any] = {}
+        for stage in stages:
+            ben_stages[str(stage)] = run_ben_stage(stage, p95_limit_ms=args.ben_p95_limit_ms)
+            if not ben_stages[str(stage)]["passed"]:
+                break
+        dds3_after = run_dds3_probe(token)
+        memory_after = docker_memory()
+        report["services"]["after"] = require_services()
+
+        memory_delta = memory_after["usage_bytes"] - memory_before["usage_bytes"]
+        dds3_impact_limit = max(args.dds3_impact_floor_ms, dds3_before["latency_ms"]["p95"] * 2.0)
+        memory_passed = (
+            memory_after["usage_bytes"] <= args.ben_memory_limit_bytes
+            and memory_delta <= args.ben_memory_delta_limit_bytes
+        )
+        dds3_passed = (
+            dds3_before["passed"]
+            and dds3_after["passed"]
+            and dds3_after["latency_ms"]["p95"] <= dds3_impact_limit
+        )
+        report["ben"] = ben_stages
+        report["memory"] = {
             "before": memory_before,
             "after": memory_after,
             "delta_bytes": memory_delta,
             "usage_limit_bytes": args.ben_memory_limit_bytes,
             "delta_limit_bytes": args.ben_memory_delta_limit_bytes,
             "passed": memory_passed,
-        },
-        "dds3": {
+        }
+        report["dds3"] = {
             "before": dds3_before,
             "after": dds3_after,
             "after_p95_limit_ms": round(dds3_impact_limit, 3),
             "passed": dds3_passed,
-        },
-    }
+        }
+        report["passed"] = (
+            set(ben_stages) == {"100", "500"}
+            and all(stage["passed"] for stage in ben_stages.values())
+            and memory_passed
+            and dds3_passed
+        )
+    except Exception as exc:
+        report["error"] = {"type": type(exc).__name__, "message": str(exc)[:500]}
     print(json.dumps(report, ensure_ascii=False, separators=(",", ":"), sort_keys=True))
-    return 0 if passed else 1
+    return 0 if report["passed"] else 1
 
 
 if __name__ == "__main__":
