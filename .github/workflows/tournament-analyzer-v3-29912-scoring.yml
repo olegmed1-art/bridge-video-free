@@ -50,6 +50,32 @@ jobs:
           DDS29912="$(find evidence/29912 -type f -name 'diana-29912-cross-session-dds3.json' -print -quit)"
           test -n "$DDS29912"
           echo "DDS29912=$DDS29912" >> "$GITHUB_ENV"
+      - name: Diagnose preserved raw MP scale
+        run: |
+          python - <<'PY'
+          import json, os
+          p=json.load(open(os.environ['DDS29912'], encoding='utf-8'))
+          for s in p['sessions']:
+              r=int(s['round'])
+              f=int(s['tournament']['field_size'])
+              top=2*(f-1)
+              vals=[float(b['pair_matchpoints']) for b in s['boards']]
+              n=len(vals)
+              direct=100*sum(vals)/(n*top)
+              centered=50+direct
+              print(
+                  'MP_SCALE_DIAG',
+                  'round=',r,
+                  'field=',f,
+                  'boards=',n,
+                  'reported=',s['tournament']['session_score'],
+                  'min=',min(vals),
+                  'max=',max(vals),
+                  'sum=',sum(vals),
+                  'direct_pct=',round(direct,6),
+                  'centered_offset_pct=',round(centered,6),
+              )
+          PY
       - name: Verify raw MP scale and build context
         run: |
           set -euo pipefail
