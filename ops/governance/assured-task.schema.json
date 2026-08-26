@@ -1,0 +1,283 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bridge-school.example/schemas/assured-task-v1.json",
+  "title": "School Assured Task Contract v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "task_id",
+    "title",
+    "work_class",
+    "urgency",
+    "governance_mode",
+    "decision_target",
+    "scope",
+    "roles",
+    "evidence_contract",
+    "stop_conditions",
+    "status"
+  ],
+  "properties": {
+    "task_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "work_class": {
+      "enum": [
+        "INCIDENT",
+        "MANDATORY",
+        "STRATEGIC",
+        "OPERATIONAL",
+        "IMPROVEMENT",
+        "RESEARCH"
+      ]
+    },
+    "urgency": {
+      "enum": [
+        "EXPEDITE",
+        "HIGH",
+        "NORMAL",
+        "LOW"
+      ]
+    },
+    "strategic_rank": {
+      "enum": [
+        "S1",
+        "S2",
+        "S3",
+        "NONE"
+      ]
+    },
+    "governance_mode": {
+      "const": "ASSURED"
+    },
+    "decision_target": {
+      "type": "string",
+      "minLength": 1
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "included",
+        "excluded",
+        "wip_limit"
+      ],
+      "properties": {
+        "included": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "excluded": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "wip_limit": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "hypothesis": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "pinned_inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "identity"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "identity": {
+            "type": "string"
+          },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "roles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "coordinator",
+        "curator",
+        "observatory",
+        "red_team",
+        "technical_owner"
+      ],
+      "properties": {
+        "coordinator": {
+          "type": "string"
+        },
+        "curator": {
+          "type": "string"
+        },
+        "observatory": {
+          "type": "string"
+        },
+        "red_team": {
+          "type": "string"
+        },
+        "technical_owner": {
+          "type": "string"
+        },
+        "bridge_owner": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "specialists": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "minimum_independence": {
+      "enum": [
+        "I2",
+        "I3",
+        "I4"
+      ]
+    },
+    "evidence_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required_evidence",
+        "minimum_evidence_level",
+        "metrics",
+        "primary_sources"
+      ],
+      "properties": {
+        "required_evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        },
+        "minimum_evidence_level": {
+          "enum": [
+            "E2",
+            "E3",
+            "E4",
+            "E5"
+          ]
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "primary_sources": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "stop_conditions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "rollback_or_recovery": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cost_boundary": {
+      "type": "object",
+      "properties": {
+        "currency": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "incremental_cap": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "new_paid_resource_authorized": {
+          "type": "boolean"
+        }
+      }
+    },
+    "status": {
+      "enum": [
+        "DEFINED",
+        "HYPOTHESIS_FROZEN",
+        "RUNNING",
+        "EVIDENCE_READY",
+        "RED_TEAMED",
+        "DECIDED",
+        "STOPPED"
+      ]
+    },
+    "terminal_result": {
+      "enum": [
+        "PASS",
+        "FAIL",
+        "INCONCLUSIVE",
+        "STOPPED",
+        "NEEDS_BRIDGE_DECISION",
+        "NEEDS_OWNER_ACTION",
+        "NEEDS_SPEND_APPROVAL",
+        null
+      ]
+    },
+    "evidence_locations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "decision_record": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

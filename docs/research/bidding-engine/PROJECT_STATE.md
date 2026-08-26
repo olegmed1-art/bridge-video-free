@@ -7,6 +7,19 @@ Research registry: Neon `assistant_lab.research_job`, key `BIDDING-ENGINE-P0-SIN
 ## Purpose
 Build one school-owned bidding algorithm that can model an auction from the acting player's hand and public auction state, using the School Canon as authority and World / External Knowledge as research support.
 
+## Governance v1 classification
+- Canonical governance: `docs/governance/SCHOOL_GOVERNANCE_SYSTEM_V1.md`.
+- Work class: `STRATEGIC`.
+- Urgency: `NORMAL`.
+- Strategic rank: `S1`.
+- Governance mode: `ASSURED`.
+- Minimum independent assurance: `I2`.
+- Technical owner / Coordinator: AI Management System.
+- Research Curator: logically separate provenance/evidence pass.
+- Observatory: read-only research/runtime measurements where feasible.
+- Red Team: independent falsification pass; use a different model, solver, formal checker or external engine for material conclusions.
+- Director escalation: only material unresolved bridge-canon ambiguity, new paid spend, owner-only action, external obligation or strategic business choice.
+
 ## Durable role split
 - School director / bridge expert: owner decides bridge-domain canon where expert judgment is genuinely required.
 - Technical + research owner: ChatGPT owns architecture, databases, code, tooling, experiments, infrastructure, benchmarks, integration and technical decisions.
@@ -88,11 +101,12 @@ The exact physical split between Neon, Git and Drive is intentionally not frozen
 This file is the durable handoff point across chats.
 
 At the start of any new chat/task about the bidding engine:
-1. Read this file first.
-2. Read current GitHub issue #609 and its latest comments.
-3. Query the Neon research row keyed `BIDDING-ENGINE-P0-SINGLE-2026-08-26` if current execution state matters.
-4. Read only the specific research/design files needed for the task.
-5. Do not reconstruct project state from conversational memory when durable project evidence exists.
+1. Read `docs/governance/SCHOOL_GOVERNANCE_SYSTEM_V1.md` when governance affects the task.
+2. Read this file.
+3. Read current GitHub issue #609 and its latest comments.
+4. Query the Neon research row keyed `BIDDING-ENGINE-P0-SINGLE-2026-08-26` if current execution state matters.
+5. Read only the specific research/design files needed for the task.
+6. Do not reconstruct project state from conversational memory when durable project evidence exists.
 
 After any material research/design/implementation decision:
 - update this file if the durable state/invariants/next milestone changed;
