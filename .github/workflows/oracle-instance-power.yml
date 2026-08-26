@@ -79,78 +79,114 @@ jobs:
 
       - name: Read current lifecycle state
         id: state
+        shell: bash
         run: |
           set -euo pipefail
-          state="$(oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --query 'data."lifecycle-state"' --raw-output)"
+          instance_json="$(oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --output json)"
+          state="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"].get("lifecycle-state",""))')"
+          compartment="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"].get("compartment-id",""))')"
           case "$state" in RUNNING|STOPPED|STARTING|STOPPING) ;; *) echo "unexpected lifecycle state: $state" >&2; exit 1 ;; esac
+          test -n "$compartment"
           echo "current_state=$state" >> "$GITHUB_OUTPUT"
+          echo "compartment_id=$compartment" >> "$GITHUB_OUTPUT"
           echo "current lifecycle state: $state"
 
       - name: Prove host idle before stop
         id: idle
         if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state == 'RUNNING' }}
         shell: bash
+        env:
+          COMPARTMENT_ID: ${{ steps.state.outputs.compartment_id }}
         run: |
           set -euo pipefail
-          python - <<'PY' > "$RUNNER_TEMP/oracle-idle-result.txt"
-          import os, pathlib, time
-          import oci
 
-          instance_id=os.environ['OCI_INSTANCE_OCID']
-          script=pathlib.Path('ops/oracle_idle_state.sh').read_text(encoding='utf-8')
-          config=oci.config.from_file()
-          compute=oci.core.ComputeClient(config)
-          instance=compute.get_instance(instance_id).data
-          if instance.region != os.environ['OCI_REGION']:
-              raise SystemExit('instance region mismatch')
+          plugins_json="$(oci instance-agent plugin list \
+            --compartment-id "$COMPARTMENT_ID" \
+            --instanceagent-id "$OCI_INSTANCE_OCID" \
+            --all --output json)"
+          run_command_status="$(printf '%s' "$plugins_json" | python -c 'import json,sys; xs=json.load(sys.stdin).get("data",[]); print(next((x.get("status","") for x in xs if "Run Command" in str(x.get("name",""))),""))')"
+          if [[ "$run_command_status" != "RUNNING" ]]; then
+            echo "idle_state=UNKNOWN" >> "$GITHUB_OUTPUT"
+            echo "idle_reason=oci_run_command_${run_command_status:-unknown}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
-          agent=oci.compute_instance_agent.ComputeInstanceAgentClient(config)
-          models=oci.compute_instance_agent.models
-          details=models.CreateInstanceAgentCommandDetails(
-              compartment_id=instance.compartment_id,
-              execution_time_out_in_seconds=90,
-              target=models.InstanceAgentCommandTarget(instance_id=instance_id),
-              content=models.InstanceAgentCommandContent(
-                  source=models.InstanceAgentCommandSourceViaTextDetails(
-                      source_type='TEXT', text=script
-                  ),
-                  output=models.InstanceAgentCommandOutputViaTextDetails(output_type='TEXT'),
-              ),
-              display_name='bridge-school-oracle-idle-proof',
-          )
-          command=agent.create_instance_agent_command(details).data
-          terminal={'SUCCEEDED','FAILED','TIMED_OUT','CANCELED'}
-          execution=None
-          deadline=time.time()+120
-          while time.time() < deadline:
-              execution=agent.get_instance_agent_command_execution(command.id, instance_id).data
-              if execution.lifecycle_state in terminal:
-                  break
-              time.sleep(5)
-          if execution is None or execution.lifecycle_state != 'SUCCEEDED':
-              print('ORACLE_IDLE_REASON=instance_agent_check_failed')
-              print('ORACLE_IDLE_STATE=UNKNOWN')
-          else:
-              text=getattr(execution.content, 'text', '') or ''
-              # Only expose the classifier's sanitized contract lines.
-              for line in text.splitlines():
-                  if line.startswith('ORACLE_IDLE_REASON=') or line.startswith('ORACLE_IDLE_STATE='):
-                      print(line)
-          PY
-          cat "$RUNNER_TEMP/oracle-idle-result.txt"
-          idle_state="$(sed -n 's/^ORACLE_IDLE_STATE=//p' "$RUNNER_TEMP/oracle-idle-result.txt" | tail -n1)"
-          idle_reason="$(sed -n 's/^ORACLE_IDLE_REASON=//p' "$RUNNER_TEMP/oracle-idle-result.txt" | tail -n1)"
+          script_text="$(cat ops/oracle_idle_state.sh)"
+          content_json="$(SCRIPT_TEXT="$script_text" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":os.environ["SCRIPT_TEXT"]},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
+          target_json="$(python -c 'import json,os; print(json.dumps({"instanceId":os.environ["OCI_INSTANCE_OCID"]},separators=(",",":")))')"
+          command_id="$(oci instance-agent command create \
+            --compartment-id "$COMPARTMENT_ID" \
+            --content "$content_json" \
+            --target "$target_json" \
+            --timeout-in-seconds 120 \
+            --display-name "bridge-school-oracle-idle-proof-${GITHUB_RUN_ID}" \
+            --query data.id --raw-output)"
+          test -n "$command_id"
+
+          execution_json=""
+          lifecycle=""
+          for _ in $(seq 1 36); do
+            execution_json="$(oci instance-agent command-execution get \
+              --command-id "$command_id" \
+              --instance-id "$OCI_INSTANCE_OCID" \
+              --output json 2>/dev/null || true)"
+            if [[ -n "$execution_json" ]]; then
+              lifecycle="$(printf '%s' "$execution_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state",""))')"
+              case "$lifecycle" in SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break ;; esac
+            fi
+            sleep 5
+          done
+
+          if [[ "$lifecycle" != "SUCCEEDED" ]]; then
+            echo "idle_state=UNKNOWN" >> "$GITHUB_OUTPUT"
+            echo "idle_reason=instance_agent_${lifecycle:-timeout}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          exit_code="$(printf '%s' "$execution_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("content",{}).get("exit-code",""))')"
+          text="$(printf '%s' "$execution_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("content",{}).get("text","") or "")')"
+          if [[ "$exit_code" != "0" ]]; then
+            echo "idle_state=UNKNOWN" >> "$GITHUB_OUTPUT"
+            echo "idle_reason=classifier_exit_${exit_code:-unknown}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          idle_state="$(printf '%s\n' "$text" | sed -n 's/^ORACLE_IDLE_STATE=//p' | tail -n1)"
+          idle_reason="$(printf '%s\n' "$text" | sed -n 's/^ORACLE_IDLE_REASON=//p' | tail -n1)"
           case "$idle_state" in IDLE|BUSY|UNKNOWN) ;; *) idle_state=UNKNOWN; idle_reason=invalid_idle_proof ;; esac
+          printf 'idle proof: %s (%s)\n' "$idle_state" "$idle_reason"
           echo "idle_state=$idle_state" >> "$GITHUB_OUTPUT"
           echo "idle_reason=$idle_reason" >> "$GITHUB_OUTPUT"
 
       - name: Start exact instance
+        id: start
         if: ${{ steps.command.outputs.action == 'start' && steps.state.outputs.current_state == 'STOPPED' }}
+        shell: bash
         run: |
           set -euo pipefail
           oci compute instance action --instance-id "$OCI_INSTANCE_OCID" --action START >/dev/null
           oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --wait-for-state RUNNING --wait-interval-seconds 10 --max-wait-seconds 600 >/dev/null
+          echo "started=true" >> "$GITHUB_OUTPUT"
           echo "instance reached RUNNING"
+
+      - name: Verify DDS3 health after start
+        if: ${{ steps.command.outputs.action == 'start' && (steps.start.outputs.started == 'true' || steps.state.outputs.current_state == 'RUNNING') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          public_ip="$(oci compute instance list-vnics --instance-id "$OCI_INSTANCE_OCID" --all --query 'data[0]."public-ip"' --raw-output)"
+          test -n "$public_ip" && [[ "$public_ip" != "null" ]]
+          ready=""
+          for _ in $(seq 1 30); do
+            if ready="$(curl -fsS --max-time 10 "https://${public_ip}/readyz" 2>/dev/null)"; then
+              if printf '%s' "$ready" | python -c 'import json,sys; x=json.load(sys.stdin); assert x.get("status")=="ready" and x.get("engine")=="DDS3" and x.get("fallback_used") is False'; then
+                echo "DDS3 health verified after start"
+                exit 0
+              fi
+            fi
+            sleep 10
+          done
+          echo "instance is RUNNING but DDS3 health was not proven" >&2
+          exit 4
 
       - name: Stop exact instance only with IDLE proof
         if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state == 'RUNNING' && steps.idle.outputs.idle_state == 'IDLE' }}
@@ -160,11 +196,17 @@ jobs:
           oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --wait-for-state STOPPED --wait-interval-seconds 10 --max-wait-seconds 600 >/dev/null
           echo "instance reached STOPPED after IDLE proof"
 
-      - name: Refuse stop on unknown state
-        if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state == 'RUNNING' && steps.idle.outputs.idle_state == 'UNKNOWN' }}
+      - name: Refuse stop unless IDLE is proven
+        if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state == 'RUNNING' && steps.idle.outputs.idle_state != 'IDLE' }}
         run: |
-          echo "STOP REFUSED: host idle state is UNKNOWN" >&2
+          echo "STOP REFUSED: host idle state is ${{ steps.idle.outputs.idle_state || 'UNKNOWN' }}" >&2
           exit 3
+
+      - name: Refuse transition-state mutation
+        if: ${{ (steps.command.outputs.action == 'start' || steps.command.outputs.action == 'stop') && (steps.state.outputs.current_state == 'STARTING' || steps.state.outputs.current_state == 'STOPPING') }}
+        run: |
+          echo "MUTATION REFUSED: lifecycle transition already in progress" >&2
+          exit 5
 
       - name: Publish run summary
         if: ${{ always() }}
