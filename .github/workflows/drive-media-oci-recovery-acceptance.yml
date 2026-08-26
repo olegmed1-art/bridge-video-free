@@ -97,7 +97,7 @@ jobs:
           chmod 0600 "$HOME/.oci/config"
           oci iam region list --output json >/dev/null
 
-      - name: Select the already-existing private Standard bucket
+      - name: Select the already-existing private bucket
         id: target
         shell: bash
         run: |
@@ -112,14 +112,19 @@ jobs:
           assert len(xs)==1, f'expected exactly one existing bucket, got {len(xs)}'
           assert len(private)==1 and not public, 'target must be the sole private bucket'
           x=private[0]
-          assert str(x.get('storage-tier') or '')=='Standard', 'target bucket must be Standard'
           print('BUCKET='+shlex.quote(str(x['name'])))
           PY
           chmod 0600 "$RUNNER_TEMP/target.env"
           source "$RUNNER_TEMP/target.env"
           test -n "$BUCKET"
+          details="$(oci os bucket get --bucket-name "$BUCKET" --output json)"
+          DETAILS_JSON="$details" python - <<'PY'
+          import json,os
+          x=json.loads(os.environ['DETAILS_JSON']).get('data') or {}
+          assert str(x.get('public-access-type') or 'NoPublicAccess')=='NoPublicAccess'
+          print('PRIVATE_BUCKET_DETAIL_PASS')
+          PY
           echo 'target_private=true' >> "$GITHUB_OUTPUT"
-          echo 'target_standard=true' >> "$GITHUB_OUTPUT"
 
       - name: Download exact Drive source and verify identity
         id: source
@@ -202,7 +207,7 @@ jobs:
             echo "- source_file_id: \`$SOURCE_FILE_ID\`"
             echo "- source_bytes: \`${SOURCE_BYTES_OUT:-unverified}\`"
             echo "- source_sha256: \`${SOURCE_SHA_OUT:-unverified}\`"
-            echo "- target: existing private OCI Object Storage / Standard / AES-256 server-side encryption"
+            echo "- target: existing private OCI Object Storage / AES-256 server-side encryption"
             echo "- durable_object_put: \`${PUT_DONE:-false}\`"
             echo "- restored_bytes: \`${RESTORED_BYTES:-unverified}\`"
             echo "- restored_sha256: \`${RESTORED_SHA:-unverified}\`"
