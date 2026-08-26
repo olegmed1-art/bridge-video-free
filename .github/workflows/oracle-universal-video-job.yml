@@ -25,13 +25,13 @@ jobs:
       request_id: ${{ steps.request.outputs.request_id }}
       issue: ${{ steps.request.outputs.issue }}
       job_id: ${{ steps.request.outputs.job_id }}
-      mode: ${{ steps.request.outputs.mode }}
+      profile: ${{ steps.request.outputs.profile }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
           fetch-depth: 2
-      - name: Validate exact Diana 11 request
+      - name: Validate generic explicit Drive request
         id: request
         if: ${{ github.event_name == 'push' }}
         shell: bash
@@ -45,21 +45,17 @@ jobs:
           x=json.load(open(os.environ['REQUEST_FILE'], encoding='utf-8'))
           assert set(x)=={'request_id','issue','job'}, x
           assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
-          assert x['issue']==441
+          assert isinstance(x['issue'], int) and x['issue'] > 0
           job=x['job']
           jid=job.get('job_id')
           profile=job.get('profile')
-          allowed={
-            ('diana11-transcript-20260825-01','transcript_only'):'transcript',
-            ('diana11-bridge-20260825-01','bridge_lesson'):'bridge',
-          }
-          assert (jid, profile) in allowed, (jid, profile)
-          assert job.get('source',{}).get('kind')=='google_drive'
-          assert job.get('source',{}).get('file_id')=='1PGRLozLJKG8tl-JYGPTCcS_lT-nn-T7C'
+          from universal_video.contract import validate_job
+          validated=validate_job(job)
+          assert validated.source['kind']=='google_drive'
           print('request_id='+x['request_id'])
-          print('issue=441')
+          print('issue='+str(x['issue']))
           print('job_id='+jid)
-          print('mode='+allowed[(jid,profile)])
+          print('profile='+profile)
           PY
       - name: Contract-only PR validation
         if: ${{ github.event_name == 'pull_request' }}
@@ -84,7 +80,7 @@ jobs:
       OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
       ISSUE_NUMBER: ${{ needs.validate.outputs.issue }}
       JOB_ID: ${{ needs.validate.outputs.job_id }}
-      MODE: ${{ needs.validate.outputs.mode }}
+      PROFILE: ${{ needs.validate.outputs.profile }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -112,7 +108,7 @@ jobs:
           [[ "$state" == RUNNING ]]
           echo ORACLE_UNIVERSAL_VIDEO_JOB_OCI_PASS
 
-      - name: Submit and monitor exact resident job
+      - name: Submit and monitor generic resident job
         shell: bash
         run: |
           set -euo pipefail
@@ -135,17 +131,9 @@ jobs:
             printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("text","") or "")'
           }
 
-          if [[ "$MODE" == bridge ]]; then
-            submit_cmd='sudo -n /usr/local/sbin/universal-video-diana11 submit-bridge'
-            status_cmd='sudo -n /usr/local/sbin/universal-video-diana11 status-bridge'
-            label='Диана 11 / bridge_lesson'
-          else
-            submit_cmd='sudo -n /usr/local/sbin/universal-video-diana11 submit'
-            status_cmd='sudo -n /usr/local/sbin/universal-video-diana11 status'
-            label='Диана 11 / transcript_only'
-          fi
+          request_file="$(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^ops/oracle-universal-video-job-requests/[^/]+\.json
 
-          initial="$(run_remote "diana11-submit-${GITHUB_RUN_ID}" "$submit_cmd")"
+          initial="$(run_remote "universal-video-submit-${GITHUB_RUN_ID}" "$submit_cmd")"
           state="$(printf '%s\n' "$initial" | sed -n 's/^UV_STATE=//p' | tail -n1)"
           [[ "$state" =~ ^(QUEUED|RUNNING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]] || { echo "unsafe submit state: $state" >&2; exit 1; }
           initial_safe="$(printf '%s\n' "$initial" | grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|CONFORMANCE_STATE|ATTESTATION_MODE|ARTIFACT_SET_SHA256|MANIFEST_SHA256|ARTIFACT_COUNT|TOTAL_BYTES|DOMAIN_ANALYSIS_STATUS|TECHNICAL_BUNDLE_READY|BRIDGE_PRODUCTION_READY|PEDAGOGICAL_STATUS|PUBLICATION_STATE|ERROR_TYPE|ERROR)=' | head -n 20 || true)"
@@ -158,7 +146,48 @@ jobs:
               REVIEW|NONCONFORMANT|CONFLICT|FAILED) exit 1;;
             esac
             sleep 60
-            out="$(run_remote "diana11-status-${GITHUB_RUN_ID}" "$status_cmd")"
+            out="$(run_remote "universal-video-status-${GITHUB_RUN_ID}" "$status_cmd")"
+            state="$(printf '%s\n' "$out" | sed -n 's/^UV_STATE=//p' | tail -n1)"
+            [[ "$state" =~ ^(QUEUED|RUNNING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]] || { echo "unsafe status: $state" >&2; exit 1; }
+            if [[ "$state" != "$last" ]]; then
+              safe="$(printf '%s\n' "$out" | grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|CONFORMANCE_STATE|ATTESTATION_MODE|ARTIFACT_SET_SHA256|MANIFEST_SHA256|ARTIFACT_COUNT|TOTAL_BYTES|DOMAIN_ANALYSIS_STATUS|TECHNICAL_BUNDLE_READY|BRIDGE_PRODUCTION_READY|PEDAGOGICAL_STATUS|PUBLICATION_STATE|ERROR_TYPE|ERROR)=' | head -n 20)"
+              gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус **$label**: **$last → $state**.\n\n\`\`\`text\n$safe\n\`\`\`\nRun: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              last="$state"
+            fi
+          done
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "**$label** остаётся **$last** после 5-часового окна наблюдения; resident job не остановлен."
+          exit 2
+
+      - name: Report failure
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Оператор **Universal Video / $PROFILE / $JOB_ID** завершился fail-closed до подтверждённого COMPLETED. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+ | head -n1)"
+          payload="$(REQUEST_FILE="$request_file" python - <<'PY'
+          import base64,json,os
+          x=json.load(open(os.environ['REQUEST_FILE'],encoding='utf-8'))
+          print(base64.b64encode(json.dumps(x['job'],ensure_ascii=False,separators=(',',':')).encode()).decode())
+          PY
+          )"
+          submit_cmd="sudo -n /usr/local/sbin/universal-video submit-base64 '$payload'"
+          status_cmd="sudo -n /usr/local/sbin/universal-video status '$JOB_ID'"
+          label="Universal Video / $PROFILE / $JOB_ID"
+
+          initial="$(run_remote "universal-video-submit-${GITHUB_RUN_ID}" "$submit_cmd")"
+          state="$(printf '%s\n' "$initial" | sed -n 's/^UV_STATE=//p' | tail -n1)"
+          [[ "$state" =~ ^(QUEUED|RUNNING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]] || { echo "unsafe submit state: $state" >&2; exit 1; }
+          initial_safe="$(printf '%s\n' "$initial" | grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|CONFORMANCE_STATE|ATTESTATION_MODE|ARTIFACT_SET_SHA256|MANIFEST_SHA256|ARTIFACT_COUNT|TOTAL_BYTES|DOMAIN_ANALYSIS_STATUS|TECHNICAL_BUNDLE_READY|BRIDGE_PRODUCTION_READY|PEDAGOGICAL_STATUS|PUBLICATION_STATE|ERROR_TYPE|ERROR)=' | head -n 20 || true)"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус **$label**: **SUBMITTED → $state**.\n\n\`\`\`text\n$initial_safe\n\`\`\`\nТехническая готовность не означает предметную или педагогическую готовность. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          last="$state"
+
+          for _ in $(seq 1 300); do
+            case "$last" in
+              TECHNICAL_CONFORMANT) echo ORACLE_UNIVERSAL_VIDEO_JOB_TECHNICAL_CONFORMANCE_PASS; exit 0;;
+              REVIEW|NONCONFORMANT|CONFLICT|FAILED) exit 1;;
+            esac
+            sleep 60
+            out="$(run_remote "universal-video-status-${GITHUB_RUN_ID}" "$status_cmd")"
             state="$(printf '%s\n' "$out" | sed -n 's/^UV_STATE=//p' | tail -n1)"
             [[ "$state" =~ ^(QUEUED|RUNNING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]] || { echo "unsafe status: $state" >&2; exit 1; }
             if [[ "$state" != "$last" ]]; then
