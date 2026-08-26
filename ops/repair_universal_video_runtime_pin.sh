@@ -25,7 +25,7 @@ readonly SERVICE='universal-video.service'
 [[ "$(systemctl is-active "$SERVICE")" == active ]] || fail
 
 ready_before="$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)" || fail
-READY_JSON="$ready_before" python3 - <<'PY' || exit 1
+READY_JSON="$ready_before" python3 - <<'PY' || fail
 import json,os
 x=json.loads(os.environ['READY_JSON'])
 assert x.get('status')=='ready'
@@ -46,16 +46,18 @@ spool_empty(){
 spool_empty || fail
 printf 'UV003_RUNTIME_PIN_SPOOL=EMPTY\n'
 
-# Validate the env shape without exposing any values. There may be zero or one
-# existing source-commit key; duplicates fail closed.
-ENV_FILE="$ENV_FILE" python3 - <<'PY' || exit 1
+# Report only cardinality, never the environment value. This is safe evidence
+# for the fail-closed repair decision.
+env_shape="$(ENV_FILE="$ENV_FILE" python3 - <<'PY'
 import os
 from pathlib import Path
-p=Path(os.environ['ENV_FILE'])
-lines=p.read_text(encoding='utf-8').splitlines()
-keys=[line for line in lines if line.startswith('UNIVERSAL_VIDEO_SOURCE_COMMIT=')]
-assert len(keys) <= 1
+lines=Path(os.environ['ENV_FILE']).read_text(encoding='utf-8').splitlines()
+n=sum(1 for line in lines if line.startswith('UNIVERSAL_VIDEO_SOURCE_COMMIT='))
+print('ZERO' if n == 0 else 'ONE' if n == 1 else 'MULTIPLE')
 PY
+)" || fail
+printf 'UV003_RUNTIME_PIN_ENV_SHAPE=%s\n' "$env_shape"
+[[ "$env_shape" == ZERO || "$env_shape" == ONE ]] || fail
 
 backup="$(mktemp -p "$BASE" .universal-video.env.uv003-backup.XXXXXX)"
 cp --preserve=mode,ownership,timestamps "$ENV_FILE" "$backup"
@@ -68,8 +70,6 @@ rollback(){
     if (( changed == 1 )); then
       cp --preserve=mode,ownership,timestamps "$backup" "$ENV_FILE"
     fi
-    # Restart only if we stopped an originally active, empty sidecar. This does
-    # not enqueue anything; if a queue item appeared, leave it stopped.
     if (( stopped == 1 )) && spool_empty; then
       systemctl start "$SERVICE" >/dev/null 2>&1 || true
     fi
@@ -80,13 +80,12 @@ rollback(){
 }
 trap rollback EXIT
 
-# Quiesce the sidecar before changing the environment inherited at process start.
 systemctl stop "$SERVICE"
 stopped=1
 systemctl is-active --quiet "$SERVICE" && fail
 spool_empty || fail
 
-ENV_FILE="$ENV_FILE" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" python3 - <<'PY'
+ENV_FILE="$ENV_FILE" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" python3 - <<'PY' || fail
 import os,tempfile
 from pathlib import Path
 p=Path(os.environ['ENV_FILE'])
@@ -115,8 +114,7 @@ finally:
 PY
 changed=1
 
-# Re-validate file pin before restarting the idle sidecar.
-ENV_FILE="$ENV_FILE" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" python3 - <<'PY' || exit 1
+ENV_FILE="$ENV_FILE" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" python3 - <<'PY' || fail
 import os
 from pathlib import Path
 vals=[]
@@ -131,10 +129,9 @@ stopped=0
 sleep 2
 [[ "$(systemctl is-active "$SERVICE")" == active ]] || fail
 
-# The live worker must have inherited the corrected pin. Do not print its env.
 pid="$(systemctl show "$SERVICE" -p MainPID --value)"
 [[ "$pid" =~ ^[1-9][0-9]*$ ]] || fail
-PID="$pid" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" python3 - <<'PY' || exit 1
+PID="$pid" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" python3 - <<'PY' || fail
 import os
 from pathlib import Path
 raw=Path('/proc')/os.environ['PID']/'environ'
@@ -148,7 +145,7 @@ PY
 spool_empty || fail
 
 ready_after="$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)" || fail
-READY_JSON="$ready_after" python3 - <<'PY' || exit 1
+READY_JSON="$ready_after" python3 - <<'PY' || fail
 import json,os
 x=json.loads(os.environ['READY_JSON'])
 assert x.get('status')=='ready'
