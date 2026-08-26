@@ -158,12 +158,22 @@ jobs:
           source "$RUNNER_TEMP/target.env"
           object="whole-school-recovery-v1/drive/${SOURCE_FILE_ID}/${EXPECTED_SHA256}.bin"
           printf '%s' "$object" > "$RUNNER_TEMP/object-name"
+          metadata="$(python - <<'PY'
+          import json, os
+          print(json.dumps({
+              'source-file-id': os.environ['SOURCE_FILE_ID'],
+              'source-sha256': os.environ['EXPECTED_SHA256'],
+              'source-bytes': os.environ['EXPECTED_BYTES'],
+              'recovery-scope': 'whole-school-recovery-v1',
+          }, separators=(',', ':')))
+          PY
+          )"
           oci os object put \
             --bucket-name "$BUCKET" \
             --name "$object" \
             --file source.bin \
             --content-type application/octet-stream \
-            --metadata "source-file-id=${SOURCE_FILE_ID},source-sha256=${EXPECTED_SHA256},source-bytes=${EXPECTED_BYTES},recovery-scope=whole-school-recovery-v1" \
+            --metadata "$metadata" \
             --force >/dev/null
           rm -f source.bin
           echo 'put_completed=true' >> "$GITHUB_OUTPUT"
