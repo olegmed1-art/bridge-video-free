@@ -46,8 +46,8 @@ spool_empty(){
 spool_empty || fail
 printf 'UV003_RUNTIME_PIN_SPOOL=EMPTY\n'
 
-# Report only cardinality, never the environment value. This is safe evidence
-# for the fail-closed repair decision.
+# Cardinality is safe to compute but values are never exposed. Zero, one, or
+# duplicate source-pin keys are all canonicalized to exactly one pinned key.
 env_shape="$(ENV_FILE="$ENV_FILE" python3 - <<'PY'
 import os
 from pathlib import Path
@@ -56,8 +56,7 @@ n=sum(1 for line in lines if line.startswith('UNIVERSAL_VIDEO_SOURCE_COMMIT='))
 print('ZERO' if n == 0 else 'ONE' if n == 1 else 'MULTIPLE')
 PY
 )" || fail
-printf 'UV003_RUNTIME_PIN_ENV_SHAPE=%s\n' "$env_shape"
-[[ "$env_shape" == ZERO || "$env_shape" == ONE ]] || fail
+[[ "$env_shape" == ZERO || "$env_shape" == ONE || "$env_shape" == MULTIPLE ]] || fail
 
 backup="$(mktemp -p "$BASE" .universal-video.env.uv003-backup.XXXXXX)"
 cp --preserve=mode,ownership,timestamps "$ENV_FILE" "$backup"
@@ -85,22 +84,17 @@ stopped=1
 systemctl is-active --quiet "$SERVICE" && fail
 spool_empty || fail
 
+# Canonicalize only the single source-revision setting: remove every existing
+# instance of that key and append exactly one pinned value. All other lines are
+# preserved byte-for-byte modulo the final newline.
 ENV_FILE="$ENV_FILE" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" python3 - <<'PY' || fail
 import os,tempfile
 from pathlib import Path
 p=Path(os.environ['ENV_FILE'])
 expected=os.environ['EXPECTED_RUNTIME_COMMIT']
 lines=p.read_text(encoding='utf-8').splitlines()
-out=[]; found=0
-for line in lines:
-    if line.startswith('UNIVERSAL_VIDEO_SOURCE_COMMIT='):
-        found += 1
-        if found > 1: raise SystemExit(2)
-        out.append('UNIVERSAL_VIDEO_SOURCE_COMMIT='+expected)
-    else:
-        out.append(line)
-if found == 0:
-    out.append('UNIVERSAL_VIDEO_SOURCE_COMMIT='+expected)
+out=[line for line in lines if not line.startswith('UNIVERSAL_VIDEO_SOURCE_COMMIT=')]
+out.append('UNIVERSAL_VIDEO_SOURCE_COMMIT='+expected)
 fd,tmp=tempfile.mkstemp(prefix='.universal-video.env.uv003.', dir=str(p.parent), text=True)
 try:
     with os.fdopen(fd,'w',encoding='utf-8') as h:
