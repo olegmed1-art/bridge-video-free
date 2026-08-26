@@ -68,6 +68,8 @@ jobs:
             echo "OCI_KEY_INVALID: expected an unencrypted private PEM key or base64:<single-line-Pem-base64>" >&2
             exit 6
           fi
+          openssl pkey -in "$HOME/.oci/oci_api_key.pem" -traditional -out "$HOME/.oci/oci_api_key.pkcs1.pem"
+          mv "$HOME/.oci/oci_api_key.pkcs1.pem" "$HOME/.oci/oci_api_key.pem"
           actual_fingerprint="$(openssl pkey -in "$HOME/.oci/oci_api_key.pem" -pubout -outform DER | openssl md5 -r | awk '{print $1}' | sed 's/../&:/g;s/:$//')"
           test -n "$actual_fingerprint"
           export OCI_DERIVED_FINGERPRINT="$actual_fingerprint"
