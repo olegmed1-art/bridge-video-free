@@ -1,11 +1,10 @@
 schema_version: 1
-updated_at_utc: "2026-08-25T18:33:00Z"
+updated_at_utc: "2026-08-26T05:10:00Z"
 policy: docs/TECHNICAL_GOVERNANCE.md
 whole_school_recovery:
   target_status: RECOVERY_PROVEN_V1
   current_status: PARTIAL
   blockers:
-    - independent_neon_backup_restore_not_proven
     - independent_large_irreplaceable_media_backup_not_proven
     - restored_database_application_smoke_not_proven
     - oci_boot_volume_restore_not_proven
@@ -32,8 +31,22 @@ components:
     rto_target_hours: 4
     backup_required: true
     independent_backup: required
-    backup_status: unproven
-    restore_status: unproven
+    backup_status: proven
+    restore_status: proven
+    independent_backup_evidence:
+      workflow_run_id: 32932896224
+      artifact_id: 9593826932
+      artifact_name: neon-independent-backup-v1-20260826T050935Z-32932896224-1
+      encrypted_backup_sha256: d4a3eee080badc849fd5346536ee49b3bb1a1448a483febbfdb81b5b4132115b
+      encrypted_bytes: 6566288
+      artifact_expires_at_utc: "2026-09-30T05:09:36Z"
+      source_tables: 234
+      restored_tables: 234
+      source_schemas: 5
+      restored_schemas: 5
+      raw_dump_uploaded: false
+      restore_target: isolated_postgres18
+      observed_restore_result: success
     internal_checkpoint:
       branch_id: br-nameless-leaf-b108v431
       branch_name: recovery-governance-baseline-20260825
@@ -102,7 +115,7 @@ audit_snapshots:
     overall_status: CROSS_SERVICE_PARTIAL
     whole_school_recovery_ready: false
     neon_current_state_branch_restore: proven
-    neon_off_provider_backup_restore: unproven
+    neon_off_provider_backup_restore: proven
     neon_recovery_checkpoint_rows_observed: 0
     neon_recovery_verification_rows_observed: 0
     neon_org_mfa_observed: disabled
@@ -129,6 +142,7 @@ audit_snapshots:
       anyone_writer_items: 0
     evidence_runs:
       neon_health: 32839810693
+      neon_independent_backup_restore: 32932896224
       dds3_production_health: 32845019060
       oracle_ben_dds3_health: 32835192297
       oci_finops_backup_observation: 32820354158
@@ -139,11 +153,7 @@ work_queue:
     canonical_governance_issue: 523
     wip_limit: 1
     duplicate_rule: update_existing_tracker_before_creating_new_issue
-  active:
-    - id: independent_neon_backup_restore
-      priority: P0
-      status: open
-      tracking_issue: 526
+  active: []
   queued:
     - id: neon_org_mfa
       priority: P0
