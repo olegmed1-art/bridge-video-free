@@ -40,6 +40,19 @@ jobs:
           grep -Fq "readonly SERVICE='universal-video.service'" ops/repair_universal_video_runtime_pin.sh
           grep -Fq 'UNIVERSAL_VIDEO_SOURCE_COMMIT=' ops/repair_universal_video_runtime_pin.sh
           grep -Fq 'UV003_RUNTIME_PIN_REPAIR=PASS' ops/repair_universal_video_runtime_pin.sh
+          grep -Fq 'UV003_RUNTIME_PIN_FAILURE_CODE=%s' ops/repair_universal_video_runtime_pin.sh
+          python - <<'PY'
+          from pathlib import Path
+          text=Path('ops/repair_universal_video_runtime_pin.sh').read_text(encoding='utf-8')
+          stages=(
+              'PRECHECK','READY_BEFORE','SPOOL_BEFORE','ENV_SHAPE','BACKUP',
+              'STOP_SERVICE','WRITE_ENV','VERIFY_FILE','SPOOL_AFTER_WRITE',
+              'START_SERVICE','VERIFY_LIVE','SPOOL_AFTER_START','READY_AFTER',
+              'ASSISTANT_AFTER','FINALIZE',
+          )
+          for stage in stages:
+              assert f"failure_stage='{stage}'" in text or f'|{stage}' in text
+          PY
           for forbidden in 'spool/inbox/' 'ffmpeg ' 'faster_whisper' 'GOOGLE_DRIVE' 'drive_adapter' 'submit_for' 'enqueue(' 'production'; do
             ! grep -Fq "$forbidden" ops/repair_universal_video_runtime_pin.sh || { echo "forbidden repair surface: $forbidden" >&2; exit 1; }
           done
@@ -121,9 +134,24 @@ jobs:
           if ! raw="$("${ssh_cmd[@]}" "sudo -n env EXPECTED_RUNTIME_COMMIT='${{ needs.validate.outputs.expected_runtime_commit }}' bash /tmp/uv003-runtime-pin-repair.sh" 2>&1)"; then
             RAW="$raw" python - <<'PY' > "$RUNNER_TEMP/uv003-repair-safe.txt"
           import os,re
-          allowed=re.compile(r'^UV003_(?:RUNTIME_PIN_REPAIR=FAILED_CLOSED|RUNTIME_PIN_SPOOL=EMPTY)$')
+          allowed=re.compile(
+              r'^UV003_(?:'
+              r'RUNTIME_PIN_REPAIR=FAILED_CLOSED|'
+              r'RUNTIME_PIN_SPOOL=EMPTY|'
+              r'RUNTIME_PIN_FAILURE_CODE=(?:'
+              r'PRECHECK|READY_BEFORE|SPOOL_BEFORE|ENV_SHAPE|BACKUP|'
+              r'STOP_SERVICE|WRITE_ENV|VERIFY_FILE|SPOOL_AFTER_WRITE|'
+              r'START_SERVICE|VERIFY_LIVE|SPOOL_AFTER_START|READY_AFTER|'
+              r'ASSISTANT_AFTER|FINALIZE'
+              r'))$'
+          )
+          seen=[]
           for line in os.environ['RAW'].splitlines():
-              if allowed.fullmatch(line): print(line)
+              if allowed.fullmatch(line) and line not in seen:
+                  seen.append(line)
+          if not any(line.startswith('UV003_RUNTIME_PIN_FAILURE_CODE=') for line in seen):
+              seen.append('UV003_RUNTIME_PIN_FAILURE_CODE=REMOTE_UNCLASSIFIED')
+          print('\n'.join(seen))
           PY
             cat "$RUNNER_TEMP/uv003-repair-safe.txt"
             exit 1
@@ -167,6 +195,12 @@ jobs:
               echo 'Only the Universal Video source-revision env pin was repaired; the idle sidecar was restarted to inherit it. No job was submitted or processed and no Drive write occurred.'
             else
               echo "Repair failed closed. Outcome: ${REPAIR_OUTCOME:-UNKNOWN}."
+              if [[ -s "$RUNNER_TEMP/uv003-repair-safe.txt" ]]; then
+                echo 'Allowlisted diagnostic:'
+                echo '```text'
+                cat "$RUNNER_TEMP/uv003-repair-safe.txt"
+                echo '```'
+              fi
             fi
             echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           } > "$body"
