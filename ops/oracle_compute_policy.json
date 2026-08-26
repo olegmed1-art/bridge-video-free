@@ -1,11 +1,15 @@
 {
-  "schema": "bridge-school-oracle-compute-policy-v1",
-  "window_days": 28,
-  "objective": "maximize useful compute utilization during Oracle credit window without weakening production, DDS3 holdout, or cost safety gates",
+  "schema": "bridge-school-oracle-compute-policy-v2",
+  "window_days": 0,
+  "objective": "minimize paid Oracle compute time while preserving approved evidence-bound work, interactive reliability, and existing safety gates",
   "principles": {
     "production_priority": true,
+    "cost_first_on_demand": true,
+    "stop_when_intentionally_idle": true,
+    "no_filler_compute_to_consume_credits": true,
     "useful_compute_not_raw_cpu": true,
     "idle_is_allowed_when_no_evidence_bound_work": true,
+    "automatic_stop_requires_complete_fail_closed_idle_guard": true,
     "no_sealed_test_background_compute": true,
     "no_methodology_invention": true,
     "no_unbounded_jobs": true
@@ -15,24 +19,24 @@
       "id": "P0",
       "name": "foreground_research_compute",
       "examples": ["DDS3 staged TRAIN gates", "approved bounded tournament DDS jobs"],
-      "target_share_min": 0.40,
-      "target_share_max": 0.60,
+      "target_share_min": 0.0,
+      "target_share_max": 1.0,
       "preempts": ["P1", "P2"]
     },
     {
       "id": "P1",
       "name": "research_and_media",
       "examples": ["BEN benchmark/research", "video analysis backlog", "targeted DDS discrepancy sets"],
-      "target_share_min": 0.25,
-      "target_share_max": 0.45,
+      "target_share_min": 0.0,
+      "target_share_max": 1.0,
       "preempts": ["P2"]
     },
     {
       "id": "P2",
       "name": "background_quality",
       "examples": ["regression", "determinism checks", "integrity audits", "performance baselines"],
-      "target_share_min": 0.05,
-      "target_share_max": 0.15,
+      "target_share_min": 0.0,
+      "target_share_max": 1.0,
       "preempts": []
     }
   ],
@@ -52,15 +56,16 @@
       "unknown_output_provenance",
       "sealed_or_holdout_scope_without_explicit_gate",
       "production_restart_required",
-      "paid_external_dependency_without_budget_gate"
+      "paid_external_dependency_without_budget_gate",
+      "filler_compute_without_evidence_bound_need"
     ]
   },
-  "four_week_sequence": [
-    "finish currently authorized DDS3 staged work",
-    "establish useful-compute accounting and idle detection",
-    "fill safe spare capacity with BEN benchmark and video backlog",
-    "prioritize targeted DDS discrepancy/counterexample queues over blind volume",
-    "run nightly low-priority regression and integrity work",
-    "review utilization and research yield daily; rebalance weekly"
+  "on_demand_sequence": [
+    "admit only approved evidence-bound work",
+    "start the exact existing Frankfurt Oracle VM only when required",
+    "run bounded work with existing priority and resource safety gates",
+    "persist required evidence off-host",
+    "prove all workload families idle with a complete fail-closed guard",
+    "stop the VM through OCI lifecycle control after the configured idle grace period"
   ]
 }
