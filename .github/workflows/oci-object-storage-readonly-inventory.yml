@@ -1,0 +1,138 @@
+name: OCI Object Storage read-only inventory
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oci-object-storage-readonly-inventory.yml'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oci-object-storage-readonly-inventory
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Enforce read-only OCI surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          f=.github/workflows/oci-object-storage-readonly-inventory.yml
+          ! grep -nE 'oci .* (create|update|delete|put|copy|rename|restore|reencrypt|replication|make-writable) ' "$f"
+          grep -q 'oci os ns get' "$f"
+          grep -q 'oci os bucket list' "$f"
+          grep -q 'oci compute instance get' "$f"
+
+  inventory:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 580 &&
+      github.event.comment.user.login == 'olegmed1-art' &&
+      github.event.comment.body == '/drive-recovery inventory-oci'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      ISSUE_NUMBER: '580'
+      INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      OCI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Configure OCI CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          for value in OCI_USER OCI_TENANCY OCI_FINGERPRINT OCI_KEY OCI_REGION; do
+            [[ -n "${!value:-}" ]] || { echo "$value is not configured" >&2; exit 21; }
+          done
+          python -m pip install --disable-pip-version-check -q 'oci-cli==3.90.3'
+          install -d -m 0700 "$HOME/.oci"
+          printf '%s' "$OCI_KEY" | python -c '
+          import sys
+          raw=sys.stdin.read().replace("\\r", "").replace("\\n", "\n")
+          if not raw.endswith("\n"): raw += "\n"
+          open(sys.argv[1], "w", encoding="utf-8", newline="\n").write(raw)
+          ' "$HOME/.oci/key.pem"
+          chmod 0600 "$HOME/.oci/key.pem"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$OCI_USER
+          fingerprint=$OCI_FINGERPRINT
+          tenancy=$OCI_TENANCY
+          region=$OCI_REGION
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 0600 "$HOME/.oci/config"
+          oci iam region list --output json >/dev/null
+
+      - name: Inventory existing buckets without exposing names
+        id: inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          instance="$(oci compute instance get --instance-id "$INSTANCE_ID" --output json)"
+          compartment="$(printf '%s' "$instance" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["compartment-id"])')"
+          namespace="$(oci os ns get --query 'data' --raw-output)"
+          [[ -n "$namespace" ]]
+          buckets="$(oci os bucket list --compartment-id "$compartment" --all --output json)"
+          BUCKETS_JSON="$buckets" python - <<'PY' > "$RUNNER_TEMP/inventory.txt"
+          import hashlib, json, os
+          xs=json.loads(os.environ['BUCKETS_JSON']).get('data') or []
+          private=[]
+          public=[]
+          for x in xs:
+              access=str(x.get('public-access-type') or 'NoPublicAccess')
+              name=str(x.get('name') or '')
+              rec=(hashlib.sha256(name.encode()).hexdigest()[:16], str(x.get('storage-tier') or 'unknown'))
+              if access == 'NoPublicAccess': private.append(rec)
+              else: public.append(rec)
+          print('bucket_count='+str(len(xs)))
+          print('private_bucket_count='+str(len(private)))
+          print('public_bucket_count='+str(len(public)))
+          print('private_bucket_fingerprints='+(','.join(a+':'+b for a,b in private) if private else 'none'))
+          print('candidate_existing_private_bucket='+('yes' if private else 'no'))
+          PY
+          cat "$RUNNER_TEMP/inventory.txt"
+
+      - name: Publish sanitized inventory evidence
+        if: always()
+        shell: bash
+        env:
+          OUTCOME: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "OCI Object Storage read-only inventory: **${OUTCOME^^}**"
+            echo
+            if [[ -s "$RUNNER_TEMP/inventory.txt" ]]; then
+              echo '```text'
+              cat "$RUNNER_TEMP/inventory.txt"
+              echo '```'
+            else
+              echo 'Inventory evidence was not produced; fail-closed before acceptance.'
+            fi
+            echo
+            echo 'Read-only only: no bucket or object was created, modified, uploaded, copied, restored, or deleted.'
+            echo "Run: $RUN_URL"
+          } > "$RUNNER_TEMP/body.md"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"
