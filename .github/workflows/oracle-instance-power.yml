@@ -42,12 +42,10 @@ jobs:
         env:
           OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
           OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
         run: |
           set -euo pipefail
           test -n "${OCI_CLI_CONFIG:-}"
           test -n "${OCI_CLI_KEY_CONTENT:-}"
-          test -n "${OCI_CLI_FINGERPRINT:-}"
 
       - name: Install OCI CLI
         run: python -m pip install --disable-pip-version-check --quiet 'oci-cli==3.90.3'
@@ -56,7 +54,6 @@ jobs:
         env:
           OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
           OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
-          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
         run: |
           set -euo pipefail
           umask 077
@@ -73,10 +70,7 @@ jobs:
           fi
           actual_fingerprint="$(openssl pkey -in "$HOME/.oci/oci_api_key.pem" -pubout -outform DER | openssl md5 -r | awk '{print $1}' | sed 's/../&:/g;s/:$//')"
           test -n "$actual_fingerprint"
-          if [[ "$actual_fingerprint" != "$OCI_CLI_FINGERPRINT" ]]; then
-            echo "private key fingerprint does not match OCI_CLI_FINGERPRINT" >&2
-            exit 6
-          fi
+          export OCI_DERIVED_FINGERPRINT="$actual_fingerprint"
           python - <<'PY'
           import os
           from pathlib import Path
@@ -88,12 +82,12 @@ jobs:
               elif line.strip().startswith('region='):
                   lines.append('region=eu-frankfurt-1'); region=True
               elif line.strip().startswith('fingerprint='):
-                  lines.append(f'fingerprint={os.environ["OCI_CLI_FINGERPRINT"]}'); fingerprint=True
+                  lines.append(f'fingerprint={os.environ["OCI_DERIVED_FINGERPRINT"]}'); fingerprint=True
               else:
                   lines.append(line)
           if not key: lines.append(f'key_file={Path.home()}/.oci/oci_api_key.pem')
           if not region: lines.append('region=eu-frankfurt-1')
-          if not fingerprint: lines.append(f'fingerprint={os.environ["OCI_CLI_FINGERPRINT"]}')
+          if not fingerprint: lines.append(f'fingerprint={os.environ["OCI_DERIVED_FINGERPRINT"]}')
           p.write_text('\n'.join(lines)+'\n')
           PY
           oci iam region list --output json >/dev/null
