@@ -17,7 +17,13 @@ on_err(){
   printf 'UV003_FAILURE_CODE=%s\n' "$stage" >&2
   return "$rc"
 }
+on_exit(){
+  local rc=$?
+  if (( rc != 0 )); then printf 'UV003_FAILURE_CODE=%s\n' "$stage" >&2; fi
+  return "$rc"
+}
 trap on_err ERR
+trap on_exit EXIT
 
 set_stage 'BOOTSTRAP_INPUT'
 fail(){
@@ -99,6 +105,7 @@ if [[ -e "$SUDOERS" ]]; then cp -a "$SUDOERS" "$backup/sudoers"; had_sudoers=1; 
 cleanup(){
   local rc=$?
   set +e
+  if (( rc != 0 )); then printf 'UV003_FAILURE_CODE=%s\n' "$stage" >&2; fi
   if (( completed == 0 )); then
     if (( had_target == 1 )); then cp -a "$backup/target" "$TARGET"; else rm -f "$TARGET"; fi
     if (( had_sudoers == 1 )); then cp -a "$backup/sudoers" "$SUDOERS"; else rm -f "$SUDOERS"; fi
@@ -125,4 +132,5 @@ if sudo -u ocarun sudo -n "$TARGET" unexpected >/dev/null 2>&1; then
 fi
 completed=1
 trap - ERR
+trap - EXIT
 echo UV003_PREFLIGHT_OPERATOR_INSTALLED
