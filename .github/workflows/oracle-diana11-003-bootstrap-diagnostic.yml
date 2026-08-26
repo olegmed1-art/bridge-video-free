@@ -47,6 +47,8 @@ jobs:
           PY
           grep -Fq 'UV003_BOOTSTRAP_DIAGNOSTIC=' ops/probe_uv003_operator_bootstrap.py
           grep -Fq "readonly BRIDGE_JOB_ID='diana11-shadow-20260826-001'" ops/universal_video_diana11_003_operator.sh
+          grep -Fq "rm -f /tmp/uv003-bootstrap-diagnostic.py && umask 077 && cat > /tmp/uv003-bootstrap-diagnostic.py && chmod 0600 /tmp/uv003-bootstrap-diagnostic.py" .github/workflows/oracle-diana11-003-bootstrap-diagnostic.yml
+          grep -Fq "rm -f /tmp/uv003-operator-source.sh && umask 077 && cat > /tmp/uv003-operator-source.sh && chmod 0600 /tmp/uv003-operator-source.sh" .github/workflows/oracle-diana11-003-bootstrap-diagnostic.yml
           for forbidden in 'systemctl start' 'systemctl stop' 'systemctl restart' 'requests.post' 'requests.put' 'requests.patch' 'requests.delete' 'GOOGLE_DRIVE' 'ffmpeg' 'faster_whisper'; do
             ! grep -Fq "$forbidden" ops/probe_uv003_operator_bootstrap.py || { echo "forbidden diagnostic surface: $forbidden" >&2; exit 1; }
           done
@@ -63,7 +65,7 @@ jobs:
           import json,os,re
           x=json.load(open(os.environ['REQUEST_FILE'], encoding='utf-8'))
           assert set(x)=={'request_id','issue','probe'}
-          assert x['request_id']=='uv003-bootstrap-readonly-20260826-01'
+          assert x['request_id']=='uv003-bootstrap-readonly-20260826-02'
           assert x['issue']==615
           assert x['probe']=='uv003-bootstrap-readonly-v1'
           assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', x['request_id'])
@@ -125,8 +127,8 @@ jobs:
           ssh_cmd=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
           probe_sha="$(sha256sum ops/probe_uv003_operator_bootstrap.py | awk '{print $1}')"
           operator_sha="$(sha256sum ops/universal_video_diana11_003_operator.sh | awk '{print $1}')"
-          cat ops/probe_uv003_operator_bootstrap.py | "${ssh_cmd[@]}" 'cat > /tmp/uv003-bootstrap-diagnostic.py && chmod 0500 /tmp/uv003-bootstrap-diagnostic.py'
-          cat ops/universal_video_diana11_003_operator.sh | "${ssh_cmd[@]}" 'cat > /tmp/uv003-operator-source.sh && chmod 0500 /tmp/uv003-operator-source.sh'
+          cat ops/probe_uv003_operator_bootstrap.py | "${ssh_cmd[@]}" 'rm -f /tmp/uv003-bootstrap-diagnostic.py && umask 077 && cat > /tmp/uv003-bootstrap-diagnostic.py && chmod 0600 /tmp/uv003-bootstrap-diagnostic.py'
+          cat ops/universal_video_diana11_003_operator.sh | "${ssh_cmd[@]}" 'rm -f /tmp/uv003-operator-source.sh && umask 077 && cat > /tmp/uv003-operator-source.sh && chmod 0600 /tmp/uv003-operator-source.sh'
           remote_hashes="$("${ssh_cmd[@]}" 'sha256sum /tmp/uv003-bootstrap-diagnostic.py /tmp/uv003-operator-source.sh' 2>/dev/null)"
           REMOTE_HASHES="$remote_hashes" PROBE_SHA="$probe_sha" OPERATOR_SHA="$operator_sha" python - <<'PY'
           import os
