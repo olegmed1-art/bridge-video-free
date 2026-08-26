@@ -8,6 +8,10 @@ on:
     branches: [main]
     paths:
       - 'ops/oracle-universal-video-job-requests/*.json'
+  # Integration-token commits do not always emit an Actions push event.
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -33,12 +37,183 @@ jobs:
           fetch-depth: 2
       - name: Validate generic explicit Drive request
         id: request
-        if: ${{ github.event_name == 'push' }}
+        if: ${{ github.event_name != 'pull_request' }}
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
-            | grep -E '^ops/oracle-universal-video-job-requests/[^/]+\.json$' | sort -u)
+          if [[ "$GITHUB_EVENT_NAME" == 'push' ]]; then
+            mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+              | grep -E '^ops/oracle-universal-video-job-requests/[^/]+\.json
+          [[ ${#files[@]} -eq 1 ]] || { echo "expected exactly one job request" >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          x=json.load(open(os.environ['REQUEST_FILE'], encoding='utf-8'))
+          assert set(x)=={'request_id','issue','job'}, x
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
+          assert isinstance(x['issue'], int) and x['issue'] > 0
+          job=x['job']
+          jid=job.get('job_id')
+          profile=job.get('profile')
+          from universal_video.contract import validate_job
+          validated=validate_job(job)
+          assert validated.source['kind']=='google_drive'
+          print('request_id='+x['request_id'])
+          print('issue='+str(x['issue']))
+          print('job_id='+jid)
+          print('profile='+profile)
+          PY
+      - name: Contract-only PR validation
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          python - <<'PY'
+          import yaml
+          yaml.safe_load(open('.github/workflows/oracle-universal-video-job.yml', encoding='utf-8'))
+          print('ORACLE_UNIVERSAL_VIDEO_JOB_CONTRACT_PASS')
+          PY
+
+  execute:
+    if: ${{ github.event_name != 'pull_request' }}
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      OCI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      ISSUE_NUMBER: ${{ needs.validate.outputs.issue }}
+      JOB_ID: ${{ needs.validate.outputs.job_id }}
+      PROFILE: ${{ needs.validate.outputs.profile }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Configure OCI CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q oci-cli
+          mkdir -p "$HOME/.oci"
+          printf '%s\n' "$OCI_KEY" > "$HOME/.oci/key.pem"
+          chmod 600 "$HOME/.oci/key.pem"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$OCI_USER
+          fingerprint=$OCI_FINGERPRINT
+          tenancy=$OCI_TENANCY
+          region=$OCI_REGION
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+          oci iam region list --output json >/dev/null
+          state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
+          [[ "$state" == RUNNING ]]
+          echo ORACLE_UNIVERSAL_VIDEO_JOB_OCI_PASS
+
+      - name: Submit and monitor generic resident job
+        shell: bash
+        run: |
+          set -euo pipefail
+          compartment="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."compartment-id"' --raw-output)"
+          run_remote() {
+            local display="$1" command="$2" timeout="${3:-180}"
+            local content target cid execution lifecycle
+            content="$(SCRIPT_TEXT="$command" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":"set -Eeuo pipefail\n"+os.environ["SCRIPT_TEXT"]+"\n"},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
+            target="$(python -c 'import json,os; print(json.dumps({"instanceId":os.environ["INSTANCE_ID"]},separators=(",",":")))')"
+            cid="$(oci instance-agent command create --compartment-id "$compartment" --content "$content" --target "$target" --timeout-in-seconds "$timeout" --display-name "$display" --query data.id --raw-output)"
+            execution=''; lifecycle=''
+            for _ in $(seq 1 90); do
+              execution="$(oci instance-agent command-execution get --command-id "$cid" --instance-id "$INSTANCE_ID" --output json 2>/dev/null || true)"
+              [[ -n "$execution" ]] || { sleep 2; continue; }
+              lifecycle="$(printf '%s' "$execution" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state",""))')"
+              case "$lifecycle" in SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break;; esac
+              sleep 2
+            done
+            [[ "$lifecycle" == SUCCEEDED ]] || { echo "instance-agent command failed: $lifecycle" >&2; return 1; }
+            printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("text","") or "")'
+          }
+
+          request_file="$(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^ops/oracle-universal-video-job-requests/[^/]+\.json
+
+          initial="$(run_remote "universal-video-submit-${GITHUB_RUN_ID}" "$submit_cmd")"
+          state="$(printf '%s\n' "$initial" | sed -n 's/^UV_STATE=//p' | tail -n1)"
+          [[ "$state" =~ ^(QUEUED|RUNNING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]] || { echo "unsafe submit state: $state" >&2; exit 1; }
+          initial_safe="$(printf '%s\n' "$initial" | grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|CONFORMANCE_STATE|ATTESTATION_MODE|ARTIFACT_SET_SHA256|MANIFEST_SHA256|ARTIFACT_COUNT|TOTAL_BYTES|DOMAIN_ANALYSIS_STATUS|TECHNICAL_BUNDLE_READY|BRIDGE_PRODUCTION_READY|PEDAGOGICAL_STATUS|PUBLICATION_STATE|ERROR_TYPE|ERROR)=' | head -n 20 || true)"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус **$label**: **SUBMITTED → $state**.\n\n\`\`\`text\n$initial_safe\n\`\`\`\nТехническая готовность не означает предметную или педагогическую готовность. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          last="$state"
+
+          for _ in $(seq 1 300); do
+            case "$last" in
+              TECHNICAL_CONFORMANT) echo ORACLE_UNIVERSAL_VIDEO_JOB_TECHNICAL_CONFORMANCE_PASS; exit 0;;
+              REVIEW|NONCONFORMANT|CONFLICT|FAILED) exit 1;;
+            esac
+            sleep 60
+            out="$(run_remote "universal-video-status-${GITHUB_RUN_ID}" "$status_cmd")"
+            state="$(printf '%s\n' "$out" | sed -n 's/^UV_STATE=//p' | tail -n1)"
+            [[ "$state" =~ ^(QUEUED|RUNNING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]] || { echo "unsafe status: $state" >&2; exit 1; }
+            if [[ "$state" != "$last" ]]; then
+              safe="$(printf '%s\n' "$out" | grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|CONFORMANCE_STATE|ATTESTATION_MODE|ARTIFACT_SET_SHA256|MANIFEST_SHA256|ARTIFACT_COUNT|TOTAL_BYTES|DOMAIN_ANALYSIS_STATUS|TECHNICAL_BUNDLE_READY|BRIDGE_PRODUCTION_READY|PEDAGOGICAL_STATUS|PUBLICATION_STATE|ERROR_TYPE|ERROR)=' | head -n 20)"
+              gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус **$label**: **$last → $state**.\n\n\`\`\`text\n$safe\n\`\`\`\nRun: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              last="$state"
+            fi
+          done
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "**$label** остаётся **$last** после 5-часового окна наблюдения; resident job не остановлен."
+          exit 2
+
+      - name: Report failure
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Оператор **Universal Video / $PROFILE / $JOB_ID** завершился fail-closed до подтверждённого COMPLETED. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+ | head -n1)"
+          payload="$(REQUEST_FILE="$request_file" python - <<'PY'
+          import base64,json,os
+          x=json.load(open(os.environ['REQUEST_FILE'],encoding='utf-8'))
+          print(base64.b64encode(json.dumps(x['job'],ensure_ascii=False,separators=(',',':')).encode()).decode())
+          PY
+          )"
+          submit_cmd="sudo -n /usr/local/sbin/universal-video submit-base64 '$payload'"
+          status_cmd="sudo -n /usr/local/sbin/universal-video status '$JOB_ID'"
+          label="Universal Video / $PROFILE / $JOB_ID"
+
+          initial="$(run_remote "universal-video-submit-${GITHUB_RUN_ID}" "$submit_cmd")"
+          state="$(printf '%s\n' "$initial" | sed -n 's/^UV_STATE=//p' | tail -n1)"
+          [[ "$state" =~ ^(QUEUED|RUNNING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]] || { echo "unsafe submit state: $state" >&2; exit 1; }
+          initial_safe="$(printf '%s\n' "$initial" | grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|CONFORMANCE_STATE|ATTESTATION_MODE|ARTIFACT_SET_SHA256|MANIFEST_SHA256|ARTIFACT_COUNT|TOTAL_BYTES|DOMAIN_ANALYSIS_STATUS|TECHNICAL_BUNDLE_READY|BRIDGE_PRODUCTION_READY|PEDAGOGICAL_STATUS|PUBLICATION_STATE|ERROR_TYPE|ERROR)=' | head -n 20 || true)"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус **$label**: **SUBMITTED → $state**.\n\n\`\`\`text\n$initial_safe\n\`\`\`\nТехническая готовность не означает предметную или педагогическую готовность. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          last="$state"
+
+          for _ in $(seq 1 300); do
+            case "$last" in
+              TECHNICAL_CONFORMANT) echo ORACLE_UNIVERSAL_VIDEO_JOB_TECHNICAL_CONFORMANCE_PASS; exit 0;;
+              REVIEW|NONCONFORMANT|CONFLICT|FAILED) exit 1;;
+            esac
+            sleep 60
+            out="$(run_remote "universal-video-status-${GITHUB_RUN_ID}" "$status_cmd")"
+            state="$(printf '%s\n' "$out" | sed -n 's/^UV_STATE=//p' | tail -n1)"
+            [[ "$state" =~ ^(QUEUED|RUNNING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]] || { echo "unsafe status: $state" >&2; exit 1; }
+            if [[ "$state" != "$last" ]]; then
+              safe="$(printf '%s\n' "$out" | grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|CONFORMANCE_STATE|ATTESTATION_MODE|ARTIFACT_SET_SHA256|MANIFEST_SHA256|ARTIFACT_COUNT|TOTAL_BYTES|DOMAIN_ANALYSIS_STATUS|TECHNICAL_BUNDLE_READY|BRIDGE_PRODUCTION_READY|PEDAGOGICAL_STATUS|PUBLICATION_STATE|ERROR_TYPE|ERROR)=' | head -n 20)"
+              gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус **$label**: **$last → $state**.\n\n\`\`\`text\n$safe\n\`\`\`\nRun: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              last="$state"
+            fi
+          done
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "**$label** остаётся **$last** после 5-часового окна наблюдения; resident job не остановлен."
+          exit 2
+
+      - name: Report failure
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Оператор **Диана 11 / $MODE** завершился fail-closed до подтверждённого COMPLETED. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+ | sort -u)
+          else
+            mapfile -t files < <(find ops/oracle-universal-video-job-requests -maxdepth 1 -type f -name '*.json' -printf '%T@ %p\n' \
+              | sort -nr | head -n1 | cut -d' ' -f2-)
+          fi
           [[ ${#files[@]} -eq 1 ]] || { echo "expected exactly one job request" >&2; exit 1; }
           REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os, re
