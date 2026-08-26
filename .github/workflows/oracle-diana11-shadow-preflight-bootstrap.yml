@@ -42,6 +42,7 @@ jobs:
           bash -n ops/oracle_known_hosts_from_scan.sh
           grep -Fq 'UV003_EXECUTION_AUTHORIZED=NO' ops/universal_video_diana11_shadow_preflight.py
           grep -Fq 'UV003_PUBLICATION_AUTHORIZED=NO' ops/universal_video_diana11_shadow_preflight.py
+          grep -Fq 'UV003_FAILURE_CODE=' ops/install_universal_video_diana11_shadow_preflight.sh
           grep -Fq 'NOPASSWD: /usr/local/sbin/universal-video-diana11-shadow-preflight ""' ops/install_universal_video_diana11_shadow_preflight.sh
           python -m pip install --disable-pip-version-check -q pytest
           python -m pytest -q tests/test_diana11_shadow_preflight.py
@@ -122,7 +123,27 @@ jobs:
           cat ops/universal_video_diana11_shadow_preflight.py | "${ssh_cmd[@]}" 'cat > /tmp/uv003_preflight.py && chmod 0600 /tmp/uv003_preflight.py'
           cat ops/install_universal_video_diana11_shadow_preflight.sh | "${ssh_cmd[@]}" 'cat > /tmp/install_uv003_preflight.sh && chmod 0600 /tmp/install_uv003_preflight.sh'
           raw=''
-          if ! raw="$("${ssh_cmd[@]}" "sudo -n env SOURCE_FILE=/tmp/uv003_preflight.py EXPECTED_RUNTIME_COMMIT='${{ needs.validate.outputs.expected_runtime_commit }}' bash /tmp/install_uv003_preflight.sh && sudo -n /usr/local/sbin/universal-video-diana11-shadow-preflight" 2>&1)"; then
+          rc=0
+          if raw="$("${ssh_cmd[@]}" "sudo -n env SOURCE_FILE=/tmp/uv003_preflight.py EXPECTED_RUNTIME_COMMIT='${{ needs.validate.outputs.expected_runtime_commit }}' bash /tmp/install_uv003_preflight.sh && sudo -n /usr/local/sbin/universal-video-diana11-shadow-preflight" 2>&1)"; then
+            rc=0
+          else
+            rc=$?
+          fi
+          RAW="$raw" python - <<'PY' > "$RUNNER_TEMP/uv003-diagnostic.txt"
+          import os,re
+          allowed=re.compile(r'^UV003_FAILURE_CODE=(BOOTSTRAP_INPUT|SOURCE_CONTRACT|RUNTIME_LAYOUT|RUNTIME_COMMIT|RUNTIME_ENV|PREFLIGHT_ASSERTION|SUDOERS_TEMPLATE|INSTALL_SURFACE|SUDO_EXECUTION)$')
+          seen=[]
+          for line in os.environ['RAW'].splitlines():
+              if allowed.fullmatch(line) and line not in seen:
+                  seen.append(line)
+          print('\n'.join(seen[:1]))
+          PY
+          if (( rc != 0 )); then
+            if [[ -s "$RUNNER_TEMP/uv003-diagnostic.txt" ]]; then
+              cat "$RUNNER_TEMP/uv003-diagnostic.txt"
+            else
+              echo 'UV003_FAILURE_CODE=UNCLASSIFIED_REMOTE_FAILURE'
+            fi
             echo 'UV003_REMOTE_PREFLIGHT=FAILED_CLOSED'
             exit 1
           fi
@@ -208,6 +229,12 @@ jobs:
               echo 'No submit, ASR/media processing, retry, or Drive publication was authorized or attempted.'
             else
               echo "Preflight failed closed before READY_FOR_GO. Outcome: ${PREFLIGHT_OUTCOME:-UNKNOWN}."
+              if [[ -s "$RUNNER_TEMP/uv003-diagnostic.txt" ]]; then
+                echo 'Allowlisted diagnostic:'
+                echo '```text'
+                cat "$RUNNER_TEMP/uv003-diagnostic.txt"
+                echo '```'
+              fi
             fi
             echo "DDS3 non-regression: ${DDS3_OUTCOME:-NOT_RUN}."
             echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
