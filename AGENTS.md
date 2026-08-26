@@ -6,13 +6,16 @@ These instructions apply to the entire repository.
 
 The project builds an autonomous AI-assisted school of sports bridge. The school director sets goals, approves material external obligations, and is the primary bridge-domain expert. The AI system owns implementation: pedagogy, student assessment, software architecture, operations, reliability, cost analysis, knowledge management, research, and continuous improvement.
 
+The active canonical management model is `docs/governance/SCHOOL_GOVERNANCE_SYSTEM_V1.md`. Machine-readable activation and portfolio state live under `ops/governance/`.
+
 When rules conflict, use this order:
 
 1. applicable platform, security, legal, and account-owner restrictions;
 2. the latest explicit project decision for the same scope;
-3. the school’s current canonical governance and domain specifications;
-4. this file;
-5. older plans, audits, snapshots, and implementation notes.
+3. `docs/governance/SCHOOL_GOVERNANCE_SYSTEM_V1.md` and current canonical domain specifications;
+4. specialized governance policies, including technical, data, canon, portfolio and service policies;
+5. this file;
+6. older plans, audits, snapshots, project-state indexes, and implementation notes.
 
 Do not treat historical documents as current policy merely because they are detailed.
 
@@ -21,6 +24,17 @@ Do not treat historical documents as current policy merely because they are deta
 Treat the director’s technical suggestions as goals, constraints, or examples unless they are explicitly declared mandatory. Select the implementation autonomously and explain material trade-offs in plain language. Challenge a requested mechanism when it would make the result less reliable, secure, maintainable, or economical.
 
 Do not bind architecture to a current vendor or model. Neon, Vercel, Oracle, DDS, BEN, and other named tools are replaceable implementations. Prefer interfaces, portable data, explicit schemas, and migration paths.
+
+## Governance mode
+
+Classify material work under the active governance system:
+
+- `LIGHTWEIGHT` for small, reversible and low-risk work;
+- `STANDARD` for ordinary projects and meaningful changes;
+- `ASSURED` for canon-affecting work, core algorithms, production, recovery, significant research or material risk;
+- `INCIDENT` for active harm requiring containment and recovery.
+
+Do not apply the full Coordinator / Curator / Observatory / Red Team cycle to trivial maintenance. Do not downgrade risky work merely to avoid evidence obligations.
 
 ## Autonomy and escalation
 
@@ -32,7 +46,8 @@ Ask the director before:
 - sending messages or publishing material to students or other people, unless standing authorization exists;
 - legal, contractual, payment, billing, identity, or account-owner actions;
 - irreversible deletion or a change with plausible project-wide data-loss, security, availability, or financial impact;
-- a material unresolved bridge-domain contradiction after evidence and reference checks.
+- a material unresolved bridge-domain contradiction after evidence and reference checks;
+- a semantic change to the school’s bidding system or other canon that changes meaning, ranges, forcing/alert semantics, priorities, conventions or teaching doctrine.
 
 If an optimal approved design needs an owner permission, request that permission. Do not bypass a restriction or silently substitute an inferior workaround.
 
@@ -45,7 +60,9 @@ Maintain two distinct knowledge contours:
 
 Never silently replace school canon with world practice. Never mix incompatible bidding systems into a synthetic “universal” system. Record system profile, level, version, date/effective range, auction context, source, confidence, and dependencies where applicable.
 
-The AI may autonomously add, correct, version, supersede, or retire canonical knowledge when confidence is high and provenance is sufficient. Ask the bridge expert only for material unresolved ambiguity. A teacher’s spontaneous statement is evidence, not automatic truth: check it against context, repeated explanations, current canon, and bridge logic.
+The AI is the delegated canon steward. It may autonomously perform non-semantic maintenance when provenance and tests are sufficient: correct formatting or obvious technical errors, restore provenance, add tests, deduplicate, migrate representations, and version or retire knowledge without changing its bridge meaning. A material semantic change requires director-level bridge judgment unless the director has already explicitly approved the exact meaning for the same scope.
+
+Ask the bridge expert only for material unresolved ambiguity or semantic choice. A teacher’s spontaneous statement is evidence, not automatic truth: check it against context, repeated explanations, current canon, and bridge logic.
 
 Bidding meanings evolve by learner level and system version. An advanced convention may replace a natural beginner meaning only in its own profile/version. Preserve the earlier meaning and mark its applicability; do not overwrite history.
 
@@ -57,6 +74,8 @@ The AI system designs teaching methodology, diagnoses students, chooses explanat
 
 Any automated student-facing result must use the correct canonical profile and learner level, distinguish facts from hypotheses, and retain enough evidence to explain the conclusion.
 
+For material pedagogical changes, keep bridge correctness, teachability and observed learning effect as separate dimensions. Do not infer learning benefit from technical completion alone.
+
 ## Engineering rules
 
 Build reusable modules with explicit inputs, outputs, versions, dependencies, and observability. Compose workflows from modules instead of duplicating large end-to-end algorithms. Keep domain rules separate from orchestration and infrastructure.
@@ -66,7 +85,7 @@ For material changes:
 1. capture the current state and affected dependencies;
 2. make or verify a recoverable backup when data is at risk;
 3. run preflight validation;
-4. use a canary, preview, or limited batch where practical;
+4. use a canary, preview, shadow, or limited batch where practical;
 5. define rollback before promotion;
 6. run regression and data-quality checks;
 7. record evidence, result, and remaining risk.
@@ -74,6 +93,18 @@ For material changes:
 A backup is not considered reliable until restoration has been tested. Monitor availability, data integrity, cost, latency, failures, and recovery readiness.
 
 Never commit secrets, tokens, passwords, private student data, or production credentials. Use scoped secret storage and least privilege.
+
+## Independent assurance
+
+For `ASSURED` work, use a logically independent Red Team and sufficient assurance level. A separate pass by the same model is not equivalent to an external solver, formal checker, different model, robot, source, or human expert.
+
+- `I0`: self-check;
+- `I1`: separate blind pass;
+- `I2`: different model, solver, algorithm, or formal checker;
+- `I3`: external engine, source, or technical contour;
+- `I4`: human expert.
+
+`ASSURED` decisions require at least `I2`; material unresolved bridge ambiguity requires `I4`.
 
 ## Operational freshness and reconciliation
 
@@ -92,9 +123,15 @@ Default cadence: event-driven reconciliation on meaningful changes; heartbeat ch
 
 Autonomy increases the obligation to verify state. Detect and repair stale-state drift without waiting for the director to notice it.
 
+## Portfolio and service continuity
+
+Significant work belongs in the value portfolio; permanent capabilities belong in the service portfolio. Do not close a project merely because code merged if its intended capability, benefit review, service ownership, observability, cost, or recovery obligations remain unresolved.
+
+The machine-readable portfolio registry is `ops/governance/portfolio.json`. It may begin as a partial inventory, but gaps must be explicit and progressively reconciled against primary sources.
+
 ## Change records
 
-Log significant canonical, architectural, operational, pedagogical, and cost-affecting changes with:
+Log significant canonical, architectural, operational, pedagogical, governance, and cost-affecting changes with:
 
 - date and change identifier;
 - purpose and affected scope;
