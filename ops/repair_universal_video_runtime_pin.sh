@@ -64,32 +64,67 @@ failure_stage='SPOOL_BEFORE'
 spool_empty || fail
 printf 'UV003_RUNTIME_PIN_SPOOL=EMPTY\n'
 
-# Cardinality is safe to compute but values are never exposed. Zero, one, or
-# duplicate source-pin keys are all canonicalized to exactly one pinned key.
+# UV003_ENV_SHAPE_VALIDATOR_V2: validate the bounded non-secret file silently.
+# Zero, one, or duplicate source-pin keys are all accepted here because the
+# write stage canonicalizes them to exactly one pinned key. No value is emitted.
 failure_stage='ENV_SHAPE'
-env_shape="$(ENV_FILE="$ENV_FILE" python3 - <<'PY'
+ENV_FILE="$ENV_FILE" python3 - <<'PY' || fail
 import os
-from pathlib import Path
-lines=Path(os.environ['ENV_FILE']).read_text(encoding='utf-8').splitlines()
-n=sum(1 for line in lines if line.startswith('UNIVERSAL_VIDEO_SOURCE_COMMIT='))
-print('ZERO' if n == 0 else 'ONE' if n == 1 else 'MULTIPLE')
+import stat
+
+path=os.environ['ENV_FILE']
+maximum=1_048_576
+flags=os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+fd=os.open(path, flags)
+try:
+    info=os.fstat(fd)
+    assert stat.S_ISREG(info.st_mode)
+    assert 0 < info.st_size <= maximum
+    chunks=[]
+    total=0
+    while True:
+        chunk=os.read(fd, min(65_536, maximum + 1 - total))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        assert total <= maximum
+finally:
+    os.close(fd)
+raw=b''.join(chunks)
+assert raw and b'\x00' not in raw
+text=raw.decode('utf-8', errors='strict')
+assert not text.startswith('\ufeff')
+for line in text.splitlines():
+    assert len(line) <= 16_384
+    stripped=line.strip()
+    if not stripped or stripped.startswith('#'):
+        continue
+    assert '=' in line
 PY
-)" || fail
-[[ "$env_shape" == ZERO || "$env_shape" == ONE || "$env_shape" == MULTIPLE ]] || fail
 
 failure_stage='BACKUP'
 backup="$(mktemp -p "$BASE" .universal-video.env.uv003-backup.XXXXXX)" || fail
 cp --preserve=mode,ownership,timestamps "$ENV_FILE" "$backup" || fail
 changed=0
-stopped=0
+service_stopped=0
+service_started_new=0
 rollback(){
   local rc=$?
   set +e
   if (( rc != 0 )); then
+    # If the new process was already started, stop it only while the spool is
+    # still empty, then restore the old file and prior active service state.
+    if (( service_started_new == 1 )) && spool_empty; then
+      systemctl stop "$SERVICE" >/dev/null 2>&1 || true
+      if ! systemctl is-active --quiet "$SERVICE"; then
+        service_stopped=1
+      fi
+    fi
     if (( changed == 1 )); then
       cp --preserve=mode,ownership,timestamps "$backup" "$ENV_FILE"
     fi
-    if (( stopped == 1 )) && spool_empty; then
+    if (( service_stopped == 1 )) && spool_empty; then
       systemctl start "$SERVICE" >/dev/null 2>&1 || true
     fi
     report_failure
@@ -101,7 +136,7 @@ trap rollback EXIT
 
 failure_stage='STOP_SERVICE'
 systemctl stop "$SERVICE" || fail
-stopped=1
+service_stopped=1
 systemctl is-active --quiet "$SERVICE" && fail
 spool_empty || fail
 
@@ -109,6 +144,7 @@ spool_empty || fail
 # instance of that key and append exactly one pinned value. All other lines are
 # preserved byte-for-byte modulo the final newline.
 failure_stage='WRITE_ENV'
+changed=1
 ENV_FILE="$ENV_FILE" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" python3 - <<'PY' || fail
 import os,tempfile
 from pathlib import Path
@@ -128,7 +164,6 @@ finally:
     try: os.unlink(tmp)
     except FileNotFoundError: pass
 PY
-changed=1
 
 failure_stage='VERIFY_FILE'
 ENV_FILE="$ENV_FILE" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" python3 - <<'PY' || fail
@@ -146,7 +181,8 @@ spool_empty || fail
 
 failure_stage='START_SERVICE'
 systemctl start "$SERVICE" || fail
-stopped=0
+service_stopped=0
+service_started_new=1
 sleep 2
 [[ "$(systemctl is-active "$SERVICE")" == active ]] || fail
 
@@ -184,6 +220,7 @@ failure_stage='ASSISTANT_AFTER'
 
 failure_stage='FINALIZE'
 changed=0
+service_started_new=0
 trap - EXIT
 rm -f "$backup" || fail
 printf 'UV003_RUNTIME_PIN_FILE=PINNED\n'
