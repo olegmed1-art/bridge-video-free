@@ -30,20 +30,12 @@ jobs:
       - name: Validate credential presence
         shell: bash
         env:
-          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
-          OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
-          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
           OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
         run: |
           set -euo pipefail
-          missing=0
-          for name in OCI_CLI_USER OCI_CLI_TENANCY OCI_CLI_FINGERPRINT OCI_CLI_KEY_CONTENT; do
-            if [[ -z "${!name:-}" ]]; then
-              echo "missing required secret: $name"
-              missing=1
-            fi
-          done
-          [[ "$missing" -eq 0 ]]
+          test -n "${OCI_CLI_CONFIG:-}" || { echo 'missing required secret: OCI_CLI_CONFIG'; exit 1; }
+          test -n "${OCI_CLI_KEY_CONTENT:-}" || { echo 'missing required secret: OCI_CLI_KEY_CONTENT'; exit 1; }
 
       - name: Install OCI CLI
         run: python -m pip install --disable-pip-version-check --quiet oci-cli
@@ -51,23 +43,36 @@ jobs:
       - name: Configure bounded OCI client
         shell: bash
         env:
-          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
-          OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
-          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
           OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
         run: |
           set -euo pipefail
           umask 077
           mkdir -p "$HOME/.oci"
-          printf '%s' "$OCI_CLI_KEY_CONTENT" > "$HOME/.oci/oci_api_key.pem"
-          cat > "$HOME/.oci/config" <<EOF
-          [DEFAULT]
-          user=$OCI_CLI_USER
-          tenancy=$OCI_CLI_TENANCY
-          fingerprint=$OCI_CLI_FINGERPRINT
-          key_file=$HOME/.oci/oci_api_key.pem
-          region=$OCI_REGION
-          EOF
+          printf '%s\n' "$OCI_CLI_KEY_CONTENT" > "$HOME/.oci/oci_api_key.pem"
+          printf '%s\n' "$OCI_CLI_CONFIG" > "$HOME/.oci/config"
+          python - <<'PY'
+          from pathlib import Path
+          p = Path.home()/'.oci/config'
+          s = p.read_text()
+          lines=[]
+          found_key=False
+          found_region=False
+          for line in s.splitlines():
+              if line.strip().startswith('key_file='):
+                  lines.append(f'key_file={Path.home()}/.oci/oci_api_key.pem')
+                  found_key=True
+              elif line.strip().startswith('region='):
+                  lines.append('region=eu-frankfurt-1')
+                  found_region=True
+              else:
+                  lines.append(line)
+          if not found_key:
+              lines.append(f'key_file={Path.home()}/.oci/oci_api_key.pem')
+          if not found_region:
+              lines.append('region=eu-frankfurt-1')
+          p.write_text('\n'.join(lines)+'\n')
+          PY
 
       - name: Read current lifecycle state
         id: state
