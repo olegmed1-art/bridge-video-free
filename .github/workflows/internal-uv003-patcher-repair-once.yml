@@ -1,0 +1,45 @@
+name: Internal UV003 patcher indentation repair once
+
+on:
+  push:
+    branches:
+      - 'fix/uv003-bootstrap-contract-615'
+    paths:
+      - 'ops/internal-uv003-patcher-repair-request-615.json'
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Repair deterministic patcher string indentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          request = json.loads(Path('ops/internal-uv003-patcher-repair-request-615.json').read_text(encoding='utf-8'))
+          assert request == {'request_id': 'internal-uv003-patcher-repair-615-01', 'issue': 615}
+          path = Path('.github/workflows/internal-uv003-bootstrap-patch-once.yml')
+          text = path.read_text(encoding='utf-8')
+          old = "'''.replace('          ', '')"
+          assert text.count(old) == 6
+          path.write_text(text.replace(old, "'''"), encoding='utf-8')
+          PY
+          git diff --check
+      - name: Commit repair and remove repair machinery
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm --force .github/workflows/internal-uv003-patcher-repair-once.yml
+          git rm --force ops/internal-uv003-patcher-repair-request-615.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/internal-uv003-bootstrap-patch-once.yml
+          git commit -m 'Repair UV003 one-shot patcher indentation'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
