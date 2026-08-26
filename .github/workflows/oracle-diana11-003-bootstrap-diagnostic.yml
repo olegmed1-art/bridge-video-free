@@ -1,0 +1,212 @@
+name: Oracle Diana 11 Durable 003 Bootstrap Diagnostic
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-diana11-003-bootstrap-diagnostic.yml'
+      - 'ops/probe_uv003_operator_bootstrap.py'
+      - 'ops/universal_video_diana11_003_operator.sh'
+      - 'tests/test_uv003_bootstrap_diagnostic.py'
+      - 'ops/oracle_known_hosts_from_scan.sh'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-diana11-003-bootstrap-diagnostic-requests/*.json'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oracle-diana11-003-bootstrap-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    outputs:
+      issue: ${{ steps.request.outputs.issue }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Validate no-mutation diagnostic contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile ops/probe_uv003_operator_bootstrap.py
+          bash -n ops/universal_video_diana11_003_operator.sh
+          bash -n ops/oracle_known_hosts_from_scan.sh
+          python -m pip install --disable-pip-version-check -q pytest pyyaml
+          python -m pytest -q tests/test_uv003_bootstrap_diagnostic.py
+          python - <<'PY'
+          import yaml
+          yaml.safe_load(open('.github/workflows/oracle-diana11-003-bootstrap-diagnostic.yml', encoding='utf-8'))
+          PY
+          grep -Fq 'UV003_BOOTSTRAP_DIAGNOSTIC=' ops/probe_uv003_operator_bootstrap.py
+          grep -Fq "readonly BRIDGE_JOB_ID='diana11-shadow-20260826-001'" ops/universal_video_diana11_003_operator.sh
+          for forbidden in 'systemctl start' 'systemctl stop' 'systemctl restart' 'requests.post' 'requests.put' 'requests.patch' 'requests.delete' 'GOOGLE_DRIVE' 'ffmpeg' 'faster_whisper'; do
+            ! grep -Fq "$forbidden" ops/probe_uv003_operator_bootstrap.py || { echo "forbidden diagnostic surface: $forbidden" >&2; exit 1; }
+          done
+      - name: Validate exact diagnostic request
+        id: request
+        if: ${{ github.event_name == 'push' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+            | grep -E '^ops/oracle-diana11-003-bootstrap-diagnostic-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one UV003 bootstrap diagnostic request' >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json,os,re
+          x=json.load(open(os.environ['REQUEST_FILE'], encoding='utf-8'))
+          assert set(x)=={'request_id','issue','probe'}
+          assert x['request_id']=='uv003-bootstrap-readonly-20260826-01'
+          assert x['issue']==615
+          assert x['probe']=='uv003-bootstrap-readonly-v1'
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', x['request_id'])
+          print('issue=615')
+          PY
+
+  diagnose:
+    if: ${{ github.event_name == 'push' }}
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_NUMBER: ${{ needs.validate.outputs.issue }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Verify host identity and key
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SSH_KEY"
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "$SSH_KEY" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          known="$RUNNER_TEMP/known_hosts"
+          : > "$known"
+          index=0
+          for expected in \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64'; do
+            part="$RUNNER_TEMP/known_hosts.$index"
+            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$expected" "$part"
+            cat "$part" >> "$known"
+            index=$((index + 1))
+          done
+          sort -u -o "$known" "$known"
+          test -s "$known"
+          actual="$(ssh-keygen -lf "$known" | awk '{print $2}' | sort -u | paste -sd, -)"
+          expected="$(printf '%s\n' \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64' | sort -u | paste -sd, -)"
+          [[ "$actual" == "$expected" ]]
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+      - name: Execute exact read-only bootstrap discriminator
+        id: probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh_cmd=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          probe_sha="$(sha256sum ops/probe_uv003_operator_bootstrap.py | awk '{print $1}')"
+          operator_sha="$(sha256sum ops/universal_video_diana11_003_operator.sh | awk '{print $1}')"
+          cat ops/probe_uv003_operator_bootstrap.py | "${ssh_cmd[@]}" 'cat > /tmp/uv003-bootstrap-diagnostic.py && chmod 0500 /tmp/uv003-bootstrap-diagnostic.py'
+          cat ops/universal_video_diana11_003_operator.sh | "${ssh_cmd[@]}" 'cat > /tmp/uv003-operator-source.sh && chmod 0500 /tmp/uv003-operator-source.sh'
+          remote_hashes="$("${ssh_cmd[@]}" 'sha256sum /tmp/uv003-bootstrap-diagnostic.py /tmp/uv003-operator-source.sh' 2>/dev/null)"
+          REMOTE_HASHES="$remote_hashes" PROBE_SHA="$probe_sha" OPERATOR_SHA="$operator_sha" python - <<'PY'
+          import os
+          rows={line.split()[1]:line.split()[0] for line in os.environ['REMOTE_HASHES'].splitlines() if len(line.split())==2}
+          assert rows.get('/tmp/uv003-bootstrap-diagnostic.py')==os.environ['PROBE_SHA']
+          assert rows.get('/tmp/uv003-operator-source.sh')==os.environ['OPERATOR_SHA']
+          PY
+          raw=''; rc=0
+          if raw="$("${ssh_cmd[@]}" 'sudo -n python3 /tmp/uv003-bootstrap-diagnostic.py' 2>&1)"; then rc=0; else rc=$?; fi
+          RAW="$raw" RC="$rc" python - <<'PY' > "$RUNNER_TEMP/uv003-bootstrap-probe-safe.txt"
+          import os,re
+          codes=(
+            'ROOT_REQUIRED','SOURCE_LAYOUT','SOURCE_HEAD_READ_FAILED','SOURCE_HEAD_MISMATCH',
+            'SOURCE_STATUS_FAILED','SOURCE_DIRTY','ENV_MISSING_OR_UNSAFE','ENV_TOO_LARGE',
+            'ENV_READ_FAILED','ENV_ENCODING_INVALID','ENV_STRUCTURE_INVALID',
+            'ENV_SOURCE_PIN_MISSING','ENV_SOURCE_PIN_MULTIPLE','ENV_SOURCE_PIN_MISMATCH',
+            'ENV_MODEL_MISMATCH','PROCESSING_FINGERPRINT_MISMATCH','RUNTIME_PYTHON_MISSING',
+            'RECEIPT_READER_MISSING','WORKER_USER_MISSING','SERVICE_INACTIVE','SPOOL_LAYOUT',
+            'SPOOL_GUARD_FAILED','JOB_ID_CONFLICT','ROOT_CONTROL_UNSAFE','PASS','INTERNAL_FAILURE',
+          )
+          allowed=re.compile(r'^UV003_BOOTSTRAP_DIAGNOSTIC=(?:'+'|'.join(codes)+r')$')
+          safe=[line for line in os.environ['RAW'].splitlines() if allowed.fullmatch(line)]
+          if os.environ['RC']!='0' or len(safe)!=1:
+              print('UV003_BOOTSTRAP_DIAGNOSTIC=REMOTE_UNCLASSIFIED')
+          else:
+              print(safe[0])
+          PY
+          cat "$RUNNER_TEMP/uv003-bootstrap-probe-safe.txt"
+          [[ "$(wc -l < "$RUNNER_TEMP/uv003-bootstrap-probe-safe.txt")" == 1 ]]
+          code="$(cut -d= -f2 "$RUNNER_TEMP/uv003-bootstrap-probe-safe.txt")"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo 'observed=true' >> "$GITHUB_OUTPUT"
+      - name: Execute current source operator status path read-only
+        id: source_status
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh_cmd=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          raw=''; rc=0
+          if raw="$("${ssh_cmd[@]}" 'sudo -n bash /tmp/uv003-operator-source.sh status-bridge' 2>&1)"; then rc=0; else rc=$?; fi
+          RAW="$raw" RC="$rc" python - <<'PY' > "$RUNNER_TEMP/uv003-source-status-safe.txt"
+          import os,re
+          patterns=(
+            r'UV003_OPERATOR_FAILURE=(?:MUST_RUN_AS_ROOT|RUNTIME_LAYOUT|SPOOL_UNSAFE|SERVICE_INACTIVE|RUNTIME_COMMIT|RUNTIME_DIRTY|RUNTIME_ENV|SCHOOL_RUNTIME|ROOT_CONTROL_DIR|UNSUPPORTED_JOB|CONFORMANCE|PUBLICATION_RECEIPT|FRESH_ID_CONFLICT|STAGING|ENQUEUE_COLLISION|OAUTH|NOT_CONFORMANT|PUBLICATION|READBACK|USAGE|UNSUPPORTED_OPERATION)',
+            r'UV_STATE=(?:MISSING|CONFLICT|NONCONFORMANT|FAILED|RUNNING|QUEUED|REVIEW|TECHNICAL_CONFORMANT)',
+            r'UV_ERROR_TYPE=(?:ORPHAN_RESULT_DIRECTORY|MULTIPLE_SPOOL_STATES|UNSAFE_SPOOL_RECEIPT|UNSAFE_FAILED_RECEIPT|DONE_RECEIPT_IDENTITY_MISMATCH|UNEXPECTED_DONE_STATUS|RESULT_CONFORMANCE_FAILED)',
+            r'UNIVERSAL_VIDEO_DIANA11_003_STATUS_PASS',
+          )
+          safe=[]
+          for line in os.environ['RAW'].splitlines():
+              if any(re.fullmatch(p,line) for p in patterns) and line not in safe: safe.append(line)
+          if os.environ['RC']!='0' and not any(line.startswith('UV003_OPERATOR_FAILURE=') for line in safe):
+              safe.append('UV003_SOURCE_STATUS=REMOTE_UNCLASSIFIED')
+          print('\n'.join(safe))
+          PY
+          cat "$RUNNER_TEMP/uv003-source-status-safe.txt"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo 'observed=true' >> "$GITHUB_OUTPUT"
+      - name: Record bounded diagnostic evidence
+        if: ${{ always() }}
+        shell: bash
+        env:
+          PROBE_CODE: ${{ steps.probe.outputs.code }}
+          SOURCE_RC: ${{ steps.source_status.outputs.rc }}
+        run: |
+          set -euo pipefail
+          body="$RUNNER_TEMP/uv003-bootstrap-diagnostic.md"
+          {
+            echo '[OBSERVATORY] UV003 post-stop bootstrap diagnostic.'
+            echo
+            for file in "$RUNNER_TEMP/uv003-bootstrap-probe-safe.txt" "$RUNNER_TEMP/uv003-source-status-safe.txt"; do
+              if [[ -s "$file" ]]; then
+                echo '```text'
+                cat "$file"
+                echo '```'
+                echo
+              fi
+            done
+            echo "Probe code: ${PROBE_CODE:-NOT_OBSERVED}; source-status exit code class: $([[ "${SOURCE_RC:-1}" == 0 ]] && echo PASS || echo NONZERO)."
+            echo 'Only resident git/env/service/spool identity and the fixed source `status-bridge` path were read. No installation, enqueue, media processing, Drive write, publication, retry, paid resource, or production change occurred.'
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > "$body"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body"
