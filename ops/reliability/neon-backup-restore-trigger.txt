@@ -1,0 +1,4 @@
+run=independent-neon-backup-restore-v1
+issue=526
+canonical_promotion=false
+retry_after_pg_dump_fsync_fix=2026-08-26T08:08:00+03:00
