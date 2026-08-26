@@ -37,7 +37,13 @@ jobs:
           set -euo pipefail
           umask 077
           mkdir -p "$HOME/.oci"
-          printf '%s\n' "$OCI_CLI_KEY_CONTENT" > "$HOME/.oci/oci_api_key.pem"
+          python - "$HOME/.oci/oci_api_key.pem" <<'PY'
+          import os, sys
+          raw = os.environ['OCI_CLI_KEY_CONTENT'].replace('\r', '').replace('\\n', '\n')
+          if not raw.endswith('\n'):
+              raw += '\n'
+          open(sys.argv[1], 'w', encoding='utf-8', newline='\n').write(raw)
+          PY
           printf '%s\n' "$OCI_CLI_CONFIG" > "$HOME/.oci/config"
           python - <<'PY'
           from pathlib import Path
@@ -54,6 +60,7 @@ jobs:
           if not region: lines.append('region=eu-frankfurt-1')
           p.write_text('\n'.join(lines)+'\n')
           PY
+          chmod 0600 "$HOME/.oci/oci_api_key.pem" "$HOME/.oci/config"
           oci iam region list --output json >/dev/null
       - name: Read exact Frankfurt VM status
         run: |
