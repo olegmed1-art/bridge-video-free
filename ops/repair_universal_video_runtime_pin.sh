@@ -29,7 +29,7 @@ fail(){
 checkpoint(){
   local value="$1"
   case "$value" in
-    PRECHECK_PASS|READY_BEFORE_PASS|SPOOL_BEFORE_PASS|ENV_SHAPE_ENTER|ENV_SHAPE_PASS|BACKUP_ENTER|BACKUP_PASS|ROLLBACK_ARMED|STOP_SERVICE_ENTER|STOP_SERVICE_PASS|WRITE_ENV_ENTER|WRITE_ENV_PASS|VERIFY_FILE_PASS|SPOOL_AFTER_WRITE_PASS|START_SERVICE_ENTER|START_SERVICE_PASS|VERIFY_LIVE_PASS|SPOOL_AFTER_START_PASS|READY_AFTER_PASS|ASSISTANT_AFTER_PASS|FINALIZE_ENTER) ;;
+    PRECHECK_PASS|READY_BEFORE_PASS|SPOOL_BEFORE_PASS|ENV_SHAPE_ENTER|ENV_SHAPE_STAT_PASS|ENV_SHAPE_READ_PASS|ENV_SHAPE_UTF8_PASS|ENV_SHAPE_STRUCTURE_PASS|ENV_SHAPE_PASS|BACKUP_ENTER|BACKUP_PASS|ROLLBACK_ARMED|STOP_SERVICE_ENTER|STOP_SERVICE_PASS|WRITE_ENV_ENTER|WRITE_ENV_PASS|VERIFY_FILE_PASS|SPOOL_AFTER_WRITE_PASS|START_SERVICE_ENTER|START_SERVICE_PASS|VERIFY_LIVE_PASS|SPOOL_AFTER_START_PASS|READY_AFTER_PASS|ASSISTANT_AFTER_PASS|FINALIZE_ENTER) ;;
     *) failure_stage='PRECHECK'; fail ;;
   esac
   printf 'UV003_RUNTIME_PIN_CHECKPOINT=%s\n' "$value"
@@ -86,44 +86,41 @@ spool_empty || fail
 printf 'UV003_RUNTIME_PIN_SPOOL=EMPTY\n'
 checkpoint SPOOL_BEFORE_PASS
 
-# UV003_ENV_SHAPE_VALIDATOR_V2: validate the bounded non-secret file silently.
-# Zero, one, or duplicate source-pin keys are all accepted here because the
-# write stage canonicalizes them to exactly one pinned key. No value is emitted.
+# UV003_ENV_SHAPE_PROBE_PARITY_V3: use the same bounded, one-read validation
+# path that independently classified the resident file as SOURCE_KEY_ONE.
+# No environment line or value is emitted; only fixed progress markers appear.
 failure_stage='ENV_SHAPE'
 checkpoint ENV_SHAPE_ENTER
 ENV_FILE="$ENV_FILE" python3 - <<'PY' || fail
 import os
 import stat
+from pathlib import Path
 
-path=os.environ['ENV_FILE']
+path=Path(os.environ['ENV_FILE'])
 maximum=1_048_576
-flags=os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
-fd=os.open(path, flags)
+assert not path.is_symlink()
+info=path.stat()
+assert stat.S_ISREG(info.st_mode)
+assert info.st_size <= maximum
+print('UV003_RUNTIME_PIN_CHECKPOINT=ENV_SHAPE_STAT_PASS', flush=True)
+fd=os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0))
 try:
-    info=os.fstat(fd)
-    assert stat.S_ISREG(info.st_mode)
-    assert 0 < info.st_size <= maximum
-    chunks=[]
-    total=0
-    while True:
-        chunk=os.read(fd, min(65_536, maximum + 1 - total))
-        if not chunk:
-            break
-        chunks.append(chunk)
-        total += len(chunk)
-        assert total <= maximum
+    raw=os.read(fd, maximum + 1)
 finally:
     os.close(fd)
-raw=b''.join(chunks)
+assert len(raw) <= maximum
+print('UV003_RUNTIME_PIN_CHECKPOINT=ENV_SHAPE_READ_PASS', flush=True)
 assert raw and b'\x00' not in raw
 text=raw.decode('utf-8', errors='strict')
 assert not text.startswith('\ufeff')
+print('UV003_RUNTIME_PIN_CHECKPOINT=ENV_SHAPE_UTF8_PASS', flush=True)
 for line in text.splitlines():
     assert len(line) <= 16_384
     stripped=line.strip()
     if not stripped or stripped.startswith('#'):
         continue
     assert '=' in line
+print('UV003_RUNTIME_PIN_CHECKPOINT=ENV_SHAPE_STRUCTURE_PASS', flush=True)
 PY
 checkpoint ENV_SHAPE_PASS
 

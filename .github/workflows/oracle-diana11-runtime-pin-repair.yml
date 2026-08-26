@@ -39,6 +39,7 @@ jobs:
           bash -n ops/repair_universal_video_runtime_pin.sh
           grep -Fq "readonly SERVICE='universal-video.service'" ops/repair_universal_video_runtime_pin.sh
           grep -Fq 'UNIVERSAL_VIDEO_SOURCE_COMMIT=' ops/repair_universal_video_runtime_pin.sh
+          grep -Fq 'UV003_ENV_SHAPE_PROBE_PARITY_V3' ops/repair_universal_video_runtime_pin.sh
           grep -Fq 'UV003_RUNTIME_PIN_REPAIR=PASS' ops/repair_universal_video_runtime_pin.sh
           grep -Fq 'UV003_RUNTIME_PIN_FAILURE_CODE=%s' ops/repair_universal_video_runtime_pin.sh
           grep -Fq 'UV003_RUNTIME_PIN_CHECKPOINT=%s' ops/repair_universal_video_runtime_pin.sh
@@ -141,8 +142,10 @@ jobs:
               r'RUNTIME_PIN_SPOOL=EMPTY|'
               r'RUNTIME_PIN_CHECKPOINT=(?:'
               r'PRECHECK_PASS|READY_BEFORE_PASS|SPOOL_BEFORE_PASS|'
-              r'ENV_SHAPE_ENTER|ENV_SHAPE_PASS|BACKUP_ENTER|BACKUP_PASS|'
-              r'ROLLBACK_ARMED|STOP_SERVICE_ENTER|STOP_SERVICE_PASS|'
+              r'ENV_SHAPE_ENTER|ENV_SHAPE_STAT_PASS|ENV_SHAPE_READ_PASS|'
+              r'ENV_SHAPE_UTF8_PASS|ENV_SHAPE_STRUCTURE_PASS|ENV_SHAPE_PASS|'
+              r'BACKUP_ENTER|BACKUP_PASS|ROLLBACK_ARMED|'
+              r'STOP_SERVICE_ENTER|STOP_SERVICE_PASS|'
               r'WRITE_ENV_ENTER|WRITE_ENV_PASS|VERIFY_FILE_PASS|'
               r'SPOOL_AFTER_WRITE_PASS|START_SERVICE_ENTER|START_SERVICE_PASS|'
               r'VERIFY_LIVE_PASS|SPOOL_AFTER_START_PASS|READY_AFTER_PASS|'
