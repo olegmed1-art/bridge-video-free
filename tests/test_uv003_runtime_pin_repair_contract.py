@@ -6,6 +6,31 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "ops/repair_universal_video_runtime_pin.sh"
+WORKFLOW = ROOT / ".github/workflows/oracle-diana11-runtime-pin-repair.yml"
+
+CHECKPOINTS = (
+    "PRECHECK_PASS",
+    "READY_BEFORE_PASS",
+    "SPOOL_BEFORE_PASS",
+    "ENV_SHAPE_ENTER",
+    "ENV_SHAPE_PASS",
+    "BACKUP_ENTER",
+    "BACKUP_PASS",
+    "ROLLBACK_ARMED",
+    "STOP_SERVICE_ENTER",
+    "STOP_SERVICE_PASS",
+    "WRITE_ENV_ENTER",
+    "WRITE_ENV_PASS",
+    "VERIFY_FILE_PASS",
+    "SPOOL_AFTER_WRITE_PASS",
+    "START_SERVICE_ENTER",
+    "START_SERVICE_PASS",
+    "VERIFY_LIVE_PASS",
+    "SPOOL_AFTER_START_PASS",
+    "READY_AFTER_PASS",
+    "ASSISTANT_AFTER_PASS",
+    "FINALIZE_ENTER",
+)
 
 
 def text() -> str:
@@ -75,36 +100,23 @@ def test_global_err_trap_emits_the_fixed_failure_surface():
 
 def test_stage_checkpoints_are_fixed_and_non_sensitive():
     source = text()
-    expected = (
-        "PRECHECK_PASS",
-        "READY_BEFORE_PASS",
-        "SPOOL_BEFORE_PASS",
-        "ENV_SHAPE_ENTER",
-        "ENV_SHAPE_PASS",
-        "BACKUP_ENTER",
-        "BACKUP_PASS",
-        "ROLLBACK_ARMED",
-        "STOP_SERVICE_ENTER",
-        "STOP_SERVICE_PASS",
-        "WRITE_ENV_ENTER",
-        "WRITE_ENV_PASS",
-        "VERIFY_FILE_PASS",
-        "SPOOL_AFTER_WRITE_PASS",
-        "START_SERVICE_ENTER",
-        "START_SERVICE_PASS",
-        "VERIFY_LIVE_PASS",
-        "SPOOL_AFTER_START_PASS",
-        "READY_AFTER_PASS",
-        "ASSISTANT_AFTER_PASS",
-        "FINALIZE_ENTER",
-    )
     checkpoint_fn = source.split("checkpoint(){", 1)[1].split("on_error(){", 1)[0]
-    for value in expected:
+    for value in CHECKPOINTS:
         assert value in checkpoint_fn
         assert f"checkpoint {value}" in source
     assert "UV003_RUNTIME_PIN_CHECKPOINT=%s" in checkpoint_fn
     assert "$EXPECTED_RUNTIME_COMMIT" not in checkpoint_fn
     assert "$ENV_FILE" not in checkpoint_fn
+
+
+def test_workflow_surfaces_every_allowlisted_checkpoint_on_failure():
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    failure_parser = workflow.split("allowed=re.compile(", 1)[1].split("seen=[]", 1)[0]
+    assert "RUNTIME_PIN_CHECKPOINT=(?:" in failure_parser
+    for value in CHECKPOINTS:
+        assert value in failure_parser
+    assert "RUNTIME_PIN_FAILURE_CODE=REMOTE_UNCLASSIFIED" in workflow
+    assert "RAW=\"$raw\"" in workflow
 
 
 def test_all_failure_stages_remain_fixed_and_allowlisted():
