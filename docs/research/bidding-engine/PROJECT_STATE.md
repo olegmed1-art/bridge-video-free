@@ -7,6 +7,13 @@ Research registry: Neon `assistant_lab.research_job`, key `BIDDING-ENGINE-P0-SIN
 ## Purpose
 Build one school-owned bidding algorithm that can model an auction from the acting player's hand and public auction state, using the School Canon as authority and World / External Knowledge as research support.
 
+## Durable role split
+- School director / bridge expert: owner decides bridge-domain canon where expert judgment is genuinely required.
+- Technical + research owner: ChatGPT owns architecture, databases, code, tooling, experiments, infrastructure, benchmarks, integration and technical decisions.
+- Research Lab: an R&D execution layer inside the bidding-engine program, not the owner of the whole project. It receives bounded research questions, runs reproducible experiments/compute, and returns evidence, traces, measurements and confidence.
+- Research Lab must not silently promote external findings into SCHOOL CANON and must not become an independent competing architecture.
+- ChatGPT integrates laboratory evidence into the single school bidding engine and only escalates to the owner for bridge-canon decisions or new paid spend/resources.
+
 ## Durable invariants
 1. There is one target bidding engine, not multiple competing school engines.
 2. SCHOOL CANON is the authoritative bidding knowledge base of the school.
@@ -18,6 +25,7 @@ Build one school-owned bidding algorithm that can model an auction from the acti
 8. Explanation is required on demand, but human-facing document formatting is not a storage constraint.
 9. Existing GitHub, Neon, Drive and already-provisioned compute may be used autonomously. New paid tools/features/resources require owner approval before spend.
 10. Current scope is bidding first. Defense and declarer play are future extensions unless a shared infrastructure choice clearly benefits bidding.
+11. Research Lab is used actively for world-research, BEN/BBA/Pons/Bridgit analysis, DDS/Monte-Carlo/mass compute, benchmarking and evidence generation; the main engine architecture remains centrally owned by ChatGPT.
 
 ## Current known infrastructure
 - Production Neon project: `bridge-school-core` (`misty-poetry-18012774`).
@@ -43,6 +51,21 @@ Machine-readable auxiliary world knowledge with source family and provenance cla
 
 ### Evidence / research traces
 Decision traces, benchmarks, model hashes, experiment outputs and reconstruction evidence. Evidence supports knowledge but is not itself canon.
+
+## Research Lab contract
+A lab task should have:
+1. a concrete research question;
+2. pinned inputs/version/model/commit where relevant;
+3. a reproducible experiment or analysis method;
+4. bounded compute/scope;
+5. explicit output evidence;
+6. conclusion + confidence + known limitations;
+7. a clear link to a pending architecture/knowledge decision.
+
+Default flow:
+`research question -> experiment -> evidence -> conclusion/confidence -> ChatGPT technical decision -> optional bridge-expert escalation`
+
+Avoid open-ended research with no decision target.
 
 ## Current engineering objective
 Design a common machine-readable knowledge object and retrieval semantics that can represent both SCHOOL CANON and WORLD / EXTERNAL KNOWLEDGE while preserving authority separation.
