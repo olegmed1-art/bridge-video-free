@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bridge-school.local/schemas/universal-video-job-request-v1.json",
+  "title": "Explicit Universal Video server job",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["job_id", "profile", "source"],
+  "properties": {
+    "job_id": {"type": "string", "pattern": "^[A-Za-z0-9._:-]{1,160}$"},
+    "profile": {"enum": ["transcript_only", "educational", "bridge_lesson", "bridge_lecture", "bridge_review"]},
+    "project": {"type": "string", "maxLength": 160},
+    "metadata": {"type": "object"},
+    "options": {"type": "object"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "file_id"],
+      "properties": {
+        "kind": {"const": "google_drive"},
+        "file_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{10,200}$"},
+        "name": {"type": "string", "maxLength": 500}
+      }
+    }
+  }
+}

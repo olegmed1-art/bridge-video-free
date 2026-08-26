@@ -111,11 +111,21 @@ UNIVERSAL_VIDEO_PREVIOUSLY_ACTIVE="$VIDEO_WAS_ACTIVE" \
 PYTHONDONTWRITEBYTECODE=1 \
   bash "$SOURCE_DIR/ops/oracle_universal_video_install.sh"
 
+# Install the bounded generic control plane only after the isolated checkout
+# and sidecar have passed their own gates. This grants ocarun two validated
+# operations, never a shell or an arbitrary filesystem path.
+log "Install bounded generic Universal Video operator"
+SOURCE_FILE="$SOURCE_DIR/ops/universal_video_operator.sh" \
+EXPECTED_RUNTIME_COMMIT="$RESOLVED_COMMIT" \
+  bash "$SOURCE_DIR/ops/install_universal_video_operator.sh"
+sudo -u ocarun sudo -n /usr/local/sbin/universal-video status install-smoke >/dev/null
+
 log "Activation evidence"
 printf 'source_commit=%s\n' "$RESOLVED_COMMIT"
 printf 'assistant_lab=%s\n' "$(systemctl is-active assistant-lab.service)"
 printf 'universal_video_enabled=%s\n' "$(systemctl is-enabled universal-video.service 2>/dev/null || true)"
 printf 'universal_video_active=%s\n' "$(systemctl is-active universal-video.service 2>/dev/null || true)"
+echo 'universal_video_operator=installed'
 drive_file="$BASE_DIR/secrets/google-drive-oauth.json"
 if [[ -f "$drive_file" ]] && DRIVE_OAUTH_FILE="$drive_file" python3 - <<'PY'
 import json, os

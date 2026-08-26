@@ -153,6 +153,8 @@ jobs:
             ops/oracle_universal_video_run_command.sh \
             ops/oracle_universal_video_install.sh \
             ops/oracle_universal_video_spool_guard.sh \
+            ops/universal_video_operator.sh \
+            ops/install_universal_video_operator.sh \
             ops/universal_video_receipt_reader.py \
             universal_video/runner.py; do
             git show "$ref:$path" >/dev/null
@@ -262,6 +264,7 @@ jobs:
           grep -F assistant_lab=active "$log" >/dev/null
           grep -F universal_video_enabled=enabled "$log" >/dev/null
           grep -F universal_video_active=active "$log" >/dev/null
+          grep -Fx universal_video_operator=installed "$log" >/dev/null
           grep -F DDS3_AFTER_PASS "$log" >/dev/null
           if [[ "$smoke" == 1 ]]; then
             grep -F UNIVERSAL_VIDEO_SYNTHETIC_SMOKE_PASS "$log" >/dev/null
