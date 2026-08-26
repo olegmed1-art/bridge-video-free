@@ -1,0 +1,171 @@
+name: Oracle Diana 11 Runtime Pin Repair
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-diana11-runtime-pin-repair.yml'
+      - 'ops/repair_universal_video_runtime_pin.sh'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-diana11-runtime-pin-repair-requests/*.json'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oracle-diana11-runtime-pin-repair
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      issue: ${{ steps.request.outputs.issue }}
+      expected_runtime_commit: ${{ steps.request.outputs.expected_runtime_commit }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Validate bounded repair contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/repair_universal_video_runtime_pin.sh
+          grep -Fq "readonly SERVICE='universal-video.service'" ops/repair_universal_video_runtime_pin.sh
+          grep -Fq 'UNIVERSAL_VIDEO_SOURCE_COMMIT=' ops/repair_universal_video_runtime_pin.sh
+          grep -Fq 'UV003_RUNTIME_PIN_REPAIR=PASS' ops/repair_universal_video_runtime_pin.sh
+          for forbidden in 'spool/inbox/' 'ffmpeg ' 'faster_whisper' 'GOOGLE_DRIVE' 'drive_adapter' 'submit_for' 'enqueue(' 'production'; do
+            ! grep -Fq "$forbidden" ops/repair_universal_video_runtime_pin.sh || { echo "forbidden repair surface: $forbidden" >&2; exit 1; }
+          done
+      - name: Validate exact repair request
+        id: request
+        if: ${{ github.event_name == 'push' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+            | grep -E '^ops/oracle-diana11-runtime-pin-repair-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one UV003 runtime-pin repair request' >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json,os,re
+          x=json.load(open(os.environ['REQUEST_FILE'], encoding='utf-8'))
+          assert set(x)=={'request_id','issue','expected_runtime_commit'}
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
+          assert x['issue']==566
+          assert x['expected_runtime_commit']=='6a4e8248eedd00f849fcefd1bf41a51b26f5e7c6'
+          print('issue=566')
+          print('expected_runtime_commit='+x['expected_runtime_commit'])
+          PY
+
+  repair:
+    if: ${{ github.event_name == 'push' }}
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_NUMBER: ${{ needs.validate.outputs.issue }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Verify host identity and key
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SSH_KEY"
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "$SSH_KEY" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          known="$RUNNER_TEMP/known_hosts"
+          : > "$known"
+          index=0
+          for expected in \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64'; do
+            part="$RUNNER_TEMP/known_hosts.$index"
+            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$expected" "$part"
+            cat "$part" >> "$known"
+            index=$((index + 1))
+          done
+          sort -u -o "$known" "$known"
+          test -s "$known"
+          actual="$(ssh-keygen -lf "$known" | awk '{print $2}' | sort -u | paste -sd, -)"
+          expected="$(printf '%s\n' \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64' | sort -u | paste -sd, -)"
+          [[ "$actual" == "$expected" ]] || exit 1
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+      - name: Execute bounded runtime-pin repair
+        id: repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh_cmd=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          cat ops/repair_universal_video_runtime_pin.sh | "${ssh_cmd[@]}" 'cat > /tmp/uv003-runtime-pin-repair.sh && chmod 0600 /tmp/uv003-runtime-pin-repair.sh'
+          raw=''
+          if ! raw="$("${ssh_cmd[@]}" "sudo -n env EXPECTED_RUNTIME_COMMIT='${{ needs.validate.outputs.expected_runtime_commit }}' bash /tmp/uv003-runtime-pin-repair.sh" 2>&1)"; then
+            RAW="$raw" python - <<'PY' > "$RUNNER_TEMP/uv003-repair-safe.txt"
+          import os,re
+          allowed=re.compile(r'^UV003_(?:RUNTIME_PIN_REPAIR=FAILED_CLOSED|RUNTIME_PIN_SPOOL=EMPTY)$')
+          for line in os.environ['RAW'].splitlines():
+              if allowed.fullmatch(line): print(line)
+          PY
+            cat "$RUNNER_TEMP/uv003-repair-safe.txt"
+            exit 1
+          fi
+          RAW="$raw" python - <<'PY' > "$RUNNER_TEMP/uv003-repair-safe.txt"
+          import os,re
+          patterns=(
+            r'UV003_RUNTIME_PIN_SPOOL=EMPTY',
+            r'UV003_RUNTIME_PIN_FILE=PINNED',
+            r'UV003_RUNTIME_PIN_LIVE=PINNED',
+            r'UV003_DDS3_NONREGRESSION=PASS',
+            r'UV003_RUNTIME_PIN_REPAIR=PASS',
+          )
+          seen=[]
+          for line in os.environ['RAW'].splitlines():
+              if any(re.fullmatch(p,line) for p in patterns) and line not in seen: seen.append(line)
+          print('\n'.join(seen))
+          PY
+          cat "$RUNNER_TEMP/uv003-repair-safe.txt"
+          for marker in UV003_RUNTIME_PIN_SPOOL=EMPTY UV003_RUNTIME_PIN_FILE=PINNED UV003_RUNTIME_PIN_LIVE=PINNED UV003_DDS3_NONREGRESSION=PASS UV003_RUNTIME_PIN_REPAIR=PASS; do
+            grep -Fx "$marker" "$RUNNER_TEMP/uv003-repair-safe.txt" >/dev/null
+          done
+          echo 'validated=true' >> "$GITHUB_OUTPUT"
+      - name: Record bounded repair evidence
+        if: ${{ always() }}
+        shell: bash
+        env:
+          REPAIR_OUTCOME: ${{ steps.repair.outcome }}
+          REPAIR_VALIDATED: ${{ steps.repair.outputs.validated }}
+        run: |
+          set -euo pipefail
+          body="$RUNNER_TEMP/comment.md"
+          {
+            echo '[OBSERVATORY] UV003 bounded runtime-pin repair.'
+            echo
+            if [[ "${REPAIR_VALIDATED:-}" == true && -s "$RUNNER_TEMP/uv003-repair-safe.txt" ]]; then
+              echo '```text'
+              cat "$RUNNER_TEMP/uv003-repair-safe.txt"
+              echo '```'
+              echo
+              echo 'Only the Universal Video source-revision env pin was repaired; the idle sidecar was restarted to inherit it. No job was submitted or processed and no Drive write occurred.'
+            else
+              echo "Repair failed closed. Outcome: ${REPAIR_OUTCOME:-UNKNOWN}."
+            fi
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > "$body"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body"
