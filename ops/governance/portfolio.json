@@ -1,0 +1,149 @@
+{
+  "schema_version": "1.0",
+  "registry_status": "ACTIVE_PARTIAL_INVENTORY",
+  "last_verified_at": "2026-08-26",
+  "primary_tracker_repository": "olegmed1-art/bridge-video-free",
+  "value_portfolio": [
+    {
+      "portfolio_id": "GOVERNANCE-SYSTEM-V1",
+      "title": "School Governance System v1.0",
+      "work_class": "MANDATORY",
+      "urgency": "HIGH",
+      "strategic_rank": "S1",
+      "governance_mode": "ASSURED",
+      "status": "ACTIVE",
+      "problem_statement": "The school needs one durable, low-bureaucracy management system that preserves director accountability, AI autonomy, evidence and independent assurance across chats and projects.",
+      "benefit_hypothesis": "A canonical governance system will reduce forgotten work, duplicate initiatives, false completion, unnecessary director involvement and uncontrolled risk.",
+      "target_users": [
+        "school_director",
+        "ai_management_system",
+        "research_lab"
+      ],
+      "expected_capability": "Consistent portfolio, service, canon, research and incident governance.",
+      "success_metrics": [
+        "portfolio_state_recoverable_without_chat_memory",
+        "routine_technical_escalations_to_director_decrease",
+        "assured_decisions_have_required_evidence_and_independent_review",
+        "governance_overhead_remains_proportionate"
+      ],
+      "benefit_review_date": "2026-09-25",
+      "full_review_date": "2026-11-24",
+      "kill_criteria": [
+        "governance_systematically_increases_director_technical_work",
+        "governance_blocks_incident_containment",
+        "governance_overhead_exceeds_value_without_risk_reduction"
+      ],
+      "tracker": "https://github.com/olegmed1-art/bridge-video-free/issues/611",
+      "canonical_state": "ops/governance/governance-state.json"
+    },
+    {
+      "portfolio_id": "SCHOOL-CANONICAL-BIDDING-ENGINE",
+      "title": "School Canonical Bidding Engine",
+      "work_class": "STRATEGIC",
+      "urgency": "NORMAL",
+      "strategic_rank": "S1",
+      "governance_mode": "ASSURED",
+      "status": "ACTIVE",
+      "problem_statement": "The school cannot yet reliably model an auction from the acting player's information set using a complete, versioned and traceable school canon.",
+      "benefit_hypothesis": "A school-owned engine backed by School Canon and World Knowledge will produce reproducible bids and explanations without silently inventing school rules.",
+      "target_users": [
+        "school_director",
+        "teachers",
+        "students",
+        "tournament_analysis_systems"
+      ],
+      "expected_capability": "Model and explain bidding from hand plus public auction state.",
+      "success_metrics": [
+        "canonical_coverage",
+        "zero_hidden_information_leakage_in_canonical_inference",
+        "decision_trace_completeness",
+        "knowledge_gap_detection",
+        "regression_stability"
+      ],
+      "kill_criteria": [
+        "external_engine_silently_becomes_school_canon",
+        "hidden_information_is_used_as_public_knowledge",
+        "architecture_cannot_trace_decisions_to_active_knowledge"
+      ],
+      "tracker": "https://github.com/olegmed1-art/bridge-video-free/issues/609",
+      "project_state": "docs/research/bidding-engine/PROJECT_STATE.md"
+    }
+  ],
+  "service_portfolio": [
+    {
+      "service_id": "RESEARCH-LAB",
+      "title": "Research Lab Service",
+      "status": "ACTIVE_PARTIAL",
+      "service_owner": "AI Management System",
+      "users": [
+        "ai_management_system",
+        "school_director",
+        "school_projects"
+      ],
+      "service_level": "Best effort within existing compute and governance boundaries",
+      "health_metrics": [
+        "research_jobs_by_stage",
+        "reproducible_evidence_rate",
+        "failed_or_inconclusive_rate",
+        "compute_cost",
+        "queue_age"
+      ],
+      "dependencies": [
+        "GitHub",
+        "Neon assistant_lab",
+        "existing compute",
+        "Google Drive where source evidence is required"
+      ],
+      "data_classes": [
+        "INTERNAL",
+        "CONFIDENTIAL"
+      ],
+      "recovery_requirement": "Research evidence must not exist only on ephemeral compute.",
+      "improvement_backlog": [
+        "formalize_service_health_and_queue_views",
+        "prove_reproducible_BEN_trace",
+        "add_assured_task_contract_usage"
+      ]
+    },
+    {
+      "service_id": "SCHOOL-CANON-KNOWLEDGE",
+      "title": "School Canon Knowledge Service",
+      "status": "DEVELOPING",
+      "service_owner": "AI Management System as delegated canon steward",
+      "users": [
+        "teachers",
+        "students",
+        "bidding_engine",
+        "tournament_analysis"
+      ],
+      "service_level": "Authoritative only for explicitly active canonical knowledge",
+      "health_metrics": [
+        "active_rule_count",
+        "provenance_completeness",
+        "test_coverage",
+        "knowledge_gap_count",
+        "conflict_count"
+      ],
+      "dependencies": [
+        "canonical source registry",
+        "Neon",
+        "GitHub versioning",
+        "approved school materials"
+      ],
+      "data_classes": [
+        "INTERNAL"
+      ],
+      "recovery_requirement": "Canon versions, provenance and activation history must be recoverable and never depend on chat memory.",
+      "improvement_backlog": [
+        "design_bidding_canon_schema",
+        "separate_school_canon_from_world_knowledge",
+        "repair_missing_skill_provenance"
+      ]
+    }
+  ],
+  "inventory_gaps": [
+    "Classify all other currently active P0/P1 issues as FULL_MODEL, LIGHTWEIGHT or EXEMPT_WITH_REASON.",
+    "Add remaining permanent school services after primary-source verification.",
+    "Bind portfolio entries to machine-readable Observatory metrics where available."
+  ]
+}
