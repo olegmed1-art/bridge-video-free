@@ -1,0 +1,64 @@
+name: TEMP Oracle power live test
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/temp-oracle-power-live-test.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  status:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      OCI_REGION: eu-frankfurt-1
+      OCI_INSTANCE_OCID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate credential presence
+        env:
+          OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+        run: |
+          set -euo pipefail
+          test -n "${OCI_CLI_CONFIG:-}"
+          test -n "${OCI_CLI_KEY_CONTENT:-}"
+      - name: Install OCI CLI
+        run: python -m pip install --disable-pip-version-check --quiet 'oci-cli==3.90.3'
+      - name: Configure bounded OCI client
+        env:
+          OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$HOME/.oci"
+          printf '%s\n' "$OCI_CLI_KEY_CONTENT" > "$HOME/.oci/oci_api_key.pem"
+          printf '%s\n' "$OCI_CLI_CONFIG" > "$HOME/.oci/config"
+          python - <<'PY'
+          from pathlib import Path
+          p=Path.home()/'.oci/config'
+          lines=[]; key=False; region=False
+          for line in p.read_text().splitlines():
+              if line.strip().startswith('key_file='):
+                  lines.append(f'key_file={Path.home()}/.oci/oci_api_key.pem'); key=True
+              elif line.strip().startswith('region='):
+                  lines.append('region=eu-frankfurt-1'); region=True
+              else:
+                  lines.append(line)
+          if not key: lines.append(f'key_file={Path.home()}/.oci/oci_api_key.pem')
+          if not region: lines.append('region=eu-frankfurt-1')
+          p.write_text('\n'.join(lines)+'\n')
+          PY
+          oci iam region list --output json >/dev/null
+      - name: Read exact Frankfurt VM status
+        run: |
+          set -euo pipefail
+          state="$(oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --query 'data."lifecycle-state"' --raw-output)"
+          case "$state" in RUNNING|STOPPED|STARTING|STOPPING) ;; *) echo "unexpected lifecycle state: $state" >&2; exit 1 ;; esac
+          echo "ORACLE_VM_STATE=$state"
+          echo "### Oracle live status: $state" >> "$GITHUB_STEP_SUMMARY"
