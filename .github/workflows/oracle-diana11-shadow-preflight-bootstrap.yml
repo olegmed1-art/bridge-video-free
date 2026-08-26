@@ -122,32 +122,49 @@ jobs:
           "${ssh_cmd[@]}" 'sudo -n true'
           cat ops/universal_video_diana11_shadow_preflight.py | "${ssh_cmd[@]}" 'cat > /tmp/uv003_preflight.py && chmod 0600 /tmp/uv003_preflight.py'
           cat ops/install_universal_video_diana11_shadow_preflight.sh | "${ssh_cmd[@]}" 'cat > /tmp/install_uv003_preflight.sh && chmod 0600 /tmp/install_uv003_preflight.sh'
-          raw=''
-          rc=0
-          remote="sudo -n env SOURCE_FILE=/tmp/uv003_preflight.py EXPECTED_RUNTIME_COMMIT='${{ needs.validate.outputs.expected_runtime_commit }}' bash /tmp/install_uv003_preflight.sh || exit \$?; if sudo -n /usr/local/sbin/universal-video-diana11-shadow-preflight; then exit 0; else echo UV003_FAILURE_CODE=POST_INSTALL_EXECUTION >&2; exit 1; fi"
-          if raw="$("${ssh_cmd[@]}" "$remote" 2>&1)"; then
-            rc=0
+
+          installer_raw=''
+          installer_rc=0
+          if installer_raw="$("${ssh_cmd[@]}" "sudo -n env SOURCE_FILE=/tmp/uv003_preflight.py EXPECTED_RUNTIME_COMMIT='${{ needs.validate.outputs.expected_runtime_commit }}' bash /tmp/install_uv003_preflight.sh" 2>&1)"; then
+            installer_rc=0
           else
-            rc=$?
+            installer_rc=$?
           fi
-          RAW="$raw" python - <<'PY' > "$RUNNER_TEMP/uv003-diagnostic.txt"
+          RAW="$installer_raw" python - <<'PY' > "$RUNNER_TEMP/uv003-diagnostic.txt"
           import os,re,sys
-          allowed=re.compile(r'^UV003_FAILURE_CODE=(BOOTSTRAP_INPUT|SOURCE_CONTRACT|RUNTIME_LAYOUT|RUNTIME_COMMIT|RUNTIME_ENV|PREFLIGHT_ASSERTION|SUDOERS_TEMPLATE|INSTALL_SURFACE|SUDO_EXECUTION|POST_INSTALL_EXECUTION)$')
+          allowed=re.compile(r'^UV003_FAILURE_CODE=(BOOTSTRAP_INPUT|SOURCE_CONTRACT|RUNTIME_LAYOUT|RUNTIME_COMMIT|RUNTIME_ENV|PREFLIGHT_ASSERTION|SUDOERS_TEMPLATE|INSTALL_SURFACE|SUDO_EXECUTION)$')
           seen=[]
           for line in os.environ['RAW'].splitlines():
               if allowed.fullmatch(line) and line not in seen:
                   seen.append(line)
           sys.stdout.write('\n'.join(seen[:1]))
           PY
-          if (( rc != 0 )); then
+          if (( installer_rc != 0 )); then
             if [[ ! -s "$RUNNER_TEMP/uv003-diagnostic.txt" ]]; then
-              printf '%s' 'UV003_FAILURE_CODE=UNCLASSIFIED_REMOTE_FAILURE' > "$RUNNER_TEMP/uv003-diagnostic.txt"
+              printf '%s' 'UV003_FAILURE_CODE=INSTALLER_REMOTE_FAILURE' > "$RUNNER_TEMP/uv003-diagnostic.txt"
             fi
             cat "$RUNNER_TEMP/uv003-diagnostic.txt"
             echo
             echo 'UV003_REMOTE_PREFLIGHT=FAILED_CLOSED'
             exit 1
           fi
+
+          operator_raw=''
+          operator_rc=0
+          if operator_raw="$("${ssh_cmd[@]}" 'sudo -n /usr/local/sbin/universal-video-diana11-shadow-preflight' 2>&1)"; then
+            operator_rc=0
+          else
+            operator_rc=$?
+          fi
+          if (( operator_rc != 0 )); then
+            printf '%s' 'UV003_FAILURE_CODE=POST_INSTALL_EXECUTION' > "$RUNNER_TEMP/uv003-diagnostic.txt"
+            cat "$RUNNER_TEMP/uv003-diagnostic.txt"
+            echo
+            echo 'UV003_REMOTE_PREFLIGHT=FAILED_CLOSED'
+            exit 1
+          fi
+
+          raw="$installer_raw"$'\n'"$operator_raw"
           RAW="$raw" python - <<'PY' > "$RUNNER_TEMP/uv003-safe.txt"
           import os,re
           patterns=(
