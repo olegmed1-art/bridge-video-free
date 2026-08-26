@@ -1,0 +1,224 @@
+name: Drive media OCI large recovery acceptance
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/drive-media-oci-recovery-large-acceptance.yml'
+      - 'universal_video/drive_adapter.py'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: drive-media-oci-large-recovery-acceptance
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Validate bounded large-source contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          f=.github/workflows/drive-media-oci-recovery-large-acceptance.yml
+          grep -Fq "SOURCE_FILE_ID: 1ZtRQYhDh2ErLkpvbDl-NE2nFDIJdBfO1" "$f"
+          grep -Fq "EXPECTED_BYTES: '409302227'" "$f"
+          grep -Fq "github.event.issue.number == 580" "$f"
+          grep -Fq "github.event.comment.body == '/drive-recovery copy-acceptance-254-large'" "$f"
+          grep -Fq 'oci os object put' "$f"
+          grep -Fq 'oci os object get' "$f"
+          ! grep -nE 'oci os (bucket|object) (delete|bulk-delete|rename|restore)' "$f"
+
+  acceptance:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 580 &&
+      github.event.comment.user.login == 'olegmed1-art' &&
+      github.event.comment.body == '/drive-recovery copy-acceptance-254-large'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SOURCE_FILE_ID: 1ZtRQYhDh2ErLkpvbDl-NE2nFDIJdBfO1
+      EXPECTED_BYTES: '409302227'
+      GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+      OCI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Fail closed on missing credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          for value in GOOGLE_DRIVE_OAUTH_JSON OCI_USER OCI_TENANCY OCI_FINGERPRINT OCI_KEY OCI_REGION; do
+            [[ -n "${!value:-}" ]] || { echo "$value is not configured" >&2; exit 21; }
+          done
+
+      - name: Install bounded clients
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q 'oci-cli==3.90.3' 'google-auth>=2.30,<3' 'requests>=2.31,<3'
+          install -d -m 0700 "$HOME/.oci"
+          printf '%s' "$OCI_KEY" | python -c '
+          import sys
+          raw=sys.stdin.read().replace("\\r", "").replace("\\n", "\n")
+          if not raw.endswith("\n"): raw += "\n"
+          open(sys.argv[1], "w", encoding="utf-8", newline="\n").write(raw)
+          ' "$HOME/.oci/key.pem"
+          chmod 0600 "$HOME/.oci/key.pem"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$OCI_USER
+          fingerprint=$OCI_FINGERPRINT
+          tenancy=$OCI_TENANCY
+          region=$OCI_REGION
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 0600 "$HOME/.oci/config"
+          oci iam region list --output json >/dev/null
+
+      - name: Select sole existing private bucket
+        shell: bash
+        run: |
+          set -euo pipefail
+          compartment="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."compartment-id"' --raw-output)"
+          buckets="$(oci os bucket list --compartment-id "$compartment" --all --output json)"
+          BUCKETS_JSON="$buckets" python - <<'PY' > "$RUNNER_TEMP/target.env"
+          import json, os, shlex
+          xs=json.loads(os.environ['BUCKETS_JSON']).get('data') or []
+          private=[x for x in xs if str(x.get('public-access-type') or 'NoPublicAccess')=='NoPublicAccess']
+          public=[x for x in xs if str(x.get('public-access-type') or 'NoPublicAccess')!='NoPublicAccess']
+          assert len(xs)==1, f'expected exactly one existing bucket, got {len(xs)}'
+          assert len(private)==1 and not public, 'target must be the sole private bucket'
+          print('BUCKET='+shlex.quote(str(private[0]['name'])))
+          PY
+          chmod 0600 "$RUNNER_TEMP/target.env"
+          source "$RUNNER_TEMP/target.env"
+          details="$(oci os bucket get --bucket-name "$BUCKET" --output json)"
+          DETAILS_JSON="$details" python - <<'PY'
+          import json, os
+          x=json.loads(os.environ['DETAILS_JSON']).get('data') or {}
+          assert str(x.get('public-access-type') or 'NoPublicAccess')=='NoPublicAccess'
+          PY
+
+      - name: Download exact large Drive source and compute checksum
+        id: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          python - <<'PY' > "$RUNNER_TEMP/source.env"
+          import os, re, shlex
+          from pathlib import Path
+          from universal_video.drive_adapter import access_token, download_file, file_metadata
+          token=access_token()
+          meta=file_metadata(os.environ['SOURCE_FILE_ID'], token)
+          expected=int(os.environ['EXPECTED_BYTES'])
+          assert int(meta.get('size') or 0)==expected, (meta.get('size'), expected)
+          out=download_file(os.environ['SOURCE_FILE_ID'], Path('source.bin'), token, max_bytes=expected)
+          size=Path('source.bin').stat().st_size
+          sha=out['_download_sha256'].lower()
+          assert size==expected
+          assert re.fullmatch(r'[0-9a-f]{64}', sha)
+          print('SOURCE_BYTES='+str(size))
+          print('SOURCE_SHA256='+shlex.quote(sha))
+          PY
+          source "$RUNNER_TEMP/source.env"
+          echo "source_bytes=$SOURCE_BYTES" >> "$GITHUB_OUTPUT"
+          echo "source_sha256=$SOURCE_SHA256" >> "$GITHUB_OUTPUT"
+
+      - name: Put exactly one durable recovery object
+        id: put
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/target.env"
+          source "$RUNNER_TEMP/source.env"
+          object="whole-school-recovery-v1/drive/${SOURCE_FILE_ID}/${SOURCE_SHA256}.bin"
+          printf '%s' "$object" > "$RUNNER_TEMP/object-name"
+          metadata="$(SOURCE_SHA256="$SOURCE_SHA256" python - <<'PY'
+          import json, os
+          print(json.dumps({
+              'source-file-id': os.environ['SOURCE_FILE_ID'],
+              'source-sha256': os.environ['SOURCE_SHA256'],
+              'source-bytes': os.environ['EXPECTED_BYTES'],
+              'recovery-scope': 'whole-school-recovery-v1',
+          }, separators=(',', ':')))
+          PY
+          )"
+          oci os object put --bucket-name "$BUCKET" --name "$object" --file source.bin \
+            --content-type application/octet-stream --metadata "$metadata" --force >/dev/null
+          rm -f source.bin
+          echo 'put_completed=true' >> "$GITHUB_OUTPUT"
+
+      - name: Read back independently and verify byte-for-byte identity
+        id: restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/target.env"
+          source "$RUNNER_TEMP/source.env"
+          object="$(cat "$RUNNER_TEMP/object-name")"
+          umask 077
+          oci os object get --bucket-name "$BUCKET" --name "$object" --file restored.bin >/dev/null
+          bytes="$(stat -c %s restored.bin)"
+          sha="$(sha256sum restored.bin | awk '{print $1}')"
+          test "$bytes" = "$SOURCE_BYTES"
+          test "$sha" = "$SOURCE_SHA256"
+          rm -f restored.bin
+          echo "restored_bytes=$bytes" >> "$GITHUB_OUTPUT"
+          echo "restored_sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo 'checksum_equal=true' >> "$GITHUB_OUTPUT"
+
+      - name: Publish retained non-sensitive evidence
+        if: always()
+        shell: bash
+        env:
+          SOURCE_BYTES_OUT: ${{ steps.source.outputs.source_bytes }}
+          SOURCE_SHA_OUT: ${{ steps.source.outputs.source_sha256 }}
+          PUT_DONE: ${{ steps.put.outputs.put_completed }}
+          RESTORED_BYTES: ${{ steps.restore.outputs.restored_bytes }}
+          RESTORED_SHA: ${{ steps.restore.outputs.restored_sha256 }}
+          CHECKSUM_EQUAL: ${{ steps.restore.outputs.checksum_equal }}
+          OUTCOME: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Large Drive→OCI independent recovery acceptance: **${OUTCOME^^}**"
+            echo
+            echo "- source_file_id: \`$SOURCE_FILE_ID\`"
+            echo "- source_bytes: \`${SOURCE_BYTES_OUT:-unverified}\`"
+            echo "- source_sha256: \`${SOURCE_SHA_OUT:-unverified}\`"
+            echo "- previous_connector_limit_bytes: \`268435456\`"
+            echo "- source_exceeds_previous_connector_limit: \`true\`"
+            echo "- target: existing private OCI Object Storage / server-side encryption"
+            echo "- durable_object_put: \`${PUT_DONE:-false}\`"
+            echo "- restored_bytes: \`${RESTORED_BYTES:-unverified}\`"
+            echo "- restored_sha256: \`${RESTORED_SHA:-unverified}\`"
+            echo "- checksum_equal: \`${CHECKSUM_EQUAL:-false}\`"
+            echo "- source_deleted_or_moved: \`false\`"
+            echo "- bucket_created_or_modified: \`false\`"
+            echo "- recovery_object_retained: \`${PUT_DONE:-false}\`"
+            echo
+            echo "Run: $RUN_URL"
+          } > "$RUNNER_TEMP/body.md"
+          gh issue comment 580 --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/body.md"
