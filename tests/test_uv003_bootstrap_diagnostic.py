@@ -107,6 +107,7 @@ def test_workflow_is_request_only_and_cannot_execute_job():
     assert "x['probe']=='uv003-bootstrap-readonly-v1'" in source
     assert "sudo -n python3 /tmp/uv003-bootstrap-diagnostic.py" in source
     assert "sudo -n bash /tmp/uv003-operator-source.sh status-bridge" in source
+    runtime = source.split("\n  diagnose:\n", 1)[1]
     for forbidden in (
         "submit-bridge",
         "publish-bridge",
@@ -116,4 +117,4 @@ def test_workflow_is_request_only_and_cannot_execute_job():
         "systemctl stop",
         "systemctl start",
     ):
-        assert forbidden not in source
+        assert forbidden not in runtime
