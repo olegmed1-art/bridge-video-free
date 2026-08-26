@@ -1,0 +1,527 @@
+name: Oracle Diana 11 Durable 003 One Shadow Execution
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-diana11-003-one-shadow-execution.yml'
+      - 'ops/universal_video_diana11_003_operator.sh'
+      - 'ops/install_universal_video_diana11_003_operator.sh'
+      - 'tests/test_uv003_execution_contract.py'
+      - 'ops/oracle_known_hosts_from_scan.sh'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-diana11-003-execution-requests/*.json'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oracle-diana11-003-one-shadow-execution
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    outputs:
+      issue: ${{ steps.request.outputs.issue }}
+      request_id: ${{ steps.request.outputs.request_id }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Validate frozen execution surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/universal_video_diana11_003_operator.sh
+          bash -n ops/install_universal_video_diana11_003_operator.sh
+          bash -n ops/oracle_known_hosts_from_scan.sh
+          python -m py_compile ops/universal_video_diana11_shadow_preflight.py
+          python -m pip install --disable-pip-version-check -q pytest pyyaml
+          python -m pytest -q tests/test_uv003_execution_contract.py
+          python - <<'PY'
+          import yaml
+          yaml.safe_load(open('.github/workflows/oracle-diana11-003-one-shadow-execution.yml', encoding='utf-8'))
+          print('UV003_ONE_SHADOW_EXECUTION_CONTRACT_PASS')
+          PY
+      - name: Validate exact one-shadow request
+        id: request
+        if: ${{ github.event_name == 'push' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+            | grep -E '^ops/oracle-diana11-003-execution-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one UV003 execution request' >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import hashlib,json,os,re
+          x=json.load(open(os.environ['REQUEST_FILE'], encoding='utf-8'))
+          assert set(x)=={
+              'request_id','issue','experiment_id','job','expected_job_hash',
+              'expected_runtime_commit','expected_whisper_model',
+              'expected_processing_fingerprint','destination_folder_id',
+              'submit_limit','automatic_retries','incremental_cost_cap_eur',
+          }
+          assert x['request_id']=='uv003-execute-one-shadow-20260826-01'
+          assert x['issue']==612
+          assert x['experiment_id']=='UV-DIANA11-DURABLE-003'
+          assert x['expected_job_hash']=='a43e11beb0765aa91551d4c4a69767f02c4dcb3b5e485cd5bb0f2996e734d73d'
+          assert x['expected_runtime_commit']=='6a4e8248eedd00f849fcefd1bf41a51b26f5e7c6'
+          assert x['expected_whisper_model']=='small'
+          assert x['expected_processing_fingerprint']=='371661d2a1858e576e2f618ddf504da724edc30089a9af88f9dd3a140ca30951'
+          assert x['destination_folder_id']=='1I8cSuA-p0MpaZIbA33slks19KyvfJDMK'
+          assert x['submit_limit']==1 and type(x['submit_limit']) is int
+          assert x['automatic_retries']==0 and type(x['automatic_retries']) is int
+          assert x['incremental_cost_cap_eur']==3 and type(x['incremental_cost_cap_eur']) is int
+          job=x['job']
+          assert set(job)=={'job_id','profile','source','project','metadata','options'}
+          assert job['job_id']=='diana11-shadow-20260826-001'
+          assert job['profile']=='bridge_lesson'
+          assert job['source']=={'kind':'google_drive','file_id':'1PGRLozLJKG8tl-JYGPTCcS_lT-nn-T7C','name':'Диана 11'}
+          assert job['project']=='Школа спортивного бриджа'
+          assert job['metadata']=={'purpose':'UV-DIANA11-DURABLE-003 fresh provenance shadow','human_requested':True}
+          assert job['options']['chunk_seconds']==600 and type(job['options']['chunk_seconds']) is int
+          assert job['options']['max_source_bytes']==2147483648 and type(job['options']['max_source_bytes']) is int
+          assert job['options']['max_duration_seconds']==43200.0 and type(job['options']['max_duration_seconds']) is float
+          raw=json.dumps({'contract':'universal-video-v1',**job},ensure_ascii=False,sort_keys=True,separators=(',',':')).encode('utf-8')
+          assert hashlib.sha256(raw).hexdigest()==x['expected_job_hash']
+          processing={'contract':'universal-video-v1','source_revision':x['expected_runtime_commit'],'whisper_model':x['expected_whisper_model']}
+          raw=json.dumps(processing,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode('utf-8')
+          assert hashlib.sha256(raw).hexdigest()==x['expected_processing_fingerprint']
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', x['request_id'])
+          print('issue=612')
+          print('request_id='+x['request_id'])
+          PY
+
+  execute:
+    if: ${{ github.event_name == 'push' }}
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_NUMBER: ${{ needs.validate.outputs.issue }}
+      JOB_ID: diana11-shadow-20260826-001
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Start bounded observation clock
+        shell: bash
+        run: date +%s > "$RUNNER_TEMP/uv003-start-epoch"
+      - name: Verify host identity and key
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SSH_KEY"
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "$SSH_KEY" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          known="$RUNNER_TEMP/known_hosts"
+          : > "$known"
+          index=0
+          for expected in \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64'; do
+            part="$RUNNER_TEMP/known_hosts.$index"
+            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$expected" "$part"
+            cat "$part" >> "$known"
+            index=$((index + 1))
+          done
+          sort -u -o "$known" "$known"
+          test -s "$known"
+          actual="$(ssh-keygen -lf "$known" | awk '{print $2}' | sort -u | paste -sd, -)"
+          expected="$(printf '%s\n' \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64' | sort -u | paste -sd, -)"
+          [[ "$actual" == "$expected" ]]
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+      - name: Install exact one-job operator
+        id: bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh_cmd=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          operator_sha="$(sha256sum ops/universal_video_diana11_003_operator.sh | awk '{print $1}')"
+          cat ops/universal_video_diana11_003_operator.sh | "${ssh_cmd[@]}" 'cat > /tmp/uv003-operator.sh && chmod 0600 /tmp/uv003-operator.sh'
+          cat ops/install_universal_video_diana11_003_operator.sh | "${ssh_cmd[@]}" 'cat > /tmp/install-uv003-operator.sh && chmod 0600 /tmp/install-uv003-operator.sh'
+          raw=''; rc=0
+          if raw="$("${ssh_cmd[@]}" "sudo -n env SOURCE_FILE=/tmp/uv003-operator.sh EXPECTED_RUNTIME_COMMIT='6a4e8248eedd00f849fcefd1bf41a51b26f5e7c6' EXPECTED_SOURCE_SHA256='$operator_sha' bash /tmp/install-uv003-operator.sh" 2>&1)"; then rc=0; else rc=$?; fi
+          RAW="$raw" RC="$rc" python - <<'PY' > "$RUNNER_TEMP/uv003-bootstrap-safe.txt"
+          import os,re
+          allowed=re.compile(r'^UV003_OPERATOR_BOOTSTRAP=(?:PASS)$|^UV003_OPERATOR_BOOTSTRAP_FAILURE=(?:BOOTSTRAP_INPUT|SOURCE_CONTRACT|RUNTIME_CONTRACT|SUDOERS_TEMPLATE|INSTALL_SURFACE)$')
+          safe=[]
+          for line in os.environ['RAW'].splitlines():
+              if allowed.fullmatch(line) and line not in safe: safe.append(line)
+          if os.environ['RC']!='0' and not any('FAILURE=' in line for line in safe):
+              safe.append('UV003_OPERATOR_BOOTSTRAP_FAILURE=REMOTE_UNCLASSIFIED')
+          print('\n'.join(safe))
+          PY
+          cat "$RUNNER_TEMP/uv003-bootstrap-safe.txt"
+          [[ "$rc" == 0 ]]
+          grep -Fx 'UV003_OPERATOR_BOOTSTRAP=PASS' "$RUNNER_TEMP/uv003-bootstrap-safe.txt"
+          echo 'validated=true' >> "$GITHUB_OUTPUT"
+      - name: Revalidate frozen no-submit preflight
+        id: preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh_cmd=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          raw=''; rc=0
+          if raw="$("${ssh_cmd[@]}" 'sudo -n /usr/local/sbin/universal-video-diana11-shadow-preflight && sudo -n /usr/local/sbin/universal-video-diana11-003 status-bridge' 2>&1)"; then rc=0; else rc=$?; fi
+          RAW="$raw" RC="$rc" python - <<'PY' > "$RUNNER_TEMP/uv003-preflight-safe.txt"
+          import os,re
+          patterns=(
+            r'UV003_EXPERIMENT_ID=UV-DIANA11-DURABLE-003',
+            r'UV003_JOB_ID=diana11-shadow-20260826-001',
+            r'UV003_JOB_HASH=a43e11beb0765aa91551d4c4a69767f02c4dcb3b5e485cd5bb0f2996e734d73d',
+            r'UV003_PROFILE=bridge_lesson',
+            r'UV003_SOURCE_FILE_ID=1PGRLozLJKG8tl-JYGPTCcS_lT-nn-T7C',
+            r'UV003_SOURCE_SIZE_BYTES=740292560',
+            r'UV003_DESTINATION_FOLDER_ID=1I8cSuA-p0MpaZIbA33slks19KyvfJDMK',
+            r'UV003_PROCESSING_REVISION=6a4e8248eedd00f849fcefd1bf41a51b26f5e7c6',
+            r'UV003_PROCESSING_WHISPER_MODEL=small',
+            r'UV003_PROCESSING_FINGERPRINT=371661d2a1858e576e2f618ddf504da724edc30089a9af88f9dd3a140ca30951',
+            r'UV003_JOB_GUARD=ABSENT',
+            r'UV003_AUTOMATIC_RETRIES=0',
+            r'UV003_EXECUTION_AUTHORIZED=NO',
+            r'UV003_PUBLICATION_AUTHORIZED=NO',
+            r'UV003_PRODUCTION_PROMOTION=BLOCKED',
+            r'UV003_PREFLIGHT_PASS',
+            r'UV_STATE=MISSING',
+            r'UNIVERSAL_VIDEO_DIANA11_003_STATUS_PASS',
+            r'UV003_OPERATOR_FAILURE=[A-Z_]+',
+          )
+          safe=[]
+          for line in os.environ['RAW'].splitlines():
+              if any(re.fullmatch(p,line) for p in patterns) and line not in safe: safe.append(line)
+          if os.environ['RC']!='0': safe.append('UV003_PREFLIGHT_EXECUTION_GATE=FAILED_CLOSED')
+          print('\n'.join(dict.fromkeys(safe)))
+          PY
+          cat "$RUNNER_TEMP/uv003-preflight-safe.txt"
+          [[ "$rc" == 0 ]]
+          for marker in \
+            'UV003_JOB_GUARD=ABSENT' \
+            'UV003_AUTOMATIC_RETRIES=0' \
+            'UV003_PREFLIGHT_PASS' \
+            'UV_STATE=MISSING' \
+            'UNIVERSAL_VIDEO_DIANA11_003_STATUS_PASS'; do
+            grep -Fx "$marker" "$RUNNER_TEMP/uv003-preflight-safe.txt"
+          done
+          echo 'validated=true' >> "$GITHUB_OUTPUT"
+      - name: Submit once and monitor technical terminal state
+        id: execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh_cmd=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          filter_status(){
+            RAW="$1" python - <<'PY'
+          import os,re
+          patterns=(
+            r'UV_STATE=(?:MISSING|CONFLICT|NONCONFORMANT|FAILED|RUNNING|QUEUED|REVIEW|TECHNICAL_CONFORMANT)',
+            r'UV_RESULT_STATUS=(?:COMPLETED|REVIEW)',
+            r'UV_CONFORMANCE_STATE=PASS',
+            r'UV_ATTESTATION_MODE=GENERATION_FINALIZATION',
+            r'UV_(?:ARTIFACT_SET_SHA256|MANIFEST_SHA256|PROCESSING_FINGERPRINT)=[0-9a-f]{64}',
+            r'UV_PROCESSING_REVISION=6a4e8248eedd00f849fcefd1bf41a51b26f5e7c6',
+            r'UV_PROCESSING_WHISPER_MODEL=small',
+            r'UV_(?:ARTIFACT_COUNT|TOTAL_BYTES|SUBMIT_COUNT|AUTOMATIC_RETRIES)=[0-9]{1,20}',
+            r'UV_DOMAIN_ANALYSIS_STATUS=DEFERRED',
+            r'UV_(?:TECHNICAL_BUNDLE_READY|BRIDGE_PRODUCTION_READY)=(?:YES|NO)',
+            r'UV_TRANSCRIPT_QC=PASS',
+            r'UV_PEDAGOGICAL_STATUS=NOT_EVALUATED',
+            r'UV_PUBLICATION_STATE=(?:NOT_PUBLISHED|FAILED|NOT_CURRENTLY_VERIFIABLE|STALE_LOCAL_MISMATCH|PUBLISHED_VERIFIED)',
+            r'UV_(?:PUBLICATION_BUNDLE_SHA256)=[0-9a-f]{64}',
+            r'UV_PUBLICATION_FOLDER_ID=[A-Za-z0-9_-]{10,128}',
+            r'UV_ERROR_TYPE=(?:MULTIPLE_SPOOL_STATES|ORPHAN_RESULT_DIRECTORY|UNSAFE_SPOOL_RECEIPT|UNSAFE_FAILED_RECEIPT|DONE_RECEIPT_IDENTITY_MISMATCH|UNEXPECTED_DONE_STATUS|RESULT_CONFORMANCE_FAILED|FRESH_ID_PUBLICATION_CONFLICT)',
+            r'UV003_OPERATOR_FAILURE=[A-Z_]+',
+            r'UNIVERSAL_VIDEO_DIANA11_003_(?:SUBMIT_PASS|SUBMIT_IDEMPOTENT|STATUS_PASS|CONFORMANCE_PASS)',
+          )
+          safe=[]
+          for line in os.environ['RAW'].splitlines():
+              if any(re.fullmatch(p,line) for p in patterns) and line not in safe: safe.append(line)
+          print('\n'.join(safe))
+          PY
+          }
+          raw=''; rc=0
+          if raw="$("${ssh_cmd[@]}" 'sudo -n /usr/local/sbin/universal-video-diana11-003 submit-bridge' 2>&1)"; then rc=0; else rc=$?; fi
+          filter_status "$raw" > "$RUNNER_TEMP/uv003-submit-safe.txt"
+          cat "$RUNNER_TEMP/uv003-submit-safe.txt"
+          [[ "$rc" == 0 ]]
+          grep -Fx 'UV_SUBMIT_COUNT=1' "$RUNNER_TEMP/uv003-submit-safe.txt"
+          grep -Fx 'UV_AUTOMATIC_RETRIES=0' "$RUNNER_TEMP/uv003-submit-safe.txt"
+          grep -Fx 'UNIVERSAL_VIDEO_DIANA11_003_SUBMIT_PASS' "$RUNNER_TEMP/uv003-submit-safe.txt"
+          state="$(sed -n 's/^UV_STATE=//p' "$RUNNER_TEMP/uv003-submit-safe.txt" | tail -n1)"
+          [[ "$state" == QUEUED ]]
+          echo 'submit_recorded=true' >> "$GITHUB_OUTPUT"
+          echo 'submit_count=1' >> "$GITHUB_OUTPUT"
+          body="$RUNNER_TEMP/uv003-submitted.md"
+          {
+            echo '[OBSERVATORY] UV003 exact frozen job submitted once.'
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/uv003-submit-safe.txt"
+            echo '```'
+            echo
+            echo 'No automatic retry or second-submit path is active. Raw remote output is not recorded.'
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > "$body"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+          last="$state"
+          for _ in $(seq 1 300); do
+            sleep 60
+            raw=''; rc=0
+            if raw="$("${ssh_cmd[@]}" 'sudo -n /usr/local/sbin/universal-video-diana11-003 status-bridge' 2>&1)"; then rc=0; else rc=$?; fi
+            safe="$RUNNER_TEMP/uv003-current-safe.txt"
+            filter_status "$raw" > "$safe"
+            if (( rc != 0 )); then
+              cp "$safe" "$RUNNER_TEMP/uv003-terminal-safe.txt"
+              echo 'terminal_state=OBSERVATION_FAILED' >> "$GITHUB_OUTPUT"
+              exit 2
+            fi
+            grep -Fx 'UNIVERSAL_VIDEO_DIANA11_003_STATUS_PASS' "$safe" >/dev/null
+            state="$(sed -n 's/^UV_STATE=//p' "$safe" | tail -n1)"
+            [[ "$state" =~ ^(MISSING|CONFLICT|NONCONFORMANT|FAILED|RUNNING|QUEUED|REVIEW|TECHNICAL_CONFORMANT)$ ]]
+            if [[ "$state" != "$last" ]]; then
+              body="$RUNNER_TEMP/uv003-transition.md"
+              {
+                echo "[OBSERVATORY] UV003 resident state: \`$last → $state\`."
+                echo
+                echo '```text'
+                cat "$safe"
+                echo '```'
+                echo
+                echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              } > "$body"
+              gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+              last="$state"
+            fi
+            case "$state" in
+              TECHNICAL_CONFORMANT)
+                cp "$safe" "$RUNNER_TEMP/uv003-terminal-safe.txt"
+                for marker in \
+                  'UV_CONFORMANCE_STATE=PASS' \
+                  'UV_ATTESTATION_MODE=GENERATION_FINALIZATION' \
+                  'UV_TRANSCRIPT_QC=PASS' \
+                  'UV_PROCESSING_REVISION=6a4e8248eedd00f849fcefd1bf41a51b26f5e7c6' \
+                  'UV_PROCESSING_WHISPER_MODEL=small' \
+                  'UV_PROCESSING_FINGERPRINT=371661d2a1858e576e2f618ddf504da724edc30089a9af88f9dd3a140ca30951'; do
+                  grep -Fx "$marker" "$safe" >/dev/null
+                done
+                echo 'terminal_state=TECHNICAL_CONFORMANT' >> "$GITHUB_OUTPUT"
+                echo 'validated=true' >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              REVIEW|NONCONFORMANT|CONFLICT|FAILED|MISSING)
+                cp "$safe" "$RUNNER_TEMP/uv003-terminal-safe.txt"
+                echo "terminal_state=$state" >> "$GITHUB_OUTPUT"
+                exit 1
+                ;;
+            esac
+          done
+          cp "$RUNNER_TEMP/uv003-current-safe.txt" "$RUNNER_TEMP/uv003-terminal-safe.txt"
+          printf '%s\n' 'UV003_OBSERVATION_WINDOW=EXPIRED' >> "$RUNNER_TEMP/uv003-terminal-safe.txt"
+          echo "terminal_state=${last:-UNKNOWN}" >> "$GITHUB_OUTPUT"
+          exit 2
+      - name: Publish exact compact bundle once
+        id: publication
+        if: ${{ steps.execution.outputs.validated == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh_cmd=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          raw=''; rc=0
+          if raw="$(timeout 1800 "${ssh_cmd[@]}" 'sudo -n /usr/local/sbin/universal-video-diana11-003 publish-bridge' 2>&1)"; then rc=0; else rc=$?; fi
+          RAW="$raw" python - <<'PY' > "$RUNNER_TEMP/uv003-publication-safe.txt"
+          import os,re
+          patterns=(
+            r'UV_PUBLICATION_STATE=PUBLISHED_VERIFIED',
+            r'UV_PUBLICATION_BUNDLE_SHA256=[0-9a-f]{64}',
+            r'UV_PUBLICATION_FOLDER_ID=[A-Za-z0-9_-]{10,128}',
+            r'UV_RAW_MEDIA_PUBLISHED=NO',
+            r'UV_DOMAIN_ANALYSIS_STATUS=DEFERRED',
+            r'UV_BRIDGE_PRODUCTION_READY=NO',
+            r'UV_PEDAGOGICAL_STATUS=NOT_EVALUATED',
+            r'UV003_OPERATOR_FAILURE=[A-Z_]+',
+            r'UNIVERSAL_VIDEO_DIANA11_003_PUBLISH_VERIFIED_PASS',
+          )
+          safe=[]
+          for line in os.environ['RAW'].splitlines():
+              if any(re.fullmatch(p,line) for p in patterns) and line not in safe: safe.append(line)
+          print('\n'.join(safe))
+          PY
+          cat "$RUNNER_TEMP/uv003-publication-safe.txt"
+          [[ "$rc" == 0 ]]
+          for marker in \
+            'UV_PUBLICATION_STATE=PUBLISHED_VERIFIED' \
+            'UV_RAW_MEDIA_PUBLISHED=NO' \
+            'UV_DOMAIN_ANALYSIS_STATUS=DEFERRED' \
+            'UV_BRIDGE_PRODUCTION_READY=NO' \
+            'UV_PEDAGOGICAL_STATUS=NOT_EVALUATED' \
+            'UNIVERSAL_VIDEO_DIANA11_003_PUBLISH_VERIFIED_PASS'; do
+            grep -Fx "$marker" "$RUNNER_TEMP/uv003-publication-safe.txt"
+          done
+          echo 'validated=true' >> "$GITHUB_OUTPUT"
+      - name: Independently read back exact remote inventory
+        id: readback
+        if: ${{ steps.publication.outputs.validated == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh_cmd=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          raw=''; rc=0
+          if raw="$(timeout 900 "${ssh_cmd[@]}" 'sudo -n /usr/local/sbin/universal-video-diana11-003 readback-bridge' 2>&1)"; then rc=0; else rc=$?; fi
+          RAW="$raw" python - <<'PY' > "$RUNNER_TEMP/uv003-readback-safe.txt"
+          import os,re
+          patterns=(
+            r'UV_READBACK_STATE=REMOTE_VERIFIED',
+            r'UV_READBACK_ARTIFACT_COUNT=[0-9]{1,20}',
+            r'UV_READBACK_TOTAL_BYTES=[0-9]{1,20}',
+            r'UV_READBACK_BUNDLE_SHA256=[0-9a-f]{64}',
+            r'UV_READBACK_FOLDER_ID=[A-Za-z0-9_-]{10,128}',
+            r'UV_READBACK_BROAD_ACL=NO',
+            r'UV003_OPERATOR_FAILURE=[A-Z_]+',
+            r'UNIVERSAL_VIDEO_DIANA11_003_READBACK_PASS',
+          )
+          safe=[]
+          for line in os.environ['RAW'].splitlines():
+              if any(re.fullmatch(p,line) for p in patterns) and line not in safe: safe.append(line)
+          print('\n'.join(safe))
+          PY
+          cat "$RUNNER_TEMP/uv003-readback-safe.txt"
+          [[ "$rc" == 0 ]]
+          for marker in \
+            'UV_READBACK_STATE=REMOTE_VERIFIED' \
+            'UV_READBACK_BROAD_ACL=NO' \
+            'UNIVERSAL_VIDEO_DIANA11_003_READBACK_PASS'; do
+            grep -Fx "$marker" "$RUNNER_TEMP/uv003-readback-safe.txt"
+          done
+          pub_hash="$(sed -n 's/^UV_PUBLICATION_BUNDLE_SHA256=//p' "$RUNNER_TEMP/uv003-publication-safe.txt")"
+          read_hash="$(sed -n 's/^UV_READBACK_BUNDLE_SHA256=//p' "$RUNNER_TEMP/uv003-readback-safe.txt")"
+          [[ -n "$pub_hash" && "$pub_hash" == "$read_hash" ]]
+          echo 'validated=true' >> "$GITHUB_OUTPUT"
+      - name: Verify DDS3 non-regression
+        id: dds3
+        if: ${{ steps.readback.outputs.validated == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          READY="$(curl -fsS --retry 3 --retry-delay 3 --max-time 20 https://158.180.47.161/readyz)" python - <<'PY' > "$RUNNER_TEMP/uv003-dds3-safe.txt"
+          import json,os
+          x=json.loads(os.environ['READY'])
+          assert x.get('status')=='ready'
+          assert x.get('engine')=='DDS3'
+          assert x.get('fallback_used') is False
+          assert x.get('position_solver')=='ready'
+          print('UV003_DDS3_NONREGRESSION=PASS')
+          PY
+          cat "$RUNNER_TEMP/uv003-dds3-safe.txt"
+          echo 'validated=true' >> "$GITHUB_OUTPUT"
+      - name: Record terminal evidence and classification
+        if: ${{ always() }}
+        shell: bash
+        env:
+          BOOTSTRAP_VALIDATED: ${{ steps.bootstrap.outputs.validated }}
+          PREFLIGHT_VALIDATED: ${{ steps.preflight.outputs.validated }}
+          SUBMIT_RECORDED: ${{ steps.execution.outputs.submit_recorded }}
+          TERMINAL_STATE: ${{ steps.execution.outputs.terminal_state }}
+          EXECUTION_VALIDATED: ${{ steps.execution.outputs.validated }}
+          PUBLICATION_VALIDATED: ${{ steps.publication.outputs.validated }}
+          READBACK_VALIDATED: ${{ steps.readback.outputs.validated }}
+          DDS3_VALIDATED: ${{ steps.dds3.outputs.validated }}
+        run: |
+          set -euo pipefail
+          classification='INCONCLUSIVE'
+          execution_terminal='STOPPED'
+          technical_artifact='NOT_CREATED'
+          publication='NOT_PUBLISHED'
+          if [[ "${EXECUTION_VALIDATED:-}" == true ]]; then
+            execution_terminal='COMPLETED'
+            technical_artifact='VERIFIED'
+          elif [[ "${TERMINAL_STATE:-}" =~ ^(REVIEW|NONCONFORMANT|CONFLICT|FAILED|MISSING)$ ]]; then
+            classification='STOPPED'
+            execution_terminal='STOPPED'
+            technical_artifact='NONCONFORMANT'
+          elif [[ "${SUBMIT_RECORDED:-}" != true ]]; then
+            classification='STOPPED'
+            execution_terminal='NOT_STARTED'
+          fi
+          if [[ "${PUBLICATION_VALIDATED:-}" == true ]]; then publication='REMOTE_VERIFIED'; fi
+          if [[ "${EXECUTION_VALIDATED:-}" == true && "${PUBLICATION_VALIDATED:-}" != true ]]; then
+            classification='STOPPED'
+            publication='FAILED_CLOSED'
+          fi
+          if [[ "${PUBLICATION_VALIDATED:-}" == true && "${READBACK_VALIDATED:-}" != true ]]; then
+            classification='STOPPED'
+            publication='FAILED_CLOSED'
+          fi
+          if [[ "${EXECUTION_VALIDATED:-}" == true && "${PUBLICATION_VALIDATED:-}" == true && "${READBACK_VALIDATED:-}" == true && "${DDS3_VALIDATED:-}" == true ]]; then
+            classification='PASS'
+            execution_terminal='COMPLETED'
+            technical_artifact='VERIFIED'
+            publication='REMOTE_VERIFIED'
+          elif [[ "${DDS3_VALIDATED:-}" != true && "${READBACK_VALIDATED:-}" == true ]]; then
+            classification='STOPPED'
+          fi
+          start="$(cat "$RUNNER_TEMP/uv003-start-epoch" 2>/dev/null || date +%s)"
+          now="$(date +%s)"
+          elapsed=$(( now - start ))
+          body="$RUNNER_TEMP/uv003-final.md"
+          {
+            echo '[COORDINATOR] UV003 TERMINAL EVIDENCE'
+            echo
+            echo '```text'
+            echo "EXECUTION_TERMINAL=$execution_terminal"
+            echo "TECHNICAL_ARTIFACT=$technical_artifact"
+            echo "PUBLICATION=$publication"
+            echo 'DOMAIN_ANALYSIS=DEFERRED'
+            echo 'METHODOLOGY=NOT_EVALUATED'
+            echo 'PRODUCTION_PROMOTION=BLOCKED'
+            echo "TERMINAL_CLASSIFICATION=$classification"
+            echo 'SUBMIT_COUNT='"$([[ "${SUBMIT_RECORDED:-}" == true ]] && echo 1 || echo 0)"
+            echo 'AUTOMATIC_RETRIES=0'
+            echo "ELAPSED_SECONDS=$elapsed"
+            echo 'NEW_PAID_RESOURCES=0'
+            echo 'INCREMENTAL_COST_CAP_EUR=3'
+            echo 'RAW_MEDIA_PUBLISHED=NO'
+            echo 'GITHUB_RAW_REMOTE_OUTPUT_RECORDED=NO'
+            echo '```'
+            for file in \
+              "$RUNNER_TEMP/uv003-bootstrap-safe.txt" \
+              "$RUNNER_TEMP/uv003-preflight-safe.txt" \
+              "$RUNNER_TEMP/uv003-submit-safe.txt" \
+              "$RUNNER_TEMP/uv003-terminal-safe.txt" \
+              "$RUNNER_TEMP/uv003-publication-safe.txt" \
+              "$RUNNER_TEMP/uv003-readback-safe.txt" \
+              "$RUNNER_TEMP/uv003-dds3-safe.txt"; do
+              if [[ -s "$file" ]]; then
+                echo
+                echo '```text'
+                cat "$file"
+                echo '```'
+              fi
+            done
+            echo
+            echo 'Existing always-on Oracle baseline is reported separately and was not relabeled as experiment cost. No new service, instance shape, tariff, Drive ACL, production routing, or automatic retry was introduced.'
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > "$body"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+          if [[ "$classification" == PASS ]]; then
+            gh issue comment 566 --repo "$GITHUB_REPOSITORY" --body "[COORDINATOR] Post-GO execution evidence is recorded in #$ISSUE_NUMBER with terminal classification **PASS**. Exactly one frozen shadow job was submitted; compact publication and independent readback passed; production promotion remains blocked. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+            gh issue close "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --reason completed
+          elif [[ "$classification" == STOPPED ]]; then
+            gh issue close "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --reason completed
+          fi
