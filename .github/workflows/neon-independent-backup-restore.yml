@@ -51,7 +51,7 @@ jobs:
     environment: database-production
     env:
       DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
-      BACKUP_PASSPHRASE: ${{ secrets.NEON_BACKUP_PASSPHSE }}
+      BACKUP_PASSPHRASE: ${{ secrets.NEON_BACKUP_PASSPHRASE }}
     outputs:
       artifact_name: ${{ steps.meta.outputs.artifact_name }}
       backup_sha256: ${{ steps.meta.outputs.backup_sha256 }}
