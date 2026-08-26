@@ -12,6 +12,10 @@ on:
     branches: [main]
     paths:
       - .github/oracle-power-command
+  pull_request_target:
+    types: [opened]
+    paths:
+      - .github/oracle-power-command
 
 permissions:
   contents: read
@@ -22,15 +26,28 @@ concurrency:
 
 jobs:
   power:
+    if: >-
+      github.event_name != 'pull_request_target' ||
+      (github.actor == 'olegmed1-art' &&
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       startsWith(github.event.pull_request.head.ref, 'oracle-power/'))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       OCI_REGION: eu-frankfurt-1
       OCI_INSTANCE_OCID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
     steps:
-      - name: Checkout command
+      - name: Checkout push command
         if: ${{ github.event_name == 'push' }}
         uses: actions/checkout@v4
+
+      - name: Checkout owner PR command
+        if: ${{ github.event_name == 'pull_request_target' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          sparse-checkout: .github/oracle-power-command
+          sparse-checkout-cone-mode: false
 
       - name: Resolve bounded action
         id: command
