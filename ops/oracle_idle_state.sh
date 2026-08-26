@@ -25,32 +25,25 @@ trap finish EXIT
 [[ -x "$PYTHON" ]] || { reason="assistant_lab_python_missing"; exit 0; }
 
 # The resident daemon being active is expected and does not itself make the host busy.
-# A failed/activating worker, however, makes the state unknown because queue ownership
-# cannot be trusted while lifecycle is unstable.
+# An unhealthy/transitioning worker makes the state unknowable, so STOP stays blocked.
 if command -v systemctl >/dev/null 2>&1; then
   worker_state="$(systemctl is-active assistant-lab.service 2>/dev/null || true)"
   case "$worker_state" in
     active) ;;
-    inactive|failed|activating|deactivating|reloading|"")
-      reason="assistant_lab_service_${worker_state:-unknown}"
-      exit 0
-      ;;
-    *) reason="assistant_lab_service_unknown_${worker_state}"; exit 0 ;;
+    *) reason="assistant_lab_service_${worker_state:-unknown}"; exit 0 ;;
   esac
 else
   reason="systemctl_missing"
   exit 0
 fi
 
-# A running observer experiment must keep the machine alive. The observer service may
-# be resident, so inspect child processes rather than treating the service itself as busy.
+# Observer experiments and durable-delivery work are independent keep-alive reasons.
 if pgrep -f '[a]ssistant_lab.*observer.*experiment|[o]racle_assistant_lab_observer.*run' >/dev/null 2>&1; then
   state="BUSY"
   reason="observer_experiment_process"
   exit 0
 fi
 
-# Known durable-delivery/spool roots. A non-empty root is conservatively BUSY.
 for spool in \
   /opt/bridge-school/assistant-lab/spool \
   /opt/bridge-school/assistant-lab/feedback-spool \
@@ -64,13 +57,11 @@ do
   fi
 done
 
-# Read the root-owned DSN without echoing it. The DB query is deliberately conservative:
-# any schema/privilege/connectivity problem returns UNKNOWN instead of permitting stop.
-set -a
-# shellcheck disable=SC1090
-source "$LAB_ENV"
-set +a
-[[ -n "${ASSISTANT_LAB_DATABASE_URL:-}" ]] || { reason="assistant_lab_dsn_missing"; exit 0; }
+# Read only the exact DSN assignment; do not source the environment file as shell code.
+dsn_line="$(grep -m1 '^ASSISTANT_LAB_DATABASE_URL=' "$LAB_ENV" 2>/dev/null || true)"
+[[ -n "$dsn_line" ]] || { reason="assistant_lab_dsn_missing"; exit 0; }
+export ASSISTANT_LAB_DATABASE_URL="${dsn_line#ASSISTANT_LAB_DATABASE_URL=}"
+[[ -n "$ASSISTANT_LAB_DATABASE_URL" ]] || { reason="assistant_lab_dsn_empty"; exit 0; }
 
 DB_RESULT="$("$PYTHON" - <<'PY' 2>/dev/null || true
 import os
@@ -88,33 +79,24 @@ if not dsn:
 try:
     with psycopg.connect(dsn, connect_timeout=8, application_name="oracle-idle-state") as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM assistant_lab.job WHERE status IN ('QUEUED','RUNNING')")
-            active_jobs = int(cur.fetchone()[0])
-
-            # ResearchJob is an independent orchestration envelope. It must also be
-            # quiescent. Lack of SELECT privilege is intentionally fail-closed.
-            cur.execute("SELECT count(*) FROM assistant_lab.research_job WHERE stage IN ('QUEUED','ACCEPTED','RUNNING','CHECKPOINTED','VALIDATING')")
-            active_research = int(cur.fetchone()[0])
-
-            # Control commands are Oracle work too. Different schema revisions used
-            # different lifecycle spellings, so discover the status column contract
-            # without assuming a particular case convention.
-            cur.execute("SELECT to_regclass('assistant_lab.control_command')")
-            control_table = cur.fetchone()[0]
-            active_control = 0
-            if control_table is not None:
-                cur.execute("SELECT count(*) FROM assistant_lab.control_command WHERE upper(status::text) IN ('QUEUED','RUNNING','PENDING')")
-                active_control = int(cur.fetchone()[0])
-
-    if active_jobs or active_research or active_control:
+            cur.execute("SELECT active_jobs, active_research_jobs, active_control_commands FROM assistant_lab.oracle_idle_snapshot()")
+            row = cur.fetchone()
+            if row is None or len(row) != 3:
+                print("UNKNOWN:idle_snapshot_missing")
+                raise SystemExit
+            active_jobs, active_research, active_control = map(int, row)
+    if min(active_jobs, active_research, active_control) < 0:
+        print("UNKNOWN:invalid_idle_snapshot")
+    elif active_jobs or active_research or active_control:
         print(f"BUSY:jobs={active_jobs},research={active_research},control={active_control}")
     else:
         print("IDLE:jobs=0,research=0,control=0")
-except Exception as exc:
-    # Never print the exception because driver errors may contain connection details.
+except Exception:
+    # Do not expose driver errors because they may contain connection details.
     print("UNKNOWN:database_check_failed")
 PY
 )"
+unset ASSISTANT_LAB_DATABASE_URL
 
 case "$DB_RESULT" in
   IDLE:*) state="IDLE"; reason="${DB_RESULT#IDLE:}" ;;
