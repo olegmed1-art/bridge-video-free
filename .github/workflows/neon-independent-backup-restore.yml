@@ -51,7 +51,7 @@ jobs:
     environment: database-production
     env:
       DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
-      BACKUP_PASSPHRASE: ${{ secrets.NEON_BACKUP_PASSPHRASE }}
+      BACKUP_PASSPHRASE: ${{ secrets.NEON_BACKUP_PASSPHSE }}
     outputs:
       artifact_name: ${{ steps.meta.outputs.artifact_name }}
       backup_sha256: ${{ steps.meta.outputs.backup_sha256 }}
@@ -97,13 +97,17 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          docker run --rm -e DATABASE_URL postgres:18 \
+          rm -f neon.dump
+          docker run --rm \
+            -e DATABASE_URL \
+            -v "$PWD:/backup" \
+            postgres:18 \
             pg_dump "$DATABASE_URL" \
               --format=custom \
               --compress=9 \
               --no-owner \
               --no-privileges \
-              --file=/dev/stdout > neon.dump
+              --file=/backup/neon.dump
           test -s neon.dump
 
       - name: Encrypt backup before durable upload
