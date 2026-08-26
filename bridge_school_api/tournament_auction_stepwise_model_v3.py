@@ -22,6 +22,33 @@ class HandView:
     lengths: Mapping[str, int]
 
 
+@dataclass(frozen=True)
+class PublicSuitPromise:
+    """A minimum suit length established by a public, evidenced call."""
+
+    suit: str
+    minimum_length: int
+    source_call: str
+    canon_rule_id: str
+    evidence_ref: str
+
+    def __post_init__(self) -> None:
+        suit = str(self.suit or "").strip().upper()
+        minimum = int(self.minimum_length)
+        if suit not in SUITS:
+            raise AuctionModelError("public suit promise requires S/H/D/C suit")
+        if not 0 <= minimum <= 13:
+            raise AuctionModelError("public suit promise minimum must be between 0 and 13")
+        if not str(self.source_call or "").strip():
+            raise AuctionModelError("public suit promise requires source_call")
+        if not str(self.canon_rule_id or "").strip():
+            raise AuctionModelError("public suit promise requires canon_rule_id")
+        if not str(self.evidence_ref or "").strip():
+            raise AuctionModelError("public suit promise requires evidence_ref")
+        object.__setattr__(self, "suit", suit)
+        object.__setattr__(self, "minimum_length", minimum)
+
+
 def _parse_hand(seat: str, cards: str) -> HandView:
     parts = str(cards or "").strip().split(".")
     if len(parts) != 4:
@@ -41,26 +68,27 @@ def _required_text(value: Any, field: str) -> str:
     return text
 
 
-def guaranteed_fit_state(*, actor_length: int, partner_promised_minimum: int) -> dict[str, Any]:
-    """Return the fit state available to the acting player at that moment.
-
-    School definition: a fit exists when the partnership is known to hold at least
-    eight cards in the suit. The calculation is therefore based on the acting
-    player's actual length plus the minimum length promised by partner's public call,
-    not on partner's hidden actual holding.
-    """
+def guaranteed_fit_state(*, actor_length: int, partner_promise: PublicSuitPromise) -> dict[str, Any]:
+    """Return fit state from the actor's hand and an evidenced public promise only."""
     actor_length = int(actor_length)
-    partner_promised_minimum = int(partner_promised_minimum)
-    if actor_length < 0 or partner_promised_minimum < 0:
-        raise AuctionModelError("fit lengths must be non-negative")
-    combined = actor_length + partner_promised_minimum
+    if actor_length < 0 or actor_length > 13:
+        raise AuctionModelError("actor length must be between 0 and 13")
+    if not isinstance(partner_promise, PublicSuitPromise):
+        raise AuctionModelError("partner_promise must be an evidenced PublicSuitPromise")
+    combined = actor_length + partner_promise.minimum_length
+    fit_established = combined >= FIT_MIN_COMBINED_LENGTH
     return {
         "actor_length": actor_length,
-        "partner_promised_minimum": partner_promised_minimum,
+        "partner_promised_minimum": partner_promise.minimum_length,
+        "partner_promise_suit": partner_promise.suit,
+        "partner_promise_source_call": partner_promise.source_call,
+        "partner_promise_canon_rule_id": partner_promise.canon_rule_id,
+        "partner_promise_evidence_ref": partner_promise.evidence_ref,
         "guaranteed_combined_length": combined,
-        "fit_established": combined >= FIT_MIN_COMBINED_LENGTH,
+        "fit_established": fit_established,
         "fit_threshold": FIT_MIN_COMBINED_LENGTH,
         "uses_partner_hidden_actual_length": False,
+        "support_as_known_fit_allowed": fit_established,
     }
 
 
@@ -187,8 +215,16 @@ def board15_verified_prefix() -> dict[str, Any]:
     out["next_actor_fit_check"] = {
         "seat": "W",
         "suit": "H",
-        **guaranteed_fit_state(actor_length=3, partner_promised_minimum=4),
+        **guaranteed_fit_state(
+            actor_length=3,
+            partner_promise=PublicSuitPromise(
+                suit="H",
+                minimum_length=4,
+                source_call="1H",
+                canon_rule_id="RESP_NEW_SUIT_LEVEL1_4PLUS",
+                evidence_ref="teacher-confirmed-in-chat-2026-08-25",
+            ),
+        ),
         "teacher_rule_evidence": "teacher-confirmed-in-chat-2026-08-26",
-        "support_as_known_fit_allowed": False,
     }
     return out
