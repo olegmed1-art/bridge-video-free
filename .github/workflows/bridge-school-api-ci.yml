@@ -10,6 +10,7 @@ on:
       - 'tests/test_ai_policy_contract.py'
       - 'tests/test_ai_auction_rollout.py'
       - 'tests/test_ai_auction_scoring.py'
+      - 'tests/test_tournament_auction_stepwise_model_v3.py'
       - 'requirements-api.txt'
       - 'Dockerfile.api'
       - '.github/workflows/bridge-school-api-ci.yml'
@@ -23,6 +24,7 @@ on:
       - 'tests/test_ai_policy_contract.py'
       - 'tests/test_ai_auction_rollout.py'
       - 'tests/test_ai_auction_scoring.py'
+      - 'tests/test_tournament_auction_stepwise_model_v3.py'
       - 'requirements-api.txt'
       - 'Dockerfile.api'
       - '.github/workflows/bridge-school-api-ci.yml'
@@ -59,6 +61,7 @@ jobs:
           tests/test_ai_policy_contract.py
           tests/test_ai_auction_rollout.py
           tests/test_ai_auction_scoring.py
+          tests/test_tournament_auction_stepwise_model_v3.py
       - name: Import FastAPI application
         run: python -c "from app import app; assert app.title == 'Bridge School API'"
       - name: Build API container
