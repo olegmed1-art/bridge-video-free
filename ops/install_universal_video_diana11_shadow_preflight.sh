@@ -56,7 +56,8 @@ set_stage 'RUNTIME_COMMIT'
 [[ "$(git -C "$SOURCE_DIR" rev-parse HEAD)" == "$EXPECTED_RUNTIME_COMMIT" ]] || fail 'runtime commit mismatch'
 [[ -z "$(git -C "$SOURCE_DIR" status --porcelain=v1 --untracked-files=all)" ]] || fail 'runtime checkout is dirty'
 
-set_stage 'RUNTIME_ENV_REVISION'
+# Reuse RUNTIME_COMMIT for the second, environment-vs-checkout revision consistency check.
+set_stage 'RUNTIME_COMMIT'
 RUNTIME_ENV="$RUNTIME_ENV" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" python3 - <<'PY'
 import os
 from pathlib import Path
@@ -70,7 +71,8 @@ for raw in Path(os.environ['RUNTIME_ENV']).read_text(encoding='utf-8').splitline
 assert value == os.environ['EXPECTED_RUNTIME_COMMIT']
 PY
 
-set_stage 'RUNTIME_ENV_MODEL'
+# RUNTIME_ENV now isolates only effective Whisper-model validation.
+set_stage 'RUNTIME_ENV'
 RUNTIME_ENV="$RUNTIME_ENV" python3 - <<'PY'
 import os
 from pathlib import Path
