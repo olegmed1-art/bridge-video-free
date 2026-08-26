@@ -1,0 +1,35 @@
+name: Governance state validation
+
+on:
+  pull_request:
+    paths:
+      - 'docs/governance/**'
+      - 'ops/governance/**'
+      - '.github/workflows/governance-state.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'docs/governance/**'
+      - 'ops/governance/**'
+      - '.github/workflows/governance-state.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-governance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Validate canonical governance registries
+        run: python ops/governance/validate_governance.py
