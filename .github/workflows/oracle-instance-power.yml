@@ -8,14 +8,6 @@ on:
         required: true
         type: choice
         options: [status, start, stop]
-  push:
-    branches: [main]
-    paths:
-      - .github/oracle-power-command
-  pull_request_target:
-    types: [opened]
-    paths:
-      - .github/oracle-power-command
 
 permissions:
   contents: read
@@ -26,28 +18,14 @@ concurrency:
 
 jobs:
   power:
-    if: >-
-      github.event_name != 'pull_request_target' ||
-      (github.actor == 'olegmed1-art' &&
-       github.event.pull_request.head.repo.full_name == github.repository &&
-       startsWith(github.event.pull_request.head.ref, 'oracle-power/'))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       OCI_REGION: eu-frankfurt-1
       OCI_INSTANCE_OCID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
     steps:
-      - name: Checkout push command
-        if: ${{ github.event_name == 'push' }}
+      - name: Checkout bounded control code
         uses: actions/checkout@v4
-
-      - name: Checkout owner PR command
-        if: ${{ github.event_name == 'pull_request_target' }}
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          sparse-checkout: .github/oracle-power-command
-          sparse-checkout-cone-mode: false
 
       - name: Resolve bounded action
         id: command
@@ -55,11 +33,7 @@ jobs:
           DISPATCH_ACTION: ${{ inputs.action }}
         run: |
           set -euo pipefail
-          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
-            action="${DISPATCH_ACTION}"
-          else
-            action="$(sed -n 's/^action=//p' .github/oracle-power-command | tail -n 1)"
-          fi
+          action="${DISPATCH_ACTION}"
           case "$action" in status|start|stop) ;; *) echo "invalid action" >&2; exit 2 ;; esac
           echo "action=$action" >> "$GITHUB_OUTPUT"
           echo "bounded action: $action"
@@ -74,7 +48,7 @@ jobs:
           test -n "${OCI_CLI_KEY_CONTENT:-}"
 
       - name: Install OCI CLI
-        run: python -m pip install --disable-pip-version-check --quiet oci-cli
+        run: python -m pip install --disable-pip-version-check --quiet 'oci-cli==3.90.3'
 
       - name: Configure bounded OCI client
         env:
@@ -101,41 +75,111 @@ jobs:
           if not region: lines.append('region=eu-frankfurt-1')
           p.write_text('\n'.join(lines)+'\n')
           PY
+          oci iam region list --output json >/dev/null
 
       - name: Read current lifecycle state
         id: state
         run: |
           set -euo pipefail
           state="$(oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --query 'data."lifecycle-state"' --raw-output)"
-          case "$state" in RUNNING|STOPPED|STARTING|STOPPING) ;; *) exit 1 ;; esac
+          case "$state" in RUNNING|STOPPED|STARTING|STOPPING) ;; *) echo "unexpected lifecycle state: $state" >&2; exit 1 ;; esac
           echo "current_state=$state" >> "$GITHUB_OUTPUT"
           echo "current lifecycle state: $state"
 
+      - name: Prove host idle before stop
+        id: idle
+        if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state == 'RUNNING' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' > "$RUNNER_TEMP/oracle-idle-result.txt"
+          import os, pathlib, time
+          import oci
+
+          instance_id=os.environ['OCI_INSTANCE_OCID']
+          script=pathlib.Path('ops/oracle_idle_state.sh').read_text(encoding='utf-8')
+          config=oci.config.from_file()
+          compute=oci.core.ComputeClient(config)
+          instance=compute.get_instance(instance_id).data
+          if instance.region != os.environ['OCI_REGION']:
+              raise SystemExit('instance region mismatch')
+
+          agent=oci.compute_instance_agent.ComputeInstanceAgentClient(config)
+          models=oci.compute_instance_agent.models
+          details=models.CreateInstanceAgentCommandDetails(
+              compartment_id=instance.compartment_id,
+              execution_time_out_in_seconds=90,
+              target=models.InstanceAgentCommandTarget(instance_id=instance_id),
+              content=models.InstanceAgentCommandContent(
+                  source=models.InstanceAgentCommandSourceViaTextDetails(
+                      source_type='TEXT', text=script
+                  ),
+                  output=models.InstanceAgentCommandOutputViaTextDetails(output_type='TEXT'),
+              ),
+              display_name='bridge-school-oracle-idle-proof',
+          )
+          command=agent.create_instance_agent_command(details).data
+          terminal={'SUCCEEDED','FAILED','TIMED_OUT','CANCELED'}
+          execution=None
+          deadline=time.time()+120
+          while time.time() < deadline:
+              execution=agent.get_instance_agent_command_execution(command.id, instance_id).data
+              if execution.lifecycle_state in terminal:
+                  break
+              time.sleep(5)
+          if execution is None or execution.lifecycle_state != 'SUCCEEDED':
+              print('ORACLE_IDLE_REASON=instance_agent_check_failed')
+              print('ORACLE_IDLE_STATE=UNKNOWN')
+          else:
+              text=getattr(execution.content, 'text', '') or ''
+              # Only expose the classifier's sanitized contract lines.
+              for line in text.splitlines():
+                  if line.startswith('ORACLE_IDLE_REASON=') or line.startswith('ORACLE_IDLE_STATE='):
+                      print(line)
+          PY
+          cat "$RUNNER_TEMP/oracle-idle-result.txt"
+          idle_state="$(sed -n 's/^ORACLE_IDLE_STATE=//p' "$RUNNER_TEMP/oracle-idle-result.txt" | tail -n1)"
+          idle_reason="$(sed -n 's/^ORACLE_IDLE_REASON=//p' "$RUNNER_TEMP/oracle-idle-result.txt" | tail -n1)"
+          case "$idle_state" in IDLE|BUSY|UNKNOWN) ;; *) idle_state=UNKNOWN; idle_reason=invalid_idle_proof ;; esac
+          echo "idle_state=$idle_state" >> "$GITHUB_OUTPUT"
+          echo "idle_reason=$idle_reason" >> "$GITHUB_OUTPUT"
+
       - name: Start exact instance
-        if: ${{ steps.command.outputs.action == 'start' && steps.state.outputs.current_state != 'RUNNING' }}
+        if: ${{ steps.command.outputs.action == 'start' && steps.state.outputs.current_state == 'STOPPED' }}
         run: |
           set -euo pipefail
           oci compute instance action --instance-id "$OCI_INSTANCE_OCID" --action START >/dev/null
           oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --wait-for-state RUNNING --wait-interval-seconds 10 --max-wait-seconds 600 >/dev/null
           echo "instance reached RUNNING"
 
-      - name: Stop exact instance
-        if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state != 'STOPPED' }}
+      - name: Stop exact instance only with IDLE proof
+        if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state == 'RUNNING' && steps.idle.outputs.idle_state == 'IDLE' }}
         run: |
           set -euo pipefail
           oci compute instance action --instance-id "$OCI_INSTANCE_OCID" --action STOP >/dev/null
           oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --wait-for-state STOPPED --wait-interval-seconds 10 --max-wait-seconds 600 >/dev/null
-          echo "instance reached STOPPED"
+          echo "instance reached STOPPED after IDLE proof"
+
+      - name: Refuse stop on unknown state
+        if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state == 'RUNNING' && steps.idle.outputs.idle_state == 'UNKNOWN' }}
+        run: |
+          echo "STOP REFUSED: host idle state is UNKNOWN" >&2
+          exit 3
 
       - name: Publish run summary
         if: ${{ always() }}
         env:
           ACTION_VALUE: ${{ steps.command.outputs.action }}
           STATE: ${{ steps.state.outputs.current_state }}
+          IDLE_STATE: ${{ steps.idle.outputs.idle_state }}
+          IDLE_REASON: ${{ steps.idle.outputs.idle_reason }}
         run: |
           {
             echo "### Oracle instance power"
             echo "- action: ${ACTION_VALUE:-UNKNOWN}"
             echo "- initial_state: ${STATE:-UNKNOWN}"
-            echo "- instance: exact Frankfurt VM only"
+            echo "- idle_state: ${IDLE_STATE:-not_applicable}"
+            echo "- idle_reason: ${IDLE_REASON:-not_applicable}"
+            echo "- target: exact Frankfurt VM only"
+            echo "- automatic idle shutdown: disabled"
           } >> "$GITHUB_STEP_SUMMARY"
