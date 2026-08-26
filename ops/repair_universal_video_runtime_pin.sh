@@ -7,7 +7,10 @@ umask 077
 # and restart only universal-video.service. It never enqueues or processes a job,
 # writes Drive, touches Assistant Lab/DDS3, or changes routing outside the sidecar.
 
-fail(){ printf 'UV003_RUNTIME_PIN_REPAIR=FAILED_CLOSED\n' >&2; exit 1; }
+stage='PRECHECK'
+mark(){ stage="$1"; printf 'UV003_RUNTIME_PIN_STAGE=%s\n' "$stage"; }
+fail(){ printf 'UV003_RUNTIME_PIN_STAGE=%s\n' "$stage" >&2; printf 'UV003_RUNTIME_PIN_REPAIR=FAILED_CLOSED\n' >&2; exit 1; }
+mark PRECHECK
 [[ "$(id -u)" -eq 0 ]] || fail
 : "${EXPECTED_RUNTIME_COMMIT:?EXPECTED_RUNTIME_COMMIT is required}"
 [[ "$EXPECTED_RUNTIME_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail
@@ -24,6 +27,7 @@ readonly SERVICE='universal-video.service'
 [[ "$(systemctl is-active assistant-lab.service)" == active ]] || fail
 [[ "$(systemctl is-active "$SERVICE")" == active ]] || fail
 
+mark DDS3_BEFORE
 ready_before="$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)" || fail
 READY_JSON="$ready_before" python3 - <<'PY' || fail
 import json,os
@@ -43,11 +47,11 @@ spool_empty(){
     fi
   done
 }
+mark SPOOL_GUARD
 spool_empty || fail
 printf 'UV003_RUNTIME_PIN_SPOOL=EMPTY\n'
 
-# Cardinality is safe to compute but values are never exposed. Zero, one, or
-# duplicate source-pin keys are all canonicalized to exactly one pinned key.
+mark ENV_SHAPE
 env_shape="$(ENV_FILE="$ENV_FILE" python3 - <<'PY'
 import os
 from pathlib import Path
@@ -58,6 +62,7 @@ PY
 )" || fail
 [[ "$env_shape" == ZERO || "$env_shape" == ONE || "$env_shape" == MULTIPLE ]] || fail
 
+mark BACKUP
 backup="$(mktemp -p "$BASE" .universal-video.env.uv003-backup.XXXXXX)"
 cp --preserve=mode,ownership,timestamps "$ENV_FILE" "$backup"
 changed=0
@@ -72,6 +77,7 @@ rollback(){
     if (( stopped == 1 )) && spool_empty; then
       systemctl start "$SERVICE" >/dev/null 2>&1 || true
     fi
+    printf 'UV003_RUNTIME_PIN_STAGE=%s\n' "$stage" >&2
     printf 'UV003_RUNTIME_PIN_REPAIR=FAILED_CLOSED\n' >&2
   fi
   rm -f "$backup"
@@ -79,14 +85,13 @@ rollback(){
 }
 trap rollback EXIT
 
+mark STOP_SIDECAR
 systemctl stop "$SERVICE"
 stopped=1
 systemctl is-active --quiet "$SERVICE" && fail
 spool_empty || fail
 
-# Canonicalize only the single source-revision setting: remove every existing
-# instance of that key and append exactly one pinned value. All other lines are
-# preserved byte-for-byte modulo the final newline.
+mark WRITE_PIN
 ENV_FILE="$ENV_FILE" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" python3 - <<'PY' || fail
 import os,tempfile
 from pathlib import Path
@@ -108,6 +113,7 @@ finally:
 PY
 changed=1
 
+mark VERIFY_FILE_PIN
 ENV_FILE="$ENV_FILE" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" python3 - <<'PY' || fail
 import os
 from pathlib import Path
@@ -118,11 +124,14 @@ for line in Path(os.environ['ENV_FILE']).read_text(encoding='utf-8').splitlines(
 assert vals == [os.environ['EXPECTED_RUNTIME_COMMIT']]
 PY
 spool_empty || fail
+
+mark START_SIDECAR
 systemctl start "$SERVICE"
 stopped=0
 sleep 2
 [[ "$(systemctl is-active "$SERVICE")" == active ]] || fail
 
+mark VERIFY_LIVE_PIN
 pid="$(systemctl show "$SERVICE" -p MainPID --value)"
 [[ "$pid" =~ ^[1-9][0-9]*$ ]] || fail
 PID="$pid" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" python3 - <<'PY' || fail
@@ -138,6 +147,7 @@ assert vals == [os.environ['EXPECTED_RUNTIME_COMMIT']]
 PY
 spool_empty || fail
 
+mark DDS3_AFTER
 ready_after="$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)" || fail
 READY_JSON="$ready_after" python3 - <<'PY' || fail
 import json,os
