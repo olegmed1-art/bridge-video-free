@@ -1,8 +1,10 @@
 # School Governance Operating Model
 
-Status: **ADOPTED / IMPLEMENTATION STARTED 2026-08-26**
+Status: **INTERIM / PILOT**
 
-This document formalizes the school-wide governance pattern previously used in bounded experiments and aligns it with the School governance v2.0 and Technical Governance.
+Candidate successor under review: `docs/governance/SCHOOL_GOVERNANCE_SYSTEM_V1_PROPOSED.md`.
+
+This document formalized the school-wide governance pattern previously used in bounded experiments. It remains usable for current Coordinator / Curator / Red Team / Observatory work, but it is not the final school constitution. It becomes `SUPERSEDED` only after the proposed v1 model is reviewed, piloted and explicitly approved by the School Director.
 
 ## 1. Core ownership
 
