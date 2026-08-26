@@ -61,9 +61,17 @@ jobs:
           set -euo pipefail
           umask 077
           mkdir -p "$HOME/.oci"
-          printf '%s\n' "$OCI_CLI_KEY_CONTENT" > "$HOME/.oci/oci_api_key.pem"
+          if [[ "$OCI_CLI_KEY_CONTENT" == base64:* ]]; then
+            printf '%s' "${OCI_CLI_KEY_CONTENT#base64:}" | base64 --decode > "$HOME/.oci/oci_api_key.pem"
+          else
+            printf '%s\n' "$OCI_CLI_KEY_CONTENT" > "$HOME/.oci/oci_api_key.pem"
+          fi
           printf '%s\n' "$OCI_CLI_CONFIG" > "$HOME/.oci/config"
-          actual_fingerprint="$(openssl pkey -in "$HOME/.oci/oci_api_key.pem" -pubout -outform DER 2>/dev/null | openssl md5 -r | awk '{print $1}' | sed 's/../&:/g;s/:$//')"
+          if ! openssl pkey -in "$HOME/.oci/oci_api_key.pem" -noout -check >/dev/null 2>&1; then
+            echo "OCI_KEY_INVALID: expected an unencrypted private PEM key or base64:<single-line-Pem-base64>" >&2
+            exit 6
+          fi
+          actual_fingerprint="$(openssl pkey -in "$HOME/.oci/oci_api_key.pem" -pubout -outform DER | openssl md5 -r | awk '{print $1}' | sed 's/../&:/g;s/:$//')"
           test -n "$actual_fingerprint"
           if [[ "$actual_fingerprint" != "$OCI_CLI_FINGERPRINT" ]]; then
             echo "private key fingerprint does not match OCI_CLI_FINGERPRINT" >&2
