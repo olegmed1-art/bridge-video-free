@@ -1,0 +1,89 @@
+{
+  "schema_version": "1.0",
+  "governance_system": {
+    "id": "SCHOOL-GOVERNANCE-SYSTEM",
+    "version": "1.0",
+    "status": "ACTIVE",
+    "authority": "CANONICAL",
+    "effective_at": "2026-08-26",
+    "canonical_document": "docs/governance/SCHOOL_GOVERNANCE_SYSTEM_V1.md",
+    "director_accountable_owner": true,
+    "ai_delegated_operator": true,
+    "supersedes": [
+      "docs/governance/SCHOOL_GOVERNANCE_OPERATING_MODEL.md"
+    ],
+    "design_evidence": [
+      "docs/governance/SCHOOL_GOVERNANCE_SYSTEM_V1_PROPOSED.md",
+      "docs/governance/SCHOOL_GOVERNANCE_SYSTEM_V1_AUDIT_RU.md"
+    ]
+  },
+  "reviews": {
+    "first_operational_audit_due": "2026-09-25",
+    "full_review_due": "2026-11-24",
+    "recurring_review_months": 6,
+    "allowed_outcomes": [
+      "KEEP",
+      "ADJUST",
+      "SIMPLIFY",
+      "PARTIALLY_RETIRE",
+      "REPLACE"
+    ]
+  },
+  "governance_modes": [
+    "LIGHTWEIGHT",
+    "STANDARD",
+    "ASSURED",
+    "INCIDENT"
+  ],
+  "work_classes": [
+    "INCIDENT",
+    "MANDATORY",
+    "STRATEGIC",
+    "OPERATIONAL",
+    "IMPROVEMENT",
+    "RESEARCH"
+  ],
+  "urgencies": [
+    "EXPEDITE",
+    "HIGH",
+    "NORMAL",
+    "LOW"
+  ],
+  "strategic_ranks": [
+    "S1",
+    "S2",
+    "S3",
+    "NONE"
+  ],
+  "independence_levels": [
+    "I0",
+    "I1",
+    "I2",
+    "I3",
+    "I4"
+  ],
+  "evidence_levels": [
+    "E0",
+    "E1",
+    "E2",
+    "E3",
+    "E4",
+    "E5"
+  ],
+  "terminal_results": [
+    "PASS",
+    "FAIL",
+    "INCONCLUSIVE",
+    "STOPPED",
+    "NEEDS_BRIDGE_DECISION",
+    "NEEDS_OWNER_ACTION",
+    "NEEDS_SPEND_APPROVAL"
+  ],
+  "data_classes": [
+    "PUBLIC",
+    "INTERNAL",
+    "CONFIDENTIAL",
+    "STUDENT_SENSITIVE",
+    "CREDENTIAL_SECRET"
+  ]
+}
