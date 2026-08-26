@@ -165,3 +165,35 @@ def test_publication_and_readback_are_strictly_gated():
     assert "PRODUCTION_PROMOTION=BLOCKED" in source
     assert "GITHUB_RAW_REMOTE_OUTPUT_RECORDED=NO" in source
     assert "actions/upload-artifact" not in source
+
+def test_readonly_runtime_values_use_distinct_child_environment_names():
+    source = OPERATOR.read_text(encoding="utf-8")
+    pin = source.split("verify_runtime_pin(){", 1)[1].split("verify_runtime(){", 1)[0]
+    assert 'UV003_RUNTIME_ENV="$RUNTIME_ENV"' in pin
+    assert 'UV003_EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT"' in pin
+    assert 'UV003_EXPECTED_WHISPER_MODEL="$EXPECTED_WHISPER_MODEL"' in pin
+    assert 'UV003_EXPECTED_PROCESSING_FINGERPRINT="$EXPECTED_PROCESSING_FINGERPRINT"' in pin
+    assert "|| fail RUNTIME_ENV" in pin
+    assert source.count('UV003_EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT"') == 2
+    assert source.count('UV003_EXPECTED_WHISPER_MODEL="$EXPECTED_WHISPER_MODEL"') == 2
+    assert source.count('UV003_EXPECTED_PROCESSING_FINGERPRINT="$EXPECTED_PROCESSING_FINGERPRINT"') == 2
+    assert "|| fail CONFORMANCE" in source
+    for forbidden in (
+        "os.environ['RUNTIME_ENV']",
+        "os.environ['EXPECTED_RUNTIME_COMMIT']",
+        "os.environ['EXPECTED_WHISPER_MODEL']",
+        "os.environ['EXPECTED_PROCESSING_FINGERPRINT']",
+    ):
+        assert forbidden not in source
+
+
+def test_installer_preserves_exit_evidence_through_rollback_cleanup():
+    source = INSTALLER.read_text(encoding="utf-8")
+    assert source.count("trap on_exit EXIT") == 1
+    assert "trap cleanup EXIT" not in source
+    assert source.count("UV003_OPERATOR_BOOTSTRAP_FAILURE=%s") == 1
+    on_exit = source.split("on_exit(){", 1)[1].split("trap on_exit EXIT", 1)[0]
+    assert "declare -F cleanup" in on_exit
+    assert 'cleanup "$rc" || true' in on_exit
+    cleanup = source.split("cleanup(){", 1)[1].split('if (( had_staging == 0 ))', 1)[0]
+    assert 'local rc="${1:-$?}"' in cleanup

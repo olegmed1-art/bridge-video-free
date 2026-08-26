@@ -82,6 +82,19 @@ def safe_regular(path: Path, *, maximum: int) -> tuple[bool, int]:
     return stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode), int(info.st_size)
 
 
+def safe_executable_regular_target(path: Path, *, maximum: int) -> bool:
+    try:
+        original = path.lstat()
+        if not (stat.S_ISREG(original.st_mode) or stat.S_ISLNK(original.st_mode)):
+            return False
+        target = path.resolve(strict=True)
+        info = target.stat()
+    except (OSError, RuntimeError):
+        return False
+    size = int(info.st_size)
+    return stat.S_ISREG(info.st_mode) and 0 < size <= maximum and os.access(target, os.X_OK)
+
+
 def safe_directory(path: Path) -> bool:
     try:
         info = path.lstat()
@@ -188,7 +201,7 @@ def probe() -> str:
         return "PROCESSING_FINGERPRINT_MISMATCH"
 
     runtime_python = BASE / ".venv/bin/python"
-    if not safe_regular(runtime_python, maximum=128 * 1024**2)[0] or not os.access(runtime_python, os.X_OK):
+    if not safe_executable_regular_target(runtime_python, maximum=128 * 1024**2):
         return "RUNTIME_PYTHON_MISSING"
     if not safe_regular(SOURCE / "ops/universal_video_receipt_reader.py", maximum=4 * 1024**2)[0]:
         return "RECEIPT_READER_MISSING"

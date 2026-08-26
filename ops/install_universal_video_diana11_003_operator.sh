@@ -6,13 +6,15 @@ umask 077
 # No shell, editor, arbitrary path, argument, or NOPASSWD:ALL is granted.
 
 stage='BOOTSTRAP_INPUT'
-fail(){
-  printf 'UV003_OPERATOR_BOOTSTRAP_FAILURE=%s\n' "$stage" >&2
-  exit 1
-}
+fail(){ exit 1; }
 on_exit(){
   local rc=$?
-  if (( rc != 0 )); then printf 'UV003_OPERATOR_BOOTSTRAP_FAILURE=%s\n' "$stage" >&2; fi
+  if (( rc != 0 )) && declare -F cleanup >/dev/null 2>&1; then
+    cleanup "$rc" || true
+  fi
+  if (( rc != 0 )); then
+    printf 'UV003_OPERATOR_BOOTSTRAP_FAILURE=%s\n' "$stage" >&2
+  fi
   return "$rc"
 }
 trap on_exit EXIT
@@ -108,7 +110,7 @@ for path in "$ROOT_STAGING" "$PUBLISHED_DIR"; do
   fi
 done
 cleanup(){
-  local rc=$?
+  local rc="${1:-$?}"
   set +e
   if (( completed == 0 )); then
     if (( had_target == 1 )); then cp -a "$backup/target" "$TARGET"; else rm -f "$TARGET"; fi
@@ -121,7 +123,6 @@ cleanup(){
   rm -rf "$backup"
   return "$rc"
 }
-trap cleanup EXIT
 if (( had_staging == 0 )); then install -d -o root -g root -m 0700 "$ROOT_STAGING"; fi
 if (( had_published == 0 )); then install -d -o root -g root -m 0700 "$PUBLISHED_DIR"; fi
 [[ "$(stat -c '%d' "$ROOT_STAGING")" == "$(stat -c '%d' /opt/bridge-school/universal-video/spool/inbox)" ]] || fail
