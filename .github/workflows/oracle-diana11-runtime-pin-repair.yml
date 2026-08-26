@@ -14,8 +14,10 @@ permissions:
   contents: read
   issues: write
 
+# PR validation must never block an already-approved push repair request.
+# Keep each event class serialized independently.
 concurrency:
-  group: oracle-diana11-runtime-pin-repair
+  group: oracle-diana11-runtime-pin-repair-${{ github.event_name }}
   cancel-in-progress: false
 
 jobs:
