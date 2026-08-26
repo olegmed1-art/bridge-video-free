@@ -41,6 +41,7 @@ jobs:
           grep -Fq 'UNIVERSAL_VIDEO_SOURCE_COMMIT=' ops/repair_universal_video_runtime_pin.sh
           grep -Fq 'UV003_RUNTIME_PIN_REPAIR=PASS' ops/repair_universal_video_runtime_pin.sh
           grep -Fq 'UV003_RUNTIME_PIN_FAILURE_CODE=%s' ops/repair_universal_video_runtime_pin.sh
+          grep -Fq 'UV003_RUNTIME_PIN_CHECKPOINT=%s' ops/repair_universal_video_runtime_pin.sh
           python - <<'PY'
           from pathlib import Path
           text=Path('ops/repair_universal_video_runtime_pin.sh').read_text(encoding='utf-8')
@@ -138,6 +139,15 @@ jobs:
               r'^UV003_(?:'
               r'RUNTIME_PIN_REPAIR=FAILED_CLOSED|'
               r'RUNTIME_PIN_SPOOL=EMPTY|'
+              r'RUNTIME_PIN_CHECKPOINT=(?:'
+              r'PRECHECK_PASS|READY_BEFORE_PASS|SPOOL_BEFORE_PASS|'
+              r'ENV_SHAPE_ENTER|ENV_SHAPE_PASS|BACKUP_ENTER|BACKUP_PASS|'
+              r'ROLLBACK_ARMED|STOP_SERVICE_ENTER|STOP_SERVICE_PASS|'
+              r'WRITE_ENV_ENTER|WRITE_ENV_PASS|VERIFY_FILE_PASS|'
+              r'SPOOL_AFTER_WRITE_PASS|START_SERVICE_ENTER|START_SERVICE_PASS|'
+              r'VERIFY_LIVE_PASS|SPOOL_AFTER_START_PASS|READY_AFTER_PASS|'
+              r'ASSISTANT_AFTER_PASS|FINALIZE_ENTER'
+              r')|'
               r'RUNTIME_PIN_FAILURE_CODE=(?:'
               r'PRECHECK|READY_BEFORE|SPOOL_BEFORE|ENV_SHAPE|BACKUP|'
               r'STOP_SERVICE|WRITE_ENV|VERIFY_FILE|SPOOL_AFTER_WRITE|'
