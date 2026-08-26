@@ -2,6 +2,7 @@ import pytest
 
 from bridge_school_api.tournament_auction_stepwise_model_v3 import (
     AuctionModelError,
+    PublicSuitPromise,
     board15_verified_prefix,
     build_stepwise_auction_model,
     guaranteed_fit_state,
@@ -14,6 +15,16 @@ HANDS = {
     "S": "AT94.5.9765.KQ42",
     "W": "8752.KT4.KQJT.AT",
 }
+
+
+def heart_promise(minimum_length: int = 4) -> PublicSuitPromise:
+    return PublicSuitPromise(
+        suit="H",
+        minimum_length=minimum_length,
+        source_call="1H",
+        canon_rule_id="RESP_NEW_SUIT_LEVEL1_4PLUS",
+        evidence_ref="teacher-confirmed-in-chat-2026-08-25",
+    )
 
 
 def test_board15_prefix_is_forward_and_hidden_hand_safe():
@@ -49,9 +60,28 @@ def test_board15_west_does_not_have_known_heart_fit_after_1h():
 
 
 def test_fit_is_established_at_guaranteed_eight_cards():
-    fit = guaranteed_fit_state(actor_length=4, partner_promised_minimum=4)
+    fit = guaranteed_fit_state(actor_length=4, partner_promise=heart_promise())
     assert fit["guaranteed_combined_length"] == 8
     assert fit["fit_established"] is True
+    assert fit["support_as_known_fit_allowed"] is True
+
+
+def test_fit_api_rejects_unproven_partner_length():
+    with pytest.raises(AuctionModelError, match="evidenced PublicSuitPromise"):
+        guaranteed_fit_state(actor_length=3, partner_promise=7)
+
+
+def test_hidden_partner_length_cannot_change_public_fit_result():
+    promise = heart_promise()
+    results = [
+        guaranteed_fit_state(actor_length=3, partner_promise=promise)
+        for _hidden_partner_actual_length in (4, 7)
+    ]
+    assert results[0] == results[1]
+    assert results[0]["guaranteed_combined_length"] == 7
+    assert results[0]["fit_established"] is False
+    assert results[0]["partner_promise_source_call"] == "1H"
+    assert results[0]["partner_promise_canon_rule_id"] == "RESP_NEW_SUIT_LEVEL1_4PLUS"
 
 
 def test_public_history_grows_one_call_at_a_time():
