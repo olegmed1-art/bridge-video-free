@@ -21,7 +21,26 @@ report_failure(){
     failure_reported=1
   fi
 }
-fail(){ report_failure; exit 1; }
+fail(){
+  trap - ERR
+  report_failure
+  exit 1
+}
+checkpoint(){
+  local value="$1"
+  case "$value" in
+    PRECHECK_PASS|READY_BEFORE_PASS|SPOOL_BEFORE_PASS|ENV_SHAPE_ENTER|ENV_SHAPE_PASS|BACKUP_ENTER|BACKUP_PASS|ROLLBACK_ARMED|STOP_SERVICE_ENTER|STOP_SERVICE_PASS|WRITE_ENV_ENTER|WRITE_ENV_PASS|VERIFY_FILE_PASS|SPOOL_AFTER_WRITE_PASS|START_SERVICE_ENTER|START_SERVICE_PASS|VERIFY_LIVE_PASS|SPOOL_AFTER_START_PASS|READY_AFTER_PASS|ASSISTANT_AFTER_PASS|FINALIZE_ENTER) ;;
+    *) failure_stage='PRECHECK'; fail ;;
+  esac
+  printf 'UV003_RUNTIME_PIN_CHECKPOINT=%s\n' "$value"
+}
+on_error(){
+  local rc=$?
+  trap - ERR
+  report_failure
+  exit "$rc"
+}
+trap on_error ERR
 
 [[ "$(id -u)" -eq 0 ]] || fail
 [[ -n "${EXPECTED_RUNTIME_COMMIT:-}" ]] || fail
@@ -38,6 +57,7 @@ readonly SERVICE='universal-video.service'
 [[ -z "$(git -C "$SOURCE" status --porcelain=v1 --untracked-files=all)" ]] || fail
 [[ "$(systemctl is-active assistant-lab.service)" == active ]] || fail
 [[ "$(systemctl is-active "$SERVICE")" == active ]] || fail
+checkpoint PRECHECK_PASS
 
 failure_stage='READY_BEFORE'
 ready_before="$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)" || fail
@@ -49,6 +69,7 @@ assert x.get('engine')=='DDS3'
 assert x.get('fallback_used') is False
 assert x.get('position_solver')=='ready'
 PY
+checkpoint READY_BEFORE_PASS
 
 spool_empty(){
   local state
@@ -63,11 +84,13 @@ spool_empty(){
 failure_stage='SPOOL_BEFORE'
 spool_empty || fail
 printf 'UV003_RUNTIME_PIN_SPOOL=EMPTY\n'
+checkpoint SPOOL_BEFORE_PASS
 
 # UV003_ENV_SHAPE_VALIDATOR_V2: validate the bounded non-secret file silently.
 # Zero, one, or duplicate source-pin keys are all accepted here because the
 # write stage canonicalizes them to exactly one pinned key. No value is emitted.
 failure_stage='ENV_SHAPE'
+checkpoint ENV_SHAPE_ENTER
 ENV_FILE="$ENV_FILE" python3 - <<'PY' || fail
 import os
 import stat
@@ -102,15 +125,19 @@ for line in text.splitlines():
         continue
     assert '=' in line
 PY
+checkpoint ENV_SHAPE_PASS
 
 failure_stage='BACKUP'
+checkpoint BACKUP_ENTER
 backup="$(mktemp -p "$BASE" .universal-video.env.uv003-backup.XXXXXX)" || fail
 cp --preserve=mode,ownership,timestamps "$ENV_FILE" "$backup" || fail
+checkpoint BACKUP_PASS
 changed=0
 service_stopped=0
 service_started_new=0
 rollback(){
   local rc=$?
+  trap - ERR
   set +e
   if (( rc != 0 )); then
     # If the new process was already started, stop it only while the spool is
@@ -133,17 +160,21 @@ rollback(){
   return "$rc"
 }
 trap rollback EXIT
+checkpoint ROLLBACK_ARMED
 
 failure_stage='STOP_SERVICE'
+checkpoint STOP_SERVICE_ENTER
 systemctl stop "$SERVICE" || fail
 service_stopped=1
 systemctl is-active --quiet "$SERVICE" && fail
 spool_empty || fail
+checkpoint STOP_SERVICE_PASS
 
 # Canonicalize only the single source-revision setting: remove every existing
 # instance of that key and append exactly one pinned value. All other lines are
 # preserved byte-for-byte modulo the final newline.
 failure_stage='WRITE_ENV'
+checkpoint WRITE_ENV_ENTER
 changed=1
 ENV_FILE="$ENV_FILE" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" python3 - <<'PY' || fail
 import os,tempfile
@@ -164,6 +195,7 @@ finally:
     try: os.unlink(tmp)
     except FileNotFoundError: pass
 PY
+checkpoint WRITE_ENV_PASS
 
 failure_stage='VERIFY_FILE'
 ENV_FILE="$ENV_FILE" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" python3 - <<'PY' || fail
@@ -175,16 +207,20 @@ for line in Path(os.environ['ENV_FILE']).read_text(encoding='utf-8').splitlines(
         vals.append(line.split('=',1)[1].strip())
 assert vals == [os.environ['EXPECTED_RUNTIME_COMMIT']]
 PY
+checkpoint VERIFY_FILE_PASS
 
 failure_stage='SPOOL_AFTER_WRITE'
 spool_empty || fail
+checkpoint SPOOL_AFTER_WRITE_PASS
 
 failure_stage='START_SERVICE'
+checkpoint START_SERVICE_ENTER
 systemctl start "$SERVICE" || fail
 service_stopped=0
 service_started_new=1
 sleep 2
 [[ "$(systemctl is-active "$SERVICE")" == active ]] || fail
+checkpoint START_SERVICE_PASS
 
 failure_stage='VERIFY_LIVE'
 pid="$(systemctl show "$SERVICE" -p MainPID --value)"
@@ -200,9 +236,11 @@ for item in items:
         vals.append(item.split(b'=',1)[1].decode('ascii'))
 assert vals == [os.environ['EXPECTED_RUNTIME_COMMIT']]
 PY
+checkpoint VERIFY_LIVE_PASS
 
 failure_stage='SPOOL_AFTER_START'
 spool_empty || fail
+checkpoint SPOOL_AFTER_START_PASS
 
 failure_stage='READY_AFTER'
 ready_after="$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)" || fail
@@ -214,13 +252,17 @@ assert x.get('engine')=='DDS3'
 assert x.get('fallback_used') is False
 assert x.get('position_solver')=='ready'
 PY
+checkpoint READY_AFTER_PASS
 
 failure_stage='ASSISTANT_AFTER'
 [[ "$(systemctl is-active assistant-lab.service)" == active ]] || fail
+checkpoint ASSISTANT_AFTER_PASS
 
 failure_stage='FINALIZE'
+checkpoint FINALIZE_ENTER
 changed=0
 service_started_new=0
+trap - ERR
 trap - EXIT
 rm -f "$backup" || fail
 printf 'UV003_RUNTIME_PIN_FILE=PINNED\n'
