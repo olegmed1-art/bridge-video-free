@@ -8,20 +8,9 @@ umask 077
 # arbitrary stderr remains suppressed.
 
 stage='BOOTSTRAP_INPUT'
-set_stage(){
-  stage="$1"
-  printf 'UV003_STAGE=%s\n' "$stage" >&2
-}
-on_err(){
-  local rc=$?
-  printf 'UV003_FAILURE_CODE=%s\n' "$stage" >&2
-  return "$rc"
-}
-on_exit(){
-  local rc=$?
-  if (( rc != 0 )); then printf 'UV003_FAILURE_CODE=%s\n' "$stage" >&2; fi
-  return "$rc"
-}
+set_stage(){ stage="$1"; printf 'UV003_STAGE=%s\n' "$stage" >&2; }
+on_err(){ local rc=$?; printf 'UV003_FAILURE_CODE=%s\n' "$stage" >&2; return "$rc"; }
+on_exit(){ local rc=$?; if (( rc != 0 )); then printf 'UV003_FAILURE_CODE=%s\n' "$stage" >&2; fi; return "$rc"; }
 trap on_err ERR
 trap on_exit EXIT
 
@@ -67,8 +56,24 @@ set_stage 'RUNTIME_COMMIT'
 [[ "$(git -C "$SOURCE_DIR" rev-parse HEAD)" == "$EXPECTED_RUNTIME_COMMIT" ]] || fail 'runtime commit mismatch'
 [[ -z "$(git -C "$SOURCE_DIR" status --porcelain=v1 --untracked-files=all)" ]] || fail 'runtime checkout is dirty'
 
-set_stage 'RUNTIME_ENV'
+# Reuse RUNTIME_COMMIT for the second, environment-vs-checkout revision consistency check.
+set_stage 'RUNTIME_COMMIT'
 RUNTIME_ENV="$RUNTIME_ENV" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" python3 - <<'PY'
+import os
+from pathlib import Path
+value=''
+for raw in Path(os.environ['RUNTIME_ENV']).read_text(encoding='utf-8').splitlines():
+    line=raw.strip()
+    if not line or line.startswith('#') or '=' not in line:
+        continue
+    key,val=line.split('=',1)
+    if key == 'UNIVERSAL_VIDEO_SOURCE_COMMIT': value=val.strip()
+assert value == os.environ['EXPECTED_RUNTIME_COMMIT']
+PY
+
+# RUNTIME_ENV now isolates only effective Whisper-model validation.
+set_stage 'RUNTIME_ENV'
+RUNTIME_ENV="$RUNTIME_ENV" python3 - <<'PY'
 import os
 from pathlib import Path
 values={}
@@ -76,13 +81,9 @@ for raw in Path(os.environ['RUNTIME_ENV']).read_text(encoding='utf-8').splitline
     line=raw.strip()
     if not line or line.startswith('#') or '=' not in line:
         continue
-    key,value=line.split('=',1)
-    if key in {'UNIVERSAL_VIDEO_SOURCE_COMMIT','UNIVERSAL_VIDEO_WHISPER_MODEL','WHISPER_MODEL'}:
-        values[key]=value.strip()
-assert values.get('UNIVERSAL_VIDEO_SOURCE_COMMIT') == os.environ['EXPECTED_RUNTIME_COMMIT']
-model=(values.get('UNIVERSAL_VIDEO_WHISPER_MODEL','').strip()
-       or values.get('WHISPER_MODEL','').strip()
-       or 'small')
+    key,val=line.split('=',1)
+    if key in {'UNIVERSAL_VIDEO_WHISPER_MODEL','WHISPER_MODEL'}: values[key]=val.strip()
+model=(values.get('UNIVERSAL_VIDEO_WHISPER_MODEL','').strip() or values.get('WHISPER_MODEL','').strip() or 'small')
 assert model and len(model) <= 80 and not any(ch.isspace() for ch in model)
 PY
 
@@ -127,9 +128,7 @@ visudo -cf /etc/sudoers >/dev/null
 
 set_stage 'SUDO_EXECUTION'
 sudo -u ocarun sudo -n "$TARGET" >/dev/null
-if sudo -u ocarun sudo -n "$TARGET" unexpected >/dev/null 2>&1; then
-  fail 'preflight sudo surface unexpectedly accepts arguments'
-fi
+if sudo -u ocarun sudo -n "$TARGET" unexpected >/dev/null 2>&1; then fail 'preflight sudo surface unexpectedly accepts arguments'; fi
 completed=1
 trap - ERR
 trap - EXIT
