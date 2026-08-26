@@ -8,12 +8,13 @@ on:
         required: true
         type: choice
         options: [status, start, stop]
-  issue_comment:
-    types: [created]
+  push:
+    branches: [main]
+    paths:
+      - .github/oracle-power-command
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
   group: oracle-instance-power
@@ -21,20 +22,31 @@ concurrency:
 
 jobs:
   power:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'issue_comment' &&
-       github.event.comment.user.login == 'olegmed1-art' &&
-       (github.event.comment.body == '/oracle-power status' ||
-        github.event.comment.body == '/oracle-power start' ||
-        github.event.comment.body == '/oracle-power stop'))
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       OCI_REGION: eu-frankfurt-1
       OCI_INSTANCE_OCID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
-      ACTION_VALUE: ${{ github.event_name == 'workflow_dispatch' && inputs.action || (github.event.comment.body == '/oracle-power start' && 'start' || github.event.comment.body == '/oracle-power stop' && 'stop' || 'status') }}
     steps:
+      - name: Checkout command
+        if: ${{ github.event_name == 'push' }}
+        uses: actions/checkout@v4
+
+      - name: Resolve bounded action
+        id: command
+        env:
+          DISPATCH_ACTION: ${{ inputs.action }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            action="${DISPATCH_ACTION}"
+          else
+            action="$(sed -n 's/^action=//p' .github/oracle-power-command | tail -n 1)"
+          fi
+          case "$action" in status|start|stop) ;; *) echo "invalid action" >&2; exit 2 ;; esac
+          echo "action=$action" >> "$GITHUB_OUTPUT"
+          echo "bounded action: $action"
+
       - name: Validate credential presence
         env:
           OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
@@ -83,7 +95,7 @@ jobs:
           echo "current lifecycle state: $state"
 
       - name: Start exact instance
-        if: ${{ env.ACTION_VALUE == 'start' && steps.state.outputs.current_state != 'RUNNING' }}
+        if: ${{ steps.command.outputs.action == 'start' && steps.state.outputs.current_state != 'RUNNING' }}
         run: |
           set -euo pipefail
           oci compute instance action --instance-id "$OCI_INSTANCE_OCID" --action START >/dev/null
@@ -91,19 +103,22 @@ jobs:
           echo "instance reached RUNNING"
 
       - name: Stop exact instance
-        if: ${{ env.ACTION_VALUE == 'stop' && steps.state.outputs.current_state != 'STOPPED' }}
+        if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state != 'STOPPED' }}
         run: |
           set -euo pipefail
           oci compute instance action --instance-id "$OCI_INSTANCE_OCID" --action STOP >/dev/null
           oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --wait-for-state STOPPED --wait-interval-seconds 10 --max-wait-seconds 600 >/dev/null
           echo "instance reached STOPPED"
 
-      - name: Publish issue-comment result
-        if: ${{ always() && github.event_name == 'issue_comment' }}
+      - name: Publish run summary
+        if: ${{ always() }}
         env:
-          GH_TOKEN: ${{ github.token }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ACTION_VALUE: ${{ steps.command.outputs.action }}
           STATE: ${{ steps.state.outputs.current_state }}
         run: |
-          set -euo pipefail
-          gh api "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" -f body="Oracle power ${ACTION_VALUE}: initial_state=${STATE:-UNKNOWN}; workflow=${{ job.status }}" >/dev/null
+          {
+            echo "### Oracle instance power"
+            echo "- action: ${ACTION_VALUE:-UNKNOWN}"
+            echo "- initial_state: ${STATE:-UNKNOWN}"
+            echo "- instance: exact Frankfurt VM only"
+          } >> "$GITHUB_STEP_SUMMARY"
