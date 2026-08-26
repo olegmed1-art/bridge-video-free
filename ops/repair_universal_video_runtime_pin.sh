@@ -5,7 +5,7 @@ umask 077
 # Bounded repair for UV-DIANA11-DURABLE-003.
 # It may change only UNIVERSAL_VIDEO_SOURCE_COMMIT in the non-secret runtime env
 # and restart only universal-video.service. It never enqueues or processes a job,
-# writes Drive, touches Assistant Lab/DDS3, or changes production routing.
+# writes Drive, touches Assistant Lab/DDS3, or changes routing outside the sidecar.
 
 fail(){ printf 'UV003_RUNTIME_PIN_REPAIR=FAILED_CLOSED\n' >&2; exit 1; }
 [[ "$(id -u)" -eq 0 ]] || fail
