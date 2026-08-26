@@ -15,7 +15,12 @@ on_err(){
 }
 trap on_err ERR
 
-fail(){ echo "ERROR: $*" >&2; exit 1; }
+fail(){
+  printf 'UV003_FAILURE_CODE=%s\n' "$stage" >&2
+  echo "ERROR: $*" >&2
+  trap - ERR
+  exit 1
+}
 [[ $(id -u) -eq 0 ]] || fail 'must run as root'
 : "${SOURCE_FILE:?SOURCE_FILE is required}"
 : "${EXPECTED_RUNTIME_COMMIT:?EXPECTED_RUNTIME_COMMIT is required}"
