@@ -1,0 +1,284 @@
+name: Internal UV003 bootstrap contract patch once
+
+on:
+  push:
+    branches:
+      - 'fix/uv003-bootstrap-contract-615'
+    paths:
+      - 'ops/internal-uv003-bootstrap-patch-request-615.json'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: internal-uv003-bootstrap-patch-615
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 2
+      - name: Validate one-shot request
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          path = Path('ops/internal-uv003-bootstrap-patch-request-615.json')
+          payload = json.loads(path.read_text(encoding='utf-8'))
+          assert payload == {
+              'request_id': 'internal-uv003-bootstrap-patch-615-01',
+              'issue': 615,
+              'scope': 'source-contract-only',
+          }
+          PY
+      - name: Apply deterministic source-only corrections
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              assert count == 1, f'{label}: expected 1 occurrence, found {count}'
+              return text.replace(old, new, 1)
+
+          def replace_exact(text: str, old: str, new: str, expected: int, label: str) -> str:
+              count = text.count(old)
+              assert count == expected, f'{label}: expected {expected} occurrences, found {count}'
+              return text.replace(old, new)
+
+          operator = Path('ops/universal_video_diana11_003_operator.sh')
+          text = operator.read_text(encoding='utf-8')
+          text = replace_once(
+              text,
+              '  RUNTIME_ENV="$RUNTIME_ENV" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" EXPECTED_WHISPER_MODEL="$EXPECTED_WHISPER_MODEL" EXPECTED_PROCESSING_FINGERPRINT="$EXPECTED_PROCESSING_FINGERPRINT" python3 - <<\'PY\' >/dev/null || exit 1\n',
+              '  UV003_RUNTIME_ENV="$RUNTIME_ENV" UV003_EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" UV003_EXPECTED_WHISPER_MODEL="$EXPECTED_WHISPER_MODEL" UV003_EXPECTED_PROCESSING_FINGERPRINT="$EXPECTED_PROCESSING_FINGERPRINT" python3 - <<\'PY\' >/dev/null || fail RUNTIME_ENV\n',
+              'runtime pin child environment',
+          )
+          text = replace_once(
+              text,
+              '      REPORT_JSON="$report" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" EXPECTED_WHISPER_MODEL="$EXPECTED_WHISPER_MODEL" EXPECTED_PROCESSING_FINGERPRINT="$EXPECTED_PROCESSING_FINGERPRINT" python3 - <<\'PY\' || exit 1\n',
+              '      REPORT_JSON="$report" UV003_EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" UV003_EXPECTED_WHISPER_MODEL="$EXPECTED_WHISPER_MODEL" UV003_EXPECTED_PROCESSING_FINGERPRINT="$EXPECTED_PROCESSING_FINGERPRINT" python3 - <<\'PY\' || fail CONFORMANCE\n',
+              'conformance child environment',
+          )
+          text = replace_exact(text, "os.environ['RUNTIME_ENV']", "os.environ['UV003_RUNTIME_ENV']", 1, 'runtime env key')
+          text = replace_exact(text, "os.environ['EXPECTED_RUNTIME_COMMIT']", "os.environ['UV003_EXPECTED_RUNTIME_COMMIT']", 3, 'runtime commit key')
+          text = replace_exact(text, "os.environ['EXPECTED_WHISPER_MODEL']", "os.environ['UV003_EXPECTED_WHISPER_MODEL']", 3, 'whisper model key')
+          text = replace_exact(text, "os.environ['EXPECTED_PROCESSING_FINGERPRINT']", "os.environ['UV003_EXPECTED_PROCESSING_FINGERPRINT']", 2, 'fingerprint key')
+          text = replace_once(text, '  [[ $? -eq 0 ]] || fail RUNTIME_ENV\n', '', 'obsolete runtime pin status check')
+          assert not re.search(r'(?m)^\s*RUNTIME_ENV="\$RUNTIME_ENV"\s', text)
+          assert not re.search(r'(?m)^\s*(?:REPORT_JSON="\$report"\s+)?EXPECTED_RUNTIME_COMMIT=', text)
+          assert text.count('UV003_EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT"') == 2
+          operator.write_text(text, encoding='utf-8')
+
+          probe = Path('ops/probe_uv003_operator_bootstrap.py')
+          text = probe.read_text(encoding='utf-8')
+          old_helper = '''def safe_regular(path: Path, *, maximum: int) -> tuple[bool, int]:
+              try:
+                  info = path.lstat()
+              except OSError:
+                  return False, 0
+              return stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode), int(info.st_size)
+          '''.replace('          ', '')
+          new_helper = '''def safe_regular(path: Path, *, maximum: int) -> tuple[bool, int]:
+              try:
+                  info = path.lstat()
+              except OSError:
+                  return False, 0
+              return stat.S_ISREG(info.st_mode) and not stat.S_ISLNK(info.st_mode), int(info.st_size)
+
+
+          def safe_executable_regular_target(path: Path, *, maximum: int) -> bool:
+              try:
+                  original = path.lstat()
+                  if not (stat.S_ISREG(original.st_mode) or stat.S_ISLNK(original.st_mode)):
+                      return False
+                  target = path.resolve(strict=True)
+                  info = target.stat()
+              except (OSError, RuntimeError):
+                  return False
+              size = int(info.st_size)
+              return stat.S_ISREG(info.st_mode) and 0 < size <= maximum and os.access(target, os.X_OK)
+          '''.replace('          ', '')
+          text = replace_once(text, old_helper, new_helper, 'runtime executable resolver')
+          text = replace_once(
+              text,
+              '    if not safe_regular(runtime_python, maximum=128 * 1024**2)[0] or not os.access(runtime_python, os.X_OK):\n',
+              '    if not safe_executable_regular_target(runtime_python, maximum=128 * 1024**2):\n',
+              'runtime Python probe',
+          )
+          probe.write_text(text, encoding='utf-8')
+
+          installer = Path('ops/install_universal_video_diana11_003_operator.sh')
+          text = installer.read_text(encoding='utf-8')
+          old_trap = '''stage='BOOTSTRAP_INPUT'
+          fail(){
+            printf 'UV003_OPERATOR_BOOTSTRAP_FAILURE=%s\\n' "$stage" >&2
+            exit 1
+          }
+          on_exit(){
+            local rc=$?
+            if (( rc != 0 )); then printf 'UV003_OPERATOR_BOOTSTRAP_FAILURE=%s\\n' "$stage" >&2; fi
+            return "$rc"
+          }
+          trap on_exit EXIT
+          '''.replace('          ', '')
+          new_trap = '''stage='BOOTSTRAP_INPUT'
+          fail(){ exit 1; }
+          on_exit(){
+            local rc=$?
+            if (( rc != 0 )) && declare -F cleanup >/dev/null 2>&1; then
+              cleanup "$rc" || true
+            fi
+            if (( rc != 0 )); then
+              printf 'UV003_OPERATOR_BOOTSTRAP_FAILURE=%s\\n' "$stage" >&2
+            fi
+            return "$rc"
+          }
+          trap on_exit EXIT
+          '''.replace('          ', '')
+          text = replace_once(text, old_trap, new_trap, 'global evidence trap')
+          text = replace_once(text, '  local rc=$?\n  set +e\n', '  local rc="${1:-$?}"\n  set +e\n', 'cleanup status argument')
+          text = replace_once(text, 'trap cleanup EXIT\n', '', 'trap replacement removal')
+          assert text.count('trap on_exit EXIT') == 1
+          assert 'trap cleanup EXIT' not in text
+          assert text.count('UV003_OPERATOR_BOOTSTRAP_FAILURE=%s') == 1
+          installer.write_text(text, encoding='utf-8')
+
+          workflow = Path('.github/workflows/oracle-diana11-003-bootstrap-diagnostic.yml')
+          text = workflow.read_text(encoding='utf-8')
+          text = replace_once(
+              text,
+              "      - 'ops/universal_video_diana11_003_operator.sh'\n      - 'tests/test_uv003_bootstrap_diagnostic.py'\n",
+              "      - 'ops/universal_video_diana11_003_operator.sh'\n      - 'ops/install_universal_video_diana11_003_operator.sh'\n      - 'tests/test_uv003_bootstrap_diagnostic.py'\n      - 'tests/test_uv003_execution_contract.py'\n",
+              'diagnostic PR paths',
+          )
+          text = replace_once(
+              text,
+              '          bash -n ops/universal_video_diana11_003_operator.sh\n          bash -n ops/oracle_known_hosts_from_scan.sh\n',
+              '          bash -n ops/universal_video_diana11_003_operator.sh\n          bash -n ops/install_universal_video_diana11_003_operator.sh\n          bash -n ops/oracle_known_hosts_from_scan.sh\n',
+              'installer shell validation',
+          )
+          text = replace_once(
+              text,
+              '          python -m pytest -q tests/test_uv003_bootstrap_diagnostic.py\n',
+              '          python -m pytest -q tests/test_uv003_bootstrap_diagnostic.py tests/test_uv003_execution_contract.py\n',
+              'bounded pytest surface',
+          )
+          text = replace_once(
+              text,
+              "          assert x['request_id']=='uv003-bootstrap-readonly-20260826-01'\n",
+              "          assert x['request_id']=='uv003-bootstrap-readonly-20260826-02'\n",
+              'second read-only request identity',
+          )
+          workflow.write_text(text, encoding='utf-8')
+
+          bootstrap_test = Path('tests/test_uv003_bootstrap_diagnostic.py')
+          text = bootstrap_test.read_text(encoding='utf-8')
+          text = replace_once(
+              text,
+              '    assert "x[\'issue\']==615" in source\n    assert "x[\'probe\']==\'uv003-bootstrap-readonly-v1\'" in source\n',
+              '    assert "x[\'request_id\']==\'uv003-bootstrap-readonly-20260826-02\'" in source\n    assert "x[\'issue\']==615" in source\n    assert "x[\'probe\']==\'uv003-bootstrap-readonly-v1\'" in source\n',
+              'workflow request assertion',
+          )
+          addition = '''
+
+          def test_runtime_python_symlink_resolves_to_bounded_executable(tmp_path):
+              module = load_module()
+              target = tmp_path / "python3"
+              target.write_bytes(b"#!/bin/sh\\nexit 0\\n")
+              target.chmod(0o755)
+              link = tmp_path / "python"
+              link.symlink_to(target.name)
+              assert module.safe_executable_regular_target(link, maximum=1024)
+
+              target.chmod(0o644)
+              assert not module.safe_executable_regular_target(link, maximum=1024)
+              target.chmod(0o755)
+              target.write_bytes(b"x" * 1025)
+              assert not module.safe_executable_regular_target(link, maximum=1024)
+
+              link.unlink()
+              link.symlink_to("missing-python")
+              assert not module.safe_executable_regular_target(link, maximum=1024)
+          '''.replace('          ', '')
+          assert 'test_runtime_python_symlink_resolves_to_bounded_executable' not in text
+          bootstrap_test.write_text(text.rstrip() + addition + '\n', encoding='utf-8')
+
+          execution_test = Path('tests/test_uv003_execution_contract.py')
+          text = execution_test.read_text(encoding='utf-8')
+          addition = '''
+
+          def test_readonly_runtime_values_use_distinct_child_environment_names():
+              source = OPERATOR.read_text(encoding="utf-8")
+              pin = source.split("verify_runtime_pin(){", 1)[1].split("verify_runtime(){", 1)[0]
+              assert 'UV003_RUNTIME_ENV="$RUNTIME_ENV"' in pin
+              assert 'UV003_EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT"' in pin
+              assert 'UV003_EXPECTED_WHISPER_MODEL="$EXPECTED_WHISPER_MODEL"' in pin
+              assert 'UV003_EXPECTED_PROCESSING_FINGERPRINT="$EXPECTED_PROCESSING_FINGERPRINT"' in pin
+              assert "|| fail RUNTIME_ENV" in pin
+              assert source.count('UV003_EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT"') == 2
+              assert source.count('UV003_EXPECTED_WHISPER_MODEL="$EXPECTED_WHISPER_MODEL"') == 2
+              assert source.count('UV003_EXPECTED_PROCESSING_FINGERPRINT="$EXPECTED_PROCESSING_FINGERPRINT"') == 2
+              assert "|| fail CONFORMANCE" in source
+              for forbidden in (
+                  "os.environ['RUNTIME_ENV']",
+                  "os.environ['EXPECTED_RUNTIME_COMMIT']",
+                  "os.environ['EXPECTED_WHISPER_MODEL']",
+                  "os.environ['EXPECTED_PROCESSING_FINGERPRINT']",
+              ):
+                  assert forbidden not in source
+
+
+          def test_installer_preserves_exit_evidence_through_rollback_cleanup():
+              source = INSTALLER.read_text(encoding="utf-8")
+              assert source.count("trap on_exit EXIT") == 1
+              assert "trap cleanup EXIT" not in source
+              assert source.count("UV003_OPERATOR_BOOTSTRAP_FAILURE=%s") == 1
+              on_exit = source.split("on_exit(){", 1)[1].split("trap on_exit EXIT", 1)[0]
+              assert "declare -F cleanup" in on_exit
+              assert 'cleanup "$rc" || true' in on_exit
+              cleanup = source.split("cleanup(){", 1)[1].split('if (( had_staging == 0 ))', 1)[0]
+              assert 'local rc="${1:-$?}"' in cleanup
+          '''.replace('          ', '')
+          assert 'test_readonly_runtime_values_use_distinct_child_environment_names' not in text
+          execution_test.write_text(text.rstrip() + addition + '\n', encoding='utf-8')
+          PY
+      - name: Run bounded static and unit validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/universal_video_diana11_003_operator.sh
+          bash -n ops/install_universal_video_diana11_003_operator.sh
+          python -m py_compile ops/probe_uv003_operator_bootstrap.py
+          python -m pip install --disable-pip-version-check -q pytest pyyaml
+          python -m pytest -q tests/test_uv003_bootstrap_diagnostic.py tests/test_uv003_execution_contract.py
+          python - <<'PY'
+          import yaml
+          yaml.safe_load(open('.github/workflows/oracle-diana11-003-bootstrap-diagnostic.yml', encoding='utf-8'))
+          PY
+          git diff --check
+      - name: Commit corrected source and remove one-shot machinery
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm --force .github/workflows/internal-uv003-bootstrap-patch-once.yml
+          git rm --force ops/internal-uv003-bootstrap-patch-request-615.json
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add ops/universal_video_diana11_003_operator.sh \
+            ops/install_universal_video_diana11_003_operator.sh \
+            ops/probe_uv003_operator_bootstrap.py \
+            .github/workflows/oracle-diana11-003-bootstrap-diagnostic.yml \
+            tests/test_uv003_bootstrap_diagnostic.py \
+            tests/test_uv003_execution_contract.py
+          git commit -m 'Fix UV003 bootstrap evidence and readonly env handoff (#615)'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
