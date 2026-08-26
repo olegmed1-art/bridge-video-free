@@ -1,0 +1,120 @@
+name: Oracle instance power
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: Exact lifecycle action
+        required: true
+        type: choice
+        options:
+          - status
+          - start
+          - stop
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-power
+  cancel-in-progress: false
+
+jobs:
+  power:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      OCI_REGION: eu-frankfurt-1
+      OCI_INSTANCE_OCID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+    steps:
+      - name: Validate credential presence
+        shell: bash
+        env:
+          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+          OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in OCI_CLI_USER OCI_CLI_TENANCY OCI_CLI_FINGERPRINT OCI_CLI_KEY_CONTENT; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "missing required secret: $name"
+              missing=1
+            fi
+          done
+          [[ "$missing" -eq 0 ]]
+
+      - name: Install OCI CLI
+        run: python -m pip install --disable-pip-version-check --quiet oci-cli
+
+      - name: Configure bounded OCI client
+        shell: bash
+        env:
+          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+          OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$HOME/.oci"
+          printf '%s' "$OCI_CLI_KEY_CONTENT" > "$HOME/.oci/oci_api_key.pem"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$OCI_CLI_USER
+          tenancy=$OCI_CLI_TENANCY
+          fingerprint=$OCI_CLI_FINGERPRINT
+          key_file=$HOME/.oci/oci_api_key.pem
+          region=$OCI_REGION
+          EOF
+
+      - name: Read current lifecycle state
+        id: state
+        shell: bash
+        run: |
+          set -euo pipefail
+          state="$(oci compute instance get \
+            --instance-id "$OCI_INSTANCE_OCID" \
+            --query 'data."lifecycle-state"' \
+            --raw-output)"
+          case "$state" in
+            RUNNING|STOPPED|STARTING|STOPPING) ;;
+            *) echo "unexpected lifecycle state: $state" >&2; exit 1 ;;
+          esac
+          echo "current_state=$state" >> "$GITHUB_OUTPUT"
+          echo "current lifecycle state: $state"
+
+      - name: Start exact instance
+        if: ${{ inputs.action == 'start' && steps.state.outputs.current_state != 'RUNNING' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          oci compute instance action \
+            --instance-id "$OCI_INSTANCE_OCID" \
+            --action START >/dev/null
+          oci compute instance get \
+            --instance-id "$OCI_INSTANCE_OCID" \
+            --wait-for-state RUNNING \
+            --wait-interval-seconds 10 \
+            --max-wait-seconds 600 >/dev/null
+          echo "instance reached RUNNING"
+
+      - name: Stop exact instance
+        if: ${{ inputs.action == 'stop' && steps.state.outputs.current_state != 'STOPPED' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          oci compute instance action \
+            --instance-id "$OCI_INSTANCE_OCID" \
+            --action STOP >/dev/null
+          oci compute instance get \
+            --instance-id "$OCI_INSTANCE_OCID" \
+            --wait-for-state STOPPED \
+            --wait-interval-seconds 10 \
+            --max-wait-seconds 600 >/dev/null
+          echo "instance reached STOPPED"
+
+      - name: Report no-op status
+        if: ${{ inputs.action == 'status' || (inputs.action == 'start' && steps.state.outputs.current_state == 'RUNNING') || (inputs.action == 'stop' && steps.state.outputs.current_state == 'STOPPED') }}
+        run: echo "No lifecycle mutation required."
