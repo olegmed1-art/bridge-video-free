@@ -41,11 +41,11 @@ verify_runtime_pin(){
   [[ -f "$RUNTIME_ENV" && ! -L "$RUNTIME_ENV" ]] || fail RUNTIME_ENV
   [[ "$(git -C "$SOURCE_DIR" rev-parse HEAD)" == "$EXPECTED_RUNTIME_COMMIT" ]] || fail RUNTIME_COMMIT
   [[ -z "$(git -C "$SOURCE_DIR" status --porcelain=v1 --untracked-files=all)" ]] || fail RUNTIME_DIRTY
-  RUNTIME_ENV="$RUNTIME_ENV" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" EXPECTED_WHISPER_MODEL="$EXPECTED_WHISPER_MODEL" EXPECTED_PROCESSING_FINGERPRINT="$EXPECTED_PROCESSING_FINGERPRINT" python3 - <<'PY' >/dev/null || exit 1
+  UV003_RUNTIME_ENV="$RUNTIME_ENV" UV003_EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" UV003_EXPECTED_WHISPER_MODEL="$EXPECTED_WHISPER_MODEL" UV003_EXPECTED_PROCESSING_FINGERPRINT="$EXPECTED_PROCESSING_FINGERPRINT" python3 - <<'PY' >/dev/null || fail RUNTIME_ENV
 import hashlib,json,os
 from pathlib import Path
 values={}
-for raw in Path(os.environ['RUNTIME_ENV']).read_text(encoding='utf-8').splitlines():
+for raw in Path(os.environ['UV003_RUNTIME_ENV']).read_text(encoding='utf-8').splitlines():
     line=raw.strip()
     if not line or line.startswith('#') or '=' not in line:
         continue
@@ -54,13 +54,12 @@ for raw in Path(os.environ['RUNTIME_ENV']).read_text(encoding='utf-8').splitline
         values[key]=value.strip()
 revision=values.get('UNIVERSAL_VIDEO_SOURCE_COMMIT','')
 model=(values.get('UNIVERSAL_VIDEO_WHISPER_MODEL','') or values.get('WHISPER_MODEL','') or 'small').strip()
-assert revision == os.environ['EXPECTED_RUNTIME_COMMIT']
-assert model == os.environ['EXPECTED_WHISPER_MODEL']
+assert revision == os.environ['UV003_EXPECTED_RUNTIME_COMMIT']
+assert model == os.environ['UV003_EXPECTED_WHISPER_MODEL']
 payload={'contract':'universal-video-v1','source_revision':revision,'whisper_model':model}
 raw=json.dumps(payload,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode('utf-8')
-assert hashlib.sha256(raw).hexdigest() == os.environ['EXPECTED_PROCESSING_FINGERPRINT']
+assert hashlib.sha256(raw).hexdigest() == os.environ['UV003_EXPECTED_PROCESSING_FINGERPRINT']
 PY
-  [[ $? -eq 0 ]] || fail RUNTIME_ENV
 }
 
 verify_runtime(){
@@ -221,12 +220,12 @@ state_for(){
         publication_state "$job_id"
         return 0
       fi
-      REPORT_JSON="$report" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" EXPECTED_WHISPER_MODEL="$EXPECTED_WHISPER_MODEL" EXPECTED_PROCESSING_FINGERPRINT="$EXPECTED_PROCESSING_FINGERPRINT" python3 - <<'PY' || exit 1
+      REPORT_JSON="$report" UV003_EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" UV003_EXPECTED_WHISPER_MODEL="$EXPECTED_WHISPER_MODEL" UV003_EXPECTED_PROCESSING_FINGERPRINT="$EXPECTED_PROCESSING_FINGERPRINT" python3 - <<'PY' || fail CONFORMANCE
 import json,os
 x=json.loads(os.environ['REPORT_JSON'])
 assert x.get('state') == 'PASS'
-assert x.get('processing_revision') == os.environ['EXPECTED_RUNTIME_COMMIT']
-assert x.get('processing_model') == os.environ['EXPECTED_WHISPER_MODEL']
+assert x.get('processing_revision') == os.environ['UV003_EXPECTED_RUNTIME_COMMIT']
+assert x.get('processing_model') == os.environ['UV003_EXPECTED_WHISPER_MODEL']
 print('UV_STATE=TECHNICAL_CONFORMANT')
 print('UV_CONFORMANCE_STATE=PASS')
 print('UV_ATTESTATION_MODE='+str(x.get('evidence_phase') or ''))
@@ -237,9 +236,9 @@ print('UV_TOTAL_BYTES='+str(x.get('total_bytes') or ''))
 print('UV_DOMAIN_ANALYSIS_STATUS='+str(x.get('domain_analysis_status') or ''))
 print('UV_TECHNICAL_BUNDLE_READY=YES')
 print('UV_TRANSCRIPT_QC=PASS')
-print('UV_PROCESSING_REVISION='+os.environ['EXPECTED_RUNTIME_COMMIT'])
-print('UV_PROCESSING_WHISPER_MODEL='+os.environ['EXPECTED_WHISPER_MODEL'])
-print('UV_PROCESSING_FINGERPRINT='+os.environ['EXPECTED_PROCESSING_FINGERPRINT'])
+print('UV_PROCESSING_REVISION='+os.environ['UV003_EXPECTED_RUNTIME_COMMIT'])
+print('UV_PROCESSING_WHISPER_MODEL='+os.environ['UV003_EXPECTED_WHISPER_MODEL'])
+print('UV_PROCESSING_FINGERPRINT='+os.environ['UV003_EXPECTED_PROCESSING_FINGERPRINT'])
 print('UV_BRIDGE_PRODUCTION_READY=NO')
 print('UV_PEDAGOGICAL_STATUS=NOT_EVALUATED')
 PY

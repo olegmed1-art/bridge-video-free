@@ -118,3 +118,22 @@ def test_workflow_is_request_only_and_cannot_execute_job():
         "systemctl start",
     ):
         assert forbidden not in runtime
+
+def test_runtime_python_symlink_resolves_to_bounded_executable(tmp_path):
+    module = load_module()
+    target = tmp_path / "python3"
+    target.write_bytes(b"#!/bin/sh\nexit 0\n")
+    target.chmod(0o755)
+    link = tmp_path / "python"
+    link.symlink_to(target.name)
+    assert module.safe_executable_regular_target(link, maximum=1024)
+
+    target.chmod(0o644)
+    assert not module.safe_executable_regular_target(link, maximum=1024)
+    target.chmod(0o755)
+    target.write_bytes(b"x" * 1025)
+    assert not module.safe_executable_regular_target(link, maximum=1024)
+
+    link.unlink()
+    link.symlink_to("missing-python")
+    assert not module.safe_executable_regular_target(link, maximum=1024)
