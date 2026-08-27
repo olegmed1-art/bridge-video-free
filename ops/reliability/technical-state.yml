@@ -1,5 +1,5 @@
 schema_version: 1
-updated_at_utc: "2026-08-27T16:40:00Z"
+updated_at_utc: "2026-08-27T16:47:00Z"
 policy: docs/TECHNICAL_GOVERNANCE.md
 whole_school_recovery:
   target_status: RECOVERY_PROVEN_V1
@@ -8,7 +8,6 @@ whole_school_recovery:
     - independent_large_irreplaceable_media_backup_not_proven
     - oci_boot_volume_restore_not_proven
     - full_end_to_end_restore_drill_not_proven
-    - recovery_registry_evidence_not_populated
     - explicit_rpo_rto_not_fully_verified
 
 components:
@@ -152,8 +151,8 @@ audit_snapshots:
     whole_school_recovery_ready: false
     neon_current_state_branch_restore: proven
     neon_off_provider_backup_restore: proven
-    neon_recovery_checkpoint_rows_observed: 0
-    neon_recovery_verification_rows_observed: 0
+    neon_recovery_checkpoint_rows_observed: 1
+    neon_recovery_verification_rows_observed: 1
     neon_org_mfa_observed: disabled
     oracle_boot_backup_observed: available
     oracle_recurring_backup_policy_observed: assigned
@@ -164,6 +163,16 @@ audit_snapshots:
       connector_limit_bytes: 268435456
     independent_large_media_backup: unproven
     restored_database_application_smoke: proven
+    recovery_registry_population:
+      conclusion: success
+      workflow_run_id: 33094901420
+      workflow_job_id: 98597124215
+      merge_commit: 847fe5edd984aaa933922e0eaca1c118eafee816
+      resolved_by_pr: 722
+      recovery_checkpoint_rows_observed: 1
+      recovery_verification_rows_observed: 1
+      recorded_checkpoint_id: 01a0441d-1487-7ff2-97ad-c9efd1205f47
+      recorded_verification_id: 01a0441d-14f4-742b-9482-1faabe502c7d
     dds3_runtime_container_workflow:
       conclusion: success
       workflow_run_id: 33093179244
@@ -186,6 +195,7 @@ audit_snapshots:
       dds3_production_health: 32845019060
       dds3_runtime_container_proof: 33093179244
       restored_database_application_smoke: 33094310879
+      recovery_registry_population: 33094901420
       oracle_ben_dds3_health: 32835192297
       oci_finops_backup_observation: 32820354158
       drive_acl_main: 32415116012
@@ -231,8 +241,12 @@ work_queue:
       evidence_workflow_job_id: 98595090998
     - id: recovery_registry_population_and_rpo_rto
       priority: P1
-      status: queued
+      status: partially_proven_by_main_ci
       tracking_issue: 523
+      resolved_recovery_registry_by_pr: 722
+      evidence_workflow_run_id: 33094901420
+      evidence_workflow_job_id: 98597124215
+      remaining: explicit_rpo_rto_not_fully_verified
     - id: vercel_deploy_freshness_and_quota
       priority: P1
       status: queued
