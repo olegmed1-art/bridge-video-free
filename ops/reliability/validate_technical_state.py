@@ -31,6 +31,8 @@ REQUIRED_INVARIANTS = {
     "actual_state_overrides_documentation",
     "owner_only_actions_are_minimized",
 }
+RPO_RTO_COMPONENTS = ("neon", "oracle_frankfurt")
+OWNER_ACTION_STATUSES = {"owner_action_required"}
 
 
 def fail(message: str) -> None:
@@ -59,6 +61,13 @@ def main() -> None:
     if missing_invariants:
         fail(f"missing safety invariants: {', '.join(missing_invariants)}")
 
+    for component_name in RPO_RTO_COMPONENTS:
+        component = components[component_name]
+        for key in ("rpo_target_hours", "rto_target_hours"):
+            value = component.get(key)
+            if not isinstance(value, int) or value <= 0:
+                fail(f"{component_name}.{key} must be a positive integer")
+
     neon = components["neon"]
     if neon.get("backup_required") is not True:
         fail("Neon backup must remain required")
@@ -84,6 +93,17 @@ def main() -> None:
     blockers = recovery.get("blockers")
     if recovery.get("current_status") != "RECOVERY_PROVEN_V1" and not blockers:
         fail("non-proven recovery state must list blockers")
+    if recovery.get("current_status") == "RECOVERY_PROVEN_V1" and blockers:
+        fail("proven recovery state cannot list blockers")
+
+    queued = ((state.get("work_queue") or {}).get("queued") or [])
+    owner_action_items = [
+        item.get("id")
+        for item in queued
+        if isinstance(item, dict) and item.get("status") in OWNER_ACTION_STATUSES
+    ]
+    if recovery.get("current_status") == "RECOVERY_PROVEN_V1" and owner_action_items:
+        fail("proven recovery state cannot contain owner-action-required work")
 
     updated_raw = state.get("updated_at_utc")
     try:
