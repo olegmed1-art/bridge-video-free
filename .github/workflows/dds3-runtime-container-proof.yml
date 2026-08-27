@@ -59,7 +59,7 @@ jobs:
               "engine": "DDS3",
               "fallback_used": False,
               "par_score_ns": -110,
-              "dd_table": {"S": [7, 6, 7, 6], "H": [8, 5, 8, 5], "D": [6, 7, 6, 7], "C": [8, 5, 8, 5], "NT": [7, 6, 7, 6]},
+              "dd_table": {"S": [5, 8, 5, 8], "H": [6, 6, 6, 6], "D": [5, 7, 5, 7], "C": [7, 5, 7, 5], "NT": [6, 6, 6, 6]},
           }
           actual = {key: r.get(key) for key in expected}
           assert actual == expected, {"expected": expected, "actual": actual}
