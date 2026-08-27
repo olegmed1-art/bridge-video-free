@@ -203,7 +203,14 @@ jobs:
         run: |
           set -euo pipefail
           oci compute instance action --instance-id "$OCI_INSTANCE_OCID" --action START >/dev/null
-          oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --wait-for-state RUNNING --wait-interval-seconds 10 --max-wait-seconds 600 >/dev/null
+          state=""
+          for _ in $(seq 1 60); do
+            state="$(oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --query 'data."lifecycle-state"' --raw-output)"
+            [[ "$state" == "RUNNING" ]] && break
+            [[ "$state" == "STARTING" || "$state" == "STOPPED" ]] || { echo "unexpected start state: $state" >&2; exit 7; }
+            sleep 10
+          done
+          [[ "$state" == "RUNNING" ]] || { echo "start timed out" >&2; exit 8; }
           echo "started=true" >> "$GITHUB_OUTPUT"
           echo "instance reached RUNNING"
 
@@ -232,7 +239,14 @@ jobs:
         run: |
           set -euo pipefail
           oci compute instance action --instance-id "$OCI_INSTANCE_OCID" --action STOP >/dev/null
-          oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --wait-for-state STOPPED --wait-interval-seconds 10 --max-wait-seconds 600 >/dev/null
+          state=""
+          for _ in $(seq 1 60); do
+            state="$(oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --query 'data."lifecycle-state"' --raw-output)"
+            [[ "$state" == "STOPPED" ]] && break
+            [[ "$state" == "STOPPING" || "$state" == "RUNNING" ]] || { echo "unexpected stop state: $state" >&2; exit 7; }
+            sleep 10
+          done
+          [[ "$state" == "STOPPED" ]] || { echo "stop timed out" >&2; exit 8; }
           echo "instance reached STOPPED after IDLE proof"
 
       - name: Refuse stop unless IDLE is proven
