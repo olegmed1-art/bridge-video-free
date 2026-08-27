@@ -1,0 +1,75 @@
+name: Oracle instance automatic power controller
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/5 * * * *'
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: oracle-instance-power-auto
+  cancel-in-progress: false
+
+jobs:
+  decide:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout trusted controller
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Read exact active-work snapshot
+        id: work
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${DATABASE_URL:-}"
+          python -m pip install --disable-pip-version-check --quiet 'psycopg[binary]==3.2.10'
+          snapshot="$(python - <<'PY'
+          import os
+          import psycopg
+
+          with psycopg.connect(
+              os.environ['DATABASE_URL'],
+              connect_timeout=8,
+              application_name='oracle-power-auto-controller',
+          ) as conn, conn.cursor() as cur:
+              cur.execute(
+                  'SELECT active_jobs, active_research_jobs, active_control_commands '
+                  'FROM assistant_lab.oracle_idle_snapshot()'
+              )
+              row = cur.fetchone()
+              if row is None or len(row) != 3:
+                  raise RuntimeError('idle snapshot unavailable')
+              values = tuple(map(int, row))
+              if min(values) < 0:
+                  raise RuntimeError('invalid idle snapshot')
+              print(','.join(map(str, values)))
+          PY
+          )"
+          IFS=, read -r jobs research control <<< "$snapshot"
+          active=$((jobs + research + control))
+          echo "active=$active" >> "$GITHUB_OUTPUT"
+          printf 'active work: jobs=%s research=%s control=%s\n' "$jobs" "$research" "$control"
+
+      - name: Dispatch bounded power action
+        shell: bash
+        env:
+          ACTIVE: ${{ steps.work.outputs.active }}
+        run: |
+          set -euo pipefail
+          [[ "$ACTIVE" =~ ^[0-9]+$ ]]
+          if (( ACTIVE > 0 )); then action=start; else action=stop; fi
+          gh workflow run oracle-instance-power.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f action="$action"
+          echo "dispatched bounded action: $action"
