@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CANDIDATE = ROOT / ".github/workflows/oracle-instance-idle-candidate.yml"
 VIDEO = ROOT / ".github/workflows/oracle-universal-video-job.yml"
 POWER = ROOT / ".github/workflows/oracle-instance-power.yml"
+AUTO = ROOT / ".github/workflows/oracle-instance-power-auto.yml"
 
 
 def test_terminal_video_work_dispatches_external_idle_candidate():
@@ -38,3 +39,13 @@ def test_downstream_power_boundary_remains_exact_and_idle_gated():
     assert "options: [status, start, stop]" in text
     assert "steps.idle.outputs.idle_state == 'IDLE'" in text
     assert "Stop exact instance only with IDLE proof" in text
+    assert "controller: manual only" in text
+
+
+def test_oracle_power_auto_controller_has_no_timer_or_push_trigger():
+    text = AUTO.read_text(encoding="utf-8")
+    assert "workflow_dispatch:" in text
+    assert "\n  schedule:" not in text
+    assert "\n  push:" not in text
+    assert "cron:" not in text
+    assert "manually dispatched bounded action" in text
