@@ -141,7 +141,7 @@ jobs:
           fi
 
           classifier_text="$(cat ops/oracle_idle_state.sh)"
-          script_text="$(printf "sudo -n bash -s <<'ORACLE_IDLE_CLASSIFIER'\n%s\nORACLE_IDLE_CLASSIFIER\n" "$classifier_text")"
+          script_text="$(printf 'if ! sudo -n true 2>/dev/null; then echo OCARUN_SUDO_NOT_CONFIGURED; exit 77; fi\nexec sudo -n bash -c %q\n' "$classifier_text")"
           content_json="$(SCRIPT_TEXT="$script_text" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":os.environ["SCRIPT_TEXT"]},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
           target_json="$(python -c 'import json,os; print(json.dumps({"instanceId":os.environ["OCI_INSTANCE_OCID"]},separators=(",",":")))')"
           command_id="$(oci instance-agent command create \
@@ -167,13 +167,19 @@ jobs:
             sleep 5
           done
 
+          exit_code="$(printf '%s' "$execution_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("content",{}).get("exit-code","") or "")' 2>/dev/null || true)"
+          text="$(printf '%s' "$execution_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("content",{}).get("text","") or "")' 2>/dev/null || true)"
           if [[ "$lifecycle" != "SUCCEEDED" ]]; then
+            diagnostic="$(printf '%s\n' "$text" | grep -E '^(OCARUN_SUDO_NOT_CONFIGURED|ORACLE_IDLE_REASON=|ORACLE_IDLE_STATE=)' | tail -n2 | tr '\n' ',' | sed 's/,$//' || true)"
+            printf 'idle command failed: lifecycle=%s exit=%s diagnostic=%s\n' "${lifecycle:-timeout}" "${exit_code:-unknown}" "${diagnostic:-unavailable}"
             echo "idle_state=UNKNOWN" >> "$GITHUB_OUTPUT"
-            echo "idle_reason=instance_agent_${lifecycle:-timeout}" >> "$GITHUB_OUTPUT"
+            if [[ "$diagnostic" == *OCARUN_SUDO_NOT_CONFIGURED* ]]; then
+              echo "idle_reason=ocarun_sudo_not_configured" >> "$GITHUB_OUTPUT"
+            else
+              echo "idle_reason=instance_agent_${lifecycle:-timeout}_exit_${exit_code:-unknown}" >> "$GITHUB_OUTPUT"
+            fi
             exit 0
           fi
-          exit_code="$(printf '%s' "$execution_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("content",{}).get("exit-code",""))')"
-          text="$(printf '%s' "$execution_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("content",{}).get("text","") or "")')"
           if [[ "$exit_code" != "0" ]]; then
             echo "idle_state=UNKNOWN" >> "$GITHUB_OUTPUT"
             echo "idle_reason=classifier_exit_${exit_code:-unknown}" >> "$GITHUB_OUTPUT"
