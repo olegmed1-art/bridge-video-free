@@ -140,7 +140,8 @@ jobs:
             exit 0
           fi
 
-          script_text="$(cat ops/oracle_idle_state.sh)"
+          classifier_text="$(cat ops/oracle_idle_state.sh)"
+          script_text="$(printf "sudo -n bash -s <<'ORACLE_IDLE_CLASSIFIER'\n%s\nORACLE_IDLE_CLASSIFIER\n" "$classifier_text")"
           content_json="$(SCRIPT_TEXT="$script_text" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":os.environ["SCRIPT_TEXT"]},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
           target_json="$(python -c 'import json,os; print(json.dumps({"instanceId":os.environ["OCI_INSTANCE_OCID"]},separators=(",",":")))')"
           command_id="$(oci instance-agent command create \
