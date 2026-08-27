@@ -89,6 +89,8 @@ ensure_real_dir "$BASE_DIR" root "$GROUP_NAME" 0750
 ensure_real_dir "$BASE_DIR/spool" root "$GROUP_NAME" 0750
 for d in inbox running done failed results; do
   ensure_real_dir "$BASE_DIR/spool/$d" "$USER_NAME" "$GROUP_NAME" 0750
+  chown "$USER_NAME:$GROUP_NAME" "$BASE_DIR/spool/$d"
+  chmod 0750 "$BASE_DIR/spool/$d"
 done
 for d in model-cache media output; do
   ensure_real_dir "$BASE_DIR/$d" "$USER_NAME" "$GROUP_NAME" 0750
@@ -96,6 +98,17 @@ done
 ensure_real_dir "$SECRETS_DIR" root "$GROUP_NAME" 0750
 bash "$SOURCE_DIR/ops/oracle_universal_video_spool_guard.sh" \
   verify "$BASE_DIR" root "$USER_NAME" "$GROUP_NAME"
+runuser -u "$USER_NAME" -- /usr/bin/python3 - "$BASE_DIR/spool" <<'PY'
+import os, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+for leaf in ("inbox", "running", "done", "failed", "results"):
+    path = root / leaf / f".write-check-{os.getpid()}"
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(fd)
+    path.unlink()
+print("UNIVERSAL_VIDEO_SPOOL_WRITE_ACCESS_PASS")
+PY
 
 log "Prepare file-backed secret boundary for optional Google Drive sources"
 if [[ ! -e "$SECRETS_ENV_FILE" ]]; then
