@@ -155,7 +155,11 @@ jobs:
               case "$lifecycle" in SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break;; esac
               sleep 2
             done
-            [[ "$lifecycle" == SUCCEEDED ]] || { echo "instance-agent command failed: $lifecycle" >&2; return 1; }
+            if [[ "$lifecycle" != SUCCEEDED ]]; then
+              echo "instance-agent command failed: $lifecycle" >&2
+              printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print(((d.get("content") or {}).get("text","") or "")[:2000])' >&2
+              return 1
+            fi
             printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("text","") or "")'
           }
 
