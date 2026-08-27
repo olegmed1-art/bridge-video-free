@@ -1,0 +1,34 @@
+{
+  "schema": "bridge-school-recovery-registry-record-v1",
+  "checkpoint_type": "export",
+  "provider": "github-actions-artifact",
+  "external_ref": "neon-independent-backup-v1-20260826T050935Z-32932896224-1",
+  "source_fingerprint": {
+    "source_provider": "Neon",
+    "source_database": "neondb",
+    "postgres_major": 18,
+    "source_tables": 234,
+    "source_schemas": 5,
+    "encrypted_backup_sha256": "d4a3eee080badc849fd5346536ee49b3bb1a1448a483febbfdb81b5b4132115b",
+    "encrypted_bytes": 6566288,
+    "raw_dump_uploaded": false
+  },
+  "retention_until": "2026-09-30T05:09:36Z",
+  "notes": "Independent encrypted Neon backup artifact restored into isolated PostgreSQL 18 in workflow run 32932896224.",
+  "verification_type": "restore_test",
+  "result": "success",
+  "observed_fingerprint": {
+    "restore_target": "isolated_postgres18",
+    "restored_tables": 234,
+    "restored_schemas": 5,
+    "observed_restore_result": "success"
+  },
+  "restore_target_ref": "github-actions-run-32932896224-isolated-postgres18",
+  "details": {
+    "workflow_run_id": 32932896224,
+    "artifact_id": 9593826932,
+    "artifact_name": "neon-independent-backup-v1-20260826T050935Z-32932896224-1",
+    "technical_state_recorded": true,
+    "raw_dump_uploaded": false
+  }
+}
