@@ -20,7 +20,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: oracle-instance-workload-mutation
+  group: ${{ github.event_name == 'pull_request' && format('oracle-universal-video-pr-{0}', github.run_id) || 'oracle-instance-workload-mutation' }}
   cancel-in-progress: false
 
 jobs:
