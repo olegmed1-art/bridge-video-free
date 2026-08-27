@@ -14,7 +14,6 @@ on:
     paths:
       - 'dds3_runtime/**'
       - 'bridge_school_api/dds3/**'
-      - 'bridge_school_api/dds3/**'
       - 'dds3_cli/**'
       - '.github/workflows/dds3-runtime-container-proof.yml'
       - 'tests/test_dds3_runtime_container_workflow_contract.py'
