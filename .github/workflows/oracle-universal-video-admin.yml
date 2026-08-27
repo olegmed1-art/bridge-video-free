@@ -48,8 +48,11 @@ jobs:
     env:
       ISSUE_NUMBER: '371'
       INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
-      OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
+      OCI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
       OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -79,45 +82,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${OCI_CLI_CONFIG:-}"
-          test -n "${OCI_KEY:-}"
-          python -m pip install --disable-pip-version-check -q 'oci-cli==3.90.3'
-          umask 077
+          python -m pip install --disable-pip-version-check -q oci-cli
+          oci_user="$(printf '%s\n' "$OCI_USER" | sed -nE 's/^[[:space:]]*(user=)?(ocid1\\.user\\.[A-Za-z0-9._-]+)[[:space:]]*$/\\2/p' | head -n1)"
+          oci_fingerprint="$(printf '%s\n' "$OCI_FINGERPRINT" | sed -nE 's/^[[:space:]]*(fingerprint=)?([0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){15})[[:space:]]*$/\\2/p' | head -n1)"
+          oci_tenancy="$(printf '%s\n' "$OCI_TENANCY" | sed -nE 's/^[[:space:]]*(tenancy=)?(ocid1\\.tenancy\\.[A-Za-z0-9._-]+)[[:space:]]*$/\\2/p' | head -n1)"
+          [[ -n "$oci_user" && -n "$oci_fingerprint" && -n "$oci_tenancy" ]] || { echo 'invalid OCI identity fields' >&2; exit 1; }
           mkdir -p "$HOME/.oci"
-          if [[ "$OCI_KEY" == base64:* ]]; then
-            printf '%s' "${OCI_KEY#base64:}" | base64 --decode > "$HOME/.oci/oci_api_key.pem"
-          else
-            printf '%s\n' "$OCI_KEY" > "$HOME/.oci/oci_api_key.pem"
-          fi
-          printf '%s\n' "$OCI_CLI_CONFIG" > "$HOME/.oci/config"
-          if ! openssl pkey -in "$HOME/.oci/oci_api_key.pem" -noout -check >/dev/null 2>&1; then
-            echo "OCI_KEY_INVALID: expected an unencrypted private PEM key or base64:<single-line-Pem-base64>" >&2
-            exit 6
-          fi
-          openssl pkey -in "$HOME/.oci/oci_api_key.pem" -traditional -out "$HOME/.oci/oci_api_key.pkcs1.pem"
-          mv "$HOME/.oci/oci_api_key.pkcs1.pem" "$HOME/.oci/oci_api_key.pem"
-          actual_fingerprint="$(openssl pkey -in "$HOME/.oci/oci_api_key.pem" -pubout -outform DER | openssl md5 -r | awk '{print $1}' | sed 's/../&:/g;s/:$//')"
-          test -n "$actual_fingerprint"
-          export OCI_DERIVED_FINGERPRINT="$actual_fingerprint"
-          python - <<'PY'
-          import os
-          from pathlib import Path
-          p=Path.home()/'.oci/config'
-          lines=[]; key=False; region=False; fingerprint=False
-          for line in p.read_text().splitlines():
-              if line.strip().startswith('key_file='):
-                  lines.append(f'key_file={Path.home()}/.oci/oci_api_key.pem'); key=True
-              elif line.strip().startswith('region='):
-                  lines.append('region=eu-frankfurt-1'); region=True
-              elif line.strip().startswith('fingerprint='):
-                  lines.append(f'fingerprint={os.environ["OCI_DERIVED_FINGERPRINT"]}'); fingerprint=True
-              else:
-                  lines.append(line)
-          if not key: lines.append(f'key_file={Path.home()}/.oci/oci_api_key.pem')
-          if not region: lines.append('region=eu-frankfurt-1')
-          if not fingerprint: lines.append(f'fingerprint={os.environ["OCI_DERIVED_FINGERPRINT"]}')
-          p.write_text('\n'.join(lines)+'\n')
-          PY
+          printf '%s\n' "$OCI_KEY" > "$HOME/.oci/key.pem"
+          chmod 600 "$HOME/.oci/key.pem"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$oci_user
+          fingerprint=$oci_fingerprint
+          tenancy=$oci_tenancy
+          region=$OCI_REGION
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
           oci iam region list --output json >/dev/null
           echo UNIVERSAL_VIDEO_OCI_API_AUTH_PASS
 
