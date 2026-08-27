@@ -24,6 +24,41 @@ def _terminal_result(root: Path, job_id: str, *, age_seconds: int, now: float, p
     return job
 
 
+def _durable_publication_receipt(root: Path, job_id: str, *, age_seconds: int, now: float) -> Path:
+    artifact_set = "a" * 64
+    manifest_sha = "b" * 64
+    receipt = root / "spool" / "done" / f"{job_id}.json"
+    receipt.parent.mkdir(parents=True, exist_ok=True)
+    receipt.write_text(
+        json.dumps(
+            {
+                "status": "COMPLETED",
+                "compute_status": "COMPLETED",
+                "job_id": job_id,
+                "publication_state": "REMOTE_VERIFIED",
+                "publication": {
+                    "status": "PUBLISHED_VERIFIED",
+                    "remote_verification": "SIZE_MD5_SHA256_PROPERTY_MATCH",
+                    "artifact_set_sha256": artifact_set,
+                    "manifest_sha256": manifest_sha,
+                    "remote_artifacts": [
+                        {"relative_name": "manifest.json", "size_bytes": 10, "sha256": manifest_sha}
+                    ],
+                },
+                "conformance": {
+                    "state": "PASS",
+                    "artifact_set_sha256": artifact_set,
+                    "manifest_sha256": manifest_sha,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    stamp = now - age_seconds
+    os.utime(receipt, (stamp, stamp))
+    return receipt
+
+
 def test_retention_never_deletes_pending_or_running_artifacts(tmp_path: Path):
     now = 2_000_000_000.0
     base = tmp_path / "uv"
@@ -51,6 +86,7 @@ def test_retention_never_deletes_pending_or_running_artifacts(tmp_path: Path):
     )
     active_result = _terminal_result(base, "active-job", age_seconds=40 * DAY, now=now)
     stale_result = _terminal_result(base, "stale-job", age_seconds=40 * DAY, now=now)
+    _durable_publication_receipt(base, "stale-job", age_seconds=40 * DAY, now=now)
 
     policy = RetentionPolicy(max_deletes_per_run=100)
     plan = build_cleanup_plan(base, policy=policy, now=now)
@@ -59,6 +95,29 @@ def test_retention_never_deletes_pending_or_running_artifacts(tmp_path: Path):
     assert active_result not in paths
     assert stale_media in paths
     assert stale_result in paths
+
+
+def test_retention_blocks_completed_cleanup_without_durable_publication_proof(tmp_path: Path):
+    now = 2_000_000_000.0
+    base = tmp_path / "uv"
+    for name in ("inbox", "running", "done", "failed", "results"):
+        (base / "spool" / name).mkdir(parents=True, exist_ok=True)
+    (base / "media").mkdir(parents=True)
+    unproven = _terminal_result(base, "unproven-job", age_seconds=40 * DAY, now=now)
+    (base / "spool" / "done" / "unproven-job.json").write_text(
+        json.dumps({"status": "COMPLETED", "job_id": "unproven-job"}),
+        encoding="utf-8",
+    )
+    proven = _terminal_result(base, "proven-job", age_seconds=40 * DAY, now=now)
+    proven_receipt = _durable_publication_receipt(base, "proven-job", age_seconds=40 * DAY, now=now)
+
+    plan = build_cleanup_plan(base, policy=RetentionPolicy(), now=now)
+    paths = {item.path for item in plan}
+
+    assert unproven not in paths
+    assert base / "spool" / "done" / "unproven-job.json" not in paths
+    assert proven in paths
+    assert proven_receipt in paths
 
 
 def test_abandoned_result_directory_is_bounded_after_grace(tmp_path: Path):

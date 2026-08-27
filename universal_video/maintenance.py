@@ -22,6 +22,8 @@ GIB = 1024**3
 DAY = 24 * 3600
 HOUR = 3600
 TERMINAL_STATUSES = frozenset({"COMPLETED", "REVIEW", "FAILED"})
+COMPLETED_CLEANUP_PROOF_STATUSES = frozenset({"PUBLISHED_VERIFIED"})
+COMPLETED_CLEANUP_REMOTE_VERIFICATION = "SIZE_MD5_SHA256_PROPERTY_MATCH"
 
 
 @dataclass(frozen=True)
@@ -152,6 +154,50 @@ def _terminal_result_dir(path: Path) -> bool:
     return str(manifest.get("status") or "").upper() in TERMINAL_STATUSES
 
 
+def _completed_durable_proof(payload: dict[str, Any] | None, *, job_id: str | None = None) -> bool:
+    if not payload or str(payload.get("status") or payload.get("compute_status") or "").upper() != "COMPLETED":
+        return False
+    if job_id is not None and str(payload.get("job_id") or "") != job_id:
+        return False
+    publication = payload.get("publication") if isinstance(payload.get("publication"), dict) else {}
+    conformance = (
+        payload.get("conformance")
+        if isinstance(payload.get("conformance"), dict)
+        else payload.get("result_conformance")
+        if isinstance(payload.get("result_conformance"), dict)
+        else {}
+    )
+    if payload.get("publication_state") != "REMOTE_VERIFIED":
+        return False
+    if publication.get("status") not in COMPLETED_CLEANUP_PROOF_STATUSES:
+        return False
+    if publication.get("remote_verification") != COMPLETED_CLEANUP_REMOTE_VERIFICATION:
+        return False
+    if conformance.get("state") != "PASS":
+        return False
+    artifact_set = str(publication.get("artifact_set_sha256") or "")
+    manifest_sha = str(publication.get("manifest_sha256") or "")
+    if len(artifact_set) != 64 or any(ch not in "0123456789abcdef" for ch in artifact_set.lower()):
+        return False
+    if len(manifest_sha) != 64 or any(ch not in "0123456789abcdef" for ch in manifest_sha.lower()):
+        return False
+    if conformance.get("artifact_set_sha256") != publication.get("artifact_set_sha256"):
+        return False
+    if conformance.get("manifest_sha256") != publication.get("manifest_sha256"):
+        return False
+    remote_artifacts = publication.get("remote_artifacts")
+    if not isinstance(remote_artifacts, list) or not remote_artifacts:
+        return False
+    return True
+
+
+def _completed_receipt_has_durable_proof(done_root: Path, job_id: str) -> bool:
+    if not done_root.is_dir():
+        return False
+    receipt = _safe_json(done_root / f"{job_id}.json")
+    return _completed_durable_proof(receipt, job_id=job_id)
+
+
 def _dedupe(candidates: Iterable[Candidate]) -> list[Candidate]:
     chosen: dict[Path, Candidate] = {}
     for item in candidates:
@@ -181,6 +227,8 @@ def build_cleanup_plan(
             for path in root.iterdir():
                 if not _regular_file(path):
                     continue
+                if bucket == "done" and not _completed_durable_proof(_safe_json(path)):
+                    continue
                 info = path.lstat()
                 files.append((info.st_mtime, path, info.st_size))
         files.sort(key=lambda item: (item[0], item[1].name))
@@ -209,6 +257,8 @@ def build_cleanup_plan(
             if not _terminal_result_dir(path):
                 if age >= policy.abandoned_results_ttl_seconds:
                     candidates.append(Candidate(path, "results", mtime, size, "abandoned_ttl"))
+                continue
+            if not _completed_receipt_has_durable_proof(spool_root / "done", path.name):
                 continue
             result_dirs.append((mtime, path, size))
     result_dirs.sort(key=lambda item: (item[0], item[1].name))
