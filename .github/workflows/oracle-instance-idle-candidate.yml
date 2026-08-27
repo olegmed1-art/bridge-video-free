@@ -86,5 +86,6 @@ jobs:
           gh workflow run oracle-instance-power.yml \
             --repo "$GITHUB_REPOSITORY" \
             --ref main \
-            -f action=stop
+            -f action=stop \
+            -f idle_source_run_id="$SOURCE_RUN_ID"
           echo 'bounded stop dispatched; downstream workflow must independently prove host IDLE'

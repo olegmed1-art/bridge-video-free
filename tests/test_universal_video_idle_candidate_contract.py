@@ -29,6 +29,7 @@ def test_idle_candidate_waits_and_fails_closed_before_bounded_stop():
     assert "steps.idle.outputs.stop_allowed == 'true'" in text
     assert "gh workflow run oracle-instance-power.yml" in text
     assert "-f action=stop" in text
+    assert '-f idle_source_run_id="$SOURCE_RUN_ID"' in text
     assert "OCI_" not in text
     assert "ocid1." not in text
 
@@ -37,9 +38,25 @@ def test_downstream_power_boundary_remains_exact_and_idle_gated():
     text = POWER.read_text(encoding="utf-8")
     assert "ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq" in text
     assert "options: [status, start, stop]" in text
+    assert "idle_source_run_id:" in text
+    assert "actions: read" in text
+    assert "group: oracle-instance-workload-mutation" in text
+    assert "Revalidate automatic stop epoch" in text
+    assert 'row.get("status")!="completed"' in text
+    assert 'r.get("event")!="pull_request"' in text
+    assert "steps.epoch.outputs.epoch_state == 'CURRENT'" in text
+    assert "Refuse stale automatic stop" in text
     assert "steps.idle.outputs.idle_state == 'IDLE'" in text
     assert "Stop exact instance only with IDLE proof" in text
     assert "controller: manual only" in text
+
+
+def test_video_and_power_mutations_share_a_non_cancelling_lock():
+    video = VIDEO.read_text(encoding="utf-8")
+    power = POWER.read_text(encoding="utf-8")
+    for text in (video, power):
+        assert "group: oracle-instance-workload-mutation" in text
+        assert "cancel-in-progress: false" in text
 
 
 def test_oracle_power_auto_controller_has_no_timer_or_push_trigger():
