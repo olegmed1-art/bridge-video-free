@@ -10,7 +10,7 @@ readonly ORACLE_HOST='158.180.47.161'
 readonly ORACLE_USER='ubuntu'
 readonly SSH_KEY_PATH="$HOME/.ssh/bridge_school_dds3_oracle"
 readonly REPOSITORY='olegmed1-art/bridge-video-free'
-readonly BOOTSTRAP_COMMIT='deb9746f0c4088ee27fd03bff9b698524448074a'
+readonly BOOTSTRAP_COMMIT='dffccf87d69f72cd401559018aea512f5de36b64'
 readonly ASSISTANT_INSTALLER='ops/install_assistant_lab_ocarun_admin.sh'
 readonly VIDEO_INSTALLER='ops/install_universal_video_ocarun_admin.sh'
 
