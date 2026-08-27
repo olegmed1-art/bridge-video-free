@@ -54,43 +54,42 @@ def _wrap_injected_parser(parser: LegacyParserInjection):
     return detector
 
 
-def build_engine(*, allow_legacy_old_bbo: bool = False) -> BridgeVisionEngine:
+def build_engine(
+    *, allow_legacy_old_bbo: bool = False, allow_ocr_card_labels: bool = False
+) -> BridgeVisionEngine:
     engine = BridgeVisionEngine()
-    # Native detector families are registered here as they graduate from their
-    # gold-set gates. Until then, native analysis fails closed rather than
-    # pretending the legacy BBO parser is universal.
     if allow_legacy_old_bbo:
         from bridge_vision.legacy import old_bbo_report_parser
-
         engine.register("old-bbo-compat", old_bbo_report_parser)
+    if allow_ocr_card_labels:
+        from bridge_vision.native_cards import NativeFourSeatCardDetector
+        from bridge_vision.ocr_cards import OcrCardLabelBackend
+        engine.register("ocr-card-labels", NativeFourSeatCardDetector(OcrCardLabelBackend()))
     return engine
 
 
 def process_job_frames(
-    job_dir: Path,
-    *,
-    engine: BridgeVisionEngine | None = None,
+    job_dir: Path, *, engine: BridgeVisionEngine | None = None,
     parser: LegacyParserInjection | None = None,
-    allow_legacy_old_bbo: bool = False,
+    allow_legacy_old_bbo: bool = False, allow_ocr_card_labels: bool = False,
 ) -> dict[str, Any]:
     if engine is not None and parser is not None:
         raise ValueError("pass engine or parser, not both")
     compatibility_mode = parser is not None
     root = job_dir.resolve()
-    manifest_path = root / "manifest.json"
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
     frames = manifest.get("frames")
     if not isinstance(frames, list):
         raise ValueError("manifest frames must be an array")
-
     if parser is not None:
         vision = BridgeVisionEngine({"explicit-injected-parser": _wrap_injected_parser(parser)})
     else:
-        vision = engine or build_engine(allow_legacy_old_bbo=allow_legacy_old_bbo)
+        vision = engine or build_engine(
+            allow_legacy_old_bbo=allow_legacy_old_bbo,
+            allow_ocr_card_labels=allow_ocr_card_labels,
+        )
     records: list[dict[str, Any]] = []
-    recognized_frames = 0
-    conflict_frames = 0
-
+    recognized_frames = conflict_frames = 0
     for frame_meta in frames:
         if not isinstance(frame_meta, dict):
             raise ValueError("manifest frame entry must be an object")
@@ -109,60 +108,36 @@ def process_job_frames(
         result["frame_file"] = frame.name
         result["frame_sha256"] = frame_meta.get("sha256")
         records.append(result)
-        if result["deal"] is not None:
-            recognized_frames += 1
-        if result["status"] == "CONFLICT":
-            conflict_frames += 1
-
+        recognized_frames += result["deal"] is not None
+        conflict_frames += result["status"] == "CONFLICT"
     output_path = root / "bridge_positions.jsonl"
-    output_path.write_text(
-        "".join(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n" for record in records),
-        encoding="utf-8",
-    )
+    output_path.write_text("".join(json.dumps(r, ensure_ascii=False, separators=(",", ":")) + "\n" for r in records), encoding="utf-8")
+    summary = {
+        "status": "REVIEW" if conflict_frames else "COMPLETED",
+        "job_id": manifest.get("job_id"), "source_fingerprint": manifest.get("source_fingerprint"),
+        "input_frames": len(frames), "output_records": len(records),
+        "recognized_frames": recognized_frames, "conflict_frames": conflict_frames,
+        "output": output_path.name,
+    }
     if compatibility_mode:
-        summary = {
-            "status": "REVIEW" if conflict_frames else "COMPLETED",
-            "job_id": manifest.get("job_id"),
-            "source_fingerprint": manifest.get("source_fingerprint"),
-            "input_frames": len(frames),
-            "output_records": len(records),
-            "recognized_frames": recognized_frames,
-            "conflict_frames": conflict_frames,
-            "derive_fourth_hand": False,
-            "output": output_path.name,
-        }
+        summary["derive_fourth_hand"] = False
     else:
-        summary = {
-            "status": "REVIEW" if conflict_frames else "COMPLETED",
-            "vision_engine": "native",
-            "detectors": list(vision.detector_names),
-            "legacy_old_bbo_enabled": bool(allow_legacy_old_bbo),
-            "job_id": manifest.get("job_id"),
-            "source_fingerprint": manifest.get("source_fingerprint"),
-            "input_frames": len(frames),
-            "output_records": len(records),
-            "recognized_frames": recognized_frames,
-            "conflict_frames": conflict_frames,
-            "output": output_path.name,
-        }
-    summary_path = root / "bridge_positions_summary.json"
-    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        summary.update({"vision_engine": "native", "detectors": list(vision.detector_names),
+                        "legacy_old_bbo_enabled": bool(allow_legacy_old_bbo),
+                        "ocr_card_labels_enabled": bool(allow_ocr_card_labels)})
+    (root / "bridge_positions_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("job_dir", type=Path)
-    parser.add_argument(
-        "--allow-legacy-old-bbo",
-        action="store_true",
-        help="explicitly enable the old layout-specific BBO compatibility parser",
-    )
+    parser.add_argument("--allow-legacy-old-bbo", action="store_true")
+    parser.add_argument("--allow-ocr-card-labels", action="store_true",
+                        help="explicitly enable OCR card-label recognition; outputs remain review evidence")
     args = parser.parse_args()
-    summary = process_job_frames(
-        args.job_dir,
-        allow_legacy_old_bbo=args.allow_legacy_old_bbo,
-    )
+    summary = process_job_frames(args.job_dir, allow_legacy_old_bbo=args.allow_legacy_old_bbo,
+                                 allow_ocr_card_labels=args.allow_ocr_card_labels)
     print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
 
 
