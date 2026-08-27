@@ -22,7 +22,10 @@ readonly OAUTH_FILE="$BASE_DIR/secrets/google-drive-oauth.json"
 readonly OAUTH_ENV="$BASE_DIR/universal-video-secrets.env"
 readonly SAFE_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 
+CURRENT_STAGE='startup'
 fail(){ echo "ERROR: $*" >&2; exit 1; }
+on_error(){ local rc=$?; echo "UNIVERSAL_VIDEO_OCI_ADMIN_ERROR stage=${CURRENT_STAGE} rc=${rc}" >&2; exit "$rc"; }
+trap on_error ERR
 need_root(){ [[ $(id -u) -eq 0 ]] || fail 'must run as root'; }
 state(){ systemctl is-active "$1" 2>/dev/null || true; }
 
@@ -83,9 +86,13 @@ PY
 }
 
 audit(){
+  CURRENT_STAGE='audit_protected_services'
   verify_protected_services
+  CURRENT_STAGE='audit_dds3'
   verify_dds3
+  CURRENT_STAGE='audit_sidecar'
   verify_sidecar
+  CURRENT_STAGE='audit_collect_state'
   local memory_high memory_max timer_active timer_enabled drive_state source_head
   memory_high="$(systemctl show universal-video.service -p MemoryHigh --value 2>/dev/null || true)"
   memory_max="$(systemctl show universal-video.service -p MemoryMax --value 2>/dev/null || true)"
@@ -118,9 +125,13 @@ download_verified(){
 }
 
 productionize(){
+  CURRENT_STAGE='productionize_protected_services'
   verify_protected_services
+  CURRENT_STAGE='productionize_dds3_before'
   verify_dds3
+  CURRENT_STAGE='productionize_sidecar_before'
   verify_sidecar
+  CURRENT_STAGE='productionize_running_job_guard'
   [[ ! -e "$BASE_DIR/spool/running" || -z "$(find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null)" ]] \
     || fail 'universal-video has a running job'
 
@@ -136,12 +147,15 @@ productionize(){
   activation="$work/activate.sh"
   production="$work/productionize.sh"
   log_file="$work/productionize.log"
+  CURRENT_STAGE='productionize_download_activation'
   download_verified "$ACTIVATION_PATH" "$ACTIVATION_BLOB" "$activation"
+  CURRENT_STAGE='productionize_download_script'
   download_verified "$PRODUCTIONIZE_PATH" "$PRODUCTIONIZE_BLOB" "$production"
 
   echo "runtime_commit=$UV_RUNTIME_COMMIT"
   echo 'UNIVERSAL_VIDEO_OCI_ADMIN_PIN_PASS'
 
+  CURRENT_STAGE='productionize_activation'
   /usr/bin/env -i \
     PATH="$SAFE_PATH" HOME=/root LANG=C.UTF-8 \
     UNIVERSAL_VIDEO_GIT_REF="$UV_RUNTIME_COMMIT" \
@@ -153,6 +167,7 @@ productionize(){
   grep -Fx "source_commit=$UV_RUNTIME_COMMIT" "$log_file" >/dev/null || fail 'activation source pin mismatch'
 
   : > "$log_file"
+  CURRENT_STAGE='productionize_script'
   /usr/bin/env -i \
     PATH="$SAFE_PATH" HOME=/root LANG=C.UTF-8 \
     UNIVERSAL_VIDEO_SOURCE_DIR="$SOURCE_DIR" \
@@ -163,6 +178,7 @@ productionize(){
     UNIVERSAL_VIDEO_MAX_DURATION_SECONDS=43200 \
     nice -n 10 bash "$production" | tee "$log_file"
 
+  CURRENT_STAGE='productionize_marker_validation'
   for marker in \
     UNIVERSAL_VIDEO_MEMORY_LIMITS_PASS \
     UNIVERSAL_VIDEO_RETENTION_PASS \
@@ -175,17 +191,21 @@ productionize(){
   grep -F 'UNIVERSAL_VIDEO_PRODUCTIONIZE_PASS' "$log_file" | grep -F 'asr_started=0' >/dev/null \
     || fail 'final no-ASR productionization marker missing'
 
+  CURRENT_STAGE='productionize_service_state_validation'
   [[ "$(state assistant-lab.service)" == "$before_assistant" ]] || fail 'assistant-lab state changed'
   [[ "$(state assistant-lab-observer.service)" == "$before_observer" ]] || fail 'observer state changed'
   [[ "$(state assistant-lab-control.service)" == "$before_control" ]] || fail 'control state changed'
   [[ "$(state assistant-lab-control-bridge.service)" == "$before_bridge" ]] || fail 'control bridge state changed'
+  CURRENT_STAGE='productionize_dds3_after'
   verify_dds3
+  CURRENT_STAGE='productionize_sidecar_after'
   verify_sidecar
   rm -rf "$work"
   trap - EXIT INT TERM
   echo UNIVERSAL_VIDEO_OCI_ADMIN_PRODUCTIONIZE_PASS
 }
 
+CURRENT_STAGE='argument_validation'
 need_root
 [[ $# -eq 1 ]] || fail 'usage: universal-video-oci-admin audit|productionize'
 case "$1" in
