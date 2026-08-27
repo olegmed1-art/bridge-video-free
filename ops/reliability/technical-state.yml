@@ -157,6 +157,7 @@ audit_snapshots:
       dds3_production_health: 32845019060
       oracle_ben_dds3_health: 32835192297
       oci_finops_backup_observation: 32820354158
+      drive_acl_main: 32415116012
 
 work_queue:
   policy:
