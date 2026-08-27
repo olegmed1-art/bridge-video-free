@@ -43,6 +43,19 @@ Classify outputs as:
 
 Prefer one durable source plus compact reproducible evidence over multiple large duplicate media copies.
 
+## Completed-result cleanup proof
+
+A `COMPLETED` Universal Video result directory is not an ephemeral derivative by default. It may be selected for cleanup only after durable publication proof exists.
+
+Accepted proof forms:
+
+- a completed-job receipt in `spool/done` or an explicitly configured external receipt proof root;
+- a local `DURABLE_PUBLICATION_PROOF.json` sidecar in the result directory.
+
+The local sidecar is valid only when it matches the result manifest `job_id` and `job_hash`, records a non-empty Drive folder id, includes the artifact-set and publication-marker SHA-256 values, and records the remote verification mode `SIZE_MD5_SHA256_PROPERTY_MATCH`.
+
+The publisher writes this sidecar only after the Drive completion marker, full remote inventory verification, and final folder readback have succeeded. Do not modify `manifest.json` after publication merely to record cleanup state, because that would invalidate the published manifest checksum.
+
 ## Cost guardrails
 
 1. Heavy compute cost belongs to the compute provider, not Vercel.
