@@ -1,6 +1,7 @@
 name: DDS3 runtime container
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - 'dds3_runtime/**'
