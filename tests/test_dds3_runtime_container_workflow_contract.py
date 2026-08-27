@@ -1,8 +1,10 @@
 from pathlib import Path
 
+WORKFLOW = Path(".github/workflows/dds3-runtime-container-proof.yml")
+
 
 def test_dds3_runtime_container_workflow_is_triggerable_and_has_job():
-    source = Path(".github/workflows/dds3-runtime-container.yml").read_text(encoding="utf-8")
+    source = WORKFLOW.read_text(encoding="utf-8")
 
     assert "workflow_dispatch: {}" in source
     assert "pull_request:" in source
@@ -14,7 +16,7 @@ def test_dds3_runtime_container_workflow_is_triggerable_and_has_job():
 
 
 def test_dds3_runtime_container_workflow_filters_cover_contract_test():
-    source = Path(".github/workflows/dds3-runtime-container.yml").read_text(encoding="utf-8")
+    source = WORKFLOW.read_text(encoding="utf-8")
 
-    assert ".github/workflows/dds3-runtime-container.yml" in source
+    assert ".github/workflows/dds3-runtime-container-proof.yml" in source
     assert "tests/test_dds3_runtime_container_workflow_contract.py" in source
