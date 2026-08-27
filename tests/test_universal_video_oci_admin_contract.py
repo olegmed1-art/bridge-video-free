@@ -35,10 +35,12 @@ def test_entrypoint_is_fixed_and_no_asr_productionization_only():
 def test_sudoers_surface_is_exact_and_not_broad():
     audit_line = "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-oci-admin audit"
     productionize_line = "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-oci-admin productionize"
+    spool_repair_line = "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-spool-repair"
     assert audit_line in INSTALL
     assert productionize_line in INSTALL
+    assert spool_repair_line in INSTALL
     sudo_lines = [line.strip() for line in INSTALL.splitlines() if line.strip().startswith("ocarun ALL=")]
-    assert sudo_lines == [audit_line, productionize_line]
+    assert sudo_lines == [audit_line, productionize_line, spool_repair_line]
     assert "NOPASSWD:[[:space:]]*ALL" in INSTALL
     assert "visudo -cf" in INSTALL
     assert "install -o root -g root -m 0755" in INSTALL
@@ -67,8 +69,6 @@ def test_cloud_shell_bootstrap_is_single_fixed_host_path():
     assert "ORACLE_BOUNDED_ADMIN_PIN_PASS" in CLOUD
     assert "ORACLE_BOUNDED_OCARUN_ADMIN_BOOTSTRAP_PASS" in CLOUD
     assert "SOURCE_COMMIT='$BOOTSTRAP_COMMIT'" in CLOUD
-    # Positional parameters are used only inside the private fetch_installer helper
-    # and awk. The Cloud Shell user-facing contract itself takes no arguments.
     assert 'case "$1"' not in CLOUD
     assert '[[ $#' not in CLOUD
     assert "eval " not in CLOUD
