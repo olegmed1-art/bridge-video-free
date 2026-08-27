@@ -126,7 +126,13 @@ jobs:
           chmod 600 "$HOME/.oci/config"
           oci iam region list --output json >/dev/null
           state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
-          [[ "$state" == RUNNING ]]
+          case "$state" in
+            RUNNING) ;;
+            STOPPED)
+              oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null
+              ;;
+            *) echo "Oracle instance is not runnable: $state" >&2; exit 1 ;;
+          esac
           echo ORACLE_UNIVERSAL_VIDEO_JOB_OCI_PASS
 
       - name: Submit and monitor generic resident job
