@@ -276,5 +276,5 @@ jobs:
             echo "- idle_state: ${IDLE_STATE:-not_applicable}"
             echo "- idle_reason: ${IDLE_REASON:-not_applicable}"
             echo "- target: exact Frankfurt VM only"
-            echo "- automatic idle shutdown: disabled"
+            echo "- automatic controller: enabled (Neon active-work snapshot + fail-closed host idle proof)"
           } >> "$GITHUB_STEP_SUMMARY"
