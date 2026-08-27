@@ -141,16 +141,26 @@ jobs:
           fi
 
           classifier_text="$(cat ops/oracle_idle_state.sh)"
-          script_text="$(printf 'if ! sudo -n true 2>/dev/null; then echo OCARUN_SUDO_NOT_CONFIGURED; exit 77; fi\nexec sudo -n bash -c %q\n' "$classifier_text")"
+          classifier_payload="$(printf '%s' "$classifier_text" | gzip -9 -c | base64 -w0)"
+          script_text="$(printf "if ! sudo -n true 2>/dev/null; then echo OCARUN_SUDO_NOT_CONFIGURED; exit 77; fi\nprintf '%%s' '%s' | base64 --decode | gzip --decompress | sudo -n bash\n" "$classifier_payload")"
+          if (( ${#script_text} > 4096 )); then
+            echo "idle_state=UNKNOWN" >> "$GITHUB_OUTPUT"
+            echo "idle_reason=classifier_payload_too_large" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           content_json="$(SCRIPT_TEXT="$script_text" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":os.environ["SCRIPT_TEXT"]},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
           target_json="$(python -c 'import json,os; print(json.dumps({"instanceId":os.environ["OCI_INSTANCE_OCID"]},separators=(",",":")))')"
-          command_id="$(oci instance-agent command create \
+          if ! command_id="$(oci instance-agent command create \
             --compartment-id "$COMPARTMENT_ID" \
             --content "$content_json" \
             --target "$target_json" \
             --timeout-in-seconds 120 \
             --display-name "bridge-school-oracle-idle-proof-${GITHUB_RUN_ID}" \
-            --query data.id --raw-output)"
+            --query data.id --raw-output 2>/dev/null)"; then
+            echo "idle_state=UNKNOWN" >> "$GITHUB_OUTPUT"
+            echo "idle_reason=instance_agent_command_create_failed" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           test -n "$command_id"
 
           execution_json=""
