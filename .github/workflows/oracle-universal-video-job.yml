@@ -151,7 +151,12 @@ jobs:
             for _ in $(seq 1 90); do
               execution="$(oci instance-agent command-execution get --command-id "$cid" --instance-id "$INSTANCE_ID" --output json 2>/dev/null || true)"
               [[ -n "$execution" ]] || { sleep 2; continue; }
-              lifecycle="$(printf '%s' "$execution" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state",""))')"
+              # OCI can expose an empty or incomplete execution document while
+              # propagating a new command.  Treat it as pending and retry.
+              if ! lifecycle="$(printf '%s' "$execution" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state",""))' 2>/dev/null)"; then
+                sleep 2
+                continue
+              fi
               case "$lifecycle" in SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break;; esac
               sleep 2
             done
