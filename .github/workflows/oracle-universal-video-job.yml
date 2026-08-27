@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 0
       - name: Validate generic explicit Drive request
         id: request
         if: ${{ github.event_name != 'pull_request' }}
@@ -46,8 +46,10 @@ jobs:
             mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
               | grep -E '^ops/oracle-universal-video-job-requests/[^/]+\.json$' | sort -u)
           else
-            mapfile -t files < <(find ops/oracle-universal-video-job-requests -maxdepth 1 -type f -name '*.json' -printf '%T@ %p\n' \
-              | sort -nr | head -n1 | cut -d' ' -f2-)
+            mapfile -t files < <(for f in ops/oracle-universal-video-job-requests/*.json; do
+              [[ -f "$f" ]] || continue
+              printf '%s %s\n' "$(git log -1 --format=%ct -- "$f")" "$f"
+            done | sort -nr | head -n1 | cut -d' ' -f2-)
           fi
           [[ ${#files[@]} -eq 1 ]] || { echo "expected exactly one job request" >&2; exit 1; }
           REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
@@ -96,7 +98,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 0
       - name: Configure OCI CLI
         shell: bash
         run: |
