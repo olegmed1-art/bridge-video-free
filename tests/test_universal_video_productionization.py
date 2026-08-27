@@ -144,7 +144,7 @@ def test_retention_apply_removes_only_planned_managed_paths(tmp_path: Path):
     for name in ("inbox", "running", "done", "failed", "results"):
         (base / "spool" / name).mkdir(parents=True, exist_ok=True)
     (base / "media").mkdir(parents=True)
-    receipt = base / "spool" / "done" / "old.json"
+    receipt = base / "spool" / "failed" / "old.json"
     receipt.write_text("{}", encoding="utf-8")
     old = now - 40 * DAY
     os.utime(receipt, (old, old))
