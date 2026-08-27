@@ -54,8 +54,10 @@ def test_downstream_power_boundary_remains_exact_and_idle_gated():
 def test_video_and_power_mutations_share_a_non_cancelling_lock():
     video = VIDEO.read_text(encoding="utf-8")
     power = POWER.read_text(encoding="utf-8")
+    assert "'oracle-instance-workload-mutation'" in video
+    assert "oracle-universal-video-pr-{0}" in video
+    assert "group: oracle-instance-workload-mutation" in power
     for text in (video, power):
-        assert "group: oracle-instance-workload-mutation" in text
         assert "cancel-in-progress: false" in text
 
 
