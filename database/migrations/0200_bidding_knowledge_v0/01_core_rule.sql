@@ -1,0 +1,189 @@
+-- 0200_bidding_knowledge_v0 / part 01
+-- Included transactionally by ../0200_bidding_knowledge_v0.sql.
+
+CREATE SCHEMA IF NOT EXISTS bidding;
+
+COMMENT ON SCHEMA bidding IS
+  'Executable bidding knowledge, test evidence, activation, ingestion audit and decision traces. SCHOOL CANON and WORLD remain authority-separated.';
+
+REVOKE ALL ON SCHEMA bidding FROM PUBLIC;
+
+GRANT USAGE ON SCHEMA bidding TO bridge_school_reader, bridge_school_app, bridge_school_worker;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA bidding REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+
+CREATE OR REPLACE FUNCTION bidding.contains_forbidden_hidden_key(payload jsonb)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+WITH RECURSIVE walk(value) AS (
+    SELECT COALESCE(payload, 'null'::jsonb)
+    UNION ALL
+    SELECT child.value
+      FROM walk AS w
+      CROSS JOIN LATERAL (
+          SELECT e.value
+            FROM jsonb_each(
+                CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END
+            ) AS e
+          UNION ALL
+          SELECT a.value
+            FROM jsonb_array_elements(
+                CASE WHEN jsonb_typeof(w.value)='array' THEN w.value ELSE '[]'::jsonb END
+            ) AS a
+      ) AS child
+), forbidden AS (
+    SELECT 1
+      FROM walk AS w
+      CROSS JOIN LATERAL jsonb_object_keys(
+          CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END
+      ) AS k(key)
+     WHERE lower(k.key) = ANY (ARRAY[
+        'partner_hand','opponent_hand','opponent_hands',
+        'north_hand','east_hand','south_hand','west_hand',
+        'full_deal','hidden_cards','actual_partner_hand',
+        'actual_opponent_hand','actual_opponent_hands',
+        'partner_cards','opponent_cards','all_hands'
+     ])
+     LIMIT 1
+)
+SELECT EXISTS (SELECT 1 FROM forbidden);
+$$;
+
+CREATE TABLE bidding.rule (
+    rule_id uuid PRIMARY KEY DEFAULT uuidv7(),
+    school_id uuid NOT NULL REFERENCES public.school(school_id) ON DELETE RESTRICT,
+    knowledge_version_id uuid NOT NULL UNIQUE
+        REFERENCES public.knowledge_version(knowledge_version_id) ON DELETE RESTRICT,
+    rule_key text NOT NULL CHECK (btrim(rule_key) <> ''),
+    rule_kind text NOT NULL
+        CHECK (rule_kind IN ('bid','inference','priority','exception','fallback')),
+    auction_pattern jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(auction_pattern)='object'),
+    hand_constraints jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(hand_constraints)='object'),
+    public_context_constraints jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(public_context_constraints)='object'),
+    action jsonb NOT NULL CHECK (jsonb_typeof(action)='object'),
+    meaning jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(meaning)='object'),
+    public_inference jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(public_inference)='object'),
+    alert_semantics jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(alert_semantics)='object'),
+    forcing_semantics jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(forcing_semantics)='object'),
+    priority integer NOT NULL DEFAULT 0,
+    specificity integer NOT NULL DEFAULT 0 CHECK (specificity >= 0),
+    explanation jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(explanation)='object'),
+    condition_schema_version text NOT NULL DEFAULT 'bidding-condition-v0',
+    compiled_payload jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(compiled_payload)='object'),
+    lifecycle_status text NOT NULL DEFAULT 'candidate'
+        CHECK (lifecycle_status IN ('candidate','validated','retired')),
+    method_version text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (updated_at >= created_at),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(auction_pattern)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(hand_constraints)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(public_context_constraints)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(action)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(meaning)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(public_inference)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(alert_semantics)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(forcing_semantics)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(explanation)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(compiled_payload)),
+    UNIQUE (school_id, rule_key)
+);
+
+CREATE INDEX bidding_rule_runtime_lookup_idx
+    ON bidding.rule (school_id, lifecycle_status, priority DESC, specificity DESC, rule_key);
+
+CREATE OR REPLACE FUNCTION bidding.validate_rule_school_scope()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_school_id uuid;
+BEGIN
+    SELECT ki.school_id
+      INTO v_school_id
+      FROM public.knowledge_version AS kv
+      JOIN public.knowledge_item AS ki
+        ON ki.knowledge_item_id=kv.knowledge_item_id
+     WHERE kv.knowledge_version_id=NEW.knowledge_version_id;
+    IF v_school_id IS NULL OR v_school_id <> NEW.school_id THEN
+        RAISE EXCEPTION 'BID_RULE_KNOWLEDGE_SCHOOL_MISMATCH' USING ERRCODE='23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER rule_school_scope_guard
+BEFORE INSERT OR UPDATE OF school_id, knowledge_version_id ON bidding.rule
+FOR EACH ROW EXECUTE FUNCTION bidding.validate_rule_school_scope();
+
+CREATE TABLE bidding.rule_relation (
+    rule_relation_id uuid PRIMARY KEY DEFAULT uuidv7(),
+    school_id uuid NOT NULL REFERENCES public.school(school_id) ON DELETE RESTRICT,
+    from_rule_id uuid NOT NULL REFERENCES bidding.rule(rule_id) ON DELETE RESTRICT,
+    to_rule_id uuid NOT NULL REFERENCES bidding.rule(rule_id) ON DELETE RESTRICT,
+    relation_type text NOT NULL
+        CHECK (relation_type IN ('depends_on','overrides','excludes','continues_to','implies')),
+    conditions jsonb NOT NULL DEFAULT '{}'::jsonb
+        CHECK (jsonb_typeof(conditions)='object'),
+    method_version text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (from_rule_id <> to_rule_id),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(conditions)),
+    UNIQUE (from_rule_id, to_rule_id, relation_type)
+);
+
+CREATE INDEX bidding_rule_relation_to_idx
+    ON bidding.rule_relation (school_id, to_rule_id, relation_type);
+
+CREATE OR REPLACE FUNCTION bidding.validate_rule_relation_school_scope()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_from_school uuid;
+    v_to_school uuid;
+BEGIN
+    SELECT school_id INTO v_from_school FROM bidding.rule WHERE rule_id=NEW.from_rule_id;
+    SELECT school_id INTO v_to_school FROM bidding.rule WHERE rule_id=NEW.to_rule_id;
+    IF v_from_school IS NULL OR v_to_school IS NULL
+       OR v_from_school <> NEW.school_id OR v_to_school <> NEW.school_id THEN
+        RAISE EXCEPTION 'BID_RULE_RELATION_SCHOOL_MISMATCH' USING ERRCODE='23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER rule_relation_school_scope_guard
+BEFORE INSERT OR UPDATE OF school_id, from_rule_id, to_rule_id ON bidding.rule_relation
+FOR EACH ROW EXECUTE FUNCTION bidding.validate_rule_relation_school_scope();
+
+CREATE TABLE bidding.rule_test (
+    rule_test_id uuid PRIMARY KEY DEFAULT uuidv7(),
+    school_id uuid NOT NULL REFERENCES public.school(school_id) ON DELETE RESTRICT,
+    rule_id uuid NOT NULL REFERENCES bidding.rule(rule_id) ON DELETE RESTRICT,
+    test_key text NOT NULL CHECK (btrim(test_key) <> ''),
+    test_type text NOT NULL CHECK (test_type IN (
+        'positive','negative','boundary','interference',
+        'hidden_information','conflict','regression'
+    )),
+    fixture jsonb NOT NULL CHECK (jsonb_typeof(fixture)='object'),
+    expected jsonb NOT NULL CHECK (jsonb_typeof(expected)='object'),
+    enabled boolean NOT NULL DEFAULT true,
+    method_version text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CHECK (test_type='hidden_information' OR NOT bidding.contains_forbidden_hidden_key(fixture)),
+    CHECK (NOT bidding.contains_forbidden_hidden_key(expected)),
+    UNIQUE (rule_id, test_key)
+);
