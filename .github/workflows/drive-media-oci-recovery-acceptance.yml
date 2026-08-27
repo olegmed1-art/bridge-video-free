@@ -36,6 +36,8 @@ jobs:
           grep -Fq "github.event.issue.number == 580" "$f"
           grep -Fq "github.event.comment.body == '/drive-recovery copy-acceptance-253'" "$f"
           ! grep -nE 'oci os (bucket|object) (delete|bulk-delete|rename|restore)' "$f"
+          grep -Fq 'oci os object head' "$f"
+          grep -Fq 'object_preexisting=false' "$f"
           grep -Fq 'oci os object put' "$f"
           grep -Fq 'oci os object get' "$f"
 
@@ -168,6 +170,11 @@ jobs:
           }, separators=(',', ':')))
           PY
           )"
+          if oci os object head --bucket-name "$BUCKET" --name "$object" >/dev/null 2>&1; then
+            echo "Recovery object already exists; refusing to overwrite retained evidence" >&2
+            exit 31
+          fi
+          echo 'object_preexisting=false' >> "$GITHUB_OUTPUT"
           oci os object put \
             --bucket-name "$BUCKET" \
             --name "$object" \
@@ -202,6 +209,7 @@ jobs:
         env:
           SOURCE_BYTES_OUT: ${{ steps.source.outputs.source_bytes }}
           SOURCE_SHA_OUT: ${{ steps.source.outputs.source_sha256 }}
+          OBJECT_PREEXISTING: ${{ steps.put.outputs.object_preexisting }}
           PUT_DONE: ${{ steps.put.outputs.put_completed }}
           RESTORED_BYTES: ${{ steps.restore.outputs.restored_bytes }}
           RESTORED_SHA: ${{ steps.restore.outputs.restored_sha256 }}
@@ -218,6 +226,7 @@ jobs:
             echo "- source_bytes: \`${SOURCE_BYTES_OUT:-unverified}\`"
             echo "- source_sha256: \`${SOURCE_SHA_OUT:-unverified}\`"
             echo "- target: existing private OCI Object Storage / AES-256 server-side encryption"
+            echo "- object_preexisting: \`${OBJECT_PREEXISTING:-unverified}\`"
             echo "- durable_object_put: \`${PUT_DONE:-false}\`"
             echo "- restored_bytes: \`${RESTORED_BYTES:-unverified}\`"
             echo "- restored_sha256: \`${RESTORED_SHA:-unverified}\`"
