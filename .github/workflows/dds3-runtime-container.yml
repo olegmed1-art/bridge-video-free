@@ -2,12 +2,18 @@ name: DDS3 runtime container
 
 on:
   pull_request:
+    paths:
+      - 'dds3_runtime/**'
+      - 'bridge_school_api/dds3/**'
+      - 'dds3_cli/**'
+      - '.github/workflows/dds3-runtime-container.yml'
   push:
     branches: [main]
     paths:
       - 'dds3_runtime/**'
       - 'bridge_school_api/dds3/**'
       - 'dds3_cli/**'
+      - '.github/workflows/dds3-runtime-container.yml'
 
 permissions:
   contents: read
