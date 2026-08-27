@@ -161,8 +161,10 @@ jobs:
               sleep 2
             done
             if [[ "$lifecycle" != SUCCEEDED ]]; then
-              echo "instance-agent command failed: $lifecycle" >&2
-              printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print(((d.get("content") or {}).get("text","") or "")[:2000])' >&2
+              echo "instance-agent command did not reach SUCCEEDED: ${lifecycle:-NO_TERMINAL_RESPONSE}" >&2
+              if [[ -n "$execution" ]] && printf '%s' "$execution" | python -c 'import json,sys; json.load(sys.stdin)' >/dev/null 2>&1; then
+                printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print(((d.get("content") or {}).get("text","") or "")[:2000])' >&2
+              fi
               return 1
             fi
             printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("text","") or "")'
