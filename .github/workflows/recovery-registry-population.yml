@@ -1,0 +1,66 @@
+name: Recovery registry population
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type RECORD to write checked-in recovery evidence metadata'
+        required: true
+        type: string
+      record_path:
+        description: 'Checked-in JSON recovery record path'
+        required: true
+        default: ops/reliability/recovery-registry-records/neon-independent-backup-restore-20260826.json
+        type: string
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/recovery-registry-population.yml'
+      - 'database/record_recovery_evidence.py'
+      - 'ops/reliability/recovery-registry-records/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: recovery-registry-population
+  cancel-in-progress: false
+
+jobs:
+  record:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: database-production
+    env:
+      NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      RECOVERY_RECORD_PATH: ${{ github.event_name == 'workflow_dispatch' && inputs.record_path || 'ops/reliability/recovery-registry-records/neon-independent-backup-restore-20260826.json' }}
+      CONFIRMATION: ${{ github.event_name == 'workflow_dispatch' && inputs.confirmation || 'RECORD' }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+
+      - name: Validate confirmation and record path
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$CONFIRMATION" = "RECORD"
+          case "$RECOVERY_RECORD_PATH" in
+            ops/reliability/recovery-registry-records/*.json) ;;
+            *) echo "record_path must be under ops/reliability/recovery-registry-records"; exit 1 ;;
+          esac
+          test -f "$RECOVERY_RECORD_PATH"
+          test -n "${NEON_DATABASE_URL:-}" || { echo 'NEON_DATABASE_URL is not configured'; exit 1; }
+
+      - name: Install database client dependency
+        shell: bash
+        run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+
+      - name: Record recovery evidence metadata
+        shell: bash
+        run: python database/record_recovery_evidence.py
