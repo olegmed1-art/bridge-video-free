@@ -1,5 +1,5 @@
 schema_version: 1
-updated_at_utc: "2026-08-26T05:10:00Z"
+updated_at_utc: "2026-08-27T16:05:00Z"
 policy: docs/TECHNICAL_GOVERNANCE.md
 whole_school_recovery:
   target_status: RECOVERY_PROVEN_V1
@@ -11,7 +11,6 @@ whole_school_recovery:
     - full_end_to_end_restore_drill_not_proven
     - recovery_registry_evidence_not_populated
     - explicit_rpo_rto_not_fully_verified
-    - video_result_deletion_durable_copy_gate_not_proven
     - dds3_runtime_container_ci_not_executing_jobs
 
 components:
@@ -106,9 +105,21 @@ components:
   video_worker:
     role: media_preprocessing
     criticality: medium
-    health: expansion_gate
+    health: cleanup_gate_proven_expansion_gate
     backup_required: false
     unique_durable_data_allowed: false
+    cleanup_gate_evidence:
+      pr: 696
+      merge_commit: e5f650baa085338acf5f57905444a0efc6d6bb56
+      policy_commit: e6c02b524ab74bfbc222269109a97af5b159f303
+      ci:
+        universal_video_analyzer_ci: success
+        universal_video_engine_smoke: success
+        secret_gate: success
+      proof_forms:
+        - done_receipt
+        - external_receipt_proof_root
+        - local_durable_publication_proof_sidecar
 
 audit_snapshots:
   factual_resilience_2026_08_25:
@@ -146,7 +157,6 @@ audit_snapshots:
       dds3_production_health: 32845019060
       oracle_ben_dds3_health: 32835192297
       oci_finops_backup_observation: 32820354158
-      drive_acl_main: 32415116012
 
 work_queue:
   policy:
@@ -165,9 +175,10 @@ work_queue:
       tracking_issue: 523
     - id: video_result_durable_copy_before_cleanup
       priority: P0
-      status: active_experiment
+      status: proven_by_code_contract
       tracking_issue: 547
       related_issue: 371
+      resolved_by_pr: 696
     - id: dds3_runtime_container_ci_execution
       priority: P0
       status: queued
