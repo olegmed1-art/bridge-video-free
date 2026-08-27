@@ -5,6 +5,8 @@ on:
     paths:
       - '.github/workflows/oracle-universal-video-activation.yml'
       - 'ops/oracle_universal_video_*.sh'
+      - 'ops/universal_video_operator.sh'
+      - 'ops/install_universal_video_operator.sh'
       - 'ops/universal_video_receipt_reader.py'
       - 'ops/oracle-universal-video-request.schema.json'
       - 'tests/test_oracle_universal_video_activation_contract.py'

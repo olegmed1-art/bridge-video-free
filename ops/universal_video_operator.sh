@@ -9,13 +9,14 @@ umask 077
 readonly BASE_DIR='/opt/bridge-school/universal-video'
 readonly SOURCE_DIR='/opt/bridge-school/universal-video-src'
 readonly PYTHON="$BASE_DIR/.venv/bin/python"
+readonly RECEIPT_READER="$SOURCE_DIR/ops/universal_video_receipt_reader.py"
 readonly SPOOL="$BASE_DIR/spool"
 readonly STAGING='/opt/bridge-school/.universal-video-staging'
 
 fail(){ echo "UV_STATE=REJECTED"; echo "UV_ERROR=$1"; exit 1; }
 safe_id(){ [[ "$1" =~ ^[A-Za-z0-9._:-]{1,160}$ && "$1" != . && "$1" != .. ]]; }
 verify(){
-  [[ -x "$PYTHON" && -d "$SOURCE_DIR/.git" ]] || fail 'universal video runtime missing'
+  [[ -x "$PYTHON" && -d "$SOURCE_DIR/.git" && -f "$RECEIPT_READER" && ! -L "$RECEIPT_READER" ]] || fail 'universal video runtime missing'
   [[ -d "$SPOOL/inbox" && -d "$SPOOL/running" && -d "$SPOOL/done" && -d "$SPOOL/failed" ]] || fail 'universal video spool missing'
   [[ -d "$STAGING" && ! -L "$STAGING" && "$(stat -c '%U:%G:%a' "$STAGING")" == root:root:700 ]] || fail 'unsafe staging directory'
   systemctl is-active --quiet universal-video.service || fail 'universal-video.service inactive'
@@ -35,7 +36,7 @@ submit(){
 status(){
   [[ $# -eq 1 ]] && safe_id "$1" || fail 'invalid job id'
   verify
-  local id="$1" name="$1.json" found=() state receipt
+  local id="$1" name="$1.json" found=() state receipt summary
   for state in inbox running done failed; do [[ -f "$SPOOL/$state/$name" && ! -L "$SPOOL/$state/$name" ]] && found+=("$state"); done
   [[ ${#found[@]} -le 1 ]] || { echo 'UV_STATE=CONFLICT'; exit 1; }
   [[ ${#found[@]} -eq 1 ]] || { echo 'UV_STATE=MISSING'; exit 0; }
@@ -43,7 +44,15 @@ status(){
   case "$state" in
     inbox) echo 'UV_STATE=QUEUED' ;;
     running) echo 'UV_STATE=RUNNING' ;;
-    failed) echo 'UV_STATE=FAILED' ;;
+    failed)
+      if ! summary="$(/usr/bin/python3 "$RECEIPT_READER" inspect-failed "$receipt" "$name" 2>/dev/null)"; then
+        echo 'UV_STATE=NONCONFORMANT'
+        echo 'UV_ERROR_TYPE=UNSAFE_FAILED_RECEIPT'
+        exit 1
+      fi
+      echo 'UV_STATE=FAILED'
+      printf '%s\n' "$summary"
+      ;;
     done)
       receipt="$SPOOL/done/$name"
       STATUS="$(JOB="$receipt" python3 - <<'PY'
