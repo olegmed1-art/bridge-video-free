@@ -1,13 +1,14 @@
 name: DDS3 runtime container
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
   pull_request:
     paths:
       - 'dds3_runtime/**'
       - 'bridge_school_api/dds3/**'
       - 'dds3_cli/**'
       - '.github/workflows/dds3-runtime-container.yml'
+      - 'tests/test_dds3_runtime_container_workflow_contract.py'
   push:
     branches: [main]
     paths:
@@ -15,6 +16,7 @@ on:
       - 'bridge_school_api/dds3/**'
       - 'dds3_cli/**'
       - '.github/workflows/dds3-runtime-container.yml'
+      - 'tests/test_dds3_runtime_container_workflow_contract.py'
 
 permissions:
   contents: read
@@ -24,7 +26,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - name: Build pinned DDS3 runtime image
