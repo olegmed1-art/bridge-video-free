@@ -52,7 +52,7 @@ def test_cloud_shell_bootstrap_is_single_fixed_host_path():
     assert "readonly ORACLE_HOST='158.180.47.161'" in CLOUD
     assert "readonly ORACLE_USER='ubuntu'" in CLOUD
     assert 'readonly SSH_KEY_PATH="$HOME/.ssh/bridge_school_dds3_oracle"' in CLOUD
-    assert "readonly BOOTSTRAP_COMMIT='deb9746f0c4088ee27fd03bff9b698524448074a'" in CLOUD
+    assert "readonly BOOTSTRAP_COMMIT='dffccf87d69f72cd401559018aea512f5de36b64'" in CLOUD
     assert "SOURCE_COMMIT is not current main" not in CLOUD
     assert "git ls-remote" not in CLOUD
     for fingerprint in (
