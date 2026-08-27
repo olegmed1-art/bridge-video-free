@@ -107,7 +107,11 @@ jobs:
           set -euo pipefail
           compartment="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."compartment-id"' --raw-output)"
           state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
-          [[ "$state" == RUNNING ]]
+          case "$state" in
+            RUNNING) ;;
+            STOPPED) oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+            *) echo "Oracle instance is not runnable: $state" >&2; exit 1 ;;
+          esac
           case "$OPERATION" in
             audit) remote='sudo -n /usr/local/sbin/universal-video-oci-admin audit' ;;
             productionize) remote='sudo -n /usr/local/sbin/universal-video-oci-admin productionize' ;;
