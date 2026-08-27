@@ -1,0 +1,90 @@
+name: Oracle external idle candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Terminal workload workflow run
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: oracle-instance-idle-candidate
+  cancel-in-progress: true
+
+jobs:
+  verify-after-grace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      GH_TOKEN: ${{ github.token }}
+      SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+    steps:
+      - name: Wait for grace period
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]]
+          sleep 600
+
+      - name: Prove no external work remains
+        id: idle
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${DATABASE_URL:-}"
+          python -m pip install --disable-pip-version-check --quiet 'psycopg[binary]==3.2.10'
+          snapshot="$(python - <<'PY'
+          import os
+          import psycopg
+
+          with psycopg.connect(
+              os.environ['DATABASE_URL'],
+              connect_timeout=8,
+              application_name='oracle-external-idle-candidate',
+          ) as conn, conn.cursor() as cur:
+              cur.execute(
+                  'SELECT active_jobs, active_research_jobs, active_control_commands '
+                  'FROM assistant_lab.oracle_idle_snapshot()'
+              )
+              row = cur.fetchone()
+              if row is None or len(row) != 3:
+                  raise RuntimeError('idle snapshot unavailable')
+              values = tuple(map(int, row))
+              if min(values) < 0:
+                  raise RuntimeError('invalid idle snapshot')
+              print(','.join(map(str, values)))
+          PY
+          )"
+          IFS=, read -r jobs research control <<< "$snapshot"
+          active=$((jobs + research + control))
+
+          uv_active="$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            "/repos/$GITHUB_REPOSITORY/actions/workflows/oracle-universal-video-job.yml/runs?per_page=100" \
+            | SOURCE_RUN_ID="$SOURCE_RUN_ID" python -c 'import json,os,sys; source=int(os.environ["SOURCE_RUN_ID"]); active={"queued","in_progress","waiting","requested","pending"}; print(sum(1 for run in json.load(sys.stdin).get("workflow_runs",[]) if int(run.get("id",0)) != source and run.get("status") in active))')"
+          [[ "$uv_active" =~ ^[0-9]+$ ]]
+          printf 'idle candidate: jobs=%s research=%s control=%s uv_active=%s\n' "$jobs" "$research" "$control" "$uv_active"
+
+          if (( active == 0 && uv_active == 0 )); then
+            echo 'stop_allowed=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'stop_allowed=false' >> "$GITHUB_OUTPUT"
+            echo 'idle candidate cancelled because work is active or queued'
+          fi
+
+      - name: Dispatch bounded stop
+        if: ${{ steps.idle.outputs.stop_allowed == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run oracle-instance-power.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f action=stop
+          echo 'bounded stop dispatched; downstream workflow must independently prove host IDLE'

@@ -15,6 +15,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: write
   contents: read
   issues: write
 
@@ -203,3 +204,13 @@ jobs:
         shell: bash
         run: |
           gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Оператор **Universal Video / $PROFILE / $JOB_ID** завершился fail-closed до подтверждённого COMPLETED. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+      - name: Signal external idle candidate
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run oracle-instance-idle-candidate.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f source_run_id="$GITHUB_RUN_ID"
+          echo "external idle candidate dispatched; OCI privilege remains in the bounded power workflow"
