@@ -159,6 +159,22 @@ jobs:
             printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("text","") or "")'
           }
 
+          # OCI agent executes this fixed repair only; it restores service-owned
+          # spool leaves and proves that the service identity can write there.
+          repair_cmd='for d in inbox running done failed results; do /usr/bin/install -d -o universal-video -g universal-video -m 0750 /opt/bridge-school/universal-video/spool/$d; /usr/bin/chown universal-video:universal-video /opt/bridge-school/universal-video/spool/$d; /usr/bin/chmod 0750 /opt/bridge-school/universal-video/spool/$d; done; /usr/sbin/runuser -u universal-video -- /usr/bin/python3 - /opt/bridge-school/universal-video/spool <<"PY"
+import os, sys
+from pathlib import Path
+root=Path(sys.argv[1])
+for leaf in ("inbox","running","done","failed","results"):
+    p=root / leaf / f".operator-write-check-{os.getpid()}"
+    fd=os.open(p, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(fd)
+    p.unlink()
+print("UNIVERSAL_VIDEO_SPOOL_RUNTIME_REPAIR_PASS")
+PY'
+          repair_out="$(run_remote "universal-video-spool-repair-${GITHUB_RUN_ID}" "$repair_cmd")"
+          grep -qx 'UNIVERSAL_VIDEO_SPOOL_RUNTIME_REPAIR_PASS' <<<"$repair_out"
+
           if [[ "$GITHUB_EVENT_NAME" == 'push' ]]; then
             request_file="$(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^ops/oracle-universal-video-job-requests/[^/]+\.json$' | head -n1)"
           else
