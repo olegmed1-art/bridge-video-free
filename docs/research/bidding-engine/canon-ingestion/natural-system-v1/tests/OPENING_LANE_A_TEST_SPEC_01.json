@@ -1,0 +1,70 @@
+{
+  "spec_version": "0.1",
+  "source_key": "school-canon-bidding-natural-system-v1",
+  "status": "abstract_tests_not_card_level",
+  "point_method_status": "UNRESOLVED_SCHOOL_POINT_METHOD",
+  "rules": [
+    {
+      "candidate_id": "NSV1-OPEN-1H",
+      "call": "1H",
+      "source_constraints": {"points":{"min":12,"max":22,"method":"UNRESOLVED_SCHOOL_POINT_METHOD"},"hearts":{"min":5},"spades":{"max":4}},
+      "tests": [
+        {"id":"1H-POS-BOUNDARY","type":"positive_boundary","symbolic_hand":{"points":12,"hearts":5,"spades":4},"expected":"applicable_if_no_higher_priority_opening"},
+        {"id":"1H-NEG-HEARTS","type":"negative","symbolic_hand":{"points":12,"hearts":4,"spades":4},"expected":"not_applicable"},
+        {"id":"1H-NEG-SPADES","type":"negative","symbolic_hand":{"points":12,"hearts":5,"spades":5},"expected":"not_applicable"},
+        {"id":"1H-UPPER-BOUNDARY","type":"boundary","symbolic_hand":{"points":22,"hearts":5,"spades":4},"expected":"applicable_if_no_higher_priority_opening"},
+        {"id":"1H-OVER-POINTS","type":"boundary","symbolic_hand":{"points":23,"hearts":5,"spades":4},"expected":"not_applicable_to_this_rule"},
+        {"id":"1H-HIDDEN-INFO","type":"hidden_information","assertion":"evaluation uses opener hand and public auction only","expected":"pass"}
+      ],
+      "blocked_by": ["OP-007 point-count method", "OP-033 opening precedence for overlapping 1NT case"]
+    },
+    {
+      "candidate_id": "NSV1-OPEN-1S",
+      "call": "1S",
+      "source_constraints": {"points":{"min":12,"max":22,"method":"UNRESOLVED_SCHOOL_POINT_METHOD"},"spades":{"min":5}},
+      "tests": [
+        {"id":"1S-POS-BOUNDARY","type":"positive_boundary","symbolic_hand":{"points":12,"spades":5},"expected":"applicable_if_no_higher_priority_opening"},
+        {"id":"1S-NEG-LENGTH","type":"negative","symbolic_hand":{"points":12,"spades":4},"expected":"not_applicable"},
+        {"id":"1S-UPPER-BOUNDARY","type":"boundary","symbolic_hand":{"points":22,"spades":5},"expected":"applicable_if_no_higher_priority_opening"},
+        {"id":"1S-OVER-POINTS","type":"boundary","symbolic_hand":{"points":23,"spades":5},"expected":"not_applicable_to_this_rule"},
+        {"id":"1S-HIDDEN-INFO","type":"hidden_information","assertion":"evaluation uses opener hand and public auction only","expected":"pass"}
+      ],
+      "blocked_by": ["OP-007 point-count method", "OP-033 opening precedence for overlapping 1NT/equal-major cases"]
+    },
+    {
+      "candidate_id": "NSV1-OPEN-1NT",
+      "call": "1NT",
+      "source_constraints": {"points":{"min":15,"max":17,"method":"UNRESOLVED_SCHOOL_POINT_METHOD"},"shape_tokens":["5332","5m422","6m322"]},
+      "tests": [
+        {"id":"1NT-POS-5332","type":"positive_shape","symbolic_hand":{"points":15,"shape_token":"5332"},"expected":"applicable_if_no_priority_conflict"},
+        {"id":"1NT-POS-5m422","type":"positive_shape","symbolic_hand":{"points":16,"shape_token":"5m422"},"expected":"applicable"},
+        {"id":"1NT-POS-6m322","type":"positive_shape","symbolic_hand":{"points":17,"shape_token":"6m322"},"expected":"applicable"},
+        {"id":"1NT-LOW","type":"boundary","symbolic_hand":{"points":14,"shape_token":"5332"},"expected":"not_applicable"},
+        {"id":"1NT-HIGH","type":"boundary","symbolic_hand":{"points":18,"shape_token":"5332"},"expected":"not_applicable"},
+        {"id":"1NT-SHAPE-NEG","type":"negative_shape","symbolic_hand":{"points":16,"shape_token":"5422_nonminor5"},"expected":"not_proven_applicable_by_source"},
+        {"id":"1NT-CONFLICT-5M","type":"conflict","symbolic_hand":{"points":16,"shape_token":"5332","five_card_major":true},"expected":"canonical_conflict_until_OP_033"},
+        {"id":"1NT-HIDDEN-INFO","type":"hidden_information","assertion":"evaluation uses opener hand and public auction only","expected":"pass"}
+      ],
+      "blocked_by": ["OP-007 point-count method", "OP-033 priority on 5332 with five-card major"]
+    },
+    {
+      "candidate_id": "NSV1-OPEN-2NT",
+      "call": "2NT",
+      "source_constraints": {"points":{"min":20,"max":22,"method":"UNRESOLVED_SCHOOL_POINT_METHOD"},"shape_tokens":["5332","5m422","6m322"]},
+      "tests": [
+        {"id":"2NT-POS-5332","type":"positive_shape","symbolic_hand":{"points":20,"shape_token":"5332"},"expected":"applicable"},
+        {"id":"2NT-POS-5m422","type":"positive_shape","symbolic_hand":{"points":21,"shape_token":"5m422"},"expected":"applicable"},
+        {"id":"2NT-POS-6m322","type":"positive_shape","symbolic_hand":{"points":22,"shape_token":"6m322"},"expected":"applicable"},
+        {"id":"2NT-LOW","type":"boundary","symbolic_hand":{"points":19,"shape_token":"5332"},"expected":"not_applicable"},
+        {"id":"2NT-HIGH","type":"boundary","symbolic_hand":{"points":23,"shape_token":"5332"},"expected":"not_applicable_to_this_rule"},
+        {"id":"2NT-HIDDEN-INFO","type":"hidden_information","assertion":"evaluation uses opener hand and public auction only","expected":"pass"}
+      ],
+      "blocked_by": ["OP-007 point-count method"]
+    }
+  ],
+  "safety": {
+    "card_level_pass_for_strength_forbidden": true,
+    "activation_allowed": false,
+    "external_knowledge_used": false
+  }
+}
