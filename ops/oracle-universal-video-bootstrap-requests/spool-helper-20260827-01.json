@@ -1,0 +1,6 @@
+{
+  "request_id": "spool-helper-20260827-01",
+  "operation": "install_spool_helper",
+  "instance_id": "ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq",
+  "source_commit": "0f2e35bf77f4d8be4d85593b1775ee21150770f6"
+}
