@@ -2,6 +2,10 @@ name: Oracle instance automatic power controller
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/oracle-instance-power-auto.yml'
   schedule:
     - cron: '*/5 * * * *'
 
