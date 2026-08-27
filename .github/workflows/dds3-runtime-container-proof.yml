@@ -1,4 +1,4 @@
-name: DDS3 runtime container
+name: DDS3 runtime container proof
 
 on:
   workflow_dispatch: {}
@@ -7,7 +7,7 @@ on:
       - 'dds3_runtime/**'
       - 'bridge_school_api/dds3/**'
       - 'dds3_cli/**'
-      - '.github/workflows/dds3-runtime-container.yml'
+      - '.github/workflows/dds3-runtime-container-proof.yml'
       - 'tests/test_dds3_runtime_container_workflow_contract.py'
   push:
     branches: [main]
@@ -15,7 +15,7 @@ on:
       - 'dds3_runtime/**'
       - 'bridge_school_api/dds3/**'
       - 'dds3_cli/**'
-      - '.github/workflows/dds3-runtime-container.yml'
+      - '.github/workflows/dds3-runtime-container-proof.yml'
       - 'tests/test_dds3_runtime_container_workflow_contract.py'
 
 permissions:
