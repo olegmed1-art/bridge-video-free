@@ -8,14 +8,19 @@ on:
         required: true
         type: choice
         options: [status, start, stop]
+      idle_source_run_id:
+        description: Optional terminal workload run binding for automatic stop
+        required: false
+        type: string
   issue_comment:
     types: [created]
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
-  group: oracle-instance-power
+  group: oracle-instance-workload-mutation
   cancel-in-progress: false
 
 jobs:
@@ -38,6 +43,7 @@ jobs:
         id: command
         env:
           DISPATCH_ACTION: ${{ inputs.action }}
+          DISPATCH_IDLE_SOURCE_RUN_ID: ${{ inputs.idle_source_run_id }}
           COMMENT_COMMAND: ${{ github.event.comment.body }}
         run: |
           set -euo pipefail
@@ -47,7 +53,13 @@ jobs:
             action="${COMMENT_COMMAND#/oracle-instance }"
           fi
           case "$action" in status|start|stop) ;; *) echo "invalid action" >&2; exit 2 ;; esac
+          idle_source_run_id="${DISPATCH_IDLE_SOURCE_RUN_ID:-}"
+          if [[ -n "$idle_source_run_id" ]]; then
+            [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$action" == "stop" ]] || { echo "idle source is valid only for dispatched stop" >&2; exit 2; }
+            [[ "$idle_source_run_id" =~ ^[0-9]+$ ]] || { echo "invalid idle source run id" >&2; exit 2; }
+          fi
           echo "action=$action" >> "$GITHUB_OUTPUT"
+          echo "idle_source_run_id=$idle_source_run_id" >> "$GITHUB_OUTPUT"
           echo "bounded action: $action"
 
       - name: Validate credential presence
@@ -196,6 +208,29 @@ jobs:
           echo "idle_state=$idle_state" >> "$GITHUB_OUTPUT"
           echo "idle_reason=$idle_reason" >> "$GITHUB_OUTPUT"
 
+      - name: Revalidate automatic stop epoch
+        id: epoch
+        if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state == 'RUNNING' && steps.idle.outputs.idle_state == 'IDLE' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IDLE_SOURCE_RUN_ID: ${{ steps.command.outputs.idle_source_run_id }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$IDLE_SOURCE_RUN_ID" ]]; then
+            echo 'epoch_state=MANUAL' >> "$GITHUB_OUTPUT"
+            echo 'manual stop retains the independent host-IDLE gate'
+            exit 0
+          fi
+
+          epoch_state="$(gh api \
+            -H 'Accept: application/vnd.github+json' \
+            "/repos/$GITHUB_REPOSITORY/actions/workflows/oracle-universal-video-job.yml/runs?per_page=100" \
+            | IDLE_SOURCE_RUN_ID="$IDLE_SOURCE_RUN_ID" python -c 'import json,os,sys; source=int(os.environ["IDLE_SOURCE_RUN_ID"]); runs=json.load(sys.stdin).get("workflow_runs",[]); row=next((r for r in runs if int(r.get("id",0))==source),None); newer=any(int(r.get("id",0))>source and r.get("event")!="pull_request" for r in runs); print("UNKNOWN" if row is None or row.get("status")!="completed" else "STALE" if newer else "CURRENT")')"
+          case "$epoch_state" in CURRENT|STALE|UNKNOWN) ;; *) epoch_state=UNKNOWN ;; esac
+          echo "epoch_state=$epoch_state" >> "$GITHUB_OUTPUT"
+          echo "automatic stop epoch: $epoch_state"
+
       - name: Start exact instance
         id: start
         if: ${{ steps.command.outputs.action == 'start' && steps.state.outputs.current_state == 'STOPPED' }}
@@ -235,7 +270,7 @@ jobs:
           exit 4
 
       - name: Stop exact instance only with IDLE proof
-        if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state == 'RUNNING' && steps.idle.outputs.idle_state == 'IDLE' }}
+        if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state == 'RUNNING' && steps.idle.outputs.idle_state == 'IDLE' && (steps.epoch.outputs.epoch_state == 'CURRENT' || steps.epoch.outputs.epoch_state == 'MANUAL') }}
         run: |
           set -euo pipefail
           oci compute instance action --instance-id "$OCI_INSTANCE_OCID" --action STOP >/dev/null
@@ -255,6 +290,12 @@ jobs:
           echo "STOP REFUSED: host idle state is ${{ steps.idle.outputs.idle_state || 'UNKNOWN' }}" >&2
           exit 3
 
+      - name: Refuse stale automatic stop
+        if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state == 'RUNNING' && steps.idle.outputs.idle_state == 'IDLE' && steps.epoch.outputs.epoch_state != 'CURRENT' && steps.epoch.outputs.epoch_state != 'MANUAL' }}
+        run: |
+          echo "STOP REFUSED: automatic idle epoch is ${{ steps.epoch.outputs.epoch_state || 'UNKNOWN' }}" >&2
+          exit 3
+
       - name: Refuse transition-state mutation
         if: ${{ (steps.command.outputs.action == 'start' || steps.command.outputs.action == 'stop') && (steps.state.outputs.current_state == 'STARTING' || steps.state.outputs.current_state == 'STOPPING') }}
         run: |
@@ -268,6 +309,7 @@ jobs:
           STATE: ${{ steps.state.outputs.current_state }}
           IDLE_STATE: ${{ steps.idle.outputs.idle_state }}
           IDLE_REASON: ${{ steps.idle.outputs.idle_reason }}
+          EPOCH_STATE: ${{ steps.epoch.outputs.epoch_state }}
         run: |
           {
             echo "### Oracle instance power"
@@ -275,6 +317,7 @@ jobs:
             echo "- initial_state: ${STATE:-UNKNOWN}"
             echo "- idle_state: ${IDLE_STATE:-not_applicable}"
             echo "- idle_reason: ${IDLE_REASON:-not_applicable}"
+            echo "- automatic_epoch: ${EPOCH_STATE:-not_applicable}"
             echo "- target: exact Frankfurt VM only"
             echo "- controller: manual only (status/start/stop, stop requires fail-closed idle proof)"
           } >> "$GITHUB_STEP_SUMMARY"
