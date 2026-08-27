@@ -9,6 +9,14 @@
       "kind": "infrastructure",
       "policy": "Authentication and Google Drive transport only; must not make bridge-content decisions."
     },
+    "PIL": {
+      "kind": "infrastructure",
+      "policy": "Image decoding only; must not identify cards, assign seats, or infer missing cards."
+    },
+    "pytesseract": {
+      "kind": "model",
+      "policy": "May emit raw OCR tokens with boxes and confidence only. Tokens require the native card validator, confidence threshold, seat geometry, and human-verified gold gate before any promotion."
+    },
     "requests": {
       "kind": "infrastructure",
       "policy": "HTTP transport only; must not make bridge-content decisions."
