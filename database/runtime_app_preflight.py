@@ -133,8 +133,10 @@ def main() -> None:
                     fail(f"principal does not inherit {EXPECTED_CAPABILITY}")
                 if not can_read_school:
                     fail("app cannot read the school registry")
-                if not (can_insert_person and can_update_person):
-                    fail("app lacks expected interactive person write capability")
+                if can_insert_person:
+                    fail("app can bypass controlled onboarding by inserting person")
+                if not can_update_person:
+                    fail("app lacks expected existing-person update capability")
                 if can_delete_person:
                     fail("app has forbidden DELETE capability on person")
                 if can_insert_source_observation:
@@ -152,7 +154,8 @@ def main() -> None:
 
         print(
             "RUNTIME_DB_APP: PASS "
-            f"principal={EXPECTED_PRINCIPAL} capability={EXPECTED_CAPABILITY} school=verified"
+            f"principal={EXPECTED_PRINCIPAL} capability={EXPECTED_CAPABILITY} "
+            "controlled_onboarding=verified school=verified"
         )
     except psycopg.Error as exc:
         fail(f"database connection/query failed: {exc.__class__.__name__}: {safe_db_error(exc)}")
