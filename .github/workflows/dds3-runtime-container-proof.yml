@@ -14,6 +14,7 @@ on:
     paths:
       - 'dds3_runtime/**'
       - 'bridge_school_api/dds3/**'
+      - 'bridge_school_api/dds3/**'
       - 'dds3_cli/**'
       - '.github/workflows/dds3-runtime-container-proof.yml'
       - 'tests/test_dds3_runtime_container_workflow_contract.py'
@@ -51,7 +52,20 @@ jobs:
           curl -fsS -H 'Authorization: Bearer ci-secret' -H 'Content-Type: application/json' \
             -d '{"operation":"dd_table","pbn":"N:QJ6.K652.J85.T98 873.J97.AT764.Q4 K5.T83.KQ9.A7652 AT942.AQ4.32.KJ3","dealer":"N","vulnerability":"None"}' \
             http://127.0.0.1:18080/v1/compute > result.json
-          python -c 'import json; r=json.load(open("result.json")); assert r["engine"]=="DDS3"; assert r["fallback_used"] is False; assert r["par_score_ns"]==-110; assert r["dd_table"]=={"S":[7,6,7,6],"H":[8,5,8,5],"D":[6,7,6,7],"C":[8,5,8,5],"NT":[7,6,7,6]}; print("DDS3_RUNTIME_E2E: PASS")'
+          cat result.json
+          python - <<'PY'
+          import json
+          r = json.load(open("result.json"))
+          expected = {
+              "engine": "DDS3",
+              "fallback_used": False,
+              "par_score_ns": -110,
+              "dd_table": {"S": [7, 6, 7, 6], "H": [8, 5, 8, 5], "D": [6, 7, 6, 7], "C": [8, 5, 8, 5], "NT": [7, 6, 7, 6]},
+          }
+          actual = {key: r.get(key) for key in expected}
+          assert actual == expected, {"expected": expected, "actual": actual}
+          print("DDS3_RUNTIME_E2E: PASS")
+          PY
       - name: Reject unauthenticated embedding call
         run: |
           code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"operation":"dd_table"}' http://127.0.0.1:18080/v1/compute)
