@@ -41,6 +41,7 @@ status(){
   [[ ${#found[@]} -le 1 ]] || { echo 'UV_STATE=CONFLICT'; exit 1; }
   [[ ${#found[@]} -eq 1 ]] || { echo 'UV_STATE=MISSING'; exit 0; }
   state="${found[0]}"
+  receipt="$SPOOL/$state/$name"
   case "$state" in
     inbox) echo 'UV_STATE=QUEUED' ;;
     running) echo 'UV_STATE=RUNNING' ;;
@@ -54,7 +55,6 @@ status(){
       printf '%s\n' "$summary"
       ;;
     done)
-      receipt="$SPOOL/done/$name"
       STATUS="$(JOB="$receipt" python3 - <<'PY'
 import json, os
 x=json.load(open(os.environ['JOB'], encoding='utf-8'))
