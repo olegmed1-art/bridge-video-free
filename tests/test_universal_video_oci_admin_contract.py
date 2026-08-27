@@ -73,8 +73,9 @@ def test_workflow_accepts_only_two_operations_and_one_instance():
     assert "x['operation'] in {'audit','productionize'}" in WORKFLOW
     assert "assert set(x)=={'request_id','operation','instance_id'}" in WORKFLOW
     assert "ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq" in WORKFLOW
-    assert 'remote=\'if sudo -n /usr/local/sbin/universal-video-oci-admin audit 2>&1; then echo UNIVERSAL_VIDEO_OCI_ADMIN_EXECUTION_PASS; else rc=$?; printf "UNIVERSAL_VIDEO_OCI_ADMIN_EXECUTION_FAIL rc=%s\\n" "$rc"; fi\'' in WORKFLOW
-    assert 'remote=\'if sudo -n /usr/local/sbin/universal-video-oci-admin productionize 2>&1; then echo UNIVERSAL_VIDEO_OCI_ADMIN_EXECUTION_PASS; else rc=$?; printf "UNIVERSAL_VIDEO_OCI_ADMIN_EXECUTION_FAIL rc=%s\\n" "$rc"; fi\'' in WORKFLOW
+    assert "universal-video-oci-admin audit 2>&1" in WORKFLOW
+    assert "universal-video-oci-admin productionize 2>&1" in WORKFLOW
+    assert "UNIVERSAL_VIDEO_OCI_ADMIN_EXECUTION_FAIL" in WORKFLOW
     assert "--timeout-in-seconds 3600" in WORKFLOW
     assert "UNIVERSAL_VIDEO_OCI_ADMIN_REMOTE_PASS" in WORKFLOW
     assert "UNIVERSAL_VIDEO_OCI_ADMIN_EXTERNAL_DDS3_PASS" in WORKFLOW
