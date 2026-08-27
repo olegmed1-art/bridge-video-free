@@ -220,6 +220,34 @@ def _completed_receipt_has_durable_proof(done_root: Path, job_id: str, proof_roo
     return False
 
 
+
+def _completed_local_publication_proof(path: Path, job_id: str) -> bool:
+    manifest = _safe_json(path / "manifest.json")
+    if not manifest or str(manifest.get("job_id") or "") != job_id:
+        return False
+    proof = _safe_json(path / "DURABLE_PUBLICATION_PROOF.json")
+    if not proof:
+        return False
+    if proof.get("schema") != "universal-video-durable-publication-proof-v1":
+        return False
+    if proof.get("status") != "PUBLISHED_VERIFIED":
+        return False
+    if proof.get("job_id") != manifest.get("job_id") or proof.get("job_hash") != manifest.get("job_hash"):
+        return False
+    if proof.get("remote_verification") != COMPLETED_CLEANUP_REMOTE_VERIFICATION:
+        return False
+    if not str(proof.get("drive_folder_id") or "").strip():
+        return False
+    artifact_set = str(proof.get("artifact_set_sha256") or "").lower()
+    marker = str(proof.get("publication_marker_sha256") or "").lower()
+    return (
+        len(artifact_set) == 64
+        and all(ch in "0123456789abcdef" for ch in artifact_set)
+        and len(marker) == 64
+        and all(ch in "0123456789abcdef" for ch in marker)
+    )
+
+
 def _dedupe(candidates: Iterable[Candidate]) -> list[Candidate]:
     chosen: dict[Path, Candidate] = {}
     for item in candidates:
@@ -284,7 +312,10 @@ def build_cleanup_plan(
                 if age >= policy.abandoned_results_ttl_seconds:
                     candidates.append(Candidate(path, "results", mtime, size, "abandoned_ttl"))
                 continue
-            if not _completed_receipt_has_durable_proof(spool_root / "done", path.name, proof_roots):
+            if not (
+                _completed_receipt_has_durable_proof(spool_root / "done", path.name, proof_roots)
+                or _completed_local_publication_proof(path, path.name)
+            ):
                 continue
             result_dirs.append((mtime, path, size))
     result_dirs.sort(key=lambda item: (item[0], item[1].name))
