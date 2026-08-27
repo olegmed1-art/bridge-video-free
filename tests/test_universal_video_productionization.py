@@ -59,6 +59,30 @@ def _durable_publication_receipt(root: Path, job_id: str, *, age_seconds: int, n
     return receipt
 
 
+
+def _durable_publication_proof(result_dir: Path, job_id: str) -> Path:
+    manifest = json.loads((result_dir / "manifest.json").read_text(encoding="utf-8"))
+    manifest["job_hash"] = "c" * 64
+    (result_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    proof = result_dir / "DURABLE_PUBLICATION_PROOF.json"
+    proof.write_text(
+        json.dumps(
+            {
+                "schema": "universal-video-durable-publication-proof-v1",
+                "status": "PUBLISHED_VERIFIED",
+                "job_id": job_id,
+                "job_hash": "c" * 64,
+                "drive_folder_id": "drive-folder-id",
+                "artifact_set_sha256": "a" * 64,
+                "publication_marker_sha256": "b" * 64,
+                "remote_verification": "SIZE_MD5_SHA256_PROPERTY_MATCH",
+            }
+        ),
+        encoding="utf-8",
+    )
+    return proof
+
+
 def test_retention_never_deletes_pending_or_running_artifacts(tmp_path: Path):
     now = 2_000_000_000.0
     base = tmp_path / "uv"
@@ -143,6 +167,38 @@ def test_retention_accepts_explicit_external_publication_proof_dir(monkeypatch, 
 
     assert result in paths
     assert local_done in paths
+
+
+
+def test_retention_accepts_local_publication_proof_sidecar(tmp_path: Path):
+    now = 2_000_000_000.0
+    base = tmp_path / "uv"
+    for name in ("inbox", "running", "done", "failed", "results"):
+        (base / "spool" / name).mkdir(parents=True, exist_ok=True)
+    (base / "media").mkdir(parents=True)
+
+    result = _terminal_result(base, "sidecar-proof-job", age_seconds=40 * DAY, now=now)
+    _durable_publication_proof(result, "sidecar-proof-job")
+
+    plan = build_cleanup_plan(base, policy=RetentionPolicy(), now=now)
+    assert result in {item.path for item in plan}
+
+
+def test_retention_rejects_incomplete_local_publication_proof_sidecar(tmp_path: Path):
+    now = 2_000_000_000.0
+    base = tmp_path / "uv"
+    for name in ("inbox", "running", "done", "failed", "results"):
+        (base / "spool" / name).mkdir(parents=True, exist_ok=True)
+    (base / "media").mkdir(parents=True)
+
+    result = _terminal_result(base, "bad-sidecar-proof-job", age_seconds=40 * DAY, now=now)
+    proof = _durable_publication_proof(result, "bad-sidecar-proof-job")
+    payload = json.loads(proof.read_text(encoding="utf-8"))
+    payload["publication_marker_sha256"] = "not-a-sha"
+    proof.write_text(json.dumps(payload), encoding="utf-8")
+
+    plan = build_cleanup_plan(base, policy=RetentionPolicy(), now=now)
+    assert result not in {item.path for item in plan}
 
 
 def test_abandoned_result_directory_is_bounded_after_grace(tmp_path: Path):
@@ -432,6 +488,12 @@ def test_publish_writes_marker_last_and_is_deterministic_on_retry(tmp_path: Path
     assert "PUBLICATION_COMPLETE.json" in inventories[1]
     assert first["artifact_set_sha256"] == second["artifact_set_sha256"]
     assert first["publication_marker_sha256"] == second["publication_marker_sha256"]
+    proof = json.loads((job / "DURABLE_PUBLICATION_PROOF.json").read_text(encoding="utf-8"))
+    assert proof["status"] == "PUBLISHED_VERIFIED"
+    assert proof["drive_folder_id"] == "child-id"
+    assert proof["artifact_set_sha256"] == expected_bundle
+    assert proof["publication_marker_sha256"] == first["publication_marker_sha256"]
+    assert proof["remote_verification"] == "SIZE_MD5_SHA256_PROPERTY_MATCH"
 
 
 def test_publish_fails_before_network_when_approved_bundle_changes(tmp_path: Path, monkeypatch):

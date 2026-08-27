@@ -481,6 +481,24 @@ def publish_result(
     report["remote_verification"] = "SIZE_MD5_SHA256_PROPERTY_MATCH"
     report["verified_at"] = datetime.now(timezone.utc).isoformat()
     _verify_folder(child_id, token, expected_parent_id=folder_id, require_writable=True)
+    proof = {
+        "schema": "universal-video-durable-publication-proof-v1",
+        "status": "PUBLISHED_VERIFIED",
+        "job_id": manifest.get("job_id"),
+        "job_hash": manifest.get("job_hash"),
+        "drive_folder_id": child_id,
+        "artifact_set_sha256": bundle_hash,
+        "publication_marker_sha256": marker.sha256,
+        "remote_verification": "SIZE_MD5_SHA256_PROPERTY_MATCH",
+        "verified_at": report["verified_at"],
+    }
+    proof_path = job_dir / "DURABLE_PUBLICATION_PROOF.json"
+    proof_tmp = job_dir / ".DURABLE_PUBLICATION_PROOF.json.tmp"
+    proof_tmp.write_text(
+        json.dumps(proof, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(proof_tmp, proof_path)
     return report
 
 
