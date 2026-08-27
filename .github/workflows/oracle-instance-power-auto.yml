@@ -2,15 +2,6 @@ name: Oracle instance automatic power controller
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/oracle-instance-power-auto.yml'
-  # GitHub schedules are best-effort. Offset from the common :00/:05 slots to
-  # reduce delay/drop risk while preserving a five-minute polling interval.
-  # Queued work remains durable until the next pass.
-  schedule:
-    - cron: '2-57/5 * * * *'
 
 permissions:
   actions: write
@@ -79,4 +70,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --ref main \
             -f action="$action"
-          echo "dispatched bounded action: $action"
+          echo "manually dispatched bounded action: $action"
