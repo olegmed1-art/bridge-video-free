@@ -55,6 +55,24 @@ jobs:
           VERCEL_GIT_COMMIT_REF='' \
             bash scripts/vercel_ignore_build.sh > "$RUNNER_TEMP/vercel-missing-ref.log"
           grep -F "non-main ref 'unknown'; skip" "$RUNNER_TEMP/vercel-missing-ref.log" >/dev/null
+          tmp_repo="$RUNNER_TEMP/vercel-docs-only-repo"
+          mkdir -p "$tmp_repo/scripts" "$tmp_repo/docs/architecture"
+          cp scripts/vercel_ignore_build.sh "$tmp_repo/scripts/vercel_ignore_build.sh"
+          (
+            cd "$tmp_repo"
+            git init -q
+            git config user.email ci@example.invalid
+            git config user.name "CI"
+            touch app.py
+            git add .
+            git commit -qm base
+            printf 'docs only\n' > docs/architecture/simple_operating_architecture_v1.md
+            git add .
+            git commit -qm docs-only
+            VERCEL_GIT_COMMIT_REF=main VERCEL_GIT_PREVIOUS_SHA=HEAD^ \
+              bash scripts/vercel_ignore_build.sh > "$RUNNER_TEMP/vercel-docs-main.log"
+          )
+          grep -F 'main has no web/API runtime change; skip' "$RUNNER_TEMP/vercel-docs-main.log" >/dev/null
           python -m json.tool vercel.json >/dev/null
           python - <<'PY'
           import json
@@ -88,6 +106,9 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          test -f docs/architecture/simple_operating_architecture_v1.md
+          grep -F 'Codex coordinates, GitHub controls, Oracle computes, Neon and Drive store, Vercel shows.' docs/architecture/simple_operating_architecture_v1.md >/dev/null
+          grep -F 'Detailed subsystem documents remain valid only inside these boundaries.' docs/architecture/simple_operating_architecture_v1.md >/dev/null
           grep -F 'MUST NOT by itself create a Vercel deployment' docs/architecture/deployment.md >/dev/null
           grep -F 'Do not store raw media bytes in Neon' docs/architecture/video-data-policy.md >/dev/null
           grep -F 'must not become an unnecessary media proxy' docs/architecture/video-data-policy.md >/dev/null

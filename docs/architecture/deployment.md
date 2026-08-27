@@ -2,6 +2,11 @@
 
 This repository is a monorepo, but its runtime responsibilities are intentionally separated.
 
+This deployment document implements the active top-level model in
+[`simple_operating_architecture_v1.md`](simple_operating_architecture_v1.md):
+Codex coordinates, GitHub controls, Oracle computes, Neon and Drive store,
+Vercel shows.
+
 ## Responsibility boundaries
 
 - **GitHub**: source code, pull requests, CI, release policy and audit trail.
