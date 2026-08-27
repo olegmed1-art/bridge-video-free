@@ -22,6 +22,11 @@ def test_entrypoint_is_fixed_and_no_asr_productionization_only():
     assert "asr_started=0" in ENTRY
     assert "faster_whisper" not in ENTRY
     assert "run_job" not in ENTRY
+    assert "UNIVERSAL_VIDEO_OCI_ADMIN_ERROR stage=${CURRENT_STAGE} rc=${rc}" in ENTRY
+    assert "CURRENT_STAGE='productionize_activation'" in ENTRY
+    assert "CURRENT_STAGE='productionize_script'" in ENTRY
+    assert "CURRENT_STAGE='productionize_marker_validation'" in ENTRY
+    assert "CURRENT_STAGE='productionize_dds3_after'" in ENTRY
     assert "eval " not in ENTRY
     assert "bash -c" not in ENTRY
     assert "sh -c" not in ENTRY
@@ -76,6 +81,7 @@ def test_workflow_accepts_only_two_operations_and_one_instance():
     assert "universal-video-oci-admin audit 2>&1" in WORKFLOW
     assert "universal-video-oci-admin productionize 2>&1" in WORKFLOW
     assert "UNIVERSAL_VIDEO_OCI_ADMIN_EXECUTION_FAIL" in WORKFLOW
+    assert "UNIVERSAL_VIDEO_[A-Z0-9_]+(PASS|FAIL|ERROR)" in WORKFLOW
     assert "--timeout-in-seconds 3600" in WORKFLOW
     assert "UNIVERSAL_VIDEO_OCI_ADMIN_REMOTE_PASS" in WORKFLOW
     assert "UNIVERSAL_VIDEO_OCI_ADMIN_EXTERNAL_DDS3_PASS" in WORKFLOW
