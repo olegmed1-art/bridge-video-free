@@ -83,9 +83,9 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check -q oci-cli
-          oci_user="$(printf '%s\n' "$OCI_USER" | sed -nE 's/^[[:space:]]*(user=)?(ocid1\\.user\\.[A-Za-z0-9._-]+)[[:space:]]*$/\\2/p' | head -n1)"
+          oci_user="$(printf '%s\n' "$OCI_USER" | sed -nE 's/^[[:space:]]*(user=)?(ocid1\.user\.[A-Za-z0-9._-]+)[[:space:]]*$/\\2/p' | head -n1)"
           oci_fingerprint="$(printf '%s\n' "$OCI_FINGERPRINT" | sed -nE 's/^[[:space:]]*(fingerprint=)?([0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){15})[[:space:]]*$/\\2/p' | head -n1)"
-          oci_tenancy="$(printf '%s\n' "$OCI_TENANCY" | sed -nE 's/^[[:space:]]*(tenancy=)?(ocid1\\.tenancy\\.[A-Za-z0-9._-]+)[[:space:]]*$/\\2/p' | head -n1)"
+          oci_tenancy="$(printf '%s\n' "$OCI_TENANCY" | sed -nE 's/^[[:space:]]*(tenancy=)?(ocid1\.tenancy\.[A-Za-z0-9._-]+)[[:space:]]*$/\\2/p' | head -n1)"
           [[ -n "$oci_user" && -n "$oci_fingerprint" && -n "$oci_tenancy" ]] || { echo 'invalid OCI identity fields' >&2; exit 1; }
           mkdir -p "$HOME/.oci"
           printf '%s\n' "$OCI_KEY" > "$HOME/.oci/key.pem"
