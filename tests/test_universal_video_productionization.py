@@ -120,6 +120,31 @@ def test_retention_blocks_completed_cleanup_without_durable_publication_proof(tm
     assert proven_receipt in paths
 
 
+def test_retention_accepts_explicit_external_publication_proof_dir(monkeypatch, tmp_path: Path):
+    now = 2_000_000_000.0
+    base = tmp_path / "uv"
+    for name in ("inbox", "running", "done", "failed", "results"):
+        (base / "spool" / name).mkdir(parents=True, exist_ok=True)
+    (base / "media").mkdir(parents=True)
+    result = _terminal_result(base, "external-proof-job", age_seconds=40 * DAY, now=now)
+    local_done = base / "spool" / "done" / "external-proof-job.json"
+    local_done.write_text(
+        json.dumps({"status": "COMPLETED", "job_id": "external-proof-job"}),
+        encoding="utf-8",
+    )
+    stamp = now - 40 * DAY
+    os.utime(local_done, (stamp, stamp))
+    proof_dir = tmp_path / "published"
+    _durable_publication_receipt(proof_dir, "external-proof-job", age_seconds=40 * DAY, now=now)
+    monkeypatch.setenv("UNIVERSAL_VIDEO_PUBLISHED_RECEIPT_DIRS", str(proof_dir / "spool" / "done"))
+
+    plan = build_cleanup_plan(base, policy=RetentionPolicy(), now=now)
+    paths = {item.path for item in plan}
+
+    assert result in paths
+    assert local_done in paths
+
+
 def test_abandoned_result_directory_is_bounded_after_grace(tmp_path: Path):
     now = 2_000_000_000.0
     base = tmp_path / "uv"

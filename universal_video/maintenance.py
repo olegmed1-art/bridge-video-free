@@ -24,6 +24,7 @@ HOUR = 3600
 TERMINAL_STATUSES = frozenset({"COMPLETED", "REVIEW", "FAILED"})
 COMPLETED_CLEANUP_PROOF_STATUSES = frozenset({"PUBLISHED_VERIFIED"})
 COMPLETED_CLEANUP_REMOTE_VERIFICATION = "SIZE_MD5_SHA256_PROPERTY_MATCH"
+MAX_PUBLISHED_RECEIPT_ROOTS = 10
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,26 @@ def policy_from_env() -> RetentionPolicy:
         media_budget_grace_seconds=_env_int("UNIVERSAL_VIDEO_MEDIA_BUDGET_GRACE_HOURS", 1, 1, 168) * HOUR,
         max_deletes_per_run=_env_int("UNIVERSAL_VIDEO_MAX_DELETES_PER_MAINTENANCE", 100, 1, 1000),
     )
+
+
+def published_receipt_roots_from_env() -> list[Path]:
+    raw = os.getenv("UNIVERSAL_VIDEO_PUBLISHED_RECEIPT_DIRS", "").strip()
+    if not raw:
+        return []
+    roots: list[Path] = []
+    for item in raw.split(":"):
+        value = item.strip()
+        if not value:
+            continue
+        path = Path(value)
+        if not path.is_absolute():
+            raise RuntimeError("UNIVERSAL_VIDEO_PUBLISHED_RECEIPT_DIRS entries must be absolute")
+        if path.is_symlink():
+            raise RuntimeError("UNIVERSAL_VIDEO_PUBLISHED_RECEIPT_DIRS refuses symlink roots")
+        roots.append(path)
+    if len(roots) > MAX_PUBLISHED_RECEIPT_ROOTS:
+        raise RuntimeError("UNIVERSAL_VIDEO_PUBLISHED_RECEIPT_DIRS has too many roots")
+    return roots
 
 
 def _regular_file(path: Path, *, max_bytes: int | None = None) -> bool:
@@ -191,11 +212,12 @@ def _completed_durable_proof(payload: dict[str, Any] | None, *, job_id: str | No
     return True
 
 
-def _completed_receipt_has_durable_proof(done_root: Path, job_id: str) -> bool:
-    if not done_root.is_dir():
-        return False
-    receipt = _safe_json(done_root / f"{job_id}.json")
-    return _completed_durable_proof(receipt, job_id=job_id)
+def _completed_receipt_has_durable_proof(done_root: Path, job_id: str, proof_roots: Iterable[Path]) -> bool:
+    candidates = [done_root / f"{job_id}.json", *(root / f"{job_id}.json" for root in proof_roots)]
+    for receipt in candidates:
+        if _completed_durable_proof(_safe_json(receipt), job_id=job_id):
+            return True
+    return False
 
 
 def _dedupe(candidates: Iterable[Candidate]) -> list[Candidate]:
@@ -217,6 +239,7 @@ def build_cleanup_plan(
     now = time.time() if now is None else float(now)
     spool_root = base_dir / "spool"
     media_root = base_dir / "media"
+    proof_roots = published_receipt_roots_from_env()
     active_job_ids, protected_media = _protected_state(spool_root, media_root)
     candidates: list[Candidate] = []
 
@@ -227,8 +250,11 @@ def build_cleanup_plan(
             for path in root.iterdir():
                 if not _regular_file(path):
                     continue
-                if bucket == "done" and not _completed_durable_proof(_safe_json(path)):
-                    continue
+                if bucket == "done":
+                    payload = _safe_json(path)
+                    job_id = str((payload or {}).get("job_id") or path.stem)
+                    if not _completed_receipt_has_durable_proof(root, job_id, proof_roots):
+                        continue
                 info = path.lstat()
                 files.append((info.st_mtime, path, info.st_size))
         files.sort(key=lambda item: (item[0], item[1].name))
@@ -258,7 +284,7 @@ def build_cleanup_plan(
                 if age >= policy.abandoned_results_ttl_seconds:
                     candidates.append(Candidate(path, "results", mtime, size, "abandoned_ttl"))
                 continue
-            if not _completed_receipt_has_durable_proof(spool_root / "done", path.name):
+            if not _completed_receipt_has_durable_proof(spool_root / "done", path.name, proof_roots):
                 continue
             result_dirs.append((mtime, path, size))
     result_dirs.sort(key=lambda item: (item[0], item[1].name))
