@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/oracle-instance-power-auto.yml'
+  # GitHub schedules are best-effort; queued work remains durable until the next pass.
   schedule:
     - cron: '*/5 * * * *'
 
