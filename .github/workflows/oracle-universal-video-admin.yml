@@ -136,8 +136,8 @@ jobs:
             *) echo "Oracle instance is not runnable: $state" >&2; exit 1 ;;
           esac
           case "$OPERATION" in
-            audit) remote='sudo -n /usr/local/sbin/universal-video-oci-admin audit 2>&1' ;;
-            productionize) remote='sudo -n /usr/local/sbin/universal-video-oci-admin productionize 2>&1' ;;
+            audit) remote='if sudo -n /usr/local/sbin/universal-video-oci-admin audit 2>&1; then echo UNIVERSAL_VIDEO_OCI_ADMIN_EXECUTION_PASS; else rc=$?; printf "UNIVERSAL_VIDEO_OCI_ADMIN_EXECUTION_FAIL rc=%s\\n" "$rc"; fi' ;;
+            productionize) remote='if sudo -n /usr/local/sbin/universal-video-oci-admin productionize 2>&1; then echo UNIVERSAL_VIDEO_OCI_ADMIN_EXECUTION_PASS; else rc=$?; printf "UNIVERSAL_VIDEO_OCI_ADMIN_EXECUTION_FAIL rc=%s\\n" "$rc"; fi' ;;
             *) exit 64 ;;
           esac
           content="$(SCRIPT_TEXT="$remote" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":"set -Eeuo pipefail\n"+os.environ["SCRIPT_TEXT"]+"\n"},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
