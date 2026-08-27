@@ -80,20 +80,18 @@ def test_workflow_accepts_only_two_operations_and_one_instance():
     assert "UNIVERSAL_VIDEO_OCI_ADMIN_EXTERNAL_DDS3_PASS" in WORKFLOW
 
 
-def test_workflow_normalizes_oci_identity_fields_before_config_write():
-    assert "oci_user=\"" in WORKFLOW
-    assert "oci_fingerprint=\"" in WORKFLOW
-    assert "oci_tenancy=\"" in WORKFLOW
-    assert "(user=)?(ocid1\\.user\\." in WORKFLOW
-    assert "(fingerprint=)?([0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){15})" in WORKFLOW
-    assert "(tenancy=)?(ocid1\\.tenancy\\." in WORKFLOW
-    assert "invalid OCI identity fields" in WORKFLOW
-    assert "user=$oci_user" in WORKFLOW
-    assert "fingerprint=$oci_fingerprint" in WORKFLOW
-    assert "tenancy=$oci_tenancy" in WORKFLOW
-    assert "user=$OCI_USER" not in WORKFLOW
-    assert "fingerprint=$OCI_FINGERPRINT" not in WORKFLOW
-    assert "tenancy=$OCI_TENANCY" not in WORKFLOW
+def test_workflow_reuses_the_proven_bounded_oci_config_contract():
+    assert "OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}" in WORKFLOW
+    assert "OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}" in WORKFLOW
+    assert "OCI_CLI_USER" not in WORKFLOW
+    assert "OCI_CLI_TENANCY" not in WORKFLOW
+    assert "OCI_CLI_FINGERPRINT" not in WORKFLOW
+    assert "OCI_CLI_REGION" not in WORKFLOW
+    assert "region=eu-frankfurt-1" in WORKFLOW
+    assert "oci-cli==3.90.3" in WORKFLOW
+    assert "openssl pkey" in WORKFLOW
+    assert "oci_user=\"" not in WORKFLOW
+    assert "\\\\2/p" not in WORKFLOW
 
 
 def test_workflow_does_not_publish_raw_remote_output_or_oauth_values():
