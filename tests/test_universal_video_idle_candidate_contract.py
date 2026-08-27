@@ -59,6 +59,18 @@ def test_video_and_power_mutations_share_a_non_cancelling_lock():
         assert "cancel-in-progress: false" in text
 
 
+def test_video_watchdog_is_rare_and_refuses_durable_receipt_replay():
+    text = VIDEO.read_text(encoding="utf-8")
+    assert "cron: '17 * * * *'" in text
+    assert "cron: '*/5 * * * *'" not in text
+    assert "should_execute: ${{ steps.request.outputs.should_execute }}" in text
+    assert "gh api --paginate --slurp" in text
+    assert "issues/$issue/comments?per_page=100" in text
+    assert 'marker="Universal Video / $profile / $job_id"' in text
+    assert "durable request receipt present; replay refused" in text
+    assert "needs.validate.outputs.should_execute == 'true'" in text
+
+
 def test_oracle_power_auto_controller_has_no_timer_or_push_trigger():
     text = AUTO.read_text(encoding="utf-8")
     assert "workflow_dispatch:" in text
