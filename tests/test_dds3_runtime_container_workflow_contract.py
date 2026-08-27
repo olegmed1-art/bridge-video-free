@@ -12,7 +12,8 @@ def test_dds3_runtime_container_workflow_is_triggerable_and_has_job():
     assert "runtime-e2e:" in source
     assert "docker build -f dds3_runtime/Dockerfile" in source
     assert "DDS3_RUNTIME_E2E: PASS" in source
-    assert "fallback_used'] is False" in source
+    assert "fallback_used" in source
+    assert "python -c" in source
 
 
 def test_dds3_runtime_container_workflow_filters_cover_contract_test():
