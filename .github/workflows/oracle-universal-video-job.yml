@@ -101,12 +101,16 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check -q oci-cli
+          # Accept either the intended one-line OCID or the matching line from
+          # an accidentally pasted Oracle configuration preview.  Never echo it.
+          oci_user="$(printf '%s\n' "$OCI_USER" | sed -nE 's/^[[:space:]]*(user=)?(ocid1\.user\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p' | head -n1)"
+          [[ -n "$oci_user" ]] || { echo 'OCI_CLI_USER is not a valid user OCID' >&2; exit 1; }
           mkdir -p "$HOME/.oci"
           printf '%s\n' "$OCI_KEY" > "$HOME/.oci/key.pem"
           chmod 600 "$HOME/.oci/key.pem"
           cat > "$HOME/.oci/config" <<EOF
           [DEFAULT]
-          user=$OCI_USER
+          user=$oci_user
           fingerprint=$OCI_FINGERPRINT
           tenancy=$OCI_TENANCY
           region=$OCI_REGION
