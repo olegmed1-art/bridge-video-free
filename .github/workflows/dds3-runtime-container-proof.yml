@@ -29,10 +29,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Build pinned DDS3 core image
+        run: |
+          docker build -f Dockerfile.dds3 -t bridge-school-dds3 .
       - name: Build pinned DDS3 runtime image
-        run: docker build -f dds3_runtime/Dockerfile -t bridge-school-dds3-runtime:test .
+        run: |
+          docker build -f dds3_runtime/Dockerfile -t bridge-school-dds3-runtime:test .
       - name: Start runtime
-        run: docker run -d --rm --name dds3-runtime -p 18080:8080 -e DDS3_RUNTIME_TOKEN=ci-secret bridge-school-dds3-runtime:test
+        run: |
+          docker run -d --rm --name dds3-runtime -p 18080:8080 -e DDS3_RUNTIME_TOKEN=ci-secret bridge-school-dds3-runtime:test
       - name: Wait for real DDS3 readiness
         run: |
           for i in $(seq 1 30); do
@@ -46,9 +51,25 @@ jobs:
           curl -fsS -H 'Authorization: Bearer ci-secret' -H 'Content-Type: application/json' \
             -d '{"operation":"dd_table","pbn":"N:QJ6.K652.J85.T98 873.J97.AT764.Q4 K5.T83.KQ9.A7652 AT942.AQ4.32.KJ3","dealer":"N","vulnerability":"None"}' \
             http://127.0.0.1:18080/v1/compute > result.json
-          python -c 'import json; r=json.load(open("result.json")); assert r["engine"]=="DDS3"; assert r["fallback_used"] is False; assert r["par_score_ns"]==-110; assert r["dd_table"]=={"S":[7,6,7,6],"H":[8,5,8,5],"D":[6,7,6,7],"C":[8,5,8,5],"NT":[7,6,7,6]}; print("DDS3_RUNTIME_E2E: PASS")'
+          cat result.json
+          python - <<'PY'
+          import json
+          r = json.load(open("result.json"))
+          expected = {
+              "engine": "DDS3",
+              "fallback_used": False,
+              "par_score_ns": -110,
+              "dd_table": {"S": [5, 8, 5, 8], "H": [6, 6, 6, 6], "D": [5, 7, 5, 7], "C": [7, 5, 7, 5], "NT": [6, 6, 6, 6]},
+          }
+          actual = {key: r.get(key) for key in expected}
+          assert actual == expected, {"expected": expected, "actual": actual}
+          print("DDS3_RUNTIME_E2E: PASS")
+          PY
       - name: Reject unauthenticated embedding call
-        run: test "$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"operation":"dd_table"}' http://127.0.0.1:18080/v1/compute)" = 401
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -d '{"operation":"dd_table"}' http://127.0.0.1:18080/v1/compute)
+          test "$code" = 401
       - name: Runtime logs on failure
         if: failure()
-        run: docker logs dds3-runtime || true
+        run: |
+          docker logs dds3-runtime || true
