@@ -115,6 +115,7 @@ jobs:
         shell: bash
         run: |
           chmod +x database/scripts/migrate.sh
+          bash -n database/scripts/migrate.sh
           database/scripts/migrate.sh
 
       - name: Run invariant tests
@@ -153,13 +154,32 @@ jobs:
         run: |
           set -euo pipefail
           target="database/migrations/0001_global_registry.sql"
-          cp "$target" /tmp/0001_global_registry.sql
+          backup="$(mktemp)"
+          cp "$target" "$backup"
+          trap 'mv "$backup" "$target"' EXIT
           printf '\n-- CI tamper probe\n' >> "$target"
           if database/scripts/migrate.sh; then
             echo 'Checksum guard failed to reject modified historical migration' >&2
             exit 1
           fi
-          mv /tmp/0001_global_registry.sql "$target"
+          mv "$backup" "$target"
+          trap - EXIT
+
+      - name: Verify composite checksum rejects an edited migration component
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="database/migrations/0200_bidding_knowledge_v0/01_core_rule.sql"
+          backup="$(mktemp)"
+          cp "$target" "$backup"
+          trap 'mv "$backup" "$target"' EXIT
+          printf '\n-- CI composite tamper probe\n' >> "$target"
+          if database/scripts/migrate.sh; then
+            echo 'Composite checksum guard accepted a modified migration component' >&2
+            exit 1
+          fi
+          mv "$backup" "$target"
+          trap - EXIT
 
       - name: Verify migration registry
         shell: bash
