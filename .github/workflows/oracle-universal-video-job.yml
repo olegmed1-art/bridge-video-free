@@ -8,10 +8,10 @@ on:
     branches: [main]
     paths:
       - 'ops/oracle-universal-video-job-requests/*.json'
-  # Commits made by an integration token may not emit a push event that starts
-  # Actions.  Polling the explicit request queue keeps those jobs durable.
+  # Rare recovery watchdog for commits made by integration tokens that do not
+  # emit a push event. A durable issue receipt prevents replay of handled jobs.
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '17 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -32,6 +32,7 @@ jobs:
       issue: ${{ steps.request.outputs.issue }}
       job_id: ${{ steps.request.outputs.job_id }}
       profile: ${{ steps.request.outputs.profile }}
+      should_execute: ${{ steps.request.outputs.should_execute }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -41,6 +42,8 @@ jobs:
         id: request
         if: ${{ github.event_name != 'pull_request' }}
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [[ "$GITHUB_EVENT_NAME" == 'push' ]]; then
@@ -70,6 +73,29 @@ jobs:
           print('job_id='+jid)
           print('profile='+profile)
           PY
+
+          issue="$(sed -n 's/^issue=//p' "$GITHUB_OUTPUT" | tail -n1)"
+          job_id="$(sed -n 's/^job_id=//p' "$GITHUB_OUTPUT" | tail -n1)"
+          profile="$(sed -n 's/^profile=//p' "$GITHUB_OUTPUT" | tail -n1)"
+          [[ "$issue" =~ ^[1-9][0-9]*$ && -n "$job_id" && -n "$profile" ]]
+
+          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
+            receipt_count=0
+          else
+            marker="Universal Video / $profile / $job_id"
+            receipt_count="$(gh api --paginate --slurp \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/$GITHUB_REPOSITORY/issues/$issue/comments?per_page=100" \
+              | MARKER="$marker" python -c 'import json,os,sys; marker=os.environ["MARKER"]; data=json.load(sys.stdin); walk=lambda x: ([x] if isinstance(x,dict) else sum((walk(y) for y in x),[]) if isinstance(x,list) else []); print(sum(marker in str(x.get("body","")) for x in walk(data)))')"
+          fi
+          [[ "$receipt_count" =~ ^[0-9]+$ ]]
+          if (( receipt_count == 0 )); then
+            echo 'should_execute=true' >> "$GITHUB_OUTPUT"
+            echo 'durable request receipt absent; execution allowed'
+          else
+            echo 'should_execute=false' >> "$GITHUB_OUTPUT"
+            echo 'durable request receipt present; replay refused'
+          fi
       - name: Contract-only PR validation
         if: ${{ github.event_name == 'pull_request' }}
         run: |
@@ -80,7 +106,7 @@ jobs:
           PY
 
   execute:
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' && needs.validate.outputs.should_execute == 'true' }}
     needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 330
