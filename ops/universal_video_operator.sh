@@ -45,10 +45,10 @@ status(){
     inbox) echo 'UV_STATE=QUEUED' ;;
     running) echo 'UV_STATE=RUNNING' ;;
     failed)
-      if ! summary="$(/usr/bin/python3 "$RECEIPT_READER" inspect-failed "$receipt" "$name" 2>/dev/null)"; then
+      if ! summary="$(runuser -u universal-video -- /usr/bin/python3 "$RECEIPT_READER" inspect-failed "$receipt" "$name" 2>/dev/null)"; then
         echo 'UV_STATE=NONCONFORMANT'
         echo 'UV_ERROR_TYPE=UNSAFE_FAILED_RECEIPT'
-        exit 1
+        return 0
       fi
       echo 'UV_STATE=FAILED'
       printf '%s\n' "$summary"
