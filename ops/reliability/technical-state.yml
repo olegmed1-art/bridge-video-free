@@ -1,5 +1,5 @@
 schema_version: 1
-updated_at_utc: "2026-08-27T16:05:00Z"
+updated_at_utc: "2026-08-27T16:31:00Z"
 policy: docs/TECHNICAL_GOVERNANCE.md
 whole_school_recovery:
   target_status: RECOVERY_PROVEN_V1
@@ -11,7 +11,6 @@ whole_school_recovery:
     - full_end_to_end_restore_drill_not_proven
     - recovery_registry_evidence_not_populated
     - explicit_rpo_rto_not_fully_verified
-    - dds3_runtime_container_ci_not_executing_jobs
 
 components:
   github:
@@ -87,12 +86,27 @@ components:
   dds3:
     role: deterministic_bridge_compute
     criticality: critical
-    health: proven_on_golden_case
+    health: runtime_container_proof_success
     acceptance_requirements:
       engine: DDS3
       fallback_used: false
       expected_result_required: true
       evidence_retained: true
+    runtime_container_evidence:
+      workflow_run_id: 33093179244
+      workflow_job_id: 98591152227
+      merge_commit: 2162eac02e113276d8bad3c832350eb4b3ddcfcd
+      conclusion: success
+      jobs_observed: 1
+      proof_steps:
+        - build_pinned_dds3_core_image
+        - build_pinned_dds3_runtime_image
+        - real_dds3_readiness
+        - golden_http_compute
+        - unauthenticated_request_rejected
+      observed_engine: DDS3
+      observed_fallback_used: false
+      observed_par_score_ns: -110
     recovery_status: partial
 
   ben:
@@ -140,8 +154,12 @@ audit_snapshots:
     independent_large_media_backup: unproven
     restored_database_application_smoke: unproven
     dds3_runtime_container_workflow:
-      conclusion: failure
-      jobs_observed: 0
+      conclusion: success
+      workflow_run_id: 33093179244
+      workflow_job_id: 98591152227
+      merge_commit: 2162eac02e113276d8bad3c832350eb4b3ddcfcd
+      jobs_observed: 1
+      zero_job_symptom_resolved_by_pr: 703
     vercel_snapshot:
       production_healthy: true
       production_behind_main_commits: 4
@@ -155,6 +173,7 @@ audit_snapshots:
       neon_health: 32839810693
       neon_independent_backup_restore: 32932896224
       dds3_production_health: 32845019060
+      dds3_runtime_container_proof: 33093179244
       oracle_ben_dds3_health: 32835192297
       oci_finops_backup_observation: 32820354158
       drive_acl_main: 32415116012
@@ -182,8 +201,11 @@ work_queue:
       resolved_by_pr: 696
     - id: dds3_runtime_container_ci_execution
       priority: P0
-      status: queued
+      status: proven_by_main_ci
       tracking_issue: 523
+      resolved_by_pr: 703
+      evidence_workflow_run_id: 33093179244
+      evidence_workflow_job_id: 98591152227
     - id: oracle_boot_volume_restore_drill
       priority: P1
       status: queued
