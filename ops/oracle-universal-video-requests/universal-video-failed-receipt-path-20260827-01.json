@@ -1,0 +1,9 @@
+{
+  "request_id": "universal-video-failed-receipt-path-20260827-01",
+  "mode": "activate",
+  "git_ref": "0cdeb876e7ac2e5f6f8e64ea621c2a9bb3d6414a",
+  "expected_host_fingerprint": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}
