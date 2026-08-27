@@ -1,12 +1,11 @@
 schema_version: 1
-updated_at_utc: "2026-08-27T16:31:00Z"
+updated_at_utc: "2026-08-27T16:40:00Z"
 policy: docs/TECHNICAL_GOVERNANCE.md
 whole_school_recovery:
   target_status: RECOVERY_PROVEN_V1
   current_status: PARTIAL
   blockers:
     - independent_large_irreplaceable_media_backup_not_proven
-    - restored_database_application_smoke_not_proven
     - oci_boot_volume_restore_not_proven
     - full_end_to_end_restore_drill_not_proven
     - recovery_registry_evidence_not_populated
@@ -31,6 +30,18 @@ components:
     independent_backup: required
     backup_status: proven
     restore_status: proven
+    runtime_app_smoke_evidence:
+      workflow_run_id: 33094310879
+      workflow_job_id: 98595090998
+      merge_commit: 6c40d85e3c7d1d5c397038d7943bbece271fc77f
+      previous_failed_workflow_run_id: 33093768968
+      previous_failed_workflow_job_id: 98593212468
+      resolved_by_pr: 718
+      conclusion: success
+      principal: bridge_school_app_principal
+      capability: bridge_school_app
+      controlled_onboarding: verified
+      school: verified
     independent_backup_evidence:
       workflow_run_id: 32932896224
       artifact_id: 9593826932
@@ -152,7 +163,7 @@ audit_snapshots:
       result: blocked
       connector_limit_bytes: 268435456
     independent_large_media_backup: unproven
-    restored_database_application_smoke: unproven
+    restored_database_application_smoke: proven
     dds3_runtime_container_workflow:
       conclusion: success
       workflow_run_id: 33093179244
@@ -174,6 +185,7 @@ audit_snapshots:
       neon_independent_backup_restore: 32932896224
       dds3_production_health: 32845019060
       dds3_runtime_container_proof: 33093179244
+      restored_database_application_smoke: 33094310879
       oracle_ben_dds3_health: 32835192297
       oci_finops_backup_observation: 32820354158
       drive_acl_main: 32415116012
@@ -212,8 +224,11 @@ work_queue:
       tracking_issue: 265
     - id: restored_database_application_smoke
       priority: P1
-      status: queued
+      status: proven_by_main_ci
       tracking_issue: 523
+      resolved_by_pr: 718
+      evidence_workflow_run_id: 33094310879
+      evidence_workflow_job_id: 98595090998
     - id: recovery_registry_population_and_rpo_rto
       priority: P1
       status: queued
