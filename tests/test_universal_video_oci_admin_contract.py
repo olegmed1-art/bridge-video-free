@@ -88,3 +88,15 @@ def test_workflow_does_not_publish_raw_remote_output_or_oauth_values():
     assert "client_secret" not in WORKFLOW
     assert "refresh_token" not in WORKFLOW
     assert "GOOGLE_DRIVE_OAUTH_JSON" not in WORKFLOW
+
+
+def test_workflow_reuses_the_proven_bounded_oci_config_contract():
+    assert "OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}" in WORKFLOW
+    assert "OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}" in WORKFLOW
+    assert "OCI_CLI_USER" not in WORKFLOW
+    assert "OCI_CLI_TENANCY" not in WORKFLOW
+    assert "OCI_CLI_FINGERPRINT" not in WORKFLOW
+    assert "OCI_CLI_REGION" not in WORKFLOW
+    assert "region=eu-frankfurt-1" in WORKFLOW
+    assert "oci-cli==3.90.3" in WORKFLOW
+    assert "openssl pkey" in WORKFLOW
