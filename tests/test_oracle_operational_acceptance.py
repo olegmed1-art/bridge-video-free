@@ -58,3 +58,11 @@ def test_restore_preflight_is_read_only_and_keeps_restore_unproven():
     assert "boot-volume create" not in restore
     assert "instance action" not in restore
     assert "boot-volume delete" not in restore
+
+
+def test_oci_credentials_are_normalized_without_multiline_config_injection():
+    assert 'def scalar(env_name, config_key):' in WORKFLOW
+    assert 'expected one scalar or one {config_key}= entry' in WORKFLOW
+    assert '"user": scalar("OCI_USER", "user")' in WORKFLOW
+    assert '"tenancy": scalar("OCI_TENANCY", "tenancy")' in WORKFLOW
+    assert 'cat > "$HOME/.oci/config"' not in WORKFLOW

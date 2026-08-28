@@ -106,14 +106,29 @@ jobs:
           open(sys.argv[1], "w", encoding="utf-8", newline="\n").write(raw)
           ' "$HOME/.oci/key.pem"
           chmod 0600 "$HOME/.oci/key.pem"
-          cat > "$HOME/.oci/config" <<EOF
-          [DEFAULT]
-          user=$OCI_USER
-          fingerprint=$OCI_FINGERPRINT
-          tenancy=$OCI_TENANCY
-          region=$OCI_REGION
-          key_file=$HOME/.oci/key.pem
-          EOF
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          def scalar(env_name, config_key):
+              lines = [line.strip() for line in os.environ[env_name].replace("\\r", "").splitlines() if line.strip()]
+              matches = [line.split("=", 1)[1].strip() for line in lines if line.startswith(config_key + "=")]
+              if len(matches) == 1 and matches[0]:
+                  return matches[0]
+              if not matches and len(lines) == 1 and "=" not in lines[0]:
+                  return lines[0]
+              raise SystemExit(f"{env_name} is ambiguous; expected one scalar or one {config_key}= entry")
+
+          config = {
+              "user": scalar("OCI_USER", "user"),
+              "fingerprint": scalar("OCI_FINGERPRINT", "fingerprint"),
+              "tenancy": scalar("OCI_TENANCY", "tenancy"),
+              "region": scalar("OCI_REGION", "region"),
+          }
+          text = "[DEFAULT]\\n" + "".join(f"{key}={value}\\n" for key, value in config.items())
+          text += f"key_file={Path.home() / '.oci' / 'key.pem'}\\n"
+          (Path.home() / ".oci" / "config").write_text(text, encoding="utf-8")
+          PY
           chmod 0600 "$HOME/.oci/config"
           oci iam region list --output json >/dev/null
 
