@@ -110,11 +110,13 @@ jobs:
           restored_size="$(oci bv boot-volume get --boot-volume-id "$restored_id" --query 'data."size-in-gbs"' --raw-output)"
           [[ "$restored_state" == AVAILABLE && "$restored_size" == 47 ]] || exit 40
           oci bv boot-volume delete --boot-volume-id "$restored_id" --force >/dev/null
+          deleted=false
           for _ in $(seq 1 60); do
-            if ! oci bv boot-volume get --boot-volume-id "$restored_id" --output json >/dev/null 2>&1; then break; fi
+            state="$(oci bv boot-volume get --boot-volume-id "$restored_id" --query 'data."lifecycle-state"' --raw-output 2>/dev/null || true)"
+            if [[ -z "$state" || "$state" == TERMINATED ]]; then deleted=true; break; fi
             sleep 5
           done
-          if oci bv boot-volume get --boot-volume-id "$restored_id" --output json >/dev/null 2>&1; then exit 41; fi
+          [[ "$deleted" == true ]] || exit 41
           trap - EXIT
           STATUS=PASS SIZE="$restored_size" python - <<'PY' > "$evidence"
           import json,os
