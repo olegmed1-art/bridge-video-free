@@ -1,15 +1,26 @@
 from bridge_vision.evidence_fusion import fuse_card_evidence
 
-
 RANKS = "AKQJT98765432"
 
 
-def declaration(card, seat, *, confidence=0.97, segment=1, role="TEACHER"):
+def declaration(
+    card,
+    seat,
+    *,
+    confidence=0.97,
+    segment=1,
+    role="TEACHER",
+    speaker_confidence=0.98,
+    verified=True,
+):
     return {
         "card": card,
         "seat": seat,
         "confidence": confidence,
         "speaker_role": role,
+        "speaker_id": "teacher-0" if role == "TEACHER" else "student-0",
+        "speaker_identity_verified": verified,
+        "speaker_assignment_confidence": speaker_confidence,
         "evidence_locator": f"transcript.jsonl#segment={segment}",
         "start": float(segment),
         "end": float(segment) + 1.0,
@@ -53,7 +64,7 @@ def test_low_confidence_or_unverified_speaker_never_becomes_card_fact():
         {"N": ["AS"]},
         [
             declaration("KH", "E", confidence=0.5),
-            declaration("QD", "S", role="STUDENT", segment=2),
+            declaration("QD", "S", role="STUDENT", segment=2, verified=False),
         ],
     )
     assert result["status"] == "REVIEW"
@@ -63,6 +74,17 @@ def test_low_confidence_or_unverified_speaker_never_becomes_card_fact():
         "LOW_CONFIDENCE",
         "UNVERIFIED_SPEAKER",
     }
+
+
+def test_low_speaker_assignment_confidence_is_rejected():
+    result = fuse_card_evidence(
+        {},
+        [declaration("AS", "N", speaker_confidence=0.60)],
+    )
+
+    assert result["status"] == "REVIEW"
+    assert result["deal"]["hands"]["N"]["cards"] == []
+    assert result["rejected_declarations"][0]["reason"] == "LOW_SPEAKER_CONFIDENCE"
 
 
 def test_speech_visual_cross_seat_conflict_fails_closed():
@@ -135,3 +157,116 @@ def test_partial_rank_and_suit_fields_become_exact_card_declaration():
     assert result["status"] == "PASS"
     assert result["accepted_declarations"][0]["card"] == "TH"
     assert result["deal"]["hands"]["E"]["cards"] == ["TH"]
+
+
+def test_exact_student_declaration_is_retained_but_never_becomes_observation():
+    result = fuse_card_evidence(
+        {"N": ["AS"]},
+        [declaration("KH", "E", role="STUDENT")],
+    )
+
+    assert result["status"] == "REVIEW"
+    assert result["deal"]["hands"]["E"]["cards"] == []
+    assert result["accepted_declarations"] == []
+    suggestion = result["student_speech_suggestions"][0]
+    assert suggestion["resolution"] == "UNCONFIRMED_STUDENT_SUGGESTION"
+    assert suggestion["provenance_class"] == "STUDENT_SPEECH_SUGGESTION"
+    assert suggestion["accepted_as_observation"] is False
+
+
+def test_student_declaration_cannot_trigger_fourth_hand_derivation():
+    visual = {
+        "N": [f"{rank}S" for rank in RANKS],
+        "E": [f"{rank}H" for rank in RANKS],
+        "S": [f"{rank}D" for rank in RANKS[:-1]],
+    }
+    result = fuse_card_evidence(
+        visual,
+        [declaration("2D", "S", role="STUDENT")],
+    )
+
+    assert result["status"] == "REVIEW"
+    assert result["deal"]["hands"]["S"]["unknown_count"] == 1
+    assert result["deal"]["hands"]["W"]["unknown_count"] == 13
+    assert result["deal"]["derivations"] == []
+
+
+def test_student_and_layout_may_corroborate_but_still_do_not_add_card():
+    layout = {
+        "seat": "W",
+        "suggested_card": "QD",
+        "resolution": "LAYOUT_UNIQUE_SUGGESTION",
+        "provenance_class": "LAYOUT_SUGGESTION",
+        "accepted_as_observation": False,
+    }
+    result = fuse_card_evidence(
+        {},
+        [declaration("QD", "W", role="STUDENT")],
+        layout_suggestions=[layout],
+    )
+
+    assert result["deal"]["hands"]["W"]["cards"] == []
+    assert result["student_speech_suggestions"][0]["resolution"] == (
+        "CORROBORATES_LAYOUT_SUGGESTION"
+    )
+    assert result["speech_layout_corroborations"] == [
+        {
+            "seat": "W",
+            "card": "QD",
+            "speech_source": "STUDENT_SPEECH_SUGGESTION",
+            "speech_evidence_locator": "transcript.jsonl#segment=1",
+            "layout_index": 0,
+            "accepted_as_observation": False,
+            "speech_declaration_accepted_as_observation": False,
+            "layout_accepted_as_observation": False,
+        }
+    ]
+
+
+def test_student_contradiction_is_review_signal_not_hard_conflict():
+    result = fuse_card_evidence(
+        {"N": ["AS"]},
+        [declaration("AS", "W", role="STUDENT")],
+    )
+
+    assert result["status"] == "REVIEW"
+    assert result["conflicts"] == []
+    assert result["deal"]["hands"]["N"]["cards"] == ["AS"]
+    assert result["student_speech_suggestions"][0]["resolution"] == (
+        "CONTRADICTS_ACCEPTED_EVIDENCE"
+    )
+
+
+def test_student_declaration_remains_auditable_when_teacher_causes_hard_conflict():
+    result = fuse_card_evidence(
+        {"N": ["AS"]},
+        [
+            declaration("AS", "W"),
+            declaration("KH", "E", role="STUDENT", segment=2),
+        ],
+    )
+
+    assert result["status"] == "CONFLICT"
+    suggestion = result["student_speech_suggestions"][0]
+    assert suggestion["card"] == "KH"
+    assert suggestion["resolution"] == "NOT_EVALUATED_DUE_TO_HARD_CONFLICT"
+    assert suggestion["accepted_as_observation"] is False
+
+
+def test_teacher_speech_and_layout_corroboration_remains_attributable():
+    layout = {
+        "seat": "W",
+        "suggested_card": "QD",
+        "resolution": "LAYOUT_UNIQUE_SUGGESTION",
+        "provenance_class": "LAYOUT_SUGGESTION",
+        "accepted_as_observation": False,
+    }
+    result = fuse_card_evidence(
+        {},
+        [declaration("QD", "W")],
+        layout_suggestions=[layout],
+    )
+
+    assert result["status"] == "PASS"
+    assert result["deal"]["hands"]["W"]["cards"] == ["QD"]
+    assert result["speech_layout_corroborations"][0]["speech_source"] == "TEACHER_SPEECH"

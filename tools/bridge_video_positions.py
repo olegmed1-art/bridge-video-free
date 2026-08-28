@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Post-process Universal Video keyframes through the school-owned Bridge Vision engine.
 
 Native Bridge Vision is the default. The old BBO screenshot parser remains an
@@ -7,15 +6,104 @@ explicit opt-in legacy adapter only; it is never silently selected.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from bridge_vision import BridgeVisionEngine
+from bridge_vision import BridgeVisionEngine, fuse_card_evidence
+from bridge_vision.evidence_fusion import MAX_DECLARATIONS
 
 NativeDetectorInjection = Callable[[Path], dict[str, Any]]
 
 LegacyParserInjection = Callable[[Path], dict[str, Any]]
+
+
+def _bounded_speech_declarations(
+    declarations: Iterable[Mapping[str, Any]] | None,
+) -> list[Mapping[str, Any]]:
+    if declarations is None:
+        return []
+    if isinstance(declarations, (str, bytes)):
+        raise TypeError("speech declarations must be an iterable of objects")
+    bounded: list[Mapping[str, Any]] = []
+    for index, declaration in enumerate(declarations):
+        if index >= MAX_DECLARATIONS:
+            raise ValueError("too many speech declarations")
+        if not isinstance(declaration, Mapping):
+            raise TypeError("speech declaration must be an object")
+        bounded.append(declaration)
+    return bounded
+
+
+def _speech_for_frame(
+    declarations: list[Mapping[str, Any]],
+    *,
+    frame_file: str,
+    frame_sha256: str,
+    frame_time: Any,
+) -> list[tuple[int, Mapping[str, Any]]]:
+    selected: list[tuple[int, Mapping[str, Any]]] = []
+    try:
+        timestamp = float(frame_time)
+    except (TypeError, ValueError):
+        timestamp = math.nan
+    for index, declaration in enumerate(declarations):
+        declared_sha = declaration.get("frame_sha256")
+        declared_file = declaration.get("frame_file")
+        if declared_sha is not None:
+            applies = str(declared_sha) == frame_sha256
+        elif declared_file is not None:
+            applies = str(declared_file) == frame_file
+        else:
+            try:
+                start = float(declaration.get("start"))
+                end = float(declaration.get("end"))
+            except (TypeError, ValueError):
+                applies = False
+            else:
+                applies = math.isfinite(timestamp) and start <= timestamp <= end
+        if applies:
+            selected.append((index, declaration))
+    return selected
+
+
+def _layout_suggestions(result: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    suggestions: list[Mapping[str, Any]] = []
+    sources = list(result.get("candidates") or []) + list(result.get("diagnostics") or [])
+    for source in sources:
+        if not isinstance(source, Mapping):
+            continue
+        evidence = source.get("evidence") or {}
+        if not isinstance(evidence, Mapping):
+            continue
+        raw_suggestions = evidence.get("layout_suggestions") or []
+        if not isinstance(raw_suggestions, list):
+            continue
+        suggestions.extend(item for item in raw_suggestions if isinstance(item, Mapping))
+    return suggestions
+
+
+def _observed_hands(result: Mapping[str, Any]) -> dict[str, list[str]]:
+    deal = result.get("deal") or {}
+    provenance = deal.get("card_provenance") if isinstance(deal, Mapping) else None
+    if not isinstance(provenance, Mapping):
+        return {}
+    return {
+        seat: list(entry.get("observed_cards") or [])
+        for seat, entry in provenance.items()
+        if isinstance(entry, Mapping) and entry.get("observed_cards")
+    }
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _safe_frame_path(job_dir: Path, file_name: Any) -> Path:
@@ -81,6 +169,7 @@ def process_job_frames(
     parser: LegacyParserInjection | None = None,
     allow_legacy_old_bbo: bool = False,
     profiled_challenger: NativeDetectorInjection | None = None,
+    speech_declarations: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     selected = sum(value is not None for value in (engine, parser, profiled_challenger))
     if selected > 1:
@@ -93,7 +182,7 @@ def process_job_frames(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     frames = manifest.get("frames")
     if not isinstance(frames, list):
-        raise ValueError("manifest frames must be an array")
+        raise TypeError("manifest frames must be an array")
 
     if parser is not None:
         vision = BridgeVisionEngine({"explicit-injected-parser": _wrap_injected_parser(parser)})
@@ -102,15 +191,27 @@ def process_job_frames(
             allow_legacy_old_bbo=allow_legacy_old_bbo,
             profiled_challenger=profiled_challenger,
         )
+    profiled_shadow = vision.shadow_only
+    speech = _bounded_speech_declarations(speech_declarations)
+    if speech and not profiled_shadow:
+        raise ValueError("speech evidence fusion is limited to the profiled shadow challenger")
     records: list[dict[str, Any]] = []
     recognized_frames = 0
     conflict_frames = 0
     derived_fourth_hand_frames = 0
+    speech_fusion_records = 0
+    speech_review_frames = 0
+    speech_conflict_frames = 0
+    speech_frame_associations = 0
+    matched_speech_indices: set[int] = set()
 
     for frame_meta in frames:
         if not isinstance(frame_meta, dict):
-            raise ValueError("manifest frame entry must be an object")
+            raise TypeError("manifest frame entry must be an object")
         frame = _safe_frame_path(root, frame_meta.get("file"))
+        actual_frame_sha = _sha256(frame) if profiled_shadow else None
+        if profiled_shadow and frame_meta.get("sha256") != actual_frame_sha:
+            raise ValueError("profiled shadow frame hash mismatch")
         result = vision.analyze_frame(frame).to_dict()
         if compatibility_mode:
             candidates = result.get("candidates") or []
@@ -123,7 +224,29 @@ def process_job_frames(
             result["state_fingerprint"] = evidence.get("state_fingerprint")
         result["time"] = frame_meta.get("time")
         result["frame_file"] = frame.name
-        result["frame_sha256"] = frame_meta.get("sha256")
+        result["frame_sha256"] = actual_frame_sha or frame_meta.get("sha256")
+        if speech:
+            selected_speech_rows = _speech_for_frame(
+                speech,
+                frame_file=frame.name,
+                frame_sha256=str(result["frame_sha256"] or ""),
+                frame_time=frame_meta.get("time"),
+            )
+            if selected_speech_rows:
+                matched_speech_indices.update(index for index, _ in selected_speech_rows)
+                speech_frame_associations += len(selected_speech_rows)
+                fusion = fuse_card_evidence(
+                    _observed_hands(result),
+                    [declaration for _, declaration in selected_speech_rows],
+                    layout_suggestions=_layout_suggestions(result),
+                )
+                result["speech_fusion"] = fusion
+                result["fused_deal"] = fusion["deal"]
+                speech_fusion_records += 1
+                if fusion["status"] == "CONFLICT":
+                    speech_conflict_frames += 1
+                elif fusion["status"] == "REVIEW":
+                    speech_review_frames += 1
         records.append(result)
         if result["deal"] is not None:
             recognized_frames += 1
@@ -132,11 +255,14 @@ def process_job_frames(
         if result["status"] == "CONFLICT":
             conflict_frames += 1
 
-    output_path = root / "bridge_positions.jsonl"
+    output_path = root / (
+        "bridge_positions_profiled_shadow.jsonl" if profiled_shadow else "bridge_positions.jsonl"
+    )
     output_path.write_text(
         "".join(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n" for record in records),
         encoding="utf-8",
     )
+    unmatched_speech_declarations = len(speech) - len(matched_speech_indices)
     if compatibility_mode:
         summary = {
             "status": "REVIEW" if conflict_frames else "COMPLETED",
@@ -152,11 +278,26 @@ def process_job_frames(
         }
     else:
         summary = {
-            "status": "REVIEW" if conflict_frames else "COMPLETED",
+            "status": (
+                "SHADOW_REVIEW"
+                if profiled_shadow and (
+                    conflict_frames
+                    or speech_conflict_frames
+                    or speech_review_frames
+                    or unmatched_speech_declarations
+                )
+                else "SHADOW_COMPLETED"
+                if profiled_shadow
+                else "REVIEW"
+                if conflict_frames
+                else "COMPLETED"
+            ),
             "vision_engine": "native",
             "detectors": list(vision.detector_names),
             "legacy_old_bbo_enabled": bool(allow_legacy_old_bbo),
-            "profiled_challenger_enabled": profiled_challenger is not None,
+            "profiled_challenger_enabled": profiled_shadow,
+            "result_scope": "SHADOW_ONLY" if profiled_shadow else "CANONICAL_PIPELINE_INPUT",
+            "canonical_promotion_allowed": not profiled_shadow,
             "job_id": manifest.get("job_id"),
             "source_fingerprint": manifest.get("source_fingerprint"),
             "input_frames": len(frames),
@@ -165,9 +306,20 @@ def process_job_frames(
             "conflict_frames": conflict_frames,
             "derive_fourth_hand": True,
             "derived_fourth_hand_frames": derived_fourth_hand_frames,
+            "speech_fusion_records": speech_fusion_records,
+            "speech_review_frames": speech_review_frames,
+            "speech_conflict_frames": speech_conflict_frames,
+            "speech_declarations_input": len(speech),
+            "speech_declarations_matched": len(matched_speech_indices),
+            "speech_unmatched_declarations": unmatched_speech_declarations,
+            "speech_frame_associations": speech_frame_associations,
             "output": output_path.name,
         }
-    summary_path = root / "bridge_positions_summary.json"
+    summary_path = root / (
+        "bridge_positions_profiled_shadow_summary.json"
+        if profiled_shadow
+        else "bridge_positions_summary.json"
+    )
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
 

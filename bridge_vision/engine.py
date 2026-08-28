@@ -95,11 +95,24 @@ class BridgeVisionEngine:
         if not 0.0 <= min_confidence <= 1.0:
             raise ValueError("min_confidence outside [0,1]")
         self._detectors = dict(detectors or {})
+        self._validate_detector_modes()
         self.min_confidence = float(min_confidence)
+
+    def _validate_detector_modes(self) -> None:
+        modes = {bool(getattr(detector, "shadow_only", False)) for detector in self._detectors.values()}
+        if len(modes) > 1:
+            raise ValueError("shadow-only and canonical detectors cannot be mixed")
 
     @property
     def detector_names(self) -> tuple[str, ...]:
         return tuple(sorted(self._detectors))
+
+    @property
+    def shadow_only(self) -> bool:
+        return bool(self._detectors) and all(
+            bool(getattr(detector, "shadow_only", False))
+            for detector in self._detectors.values()
+        )
 
     def register(self, name: str, detector: Detector) -> None:
         key = str(name or "").strip()
@@ -108,6 +121,11 @@ class BridgeVisionEngine:
         if key in self._detectors:
             raise ValueError(f"detector already registered: {key}")
         self._detectors[key] = detector
+        try:
+            self._validate_detector_modes()
+        except ValueError:
+            self._detectors.pop(key, None)
+            raise
 
     def analyze_frame(self, frame: Path) -> VisionResult:
         candidates: list[VisionCandidate] = []
