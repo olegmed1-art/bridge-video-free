@@ -109,6 +109,13 @@ BEGIN
         RETURN NEW;
     END IF;
 
+    -- Shared row-lock protocol: activation and every mutable rule-dependent
+    -- definition serialize on the owning bidding.rule row.
+    PERFORM 1
+      FROM bidding.rule
+     WHERE rule_id=NEW.rule_id
+     FOR UPDATE;
+
     SELECT r.school_id, r.knowledge_version_id, kv.authority_class
       INTO v_rule_school, v_knowledge_version_id, v_authority_class
       FROM bidding.rule AS r
@@ -209,6 +216,10 @@ DECLARE
     v_rule_id uuid;
 BEGIN
     IF TG_OP='DELETE' THEN v_rule_id := OLD.rule_id; ELSE v_rule_id := NEW.rule_id; END IF;
+    PERFORM 1
+      FROM bidding.rule
+     WHERE rule_id=v_rule_id
+     FOR UPDATE;
     IF bidding.rule_is_currently_active(v_rule_id) THEN
         RAISE EXCEPTION 'BID_ACTIVE_RULE_TEST_IMMUTABLE' USING ERRCODE='55000';
     END IF;
@@ -234,6 +245,11 @@ BEGIN
     ELSE
         v_from_rule := NEW.from_rule_id; v_to_rule := NEW.to_rule_id;
     END IF;
+    PERFORM 1
+      FROM bidding.rule
+     WHERE rule_id IN (v_from_rule,v_to_rule)
+     ORDER BY rule_id
+     FOR UPDATE;
     IF bidding.rule_is_currently_active(v_from_rule)
        OR bidding.rule_is_currently_active(v_to_rule) THEN
         RAISE EXCEPTION 'BID_ACTIVE_RULE_RELATION_IMMUTABLE' USING ERRCODE='55000';
