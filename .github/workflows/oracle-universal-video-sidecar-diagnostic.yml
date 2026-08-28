@@ -75,9 +75,9 @@ jobs:
           REQUEST_FILE="${files[0]}" python - <<'PY'
           import json,os,re
           x=json.load(open(os.environ['REQUEST_FILE'],encoding='utf-8'))
-          assert set(x)=={'request_id','operation'},x
-          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}',str(x['request_id']))
-          assert x['operation']=='diagnose'
+          assert set(x) == {'request_id','operation'}, x
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
+          assert x['operation'] == 'diagnose'
           print('UNIVERSAL_VIDEO_SIDECAR_DIAGNOSTIC_REQUEST_PASS')
           PY
 
