@@ -83,7 +83,9 @@ jobs:
           echo 'bounded start dispatched for active manual hold'
 
   reconcile:
-    if: ${{ github.event_name == 'schedule' }}
+    # Temporary operator pause (2026-08-28): disable scheduled power-state
+    # reconciliation. Explicit hold/release commands remain available.
+    if: ${{ github.event_name == 'schedule' && false }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     env:
