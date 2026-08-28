@@ -14,7 +14,7 @@ on:
         description: Safe operation to execute
         required: true
         type: choice
-        options: [preflight, reboot]
+        options: [preflight, restore-preflight, reboot]
         default: preflight
 
 permissions:
@@ -49,6 +49,7 @@ jobs:
       (github.event_name == 'issue_comment' &&
        github.event.comment.user.login == 'olegmed1-art' &&
        (github.event.comment.body == '/oracle-ops preflight' ||
+        github.event.comment.body == '/oracle-ops restore-preflight' ||
         github.event.comment.body == '/oracle-ops reboot')) ||
       github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
@@ -80,11 +81,12 @@ jobs:
           if [[ -z "$operation" ]]; then
             case "$COMMENT" in
               '/oracle-ops preflight') operation=preflight ;;
+              '/oracle-ops restore-preflight') operation=restore-preflight ;;
               '/oracle-ops reboot') operation=reboot ;;
               *) exit 20 ;;
             esac
           fi
-          [[ "$operation" == preflight || "$operation" == reboot ]]
+          [[ "$operation" == preflight || "$operation" == restore-preflight || "$operation" == reboot ]]
           echo "operation=$operation" >> "$GITHUB_OUTPUT"
 
       - name: Configure pinned OCI CLI credential
@@ -116,6 +118,7 @@ jobs:
           oci iam region list --output json >/dev/null
 
       - name: Execute backup, budget and optional reboot gate
+        if: ${{ steps.operation.outputs.operation != 'restore-preflight' }}
         id: gate
         shell: bash
         env:
@@ -130,12 +133,68 @@ jobs:
           export EVIDENCE_FILE="$RUNNER_TEMP/oracle-operational-evidence.json"
           bash ops/oracle_dds3_operational_gate.sh
 
+
+      - name: Read-only boot-volume restore preflight
+        if: ${{ steps.operation.outputs.operation == 'restore-preflight' }}
+        id: restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$OCI_REGION" == "eu-frankfurt-1" ]] || { echo "Refusing non-Frankfurt region" >&2; exit 30; }
+          export OCI_CLI_REGION="$OCI_REGION"
+          instance_name=bridge-school-dds3-frankfurt
+          evidence="$RUNNER_TEMP/oracle-operational-evidence.json"
+          roots="$(oci iam compartment list --include-root --all --output json)"
+          tenancy_id="$(printf '%s' "$roots" | python -c 'import json,sys; xs=[x["id"] for x in json.load(sys.stdin)["data"] if x.get("id","").startswith("ocid1.tenancy.")]; assert len(xs)==1; print(xs[0])')"
+          instances="$(oci compute instance list --compartment-id "$tenancy_id" --display-name "$instance_name" --all --output json)"
+          instance_count="$(printf '%s' "$instances" | python -c 'import json,sys; print(len([x for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state") not in {"TERMINATED","TERMINATING"}]))')"
+          [[ "$instance_count" == 1 ]] || { echo "Expected exactly one live instance, found $instance_count" >&2; exit 32; }
+          instance_id="$(printf '%s' "$instances" | python -c 'import json,sys; print([x for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state") not in {"TERMINATED","TERMINATING"}][0]["id"])')"
+          instance_json="$(oci compute instance get --instance-id "$instance_id" --output json)"
+          instance_state="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["lifecycle-state"])')"
+          availability_domain="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["availability-domain"])')"
+          [[ "$instance_state" == RUNNING ]] || { echo "Instance is not RUNNING" >&2; exit 33; }
+          attachments="$(oci compute boot-volume-attachment list --compartment-id "$tenancy_id" --availability-domain "$availability_domain" --instance-id "$instance_id" --all --output json)"
+          attachment_count="$(printf '%s' "$attachments" | python -c 'import json,sys; print(len([x for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state")=="ATTACHED"]))')"
+          [[ "$attachment_count" == 1 ]] || { echo "Expected exactly one attached boot volume, found $attachment_count" >&2; exit 34; }
+          boot_volume_id="$(printf '%s' "$attachments" | python -c 'import json,sys; print([x for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state")=="ATTACHED"][0]["boot-volume-id"])')"
+          boot_volume_json="$(oci bv boot-volume get --boot-volume-id "$boot_volume_id" --output json)"
+          boot_volume_size_gb="$(printf '%s' "$boot_volume_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["size-in-gbs"])')"
+          backups="$(oci bv boot-volume-backup list --compartment-id "$tenancy_id" --boot-volume-id "$boot_volume_id" --all --output json)"
+          backup_json="$(printf '%s' "$backups" | python -c '
+          import json,sys
+          xs=[x for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state")=="AVAILABLE" and x.get("type")=="FULL" and x.get("source-boot-volume-id")==sys.argv[1]]
+          xs.sort(key=lambda x:x.get("time-created",""), reverse=True)
+          assert xs, "no AVAILABLE FULL backup for attached production boot volume"
+          print(json.dumps(xs[0]))
+          ' "$boot_volume_id")"
+          backup_state="$(printf '%s' "$backup_json" | python -c 'import json,sys; print(json.load(sys.stdin)["lifecycle-state"])')"
+          backup_type="$(printf '%s' "$backup_json" | python -c 'import json,sys; print(json.load(sys.stdin)["type"])')"
+          backup_size_gb="$(printf '%s' "$backup_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("size-in-gbs") or "")')"
+          [[ "$backup_state" == AVAILABLE && "$backup_type" == FULL ]] || exit 35
+          [[ -n "$backup_size_gb" && "$backup_size_gb" -ge "$boot_volume_size_gb" ]] || { echo "Backup capacity is smaller than source volume" >&2; exit 36; }
+          STATUS=RESTORE_PREFLIGHT_PASS INSTANCE_STATE="$instance_state" AVAILABILITY_DOMAIN="$availability_domain" \
+          BOOT_VOLUME_SIZE_GB="$boot_volume_size_gb" BACKUP_STATE="$backup_state" BACKUP_TYPE="$backup_type" \
+          BACKUP_SIZE_GB="$backup_size_gb" python - <<'PY' > "$evidence"
+          import json, os
+          print(json.dumps({
+              "status": os.environ["STATUS"], "instance_state": os.environ["INSTANCE_STATE"],
+              "availability_domain": os.environ["AVAILABILITY_DOMAIN"],
+              "boot_volume_size_gb": int(os.environ["BOOT_VOLUME_SIZE_GB"]),
+              "backup_state": os.environ["BACKUP_STATE"], "backup_type": os.environ["BACKUP_TYPE"],
+              "backup_size_gb": int(os.environ["BACKUP_SIZE_GB"]),
+              "restore_executed": False, "production_volume_modified": False,
+              "evidence_class": "READ_ONLY_RESTORE_PREFLIGHT",
+              "next_gate": "isolated_restore_and_acceptance_still_required",
+          }, sort_keys=True))
+          PY
+
       - name: Publish sanitized evidence
         if: ${{ always() }}
         shell: bash
         env:
           OPERATION: ${{ steps.operation.outputs.operation }}
-          GATE_OUTCOME: ${{ steps.gate.outcome }}
+          GATE_OUTCOME: ${{ steps.operation.outputs.operation == 'restore-preflight' && steps.restore.outcome || steps.gate.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -155,6 +214,8 @@ jobs:
                   "status", "shape", "ocpu", "memory_gb", "boot_volume_size_gb",
                   "backup_state", "budget_amount", "budget_email_configured",
                   "rebooted", "host_disk", "host_memory", "control_path",
+                  "instance_state", "availability_domain", "backup_type", "backup_size_gb",
+                  "restore_executed", "production_volume_modified", "evidence_class", "next_gate",
               ):
                   print(f"- `{key}`: `{x.get(key, 'unknown')}`")
           else:
