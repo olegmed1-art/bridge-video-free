@@ -56,6 +56,10 @@ WITH RECURSIVE walk(value,key_path) AS (
                 'northhand','easthand','southhand','westhand',
                 'handnorth','handeast','handsouth','handwest',
                 'handsnorth','handseast','handssouth','handswest',
+                'handn','hande','hands','handw',
+                'handsn','handse','handss','handsw',
+                'nhand','ehand','shand','whand',
+                'nhands','ehands','shands','whands',
                 'fulldeal','hiddencards','actualpartnerhand',
                 'actualopponenthand','actualopponenthands',
                 'partnercards','opponentcards','allhands'
