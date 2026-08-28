@@ -104,12 +104,12 @@ WITH RECURSIVE walk(value,key_path) AS (
                  WHERE array_to_string(
                            w.key_path[path_start.i:path_end.j],''
                        ) = f.alias
-                    OR array_to_string(
-                           w.key_path[path_start.i:path_end.j],''
-                       ) LIKE f.alias || '%'
-                    OR array_to_string(
-                           w.key_path[path_start.i:path_end.j],''
-                       ) LIKE '%' || f.alias
+                    OR (
+                        length(f.alias) >= 8
+                        AND array_to_string(
+                            w.key_path[path_start.i:path_end.j],''
+                        ) LIKE f.alias || '%'
+                    )
            )
            AND NOT (
                 jsonb_typeof(w.value)='number'
@@ -118,7 +118,12 @@ WITH RECURSIVE walk(value,key_path) AS (
                       FROM unnest(w.key_path) AS metric(segment)
                       CROSS JOIN metric_word AS m
                      WHERE metric.segment=m.word
-                        OR metric.segment LIKE '%' || m.word || '%'
+                        OR EXISTS (
+                            SELECT 1
+                              FROM forbidden_alias AS metric_alias
+                             WHERE length(metric_alias.alias) >= 8
+                               AND metric.segment = metric_alias.alias || m.word
+                        )
                 )
            )
      )
@@ -134,7 +139,12 @@ WITH RECURSIVE walk(value,key_path) AS (
                       FROM unnest(w.key_path) AS metric(segment)
                       CROSS JOIN metric_word AS m
                      WHERE metric.segment=m.word
-                        OR metric.segment LIKE '%' || m.word || '%'
+                        OR EXISTS (
+                            SELECT 1
+                              FROM forbidden_alias AS metric_alias
+                             WHERE length(metric_alias.alias) >= 8
+                               AND metric.segment = metric_alias.alias || m.word
+                        )
                     )
                )
                AND (
@@ -166,10 +176,10 @@ WITH RECURSIVE walk(value,key_path) AS (
                     )
                     OR (
                         w.key_path[left_pos.i]='hidden'
-                        AND w.key_path[right_pos.j]='cards'
+                        AND w.key_path[right_pos.j] IN ('card','cards')
                     )
                     OR (
-                        w.key_path[left_pos.i]='cards'
+                        w.key_path[left_pos.i] IN ('card','cards')
                         AND w.key_path[right_pos.j]='hidden'
                     )
                     OR (
@@ -179,7 +189,7 @@ WITH RECURSIVE walk(value,key_path) AS (
                )
         )
         OR (
-            jsonb_typeof(w.value) IN ('object','array')
+            jsonb_typeof(w.value) <> 'number'
             AND (
                 'allhands'=ANY(w.key_path)
                 OR EXISTS (
@@ -204,9 +214,18 @@ WITH RECURSIVE walk(value,key_path) AS (
             AND EXISTS (
                 SELECT 1
                   FROM jsonb_each(w.value) AS seat_field(key,value)
-                 WHERE lower(regexp_replace(seat_field.key,'[^a-z0-9]','','g'))='seat'
+                 WHERE lower(regexp_replace(seat_field.key,'[^a-z0-9]','','g'))
+                       IN ('seat','owner')
                    AND jsonb_typeof(seat_field.value)='string'
-                   AND upper(seat_field.value #>> '{}') IN ('N','E','S','W')
+                   AND (
+                       upper(seat_field.value #>> '{}') IN ('N','E','S','W')
+                       OR (
+                           lower(regexp_replace(seat_field.key,'[^a-z0-9]','','g'))='owner'
+                           AND lower(seat_field.value #>> '{}') IN (
+                               'partner','opponent','opponents','other','others'
+                           )
+                       )
+                   )
             )
             AND EXISTS (
                 SELECT 1
