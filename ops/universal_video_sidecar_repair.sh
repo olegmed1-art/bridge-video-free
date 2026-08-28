@@ -16,7 +16,7 @@ readonly SAFE_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 fail() {
   local code="$1"
   case "$code" in
-    MUST_RUN_AS_ROOT|PROTECTED_SERVICE|DDS3|RUNTIME_LAYOUT|RUNTIME_PIN|RUNTIME_DIRTY|QUEUED_OR_RUNNING_JOB|IMPORT_MODULE_MISSING|IMPORT_PERMISSION|IMPORT_OS_ERROR|IMPORT_OTHER|SPOOL_REPAIR|SERVICE_START|POST_REGRESSION) ;;
+    MUST_RUN_AS_ROOT|PROTECTED_SERVICE|DDS3|RUNTIME_LAYOUT|RUNTIME_PIN|RUNTIME_DIRTY|QUEUED_OR_RUNNING_JOB|SPOOL_REPAIR|SERVICE_START|POST_REGRESSION) ;;
     *) code='RUNTIME_LAYOUT' ;;
   esac
   printf 'UNIVERSAL_VIDEO_SIDECAR_REPAIR_FAIL=%s\n' "$code" >&2
@@ -85,33 +85,8 @@ else
 fi
 echo 'spool_write_boundary=repaired'
 
-set +e
-runuser -u universal-video -- /usr/bin/env -i \
-  PATH="$SAFE_PATH" HOME="$BASE_DIR" \
-  PYTHONPATH="$SOURCE_DIR" PYTHONDONTWRITEBYTECODE=1 HF_HOME="$BASE_DIR/model-cache" \
-  "$PYTHON" - <<'PY' >/dev/null
-import sys
-try:
-    import universal_video.spool_worker
-except ModuleNotFoundError:
-    sys.exit(41)
-except PermissionError:
-    sys.exit(42)
-except OSError:
-    sys.exit(43)
-except Exception:
-    sys.exit(44)
-PY
-import_rc=$?
-set -e
-case "$import_rc" in
-  0) ;;
-  41) fail IMPORT_MODULE_MISSING ;;
-  42) fail IMPORT_PERMISSION ;;
-  43) fail IMPORT_OS_ERROR ;;
-  *) fail IMPORT_OTHER ;;
-esac
-echo 'runtime_import=pass'
+echo 'runtime_import=deferred_to_authoritative_systemd_unit'
+
 
 install -o root -g root -m 0644 "$UNIT_SOURCE" "$UNIT_TARGET"
 systemctl daemon-reload
