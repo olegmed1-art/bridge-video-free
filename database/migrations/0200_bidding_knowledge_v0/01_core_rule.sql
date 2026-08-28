@@ -80,12 +80,42 @@ WITH RECURSIVE walk(value,key_path) AS (
          WHERE path_end.j >= path_start.i
            AND array_to_string(w.key_path[path_start.i:path_end.j],'')
                = ANY (SELECT alias FROM forbidden_alias)
+           AND (
+                jsonb_typeof(w.value) IN ('object','array')
+                OR path_end.j=cardinality(w.key_path)
+                OR EXISTS (
+                    SELECT 1
+                      FROM unnest(
+                          w.key_path[path_end.j+1:cardinality(w.key_path)]
+                      ) AS suffix(segment)
+                     WHERE suffix.segment <> ALL (ARRAY[
+                         'played','count','counts','total','totals',
+                         'rate','rates','average','averages','avg',
+                         'percentage','percentages','pct'
+                     ])
+                )
+           )
      )
         OR EXISTS (
             SELECT 1
               FROM generate_subscripts(w.key_path,1) AS left_pos(i)
               CROSS JOIN generate_subscripts(w.key_path,1) AS right_pos(j)
              WHERE left_pos.i < right_pos.j
+               AND (
+                    jsonb_typeof(w.value) IN ('object','array')
+                    OR right_pos.j=cardinality(w.key_path)
+                    OR EXISTS (
+                        SELECT 1
+                          FROM unnest(
+                              w.key_path[right_pos.j+1:cardinality(w.key_path)]
+                          ) AS suffix(segment)
+                         WHERE suffix.segment <> ALL (ARRAY[
+                             'played','count','counts','total','totals',
+                             'rate','rates','average','averages','avg',
+                             'percentage','percentages','pct'
+                         ])
+                    )
+               )
                AND (
                     (
                         w.key_path[left_pos.i] IN ('partner','opponent','opponents')
