@@ -154,11 +154,16 @@ WITH RECURSIVE walk(value,key_path) AS (
         OR (
             jsonb_typeof(w.value) IN ('object','array')
             AND (
-                w.key_path[cardinality(w.key_path)]='allhands'
-                OR (
-                    cardinality(w.key_path) >= 2
-                    AND w.key_path[cardinality(w.key_path)-1]='all'
-                    AND w.key_path[cardinality(w.key_path)] IN ('hand','hands')
+                'allhands'=ANY(w.key_path)
+                OR EXISTS (
+                    SELECT 1
+                      FROM generate_subscripts(w.key_path,1) AS all_pos(i)
+                      CROSS JOIN generate_subscripts(w.key_path,1) AS hand_pos(j)
+                     WHERE (
+                         w.key_path[all_pos.i]='all'
+                         AND w.key_path[hand_pos.j] IN ('hand','hands')
+                     )
+                       AND all_pos.i <> hand_pos.j
                 )
             )
         )
