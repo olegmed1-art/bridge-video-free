@@ -59,12 +59,14 @@ WITH RECURSIVE walk(value,key_path) AS (
 ), forbidden_alias(alias) AS (
     SELECT unnest(ARRAY[
         'partnerhand','partnerhands','opponenthand','opponenthands',
-        'otherhand','otherhands','handother','handsother',
-        'handpartner','handspartner','handopponent','handsopponent',
-        'cardpartner','cardopponent','cardother',
-        'cardspartner','cardsopponent','cardsother',
-        'partnercard','opponentcard','othercard',
-        'partnercards','opponentcards','othercards',
+        'opponentshand','opponentshands','otherhand','otherhands',
+        'othershand','othershands','handother','handsother',
+        'handothers','handsothers','handpartner','handspartner',
+        'handopponent','handsopponent','handopponents','handsopponents',
+        'cardpartner','cardopponent','cardopponents','cardother','cardothers',
+        'cardspartner','cardsopponent','cardsopponents','cardsother','cardsothers',
+        'partnercard','opponentcard','opponentscard','othercard','otherscard',
+        'partnercards','opponentcards','opponentscards','othercards','otherscards',
         'northhand','easthand','southhand','westhand',
         'handnorth','handeast','handsouth','handwest',
         'handsnorth','handseast','handssouth','handswest',
@@ -230,8 +232,11 @@ WITH RECURSIVE walk(value,key_path) AS (
                 OR EXISTS (
                     SELECT 1
                       FROM unnest(w.key_path) AS compact(segment)
-                      CROSS JOIN metric_word AS metric
-                     WHERE compact.segment='allhands' || metric.word
+                     WHERE compact.segment LIKE 'allhands%'
+                       AND substring(compact.segment FROM length('allhands')+1) ~ (
+                           SELECT '^(' || string_agg(word,'|') || ')+$'
+                             FROM allowed_suffix
+                       )
                 )
                 OR EXISTS (
                     SELECT 1
