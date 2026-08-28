@@ -42,7 +42,38 @@ def test_spool_preflight_fails_before_heavy_runner(tmp_path, monkeypatch: pytest
     failure = json.loads((tmp_path / "failed" / "job.json").read_text(encoding="utf-8"))
     assert failure["status"] == "FAILED"
     assert failure["error_type"] == "VideoRuntimeUnavailable"
-    assert "VIDEO_RUNTIME_MISSING_TOOL:ffmpeg" in failure["error"]
+    assert failure["error_code"] == "UV_RUNTIME_DEPENDENCY_MISSING"
+    assert "error" not in failure
+
+
+def test_spool_failure_receipt_drops_exception_text(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "media" / "lesson.mp4"
+    source.parent.mkdir()
+    source.write_bytes(b"video")
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    payload = {
+        "job_id": "failure-boundary",
+        "profile": "transcript_only",
+        "source": {"kind": "local_path", "path": str(source)},
+    }
+    (inbox / "failure-boundary.json").write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setenv("UNIVERSAL_VIDEO_MEDIA_ROOT", str(source.parent))
+    monkeypatch.setattr(spool_worker, "validate_video_runtime", lambda: None)
+    monkeypatch.setattr(
+        spool_worker,
+        "run_job",
+        mock.Mock(side_effect=RuntimeError("DO_NOT_PUBLISH_RAW_STDERR /private/source-name.mp4")),
+    )
+
+    assert spool_worker.process_one(tmp_path) is True
+    receipt_text = (tmp_path / "failed" / "failure-boundary.json").read_text(encoding="utf-8")
+    failure = json.loads(receipt_text)
+    assert failure["error_type"] == "RuntimeError"
+    assert failure["error_code"] == "UV_WORKER_RUNTIME_FAILED"
+    assert "error" not in failure
+    assert "DO_NOT_PUBLISH_RAW_STDERR" not in receipt_text
+    assert "source-name.mp4" not in receipt_text
 
 
 def test_spool_receipt_has_locator_and_generation_conformance(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

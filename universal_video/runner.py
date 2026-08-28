@@ -53,13 +53,34 @@ ASR_CRITICAL_CONSENSUS = 0.05
 ASR_LOOP_THRESHOLD = 0.35
 NO_SPEECH_VAD_SECONDS = 0.25
 _MODEL = None
+FAILURE_CODE_RE = re.compile(r"^UV_[A-Z0-9_]{1,96}$")
 
 
-def _run(args: list[str], *, timeout: int = 3600) -> str:
-    proc = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
+class VideoSubprocessError(RuntimeError):
+    """Stable subprocess failure that never carries command output or paths."""
+
+    def __init__(self, error_code: str):
+        if not FAILURE_CODE_RE.fullmatch(error_code):
+            error_code = "UV_MEDIA_COMMAND_FAILED"
+        self.error_code = error_code
+        super().__init__(error_code)
+
+
+def _run(
+    args: list[str],
+    *,
+    timeout: int = 3600,
+    failure_code: str = "UV_MEDIA_COMMAND_FAILED",
+) -> str:
+    proc = subprocess.run(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=timeout,
+    )
     if proc.returncode:
-        tail = (proc.stderr or "")[-3000:]
-        raise RuntimeError(f"subprocess failed rc={proc.returncode}: {tail}")
+        raise VideoSubprocessError(failure_code)
     return proc.stdout
 
 
@@ -285,6 +306,7 @@ def media_probe(path: Path, *, known_sha256: str | None = None) -> dict[str, Any
             str(path),
         ],
         timeout=60,
+        failure_code="UV_MEDIA_PROBE_FAILED",
     )
     data = json.loads(raw)
     duration = float((data.get("format") or {}).get("duration") or 0)
@@ -323,6 +345,7 @@ def _audio_chunk(video: Path, output: Path, start: float, duration: float) -> No
             str(output),
         ],
         timeout=max(120, int(duration * 3)),
+        failure_code="UV_AUDIO_EXTRACT_FAILED",
     )
 
 
@@ -638,6 +661,7 @@ def extract_keyframes(
                 str(path),
             ],
             timeout=120,
+            failure_code="UV_FRAME_EXTRACT_FAILED",
         )
         if path.exists() and path.stat().st_size:
             frames.append({"time": round(ts, 3), "file": path.name, "sha256": _sha256(path)})

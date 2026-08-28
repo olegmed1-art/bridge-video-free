@@ -56,6 +56,8 @@ def test_job_keeps_remote_output_fail_closed_and_bounded():
     assert "initial_safe=" in WORKFLOW
     assert "safe=" in WORKFLOW
     assert "grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|CONFORMANCE_STATE|" in WORKFLOW
+    assert "|ERROR_TYPE|ERROR_CODE)=" in WORKFLOW
+    assert "|ERROR_TYPE|ERROR)=" not in WORKFLOW
     assert "PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_COMMAND_FAILED" in WORKFLOW
     assert "PRE_SUBMIT_ERROR_CODE=UV_SUBMIT_SERVICE_INACTIVE" not in WORKFLOW
     assert "code='UV_SUBMIT_SERVICE_INACTIVE'" in WORKFLOW
