@@ -13,6 +13,8 @@ from typing import Any, Callable
 
 from bridge_vision import BridgeVisionEngine
 
+NativeDetectorInjection = Callable[[Path], dict[str, Any]]
+
 LegacyParserInjection = Callable[[Path], dict[str, Any]]
 
 
@@ -54,7 +56,11 @@ def _wrap_injected_parser(parser: LegacyParserInjection):
     return detector
 
 
-def build_engine(*, allow_legacy_old_bbo: bool = False) -> BridgeVisionEngine:
+def build_engine(
+    *,
+    allow_legacy_old_bbo: bool = False,
+    profiled_challenger: NativeDetectorInjection | None = None,
+) -> BridgeVisionEngine:
     engine = BridgeVisionEngine()
     # Native detector families are registered here as they graduate from their
     # gold-set gates. Until then, native analysis fails closed rather than
@@ -63,6 +69,8 @@ def build_engine(*, allow_legacy_old_bbo: bool = False) -> BridgeVisionEngine:
         from bridge_vision.legacy import old_bbo_report_parser
 
         engine.register("old-bbo-compat", old_bbo_report_parser)
+    if profiled_challenger is not None:
+        engine.register("profiled-interface-challenger", profiled_challenger)
     return engine
 
 
@@ -72,9 +80,13 @@ def process_job_frames(
     engine: BridgeVisionEngine | None = None,
     parser: LegacyParserInjection | None = None,
     allow_legacy_old_bbo: bool = False,
+    profiled_challenger: NativeDetectorInjection | None = None,
 ) -> dict[str, Any]:
-    if engine is not None and parser is not None:
-        raise ValueError("pass engine or parser, not both")
+    selected = sum(value is not None for value in (engine, parser, profiled_challenger))
+    if selected > 1:
+        raise ValueError("pass only one of engine, parser or profiled_challenger")
+    if allow_legacy_old_bbo and selected:
+        raise ValueError("legacy old BBO mode cannot be combined with an injected detector")
     compatibility_mode = parser is not None
     root = job_dir.resolve()
     manifest_path = root / "manifest.json"
@@ -86,7 +98,10 @@ def process_job_frames(
     if parser is not None:
         vision = BridgeVisionEngine({"explicit-injected-parser": _wrap_injected_parser(parser)})
     else:
-        vision = engine or build_engine(allow_legacy_old_bbo=allow_legacy_old_bbo)
+        vision = engine or build_engine(
+            allow_legacy_old_bbo=allow_legacy_old_bbo,
+            profiled_challenger=profiled_challenger,
+        )
     records: list[dict[str, Any]] = []
     recognized_frames = 0
     conflict_frames = 0
@@ -141,6 +156,7 @@ def process_job_frames(
             "vision_engine": "native",
             "detectors": list(vision.detector_names),
             "legacy_old_bbo_enabled": bool(allow_legacy_old_bbo),
+            "profiled_challenger_enabled": profiled_challenger is not None,
             "job_id": manifest.get("job_id"),
             "source_fingerprint": manifest.get("source_fingerprint"),
             "input_frames": len(frames),
