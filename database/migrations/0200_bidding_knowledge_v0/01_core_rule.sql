@@ -105,6 +105,11 @@ WITH RECURSIVE walk(value,key_path) AS (
     SELECT word FROM metric_word
     UNION ALL
     SELECT word FROM sensitive_suffix
+), owner_word(word) AS (
+    SELECT unnest(ARRAY[
+        'partner','opponent','opponents','other','others',
+        'north','east','south','west','n','e','s','w'
+    ])
 ), forbidden AS (
     SELECT 1
       FROM walk AS w
@@ -167,6 +172,37 @@ WITH RECURSIVE walk(value,key_path) AS (
      )
         OR EXISTS (
             SELECT 1
+              FROM unnest(w.key_path) AS compact(segment)
+              CROSS JOIN owner_word AS owner
+             WHERE compact.segment LIKE owner.word || '%'
+               AND substring(
+                   compact.segment FROM length(owner.word)+1
+               ) ~ (
+                   SELECT '^(' || string_agg(word,'|') || ')+$'
+                     FROM allowed_suffix
+               )
+               AND NOT (
+                   jsonb_typeof(w.value)='number'
+                   AND EXISTS (
+                       SELECT 1
+                         FROM unnest(ARRAY['hand','hands','card','cards'])
+                              AS public_metric(subject)
+                        WHERE substring(
+                                  compact.segment FROM length(owner.word)+1
+                              ) LIKE public_metric.subject || '%'
+                          AND substring(
+                                  compact.segment
+                                  FROM length(owner.word)+
+                                       length(public_metric.subject)+1
+                              ) ~ (
+                                  SELECT '^(' || string_agg(word,'|') || ')+$'
+                                    FROM metric_word
+                              )
+                   )
+               )
+        )
+        OR EXISTS (
+            SELECT 1
               FROM generate_subscripts(w.key_path,1) AS left_pos(i)
               CROSS JOIN generate_subscripts(w.key_path,1) AS right_pos(j)
              WHERE left_pos.i < right_pos.j
@@ -195,7 +231,19 @@ WITH RECURSIVE walk(value,key_path) AS (
                           FROM generate_subscripts(w.key_path,1) AS suffix_pos(k)
                           JOIN sensitive_suffix AS suffix
                             ON suffix.word=w.key_path[suffix_pos.k]
-                         WHERE suffix_pos.k > greatest(left_pos.i,right_pos.j)
+                         WHERE suffix_pos.k > CASE
+                             WHEN w.key_path[left_pos.i] IN (
+                                      'hand','hands','card','cards'
+                                  )
+                              AND left_pos.i < cardinality(w.key_path)
+                              AND EXISTS (
+                                  SELECT 1 FROM metric_word AS leading_metric
+                                   WHERE leading_metric.word=
+                                         w.key_path[left_pos.i+1]
+                              )
+                             THEN left_pos.i+1
+                             ELSE right_pos.j+1
+                         END
                            AND NOT (
                                w.key_path[suffix_pos.k] IN (
                                    'hand','hands','card','cards'
@@ -276,8 +324,7 @@ WITH RECURSIVE walk(value,key_path) AS (
                     )
             )
             OR (
-                jsonb_typeof(w.value) <> 'number'
-                AND EXISTS (
+                EXISTS (
                     SELECT 1
                       FROM generate_subscripts(w.key_path,1) AS all_pos(i)
                       CROSS JOIN generate_subscripts(w.key_path,1) AS hand_pos(j)
@@ -286,6 +333,25 @@ WITH RECURSIVE walk(value,key_path) AS (
                          AND w.key_path[hand_pos.j] IN ('hand','hands')
                        )
                        AND all_pos.i <> hand_pos.j
+                       AND (
+                           jsonb_typeof(w.value) <> 'number'
+                           OR NOT (
+                               hand_pos.j < cardinality(w.key_path)
+                               AND NOT EXISTS (
+                                   SELECT 1
+                                     FROM generate_subscripts(
+                                              w.key_path,1
+                                          ) AS split_suffix(k)
+                                    WHERE split_suffix.k > hand_pos.j
+                                      AND NOT EXISTS (
+                                          SELECT 1
+                                            FROM metric_word AS metric
+                                           WHERE metric.word=
+                                                 w.key_path[split_suffix.k]
+                                      )
+                               )
+                           )
+                       )
                 )
             )
         )
