@@ -186,18 +186,36 @@ jobs:
           backup_state="$(printf '%s' "$backup_json" | python -c 'import json,sys; print(json.load(sys.stdin)["lifecycle-state"])')"
           backup_type="$(printf '%s' "$backup_json" | python -c 'import json,sys; print(json.load(sys.stdin)["type"])')"
           backup_size_gb="$(printf '%s' "$backup_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("size-in-gbs") or "")')"
+          backup_time_created="$(printf '%s' "$backup_json" | python -c 'import json,sys; print(json.load(sys.stdin)["time-created"])')"
+          observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          backup_age_seconds="$(BACKUP_TIME_CREATED="$backup_time_created" OBSERVED_AT="$observed_at" python -c '
+          import datetime, os
+          created=datetime.datetime.fromisoformat(os.environ["BACKUP_TIME_CREATED"].replace("Z","+00:00"))
+          observed=datetime.datetime.fromisoformat(os.environ["OBSERVED_AT"].replace("Z","+00:00"))
+          age=int((observed-created).total_seconds())
+          assert age >= 0, "backup time is in the future"
+          print(age)
+          ')"
           [[ "$backup_state" == AVAILABLE && "$backup_type" == FULL ]] || exit 35
           [[ -n "$backup_size_gb" && "$backup_size_gb" -ge "$boot_volume_size_gb" ]] || { echo "Backup capacity is smaller than source volume" >&2; exit 36; }
           STATUS=RESTORE_PREFLIGHT_PASS INSTANCE_STATE="$instance_state" AVAILABILITY_DOMAIN="$availability_domain" \
           BOOT_VOLUME_SIZE_GB="$boot_volume_size_gb" BACKUP_STATE="$backup_state" BACKUP_TYPE="$backup_type" \
-          BACKUP_SIZE_GB="$backup_size_gb" python - <<'PY' > "$evidence"
+          BACKUP_SIZE_GB="$backup_size_gb" BACKUP_TIME_CREATED="$backup_time_created" OBSERVED_AT="$observed_at" \
+          BACKUP_AGE_SECONDS="$backup_age_seconds" python - <<'PY' > "$evidence"
           import json, os
+          age_seconds = int(os.environ["BACKUP_AGE_SECONDS"])
           print(json.dumps({
               "status": os.environ["STATUS"], "instance_state": os.environ["INSTANCE_STATE"],
               "availability_domain": os.environ["AVAILABILITY_DOMAIN"],
               "boot_volume_size_gb": int(os.environ["BOOT_VOLUME_SIZE_GB"]),
               "backup_state": os.environ["BACKUP_STATE"], "backup_type": os.environ["BACKUP_TYPE"],
               "backup_size_gb": int(os.environ["BACKUP_SIZE_GB"]),
+              "backup_time_created": os.environ["BACKUP_TIME_CREATED"],
+              "observed_at": os.environ["OBSERVED_AT"],
+              "backup_age_seconds": age_seconds,
+              "backup_age_hours": round(age_seconds / 3600, 3),
+              "rpo_target_hours": 24,
+              "rpo_target_met_at_observation": age_seconds <= 24 * 3600,
               "restore_executed": False, "production_volume_modified": False,
               "evidence_class": "READ_ONLY_RESTORE_PREFLIGHT",
               "next_gate": "isolated_restore_and_acceptance_still_required",
@@ -230,6 +248,8 @@ jobs:
                   "backup_state", "budget_amount", "budget_email_configured",
                   "rebooted", "host_disk", "host_memory", "control_path",
                   "instance_state", "availability_domain", "backup_type", "backup_size_gb",
+                  "backup_time_created", "observed_at", "backup_age_seconds", "backup_age_hours",
+                  "rpo_target_hours", "rpo_target_met_at_observation",
                   "restore_executed", "production_volume_modified", "evidence_class", "next_gate",
               ):
                   print(f"- `{key}`: `{x.get(key, 'unknown')}`")
