@@ -17,7 +17,9 @@ id ocarun >/dev/null 2>&1 || fail 'ocarun user does not exist'
 readonly BASE="https://raw.githubusercontent.com/olegmed1-art/bridge-video-free/${SOURCE_COMMIT}/ops"
 readonly TARGET='/usr/local/sbin/universal-video-oci-admin'
 readonly REPAIR_TARGET='/usr/local/sbin/universal-video-spool-repair'
-readonly SUDOERS='/etc/sudoers.d/universal-video-ocarun'
+# Keep bounded admin grants separate from the generic submit/status grants.
+# Both installers may be re-run without deleting the other's command surface.
+readonly SUDOERS='/etc/sudoers.d/universal-video-admin-ocarun'
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
