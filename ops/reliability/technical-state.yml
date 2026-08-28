@@ -1,11 +1,10 @@
 schema_version: 1
-updated_at_utc: "2026-08-28T00:00:00Z"
+updated_at_utc: "2026-08-28T05:13:00Z"
 policy: docs/TECHNICAL_GOVERNANCE.md
 whole_school_recovery:
   target_status: RECOVERY_PROVEN_V1
   current_status: PARTIAL
   blockers:
-    - oci_boot_volume_restore_not_proven
     - full_end_to_end_restore_drill_not_proven
     - explicit_rpo_rto_not_fully_verified
 
@@ -78,7 +77,16 @@ components:
     backup_required: true
     backup_status: partial
     backup_evidence: one_available_boot_volume_backup_and_recurring_policy_observed
-    restore_status: unproven
+    restore_status: proven_isolated_volume_restore
+    restore_evidence:
+      workflow_run_id: 33144038748
+      restored_state: AVAILABLE
+      restored_size_gb: 47
+      temporary_volume_deleted: true
+      production_volume_modified: false
+      production_instance_rebooted: false
+      routing_changed: false
+      boot_acceptance_proven: false
     reboot_recovery_status: unproven
     unique_durable_data_allowed: false
 
@@ -176,7 +184,7 @@ audit_snapshots:
     neon_org_mfa_observed: disabled
     oracle_boot_backup_observed: available
     oracle_recurring_backup_policy_observed: assigned
-    oracle_boot_volume_restore: unproven
+    oracle_boot_volume_restore: proven_isolated_volume_restore
     large_drive_raw_export:
       source_size_bytes: 1699568400
       result: blocked
@@ -251,8 +259,9 @@ work_queue:
       evidence_workflow_job_id: 98591152227
     - id: oracle_boot_volume_restore_drill
       priority: P1
-      status: queued
+      status: proven_isolated_volume_restore
       tracking_issue: 265
+      evidence_workflow_run_id: 33144038748
     - id: restored_database_application_smoke
       priority: P1
       status: proven_by_main_ci
