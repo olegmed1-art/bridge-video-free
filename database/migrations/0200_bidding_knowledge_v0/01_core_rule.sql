@@ -247,14 +247,21 @@ WITH RECURSIVE walk(value,key_path) AS (
                          )
                      )
                      OR (
-                         w.key_path[suffix_pos.j] LIKE suffix.word || '%'
-                         AND substring(
-                                 w.key_path[suffix_pos.j]
-                                 FROM length(suffix.word)+1
-                             ) ~ (
-                                 SELECT '^(' || string_agg(word,'|') || ')+$'
-                                   FROM metric_word
-                             )
+                         EXISTS (
+                             SELECT 1
+                               FROM unnest(
+                                        ARRAY['hand','hands','card','cards']
+                                    ) AS public_subject(subject)
+                              WHERE w.key_path[suffix_pos.j]
+                                    LIKE public_subject.subject || '%'
+                                AND substring(
+                                        w.key_path[suffix_pos.j]
+                                        FROM length(public_subject.subject)+1
+                                    ) ~ (
+                                        SELECT '^(' || string_agg(word,'|') || ')+$'
+                                          FROM metric_word
+                                    )
+                         )
                      )
                  )
              )
