@@ -68,6 +68,7 @@ WITH RECURSIVE walk(value,key_path) AS (
         'partnercard','opponentcard','opponentscard','othercard','otherscard',
         'partnercards','opponentcards','opponentscards','othercards','otherscards',
         'northhand','easthand','southhand','westhand',
+        'northhands','easthands','southhands','westhands',
         'handnorth','handeast','handsouth','handwest',
         'handsnorth','handseast','handssouth','handswest',
         'northcard','eastcard','southcard','westcard',
@@ -147,12 +148,18 @@ WITH RECURSIVE walk(value,key_path) AS (
                                       AND w.key_path[path_end.j+1]=metric.word
                                )
                            )
-                           OR EXISTS (
-                               SELECT 1
-                                 FROM metric_word AS metric
-                                WHERE array_to_string(
-                                          w.key_path[path_start.i:path_end.j],''
-                                      ) = f.alias || metric.word
+                           OR (
+                               array_to_string(
+                                   w.key_path[path_start.i:path_end.j],''
+                               ) LIKE f.alias || '%'
+                               AND substring(
+                                   array_to_string(
+                                       w.key_path[path_start.i:path_end.j],''
+                                   ) FROM length(f.alias)+1
+                               ) ~ (
+                                   SELECT '^(' || string_agg(word,'|') || ')+$'
+                                     FROM metric_word
+                               )
                            )
                         )
                    )
