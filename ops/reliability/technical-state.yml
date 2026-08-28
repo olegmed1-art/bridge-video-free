@@ -1,5 +1,5 @@
 schema_version: 1
-updated_at_utc: "2026-08-28T05:13:00Z"
+updated_at_utc: "2026-08-28T05:46:00Z"
 policy: docs/TECHNICAL_GOVERNANCE.md
 whole_school_recovery:
   target_status: RECOVERY_PROVEN_V1
@@ -75,11 +75,28 @@ components:
     rpo_target_hours: 24
     rto_target_hours: 4
     backup_required: true
-    backup_status: partial
-    backup_evidence: one_available_boot_volume_backup_and_recurring_policy_observed
+    backup_status: target_met_at_latest_observation_recurring_cadence_unverified
+    backup_evidence: fresh_available_full_boot_volume_backup_and_policy_assignment_observed
+    rpo_evidence:
+      initial_preflight_workflow_run_id: 33145314229
+      initial_observed_at_utc: "2026-08-28T05:38:08Z"
+      initial_backup_age_seconds: 173778
+      initial_target_met: false
+      remediation_backup_workflow_run_id: 33145409047
+      verification_workflow_run_id: 33145705145
+      verified_observed_at_utc: "2026-08-28T05:45:49Z"
+      verified_backup_time_created_utc: "2026-08-28T05:39:58.941000+00:00"
+      verified_backup_age_seconds: 350
+      verified_backup_age_hours: 0.097
+      rpo_target_hours: 24
+      target_met_at_latest_observation: true
+      recurring_schedule_verified: false
+      note: latest_observation_meets_target_but_recurring_24h_cadence_is_not_yet_proven
     restore_status: proven_isolated_volume_restore
     restore_evidence:
       workflow_run_id: 33144038748
+      workflow_elapsed_seconds: 78
+      workflow_elapsed_is_full_rto: false
       restored_state: AVAILABLE
       restored_size_gb: 47
       temporary_volume_deleted: true
