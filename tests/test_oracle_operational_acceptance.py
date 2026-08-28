@@ -51,7 +51,7 @@ def test_restore_preflight_is_read_only_and_keeps_restore_unproven():
     end = WORKFLOW.index("- name: Publish sanitized evidence", start)
     restore = WORKFLOW[start:end]
     assert "oci bv boot-volume-backup list" in restore
-    assert "source-boot-volume-id" in restore
+    assert 'x.get("boot-volume-id")==sys.argv[1]' in restore
     assert '"restore_executed": False' in restore
     assert '"production_volume_modified": False' in restore
     assert "isolated_restore_and_acceptance_still_required" in restore

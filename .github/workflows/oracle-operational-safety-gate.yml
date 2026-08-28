@@ -178,7 +178,7 @@ jobs:
           backups="$(oci bv boot-volume-backup list --compartment-id "$tenancy_id" --boot-volume-id "$boot_volume_id" --all --output json)"
           backup_json="$(printf '%s' "$backups" | python -c '
           import json,sys
-          xs=[x for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state")=="AVAILABLE" and x.get("type")=="FULL" and x.get("source-boot-volume-id")==sys.argv[1]]
+          xs=[x for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state")=="AVAILABLE" and x.get("type")=="FULL" and x.get("boot-volume-id")==sys.argv[1]]
           xs.sort(key=lambda x:x.get("time-created",""), reverse=True)
           assert xs, "no AVAILABLE FULL backup for attached production boot volume"
           print(json.dumps(xs[0]))
