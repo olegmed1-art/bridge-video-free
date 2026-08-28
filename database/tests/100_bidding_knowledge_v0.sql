@@ -174,6 +174,16 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_HIDDEN_CHAINED_ALL_HANDS_SUFFIX_NOT_BLOCKED';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
+        '{"allhandsholding":123456789}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_NUMERIC_ALL_HANDS_SENSITIVE_NOT_BLOCKED';
+    END IF;
+    IF bidding.contains_forbidden_hidden_key(
+        '{"allhandscounttotal":52}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_PUBLIC_NUMERIC_ALL_HANDS_METRIC_FALSE_POSITIVE';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
         '{"eastcards":["AS"],"cardseast":["KS"],"ECards":["QS"]}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_SEAT_CARDS_NOT_BLOCKED';
@@ -222,6 +232,11 @@ BEGIN
         '{"count":{"partnerCard":51}}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_UNRELATED_METRIC_WRAPPER_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"handsPlayed":{"bySeat":{"partnerHcp":10}}}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_REVERSE_METRIC_SUFFIX_NOT_BLOCKED';
     END IF;
     IF bidding.contains_forbidden_hidden_key(
         '{"seat":"N","cards":["AS"]}'::jsonb
