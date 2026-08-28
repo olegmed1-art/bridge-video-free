@@ -70,9 +70,7 @@ jobs:
             iso="$(date -u -d "@$UNTIL" +%Y-%m-%dT%H:%M:%SZ)"
             body="[oracle-hold state] until_epoch=$UNTIL until_utc=$iso status=ACTIVE requested_hours=$HOURS"
           fi
-          issue="${{ github.event.issue.number }}"
-          if [[ -z "$issue" || "$issue" == "0" ]]; then issue=751; fi
-          gh issue comment "$issue" --repo "$GITHUB_REPOSITORY" --body "$body"
+          gh issue comment 751 --repo "$GITHUB_REPOSITORY" --body "$body"
 
       - name: Ensure exact Oracle instance is running
         if: ${{ steps.hold.outputs.hours != '0' }}
