@@ -129,7 +129,7 @@ END;
 $$;
 
 CREATE TRIGGER rule_conflict_school_scope_guard
-BEFORE INSERT OR UPDATE OF school_id, left_rule_id, right_rule_id ON bidding.rule_conflict
+BEFORE INSERT OR UPDATE OF school_id, left_rule_id, right_rule_id, evidence_ids ON bidding.rule_conflict
 FOR EACH ROW EXECUTE FUNCTION bidding.validate_rule_conflict_school_scope();
 
 CREATE TABLE bidding.runtime_activation (
@@ -161,3 +161,14 @@ CREATE UNIQUE INDEX bidding_runtime_activation_open_uidx
 
 CREATE INDEX bidding_runtime_activation_lookup_idx
     ON bidding.runtime_activation (school_id, authority_lane, scope_key, status, valid_from, valid_to);
+
+ALTER TABLE bidding.runtime_activation
+ADD CONSTRAINT bidding_runtime_activation_active_no_overlap
+EXCLUDE USING gist (
+    school_id WITH =,
+    rule_id WITH =,
+    authority_lane WITH =,
+    scope_key WITH =,
+    tstzrange(valid_from,valid_to,'[)') WITH &&
+)
+WHERE (status='active');
