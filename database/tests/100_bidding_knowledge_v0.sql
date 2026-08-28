@@ -30,6 +30,15 @@ BEGIN
      WHERE stable_name='Школа спортивного бриджа';
     IF v_school IS NULL THEN RAISE EXCEPTION 'SMOKE_SCHOOL_MISSING'; END IF;
 
+    IF bidding.contains_forbidden_hidden_key('{"handsPlayed":12}'::jsonb) THEN
+        RAISE EXCEPTION 'SMOKE_PUBLIC_HANDS_PLAYED_FALSE_POSITIVE';
+    END IF;
+    IF bidding.contains_forbidden_hidden_key(
+        '{"summary":{"hands":12}}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_PUBLIC_HANDS_SUMMARY_FALSE_POSITIVE';
+    END IF;
+
     INSERT INTO public.school(stable_name,status)
     VALUES ('CI bidding isolated school 20260827','active')
     RETURNING school_id INTO v_other_school;
