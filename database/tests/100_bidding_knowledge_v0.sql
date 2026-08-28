@@ -43,6 +43,21 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'SMOKE_PUBLIC_ALL_HANDS_METRIC_FALSE_POSITIVE';
     END IF;
+    IF bidding.contains_forbidden_hidden_key(
+        '{"partnerHandsPlayed":12}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_PUBLIC_PARTNER_HANDS_METRIC_FALSE_POSITIVE';
+    END IF;
+    IF bidding.contains_forbidden_hidden_key(
+        '{"opponent":{"cardsPlayed":26}}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_PUBLIC_OPPONENT_CARDS_METRIC_FALSE_POSITIVE';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"partnerHandsHcp":10}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_PARTNER_HCP_NOT_BLOCKED';
+    END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
         '{"allHands":{"N":["AS"],"E":["KS"]}}'::jsonb
     ) THEN
