@@ -30,6 +30,7 @@ def test_operational_workflow_is_owner_gated_and_uses_run_command_control():
     assert "github.event.comment.user.login == 'olegmed1-art'" in WORKFLOW
     assert "/oracle-ops preflight" in WORKFLOW
     assert "/oracle-ops reboot" in WORKFLOW
+    assert "/oracle-ops restore-preflight" in WORKFLOW
     assert 'SSH_KEY="$RUNNER_TEMP/no-ssh-control-key"' in WORKFLOW
     assert "oci-cli==3.90.3" in WORKFLOW
 
@@ -43,3 +44,17 @@ def test_scheduled_monitor_is_exact_host_bound_and_four_world_fail_closed():
     assert 'x.get("dds_required_worlds") == 4' in MONITOR
     assert 'x.get("fallback_used") is False' in MONITOR
     assert "[Monitor] Oracle BEN DDS3 health failure" in MONITOR
+
+
+def test_restore_preflight_is_read_only_and_keeps_restore_unproven():
+    start = WORKFLOW.index("- name: Read-only boot-volume restore preflight")
+    end = WORKFLOW.index("- name: Publish sanitized evidence", start)
+    restore = WORKFLOW[start:end]
+    assert "oci bv boot-volume-backup list" in restore
+    assert "source-boot-volume-id" in restore
+    assert '"restore_executed": False' in restore
+    assert '"production_volume_modified": False' in restore
+    assert "isolated_restore_and_acceptance_still_required" in restore
+    assert "boot-volume create" not in restore
+    assert "instance action" not in restore
+    assert "boot-volume delete" not in restore
