@@ -45,7 +45,7 @@ visudo -cf "$tmp/sudoers" >/dev/null
 install -o root -g root -m 0440 "$tmp/sudoers" "$SUDOERS"
 visudo -cf /etc/sudoers >/dev/null
 
-! grep -Eq 'NOPASSWD:[[:space:]]*ALL' "$SUDOERS" || fail 'broad NOPASSWD grant detected'
+if grep -Ev '^[[:space:]]*(#|$)' "$SUDOERS" | grep -Eq 'NOPASSWD:[[:space:]]*ALL'; then fail 'broad NOPASSWD grant detected'; fi
 [[ "$(stat -c '%U:%G:%a' "$TARGET")" == 'root:root:755' ]] || fail 'unexpected entrypoint ownership/mode'
 [[ "$(stat -c '%U:%G:%a' "$REPAIR_TARGET")" == 'root:root:755' ]] || fail 'unexpected repair helper ownership/mode'
 [[ "$(stat -c '%U:%G:%a' "$SUDOERS")" == 'root:root:440' ]] || fail 'unexpected sudoers ownership/mode'
