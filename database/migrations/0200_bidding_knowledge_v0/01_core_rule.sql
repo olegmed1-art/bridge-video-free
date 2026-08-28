@@ -59,16 +59,29 @@ WITH RECURSIVE walk(value,key_path) AS (
 ), forbidden_alias(alias) AS (
     SELECT unnest(ARRAY[
         'partnerhand','partnerhands','opponenthand','opponenthands',
+        'otherhand','otherhands','handother','handsother',
+        'handpartner','handspartner','handopponent','handsopponent',
+        'cardspartner','cardsopponent','cardsother',
+        'partnercards','opponentcards','othercards',
         'northhand','easthand','southhand','westhand',
         'handnorth','handeast','handsouth','handwest',
         'handsnorth','handseast','handssouth','handswest',
+        'northcards','eastcards','southcards','westcards',
+        'cardsnorth','cardseast','cardssouth','cardswest',
         'handn','hande','handw',
         'handsn','handse','handss','handsw',
         'nhand','ehand','shand','whand',
         'nhands','ehands','shands','whands',
-        'fulldeal','hiddencards','actualpartnerhand',
-        'actualopponenthand','actualopponenthands',
-        'partnercards','opponentcards'
+        'ncards','ecards','scards','wcards',
+        'cardsn','cardse','cardss','cardsw',
+        'fulldeal','dealfull','hiddencards','cardshidden',
+        'actualpartnerhand','actualopponenthand','actualopponenthands'
+    ])
+), metric_word(word) AS (
+    SELECT unnest(ARRAY[
+        'played','count','counts','total','totals',
+        'rate','rates','average','averages','avg',
+        'percentage','percentages','pct'
     ])
 ), forbidden AS (
     SELECT 1
@@ -78,18 +91,27 @@ WITH RECURSIVE walk(value,key_path) AS (
           FROM generate_subscripts(w.key_path,1) AS path_start(i)
           CROSS JOIN generate_subscripts(w.key_path,1) AS path_end(j)
          WHERE path_end.j >= path_start.i
-           AND array_to_string(w.key_path[path_start.i:path_end.j],'')
-               = ANY (SELECT alias FROM forbidden_alias)
+           AND EXISTS (
+                SELECT 1
+                  FROM forbidden_alias AS f
+                 WHERE array_to_string(
+                           w.key_path[path_start.i:path_end.j],''
+                       ) = f.alias
+                    OR array_to_string(
+                           w.key_path[path_start.i:path_end.j],''
+                       ) LIKE f.alias || '%'
+                    OR array_to_string(
+                           w.key_path[path_start.i:path_end.j],''
+                       ) LIKE '%' || f.alias
+           )
            AND NOT (
-                jsonb_typeof(w.value) NOT IN ('object','array')
+                jsonb_typeof(w.value)='number'
                 AND EXISTS (
                     SELECT 1
                       FROM unnest(w.key_path) AS metric(segment)
-                     WHERE metric.segment = ANY (ARRAY[
-                         'played','count','counts','total','totals',
-                         'rate','rates','average','averages','avg',
-                         'percentage','percentages','pct'
-                     ])
+                      CROSS JOIN metric_word AS m
+                     WHERE metric.segment=m.word
+                        OR metric.segment LIKE '%' || m.word || '%'
                 )
            )
      )
@@ -99,20 +121,18 @@ WITH RECURSIVE walk(value,key_path) AS (
               CROSS JOIN generate_subscripts(w.key_path,1) AS right_pos(j)
              WHERE left_pos.i < right_pos.j
                AND NOT (
-                    jsonb_typeof(w.value) NOT IN ('object','array')
+                    jsonb_typeof(w.value)='number'
                     AND EXISTS (
                         SELECT 1
-                          FROM unnest(w.key_path) AS metric(segment)
-                         WHERE metric.segment = ANY (ARRAY[
-                             'played','count','counts','total','totals',
-                             'rate','rates','average','averages','avg',
-                             'percentage','percentages','pct'
-                         ])
+                      FROM unnest(w.key_path) AS metric(segment)
+                      CROSS JOIN metric_word AS m
+                     WHERE metric.segment=m.word
+                        OR metric.segment LIKE '%' || m.word || '%'
                     )
                )
                AND (
                     (
-                        w.key_path[left_pos.i] IN ('partner','opponent','opponents')
+                        w.key_path[left_pos.i] IN ('partner','opponent','opponents','other','others')
                         AND w.key_path[right_pos.j] IN ('hand','hands','cards')
                     )
                     OR (
@@ -165,6 +185,28 @@ WITH RECURSIVE walk(value,key_path) AS (
                      )
                        AND all_pos.i <> hand_pos.j
                 )
+            )
+        )
+        OR (
+            jsonb_typeof(w.value)='object'
+            AND (
+                'hand'=ANY(w.key_path)
+                OR 'hands'=ANY(w.key_path)
+                OR 'allhands'=ANY(w.key_path)
+            )
+            AND EXISTS (
+                SELECT 1
+                  FROM jsonb_each(w.value) AS seat_field(key,value)
+                 WHERE lower(regexp_replace(seat_field.key,'[^a-z0-9]','','g'))='seat'
+                   AND jsonb_typeof(seat_field.value)='string'
+                   AND upper(seat_field.value #>> '{}') IN ('N','E','S','W')
+            )
+            AND EXISTS (
+                SELECT 1
+                  FROM jsonb_each(w.value) AS cards_field(key,value)
+                 WHERE lower(regexp_replace(cards_field.key,'[^a-z0-9]','','g'))
+                       IN ('card','cards')
+                   AND jsonb_typeof(cards_field.value) IN ('object','array')
             )
         )
      LIMIT 1
