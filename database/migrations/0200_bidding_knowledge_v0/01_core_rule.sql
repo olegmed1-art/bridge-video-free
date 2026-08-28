@@ -101,19 +101,39 @@ WITH RECURSIVE walk(value,key_path) AS (
               FROM generate_subscripts(w.key_path,1) AS left_pos(i)
               CROSS JOIN generate_subscripts(w.key_path,1) AS right_pos(j)
              WHERE left_pos.i < right_pos.j
-               AND (
-                    jsonb_typeof(w.value) IN ('object','array')
-                    OR right_pos.j=cardinality(w.key_path)
-                    OR EXISTS (
-                        SELECT 1
-                          FROM unnest(
-                              w.key_path[right_pos.j+1:cardinality(w.key_path)]
-                          ) AS suffix(segment)
-                         WHERE suffix.segment <> ALL (ARRAY[
-                             'played','count','counts','total','totals',
-                             'rate','rates','average','averages','avg',
-                             'percentage','percentages','pct'
-                         ])
+               AND NOT (
+                    jsonb_typeof(w.value) NOT IN ('object','array')
+                    AND (
+                        (
+                            right_pos.j < cardinality(w.key_path)
+                            AND NOT EXISTS (
+                                SELECT 1
+                                  FROM unnest(
+                                      w.key_path[
+                                          right_pos.j+1:cardinality(w.key_path)
+                                      ]
+                                  ) AS suffix(segment)
+                                 WHERE suffix.segment <> ALL (ARRAY[
+                                     'played','count','counts','total','totals',
+                                     'rate','rates','average','averages','avg',
+                                     'percentage','percentages','pct'
+                                 ])
+                            )
+                        )
+                        OR (
+                            right_pos.j > left_pos.i+1
+                            AND NOT EXISTS (
+                                SELECT 1
+                                  FROM unnest(
+                                      w.key_path[left_pos.i+1:right_pos.j-1]
+                                  ) AS infix(segment)
+                                 WHERE infix.segment <> ALL (ARRAY[
+                                     'played','count','counts','total','totals',
+                                     'rate','rates','average','averages','avg',
+                                     'percentage','percentages','pct'
+                                 ])
+                            )
+                        )
                     )
                )
                AND (
