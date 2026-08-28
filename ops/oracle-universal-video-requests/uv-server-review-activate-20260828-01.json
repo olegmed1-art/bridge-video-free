@@ -1,0 +1,9 @@
+{
+  "request_id": "uv-server-review-activate-20260828-01",
+  "mode": "activate",
+  "git_ref": "b5218fec955edb71cae95da70262c9884a38f951",
+  "expected_host_fingerprint": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}
