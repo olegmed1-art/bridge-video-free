@@ -134,8 +134,7 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_HIDDEN_OTHER_HAND_NOT_BLOCKED';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
-        '{"cards":{"metadata":{"other":["AS"]}},' ||
-        '"hand":{"metadata":{"others":["KS"]}}}'::jsonb
+        '{"cards":{"metadata":{"other":["AS"]}},"hand":{"metadata":{"others":["KS"]}}}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_REVERSE_OTHER_OWNER_NOT_BLOCKED';
     END IF;
