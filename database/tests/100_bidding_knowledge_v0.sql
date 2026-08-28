@@ -164,6 +164,11 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_ALL_HANDS_SUFFIX_NOT_BLOCKED';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
+        '{"allhandsholdingcount":"N:AKQ E:JT9","allhandscounttotal":"N:... E:..."}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_CHAINED_ALL_HANDS_SUFFIX_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
         '{"eastcards":["AS"],"cardseast":["KS"],"ECards":["QS"]}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_SEAT_CARDS_NOT_BLOCKED';
@@ -217,6 +222,11 @@ BEGIN
         '{"otherHand":{"cards":["AS"]},"otherHands":[["KS"]]}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_OTHER_HAND_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"opponentscards":["AS"],"othershand":"AS KH QD","cardsopponents":["KS"],"handothers":"QS"}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_PLURAL_OWNER_NOT_BLOCKED';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
         '{"cards":{"metadata":{"other":["AS"]}},"hand":{"metadata":{"others":["KS"]}}}'::jsonb
