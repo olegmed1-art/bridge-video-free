@@ -252,6 +252,23 @@ BEGIN
             school_id,decision_key,request_fingerprint,acting_seat,acting_hand,
             public_auction,public_context,scope_key,outcome,explanation,resolver_version
         ) VALUES (
+            v_school,'ci-hidden-semantic-wrapper-decision',
+            'ci-hidden-semantic-wrapper-fingerprint','N',
+            '{"partner":{"actual":{"hand":{"cards":["AS"]}}}}'::jsonb,
+            '{"calls":[]}'::jsonb,'{}'::jsonb,'ci','no_action','{}'::jsonb,'ci-resolver-v0'
+        );
+    EXCEPTION WHEN check_violation THEN v_failed := true;
+    END;
+    IF NOT v_failed THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_SEMANTIC_WRAPPER_NOT_BLOCKED';
+    END IF;
+
+    v_failed := false;
+    BEGIN
+        INSERT INTO bidding.decision_trace(
+            school_id,decision_key,request_fingerprint,acting_seat,acting_hand,
+            public_auction,public_context,scope_key,outcome,explanation,resolver_version
+        ) VALUES (
             v_school,'ci-hidden-composite-key-decision','ci-hidden-composite-key-fingerprint','N',
             '{"partner_observed_hand":{"cards":["AS"]}}'::jsonb,
             '{"calls":[]}'::jsonb,'{}'::jsonb,'ci','no_action','{}'::jsonb,'ci-resolver-v0'
