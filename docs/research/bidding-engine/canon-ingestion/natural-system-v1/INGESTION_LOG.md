@@ -376,3 +376,42 @@ Each entry records:
 **Database effect:** Disposable branch only. No Canon rule or candidate was inserted or activated.  
 **Limitation:** This proves connector-based migration and smoke behavior from a clean production-derived baseline. Native `migrate.sh` transport to this Neon branch remains unproved because the local runner cannot reach the Neon hostname directly.  
 **Next:** Conduct independent I2 fail-closed review before any production promotion decision.
+
+
+## 2026-08-28 / LOG-0034 - Pre-I2 red-team found material fail-closed gaps
+
+**Role:** Red Team / Security review  
+**Action:** Performed a separate adversarial review after the clean connector preflight rather than treating the passing smoke test as sufficient assurance.  
+**Findings:** (1) trigger-only activation overlap prevention was not concurrency-safe; (2) a future-dated active activation did not lock its rule against mutation before `valid_from`; (3) forbidden hidden-hand keys could use case or separator aliases such as `partnerHand`; (4) updating only `rule_conflict.evidence_ids` bypassed the cross-school evidence trigger.  
+**Assessment:** Material blockers. The original `0200` checksum from LOG-0033 is valid evidence for that exact version but is superseded as a promotion candidate.  
+**Database effect:** None. Production none.  
+**Next:** Harden the unpromoted migration and add regressions before independent I2 review.
+
+## 2026-08-28 / LOG-0035 - Fail-closed hardening opened in draft PR #798
+
+**Role:** Technical owner / Red Team  
+**Action:** Opened draft PR #798, `fix(bidding): harden activation and hidden-information gates`.  
+**Changes:** Added a GiST exclusion constraint for active interval overlap; extended immutability to future-dated active activations; normalized forbidden hidden-key names; revalidated conflict `evidence_ids` on update; added smoke regressions and a two-connection concurrency test.  
+**Verification:** Migration remains unregistered in production, so correcting the unpromoted composite does not rewrite production history.  
+**Database effect:** Production none.  
+**Next:** Run fresh production-derived preflight and all required CI gates.
+
+## 2026-08-28 / LOG-0036 - Hardened 0200 preflight and CI passed
+
+**Role:** Technical owner / Observatory  
+**Action:** Created fresh production-derived Neon branch `br-mute-term-b1ncudmz`, applied 122 exact hardening statements in one transaction, persisted the new composite checksum, and ran the updated rollback-safe smoke contract.  
+**Checksum:** `5f24d552eb4f322c55fdcb03dbc943d2dc2d04f07753f5a910e29a5c3640e474`.  
+**Smoke result:** The exact updated DO block reached `BID_SMOKE_ROLLBACK_SENTINEL`; alias rejection, scheduled-rule immutability, conflict-evidence update scope and exclusion-constraint presence all passed before rollback.  
+**GitHub evidence:** At head `a6d4a2e85dc90ce393155c2c503507c46767ba14`, Database CI run `33158443379`, Migration Namespace Guard `33158443367`, Secret gate `33158443369` and META Evidence Gate `33158443406` all passed.  
+**Concurrency evidence:** Database CI used two independent PostgreSQL connections. The second overlapping activation waited on the first uncommitted exclusion key and then failed with SQLSTATE `23P01`; exactly one activation committed.  
+**Database effect:** Disposable branch only. Production remains without `0200` or the `bidding` schema.  
+**Next:** Independent I2 fail-closed review.
+
+## 2026-08-28 / LOG-0037 - Independent I2 review requested and pending
+
+**Role:** Coordinator  
+**Action:** Requested an independent fail-closed review in draft PR #798, with explicit focus on concurrency, authority separation, hidden information, cross-school provenance, append-only audit behavior and ACLs.  
+**Cost boundary:** The paid Vercel Agent review path was not invoked.  
+**Status:** Pending; no merge or production promotion is permitted on internal red-team and CI evidence alone.  
+**Database effect:** None.  
+**Next:** Resolve every material independent finding or obtain a clean I2 disposition before continuing Canon ingestion.
