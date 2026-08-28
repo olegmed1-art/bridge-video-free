@@ -27,6 +27,7 @@ jobs:
       - run: |
           set -euo pipefail
           ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" .github/workflows/oci-isolated-restore-drill.yml
+          python -m pip install --disable-pip-version-check -q pytest==8.3.5
           python -m pytest -q tests/test_oci_isolated_restore_drill.py
 
   restore:
