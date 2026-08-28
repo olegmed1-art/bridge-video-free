@@ -1,0 +1,127 @@
+name: Universal Video sidecar bounded repair
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-universal-video-sidecar-repair.yml'
+      - 'ops/universal_video_sidecar_repair.sh'
+      - 'tests/test_universal_video_sidecar_repair_contract.py'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('uv-sidecar-repair-pr-{0}', github.run_id) || 'oracle-instance-workload-mutation' }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Validate fixed repair contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/universal_video_sidecar_repair.sh
+          python -m pytest -q tests/test_universal_video_sidecar_repair_contract.py
+
+  repair:
+    if: ${{ github.event_name == 'issue_comment' && github.event.comment.user.login == 'olegmed1-art' && github.event.comment.body == '/oracle uv-sidecar-repair' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      EXPECTED_SCRIPT_BLOB: 345d518ecc3f3e2f468b12fc69f58308cf8a8d9c
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Verify immutable repair payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object ops/universal_video_sidecar_repair.sh)" = "$EXPECTED_SCRIPT_BLOB"
+          bash -n ops/universal_video_sidecar_repair.sh
+
+      - name: Resolve trusted SSH transport
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Execute fixed sidecar repair
+        id: repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw="$RUNNER_TEMP/uv-sidecar-repair-raw.txt"
+          safe="$RUNNER_TEMP/uv-sidecar-repair-safe.txt"
+          set +e
+          ssh -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
+            "$ORACLE_USER@$ORACLE_HOST" 'sudo -n /bin/bash -s' \
+            < ops/universal_video_sidecar_repair.sh >"$raw" 2>&1
+          rc=$?
+          set -e
+          grep -E '^(source_head=|dds3_(before|after)=|protected_services_(before|after)=|job_guard=|spool_write_boundary=|runtime_import=|sidecar_(active|enabled)=|SubState=|Result=|ExecMainCode=|ExecMainStatus=|NRestarts=|UNIVERSAL_VIDEO_SIDECAR_REPAIR_FAIL=|UNIVERSAL_VIDEO_SIDECAR_REPAIR_PASS$)' "$raw" > "$safe" || true
+          cat "$safe"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          [[ "$rc" -eq 0 ]]
+          grep -Fx 'UNIVERSAL_VIDEO_SIDECAR_REPAIR_PASS' "$safe" >/dev/null
+
+      - name: Publish bounded repair evidence
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPAIR_OUTCOME: ${{ steps.repair.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          safe="$RUNNER_TEMP/uv-sidecar-repair-safe.txt"
+          body="$RUNNER_TEMP/body.md"
+          {
+            echo "Universal Video bounded sidecar repair: **$REPAIR_OUTCOME**."
+            if [[ -s "$safe" ]]; then
+              echo
+              echo '```text'
+              cat "$safe"
+              echo '```'
+            fi
+            echo
+            echo "No media job was submitted and no raw SSH output was published. Run: $RUN_URL"
+          } > "$body"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body"
