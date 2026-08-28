@@ -141,6 +141,14 @@ WITH RECURSIVE walk(value,key_path) AS (
                         w.key_path[left_pos.i]='hidden'
                         AND w.key_path[right_pos.j]='cards'
                     )
+                    OR (
+                        w.key_path[left_pos.i]='cards'
+                        AND w.key_path[right_pos.j]='hidden'
+                    )
+                    OR (
+                        w.key_path[left_pos.i]='deal'
+                        AND w.key_path[right_pos.j]='full'
+                    )
                )
         )
         OR (
