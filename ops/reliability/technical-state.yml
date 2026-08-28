@@ -1,5 +1,5 @@
 schema_version: 1
-updated_at_utc: "2026-08-28T05:46:00Z"
+updated_at_utc: "2026-08-28T06:24:00Z"
 policy: docs/TECHNICAL_GOVERNANCE.md
 whole_school_recovery:
   target_status: RECOVERY_PROVEN_V1
@@ -90,8 +90,12 @@ components:
       verified_backup_age_hours: 0.097
       rpo_target_hours: 24
       target_met_at_latest_observation: true
-      recurring_schedule_verified: false
-      note: latest_observation_meets_target_but_recurring_24h_cadence_is_not_yet_proven
+      recurring_policy_assignment_workflow_run_id: 33147666581
+      recurring_policy_name: Gold
+      recurring_policy_frequency: daily
+      recurring_policy_exact_assignment_verified: true
+      recurring_schedule_observed_execution: false
+      note: daily_policy_assignment_is_proven_but_the_next_scheduled_backup_has_not_yet_been_observed
     restore_status: proven_isolated_volume_restore
     restore_evidence:
       workflow_run_id: 33144038748
