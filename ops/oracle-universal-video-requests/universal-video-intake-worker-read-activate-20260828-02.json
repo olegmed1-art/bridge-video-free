@@ -1,0 +1,9 @@
+{
+  "request_id": "uv-intake-worker-read-activate-20260828-02",
+  "mode": "activate",
+  "git_ref": "e4157e78e64691f3446c554f23bfd36a405bd359",
+  "expected_host_fingerprint": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}
