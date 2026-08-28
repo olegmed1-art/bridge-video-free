@@ -18,6 +18,14 @@ def test_reboot_gate_requires_backup_and_checks_ben_services():
     assert "127.0.0.1:8085/bid" in GATE
 
 
+def test_daily_backup_policy_is_exact_and_switch_has_rollback():
+    assert 'BACKUP_POLICY_NAME="${BACKUP_POLICY_NAME:-Gold}"' in GATE
+    assert '[[ "$ASSIGNED_POLICY_ID" == "$POLICY_ID" ]]' in GATE
+    assert 'volume-backup-policy-assignment delete --policy-assignment-id "$ASSIGNMENT_ID" --force' in GATE
+    assert '--policy-id "$PREVIOUS_POLICY_ID"' in GATE
+    assert "Bronze" not in GATE
+
+
 def test_budget_recipient_is_secret_or_existing_oci_configuration():
     assert 'NONINTERACTIVE="${NONINTERACTIVE:-0}"' in GATE
     assert "existing OCI alert recipient is required" in GATE

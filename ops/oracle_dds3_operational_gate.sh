@@ -9,7 +9,7 @@ set -Eeuo pipefail
 
 REGION="${REGION:-eu-frankfurt-1}"
 INSTANCE_NAME="${INSTANCE_NAME:-bridge-school-dds3-frankfurt}"
-BACKUP_POLICY_NAME="${BACKUP_POLICY_NAME:-Bronze}"
+BACKUP_POLICY_NAME="${BACKUP_POLICY_NAME:-Gold}"
 BUDGET_NAME="${BUDGET_NAME:-bridge-school-dds3-trial-guard}"
 BUDGET_AMOUNT="${BUDGET_AMOUNT:-250}"
 BUDGET_EMAIL="${BUDGET_EMAIL:-}"
@@ -160,18 +160,28 @@ nullish "$BACKUP_ID" && die "Full backup did not reach AVAILABLE"
 BACKUP_STATE="$(oci bv boot-volume-backup get --boot-volume-backup-id "$BACKUP_ID" --query 'data."lifecycle-state"' --raw-output)"
 [[ "$BACKUP_STATE" == "AVAILABLE" ]] || die "Backup state is $BACKUP_STATE"
 
-log "Ensure a recurring boot-volume backup policy is assigned"
+log "Enforce the exact daily boot-volume backup policy"
+POLICIES_JSON="$(oci bv volume-backup-policy list --all --output json)"
+POLICY_ID="$(printf '%s' "$POLICIES_JSON" | python3 -c 'import json,sys,os; name=os.environ["BACKUP_POLICY_NAME"].lower(); xs=[x for x in json.load(sys.stdin).get("data",[]) if str(x.get("display-name","")).lower()==name]; print(xs[0].get("id","") if len(xs)==1 else "")')"
+nullish "$POLICY_ID" && die "Could not resolve exactly one Oracle-defined $BACKUP_POLICY_NAME policy"
 ASSIGNMENT_JSON="$(oci bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment --asset-id "$BOOT_VOLUME_ID" --output json | normalize_list_json)"
 ASSIGNED_POLICY_ID="$(printf '%s' "$ASSIGNMENT_JSON" | python3 -c 'import json,sys; xs=json.load(sys.stdin).get("data",[]); print(xs[0].get("policy-id","") if xs else "")')"
-if nullish "$ASSIGNED_POLICY_ID"; then
-  POLICIES_JSON="$(oci bv volume-backup-policy list --all --output json)"
-  POLICY_ID="$(printf '%s' "$POLICIES_JSON" | python3 -c 'import json,sys,os; name=os.environ["BACKUP_POLICY_NAME"].lower(); xs=[x for x in json.load(sys.stdin).get("data",[]) if str(x.get("display-name","")).lower()==name]; print(xs[0].get("id","") if len(xs)==1 else "")')"
-  nullish "$POLICY_ID" && die "Could not resolve exactly one Oracle-defined $BACKUP_POLICY_NAME policy"
-  ASSIGNMENT_JSON="$(oci bv volume-backup-policy-assignment create --asset-id "$BOOT_VOLUME_ID" --policy-id "$POLICY_ID" --output json)"
-  ASSIGNED_POLICY_ID="$(printf '%s' "$ASSIGNMENT_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"].get("policy-id",""))')"
+ASSIGNMENT_ID="$(printf '%s' "$ASSIGNMENT_JSON" | python3 -c 'import json,sys; xs=json.load(sys.stdin).get("data",[]); print(xs[0].get("id","") if xs else "")')"
+if [[ "$ASSIGNED_POLICY_ID" != "$POLICY_ID" ]]; then
+  PREVIOUS_POLICY_ID="$ASSIGNED_POLICY_ID"
+  if ! nullish "$ASSIGNMENT_ID"; then
+    oci bv volume-backup-policy-assignment delete --policy-assignment-id "$ASSIGNMENT_ID" --force
+  fi
+  if ! ASSIGNMENT_JSON="$(oci bv volume-backup-policy-assignment create --asset-id "$BOOT_VOLUME_ID" --policy-id "$POLICY_ID" --output json)"; then
+    if ! nullish "$PREVIOUS_POLICY_ID"; then
+      oci bv volume-backup-policy-assignment create --asset-id "$BOOT_VOLUME_ID" --policy-id "$PREVIOUS_POLICY_ID" --output json >/dev/null || true
+    fi
+    die "Failed to assign $BACKUP_POLICY_NAME policy; previous assignment restoration attempted"
+  fi
 fi
-nullish "$ASSIGNED_POLICY_ID" && die "Backup policy assignment is missing"
-
+ASSIGNMENT_JSON="$(oci bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment --asset-id "$BOOT_VOLUME_ID" --output json | normalize_list_json)"
+ASSIGNED_POLICY_ID="$(printf '%s' "$ASSIGNMENT_JSON" | python3 -c 'import json,sys; xs=json.load(sys.stdin).get("data",[]); print(xs[0].get("policy-id","") if len(xs)==1 else "")')"
+[[ "$ASSIGNED_POLICY_ID" == "$POLICY_ID" ]] || die "Exact $BACKUP_POLICY_NAME backup policy assignment is not proven"
 log "Ensure monthly budget and five alert rules"
 BUDGETS_JSON="$(oci budgets budget budget list -c "$TENANCY_ID" --display-name "$BUDGET_NAME" --all --output json | normalize_list_json)"
 BUDGET_ID="$(printf '%s' "$BUDGETS_JSON" | python3 -c 'import json,sys; xs=json.load(sys.stdin).get("data",[]); xs.sort(key=lambda x:x.get("time-created",""),reverse=True); print(xs[0].get("id","") if xs else "")')"
