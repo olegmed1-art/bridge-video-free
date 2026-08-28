@@ -5,6 +5,7 @@ import json
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/oracle-universal-video-activation.yml"
 SCHEMA = ROOT / "ops/oracle-universal-video-request.schema.json"
+OPERATOR_INSTALL = ROOT / "ops/install_universal_video_operator.sh"
 
 
 def test_activation_workflow_is_fixed_scope_and_fail_closed():
@@ -36,3 +37,11 @@ def test_request_schema_rejects_arbitrary_host_command_and_unknown_fields():
     assert schema["properties"]["issue"]["const"] == 318
     assert schema["properties"]["mode"]["enum"] == ["probe", "activate", "smoke"]
     assert "command" not in schema["properties"]
+
+
+def test_generic_operator_owns_a_dedicated_sudoers_file():
+    installer = OPERATOR_INSTALL.read_text(encoding="utf-8")
+    assert "readonly SUDOERS='/etc/sudoers.d/universal-video-operator-ocarun'" in installer
+    assert "readonly SUDOERS='/etc/sudoers.d/universal-video-ocarun'" not in installer
+    assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video submit-base64 *" in installer
+    assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video status *" in installer
