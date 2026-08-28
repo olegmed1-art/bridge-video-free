@@ -168,10 +168,14 @@ STABLE
 AS $$
 SELECT EXISTS (
     SELECT 1 FROM bidding.runtime_activation
-     WHERE rule_id=p_rule_id AND status='active'
-       AND valid_from <= now() AND (valid_to IS NULL OR valid_to > now())
+     WHERE rule_id=p_rule_id
+       AND status='active'
+       AND (valid_to IS NULL OR valid_to > now())
 );
-$$;
+$;
+
+COMMENT ON FUNCTION bidding.rule_is_currently_active(uuid) IS
+  'Returns true while a rule has a non-expired active activation, including a future-dated activation, so scheduled rules cannot be mutated after gate evaluation.';
 
 CREATE OR REPLACE FUNCTION bidding.reject_active_rule_mutation()
 RETURNS trigger
