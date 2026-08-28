@@ -3,6 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ENTRY = (ROOT / "ops/universal_video_oci_admin_entrypoint.sh").read_text(encoding="utf-8")
 INSTALL = (ROOT / "ops/install_universal_video_ocarun_admin.sh").read_text(encoding="utf-8")
+OPERATOR_INSTALL = (ROOT / "ops/install_universal_video_operator.sh").read_text(encoding="utf-8")
 CLOUD = (ROOT / "ops/cloud_shell_install_bounded_oci_admin.sh").read_text(encoding="utf-8")
 VIDEO_CLOUD = (ROOT / "ops/cloud_shell_install_universal_video_bounded_admin.sh").read_text(encoding="utf-8")
 WORKFLOW = (ROOT / ".github/workflows/oracle-universal-video-admin.yml").read_text(encoding="utf-8")
@@ -50,6 +51,10 @@ def test_sudoers_surface_is_exact_and_not_broad():
     assert "sudo -u ocarun sudo -n \"$TARGET\" audit" in INSTALL
     assert "bash -c" not in INSTALL
     assert "eval " not in INSTALL
+    assert "readonly SUDOERS='/etc/sudoers.d/universal-video-admin-ocarun'" in INSTALL
+    assert "readonly SUDOERS='/etc/sudoers.d/universal-video-operator-ocarun'" in OPERATOR_INSTALL
+    assert "readonly SUDOERS='/etc/sudoers.d/universal-video-ocarun'" not in INSTALL
+    assert "readonly SUDOERS='/etc/sudoers.d/universal-video-ocarun'" not in OPERATOR_INSTALL
 
 
 def test_cloud_shell_bootstrap_is_single_fixed_host_path():
