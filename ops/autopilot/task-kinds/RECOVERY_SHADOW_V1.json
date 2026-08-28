@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "kind": "RECOVERY_SHADOW_V1",
+  "version": 1,
+  "description": "Read-only shadow continuation of Whole-school Recovery using checked-in state and allow-listed evidence workflows.",
+  "risk_class": "LOW",
+  "governance_mode": "ASSURED",
+  "allowed_executors": ["vercel", "github", "openai"],
+  "allowed_transitions": [
+    {"from": "QUEUED", "to": "RUNNING", "event": "TASK_CLAIMED"},
+    {"from": "RUNNING", "to": "WAITING_EXTERNAL", "event": "READ_ONLY_EVIDENCE_DISPATCHED"},
+    {"from": "WAITING_EXTERNAL", "to": "RUNNING", "event": "EVIDENCE_CALLBACK_VERIFIED"},
+    {"from": "RUNNING", "to": "SUCCEEDED", "event": "SHADOW_RECOMMENDATION_RECORDED"},
+    {"from": "RUNNING", "to": "FAILED_CLOSED", "event": "UNKNOWN_OR_UNSAFE_STATE"},
+    {"from": "RUNNING", "to": "OWNER_REQUIRED", "event": "CANON_OR_OWNER_BOUNDARY_DETECTED", "owner_approval_required": true},
+    {"from": "WAITING_EXTERNAL", "to": "DEADLINE_STOP", "event": "WAIT_DEADLINE_EXCEEDED"}
+  ],
+  "approval_policy": {
+    "required_for": ["CANON_OR_OWNER_BOUNDARY_DETECTED"],
+    "approval_ttl_seconds": 86400,
+    "scope_digest_required": true
+  },
+  "retry_policy": {
+    "max_external_attempts": 5,
+    "max_model_turns": 2,
+    "backoff": "exponential"
+  },
+  "budget_policy": {
+    "per_task_limit_usd": 0.25,
+    "critical_model_requires_risk_gate": true
+  },
+  "acceptance_criteria": [
+    "technical-state.yml is treated as checked-in factual input, not blindly trusted over fresh evidence",
+    "only allow-listed read-only evidence workflow can be dispatched",
+    "no production mutation, merge, billing or secrets change occurs",
+    "model receives compact state capsule rather than full chat history",
+    "recommendation cites retained evidence references",
+    "unknown or contradictory evidence fails closed",
+    "canon or owner-only boundary produces OWNER_REQUIRED"
+  ],
+  "rollback": {
+    "kill_switch_safe": true,
+    "instructions": [
+      "set AUTOPILOT_ENABLED=false",
+      "stop new shadow task creation",
+      "retain recommendations and evidence references",
+      "leave existing recovery workflows and production systems unchanged"
+    ]
+  }
+}
