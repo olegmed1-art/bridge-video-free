@@ -92,6 +92,12 @@ WITH RECURSIVE walk(value,key_path) AS (
                         AND w.key_path[right_pos.j] IN ('hand','hands','cards')
                     )
                     OR (
+                        w.key_path[left_pos.i] IN ('hand','hands','cards')
+                        AND w.key_path[right_pos.j] IN (
+                            'partner','opponent','opponents'
+                        )
+                    )
+                    OR (
                         w.key_path[left_pos.i] IN (
                             'north','east','south','west','n','e','s','w'
                         )
