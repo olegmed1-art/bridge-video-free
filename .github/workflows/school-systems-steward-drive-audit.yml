@@ -1,0 +1,138 @@
+name: School Systems Steward - Drive read-only audit
+
+on:
+  pull_request:
+    paths:
+      - "steward/**"
+      - "tests/test_school_systems_drive_inventory.py"
+      - ".github/workflows/school-systems-steward-drive-audit.yml"
+      - "universal_video/drive_adapter.py"
+  workflow_dispatch:
+    inputs:
+      root_folder_id:
+        description: "Google Drive folder ID to inventory recursively"
+        required: true
+        default: "1uzpcT49YcV34gcv_Jo2U86a9qHUuqPpj"
+        type: string
+      root_name:
+        description: "Human-readable root name for manifest paths"
+        required: true
+        default: "Школа спортивного бриджа"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: school-systems-steward-drive-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install bounded dependencies
+        run: python -m pip install -q pytest requests==2.32.5 google-auth==2.48.0
+
+      - name: Run Steward contract tests
+        run: python -m pytest -q tests/test_school_systems_drive_inventory.py
+
+      - name: Compile collector
+        run: python -m py_compile steward/__init__.py steward/drive_inventory.py
+
+  drive-audit:
+    if: github.event_name == 'workflow_dispatch'
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install bounded dependencies
+        run: python -m pip install -q requests==2.32.5 google-auth==2.48.0
+
+      - name: Validate credential presence without printing it
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${GOOGLE_DRIVE_OAUTH_JSON:-}" ]]; then
+            echo "SCHOOL_STEWARD_DRIVE_AUDIT_FAIL code=DRIVE_SECRET_MISSING" >&2
+            exit 1
+          fi
+
+      - name: Run complete read-only Drive traversal
+        id: inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/school-steward-drive-${GITHUB_RUN_ID}"
+          mkdir -p "$out"
+          python -m steward.drive_inventory \
+            --root-folder-id "${{ inputs.root_folder_id }}" \
+            --root-name "${{ inputs.root_name }}" \
+            --output-dir "$out"
+          echo "output_dir=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Validate complete manifest boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="${{ steps.inventory.outputs.output_dir }}/drive-inventory.json"
+          python - "$manifest" "${{ inputs.root_folder_id }}" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          expected_root = sys.argv[2]
+          if not path.is_file() or path.stat().st_size == 0:
+              raise SystemExit("SCHOOL_STEWARD_DRIVE_AUDIT_FAIL code=MANIFEST_MISSING")
+          payload = json.loads(path.read_text(encoding="utf-8"))
+          if payload.get("status") != "COMPLETE":
+              raise SystemExit("SCHOOL_STEWARD_DRIVE_AUDIT_FAIL code=MANIFEST_NOT_COMPLETE")
+          if (payload.get("root") or {}).get("folder_id") != expected_root:
+              raise SystemExit("SCHOOL_STEWARD_DRIVE_AUDIT_FAIL code=ROOT_MISMATCH")
+          digest = str(payload.get("inventory_sha256") or "")
+          if not re.fullmatch(r"[0-9a-f]{64}", digest):
+              raise SystemExit("SCHOOL_STEWARD_DRIVE_AUDIT_FAIL code=CHECKSUM_INVALID")
+          counts = payload.get("counts")
+          keys = ("folders", "files", "videos")
+          if not isinstance(counts, dict) or not all(
+              isinstance(counts.get(key), int) for key in keys
+          ):
+              raise SystemExit("SCHOOL_STEWARD_DRIVE_AUDIT_FAIL code=COUNTS_INVALID")
+          print(
+              "SCHOOL_STEWARD_DRIVE_MANIFEST_PASS "
+              f"folders={counts['folders']} files={counts['files']} "
+              f"videos={counts['videos']} sha256={digest}"
+          )
+          PY
+
+      - name: Print bounded summary
+        run: cat "${{ steps.inventory.outputs.output_dir }}/drive-inventory-summary.txt"
+
+      - name: Upload read-only inventory evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: school-systems-steward-drive-${{ github.run_id }}
+          path: ${{ steps.inventory.outputs.output_dir }}
+          if-no-files-found: error
+          retention-days: 14
