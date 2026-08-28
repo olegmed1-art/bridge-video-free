@@ -118,6 +118,11 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_SEAT_VALUE_RECORD_NOT_BLOCKED';
     END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"hands":[{"seat":"E","cards":"AS KH QD"}]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_SCALAR_SEAT_RECORD_NOT_BLOCKED';
+    END IF;
     IF bidding.contains_forbidden_hidden_key(
         '{"seat":"N","cards":["AS"]}'::jsonb
     ) THEN
@@ -127,6 +132,27 @@ BEGIN
         '{"otherHand":{"cards":["AS"]},"otherHands":[["KS"]]}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_OTHER_HAND_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"cards":{"metadata":{"other":["AS"]}},' ||
+        '"hand":{"metadata":{"others":["KS"]}}}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_REVERSE_OTHER_OWNER_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"partner":{"card":"AS"},"east":{"card":"KS"}}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_SINGULAR_CARD_PATH_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"partnercard":"AS","cardpartner":"KS","eastcard":"QS","cardeast":"JS"}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_SINGULAR_CARD_NOT_BLOCKED';
+    END IF;
+    IF bidding.contains_forbidden_hidden_key(
+        '{"cards":["AS"]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_ACTING_CARDS_FALSE_POSITIVE';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
         '{"partnerHandsCount":"AS KH QD"}'::jsonb
