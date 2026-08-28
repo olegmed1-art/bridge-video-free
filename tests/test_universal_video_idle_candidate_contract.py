@@ -6,6 +6,7 @@ CANDIDATE = ROOT / ".github/workflows/oracle-instance-idle-candidate.yml"
 VIDEO = ROOT / ".github/workflows/oracle-universal-video-job.yml"
 POWER = ROOT / ".github/workflows/oracle-instance-power.yml"
 AUTO = ROOT / ".github/workflows/oracle-instance-power-auto.yml"
+EPOCH_PROBE = ROOT / ".github/workflows/oracle-epoch-readonly-probe.yml"
 
 
 def test_terminal_video_work_dispatches_external_idle_candidate():
@@ -80,3 +81,19 @@ def test_oracle_power_auto_controller_has_no_timer_or_push_trigger():
     assert "\n  push:" not in text
     assert "cron:" not in text
     assert "manually dispatched bounded action" in text
+
+
+def test_epoch_probe_is_read_only_and_owner_bounded():
+    text = EPOCH_PROBE.read_text(encoding="utf-8")
+    assert "github.actor == github.repository_owner" in text
+    assert "startsWith(github.event.comment.body, '/oracle-epoch ')" in text
+    assert "actions: read" in text
+    assert "contents: read" in text
+    assert "issues: write" in text
+    assert "oracle-universal-video-job.yml/runs?per_page=100" in text
+    assert 'row.get("status")!="completed"' in text
+    assert '"STALE" if newer else "CURRENT"' in text
+    assert "OCI_" not in text
+    assert "ocid1." not in text
+    assert "instance action" not in text
+    assert "gh workflow run oracle-instance-power.yml" not in text
