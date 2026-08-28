@@ -168,11 +168,12 @@ jobs:
           set -euo pipefail
           compartment="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."compartment-id"' --raw-output)"
           run_remote() {
-            local display="$1" command="$2" timeout="${3:-180}"
+            local display="$1" command="$2" timeout="${3:-180}" execution_user="${4:-ocarun}"
             local content target cid execution lifecycle
+            case "$execution_user" in ocarun|universal-video) ;; *) return 64 ;; esac
             content="$(SCRIPT_TEXT="$command" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":"set -Eeuo pipefail\n"+os.environ["SCRIPT_TEXT"]+"\n"},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
             target="$(python -c 'import json,os; print(json.dumps({"instanceId":os.environ["INSTANCE_ID"]},separators=(",",":")))')"
-            cid="$(oci instance-agent command create --compartment-id "$compartment" --content "$content" --target "$target" --execution-user ocarun --timeout-in-seconds "$timeout" --display-name "$display" --query data.id --raw-output)"
+            cid="$(oci instance-agent command create --compartment-id "$compartment" --content "$content" --target "$target" --execution-user "$execution_user" --timeout-in-seconds "$timeout" --display-name "$display" --query data.id --raw-output)"
             execution=''; lifecycle=''
             for _ in $(seq 1 90); do
               execution="$(oci instance-agent command-execution get --command-id "$cid" --instance-id "$INSTANCE_ID" --output json 2>/dev/null || true)"
@@ -196,22 +197,21 @@ jobs:
             printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("text","") or "")'
           }
 
-          # OCI agent invokes only the fixed root-owned, argument-free repair helper.
-          # The helper repairs the five service-owned spool leaves and proves writes.
-          repair_cmd='sudo -n /usr/local/sbin/universal-video-spool-repair'
+          # Prove the service principal can write every spool leaf without root.
+          spool_probe_cmd='root=/opt/bridge-school/universal-video/spool; for d in inbox running done failed results; do p="$root/$d/.operator-write-check-$"; : > "$p"; rm -f "$p"; done; echo UNIVERSAL_VIDEO_SPOOL_SERVICE_WRITE_PASS'
           set +e
-          repair_out="$(run_remote "universal-video-spool-repair-${GITHUB_RUN_ID}" "$repair_cmd" 2>&1)"
+          repair_out="$(run_remote "universal-video-spool-service-probe-${GITHUB_RUN_ID}" "$spool_probe_cmd" 180 universal-video 2>&1)"
           repair_rc=$?
           set -e
           if (( repair_rc != 0 )); then
-            echo 'PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_COMMAND_FAILED' >> "$GITHUB_ENV"
+            echo 'PRE_SUBMIT_ERROR_CODE=UV_SPOOL_SERVICE_WRITE_FAILED' >> "$GITHUB_ENV"
             exit 1
           fi
-          if ! grep -qx 'UNIVERSAL_VIDEO_SPOOL_RUNTIME_REPAIR_PASS' <<<"$repair_out"; then
-            echo 'PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_MARKER_MISSING' >> "$GITHUB_ENV"
+          if ! grep -qx 'UNIVERSAL_VIDEO_SPOOL_SERVICE_WRITE_PASS' <<<"$repair_out"; then
+            echo 'PRE_SUBMIT_ERROR_CODE=UV_SPOOL_SERVICE_MARKER_MISSING' >> "$GITHUB_ENV"
             exit 1
           fi
-          echo 'PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_PASS' >> "$GITHUB_ENV"
+          echo 'PRE_SUBMIT_ERROR_CODE=UV_SPOOL_SERVICE_WRITE_PASS' >> "$GITHUB_ENV"
 
           if [[ "$GITHUB_EVENT_NAME" == 'push' ]]; then
             request_file="$(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^ops/oracle-universal-video-job-requests/[^/]+\.json$' | head -n1)"
@@ -224,11 +224,11 @@ jobs:
           print(base64.b64encode(json.dumps(x['job'],ensure_ascii=False,separators=(',',':')).encode()).decode())
           PY
           )"
-          submit_cmd="sudo -n /usr/local/sbin/universal-video submit-base64 '$payload'"
-          status_cmd="sudo -n /usr/local/sbin/universal-video status '$JOB_ID'"
+          submit_cmd="/usr/local/sbin/universal-video submit-base64 '$payload'"
+          status_cmd="/usr/local/sbin/universal-video status '$JOB_ID'"
           label="Universal Video / $PROFILE / $JOB_ID"
 
-          initial="$(run_remote "universal-video-submit-${GITHUB_RUN_ID}" "$submit_cmd")"
+          initial="$(run_remote "universal-video-submit-${GITHUB_RUN_ID}" "$submit_cmd" 180 universal-video)"
           state="$(printf '%s\n' "$initial" | sed -n 's/^UV_STATE=//p' | tail -n1)"
           [[ "$state" =~ ^(QUEUED|RUNNING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]] || { echo "unsafe submit state: $state" >&2; exit 1; }
           initial_safe="$(printf '%s\n' "$initial" | grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|CONFORMANCE_STATE|ATTESTATION_MODE|ARTIFACT_SET_SHA256|MANIFEST_SHA256|ARTIFACT_COUNT|TOTAL_BYTES|DOMAIN_ANALYSIS_STATUS|TECHNICAL_BUNDLE_READY|BRIDGE_PRODUCTION_READY|PEDAGOGICAL_STATUS|PUBLICATION_STATE|ERROR_TYPE|ERROR)=' | head -n 20 || true)"
@@ -241,7 +241,7 @@ jobs:
               REVIEW|NONCONFORMANT|CONFLICT|FAILED) exit 1;;
             esac
             sleep 60
-            out="$(run_remote "universal-video-status-${GITHUB_RUN_ID}" "$status_cmd")"
+            out="$(run_remote "universal-video-status-${GITHUB_RUN_ID}" "$status_cmd" 180 universal-video)"
             state="$(printf '%s\n' "$out" | sed -n 's/^UV_STATE=//p' | tail -n1)"
             [[ "$state" =~ ^(QUEUED|RUNNING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]] || { echo "unsafe status: $state" >&2; exit 1; }
             if [[ "$state" != "$last" ]]; then
