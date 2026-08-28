@@ -1,0 +1,147 @@
+name: Universal Video sidecar bounded diagnostic
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-universal-video-sidecar-diagnostic.yml'
+      - 'ops/universal_video_sidecar_diagnostic.sh'
+      - 'tests/test_universal_video_sidecar_diagnostic_contract.py'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-universal-video-sidecar-diagnostic-requests/*.json'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('uv-sidecar-diagnostic-pr-{0}', github.run_id) || 'oracle-instance-workload-mutation' }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Validate fixed diagnostic contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/universal_video_sidecar_diagnostic.sh
+          python - <<'PY'
+          path='tests/test_universal_video_sidecar_diagnostic_contract.py'
+          ns={'__file__':path,'__name__':'uv_sidecar_diagnostic_contract'}
+          exec(open(path,encoding='utf-8').read(),ns)
+          for name,fn in sorted(ns.items()):
+              if name.startswith('test_') and callable(fn): fn()
+          print('UNIVERSAL_VIDEO_SIDECAR_DIAGNOSTIC_CONTRACT_PASS')
+          PY
+
+  diagnose:
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      EXPECTED_SCRIPT_BLOB: 0bbb421711f64f46c41182476cd7fa3122949d36
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 2
+
+      - name: Validate isolated diagnostic request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+            | grep -E '^ops/oracle-universal-video-sidecar-diagnostic-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one sidecar diagnostic request' >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python - <<'PY'
+          import json,os,re
+          x=json.load(open(os.environ['REQUEST_FILE'],encoding='utf-8'))
+          assert set(x) == {'request_id','operation'}, x
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
+          assert x['operation'] == 'diagnose'
+          print('UNIVERSAL_VIDEO_SIDECAR_DIAGNOSTIC_REQUEST_PASS')
+          PY
+
+      - name: Verify immutable diagnostic payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object ops/universal_video_sidecar_diagnostic.sh)" = "$EXPECTED_SCRIPT_BLOB"
+          bash -n ops/universal_video_sidecar_diagnostic.sh
+
+      - name: Resolve trusted SSH transport
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Execute fixed read-only diagnostic
+        id: diagnostic
+        shell: bash
+        run: |
+          set -euo pipefail
+          raw="$RUNNER_TEMP/uv-sidecar-diagnostic-raw.txt"
+          safe="$RUNNER_TEMP/uv-sidecar-diagnostic-safe.txt"
+          set +e
+          ssh -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
+            "$ORACLE_USER@$ORACLE_HOST" 'sudo -n /bin/bash -s' \
+            < ops/universal_video_sidecar_diagnostic.sh >"$raw" 2>&1
+          rc=$?
+          set -e
+          grep -E '^(protected_services=|dds3=|source_head=|source_clean=|ActiveState=|SubState=|Result=|ExecMainCode=|ExecMainStatus=|NRestarts=|service_enabled=|source_root_traverse=|source_package_traverse=|source_worker_read=|runtime_root_traverse=|venv_python_exec=|source_root_meta=|source_package_meta=|source_worker_meta=|runtime_root_meta=|venv_root_meta=|venv_python_meta=|service_user_import_rc=|service_user_import=|import_failure_kind=|import_failure_path_class=|import_missing_module=|UNIVERSAL_VIDEO_SIDECAR_DIAGNOSTIC_(PASS|FAIL)=?.*)' "$raw" > "$safe" || true
+          cat "$safe"
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          [[ "$rc" -eq 0 ]]
+          grep -Fx 'UNIVERSAL_VIDEO_SIDECAR_DIAGNOSTIC_PASS' "$safe" >/dev/null
+
+      - name: Publish bounded diagnostic evidence
+        if: always()
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.diagnostic.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          safe="$RUNNER_TEMP/uv-sidecar-diagnostic-safe.txt"
+          body="$RUNNER_TEMP/body.md"
+          {
+            echo "Universal Video sidecar diagnostic: **$OUTCOME**."
+            if [[ -s "$safe" ]]; then echo; echo '```text'; cat "$safe"; echo '```'; fi
+            echo
+            echo "Read-only diagnostic; no media/ASR or service mutation. Run: $RUN_URL"
+          } > "$body"
+          gh issue comment 634 --repo "$GITHUB_REPOSITORY" --body-file "$body"
