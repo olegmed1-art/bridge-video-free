@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - "steward/**"
-      - "tests/test_school_systems_drive_inventory.py"
+      - "tests/test_school_systems_drive_*.py"
       - ".github/workflows/school-systems-steward-drive-audit.yml"
       - "universal_video/drive_adapter.py"
   push:
@@ -53,10 +53,14 @@ jobs:
         run: python -m pip install -q pytest requests==2.32.5 google-auth==2.48.0
 
       - name: Run Steward contract tests
-        run: python -m pytest -q tests/test_school_systems_drive_inventory.py
+        run: python -m pytest -q tests/test_school_systems_drive_inventory.py tests/test_school_systems_drive_runner.py
 
       - name: Compile collector
-        run: python -m py_compile steward/__init__.py steward/drive_inventory.py
+        run: >-
+          python -m py_compile
+          steward/__init__.py
+          steward/drive_inventory.py
+          steward/drive_inventory_runner.py
 
   drive-audit:
     if: github.event_name != 'pull_request'
@@ -101,7 +105,7 @@ jobs:
           fi
           out="$RUNNER_TEMP/school-steward-drive-${GITHUB_RUN_ID}"
           mkdir -p "$out"
-          python -m steward.drive_inventory \
+          python -m steward.drive_inventory_runner \
             --root-folder-id "$root_id" \
             --root-name "$root_name" \
             --output-dir "$out"
