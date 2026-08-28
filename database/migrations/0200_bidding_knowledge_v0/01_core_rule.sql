@@ -77,7 +77,7 @@ WITH RECURSIVE walk(value,key_path) AS (
         'nhand','ehand','shand','whand',
         'nhands','ehands','shands','whands',
         'ncard','ecard','scard','wcard',
-        'cardn','carde','cards','cardw',
+        'cardn','carde','cardw',
         'ncards','ecards','scards','wcards',
         'cardsn','cardse','cardss','cardsw',
         'fulldeal','dealfull','hiddencard','cardhidden',
