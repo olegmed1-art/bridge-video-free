@@ -18,18 +18,27 @@ LANGUAGE sql
 IMMUTABLE
 PARALLEL SAFE
 AS $$
-WITH RECURSIVE walk(value) AS (
-    SELECT COALESCE(payload, 'null'::jsonb)
+WITH RECURSIVE walk(value,key_path) AS (
+    SELECT COALESCE(payload, 'null'::jsonb), ARRAY[]::text[]
     UNION ALL
-    SELECT child.value
+    SELECT
+        child.value,
+        CASE
+            WHEN child.key_norm IS NULL THEN w.key_path
+            ELSE w.key_path || child.key_norm
+        END
       FROM walk AS w
       CROSS JOIN LATERAL (
-          SELECT e.value
+          SELECT
+              e.value,
+              regexp_replace(lower(e.key), '[^a-z0-9]+', '', 'g') AS key_norm
             FROM jsonb_each(
                 CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END
             ) AS e
           UNION ALL
-          SELECT a.value
+          SELECT
+              a.value,
+              NULL::text AS key_norm
             FROM jsonb_array_elements(
                 CASE WHEN jsonb_typeof(w.value)='array' THEN w.value ELSE '[]'::jsonb END
             ) AS a
@@ -37,16 +46,21 @@ WITH RECURSIVE walk(value) AS (
 ), forbidden AS (
     SELECT 1
       FROM walk AS w
-      CROSS JOIN LATERAL jsonb_object_keys(
-          CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END
-      ) AS k(key)
-     WHERE regexp_replace(lower(k.key), '[^a-z0-9]+', '', 'g') = ANY (ARRAY[
-        'partnerhand','opponenthand','opponenthands',
-        'northhand','easthand','southhand','westhand',
-        'fulldeal','hiddencards','actualpartnerhand',
-        'actualopponenthand','actualopponenthands',
-        'partnercards','opponentcards','allhands'
-     ])
+     WHERE EXISTS (
+        SELECT 1
+          FROM generate_subscripts(w.key_path,1) AS path_start(i)
+          CROSS JOIN generate_subscripts(w.key_path,1) AS path_end(j)
+         WHERE path_end.j >= path_start.i
+           AND array_to_string(w.key_path[path_start.i:path_end.j],'') = ANY (ARRAY[
+                'partnerhand','partnerhands','opponenthand','opponenthands',
+                'northhand','easthand','southhand','westhand',
+                'handnorth','handeast','handsouth','handwest',
+                'handsnorth','handseast','handssouth','handswest',
+                'fulldeal','hiddencards','actualpartnerhand',
+                'actualopponenthand','actualopponenthands',
+                'partnercards','opponentcards','allhands'
+           ])
+     )
      LIMIT 1
 )
 SELECT EXISTS (SELECT 1 FROM forbidden);
