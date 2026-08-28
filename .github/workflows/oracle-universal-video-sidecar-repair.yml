@@ -32,8 +32,9 @@ jobs:
           set -euo pipefail
           bash -n ops/universal_video_sidecar_repair.sh
           python - <<'PY'
-          ns = {}
-          exec(open('tests/test_universal_video_sidecar_repair_contract.py', encoding='utf-8').read(), ns)
+          path = 'tests/test_universal_video_sidecar_repair_contract.py'
+          ns = {'__file__': path, '__name__': 'uv_sidecar_contract'}
+          exec(open(path, encoding='utf-8').read(), ns)
           for name, fn in sorted(ns.items()):
               if name.startswith('test_') and callable(fn):
                   fn()
