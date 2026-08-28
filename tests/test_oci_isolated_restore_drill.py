@@ -14,4 +14,6 @@ def test_isolated_restore_is_exact_owner_gated_and_production_safe():
     assert '"$state" == TERMINATED' in W
     assert '"boot_acceptance_proven":False' in W
     assert "instance action" not in W
+    assert '"TERMINATED","TERMINATING"' in W
+    assert 'lifecycle-state")=="RUNNING"' not in W
     assert "boot-volume-attachment attach" not in W
