@@ -44,6 +44,9 @@ concurrency:
 
 jobs:
   contract:
+    # Temporary operator pause (2026-08-28): scheduled cleanup is dormant;
+    # PR and explicitly dispatched validation remain available.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -65,7 +68,8 @@ jobs:
           python tests/test_artifact_cleanup_workflow_contract.py
 
   cleanup:
-    if: github.event_name != 'pull_request'
+    # Keep destructive cleanup manual-only while scheduled mutations are paused.
+    if: github.event_name == 'workflow_dispatch'
     needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 15
