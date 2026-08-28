@@ -53,7 +53,7 @@ jobs:
         run: python -m pip install -q pytest requests==2.32.5 google-auth==2.48.0
 
       - name: Run Steward contract tests
-        run: python -m pytest -q tests/test_school_systems_drive_inventory.py tests/test_school_systems_drive_runner.py
+        run: python -m pytest -q tests/test_school_systems_drive_*.py
 
       - name: Compile collector
         run: >-
@@ -148,13 +148,88 @@ jobs:
           )
           PY
 
-      - name: Print bounded summary
+      - name: Print bounded non-sensitive summary
         run: cat "${{ steps.inventory.outputs.output_dir }}/drive-inventory-summary.txt"
 
-      - name: Upload read-only inventory evidence
-        uses: actions/upload-artifact@v4
-        with:
-          name: school-systems-steward-drive-${{ github.run_id }}
-          path: ${{ steps.inventory.outputs.output_dir }}
-          if-no-files-found: error
-          retention-days: 14
+      - name: Keep detailed inventory runner-local only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "${{ steps.inventory.outputs.output_dir }}/drive-inventory.json"
+          test -s "${{ steps.inventory.outputs.output_dir }}/drive-videos.csv"
+          echo "SCHOOL_STEWARD_PRIVATE_EVIDENCE_PASS detailed_artifact_uploaded=0"
+
+  purge-legacy-detailed-artifacts:
+    if: ${{ always() && github.event_name == 'push' }}
+    needs: drive-audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Delete only legacy Steward detailed artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          repository = os.environ["GH_REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+          prefix = "school-systems-steward-drive-"
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "school-systems-steward",
+          }
+          deleted = 0
+          page = 1
+          while True:
+              list_url = (
+                  f"https://api.github.com/repos/{repository}/actions/artifacts"
+                  f"?per_page=100&page={page}"
+              )
+              with urllib.request.urlopen(
+                  urllib.request.Request(list_url, headers=headers), timeout=30
+              ) as response:
+                  payload = json.load(response)
+              artifacts = payload.get("artifacts")
+              if not isinstance(artifacts, list):
+                  raise SystemExit(
+                      "SCHOOL_STEWARD_ARTIFACT_PURGE_FAIL code=INVALID_LIST"
+                  )
+              for artifact in artifacts:
+                  name = str(artifact.get("name") or "")
+                  artifact_id = artifact.get("id")
+                  if not name.startswith(prefix):
+                      continue
+                  if not isinstance(artifact_id, int):
+                      raise SystemExit(
+                          "SCHOOL_STEWARD_ARTIFACT_PURGE_FAIL code=INVALID_ID"
+                      )
+                  delete_url = (
+                      f"https://api.github.com/repos/{repository}/actions/"
+                      f"artifacts/{artifact_id}"
+                  )
+                  request = urllib.request.Request(
+                      delete_url, headers=headers, method="DELETE"
+                  )
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      if response.status != 204:
+                          raise SystemExit(
+                              "SCHOOL_STEWARD_ARTIFACT_PURGE_FAIL "
+                              f"code=HTTP_{response.status}"
+                          )
+                  deleted += 1
+              if len(artifacts) < 100:
+                  break
+              page += 1
+          print(f"SCHOOL_STEWARD_ARTIFACT_PURGE_PASS deleted={deleted}")
+          PY
