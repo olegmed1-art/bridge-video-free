@@ -54,6 +54,9 @@ def test_restore_preflight_is_read_only_and_keeps_restore_unproven():
     assert 'x.get("boot-volume-id")==sys.argv[1]' in restore
     assert '"restore_executed": False' in restore
     assert '"production_volume_modified": False' in restore
+    assert '"backup_time_created": os.environ["BACKUP_TIME_CREATED"]' in restore
+    assert '"backup_age_seconds": age_seconds' in restore
+    assert '"rpo_target_met_at_observation": age_seconds <= 24 * 3600' in restore
     assert "isolated_restore_and_acceptance_still_required" in restore
     assert "boot-volume create" not in restore
     assert "instance action" not in restore
