@@ -182,7 +182,6 @@ fi
 ASSIGNMENT_JSON="$(oci bv volume-backup-policy-assignment get-volume-backup-policy-asset-assignment --asset-id "$BOOT_VOLUME_ID" --output json | normalize_list_json)"
 ASSIGNED_POLICY_ID="$(printf '%s' "$ASSIGNMENT_JSON" | python3 -c 'import json,sys; xs=json.load(sys.stdin).get("data",[]); print(xs[0].get("policy-id","") if len(xs)==1 else "")')"
 [[ "$ASSIGNED_POLICY_ID" == "$POLICY_ID" ]] || die "Exact $BACKUP_POLICY_NAME backup policy assignment is not proven"
-
 log "Ensure monthly budget and five alert rules"
 BUDGETS_JSON="$(oci budgets budget budget list -c "$TENANCY_ID" --display-name "$BUDGET_NAME" --all --output json | normalize_list_json)"
 BUDGET_ID="$(printf '%s' "$BUDGETS_JSON" | python3 -c 'import json,sys; xs=json.load(sys.stdin).get("data",[]); xs.sort(key=lambda x:x.get("time-created",""),reverse=True); print(xs[0].get("id","") if xs else "")')"
