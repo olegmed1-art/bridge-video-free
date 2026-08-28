@@ -30,6 +30,8 @@ jobs:
             [[ "$jobs" == 0 ]]
           done
           for run_id in $RUN_IDS; do
-            gh api --method POST "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/cancel"
+            if ! gh api --method POST "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/cancel"; then
+              gh api --method POST "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id/force-cancel"
+            fi
           done
           echo STALE_ORACLE_QUEUE_CANCEL_REQUESTED
