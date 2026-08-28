@@ -31,7 +31,14 @@ jobs:
         run: |
           set -euo pipefail
           bash -n ops/universal_video_sidecar_repair.sh
-          python -m pytest -q tests/test_universal_video_sidecar_repair_contract.py
+          python - <<'PY'
+          ns = {}
+          exec(open('tests/test_universal_video_sidecar_repair_contract.py', encoding='utf-8').read(), ns)
+          for name, fn in sorted(ns.items()):
+              if name.startswith('test_') and callable(fn):
+                  fn()
+          print('UNIVERSAL_VIDEO_SIDECAR_REPAIR_CONTRACT_PASS')
+          PY
 
   repair:
     if: ${{ github.event_name == 'issue_comment' && github.event.comment.user.login == 'olegmed1-art' && github.event.comment.body == '/oracle uv-sidecar-repair' }}
