@@ -10,7 +10,10 @@ fail(){ echo "ERROR: $*" >&2; exit 1; }
 [[ "$EXPECTED_RUNTIME_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail 'invalid runtime commit'
 readonly SOURCE_DIR='/opt/bridge-school/universal-video-src'
 readonly TARGET='/usr/local/sbin/universal-video'
-readonly SUDOERS='/etc/sudoers.d/universal-video-ocarun'
+# The generic submit/status surface and the OCI admin surface have independent
+# ownership. Sharing one sudoers path lets either installer erase the other's
+# exact grants during a later idempotent bootstrap.
+readonly SUDOERS='/etc/sudoers.d/universal-video-operator-ocarun'
 [[ "$(git -C "$SOURCE_DIR" rev-parse HEAD)" == "$EXPECTED_RUNTIME_COMMIT" ]] || fail 'runtime commit mismatch'
 [[ -z "$(git -C "$SOURCE_DIR" status --porcelain=v1 --untracked-files=all)" ]] || fail 'runtime checkout is dirty'
 [[ "$(git -C "$SOURCE_DIR" rev-parse "$EXPECTED_RUNTIME_COMMIT:ops/universal_video_operator.sh")" == "$(git hash-object "$SOURCE_FILE")" ]] || fail 'operator does not match checkout'
