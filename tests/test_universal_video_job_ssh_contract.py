@@ -1,0 +1,44 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW = (ROOT / ".github/workflows/oracle-universal-video-job.yml").read_text(
+    encoding="utf-8"
+)
+
+
+def test_job_uses_pinned_bounded_ssh_transport():
+    assert "ORACLE_HOST: 158.180.47.161" in WORKFLOW
+    assert "ORACLE_USER: ubuntu" in WORKFLOW
+    assert (
+        "EXPECTED_FINGERPRINT: "
+        "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk"
+    ) in WORKFLOW
+    assert 'ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"' in WORKFLOW
+    assert "StrictHostKeyChecking=yes" in WORKFLOW
+    assert "StrictHostKeyChecking=no" not in WORKFLOW
+    assert "BatchMode=yes" in WORKFLOW
+    assert "IdentitiesOnly=yes" in WORKFLOW
+    assert "timeout 180 ssh" in WORKFLOW
+    assert "ServerAliveInterval=15" in WORKFLOW
+    assert "ServerAliveCountMax=2" in WORKFLOW
+
+
+def test_job_invokes_only_fixed_resident_admin_surfaces():
+    assert "oci instance-agent command" not in WORKFLOW
+    assert "--execution-user" not in WORKFLOW
+    assert "repair_cmd='sudo -n /usr/local/sbin/universal-video-spool-repair'" in WORKFLOW
+    assert 'submit_cmd="sudo -n /usr/local/sbin/universal-video submit-base64 \'$payload\'"' in WORKFLOW
+    assert 'status_cmd="sudo -n /usr/local/sbin/universal-video status \'$JOB_ID\'"' in WORKFLOW
+    assert 'run_remote "$repair_cmd"' in WORKFLOW
+    assert 'run_remote "$submit_cmd"' in WORKFLOW
+    assert 'run_remote "$status_cmd"' in WORKFLOW
+
+
+def test_job_keeps_remote_output_fail_closed_and_bounded():
+    assert '"$ORACLE_USER@$ORACLE_HOST" "$command" 2>/dev/null' in WORKFLOW
+    assert "initial_safe=" in WORKFLOW
+    assert "safe=" in WORKFLOW
+    assert "grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|CONFORMANCE_STATE|" in WORKFLOW
+    assert "PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_COMMAND_FAILED" in WORKFLOW
+    assert "UV_OPERATOR_ERROR_CODE=$code" in WORKFLOW
