@@ -89,7 +89,7 @@ jobs:
           roots="$(oci iam compartment list --include-root --all --output json)"
           tenancy_id="$(printf '%s' "$roots" | python -c 'import json,sys; xs=[x["id"] for x in json.load(sys.stdin)["data"] if x.get("id","").startswith("ocid1.tenancy.")]; assert len(xs)==1; print(xs[0])')"
           instances="$(oci compute instance list --compartment-id "$tenancy_id" --display-name bridge-school-dds3-frankfurt --all --output json)"
-          instance_id="$(printf '%s' "$instances" | python -c 'import json,sys; xs=[x for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state")=="RUNNING"]; assert len(xs)==1; print(xs[0]["id"])')"
+          instance_id="$(printf '%s' "$instances" | python -c 'import json,sys; xs=[x for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state") not in {"TERMINATED","TERMINATING"}]; assert len(xs)==1; print(xs[0]["id"])')"
           instance_json="$(oci compute instance get --instance-id "$instance_id" --output json)"
           ad="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["availability-domain"])')"
           attachments="$(oci compute boot-volume-attachment list --compartment-id "$tenancy_id" --availability-domain "$ad" --instance-id "$instance_id" --all --output json)"
