@@ -274,6 +274,11 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_HIDDEN_WRAPPED_OWNER_SUFFIX_NOT_BLOCKED';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
+        '{"partnermetadata":{"cards":["AS"]}}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_OWNER_WRAPPER_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
         '{"handsPlayed":{"holdingcount":{"bySeat":{"partner":123456}}}}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_INTERMEDIATE_SUFFIX_NOT_BLOCKED';
