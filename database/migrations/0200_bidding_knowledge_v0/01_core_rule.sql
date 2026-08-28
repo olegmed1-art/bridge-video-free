@@ -203,6 +203,30 @@ WITH RECURSIVE walk(value,key_path) AS (
         )
         OR EXISTS (
             SELECT 1
+              FROM generate_subscripts(w.key_path,1) AS owner_pos(i)
+              JOIN owner_word AS owner
+                ON owner.word=w.key_path[owner_pos.i]
+              JOIN sensitive_suffix AS suffix
+                ON owner_pos.i < cardinality(w.key_path)
+               AND suffix.word=w.key_path[owner_pos.i+1]
+             WHERE NOT (
+                 jsonb_typeof(w.value)='number'
+                 AND suffix.word IN ('hand','hands','card','cards')
+                 AND owner_pos.i+1 < cardinality(w.key_path)
+                 AND NOT EXISTS (
+                     SELECT 1
+                       FROM generate_subscripts(w.key_path,1) AS metric_pos(k)
+                      WHERE metric_pos.k > owner_pos.i+1
+                        AND NOT EXISTS (
+                            SELECT 1
+                              FROM metric_word AS metric
+                             WHERE metric.word=w.key_path[metric_pos.k]
+                        )
+                 )
+             )
+        )
+        OR EXISTS (
+            SELECT 1
               FROM generate_subscripts(w.key_path,1) AS left_pos(i)
               CROSS JOIN generate_subscripts(w.key_path,1) AS right_pos(j)
              WHERE left_pos.i < right_pos.j
@@ -229,8 +253,6 @@ WITH RECURSIVE walk(value,key_path) AS (
                     AND NOT EXISTS (
                         SELECT 1
                           FROM generate_subscripts(w.key_path,1) AS suffix_pos(k)
-                          JOIN sensitive_suffix AS suffix
-                            ON suffix.word=w.key_path[suffix_pos.k]
                          WHERE suffix_pos.k > CASE
                              WHEN w.key_path[left_pos.i] IN (
                                       'hand','hands','card','cards'
@@ -244,6 +266,20 @@ WITH RECURSIVE walk(value,key_path) AS (
                              THEN left_pos.i+1
                              ELSE right_pos.j+1
                          END
+                           AND EXISTS (
+                               SELECT 1
+                                 FROM sensitive_suffix AS suffix
+                                WHERE w.key_path[suffix_pos.k]=suffix.word
+                                   OR (
+                                       w.key_path[suffix_pos.k] ~ (
+                                           SELECT '^(' || string_agg(word,'|') || ')+$'
+                                             FROM allowed_suffix
+                                       )
+                                       AND position(
+                                           suffix.word IN w.key_path[suffix_pos.k]
+                                       ) > 0
+                                   )
+                           )
                            AND NOT (
                                w.key_path[suffix_pos.k] IN (
                                    'hand','hands','card','cards'
