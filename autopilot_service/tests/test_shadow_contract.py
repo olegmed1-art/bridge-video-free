@@ -21,6 +21,9 @@ from autopilot_app.workflow import wf
 from autopilot_app.workflows import ShadowSignal, shadow_wait_workflow
 
 
+STRONG_SECRET = "s" * 32
+
+
 class ShadowContractTests(unittest.TestCase):
     def test_registry_exposes_observed_public_api(self) -> None:
         self.assertTrue(callable(getattr(wf, "workflow", None)))
@@ -62,19 +65,21 @@ class ShadowContractTests(unittest.TestCase):
                 outcome="unknown",
             )
 
-    def test_control_fails_closed_when_secret_is_absent(self) -> None:
-        with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaises(HTTPException) as ctx:
-                _require_shadow_authorization("Bearer value")
-        self.assertEqual(ctx.exception.status_code, 503)
-        self.assertEqual(ctx.exception.detail, "SHADOW_CONTROL_NOT_CONFIGURED")
+    def test_control_fails_closed_when_secret_is_absent_or_weak(self) -> None:
+        for env in ({}, {"AUTOPILOT_SHADOW_SECRET": "too-short"}):
+            with self.subTest(env=env):
+                with patch.dict(os.environ, env, clear=True):
+                    with self.assertRaises(HTTPException) as ctx:
+                        _require_shadow_authorization("Bearer value")
+                self.assertEqual(ctx.exception.status_code, 503)
+                self.assertEqual(ctx.exception.detail, "SHADOW_CONTROL_NOT_CONFIGURED")
 
     def test_control_auth_is_exact_and_constant_time_boundary(self) -> None:
-        with patch.dict(os.environ, {"AUTOPILOT_SHADOW_SECRET": "expected"}):
+        with patch.dict(os.environ, {"AUTOPILOT_SHADOW_SECRET": STRONG_SECRET}):
             with self.assertRaises(HTTPException) as ctx:
                 _require_shadow_authorization("Bearer wrong")
             self.assertEqual(ctx.exception.status_code, 401)
-            _require_shadow_authorization("Bearer expected")
+            _require_shadow_authorization(f"Bearer {STRONG_SECRET}")
 
     def test_start_uses_exact_observed_api_and_returns_run_id(self) -> None:
         fake_run = SimpleNamespace(run_id="run-shadow-1")
@@ -107,8 +112,8 @@ class ShadowContractTests(unittest.TestCase):
         self.assertFalse(payload["workflow_start_enabled"])
         self.assertFalse(payload["resume_configured"])
 
-    def test_health_enables_only_shadow_control_when_secret_exists(self) -> None:
-        with patch.dict(os.environ, {"AUTOPILOT_SHADOW_SECRET": "configured"}):
+    def test_health_enables_only_shadow_control_when_strong_secret_exists(self) -> None:
+        with patch.dict(os.environ, {"AUTOPILOT_SHADOW_SECRET": STRONG_SECRET}):
             payload = asyncio.run(healthz())
         self.assertFalse(payload["production_mutations_enabled"])
         self.assertTrue(payload["workflow_start_enabled"])
