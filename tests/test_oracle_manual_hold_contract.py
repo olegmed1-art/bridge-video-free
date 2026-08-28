@@ -17,6 +17,8 @@ def test_manual_hold_is_owner_bounded_and_duration_bounded():
 
 def test_hold_state_is_durable_and_release_is_fail_closed():
     text = HOLD.read_text(encoding='utf-8')
+    assert "gh issue comment 751" in text
+    assert "github.event.issue.number" not in text
     assert "issues/751/comments?per_page=100" in text
     assert "[oracle-hold state] until_epoch=" in text
     assert "assistant_lab.oracle_idle_snapshot()" in text
