@@ -98,6 +98,16 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_ALL_HANDS_CONTAINER_NOT_BLOCKED';
     END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"allHandsPlayed":{"N":["AS"],"E":["KS"]}}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_ALL_HANDS_METRIC_OBJECT_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"allHandsCount":[["AS"],["KS"]]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_ALL_HANDS_METRIC_ARRAY_NOT_BLOCKED';
+    END IF;
 
     INSERT INTO public.school(stable_name,status)
     VALUES ('CI bidding isolated school 20260827','active')
