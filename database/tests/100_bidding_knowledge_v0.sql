@@ -108,6 +108,46 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_ALL_HANDS_METRIC_ARRAY_NOT_BLOCKED';
     END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"eastcards":["AS"],"cardseast":["KS"],"ECards":["QS"]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_SEAT_CARDS_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"hands":[{"seat":"E","cards":["AS"]}]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_SEAT_VALUE_RECORD_NOT_BLOCKED';
+    END IF;
+    IF bidding.contains_forbidden_hidden_key(
+        '{"seat":"N","cards":["AS"]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_ACTING_HAND_RECORD_FALSE_POSITIVE';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"otherHand":{"cards":["AS"]},"otherHands":[["KS"]]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_OTHER_HAND_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"partnerHandsCount":"AS KH QD"}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_STRING_METRIC_NOT_BLOCKED';
+    END IF;
+    IF bidding.contains_forbidden_hidden_key(
+        '{"partnerhandscount":12}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_COMPACT_NUMERIC_METRIC_FALSE_POSITIVE';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"partnerhandhcp":10}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_UNSPLIT_SUFFIX_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"handpartner":["AS"],"cardshidden":["KS"],"dealfull":{"N":["QS"]}}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_REVERSE_ALIAS_NOT_BLOCKED';
+    END IF;
 
     INSERT INTO public.school(stable_name,status)
     VALUES ('CI bidding isolated school 20260827','active')
