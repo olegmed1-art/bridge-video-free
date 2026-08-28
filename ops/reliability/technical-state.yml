@@ -1,11 +1,10 @@
 schema_version: 1
-updated_at_utc: "2026-08-27T16:55:00Z"
+updated_at_utc: "2026-08-28T00:00:00Z"
 policy: docs/TECHNICAL_GOVERNANCE.md
 whole_school_recovery:
   target_status: RECOVERY_PROVEN_V1
   current_status: PARTIAL
   blockers:
-    - independent_large_irreplaceable_media_backup_not_proven
     - oci_boot_volume_restore_not_proven
     - full_end_to_end_restore_drill_not_proven
     - explicit_rpo_rto_not_fully_verified
@@ -97,7 +96,22 @@ components:
     health: observed
     backup_required: true
     independent_backup_scope: irreproducible_sources_and_final_evidence
-    backup_status: partial
+    backup_status: proven_for_representative_large_source
+    independent_backup_evidence:
+      workflow_run_id: 32935066096
+      source_file_id: 1ZtRQYhDh2ErLkpvbDl-NE2nFDIJdBfO1
+      source_bytes: 409302227
+      source_sha256: 8229a8c3fc6b91f6bf74ea17b2478c9dfbca291d3e90e6379338a5ab83c7407d
+      previous_connector_limit_bytes: 268435456
+      source_exceeds_previous_connector_limit: true
+      target: private_oci_object_storage
+      durable_object_put: true
+      restored_bytes: 409302227
+      restored_sha256: 8229a8c3fc6b91f6bf74ea17b2478c9dfbca291d3e90e6379338a5ab83c7407d
+      checksum_equal: true
+      source_deleted_or_moved: false
+      bucket_created_or_modified: false
+      recovery_object_retained: true
 
   dds3:
     role: deterministic_bridge_compute
@@ -167,7 +181,7 @@ audit_snapshots:
       source_size_bytes: 1699568400
       result: blocked
       connector_limit_bytes: 268435456
-    independent_large_media_backup: unproven
+    independent_large_media_backup: proven_for_representative_large_source
     restored_database_application_smoke: proven
     recovery_registry_population:
       conclusion: success
@@ -219,8 +233,9 @@ work_queue:
       tracking_issue: 523
     - id: independent_large_irreplaceable_media_backup
       priority: P0
-      status: queued
-      tracking_issue: 523
+      status: proven_for_representative_large_source
+      tracking_issue: 580
+      evidence_workflow_run_id: 32935066096
     - id: video_result_durable_copy_before_cleanup
       priority: P0
       status: proven_by_code_contract
