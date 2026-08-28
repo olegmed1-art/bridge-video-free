@@ -248,6 +248,20 @@ BEGIN
 
     v_failed := false;
     BEGIN
+        INSERT INTO bidding.decision_trace(
+            school_id,decision_key,request_fingerprint,acting_seat,acting_hand,
+            public_auction,public_context,scope_key,outcome,explanation,resolver_version
+        ) VALUES (
+            v_school,'ci-hidden-seat-abbrev-decision','ci-hidden-seat-abbrev-fingerprint','N',
+            '{"hands":{"E":["AS"]}}'::jsonb,
+            '{"calls":[]}'::jsonb,'{}'::jsonb,'ci','no_action','{}'::jsonb,'ci-resolver-v0'
+        );
+    EXCEPTION WHEN check_violation THEN v_failed := true;
+    END;
+    IF NOT v_failed THEN RAISE EXCEPTION 'SMOKE_HIDDEN_SEAT_ABBREVIATION_NOT_BLOCKED'; END IF;
+
+    v_failed := false;
+    BEGIN
         UPDATE bidding.decision_trace SET explanation='{}'::jsonb
          WHERE school_id=v_school AND decision_key='ci-decision';
     EXCEPTION WHEN object_not_in_prerequisite_state THEN v_failed := true;
