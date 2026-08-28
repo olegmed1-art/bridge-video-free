@@ -5,6 +5,12 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = (ROOT / ".github/workflows/oracle-universal-video-job.yml").read_text(
     encoding="utf-8"
 )
+OPERATOR_INSTALL = (ROOT / "ops/install_universal_video_operator.sh").read_text(
+    encoding="utf-8"
+)
+ADMIN_INSTALL = (ROOT / "ops/install_universal_video_ocarun_admin.sh").read_text(
+    encoding="utf-8"
+)
 
 
 def test_job_uses_pinned_bounded_ssh_transport():
@@ -33,6 +39,16 @@ def test_job_invokes_only_fixed_resident_admin_surfaces():
     assert 'run_remote "$repair_cmd"' in WORKFLOW
     assert 'run_remote "$submit_cmd"' in WORKFLOW
     assert 'run_remote "$status_cmd"' in WORKFLOW
+
+
+def test_operator_and_admin_sudoers_ownership_cannot_collide():
+    assert "readonly SUDOERS='/etc/sudoers.d/universal-video-operator-ocarun'" in OPERATOR_INSTALL
+    assert "readonly SUDOERS='/etc/sudoers.d/universal-video-admin-ocarun'" in ADMIN_INSTALL
+    assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video submit-base64 *" in OPERATOR_INSTALL
+    assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video status *" in OPERATOR_INSTALL
+    assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-spool-repair" in ADMIN_INSTALL
+    assert "/etc/sudoers.d/universal-video-ocarun'" not in OPERATOR_INSTALL
+    assert "/etc/sudoers.d/universal-video-ocarun'" not in ADMIN_INSTALL
 
 
 def test_job_keeps_remote_output_fail_closed_and_bounded():
