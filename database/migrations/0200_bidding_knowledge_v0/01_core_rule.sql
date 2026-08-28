@@ -61,20 +61,27 @@ WITH RECURSIVE walk(value,key_path) AS (
         'partnerhand','partnerhands','opponenthand','opponenthands',
         'otherhand','otherhands','handother','handsother',
         'handpartner','handspartner','handopponent','handsopponent',
+        'cardpartner','cardopponent','cardother',
         'cardspartner','cardsopponent','cardsother',
+        'partnercard','opponentcard','othercard',
         'partnercards','opponentcards','othercards',
         'northhand','easthand','southhand','westhand',
         'handnorth','handeast','handsouth','handwest',
         'handsnorth','handseast','handssouth','handswest',
+        'northcard','eastcard','southcard','westcard',
+        'cardnorth','cardeast','cardsouth','cardwest',
         'northcards','eastcards','southcards','westcards',
         'cardsnorth','cardseast','cardssouth','cardswest',
         'handn','hande','handw',
         'handsn','handse','handss','handsw',
         'nhand','ehand','shand','whand',
         'nhands','ehands','shands','whands',
+        'ncard','ecard','scard','wcard',
+        'cardn','carde','cards','cardw',
         'ncards','ecards','scards','wcards',
         'cardsn','cardse','cardss','cardsw',
-        'fulldeal','dealfull','hiddencards','cardshidden',
+        'fulldeal','dealfull','hiddencard','cardhidden',
+        'hiddencards','cardshidden',
         'actualpartnerhand','actualopponenthand','actualopponenthands'
     ])
 ), metric_word(word) AS (
@@ -133,22 +140,22 @@ WITH RECURSIVE walk(value,key_path) AS (
                AND (
                     (
                         w.key_path[left_pos.i] IN ('partner','opponent','opponents','other','others')
-                        AND w.key_path[right_pos.j] IN ('hand','hands','cards')
+                        AND w.key_path[right_pos.j] IN ('hand','hands','card','cards')
                     )
                     OR (
-                        w.key_path[left_pos.i] IN ('hand','hands','cards')
+                        w.key_path[left_pos.i] IN ('hand','hands','card','cards')
                         AND w.key_path[right_pos.j] IN (
-                            'partner','opponent','opponents'
+                            'partner','opponent','opponents','other','others'
                         )
                     )
                     OR (
                         w.key_path[left_pos.i] IN (
                             'north','east','south','west','n','e','s','w'
                         )
-                        AND w.key_path[right_pos.j] IN ('hand','hands','cards')
+                        AND w.key_path[right_pos.j] IN ('hand','hands','card','cards')
                     )
                     OR (
-                        w.key_path[left_pos.i] IN ('hand','hands','cards')
+                        w.key_path[left_pos.i] IN ('hand','hands','card','cards')
                         AND w.key_path[right_pos.j] IN (
                             'north','east','south','west','n','e','s','w'
                         )
@@ -206,7 +213,7 @@ WITH RECURSIVE walk(value,key_path) AS (
                   FROM jsonb_each(w.value) AS cards_field(key,value)
                  WHERE lower(regexp_replace(cards_field.key,'[^a-z0-9]','','g'))
                        IN ('card','cards')
-                   AND jsonb_typeof(cards_field.value) IN ('object','array')
+                   AND jsonb_typeof(cards_field.value) <> 'null'
             )
         )
      LIMIT 1
