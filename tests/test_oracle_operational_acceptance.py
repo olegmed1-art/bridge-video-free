@@ -66,3 +66,8 @@ def test_oci_credentials_are_normalized_without_multiline_config_injection():
     assert '"user": scalar("OCI_USER", "user")' in WORKFLOW
     assert '"tenancy": scalar("OCI_TENANCY", "tenancy")' in WORKFLOW
     assert 'cat > "$HOME/.oci/config"' not in WORKFLOW
+
+
+def test_generated_oci_config_uses_real_line_separators():
+    assert 'text = "[DEFAULT]\\\\\\\\n"' not in WORKFLOW
+    assert 'key_file={Path.home() / \'.oci\' / \'key.pem\'}\\\\\\\\n' not in WORKFLOW

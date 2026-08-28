@@ -125,8 +125,8 @@ jobs:
               "tenancy": scalar("OCI_TENANCY", "tenancy"),
               "region": scalar("OCI_REGION", "region"),
           }
-          text = "[DEFAULT]\\n" + "".join(f"{key}={value}\\n" for key, value in config.items())
-          text += f"key_file={Path.home() / '.oci' / 'key.pem'}\\n"
+          text = "[DEFAULT]\n" + "".join(f"{key}={value}\n" for key, value in config.items())
+          text += f"key_file={Path.home() / '.oci' / 'key.pem'}\n"
           (Path.home() / ".oci" / "config").write_text(text, encoding="utf-8")
           PY
           chmod 0600 "$HOME/.oci/config"
