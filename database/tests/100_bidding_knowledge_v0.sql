@@ -54,6 +54,11 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_PUBLIC_COMPACT_PARTNER_METRIC_FALSE_POSITIVE';
     END IF;
     IF bidding.contains_forbidden_hidden_key(
+        '{"partnerCardCount":12}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_PUBLIC_SCOPED_CARD_METRIC_FALSE_POSITIVE';
+    END IF;
+    IF bidding.contains_forbidden_hidden_key(
         '{"cardErrors":"invalid rank"}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_PUBLIC_CARD_ERRORS_FALSE_POSITIVE';
@@ -177,6 +182,11 @@ BEGIN
         '{"discount":{"partnerCard":14}}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_METRIC_SUBSTRING_BYPASS_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"count":{"partnerCard":51}}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_UNRELATED_METRIC_WRAPPER_NOT_BLOCKED';
     END IF;
     IF bidding.contains_forbidden_hidden_key(
         '{"seat":"N","cards":["AS"]}'::jsonb
