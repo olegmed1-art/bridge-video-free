@@ -206,24 +206,93 @@ WITH RECURSIVE walk(value,key_path) AS (
               FROM generate_subscripts(w.key_path,1) AS owner_pos(i)
               JOIN owner_word AS owner
                 ON owner.word=w.key_path[owner_pos.i]
+              CROSS JOIN generate_subscripts(w.key_path,1) AS suffix_pos(j)
               JOIN sensitive_suffix AS suffix
-                ON owner_pos.i < cardinality(w.key_path)
-               AND suffix.word=w.key_path[owner_pos.i+1]
+                ON suffix_pos.j > owner_pos.i
+               AND (
+                   suffix.word=w.key_path[suffix_pos.j]
+                   OR (
+                       w.key_path[suffix_pos.j] ~ (
+                           SELECT '^(' || string_agg(word,'|') || ')+$'
+                             FROM allowed_suffix
+                       )
+                       AND position(
+                           suffix.word IN w.key_path[suffix_pos.j]
+                       ) > 0
+                   )
+               )
              WHERE NOT (
                  jsonb_typeof(w.value)='number'
                  AND suffix.word IN ('hand','hands','card','cards')
-                 AND owner_pos.i+1 < cardinality(w.key_path)
-                 AND NOT EXISTS (
-                     SELECT 1
-                       FROM generate_subscripts(w.key_path,1) AS metric_pos(k)
-                      WHERE metric_pos.k > owner_pos.i+1
-                        AND NOT EXISTS (
-                            SELECT 1
-                              FROM metric_word AS metric
-                             WHERE metric.word=w.key_path[metric_pos.k]
-                        )
+                 AND (
+                     (
+                         w.key_path[suffix_pos.j]=suffix.word
+                         AND suffix_pos.j < cardinality(w.key_path)
+                         AND NOT EXISTS (
+                             SELECT 1
+                               FROM generate_subscripts(w.key_path,1)
+                                    AS metric_pos(k)
+                              WHERE metric_pos.k > suffix_pos.j
+                                AND NOT EXISTS (
+                                    SELECT 1
+                                      FROM metric_word AS metric
+                                     WHERE metric.word=
+                                           w.key_path[metric_pos.k]
+                                )
+                         )
+                     )
+                     OR (
+                         w.key_path[suffix_pos.j] LIKE suffix.word || '%'
+                         AND substring(
+                                 w.key_path[suffix_pos.j]
+                                 FROM length(suffix.word)+1
+                             ) ~ (
+                                 SELECT '^(' || string_agg(word,'|') || ')+$'
+                                   FROM metric_word
+                             )
+                     )
                  )
              )
+        )
+        OR EXISTS (
+            SELECT 1
+              FROM generate_subscripts(w.key_path,1) AS subject_pos(i)
+              CROSS JOIN unnest(ARRAY['hand','hands','card','cards'])
+                         AS metric_subject(subject)
+             WHERE w.key_path[subject_pos.i] LIKE metric_subject.subject || '%'
+               AND substring(
+                       w.key_path[subject_pos.i]
+                       FROM length(metric_subject.subject)+1
+                   ) ~ (
+                       SELECT '^(' || string_agg(word,'|') || ')+$'
+                         FROM metric_word
+                   )
+               AND EXISTS (
+                   SELECT 1
+                     FROM generate_subscripts(w.key_path,1) AS owner_pos(j)
+                     JOIN owner_word AS owner
+                       ON owner.word=w.key_path[owner_pos.j]
+                    WHERE owner_pos.j > subject_pos.i
+               )
+               AND EXISTS (
+                   SELECT 1
+                     FROM generate_subscripts(w.key_path,1) AS suffix_pos(k)
+                    WHERE suffix_pos.k > subject_pos.i
+                      AND EXISTS (
+                          SELECT 1
+                            FROM sensitive_suffix AS suffix
+                           WHERE w.key_path[suffix_pos.k]=suffix.word
+                              OR (
+                                  w.key_path[suffix_pos.k] ~ (
+                                      SELECT '^(' || string_agg(word,'|') || ')+$'
+                                        FROM allowed_suffix
+                                  )
+                                  AND position(
+                                      suffix.word IN w.key_path[suffix_pos.k]
+                                  ) > 0
+                              )
+                      )
+               )
         )
         OR EXISTS (
             SELECT 1
