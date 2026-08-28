@@ -1,0 +1,137 @@
+name: OCI isolated boot-volume restore drill
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oci-isolated-restore-drill.yml'
+      - 'tests/test_oci_isolated_restore_drill.py'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oci-isolated-restore-drill
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: |
+          set -euo pipefail
+          ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" .github/workflows/oci-isolated-restore-drill.yml
+          python -m pytest -q tests/test_oci_isolated_restore_drill.py
+
+  restore:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 265 &&
+      github.event.comment.user.login == 'olegmed1-art' &&
+      github.event.comment.body == '/oracle-ops restore-isolated'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      OCI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Configure pinned OCI credential
+        shell: bash
+        run: |
+          set -euo pipefail
+          for value in OCI_USER OCI_TENANCY OCI_FINGERPRINT OCI_KEY OCI_REGION; do
+            [[ -n "${!value:-}" ]] || exit 21
+          done
+          [[ "$OCI_REGION" == "eu-frankfurt-1" ]] || exit 22
+          python -m pip install --disable-pip-version-check -q 'oci-cli==3.90.3'
+          install -d -m 0700 "$HOME/.oci"
+          printf '%s' "$OCI_KEY" | python -c 'import sys; raw=sys.stdin.read().replace("\\r","").replace("\\n","\n"); open(sys.argv[1],"w").write(raw if raw.endswith("\n") else raw+"\n")' "$HOME/.oci/key.pem"
+          chmod 0600 "$HOME/.oci/key.pem"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          def scalar(env, key):
+              lines=[x.strip() for x in os.environ[env].replace("\r","").splitlines() if x.strip()]
+              matches=[x.split("=",1)[1].strip() for x in lines if x.startswith(key+"=")]
+              if len(matches)==1 and matches[0]: return matches[0]
+              if not matches and len(lines)==1 and "=" not in lines[0]: return lines[0]
+              raise SystemExit(f"ambiguous {env}")
+          values={"user":scalar("OCI_USER","user"),"fingerprint":scalar("OCI_FINGERPRINT","fingerprint"),"tenancy":scalar("OCI_TENANCY","tenancy"),"region":scalar("OCI_REGION","region")}
+          text="[DEFAULT]\n"+"".join(f"{k}={v}\n" for k,v in values.items())+f"key_file={Path.home()/'.oci'/'key.pem'}\n"
+          (Path.home()/".oci"/"config").write_text(text)
+          PY
+          chmod 0600 "$HOME/.oci/config"
+          oci iam region list --output json >/dev/null
+
+      - name: Restore isolated volume, verify, and remove
+        id: drill
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          export OCI_CLI_REGION="$OCI_REGION"
+          evidence="$RUNNER_TEMP/oci-isolated-restore.json"
+          roots="$(oci iam compartment list --include-root --all --output json)"
+          tenancy_id="$(printf '%s' "$roots" | python -c 'import json,sys; xs=[x["id"] for x in json.load(sys.stdin)["data"] if x.get("id","").startswith("ocid1.tenancy.")]; assert len(xs)==1; print(xs[0])')"
+          instances="$(oci compute instance list --compartment-id "$tenancy_id" --display-name bridge-school-dds3-frankfurt --all --output json)"
+          instance_id="$(printf '%s' "$instances" | python -c 'import json,sys; xs=[x for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state")=="RUNNING"]; assert len(xs)==1; print(xs[0]["id"])')"
+          instance_json="$(oci compute instance get --instance-id "$instance_id" --output json)"
+          ad="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["availability-domain"])')"
+          attachments="$(oci compute boot-volume-attachment list --compartment-id "$tenancy_id" --availability-domain "$ad" --instance-id "$instance_id" --all --output json)"
+          source_id="$(printf '%s' "$attachments" | python -c 'import json,sys; xs=[x for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state")=="ATTACHED"]; assert len(xs)==1; print(xs[0]["boot-volume-id"])')"
+          backups="$(oci bv boot-volume-backup list --compartment-id "$tenancy_id" --boot-volume-id "$source_id" --all --output json)"
+          backup_id="$(printf '%s' "$backups" | python -c 'import json,sys; xs=[x for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state")=="AVAILABLE" and x.get("type")=="FULL" and x.get("boot-volume-id")==sys.argv[1]]; xs.sort(key=lambda x:x.get("time-created",""),reverse=True); assert xs; print(xs[0]["id"])' "$source_id")"
+          drill_name="bridge-school-restore-drill-${GITHUB_RUN_ID}"
+          restored_id=""
+          cleanup() {
+            if [[ -n "$restored_id" ]]; then
+              oci bv boot-volume delete --boot-volume-id "$restored_id" --force >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+          restored="$(oci bv boot-volume create --source-boot-volume-backup-id "$backup_id" --availability-domain "$ad" --compartment-id "$tenancy_id" --display-name "$drill_name" --wait-for-state AVAILABLE --max-wait-seconds 3600 --output json)"
+          restored_id="$(printf '%s' "$restored" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
+          restored_state="$(oci bv boot-volume get --boot-volume-id "$restored_id" --query 'data."lifecycle-state"' --raw-output)"
+          restored_size="$(oci bv boot-volume get --boot-volume-id "$restored_id" --query 'data."size-in-gbs"' --raw-output)"
+          [[ "$restored_state" == AVAILABLE && "$restored_size" == 47 ]] || exit 40
+          oci bv boot-volume delete --boot-volume-id "$restored_id" --force >/dev/null
+          for _ in $(seq 1 60); do
+            if ! oci bv boot-volume get --boot-volume-id "$restored_id" --output json >/dev/null 2>&1; then break; fi
+            sleep 5
+          done
+          if oci bv boot-volume get --boot-volume-id "$restored_id" --output json >/dev/null 2>&1; then exit 41; fi
+          trap - EXIT
+          STATUS=PASS SIZE="$restored_size" python - <<'PY' > "$evidence"
+          import json,os
+          print(json.dumps({"status":os.environ["STATUS"],"evidence_class":"ISOLATED_BOOT_VOLUME_RESTORE","restored_state":"AVAILABLE","restored_size_gb":int(os.environ["SIZE"]),"production_volume_modified":False,"production_instance_rebooted":False,"routing_changed":False,"temporary_volume_deleted":True,"boot_acceptance_proven":False},sort_keys=True))
+          PY
+
+      - name: Publish bounded evidence
+        if: ${{ always() }}
+        env:
+          OUTCOME: ${{ steps.drill.outcome }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/oci-isolated-restore.json"
+          if [[ -f "$evidence" ]]; then
+            body="OCI isolated restore drill: **SUCCESS**"$'\n\n'```json$'\n'"$(cat "$evidence")"$'\n'```$'\n\n'"Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          else
+            body="OCI isolated restore drill: **${OUTCOME^^}**"$'\n\n'"No acceptance evidence produced; restore remains unproven."$'\n\n'"Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
+          gh issue comment 265 --repo "$GITHUB_REPOSITORY" --body "$body"
