@@ -11,6 +11,7 @@ def test_isolated_restore_is_exact_owner_gated_and_production_safe():
     assert '"production_volume_modified":False' in W
     assert '"routing_changed":False' in W
     assert '"temporary_volume_deleted":True' in W
+    assert '"$state" == TERMINATED' in W
     assert '"boot_acceptance_proven":False' in W
     assert "instance action" not in W
     assert "boot-volume-attachment attach" not in W
