@@ -63,6 +63,16 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'SMOKE_PUBLIC_REVERSE_OPPONENT_METRIC_FALSE_POSITIVE';
     END IF;
+    IF bidding.contains_forbidden_hidden_key(
+        '{"handsPlayed":{"bySeat":{"partner":12}}}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_PUBLIC_GROUPED_OWNER_METRIC_FALSE_POSITIVE';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"partnerHandsPlayed":{"cards":["AS"]}}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_METRIC_NAMED_CONTAINER_NOT_BLOCKED';
+    END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
         '{"cards":{"metadata":{"partner":"AS"}}}'::jsonb
     ) THEN
