@@ -20,6 +20,8 @@ DECLARE
     v_item uuid;
     v_version uuid;
     v_rule uuid;
+    v_item_b uuid;
+    v_version_b uuid;
     v_test uuid;
     v_type text;
 BEGIN
@@ -77,6 +79,36 @@ BEGIN
             v_school,v_test,'pass','ci-concurrency-v1'
         );
     END LOOP;
+
+    INSERT INTO public.knowledge_item(
+        school_id,stable_key,knowledge_type,title,status
+    ) VALUES (
+        v_school,'ci-bidding-inactive-reassignment-target','bidding_rule',
+        'CI inactive reassignment target','active'
+    ) RETURNING knowledge_item_id INTO v_item_b;
+
+    INSERT INTO public.knowledge_version(
+        knowledge_item_id,version_no,content,authority_class,review_status,
+        bidding_system_key,agreement_scope,level_scope,method_version,provenance,status
+    ) VALUES (
+        v_item_b,1,'{"fixture":"inactive-target"}'::jsonb,'school_canon','reviewed',
+        'ci-concurrency','{}'::jsonb,'{}'::jsonb,'ci-concurrency-v1',
+        '{"class":"DIRECT"}'::jsonb,'candidate'
+    ) RETURNING knowledge_version_id INTO v_version_b;
+
+    INSERT INTO public.knowledge_version_source(
+        knowledge_version_id,source_id,relation_type,source_locator
+    ) VALUES (
+        v_version_b,v_source,'derived_from','{"fixture":"inactive-target"}'::jsonb
+    );
+
+    INSERT INTO bidding.rule(
+        school_id,knowledge_version_id,rule_key,rule_kind,auction_pattern,
+        hand_constraints,public_context_constraints,action,lifecycle_status,method_version
+    ) VALUES (
+        v_school,v_version_b,'ci.activation.inactive-target','bid','{"calls":[]}'::jsonb,
+        '{}'::jsonb,'{}'::jsonb,'{"call":"P"}'::jsonb,'validated','ci-concurrency-v1'
+    );
 
     INSERT INTO public.canon_activation(
         knowledge_version_id,scope_key,valid_from,approval_provenance,status
@@ -240,6 +272,79 @@ def main() -> None:
                 )
         finally:
             scheduler.close()
+
+        with psycopg.connect(DATABASE_URL) as reset:
+            reset.execute(
+                """
+                UPDATE bidding.runtime_activation AS ra
+                   SET status='revoked'
+                  FROM bidding.rule AS r
+                 WHERE r.rule_id=ra.rule_id
+                   AND r.rule_key='ci.activation.concurrent'
+                   AND ra.status='active'
+                """
+            )
+
+        dependency_scheduler = psycopg.connect(DATABASE_URL)
+        reassignment_started = threading.Event()
+        reassignment_finished = threading.Event()
+        reassignment_sqlstate: list[str | None] = []
+
+        try:
+            dependency_scheduler.execute(
+                INSERT_SQL,
+                ("9 hours", "11 hours", '{"runner":"dependency-scheduler"}'),
+            )
+
+            def reassign_active_test() -> None:
+                with psycopg.connect(DATABASE_URL) as mutator:
+                    reassignment_started.set()
+                    try:
+                        mutator.execute(
+                            """
+                            UPDATE bidding.rule_test AS t
+                               SET rule_id=target.rule_id
+                              FROM bidding.rule AS source
+                              JOIN bidding.rule AS target
+                                ON target.rule_key='ci.activation.inactive-target'
+                             WHERE t.rule_id=source.rule_id
+                               AND source.rule_key='ci.activation.concurrent'
+                               AND t.test_key='positive'
+                            """
+                        )
+                        mutator.commit()
+                        reassignment_sqlstate.append(None)
+                    except psycopg.Error as exc:
+                        mutator.rollback()
+                        reassignment_sqlstate.append(exc.sqlstate)
+                    finally:
+                        reassignment_finished.set()
+
+            reassignment_thread = threading.Thread(
+                target=reassign_active_test,
+                daemon=True,
+            )
+            reassignment_thread.start()
+            if not reassignment_started.wait(timeout=5):
+                raise AssertionError("Concurrent test reassignment did not start")
+            if reassignment_finished.wait(timeout=1):
+                raise AssertionError(
+                    "Test reassignment did not wait on the old owner's activation lock"
+                )
+
+            dependency_scheduler.commit()
+            reassignment_thread.join(timeout=10)
+            if reassignment_thread.is_alive():
+                raise AssertionError(
+                    "Test reassignment did not finish after activation commit"
+                )
+            if reassignment_sqlstate != ["55000"]:
+                raise AssertionError(
+                    "Expected old-owner immutability SQLSTATE 55000, "
+                    f"got {reassignment_sqlstate!r}"
+                )
+        finally:
+            dependency_scheduler.close()
     finally:
         first.close()
 
