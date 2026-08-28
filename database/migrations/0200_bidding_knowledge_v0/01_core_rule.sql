@@ -216,6 +216,11 @@ WITH RECURSIVE walk(value,key_path) AS (
                            SELECT '^(' || string_agg(word,'|') || ')+$'
                              FROM allowed_suffix
                        )
+                       AND NOT EXISTS (
+                           SELECT 1
+                             FROM sensitive_suffix AS exact_suffix
+                            WHERE exact_suffix.word=w.key_path[suffix_pos.j]
+                       )
                        AND position(
                            suffix.word IN w.key_path[suffix_pos.j]
                        ) > 0
