@@ -5,11 +5,13 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/oracle-universal-video-job.yml"
 
 
-def test_spool_operations_use_exact_installed_ocarun_surface():
+def test_spool_operations_use_exact_installed_bounded_ssh_surface():
     text = WORKFLOW.read_text(encoding="utf-8")
 
-    assert "--execution-user ocarun" in text
-    assert "--execution-user root" not in text
+    assert "oci instance-agent command" not in text
+    assert "timeout 180 ssh" in text
+    assert "StrictHostKeyChecking=yes" in text
+    assert '"$ORACLE_USER@$ORACLE_HOST" "$command" 2>/dev/null' in text
     assert "sudo -n /usr/local/sbin/universal-video-spool-repair" in text
     assert "UNIVERSAL_VIDEO_SPOOL_RUNTIME_REPAIR_PASS" in text
 
