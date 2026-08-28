@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/oracle-universal-video-job.yml'
+      - 'tests/test_universal_video_job_ssh_contract.py'
   push:
     branches: [main]
     paths:
@@ -102,6 +103,12 @@ jobs:
           python - <<'PY'
           import yaml
           yaml.safe_load(open('.github/workflows/oracle-universal-video-job.yml', encoding='utf-8'))
+          path = 'tests/test_universal_video_job_ssh_contract.py'
+          ns = {'__file__': path, '__name__': 'uv_job_ssh_contract'}
+          exec(open(path, encoding='utf-8').read(), ns)
+          for name, fn in sorted(ns.items()):
+              if name.startswith('test_') and callable(fn):
+                  fn()
           print('ORACLE_UNIVERSAL_VIDEO_JOB_CONTRACT_PASS')
           PY
 
@@ -117,6 +124,15 @@ jobs:
       OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
       OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
       ISSUE_NUMBER: ${{ needs.validate.outputs.issue }}
       JOB_ID: ${{ needs.validate.outputs.job_id }}
       PROFILE: ${{ needs.validate.outputs.profile }}
@@ -162,44 +178,42 @@ jobs:
           esac
           echo ORACLE_UNIVERSAL_VIDEO_JOB_OCI_PASS
 
+      - name: Resolve trusted SSH transport
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
       - name: Submit and monitor generic resident job
         shell: bash
         run: |
           set -euo pipefail
-          compartment="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."compartment-id"' --raw-output)"
           run_remote() {
-            local display="$1" command="$2" timeout="${3:-180}"
-            local content target cid execution lifecycle
-            content="$(SCRIPT_TEXT="$command" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":"set -Eeuo pipefail\n"+os.environ["SCRIPT_TEXT"]+"\n"},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
-            target="$(python -c 'import json,os; print(json.dumps({"instanceId":os.environ["INSTANCE_ID"]},separators=(",",":")))')"
-            cid="$(oci instance-agent command create --compartment-id "$compartment" --content "$content" --target "$target" --execution-user ocarun --timeout-in-seconds "$timeout" --display-name "$display" --query data.id --raw-output)"
-            execution=''; lifecycle=''
-            for _ in $(seq 1 90); do
-              execution="$(oci instance-agent command-execution get --command-id "$cid" --instance-id "$INSTANCE_ID" --output json 2>/dev/null || true)"
-              [[ -n "$execution" ]] || { sleep 2; continue; }
-              # OCI can expose an empty or incomplete execution document while
-              # propagating a new command.  Treat it as pending and retry.
-              if ! lifecycle="$(printf '%s' "$execution" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state",""))' 2>/dev/null)"; then
-                sleep 2
-                continue
-              fi
-              case "$lifecycle" in SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break;; esac
-              sleep 2
-            done
-            if [[ "$lifecycle" != SUCCEEDED ]]; then
-              echo "instance-agent command did not reach SUCCEEDED: ${lifecycle:-NO_TERMINAL_RESPONSE}" >&2
-              if [[ -n "$execution" ]] && printf '%s' "$execution" | python -c 'import json,sys; json.load(sys.stdin)' >/dev/null 2>&1; then
-                printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print(((d.get("content") or {}).get("text","") or "")[:2000])' >&2
-              fi
-              return 1
-            fi
-            printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("text","") or "")'
+            local command="$1"
+            timeout 180 ssh -i '${{ steps.ssh.outputs.key }}' \
+              -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+              -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
+              "$ORACLE_USER@$ORACLE_HOST" "$command" 2>/dev/null
           }
 
           # Invoke only the installed fixed, root-owned, argument-free helper.
           repair_cmd='sudo -n /usr/local/sbin/universal-video-spool-repair'
           set +e
-          repair_out="$(run_remote "universal-video-spool-repair-${GITHUB_RUN_ID}" "$repair_cmd" 180 2>&1)"
+          repair_out="$(run_remote "$repair_cmd")"
           repair_rc=$?
           set -e
           if (( repair_rc != 0 )); then
@@ -227,7 +241,7 @@ jobs:
           status_cmd="sudo -n /usr/local/sbin/universal-video status '$JOB_ID'"
           label="Universal Video / $PROFILE / $JOB_ID"
 
-          initial="$(run_remote "universal-video-submit-${GITHUB_RUN_ID}" "$submit_cmd" 180)"
+          initial="$(run_remote "$submit_cmd")"
           state="$(printf '%s\n' "$initial" | sed -n 's/^UV_STATE=//p' | tail -n1)"
           [[ "$state" =~ ^(QUEUED|RUNNING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]] || { echo "unsafe submit state: $state" >&2; exit 1; }
           initial_safe="$(printf '%s\n' "$initial" | grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|CONFORMANCE_STATE|ATTESTATION_MODE|ARTIFACT_SET_SHA256|MANIFEST_SHA256|ARTIFACT_COUNT|TOTAL_BYTES|DOMAIN_ANALYSIS_STATUS|TECHNICAL_BUNDLE_READY|BRIDGE_PRODUCTION_READY|PEDAGOGICAL_STATUS|PUBLICATION_STATE|ERROR_TYPE|ERROR)=' | head -n 20 || true)"
@@ -240,7 +254,7 @@ jobs:
               REVIEW|NONCONFORMANT|CONFLICT|FAILED) exit 1;;
             esac
             sleep 60
-            out="$(run_remote "universal-video-status-${GITHUB_RUN_ID}" "$status_cmd" 180)"
+            out="$(run_remote "$status_cmd")"
             state="$(printf '%s\n' "$out" | sed -n 's/^UV_STATE=//p' | tail -n1)"
             [[ "$state" =~ ^(QUEUED|RUNNING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]] || { echo "unsafe status: $state" >&2; exit 1; }
             if [[ "$state" != "$last" ]]; then
