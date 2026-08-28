@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bridge-school-autopilot-shadow"
+version = "0.1.0"
+description = "Shadow-only compatibility spike for School Autopilot Controller v1"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.141.1",
+  "pydantic>=2.12,<3",
+  "uvicorn[standard]==0.52.2",
+  "vercel==0.10.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.vercel]
+entrypoint = "app.main:app"
+
+[[tool.vercel.workflows]]
+entrypoint = "app.workflows:wf"
