@@ -10,6 +10,9 @@ def test_repair_is_fixed_no_media_sidecar_operation():
     assert "assistant-lab.service" in SCRIPT
     assert "fallback_used" in SCRIPT
     assert "QUEUED_OR_RUNNING_JOB" in SCRIPT
+    assert "IMPORT_MODULE_MISSING" in SCRIPT
+    assert "IMPORT_PERMISSION" in SCRIPT
+    assert "PYTHONDONTWRITEBYTECODE=1" in SCRIPT
     assert 'systemctl start "$SERVICE"' in SCRIPT
     assert "UNIVERSAL_VIDEO_SIDECAR_REPAIR_PASS" in SCRIPT
     assert "submit-base64" not in SCRIPT
@@ -23,7 +26,7 @@ def test_workflow_exposes_only_exact_owner_command_and_pinned_payload():
     assert "workflow_dispatch" not in WORKFLOW
     assert "ORACLE_HOST: 158.180.47.161" in WORKFLOW
     assert "ORACLE_USER: ubuntu" in WORKFLOW
-    assert "EXPECTED_SCRIPT_BLOB: 345d518ecc3f3e2f468b12fc69f58308cf8a8d9c" in WORKFLOW
+    assert "EXPECTED_SCRIPT_BLOB: f1431f09f4bbcb91b408ad6aa07256b57fd3efb4" in WORKFLOW
     assert "git hash-object ops/universal_video_sidecar_repair.sh" in WORKFLOW
     assert "'sudo -n /bin/bash -s'" in WORKFLOW
 
