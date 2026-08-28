@@ -201,6 +201,31 @@ def assert_evidence_waits_then_fails(
         )
 
 
+def assert_repeatable_read_activation_fails() -> None:
+    with psycopg.connect(DATABASE_URL) as isolated:
+        isolated.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        isolated.execute("SELECT 1")  # Establish the transaction snapshot.
+        try:
+            isolated.execute(
+                INSERT_SQL,
+                (
+                    "21 hours",
+                    "23 hours",
+                    '{"runner":"repeatable-read"}',
+                ),
+            )
+        except psycopg.Error as exc:
+            isolated.rollback()
+            if exc.sqlstate != "55000":
+                raise AssertionError(
+                    "Expected REPEATABLE READ activation SQLSTATE 55000, "
+                    f"got {exc.sqlstate!r}"
+                ) from exc
+        else:
+            isolated.rollback()
+            raise AssertionError("REPEATABLE READ activation was not rejected")
+
+
 def main() -> None:
     with psycopg.connect(DATABASE_URL) as setup_conn:
         setup_conn.execute(SETUP_SQL)
@@ -457,6 +482,7 @@ def main() -> None:
              WHERE source.rule_key='ci.activation.concurrent'
             """,
         )
+        assert_repeatable_read_activation_fails()
     finally:
         first.close()
 
