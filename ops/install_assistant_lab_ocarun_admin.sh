@@ -37,7 +37,7 @@ install -o root -g root -m 0440 "$tmp.sudoers" "$SUDOERS"
 visudo -cf /etc/sudoers >/dev/null
 
 # Prove there is no broad passwordless sudo grant in this file.
-! grep -Eq 'NOPASSWD:[[:space:]]*ALL' "$SUDOERS" || fail 'broad NOPASSWD grant detected'
+if grep -Ev '^[[:space:]]*(#|$)' "$SUDOERS" | grep -Eq 'NOPASSWD:[[:space:]]*ALL'; then fail 'broad NOPASSWD grant detected'; fi
 
 printf 'installed=%s\n' "$TARGET"
 printf 'sudoers=%s\n' "$SUDOERS"
