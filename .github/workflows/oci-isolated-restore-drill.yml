@@ -128,13 +128,26 @@ jobs:
         env:
           OUTCOME: ${{ steps.drill.outcome }}
           GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         shell: bash
         run: |
           set -euo pipefail
           evidence="$RUNNER_TEMP/oci-isolated-restore.json"
-          if [[ -f "$evidence" ]]; then
-            body="OCI isolated restore drill: **SUCCESS**"$'\n\n'```json$'\n'"$(cat "$evidence")"$'\n'```$'\n\n'"Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          else
-            body="OCI isolated restore drill: **${OUTCOME^^}**"$'\n\n'"No acceptance evidence produced; restore remains unproven."$'\n\n'"Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          fi
-          gh issue comment 265 --repo "$GITHUB_REPOSITORY" --body "$body"
+          body="$RUNNER_TEMP/oci-isolated-restore.md"
+          EVIDENCE="$evidence" python - <<'PY' > "$body"
+          import json, os
+          from pathlib import Path
+          path=Path(os.environ["EVIDENCE"])
+          outcome=os.environ["OUTCOME"].upper()
+          print(f"OCI isolated restore drill: **{outcome}**")
+          print()
+          if path.is_file():
+              data=json.loads(path.read_text())
+              for key,value in data.items():
+                  print(f"- `{key}`: `{value}`")
+          else:
+              print("No acceptance evidence produced; restore remains unproven.")
+          print()
+          print(f"Run: {os.environ['RUN_URL']}")
+          PY
+          gh issue comment 265 --repo "$GITHUB_REPOSITORY" --body-file "$body"
