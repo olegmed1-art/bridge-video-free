@@ -84,12 +84,14 @@ class ShadowContractTests(unittest.TestCase):
     def test_start_uses_exact_observed_api_and_returns_run_id(self) -> None:
         fake_run = SimpleNamespace(run_id="run-shadow-1")
         with patch("autopilot_app.main.workflow.start", return_value=fake_run) as start:
-            run_id = _start_shadow_workflow(
-                task_id="task-shadow-1",
-                hook_token="x" * 43,
+            run_id = asyncio.run(
+                _start_shadow_workflow(
+                    task_id="task-shadow-1",
+                    hook_token="x" * 43,
+                )
             )
         self.assertEqual(run_id, "run-shadow-1")
-        start.assert_called_once_with(
+        start.assert_awaited_once_with(
             shadow_wait_workflow,
             task_id="task-shadow-1",
             hook_token="x" * 43,
@@ -101,7 +103,12 @@ class ShadowContractTests(unittest.TestCase):
             return_value=SimpleNamespace(run_id=""),
         ):
             with self.assertRaisesRegex(RuntimeError, "SHADOW_WORKFLOW_RUN_ID_INVALID"):
-                _start_shadow_workflow(task_id="task-shadow-1", hook_token="x" * 43)
+                asyncio.run(
+                    _start_shadow_workflow(
+                        task_id="task-shadow-1",
+                        hook_token="x" * 43,
+                    )
+                )
 
     def test_health_is_non_mutating_and_fail_closed_by_default(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
