@@ -84,6 +84,11 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_PUBLIC_OPPONENT_CARDS_METRIC_FALSE_POSITIVE';
     END IF;
     IF bidding.contains_forbidden_hidden_key(
+        '{"partner":{"metadata":{"handscount":12,"cardsplayed":26}}}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_PUBLIC_WRAPPED_COMPACT_METRIC_FALSE_POSITIVE';
+    END IF;
+    IF bidding.contains_forbidden_hidden_key(
         '{"handsPlayed":{"partner":12}}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_PUBLIC_REVERSE_PARTNER_METRIC_FALSE_POSITIVE';
