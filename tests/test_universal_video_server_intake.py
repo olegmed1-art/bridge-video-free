@@ -1,4 +1,6 @@
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -24,6 +26,40 @@ def test_accepts_any_explicit_drive_video(tmp_path: Path):
     staging.mkdir()
     assert submit(payload(), spool_root=spool, staging_root=staging) == "lesson-173"
     assert json.loads((spool / "inbox" / "lesson-173.json").read_text()) == payload()
+
+
+def test_published_job_is_readable_only_by_inbox_group_under_restrictive_umask(tmp_path: Path):
+    spool, staging = tmp_path / "spool", tmp_path / "staging"
+    inbox = spool / "inbox"
+    inbox.mkdir(parents=True)
+    staging.mkdir()
+    previous_umask = os.umask(0o077)
+    try:
+        submit(payload(), spool_root=spool, staging_root=staging)
+    finally:
+        os.umask(previous_umask)
+
+    published = inbox / "lesson-173.json"
+    assert stat.S_IMODE(published.stat().st_mode) == 0o640
+    assert published.stat().st_gid == inbox.stat().st_gid
+
+
+def test_worker_group_assignment_failure_does_not_publish_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    spool, staging = tmp_path / "spool", tmp_path / "staging"
+    inbox = spool / "inbox"
+    inbox.mkdir(parents=True)
+    staging.mkdir()
+
+    def fail_group_assignment(_fd: int, _uid: int, _gid: int) -> None:
+        raise PermissionError("group assignment refused")
+
+    monkeypatch.setattr(os, "fchown", fail_group_assignment)
+    with pytest.raises(PermissionError, match="group assignment refused"):
+        submit(payload(), spool_root=spool, staging_root=staging)
+    assert list(inbox.iterdir()) == []
+    assert list(staging.iterdir()) == []
 
 
 def test_rejects_duplicate_or_local_source(tmp_path: Path):

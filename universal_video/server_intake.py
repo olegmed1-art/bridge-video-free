@@ -19,16 +19,26 @@ class IntakeError(RuntimeError):
     pass
 
 
-def _write_new(path: Path, payload: dict) -> None:
+def _write_new(path: Path, payload: dict, *, worker_gid: int) -> None:
     raw = (json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags, 0o640)
     try:
-        with os.fdopen(fd, "wb") as handle:
+        # The privileged intake runs with a restrictive umask and publishes
+        # this inode into a spool consumed by an unprivileged worker. Keep the
+        # root owner, but grant read access only to the worker group inherited
+        # from the already-validated inbox directory.
+        os.fchown(fd, -1, worker_gid)
+        os.fchmod(fd, 0o640)
+        handle = os.fdopen(fd, "wb")
+        fd = -1
+        with handle:
             handle.write(raw)
             handle.flush()
             os.fsync(handle.fileno())
     except Exception:
+        if fd >= 0:
+            os.close(fd)
         path.unlink(missing_ok=True)
         raise
 
@@ -46,7 +56,7 @@ def submit(payload: dict, *, spool_root: Path, staging_root: Path) -> str:
     if target.exists() or target.is_symlink():
         raise IntakeError("job id already exists; use status or a new id")
     temporary = staging_root / f".{job.job_id}.{os.getpid()}.{time.time_ns()}.json"
-    _write_new(temporary, payload)
+    _write_new(temporary, payload, worker_gid=inbox.stat().st_gid)
     try:
         os.link(temporary, target, follow_symlinks=False)
         directory = os.open(inbox, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
