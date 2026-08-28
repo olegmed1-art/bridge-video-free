@@ -41,6 +41,7 @@ def test_sudoers_surface_is_exact_and_not_broad():
     assert spool_repair_line in INSTALL
     sudo_lines = [line.strip() for line in INSTALL.splitlines() if line.strip().startswith("ocarun ALL=")]
     assert sudo_lines == [audit_line, productionize_line, spool_repair_line]
+    assert "grep -Ev '^[[:space:]]*(#|$)'" in INSTALL
     assert "NOPASSWD:[[:space:]]*ALL" in INSTALL
     assert "visudo -cf" in INSTALL
     assert "install -o root -g root -m 0755" in INSTALL
