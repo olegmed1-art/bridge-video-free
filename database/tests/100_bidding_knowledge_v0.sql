@@ -49,6 +49,16 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_PUBLIC_PARTNER_HANDS_METRIC_FALSE_POSITIVE';
     END IF;
     IF bidding.contains_forbidden_hidden_key(
+        '{"partnerhandscount":12}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_PUBLIC_COMPACT_PARTNER_METRIC_FALSE_POSITIVE';
+    END IF;
+    IF bidding.contains_forbidden_hidden_key(
+        '{"cardErrors":"invalid rank"}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_PUBLIC_CARD_ERRORS_FALSE_POSITIVE';
+    END IF;
+    IF bidding.contains_forbidden_hidden_key(
         '{"opponent":{"cardsPlayed":26}}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_PUBLIC_OPPONENT_CARDS_METRIC_FALSE_POSITIVE';
@@ -79,6 +89,16 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_HIDDEN_REVERSED_HIDDEN_CARDS_NOT_BLOCKED';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
+        '{"hidden":{"metadata":{"card":"AS"}}}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_SINGULAR_HIDDEN_CARD_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"card":{"metadata":{"hidden":true}}}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_REVERSED_SINGULAR_CARD_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
         '{"deal":{"metadata":{"full":{"N":["AS"]}}}}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_REVERSED_FULL_DEAL_NOT_BLOCKED';
@@ -97,6 +117,11 @@ BEGIN
         '{"allHands":{"N":["AS"],"E":["KS"]}}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_ALL_HANDS_CONTAINER_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"allHands":"N:AKQ E:JT9"}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_ALL_HANDS_SCALAR_NOT_BLOCKED';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
         '{"allHandsPlayed":{"N":["AS"],"E":["KS"]}}'::jsonb
@@ -122,6 +147,16 @@ BEGIN
         '{"hands":[{"seat":"E","cards":"AS KH QD"}]}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_SCALAR_SEAT_RECORD_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"hands":[{"owner":"other","cards":["AS"]}]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_OWNER_VALUE_RECORD_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"discount":{"partnerCard":14}}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_METRIC_SUBSTRING_BYPASS_NOT_BLOCKED';
     END IF;
     IF bidding.contains_forbidden_hidden_key(
         '{"seat":"N","cards":["AS"]}'::jsonb
@@ -306,6 +341,18 @@ BEGIN
     EXCEPTION WHEN object_not_in_prerequisite_state THEN v_failed := true;
     END;
     IF NOT v_failed THEN RAISE EXCEPTION 'SMOKE_ACTIVE_RULE_TEST_INSERT_NOT_BLOCKED'; END IF;
+
+    SELECT rule_test_id INTO v_test
+      FROM bidding.rule_test
+     WHERE rule_id=v_rule AND test_key='positive';
+    v_failed := false;
+    BEGIN
+        INSERT INTO bidding.rule_test_run(
+            school_id,rule_test_id,result,result_details,method_version
+        ) VALUES (v_school,v_test,'fail','{"late":true}'::jsonb,'ci-smoke-v1');
+    EXCEPTION WHEN object_not_in_prerequisite_state THEN v_failed := true;
+    END;
+    IF NOT v_failed THEN RAISE EXCEPTION 'SMOKE_ACTIVE_RULE_TEST_RUN_NOT_BLOCKED'; END IF;
 
     v_failed := false;
     BEGIN
@@ -630,6 +677,15 @@ BEGIN
     INSERT INTO bidding.runtime_activation(
         school_id,rule_id,authority_lane,scope_key,status
     ) VALUES (v_school,v_external_rule,'world_external','ci','active');
+
+    v_failed := false;
+    BEGIN
+        INSERT INTO bidding.rule_conflict(
+            school_id,left_rule_id,right_rule_id,conflict_type,status
+        ) VALUES (v_school,v_rule,v_external_rule,'contradiction','open');
+    EXCEPTION WHEN object_not_in_prerequisite_state THEN v_failed := true;
+    END;
+    IF NOT v_failed THEN RAISE EXCEPTION 'SMOKE_ACTIVE_RULE_OPEN_CONFLICT_NOT_BLOCKED'; END IF;
 
     SELECT count(*) INTO v_count FROM bidding.get_school_runtime_rule_catalog(v_school,'ci');
     IF v_count <> 1 THEN RAISE EXCEPTION 'SMOKE_WORLD_LEAKED_TO_CANON_%',v_count; END IF;
