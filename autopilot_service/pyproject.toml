@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.27,<2"]
+requires = ["hatchling==1.27.0"]
 build-backend = "hatchling.build"
 
 [project]
@@ -15,10 +15,10 @@ dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["app"]
+packages = ["autopilot_app"]
 
 [tool.vercel]
-entrypoint = "app.main:app"
+entrypoint = "autopilot_app.main:app"
 
 [[tool.vercel.workflows]]
-entrypoint = "app.workflows:wf"
+entrypoint = "autopilot_app.workflows:wf"
