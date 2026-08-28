@@ -23,7 +23,7 @@ def test_ai_queue_worker_is_manual_only_during_pause():
 def test_dds3_monitors_skip_scheduled_execution_during_pause():
     production = read("dds3-production-health-monitor.yml")
     oracle = read("oracle-ben-dds3-health-monitor.yml")
-    assert "if: github.event_name != 'schedule'" in production
+    assert "if: github.event_name == 'workflow_dispatch'" in production
     assert "if: github.event_name != 'schedule'" in oracle
     assert "if: ${{ github.event_name == 'workflow_dispatch' }}" in oracle
 
