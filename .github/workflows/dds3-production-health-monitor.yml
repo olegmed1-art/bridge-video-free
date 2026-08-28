@@ -18,6 +18,9 @@ concurrency:
 
 jobs:
   health:
+    # Temporary operator pause (2026-08-28): scheduled DDS3 activity is dormant;
+    # manual runs and read-only PR contract checks remain available.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
