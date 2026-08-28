@@ -110,6 +110,11 @@ WITH RECURSIVE walk(value,key_path) AS (
         'partner','opponent','opponents','other','others',
         'north','east','south','west','n','e','s','w'
     ])
+), structural_wrapper(word) AS (
+    SELECT unnest(ARRAY[
+        'metadata','context','data','info','details','payload',
+        'attributes','stats','summary','byseat'
+    ])
 ), forbidden AS (
     SELECT 1
       FROM walk AS w
@@ -206,6 +211,17 @@ WITH RECURSIVE walk(value,key_path) AS (
               FROM generate_subscripts(w.key_path,1) AS owner_pos(i)
               JOIN owner_word AS owner
                 ON owner.word=w.key_path[owner_pos.i]
+                OR (
+                    length(owner.word) > 1
+                    AND w.key_path[owner_pos.i] LIKE owner.word || '%'
+                    AND substring(
+                            w.key_path[owner_pos.i]
+                            FROM length(owner.word)+1
+                        ) ~ (
+                            SELECT '^(' || string_agg(word,'|') || ')+$'
+                              FROM structural_wrapper
+                        )
+                )
               CROSS JOIN generate_subscripts(w.key_path,1) AS suffix_pos(j)
               JOIN sensitive_suffix AS suffix
                 ON suffix_pos.j > owner_pos.i
