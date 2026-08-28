@@ -63,10 +63,10 @@ def _require_shadow_authorization(authorization: str | None) -> None:
         )
 
 
-def _start_shadow_workflow(*, task_id: str, hook_token: str) -> str:
-    """Start through the exact public API observed for vercel==0.10.0."""
+async def _start_shadow_workflow(*, task_id: str, hook_token: str) -> str:
+    """Start through the exact public async API observed for vercel==0.10.0."""
 
-    run = workflow.start(
+    run = await workflow.start(
         shadow_wait_workflow,
         task_id=task_id,
         hook_token=hook_token,
@@ -108,7 +108,10 @@ async def start_shadow_wait(
 
     _require_shadow_authorization(authorization)
     hook_token = secrets.token_urlsafe(32)
-    run_id = _start_shadow_workflow(task_id=request.task_id, hook_token=hook_token)
+    run_id = await _start_shadow_workflow(
+        task_id=request.task_id,
+        hook_token=hook_token,
+    )
     return {
         "accepted": True,
         "task_id": request.task_id,
