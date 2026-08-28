@@ -8,16 +8,54 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import time
 from pathlib import Path
 from typing import Any
 
-from .contract import MAX_JOB_BYTES, canonical_job_hash, validate_from_env
+from .contract import MAX_JOB_BYTES, VideoContractError, canonical_job_hash, validate_from_env
 from .finops_observation import build_video_finops_observation, directory_bytes
-from .result_conformance import verify_result
+from .result_conformance import ResultConformanceError, verify_result
 from .runner import run_job
-from .runtime_preflight import validate_video_runtime
+from .runtime_preflight import VideoRuntimeUnavailable, validate_video_runtime
+
+
+ERROR_CODE_RE = re.compile(r"^UV_[A-Z0-9_]{1,96}$")
+ERROR_TYPE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.]{0,119}$")
+
+
+def _failure_type(exc: BaseException) -> str:
+    name = type(exc).__name__
+    return name if ERROR_TYPE_RE.fullmatch(name) else "WorkerFailure"
+
+
+def _failure_code(exc: BaseException) -> str:
+    explicit = str(getattr(exc, "error_code", "") or "")
+    if ERROR_CODE_RE.fullmatch(explicit):
+        return explicit
+    if isinstance(exc, VideoRuntimeUnavailable):
+        message = str(exc)
+        if message.startswith("VIDEO_RUNTIME_MISSING_TOOL:"):
+            return "UV_RUNTIME_DEPENDENCY_MISSING"
+        if message.startswith("VIDEO_RUNTIME_MISSING_ASR:"):
+            return "UV_RUNTIME_ASR_MISSING"
+        return "UV_RUNTIME_PREFLIGHT_FAILED"
+    if isinstance(exc, VideoContractError):
+        return "UV_JOB_CONTRACT_INVALID"
+    if isinstance(exc, json.JSONDecodeError):
+        return "UV_JOB_JSON_INVALID"
+    if isinstance(exc, ResultConformanceError):
+        return "UV_RESULT_CONFORMANCE_FAILED"
+    if isinstance(exc, TimeoutError):
+        return "UV_WORKER_TIMEOUT"
+    if isinstance(exc, OSError):
+        return "UV_WORKER_IO_FAILED"
+    if isinstance(exc, (TypeError, ValueError)):
+        return "UV_WORKER_INPUT_INVALID"
+    if isinstance(exc, RuntimeError):
+        return "UV_WORKER_RUNTIME_FAILED"
+    return "UV_WORKER_FAILED"
 
 
 def _dirs(root: Path) -> dict[str, Path]:
@@ -61,8 +99,10 @@ def _regular_payload(path: Path) -> tuple[bool, str | None]:
     return True, None
 
 
-def _reject_payload(path: Path, failed_dir: Path, *, error_type: str, error: str) -> None:
+def _reject_payload(path: Path, failed_dir: Path, *, error_code: str) -> None:
     name = path.name
+    if not ERROR_CODE_RE.fullmatch(error_code):
+        error_code = "UV_SPOOL_PAYLOAD_REJECTED"
     try:
         path.unlink(missing_ok=True)
     finally:
@@ -71,8 +111,8 @@ def _reject_payload(path: Path, failed_dir: Path, *, error_type: str, error: str
                 {
                     "status": "FAILED",
                     "job_file": name,
-                    "error_type": error_type,
-                    "error": error[:4000],
+                    "error_type": "SpoolPayloadRejected",
+                    "error_code": error_code,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -96,13 +136,12 @@ def recover_orphaned_jobs(spool_root: Path) -> dict[str, int]:
     conflicts = 0
     rejected = 0
     for claimed in sorted(paths["running"].glob("*.json"), key=lambda p: p.name):
-        valid, reason = _regular_payload(claimed)
+        valid, _ = _regular_payload(claimed)
         if not valid:
             _reject_payload(
                 claimed,
                 paths["failed"],
-                error_type="INVALID_ORPHAN_PAYLOAD",
-                error=reason or "invalid orphan payload",
+                error_code="UV_INVALID_ORPHAN_PAYLOAD",
             )
             rejected += 1
             continue
@@ -113,7 +152,7 @@ def recover_orphaned_jobs(spool_root: Path) -> dict[str, int]:
             recovered += 1
             continue
 
-        destination_valid, destination_reason = _regular_payload(destination)
+        destination_valid, _ = _regular_payload(destination)
         if not destination_valid:
             stamp = int(time.time())
             payload_path = paths["failed"] / f"{claimed.stem}.recovery-conflict-{stamp}.payload.json"
@@ -123,9 +162,9 @@ def recover_orphaned_jobs(spool_root: Path) -> dict[str, int]:
                 json.dumps(
                     {
                         "status": "FAILED",
-                        "error_type": "RECOVERY_CONFLICT",
+                        "error_type": "SpoolRecoveryConflict",
+                        "error_code": "UV_SPOOL_RECOVERY_CONFLICT",
                         "job_file": claimed.name,
-                        "error": f"existing inbox payload is unsafe: {destination_reason}",
                         "quarantined_payload": payload_path.name,
                     },
                     ensure_ascii=False,
@@ -153,7 +192,8 @@ def recover_orphaned_jobs(spool_root: Path) -> dict[str, int]:
             json.dumps(
                 {
                     "status": "FAILED",
-                    "error_type": "RECOVERY_CONFLICT",
+                    "error_type": "SpoolRecoveryConflict",
+                    "error_code": "UV_SPOOL_RECOVERY_CONFLICT",
                     "job_file": claimed.name,
                     "quarantined_payload": payload_path.name,
                 },
@@ -180,8 +220,7 @@ def process_one(spool_root: Path) -> bool:
             _reject_payload(
                 path,
                 paths["failed"],
-                error_type="INVALID_SPOOL_PAYLOAD",
-                error=reason or "invalid spool payload",
+                error_code="UV_INVALID_SPOOL_PAYLOAD",
             )
             return True
         try:
@@ -199,8 +238,7 @@ def process_one(spool_root: Path) -> bool:
         _reject_payload(
             source,
             paths["failed"],
-            error_type="RUNNING_NAME_COLLISION",
-            error="running spool already contains this job filename",
+            error_code="UV_RUNNING_NAME_COLLISION",
         )
         return True
     try:
@@ -276,8 +314,8 @@ def process_one(spool_root: Path) -> bool:
         failure = {
             "status": "FAILED",
             "job_file": source.name,
-            "error_type": type(exc).__name__,
-            "error": str(exc)[:4000],
+            "error_type": _failure_type(exc),
+            "error_code": _failure_code(exc),
             "finops_observation": build_video_finops_observation(
                 status="FAILED",
                 elapsed_seconds=time.monotonic() - started,

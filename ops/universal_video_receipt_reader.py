@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 import sys
 from typing import Any
 
 
 MAX_RECEIPT_BYTES = 8 * 1024 * 1024
+ERROR_TYPE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.]{0,119}$")
+ERROR_CODE_RE = re.compile(r"^UV_[A-Z0-9_]{1,96}$")
 
 
 class ReceiptError(ValueError):
@@ -119,12 +122,6 @@ def _verify_identity(
     return status
 
 
-def _one_line(value: Any, limit: int) -> str:
-    rendered = str(value or "")
-    rendered = "".join(char if char.isprintable() and char not in "\r\n" else " " for char in rendered)
-    return rendered[:limit]
-
-
 def main(argv: list[str]) -> int:
     if len(argv) == 7 and argv[1] == "inspect-done":
         payload = safe_load(argv[2])
@@ -142,8 +139,12 @@ def main(argv: list[str]) -> int:
         payload = safe_load(argv[2])
         if payload.get("status") != "FAILED" or payload.get("job_file") != argv[3]:
             raise ReceiptError("failed receipt identity mismatch")
-        print("UV_ERROR_TYPE=" + _one_line(payload.get("error_type"), 120))
-        print("UV_ERROR=" + _one_line(payload.get("error"), 500))
+        error_type = str(payload.get("error_type") or "")
+        error_code = str(payload.get("error_code") or "")
+        if not ERROR_TYPE_RE.fullmatch(error_type) or not ERROR_CODE_RE.fullmatch(error_code):
+            raise ReceiptError("failed receipt error identity mismatch")
+        print("UV_ERROR_TYPE=" + error_type)
+        print("UV_ERROR_CODE=" + error_code)
         return 0
     raise ReceiptError("unsupported receipt operation")
 
