@@ -8,7 +8,8 @@ required = [
     'schedule:',
     "cron: '47 */6 * * *'",
     'pull_request:',
-    "if: github.event_name != 'pull_request'",
+    "if: github.event_name != 'schedule'",
+    "if: github.event_name == 'workflow_dispatch'",
     'actions: write',
     'contents: read',
     'persist-credentials: false',
@@ -43,7 +44,7 @@ for forbidden in [
 ]:
     assert forbidden not in text, forbidden
 
-assert text.index("if: github.event_name != 'pull_request'") < text.index('BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}')
+assert text.index("if: github.event_name == 'workflow_dispatch'") < text.index('BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}')
 push_block = text[text.index('push)'):text.index('workflow_dispatch)')]
 assert 'GITHUB_ACTOR' not in push_block
 assert 'GITHUB_TRIGGERING_ACTOR' not in push_block
