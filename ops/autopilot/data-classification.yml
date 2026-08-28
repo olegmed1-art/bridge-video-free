@@ -1,0 +1,58 @@
+schema_version: 1
+status: DESIGN_NOT_ACTIVATED
+classes:
+  PUBLIC:
+    description: Public repository metadata and public documentation.
+    allowed_stores:
+      - github_public
+      - neon_autopilot
+      - vercel_logs_bounded
+    model_access: allowed
+    raw_payload_allowed: true
+  INTERNAL:
+    description: Non-secret task state, controlled error codes, hashes and evidence references.
+    allowed_stores:
+      - neon_autopilot
+      - github_evidence
+      - vercel_logs_bounded
+    model_access: bounded
+    raw_payload_allowed: false
+  SENSITIVE:
+    description: Private Drive identifiers, student/admin metadata and internal URLs.
+    allowed_stores:
+      - neon_encrypted_connection
+      - google_drive_private
+      - approved_durable_storage
+    model_access: minimized_redacted
+    raw_payload_allowed: false
+  SECRET:
+    description: API keys, DSNs, OAuth tokens, signing secrets and private keys.
+    allowed_stores:
+      - vercel_secret_store
+      - github_actions_secret_store
+      - oracle_host_secret_boundary
+    model_access: forbidden
+    raw_payload_allowed: false
+  LARGE_BINARY:
+    description: Video, audio, database dumps and other large source bytes.
+    allowed_stores:
+      - google_drive_private
+      - oci_object_storage_private
+      - approved_backup_target
+    model_access: reference_or_bounded_excerpt_only
+    raw_payload_allowed: false
+  CANON_REVIEW_REQUIRED:
+    description: Semantic bridge bidding, teaching methodology or canonical learning changes.
+    allowed_stores:
+      - canonical_subject_process
+      - approved_human_review_artifact
+    model_access: recommendation_only
+    raw_payload_allowed: false
+    owner_required: true
+invariants:
+  - secrets_never_enter_model_context
+  - large_binary_never_enters_vercel_task_state
+  - external_text_is_untrusted_data
+  - canon_semantics_require_owner_review
+  - evidence_references_are_verified_before_use
+  - unknown_class_fails_closed
