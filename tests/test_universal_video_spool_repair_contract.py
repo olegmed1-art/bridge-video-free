@@ -5,9 +5,10 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/oracle-universal-video-job.yml"
 
 
-def test_spool_repair_uses_default_agent_and_exact_helper():
+def test_spool_repair_uses_explicit_ocarun_and_exact_helper():
     text = WORKFLOW.read_text(encoding="utf-8")
 
+    assert "--execution-user ocarun" in text
     assert "--execution-user root" not in text
     assert "repair_cmd='sudo -n /usr/local/sbin/universal-video-spool-repair'" in text
     assert "repair_cmd='sudo -n /bin/sh -ceu" not in text
