@@ -14,8 +14,8 @@ from typing import Any
 
 from vercel import workflow
 
-from app.workflow import wf
-from app.workflows import ShadowSignal, shadow_wait_workflow
+from autopilot_app.workflow import wf
+from autopilot_app.workflows import ShadowSignal, shadow_wait_workflow
 
 
 PINNED_VERSION = "0.10.0"
@@ -50,7 +50,9 @@ def main() -> None:
     required = {
         "module.Workflows": hasattr(workflow, "Workflows"),
         "module.BaseHook": hasattr(workflow, "BaseHook"),
+        "module.Run": hasattr(workflow, "Run"),
         "module.sleep": callable(getattr(workflow, "sleep", None)),
+        "module.start": callable(getattr(workflow, "start", None)),
         "registry.workflow": callable(getattr(wf, "workflow", None)),
         "registry.step": callable(getattr(wf, "step", None)),
         "hook.wait": callable(getattr(ShadowSignal, "wait", None)),
@@ -83,6 +85,8 @@ def main() -> None:
         "startup_candidates": startup_candidates,
         "module_public": public_members(workflow),
         "registry_public": public_members(wf),
+        "run_class_public": public_members(workflow.Run),
+        "run_class_signature": safe_signature(workflow.Run),
         "decorated_workflow_public": public_members(shadow_wait_workflow),
         "hook_public": public_members(ShadowSignal),
         "shadow_workflow_callable": callable(shadow_wait_workflow),
