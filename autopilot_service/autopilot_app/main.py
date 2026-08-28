@@ -37,12 +37,17 @@ def _package_version(name: str) -> str:
         return "not-installed"
 
 
+def _shadow_secret() -> str:
+    value = os.getenv("AUTOPILOT_SHADOW_SECRET", "")
+    return value if len(value) >= 32 else ""
+
+
 def _shadow_configured() -> bool:
-    return bool(os.getenv("AUTOPILOT_SHADOW_SECRET", ""))
+    return bool(_shadow_secret())
 
 
 def _require_shadow_authorization(authorization: str | None) -> None:
-    expected = os.getenv("AUTOPILOT_SHADOW_SECRET", "")
+    expected = _shadow_secret()
     if not expected:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
