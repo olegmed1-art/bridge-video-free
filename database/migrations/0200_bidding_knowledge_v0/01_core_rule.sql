@@ -40,12 +40,12 @@ WITH RECURSIVE walk(value) AS (
       CROSS JOIN LATERAL jsonb_object_keys(
           CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END
       ) AS k(key)
-     WHERE lower(k.key) = ANY (ARRAY[
-        'partner_hand','opponent_hand','opponent_hands',
-        'north_hand','east_hand','south_hand','west_hand',
-        'full_deal','hidden_cards','actual_partner_hand',
-        'actual_opponent_hand','actual_opponent_hands',
-        'partner_cards','opponent_cards','all_hands'
+     WHERE regexp_replace(lower(k.key), '[^a-z0-9]+', '', 'g') = ANY (ARRAY[
+        'partnerhand','opponenthand','opponenthands',
+        'northhand','easthand','southhand','westhand',
+        'fulldeal','hiddencards','actualpartnerhand',
+        'actualopponenthand','actualopponenthands',
+        'partnercards','opponentcards','allhands'
      ])
      LIMIT 1
 )
