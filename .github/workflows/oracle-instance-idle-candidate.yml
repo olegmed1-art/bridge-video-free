@@ -11,6 +11,7 @@ on:
 permissions:
   actions: write
   contents: read
+  issues: read
 
 concurrency:
   group: oracle-instance-idle-candidate
@@ -32,8 +33,25 @@ jobs:
           [[ "$SOURCE_RUN_ID" =~ ^[0-9]+$ ]]
           sleep 600
 
+      - name: Check owner manual hold
+        id: hold
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest="$(gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/issues/751/comments?per_page=100" \
+            | python -c 'import json,re,sys; xs=[x for page in json.load(sys.stdin) for x in page]; vals=[]; pat=re.compile(r"^\[oracle-hold state\] until_epoch=(\d+)"); [(vals.append(int(m.group(1)))) for x in xs if (m:=pat.match(x.get("body","") or ""))]; print(vals[-1] if vals else 0)')"
+          [[ "$latest" =~ ^[0-9]+$ ]]
+          now="$(date -u +%s)"
+          if (( latest > now )); then
+            echo 'active=true' >> "$GITHUB_OUTPUT"
+            echo "automatic stop suppressed by owner manual hold until epoch $latest"
+          else
+            echo 'active=false' >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Prove no external work remains
         id: idle
+        if: ${{ steps.hold.outputs.active != 'true' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -79,7 +97,7 @@ jobs:
           fi
 
       - name: Dispatch bounded stop
-        if: ${{ steps.idle.outputs.stop_allowed == 'true' }}
+        if: ${{ steps.hold.outputs.active != 'true' && steps.idle.outputs.stop_allowed == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
