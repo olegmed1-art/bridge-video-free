@@ -6,6 +6,10 @@ on:
       - '.github/workflows/oracle-universal-video-sidecar-repair.yml'
       - 'ops/universal_video_sidecar_repair.sh'
       - 'tests/test_universal_video_sidecar_repair_contract.py'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-universal-video-sidecar-repair-requests/*.json'
   issue_comment:
     types: [created]
 
@@ -42,7 +46,7 @@ jobs:
           PY
 
   repair:
-    if: ${{ github.event_name == 'issue_comment' && github.event.comment.user.login == 'olegmed1-art' && github.event.comment.body == '/oracle uv-sidecar-repair' }}
+    if: ${{ github.event_name == 'push' || (github.event_name == 'issue_comment' && github.event.comment.user.login == 'olegmed1-art' && github.event.comment.body == '/oracle uv-sidecar-repair') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 8
     env:
@@ -61,6 +65,24 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 2
+
+      - name: Validate isolated push request
+        if: ${{ github.event_name == 'push' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+            | grep -E '^ops/oracle-universal-video-sidecar-repair-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one sidecar repair request' >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python - <<'PY'
+          import json, os, re
+          x=json.load(open(os.environ['REQUEST_FILE'], encoding='utf-8'))
+          assert set(x) == {'request_id','operation'}, x
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
+          assert x['operation'] == 'repair'
+          print('UNIVERSAL_VIDEO_SIDECAR_REPAIR_REQUEST_PASS')
+          PY
 
       - name: Verify immutable repair payload
         shell: bash
@@ -113,7 +135,7 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_NUMBER: ${{ github.event_name == 'issue_comment' && github.event.issue.number || 634 }}
           REPAIR_OUTCOME: ${{ steps.repair.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         shell: bash
