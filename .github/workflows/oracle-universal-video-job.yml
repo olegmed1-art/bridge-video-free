@@ -25,6 +25,9 @@ concurrency:
 
 jobs:
   validate:
+    # Temporary operator pause (2026-08-28): the hourly recovery watchdog is
+    # dormant; PR, request-push and explicit manual paths remain available.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -106,7 +109,7 @@ jobs:
           PY
 
   execute:
-    if: ${{ github.event_name != 'pull_request' && needs.validate.outputs.should_execute == 'true' }}
+    if: ${{ github.event_name != 'pull_request' && github.event_name != 'schedule' && needs.validate.outputs.should_execute == 'true' }}
     needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 330
