@@ -135,6 +135,72 @@ WHERE r.rule_key='ci.activation.concurrent'
 """
 
 
+def assert_evidence_waits_then_fails(
+    label: str,
+    start_offset: str,
+    end_offset: str,
+    mutation_sql: str,
+) -> None:
+    scheduler = psycopg.connect(DATABASE_URL)
+    mutation_started = threading.Event()
+    mutation_finished = threading.Event()
+    mutation_sqlstate: list[str | None] = []
+
+    try:
+        scheduler.execute(
+            INSERT_SQL,
+            (start_offset, end_offset, f'{{"runner":"{label}"}}'),
+        )
+
+        def insert_evidence() -> None:
+            with psycopg.connect(DATABASE_URL) as mutator:
+                mutation_started.set()
+                try:
+                    mutator.execute(mutation_sql)
+                    mutator.commit()
+                    mutation_sqlstate.append(None)
+                except psycopg.Error as exc:
+                    mutator.rollback()
+                    mutation_sqlstate.append(exc.sqlstate)
+                finally:
+                    mutation_finished.set()
+
+        mutation_thread = threading.Thread(target=insert_evidence, daemon=True)
+        mutation_thread.start()
+        if not mutation_started.wait(timeout=5):
+            raise AssertionError(f"{label} mutation did not start")
+        if mutation_finished.wait(timeout=1):
+            raise AssertionError(
+                f"{label} mutation did not wait on the uncommitted activation lock"
+            )
+
+        scheduler.commit()
+        mutation_thread.join(timeout=10)
+        if mutation_thread.is_alive():
+            raise AssertionError(
+                f"{label} mutation did not finish after activation commit"
+            )
+        if mutation_sqlstate != ["55000"]:
+            raise AssertionError(
+                f"Expected {label} immutability SQLSTATE 55000, "
+                f"got {mutation_sqlstate!r}"
+            )
+    finally:
+        scheduler.close()
+
+    with psycopg.connect(DATABASE_URL) as reset:
+        reset.execute(
+            """
+            UPDATE bidding.runtime_activation AS ra
+               SET status='revoked'
+              FROM bidding.rule AS r
+             WHERE r.rule_id=ra.rule_id
+               AND r.rule_key='ci.activation.concurrent'
+               AND ra.status='active'
+            """
+        )
+
+
 def main() -> None:
     with psycopg.connect(DATABASE_URL) as setup_conn:
         setup_conn.execute(SETUP_SQL)
@@ -345,6 +411,52 @@ def main() -> None:
                 )
         finally:
             dependency_scheduler.close()
+
+        with psycopg.connect(DATABASE_URL) as reset:
+            reset.execute(
+                """
+                UPDATE bidding.runtime_activation AS ra
+                   SET status='revoked'
+                  FROM bidding.rule AS r
+                 WHERE r.rule_id=ra.rule_id
+                   AND r.rule_key='ci.activation.concurrent'
+                   AND ra.status='active'
+                """
+            )
+
+        assert_evidence_waits_then_fails(
+            "late-test-run",
+            "13 hours",
+            "15 hours",
+            """
+            INSERT INTO bidding.rule_test_run(
+                school_id,rule_test_id,result,result_details,method_version
+            )
+            SELECT r.school_id,t.rule_test_id,'fail','{"late":true}'::jsonb,
+                   'ci-concurrency-v1'
+              FROM bidding.rule AS r
+              JOIN bidding.rule_test AS t ON t.rule_id=r.rule_id
+             WHERE r.rule_key='ci.activation.concurrent'
+               AND t.test_key='positive'
+            """,
+        )
+
+        assert_evidence_waits_then_fails(
+            "open-conflict",
+            "17 hours",
+            "19 hours",
+            """
+            INSERT INTO bidding.rule_conflict(
+                school_id,left_rule_id,right_rule_id,conflict_type,status
+            )
+            SELECT source.school_id,source.rule_id,target.rule_id,
+                   'contradiction','open'
+              FROM bidding.rule AS source
+              JOIN bidding.rule AS target
+                ON target.rule_key='ci.activation.inactive-target'
+             WHERE source.rule_key='ci.activation.concurrent'
+            """,
+        )
     finally:
         first.close()
 
