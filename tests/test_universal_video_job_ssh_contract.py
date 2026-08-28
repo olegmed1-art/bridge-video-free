@@ -27,9 +27,9 @@ def test_job_uses_pinned_bounded_ssh_transport():
 def test_job_invokes_only_fixed_resident_admin_surfaces():
     assert "oci instance-agent command" not in WORKFLOW
     assert "--execution-user" not in WORKFLOW
-    assert "repair_cmd='sudo -n /usr/local/sbin/universal-video-spool-repair'" in WORKFLOW
-    assert 'submit_cmd="sudo -n /usr/local/sbin/universal-video submit-base64 \'$payload\'"' in WORKFLOW
-    assert 'status_cmd="sudo -n /usr/local/sbin/universal-video status \'$JOB_ID\'"' in WORKFLOW
+    assert "repair_cmd='sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video-spool-repair'" in WORKFLOW
+    assert 'submit_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video submit-base64 \'$payload\'"' in WORKFLOW
+    assert 'status_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video status \'$JOB_ID\'"' in WORKFLOW
     assert 'run_remote "$repair_cmd"' in WORKFLOW
     assert 'run_remote "$submit_cmd"' in WORKFLOW
     assert 'run_remote "$status_cmd"' in WORKFLOW
@@ -41,4 +41,9 @@ def test_job_keeps_remote_output_fail_closed_and_bounded():
     assert "safe=" in WORKFLOW
     assert "grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|CONFORMANCE_STATE|" in WORKFLOW
     assert "PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_COMMAND_FAILED" in WORKFLOW
+    assert "PRE_SUBMIT_ERROR_CODE=UV_SUBMIT_SERVICE_INACTIVE" not in WORKFLOW
+    assert "code='UV_SUBMIT_SERVICE_INACTIVE'" in WORKFLOW
+    assert "PRE_SUBMIT_ERROR_CODE=UV_SUBMIT_STATE_INVALID" in WORKFLOW
+    assert "PRE_SUBMIT_ERROR_CODE=UV_STATUS_COMMAND_FAILED" in WORKFLOW
+    assert "PRE_SUBMIT_ERROR_CODE=UV_STATUS_STATE_INVALID" in WORKFLOW
     assert "UV_OPERATOR_ERROR_CODE=$code" in WORKFLOW
