@@ -45,13 +45,13 @@ jobs:
             esac
           done
 
-          for path in database/migrations/02??_*.sql; do
+          for path in database/migrations/03??_*.sql; do
             base="$(basename "$path" .sql)"
             suffix="${base#*_}"
             case "$suffix" in
               autopilot_*|workflow_*) ;;
               *)
-                echo "Reserved migration range 0200-0299 is School Autopilot/Workflow only: $path" >&2
+                echo "Reserved migration range 0300-0399 is School Autopilot/Workflow only: $path" >&2
                 exit 1
                 ;;
             esac
@@ -69,13 +69,13 @@ jobs:
             esac
           done
 
-          for path in database/tests/20?_*.sql database/tests/21?_*.sql database/tests/22?_*.sql; do
+          for path in database/tests/30?_*.sql database/tests/31?_*.sql database/tests/32?_*.sql; do
             base="$(basename "$path" .sql)"
             suffix="${base#*_}"
             case "$suffix" in
               autopilot_*|workflow_*) ;;
               *)
-                echo "Reserved SQL-test range 200-229 is School Autopilot/Workflow only: $path" >&2
+                echo "Reserved SQL-test range 300-329 is School Autopilot/Workflow only: $path" >&2
                 exit 1
                 ;;
             esac
