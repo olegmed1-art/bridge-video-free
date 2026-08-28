@@ -134,6 +134,11 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_HIDDEN_SHORT_ALIAS_SUFFIX_NOT_BLOCKED';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
+        '{"ehandhcptotal":10,"cardeholdingcount":4}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_CHAINED_ALIAS_SUFFIX_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
         '{"allHands":{"N":["AS"],"E":["KS"]}}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_ALL_HANDS_CONTAINER_NOT_BLOCKED';
@@ -182,6 +187,11 @@ BEGIN
         '{"players":[{"owner":"partner","cards":["AS"]}]}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_OWNER_RECORD_NEUTRAL_COLLECTION_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"players":[{"Owner":"partner","Cards":["AS"]}]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_CAPITALIZED_OWNER_RECORD_NOT_BLOCKED';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
         '{"hands":[{"owner":"east","cards":["AS"]},{"seat":"West","card":"KS"}]}'::jsonb
