@@ -30,6 +30,17 @@ def test_workflow_exposes_only_exact_owner_command_and_pinned_payload():
     assert "'sudo -n /bin/bash -s'" in WORKFLOW
 
 
+def test_push_trigger_is_isolated_to_one_fixed_repair_request():
+    assert "ops/oracle-universal-video-sidecar-repair-requests/*.json" in WORKFLOW
+    assert "github.event_name == 'push'" in WORKFLOW
+    assert "expected exactly one sidecar repair request" in WORKFLOW
+    assert "assert set(x) == {'request_id','operation'}" in WORKFLOW
+    assert "assert x['operation'] == 'repair'" in WORKFLOW
+    assert "UNIVERSAL_VIDEO_SIDECAR_REPAIR_REQUEST_PASS" in WORKFLOW
+    assert "oracle-instance-workload-mutation" in WORKFLOW
+    assert "cancel-in-progress: false" in WORKFLOW
+
+
 def test_workflow_never_publishes_raw_ssh_output():
     assert 'cat "$RUNNER_TEMP/uv-sidecar-repair-raw.txt"' not in WORKFLOW
     assert 'cat "$safe"' in WORKFLOW
