@@ -108,39 +108,49 @@ WITH RECURSIVE walk(value,key_path) AS (
          WHERE path_end.j >= path_start.i
            AND EXISTS (
                 SELECT 1
-                  FROM forbidden_alias AS f
-                 WHERE array_to_string(
+                 FROM forbidden_alias AS f
+                 WHERE (
+                       array_to_string(
                            w.key_path[path_start.i:path_end.j],''
                        ) = f.alias
-                    OR (
-                        length(f.alias) >= 8
-                        AND EXISTS (
-                            SELECT 1
-                              FROM (
-                                  SELECT word FROM metric_word
-                                  UNION ALL
-                                  SELECT word FROM sensitive_suffix
-                              ) AS suffix
-                             WHERE array_to_string(
-                                       w.key_path[path_start.i:path_end.j],''
-                                   ) = f.alias || suffix.word
+                       OR (
+                           length(f.alias) >= 8
+                           AND EXISTS (
+                               SELECT 1
+                                 FROM (
+                                     SELECT word FROM metric_word
+                                     UNION ALL
+                                     SELECT word FROM sensitive_suffix
+                                 ) AS suffix
+                                WHERE array_to_string(
+                                          w.key_path[path_start.i:path_end.j],''
+                                      ) = f.alias || suffix.word
+                           )
+                       )
+                 )
+                   AND NOT (
+                       jsonb_typeof(w.value)='number'
+                       AND (
+                           (
+                               array_to_string(
+                                   w.key_path[path_start.i:path_end.j],''
+                               ) = f.alias
+                               AND EXISTS (
+                                   SELECT 1
+                                     FROM metric_word AS metric
+                                    WHERE path_end.j < cardinality(w.key_path)
+                                      AND w.key_path[path_end.j+1]=metric.word
+                               )
+                           )
+                           OR EXISTS (
+                               SELECT 1
+                                 FROM metric_word AS metric
+                                WHERE array_to_string(
+                                          w.key_path[path_start.i:path_end.j],''
+                                      ) = f.alias || metric.word
+                           )
                         )
-                    )
-           )
-           AND NOT (
-                jsonb_typeof(w.value)='number'
-                AND EXISTS (
-                    SELECT 1
-                      FROM unnest(w.key_path) AS metric(segment)
-                      CROSS JOIN metric_word AS m
-                     WHERE metric.segment=m.word
-                        OR EXISTS (
-                            SELECT 1
-                              FROM forbidden_alias AS metric_alias
-                             WHERE length(metric_alias.alias) >= 8
-                               AND metric.segment = metric_alias.alias || m.word
-                        )
-                )
+                   )
            )
      )
         OR EXISTS (
@@ -152,15 +162,21 @@ WITH RECURSIVE walk(value,key_path) AS (
                     jsonb_typeof(w.value)='number'
                     AND EXISTS (
                         SELECT 1
-                      FROM unnest(w.key_path) AS metric(segment)
-                      CROSS JOIN metric_word AS m
-                     WHERE metric.segment=m.word
-                        OR EXISTS (
-                            SELECT 1
-                              FROM forbidden_alias AS metric_alias
-                             WHERE length(metric_alias.alias) >= 8
-                               AND metric.segment = metric_alias.alias || m.word
-                        )
+                          FROM metric_word AS metric
+                         WHERE (
+                             w.key_path[left_pos.i] IN (
+                                 'hand','hands','card','cards'
+                             )
+                             AND left_pos.i < cardinality(w.key_path)
+                             AND w.key_path[left_pos.i+1]=metric.word
+                         )
+                            OR (
+                                w.key_path[right_pos.j] IN (
+                                    'hand','hands','card','cards'
+                                )
+                                AND right_pos.j < cardinality(w.key_path)
+                                AND w.key_path[right_pos.j+1]=metric.word
+                            )
                     )
                )
                AND (
