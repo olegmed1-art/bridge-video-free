@@ -191,10 +191,14 @@ AS $$
 DECLARE
     v_rule_id uuid;
 BEGIN
+    -- Lock the mutable test row before resolving its owner. A concurrent
+    -- reassignment must commit first, so this trigger cannot cache a stale
+    -- owner and then append evidence to a newly activated rule.
     SELECT rule_id
       INTO v_rule_id
       FROM bidding.rule_test
-     WHERE rule_test_id=NEW.rule_test_id;
+     WHERE rule_test_id=NEW.rule_test_id
+     FOR UPDATE;
 
     -- Test evidence and activation must serialize on the same owner row. If
     -- this insert wins the lock, a later activation sees its result; if the
