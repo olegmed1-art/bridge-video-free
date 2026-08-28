@@ -74,6 +74,16 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_HIDDEN_METRIC_NAMED_CONTAINER_NOT_BLOCKED';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
+        '{"cards":{"metadata":{"hidden":["AS"]}}}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_REVERSED_HIDDEN_CARDS_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"deal":{"metadata":{"full":{"N":["AS"]}}}}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_REVERSED_FULL_DEAL_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
         '{"cards":{"metadata":{"partner":"AS"}}}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_REVERSE_SCALAR_CARD_NOT_BLOCKED';
