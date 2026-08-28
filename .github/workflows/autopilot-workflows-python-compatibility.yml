@@ -52,6 +52,7 @@ jobs:
           grep -F '"hook.resume": true' "$RUNNER_TEMP/vercel-workflow-api.jsonl" >/dev/null
           grep -F '"hook.wait": true' "$RUNNER_TEMP/vercel-workflow-api.jsonl" >/dev/null
           grep -F '"module.start": true' "$RUNNER_TEMP/vercel-workflow-api.jsonl" >/dev/null
+          grep -F '"run_id": {"callable": false' "$RUNNER_TEMP/vercel-workflow-api.jsonl" >/dev/null
 
       - name: Run shadow contract tests
         shell: bash
@@ -66,4 +67,5 @@ jobs:
           ! grep -R --line-number -E 'NEON_DATABASE_URL|OPENAI_API_KEY|OCI_CLI_|GITHUB_APP_PRIVATE_KEY|psycopg|subprocess|os\.system' \
             autopilot_service/autopilot_app autopilot_service/tests
           grep -F '"production_mutations_enabled": False' autopilot_service/autopilot_app/main.py >/dev/null
-          grep -F '"workflow_start_enabled": False' autopilot_service/autopilot_app/main.py >/dev/null
+          grep -F '"workflow_start_supported": True' autopilot_service/autopilot_app/main.py >/dev/null
+          grep -F 'secrets.token_urlsafe(32)' autopilot_service/autopilot_app/main.py >/dev/null
