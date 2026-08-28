@@ -415,3 +415,12 @@ Each entry records:
 **Status:** Pending; no merge or production promotion is permitted on internal red-team and CI evidence alone.  
 **Database effect:** None.  
 **Next:** Resolve every material independent finding or obtain a clean I2 disposition before continuing Canon ingestion.
+
+
+## 2026-08-28 / LOG-0038 - Disposable preflight branches removed
+
+**Role:** Database custodian  
+**Action:** Deleted the two disposable branches created during this reconciliation: `br-fragrant-dream-b1e2xses` and `br-mute-term-b1ncudmz`, after their checksums, smoke results and CI evidence were persisted in GitHub.  
+**Database effect:** Test-only branch schemas and fixtures were removed. Protected production `br-wispy-lab-b1rq54of` and the older historical validation branch `br-muddy-resonance-b1pf1tze` were not changed.  
+**Recovery:** The deleted branches are not the evidence source; the reproducible migration commit, checksums, workflow runs and append-only log are retained. A fresh branch must be created for any later preflight.  
+**Next:** Await independent I2 disposition on draft PR #798.
