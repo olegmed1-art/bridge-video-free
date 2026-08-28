@@ -190,6 +190,25 @@ WITH RECURSIVE walk(value,key_path) AS (
                                 AND w.key_path[right_pos.j+1]=metric.word
                             )
                     )
+                    AND NOT EXISTS (
+                        SELECT 1
+                          FROM generate_subscripts(w.key_path,1) AS suffix_pos(k)
+                          JOIN sensitive_suffix AS suffix
+                            ON suffix.word=w.key_path[suffix_pos.k]
+                         WHERE suffix_pos.k > greatest(left_pos.i,right_pos.j)
+                           AND NOT (
+                               w.key_path[suffix_pos.k] IN (
+                                   'hand','hands','card','cards'
+                               )
+                               AND suffix_pos.k < cardinality(w.key_path)
+                               AND EXISTS (
+                                   SELECT 1
+                                     FROM metric_word AS trailing_metric
+                                    WHERE trailing_metric.word=
+                                          w.key_path[suffix_pos.k+1]
+                               )
+                           )
+                    )
                )
                AND (
                     (
@@ -233,26 +252,39 @@ WITH RECURSIVE walk(value,key_path) AS (
                )
         )
         OR (
-            jsonb_typeof(w.value) <> 'number'
-            AND (
-                'allhands'=ANY(w.key_path)
-                OR EXISTS (
-                    SELECT 1
-                      FROM unnest(w.key_path) AS compact(segment)
-                     WHERE compact.segment LIKE 'allhands%'
-                       AND substring(compact.segment FROM length('allhands')+1) ~ (
-                           SELECT '^(' || string_agg(word,'|') || ')+$'
-                             FROM allowed_suffix
-                       )
-                )
-                OR EXISTS (
+            EXISTS (
+                SELECT 1
+                  FROM unnest(w.key_path) AS compact(segment)
+                 WHERE compact.segment='allhands'
+                    OR (
+                        compact.segment LIKE 'allhands%'
+                        AND substring(
+                            compact.segment FROM length('allhands')+1
+                        ) ~ (
+                            SELECT '^(' || string_agg(word,'|') || ')+$'
+                              FROM allowed_suffix
+                        )
+                        AND (
+                            jsonb_typeof(w.value) <> 'number'
+                            OR NOT substring(
+                                compact.segment FROM length('allhands')+1
+                            ) ~ (
+                                SELECT '^(' || string_agg(word,'|') || ')+$'
+                                  FROM metric_word
+                            )
+                        )
+                    )
+            )
+            OR (
+                jsonb_typeof(w.value) <> 'number'
+                AND EXISTS (
                     SELECT 1
                       FROM generate_subscripts(w.key_path,1) AS all_pos(i)
                       CROSS JOIN generate_subscripts(w.key_path,1) AS hand_pos(j)
                      WHERE (
                          w.key_path[all_pos.i]='all'
                          AND w.key_path[hand_pos.j] IN ('hand','hands')
-                     )
+                       )
                        AND all_pos.i <> hand_pos.j
                 )
             )
