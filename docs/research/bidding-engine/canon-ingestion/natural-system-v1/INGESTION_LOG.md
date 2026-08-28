@@ -342,3 +342,37 @@ Each entry records:
 **Database effect:** None.  
 **Assessment:** The failed helper flow is closed and will not be represented as successful evidence.  
 **Next:** Execute the repository's exact `database/scripts/migrate.sh` on a fresh disposable production-derived branch; require registry checksum match, smoke-test rollback, zero residual rows and an idempotent rerun before I2 review.
+
+
+## 2026-08-28 / LOG-0031 - Fresh production-derived preflight baseline created
+
+**Role:** Database custodian / Observatory  
+**Action:** Created disposable Neon branch `bidding-0200-clean-preflight-20260828`, branch ID `br-fragrant-dream-b1e2xses`, directly from protected production branch `br-wispy-lab-b1rq54of`.  
+**Baseline:** 62 registered migrations; no `bidding` schema; no `0200_bidding_knowledge_v0` registry row.  
+**Verification:** Read-only baseline query on the new branch before any migration SQL.  
+**Database effect:** Production none; disposable branch only.  
+**Next:** Apply the exact composite migration fail-closed.
+
+## 2026-08-28 / LOG-0032 - Direct migrate.sh transport blocked before SQL
+
+**Role:** Technical owner / Red Team  
+**Action:** Reconstructed the current repository migration tree and installed an isolated PostgreSQL client, then attempted the exact `database/scripts/migrate.sh` against the disposable branch.  
+**Result:** The local execution environment could not resolve the Neon endpoint hostname and `psql` stopped before executing any SQL.  
+**Verification:** Error was `could not translate host name ... Temporary failure in name resolution`; the fresh branch baseline was rechecked before the connector fallback.  
+**Database effect:** None from this attempt. Production none.  
+**Assessment:** This is a transport restriction of the local runner, not migration success or failure. It must not be hidden or represented as a completed native-script run.  
+**Next:** Use the official Neon connector on the same disposable branch, preserving the exact composite bytes, transaction boundary and repository checksum algorithm.
+
+## 2026-08-28 / LOG-0033 - Clean 0200 connector preflight passed
+
+**Role:** Technical owner / Observatory / Red Team  
+**Action:** Applied the eight exact mainline components of `0200_bidding_knowledge_v0` as 120 parsed SQL statements in one transaction through the official Neon connector on branch `br-fragrant-dream-b1e2xses`. Persisted the checksum produced by the repository `migrate.sh` composite algorithm.  
+**Checksum:** `024b348c0bf01dc7666caef5bcb7e0613463d4f223ee0bc3e9171baa1af091fd`.  
+**Structure:** 9 base tables, 3 views, 20 functions and 16 non-internal triggers; migration count advanced from 62 to 63 on the disposable branch.  
+**Smoke verification:** Executed the exact `database/tests/100_bidding_knowledge_v0.sql` DO block and then deliberately raised `BID_SMOKE_ROLLBACK_SENTINEL` in the same transaction. The sentinel was reached, proving all prior assertions passed; the transaction rolled back.  
+**Residual verification:** All nine bidding tables contained zero rows; the CI fixture school, sources and knowledge items were absent.  
+**Idempotence verification:** A second-pass registry gate required the exact migration key and checksum and completed without schema or data mutation.  
+**Production verification:** Protected production remained at 62 migrations with no `bidding` schema and no `0200_bidding_knowledge_v0` registry row.  
+**Database effect:** Disposable branch only. No Canon rule or candidate was inserted or activated.  
+**Limitation:** This proves connector-based migration and smoke behavior from a clean production-derived baseline. Native `migrate.sh` transport to this Neon branch remains unproved because the local runner cannot reach the Neon hostname directly.  
+**Next:** Conduct independent I2 fail-closed review before any production promotion decision.
