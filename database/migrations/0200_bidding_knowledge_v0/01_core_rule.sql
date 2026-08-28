@@ -24,25 +24,52 @@ WITH RECURSIVE walk(value,key_path) AS (
     SELECT
         child.value,
         CASE
-            WHEN child.key_norm IS NULL THEN w.key_path
-            ELSE w.key_path || child.key_norm
+            WHEN cardinality(child.key_tokens)=0 THEN w.key_path
+            ELSE w.key_path || child.key_tokens
         END
       FROM walk AS w
       CROSS JOIN LATERAL (
           SELECT
               e.value,
-              regexp_replace(lower(e.key), '[^a-z0-9]+', '', 'g') AS key_norm
+              array_remove(
+                  regexp_split_to_array(
+                      lower(
+                          regexp_replace(
+                              e.key,
+                              '([a-z0-9])([A-Z])',
+                              E'\\1_\\2',
+                              'g'
+                          )
+                      ),
+                      '[^a-z0-9]+'
+                  ),
+                  ''
+              ) AS key_tokens
             FROM jsonb_each(
                 CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END
             ) AS e
           UNION ALL
           SELECT
               a.value,
-              NULL::text AS key_norm
+              ARRAY[]::text[] AS key_tokens
             FROM jsonb_array_elements(
                 CASE WHEN jsonb_typeof(w.value)='array' THEN w.value ELSE '[]'::jsonb END
             ) AS a
       ) AS child
+), forbidden_alias(alias) AS (
+    SELECT unnest(ARRAY[
+        'partnerhand','partnerhands','opponenthand','opponenthands',
+        'northhand','easthand','southhand','westhand',
+        'handnorth','handeast','handsouth','handwest',
+        'handsnorth','handseast','handssouth','handswest',
+        'handn','hande','hands','handw',
+        'handsn','handse','handss','handsw',
+        'nhand','ehand','shand','whand',
+        'nhands','ehands','shands','whands',
+        'fulldeal','hiddencards','actualpartnerhand',
+        'actualopponenthand','actualopponenthands',
+        'partnercards','opponentcards','allhands'
+    ])
 ), forbidden AS (
     SELECT 1
       FROM walk AS w
@@ -51,20 +78,18 @@ WITH RECURSIVE walk(value,key_path) AS (
           FROM generate_subscripts(w.key_path,1) AS path_start(i)
           CROSS JOIN generate_subscripts(w.key_path,1) AS path_end(j)
          WHERE path_end.j >= path_start.i
-           AND array_to_string(w.key_path[path_start.i:path_end.j],'') = ANY (ARRAY[
-                'partnerhand','partnerhands','opponenthand','opponenthands',
-                'northhand','easthand','southhand','westhand',
-                'handnorth','handeast','handsouth','handwest',
-                'handsnorth','handseast','handssouth','handswest',
-                'handn','hande','hands','handw',
-                'handsn','handse','handss','handsw',
-                'nhand','ehand','shand','whand',
-                'nhands','ehands','shands','whands',
-                'fulldeal','hiddencards','actualpartnerhand',
-                'actualopponenthand','actualopponenthands',
-                'partnercards','opponentcards','allhands'
-           ])
+           AND array_to_string(w.key_path[path_start.i:path_end.j],'')
+               = ANY (SELECT alias FROM forbidden_alias)
      )
+        OR (
+            SELECT string_agg(p.segment,'' ORDER BY p.ordinality)
+              FROM unnest(w.key_path) WITH ORDINALITY AS p(segment,ordinality)
+             WHERE p.segment = ANY (ARRAY[
+                'actual','all','partner','opponent','opponents',
+                'north','east','south','west','n','e','s','w',
+                'hand','hands','cards','full','deal','hidden'
+             ])
+        ) = ANY (SELECT alias FROM forbidden_alias)
      LIMIT 1
 )
 SELECT EXISTS (SELECT 1 FROM forbidden);
