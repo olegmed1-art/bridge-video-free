@@ -90,6 +90,14 @@ WITH RECURSIVE walk(value,key_path) AS (
         'rate','rates','average','averages','avg',
         'percentage','percentages','pct'
     ])
+), sensitive_suffix(word) AS (
+    SELECT unnest(ARRAY[
+        'hcp','point','points','shape','distribution',
+        'length','lengths','holding','holdings','honor','honors',
+        'control','controls','spade','spades','heart','hearts',
+        'diamond','diamonds','club','clubs','card','cards',
+        'hand','hands','deal'
+    ])
 ), forbidden AS (
     SELECT 1
       FROM walk AS w
@@ -106,9 +114,17 @@ WITH RECURSIVE walk(value,key_path) AS (
                        ) = f.alias
                     OR (
                         length(f.alias) >= 8
-                        AND array_to_string(
-                            w.key_path[path_start.i:path_end.j],''
-                        ) LIKE f.alias || '%'
+                        AND EXISTS (
+                            SELECT 1
+                              FROM (
+                                  SELECT word FROM metric_word
+                                  UNION ALL
+                                  SELECT word FROM sensitive_suffix
+                              ) AS suffix
+                             WHERE array_to_string(
+                                       w.key_path[path_start.i:path_end.j],''
+                                   ) = f.alias || suffix.word
+                        )
                     )
            )
            AND NOT (
@@ -194,6 +210,12 @@ WITH RECURSIVE walk(value,key_path) AS (
                 'allhands'=ANY(w.key_path)
                 OR EXISTS (
                     SELECT 1
+                      FROM unnest(w.key_path) AS compact(segment)
+                      CROSS JOIN metric_word AS metric
+                     WHERE compact.segment='allhands' || metric.word
+                )
+                OR EXISTS (
+                    SELECT 1
                       FROM generate_subscripts(w.key_path,1) AS all_pos(i)
                       CROSS JOIN generate_subscripts(w.key_path,1) AS hand_pos(j)
                      WHERE (
@@ -218,7 +240,9 @@ WITH RECURSIVE walk(value,key_path) AS (
                        IN ('seat','owner')
                    AND jsonb_typeof(seat_field.value)='string'
                    AND (
-                       upper(seat_field.value #>> '{}') IN ('N','E','S','W')
+                       upper(seat_field.value #>> '{}') IN (
+                           'N','E','S','W','NORTH','EAST','SOUTH','WEST'
+                       )
                        OR (
                            lower(regexp_replace(seat_field.key,'[^a-z0-9]','','g'))='owner'
                            AND lower(seat_field.value #>> '{}') IN (
