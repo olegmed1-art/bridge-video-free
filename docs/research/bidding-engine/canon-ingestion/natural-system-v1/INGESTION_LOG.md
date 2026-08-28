@@ -281,3 +281,64 @@ Each entry records:
 **Database effect:** None. No rule was created or activated in production.  
 **Unresolved:** PR is intentionally draft and not merge-ready while transcription and review continue.  
 **Next:** Persist the independently validated infrastructure migration and transcribe the next auction block.
+
+
+## 2026-08-28 / LOG-0025 - Infrastructure PR #630 status corrected
+
+**Role:** Observatory / Coordinator  
+**Action:** Rechecked the GitHub state of PR #630 instead of carrying forward the stale draft status recorded in LOG-0005.  
+**Finding:** PR #630, `Bidding knowledge v0: authority-separated runtime gates and traces`, is merged at commit `0f80f102b640d9b4f69749ccb3afb12f8293461a`.  
+**Verification:** Read-only GitHub PR and commit inspection.  
+**Database effect:** None. A merged code change is not evidence that its schema is present in production.  
+**Correction:** References in earlier log entries to PR #630 being an open draft are historical observations and no longer describe the current GitHub state.  
+**Next:** Reconcile the mainline migration and production migration registry independently.
+
+## 2026-08-28 / LOG-0026 - Mainline bidding migration status reconciled
+
+**Role:** Observatory / Technical owner  
+**Action:** Rechecked PR #668, its head checks, and the active database migration path.  
+**Finding:** PR #668, `Bidding knowledge v0: mainline schema, checksums and DB contract`, is merged at commit `7da87bb2e58a517d961624dc8d539dfbac3d84d2`. Its head commit `d651bbe578b34d1a44bea3d72c4c219d29097244` had successful Database CI, Secret gate, META Evidence Gate, and Migration Namespace Guard checks. The mainline migration key is `0200_bidding_knowledge_v0`.  
+**Verification:** Read-only GitHub PR, file, commit-status and workflow inspection.  
+**Database effect:** None. Production registration and objects were checked separately.  
+**Correction:** Earlier entries that refer to a local `0105_bidding_knowledge_v0.sql` describe an intermediate validation draft, not the current mainline migration identity.  
+**Next:** Prove `0200_bidding_knowledge_v0` from a fresh production-derived branch before any promotion decision.
+
+## 2026-08-28 / LOG-0027 - Canon ingestion PR #662 status corrected
+
+**Role:** Observatory / Curator  
+**Action:** Rechecked PR #662.  
+**Finding:** PR #662, `SCHOOL CANON ingestion: approved natural bidding system v1`, is merged at commit `24d47df1535b693afcfa073aa8db0ce88cca841c`. The approved source remains Google Drive file `1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf`, SHA-256 `dc9678da5ab19a897c3f1fbd785cc6f7b0ddd9d70d90d895743db615a2fdd3d6`.  
+**Verification:** Read-only GitHub inspection and comparison with `SOURCE_MANIFEST.json`.  
+**Database effect:** None. The 34-block inventory, two exact transcriptions, 33 candidate records and related plans remain Git artifacts; no rule is activated by the merge.  
+**Correction:** LOG-0024 is preserved as the state at PR creation; it is no longer the current PR status.  
+**Next:** Continue source work only under the fail-closed eligibility rules.
+
+## 2026-08-28 / LOG-0028 - Production Neon state reconciled
+
+**Role:** Observatory / Database custodian  
+**Action:** Queried the protected production branch read-only for the migration registry and bidding objects.  
+**Finding:** Production contains 62 registered migrations. Migrations `0020` through `0037` are already registered; `0200_bidding_knowledge_v0` is not registered. Production has no `bidding` schema, no `bidding.rule` table and no active bidding Canon runtime rules.  
+**Verification:** Read-only Neon metadata and SQL queries against production project `misty-poetry-18012774`, branch `br-wispy-lab-b1rq54of`, database `neondb`.  
+**Database effect:** None.  
+**Correction:** The earlier project handoff statement that only migrations `0001–0019` were present is superseded by this live observation.  
+**Next:** Keep production unchanged and create clean, disposable preflight evidence.
+
+## 2026-08-28 / LOG-0029 - Existing validation branch rejected as promotion evidence
+
+**Role:** Red Team / Observatory  
+**Action:** Re-inspected the earlier validation branch `br-muddy-resonance-b1pf1tze`.  
+**Finding:** The branch contains bidding objects, two rules, two active activations, one decision trace and one ingestion run, while `0200_bidding_knowledge_v0` is not registered.  
+**Verification:** Read-only Neon SQL on the isolated branch.  
+**Database effect:** Production none; no cleanup or mutation was performed.  
+**Assessment:** This branch is useful historical evidence but is not a clean preflight baseline and must not support production promotion.  
+**Next:** Use a fresh branch from current production and require zero residual fixture rows.
+
+## 2026-08-28 / LOG-0030 - Automated migration helper failed closed
+
+**Role:** Technical owner / Observatory  
+**Action:** Submitted the exact mainline composite migration to the Neon migration-preparation helper. The computed composite SHA-256 was `024b348c0bf01dc7666caef5bcb7e0613463d4f223ee0bc3e9171baa1af091fd`.  
+**Result:** The helper returned `INVALID_ARGUMENT` and produced no migration identifier or validated migration branch.  
+**Verification:** The failure response was checked; production still has no `0200_bidding_knowledge_v0` registry row or bidding schema.  
+**Database effect:** None.  
+**Assessment:** The failed helper flow is closed and will not be represented as successful evidence.  
+**Next:** Execute the repository's exact `database/scripts/migrate.sh` on a fresh disposable production-derived branch; require registry checksum match, smoke-test rollback, zero residual rows and an idempotent rerun before I2 review.
