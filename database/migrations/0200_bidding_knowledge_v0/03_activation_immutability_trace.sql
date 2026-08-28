@@ -184,6 +184,80 @@ $$;
 COMMENT ON FUNCTION bidding.rule_is_currently_active(uuid) IS
   'Returns true while a rule has a non-expired active activation, including a future-dated activation, so scheduled rules cannot be mutated after gate evaluation.';
 
+CREATE OR REPLACE FUNCTION bidding.reject_active_rule_test_run_insert()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_rule_id uuid;
+BEGIN
+    SELECT rule_id
+      INTO v_rule_id
+      FROM bidding.rule_test
+     WHERE rule_test_id=NEW.rule_test_id;
+
+    -- Test evidence and activation must serialize on the same owner row. If
+    -- this insert wins the lock, a later activation sees its result; if the
+    -- activation wins, the evidence insert is rejected after waiting.
+    PERFORM 1
+      FROM bidding.rule
+     WHERE rule_id=v_rule_id
+     FOR UPDATE;
+
+    IF v_rule_id IS NOT NULL AND bidding.rule_is_currently_active(v_rule_id) THEN
+        RAISE EXCEPTION 'BID_ACTIVE_RULE_TEST_RUN_IMMUTABLE' USING ERRCODE='55000';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER active_rule_test_run_immutable
+BEFORE INSERT ON bidding.rule_test_run
+FOR EACH ROW EXECUTE FUNCTION bidding.reject_active_rule_test_run_insert();
+
+CREATE OR REPLACE FUNCTION bidding.reject_active_rule_conflict_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_rule_ids uuid[];
+BEGIN
+    IF NEW.status <> 'open' THEN
+        RETURN NEW;
+    END IF;
+
+    IF TG_OP='UPDATE' THEN
+        v_rule_ids := ARRAY[
+            OLD.left_rule_id,OLD.right_rule_id,
+            NEW.left_rule_id,NEW.right_rule_id
+        ];
+    ELSE
+        v_rule_ids := ARRAY[NEW.left_rule_id,NEW.right_rule_id];
+    END IF;
+
+    -- Open conflict evidence participates in activation eligibility, so lock
+    -- every old/new owner deterministically before accepting it.
+    PERFORM 1
+      FROM bidding.rule
+     WHERE rule_id=ANY(v_rule_ids)
+     ORDER BY rule_id
+     FOR UPDATE;
+
+    IF EXISTS (
+        SELECT 1
+          FROM unnest(v_rule_ids) AS x(rule_id)
+         WHERE bidding.rule_is_currently_active(x.rule_id)
+    ) THEN
+        RAISE EXCEPTION 'BID_ACTIVE_RULE_CONFLICT_IMMUTABLE' USING ERRCODE='55000';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER active_rule_conflict_immutable
+BEFORE INSERT OR UPDATE ON bidding.rule_conflict
+FOR EACH ROW EXECUTE FUNCTION bidding.reject_active_rule_conflict_mutation();
+
 CREATE OR REPLACE FUNCTION bidding.reject_active_rule_mutation()
 RETURNS trigger
 LANGUAGE plpgsql
