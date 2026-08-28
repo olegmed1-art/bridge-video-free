@@ -101,7 +101,7 @@
   ],
   "next_actions": [
     "merge_phase_0_design_after_checks",
-    "reserve_and_enforce_database_namespace_0200_0299",
+    "reserve_and_enforce_database_namespace_0300_0399",
     "run_python_vercel_workflows_compatibility_spike",
     "prepare_autopilot_schema_on_temporary_neon_branch",
     "implement_shadow_pilots"
