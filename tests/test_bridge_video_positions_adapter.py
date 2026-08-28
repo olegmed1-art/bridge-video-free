@@ -44,7 +44,8 @@ def test_universal_video_frames_flow_into_existing_recognizer_contract(tmp_path:
         "output_records": 1,
         "recognized_frames": 1,
         "conflict_frames": 0,
-        "derive_fourth_hand": False,
+        "derive_fourth_hand": True,
+        "derived_fourth_hand_frames": 0,
         "output": "bridge_positions.jsonl",
     }
     record = json.loads((tmp_path / "bridge_positions.jsonl").read_text(encoding="utf-8"))

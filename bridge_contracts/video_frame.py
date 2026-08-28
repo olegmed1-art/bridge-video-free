@@ -12,7 +12,7 @@ from typing import Any, Mapping
 
 from .video_deal import CanonicalVideoDeal, canonicalize_video_deal
 
-BRIDGE_VIDEO_FRAME_CONTRACT_VERSION = "bridge-video-frame-v1"
+BRIDGE_VIDEO_FRAME_CONTRACT_VERSION = "bridge-video-frame-v2"
 PARSER_STATUSES = frozenset({"PARTIAL_BOARD_OBSERVATION", "INSUFFICIENT", "CONFLICT", "UNAVAILABLE"})
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _STATE_FP_RE = re.compile(r"^[0-9a-f]{20}$")
@@ -74,7 +74,7 @@ def canonicalize_frame_recognition(
     time: Any = None,
     frame_file: Any = None,
     frame_sha256: Any = None,
-    derive_fourth_hand: bool = False,
+    derive_fourth_hand: bool = True,
 ) -> CanonicalVideoFrame:
     if not isinstance(recognition, Mapping):
         raise BridgeVideoFrameContractError("recognition must be an object")

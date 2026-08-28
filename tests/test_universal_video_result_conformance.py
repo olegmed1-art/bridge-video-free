@@ -8,6 +8,7 @@ import pytest
 
 from universal_video.result_conformance import ResultConformanceError, verify_result
 from universal_video.profiles import resolve_profile
+from universal_video.server_review import build_server_review
 
 
 def _fingerprint(payload: dict) -> str:
@@ -147,6 +148,53 @@ def test_conformance_pass_separates_bundle_from_domain_and_pedagogical_readiness
     assert report["evidence_phase"] == "POST_HOC_OBSERVATION"
     assert report["artifact_count"] == 5
     assert len(report["artifact_set_sha256"]) == 64
+
+
+def test_server_review_compacts_any_conformant_bundle_without_canon_promotion(tmp_path: Path):
+    job_dir, _ = _bundle(tmp_path)
+    base = _verify(job_dir, evidence_phase="GENERATION_FINALIZATION")
+    review = build_server_review(job_dir, base)
+    (job_dir / "server_review.json").write_text(json.dumps(review), encoding="utf-8")
+
+    final = _verify(
+        job_dir,
+        evidence_phase="GENERATION_FINALIZATION",
+        require_server_review=True,
+    )
+    assert final["server_final_review_status"] == "REVIEW_REQUIRED"
+    assert final["chat_handoff_mode"] == "EXCEPTIONS_ONLY"
+    assert final["artifact_count"] == 6
+    assert review["execution_location"] == "RESIDENT_SERVER_POSTPROCESS"
+    assert review["handoff"]["technical_final_review_completed"] is True
+    assert review["handoff"]["canonical_promotion_allowed"] is False
+    assert review["handoff"]["raw_media_included"] is False
+    assert review["handoff"]["full_transcript_included"] is False
+    assert review["summary"]["deferred_analysis"] == [
+        "speaker_structure",
+        "bridge_context",
+        "bridge_positions",
+        "dds3_optional",
+        "educational_candidates",
+    ]
+    publication = _verify(
+        job_dir,
+        evidence_phase="PUBLICATION_PREFLIGHT",
+        require_server_review=True,
+    )
+    assert publication["artifact_set_sha256"] == final["artifact_set_sha256"]
+
+
+def test_server_review_tamper_and_missing_packet_fail_closed(tmp_path: Path):
+    job_dir, _ = _bundle(tmp_path)
+    with pytest.raises(ResultConformanceError, match="required server review"):
+        _verify(job_dir, require_server_review=True)
+
+    base = _verify(job_dir, evidence_phase="GENERATION_FINALIZATION")
+    review = build_server_review(job_dir, base)
+    review["handoff"]["canonical_promotion_allowed"] = True
+    (job_dir / "server_review.json").write_text(json.dumps(review), encoding="utf-8")
+    with pytest.raises(ResultConformanceError, match="handoff boundary"):
+        _verify(job_dir, require_server_review=True)
 
 
 def test_review_is_not_a_conformant_completed_bundle(tmp_path: Path):

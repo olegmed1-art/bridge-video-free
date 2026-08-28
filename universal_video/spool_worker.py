@@ -19,6 +19,7 @@ from .finops_observation import build_video_finops_observation, directory_bytes
 from .result_conformance import ResultConformanceError, verify_result
 from .runner import run_job
 from .runtime_preflight import VideoRuntimeUnavailable, validate_video_runtime
+from .server_review import ServerReviewError, build_server_review
 
 
 ERROR_CODE_RE = re.compile(r"^UV_[A-Z0-9_]{1,96}$")
@@ -47,6 +48,8 @@ def _failure_code(exc: BaseException) -> str:
         return "UV_JOB_JSON_INVALID"
     if isinstance(exc, ResultConformanceError):
         return "UV_RESULT_CONFORMANCE_FAILED"
+    if isinstance(exc, ServerReviewError):
+        return "UV_SERVER_REVIEW_FAILED"
     if isinstance(exc, TimeoutError):
         return "UV_WORKER_TIMEOUT"
     if isinstance(exc, OSError):
@@ -277,6 +280,22 @@ def process_one(spool_root: Path) -> bool:
         if manifest_path.exists() and not reused_finalized_result:
             _atomic_write_json(manifest_path, result)
         if str(result.get("status") or "") == "COMPLETED":
+            review_path = result_dir / "server_review.json"
+            if not review_path.exists():
+                base_conformance = verify_result(
+                    result_dir,
+                    expected_job_id=validated_job.job_id,
+                    expected_profile=validated_job.profile,
+                    expected_job_hash=canonical_job_hash(validated_job),
+                    expected_source_file_id=(
+                        str(validated_job.source.get("file_id"))
+                        if validated_job.source.get("kind") == "google_drive"
+                        else None
+                    ),
+                    evidence_phase=("REUSE_OBSERVATION" if reused_finalized_result else "GENERATION_FINALIZATION"),
+                )
+                server_review = build_server_review(result_dir, base_conformance)
+                _atomic_write_json(review_path, server_review)
             conformance = verify_result(
                 result_dir,
                 expected_job_id=validated_job.job_id,
@@ -288,6 +307,7 @@ def process_one(spool_root: Path) -> bool:
                     else None
                 ),
                 evidence_phase=("REUSE_OBSERVATION" if reused_finalized_result else "GENERATION_FINALIZATION"),
+                require_server_review=True,
             )
         else:
             conformance = {

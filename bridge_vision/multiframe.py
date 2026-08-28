@@ -13,7 +13,7 @@ from typing import Any, Iterable, Mapping
 
 from bridge_contracts.video_deal import SEATS, canonicalize_video_deal
 
-MULTIFRAME_VERSION = "bridge-vision-multiframe-v2"
+MULTIFRAME_VERSION = "bridge-vision-multiframe-v3"
 
 
 class MultiFrameError(ValueError):
@@ -27,6 +27,16 @@ def _pairs(record: Mapping[str, Any]) -> set[tuple[str, str]]:
     hands = deal.get("hands")
     if not isinstance(hands, Mapping):
         return set()
+    derived: set[tuple[str, str]] = set()
+    derivations = deal.get("derivations")
+    if isinstance(derivations, (list, tuple)):
+        for item in derivations:
+            if not isinstance(item, Mapping):
+                continue
+            seat = str(item.get("seat") or "")
+            computed = item.get("computed_cards") or []
+            if seat in SEATS and isinstance(computed, (list, tuple)):
+                derived.update((seat, str(card)) for card in computed)
     out: set[tuple[str, str]] = set()
     for seat in SEATS:
         hand = hands.get(seat) or {}
@@ -36,7 +46,9 @@ def _pairs(record: Mapping[str, Any]) -> set[tuple[str, str]]:
         if not isinstance(cards, (list, tuple)):
             raise MultiFrameError("deal hand cards must be an array")
         for card in cards:
-            out.add((seat, str(card)))
+            pair = (seat, str(card))
+            if pair not in derived:
+                out.add(pair)
     return out
 
 
@@ -85,7 +97,7 @@ class DealTrack:
         hands = {seat: [] for seat in SEATS}
         for seat, card in sorted(self.observed_pairs):
             hands[seat].append(card)
-        return canonicalize_video_deal({"hands": hands}).to_dict()
+        return canonicalize_video_deal({"hands": hands}, derive_fourth_hand=True).to_dict()
 
     def to_dict(self) -> dict[str, Any]:
         return {

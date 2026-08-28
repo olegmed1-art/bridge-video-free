@@ -6,5 +6,12 @@ native/default engine.
 """
 
 from .engine import BridgeVisionEngine, VisionCandidate, VisionResult
+from .evidence_fusion import CardEvidenceFusionError, fuse_card_evidence
 
-__all__ = ["BridgeVisionEngine", "VisionCandidate", "VisionResult"]
+__all__ = [
+    "BridgeVisionEngine",
+    "CardEvidenceFusionError",
+    "VisionCandidate",
+    "VisionResult",
+    "fuse_card_evidence",
+]

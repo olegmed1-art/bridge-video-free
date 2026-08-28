@@ -90,6 +90,7 @@ def process_job_frames(
     records: list[dict[str, Any]] = []
     recognized_frames = 0
     conflict_frames = 0
+    derived_fourth_hand_frames = 0
 
     for frame_meta in frames:
         if not isinstance(frame_meta, dict):
@@ -111,6 +112,8 @@ def process_job_frames(
         records.append(result)
         if result["deal"] is not None:
             recognized_frames += 1
+            if (result["deal"].get("derivations") or []):
+                derived_fourth_hand_frames += 1
         if result["status"] == "CONFLICT":
             conflict_frames += 1
 
@@ -128,7 +131,8 @@ def process_job_frames(
             "output_records": len(records),
             "recognized_frames": recognized_frames,
             "conflict_frames": conflict_frames,
-            "derive_fourth_hand": False,
+            "derive_fourth_hand": True,
+            "derived_fourth_hand_frames": derived_fourth_hand_frames,
             "output": output_path.name,
         }
     else:
@@ -143,6 +147,8 @@ def process_job_frames(
             "output_records": len(records),
             "recognized_frames": recognized_frames,
             "conflict_frames": conflict_frames,
+            "derive_fourth_hand": True,
+            "derived_fourth_hand_frames": derived_fourth_hand_frames,
             "output": output_path.name,
         }
     summary_path = root / "bridge_positions_summary.json"
