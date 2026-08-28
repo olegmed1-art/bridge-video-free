@@ -111,6 +111,7 @@ def main() -> None:
     second_started = threading.Event()
     second_finished = threading.Event()
     second_sqlstate: list[str | None] = []
+    second_message: list[str] = []
 
     try:
         first.execute(INSERT_SQL, ("1 hour", "3 hours", '{"runner":"first"}'))
@@ -125,9 +126,11 @@ def main() -> None:
                     )
                     second.commit()
                     second_sqlstate.append(None)
+                    second_message.append("")
                 except psycopg.Error as exc:
                     second.rollback()
                     second_sqlstate.append(exc.sqlstate)
+                    second_message.append(exc.diag.message_primary or "")
                 finally:
                     second_finished.set()
 
@@ -144,9 +147,18 @@ def main() -> None:
         thread.join(timeout=10)
         if thread.is_alive():
             raise AssertionError("Second transaction did not finish after first commit")
-        if second_sqlstate != ["23P01"]:
+        overlap_blocked = (
+            second_sqlstate == ["23P01"]
+            or (
+                second_sqlstate == ["23514"]
+                and second_message == ["BID_RUNTIME_ACTIVATION_OVERLAP"]
+            )
+        )
+        if not overlap_blocked:
             raise AssertionError(
-                f"Expected exclusion_violation 23P01, got {second_sqlstate!r}"
+                "Expected exclusion_violation 23P01 or the serialized "
+                "BID_RUNTIME_ACTIVATION_OVERLAP guard, got "
+                f"{list(zip(second_sqlstate, second_message))!r}"
             )
 
         with psycopg.connect(DATABASE_URL) as verify:
