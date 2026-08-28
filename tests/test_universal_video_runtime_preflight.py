@@ -115,6 +115,13 @@ def test_spool_receipt_has_locator_and_generation_conformance(tmp_path, monkeypa
     monkeypatch.setattr(spool_worker, "run_job", fake_run)
     verifier = mock.Mock(return_value=conformance)
     monkeypatch.setattr(spool_worker, "verify_result", verifier)
+    review = {
+        "schema": "universal-video-server-review-v1",
+        "state": "PASS",
+        "handoff": {"mode": "SUMMARY_ONLY"},
+    }
+    review_builder = mock.Mock(return_value=review)
+    monkeypatch.setattr(spool_worker, "build_server_review", review_builder)
 
     assert spool_worker.process_one(tmp_path) is True
     receipt = json.loads((tmp_path / "done" / "receipt-job.json").read_text(encoding="utf-8"))
@@ -123,7 +130,60 @@ def test_spool_receipt_has_locator_and_generation_conformance(tmp_path, monkeypa
     assert receipt["result_dir"] == str(expected_dir)
     assert receipt["result_locator"] == {"kind": "local_directory", "path": str(expected_dir)}
     assert receipt["result_conformance"] == conformance
+    assert verifier.call_count == 2
+    assert verifier.call_args_list[1].kwargs["require_server_review"] is True
+    review_builder.assert_called_once_with(expected_dir, conformance)
+    assert json.loads((expected_dir / "server_review.json").read_text(encoding="utf-8")) == review
+
+
+def test_spool_reuse_revalidates_existing_server_review_without_rewriting(tmp_path, monkeypatch):
+    source = tmp_path / "media" / "lesson.mp4"
+    source.parent.mkdir()
+    source.write_bytes(b"video")
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    payload = {
+        "job_id": "reuse-job",
+        "profile": "transcript_only",
+        "source": {"kind": "local_path", "path": str(source)},
+    }
+    (inbox / "reuse-job.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    existing_review = {"schema": "universal-video-server-review-v1", "state": "PASS"}
+
+    def fake_run(_payload, results):
+        result_dir = results / "reuse-job"
+        result_dir.mkdir(parents=True)
+        result = {
+            "status": "COMPLETED",
+            "job_id": "reuse-job",
+            "job_hash": "a" * 64,
+            "profile": "transcript_only",
+            "source": {"kind": "local_path"},
+            "media": {"size_bytes": 5, "duration_seconds": 1.0},
+            "runtime": {"elapsed_seconds": 2.0},
+            "finops_observation": {"schema": "universal-video-finops-v1"},
+        }
+        (result_dir / "manifest.json").write_text(json.dumps(result), encoding="utf-8")
+        (result_dir / "server_review.json").write_text(json.dumps(existing_review), encoding="utf-8")
+        return result
+
+    conformance = {"schema": "universal-video-result-conformance-v1", "state": "PASS"}
+    monkeypatch.setenv("UNIVERSAL_VIDEO_MEDIA_ROOT", str(source.parent))
+    monkeypatch.setattr(spool_worker, "validate_video_runtime", lambda: None)
+    monkeypatch.setattr(spool_worker, "run_job", fake_run)
+    verifier = mock.Mock(return_value=conformance)
+    review_builder = mock.Mock()
+    monkeypatch.setattr(spool_worker, "verify_result", verifier)
+    monkeypatch.setattr(spool_worker, "build_server_review", review_builder)
+
+    assert spool_worker.process_one(tmp_path) is True
     verifier.assert_called_once()
+    assert verifier.call_args.kwargs["evidence_phase"] == "REUSE_OBSERVATION"
+    assert verifier.call_args.kwargs["require_server_review"] is True
+    review_builder.assert_not_called()
+    review_path = tmp_path / "results" / "reuse-job" / "server_review.json"
+    assert json.loads(review_path.read_text(encoding="utf-8")) == existing_review
 
 
 def test_review_receipt_is_not_marked_technical_ready(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

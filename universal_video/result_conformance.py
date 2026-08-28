@@ -26,6 +26,10 @@ WORD_RE = re.compile(r"[A-Za-zА-Яа-яЁё0-9]+")
 FRAME_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 RAW_EXTENSIONS = frozenset({".mp4", ".mkv", ".mov", ".avi", ".webm", ".wav", ".mp3", ".m4a", ".flac"})
 REQUIRED_TRANSCRIPT_FILES = ("transcript.jsonl", "transcript.txt", "transcript_qc.json")
+SERVER_REVIEW_FILE = "server_review.json"
+SERVER_REVIEW_SCHEMA = "universal-video-server-review-v1"
+MAX_SERVER_REVIEW_ITEMS = 100
+MAX_SERVER_REVIEW_EXCERPT_CHARS = 500
 DEFAULT_MAX_FILE_BYTES = 256 * 1024**2
 DEFAULT_MAX_TOTAL_BYTES = 512 * 1024**2
 DEFAULT_MAX_FRAMES = 300
@@ -317,6 +321,165 @@ def _artifact_set_sha256(artifacts: list[dict[str, Any]]) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _validate_server_review(
+    review: Any,
+    *,
+    manifest: dict[str, Any],
+    transcript_segments: list[dict[str, Any]],
+    qc_rows: list[dict[str, Any]],
+    base_artifact_set_sha256: str,
+) -> tuple[str, int, str]:
+    if not isinstance(review, dict) or review.get("schema") != SERVER_REVIEW_SCHEMA:
+        raise ResultConformanceError("invalid server review schema")
+    if review.get("review_scope") != "TECHNICAL_POSTPROCESS_ONLY":
+        raise ResultConformanceError("server review exceeds technical scope")
+    if review.get("execution_location") != "RESIDENT_SERVER_POSTPROCESS":
+        raise ResultConformanceError("unexpected server review execution location")
+    for field in ("job_id", "job_hash", "profile", "source_fingerprint", "processing_fingerprint"):
+        if review.get(field) != manifest.get(field):
+            raise ResultConformanceError(f"server review {field} mismatch")
+
+    binding = review.get("input_conformance")
+    if not isinstance(binding, dict):
+        raise ResultConformanceError("server review input binding missing")
+    binding_phase = binding.get("evidence_phase")
+    if (
+        binding.get("schema") != "universal-video-result-conformance-v1"
+        or binding.get("state") != "PASS"
+        or binding_phase not in {"GENERATION_FINALIZATION", "REUSE_OBSERVATION"}
+        or _required_hex(binding.get("artifact_set_sha256"), "server review input artifact set")
+        != base_artifact_set_sha256
+    ):
+        raise ResultConformanceError("server review input binding mismatch")
+
+    checks = review.get("checks")
+    if not isinstance(checks, dict):
+        raise ResultConformanceError("server review checks missing")
+    for field in ("artifact_integrity", "transcript_timeline", "transcript_qc", "exception_compaction"):
+        if checks.get(field) != "PASS":
+            raise ResultConformanceError(f"server review {field} did not pass")
+    frames = manifest.get("frames") if isinstance(manifest.get("frames"), list) else []
+    expected_frame_check = "PASS" if frames else "NOT_APPLICABLE"
+    if checks.get("keyframe_inventory") != expected_frame_check:
+        raise ResultConformanceError("server review keyframe status mismatch")
+
+    transcript = manifest.get("transcript") if isinstance(manifest.get("transcript"), dict) else {}
+    media = manifest.get("media") if isinstance(manifest.get("media"), dict) else {}
+    deferred = manifest.get("deferred_analysis") if isinstance(manifest.get("deferred_analysis"), list) else []
+    summary = review.get("summary")
+    expected_summary = {
+        "duration_seconds": media.get("duration_seconds"),
+        "transcript_segments": transcript.get("segments"),
+        "transcript_words": transcript.get("words"),
+        "transcript_language": transcript.get("language"),
+        "qc_blocks": transcript.get("qc_blocks"),
+        "qc_failed": transcript.get("qc_failed"),
+        "keyframes": len(frames),
+        "deferred_analysis": deferred,
+    }
+    if summary != expected_summary:
+        raise ResultConformanceError("server review summary mismatch")
+
+    items = review.get("review_items")
+    if not isinstance(items, list) or len(items) > MAX_SERVER_REVIEW_ITEMS:
+        raise ResultConformanceError("invalid server review items")
+    allowed_kinds = {"ASR_QC_EXCEPTION", "UNRELIABLE_TRANSCRIPT_SEGMENT", "DEFERRED_DOMAIN_ANALYSIS"}
+    deferred_items = 0
+    for item in items:
+        if not isinstance(item, dict) or item.get("kind") not in allowed_kinds:
+            raise ResultConformanceError("invalid server review item")
+        if item.get("severity") not in {"REVIEW", "CRITICAL"}:
+            raise ResultConformanceError("invalid server review severity")
+        evidence = str(item.get("evidence") or "")
+        if not (
+            evidence.startswith("transcript_qc.json#chunk=")
+            or evidence.startswith("transcript.jsonl#segment=")
+            or evidence == "manifest.json#deferred_analysis"
+        ):
+            raise ResultConformanceError("unsafe server review evidence locator")
+        excerpt = item.get("excerpt")
+        if excerpt is not None and (not isinstance(excerpt, str) or len(excerpt) > MAX_SERVER_REVIEW_EXCERPT_CHARS):
+            raise ResultConformanceError("server review excerpt exceeds cap")
+        reason_codes = item.get("reason_codes")
+        if reason_codes is not None and (
+            not isinstance(reason_codes, list)
+            or len(reason_codes) > 20
+            or any(not isinstance(value, str) or len(value) > 96 for value in reason_codes)
+        ):
+            raise ResultConformanceError("invalid server review reason codes")
+        if item.get("kind") == "DEFERRED_DOMAIN_ANALYSIS":
+            deferred_items += 1
+            if evidence != "manifest.json#deferred_analysis" or reason_codes != deferred[:20]:
+                raise ResultConformanceError("server review deferred boundary mismatch")
+    if deferred_items != (1 if deferred else 0):
+        raise ResultConformanceError("server review deferred item mismatch")
+    truncated = _exact_int(review.get("review_items_truncated"), "server review truncated count")
+
+    expected_items: list[dict[str, Any]] = []
+    for row in qc_rows:
+        if bool(row.get("ok")) and not bool(row.get("critical")) and not bool(row.get("nonspeech_hallucination")):
+            continue
+        reasons = row.get("failure_reasons") if isinstance(row.get("failure_reasons"), list) else []
+        expected_items.append(
+            {
+                "kind": "ASR_QC_EXCEPTION",
+                "severity": "CRITICAL" if bool(row.get("critical")) else "REVIEW",
+                "start": float(row.get("start") or 0.0),
+                "end": float(row.get("end") or 0.0),
+                "reason_codes": [str(value)[:96] for value in reasons[:8]],
+                "evidence": f"transcript_qc.json#chunk={int(row.get('chunk') or 0)}",
+            }
+        )
+    for index, row in enumerate(transcript_segments):
+        if not bool(row.get("unreliable")):
+            continue
+        excerpt = re.sub(r"\s+", " ", str(row.get("text") or "")).strip()[:MAX_SERVER_REVIEW_EXCERPT_CHARS]
+        expected_items.append(
+            {
+                "kind": "UNRELIABLE_TRANSCRIPT_SEGMENT",
+                "severity": "REVIEW",
+                "start": float(row.get("start") or 0.0),
+                "end": float(row.get("end") or 0.0),
+                "excerpt": excerpt,
+                "evidence": f"transcript.jsonl#segment={index}",
+            }
+        )
+    if deferred:
+        expected_items.append(
+            {
+                "kind": "DEFERRED_DOMAIN_ANALYSIS",
+                "severity": "REVIEW",
+                "reason_codes": deferred[:20],
+                "evidence": "manifest.json#deferred_analysis",
+            }
+        )
+    if items != expected_items[:MAX_SERVER_REVIEW_ITEMS]:
+        raise ResultConformanceError("server review omitted or changed an exception")
+    if truncated != max(0, len(expected_items) - MAX_SERVER_REVIEW_ITEMS):
+        raise ResultConformanceError("server review truncated count mismatch")
+
+    requires_expert_review = bool(items)
+    expected_state = "REVIEW_REQUIRED" if requires_expert_review else "PASS"
+    if review.get("state") != expected_state:
+        raise ResultConformanceError("server review state mismatch")
+    handoff = review.get("handoff")
+    if not isinstance(handoff, dict):
+        raise ResultConformanceError("server review handoff missing")
+    expected_handoff = {
+        "mode": "EXCEPTIONS_ONLY" if items else "SUMMARY_ONLY",
+        "requires_expert_review": requires_expert_review,
+        "technical_final_review_completed": True,
+        "domain_analysis_status": "DEFERRED" if deferred else "NOT_APPLICABLE",
+        "pedagogical_status": "NOT_EVALUATED",
+        "canonical_promotion_allowed": False,
+        "raw_media_included": False,
+        "full_transcript_included": False,
+    }
+    if handoff != expected_handoff:
+        raise ResultConformanceError("server review handoff boundary mismatch")
+    return expected_state, len(items) + truncated, expected_handoff["mode"]
+
+
 def verify_result(
     job_dir: Path,
     *,
@@ -329,6 +492,7 @@ def verify_result(
     max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
     max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
     max_frames: int = DEFAULT_MAX_FRAMES,
+    require_server_review: bool = False,
 ) -> dict[str, Any]:
     """Verify one immutable-looking technical result bundle.
 
@@ -571,6 +735,24 @@ def verify_result(
         if disk_frames != seen_frames:
             raise ResultConformanceError("keyframe inventory mismatch")
 
+    base_artifact_set_sha256 = _artifact_set_sha256(artifacts)
+    server_review_path = job_dir / SERVER_REVIEW_FILE
+    server_final_review_status = "NOT_GENERATED"
+    review_item_count = 0
+    chat_handoff_mode = "NONE"
+    if server_review_path.exists():
+        review = _read_json(server_review_path, max_bytes=max_file_bytes)
+        server_final_review_status, review_item_count, chat_handoff_mode = _validate_server_review(
+            review,
+            manifest=manifest,
+            transcript_segments=segments,
+            qc_rows=qc,
+            base_artifact_set_sha256=base_artifact_set_sha256,
+        )
+        artifacts.append(_artifact(server_review_path, SERVER_REVIEW_FILE, max_file_bytes=max_file_bytes))
+    elif require_server_review:
+        raise ResultConformanceError("required server review is missing")
+
     total_bytes = sum(int(item["size_bytes"]) for item in artifacts)
     if total_bytes > max_total_bytes:
         raise ResultConformanceError("technical bundle exceeds total byte cap")
@@ -606,6 +788,9 @@ def verify_result(
         "deferred_analysis": deferred,
         "bridge_production_ready": False,
         "pedagogical_status": "NOT_EVALUATED",
+        "server_final_review_status": server_final_review_status,
+        "review_item_count": review_item_count,
+        "chat_handoff_mode": chat_handoff_mode,
         "publication_eligible": True,
         "source_binding_status": source_binding,
         "processing_revision": str(manifest.get("processing_revision") or ""),

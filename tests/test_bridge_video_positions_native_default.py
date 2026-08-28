@@ -29,6 +29,6 @@ def test_video_positions_uses_native_engine_and_keeps_legacy_off(tmp_path: Path)
     assert summary["legacy_old_bbo_enabled"] is False
     assert summary["detectors"] == ["school-native-test"]
     record = json.loads((tmp_path / "bridge_positions.jsonl").read_text(encoding="utf-8"))
-    assert record["engine_version"] == "bridge-vision-native-v1"
+    assert record["engine_version"] == "bridge-vision-native-v2"
     assert record["deal"]["hands"]["E"]["cards"] == []
     assert record["deal"]["hands"]["W"]["cards"] == []

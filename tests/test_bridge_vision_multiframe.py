@@ -64,6 +64,23 @@ def test_explicit_board_identity_can_link_without_card_overlap():
     assert result["deals"][0]["explicit_board_key"] == "board_id:17"
 
 
+def test_three_hands_shown_across_frames_derive_only_the_missing_fourth_hand():
+    ranks = "AKQJT98765432"
+    records = [
+        rec({"N": [f"{rank}S" for rank in ranks]}, frame="a.jpg", board_id="same-deal"),
+        rec({"E": [f"{rank}H" for rank in ranks]}, frame="b.jpg", board_id="same-deal"),
+        rec({"S": [f"{rank}D" for rank in ranks]}, frame="c.jpg", board_id="same-deal"),
+    ]
+    result = reconstruct_deals(records).to_dict()
+    assert result["deal_count"] == 1
+    reconstructed = result["deals"][0]
+    assert reconstructed["observed_card_count"] == 39
+    assert len(reconstructed["deal"]["hands"]["W"]["cards"]) == 13
+    derivation = reconstructed["deal"]["derivations"][0]
+    assert derivation["provenance_class"] == "DERIVED"
+    assert derivation["confidence"]["source_observation_floor"] is None
+
+
 def test_explicit_identity_may_disappear_when_card_evidence_is_strong():
     records = [
         rec({"N": ["AS", "KS", "QS", "JS"]}, frame="a.jpg", board_id="17"),

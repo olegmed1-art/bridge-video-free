@@ -22,12 +22,14 @@ from typing import Any
 
 import requests
 
+from .contract import CONTRACT_VERSION
 from .drive_adapter import DRIVE, access_token
 from .result_conformance import ResultConformanceError, verify_result
 
 UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
 FOLDER_MIME = "application/vnd.google-apps.folder"
-TOP_LEVEL_ALLOWLIST = frozenset({"manifest.json", "transcript.jsonl", "transcript.txt", "transcript_qc.json"})
+BASE_TOP_LEVEL_ALLOWLIST = frozenset({"manifest.json", "transcript.jsonl", "transcript.txt", "transcript_qc.json"})
+TOP_LEVEL_ALLOWLIST = BASE_TOP_LEVEL_ALLOWLIST | {"server_review.json"}
 FRAME_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 PUBLISHABLE_STATUSES = frozenset({"COMPLETED"})
 RAW_EXTENSIONS = frozenset({".mp4", ".mkv", ".mov", ".avi", ".webm", ".wav", ".mp3", ".m4a", ".flac"})
@@ -97,7 +99,9 @@ def collect_compact_artifacts(
         raise RuntimeError("result is not technical COMPLETED/publishable")
     if not all(str(manifest.get(key) or "").strip() for key in ("job_id", "job_hash", "profile")):
         raise RuntimeError("publishable manifest identity is incomplete")
-    required = TOP_LEVEL_ALLOWLIST
+    required = BASE_TOP_LEVEL_ALLOWLIST
+    if manifest.get("contract") == CONTRACT_VERSION:
+        required = TOP_LEVEL_ALLOWLIST
     missing = sorted(name for name in required if not (job_dir / name).exists())
     if missing:
         raise RuntimeError(f"required compact artifacts missing: {','.join(missing)}")
@@ -417,6 +421,7 @@ def publish_result(
         max_file_bytes=max_file_bytes,
         max_total_bytes=max_total_bytes,
         max_frames=max_frames,
+        require_server_review=True,
     )
     if conformance.get("artifact_set_sha256") != bundle_hash:
         raise RuntimeError("publication/conformance artifact inventory mismatch")
@@ -434,6 +439,8 @@ def publish_result(
         "local_conformance": "PASS",
         "domain_analysis_status": conformance.get("domain_analysis_status"),
         "pedagogical_status": conformance.get("pedagogical_status"),
+        "server_final_review_status": conformance.get("server_final_review_status"),
+        "review_item_count": conformance.get("review_item_count"),
         "raw_media_included": False,
     }
     if dry_run:
