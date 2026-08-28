@@ -68,7 +68,7 @@ WITH RECURSIVE walk(value,key_path) AS (
         'nhands','ehands','shands','whands',
         'fulldeal','hiddencards','actualpartnerhand',
         'actualopponenthand','actualopponenthands',
-        'partnercards','opponentcards','allhands'
+        'partnercards','opponentcards'
     ])
 ), forbidden AS (
     SELECT 1
@@ -117,11 +117,18 @@ WITH RECURSIVE walk(value,key_path) AS (
                         w.key_path[left_pos.i]='hidden'
                         AND w.key_path[right_pos.j]='cards'
                     )
-                    OR (
-                        w.key_path[left_pos.i]='all'
-                        AND w.key_path[right_pos.j] IN ('hand','hands')
-                    )
                )
+        )
+        OR (
+            jsonb_typeof(w.value) IN ('object','array')
+            AND (
+                w.key_path[cardinality(w.key_path)]='allhands'
+                OR (
+                    cardinality(w.key_path) >= 2
+                    AND w.key_path[cardinality(w.key_path)-1]='all'
+                    AND w.key_path[cardinality(w.key_path)] IN ('hand','hands')
+                )
+            )
         )
      LIMIT 1
 )
