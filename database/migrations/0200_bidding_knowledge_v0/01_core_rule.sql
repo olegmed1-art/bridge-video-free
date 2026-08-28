@@ -114,8 +114,7 @@ WITH RECURSIVE walk(value,key_path) AS (
                            w.key_path[path_start.i:path_end.j],''
                        ) = f.alias
                        OR (
-                           length(f.alias) >= 8
-                           AND EXISTS (
+                           EXISTS (
                                SELECT 1
                                  FROM (
                                      SELECT word FROM metric_word
@@ -244,25 +243,28 @@ WITH RECURSIVE walk(value,key_path) AS (
         )
         OR (
             jsonb_typeof(w.value)='object'
-            AND (
-                'hand'=ANY(w.key_path)
-                OR 'hands'=ANY(w.key_path)
-                OR 'allhands'=ANY(w.key_path)
-            )
             AND EXISTS (
                 SELECT 1
                   FROM jsonb_each(w.value) AS seat_field(key,value)
-                 WHERE lower(regexp_replace(seat_field.key,'[^a-z0-9]','','g'))
-                       IN ('seat','owner')
-                   AND jsonb_typeof(seat_field.value)='string'
+                 WHERE jsonb_typeof(seat_field.value)='string'
                    AND (
-                       upper(seat_field.value #>> '{}') IN (
-                           'N','E','S','W','NORTH','EAST','SOUTH','WEST'
-                       )
-                       OR (
+                       (
                            lower(regexp_replace(seat_field.key,'[^a-z0-9]','','g'))='owner'
                            AND lower(seat_field.value #>> '{}') IN (
                                'partner','opponent','opponents','other','others'
+                           )
+                       )
+                       OR (
+                           (
+                               'hand'=ANY(w.key_path)
+                               OR 'hands'=ANY(w.key_path)
+                               OR 'allhands'=ANY(w.key_path)
+                           )
+                           AND lower(regexp_replace(
+                               seat_field.key,'[^a-z0-9]','','g'
+                           )) IN ('seat','owner')
+                           AND upper(seat_field.value #>> '{}') IN (
+                               'N','E','S','W','NORTH','EAST','SOUTH','WEST'
                            )
                        )
                    )
