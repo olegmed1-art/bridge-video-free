@@ -199,6 +199,11 @@ AS $$
 DECLARE
     v_rule_id uuid;
 BEGIN
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'BID_EVIDENCE_MUTATION_REQUIRES_READ_COMMITTED'
+            USING ERRCODE='55000';
+    END IF;
+
     -- Lock the mutable test row before resolving its owner. A concurrent
     -- reassignment must commit first, so this trigger cannot cache a stale
     -- owner and then append evidence to a newly activated rule.
@@ -236,6 +241,11 @@ DECLARE
 BEGIN
     IF NEW.status <> 'open' THEN
         RETURN NEW;
+    END IF;
+
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'BID_EVIDENCE_MUTATION_REQUIRES_READ_COMMITTED'
+            USING ERRCODE='55000';
     END IF;
 
     IF TG_OP='UPDATE' THEN
@@ -277,6 +287,11 @@ AS $$
 DECLARE
     v_rule_id uuid;
 BEGIN
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'BID_DEFINITION_MUTATION_REQUIRES_READ_COMMITTED'
+            USING ERRCODE='55000';
+    END IF;
+
     IF TG_OP='DELETE' THEN
         v_rule_id := OLD.rule_id;
     ELSE
@@ -301,6 +316,11 @@ AS $$
 DECLARE
     v_rule_ids uuid[];
 BEGIN
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'BID_DEFINITION_MUTATION_REQUIRES_READ_COMMITTED'
+            USING ERRCODE='55000';
+    END IF;
+
     IF TG_OP='INSERT' THEN
         v_rule_ids := ARRAY[NEW.rule_id];
     ELSIF TG_OP='UPDATE' THEN
@@ -340,6 +360,11 @@ AS $$
 DECLARE
     v_rule_ids uuid[];
 BEGIN
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'BID_DEFINITION_MUTATION_REQUIRES_READ_COMMITTED'
+            USING ERRCODE='55000';
+    END IF;
+
     IF TG_OP='INSERT' THEN
         v_rule_ids := ARRAY[NEW.from_rule_id,NEW.to_rule_id];
     ELSIF TG_OP='UPDATE' THEN
