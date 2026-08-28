@@ -81,15 +81,42 @@ WITH RECURSIVE walk(value,key_path) AS (
            AND array_to_string(w.key_path[path_start.i:path_end.j],'')
                = ANY (SELECT alias FROM forbidden_alias)
      )
-        OR (
-            SELECT string_agg(p.segment,'' ORDER BY p.ordinality)
-              FROM unnest(w.key_path) WITH ORDINALITY AS p(segment,ordinality)
-             WHERE p.segment = ANY (ARRAY[
-                'actual','all','partner','opponent','opponents',
-                'north','east','south','west','n','e','s','w',
-                'hand','hands','cards','full','deal','hidden'
-             ])
-        ) = ANY (SELECT alias FROM forbidden_alias)
+        OR EXISTS (
+            SELECT 1
+              FROM generate_subscripts(w.key_path,1) AS left_pos(i)
+              CROSS JOIN generate_subscripts(w.key_path,1) AS right_pos(j)
+             WHERE left_pos.i < right_pos.j
+               AND (
+                    (
+                        w.key_path[left_pos.i] IN ('partner','opponent','opponents')
+                        AND w.key_path[right_pos.j] IN ('hand','hands','cards')
+                    )
+                    OR (
+                        w.key_path[left_pos.i] IN (
+                            'north','east','south','west','n','e','s','w'
+                        )
+                        AND w.key_path[right_pos.j] IN ('hand','hands')
+                    )
+                    OR (
+                        w.key_path[left_pos.i] IN ('hand','hands')
+                        AND w.key_path[right_pos.j] IN (
+                            'north','east','south','west','n','e','s','w'
+                        )
+                    )
+                    OR (
+                        w.key_path[left_pos.i]='full'
+                        AND w.key_path[right_pos.j]='deal'
+                    )
+                    OR (
+                        w.key_path[left_pos.i]='hidden'
+                        AND w.key_path[right_pos.j]='cards'
+                    )
+                    OR (
+                        w.key_path[left_pos.i]='all'
+                        AND w.key_path[right_pos.j] IN ('hand','hands')
+                    )
+               )
+        )
      LIMIT 1
 )
 SELECT EXISTS (SELECT 1 FROM forbidden);
