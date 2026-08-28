@@ -98,6 +98,10 @@ WITH RECURSIVE walk(value,key_path) AS (
         'diamond','diamonds','club','clubs','card','cards',
         'hand','hands','deal'
     ])
+), allowed_suffix(word) AS (
+    SELECT word FROM metric_word
+    UNION ALL
+    SELECT word FROM sensitive_suffix
 ), forbidden AS (
     SELECT 1
       FROM walk AS w
@@ -114,16 +118,16 @@ WITH RECURSIVE walk(value,key_path) AS (
                            w.key_path[path_start.i:path_end.j],''
                        ) = f.alias
                        OR (
-                           EXISTS (
-                               SELECT 1
-                                 FROM (
-                                     SELECT word FROM metric_word
-                                     UNION ALL
-                                     SELECT word FROM sensitive_suffix
-                                 ) AS suffix
-                                WHERE array_to_string(
-                                          w.key_path[path_start.i:path_end.j],''
-                                      ) = f.alias || suffix.word
+                           array_to_string(
+                               w.key_path[path_start.i:path_end.j],''
+                           ) LIKE f.alias || '%'
+                           AND substring(
+                               array_to_string(
+                                   w.key_path[path_start.i:path_end.j],''
+                               ) FROM length(f.alias)+1
+                           ) ~ (
+                               SELECT '^(' || string_agg(word,'|') || ')+$'
+                                 FROM allowed_suffix
                            )
                        )
                  )
@@ -249,7 +253,7 @@ WITH RECURSIVE walk(value,key_path) AS (
                  WHERE jsonb_typeof(seat_field.value)='string'
                    AND (
                        (
-                           lower(regexp_replace(seat_field.key,'[^a-z0-9]','','g'))='owner'
+                           regexp_replace(lower(seat_field.key),'[^a-z0-9]','','g')='owner'
                            AND lower(seat_field.value #>> '{}') IN (
                                'partner','opponent','opponents','other','others'
                            )
@@ -260,9 +264,9 @@ WITH RECURSIVE walk(value,key_path) AS (
                                OR 'hands'=ANY(w.key_path)
                                OR 'allhands'=ANY(w.key_path)
                            )
-                           AND lower(regexp_replace(
-                               seat_field.key,'[^a-z0-9]','','g'
-                           )) IN ('seat','owner')
+                           AND regexp_replace(
+                               lower(seat_field.key),'[^a-z0-9]','','g'
+                           ) IN ('seat','owner')
                            AND upper(seat_field.value #>> '{}') IN (
                                'N','E','S','W','NORTH','EAST','SOUTH','WEST'
                            )
@@ -272,7 +276,7 @@ WITH RECURSIVE walk(value,key_path) AS (
             AND EXISTS (
                 SELECT 1
                   FROM jsonb_each(w.value) AS cards_field(key,value)
-                 WHERE lower(regexp_replace(cards_field.key,'[^a-z0-9]','','g'))
+                 WHERE regexp_replace(lower(cards_field.key),'[^a-z0-9]','','g')
                        IN ('card','cards')
                    AND jsonb_typeof(cards_field.value) <> 'null'
             )
