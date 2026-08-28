@@ -7,6 +7,15 @@ on:
       - "tests/test_school_systems_drive_inventory.py"
       - ".github/workflows/school-systems-steward-drive-audit.yml"
       - "universal_video/drive_adapter.py"
+  push:
+    branches:
+      - main
+    paths:
+      - "steward/**"
+      - ".github/workflows/school-systems-steward-drive-audit.yml"
+      - "universal_video/drive_adapter.py"
+  schedule:
+    - cron: "23 2 * * 1"
   workflow_dispatch:
     inputs:
       root_folder_id:
@@ -50,12 +59,14 @@ jobs:
         run: python -m py_compile steward/__init__.py steward/drive_inventory.py
 
   drive-audit:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name != 'pull_request'
     needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+      INPUT_ROOT_FOLDER_ID: ${{ inputs.root_folder_id }}
+      INPUT_ROOT_NAME: ${{ inputs.root_name }}
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -82,20 +93,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          root_id="${INPUT_ROOT_FOLDER_ID:-1uzpcT49YcV34gcv_Jo2U86a9qHUuqPpj}"
+          root_name="${INPUT_ROOT_NAME:-Школа спортивного бриджа}"
+          if [[ "$root_id" == *$'\n'* || "$root_name" == *$'\n'* ]]; then
+            echo "SCHOOL_STEWARD_DRIVE_AUDIT_FAIL code=INPUT_NEWLINE_FORBIDDEN" >&2
+            exit 1
+          fi
           out="$RUNNER_TEMP/school-steward-drive-${GITHUB_RUN_ID}"
           mkdir -p "$out"
           python -m steward.drive_inventory \
-            --root-folder-id "${{ inputs.root_folder_id }}" \
-            --root-name "${{ inputs.root_name }}" \
+            --root-folder-id "$root_id" \
+            --root-name "$root_name" \
             --output-dir "$out"
           echo "output_dir=$out" >> "$GITHUB_OUTPUT"
+          echo "root_folder_id=$root_id" >> "$GITHUB_OUTPUT"
 
       - name: Validate complete manifest boundary
         shell: bash
         run: |
           set -euo pipefail
           manifest="${{ steps.inventory.outputs.output_dir }}/drive-inventory.json"
-          python - "$manifest" "${{ inputs.root_folder_id }}" <<'PY'
+          python - "$manifest" "${{ steps.inventory.outputs.root_folder_id }}" <<'PY'
           import json
           import re
           import sys
