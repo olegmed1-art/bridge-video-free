@@ -34,6 +34,7 @@ def public_members(value: Any) -> dict[str, dict[str, object]]:
         member = getattr(value, name)
         result[name] = {
             "callable": callable(member),
+            "is_coroutine_function": inspect.iscoroutinefunction(member),
             "signature": safe_signature(member),
             "type": type(member).__name__,
         }
@@ -53,6 +54,9 @@ def main() -> None:
         "module.Run": hasattr(workflow, "Run"),
         "module.sleep": callable(getattr(workflow, "sleep", None)),
         "module.start": callable(getattr(workflow, "start", None)),
+        "module.start_async": inspect.iscoroutinefunction(
+            getattr(workflow, "start", None)
+        ),
         "registry.workflow": callable(getattr(wf, "workflow", None)),
         "registry.step": callable(getattr(wf, "step", None)),
         "hook.wait": callable(getattr(ShadowSignal, "wait", None)),
@@ -75,6 +79,7 @@ def main() -> None:
                     {
                         "owner": owner_name,
                         "name": name,
+                        "is_coroutine_function": inspect.iscoroutinefunction(candidate),
                         "signature": safe_signature(candidate),
                     }
                 )
