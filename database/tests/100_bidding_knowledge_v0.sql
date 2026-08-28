@@ -59,6 +59,16 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_PUBLIC_CARD_ERRORS_FALSE_POSITIVE';
     END IF;
     IF bidding.contains_forbidden_hidden_key(
+        '{"opponentHandicap":7,"partnerHandshake":"complete"}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_PUBLIC_LONG_ALIAS_PREFIX_FALSE_POSITIVE';
+    END IF;
+    IF bidding.contains_forbidden_hidden_key(
+        '{"allhandscount":12}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_PUBLIC_COMPACT_ALL_HANDS_METRIC_FALSE_POSITIVE';
+    END IF;
+    IF bidding.contains_forbidden_hidden_key(
         '{"opponent":{"cardsPlayed":26}}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_PUBLIC_OPPONENT_CARDS_METRIC_FALSE_POSITIVE';
@@ -134,6 +144,11 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_HIDDEN_ALL_HANDS_METRIC_ARRAY_NOT_BLOCKED';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
+        '{"allhandscount":[["AS"],["KS"]],"allhandsplayed":"N:AKQ E:JT9"}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_ALL_HANDS_SUFFIX_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
         '{"eastcards":["AS"],"cardseast":["KS"],"ECards":["QS"]}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_SEAT_CARDS_NOT_BLOCKED';
@@ -152,6 +167,11 @@ BEGIN
         '{"hands":[{"owner":"other","cards":["AS"]}]}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_OWNER_VALUE_RECORD_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"hands":[{"owner":"east","cards":["AS"]},{"seat":"West","card":"KS"}]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_FULL_COMPASS_VALUE_RECORD_NOT_BLOCKED';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
         '{"discount":{"partnerCard":14}}'::jsonb
