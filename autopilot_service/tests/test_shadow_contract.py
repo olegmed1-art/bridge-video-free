@@ -8,17 +8,20 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 from pydantic import ValidationError
+from vercel import workflow
 
-from app.main import _require_shadow_authorization, healthz
-from app.workflow import wf
-from app.workflows import ShadowSignal, shadow_wait_workflow
+from autopilot_app.main import _require_shadow_authorization, healthz
+from autopilot_app.workflow import wf
+from autopilot_app.workflows import ShadowSignal, shadow_wait_workflow
 
 
 class ShadowContractTests(unittest.TestCase):
     def test_registry_exposes_documented_decorators(self) -> None:
         self.assertTrue(callable(getattr(wf, "workflow", None)))
         self.assertTrue(callable(getattr(wf, "step", None)))
-        self.assertTrue(callable(shadow_wait_workflow))
+        self.assertTrue(callable(getattr(workflow, "start", None)))
+        self.assertFalse(callable(shadow_wait_workflow))
+        self.assertTrue(bool(getattr(shadow_wait_workflow, "workflow_id", "")))
 
     def test_signal_schema_is_bounded(self) -> None:
         signal = ShadowSignal(
@@ -68,7 +71,8 @@ class ShadowContractTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         pyproject = (root / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIn('"vercel==0.10.0"', pyproject)
-        self.assertIn('entrypoint = "app.workflows:wf"', pyproject)
+        self.assertIn('entrypoint = "autopilot_app.workflows:wf"', pyproject)
+        self.assertIn('packages = ["autopilot_app"]', pyproject)
 
 
 if __name__ == "__main__":
