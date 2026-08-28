@@ -104,7 +104,7 @@ jobs:
             fi
           }
           trap cleanup EXIT
-          restored="$(oci bv boot-volume create --source-boot-volume-backup-id "$backup_id" --availability-domain "$ad" --compartment-id "$tenancy_id" --display-name "$drill_name" --wait-for-state AVAILABLE --max-wait-seconds 3600 --output json)"
+          restored="$(oci bv boot-volume create --boot-volume-backup-id "$backup_id" --availability-domain "$ad" --compartment-id "$tenancy_id" --display-name "$drill_name" --wait-for-state AVAILABLE --max-wait-seconds 3600 --output json)"
           restored_id="$(printf '%s' "$restored" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
           restored_state="$(oci bv boot-volume get --boot-volume-id "$restored_id" --query 'data."lifecycle-state"' --raw-output)"
           restored_size="$(oci bv boot-volume get --boot-volume-id "$restored_id" --query 'data."size-in-gbs"' --raw-output)"
