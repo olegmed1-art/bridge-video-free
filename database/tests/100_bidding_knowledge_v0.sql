@@ -21,6 +21,7 @@ DECLARE
     v_other_item uuid;
     v_other_version uuid;
     v_gap uuid;
+    v_conflict uuid;
     v_failed boolean;
     v_count integer;
 BEGIN
@@ -205,6 +206,20 @@ BEGIN
 
     v_failed := false;
     BEGIN
+        INSERT INTO bidding.decision_trace(
+            school_id,decision_key,request_fingerprint,acting_seat,acting_hand,
+            public_auction,public_context,scope_key,outcome,explanation,resolver_version
+        ) VALUES (
+            v_school,'ci-hidden-alias-decision','ci-hidden-alias-fingerprint','N',
+            '{"partnerHand":{"cards":["AS"]}}'::jsonb,
+            '{"calls":[]}'::jsonb,'{}'::jsonb,'ci','no_action','{}'::jsonb,'ci-resolver-v0'
+        );
+    EXCEPTION WHEN check_violation THEN v_failed := true;
+    END;
+    IF NOT v_failed THEN RAISE EXCEPTION 'SMOKE_HIDDEN_KEY_ALIAS_NOT_BLOCKED'; END IF;
+
+    v_failed := false;
+    BEGIN
         UPDATE bidding.decision_trace SET explanation='{}'::jsonb
          WHERE school_id=v_school AND decision_key='ci-decision';
     EXCEPTION WHEN object_not_in_prerequisite_state THEN v_failed := true;
@@ -322,6 +337,48 @@ BEGIN
 
     SELECT count(*) INTO v_count FROM bidding.get_research_rule_catalog(v_school,'ci',true);
     IF v_count <> 2 THEN RAISE EXCEPTION 'SMOKE_RESEARCH_CATALOG_COUNT_%',v_count; END IF;
+
+    INSERT INTO bidding.rule_conflict(
+        school_id,left_rule_id,right_rule_id,conflict_type,evidence_ids,status,resolved_at
+    ) VALUES (
+        v_school,v_rule,v_external_rule,'overlap','{}'::uuid[],'resolved',now()
+    ) RETURNING rule_conflict_id INTO v_conflict;
+
+    v_failed := false;
+    BEGIN
+        UPDATE bidding.rule_conflict
+           SET evidence_ids=ARRAY[v_other_evidence]
+         WHERE rule_conflict_id=v_conflict;
+    EXCEPTION WHEN check_violation THEN v_failed := true;
+    END;
+    IF NOT v_failed THEN RAISE EXCEPTION 'SMOKE_CONFLICT_EVIDENCE_UPDATE_SCOPE_NOT_BLOCKED'; END IF;
+
+    UPDATE bidding.runtime_activation
+       SET status='revoked'
+     WHERE runtime_activation_id=v_runtime_activation;
+
+    INSERT INTO bidding.runtime_activation(
+        school_id,rule_id,authority_lane,canon_activation_id,scope_key,valid_from,status
+    ) VALUES (
+        v_school,v_rule,'school_canon',v_canon_activation,'ci',now()+interval '1 day','active'
+    ) RETURNING runtime_activation_id INTO v_runtime_activation;
+
+    v_failed := false;
+    BEGIN
+        UPDATE bidding.rule SET priority=priority+1 WHERE rule_id=v_rule;
+    EXCEPTION WHEN object_not_in_prerequisite_state THEN v_failed := true;
+    END;
+    IF NOT v_failed THEN RAISE EXCEPTION 'SMOKE_SCHEDULED_RULE_MUTATION_NOT_BLOCKED'; END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pg_constraint
+         WHERE conname='bidding_runtime_activation_active_no_overlap'
+           AND conrelid='bidding.runtime_activation'::regclass
+           AND contype='x'
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_ACTIVATION_EXCLUSION_CONSTRAINT_MISSING';
+    END IF;
 
     INSERT INTO public.knowledge_item(
         school_id,stable_key,knowledge_type,title,status
