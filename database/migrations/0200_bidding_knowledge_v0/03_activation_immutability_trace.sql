@@ -213,14 +213,29 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_rule_id uuid;
+    v_rule_ids uuid[];
 BEGIN
-    IF TG_OP='DELETE' THEN v_rule_id := OLD.rule_id; ELSE v_rule_id := NEW.rule_id; END IF;
+    IF TG_OP='INSERT' THEN
+        v_rule_ids := ARRAY[NEW.rule_id];
+    ELSIF TG_OP='UPDATE' THEN
+        v_rule_ids := ARRAY[OLD.rule_id,NEW.rule_id];
+    ELSE
+        v_rule_ids := ARRAY[OLD.rule_id];
+    END IF;
+
+    -- Lock both the old and new owners for reassignment updates. Deterministic
+    -- ordering prevents deadlocks when two rules are involved.
     PERFORM 1
       FROM bidding.rule
-     WHERE rule_id=v_rule_id
+     WHERE rule_id=ANY(v_rule_ids)
+     ORDER BY rule_id
      FOR UPDATE;
-    IF bidding.rule_is_currently_active(v_rule_id) THEN
+
+    IF EXISTS (
+        SELECT 1
+          FROM unnest(v_rule_ids) AS x(rule_id)
+         WHERE bidding.rule_is_currently_active(x.rule_id)
+    ) THEN
         RAISE EXCEPTION 'BID_ACTIVE_RULE_TEST_IMMUTABLE' USING ERRCODE='55000';
     END IF;
     IF TG_OP='DELETE' THEN RETURN OLD; END IF;
@@ -237,21 +252,32 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_from_rule uuid;
-    v_to_rule uuid;
+    v_rule_ids uuid[];
 BEGIN
-    IF TG_OP='DELETE' THEN
-        v_from_rule := OLD.from_rule_id; v_to_rule := OLD.to_rule_id;
+    IF TG_OP='INSERT' THEN
+        v_rule_ids := ARRAY[NEW.from_rule_id,NEW.to_rule_id];
+    ELSIF TG_OP='UPDATE' THEN
+        v_rule_ids := ARRAY[
+            OLD.from_rule_id,OLD.to_rule_id,
+            NEW.from_rule_id,NEW.to_rule_id
+        ];
     ELSE
-        v_from_rule := NEW.from_rule_id; v_to_rule := NEW.to_rule_id;
+        v_rule_ids := ARRAY[OLD.from_rule_id,OLD.to_rule_id];
     END IF;
+
+    -- Relation reassignment must serialize with activations of every old and
+    -- new endpoint, not only the post-update owners.
     PERFORM 1
       FROM bidding.rule
-     WHERE rule_id IN (v_from_rule,v_to_rule)
+     WHERE rule_id=ANY(v_rule_ids)
      ORDER BY rule_id
      FOR UPDATE;
-    IF bidding.rule_is_currently_active(v_from_rule)
-       OR bidding.rule_is_currently_active(v_to_rule) THEN
+
+    IF EXISTS (
+        SELECT 1
+          FROM unnest(v_rule_ids) AS x(rule_id)
+         WHERE bidding.rule_is_currently_active(x.rule_id)
+    ) THEN
         RAISE EXCEPTION 'BID_ACTIVE_RULE_RELATION_IMMUTABLE' USING ERRCODE='55000';
     END IF;
     IF TG_OP='DELETE' THEN RETURN OLD; END IF;
