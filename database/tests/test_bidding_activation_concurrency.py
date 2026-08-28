@@ -161,6 +161,73 @@ def main() -> None:
             ).fetchone()[0]
             if count != 1:
                 raise AssertionError(f"Expected one committed activation, got {count}")
+
+            verify.execute(
+                """
+                UPDATE bidding.runtime_activation AS ra
+                   SET status='revoked'
+                  FROM bidding.rule AS r
+                 WHERE r.rule_id=ra.rule_id
+                   AND r.rule_key='ci.activation.concurrent'
+                   AND ra.status='active'
+                """
+            )
+
+        scheduler = psycopg.connect(DATABASE_URL)
+        mutation_started = threading.Event()
+        mutation_finished = threading.Event()
+        mutation_sqlstate: list[str | None] = []
+
+        try:
+            scheduler.execute(
+                INSERT_SQL,
+                ("5 hours", "7 hours", '{"runner":"scheduler"}'),
+            )
+
+            def mutate_scheduled_rule() -> None:
+                with psycopg.connect(DATABASE_URL) as mutator:
+                    mutation_started.set()
+                    try:
+                        mutator.execute(
+                            """
+                            UPDATE bidding.rule
+                               SET priority=priority+1
+                             WHERE rule_key='ci.activation.concurrent'
+                            """
+                        )
+                        mutator.commit()
+                        mutation_sqlstate.append(None)
+                    except psycopg.Error as exc:
+                        mutator.rollback()
+                        mutation_sqlstate.append(exc.sqlstate)
+                    finally:
+                        mutation_finished.set()
+
+            mutation_thread = threading.Thread(
+                target=mutate_scheduled_rule,
+                daemon=True,
+            )
+            mutation_thread.start()
+            if not mutation_started.wait(timeout=5):
+                raise AssertionError("Concurrent rule mutation did not start")
+            if mutation_finished.wait(timeout=1):
+                raise AssertionError(
+                    "Rule mutation did not wait on the uncommitted activation lock"
+                )
+
+            scheduler.commit()
+            mutation_thread.join(timeout=10)
+            if mutation_thread.is_alive():
+                raise AssertionError(
+                    "Rule mutation did not finish after scheduled activation commit"
+                )
+            if mutation_sqlstate != ["55000"]:
+                raise AssertionError(
+                    "Expected active-rule immutability SQLSTATE 55000, "
+                    f"got {mutation_sqlstate!r}"
+                )
+        finally:
+            scheduler.close()
     finally:
         first.close()
 
