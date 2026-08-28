@@ -109,6 +109,14 @@ BEGIN
         RETURN NEW;
     END IF;
 
+    -- Evidence gates must observe commits made while waiting for the shared
+    -- rule lock. A REPEATABLE READ/SERIALIZABLE snapshot can remain stale
+    -- after that wait, so activation is fail-closed outside READ COMMITTED.
+    IF current_setting('transaction_isolation') <> 'read committed' THEN
+        RAISE EXCEPTION 'BID_ACTIVATION_REQUIRES_READ_COMMITTED'
+            USING ERRCODE='55000';
+    END IF;
+
     -- Shared row-lock protocol: activation and every mutable rule-dependent
     -- definition serialize on the owning bidding.rule row.
     PERFORM 1
