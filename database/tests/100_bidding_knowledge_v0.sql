@@ -178,10 +178,20 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_NUMERIC_ALL_HANDS_SENSITIVE_NOT_BLOCKED';
     END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"allHandsHolding":123456789}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_SPLIT_NUMERIC_ALL_HANDS_NOT_BLOCKED';
+    END IF;
     IF bidding.contains_forbidden_hidden_key(
         '{"allhandscounttotal":52}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_PUBLIC_NUMERIC_ALL_HANDS_METRIC_FALSE_POSITIVE';
+    END IF;
+    IF bidding.contains_forbidden_hidden_key(
+        '{"allHandsCountTotal":52}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_PUBLIC_SPLIT_ALL_HANDS_METRIC_FALSE_POSITIVE';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
         '{"eastcards":["AS"],"cardseast":["KS"],"ECards":["QS"]}'::jsonb
@@ -237,6 +247,16 @@ BEGIN
         '{"handsPlayed":{"bySeat":{"partnerHcp":10}}}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_REVERSE_METRIC_SUFFIX_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"handsPlayed":{"holding":{"bySeat":{"partner":123456}}}}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_REVERSE_INTERMEDIATE_SUFFIX_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"handsPlayed":{"bySeat":{"partnerhcp":10}}}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_OWNER_SUFFIX_NOT_BLOCKED';
     END IF;
     IF bidding.contains_forbidden_hidden_key(
         '{"seat":"N","cards":["AS"]}'::jsonb
