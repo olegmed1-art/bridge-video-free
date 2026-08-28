@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "registry_status": "ACTIVE_PARTIAL_INVENTORY",
-  "last_verified_at": "2026-08-26",
+  "last_verified_at": "2026-08-28",
   "primary_tracker_repository": "olegmed1-art/bridge-video-free",
   "value_portfolio": [
     {
@@ -67,6 +67,44 @@
       ],
       "tracker": "https://github.com/olegmed1-art/bridge-video-free/issues/609",
       "project_state": "docs/research/bidding-engine/PROJECT_STATE.md"
+    },
+    {
+      "portfolio_id": "SCHOOL-AUTOPILOT-CONTROLLER-V1",
+      "title": "School Autopilot Controller v1",
+      "work_class": "STRATEGIC",
+      "urgency": "HIGH",
+      "strategic_rank": "S1",
+      "governance_mode": "ASSURED",
+      "status": "ACTIVE_DISCOVERY",
+      "problem_statement": "External waits currently end an ordinary ChatGPT turn and force the school director to act as a manual scheduler by repeatedly sending continuation commands without making a substantive decision.",
+      "benefit_hypothesis": "A durable event-driven controller using the existing Vercel, Neon, GitHub and Oracle stack will continue eligible technical tasks to factual completion or a real owner boundary while reducing model turns and director intervention.",
+      "target_users": [
+        "school_director",
+        "ai_management_system",
+        "school_technical_services"
+      ],
+      "expected_capability": "Durable bounded task execution across external waits with canonical state, evidence, cost controls and explicit owner boundaries.",
+      "success_metrics": [
+        "director_continuation_commands_per_eligible_task_reduce_by_80_percent",
+        "eligible_external_waits_resume_without_director_action_at_least_95_percent",
+        "duplicate_external_side_effects_equal_zero",
+        "model_free_state_transitions_exceed_80_percent",
+        "every_done_task_has_retained_acceptance_evidence"
+      ],
+      "baseline": "Chat-driven technical work commonly stops after one step or an external wait and requires another director message.",
+      "target": "One command advances a bounded task until DONE, OWNER_REQUIRED, FAILED_CLOSED, BUDGET_STOP or CANCELLED.",
+      "cost_boundary": "No new fixed subscription; reuse existing Vercel Pro, Neon, GitHub and Oracle; OpenAI API pilot hard cap USD 20.",
+      "benefit_review_date": "2026-09-11",
+      "full_review_date": "2026-10-01",
+      "kill_criteria": [
+        "autopilot_increases_director_scheduler_work",
+        "duplicate_or_untraceable_mutation_occurs",
+        "task_state_cannot_be_recovered_without_chat_or_live_workflow_memory",
+        "arbitrary_shell_or_model_invented_capability_becomes_required",
+        "cost_cannot_be_bounded_before_execution"
+      ],
+      "tracker": "https://github.com/olegmed1-art/bridge-video-free/issues/782",
+      "project_state": "ops/autopilot/project-state.json"
     }
   ],
   "service_portfolio": [

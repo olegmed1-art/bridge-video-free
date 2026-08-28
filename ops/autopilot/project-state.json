@@ -1,0 +1,109 @@
+{
+  "schema_version": "1.0",
+  "project_id": "SCHOOL-AUTOPILOT-CONTROLLER-V1",
+  "title": "School Autopilot Controller v1",
+  "decision": "BUILD_VARIANT_2",
+  "status": "APPROVED_DESIGN_NOT_ACTIVATED",
+  "governance_mode": "ASSURED",
+  "work_class": "STRATEGIC",
+  "urgency": "HIGH",
+  "strategic_rank": "S1",
+  "approved_at": "2026-08-28",
+  "tracker": "https://github.com/olegmed1-art/bridge-video-free/issues/782",
+  "architecture": "docs/architecture/SCHOOL_AUTOPILOT_CONTROLLER_V1.md",
+  "target_capability": "Continue bounded technical tasks through external waits without repeated director continuation commands.",
+  "stack": {
+    "orchestrator": "Vercel Workflows",
+    "canonical_state": "Neon Postgres",
+    "code_ci_evidence": "GitHub",
+    "heavy_compute": "Oracle Frankfurt",
+    "source_archive": "Google Drive",
+    "reasoning": "OpenAI Responses API and Agents SDK"
+  },
+  "deployment": {
+    "vercel_team_plan": "pro_existing",
+    "target_project": "separate_project_same_team",
+    "target_root_directory": "autopilot_service/",
+    "production_activated": false,
+    "shadow_only": true
+  },
+  "phase": {
+    "current": "PHASE_0_DESIGN",
+    "ordered": [
+      "PHASE_0_DESIGN",
+      "PHASE_1_SHADOW",
+      "PHASE_2_BOUNDED_WRITE",
+      "PHASE_3_CONTROLLED_PRODUCTION",
+      "PHASE_4_SCALE"
+    ]
+  },
+  "canonical_task_states": [
+    "NEW",
+    "VALIDATING",
+    "READY",
+    "RUNNING",
+    "WAITING_EXTERNAL",
+    "EVALUATING",
+    "OWNER_REQUIRED",
+    "FAILED_CLOSED",
+    "BUDGET_STOP",
+    "DONE",
+    "CANCELLED"
+  ],
+  "terminal_states": [
+    "OWNER_REQUIRED",
+    "FAILED_CLOSED",
+    "BUDGET_STOP",
+    "DONE",
+    "CANCELLED"
+  ],
+  "pilot_budget": {
+    "new_fixed_monthly_subscription_usd": 0,
+    "openai_api_global_cap_usd": 20,
+    "default_shadow_task_cap_usd": 0.5,
+    "increase_requires_director": true
+  },
+  "promotion_blocks": [
+    "main_branch_protection_not_proven",
+    "python_vercel_workflows_compatibility_not_proven",
+    "autopilot_schema_not_tested_on_temporary_neon_branch",
+    "shadow_wait_resume_dedupe_not_proven",
+    "independent_assurance_i2_not_proven"
+  ],
+  "safety_invariants": [
+    "no_arbitrary_shell",
+    "no_capability_invented_by_model",
+    "all_mutations_idempotent",
+    "bounded_retries",
+    "no_auto_merge_while_main_unprotected",
+    "no_production_migration_without_temporary_branch_gate",
+    "no_bridge_canon_semantic_mutation_without_director",
+    "no_secret_or_unbounded_raw_log_in_task_state",
+    "deterministic_transitions_do_not_call_model",
+    "done_requires_retained_acceptance_evidence"
+  ],
+  "phase_1_pilots": [
+    {
+      "id": "PILOT-A-DURABLE-HOOK",
+      "mode": "synthetic_signed_shadow",
+      "production_mutation": false
+    },
+    {
+      "id": "PILOT-B-GITHUB-WAIT",
+      "mode": "real_public_read_only",
+      "production_mutation": false
+    },
+    {
+      "id": "PILOT-C-OWNER-BOUNDARY",
+      "mode": "synthetic_policy_test",
+      "production_mutation": false
+    }
+  ],
+  "next_actions": [
+    "merge_phase_0_design_after_checks",
+    "reserve_and_enforce_database_namespace_0300_0399",
+    "run_python_vercel_workflows_compatibility_spike",
+    "prepare_autopilot_schema_on_temporary_neon_branch",
+    "implement_shadow_pilots"
+  ]
+}

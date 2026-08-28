@@ -27,7 +27,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Enforce reserved Club/Identity ranges
+      - name: Enforce reserved migration and SQL-test ranges
         shell: bash
         run: |
           set -euo pipefail
@@ -45,6 +45,18 @@ jobs:
             esac
           done
 
+          for path in database/migrations/03??_*.sql; do
+            base="$(basename "$path" .sql)"
+            suffix="${base#*_}"
+            case "$suffix" in
+              autopilot_*|workflow_*) ;;
+              *)
+                echo "Reserved migration range 0300-0399 is School Autopilot/Workflow only: $path" >&2
+                exit 1
+                ;;
+            esac
+          done
+
           for path in database/tests/09?_*.sql; do
             base="$(basename "$path" .sql)"
             suffix="${base#*_}"
@@ -52,6 +64,18 @@ jobs:
               identity_*|club_*|member_*|auth_*) ;;
               *)
                 echo "Reserved SQL-test range 090-099 is Club/Member/Identity/Auth only: $path" >&2
+                exit 1
+                ;;
+            esac
+          done
+
+          for path in database/tests/30?_*.sql database/tests/31?_*.sql database/tests/32?_*.sql; do
+            base="$(basename "$path" .sql)"
+            suffix="${base#*_}"
+            case "$suffix" in
+              autopilot_*|workflow_*) ;;
+              *)
+                echo "Reserved SQL-test range 300-329 is School Autopilot/Workflow only: $path" >&2
                 exit 1
                 ;;
             esac
