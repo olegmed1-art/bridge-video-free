@@ -226,6 +226,26 @@ def assert_repeatable_read_activation_fails() -> None:
             raise AssertionError("REPEATABLE READ activation was not rejected")
 
 
+def assert_repeatable_read_mutation_fails(label: str, mutation_sql: str) -> None:
+    with psycopg.connect(DATABASE_URL) as isolated:
+        isolated.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+        isolated.execute("SELECT 1")  # Establish the transaction snapshot.
+        try:
+            isolated.execute(mutation_sql)
+        except psycopg.Error as exc:
+            isolated.rollback()
+            if exc.sqlstate != "55000":
+                raise AssertionError(
+                    f"Expected REPEATABLE READ {label} SQLSTATE 55000, "
+                    f"got {exc.sqlstate!r}"
+                ) from exc
+        else:
+            isolated.rollback()
+            raise AssertionError(
+                f"REPEATABLE READ {label} mutation was not rejected"
+            )
+
+
 def main() -> None:
     with psycopg.connect(DATABASE_URL) as setup_conn:
         setup_conn.execute(SETUP_SQL)
@@ -483,6 +503,34 @@ def main() -> None:
             """,
         )
         assert_repeatable_read_activation_fails()
+        assert_repeatable_read_mutation_fails(
+            "test-run evidence",
+            """
+            INSERT INTO bidding.rule_test_run(
+                school_id,rule_test_id,result,result_details,method_version
+            )
+            SELECT r.school_id,t.rule_test_id,'fail','{"rr":true}'::jsonb,
+                   'ci-concurrency-v1'
+              FROM bidding.rule AS r
+              JOIN bidding.rule_test AS t ON t.rule_id=r.rule_id
+             WHERE r.rule_key='ci.activation.concurrent'
+               AND t.test_key='positive'
+            """,
+        )
+        assert_repeatable_read_mutation_fails(
+            "open-conflict evidence",
+            """
+            INSERT INTO bidding.rule_conflict(
+                school_id,left_rule_id,right_rule_id,conflict_type,status
+            )
+            SELECT source.school_id,source.rule_id,target.rule_id,
+                   'contradiction','open'
+              FROM bidding.rule AS source
+              JOIN bidding.rule AS target
+                ON target.rule_key='ci.activation.inactive-target'
+             WHERE source.rule_key='ci.activation.concurrent'
+            """,
+        )
     finally:
         first.close()
 
