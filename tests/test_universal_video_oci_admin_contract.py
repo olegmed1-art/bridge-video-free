@@ -4,6 +4,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ENTRY = (ROOT / "ops/universal_video_oci_admin_entrypoint.sh").read_text(encoding="utf-8")
 INSTALL = (ROOT / "ops/install_universal_video_ocarun_admin.sh").read_text(encoding="utf-8")
 CLOUD = (ROOT / "ops/cloud_shell_install_bounded_oci_admin.sh").read_text(encoding="utf-8")
+VIDEO_CLOUD = (ROOT / "ops/cloud_shell_install_universal_video_bounded_admin.sh").read_text(encoding="utf-8")
 WORKFLOW = (ROOT / ".github/workflows/oracle-universal-video-admin.yml").read_text(encoding="utf-8")
 
 
@@ -110,3 +111,12 @@ def test_workflow_does_not_publish_raw_remote_output_or_oauth_values():
     assert "client_secret" not in WORKFLOW
     assert "refresh_token" not in WORKFLOW
     assert "GOOGLE_DRIVE_OAUTH_JSON" not in WORKFLOW
+
+
+def test_video_only_cloud_bootstrap_does_not_depend_on_assistant_lab_audit():
+    assert "ops/install_universal_video_ocarun_admin.sh" in VIDEO_CLOUD
+    assert "install_assistant_lab_ocarun_admin.sh" not in VIDEO_CLOUD
+    assert "assistant-lab-oci-admin" not in VIDEO_CLOUD
+    assert "ORACLE_UNIVERSAL_VIDEO_BOUNDED_ADMIN_BOOTSTRAP_PASS" in VIDEO_CLOUD
+    assert "SOURCE_COMMIT='$BOOTSTRAP_COMMIT'" in VIDEO_CLOUD
+    assert "cmp -s \"$actual\" \"$expected\"" in VIDEO_CLOUD
