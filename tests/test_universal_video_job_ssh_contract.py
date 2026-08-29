@@ -34,7 +34,7 @@ def test_job_invokes_only_fixed_resident_admin_surfaces():
     assert "oci instance-agent command" not in WORKFLOW
     assert "--execution-user" not in WORKFLOW
     assert "repair_cmd='sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video-spool-repair'" in WORKFLOW
-    assert 'submit_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video submit-base64 \'$payload\'"' in WORKFLOW
+    assert 'submit_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video submit-drive-base64 \'$payload\'"' in WORKFLOW
     assert 'status_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video status \'$JOB_ID\'"' in WORKFLOW
     assert 'run_remote "$repair_cmd"' in WORKFLOW
     assert 'run_remote "$submit_cmd"' in WORKFLOW
@@ -50,7 +50,7 @@ def test_job_payload_binds_request_and_requested_runtime_for_resident_attestatio
 def test_operator_and_admin_sudoers_ownership_cannot_collide():
     assert "readonly SUDOERS='/etc/sudoers.d/universal-video-operator-ocarun'" in OPERATOR_INSTALL
     assert "readonly SUDOERS='/etc/sudoers.d/universal-video-admin-ocarun'" in ADMIN_INSTALL
-    assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video submit-base64 *" in OPERATOR_INSTALL
+    assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video submit-drive-base64 *" in OPERATOR_INSTALL
     assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video status *" in OPERATOR_INSTALL
     assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-spool-repair" in ADMIN_INSTALL
     assert "/etc/sudoers.d/universal-video-ocarun'" not in OPERATOR_INSTALL

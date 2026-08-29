@@ -14,7 +14,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .contract import MAX_JOB_BYTES, VideoContractError, canonical_job_hash, validate_from_env
+from .contract import MAX_JOB_BYTES, VideoContractError, canonical_job_hash, validate_from_env, validate_job
+from .drive_stage import DriveStageError, remove_staged_job, stage_drive_job
 from .finops_observation import build_video_finops_observation, directory_bytes
 from .result_conformance import ResultConformanceError, verify_result
 from .runner import run_job
@@ -57,6 +58,8 @@ def _failure_code(exc: BaseException) -> str:
         return "UV_RESULT_CONFORMANCE_FAILED"
     if isinstance(exc, ServerReviewError):
         return "UV_SERVER_REVIEW_FAILED"
+    if isinstance(exc, DriveStageError):
+        return "UV_DRIVE_STAGE_FAILED"
     if isinstance(exc, TimeoutError):
         return "UV_WORKER_TIMEOUT"
     if isinstance(exc, OSError):
@@ -69,10 +72,24 @@ def _failure_code(exc: BaseException) -> str:
 
 
 def _dirs(root: Path) -> dict[str, Path]:
-    out = {name: root / name for name in ("inbox", "running", "done", "failed", "results")}
+    out = {name: root / name for name in ("inbox", "running", "done", "failed", "results", "progress")}
     for path in out.values():
         path.mkdir(parents=True, exist_ok=True)
     return out
+
+
+def _write_progress(paths: dict[str, Path], job_id: str, state: str) -> None:
+    if not re.fullmatch(r"^[A-Za-z0-9._:-]{1,160}$", job_id):
+        raise RuntimeError("invalid progress job id")
+    _atomic_write_json(
+        paths["progress"] / f"{job_id}.json",
+        {
+            "schema": "universal-video-pipeline-progress-v1",
+            "job_id": job_id,
+            "state": state,
+            "observed_at_unix": time.time(),
+        },
+    )
 
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -338,13 +355,21 @@ def process_one(spool_root: Path) -> bool:
 
     started = time.monotonic()
     payload: dict | None = None
+    staged_job_dir: Path | None = None
+    media_root = Path(os.getenv("UNIVERSAL_VIDEO_MEDIA_ROOT", "/opt/bridge-school/universal-video/media"))
     try:
         valid, reason = _regular_payload(claimed)
         if not valid:
             raise RuntimeError(reason or "invalid claimed spool payload")
         payload = json.loads(claimed.read_text(encoding="utf-8"))
         validate_video_runtime()
+        intake_job = validate_job(payload)
+        if intake_job.source.get("kind") == "google_drive":
+            _write_progress(paths, intake_job.job_id, "DOWNLOADING_FROM_DRIVE")
+            payload, staged_job_dir = stage_drive_job(intake_job, payload, media_root)
+            _write_progress(paths, intake_job.job_id, "SOURCE_READY_ON_ORACLE")
         validated_job = validate_from_env(payload)
+        _write_progress(paths, validated_job.job_id, "PROCESSING")
         result = run_job(payload, paths["results"])
         result_dir = paths["results"] / str(result.get("job_id") or "")
         media = result.get("media") or {}
@@ -376,7 +401,7 @@ def process_one(spool_root: Path) -> bool:
                     expected_job_hash=canonical_job_hash(validated_job),
                     expected_source_file_id=(
                         str(validated_job.source.get("file_id"))
-                        if validated_job.source.get("kind") == "google_drive"
+                        if validated_job.source.get("kind") in {"google_drive", "oracle_drive_staged"}
                         else None
                     ),
                     evidence_phase=("REUSE_OBSERVATION" if reused_finalized_result else "GENERATION_FINALIZATION"),
@@ -390,7 +415,7 @@ def process_one(spool_root: Path) -> bool:
                 expected_job_hash=canonical_job_hash(validated_job),
                 expected_source_file_id=(
                     str(validated_job.source.get("file_id"))
-                    if validated_job.source.get("kind") == "google_drive"
+                    if validated_job.source.get("kind") in {"google_drive", "oracle_drive_staged"}
                     else None
                 ),
                 evidence_phase=("REUSE_OBSERVATION" if reused_finalized_result else "GENERATION_FINALIZATION"),
@@ -420,6 +445,10 @@ def process_one(spool_root: Path) -> bool:
             receipt_payload["runtime_attestation"] = attestation
         receipt = paths["done"] / source.name
         _atomic_write_json(receipt, receipt_payload)
+        try:
+            _write_progress(paths, validated_job.job_id, "RESULT_READY" if str(result.get("status") or "") == "COMPLETED" else "REVIEW")
+        except OSError:
+            pass
         claimed.unlink(missing_ok=True)
     except Exception as exc:
         source_kind = None
@@ -438,7 +467,22 @@ def process_one(spool_root: Path) -> bool:
             ),
         }
         _atomic_write_json(paths["failed"] / source.name, failure)
+        if isinstance(payload, dict):
+            failed_job_id = str(payload.get("job_id") or "")
+            if re.fullmatch(r"^[A-Za-z0-9._:-]{1,160}$", failed_job_id):
+                try:
+                    _write_progress(paths, failed_job_id, "FAILED")
+                except OSError:
+                    pass
         claimed.unlink(missing_ok=True)
+    finally:
+        if staged_job_dir is not None and staged_job_dir.exists():
+            try:
+                remove_staged_job(staged_job_dir, media_root)
+            except (DriveStageError, OSError):
+                # A terminal receipt remains authoritative. Maintenance may
+                # later quarantine an undeletable staging directory.
+                pass
     return True
 
 

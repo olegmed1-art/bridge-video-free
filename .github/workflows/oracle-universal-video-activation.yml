@@ -158,6 +158,7 @@ jobs:
             ops/universal_video_operator.sh \
             ops/install_universal_video_operator.sh \
             ops/universal_video_receipt_reader.py \
+            universal_video/drive_stage.py \
             universal_video/runner.py; do
             git show "$ref:$path" >/dev/null
           done

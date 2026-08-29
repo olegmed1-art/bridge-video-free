@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from unittest import mock
+from pathlib import Path
 
 import pytest
 
@@ -225,3 +227,57 @@ def test_review_receipt_is_not_marked_technical_ready(tmp_path, monkeypatch: pyt
     assert receipt["result_conformance"]["state"] == "NOT_ELIGIBLE"
     assert receipt["result_conformance"]["technical_bundle_ready"] is False
     verifier.assert_not_called()
+
+
+def test_drive_job_is_staged_on_oracle_before_processing_and_then_removed(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    media = tmp_path / "media"
+    media.mkdir()
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    payload = {
+        "job_id": "drive-chain-job",
+        "profile": "transcript_only",
+        "source": {"kind": "google_drive", "file_id": "1AbCdEfGhIjKlMnOpQrStUvWxYz"},
+    }
+    (inbox / "drive-chain-job.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def fake_stage(job, original, media_root):
+        job_dir = media_root / "drive-ready" / job.job_id
+        job_dir.mkdir(parents=True)
+        source = job_dir / "source.mp4"
+        source.write_bytes(b"v" * (1024 * 1024))
+        staged = dict(original)
+        staged["source"] = {
+            "kind": "oracle_drive_staged",
+            "path": str(source),
+            "file_id": payload["source"]["file_id"],
+            "size_bytes": source.stat().st_size,
+            "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        }
+        return staged, job_dir
+
+    def fake_run(staged, results):
+        assert staged["source"]["kind"] == "oracle_drive_staged"
+        assert Path(staged["source"]["path"]).exists()
+        result_dir = results / "drive-chain-job"
+        result_dir.mkdir(parents=True)
+        result = {
+            "status": "REVIEW",
+            "job_id": "drive-chain-job",
+            "profile": "transcript_only",
+            "source": {"kind": "google_drive", "file_id": payload["source"]["file_id"]},
+            "media": {"size_bytes": 1024 * 1024, "duration_seconds": 1.0},
+            "runtime": {"elapsed_seconds": 2.0},
+        }
+        (result_dir / "manifest.json").write_text(json.dumps(result), encoding="utf-8")
+        return result
+
+    monkeypatch.setenv("UNIVERSAL_VIDEO_MEDIA_ROOT", str(media))
+    monkeypatch.setenv("UNIVERSAL_VIDEO_REQUIRE_STAGED_SOURCE", "1")
+    monkeypatch.setattr(spool_worker, "validate_video_runtime", lambda: None)
+    monkeypatch.setattr(spool_worker, "stage_drive_job", fake_stage)
+    monkeypatch.setattr(spool_worker, "run_job", fake_run)
+    assert spool_worker.process_one(tmp_path) is True
+    assert not (media / "drive-ready" / "drive-chain-job").exists()
+    progress = json.loads((tmp_path / "progress" / "drive-chain-job.json").read_text(encoding="utf-8"))
+    assert progress["state"] == "REVIEW"

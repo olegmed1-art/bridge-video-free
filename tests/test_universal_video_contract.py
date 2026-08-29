@@ -47,6 +47,30 @@ def test_google_drive_source_is_bounded():
     assert job.source["kind"] == "google_drive"
 
 
+def test_oracle_drive_staged_preserves_drive_job_identity(tmp_path: Path):
+    media = tmp_path / "media"
+    media.mkdir()
+    source = media / "source.mp4"
+    source.write_bytes(b"x" * (1024 * 1024))
+    original = validate_job({
+        "job_id": "drive-stage",
+        "profile": "bridge_lesson",
+        "source": {"kind": "google_drive", "file_id": "1AbCdEfGhIjKlMnOpQrStUvWxYz"},
+    })
+    staged = validate_job({
+        "job_id": "drive-stage",
+        "profile": "bridge_lesson",
+        "source": {
+            "kind": "oracle_drive_staged",
+            "path": str(source),
+            "file_id": "1AbCdEfGhIjKlMnOpQrStUvWxYz",
+            "size_bytes": source.stat().st_size,
+            "sha256": __import__("hashlib").sha256(source.read_bytes()).hexdigest(),
+        },
+    }, allowed_local_root=str(media))
+    assert canonical_job_hash(staged) == canonical_job_hash(original)
+
+
 def test_hash_is_deterministic(tmp_path: Path):
     path = tmp_path / "v.mp4"
     path.write_bytes(b"x")

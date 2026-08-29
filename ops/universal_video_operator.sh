@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bounded resident control plane for Universal Video jobs.
+# Bounded Drive-only resident control plane for Universal Video jobs.
 # The only writable input is a base64-encoded JSON job contract; it is never
 # interpreted as shell. All source identity and profile validation happens in
 # universal_video.server_intake.
@@ -17,11 +17,11 @@ fail(){ echo "UV_STATE=REJECTED"; echo "UV_ERROR=$1"; exit 1; }
 safe_id(){ [[ "$1" =~ ^[A-Za-z0-9._:-]{1,160}$ && "$1" != . && "$1" != .. ]]; }
 verify(){
   [[ -x "$PYTHON" && -d "$SOURCE_DIR/.git" && -f "$RECEIPT_READER" && ! -L "$RECEIPT_READER" ]] || fail 'universal video runtime missing'
-  [[ -d "$SPOOL/inbox" && -d "$SPOOL/running" && -d "$SPOOL/done" && -d "$SPOOL/failed" ]] || fail 'universal video spool missing'
+  [[ -d "$SPOOL/inbox" && -d "$SPOOL/running" && -d "$SPOOL/done" && -d "$SPOOL/failed" && -d "$SPOOL/progress" ]] || fail 'universal video spool missing'
   [[ -d "$STAGING" && ! -L "$STAGING" && "$(stat -c '%U:%G:%a' "$STAGING")" == root:root:700 ]] || fail 'unsafe staging directory'
   systemctl is-active --quiet universal-video.service || fail 'universal-video.service inactive'
 }
-submit(){
+submit_drive(){
   [[ $# -eq 1 && ${#1} -le 350000 ]] || fail 'invalid encoded job'
   verify
   local tmp
@@ -43,8 +43,20 @@ status(){
   state="${found[0]}"
   receipt="$SPOOL/$state/$name"
   case "$state" in
-    inbox) echo 'UV_STATE=QUEUED' ;;
-    running) echo 'UV_STATE=RUNNING' ;;
+    inbox) echo 'UV_STATE=DOWNLOAD_QUEUED' ;;
+    running)
+      progress="$SPOOL/progress/$name"
+      if [[ -f "$progress" && ! -L "$progress" ]]; then
+        JOB="$progress" python3 - <<'PY'
+import json, os
+x=json.load(open(os.environ['JOB'], encoding='utf-8'))
+state=str(x.get('state') or 'RUNNING')
+print('UV_STATE='+state if state in {'DOWNLOADING_FROM_DRIVE','SOURCE_READY_ON_ORACLE','PROCESSING'} else 'UV_STATE=RUNNING')
+PY
+      else
+        echo 'UV_STATE=RUNNING'
+      fi
+      ;;
     failed)
       if ! summary="$(runuser -u universal-video -- /usr/bin/python3 "$RECEIPT_READER" inspect-failed "$receipt" "$name" 2>/dev/null)"; then
         echo 'UV_STATE=NONCONFORMANT'
@@ -65,9 +77,9 @@ PY
       ;;
   esac
 }
-[[ $# -ge 1 ]] || fail 'usage: universal-video submit-base64 PAYLOAD | status JOB_ID'
+[[ $# -ge 1 ]] || fail 'usage: universal-video submit-drive-base64 PAYLOAD | status JOB_ID'
 case "$1" in
-  submit-base64) shift; submit "$@" ;;
+  submit-drive-base64) shift; submit_drive "$@" ;;
   status) shift; status "$@" ;;
   *) fail 'unsupported operation' ;;
 esac

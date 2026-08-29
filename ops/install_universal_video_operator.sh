@@ -21,11 +21,26 @@ install -d -o root -g root -m 0700 /opt/bridge-school/.universal-video-staging
 tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
 cat >"$tmp" <<'EOF'
 # Bounded generic Universal Video controls.
-ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video submit-base64 *
+ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video submit-drive-base64 *
 ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video status *
 EOF
 chmod 0440 "$tmp"; visudo -cf "$tmp" >/dev/null
 install -o root -g root -m 0755 "$SOURCE_FILE" "$TARGET"
 install -o root -g root -m 0440 "$tmp" "$SUDOERS"
+visudo -cf /etc/sudoers >/dev/null
+# Retire the three historical video-specific ingress surfaces only after the
+# generic Drive-only operator and its exact sudo rule are installed and valid.
+for obsolete in \
+  /usr/local/sbin/universal-video-diana11 \
+  /usr/local/sbin/universal-video-diana11-002 \
+  /usr/local/sbin/universal-video-diana11-003 \
+  /etc/sudoers.d/universal-video-diana11-ocarun \
+  /etc/sudoers.d/universal-video-diana11-002-ocarun \
+  /etc/sudoers.d/universal-video-diana11-003-ocarun; do
+  if [[ -e "$obsolete" || -L "$obsolete" ]]; then
+    [[ -f "$obsolete" && ! -L "$obsolete" ]] || fail "unsafe obsolete ingress target: $obsolete"
+    rm -f -- "$obsolete"
+  fi
+done
 visudo -cf /etc/sudoers >/dev/null
 echo UNIVERSAL_VIDEO_OPERATOR_INSTALL_PASS

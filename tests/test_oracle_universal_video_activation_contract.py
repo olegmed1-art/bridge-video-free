@@ -31,6 +31,9 @@ def test_activation_workflow_is_fixed_scope_and_fail_closed():
     assert "workflow_dispatch" in text
     assert "ops/oracle-universal-video-requests/*.json" in text
     assert "run: ${{" not in text
+    command = RUN_COMMAND.read_text(encoding="utf-8")
+    assert "'kind':'oracle_drive_staged'" in command
+    assert "'kind':'local_path'" not in command
 
 
 def test_request_schema_rejects_arbitrary_host_command_and_unknown_fields():
@@ -47,8 +50,17 @@ def test_generic_operator_owns_a_dedicated_sudoers_file():
     installer = OPERATOR_INSTALL.read_text(encoding="utf-8")
     assert "readonly SUDOERS='/etc/sudoers.d/universal-video-operator-ocarun'" in installer
     assert "readonly SUDOERS='/etc/sudoers.d/universal-video-ocarun'" not in installer
-    assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video submit-base64 *" in installer
+    assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video submit-drive-base64 *" in installer
     assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video status *" in installer
+    assert "/usr/local/sbin/universal-video-diana11" in installer
+    for name in (
+        "install_universal_video_diana11_operator.sh",
+        "install_universal_video_diana11_002_operator.sh",
+        "install_universal_video_diana11_003_operator.sh",
+    ):
+        retired = (ROOT / "ops" / name).read_text(encoding="utf-8")
+        assert "RETIRED: use /usr/local/sbin/universal-video submit-drive-base64" in retired
+        assert "exit 78" in retired
 
 
 def test_activation_installs_export_boundary_from_the_exact_resolved_revision():

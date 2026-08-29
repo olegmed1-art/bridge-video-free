@@ -87,7 +87,7 @@ ensure_real_dir(){
 
 ensure_real_dir "$BASE_DIR" root "$GROUP_NAME" 0750
 ensure_real_dir "$BASE_DIR/spool" root "$GROUP_NAME" 0750
-for d in inbox running done failed results; do
+for d in inbox running done failed results progress; do
   ensure_real_dir "$BASE_DIR/spool/$d" "$USER_NAME" "$GROUP_NAME" 0750
   chown "$USER_NAME:$GROUP_NAME" "$BASE_DIR/spool/$d"
   chmod 0750 "$BASE_DIR/spool/$d"
@@ -174,6 +174,7 @@ cat >"$BASE_DIR/universal-video.env" <<EOF
 UNIVERSAL_VIDEO_SPOOL_ROOT=$BASE_DIR/spool
 UNIVERSAL_VIDEO_OUTPUT_ROOT=$BASE_DIR/output
 UNIVERSAL_VIDEO_MEDIA_ROOT=$BASE_DIR/media
+UNIVERSAL_VIDEO_REQUIRE_STAGED_SOURCE=1
 UNIVERSAL_VIDEO_WHISPER_MODEL=$MODEL
 UNIVERSAL_VIDEO_ASR_THREADS=$THREADS
 UNIVERSAL_VIDEO_POLL_SECONDS=2
