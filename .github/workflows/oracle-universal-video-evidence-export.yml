@@ -40,7 +40,6 @@ jobs:
     env:
       ISSUE_NUMBER: '819'
       INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
-      EXPORTER_COMMIT: edbb4cae625323146fcab3ad4f80ed3d9a9abc90
       OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
       OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
     steps:
@@ -134,32 +133,8 @@ jobs:
           remote="$(cat <<EOF
           set -Eeuo pipefail
           umask 077
-          readonly source_dir=/opt/bridge-school/universal-video-src
-          readonly base_dir=/opt/bridge-school/universal-video
-          readonly request_dir=/var/lib/bridge-school/universal-video
-          readonly status_dir=/run/bridge-school
-          [[ \"\$(git -C \"\$source_dir\" rev-parse HEAD)\" == '$EXPORTER_COMMIT' ]]
-          systemctl is-active --quiet universal-video.service
-          [[ -z \"\$(find \"\$base_dir/spool/running\" -maxdepth 1 -type f -name '*.json' -print -quit)\" ]]
-          install -d -m 0750 -o root -g universal-video \"\$request_dir\" \"\$status_dir\"
-          printf '%s' '$REQUEST_B64' | base64 --decode > \"\$request_dir/evidence-export-request.json.tmp\"
-          install -m 0640 -o root -g universal-video \"\$request_dir/evidence-export-request.json.tmp\" \"\$request_dir/evidence-export-request.json\"
-          rm -f \"\$request_dir/evidence-export-request.json.tmp\"
-          python3 - \"\$status_dir/universal-video-status.json.tmp\" <<'PY'
-          import json, os, sys, time
-          path=sys.argv[1]
-          payload={'schema':'universal-video-resident-status-v1','instance_state':'RUNNING','active_jobs':[],'observed_at_unix':time.time()}
-          fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o640)
-          with os.fdopen(fd,'w',encoding='utf-8') as handle:
-              json.dump(payload,handle,sort_keys=True,separators=(',',':'))
-              handle.write('\n')
-          PY
-          chown root:universal-video \"\$status_dir/universal-video-status.json.tmp\"
-          mv -f \"\$status_dir/universal-video-status.json.tmp\" \"\$status_dir/universal-video-status.json\"
-          [[ -z \"\$(find \"\$base_dir/spool/running\" -maxdepth 1 -type f -name '*.json' -print -quit)\" ]]
           echo UV_EVIDENCE_EXPORT_BEGIN
-          runuser -u universal-video -- env PYTHONPATH=\"\$source_dir\" PYTHONDONTWRITEBYTECODE=1 \
-            \"\$base_dir/.venv/bin/python\" \"\$source_dir/ops/universal_video_resident_evidence_export.py\"
+          printf '%s' '$REQUEST_B64' | base64 --decode | sudo -n /usr/local/sbin/universal-video-evidence-export
           echo UV_EVIDENCE_EXPORT_END
           EOF
           )"
@@ -236,4 +211,3 @@ jobs:
             echo "No transcript text, raw command output, media, OAuth value, or canonical artifact was published. Run: $RUN_URL"
           } > "$body"
           gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body"
-

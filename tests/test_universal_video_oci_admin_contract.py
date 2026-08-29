@@ -38,17 +38,20 @@ def test_sudoers_surface_is_exact_and_not_broad():
     audit_line = "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-oci-admin audit"
     productionize_line = "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-oci-admin productionize"
     spool_repair_line = "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-spool-repair"
+    evidence_export_line = 'ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-evidence-export ""'
     assert audit_line in INSTALL
     assert productionize_line in INSTALL
     assert spool_repair_line in INSTALL
+    assert evidence_export_line in INSTALL
     sudo_lines = [line.strip() for line in INSTALL.splitlines() if line.strip().startswith("ocarun ALL=")]
-    assert sudo_lines == [audit_line, productionize_line, spool_repair_line]
+    assert sudo_lines == [audit_line, productionize_line, spool_repair_line, evidence_export_line]
     assert "grep -Ev '^[[:space:]]*(#|$)'" in INSTALL
     assert "NOPASSWD:[[:space:]]*ALL" in INSTALL
     assert "visudo -cf" in INSTALL
     assert "install -o root -g root -m 0755" in INSTALL
     assert "install -o root -g root -m 0440" in INSTALL
     assert "sudo -u ocarun sudo -n \"$TARGET\" audit" in INSTALL
+    assert "sudo -u ocarun sudo -n \"$EXPORT_TARGET\" unexpected" in INSTALL
     assert "bash -c" not in INSTALL
     assert "eval " not in INSTALL
     assert "readonly SUDOERS='/etc/sudoers.d/universal-video-admin-ocarun'" in INSTALL
