@@ -180,22 +180,23 @@ fi
 
 if [[ "$RUN_SMOKE" == "1" ]]; then
   log "Run bounded synthetic Oracle-staged smoke job"
-  smoke_stage="$BASE_DIR/media/drive-ready/universal-video-smoke"
+  smoke_job_id="universal-video-smoke-${RESOLVED_COMMIT:0:8}-$(date -u +%s)-$$"
+  smoke_stage="$BASE_DIR/media/drive-ready/$smoke_job_id"
   if [[ -e "$smoke_stage" || -L "$smoke_stage" ]]; then
     [[ -d "$smoke_stage" && ! -L "$smoke_stage" ]] || die "unsafe synthetic smoke staging path"
   fi
   install -d -o universal-video -g universal-video -m 0750 "$smoke_stage"
   media="$smoke_stage/source.mp4"
-  job="$BASE_DIR/spool/inbox/universal-video-smoke.json"
+  job="$BASE_DIR/spool/inbox/$smoke_job_id.json"
   runuser -u universal-video -- rm -f -- \
-    "$BASE_DIR/spool/done/universal-video-smoke.json" \
-    "$BASE_DIR/spool/failed/universal-video-smoke.json" \
+    "$BASE_DIR/spool/done/$smoke_job_id.json" \
+    "$BASE_DIR/spool/failed/$smoke_job_id.json" \
     "$job.tmp"
   runuser -u universal-video -- ffmpeg -hide_banner -loglevel error -y \
     -f lavfi -i testsrc2=size=640x360:rate=30:duration=5 \
     -f lavfi -i sine=frequency=440:duration=3 \
     -shortest -c:v mpeg4 -q:v 2 -pix_fmt yuv420p -c:a aac "$media"
-  runuser -u universal-video -- env JOB_TMP="$job.tmp" JOB_PATH="$job" MEDIA_PATH="$media" /usr/bin/python3 - <<'PY'
+  runuser -u universal-video -- env JOB_TMP="$job.tmp" JOB_PATH="$job" MEDIA_PATH="$media" SMOKE_JOB_ID="$smoke_job_id" /usr/bin/python3 - <<'PY'
 import hashlib, json, os
 path=os.environ['MEDIA_PATH']
 size=os.path.getsize(path)
@@ -206,7 +207,7 @@ with open(path,'rb') as handle:
         digest.update(block)
 sha=digest.hexdigest()
 payload={
-    'job_id':'universal-video-smoke',
+    'job_id':os.environ['SMOKE_JOB_ID'],
     'profile':'transcript_only',
     'project':'infrastructure-smoke',
     'source':{
@@ -234,18 +235,18 @@ finally:
 PY
   deadline=$((SECONDS + 300))
   while (( SECONDS < deadline )); do
-    if [[ -f "$BASE_DIR/spool/done/universal-video-smoke.json" ]]; then
-      runuser -u universal-video -- /bin/cat "$BASE_DIR/spool/done/universal-video-smoke.json"
+    if [[ -f "$BASE_DIR/spool/done/$smoke_job_id.json" ]]; then
+      runuser -u universal-video -- /bin/cat "$BASE_DIR/spool/done/$smoke_job_id.json"
       echo UNIVERSAL_VIDEO_SYNTHETIC_SMOKE_PASS
       break
     fi
-    if [[ -f "$BASE_DIR/spool/failed/universal-video-smoke.json" ]]; then
-      runuser -u universal-video -- /bin/cat "$BASE_DIR/spool/failed/universal-video-smoke.json" >&2
+    if [[ -f "$BASE_DIR/spool/failed/$smoke_job_id.json" ]]; then
+      runuser -u universal-video -- /bin/cat "$BASE_DIR/spool/failed/$smoke_job_id.json" >&2
       die "synthetic smoke job failed"
     fi
     sleep 2
   done
-  [[ -f "$BASE_DIR/spool/done/universal-video-smoke.json" ]] || die "synthetic smoke job timed out"
+  [[ -f "$BASE_DIR/spool/done/$smoke_job_id.json" ]] || die "synthetic smoke job timed out"
 fi
 
 echo UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS

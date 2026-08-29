@@ -34,6 +34,8 @@ def test_activation_workflow_is_fixed_scope_and_fail_closed():
     command = RUN_COMMAND.read_text(encoding="utf-8")
     assert "'kind':'oracle_drive_staged'" in command
     assert "'kind':'local_path'" not in command
+    assert 'SMOKE_JOB_ID="$smoke_job_id"' in command
+    assert "'job_id':os.environ['SMOKE_JOB_ID']" in command
 
 
 def test_request_schema_rejects_arbitrary_host_command_and_unknown_fields():
