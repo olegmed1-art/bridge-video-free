@@ -16,58 +16,50 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
-      OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
-      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
 
-      - name: Configure bounded OCI client
+      - name: Verify pinned host and select existing SSH credential
+        id: ssh
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${OCI_CLI_CONFIG:-}"
-          test -n "${OCI_KEY:-}"
-          python -m pip install --disable-pip-version-check -q 'oci-cli==3.90.3'
-          umask 077
-          mkdir -p "$HOME/.oci"
-          if [[ "$OCI_KEY" == base64:* ]]; then
-            printf '%s' "${OCI_KEY#base64:}" | base64 --decode > "$HOME/.oci/oci_api_key.pem"
-          else
-            printf '%s\n' "$OCI_KEY" > "$HOME/.oci/oci_api_key.pem"
-          fi
-          printf '%s\n' "$OCI_CLI_CONFIG" > "$HOME/.oci/config"
-          openssl pkey -in "$HOME/.oci/oci_api_key.pem" -traditional -out "$HOME/.oci/key.pem"
-          mv "$HOME/.oci/key.pem" "$HOME/.oci/oci_api_key.pem"
-          fingerprint="$(openssl pkey -in "$HOME/.oci/oci_api_key.pem" -pubout -outform DER | openssl md5 -r | awk '{print $1}' | sed 's/../&:/g;s/:$//')"
-          FINGERPRINT="$fingerprint" python - <<'PY'
-          import os
-          from pathlib import Path
-          p=Path.home()/'.oci/config'
-          lines=[]; found=set()
-          for line in p.read_text().splitlines():
-              key=line.strip().split('=',1)[0]
-              if key=='key_file': lines.append(f'key_file={Path.home()}/.oci/oci_api_key.pem'); found.add(key)
-              elif key=='region': lines.append('region=eu-frankfurt-1'); found.add(key)
-              elif key=='fingerprint': lines.append('fingerprint='+os.environ['FINGERPRINT']); found.add(key)
-              else: lines.append(line)
-          if 'key_file' not in found: lines.append(f'key_file={Path.home()}/.oci/oci_api_key.pem')
-          if 'region' not in found: lines.append('region=eu-frankfurt-1')
-          if 'fingerprint' not in found: lines.append('fingerprint='+os.environ['FINGERPRINT'])
-          p.write_text('\n'.join(lines)+'\n')
-          PY
-          chmod 0600 "$HOME/.oci/config" "$HOME/.oci/oci_api_key.pem"
+          work="$RUNNER_TEMP/issue840-replay"
+          mkdir -p "$work"
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]] || { echo 'Oracle SSH credential unavailable' >&2; exit 1; }
+          key="$work/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
 
       - name: Find and replay completed transcript artifacts read-only
         shell: bash
         run: |
           set -euo pipefail
-          compartment="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."compartment-id"' --raw-output)"
-          state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
-          [[ "$state" == RUNNING ]]
-          remote="$(cat <<'REMOTE'
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            'sudo -n bash -s' <<'REMOTE' > "$RUNNER_TEMP/raw.txt"
           set -Eeuo pipefail
           python3 - <<'PY'
           import json
@@ -75,6 +67,7 @@ jobs:
           from pathlib import Path
 
           root=Path('/opt/bridge-school/universal-video/spool/results')
+          assert root.is_dir() and not root.is_symlink(), root
           output=[]
           jobs=(
               sorted(root.iterdir(), key=lambda path: path.stat().st_mtime, reverse=True)[:50]
@@ -112,25 +105,15 @@ jobs:
                   'observed_clusters':len(counts),
                   'speaker_status':report.get('status','UNAVAILABLE'),
                   'open_set_count_proved':open_set,
+                  'role_mapping_supported':report.get('role_mapping_supported') is True,
+                  'teacher_student_attribution':report.get('teacher_student_attribution','UNAVAILABLE'),
+                  'reason':report.get('reason'),
               })
           print('UV840_REPLAY_BEGIN')
           print(json.dumps({'schema':'uv840-server-transcript-replay-v1','result_scope':'SHADOW_ONLY','jobs':output},separators=(',',':')))
           print('UV840_REPLAY_END')
           PY
           REMOTE
-          )"
-          content="$(SCRIPT_TEXT="$remote" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":os.environ["SCRIPT_TEXT"]},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
-          target="$(python -c 'import json,os; print(json.dumps({"instanceId":os.environ["INSTANCE_ID"]},separators=(",",":")))')"
-          command_id="$(oci instance-agent command create --compartment-id "$compartment" --content "$content" --target "$target" --timeout-in-seconds 600 --display-name "uv840-replay-${GITHUB_RUN_ID}" --query data.id --raw-output)"
-          for _ in $(seq 1 150); do
-            execution="$(oci instance-agent command-execution get --command-id "$command_id" --instance-id "$INSTANCE_ID" --output json 2>/dev/null || true)"
-            [[ -n "$execution" ]] || { sleep 3; continue; }
-            lifecycle="$(printf '%s' "$execution" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state",""))')"
-            case "$lifecycle" in SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break;; esac
-            sleep 3
-          done
-          [[ "${lifecycle:-}" == SUCCEEDED ]]
-          printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("text","") or "")' > "$RUNNER_TEMP/raw.txt"
           python - <<'PY'
           import json, os
           from pathlib import Path
