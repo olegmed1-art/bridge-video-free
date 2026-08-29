@@ -158,12 +158,19 @@ jobs:
           raw=raw_path.read_text(encoding='utf-8')
           raw_path.unlink(missing_ok=True)
           assert os.environ['REMOTE_LIFECYCLE']=='SUCCEEDED', os.environ['REMOTE_LIFECYCLE']
-          lines=[line.strip() for line in raw.splitlines()]
-          begins=[i for i,line in enumerate(lines) if line=='UV_EVIDENCE_EXPORT_BEGIN']
-          ends=[i for i,line in enumerate(lines) if line=='UV_EVIDENCE_EXPORT_END']
-          assert len(begins)==len(ends)==1
-          assert ends[0]==begins[0]+2
-          x=json.loads(lines[begins[0]+1])
+          decoder=json.JSONDecoder()
+          receipts=[]
+          for index,char in enumerate(raw):
+            if char!='{':
+              continue
+            try:
+              candidate,_=decoder.raw_decode(raw,index)
+            except json.JSONDecodeError:
+              continue
+            if isinstance(candidate,dict) and candidate.get('schema')=='universal-video-evidence-export-v1':
+              receipts.append(candidate)
+          assert len(receipts)==1
+          x=receipts[0]
           safe_path=Path(os.environ['RUNNER_TEMP'],'uv-export-safe.json')
           if x.get('state')=='INCONCLUSIVE':
             allowed={'schema','state','reason','publication_state','school_canon_changed'}

@@ -43,14 +43,14 @@ def test_sanitized_inconclusive_reason_is_published_fail_closed():
     assert "raw_path.unlink(missing_ok=True)" in text
 
 
-def test_remote_receipt_framing_tolerates_only_outer_transport_noise():
+def test_remote_receipt_parser_accepts_one_schema_bound_json_amid_transport_noise():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "lines=[line.strip() for line in raw.splitlines()]" in text
-    assert "begins=[i for i,line in enumerate(lines) if line=='UV_EVIDENCE_EXPORT_BEGIN']" in text
-    assert "ends=[i for i,line in enumerate(lines) if line=='UV_EVIDENCE_EXPORT_END']" in text
-    assert "assert len(begins)==len(ends)==1" in text
-    assert "assert ends[0]==begins[0]+2" in text
-    assert "x=json.loads(lines[begins[0]+1])" in text
+    assert "decoder=json.JSONDecoder()" in text
+    assert "for index,char in enumerate(raw):" in text
+    assert "candidate,_=decoder.raw_decode(raw,index)" in text
+    assert "candidate.get('schema')=='universal-video-evidence-export-v1'" in text
+    assert "assert len(receipts)==1" in text
+    assert "x=receipts[0]" in text
 
 
 def test_workflow_cannot_start_compute_or_promote_results():
