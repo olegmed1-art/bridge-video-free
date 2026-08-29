@@ -157,3 +157,21 @@ Gold evaluation may use `evaluate_card_detector_report` to emit exact per-frame
 `TP/FP/FN/ambiguous/seat_errors` plus aggregate precision and recall. The
 profiled SHADOW JSONL and summary are published to Drive only as a complete
 pair; the canonical `bridge_positions.jsonl` is not published by this path.
+
+## Temporal visibility during play
+
+`bridge_vision.temporal_visibility.TemporalCardVisibilityTracker` separates:
+
+- `VISIBLE`;
+- `VISIBLE_FN`;
+- `PLAYED_NO_LONGER_VISIBLE`;
+- `OCCLUDED`;
+- `AMBIGUOUS`;
+- `NOT_EXPECTED_VISIBLE`.
+
+A card disappearance never proves play. `PLAYED_NO_LONGER_VISIBLE` requires an
+explicit verified play event with an evidence locator, stable deal identity,
+and a prior or current observation of that exact `card + seat`. Deal tracks and
+duplicate frame identities are isolated fail-closed. Temporal gold evaluation
+uses only `VISIBLE_FN` in visible recall; verified played, occluded, ambiguous
+and not-expected-visible cards remain separately counted.
