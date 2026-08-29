@@ -267,6 +267,9 @@ jobs:
           grep -F universal_video_enabled=enabled "$log" >/dev/null
           grep -F universal_video_active=active "$log" >/dev/null
           grep -Fx universal_video_operator=installed "$log" >/dev/null
+          grep -Fx universal_video_admin=installed_revision_bound "$log" >/dev/null
+          grep -Fx UNIVERSAL_VIDEO_OCARUN_BOUNDED_ADMIN_BOOTSTRAP_PASS "$log" >/dev/null
+          grep -Fx UNIVERSAL_VIDEO_OCARUN_POST_BOOTSTRAP_AUDIT_PASS "$log" >/dev/null
           grep -F DDS3_AFTER_PASS "$log" >/dev/null
           if [[ "$smoke" == 1 ]]; then
             grep -F UNIVERSAL_VIDEO_SYNTHETIC_SMOKE_PASS "$log" >/dev/null
