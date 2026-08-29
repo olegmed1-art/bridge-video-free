@@ -21,5 +21,6 @@ def test_dense_field_is_one_marker_guarded_reusable_shadow_workflow():
 
     assert "dense-diana14-shadow:" in caller
     assert "<!-- diana14-dense-r5 -->" in caller
+    assert "github.event.pull_request.head.sha == '9cd2f31cbfb9583acfabb55d2370a480f6855b49'" in caller
     assert "field-diana14-3-1-test-r5-dense.yml" in caller
     assert "secrets: inherit" in caller

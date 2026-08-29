@@ -149,6 +149,7 @@ def _accumulate_deals(records: Sequence[Mapping[str, Any]]) -> dict[str, dict[st
             "vulnerability": vulnerability,
             "hands": {seat: set() for seat in SEATS},
             "frames": set(),
+            "representative_frames": [],
             "auction_observations": [],
         })
         if (state["board_number"], state["dealer"], state["vulnerability"]) != (board_number, dealer, vulnerability):
@@ -156,7 +157,27 @@ def _accumulate_deals(records: Sequence[Mapping[str, Any]]) -> dict[str, dict[st
         for seat in SEATS:
             state["hands"][seat].update(observed[seat])
         state["auction_observations"].extend(auction_observations)
-        state["frames"].add(str(record.get("frame_file") or record.get("frame_sha256") or index))
+        frame_locator = str(record.get("frame_file") or record.get("frame_sha256") or index)
+        state["frames"].add(frame_locator)
+        accepted_auction_calls = max(
+            (
+                len(item.get("calls") or [])
+                for item in auction_observations
+                if item.get("accepted_as_observation") is True
+            ),
+            default=0,
+        )
+        try:
+            frame_time = float(record.get("time"))
+        except (TypeError, ValueError):
+            frame_time = float("inf")
+        state["representative_frames"].append({
+            "frame_file": str(record.get("frame_file") or ""),
+            "frame_sha256": str(record.get("frame_sha256") or ""),
+            "time": frame_time,
+            "observed_card_count": sum(len(cards) for cards in observed.values()),
+            "auction_call_count": accepted_auction_calls,
+        })
     return deals
 
 
@@ -192,6 +213,66 @@ def summarize_shadow_auctions(records: Sequence[Mapping[str, Any]]) -> dict[str,
         "deal_statuses": statuses,
         "standard_pbn_auctions": statuses.get("COMPLETE_CONFIRMED", 0),
     }
+
+
+def build_shadow_deal_views(records: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Build deterministic observed/reconstructed views for human SHADOW review.
+
+    The observed view contains accepted card observations only.  The reconstructed
+    view can add a fourth hand solely through the existing exact 39-to-13 deck
+    subtraction contract; any other incomplete layout remains visibly incomplete.
+    """
+    deals = _accumulate_deals(records)
+    views: list[dict[str, Any]] = []
+    for ordinal, (identity, state) in enumerate(sorted(deals.items()), start=1):
+        observed = canonicalize_video_deal({
+            "hands": {seat: sorted(state["hands"][seat]) for seat in SEATS},
+        }).to_dict()
+        reconstructed = canonicalize_video_deal(
+            {"hands": {seat: sorted(state["hands"][seat]) for seat in SEATS}},
+            derive_fourth_hand=True,
+        ).to_dict()
+        derivations = reconstructed.get("derivations") or []
+        observed_count = sum(len(observed["hands"][seat]["cards"]) for seat in SEATS)
+        if derivations:
+            reconstruction_status = "DERIVED_39_TO_13"
+        elif observed_count == 52:
+            reconstruction_status = "OBSERVED_COMPLETE"
+        else:
+            reconstruction_status = "NOT_DERIVED_INSUFFICIENT_OBSERVATIONS"
+        auction = aggregate_auction_observations(state["auction_observations"])
+        representative = min(
+            state["representative_frames"],
+            key=lambda item: (
+                -int(item["observed_card_count"]),
+                -int(item["auction_call_count"]),
+                float(item["time"]),
+                str(item["frame_file"]),
+            ),
+            default={
+                "frame_file": "",
+                "frame_sha256": "",
+                "time": float("inf"),
+                "observed_card_count": 0,
+                "auction_call_count": 0,
+            },
+        )
+        views.append({
+            "identity": identity,
+            "board_number": state["board_number"] or ordinal,
+            "dealer": state["dealer"],
+            "vulnerability": state["vulnerability"],
+            "observed": observed,
+            "observed_count": observed_count,
+            "reconstructed": reconstructed,
+            "reconstruction_status": reconstruction_status,
+            "auction": auction,
+            "source_frames": sorted(state["frames"]),
+            "representative_frame": representative,
+            "result_scope": "SHADOW_ONLY",
+            "canonical_promotion_allowed": False,
+        })
+    return views
 
 
 def render_shadow_pbn(records: Sequence[Mapping[str, Any]], *, source: str = "") -> str:
@@ -263,4 +344,10 @@ def render_shadow_pbn(records: Sequence[Mapping[str, Any]], *, source: str = "")
     return header + "\n" + "\n\n".join(blocks) + "\n"
 
 
-__all__ = ["SCHEMA", "ShadowPbnError", "render_shadow_pbn", "summarize_shadow_auctions"]
+__all__ = [
+    "SCHEMA",
+    "ShadowPbnError",
+    "build_shadow_deal_views",
+    "render_shadow_pbn",
+    "summarize_shadow_auctions",
+]

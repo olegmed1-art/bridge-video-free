@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import runpy
 from pathlib import Path
 
 import pytest
+from reportlab.pdfgen.canvas import Canvas
 
 from universal_video.evidence_export import EvidenceExportError, build_evidence_export
 from universal_video.result_conformance import verify_result
@@ -14,6 +16,14 @@ from universal_video.server_review import build_server_review
 _bundle = runpy.run_path(
     str(Path(__file__).with_name("test_universal_video_result_conformance.py"))
 )["_bundle"]
+
+
+def _write_shadow_pdf(path: Path) -> str:
+    canvas = Canvas(str(path))
+    canvas.setSubject("SHADOW_ONLY; CanonicalPromotionAllowed=false")
+    canvas.drawString(72, 720, "SHADOW_ONLY CanonicalPromotionAllowed=false")
+    canvas.save()
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _inputs(tmp_path: Path, *, status_v2: bool = True):
@@ -182,6 +192,7 @@ def test_manifest_processing_revision_must_match_requested_runtime(tmp_path: Pat
 
 def test_shadow_cards_are_exported_only_with_complete_hash_bound_set(tmp_path: Path):
     request, status, spool, result_dir, _final = _inputs(tmp_path)
+    pdf_sha256 = _write_shadow_pdf(result_dir / "bridge_positions_profiled_shadow_report.pdf")
     summary = {
         "status": "SHADOW_COMPLETED",
         "profiled_challenger_enabled": True,
@@ -190,6 +201,9 @@ def test_shadow_cards_are_exported_only_with_complete_hash_bound_set(tmp_path: P
         "recognized_frames": 2,
         "conflict_frames": 0,
         "derived_fourth_hand_frames": 0,
+        "pdf_output": "bridge_positions_profiled_shadow_report.pdf",
+        "pdf_pages": 1,
+        "pdf_sha256": pdf_sha256,
     }
     (result_dir / "bridge_positions_profiled_shadow_summary.json").write_text(
         json.dumps(summary), encoding="utf-8"
@@ -207,7 +221,7 @@ def test_shadow_cards_are_exported_only_with_complete_hash_bound_set(tmp_path: P
     )
     assert receipt["cards"]["status"] == "OBSERVED_SHADOW"
     assert receipt["cards"]["recognized_frames"] == 2
-    assert len(receipt["cards"]["artifacts"]) == 3
+    assert len(receipt["cards"]["artifacts"]) == 4
     assert all(len(item["sha256"]) == 64 for item in receipt["cards"]["artifacts"])
 
 
@@ -254,12 +268,16 @@ def test_request_done_tamper_duplicate_json_and_symlink_fail_closed(tmp_path: Pa
 
 def test_partial_or_promotable_shadow_artifact_fails_closed(tmp_path: Path):
     request, status, spool, result_dir, _final = _inputs(tmp_path)
+    pdf_sha256 = _write_shadow_pdf(result_dir / "bridge_positions_profiled_shadow_report.pdf")
     (result_dir / "bridge_positions_profiled_shadow_summary.json").write_text(
         json.dumps(
             {
                 "profiled_challenger_enabled": True,
                 "result_scope": "SHADOW_ONLY",
-                "canonical_promotion_allowed": True,
+                    "canonical_promotion_allowed": True,
+                    "pdf_output": "bridge_positions_profiled_shadow_report.pdf",
+                    "pdf_pages": 1,
+                    "pdf_sha256": pdf_sha256,
             }
         ),
         encoding="utf-8",
@@ -275,12 +293,16 @@ def test_partial_or_promotable_shadow_artifact_fails_closed(tmp_path: Path):
 
 def test_promotable_nested_shadow_record_fails_closed(tmp_path: Path):
     request, status, spool, result_dir, _final = _inputs(tmp_path)
+    pdf_sha256 = _write_shadow_pdf(result_dir / "bridge_positions_profiled_shadow_report.pdf")
     (result_dir / "bridge_positions_profiled_shadow_summary.json").write_text(
         json.dumps(
             {
                 "profiled_challenger_enabled": True,
                 "result_scope": "SHADOW_ONLY",
-                "canonical_promotion_allowed": False,
+                    "canonical_promotion_allowed": False,
+                    "pdf_output": "bridge_positions_profiled_shadow_report.pdf",
+                    "pdf_pages": 1,
+                    "pdf_sha256": pdf_sha256,
             }
         ),
         encoding="utf-8",

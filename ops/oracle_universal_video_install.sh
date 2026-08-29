@@ -33,6 +33,7 @@ die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 [[ -d "$SOURCE_DIR/.git" ]] || die "isolated source checkout missing at $SOURCE_DIR"
 [[ -f "$SOURCE_DIR/universal_video/runner.py" ]] || die "universal video code missing"
 [[ -f "$SOURCE_DIR/requirements-universal-video-speaker.txt" ]] || die "speaker requirements file missing"
+[[ -f "$SOURCE_DIR/requirements-universal-video-shadow-report.txt" ]] || die "shadow report requirements file missing"
 [[ -f "$SERVICE_SRC" ]] || die "systemd unit missing"
 
 SOURCE_COMMIT="$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || true)"
@@ -142,6 +143,7 @@ else
 fi
 runuser -u "$USER_NAME" -- "$BASE_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --upgrade pip >/dev/null
 runuser -u "$USER_NAME" -- "$BASE_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir -r "$SOURCE_DIR/requirements-universal-video-speaker.txt"
+runuser -u "$USER_NAME" -- "$BASE_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir -r "$SOURCE_DIR/requirements-universal-video-shadow-report.txt"
 
 log "Verify runtime imports"
 runuser -u "$USER_NAME" -- env PYTHONPATH="$SOURCE_DIR" PYTHONDONTWRITEBYTECODE=1 \
@@ -151,7 +153,7 @@ from universal_video.drive_adapter import access_token
 from universal_video.profiles import PROFILES
 from universal_video.speaker_structure import run_speaker_structure
 from faster_whisper import WhisperModel
-import numpy
+import numpy, pypdf, reportlab
 assert 'transcript_only' in PROFILES
 assert 'educational' in PROFILES
 assert 'bridge_lesson' in PROFILES

@@ -37,12 +37,13 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y ffmpeg
           python -m pip install --disable-pip-version-check -q \
-            -r requirements-universal-video-speaker.txt pytest
+            -r requirements-universal-video-speaker.txt \
+            -r requirements-universal-video-shadow-report.txt pytest
           python -m pip install --disable-pip-version-check -q --force-reinstall \
             'numpy==2.2.6' 'sherpa-onnx==1.13.4' 'sherpa-onnx-bin==1.13.4'
           ffmpeg -version | head -1
           python - <<'PY'
-          import faster_whisper, numpy, requests, sherpa_onnx
+          import faster_whisper, numpy, pypdf, reportlab, requests, sherpa_onnx
           assert numpy.__version__ == '2.2.6'
           assert getattr(sherpa_onnx, '__version__', None) == '1.13.4'
           print('FIELD_RUNTIME_IMPORTS_PASS')

@@ -15,6 +15,8 @@ from typing import Any
 
 from bridge_vision import BridgeVisionEngine, fuse_card_evidence
 from bridge_vision.evidence_fusion import MAX_DECLARATIONS
+from bridge_vision.shadow_pdf import REPORT_NAME as SHADOW_PDF_NAME
+from bridge_vision.shadow_pdf import render_shadow_pdf
 from bridge_vision.shadow_pbn import render_shadow_pbn, summarize_shadow_auctions
 from bridge_vision.transcript_card_observer import observe_transcript_cards
 
@@ -325,6 +327,7 @@ def process_job_frames(
         encoding="utf-8",
     )
     pbn_path = None
+    pdf_report = None
     if profiled_shadow:
         pbn_path = root / "bridge_positions_profiled_shadow.pbn"
         pbn_path.write_text(
@@ -333,6 +336,12 @@ def process_job_frames(
                 source=str(manifest.get("source_fingerprint") or manifest.get("job_id") or ""),
             ),
             encoding="utf-8",
+        )
+        pdf_report = render_shadow_pdf(
+            records,
+            frames_root=root / "frames",
+            output_path=root / SHADOW_PDF_NAME,
+            source=str(manifest.get("source_fingerprint") or manifest.get("job_id") or ""),
         )
     unmatched_speech_declarations = len(speech) - len(matched_speech_indices)
     if compatibility_mode:
@@ -403,6 +412,11 @@ def process_job_frames(
             "auction_standard_pbn_blocks": auction_summary["standard_pbn_auctions"],
             "output": output_path.name,
             "pbn_output": pbn_path.name if pbn_path else None,
+            "pdf_output": pdf_report["output"] if pdf_report else None,
+            "pdf_pages": pdf_report["pages"] if pdf_report else 0,
+            "pdf_deals": pdf_report["deals"] if pdf_report else 0,
+            "pdf_screenshots_embedded": pdf_report["screenshots_embedded"] if pdf_report else 0,
+            "pdf_sha256": pdf_report["sha256"] if pdf_report else None,
         }
     summary_path = root / (
         "bridge_positions_profiled_shadow_summary.json"

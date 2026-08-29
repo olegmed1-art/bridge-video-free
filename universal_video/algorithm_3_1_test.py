@@ -147,6 +147,12 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "boundary": "only an exact conflict-free 39-card observation may derive the fourth hand",
     },
     {
+        "id": "shadow_board_review_pdf",
+        "state": "SHADOW_COMPONENT",
+        "modules": ["bridge_vision.shadow_pdf", "tools.bridge_video_positions"],
+        "boundary": "one page per deal keeps screenshot, observed cards, explicit 39-to-13 derivation and auction together; visible and metadata SHADOW_ONLY labels forbid canonical use",
+    },
+    {
         "id": "dds3_optional",
         "state": "DEFERRED_OPTIONAL",
         "modules": ["universal_video.profiles"],

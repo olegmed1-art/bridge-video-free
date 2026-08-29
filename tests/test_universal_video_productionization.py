@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 import pytest
+from reportlab.pdfgen.canvas import Canvas
 
 import universal_video.drive_preflight as drive_preflight
 import universal_video.drive_results as drive_results
@@ -341,11 +342,16 @@ def test_compact_result_router_publishes_complete_profiled_shadow_card_set(tmp_p
         "% PBN 2.1\n% X-ResultScope: SHADOW_ONLY\n% X-CanonicalPromotionAllowed: false\n",
         encoding="utf-8",
     )
+    pdf = Canvas(str(job / "bridge_positions_profiled_shadow_report.pdf"))
+    pdf.setSubject("SHADOW_ONLY; CanonicalPromotionAllowed=false")
+    pdf.drawString(72, 720, "SHADOW_ONLY CanonicalPromotionAllowed=false")
+    pdf.save()
 
     names = {item.relative_name for item in collect_compact_artifacts(job)}
     assert "bridge_positions_profiled_shadow.jsonl" in names
     assert "bridge_positions_profiled_shadow_summary.json" in names
     assert "bridge_positions_profiled_shadow.pbn" in names
+    assert "bridge_positions_profiled_shadow_report.pdf" in names
     assert "bridge_positions.jsonl" not in names
 
 

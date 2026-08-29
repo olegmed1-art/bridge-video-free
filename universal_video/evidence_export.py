@@ -329,14 +329,15 @@ def _card_summary(result_dir: Path, deferred: list[str]) -> dict[str, Any]:
     summary_path = result_dir / "bridge_positions_profiled_shadow_summary.json"
     jsonl_path = result_dir / "bridge_positions_profiled_shadow.jsonl"
     pbn_path = result_dir / "bridge_positions_profiled_shadow.pbn"
-    if not summary_path.exists() and not jsonl_path.exists() and not pbn_path.exists():
+    pdf_path = result_dir / "bridge_positions_profiled_shadow_report.pdf"
+    if not summary_path.exists() and not jsonl_path.exists() and not pbn_path.exists() and not pdf_path.exists():
         return {
             "status": "UNAVAILABLE",
             "reason": "BRIDGE_POSITIONS_DEFERRED" if "bridge_positions" in deferred else "SHADOW_ARTIFACT_MISSING",
             "recognized_frames": None,
             "canonical_promotion_allowed": False,
         }
-    if not summary_path.exists() or not jsonl_path.exists() or not pbn_path.exists():
+    if not summary_path.exists() or not jsonl_path.exists() or not pbn_path.exists() or not pdf_path.exists():
         raise EvidenceExportError("partial shadow card artifact set")
     summary = _read_regular_json(summary_path, max_bytes=1024 * 1024)
     if summary.get("profiled_challenger_enabled") is not True:
@@ -346,6 +347,14 @@ def _card_summary(result_dir: Path, deferred: list[str]) -> dict[str, Any]:
     summary_sha, summary_size = _sha256(summary_path, max_bytes=1024 * 1024)
     jsonl_sha, jsonl_size = _sha256(jsonl_path, max_bytes=MAX_SHADOW_BYTES)
     pbn_sha, pbn_size = _sha256(pbn_path, max_bytes=MAX_SHADOW_BYTES)
+    pdf_sha, pdf_size = _sha256(pdf_path, max_bytes=MAX_SHADOW_BYTES)
+    if (
+        summary.get("pdf_output") != pdf_path.name
+        or summary.get("pdf_sha256") != pdf_sha
+        or type(summary.get("pdf_pages")) is not int
+        or int(summary["pdf_pages"]) < 1
+    ):
+        raise EvidenceExportError("shadow PDF summary binding mismatch")
     try:
         raw_jsonl = jsonl_path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
@@ -370,6 +379,24 @@ def _card_summary(result_dir: Path, deferred: list[str]) -> dict[str, Any]:
         or 'X-CanonicalPromotionAllowed "true"' in raw_pbn
     ):
         raise EvidenceExportError("shadow PBN promotion boundary mismatch")
+    try:
+        raw_pdf = pdf_path.read_bytes()
+        from pypdf import PdfReader
+
+        pdf_reader = PdfReader(str(pdf_path))
+    except OSError as exc:
+        raise EvidenceExportError("invalid shadow PDF") from exc
+    except Exception as exc:
+        raise EvidenceExportError("shadow PDF cannot be reopened") from exc
+    if (
+        not raw_pdf.startswith(b"%PDF-")
+        or b"SHADOW_ONLY" not in raw_pdf
+        or b"CanonicalPromotionAllowed=false" not in raw_pdf
+        or len(pdf_reader.pages) != summary["pdf_pages"]
+        or (pdf_reader.metadata or {}).get("/Subject")
+        != "SHADOW_ONLY; CanonicalPromotionAllowed=false"
+    ):
+        raise EvidenceExportError("shadow PDF promotion boundary mismatch")
     return {
         "status": "OBSERVED_SHADOW",
         "recognized_frames": int(summary.get("recognized_frames") or 0),
@@ -380,6 +407,7 @@ def _card_summary(result_dir: Path, deferred: list[str]) -> dict[str, Any]:
             {"locator": summary_path.name, "sha256": summary_sha, "size_bytes": summary_size},
             {"locator": jsonl_path.name, "sha256": jsonl_sha, "size_bytes": jsonl_size},
             {"locator": pbn_path.name, "sha256": pbn_sha, "size_bytes": pbn_size},
+            {"locator": pdf_path.name, "sha256": pdf_sha, "size_bytes": pdf_size},
         ],
     }
 

@@ -155,8 +155,17 @@ Only 52 unique accepted observations (13 per seat) may produce a standard PBN
 `Auction` tag and call section. Every weaker auction is visibly separated into
 `X-AuctionStatus`, `X-AuctionCalls`, frame-support and conflict-variant tags.
 Conflict records, pending temporal votes, uncorroborated layout suggestions and
-diagnostic candidates are not exported as found cards. JSONL, summary and PBN
-form one all-or-nothing, hash-bound SHADOW artifact set.
+diagnostic candidates are not exported as found cards. JSONL, summary, PBN and
+`bridge_positions_profiled_shadow_report.pdf` form one all-or-nothing,
+hash-bound SHADOW artifact set.
+
+The PDF contains one landscape A4 page per deal. The representative
+SHA-256-bound screenshot, accepted `OBSERVED` cards, separately labelled
+reconstructed layout, and auction appear on the same page. Reconstruction is
+orange and is allowed only for the exact 39-to-13 deck-subtraction rule; every
+other incomplete deal retains unknown-card counts and says that it was not
+reconstructed. Every page and the PDF metadata state `SHADOW_ONLY`,
+`NOT CANONICAL`, and `NOT PRODUCTION`.
 
 ## Activation and rollback
 

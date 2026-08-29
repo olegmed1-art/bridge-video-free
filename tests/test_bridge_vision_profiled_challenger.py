@@ -621,6 +621,11 @@ def test_profiled_challenger_is_explicit_opt_in_for_video_positions(tmp_path: Pa
     assert '[X-UnknownCount-N "12"]' in pbn
     assert '[Deal "' not in pbn
     assert summary["pbn_output"] == "bridge_positions_profiled_shadow.pbn"
+    assert summary["pdf_output"] == "bridge_positions_profiled_shadow_report.pdf"
+    assert summary["pdf_pages"] == 1
+    assert summary["pdf_deals"] == 1
+    assert len(summary["pdf_sha256"]) == 64
+    assert (tmp_path / summary["pdf_output"]).read_bytes().startswith(b"%PDF-")
 
     with pytest.raises(ValueError, match="cannot be combined"):
         process_job_frames(
@@ -675,6 +680,8 @@ def test_profiled_shadow_reads_temporally_confirmed_visual_auction_into_pbn(tmp_
     assert summary["auction_frame_observations_rejected"] == 0
     assert summary["auction_deal_statuses"] == {"COMPLETE_CONFIRMED": 1}
     assert summary["auction_standard_pbn_blocks"] == 1
+    assert summary["pdf_pages"] == 1
+    assert summary["pdf_deals"] == 1
     pbn = (tmp_path / "bridge_positions_profiled_shadow.pbn").read_text(encoding="utf-8")
     assert '[Auction "N"]' in pbn
     assert "1H Pass 2H Pass\nPass Pass" in pbn
