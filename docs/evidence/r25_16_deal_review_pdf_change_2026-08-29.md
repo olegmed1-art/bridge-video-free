@@ -27,6 +27,8 @@ or convert SHADOW observations to production facts.
   complete, mutually consistent 13-card hands provide 39 unique cards.
 - Missing cards, missing auctions, an invalid screenshot hash, and unavailable
   evidence remain visible as unknown or unavailable.
+- The renderer is seat-agnostic and applies the same verified/observed/derived
+  rules to `N`, `E`, `S`, and `W`; no example hand is encoded in runtime code.
 - `HUMAN_VERIFIED`, `OBSERVED`, and `DERIVED` are printed as distinct evidence
   classes. The page states that evidence review is not automatic canon
   promotion.

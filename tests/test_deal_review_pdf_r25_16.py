@@ -8,6 +8,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 import run_master_3_1_free as base
+from bridge_contracts.video_deal import SEATS
 from bridge_vision.deal_review_pdf import (
     DealReviewPdfError,
     build_deal_review_views,
@@ -75,10 +76,10 @@ def test_stable_master_pdf_appends_verified_layout_and_exact_reconstruction(tmp_
             "deal_id": "board-1",
             "board_number": 1,
             "status": "reviewed",
-            "hands": {"S": ["AS", "9S", "5S", "QH", "TH", "6H", "3H", "KD", "7D", "4D", "8C", "6C", "3C"]},
+            "hands": {"E": _complete_suit("C")},
             "verification": {
                 "status": "HUMAN_VERIFIED",
-                "verified_seats": ["S"],
+                "verified_seats": ["E"],
                 "method": "director visual review",
                 "reviewer": "school_director",
                 "verified_at": "2026-08-29T16:15:00Z",
@@ -128,7 +129,7 @@ def test_stable_master_pdf_appends_verified_layout_and_exact_reconstruction(tmp_
         assert all(page.rect.width > page.rect.height for page in review_pages)
         first_text = review_pages[0].get_text()
         second_text = review_pages[1].get_text()
-        assert "S - HUMAN_VERIFIED" in first_text
+        assert "E - HUMAN_VERIFIED" in first_text
         assert "NOT_DERIVED_INSUFFICIENT_OBSERVATIONS" in first_text
         assert "1H" in first_text and "Pass" in first_text
         assert "W - DERIVED" in second_text
@@ -173,6 +174,31 @@ def test_human_verified_label_requires_matching_hash_bound_frame(tmp_path: Path)
     ])
     with pytest.raises(DealReviewPdfError, match="hash-bound screenshot"):
         build_deal_review_views(master, [shot])
+
+
+@pytest.mark.parametrize("verified_seat", SEATS)
+def test_human_verification_is_seat_agnostic(tmp_path: Path, verified_seat: str):
+    shot = _frame(tmp_path / f"frame-{verified_seat}.jpg", f"VERIFIED {verified_seat}")
+    cards = {"N": "AS", "E": "AH", "S": "AD", "W": "AC"}
+    master = _master([
+        {
+            "deal_id": f"verified-{verified_seat}",
+            "hands": {verified_seat: [cards[verified_seat]]},
+            "verification": {
+                "status": "HUMAN_VERIFIED",
+                "verified_seats": [verified_seat],
+                "method": "independent visual review",
+                "reviewer": "bridge_expert",
+                "verified_at": "2026-08-29T16:15:00Z",
+                "reference_frame_sha256": shot["sha256"],
+            },
+            "auction": None,
+            "evidence": [shot["evidence_id"]],
+        }
+    ])
+    views = build_deal_review_views(master, [shot])
+    assert views[0]["verified_seats"] == {verified_seat}
+    assert views[0]["observed_count"] == 1
 
 
 def test_no_deals_preserves_existing_portrait_report(tmp_path: Path):
