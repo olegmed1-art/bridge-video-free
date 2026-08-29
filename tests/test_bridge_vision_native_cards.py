@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from bridge_vision.gold import evaluate_card_detector, evaluate_card_detector_report, passes_card_gold_gate
+from bridge_vision.gold import (
+    evaluate_card_detector,
+    evaluate_card_detector_report,
+    evaluate_temporal_card_detector_report,
+    passes_card_gold_gate,
+)
 from bridge_vision.native_cards import (
     NativeCardDetectorError,
     NativeFourSeatCardDetector,
@@ -95,3 +100,36 @@ def test_gold_report_exposes_tp_fp_fn_ambiguous_per_frame():
     }]
     assert report["totals"]["precision"] == pytest.approx(2 / 3)
     assert report["totals"]["recall"] == 0.5
+
+
+def test_temporal_gold_report_does_not_charge_verified_play_as_fn():
+    outputs = {
+        "early.jpg": {"hands": {"S": ["AS", "KS", "QS"]}},
+        "later.jpg": {"hands": {"S": ["KS", "QS"]}},
+    }
+    report = evaluate_temporal_card_detector_report(
+        lambda frame: outputs[frame.name],
+        [
+            {
+                "frame": "early.jpg",
+                "frame_id": "early",
+                "deal_key": "board-8",
+                "hands": {"S": ["AS", "KS", "QS"]},
+            },
+            {
+                "frame": "later.jpg",
+                "frame_id": "later",
+                "deal_key": "board-8",
+                "hands": {"S": ["AS", "KS", "QS"]},
+                "play_events": [{
+                    "seat": "S",
+                    "card": "AS",
+                    "verified": True,
+                    "evidence_locator": "later.jpg#center",
+                }],
+            },
+        ],
+    )
+    assert report["frames"][1]["played_no_longer_visible"] == 1
+    assert report["frames"][1]["visible_fn"] == 0
+    assert report["totals"]["visible_recall"] == 1.0
