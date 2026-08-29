@@ -15,6 +15,7 @@ from typing import Any
 
 from bridge_vision import BridgeVisionEngine, fuse_card_evidence
 from bridge_vision.evidence_fusion import MAX_DECLARATIONS
+from bridge_vision.shadow_pbn import render_shadow_pbn
 
 NativeDetectorInjection = Callable[[Path], dict[str, Any]]
 
@@ -262,6 +263,16 @@ def process_job_frames(
         "".join(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n" for record in records),
         encoding="utf-8",
     )
+    pbn_path = None
+    if profiled_shadow:
+        pbn_path = root / "bridge_positions_profiled_shadow.pbn"
+        pbn_path.write_text(
+            render_shadow_pbn(
+                records,
+                source=str(manifest.get("source_fingerprint") or manifest.get("job_id") or ""),
+            ),
+            encoding="utf-8",
+        )
     unmatched_speech_declarations = len(speech) - len(matched_speech_indices)
     if compatibility_mode:
         summary = {
@@ -275,6 +286,7 @@ def process_job_frames(
             "derive_fourth_hand": True,
             "derived_fourth_hand_frames": derived_fourth_hand_frames,
             "output": output_path.name,
+            "pbn_output": pbn_path.name if pbn_path else None,
         }
     else:
         summary = {
@@ -314,6 +326,7 @@ def process_job_frames(
             "speech_unmatched_declarations": unmatched_speech_declarations,
             "speech_frame_associations": speech_frame_associations,
             "output": output_path.name,
+            "pbn_output": pbn_path.name if pbn_path else None,
         }
     summary_path = root / (
         "bridge_positions_profiled_shadow_summary.json"

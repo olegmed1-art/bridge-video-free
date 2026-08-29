@@ -310,7 +310,7 @@ def test_compact_result_router_excludes_raw_media_and_caps_keyframes(tmp_path: P
         collect_compact_artifacts(job, max_frames=1)
 
 
-def test_compact_result_router_publishes_complete_profiled_shadow_card_pair(tmp_path: Path):
+def test_compact_result_router_publishes_complete_profiled_shadow_card_set(tmp_path: Path):
     job = tmp_path / "shadow-card-job"
     job.mkdir()
     (job / "manifest.json").write_text(
@@ -337,10 +337,15 @@ def test_compact_result_router_publishes_complete_profiled_shadow_card_pair(tmp_
         }),
         encoding="utf-8",
     )
+    (job / "bridge_positions_profiled_shadow.pbn").write_text(
+        "% PBN 2.1\n% X-ResultScope: SHADOW_ONLY\n% X-CanonicalPromotionAllowed: false\n",
+        encoding="utf-8",
+    )
 
     names = {item.relative_name for item in collect_compact_artifacts(job)}
     assert "bridge_positions_profiled_shadow.jsonl" in names
     assert "bridge_positions_profiled_shadow_summary.json" in names
+    assert "bridge_positions_profiled_shadow.pbn" in names
     assert "bridge_positions.jsonl" not in names
 
 

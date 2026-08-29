@@ -26,7 +26,7 @@ The default Native Bridge Vision runtime is unchanged. With no explicitly inject
 9. **Explainable rejection.** Pending, rejected and conflicting observations retain bounded profile, frame, registration, channel, geometry and temporal evidence. The manifest frame SHA is re-computed from bytes before shadow output is written. `UNAVAILABLE` is therefore auditable.
 10. **Verified layout prior.** The interface profile records the director-verified Bridgit layout: hearts, clubs, diamonds, spades (`H,C,D,S`) in that order for every hand; ranks descend from ace to two inside each suit. Hands displayed at screen top/bottom read the sequence horizontally through increasing registered X; screen left/right read the same sequence vertically through increasing registered Y. Logical seats are obtained through the verified compass rotation. The rule is applied only to ambiguous candidate sets above the confidence gate. A unique result is labelled `LAYOUT_SUGGESTION`, has `accepted_as_observation=false`, and cannot trigger `39 → 13`.
 11. **Attributed speech fusion.** A normalized exact teacher declaration may enter the shadow observed set only when card, seat, transcript locator, bounded timeline, verified speaker identity, speaker assignment confidence and declaration confidence all pass their gates. Student declarations are retained as `STUDENT_SPEECH_SUGGESTION`; they can confirm, contradict or corroborate a layout suggestion but never add a card, create a complete deal or trigger derivation.
-12. **Board metadata.** An injected recognizer may provide an attributable, confidence-gated board-number observation. Dealer and vulnerability are deterministically derived from the standard duplicate 4/16-board cycles. Optional directly observed dealer/vulnerability must agree with that cycle or the frame fails closed. Board metadata requires the same independent-frame temporal consensus as cards, and disagreement inside one stable deal identity is a hard conflict. A bare string such as `value=board-7` is only a track identity and is never parsed as an observed board number.
+12. **Bridgit compass and board metadata.** For the verified Bridgit profile, the source is the compass immediately above the cards at the upper right of the table: board number in its centre, `N/E/S/W` around it, the yellow `D` dealer marker, and (when confidently decoded) vulnerability colour. `bridge_vision.bridgit_compass` accepts only the human-verified ROI, a complete cyclic 0/90/180/270-degree compass and attributable observations at or above the confidence gate. It binds the observed board number to the stable deal track and verifies dealer/vulnerability against the standard duplicate 4/16-board cycles. A board change starts a separate temporal track. ROI, compass, profile rotation, dealer or vulnerability disagreement fails closed to `REVIEW`; the adapter never guesses a missing label. Board metadata requires the same independent-frame temporal consensus as cards. A bare string such as `value=board-7` is only a track identity and is never parsed as an observed board number.
 
 ## Runtime contract
 
@@ -105,6 +105,16 @@ profiled shadow challenger and is emitted separately as `speech_fusion` and
 `fused_deal`; it never replaces the raw vision result.
 
 The challenger output keeps `canonical_promotion_allowed=false`. It may produce a shadow `OBSERVED` deal or the existing exact `39 observed → 13 DERIVED` result, but neither is automatically published to the School Canon. Profiled output is written only to `bridge_positions_profiled_shadow.jsonl`; the canonical downstream filename `bridge_positions.jsonl` is never created or overwritten by this path.
+
+Every profiled SHADOW run also writes `bridge_positions_profiled_shadow.pbn` for
+director review. Accepted observations are accumulated only inside the stable
+deal identity supplied by the verified Bridgit compass. Partial hands use
+`X-Observed-N/E/S/W` and `X-UnknownCount-N/E/S/W`; they deliberately omit the
+standard `Deal` tag because omitted cards must not be misrepresented as voids.
+Only 52 unique accepted observations (13 per seat) may produce a standard PBN
+`Deal` tag. Conflict records, pending temporal votes, layout suggestions and
+diagnostic candidates are not exported as found cards. JSONL, summary and PBN
+form one all-or-nothing, hash-bound SHADOW artifact set.
 
 ## Activation and rollback
 

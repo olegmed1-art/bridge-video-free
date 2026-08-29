@@ -32,6 +32,7 @@ BASE_TOP_LEVEL_ALLOWLIST = frozenset({"manifest.json", "transcript.jsonl", "tran
 SHADOW_CARD_ARTIFACTS = frozenset({
     "bridge_positions_profiled_shadow.jsonl",
     "bridge_positions_profiled_shadow_summary.json",
+    "bridge_positions_profiled_shadow.pbn",
 })
 TOP_LEVEL_ALLOWLIST = BASE_TOP_LEVEL_ALLOWLIST | {"server_review.json"} | SHADOW_CARD_ARTIFACTS
 FRAME_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp"})

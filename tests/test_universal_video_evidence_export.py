@@ -171,7 +171,7 @@ def test_manifest_processing_revision_must_match_requested_runtime(tmp_path: Pat
         )
 
 
-def test_shadow_cards_are_exported_only_with_complete_hash_bound_pair(tmp_path: Path):
+def test_shadow_cards_are_exported_only_with_complete_hash_bound_set(tmp_path: Path):
     request, status, spool, result_dir, _final = _inputs(tmp_path)
     summary = {
         "status": "SHADOW_COMPLETED",
@@ -189,12 +189,16 @@ def test_shadow_cards_are_exported_only_with_complete_hash_bound_pair(tmp_path: 
         json.dumps({"status": "PASS", "canonical_promotion_allowed": False}) + "\n",
         encoding="utf-8",
     )
+    (result_dir / "bridge_positions_profiled_shadow.pbn").write_text(
+        "% PBN 2.1\n% X-ResultScope: SHADOW_ONLY\n% X-CanonicalPromotionAllowed: false\n",
+        encoding="utf-8",
+    )
     receipt = build_evidence_export(
         request_path=request, status_path=status, spool_root=spool, now=1010.0
     )
     assert receipt["cards"]["status"] == "OBSERVED_SHADOW"
     assert receipt["cards"]["recognized_frames"] == 2
-    assert len(receipt["cards"]["artifacts"]) == 2
+    assert len(receipt["cards"]["artifacts"]) == 3
     assert all(len(item["sha256"]) == 64 for item in receipt["cards"]["artifacts"])
 
 
@@ -252,6 +256,10 @@ def test_partial_or_promotable_shadow_artifact_fails_closed(tmp_path: Path):
         encoding="utf-8",
     )
     (result_dir / "bridge_positions_profiled_shadow.jsonl").write_text("{}\n", encoding="utf-8")
+    (result_dir / "bridge_positions_profiled_shadow.pbn").write_text(
+        "% PBN 2.1\n% X-ResultScope: SHADOW_ONLY\n% X-CanonicalPromotionAllowed: false\n",
+        encoding="utf-8",
+    )
     with pytest.raises(EvidenceExportError, match="promotion boundary"):
         build_evidence_export(request_path=request, status_path=status, spool_root=spool, now=1010.0)
 
@@ -270,6 +278,10 @@ def test_promotable_nested_shadow_record_fails_closed(tmp_path: Path):
     )
     (result_dir / "bridge_positions_profiled_shadow.jsonl").write_text(
         json.dumps({"evidence": {"canonical_promotion_allowed": True}}) + "\n",
+        encoding="utf-8",
+    )
+    (result_dir / "bridge_positions_profiled_shadow.pbn").write_text(
+        "% PBN 2.1\n% X-ResultScope: SHADOW_ONLY\n% X-CanonicalPromotionAllowed: false\n",
         encoding="utf-8",
     )
     with pytest.raises(EvidenceExportError, match="record promotion boundary"):

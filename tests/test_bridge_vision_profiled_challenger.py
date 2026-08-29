@@ -578,6 +578,12 @@ def test_profiled_challenger_is_explicit_opt_in_for_video_positions(tmp_path: Pa
     assert records[1]["deal"]["hands"]["N"]["cards"] == ["AS"]
     evidence = records[1]["candidates"][0]["evidence"]
     assert evidence["canonical_promotion_allowed"] is False
+    pbn = (tmp_path / "bridge_positions_profiled_shadow.pbn").read_text(encoding="utf-8")
+    assert '% X-ResultScope: SHADOW_ONLY' in pbn
+    assert '[X-Observed-N "A.-.-.-"]' in pbn
+    assert '[X-UnknownCount-N "12"]' in pbn
+    assert '[Deal "' not in pbn
+    assert summary["pbn_output"] == "bridge_positions_profiled_shadow.pbn"
 
     with pytest.raises(ValueError, match="cannot be combined"):
         process_job_frames(
