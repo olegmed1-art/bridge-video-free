@@ -5,6 +5,7 @@ from bridge_speaker_diarization_v2 import (
     _assign_speakers_from_turns,
     _map_roles_v2,
 )
+from bridge_speaker_diarization import _diagnostic_code
 
 
 def test_clear_turn_overlap_maps_two_anonymous_speakers():
@@ -59,3 +60,15 @@ def test_models_are_public_token_free_release_assets():
     assert EMBEDDING_URL.startswith("https://github.com/k2-fsa/sherpa-onnx/releases/download/")
     assert "token" not in SEGMENTATION_URL.lower()
     assert "token" not in EMBEDDING_URL.lower()
+
+
+def test_v1_failure_diagnostics_are_bounded():
+    assert _diagnostic_code(RuntimeError("insufficient voiced segments")) == (
+        "INSUFFICIENT_VOICED_SEGMENTS"
+    )
+    assert _diagnostic_code(
+        RuntimeError("acoustic clusters not sufficiently separated")
+    ) == "ACOUSTIC_CLUSTERS_NOT_SEPARATED"
+    assert _diagnostic_code(RuntimeError("secret internal detail")) == (
+        "DIARIZATION_ENGINE_FAILED"
+    )

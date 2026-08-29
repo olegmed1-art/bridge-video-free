@@ -39,8 +39,10 @@ def _diarized(label_a: str = "Diana Veksler", label_b: str = "Student"):
 
 def _patch_diarizer(monkeypatch, rows, report):
     import bridge_speaker_diarization
+    import bridge_speaker_diarization_v3
 
     monkeypatch.setattr(bridge_speaker_diarization, "diarize_transcript", lambda *_args, **_kwargs: (rows, report))
+    monkeypatch.setattr(bridge_speaker_diarization_v3, "diarize_transcript", lambda *_args, **_kwargs: (rows, report))
 
 
 def test_success_reanonymizes_source_labels_and_preserves_asr(monkeypatch, tmp_path: Path):
@@ -94,6 +96,117 @@ def test_invalid_confidence_fails_closed(monkeypatch, tmp_path: Path):
     output, report = run_speaker_structure(tmp_path / "lesson.mp4", _asr_rows(), tmp_path)
     assert all("speaker" not in row for row in output)
     assert report["reason"] == "INVALID_SPEAKER_ANNOTATION"
+
+
+@pytest.mark.parametrize(
+    ("raw_report", "expected_reason"),
+    [
+        (
+            {
+                "revision": "bridge-local-diarization-v1",
+                "status": "UNAVAILABLE",
+                "reason": "RuntimeError",
+                "diagnostic_code": "ACOUSTIC_CLUSTERS_NOT_SEPARATED",
+                "detail": "must not be exported",
+            },
+            "ACOUSTIC_CLUSTERS_NOT_SEPARATED",
+        ),
+        (
+            {
+                "revision": "bridge-local-diarization-v1",
+                "status": "UNAVAILABLE",
+                "reason": "RuntimeError",
+                "detail": "unbounded internal detail",
+            },
+            "DIARIZATION_ENGINE_FAILED",
+        ),
+        (
+            {
+                "revision": "bridge-local-diarization-v1",
+                "status": "UNAVAILABLE",
+                "reason": "ModuleNotFoundError",
+            },
+            "OPTIONAL_RUNTIME_UNAVAILABLE",
+        ),
+    ],
+)
+def test_unavailable_producer_exposes_only_bounded_reason(
+    monkeypatch, tmp_path: Path, raw_report: dict, expected_reason: str
+):
+    _patch_diarizer(monkeypatch, _asr_rows(), raw_report)
+    output, report = run_speaker_structure(
+        tmp_path / "lesson.mp4",
+        _asr_rows(),
+        tmp_path,
+        min_label_coverage=MIN_TEST_LABEL_COVERAGE,
+    )
+
+    assert all("speaker" not in row for row in output)
+    assert report["status"] == "UNAVAILABLE"
+    assert report["quality_gate"] == "INCONCLUSIVE"
+    assert report["reason"] == expected_reason
+    assert "detail" not in report
+
+
+def test_v3_collapse_status_fails_closed_with_specific_reason(monkeypatch, tmp_path: Path):
+    _patch_diarizer(
+        monkeypatch,
+        _diarized(),
+        {
+            "revision": "bridge-sherpa-onnx-diarization-v3",
+            "status": "DIARIZED_COLLAPSE_RISK",
+        },
+    )
+    output, report = run_speaker_structure(
+        tmp_path / "lesson.mp4",
+        _asr_rows(),
+        tmp_path,
+        min_label_coverage=MIN_TEST_LABEL_COVERAGE,
+    )
+
+    assert all("speaker" not in row for row in output)
+    assert report["status"] == "UNAVAILABLE"
+    assert report["reason"] == "SPEAKER_COLLAPSE_RISK"
+
+
+def test_test_profile_selects_v3_without_changing_stable_backend(monkeypatch, tmp_path: Path):
+    import bridge_speaker_diarization
+    import bridge_speaker_diarization_v3
+
+    calls: list[str] = []
+
+    def stable(*_args, **_kwargs):
+        calls.append("v1")
+        return _asr_rows(), {
+            "revision": "bridge-local-diarization-v1",
+            "status": "UNAVAILABLE",
+            "diagnostic_code": "INSUFFICIENT_VOICED_SEGMENTS",
+        }
+
+    def test_backend(*_args, **_kwargs):
+        calls.append("v3")
+        return _asr_rows(), {
+            "revision": "bridge-sherpa-onnx-diarization-v3",
+            "status": "UNAVAILABLE",
+            "diagnostic_code": "ACOUSTIC_CLUSTERS_NOT_SEPARATED",
+        }
+
+    monkeypatch.setattr(bridge_speaker_diarization, "diarize_transcript", stable)
+    monkeypatch.setattr(bridge_speaker_diarization_v3, "diarize_transcript", test_backend)
+
+    _, stable_report = run_speaker_structure(
+        tmp_path / "lesson.mp4", _asr_rows(), tmp_path
+    )
+    _, test_report = run_speaker_structure(
+        tmp_path / "lesson.mp4",
+        _asr_rows(),
+        tmp_path,
+        min_label_coverage=MIN_TEST_LABEL_COVERAGE,
+    )
+
+    assert calls == ["v1", "v3"]
+    assert stable_report["revision"] == "bridge-local-diarization-v1"
+    assert test_report["revision"] == "bridge-sherpa-onnx-diarization-v3"
 
 
 def test_large_lesson_coverage_fixture(monkeypatch, tmp_path: Path):

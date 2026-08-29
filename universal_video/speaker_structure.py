@@ -41,6 +41,11 @@ _REASONS = frozenset(
     {
         "NONE",
         "OPTIONAL_RUNTIME_UNAVAILABLE",
+        "AUDIO_EXTRACTION_FAILED",
+        "AUDIO_FORMAT_UNSUPPORTED",
+        "INSUFFICIENT_VOICED_SEGMENTS",
+        "ACOUSTIC_CLUSTERS_NOT_SEPARATED",
+        "DIARIZATION_ENGINE_FAILED",
         "UNSUPPORTED_STATUS",
         "SEGMENT_COUNT_MISMATCH",
         "NO_SPEAKER_LABELS",
@@ -52,6 +57,17 @@ _REASONS = frozenset(
         "DISABLED",
     }
 )
+
+
+def _producer_failure_reason(report: Mapping[str, Any]) -> str:
+    """Return only a bounded diagnostic code from an unavailable producer."""
+    code = str(report.get("diagnostic_code") or "").strip().upper()
+    if code in _REASONS - {"NONE"}:
+        return code
+    producer_error = str(report.get("reason") or "").strip()
+    if producer_error in {"ImportError", "ModuleNotFoundError", "FileNotFoundError"}:
+        return "OPTIONAL_RUNTIME_UNAVAILABLE"
+    return "DIARIZATION_ENGINE_FAILED"
 
 
 def _strip_speaker_fields(segment: Mapping[str, Any]) -> dict[str, Any]:
@@ -167,7 +183,10 @@ def run_speaker_structure(
     original = [_strip_speaker_fields(segment) for segment in transcript]
     revision = "bridge-speaker-structure-v1"
     try:
-        from bridge_speaker_diarization import DIARIZATION_REVISION, diarize_transcript
+        if normalized_min_coverage is None:
+            from bridge_speaker_diarization import DIARIZATION_REVISION, diarize_transcript
+        else:
+            from bridge_speaker_diarization_v3 import DIARIZATION_REVISION, diarize_transcript
 
         raw_segments, raw_report = diarize_transcript(video_path, transcript, work_dir, enabled=True)
         raw_report = raw_report if isinstance(raw_report, Mapping) else {}
@@ -181,13 +200,20 @@ def run_speaker_structure(
         )
 
     status = str(raw_report.get("status") or "UNAVAILABLE").upper()
+    if status == "DIARIZED_COLLAPSE_RISK":
+        return _unavailable(
+            original,
+            revision=revision,
+            reason="SPEAKER_COLLAPSE_RISK",
+            min_label_coverage=normalized_min_coverage,
+        )
     if status not in _ALLOWED_STATUSES:
         return _unavailable(original, revision=revision, reason="UNSUPPORTED_STATUS", min_label_coverage=normalized_min_coverage)
     if status not in _POSITIVE_STATUSES:
         reason = {
             "UNAVAILABLE_INSUFFICIENT_SEGMENTS": "INSUFFICIENT_SEGMENTS",
             "DISABLED": "DISABLED",
-        }.get(status, "OPTIONAL_RUNTIME_UNAVAILABLE")
+        }.get(status, _producer_failure_reason(raw_report))
         return _unavailable(original, revision=revision, status=status, reason=reason, min_label_coverage=normalized_min_coverage)
     if not isinstance(raw_segments, Sequence) or isinstance(raw_segments, (str, bytes)):
         return _unavailable(original, revision=revision, reason="SEGMENT_COUNT_MISMATCH", min_label_coverage=normalized_min_coverage)

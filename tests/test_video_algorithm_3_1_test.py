@@ -33,7 +33,8 @@ EXPECTED_RECENT_CAPABILITIES = {
     "runtime_attestation_v2",
     "timestamped_asr_and_acoustic_qc",
     "bridge_semantic_qc",
-    "anonymous_speaker_structure_v2",
+    "anonymous_speaker_structure_v3",
+    "speaker_bounded_diagnostic_gate_v1",
     "speaker_label_coverage_gate_v1",
     "profiled_card_pixel_challenger_v2",
     "card_ocr_label_channel",
@@ -107,7 +108,7 @@ def test_definition_composes_base_and_all_recent_video_capabilities():
     assert definition["canonical_promotion_allowed"] is False
     assert definition["production_activation_allowed"] is False
     assert definition["next_video_auto_start_allowed"] is False
-    assert definition["algorithm_revision"] == "3.1-test-r3"
+    assert definition["algorithm_revision"] == "3.1-test-r4"
     assert definition["bridgit_layout_policy"] == BRIDGIT_LAYOUT_POLICY
     assert definition["bridgit_layout_policy"]["suit_order"] == ["H", "C", "D", "S"]
     assert definition["bridgit_layout_policy"]["screen_axes"] == {

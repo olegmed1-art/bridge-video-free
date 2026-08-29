@@ -1,4 +1,4 @@
-name: FIELD Diana 14 / Video 3.1-test-r3
+name: FIELD Diana 14 / Video 3.1-test-r4
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: field-diana14-3-1-test-r3
+  group: field-diana14-3-1-test-r4
   cancel-in-progress: false
 
 jobs:
@@ -22,7 +22,8 @@ jobs:
       UNIVERSAL_VIDEO_WHISPER_MODEL: small
       UNIVERSAL_VIDEO_MAX_SOURCE_BYTES: '1073741824'
       HF_HOME: /tmp/diana14-hf-cache
-      JOB_ID: diana14-video31-test-r3-20260829-01
+      BRIDGE_SPEAKER_MODEL_CACHE: /tmp/diana14-speaker-models-r4
+      JOB_ID: diana14-video31-test-r4-20260829-02
       SOURCE_FILE_ID: 1Hs9rItDk1tsU0nL7vl7A1HF9NHgBU8dr
       EXPECTED_SOURCE_SIZE: '655885284'
 
@@ -43,9 +44,13 @@ jobs:
           sudo apt-get install -y ffmpeg
           python -m pip install --disable-pip-version-check -q \
             -r requirements-universal-video-speaker.txt pytest
+          python -m pip install --disable-pip-version-check -q --force-reinstall \
+            'numpy==2.2.6' 'sherpa-onnx==1.13.4' 'sherpa-onnx-bin==1.13.4'
           ffmpeg -version | head -1
           python - <<'PY'
-          import faster_whisper, numpy, requests
+          import faster_whisper, numpy, requests, sherpa_onnx
+          assert numpy.__version__ == '2.2.6'
+          assert getattr(sherpa_onnx, '__version__', None) == '1.13.4'
           print('FIELD_RUNTIME_IMPORTS_PASS')
           PY
 
@@ -96,7 +101,7 @@ jobs:
               'project': 'Школа спортивного бриджа',
               'metadata': {
                   'human_requested': True,
-                  'purpose': 'One isolated field shadow of Video Analysis 3.1-test-r3',
+                  'purpose': 'One isolated field shadow of Video Analysis 3.1-test-r4',
                   'automatic_retry': False,
                   'next_video_auto_start': False,
                   'promotion_allowed': False,
@@ -150,8 +155,8 @@ jobs:
           manifest = json.loads((job_dir / 'manifest.json').read_text(encoding='utf-8'))
           speaker = json.loads((job_dir / 'speaker_diarization.json').read_text(encoding='utf-8'))
           receipt = {
-              'field_test': 'diana14-video31-test-r3-20260829-01',
-              'algorithm_revision': '3.1-test-r3',
+              'field_test': 'diana14-video31-test-r4-20260829-02',
+              'algorithm_revision': '3.1-test-r4',
               'result_scope': 'SHADOW_ONLY',
               'source': {
                   'file_id': os.environ['SOURCE_FILE_ID'],
@@ -195,7 +200,7 @@ jobs:
         if: ${{ always() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: diana14-video31-test-r3-field-evidence
+          name: diana14-video31-test-r4-field-evidence
           path: ${{ runner.temp }}/field-artifact
           if-no-files-found: error
           retention-days: 14

@@ -17,7 +17,7 @@ from .speaker_structure import MIN_TEST_LABEL_COVERAGE
 
 SCHEMA = "bridge-video-algorithm-definition-v1"
 ALGORITHM_VERSION = "3.1-test"
-ALGORITHM_REVISION = "3.1-test-r3"
+ALGORITHM_REVISION = "3.1-test-r4"
 BASE_ALGORITHM_VERSION = "3.1 FREE"
 PROFILE_NAME = "bridge_lesson_3_1_test"
 DEFINITION_FILE = "algorithm_3_1_test.json"
@@ -93,10 +93,16 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
         "boundary": "frames are hash-bound to the result manifest",
     },
     {
-        "id": "anonymous_speaker_structure_v2",
+        "id": "anonymous_speaker_structure_v3",
         "state": "IMPLEMENTED_OPTIONAL",
+        "modules": ["universal_video.speaker_structure", "bridge_speaker_diarization_v3"],
+        "boundary": "test profile uses neural v3; only SPEAKER_A..H; any doubt removes all labels",
+    },
+    {
+        "id": "speaker_bounded_diagnostic_gate_v1",
+        "state": "IMPLEMENTED_TEST_ONLY",
         "modules": ["universal_video.speaker_structure", "bridge_speaker_diarization"],
-        "boundary": "only SPEAKER_A..H; roles are suggestions; any doubt removes all labels",
+        "boundary": "field failures expose only enumerated reason codes and never raw exceptions",
     },
     {
         "id": "speaker_label_coverage_gate_v1",
