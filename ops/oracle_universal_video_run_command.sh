@@ -120,6 +120,16 @@ EXPECTED_RUNTIME_COMMIT="$RESOLVED_COMMIT" \
   bash "$SOURCE_DIR/ops/install_universal_video_operator.sh"
 sudo -u ocarun sudo -n /usr/local/sbin/universal-video status install-smoke >/dev/null
 
+# Keep the fixed evidence-export entrypoint and its root-owned source pin on
+# the same exact revision as the resident worker. The installer exposes only
+# fixed audit/productionize/repair/export commands and performs its own visudo,
+# ownership, argument-rejection, and read-only audit gates. It does not submit
+# a job, start ASR, or publish evidence.
+log "Install revision-bound Universal Video admin and evidence export entrypoints"
+SOURCE_COMMIT="$RESOLVED_COMMIT" \
+  bash "$SOURCE_DIR/ops/install_universal_video_ocarun_admin.sh"
+echo 'universal_video_admin=installed_revision_bound'
+
 log "Activation evidence"
 printf 'source_commit=%s\n' "$RESOLVED_COMMIT"
 printf 'assistant_lab=%s\n' "$(systemctl is-active assistant-lab.service)"

@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/oracle-universal-video-activation.yml"
 SCHEMA = ROOT / "ops/oracle-universal-video-request.schema.json"
 OPERATOR_INSTALL = ROOT / "ops/install_universal_video_operator.sh"
+RUN_COMMAND = ROOT / "ops/oracle_universal_video_run_command.sh"
 
 
 def test_activation_workflow_is_fixed_scope_and_fail_closed():
@@ -23,6 +24,9 @@ def test_activation_workflow_is_fixed_scope_and_fail_closed():
     assert "assistant_lab=active" in text
     assert "universal_video_enabled=enabled" in text
     assert "universal_video_active=active" in text
+    assert "universal_video_admin=installed_revision_bound" in text
+    assert "UNIVERSAL_VIDEO_OCARUN_BOUNDED_ADMIN_BOOTSTRAP_PASS" in text
+    assert "UNIVERSAL_VIDEO_OCARUN_POST_BOOTSTRAP_AUDIT_PASS" in text
     assert "DDS3_AFTER_PASS" in text
     assert "workflow_dispatch" in text
     assert "ops/oracle-universal-video-requests/*.json" in text
@@ -45,3 +49,14 @@ def test_generic_operator_owns_a_dedicated_sudoers_file():
     assert "readonly SUDOERS='/etc/sudoers.d/universal-video-ocarun'" not in installer
     assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video submit-base64 *" in installer
     assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video status *" in installer
+
+
+def test_activation_installs_export_boundary_from_the_exact_resolved_revision():
+    command = RUN_COMMAND.read_text(encoding="utf-8")
+    assert 'SOURCE_COMMIT="$RESOLVED_COMMIT"' in command
+    assert 'bash "$SOURCE_DIR/ops/install_universal_video_ocarun_admin.sh"' in command
+    assert "universal_video_admin=installed_revision_bound" in command
+    assert command.index('SOURCE_COMMIT="$RESOLVED_COMMIT"') < command.index(
+        "universal_video_admin=installed_revision_bound"
+    )
+    assert "UNIVERSAL_VIDEO_RUN_SMOKE=1" not in command
