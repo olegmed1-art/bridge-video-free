@@ -150,6 +150,17 @@ jobs:
             case "$lifecycle" in SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break;; esac
             sleep 3
           done
+          if [[ "$lifecycle" == SUCCEEDED ]]; then
+            for _ in $(seq 1 15); do
+              has_text="$(printf '%s' "$execution" | python -c 'import json,sys; print("yes" if str((json.load(sys.stdin).get("data",{}).get("content") or {}).get("text","") or "") else "no")')"
+              [[ "$has_text" == yes ]] && break
+              sleep 2
+              execution="$(oci instance-agent command-execution get --command-id "$command_id" --instance-id "$INSTANCE_ID" --output json 2>/dev/null || true)"
+              [[ -n "$execution" ]] || continue
+              lifecycle="$(printf '%s' "$execution" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state",""))')"
+              [[ "$lifecycle" == SUCCEEDED ]] || break
+            done
+          fi
           printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("text","") or "")' > "$RUNNER_TEMP/uv-export-raw.txt"
           REMOTE_LIFECYCLE="$lifecycle" JOB_ID='${{ steps.request.outputs.job_id }}' python - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os, re
