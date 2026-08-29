@@ -1,6 +1,6 @@
 from bridge_school_api.bidding_world_resolver import (
     CANON_CONFLICT, UNRESOLVED_GAP, WORLD_CONFLICT, WORLD_FALLBACK,
-    KnowledgeRule, resolve_two_lane,
+    KnowledgeRule, learner_response, resolve_two_lane,
 )
 
 
@@ -30,6 +30,11 @@ def test_canon_conflict_stops_before_world():
     )
     assert result.outcome == CANON_CONFLICT
     assert result.trace["world_searched"] is False
+    learner = learner_response(result)
+    assert learner["status"] == "PENDING_CANON_CLARIFICATION"
+    assert learner["action"] is None
+    assert learner["authority"] == "SCHOOL_CANON"
+    assert learner["conflicting_rule_ids"] == ["c1", "c2"]
 
 
 def test_gap_allows_only_reliable_world_fallback():

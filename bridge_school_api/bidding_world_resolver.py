@@ -38,6 +38,24 @@ class Resolution:
     trace: dict[str, Any]
 
 
+def learner_response(resolution: Resolution) -> dict[str, Any]:
+    """Return a safe, display-ready result without weakening authority gates.
+
+    In particular, a CANON_CONFLICT is visible to the learner as an explicit
+    pending clarification, never as a selected action or an invitation to use
+    WORLD as a tie-breaker.
+    """
+    if resolution.outcome == "CANON_MATCH":
+        return {"status": "ANSWER", "authority": "SCHOOL_CANON", "action": resolution.selected.action if resolution.selected else None, "message": "Ответ дан по утверждённому правилу Школы."}
+    if resolution.outcome == CANON_CONFLICT:
+        return {"status": "PENDING_CANON_CLARIFICATION", "authority": "SCHOOL_CANON", "action": None, "message": "В утверждённых правилах Школы есть конфликт для этой ситуации. Единая рекомендация пока не выдана.", "conflicting_rule_ids": [r.rule_id for r in resolution.canon_candidates]}
+    if resolution.outcome == WORLD_FALLBACK:
+        return {"status": "ANSWER", "authority": "WORLD_FALLBACK", "action": resolution.selected.action if resolution.selected else None, "message": "В утверждённом каноне нет правила; показан внешний ответ, не являющийся правилом Школы."}
+    if resolution.outcome == WORLD_CONFLICT:
+        return {"status": "WORLD_CONFLICT", "authority": "WORLD_EXTERNAL", "action": None, "message": "Внешние источники расходятся; автоматическая рекомендация не выдана.", "alternative_rule_ids": [r.rule_id for r in resolution.world_candidates]}
+    return {"status": "UNRESOLVED_GAP", "authority": None, "action": None, "message": "Подходящего подтверждённого ответа пока нет."}
+
+
 def _rank(rules: Iterable[KnowledgeRule]) -> tuple[KnowledgeRule, ...]:
     return tuple(sorted((r for r in rules if r.applicable), key=lambda r: (-r.priority, -r.specificity, r.rule_id)))
 
