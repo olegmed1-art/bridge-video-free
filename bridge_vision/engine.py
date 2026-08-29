@@ -7,9 +7,10 @@ conflicts. Platform-specific recognizers are plugins, not the architecture.
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping
+from typing import Any
 
 from bridge_contracts.video_deal import SEATS, canonicalize_video_deal
 
@@ -44,6 +45,7 @@ class VisionResult:
     candidates: tuple[VisionCandidate, ...]
     conflicts: tuple[dict[str, Any], ...]
     engine_version: str = NATIVE_ENGINE_VERSION
+    diagnostics: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -52,6 +54,7 @@ class VisionResult:
             "deal": self.deal,
             "candidates": [candidate.to_dict() for candidate in self.candidates],
             "conflicts": list(self.conflicts),
+            "diagnostics": list(self.diagnostics),
         }
 
 
@@ -92,11 +95,24 @@ class BridgeVisionEngine:
         if not 0.0 <= min_confidence <= 1.0:
             raise ValueError("min_confidence outside [0,1]")
         self._detectors = dict(detectors or {})
+        self._validate_detector_modes()
         self.min_confidence = float(min_confidence)
+
+    def _validate_detector_modes(self) -> None:
+        modes = {bool(getattr(detector, "shadow_only", False)) for detector in self._detectors.values()}
+        if len(modes) > 1:
+            raise ValueError("shadow-only and canonical detectors cannot be mixed")
 
     @property
     def detector_names(self) -> tuple[str, ...]:
         return tuple(sorted(self._detectors))
+
+    @property
+    def shadow_only(self) -> bool:
+        return bool(self._detectors) and all(
+            bool(getattr(detector, "shadow_only", False))
+            for detector in self._detectors.values()
+        )
 
     def register(self, name: str, detector: Detector) -> None:
         key = str(name or "").strip()
@@ -105,17 +121,56 @@ class BridgeVisionEngine:
         if key in self._detectors:
             raise ValueError(f"detector already registered: {key}")
         self._detectors[key] = detector
+        try:
+            self._validate_detector_modes()
+        except ValueError:
+            self._detectors.pop(key, None)
+            raise
 
     def analyze_frame(self, frame: Path) -> VisionResult:
         candidates: list[VisionCandidate] = []
+        detector_conflicts: list[dict[str, Any]] = []
+        diagnostics: list[dict[str, Any]] = []
         for name, detector in sorted(self._detectors.items()):
             raw = detector(frame)
+            if isinstance(raw, Mapping) and str(raw.get("status") or "").upper() == "CONFLICT":
+                raw_conflicts = raw.get("conflicts") or []
+                if not isinstance(raw_conflicts, (list, tuple)):
+                    raise BridgeVisionError(f"detector {name} conflicts must be an array")
+                if not raw_conflicts:
+                    raise BridgeVisionError(f"detector {name} returned an empty conflict")
+                for conflict in raw_conflicts:
+                    if not isinstance(conflict, Mapping):
+                        raise BridgeVisionError(f"detector {name} conflict must be an object")
+                    detector_conflicts.append({**dict(conflict), "detector": name})
+                evidence = raw.get("evidence") or {}
+                diagnostics.append({
+                    "detector": name,
+                    "status": "CONFLICT",
+                    "evidence": dict(evidence) if isinstance(evidence, Mapping) else {},
+                })
+                continue
             candidate = _candidate(name, raw)
             if candidate.confidence >= self.min_confidence and candidate.hands:
                 candidates.append(candidate)
+            else:
+                diagnostics.append({
+                    "detector": name,
+                    "status": str(raw.get("status") or "REJECTED").upper(),
+                    "confidence": candidate.confidence,
+                    "evidence": dict(candidate.evidence),
+                })
 
+        if detector_conflicts:
+            return VisionResult(
+                "CONFLICT",
+                None,
+                tuple(candidates),
+                tuple(detector_conflicts),
+                diagnostics=tuple(diagnostics),
+            )
         if not candidates:
-            return VisionResult("UNAVAILABLE", None, tuple(), tuple())
+            return VisionResult("UNAVAILABLE", None, (), (), diagnostics=tuple(diagnostics))
 
         # A card assigned to different seats by accepted detectors is a hard conflict.
         card_to_seat: dict[str, str] = {}
@@ -138,7 +193,13 @@ class BridgeVisionEngine:
                         merged[seat].add(card)
 
         if conflicts:
-            return VisionResult("CONFLICT", None, tuple(candidates), tuple(conflicts))
+            return VisionResult(
+                "CONFLICT",
+                None,
+                tuple(candidates),
+                tuple(conflicts),
+                diagnostics=tuple(diagnostics),
+            )
 
         deal = canonicalize_video_deal(
             {"hands": {seat: sorted(cards) for seat, cards in merged.items()}},
@@ -162,13 +223,13 @@ class BridgeVisionEngine:
             if isinstance(confidence, dict):
                 confidence["source_observation_floor"] = source_floor
         status = "PARTIAL_BOARD_OBSERVATION" if observed >= 4 else "INSUFFICIENT"
-        return VisionResult(status, deal, tuple(candidates), tuple())
+        return VisionResult(status, deal, tuple(candidates), (), diagnostics=tuple(diagnostics))
 
 
 __all__ = [
     "NATIVE_ENGINE_VERSION",
-    "BridgeVisionError",
     "BridgeVisionEngine",
+    "BridgeVisionError",
     "VisionCandidate",
     "VisionResult",
 ]
