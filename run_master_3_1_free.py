@@ -5,6 +5,12 @@ from pathlib import Path
 import hashlib, html, json, math, os, re, tempfile, time
 import requests
 import run_drive_3_1_free as io
+from bridge_vision.deal_evidence import (
+    DealEvidenceError,
+    MAX_BUNDLE_BYTES,
+    apply_deal_evidence_bundle,
+)
+from bridge_vision.deal_pbn import render_deals_pbn
 from bridge_vision.deal_review_pdf import append_deal_review_pages
 from bridge_worker_3_1_free import (
     ALGORITHM_VERSION, ALGORITHM_REVISION, INFERENCE, UNCERTAIN,
@@ -163,6 +169,35 @@ def derive_deals_decisions(episodes,job):
         if e.get('type') in {'торговля','розыгрыш','защита','ошибка/коррекция'}:deals.append({'deal_id':stable_entity_id('deal',job,e['episode_id']),'episode_id':e['episode_id'],'status':'candidate','hands':{'N':None,'E':None,'S':None,'W':None},'auction':None,'contract':None,'declarer':None,'opening_lead':None,'result':None,'reconstruction_rule':'UNKNOWN unless explicitly recoverable from transcript/visual evidence','statement_type':UNCERTAIN,'evidence':e.get('evidence',[])+e.get('visual_evidence',[])})
         if e.get('decision_cues'):dec.append({'decision_id':stable_entity_id('decision',job,e['episode_id']),'episode_id':e['episode_id'],'actor':e.get('speaker'),'observed_context':e.get('summary_text','')[:1000],'decision_cues':e.get('decision_cues',[]),'reasoning':None,'decision_quality':'not rated without sufficient context','single_deal_result_must_not_determine_quality':True,'statement_type':INFERENCE,'evidence':e.get('evidence',[])})
     return deals,dec
+
+def discover_deal_evidence(t,parent,job,passport,work,shots):
+    """Read one exact source-bound SHADOW bundle; absence remains UNAVAILABLE."""
+    name=f'BRIDGE_DEAL_EVIDENCE_{job}.json';safe_name=name.replace("'","\\'")
+    files=io.search(t,f"'{parent}' in parents and trashed=false and name='{safe_name}'")
+    if not files:return None
+    if len(files)!=1:raise RuntimeError('DEAL_EVIDENCE_AMBIGUOUS')
+    source_file=files[0]
+    if source_file.get('mimeType') not in {'application/json','text/json'}:raise RuntimeError('DEAL_EVIDENCE_MIME_REJECTED')
+    declared_size=int(source_file.get('size') or 0)
+    if declared_size<=0 or declared_size>MAX_BUNDLE_BYTES:raise RuntimeError('DEAL_EVIDENCE_SIZE_REJECTED')
+    path=work/name;io.download(t,source_file['id'],path)
+    if not path.is_file() or path.stat().st_size!=declared_size or path.stat().st_size>MAX_BUNDLE_BYTES:raise RuntimeError('DEAL_EVIDENCE_SIZE_MISMATCH')
+    try:
+        bundle=json.loads(path.read_text(encoding='utf-8'))
+        result=apply_deal_evidence_bundle(bundle,source=passport,shots=shots)
+    except (DealEvidenceError,UnicodeError,json.JSONDecodeError,TypeError,ValueError) as exc:
+        raise RuntimeError('DEAL_EVIDENCE_REJECTED') from exc
+    result['source_file']={'driveId':source_file['id'],'name':source_file['name'],'sizeBytes':declared_size,'sha256':io.sha(path)}
+    return result
+
+def _upload_with_source_access(t,parent,path,mime,source_permissions):
+    uploaded=io.upload_file(t,parent,path,mime)
+    have={io.pkey(x) for x in io.perms(t,uploaded['id']) if x.get('role')!='owner'}
+    for permission in source_permissions:
+        if permission.get('role')!='owner' and io.pkey(permission) not in have:io.add_perm(t,uploaded['id'],permission)
+    access=io.pmatrix(io.perms(t,uploaded['id']))==io.pmatrix(source_permissions)
+    if not access:raise RuntimeError('OUTPUT_ACCESS_MISMATCH')
+    return uploaded,access
 
 def _tm(s):
     s=max(0,int(float(s or 0)));return f'{s//3600:02d}:{(s%3600)//60:02d}:{s%60:02d}'
@@ -357,9 +392,19 @@ def process_job(t):
         work=Path(td);suffix=Path(src.get('name') or '').suffix.lower();suffix=suffix if suffix and len(suffix)<=12 else '.video';video=work/('source'+suffix);io.download(t,src['id'],video);dur=io.duration(video);ps=io.perms(t,src['id']);passport={'driveId':src['id'],'name':src['name'],'mimeType':src.get('mimeType'),'sizeBytes':video.stat().st_size,'durationSeconds':dur,'sha256':io.sha(video),'parentFolderId':parent,'permissions':io.pmatrix(ps),'immutable':True}
         course,cid,cname=course_text(t);segs,tinfo,warnings=obtain_transcript(t,parent,src['name'],video,work,dur,job);participants=sorted({s.get('speaker') for s in segs if s.get('speaker')});critical=[s['start'] for s in segs if bridge_term_hits(s['text'])];p1,p2,shots=visual(video,work,dur,critical,job)
         if not p2['gapCheckPass']:raise RuntimeError('VISUAL_GAP_CHECK_FAILED')
-        eps=semantic_episode_plan(segs,job);attach_visual_evidence(eps,shots);links=course_link_candidates(eps,course,cid);deals,decisions=derive_deals_decisions(eps,job);pubshots=[{k:v for k,v in x.items() if k!='path'} for x in shots]
-        master=master_analysis_payload(job_id=job,passport=passport,transcript=segs,transcript_qc=tinfo,visual_qc={'pass1':p1,'pass2':p2},episodes=eps,course_links=links,screenshots=pubshots,participants=[{'name':x,'role':'unknown until confirmed'} for x in participants],methodology_source={'driveId':cid,'name':cname,'sha256':hashlib.sha256(course.encode()).hexdigest(),'status':'canonical-first'},extra_warnings=warnings);master['deals']=deals;master['decisions']=decisions;master['content_quality']['deal_candidates']=len(deals);master['content_quality']['decision_candidates']=len(decisions);r24=validate_r24_master(master);master['content_quality']['r24Gate']=r24;io.safe(job_id=job,stage='MASTER_ANALYSIS_BUILD',exit_code=0 if r24['ok'] else 1,episode_count=len(eps),content_warning_count=len(warnings))
+        eps=semantic_episode_plan(segs,job);attach_visual_evidence(eps,shots);links=course_link_candidates(eps,course,cid);semantic_deals,decisions=derive_deals_decisions(eps,job);deal_evidence=discover_deal_evidence(t,parent,job,passport,work,shots);deals=deal_evidence['deals'] if deal_evidence else semantic_deals;pubshots=[{k:v for k,v in x.items() if k!='path'} for x in shots]
+        master=master_analysis_payload(job_id=job,passport=passport,transcript=segs,transcript_qc=tinfo,visual_qc={'pass1':p1,'pass2':p2},episodes=eps,course_links=links,screenshots=pubshots,participants=[{'name':x,'role':'unknown until confirmed'} for x in participants],methodology_source={'driveId':cid,'name':cname,'sha256':hashlib.sha256(course.encode()).hexdigest(),'status':'canonical-first'},extra_warnings=warnings);master['deals']=deals;master['decisions']=decisions;master['content_quality']['deal_candidates']=len(deals);master['content_quality']['decision_candidates']=len(decisions)
+        if deal_evidence:
+            master['deal_candidates_unbound']=semantic_deals
+            master['content_quality']['deal_evidence']={**deal_evidence['summary'],'schema':deal_evidence['schema'],'result_scope':deal_evidence['result_scope'],'payload_sha256':deal_evidence['payload_sha256'],'source_file':deal_evidence['source_file'],'canonical_promotion_allowed':False,'production_activation_allowed':False}
+        r24=validate_r24_master(master);master['content_quality']['r24Gate']=r24;io.safe(job_id=job,stage='MASTER_ANALYSIS_BUILD',exit_code=0 if r24['ok'] else 1,episode_count=len(eps),content_warning_count=len(warnings))
         if not r24['ok']:raise RuntimeError('R24_CONTENT_GATE_FAILED:'+','.join(r24['issues']))
+        pbn_path=None;pbn_report=None
+        if deal_evidence:
+            pbn_path=work/f"{_safe_stem(src['name'])} — карты и торговля 3.1 FREE.pbn"
+            pbn_text,pbn_report=render_deals_pbn(deals,source_name=src['name'],algorithm_revision=ALGORITHM_REVISION)
+            pbn_path.write_text(pbn_text,encoding='utf-8');pbn_report['sha256']=io.sha(pbn_path);pbn_report['sizeBytes']=pbn_path.stat().st_size
+            master['content_quality']['deal_pbn']=pbn_report
         report=work/f"{_safe_stem(src['name'])} — мастер-анализ 3.1 FREE.pdf"
         deal_review=pdf_report(report,master,shots)
         master['content_quality']['deal_review_pdf']=deal_review
@@ -367,13 +412,13 @@ def process_job(t):
         q=pdfqc(report,expected_deal_review_pages=deal_review['pages'])
         io.safe(job_id=job,stage='PDF_QC',exit_code=0 if q['ok'] else 1,master_embedded=q['masterEmbedded'],deal_review_pages=q['dealReviewPages'])
         if not q['ok']:raise RuntimeError('PDF_QC_FAILED')
-        up=io.upload_file(t,parent,report,'application/pdf');have={io.pkey(x) for x in io.perms(t,up['id']) if x.get('role')!='owner'}
-        for p in ps:
-            if p.get('role')!='owner' and io.pkey(p) not in have:io.add_perm(t,up['id'],p)
-        access=io.pmatrix(io.perms(t,up['id']))==io.pmatrix(ps)
-        if not access:raise RuntimeError('PDF_ACCESS_MISMATCH')
+        up,access=_upload_with_source_access(t,parent,report,'application/pdf',ps)
+        pbn_upload=None
+        if pbn_path is not None:
+            pbn_up,pbn_access=_upload_with_source_access(t,parent,pbn_path,'application/octet-stream',ps)
+            pbn_upload={'driveId':pbn_up['id'],'name':pbn_up['name'],'sizeBytes':int(pbn_up.get('size') or 0),'sha256':pbn_report['sha256'],'access_match':pbn_access,**{k:v for k,v in pbn_report.items() if k not in {'sha256','sizeBytes'}}}
         chk=work/'recheck.bin';io.download(t,src['id'],chk)
         if io.sha(chk)!=passport['sha256'] or chk.stat().st_size!=passport['sizeBytes']:raise RuntimeError('ORIGINAL_REVERIFY_FAILED')
-        done={'schema':'bridge-video-ai-done','algorithmVersion':ALGORITHM_VERSION,'algorithmRevision':ALGORITHM_REVISION,'status':'AI_DONE','job_id':job,'original':passport,'masterPdf':{'driveId':up['id'],'name':up['name'],'sizeBytes':int(up.get('size') or 0),'pages':q['pages'],'dealReviewPages':q['dealReviewPages'],'dealReviewScreenshotsEmbedded':deal_review['screenshots_embedded'],'sha256':q['sha256'],'masterJsonEmbedded':q['masterEmbedded'],'masterJsonSha256':msha,'access_match':access},'speech':{'primarySource':tinfo.get('primarySource'),'segmentCount':len(segs),'qcCount':len(tinfo.get('qc') or []),'unreliableCount':sum(bool(s.get('unreliable')) for s in segs)},'visual':{'pass1':p1['status'],'pass2':p2['status'],'gapCheckPass':p2['gapCheckPass'],'evidenceCount':len(shots)},'semantic':master.get('content_quality',{}),'methodologySource':master['technical_qc']['methodology_source'],'at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())};io.upload_json(t,parent,f'AI_DONE_{job}.json',done);io.upload_json(t,parent,f'METHODOLOGY_READY_{job}.json',{'schema':'bridge-video-methodology-ready','status':'METHODOLOGY_READY','job_id':job,'algorithmVersion':ALGORITHM_VERSION,'algorithmRevision':ALGORITHM_REVISION,'contentGate':r24,'masterPdfDriveId':up['id'],'masterPdfSha256':q['sha256'],'at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())});done_sha=q['sha256']
+        done={'schema':'bridge-video-ai-done','algorithmVersion':ALGORITHM_VERSION,'algorithmRevision':ALGORITHM_REVISION,'status':'AI_DONE','job_id':job,'original':passport,'masterPdf':{'driveId':up['id'],'name':up['name'],'sizeBytes':int(up.get('size') or 0),'pages':q['pages'],'dealReviewPages':q['dealReviewPages'],'dealReviewScreenshotsEmbedded':deal_review['screenshots_embedded'],'sha256':q['sha256'],'masterJsonEmbedded':q['masterEmbedded'],'masterJsonSha256':msha,'access_match':access},'dealPbn':pbn_upload,'speech':{'primarySource':tinfo.get('primarySource'),'segmentCount':len(segs),'qcCount':len(tinfo.get('qc') or []),'unreliableCount':sum(bool(s.get('unreliable')) for s in segs)},'visual':{'pass1':p1['status'],'pass2':p2['status'],'gapCheckPass':p2['gapCheckPass'],'evidenceCount':len(shots)},'semantic':master.get('content_quality',{}),'methodologySource':master['technical_qc']['methodology_source'],'at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())};io.upload_json(t,parent,f'AI_DONE_{job}.json',done);io.upload_json(t,parent,f'METHODOLOGY_READY_{job}.json',{'schema':'bridge-video-methodology-ready','status':'METHODOLOGY_READY','job_id':job,'algorithmVersion':ALGORITHM_VERSION,'algorithmRevision':ALGORITHM_REVISION,'contentGate':r24,'masterPdfDriveId':up['id'],'masterPdfSha256':q['sha256'],'dealPbnDriveId':pbn_upload['driveId'] if pbn_upload else None,'dealPbnSha256':pbn_upload['sha256'] if pbn_upload else None,'at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())});done_sha=q['sha256']
     io.upload_json(t,parent,f'CLEANUP_ACK_{job}.json',{'status':'CLEANUP_ACK','job_id':job,'algorithmRevision':ALGORITHM_REVISION,'reportSha256':done_sha,'temporaryRunnerDataDeleted':True,'at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())});io.safe(job_id=job,stage='CLEANUP_ACK',exit_code=0)
     return done
