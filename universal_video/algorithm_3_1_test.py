@@ -17,7 +17,7 @@ from .speaker_structure import MIN_TEST_LABEL_COVERAGE
 
 SCHEMA = "bridge-video-algorithm-definition-v1"
 ALGORITHM_VERSION = "3.1-test"
-ALGORITHM_REVISION = "3.1-test-r4"
+ALGORITHM_REVISION = "3.1-test-r6-speaker-selection"
 BASE_ALGORITHM_VERSION = "3.1 FREE"
 PROFILE_NAME = "bridge_lesson_3_1_test"
 DEFINITION_FILE = "algorithm_3_1_test.json"

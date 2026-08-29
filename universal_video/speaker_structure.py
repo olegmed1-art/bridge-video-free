@@ -21,6 +21,7 @@ MIN_TEST_LABEL_COVERAGE = 0.80
 MAX_SPEAKERS = 8
 ANONYMOUS_LABELS = tuple(f"SPEAKER_{chr(ord('A') + index)}" for index in range(MAX_SPEAKERS))
 _REVISION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+_DIAGNOSTIC_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$")
 _POSITIVE_STATUSES = frozenset(
     {"DIARIZED_ROLE_MAPPED", "DIARIZED_UNMAPPED", "EXISTING_SPEAKER_LABELS_PRESERVED"}
 )
@@ -95,6 +96,7 @@ def _report(
     min_label_coverage: float | None,
     speaker_count_evidence: Mapping[str, Any] | None = None,
     role_mapping_proof_status: str | None = None,
+    rejected_candidate: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     labels = [str(segment.get("speaker")) for segment in segments if segment.get("speaker")]
     counts = Counter(labels)
@@ -134,6 +136,8 @@ def _report(
             dict(speaker_count_evidence) if speaker_count_evidence else None
         )
         report["role_mapping_proof_status"] = role_mapping_proof_status or "NOT_APPLICABLE"
+        if rejected_candidate is not None:
+            report["rejected_candidate"] = dict(rejected_candidate)
     return report
 
 
@@ -144,6 +148,7 @@ def _unavailable(
     status: str = "UNAVAILABLE",
     reason: str,
     min_label_coverage: float | None = None,
+    rejected_candidate: Mapping[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     copied = [_strip_speaker_fields(segment) for segment in transcript]
     bounded_status = status if status in _ALLOWED_STATUSES - _POSITIVE_STATUSES else "UNAVAILABLE"
@@ -155,7 +160,42 @@ def _unavailable(
         segments=copied,
         role_mapping_supported=False,
         min_label_coverage=min_label_coverage,
+        rejected_candidate=rejected_candidate,
     )
+
+
+def _candidate_observation(
+    segments: Sequence[Mapping[str, Any]], producer_report: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Keep only anonymous aggregates for a candidate rejected by the gate."""
+    labels = [str(segment.get("speaker") or "").strip() for segment in segments]
+    labeled = sum(bool(label) for label in labels)
+    total_duration = sum(_duration(segment) for segment in segments)
+    labeled_duration = sum(
+        _duration(segment) for segment, label in zip(segments, labels) if label
+    )
+    selected = str(
+        producer_report.get("selected_hypothesis")
+        or producer_report.get("model_id")
+        or "unknown"
+    )
+    if not _DIAGNOSTIC_ID.fullmatch(selected):
+        selected = "unknown"
+    status = str(producer_report.get("status") or "UNAVAILABLE").upper()
+    if status not in _ALLOWED_STATUSES | {"DIARIZED_COLLAPSE_RISK"}:
+        status = "UNAVAILABLE"
+    return {
+        "schema": "universal-video-rejected-speaker-candidate-v1",
+        "producer_status": status,
+        "selected_hypothesis": selected,
+        "segments_total": len(segments),
+        "segments_labeled": labeled,
+        "speaker_count": len({label for label in labels if label}),
+        "segment_coverage": labeled / len(segments) if segments else 0.0,
+        "speech_duration_coverage": (
+            labeled_duration / total_duration if total_duration > 0.0 else 0.0
+        ),
+    }
 
 
 def _probability(value: Any) -> float | None:
@@ -225,6 +265,7 @@ def run_speaker_structure(
         return _unavailable(original, revision=revision, reason="SEGMENT_COUNT_MISMATCH", min_label_coverage=normalized_min_coverage)
     if len(raw_segments) != len(original) or any(not isinstance(segment, Mapping) for segment in raw_segments):
         return _unavailable(original, revision=revision, reason="SEGMENT_COUNT_MISMATCH", min_label_coverage=normalized_min_coverage)
+    rejected_candidate = _candidate_observation(raw_segments, raw_report)
 
     source_labels: list[str] = []
     for segment in raw_segments:
@@ -232,11 +273,11 @@ def run_speaker_structure(
         if label and label not in source_labels:
             source_labels.append(label)
     if not source_labels:
-        return _unavailable(original, revision=revision, reason="NO_SPEAKER_LABELS", min_label_coverage=normalized_min_coverage)
+        return _unavailable(original, revision=revision, reason="NO_SPEAKER_LABELS", min_label_coverage=normalized_min_coverage, rejected_candidate=rejected_candidate)
     if len(source_labels) == 1:
-        return _unavailable(original, revision=revision, reason="SPEAKER_COLLAPSE_RISK", min_label_coverage=normalized_min_coverage)
+        return _unavailable(original, revision=revision, reason="SPEAKER_COLLAPSE_RISK", min_label_coverage=normalized_min_coverage, rejected_candidate=rejected_candidate)
     if len(source_labels) > MAX_SPEAKERS:
-        return _unavailable(original, revision=revision, reason="TOO_MANY_SPEAKERS", min_label_coverage=normalized_min_coverage)
+        return _unavailable(original, revision=revision, reason="TOO_MANY_SPEAKERS", min_label_coverage=normalized_min_coverage, rejected_candidate=rejected_candidate)
 
     label_map = {source: ANONYMOUS_LABELS[index] for index, source in enumerate(source_labels)}
     normalized: list[dict[str, Any]] = []
@@ -291,6 +332,7 @@ def run_speaker_structure(
             revision=revision,
             reason="INSUFFICIENT_LABEL_COVERAGE",
             min_label_coverage=normalized_min_coverage,
+            rejected_candidate=rejected_candidate,
         )
     role_mapping_supported = status == "DIARIZED_ROLE_MAPPED" and bool(raw_report.get("role_mapping_supported"))
     if status == "DIARIZED_ROLE_MAPPED" and not role_mapping_supported:
