@@ -287,6 +287,8 @@ def run_speaker_structure(
             min_label_coverage=normalized_min_coverage,
         )
     role_mapping_supported = status == "DIARIZED_ROLE_MAPPED" and bool(raw_report.get("role_mapping_supported"))
+    if status == "DIARIZED_ROLE_MAPPED" and not role_mapping_supported:
+        status = "DIARIZED_UNMAPPED"
     if not role_mapping_supported:
         for segment in normalized:
             if segment.get("speaker"):

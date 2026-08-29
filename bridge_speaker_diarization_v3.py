@@ -201,6 +201,7 @@ def _build_report(
         "role_labeled_segments": role_labeled,
         "role_labeled_ratio": round(role_labeled / max(1, len(enriched)), 4),
         **role_report,
+        "role_mapping_supported": bool(role_report.get("mapping_supported")),
         "hypotheses": hypotheses,
         "models": dict(models),
         "privacy": {

@@ -69,6 +69,31 @@ def test_success_reanonymizes_source_labels_and_preserves_asr(monkeypatch, tmp_p
     assert report["teacher_student_attribution"] == "SUGGESTION_ONLY"
 
 
+def test_mapped_status_without_explicit_role_evidence_degrades_to_unmapped(monkeypatch, tmp_path: Path):
+    _patch_diarizer(
+        monkeypatch,
+        _diarized(),
+        {
+            "revision": "bridge-sherpa-onnx-diarization-v3",
+            "status": "DIARIZED_ROLE_MAPPED",
+            "mapping_supported": True,
+        },
+    )
+
+    rows, report = run_speaker_structure(
+        tmp_path / "lesson.mp4",
+        _asr_rows(),
+        tmp_path,
+        min_label_coverage=0.8,
+    )
+
+    assert [row["speaker"] for row in rows] == ["SPEAKER_A", "SPEAKER_B"]
+    assert all(row["speaker_role_candidate"] == "unknown" for row in rows)
+    assert report["status"] == "DIARIZED_UNMAPPED"
+    assert report["role_mapping_supported"] is False
+    assert report["teacher_student_attribution"] == "UNAVAILABLE"
+
+
 @pytest.mark.parametrize(
     ("rows", "status", "reason"),
     [
