@@ -76,7 +76,11 @@ jobs:
 
           root=Path('/opt/bridge-school/universal-video/spool/results')
           output=[]
-          for job in sorted(root.iterdir()) if root.is_dir() else []:
+          jobs=(
+              sorted(root.iterdir(), key=lambda path: path.stat().st_mtime, reverse=True)[:50]
+              if root.is_dir() else []
+          )
+          for job in jobs:
               transcript=job/'transcript.jsonl'
               speaker=job/'speaker_diarization.json'
               if not transcript.is_file():
@@ -117,8 +121,8 @@ jobs:
           )"
           content="$(SCRIPT_TEXT="$remote" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":os.environ["SCRIPT_TEXT"]},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
           target="$(python -c 'import json,os; print(json.dumps({"instanceId":os.environ["INSTANCE_ID"]},separators=(",",":")))')"
-          command_id="$(oci instance-agent command create --compartment-id "$compartment" --content "$content" --target "$target" --timeout-in-seconds 300 --display-name "uv840-replay-${GITHUB_RUN_ID}" --query data.id --raw-output)"
-          for _ in $(seq 1 90); do
+          command_id="$(oci instance-agent command create --compartment-id "$compartment" --content "$content" --target "$target" --timeout-in-seconds 600 --display-name "uv840-replay-${GITHUB_RUN_ID}" --query data.id --raw-output)"
+          for _ in $(seq 1 150); do
             execution="$(oci instance-agent command-execution get --command-id "$command_id" --instance-id "$INSTANCE_ID" --output json 2>/dev/null || true)"
             [[ -n "$execution" ]] || { sleep 3; continue; }
             lifecycle="$(printf '%s' "$execution" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state",""))')"
