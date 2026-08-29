@@ -19,6 +19,16 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from .algorithm_3_1_test import (
+    ALGORITHM_REVISION as TEST_ALGORITHM_REVISION,
+    ALGORITHM_VERSION as TEST_ALGORITHM_VERSION,
+    BASE_ALGORITHM_VERSION as TEST_BASE_ALGORITHM_VERSION,
+    DEFINITION_FILE as TEST_DEFINITION_FILE,
+    PROFILE_NAME as TEST_PROFILE_NAME,
+    RELEASE_CHANNEL as TEST_RELEASE_CHANNEL,
+    RESULT_SCOPE as TEST_RESULT_SCOPE,
+    write_definition as write_test_algorithm_definition,
+)
 from .contract import (
     CONTRACT_VERSION,
     MAX_FRAME_INTERVAL_SECONDS,
@@ -32,6 +42,8 @@ from .contract import (
 )
 from .drive_adapter import access_token, download_file, file_metadata
 from .profiles import resolve_profile
+from .speaker_structure import MIN_TEST_LABEL_COVERAGE, run_speaker_structure
+from .readiness import build_test_readiness, deferred_stages
 
 WORD_RE = re.compile(r"[A-Za-zА-Яа-яЁё0-9]+")
 _NON_SPEECH_RE = re.compile(r"\[\s*([^\]\n]{2,48})\s*\]", re.IGNORECASE)
@@ -783,6 +795,16 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
             chunk_seconds=chunk_seconds,
             initial_prompt=initial_prompt,
         )
+        speaker_report: dict[str, Any] | None = None
+        if "speaker_structure" in profile.stages:
+            transcript, speaker_report = run_speaker_structure(
+                source,
+                transcript,
+                work,
+                min_label_coverage=(
+                    MIN_TEST_LABEL_COVERAGE if profile.name == TEST_PROFILE_NAME else None
+                ),
+            )
         transcript_words = sum(len(_words(item["text"])) for item in transcript)
         qc_pass, failed_qc, allowed_failed_qc = _qc_summary(transcript, qc)
         speech_qc = [item for item in qc if not bool(item.get("no_speech"))]
@@ -802,6 +824,10 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
         )
         qc_path = job_dir / "transcript_qc.json"
         qc_path.write_text(json.dumps(qc, ensure_ascii=False, indent=2), encoding="utf-8")
+        speaker_path: Path | None = None
+        if speaker_report is not None:
+            speaker_path = job_dir / "speaker_diarization.json"
+            speaker_path.write_text(json.dumps(speaker_report, ensure_ascii=False, indent=2), encoding="utf-8")
 
         frames: list[dict[str, Any]] = []
         if "keyframes" in profile.stages:
@@ -812,6 +838,36 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
                 interval_seconds=int(job.options.get("frame_interval_seconds") or 120),
             )
 
+        algorithm_summary: dict[str, Any] | None = None
+        if "algorithm_manifest" in profile.stages:
+            if profile.name != TEST_PROFILE_NAME:
+                raise RuntimeError("algorithm manifest is not bound to an approved test profile")
+            _, definition_hash = write_test_algorithm_definition(
+                job_dir / TEST_DEFINITION_FILE,
+                source_revision=processing["source_revision"],
+            )
+            algorithm_summary = {
+                "version": TEST_ALGORITHM_VERSION,
+                "revision": TEST_ALGORITHM_REVISION,
+                "base_version": TEST_BASE_ALGORITHM_VERSION,
+                "release_channel": TEST_RELEASE_CHANNEL,
+                "result_scope": TEST_RESULT_SCOPE,
+                "canonical_promotion_allowed": False,
+                "production_activation_allowed": False,
+                "definition": TEST_DEFINITION_FILE,
+                "definition_sha256": definition_hash,
+            }
+
+        deferred_analysis = deferred_stages(profile.stages)
+        readiness = (
+            build_test_readiness(
+                profile.stages,
+                qc_pass=qc_pass,
+                speaker_report=speaker_report,
+            )
+            if profile.name == TEST_PROFILE_NAME
+            else None
+        )
         manifest = {
             "contract": CONTRACT_VERSION,
             "status": "COMPLETED" if qc_pass else "REVIEW",
@@ -827,6 +883,8 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
             "project": job.project,
             "domain_plugin": profile.domain_plugin,
             "planned_stages": list(profile.stages),
+            "algorithm": algorithm_summary,
+            "readiness": readiness,
             "source": source_provenance,
             "media": media,
             "transcript": {
@@ -846,21 +904,18 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
                 "text": transcript_txt.name,
                 "qc": qc_path.name,
             },
-            "frames": frames,
-            "deferred_analysis": [
-                stage
-                for stage in profile.stages
-                if stage
-                not in {
-                    "media_preflight",
-                    "audio_extract",
-                    "transcribe",
-                    "transcript_qc",
-                    "timeline",
-                    "keyframes",
-                    "package",
+            "speaker_structure": (
+                {
+                    "report": speaker_path.name,
+                    "status": speaker_report["status"],
+                    "speaker_count": speaker_report["speaker_count"],
+                    "segments_labeled": speaker_report["segments_labeled"],
                 }
-            ],
+                if speaker_report is not None and speaker_path is not None
+                else None
+            ),
+            "frames": frames,
+            "deferred_analysis": deferred_analysis,
             "metadata": job.metadata,
             "runtime": {
                 "elapsed_seconds": round(time.time() - started, 3),

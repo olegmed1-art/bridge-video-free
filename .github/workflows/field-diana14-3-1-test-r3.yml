@@ -1,0 +1,199 @@
+name: FIELD Diana 14 / Video 3.1-test-r3
+
+on:
+  push:
+    branches:
+      - test/diana14-3-1-r3-field
+
+permissions:
+  contents: read
+
+concurrency:
+  group: field-diana14-3-1-test-r3
+  cancel-in-progress: false
+
+jobs:
+  field-shadow:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+      UNIVERSAL_VIDEO_SOURCE_COMMIT: ${{ github.sha }}
+      UNIVERSAL_VIDEO_WHISPER_MODEL: small
+      UNIVERSAL_VIDEO_MAX_SOURCE_BYTES: '1073741824'
+      HF_HOME: ${{ runner.temp }}/hf-cache
+      JOB_ID: diana14-video31-test-r3-20260829-01
+      SOURCE_FILE_ID: 1Hs9rItDk1tsU0nL7vl7A1HF9NHgBU8dr
+      EXPECTED_SOURCE_SIZE: '655885284'
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+
+      - name: Install bounded test runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q \
+            -r requirements-universal-video-speaker.txt pytest
+          ffmpeg -version | head -1
+          python - <<'PY'
+          import faster_whisper, numpy, requests
+          print('FIELD_RUNTIME_IMPORTS_PASS')
+          PY
+
+      - name: Re-run algorithm contract and regression gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest -q \
+            tests/test_universal_video_*.py \
+            tests/test_bridge_video_*.py \
+            tests/test_bridge_vision_*.py
+
+      - name: Validate exact source metadata without downloading media
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GOOGLE_DRIVE_OAUTH_JSON"
+          python - <<'PY'
+          import os
+          from universal_video.drive_adapter import access_token, file_metadata
+
+          meta = file_metadata(os.environ['SOURCE_FILE_ID'], access_token())
+          assert meta.get('id') == os.environ['SOURCE_FILE_ID'], meta
+          assert meta.get('name') == 'Диана 14.mp4', meta
+          assert meta.get('mimeType') == 'video/mp4', meta
+          assert int(meta.get('size') or 0) == int(os.environ['EXPECTED_SOURCE_SIZE']), meta
+          assert str(meta.get('md5Checksum') or '').strip(), meta
+          print('FIELD_SOURCE_METADATA_PASS')
+          PY
+
+      - name: Build exact shadow job
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/field-artifact"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          job = {
+              'job_id': os.environ['JOB_ID'],
+              'profile': 'bridge_lesson_3_1_test',
+              'source': {
+                  'kind': 'google_drive',
+                  'file_id': os.environ['SOURCE_FILE_ID'],
+                  'name': 'Диана 14.mp4',
+              },
+              'project': 'Школа спортивного бриджа',
+              'metadata': {
+                  'human_requested': True,
+                  'purpose': 'One isolated field shadow of Video Analysis 3.1-test-r3',
+                  'automatic_retry': False,
+                  'next_video_auto_start': False,
+                  'promotion_allowed': False,
+              },
+              'options': {
+                  'chunk_seconds': 600,
+                  'frame_interval_seconds': 120,
+                  'max_source_bytes': 1073741824,
+                  'max_duration_seconds': 43200,
+              },
+          }
+          path = Path(os.environ['RUNNER_TEMP']) / 'diana14-job.json'
+          path.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding='utf-8')
+          print('FIELD_JOB_CONTRACT_READY')
+          PY
+
+      - name: Run one isolated field shadow
+        id: field
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m universal_video.runner \
+            "$RUNNER_TEMP/diana14-job.json" \
+            --output-root "$RUNNER_TEMP/results" \
+            > "$RUNNER_TEMP/field-artifact/runner-manifest.stdout.json"
+          echo 'completed=true' >> "$GITHUB_OUTPUT"
+
+      - name: Verify result and write bounded field receipt
+        if: ${{ steps.field.outputs.completed == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          from universal_video.contract import canonical_job_hash, validate_job
+          from universal_video.result_conformance import verify_result
+
+          root = Path(os.environ['RUNNER_TEMP'])
+          job_data = json.loads((root / 'diana14-job.json').read_text(encoding='utf-8'))
+          job = validate_job(job_data)
+          job_dir = root / 'results' / os.environ['JOB_ID']
+          report = verify_result(
+              job_dir,
+              expected_job_id=os.environ['JOB_ID'],
+              expected_profile='bridge_lesson_3_1_test',
+              expected_job_hash=canonical_job_hash(job),
+              expected_source_file_id=os.environ['SOURCE_FILE_ID'],
+          )
+          manifest = json.loads((job_dir / 'manifest.json').read_text(encoding='utf-8'))
+          speaker = json.loads((job_dir / 'speaker_diarization.json').read_text(encoding='utf-8'))
+          receipt = {
+              'field_test': 'diana14-video31-test-r3-20260829-01',
+              'algorithm_revision': '3.1-test-r3',
+              'result_scope': 'SHADOW_ONLY',
+              'source': {
+                  'file_id': os.environ['SOURCE_FILE_ID'],
+                  'name': 'Диана 14.mp4',
+                  'size_bytes': int(os.environ['EXPECTED_SOURCE_SIZE']),
+                  'fingerprint': manifest.get('source_fingerprint'),
+              },
+              'runtime_commit': os.environ['UNIVERSAL_VIDEO_SOURCE_COMMIT'],
+              'manifest_status': manifest.get('status'),
+              'conformance_state': report.get('state'),
+              'transcript': manifest.get('transcript'),
+              'speaker_structure': speaker,
+              'readiness': manifest.get('readiness'),
+              'deferred_analysis': manifest.get('deferred_analysis'),
+              'cards_field_result': 'UNAVAILABLE_PIXEL_BACKEND_NOT_INSTALLED',
+              'canonical_promotion_allowed': False,
+              'production_activation_allowed': False,
+              'next_video_auto_start_allowed': False,
+          }
+          artifact = root / 'field-artifact'
+          (artifact / 'field-receipt.json').write_text(
+              json.dumps(receipt, ensure_ascii=False, indent=2), encoding='utf-8'
+          )
+          (artifact / 'conformance-report.json').write_text(
+              json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8'
+          )
+          print('FIELD_RESULT_CONFORMANCE_PASS')
+          PY
+          cp -a "$RUNNER_TEMP/results/$JOB_ID" "$RUNNER_TEMP/field-artifact/result"
+          sha256sum "$RUNNER_TEMP/field-artifact/field-receipt.json" \
+            > "$RUNNER_TEMP/field-artifact/field-receipt.sha256"
+
+      - name: Remove credential from environment before packaging
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          unset GOOGLE_DRIVE_OAUTH_JSON
+          rm -f "$RUNNER_TEMP/diana14-job.json"
+
+      - name: Upload field evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: diana14-video31-test-r3-field-evidence
+          path: ${{ runner.temp }}/field-artifact
+          if-no-files-found: error
+          retention-days: 14
