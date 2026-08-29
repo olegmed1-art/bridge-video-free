@@ -24,6 +24,13 @@ from .server_review import ServerReviewError, build_server_review
 
 ERROR_CODE_RE = re.compile(r"^UV_[A-Z0-9_]{1,96}$")
 ERROR_TYPE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.]{0,119}$")
+HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
+RUNTIME_ATTESTATION_FIELDS = frozenset({
+    "schema", "job_id", "request_commit", "requested_runtime_commit",
+    "installed_runtime_commit", "observed_job_runtime_commit", "profile",
+    "job_hash", "source_file_id", "canonical_output_untouched",
+    "canonical_promotion_allowed", "publication_state",
+})
 
 
 def _failure_type(exc: BaseException) -> str:
@@ -86,6 +93,86 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
             os.close(directory_fd)
     finally:
         temp.unlink(missing_ok=True)
+
+
+def _runtime_attestation(
+    *, payload: dict[str, Any], result: dict[str, Any], job_hash: str
+) -> dict[str, Any] | None:
+    """Build provenance only from values observed by the resident worker.
+
+    Legacy jobs without an explicit request commit remain unattested.  The
+    exporter must classify them INCONCLUSIVE rather than reconstructing or
+    guessing provenance after completion.
+    """
+
+    metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
+    request_commit = str(metadata.get("request_commit") or "").strip().lower()
+    requested_runtime = str(metadata.get("requested_runtime_commit") or "").strip().lower()
+    installed_runtime = os.getenv("UNIVERSAL_VIDEO_SOURCE_COMMIT", "").strip().lower()
+    observed_runtime = str(result.get("processing_revision") or "").strip().lower()
+    source = payload.get("source") if isinstance(payload.get("source"), dict) else {}
+    source_file_id = str(source.get("file_id") or "").strip()
+    if not (
+        HEX40_RE.fullmatch(request_commit)
+        and HEX40_RE.fullmatch(requested_runtime)
+        and HEX40_RE.fullmatch(installed_runtime)
+        and HEX40_RE.fullmatch(observed_runtime)
+        and re.fullmatch(r"^[A-Za-z0-9_-]{10,200}$", source_file_id)
+    ):
+        return None
+    return {
+        "schema": "universal-video-runtime-job-attestation-v1",
+        "job_id": str(result.get("job_id") or ""),
+        "request_commit": request_commit,
+        "requested_runtime_commit": requested_runtime,
+        "installed_runtime_commit": installed_runtime,
+        "observed_job_runtime_commit": observed_runtime,
+        "profile": str(result.get("profile") or ""),
+        "job_hash": job_hash,
+        "source_file_id": source_file_id,
+        "canonical_output_untouched": True,
+        "canonical_promotion_allowed": False,
+        "publication_state": "NOT_PUBLISHED",
+    }
+
+
+def write_resident_status(spool_root: Path, status_path: Path) -> dict[str, Any]:
+    """Publish a fresh v2 status from resident-owned spool receipts."""
+
+    paths = _dirs(spool_root)
+    installed_runtime = os.getenv("UNIVERSAL_VIDEO_SOURCE_COMMIT", "").strip().lower()
+    if not HEX40_RE.fullmatch(installed_runtime):
+        raise RuntimeError("installed runtime commit is unavailable")
+    active_jobs = sorted(path.stem for path in paths["running"].glob("*.json"))[:32]
+    candidates: list[tuple[float, dict[str, Any]]] = []
+    for path in paths["done"].glob("*.json"):
+        valid, _ = _regular_payload(path)
+        if not valid:
+            continue
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            attestation = value.get("runtime_attestation") if isinstance(value, dict) else None
+            if (
+                isinstance(attestation, dict)
+                and set(attestation) == RUNTIME_ATTESTATION_FIELDS
+                and attestation.get("schema") == "universal-video-runtime-job-attestation-v1"
+                and attestation.get("installed_runtime_commit") == installed_runtime
+            ):
+                candidates.append((path.stat().st_mtime, attestation))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+    attestations = [item for _, item in sorted(candidates, key=lambda row: row[0], reverse=True)[:32]]
+    status = {
+        "schema": "universal-video-resident-status-v2",
+        "instance_state": "RUNNING",
+        "active_jobs": active_jobs,
+        "observed_at_unix": time.time(),
+        "installed_runtime_commit": installed_runtime,
+        "job_attestations": attestations,
+    }
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_json(status_path, status)
+    return status
 
 
 def _regular_payload(path: Path) -> tuple[bool, str | None]:
@@ -324,6 +411,13 @@ def process_one(spool_root: Path) -> bool:
         receipt_payload["result_dir"] = str(result_dir)
         receipt_payload["result_locator"] = {"kind": "local_directory", "path": str(result_dir)}
         receipt_payload["result_conformance"] = conformance
+        attestation = _runtime_attestation(
+            payload=payload,
+            result=result,
+            job_hash=canonical_job_hash(validated_job),
+        )
+        if attestation is not None:
+            receipt_payload["runtime_attestation"] = attestation
         receipt = paths["done"] / source.name
         _atomic_write_json(receipt, receipt_payload)
         claimed.unlink(missing_ok=True)
@@ -352,8 +446,16 @@ def run_forever(spool_root: Path, poll_seconds: float) -> None:
     recovery = recover_orphaned_jobs(spool_root)
     if any(recovery.values()):
         print(json.dumps({"event": "spool_recovery", **recovery}, sort_keys=True), flush=True)
+    status_path = Path(
+        os.getenv(
+            "UNIVERSAL_VIDEO_STATUS_PATH",
+            "/run/bridge-school/universal-video-status.json",
+        )
+    )
     while True:
-        if process_one(spool_root):
+        processed = process_one(spool_root)
+        write_resident_status(spool_root, status_path)
+        if processed:
             continue
         time.sleep(poll_seconds)
 

@@ -41,6 +41,12 @@ def test_job_invokes_only_fixed_resident_admin_surfaces():
     assert 'run_remote "$status_cmd"' in WORKFLOW
 
 
+def test_job_payload_binds_request_and_requested_runtime_for_resident_attestation():
+    assert "metadata['request_commit']=os.environ['GITHUB_SHA'].lower()" in WORKFLOW
+    assert "metadata['requested_runtime_commit']=requested" in WORKFLOW
+    assert "requested_runtime_commit is required for resident attestation" in WORKFLOW
+
+
 def test_operator_and_admin_sudoers_ownership_cannot_collide():
     assert "readonly SUDOERS='/etc/sudoers.d/universal-video-operator-ocarun'" in OPERATOR_INSTALL
     assert "readonly SUDOERS='/etc/sudoers.d/universal-video-admin-ocarun'" in ADMIN_INSTALL
