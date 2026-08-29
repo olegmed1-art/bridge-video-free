@@ -5,6 +5,10 @@
       "kind": "model",
       "policy": "Allowed only as raw ASR base. Bridge semantics, corrections and canonical facts must be produced by school-owned post-processing and evidence rules."
     },
+    "fitz": {
+      "kind": "infrastructure",
+      "policy": "PyMuPDF is used only to merge, reopen, render and validate PDF artifacts; it must not infer cards, auctions, evidence provenance or canon status."
+    },
     "google": {
       "kind": "infrastructure",
       "policy": "Authentication and Google Drive transport only; must not make bridge-content decisions."
@@ -12,6 +16,10 @@
     "requests": {
       "kind": "infrastructure",
       "policy": "HTTP transport only; must not make bridge-content decisions."
+    },
+    "reportlab": {
+      "kind": "infrastructure",
+      "policy": "PDF presentation only; it must render supplied evidence classes without creating card, auction, reconstruction or canon decisions."
     }
   }
 }

@@ -40,6 +40,8 @@ or convert SHADOW observations to production facts.
 - ReportLab authors the page; PyMuPDF independently reopens, renders, inspects
   geometry and text markers, merges the appendix, and validates the final PDF
   (`I2`).
+- Both PDF libraries are registered as presentation/validation infrastructure
+  and are prohibited from making card, auction, provenance or canon decisions.
 - Director visual confirmation of the page layout is retained as `I4` for the
   reviewed example, not as recognizer-accuracy evidence for unseen cards.
 
