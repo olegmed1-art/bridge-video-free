@@ -21,7 +21,7 @@ jobs:
       UNIVERSAL_VIDEO_SOURCE_COMMIT: ${{ github.sha }}
       UNIVERSAL_VIDEO_WHISPER_MODEL: small
       UNIVERSAL_VIDEO_MAX_SOURCE_BYTES: '1073741824'
-      HF_HOME: ${{ runner.temp }}/hf-cache
+      HF_HOME: /tmp/diana14-hf-cache
       JOB_ID: diana14-video31-test-r3-20260829-01
       SOURCE_FILE_ID: 1Hs9rItDk1tsU0nL7vl7A1HF9NHgBU8dr
       EXPECTED_SOURCE_SIZE: '655885284'
