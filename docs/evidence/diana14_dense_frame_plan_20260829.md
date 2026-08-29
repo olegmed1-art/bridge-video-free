@@ -43,5 +43,8 @@ production publication route.
   explicitly requested `max_frames=300` check still fails closed.
 - Independent verifier reconstructs the expected timestamps from duration and
   interval instead of trusting the runner's declared count.
+- Execution is isolated behind a one-run PR marker and the reusable SHADOW
+  workflow; removal of the marker prevents later commits from starting another
+  dense field job.
 - Rollback: revert `UV-3.1-TEST-DENSE-FRAMES-20260829` and restore the isolated
   Diana 14 job to its preceding revision. Existing r4 evidence remains immutable.
