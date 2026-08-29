@@ -1,6 +1,10 @@
 {
   "schema": "bridge-decision-dependencies-v1",
   "dependencies": {
+    "cv2": {
+      "kind": "infrastructure",
+      "policy": "Deterministic image decode, resize and non-maximum suppression only inside an explicitly injected SHADOW world-card adapter; it cannot assign bridge seats or promote canonical cards."
+    },
     "faster_whisper": {
       "kind": "model",
       "policy": "Allowed only as raw ASR base. Bridge semantics, corrections and canonical facts must be produced by school-owned post-processing and evidence rules."
@@ -8,6 +12,22 @@
     "google": {
       "kind": "infrastructure",
       "policy": "Authentication and Google Drive transport only; must not make bridge-content decisions."
+    },
+    "numpy": {
+      "kind": "infrastructure",
+      "policy": "Numeric tensor preparation only for the explicitly injected SHADOW recognizer and optional speaker sidecar; school-owned evidence gates remain authoritative."
+    },
+    "onnxruntime": {
+      "kind": "model",
+      "policy": "May execute only an explicitly selected, SHA-256-bound local world-card model in the independent full-card reference channel of the SHADOW pipeline; never activates implicitly or promotes canonical output."
+    },
+    "pypdf": {
+      "kind": "infrastructure",
+      "policy": "Reopens and validates the generated SHADOW review PDF only; it cannot add, remove, infer, or promote bridge evidence."
+    },
+    "reportlab": {
+      "kind": "infrastructure",
+      "policy": "Renders accepted observed, explicitly derived, auction, and screenshot evidence into a human-review SHADOW PDF; it cannot make bridge-content decisions or promote output."
     },
     "requests": {
       "kind": "infrastructure",

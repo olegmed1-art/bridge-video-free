@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import os
 import re
 import stat
 import time
@@ -244,44 +243,101 @@ def _contains_promotion_true(value: Any) -> bool:
     return False
 
 
-def _speaker_summary(rows: list[dict[str, Any]], deferred: list[str]) -> dict[str, Any]:
+def _speaker_summary(
+    rows: list[dict[str, Any]],
+    deferred: list[str],
+    *,
+    result_dir: Path,
+    artifacts_by_name: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
     labels = [str(row.get("speaker")) for row in rows if row.get("speaker") not in (None, "")]
-    roles = [str(row.get("speaker_role") or row.get("speaker_role_candidate")) for row in rows if row.get("speaker_role") or row.get("speaker_role_candidate")]
+    roles = sorted(
+        {
+            str(row.get("speaker_role_candidate"))
+            for row in rows
+            if row.get("speaker_role_candidate") in {"teacher", "student"}
+        }
+    )
+    report_path = result_dir / "speaker_diarization.json"
+    report_artifact = artifacts_by_name.get("speaker_diarization.json")
+    report = None
+    artifacts: list[dict[str, Any]] = []
+    if report_path.exists() != (report_artifact is not None):
+        raise EvidenceExportError("speaker report inventory mismatch")
+    if report_path.exists() and report_artifact is not None:
+        before_sha, before_size = _sha256(report_path, max_bytes=1024 * 1024)
+        if (
+            before_sha != report_artifact["sha256"]
+            or before_size != report_artifact["size_bytes"]
+        ):
+            raise EvidenceExportError("speaker report changed before export")
+        report = _read_regular_json(report_path, max_bytes=1024 * 1024)
+        after_sha, after_size = _sha256(report_path, max_bytes=1024 * 1024)
+        if (after_sha, after_size) != (before_sha, before_size):
+            raise EvidenceExportError("speaker report changed during export")
+        artifacts.append(
+            {
+                "locator": "speaker_diarization.json",
+                "sha256": before_sha,
+                "size_bytes": before_size,
+            }
+        )
     if not labels:
-        return {
+        summary = {
             "status": "UNAVAILABLE",
-            "reason": "SPEAKER_LABELS_MISSING" if "speaker_structure" in deferred else "SPEAKER_EVIDENCE_MISSING",
-            "speaker_count": None,
+            "stage_status": report.get("status") if report else "DEFERRED",
+            "reason": (
+                str(report.get("reason"))
+                if report
+                else "SPEAKER_LABELS_MISSING" if "speaker_structure" in deferred else "SPEAKER_EVIDENCE_MISSING"
+            ),
+            "speaker_count": 0,
             "labeled_segments": 0,
             "unlabeled_segments": len(rows),
-            "collapse": "NOT_COMPUTABLE_WITHOUT_HUMAN_REFERENCE",
+            "collapse": "GATE_REJECTED" if report else "NOT_COMPUTABLE_WITHOUT_HUMAN_REFERENCE",
             "fragmentation": "NOT_COMPUTABLE_WITHOUT_HUMAN_REFERENCE",
             "teacher_student_attribution": "UNAVAILABLE",
+            "artifacts": artifacts,
         }
-    return {
+        if report and "label_coverage" in report:
+            summary["label_coverage"] = report["label_coverage"]
+            summary["speech_duration_coverage"] = report.get("speech_duration_coverage")
+            summary["minimum_label_coverage"] = report.get("minimum_label_coverage")
+        return summary
+    summary = {
         "status": "OBSERVED_ANONYMOUS_LABELS",
+        "stage_status": report.get("status") if report else "UNKNOWN",
+        "quality_gate": report.get("quality_gate") if report else "UNAVAILABLE",
         "speaker_count": len(set(labels)),
         "speaker_labels": sorted(set(labels)),
         "labeled_segments": len(labels),
         "unlabeled_segments": len(rows) - len(labels),
-        "collapse": "NOT_COMPUTABLE_WITHOUT_HUMAN_REFERENCE",
+        "collapse": "GATE_PASS",
         "fragmentation": "NOT_COMPUTABLE_WITHOUT_HUMAN_REFERENCE",
         "teacher_student_attribution": "SUGGESTION_ONLY" if roles else "UNAVAILABLE",
-        "role_candidates": sorted(set(roles)),
+        "role_candidates": roles,
+        "artifacts": artifacts,
     }
+    if report and "label_coverage" in report:
+        summary["label_coverage"] = report["label_coverage"]
+        summary["speech_duration_coverage"] = report.get("speech_duration_coverage")
+        summary["minimum_label_coverage"] = report.get("minimum_label_coverage")
+    return summary
 
 
 def _card_summary(result_dir: Path, deferred: list[str]) -> dict[str, Any]:
     summary_path = result_dir / "bridge_positions_profiled_shadow_summary.json"
     jsonl_path = result_dir / "bridge_positions_profiled_shadow.jsonl"
-    if not summary_path.exists() and not jsonl_path.exists():
+    pbn_path = result_dir / "bridge_positions_profiled_shadow.pbn"
+    pdf_path = result_dir / "bridge_positions_profiled_shadow_report.pdf"
+    if not summary_path.exists() and not jsonl_path.exists() and not pbn_path.exists() and not pdf_path.exists():
         return {
             "status": "UNAVAILABLE",
             "reason": "BRIDGE_POSITIONS_DEFERRED" if "bridge_positions" in deferred else "SHADOW_ARTIFACT_MISSING",
             "recognized_frames": None,
             "canonical_promotion_allowed": False,
         }
-    if not summary_path.exists() or not jsonl_path.exists():
+    if not summary_path.exists() or not jsonl_path.exists() or not pbn_path.exists() or not pdf_path.exists():
         raise EvidenceExportError("partial shadow card artifact set")
     summary = _read_regular_json(summary_path, max_bytes=1024 * 1024)
     if summary.get("profiled_challenger_enabled") is not True:
@@ -290,6 +346,15 @@ def _card_summary(result_dir: Path, deferred: list[str]) -> dict[str, Any]:
         raise EvidenceExportError("shadow summary promotion boundary mismatch")
     summary_sha, summary_size = _sha256(summary_path, max_bytes=1024 * 1024)
     jsonl_sha, jsonl_size = _sha256(jsonl_path, max_bytes=MAX_SHADOW_BYTES)
+    pbn_sha, pbn_size = _sha256(pbn_path, max_bytes=MAX_SHADOW_BYTES)
+    pdf_sha, pdf_size = _sha256(pdf_path, max_bytes=MAX_SHADOW_BYTES)
+    if (
+        summary.get("pdf_output") != pdf_path.name
+        or summary.get("pdf_sha256") != pdf_sha
+        or type(summary.get("pdf_pages")) is not int
+        or int(summary["pdf_pages"]) < 1
+    ):
+        raise EvidenceExportError("shadow PDF summary binding mismatch")
     try:
         raw_jsonl = jsonl_path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
@@ -303,6 +368,35 @@ def _card_summary(result_dir: Path, deferred: list[str]) -> dict[str, Any]:
             raise EvidenceExportError("invalid shadow JSONL") from exc
         if not isinstance(record, dict) or _contains_promotion_true(record):
             raise EvidenceExportError("shadow record promotion boundary mismatch")
+    try:
+        raw_pbn = pbn_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise EvidenceExportError("invalid shadow PBN") from exc
+    if (
+        not raw_pbn.startswith("% PBN 2.1\n")
+        or "% X-ResultScope: SHADOW_ONLY\n" not in raw_pbn
+        or "% X-CanonicalPromotionAllowed: false\n" not in raw_pbn
+        or 'X-CanonicalPromotionAllowed "true"' in raw_pbn
+    ):
+        raise EvidenceExportError("shadow PBN promotion boundary mismatch")
+    try:
+        raw_pdf = pdf_path.read_bytes()
+        from pypdf import PdfReader
+
+        pdf_reader = PdfReader(str(pdf_path))
+    except OSError as exc:
+        raise EvidenceExportError("invalid shadow PDF") from exc
+    except Exception as exc:
+        raise EvidenceExportError("shadow PDF cannot be reopened") from exc
+    if (
+        not raw_pdf.startswith(b"%PDF-")
+        or b"SHADOW_ONLY" not in raw_pdf
+        or b"CanonicalPromotionAllowed=false" not in raw_pdf
+        or len(pdf_reader.pages) != summary["pdf_pages"]
+        or (pdf_reader.metadata or {}).get("/Subject")
+        != "SHADOW_ONLY; CanonicalPromotionAllowed=false"
+    ):
+        raise EvidenceExportError("shadow PDF promotion boundary mismatch")
     return {
         "status": "OBSERVED_SHADOW",
         "recognized_frames": int(summary.get("recognized_frames") or 0),
@@ -312,6 +406,8 @@ def _card_summary(result_dir: Path, deferred: list[str]) -> dict[str, Any]:
         "artifacts": [
             {"locator": summary_path.name, "sha256": summary_sha, "size_bytes": summary_size},
             {"locator": jsonl_path.name, "sha256": jsonl_sha, "size_bytes": jsonl_size},
+            {"locator": pbn_path.name, "sha256": pbn_sha, "size_bytes": pbn_size},
+            {"locator": pdf_path.name, "sha256": pdf_sha, "size_bytes": pdf_size},
         ],
     }
 
@@ -418,7 +514,12 @@ def build_evidence_export(
             "qc_hallucination_blocks": manifest["transcript"]["qc_hallucination_blocks"],
             "artifacts": asr_artifacts,
         },
-        "speakers": _speaker_summary(transcript_rows, deferred),
+        "speakers": _speaker_summary(
+            transcript_rows,
+            deferred,
+            result_dir=result_dir,
+            artifacts_by_name=artifacts_by_name,
+        ),
         "cards": _card_summary(result_dir, deferred),
         "publication_state": "NOT_PUBLISHED",
         "school_canon_changed": False,

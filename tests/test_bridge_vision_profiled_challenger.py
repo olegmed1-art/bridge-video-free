@@ -88,14 +88,21 @@ def observed_card(card="AS", *, x=490, y=50, rank_confidence=0.98, suit_confiden
     }
 
 
-def ambiguous_card(cards, *, x, y):
-    return {
+def ambiguous_card(cards, *, x, y, pointer=False):
+    observation = {
         "box": {"x": x, "y": y, "w": 20, "h": 20},
         "card_candidates": [
             {"card": card, "confidence": 0.85, "channel_id": "full-card-reference-v1"}
             for card in cards
         ],
     }
+    if pointer:
+        observation["pointer_corroboration"] = {
+            "source": "VISUAL_POINTER",
+            "confidence": 0.96,
+            "evidence_locator": "frame#pointer=0",
+        }
+    return observation
 
 
 def payload(
@@ -106,6 +113,7 @@ def payload(
     registration_ratio=0.95,
     deal_identity=None,
     board_metadata=None,
+    auction=None,
 ):
     result = {
         "frame_sha256": frame_sha(path),
@@ -120,6 +128,8 @@ def payload(
     }
     if board_metadata is not None:
         result["board_metadata"] = board_metadata
+    if auction is not None:
+        result["auction"] = auction
     return result
 
 
@@ -129,6 +139,33 @@ def metadata_field(value, *, segment="frame#metadata"):
         "confidence": 0.98,
         "source": "VISUAL_TEXT",
         "evidence_locator": segment,
+    }
+
+
+def visual_auction(calls, *, complete=True):
+    seats = ("N", "E", "S", "W")
+    return {
+        "source": "BRIDGIT_AUCTION_TABLE",
+        "board_number": 1,
+        "dealer": "N",
+        "complete": complete,
+        "evidence_locator": "frame#auction-table",
+        "calls": [
+            {
+                "seat": seats[index % 4],
+                "column": seats[index % 4],
+                "row": index // 4,
+                "box": {"x": 600 + 40 * (index % 4), "y": 500 + 20 * (index // 4), "w": 32, "h": 16},
+                "ocr": {"value": call, "confidence": 0.97, "channel_id": "paddleocr-v1"},
+                "reference_match": {
+                    "value": call,
+                    "confidence": 0.96,
+                    "channel_id": "bridgit-cell-template-v1",
+                },
+                "evidence_locator": f"frame#auction-cell={index}",
+            }
+            for index, call in enumerate(calls)
+        ],
     }
 
 
@@ -318,6 +355,36 @@ def test_layout_prior_suggests_unique_card_without_promoting_it(
     assert suggestion["provenance_class"] == "LAYOUT_SUGGESTION"
     assert suggestion["accepted_as_observation"] is False
     assert result["evidence"]["canonical_promotion_allowed"] is False
+
+
+@pytest.mark.parametrize(
+    ("before", "ambiguous", "after"),
+    [
+        (observed_card("2H", x=300, y=50), ambiguous_card(["AC", "AS"], x=400, y=50), observed_card("QD", x=500, y=50)),
+        (observed_card("2H", x=300, y=900), ambiguous_card(["AC", "AS"], x=400, y=900), observed_card("QD", x=500, y=900)),
+        (observed_card("2H", x=900, y=300), ambiguous_card(["AC", "AS"], x=900, y=400), observed_card("QD", x=900, y=500)),
+        (observed_card("2H", x=50, y=300), ambiguous_card(["AC", "AS"], x=50, y=400), observed_card("QD", x=50, y=500)),
+    ],
+)
+def test_verified_hcds_suit_order_applies_horizontally_and_vertically_without_promotion(
+    tmp_path: Path,
+    before,
+    ambiguous,
+    after,
+):
+    first, _ = make_frames(tmp_path)
+    detector = ProfiledCardChallenger(
+        parse_profile(profile_raw()),
+        lambda *_: payload(first, [before, ambiguous, after]),
+    )
+
+    result = detector(first)
+
+    suggestion = result["evidence"]["layout_suggestions"][0]
+    assert suggestion["suggested_card"] == "AC"
+    assert suggestion["accepted_as_observation"] is False
+    assert detector.profile.ordering_prior["suit_order"] == list("HCDS")
+    assert detector.profile.ordering_prior["rank_order"] == list("AKQJT98765432")
 
 
 @pytest.mark.parametrize(
@@ -548,6 +615,17 @@ def test_profiled_challenger_is_explicit_opt_in_for_video_positions(tmp_path: Pa
     assert records[1]["deal"]["hands"]["N"]["cards"] == ["AS"]
     evidence = records[1]["candidates"][0]["evidence"]
     assert evidence["canonical_promotion_allowed"] is False
+    pbn = (tmp_path / "bridge_positions_profiled_shadow.pbn").read_text(encoding="utf-8")
+    assert '% X-ResultScope: SHADOW_ONLY' in pbn
+    assert '[X-Observed-N "A.-.-.-"]' in pbn
+    assert '[X-UnknownCount-N "12"]' in pbn
+    assert '[Deal "' not in pbn
+    assert summary["pbn_output"] == "bridge_positions_profiled_shadow.pbn"
+    assert summary["pdf_output"] == "bridge_positions_profiled_shadow_report.pdf"
+    assert summary["pdf_pages"] == 1
+    assert summary["pdf_deals"] == 1
+    assert len(summary["pdf_sha256"]) == 64
+    assert (tmp_path / summary["pdf_output"]).read_bytes().startswith(b"%PDF-")
 
     with pytest.raises(ValueError, match="cannot be combined"):
         process_job_frames(
@@ -555,6 +633,133 @@ def test_profiled_challenger_is_explicit_opt_in_for_video_positions(tmp_path: Pa
             profiled_challenger=detector,
             allow_legacy_old_bbo=True,
         )
+
+
+def test_profiled_shadow_reads_temporally_confirmed_visual_auction_into_pbn(tmp_path: Path):
+    frames_dir = tmp_path / "frames"
+    frames_dir.mkdir()
+    frames = []
+    for index in range(3):
+        frame = frames_dir / f"auction-{index}.jpg"
+        frame.write_bytes(f"auction-frame-{index}".encode())
+        frames.append(frame)
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({
+            "job_id": "profiled-auction-1",
+            "source_fingerprint": "source-auction-1",
+            "frames": [
+                {"time": 10.0 + index * 30, "file": frame.name, "sha256": frame_sha(frame)}
+                for index, frame in enumerate(frames)
+            ],
+        }),
+        encoding="utf-8",
+    )
+    board = {
+        "board_number": metadata_field(1),
+        "dealer": metadata_field("N"),
+        "vulnerability": metadata_field("NONE"),
+    }
+    calls = ["1H", "P", "2H", "P", "P", "P"]
+    raw = {
+        frame.name: payload(
+            frame,
+            [observed_card()],
+            deal_identity={"kind": "EXPLICIT_BOARD", "scope": "lesson-1", "value": "board-1"},
+            board_metadata=board,
+            auction=visual_auction(calls),
+        )
+        for frame in frames
+    }
+    detector = ProfiledCardChallenger(parse_profile(profile_raw()), lambda frame, _: raw[frame.name])
+
+    summary = process_job_frames(tmp_path, profiled_challenger=detector)
+
+    assert summary["status"] == "SHADOW_COMPLETED"
+    assert summary["auction_frame_observations_accepted"] == 2
+    assert summary["auction_frame_observations_review"] == 1
+    assert summary["auction_frame_observations_rejected"] == 0
+    assert summary["auction_deal_statuses"] == {"COMPLETE_CONFIRMED": 1}
+    assert summary["auction_standard_pbn_blocks"] == 1
+    assert summary["pdf_pages"] == 1
+    assert summary["pdf_deals"] == 1
+    pbn = (tmp_path / "bridge_positions_profiled_shadow.pbn").read_text(encoding="utf-8")
+    assert '[Auction "N"]' in pbn
+    assert "1H Pass 2H Pass\nPass Pass" in pbn
+
+
+def test_profiled_shadow_auto_observes_exact_transcript_card_at_nearest_frame(tmp_path: Path):
+    frames_dir = tmp_path / "frames"
+    frames_dir.mkdir()
+    first = frames_dir / "transcript-layout-1.jpg"
+    second = frames_dir / "transcript-layout-2.jpg"
+    first.write_bytes(b"transcript-layout-frame-1")
+    second.write_bytes(b"transcript-layout-frame-2")
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({
+            "job_id": "profiled-transcript-1",
+            "source_fingerprint": "source-transcript-1",
+            "frames": [
+                {"time": 10.0, "file": first.name, "sha256": frame_sha(first)},
+                {"time": 40.0, "file": second.name, "sha256": frame_sha(second)},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    (tmp_path / "transcript.jsonl").write_text(
+        json.dumps({
+            "start": 39.0,
+            "end": 41.0,
+            "text": "Я вижу короля червей на севере.",
+            "speaker": "speaker-0",
+            "speaker_role_candidate": "TEACHER",
+            "speaker_confidence": 0.96,
+            "speaker_identity_verified": True,
+            "speaker_role_verified": True,
+        }, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    board = {
+        "board_number": metadata_field(1),
+        "dealer": metadata_field("N"),
+        "vulnerability": metadata_field("NONE"),
+    }
+    cards = [
+        observed_card("AH", x=300, y=50),
+        ambiguous_card(["KH", "2S"], x=400, y=50, pointer=True),
+        observed_card("QH", x=500, y=50),
+    ]
+    raw = {
+        current.name: payload(
+            current,
+            cards,
+            deal_identity={"kind": "EXPLICIT_BOARD", "scope": "lesson-1", "value": "board-1"},
+            board_metadata=board,
+        )
+        for current in (first, second)
+    }
+    detector = ProfiledCardChallenger(
+        parse_profile(profile_raw()),
+        lambda current, _: raw[current.name],
+    )
+
+    summary = process_job_frames(
+        tmp_path,
+        profiled_challenger=detector,
+        auto_transcript_card_observations=True,
+    )
+
+    assert summary["status"] == "SHADOW_COMPLETED"
+    assert summary["transcript_card_mentions"] == 1
+    assert summary["transcript_card_observations_accepted"] == 1
+    record = json.loads(
+        (tmp_path / "bridge_positions_profiled_shadow.jsonl").read_text().splitlines()[1]
+    )
+    observation = record["transcript_card_observations"][0]
+    assert observation["card"] == "KH"
+    assert observation["seat"] == "N"
+    assert observation["provenance_class"] == "OBSERVED_MULTIMODAL"
+    pbn = (tmp_path / "bridge_positions_profiled_shadow.pbn").read_text(encoding="utf-8")
+    assert '[X-Observed-N "-.AKQ.-.-"]' in pbn
 
 
 def test_profiled_shadow_fuses_attributed_student_speech_with_layout_without_promotion(

@@ -73,8 +73,17 @@ def test_reserved_path_job_ids_are_forbidden(tmp_path: Path):
 def test_frame_interval_is_bounded(tmp_path: Path):
     with pytest.raises(VideoContractError, match="frame_interval_seconds"):
         _job(tmp_path, options={"frame_interval_seconds": 0})
+    dense = _job(tmp_path, options={"frame_interval_seconds": 1})
+    assert dense.options["frame_interval_seconds"] == 1
     job = _job(tmp_path, options={"frame_interval_seconds": 120})
     assert job.options["frame_interval_seconds"] == 120
+
+
+def test_long_lesson_dense_plan_has_no_300_frame_cap():
+    timestamps = runner.plan_keyframe_timestamps(6950.8, interval_seconds=3)
+    assert len(timestamps) == 2318
+    assert timestamps[:3] == [0.0, 3.0, 6.0]
+    assert timestamps[-1] == 6950.3
 
 
 def test_source_size_option_is_bounded(tmp_path: Path):

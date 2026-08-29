@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import runpy
 from pathlib import Path
 
 import pytest
+from reportlab.pdfgen.canvas import Canvas
 
 from universal_video.evidence_export import EvidenceExportError, build_evidence_export
 from universal_video.result_conformance import verify_result
@@ -14,6 +16,14 @@ from universal_video.server_review import build_server_review
 _bundle = runpy.run_path(
     str(Path(__file__).with_name("test_universal_video_result_conformance.py"))
 )["_bundle"]
+
+
+def _write_shadow_pdf(path: Path) -> str:
+    canvas = Canvas(str(path))
+    canvas.setSubject("SHADOW_ONLY; CanonicalPromotionAllowed=false")
+    canvas.drawString(72, 720, "SHADOW_ONLY CanonicalPromotionAllowed=false")
+    canvas.save()
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _inputs(tmp_path: Path, *, status_v2: bool = True):
@@ -116,14 +126,23 @@ def test_exact_runtime_bound_job_export_exposes_asr_and_keeps_deferred_stages_un
     }
     assert receipt["speakers"] == {
         "status": "UNAVAILABLE",
-        "reason": "SPEAKER_LABELS_MISSING",
-        "speaker_count": None,
+        "stage_status": "UNAVAILABLE_INSUFFICIENT_SEGMENTS",
+        "reason": "INSUFFICIENT_SEGMENTS",
+        "speaker_count": 0,
         "labeled_segments": 0,
         "unlabeled_segments": 1,
-        "collapse": "NOT_COMPUTABLE_WITHOUT_HUMAN_REFERENCE",
+        "collapse": "GATE_REJECTED",
         "fragmentation": "NOT_COMPUTABLE_WITHOUT_HUMAN_REFERENCE",
         "teacher_student_attribution": "UNAVAILABLE",
+        "artifacts": [
+            {
+                "locator": "speaker_diarization.json",
+                "sha256": receipt["speakers"]["artifacts"][0]["sha256"],
+                "size_bytes": receipt["speakers"]["artifacts"][0]["size_bytes"],
+            }
+        ],
     }
+    assert len(receipt["speakers"]["artifacts"][0]["sha256"]) == 64
     assert receipt["cards"]["status"] == "UNAVAILABLE"
     assert receipt["cards"]["reason"] == "BRIDGE_POSITIONS_DEFERRED"
     assert receipt["cards"]["canonical_promotion_allowed"] is False
@@ -171,8 +190,9 @@ def test_manifest_processing_revision_must_match_requested_runtime(tmp_path: Pat
         )
 
 
-def test_shadow_cards_are_exported_only_with_complete_hash_bound_pair(tmp_path: Path):
+def test_shadow_cards_are_exported_only_with_complete_hash_bound_set(tmp_path: Path):
     request, status, spool, result_dir, _final = _inputs(tmp_path)
+    pdf_sha256 = _write_shadow_pdf(result_dir / "bridge_positions_profiled_shadow_report.pdf")
     summary = {
         "status": "SHADOW_COMPLETED",
         "profiled_challenger_enabled": True,
@@ -181,6 +201,9 @@ def test_shadow_cards_are_exported_only_with_complete_hash_bound_pair(tmp_path: 
         "recognized_frames": 2,
         "conflict_frames": 0,
         "derived_fourth_hand_frames": 0,
+        "pdf_output": "bridge_positions_profiled_shadow_report.pdf",
+        "pdf_pages": 1,
+        "pdf_sha256": pdf_sha256,
     }
     (result_dir / "bridge_positions_profiled_shadow_summary.json").write_text(
         json.dumps(summary), encoding="utf-8"
@@ -189,12 +212,16 @@ def test_shadow_cards_are_exported_only_with_complete_hash_bound_pair(tmp_path: 
         json.dumps({"status": "PASS", "canonical_promotion_allowed": False}) + "\n",
         encoding="utf-8",
     )
+    (result_dir / "bridge_positions_profiled_shadow.pbn").write_text(
+        "% PBN 2.1\n% X-ResultScope: SHADOW_ONLY\n% X-CanonicalPromotionAllowed: false\n",
+        encoding="utf-8",
+    )
     receipt = build_evidence_export(
         request_path=request, status_path=status, spool_root=spool, now=1010.0
     )
     assert receipt["cards"]["status"] == "OBSERVED_SHADOW"
     assert receipt["cards"]["recognized_frames"] == 2
-    assert len(receipt["cards"]["artifacts"]) == 2
+    assert len(receipt["cards"]["artifacts"]) == 4
     assert all(len(item["sha256"]) == 64 for item in receipt["cards"]["artifacts"])
 
 
@@ -241,35 +268,51 @@ def test_request_done_tamper_duplicate_json_and_symlink_fail_closed(tmp_path: Pa
 
 def test_partial_or_promotable_shadow_artifact_fails_closed(tmp_path: Path):
     request, status, spool, result_dir, _final = _inputs(tmp_path)
+    pdf_sha256 = _write_shadow_pdf(result_dir / "bridge_positions_profiled_shadow_report.pdf")
     (result_dir / "bridge_positions_profiled_shadow_summary.json").write_text(
         json.dumps(
             {
                 "profiled_challenger_enabled": True,
                 "result_scope": "SHADOW_ONLY",
-                "canonical_promotion_allowed": True,
+                    "canonical_promotion_allowed": True,
+                    "pdf_output": "bridge_positions_profiled_shadow_report.pdf",
+                    "pdf_pages": 1,
+                    "pdf_sha256": pdf_sha256,
             }
         ),
         encoding="utf-8",
     )
     (result_dir / "bridge_positions_profiled_shadow.jsonl").write_text("{}\n", encoding="utf-8")
+    (result_dir / "bridge_positions_profiled_shadow.pbn").write_text(
+        "% PBN 2.1\n% X-ResultScope: SHADOW_ONLY\n% X-CanonicalPromotionAllowed: false\n",
+        encoding="utf-8",
+    )
     with pytest.raises(EvidenceExportError, match="promotion boundary"):
         build_evidence_export(request_path=request, status_path=status, spool_root=spool, now=1010.0)
 
 
 def test_promotable_nested_shadow_record_fails_closed(tmp_path: Path):
     request, status, spool, result_dir, _final = _inputs(tmp_path)
+    pdf_sha256 = _write_shadow_pdf(result_dir / "bridge_positions_profiled_shadow_report.pdf")
     (result_dir / "bridge_positions_profiled_shadow_summary.json").write_text(
         json.dumps(
             {
                 "profiled_challenger_enabled": True,
                 "result_scope": "SHADOW_ONLY",
-                "canonical_promotion_allowed": False,
+                    "canonical_promotion_allowed": False,
+                    "pdf_output": "bridge_positions_profiled_shadow_report.pdf",
+                    "pdf_pages": 1,
+                    "pdf_sha256": pdf_sha256,
             }
         ),
         encoding="utf-8",
     )
     (result_dir / "bridge_positions_profiled_shadow.jsonl").write_text(
         json.dumps({"evidence": {"canonical_promotion_allowed": True}}) + "\n",
+        encoding="utf-8",
+    )
+    (result_dir / "bridge_positions_profiled_shadow.pbn").write_text(
+        "% PBN 2.1\n% X-ResultScope: SHADOW_ONLY\n% X-CanonicalPromotionAllowed: false\n",
         encoding="utf-8",
     )
     with pytest.raises(EvidenceExportError, match="record promotion boundary"):
