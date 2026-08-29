@@ -1,0 +1,26 @@
+{
+  "request_id": "diana13-video31-20260829-01",
+  "issue": 818,
+  "job": {
+    "job_id": "diana13-video31-20260829-01",
+    "profile": "bridge_lesson",
+    "source": {
+      "kind": "google_drive",
+      "file_id": "198-2v3JBlNQobdsPYQQWzrrCqQ1zBZOI",
+      "name": "Диана 13.mp4"
+    },
+    "project": "Школа спортивного бриджа",
+    "metadata": {
+      "human_requested": true,
+      "purpose": "Расшифровка Дианы 13 обновлённым Universal Video с shadow evidence PR #817",
+      "requested_runtime_commit": "3f04753506649826fee31484cdc5b544925e9c63",
+      "source_folder": "Диана Конвеер"
+    },
+    "options": {
+      "chunk_seconds": 600,
+      "frame_interval_seconds": 60,
+      "max_source_bytes": 2147483648,
+      "max_duration_seconds": 43200
+    }
+  }
+}
