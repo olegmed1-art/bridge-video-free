@@ -23,7 +23,7 @@ def _layout(tmp_path: Path) -> Path:
     parent.mkdir(mode=0o700)
     (base / "spool").mkdir(parents=True, mode=0o750)
     base.chmod(0o750)
-    for leaf in ("inbox", "running", "done", "failed", "results"):
+    for leaf in ("inbox", "running", "done", "failed", "results", "progress"):
         (base / "spool" / leaf).mkdir(mode=0o750)
     return base
 
@@ -45,7 +45,7 @@ def test_protected_spool_layout_passes(tmp_path: Path):
     assert "UNIVERSAL_VIDEO_SPOOL_LAYOUT_PASS" in result.stdout
 
 
-@pytest.mark.parametrize("leaf_name", ["inbox", "running", "done", "failed", "results"])
+@pytest.mark.parametrize("leaf_name", ["inbox", "running", "done", "failed", "results", "progress"])
 def test_worker_symlink_substitution_fails_before_traversal(tmp_path: Path, leaf_name: str):
     base = _layout(tmp_path)
     outside = tmp_path / f"outside-{leaf_name}"

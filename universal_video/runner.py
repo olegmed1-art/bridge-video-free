@@ -222,7 +222,7 @@ def _qc_summary(transcript: list[dict[str, Any]], qc: list[dict[str, Any]]) -> t
 def _inspect_source(job: VideoJob, *, max_source_bytes: int) -> dict[str, Any]:
     """Inspect source identity before allowing a COMPLETED result to be reused."""
 
-    if job.source["kind"] == "local_path":
+    if job.source["kind"] in {"local_path", "oracle_drive_staged"}:
         path = Path(job.source["path"])
         if not path.is_file():
             raise RuntimeError("local video source does not exist")
@@ -233,7 +233,7 @@ def _inspect_source(job: VideoJob, *, max_source_bytes: int) -> dict[str, Any]:
             raise RuntimeError("local video exceeds configured source-size limit")
         sha256 = _sha256(path)
         fingerprint_payload = {"kind": "local_path", "size_bytes": size, "sha256": sha256}
-        return {
+        inspection = {
             "kind": "local_path",
             "fingerprint": _fingerprint(fingerprint_payload),
             "fingerprint_basis": "sha256+size",
@@ -241,6 +241,18 @@ def _inspect_source(job: VideoJob, *, max_source_bytes: int) -> dict[str, Any]:
             "known_sha256": sha256,
             "path": path,
         }
+        if job.source["kind"] == "oracle_drive_staged":
+            if int(path.stat().st_size) != int(job.source["size_bytes"]):
+                raise RuntimeError("staged Drive source size mismatch")
+            observed = _sha256(path)
+            if observed != job.source["sha256"]:
+                raise RuntimeError("staged Drive source checksum mismatch")
+            inspection.update({
+                "kind": "oracle_drive_staged",
+                "known_sha256": observed,
+                "reuse_safe": True,
+            })
+        return inspection
 
     token = access_token()
     meta = file_metadata(job.source["file_id"], token)
@@ -682,6 +694,23 @@ def _materialize_source(
             "path": str(path),
             "fingerprint": inspection["fingerprint"],
             "fingerprint_basis": inspection["fingerprint_basis"],
+        }, inspection.get("known_sha256")
+
+    if job.source["kind"] == "oracle_drive_staged":
+        path = inspection["path"]
+        return path, {
+            "kind": "google_drive",
+            "file_id": job.source["file_id"],
+            "name": job.source.get("drive_name") or job.source.get("name"),
+            "mimeType": job.source.get("mime_type"),
+            "size": job.source.get("size_bytes"),
+            "modifiedTime": job.source.get("modified_time"),
+            "md5Checksum": job.source.get("md5"),
+            "sha256Checksum": job.source.get("sha256"),
+            "fingerprint": inspection["fingerprint"],
+            "fingerprint_basis": inspection["fingerprint_basis"],
+            "reuse_safe": True,
+            "oracle_staged": True,
         }, inspection.get("known_sha256")
 
     meta = inspection["metadata"]

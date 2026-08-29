@@ -179,24 +179,45 @@ if [[ "$OLD_DIRTY" == "0" && -n "$OLD_DIR" && -e "$OLD_DIR" ]]; then
 fi
 
 if [[ "$RUN_SMOKE" == "1" ]]; then
-  log "Run bounded synthetic local smoke job"
-  media="$BASE_DIR/media/universal-video-smoke.mp4"
+  log "Run bounded synthetic Oracle-staged smoke job"
+  smoke_stage="$BASE_DIR/media/drive-ready/universal-video-smoke"
+  if [[ -e "$smoke_stage" || -L "$smoke_stage" ]]; then
+    [[ -d "$smoke_stage" && ! -L "$smoke_stage" ]] || die "unsafe synthetic smoke staging path"
+  fi
+  install -d -o universal-video -g universal-video -m 0750 "$smoke_stage"
+  media="$smoke_stage/source.mp4"
   job="$BASE_DIR/spool/inbox/universal-video-smoke.json"
   runuser -u universal-video -- rm -f -- \
     "$BASE_DIR/spool/done/universal-video-smoke.json" \
     "$BASE_DIR/spool/failed/universal-video-smoke.json" \
     "$job.tmp"
   runuser -u universal-video -- ffmpeg -hide_banner -loglevel error -y \
-    -f lavfi -i color=c=black:s=320x180:d=3 \
+    -f lavfi -i testsrc2=size=640x360:rate=30:duration=5 \
     -f lavfi -i sine=frequency=440:duration=3 \
-    -shortest -c:v mpeg4 -q:v 10 -pix_fmt yuv420p -c:a aac "$media"
+    -shortest -c:v mpeg4 -q:v 2 -pix_fmt yuv420p -c:a aac "$media"
   runuser -u universal-video -- env JOB_TMP="$job.tmp" JOB_PATH="$job" MEDIA_PATH="$media" /usr/bin/python3 - <<'PY'
-import json, os
+import hashlib, json, os
+path=os.environ['MEDIA_PATH']
+size=os.path.getsize(path)
+assert size >= 1024 * 1024, size
+digest=hashlib.sha256()
+with open(path,'rb') as handle:
+    for block in iter(lambda: handle.read(8 * 1024 * 1024), b''):
+        digest.update(block)
+sha=digest.hexdigest()
 payload={
     'job_id':'universal-video-smoke',
     'profile':'transcript_only',
     'project':'infrastructure-smoke',
-    'source':{'kind':'local_path','path':os.environ['MEDIA_PATH']},
+    'source':{
+        'kind':'oracle_drive_staged',
+        'path':path,
+        'file_id':'syntheticSmokeOracleDrive0001',
+        'drive_name':'universal-video-smoke.mp4',
+        'mime_type':'video/mp4',
+        'size_bytes':size,
+        'sha256':sha,
+    },
     'metadata':{'synthetic':True},
     'options':{'max_duration_seconds':10,'chunk_seconds':60},
 }

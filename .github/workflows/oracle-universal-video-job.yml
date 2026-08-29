@@ -250,7 +250,7 @@ jobs:
           print(base64.b64encode(json.dumps(job,ensure_ascii=False,separators=(',',':')).encode()).decode())
           PY
           )"
-          submit_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video submit-base64 '$payload'"
+          submit_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video submit-drive-base64 '$payload'"
           status_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video status '$JOB_ID'"
           label="Universal Video / $PROFILE / $JOB_ID"
 
@@ -273,7 +273,7 @@ jobs:
             exit 1
           fi
           state="$(printf '%s\n' "$initial" | sed -n 's/^UV_STATE=//p' | tail -n1)"
-          if [[ ! "$state" =~ ^(QUEUED|RUNNING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]]; then
+          if [[ ! "$state" =~ ^(DOWNLOAD_QUEUED|DOWNLOADING_FROM_DRIVE|SOURCE_READY_ON_ORACLE|PROCESSING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]]; then
             echo 'PRE_SUBMIT_ERROR_CODE=UV_SUBMIT_STATE_INVALID' >> "$GITHUB_ENV"
             exit 1
           fi
@@ -300,7 +300,7 @@ jobs:
               exit 1
             fi
             state="$(printf '%s\n' "$out" | sed -n 's/^UV_STATE=//p' | tail -n1)"
-            if [[ ! "$state" =~ ^(QUEUED|RUNNING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]]; then
+            if [[ ! "$state" =~ ^(DOWNLOAD_QUEUED|DOWNLOADING_FROM_DRIVE|SOURCE_READY_ON_ORACLE|PROCESSING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]]; then
               echo 'PRE_SUBMIT_ERROR_CODE=UV_STATUS_STATE_INVALID' >> "$GITHUB_ENV"
               exit 1
             fi

@@ -9,7 +9,7 @@ INSTALLER = ROOT / "ops/install_universal_video_ocarun_admin.sh"
 def test_spool_repair_helper_is_fixed_and_argument_free():
     text = HELPER.read_text(encoding="utf-8")
     assert "[[ $(id -u) -eq 0 ]]" in text
-    assert "inbox running done failed results" in text
+    assert "inbox running done failed results progress" in text
     assert "/usr/sbin/runuser -u universal-video" in text
     assert "UNIVERSAL_VIDEO_SPOOL_RUNTIME_REPAIR_PASS" in text
     assert "$1" not in text

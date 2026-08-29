@@ -19,7 +19,7 @@ def test_spool_operations_use_exact_installed_bounded_ssh_surface():
 def test_submit_and_status_remain_fail_closed():
     text = WORKFLOW.read_text(encoding="utf-8")
 
-    assert 'submit_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video submit-base64' in text
+    assert 'submit_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video submit-drive-base64' in text
     assert 'status_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video status' in text
     assert "PRE_SUBMIT_ERROR_CODE=UV_SUBMIT_COMMAND_FAILED" not in text
     assert "code='UV_SUBMIT_COMMAND_FAILED'" in text

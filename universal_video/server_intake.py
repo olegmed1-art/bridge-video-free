@@ -53,7 +53,11 @@ def submit(payload: dict, *, spool_root: Path, staging_root: Path) -> str:
     if not inbox.is_dir() or inbox.is_symlink():
         raise IntakeError("unsafe spool inbox")
     target = inbox / f"{job.job_id}.json"
-    if target.exists() or target.is_symlink():
+    collisions = [
+        spool_root / state / f"{job.job_id}.json"
+        for state in ("inbox", "running", "done", "failed", "progress")
+    ] + [spool_root / "results" / job.job_id]
+    if any(path.exists() or path.is_symlink() for path in collisions):
         raise IntakeError("job id already exists; use status or a new id")
     temporary = staging_root / f".{job.job_id}.{os.getpid()}.{time.time_ns()}.json"
     _write_new(temporary, payload, worker_gid=inbox.stat().st_gid)
@@ -77,7 +81,7 @@ def main(argv: list[str]) -> int:
         raise IntakeError("job payload must be a regular file")
     payload = json.loads(payload_path.read_text(encoding="utf-8"))
     staging = Path(os.environ.get("UNIVERSAL_VIDEO_STAGING_ROOT", "/opt/bridge-school/.universal-video-staging"))
-    print("UV_STATE=QUEUED")
+    print("UV_STATE=DOWNLOAD_QUEUED")
     print("UV_JOB_ID=" + submit(payload, spool_root=spool, staging_root=staging))
     return 0
 

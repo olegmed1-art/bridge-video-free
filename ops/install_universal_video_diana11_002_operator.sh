@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+echo 'RETIRED: use /usr/local/sbin/universal-video submit-drive-base64' >&2
+exit 78
 umask 077
 
 # One-time root bootstrap for four exact UV-DIANA11-DURABLE-002 operator commands.

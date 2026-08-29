@@ -73,3 +73,23 @@ def test_rejects_duplicate_or_local_source(tmp_path: Path):
     bad["source"] = {"kind": "local_path", "path": "/media/x.mp4"}
     with pytest.raises(IntakeError):
         submit(bad, spool_root=spool, staging_root=staging)
+
+
+@pytest.mark.parametrize("state", ["running", "done", "failed", "progress"])
+def test_rejects_job_id_present_in_any_terminal_or_active_state(tmp_path: Path, state: str):
+    spool, staging = tmp_path / "spool", tmp_path / "staging"
+    (spool / "inbox").mkdir(parents=True)
+    (spool / state).mkdir()
+    staging.mkdir()
+    (spool / state / "lesson-173.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(IntakeError, match="already exists"):
+        submit(payload(), spool_root=spool, staging_root=staging)
+
+
+def test_rejects_job_id_with_existing_result_directory(tmp_path: Path):
+    spool, staging = tmp_path / "spool", tmp_path / "staging"
+    (spool / "inbox").mkdir(parents=True)
+    (spool / "results" / "lesson-173").mkdir(parents=True)
+    staging.mkdir()
+    with pytest.raises(IntakeError, match="already exists"):
+        submit(payload(), spool_root=spool, staging_root=staging)
