@@ -8,6 +8,7 @@ channels by geometry and never lets a vendor model assign a bridge seat.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ast
 import json
 import math
 from pathlib import Path
@@ -150,10 +151,14 @@ class LgdGen3OnnxDetector:
         self.session = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
         self.input_name = self.session.get_inputs()[0].name
         metadata = self.session.get_modelmeta().custom_metadata_map or {}
+        names_text = metadata.get("names", "{}")
         try:
-            names_raw = json.loads(metadata.get("names", "{}"))
-        except json.JSONDecodeError as exc:
-            raise WorldCardBackendError("LGD model class metadata is invalid") from exc
+            names_raw = json.loads(names_text)
+        except json.JSONDecodeError:
+            try:
+                names_raw = ast.literal_eval(names_text)
+            except (SyntaxError, ValueError) as exc:
+                raise WorldCardBackendError("LGD model class metadata is invalid") from exc
         if isinstance(names_raw, list):
             names = {index: value for index, value in enumerate(names_raw)}
         elif isinstance(names_raw, Mapping):
@@ -189,27 +194,47 @@ class LgdGen3OnnxDetector:
             output = output.T
         if output.shape[1] != 56:
             raise WorldCardBackendError("unsupported LGD class output shape")
-        predictions: list[WorldCardPrediction] = []
+        candidates: list[WorldCardPrediction] = []
         for row in output:
             class_id = int(row[4:].argmax())
             confidence = float(row[4 + class_id])
             if confidence < self.confidence:
                 continue
             cx, cy, box_width, box_height = map(float, row[:4])
-            predictions.append(WorldCardPrediction(
+            x = (cx - box_width / 2.0 - offset_x) / scale
+            y = (cy - box_height / 2.0 - offset_y) / scale
+            mapped_width = box_width / scale
+            mapped_height = box_height / scale
+            x = max(0.0, x)
+            y = max(0.0, y)
+            mapped_width = min(mapped_width, width - x)
+            mapped_height = min(mapped_height, height - y)
+            if mapped_width <= 0 or mapped_height <= 0:
+                continue
+            candidates.append(WorldCardPrediction(
                 card=self.names[class_id],
                 confidence=confidence,
                 box=_box({
-                    "x": (cx - box_width / 2.0 - offset_x) / scale,
-                    "y": (cy - box_height / 2.0 - offset_y) / scale,
-                    "w": box_width / scale,
-                    "h": box_height / scale,
+                    "x": x,
+                    "y": y,
+                    "w": mapped_width,
+                    "h": mapped_height,
                 }),
                 model_id=self.model_id,
             ))
-            if len(predictions) > MAX_WORLD_PREDICTIONS:
-                raise WorldCardBackendError("LGD prediction cap exceeded")
-        return predictions
+        if not candidates:
+            return []
+        indexes = cv2.dnn.NMSBoxes(
+            [[item.box["x"], item.box["y"], item.box["w"], item.box["h"]] for item in candidates],
+            [item.confidence for item in candidates],
+            self.confidence,
+            0.45,
+        )
+        selected = [candidates[int(index)] for index in list(indexes)]
+        selected.sort(key=lambda item: item.confidence, reverse=True)
+        if len(selected) > MAX_WORLD_PREDICTIONS:
+            raise WorldCardBackendError("LGD prediction cap exceeded after NMS")
+        return selected
 
 
 class ProfiledWorldReferenceComposer:
