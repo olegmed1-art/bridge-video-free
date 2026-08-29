@@ -58,7 +58,6 @@ def resolve_two_lane(canon_rules: Iterable[KnowledgeRule], world_rules: Iterable
     is not treated as a fallback answer.
     """
     canon = _rank(r for r in canon_rules if r.authority_class == "school_canon")
-    world = _rank(r for r in world_rules if r.authority_class == "external")
     canon_winner, canon_conflict = _winner_or_conflict(canon)
     trace: dict[str, Any] = {"canon_stage": "searched", "canon_rule_ids": [r.rule_id for r in canon], "world_searched": False}
     if canon_conflict:
@@ -68,6 +67,10 @@ def resolve_two_lane(canon_rules: Iterable[KnowledgeRule], world_rules: Iterable
         trace["canon_stage"] = "CANON_MATCH"
         return Resolution("CANON_MATCH", canon_winner, canon, (), trace)
 
+    # Keep WORLD lazy.  In production this iterable may be a database cursor or
+    # remote robot query; touching it before a recorded canon gap would violate
+    # the authority-ordering contract even if its result were later discarded.
+    world = _rank(r for r in world_rules if r.authority_class == "external")
     trace.update({"canon_stage": CANON_GAP, "world_searched": True, "world_rule_ids": [r.rule_id for r in world]})
     world_winner, world_conflict = _winner_or_conflict(world)
     if world_conflict:
