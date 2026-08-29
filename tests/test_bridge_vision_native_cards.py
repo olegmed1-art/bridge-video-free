@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from bridge_vision.gold import evaluate_card_detector, passes_card_gold_gate
+from bridge_vision.gold import evaluate_card_detector, evaluate_card_detector_report, passes_card_gold_gate
 from bridge_vision.native_cards import (
     NativeCardDetectorError,
     NativeFourSeatCardDetector,
@@ -72,3 +72,26 @@ def test_gold_gate_requires_zero_seat_errors_and_high_precision_recall():
     assert metrics.recall == 1.0
     assert metrics.seat_errors == 0
     assert passes_card_gold_gate(metrics)
+
+
+def test_gold_report_exposes_tp_fp_fn_ambiguous_per_frame():
+    def detector(_):
+        return {
+            "hands": {"N": ["AS", "KH"], "E": ["QD"]},
+            "ambiguous": [{"candidates": ["JC", "JS"]}],
+        }
+
+    report = evaluate_card_detector_report(detector, [{
+        "frame": "gold.jpg",
+        "hands": {"N": ["AS", "KH", "QH"], "E": ["JC"]},
+    }])
+    assert report["frames"] == [{
+        "frame": "gold.jpg",
+        "tp": 2,
+        "fp": 1,
+        "fn": 2,
+        "ambiguous": 1,
+        "seat_errors": 0,
+    }]
+    assert report["totals"]["precision"] == pytest.approx(2 / 3)
+    assert report["totals"]["recall"] == 0.5
