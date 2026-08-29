@@ -53,6 +53,15 @@ def test_remote_receipt_parser_accepts_one_schema_bound_json_amid_transport_nois
     assert "x=receipts[0]" in text
 
 
+def test_terminal_execution_waits_boundedly_for_oci_text_visibility():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert 'if [[ "$lifecycle" == SUCCEEDED ]]; then' in text
+    assert "for _ in $(seq 1 15); do" in text
+    assert '[[ "$has_text" == yes ]] && break' in text
+    assert "sleep 2" in text
+    assert text.count("oci instance-agent command-execution get --command-id") == 2
+
+
 def test_workflow_cannot_start_compute_or_promote_results():
     text = WORKFLOW.read_text(encoding="utf-8")
     forbidden = (
