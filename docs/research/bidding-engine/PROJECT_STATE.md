@@ -83,6 +83,17 @@ Avoid open-ended research with no decision target.
 ## Current engineering objective
 Design a common machine-readable knowledge object and retrieval semantics that can represent both SCHOOL CANON and WORLD / EXTERNAL KNOWLEDGE while preserving authority separation.
 
+## 2026-08-29 draft extension — WORLD knowledge runtime
+
+Draft branch `bidding/world-knowledge-v0` adds a storage-neutral two-lane
+resolver contract and a forward migration candidate `0201_world_knowledge_v0`.
+It is **not applied to production**, creates no bidding rule and has no canon
+activation effect.  The resolver records `CANON_GAP` before any WORLD lookup;
+it stops on `CANON_CONFLICT`, preserves `WORLD_CONFLICT`, and never promotes a
+WORLD result.  Robot decisions are explicitly pinned and hidden-information
+guarded.  The exact current primary-source gate remains unchanged: `0200` / #798
+must first pass the independent I2 review and promotion procedure.
+
 The target runtime flow is conceptually:
 `hand + public auction + context -> knowledge retrieval -> applicable rules/inferences -> bid selection -> optional explanation -> decision trace`
 
