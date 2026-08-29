@@ -646,7 +646,11 @@ def verify_result(
             }
         # role_mapping_proof_status was introduced after the first v2 field
         # receipts.  Absence is a legacy receipt, never a proof of a mapping.
-        optional_speaker_fields = {"role_mapping_proof_status"} if open_set_speaker_profile else set()
+        optional_speaker_fields = (
+            {"role_mapping_proof_status", "rejected_candidate"}
+            if open_set_speaker_profile
+            else set()
+        )
         if not set(speaker_report).issubset(expected_speaker_report_fields | optional_speaker_fields) or not expected_speaker_report_fields.issubset(speaker_report):
             raise ResultConformanceError("invalid speaker structure report shape")
         if not isinstance(speaker_report.get("revision"), str) or not re.fullmatch(
@@ -737,6 +741,42 @@ def verify_result(
                 "PASS", "INCONCLUSIVE", "NOT_APPLICABLE"
             }:
                 raise ResultConformanceError("invalid speaker role proof status")
+            rejected = speaker_report.get("rejected_candidate")
+            if rejected is not None:
+                if status in positive_speaker_statuses or not isinstance(rejected, dict) or set(rejected) != {
+                    "schema", "producer_status", "selected_hypothesis", "segments_total",
+                    "segments_labeled", "speaker_count", "segment_coverage",
+                    "speech_duration_coverage",
+                }:
+                    raise ResultConformanceError("invalid rejected speaker candidate")
+                if rejected.get("schema") != "universal-video-rejected-speaker-candidate-v1":
+                    raise ResultConformanceError("invalid rejected speaker candidate schema")
+                if rejected.get("producer_status") not in (
+                    positive_speaker_statuses
+                    | unavailable_speaker_statuses
+                    | {"DIARIZED_COLLAPSE_RISK"}
+                ):
+                    raise ResultConformanceError("invalid rejected speaker producer status")
+                if not isinstance(rejected.get("selected_hypothesis"), str) or not re.fullmatch(
+                    r"[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}", rejected["selected_hypothesis"]
+                ):
+                    raise ResultConformanceError("invalid rejected speaker hypothesis")
+                rejected_total = _exact_int(rejected.get("segments_total"), "rejected speaker total")
+                rejected_labeled = _exact_int(rejected.get("segments_labeled"), "rejected speaker labels")
+                _exact_int(rejected.get("speaker_count"), "rejected speaker count")
+                rejected_coverage = _bounded_number(
+                    rejected.get("segment_coverage"), "rejected speaker coverage",
+                    minimum=0.0, maximum=1.0,
+                )
+                _bounded_number(
+                    rejected.get("speech_duration_coverage"),
+                    "rejected speaker duration coverage", minimum=0.0, maximum=1.0,
+                )
+                if rejected_total != segment_total or rejected_labeled > rejected_total:
+                    raise ResultConformanceError("rejected speaker candidate aggregate mismatch")
+                expected_rejected_coverage = rejected_labeled / rejected_total if rejected_total else 0.0
+                if abs(rejected_coverage - expected_rejected_coverage) > 1e-12:
+                    raise ResultConformanceError("rejected speaker candidate coverage mismatch")
         if status in positive_speaker_statuses:
             if speaker_report.get("quality_gate") != "PASS" or speaker_report.get("reason") != "NONE":
                 raise ResultConformanceError("speaker PASS gate mismatch")

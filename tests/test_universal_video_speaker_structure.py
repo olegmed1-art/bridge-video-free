@@ -363,6 +363,16 @@ def test_test_profile_rejects_two_labels_with_low_lesson_coverage(monkeypatch, t
     assert report["label_coverage"] == 0.0
     assert report["speech_duration_coverage"] == 0.0
     assert report["minimum_label_coverage"] == 0.80
+    assert report["rejected_candidate"] == {
+        "schema": "universal-video-rejected-speaker-candidate-v1",
+        "producer_status": "DIARIZED_UNMAPPED",
+        "selected_hypothesis": "unknown",
+        "segments_total": 10,
+        "segments_labeled": 2,
+        "speaker_count": 2,
+        "segment_coverage": 0.2,
+        "speech_duration_coverage": 0.2,
+    }
 
 
 def test_test_profile_rejects_short_segment_coverage_with_long_unlabeled_speech(monkeypatch, tmp_path: Path):

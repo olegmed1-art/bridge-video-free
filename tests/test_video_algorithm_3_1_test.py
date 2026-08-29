@@ -110,7 +110,7 @@ def test_definition_composes_base_and_all_recent_video_capabilities():
     assert definition["canonical_promotion_allowed"] is False
     assert definition["production_activation_allowed"] is False
     assert definition["next_video_auto_start_allowed"] is False
-    assert definition["algorithm_revision"] == "3.1-test-r4"
+    assert definition["algorithm_revision"] == "3.1-test-r6-speaker-selection"
     assert definition["bridgit_layout_policy"] == BRIDGIT_LAYOUT_POLICY
     assert definition["bridgit_layout_policy"]["suit_order"] == ["H", "C", "D", "S"]
     assert definition["bridgit_layout_policy"]["screen_axes"] == {
@@ -223,4 +223,45 @@ def test_test_speaker_coverage_policy_tamper_fails_closed(tmp_path: Path):
     report["minimum_label_coverage"] = 0.10
     path.write_text(json.dumps(report), encoding="utf-8")
     with pytest.raises(ResultConformanceError, match="minimum label coverage mismatch"):
+        _verify(job_dir)
+
+
+def test_rejected_speaker_candidate_keeps_only_bounded_aggregate_diagnostics(
+    tmp_path: Path,
+):
+    job_dir, _ = _make_test_bundle(tmp_path)
+    path = job_dir / "speaker_diarization.json"
+    report = json.loads(path.read_text(encoding="utf-8"))
+    report["rejected_candidate"] = {
+        "schema": "universal-video-rejected-speaker-candidate-v1",
+        "producer_status": "DIARIZED_UNMAPPED",
+        "selected_hypothesis": "pyannote+3dspeaker",
+        "segments_total": 1,
+        "segments_labeled": 0,
+        "speaker_count": 0,
+        "segment_coverage": 0.0,
+        "speech_duration_coverage": 0.0,
+    }
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    assert _verify(job_dir)["state"] == "PASS"
+
+
+def test_rejected_speaker_candidate_coverage_tamper_fails_closed(tmp_path: Path):
+    job_dir, _ = _make_test_bundle(tmp_path)
+    path = job_dir / "speaker_diarization.json"
+    report = json.loads(path.read_text(encoding="utf-8"))
+    report["rejected_candidate"] = {
+        "schema": "universal-video-rejected-speaker-candidate-v1",
+        "producer_status": "DIARIZED_UNMAPPED",
+        "selected_hypothesis": "pyannote+3dspeaker",
+        "segments_total": 1,
+        "segments_labeled": 0,
+        "speaker_count": 0,
+        "segment_coverage": 0.5,
+        "speech_duration_coverage": 0.0,
+    }
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(ResultConformanceError, match="candidate coverage mismatch"):
         _verify(job_dir)

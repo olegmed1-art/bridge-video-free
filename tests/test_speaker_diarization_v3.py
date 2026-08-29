@@ -1,4 +1,8 @@
+from pathlib import Path
+
 import numpy as np
+
+import bridge_speaker_diarization_v3 as diarization
 
 from bridge_speaker_diarization_v3 import (
     EMBEDDING_URL,
@@ -7,6 +11,8 @@ from bridge_speaker_diarization_v3 import (
     _cluster_embeddings_two,
     _cluster_embeddings_open_set,
     _collapse_diagnostics,
+    _candidate_rank,
+    _coverage_diagnostics,
     _hypothesis_score,
 )
 
@@ -42,6 +48,193 @@ def test_noncollapsed_hypothesis_scores_above_collapsed_one():
     collapsed = _collapse_diagnostics(_turns(952, 6), [0] * 952 + [1] * 6)
     sane = _collapse_diagnostics(_turns(90, 10), [0] * 90 + [1] * 10)
     assert _hypothesis_score(sane) > _hypothesis_score(collapsed)
+
+
+def test_candidate_selection_prefers_coverage_without_accepting_collapse():
+    low_coverage = {
+        "cluster_collapse_detected": False,
+        "segment_coverage": 0.63,
+        "speech_duration_coverage": 0.71,
+        "score": 3.2,
+    }
+    field_ready = {
+        "cluster_collapse_detected": False,
+        "segment_coverage": 0.91,
+        "speech_duration_coverage": 0.94,
+        "score": 3.0,
+    }
+    collapsed = {
+        "cluster_collapse_detected": True,
+        "segment_coverage": 0.99,
+        "speech_duration_coverage": 0.99,
+        "score": 9.0,
+    }
+    assert _candidate_rank(field_ready) > _candidate_rank(low_coverage)
+    assert _candidate_rank(low_coverage) > _candidate_rank(collapsed)
+
+
+def test_candidate_coverage_is_recomputed_from_transcript_durations():
+    segments = [
+        {"start": 0.0, "end": 1.0},
+        {"start": 1.0, "end": 5.0},
+        {"start": 5.0, "end": 10.0},
+    ]
+    report = _coverage_diagnostics(segments, [0, None, 1])
+    assert report == {
+        "segments_total": 3,
+        "segment_coverage": 0.666667,
+        "speech_duration_coverage": 0.6,
+    }
+
+
+def test_end_to_end_selector_does_not_discard_higher_coverage_sherpa_candidate(
+    monkeypatch, tmp_path: Path
+):
+    segments = [
+        {
+            "start": float(index),
+            "end": float(index + 1),
+            "text": f"segment {index}",
+            "chunk": 0,
+            "unreliable": False,
+        }
+        for index in range(20)
+    ]
+    model = tmp_path / "model.onnx"
+    model.write_bytes(b"bounded-test-model")
+
+    def extract(_video, wav):
+        wav.write_bytes(b"bounded-test-wav")
+
+    def turns(count):
+        return [
+            {"start": float(index), "end": float(index + 1), "speaker": index % 2}
+            for index in range(count)
+        ]
+
+    count_evidence = {
+        "mode": "OPEN_SET",
+        "candidate_counts": [],
+        "selected_count": 2,
+        "selection_margin": 0.2,
+        "collapse_check": "PASS",
+        "fragmentation_check": "PASS",
+        "mixing_check": "PASS",
+    }
+    monkeypatch.setattr(diarization.previous, "_extract_pcm", extract)
+    monkeypatch.setattr(diarization, "_ensure_segmentation", lambda _cache: model)
+    monkeypatch.setattr(diarization, "_ensure_embedding", lambda _cache, _kind: model)
+    monkeypatch.setattr(
+        diarization,
+        "diarize_with_open_set_embeddings",
+        lambda *_args, **_kwargs: (
+            turns(12),
+            {
+                "engine": "segment-embedding-open-set",
+                "model_id": "3dspeaker-segment-open-set",
+                "speaker_count_evidence": count_evidence,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        diarization,
+        "_run_sherpa_model",
+        lambda *_args, **_kwargs: (
+            turns(20),
+            {
+                "engine": "sherpa-onnx",
+                "model_id": "pyannote+3dspeaker",
+                "num_speakers_requested": 2,
+            },
+        ),
+    )
+
+    output, report = diarization.diarize_transcript(
+        tmp_path / "lesson.mp4",
+        segments,
+        tmp_path / "work",
+        minimum_segments_per_cluster=2,
+    )
+
+    assert report["status"] == "DIARIZED_UNMAPPED"
+    assert report["selected_hypothesis"] == "pyannote+3dspeaker"
+    assert report["segments_labeled"] == 20
+    assert report["segment_coverage"] == 1.0
+    assert report["speech_duration_coverage"] == 1.0
+    assert report["speaker_count_evidence"] == count_evidence
+    assert sum(bool(item.get("speaker")) for item in output) == 20
+
+
+def test_failed_comparison_candidate_does_not_discard_valid_open_set_result(
+    monkeypatch, tmp_path: Path
+):
+    segments = [
+        {
+            "start": float(index),
+            "end": float(index + 1),
+            "text": f"segment {index}",
+            "chunk": 0,
+            "unreliable": False,
+        }
+        for index in range(20)
+    ]
+    model = tmp_path / "model.onnx"
+    model.write_bytes(b"bounded-test-model")
+    open_turns = [
+        {"start": float(index), "end": float(index + 1), "speaker": index % 2}
+        for index in range(20)
+    ]
+    count_evidence = {
+        "mode": "OPEN_SET",
+        "candidate_counts": [],
+        "selected_count": 2,
+        "selection_margin": 0.2,
+        "collapse_check": "PASS",
+        "fragmentation_check": "PASS",
+        "mixing_check": "PASS",
+    }
+
+    monkeypatch.setattr(
+        diarization.previous,
+        "_extract_pcm",
+        lambda _video, wav: wav.write_bytes(b"bounded-test-wav"),
+    )
+    monkeypatch.setattr(diarization, "_ensure_segmentation", lambda _cache: model)
+    monkeypatch.setattr(diarization, "_ensure_embedding", lambda _cache, _kind: model)
+    monkeypatch.setattr(
+        diarization,
+        "diarize_with_open_set_embeddings",
+        lambda *_args, **_kwargs: (
+            open_turns,
+            {
+                "engine": "segment-embedding-open-set",
+                "model_id": "3dspeaker-segment-open-set",
+                "speaker_count_evidence": count_evidence,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        diarization,
+        "_run_sherpa_model",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("candidate failed")),
+    )
+
+    output, report = diarization.diarize_transcript(
+        tmp_path / "lesson.mp4",
+        segments,
+        tmp_path / "work",
+        minimum_segments_per_cluster=2,
+    )
+
+    assert report["status"] == "DIARIZED_UNMAPPED"
+    assert report["selected_hypothesis"] == "3dspeaker-segment-open-set"
+    assert report["segments_labeled"] == 20
+    assert any(
+        item.get("model_id") == "pyannote+3dspeaker"
+        and item.get("status") == "FAILED_SOFT"
+        for item in report["hypotheses"]
+    )
+    assert sum(bool(item.get("speaker")) for item in output) == 20
 
 
 def test_embedding_recluster_separates_two_clouds_deterministically():

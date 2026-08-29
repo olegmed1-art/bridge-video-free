@@ -103,8 +103,13 @@ def _hypothesis_score(diagnostics: Mapping[str, Any]) -> float:
     minor_seg = min(0.25, float(diagnostics.get("minor_segment_ratio") or 0.0))
     minor_dur = min(0.25, float(diagnostics.get("minor_duration_ratio") or 0.0))
     transitions = min(1.0, float(diagnostics.get("speaker_transitions") or 0) / 30.0)
-    coverage = min(1.0, float(diagnostics.get("segments_labeled") or 0) / 100.0)
-    return round(3.0 * minor_seg + 2.0 * minor_dur + transitions + coverage - penalty, 6)
+    segment_coverage = diagnostics.get("segment_coverage")
+    duration_coverage = diagnostics.get("speech_duration_coverage")
+    if segment_coverage is None or duration_coverage is None:
+        coverage = min(1.0, float(diagnostics.get("segments_labeled") or 0) / 100.0)
+    else:
+        coverage = min(float(segment_coverage), float(duration_coverage))
+    return round(3.0 * minor_seg + 2.0 * minor_dur + transitions + 2.0 * coverage - penalty, 6)
 
 
 def _normalize_rows(matrix):
