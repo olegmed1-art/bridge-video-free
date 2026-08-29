@@ -1,0 +1,9 @@
+{
+  "request_id": "drive-only-ingress-smoke-20260829-01",
+  "mode": "smoke",
+  "git_ref": "447c81df0a391c2bea9dc2337def5b5c3e601c2a",
+  "expected_host_fingerprint": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}
