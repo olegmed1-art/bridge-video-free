@@ -119,6 +119,10 @@ jobs:
           before_fp="$(openssl x509 -in "$cert" -noout -fingerprint -sha256)"
           printf 'tls_before_not_after=%s\n' "$(openssl x509 -in "$cert" -noout -enddate | cut -d= -f2-)"
 
+          created_hook=false
+          created_service=false
+          created_timer=false
+
           rollback(){
             rc=$?
             after_fp="$(openssl x509 -in "$cert" -noout -fingerprint -sha256 2>/dev/null || true)"
@@ -126,10 +130,59 @@ jobs:
               "$certbot" rollback --cert-name "$PUBLIC_IP" --non-interactive >/dev/null 2>&1 || true
               systemctl reload nginx >/dev/null 2>&1 || true
             fi
+            if [[ "$created_timer" == true ]]; then
+              systemctl disable --now dds3-cert-renew.timer >/dev/null 2>&1 || true
+              rm -f /etc/systemd/system/dds3-cert-renew.timer
+            fi
+            if [[ "$created_service" == true ]]; then
+              rm -f /etc/systemd/system/dds3-cert-renew.service
+            fi
+            if [[ "$created_hook" == true ]]; then
+              rm -f /etc/letsencrypt/renewal-hooks/deploy/10-reload-nginx
+            fi
+            systemctl daemon-reload >/dev/null 2>&1 || true
             echo TLS_RENEWAL_ROLLBACK_ATTEMPTED >&2
             exit "$rc"
           }
           trap rollback ERR
+
+          install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
+          if [[ ! -e /etc/letsencrypt/renewal-hooks/deploy/10-reload-nginx ]]; then
+            cat >/etc/letsencrypt/renewal-hooks/deploy/10-reload-nginx <<'EOF'
+          #!/bin/sh
+          systemctl reload nginx
+          EOF
+            chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/10-reload-nginx
+            created_hook=true
+          fi
+          if [[ ! -e /etc/systemd/system/dds3-cert-renew.service ]]; then
+            cat >/etc/systemd/system/dds3-cert-renew.service <<'EOF'
+          [Unit]
+          Description=Renew Bridge School DDS3 short-lived TLS certificate
+          After=network-online.target nginx.service
+          Wants=network-online.target
+          [Service]
+          Type=oneshot
+          ExecStart=/opt/certbot/bin/certbot renew --quiet --cert-name 158.180.47.161
+          EOF
+            created_service=true
+          fi
+          if [[ ! -e /etc/systemd/system/dds3-cert-renew.timer ]]; then
+            cat >/etc/systemd/system/dds3-cert-renew.timer <<'EOF'
+          [Unit]
+          Description=Check DDS3 TLS certificate renewal twice daily
+          [Timer]
+          OnCalendar=*-*-* 00,12:17:00
+          RandomizedDelaySec=45m
+          Persistent=true
+          [Install]
+          WantedBy=timers.target
+          EOF
+            created_timer=true
+          fi
+          systemctl daemon-reload
+          systemctl enable --now dds3-cert-renew.timer >/dev/null
+          systemctl is-active --quiet dds3-cert-renew.timer
 
           if ! openssl x509 -checkend 86400 -noout -in "$cert" >/dev/null 2>&1; then
             systemctl reset-failed dds3-cert-renew.service 2>/dev/null || true
@@ -155,7 +208,6 @@ jobs:
 
           nginx -t >/dev/null
           systemctl reload nginx
-          systemctl enable --now dds3-cert-renew.timer >/dev/null
           systemctl is-active --quiet dds3-cert-renew.timer
           openssl x509 -checkend 86400 -noout -in "$cert"
           curl -fsS --max-time 12 "https://$PUBLIC_IP/readyz" >/tmp/dds3-tls-renewal-ready.json
