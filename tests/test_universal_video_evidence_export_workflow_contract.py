@@ -17,6 +17,8 @@ def test_export_workflow_has_a_fixed_read_only_remote_surface():
     assert "chown root:universal-video" not in text
     assert "publication_state']=='NOT_PUBLISHED'" in text
     assert "school_canon_changed'] is False" in text
+    assert "x['runtime']['binding']=='OBSERVED_EXACT'" in text
+    assert "requested_runtime_commit']==x['runtime']['installed_runtime_commit']==x['runtime']['observed_job_runtime_commit']" in text
 
 
 def test_raw_remote_output_is_never_published_or_logged():

@@ -239,7 +239,15 @@ jobs:
           payload="$(REQUEST_FILE="$request_file" python - <<'PY'
           import base64,json,os
           x=json.load(open(os.environ['REQUEST_FILE'],encoding='utf-8'))
-          print(base64.b64encode(json.dumps(x['job'],ensure_ascii=False,separators=(',',':')).encode()).decode())
+          job=dict(x['job'])
+          metadata=dict(job.get('metadata') or {})
+          requested=str(metadata.get('requested_runtime_commit') or '').strip().lower()
+          if not __import__('re').fullmatch(r'[0-9a-f]{40}', requested):
+              raise SystemExit('requested_runtime_commit is required for resident attestation')
+          metadata['request_commit']=os.environ['GITHUB_SHA'].lower()
+          metadata['requested_runtime_commit']=requested
+          job['metadata']=metadata
+          print(base64.b64encode(json.dumps(job,ensure_ascii=False,separators=(',',':')).encode()).decode())
           PY
           )"
           submit_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video submit-base64 '$payload'"

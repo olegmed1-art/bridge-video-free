@@ -162,6 +162,9 @@ jobs:
           assert set(x)=={'schema','state','exported_at_unix','job','runtime','technical','asr_qc','speakers','cards','publication_state','school_canon_changed'}
           assert x['schema']=='universal-video-evidence-export-v1' and x['state']=='PASS'
           assert x['job']['job_id']==os.environ['JOB_ID']
+          assert set(x['runtime'])=={'requested_runtime_commit','installed_runtime_commit','observed_job_runtime_commit','binding'}
+          assert x['runtime']['binding']=='OBSERVED_EXACT'
+          assert x['runtime']['requested_runtime_commit']==x['runtime']['installed_runtime_commit']==x['runtime']['observed_job_runtime_commit']
           assert x['publication_state']=='NOT_PUBLISHED' and x['school_canon_changed'] is False
           assert x['technical']['canonical_promotion_allowed'] is False
           assert x['cards']['canonical_promotion_allowed'] is False

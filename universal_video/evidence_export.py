@@ -21,7 +21,7 @@ from .result_conformance import ResultConformanceError, verify_result
 
 EXPORT_SCHEMA = "universal-video-evidence-export-v1"
 REQUEST_SCHEMA = "universal-video-evidence-export-request-v1"
-STATUS_SCHEMAS = frozenset({"universal-video-resident-status-v1", "universal-video-resident-status-v2"})
+STATUS_SCHEMA = "universal-video-resident-status-v2"
 MAX_REQUEST_BYTES = 16 * 1024
 MAX_STATUS_BYTES = 16 * 1024
 MAX_DONE_BYTES = 256 * 1024
@@ -35,8 +35,10 @@ ALLOWED_REQUEST_FIELDS = frozenset({
     "schema", "job_id", "profile", "job_hash", "source_file_id",
     "request_commit", "requested_runtime_commit", "timeout_seconds",
 })
-ALLOWED_STATUS_FIELDS_V1 = frozenset({"schema", "instance_state", "active_jobs", "observed_at_unix"})
-ALLOWED_STATUS_FIELDS_V2 = ALLOWED_STATUS_FIELDS_V1 | frozenset({"installed_runtime_commit", "job_attestations"})
+ALLOWED_STATUS_FIELDS = frozenset({
+    "schema", "instance_state", "active_jobs", "observed_at_unix",
+    "installed_runtime_commit", "job_attestations",
+})
 ALLOWED_ATTESTATION_FIELDS = frozenset({
     "schema", "job_id", "request_commit", "requested_runtime_commit",
     "installed_runtime_commit", "observed_job_runtime_commit", "profile",
@@ -133,9 +135,7 @@ def _validate_request(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def _validate_status(status: dict[str, Any], *, now: float) -> dict[str, Any]:
-    schema = status.get("schema")
-    allowed = ALLOWED_STATUS_FIELDS_V2 if schema == "universal-video-resident-status-v2" else ALLOWED_STATUS_FIELDS_V1
-    if schema not in STATUS_SCHEMAS or set(status) != allowed:
+    if status.get("schema") != STATUS_SCHEMA or set(status) != ALLOWED_STATUS_FIELDS:
         raise EvidenceExportError("invalid resident status shape")
     if status.get("instance_state") != "RUNNING":
         raise EvidenceExportError("resident instance is not RUNNING")
@@ -147,18 +147,74 @@ def _validate_status(status: dict[str, Any], *, now: float) -> dict[str, Any]:
     observed_number = float(observed)
     if not math.isfinite(observed_number) or observed_number > now + 2 or now - observed_number > MAX_STATUS_AGE_SECONDS:
         raise EvidenceExportError("resident status is stale")
-    installed = None
-    attestations: list[dict[str, Any]] = []
-    if schema == "universal-video-resident-status-v2":
-        installed = _hex(status.get("installed_runtime_commit"), width=40, field="installed_runtime_commit")
-        raw = status.get("job_attestations")
-        if not isinstance(raw, list) or len(raw) > 32 or any(not isinstance(item, dict) for item in raw):
-            raise EvidenceExportError("invalid job attestations")
-        for item in raw:
-            if set(item) != ALLOWED_ATTESTATION_FIELDS or item.get("schema") != "universal-video-runtime-job-attestation-v1":
-                raise EvidenceExportError("invalid job attestation shape")
-        attestations = list(raw)
-    return {"schema": schema, "observed_at_unix": observed_number, "installed_runtime_commit": installed, "job_attestations": attestations}
+    installed = _hex(status.get("installed_runtime_commit"), width=40, field="installed_runtime_commit")
+    raw = status.get("job_attestations")
+    if not isinstance(raw, list) or len(raw) > 32 or any(not isinstance(item, dict) for item in raw):
+        raise EvidenceExportError("invalid job attestations")
+    for item in raw:
+        if set(item) != ALLOWED_ATTESTATION_FIELDS or item.get("schema") != "universal-video-runtime-job-attestation-v1":
+            raise EvidenceExportError("invalid job attestation shape")
+        _id(item.get("job_id"), "attestation job_id")
+        _hex(item.get("request_commit"), width=40, field="attestation request_commit")
+        _hex(
+            item.get("requested_runtime_commit"),
+            width=40,
+            field="attestation requested_runtime_commit",
+        )
+        _hex(
+            item.get("installed_runtime_commit"),
+            width=40,
+            field="attestation installed_runtime_commit",
+        )
+        _hex(
+            item.get("observed_job_runtime_commit"),
+            width=40,
+            field="attestation observed_job_runtime_commit",
+        )
+        if not re.fullmatch(r"^[a-z0-9._:-]{1,80}$", str(item.get("profile") or "")):
+            raise EvidenceExportError("invalid attestation profile")
+        _hex(item.get("job_hash"), width=64, field="attestation job_hash")
+        _id(item.get("source_file_id"), "attestation source_file_id")
+        if (
+            item.get("canonical_output_untouched") is not True
+            or item.get("canonical_promotion_allowed") is not False
+            or item.get("publication_state") != "NOT_PUBLISHED"
+        ):
+            raise EvidenceExportError("invalid job attestation safety boundary")
+    return {
+        "schema": STATUS_SCHEMA,
+        "observed_at_unix": observed_number,
+        "installed_runtime_commit": installed,
+        "job_attestations": list(raw),
+    }
+
+
+def _exact_runtime_attestation(
+    status: dict[str, Any], request: dict[str, Any]
+) -> dict[str, Any]:
+    installed = status["installed_runtime_commit"]
+    if installed != request["requested_runtime_commit"]:
+        raise EvidenceExportError("installed runtime does not match requested runtime")
+    matches = [
+        item
+        for item in status["job_attestations"]
+        if (
+            item.get("job_id") == request["job_id"]
+            and item.get("request_commit") == request["request_commit"]
+            and item.get("requested_runtime_commit") == request["requested_runtime_commit"]
+            and item.get("installed_runtime_commit") == installed
+            and item.get("observed_job_runtime_commit") == installed
+            and item.get("profile") == request["profile"]
+            and item.get("job_hash") == request["job_hash"]
+            and item.get("source_file_id") == request["source_file_id"]
+            and item.get("canonical_output_untouched") is True
+            and item.get("canonical_promotion_allowed") is False
+            and item.get("publication_state") == "NOT_PUBLISHED"
+        )
+    ]
+    if len(matches) != 1:
+        raise EvidenceExportError("exact observed runtime attestation unavailable")
+    return matches[0]
 
 
 def _transcript_rows(path: Path) -> tuple[list[dict[str, Any]], str, int]:
@@ -284,6 +340,9 @@ def build_evidence_export(
         raise EvidenceExportError("unexpected done receipt version")
     if done.get("compute_status") != "COMPLETED" or done.get("job_id") != job_id:
         raise EvidenceExportError("done receipt is not exact completed job")
+    runtime_attestation = _exact_runtime_attestation(status, request)
+    if done.get("runtime_attestation") != runtime_attestation:
+        raise EvidenceExportError("resident status attestation is not bound to done receipt")
     try:
         conformance = verify_result(
             result_dir,
@@ -301,6 +360,10 @@ def build_evidence_export(
         raise EvidenceExportError("done receipt/result bundle mismatch")
 
     manifest = _read_regular_json(result_dir / "manifest.json", max_bytes=256 * 1024)
+    if manifest.get("processing_revision") != request["requested_runtime_commit"]:
+        raise EvidenceExportError("manifest processing revision does not match requested runtime")
+    if conformance.get("processing_revision") != request["requested_runtime_commit"]:
+        raise EvidenceExportError("conformance processing revision does not match requested runtime")
     transcript_rows, transcript_sha, transcript_size = _transcript_rows(result_dir / "transcript.jsonl")
     deferred = list(conformance.get("deferred_analysis") or [])
     artifacts_by_name = {item["relative_name"]: item for item in conformance["artifacts"]}
@@ -317,26 +380,6 @@ def build_evidence_export(
         }
         for name in ("transcript.jsonl", "transcript.txt", "transcript_qc.json")
     ]
-    installed = status["installed_runtime_commit"]
-    runtime_binding = "UNAVAILABLE"
-    if installed == request["requested_runtime_commit"]:
-        for item in status["job_attestations"]:
-            if (
-                item.get("job_id") == job_id
-                and item.get("request_commit") == request["request_commit"]
-                and item.get("requested_runtime_commit") == request["requested_runtime_commit"]
-                and item.get("installed_runtime_commit") == installed
-                and item.get("observed_job_runtime_commit") == installed
-                and item.get("profile") == request["profile"]
-                and item.get("job_hash") == request["job_hash"]
-                and item.get("source_file_id") == request["source_file_id"]
-                and item.get("canonical_output_untouched") is True
-                and item.get("canonical_promotion_allowed") is False
-                and item.get("publication_state") == "NOT_PUBLISHED"
-            ):
-                runtime_binding = "OBSERVED_EXACT"
-                break
-
     receipt = {
         "schema": EXPORT_SCHEMA,
         "state": "PASS",
@@ -350,8 +393,9 @@ def build_evidence_export(
         },
         "runtime": {
             "requested_runtime_commit": request["requested_runtime_commit"],
-            "installed_runtime_commit": installed,
-            "binding": runtime_binding,
+            "installed_runtime_commit": status["installed_runtime_commit"],
+            "observed_job_runtime_commit": runtime_attestation["observed_job_runtime_commit"],
+            "binding": "OBSERVED_EXACT",
         },
         "technical": {
             "artifact_set_sha256": conformance["artifact_set_sha256"],

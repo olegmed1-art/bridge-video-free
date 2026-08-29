@@ -16,7 +16,7 @@ _bundle = runpy.run_path(
 )["_bundle"]
 
 
-def _inputs(tmp_path: Path, *, status_v2: bool = False):
+def _inputs(tmp_path: Path, *, status_v2: bool = True):
     spool = tmp_path / "spool"
     result_dir, manifest = _bundle(spool / "results")
     base = verify_result(
@@ -40,12 +40,28 @@ def _inputs(tmp_path: Path, *, status_v2: bool = False):
     )
     done_dir = spool / "done"
     done_dir.mkdir(parents=True)
+    attestation = {
+        "schema": "universal-video-runtime-job-attestation-v1",
+        "job_id": "exact-video-job",
+        "request_commit": "e" * 40,
+        "requested_runtime_commit": "a" * 40,
+        "installed_runtime_commit": "a" * 40,
+        "observed_job_runtime_commit": "a" * 40,
+        "profile": "bridge_lesson",
+        "job_hash": "c" * 64,
+        "source_file_id": "1AbCdEfGhIjKlMnOpQrStUvWxYz",
+        "canonical_output_untouched": True,
+        "canonical_promotion_allowed": False,
+        "publication_state": "NOT_PUBLISHED",
+    }
     done = {
         **manifest,
         "receipt_version": "universal-video-compute-receipt-v1",
         "compute_status": "COMPLETED",
         "result_conformance": final,
     }
+    if status_v2:
+        done["runtime_attestation"] = attestation
     (done_dir / "exact-video-job.json").write_text(json.dumps(done), encoding="utf-8")
     request = {
         "schema": "universal-video-evidence-export-request-v1",
@@ -70,29 +86,14 @@ def _inputs(tmp_path: Path, *, status_v2: bool = False):
             **status,
             "schema": "universal-video-resident-status-v2",
             "installed_runtime_commit": "a" * 40,
-            "job_attestations": [
-                {
-                    "schema": "universal-video-runtime-job-attestation-v1",
-                    "job_id": "exact-video-job",
-                    "request_commit": "e" * 40,
-                    "requested_runtime_commit": "a" * 40,
-                    "installed_runtime_commit": "a" * 40,
-                    "observed_job_runtime_commit": "a" * 40,
-                    "profile": "bridge_lesson",
-                    "job_hash": "c" * 64,
-                    "source_file_id": "1AbCdEfGhIjKlMnOpQrStUvWxYz",
-                    "canonical_output_untouched": True,
-                    "canonical_promotion_allowed": False,
-                    "publication_state": "NOT_PUBLISHED",
-                }
-            ],
+            "job_attestations": [attestation],
         }
     status_path = tmp_path / "status.json"
     status_path.write_text(json.dumps(status), encoding="utf-8")
     return request_path, status_path, spool, result_dir, final
 
 
-def _export(tmp_path: Path, *, status_v2: bool = False):
+def _export(tmp_path: Path, *, status_v2: bool = True):
     request, status, spool, result_dir, final = _inputs(tmp_path, status_v2=status_v2)
     receipt = build_evidence_export(
         request_path=request,
@@ -103,7 +104,7 @@ def _export(tmp_path: Path, *, status_v2: bool = False):
     return receipt, request, status, spool, result_dir, final
 
 
-def test_exact_job_export_exposes_asr_and_keeps_deferred_stages_unavailable(tmp_path: Path):
+def test_exact_runtime_bound_job_export_exposes_asr_and_keeps_deferred_stages_unavailable(tmp_path: Path):
     receipt, *_ = _export(tmp_path)
     assert receipt["state"] == "PASS"
     assert receipt["asr_qc"]["status"] == "PASS"
@@ -126,7 +127,7 @@ def test_exact_job_export_exposes_asr_and_keeps_deferred_stages_unavailable(tmp_
     assert receipt["cards"]["status"] == "UNAVAILABLE"
     assert receipt["cards"]["reason"] == "BRIDGE_POSITIONS_DEFERRED"
     assert receipt["cards"]["canonical_promotion_allowed"] is False
-    assert receipt["runtime"]["binding"] == "UNAVAILABLE"
+    assert receipt["runtime"]["binding"] == "OBSERVED_EXACT"
     assert receipt["publication_state"] == "NOT_PUBLISHED"
     assert receipt["school_canon_changed"] is False
 
@@ -136,6 +137,38 @@ def test_v2_status_can_prove_exact_observed_runtime_without_promoting(tmp_path: 
     assert receipt["runtime"]["binding"] == "OBSERVED_EXACT"
     assert receipt["runtime"]["installed_runtime_commit"] == "a" * 40
     assert receipt["technical"]["canonical_promotion_allowed"] is False
+
+
+def test_v1_or_unbound_runtime_cannot_produce_pass(tmp_path: Path):
+    request, status, spool, *_ = _inputs(tmp_path, status_v2=False)
+    with pytest.raises(EvidenceExportError, match="resident status shape"):
+        build_evidence_export(
+            request_path=request, status_path=status, spool_root=spool, now=1010.0
+        )
+
+
+def test_status_attestation_must_be_bound_to_done_receipt(tmp_path: Path):
+    request, status, spool, *_ = _inputs(tmp_path)
+    done_path = spool / "done" / "exact-video-job.json"
+    done = json.loads(done_path.read_text(encoding="utf-8"))
+    done.pop("runtime_attestation")
+    done_path.write_text(json.dumps(done), encoding="utf-8")
+    with pytest.raises(EvidenceExportError, match="bound to done receipt"):
+        build_evidence_export(
+            request_path=request, status_path=status, spool_root=spool, now=1010.0
+        )
+
+
+def test_manifest_processing_revision_must_match_requested_runtime(tmp_path: Path):
+    request, status, spool, result_dir, *_ = _inputs(tmp_path)
+    manifest_path = result_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["processing_revision"] = "b" * 40
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(EvidenceExportError, match="result bundle is unavailable or invalid"):
+        build_evidence_export(
+            request_path=request, status_path=status, spool_root=spool, now=1010.0
+        )
 
 
 def test_shadow_cards_are_exported_only_with_complete_hash_bound_pair(tmp_path: Path):

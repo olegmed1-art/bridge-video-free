@@ -13,6 +13,9 @@ EnvironmentFile=-/opt/bridge-school/universal-video/universal-video-secrets.env
 Environment=PYTHONPATH=/opt/bridge-school/universal-video-src
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=HF_HOME=/opt/bridge-school/universal-video/model-cache
+Environment=UNIVERSAL_VIDEO_STATUS_PATH=/run/bridge-school/universal-video-status.json
+RuntimeDirectory=bridge-school
+RuntimeDirectoryMode=0750
 ExecStart=/opt/bridge-school/universal-video/.venv/bin/python -m universal_video.spool_worker
 Restart=on-failure
 RestartSec=3
@@ -41,6 +44,7 @@ RestrictRealtime=true
 SystemCallArchitectures=native
 ReadOnlyPaths=/opt/bridge-school/universal-video-src
 ReadWritePaths=/opt/bridge-school/universal-video
+ReadWritePaths=/run/bridge-school
 UMask=0027
 
 [Install]

@@ -7,9 +7,9 @@ umask 077
 # sudoers and supplies one bounded JSON request on stdin. No path, command,
 # service, job, or commit argument is accepted.
 
-readonly EXPECTED_SOURCE_COMMIT='edbb4cae625323146fcab3ad4f80ed3d9a9abc90'
 readonly SOURCE_DIR='/opt/bridge-school/universal-video-src'
 readonly BASE_DIR='/opt/bridge-school/universal-video'
+readonly PIN_PATH='/etc/bridge-school/universal-video-evidence-export.commit'
 readonly REQUEST_DIR='/var/lib/bridge-school/universal-video'
 readonly STATUS_DIR='/run/bridge-school'
 readonly REQUEST_PATH="$REQUEST_DIR/evidence-export-request.json"
@@ -19,17 +19,23 @@ readonly MAX_REQUEST_BYTES=4096
 fail(){ echo "ERROR: $*" >&2; exit 1; }
 [[ $(id -u) -eq 0 ]] || fail 'must run as root'
 [[ $# -eq 0 ]] || fail 'usage: universal-video-evidence-export'
-[[ "$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || true)" == "$EXPECTED_SOURCE_COMMIT" ]] \
+[[ -f "$PIN_PATH" && ! -L "$PIN_PATH" ]] || fail 'exporter source pin missing or unsafe'
+[[ "$(stat -c '%U:%G:%a' "$PIN_PATH")" == 'root:root:444' ]] || fail 'exporter source pin ownership mismatch'
+read -r expected_source_commit < "$PIN_PATH"
+[[ "$expected_source_commit" =~ ^[0-9a-f]{40}$ ]] || fail 'exporter source pin invalid'
+[[ "$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || true)" == "$expected_source_commit" ]] \
   || fail 'exporter source pin mismatch'
 systemctl is-active --quiet universal-video.service || fail 'universal-video.service is not active'
 running="$(find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit)" \
   || fail 'running job guard unavailable'
 [[ -z "$running" ]] || fail 'universal-video has a running job'
 
-install -d -m 0750 -o root -g universal-video "$REQUEST_DIR" "$STATUS_DIR"
+install -d -m 0750 -o root -g universal-video "$REQUEST_DIR"
+[[ -d "$STATUS_DIR" && ! -L "$STATUS_DIR" ]] || fail 'resident status directory missing or unsafe'
+[[ "$(stat -c '%U:%G:%a' "$STATUS_DIR")" == 'universal-video:universal-video:750' ]] \
+  || fail 'resident status directory ownership mismatch'
 work="$(mktemp -d -p "$REQUEST_DIR" .evidence-export.XXXXXX)"
-status_tmp="$(mktemp -p "$STATUS_DIR" .universal-video-status.XXXXXX)"
-trap 'rm -rf "${work:-}"; rm -f "${status_tmp:-}"' EXIT INT TERM
+trap 'rm -rf "${work:-}"' EXIT INT TERM
 
 request_tmp="$work/request.json"
 dd if=/dev/stdin of="$request_tmp" bs=$((MAX_REQUEST_BYTES + 1)) count=1 status=none
@@ -49,26 +55,12 @@ chown root:universal-video "$request_tmp"
 chmod 0640 "$request_tmp"
 mv -f "$request_tmp" "$REQUEST_PATH"
 
-python3 - "$status_tmp" <<'PY'
-import json, os, sys, time
-
-path = sys.argv[1]
-payload = {
-    "schema": "universal-video-resident-status-v1",
-    "instance_state": "RUNNING",
-    "active_jobs": [],
-    "observed_at_unix": time.time(),
-}
-with open(path, "w", encoding="utf-8") as handle:
-    json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
-    handle.write("\n")
-    handle.flush()
-    os.fsync(handle.fileno())
-PY
-chown root:universal-video "$status_tmp"
-chmod 0640 "$status_tmp"
-mv -f "$status_tmp" "$STATUS_PATH"
-status_tmp=''
+[[ -f "$STATUS_PATH" && ! -L "$STATUS_PATH" ]] || fail 'resident status missing or unsafe'
+[[ "$(stat -c '%U:%G:%a' "$STATUS_PATH")" == 'universal-video:universal-video:640' ]] \
+  || fail 'resident status ownership mismatch'
+status_size="$(stat -c '%s' "$STATUS_PATH")"
+[[ "$status_size" =~ ^[0-9]+$ ]] || fail 'resident status size unavailable'
+(( status_size > 0 && status_size <= 16384 )) || fail 'resident status exceeds byte cap'
 
 running="$(find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit)" \
   || fail 'final running job guard unavailable'
