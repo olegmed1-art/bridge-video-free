@@ -5,6 +5,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from bridge_vision.temporal_visibility import (
+    AMBIGUOUS,
+    NOT_EXPECTED,
+    OCCLUDED,
+    PLAYED,
+    TemporalCardVisibilityTracker,
+    VISIBLE,
+    VISIBLE_FN,
+)
+
 
 @dataclass(frozen=True)
 class GoldMetrics:
@@ -81,6 +91,53 @@ def evaluate_card_detector_report(detector, cases: Iterable[Mapping[str, Any]]) 
     return {"frames": rows, "totals": totals}
 
 
+def evaluate_temporal_card_detector_report(detector, cases: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    """Evaluate visible-card accuracy without treating proven played cards as FN."""
+    tracker = TemporalCardVisibilityTracker()
+    rows: list[dict[str, Any]] = []
+    totals = {
+        "tp": 0, "fp": 0, "visible_fn": 0, "ambiguous": 0,
+        "played_no_longer_visible": 0, "occluded": 0, "not_expected_visible": 0,
+    }
+    for index, case in enumerate(cases, start=1):
+        frame = Path(str(case.get("frame") or f"gold-{index}.jpg"))
+        raw = detector(frame)
+        predicted = _pairs(raw.get("hands") or {})
+        visibility = tracker.observe(
+            deal_key=str(case.get("deal_key") or ""),
+            frame_id=str(case.get("frame_id") or frame),
+            visible_hands=raw.get("hands") or {},
+            expected_hands=case.get("hands") or {},
+            play_events=case.get("play_events") or (),
+            occluded=case.get("occluded") or (),
+            ambiguous=case.get("ambiguous") or (),
+            not_expected_visible=case.get("not_expected_visible") or (),
+        )
+        states = {
+            (item["seat"], item["card"]): item["status"]
+            for item in visibility["cards"]
+        }
+        expected_visible = {pair for pair, status in states.items() if status in {VISIBLE, VISIBLE_FN}}
+        row = {
+            "frame": str(frame),
+            "tp": len(predicted & expected_visible),
+            "fp": len(predicted - expected_visible),
+            "visible_fn": sum(status == VISIBLE_FN for status in states.values()),
+            "ambiguous": sum(status == AMBIGUOUS for status in states.values()),
+            "played_no_longer_visible": sum(status == PLAYED for status in states.values()),
+            "occluded": sum(status == OCCLUDED for status in states.values()),
+            "not_expected_visible": sum(status == NOT_EXPECTED for status in states.values()),
+        }
+        rows.append(row)
+        for key in totals:
+            totals[key] += row[key]
+    predicted_total = totals["tp"] + totals["fp"]
+    expected_visible_total = totals["tp"] + totals["visible_fn"]
+    totals["precision"] = totals["tp"] / predicted_total if predicted_total else (1.0 if expected_visible_total == 0 else 0.0)
+    totals["visible_recall"] = totals["tp"] / expected_visible_total if expected_visible_total else 1.0
+    return {"frames": rows, "totals": totals, "visibility_version": visibility["version"] if rows else None}
+
+
 def passes_card_gold_gate(metrics: GoldMetrics, *, min_precision: float = 0.995, min_recall: float = 0.95) -> bool:
     return (
         metrics.frames > 0
@@ -94,5 +151,6 @@ __all__ = [
     "GoldMetrics",
     "evaluate_card_detector",
     "evaluate_card_detector_report",
+    "evaluate_temporal_card_detector_report",
     "passes_card_gold_gate",
 ]
