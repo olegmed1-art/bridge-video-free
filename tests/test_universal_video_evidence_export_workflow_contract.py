@@ -33,6 +33,16 @@ def test_raw_remote_output_is_never_published_or_logged():
     assert "bridge_positions_profiled_shadow.jsonl" in text
 
 
+def test_sanitized_inconclusive_reason_is_published_fail_closed():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "if x.get('state')=='INCONCLUSIVE':" in text
+    assert "allowed={'schema','state','reason','publication_state','school_canon_changed'}" in text
+    assert "re.fullmatch(r'[A-Z0-9_.:-]{1,120}',str(x['reason']))" in text
+    assert "print('state=INCONCLUSIVE')" in text
+    assert "raise SystemExit('bounded evidence export returned sanitized INCONCLUSIVE')" in text
+    assert "raw_path.unlink(missing_ok=True)" in text
+
+
 def test_workflow_cannot_start_compute_or_promote_results():
     text = WORKFLOW.read_text(encoding="utf-8")
     forbidden = (

@@ -154,11 +154,25 @@ jobs:
           REMOTE_LIFECYCLE="$lifecycle" JOB_ID='${{ steps.request.outputs.job_id }}' python - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os, re
           from pathlib import Path
-          raw=Path(os.environ['RUNNER_TEMP'],'uv-export-raw.txt').read_text(encoding='utf-8')
+          raw_path=Path(os.environ['RUNNER_TEMP'],'uv-export-raw.txt')
+          raw=raw_path.read_text(encoding='utf-8')
+          raw_path.unlink(missing_ok=True)
           found=re.findall(r'(?m)^UV_EVIDENCE_EXPORT_BEGIN\r?\n([^\r\n]+)\r?\nUV_EVIDENCE_EXPORT_END$',raw)
           assert os.environ['REMOTE_LIFECYCLE']=='SUCCEEDED', os.environ['REMOTE_LIFECYCLE']
           assert len(found)==1
           x=json.loads(found[0])
+          safe_path=Path(os.environ['RUNNER_TEMP'],'uv-export-safe.json')
+          if x.get('state')=='INCONCLUSIVE':
+            allowed={'schema','state','reason','publication_state','school_canon_changed'}
+            assert set(x)==allowed
+            assert x['schema']=='universal-video-evidence-export-v1'
+            assert re.fullmatch(r'[A-Z0-9_.:-]{1,120}',str(x['reason']))
+            assert x['publication_state']=='NOT_PUBLISHED' and x['school_canon_changed'] is False
+            encoded=(json.dumps(x,ensure_ascii=False,sort_keys=True,indent=2)+'\n').encode()
+            assert len(encoded)<=4096
+            safe_path.write_bytes(encoded)
+            print('state=INCONCLUSIVE')
+            raise SystemExit('bounded evidence export returned sanitized INCONCLUSIVE')
           assert set(x)=={'schema','state','exported_at_unix','job','runtime','technical','asr_qc','speakers','cards','publication_state','school_canon_changed'}
           assert x['schema']=='universal-video-evidence-export-v1' and x['state']=='PASS'
           assert x['job']['job_id']==os.environ['JOB_ID']
@@ -173,10 +187,9 @@ jobs:
           assert all(set(a)=={'locator','sha256','size_bytes'} and a['locator'] in allowed and re.fullmatch(r'[0-9a-f]{64}',a['sha256']) for a in artifacts)
           encoded=(json.dumps(x,ensure_ascii=False,sort_keys=True,indent=2)+'\n').encode()
           assert len(encoded)<=32000
-          Path(os.environ['RUNNER_TEMP'],'uv-export-safe.json').write_bytes(encoded)
+          safe_path.write_bytes(encoded)
           print('state=PASS')
           PY
-          rm -f "$RUNNER_TEMP/uv-export-raw.txt"
           echo UNIVERSAL_VIDEO_EVIDENCE_EXPORT_REMOTE_PASS
 
       - name: External DDS3 non-regression
