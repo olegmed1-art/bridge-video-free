@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 STATE_PATH = ROOT / "ops/governance/governance-state.json"
 PORTFOLIO_PATH = ROOT / "ops/governance/portfolio.json"
 ASSURED_SCHEMA_PATH = ROOT / "ops/governance/assured-task.schema.json"
+ACTIVE_WORKSTREAMS_PATH = ROOT / "ops/governance/active-workstreams.json"
 
 
 class ValidationError(RuntimeError):
@@ -179,17 +180,83 @@ def validate_assured_schema(schema: dict[str, Any]) -> None:
     require(mode.get("const") == "ASSURED", "assured task schema must pin ASSURED mode")
 
 
+REQUIRED_WORKSTREAM_FIELDS = {
+    "issue",
+    "title",
+    "workstream_id",
+    "source_priority",
+    "work_class",
+    "urgency",
+    "strategic_rank",
+    "governance_mode",
+    "operational_status",
+    "classification_reason",
+    "evidence_refs",
+}
+
+
+def validate_active_workstreams(inventory: dict[str, Any], state: dict[str, Any]) -> None:
+    require(inventory.get("schema_version") == "1.0", "unsupported active-workstreams schema_version")
+    require(
+        inventory.get("inventory_status") == "PRIMARY_SOURCE_SNAPSHOT",
+        "active work inventory must identify its source status",
+    )
+    parse_iso_date(inventory.get("last_verified_at"), "active-workstreams.last_verified_at")
+    require(
+        inventory.get("source_repository") == "olegmed1-art/bridge-video-free",
+        "unexpected active-workstreams source repository",
+    )
+    queries = inventory.get("source_queries")
+    require(isinstance(queries, list) and queries, "active-workstreams source_queries cannot be empty")
+    require(
+        inventory.get("independence_status") in {"PENDING_I2_REVIEW", "I2_REVIEWED"},
+        "invalid active-workstreams independence status",
+    )
+
+    items = inventory.get("items")
+    require(isinstance(items, list) and items, "active-workstreams items cannot be empty")
+    valid_classes = set(state["work_classes"])
+    valid_urgencies = set(state["urgencies"])
+    valid_ranks = set(state["strategic_ranks"])
+    valid_modes = set(state["governance_modes"])
+    issue_numbers: set[int] = set()
+    for item in items:
+        require(isinstance(item, dict), "each active work item must be an object")
+        missing = REQUIRED_WORKSTREAM_FIELDS - item.keys()
+        require(not missing, f"active work item is missing fields: {sorted(missing)}")
+        issue = item["issue"]
+        require(isinstance(issue, int) and issue > 0, "active work issue must be a positive integer")
+        require(issue not in issue_numbers, f"duplicate active work issue: {issue}")
+        issue_numbers.add(issue)
+        require(item["source_priority"] in {"P0", "P1"}, f"invalid source_priority for issue {issue}")
+        require(item["work_class"] in valid_classes, f"invalid work_class for issue {issue}")
+        require(item["urgency"] in valid_urgencies, f"invalid urgency for issue {issue}")
+        require(item["strategic_rank"] in valid_ranks, f"invalid strategic_rank for issue {issue}")
+        require(item["governance_mode"] in valid_modes, f"invalid governance_mode for issue {issue}")
+        require(
+            isinstance(item["classification_reason"], str) and item["classification_reason"],
+            f"classification_reason is required for issue {issue}",
+        )
+        require(
+            isinstance(item["evidence_refs"], list) and item["evidence_refs"],
+            f"evidence_refs are required for issue {issue}",
+        )
+
+
 def main() -> int:
     try:
         state = load_json(STATE_PATH)
         portfolio = load_json(PORTFOLIO_PATH)
         assured_schema = load_json(ASSURED_SCHEMA_PATH)
+        active_workstreams = load_json(ACTIVE_WORKSTREAMS_PATH)
         require(isinstance(state, dict), "governance-state root must be an object")
         require(isinstance(portfolio, dict), "portfolio root must be an object")
         require(isinstance(assured_schema, dict), "assured task schema root must be an object")
+        require(isinstance(active_workstreams, dict), "active-workstreams root must be an object")
         validate_state(state)
         validate_portfolio(portfolio, state)
         validate_assured_schema(assured_schema)
+        validate_active_workstreams(active_workstreams, state)
     except ValidationError as exc:
         print(f"GOVERNANCE_VALIDATION=FAIL: {exc}", file=sys.stderr)
         return 1
