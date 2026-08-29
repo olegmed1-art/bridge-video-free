@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from universal_video import runtime_preflight
-from universal_video.runtime_preflight import VideoRuntimeUnavailable
+from universal_video.runtime_preflight import VideoInputUnavailable, VideoRuntimeUnavailable
 from universal_video import spool_worker
 
 
@@ -24,6 +24,23 @@ def test_missing_asr_is_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(runtime_preflight.importlib.util, "find_spec", lambda name: None)
     with pytest.raises(VideoRuntimeUnavailable, match="VIDEO_RUNTIME_MISSING_ASR:faster_whisper"):
         runtime_preflight.validate_video_runtime()
+
+
+def test_staged_video_without_audio_is_rejected_before_processing(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "video.mp4"
+    source.write_bytes(b"not-used-by-mocked-probe")
+    completed = runtime_preflight.subprocess.CompletedProcess(
+        ["ffprobe"], 0,
+        stdout=json.dumps({
+            "format": {"duration": "2.0", "size": str(source.stat().st_size), "format_name": "mov,mp4"},
+            "streams": [{"codec_type": "video", "codec_name": "h264"}],
+        }),
+        stderr="",
+    )
+    monkeypatch.setattr(runtime_preflight.subprocess, "run", lambda *_args, **_kwargs: completed)
+    with pytest.raises(VideoInputUnavailable) as caught:
+        runtime_preflight.validate_staged_video(source)
+    assert caught.value.error_code == "UV_MEDIA_AUDIO_TRACK_MISSING"
 
 
 def test_spool_preflight_fails_before_heavy_runner(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -276,8 +293,54 @@ def test_drive_job_is_staged_on_oracle_before_processing_and_then_removed(tmp_pa
     monkeypatch.setenv("UNIVERSAL_VIDEO_REQUIRE_STAGED_SOURCE", "1")
     monkeypatch.setattr(spool_worker, "validate_video_runtime", lambda: None)
     monkeypatch.setattr(spool_worker, "stage_drive_job", fake_stage)
+    monkeypatch.setattr(spool_worker, "validate_staged_video", lambda _path: {})
     monkeypatch.setattr(spool_worker, "run_job", fake_run)
     assert spool_worker.process_one(tmp_path) is True
     assert not (media / "drive-ready" / "drive-chain-job").exists()
     progress = json.loads((tmp_path / "progress" / "drive-chain-job.json").read_text(encoding="utf-8"))
     assert progress["state"] == "REVIEW"
+
+
+
+def test_drive_source_without_audio_fails_before_heavy_runner(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    media = tmp_path / "media"
+    media.mkdir()
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    payload = {
+        "job_id": "drive-no-audio",
+        "profile": "transcript_only",
+        "source": {"kind": "google_drive", "file_id": "1AbCdEfGhIjKlMnOpQrStUvWxYz"},
+    }
+    (inbox / "drive-no-audio.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    def fake_stage(job, original, media_root):
+        job_dir = media_root / "drive-ready" / job.job_id
+        job_dir.mkdir(parents=True)
+        source = job_dir / "source.mp4"
+        source.write_bytes(b"v" * (1024 * 1024))
+        staged = dict(original)
+        staged["source"] = {
+            "kind": "oracle_drive_staged", "path": str(source),
+            "file_id": payload["source"]["file_id"], "size_bytes": source.stat().st_size,
+            "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        }
+        return staged, job_dir
+
+    monkeypatch.setenv("UNIVERSAL_VIDEO_MEDIA_ROOT", str(media))
+    monkeypatch.setenv("UNIVERSAL_VIDEO_REQUIRE_STAGED_SOURCE", "1")
+    monkeypatch.setattr(spool_worker, "validate_video_runtime", lambda: None)
+    monkeypatch.setattr(spool_worker, "stage_drive_job", fake_stage)
+    monkeypatch.setattr(
+        spool_worker,
+        "validate_staged_video",
+        mock.Mock(side_effect=VideoInputUnavailable("UV_MEDIA_AUDIO_TRACK_MISSING")),
+    )
+    runner = mock.Mock()
+    monkeypatch.setattr(spool_worker, "run_job", runner)
+
+    assert spool_worker.process_one(tmp_path) is True
+    runner.assert_not_called()
+    failure = json.loads((tmp_path / "failed" / "drive-no-audio.json").read_text(encoding="utf-8"))
+    assert failure["error_code"] == "UV_MEDIA_AUDIO_TRACK_MISSING"
+    assert not (media / "drive-ready" / "drive-no-audio").exists()
