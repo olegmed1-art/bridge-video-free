@@ -321,6 +321,36 @@ def test_layout_prior_suggests_unique_card_without_promoting_it(
 
 
 @pytest.mark.parametrize(
+    ("before", "ambiguous", "after"),
+    [
+        (observed_card("2H", x=300, y=50), ambiguous_card(["AC", "AS"], x=400, y=50), observed_card("QD", x=500, y=50)),
+        (observed_card("2H", x=300, y=900), ambiguous_card(["AC", "AS"], x=400, y=900), observed_card("QD", x=500, y=900)),
+        (observed_card("2H", x=900, y=300), ambiguous_card(["AC", "AS"], x=900, y=400), observed_card("QD", x=900, y=500)),
+        (observed_card("2H", x=50, y=300), ambiguous_card(["AC", "AS"], x=50, y=400), observed_card("QD", x=50, y=500)),
+    ],
+)
+def test_verified_hcds_suit_order_applies_horizontally_and_vertically_without_promotion(
+    tmp_path: Path,
+    before,
+    ambiguous,
+    after,
+):
+    first, _ = make_frames(tmp_path)
+    detector = ProfiledCardChallenger(
+        parse_profile(profile_raw()),
+        lambda *_: payload(first, [before, ambiguous, after]),
+    )
+
+    result = detector(first)
+
+    suggestion = result["evidence"]["layout_suggestions"][0]
+    assert suggestion["suggested_card"] == "AC"
+    assert suggestion["accepted_as_observation"] is False
+    assert detector.profile.ordering_prior["suit_order"] == list("HCDS")
+    assert detector.profile.ordering_prior["rank_order"] == list("AKQJT98765432")
+
+
+@pytest.mark.parametrize(
     "positions",
     [
         {"top": "N", "right": "E", "bottom": "S", "left": "W"},
