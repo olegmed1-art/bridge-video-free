@@ -47,3 +47,13 @@ def test_container_image_keeps_credentials_and_media_out_of_layers() -> None:
     assert "GOOGLE_DRIVE_OAUTH" not in dockerfile
     assert "COPY universal_video" in dockerfile
     assert "USER universal-video:universal-video" in dockerfile
+
+
+def test_oracle_container_service_is_read_only_and_explicitly_activated() -> None:
+    root = Path(__file__).resolve().parents[1]
+    service = (root / "deploy/oracle-universal-video/universal-video-container.service").read_text(encoding="utf-8")
+    installer = (root / "ops/oracle_universal_video_container_install.sh").read_text(encoding="utf-8")
+    assert "--read-only" in service
+    assert "--memory=8g" in service
+    assert "UNIVERSAL_VIDEO_CONTAINER_ACTIVATE:-0" in installer
+    assert "docker run --rm" in installer
