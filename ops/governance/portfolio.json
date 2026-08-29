@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "registry_status": "ACTIVE_PARTIAL_INVENTORY",
-  "last_verified_at": "2026-08-28",
+  "last_verified_at": "2026-08-29",
   "primary_tracker_repository": "olegmed1-art/bridge-video-free",
   "value_portfolio": [
     {
@@ -177,11 +177,156 @@
         "separate_school_canon_from_world_knowledge",
         "repair_missing_skill_provenance"
       ]
+    },
+    {
+      "service_id": "BIDDING-ENGINE",
+      "title": "Bidding Engine Service",
+      "status": "DEVELOPING",
+      "service_owner": "AI Management System",
+      "users": [
+        "teachers",
+        "students",
+        "tournament_analysis"
+      ],
+      "service_level": "Research and validation only until canonical coverage and activation gates pass",
+      "health_metrics": [
+        "canonical_coverage",
+        "knowledge_gap_count",
+        "hidden_information_rejections",
+        "decision_trace_completeness",
+        "regression_pass_rate"
+      ],
+      "dependencies": [
+        "School Canon Knowledge Service",
+        "World External Knowledge",
+        "Neon",
+        "GitHub",
+        "DDS and research engines where explicitly advisory"
+      ],
+      "data_classes": [
+        "INTERNAL"
+      ],
+      "recovery_requirement": "Rules, activations, traces and provenance must be reconstructable without chat memory.",
+      "improvement_backlog": [
+        "complete production migration evidence",
+        "prove first canonical vertical slice",
+        "bind runtime health to Observatory"
+      ]
+    },
+    {
+      "service_id": "VIDEO-PROCESSING",
+      "title": "Video Processing Service",
+      "status": "ACTIVE_SHADOW",
+      "service_owner": "AI Management System",
+      "users": [
+        "school_director",
+        "teachers",
+        "research_lab"
+      ],
+      "service_level": "Explicit-request, canary-first, shadow-review only until independent promotion gates pass",
+      "health_metrics": [
+        "queue_depth_by_state",
+        "oldest_queue_age",
+        "canary_pass_rate",
+        "speaker_coverage",
+        "card_precision_and_recall",
+        "processing_runtime_and_cost"
+      ],
+      "dependencies": [
+        "Google Drive",
+        "Neon video queue",
+        "Oracle Universal Video worker",
+        "GitHub evidence and CI"
+      ],
+      "data_classes": [
+        "INTERNAL",
+        "CONFIDENTIAL",
+        "STUDENT_SENSITIVE",
+        "CREDENTIAL_SECRET"
+      ],
+      "recovery_requirement": "Source identity, queue state and accepted evidence must survive worker restart and must not exist only on Oracle local disk.",
+      "improvement_backlog": [
+        "prove one complete real-video canary",
+        "complete diarization and speaker-role field gate",
+        "complete card-recognition holdout",
+        "bind queue and quality metrics to Observatory"
+      ]
+    },
+    {
+      "service_id": "RELIABILITY-RECOVERY",
+      "title": "Reliability and Recovery Service",
+      "status": "ACTIVE_PARTIAL",
+      "service_owner": "AI Management System",
+      "users": [
+        "school_technical_services",
+        "ai_management_system"
+      ],
+      "service_level": "Fail closed when recovery credentials, workload state or host evidence are unknown",
+      "health_metrics": [
+        "backup_freshness",
+        "restore_test_age",
+        "observer_health",
+        "idle_guard_state",
+        "dds3_readiness",
+        "recovery_time"
+      ],
+      "dependencies": [
+        "Oracle Cloud",
+        "GitHub Actions",
+        "Neon",
+        "service-specific evidence stores"
+      ],
+      "data_classes": [
+        "INTERNAL",
+        "CONFIDENTIAL",
+        "CREDENTIAL_SECRET"
+      ],
+      "recovery_requirement": "At least one bounded recovery path must remain available and be proven without exposing credentials.",
+      "improvement_backlog": [
+        "configure least-privilege OCI recovery credential",
+        "prove observer activation on host",
+        "complete all-workload idle guard",
+        "record restore drills and RPO/RTO"
+      ]
+    },
+    {
+      "service_id": "SCHOOL-SYSTEMS-OBSERVABILITY",
+      "title": "School Systems Observability Service",
+      "status": "DEVELOPING",
+      "service_owner": "AI Management System",
+      "users": [
+        "school_director",
+        "ai_management_system",
+        "red_team"
+      ],
+      "service_level": "Read-only evidence preferred; incomplete or stale inventory is never reported as complete",
+      "health_metrics": [
+        "inventory_freshness",
+        "inventory_completeness",
+        "stale_work_count",
+        "failed_check_count",
+        "unresolved_owner_action_count"
+      ],
+      "dependencies": [
+        "GitHub",
+        "service-specific read-only probes",
+        "governance registries"
+      ],
+      "data_classes": [
+        "INTERNAL",
+        "CONFIDENTIAL"
+      ],
+      "recovery_requirement": "Canonical summaries must be reproducible from primary sources and versioned registries.",
+      "improvement_backlog": [
+        "complete GitHub baseline",
+        "bind service metrics to daily management summary",
+        "add freshness and primary-source drift checks"
+      ]
     }
   ],
   "inventory_gaps": [
-    "Classify all other currently active P0/P1 issues as FULL_MODEL, LIGHTWEIGHT or EXEMPT_WITH_REASON.",
-    "Add remaining permanent school services after primary-source verification.",
-    "Bind portfolio entries to machine-readable Observatory metrics where available."
+    "Obtain independent I2 review of active-workstreams.json before treating the classifications as accepted.",
+    "Verify and add remaining permanent services that are not represented by current P0/P1 primary sources.",
+    "Bind portfolio and service entries to machine-readable Observatory metric locations, freshness and owners."
   ]
 }
