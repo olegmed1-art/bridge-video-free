@@ -30,6 +30,7 @@ def test_raw_remote_output_is_never_published_or_logged():
     assert "No transcript text, raw command output, media" in text
     assert "transcript.jsonl" in text
     assert "transcript.txt" in text
+    assert "speaker_diarization.json" in text
     assert "bridge_positions_profiled_shadow.jsonl" in text
 
 
@@ -43,23 +44,14 @@ def test_sanitized_inconclusive_reason_is_published_fail_closed():
     assert "raw_path.unlink(missing_ok=True)" in text
 
 
-def test_remote_receipt_parser_accepts_one_schema_bound_json_amid_transport_noise():
+def test_remote_receipt_framing_tolerates_only_outer_transport_noise():
     text = WORKFLOW.read_text(encoding="utf-8")
-    assert "decoder=json.JSONDecoder()" in text
-    assert "for index,char in enumerate(raw):" in text
-    assert "candidate,_=decoder.raw_decode(raw,index)" in text
-    assert "candidate.get('schema')=='universal-video-evidence-export-v1'" in text
-    assert "assert len(receipts)==1" in text
-    assert "x=receipts[0]" in text
-
-
-def test_terminal_execution_waits_boundedly_for_oci_text_visibility():
-    text = WORKFLOW.read_text(encoding="utf-8")
-    assert 'if [[ "$lifecycle" == SUCCEEDED ]]; then' in text
-    assert "for _ in $(seq 1 15); do" in text
-    assert '[[ "$has_text" == yes ]] && break' in text
-    assert "sleep 2" in text
-    assert text.count("oci instance-agent command-execution get --command-id") == 2
+    assert "lines=[line.strip() for line in raw.splitlines()]" in text
+    assert "begins=[i for i,line in enumerate(lines) if line=='UV_EVIDENCE_EXPORT_BEGIN']" in text
+    assert "ends=[i for i,line in enumerate(lines) if line=='UV_EVIDENCE_EXPORT_END']" in text
+    assert "assert len(begins)==len(ends)==1" in text
+    assert "assert ends[0]==begins[0]+2" in text
+    assert "x=json.loads(lines[begins[0]+1])" in text
 
 
 def test_workflow_cannot_start_compute_or_promote_results():
