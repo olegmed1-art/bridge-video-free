@@ -18,7 +18,9 @@ on:
       - 'bridge_runtime_hardening_r25_7.py'
       - 'bridge_runtime_hardening_r25_14.py'
       - 'bridge_runtime_hardening_r25_15.py'
+      - 'bridge_runtime_hardening_r25_16.py'
       - 'run_master_3_1_free.py'
+      - 'bridge_vision/deal_review_pdf.py'
       - 'run_master_3_1_free_semantic.py'
       - 'run_master_3_1_free_semantic_v2.py'
       - 'bridge_speaker_diarization.py'
@@ -30,6 +32,7 @@ on:
       - 'tests/test_production_evidence_contract.py'
       - 'tests/test_asr_policy_r25_6.py'
       - 'tests/test_pdf_presentation_r25_6.py'
+      - 'tests/test_deal_review_pdf_r25_16.py'
       - 'tests/test_speaker_diarization_v2.py'
       - 'tests/test_speaker_diarization_v3.py'
       - 'tests/test_speaker_mapping_r29.py'
@@ -53,7 +56,9 @@ on:
       - 'bridge_runtime_hardening_r25_7.py'
       - 'bridge_runtime_hardening_r25_14.py'
       - 'bridge_runtime_hardening_r25_15.py'
+      - 'bridge_runtime_hardening_r25_16.py'
       - 'run_master_3_1_free.py'
+      - 'bridge_vision/deal_review_pdf.py'
       - 'run_master_3_1_free_semantic.py'
       - 'run_master_3_1_free_semantic_v2.py'
       - 'bridge_speaker_diarization.py'
@@ -65,6 +70,7 @@ on:
       - 'tests/test_production_evidence_contract.py'
       - 'tests/test_asr_policy_r25_6.py'
       - 'tests/test_pdf_presentation_r25_6.py'
+      - 'tests/test_deal_review_pdf_r25_16.py'
       - 'tests/test_speaker_diarization_v2.py'
       - 'tests/test_speaker_diarization_v3.py'
       - 'tests/test_speaker_mapping_r29.py'
@@ -79,7 +85,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
-      BRIDGE_REQUESTED_ALGORITHM_REVISION: 3.1-free-r25.15
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: 3.1-free-r25.16
       WHISPER_MODEL: small
       PYTHONUNBUFFERED: '1'
     steps:
@@ -102,10 +108,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONPATH=. python tests/test_production_evidence_contract.py
-          # r25.15 inherits r25.14 -> r25.7 -> the proven r25.6 policies.
+          # r25.16 inherits r25.15 -> r25.14 -> r25.7 -> proven r25.6 policies.
           PYTHONPATH=. python tests/test_asr_policy_r25_6.py
           PYTHONPATH=. python tests/test_unreliable_asr_isolation_r25_4.py
           PYTHONPATH=. python tests/test_pdf_presentation_r25_6.py
+          PYTHONPATH=. python -m pytest -q tests/test_deal_review_pdf_r25_16.py
           # Speaker repair is part of production; preserve both v2 compatibility
           # and the v3 collapse-repair regression suite.
           PYTHONPATH=. python -m pytest -q tests/test_speaker_diarization_v2.py tests/test_speaker_diarization_v3.py
@@ -121,7 +128,9 @@ jobs:
             bridge_runtime_hardening_r25_7.py \
             bridge_runtime_hardening_r25_14.py \
             bridge_runtime_hardening_r25_15.py \
+            bridge_runtime_hardening_r25_16.py \
             run_master_3_1_free.py \
+            bridge_vision/deal_review_pdf.py \
             run_master_3_1_free_semantic.py \
             run_master_3_1_free_semantic_v2.py \
             bridge_speaker_diarization.py \

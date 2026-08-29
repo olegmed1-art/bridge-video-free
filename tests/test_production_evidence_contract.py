@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
-"""Permanent production guard for the evidence-preserving 3.1 FREE r25.15 route.
+"""Permanent production guard for the evidence-preserving 3.1 FREE r25.16 route.
 
-r25.15 is accepted as production only when it remains a thin descendant of
-r25.14 -> r25.7 -> r25.6 and changes only the local anonymous speaker-separation
-layer. Identity, privacy, methodology and zero-paid-AI guards remain intact.
+r25.16 remains a thin descendant of the operational r25.15 route and changes
+only the deal-review PDF presentation layer. Identity, privacy, methodology and
+zero-paid-AI guards remain intact.
 """
 from pathlib import Path
 from types import SimpleNamespace
 import json
 import os
 
-import bridge_runtime_hardening_r25_15 as runtime
+import bridge_runtime_hardening_r25_16 as runtime
 from bridge_output_scoped_idempotency import existing_same_revision_done
 import check_completed_job as preflight
 import run_master_3_1_free as base
 
 
-def test_production_route_is_confirmed_r25_15_with_inheritance_chain():
+def test_production_route_is_confirmed_r25_16_with_inheritance_chain():
     adapter = Path("run_drive_3_1_free_generic.py").read_text(encoding="utf-8")
     workflow = Path(".github/workflows/bridge-video-3.1-free.yml").read_text(encoding="utf-8")
-    runtime_source = Path("bridge_runtime_hardening_r25_15.py").read_text(encoding="utf-8")
+    runtime_source = Path("bridge_runtime_hardening_r25_16.py").read_text(encoding="utf-8")
+    r25_15_source = Path("bridge_runtime_hardening_r25_15.py").read_text(encoding="utf-8")
     r25_14_source = Path("bridge_runtime_hardening_r25_14.py").read_text(encoding="utf-8")
     r25_7_source = Path("bridge_runtime_hardening_r25_7.py").read_text(encoding="utf-8")
     semantic_v2 = Path("run_master_3_1_free_semantic_v2.py").read_text(encoding="utf-8")
@@ -27,8 +28,8 @@ def test_production_route_is_confirmed_r25_15_with_inheritance_chain():
     diarization_core = Path("bridge_speaker_diarization_v3_core.py").read_text(encoding="utf-8")
     diarization_repair = Path("bridge_speaker_diarization_v3_repair.py").read_text(encoding="utf-8")
 
-    assert "bridge_runtime_hardening_r25_15" in adapter
-    assert 'BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.15"' in workflow
+    assert "bridge_runtime_hardening_r25_16" in adapter
+    assert 'BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.16"' in workflow
     assert 'BRIDGE_DIARIZATION_ENABLED: "true"' in workflow
     assert "WHISPER_MODEL: small" in workflow
     assert "BRIDGE_REQUESTED_WHISPER_MODEL: medium" not in workflow
@@ -37,12 +38,16 @@ def test_production_route_is_confirmed_r25_15_with_inheritance_chain():
     assert 'git diff-tree --no-commit-id --name-only -r -m "$GITHUB_SHA"' in workflow
     assert "Expected exactly one run request in triggering commit" in workflow
 
-    assert "import bridge_runtime_hardening_r25_14 as previous" in runtime_source
+    assert "import bridge_runtime_hardening_r25_15 as previous" in runtime_source
     assert "previous.install(token_func)" in runtime_source
-    assert "bridge_speaker_diarization_v3" in runtime_source
     assert "bridge_output_scoped_idempotency" in runtime_source
     assert "semantic_v2._existing_same_revision_done" in runtime_source
     assert "semantic_v2.previous._existing_same_revision_done" in runtime_source
+    assert "import bridge_runtime_hardening_r25_14 as previous" in r25_15_source
+    assert "bridge_speaker_diarization_v3" in r25_15_source
+    assert "bridge_output_scoped_idempotency" in r25_15_source
+    assert "semantic_v2._existing_same_revision_done" in r25_15_source
+    assert "semantic_v2.previous._existing_same_revision_done" in r25_15_source
     assert "import bridge_runtime_hardening_r25_7 as previous" in r25_14_source
     assert "previous.install(token_func)" in r25_14_source
     assert "import bridge_runtime_hardening_r25_6 as previous" in r25_7_source
@@ -220,10 +225,10 @@ def test_periodic_auto_discovery_remains_disabled():
 
 
 if __name__ == "__main__":
-    test_production_route_is_confirmed_r25_15_with_inheritance_chain()
+    test_production_route_is_confirmed_r25_16_with_inheritance_chain()
     test_runtime_does_not_filter_master_canon_evidence()
     test_terminal_preflight_matches_revision_receipt_contract()
     test_terminal_preflight_scopes_same_revision_to_output_generation()
     test_runtime_same_revision_done_is_scoped_to_requested_output_folder()
     test_periodic_auto_discovery_remains_disabled()
-    print("PRODUCTION_R25_15_EVIDENCE_CONTRACT: PASS")
+    print("PRODUCTION_R25_16_EVIDENCE_CONTRACT: PASS")
