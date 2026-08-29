@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bridge-school.local/contracts/universal-video-resident-status-v2.json",
+  "title": "Universal Video resident status v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "instance_state",
+    "active_jobs",
+    "observed_at_unix",
+    "installed_runtime_commit",
+    "job_attestations"
+  ],
+  "properties": {
+    "schema": {"const": "universal-video-resident-status-v2"},
+    "instance_state": {"const": "RUNNING"},
+    "active_jobs": {"type": "array", "maxItems": 0},
+    "observed_at_unix": {"type": "number"},
+    "installed_runtime_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "job_attestations": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "schema",
+          "job_id",
+          "request_commit",
+          "requested_runtime_commit",
+          "installed_runtime_commit",
+          "observed_job_runtime_commit",
+          "profile",
+          "job_hash",
+          "source_file_id",
+          "canonical_output_untouched",
+          "canonical_promotion_allowed",
+          "publication_state"
+        ],
+        "properties": {
+          "schema": {"const": "universal-video-runtime-job-attestation-v1"},
+          "job_id": {"type": "string", "pattern": "^[A-Za-z0-9._:-]{1,160}$"},
+          "request_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+          "requested_runtime_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+          "installed_runtime_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+          "observed_job_runtime_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+          "profile": {"type": "string", "pattern": "^[a-z0-9._:-]{1,80}$"},
+          "job_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "source_file_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{10,200}$"},
+          "canonical_output_untouched": {"const": true},
+          "canonical_promotion_allowed": {"const": false},
+          "publication_state": {"const": "NOT_PUBLISHED"}
+        }
+      }
+    }
+  }
+}
