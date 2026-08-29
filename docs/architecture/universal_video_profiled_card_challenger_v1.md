@@ -4,7 +4,8 @@ Date: 2026-08-28
 
 Governance mode: ASSURED
 
-Status: implemented for opt-in shadow/test use; no pixel backend approved; no production promotion
+Status: implemented for opt-in shadow/test use; world-model adapters available;
+no pixel backend approved; no production promotion
 
 ## Outcome
 
@@ -134,3 +135,25 @@ Rollback is removal of the injected challenger or revert of this change. Existin
 - logically independent assurance reaches at least I2.
 
 Until all gates pass, the only valid operational mode is opt-in shadow/test with no canonical promotion.
+
+## World-model test adapters
+
+`bridge_vision.world_card_backends` supplies two explicit challenger adapters:
+
+- `LgdGen3OnnxDetector` runs a hash-bindable 52-class LGD gen3 ONNX artifact
+  locally with ONNX Runtime. The caller remains responsible for the AGPL
+  boundary and artifact approval.
+- `RoboflowCardDetector` calls one explicitly configured hosted model/version.
+  Calling it transfers that selected frame outside Oracle; it is never created
+  from ambient configuration or enabled by file presence.
+
+Neither adapter is a complete bridge recognizer. `ProfiledWorldReferenceComposer`
+uses its output only as the independent full-card reference channel. A separate
+school glyph backend must still emit rank and suit observations, registration
+and deal identity. Matching is by bounded box IoU; missing or tied matches are
+dropped. Seat ownership remains solely in the registered geometry layer.
+
+Gold evaluation may use `evaluate_card_detector_report` to emit exact per-frame
+`TP/FP/FN/ambiguous/seat_errors` plus aggregate precision and recall. The
+profiled SHADOW JSONL and summary are published to Drive only as a complete
+pair; the canonical `bridge_positions.jsonl` is not published by this path.
