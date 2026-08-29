@@ -310,6 +310,61 @@ def test_compact_result_router_excludes_raw_media_and_caps_keyframes(tmp_path: P
         collect_compact_artifacts(job, max_frames=1)
 
 
+def test_compact_result_router_publishes_complete_profiled_shadow_card_pair(tmp_path: Path):
+    job = tmp_path / "shadow-card-job"
+    job.mkdir()
+    (job / "manifest.json").write_text(
+        json.dumps({
+            "status": "COMPLETED",
+            "job_id": "shadow-card-job",
+            "job_hash": "b" * 64,
+            "profile": "bridge_lesson",
+        }),
+        encoding="utf-8",
+    )
+    (job / "transcript.jsonl").write_text('{"text":"ok"}\n', encoding="utf-8")
+    (job / "transcript.txt").write_text("ok", encoding="utf-8")
+    (job / "transcript_qc.json").write_text("[]", encoding="utf-8")
+    (job / "bridge_positions_profiled_shadow.jsonl").write_text(
+        '{"result_scope":"SHADOW_ONLY","canonical_promotion_allowed":false}\n',
+        encoding="utf-8",
+    )
+    (job / "bridge_positions_profiled_shadow_summary.json").write_text(
+        json.dumps({
+            "result_scope": "SHADOW_ONLY",
+            "canonical_promotion_allowed": False,
+            "derive_fourth_hand": True,
+        }),
+        encoding="utf-8",
+    )
+
+    names = {item.relative_name for item in collect_compact_artifacts(job)}
+    assert "bridge_positions_profiled_shadow.jsonl" in names
+    assert "bridge_positions_profiled_shadow_summary.json" in names
+    assert "bridge_positions.jsonl" not in names
+
+
+def test_compact_result_router_rejects_partial_profiled_shadow_card_pair(tmp_path: Path):
+    job = tmp_path / "partial-shadow-card-job"
+    job.mkdir()
+    (job / "manifest.json").write_text(
+        json.dumps({
+            "status": "COMPLETED",
+            "job_id": "partial-shadow-card-job",
+            "job_hash": "c" * 64,
+            "profile": "bridge_lesson",
+        }),
+        encoding="utf-8",
+    )
+    (job / "transcript.jsonl").write_text('{"text":"ok"}\n', encoding="utf-8")
+    (job / "transcript.txt").write_text("ok", encoding="utf-8")
+    (job / "transcript_qc.json").write_text("[]", encoding="utf-8")
+    (job / "bridge_positions_profiled_shadow.jsonl").write_text("{}\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="partial shadow card artifact set"):
+        collect_compact_artifacts(job)
+
+
 def test_compact_result_router_rejects_review_and_incomplete_identity(tmp_path: Path):
     job = tmp_path / "review-job"
     job.mkdir()
