@@ -1,0 +1,7 @@
+{
+  "request_id": "renew-expired-ip-certificate-20260829-01",
+  "operation": "renew-expired-certificate",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "expected_fingerprint": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk"
+}
