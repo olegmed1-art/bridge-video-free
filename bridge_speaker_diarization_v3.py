@@ -19,10 +19,14 @@ import bridge_speaker_diarization as fallback
 import bridge_speaker_diarization_v2 as previous
 from bridge_speaker_diarization_v3_core import (
     _collapse_diagnostics,
+    _cluster_embeddings_open_set,
     _cluster_embeddings_two,
     _hypothesis_score,
 )
-from bridge_speaker_diarization_v3_repair import repair_with_segment_embeddings
+from bridge_speaker_diarization_v3_repair import (
+    diarize_with_open_set_embeddings,
+    repair_with_segment_embeddings,
+)
 
 DIARIZATION_REVISION = "bridge-sherpa-onnx-diarization-v3"
 SHERPA_ONNX_VERSION = previous.SHERPA_ONNX_VERSION
@@ -164,7 +168,16 @@ def _build_report(
     )
     if assignment_report["segments_labeled"] < minimum_segments_per_cluster * 2:
         raise RuntimeError("too few transcript segments received speaker labels")
-    role_mapping, role_report = previous._map_roles_v2(enriched, assignments)
+    active_speakers = sorted({int(value) for value in assignments if value is not None})
+    if active_speakers == [0, 1]:
+        role_mapping, role_report = previous._map_roles_v2(enriched, assignments)
+    else:
+        role_mapping = {speaker: "unknown" for speaker in active_speakers}
+        role_report = {
+            "mapping_supported": False,
+            "role_mapping": {str(speaker): "unknown" for speaker in active_speakers},
+            "mapping_blocker": "TEACHER_STUDENT_REQUIRES_EXACTLY_TWO_ACOUSTIC_SPEAKERS",
+        }
     if collapse["cluster_collapse_detected"]:
         role_mapping = {0: "unknown", 1: "unknown"}
         role_report = dict(role_report)
@@ -177,7 +190,7 @@ def _build_report(
         )
     role_labeled = 0
     for segment, assignment in zip(enriched, assignments):
-        if assignment not in (0, 1):
+        if assignment is None:
             continue
         role = role_mapping.get(int(assignment), "unknown")
         segment["speaker_role_candidate"] = role
@@ -266,6 +279,33 @@ def diarize_transcript(
         primary_embedding = _ensure_embedding(cache_dir, "3dspeaker")
         candidates = []
 
+        open_turns, open_engine = diarize_with_open_set_embeddings(
+            wav_path,
+            copied,
+            primary_embedding,
+            read_pcm16_mono=previous._read_pcm16_mono,
+            sherpa_version=SHERPA_ONNX_VERSION,
+            max_speakers=4,
+        )
+        open_count = int(open_engine["speaker_count_evidence"]["selected_count"])
+        _, _, open_assignments = _assign_v3(copied, open_turns)
+        open_diagnostics = _collapse_diagnostics(
+            open_turns,
+            open_assignments,
+            expected_speakers=open_count,
+            minimum_segments_per_cluster=minimum_segments_per_cluster,
+        )
+        if open_diagnostics["cluster_collapse_detected"]:
+            raise RuntimeError("open-set selected count failed collapse validation")
+        hypotheses.append(
+            {
+                "model_id": "3dspeaker-segment-open-set",
+                "score": _hypothesis_score(open_diagnostics),
+                **open_diagnostics,
+                "speaker_count_evidence": open_engine["speaker_count_evidence"],
+            }
+        )
+
         def evaluate(model_id: str, embedding_path: Path):
             turns, engine = _run_sherpa_model(
                 wav_path, segmentation, embedding_path, model_id=model_id, num_speakers=2
@@ -287,7 +327,8 @@ def diarize_transcript(
             evaluate("pyannote+nemo", _ensure_embedding(cache_dir, "nemo"))
 
         candidates.sort(key=lambda item: item[0], reverse=True)
-        chosen_score, chosen_turns, chosen_engine, chosen_diag = candidates[0]
+        chosen_score = _hypothesis_score(open_diagnostics)
+        chosen_turns, chosen_engine, chosen_diag = open_turns, open_engine, open_diagnostics
 
         if chosen_diag["cluster_collapse_detected"]:
             try:
@@ -401,6 +442,7 @@ __all__ = [
     "THREED_EMBEDDING_URL",
     "_collapse_diagnostics",
     "_cluster_embeddings_two",
+    "_cluster_embeddings_open_set",
     "_hypothesis_score",
     "diarize_transcript",
 ]

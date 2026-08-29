@@ -93,6 +93,7 @@ def _report(
     segments: Sequence[Mapping[str, Any]],
     role_mapping_supported: bool,
     min_label_coverage: float | None,
+    speaker_count_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     labels = [str(segment.get("speaker")) for segment in segments if segment.get("speaker")]
     counts = Counter(labels)
@@ -128,6 +129,9 @@ def _report(
             labeled_duration / total_duration if total_duration > 0.0 else 0.0
         )
         report["minimum_label_coverage"] = min_label_coverage
+        report["speaker_count_evidence"] = (
+            dict(speaker_count_evidence) if speaker_count_evidence else None
+        )
     return report
 
 
@@ -301,6 +305,11 @@ def run_speaker_structure(
         segments=normalized,
         role_mapping_supported=role_mapping_supported,
         min_label_coverage=normalized_min_coverage,
+        speaker_count_evidence=(
+            raw_report.get("speaker_count_evidence")
+            if isinstance(raw_report.get("speaker_count_evidence"), Mapping)
+            else None
+        ),
     )
     return normalized, report
 
