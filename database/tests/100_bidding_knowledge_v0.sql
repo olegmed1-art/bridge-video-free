@@ -89,6 +89,11 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_PUBLIC_WRAPPED_COMPACT_METRIC_FALSE_POSITIVE';
     END IF;
     IF bidding.contains_forbidden_hidden_key(
+        '{"partnermetadatahandscount":12}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_PUBLIC_COMPACT_WRAPPED_METRIC_FALSE_POSITIVE';
+    END IF;
+    IF bidding.contains_forbidden_hidden_key(
         '{"handsPlayed":{"partner":12}}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_PUBLIC_REVERSE_PARTNER_METRIC_FALSE_POSITIVE';
@@ -277,6 +282,16 @@ BEGIN
         '{"partnermetadata":{"cards":["AS"]}}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_OWNER_WRAPPER_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"partnermetadatacards":["AS"]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_OWNER_WRAPPER_TAIL_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"opponentcontextdetailshand":"AKQ"}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_OWNER_WRAPPER_HAND_NOT_BLOCKED';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
         '{"handsPlayed":{"holdingcount":{"bySeat":{"partner":123456}}}}'::jsonb
