@@ -15,11 +15,13 @@ from typing import Any
 
 from bridge_vision import BridgeVisionEngine, fuse_card_evidence
 from bridge_vision.evidence_fusion import MAX_DECLARATIONS
-from bridge_vision.shadow_pbn import render_shadow_pbn
+from bridge_vision.shadow_pbn import render_shadow_pbn, summarize_shadow_auctions
+from bridge_vision.transcript_card_observer import observe_transcript_cards
 
 NativeDetectorInjection = Callable[[Path], dict[str, Any]]
 
 LegacyParserInjection = Callable[[Path], dict[str, Any]]
+MAX_TRANSCRIPT_BYTES = 32 * 1024 * 1024
 
 
 def _bounded_speech_declarations(
@@ -124,6 +126,26 @@ def _safe_frame_path(job_dir: Path, file_name: Any) -> Path:
     return frame
 
 
+def _transcript_rows(root: Path) -> list[dict[str, Any]]:
+    path = root / "transcript.jsonl"
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_TRANSCRIPT_BYTES:
+        raise ValueError("transcript.jsonl is missing, unsafe or oversized")
+    rows: list[dict[str, Any]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise ValueError("transcript.jsonl is not valid UTF-8") from exc
+    for segment, line in enumerate(lines):
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"transcript.jsonl segment {segment} is invalid JSON") from exc
+        if not isinstance(row, dict):
+            raise ValueError(f"transcript.jsonl segment {segment} must be an object")
+        rows.append(row)
+    return rows
+
+
 def _wrap_injected_parser(parser: LegacyParserInjection):
     """Compatibility shim for explicit callers/tests; never selected implicitly."""
     def detector(frame: Path) -> dict[str, Any]:
@@ -171,6 +193,7 @@ def process_job_frames(
     allow_legacy_old_bbo: bool = False,
     profiled_challenger: NativeDetectorInjection | None = None,
     speech_declarations: Iterable[Mapping[str, Any]] | None = None,
+    auto_transcript_card_observations: bool = False,
 ) -> dict[str, Any]:
     selected = sum(value is not None for value in (engine, parser, profiled_challenger))
     if selected > 1:
@@ -194,6 +217,8 @@ def process_job_frames(
         )
     profiled_shadow = vision.shadow_only
     speech = _bounded_speech_declarations(speech_declarations)
+    if auto_transcript_card_observations and not profiled_shadow:
+        raise ValueError("automatic transcript card observations are limited to profiled shadow")
     if speech and not profiled_shadow:
         raise ValueError("speech evidence fusion is limited to the profiled shadow challenger")
     records: list[dict[str, Any]] = []
@@ -256,6 +281,42 @@ def process_job_frames(
         if result["status"] == "CONFLICT":
             conflict_frames += 1
 
+    transcript_observer = None
+    transcript_observations_by_frame: dict[int, list[dict[str, Any]]] = {}
+    if auto_transcript_card_observations:
+        transcript_observer = observe_transcript_cards(_transcript_rows(root), records)
+        for observation in transcript_observer["observations"]:
+            frame_index = observation.get("frame_index")
+            if isinstance(frame_index, int) and 0 <= frame_index < len(records):
+                transcript_observations_by_frame.setdefault(frame_index, []).append(observation)
+        for frame_index, observations in transcript_observations_by_frame.items():
+            record = records[frame_index]
+            record["transcript_card_observations"] = observations
+            accepted_hands: dict[str, list[str]] = {}
+            for observation in observations:
+                if observation.get("accepted_as_observation") is not True:
+                    continue
+                seat = str(observation.get("seat") or "").upper()
+                card = str(observation.get("card") or "").upper()
+                if seat in {"N", "E", "S", "W"} and card:
+                    accepted_hands.setdefault(seat, []).append(card)
+            if accepted_hands:
+                record["multimodal_observed_hands"] = {
+                    seat: sorted(set(cards)) for seat, cards in accepted_hands.items()
+                }
+
+    auction_summary = (
+        summarize_shadow_auctions(records)
+        if profiled_shadow
+        else {
+            "frame_observations_accepted": 0,
+            "frame_observations_review": 0,
+            "frame_observations_rejected": 0,
+            "deal_statuses": {},
+            "standard_pbn_auctions": 0,
+        }
+    )
+
     output_path = root / (
         "bridge_positions_profiled_shadow.jsonl" if profiled_shadow else "bridge_positions.jsonl"
     )
@@ -286,7 +347,6 @@ def process_job_frames(
             "derive_fourth_hand": True,
             "derived_fourth_hand_frames": derived_fourth_hand_frames,
             "output": output_path.name,
-            "pbn_output": pbn_path.name if pbn_path else None,
         }
     else:
         summary = {
@@ -297,6 +357,12 @@ def process_job_frames(
                     or speech_conflict_frames
                     or speech_review_frames
                     or unmatched_speech_declarations
+                    or (transcript_observer and transcript_observer["status"] != "PASS")
+                    or auction_summary["frame_observations_rejected"]
+                    or any(
+                        status != "COMPLETE_CONFIRMED"
+                        for status in auction_summary["deal_statuses"]
+                    )
                 )
                 else "SHADOW_COMPLETED"
                 if profiled_shadow
@@ -325,6 +391,16 @@ def process_job_frames(
             "speech_declarations_matched": len(matched_speech_indices),
             "speech_unmatched_declarations": unmatched_speech_declarations,
             "speech_frame_associations": speech_frame_associations,
+            "auto_transcript_card_observations_enabled": auto_transcript_card_observations,
+            "transcript_card_mentions": transcript_observer["mentions"] if transcript_observer else 0,
+            "transcript_card_observations_accepted": transcript_observer["accepted_observations"] if transcript_observer else 0,
+            "transcript_card_observations_review": transcript_observer["review_observations"] if transcript_observer else 0,
+            "transcript_card_observations_conflict": transcript_observer["conflict_observations"] if transcript_observer else 0,
+            "auction_frame_observations_accepted": auction_summary["frame_observations_accepted"],
+            "auction_frame_observations_review": auction_summary["frame_observations_review"],
+            "auction_frame_observations_rejected": auction_summary["frame_observations_rejected"],
+            "auction_deal_statuses": auction_summary["deal_statuses"],
+            "auction_standard_pbn_blocks": auction_summary["standard_pbn_auctions"],
             "output": output_path.name,
             "pbn_output": pbn_path.name if pbn_path else None,
         }
@@ -345,10 +421,16 @@ def main() -> None:
         action="store_true",
         help="explicitly enable the old layout-specific BBO compatibility parser",
     )
+    parser.add_argument(
+        "--auto-transcript-card-observations",
+        action="store_true",
+        help="opt in to exact Russian transcript + nearest-frame SHADOW card observations",
+    )
     args = parser.parse_args()
     summary = process_job_frames(
         args.job_dir,
         allow_legacy_old_bbo=args.allow_legacy_old_bbo,
+        auto_transcript_card_observations=args.auto_transcript_card_observations,
     )
     print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
 

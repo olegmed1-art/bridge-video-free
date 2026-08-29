@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from bridge_contracts.video_deal import SEATS, canonicalize_video_deal
+from bridge_vision.auction_observer import aggregate_auction_observations
 
 SCHEMA = "bridge-profiled-shadow-pbn/v1"
 RANK_ORDER = "AKQJT98765432"
@@ -31,6 +32,30 @@ def _hand(cards: Sequence[str]) -> str:
     )
 
 
+def _evidence_sources(record: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    sources: list[Mapping[str, Any]] = []
+    for key in ("candidates", "diagnostics"):
+        values = record.get(key) or []
+        if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
+            raise ShadowPbnError(f"record {key} must be an array")
+        sources.extend(item for item in values if isinstance(item, Mapping))
+    return sources
+
+
+def _auction_observations(record: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    observations: list[Mapping[str, Any]] = []
+    for source in _evidence_sources(record):
+        evidence = source.get("evidence") or {}
+        if not isinstance(evidence, Mapping):
+            continue
+        observation = evidence.get("auction_observation")
+        if observation is not None:
+            if not isinstance(observation, Mapping):
+                raise ShadowPbnError("auction observation must be an object")
+            observations.append(observation)
+    return observations
+
+
 def _candidate_observations(record: Mapping[str, Any]) -> dict[str, set[str]]:
     observed = {seat: set() for seat in SEATS}
     candidates = record.get("candidates") or []
@@ -48,6 +73,25 @@ def _candidate_observations(record: Mapping[str, Any]) -> dict[str, set[str]]:
         normalized = canonicalize_video_deal({"hands": dict(hands)}).to_dict()["hands"]
         for seat in SEATS:
             observed[seat].update(normalized[seat]["cards"])
+    multimodal = record.get("transcript_card_observations") or []
+    if not isinstance(multimodal, Sequence) or isinstance(multimodal, (str, bytes)):
+        raise ShadowPbnError("transcript card observations must be an array")
+    for observation in multimodal:
+        if not isinstance(observation, Mapping):
+            raise ShadowPbnError("transcript card observation must be an object")
+        if observation.get("accepted_as_observation") is not True:
+            continue
+        if (
+            observation.get("canonical_promotion_allowed") is not False
+            or observation.get("provenance_class")
+            not in {"OBSERVED_MULTIMODAL", "OBSERVED_VISUAL_WITH_SPEECH_CORROBORATION"}
+        ):
+            raise ShadowPbnError("invalid accepted transcript card provenance")
+        seat = str(observation.get("seat") or "").upper()
+        if seat not in SEATS:
+            raise ShadowPbnError("invalid transcript card seat")
+        normalized = canonicalize_video_deal({"hands": {seat: [observation.get("card")]}}).to_dict()
+        observed[seat].update(normalized["hands"][seat]["cards"])
     card_seats: dict[str, str] = {}
     for seat in SEATS:
         for card in observed[seat]:
@@ -60,8 +104,8 @@ def _candidate_observations(record: Mapping[str, Any]) -> dict[str, set[str]]:
 def _metadata(record: Mapping[str, Any]) -> tuple[str, int | None, str | None, str | None]:
     identities: set[str] = set()
     metadata: list[Mapping[str, Any]] = []
-    for candidate in record.get("candidates") or []:
-        evidence = candidate.get("evidence") or {}
+    for source in _evidence_sources(record):
+        evidence = source.get("evidence") or {}
         identity = evidence.get("deal_identity") or {}
         if isinstance(identity, Mapping):
             identities.add("|".join(str(identity.get(key) or "") for key in ("kind", "scope", "value")))
@@ -85,8 +129,7 @@ def _metadata(record: Mapping[str, Any]) -> tuple[str, int | None, str | None, s
     return next(iter(identities), f"board-{board_number}"), board_number, dealer, vulnerability
 
 
-def render_shadow_pbn(records: Sequence[Mapping[str, Any]], *, source: str = "") -> str:
-    """Accumulate accepted observed cards by deal and render a safe PBN view."""
+def _accumulate_deals(records: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
     deals: dict[str, dict[str, Any]] = {}
     for index, record in enumerate(records):
         if not isinstance(record, Mapping):
@@ -94,7 +137,10 @@ def render_shadow_pbn(records: Sequence[Mapping[str, Any]], *, source: str = "")
         if record.get("status") == "CONFLICT":
             continue
         observed = _candidate_observations(record)
-        if not any(observed.values()):
+        auction_observations = _auction_observations(record)
+        if not any(observed.values()) and not any(
+            item.get("accepted_as_observation") is True for item in auction_observations
+        ):
             continue
         identity, board_number, dealer, vulnerability = _metadata(record)
         state = deals.setdefault(identity, {
@@ -103,12 +149,54 @@ def render_shadow_pbn(records: Sequence[Mapping[str, Any]], *, source: str = "")
             "vulnerability": vulnerability,
             "hands": {seat: set() for seat in SEATS},
             "frames": set(),
+            "auction_observations": [],
         })
         if (state["board_number"], state["dealer"], state["vulnerability"]) != (board_number, dealer, vulnerability):
             raise ShadowPbnError("board metadata changed inside one deal identity")
         for seat in SEATS:
             state["hands"][seat].update(observed[seat])
+        state["auction_observations"].extend(auction_observations)
         state["frames"].add(str(record.get("frame_file") or record.get("frame_sha256") or index))
+    return deals
+
+
+def _pbn_call(call: str) -> str:
+    return "Pass" if call == "PASS" else call
+
+
+def _auction_data(calls: Sequence[str]) -> list[str]:
+    rendered = [_pbn_call(call) for call in calls]
+    return [" ".join(rendered[index : index + 4]) for index in range(0, len(rendered), 4)]
+
+
+def summarize_shadow_auctions(records: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    deals = _accumulate_deals(records)
+    statuses: dict[str, int] = {}
+    accepted_frames = review_frames = rejected_frames = 0
+    for record in records:
+        for observation in _auction_observations(record):
+            if observation.get("accepted_as_observation") is True:
+                accepted_frames += 1
+            else:
+                review_frames += 1
+                if observation.get("reason") != "BOARD_AND_COMPASS_NOT_TEMPORALLY_CONFIRMED":
+                    rejected_frames += 1
+    for state in deals.values():
+        auction = aggregate_auction_observations(state["auction_observations"])
+        if auction["status"] != "UNAVAILABLE":
+            statuses[auction["status"]] = statuses.get(auction["status"], 0) + 1
+    return {
+        "frame_observations_accepted": accepted_frames,
+        "frame_observations_review": review_frames,
+        "frame_observations_rejected": rejected_frames,
+        "deal_statuses": statuses,
+        "standard_pbn_auctions": statuses.get("COMPLETE_CONFIRMED", 0),
+    }
+
+
+def render_shadow_pbn(records: Sequence[Mapping[str, Any]], *, source: str = "") -> str:
+    """Accumulate accepted observed cards and auctions by deal into safe PBN."""
+    deals = _accumulate_deals(records)
 
     blocks: list[str] = []
     for ordinal, (identity, state) in enumerate(sorted(deals.items()), start=1):
@@ -123,6 +211,7 @@ def render_shadow_pbn(records: Sequence[Mapping[str, Any]], *, source: str = "")
                     raise ShadowPbnError("cross-seat temporal card conflict")
         observed_count = len(card_seats)
         complete = observed_count == 52 and all(len(hands[seat]) == 13 for seat in SEATS)
+        auction = aggregate_auction_observations(state["auction_observations"])
         lines = [
             _tag("Event", "Video card recognition SHADOW"),
             _tag("Site", source or "Universal Video"),
@@ -146,6 +235,22 @@ def render_shadow_pbn(records: Sequence[Mapping[str, Any]], *, source: str = "")
             lines.append(_tag("Deal", "N:" + " ".join(_hand(sorted(hands[seat])) for seat in SEATS)))
         else:
             lines.append(_tag("X-DealStatus", "PARTIAL_OBSERVED_NO_STANDARD_DEAL_TAG"))
+        if auction["status"] != "UNAVAILABLE":
+            lines.append(_tag("X-AuctionStatus", auction["status"]))
+            if auction.get("calls"):
+                lines.append(_tag("X-AuctionCalls", " ".join(_pbn_call(call) for call in auction["calls"])))
+                lines.append(_tag(
+                    "X-AuctionCallFrameSupport",
+                    ",".join(str(value) for value in auction["call_frame_support"]),
+                ))
+            if auction.get("variants"):
+                lines.append(_tag(
+                    "X-AuctionVariants",
+                    " | ".join(" ".join(_pbn_call(call) for call in variant) for variant in auction["variants"]),
+                ))
+            if auction.get("accepted_as_standard_pbn") is True:
+                lines.append(_tag("Auction", auction["dealer"]))
+                lines.extend(_auction_data(auction["calls"]))
         blocks.append("\n".join(lines))
     header = (
         "% PBN 2.1\n"
@@ -154,8 +259,8 @@ def render_shadow_pbn(records: Sequence[Mapping[str, Any]], *, source: str = "")
         "% X-CanonicalPromotionAllowed: false\n"
     )
     if not blocks:
-        return header + "% No accepted card observations\n"
+        return header + "% No accepted card observations or auction observations\n"
     return header + "\n" + "\n\n".join(blocks) + "\n"
 
 
-__all__ = ["SCHEMA", "ShadowPbnError", "render_shadow_pbn"]
+__all__ = ["SCHEMA", "ShadowPbnError", "render_shadow_pbn", "summarize_shadow_auctions"]

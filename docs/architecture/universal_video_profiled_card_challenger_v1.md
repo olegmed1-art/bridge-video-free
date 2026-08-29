@@ -7,6 +7,8 @@ Governance mode: ASSURED
 Status: implemented for opt-in shadow/test use; world-model adapters available;
 no pixel backend approved; no production promotion
 
+Change ID: `UV-3.1-TEST-MULTIMODAL-CARDS-AUCTION-20260829`
+
 ## Outcome
 
 Universal Video now has a deterministic, interface-profiled decision boundary for a future card pixel recognizer. The boundary adopts the transferable principles found in Dealer4, BridgeSorter and TCG-AR without importing proprietary code, model weights, accuracy claims or special-card hardware.
@@ -27,6 +29,8 @@ The default Native Bridge Vision runtime is unchanged. With no explicitly inject
 10. **Verified layout prior.** The interface profile records the director-verified Bridgit layout: hearts, clubs, diamonds, spades (`H,C,D,S`) in that order for every hand; ranks descend from ace to two inside each suit. Hands displayed at screen top/bottom read the sequence horizontally through increasing registered X; screen left/right read the same sequence vertically through increasing registered Y. Logical seats are obtained through the verified compass rotation. The rule is applied only to ambiguous candidate sets above the confidence gate. A unique result is labelled `LAYOUT_SUGGESTION`, has `accepted_as_observation=false`, and cannot trigger `39 → 13`.
 11. **Attributed speech fusion.** A normalized exact teacher declaration may enter the shadow observed set only when card, seat, transcript locator, bounded timeline, verified speaker identity, speaker assignment confidence and declaration confidence all pass their gates. Student declarations are retained as `STUDENT_SPEECH_SUGGESTION`; they can confirm, contradict or corroborate a layout suggestion but never add a card, create a complete deal or trigger derivation.
 12. **Bridgit compass and board metadata.** For the verified Bridgit profile, the source is the compass immediately above the cards at the upper right of the table: board number in its centre, `N/E/S/W` around it, the yellow `D` dealer marker, and (when confidently decoded) vulnerability colour. `bridge_vision.bridgit_compass` accepts only the human-verified ROI, a complete cyclic 0/90/180/270-degree compass and attributable observations at or above the confidence gate. It binds the observed board number to the stable deal track and verifies dealer/vulnerability against the standard duplicate 4/16-board cycles. A board change starts a separate temporal track. ROI, compass, profile rotation, dealer or vulnerability disagreement fails closed to `REVIEW`; the adapter never guesses a missing label. Board metadata requires the same independent-frame temporal consensus as cards. A bare string such as `value=board-7` is only a track identity and is never parsed as an observed board number.
+13. **Automatic transcript observation.** `bridge_vision.transcript_card_observer` extracts only exact Russian rank+suit mentions, keeps negation, hypothetical language, bidding context and non-factual context in `REVIEW`, and binds an accepted mention to exactly one nearest frame within 65 seconds. Speech never creates an unseen card. It may corroborate an already accepted visual card. Promotion of a layout-only card requires all of: unique layout candidate, verified teacher identity and role at confidence 0.90+, and an attributable visual pointer observation at confidence 0.90+. Student or unverified-role speech remains review/corroboration and never adds a card.
+14. **Visual auction observation.** `bridge_vision.auction_observer` accepts Bridgit bidding-table cells only when independent OCR and cell-template channels agree and each is at least 0.90 confident. Dealer-relative seat, column, row, bounding box, frame locator, confirmed board/compass and Laws-level call order are mandatory. Frames of one board must form compatible prefixes. A standard PBN `Auction` section is emitted only for a legally terminated sequence whose every call has at least two independent-frame observations. Partial, single-frame-complete or conflicting sequences are retained only in `X-Auction-*` review tags.
 
 ## Runtime contract
 
@@ -80,6 +84,41 @@ matched full-card candidates:
 }
 ```
 
+If a verified visual pointer targets that ambiguous card, the backend may add:
+
+```json
+{
+  "pointer_corroboration": {
+    "source": "VISUAL_POINTER",
+    "confidence": 0.96,
+    "evidence_locator": "frame.jpg#pointer=0"
+  }
+}
+```
+
+The optional Bridgit auction observation is part of the same registered frame:
+
+```json
+{
+  "auction": {
+    "source": "BRIDGIT_AUCTION_TABLE",
+    "board_number": 1,
+    "dealer": "N",
+    "complete": false,
+    "evidence_locator": "frame.jpg#auction-table",
+    "calls": [{
+      "seat": "N",
+      "column": "N",
+      "row": 0,
+      "box": {"x": 600, "y": 500, "w": 32, "h": 18},
+      "ocr": {"value": "1H", "confidence": 0.97, "channel_id": "auction-ocr-v1"},
+      "reference_match": {"value": "1H", "confidence": 0.96, "channel_id": "auction-cell-template-v1"},
+      "evidence_locator": "frame.jpg#auction-cell=0"
+    }]
+  }
+}
+```
+
 Upstream ASR and speaker attribution may pass a declaration scoped by frame
 SHA/file or by an overlapping timeline:
 
@@ -112,7 +151,10 @@ deal identity supplied by the verified Bridgit compass. Partial hands use
 `X-Observed-N/E/S/W` and `X-UnknownCount-N/E/S/W`; they deliberately omit the
 standard `Deal` tag because omitted cards must not be misrepresented as voids.
 Only 52 unique accepted observations (13 per seat) may produce a standard PBN
-`Deal` tag. Conflict records, pending temporal votes, layout suggestions and
+`Deal` tag. A complete, legal, twice-observed visual auction uses the standard
+`Auction` tag and call section. Every weaker auction is visibly separated into
+`X-AuctionStatus`, `X-AuctionCalls`, frame-support and conflict-variant tags.
+Conflict records, pending temporal votes, uncorroborated layout suggestions and
 diagnostic candidates are not exported as found cards. JSONL, summary and PBN
 form one all-or-nothing, hash-bound SHADOW artifact set.
 
@@ -125,12 +167,29 @@ process_job_frames(
     job_dir,
     profiled_challenger=challenger,
     speech_declarations=normalized_attributed_speech,
+    auto_transcript_card_observations=True,
 )
 ```
 
 No environment variable, file presence or legacy fallback activates it. An injected engine/parser/challenger and the legacy-old-BBO flag are mutually exclusive; mixed execution is rejected. Shadow summaries declare `result_scope=SHADOW_ONLY` and `canonical_promotion_allowed=false`.
 
 Rollback is removal of the injected challenger or revert of this change. Existing default routing requires no migration and remains fail-closed.
+
+## Verification record for the change
+
+- Automated regression: 129 focused Bridge Vision, compass, video adapter and
+  deal/PBN tests plus the new multimodal and auction tests passed locally.
+- Independent assurance I2: completed-auction termination, normalized calls and
+  dealer-relative seat order are cross-checked against the separate tournament
+  auction validator implementation.
+- Diana 14 evidence preflight: 730 timestamped transcript segments and 59
+  120-second keyframes are available; the transcript extractor finds exact
+  mentions but the archived result contains no approved pixel backend/profile
+  output and its sparse frames do not expose a complete bidding table. Therefore
+  no Diana 14 card or standard auction is promoted by this change alone.
+- Rollback: revert this change or omit both the profiled challenger and the
+  `auto_transcript_card_observations` opt-in. Canonical filenames and production
+  routing are unchanged.
 
 ## Gates before any production promotion
 
