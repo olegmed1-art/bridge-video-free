@@ -17,7 +17,7 @@ def _asr_rows() -> list[dict]:
     ]
 
 
-def _diarized(label_a: str = "Diana Veksler", label_b: str = "Student"):
+def _diarized(label_a: str = "Private Teacher Name", label_b: str = "Learner"):
     return [
         {
             **_asr_rows()[0],
@@ -59,8 +59,8 @@ def test_success_reanonymizes_source_labels_and_preserves_asr(monkeypatch, tmp_p
 
     assert [row["text"] for row in rows] == ["original one", "original two"]
     assert [row["speaker"] for row in rows] == ["SPEAKER_A", "SPEAKER_B"]
-    assert "Diana" not in json.dumps({"rows": rows, "report": report})
-    assert "Student" not in json.dumps({"rows": rows, "report": report})
+    assert "Private Teacher Name" not in json.dumps({"rows": rows, "report": report})
+    assert "Learner" not in json.dumps({"rows": rows, "report": report})
     assert report["status"] == "DIARIZED_ROLE_MAPPED"
     assert report["schema"] == "universal-video-speaker-structure-v1"
     assert "label_coverage" not in report
@@ -269,7 +269,7 @@ def test_large_lesson_coverage_fixture(monkeypatch, tmp_path: Path):
         },
     )
     output, report = run_speaker_structure(
-        tmp_path / "diana2.mp4",
+        tmp_path / "public-field.mp4",
         transcript,
         tmp_path,
         min_label_coverage=MIN_TEST_LABEL_COVERAGE,
@@ -285,7 +285,7 @@ def test_large_lesson_coverage_fixture(monkeypatch, tmp_path: Path):
     assert sum("speaker" not in row for row in output) == 46
 
 
-def test_diana2_public_field_receipt_is_not_a_segment_fixture():
+def test_public_field_receipt_is_not_a_segment_fixture():
     """Public aggregates use different denominators; raw map is required for replay."""
     transcript_segments = 980
     speaker_labeled_segments = 934
@@ -484,7 +484,7 @@ def test_producer_output_passes_independent_conformance_checker(monkeypatch, tmp
 
 def test_conformance_rejects_real_person_label(tmp_path: Path):
     job_dir, manifest = _bundle(tmp_path)
-    _install_two_speaker_evidence(job_dir, manifest, first_label="Diana Veksler")
+    _install_two_speaker_evidence(job_dir, manifest, first_label="Private Teacher Name")
     with pytest.raises(ResultConformanceError, match="anonymous speaker"):
         _verify(job_dir)
 

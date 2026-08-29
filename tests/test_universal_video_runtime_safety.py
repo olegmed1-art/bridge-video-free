@@ -79,7 +79,7 @@ def test_frame_interval_is_bounded(tmp_path: Path):
     assert job.options["frame_interval_seconds"] == 120
 
 
-def test_diana14_dense_plan_has_no_300_frame_cap():
+def test_long_lesson_dense_plan_has_no_300_frame_cap():
     timestamps = runner.plan_keyframe_timestamps(6950.8, interval_seconds=3)
     assert len(timestamps) == 2318
     assert timestamps[:3] == [0.0, 3.0, 6.0]
