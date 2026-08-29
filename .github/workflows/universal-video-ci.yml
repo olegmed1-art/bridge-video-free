@@ -104,3 +104,11 @@ jobs:
         run: python -m compileall -q universal_video bridge_vision bridge_contracts tools/bridge_video_positions.py tools/bridge_video_deals.py
       - name: Record requirements checksum
         run: sha256sum requirements-universal-video.txt requirements-universal-video-speaker.txt
+
+  dense-diana14-shadow:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.ref == 'codex/issue-733-shadow-derived-persistence' &&
+      contains(github.event.pull_request.body, '<!-- diana14-dense-r5 -->')
+    uses: ./.github/workflows/field-diana14-3-1-test-r5-dense.yml
+    secrets: inherit

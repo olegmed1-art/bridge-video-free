@@ -1,9 +1,7 @@
 name: FIELD Diana 14 / Video 3.1-test-r5 dense
 
 on:
-  push:
-    branches:
-      - codex/issue-733-shadow-derived-persistence
+  workflow_call:
 
 permissions:
   contents: read
@@ -14,7 +12,6 @@ concurrency:
 
 jobs:
   field-shadow:
-    if: contains(github.event.head_commit.message, '[diana14-dense]')
     runs-on: ubuntu-24.04
     timeout-minutes: 330
     env:
