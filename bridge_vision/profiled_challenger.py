@@ -712,11 +712,25 @@ class ProfiledCardChallenger:
 
     shadow_only = True
 
-    def __init__(self, profile: InterfaceProfile, recognizer: PixelRecognizer):
+    def __init__(
+        self,
+        profile: InterfaceProfile,
+        recognizer: PixelRecognizer,
+        *,
+        backend_id: str | None = None,
+        backend_sha256: str | None = None,
+    ):
         if not callable(recognizer):
             raise TypeError("recognizer must be callable")
+        if (backend_id is None) != (backend_sha256 is None):
+            raise ProfiledChallengerError("backend identity must be complete")
+        if backend_id is not None:
+            _channel_id(backend_id, "backend_id")
+            _required_sha(backend_sha256, "backend_sha256")
         self.profile = profile
         self.recognizer = recognizer
+        self.backend_id = backend_id
+        self.backend_sha256 = backend_sha256
         self._tracks: dict[str, _Track] = {}
 
     def _review(self, frame_sha: str, reason: str, **extra: Any) -> dict[str, Any]:

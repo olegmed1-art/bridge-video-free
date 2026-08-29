@@ -18,10 +18,20 @@ from pathlib import Path
 from typing import Any
 
 from .result_conformance import ResultConformanceError, verify_result
+from .runtime_shadow_evidence import (
+    MAX_RECEIPT_BYTES as MAX_RUNTIME_RECEIPT_BYTES,
+    RECEIPT_FILE as RUNTIME_RECEIPT_FILE,
+    SHADOW_OUTPUT_FILE,
+    validate_receipt as validate_runtime_shadow_receipt,
+)
 
 EXPORT_SCHEMA = "universal-video-evidence-export-v1"
 REQUEST_SCHEMA = "universal-video-evidence-export-request-v1"
-STATUS_SCHEMAS = frozenset({"universal-video-resident-status-v1", "universal-video-resident-status-v2"})
+STATUS_SCHEMAS = frozenset({
+    "universal-video-resident-status-v1",
+    "universal-video-resident-status-v2",
+    "universal-video-resident-status-v3",
+})
 MAX_REQUEST_BYTES = 16 * 1024
 MAX_STATUS_BYTES = 16 * 1024
 MAX_DONE_BYTES = 256 * 1024
@@ -37,11 +47,19 @@ ALLOWED_REQUEST_FIELDS = frozenset({
 })
 ALLOWED_STATUS_FIELDS_V1 = frozenset({"schema", "instance_state", "active_jobs", "observed_at_unix"})
 ALLOWED_STATUS_FIELDS_V2 = ALLOWED_STATUS_FIELDS_V1 | frozenset({"installed_runtime_commit", "job_attestations"})
+ALLOWED_STATUS_FIELDS_V3 = ALLOWED_STATUS_FIELDS_V1 | frozenset({"exporter_commit", "job_attestations"})
 ALLOWED_ATTESTATION_FIELDS = frozenset({
     "schema", "job_id", "request_commit", "requested_runtime_commit",
     "installed_runtime_commit", "observed_job_runtime_commit", "profile",
     "job_hash", "source_file_id", "canonical_output_untouched",
     "canonical_promotion_allowed", "publication_state",
+})
+ALLOWED_ATTESTATION_FIELDS_V2 = frozenset({
+    "schema", "job_id", "request_commit", "requested_runtime_commit",
+    "observed_job_runtime_commit", "processing_revision", "profile",
+    "job_hash", "source_file_id", "runtime_shadow_attestation",
+    "canonical_output_untouched", "canonical_promotion_allowed",
+    "publication_state",
 })
 
 
@@ -134,7 +152,12 @@ def _validate_request(request: dict[str, Any]) -> dict[str, Any]:
 
 def _validate_status(status: dict[str, Any], *, now: float) -> dict[str, Any]:
     schema = status.get("schema")
-    allowed = ALLOWED_STATUS_FIELDS_V2 if schema == "universal-video-resident-status-v2" else ALLOWED_STATUS_FIELDS_V1
+    if schema == "universal-video-resident-status-v3":
+        allowed = ALLOWED_STATUS_FIELDS_V3
+    elif schema == "universal-video-resident-status-v2":
+        allowed = ALLOWED_STATUS_FIELDS_V2
+    else:
+        allowed = ALLOWED_STATUS_FIELDS_V1
     if schema not in STATUS_SCHEMAS or set(status) != allowed:
         raise EvidenceExportError("invalid resident status shape")
     if status.get("instance_state") != "RUNNING":
@@ -148,6 +171,7 @@ def _validate_status(status: dict[str, Any], *, now: float) -> dict[str, Any]:
     if not math.isfinite(observed_number) or observed_number > now + 2 or now - observed_number > MAX_STATUS_AGE_SECONDS:
         raise EvidenceExportError("resident status is stale")
     installed = None
+    exporter_commit = None
     attestations: list[dict[str, Any]] = []
     if schema == "universal-video-resident-status-v2":
         installed = _hex(status.get("installed_runtime_commit"), width=40, field="installed_runtime_commit")
@@ -158,7 +182,28 @@ def _validate_status(status: dict[str, Any], *, now: float) -> dict[str, Any]:
             if set(item) != ALLOWED_ATTESTATION_FIELDS or item.get("schema") != "universal-video-runtime-job-attestation-v1":
                 raise EvidenceExportError("invalid job attestation shape")
         attestations = list(raw)
-    return {"schema": schema, "observed_at_unix": observed_number, "installed_runtime_commit": installed, "job_attestations": attestations}
+    elif schema == "universal-video-resident-status-v3":
+        exporter_commit = _hex(status.get("exporter_commit"), width=40, field="exporter_commit")
+        raw = status.get("job_attestations")
+        if not isinstance(raw, list) or len(raw) != 1 or not isinstance(raw[0], dict):
+            raise EvidenceExportError("invalid v3 job attestations")
+        item = raw[0]
+        if set(item) != ALLOWED_ATTESTATION_FIELDS_V2 or item.get("schema") != "universal-video-runtime-job-attestation-v2":
+            raise EvidenceExportError("invalid v3 job attestation shape")
+        try:
+            shadow = validate_runtime_shadow_receipt(item.get("runtime_shadow_attestation"))
+        except ValueError as exc:
+            raise EvidenceExportError("invalid runtime shadow attestation") from exc
+        normalized = dict(item)
+        normalized["runtime_shadow_attestation"] = shadow
+        attestations = [normalized]
+    return {
+        "schema": schema,
+        "observed_at_unix": observed_number,
+        "installed_runtime_commit": installed,
+        "exporter_commit": exporter_commit,
+        "job_attestations": attestations,
+    }
 
 
 def _transcript_rows(path: Path) -> tuple[list[dict[str, Any]], str, int]:
@@ -188,6 +233,14 @@ def _contains_promotion_true(value: Any) -> bool:
     return False
 
 
+def _present(path: Path) -> bool:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return False
+    return True
+
+
 def _speaker_summary(rows: list[dict[str, Any]], deferred: list[str]) -> dict[str, Any]:
     labels = [str(row.get("speaker")) for row in rows if row.get("speaker") not in (None, "")]
     roles = [str(row.get("speaker_role") or row.get("speaker_role_candidate")) for row in rows if row.get("speaker_role") or row.get("speaker_role_candidate")]
@@ -215,25 +268,65 @@ def _speaker_summary(rows: list[dict[str, Any]], deferred: list[str]) -> dict[st
     }
 
 
-def _card_summary(result_dir: Path, deferred: list[str]) -> dict[str, Any]:
+def _card_summary(
+    result_dir: Path,
+    deferred: list[str],
+    runtime_shadow: dict[str, Any],
+) -> dict[str, Any]:
     summary_path = result_dir / "bridge_positions_profiled_shadow_summary.json"
     jsonl_path = result_dir / "bridge_positions_profiled_shadow.jsonl"
-    if not summary_path.exists() and not jsonl_path.exists():
+    runtime_path = result_dir / RUNTIME_RECEIPT_FILE
+    if runtime_shadow["state"] == "UNAVAILABLE":
+        if _present(summary_path) or _present(jsonl_path):
+            raise EvidenceExportError("unavailable shadow attestation has artifacts")
+        runtime_artifacts = []
+        if _present(runtime_path):
+            runtime_file = _read_regular_json(runtime_path, max_bytes=MAX_RUNTIME_RECEIPT_BYTES)
+            try:
+                observed_runtime = validate_runtime_shadow_receipt(runtime_file)
+            except ValueError as exc:
+                raise EvidenceExportError("invalid runtime shadow receipt file") from exc
+            if observed_runtime != runtime_shadow:
+                raise EvidenceExportError("runtime shadow status/result mismatch")
+            runtime_sha, runtime_size = _sha256(runtime_path, max_bytes=MAX_RUNTIME_RECEIPT_BYTES)
+            runtime_artifacts.append(
+                {"locator": runtime_path.name, "sha256": runtime_sha, "size_bytes": runtime_size}
+            )
         return {
             "status": "UNAVAILABLE",
-            "reason": "BRIDGE_POSITIONS_DEFERRED" if "bridge_positions" in deferred else "SHADOW_ARTIFACT_MISSING",
+            "reason": runtime_shadow["unavailable_reasons"],
             "recognized_frames": None,
+            "profile_id": runtime_shadow["profile_id"],
+            "backend_id": runtime_shadow["backend_id"],
+            "challenger_invoked": False,
             "canonical_promotion_allowed": False,
+            "artifacts": runtime_artifacts,
         }
-    if not summary_path.exists() or not jsonl_path.exists():
+    if not _present(summary_path) or not _present(jsonl_path) or not _present(runtime_path):
         raise EvidenceExportError("partial shadow card artifact set")
+    runtime_file = _read_regular_json(runtime_path, max_bytes=MAX_RUNTIME_RECEIPT_BYTES)
+    try:
+        observed_runtime = validate_runtime_shadow_receipt(runtime_file)
+    except ValueError as exc:
+        raise EvidenceExportError("invalid runtime shadow receipt file") from exc
+    if observed_runtime != runtime_shadow:
+        raise EvidenceExportError("runtime shadow status/result mismatch")
     summary = _read_regular_json(summary_path, max_bytes=1024 * 1024)
     if summary.get("profiled_challenger_enabled") is not True:
         raise EvidenceExportError("shadow summary is not from the profiled challenger")
     if summary.get("result_scope") != "SHADOW_ONLY" or summary.get("canonical_promotion_allowed") is not False:
         raise EvidenceExportError("shadow summary promotion boundary mismatch")
+    runtime_sha, runtime_size = _sha256(runtime_path, max_bytes=MAX_RUNTIME_RECEIPT_BYTES)
+    if (
+        summary.get("runtime_evidence_receipt") != RUNTIME_RECEIPT_FILE
+        or summary.get("runtime_evidence_receipt_sha256") != runtime_sha
+        or summary.get("output") != SHADOW_OUTPUT_FILE
+    ):
+        raise EvidenceExportError("shadow summary runtime binding mismatch")
     summary_sha, summary_size = _sha256(summary_path, max_bytes=1024 * 1024)
     jsonl_sha, jsonl_size = _sha256(jsonl_path, max_bytes=MAX_SHADOW_BYTES)
+    if jsonl_sha != runtime_shadow["shadow_output_sha256"]:
+        raise EvidenceExportError("shadow output attestation mismatch")
     try:
         raw_jsonl = jsonl_path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
@@ -249,11 +342,20 @@ def _card_summary(result_dir: Path, deferred: list[str]) -> dict[str, Any]:
             raise EvidenceExportError("shadow record promotion boundary mismatch")
     return {
         "status": "OBSERVED_SHADOW",
+        "profile_id": runtime_shadow["profile_id"],
+        "profile_hash": runtime_shadow["profile_hash"],
+        "profile_authority": runtime_shadow["profile_authority"],
+        "profile_authority_sha256": runtime_shadow["profile_authority_sha256"],
+        "backend_id": runtime_shadow["backend_id"],
+        "backend_hash": runtime_shadow["backend_hash"],
+        "backend_authority": runtime_shadow["backend_authority"],
+        "challenger_invoked": True,
         "recognized_frames": int(summary.get("recognized_frames") or 0),
         "conflict_frames": int(summary.get("conflict_frames") or 0),
         "derived_fourth_hand_frames": int(summary.get("derived_fourth_hand_frames") or 0),
         "canonical_promotion_allowed": False,
         "artifacts": [
+            {"locator": runtime_path.name, "sha256": runtime_sha, "size_bytes": runtime_size},
             {"locator": summary_path.name, "sha256": summary_sha, "size_bytes": summary_size},
             {"locator": jsonl_path.name, "sha256": jsonl_sha, "size_bytes": jsonl_size},
         ],
@@ -301,6 +403,11 @@ def build_evidence_export(
         raise EvidenceExportError("done receipt/result bundle mismatch")
 
     manifest = _read_regular_json(result_dir / "manifest.json", max_bytes=256 * 1024)
+    processing_revision = _hex(
+        manifest.get("processing_revision"), width=40, field="processing_revision"
+    )
+    if processing_revision != request["requested_runtime_commit"]:
+        raise EvidenceExportError("manifest runtime revision mismatch")
     transcript_rows, transcript_sha, transcript_size = _transcript_rows(result_dir / "transcript.jsonl")
     deferred = list(conformance.get("deferred_analysis") or [])
     artifacts_by_name = {item["relative_name"]: item for item in conformance["artifacts"]}
@@ -317,25 +424,24 @@ def build_evidence_export(
         }
         for name in ("transcript.jsonl", "transcript.txt", "transcript_qc.json")
     ]
-    installed = status["installed_runtime_commit"]
-    runtime_binding = "UNAVAILABLE"
-    if installed == request["requested_runtime_commit"]:
-        for item in status["job_attestations"]:
-            if (
-                item.get("job_id") == job_id
-                and item.get("request_commit") == request["request_commit"]
-                and item.get("requested_runtime_commit") == request["requested_runtime_commit"]
-                and item.get("installed_runtime_commit") == installed
-                and item.get("observed_job_runtime_commit") == installed
-                and item.get("profile") == request["profile"]
-                and item.get("job_hash") == request["job_hash"]
-                and item.get("source_file_id") == request["source_file_id"]
-                and item.get("canonical_output_untouched") is True
-                and item.get("canonical_promotion_allowed") is False
-                and item.get("publication_state") == "NOT_PUBLISHED"
-            ):
-                runtime_binding = "OBSERVED_EXACT"
-                break
+    if status["schema"] != "universal-video-resident-status-v3":
+        raise EvidenceExportError("exact runtime attestation unavailable")
+    attestation = status["job_attestations"][0]
+    if not (
+        attestation.get("job_id") == job_id
+        and attestation.get("request_commit") == request["request_commit"]
+        and attestation.get("requested_runtime_commit") == request["requested_runtime_commit"]
+        and attestation.get("observed_job_runtime_commit") == processing_revision
+        and attestation.get("processing_revision") == processing_revision
+        and attestation.get("profile") == request["profile"]
+        and attestation.get("job_hash") == request["job_hash"]
+        and attestation.get("source_file_id") == request["source_file_id"]
+        and attestation.get("canonical_output_untouched") is True
+        and attestation.get("canonical_promotion_allowed") is False
+        and attestation.get("publication_state") == "NOT_PUBLISHED"
+    ):
+        raise EvidenceExportError("exact runtime attestation mismatch")
+    runtime_shadow = attestation["runtime_shadow_attestation"]
 
     receipt = {
         "schema": EXPORT_SCHEMA,
@@ -350,8 +456,9 @@ def build_evidence_export(
         },
         "runtime": {
             "requested_runtime_commit": request["requested_runtime_commit"],
-            "installed_runtime_commit": installed,
-            "binding": runtime_binding,
+            "observed_job_runtime_commit": processing_revision,
+            "exporter_commit": status["exporter_commit"],
+            "binding": "OBSERVED_EXACT",
         },
         "technical": {
             "artifact_set_sha256": conformance["artifact_set_sha256"],
@@ -375,7 +482,7 @@ def build_evidence_export(
             "artifacts": asr_artifacts,
         },
         "speakers": _speaker_summary(transcript_rows, deferred),
-        "cards": _card_summary(result_dir, deferred),
+        "cards": _card_summary(result_dir, deferred, runtime_shadow),
         "publication_state": "NOT_PUBLISHED",
         "school_canon_changed": False,
     }

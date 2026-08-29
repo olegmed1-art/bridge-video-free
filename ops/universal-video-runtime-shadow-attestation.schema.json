@@ -1,0 +1,119 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bridge-school.invalid/schemas/universal-video-runtime-shadow-attestation-v1.json",
+  "title": "Universal Video runtime shadow attestation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "state",
+    "request_commit",
+    "requested_runtime_commit",
+    "installed_runtime_commit",
+    "observed_job_runtime_commit",
+    "runtime_binding",
+    "profile_id",
+    "profile_hash",
+    "profile_authority",
+    "profile_authority_sha256",
+    "backend_id",
+    "backend_hash",
+    "backend_authority",
+    "challenger_invoked",
+    "shadow_only",
+    "shadow_output_locator",
+    "shadow_output_sha256",
+    "canonical_output_untouched",
+    "canonical_promotion_allowed",
+    "publication_state",
+    "unavailable_reasons"
+  ],
+  "properties": {
+    "schema": {"const": "universal-video-runtime-shadow-attestation-v1"},
+    "state": {"enum": ["UNAVAILABLE", "OBSERVED"]},
+    "request_commit": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+    "requested_runtime_commit": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+    "installed_runtime_commit": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+    "observed_job_runtime_commit": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+    "runtime_binding": {"enum": ["UNAVAILABLE", "PASS"]},
+    "profile_id": {"type": ["string", "null"], "maxLength": 128},
+    "profile_hash": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "profile_authority": {"type": ["string", "null"], "maxLength": 64},
+    "profile_authority_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "backend_id": {"type": ["string", "null"], "maxLength": 128},
+    "backend_hash": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "backend_authority": {"type": ["string", "null"], "maxLength": 64},
+    "challenger_invoked": {"type": "boolean"},
+    "shadow_only": {"const": true},
+    "shadow_output_locator": {"type": ["string", "null"], "maxLength": 128},
+    "shadow_output_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "canonical_output_untouched": {"const": true},
+    "canonical_promotion_allowed": {"const": false},
+    "publication_state": {"const": "NOT_PUBLISHED"},
+    "unavailable_reasons": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "ACTIVATION_CONTEXT_MISSING",
+          "ACTIVATION_CONTEXT_UNKNOWN_FIELD",
+          "BACKEND_AUTHORITY_MISSING",
+          "BACKEND_HASH_INVALID",
+          "BACKEND_ID_INVALID",
+          "BACKEND_ID_MISMATCH",
+          "BACKEND_NOT_BOUND",
+          "CANONICAL_OUTPUT_CHANGED",
+          "CHALLENGER_MISSING",
+          "CHALLENGER_NOT_SHADOW_ONLY",
+          "COMMIT_INVALID",
+          "PROFILE_AUTHORITY_MISSING",
+          "PROFILE_AUTHORITY_MISMATCH",
+          "PROFILE_HASH_INVALID",
+          "PROFILE_HASH_MISMATCH",
+          "PROFILE_ID_INVALID",
+          "PROFILE_ID_MISMATCH",
+          "PROFILE_NOT_BOUND",
+          "RUNTIME_COMMIT_MISMATCH",
+          "SHADOW_OUTPUT_INVALID",
+          "SHADOW_RECEIPT_MISSING",
+          "SHADOW_SUMMARY_INVALID"
+        ]
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"state": {"const": "OBSERVED"}}},
+      "then": {
+        "properties": {
+          "request_commit": {"type": "string"},
+          "requested_runtime_commit": {"type": "string"},
+          "installed_runtime_commit": {"type": "string"},
+          "observed_job_runtime_commit": {"type": "string"},
+          "runtime_binding": {"const": "PASS"},
+          "profile_id": {"type": "string"},
+          "profile_hash": {"type": "string"},
+          "profile_authority": {"const": "APPROVED_HUMAN_REVIEW"},
+          "profile_authority_sha256": {"type": "string"},
+          "backend_id": {"type": "string"},
+          "backend_hash": {"type": "string"},
+          "backend_authority": {"const": "APPROVED_VERSIONED_BACKEND"},
+          "challenger_invoked": {"const": true},
+          "shadow_output_locator": {"const": "bridge_positions_profiled_shadow.jsonl"},
+          "shadow_output_sha256": {"type": "string"},
+          "unavailable_reasons": {"maxItems": 0}
+        }
+      },
+      "else": {
+        "properties": {
+          "runtime_binding": {"const": "UNAVAILABLE"},
+          "challenger_invoked": {"const": false},
+          "shadow_output_locator": {"type": "null"},
+          "shadow_output_sha256": {"type": "null"},
+          "unavailable_reasons": {"minItems": 1}
+        }
+      }
+    }
+  ]
+}

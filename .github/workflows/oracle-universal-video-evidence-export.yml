@@ -4,7 +4,13 @@ on:
   pull_request:
     paths:
       - '.github/workflows/oracle-universal-video-evidence-export.yml'
+      - 'ops/universal_video_oci_admin_entrypoint.sh'
+      - 'ops/install_universal_video_ocarun_admin.sh'
+      - 'ops/universal-video-resident-status-v3.schema.json'
+      - 'tests/test_universal_video_oci_admin_contract.py'
       - 'tests/test_universal_video_evidence_export_workflow_contract.py'
+      - 'tests/test_universal_video_status_attestation.py'
+      - 'universal_video/status_attestation.py'
   push:
     branches: [main]
     paths:
@@ -40,7 +46,6 @@ jobs:
     env:
       ISSUE_NUMBER: '819'
       INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
-      EXPORTER_COMMIT: edbb4cae625323146fcab3ad4f80ed3d9a9abc90
       OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
       OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
     steps:
@@ -134,33 +139,14 @@ jobs:
           remote="$(cat <<EOF
           set -Eeuo pipefail
           umask 077
-          readonly source_dir=/opt/bridge-school/universal-video-src
-          readonly base_dir=/opt/bridge-school/universal-video
-          readonly request_dir=/var/lib/bridge-school/universal-video
-          readonly status_dir=/run/bridge-school
-          [[ \"\$(git -C \"\$source_dir\" rev-parse HEAD)\" == '$EXPORTER_COMMIT' ]]
-          systemctl is-active --quiet universal-video.service
-          [[ -z \"\$(find \"\$base_dir/spool/running\" -maxdepth 1 -type f -name '*.json' -print -quit)\" ]]
-          install -d -m 0750 -o root -g universal-video \"\$request_dir\" \"\$status_dir\"
-          printf '%s' '$REQUEST_B64' | base64 --decode > \"\$request_dir/evidence-export-request.json.tmp\"
-          install -m 0640 -o root -g universal-video \"\$request_dir/evidence-export-request.json.tmp\" \"\$request_dir/evidence-export-request.json\"
-          rm -f \"\$request_dir/evidence-export-request.json.tmp\"
-          python3 - \"\$status_dir/universal-video-status.json.tmp\" <<'PY'
-          import json, os, sys, time
-          path=sys.argv[1]
-          payload={'schema':'universal-video-resident-status-v1','instance_state':'RUNNING','active_jobs':[],'observed_at_unix':time.time()}
-          fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o640)
-          with os.fdopen(fd,'w',encoding='utf-8') as handle:
-              json.dump(payload,handle,sort_keys=True,separators=(',',':'))
-              handle.write('\n')
-          PY
-          chown root:universal-video \"\$status_dir/universal-video-status.json.tmp\"
-          mv -f \"\$status_dir/universal-video-status.json.tmp\" \"\$status_dir/universal-video-status.json\"
-          [[ -z \"\$(find \"\$base_dir/spool/running\" -maxdepth 1 -type f -name '*.json' -print -quit)\" ]]
-          echo UV_EVIDENCE_EXPORT_BEGIN
-          runuser -u universal-video -- env PYTHONPATH=\"\$source_dir\" PYTHONDONTWRITEBYTECODE=1 \
-            \"\$base_dir/.venv/bin/python\" \"\$source_dir/ops/universal_video_resident_evidence_export.py\"
-          echo UV_EVIDENCE_EXPORT_END
+          if receipt=\$(printf '%s' '$REQUEST_B64' | base64 --decode | \
+            sudo -n /usr/local/sbin/universal-video-oci-admin evidence-export 2>/dev/null); then
+            printf 'UV_EVIDENCE_EXPORT_BEGIN\n%s\nUV_EVIDENCE_EXPORT_END\n' \"\$receipt\"
+          else
+            rc=\$?
+            printf 'UV_EVIDENCE_EXPORT_FAIL stage=bounded_admin rc=%s\n' \"\$rc\"
+            exit \"\$rc\"
+          fi
           EOF
           )"
           content="$(SCRIPT_TEXT="$remote" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":os.environ["SCRIPT_TEXT"]},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
@@ -181,24 +167,41 @@ jobs:
           from pathlib import Path
           raw=Path(os.environ['RUNNER_TEMP'],'uv-export-raw.txt').read_text(encoding='utf-8')
           found=re.findall(r'(?m)^UV_EVIDENCE_EXPORT_BEGIN\r?\n([^\r\n]+)\r?\nUV_EVIDENCE_EXPORT_END$',raw)
-          assert os.environ['REMOTE_LIFECYCLE']=='SUCCEEDED', os.environ['REMOTE_LIFECYCLE']
-          assert len(found)==1
-          x=json.loads(found[0])
-          assert set(x)=={'schema','state','exported_at_unix','job','runtime','technical','asr_qc','speakers','cards','publication_state','school_canon_changed'}
-          assert x['schema']=='universal-video-evidence-export-v1' and x['state']=='PASS'
-          assert x['job']['job_id']==os.environ['JOB_ID']
-          assert x['publication_state']=='NOT_PUBLISHED' and x['school_canon_changed'] is False
-          assert x['technical']['canonical_promotion_allowed'] is False
-          assert x['cards']['canonical_promotion_allowed'] is False
-          allowed={'transcript.jsonl','transcript.txt','transcript_qc.json','bridge_positions_profiled_shadow_summary.json','bridge_positions_profiled_shadow.jsonl'}
-          artifacts=list(x['asr_qc'].get('artifacts',[]))+list(x['cards'].get('artifacts',[]))
-          assert all(set(a)=={'locator','sha256','size_bytes'} and a['locator'] in allowed and re.fullmatch(r'[0-9a-f]{64}',a['sha256']) for a in artifacts)
+          failures=re.findall(r'(?m)^UV_EVIDENCE_EXPORT_FAIL stage=([a-z_]+) rc=([1-9][0-9]{0,2})$',raw)
+          failed=False
+          if os.environ['REMOTE_LIFECYCLE']!='SUCCEEDED':
+              assert len(failures)==1 and not found
+              stage,rc=failures[0]
+              x={'schema':'universal-video-evidence-export-v1','state':'INCONCLUSIVE','reason':f'REMOTE_{stage.upper()}_RC_{rc}','publication_state':'NOT_PUBLISHED','school_canon_changed':False}
+              failed=True
+          else:
+              assert len(found)==1 and not failures
+              x=json.loads(found[0])
+          if x.get('state')=='INCONCLUSIVE':
+              assert set(x)=={'schema','state','reason','publication_state','school_canon_changed'}
+              assert x['schema']=='universal-video-evidence-export-v1'
+              assert re.fullmatch(r'[A-Z0-9_]{1,120}',str(x['reason']))
+              assert x['publication_state']=='NOT_PUBLISHED' and x['school_canon_changed'] is False
+              failed=True
+          else:
+              assert set(x)=={'schema','state','exported_at_unix','job','runtime','technical','asr_qc','speakers','cards','publication_state','school_canon_changed'}
+              assert x['schema']=='universal-video-evidence-export-v1' and x['state']=='PASS'
+              assert x['job']['job_id']==os.environ['JOB_ID']
+              assert x['publication_state']=='NOT_PUBLISHED' and x['school_canon_changed'] is False
+              assert x['technical']['canonical_promotion_allowed'] is False
+              assert x['cards']['canonical_promotion_allowed'] is False
+              allowed={'transcript.jsonl','transcript.txt','transcript_qc.json','bridge_positions_profiled_shadow_summary.json','bridge_positions_profiled_shadow.jsonl','bridge_positions_profiled_shadow_runtime.json'}
+              artifacts=list(x['asr_qc'].get('artifacts',[]))+list(x['cards'].get('artifacts',[]))
+              assert all(set(a)=={'locator','sha256','size_bytes'} and a['locator'] in allowed and re.fullmatch(r'[0-9a-f]{64}',a['sha256']) for a in artifacts)
           encoded=(json.dumps(x,ensure_ascii=False,sort_keys=True,indent=2)+'\n').encode()
           assert len(encoded)<=32000
           Path(os.environ['RUNNER_TEMP'],'uv-export-safe.json').write_bytes(encoded)
-          print('state=PASS')
+          if failed:
+              Path(os.environ['RUNNER_TEMP'],'uv-export-failed').touch()
+          print('state='+x['state'])
           PY
           rm -f "$RUNNER_TEMP/uv-export-raw.txt"
+          [[ ! -e "$RUNNER_TEMP/uv-export-failed" ]] || exit 1
           echo UNIVERSAL_VIDEO_EVIDENCE_EXPORT_REMOTE_PASS
 
       - name: External DDS3 non-regression
@@ -236,4 +239,3 @@ jobs:
             echo "No transcript text, raw command output, media, OAuth value, or canonical artifact was published. Run: $RUN_URL"
           } > "$body"
           gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body"
-

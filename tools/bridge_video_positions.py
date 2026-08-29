@@ -15,6 +15,15 @@ from typing import Any
 
 from bridge_vision import BridgeVisionEngine, fuse_card_evidence
 from bridge_vision.evidence_fusion import MAX_DECLARATIONS
+from universal_video.runtime_shadow_evidence import (
+    CANONICAL_OUTPUT_FILE,
+    ShadowRuntimeEvidenceError,
+    file_snapshot,
+    observed_receipt,
+    unavailable_receipt,
+    validate_activation_context,
+    write_receipt,
+)
 
 NativeDetectorInjection = Callable[[Path], dict[str, Any]]
 
@@ -170,6 +179,7 @@ def process_job_frames(
     allow_legacy_old_bbo: bool = False,
     profiled_challenger: NativeDetectorInjection | None = None,
     speech_declarations: Iterable[Mapping[str, Any]] | None = None,
+    shadow_runtime_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     selected = sum(value is not None for value in (engine, parser, profiled_challenger))
     if selected > 1:
@@ -184,6 +194,21 @@ def process_job_frames(
     if not isinstance(frames, list):
         raise TypeError("manifest frames must be an array")
 
+    if shadow_runtime_context is not None and profiled_challenger is None:
+        receipt = unavailable_receipt(shadow_runtime_context, ["CHALLENGER_MISSING"])
+        write_receipt(root, receipt)
+        raise ValueError("profiled shadow activation unavailable: CHALLENGER_MISSING")
+    normalized_runtime_context = None
+    if profiled_challenger is not None:
+        try:
+            normalized_runtime_context = validate_activation_context(
+                shadow_runtime_context,
+                profiled_challenger,
+            )
+        except ShadowRuntimeEvidenceError as exc:
+            receipt = unavailable_receipt(shadow_runtime_context, [exc.code])
+            write_receipt(root, receipt)
+            raise ValueError(f"profiled shadow activation unavailable: {exc.code}") from exc
     if parser is not None:
         vision = BridgeVisionEngine({"explicit-injected-parser": _wrap_injected_parser(parser)})
     else:
@@ -192,6 +217,15 @@ def process_job_frames(
             profiled_challenger=profiled_challenger,
         )
     profiled_shadow = vision.shadow_only
+    if profiled_shadow and normalized_runtime_context is None:
+        receipt = unavailable_receipt(shadow_runtime_context, ["ACTIVATION_CONTEXT_MISSING"])
+        write_receipt(root, receipt)
+        raise ValueError("profiled shadow activation unavailable: ACTIVATION_CONTEXT_MISSING")
+    canonical_before = (
+        file_snapshot(root / CANONICAL_OUTPUT_FILE)
+        if profiled_shadow
+        else {"exists": False}
+    )
     speech = _bounded_speech_declarations(speech_declarations)
     if speech and not profiled_shadow:
         raise ValueError("speech evidence fusion is limited to the profiled shadow challenger")
@@ -321,6 +355,17 @@ def process_job_frames(
         else "bridge_positions_summary.json"
     )
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    if profiled_shadow:
+        try:
+            receipt = observed_receipt(root, normalized_runtime_context, summary, canonical_before)
+            receipt_locator, receipt_sha256 = write_receipt(root, receipt)
+        except ShadowRuntimeEvidenceError as exc:
+            receipt = unavailable_receipt(normalized_runtime_context, [exc.code])
+            write_receipt(root, receipt)
+            raise ValueError(f"profiled shadow attestation unavailable: {exc.code}") from exc
+        summary["runtime_evidence_receipt"] = receipt_locator
+        summary["runtime_evidence_receipt_sha256"] = receipt_sha256
+        summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
 
 

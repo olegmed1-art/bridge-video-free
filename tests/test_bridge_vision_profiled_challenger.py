@@ -15,6 +15,11 @@ from bridge_vision.profiled_challenger import (
     parse_profile,
 )
 from tools.bridge_video_positions import process_job_frames
+from universal_video.runtime_shadow_evidence import (
+    BACKEND_AUTHORITY,
+    PROFILE_AUTHORITY,
+    SCHEMA as RUNTIME_EVIDENCE_SCHEMA,
+)
 
 
 def digest(label: str) -> str:
@@ -67,6 +72,32 @@ def profile_raw(*, seat_positions=None, **gate_overrides):
         },
         gates=gates,
     )
+
+
+def runtime_context(detector):
+    detector.backend_id = "test-pixel-backend"
+    detector.backend_sha256 = "b" * 64
+    profile_hash = hashlib.sha256(
+        json.dumps(
+            detector.profile.recognizer_view(),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return {
+        "schema": RUNTIME_EVIDENCE_SCHEMA,
+        "request_commit": "1" * 40,
+        "requested_runtime_commit": "2" * 40,
+        "installed_runtime_commit": "2" * 40,
+        "observed_job_runtime_commit": "2" * 40,
+        "profile_id": detector.profile.profile_id,
+        "profile_hash": profile_hash,
+        "profile_authority": PROFILE_AUTHORITY,
+        "profile_authority_sha256": detector.profile.verification_sha256,
+        "backend_id": detector.backend_id,
+        "backend_hash": detector.backend_sha256,
+        "backend_authority": BACKEND_AUTHORITY,
+    }
 
 
 def frame_sha(path: Path) -> str:
@@ -530,7 +561,11 @@ def test_profiled_challenger_is_explicit_opt_in_for_video_positions(tmp_path: Pa
         second.name: payload(second, [observed_card()]),
     }
     detector = ProfiledCardChallenger(parse_profile(profile_raw()), lambda frame, _: observations[frame.name])
-    summary = process_job_frames(tmp_path, profiled_challenger=detector)
+    summary = process_job_frames(
+        tmp_path,
+        profiled_challenger=detector,
+        shadow_runtime_context=runtime_context(detector),
+    )
     assert summary["profiled_challenger_enabled"] is True
     assert summary["status"] == "SHADOW_COMPLETED"
     assert summary["result_scope"] == "SHADOW_ONLY"
@@ -599,6 +634,7 @@ def test_profiled_shadow_fuses_attributed_student_speech_with_layout_without_pro
         tmp_path,
         profiled_challenger=detector,
         speech_declarations=speech,
+        shadow_runtime_context=runtime_context(detector),
     )
 
     assert summary["status"] == "SHADOW_REVIEW"
@@ -654,7 +690,11 @@ def test_profiled_shadow_rejects_manifest_frame_hash_mismatch(tmp_path: Path):
         lambda current, _: payload(current, [observed_card()]),
     )
     with pytest.raises(ValueError, match="frame hash mismatch"):
-        process_job_frames(tmp_path, profiled_challenger=detector)
+        process_job_frames(
+            tmp_path,
+            profiled_challenger=detector,
+            shadow_runtime_context=runtime_context(detector),
+        )
     assert not (tmp_path / "bridge_positions_profiled_shadow.jsonl").exists()
 
 

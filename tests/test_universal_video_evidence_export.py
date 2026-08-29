@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import runpy
 from pathlib import Path
 
@@ -9,6 +10,15 @@ import pytest
 from universal_video.evidence_export import EvidenceExportError, build_evidence_export
 from universal_video.result_conformance import verify_result
 from universal_video.server_review import build_server_review
+from universal_video.status_attestation import build_resident_status
+from universal_video.runtime_shadow_evidence import (
+    BACKEND_AUTHORITY,
+    PROFILE_AUTHORITY,
+    RECEIPT_FILE,
+    SCHEMA as SHADOW_SCHEMA,
+    SHADOW_OUTPUT_FILE,
+    write_receipt,
+)
 
 
 _bundle = runpy.run_path(
@@ -16,9 +26,12 @@ _bundle = runpy.run_path(
 )["_bundle"]
 
 
-def _inputs(tmp_path: Path, *, status_v2: bool = False):
+def _inputs(tmp_path: Path, *, status_v3: bool = True):
     spool = tmp_path / "spool"
     result_dir, manifest = _bundle(spool / "results")
+    manifest["metadata"] = {"requested_runtime_commit": "a" * 40}
+    manifest["runtime"] = {"source_revision": "a" * 40}
+    (result_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     base = verify_result(
         result_dir,
         expected_job_id="exact-video-job",
@@ -59,41 +72,24 @@ def _inputs(tmp_path: Path, *, status_v2: bool = False):
     }
     request_path = tmp_path / "request.json"
     request_path.write_text(json.dumps(request), encoding="utf-8")
-    status = {
+    status = build_resident_status(
+        request_path=request_path,
+        spool_root=spool,
+        exporter_commit="f" * 40,
+        now=1000.0,
+    ) if status_v3 else {
         "schema": "universal-video-resident-status-v1",
         "instance_state": "RUNNING",
         "active_jobs": [],
         "observed_at_unix": 1000.0,
     }
-    if status_v2:
-        status = {
-            **status,
-            "schema": "universal-video-resident-status-v2",
-            "installed_runtime_commit": "a" * 40,
-            "job_attestations": [
-                {
-                    "schema": "universal-video-runtime-job-attestation-v1",
-                    "job_id": "exact-video-job",
-                    "request_commit": "e" * 40,
-                    "requested_runtime_commit": "a" * 40,
-                    "installed_runtime_commit": "a" * 40,
-                    "observed_job_runtime_commit": "a" * 40,
-                    "profile": "bridge_lesson",
-                    "job_hash": "c" * 64,
-                    "source_file_id": "1AbCdEfGhIjKlMnOpQrStUvWxYz",
-                    "canonical_output_untouched": True,
-                    "canonical_promotion_allowed": False,
-                    "publication_state": "NOT_PUBLISHED",
-                }
-            ],
-        }
     status_path = tmp_path / "status.json"
     status_path.write_text(json.dumps(status), encoding="utf-8")
     return request_path, status_path, spool, result_dir, final
 
 
-def _export(tmp_path: Path, *, status_v2: bool = False):
-    request, status, spool, result_dir, final = _inputs(tmp_path, status_v2=status_v2)
+def _export(tmp_path: Path, *, status_v3: bool = True):
+    request, status, spool, result_dir, final = _inputs(tmp_path, status_v3=status_v3)
     receipt = build_evidence_export(
         request_path=request,
         status_path=status,
@@ -124,22 +120,72 @@ def test_exact_job_export_exposes_asr_and_keeps_deferred_stages_unavailable(tmp_
         "teacher_student_attribution": "UNAVAILABLE",
     }
     assert receipt["cards"]["status"] == "UNAVAILABLE"
-    assert receipt["cards"]["reason"] == "BRIDGE_POSITIONS_DEFERRED"
+    assert receipt["cards"]["reason"] == ["SHADOW_RECEIPT_MISSING"]
     assert receipt["cards"]["canonical_promotion_allowed"] is False
-    assert receipt["runtime"]["binding"] == "UNAVAILABLE"
+    assert receipt["runtime"]["binding"] == "OBSERVED_EXACT"
+    assert receipt["runtime"]["observed_job_runtime_commit"] == "a" * 40
+    assert receipt["runtime"]["exporter_commit"] == "f" * 40
     assert receipt["publication_state"] == "NOT_PUBLISHED"
     assert receipt["school_canon_changed"] is False
 
 
-def test_v2_status_can_prove_exact_observed_runtime_without_promoting(tmp_path: Path):
-    receipt, *_ = _export(tmp_path, status_v2=True)
-    assert receipt["runtime"]["binding"] == "OBSERVED_EXACT"
-    assert receipt["runtime"]["installed_runtime_commit"] == "a" * 40
-    assert receipt["technical"]["canonical_promotion_allowed"] is False
+def test_legacy_status_cannot_claim_exact_runtime_binding(tmp_path: Path):
+    request, status, spool, *_ = _inputs(tmp_path, status_v3=False)
+    with pytest.raises(EvidenceExportError, match="exact runtime attestation unavailable"):
+        build_evidence_export(request_path=request, status_path=status, spool_root=spool, now=1010.0)
+
+
+def test_explicit_unavailable_shadow_receipt_is_hash_exported(tmp_path: Path):
+    request, status, spool, result_dir, _final = _inputs(tmp_path)
+    status_value = json.loads(status.read_text())
+    shadow = status_value["job_attestations"][0]["runtime_shadow_attestation"]
+    write_receipt(result_dir, shadow)
+    receipt = build_evidence_export(
+        request_path=request, status_path=status, spool_root=spool, now=1010.0
+    )
+    assert receipt["cards"]["status"] == "UNAVAILABLE"
+    assert [item["locator"] for item in receipt["cards"]["artifacts"]] == [RECEIPT_FILE]
+
+
+def test_broken_shadow_receipt_symlink_is_not_treated_as_absent(tmp_path: Path):
+    request, status, spool, result_dir, _final = _inputs(tmp_path)
+    (result_dir / RECEIPT_FILE).symlink_to(result_dir / "missing-runtime-receipt.json")
+    with pytest.raises(EvidenceExportError, match="result bundle is unavailable or invalid"):
+        build_evidence_export(request_path=request, status_path=status, spool_root=spool, now=1010.0)
 
 
 def test_shadow_cards_are_exported_only_with_complete_hash_bound_pair(tmp_path: Path):
     request, status, spool, result_dir, _final = _inputs(tmp_path)
+    shadow_path = result_dir / SHADOW_OUTPUT_FILE
+    shadow_path.write_text(
+        json.dumps({"status": "PASS", "canonical_promotion_allowed": False}) + "\n",
+        encoding="utf-8",
+    )
+    runtime_receipt = {
+        "schema": SHADOW_SCHEMA,
+        "state": "OBSERVED",
+        "request_commit": "e" * 40,
+        "requested_runtime_commit": "a" * 40,
+        "installed_runtime_commit": "a" * 40,
+        "observed_job_runtime_commit": "a" * 40,
+        "runtime_binding": "PASS",
+        "profile_id": "verified-profile-v1",
+        "profile_hash": "1" * 64,
+        "profile_authority": PROFILE_AUTHORITY,
+        "profile_authority_sha256": "2" * 64,
+        "backend_id": "pixel-backend-v1",
+        "backend_hash": "3" * 64,
+        "backend_authority": BACKEND_AUTHORITY,
+        "challenger_invoked": True,
+        "shadow_only": True,
+        "shadow_output_locator": SHADOW_OUTPUT_FILE,
+        "shadow_output_sha256": hashlib.sha256(shadow_path.read_bytes()).hexdigest(),
+        "canonical_output_untouched": True,
+        "canonical_promotion_allowed": False,
+        "publication_state": "NOT_PUBLISHED",
+        "unavailable_reasons": [],
+    }
+    locator, runtime_sha = write_receipt(result_dir, runtime_receipt)
     summary = {
         "status": "SHADOW_COMPLETED",
         "profiled_challenger_enabled": True,
@@ -148,12 +194,22 @@ def test_shadow_cards_are_exported_only_with_complete_hash_bound_pair(tmp_path: 
         "recognized_frames": 2,
         "conflict_frames": 0,
         "derived_fourth_hand_frames": 0,
+        "output": SHADOW_OUTPUT_FILE,
+        "runtime_evidence_receipt": locator,
+        "runtime_evidence_receipt_sha256": runtime_sha,
     }
     (result_dir / "bridge_positions_profiled_shadow_summary.json").write_text(
         json.dumps(summary), encoding="utf-8"
     )
-    (result_dir / "bridge_positions_profiled_shadow.jsonl").write_text(
-        json.dumps({"status": "PASS", "canonical_promotion_allowed": False}) + "\n",
+    status.write_text(
+        json.dumps(
+            build_resident_status(
+                request_path=request,
+                spool_root=spool,
+                exporter_commit="f" * 40,
+                now=1000.0,
+            )
+        ),
         encoding="utf-8",
     )
     receipt = build_evidence_export(
@@ -161,7 +217,9 @@ def test_shadow_cards_are_exported_only_with_complete_hash_bound_pair(tmp_path: 
     )
     assert receipt["cards"]["status"] == "OBSERVED_SHADOW"
     assert receipt["cards"]["recognized_frames"] == 2
-    assert len(receipt["cards"]["artifacts"]) == 2
+    assert receipt["cards"]["profile_authority"] == PROFILE_AUTHORITY
+    assert receipt["cards"]["backend_authority"] == BACKEND_AUTHORITY
+    assert len(receipt["cards"]["artifacts"]) == 3
     assert all(len(item["sha256"]) == 64 for item in receipt["cards"]["artifacts"])
 
 
@@ -179,6 +237,33 @@ def test_status_guard_fails_closed(tmp_path: Path, mutation, message: str):
     mutation(status)
     status_path.write_text(json.dumps(status), encoding="utf-8")
     with pytest.raises(EvidenceExportError, match=message):
+        build_evidence_export(
+            request_path=request, status_path=status_path, spool_root=spool, now=1010.0
+        )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda job: job.update({"job_id": "other-job"}),
+        lambda job: job.update({"request_commit": "d" * 40}),
+        lambda job: job.update({"requested_runtime_commit": "d" * 40}),
+        lambda job: job.update({"observed_job_runtime_commit": "d" * 40}),
+        lambda job: job.update({"processing_revision": "d" * 40}),
+        lambda job: job.update({"profile": "transcript_only"}),
+        lambda job: job.update({"job_hash": "d" * 64}),
+        lambda job: job.update({"source_file_id": "1DifferentDriveFileId000000"}),
+        lambda job: job.update({"canonical_output_untouched": False}),
+        lambda job: job.update({"canonical_promotion_allowed": True}),
+        lambda job: job.update({"publication_state": "PUBLISHED"}),
+    ],
+)
+def test_every_exact_job_attestation_binding_fails_closed(tmp_path: Path, mutation):
+    request, status_path, spool, *_ = _inputs(tmp_path)
+    status = json.loads(status_path.read_text())
+    mutation(status["job_attestations"][0])
+    status_path.write_text(json.dumps(status), encoding="utf-8")
+    with pytest.raises(EvidenceExportError):
         build_evidence_export(
             request_path=request, status_path=status_path, spool_root=spool, now=1010.0
         )
@@ -219,7 +304,7 @@ def test_partial_or_promotable_shadow_artifact_fails_closed(tmp_path: Path):
         encoding="utf-8",
     )
     (result_dir / "bridge_positions_profiled_shadow.jsonl").write_text("{}\n", encoding="utf-8")
-    with pytest.raises(EvidenceExportError, match="promotion boundary"):
+    with pytest.raises(EvidenceExportError, match="unavailable shadow attestation has artifacts"):
         build_evidence_export(request_path=request, status_path=status, spool_root=spool, now=1010.0)
 
 
@@ -239,5 +324,5 @@ def test_promotable_nested_shadow_record_fails_closed(tmp_path: Path):
         json.dumps({"evidence": {"canonical_promotion_allowed": True}}) + "\n",
         encoding="utf-8",
     )
-    with pytest.raises(EvidenceExportError, match="record promotion boundary"):
+    with pytest.raises(EvidenceExportError, match="unavailable shadow attestation has artifacts"):
         build_evidence_export(request_path=request, status_path=status, spool_root=spool, now=1010.0)

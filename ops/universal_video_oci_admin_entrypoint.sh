@@ -16,6 +16,13 @@ readonly PRODUCTIONIZE_PATH='ops/oracle_universal_video_productionize.sh'
 readonly PRODUCTIONIZE_BLOB='9a76e06ed1cb7ecc92102e5c16cf215c18f9159d'
 readonly SOURCE_DIR='/opt/bridge-school/universal-video-src'
 readonly BASE_DIR='/opt/bridge-school/universal-video'
+readonly EVIDENCE_REQUEST_DIR='/var/lib/bridge-school/universal-video'
+readonly EVIDENCE_REQUEST_PATH="$EVIDENCE_REQUEST_DIR/evidence-export-request.json"
+readonly EVIDENCE_STATUS_DIR='/run/bridge-school'
+readonly EVIDENCE_STATUS_PATH="$EVIDENCE_STATUS_DIR/universal-video-status.json"
+readonly EVIDENCE_EXPORTER_PIN='/etc/bridge-school/universal-video-admin-source-commit'
+readonly MAX_EVIDENCE_REQUEST_BYTES=16384
+readonly MAX_EVIDENCE_RECEIPT_BYTES=32768
 readonly DRIVE_PROBE_FILE_ID='1RKrDWP6IOfVyuDWRMIsiUT62vpmVW9VS'
 readonly DRIVE_RESULTS_FOLDER_ID='1I8cSuA-p0MpaZIbA33slks19KyvfJDMK'
 readonly OAUTH_FILE="$BASE_DIR/secrets/google-drive-oauth.json"
@@ -205,11 +212,87 @@ productionize(){
   echo UNIVERSAL_VIDEO_OCI_ADMIN_PRODUCTIONIZE_PASS
 }
 
+evidence_export(){
+  CURRENT_STAGE='evidence_export_protected_services'
+  verify_protected_services
+  CURRENT_STAGE='evidence_export_dds3_before'
+  verify_dds3
+  CURRENT_STAGE='evidence_export_sidecar'
+  verify_sidecar
+  CURRENT_STAGE='evidence_export_runtime_pin'
+  [[ -d "$SOURCE_DIR/.git" ]] || fail 'universal-video source checkout missing'
+  [[ -f "$EVIDENCE_EXPORTER_PIN" && ! -L "$EVIDENCE_EXPORTER_PIN" ]] || fail 'evidence exporter pin missing'
+  local exporter_pin
+  exporter_pin="$(tr -d '\n' < "$EVIDENCE_EXPORTER_PIN")"
+  [[ "$exporter_pin" =~ ^[0-9a-f]{40}$ ]] || fail 'evidence exporter pin invalid'
+  [[ "$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || true)" == "$exporter_pin" ]] \
+    || fail 'evidence exporter source pin mismatch'
+  CURRENT_STAGE='evidence_export_running_job_guard'
+  [[ ! -e "$BASE_DIR/spool/running" || -z "$(find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null)" ]] \
+    || fail 'universal-video has a running job'
+
+  install -d -m 0750 -o root -g universal-video "$EVIDENCE_REQUEST_DIR" "$EVIDENCE_STATUS_DIR"
+  local work request_tmp status_tmp receipt receipt_bytes
+  work="$(mktemp -d -p "$EVIDENCE_STATUS_DIR" .uv-evidence-export.XXXXXX)"
+  chown root:universal-video "$work"
+  chmod 0750 "$work"
+  trap 'rm -rf "${work:-}"' EXIT INT TERM
+  request_tmp="$work/request.json"
+  status_tmp="$work/status.json"
+
+  CURRENT_STAGE='evidence_export_request_read'
+  /usr/bin/head -c "$((MAX_EVIDENCE_REQUEST_BYTES + 1))" > "$request_tmp"
+  chown root:universal-video "$request_tmp"
+  chmod 0640 "$request_tmp"
+  [[ -s "$request_tmp" && "$(stat -c '%s' "$request_tmp")" -le "$MAX_EVIDENCE_REQUEST_BYTES" ]] \
+    || fail 'invalid evidence export request size'
+  CURRENT_STAGE='evidence_export_request_validate'
+  runuser -u universal-video -- env PYTHONPATH="$SOURCE_DIR" PYTHONDONTWRITEBYTECODE=1 \
+    "$BASE_DIR/.venv/bin/python" - "$request_tmp" <<'PY'
+import sys
+from pathlib import Path
+from universal_video.evidence_export import MAX_REQUEST_BYTES, _read_regular_json, _validate_request
+_validate_request(_read_regular_json(Path(sys.argv[1]), max_bytes=MAX_REQUEST_BYTES))
+PY
+  install -m 0640 -o root -g universal-video "$request_tmp" "$EVIDENCE_REQUEST_PATH"
+
+  CURRENT_STAGE='evidence_export_status_snapshot'
+  runuser -u universal-video -- env PYTHONPATH="$SOURCE_DIR" PYTHONDONTWRITEBYTECODE=1 \
+    "$BASE_DIR/.venv/bin/python" -m universal_video.status_attestation > "$status_tmp"
+  install -m 0640 -o root -g universal-video "$status_tmp" "$EVIDENCE_STATUS_PATH"
+  CURRENT_STAGE='evidence_export_second_running_job_guard'
+  [[ -z "$(find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null)" ]] \
+    || fail 'universal-video accepted a job during evidence export'
+
+  CURRENT_STAGE='evidence_export_execute'
+  receipt="$(runuser -u universal-video -- env PYTHONPATH="$SOURCE_DIR" PYTHONDONTWRITEBYTECODE=1 \
+    "$BASE_DIR/.venv/bin/python" "$SOURCE_DIR/ops/universal_video_resident_evidence_export.py")"
+  receipt_bytes="$(printf '%s' "$receipt" | wc -c)"
+  [[ "$receipt_bytes" -gt 0 && "$receipt_bytes" -le "$MAX_EVIDENCE_RECEIPT_BYTES" ]] \
+    || fail 'evidence export receipt size mismatch'
+  RECEIPT="$receipt" python3 - <<'PY'
+import json, os
+x=json.loads(os.environ['RECEIPT'])
+assert x.get('schema')=='universal-video-evidence-export-v1', x
+assert x.get('state') in {'PASS','INCONCLUSIVE'}, x
+assert x.get('publication_state')=='NOT_PUBLISHED', x
+assert x.get('school_canon_changed') is False, x
+PY
+  CURRENT_STAGE='evidence_export_dds3_after'
+  verify_dds3
+  CURRENT_STAGE='evidence_export_sidecar_after'
+  verify_sidecar
+  rm -rf "$work"
+  trap - EXIT INT TERM
+  printf '%s\n' "$receipt"
+}
+
 CURRENT_STAGE='argument_validation'
 need_root
-[[ $# -eq 1 ]] || fail 'usage: universal-video-oci-admin audit|productionize'
+[[ $# -eq 1 ]] || fail 'usage: universal-video-oci-admin audit|productionize|evidence-export'
 case "$1" in
   audit) audit ;;
   productionize) productionize ;;
+  evidence-export) evidence_export ;;
   *) fail 'unsupported operation' ;;
 esac

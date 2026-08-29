@@ -10,9 +10,10 @@ WORKFLOW = (ROOT / ".github/workflows/oracle-universal-video-admin.yml").read_te
 
 
 def test_entrypoint_is_fixed_and_no_asr_productionization_only():
-    assert "usage: universal-video-oci-admin audit|productionize" in ENTRY
+    assert "usage: universal-video-oci-admin audit|productionize|evidence-export" in ENTRY
     assert "audit) audit ;;" in ENTRY
     assert "productionize) productionize ;;" in ENTRY
+    assert "evidence-export) evidence_export ;;" in ENTRY
     assert "readonly UV_RUNTIME_COMMIT='7e46f0327d6094400e0d35ec6af20408cc97683e'" in ENTRY
     assert "readonly ACTIVATION_BLOB='bbf4dc5779726fca415f641b90d017a802daaabf'" in ENTRY
     assert "readonly PRODUCTIONIZE_BLOB='9a76e06ed1cb7ecc92102e5c16cf215c18f9159d'" in ENTRY
@@ -37,12 +38,14 @@ def test_entrypoint_is_fixed_and_no_asr_productionization_only():
 def test_sudoers_surface_is_exact_and_not_broad():
     audit_line = "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-oci-admin audit"
     productionize_line = "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-oci-admin productionize"
+    evidence_export_line = "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-oci-admin evidence-export"
     spool_repair_line = "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-spool-repair"
     assert audit_line in INSTALL
     assert productionize_line in INSTALL
+    assert evidence_export_line in INSTALL
     assert spool_repair_line in INSTALL
     sudo_lines = [line.strip() for line in INSTALL.splitlines() if line.strip().startswith("ocarun ALL=")]
-    assert sudo_lines == [audit_line, productionize_line, spool_repair_line]
+    assert sudo_lines == [audit_line, productionize_line, evidence_export_line, spool_repair_line]
     assert "grep -Ev '^[[:space:]]*(#|$)'" in INSTALL
     assert "NOPASSWD:[[:space:]]*ALL" in INSTALL
     assert "visudo -cf" in INSTALL
@@ -55,6 +58,31 @@ def test_sudoers_surface_is_exact_and_not_broad():
     assert "readonly SUDOERS='/etc/sudoers.d/universal-video-operator-ocarun'" in OPERATOR_INSTALL
     assert "readonly SUDOERS='/etc/sudoers.d/universal-video-ocarun'" not in INSTALL
     assert "readonly SUDOERS='/etc/sudoers.d/universal-video-ocarun'" not in OPERATOR_INSTALL
+
+
+def test_evidence_export_admin_is_fixed_input_idle_and_sanitized():
+    assert "readonly EVIDENCE_REQUEST_PATH=\"$EVIDENCE_REQUEST_DIR/evidence-export-request.json\"" in ENTRY
+    assert "readonly EVIDENCE_STATUS_PATH=\"$EVIDENCE_STATUS_DIR/universal-video-status.json\"" in ENTRY
+    assert "readonly MAX_EVIDENCE_REQUEST_BYTES=16384" in ENTRY
+    assert "readonly MAX_EVIDENCE_RECEIPT_BYTES=32768" in ENTRY
+    assert "readonly EVIDENCE_EXPORTER_PIN='/etc/bridge-school/universal-video-admin-source-commit'" in ENTRY
+    assert "-m universal_video.status_attestation" in ENTRY
+    assert "evidence_export_running_job_guard" in ENTRY
+    assert "evidence_export_second_running_job_guard" in ENTRY
+    assert "universal-video has a running job" in ENTRY
+    assert "universal-video accepted a job during evidence export" in ENTRY
+    assert "_validate_request(_read_regular_json" in ENTRY
+    assert "publication_state')=='NOT_PUBLISHED'" in ENTRY
+    assert "school_canon_changed') is False" in ENTRY
+    assert "UNIVERSAL_VIDEO_RUN_SMOKE=1" not in ENTRY
+    assert "universal-video-resident-status-v1" not in ENTRY
+
+
+def test_installer_binds_admin_to_the_exact_deployed_source_commit():
+    assert "readonly SOURCE_PIN='/etc/bridge-school/universal-video-admin-source-commit'" in INSTALL
+    assert 'install -o root -g universal-video -m 0440 "$tmp/source-commit" "$SOURCE_PIN"' in INSTALL
+    assert "unexpected source pin ownership/mode" in INSTALL
+    assert "unexpected source pin content" in INSTALL
 
 
 def test_cloud_shell_bootstrap_is_single_fixed_host_path():

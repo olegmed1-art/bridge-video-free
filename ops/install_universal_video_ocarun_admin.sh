@@ -17,6 +17,7 @@ id ocarun >/dev/null 2>&1 || fail 'ocarun user does not exist'
 readonly BASE="https://raw.githubusercontent.com/olegmed1-art/bridge-video-free/${SOURCE_COMMIT}/ops"
 readonly TARGET='/usr/local/sbin/universal-video-oci-admin'
 readonly REPAIR_TARGET='/usr/local/sbin/universal-video-spool-repair'
+readonly SOURCE_PIN='/etc/bridge-school/universal-video-admin-source-commit'
 # Keep bounded admin grants separate from the generic submit/status grants.
 # Both installers may be re-run without deleting the other's command surface.
 readonly SUDOERS='/etc/sudoers.d/universal-video-admin-ocarun'
@@ -27,7 +28,7 @@ curl -fsSL --retry 3 --retry-delay 2 "$BASE/universal_video_oci_admin_entrypoint
 curl -fsSL --retry 3 --retry-delay 2 "$BASE/universal_video_spool_repair.sh" -o "$tmp/repair"
 bash -n "$tmp/admin"
 bash -n "$tmp/repair"
-grep -Fq "usage: universal-video-oci-admin audit|productionize" "$tmp/admin" || fail 'unexpected Universal Video entrypoint contract'
+grep -Fq "usage: universal-video-oci-admin audit|productionize|evidence-export" "$tmp/admin" || fail 'unexpected Universal Video entrypoint contract'
 grep -Fq "readonly UV_RUNTIME_COMMIT='7e46f0327d6094400e0d35ec6af20408cc97683e'" "$tmp/admin" || fail 'unexpected Universal Video runtime pin'
 grep -Fq "UNIVERSAL_VIDEO_DRIVE_SOURCE_NO_ASR_PASS" "$tmp/admin" || fail 'no-ASR productionization gate missing'
 grep -Fq 'UNIVERSAL_VIDEO_SPOOL_RUNTIME_REPAIR_PASS' "$tmp/repair" || fail 'spool repair marker missing'
@@ -35,11 +36,15 @@ grep -Fq 'UNIVERSAL_VIDEO_SPOOL_RUNTIME_REPAIR_PASS' "$tmp/repair" || fail 'spoo
 
 install -o root -g root -m 0755 "$tmp/admin" "$TARGET"
 install -o root -g root -m 0755 "$tmp/repair" "$REPAIR_TARGET"
+printf '%s\n' "$SOURCE_COMMIT" > "$tmp/source-commit"
+install -d -o root -g root -m 0755 "$(dirname "$SOURCE_PIN")"
+install -o root -g universal-video -m 0440 "$tmp/source-commit" "$SOURCE_PIN"
 cat > "$tmp/sudoers" <<'EOF'
 # Bounded OCI Run Command privilege for Universal Video only.
 # No shell, editor, package manager, arbitrary systemctl/path, or NOPASSWD:ALL.
 ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-oci-admin audit
 ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-oci-admin productionize
+ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-oci-admin evidence-export
 ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-spool-repair
 EOF
 chmod 0440 "$tmp/sudoers"
@@ -51,10 +56,13 @@ if grep -Ev '^[[:space:]]*(#|$)' "$SUDOERS" | grep -Eq 'NOPASSWD:[[:space:]]*ALL
 [[ "$(stat -c '%U:%G:%a' "$TARGET")" == 'root:root:755' ]] || fail 'unexpected entrypoint ownership/mode'
 [[ "$(stat -c '%U:%G:%a' "$REPAIR_TARGET")" == 'root:root:755' ]] || fail 'unexpected repair helper ownership/mode'
 [[ "$(stat -c '%U:%G:%a' "$SUDOERS")" == 'root:root:440' ]] || fail 'unexpected sudoers ownership/mode'
+[[ "$(stat -c '%U:%G:%a' "$SOURCE_PIN")" == 'root:universal-video:440' ]] || fail 'unexpected source pin ownership/mode'
+[[ "$(tr -d '\n' < "$SOURCE_PIN")" == "$SOURCE_COMMIT" ]] || fail 'unexpected source pin content'
 
 printf 'installed=%s\n' "$TARGET"
 printf 'repair=%s\n' "$REPAIR_TARGET"
 printf 'sudoers=%s\n' "$SUDOERS"
+printf 'source_pin=%s\n' "$SOURCE_PIN"
 printf 'source_commit=%s\n' "$SOURCE_COMMIT"
 echo UNIVERSAL_VIDEO_OCARUN_BOUNDED_ADMIN_BOOTSTRAP_PASS
 
