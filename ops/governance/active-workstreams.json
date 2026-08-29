@@ -1,0 +1,182 @@
+{
+  "schema_version": "1.0",
+  "inventory_status": "PRIMARY_SOURCE_SNAPSHOT",
+  "last_verified_at": "2026-08-29",
+  "source_repository": "olegmed1-art/bridge-video-free",
+  "source_queries": [
+    "is:issue is:open in:title P0",
+    "is:issue is:open in:title P1"
+  ],
+  "independence_status": "PENDING_I2_REVIEW",
+  "items": [
+    {
+      "issue": 611,
+      "title": "P0: implement school-wide Coordinator / Curator / Red Team / Observatory governance",
+      "workstream_id": "GOVERNANCE-SYSTEM-V1",
+      "source_priority": "P0",
+      "work_class": "MANDATORY",
+      "urgency": "HIGH",
+      "strategic_rank": "S1",
+      "governance_mode": "ASSURED",
+      "operational_status": "ACTIVE_PARTIAL_INVENTORY",
+      "classification_reason": "The canonical governance system changes school-wide authority, assurance and recovery of state.",
+      "evidence_refs": [
+        "https://github.com/olegmed1-art/bridge-video-free/issues/611",
+        "docs/governance/SCHOOL_GOVERNANCE_SYSTEM_V1.md",
+        "ops/governance/governance-state.json"
+      ]
+    },
+    {
+      "issue": 609,
+      "title": "P0: School Canonical Bidding Engine — research and implementation",
+      "workstream_id": "SCHOOL-CANONICAL-BIDDING-ENGINE",
+      "source_priority": "P0",
+      "work_class": "STRATEGIC",
+      "urgency": "NORMAL",
+      "strategic_rank": "S1",
+      "governance_mode": "ASSURED",
+      "operational_status": "ACTIVE",
+      "classification_reason": "The work affects school canon, a core algorithm, production data and hidden-information safety.",
+      "evidence_refs": [
+        "https://github.com/olegmed1-art/bridge-video-free/issues/609",
+        "docs/research/bidding-engine/PROJECT_STATE.md"
+      ]
+    },
+    {
+      "issue": 371,
+      "title": "P0: productionize Universal Video I/O and resource limits before first real lesson",
+      "workstream_id": "UNIVERSAL-VIDEO-PLATFORM",
+      "source_priority": "P0",
+      "work_class": "STRATEGIC",
+      "urgency": "HIGH",
+      "strategic_rank": "S1",
+      "governance_mode": "ASSURED",
+      "operational_status": "ACTIVE",
+      "classification_reason": "This is a production-bound service change handling real educational media, credentials and shared Oracle capacity.",
+      "evidence_refs": [
+        "https://github.com/olegmed1-art/bridge-video-free/issues/371"
+      ]
+    },
+    {
+      "issue": 840,
+      "title": "P0: prove speaker diarization and role mapping for Video 3.1-test-r4",
+      "workstream_id": "UNIVERSAL-VIDEO-PLATFORM",
+      "source_priority": "P0",
+      "work_class": "RESEARCH",
+      "urgency": "HIGH",
+      "strategic_rank": "S2",
+      "governance_mode": "ASSURED",
+      "operational_status": "SHADOW_EVIDENCE",
+      "classification_reason": "The result is a core recognition claim over real lesson media and requires independent coverage and role-evidence gates.",
+      "evidence_refs": [
+        "https://github.com/olegmed1-art/bridge-video-free/issues/840"
+      ]
+    },
+    {
+      "issue": 847,
+      "title": "P1: project-neutral Neon intake for Universal Video batches",
+      "workstream_id": "UNIVERSAL-VIDEO-PLATFORM",
+      "source_priority": "P1",
+      "work_class": "STRATEGIC",
+      "urgency": "HIGH",
+      "strategic_rank": "S1",
+      "governance_mode": "ASSURED",
+      "operational_status": "IMPLEMENTATION_REVIEW",
+      "classification_reason": "The queue changes durable database state, leases and production-bound batch control for up to 1000 videos.",
+      "evidence_refs": [
+        "https://github.com/olegmed1-art/bridge-video-free/issues/847",
+        "https://github.com/olegmed1-art/bridge-video-free/pull/848"
+      ]
+    },
+    {
+      "issue": 733,
+      "title": "P1: add fail-closed Bridgit graphic-card recognition from real lesson video",
+      "workstream_id": "BRIDGE-VISION-RECOGNITION",
+      "source_priority": "P1",
+      "work_class": "RESEARCH",
+      "urgency": "HIGH",
+      "strategic_rank": "S2",
+      "governance_mode": "ASSURED",
+      "operational_status": "SHADOW_RESEARCH",
+      "classification_reason": "The work makes bridge-card correctness claims from student-sensitive media and is a core algorithm with explicit promotion gates.",
+      "evidence_refs": [
+        "https://github.com/olegmed1-art/bridge-video-free/issues/733"
+      ]
+    },
+    {
+      "issue": 742,
+      "title": "P1: run independent Bridgit glyph holdout before enabling backend",
+      "workstream_id": "BRIDGE-VISION-RECOGNITION",
+      "source_priority": "P1",
+      "work_class": "RESEARCH",
+      "urgency": "HIGH",
+      "strategic_rank": "S2",
+      "governance_mode": "ASSURED",
+      "operational_status": "INDEPENDENT_FIELD_GATE",
+      "classification_reason": "This is the independent evidence gate for a core recognizer and must preserve human gold labels and false-acceptance reporting.",
+      "evidence_refs": [
+        "https://github.com/olegmed1-art/bridge-video-free/issues/742"
+      ]
+    },
+    {
+      "issue": 792,
+      "title": "P0: add read-only School Systems Steward GitHub baseline",
+      "workstream_id": "SCHOOL-SYSTEMS-STEWARD",
+      "source_priority": "P0",
+      "work_class": "IMPROVEMENT",
+      "urgency": "NORMAL",
+      "strategic_rank": "S2",
+      "governance_mode": "STANDARD",
+      "operational_status": "ACTIVE",
+      "classification_reason": "The scope is read-only and reversible, but it creates a material school-wide operational baseline and requires fail-closed pagination checks.",
+      "evidence_refs": [
+        "https://github.com/olegmed1-art/bridge-video-free/issues/792"
+      ]
+    },
+    {
+      "issue": 374,
+      "title": "P0: bootstrap permanent OCI administrative credential",
+      "workstream_id": "ORACLE-RELIABILITY-FOUNDATION",
+      "source_priority": "P0",
+      "work_class": "MANDATORY",
+      "urgency": "HIGH",
+      "strategic_rank": "S1",
+      "governance_mode": "ASSURED",
+      "operational_status": "NEEDS_OWNER_ACTION",
+      "classification_reason": "The change establishes a credential and recovery authority path to the production Oracle host.",
+      "evidence_refs": [
+        "https://github.com/olegmed1-art/bridge-video-free/issues/374"
+      ]
+    },
+    {
+      "issue": 336,
+      "title": "P0: activate Assistant Lab Oracle Observer on Frankfurt host",
+      "workstream_id": "ORACLE-RELIABILITY-FOUNDATION",
+      "source_priority": "P0",
+      "work_class": "OPERATIONAL",
+      "urgency": "HIGH",
+      "strategic_rank": "S1",
+      "governance_mode": "ASSURED",
+      "operational_status": "BLOCKED_ON_HOST_EXECUTION",
+      "classification_reason": "This changes a resident production service and requires host-side evidence plus DDS3 non-regression proof.",
+      "evidence_refs": [
+        "https://github.com/olegmed1-art/bridge-video-free/issues/336"
+      ]
+    },
+    {
+      "issue": 627,
+      "title": "P1: prove complete Oracle idle guard before automatic stop",
+      "workstream_id": "ORACLE-RELIABILITY-FOUNDATION",
+      "source_priority": "P1",
+      "work_class": "MANDATORY",
+      "urgency": "HIGH",
+      "strategic_rank": "S1",
+      "governance_mode": "ASSURED",
+      "operational_status": "ACTIVE",
+      "classification_reason": "An incorrect idle decision can interrupt production work, so UNKNOWN must remain fail-closed and independently verified.",
+      "evidence_refs": [
+        "https://github.com/olegmed1-art/bridge-video-free/issues/627"
+      ]
+    }
+  ]
+}
