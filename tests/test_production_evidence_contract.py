@@ -55,6 +55,9 @@ def test_production_route_is_confirmed_r25_16_with_inheritance_chain():
     assert "import run_master_3_1_free_semantic as previous" in semantic_v2
     assert "METHODOLOGY_PARTIAL" in semantic_v2
     assert "technical_ready_does_not_imply_methodology_ready" in semantic_v2
+    assert "from universal_video.speaker_structure import MIN_TEST_LABEL_COVERAGE, run_speaker_structure" in semantic_v2
+    assert "min_label_coverage=MIN_TEST_LABEL_COVERAGE" in semantic_v2
+    assert "Do not preserve unverified Zoom labels" in semantic_v2
 
     combined = "\n".join((diarization_v3, diarization_core, diarization_repair))
     assert "cluster_collapse" in combined
