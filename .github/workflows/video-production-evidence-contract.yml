@@ -20,11 +20,19 @@ on:
       - 'bridge_runtime_hardening_r25_15.py'
       - 'bridge_runtime_hardening_r25_16.py'
       - 'bridge_runtime_hardening_r25_17.py'
+      - 'bridge_runtime_hardening_r25_18.py'
       - 'run_master_3_1_free.py'
       - 'bridge_contracts/video_auction.py'
       - 'bridge_vision/deal_evidence.py'
       - 'bridge_vision/deal_pbn.py'
       - 'bridge_vision/deal_review_pdf.py'
+      - 'bridge_vision/template_pixel_producer.py'
+      - 'bridge_vision/video_deal_producer.py'
+      - 'bridge_vision/auction_observer.py'
+      - 'bridge_vision/bridgit_compass.py'
+      - 'bridge_vision/transcript_card_observer.py'
+      - 'bridge_vision/world_card_backends.py'
+      - 'bridge_vision/shadow_pbn.py'
       - 'run_master_3_1_free_semantic.py'
       - 'run_master_3_1_free_semantic_v2.py'
       - 'bridge_speaker_diarization.py'
@@ -38,6 +46,7 @@ on:
       - 'tests/test_pdf_presentation_r25_6.py'
       - 'tests/test_deal_review_pdf_r25_16.py'
       - 'tests/test_deal_evidence_r25_17.py'
+      - 'tests/test_video_deal_producer_r25_18.py'
       - 'tests/test_speaker_diarization_v2.py'
       - 'tests/test_speaker_diarization_v3.py'
       - 'tests/test_speaker_mapping_r29.py'
@@ -63,11 +72,19 @@ on:
       - 'bridge_runtime_hardening_r25_15.py'
       - 'bridge_runtime_hardening_r25_16.py'
       - 'bridge_runtime_hardening_r25_17.py'
+      - 'bridge_runtime_hardening_r25_18.py'
       - 'run_master_3_1_free.py'
       - 'bridge_contracts/video_auction.py'
       - 'bridge_vision/deal_evidence.py'
       - 'bridge_vision/deal_pbn.py'
       - 'bridge_vision/deal_review_pdf.py'
+      - 'bridge_vision/template_pixel_producer.py'
+      - 'bridge_vision/video_deal_producer.py'
+      - 'bridge_vision/auction_observer.py'
+      - 'bridge_vision/bridgit_compass.py'
+      - 'bridge_vision/transcript_card_observer.py'
+      - 'bridge_vision/world_card_backends.py'
+      - 'bridge_vision/shadow_pbn.py'
       - 'run_master_3_1_free_semantic.py'
       - 'run_master_3_1_free_semantic_v2.py'
       - 'bridge_speaker_diarization.py'
@@ -81,6 +98,7 @@ on:
       - 'tests/test_pdf_presentation_r25_6.py'
       - 'tests/test_deal_review_pdf_r25_16.py'
       - 'tests/test_deal_evidence_r25_17.py'
+      - 'tests/test_video_deal_producer_r25_18.py'
       - 'tests/test_speaker_diarization_v2.py'
       - 'tests/test_speaker_diarization_v3.py'
       - 'tests/test_speaker_mapping_r29.py'
@@ -95,7 +113,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
-      BRIDGE_REQUESTED_ALGORITHM_REVISION: 3.1-free-r25.17
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: 3.1-free-r25.18
       WHISPER_MODEL: small
       PYTHONUNBUFFERED: '1'
     steps:
@@ -111,19 +129,20 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq fonts-dejavu-core
+          sudo apt-get install -y -qq fonts-dejavu-core tesseract-ocr
           python -m pip install --disable-pip-version-check -r requirements-worker.txt
           python -m pip install --disable-pip-version-check 'numpy==2.2.6' 'pytest==9.1.1'
       - name: Verify production route and evidence preservation
         run: |
           set -euo pipefail
           PYTHONPATH=. python tests/test_production_evidence_contract.py
-          # r25.17 inherits r25.16 -> r25.15 -> r25.14 -> r25.7 -> proven r25.6 policies.
+          # r25.18 inherits r25.17 -> r25.16 -> r25.15 -> r25.14 -> r25.7 -> proven r25.6 policies.
           PYTHONPATH=. python tests/test_asr_policy_r25_6.py
           PYTHONPATH=. python tests/test_unreliable_asr_isolation_r25_4.py
           PYTHONPATH=. python tests/test_pdf_presentation_r25_6.py
           PYTHONPATH=. python -m pytest -q tests/test_deal_review_pdf_r25_16.py
           PYTHONPATH=. python -m pytest -q tests/test_deal_evidence_r25_17.py
+          PYTHONPATH=. python -m pytest -q tests/test_video_deal_producer_r25_18.py
           # Speaker repair is part of production; preserve both v2 compatibility
           # and the v3 collapse-repair regression suite.
           PYTHONPATH=. python -m pytest -q tests/test_speaker_diarization_v2.py tests/test_speaker_diarization_v3.py
@@ -141,11 +160,14 @@ jobs:
             bridge_runtime_hardening_r25_15.py \
             bridge_runtime_hardening_r25_16.py \
             bridge_runtime_hardening_r25_17.py \
+            bridge_runtime_hardening_r25_18.py \
             run_master_3_1_free.py \
             bridge_contracts/video_auction.py \
             bridge_vision/deal_evidence.py \
             bridge_vision/deal_pbn.py \
             bridge_vision/deal_review_pdf.py \
+            bridge_vision/template_pixel_producer.py \
+            bridge_vision/video_deal_producer.py \
             run_master_3_1_free_semantic.py \
             run_master_3_1_free_semantic_v2.py \
             bridge_speaker_diarization.py \

@@ -4,6 +4,7 @@ faster-whisper==1.2.1
 pillow==12.3.0
 ImageHash==4.3.2
 opencv-python-headless==5.0.0.93
+pytesseract==0.3.13
 reportlab==5.0.0
 pymupdf==1.28.2
 psycopg[binary]==3.3.4

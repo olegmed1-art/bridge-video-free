@@ -51,7 +51,7 @@ jobs:
       BRIDGE_LARGER_RUNNER: "false"
       BRIDGE_PAID_CLOUD: "false"
       BRIDGE_BILLING_FALLBACK: "false"
-      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.17"
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.18"
       BRIDGE_DIARIZATION_ENABLED: "true"
       PYTHONUNBUFFERED: "1"
       WHISPER_MODEL: small
@@ -201,7 +201,7 @@ jobs:
         if: steps.terminal.outputs.already_completed != 'true'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core tesseract-ocr
           python -m pip install --disable-pip-version-check -r requirements-worker.txt
 
       - name: Google Drive OAuth preflight

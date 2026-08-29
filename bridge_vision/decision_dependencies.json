@@ -1,6 +1,10 @@
 {
   "schema": "bridge-decision-dependencies-v1",
   "dependencies": {
+    "cv2": {
+      "kind": "model",
+      "policy": "OpenCV may register frames and perform profile-bound pixel/template matching only inside the opt-in SHADOW producer; it cannot create Canon facts or bypass evidence gates."
+    },
     "faster_whisper": {
       "kind": "model",
       "policy": "Allowed only as raw ASR base. Bridge semantics, corrections and canonical facts must be produced by school-owned post-processing and evidence rules."
@@ -12,6 +16,18 @@
     "google": {
       "kind": "infrastructure",
       "policy": "Authentication and Google Drive transport only; must not make bridge-content decisions."
+    },
+    "numpy": {
+      "kind": "infrastructure",
+      "policy": "Array operations for explicitly registered SHADOW image/model backends only; it must not define bridge meaning, evidence status or promotion policy."
+    },
+    "onnxruntime": {
+      "kind": "model",
+      "policy": "Executes only a hash-bound, independently gated SHADOW reference-card model; its output remains non-canonical and requires separate rank and suit agreement."
+    },
+    "pytesseract": {
+      "kind": "model",
+      "policy": "Optional auction-cell OCR challenger only; a call is retained solely when it agrees with a separate verified cell-template channel and passes Laws-level validation."
     },
     "requests": {
       "kind": "infrastructure",
