@@ -3,7 +3,7 @@ name: FIELD Diana 14 / Video 3.1-test-r5-open-set
 on:
   push:
     branches:
-      - fix/840-speaker-role-proof
+      - fix/840-speaker-role-proof-r5-open-set
 
 permissions:
   contents: read
