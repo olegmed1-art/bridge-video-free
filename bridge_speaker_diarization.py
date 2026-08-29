@@ -23,6 +23,22 @@ from typing import Any, Iterable, Mapping, Sequence
 
 DIARIZATION_REVISION = "bridge-local-diarization-v1"
 
+
+def _diagnostic_code(exc: Exception) -> str:
+    """Map internal failures to bounded, non-sensitive field diagnostics."""
+    if isinstance(exc, (ImportError, ModuleNotFoundError, FileNotFoundError)):
+        return "OPTIONAL_RUNTIME_UNAVAILABLE"
+    if isinstance(exc, subprocess.CalledProcessError):
+        return "AUDIO_EXTRACTION_FAILED"
+    detail = str(exc)
+    if detail == "insufficient voiced segments":
+        return "INSUFFICIENT_VOICED_SEGMENTS"
+    if detail == "acoustic clusters not sufficiently separated":
+        return "ACOUSTIC_CLUSTERS_NOT_SEPARATED"
+    if detail == "unexpected diarization WAV format":
+        return "AUDIO_FORMAT_UNSUPPORTED"
+    return "DIARIZATION_ENGINE_FAILED"
+
 TEACHER_CUES = (
     "диана",
     "как ты думаешь",
@@ -368,6 +384,7 @@ def diarize_transcript(
             "revision": DIARIZATION_REVISION,
             "status": "UNAVAILABLE",
             "reason": type(exc).__name__,
+            "diagnostic_code": _diagnostic_code(exc),
             "detail": str(exc)[:300],
             "segments_total": len(copied),
             "cost": {"paid_api": 0, "persistent_audio_created": False},

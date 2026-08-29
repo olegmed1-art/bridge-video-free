@@ -51,6 +51,28 @@ def _bundle(tmp_path: Path, *, status: str = "COMPLETED") -> tuple[Path, dict]:
         }
     ]
     (job_dir / "transcript_qc.json").write_text(json.dumps(qc), encoding="utf-8")
+    speaker_report = {
+        "schema": "universal-video-speaker-structure-v1",
+        "revision": "test-v1",
+        "status": "UNAVAILABLE_INSUFFICIENT_SEGMENTS",
+        "quality_gate": "INCONCLUSIVE",
+        "reason": "INSUFFICIENT_SEGMENTS",
+        "segments_total": 1,
+        "segments_labeled": 0,
+        "speaker_count": 0,
+        "speaker_labels": [],
+        "speaker_clusters": {},
+        "role_mapping_supported": False,
+        "teacher_student_attribution": "UNAVAILABLE",
+        "privacy": {
+            "real_person_identity_claimed": False,
+            "raw_audio_persisted": False,
+            "voice_embedding_persisted": False,
+            "cross_lesson_voice_profile_persisted": False,
+            "source_speaker_labels_persisted": False,
+        },
+    }
+    (job_dir / "speaker_diarization.json").write_text(json.dumps(speaker_report), encoding="utf-8")
     frame = frames / "frame-001.jpg"
     frame.write_bytes(b"jpeg-data")
     frame_hash = hashlib.sha256(frame.read_bytes()).hexdigest()
@@ -111,8 +133,13 @@ def _bundle(tmp_path: Path, *, status: str = "COMPLETED") -> tuple[Path, dict]:
             "qc": "transcript_qc.json",
         },
         "frames": [{"time": 0.0, "file": frame.name, "sha256": frame_hash}],
+        "speaker_structure": {
+            "report": "speaker_diarization.json",
+            "status": "UNAVAILABLE_INSUFFICIENT_SEGMENTS",
+            "speaker_count": 0,
+            "segments_labeled": 0,
+        },
         "deferred_analysis": [
-            "speaker_structure",
             "bridge_context",
             "bridge_positions",
             "dds3_optional",
@@ -146,8 +173,28 @@ def test_conformance_pass_separates_bundle_from_domain_and_pedagogical_readiness
     assert report["processing_origin_status"] == "SELF_REPORTED_MANIFEST_BOUND"
     assert report["code_origin_verified"] is False
     assert report["evidence_phase"] == "POST_HOC_OBSERVATION"
-    assert report["artifact_count"] == 5
+    assert report["artifact_count"] == 6
     assert len(report["artifact_set_sha256"]) == 64
+
+
+def test_default_conformance_has_no_300_frame_count_cap(tmp_path: Path):
+    job_dir, manifest = _bundle(tmp_path)
+    frames_dir = job_dir / "frames"
+    for index in range(2, 302):
+        frame = frames_dir / f"frame-{index:03d}.jpg"
+        frame.write_bytes(f"jpeg-{index}".encode())
+        manifest["frames"].append(
+            {
+                "time": round(index / 4, 3),
+                "file": frame.name,
+                "sha256": hashlib.sha256(frame.read_bytes()).hexdigest(),
+            }
+        )
+    (job_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert _verify(job_dir)["artifact_count"] == 306
+    with pytest.raises(ResultConformanceError, match="keyframe count exceeds cap"):
+        _verify(job_dir, max_frames=300)
 
 
 def test_server_review_compacts_any_conformant_bundle_without_canon_promotion(tmp_path: Path):
@@ -163,14 +210,13 @@ def test_server_review_compacts_any_conformant_bundle_without_canon_promotion(tm
     )
     assert final["server_final_review_status"] == "REVIEW_REQUIRED"
     assert final["chat_handoff_mode"] == "EXCEPTIONS_ONLY"
-    assert final["artifact_count"] == 6
+    assert final["artifact_count"] == 7
     assert review["execution_location"] == "RESIDENT_SERVER_POSTPROCESS"
     assert review["handoff"]["technical_final_review_completed"] is True
     assert review["handoff"]["canonical_promotion_allowed"] is False
     assert review["handoff"]["raw_media_included"] is False
     assert review["handoff"]["full_transcript_included"] is False
     assert review["summary"]["deferred_analysis"] == [
-        "speaker_structure",
         "bridge_context",
         "bridge_positions",
         "dds3_optional",

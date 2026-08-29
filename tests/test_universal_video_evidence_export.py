@@ -116,14 +116,23 @@ def test_exact_runtime_bound_job_export_exposes_asr_and_keeps_deferred_stages_un
     }
     assert receipt["speakers"] == {
         "status": "UNAVAILABLE",
-        "reason": "SPEAKER_LABELS_MISSING",
-        "speaker_count": None,
+        "stage_status": "UNAVAILABLE_INSUFFICIENT_SEGMENTS",
+        "reason": "INSUFFICIENT_SEGMENTS",
+        "speaker_count": 0,
         "labeled_segments": 0,
         "unlabeled_segments": 1,
-        "collapse": "NOT_COMPUTABLE_WITHOUT_HUMAN_REFERENCE",
+        "collapse": "GATE_REJECTED",
         "fragmentation": "NOT_COMPUTABLE_WITHOUT_HUMAN_REFERENCE",
         "teacher_student_attribution": "UNAVAILABLE",
+        "artifacts": [
+            {
+                "locator": "speaker_diarization.json",
+                "sha256": receipt["speakers"]["artifacts"][0]["sha256"],
+                "size_bytes": receipt["speakers"]["artifacts"][0]["size_bytes"],
+            }
+        ],
     }
+    assert len(receipt["speakers"]["artifacts"][0]["sha256"]) == 64
     assert receipt["cards"]["status"] == "UNAVAILABLE"
     assert receipt["cards"]["reason"] == "BRIDGE_POSITIONS_DEFERRED"
     assert receipt["cards"]["canonical_promotion_allowed"] is False

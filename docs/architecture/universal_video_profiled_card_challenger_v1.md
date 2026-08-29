@@ -187,6 +187,12 @@ Rollback is removal of the injected challenger or revert of this change. Existin
   mentions but the archived result contains no approved pixel backend/profile
   output and its sparse frames do not expose a complete bidding table. Therefore
   no Diana 14 card or standard auction is promoted by this change alone.
+- Dense-frame r5 correction: the opt-in test contract now accepts a one-second
+  interval and result conformance no longer applies the former implicit
+  300-frame count cap. Count safety is replaced by the technical bundle byte
+  bound; every frame still requires an ordered media timestamp, a regular image
+  file and a matching SHA-256. The isolated Diana 14 repeat is pinned to a
+  three-second interval: 2,318 planned frames, not 59.
 - Rollback: revert this change or omit both the profiled challenger and the
   `auto_transcript_card_observations` opt-in. Canonical filenames and production
   routing are unchanged.

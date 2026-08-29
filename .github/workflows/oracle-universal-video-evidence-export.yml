@@ -150,17 +150,6 @@ jobs:
             case "$lifecycle" in SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break;; esac
             sleep 3
           done
-          if [[ "$lifecycle" == SUCCEEDED ]]; then
-            for _ in $(seq 1 15); do
-              has_text="$(printf '%s' "$execution" | python -c 'import json,sys; print("yes" if str((json.load(sys.stdin).get("data",{}).get("content") or {}).get("text","") or "") else "no")')"
-              [[ "$has_text" == yes ]] && break
-              sleep 2
-              execution="$(oci instance-agent command-execution get --command-id "$command_id" --instance-id "$INSTANCE_ID" --output json 2>/dev/null || true)"
-              [[ -n "$execution" ]] || continue
-              lifecycle="$(printf '%s' "$execution" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state",""))')"
-              [[ "$lifecycle" == SUCCEEDED ]] || break
-            done
-          fi
           printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("text","") or "")' > "$RUNNER_TEMP/uv-export-raw.txt"
           REMOTE_LIFECYCLE="$lifecycle" JOB_ID='${{ steps.request.outputs.job_id }}' python - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os, re
@@ -169,19 +158,12 @@ jobs:
           raw=raw_path.read_text(encoding='utf-8')
           raw_path.unlink(missing_ok=True)
           assert os.environ['REMOTE_LIFECYCLE']=='SUCCEEDED', os.environ['REMOTE_LIFECYCLE']
-          decoder=json.JSONDecoder()
-          receipts=[]
-          for index,char in enumerate(raw):
-            if char!='{':
-              continue
-            try:
-              candidate,_=decoder.raw_decode(raw,index)
-            except json.JSONDecodeError:
-              continue
-            if isinstance(candidate,dict) and candidate.get('schema')=='universal-video-evidence-export-v1':
-              receipts.append(candidate)
-          assert len(receipts)==1
-          x=receipts[0]
+          lines=[line.strip() for line in raw.splitlines()]
+          begins=[i for i,line in enumerate(lines) if line=='UV_EVIDENCE_EXPORT_BEGIN']
+          ends=[i for i,line in enumerate(lines) if line=='UV_EVIDENCE_EXPORT_END']
+          assert len(begins)==len(ends)==1
+          assert ends[0]==begins[0]+2
+          x=json.loads(lines[begins[0]+1])
           safe_path=Path(os.environ['RUNNER_TEMP'],'uv-export-safe.json')
           if x.get('state')=='INCONCLUSIVE':
             allowed={'schema','state','reason','publication_state','school_canon_changed'}
@@ -203,8 +185,8 @@ jobs:
           assert x['publication_state']=='NOT_PUBLISHED' and x['school_canon_changed'] is False
           assert x['technical']['canonical_promotion_allowed'] is False
           assert x['cards']['canonical_promotion_allowed'] is False
-          allowed={'transcript.jsonl','transcript.txt','transcript_qc.json','bridge_positions_profiled_shadow_summary.json','bridge_positions_profiled_shadow.jsonl'}
-          artifacts=list(x['asr_qc'].get('artifacts',[]))+list(x['cards'].get('artifacts',[]))
+          allowed={'transcript.jsonl','transcript.txt','transcript_qc.json','speaker_diarization.json','bridge_positions_profiled_shadow_summary.json','bridge_positions_profiled_shadow.jsonl'}
+          artifacts=list(x['asr_qc'].get('artifacts',[]))+list(x['speakers'].get('artifacts',[]))+list(x['cards'].get('artifacts',[]))
           assert all(set(a)=={'locator','sha256','size_bytes'} and a['locator'] in allowed and re.fullmatch(r'[0-9a-f]{64}',a['sha256']) for a in artifacts)
           encoded=(json.dumps(x,ensure_ascii=False,sort_keys=True,indent=2)+'\n').encode()
           assert len(encoded)<=32000

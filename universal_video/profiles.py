@@ -51,6 +51,22 @@ PROFILES: dict[str, ProcessingProfile] = {
         domain_plugin="bridge",
         description="Bridge lesson or individual bridge session.",
     ),
+    "bridge_lesson_3_1_test": ProcessingProfile(
+        "bridge_lesson_3_1_test",
+        CORE[:-1]
+        + (
+            "algorithm_manifest",
+            "keyframes",
+            "speaker_structure",
+            "bridge_context",
+            "bridge_positions",
+            "dds3_optional",
+            "educational_candidates",
+            "package",
+        ),
+        domain_plugin="bridge",
+        description="Opt-in shadow profile for the full Video Analysis 3.1-test algorithm.",
+    ),
     "bridge_lecture": ProcessingProfile(
         "bridge_lecture",
         CORE[:-1]

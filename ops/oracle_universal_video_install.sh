@@ -32,7 +32,7 @@ die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$THREADS" =~ ^[1-9][0-9]*$ ]] || die "UNIVERSAL_VIDEO_ASR_THREADS must be positive"
 [[ -d "$SOURCE_DIR/.git" ]] || die "isolated source checkout missing at $SOURCE_DIR"
 [[ -f "$SOURCE_DIR/universal_video/runner.py" ]] || die "universal video code missing"
-[[ -f "$SOURCE_DIR/requirements-universal-video.txt" ]] || die "requirements file missing"
+[[ -f "$SOURCE_DIR/requirements-universal-video-speaker.txt" ]] || die "speaker requirements file missing"
 [[ -f "$SERVICE_SRC" ]] || die "systemd unit missing"
 
 SOURCE_COMMIT="$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || true)"
@@ -141,7 +141,7 @@ else
   chown -R "$USER_NAME:$GROUP_NAME" "$BASE_DIR/.venv"
 fi
 runuser -u "$USER_NAME" -- "$BASE_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --upgrade pip >/dev/null
-runuser -u "$USER_NAME" -- "$BASE_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir -r "$SOURCE_DIR/requirements-universal-video.txt"
+runuser -u "$USER_NAME" -- "$BASE_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir -r "$SOURCE_DIR/requirements-universal-video-speaker.txt"
 
 log "Verify runtime imports"
 runuser -u "$USER_NAME" -- env PYTHONPATH="$SOURCE_DIR" PYTHONDONTWRITEBYTECODE=1 \
@@ -149,10 +149,13 @@ runuser -u "$USER_NAME" -- env PYTHONPATH="$SOURCE_DIR" PYTHONDONTWRITEBYTECODE=
 from universal_video.contract import validate_job
 from universal_video.drive_adapter import access_token
 from universal_video.profiles import PROFILES
+from universal_video.speaker_structure import run_speaker_structure
 from faster_whisper import WhisperModel
+import numpy
 assert 'transcript_only' in PROFILES
 assert 'educational' in PROFILES
 assert 'bridge_lesson' in PROFILES
+assert callable(run_speaker_structure)
 validate_job({'job_id':'install-smoke','profile':'transcript_only','source':{'kind':'local_path','path':'/opt/bridge-school/universal-video/media/test.mp4'}}, allowed_local_root='/opt/bridge-school/universal-video/media')
 print('UNIVERSAL_VIDEO_IMPORTS_PASS')
 PY
