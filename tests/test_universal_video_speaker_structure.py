@@ -94,6 +94,32 @@ def test_mapped_status_without_explicit_role_evidence_degrades_to_unmapped(monke
     assert report["teacher_student_attribution"] == "UNAVAILABLE"
 
 
+def test_test_profile_preserves_bounded_open_set_count_evidence(monkeypatch, tmp_path: Path):
+    evidence = {
+        "mode": "OPEN_SET",
+        "candidate_counts": [{"candidate_count": 1}, {"candidate_count": 2}],
+        "selected_count": 2,
+        "selection_margin": 0.4,
+        "collapse_check": "PASS",
+        "fragmentation_check": "PASS",
+        "mixing_check": "PASS",
+    }
+    _patch_diarizer(
+        monkeypatch,
+        _diarized(),
+        {
+            "revision": "bridge-sherpa-onnx-diarization-v3",
+            "status": "DIARIZED_ROLE_MAPPED",
+            "role_mapping_supported": True,
+            "speaker_count_evidence": evidence,
+        },
+    )
+    _, report = run_speaker_structure(
+        tmp_path / "lesson.mp4", _asr_rows(), tmp_path, min_label_coverage=0.8
+    )
+    assert report["speaker_count_evidence"] == evidence
+
+
 @pytest.mark.parametrize(
     ("rows", "status", "reason"),
     [

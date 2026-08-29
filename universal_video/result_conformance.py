@@ -637,6 +637,7 @@ def verify_result(
                 "label_coverage",
                 "speech_duration_coverage",
                 "minimum_label_coverage",
+                "speaker_count_evidence",
             }
         if set(speaker_report) != expected_speaker_report_fields:
             raise ResultConformanceError("invalid speaker structure report shape")
@@ -709,6 +710,21 @@ def verify_result(
                 raise ResultConformanceError("speaker label coverage mismatch")
             if abs(minimum_coverage - MIN_TEST_LABEL_COVERAGE) > 1e-12:
                 raise ResultConformanceError("speaker minimum label coverage mismatch")
+            count_evidence = speaker_report.get("speaker_count_evidence")
+            if count_evidence is not None:
+                if not isinstance(count_evidence, dict) or set(count_evidence) != {
+                    "mode", "candidate_counts", "selected_count", "selection_margin",
+                    "collapse_check", "fragmentation_check", "mixing_check",
+                }:
+                    raise ResultConformanceError("invalid speaker count evidence")
+                if count_evidence.get("mode") != "OPEN_SET":
+                    raise ResultConformanceError("speaker count evidence is not open-set")
+                if _exact_int(count_evidence.get("selected_count"), "selected speaker count") != speaker_count:
+                    raise ResultConformanceError("speaker count evidence mismatch")
+                if any(count_evidence.get(key) != "PASS" for key in (
+                    "collapse_check", "fragmentation_check", "mixing_check"
+                )):
+                    raise ResultConformanceError("speaker count evidence gate failed")
         if status in positive_speaker_statuses:
             if speaker_report.get("quality_gate") != "PASS" or speaker_report.get("reason") != "NONE":
                 raise ResultConformanceError("speaker PASS gate mismatch")
