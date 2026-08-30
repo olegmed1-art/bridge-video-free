@@ -88,7 +88,16 @@ switch_started=1
 CURRENT_STAGE='installer-activation'
 UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=1 UNIVERSAL_VIDEO_CONTAINER_BUILD=0 bash "$SOURCE_DIR/ops/oracle_universal_video_container_install.sh"
 CURRENT_STAGE='service-verification'
-systemctl is-active --quiet "$NEW_SERVICE" || fail UV_CONTAINER_PROMOTION_SERVICE_INACTIVE
+service_deadline=$((SECONDS + 30))
+service_ready=0
+while (( SECONDS < service_deadline )); do
+  if systemctl is-active --quiet "$NEW_SERVICE"; then
+    service_ready=1
+    break
+  fi
+  sleep 1
+done
+(( service_ready == 1 )) || fail UV_CONTAINER_PROMOTION_SERVICE_INACTIVE
 [[ "$(systemctl is-enabled "$NEW_SERVICE")" == enabled ]] || fail UV_CONTAINER_PROMOTION_SERVICE_DISABLED
 systemctl is-active --quiet "$OLD_SERVICE" && fail UV_CONTAINER_PROMOTION_LEGACY_ACTIVE
 process_deadline=$((SECONDS + 30))
