@@ -53,6 +53,7 @@ def verify(manifest: dict[str, object]) -> dict[str, object]:
 
     state = "START"
     object_writes = 0
+    blob_results: set[str] = set()
     branch_writes = 0
     draft_pr_writes = 0
     main_reads = 0
@@ -72,7 +73,14 @@ def verify(manifest: dict[str, object]) -> dict[str, object]:
 
         if method == "GET" and path == MAIN_REF_PATH:
             main_reads += 1
-            state = "BASE_PREFLIGHT" if main_reads == 1 else "BASE_RECONFIRMED"
+            if main_reads == 1 and state == "START":
+                state = "BASE_PREFLIGHT"
+            elif main_reads == 2 and state == "COMMIT_BUILT":
+                state = "BASE_RECONFIRMED"
+            else:
+                raise SystemExit("PHASE3B_MODEL_MAIN_READ_ORDER")
+            if operation.get("expect_sha") != "a" * 40:
+                raise SystemExit("PHASE3B_MODEL_MAIN_READ_UNPINNED")
             continue
 
         if method == "GET" and path == f"{REPOSITORY_PATH}/git/commits/{'a' * 40}":
@@ -81,21 +89,67 @@ def verify(manifest: dict[str, object]) -> dict[str, object]:
             continue
 
         if method == "GET" and "/contents/" in path:
-            if state not in {"BASE_PREFLIGHT", "OBJECTS_BUILT"}:
+            if state != "BASE_PREFLIGHT":
                 raise SystemExit("PHASE3B_MODEL_FILE_PREFLIGHT_ORDER")
             if operation.get("ref") != "a" * 40:
                 raise SystemExit("PHASE3B_MODEL_FILE_PREFLIGHT_UNPINNED")
+            if operation.get("expect_absent") is not True:
+                raise SystemExit("PHASE3B_MODEL_CREATE_ABSENCE_UNBOUND")
+            if "expect_blob_sha" in operation:
+                raise SystemExit("PHASE3B_MODEL_CREATE_PRECONDITION_AMBIGUOUS")
             continue
 
-        if method == "POST" and path in {
-            f"{REPOSITORY_PATH}/git/blobs",
-            f"{REPOSITORY_PATH}/git/trees",
-            f"{REPOSITORY_PATH}/git/commits",
-        }:
-            if state not in {"BASE_PREFLIGHT", "OBJECTS_BUILT"}:
-                raise SystemExit("PHASE3B_MODEL_OBJECT_ORDER")
+        if method == "POST" and path == f"{REPOSITORY_PATH}/git/blobs":
+            if state not in {"BASE_PREFLIGHT", "BLOBS_BUILT"}:
+                raise SystemExit("PHASE3B_MODEL_BLOB_ORDER")
+            index = len(blob_results)
+            result_key = operation.get("result_key")
+            if (
+                result_key != f"blob_{index}_sha"
+                or operation.get("content_source")
+                != f"request.changes[{index}].content_utf8"
+                or not isinstance(operation.get("content_sha256"), str)
+                or len(str(operation.get("content_sha256"))) != 64
+            ):
+                raise SystemExit("PHASE3B_MODEL_BLOB_BINDING_INVALID")
+            blob_results.add(str(result_key))
             object_writes += 1
-            state = "OBJECTS_BUILT"
+            state = "BLOBS_BUILT"
+            continue
+
+        if method == "POST" and path == f"{REPOSITORY_PATH}/git/trees":
+            entries = operation.get("entries")
+            if (
+                state != "BLOBS_BUILT"
+                or operation.get("base_tree_source")
+                != "base_tree_lookup.tree.sha"
+                or operation.get("result_key") != "tree_sha"
+                or not isinstance(entries, list)
+                or len(entries) != len(blob_results)
+            ):
+                raise SystemExit("PHASE3B_MODEL_TREE_BINDING_INVALID")
+            for index, entry in enumerate(entries):
+                if (
+                    not isinstance(entry, dict)
+                    or entry.get("mode") != "100644"
+                    or entry.get("type") != "blob"
+                    or entry.get("sha_source") != f"blob_{index}_sha"
+                ):
+                    raise SystemExit("PHASE3B_MODEL_TREE_ENTRY_INVALID")
+            object_writes += 1
+            state = "TREE_BUILT"
+            continue
+
+        if method == "POST" and path == f"{REPOSITORY_PATH}/git/commits":
+            if (
+                state != "TREE_BUILT"
+                or operation.get("tree_sha_source") != "tree_sha"
+                or operation.get("parent_sha") != "a" * 40
+                or operation.get("result_key") != "commit_sha"
+            ):
+                raise SystemExit("PHASE3B_MODEL_COMMIT_BINDING_INVALID")
+            object_writes += 1
+            state = "COMMIT_BUILT"
             continue
 
         if method == "POST" and path == f"{REPOSITORY_PATH}/git/refs":
@@ -106,6 +160,8 @@ def verify(manifest: dict[str, object]) -> dict[str, object]:
                 "refs/heads/autopilot/repair/"
             ):
                 raise SystemExit("PHASE3B_MODEL_REF_NAMESPACE_INVALID")
+            if operation.get("sha_source") != "commit_sha":
+                raise SystemExit("PHASE3B_MODEL_REF_TARGET_UNBOUND")
             branch_writes += 1
             state = "BRANCH_CREATED"
             continue
@@ -130,7 +186,8 @@ def verify(manifest: dict[str, object]) -> dict[str, object]:
     if (
         state != "DRAFT_PR_CREATED"
         or main_reads != 2
-        or object_writes < 3
+        or object_writes != 3
+        or blob_results != {"blob_0_sha"}
         or branch_writes != 1
         or draft_pr_writes != 1
     ):
