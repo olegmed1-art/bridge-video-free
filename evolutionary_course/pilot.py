@@ -128,9 +128,17 @@ def run_longitudinal_pilot(
         "SKILL_WORDING_NOT_REVIEWED" in item.get("reason_codes", [])
         for item in adapted["rejected_interactions"]
     )
+    has_accepted_episode = adapted["accepted_episode_count"] > 0
+    needs_evidence_review = not (needs_methodology or has_accepted_episode)
+    if needs_methodology:
+        status = "METHODOLOGY_REVIEW_REQUIRED"
+    elif needs_evidence_review:
+        status = "EVIDENCE_REVIEW_REQUIRED"
+    else:
+        status = "READY_FOR_PRIVATE_REVIEW"
     return {
         **base,
-        "status": "METHODOLOGY_REVIEW_REQUIRED" if needs_methodology else "READY_FOR_PRIVATE_REVIEW",
+        "status": status,
         "blockers": [],
         "adapter_report": adapted,
     }
