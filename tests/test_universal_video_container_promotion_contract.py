@@ -12,6 +12,9 @@ def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
     assert "group: oracle-instance-workload-mutation" in WORKFLOW
     assert "rollback" in SCRIPT
     assert "UV_CONTAINER_PROMOTION_ROLLED_BACK" in SCRIPT
+    assert "stage=%s rc=%s" in SCRIPT
+    for stage in ("installer-activation", "service-verification", "resident-status", "protected-postflight"):
+        assert f"CURRENT_STAGE='{stage}'" in SCRIPT
     assert "UV_CONTAINER_PROMOTION_JOB_RUNNING" in SCRIPT
     assert "UNIVERSAL_VIDEO_CONTAINER_BUILD=0" in SCRIPT
     assert "contents/ops/oracle_universal_video_container_promote.sh?ref=$EXPECTED_COMMIT" in WORKFLOW
