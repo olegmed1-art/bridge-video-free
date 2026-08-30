@@ -1,0 +1,72 @@
+name: Oracle Autopilot Lite shadow CI
+
+on:
+  pull_request:
+    paths:
+      - 'oracle_autopilot/**'
+      - 'deploy/oracle-autopilot/**'
+      - 'ops/oracle_autopilot_shadow_install.sh'
+      - 'tests/test_oracle_autopilot_*.py'
+      - 'database/migrations/0300_autopilot_oracle_shadow.sql'
+      - 'database/tests/300_autopilot_oracle_shadow.sql'
+      - '.github/workflows/oracle-autopilot-shadow-ci.yml'
+      - 'docs/architecture/SCHOOL_AUTOPILOT_CONTROLLER_V1.md'
+      - 'ops/autopilot/project-state.json'
+  push:
+    branches: [main]
+    paths:
+      - 'oracle_autopilot/**'
+      - 'deploy/oracle-autopilot/**'
+      - 'ops/oracle_autopilot_shadow_install.sh'
+      - 'tests/test_oracle_autopilot_*.py'
+      - 'database/migrations/0300_autopilot_oracle_shadow.sql'
+      - 'database/tests/300_autopilot_oracle_shadow.sql'
+      - '.github/workflows/oracle-autopilot-shadow-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  oracle-shadow-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install bounded test dependencies
+        run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4' 'pytest==8.4.2'
+
+      - name: Compile and run Oracle shadow contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile oracle_autopilot/*.py tests/test_oracle_autopilot_*.py
+          python -m pytest -q tests/test_oracle_autopilot_*.py
+
+      - name: Verify staged install and systemd hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/oracle_autopilot_shadow_install.sh
+          systemd-analyze verify deploy/oracle-autopilot/school-autopilot-shadow.service
+          grep -F 'AUTOPILOT_ACTIVATE:-0' ops/oracle_autopilot_shadow_install.sh >/dev/null
+          grep -F 'AUTOPILOT_ACTIVATION_SCOPE=SHADOW_ONLY' ops/oracle_autopilot_shadow_install.sh >/dev/null
+          grep -F 'Environment=AUTOPILOT_RUNTIME_MODE=SHADOW' deploy/oracle-autopilot/school-autopilot-shadow.service >/dev/null
+          grep -F 'Restart=always' deploy/oracle-autopilot/school-autopilot-shadow.service >/dev/null
+
+      - name: Reject arbitrary execution and production enablement
+        shell: bash
+        run: |
+          set -euo pipefail
+          ! grep -R --line-number -E 'subprocess|os\.system|shell=True|OPENAI_API_KEY|GITHUB_APP_PRIVATE_KEY|OCI_CLI_' \
+            oracle_autopilot deploy/oracle-autopilot ops/oracle_autopilot_shadow_install.sh
+          ! grep -R --line-number -E 'AUTOPILOT_RUNTIME_MODE=(PRODUCTION|ACTIVE)|production_mutations_enabled.*[Tt]rue' \
+            oracle_autopilot deploy/oracle-autopilot ops/oracle_autopilot_shadow_install.sh

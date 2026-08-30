@@ -1,19 +1,21 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "project_id": "SCHOOL-AUTOPILOT-CONTROLLER-V1",
   "title": "School Autopilot Controller v1",
-  "decision": "BUILD_VARIANT_2",
-  "status": "APPROVED_DESIGN_NOT_ACTIVATED",
+  "decision": "BUILD_ORACLE_AUTOPILOT_LITE_SHADOW",
+  "status": "SHADOW_CODE_AND_TEMP_NEON_VERIFIED_NOT_ACTIVATED",
   "governance_mode": "ASSURED",
   "work_class": "STRATEGIC",
   "urgency": "HIGH",
   "strategic_rank": "S1",
-  "approved_at": "2026-08-28",
+  "approved_at": "2026-08-30",
   "tracker": "https://github.com/olegmed1-art/bridge-video-free/issues/782",
   "architecture": "docs/architecture/SCHOOL_AUTOPILOT_CONTROLLER_V1.md",
   "target_capability": "Continue bounded technical tasks through external waits without repeated director continuation commands.",
   "stack": {
-    "orchestrator": "Vercel Workflows",
+    "orchestrator": "Oracle resident systemd worker",
+    "optional_public_ingress": "Vercel API",
+    "optional_fallback_adapter": "Vercel Workflows compatibility spike",
     "canonical_state": "Neon Postgres",
     "code_ci_evidence": "GitHub",
     "heavy_compute": "Oracle Frankfurt",
@@ -22,16 +24,17 @@
   },
   "deployment": {
     "vercel_team_plan": "pro_existing",
-    "target_project": "separate_project_same_team",
-    "target_root_directory": "autopilot_service/",
+    "target_project": "existing_oracle_frankfurt_vm",
+    "target_root_directory": "oracle_autopilot/",
+    "target_service": "school-autopilot-shadow.service",
     "production_activated": false,
     "shadow_only": true
   },
   "phase": {
-    "current": "PHASE_0_DESIGN",
+    "current": "PHASE_1_ORACLE_SHADOW_VERIFIED",
     "ordered": [
       "PHASE_0_DESIGN",
-      "PHASE_1_SHADOW",
+      "PHASE_1_ORACLE_SHADOW_BUILD",
       "PHASE_2_BOUNDED_WRITE",
       "PHASE_3_CONTROLLED_PRODUCTION",
       "PHASE_4_SCALE"
@@ -64,11 +67,13 @@
     "increase_requires_director": true
   },
   "promotion_blocks": [
-    "main_branch_protection_not_proven",
-    "python_vercel_workflows_compatibility_not_proven",
-    "autopilot_schema_not_tested_on_temporary_neon_branch",
-    "shadow_wait_resume_dedupe_not_proven",
-    "independent_assurance_i2_not_proven"
+    "main_branch_unprotected",
+    "oracle_shadow_runtime_not_staged",
+    "dedicated_runtime_login_not_provisioned",
+    "actual_oracle_dispatch_latency_not_measured",
+    "continuous_neon_compute_cost_mode_not_approved",
+    "production_canary_881_not_proven",
+    "oracle_idle_stop_guard_627_not_closed"
   ],
   "safety_invariants": [
     "no_arbitrary_shell",
@@ -99,11 +104,32 @@
       "production_mutation": false
     }
   ],
+  "verification": {
+    "verified_at": "2026-08-30",
+    "temporary_neon_branch_id": "br-still-tooth-b1ilkfcj",
+    "temporary_neon_branch_name": "autopilot-shadow-final-20260830",
+    "production_neon_changed": false,
+    "migration_0300_clean_apply": "PASS",
+    "postgresql_18_state_machine_test": "PASS",
+    "python_contract_tests": "14_PASS",
+    "bounded_state_model_checker_i2": "PASS",
+    "external_postgresql_18_contour_i3": "PASS",
+    "terminal_outcomes_proven": {
+      "DONE": 3,
+      "OWNER_REQUIRED": 1,
+      "BUDGET_STOP": 1,
+      "FAILED_CLOSED": 1
+    },
+    "retained_evidence_rows": 4,
+    "unfinished_step_attempts": 0,
+    "production_runtime_activated": false
+  },
   "next_actions": [
-    "merge_phase_0_design_after_checks",
-    "reserve_and_enforce_database_namespace_0300_0399",
-    "run_python_vercel_workflows_compatibility_spike",
-    "prepare_autopilot_schema_on_temporary_neon_branch",
-    "implement_shadow_pilots"
+    "open_draft_pr_and_run_required_ci",
+    "obtain_independent_pr_review_before_merge",
+    "provision_dedicated_runtime_login_outside_git_after_review",
+    "stage_oracle_service_without_activation",
+    "measure_real_oracle_notification_and_recovery_latency",
+    "keep_runtime_disabled_until_canary_881_and_idle_guard_627_are_proven"
   ]
 }
