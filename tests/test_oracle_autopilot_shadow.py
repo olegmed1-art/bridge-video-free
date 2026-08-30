@@ -160,7 +160,8 @@ def test_staging_installs_an_immutable_isolated_source_release():
     assert 'AUTOPILOT_SOURCE_REVISION must be a pinned commit' in installer
     assert 'AUTOPILOT_SOURCE_REVISION\")" == "$SOURCE_REVISION"' in installer
     assert 'RELEASE_DIR="$RELEASES_DIR/$SOURCE_REVISION"' in installer
-    assert 'chown -R root:root "$AUTOPILOT_DIR/.venv"' in installer
+    assert 'chown -R root:"$AUTOPILOT_GROUP" "$AUTOPILOT_DIR/.venv"' in installer
+    assert 'chmod -R g+rX,o-rwx "$AUTOPILOT_DIR/.venv"' in installer
     assert 'staging refuses to replace an active service' in installer
     assert 'staging refuses to retain an enabled service' in installer
     assert 'activated=0 inactive=1 disabled=1' in installer
