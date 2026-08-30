@@ -110,3 +110,28 @@ def test_bounded_storage_inventory_has_fixed_non_secret_areas() -> None:
         "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=media used_kb=1048576",
         "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=var-log used_kb=2048",
     ]
+
+
+def test_container_cleanup_is_limited_to_stale_regular_root_cache_files() -> None:
+    installer = (ROOT / "ops/oracle_universal_video_container_install.sh").read_text(encoding="utf-8")
+
+    assert 'root_cache=/root/.cache' in installer
+    assert '[[ -d "$root_cache" && ! -L "$root_cache" ]]' in installer
+    assert 'find "$root_cache" -xdev -type f -mtime +14 -delete' in installer
+    assert 'find "$root_cache" -xdev -depth -type d -empty -delete' in installer
+    assert "rm -rf /root/.cache" not in installer
+
+
+def test_bounded_parser_reports_stale_cache_cleanup_only() -> None:
+    path = ROOT / "ops/bounded_container_log_diagnostic.py"
+    spec = importlib.util.spec_from_file_location("bounded_container_cleanup", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.bounded_diagnostics(
+        [
+            "UNIVERSAL_VIDEO_CONTAINER_CLEANUP area=root-cache age_days=14 files=8 freed_kb=1024",
+            "UNIVERSAL_VIDEO_CONTAINER_CLEANUP area=secrets age_days=0 files=1 freed_kb=1",
+        ]
+    ) == ["UNIVERSAL_VIDEO_CONTAINER_CLEANUP area=root-cache age_days=14 files=8 freed_kb=1024"]
