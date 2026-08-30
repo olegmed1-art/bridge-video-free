@@ -57,6 +57,15 @@ def test_job_payload_binds_request_and_requested_runtime_for_resident_attestatio
     assert "requested_runtime_commit is required for resident attestation" in WORKFLOW
 
 
+def test_existing_job_resumes_by_exact_id_instead_of_duplicate_submission():
+    assert "UV_ERROR=job id already exists; use status or a new id" in WORKFLOW
+    assert "PRE_SUBMIT_ERROR_CODE=UV_EXISTING_JOB_RESUMED" in WORKFLOW
+    assert "PRE_SUBMIT_ERROR_CODE=UV_RESUME_STATUS_COMMAND_FAILED" in WORKFLOW
+    assert "entry='RESUMED'" in WORKFLOW
+    assert 'initial="$(run_remote "$status_cmd")"' in WORKFLOW
+    assert "SOURCE_READY_ON_ORACLE|RUNNING|PROCESSING" in WORKFLOW
+
+
 def test_operator_and_admin_sudoers_ownership_cannot_collide():
     assert "readonly SUDOERS='/etc/sudoers.d/universal-video-operator-ocarun'" in OPERATOR_INSTALL
     assert "readonly SUDOERS='/etc/sudoers.d/universal-video-admin-ocarun'" in ADMIN_INSTALL
