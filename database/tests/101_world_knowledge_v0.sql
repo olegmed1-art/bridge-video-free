@@ -24,6 +24,10 @@ BEGIN
  INSERT INTO bidding.world_canon_gap_binding(knowledge_gap_id,school_id,request_fingerprint,system_profile_key,
   system_version,learner_level,auction_context_id,effective_at,profile_fingerprint)
  VALUES(old_gap,s,'old-request','natural','v1','L1','auction-1',now(),repeat('e',64));
+ failed:=false; BEGIN
+  UPDATE public.knowledge_gap SET school_id=gen_random_uuid() WHERE knowledge_gap_id=old_gap;
+ EXCEPTION WHEN check_violation OR foreign_key_violation THEN failed:=true; END;
+ IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_BOUND_GAP_SCHOOL_MUTATION_ACCEPTED'; END IF;
  INSERT INTO public.knowledge_item(school_id,stable_key,knowledge_type,title,status)
  VALUES(s,'ci-world-0201','bidding_rule','CI WORLD 0201','active') RETURNING knowledge_item_id INTO oi;
  INSERT INTO public.knowledge_version(knowledge_item_id,version_no,content,authority_class,review_status,
@@ -135,6 +139,14 @@ BEGIN
   '{"calls":[]}','{}','{"bid":"2H"}','{"bid":"2H"}','high',
   jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest('{"bid":"2H"}'::jsonb::text,'sha256'),'hex'))));
 
+ -- Ordinary convention prose is not mistaken for a holding.
+ INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
+  public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
+ VALUES(s,config,'ROBOT_LIVE_DECISION','N',
+  '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+  '{"calls":[]}','{}','{"meaning":"Stayman standard"}','{"meaning":"Stayman standard"}','high',
+  jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest('{"meaning":"Stayman standard"}'::jsonb::text,'sha256'),'hex'))));
+
  bad_raw:='{"deal":{"N":[]}}';
  bad_trace:=jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
  failed:=false; v_constraint:=NULL; BEGIN
@@ -234,6 +246,17 @@ BEGIN
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_SEPARATED_GROUPED_HOLDING_ACCEPTED'; END IF;
 
+ bad_raw:='{"explanation":"AKQ.JT9.876.5432"}';
+ bad_trace:=jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
+ failed:=false; BEGIN
+  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
+   public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
+  VALUES(s,config,'ROBOT_LIVE_DECISION','N',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"calls":[]}','{}',bad_raw,'{"bid":"1S"}','high',bad_trace);
+ EXCEPTION WHEN check_violation THEN failed:=true; END;
+ IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_COMPACT_SUIT_ORDER_HOLDING_ACCEPTED'; END IF;
+
  failed:=false; BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
@@ -242,6 +265,15 @@ BEGIN
    '{"calls":[]}','{}',raw,'{"bid":"1S"}','high',trace);
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_NESTED_ACTING_SHAPE_ACCEPTED'; END IF;
+
+ failed:=false; BEGIN
+  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
+   public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
+  VALUES(s,config,'ROBOT_LIVE_DECISION','N',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"shape":[4,3,3,3]}',
+   '{"calls":[]}','{}',raw,'{"bid":"1S"}','high',trace);
+ EXCEPTION WHEN check_violation THEN failed:=true; END;
+ IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_CONTRADICTORY_ACTING_SHAPE_ACCEPTED'; END IF;
 
  failed:=false; BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,

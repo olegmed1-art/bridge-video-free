@@ -42,15 +42,13 @@ SELECT EXISTS (SELECT 1 FROM walk WHERE jsonb_typeof(value)='string'
    value #>> '{}' ~* '(^|[^a-z0-9])(10|[2-9tjqka])([cdhs]|♣|♦|♥|♠)([^a-z0-9]|$)'
    OR value #>> '{}' ~* '([♣♦♥♠](10|[2-9tjqka]){1,13}|(10|[2-9tjqka]){1,13}[♣♦♥♠])'
    OR value #>> '{}' ~* '(^|[^a-z0-9])([cdhs](10|[2-9tjqka]){2,13}|(10|[2-9tjqka]){2,13}[cdhs])([^a-z0-9]|$)'
+   OR value #>> '{}' ~* '(^|[^a-z0-9])(([cdhs]|♣|♦|♥|♠)[[:space:]:-]*(10|[2-9tjqka]){2,13}|(10|[2-9tjqka]){2,13}[[:space:]:-]*([cdhs]|♣|♦|♥|♠))([^a-z0-9]|$)'
    OR regexp_replace(
         regexp_replace(translate(value #>> '{}','♣♦♥♠','CDHS'),'10','T','gi'),
         '[^a-z0-9]','','gi')
       ~* '^([2-9TJQKA][CDHS])+$'
-   OR regexp_replace(
-        regexp_replace(translate(value #>> '{}','♣♦♥♠','CDHS'),'10','T','gi'),
-        '[^a-z0-9]','','gi')
-      ~* '([CDHS][2-9TJQKA]{2,13}|[2-9TJQKA]{2,13}[CDHS])'
- ));
+   OR value #>> '{}' ~* '(^|[^a-z0-9])([2-9tjqka]{0,13}\.){3}[2-9tjqka]{0,13}([^a-z0-9]|$)'
+));
 $$;
 
 CREATE OR REPLACE FUNCTION bidding.valid_acting_hand(payload jsonb)
@@ -71,6 +69,13 @@ SELECT jsonb_typeof(payload)='object'
           AND sum(CASE WHEN jsonb_typeof(value)='number' AND value #>> '{}' ~ '^(0|[1-9]|1[0-3])$'
                        THEN (value #>> '{}')::integer ELSE 100 END)=13
         FROM jsonb_array_elements(payload->'shape'))
+   AND NOT EXISTS (
+     SELECT 1
+       FROM jsonb_array_elements(payload->'shape') WITH ORDINALITY shape(value,ord)
+      WHERE (value #>> '{}')::integer IS DISTINCT FROM
+        (SELECT count(*) FROM jsonb_array_elements_text(payload->'cards') card(value)
+          WHERE right(card.value,1)=((ARRAY['C','D','H','S'])[shape.ord]))
+   )
  ));
 $$;
 
@@ -130,6 +135,17 @@ CREATE TRIGGER world_canon_gap_binding_guard BEFORE INSERT ON bidding.world_cano
 FOR EACH ROW EXECUTE FUNCTION bidding.validate_world_canon_gap_binding();
 CREATE TRIGGER world_canon_gap_binding_append_only BEFORE UPDATE OR DELETE ON bidding.world_canon_gap_binding
 FOR EACH ROW EXECUTE FUNCTION bidding.reject_append_only_mutation();
+CREATE OR REPLACE FUNCTION bidding.preserve_bound_knowledge_gap_identity()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF EXISTS(SELECT 1 FROM bidding.world_canon_gap_binding b WHERE b.knowledge_gap_id=OLD.knowledge_gap_id)
+    AND (NEW.knowledge_gap_id IS DISTINCT FROM OLD.knowledge_gap_id OR NEW.school_id IS DISTINCT FROM OLD.school_id)
+ THEN RAISE EXCEPTION 'BID_WORLD_BOUND_GAP_IDENTITY_IMMUTABLE' USING ERRCODE='23514'; END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER world_bound_knowledge_gap_identity_guard
+BEFORE UPDATE OF knowledge_gap_id,school_id ON public.knowledge_gap
+FOR EACH ROW EXECUTE FUNCTION bidding.preserve_bound_knowledge_gap_identity();
 
 CREATE TABLE bidding.world_robot (
  world_robot_id uuid PRIMARY KEY DEFAULT uuidv7(), robot_key text NOT NULL UNIQUE CHECK(btrim(robot_key)<>''),
@@ -273,6 +289,7 @@ GRANT EXECUTE ON FUNCTION bidding.contains_forbidden_hidden_key(jsonb) TO bridge
 GRANT EXECUTE ON FUNCTION bidding.contains_nonpublic_card_material(jsonb),bidding.contains_card_token(jsonb),
  bidding.valid_acting_hand(jsonb),bidding.valid_public_robot_payload(text,jsonb) TO bridge_school_worker;
 REVOKE ALL ON FUNCTION bidding.validate_world_canon_gap_binding() FROM PUBLIC,bridge_school_reader,bridge_school_app,bridge_school_worker;
+REVOKE ALL ON FUNCTION bidding.preserve_bound_knowledge_gap_identity() FROM PUBLIC,bridge_school_reader,bridge_school_app,bridge_school_worker;
 REVOKE ALL ON FUNCTION bidding.validate_world_resolution_trace() FROM PUBLIC,bridge_school_reader,bridge_school_app,bridge_school_worker;
 REVOKE ALL ON FUNCTION bidding.validate_world_robot_decision() FROM PUBLIC,bridge_school_reader,bridge_school_app,bridge_school_worker;
 INSERT INTO public.schema_migration(migration_key) VALUES('0201_world_knowledge_v0') ON CONFLICT DO NOTHING;

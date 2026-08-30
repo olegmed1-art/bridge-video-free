@@ -110,6 +110,16 @@ def _profile_fingerprint(profile: ResolutionProfile) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def _request_fingerprint(*, acting_seat: str, acting_hand: dict[str, Any],
+                         public_auction: dict[str, Any], public_context: dict[str, Any]) -> str:
+    raw = json.dumps(
+        {"acting_seat": acting_seat, "acting_hand": acting_hand,
+         "public_auction": public_auction, "public_context": public_context},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
 class PostgresCanonGapStore:
     """Trusted boundary: commit on one connection, verify on a fresh connection."""
     def __init_subclass__(cls, **kwargs):
@@ -173,11 +183,17 @@ class PostgresCanonGapStore:
         return CanonGapReceipt(str(row[0]), str(row[1]), row[2], row[3], row[4])
 
 
-def resolve_two_lane(*, school_id: str, request_fingerprint: str, profile: ResolutionProfile,
+def resolve_two_lane(*, school_id: str, acting_seat: str, acting_hand: dict[str, Any],
+                     public_auction: dict[str, Any], public_context: dict[str, Any],
+                     profile: ResolutionProfile,
                      canon_rules: Iterable[KnowledgeRule],
                      gap_store: PostgresCanonGapStore,
                      world_supplier: Callable[[CanonGapReceipt, ResolutionProfile], Iterable[KnowledgeRule]]) -> Resolution:
     """Resolve Canon first; commit its gap before invoking a lazy WORLD supplier."""
+    request_fingerprint = _request_fingerprint(
+        acting_seat=acting_seat, acting_hand=acting_hand,
+        public_auction=public_auction, public_context=public_context,
+    )
     canon = _rank((r for r in canon_rules if r.authority_class == "school_canon"), profile)
     canon_winner, canon_conflict = _winner_or_conflict(canon)
     trace: dict[str, Any] = {"canon_stage": "searched", "canon_rule_ids": [r.rule_id for r in canon],
