@@ -18,6 +18,13 @@ from .skill_catalog import (
     resolve_reviewed_skill,
     validate_catalog,
 )
+from .methodology_queue import (
+    DECISION_SCHEMA,
+    QUEUE_SCHEMA,
+    MethodologyQueueError,
+    build_methodology_review_queue,
+    record_methodology_decision,
+)
 from .video31_adapter import (
     ADAPTER_SCHEMA,
     CATALOG_ADAPTER_SCHEMA,
@@ -42,6 +49,7 @@ __all__ = [
     "CATALOG_SCHEMA",
     "CATALOG_VERSION",
     "COURSE_VERSION",
+    "DECISION_SCHEMA",
     "EPISTEMIC_CLASSES",
     "EpisodeContractError",
     "SCHEMA",
@@ -52,10 +60,14 @@ __all__ = [
     "MASTERY_POLICY_SCHEMA",
     "MASTERY_REPORT_SCHEMA",
     "MasteryEvidenceError",
+    "MethodologyQueueError",
+    "QUEUE_SCHEMA",
     "adapt_video31_quality",
     "adapt_video31_quality_with_catalog",
+    "build_methodology_review_queue",
     "build_skill_trajectory",
     "canonical_sha256",
+    "record_methodology_decision",
     "resolve_reviewed_skill",
     "validate_catalog",
     "validate_episode",

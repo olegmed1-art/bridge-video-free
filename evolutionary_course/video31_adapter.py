@@ -219,6 +219,14 @@ def adapt_video31_quality(
                 rejected.append({
                     "interaction_id": interaction_id or None,
                     "reason_codes": ["SKILL_WORDING_NOT_REVIEWED"],
+                    "review_candidate": {
+                        "task_wording": task,
+                        "video_file_id": file_id,
+                        "source_name": source_name,
+                        "start_seconds": start,
+                        "end_seconds": end,
+                        "transcript_segment_ids": evidence_refs,
+                    },
                 })
                 continue
             prerequisites = list(catalog_skills[skill_id]["prerequisite_skill_ids"])
