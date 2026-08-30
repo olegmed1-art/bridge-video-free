@@ -96,3 +96,10 @@ def test_promotion_waits_boundedly_for_systemd_service_before_process_probe() ->
     assert "while (( SECONDS < service_deadline ))" in SCRIPT
     assert "(( service_ready == 1 )) || fail UV_CONTAINER_PROMOTION_SERVICE_INACTIVE" in SCRIPT
     assert SCRIPT.index("service_deadline=") < SCRIPT.index("process_deadline=")
+
+
+def test_post_switch_failures_invoke_rollback_directly() -> None:
+    fail_body = SCRIPT[SCRIPT.index("fail(){"):SCRIPT.index("has_running_job(){")]
+    assert "if (( switch_started == 1 )); then" in fail_body
+    assert "rollback 1" in fail_body
+    assert 'local rc="${1:-$?}"' in SCRIPT
