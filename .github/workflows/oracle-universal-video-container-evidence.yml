@@ -5,6 +5,13 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/oracle-universal-video-container-evidence.yml'
+      - 'deploy/oracle-universal-video/Dockerfile'
+      - 'deploy/oracle-universal-video/universal-video-container-entrypoint.sh'
+      - 'deploy/oracle-universal-video/universal-video-container.service'
+      - 'ops/oracle_universal_video_container_install.sh'
+      - 'requirements-universal-video.txt'
+      - 'requirements-universal-video-speaker.txt'
+      - 'universal_video/container_runtime.py'
   workflow_dispatch:
     inputs:
       git_ref:
