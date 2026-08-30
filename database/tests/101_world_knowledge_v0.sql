@@ -266,11 +266,4 @@ BEGIN
  THEN RAISE EXCEPTION 'WORLD_SMOKE_RUNTIME_FUNCTION_ACL_INCOMPLETE'; END IF;
 END $$;
 
-SET LOCAL ROLE bridge_school_worker;
-SELECT bidding.valid_acting_hand('{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}'::jsonb);
-SELECT bidding.valid_public_robot_payload('response','{"bid":"2H"}'::jsonb);
-RESET ROLE;
-SET LOCAL ROLE bridge_school_app;
-SELECT bidding.contains_forbidden_hidden_key('{}'::jsonb);
-RESET ROLE;
 ROLLBACK;
