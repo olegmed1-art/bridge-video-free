@@ -91,7 +91,17 @@ CURRENT_STAGE='service-verification'
 systemctl is-active --quiet "$NEW_SERVICE" || fail UV_CONTAINER_PROMOTION_SERVICE_INACTIVE
 [[ "$(systemctl is-enabled "$NEW_SERVICE")" == enabled ]] || fail UV_CONTAINER_PROMOTION_SERVICE_DISABLED
 systemctl is-active --quiet "$OLD_SERVICE" && fail UV_CONTAINER_PROMOTION_LEGACY_ACTIVE
-[[ "$(docker inspect --format '{{.State.Running}}' universal-video-container)" == true ]] || fail UV_CONTAINER_PROMOTION_PROCESS_INACTIVE
+process_deadline=$((SECONDS + 30))
+process_ready=0
+while (( SECONDS < process_deadline )); do
+  if [[ "$(docker inspect --format '{{.State.Running}}' universal-video-container 2>/dev/null || true)" == true ]]; then
+    process_ready=1
+    break
+  fi
+  systemctl is-active --quiet "$NEW_SERVICE" || break
+  sleep 1
+done
+(( process_ready == 1 )) || fail UV_CONTAINER_PROMOTION_PROCESS_INACTIVE
 [[ "$(docker inspect --format '{{.Image}}' universal-video-container)" == "$EXPECTED_DIGEST" ]] || fail UV_CONTAINER_PROMOTION_RUNNING_IMAGE_MISMATCH
 
 CURRENT_STAGE='resident-status'
