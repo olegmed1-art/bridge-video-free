@@ -54,7 +54,7 @@ def test_promotion_requires_a_fresh_status_from_the_new_resident() -> None:
 
 
 def test_promotion_exposes_only_structured_container_runtime_failure_code() -> None:
-    assert 'journalctl -u "$NEW_SERVICE" -n 80 --no-pager -o cat' in SCRIPT
+    assert 'journalctl -u "$NEW_SERVICE" --since "$since" --no-pager -o cat' in SCRIPT
     assert 'set(value)=={"error_code","status"}' in SCRIPT
     assert 're.fullmatch(r"UV_CONTAINER_[A-Z0-9_]+"' in SCRIPT
     assert 'json.dumps(value,separators=(",",":"),sort_keys=True)' in SCRIPT
