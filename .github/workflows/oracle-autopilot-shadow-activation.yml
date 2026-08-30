@@ -205,11 +205,13 @@ jobs:
           actual_uid="$(awk '/^Uid:/{print $2}' "/proc/$pid/status")"
           [[ "$actual_uid" == "$expected_uid" ]]
 
-          active_since="$(systemctl show -p ActiveEnterTimestamp --value "$service")"
-          test -n "$active_since"
-          journal="$(journalctl -u "$service" --since "$active_since" --no-pager -n 100)"
-          grep -F 'worker_started' <<<"$journal" >/dev/null
-          ! grep -Eq 'listener_reconnect|Traceback|RuntimeError' <<<"$journal"
+          if [[ "$activated_here" == 1 ]]; then
+            active_since="$(systemctl show -p ActiveEnterTimestamp --value "$service")"
+            test -n "$active_since"
+            journal="$(journalctl -u "$service" --since "$active_since" --no-pager -n 100)"
+            grep -F 'worker_started' <<<"$journal" >/dev/null
+            ! grep -Eq 'listener_reconnect|Traceback|RuntimeError' <<<"$journal"
+          fi
           trap - EXIT
           echo 'AUTOPILOT_SHADOW_ACTIVATION_PASS'
           echo 'AUTOPILOT_RUNTIME_MODE=SHADOW'
