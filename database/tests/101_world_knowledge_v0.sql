@@ -110,9 +110,9 @@ BEGIN
  VALUES(robot,repeat('c',64),'{"system":"natural"}','{"temperature":0}') RETURNING world_robot_configuration_id INTO config;
  request_hash:=encode(digest(jsonb_build_object(
   'acting_seat','N',
-  'acting_hand','{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10,"shape":[13,0,0,0]}'::jsonb,
-  'public_auction','{"calls":[],"dealer":"N"}'::jsonb,
-  'public_context','{"scoring":"IMP","acting_seat":"N"}'::jsonb)::text,'sha256'),'hex');
+  'acting_hand','{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}'::jsonb,
+  'public_auction','{"calls":[]}'::jsonb,
+  'public_context','{}'::jsonb)::text,'sha256'),'hex');
  trace:=jsonb_build_object('mode','ROBOT_LIVE_DECISION','request_id','req-1','engine_key','ben-ci',
   'engine_version','commit-1','model_hash',repeat('b',64),'configuration_hash',repeat('c',64),
   'input_fingerprint',request_hash,'started_at','2026-08-30T00:00:00Z','completed_at','2026-08-30T00:00:01Z',
@@ -123,16 +123,16 @@ BEGIN
  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
   public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
  VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-  '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10,"shape":[13,0,0,0]}',
-  '{"calls":[],"dealer":"N"}','{"scoring":"IMP","acting_seat":"N"}',raw,'{"bid":"1S"}','high',trace)
+  '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+  '{"calls":[]}','{}',raw,'{"bid":"1S"}','high',trace)
  RETURNING world_robot_decision_id INTO decision;
 
  -- Legal bid fields are public calls, not hidden card tokens.
  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
   public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
  VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-  '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10,"shape":[13,0,0,0]}',
-  '{"calls":[],"dealer":"N"}','{"scoring":"IMP","acting_seat":"N"}','{"bid":"2H"}','{"bid":"2H"}','high',
+  '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+  '{"calls":[]}','{}','{"bid":"2H"}','{"bid":"2H"}','high',
   jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest('{"bid":"2H"}'::jsonb::text,'sha256'),'hex'))));
 
  bad_raw:='{"deal":{"N":[]}}';
@@ -252,12 +252,18 @@ BEGIN
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_REUSED_TRACE_INPUT_ACCEPTED'; END IF;
 
+ bad_trace:=jsonb_set(trace,'{input_fingerprint}',to_jsonb(encode(digest(jsonb_build_object(
+  'acting_seat','N',
+  'acting_hand','{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}'::jsonb,
+  'public_auction','{"calls":[],"alerts":{"private_material":[51,50,49]}}'::jsonb,
+  'public_context','{}'::jsonb)::text,'sha256'),'hex')));
+ bad_trace:=jsonb_set(bad_trace,'{steps,0,input_hash}',bad_trace->'input_fingerprint');
  failed:=false; v_constraint:=NULL; BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
   VALUES(s,config,'ROBOT_LIVE_DECISION','N',
    '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
-   '{"calls":[],"alerts":{"private_material":[51,50,49]}}','{}',raw,'{"bid":"1S"}','high',trace);
+   '{"calls":[],"alerts":{"private_material":[51,50,49]}}','{}',raw,'{"bid":"1S"}','high',bad_trace);
  EXCEPTION WHEN check_violation THEN GET STACKED DIAGNOSTICS v_constraint=CONSTRAINT_NAME; failed:=(v_constraint='world_robot_decision_public_auction'); END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_NESTED_AUCTION_MATERIAL_ACCEPTED'; END IF;
 
