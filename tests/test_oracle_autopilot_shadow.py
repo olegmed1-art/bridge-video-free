@@ -149,6 +149,19 @@ def test_systemd_unit_is_shadow_only_and_resource_bounded():
     assert "MemoryMax=768M" in unit
     assert "CPUQuota=100%" in unit
     assert "NoNewPrivileges=true" in unit
+    assert "WorkingDirectory=/opt/bridge-school/school-autopilot/current" in unit
+    assert "WorkingDirectory=/opt/bridge-school/bridge-video-free" not in unit
+    assert "ReadWritePaths=/opt/bridge-school/school-autopilot/runtime" in unit
+
+
+def test_staging_installs_an_immutable_isolated_source_release():
+    installer = open("ops/oracle_autopilot_shadow_install.sh", encoding="utf-8").read()
+    assert 'AUTOPILOT_SOURCE_REVISION must be a pinned commit' in installer
+    assert 'RELEASE_DIR="$RELEASES_DIR/$SOURCE_REVISION"' in installer
+    assert 'chown -R root:root "$AUTOPILOT_DIR/.venv"' in installer
+    assert 'staging refuses to replace an active service' in installer
+    assert 'staging refuses to retain an enabled service' in installer
+    assert 'activated=0 inactive=1 disabled=1' in installer
 
 
 def test_ready_queue_is_drained_without_a_poll_gap(monkeypatch):

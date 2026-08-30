@@ -15,7 +15,11 @@ without Vercel Workflows in the scheduling path. It is shadow-only:
 - no arbitrary shell;
 - no GitHub, Drive, media, canon or production mutation;
 - no new fixed subscription;
-- service installation is staged by default and leaves runtime state unchanged.
+- service installation is staged by default and leaves the service inactive and
+  disabled;
+- the Autopilot source is copied into an immutable, root-owned release under
+  `/opt/bridge-school/school-autopilot/releases/`; the shared checkout used by
+  DDS3, BEN, Assistant Lab and video services is not switched to the draft PR.
 
 ## Source files
 
@@ -62,6 +66,12 @@ from `WAITING_EXTERNAL` to `DONE`.
 6. Record task-to-task dispatch latency; target p95 is at most five seconds.
 7. Delete or retain the temporary branch according to the evidence plan.
 8. Stage the Oracle unit with `AUTOPILOT_ACTIVATE=0`.
+
+The staging transport pins all three recorded Oracle SSH host keys. The
+temporary Neon DSN is encrypted with RSA-OAEP/SHA-256 to the Oracle RSA host
+key before it enters GitHub. Only ciphertext is retained in the bounded request;
+plaintext exists in transit only inside the protected runner process and is
+written on Oracle as the root-owned mode-0600 environment file.
 
 ## Activation boundary
 

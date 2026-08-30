@@ -8,6 +8,7 @@ set -Eeuo pipefail
 #
 # Optional:
 #   AUTOPILOT_EXPECTED_DB_USER=autopilot_runtime_login
+#   AUTOPILOT_SOURCE_REVISION=<40-character git commit>
 #   AUTOPILOT_ACTIVATE=0|1
 #   AUTOPILOT_ACTIVATION_SCOPE=SHADOW_ONLY (required when ACTIVATE=1)
 #
@@ -18,6 +19,11 @@ AUTOPILOT_USER="${AUTOPILOT_UNIX_USER:-school-autopilot}"
 AUTOPILOT_GROUP="${AUTOPILOT_UNIX_GROUP:-school-autopilot}"
 AUTOPILOT_DIR="${AUTOPILOT_DIR:-/opt/bridge-school/school-autopilot}"
 REPO_DIR="${AUTOPILOT_REPO_DIR:-/opt/bridge-school/bridge-video-free}"
+SOURCE_REVISION="${AUTOPILOT_SOURCE_REVISION:-}"
+RELEASES_DIR="$AUTOPILOT_DIR/releases"
+RELEASE_DIR="$RELEASES_DIR/$SOURCE_REVISION"
+CURRENT_LINK="$AUTOPILOT_DIR/current"
+RUNTIME_DIR="$AUTOPILOT_DIR/runtime"
 SERVICE_NAME="${AUTOPILOT_SERVICE_NAME:-school-autopilot-shadow.service}"
 SERVICE_SRC="$REPO_DIR/deploy/oracle-autopilot/school-autopilot-shadow.service"
 SERVICE_DST="/etc/systemd/system/$SERVICE_NAME"
@@ -31,6 +37,7 @@ die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
 [[ "$(id -u)" -eq 0 ]] || die "run as root on the existing Oracle host"
 [[ -n "${AUTOPILOT_DATABASE_URL:-}" ]] || die "AUTOPILOT_DATABASE_URL is required as protected input"
+[[ "$SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]] || die "AUTOPILOT_SOURCE_REVISION must be a pinned commit"
 [[ "$ACTIVATE" =~ ^[01]$ ]] || die "AUTOPILOT_ACTIVATE must be 0 or 1"
 [[ "$PSYCOPG_VERSION" =~ ^3\.[23]\.[0-9]+$ ]] || die "psycopg must stay on a verified 3.2/3.3 line"
 if [[ "$ACTIVATE" == "1" && "$ACTIVATION_SCOPE" != "SHADOW_ONLY" ]]; then
@@ -43,6 +50,15 @@ command -v python3 >/dev/null 2>&1 || die "python3 is required"
 command -v systemctl >/dev/null 2>&1 || die "systemd is required"
 command -v systemd-analyze >/dev/null 2>&1 || die "systemd-analyze is required"
 
+if [[ "$ACTIVATE" == "0" ]]; then
+  current_state="$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)"
+  enabled_state="$(systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || true)"
+  [[ "$current_state" != "active" && "$current_state" != "activating" ]] \
+    || die "staging refuses to replace an active service"
+  [[ "$enabled_state" != "enabled" && "$enabled_state" != "enabled-runtime" ]] \
+    || die "staging refuses to retain an enabled service"
+fi
+
 log "Create isolated Unix identity and runtime directory"
 if ! getent group "$AUTOPILOT_GROUP" >/dev/null 2>&1; then
   groupadd --system "$AUTOPILOT_GROUP"
@@ -50,18 +66,28 @@ fi
 if ! id "$AUTOPILOT_USER" >/dev/null 2>&1; then
   useradd --system --gid "$AUTOPILOT_GROUP" --home-dir "$AUTOPILOT_DIR" --shell /usr/sbin/nologin "$AUTOPILOT_USER"
 fi
-install -d -m 0750 -o "$AUTOPILOT_USER" -g "$AUTOPILOT_GROUP" "$AUTOPILOT_DIR"
+install -d -m 0750 -o root -g "$AUTOPILOT_GROUP" "$AUTOPILOT_DIR"
+install -d -m 0755 -o root -g root "$RELEASES_DIR"
+install -d -m 0750 -o "$AUTOPILOT_USER" -g "$AUTOPILOT_GROUP" "$RUNTIME_DIR"
+
+log "Install immutable Autopilot source release"
+install -d -m 0755 -o root -g root "$RELEASE_DIR"
+install -d -m 0755 -o root -g root "$RELEASE_DIR/oracle_autopilot"
+install -m 0644 -o root -g root "$REPO_DIR"/oracle_autopilot/*.py "$RELEASE_DIR/oracle_autopilot/"
+printf '%s\n' "$SOURCE_REVISION" > "$RELEASE_DIR/SOURCE_REVISION"
+chmod 0444 "$RELEASE_DIR/SOURCE_REVISION"
 
 log "Create bounded Python runtime"
 python3 -m venv "$AUTOPILOT_DIR/.venv"
 "$AUTOPILOT_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir \
   "psycopg[binary]==$PSYCOPG_VERSION" >/dev/null
-chown -R "$AUTOPILOT_USER:$AUTOPILOT_GROUP" "$AUTOPILOT_DIR/.venv"
+chown -R root:root "$AUTOPILOT_DIR/.venv"
+chmod -R go-w "$AUTOPILOT_DIR/.venv"
 
 log "Validate direct Neon DSN and least-privilege RPC boundary"
 AUTOPILOT_EXPECTED_DB_USER="$EXPECTED_DB_USER" \
 AUTOPILOT_DATABASE_URL="$AUTOPILOT_DATABASE_URL" \
-PYTHONPATH="$REPO_DIR" \
+PYTHONPATH="$RELEASE_DIR" \
 "$AUTOPILOT_DIR/.venv/bin/python" - <<'PY'
 import os
 import psycopg
@@ -86,6 +112,10 @@ assert schema_usage and not table_select and not table_insert and can_claim and 
 )
 print("AUTOPILOT_DB_PREFLIGHT_PASS")
 PY
+
+log "Select verified immutable source release"
+ln -sfn "$RELEASE_DIR" "$AUTOPILOT_DIR/current.next"
+mv -Tf "$AUTOPILOT_DIR/current.next" "$CURRENT_LINK"
 
 log "Write root-owned shadow environment without printing credentials"
 umask 077
@@ -116,6 +146,11 @@ if [[ "$ACTIVATE" == "1" ]]; then
   printf 'AUTOPILOT_SHADOW_INSTALL_PASS activated=1 production_mutations=0\n'
 else
   current_state="$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)"
-  log "Stage complete; service state left unchanged (${current_state:-unknown})"
-  printf 'AUTOPILOT_SHADOW_INSTALL_PASS activated=0 state_unchanged=1\n'
+  enabled_state="$(systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || true)"
+  [[ "$current_state" != "active" && "$current_state" != "activating" ]] \
+    || die "staged service unexpectedly active"
+  [[ "$enabled_state" != "enabled" && "$enabled_state" != "enabled-runtime" ]] \
+    || die "staged service unexpectedly enabled"
+  log "Stage complete; service remains inactive and disabled"
+  printf 'AUTOPILOT_SHADOW_INSTALL_PASS activated=0 inactive=1 disabled=1\n'
 fi

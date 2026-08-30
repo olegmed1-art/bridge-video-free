@@ -1,0 +1,250 @@
+name: Oracle Autopilot encrypted staging
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-autopilot-staging.yml'
+      - 'deploy/oracle-autopilot/**'
+      - 'ops/oracle_autopilot_shadow_install.sh'
+      - 'tests/test_oracle_autopilot_shadow.py'
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths:
+      - 'ops/oracle-autopilot-staging-requests/*.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Validate encrypted staging contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/oracle_autopilot_shadow_install.sh
+          grep -F 'AUTOPILOT_ACTIVATE:-0' ops/oracle_autopilot_shadow_install.sh >/dev/null
+          grep -F 'activated=0 inactive=1 disabled=1' ops/oracle_autopilot_shadow_install.sh >/dev/null
+          grep -F 'WorkingDirectory=/opt/bridge-school/school-autopilot/current' \
+            deploy/oracle-autopilot/school-autopilot-shadow.service >/dev/null
+          ! grep -F 'WorkingDirectory=/opt/bridge-school/bridge-video-free' \
+            deploy/oracle-autopilot/school-autopilot-shadow.service
+
+  stage:
+    if: ${{ github.event_name == 'push' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Validate exact encrypted request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+            | grep -E '^ops/oracle-autopilot-staging-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one encrypted staging request' >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import base64
+          import hashlib
+          import json
+          import os
+          import re
+
+          request = json.load(open(os.environ["REQUEST_FILE"], encoding="utf-8"))
+          assert set(request) == {
+              "request_id", "target_host", "rsa_fingerprint", "activate",
+              "expected_db_user", "plaintext_length", "ciphertext_b64",
+              "ciphertext_sha256",
+          }
+          assert re.fullmatch(r"[A-Za-z0-9._-]{1,80}", request["request_id"])
+          assert request["target_host"] == "158.180.47.161"
+          assert request["rsa_fingerprint"] == "SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64"
+          assert request["activate"] == 0
+          assert request["expected_db_user"] == "autopilot_runtime_login"
+          assert isinstance(request["plaintext_length"], int)
+          assert 1 <= request["plaintext_length"] <= 318
+          ciphertext = base64.b64decode(request["ciphertext_b64"], validate=True)
+          assert len(ciphertext) == 384
+          assert hashlib.sha256(ciphertext).hexdigest() == request["ciphertext_sha256"]
+          cipher_path = os.path.join(os.environ["RUNNER_TEMP"], "autopilot-dsn.oaep")
+          with open(cipher_path, "wb") as handle:
+              handle.write(ciphertext)
+          os.chmod(cipher_path, 0o600)
+          print(f"request_id={request['request_id']}")
+          print(f"plaintext_length={request['plaintext_length']}")
+          print(f"cipher_path={cipher_path}")
+          PY
+
+      - name: Verify pinned Oracle identity and SSH access
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/oracle-autopilot-known-hosts"
+          : > "$known"
+          index=0
+          for expected in \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64'; do
+            part="$RUNNER_TEMP/oracle-autopilot-known-hosts.$index"
+            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$expected" "$part"
+            cat "$part" >> "$known"
+            index=$((index + 1))
+          done
+          sort -u -o "$known" "$known"
+          rsa_line="$(awk '$2 == "ssh-rsa" {print; exit}' "$known")"
+          test -n "$rsa_line"
+          printf '%s\n' "$rsa_line" | awk '{print $2, $3}' > "$RUNNER_TEMP/oracle-rsa.pub"
+          [[ "$(ssh-keygen -lf "$RUNNER_TEMP/oracle-rsa.pub" | awk '{print $2}')" == \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64' ]]
+
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]] || { echo 'Oracle SSH credential unavailable' >&2; exit 1; }
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Package pinned Autopilot source
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/oracle-autopilot-source.tgz"
+          tar -czf "$bundle" \
+            oracle_autopilot \
+            deploy/oracle-autopilot/school-autopilot-shadow.service \
+            ops/oracle_autopilot_shadow_install.sh
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+
+      - name: Stage inactive Oracle service
+        id: stage
+        shell: bash
+        env:
+          PLAINTEXT_LENGTH: ${{ steps.request.outputs.plaintext_length }}
+        run: |
+          set -euo pipefail
+          ssh_base=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          scp_base=(scp -q -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15)
+          remote_bundle="/tmp/oracle-autopilot-source-${GITHUB_RUN_ID}.tgz"
+          remote_cipher="/tmp/oracle-autopilot-dsn-${GITHUB_RUN_ID}.oaep"
+          "${scp_base[@]}" '${{ steps.package.outputs.bundle }}' \
+            "$ORACLE_USER@$ORACLE_HOST:$remote_bundle"
+          "${scp_base[@]}" '${{ steps.request.outputs.cipher_path }}' \
+            "$ORACLE_USER@$ORACLE_HOST:$remote_cipher"
+          "${ssh_base[@]}" \
+            "sudo -n env AUTOPILOT_SOURCE_REVISION='$GITHUB_SHA' AUTOPILOT_PLAINTEXT_LENGTH='$PLAINTEXT_LENGTH' AUTOPILOT_BUNDLE_PATH='$remote_bundle' AUTOPILOT_CIPHER_PATH='$remote_cipher' bash -s" \
+            <<'REMOTE' | tee "$RUNNER_TEMP/oracle-autopilot-stage-safe.log"
+          set -Eeuo pipefail
+          umask 077
+          [[ "$AUTOPILOT_SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$AUTOPILOT_PLAINTEXT_LENGTH" =~ ^[0-9]{1,3}$ ]]
+          [[ "$AUTOPILOT_BUNDLE_PATH" =~ ^/tmp/oracle-autopilot-source-[0-9]+\.tgz$ ]]
+          [[ "$AUTOPILOT_CIPHER_PATH" =~ ^/tmp/oracle-autopilot-dsn-[0-9]+\.oaep$ ]]
+          work="$(mktemp -d /var/tmp/oracle-autopilot-stage.XXXXXXXX)"
+          cleanup(){ rm -f -- "$AUTOPILOT_BUNDLE_PATH" "$AUTOPILOT_CIPHER_PATH"; rm -rf -- "$work"; }
+          trap cleanup EXIT
+          install -m 0600 -o root -g root /etc/ssh/ssh_host_rsa_key "$work/host-rsa"
+          ssh-keygen -q -p -m PEM -P '' -N '' -f "$work/host-rsa" >/dev/null 2>&1
+          openssl pkeyutl -decrypt -inkey "$work/host-rsa" \
+            -in "$AUTOPILOT_CIPHER_PATH" -out "$work/database-url" \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
+            -pkeyopt rsa_mgf1_md:sha256
+          [[ "$(wc -c < "$work/database-url")" == "$AUTOPILOT_PLAINTEXT_LENGTH" ]]
+          install -d -m 0700 -o root -g root "$work/source"
+          tar -xzf "$AUTOPILOT_BUNDLE_PATH" -C "$work/source"
+          test -f "$work/source/oracle_autopilot/worker.py"
+          test -f "$work/source/ops/oracle_autopilot_shadow_install.sh"
+          database_url="$(cat "$work/database-url")"
+          AUTOPILOT_DATABASE_URL="$database_url" \
+          AUTOPILOT_EXPECTED_DB_USER=autopilot_runtime_login \
+          AUTOPILOT_SOURCE_REVISION="$AUTOPILOT_SOURCE_REVISION" \
+          AUTOPILOT_REPO_DIR="$work/source" \
+          AUTOPILOT_ACTIVATE=0 \
+            bash "$work/source/ops/oracle_autopilot_shadow_install.sh"
+          unset database_url
+          [[ "$(systemctl is-active school-autopilot-shadow.service 2>/dev/null || true)" != active ]]
+          [[ "$(systemctl is-enabled school-autopilot-shadow.service 2>/dev/null || true)" != enabled ]]
+          [[ "$(stat -c '%U:%G:%a' /opt/bridge-school/school-autopilot/autopilot-shadow.env)" == root:root:600 ]]
+          [[ "$(readlink -f /opt/bridge-school/school-autopilot/current)" == \
+            "/opt/bridge-school/school-autopilot/releases/$AUTOPILOT_SOURCE_REVISION" ]]
+          [[ "$(cat /opt/bridge-school/school-autopilot/current/SOURCE_REVISION)" == \
+            "$AUTOPILOT_SOURCE_REVISION" ]]
+          echo 'AUTOPILOT_ORACLE_ENCRYPTED_STAGING_PASS'
+          echo 'AUTOPILOT_ACTIVATE=0'
+          echo 'AUTOPILOT_SERVICE_ACTIVE=NO'
+          echo 'AUTOPILOT_SERVICE_ENABLED=NO'
+          REMOTE
+          grep -Fx 'AUTOPILOT_ORACLE_ENCRYPTED_STAGING_PASS' \
+            "$RUNNER_TEMP/oracle-autopilot-stage-safe.log" >/dev/null
+          grep -Fx 'AUTOPILOT_ACTIVATE=0' "$RUNNER_TEMP/oracle-autopilot-stage-safe.log" >/dev/null
+          grep -Fx 'AUTOPILOT_SERVICE_ACTIVE=NO' "$RUNNER_TEMP/oracle-autopilot-stage-safe.log" >/dev/null
+          grep -Fx 'AUTOPILOT_SERVICE_ENABLED=NO' "$RUNNER_TEMP/oracle-autopilot-stage-safe.log" >/dev/null
+
+      - name: Verify external DDS3 non-regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          READY_JSON="$(curl -fsS --retry 3 --retry-delay 3 --max-time 20 "https://$ORACLE_HOST/readyz")" \
+            python - <<'PY'
+          import json
+          import os
+          payload = json.loads(os.environ["READY_JSON"])
+          assert payload.get("status") == "ready", payload
+          assert payload.get("engine") == "DDS3", payload
+          assert payload.get("fallback_used") is False, payload
+          print("AUTOPILOT_STAGING_DDS3_NONREGRESSION_PASS")
+          PY
+
+      - name: Publish safe staging summary
+        if: ${{ always() }}
+        shell: bash
+        env:
+          STAGE_OUTCOME: ${{ steps.stage.outcome }}
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+        run: |
+          {
+            echo '### Oracle Autopilot encrypted staging'
+            echo "- request: ${REQUEST_ID:-unresolved}"
+            echo "- stage: ${STAGE_OUTCOME:-not-run}"
+            echo '- activation: `0`'
+            echo '- plaintext secret in repository/logs: `NO`'
+            echo '- target: exact pinned Frankfurt Oracle VM'
+          } >> "$GITHUB_STEP_SUMMARY"

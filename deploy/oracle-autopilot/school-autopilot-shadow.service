@@ -9,7 +9,7 @@ StartLimitBurst=10
 Type=simple
 User=school-autopilot
 Group=school-autopilot
-WorkingDirectory=/opt/bridge-school/bridge-video-free
+WorkingDirectory=/opt/bridge-school/school-autopilot/current
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=PYTHONUNBUFFERED=1
 Environment=AUTOPILOT_RUNTIME_MODE=SHADOW
@@ -40,7 +40,7 @@ RestrictRealtime=true
 RestrictSUIDSGID=true
 RestrictNamespaces=true
 SystemCallArchitectures=native
-ReadWritePaths=/opt/bridge-school/school-autopilot
+ReadWritePaths=/opt/bridge-school/school-autopilot/runtime
 
 [Install]
 WantedBy=multi-user.target
