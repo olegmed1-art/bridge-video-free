@@ -9,12 +9,24 @@ readonly BASE_DIR='/opt/bridge-school/universal-video'
 readonly OLD_SERVICE='universal-video.service'
 readonly NEW_SERVICE='universal-video-container.service'
 readonly STATUS='/run/bridge-school/universal-video-status.json'
+readonly OPERATOR_TARGET='/usr/local/sbin/universal-video'
+readonly OPERATOR_SUDOERS='/etc/sudoers.d/universal-video-operator-ocarun'
 EXPECTED_COMMIT="${UNIVERSAL_VIDEO_EXPECTED_COMMIT:-}"
 EXPECTED_DIGEST="${UNIVERSAL_VIDEO_EXPECTED_IMAGE_DIGEST:-}"
 switch_started=0
+operator_snapshot_ready=0
+operator_existed=0
+operator_sudoers_existed=0
+operator_backup_root=''
 old_enabled_before=''
 old_active_before=''
 CURRENT_STAGE='validation'
+
+cleanup(){
+  if [[ -n "$operator_backup_root" && -d "$operator_backup_root" ]]; then
+    rm -rf -- "$operator_backup_root"
+  fi
+}
 
 fail(){
   local code="$1"
@@ -73,11 +85,25 @@ rollback(){
     else
       systemctl stop "$OLD_SERVICE" >/dev/null 2>&1 || true
     fi
+    if (( operator_snapshot_ready == 1 )); then
+      if (( operator_existed == 1 )); then
+        install -o root -g root -m 0755 "$operator_backup_root/operator" "$OPERATOR_TARGET" || true
+      else
+        rm -f -- "$OPERATOR_TARGET" || true
+      fi
+      if (( operator_sudoers_existed == 1 )); then
+        install -o root -g root -m 0440 "$operator_backup_root/sudoers" "$OPERATOR_SUDOERS" || true
+      else
+        rm -f -- "$OPERATOR_SUDOERS" || true
+      fi
+      visudo -cf /etc/sudoers >/dev/null 2>&1 || true
+    fi
   fi
   printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_FAILED code=UV_CONTAINER_PROMOTION_ROLLED_BACK stage=%s rc=%s\n' "$CURRENT_STAGE" "$rc" >&2
   exit "$rc"
 }
 trap rollback ERR
+trap cleanup EXIT
 
 [[ $(id -u) -eq 0 ]] || fail UV_CONTAINER_PROMOTION_NOT_ROOT
 [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]] || fail UV_CONTAINER_PROMOTION_COMMIT_INVALID
@@ -86,6 +112,20 @@ trap rollback ERR
 [[ -z "$(git -C "$SOURCE_DIR" status --porcelain=v1 --untracked-files=all)" ]] || fail UV_CONTAINER_PROMOTION_SOURCE_DIRTY
 [[ -d "$BASE_DIR/spool/running" && ! -L "$BASE_DIR/spool/running" ]] || fail UV_CONTAINER_PROMOTION_SPOOL_UNAVAILABLE
 has_running_job && fail UV_CONTAINER_PROMOTION_JOB_RUNNING
+
+CURRENT_STAGE='operator-snapshot'
+operator_backup_root="$(mktemp -d)"
+if [[ -e "$OPERATOR_TARGET" || -L "$OPERATOR_TARGET" ]]; then
+  [[ -f "$OPERATOR_TARGET" && ! -L "$OPERATOR_TARGET" ]] || fail UV_CONTAINER_PROMOTION_OPERATOR_UNSAFE
+  install -o root -g root -m 0600 "$OPERATOR_TARGET" "$operator_backup_root/operator"
+  operator_existed=1
+fi
+if [[ -e "$OPERATOR_SUDOERS" || -L "$OPERATOR_SUDOERS" ]]; then
+  [[ -f "$OPERATOR_SUDOERS" && ! -L "$OPERATOR_SUDOERS" ]] || fail UV_CONTAINER_PROMOTION_OPERATOR_SUDOERS_UNSAFE
+  install -o root -g root -m 0600 "$OPERATOR_SUDOERS" "$operator_backup_root/sudoers"
+  operator_sudoers_existed=1
+fi
+operator_snapshot_ready=1
 
 CURRENT_STAGE='protected-preflight'
 before_assistant="$(systemctl is-active assistant-lab.service)"
@@ -168,6 +208,19 @@ assert x.get('installed_runtime_commit') == os.environ['EXPECTED_COMMIT']
 assert x.get('active_jobs') == []
 assert float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])
 PY
+
+CURRENT_STAGE='operator-sync'
+SOURCE_FILE="$SOURCE_DIR/ops/universal_video_operator.sh" \
+EXPECTED_RUNTIME_COMMIT="$EXPECTED_COMMIT" \
+  bash "$SOURCE_DIR/ops/install_universal_video_operator.sh"
+[[ "$(git hash-object "$OPERATOR_TARGET")" == "$(git -C "$SOURCE_DIR" rev-parse "$EXPECTED_COMMIT:ops/universal_video_operator.sh")" ]] || fail UV_CONTAINER_PROMOTION_OPERATOR_MISMATCH
+set +e
+operator_smoke="$(sudo -u ocarun sudo -n "$OPERATOR_TARGET" status .. 2>&1)"
+operator_smoke_rc=$?
+set -e
+[[ "$operator_smoke_rc" -eq 1 ]] || fail UV_CONTAINER_PROMOTION_OPERATOR_SMOKE_RC
+grep -Fx 'UV_STATE=REJECTED' <<<"$operator_smoke" >/dev/null || fail UV_CONTAINER_PROMOTION_OPERATOR_SMOKE_STATE
+grep -Fx 'UV_ERROR=invalid job id' <<<"$operator_smoke" >/dev/null || fail UV_CONTAINER_PROMOTION_OPERATOR_SMOKE_REASON
 
 CURRENT_STAGE='protected-postflight'
 [[ "$(systemctl is-active assistant-lab.service)" == "$before_assistant" ]] || fail UV_CONTAINER_PROMOTION_PROTECTED_SERVICE_CHANGED
