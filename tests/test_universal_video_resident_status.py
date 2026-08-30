@@ -103,3 +103,12 @@ def test_systemd_grants_only_resident_status_runtime_directory():
     assert "RuntimeDirectoryMode=0750" in UNIT
     assert "UNIVERSAL_VIDEO_STATUS_PATH=/run/bridge-school/universal-video-status.json" in UNIT
     assert "ReadWritePaths=/run/bridge-school" in UNIT
+
+
+def test_resident_publishes_status_before_accepting_first_job() -> None:
+    worker = (ROOT / "universal_video/spool_worker.py").read_text(encoding="utf-8")
+    start = worker.index("def run_forever")
+    run_forever = worker[start:worker.index("\ndef main()", start)]
+    first_status = run_forever.index("write_resident_status(spool_root, status_path)")
+    first_process = run_forever.index("processed = process_one(spool_root)")
+    assert first_status < first_process
