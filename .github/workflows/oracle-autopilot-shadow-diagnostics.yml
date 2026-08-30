@@ -43,8 +43,8 @@ jobs:
               'systemctl ' + 'disable',
               '--action ' + 'STOP',
               'oci compute instance ' + 'action',
-              'echo "$journal"',
-              'cat "$root/autopilot-shadow.env"',
+              'echo ' + '"$journal"',
+              'cat ' + '"$root/autopilot-shadow.env"',
           ):
               assert forbidden not in workflow
           PY
