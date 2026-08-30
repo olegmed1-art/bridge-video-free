@@ -136,3 +136,18 @@ def test_bounded_parser_reports_stale_cache_cleanup_only() -> None:
             "UNIVERSAL_VIDEO_CONTAINER_CLEANUP area=secrets age_days=0 files=1 freed_kb=1",
         ]
     ) == ["UNIVERSAL_VIDEO_CONTAINER_CLEANUP area=root-cache age_days=14 files=8 freed_kb=1024"]
+
+
+def test_activation_does_not_run_build_disk_cleanup_or_delete_attested_image() -> None:
+    installer = (ROOT / "ops/oracle_universal_video_container_install.sh").read_text(encoding="utf-8")
+
+    build_guard = 'if [[ "$BUILD_IMAGE" == 1 ]]; then'
+    disk_probe = 'disk_available_kb="$(df -Pk "$BASE_DIR"'
+    image_inspect = 'docker image inspect "$image" >/dev/null'
+    first_guard = installer.index(build_guard)
+    first_disk_probe = installer.index(disk_probe)
+    build_branch = installer.rindex(build_guard)
+    activation_inspect = installer.index(image_inspect)
+    assert first_guard < first_disk_probe < build_branch < activation_inspect
+    assert installer.count('docker builder prune --all --force') == 1
+    assert 'docker image prune --all' not in installer
