@@ -34,12 +34,12 @@ WITH RECURSIVE walk(value,key_name) AS (
 SELECT EXISTS (SELECT 1 FROM walk WHERE jsonb_typeof(value)='string'
  AND NOT (
    key_name IN ('bid','action','calls')
-   AND trim(both '"' from value::text) ~* '^(pass|p|x|xx|[1-7](c|d|h|s|nt|n))$'
+   AND value #>> '{}' ~* '^(pass|p|x|xx|[1-7](c|d|h|s|nt|n))$'
  )
  AND (
-   trim(both '"' from value::text) ~* '(^|[^a-z0-9])[2-9tjqka][cdhs]([^a-z0-9]|$)'
-   OR regexp_replace(trim(both '"' from value::text),'[^a-z0-9]','','g')
-      ~* '^([2-9tjqka][cdhs]){1,13}$'
+   value #>> '{}' ~* '(^|[^a-z0-9])[2-9tjqka][cdhs]([^a-z0-9]|$)'
+   OR regexp_replace(value #>> '{}','[^a-z0-9]','','gi')
+      ~ '^([2-9TJQKA][CDHS])+$'
  ));
 $$;
 
@@ -74,7 +74,7 @@ BEGIN
     RETURN jsonb_typeof(payload->'calls')='array'
       AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(payload->'calls') v
                        WHERE jsonb_typeof(v)<>'string'
-                          OR trim(both '"' from v::text) !~* '^(pass|p|x|xx|[1-7](c|d|h|s|nt|n))$')
+                          OR v #>> '{}' !~* '^(pass|p|x|xx|[1-7](c|d|h|s|nt|n))$')
       AND NOT EXISTS (SELECT 1 FROM jsonb_each(payload) e
                        WHERE e.key<>'calls'
                          AND jsonb_typeof(e.value) NOT IN ('string','boolean','null'));
