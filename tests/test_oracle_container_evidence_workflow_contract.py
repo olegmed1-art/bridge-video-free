@@ -40,4 +40,5 @@ def test_evidence_workflow_remains_non_activating_and_media_free() -> None:
     assert "paths:" in text
     assert "'universal_video/container_runtime.py'" in text
     assert "'ops/oracle_universal_video_container_install.sh'" in text
+    assert "'ops/oracle_universal_video_run_command.sh'" in text
     assert "'deploy/oracle-universal-video/Dockerfile'" in text
