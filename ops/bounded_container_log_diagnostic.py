@@ -17,6 +17,8 @@ ALLOWED_ERRORS = {
     "ERROR: a video job is running; refusing container rollout",
     "ERROR: protected Google Drive OAuth file missing",
     "ERROR: container image digest unavailable",
+    "ERROR: container image build failed",
+    "ERROR: container disk capacity unavailable",
 }
 MOUNT_ERROR_RE = re.compile(r"ERROR: unsafe or missing mount: [A-Za-z0-9._/-]+")
 ERROR_CODE_RE = re.compile(r"UV_CONTAINER_[A-Z0-9_]+")
