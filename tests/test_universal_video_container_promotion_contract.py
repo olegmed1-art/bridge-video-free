@@ -22,3 +22,12 @@ def test_promotion_selects_exact_image_and_excludes_legacy_worker() -> None:
     assert "x.get('active_jobs') == []" in SCRIPT
     assert "observed_at_unix" in SCRIPT
     assert "fallback_used=false active_jobs=0" in SCRIPT
+
+
+def test_promotion_requires_a_fresh_status_from_the_new_resident() -> None:
+    assert "fresh_status=0" in SCRIPT
+    assert "fresh_status=1" in SCRIPT
+    assert "(( fresh_status != 1 ))" in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_STATUS_MISSING" in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_STATUS_STALE" in SCRIPT
+    assert SCRIPT.count("float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])") == 2
