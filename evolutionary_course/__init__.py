@@ -58,6 +58,11 @@ from .adaptive_selector import (
     AdaptiveSelectorError,
     select_next_activity,
 )
+from .artifact_readiness import (
+    ARTIFACT_READINESS_SCHEMA,
+    ArtifactReadinessError,
+    assess_artifact_readiness,
+)
 
 __all__ = [
     "ADAPTER_SCHEMA",
@@ -88,6 +93,8 @@ __all__ = [
     "SELECTOR_POLICY_SCHEMA",
     "SELECTOR_SCHEMA",
     "AdaptiveSelectorError",
+    "ARTIFACT_READINESS_SCHEMA",
+    "ArtifactReadinessError",
     "adapt_legacy_report_pointers",
     "adapt_video31_quality",
     "adapt_video31_quality_with_catalog",
@@ -105,4 +112,5 @@ __all__ = [
     "validate_mastery_policy",
     "validate_learning_module",
     "select_next_activity",
+    "assess_artifact_readiness",
 ]
