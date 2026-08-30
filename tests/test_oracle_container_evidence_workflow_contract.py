@@ -45,5 +45,7 @@ def test_evidence_workflow_remains_non_activating_and_media_free() -> None:
     assert "'deploy/oracle-universal-video/Dockerfile'" in text
     assert "'.github/workflows/oracle-universal-video-container-promote.yml'" in text
     assert "UNIVERSAL_VIDEO_PROMOTION_ENTRYPOINT_ATTEST_PASS" in text
+    assert "group: oracle-instance-workload-mutation" in text
+    assert "'.github/workflows/oracle-universal-video-activation.yml'" in text
     assert "ORACLE_INSTANCE_RUNNING_PASS" in text
     assert "compute instance action --instance-id \"$INSTANCE_ID\" --action START" in text
