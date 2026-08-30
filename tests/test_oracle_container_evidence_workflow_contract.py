@@ -187,3 +187,16 @@ def test_source_prepare_emits_only_fixed_bounded_stages() -> None:
             "UNIVERSAL_VIDEO_PREPARE_STAGE stage=private-secret",
         ]
     ) == ["UNIVERSAL_VIDEO_PREPARE_STAGE stage=source-checkout"]
+
+
+def test_container_gates_prepare_source_without_reinstalling_legacy_runtime() -> None:
+    run_command = (ROOT / "ops/oracle_universal_video_run_command.sh").read_text(encoding="utf-8")
+    evidence = WORKFLOW.read_text(encoding="utf-8")
+    promotion = (ROOT / ".github/workflows/oracle-universal-video-container-promote.yml").read_text(encoding="utf-8")
+
+    assert 'SOURCE_ONLY="${UNIVERSAL_VIDEO_SOURCE_ONLY:-0}"' in run_command
+    assert '[[ "$SOURCE_ONLY" =~ ^[01]$ ]]' in run_command
+    assert 'if [[ "$SOURCE_ONLY" == "1" ]]; then' in run_command
+    assert "UNIVERSAL_VIDEO_SOURCE_ONLY_PREPARE_PASS" in run_command
+    assert "UNIVERSAL_VIDEO_SOURCE_ONLY=1" in evidence
+    assert "UNIVERSAL_VIDEO_SOURCE_ONLY=1" in promotion
