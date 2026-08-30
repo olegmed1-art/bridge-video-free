@@ -66,6 +66,20 @@ ASR_LOOP_THRESHOLD = 0.35
 NO_SPEECH_VAD_SECONDS = 0.25
 _MODEL = None
 FAILURE_CODE_RE = re.compile(r"^UV_[A-Z0-9_]{1,96}$")
+FRAME_EVIDENCE_SCHEMA = "universal-video-frame-evidence-v1"
+MAX_EVIDENCE_FRAMES = 300
+DEFAULT_NEIGHBOR_OFFSET_SECONDS = 1.5
+
+# Normalized, layout-neutral regions.  The media worker records these regions
+# but does not try to recognize cards.  A downstream vision adapter may crop
+# them from the immutable full frame according to its interface profile.
+BRIDGE_EVIDENCE_REGIONS = {
+    "N": {"x": 0.15, "y": 0.00, "width": 0.70, "height": 0.30},
+    "E": {"x": 0.70, "y": 0.15, "width": 0.30, "height": 0.70},
+    "S": {"x": 0.15, "y": 0.70, "width": 0.70, "height": 0.30},
+    "W": {"x": 0.00, "y": 0.15, "width": 0.30, "height": 0.70},
+    "CENTER": {"x": 0.25, "y": 0.25, "width": 0.50, "height": 0.50},
+}
 
 
 class VideoSubprocessError(RuntimeError):
@@ -649,24 +663,108 @@ def transcribe(
     return timeline, qcs, language, deduplicated
 
 
-def extract_keyframes(
+def _stratified(values: list[float], target: int) -> list[float]:
+    if target <= 0:
+        return []
+    if len(values) <= target:
+        return list(values)
+    if target == 1:
+        return [values[(len(values) - 1) // 2]]
+    indices = sorted({round(i * (len(values) - 1) / (target - 1)) for i in range(target)})
+    return [values[index] for index in indices]
+
+
+def plan_frame_evidence(
+    duration: float,
+    *,
+    interval_seconds: int = 120,
+    include_neighbors: bool = False,
+    neighbor_offset_seconds: float = DEFAULT_NEIGHBOR_OFFSET_SECONDS,
+    max_frames: int = MAX_EVIDENCE_FRAMES,
+) -> dict[str, Any]:
+    """Plan a bounded frame packet without interpreting the video contents."""
+
+    if duration <= 0 or not math.isfinite(duration):
+        raise RuntimeError("frame evidence duration must be positive")
+    if not MIN_FRAME_INTERVAL_SECONDS <= interval_seconds <= MAX_FRAME_INTERVAL_SECONDS:
+        raise RuntimeError("frame interval outside hard safety range")
+    if not 0.25 <= neighbor_offset_seconds <= 5.0:
+        raise RuntimeError("neighbor frame offset outside hard safety range")
+    if not 1 <= max_frames <= MAX_EVIDENCE_FRAMES:
+        raise RuntimeError("frame evidence count outside hard safety range")
+    if include_neighbors and max_frames < 3:
+        raise RuntimeError("neighbor frame evidence requires a cap of at least three frames")
+
+    anchors = {0.0, max(0.0, duration - 0.5)}
+    timestamp = float(interval_seconds)
+    while timestamp < duration:
+        anchors.add(round(timestamp, 3))
+        timestamp += interval_seconds
+    ordered_anchors = sorted(anchors)
+    frames_per_anchor = 3 if include_neighbors else 1
+    ordered_anchors = _stratified(ordered_anchors, max(1, max_frames // frames_per_anchor))
+
+    bundles: list[dict[str, Any]] = []
+    timestamps: set[float] = set()
+    for index, anchor in enumerate(ordered_anchors):
+        roles: list[tuple[str, float]] = [("CENTER", anchor)]
+        if include_neighbors:
+            roles = [
+                ("BEFORE", anchor - neighbor_offset_seconds),
+                ("CENTER", anchor),
+                ("AFTER", anchor + neighbor_offset_seconds),
+            ]
+        members = []
+        for role, raw_time in roles:
+            if raw_time < 0 or raw_time > duration:
+                continue
+            frame_time = round(raw_time, 3)
+            timestamps.add(frame_time)
+            members.append({
+                "role": role,
+                "time": frame_time,
+                "offset_seconds": round(frame_time - anchor, 3),
+            })
+        bundles.append({
+            "bundle_id": f"evidence-{index:04d}",
+            "anchor_time": round(anchor, 3),
+            "members": members,
+        })
+
+    if len(timestamps) > max_frames:
+        raise RuntimeError("frame evidence plan exceeds cap")
+    return {
+        "schema": FRAME_EVIDENCE_SCHEMA,
+        "strategy": "anchor-neighbors-v1" if include_neighbors else "anchor-only-v1",
+        "neighbor_offset_seconds": neighbor_offset_seconds if include_neighbors else None,
+        "regions": dict(BRIDGE_EVIDENCE_REGIONS) if include_neighbors else {},
+        "bundles": bundles,
+        "timestamps": sorted(timestamps),
+    }
+
+
+def extract_frame_evidence(
     video: Path,
     output_dir: Path,
     duration: float,
     *,
     interval_seconds: int = 120,
-) -> list[dict[str, Any]]:
-    if not MIN_FRAME_INTERVAL_SECONDS <= interval_seconds <= MAX_FRAME_INTERVAL_SECONDS:
-        raise RuntimeError("frame interval outside hard safety range")
+    include_neighbors: bool = False,
+    neighbor_offset_seconds: float = DEFAULT_NEIGHBOR_OFFSET_SECONDS,
+    max_frames: int = MAX_EVIDENCE_FRAMES,
+) -> dict[str, Any]:
+    plan = plan_frame_evidence(
+        duration,
+        interval_seconds=interval_seconds,
+        include_neighbors=include_neighbors,
+        neighbor_offset_seconds=neighbor_offset_seconds,
+        max_frames=max_frames,
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
-    timestamps = {0.0, max(0.0, duration - 0.5)}
-    t = float(interval_seconds)
-    while t < duration:
-        timestamps.add(t)
-        t += interval_seconds
     frames: list[dict[str, Any]] = []
-    for index, ts in enumerate(sorted(timestamps)):
-        path = output_dir / f"frame-{index:04d}-{int(ts):06d}.jpg"
+    by_time: dict[float, str] = {}
+    for index, ts in enumerate(plan.pop("timestamps")):
+        path = output_dir / f"frame-{index:04d}-{int(round(ts * 1000)):09d}.jpg"
         _run(
             [
                 "ffmpeg",
@@ -689,7 +787,32 @@ def extract_keyframes(
         )
         if path.exists() and path.stat().st_size:
             frames.append({"time": round(ts, 3), "file": path.name, "sha256": _sha256(path)})
-    return frames
+            by_time[round(ts, 3)] = path.name
+    for bundle in plan["bundles"]:
+        for member in bundle["members"]:
+            member["file"] = by_time.get(member["time"])
+        bundle["members"] = [member for member in bundle["members"] if member.get("file")]
+    plan["frame_count"] = len(frames)
+    plan["bundle_count"] = len(plan["bundles"])
+    plan["frames"] = frames
+    return plan
+
+
+def extract_keyframes(
+    video: Path,
+    output_dir: Path,
+    duration: float,
+    *,
+    interval_seconds: int = 120,
+) -> list[dict[str, Any]]:
+    """Backward-compatible anchor-only extraction boundary."""
+
+    return extract_frame_evidence(
+        video,
+        output_dir,
+        duration,
+        interval_seconds=interval_seconds,
+    )["frames"]
 
 
 def _materialize_source(
@@ -865,13 +988,16 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
             speaker_path.write_text(json.dumps(speaker_report, ensure_ascii=False, indent=2), encoding="utf-8")
 
         frames: list[dict[str, Any]] = []
+        frame_evidence: dict[str, Any] | None = None
         if "keyframes" in profile.stages:
-            frames = extract_keyframes(
+            frame_evidence = extract_frame_evidence(
                 source,
                 job_dir / "frames",
                 media["duration_seconds"],
                 interval_seconds=int(job.options.get("frame_interval_seconds") or 120),
+                include_neighbors=profile.domain_plugin == "bridge",
             )
+            frames = frame_evidence.pop("frames")
 
         algorithm_summary: dict[str, Any] | None = None
         if "algorithm_manifest" in profile.stages:
@@ -950,6 +1076,7 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
                 else None
             ),
             "frames": frames,
+            "frame_evidence": frame_evidence,
             "deferred_analysis": deferred_analysis,
             "metadata": job.metadata,
             "runtime": {
