@@ -302,6 +302,8 @@ jobs:
                 code='UV_SUBMIT_INTAKE_COLLISION'
               elif grep -Eq '^UV_ERROR=(invalid |unsupported source kind|unknown video profile|.* (outside bounded range|must be (an integer|numeric|an object)))' <<<"$initial"; then
                 code='UV_SUBMIT_CONTRACT_REJECTED'
+              elif grep -qx 'UV_ERROR=server intake command failed' <<<"$initial"; then
+                code='UV_SUBMIT_INTAKE_RUNTIME_FAILED'
               fi
               echo "PRE_SUBMIT_ERROR_CODE=$code" >> "$GITHUB_ENV"
               exit 1

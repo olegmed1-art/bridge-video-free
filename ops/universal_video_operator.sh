@@ -9,6 +9,7 @@ umask 077
 readonly BASE_DIR='/opt/bridge-school/universal-video'
 readonly SOURCE_DIR='/opt/bridge-school/universal-video-src'
 readonly PYTHON="$BASE_DIR/.venv/bin/python"
+readonly SYSTEM_PYTHON='/usr/bin/python3'
 readonly RECEIPT_READER="$SOURCE_DIR/ops/universal_video_receipt_reader.py"
 readonly SPOOL="$BASE_DIR/spool"
 readonly STAGING='/opt/bridge-school/.universal-video-staging'
@@ -63,7 +64,16 @@ submit_drive(){
   printf '%s' "$1" | base64 --decode >"$tmp" 2>/dev/null || fail 'invalid job encoding'
   [[ $(stat -c '%s' "$tmp") -le 262144 ]] || fail 'job payload too large'
   chown root:root "$tmp"; chmod 0600 "$tmp"
-  UNIVERSAL_VIDEO_STAGING_ROOT="$STAGING" PYTHONPATH="$SOURCE_DIR" "$PYTHON" -m universal_video.server_intake submit "$tmp" "$SPOOL"
+  local intake_output
+  if intake_output="$(UNIVERSAL_VIDEO_STAGING_ROOT="$STAGING" PYTHONPATH="$SOURCE_DIR" "$SYSTEM_PYTHON" -m universal_video.server_intake submit "$tmp" "$SPOOL" 2>&1)"; then
+    printf '%s\n' "$intake_output"
+  elif grep -qx 'UV_ERROR=job id already exists; use status or a new id' <<<"$intake_output"; then
+    echo 'UV_STATE=REJECTED'
+    echo 'UV_ERROR=job id already exists; use status or a new id'
+    return 1
+  else
+    fail 'server intake command failed'
+  fi
   rm -f "$tmp"; trap - EXIT
 }
 status(){

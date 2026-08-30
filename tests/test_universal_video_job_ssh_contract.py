@@ -8,6 +8,7 @@ WORKFLOW = (ROOT / ".github/workflows/oracle-universal-video-job.yml").read_text
 OPERATOR_INSTALL = (ROOT / "ops/install_universal_video_operator.sh").read_text(
     encoding="utf-8"
 )
+OPERATOR = (ROOT / "ops/universal_video_operator.sh").read_text(encoding="utf-8")
 ADMIN_INSTALL = (ROOT / "ops/install_universal_video_ocarun_admin.sh").read_text(
     encoding="utf-8"
 )
@@ -104,6 +105,17 @@ def test_submit_maps_intake_failures_without_logging_private_paths() -> None:
         "UV_SUBMIT_INTAKE_READ_ONLY",
         "UV_SUBMIT_INTAKE_COLLISION",
         "UV_SUBMIT_CONTRACT_REJECTED",
+        "UV_SUBMIT_INTAKE_RUNTIME_FAILED",
     ):
         assert f"code='{code}'" in WORKFLOW
     assert 'echo "$initial"' not in WORKFLOW
+
+
+def test_submit_intake_does_not_depend_on_legacy_host_venv() -> None:
+    start = OPERATOR.index("submit_drive(){")
+    submit = OPERATOR[start:OPERATOR.index("\nstatus(){", start)]
+    assert "readonly SYSTEM_PYTHON='/usr/bin/python3'" in OPERATOR
+    assert '"$SYSTEM_PYTHON" -m universal_video.server_intake submit' in submit
+    assert '"$PYTHON" -m universal_video.server_intake submit' not in submit
+    assert "fail 'server intake command failed'" in submit
+    assert "job id already exists; use status or a new id" in submit
