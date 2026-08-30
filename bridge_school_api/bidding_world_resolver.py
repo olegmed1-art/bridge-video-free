@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import hashlib
+import json
 from typing import Any, Callable, Iterable
 
 CANON_GAP = "CANON_GAP"
@@ -100,14 +102,77 @@ def _winner_or_conflict(rules: tuple[KnowledgeRule, ...]) -> tuple[KnowledgeRule
 
 
 def _profile_fingerprint(profile: ResolutionProfile) -> str:
-    return "|".join((profile.system_profile, profile.system_version, profile.learner_level,
-                     profile.auction_context_id, profile.effective_at.isoformat()))
+    raw = "|".join((profile.system_profile, profile.system_version, profile.learner_level,
+                    profile.auction_context_id, profile.effective_at.isoformat()))
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+class PostgresCanonGapStore:
+    """Trusted boundary: commit on one connection, verify on a fresh connection."""
+    def __init_subclass__(cls, **kwargs):
+        raise TypeError("PostgresCanonGapStore is sealed")
+
+    def __init__(self, connection_factory: Callable[[], Any]):
+        self._connection_factory = connection_factory
+
+    def persist_and_verify(self, school_id: str, request_fingerprint: str,
+                           profile: ResolutionProfile) -> CanonGapReceipt:
+        fingerprint = _profile_fingerprint(profile)
+        writer = self._connection_factory()
+        with writer:
+            with writer.cursor() as cur:
+                cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                            (f"{school_id}:{request_fingerprint}",))
+                cur.execute(
+                    """SELECT knowledge_gap_id,profile_fingerprint
+                       FROM bidding.world_canon_gap_binding
+                       WHERE school_id=%s AND request_fingerprint=%s""",
+                    (school_id, request_fingerprint),
+                )
+                existing = cur.fetchone()
+                if existing is not None:
+                    gap_id = str(existing[0])
+                    if existing[1] != fingerprint:
+                        raise RuntimeError("request fingerprint is already bound to a different resolution profile")
+                else:
+                    cur.execute(
+                        """INSERT INTO public.knowledge_gap(school_id,question,context_scope,status)
+                           VALUES (%s,'CANON_GAP',%s::jsonb,'open') RETURNING knowledge_gap_id""",
+                        (school_id, json.dumps({"request_fingerprint": request_fingerprint})),
+                    )
+                    gap_id = str(cur.fetchone()[0])
+                    cur.execute(
+                        """INSERT INTO bidding.world_canon_gap_binding(
+                             knowledge_gap_id,school_id,request_fingerprint,system_profile_key,
+                             system_version,learner_level,auction_context_id,effective_at,profile_fingerprint)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                        (gap_id, school_id, request_fingerprint, profile.system_profile,
+                         profile.system_version, profile.learner_level, profile.auction_context_id,
+                         profile.effective_at, fingerprint),
+                    )
+            writer.commit()
+
+        reader = self._connection_factory()
+        if reader is writer:
+            raise RuntimeError("post-commit gap verification requires a fresh connection")
+        with reader:
+            with reader.cursor() as cur:
+                cur.execute(
+                    """SELECT knowledge_gap_id,school_id,request_fingerprint,profile_fingerprint,created_at
+                       FROM bidding.world_canon_gap_binding
+                       WHERE knowledge_gap_id=%s AND school_id=%s AND request_fingerprint=%s
+                         AND profile_fingerprint=%s""",
+                    (gap_id, school_id, request_fingerprint, fingerprint),
+                )
+                row = cur.fetchone()
+        if row is None:
+            raise RuntimeError("committed CANON_GAP binding was not visible on an independent connection")
+        return CanonGapReceipt(str(row[0]), str(row[1]), row[2], row[3], row[4])
 
 
 def resolve_two_lane(*, school_id: str, request_fingerprint: str, profile: ResolutionProfile,
                      canon_rules: Iterable[KnowledgeRule],
-                     persist_canon_gap: Callable[[str, str, ResolutionProfile], str],
-                     verify_committed_gap: Callable[[str, str, str, ResolutionProfile], CanonGapReceipt | None],
+                     gap_store: PostgresCanonGapStore,
                      world_supplier: Callable[[CanonGapReceipt, ResolutionProfile], Iterable[KnowledgeRule]]) -> Resolution:
     """Resolve Canon first; commit its gap before invoking a lazy WORLD supplier."""
     canon = _rank((r for r in canon_rules if r.authority_class == "school_canon"), profile)
@@ -124,11 +189,10 @@ def resolve_two_lane(*, school_id: str, request_fingerprint: str, profile: Resol
         trace["canon_stage"] = "CANON_MATCH"
         return Resolution("CANON_MATCH", canon_winner, canon, (), trace)
 
-    gap_id = persist_canon_gap(school_id, request_fingerprint, profile)
-    # This must be an independent, post-commit read (normally a fresh database
-    # transaction), not a boolean returned by the inserting transaction.
-    receipt = verify_committed_gap(gap_id, school_id, request_fingerprint, profile)
-    if (receipt is None or receipt.gap_id != gap_id or receipt.school_id != school_id
+    if type(gap_store) is not PostgresCanonGapStore:
+        raise TypeError("gap_store must be the sealed database-backed PostgresCanonGapStore")
+    receipt = gap_store.persist_and_verify(school_id, request_fingerprint, profile)
+    if (receipt.school_id != school_id
             or receipt.request_fingerprint != request_fingerprint
             or receipt.profile_fingerprint != _profile_fingerprint(profile)
             or receipt.committed_at.tzinfo is None):

@@ -9,6 +9,8 @@ import argparse, hashlib, json
 from pathlib import Path
 
 EXPECTED = {"sources": 245, "authors": 42, "bridgeclub_audit": 95, "material_queue": 20}
+STABLE_ID_FIELD = {"sources": "source_id", "authors": "author_id",
+                   "bridgeclub_audit": "audit_id", "material_queue": "material_id"}
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -25,6 +27,12 @@ def main() -> None:
     for key, rows in payload.items():
         if not all(isinstance(row, dict) for row in rows):
             raise SystemExit(f"WORLD-META-001 {key} contains a non-object row")
+        id_field = STABLE_ID_FIELD[key]
+        ids = [row.get(id_field) for row in rows]
+        if any(not isinstance(value, str) or not value.strip() for value in ids):
+            raise SystemExit(f"WORLD-META-001 {key} requires nonempty string {id_field} on every row")
+        if len(set(ids)) != len(ids):
+            raise SystemExit(f"WORLD-META-001 {key} contains duplicate {id_field}")
     manifest = {"batch_key":"WORLD-META-001", "authority_class":"external", "activation_allowed":False,
                 "counts":counts, "input_sha256":hashlib.sha256(raw).hexdigest(),
                 "guarantees":["metadata_evidence_only","no_canon_activation","no_bidding_rule_insert"]}

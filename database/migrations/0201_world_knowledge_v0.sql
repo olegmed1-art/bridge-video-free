@@ -31,7 +31,7 @@ WITH RECURSIVE walk(value) AS (
   ) child
 )
 SELECT EXISTS (SELECT 1 FROM walk WHERE jsonb_typeof(value)='string'
- AND trim(both '"' from value::text) ~ '^[2-9TJQKA][CDHS]$');
+ AND trim(both '"' from value::text) ~* '(^|[^a-z0-9])[2-9tjqka][cdhs]([^a-z0-9]|$)');
 $$;
 
 CREATE OR REPLACE FUNCTION bidding.valid_acting_hand(payload jsonb)
@@ -55,12 +55,19 @@ BEGIN
      OR bidding.contains_nonpublic_card_material(payload) OR bidding.contains_card_token(payload) THEN RETURN false; END IF;
   allowed := CASE kind
     WHEN 'auction' THEN ARRAY['calls','dealer','vulnerability','alerts','explanations']
-    WHEN 'context' THEN ARRAY['board_number','dealer','vulnerability','scoring','acting_seat','public_inferences']
-    WHEN 'response' THEN ARRAY['bid','action','meaning','forcing','alert','confidence','alternatives','explanation','status','engine_output']
-    WHEN 'interpretation' THEN ARRAY['bid','action','meaning','forcing','alert','confidence','alternatives','explanation','status','public_inferences']
+    WHEN 'context' THEN ARRAY['board_number','dealer','vulnerability','scoring','acting_seat']
+    WHEN 'response' THEN ARRAY['bid','action','meaning','forcing','alert','confidence','explanation','status']
+    WHEN 'interpretation' THEN ARRAY['bid','action','meaning','forcing','alert','confidence','explanation','status']
     WHEN 'trace' THEN ARRAY['mode','request_id','engine_key','engine_version','model_hash','configuration_hash','input_fingerprint','started_at','completed_at','steps','raw_response_sha256']
     ELSE ARRAY[]::text[] END;
-  RETURN NOT EXISTS (SELECT 1 FROM jsonb_object_keys(payload) k WHERE NOT (k = ANY(allowed)));
+  IF EXISTS (SELECT 1 FROM jsonb_object_keys(payload) k WHERE NOT (k = ANY(allowed))) THEN RETURN false; END IF;
+  IF kind='auction' THEN
+    RETURN jsonb_typeof(payload->'calls')='array'
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(payload->'calls') v WHERE jsonb_typeof(v)<>'string');
+  ELSIF kind IN ('context','response','interpretation') THEN
+    RETURN NOT EXISTS (SELECT 1 FROM jsonb_each(payload) e WHERE jsonb_typeof(e.value) NOT IN ('string','number','boolean','null'));
+  END IF;
+  RETURN true;
 END $$;
 
 CREATE TABLE bidding.world_intake_batch (
@@ -72,12 +79,34 @@ CREATE TABLE bidding.world_intake_batch (
  metadata jsonb NOT NULL DEFAULT '{}' CHECK(jsonb_typeof(metadata)='object' AND NOT bidding.contains_forbidden_hidden_key(metadata)),
  created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(school_id,batch_key));
 
+CREATE TABLE bidding.world_canon_gap_binding (
+ knowledge_gap_id uuid PRIMARY KEY REFERENCES public.knowledge_gap ON DELETE RESTRICT,
+ school_id uuid NOT NULL REFERENCES public.school ON DELETE RESTRICT,
+ request_fingerprint text NOT NULL CHECK(btrim(request_fingerprint)<>''),
+ system_profile_key text NOT NULL CHECK(btrim(system_profile_key)<>''), system_version text NOT NULL CHECK(btrim(system_version)<>''),
+ learner_level text NOT NULL CHECK(btrim(learner_level)<>''), auction_context_id text NOT NULL CHECK(btrim(auction_context_id)<>''),
+ effective_at timestamptz NOT NULL, profile_fingerprint text NOT NULL CHECK(profile_fingerprint ~ '^[0-9a-f]{64}$'),
+ created_at timestamptz NOT NULL DEFAULT clock_timestamp(), UNIQUE(school_id,request_fingerprint));
+CREATE OR REPLACE FUNCTION bidding.validate_world_canon_gap_binding()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NOT EXISTS(SELECT 1 FROM public.knowledge_gap g WHERE g.knowledge_gap_id=NEW.knowledge_gap_id AND g.school_id=NEW.school_id)
+ THEN RAISE EXCEPTION 'BID_WORLD_GAP_BINDING_SCHOOL_MISMATCH' USING ERRCODE='23514'; END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER world_canon_gap_binding_guard BEFORE INSERT ON bidding.world_canon_gap_binding
+FOR EACH ROW EXECUTE FUNCTION bidding.validate_world_canon_gap_binding();
+CREATE TRIGGER world_canon_gap_binding_append_only BEFORE UPDATE OR DELETE ON bidding.world_canon_gap_binding
+FOR EACH ROW EXECUTE FUNCTION bidding.reject_append_only_mutation();
+
 CREATE TABLE bidding.world_robot (
  world_robot_id uuid PRIMARY KEY DEFAULT uuidv7(), robot_key text NOT NULL UNIQUE CHECK(btrim(robot_key)<>''),
  display_name text NOT NULL CHECK(btrim(display_name)<>''), engine_version text NOT NULL CHECK(btrim(engine_version)<>''),
  model_hash text NOT NULL CHECK(model_hash ~ '^[0-9a-f]{64}$'),
  license_boundary jsonb NOT NULL CHECK(jsonb_typeof(license_boundary)='object' AND license_boundary <> '{}'::jsonb
    AND license_boundary ?& ARRAY['license_name','license_version','usage_scope','api_boundary']
+   AND jsonb_typeof(license_boundary->'license_name')='string' AND jsonb_typeof(license_boundary->'license_version')='string'
+   AND jsonb_typeof(license_boundary->'usage_scope')='string' AND jsonb_typeof(license_boundary->'api_boundary')='string'
    AND COALESCE(btrim(license_boundary->>'license_name'),'')<>'' AND COALESCE(btrim(license_boundary->>'license_version'),'')<>''
    AND COALESCE(btrim(license_boundary->>'usage_scope'),'')<>'' AND COALESCE(btrim(license_boundary->>'api_boundary'),'')<>''
    AND NOT bidding.contains_forbidden_hidden_key(license_boundary)),
@@ -97,7 +126,7 @@ CREATE TABLE bidding.world_robot_decision (
  acting_seat text NOT NULL CHECK(acting_seat IN ('N','E','S','W')), acting_hand jsonb NOT NULL CHECK(bidding.valid_acting_hand(acting_hand)),
  public_auction jsonb NOT NULL CHECK(bidding.valid_public_robot_payload('auction',public_auction)),
  public_context jsonb NOT NULL CHECK(bidding.valid_public_robot_payload('context',public_context)),
- raw_response jsonb NOT NULL CHECK(bidding.valid_public_robot_payload('response',raw_response)),
+ raw_response jsonb NOT NULL CONSTRAINT world_robot_decision_public_raw_response CHECK(bidding.valid_public_robot_payload('response',raw_response)),
  interpretation jsonb NOT NULL CHECK(bidding.valid_public_robot_payload('interpretation',interpretation)),
  confidence text NOT NULL CHECK(confidence IN ('low','medium','high','verified','reproducible')),
  decision_trace jsonb NOT NULL CHECK(bidding.valid_public_robot_payload('trace',decision_trace)), recorded_at timestamptz NOT NULL DEFAULT now());
@@ -116,6 +145,18 @@ BEGIN
     OR NEW.decision_trace->>'configuration_hash' IS DISTINCT FROM c.configuration_hash
     OR NEW.decision_trace->>'raw_response_sha256' IS DISTINCT FROM encode(digest(NEW.raw_response::text,'sha256'),'hex')
     OR jsonb_typeof(NEW.decision_trace->'steps')<>'array' OR jsonb_array_length(NEW.decision_trace->'steps')=0
+    OR COALESCE(btrim(NEW.decision_trace->>'request_id'),'')='' OR COALESCE(btrim(NEW.decision_trace->>'input_fingerprint'),'')=''
+    OR (NEW.decision_trace->>'started_at')::timestamptz >= (NEW.decision_trace->>'completed_at')::timestamptz
+    OR EXISTS (SELECT 1 FROM jsonb_array_elements(NEW.decision_trace->'steps') step
+       WHERE jsonb_typeof(step)<>'object'
+          OR NOT (step ?& ARRAY['seq','event','at','status','input_hash','output_hash'])
+          OR EXISTS (SELECT 1 FROM jsonb_object_keys(step) k WHERE k NOT IN ('seq','event','at','status','input_hash','output_hash'))
+          OR jsonb_typeof(step->'seq')<>'number' OR jsonb_typeof(step->'event')<>'string'
+          OR jsonb_typeof(step->'at')<>'string' OR jsonb_typeof(step->'status')<>'string'
+          OR jsonb_typeof(step->'input_hash')<>'string' OR jsonb_typeof(step->'output_hash')<>'string'
+          OR COALESCE(btrim(step->>'event'),'')='' OR COALESCE(btrim(step->>'status'),'')=''
+          OR (step->>'at')::timestamptz < (NEW.decision_trace->>'started_at')::timestamptz
+          OR (step->>'at')::timestamptz > (NEW.decision_trace->>'completed_at')::timestamptz)
  THEN RAISE EXCEPTION 'BID_WORLD_ROBOT_TRACE_INCOMPLETE_OR_UNPINNED' USING ERRCODE='23514'; END IF;
  RETURN NEW;
 END $$;
@@ -140,14 +181,11 @@ CREATE TABLE bidding.world_resolution_trace (
 CREATE OR REPLACE FUNCTION bidding.validate_world_resolution_trace()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
- IF NEW.knowledge_gap_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.knowledge_gap g
+ IF NEW.knowledge_gap_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM bidding.world_canon_gap_binding g
    WHERE g.knowledge_gap_id=NEW.knowledge_gap_id AND g.school_id=NEW.school_id
-     AND g.context_scope->>'request_fingerprint' IS NOT DISTINCT FROM NEW.request_fingerprint
-     AND g.context_scope->>'system_profile_key' IS NOT DISTINCT FROM NEW.system_profile_key
-     AND g.context_scope->>'system_version' IS NOT DISTINCT FROM NEW.system_version
-     AND g.context_scope->>'learner_level' IS NOT DISTINCT FROM NEW.learner_level
-     AND g.context_scope->>'auction_context_id' IS NOT DISTINCT FROM NEW.auction_context_id
-     AND (g.context_scope->>'effective_at')::timestamptz IS NOT DISTINCT FROM NEW.effective_at)
+     AND g.request_fingerprint=NEW.request_fingerprint AND g.system_profile_key=NEW.system_profile_key
+     AND g.system_version=NEW.system_version AND g.learner_level=NEW.learner_level
+     AND g.auction_context_id=NEW.auction_context_id AND g.effective_at=NEW.effective_at)
  THEN RAISE EXCEPTION 'BID_WORLD_TRACE_GAP_SCHOOL_MISMATCH' USING ERRCODE='23514'; END IF;
  IF EXISTS (
    SELECT 1 FROM unnest(NEW.canon_rule_ids||NEW.world_rule_ids) x(rule_id)
@@ -173,8 +211,16 @@ CREATE TRIGGER world_resolution_trace_guard BEFORE INSERT ON bidding.world_resol
 CREATE TRIGGER world_resolution_trace_append_only BEFORE UPDATE OR DELETE ON bidding.world_resolution_trace FOR EACH ROW EXECUTE FUNCTION bidding.reject_append_only_mutation();
 
 GRANT INSERT(school_id,batch_key,manifest_sha256,source_count,author_count,audit_count,queue_count,metadata) ON bidding.world_intake_batch TO bridge_school_worker;
+GRANT INSERT(knowledge_gap_id,school_id,request_fingerprint,system_profile_key,system_version,learner_level,auction_context_id,effective_at,profile_fingerprint)
+ ON bidding.world_canon_gap_binding TO bridge_school_app,bridge_school_worker;
+GRANT SELECT ON bidding.world_canon_gap_binding TO bridge_school_app,bridge_school_worker;
 GRANT INSERT ON bidding.world_robot_decision TO bridge_school_worker;
 GRANT INSERT ON bidding.world_resolution_trace TO bridge_school_app,bridge_school_worker;
+GRANT SELECT ON bidding.world_robot,bidding.world_robot_configuration TO bridge_school_worker;
+GRANT SELECT ON bidding.rule TO bridge_school_app,bridge_school_worker;
+GRANT SELECT ON public.knowledge_version,public.knowledge_gap TO bridge_school_app,bridge_school_worker;
+GRANT INSERT(school_id,question,context_scope,status) ON public.knowledge_gap TO bridge_school_app,bridge_school_worker;
+REVOKE ALL ON FUNCTION bidding.validate_world_canon_gap_binding() FROM PUBLIC,bridge_school_reader,bridge_school_app,bridge_school_worker;
 REVOKE ALL ON FUNCTION bidding.validate_world_resolution_trace() FROM PUBLIC,bridge_school_reader,bridge_school_app,bridge_school_worker;
 REVOKE ALL ON FUNCTION bidding.validate_world_robot_decision() FROM PUBLIC,bridge_school_reader,bridge_school_app,bridge_school_worker;
 INSERT INTO public.schema_migration(migration_key) VALUES('0201_world_knowledge_v0') ON CONFLICT DO NOTHING;
