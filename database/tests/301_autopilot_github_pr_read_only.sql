@@ -40,10 +40,53 @@ BEGIN
     IF claimed.task_id <> github_id OR claimed.current_step_key <> 'github.pr.snapshot' THEN
         RAISE EXCEPTION 'AUTOPILOT_GITHUB_CLAIM_INVALID';
     END IF;
+    BEGIN
+        PERFORM autopilot.complete_task(
+            github_id, 'sql-github-worker-1', claimed.lease_epoch,
+            'GITHUB_PR_READ_ONLY_SNAPSHOT', repeat('d', 64),
+            jsonb_build_object(
+                'repository', 'olegmed1-art/bridge-video-free',
+                'pr_number', 991,
+                'state', 'open',
+                'draft', true,
+                'head_sha', repeat('b', 40),
+                'mergeable', true,
+                'updated_at', '2026-08-30T18:00:00Z',
+                'api_host', 'api.github.com',
+                'http_method', 'GET',
+                'production_mutation', false,
+                'model_calls', 0,
+                'cost_actual_microusd', 0,
+                'task_id', github_id::text,
+                'task_kind', 'GITHUB_PR_READ_ONLY_V1',
+                'runtime', 'ORACLE_RESIDENT'
+            )
+        );
+        RAISE EXCEPTION 'AUTOPILOT_GITHUB_FORGED_SUMMARY_ACCEPTED';
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM NOT LIKE '%AUTOPILOT_GITHUB_EVIDENCE_INVALID%' THEN RAISE; END IF;
+    END;
+
     IF NOT autopilot.complete_task(
         github_id, 'sql-github-worker-1', claimed.lease_epoch,
         'GITHUB_PR_READ_ONLY_SNAPSHOT', repeat('f', 64),
-        '{"repository":"olegmed1-art/bridge-video-free","pr_number":991,"production_mutation":false,"model_calls":0,"cost_actual_microusd":0}'::jsonb
+        jsonb_build_object(
+            'repository', 'olegmed1-art/bridge-video-free',
+            'pr_number', 991,
+            'state', 'open',
+            'draft', true,
+            'head_sha', repeat('a', 40),
+            'mergeable', NULL,
+            'updated_at', '2026-08-30T18:00:00Z',
+            'api_host', 'api.github.com',
+            'http_method', 'GET',
+            'production_mutation', false,
+            'model_calls', 0,
+            'cost_actual_microusd', 0,
+            'task_id', github_id::text,
+            'task_kind', 'GITHUB_PR_READ_ONLY_V1',
+            'runtime', 'ORACLE_RESIDENT'
+        )
     ) THEN
         RAISE EXCEPTION 'AUTOPILOT_GITHUB_COMPLETION_REJECTED';
     END IF;
