@@ -39,12 +39,35 @@ CLEANUP_RE = re.compile(r"UNIVERSAL_VIDEO_CONTAINER_CLEANUP area=root-cache age_
 STORAGE_RE = re.compile(r"UNIVERSAL_VIDEO_CONTAINER_STORAGE area=(?:spool|output|media|model-cache|docker|source|bridge-school|var-lib|var-log|home|tmp|root|video-venv|var-bridge|containerd|snapd|apt|postgresql|root-cache|root-local|root-npm|root-cargo|root-rustup|pip-cache|hf-cache|uv-cache|torch-cache|whisper-cache|playwright-cache|containerd-content|containerd-snapshots|rootfs) used_kb=[0-9]+")
 
 
+def _docker_error_code(line: str) -> str | None:
+    text = line.lower()
+    if "error response from daemon" not in text and "oci runtime" not in text:
+        return None
+    if "no space left on device" in text:
+        return "UV_CONTAINER_DOCKER_DISK_FULL"
+    if "mount" in text:
+        return "UV_CONTAINER_DOCKER_MOUNT_FAILED"
+    if "permission denied" in text or "operation not permitted" in text:
+        return "UV_CONTAINER_DOCKER_PERMISSION_DENIED"
+    if "oci runtime" in text:
+        return "UV_CONTAINER_OCI_RUNTIME_FAILED"
+    if "network" in text or "iptables" in text:
+        return "UV_CONTAINER_DOCKER_NETWORK_FAILED"
+    if "already in use" in text:
+        return "UV_CONTAINER_DOCKER_NAME_CONFLICT"
+    return "UV_CONTAINER_DOCKER_RUN_FAILED"
+
+
 def bounded_diagnostics(lines: Iterable[str]) -> list[str]:
     """Return canonical safe diagnostics and discard all other log content."""
 
     output: list[str] = []
     for raw in lines:
         line = raw.strip()
+        docker_code = _docker_error_code(line)
+        if docker_code:
+            output.append(json.dumps({"error_code": docker_code, "status": "FAILED"}, separators=(",", ":"), sort_keys=True))
+            continue
         if line in ALLOWED_ERRORS or MOUNT_ERROR_RE.fullmatch(line) or RESOURCE_RE.fullmatch(line) or PREPARE_STAGE_RE.fullmatch(line) or CLEANUP_RE.fullmatch(line) or STORAGE_RE.fullmatch(line):
             output.append(line)
             continue

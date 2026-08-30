@@ -200,3 +200,23 @@ def test_container_gates_prepare_source_without_reinstalling_legacy_runtime() ->
     assert "UNIVERSAL_VIDEO_SOURCE_ONLY_PREPARE_PASS" in run_command
     assert "UNIVERSAL_VIDEO_SOURCE_ONLY=1" in evidence
     assert "UNIVERSAL_VIDEO_SOURCE_ONLY=1" in promotion
+
+
+def test_bounded_parser_maps_docker_errors_without_leaking_raw_daemon_text() -> None:
+    path = ROOT / "ops/bounded_container_log_diagnostic.py"
+    spec = importlib.util.spec_from_file_location("bounded_docker_readiness", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    result = module.bounded_diagnostics(
+        [
+            "docker: Error response from daemon: invalid mount config at /private/token",
+            "docker: Error response from daemon: opaque unexpected detail secret=hidden",
+        ]
+    )
+    assert result == [
+        '{"error_code":"UV_CONTAINER_DOCKER_MOUNT_FAILED","status":"FAILED"}',
+        '{"error_code":"UV_CONTAINER_DOCKER_RUN_FAILED","status":"FAILED"}',
+    ]
+    assert all("private" not in line and "secret" not in line for line in result)
