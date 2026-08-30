@@ -177,3 +177,31 @@ def test_ready_queue_is_drained_without_a_poll_gap(monkeypatch):
     config = WorkerConfig(dsn=DIRECT_DSN, worker_id="test-worker")
     assert drain_ready(config) == 3
     assert calls == ["test-worker"] * 4
+
+
+def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():
+    workflow = open(
+        ".github/workflows/oracle-autopilot-shadow-activation.yml", encoding="utf-8"
+    ).read()
+    assert "EXPECTED_STAGED_REVISION: edc7e8530f0aa3efa84910cb09ee459ec25f1cf6" in workflow
+    assert "request['activation_scope'] == 'SHADOW_ONLY'" in workflow
+    assert "request['no_instance_stop'] is True" in workflow
+    assert "request['neon_min_cu'] == 0.25" in workflow
+    assert "request['neon_max_cu'] == 0.25" in workflow
+    assert 'systemctl enable --now "$service"' in workflow
+    assert "AUTOPILOT_PRODUCTION_MUTATIONS=NO" in workflow
+    assert "ORACLE_INSTANCE_STOP_REQUESTED=NO" in workflow
+    for forbidden in (
+        "--action " + "STOP",
+        "systemctl " + "stop",
+        "oci compute instance " + "action",
+    ):
+        assert forbidden not in workflow
+
+
+def test_oracle_power_workflow_has_no_automatic_trigger():
+    workflow = open(
+        ".github/workflows/oracle-instance-power.yml", encoding="utf-8"
+    ).read()
+    assert "\n  schedule:" not in workflow
+    assert "\n  push:" not in workflow
