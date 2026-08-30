@@ -57,7 +57,7 @@ jobs:
     env:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
-      EXPECTED_STAGED_REVISION: edc7e8530f0aa3efa84910cb09ee459ec25f1cf6
+      EXPECTED_STAGED_REVISION: e9c9381f0aed388ef72718cdcf67ac9928947aef
       SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
       SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
       SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
