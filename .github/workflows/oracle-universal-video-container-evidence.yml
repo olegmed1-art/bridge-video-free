@@ -88,41 +88,7 @@ jobs:
           container_rc=$?
           set -e
           if (( container_rc != 0 )); then
-            CONTAINER_LOG="$RUNNER_TEMP/container.log" python - <<'PY' || echo 'UV_CONTAINER_BOUNDED_DIAGNOSTIC_UNAVAILABLE'
-            import json
-            import os
-            import re
-            from pathlib import Path
-
-            allowed = {
-                'ERROR: docker is unavailable; install and attest Docker separately',
-                'ERROR: docker daemon is unavailable',
-                'ERROR: universal-video Unix user missing',
-                'ERROR: a video job is running; refusing container rollout',
-                'ERROR: protected Google Drive OAuth file missing',
-                'ERROR: container image digest unavailable',
-            }
-            found = False
-            for raw in Path(os.environ['CONTAINER_LOG']).read_text(encoding='utf-8', errors='replace').splitlines():
-                line = raw.strip()
-                if line in allowed or re.fullmatch(r'ERROR: unsafe or missing mount: [A-Za-z0-9._/-]+', line):
-                    print(line)
-                    found = True
-                    continue
-                try:
-                    value = json.loads(line)
-                except (TypeError, ValueError):
-                    continue
-                if (
-                    isinstance(value, dict)
-                    and set(value) == {'error_code', 'status'}
-                    and value.get('status') == 'FAILED'
-                    and re.fullmatch(r'UV_CONTAINER_[A-Z0-9_]+', str(value.get('error_code', '')))
-                ):
-                    print(json.dumps(value, separators=(',', ':'), sort_keys=True))
-                    found = True
-            raise SystemExit(0 if found else 1)
-            PY
+            python ops/bounded_container_log_diagnostic.py "$RUNNER_TEMP/container.log" || echo 'UV_CONTAINER_BOUNDED_DIAGNOSTIC_UNAVAILABLE'
             exit "$container_rc"
           fi
           grep -E '^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=[0-9a-f]{40} image_digest=sha256:[0-9a-f]{64} activated=0$' "$RUNNER_TEMP/container.log"
