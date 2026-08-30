@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (ROOT / "ops/oracle_universal_video_container_promote.sh").read_text(encoding="utf-8")
 WORKFLOW = (ROOT / ".github/workflows/oracle-universal-video-container-promote.yml").read_text(encoding="utf-8")
+OPERATOR_INSTALL = (ROOT / "ops/install_universal_video_operator.sh").read_text(encoding="utf-8")
 
 
 def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
@@ -121,8 +122,33 @@ def test_promotion_atomically_syncs_revision_bound_operator() -> None:
     assert 'bash "$SOURCE_DIR/ops/install_universal_video_operator.sh"' in SCRIPT
     assert 'git hash-object "$OPERATOR_TARGET"' in SCRIPT
     assert 'rev-parse "$EXPECTED_COMMIT:ops/universal_video_operator.sh"' in SCRIPT
-    assert "CURRENT_STAGE='operator-sync'" in SCRIPT
+    assert "CURRENT_STAGE='operator-install'" in SCRIPT
+    assert "CURRENT_STAGE='operator-blob'" in SCRIPT
+    assert "CURRENT_STAGE='operator-smoke'" in SCRIPT
     assert 'sudo -u ocarun sudo -n "$OPERATOR_TARGET" status ..' in SCRIPT
+
+
+def test_operator_installer_failures_have_bounded_nonsecret_codes() -> None:
+    assert 'if ! operator_install_output="$(' in SCRIPT
+    assert '2>&1' in SCRIPT
+    assert 'fail "$code"' in SCRIPT
+    assert 'UV_CONTAINER_PROMOTION_OPERATOR_INSTALL_FAILED' in SCRIPT
+    assert 'UV_CONTAINER_PROMOTION_OPERATOR_SOURCE_DIRTY' in SCRIPT
+    assert 'UV_CONTAINER_PROMOTION_OPERATOR_SOURCE_MISMATCH' in SCRIPT
+    assert 'UV_CONTAINER_PROMOTION_OPERATOR_OBSOLETE_UNSAFE' in SCRIPT
+    assert 'UV_CONTAINER_PROMOTION_OPERATOR_INSTALL_ATTESTATION_MISSING' in SCRIPT
+    assert 'echo "$operator_install_output"' not in SCRIPT
+    for reason in (
+        "staging directory install failed",
+        "temporary sudoers file unavailable",
+        "temporary sudoers mode failed",
+        "operator sudoers validation failed",
+        "operator target install failed",
+        "operator sudoers install failed",
+        "system sudoers validation failed",
+        "post-retirement sudoers validation failed",
+    ):
+        assert reason in OPERATOR_INSTALL
 
 
 def test_operator_sync_is_restored_by_promotion_rollback() -> None:
