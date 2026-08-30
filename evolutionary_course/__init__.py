@@ -46,6 +46,12 @@ from .mastery import (
     validate_mastery_policy,
 )
 from .learning_module import MODULE_SCHEMA, LearningModuleError, validate_learning_module
+from .adaptive_selector import (
+    SELECTOR_POLICY_SCHEMA,
+    SELECTOR_SCHEMA,
+    AdaptiveSelectorError,
+    select_next_activity,
+)
 
 __all__ = [
     "ADAPTER_SCHEMA",
@@ -70,6 +76,9 @@ __all__ = [
     "QUEUE_SCHEMA",
     "MODULE_SCHEMA",
     "LearningModuleError",
+    "SELECTOR_POLICY_SCHEMA",
+    "SELECTOR_SCHEMA",
+    "AdaptiveSelectorError",
     "adapt_video31_quality",
     "adapt_video31_quality_with_catalog",
     "build_methodology_review_queue",
@@ -85,4 +94,5 @@ __all__ = [
     "evaluate_mastery_evidence",
     "validate_mastery_policy",
     "validate_learning_module",
+    "select_next_activity",
 ]
