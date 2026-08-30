@@ -424,3 +424,16 @@ Each entry records:
 **Database effect:** Test-only branch schemas and fixtures were removed. Protected production `br-wispy-lab-b1rq54of` and the older historical validation branch `br-muddy-resonance-b1pf1tze` were not changed.  
 **Recovery:** The deleted branches are not the evidence source; the reproducible migration commit, checksums, workflow runs and append-only log are retained. A fresh branch must be created for any later preflight.  
 **Next:** Await independent I2 disposition on draft PR #798.
+
+
+## 2026-08-30 / LOG-0039 - PR #798 exact-head CI and independent I2 passed
+
+**Role:** Technical owner / Red Team / Independent reviewer  
+**Action:** Completed iterative fail-closed hardening of the unpromoted `0200_bidding_knowledge_v0` migration in draft PR #798 and requested a fresh independent review after every material correction.  
+**Exact head:** `c3c668caec81fc53d4b556d2a0b8c03a21ccf4b2`.  
+**Current protections:** concurrency-safe activation and mutation locking; server-controlled evidence insertion time; cross-school authority and provenance scope; append-only audit paths; bounded fail-closed hidden-information traversal; normalized owner/seat aliases including Unicode whitespace; bounded compound card-field grammar; SCHOOL_CANON/WORLD isolation.  
+**GitHub evidence:** Bridge School Database CI `33305908016`, Migration Namespace Guard `33305908117`, Secret gate `33305908113` and META Evidence Gate `33305908037` all passed on the exact head. Independent Codex I2 review reported no major issues on the same commit in PR comment `5468100640`.  
+**Database effect:** None. No production migration, Canon rule creation or activation occurred. The earlier disposable-branch preflights in LOG-0033 and LOG-0036 prove only their exact historical checksums and are superseded as promotion evidence by later hardening.  
+**Residual gate:** The final exact head has CI and I2 evidence but has not yet received a fresh production-derived Neon preflight with its final composite checksum, rollback smoke, zero-residual verification and idempotent rerun.  
+**Status:** Infrastructure code candidate is I2-clean; production promotion remains `NO-GO` until the fresh preflight, rollback evidence and a separate irreversible production decision. PR #798 remains draft.  
+**Next:** Reconcile this append-only log, then prepare the final migration preflight without changing protected production.
