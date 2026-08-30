@@ -64,7 +64,10 @@ def _normalized_quality(quality: Mapping[str, Any], frame_hashes: Mapping[str, s
     return result
 
 
-def run_longitudinal_pilot(payload: Mapping[str, Any], *, confirmation: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def run_longitudinal_pilot(
+    payload: Mapping[str, Any], *, confirmation: Mapping[str, Any] | None = None,
+    catalog: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Run one read-only pilot or return explicit fail-closed blockers."""
     blockers: list[str] = []
     quality = payload.get("quality_v2")
@@ -80,7 +83,9 @@ def run_longitudinal_pilot(payload: Mapping[str, Any], *, confirmation: Mapping[
     confirmed_date = str(confirmation.get("lesson_date") or "").strip()
     if not confirmed_date:
         blockers.append("CONFIRMED_LESSON_DATE_MISSING")
-    expected_file_id = str(identity.get("original_source_drive_id") or "").strip()
+    analyzed_file_id = str(identity.get("master_source_drive_id") or "").strip()
+    original_file_id = str(identity.get("original_source_drive_id") or "").strip()
+    expected_file_id = analyzed_file_id or original_file_id
     confirmed_file_id = str(confirmation.get("video_file_id") or "").strip()
     if not confirmed_file_id:
         blockers.append("EXACT_VIDEO_FILE_ID_MISSING")
@@ -89,6 +94,8 @@ def run_longitudinal_pilot(payload: Mapping[str, Any], *, confirmation: Mapping[
     source_name = str(confirmation.get("source_name") or "").strip()
     if not source_name:
         blockers.append("EXACT_SOURCE_NAME_MISSING")
+    if catalog is None:
+        blockers.append("REVIEWED_SKILL_CATALOG_REQUIRED")
     transcript_ids, frame_hashes = _source_inventory(payload)
     if not transcript_ids:
         blockers.append("SOURCE_TRANSCRIPT_INVENTORY_MISSING")
@@ -97,6 +104,8 @@ def run_longitudinal_pilot(payload: Mapping[str, Any], *, confirmation: Mapping[
         "source_job_id": payload.get("job_id"),
         "lesson_number": identity.get("lesson_number"),
         "source_artifact_schema": payload.get("schema"),
+        "analyzed_source_video_file_id": analyzed_file_id or None,
+        "original_source_video_file_id": original_file_id or None,
         "media_reprocessed": False,
         "authority": {"canonical_promotion_allowed": False, "curriculum_activation_allowed": False,
                       "student_profile_write_allowed": False, "publication_allowed": False},
@@ -110,24 +119,41 @@ def run_longitudinal_pilot(payload: Mapping[str, Any], *, confirmation: Mapping[
             source={"video_file_id": confirmed_file_id, "source_name": source_name,
                     "evidence_state": "VERIFIED", "transcript_segment_ids": transcript_ids,
                     "frame_sha256": sorted(set(frame_hashes.values()))},
+            skill_catalog=catalog,
+            require_catalog_binding=True,
         )
     except Video31AdapterError as exc:
         return {**base, "status": "BLOCKED", "blockers": [f"ADAPTER_REJECTED: {exc}"]}
-    return {**base, "status": "READY_FOR_PRIVATE_REVIEW", "blockers": [], "adapter_report": adapted}
+    needs_methodology = any(
+        "SKILL_WORDING_NOT_REVIEWED" in item.get("reason_codes", [])
+        for item in adapted["rejected_interactions"]
+    )
+    return {
+        **base,
+        "status": "METHODOLOGY_REVIEW_REQUIRED" if needs_methodology else "READY_FOR_PRIVATE_REVIEW",
+        "blockers": [],
+        "adapter_report": adapted,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the read-only Evolutionary Course pilot")
     parser.add_argument("inputs", nargs="+", type=Path)
     parser.add_argument("--confirmations", type=Path)
+    parser.add_argument("--catalog", required=True, type=Path)
     args = parser.parse_args(argv)
     confirmations: Mapping[str, Any] = {}
     if args.confirmations:
         confirmations = json.loads(args.confirmations.read_text(encoding="utf-8"))
+    catalog = json.loads(args.catalog.read_text(encoding="utf-8"))
     reports = []
     for path in args.inputs:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        reports.append(run_longitudinal_pilot(payload, confirmation=confirmations.get(str(payload.get("job_id") or ""))))
+        reports.append(run_longitudinal_pilot(
+            payload,
+            confirmation=confirmations.get(str(payload.get("job_id") or "")),
+            catalog=catalog,
+        ))
     print(json.dumps(reports, ensure_ascii=False, indent=2, sort_keys=True))
     return 0 if all(report["status"] != "BLOCKED" for report in reports) else 2
 
