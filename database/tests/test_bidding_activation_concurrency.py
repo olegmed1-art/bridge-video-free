@@ -135,6 +135,73 @@ WHERE r.rule_key='ci.activation.concurrent'
 """
 
 
+def assert_late_evidence_uses_insertion_time() -> None:
+    older_transaction = psycopg.connect(DATABASE_URL)
+    try:
+        older_transaction.execute("SELECT pg_sleep(0.02)")
+        with psycopg.connect(DATABASE_URL) as newer_transaction:
+            newer_transaction.execute(
+                """
+                INSERT INTO bidding.rule_test_run(
+                    school_id,rule_test_id,result,result_details,method_version
+                )
+                SELECT r.school_id,t.rule_test_id,'pass',
+                       '{"ordering":"newer-transaction-pass"}'::jsonb,
+                       'ci-concurrency-v1'
+                  FROM bidding.rule AS r
+                  JOIN bidding.rule_test AS t ON t.rule_id=r.rule_id
+                 WHERE r.rule_key='ci.activation.concurrent'
+                   AND t.test_key='positive'
+                """
+            )
+
+        older_transaction.execute(
+            """
+            INSERT INTO bidding.rule_test_run(
+                school_id,rule_test_id,result,result_details,method_version
+            )
+            SELECT r.school_id,t.rule_test_id,'fail',
+                   '{"ordering":"older-transaction-late-fail"}'::jsonb,
+                   'ci-concurrency-v1'
+              FROM bidding.rule AS r
+              JOIN bidding.rule_test AS t ON t.rule_id=r.rule_id
+             WHERE r.rule_key='ci.activation.concurrent'
+               AND t.test_key='positive'
+            """
+        )
+        older_transaction.commit()
+    finally:
+        older_transaction.close()
+
+    with psycopg.connect(DATABASE_URL) as verify:
+        latest = verify.execute(
+            """
+            SELECT bidding.latest_test_result(t.rule_test_id)
+              FROM bidding.rule AS r
+              JOIN bidding.rule_test AS t ON t.rule_id=r.rule_id
+             WHERE r.rule_key='ci.activation.concurrent'
+               AND t.test_key='positive'
+            """
+        ).fetchone()[0]
+        if latest != "fail":
+            raise AssertionError(
+                "Later inserted failure was hidden by transaction-start ordering"
+            )
+        verify.execute(
+            """
+            INSERT INTO bidding.rule_test_run(
+                school_id,rule_test_id,result,result_details,method_version
+            )
+            SELECT r.school_id,t.rule_test_id,'pass',
+                   '{"ordering":"reset"}'::jsonb,'ci-concurrency-v1'
+              FROM bidding.rule AS r
+              JOIN bidding.rule_test AS t ON t.rule_id=r.rule_id
+             WHERE r.rule_key='ci.activation.concurrent'
+               AND t.test_key='positive'
+            """
+        )
+
+
 def assert_evidence_waits_then_fails(
     label: str,
     start_offset: str,
@@ -249,6 +316,8 @@ def assert_repeatable_read_mutation_fails(label: str, mutation_sql: str) -> None
 def main() -> None:
     with psycopg.connect(DATABASE_URL) as setup_conn:
         setup_conn.execute(SETUP_SQL)
+
+    assert_late_evidence_uses_insertion_time()
 
     first = psycopg.connect(DATABASE_URL)
     second_started = threading.Event()

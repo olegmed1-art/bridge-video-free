@@ -33,7 +33,9 @@ CREATE TABLE bidding.rule_test_run (
     evidence_id uuid REFERENCES public.evidence(evidence_id) ON DELETE SET NULL,
     method_version text NOT NULL CHECK (btrim(method_version) <> ''),
     executed_at timestamptz NOT NULL DEFAULT now(),
-    created_at timestamptz NOT NULL DEFAULT now(),
+    -- Evidence recency is insertion order, not transaction start time.  now()
+    -- is stable for a transaction and can make a later row look older.
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     CHECK (NOT bidding.contains_forbidden_hidden_key(result_details))
 );
 
