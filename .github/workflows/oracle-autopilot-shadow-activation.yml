@@ -205,21 +205,37 @@ jobs:
           fi
           sleep 12
 
-          [[ "$(systemctl is-active "$service")" == active ]]
-          [[ "$(systemctl is-enabled "$service")" == enabled ]]
-          [[ "$(systemctl show -p NRestarts --value "$service")" == 0 ]]
+          diag_active="$(systemctl is-active "$service" 2>/dev/null || true)"
+          diag_enabled="$(systemctl is-enabled "$service" 2>/dev/null || true)"
+          diag_restarts="$(systemctl show -p NRestarts --value "$service")"
           pid="$(systemctl show -p MainPID --value "$service")"
-          [[ "$pid" =~ ^[1-9][0-9]*$ ]]
           expected_uid="$(id -u school-autopilot)"
-          actual_uid="$(awk '/^Uid:/{print $2}' "/proc/$pid/status")"
+          actual_uid='unavailable'
+          if [[ "$pid" =~ ^[1-9][0-9]*$ && -r "/proc/$pid/status" ]]; then
+            actual_uid="$(awk '/^Uid:/{print $2}' "/proc/$pid/status")"
+          fi
+          printf 'AUTOPILOT_DIAG_ACTIVE=%s\n' "$diag_active"
+          printf 'AUTOPILOT_DIAG_ENABLED=%s\n' "$diag_enabled"
+          printf 'AUTOPILOT_DIAG_NRESTARTS=%s\n' "$diag_restarts"
+          printf 'AUTOPILOT_DIAG_MAINPID_VALID=%s\n' "$([[ "$pid" =~ ^[1-9][0-9]*$ ]] && echo yes || echo no)"
+          printf 'AUTOPILOT_DIAG_RUNTIME_UID_MATCH=%s\n' "$([[ "$actual_uid" == "$expected_uid" ]] && echo yes || echo no)"
+
+          [[ "$diag_active" == active ]]
+          [[ "$diag_enabled" == enabled ]]
+          [[ "$diag_restarts" == 0 ]]
+          [[ "$pid" =~ ^[1-9][0-9]*$ ]]
           [[ "$actual_uid" == "$expected_uid" ]]
 
           if [[ "$activated_here" == 1 ]]; then
             active_since="$(systemctl show -p ActiveEnterTimestamp --value "$service")"
             test -n "$active_since"
             journal="$(journalctl -u "$service" --since "$active_since" --no-pager -n 100)"
-            grep -F 'worker_started' <<<"$journal" >/dev/null
-            ! grep -Eq 'listener_reconnect|Traceback|RuntimeError' <<<"$journal"
+            worker_started_count="$(grep -Fc 'worker_started' <<<"$journal" || true)"
+            unsafe_journal_count="$(grep -Ec 'listener_reconnect|Traceback|RuntimeError' <<<"$journal" || true)"
+            printf 'AUTOPILOT_DIAG_WORKER_STARTED_COUNT=%s\n' "$worker_started_count"
+            printf 'AUTOPILOT_DIAG_UNSAFE_JOURNAL_COUNT=%s\n' "$unsafe_journal_count"
+            [[ "$worker_started_count" -ge 1 ]]
+            [[ "$unsafe_journal_count" == 0 ]]
           fi
           trap - EXIT
           echo 'AUTOPILOT_SHADOW_ACTIVATION_PASS'
