@@ -51,3 +51,6 @@ def test_promotion_exposes_only_structured_container_runtime_failure_code() -> N
     assert 're.fullmatch(r"UV_CONTAINER_[A-Z0-9_]+"' in SCRIPT
     assert 'json.dumps(value,separators=(",",":"),sort_keys=True)' in SCRIPT
     assert '\\{"error_code":"UV_CONTAINER_[A-Z0-9_]+","status":"FAILED"\\}' in WORKFLOW
+    assert "Result=[A-Za-z-]+" in WORKFLOW
+    assert "ExecMain(Code|Status)=[0-9]+" in WORKFLOW
+    assert "NRestarts=[0-9]+" in WORKFLOW

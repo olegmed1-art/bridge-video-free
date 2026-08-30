@@ -91,3 +91,7 @@ def test_oracle_container_service_is_read_only_and_explicitly_activated() -> Non
     assert '--mount "type=bind,src=$STATUS_DIR,dst=/run/bridge-school"' in installer
     assert "--mount type=bind,src=/run/bridge-school,dst=/run/bridge-school" in service
     assert "ReadWritePaths=/run/bridge-school" in service
+    assert "UV_CONTAINER_SERVICE_ACTIVATION_FAILED" in installer
+    assert "UV_CONTAINER_SERVICE_INACTIVE" in installer
+    assert "-p Result -p ExecMainCode -p ExecMainStatus -p NRestarts" in installer
+    assert 'runtime_fail(){ printf \'{"error_code":"%s","status":"FAILED"}' in installer
