@@ -7,6 +7,17 @@ import argparse
 import json
 from pathlib import Path
 
+if __package__:
+    from .validate_universal_video_feature_parity import (
+        FeatureParityError,
+        require_feature_parity_pass,
+    )
+else:
+    from validate_universal_video_feature_parity import (
+        FeatureParityError,
+        require_feature_parity_pass,
+    )
+
 
 ROOT = Path(__file__).resolve().parents[1]
 ROUTING_FILE = ROOT / "ops/universal-video-runtime-routing.json"
@@ -44,6 +55,11 @@ def load_and_validate() -> dict[str, object]:
         entrypoint = route.get("entrypoint")
         if not isinstance(entrypoint, str) or not (ROOT / entrypoint).is_file():
             raise RoutingContractError("UV_RUNTIME_ROUTING_ENTRYPOINT_MISSING")
+    if active == routing.get("policy_target_route"):
+        try:
+            require_feature_parity_pass()
+        except FeatureParityError as exc:
+            raise RoutingContractError(str(exc)) from exc
     return routing
 
 
