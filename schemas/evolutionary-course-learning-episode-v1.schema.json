@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bridge-school.example/schemas/evolutionary-course-learning-episode-v1.schema.json",
+  "title": "Evolutionary Course v1 learning episode",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "course_version", "episode_id", "occurred_at", "source", "learning_task", "interaction", "claims", "mastery_transition", "authority"],
+  "properties": {
+    "schema": {"const": "evolutionary-course-learning-episode-v1"},
+    "course_version": {"const": "Evolutionary Course v1"},
+    "episode_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]{2,127}$"},
+    "occurred_at": {"type": "string", "format": "date-time"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["video_file_id", "source_name", "start_seconds", "end_seconds", "transcript_segment_ids", "frame_sha256", "evidence_state"],
+      "properties": {
+        "video_file_id": {"type": "string", "minLength": 1},
+        "source_name": {"type": "string", "minLength": 1},
+        "start_seconds": {"type": "number", "minimum": 0},
+        "end_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "transcript_segment_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "frame_sha256": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+        "evidence_state": {"enum": ["VERIFIED", "OBSERVED"]}
+      }
+    },
+    "learning_task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["skill_id", "title", "prerequisite_skill_ids"],
+      "properties": {
+        "skill_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]{2,127}$"},
+        "title": {"type": "string", "minLength": 1},
+        "prerequisite_skill_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]{2,127}$"}}
+      }
+    },
+    "interaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["teacher_actions", "student_actions", "outcome", "support_level", "completed_cycle"],
+      "properties": {
+        "teacher_actions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "student_actions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+        "outcome": {"enum": ["SUCCESS", "PARTIAL", "ERROR", "UNRESOLVED", "NOT_ASSESSED"]},
+        "support_level": {"enum": ["NONE", "PROMPT", "GUIDED", "MODELLED", "UNKNOWN"]},
+        "completed_cycle": {"const": true}
+      }
+    },
+    "claims": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim_id", "epistemic_class", "statement", "source_refs", "confidence"],
+        "properties": {
+          "claim_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]{2,127}$"},
+          "epistemic_class": {"enum": ["FACT", "INFERENCE", "RECOMMENDATION", "UNCERTAIN"]},
+          "statement": {"type": "string", "minLength": 1},
+          "source_refs": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+        }
+      }
+    },
+    "mastery_transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from_state", "to_state", "evidence_claim_ids"],
+      "properties": {
+        "from_state": {"enum": ["NOT_INTRODUCED", "INTRODUCED", "RECOGNIZED", "SUPPORTED", "INDEPENDENT", "TRANSFERRED", "UNSTABLE", "MASTERED"]},
+        "to_state": {"enum": ["NOT_INTRODUCED", "INTRODUCED", "RECOGNIZED", "SUPPORTED", "INDEPENDENT", "TRANSFERRED", "UNSTABLE", "MASTERED"]},
+        "evidence_claim_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authority_class", "review_state", "canonical_promotion_allowed", "curriculum_activation_allowed", "student_profile_write_allowed", "publication_allowed"],
+      "properties": {
+        "authority_class": {"const": "CANDIDATE_RESEARCH"},
+        "review_state": {"enum": ["DRAFT", "REVIEW_REQUIRED", "APPROVED_CANDIDATE"]},
+        "canonical_promotion_allowed": {"const": false},
+        "curriculum_activation_allowed": {"const": false},
+        "student_profile_write_allowed": {"const": false},
+        "publication_allowed": {"const": false}
+      }
+    }
+  }
+}
