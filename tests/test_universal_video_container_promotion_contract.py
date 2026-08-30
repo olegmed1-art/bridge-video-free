@@ -103,3 +103,13 @@ def test_post_switch_failures_invoke_rollback_directly() -> None:
     assert "if (( switch_started == 1 )); then" in fail_body
     assert "rollback 1" in fail_body
     assert 'local rc="${1:-$?}"' in SCRIPT
+
+
+def test_promotion_disables_legacy_and_rollback_restores_original_state() -> None:
+    assert 'old_enabled_before="$(systemctl is-enabled "$OLD_SERVICE"' in SCRIPT
+    assert 'old_active_before="$(systemctl is-active "$OLD_SERVICE"' in SCRIPT
+    assert 'systemctl disable --now "$OLD_SERVICE" || fail UV_CONTAINER_PROMOTION_LEGACY_QUIESCE_FAILED' in SCRIPT
+    assert 'CURRENT_STAGE=\'legacy-quiesce\'' in SCRIPT
+    assert 'systemctl enable "$OLD_SERVICE"' in SCRIPT
+    assert 'if [[ "$old_active_before" == active ]]; then' in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_LEGACY_ENABLED" in SCRIPT
