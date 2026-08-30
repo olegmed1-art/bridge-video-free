@@ -15,8 +15,10 @@ without Vercel Workflows in the scheduling path. It is shadow-only:
 - no model calls;
 - no arbitrary shell;
 - no GitHub, Drive, media, canon or production mutation;
-- no model or video spend; the approved Neon shadow endpoint is hard-bounded to
-  `0.25-0.25 CU` for the activation request;
+- no model or video spend; the approved Neon shadow endpoint has a `0.25 CU`
+  always-on minimum and an existing configured `8 CU` ceiling, while the
+  dedicated runtime LOGIN is limited to four connections and v1 has no heavy
+  task capability;
 - service installation is staged by default and leaves the service inactive and
   disabled;
 - the Autopilot source is copied into an immutable, root-owned release under
@@ -86,8 +88,9 @@ Activation requires all of the following:
 - the exact staged source revision is immutable and matches the reviewed
   activation request;
 - the activation workflow itself passes an exact-head independent review;
-- the director accepts the measured incremental Neon compute cost and the
-  endpoint is bounded to `0.25-0.25 CU`;
+- the director accepts the measured incremental Neon compute cost; the request
+  records the actual `0.25 CU` minimum, `8 CU` configured ceiling and four
+  runtime connections rather than claiming a lower infrastructure limit;
 - the director authorizes the bounded `SHADOW_ONLY` scope and requires the
   Oracle instance to remain running.
 
