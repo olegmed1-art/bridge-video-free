@@ -31,7 +31,7 @@ def test_current_routing_is_explicit_single_active_and_cutover_blocked() -> None
 def test_legacy_worker_checks_route_before_job_or_secret_access() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     guard = "python ops/validate_universal_video_runtime_routing.py --require-active github_actions_legacy"
-    assert workflow.index(guard) < workflow.index("Resolve job and Diana longitudinal context")
+    assert workflow.index(guard) < workflow.index("INPUT_JOB_ID:")
     assert workflow.index(guard) < workflow.index("GOOGLE_DRIVE_OAUTH_JSON")
     assert workflow.index(guard) < workflow.index("Install free open-source runtime")
     assert workflow.index(guard) < workflow.index("Process one opaque Drive job")
