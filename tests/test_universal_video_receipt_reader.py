@@ -98,7 +98,7 @@ def test_duplicate_member_and_nonfinite_number_fail(tmp_path: Path):
     assert _run(nonfinite).returncode != 0
 
 
-def test_failed_receipt_is_bounded_and_sanitized(tmp_path: Path):
+def test_failed_receipt_exposes_only_allowlisted_identity(tmp_path: Path):
     receipt = tmp_path / "failed.json"
     _write(
         receipt,
@@ -106,8 +106,9 @@ def test_failed_receipt_is_bounded_and_sanitized(tmp_path: Path):
             {
                 "status": "FAILED",
                 "job_file": f"{JOB_ID}.json",
-                "error_type": "RuntimeError\nINJECTED",
-                "error": "line one\n\x1b[31mline two",
+                "error_type": "VideoSubprocessError",
+                "error_code": "UV_MEDIA_PROBE_FAILED",
+                "error": "DO_NOT_PRINT_RAW_STDERR\n/private/source-name.mp4",
             }
         ),
     )
@@ -121,6 +122,33 @@ def test_failed_receipt_is_bounded_and_sanitized(tmp_path: Path):
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == [
-        "UV_ERROR_TYPE=RuntimeError INJECTED",
-        "UV_ERROR=line one  [31mline two",
+        "UV_ERROR_TYPE=VideoSubprocessError",
+        "UV_ERROR_CODE=UV_MEDIA_PROBE_FAILED",
     ]
+    assert "DO_NOT_PRINT_RAW_STDERR" not in result.stdout + result.stderr
+    assert "source-name.mp4" not in result.stdout + result.stderr
+
+
+def test_failed_receipt_rejects_unbounded_error_identity(tmp_path: Path):
+    receipt = tmp_path / "failed.json"
+    _write(
+        receipt,
+        json.dumps(
+            {
+                "status": "FAILED",
+                "job_file": f"{JOB_ID}.json",
+                "error_type": "RuntimeError\nINJECTED",
+                "error_code": "NOT_ALLOWLISTED",
+            }
+        ),
+    )
+    result = subprocess.run(
+        ["python3", str(READER), "inspect-failed", str(receipt), f"{JOB_ID}.json"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=2,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "INJECTED" not in result.stdout + result.stderr

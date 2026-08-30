@@ -77,7 +77,7 @@ if [[ -x /usr/local/sbin/universal-video-spool-repair ]]; then
   grep -Fx 'UNIVERSAL_VIDEO_SPOOL_RUNTIME_REPAIR_PASS' /tmp/universal-video-spool-repair.out >/dev/null || fail SPOOL_REPAIR
   rm -f /tmp/universal-video-spool-repair.out
 else
-  for leaf in inbox running done failed results; do
+  for leaf in inbox running done failed results progress; do
     install -d -o universal-video -g universal-video -m 0750 "$BASE_DIR/spool/$leaf"
     chown universal-video:universal-video "$BASE_DIR/spool/$leaf"
     chmod 0750 "$BASE_DIR/spool/$leaf"

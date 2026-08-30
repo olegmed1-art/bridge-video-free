@@ -13,33 +13,52 @@ import math
 import os
 import re
 import stat
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from .algorithm_3_1_test import (
+    ALGORITHM_REVISION as TEST_ALGORITHM_REVISION,
+    ALGORITHM_VERSION as TEST_ALGORITHM_VERSION,
+    BASE_ALGORITHM_VERSION as TEST_BASE_ALGORITHM_VERSION,
+    DEFINITION_FILE as TEST_DEFINITION_FILE,
+    PROFILE_NAME as TEST_PROFILE_NAME,
+    RELEASE_CHANNEL as TEST_RELEASE_CHANNEL,
+    RESULT_SCOPE as TEST_RESULT_SCOPE,
+    build_definition as build_test_algorithm_definition,
+    definition_sha256 as test_definition_sha256,
+)
 from .contract import CONTRACT_VERSION
 from .profiles import resolve_profile
+from .readiness import RUNNER_EXECUTED_STAGES, build_test_readiness, deferred_stages
+from .speaker_structure import (
+    MIN_TEST_LABEL_COVERAGE,
+    SCHEMA as SPEAKER_SCHEMA_V1,
+    TEST_SCHEMA as SPEAKER_SCHEMA_V2,
+)
+from .source_parts_manifest import (
+    SourcePartsManifestError,
+    validate_source_parts_manifest,
+)
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX32 = re.compile(r"^[0-9a-f]{32}$")
 WORD_RE = re.compile(r"[A-Za-zА-Яа-яЁё0-9]+")
+ANONYMOUS_SPEAKER_RE = re.compile(r"^SPEAKER_[A-H]$")
 FRAME_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 RAW_EXTENSIONS = frozenset({".mp4", ".mkv", ".mov", ".avi", ".webm", ".wav", ".mp3", ".m4a", ".flac"})
 REQUIRED_TRANSCRIPT_FILES = ("transcript.jsonl", "transcript.txt", "transcript_qc.json")
+SERVER_REVIEW_FILE = "server_review.json"
+SOURCE_PARTS_MANIFEST_FILE = "source_parts_manifest.json"
+SERVER_REVIEW_SCHEMA = "universal-video-server-review-v1"
+MAX_SERVER_REVIEW_ITEMS = 100
+MAX_SERVER_REVIEW_EXCERPT_CHARS = 500
 DEFAULT_MAX_FILE_BYTES = 256 * 1024**2
 DEFAULT_MAX_TOTAL_BYTES = 512 * 1024**2
 DEFAULT_MAX_FRAMES = 300
-RUNNER_IMPLEMENTED_STAGES = frozenset(
-    {
-        "media_preflight",
-        "audio_extract",
-        "transcribe",
-        "transcript_qc",
-        "timeline",
-        "keyframes",
-        "package",
-    }
-)
+FRAME_EVIDENCE_SCHEMA = "universal-video-frame-evidence-v1"
+RUNNER_IMPLEMENTED_STAGES = RUNNER_EXECUTED_STAGES
 QC_FAILURE_REASONS = (
     "EMPTY_ASR",
     "LOW_CROSS_ATTEMPT_CONSENSUS",
@@ -108,6 +127,76 @@ def _required_hex(value: Any, field: str, pattern: re.Pattern[str] = HEX64) -> s
     if not pattern.fullmatch(text):
         raise ResultConformanceError(f"invalid {field}")
     return text
+
+
+def _validate_frame_evidence(manifest: dict[str, Any], frame_times: dict[str, float]) -> None:
+    packet = manifest.get("frame_evidence")
+    if packet is None:
+        return
+    if not isinstance(packet, dict) or packet.get("schema") != FRAME_EVIDENCE_SCHEMA:
+        raise ResultConformanceError("invalid frame evidence contract")
+    frame_names = set(frame_times)
+    if _exact_int(packet.get("frame_count"), "frame_evidence.frame_count") != len(frame_names):
+        raise ResultConformanceError("frame evidence count mismatch")
+    strategy = str(packet.get("strategy") or "")
+    if strategy not in {"anchor-only-v1", "anchor-neighbors-v1"}:
+        raise ResultConformanceError("invalid frame evidence strategy")
+    regions = packet.get("regions")
+    if not isinstance(regions, dict):
+        raise ResultConformanceError("frame evidence regions must be an object")
+    required_regions = {"N", "E", "S", "W", "CENTER"} if strategy == "anchor-neighbors-v1" else set()
+    if set(regions) != required_regions:
+        raise ResultConformanceError("frame evidence regions do not match strategy")
+    for region in regions.values():
+        if not isinstance(region, dict) or set(region) != {"x", "y", "width", "height"}:
+            raise ResultConformanceError("invalid frame evidence region")
+        x = _bounded_number(region["x"], "frame evidence region x")
+        y = _bounded_number(region["y"], "frame evidence region y")
+        width = _bounded_number(region["width"], "frame evidence region width")
+        height = _bounded_number(region["height"], "frame evidence region height")
+        if width <= 0 or height <= 0 or x + width > 1 or y + height > 1:
+            raise ResultConformanceError("frame evidence region is outside normalized bounds")
+    bundles = packet.get("bundles")
+    if not isinstance(bundles, list) or not bundles:
+        raise ResultConformanceError("frame evidence bundles are missing")
+    if _exact_int(packet.get("bundle_count"), "frame_evidence.bundle_count") != len(bundles):
+        raise ResultConformanceError("frame evidence bundle count mismatch")
+    seen_ids: set[str] = set()
+    referenced: set[str] = set()
+    for bundle in bundles:
+        if not isinstance(bundle, dict):
+            raise ResultConformanceError("invalid frame evidence bundle")
+        bundle_id = str(bundle.get("bundle_id") or "")
+        if not re.fullmatch(r"evidence-[0-9]{4}", bundle_id) or bundle_id in seen_ids:
+            raise ResultConformanceError("unsafe or duplicate frame evidence bundle id")
+        seen_ids.add(bundle_id)
+        anchor_time = _bounded_number(bundle.get("anchor_time"), "frame evidence anchor time", maximum=12 * 3600)
+        members = bundle.get("members")
+        if not isinstance(members, list) or not members:
+            raise ResultConformanceError("frame evidence bundle members are missing")
+        roles: set[str] = set()
+        for member in members:
+            if not isinstance(member, dict):
+                raise ResultConformanceError("invalid frame evidence member")
+            role = str(member.get("role") or "")
+            name = str(member.get("file") or "")
+            if role not in {"BEFORE", "CENTER", "AFTER"} or role in roles:
+                raise ResultConformanceError("invalid frame evidence role")
+            if name not in frame_names:
+                raise ResultConformanceError("frame evidence references an unknown keyframe")
+            roles.add(role)
+            referenced.add(name)
+            member_time = _bounded_number(member.get("time"), "frame evidence member time", maximum=12 * 3600)
+            if abs(frame_times[name] - member_time) > 0.001:
+                raise ResultConformanceError("frame evidence member time mismatch")
+            try:
+                offset = float(member.get("offset_seconds"))
+            except (TypeError, ValueError) as exc:
+                raise ResultConformanceError("invalid frame evidence member offset") from exc
+            if not math.isfinite(offset) or abs((member_time - anchor_time) - offset) > 0.001:
+                raise ResultConformanceError("frame evidence member offset mismatch")
+    if referenced != frame_names:
+        raise ResultConformanceError("frame evidence does not cover keyframe inventory")
 
 
 def _positive_number(value: Any, field: str) -> float:
@@ -317,6 +406,165 @@ def _artifact_set_sha256(artifacts: list[dict[str, Any]]) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _validate_server_review(
+    review: Any,
+    *,
+    manifest: dict[str, Any],
+    transcript_segments: list[dict[str, Any]],
+    qc_rows: list[dict[str, Any]],
+    base_artifact_set_sha256: str,
+) -> tuple[str, int, str]:
+    if not isinstance(review, dict) or review.get("schema") != SERVER_REVIEW_SCHEMA:
+        raise ResultConformanceError("invalid server review schema")
+    if review.get("review_scope") != "TECHNICAL_POSTPROCESS_ONLY":
+        raise ResultConformanceError("server review exceeds technical scope")
+    if review.get("execution_location") != "RESIDENT_SERVER_POSTPROCESS":
+        raise ResultConformanceError("unexpected server review execution location")
+    for field in ("job_id", "job_hash", "profile", "source_fingerprint", "processing_fingerprint"):
+        if review.get(field) != manifest.get(field):
+            raise ResultConformanceError(f"server review {field} mismatch")
+
+    binding = review.get("input_conformance")
+    if not isinstance(binding, dict):
+        raise ResultConformanceError("server review input binding missing")
+    binding_phase = binding.get("evidence_phase")
+    if (
+        binding.get("schema") != "universal-video-result-conformance-v1"
+        or binding.get("state") != "PASS"
+        or binding_phase not in {"GENERATION_FINALIZATION", "REUSE_OBSERVATION"}
+        or _required_hex(binding.get("artifact_set_sha256"), "server review input artifact set")
+        != base_artifact_set_sha256
+    ):
+        raise ResultConformanceError("server review input binding mismatch")
+
+    checks = review.get("checks")
+    if not isinstance(checks, dict):
+        raise ResultConformanceError("server review checks missing")
+    for field in ("artifact_integrity", "transcript_timeline", "transcript_qc", "exception_compaction"):
+        if checks.get(field) != "PASS":
+            raise ResultConformanceError(f"server review {field} did not pass")
+    frames = manifest.get("frames") if isinstance(manifest.get("frames"), list) else []
+    expected_frame_check = "PASS" if frames else "NOT_APPLICABLE"
+    if checks.get("keyframe_inventory") != expected_frame_check:
+        raise ResultConformanceError("server review keyframe status mismatch")
+
+    transcript = manifest.get("transcript") if isinstance(manifest.get("transcript"), dict) else {}
+    media = manifest.get("media") if isinstance(manifest.get("media"), dict) else {}
+    deferred = manifest.get("deferred_analysis") if isinstance(manifest.get("deferred_analysis"), list) else []
+    summary = review.get("summary")
+    expected_summary = {
+        "duration_seconds": media.get("duration_seconds"),
+        "transcript_segments": transcript.get("segments"),
+        "transcript_words": transcript.get("words"),
+        "transcript_language": transcript.get("language"),
+        "qc_blocks": transcript.get("qc_blocks"),
+        "qc_failed": transcript.get("qc_failed"),
+        "keyframes": len(frames),
+        "deferred_analysis": deferred,
+    }
+    if summary != expected_summary:
+        raise ResultConformanceError("server review summary mismatch")
+
+    items = review.get("review_items")
+    if not isinstance(items, list) or len(items) > MAX_SERVER_REVIEW_ITEMS:
+        raise ResultConformanceError("invalid server review items")
+    allowed_kinds = {"ASR_QC_EXCEPTION", "UNRELIABLE_TRANSCRIPT_SEGMENT", "DEFERRED_DOMAIN_ANALYSIS"}
+    deferred_items = 0
+    for item in items:
+        if not isinstance(item, dict) or item.get("kind") not in allowed_kinds:
+            raise ResultConformanceError("invalid server review item")
+        if item.get("severity") not in {"REVIEW", "CRITICAL"}:
+            raise ResultConformanceError("invalid server review severity")
+        evidence = str(item.get("evidence") or "")
+        if not (
+            evidence.startswith("transcript_qc.json#chunk=")
+            or evidence.startswith("transcript.jsonl#segment=")
+            or evidence == "manifest.json#deferred_analysis"
+        ):
+            raise ResultConformanceError("unsafe server review evidence locator")
+        excerpt = item.get("excerpt")
+        if excerpt is not None and (not isinstance(excerpt, str) or len(excerpt) > MAX_SERVER_REVIEW_EXCERPT_CHARS):
+            raise ResultConformanceError("server review excerpt exceeds cap")
+        reason_codes = item.get("reason_codes")
+        if reason_codes is not None and (
+            not isinstance(reason_codes, list)
+            or len(reason_codes) > 20
+            or any(not isinstance(value, str) or len(value) > 96 for value in reason_codes)
+        ):
+            raise ResultConformanceError("invalid server review reason codes")
+        if item.get("kind") == "DEFERRED_DOMAIN_ANALYSIS":
+            deferred_items += 1
+            if evidence != "manifest.json#deferred_analysis" or reason_codes != deferred[:20]:
+                raise ResultConformanceError("server review deferred boundary mismatch")
+    if deferred_items != (1 if deferred else 0):
+        raise ResultConformanceError("server review deferred item mismatch")
+    truncated = _exact_int(review.get("review_items_truncated"), "server review truncated count")
+
+    expected_items: list[dict[str, Any]] = []
+    for row in qc_rows:
+        if bool(row.get("ok")) and not bool(row.get("critical")) and not bool(row.get("nonspeech_hallucination")):
+            continue
+        reasons = row.get("failure_reasons") if isinstance(row.get("failure_reasons"), list) else []
+        expected_items.append(
+            {
+                "kind": "ASR_QC_EXCEPTION",
+                "severity": "CRITICAL" if bool(row.get("critical")) else "REVIEW",
+                "start": float(row.get("start") or 0.0),
+                "end": float(row.get("end") or 0.0),
+                "reason_codes": [str(value)[:96] for value in reasons[:8]],
+                "evidence": f"transcript_qc.json#chunk={int(row.get('chunk') or 0)}",
+            }
+        )
+    for index, row in enumerate(transcript_segments):
+        if not bool(row.get("unreliable")):
+            continue
+        excerpt = re.sub(r"\s+", " ", str(row.get("text") or "")).strip()[:MAX_SERVER_REVIEW_EXCERPT_CHARS]
+        expected_items.append(
+            {
+                "kind": "UNRELIABLE_TRANSCRIPT_SEGMENT",
+                "severity": "REVIEW",
+                "start": float(row.get("start") or 0.0),
+                "end": float(row.get("end") or 0.0),
+                "excerpt": excerpt,
+                "evidence": f"transcript.jsonl#segment={index}",
+            }
+        )
+    if deferred:
+        expected_items.append(
+            {
+                "kind": "DEFERRED_DOMAIN_ANALYSIS",
+                "severity": "REVIEW",
+                "reason_codes": deferred[:20],
+                "evidence": "manifest.json#deferred_analysis",
+            }
+        )
+    if items != expected_items[:MAX_SERVER_REVIEW_ITEMS]:
+        raise ResultConformanceError("server review omitted or changed an exception")
+    if truncated != max(0, len(expected_items) - MAX_SERVER_REVIEW_ITEMS):
+        raise ResultConformanceError("server review truncated count mismatch")
+
+    requires_expert_review = bool(items)
+    expected_state = "REVIEW_REQUIRED" if requires_expert_review else "PASS"
+    if review.get("state") != expected_state:
+        raise ResultConformanceError("server review state mismatch")
+    handoff = review.get("handoff")
+    if not isinstance(handoff, dict):
+        raise ResultConformanceError("server review handoff missing")
+    expected_handoff = {
+        "mode": "EXCEPTIONS_ONLY" if items else "SUMMARY_ONLY",
+        "requires_expert_review": requires_expert_review,
+        "technical_final_review_completed": True,
+        "domain_analysis_status": "DEFERRED" if deferred else "NOT_APPLICABLE",
+        "pedagogical_status": "NOT_EVALUATED",
+        "canonical_promotion_allowed": False,
+        "raw_media_included": False,
+        "full_transcript_included": False,
+    }
+    if handoff != expected_handoff:
+        raise ResultConformanceError("server review handoff boundary mismatch")
+    return expected_state, len(items) + truncated, expected_handoff["mode"]
+
+
 def verify_result(
     job_dir: Path,
     *,
@@ -329,6 +577,7 @@ def verify_result(
     max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
     max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
     max_frames: int = DEFAULT_MAX_FRAMES,
+    require_server_review: bool = False,
 ) -> dict[str, Any]:
     """Verify one immutable-looking technical result bundle.
 
@@ -371,6 +620,10 @@ def verify_result(
         raise ResultConformanceError("unexpected job hash")
     source_binding = _validate_source(manifest, expected_source_file_id)
     _validate_processing(manifest)
+    try:
+        profile = resolve_profile(expected_profile)
+    except ValueError as exc:
+        raise ResultConformanceError("unknown expected profile") from exc
 
     transcript = manifest.get("transcript")
     if not isinstance(transcript, dict) or transcript.get("qc_pass") is not True:
@@ -396,8 +649,269 @@ def verify_result(
             raise ResultConformanceError(f"unexpected transcript {field} locator")
 
     artifacts = [_artifact(manifest_path, "manifest.json", max_file_bytes=max_file_bytes)]
+    parts_locator = manifest.get("source_parts_manifest")
+    derived_parts = manifest.get("derived_media_parts")
+    if parts_locator is not None or derived_parts is not None:
+        if derived_parts is not True or parts_locator != SOURCE_PARTS_MANIFEST_FILE:
+            raise ResultConformanceError("invalid derived media parts declaration")
+        parts_path = job_dir / SOURCE_PARTS_MANIFEST_FILE
+        parts_payload = _read_json(parts_path, max_bytes=max_file_bytes)
+        try:
+            parts_manifest = validate_source_parts_manifest(parts_payload)
+        except SourcePartsManifestError as exc:
+            raise ResultConformanceError("invalid source-parts provenance manifest") from exc
+        source = manifest.get("source") or {}
+        media = manifest.get("media") or {}
+        expected_duration_ms = int(round(
+            _bounded_number(
+                media.get("duration_seconds"),
+                "media.duration_seconds",
+                minimum=0.000001,
+                maximum=1_000_000.0,
+            ) * 1000
+        ))
+        if parts_manifest["source"]["drive_id"] != source.get("file_id"):
+            raise ResultConformanceError("source-parts Drive binding mismatch")
+        if parts_manifest["source"]["sha256"] != _required_hex(media.get("sha256"), "media.sha256"):
+            raise ResultConformanceError("source-parts SHA-256 binding mismatch")
+        if parts_manifest["source"]["duration_ms"] != expected_duration_ms:
+            raise ResultConformanceError("source-parts duration binding mismatch")
+        artifacts.append(_artifact(parts_path, SOURCE_PARTS_MANIFEST_FILE, max_file_bytes=max_file_bytes))
     for name in REQUIRED_TRANSCRIPT_FILES:
         artifacts.append(_artifact(job_dir / name, name, max_file_bytes=max_file_bytes))
+    algorithm = manifest.get("algorithm")
+    if profile.name == TEST_PROFILE_NAME:
+        expected_algorithm = {
+            "version": TEST_ALGORITHM_VERSION,
+            "revision": TEST_ALGORITHM_REVISION,
+            "base_version": TEST_BASE_ALGORITHM_VERSION,
+            "release_channel": TEST_RELEASE_CHANNEL,
+            "result_scope": TEST_RESULT_SCOPE,
+            "canonical_promotion_allowed": False,
+            "production_activation_allowed": False,
+            "definition": TEST_DEFINITION_FILE,
+            "definition_sha256": None,
+        }
+        if not isinstance(algorithm, dict) or set(algorithm) != set(expected_algorithm):
+            raise ResultConformanceError("invalid 3.1-test algorithm manifest")
+        for field, value in expected_algorithm.items():
+            if value is not None and algorithm.get(field) != value:
+                raise ResultConformanceError(f"3.1-test algorithm {field} mismatch")
+        definition = _read_json(job_dir / TEST_DEFINITION_FILE, max_bytes=max_file_bytes)
+        expected_definition = build_test_algorithm_definition(
+            source_revision=str(manifest.get("processing_revision") or "")
+        )
+        if definition != expected_definition:
+            raise ResultConformanceError("3.1-test algorithm definition mismatch")
+        observed_definition_hash = test_definition_sha256(definition)
+        if _required_hex(algorithm.get("definition_sha256"), "3.1-test definition sha256") != observed_definition_hash:
+            raise ResultConformanceError("3.1-test algorithm definition hash mismatch")
+        artifacts.append(_artifact(job_dir / TEST_DEFINITION_FILE, TEST_DEFINITION_FILE, max_file_bytes=max_file_bytes))
+    elif algorithm is not None:
+        raise ResultConformanceError("stable profile cannot claim a test algorithm")
+    speaker_structure: dict[str, Any] | None = None
+    speaker_report: dict[str, Any] | None = None
+    if "speaker_structure" in profile.stages:
+        speaker_structure = manifest.get("speaker_structure")
+        if not isinstance(speaker_structure, dict) or set(speaker_structure) != {
+            "report", "status", "speaker_count", "segments_labeled"
+        }:
+            raise ResultConformanceError("invalid speaker structure manifest")
+        if speaker_structure.get("report") != "speaker_diarization.json":
+            raise ResultConformanceError("unexpected speaker structure report locator")
+        if not isinstance(speaker_structure.get("status"), str):
+            raise ResultConformanceError("invalid speaker structure status")
+        if _exact_int(speaker_structure.get("speaker_count"), "speaker count") < 0:
+            raise ResultConformanceError("invalid speaker count")
+        if _exact_int(speaker_structure.get("segments_labeled"), "speaker segments") < 0:
+            raise ResultConformanceError("invalid speaker segment count")
+        speaker_report = _read_json(job_dir / "speaker_diarization.json", max_bytes=max_file_bytes)
+        # Existing completed FREE bundles remain verifiable as v1.  New FREE
+        # runs emit v2 once the open-set gate is enabled by the runner.
+        open_set_speaker_profile = profile.name == TEST_PROFILE_NAME or (
+            profile.name == "bridge_lesson"
+            and isinstance(speaker_report, dict)
+            and speaker_report.get("schema") == SPEAKER_SCHEMA_V2
+        )
+        expected_speaker_schema = SPEAKER_SCHEMA_V2 if open_set_speaker_profile else SPEAKER_SCHEMA_V1
+        if not isinstance(speaker_report, dict) or speaker_report.get("schema") != expected_speaker_schema:
+            raise ResultConformanceError("invalid speaker structure report")
+        expected_speaker_report_fields = {
+            "schema", "revision", "status", "quality_gate", "reason", "segments_total",
+            "segments_labeled", "speaker_count", "speaker_labels", "speaker_clusters",
+            "role_mapping_supported", "teacher_student_attribution", "privacy",
+        }
+        if open_set_speaker_profile:
+            expected_speaker_report_fields |= {
+                "label_coverage",
+                "speech_duration_coverage",
+                "minimum_label_coverage",
+                "speaker_count_evidence",
+            }
+        # role_mapping_proof_status was introduced after the first v2 field
+        # receipts.  Absence is a legacy receipt, never a proof of a mapping.
+        optional_speaker_fields = (
+            {"role_mapping_proof_status", "rejected_candidate"}
+            if open_set_speaker_profile
+            else set()
+        )
+        if not set(speaker_report).issubset(expected_speaker_report_fields | optional_speaker_fields) or not expected_speaker_report_fields.issubset(speaker_report):
+            raise ResultConformanceError("invalid speaker structure report shape")
+        if not isinstance(speaker_report.get("revision"), str) or not re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}", speaker_report["revision"]
+        ):
+            raise ResultConformanceError("invalid speaker structure revision")
+        positive_speaker_statuses = {
+            "DIARIZED_ROLE_MAPPED", "DIARIZED_UNMAPPED", "EXISTING_SPEAKER_LABELS_PRESERVED"
+        }
+        unavailable_speaker_statuses = {"UNAVAILABLE", "UNAVAILABLE_INSUFFICIENT_SEGMENTS", "DISABLED"}
+        status = speaker_report.get("status")
+        if status not in positive_speaker_statuses | unavailable_speaker_statuses:
+            raise ResultConformanceError("invalid speaker structure status")
+        labels = speaker_report.get("speaker_labels")
+        clusters = speaker_report.get("speaker_clusters")
+        if not isinstance(labels, list) or not all(
+            isinstance(label, str) and ANONYMOUS_SPEAKER_RE.fullmatch(label) for label in labels
+        ):
+            raise ResultConformanceError("invalid anonymous speaker labels")
+        expected_labels = [f"SPEAKER_{chr(ord('A') + index)}" for index in range(len(labels))]
+        if labels != expected_labels or len(labels) > 8:
+            raise ResultConformanceError("noncanonical anonymous speaker labels")
+        if not isinstance(clusters, dict) or set(clusters) != set(labels) or any(
+            type(value) is not int or value < 1 for value in clusters.values()
+        ):
+            raise ResultConformanceError("invalid speaker cluster counts")
+        if type(speaker_report.get("role_mapping_supported")) is not bool:
+            raise ResultConformanceError("invalid speaker role mapping flag")
+        expected_attribution = (
+            "SUGGESTION_ONLY" if speaker_report["role_mapping_supported"] else "UNAVAILABLE"
+        )
+        if speaker_report.get("teacher_student_attribution") != expected_attribution:
+            raise ResultConformanceError("invalid speaker attribution boundary")
+        expected_privacy = {
+            "real_person_identity_claimed": False,
+            "raw_audio_persisted": False,
+            "voice_embedding_persisted": False,
+            "cross_lesson_voice_profile_persisted": False,
+            "source_speaker_labels_persisted": False,
+        }
+        if speaker_report.get("privacy") != expected_privacy:
+            raise ResultConformanceError("speaker privacy boundary mismatch")
+        speaker_count = _exact_int(speaker_report.get("speaker_count"), "speaker report count")
+        labeled_count = _exact_int(speaker_report.get("segments_labeled"), "speaker report segments")
+        if speaker_count != len(labels) or sum(clusters.values()) != labeled_count:
+            raise ResultConformanceError("speaker report aggregate mismatch")
+        if open_set_speaker_profile:
+            segment_total = _exact_int(speaker_report.get("segments_total"), "speaker report total")
+            coverage = _bounded_number(
+                speaker_report.get("label_coverage"),
+                "speaker label coverage",
+                minimum=0.0,
+                maximum=1.0,
+            )
+            duration_coverage = _bounded_number(
+                speaker_report.get("speech_duration_coverage"),
+                "speaker speech duration coverage",
+                minimum=0.0,
+                maximum=1.0,
+            )
+            minimum_coverage = _bounded_number(
+                speaker_report.get("minimum_label_coverage"),
+                "speaker minimum label coverage",
+                minimum=0.0,
+                maximum=1.0,
+            )
+            expected_coverage = labeled_count / segment_total if segment_total else 0.0
+            if abs(coverage - expected_coverage) > 1e-12:
+                raise ResultConformanceError("speaker label coverage mismatch")
+            if abs(minimum_coverage - MIN_TEST_LABEL_COVERAGE) > 1e-12:
+                raise ResultConformanceError("speaker minimum label coverage mismatch")
+            count_evidence = speaker_report.get("speaker_count_evidence")
+            if count_evidence is not None:
+                if not isinstance(count_evidence, dict) or set(count_evidence) != {
+                    "mode", "candidate_counts", "selected_count", "selection_margin",
+                    "collapse_check", "fragmentation_check", "mixing_check",
+                }:
+                    raise ResultConformanceError("invalid speaker count evidence")
+                if count_evidence.get("mode") != "OPEN_SET":
+                    raise ResultConformanceError("speaker count evidence is not open-set")
+                if _exact_int(count_evidence.get("selected_count"), "selected speaker count") != speaker_count:
+                    raise ResultConformanceError("speaker count evidence mismatch")
+                if any(count_evidence.get(key) != "PASS" for key in (
+                    "collapse_check", "fragmentation_check", "mixing_check"
+                )):
+                    raise ResultConformanceError("speaker count evidence gate failed")
+            if speaker_report.get("role_mapping_proof_status", "NOT_APPLICABLE") not in {
+                "PASS", "INCONCLUSIVE", "NOT_APPLICABLE"
+            }:
+                raise ResultConformanceError("invalid speaker role proof status")
+            rejected = speaker_report.get("rejected_candidate")
+            if rejected is not None:
+                if status in positive_speaker_statuses or not isinstance(rejected, dict) or set(rejected) != {
+                    "schema", "producer_status", "selected_hypothesis", "segments_total",
+                    "segments_labeled", "speaker_count", "segment_coverage",
+                    "speech_duration_coverage",
+                }:
+                    raise ResultConformanceError("invalid rejected speaker candidate")
+                if rejected.get("schema") != "universal-video-rejected-speaker-candidate-v1":
+                    raise ResultConformanceError("invalid rejected speaker candidate schema")
+                if rejected.get("producer_status") not in (
+                    positive_speaker_statuses
+                    | unavailable_speaker_statuses
+                    | {"DIARIZED_COLLAPSE_RISK"}
+                ):
+                    raise ResultConformanceError("invalid rejected speaker producer status")
+                if not isinstance(rejected.get("selected_hypothesis"), str) or not re.fullmatch(
+                    r"[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}", rejected["selected_hypothesis"]
+                ):
+                    raise ResultConformanceError("invalid rejected speaker hypothesis")
+                rejected_total = _exact_int(rejected.get("segments_total"), "rejected speaker total")
+                rejected_labeled = _exact_int(rejected.get("segments_labeled"), "rejected speaker labels")
+                _exact_int(rejected.get("speaker_count"), "rejected speaker count")
+                rejected_coverage = _bounded_number(
+                    rejected.get("segment_coverage"), "rejected speaker coverage",
+                    minimum=0.0, maximum=1.0,
+                )
+                _bounded_number(
+                    rejected.get("speech_duration_coverage"),
+                    "rejected speaker duration coverage", minimum=0.0, maximum=1.0,
+                )
+                if rejected_total != segment_total or rejected_labeled > rejected_total:
+                    raise ResultConformanceError("rejected speaker candidate aggregate mismatch")
+                expected_rejected_coverage = rejected_labeled / rejected_total if rejected_total else 0.0
+                if abs(rejected_coverage - expected_rejected_coverage) > 1e-12:
+                    raise ResultConformanceError("rejected speaker candidate coverage mismatch")
+        if status in positive_speaker_statuses:
+            if speaker_report.get("quality_gate") != "PASS" or speaker_report.get("reason") != "NONE":
+                raise ResultConformanceError("speaker PASS gate mismatch")
+            if not 2 <= speaker_count <= 8 or labeled_count < speaker_count:
+                raise ResultConformanceError("speaker PASS support is insufficient")
+            if open_set_speaker_profile and (
+                coverage < minimum_coverage or duration_coverage < minimum_coverage
+            ):
+                raise ResultConformanceError("speaker PASS coverage is insufficient")
+            if status == "DIARIZED_ROLE_MAPPED" and speaker_report["role_mapping_supported"] is not True:
+                raise ResultConformanceError("mapped speaker status lacks role evidence")
+            if status == "DIARIZED_ROLE_MAPPED" and open_set_speaker_profile and "role_mapping_proof_status" in speaker_report and speaker_report.get("role_mapping_proof_status") != "PASS":
+                raise ResultConformanceError("mapped speaker status lacks independent role proof")
+            if status != "DIARIZED_ROLE_MAPPED" and speaker_report["role_mapping_supported"] is not False:
+                raise ResultConformanceError("unmapped speaker status claims role evidence")
+        else:
+            if speaker_report.get("quality_gate") != "INCONCLUSIVE":
+                raise ResultConformanceError("speaker unavailable gate mismatch")
+            if speaker_report.get("reason") in {None, "NONE"}:
+                raise ResultConformanceError("speaker unavailable reason missing")
+            if speaker_count != 0 or labeled_count != 0 or labels or clusters:
+                raise ResultConformanceError("unavailable speaker report retains labels")
+            if speaker_report["role_mapping_supported"] is not False:
+                raise ResultConformanceError("unavailable speaker report claims roles")
+        if speaker_report.get("status") != speaker_structure["status"]:
+            raise ResultConformanceError("speaker structure status mismatch")
+        if _exact_int(speaker_report.get("speaker_count"), "speaker report count") != speaker_structure["speaker_count"]:
+            raise ResultConformanceError("speaker structure count mismatch")
+        if _exact_int(speaker_report.get("segments_labeled"), "speaker report segments") != speaker_structure["segments_labeled"]:
+            raise ResultConformanceError("speaker structure segment mismatch")
+        artifacts.append(_artifact(job_dir / "speaker_diarization.json", "speaker_diarization.json", max_file_bytes=max_file_bytes))
     if not (job_dir / "transcript.txt").read_text(encoding="utf-8").strip():
         raise ResultConformanceError("transcript text is empty")
     segments: list[dict[str, Any]] = []
@@ -418,7 +932,15 @@ def verify_result(
             if not isinstance(item, dict) or not str(item.get("text") or "").strip():
                 raise ResultConformanceError("invalid transcript segment")
             required_segment_fields = {"start", "end", "text", "chunk", "unreliable"}
-            allowed_segment_fields = required_segment_fields | {"deduped_from_chunks"}
+            speaker_fields = {
+                "speaker",
+                "speaker_cluster",
+                "speaker_confidence",
+                "speaker_role_candidate",
+                "speaker_role_confidence",
+                "speaker_assignment_revision",
+            }
+            allowed_segment_fields = required_segment_fields | {"deduped_from_chunks"} | speaker_fields
             if not required_segment_fields.issubset(item) or not set(item).issubset(allowed_segment_fields):
                 raise ResultConformanceError("unexpected transcript segment fields")
             if not isinstance(item["text"], str) or item["text"] != item["text"].strip():
@@ -426,6 +948,27 @@ def verify_result(
             _exact_int(item.get("chunk"), "segment chunk")
             if not isinstance(item.get("unreliable"), bool):
                 raise ResultConformanceError("invalid segment reliability")
+            present_speaker_fields = set(item) & speaker_fields
+            if present_speaker_fields:
+                if present_speaker_fields != speaker_fields:
+                    raise ResultConformanceError("partial segment speaker annotation")
+                if not isinstance(item["speaker"], str) or not ANONYMOUS_SPEAKER_RE.fullmatch(item["speaker"]):
+                    raise ResultConformanceError("invalid segment speaker")
+                if item["speaker_cluster"] != item["speaker"]:
+                    raise ResultConformanceError("segment speaker cluster mismatch")
+            for field in ("speaker_confidence", "speaker_role_confidence"):
+                if field in item:
+                    _bounded_number(item[field], f"segment {field}", minimum=0.0, maximum=1.0)
+            if "speaker_role_candidate" in item and item["speaker_role_candidate"] not in {
+                "teacher", "student", "unknown"
+            }:
+                raise ResultConformanceError("invalid segment speaker role candidate")
+            if "speaker_assignment_revision" in item and (
+                not isinstance(item["speaker_assignment_revision"], str)
+                or not item["speaker_assignment_revision"].strip()
+                or len(item["speaker_assignment_revision"]) > 128
+            ):
+                raise ResultConformanceError("invalid segment speaker revision")
             start = _bounded_number(item.get("start"), "segment start", maximum=media_duration + 0.01)
             end = _bounded_number(item.get("end"), "segment end", maximum=media_duration + 0.01)
             if end <= start or end > media_duration + 0.01:
@@ -451,6 +994,50 @@ def verify_result(
         raise ResultConformanceError("invalid transcript text") from exc
     if rendered_text != canonical_text:
         raise ResultConformanceError("transcript text does not match JSONL timeline")
+    if speaker_structure is not None and speaker_report is not None:
+        observed_counts = Counter(
+            str(item.get("speaker")) for item in segments if item.get("speaker")
+        )
+        observed_labels = [
+            f"SPEAKER_{chr(ord('A') + index)}" for index in range(len(observed_counts))
+        ]
+        if _exact_int(speaker_report.get("segments_total"), "speaker report total") != len(segments):
+            raise ResultConformanceError("speaker structure total mismatch")
+        if _exact_int(speaker_report.get("segments_labeled"), "speaker report labels") != sum(
+            1 for item in segments if str(item.get("speaker") or "").strip()
+        ):
+            raise ResultConformanceError("speaker structure labeled-segment mismatch")
+        if speaker_report.get("speaker_labels") != observed_labels:
+            raise ResultConformanceError("speaker structure label inventory mismatch")
+        if speaker_report.get("speaker_clusters") != {
+            label: observed_counts[label] for label in observed_labels
+        }:
+            raise ResultConformanceError("speaker structure cluster inventory mismatch")
+        if speaker_report.get("speaker_count") != len(observed_labels):
+            raise ResultConformanceError("speaker structure observed count mismatch")
+        if speaker_structure["speaker_count"] != len(observed_labels):
+            raise ResultConformanceError("speaker structure manifest count mismatch")
+        if speaker_structure["segments_labeled"] != sum(
+            1 for item in segments if str(item.get("speaker") or "").strip()
+        ):
+            raise ResultConformanceError("speaker structure manifest segment mismatch")
+        if profile.name == TEST_PROFILE_NAME:
+            total_speech_duration = sum(float(item["end"]) - float(item["start"]) for item in segments)
+            labeled_speech_duration = sum(
+                float(item["end"]) - float(item["start"])
+                for item in segments
+                if str(item.get("speaker") or "").strip()
+            )
+            expected_duration_coverage = (
+                labeled_speech_duration / total_speech_duration
+                if total_speech_duration > 0.0
+                else 0.0
+            )
+            if abs(
+                float(speaker_report.get("speech_duration_coverage"))
+                - expected_duration_coverage
+            ) > 1e-12:
+                raise ResultConformanceError("speaker speech duration coverage mismatch")
     qc = _read_json(job_dir / "transcript_qc.json", max_bytes=max_file_bytes)
     if not isinstance(qc, list) or len(qc) != qc_blocks or not qc:
         raise ResultConformanceError("transcript QC block count mismatch")
@@ -533,10 +1120,6 @@ def verify_result(
     if transcript.get("qc_pass") is not recomputed_qc_pass or not recomputed_qc_pass:
         raise ResultConformanceError("transcript QC pass mismatch")
 
-    try:
-        profile = resolve_profile(expected_profile)
-    except ValueError as exc:
-        raise ResultConformanceError("unknown expected profile") from exc
     planned_stages = manifest.get("planned_stages")
     if planned_stages != list(profile.stages):
         raise ResultConformanceError("planned stages do not match canonical profile")
@@ -550,6 +1133,7 @@ def verify_result(
     if len(manifest_frames) > max_frames:
         raise ResultConformanceError("keyframe count exceeds cap")
     seen_frames: set[str] = set()
+    frame_times: dict[str, float] = {}
     for item in manifest_frames:
         if not isinstance(item, dict):
             raise ResultConformanceError("invalid keyframe manifest entry")
@@ -557,6 +1141,7 @@ def verify_result(
         if Path(name).name != name or Path(name).suffix.lower() not in FRAME_EXTENSIONS or name in seen_frames:
             raise ResultConformanceError("unsafe or duplicate keyframe name")
         seen_frames.add(name)
+        frame_times[name] = _bounded_number(item.get("time"), "keyframe time", maximum=12 * 3600)
         artifact = _artifact(job_dir / "frames" / name, f"frames/{name}", max_file_bytes=max_file_bytes)
         if artifact["sha256"] != _required_hex(item.get("sha256"), "frame sha256"):
             raise ResultConformanceError("keyframe hash mismatch")
@@ -570,14 +1155,44 @@ def verify_result(
         }
         if disk_frames != seen_frames:
             raise ResultConformanceError("keyframe inventory mismatch")
+    _validate_frame_evidence(manifest, frame_times)
+
+    base_artifact_set_sha256 = _artifact_set_sha256(artifacts)
+    server_review_path = job_dir / SERVER_REVIEW_FILE
+    server_final_review_status = "NOT_GENERATED"
+    review_item_count = 0
+    chat_handoff_mode = "NONE"
+    if server_review_path.exists():
+        review = _read_json(server_review_path, max_bytes=max_file_bytes)
+        server_final_review_status, review_item_count, chat_handoff_mode = _validate_server_review(
+            review,
+            manifest=manifest,
+            transcript_segments=segments,
+            qc_rows=qc,
+            base_artifact_set_sha256=base_artifact_set_sha256,
+        )
+        artifacts.append(_artifact(server_review_path, SERVER_REVIEW_FILE, max_file_bytes=max_file_bytes))
+    elif require_server_review:
+        raise ResultConformanceError("required server review is missing")
 
     total_bytes = sum(int(item["size_bytes"]) for item in artifacts)
     if total_bytes > max_total_bytes:
         raise ResultConformanceError("technical bundle exceeds total byte cap")
-    expected_deferred = [stage for stage in profile.stages if stage not in RUNNER_IMPLEMENTED_STAGES]
+    expected_deferred = deferred_stages(profile.stages)
     deferred = manifest.get("deferred_analysis")
     if deferred != expected_deferred:
         raise ResultConformanceError("deferred analysis does not match executed profile boundary")
+    readiness = manifest.get("readiness")
+    if profile.name == TEST_PROFILE_NAME:
+        expected_readiness = build_test_readiness(
+            profile.stages,
+            qc_pass=True,
+            speaker_report=speaker_report,
+        )
+        if readiness != expected_readiness:
+            raise ResultConformanceError("3.1-test readiness matrix mismatch")
+    elif readiness is not None:
+        raise ResultConformanceError("stable profile cannot claim test readiness")
     if expected_deferred:
         domain_status = "DEFERRED"
     elif profile.name == "transcript_only":
@@ -606,7 +1221,12 @@ def verify_result(
         "deferred_analysis": deferred,
         "bridge_production_ready": False,
         "pedagogical_status": "NOT_EVALUATED",
-        "publication_eligible": True,
+        "readiness": readiness,
+        "server_final_review_status": server_final_review_status,
+        "review_item_count": review_item_count,
+        "chat_handoff_mode": chat_handoff_mode,
+        "publication_eligible": profile.name != TEST_PROFILE_NAME,
+        "canonical_publication_eligible": False,
         "source_binding_status": source_binding,
         "processing_revision": str(manifest.get("processing_revision") or ""),
         "processing_model": str(manifest.get("processing_whisper_model") or ""),

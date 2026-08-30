@@ -1,0 +1,242 @@
+name: Oracle DDS3 TLS renewal
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-dds3-tls-renewal.yml'
+      - 'tests/test_oracle_dds3_tls_renewal_contract.py'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-dds3-tls-renewal-requests/*.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-dds3-tls-renewal
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - run: python -m pip install --disable-pip-version-check -q pytest
+      - run: python -m pytest -q tests/test_oracle_dds3_tls_renewal_contract.py
+
+  renew:
+    if: ${{ github.event_name == 'push' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Validate one bounded renewal request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" | sort -u)
+          [[ ${#files[@]} -eq 1 && "${files[0]}" =~ ^ops/oracle-dds3-tls-renewal-requests/[^/]+\.json$ ]] \
+            || { echo 'expected exactly one TLS renewal request and no other changes' >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          x=json.load(open(os.environ['REQUEST_FILE'], encoding='utf-8'))
+          assert set(x)=={'request_id','operation','host','user','expected_fingerprint'}, x
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
+          assert x['operation']=='renew-expired-certificate'
+          assert x['host']=='158.180.47.161'
+          assert x['user']=='ubuntu'
+          assert x['expected_fingerprint']=='SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk'
+          print('request_id='+x['request_id'])
+          PY
+
+      - name: Verify host key and select existing credential
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/oracle-dds3-tls"
+          mkdir -p "$work"
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]] || { echo 'Oracle SSH credential unavailable' >&2; exit 1; }
+          key="$work/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Renew only the existing DDS3 TLS certificate
+        shell: bash
+        run: |
+          set -euo pipefail
+          log="$RUNNER_TEMP/oracle-dds3-tls-renewal.log"
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env PUBLIC_IP='$ORACLE_HOST' bash -s" <<'REMOTE' | tee "$log"
+          set -Eeuo pipefail
+          [[ "$PUBLIC_IP" == '158.180.47.161' ]]
+          cert_dir="/etc/letsencrypt/live/$PUBLIC_IP"
+          cert="$cert_dir/fullchain.pem"
+          certbot=/opt/certbot/bin/certbot
+
+          systemctl is-active --quiet assistant-lab.service nginx
+          ready="$(curl -fsS --max-time 8 http://127.0.0.1:8080/readyz)"
+          READY="$ready" python3 - <<'PY'
+          import json, os
+          x=json.loads(os.environ['READY'])
+          assert x.get('status')=='ready', x
+          assert x.get('engine')=='DDS3', x
+          assert x.get('fallback_used') is False, x
+          PY
+          [[ -x "$certbot" && -s "$cert" && -s "$cert_dir/privkey.pem" ]]
+          before_fp="$(openssl x509 -in "$cert" -noout -fingerprint -sha256)"
+          printf 'tls_before_not_after=%s\n' "$(openssl x509 -in "$cert" -noout -enddate | cut -d= -f2-)"
+
+          created_hook=false
+          created_service=false
+          created_timer=false
+
+          rollback(){
+            rc=$?
+            after_fp="$(openssl x509 -in "$cert" -noout -fingerprint -sha256 2>/dev/null || true)"
+            if [[ -n "$after_fp" && "$after_fp" != "$before_fp" ]]; then
+              "$certbot" rollback --cert-name "$PUBLIC_IP" --non-interactive >/dev/null 2>&1 || true
+              systemctl reload nginx >/dev/null 2>&1 || true
+            fi
+            if [[ "$created_timer" == true ]]; then
+              systemctl disable --now dds3-cert-renew.timer >/dev/null 2>&1 || true
+              rm -f /etc/systemd/system/dds3-cert-renew.timer
+            fi
+            if [[ "$created_service" == true ]]; then
+              rm -f /etc/systemd/system/dds3-cert-renew.service
+            fi
+            if [[ "$created_hook" == true ]]; then
+              rm -f /etc/letsencrypt/renewal-hooks/deploy/10-reload-nginx
+            fi
+            systemctl daemon-reload >/dev/null 2>&1 || true
+            echo TLS_RENEWAL_ROLLBACK_ATTEMPTED >&2
+            exit "$rc"
+          }
+          trap rollback ERR
+
+          install -d -m 0755 /etc/letsencrypt/renewal-hooks/deploy
+          if [[ ! -e /etc/letsencrypt/renewal-hooks/deploy/10-reload-nginx ]]; then
+            cat >/etc/letsencrypt/renewal-hooks/deploy/10-reload-nginx <<'EOF'
+          #!/bin/sh
+          systemctl reload nginx
+          EOF
+            chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/10-reload-nginx
+            created_hook=true
+          fi
+          if [[ ! -e /etc/systemd/system/dds3-cert-renew.service ]]; then
+            cat >/etc/systemd/system/dds3-cert-renew.service <<'EOF'
+          [Unit]
+          Description=Renew Bridge School DDS3 short-lived TLS certificate
+          After=network-online.target nginx.service
+          Wants=network-online.target
+          [Service]
+          Type=oneshot
+          ExecStart=/opt/certbot/bin/certbot renew --quiet --cert-name 158.180.47.161
+          EOF
+            created_service=true
+          fi
+          if [[ ! -e /etc/systemd/system/dds3-cert-renew.timer ]]; then
+            cat >/etc/systemd/system/dds3-cert-renew.timer <<'EOF'
+          [Unit]
+          Description=Check DDS3 TLS certificate renewal twice daily
+          [Timer]
+          OnCalendar=*-*-* 00,12:17:00
+          RandomizedDelaySec=45m
+          Persistent=true
+          [Install]
+          WantedBy=timers.target
+          EOF
+            created_timer=true
+          fi
+          systemctl daemon-reload
+          systemctl enable --now dds3-cert-renew.timer >/dev/null
+          systemctl is-active --quiet dds3-cert-renew.timer
+
+          if ! openssl x509 -checkend 86400 -noout -in "$cert" >/dev/null 2>&1; then
+            systemctl reset-failed dds3-cert-renew.service 2>/dev/null || true
+            if systemctl start dds3-cert-renew.service; then
+              echo tls_systemd_renewal=PASS
+            else
+              echo tls_systemd_renewal=FAILED_FALLBACK_REQUIRED
+            fi
+          else
+            echo tls_systemd_renewal=NOT_REQUIRED
+          fi
+
+          if ! openssl x509 -checkend 86400 -noout -in "$cert" >/dev/null 2>&1; then
+            "$certbot" certonly \
+              --non-interactive --agree-tos --register-unsafely-without-email \
+              --preferred-profile shortlived \
+              --webroot --webroot-path /var/www/certbot \
+              --ip-address "$PUBLIC_IP" --cert-name "$PUBLIC_IP" --force-renewal
+            echo tls_certbot_fallback=PASS
+          else
+            echo tls_certbot_fallback=NOT_REQUIRED
+          fi
+
+          nginx -t >/dev/null
+          systemctl reload nginx
+          systemctl is-active --quiet dds3-cert-renew.timer
+          openssl x509 -checkend 86400 -noout -in "$cert"
+          curl -fsS --max-time 12 "https://$PUBLIC_IP/readyz" >/tmp/dds3-tls-renewal-ready.json
+          python3 - <<'PY'
+          import json
+          x=json.load(open('/tmp/dds3-tls-renewal-ready.json'))
+          assert x.get('status')=='ready', x
+          assert x.get('engine')=='DDS3', x
+          assert x.get('fallback_used') is False, x
+          assert x.get('position_solver')=='ready', x
+          PY
+          printf 'tls_after_not_after=%s\n' "$(openssl x509 -in "$cert" -noout -enddate | cut -d= -f2-)"
+          echo tls_timer=active
+          echo ORACLE_DDS3_TLS_RENEWAL_PASS
+          trap - ERR
+          REMOTE
+          grep -Fx ORACLE_DDS3_TLS_RENEWAL_PASS "$log" >/dev/null
+
+      - name: Verify public DDS3 with normal trust validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          READY="$(curl -fsS --retry 3 --retry-delay 3 --max-time 20 "https://$ORACLE_HOST/readyz")" \
+            python - <<'PY'
+          import json, os
+          x=json.loads(os.environ['READY'])
+          assert x.get('status')=='ready', x
+          assert x.get('engine')=='DDS3', x
+          assert x.get('fallback_used') is False, x
+          assert x.get('position_solver')=='ready', x
+          print('ORACLE_DDS3_PUBLIC_TLS_PASS')
+          PY

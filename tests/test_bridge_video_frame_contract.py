@@ -76,3 +76,21 @@ def test_frame_metadata_is_fail_closed():
             {"status": "INSUFFICIENT", "hands": {}},
             frame_sha256="not-a-sha",
         )
+
+
+def test_frame_contract_automatically_derives_fourth_hand_from_three_complete_hands():
+    ranks = "AKQJT98765432"
+    record = canonicalize_frame_recognition(
+        {
+            "status": "PARTIAL_BOARD_OBSERVATION",
+            "hands": {
+                "N": [f"{rank}S" for rank in ranks],
+                "E": [f"{rank}H" for rank in ranks],
+                "S": [f"{rank}D" for rank in ranks],
+            },
+            "recognized_card_count": 39,
+        }
+    ).to_dict()
+    assert record["recognized_card_count"] == 39
+    assert len(record["deal"]["hands"]["W"]["cards"]) == 13
+    assert record["deal"]["derivations"][0]["provenance_class"] == "DERIVED"

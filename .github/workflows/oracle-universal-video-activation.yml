@@ -35,7 +35,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: oracle-universal-video-activation
+  group: ${{ github.event_name == 'pull_request' && format('oracle-universal-video-activation-pr-{0}', github.run_id) || 'oracle-instance-workload-mutation' }}
   cancel-in-progress: false
 
 jobs:
@@ -81,6 +81,7 @@ jobs:
       SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
       SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
       SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+      BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -158,6 +159,7 @@ jobs:
             ops/universal_video_operator.sh \
             ops/install_universal_video_operator.sh \
             ops/universal_video_receipt_reader.py \
+            universal_video/drive_stage.py \
             universal_video/runner.py; do
             git show "$ref:$path" >/dev/null
           done
@@ -253,6 +255,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          [[ -n "${BRIDGE_WORKER_DATABASE_URL:-}" ]] || { echo 'BRIDGE_WORKER_DATABASE_URL is not configured' >&2; exit 1; }
+          local_dsn="$RUNNER_TEMP/video-queue-dsn"
+          printf '%s' "$BRIDGE_WORKER_DATABASE_URL" > "$local_dsn"
+          chmod 0600 "$local_dsn"
+          remote_dsn="$(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.hostkey.outputs.known_hosts }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            'mktemp /tmp/universal-video-queue-dsn.XXXXXXXX')"
+          [[ "$remote_dsn" =~ ^/tmp/universal-video-queue-dsn\.[A-Za-z0-9]{8}$ ]]
+          scp -q -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.hostkey.outputs.known_hosts }}' \
+            -o ConnectTimeout=15 "$local_dsn" "$ORACLE_USER@$ORACLE_HOST:$remote_dsn"
+          echo "REMOTE_QUEUE_DSN_STAGING=$remote_dsn" >> "$GITHUB_ENV"
           smoke=0
           [[ '${{ steps.request.outputs.mode }}' == smoke ]] && smoke=1
           log="$RUNNER_TEMP/oracle-universal-video.log"
@@ -260,18 +277,31 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile='${{ steps.hostkey.outputs.known_hosts }}' \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n env UNIVERSAL_VIDEO_GIT_REF='${{ steps.request.outputs.git_ref }}' UNIVERSAL_VIDEO_RUN_SMOKE='$smoke' UNIVERSAL_VIDEO_ACTIVATE=1 UNIVERSAL_VIDEO_PREWARM_MODEL=1 bash -s" \
+            "sudo -n env UNIVERSAL_VIDEO_GIT_REF='${{ steps.request.outputs.git_ref }}' UNIVERSAL_VIDEO_RUN_SMOKE='$smoke' UNIVERSAL_VIDEO_ACTIVATE=1 UNIVERSAL_VIDEO_PREWARM_MODEL=1 UNIVERSAL_VIDEO_QUEUE_DSN_STAGING='$remote_dsn' bash -s" \
             < "$RUNNER_TEMP/oracle-universal-video-payload.sh" 2>&1 | tee "$log"
           grep -Fx UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS "$log" >/dev/null
           grep -F assistant_lab=active "$log" >/dev/null
           grep -F universal_video_enabled=enabled "$log" >/dev/null
           grep -F universal_video_active=active "$log" >/dev/null
           grep -Fx universal_video_operator=installed "$log" >/dev/null
+          grep -Fx universal_video_admin=installed_revision_bound "$log" >/dev/null
+          grep -Fx UNIVERSAL_VIDEO_OCARUN_BOUNDED_ADMIN_BOOTSTRAP_PASS "$log" >/dev/null
+          grep -Fx UNIVERSAL_VIDEO_OCARUN_POST_BOOTSTRAP_AUDIT_PASS "$log" >/dev/null
           grep -F DDS3_AFTER_PASS "$log" >/dev/null
           if [[ "$smoke" == 1 ]]; then
             grep -F UNIVERSAL_VIDEO_SYNTHETIC_SMOKE_PASS "$log" >/dev/null
           fi
           echo ORACLE_UNIVERSAL_VIDEO_REMOTE_ACCEPTANCE_PASS
+
+      - name: Remove unused queue credential staging file
+        if: ${{ always() && steps.request.outputs.mode != 'probe' && env.REMOTE_QUEUE_DSN_STAGING != '' }}
+        shell: bash
+        run: |
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.hostkey.outputs.known_hosts }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "rm -f -- '$REMOTE_QUEUE_DSN_STAGING'"
 
       - name: Verify external DDS3 non-regression
         if: ${{ steps.request.outputs.mode != 'probe' }}

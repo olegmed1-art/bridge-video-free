@@ -51,7 +51,7 @@ jobs:
       BRIDGE_LARGER_RUNNER: "false"
       BRIDGE_PAID_CLOUD: "false"
       BRIDGE_BILLING_FALLBACK: "false"
-      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.15"
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.16"
       BRIDGE_DIARIZATION_ENABLED: "true"
       PYTHONUNBUFFERED: "1"
       WHISPER_MODEL: small
@@ -62,6 +62,10 @@ jobs:
         with:
           fetch-depth: 2
           persist-credentials: false
+
+      - name: Enforce single active production compute route
+        shell: bash
+        run: python ops/validate_universal_video_runtime_routing.py --require-active github_actions_legacy
 
       - name: Resolve job and Diana longitudinal context
         shell: bash

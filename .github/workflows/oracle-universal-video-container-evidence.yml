@@ -1,0 +1,162 @@
+name: Oracle Universal Video Container Evidence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/oracle-universal-video-container-evidence.yml'
+      - '.github/workflows/oracle-universal-video-container-promote.yml'
+      - '.github/workflows/oracle-universal-video-activation.yml'
+      - 'deploy/oracle-universal-video/Dockerfile'
+      - 'deploy/oracle-universal-video/universal-video-container-entrypoint.sh'
+      - 'deploy/oracle-universal-video/universal-video-container.service'
+      - 'ops/oracle_universal_video_container_install.sh'
+      - 'ops/bounded_container_log_diagnostic.py'
+      - 'ops/oracle_universal_video_container_promote.sh'
+      - 'ops/oracle_universal_video_run_command.sh'
+      - 'ops/universal_video_operator.sh'
+      - 'ops/install_universal_video_operator.sh'
+      - 'requirements-universal-video.txt'
+      - 'requirements-universal-video-speaker.txt'
+      - 'universal_video/container_runtime.py'
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: 'Pinned 40-character commit to attest'
+        required: true
+        default: '6a4debedb87f74678ece5a02771d36f8d6569346'
+        type: string
+      expected_host_fingerprint:
+        description: 'SSH host fingerprint'
+        required: true
+        default: 'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[UV_EVIDENCE_RECOVER_STUCK]') }}
+
+jobs:
+  evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      OCI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate exact requested revision
+        env:
+          REF: ${{ inputs.git_ref || github.sha }}
+          FINGERPRINT: ${{ inputs.expected_host_fingerprint || 'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' }}
+        run: |
+          set -euo pipefail
+          [[ "$REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$FINGERPRINT" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]
+          git cat-file -e "$REF^{commit}"
+          git show "$REF:ops/oracle_universal_video_run_command.sh" > "$RUNNER_TEMP/prepare.sh"
+          git show "$REF:ops/oracle_universal_video_container_install.sh" > "$RUNNER_TEMP/container-install.sh"
+          chmod 0700 "$RUNNER_TEMP/prepare.sh" "$RUNNER_TEMP/container-install.sh"
+      - name: Ensure Oracle instance is running
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q oci-cli
+          oci_user="$(printf '%s\n' "$OCI_USER" | sed -nE 's/^[[:space:]]*(user=)?(ocid1\.user\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p' | head -n1)"
+          oci_fingerprint="$(printf '%s\n' "$OCI_FINGERPRINT" | sed -nE 's/^[[:space:]]*(fingerprint=)?([0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){15})[[:space:]]*$/\2/p' | head -n1)"
+          oci_tenancy="$(printf '%s\n' "$OCI_TENANCY" | sed -nE 's/^[[:space:]]*(tenancy=)?(ocid1\.tenancy\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p' | head -n1)"
+          [[ -n "$oci_user" && -n "$oci_fingerprint" && -n "$oci_tenancy" ]]
+          install -d -m 0700 "$RUNNER_TEMP/oci"
+          printf '%s\n' "$OCI_KEY" > "$RUNNER_TEMP/oci/key.pem"
+          chmod 0600 "$RUNNER_TEMP/oci/key.pem"
+          cat > "$RUNNER_TEMP/oci/config" <<EOF
+          [DEFAULT]
+          user=$oci_user
+          fingerprint=$oci_fingerprint
+          tenancy=$oci_tenancy
+          region=$OCI_REGION
+          key_file=$RUNNER_TEMP/oci/key.pem
+          EOF
+          chmod 0600 "$RUNNER_TEMP/oci/config"
+          state="$(oci --config-file "$RUNNER_TEMP/oci/config" compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
+          case "$state" in
+            RUNNING) ;;
+            STOPPED) oci --config-file "$RUNNER_TEMP/oci/config" compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+            *) echo "ORACLE_INSTANCE_STATE_UNSUPPORTED=$state"; exit 1 ;;
+          esac
+          echo ORACLE_INSTANCE_RUNNING_PASS
+      - name: Establish pinned SSH transport
+        id: ssh
+        env:
+          FINGERPRINT: ${{ inputs.expected_host_fingerprint || 'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' }}
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]] || { echo ORACLE_SSH_PRIVATE_KEY_NOT_CONFIGURED >&2; exit 1; }
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+      - name: Build and attest container without submitting a video job
+        env:
+          REF: ${{ inputs.git_ref || github.sha }}
+        run: |
+          set -euo pipefail
+          ssh_base=(ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          set +e
+          "${ssh_base[@]}" "sudo -n env UNIVERSAL_VIDEO_GIT_REF='$REF' UNIVERSAL_VIDEO_ACTIVATE=1 UNIVERSAL_VIDEO_PREWARM_MODEL=1 UNIVERSAL_VIDEO_RUN_SMOKE=0 UNIVERSAL_VIDEO_SOURCE_ONLY=1 bash -s" < "$RUNNER_TEMP/prepare.sh" > "$RUNNER_TEMP/prepare.log" 2>&1
+          prepare_rc=$?
+          set -e
+          if (( prepare_rc != 0 )); then
+            python ops/bounded_container_log_diagnostic.py "$RUNNER_TEMP/prepare.log" || true
+            disk_available_kb="$("${ssh_base[@]}" "df -Pk /opt/bridge-school | tail -n 1 | tr -s ' ' | cut -d ' ' -f 4")"
+            [[ "$disk_available_kb" =~ ^[0-9]+$ ]] && echo "UNIVERSAL_VIDEO_CONTAINER_RESOURCE disk_available_kb=$disk_available_kb disk_required_kb=8388608"
+            echo '{"error_code":"UV_CONTAINER_SOURCE_PREPARE_FAILED","status":"FAILED"}'
+            exit "$prepare_rc"
+          fi
+          grep -Fx UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS "$RUNNER_TEMP/prepare.log"
+          expected_promotion_blob="$(git rev-parse "$REF:ops/oracle_universal_video_container_promote.sh")"
+          remote_head="$("${ssh_base[@]}" 'sudo -n git -C /opt/bridge-school/universal-video-src rev-parse HEAD')"
+          remote_promotion_blob="$("${ssh_base[@]}" 'sudo -n git hash-object -- /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh')"
+          [[ "$remote_head" == "$REF" && "$remote_promotion_blob" == "$expected_promotion_blob" ]]
+          echo UNIVERSAL_VIDEO_PROMOTION_ENTRYPOINT_ATTEST_PASS
+          set +e
+          "${ssh_base[@]}" 'sudo -n env UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=0 bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_install.sh' > "$RUNNER_TEMP/container.log" 2>&1
+          container_rc=$?
+          set -e
+          if (( container_rc != 0 )); then
+            python ops/bounded_container_log_diagnostic.py "$RUNNER_TEMP/container.log" || echo 'UV_CONTAINER_BOUNDED_DIAGNOSTIC_UNAVAILABLE'
+            exit "$container_rc"
+          fi
+          grep -E '^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=[0-9a-f]{40} image_digest=sha256:[0-9a-f]{64} activated=0$' "$RUNNER_TEMP/container.log"
+          {
+            echo '## Oracle Universal Video Container Evidence'
+            grep -E '^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS ' "$RUNNER_TEMP/container.log"
+            echo 'fallback_used=false'
+            echo 'video_job_submitted=false'
+          } >> "$GITHUB_STEP_SUMMARY"

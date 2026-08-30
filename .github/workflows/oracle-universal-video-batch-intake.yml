@@ -1,0 +1,169 @@
+name: Oracle Universal Video Batch Intake
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-universal-video-batch-intake.yml'
+      - 'ops/universal-video-batch-request.schema.json'
+      - 'ops/universal-video-batch-intake.schema.json'
+      - 'tests/test_universal_video_batch_workflow_contract.py'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-universal-video-batch-requests/*.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('oracle-video-batch-pr-{0}', github.run_id) || 'oracle-instance-workload-mutation' }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      encoded_intake: ${{ steps.request.outputs.encoded_intake }}
+      request_key: ${{ steps.request.outputs.request_key }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Validate bounded project-neutral request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q requests
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            python -m pip install --disable-pip-version-check -q pytest google-auth
+            python -m py_compile universal_video/video_queue.py universal_video/video_queue_intake.py
+            python -m pytest -q tests/test_universal_video_batch_workflow_contract.py tests/test_universal_video_neon_queue.py
+            echo 'encoded_intake=' >> "$GITHUB_OUTPUT"
+            echo 'request_key=contract-only' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+            | grep -E '^ops/oracle-universal-video-batch-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one batch request' >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import base64, json, os, re
+          from universal_video.video_queue import validate_intake_request
+
+          path=os.environ['REQUEST_FILE']
+          if os.path.getsize(path)>16384: raise SystemExit('batch request too large')
+          value=json.load(open(path,encoding='utf-8'))
+          assert set(value)=={'request_id','host','user','expected_host_fingerprint','intake'}
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}',str(value['request_id']))
+          assert value['host']=='158.180.47.161' and value['user']=='ubuntu'
+          assert value['expected_host_fingerprint']=='SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk'
+          intake=validate_intake_request(value['intake'])
+          raw=json.dumps(intake,ensure_ascii=False,separators=(',',':')).encode()
+          print('encoded_intake='+base64.b64encode(raw).decode())
+          print('request_key='+intake['request_key'])
+          PY
+
+  enqueue:
+    if: ${{ github.event_name == 'push' }}
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      OCI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+      PAYLOAD: ${{ needs.validate.outputs.encoded_intake }}
+      REQUEST_KEY: ${{ needs.validate.outputs.request_key }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Ensure exact Oracle instance is running
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q oci-cli
+          oci_user="$(printf '%s\n' "$OCI_USER" | sed -nE 's/^[[:space:]]*(user=)?(ocid1\.user\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p' | head -n1)"
+          oci_tenancy="$(printf '%s\n' "$OCI_TENANCY" | sed -nE 's/^[[:space:]]*(tenancy=)?(ocid1\.tenancy\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p' | head -n1)"
+          oci_fingerprint="$(printf '%s\n' "$OCI_FINGERPRINT" | sed -nE 's/^[[:space:]]*(fingerprint=)?([0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){15})[[:space:]]*$/\2/p' | head -n1)"
+          [[ -n "$oci_user" && -n "$oci_tenancy" && -n "$oci_fingerprint" ]]
+          mkdir -p "$HOME/.oci"
+          printf '%s\n' "$OCI_KEY" > "$HOME/.oci/key.pem"
+          chmod 0600 "$HOME/.oci/key.pem"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$oci_user
+          tenancy=$oci_tenancy
+          fingerprint=$oci_fingerprint
+          region=$OCI_REGION
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 0600 "$HOME/.oci/config"
+          state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
+          case "$state" in
+            RUNNING) ;;
+            STOPPED) oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+            *) echo "Oracle instance is not runnable: $state" >&2; exit 1 ;;
+          esac
+      - name: Resolve pinned SSH transport
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      - name: Enqueue metadata through bounded Oracle operator
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "$PAYLOAD" && ${#PAYLOAD} -le 24000 ]]
+          result="$(timeout 180 ssh -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
+            "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video enqueue-batch-base64 '$PAYLOAD'" 2>/dev/null)"
+          RESULT="$result" REQUEST_KEY="$REQUEST_KEY" python - <<'PY'
+          import json, os
+          value=json.loads(os.environ['RESULT'].splitlines()[-1])
+          assert value['schema']=='universal-video-batch-intake-v1'
+          assert value['request_key']==os.environ['REQUEST_KEY']
+          assert value['status'] in {'QUEUED_CANARY','RUNNING','CANARY_BLOCKED','REVIEW'}
+          assert 1 <= int(value['expected_count']) <= 1000
+          assert value['result_mode']=='SHADOW_REVIEW_ONLY'
+          assert value['canonical_promotion_allowed'] is False
+          assert value['database_persistence_allowed'] is False
+          print(json.dumps({
+            'batch_id':value['batch_id'],
+            'request_key':value['request_key'],
+            'status':value['status'],
+            'expected_count':value['expected_count'],
+            'inventory_sha256':value['inventory_sha256'],
+            'enqueue_elapsed_seconds':value['enqueue_elapsed_seconds'],
+          },sort_keys=True))
+          PY
+          echo 'ORACLE_UNIVERSAL_VIDEO_BATCH_INTAKE_PASS'

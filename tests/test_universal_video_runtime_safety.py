@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from universal_video.contract import (
 )
 from universal_video import runner
 from universal_video.runner import (
+    VideoSubprocessError,
     _enforce_media_bounds,
     _inspect_source,
     _prepare_job_dir,
@@ -31,6 +33,26 @@ def _job(tmp_path: Path, **overrides):
     }
     payload.update(overrides)
     return validate_job(payload, allowed_local_root=str(tmp_path))
+
+
+def test_media_subprocess_failure_drops_raw_stderr(monkeypatch: pytest.MonkeyPatch):
+    sentinel = "DO_NOT_PUBLISH_RAW_STDERR /private/source-name.mp4"
+    completed = subprocess.CompletedProcess(["ffprobe"], 1, stdout="", stderr=sentinel)
+    invoked = []
+
+    def fake_run(*args, **kwargs):
+        invoked.append((args, kwargs))
+        return completed
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    with pytest.raises(VideoSubprocessError) as caught:
+        runner._run(
+            ["ffprobe", "/private/source-name.mp4"],
+            failure_code="UV_MEDIA_PROBE_FAILED",
+        )
+    assert str(caught.value) == "UV_MEDIA_PROBE_FAILED"
+    assert sentinel not in str(caught.value)
+    assert invoked[0][1]["stderr"] is subprocess.DEVNULL
 
 
 def test_reserved_path_job_ids_are_forbidden(tmp_path: Path):
@@ -329,8 +351,9 @@ def test_spool_rejects_symlink_payload_without_following_it(tmp_path: Path):
     assert process_one(tmp_path) is True
     assert not link.exists()
     failure = json.loads((tmp_path / "failed" / "job.json").read_text(encoding="utf-8"))
-    assert failure["error_type"] == "INVALID_SPOOL_PAYLOAD"
-    assert "symlink" in failure["error"]
+    assert failure["error_type"] == "SpoolPayloadRejected"
+    assert failure["error_code"] == "UV_INVALID_SPOOL_PAYLOAD"
+    assert "error" not in failure
     assert target.read_text(encoding="utf-8") == '{"job_id":"do-not-read"}'
 
 
@@ -342,5 +365,6 @@ def test_spool_rejects_oversized_payload_before_json_read(tmp_path: Path):
 
     assert process_one(tmp_path) is True
     failure = json.loads((tmp_path / "failed" / "oversize.json").read_text(encoding="utf-8"))
-    assert failure["error_type"] == "INVALID_SPOOL_PAYLOAD"
-    assert "bounded contract" in failure["error"]
+    assert failure["error_type"] == "SpoolPayloadRejected"
+    assert failure["error_code"] == "UV_INVALID_SPOOL_PAYLOAD"
+    assert "error" not in failure

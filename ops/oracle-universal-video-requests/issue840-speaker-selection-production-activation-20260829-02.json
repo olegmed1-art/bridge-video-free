@@ -1,0 +1,9 @@
+{
+  "request_id": "issue840-speaker-selection-production-activation-20260829-02",
+  "mode": "activate",
+  "git_ref": "59cf8ae3e289ce5639577bb4d6ac818ac26fd1ca",
+  "expected_host_fingerprint": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}

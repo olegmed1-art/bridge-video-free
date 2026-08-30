@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Post-process Universal Video keyframes through the school-owned Bridge Vision engine.
 
 Native Bridge Vision is the default. The old BBO screenshot parser remains an
@@ -7,13 +6,106 @@ explicit opt-in legacy adapter only; it is never silently selected.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
-from bridge_vision import BridgeVisionEngine
+from bridge_vision import BridgeVisionEngine, fuse_card_evidence
+from bridge_vision.evidence_fusion import MAX_DECLARATIONS
+
+NativeDetectorInjection = Callable[[Path], dict[str, Any]]
 
 LegacyParserInjection = Callable[[Path], dict[str, Any]]
+
+FRAME_EVIDENCE_SCHEMA = "universal-video-frame-evidence-v1"
+
+
+def _bounded_speech_declarations(
+    declarations: Iterable[Mapping[str, Any]] | None,
+) -> list[Mapping[str, Any]]:
+    if declarations is None:
+        return []
+    if isinstance(declarations, (str, bytes)):
+        raise TypeError("speech declarations must be an iterable of objects")
+    bounded: list[Mapping[str, Any]] = []
+    for index, declaration in enumerate(declarations):
+        if index >= MAX_DECLARATIONS:
+            raise ValueError("too many speech declarations")
+        if not isinstance(declaration, Mapping):
+            raise TypeError("speech declaration must be an object")
+        bounded.append(declaration)
+    return bounded
+
+
+def _speech_for_frame(
+    declarations: list[Mapping[str, Any]],
+    *,
+    frame_file: str,
+    frame_sha256: str,
+    frame_time: Any,
+) -> list[tuple[int, Mapping[str, Any]]]:
+    selected: list[tuple[int, Mapping[str, Any]]] = []
+    try:
+        timestamp = float(frame_time)
+    except (TypeError, ValueError):
+        timestamp = math.nan
+    for index, declaration in enumerate(declarations):
+        declared_sha = declaration.get("frame_sha256")
+        declared_file = declaration.get("frame_file")
+        if declared_sha is not None:
+            applies = str(declared_sha) == frame_sha256
+        elif declared_file is not None:
+            applies = str(declared_file) == frame_file
+        else:
+            try:
+                start = float(declaration.get("start"))
+                end = float(declaration.get("end"))
+            except (TypeError, ValueError):
+                applies = False
+            else:
+                applies = math.isfinite(timestamp) and start <= timestamp <= end
+        if applies:
+            selected.append((index, declaration))
+    return selected
+
+
+def _layout_suggestions(result: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    suggestions: list[Mapping[str, Any]] = []
+    sources = list(result.get("candidates") or []) + list(result.get("diagnostics") or [])
+    for source in sources:
+        if not isinstance(source, Mapping):
+            continue
+        evidence = source.get("evidence") or {}
+        if not isinstance(evidence, Mapping):
+            continue
+        raw_suggestions = evidence.get("layout_suggestions") or []
+        if not isinstance(raw_suggestions, list):
+            continue
+        suggestions.extend(item for item in raw_suggestions if isinstance(item, Mapping))
+    return suggestions
+
+
+def _observed_hands(result: Mapping[str, Any]) -> dict[str, list[str]]:
+    deal = result.get("deal") or {}
+    provenance = deal.get("card_provenance") if isinstance(deal, Mapping) else None
+    if not isinstance(provenance, Mapping):
+        return {}
+    return {
+        seat: list(entry.get("observed_cards") or [])
+        for seat, entry in provenance.items()
+        if isinstance(entry, Mapping) and entry.get("observed_cards")
+    }
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _safe_frame_path(job_dir: Path, file_name: Any) -> Path:
@@ -31,6 +123,91 @@ def _safe_frame_path(job_dir: Path, file_name: Any) -> Path:
     if not frame.is_file():
         raise ValueError(f"frame does not exist: {name}")
     return frame
+
+
+def _frame_evidence_index(
+    manifest: Mapping[str, Any],
+    frame_times: Mapping[str, float],
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any], int]:
+    """Validate optional media-worker packet metadata and index it by frame."""
+
+    raw = manifest.get("frame_evidence")
+    if raw is None:
+        return {}, {}, 0
+    if not isinstance(raw, Mapping) or raw.get("schema") != FRAME_EVIDENCE_SCHEMA:
+        raise ValueError("unsupported frame evidence contract")
+    strategy = str(raw.get("strategy") or "")
+    if strategy not in {"anchor-only-v1", "anchor-neighbors-v1"}:
+        raise ValueError("unsupported frame evidence strategy")
+    regions = raw.get("regions") or {}
+    if not isinstance(regions, Mapping):
+        raise ValueError("frame evidence regions must be an object")
+    for name, region in regions.items():
+        if name not in {"N", "E", "S", "W", "CENTER"} or not isinstance(region, Mapping):
+            raise ValueError("invalid frame evidence region")
+        values = [region.get(key) for key in ("x", "y", "width", "height")]
+        try:
+            x, y, width, height = (float(value) for value in values)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("frame evidence region must be numeric") from exc
+        if min(x, y, width, height) < 0 or width <= 0 or height <= 0 or x + width > 1 or y + height > 1:
+            raise ValueError("frame evidence region is outside normalized bounds")
+    expected_regions = {"N", "E", "S", "W", "CENTER"} if strategy == "anchor-neighbors-v1" else set()
+    if set(regions) != expected_regions:
+        raise ValueError("frame evidence regions do not match strategy")
+
+    bundles = raw.get("bundles")
+    if not isinstance(bundles, list):
+        raise ValueError("frame evidence bundles must be an array")
+    index: dict[str, list[dict[str, Any]]] = {}
+    seen_bundle_ids: set[str] = set()
+    for bundle in bundles:
+        if not isinstance(bundle, Mapping):
+            raise ValueError("frame evidence bundle must be an object")
+        bundle_id = str(bundle.get("bundle_id") or "").strip()
+        if not bundle_id or bundle_id in seen_bundle_ids:
+            raise ValueError("unsafe or duplicate frame evidence bundle id")
+        seen_bundle_ids.add(bundle_id)
+        try:
+            anchor_time = float(bundle.get("anchor_time"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("frame evidence anchor time must be numeric") from exc
+        if not math.isfinite(anchor_time) or anchor_time < 0:
+            raise ValueError("frame evidence anchor time must be non-negative")
+        members = bundle.get("members")
+        if not isinstance(members, list) or not members:
+            raise ValueError("frame evidence bundle must contain members")
+        roles: set[str] = set()
+        for member in members:
+            if not isinstance(member, Mapping):
+                raise ValueError("frame evidence member must be an object")
+            role = str(member.get("role") or "").upper()
+            file_name = str(member.get("file") or "")
+            if role not in {"BEFORE", "CENTER", "AFTER"} or role in roles:
+                raise ValueError("invalid or duplicate frame evidence role")
+            if file_name not in frame_times:
+                raise ValueError("frame evidence references an unknown frame")
+            try:
+                member_time = float(member.get("time"))
+                offset = float(member.get("offset_seconds"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("frame evidence member time and offset must be numeric") from exc
+            if (
+                not math.isfinite(member_time)
+                or not math.isfinite(offset)
+                or member_time < 0
+                or abs(float(frame_times[file_name]) - member_time) > 0.001
+                or abs((member_time - anchor_time) - offset) > 0.001
+            ):
+                raise ValueError("frame evidence member time or offset mismatch")
+            roles.add(role)
+            index.setdefault(file_name, []).append({
+                "bundle_id": bundle_id,
+                "role": role,
+                "anchor_time": anchor_time,
+                "offset_seconds": member.get("offset_seconds"),
+            })
+    return index, dict(regions), len(bundles)
 
 
 def _wrap_injected_parser(parser: LegacyParserInjection):
@@ -54,7 +231,11 @@ def _wrap_injected_parser(parser: LegacyParserInjection):
     return detector
 
 
-def build_engine(*, allow_legacy_old_bbo: bool = False) -> BridgeVisionEngine:
+def build_engine(
+    *,
+    allow_legacy_old_bbo: bool = False,
+    profiled_challenger: NativeDetectorInjection | None = None,
+) -> BridgeVisionEngine:
     engine = BridgeVisionEngine()
     # Native detector families are registered here as they graduate from their
     # gold-set gates. Until then, native analysis fails closed rather than
@@ -63,6 +244,8 @@ def build_engine(*, allow_legacy_old_bbo: bool = False) -> BridgeVisionEngine:
         from bridge_vision.legacy import old_bbo_report_parser
 
         engine.register("old-bbo-compat", old_bbo_report_parser)
+    if profiled_challenger is not None:
+        engine.register("profiled-interface-challenger", profiled_challenger)
     return engine
 
 
@@ -72,29 +255,56 @@ def process_job_frames(
     engine: BridgeVisionEngine | None = None,
     parser: LegacyParserInjection | None = None,
     allow_legacy_old_bbo: bool = False,
+    profiled_challenger: NativeDetectorInjection | None = None,
+    speech_declarations: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    if engine is not None and parser is not None:
-        raise ValueError("pass engine or parser, not both")
+    selected = sum(value is not None for value in (engine, parser, profiled_challenger))
+    if selected > 1:
+        raise ValueError("pass only one of engine, parser or profiled_challenger")
+    if allow_legacy_old_bbo and selected:
+        raise ValueError("legacy old BBO mode cannot be combined with an injected detector")
     compatibility_mode = parser is not None
     root = job_dir.resolve()
     manifest_path = root / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     frames = manifest.get("frames")
     if not isinstance(frames, list):
-        raise ValueError("manifest frames must be an array")
+        raise TypeError("manifest frames must be an array")
+    frame_times = {
+        str(item.get("file")): float(item.get("time"))
+        for item in frames
+        if isinstance(item, Mapping) and item.get("file") is not None and item.get("time") is not None
+    }
+    evidence_index, crop_regions, evidence_bundle_count = _frame_evidence_index(manifest, frame_times)
 
     if parser is not None:
         vision = BridgeVisionEngine({"explicit-injected-parser": _wrap_injected_parser(parser)})
     else:
-        vision = engine or build_engine(allow_legacy_old_bbo=allow_legacy_old_bbo)
+        vision = engine or build_engine(
+            allow_legacy_old_bbo=allow_legacy_old_bbo,
+            profiled_challenger=profiled_challenger,
+        )
+    profiled_shadow = vision.shadow_only
+    speech = _bounded_speech_declarations(speech_declarations)
+    if speech and not profiled_shadow:
+        raise ValueError("speech evidence fusion is limited to the profiled shadow challenger")
     records: list[dict[str, Any]] = []
     recognized_frames = 0
     conflict_frames = 0
+    derived_fourth_hand_frames = 0
+    speech_fusion_records = 0
+    speech_review_frames = 0
+    speech_conflict_frames = 0
+    speech_frame_associations = 0
+    matched_speech_indices: set[int] = set()
 
     for frame_meta in frames:
         if not isinstance(frame_meta, dict):
-            raise ValueError("manifest frame entry must be an object")
+            raise TypeError("manifest frame entry must be an object")
         frame = _safe_frame_path(root, frame_meta.get("file"))
+        actual_frame_sha = _sha256(frame) if profiled_shadow else None
+        if profiled_shadow and frame_meta.get("sha256") != actual_frame_sha:
+            raise ValueError("profiled shadow frame hash mismatch")
         result = vision.analyze_frame(frame).to_dict()
         if compatibility_mode:
             candidates = result.get("candidates") or []
@@ -107,18 +317,50 @@ def process_job_frames(
             result["state_fingerprint"] = evidence.get("state_fingerprint")
         result["time"] = frame_meta.get("time")
         result["frame_file"] = frame.name
-        result["frame_sha256"] = frame_meta.get("sha256")
+        result["frame_sha256"] = actual_frame_sha or frame_meta.get("sha256")
+        result["frame_evidence"] = {
+            "schema": FRAME_EVIDENCE_SCHEMA,
+            "memberships": evidence_index.get(frame.name, []),
+            "crop_regions": crop_regions,
+        }
+        if speech:
+            selected_speech_rows = _speech_for_frame(
+                speech,
+                frame_file=frame.name,
+                frame_sha256=str(result["frame_sha256"] or ""),
+                frame_time=frame_meta.get("time"),
+            )
+            if selected_speech_rows:
+                matched_speech_indices.update(index for index, _ in selected_speech_rows)
+                speech_frame_associations += len(selected_speech_rows)
+                fusion = fuse_card_evidence(
+                    _observed_hands(result),
+                    [declaration for _, declaration in selected_speech_rows],
+                    layout_suggestions=_layout_suggestions(result),
+                )
+                result["speech_fusion"] = fusion
+                result["fused_deal"] = fusion["deal"]
+                speech_fusion_records += 1
+                if fusion["status"] == "CONFLICT":
+                    speech_conflict_frames += 1
+                elif fusion["status"] == "REVIEW":
+                    speech_review_frames += 1
         records.append(result)
         if result["deal"] is not None:
             recognized_frames += 1
+            if (result["deal"].get("derivations") or []):
+                derived_fourth_hand_frames += 1
         if result["status"] == "CONFLICT":
             conflict_frames += 1
 
-    output_path = root / "bridge_positions.jsonl"
+    output_path = root / (
+        "bridge_positions_profiled_shadow.jsonl" if profiled_shadow else "bridge_positions.jsonl"
+    )
     output_path.write_text(
         "".join(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n" for record in records),
         encoding="utf-8",
     )
+    unmatched_speech_declarations = len(speech) - len(matched_speech_indices)
     if compatibility_mode:
         summary = {
             "status": "REVIEW" if conflict_frames else "COMPLETED",
@@ -128,24 +370,57 @@ def process_job_frames(
             "output_records": len(records),
             "recognized_frames": recognized_frames,
             "conflict_frames": conflict_frames,
-            "derive_fourth_hand": False,
+            "derive_fourth_hand": True,
+            "derived_fourth_hand_frames": derived_fourth_hand_frames,
             "output": output_path.name,
         }
     else:
         summary = {
-            "status": "REVIEW" if conflict_frames else "COMPLETED",
+            "status": (
+                "SHADOW_REVIEW"
+                if profiled_shadow and (
+                    conflict_frames
+                    or speech_conflict_frames
+                    or speech_review_frames
+                    or unmatched_speech_declarations
+                )
+                else "SHADOW_COMPLETED"
+                if profiled_shadow
+                else "REVIEW"
+                if conflict_frames
+                else "COMPLETED"
+            ),
             "vision_engine": "native",
             "detectors": list(vision.detector_names),
             "legacy_old_bbo_enabled": bool(allow_legacy_old_bbo),
+            "profiled_challenger_enabled": profiled_shadow,
+            "result_scope": "SHADOW_ONLY" if profiled_shadow else "CANONICAL_PIPELINE_INPUT",
+            "canonical_promotion_allowed": False,
+            "frame_evidence_schema": FRAME_EVIDENCE_SCHEMA if evidence_bundle_count else None,
+            "frame_evidence_bundle_count": evidence_bundle_count,
+            "full_deal_validation_stage": "bridge_vision.multiframe",
             "job_id": manifest.get("job_id"),
             "source_fingerprint": manifest.get("source_fingerprint"),
             "input_frames": len(frames),
             "output_records": len(records),
             "recognized_frames": recognized_frames,
             "conflict_frames": conflict_frames,
+            "derive_fourth_hand": True,
+            "derived_fourth_hand_frames": derived_fourth_hand_frames,
+            "speech_fusion_records": speech_fusion_records,
+            "speech_review_frames": speech_review_frames,
+            "speech_conflict_frames": speech_conflict_frames,
+            "speech_declarations_input": len(speech),
+            "speech_declarations_matched": len(matched_speech_indices),
+            "speech_unmatched_declarations": unmatched_speech_declarations,
+            "speech_frame_associations": speech_frame_associations,
             "output": output_path.name,
         }
-    summary_path = root / "bridge_positions_summary.json"
+    summary_path = root / (
+        "bridge_positions_profiled_shadow_summary.json"
+        if profiled_shadow
+        else "bridge_positions_summary.json"
+    )
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     return summary
 

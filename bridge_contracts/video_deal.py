@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-BRIDGE_VIDEO_DEAL_CONTRACT_VERSION = "bridge-video-deal-v2"
+BRIDGE_VIDEO_DEAL_CONTRACT_VERSION = "bridge-video-deal-v3"
 SEATS = ("N", "E", "S", "W")
 SUIT_ORDER = {"S": 0, "H": 1, "D": 2, "C": 3}
 RANK_ORDER = {rank: idx for idx, rank in enumerate("AKQJT98765432")}
@@ -37,9 +37,25 @@ class CanonicalVideoDeal:
     derivations: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
+        derived_by_seat = {
+            str(item.get("seat")): set(item.get("computed_cards") or [])
+            for item in self.derivations
+            if isinstance(item, dict)
+        }
         return {
             "contract_version": BRIDGE_VIDEO_DEAL_CONTRACT_VERSION,
             "hands": {seat: self.hands[seat].to_dict() for seat in SEATS},
+            "card_provenance": {
+                seat: {
+                    "observed_cards": [
+                        card for card in self.hands[seat].cards if card not in derived_by_seat.get(seat, set())
+                    ],
+                    "derived_cards": [
+                        card for card in self.hands[seat].cards if card in derived_by_seat.get(seat, set())
+                    ],
+                }
+                for seat in SEATS
+            },
             "derivations": [dict(item) for item in self.derivations],
         }
 
@@ -93,9 +109,15 @@ def _derive_fourth_hand(
     derivation = {
         "seat": target,
         "method": "deck_subtraction_from_three_complete_hands",
+        "provenance_class": "DERIVED",
+        "evidence_basis": "39_unique_cards_in_three_complete_observed_hands",
         "from_seats": list(complete),
         "observed_cards_preserved": sorted(target_observed, key=_card_sort_key),
         "computed_cards": sorted(computed, key=_card_sort_key),
+        "confidence": {
+            "logical_complement": 1.0,
+            "source_observation_floor": None,
+        },
     }
     return updated, (derivation,), computed
 

@@ -8,6 +8,8 @@ import pytest
 
 from universal_video.result_conformance import ResultConformanceError, verify_result
 from universal_video.profiles import resolve_profile
+from universal_video.server_review import build_server_review
+from universal_video.source_parts_manifest import build_source_parts_manifest
 
 
 def _fingerprint(payload: dict) -> str:
@@ -50,6 +52,28 @@ def _bundle(tmp_path: Path, *, status: str = "COMPLETED") -> tuple[Path, dict]:
         }
     ]
     (job_dir / "transcript_qc.json").write_text(json.dumps(qc), encoding="utf-8")
+    speaker_report = {
+        "schema": "universal-video-speaker-structure-v1",
+        "revision": "test-v1",
+        "status": "UNAVAILABLE_INSUFFICIENT_SEGMENTS",
+        "quality_gate": "INCONCLUSIVE",
+        "reason": "INSUFFICIENT_SEGMENTS",
+        "segments_total": 1,
+        "segments_labeled": 0,
+        "speaker_count": 0,
+        "speaker_labels": [],
+        "speaker_clusters": {},
+        "role_mapping_supported": False,
+        "teacher_student_attribution": "UNAVAILABLE",
+        "privacy": {
+            "real_person_identity_claimed": False,
+            "raw_audio_persisted": False,
+            "voice_embedding_persisted": False,
+            "cross_lesson_voice_profile_persisted": False,
+            "source_speaker_labels_persisted": False,
+        },
+    }
+    (job_dir / "speaker_diarization.json").write_text(json.dumps(speaker_report), encoding="utf-8")
     frame = frames / "frame-001.jpg"
     frame.write_bytes(b"jpeg-data")
     frame_hash = hashlib.sha256(frame.read_bytes()).hexdigest()
@@ -110,8 +134,13 @@ def _bundle(tmp_path: Path, *, status: str = "COMPLETED") -> tuple[Path, dict]:
             "qc": "transcript_qc.json",
         },
         "frames": [{"time": 0.0, "file": frame.name, "sha256": frame_hash}],
+        "speaker_structure": {
+            "report": "speaker_diarization.json",
+            "status": "UNAVAILABLE_INSUFFICIENT_SEGMENTS",
+            "speaker_count": 0,
+            "segments_labeled": 0,
+        },
         "deferred_analysis": [
-            "speaker_structure",
             "bridge_context",
             "bridge_positions",
             "dds3_optional",
@@ -145,8 +174,54 @@ def test_conformance_pass_separates_bundle_from_domain_and_pedagogical_readiness
     assert report["processing_origin_status"] == "SELF_REPORTED_MANIFEST_BOUND"
     assert report["code_origin_verified"] is False
     assert report["evidence_phase"] == "POST_HOC_OBSERVATION"
-    assert report["artifact_count"] == 5
+    assert report["artifact_count"] == 6
     assert len(report["artifact_set_sha256"]) == 64
+
+
+def test_server_review_compacts_any_conformant_bundle_without_canon_promotion(tmp_path: Path):
+    job_dir, _ = _bundle(tmp_path)
+    base = _verify(job_dir, evidence_phase="GENERATION_FINALIZATION")
+    review = build_server_review(job_dir, base)
+    (job_dir / "server_review.json").write_text(json.dumps(review), encoding="utf-8")
+
+    final = _verify(
+        job_dir,
+        evidence_phase="GENERATION_FINALIZATION",
+        require_server_review=True,
+    )
+    assert final["server_final_review_status"] == "REVIEW_REQUIRED"
+    assert final["chat_handoff_mode"] == "EXCEPTIONS_ONLY"
+    assert final["artifact_count"] == 7
+    assert review["execution_location"] == "RESIDENT_SERVER_POSTPROCESS"
+    assert review["handoff"]["technical_final_review_completed"] is True
+    assert review["handoff"]["canonical_promotion_allowed"] is False
+    assert review["handoff"]["raw_media_included"] is False
+    assert review["handoff"]["full_transcript_included"] is False
+    assert review["summary"]["deferred_analysis"] == [
+        "bridge_context",
+        "bridge_positions",
+        "dds3_optional",
+        "educational_candidates",
+    ]
+    publication = _verify(
+        job_dir,
+        evidence_phase="PUBLICATION_PREFLIGHT",
+        require_server_review=True,
+    )
+    assert publication["artifact_set_sha256"] == final["artifact_set_sha256"]
+
+
+def test_server_review_tamper_and_missing_packet_fail_closed(tmp_path: Path):
+    job_dir, _ = _bundle(tmp_path)
+    with pytest.raises(ResultConformanceError, match="required server review"):
+        _verify(job_dir, require_server_review=True)
+
+    base = _verify(job_dir, evidence_phase="GENERATION_FINALIZATION")
+    review = build_server_review(job_dir, base)
+    review["handoff"]["canonical_promotion_allowed"] = True
+    (job_dir / "server_review.json").write_text(json.dumps(review), encoding="utf-8")
+    with pytest.raises(ResultConformanceError, match="handoff boundary"):
+        _verify(job_dir, require_server_review=True)
 
 
 def test_review_is_not_a_conformant_completed_bundle(tmp_path: Path):
@@ -161,6 +236,67 @@ def test_exact_job_hash_and_source_identity_are_enforced(tmp_path: Path):
         _verify(job_dir, expected_job_hash="e" * 64)
     with pytest.raises(ResultConformanceError, match="unexpected source file id"):
         _verify(job_dir, expected_source_file_id="1DifferentDriveFileId000000")
+
+
+def test_declared_derived_parts_require_exact_source_provenance(tmp_path: Path):
+    job_dir, manifest = _bundle(tmp_path)
+    manifest["derived_media_parts"] = True
+    manifest["source_parts_manifest"] = "source_parts_manifest.json"
+    parts = build_source_parts_manifest(
+        {
+            "drive_id": manifest["source"]["file_id"],
+            "size_bytes": manifest["media"]["size_bytes"],
+            "modified_time": "2026-08-30T08:00:00Z",
+            "duration_ms": 90_000,
+            "sha256": manifest["media"]["sha256"],
+        },
+        [
+            {
+                "drive_id": "derivedVideoPart00001",
+                "part_index": 0,
+                "source_start_ms": 0,
+                "source_end_ms": 90_000,
+                "size_bytes": 2_000_000,
+                "sha256": "e" * 64,
+            }
+        ],
+    )
+    (job_dir / "source_parts_manifest.json").write_text(json.dumps(parts), encoding="utf-8")
+    (job_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    report = _verify(job_dir)
+    assert report["state"] == "PASS"
+    assert report["artifact_count"] == 7
+
+
+def test_derived_parts_fail_closed_without_or_after_tampering_manifest(tmp_path: Path):
+    job_dir, manifest = _bundle(tmp_path)
+    manifest["derived_media_parts"] = True
+    manifest["source_parts_manifest"] = "source_parts_manifest.json"
+    (job_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ResultConformanceError, match="source_parts_manifest.json"):
+        _verify(job_dir)
+
+    parts = build_source_parts_manifest(
+        {
+            "drive_id": manifest["source"]["file_id"],
+            "size_bytes": manifest["media"]["size_bytes"],
+            "modified_time": "2026-08-30T08:00:00Z",
+            "duration_ms": 90_000,
+            "sha256": manifest["media"]["sha256"],
+        },
+        [{
+            "drive_id": "derivedVideoPart00001",
+            "part_index": 0,
+            "source_start_ms": 0,
+            "source_end_ms": 90_000,
+            "size_bytes": 2_000_000,
+            "sha256": "e" * 64,
+        }],
+    )
+    parts["parts"][0]["source_end_ms"] = 89_000
+    (job_dir / "source_parts_manifest.json").write_text(json.dumps(parts), encoding="utf-8")
+    with pytest.raises(ResultConformanceError, match="source-parts provenance"):
+        _verify(job_dir)
 
 
 def test_frame_tamper_symlink_and_raw_media_fail_closed(tmp_path: Path):
@@ -179,6 +315,41 @@ def test_frame_tamper_symlink_and_raw_media_fail_closed(tmp_path: Path):
     transcript.unlink()
     transcript.symlink_to(job_dir / "transcript.jsonl")
     with pytest.raises(ResultConformanceError, match="symlink"):
+        _verify(job_dir)
+
+
+def test_frame_evidence_packet_is_bound_to_hashed_frame_inventory(tmp_path: Path):
+    job_dir, manifest = _bundle(tmp_path)
+    manifest["frame_evidence"] = {
+        "schema": "universal-video-frame-evidence-v1",
+        "strategy": "anchor-neighbors-v1",
+        "neighbor_offset_seconds": 1.5,
+        "regions": {
+            "N": {"x": 0.15, "y": 0.0, "width": 0.7, "height": 0.3},
+            "E": {"x": 0.7, "y": 0.15, "width": 0.3, "height": 0.7},
+            "S": {"x": 0.15, "y": 0.7, "width": 0.7, "height": 0.3},
+            "W": {"x": 0.0, "y": 0.15, "width": 0.3, "height": 0.7},
+            "CENTER": {"x": 0.25, "y": 0.25, "width": 0.5, "height": 0.5},
+        },
+        "frame_count": 1,
+        "bundle_count": 1,
+        "bundles": [{
+            "bundle_id": "evidence-0000",
+            "anchor_time": 0.0,
+            "members": [{
+                "role": "CENTER",
+                "time": 0.0,
+                "offset_seconds": 0.0,
+                "file": "frame-001.jpg",
+            }],
+        }],
+    }
+    (job_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    assert _verify(job_dir)["state"] == "PASS"
+
+    manifest["frame_evidence"]["bundles"][0]["members"][0]["file"] = "missing.jpg"
+    (job_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ResultConformanceError, match="unknown keyframe"):
         _verify(job_dir)
 
 

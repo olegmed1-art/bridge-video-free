@@ -16,6 +16,8 @@ SERVICE_DST="/etc/systemd/system/$SERVICE_NAME"
 SECRETS_DIR="${UNIVERSAL_VIDEO_SECRETS_DIR:-$BASE_DIR/secrets}"
 SECRETS_ENV_FILE="${UNIVERSAL_VIDEO_SECRETS_ENV_FILE:-$BASE_DIR/universal-video-secrets.env}"
 DRIVE_OAUTH_FILE="${UNIVERSAL_VIDEO_DRIVE_OAUTH_FILE:-$SECRETS_DIR/google-drive-oauth.json}"
+QUEUE_DSN_FILE="${UNIVERSAL_VIDEO_QUEUE_DSN_FILE:-$SECRETS_DIR/video-queue-dsn}"
+QUEUE_DSN_STAGING="${UNIVERSAL_VIDEO_QUEUE_DSN_STAGING:-}"
 ACTIVATE="${UNIVERSAL_VIDEO_ACTIVATE:-1}"
 MODEL="${UNIVERSAL_VIDEO_WHISPER_MODEL:-small}"
 THREADS="${UNIVERSAL_VIDEO_ASR_THREADS:-6}"
@@ -32,7 +34,7 @@ die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$THREADS" =~ ^[1-9][0-9]*$ ]] || die "UNIVERSAL_VIDEO_ASR_THREADS must be positive"
 [[ -d "$SOURCE_DIR/.git" ]] || die "isolated source checkout missing at $SOURCE_DIR"
 [[ -f "$SOURCE_DIR/universal_video/runner.py" ]] || die "universal video code missing"
-[[ -f "$SOURCE_DIR/requirements-universal-video.txt" ]] || die "requirements file missing"
+[[ -f "$SOURCE_DIR/requirements-universal-video-speaker.txt" ]] || die "speaker requirements file missing"
 [[ -f "$SERVICE_SRC" ]] || die "systemd unit missing"
 
 SOURCE_COMMIT="$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || true)"
@@ -87,7 +89,7 @@ ensure_real_dir(){
 
 ensure_real_dir "$BASE_DIR" root "$GROUP_NAME" 0750
 ensure_real_dir "$BASE_DIR/spool" root "$GROUP_NAME" 0750
-for d in inbox running done failed results; do
+for d in inbox running done failed results progress; do
   ensure_real_dir "$BASE_DIR/spool/$d" "$USER_NAME" "$GROUP_NAME" 0750
   chown "$USER_NAME:$GROUP_NAME" "$BASE_DIR/spool/$d"
   chmod 0750 "$BASE_DIR/spool/$d"
@@ -95,6 +97,7 @@ done
 for d in model-cache media output; do
   ensure_real_dir "$BASE_DIR/$d" "$USER_NAME" "$GROUP_NAME" 0750
 done
+ensure_real_dir "$BASE_DIR/intake" "$USER_NAME" "$GROUP_NAME" 0750
 ensure_real_dir "$SECRETS_DIR" root "$GROUP_NAME" 0750
 bash "$SOURCE_DIR/ops/oracle_universal_video_spool_guard.sh" \
   verify "$BASE_DIR" root "$USER_NAME" "$GROUP_NAME"
@@ -113,6 +116,12 @@ PY
 log "Prepare file-backed secret boundary for optional Google Drive sources"
 if [[ ! -e "$SECRETS_ENV_FILE" ]]; then
   printf 'GOOGLE_DRIVE_OAUTH_JSON_FILE=%s\n' "$DRIVE_OAUTH_FILE" >"$SECRETS_ENV_FILE"
+fi
+if grep -q '^BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE=' "$SECRETS_ENV_FILE"; then
+  grep -Fx "BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE=$QUEUE_DSN_FILE" "$SECRETS_ENV_FILE" >/dev/null \
+    || die 'unexpected BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE setting'
+else
+  printf 'BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE=%s\n' "$QUEUE_DSN_FILE" >>"$SECRETS_ENV_FILE"
 fi
 chown root:"$GROUP_NAME" "$SECRETS_ENV_FILE"
 chmod 0640 "$SECRETS_ENV_FILE"
@@ -133,6 +142,29 @@ else
   echo 'UNIVERSAL_VIDEO_DRIVE_SECRET=NOT_CONFIGURED_LOCAL_PATH_ONLY'
 fi
 
+if [[ -n "$QUEUE_DSN_STAGING" ]]; then
+  [[ "$QUEUE_DSN_STAGING" = /* && -f "$QUEUE_DSN_STAGING" && ! -L "$QUEUE_DSN_STAGING" ]] \
+    || die 'unsafe video queue DSN staging file'
+  [[ $(stat -c '%s' "$QUEUE_DSN_STAGING") -le 4096 ]] || die 'video queue DSN staging file is too large'
+  QUEUE_DSN_STAGING="$QUEUE_DSN_STAGING" python3 - <<'PY'
+import os
+from pathlib import Path
+value=Path(os.environ['QUEUE_DSN_STAGING']).read_text(encoding='utf-8').strip()
+assert value.startswith(('postgresql://','postgres://'))
+assert '\n' not in value and '\r' not in value
+print('UNIVERSAL_VIDEO_QUEUE_DSN_STAGING_PASS')
+PY
+  install -o root -g "$GROUP_NAME" -m 0640 "$QUEUE_DSN_STAGING" "$QUEUE_DSN_FILE"
+  rm -f -- "$QUEUE_DSN_STAGING"
+fi
+if [[ -f "$QUEUE_DSN_FILE" ]]; then
+  chown root:"$GROUP_NAME" "$QUEUE_DSN_FILE"
+  chmod 0640 "$QUEUE_DSN_FILE"
+  echo 'UNIVERSAL_VIDEO_QUEUE_CREDENTIAL=CONFIGURED'
+else
+  echo 'UNIVERSAL_VIDEO_QUEUE_CREDENTIAL=NOT_CONFIGURED'
+fi
+
 log "Build isolated Python runtime"
 if [[ -e "$BASE_DIR/.venv" || -L "$BASE_DIR/.venv" ]]; then
   [[ -d "$BASE_DIR/.venv" && ! -L "$BASE_DIR/.venv" ]] || die 'unsafe virtualenv path'
@@ -142,6 +174,8 @@ else
 fi
 runuser -u "$USER_NAME" -- "$BASE_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --upgrade pip >/dev/null
 runuser -u "$USER_NAME" -- "$BASE_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir -r "$SOURCE_DIR/requirements-universal-video.txt"
+runuser -u "$USER_NAME" -- "$BASE_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir -r "$SOURCE_DIR/requirements-worker.txt"
+runuser -u "$USER_NAME" -- "$BASE_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir -r "$SOURCE_DIR/requirements-universal-video-speaker.txt"
 
 log "Verify runtime imports"
 runuser -u "$USER_NAME" -- env PYTHONPATH="$SOURCE_DIR" PYTHONDONTWRITEBYTECODE=1 \
@@ -149,11 +183,26 @@ runuser -u "$USER_NAME" -- env PYTHONPATH="$SOURCE_DIR" PYTHONDONTWRITEBYTECODE=
 from universal_video.contract import validate_job
 from universal_video.drive_adapter import access_token
 from universal_video.profiles import PROFILES
+from universal_video.speaker_structure import run_speaker_structure
+from universal_video.video_queue import validate_intake_request
+from universal_video.neon_worker import APPROVED_REVISION
 from faster_whisper import WhisperModel
+import numpy
 assert 'transcript_only' in PROFILES
 assert 'educational' in PROFILES
 assert 'bridge_lesson' in PROFILES
+assert callable(run_speaker_structure)
 validate_job({'job_id':'install-smoke','profile':'transcript_only','source':{'kind':'local_path','path':'/opt/bridge-school/universal-video/media/test.mp4'}}, allowed_local_root='/opt/bridge-school/universal-video/media')
+assert APPROVED_REVISION == '3.1-free-r25.16'
+validate_intake_request({
+    'request_key':'install-smoke-batch',
+    'source_folder_id':'sourceFolder000001',
+    'output_folder_id':'outputFolder00001',
+    'work_folder_id':'outputFolder00001',
+    'processing_profile':'bridge_3_1_free',
+    'algorithm_revision':'3.1-free-r25.16',
+    'canary_source_file_id':'driveVideo00000001',
+})
 print('UNIVERSAL_VIDEO_IMPORTS_PASS')
 PY
 
@@ -174,10 +223,12 @@ cat >"$BASE_DIR/universal-video.env" <<EOF
 UNIVERSAL_VIDEO_SPOOL_ROOT=$BASE_DIR/spool
 UNIVERSAL_VIDEO_OUTPUT_ROOT=$BASE_DIR/output
 UNIVERSAL_VIDEO_MEDIA_ROOT=$BASE_DIR/media
+UNIVERSAL_VIDEO_REQUIRE_STAGED_SOURCE=1
 UNIVERSAL_VIDEO_WHISPER_MODEL=$MODEL
 UNIVERSAL_VIDEO_ASR_THREADS=$THREADS
 UNIVERSAL_VIDEO_POLL_SECONDS=2
 UNIVERSAL_VIDEO_SOURCE_COMMIT=$SOURCE_COMMIT
+UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE=$BASE_DIR/model-cache/speaker
 EOF
 chown root:root "$BASE_DIR/universal-video.env"
 chmod 0644 "$BASE_DIR/universal-video.env"

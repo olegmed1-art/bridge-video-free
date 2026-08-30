@@ -5,6 +5,8 @@ import json
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/oracle-universal-video-activation.yml"
 SCHEMA = ROOT / "ops/oracle-universal-video-request.schema.json"
+OPERATOR_INSTALL = ROOT / "ops/install_universal_video_operator.sh"
+RUN_COMMAND = ROOT / "ops/oracle_universal_video_run_command.sh"
 
 
 def test_activation_workflow_is_fixed_scope_and_fail_closed():
@@ -22,10 +24,18 @@ def test_activation_workflow_is_fixed_scope_and_fail_closed():
     assert "assistant_lab=active" in text
     assert "universal_video_enabled=enabled" in text
     assert "universal_video_active=active" in text
+    assert "universal_video_admin=installed_revision_bound" in text
+    assert "UNIVERSAL_VIDEO_OCARUN_BOUNDED_ADMIN_BOOTSTRAP_PASS" in text
+    assert "UNIVERSAL_VIDEO_OCARUN_POST_BOOTSTRAP_AUDIT_PASS" in text
     assert "DDS3_AFTER_PASS" in text
     assert "workflow_dispatch" in text
     assert "ops/oracle-universal-video-requests/*.json" in text
     assert "run: ${{" not in text
+    command = RUN_COMMAND.read_text(encoding="utf-8")
+    assert "'kind':'oracle_drive_staged'" in command
+    assert "'kind':'local_path'" not in command
+    assert 'SMOKE_JOB_ID="$smoke_job_id"' in command
+    assert "'job_id':os.environ['SMOKE_JOB_ID']" in command
 
 
 def test_request_schema_rejects_arbitrary_host_command_and_unknown_fields():
@@ -36,3 +46,50 @@ def test_request_schema_rejects_arbitrary_host_command_and_unknown_fields():
     assert schema["properties"]["issue"]["const"] == 318
     assert schema["properties"]["mode"]["enum"] == ["probe", "activate", "smoke"]
     assert "command" not in schema["properties"]
+
+
+def test_generic_operator_owns_a_dedicated_sudoers_file():
+    installer = OPERATOR_INSTALL.read_text(encoding="utf-8")
+    assert "readonly SUDOERS='/etc/sudoers.d/universal-video-operator-ocarun'" in installer
+    assert "readonly SUDOERS='/etc/sudoers.d/universal-video-ocarun'" not in installer
+    assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video submit-drive-base64 *" in installer
+    assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video status *" in installer
+    assert "/usr/local/sbin/universal-video-diana11" in installer
+    for name in (
+        "install_universal_video_diana11_operator.sh",
+        "install_universal_video_diana11_002_operator.sh",
+        "install_universal_video_diana11_003_operator.sh",
+    ):
+        retired = (ROOT / "ops" / name).read_text(encoding="utf-8")
+        assert "RETIRED: use /usr/local/sbin/universal-video submit-drive-base64" in retired
+        assert "exit 78" in retired
+    assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video enqueue-batch-base64 *" in installer
+    assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video batch-status *" in installer
+
+
+def test_batch_intake_uses_file_backed_secrets_and_no_project_binding():
+    operator = (ROOT / "ops/universal_video_operator.sh").read_text(encoding="utf-8")
+    schema = json.loads((ROOT / "ops/universal-video-batch-intake.schema.json").read_text(encoding="utf-8"))
+    assert "GOOGLE_DRIVE_OAUTH_JSON_FILE" in operator
+    assert "BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE" in operator
+    assert "enqueue-batch-base64" in operator
+    assert "batch-status" in operator
+    assert "project" not in schema["properties"]
+    assert schema["properties"]["processing_profile"]["pattern"]
+    assert schema["properties"]["algorithm_revision"]["pattern"]
+
+
+def test_activation_installs_export_boundary_from_the_exact_resolved_revision():
+    command = RUN_COMMAND.read_text(encoding="utf-8")
+    assert 'SOURCE_COMMIT="$RESOLVED_COMMIT"' in command
+    assert 'bash "$SOURCE_DIR/ops/install_universal_video_ocarun_admin.sh"' in command
+    assert "universal_video_admin=installed_revision_bound" in command
+    assert command.index('SOURCE_COMMIT="$RESOLVED_COMMIT"') < command.index(
+        "universal_video_admin=installed_revision_bound"
+    )
+    assert "UNIVERSAL_VIDEO_RUN_SMOKE=1" not in command
+
+def test_production_activation_shares_oracle_video_mutation_mutex():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "'oracle-instance-workload-mutation'" in text
+    assert "oracle-universal-video-activation-pr-{0}" in text

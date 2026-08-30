@@ -1,4 +1,3 @@
-# Optional speaker/diarization runtime. Not installed by the Universal Video core service.
+# Speaker/diarization runtime installed only for the bridge_lesson sidecar profile.
 -r requirements-universal-video.txt
-sherpa-onnx==1.13.4
-sherpa-onnx-bin==1.13.4
+numpy==2.3.2

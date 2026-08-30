@@ -5,6 +5,7 @@ from pathlib import Path
 import hashlib, html, json, math, os, re, tempfile, time
 import requests
 import run_drive_3_1_free as io
+from bridge_vision.deal_review_pdf import append_deal_review_pages
 from bridge_worker_3_1_free import (
     ALGORITHM_VERSION, ALGORITHM_REVISION, INFERENCE, UNCERTAIN,
     autonomous_qc_indices, attach_visual_evidence, bridge_term_hits,
@@ -317,10 +318,11 @@ def pdf_report(out,master,shots):
     ),body))
     st.append(Paragraph('Полные технические данные, все несвёрнутые учебные циклы, canon links и исходный master_analysis.json встроены в PDF без сокращения.',body))
     doc.build(st)
+    return append_deal_review_pages(Path(out), master=master, shots=shots)
 def embed_master(pdf,master):
     import fitz
     raw=json.dumps(master,ensure_ascii=False,indent=2).encode();d=fitz.open(pdf);d.embfile_add('master_analysis.json',raw,filename='master_analysis.json',ufilename='master_analysis.json',desc='Bridge Video 3.1 FREE master analysis');tmp=Path(str(pdf)+'.embed.pdf');d.save(tmp,garbage=4,deflate=True);d.close();tmp.replace(pdf);return hashlib.sha256(raw).hexdigest()
-def pdfqc(p):
+def pdfqc(p,expected_deal_review_pages=0):
     import fitz
     d=fitz.open(p);issues=[]
     if d.page_count<=0:issues.append('no-pages')
@@ -330,12 +332,26 @@ def pdfqc(p):
         for b in page.get_text('blocks'):
             x0,y0,x1,y1=b[:4]
             if x0<-1 or y0<-1 or x1>page.rect.x1+1 or y1>page.rect.y1+1:issues.append('bounds')
+    if expected_deal_review_pages:
+        if d.page_count<expected_deal_review_pages:issues.append('deal-review-page-count')
+        else:
+            for page in list(d)[-expected_deal_review_pages:]:
+                text=page.get_text()
+                if page.rect.width<=page.rect.height:issues.append('deal-review-not-landscape')
+                for marker in ('3.1 FREE - DEAL REVIEW','Распознано','Достроенный расклад','Торговля','EVIDENCE REVIEW'):
+                    if marker not in text:issues.append('deal-review-marker')
     embedded=set(d.embfile_names()) if hasattr(d,'embfile_names') else set();ok='master_analysis.json' in embedded
     if not ok:issues.append('master-json-not-embedded')
-    res={'ok':not issues,'pages':d.page_count,'issues':sorted(set(issues)),'sha256':io.sha(p),'masterEmbedded':ok};d.close();return res
+    res={'ok':not issues,'pages':d.page_count,'issues':sorted(set(issues)),'sha256':io.sha(p),'masterEmbedded':ok,'dealReviewPages':int(expected_deal_review_pages)};d.close();return res
 
 def process_job(t):
-    job=os.environ['BRIDGE_JOB_ID'];candidates=io.search(t,"trashed=false and mimeType contains 'video/'");revs=['3.1-free-semantic-r1','3.1-free-semantic-r2','3.1-free-semantic-r3','3.1.3-semantic-r1'];matches=[]
+    job=os.environ['BRIDGE_JOB_ID'];explicit_source=os.environ.get('BRIDGE_ORIGINAL_SOURCE_DRIVE_ID','').strip();revs=['3.1-free-semantic-r1','3.1-free-semantic-r2','3.1-free-semantic-r3','3.1.3-semantic-r1'];matches=[]
+    if explicit_source:
+        candidate=io.meta(t,explicit_source)
+        if not str(candidate.get('mimeType') or '').startswith('video/'):raise RuntimeError('BLOCKED_IDENTITY')
+        if job!=stable_job_id('drive',explicit_source):raise RuntimeError('BLOCKED_IDENTITY')
+        candidates=[candidate]
+    else:candidates=io.search(t,"trashed=false and mimeType contains 'video/'")
     for f in candidates:
         accepted={stable_job_id('drive',f['id'])};accepted.update(legacy_job_id('drive',f['id'],r) for r in revs)
         if job in accepted:matches.append(f)
@@ -350,7 +366,12 @@ def process_job(t):
         eps=semantic_episode_plan(segs,job);attach_visual_evidence(eps,shots);links=course_link_candidates(eps,course,cid);deals,decisions=derive_deals_decisions(eps,job);pubshots=[{k:v for k,v in x.items() if k!='path'} for x in shots]
         master=master_analysis_payload(job_id=job,passport=passport,transcript=segs,transcript_qc=tinfo,visual_qc={'pass1':p1,'pass2':p2},episodes=eps,course_links=links,screenshots=pubshots,participants=[{'name':x,'role':'unknown until confirmed'} for x in participants],methodology_source={'driveId':cid,'name':cname,'sha256':hashlib.sha256(course.encode()).hexdigest(),'status':'canonical-first'},extra_warnings=warnings);master['deals']=deals;master['decisions']=decisions;master['content_quality']['deal_candidates']=len(deals);master['content_quality']['decision_candidates']=len(decisions);r24=validate_r24_master(master);master['content_quality']['r24Gate']=r24;io.safe(job_id=job,stage='MASTER_ANALYSIS_BUILD',exit_code=0 if r24['ok'] else 1,episode_count=len(eps),content_warning_count=len(warnings))
         if not r24['ok']:raise RuntimeError('R24_CONTENT_GATE_FAILED:'+','.join(r24['issues']))
-        report=work/f"{_safe_stem(src['name'])} — мастер-анализ 3.1 FREE.pdf";pdf_report(report,master,shots);msha=embed_master(report,master);q=pdfqc(report);io.safe(job_id=job,stage='PDF_QC',exit_code=0 if q['ok'] else 1,master_embedded=q['masterEmbedded'])
+        report=work/f"{_safe_stem(src['name'])} — мастер-анализ 3.1 FREE.pdf"
+        deal_review=pdf_report(report,master,shots)
+        master['content_quality']['deal_review_pdf']=deal_review
+        msha=embed_master(report,master)
+        q=pdfqc(report,expected_deal_review_pages=deal_review['pages'])
+        io.safe(job_id=job,stage='PDF_QC',exit_code=0 if q['ok'] else 1,master_embedded=q['masterEmbedded'],deal_review_pages=q['dealReviewPages'])
         if not q['ok']:raise RuntimeError('PDF_QC_FAILED')
         up=io.upload_file(t,parent,report,'application/pdf');have={io.pkey(x) for x in io.perms(t,up['id']) if x.get('role')!='owner'}
         for p in ps:
@@ -359,6 +380,6 @@ def process_job(t):
         if not access:raise RuntimeError('PDF_ACCESS_MISMATCH')
         chk=work/'recheck.bin';io.download(t,src['id'],chk)
         if io.sha(chk)!=passport['sha256'] or chk.stat().st_size!=passport['sizeBytes']:raise RuntimeError('ORIGINAL_REVERIFY_FAILED')
-        done={'schema':'bridge-video-ai-done','algorithmVersion':ALGORITHM_VERSION,'algorithmRevision':ALGORITHM_REVISION,'status':'AI_DONE','job_id':job,'original':passport,'masterPdf':{'driveId':up['id'],'name':up['name'],'sizeBytes':int(up.get('size') or 0),'pages':q['pages'],'sha256':q['sha256'],'masterJsonEmbedded':q['masterEmbedded'],'masterJsonSha256':msha,'access_match':access},'speech':{'primarySource':tinfo.get('primarySource'),'segmentCount':len(segs),'qcCount':len(tinfo.get('qc') or []),'unreliableCount':sum(bool(s.get('unreliable')) for s in segs)},'visual':{'pass1':p1['status'],'pass2':p2['status'],'gapCheckPass':p2['gapCheckPass'],'evidenceCount':len(shots)},'semantic':master.get('content_quality',{}),'methodologySource':master['technical_qc']['methodology_source'],'at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())};io.upload_json(t,parent,f'AI_DONE_{job}.json',done);io.upload_json(t,parent,f'METHODOLOGY_READY_{job}.json',{'schema':'bridge-video-methodology-ready','status':'METHODOLOGY_READY','job_id':job,'algorithmVersion':ALGORITHM_VERSION,'algorithmRevision':ALGORITHM_REVISION,'contentGate':r24,'masterPdfDriveId':up['id'],'masterPdfSha256':q['sha256'],'at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())});done_sha=q['sha256']
+        done={'schema':'bridge-video-ai-done','algorithmVersion':ALGORITHM_VERSION,'algorithmRevision':ALGORITHM_REVISION,'status':'AI_DONE','job_id':job,'original':passport,'masterPdf':{'driveId':up['id'],'name':up['name'],'sizeBytes':int(up.get('size') or 0),'pages':q['pages'],'dealReviewPages':q['dealReviewPages'],'dealReviewScreenshotsEmbedded':deal_review['screenshots_embedded'],'sha256':q['sha256'],'masterJsonEmbedded':q['masterEmbedded'],'masterJsonSha256':msha,'access_match':access},'speech':{'primarySource':tinfo.get('primarySource'),'segmentCount':len(segs),'qcCount':len(tinfo.get('qc') or []),'unreliableCount':sum(bool(s.get('unreliable')) for s in segs)},'visual':{'pass1':p1['status'],'pass2':p2['status'],'gapCheckPass':p2['gapCheckPass'],'evidenceCount':len(shots)},'semantic':master.get('content_quality',{}),'methodologySource':master['technical_qc']['methodology_source'],'at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())};io.upload_json(t,parent,f'AI_DONE_{job}.json',done);io.upload_json(t,parent,f'METHODOLOGY_READY_{job}.json',{'schema':'bridge-video-methodology-ready','status':'METHODOLOGY_READY','job_id':job,'algorithmVersion':ALGORITHM_VERSION,'algorithmRevision':ALGORITHM_REVISION,'contentGate':r24,'masterPdfDriveId':up['id'],'masterPdfSha256':q['sha256'],'at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())});done_sha=q['sha256']
     io.upload_json(t,parent,f'CLEANUP_ACK_{job}.json',{'status':'CLEANUP_ACK','job_id':job,'algorithmRevision':ALGORITHM_REVISION,'reportSha256':done_sha,'temporaryRunnerDataDeleted':True,'at':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())});io.safe(job_id=job,stage='CLEANUP_ACK',exit_code=0)
     return done

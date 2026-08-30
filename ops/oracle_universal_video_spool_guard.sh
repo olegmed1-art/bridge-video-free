@@ -36,7 +36,7 @@ parent_mode="$(stat -c '%a' "$parent")"
 
 exact_dir "$base" "$chain_uid" "$worker_gid" 750
 exact_dir "$base/spool" "$chain_uid" "$worker_gid" 750
-for leaf in inbox running done failed results; do
+for leaf in inbox running done failed results progress; do
   exact_dir "$base/spool/$leaf" "$worker_uid" "$worker_gid" 750
 done
 

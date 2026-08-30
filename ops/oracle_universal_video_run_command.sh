@@ -12,6 +12,7 @@ GIT_REF="${UNIVERSAL_VIDEO_GIT_REF:-main}"
 ACTIVATE="${UNIVERSAL_VIDEO_ACTIVATE:-1}"
 PREWARM="${UNIVERSAL_VIDEO_PREWARM_MODEL:-1}"
 RUN_SMOKE="${UNIVERSAL_VIDEO_RUN_SMOKE:-0}"
+SOURCE_ONLY="${UNIVERSAL_VIDEO_SOURCE_ONLY:-0}"
 
 log(){ printf '\n[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
@@ -20,8 +21,10 @@ die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$ACTIVATE" =~ ^[01]$ ]] || die "UNIVERSAL_VIDEO_ACTIVATE must be 0 or 1"
 [[ "$PREWARM" =~ ^[01]$ ]] || die "UNIVERSAL_VIDEO_PREWARM_MODEL must be 0 or 1"
 [[ "$RUN_SMOKE" =~ ^[01]$ ]] || die "UNIVERSAL_VIDEO_RUN_SMOKE must be 0 or 1"
+[[ "$SOURCE_ONLY" =~ ^[01]$ ]] || die "UNIVERSAL_VIDEO_SOURCE_ONLY must be 0 or 1"
 
 log "Capture protected service state before changes"
+echo 'UNIVERSAL_VIDEO_PREPARE_STAGE stage=protected-preflight'
 BEFORE_ASSISTANT="$(systemctl is-active assistant-lab.service)"
 [[ "$BEFORE_ASSISTANT" == "active" ]] || die "assistant-lab.service is not active"
 BEFORE_READY="$(curl -fsS --max-time 8 http://127.0.0.1:8080/readyz)" || die "DDS3 readyz failed before activation"
@@ -34,6 +37,7 @@ assert x.get('fallback_used') is False, x
 print('DDS3_BEFORE_PASS')
 PY
 
+echo 'UNIVERSAL_VIDEO_PREPARE_STAGE stage=service-quiesce'
 VIDEO_WAS_ACTIVE=0
 if systemctl is-active --quiet universal-video.service 2>/dev/null; then
   if runuser -u universal-video -- find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null | grep -q .; then
@@ -47,6 +51,7 @@ if systemctl is-active --quiet universal-video.service 2>/dev/null; then
   fi
 fi
 
+echo 'UNIVERSAL_VIDEO_PREPARE_STAGE stage=source-checkout'
 log "Prepare dedicated universal-video source checkout"
 if ! command -v git >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
@@ -102,6 +107,33 @@ elif [[ -n "$OLD_DIR" ]]; then
   echo "UNIVERSAL_VIDEO_PREVIOUS_DIR=STAGED_CLEAN"
 fi
 
+if [[ "$SOURCE_ONLY" == "1" ]]; then
+  if [[ "$VIDEO_WAS_ACTIVE" == "1" ]]; then
+    systemctl start universal-video.service
+    systemctl is-active --quiet universal-video.service || die "universal-video failed to restart after source-only preparation"
+  fi
+  echo 'UNIVERSAL_VIDEO_PREPARE_STAGE stage=protected-postflight'
+  [[ "$(systemctl is-active assistant-lab.service)" == "$BEFORE_ASSISTANT" ]] || die "assistant-lab state changed"
+  AFTER_READY="$(curl -fsS --max-time 8 http://127.0.0.1:8080/readyz)" || die "DDS3 readyz failed after activation"
+  AFTER_READY="$AFTER_READY" python3 - <<'PY'
+import json, os
+x=json.loads(os.environ['AFTER_READY'])
+assert x.get('status') == 'ready', x
+assert x.get('engine') == 'DDS3', x
+assert x.get('fallback_used') is False, x
+print('DDS3_AFTER_PASS')
+PY
+  if [[ "$OLD_DIRTY" == "0" && -n "$OLD_DIR" && -e "$OLD_DIR" ]]; then
+    rm -rf "$OLD_DIR"
+    OLD_DIR=""
+  fi
+  echo 'UNIVERSAL_VIDEO_SOURCE_ONLY_PREPARE_PASS'
+  echo 'UNIVERSAL_VIDEO_PREPARE_STAGE stage=complete'
+  echo UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS
+  exit 0
+fi
+
+echo 'UNIVERSAL_VIDEO_PREPARE_STAGE stage=legacy-install'
 log "Run side-by-side installer"
 UNIVERSAL_VIDEO_SOURCE_DIR="$SOURCE_DIR" \
 UNIVERSAL_VIDEO_DIR="$BASE_DIR" \
@@ -114,11 +146,29 @@ PYTHONDONTWRITEBYTECODE=1 \
 # Install the bounded generic control plane only after the isolated checkout
 # and sidecar have passed their own gates. This grants ocarun two validated
 # operations, never a shell or an arbitrary filesystem path.
+echo 'UNIVERSAL_VIDEO_PREPARE_STAGE stage=operator-install'
 log "Install bounded generic Universal Video operator"
 SOURCE_FILE="$SOURCE_DIR/ops/universal_video_operator.sh" \
 EXPECTED_RUNTIME_COMMIT="$RESOLVED_COMMIT" \
   bash "$SOURCE_DIR/ops/install_universal_video_operator.sh"
-sudo -u ocarun sudo -n /usr/local/sbin/universal-video status install-smoke >/dev/null
+set +e
+operator_smoke="$(sudo -u ocarun sudo -n /usr/local/sbin/universal-video status .. 2>&1)"
+operator_smoke_rc=$?
+set -e
+[[ "$operator_smoke_rc" -eq 1 ]] || die 'bounded Universal Video operator rejection smoke returned an unexpected code'
+grep -Fx 'UV_STATE=REJECTED' <<<"$operator_smoke" >/dev/null || die 'bounded Universal Video operator rejection state missing'
+grep -Fx 'UV_ERROR=invalid job id' <<<"$operator_smoke" >/dev/null || die 'bounded Universal Video operator rejection reason missing'
+echo 'UNIVERSAL_VIDEO_OPERATOR_REJECTION_SMOKE_PASS'
+
+# Keep the fixed evidence-export entrypoint and its root-owned source pin on
+# the same exact revision as the resident worker. The installer exposes only
+# fixed audit/productionize/repair/export commands and performs its own visudo,
+# ownership, argument-rejection, and read-only audit gates. It does not submit
+# a job, start ASR, or publish evidence.
+log "Install revision-bound Universal Video admin and evidence export entrypoints"
+SOURCE_COMMIT="$RESOLVED_COMMIT" \
+  bash "$SOURCE_DIR/ops/install_universal_video_ocarun_admin.sh"
+echo 'universal_video_admin=installed_revision_bound'
 
 log "Activation evidence"
 printf 'source_commit=%s\n' "$RESOLVED_COMMIT"
@@ -150,6 +200,7 @@ print('faster_whisper_import=PASS')
 PY
 find "$BASE_DIR/model-cache" -maxdepth 4 -type f -print | head -20 || true
 
+echo 'UNIVERSAL_VIDEO_PREPARE_STAGE stage=protected-postflight'
 [[ "$(systemctl is-active assistant-lab.service)" == "$BEFORE_ASSISTANT" ]] || die "assistant-lab state changed"
 AFTER_READY="$(curl -fsS --max-time 8 http://127.0.0.1:8080/readyz)" || die "DDS3 readyz failed after activation"
 AFTER_READY="$AFTER_READY" python3 - <<'PY'
@@ -169,24 +220,46 @@ if [[ "$OLD_DIRTY" == "0" && -n "$OLD_DIR" && -e "$OLD_DIR" ]]; then
 fi
 
 if [[ "$RUN_SMOKE" == "1" ]]; then
-  log "Run bounded synthetic local smoke job"
-  media="$BASE_DIR/media/universal-video-smoke.mp4"
-  job="$BASE_DIR/spool/inbox/universal-video-smoke.json"
+  log "Run bounded synthetic Oracle-staged smoke job"
+  smoke_job_id="universal-video-smoke-${RESOLVED_COMMIT:0:8}-$(date -u +%s)-$$"
+  smoke_stage="$BASE_DIR/media/drive-ready/$smoke_job_id"
+  if [[ -e "$smoke_stage" || -L "$smoke_stage" ]]; then
+    [[ -d "$smoke_stage" && ! -L "$smoke_stage" ]] || die "unsafe synthetic smoke staging path"
+  fi
+  install -d -o universal-video -g universal-video -m 0750 "$smoke_stage"
+  media="$smoke_stage/source.mp4"
+  job="$BASE_DIR/spool/inbox/$smoke_job_id.json"
   runuser -u universal-video -- rm -f -- \
-    "$BASE_DIR/spool/done/universal-video-smoke.json" \
-    "$BASE_DIR/spool/failed/universal-video-smoke.json" \
+    "$BASE_DIR/spool/done/$smoke_job_id.json" \
+    "$BASE_DIR/spool/failed/$smoke_job_id.json" \
     "$job.tmp"
   runuser -u universal-video -- ffmpeg -hide_banner -loglevel error -y \
-    -f lavfi -i color=c=black:s=320x180:d=3 \
+    -f lavfi -i testsrc2=size=640x360:rate=30:duration=5 \
     -f lavfi -i sine=frequency=440:duration=3 \
-    -shortest -c:v mpeg4 -q:v 10 -pix_fmt yuv420p -c:a aac "$media"
-  runuser -u universal-video -- env JOB_TMP="$job.tmp" JOB_PATH="$job" MEDIA_PATH="$media" /usr/bin/python3 - <<'PY'
-import json, os
+    -shortest -c:v mpeg4 -q:v 2 -pix_fmt yuv420p -c:a aac "$media"
+  runuser -u universal-video -- env JOB_TMP="$job.tmp" JOB_PATH="$job" MEDIA_PATH="$media" SMOKE_JOB_ID="$smoke_job_id" /usr/bin/python3 - <<'PY'
+import hashlib, json, os
+path=os.environ['MEDIA_PATH']
+size=os.path.getsize(path)
+assert size >= 1024 * 1024, size
+digest=hashlib.sha256()
+with open(path,'rb') as handle:
+    for block in iter(lambda: handle.read(8 * 1024 * 1024), b''):
+        digest.update(block)
+sha=digest.hexdigest()
 payload={
-    'job_id':'universal-video-smoke',
+    'job_id':os.environ['SMOKE_JOB_ID'],
     'profile':'transcript_only',
     'project':'infrastructure-smoke',
-    'source':{'kind':'local_path','path':os.environ['MEDIA_PATH']},
+    'source':{
+        'kind':'oracle_drive_staged',
+        'path':path,
+        'file_id':'syntheticSmokeOracleDrive0001',
+        'drive_name':'universal-video-smoke.mp4',
+        'mime_type':'video/mp4',
+        'size_bytes':size,
+        'sha256':sha,
+    },
     'metadata':{'synthetic':True},
     'options':{'max_duration_seconds':10,'chunk_seconds':60},
 }
@@ -203,18 +276,19 @@ finally:
 PY
   deadline=$((SECONDS + 300))
   while (( SECONDS < deadline )); do
-    if [[ -f "$BASE_DIR/spool/done/universal-video-smoke.json" ]]; then
-      runuser -u universal-video -- /bin/cat "$BASE_DIR/spool/done/universal-video-smoke.json"
+    if [[ -f "$BASE_DIR/spool/done/$smoke_job_id.json" ]]; then
+      runuser -u universal-video -- /bin/cat "$BASE_DIR/spool/done/$smoke_job_id.json"
       echo UNIVERSAL_VIDEO_SYNTHETIC_SMOKE_PASS
       break
     fi
-    if [[ -f "$BASE_DIR/spool/failed/universal-video-smoke.json" ]]; then
-      runuser -u universal-video -- /bin/cat "$BASE_DIR/spool/failed/universal-video-smoke.json" >&2
+    if [[ -f "$BASE_DIR/spool/failed/$smoke_job_id.json" ]]; then
+      runuser -u universal-video -- /bin/cat "$BASE_DIR/spool/failed/$smoke_job_id.json" >&2
       die "synthetic smoke job failed"
     fi
     sleep 2
   done
-  [[ -f "$BASE_DIR/spool/done/universal-video-smoke.json" ]] || die "synthetic smoke job timed out"
+  [[ -f "$BASE_DIR/spool/done/$smoke_job_id.json" ]] || die "synthetic smoke job timed out"
 fi
 
+echo 'UNIVERSAL_VIDEO_PREPARE_STAGE stage=complete'
 echo UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS

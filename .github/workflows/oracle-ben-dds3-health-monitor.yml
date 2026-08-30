@@ -21,6 +21,9 @@ concurrency:
 
 jobs:
   contract:
+    # Temporary operator pause (2026-08-28): do not allocate a runner for the
+    # scheduled Oracle/DDS3 canary while infrastructure mutations are paused.
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -37,7 +40,8 @@ jobs:
           grep -F 'worlds") == 4' .github/workflows/oracle-ben-dds3-health-monitor.yml >/dev/null
 
   monitor:
-    if: ${{ github.event_name != 'pull_request' }}
+    # The live Oracle canary is manual-only during the pause.
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 15

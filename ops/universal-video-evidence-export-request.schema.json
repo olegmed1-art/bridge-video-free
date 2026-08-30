@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bridge-school.local/contracts/universal-video-evidence-export-request-v1.json",
+  "title": "Universal Video exact-job evidence export request v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "job_id",
+    "profile",
+    "job_hash",
+    "source_file_id",
+    "request_commit",
+    "requested_runtime_commit",
+    "timeout_seconds"
+  ],
+  "properties": {
+    "schema": {"const": "universal-video-evidence-export-request-v1"},
+    "job_id": {"type": "string", "pattern": "^[A-Za-z0-9._:-]{1,160}$"},
+    "profile": {"type": "string", "pattern": "^[a-z0-9._:-]{1,80}$"},
+    "job_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_file_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{10,200}$"},
+    "request_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "requested_runtime_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "timeout_seconds": {"type": "integer", "minimum": 1, "maximum": 20}
+  }
+}

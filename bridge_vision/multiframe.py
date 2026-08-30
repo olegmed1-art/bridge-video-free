@@ -11,13 +11,52 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import Any, Iterable, Mapping
 
-from bridge_contracts.video_deal import SEATS, canonicalize_video_deal
+from bridge_contracts.video_deal import FULL_DECK, SEATS, canonicalize_video_deal
 
-MULTIFRAME_VERSION = "bridge-vision-multiframe-v2"
+MULTIFRAME_VERSION = "bridge-vision-multiframe-v3"
+FULL_DEAL_VALIDATION_VERSION = "bridge-full-deal-validation-v1"
 
 
 class MultiFrameError(ValueError):
     pass
+
+
+def validate_full_deal(deal: Mapping[str, Any]) -> dict[str, Any]:
+    """Independently prove the 13-per-seat / 52-unique-card invariant."""
+
+    hands = deal.get("hands") if isinstance(deal, Mapping) else None
+    if not isinstance(hands, Mapping):
+        raise MultiFrameError("canonical deal hands must be an object")
+    seat_counts: dict[str, int] = {}
+    cards: list[str] = []
+    reasons: list[str] = []
+    for seat in SEATS:
+        hand = hands.get(seat)
+        if not isinstance(hand, Mapping) or not isinstance(hand.get("cards"), (list, tuple)):
+            raise MultiFrameError(f"canonical deal hand {seat} is invalid")
+        seat_cards = [str(card) for card in hand["cards"]]
+        seat_counts[seat] = len(seat_cards)
+        cards.extend(seat_cards)
+        if len(seat_cards) != 13:
+            reasons.append(f"HAND_{seat}_NOT_13")
+    unique_cards = set(cards)
+    if len(cards) != 52:
+        reasons.append("TOTAL_NOT_52")
+    if len(unique_cards) != len(cards):
+        reasons.append("DUPLICATE_CARDS")
+    if unique_cards != set(FULL_DECK):
+        reasons.append("DECK_MISMATCH")
+    full = not reasons
+    return {
+        "version": FULL_DEAL_VALIDATION_VERSION,
+        "status": "PASS" if full else "REVIEW",
+        "full_board": full,
+        "seat_counts": seat_counts,
+        "total_cards": len(cards),
+        "unique_cards": len(unique_cards),
+        "uses_explicit_derivation": bool(deal.get("derivations")),
+        "review_reasons": reasons,
+    }
 
 
 def _pairs(record: Mapping[str, Any]) -> set[tuple[str, str]]:
@@ -27,6 +66,16 @@ def _pairs(record: Mapping[str, Any]) -> set[tuple[str, str]]:
     hands = deal.get("hands")
     if not isinstance(hands, Mapping):
         return set()
+    derived: set[tuple[str, str]] = set()
+    derivations = deal.get("derivations")
+    if isinstance(derivations, (list, tuple)):
+        for item in derivations:
+            if not isinstance(item, Mapping):
+                continue
+            seat = str(item.get("seat") or "")
+            computed = item.get("computed_cards") or []
+            if seat in SEATS and isinstance(computed, (list, tuple)):
+                derived.update((seat, str(card)) for card in computed)
     out: set[tuple[str, str]] = set()
     for seat in SEATS:
         hand = hands.get(seat) or {}
@@ -36,7 +85,9 @@ def _pairs(record: Mapping[str, Any]) -> set[tuple[str, str]]:
         if not isinstance(cards, (list, tuple)):
             raise MultiFrameError("deal hand cards must be an array")
         for card in cards:
-            out.add((seat, str(card)))
+            pair = (seat, str(card))
+            if pair not in derived:
+                out.add(pair)
     return out
 
 
@@ -85,17 +136,21 @@ class DealTrack:
         hands = {seat: [] for seat in SEATS}
         for seat, card in sorted(self.observed_pairs):
             hands[seat].append(card)
-        return canonicalize_video_deal({"hands": hands}).to_dict()
+        return canonicalize_video_deal({"hands": hands}, derive_fourth_hand=True).to_dict()
 
     def to_dict(self) -> dict[str, Any]:
+        deal = self.canonical_deal()
+        validation = validate_full_deal(deal)
         return {
             "version": MULTIFRAME_VERSION,
             "deal_id": self.deal_id,
+            "status": "VERIFIED_FULL_BOARD" if validation["full_board"] else "REVIEW",
             "explicit_board_key": self.explicit_board_key,
             "frame_indices": list(self.frame_indices),
             "frame_files": list(self.frame_files),
             "observed_card_count": len(self.observed_pairs),
-            "deal": self.canonical_deal(),
+            "deal": deal,
+            "validation": validation,
             "conflicts": list(self.conflicts),
         }
 
@@ -106,11 +161,19 @@ class ReconstructionResult:
     review_frames: tuple[dict[str, Any], ...]
 
     def to_dict(self) -> dict[str, Any]:
+        deals = [track.to_dict() for track in self.tracks]
+        verified = sum(item["validation"]["full_board"] for item in deals)
+        review_deals = len(deals) - verified
+        status = "COMPLETED" if deals and not review_deals and not self.review_frames else "REVIEW"
         return {
             "version": MULTIFRAME_VERSION,
+            "status": status,
             "deal_count": len(self.tracks),
+            "verified_full_board_count": verified,
+            "review_deal_count": review_deals,
             "review_frame_count": len(self.review_frames),
-            "deals": [track.to_dict() for track in self.tracks],
+            "canonical_promotion_allowed": False,
+            "deals": deals,
             "review_frames": list(self.review_frames),
         }
 
@@ -223,4 +286,12 @@ def reconstruct_deals(
     return ReconstructionResult(tuple(tracks), tuple(review))
 
 
-__all__ = ["MULTIFRAME_VERSION", "DealTrack", "MultiFrameError", "ReconstructionResult", "reconstruct_deals"]
+__all__ = [
+    "FULL_DEAL_VALIDATION_VERSION",
+    "MULTIFRAME_VERSION",
+    "DealTrack",
+    "MultiFrameError",
+    "ReconstructionResult",
+    "reconstruct_deals",
+    "validate_full_deal",
+]

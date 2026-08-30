@@ -11,7 +11,9 @@ on:
       - 'tools/bridge_video_positions.py'
       - 'tools/bridge_video_deals.py'
       - 'requirements-universal-video.txt'
+      - 'requirements-universal-video-speaker.txt'
       - 'deploy/oracle-universal-video/**'
+      - 'deploy/oracle-universal-video/Dockerfile'
       - 'ops/oracle_universal_video_*.sh'
       - 'ops/universal_video_receipt_reader.py'
       - 'tests/test_universal_video_*.py'
@@ -41,7 +43,10 @@ jobs:
           bash -n ops/oracle_universal_video_run_command.sh
           bash -n ops/oracle_universal_video_drive_secret_install.sh
           bash -n ops/oracle_universal_video_productionize.sh
+          bash -n ops/oracle_universal_video_container_install.sh
           python -m py_compile ops/universal_video_receipt_reader.py
+          grep -q 'requirements-universal-video-speaker.txt' ops/oracle_universal_video_install.sh
+          grep -q 'from universal_video.speaker_structure import run_speaker_structure' ops/oracle_universal_video_install.sh
       - name: Validate systemd boundaries
         run: |
           unit=deploy/oracle-universal-video/universal-video.service
@@ -68,6 +73,8 @@ jobs:
             ops/oracle_universal_video_drive_secret_install.sh \
             ops/oracle_universal_video_productionize.sh \
             deploy/oracle-universal-video
+          grep -q -- '--read-only' deploy/oracle-universal-video/universal-video-container.service
+          grep -q -- 'UNIVERSAL_VIDEO_CONTAINER_ACTIVATE' ops/oracle_universal_video_container_install.sh
       - name: Validate isolated checkout, retention and Drive boundaries
         run: |
           grep -q 'UNIVERSAL_VIDEO_SOURCE_DIR' ops/oracle_universal_video_install.sh
@@ -100,4 +107,4 @@ jobs:
       - name: Compile Python modules
         run: python -m compileall -q universal_video bridge_vision bridge_contracts tools/bridge_video_positions.py tools/bridge_video_deals.py
       - name: Record requirements checksum
-        run: sha256sum requirements-universal-video.txt
+        run: sha256sum requirements-universal-video.txt requirements-universal-video-speaker.txt

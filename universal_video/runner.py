@@ -19,6 +19,16 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from .algorithm_3_1_test import (
+    ALGORITHM_REVISION as TEST_ALGORITHM_REVISION,
+    ALGORITHM_VERSION as TEST_ALGORITHM_VERSION,
+    BASE_ALGORITHM_VERSION as TEST_BASE_ALGORITHM_VERSION,
+    DEFINITION_FILE as TEST_DEFINITION_FILE,
+    PROFILE_NAME as TEST_PROFILE_NAME,
+    RELEASE_CHANNEL as TEST_RELEASE_CHANNEL,
+    RESULT_SCOPE as TEST_RESULT_SCOPE,
+    write_definition as write_test_algorithm_definition,
+)
 from .contract import (
     CONTRACT_VERSION,
     MAX_FRAME_INTERVAL_SECONDS,
@@ -32,6 +42,8 @@ from .contract import (
 )
 from .drive_adapter import access_token, download_file, file_metadata
 from .profiles import resolve_profile
+from .speaker_structure import MIN_TEST_LABEL_COVERAGE, run_speaker_structure
+from .readiness import build_test_readiness, deferred_stages
 
 WORD_RE = re.compile(r"[A-Za-zА-Яа-яЁё0-9]+")
 _NON_SPEECH_RE = re.compile(r"\[\s*([^\]\n]{2,48})\s*\]", re.IGNORECASE)
@@ -53,13 +65,48 @@ ASR_CRITICAL_CONSENSUS = 0.05
 ASR_LOOP_THRESHOLD = 0.35
 NO_SPEECH_VAD_SECONDS = 0.25
 _MODEL = None
+FAILURE_CODE_RE = re.compile(r"^UV_[A-Z0-9_]{1,96}$")
+FRAME_EVIDENCE_SCHEMA = "universal-video-frame-evidence-v1"
+MAX_EVIDENCE_FRAMES = 300
+DEFAULT_NEIGHBOR_OFFSET_SECONDS = 1.5
+
+# Normalized, layout-neutral regions.  The media worker records these regions
+# but does not try to recognize cards.  A downstream vision adapter may crop
+# them from the immutable full frame according to its interface profile.
+BRIDGE_EVIDENCE_REGIONS = {
+    "N": {"x": 0.15, "y": 0.00, "width": 0.70, "height": 0.30},
+    "E": {"x": 0.70, "y": 0.15, "width": 0.30, "height": 0.70},
+    "S": {"x": 0.15, "y": 0.70, "width": 0.70, "height": 0.30},
+    "W": {"x": 0.00, "y": 0.15, "width": 0.30, "height": 0.70},
+    "CENTER": {"x": 0.25, "y": 0.25, "width": 0.50, "height": 0.50},
+}
 
 
-def _run(args: list[str], *, timeout: int = 3600) -> str:
-    proc = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout)
+class VideoSubprocessError(RuntimeError):
+    """Stable subprocess failure that never carries command output or paths."""
+
+    def __init__(self, error_code: str):
+        if not FAILURE_CODE_RE.fullmatch(error_code):
+            error_code = "UV_MEDIA_COMMAND_FAILED"
+        self.error_code = error_code
+        super().__init__(error_code)
+
+
+def _run(
+    args: list[str],
+    *,
+    timeout: int = 3600,
+    failure_code: str = "UV_MEDIA_COMMAND_FAILED",
+) -> str:
+    proc = subprocess.run(
+        args,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        timeout=timeout,
+    )
     if proc.returncode:
-        tail = (proc.stderr or "")[-3000:]
-        raise RuntimeError(f"subprocess failed rc={proc.returncode}: {tail}")
+        raise VideoSubprocessError(failure_code)
     return proc.stdout
 
 
@@ -201,7 +248,7 @@ def _qc_summary(transcript: list[dict[str, Any]], qc: list[dict[str, Any]]) -> t
 def _inspect_source(job: VideoJob, *, max_source_bytes: int) -> dict[str, Any]:
     """Inspect source identity before allowing a COMPLETED result to be reused."""
 
-    if job.source["kind"] == "local_path":
+    if job.source["kind"] in {"local_path", "oracle_drive_staged"}:
         path = Path(job.source["path"])
         if not path.is_file():
             raise RuntimeError("local video source does not exist")
@@ -212,7 +259,7 @@ def _inspect_source(job: VideoJob, *, max_source_bytes: int) -> dict[str, Any]:
             raise RuntimeError("local video exceeds configured source-size limit")
         sha256 = _sha256(path)
         fingerprint_payload = {"kind": "local_path", "size_bytes": size, "sha256": sha256}
-        return {
+        inspection = {
             "kind": "local_path",
             "fingerprint": _fingerprint(fingerprint_payload),
             "fingerprint_basis": "sha256+size",
@@ -220,6 +267,18 @@ def _inspect_source(job: VideoJob, *, max_source_bytes: int) -> dict[str, Any]:
             "known_sha256": sha256,
             "path": path,
         }
+        if job.source["kind"] == "oracle_drive_staged":
+            if int(path.stat().st_size) != int(job.source["size_bytes"]):
+                raise RuntimeError("staged Drive source size mismatch")
+            observed = _sha256(path)
+            if observed != job.source["sha256"]:
+                raise RuntimeError("staged Drive source checksum mismatch")
+            inspection.update({
+                "kind": "oracle_drive_staged",
+                "known_sha256": observed,
+                "reuse_safe": True,
+            })
+        return inspection
 
     token = access_token()
     meta = file_metadata(job.source["file_id"], token)
@@ -285,6 +344,7 @@ def media_probe(path: Path, *, known_sha256: str | None = None) -> dict[str, Any
             str(path),
         ],
         timeout=60,
+        failure_code="UV_MEDIA_PROBE_FAILED",
     )
     data = json.loads(raw)
     duration = float((data.get("format") or {}).get("duration") or 0)
@@ -323,6 +383,7 @@ def _audio_chunk(video: Path, output: Path, start: float, duration: float) -> No
             str(output),
         ],
         timeout=max(120, int(duration * 3)),
+        failure_code="UV_AUDIO_EXTRACT_FAILED",
     )
 
 
@@ -602,24 +663,108 @@ def transcribe(
     return timeline, qcs, language, deduplicated
 
 
-def extract_keyframes(
+def _stratified(values: list[float], target: int) -> list[float]:
+    if target <= 0:
+        return []
+    if len(values) <= target:
+        return list(values)
+    if target == 1:
+        return [values[(len(values) - 1) // 2]]
+    indices = sorted({round(i * (len(values) - 1) / (target - 1)) for i in range(target)})
+    return [values[index] for index in indices]
+
+
+def plan_frame_evidence(
+    duration: float,
+    *,
+    interval_seconds: int = 120,
+    include_neighbors: bool = False,
+    neighbor_offset_seconds: float = DEFAULT_NEIGHBOR_OFFSET_SECONDS,
+    max_frames: int = MAX_EVIDENCE_FRAMES,
+) -> dict[str, Any]:
+    """Plan a bounded frame packet without interpreting the video contents."""
+
+    if duration <= 0 or not math.isfinite(duration):
+        raise RuntimeError("frame evidence duration must be positive")
+    if not MIN_FRAME_INTERVAL_SECONDS <= interval_seconds <= MAX_FRAME_INTERVAL_SECONDS:
+        raise RuntimeError("frame interval outside hard safety range")
+    if not 0.25 <= neighbor_offset_seconds <= 5.0:
+        raise RuntimeError("neighbor frame offset outside hard safety range")
+    if not 1 <= max_frames <= MAX_EVIDENCE_FRAMES:
+        raise RuntimeError("frame evidence count outside hard safety range")
+    if include_neighbors and max_frames < 3:
+        raise RuntimeError("neighbor frame evidence requires a cap of at least three frames")
+
+    anchors = {0.0, max(0.0, duration - 0.5)}
+    timestamp = float(interval_seconds)
+    while timestamp < duration:
+        anchors.add(round(timestamp, 3))
+        timestamp += interval_seconds
+    ordered_anchors = sorted(anchors)
+    frames_per_anchor = 3 if include_neighbors else 1
+    ordered_anchors = _stratified(ordered_anchors, max(1, max_frames // frames_per_anchor))
+
+    bundles: list[dict[str, Any]] = []
+    timestamps: set[float] = set()
+    for index, anchor in enumerate(ordered_anchors):
+        roles: list[tuple[str, float]] = [("CENTER", anchor)]
+        if include_neighbors:
+            roles = [
+                ("BEFORE", anchor - neighbor_offset_seconds),
+                ("CENTER", anchor),
+                ("AFTER", anchor + neighbor_offset_seconds),
+            ]
+        members = []
+        for role, raw_time in roles:
+            if raw_time < 0 or raw_time > duration:
+                continue
+            frame_time = round(raw_time, 3)
+            timestamps.add(frame_time)
+            members.append({
+                "role": role,
+                "time": frame_time,
+                "offset_seconds": round(frame_time - anchor, 3),
+            })
+        bundles.append({
+            "bundle_id": f"evidence-{index:04d}",
+            "anchor_time": round(anchor, 3),
+            "members": members,
+        })
+
+    if len(timestamps) > max_frames:
+        raise RuntimeError("frame evidence plan exceeds cap")
+    return {
+        "schema": FRAME_EVIDENCE_SCHEMA,
+        "strategy": "anchor-neighbors-v1" if include_neighbors else "anchor-only-v1",
+        "neighbor_offset_seconds": neighbor_offset_seconds if include_neighbors else None,
+        "regions": dict(BRIDGE_EVIDENCE_REGIONS) if include_neighbors else {},
+        "bundles": bundles,
+        "timestamps": sorted(timestamps),
+    }
+
+
+def extract_frame_evidence(
     video: Path,
     output_dir: Path,
     duration: float,
     *,
     interval_seconds: int = 120,
-) -> list[dict[str, Any]]:
-    if not MIN_FRAME_INTERVAL_SECONDS <= interval_seconds <= MAX_FRAME_INTERVAL_SECONDS:
-        raise RuntimeError("frame interval outside hard safety range")
+    include_neighbors: bool = False,
+    neighbor_offset_seconds: float = DEFAULT_NEIGHBOR_OFFSET_SECONDS,
+    max_frames: int = MAX_EVIDENCE_FRAMES,
+) -> dict[str, Any]:
+    plan = plan_frame_evidence(
+        duration,
+        interval_seconds=interval_seconds,
+        include_neighbors=include_neighbors,
+        neighbor_offset_seconds=neighbor_offset_seconds,
+        max_frames=max_frames,
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
-    timestamps = {0.0, max(0.0, duration - 0.5)}
-    t = float(interval_seconds)
-    while t < duration:
-        timestamps.add(t)
-        t += interval_seconds
     frames: list[dict[str, Any]] = []
-    for index, ts in enumerate(sorted(timestamps)):
-        path = output_dir / f"frame-{index:04d}-{int(ts):06d}.jpg"
+    by_time: dict[float, str] = {}
+    for index, ts in enumerate(plan.pop("timestamps")):
+        path = output_dir / f"frame-{index:04d}-{int(round(ts * 1000)):09d}.jpg"
         _run(
             [
                 "ffmpeg",
@@ -638,10 +783,36 @@ def extract_keyframes(
                 str(path),
             ],
             timeout=120,
+            failure_code="UV_FRAME_EXTRACT_FAILED",
         )
         if path.exists() and path.stat().st_size:
             frames.append({"time": round(ts, 3), "file": path.name, "sha256": _sha256(path)})
-    return frames
+            by_time[round(ts, 3)] = path.name
+    for bundle in plan["bundles"]:
+        for member in bundle["members"]:
+            member["file"] = by_time.get(member["time"])
+        bundle["members"] = [member for member in bundle["members"] if member.get("file")]
+    plan["frame_count"] = len(frames)
+    plan["bundle_count"] = len(plan["bundles"])
+    plan["frames"] = frames
+    return plan
+
+
+def extract_keyframes(
+    video: Path,
+    output_dir: Path,
+    duration: float,
+    *,
+    interval_seconds: int = 120,
+) -> list[dict[str, Any]]:
+    """Backward-compatible anchor-only extraction boundary."""
+
+    return extract_frame_evidence(
+        video,
+        output_dir,
+        duration,
+        interval_seconds=interval_seconds,
+    )["frames"]
 
 
 def _materialize_source(
@@ -658,6 +829,23 @@ def _materialize_source(
             "path": str(path),
             "fingerprint": inspection["fingerprint"],
             "fingerprint_basis": inspection["fingerprint_basis"],
+        }, inspection.get("known_sha256")
+
+    if job.source["kind"] == "oracle_drive_staged":
+        path = inspection["path"]
+        return path, {
+            "kind": "google_drive",
+            "file_id": job.source["file_id"],
+            "name": job.source.get("drive_name") or job.source.get("name"),
+            "mimeType": job.source.get("mime_type"),
+            "size": job.source.get("size_bytes"),
+            "modifiedTime": job.source.get("modified_time"),
+            "md5Checksum": job.source.get("md5"),
+            "sha256Checksum": job.source.get("sha256"),
+            "fingerprint": inspection["fingerprint"],
+            "fingerprint_basis": inspection["fingerprint_basis"],
+            "reuse_safe": True,
+            "oracle_staged": True,
         }, inspection.get("known_sha256")
 
     meta = inspection["metadata"]
@@ -759,6 +947,22 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
             chunk_seconds=chunk_seconds,
             initial_prompt=initial_prompt,
         )
+        speaker_report: dict[str, Any] | None = None
+        if "speaker_structure" in profile.stages:
+            transcript, speaker_report = run_speaker_structure(
+                source,
+                transcript,
+                work,
+                # The stable FREE bridge route uses the same bounded open-set
+                # speaker gate as the test route.  A failed optional speaker
+                # proof removes labels/roles; it never blocks ASR or invents
+                # an attribution.
+                min_label_coverage=(
+                    MIN_TEST_LABEL_COVERAGE
+                    if profile.name in {TEST_PROFILE_NAME, "bridge_lesson"}
+                    else None
+                ),
+            )
         transcript_words = sum(len(_words(item["text"])) for item in transcript)
         qc_pass, failed_qc, allowed_failed_qc = _qc_summary(transcript, qc)
         speech_qc = [item for item in qc if not bool(item.get("no_speech"))]
@@ -778,16 +982,53 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
         )
         qc_path = job_dir / "transcript_qc.json"
         qc_path.write_text(json.dumps(qc, ensure_ascii=False, indent=2), encoding="utf-8")
+        speaker_path: Path | None = None
+        if speaker_report is not None:
+            speaker_path = job_dir / "speaker_diarization.json"
+            speaker_path.write_text(json.dumps(speaker_report, ensure_ascii=False, indent=2), encoding="utf-8")
 
         frames: list[dict[str, Any]] = []
+        frame_evidence: dict[str, Any] | None = None
         if "keyframes" in profile.stages:
-            frames = extract_keyframes(
+            frame_evidence = extract_frame_evidence(
                 source,
                 job_dir / "frames",
                 media["duration_seconds"],
                 interval_seconds=int(job.options.get("frame_interval_seconds") or 120),
+                include_neighbors=profile.domain_plugin == "bridge",
             )
+            frames = frame_evidence.pop("frames")
 
+        algorithm_summary: dict[str, Any] | None = None
+        if "algorithm_manifest" in profile.stages:
+            if profile.name != TEST_PROFILE_NAME:
+                raise RuntimeError("algorithm manifest is not bound to an approved test profile")
+            _, definition_hash = write_test_algorithm_definition(
+                job_dir / TEST_DEFINITION_FILE,
+                source_revision=processing["source_revision"],
+            )
+            algorithm_summary = {
+                "version": TEST_ALGORITHM_VERSION,
+                "revision": TEST_ALGORITHM_REVISION,
+                "base_version": TEST_BASE_ALGORITHM_VERSION,
+                "release_channel": TEST_RELEASE_CHANNEL,
+                "result_scope": TEST_RESULT_SCOPE,
+                "canonical_promotion_allowed": False,
+                "production_activation_allowed": False,
+                "definition": TEST_DEFINITION_FILE,
+                "definition_sha256": definition_hash,
+            }
+
+        deferred_analysis = deferred_stages(profile.stages)
+        readiness = (
+            build_test_readiness(
+                profile.stages,
+                qc_pass=qc_pass,
+                speaker_report=speaker_report,
+            )
+            if profile.name == TEST_PROFILE_NAME
+            else None
+        )
         manifest = {
             "contract": CONTRACT_VERSION,
             "status": "COMPLETED" if qc_pass else "REVIEW",
@@ -803,6 +1044,8 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
             "project": job.project,
             "domain_plugin": profile.domain_plugin,
             "planned_stages": list(profile.stages),
+            "algorithm": algorithm_summary,
+            "readiness": readiness,
             "source": source_provenance,
             "media": media,
             "transcript": {
@@ -822,21 +1065,19 @@ def run_job(payload: dict[str, Any], output_root: Path) -> dict[str, Any]:
                 "text": transcript_txt.name,
                 "qc": qc_path.name,
             },
-            "frames": frames,
-            "deferred_analysis": [
-                stage
-                for stage in profile.stages
-                if stage
-                not in {
-                    "media_preflight",
-                    "audio_extract",
-                    "transcribe",
-                    "transcript_qc",
-                    "timeline",
-                    "keyframes",
-                    "package",
+            "speaker_structure": (
+                {
+                    "report": speaker_path.name,
+                    "status": speaker_report["status"],
+                    "speaker_count": speaker_report["speaker_count"],
+                    "segments_labeled": speaker_report["segments_labeled"],
                 }
-            ],
+                if speaker_report is not None and speaker_path is not None
+                else None
+            ),
+            "frames": frames,
+            "frame_evidence": frame_evidence,
+            "deferred_analysis": deferred_analysis,
             "metadata": job.metadata,
             "runtime": {
                 "elapsed_seconds": round(time.time() - started, 3),

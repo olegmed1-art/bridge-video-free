@@ -1,0 +1,80 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW = ROOT / ".github/workflows/oracle-universal-video-evidence-export.yml"
+
+
+def test_export_workflow_has_a_fixed_read_only_remote_surface():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "ops/oracle-universal-video-evidence-export-requests/*.json" in text
+    assert "expected exactly one evidence export request" in text
+    assert "assert set(wrapper)=={'request_id','issue','export'}" in text
+    assert "assert wrapper['issue']==819" in text
+    assert "sudo -n /usr/local/sbin/universal-video-evidence-export" in text
+    assert "install -d -m 0750 -o root" not in text
+    assert "runuser -u universal-video" not in text
+    assert "chown root:universal-video" not in text
+    assert "publication_state']=='NOT_PUBLISHED'" in text
+    assert "school_canon_changed'] is False" in text
+    assert "x['runtime']['binding']=='OBSERVED_EXACT'" in text
+    assert "requested_runtime_commit']==x['runtime']['installed_runtime_commit']==x['runtime']['observed_job_runtime_commit']" in text
+
+
+def test_raw_remote_output_is_never_published_or_logged():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert 'uv-export-raw.txt' in text
+    assert 'uv-export-safe.json' in text
+    assert 'cat "$RUNNER_TEMP/uv-export-raw.txt"' not in text
+    assert 'cat "$RUNNER_TEMP/uv-export-safe.json"' in text
+    assert "No transcript text, raw command output, media" in text
+    assert "transcript.jsonl" in text
+    assert "transcript.txt" in text
+    assert "speaker_diarization.json" in text
+    assert "bridge_positions_profiled_shadow.jsonl" in text
+
+
+def test_sanitized_inconclusive_reason_is_published_fail_closed():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "if x.get('state')=='INCONCLUSIVE':" in text
+    assert "allowed={'schema','state','reason','publication_state','school_canon_changed'}" in text
+    assert "re.fullmatch(r'[A-Z0-9_.:-]{1,120}',str(x['reason']))" in text
+    assert "print('state=INCONCLUSIVE')" in text
+    assert "raise SystemExit('bounded evidence export returned sanitized INCONCLUSIVE')" in text
+    assert "raw_path.unlink(missing_ok=True)" in text
+
+
+def test_remote_receipt_framing_tolerates_only_outer_transport_noise():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "lines=[line.strip() for line in raw.splitlines()]" in text
+    assert "begins=[i for i,line in enumerate(lines) if line=='UV_EVIDENCE_EXPORT_BEGIN']" in text
+    assert "ends=[i for i,line in enumerate(lines) if line=='UV_EVIDENCE_EXPORT_END']" in text
+    assert "assert len(begins)==len(ends)==1" in text
+    assert "assert ends[0]==begins[0]+2" in text
+    assert "x=json.loads(lines[begins[0]+1])" in text
+
+
+def test_workflow_cannot_start_compute_or_promote_results():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    forbidden = (
+        "universal-video submit",
+        "spool/inbox",
+        "systemctl start universal-video",
+        "workflow_dispatch",
+        "canonical_promotion_allowed'] is True",
+        "school_canon_changed'] is True",
+    )
+    for token in forbidden:
+        assert token not in text
+    assert "External DDS3 non-regression" in text
+    assert "fallback_used') is False" in text
+
+
+def test_oci_run_command_crosses_only_the_exact_bounded_sudo_surface():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    remote = text.split('remote="$(cat <<EOF', 1)[1].split("EOF", 1)[0]
+    assert remote.count("sudo -n") == 1
+    assert "sudo -n /usr/local/sbin/universal-video-evidence-export" in remote
+    assert "git -C" not in remote
+    for root_only in ("install -o root", "install -d", "chown ", "runuser "):
+        assert root_only not in remote

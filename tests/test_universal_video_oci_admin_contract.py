@@ -3,6 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 ENTRY = (ROOT / "ops/universal_video_oci_admin_entrypoint.sh").read_text(encoding="utf-8")
 INSTALL = (ROOT / "ops/install_universal_video_ocarun_admin.sh").read_text(encoding="utf-8")
+OPERATOR_INSTALL = (ROOT / "ops/install_universal_video_operator.sh").read_text(encoding="utf-8")
 CLOUD = (ROOT / "ops/cloud_shell_install_bounded_oci_admin.sh").read_text(encoding="utf-8")
 VIDEO_CLOUD = (ROOT / "ops/cloud_shell_install_universal_video_bounded_admin.sh").read_text(encoding="utf-8")
 WORKFLOW = (ROOT / ".github/workflows/oracle-universal-video-admin.yml").read_text(encoding="utf-8")
@@ -37,19 +38,26 @@ def test_sudoers_surface_is_exact_and_not_broad():
     audit_line = "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-oci-admin audit"
     productionize_line = "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-oci-admin productionize"
     spool_repair_line = "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-spool-repair"
+    evidence_export_line = 'ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-evidence-export ""'
     assert audit_line in INSTALL
     assert productionize_line in INSTALL
     assert spool_repair_line in INSTALL
+    assert evidence_export_line in INSTALL
     sudo_lines = [line.strip() for line in INSTALL.splitlines() if line.strip().startswith("ocarun ALL=")]
-    assert sudo_lines == [audit_line, productionize_line, spool_repair_line]
+    assert sudo_lines == [audit_line, productionize_line, spool_repair_line, evidence_export_line]
     assert "grep -Ev '^[[:space:]]*(#|$)'" in INSTALL
     assert "NOPASSWD:[[:space:]]*ALL" in INSTALL
     assert "visudo -cf" in INSTALL
     assert "install -o root -g root -m 0755" in INSTALL
     assert "install -o root -g root -m 0440" in INSTALL
     assert "sudo -u ocarun sudo -n \"$TARGET\" audit" in INSTALL
+    assert "sudo -u ocarun sudo -n \"$EXPORT_TARGET\" unexpected" in INSTALL
     assert "bash -c" not in INSTALL
     assert "eval " not in INSTALL
+    assert "readonly SUDOERS='/etc/sudoers.d/universal-video-admin-ocarun'" in INSTALL
+    assert "readonly SUDOERS='/etc/sudoers.d/universal-video-operator-ocarun'" in OPERATOR_INSTALL
+    assert "readonly SUDOERS='/etc/sudoers.d/universal-video-ocarun'" not in INSTALL
+    assert "readonly SUDOERS='/etc/sudoers.d/universal-video-ocarun'" not in OPERATOR_INSTALL
 
 
 def test_cloud_shell_bootstrap_is_single_fixed_host_path():

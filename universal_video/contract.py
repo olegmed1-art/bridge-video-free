@@ -18,7 +18,7 @@ MAX_SOURCE_BYTES = 64 * 1024**3
 MIN_SOURCE_BYTES = 1024**2
 MIN_FRAME_INTERVAL_SECONDS = 15
 MAX_FRAME_INTERVAL_SECONDS = 3600
-ALLOWED_SOURCE_KINDS = frozenset({"local_path", "google_drive"})
+ALLOWED_SOURCE_KINDS = frozenset({"local_path", "google_drive", "oracle_drive_staged"})
 ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,160}$")
 DRIVE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{10,200}$")
 RESERVED_PATH_IDS = frozenset({".", ".."})
@@ -79,6 +79,32 @@ def _validate_drive(source: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _validate_oracle_drive_staged(source: dict[str, Any], *, allowed_root: str | None) -> dict[str, Any]:
+    local = _validate_local_path(source, allowed_root=allowed_root)
+    drive = _validate_drive(source)
+    sha256 = _bounded_text(source.get("sha256"), "source.sha256", max_len=64).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", sha256):
+        raise VideoContractError("invalid staged source sha256")
+    try:
+        size_bytes = int(source.get("size_bytes"))
+    except (TypeError, ValueError) as exc:
+        raise VideoContractError("invalid staged source size") from exc
+    if not MIN_SOURCE_BYTES <= size_bytes <= MAX_SOURCE_BYTES:
+        raise VideoContractError("staged source size outside bounded range")
+    return {
+        "kind": "oracle_drive_staged",
+        "path": local["path"],
+        "file_id": drive["file_id"],
+        **({"name": drive["name"]} if "name" in drive else {}),
+        "drive_name": str(source.get("drive_name") or source.get("name") or "")[:500],
+        "mime_type": str(source.get("mime_type") or "application/octet-stream")[:200],
+        "size_bytes": size_bytes,
+        "sha256": sha256,
+        "modified_time": str(source.get("modified_time") or "")[:100],
+        "md5": str(source.get("md5") or "").lower()[:64],
+    }
+
+
 def _bounded_int(options: dict[str, Any], key: str, minimum: int, maximum: int) -> None:
     if key not in options:
         return
@@ -110,8 +136,10 @@ def validate_job(payload: Any, *, allowed_local_root: str | None = None) -> Vide
         raise VideoContractError("unsupported source kind")
     if kind == "local_path":
         source = _validate_local_path(source, allowed_root=allowed_local_root)
-    else:
+    elif kind == "google_drive":
         source = _validate_drive(source)
+    else:
+        source = _validate_oracle_drive_staged(source, allowed_root=allowed_local_root)
 
     project = str(data.get("project") or "").strip() or None
     if project and len(project) > 160:
@@ -148,11 +176,16 @@ def validate_job(payload: Any, *, allowed_local_root: str | None = None) -> Vide
 
 
 def canonical_job_hash(job: VideoJob) -> str:
+    source = job.source
+    if source.get("kind") == "oracle_drive_staged":
+        source = {"kind": "google_drive", "file_id": source["file_id"]}
+        if job.source.get("name"):
+            source["name"] = job.source["name"]
     payload = {
         "contract": CONTRACT_VERSION,
         "job_id": job.job_id,
         "profile": job.profile,
-        "source": job.source,
+        "source": source,
         "project": job.project,
         "metadata": job.metadata,
         "options": job.options,
@@ -163,7 +196,10 @@ def canonical_job_hash(job: VideoJob) -> str:
 
 def validate_from_env(payload: Any) -> VideoJob:
     root = os.getenv("UNIVERSAL_VIDEO_MEDIA_ROOT", "").strip() or None
-    return validate_job(payload, allowed_local_root=root)
+    job = validate_job(payload, allowed_local_root=root)
+    if os.getenv("UNIVERSAL_VIDEO_REQUIRE_STAGED_SOURCE", "0").strip() == "1" and job.source.get("kind") != "oracle_drive_staged":
+        raise VideoContractError("production worker accepts staged Drive sources only")
+    return job
 
 
 __all__ = [
