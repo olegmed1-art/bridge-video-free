@@ -33,7 +33,7 @@ jobs:
           grep -F "request['activation_scope'] == 'SHADOW_ONLY'" "$workflow" >/dev/null
           grep -F "request['no_instance_stop'] is True" "$workflow" >/dev/null
           grep -F "EXPECTED_STAGED_REVISION='edc7e8530f0aa3efa84910cb09ee459ec25f1cf6'" "$workflow" >/dev/null
-          grep -F 'EXPECTED_UNIT_SHA256: 8b18b232d7b6f0f369e1544e2abc63a0da09f20674c902855955700bc46d335f' "$workflow" >/dev/null
+          grep -F 'EXPECTED_UNIT_SHA256: feb2d95d543045c0e0ca80115bed256f6746f8c64e51b475be4c7941e6bef2ae' "$workflow" >/dev/null
           grep -F 'Environment=AUTOPILOT_RUNTIME_MODE=SHADOW' \
             deploy/oracle-autopilot/school-autopilot-shadow.service >/dev/null
           grep -F 'AUTOPILOT_ACTIVATION_SCOPE=SHADOW_ONLY' \
@@ -42,6 +42,10 @@ jobs:
           from pathlib import Path
 
           workflow = Path('.github/workflows/oracle-autopilot-shadow-activation.yml').read_text()
+          unit_sha256 = __import__('hashlib').sha256(
+              Path('deploy/oracle-autopilot/school-autopilot-shadow.service').read_bytes()
+          ).hexdigest()
+          assert f'EXPECTED_UNIT_SHA256: {unit_sha256}' in workflow
           for forbidden in (
               '--action ' + 'STOP',
               'systemctl ' + 'stop',
@@ -65,7 +69,7 @@ jobs:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
       EXPECTED_STAGED_REVISION: edc7e8530f0aa3efa84910cb09ee459ec25f1cf6
-      EXPECTED_UNIT_SHA256: 8b18b232d7b6f0f369e1544e2abc63a0da09f20674c902855955700bc46d335f
+      EXPECTED_UNIT_SHA256: feb2d95d543045c0e0ca80115bed256f6746f8c64e51b475be4c7941e6bef2ae
       SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
       SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
       SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
