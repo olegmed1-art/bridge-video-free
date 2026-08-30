@@ -171,44 +171,20 @@ BEGIN
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_NULL_TRACE_PIN_ACCEPTED'; END IF;
 
  failed:=false; BEGIN
-  UPDATE bidding.world_robot_decision SET confidence='low' WHERE world_robot_decision_id=decision;
+ UPDATE bidding.world_robot_decision SET confidence='low' WHERE world_robot_decision_id=decision;
  EXCEPTION WHEN object_not_in_prerequisite_state THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_DECISION_MUTATION_ACCEPTED'; END IF;
+
+ IF NOT has_table_privilege('bridge_school_app','bidding.world_resolution_trace','INSERT')
+    OR NOT has_table_privilege('bridge_school_app','bidding.world_canon_gap_binding','SELECT')
+    OR NOT has_table_privilege('bridge_school_app','bidding.rule','SELECT')
+    OR NOT has_table_privilege('bridge_school_app','public.knowledge_version','SELECT')
+    OR NOT has_column_privilege('bridge_school_app','public.knowledge_gap','school_id','INSERT')
+ THEN RAISE EXCEPTION 'WORLD_SMOKE_APP_RUNTIME_ACL_INCOMPLETE'; END IF;
+ IF NOT has_table_privilege('bridge_school_worker','bidding.world_robot_decision','INSERT')
+    OR NOT has_table_privilege('bridge_school_worker','bidding.world_robot','SELECT')
+    OR NOT has_table_privilege('bridge_school_worker','bidding.world_robot_configuration','SELECT')
+    OR NOT has_table_privilege('bridge_school_worker','public.knowledge_gap','SELECT')
+ THEN RAISE EXCEPTION 'WORLD_SMOKE_WORKER_RUNTIME_ACL_INCOMPLETE'; END IF;
 END $$;
-
-SET LOCAL ROLE bridge_school_app;
-INSERT INTO bidding.world_resolution_trace(
- school_id,request_fingerprint,system_profile_key,system_version,learner_level,effective_at,
- auction_context_id,canon_outcome,world_outcome,world_rule_ids,selected_world_rule_id,
- knowledge_gap_id,trace,resolver_version)
-SELECT b.school_id,b.request_fingerprint,b.system_profile_key,b.system_version,b.learner_level,b.effective_at,
- b.auction_context_id,'CANON_GAP','WORLD_FALLBACK',ARRAY[r.rule_id],r.rule_id,
- b.knowledge_gap_id,'{"runtime_role":"bridge_school_app"}','world-v0'
-FROM bidding.world_canon_gap_binding b
-JOIN bidding.rule r ON r.rule_key='ci.world.0201'
-WHERE b.request_fingerprint='role-app-fallback';
-RESET ROLE;
-
-SET LOCAL ROLE bridge_school_worker;
-INSERT INTO bidding.world_robot_decision(
- school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
- public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
-SELECT b.school_id,c.world_robot_configuration_id,'ROBOT_LIVE_DECISION','N',
- '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
- '{"calls":[],"dealer":"N"}','{"scoring":"IMP","acting_seat":"N"}',
- '{"bid":"1S"}','{"bid":"1S"}','high',
- jsonb_build_object(
-  'mode','ROBOT_LIVE_DECISION','request_id','role-worker-1','engine_key',r.robot_key,
-  'engine_version',r.engine_version,'model_hash',r.model_hash,'configuration_hash',c.configuration_hash,
-  'input_fingerprint','role-worker-input','started_at','2026-08-30T00:00:00Z',
-  'completed_at','2026-08-30T00:00:01Z',
-  'steps',jsonb_build_array(jsonb_build_object(
-    'seq',1,'event','decision','at','2026-08-30T00:00:01Z','status','ok',
-    'input_hash',repeat('1',64),'output_hash',repeat('2',64))),
-  'raw_response_sha256',encode(digest('{"bid":"1S"}'::jsonb::text,'sha256'),'hex'))
-FROM bidding.world_canon_gap_binding b
-CROSS JOIN bidding.world_robot r
-JOIN bidding.world_robot_configuration c ON c.world_robot_id=r.world_robot_id
-WHERE b.request_fingerprint='role-app-fallback' AND r.robot_key='ben-ci';
-RESET ROLE;
 ROLLBACK;
