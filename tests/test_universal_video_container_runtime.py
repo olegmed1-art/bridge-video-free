@@ -82,7 +82,8 @@ def test_container_image_keeps_credentials_and_media_out_of_layers() -> None:
 def test_container_image_contains_neon_processor_dependency_closure() -> None:
     root = Path(__file__).resolve().parents[1]
     dockerfile = (root / "deploy/oracle-universal-video/Dockerfile").read_text(encoding="utf-8")
-    assert "requirements-universal-video-neon.txt" in dockerfile
+    assert "requirements-worker.txt" in dockerfile
+    assert "COPY bridge_vision ./bridge_vision" in dockerfile
 
     local_modules = {path.stem: path for path in root.glob("*.py")}
     pending = ["bridge_worker_3_1_free", "bridge_runtime_hardening_r25_16", "route_drive_job_outputs"]
