@@ -38,6 +38,20 @@ def _confirmation():
             "video_file_id": "drive-video-4", "source_name": "Диана 4.mp4"}
 
 
+def _master_analysis():
+    return {
+        "schema": "bridge-video-master-analysis",
+        "schemaVersion": 3,
+        "job_id": "job-1",
+        "source": {"driveId": "drive-video-4"},
+        "transcript": [{
+            "segment_id": "segment_1",
+            "unreliable": False,
+            "semantic_qc": "PASS",
+        }],
+    }
+
+
 def test_unconfirmed_drive_date_blocks_pilot():
     report = run_longitudinal_pilot(_payload(), catalog=_catalog())
     assert report["status"] == "BLOCKED"
@@ -83,6 +97,74 @@ def test_unknown_real_wording_goes_to_methodology_review_without_episode():
     rejected = report["adapter_report"]["rejected_interactions"]
     assert rejected[0]["reason_codes"] == ["SKILL_WORDING_NOT_REVIEWED"]
     assert "review_candidate" in rejected[0]
+
+
+def test_rejected_evidence_cannot_be_reported_ready_for_private_review():
+    payload = _payload()
+    payload["quality_v2"]["learning_interactions"][0]["evidence_refs"] = [
+        "segment_not_in_source"
+    ]
+    report = run_longitudinal_pilot(
+        payload, confirmation=_confirmation(), catalog=_catalog()
+    )
+    assert report["status"] == "EVIDENCE_REVIEW_REQUIRED"
+    assert report["adapter_report"]["accepted_episode_count"] == 0
+    assert report["adapter_report"]["rejected_interactions"][0]["reason_codes"] == [
+        "EVIDENCE_OUTSIDE_SOURCE_TRANSCRIPT"
+    ]
+
+
+def test_empty_interaction_set_cannot_be_reported_ready_for_private_review():
+    payload = _payload()
+    payload["quality_v2"]["learning_interactions"] = []
+    report = run_longitudinal_pilot(
+        payload, confirmation=_confirmation(), catalog=_catalog()
+    )
+    assert report["status"] == "EVIDENCE_REVIEW_REQUIRED"
+    assert report["adapter_report"]["accepted_episode_count"] == 0
+
+
+def test_pinned_master_analysis_can_supply_complete_transcript_inventory():
+    payload = _payload()
+    payload["technical_qc"]["transcript"] = {}
+    report = run_longitudinal_pilot(
+        payload,
+        confirmation=_confirmation(),
+        catalog=_catalog(),
+        master_analysis=_master_analysis(),
+        master_analysis_sha256="b" * 64,
+        expected_master_analysis_sha256="b" * 64,
+    )
+    assert report["status"] == "READY_FOR_PRIVATE_REVIEW"
+    assert report["adapter_report"]["accepted_episode_count"] == 1
+
+
+def test_master_analysis_hash_mismatch_fails_closed():
+    report = run_longitudinal_pilot(
+        _payload(),
+        confirmation=_confirmation(),
+        catalog=_catalog(),
+        master_analysis=_master_analysis(),
+        master_analysis_sha256="b" * 64,
+        expected_master_analysis_sha256="c" * 64,
+    )
+    assert report["status"] == "BLOCKED"
+    assert report["blockers"] == ["MASTER_ANALYSIS_SHA256_MISMATCH"]
+
+
+def test_master_analysis_source_mismatch_fails_closed():
+    master = _master_analysis()
+    master["source"]["driveId"] = "another-video"
+    report = run_longitudinal_pilot(
+        _payload(),
+        confirmation=_confirmation(),
+        catalog=_catalog(),
+        master_analysis=master,
+        master_analysis_sha256="b" * 64,
+        expected_master_analysis_sha256="b" * 64,
+    )
+    assert report["status"] == "BLOCKED"
+    assert report["blockers"] == ["MASTER_ANALYSIS_VIDEO_FILE_ID_MISMATCH"]
 
 
 def test_real_quality_schema_requires_exact_version_two():
