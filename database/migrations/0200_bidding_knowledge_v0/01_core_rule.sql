@@ -186,6 +186,17 @@ WITH RECURSIVE walk(value,key_path) AS (
                    SELECT '^(' || string_agg(word,'|') || ')+$'
                      FROM allowed_suffix
                )
+               AND substring(
+                   compact.segment FROM length(owner.word)+1
+               ) ~ (
+                   SELECT '^(' || allowed.words || ')*('
+                          || suffixes.words || ')('
+                          || allowed.words || ')*$'
+                     FROM (SELECT string_agg(word,'|') AS words
+                             FROM allowed_suffix) AS allowed
+                     CROSS JOIN (SELECT string_agg(word,'|') AS words
+                                   FROM sensitive_suffix) AS suffixes
+               )
                AND NOT (
                    jsonb_typeof(w.value)='number'
                    AND EXISTS (
@@ -218,15 +229,16 @@ WITH RECURSIVE walk(value,key_path) AS (
                AND substring(
                        compact.segment FROM length(owner.word)+1
                    ) ~ (
-                       SELECT '^(' || wrappers.words || ')+'
-                              || '(' || suffixes.words || ')+'
-                              || '(' || metrics.words || ')*$'
+                       SELECT '^(' || wrappers.words || ')+('
+                              || allowed.words || ')*('
+                              || suffixes.words || ')('
+                              || allowed.words || ')*$'
                          FROM (SELECT string_agg(word,'|') AS words
                                  FROM structural_wrapper) AS wrappers
                          CROSS JOIN (SELECT string_agg(word,'|') AS words
-                                       FROM sensitive_suffix) AS suffixes
+                                       FROM allowed_suffix) AS allowed
                          CROSS JOIN (SELECT string_agg(word,'|') AS words
-                                       FROM metric_word) AS metrics
+                                       FROM sensitive_suffix) AS suffixes
                    )
                AND NOT (
                    jsonb_typeof(w.value)='number'
@@ -554,8 +566,32 @@ WITH RECURSIVE walk(value,key_path) AS (
                    )
             )
             AND EXISTS (
+                WITH RECURSIVE descendants(value,depth) AS (
+                    SELECT w.value,0
+                    UNION ALL
+                    SELECT child.value, descendants.depth+1
+                      FROM descendants
+                      CROSS JOIN LATERAL (
+                          SELECT e.value
+                            FROM jsonb_each(
+                                CASE WHEN jsonb_typeof(descendants.value)='object'
+                                     THEN descendants.value ELSE '{}'::jsonb END
+                            ) AS e
+                          UNION ALL
+                          SELECT a.value
+                            FROM jsonb_array_elements(
+                                CASE WHEN jsonb_typeof(descendants.value)='array'
+                                     THEN descendants.value ELSE '[]'::jsonb END
+                            ) AS a
+                      ) AS child
+                     WHERE descendants.depth < 4
+                )
                 SELECT 1
-                  FROM jsonb_each(w.value) AS cards_field(key,value)
+                  FROM descendants
+                  CROSS JOIN LATERAL jsonb_each(
+                      CASE WHEN jsonb_typeof(descendants.value)='object'
+                           THEN descendants.value ELSE '{}'::jsonb END
+                  ) AS cards_field(key,value)
                  WHERE regexp_replace(lower(cards_field.key),'[^a-z0-9]','','g')
                        IN ('card','cards')
                    AND jsonb_typeof(cards_field.value) <> 'null'

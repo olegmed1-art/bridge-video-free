@@ -94,6 +94,11 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_PUBLIC_COMPACT_WRAPPED_METRIC_FALSE_POSITIVE';
     END IF;
     IF bidding.contains_forbidden_hidden_key(
+        '{"northcount":3}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_PUBLIC_COMPACT_COMPASS_METRIC_FALSE_POSITIVE';
+    END IF;
+    IF bidding.contains_forbidden_hidden_key(
         '{"handsPlayed":{"partner":12}}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_PUBLIC_REVERSE_PARTNER_METRIC_FALSE_POSITIVE';
@@ -239,6 +244,11 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_HIDDEN_CAPITALIZED_OWNER_RECORD_NOT_BLOCKED';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
+        '{"players":[{"owner":"partner","metadata":{"cards":[51]}}]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_WRAPPED_OWNER_RECORD_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
         '{"hands":[{"owner":"east","cards":["AS"]},{"seat":"West","card":"KS"}]}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_FULL_COMPASS_VALUE_RECORD_NOT_BLOCKED';
@@ -287,6 +297,11 @@ BEGIN
         '{"partnermetadatacards":["AS"]}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_OWNER_WRAPPER_TAIL_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"partnermetadatacountcards":[51]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_WRAPPER_METRIC_TAIL_NOT_BLOCKED';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
         '{"partnermetadatahandscount":[["AS"]]}'::jsonb
