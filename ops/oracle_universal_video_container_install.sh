@@ -17,6 +17,12 @@ STATUS_DIR="${UNIVERSAL_VIDEO_STATUS_DIR:-/run/bridge-school}"
 
 die(){ printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 log(){ printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
+runtime_fail(){ printf '{"error_code":"%s","status":"FAILED"}\n' "$1" >&2; exit 1; }
+service_status(){
+  systemctl show "$SERVICE_NAME" --no-pager \
+    -p Result -p ExecMainCode -p ExecMainStatus -p NRestarts \
+    | sed -nE '/^(Result|ExecMainCode|ExecMainStatus|NRestarts)=/p'
+}
 
 [[ "$(id -u)" -eq 0 ]] || die 'run as root on the Oracle host'
 [[ "$ACTIVATE" =~ ^[01]$ ]] || die 'UNIVERSAL_VIDEO_CONTAINER_ACTIVATE must be 0 or 1'
@@ -87,7 +93,13 @@ systemctl daemon-reload
 systemd-analyze verify "/etc/systemd/system/$SERVICE_NAME" >/dev/null
 if [[ "$ACTIVATE" == 1 ]]; then
   systemctl is-active --quiet "$OLD_SERVICE" && systemctl stop "$OLD_SERVICE"
-  systemctl enable --now "$SERVICE_NAME"
-  systemctl is-active --quiet "$SERVICE_NAME" || die 'container service did not become active'
+  if ! systemctl enable --now "$SERVICE_NAME"; then
+    service_status
+    runtime_fail UV_CONTAINER_SERVICE_ACTIVATION_FAILED
+  fi
+  if ! systemctl is-active --quiet "$SERVICE_NAME"; then
+    service_status
+    runtime_fail UV_CONTAINER_SERVICE_INACTIVE
+  fi
 fi
 printf 'UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=%s image_digest=%s activated=%s\n' "$commit" "$image_id" "$ACTIVATE"
