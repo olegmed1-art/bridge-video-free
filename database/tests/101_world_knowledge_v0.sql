@@ -122,6 +122,14 @@ BEGIN
   '{"calls":[],"dealer":"N"}','{"scoring":"IMP","acting_seat":"N"}',raw,'{"bid":"1S"}','high',trace)
  RETURNING world_robot_decision_id INTO decision;
 
+ -- Legal bid fields are public calls, not hidden card tokens.
+ INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
+  public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
+ VALUES(s,config,'ROBOT_LIVE_DECISION','N',
+  '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+  '{"calls":["1S","PASS"],"dealer":"N"}','{}','{"bid":"2H"}','{"bid":"2H"}','high',
+  jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest('{"bid":"2H"}'::jsonb::text,'sha256'),'hex'))));
+
  bad_raw:='{"deal":{"N":[]}}';
  bad_trace:=jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
  failed:=false; v_constraint:=NULL; BEGIN
@@ -144,6 +152,26 @@ BEGIN
  EXCEPTION WHEN check_violation THEN GET STACKED DIAGNOSTICS v_constraint=CONSTRAINT_NAME; failed:=(v_constraint='world_robot_decision_public_raw_response'); END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_NESTED_CARD_TOKENS_ACCEPTED'; END IF;
 
+ bad_raw:='{"explanation":"ASKS"}';
+ bad_trace:=jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
+ failed:=false; v_constraint:=NULL; BEGIN
+  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
+   public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
+  VALUES(s,config,'ROBOT_LIVE_DECISION','N',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"calls":[]}','{}',bad_raw,'{"bid":"1S"}','high',bad_trace);
+ EXCEPTION WHEN check_violation THEN GET STACKED DIAGNOSTICS v_constraint=CONSTRAINT_NAME; failed:=(v_constraint='world_robot_decision_public_raw_response'); END;
+ IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_PACKED_CARD_TOKENS_ACCEPTED'; END IF;
+
+ failed:=false; v_constraint:=NULL; BEGIN
+  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
+   public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
+  VALUES(s,config,'ROBOT_LIVE_DECISION','N',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"calls":[],"alerts":{"private_material":[51,50,49]}}','{}',raw,'{"bid":"1S"}','high',trace);
+ EXCEPTION WHEN check_violation THEN GET STACKED DIAGNOSTICS v_constraint=CONSTRAINT_NAME; failed:=(v_constraint='world_robot_decision_public_auction'); END;
+ IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_NESTED_AUCTION_MATERIAL_ACCEPTED'; END IF;
+
  failed:=false; BEGIN
   INSERT INTO bidding.world_robot(robot_key,display_name,engine_version,model_hash,license_boundary)
   VALUES('typed-license','Bad','v1',repeat('a',64),
@@ -160,6 +188,18 @@ BEGIN
    jsonb_set(jsonb_set(jsonb_set(trace,'{request_id}','""'),'{started_at}','"2026-08-30T00:00:02Z"'),'{steps}','[null]'));
  EXCEPTION WHEN check_violation OR invalid_datetime_format THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_MEANINGLESS_TRACE_ACCEPTED'; END IF;
+
+ failed:=false; BEGIN
+  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
+   public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
+  VALUES(s,config,'ROBOT_LIVE_DECISION','N',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"calls":[]}','{}',raw,'{"bid":"1S"}','high',
+   jsonb_set(trace,'{steps}',jsonb_build_array(
+     jsonb_build_object('seq',2.5,'event','response','at','2026-08-30T00:00:01Z','status','ok','input_hash','','output_hash','bad'),
+     jsonb_build_object('seq',1,'event','request','at','2026-08-30T00:00:00Z','status','ok','input_hash',repeat('1',64),'output_hash',repeat('2',64)))));
+ EXCEPTION WHEN check_violation THEN failed:=true; END;
+ IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_UNPINNED_REVERSED_TRACE_ACCEPTED'; END IF;
 
  failed:=false; BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,

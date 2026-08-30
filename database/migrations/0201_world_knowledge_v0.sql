@@ -21,17 +21,26 @@ $$;
 
 CREATE OR REPLACE FUNCTION bidding.contains_card_token(payload jsonb)
 RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-WITH RECURSIVE walk(value) AS (
-  SELECT payload
+WITH RECURSIVE walk(value,key_name) AS (
+  SELECT payload,NULL::text
   UNION ALL
-  SELECT child.value FROM walk w CROSS JOIN LATERAL (
-    SELECT value FROM jsonb_array_elements(CASE WHEN jsonb_typeof(w.value)='array' THEN w.value ELSE '[]'::jsonb END)
+  SELECT child.value,child.key_name FROM walk w CROSS JOIN LATERAL (
+    SELECT value,w.key_name FROM jsonb_array_elements(CASE WHEN jsonb_typeof(w.value)='array' THEN w.value ELSE '[]'::jsonb END)
     UNION ALL
-    SELECT value FROM jsonb_each(CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END)
+    SELECT value,lower(regexp_replace(key,'[^a-z0-9]','','g'))
+      FROM jsonb_each(CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END)
   ) child
 )
 SELECT EXISTS (SELECT 1 FROM walk WHERE jsonb_typeof(value)='string'
- AND trim(both '"' from value::text) ~* '(^|[^a-z0-9])[2-9tjqka][cdhs]([^a-z0-9]|$)');
+ AND NOT (
+   key_name IN ('bid','action','calls')
+   AND trim(both '"' from value::text) ~* '^(pass|p|x|xx|[1-7](c|d|h|s|nt|n))$'
+ )
+ AND (
+   trim(both '"' from value::text) ~* '(^|[^a-z0-9])[2-9tjqka][cdhs]([^a-z0-9]|$)'
+   OR regexp_replace(trim(both '"' from value::text),'[^a-z0-9]','','g')
+      ~* '^([2-9tjqka][cdhs]){1,13}$'
+ ));
 $$;
 
 CREATE OR REPLACE FUNCTION bidding.valid_acting_hand(payload jsonb)
@@ -63,7 +72,12 @@ BEGIN
   IF EXISTS (SELECT 1 FROM jsonb_object_keys(payload) k WHERE NOT (k = ANY(allowed))) THEN RETURN false; END IF;
   IF kind='auction' THEN
     RETURN jsonb_typeof(payload->'calls')='array'
-      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(payload->'calls') v WHERE jsonb_typeof(v)<>'string');
+      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(payload->'calls') v
+                       WHERE jsonb_typeof(v)<>'string'
+                          OR trim(both '"' from v::text) !~* '^(pass|p|x|xx|[1-7](c|d|h|s|nt|n))$')
+      AND NOT EXISTS (SELECT 1 FROM jsonb_each(payload) e
+                       WHERE e.key<>'calls'
+                         AND jsonb_typeof(e.value) NOT IN ('string','boolean','null'));
   ELSIF kind IN ('context','response','interpretation') THEN
     RETURN NOT EXISTS (SELECT 1 FROM jsonb_each(payload) e WHERE jsonb_typeof(e.value) NOT IN ('string','number','boolean','null'));
   END IF;
@@ -155,8 +169,21 @@ BEGIN
           OR jsonb_typeof(step->'at')<>'string' OR jsonb_typeof(step->'status')<>'string'
           OR jsonb_typeof(step->'input_hash')<>'string' OR jsonb_typeof(step->'output_hash')<>'string'
           OR COALESCE(btrim(step->>'event'),'')='' OR COALESCE(btrim(step->>'status'),'')=''
+          OR step->>'seq' !~ '^[1-9][0-9]*$'
+          OR step->>'input_hash' !~ '^[0-9a-f]{64}$'
+          OR step->>'output_hash' !~ '^[0-9a-f]{64}$'
           OR (step->>'at')::timestamptz < (NEW.decision_trace->>'started_at')::timestamptz
           OR (step->>'at')::timestamptz > (NEW.decision_trace->>'completed_at')::timestamptz)
+    OR EXISTS (
+       SELECT 1
+         FROM (
+           SELECT step,ord,
+                  lag((step->>'at')::timestamptz) OVER (ORDER BY ord) AS previous_at
+             FROM jsonb_array_elements(NEW.decision_trace->'steps') WITH ORDINALITY AS s(step,ord)
+         ) ordered_step
+        WHERE (step->>'seq')::numeric <> ord
+           OR (previous_at IS NOT NULL AND (step->>'at')::timestamptz < previous_at)
+    )
  THEN RAISE EXCEPTION 'BID_WORLD_ROBOT_TRACE_INCOMPLETE_OR_UNPINNED' USING ERRCODE='23514'; END IF;
  RETURN NEW;
 END $$;
