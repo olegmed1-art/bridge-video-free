@@ -338,6 +338,21 @@ def test_staging_installs_an_immutable_isolated_source_release():
     assert 'activated=0 inactive=1 disabled=1' in installer
 
 
+def test_staging_update_stops_only_autopilot_and_rolls_back_on_failure():
+    workflow = open(
+        ".github/workflows/oracle-autopilot-staging.yml", encoding="utf-8"
+    ).read()
+    assert 'request["replace_active_service"] is True' in workflow
+    assert 'AUTOPILOT_REPLACE_ACTIVE' in workflow
+    assert 'systemctl disable --now "$service"' in workflow
+    assert 'systemctl enable --now "$service"' in workflow
+    assert "AUTOPILOT_UPDATE_ROLLBACK_SERVICE_RESTORED" in workflow
+    assert "AUTOPILOT_UPDATE_STOPPED_SERVICE_ONLY=YES" in workflow
+    assert "ORACLE_INSTANCE_STOP_REQUESTED=NO" in workflow
+    assert "oci compute instance" not in workflow
+    assert "--action STOP" not in workflow
+
+
 def test_ready_queue_is_drained_without_a_poll_gap(monkeypatch):
     outcomes = iter((True, True, True, False))
     calls = []

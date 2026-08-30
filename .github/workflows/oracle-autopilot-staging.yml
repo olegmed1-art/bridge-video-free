@@ -78,12 +78,13 @@ jobs:
           assert set(request) == {
               "request_id", "target_host", "rsa_fingerprint", "activate",
               "expected_db_user", "plaintext_length", "ciphertext_b64",
-              "ciphertext_sha256",
+              "ciphertext_sha256", "replace_active_service",
           }
           assert re.fullmatch(r"[A-Za-z0-9._-]{1,80}", request["request_id"])
           assert request["target_host"] == "158.180.47.161"
           assert request["rsa_fingerprint"] == "SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64"
           assert request["activate"] == 0
+          assert request["replace_active_service"] is True
           assert request["expected_db_user"] == "autopilot_runtime_login"
           assert isinstance(request["plaintext_length"], int)
           assert 1 <= request["plaintext_length"] <= 318
@@ -97,6 +98,7 @@ jobs:
           print(f"request_id={request['request_id']}")
           print(f"plaintext_length={request['plaintext_length']}")
           print(f"cipher_path={cipher_path}")
+          print("replace_active_service=1")
           PY
 
       - name: Verify pinned Oracle identity and SSH access
@@ -157,6 +159,7 @@ jobs:
         shell: bash
         env:
           PLAINTEXT_LENGTH: ${{ steps.request.outputs.plaintext_length }}
+          REPLACE_ACTIVE_SERVICE: ${{ steps.request.outputs.replace_active_service }}
         run: |
           set -euo pipefail
           ssh_base=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
@@ -172,17 +175,43 @@ jobs:
           "${scp_base[@]}" '${{ steps.request.outputs.cipher_path }}' \
             "$ORACLE_USER@$ORACLE_HOST:$remote_cipher"
           "${ssh_base[@]}" \
-            "sudo -n env AUTOPILOT_SOURCE_REVISION='$GITHUB_SHA' AUTOPILOT_PLAINTEXT_LENGTH='$PLAINTEXT_LENGTH' AUTOPILOT_BUNDLE_PATH='$remote_bundle' AUTOPILOT_CIPHER_PATH='$remote_cipher' bash -s" \
+            "sudo -n env AUTOPILOT_SOURCE_REVISION='$GITHUB_SHA' AUTOPILOT_PLAINTEXT_LENGTH='$PLAINTEXT_LENGTH' AUTOPILOT_REPLACE_ACTIVE='$REPLACE_ACTIVE_SERVICE' AUTOPILOT_BUNDLE_PATH='$remote_bundle' AUTOPILOT_CIPHER_PATH='$remote_cipher' bash -s" \
             <<'REMOTE' | tee "$RUNNER_TEMP/oracle-autopilot-stage-safe.log"
           set -Eeuo pipefail
           umask 077
           [[ "$AUTOPILOT_SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
           [[ "$AUTOPILOT_PLAINTEXT_LENGTH" =~ ^[0-9]{1,3}$ ]]
+          [[ "$AUTOPILOT_REPLACE_ACTIVE" == 1 ]]
           [[ "$AUTOPILOT_BUNDLE_PATH" =~ ^/tmp/oracle-autopilot-source-[0-9]+\.tgz$ ]]
           [[ "$AUTOPILOT_CIPHER_PATH" =~ ^/tmp/oracle-autopilot-dsn-[0-9]+\.oaep$ ]]
           work="$(mktemp -d /var/tmp/oracle-autopilot-stage.XXXXXXXX)"
+          service=school-autopilot-shadow.service
+          root=/opt/bridge-school/school-autopilot
+          previous_current=''
+          stopped_here=0
           cleanup(){ rm -f -- "$AUTOPILOT_BUNDLE_PATH" "$AUTOPILOT_CIPHER_PATH"; rm -rf -- "$work"; }
-          trap cleanup EXIT
+          finish() {
+            rc=$?
+            if [[ $rc -ne 0 && "$stopped_here" == 1 ]]; then
+              if [[ -n "$previous_current" && -d "$previous_current" ]]; then
+                ln -sfn "$previous_current" "$root/current.rollback"
+                mv -Tf "$root/current.rollback" "$root/current"
+              fi
+              if [[ -f "$work/previous-unit" ]]; then
+                install -m 0644 -o root -g root "$work/previous-unit" "/etc/systemd/system/$service"
+              fi
+              systemctl daemon-reload
+              if systemctl enable --now "$service" >/dev/null 2>&1; then
+                echo 'AUTOPILOT_UPDATE_ROLLBACK_SERVICE_RESTORED' >&2
+              else
+                echo 'AUTOPILOT_UPDATE_ROLLBACK_SERVICE_FAILED' >&2
+              fi
+            fi
+            cleanup
+            trap - EXIT
+            exit "$rc"
+          }
+          trap finish EXIT
           install -m 0600 -o root -g root /etc/ssh/ssh_host_rsa_key "$work/host-rsa"
           ssh-keygen -q -p -m PEM -P '' -N '' -f "$work/host-rsa" >/dev/null 2>&1
           openssl pkeyutl -decrypt -inkey "$work/host-rsa" \
@@ -195,6 +224,21 @@ jobs:
           test -f "$work/source/oracle_autopilot/worker.py"
           test -f "$work/source/ops/oracle_autopilot_shadow_install.sh"
           database_url="$(cat "$work/database-url")"
+          active="$(systemctl is-active "$service" 2>/dev/null || true)"
+          enabled="$(systemctl is-enabled "$service" 2>/dev/null || true)"
+          case "$active:$enabled" in
+            active:enabled)
+              previous_current="$(readlink -f "$root/current")"
+              [[ -d "$previous_current" ]]
+              install -m 0644 -o root -g root "/etc/systemd/system/$service" "$work/previous-unit"
+              stopped_here=1
+              systemctl disable --now "$service"
+              [[ "$(systemctl is-active "$service" 2>/dev/null || true)" == inactive ]]
+              [[ "$(systemctl is-enabled "$service" 2>/dev/null || true)" == disabled ]]
+              ;;
+            inactive:disabled) ;;
+            *) echo "refusing mixed update state: $active/$enabled" >&2; exit 1 ;;
+          esac
           AUTOPILOT_DATABASE_URL="$database_url" \
           AUTOPILOT_EXPECTED_DB_USER=autopilot_runtime_login \
           AUTOPILOT_SOURCE_REVISION="$AUTOPILOT_SOURCE_REVISION" \
@@ -213,12 +257,16 @@ jobs:
           echo 'AUTOPILOT_ACTIVATE=0'
           echo 'AUTOPILOT_SERVICE_ACTIVE=NO'
           echo 'AUTOPILOT_SERVICE_ENABLED=NO'
+          echo 'AUTOPILOT_UPDATE_STOPPED_SERVICE_ONLY=YES'
+          echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
           REMOTE
           grep -Fx 'AUTOPILOT_ORACLE_ENCRYPTED_STAGING_PASS' \
             "$RUNNER_TEMP/oracle-autopilot-stage-safe.log" >/dev/null
           grep -Fx 'AUTOPILOT_ACTIVATE=0' "$RUNNER_TEMP/oracle-autopilot-stage-safe.log" >/dev/null
           grep -Fx 'AUTOPILOT_SERVICE_ACTIVE=NO' "$RUNNER_TEMP/oracle-autopilot-stage-safe.log" >/dev/null
           grep -Fx 'AUTOPILOT_SERVICE_ENABLED=NO' "$RUNNER_TEMP/oracle-autopilot-stage-safe.log" >/dev/null
+          grep -Fx 'AUTOPILOT_UPDATE_STOPPED_SERVICE_ONLY=YES' "$RUNNER_TEMP/oracle-autopilot-stage-safe.log" >/dev/null
+          grep -Fx 'ORACLE_INSTANCE_STOP_REQUESTED=NO' "$RUNNER_TEMP/oracle-autopilot-stage-safe.log" >/dev/null
 
       - name: Verify external DDS3 non-regression
         shell: bash
