@@ -259,6 +259,21 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_HIDDEN_PADDED_OWNER_VALUE_NOT_BLOCKED';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
+        '{"players":[{"owner":"\tpartner\t","cards":[51]}]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_WHITESPACE_OWNER_VALUE_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"players":[{"owner":"partner","metadata":{"cardPayloadCount":[51]}}]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_CARD_METRIC_ARRAY_NOT_BLOCKED';
+    END IF;
+    IF bidding.contains_forbidden_hidden_key(
+        '{"players":[{"owner":"partner","metadata":{"cardPayloadCount":13}}]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_PUBLIC_CARD_METRIC_NUMBER_FALSE_POSITIVE';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
         '{"players":[{"owner":"partner","a":{"b":{"c":{"d":{"e":{"cards":[51]}}}}}}]}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_DEEP_OWNER_RECORD_NOT_BLOCKED';

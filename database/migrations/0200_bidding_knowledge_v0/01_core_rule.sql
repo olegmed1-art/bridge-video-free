@@ -546,7 +546,10 @@ WITH RECURSIVE walk(value,key_path) AS (
                    AND (
                        (
                            regexp_replace(lower(seat_field.key),'[^a-z0-9]','','g')='owner'
-                           AND lower(btrim(seat_field.value #>> '{}')) IN (
+                           AND lower(regexp_replace(
+                               seat_field.value #>> '{}',
+                               '^[[:space:]]+|[[:space:]]+$','','g'
+                           )) IN (
                                'partner','opponent','opponents','other','others'
                            )
                        )
@@ -559,7 +562,10 @@ WITH RECURSIVE walk(value,key_path) AS (
                            AND regexp_replace(
                                lower(seat_field.key),'[^a-z0-9]','','g'
                            ) IN ('seat','owner')
-                           AND upper(btrim(seat_field.value #>> '{}')) IN (
+                           AND upper(regexp_replace(
+                               seat_field.value #>> '{}',
+                               '^[[:space:]]+|[[:space:]]+$','','g'
+                           )) IN (
                                'N','E','S','W','NORTH','EAST','SOUTH','WEST'
                            )
                        )
@@ -601,8 +607,14 @@ WITH RECURSIVE walk(value,key_path) AS (
                           ) AS cards_field(key,value)
                          WHERE regexp_replace(
                                    lower(cards_field.key),'[^a-z0-9]','','g'
-                               ) ~ '^cards?(metadata|context|data|info|details|payload|attributes|stats|summary|byseat)*$'
+                               ) ~ '^cards?(metadata|context|data|info|details|payload|attributes|stats|summary|byseat|played|count|counts|total|totals|rate|rates|average|averages|avg|percentage|percentages|pct)*$'
                            AND jsonb_typeof(cards_field.value) <> 'null'
+                           AND NOT (
+                               jsonb_typeof(cards_field.value)='number'
+                               AND regexp_replace(
+                                   lower(cards_field.key),'[^a-z0-9]','','g'
+                               ) ~ '(played|count|counts|total|totals|rate|rates|average|averages|avg|percentage|percentages|pct)'
+                           )
                     )
             )
         )
