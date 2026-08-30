@@ -43,7 +43,10 @@ die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 if [[ "$ACTIVATE" == "1" && "$ACTIVATION_SCOPE" != "SHADOW_ONLY" ]]; then
   die "AUTOPILOT_ACTIVATION_SCOPE=SHADOW_ONLY is required for activation"
 fi
-[[ -d "$REPO_DIR/.git" ]] || die "repository checkout not found at $REPO_DIR"
+[[ -f "$REPO_DIR/AUTOPILOT_SOURCE_REVISION" ]] \
+  || die "pinned source revision marker not found at $REPO_DIR"
+[[ "$(cat "$REPO_DIR/AUTOPILOT_SOURCE_REVISION")" == "$SOURCE_REVISION" ]] \
+  || die "source revision marker does not match AUTOPILOT_SOURCE_REVISION"
 [[ -f "$REPO_DIR/oracle_autopilot/worker.py" ]] || die "Oracle Autopilot worker code is missing"
 [[ -f "$SERVICE_SRC" ]] || die "systemd unit template is missing"
 command -v python3 >/dev/null 2>&1 || die "python3 is required"

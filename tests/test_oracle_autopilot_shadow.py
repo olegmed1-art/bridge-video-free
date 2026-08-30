@@ -157,6 +157,7 @@ def test_systemd_unit_is_shadow_only_and_resource_bounded():
 def test_staging_installs_an_immutable_isolated_source_release():
     installer = open("ops/oracle_autopilot_shadow_install.sh", encoding="utf-8").read()
     assert 'AUTOPILOT_SOURCE_REVISION must be a pinned commit' in installer
+    assert 'AUTOPILOT_SOURCE_REVISION\")" == "$SOURCE_REVISION"' in installer
     assert 'RELEASE_DIR="$RELEASES_DIR/$SOURCE_REVISION"' in installer
     assert 'chown -R root:root "$AUTOPILOT_DIR/.venv"' in installer
     assert 'staging refuses to replace an active service' in installer

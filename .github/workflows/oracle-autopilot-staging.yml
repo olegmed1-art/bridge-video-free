@@ -144,7 +144,9 @@ jobs:
         run: |
           set -euo pipefail
           bundle="$RUNNER_TEMP/oracle-autopilot-source.tgz"
+          printf '%s\n' "$GITHUB_SHA" > AUTOPILOT_SOURCE_REVISION
           tar -czf "$bundle" \
+            AUTOPILOT_SOURCE_REVISION \
             oracle_autopilot \
             deploy/oracle-autopilot/school-autopilot-shadow.service \
             ops/oracle_autopilot_shadow_install.sh
