@@ -12,6 +12,8 @@ readonly STATUS='/run/bridge-school/universal-video-status.json'
 EXPECTED_COMMIT="${UNIVERSAL_VIDEO_EXPECTED_COMMIT:-}"
 EXPECTED_DIGEST="${UNIVERSAL_VIDEO_EXPECTED_IMAGE_DIGEST:-}"
 switch_started=0
+old_enabled_before=''
+old_active_before=''
 CURRENT_STAGE='validation'
 
 fail(){
@@ -61,7 +63,16 @@ rollback(){
   emit_runtime_code
   if (( switch_started == 1 )) && ! has_running_job; then
     systemctl disable --now "$NEW_SERVICE" >/dev/null 2>&1 || true
-    systemctl start "$OLD_SERVICE" >/dev/null 2>&1 || true
+    if [[ "$old_enabled_before" == enabled ]]; then
+      systemctl enable "$OLD_SERVICE" >/dev/null 2>&1 || true
+    else
+      systemctl disable "$OLD_SERVICE" >/dev/null 2>&1 || true
+    fi
+    if [[ "$old_active_before" == active ]]; then
+      systemctl start "$OLD_SERVICE" >/dev/null 2>&1 || true
+    else
+      systemctl stop "$OLD_SERVICE" >/dev/null 2>&1 || true
+    fi
   fi
   printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_FAILED code=UV_CONTAINER_PROMOTION_ROLLED_BACK stage=%s rc=%s\n' "$CURRENT_STAGE" "$rc" >&2
   exit "$rc"
@@ -91,7 +102,11 @@ CURRENT_STAGE='image-preflight'
 observed="$(docker image inspect --format '{{.Id}}' "bridge-school/universal-video:$EXPECTED_COMMIT")"
 [[ "$observed" == "$EXPECTED_DIGEST" ]] || fail UV_CONTAINER_PROMOTION_IMAGE_MISMATCH
 started_unix="$(date +%s)"
+old_enabled_before="$(systemctl is-enabled "$OLD_SERVICE" 2>/dev/null || true)"
+old_active_before="$(systemctl is-active "$OLD_SERVICE" 2>/dev/null || true)"
 switch_started=1
+CURRENT_STAGE='legacy-quiesce'
+systemctl disable --now "$OLD_SERVICE" || fail UV_CONTAINER_PROMOTION_LEGACY_QUIESCE_FAILED
 CURRENT_STAGE='installer-activation'
 UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=1 UNIVERSAL_VIDEO_CONTAINER_BUILD=0 bash "$SOURCE_DIR/ops/oracle_universal_video_container_install.sh"
 CURRENT_STAGE='service-verification'
@@ -107,6 +122,7 @@ done
 (( service_ready == 1 )) || fail UV_CONTAINER_PROMOTION_SERVICE_INACTIVE
 [[ "$(systemctl is-enabled "$NEW_SERVICE")" == enabled ]] || fail UV_CONTAINER_PROMOTION_SERVICE_DISABLED
 systemctl is-active --quiet "$OLD_SERVICE" && fail UV_CONTAINER_PROMOTION_LEGACY_ACTIVE
+[[ "$(systemctl is-enabled "$OLD_SERVICE" 2>/dev/null || true)" == disabled ]] || fail UV_CONTAINER_PROMOTION_LEGACY_ENABLED
 process_deadline=$((SECONDS + 30))
 process_ready=0
 while (( SECONDS < process_deadline )); do
