@@ -9,6 +9,7 @@ import pytest
 from universal_video.result_conformance import ResultConformanceError, verify_result
 from universal_video.profiles import resolve_profile
 from universal_video.server_review import build_server_review
+from universal_video.source_parts_manifest import build_source_parts_manifest
 
 
 def _fingerprint(payload: dict) -> str:
@@ -235,6 +236,67 @@ def test_exact_job_hash_and_source_identity_are_enforced(tmp_path: Path):
         _verify(job_dir, expected_job_hash="e" * 64)
     with pytest.raises(ResultConformanceError, match="unexpected source file id"):
         _verify(job_dir, expected_source_file_id="1DifferentDriveFileId000000")
+
+
+def test_declared_derived_parts_require_exact_source_provenance(tmp_path: Path):
+    job_dir, manifest = _bundle(tmp_path)
+    manifest["derived_media_parts"] = True
+    manifest["source_parts_manifest"] = "source_parts_manifest.json"
+    parts = build_source_parts_manifest(
+        {
+            "drive_id": manifest["source"]["file_id"],
+            "size_bytes": manifest["media"]["size_bytes"],
+            "modified_time": "2026-08-30T08:00:00Z",
+            "duration_ms": 90_000,
+            "sha256": manifest["media"]["sha256"],
+        },
+        [
+            {
+                "drive_id": "derivedVideoPart00001",
+                "part_index": 0,
+                "source_start_ms": 0,
+                "source_end_ms": 90_000,
+                "size_bytes": 2_000_000,
+                "sha256": "e" * 64,
+            }
+        ],
+    )
+    (job_dir / "source_parts_manifest.json").write_text(json.dumps(parts), encoding="utf-8")
+    (job_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    report = _verify(job_dir)
+    assert report["state"] == "PASS"
+    assert report["artifact_count"] == 7
+
+
+def test_derived_parts_fail_closed_without_or_after_tampering_manifest(tmp_path: Path):
+    job_dir, manifest = _bundle(tmp_path)
+    manifest["derived_media_parts"] = True
+    manifest["source_parts_manifest"] = "source_parts_manifest.json"
+    (job_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ResultConformanceError, match="source_parts_manifest.json"):
+        _verify(job_dir)
+
+    parts = build_source_parts_manifest(
+        {
+            "drive_id": manifest["source"]["file_id"],
+            "size_bytes": manifest["media"]["size_bytes"],
+            "modified_time": "2026-08-30T08:00:00Z",
+            "duration_ms": 90_000,
+            "sha256": manifest["media"]["sha256"],
+        },
+        [{
+            "drive_id": "derivedVideoPart00001",
+            "part_index": 0,
+            "source_start_ms": 0,
+            "source_end_ms": 90_000,
+            "size_bytes": 2_000_000,
+            "sha256": "e" * 64,
+        }],
+    )
+    parts["parts"][0]["source_end_ms"] = 89_000
+    (job_dir / "source_parts_manifest.json").write_text(json.dumps(parts), encoding="utf-8")
+    with pytest.raises(ResultConformanceError, match="source-parts provenance"):
+        _verify(job_dir)
 
 
 def test_frame_tamper_symlink_and_raw_media_fail_closed(tmp_path: Path):
