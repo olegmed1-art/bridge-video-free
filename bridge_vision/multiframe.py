@@ -136,7 +136,7 @@ class DealTrack:
         hands = {seat: [] for seat in SEATS}
         for seat, card in sorted(self.observed_pairs):
             hands[seat].append(card)
-        return canonicalize_video_deal({"hands": hands}, derive_fourth_hand=True).to_dict()
+        return canonicalize_video_deal({"hands": hands}).to_dict()
 
     def to_dict(self) -> dict[str, Any]:
         deal = self.canonical_deal()

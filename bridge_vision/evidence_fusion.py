@@ -1,9 +1,9 @@
 """Fuse visual, layout and attributed speech card evidence without guessing.
 
-Language-specific extraction is deliberately outside this module.  An upstream
-extractor may submit normalized declarations. Bounded, attributable,
-high-confidence teacher statements may become card observations. Student
-statements remain review suggestions unless independently observed.
+Language-specific extraction is deliberately outside this module. An upstream
+extractor may submit normalized declarations. Speech may corroborate or
+contradict visual evidence, but it never creates a card identity. Missing cards
+remain unknown even when a teacher names them.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from typing import Any
 
 from bridge_contracts.video_deal import SEATS, canonicalize_video_deal
 
-FUSION_SCHEMA = "bridge-card-evidence-fusion-v2"
+FUSION_SCHEMA = "bridge-card-evidence-fusion-v3"
 DEFAULT_MIN_DECLARATION_CONFIDENCE = 0.90
 DEFAULT_MIN_SPEAKER_CONFIDENCE = 0.90
 MAX_DECLARATIONS = 500
@@ -122,7 +122,8 @@ def fuse_card_evidence(
          "start": 42.1, "end": 44.0}
 
     Low-confidence or unattributed declarations are retained as rejected
-    candidates. Teacher cross-seat contradiction is a hard conflict. Student
+    candidates. A teacher declaration can corroborate an already observed card
+    or expose a hard cross-seat conflict, but cannot add a card. Student
     declarations never add cards or create a hard conflict by themselves.
     """
 
@@ -284,19 +285,31 @@ def fuse_card_evidence(
                 }
             )
             continue
-        if previous is None and len(hands[seat]) >= 13:
-            conflicts.append(
-                {
+        if previous is None:
+            rejected.append({
+                **common_event,
+                "card": card,
+                "reason": "NO_VISUAL_CARD_EVIDENCE",
+                "accepted_as_observation": False,
+            })
+            layout_match = layout_lookup.get((seat, card))
+            if layout_match is not None:
+                speech_layout_corroborations.append({
+                    "seat": seat,
                     "card": card,
-                    "declared_seat": seat,
-                    "reason": "EXACT_CARD_CONTRADICTS_COMPLETE_HAND",
-                    "evidence_locator": locator,
-                }
-            )
+                    "speech_source": "TEACHER_SPEECH_SUGGESTION",
+                    "speech_evidence_locator": locator,
+                    "layout_index": layout_match["layout_index"],
+                    "accepted_as_observation": False,
+                    "speech_declaration_accepted_as_observation": False,
+                    "layout_accepted_as_observation": False,
+                })
             continue
         event = {
             **common_event,
             "card": card,
+            "resolution": "CORROBORATES_VISUAL_OBSERVATION",
+            "accepted_as_observation": False,
         }
         accepted.append(event)
         evidence.setdefault((seat, card), []).append(
@@ -310,9 +323,6 @@ def fuse_card_evidence(
                 "end": end,
             }
         )
-        if previous is None:
-            card_to_seat[card] = seat
-            hands[seat].append(card)
         layout_match = layout_lookup.get((seat, card))
         if layout_match is not None:
             speech_layout_corroborations.append({
@@ -322,7 +332,7 @@ def fuse_card_evidence(
                 "speech_evidence_locator": locator,
                 "layout_index": layout_match["layout_index"],
                 "accepted_as_observation": False,
-                "speech_declaration_accepted_as_observation": True,
+                "speech_declaration_accepted_as_observation": False,
                 "layout_accepted_as_observation": False,
             })
 
@@ -343,7 +353,7 @@ def fuse_card_evidence(
             "canonical_promotion_allowed": False,
         }
 
-    deal = canonicalize_video_deal({"hands": hands}, derive_fourth_hand=True).to_dict()
+    deal = canonicalize_video_deal({"hands": hands}).to_dict()
     resolved_partial: list[dict[str, Any]] = []
     unresolved_partial: list[dict[str, Any]] = []
     constraint_evidence: list[dict[str, Any]] = []
@@ -357,7 +367,7 @@ def fuse_card_evidence(
             and (constraint.get("suit") is None or card[1] == constraint["suit"])
         ]
         if len(candidates) == 1:
-            resolved = {**event, "resolved_card": candidates[0], "resolution": "UNIQUE_WITHIN_CANONICAL_HAND"}
+            resolved = {**event, "resolved_card": candidates[0], "resolution": "UNIQUE_WITHIN_VISUAL_HAND"}
             resolved_partial.append(resolved)
             constraint_evidence.append(
                 {
@@ -365,7 +375,7 @@ def fuse_card_evidence(
                     "seat": seat,
                     "constraint": constraint,
                     "resolved_card": candidates[0],
-                    "resolution": "UNIQUE_WITHIN_CANONICAL_HAND",
+                    "resolution": "UNIQUE_WITHIN_VISUAL_HAND",
                     "confidence": event["confidence"],
                     "evidence_locator": event["evidence_locator"],
                     "start": event["start"],
@@ -410,12 +420,7 @@ def fuse_card_evidence(
     observed_card_to_seat = {
         card: seat
         for (seat, card), entries in evidence.items()
-        if any(item.get("source") in {"VISUAL", "TEACHER_SPEECH"} for item in entries)
-    }
-    derived_card_to_seat = {
-        card: seat
-        for seat in SEATS
-        for card in deal["card_provenance"][seat]["derived_cards"]
+        if any(item.get("source") == "VISUAL" for item in entries)
     }
     student_suggestions: list[dict[str, Any]] = []
     for event in student_raw:
@@ -429,16 +434,11 @@ def fuse_card_evidence(
         }
         if card is not None:
             observed_seat = observed_card_to_seat.get(card)
-            derived_seat = derived_card_to_seat.get(card)
             layout_match = layout_lookup.get((seat, card))
             if observed_seat == seat:
                 resolution = "CONFIRMS_ACCEPTED_EVIDENCE"
             elif observed_seat is not None:
                 resolution = "CONTRADICTS_ACCEPTED_EVIDENCE"
-            elif derived_seat == seat:
-                resolution = "CONSISTENT_WITH_DERIVED_DEAL"
-            elif derived_seat is not None:
-                resolution = "CONTRADICTS_DERIVED_DEAL"
             elif deal["hands"][seat]["unknown_count"] == 0:
                 resolution = "CONTRADICTS_COMPLETE_HAND"
             elif layout_match is not None:

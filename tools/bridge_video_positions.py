@@ -370,7 +370,7 @@ def process_job_frames(
             "output_records": len(records),
             "recognized_frames": recognized_frames,
             "conflict_frames": conflict_frames,
-            "derive_fourth_hand": True,
+            "derive_fourth_hand": False,
             "derived_fourth_hand_frames": derived_fourth_hand_frames,
             "output": output_path.name,
         }
@@ -405,7 +405,7 @@ def process_job_frames(
             "output_records": len(records),
             "recognized_frames": recognized_frames,
             "conflict_frames": conflict_frames,
-            "derive_fourth_hand": True,
+            "derive_fourth_hand": False,
             "derived_fourth_hand_frames": derived_fourth_hand_frames,
             "speech_fusion_records": speech_fusion_records,
             "speech_review_frames": speech_review_frames,

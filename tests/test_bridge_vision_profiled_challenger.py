@@ -658,7 +658,7 @@ def test_profiled_shadow_rejects_manifest_frame_hash_mismatch(tmp_path: Path):
     assert not (tmp_path / "bridge_positions_profiled_shadow.jsonl").exists()
 
 
-def test_39_to_13_derivation_waits_for_per_card_temporal_consensus(tmp_path: Path):
+def test_39_observed_cards_never_create_the_hidden_hand(tmp_path: Path):
     first, second = make_frames(tmp_path)
     ranks = "AKQJT98765432"
     cards = []
@@ -679,8 +679,6 @@ def test_39_to_13_derivation_waits_for_per_card_temporal_consensus(tmp_path: Pat
 
     accepted = engine.analyze_frame(second).to_dict()
     assert accepted["status"] == "PARTIAL_BOARD_OBSERVATION"
-    assert len(accepted["deal"]["hands"]["W"]["cards"]) == 13
-    derivation = accepted["deal"]["derivations"][0]
-    assert derivation["provenance_class"] == "DERIVED"
-    assert derivation["evidence_basis"] == "39_unique_cards_in_three_complete_observed_hands"
+    assert accepted["deal"]["hands"]["W"] == {"cards": [], "unknown_count": 13}
+    assert accepted["deal"]["derivations"] == []
     assert accepted["candidates"][0]["evidence"]["canonical_promotion_allowed"] is False
