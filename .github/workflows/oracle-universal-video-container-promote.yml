@@ -85,9 +85,15 @@ jobs:
           IMAGE_DIGEST: ${{ steps.request.outputs.image_digest }}
         run: |
           set -euo pipefail
+          expected_blob="$(gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_container_promote.sh?ref=$EXPECTED_COMMIT" --jq .sha)"
+          remote_head="$(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n git -C /opt/bridge-school/universal-video-src rev-parse HEAD')"
+          remote_blob="$(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n git hash-object /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh')"
+          [[ "$remote_head" == "$EXPECTED_COMMIT" && "$remote_blob" == "$expected_blob" ]]
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n /bin/bash -n /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh'
+          echo UV_CONTAINER_PROMOTION_ENTRYPOINT_PASS
           set +e
           ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n env UNIVERSAL_VIDEO_EXPECTED_COMMIT='$EXPECTED_COMMIT' UNIVERSAL_VIDEO_EXPECTED_IMAGE_DIGEST='$IMAGE_DIGEST' bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh" \
+            "sudo -n env UNIVERSAL_VIDEO_EXPECTED_COMMIT='$EXPECTED_COMMIT' UNIVERSAL_VIDEO_EXPECTED_IMAGE_DIGEST='$IMAGE_DIGEST' /bin/bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh" \
             > "$RUNNER_TEMP/promotion.log" 2>&1
           rc=$?
           set -e
