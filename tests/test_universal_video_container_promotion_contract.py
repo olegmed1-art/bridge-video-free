@@ -10,6 +10,8 @@ def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
     assert "assert x.get('conclusion') == 'success'" in WORKFLOW
     assert "assert x.get('head_sha') == os.environ['EXPECTED_COMMIT']" in WORKFLOW
     assert "group: oracle-instance-workload-mutation" in WORKFLOW
+    assert "ORACLE_INSTANCE_RUNNING_PASS" in WORKFLOW
+    assert "compute instance action --instance-id \"$INSTANCE_ID\" --action START" in WORKFLOW
     assert "rollback" in SCRIPT
     assert "UV_CONTAINER_PROMOTION_ROLLED_BACK" in SCRIPT
     assert "stage=%s rc=%s" in SCRIPT

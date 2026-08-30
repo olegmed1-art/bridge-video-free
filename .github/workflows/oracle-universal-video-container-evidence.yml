@@ -40,6 +40,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
+      INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      OCI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
       SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
@@ -65,6 +71,33 @@ jobs:
           git show "$REF:ops/oracle_universal_video_run_command.sh" > "$RUNNER_TEMP/prepare.sh"
           git show "$REF:ops/oracle_universal_video_container_install.sh" > "$RUNNER_TEMP/container-install.sh"
           chmod 0700 "$RUNNER_TEMP/prepare.sh" "$RUNNER_TEMP/container-install.sh"
+      - name: Ensure Oracle instance is running
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q oci-cli
+          oci_user="$(printf '%s\n' "$OCI_USER" | sed -nE 's/^[[:space:]]*(user=)?(ocid1\.user\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p' | head -n1)"
+          oci_fingerprint="$(printf '%s\n' "$OCI_FINGERPRINT" | sed -nE 's/^[[:space:]]*(fingerprint=)?([0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){15})[[:space:]]*$/\2/p' | head -n1)"
+          oci_tenancy="$(printf '%s\n' "$OCI_TENANCY" | sed -nE 's/^[[:space:]]*(tenancy=)?(ocid1\.tenancy\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p' | head -n1)"
+          [[ -n "$oci_user" && -n "$oci_fingerprint" && -n "$oci_tenancy" ]]
+          install -d -m 0700 "$RUNNER_TEMP/oci"
+          printf '%s\n' "$OCI_KEY" > "$RUNNER_TEMP/oci/key.pem"
+          chmod 0600 "$RUNNER_TEMP/oci/key.pem"
+          cat > "$RUNNER_TEMP/oci/config" <<EOF
+          [DEFAULT]
+          user=$oci_user
+          fingerprint=$oci_fingerprint
+          tenancy=$oci_tenancy
+          region=$OCI_REGION
+          key_file=$RUNNER_TEMP/oci/key.pem
+          EOF
+          chmod 0600 "$RUNNER_TEMP/oci/config"
+          state="$(oci --config-file "$RUNNER_TEMP/oci/config" compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
+          case "$state" in
+            RUNNING) ;;
+            STOPPED) oci --config-file "$RUNNER_TEMP/oci/config" compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+            *) echo "ORACLE_INSTANCE_STATE_UNSUPPORTED=$state"; exit 1 ;;
+          esac
+          echo ORACLE_INSTANCE_RUNNING_PASS
       - name: Establish pinned SSH transport
         id: ssh
         env:
