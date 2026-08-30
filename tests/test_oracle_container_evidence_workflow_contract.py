@@ -259,3 +259,11 @@ def test_container_image_build_has_its_own_graceful_timeout() -> None:
     assert 'timeout --foreground --signal=TERM --kill-after=30s "$BUILD_TIMEOUT_SECONDS" docker build' in installer
     assert "build_rc == 124 || build_rc == 137" in installer
     assert "UV_CONTAINER_IMAGE_BUILD_TIMEOUT" in installer
+
+
+def test_evidence_stuck_run_recovery_is_explicit_and_fail_closed() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    recovery = "cancel-in-progress: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[UV_EVIDENCE_RECOVER_STUCK]') }}"
+    assert recovery in text
+    assert "cancel-in-progress: true" not in text
