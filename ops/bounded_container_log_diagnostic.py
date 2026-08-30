@@ -19,6 +19,17 @@ ALLOWED_ERRORS = {
     "ERROR: container image digest unavailable",
     "ERROR: container image build failed",
     "ERROR: container disk capacity unavailable",
+    "ERROR: assistant-lab.service is not active",
+    "ERROR: DDS3 readyz failed before activation",
+    "ERROR: universal-video has a running job; refusing source upgrade",
+    "ERROR: universal-video failed to stop",
+    "ERROR: universal-video accepted a job while stopping; leaving sidecar stopped",
+    "ERROR: fresh staged source checkout is unexpectedly dirty",
+    "ERROR: bounded Universal Video operator rejection smoke returned an unexpected code",
+    "ERROR: bounded Universal Video operator rejection state missing",
+    "ERROR: bounded Universal Video operator rejection reason missing",
+    "ERROR: assistant-lab state changed",
+    "ERROR: DDS3 readyz failed after activation",
 }
 MOUNT_ERROR_RE = re.compile(r"ERROR: unsafe or missing mount: [A-Za-z0-9._/-]+")
 ERROR_CODE_RE = re.compile(r"UV_CONTAINER_[A-Z0-9_]+")
