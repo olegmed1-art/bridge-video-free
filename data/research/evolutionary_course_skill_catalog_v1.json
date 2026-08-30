@@ -1,0 +1,52 @@
+{
+  "schema": "school-skill-catalog-v1",
+  "catalog_version": "SCHOOL SKILL CATALOG v1",
+  "authority": {
+    "authority_class": "CANDIDATE_RESEARCH",
+    "school_canon_activation_allowed": false,
+    "curriculum_activation_allowed": false,
+    "student_profile_write_allowed": false,
+    "publication_allowed": false
+  },
+  "skills": [
+    {
+      "skill_id": "candidate.skill.trump-long-hand",
+      "title": "Определить длинную козырную руку",
+      "aliases": ["Найти длинную руку в козырном контракте"],
+      "prerequisite_skill_ids": [],
+      "mastery_criteria": {
+        "RECOGNIZED": ["Ученик понимает, относительно какой руки планируется розыгрыш."],
+        "SUPPORTED": ["Определяет длинную руку после направляющего вопроса."],
+        "INDEPENDENT": ["Определяет длинную руку до выбора плана розыгрыша без подсказки."],
+        "TRANSFERRED": ["Применяет критерий в новой структуре козырного контракта."]
+      },
+      "review_state": "REVIEW_REQUIRED"
+    },
+    {
+      "skill_id": "candidate.skill.count-losers",
+      "title": "Посчитать потери в длинной козырной руке",
+      "aliases": ["Подсчёт потерь", "Сколько потерь в козырном контракте"],
+      "prerequisite_skill_ids": ["candidate.skill.trump-long-hand"],
+      "mastery_criteria": {
+        "RECOGNIZED": ["Ученик отличает подсчёт потерь от подсчёта верхних взяток."],
+        "SUPPORTED": ["Считает потери по мастям после направляющего вопроса."],
+        "INDEPENDENT": ["До первого хода самостоятельно называет число потерь по мастям."],
+        "TRANSFERRED": ["Правильно считает потери при другой длине козыря и иной структуре рук."]
+      },
+      "review_state": "REVIEW_REQUIRED"
+    },
+    {
+      "skill_id": "candidate.skill.eliminate-extra-loser",
+      "title": "Найти способ ликвидации лишней потери",
+      "aliases": ["Убрать лишнюю потерю", "Ликвидировать лишнюю потерю"],
+      "prerequisite_skill_ids": ["candidate.skill.count-losers"],
+      "mastery_criteria": {
+        "RECOGNIZED": ["Ученик замечает превышение допустимого числа потерь."],
+        "SUPPORTED": ["Называет возможную технику после перечисления вариантов преподавателем."],
+        "INDEPENDENT": ["Самостоятельно выбирает технику и порядок ходов."],
+        "TRANSFERRED": ["Сравнивает вероятностный и гарантированный способы в новой раздаче."]
+      },
+      "review_state": "REVIEW_REQUIRED"
+    }
+  ]
+}
