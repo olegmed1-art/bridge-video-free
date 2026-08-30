@@ -88,6 +88,9 @@ PostgreSQL 18 migration package for the School of Sports Bridge.
 - `0300_autopilot_oracle_shadow.sql` — Oracle-resident Autopilot shadow queue with
   allow-listed tasks, event dedupe, leases/fencing, external waits, evidence,
   budget stops and least-privilege RPCs.
+- `0301_autopilot_github_pr_read_only.sql` — first real external capability:
+  an exact-head, draft-only, zero-cost public GitHub PR snapshot executed by the
+  Oracle worker without credentials or mutation.
 - `rollbacks/0056_universal_video_queue.sql` — fail-closed rollback; refuses to remove a non-empty queue.
 
 The exact production state is the `schema_migration` registry in Neon, protected by migration checksums.
@@ -119,6 +122,8 @@ This layer deliberately does **not** create a scheduled production monitor using
 - `300_autopilot_oracle_shadow.sql` — task/event idempotency, fencing,
   wait/resume/dedupe/expiry, stale recovery, evidence, budget stop and runtime
   ACL boundaries.
+- `301_autopilot_github_pr_read_only.sql` — strict GitHub target/payload gates,
+  zero-cost enforcement, exact capability mapping and retained evidence.
 
 All tests execute inside transactions and finish with `ROLLBACK`; they leave no test records in production-style databases.
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from unittest.mock import patch
 
@@ -15,6 +16,7 @@ from oracle_autopilot.contract import (
 from oracle_autopilot.worker import (
     WorkerConfig,
     drain_ready,
+    fetch_github_pr_snapshot,
     load_config,
     validate_neon_direct_dsn,
 )
@@ -128,6 +130,130 @@ def test_wait_task_requires_exact_state_and_correlation():
         )
 
 
+def test_github_pr_task_is_exactly_bounded():
+    valid = _task(
+        goal_type="GITHUB_PR_READ_ONLY_V1",
+        goal_json={
+            "repository": "olegmed1-art/bridge-video-free",
+            "pr_number": 991,
+            "expected_head_sha": "a" * 40,
+            "require_draft": True,
+        },
+        current_step_key="github.pr.snapshot",
+    )
+    validate_task_contract(valid)
+
+    for bad_goal in (
+        {**valid.goal_json, "repository": "other/repository"},
+        {**valid.goal_json, "expected_head_sha": "main"},
+        {**valid.goal_json, "require_draft": False},
+        {**valid.goal_json, "extra": "field"},
+    ):
+        with pytest.raises(AutopilotContractError):
+            validate_task_contract(
+                _task(
+                    goal_type="GITHUB_PR_READ_ONLY_V1",
+                    goal_json=bad_goal,
+                    current_step_key="github.pr.snapshot",
+                )
+            )
+
+
+def test_github_pr_snapshot_uses_bounded_public_get(monkeypatch):
+    expected_head = "b" * 40
+    payload = {
+        "number": 991,
+        "html_url": "https://github.com/olegmed1-art/bridge-video-free/pull/991",
+        "state": "open",
+        "draft": True,
+        "head": {"sha": expected_head},
+        "mergeable": True,
+        "updated_at": "2026-08-30T18:38:43Z",
+    }
+    observed = {}
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def geturl(self):
+            return "https://api.github.com/repos/olegmed1-art/bridge-video-free/pulls/991"
+
+        def read(self, limit):
+            observed["read_limit"] = limit
+            return json.dumps(payload).encode()
+
+    def fake_urlopen(request, timeout):
+        observed["url"] = request.full_url
+        observed["method"] = request.get_method()
+        observed["authorization"] = request.get_header("Authorization")
+        observed["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    summary = fetch_github_pr_snapshot(
+        {
+            "repository": "olegmed1-art/bridge-video-free",
+            "pr_number": 991,
+            "expected_head_sha": expected_head,
+            "require_draft": True,
+        }
+    )
+    assert summary["head_sha"] == expected_head
+    assert summary["production_mutation"] is False
+    assert summary["cost_actual_microusd"] == 0
+    assert observed == {
+        "url": "https://api.github.com/repos/olegmed1-art/bridge-video-free/pulls/991",
+        "method": "GET",
+        "authorization": None,
+        "timeout": 15,
+        "read_limit": 1_048_577,
+    }
+
+
+def test_github_pr_snapshot_fails_closed_on_head_change(monkeypatch):
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def geturl(self):
+            return "https://api.github.com/repos/olegmed1-art/bridge-video-free/pulls/991"
+
+        def read(self, _limit):
+            return json.dumps(
+                {
+                    "number": 991,
+                    "html_url": "https://github.com/olegmed1-art/bridge-video-free/pull/991",
+                    "state": "open",
+                    "draft": True,
+                    "head": {"sha": "c" * 40},
+                    "mergeable": None,
+                    "updated_at": "2026-08-30T18:38:43Z",
+                }
+            ).encode()
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: Response())
+    with pytest.raises(AutopilotContractError, match="GITHUB_PR_HEAD_CHANGED"):
+        fetch_github_pr_snapshot(
+            {
+                "repository": "olegmed1-art/bridge-video-free",
+                "pr_number": 991,
+                "expected_head_sha": "b" * 40,
+                "require_draft": True,
+            }
+        )
+
+
 def test_fencing_and_cost_state_are_checked_before_execution():
     with pytest.raises(AutopilotContractError, match="LEASE_INVALID"):
         validate_task_contract(_task(lease_epoch=0))
@@ -139,6 +265,8 @@ def test_worker_source_has_no_arbitrary_execution_primitives():
     source = open("oracle_autopilot/worker.py", encoding="utf-8").read()
     for forbidden in ("subprocess", "os.system", "shell=True", "exec(", "eval("):
         assert forbidden not in source
+    assert "Authorization" not in source
+    assert "GITHUB_TOKEN" not in source
 
 
 def test_systemd_unit_is_shadow_only_and_resource_bounded():

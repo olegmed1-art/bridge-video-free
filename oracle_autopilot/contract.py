@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -10,6 +11,7 @@ TaskKind = Literal[
     "AUTOPILOT_SMOKE_V1",
     "EXTERNAL_WAIT_SHADOW_V1",
     "OWNER_BOUNDARY_V1",
+    "GITHUB_PR_READ_ONLY_V1",
 ]
 
 ALLOWED_TASK_KINDS = frozenset(
@@ -17,12 +19,17 @@ ALLOWED_TASK_KINDS = frozenset(
         "AUTOPILOT_SMOKE_V1",
         "EXTERNAL_WAIT_SHADOW_V1",
         "OWNER_BOUNDARY_V1",
+        "GITHUB_PR_READ_ONLY_V1",
     }
 )
 
 
 class AutopilotContractError(RuntimeError):
     """A permanent fail-closed contract violation."""
+
+
+class AutopilotRetryableError(RuntimeError):
+    """A bounded transient failure eligible for the existing retry contract."""
 
 
 @dataclass(frozen=True)
@@ -76,6 +83,35 @@ def validate_task_contract(task: ClaimedTask) -> None:
     if task.goal_type == "OWNER_BOUNDARY_V1":
         if task.current_step_key != "policy.owner_boundary" or task.step_cursor != 0:
             raise AutopilotContractError("AUTOPILOT_OWNER_STATE_INVALID")
+        return
+
+    if task.goal_type == "GITHUB_PR_READ_ONLY_V1":
+        expected_keys = {
+            "repository",
+            "pr_number",
+            "expected_head_sha",
+            "require_draft",
+        }
+        if set(task.goal_json) != expected_keys:
+            raise AutopilotContractError("AUTOPILOT_GITHUB_FIELDS_INVALID")
+        if task.goal_json["repository"] != "olegmed1-art/bridge-video-free":
+            raise AutopilotContractError("AUTOPILOT_GITHUB_REPOSITORY_INVALID")
+        pr_number = task.goal_json["pr_number"]
+        if isinstance(pr_number, bool) or not isinstance(pr_number, int):
+            raise AutopilotContractError("AUTOPILOT_GITHUB_PR_INVALID")
+        if not 1 <= pr_number <= 1_000_000:
+            raise AutopilotContractError("AUTOPILOT_GITHUB_PR_INVALID")
+        expected_head = task.goal_json["expected_head_sha"]
+        if not isinstance(expected_head, str) or not re.fullmatch(
+            r"[0-9a-f]{40}", expected_head
+        ):
+            raise AutopilotContractError("AUTOPILOT_GITHUB_HEAD_INVALID")
+        if task.goal_json["require_draft"] is not True:
+            raise AutopilotContractError("AUTOPILOT_GITHUB_DRAFT_GATE_INVALID")
+        if task.current_step_key != "github.pr.snapshot" or task.step_cursor != 0:
+            raise AutopilotContractError("AUTOPILOT_GITHUB_STATE_INVALID")
+        if task.cost_cap_microusd != 0 or task.cost_reserved_microusd != 0:
+            raise AutopilotContractError("AUTOPILOT_GITHUB_COST_INVALID")
         return
 
     correlation_id = task.goal_json.get("correlation_id")

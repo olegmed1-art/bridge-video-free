@@ -8,7 +8,9 @@ on:
       - 'ops/oracle_autopilot_shadow_install.sh'
       - 'tests/test_oracle_autopilot_*.py'
       - 'database/migrations/0300_autopilot_oracle_shadow.sql'
+      - 'database/migrations/0301_autopilot_github_pr_read_only.sql'
       - 'database/tests/300_autopilot_oracle_shadow.sql'
+      - 'database/tests/301_autopilot_github_pr_read_only.sql'
       - '.github/workflows/oracle-autopilot-shadow-ci.yml'
       - 'docs/architecture/SCHOOL_AUTOPILOT_CONTROLLER_V1.md'
       - 'ops/autopilot/project-state.json'
@@ -20,7 +22,9 @@ on:
       - 'ops/oracle_autopilot_shadow_install.sh'
       - 'tests/test_oracle_autopilot_*.py'
       - 'database/migrations/0300_autopilot_oracle_shadow.sql'
+      - 'database/migrations/0301_autopilot_github_pr_read_only.sql'
       - 'database/tests/300_autopilot_oracle_shadow.sql'
+      - 'database/tests/301_autopilot_github_pr_read_only.sql'
       - '.github/workflows/oracle-autopilot-shadow-ci.yml'
 
 permissions:

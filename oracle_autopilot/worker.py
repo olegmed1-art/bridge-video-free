@@ -20,7 +20,9 @@ import os
 import socket
 import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Iterator
@@ -30,6 +32,7 @@ from psycopg.rows import dict_row
 
 from .contract import (
     AutopilotContractError,
+    AutopilotRetryableError,
     ClaimedTask,
     claimed_task_from_row,
     validate_task_contract,
@@ -39,6 +42,9 @@ from .contract import (
 CHANNEL = "autopilot_ready"
 RUNTIME_MODE = "SHADOW"
 LOGGER = logging.getLogger("oracle_autopilot")
+GITHUB_API_HOST = "api.github.com"
+GITHUB_REPOSITORY = "olegmed1-art/bridge-video-free"
+GITHUB_RESPONSE_LIMIT_BYTES = 1_048_576
 
 
 @dataclass(frozen=True)
@@ -189,6 +195,97 @@ def _canonical_evidence(summary: dict[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _validate_github_api_url(url: str) -> None:
+    parsed = urllib.parse.urlsplit(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != GITHUB_API_HOST
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.port is not None
+        or parsed.fragment
+    ):
+        raise AutopilotContractError("GITHUB_API_ORIGIN_INVALID")
+
+
+def fetch_github_pr_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
+    """Fetch one bounded public PR snapshot without credentials or mutation."""
+
+    repository = goal_json["repository"]
+    pr_number = goal_json["pr_number"]
+    expected_head = goal_json["expected_head_sha"]
+    if repository != GITHUB_REPOSITORY:
+        raise AutopilotContractError("GITHUB_REPOSITORY_INVALID")
+    url = f"https://{GITHUB_API_HOST}/repos/{repository}/pulls/{pr_number}"
+    _validate_github_api_url(url)
+    request = urllib.request.Request(
+        url,
+        method="GET",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "bridge-school-autopilot-shadow/1.2",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            final_url = response.geturl()
+            _validate_github_api_url(final_url)
+            if final_url != url or response.status != 200:
+                raise AutopilotContractError("GITHUB_API_RESPONSE_INVALID")
+            raw = response.read(GITHUB_RESPONSE_LIMIT_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise AutopilotContractError("GITHUB_PR_NOT_FOUND") from exc
+        if exc.code in {403, 408, 429} or 500 <= exc.code <= 599:
+            raise AutopilotRetryableError("GITHUB_API_TRANSIENT_ERROR") from exc
+        raise AutopilotContractError("GITHUB_API_HTTP_ERROR") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise AutopilotRetryableError("GITHUB_API_TRANSIENT_ERROR") from exc
+
+    if len(raw) > GITHUB_RESPONSE_LIMIT_BYTES:
+        raise AutopilotContractError("GITHUB_API_RESPONSE_TOO_LARGE")
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AutopilotContractError("GITHUB_API_JSON_INVALID") from exc
+    if not isinstance(payload, dict):
+        raise AutopilotContractError("GITHUB_API_JSON_INVALID")
+
+    head = payload.get("head")
+    head_sha = head.get("sha") if isinstance(head, dict) else None
+    expected_html_url = f"https://github.com/{repository}/pull/{pr_number}"
+    if payload.get("number") != pr_number or payload.get("html_url") != expected_html_url:
+        raise AutopilotContractError("GITHUB_PR_IDENTITY_MISMATCH")
+    if head_sha != expected_head:
+        raise AutopilotContractError("GITHUB_PR_HEAD_CHANGED")
+    if payload.get("state") != "open":
+        raise AutopilotContractError("GITHUB_PR_NOT_OPEN")
+    if goal_json["require_draft"] and payload.get("draft") is not True:
+        raise AutopilotContractError("GITHUB_PR_NOT_DRAFT")
+    mergeable = payload.get("mergeable")
+    if mergeable is not None and not isinstance(mergeable, bool):
+        raise AutopilotContractError("GITHUB_PR_MERGEABLE_INVALID")
+    updated_at = payload.get("updated_at")
+    if not isinstance(updated_at, str) or len(updated_at) > 40:
+        raise AutopilotContractError("GITHUB_PR_TIMESTAMP_INVALID")
+
+    return {
+        "repository": repository,
+        "pr_number": pr_number,
+        "state": "open",
+        "draft": True,
+        "head_sha": head_sha,
+        "mergeable": mergeable,
+        "updated_at": updated_at,
+        "api_host": GITHUB_API_HOST,
+        "http_method": "GET",
+        "production_mutation": False,
+        "model_calls": 0,
+        "cost_actual_microusd": 0,
+    }
+
+
 def _complete(
     config: WorkerConfig,
     task: ClaimedTask,
@@ -243,6 +340,19 @@ def execute_task(config: WorkerConfig, task: ClaimedTask) -> None:
         )
         if not row or not row["marked"]:
             raise AutopilotContractError("AUTOPILOT_OWNER_BOUNDARY_FENCED")
+        return
+
+    if task.goal_type == "GITHUB_PR_READ_ONLY_V1":
+        summary = fetch_github_pr_snapshot(task.goal_json)
+        summary["task_id"] = task.task_id
+        summary["task_kind"] = task.goal_type
+        summary["runtime"] = "ORACLE_RESIDENT"
+        _complete(
+            config,
+            task,
+            evidence_class="GITHUB_PR_READ_ONLY_SNAPSHOT",
+            summary=summary,
+        )
         return
 
     if task.step_cursor == 0:
@@ -309,6 +419,14 @@ def process_one(config: WorkerConfig) -> bool:
         resulting_state = fail_task(config, task, error_code=str(exc), retryable=False)
         LOGGER.warning(
             "task_contract_failure task_id=%s code=%s state=%s",
+            task.task_id,
+            exc,
+            resulting_state,
+        )
+    except AutopilotRetryableError as exc:
+        resulting_state = fail_task(config, task, error_code=str(exc), retryable=True)
+        LOGGER.warning(
+            "task_transient_failure task_id=%s code=%s state=%s",
             task.task_id,
             exc,
             resulting_state,
