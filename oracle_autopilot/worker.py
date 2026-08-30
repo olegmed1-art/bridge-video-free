@@ -45,6 +45,37 @@ LOGGER = logging.getLogger("oracle_autopilot")
 GITHUB_API_HOST = "api.github.com"
 GITHUB_REPOSITORY = "olegmed1-art/bridge-video-free"
 GITHUB_RESPONSE_LIMIT_BYTES = 1_048_576
+GITHUB_CHECK_RUN_LIMIT = 100
+GITHUB_FAILED_CHECK_LIMIT = 5
+GITHUB_DIAGNOSTIC_TEXT_LIMIT = 300
+GITHUB_CHECK_NAME_LIMIT = 200
+GITHUB_PATH_LIMIT = 200
+GITHUB_CHECK_STATUSES = frozenset(
+    {"queued", "in_progress", "completed", "waiting", "requested", "pending"}
+)
+GITHUB_CHECK_CONCLUSIONS = frozenset(
+    {
+        "action_required",
+        "cancelled",
+        "failure",
+        "neutral",
+        "skipped",
+        "stale",
+        "startup_failure",
+        "success",
+        "timed_out",
+    }
+)
+GITHUB_HARD_FAILURES = frozenset(
+    {
+        "action_required",
+        "cancelled",
+        "failure",
+        "stale",
+        "startup_failure",
+        "timed_out",
+    }
+)
 
 
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):
@@ -215,22 +246,16 @@ def _validate_github_api_url(url: str) -> None:
         raise AutopilotContractError("GITHUB_API_ORIGIN_INVALID")
 
 
-def fetch_github_pr_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
-    """Fetch one bounded public PR snapshot without credentials or mutation."""
+def _github_get_json(url: str, *, not_found_code: str) -> Any:
+    """Perform one credential-free, no-redirect, size-bounded GitHub GET."""
 
-    repository = goal_json["repository"]
-    pr_number = goal_json["pr_number"]
-    expected_head = goal_json["expected_head_sha"]
-    if repository != GITHUB_REPOSITORY:
-        raise AutopilotContractError("GITHUB_REPOSITORY_INVALID")
-    url = f"https://{GITHUB_API_HOST}/repos/{repository}/pulls/{pr_number}"
     _validate_github_api_url(url)
     request = urllib.request.Request(
         url,
         method="GET",
         headers={
             "Accept": "application/vnd.github+json",
-            "User-Agent": "bridge-school-autopilot-shadow/1.2",
+            "User-Agent": "bridge-school-autopilot-shadow/1.3",
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
@@ -244,7 +269,7 @@ def fetch_github_pr_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
             raw = response.read(GITHUB_RESPONSE_LIMIT_BYTES + 1)
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
-            raise AutopilotContractError("GITHUB_PR_NOT_FOUND") from exc
+            raise AutopilotContractError(not_found_code) from exc
         if exc.code in {403, 408, 429} or 500 <= exc.code <= 599:
             raise AutopilotRetryableError("GITHUB_API_TRANSIENT_ERROR") from exc
         raise AutopilotContractError("GITHUB_API_HTTP_ERROR") from exc
@@ -254,9 +279,32 @@ def fetch_github_pr_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
     if len(raw) > GITHUB_RESPONSE_LIMIT_BYTES:
         raise AutopilotContractError("GITHUB_API_RESPONSE_TOO_LARGE")
     try:
-        payload = json.loads(raw)
+        return json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise AutopilotContractError("GITHUB_API_JSON_INVALID") from exc
+
+
+def _diagnostic_excerpt(value: Any, *, limit: int) -> tuple[str | None, bool]:
+    if value is None:
+        return None, False
+    if not isinstance(value, str):
+        raise AutopilotContractError("GITHUB_CI_DIAGNOSTIC_INVALID")
+    normalized = " ".join(value.split())
+    if not normalized:
+        return None, False
+    return normalized[:limit], len(normalized) > limit
+
+
+def fetch_github_pr_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
+    """Fetch one bounded public PR snapshot without credentials or mutation."""
+
+    repository = goal_json["repository"]
+    pr_number = goal_json["pr_number"]
+    expected_head = goal_json["expected_head_sha"]
+    if repository != GITHUB_REPOSITORY:
+        raise AutopilotContractError("GITHUB_REPOSITORY_INVALID")
+    url = f"https://{GITHUB_API_HOST}/repos/{repository}/pulls/{pr_number}"
+    payload = _github_get_json(url, not_found_code="GITHUB_PR_NOT_FOUND")
     if not isinstance(payload, dict):
         raise AutopilotContractError("GITHUB_API_JSON_INVALID")
 
@@ -286,6 +334,171 @@ def fetch_github_pr_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
         "head_sha": head_sha,
         "mergeable": mergeable,
         "updated_at": updated_at,
+        "api_host": GITHUB_API_HOST,
+        "http_method": "GET",
+        "production_mutation": False,
+        "model_calls": 0,
+        "cost_actual_microusd": 0,
+    }
+
+
+def fetch_github_ci_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
+    """Inspect exact-head public GitHub checks without credentials or mutation."""
+
+    repository = goal_json["repository"]
+    pr_number = goal_json["pr_number"]
+    expected_head = goal_json["expected_head_sha"]
+    before = fetch_github_pr_snapshot(goal_json)
+
+    checks_url = (
+        f"https://{GITHUB_API_HOST}/repos/{repository}/commits/{expected_head}"
+        f"/check-runs?filter=latest&per_page={GITHUB_CHECK_RUN_LIMIT}"
+    )
+    payload = _github_get_json(checks_url, not_found_code="GITHUB_CI_HEAD_NOT_FOUND")
+    if not isinstance(payload, dict):
+        raise AutopilotContractError("GITHUB_CI_RESPONSE_INVALID")
+    total_count = payload.get("total_count")
+    check_runs = payload.get("check_runs")
+    if (
+        isinstance(total_count, bool)
+        or not isinstance(total_count, int)
+        or total_count < 0
+        or total_count > GITHUB_CHECK_RUN_LIMIT
+        or not isinstance(check_runs, list)
+        or len(check_runs) != total_count
+    ):
+        raise AutopilotContractError("GITHUB_CI_CHECK_SET_INCOMPLETE")
+
+    parsed_checks: list[dict[str, Any]] = []
+    conclusion_counts = {key: 0 for key in sorted(GITHUB_CHECK_CONCLUSIONS)}
+    conclusion_counts["none"] = 0
+    completed_count = 0
+    pending_count = 0
+
+    for raw_check in check_runs:
+        if not isinstance(raw_check, dict):
+            raise AutopilotContractError("GITHUB_CI_CHECK_INVALID")
+        check_id = raw_check.get("id")
+        name = raw_check.get("name")
+        status = raw_check.get("status")
+        conclusion = raw_check.get("conclusion")
+        app = raw_check.get("app")
+        output = raw_check.get("output")
+        if (
+            isinstance(check_id, bool)
+            or not isinstance(check_id, int)
+            or check_id < 1
+            or not isinstance(name, str)
+            or not 1 <= len(name) <= GITHUB_CHECK_NAME_LIMIT
+            or raw_check.get("head_sha") != expected_head
+            or status not in GITHUB_CHECK_STATUSES
+            or (conclusion is not None and conclusion not in GITHUB_CHECK_CONCLUSIONS)
+            or not isinstance(app, dict)
+            or not isinstance(app.get("slug"), str)
+            or not 1 <= len(app["slug"]) <= 100
+            or not isinstance(output, dict)
+        ):
+            raise AutopilotContractError("GITHUB_CI_CHECK_INVALID")
+        title, title_truncated = _diagnostic_excerpt(
+            output.get("title"), limit=120
+        )
+        output_excerpt, output_truncated = _diagnostic_excerpt(
+            output.get("summary"), limit=GITHUB_DIAGNOSTIC_TEXT_LIMIT
+        )
+        if status == "completed" and conclusion is not None:
+            completed_count += 1
+        else:
+            pending_count += 1
+        conclusion_counts[conclusion or "none"] += 1
+        parsed_checks.append(
+            {
+                "app_slug": app["slug"],
+                "check_run_id": check_id,
+                "conclusion": conclusion,
+                "name": name,
+                "output_title": title,
+                "output_summary_excerpt": output_excerpt,
+                "output_truncated": title_truncated or output_truncated,
+            }
+        )
+
+    parsed_checks.sort(key=lambda item: (item["name"], item["check_run_id"]))
+    hard_failures = [
+        item for item in parsed_checks if item["conclusion"] in GITHUB_HARD_FAILURES
+    ]
+    selected_failures = hard_failures[:GITHUB_FAILED_CHECK_LIMIT]
+    failed_checks: list[dict[str, Any]] = []
+    for item in selected_failures:
+        annotation_url = (
+            f"https://{GITHUB_API_HOST}/repos/{repository}/check-runs/"
+            f"{item['check_run_id']}/annotations?per_page=2"
+        )
+        annotations = _github_get_json(
+            annotation_url, not_found_code="GITHUB_CI_ANNOTATIONS_NOT_FOUND"
+        )
+        if not isinstance(annotations, list) or len(annotations) > 2:
+            raise AutopilotContractError("GITHUB_CI_ANNOTATIONS_INVALID")
+        annotation_level: str | None = None
+        annotation_path: str | None = None
+        annotation_excerpt: str | None = None
+        if annotations:
+            annotation = annotations[0]
+            if not isinstance(annotation, dict):
+                raise AutopilotContractError("GITHUB_CI_ANNOTATIONS_INVALID")
+            annotation_level = annotation.get("annotation_level")
+            annotation_path = annotation.get("path")
+            if (
+                annotation_level not in {"notice", "warning", "failure"}
+                or not isinstance(annotation_path, str)
+                or not 1 <= len(annotation_path) <= GITHUB_PATH_LIMIT
+            ):
+                raise AutopilotContractError("GITHUB_CI_ANNOTATIONS_INVALID")
+            annotation_excerpt, _ = _diagnostic_excerpt(
+                annotation.get("message"), limit=GITHUB_DIAGNOSTIC_TEXT_LIMIT
+            )
+            if annotation_excerpt is None:
+                raise AutopilotContractError("GITHUB_CI_ANNOTATIONS_INVALID")
+        failed_checks.append(
+            {
+                **item,
+                "annotation_level": annotation_level,
+                "annotation_path": annotation_path,
+                "annotation_message_excerpt": annotation_excerpt,
+                "annotations_truncated": len(annotations) > 1,
+            }
+        )
+
+    after = fetch_github_pr_snapshot(goal_json)
+    if before["head_sha"] != after["head_sha"]:
+        raise AutopilotContractError("GITHUB_PR_HEAD_CHANGED")
+
+    failure_codes = sorted(
+        {f"CI_{item['conclusion'].upper()}" for item in hard_failures}
+    )
+    if hard_failures:
+        overall_state = "FAIL"
+    elif pending_count:
+        overall_state = "PENDING"
+    elif total_count:
+        overall_state = "PASS"
+    else:
+        overall_state = "NO_CHECKS"
+
+    return {
+        "repository": repository,
+        "pr_number": pr_number,
+        "state": "open",
+        "draft": True,
+        "head_sha": expected_head,
+        "updated_at": after["updated_at"],
+        "check_total": total_count,
+        "completed_count": completed_count,
+        "pending_count": pending_count,
+        "conclusion_counts": conclusion_counts,
+        "overall_state": overall_state,
+        "failure_codes": failure_codes,
+        "failed_checks": failed_checks,
+        "failed_checks_truncated": len(hard_failures) > GITHUB_FAILED_CHECK_LIMIT,
         "api_host": GITHUB_API_HOST,
         "http_method": "GET",
         "production_mutation": False,
@@ -359,6 +572,19 @@ def execute_task(config: WorkerConfig, task: ClaimedTask) -> None:
             config,
             task,
             evidence_class="GITHUB_PR_READ_ONLY_SNAPSHOT",
+            summary=summary,
+        )
+        return
+
+    if task.goal_type == "GITHUB_CI_READ_ONLY_V1":
+        summary = fetch_github_ci_snapshot(task.goal_json)
+        summary["task_id"] = task.task_id
+        summary["task_kind"] = task.goal_type
+        summary["runtime"] = "ORACLE_RESIDENT"
+        _complete(
+            config,
+            task,
+            evidence_class="GITHUB_CI_READ_ONLY_SNAPSHOT",
             summary=summary,
         )
         return

@@ -16,6 +16,7 @@ from oracle_autopilot.contract import (
 from oracle_autopilot.worker import (
     WorkerConfig,
     drain_ready,
+    fetch_github_ci_snapshot,
     fetch_github_pr_snapshot,
     load_config,
     validate_neon_direct_dsn,
@@ -159,6 +160,29 @@ def test_github_pr_task_is_exactly_bounded():
             )
 
 
+def test_github_ci_task_is_exactly_bounded():
+    valid = _task(
+        goal_type="GITHUB_CI_READ_ONLY_V1",
+        goal_json={
+            "repository": "olegmed1-art/bridge-video-free",
+            "pr_number": 991,
+            "expected_head_sha": "a" * 40,
+            "require_draft": True,
+        },
+        current_step_key="github.ci.snapshot",
+    )
+    validate_task_contract(valid)
+
+    with pytest.raises(AutopilotContractError, match="GITHUB_STATE_INVALID"):
+        validate_task_contract(
+            _task(
+                goal_type="GITHUB_CI_READ_ONLY_V1",
+                goal_json=valid.goal_json,
+                current_step_key="github.pr.snapshot",
+            )
+        )
+
+
 def test_github_pr_snapshot_uses_bounded_public_get(monkeypatch):
     expected_head = "b" * 40
     payload = {
@@ -295,6 +319,202 @@ def test_github_pr_snapshot_rejects_redirect_before_following(monkeypatch):
             }
         )
     assert observed["redirect_attempts"] == 1
+
+
+def test_github_ci_snapshot_is_exact_bounded_and_read_only(monkeypatch):
+    expected_head = "b" * 40
+    pr_url = "https://api.github.com/repos/olegmed1-art/bridge-video-free/pulls/991"
+    checks_url = (
+        "https://api.github.com/repos/olegmed1-art/bridge-video-free/commits/"
+        f"{expected_head}/check-runs?filter=latest&per_page=100"
+    )
+    annotations_url = (
+        "https://api.github.com/repos/olegmed1-art/bridge-video-free/"
+        "check-runs/22/annotations?per_page=2"
+    )
+    pr_payload = {
+        "number": 991,
+        "html_url": "https://github.com/olegmed1-art/bridge-video-free/pull/991",
+        "state": "open",
+        "draft": True,
+        "head": {"sha": expected_head},
+        "mergeable": True,
+        "updated_at": "2026-08-30T20:00:00Z",
+    }
+    checks_payload = {
+        "total_count": 2,
+        "check_runs": [
+            {
+                "id": 11,
+                "name": "contract",
+                "head_sha": expected_head,
+                "status": "completed",
+                "conclusion": "success",
+                "app": {"slug": "github-actions"},
+                "output": {"title": "Passed", "summary": "All contracts passed."},
+            },
+            {
+                "id": 22,
+                "name": "postgresql-18",
+                "head_sha": expected_head,
+                "status": "completed",
+                "conclusion": "failure",
+                "app": {"slug": "github-actions"},
+                "output": {
+                    "title": "Migration failed",
+                    "summary": "AUTOPILOT_GITHUB_CI_EVIDENCE_INVALID",
+                },
+            },
+        ],
+    }
+    annotations_payload = [
+        {
+            "annotation_level": "failure",
+            "path": "database/migrations/0302_autopilot_github_ci_read_only.sql",
+            "message": "PostgreSQL contract rejected the evidence shape.",
+        }
+    ]
+    payloads = {
+        pr_url: [pr_payload, pr_payload],
+        checks_url: [checks_payload],
+        annotations_url: [annotations_payload],
+    }
+    observed = []
+
+    class Response:
+        status = 200
+
+        def __init__(self, url, payload):
+            self.url = url
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def geturl(self):
+            return self.url
+
+        def read(self, limit):
+            observed[-1]["read_limit"] = limit
+            return json.dumps(self.payload).encode()
+
+    class Opener:
+        @staticmethod
+        def open(request, timeout):
+            url = request.full_url
+            observed.append(
+                {
+                    "url": url,
+                    "method": request.get_method(),
+                    "authorization": request.get_header("Authorization"),
+                    "timeout": timeout,
+                }
+            )
+            return Response(url, payloads[url].pop(0))
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: Opener())
+    summary = fetch_github_ci_snapshot(
+        {
+            "repository": "olegmed1-art/bridge-video-free",
+            "pr_number": 991,
+            "expected_head_sha": expected_head,
+            "require_draft": True,
+        }
+    )
+
+    assert summary["overall_state"] == "FAIL"
+    assert summary["check_total"] == 2
+    assert summary["completed_count"] == 2
+    assert summary["pending_count"] == 0
+    assert summary["conclusion_counts"]["failure"] == 1
+    assert summary["conclusion_counts"]["success"] == 1
+    assert summary["failure_codes"] == ["CI_FAILURE"]
+    assert summary["failed_checks"] == [
+        {
+            "app_slug": "github-actions",
+            "check_run_id": 22,
+            "conclusion": "failure",
+            "name": "postgresql-18",
+            "output_title": "Migration failed",
+            "output_summary_excerpt": "AUTOPILOT_GITHUB_CI_EVIDENCE_INVALID",
+            "output_truncated": False,
+            "annotation_level": "failure",
+            "annotation_path": "database/migrations/0302_autopilot_github_ci_read_only.sql",
+            "annotation_message_excerpt": "PostgreSQL contract rejected the evidence shape.",
+            "annotations_truncated": False,
+        }
+    ]
+    assert summary["production_mutation"] is False
+    assert summary["model_calls"] == 0
+    assert summary["cost_actual_microusd"] == 0
+    assert [item["url"] for item in observed] == [
+        pr_url,
+        checks_url,
+        annotations_url,
+        pr_url,
+    ]
+    assert all(
+        item["method"] == "GET"
+        and item["authorization"] is None
+        and item["timeout"] == 15
+        and item["read_limit"] == 1_048_577
+        for item in observed
+    )
+
+
+def test_github_ci_snapshot_rejects_incomplete_check_set(monkeypatch):
+    expected_head = "b" * 40
+    pr_payload = {
+        "number": 991,
+        "html_url": "https://github.com/olegmed1-art/bridge-video-free/pull/991",
+        "state": "open",
+        "draft": True,
+        "head": {"sha": expected_head},
+        "mergeable": None,
+        "updated_at": "2026-08-30T20:00:00Z",
+    }
+    responses = iter(
+        [
+            pr_payload,
+            {"total_count": 101, "check_runs": []},
+        ]
+    )
+
+    class Response:
+        status = 200
+
+        def __init__(self, request):
+            self.request = request
+            self.payload = next(responses)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def geturl(self):
+            return self.request.full_url
+
+        def read(self, _limit):
+            return json.dumps(self.payload).encode()
+
+    class Opener:
+        open = staticmethod(lambda request, timeout: Response(request))
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: Opener())
+    with pytest.raises(AutopilotContractError, match="CI_CHECK_SET_INCOMPLETE"):
+        fetch_github_ci_snapshot(
+            {
+                "repository": "olegmed1-art/bridge-video-free",
+                "pr_number": 991,
+                "expected_head_sha": expected_head,
+                "require_draft": True,
+            }
+        )
 
 
 def test_fencing_and_cost_state_are_checked_before_execution():

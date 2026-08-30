@@ -12,6 +12,7 @@ TaskKind = Literal[
     "EXTERNAL_WAIT_SHADOW_V1",
     "OWNER_BOUNDARY_V1",
     "GITHUB_PR_READ_ONLY_V1",
+    "GITHUB_CI_READ_ONLY_V1",
 ]
 
 ALLOWED_TASK_KINDS = frozenset(
@@ -20,6 +21,7 @@ ALLOWED_TASK_KINDS = frozenset(
         "EXTERNAL_WAIT_SHADOW_V1",
         "OWNER_BOUNDARY_V1",
         "GITHUB_PR_READ_ONLY_V1",
+        "GITHUB_CI_READ_ONLY_V1",
     }
 )
 
@@ -85,7 +87,7 @@ def validate_task_contract(task: ClaimedTask) -> None:
             raise AutopilotContractError("AUTOPILOT_OWNER_STATE_INVALID")
         return
 
-    if task.goal_type == "GITHUB_PR_READ_ONLY_V1":
+    if task.goal_type in {"GITHUB_PR_READ_ONLY_V1", "GITHUB_CI_READ_ONLY_V1"}:
         expected_keys = {
             "repository",
             "pr_number",
@@ -108,7 +110,12 @@ def validate_task_contract(task: ClaimedTask) -> None:
             raise AutopilotContractError("AUTOPILOT_GITHUB_HEAD_INVALID")
         if task.goal_json["require_draft"] is not True:
             raise AutopilotContractError("AUTOPILOT_GITHUB_DRAFT_GATE_INVALID")
-        if task.current_step_key != "github.pr.snapshot" or task.step_cursor != 0:
+        expected_step = (
+            "github.pr.snapshot"
+            if task.goal_type == "GITHUB_PR_READ_ONLY_V1"
+            else "github.ci.snapshot"
+        )
+        if task.current_step_key != expected_step or task.step_cursor != 0:
             raise AutopilotContractError("AUTOPILOT_GITHUB_STATE_INVALID")
         if task.cost_cap_microusd != 0 or task.cost_reserved_microusd != 0:
             raise AutopilotContractError("AUTOPILOT_GITHUB_COST_INVALID")

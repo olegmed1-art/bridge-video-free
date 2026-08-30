@@ -173,7 +173,7 @@ GitHub остаётся:
 - хранилищем human-readable evidence;
 - аварийным fallback-контуром командных workflows.
 
-Phase 1 использует публичные read-only API и существующие workflow results. Для mutating GitHub API в Phase 2 нужен отдельный GitHub App с минимальными repository permissions. Токен ChatGPT connector не переиспользуется внешним сервисом.
+Phase 1 использует публичные read-only API и существующие workflow results. Разрешённые шаблоны привязаны к точному draft-PR HEAD: снимок PR и bounded CI triage через Check Runs с максимум пятью короткими failure-фрагментами. Worker повторно проверяет HEAD после чтения, не получает GitHub credential, не следует редиректам и не сохраняет сырые журналы. Для mutating GitHub API в Phase 2 нужен отдельный GitHub App с минимальными repository permissions. Токен ChatGPT connector не переиспользуется внешним сервисом.
 
 ### 5.4. Oracle
 
@@ -423,6 +423,7 @@ Exact Python SDK start/resume API и version pin считаются предме
 Примеры:
 
 - `github.read` — shadow available;
+- `github.ci.snapshot` — exact-head, public, credential-free, evidence-bounded;
 - `github.write` — Phase 2 после GitHub App;
 - `oracle.audit` — read-only;
 - `oracle.repair` — только bounded registered operation;
