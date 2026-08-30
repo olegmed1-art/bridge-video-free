@@ -30,6 +30,7 @@ UPLOAD = "https://www.googleapis.com/upload/drive/v3/files"
 FOLDER_MIME = "application/vnd.google-apps.folder"
 BASE_TOP_LEVEL_ALLOWLIST = frozenset({"manifest.json", "transcript.jsonl", "transcript.txt", "transcript_qc.json"})
 TOP_LEVEL_ALLOWLIST = BASE_TOP_LEVEL_ALLOWLIST | {"server_review.json"}
+OPTIONAL_TOP_LEVEL_ALLOWLIST = frozenset({"source_parts_manifest.json"})
 FRAME_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 PUBLISHABLE_STATUSES = frozenset({"COMPLETED"})
 RAW_EXTENSIONS = frozenset({".mp4", ".mkv", ".mov", ".avi", ".webm", ".wav", ".mp3", ".m4a", ".flac"})
@@ -107,7 +108,7 @@ def collect_compact_artifacts(
         raise RuntimeError(f"required compact artifacts missing: {','.join(missing)}")
 
     selected: list[Path] = []
-    for name in sorted(TOP_LEVEL_ALLOWLIST):
+    for name in sorted(TOP_LEVEL_ALLOWLIST | OPTIONAL_TOP_LEVEL_ALLOWLIST):
         path = job_dir / name
         if path.exists():
             if not _safe_regular(path, max_bytes=max_file_bytes):

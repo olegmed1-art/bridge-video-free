@@ -36,6 +36,10 @@ from .speaker_structure import (
     SCHEMA as SPEAKER_SCHEMA_V1,
     TEST_SCHEMA as SPEAKER_SCHEMA_V2,
 )
+from .source_parts_manifest import (
+    SourcePartsManifestError,
+    validate_source_parts_manifest,
+)
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
@@ -46,6 +50,7 @@ FRAME_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".webp"})
 RAW_EXTENSIONS = frozenset({".mp4", ".mkv", ".mov", ".avi", ".webm", ".wav", ".mp3", ".m4a", ".flac"})
 REQUIRED_TRANSCRIPT_FILES = ("transcript.jsonl", "transcript.txt", "transcript_qc.json")
 SERVER_REVIEW_FILE = "server_review.json"
+SOURCE_PARTS_MANIFEST_FILE = "source_parts_manifest.json"
 SERVER_REVIEW_SCHEMA = "universal-video-server-review-v1"
 MAX_SERVER_REVIEW_ITEMS = 100
 MAX_SERVER_REVIEW_EXCERPT_CHARS = 500
@@ -644,6 +649,34 @@ def verify_result(
             raise ResultConformanceError(f"unexpected transcript {field} locator")
 
     artifacts = [_artifact(manifest_path, "manifest.json", max_file_bytes=max_file_bytes)]
+    parts_locator = manifest.get("source_parts_manifest")
+    derived_parts = manifest.get("derived_media_parts")
+    if parts_locator is not None or derived_parts is not None:
+        if derived_parts is not True or parts_locator != SOURCE_PARTS_MANIFEST_FILE:
+            raise ResultConformanceError("invalid derived media parts declaration")
+        parts_path = job_dir / SOURCE_PARTS_MANIFEST_FILE
+        parts_payload = _read_json(parts_path, max_bytes=max_file_bytes)
+        try:
+            parts_manifest = validate_source_parts_manifest(parts_payload)
+        except SourcePartsManifestError as exc:
+            raise ResultConformanceError("invalid source-parts provenance manifest") from exc
+        source = manifest.get("source") or {}
+        media = manifest.get("media") or {}
+        expected_duration_ms = int(round(
+            _bounded_number(
+                media.get("duration_seconds"),
+                "media.duration_seconds",
+                minimum=0.000001,
+                maximum=1_000_000.0,
+            ) * 1000
+        ))
+        if parts_manifest["source"]["drive_id"] != source.get("file_id"):
+            raise ResultConformanceError("source-parts Drive binding mismatch")
+        if parts_manifest["source"]["sha256"] != _required_hex(media.get("sha256"), "media.sha256"):
+            raise ResultConformanceError("source-parts SHA-256 binding mismatch")
+        if parts_manifest["source"]["duration_ms"] != expected_duration_ms:
+            raise ResultConformanceError("source-parts duration binding mismatch")
+        artifacts.append(_artifact(parts_path, SOURCE_PARTS_MANIFEST_FILE, max_file_bytes=max_file_bytes))
     for name in REQUIRED_TRANSCRIPT_FILES:
         artifacts.append(_artifact(job_dir / name, name, max_file_bytes=max_file_bytes))
     algorithm = manifest.get("algorithm")
