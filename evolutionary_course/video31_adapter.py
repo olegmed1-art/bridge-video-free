@@ -121,6 +121,8 @@ def adapt_video31_quality(
 
     base_date = _confirmed_date(lesson_identity)
     file_id, source_name = _source_identity(source)
+    if source.get("evidence_state") != "VERIFIED":
+        raise Video31AdapterError("source evidence is not verified")
     source_transcript_ids = set(_refs(source.get("transcript_segment_ids")))
     source_frame_hashes = set(_refs(source.get("frame_sha256")))
     if not source_transcript_ids:
@@ -172,8 +174,13 @@ def adapt_video31_quality(
         if start < 0 or end <= start or end - start > 7200:
             reasons.append("INVALID_INTERACTION_INTERVAL")
 
-        visual_refs = _refs(interaction.get("visual_evidence_refs"))
+        visual_raw = interaction.get("visual_evidence_refs")
+        visual_refs = _refs(visual_raw)
+        if visual_raw not in (None, []) and not visual_refs:
+            reasons.append("INVALID_FRAME_EVIDENCE")
         accepted_frames = [item for item in visual_refs if _SHA256.fullmatch(item)]
+        if len(accepted_frames) != len(visual_refs):
+            reasons.append("INVALID_FRAME_EVIDENCE")
         if any(item not in source_frame_hashes for item in accepted_frames):
             reasons.append("FRAME_EVIDENCE_OUTSIDE_SOURCE")
 
@@ -217,10 +224,14 @@ def adapt_video31_quality(
             },
             "interaction": {
                 "teacher_actions": [_text(interaction.get("teacher_intervention"))],
-                "student_actions": [
-                    _text(interaction.get("student_action")),
-                    _text(interaction.get("student_followup")),
-                ],
+                "student_actions": list(
+                    dict.fromkeys(
+                        [
+                            _text(interaction.get("student_action")),
+                            _text(interaction.get("student_followup")),
+                        ]
+                    )
+                ),
                 "outcome": _outcome(interaction),
                 "support_level": _support_level(interaction),
                 "completed_cycle": True,
