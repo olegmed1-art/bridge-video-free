@@ -54,7 +54,7 @@ def test_promotion_requires_a_fresh_status_from_the_new_resident() -> None:
 
 
 def test_promotion_exposes_only_structured_container_runtime_failure_code() -> None:
-    assert 'journalctl -u "$NEW_SERVICE" -n 80 --no-pager -o cat' in SCRIPT
+    assert 'journalctl -u "$NEW_SERVICE" --since "$since" --no-pager -o cat' in SCRIPT
     assert 'set(value)=={"error_code","status"}' in SCRIPT
     assert 're.fullmatch(r"UV_CONTAINER_[A-Z0-9_]+"' in SCRIPT
     assert 'json.dumps(value,separators=(",",":"),sort_keys=True)' in SCRIPT
@@ -63,3 +63,19 @@ def test_promotion_exposes_only_structured_container_runtime_failure_code() -> N
     assert "ExecMain(Code|Status)=[0-9]+" in WORKFLOW
     assert "ExecStart(Pre)?Status[0-9]+=[0-9]+" in WORKFLOW
     assert "NRestarts=[0-9]+" in WORKFLOW
+
+
+def test_promotion_runtime_diagnostic_is_fresh_bounded_and_secret_safe() -> None:
+    assert 'local since="@${started_unix:-0}"' in SCRIPT
+    assert 'journalctl -u "$NEW_SERVICE" --since "$since"' in SCRIPT
+    assert "journalctl -u \"$NEW_SERVICE\" -n 80" not in SCRIPT
+    for code in (
+        "UV_CONTAINER_STARTUP_PERMISSION_DENIED",
+        "UV_CONTAINER_STARTUP_DISK_FULL",
+        "UV_CONTAINER_STARTUP_MEMORY_UNAVAILABLE",
+        "UV_CONTAINER_STARTUP_NAME_CONFLICT",
+        "UV_CONTAINER_DOCKER_RUN_FAILED",
+        "UV_CONTAINER_WORKER_STARTUP_EXCEPTION",
+    ):
+        assert code in SCRIPT
+    assert "print(line)" not in SCRIPT
