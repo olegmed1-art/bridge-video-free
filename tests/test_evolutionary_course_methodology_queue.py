@@ -6,6 +6,7 @@ import pytest
 
 from evolutionary_course.methodology_queue import (
     MethodologyQueueError,
+    build_candidate_review_request,
     build_methodology_review_queue,
     record_candidate_review_decision,
     record_methodology_decision,
@@ -114,6 +115,24 @@ def _real_candidate_and_catalog():
         "data/research/evolutionary_course_skill_catalog_v1.json"
     ).read_text(encoding="utf-8"))
     return candidate, catalog
+
+
+def test_candidate_review_request_is_unsigned_deterministic_and_non_mutating():
+    candidate, catalog = _real_candidate_and_catalog()
+    request = build_candidate_review_request(candidate, catalog=catalog)
+    assert request == build_candidate_review_request(candidate, catalog=catalog)
+    assert request["status"] == "AWAITING_HUMAN_DECISION"
+    assert request["decision_input"] == {
+        "decision": None, "reviewer_id": None, "reviewer_authority": None,
+        "reviewed_at": None, "rationale": None,
+    }
+    assert request["allowed_decisions"] == ["APPROVE", "REVISE", "REJECT"]
+    assert request["evidence_summary"]["numerator"] == 44616
+    assert all(value is False for value in request["authority"].values())
+    committed = json.loads(Path(
+        "data/research/evolutionary_course_diana2_methodology_review_request_v1.json"
+    ).read_text(encoding="utf-8"))
+    assert committed == request
 
 
 @pytest.mark.parametrize("decision", ["APPROVE", "REVISE", "REJECT"])

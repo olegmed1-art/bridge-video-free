@@ -13,6 +13,7 @@ from .skill_catalog import SkillCatalogError, validate_catalog
 QUEUE_SCHEMA = "evolutionary-course-methodology-review-queue-v1"
 DECISION_SCHEMA = "evolutionary-course-methodology-review-decision-v1"
 CANDIDATE_DECISION_SCHEMA = "evolutionary-course-candidate-review-decision-v1"
+CANDIDATE_REVIEW_REQUEST_SCHEMA = "evolutionary-course-candidate-review-request-v1"
 _ALLOWED_DECISIONS = (
     "MAP_EXISTING_SKILL", "PROPOSE_NEW_CANDIDATE", "DEFER", "REJECT"
 )
@@ -217,37 +218,17 @@ def _validate_probability_evidence(candidate: Mapping[str, Any]) -> None:
             raise MethodologyQueueError("probability evidence mismatch")
 
 
-def record_candidate_review_decision(
-    candidate: Mapping[str, Any],
-    *,
-    catalog: Mapping[str, Any],
-    decision: str,
-    reviewer_id: str,
-    reviewer_authority: str,
-    reviewed_at: str,
-    rationale: str,
-) -> dict[str, Any]:
-    """Validate a human decision and emit a non-mutating, auditable receipt."""
+def _validate_candidate_binding(
+    candidate: Mapping[str, Any], catalog: Mapping[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
     if not isinstance(candidate, Mapping) or candidate.get("schema") != (
         "evolutionary-course-methodology-candidate-v1"
     ):
         raise MethodologyQueueError("methodology candidate v1 required")
-    if decision not in _CANDIDATE_REVIEW_DECISIONS:
-        raise MethodologyQueueError("invalid candidate review decision")
-    reviewer_id = _text(reviewer_id)
-    rationale = _text(rationale)
-    if not reviewer_id:
-        raise MethodologyQueueError("reviewer identity required")
-    if reviewer_authority not in _REVIEWER_AUTHORITIES:
-        raise MethodologyQueueError("authorized reviewer authority required")
-    if not rationale:
-        raise MethodologyQueueError("review rationale required")
-    reviewed_at = _validate_reviewed_at(reviewed_at)
     candidate_id = _text(candidate.get("candidate_id"))
     skill_id = _text(candidate.get("skill_id"))
     if not candidate_id.startswith("methodology.") or not _CANDIDATE_ID.fullmatch(skill_id):
         raise MethodologyQueueError("candidate identity mismatch")
-    authority = candidate.get("authority")
     expected_authority = {
         "authority_class": "CANDIDATE_RESEARCH",
         "review_state": "REVIEW_REQUIRED",
@@ -256,7 +237,7 @@ def record_candidate_review_decision(
         "student_profile_write_allowed": False,
         "publication_allowed": False,
     }
-    if authority != expected_authority:
+    if candidate.get("authority") != expected_authority:
         raise MethodologyQueueError("candidate authority boundary mismatch")
     if candidate.get("next_gate") != "HUMAN_METHODOLOGY_APPROVAL_REQUIRED":
         raise MethodologyQueueError("human methodology gate required")
@@ -271,6 +252,81 @@ def record_candidate_review_decision(
         for state in ("RECOGNIZED", "SUPPORTED", "INDEPENDENT", "TRANSFERRED")
     ):
         raise MethodologyQueueError("candidate mastery criteria do not match catalog")
+    return normalized, matches[0]
+
+
+def build_candidate_review_request(
+    candidate: Mapping[str, Any], *, catalog: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Build a deterministic, unsigned request for an authorized human reviewer."""
+    normalized, skill = _validate_candidate_binding(candidate, catalog)
+    check = candidate["independent_probability_check"]
+    split_32 = next(entry for entry in check["splits"] if entry["split"] == "3-2")
+    return {
+        "schema": CANDIDATE_REVIEW_REQUEST_SCHEMA,
+        "status": "AWAITING_HUMAN_DECISION",
+        "candidate_id": candidate["candidate_id"],
+        "candidate_sha256": _sha256(candidate),
+        "skill_id": skill["skill_id"],
+        "catalog_version": normalized["catalog_version"],
+        "review_state": skill["review_state"],
+        "evidence_summary": {
+            "independent_check_verdict": check["verdict"],
+            "split": split_32["split"],
+            "numerator": split_32["numerator"],
+            "denominator": check["denominator"]["value"],
+            "percent": split_32["percent"],
+            "verified_transcript_segment_count": candidate["source_observation"][
+                "verified_transcript_segment_count"
+            ],
+            "verified_visual_evidence_count": candidate["source_observation"][
+                "verified_visual_evidence_count"
+            ],
+        },
+        "allowed_decisions": list(_CANDIDATE_REVIEW_DECISIONS),
+        "allowed_reviewer_authorities": list(_REVIEWER_AUTHORITIES),
+        "decision_input": {
+            "decision": None,
+            "reviewer_id": None,
+            "reviewer_authority": None,
+            "reviewed_at": None,
+            "rationale": None,
+        },
+        "authority": {
+            "catalog_mutation_allowed": False,
+            "school_canon_activation_allowed": False,
+            "curriculum_activation_allowed": False,
+            "student_profile_write_allowed": False,
+            "publication_allowed": False,
+        },
+    }
+
+
+def record_candidate_review_decision(
+    candidate: Mapping[str, Any],
+    *,
+    catalog: Mapping[str, Any],
+    decision: str,
+    reviewer_id: str,
+    reviewer_authority: str,
+    reviewed_at: str,
+    rationale: str,
+) -> dict[str, Any]:
+    """Validate a human decision and emit a non-mutating, auditable receipt."""
+    if decision not in _CANDIDATE_REVIEW_DECISIONS:
+        raise MethodologyQueueError("invalid candidate review decision")
+    reviewer_id = _text(reviewer_id)
+    rationale = _text(rationale)
+    if not reviewer_id:
+        raise MethodologyQueueError("reviewer identity required")
+    if reviewer_authority not in _REVIEWER_AUTHORITIES:
+        raise MethodologyQueueError("authorized reviewer authority required")
+    if not rationale:
+        raise MethodologyQueueError("review rationale required")
+    reviewed_at = _validate_reviewed_at(reviewed_at)
+    normalized, skill = _validate_candidate_binding(candidate, catalog)
+    candidate_id = _text(candidate.get("candidate_id"))
+    skill_id = skill["skill_id"]
     return {
         "schema": CANDIDATE_DECISION_SCHEMA,
         "candidate_id": candidate_id,
@@ -293,7 +349,8 @@ def record_candidate_review_decision(
 
 
 __all__ = [
-    "CANDIDATE_DECISION_SCHEMA", "DECISION_SCHEMA", "MethodologyQueueError",
-    "QUEUE_SCHEMA", "build_methodology_review_queue",
+    "CANDIDATE_DECISION_SCHEMA", "CANDIDATE_REVIEW_REQUEST_SCHEMA",
+    "DECISION_SCHEMA", "MethodologyQueueError", "QUEUE_SCHEMA",
+    "build_candidate_review_request", "build_methodology_review_queue",
     "record_candidate_review_decision", "record_methodology_decision",
 ]

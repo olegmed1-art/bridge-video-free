@@ -1,0 +1,41 @@
+{
+  "schema": "evolutionary-course-candidate-review-request-v1",
+  "status": "AWAITING_HUMAN_DECISION",
+  "candidate_id": "methodology.diana-2.estimate-five-card-split",
+  "candidate_sha256": "51bebeffc36d5132639fb6bc2f35ac36211f1da6216bd228361e0d8d484c62a4",
+  "skill_id": "candidate.skill.estimate-five-card-split",
+  "catalog_version": "SCHOOL SKILL CATALOG v1",
+  "review_state": "REVIEW_REQUIRED",
+  "evidence_summary": {
+    "independent_check_verdict": "SUPPORTED",
+    "split": "3-2",
+    "numerator": 44616,
+    "denominator": 65780,
+    "percent": 67.82608695652173,
+    "verified_transcript_segment_count": 9,
+    "verified_visual_evidence_count": 6
+  },
+  "allowed_decisions": [
+    "APPROVE",
+    "REVISE",
+    "REJECT"
+  ],
+  "allowed_reviewer_authorities": [
+    "SCHOOL_DIRECTOR",
+    "AUTHORIZED_METHODOLOGY_REVIEWER"
+  ],
+  "decision_input": {
+    "decision": null,
+    "reviewer_id": null,
+    "reviewer_authority": null,
+    "reviewed_at": null,
+    "rationale": null
+  },
+  "authority": {
+    "catalog_mutation_allowed": false,
+    "school_canon_activation_allowed": false,
+    "curriculum_activation_allowed": false,
+    "student_profile_write_allowed": false,
+    "publication_allowed": false
+  }
+}
