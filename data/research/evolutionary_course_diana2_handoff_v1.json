@@ -1,0 +1,50 @@
+{
+  "schema": "evolutionary-course-source-handoff-v1",
+  "handoff_id": "evolutionary-course.diana-2.2026-08-30",
+  "status": "SOURCE_BOUND_ADAPTER_INPUT_MISSING",
+  "lesson_identity": {
+    "lesson_id": "diana-2",
+    "lesson_date": "2021-02-28",
+    "lesson_date_status": "CONFIRMED"
+  },
+  "source": {
+    "video_file_id": "1ACfY5ksRaYPKsUfd23cvcoSQbCe6GJr8",
+    "source_name": "Диана 2..mp4",
+    "source_size_bytes": 680323194,
+    "source_job_id": "41daa4ca6e09d13e366c578b7c53ae31",
+    "identity_status": "VERIFIED_FROM_REPOSITORY_EVIDENCE"
+  },
+  "existing_result": {
+    "master_pdf_drive_id": "1LjT7t-fBmeGXn7UwDqftYbh-xKDGKC3i",
+    "master_pdf_sha256": "f429f69a53938923f4c5bbca37fc1fc815dc8eded8eb9e6b4d080d0368ea9ac9",
+    "embedded_master_analysis_sha256": "fb7c6292f7386aa04ed9d91a101adbd13470d637c2eae1b71c7a37e871f20987",
+    "video31_revision": "3.1-free-r25.15",
+    "identity_overlay_revision": "3.1-free-r29"
+  },
+  "evidence_refs": [
+    "docs/evidence/r25_15_operational_diana2_2026-08-19.md",
+    "docs/evidence/r29_operational_diana2_2026-08-19.md",
+    "meta_school/evidence/DIANA_2_PREFLIGHT_20260818.md",
+    "meta_school/evidence/DIANA_2_MIGRATION_0049_READBACK_20260818.md"
+  ],
+  "required_before_adapter": [
+    "EXPORTED_QUALITY_V2_JSON_BOUND_TO_MASTER_ANALYSIS_SHA256",
+    "TRANSCRIPT_SEGMENT_INVENTORY",
+    "FRAME_SHA256_INVENTORY_FOR_VISUAL_CLAIMS",
+    "LEARNING_INTERACTIONS_WITH_SUPPORTED_ACTOR_ATTRIBUTION",
+    "REVIEWED_SKILL_CATALOG_BINDING"
+  ],
+  "effects": {
+    "media_processed": false,
+    "adapter_report_created": false,
+    "learning_episode_created": false,
+    "catalog_mutated": false,
+    "student_profile_written": false
+  },
+  "authority": {
+    "authority_class": "CANDIDATE_RESEARCH",
+    "canonical_promotion_allowed": false,
+    "curriculum_activation_allowed": false,
+    "publication_allowed": false
+  }
+}

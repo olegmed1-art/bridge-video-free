@@ -23,10 +23,10 @@ def test_real_inventory_is_honestly_blocked_without_processing_media():
     assert report["episode_created"] is False
 
 
-def test_diana_2_is_not_promoted_without_exact_source_and_adapter():
+def test_diana_2_is_not_promoted_without_adapter_and_catalog_binding():
     report = assess_artifact_readiness(_manifest())
     diana2 = next(item for item in report["candidates"] if item["lesson_id"] == "diana-2")
-    assert "EXACT_SOURCE_IDENTITY_NOT_VERIFIED" in diana2["blockers"]
+    assert "EXACT_SOURCE_IDENTITY_NOT_VERIFIED" not in diana2["blockers"]
     assert "COURSE_ADAPTER_REPORT_MISSING" in diana2["blockers"]
     assert "REVIEWED_CATALOG_BINDING_MISSING" in diana2["blockers"]
 
