@@ -57,7 +57,7 @@ def test_container_installer_reclaims_only_unused_video_images_before_build() ->
     installer = (ROOT / "ops/oracle_universal_video_container_install.sh").read_text(encoding="utf-8")
 
     assert 'UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB:-8388608' in installer
-    assert 'docker builder prune --force' in installer
+    assert 'docker builder prune --all --force' in installer
     assert 'docker image ls --filter "reference=$IMAGE_REPO:*"' in installer
     assert 'docker ps -aq --filter "ancestor=$old_image_id"' in installer
     assert 'UV_CONTAINER_DISK_INSUFFICIENT' in installer
