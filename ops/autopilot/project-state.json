@@ -245,6 +245,21 @@
       "autoscaling_max_cu": 8,
       "suspend_timeout_seconds": 0,
       "runtime_connection_limit": 4
+    },
+    "post_smoke_health": {
+      "workflow_run_id": 33327242295,
+      "service_active": true,
+      "service_enabled": true,
+      "restarts": 0,
+      "systemd_result": "success",
+      "exec_main_status": 0,
+      "worker_started_count": 1,
+      "listener_reconnect_count_since_activation": 0,
+      "database_error_count_since_activation": 0,
+      "current_start_traceback_count": 0,
+      "historical_permission_failure_retained": true,
+      "read_only_diagnostic": true,
+      "oracle_instance_stop_requested": false
     }
   },
   "next_actions": [
