@@ -86,10 +86,13 @@ jobs:
         run: |
           set -euo pipefail
           expected_blob="$(gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_container_promote.sh?ref=$EXPECTED_COMMIT" --jq .sha)"
-          remote_head="$(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n git -C /opt/bridge-school/universal-video-src rev-parse HEAD')"
-          remote_blob="$(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n git hash-object /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh')"
-          [[ "$remote_head" == "$EXPECTED_COMMIT" && "$remote_blob" == "$expected_blob" ]]
-          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n /bin/bash -n /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh'
+          ssh_base=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          remote_head="$("${ssh_base[@]}" 'sudo -n git -C /opt/bridge-school/universal-video-src rev-parse HEAD')" || { echo UV_CONTAINER_PROMOTION_SOURCE_UNAVAILABLE; exit 1; }
+          [[ "$remote_head" == "$EXPECTED_COMMIT" ]] || { echo UV_CONTAINER_PROMOTION_SOURCE_MISMATCH; exit 1; }
+          "${ssh_base[@]}" 'sudo -n test -f /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh' || { echo UV_CONTAINER_PROMOTION_ENTRYPOINT_MISSING; exit 1; }
+          remote_blob="$("${ssh_base[@]}" 'sudo -n git hash-object -- /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh')" || { echo UV_CONTAINER_PROMOTION_BLOB_UNAVAILABLE; exit 1; }
+          [[ "$remote_blob" == "$expected_blob" ]] || { echo UV_CONTAINER_PROMOTION_BLOB_MISMATCH; exit 1; }
+          "${ssh_base[@]}" 'sudo -n /bin/bash -n /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh' || { echo UV_CONTAINER_PROMOTION_ENTRYPOINT_INVALID; exit 1; }
           echo UV_CONTAINER_PROMOTION_ENTRYPOINT_PASS
           set +e
           ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
