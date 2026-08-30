@@ -33,6 +33,7 @@ jobs:
           grep -F "request['activation_scope'] == 'SHADOW_ONLY'" "$workflow" >/dev/null
           grep -F "request['no_instance_stop'] is True" "$workflow" >/dev/null
           grep -F "EXPECTED_STAGED_REVISION='edc7e8530f0aa3efa84910cb09ee459ec25f1cf6'" "$workflow" >/dev/null
+          grep -F 'EXPECTED_UNIT_SHA256: 8b18b232d7b6f0f369e1544e2abc63a0da09f20674c902855955700bc46d335f' "$workflow" >/dev/null
           grep -F 'Environment=AUTOPILOT_RUNTIME_MODE=SHADOW' \
             deploy/oracle-autopilot/school-autopilot-shadow.service >/dev/null
           grep -F 'AUTOPILOT_ACTIVATION_SCOPE=SHADOW_ONLY' \
@@ -64,6 +65,7 @@ jobs:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
       EXPECTED_STAGED_REVISION: edc7e8530f0aa3efa84910cb09ee459ec25f1cf6
+      EXPECTED_UNIT_SHA256: 8b18b232d7b6f0f369e1544e2abc63a0da09f20674c902855955700bc46d335f
       SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
       SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
       SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
@@ -153,7 +155,8 @@ jobs:
           ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n env EXPECTED_REVISION='$SOURCE_REVISION' bash -s" <<'REMOTE' | tee "$proof"
+            "sudo -n env EXPECTED_REVISION='$SOURCE_REVISION' EXPECTED_UNIT_SHA256='$EXPECTED_UNIT_SHA256' bash -s" \
+            <<'REMOTE' | tee "$proof"
           set -Eeuo pipefail
           service=school-autopilot-shadow.service
           root=/opt/bridge-school/school-autopilot
@@ -161,10 +164,12 @@ jobs:
           unit=/etc/systemd/system/$service
 
           [[ "$EXPECTED_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_UNIT_SHA256" =~ ^[0-9a-f]{64}$ ]]
           [[ "$(readlink -f "$root/current")" == "$release" ]]
           [[ "$(cat "$root/current/SOURCE_REVISION")" == "$EXPECTED_REVISION" ]]
           [[ "$(stat -c '%U:%G:%a' "$root/autopilot-shadow.env")" == root:root:600 ]]
-          cmp -s "$unit" "$release/deploy/oracle-autopilot/school-autopilot-shadow.service"
+          [[ -f "$unit" ]]
+          [[ "$(sha256sum "$unit" | awk '{print $1}')" == "$EXPECTED_UNIT_SHA256" ]]
           grep -Fx 'User=school-autopilot' "$unit" >/dev/null
           grep -Fx 'Environment=AUTOPILOT_RUNTIME_MODE=SHADOW' "$unit" >/dev/null
           grep -Fx 'NoNewPrivileges=true' "$unit" >/dev/null
