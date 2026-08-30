@@ -56,8 +56,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m py_compile oracle_autopilot/*.py tests/test_oracle_autopilot_*.py
-          python -m pytest -q tests/test_oracle_autopilot_*.py
+          python -m py_compile oracle_autopilot/*.py autopilot_phase3b/*.py \
+            tests/test_oracle_autopilot_*.py tests/test_autopilot_phase3b_*.py
+          python -m pytest -q \
+            tests/test_oracle_autopilot_*.py tests/test_autopilot_phase3b_*.py
+          python tools/verify_autopilot_phase3b_manifest.py | tee \
+            "$RUNNER_TEMP/autopilot-phase3b-model.json"
+          grep -F '"result": "PASS"' \
+            "$RUNNER_TEMP/autopilot-phase3b-model.json" >/dev/null
 
       - name: Verify staged install and systemd hardening
         shell: bash
