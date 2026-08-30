@@ -3,7 +3,7 @@
   "project_id": "SCHOOL-AUTOPILOT-CONTROLLER-V1",
   "title": "School Autopilot Controller v1",
   "decision": "BUILD_ORACLE_AUTOPILOT_LITE_SHADOW",
-  "status": "DRAFT_PR_991_CI_PASS_NOT_ACTIVATED",
+  "status": "DRAFT_PR_991_CI_AND_INDEPENDENT_REVIEW_PASS_NOT_ACTIVATED",
   "governance_mode": "ASSURED",
   "work_class": "STRATEGIC",
   "urgency": "HIGH",
@@ -68,7 +68,6 @@
   },
   "promotion_blocks": [
     "main_branch_unprotected",
-    "independent_pr_review_pending",
     "oracle_shadow_runtime_not_staged",
     "dedicated_runtime_login_not_provisioned",
     "actual_oracle_dispatch_latency_not_measured",
@@ -112,6 +111,15 @@
     "draft_pr": "https://github.com/olegmed1-art/bridge-video-free/pull/991",
     "verified_implementation_head_sha": "d56be00b421dfd824b5960f62852fe101522cf70",
     "github_ci_at_verified_implementation_head": "8_PASS",
+    "independent_review": {
+      "provider": "Vercel Agent Code Review",
+      "reviewed_pr_head_sha": "7ce601547449cdca2ffa555ea1385e5a2fd9e617",
+      "completed_at": "2026-08-30",
+      "result": "PASS",
+      "suggestions": 0,
+      "duration_seconds": 422,
+      "cost_usd": 1.83
+    },
     "production_neon_changed": false,
     "migration_0300_clean_apply": "PASS",
     "postgresql_18_state_machine_test": "PASS",
@@ -129,7 +137,6 @@
     "production_runtime_activated": false
   },
   "next_actions": [
-    "obtain_independent_pr_review_before_merge",
     "provision_dedicated_runtime_login_outside_git_after_review",
     "stage_oracle_service_without_activation",
     "measure_real_oracle_notification_and_recovery_latency",
