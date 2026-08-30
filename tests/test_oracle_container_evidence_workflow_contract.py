@@ -85,3 +85,20 @@ def test_bounded_parser_reports_build_and_disk_failures_without_raw_log() -> Non
         "UNIVERSAL_VIDEO_CONTAINER_RESOURCE disk_available_kb=7340032 disk_required_kb=8388608",
         '{"error_code":"UV_CONTAINER_DISK_INSUFFICIENT","status":"FAILED"}',
     ]
+
+
+def test_bounded_storage_inventory_has_fixed_non_secret_areas() -> None:
+    installer = (ROOT / "ops/oracle_universal_video_container_install.sh").read_text(encoding="utf-8")
+    path = ROOT / "ops/bounded_container_log_diagnostic.py"
+    spec = importlib.util.spec_from_file_location("bounded_container_storage_inventory", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert "for storage_area in spool output media model-cache" in installer
+    assert module.bounded_diagnostics(
+        [
+            "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=media used_kb=1048576",
+            "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=private-path used_kb=1",
+        ]
+    ) == ["UNIVERSAL_VIDEO_CONTAINER_STORAGE area=media used_kb=1048576"]
