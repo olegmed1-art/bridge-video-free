@@ -49,6 +49,7 @@ def test_evidence_workflow_remains_non_activating_and_media_free() -> None:
     assert "'.github/workflows/oracle-universal-video-activation.yml'" in text
     assert "ORACLE_INSTANCE_RUNNING_PASS" in text
     assert "compute instance action --instance-id \"$INSTANCE_ID\" --action START" in text
+    assert "'ops/bounded_container_log_diagnostic.py'" in text
 
 
 def test_container_installer_reclaims_only_unused_video_images_before_build() -> None:
