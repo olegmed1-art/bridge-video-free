@@ -207,31 +207,40 @@ WITH RECURSIVE walk(value,key_path) AS (
                )
         )
         OR EXISTS (
-            -- Compact lower-case owner + wrapper + sensitive-tail paths are
-            -- equivalent to their camel-case form and must remain fail-closed.
+            -- A compact lower-case segment can contain an owner, a bounded
+            -- structural wrapper chain and the sensitive tail together (for
+            -- example: partnermetadatacards).  Camel-case is tokenised above;
+            -- this branch keeps the equivalent compact spelling fail-closed.
             SELECT 1
               FROM unnest(w.key_path) AS compact(segment)
               CROSS JOIN owner_word AS owner
              WHERE compact.segment LIKE owner.word || '%'
-               AND substring(compact.segment FROM length(owner.word)+1) ~ (
-                   SELECT '^(' || string_agg(wrapper.word,'|') || ')+'
-                          || '(' || string_agg(suffix.word,'|') || ')+'
-                          || '(' || string_agg(metric.word,'|') || ')*'
-                          || chr(36)
-                     FROM structural_wrapper AS wrapper
-                     CROSS JOIN sensitive_suffix AS suffix
-                     CROSS JOIN metric_word AS metric
-               )
+               AND substring(
+                       compact.segment FROM length(owner.word)+1
+                   ) ~ (
+                       SELECT '^(' || wrappers.words || ')+'
+                              || '(' || suffixes.words || ')+'
+                              || '(' || metrics.words || ')*$'
+                         FROM (SELECT string_agg(word,'|') AS words
+                                 FROM structural_wrapper) AS wrappers
+                         CROSS JOIN (SELECT string_agg(word,'|') AS words
+                                       FROM sensitive_suffix) AS suffixes
+                         CROSS JOIN (SELECT string_agg(word,'|') AS words
+                                       FROM metric_word) AS metrics
+                   )
                AND NOT (
                    jsonb_typeof(w.value)='number'
-                   AND substring(compact.segment FROM length(owner.word)+1) ~ (
-                       SELECT '^(' || string_agg(wrapper.word,'|') || ')+'
-                              || '(hand|hands|card|cards)'
-                              || '(' || string_agg(metric.word,'|') || ')+'
-                              || chr(36)
-                         FROM structural_wrapper AS wrapper
-                         CROSS JOIN metric_word AS metric
-                   )
+                   AND substring(
+                           compact.segment FROM length(owner.word)+1
+                       ) ~ (
+                           SELECT '^(' || wrappers.words || ')+'
+                                  || '(hand|hands|card|cards)'
+                                  || '(' || metrics.words || ')+$'
+                             FROM (SELECT string_agg(word,'|') AS words
+                                     FROM structural_wrapper) AS wrappers
+                             CROSS JOIN (SELECT string_agg(word,'|') AS words
+                                           FROM metric_word) AS metrics
+                       )
                )
         )
         OR EXISTS (
