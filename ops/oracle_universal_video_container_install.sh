@@ -61,78 +61,80 @@ if find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -qui
   die 'a video job is running; refusing container rollout'
 fi
 
-disk_available_kb="$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $4}')"
-[[ "$disk_available_kb" =~ ^[0-9]+$ ]] || die 'container disk capacity unavailable'
-if (( disk_available_kb < MIN_FREE_KB )); then
-  log 'Reclaim unused Universal Video build cache before image build'
-  docker builder prune --all --force >/dev/null 2>&1 || true
-  docker image prune --all --force >/dev/null 2>&1 || true
-  mapfile -t old_image_ids < <(docker image ls --filter "reference=$IMAGE_REPO:*" --format '{{.ID}}' | sort -u)
-  for old_image_id in "${old_image_ids[@]}"; do
-    if [[ -z "$(docker ps -aq --filter "ancestor=$old_image_id")" ]]; then
-      docker image rm "$old_image_id" >/dev/null 2>&1 || true
-    fi
-  done
+if [[ "$BUILD_IMAGE" == 1 ]]; then
   disk_available_kb="$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $4}')"
-  root_cache=/root/.cache
-  if (( disk_available_kb < MIN_FREE_KB )) && [[ -d "$root_cache" && ! -L "$root_cache" ]]; then
-    stale_cache_files="$(find "$root_cache" -xdev -type f -mtime +14 -print | wc -l)"
-    disk_before_kb="$disk_available_kb"
-    find "$root_cache" -xdev -type f -mtime +14 -delete
-    find "$root_cache" -xdev -depth -type d -empty -delete
+  [[ "$disk_available_kb" =~ ^[0-9]+$ ]] || die 'container disk capacity unavailable'
+  if (( disk_available_kb < MIN_FREE_KB )); then
+    log 'Reclaim unused Universal Video build cache before image build'
+    docker builder prune --all --force >/dev/null 2>&1 || true
+    docker image prune --all --force >/dev/null 2>&1 || true
+    mapfile -t old_image_ids < <(docker image ls --filter "reference=$IMAGE_REPO:*" --format '{{.ID}}' | sort -u)
+    for old_image_id in "${old_image_ids[@]}"; do
+      if [[ -z "$(docker ps -aq --filter "ancestor=$old_image_id")" ]]; then
+        docker image rm "$old_image_id" >/dev/null 2>&1 || true
+      fi
+    done
     disk_available_kb="$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $4}')"
-    disk_freed_kb=$(( disk_available_kb - disk_before_kb ))
-    printf 'UNIVERSAL_VIDEO_CONTAINER_CLEANUP area=root-cache age_days=14 files=%s freed_kb=%s\n' "$stale_cache_files" "$disk_freed_kb"
-  fi
-fi
-printf 'UNIVERSAL_VIDEO_CONTAINER_RESOURCE disk_available_kb=%s disk_required_kb=%s\n' "$disk_available_kb" "$MIN_FREE_KB"
-if (( disk_available_kb < MIN_FREE_KB )); then
-  for storage_area in spool output media model-cache; do
-    storage_used_kb="$(du -skx "$BASE_DIR/$storage_area" | awk '{print $1}')"
-    printf 'UNIVERSAL_VIDEO_CONTAINER_STORAGE area=%s used_kb=%s\n' "$storage_area" "$storage_used_kb"
-  done
-  if [[ -d /var/lib/docker && ! -L /var/lib/docker ]]; then
-    storage_used_kb="$(du -skx /var/lib/docker | awk '{print $1}')"
-    printf 'UNIVERSAL_VIDEO_CONTAINER_STORAGE area=docker used_kb=%s\n' "$storage_used_kb"
-  fi
-  for storage_spec in \
-    "source:$SOURCE_DIR" \
-    "bridge-school:/opt/bridge-school" \
-    "var-lib:/var/lib" \
-    "var-log:/var/log" \
-    "home:/home" \
-    "tmp:/tmp" \
-    "root:/root" \
-    "video-venv:$BASE_DIR/.venv" \
-    "var-bridge:/var/lib/bridge-school" \
-    "containerd:/var/lib/containerd" \
-    "snapd:/var/lib/snapd" \
-    "apt:/var/lib/apt" \
-    "postgresql:/var/lib/postgresql" \
-    "root-cache:/root/.cache" \
-    "root-local:/root/.local" \
-    "root-npm:/root/.npm" \
-    "root-cargo:/root/.cargo" \
-    "root-rustup:/root/.rustup" \
-    "pip-cache:/root/.cache/pip" \
-    "hf-cache:/root/.cache/huggingface" \
-    "uv-cache:/root/.cache/uv" \
-    "torch-cache:/root/.cache/torch" \
-    "whisper-cache:/root/.cache/whisper" \
-    "playwright-cache:/root/.cache/ms-playwright" \
-    "containerd-content:/var/lib/containerd/io.containerd.content.v1.content" \
-    "containerd-snapshots:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs"; do
-    storage_area="${storage_spec%%:*}"
-    storage_path="${storage_spec#*:}"
-    if [[ -d "$storage_path" && ! -L "$storage_path" ]]; then
-      storage_used_kb="$(du -skx "$storage_path" | awk '{print $1}')"
-      printf 'UNIVERSAL_VIDEO_CONTAINER_STORAGE area=%s used_kb=%s\n' "$storage_area" "$storage_used_kb"
+    root_cache=/root/.cache
+    if (( disk_available_kb < MIN_FREE_KB )) && [[ -d "$root_cache" && ! -L "$root_cache" ]]; then
+      stale_cache_files="$(find "$root_cache" -xdev -type f -mtime +14 -print | wc -l)"
+      disk_before_kb="$disk_available_kb"
+      find "$root_cache" -xdev -type f -mtime +14 -delete
+      find "$root_cache" -xdev -depth -type d -empty -delete
+      disk_available_kb="$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $4}')"
+      disk_freed_kb=$(( disk_available_kb - disk_before_kb ))
+      printf 'UNIVERSAL_VIDEO_CONTAINER_CLEANUP area=root-cache age_days=14 files=%s freed_kb=%s\n' "$stale_cache_files" "$disk_freed_kb"
     fi
-  done
-  storage_used_kb="$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $3}')"
-  printf 'UNIVERSAL_VIDEO_CONTAINER_STORAGE area=rootfs used_kb=%s\n' "$storage_used_kb"
-  printf '{"error_code":"UV_CONTAINER_DISK_INSUFFICIENT","status":"FAILED"}\n' >&2
-  exit 78
+  fi
+  printf 'UNIVERSAL_VIDEO_CONTAINER_RESOURCE disk_available_kb=%s disk_required_kb=%s\n' "$disk_available_kb" "$MIN_FREE_KB"
+  if (( disk_available_kb < MIN_FREE_KB )); then
+    for storage_area in spool output media model-cache; do
+      storage_used_kb="$(du -skx "$BASE_DIR/$storage_area" | awk '{print $1}')"
+      printf 'UNIVERSAL_VIDEO_CONTAINER_STORAGE area=%s used_kb=%s\n' "$storage_area" "$storage_used_kb"
+    done
+    if [[ -d /var/lib/docker && ! -L /var/lib/docker ]]; then
+      storage_used_kb="$(du -skx /var/lib/docker | awk '{print $1}')"
+      printf 'UNIVERSAL_VIDEO_CONTAINER_STORAGE area=docker used_kb=%s\n' "$storage_used_kb"
+    fi
+    for storage_spec in \
+      "source:$SOURCE_DIR" \
+      "bridge-school:/opt/bridge-school" \
+      "var-lib:/var/lib" \
+      "var-log:/var/log" \
+      "home:/home" \
+      "tmp:/tmp" \
+      "root:/root" \
+      "video-venv:$BASE_DIR/.venv" \
+      "var-bridge:/var/lib/bridge-school" \
+      "containerd:/var/lib/containerd" \
+      "snapd:/var/lib/snapd" \
+      "apt:/var/lib/apt" \
+      "postgresql:/var/lib/postgresql" \
+      "root-cache:/root/.cache" \
+      "root-local:/root/.local" \
+      "root-npm:/root/.npm" \
+      "root-cargo:/root/.cargo" \
+      "root-rustup:/root/.rustup" \
+      "pip-cache:/root/.cache/pip" \
+      "hf-cache:/root/.cache/huggingface" \
+      "uv-cache:/root/.cache/uv" \
+      "torch-cache:/root/.cache/torch" \
+      "whisper-cache:/root/.cache/whisper" \
+      "playwright-cache:/root/.cache/ms-playwright" \
+      "containerd-content:/var/lib/containerd/io.containerd.content.v1.content" \
+      "containerd-snapshots:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs"; do
+      storage_area="${storage_spec%%:*}"
+      storage_path="${storage_spec#*:}"
+      if [[ -d "$storage_path" && ! -L "$storage_path" ]]; then
+        storage_used_kb="$(du -skx "$storage_path" | awk '{print $1}')"
+        printf 'UNIVERSAL_VIDEO_CONTAINER_STORAGE area=%s used_kb=%s\n' "$storage_area" "$storage_used_kb"
+      fi
+    done
+    storage_used_kb="$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $3}')"
+    printf 'UNIVERSAL_VIDEO_CONTAINER_STORAGE area=rootfs used_kb=%s\n' "$storage_used_kb"
+    printf '{"error_code":"UV_CONTAINER_DISK_INSUFFICIENT","status":"FAILED"}\n' >&2
+    exit 78
+  fi
 fi
 
 log "Build immutable container image for $commit"
