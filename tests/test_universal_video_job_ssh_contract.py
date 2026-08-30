@@ -39,6 +39,9 @@ def test_job_invokes_only_fixed_resident_admin_surfaces():
     assert 'run_remote "$repair_cmd"' in WORKFLOW
     assert 'run_remote "$submit_cmd"' in WORKFLOW
     assert 'run_remote "$status_cmd"' in WORKFLOW
+    operator = (ROOT / "ops/universal_video_operator.sh").read_text(encoding="utf-8")
+    assert "systemctl is-active --quiet universal-video-container.service" in operator
+    assert "legacy universal-video.service still active" in operator
 
 
 def test_job_payload_binds_request_and_requested_runtime_for_resident_attestation():
@@ -66,6 +69,7 @@ def test_job_keeps_remote_output_fail_closed_and_bounded():
     assert "|ERROR_TYPE|ERROR)=" not in WORKFLOW
     assert "PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_COMMAND_FAILED" in WORKFLOW
     assert "PRE_SUBMIT_ERROR_CODE=UV_SUBMIT_SERVICE_INACTIVE" not in WORKFLOW
+    assert "UV_ERROR=universal-video-container.service inactive" in WORKFLOW
     assert "code='UV_SUBMIT_SERVICE_INACTIVE'" in WORKFLOW
     assert "PRE_SUBMIT_ERROR_CODE=UV_SUBMIT_STATE_INVALID" in WORKFLOW
     assert "PRE_SUBMIT_ERROR_CODE=UV_STATUS_COMMAND_FAILED" in WORKFLOW
