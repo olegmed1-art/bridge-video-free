@@ -86,6 +86,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          tasks="$(find /tmp/train-state -name blind_tasks_crossfit_main.jsonl -print -quit)"
+          test -n "$tasks"
+          PYTHONPATH=. python tools/verify_stage2c4_family_recovery.py \
+            --tasks "$tasks" \
+            --evidence stage2c4-sealed-family-recovery.json \
+            | tee stage2c4-sealed-family-recovery-i2.json
           python - <<'PY'
           import hashlib
           import json
@@ -133,6 +139,7 @@ jobs:
           name: dds-stage2c4-family-identity-recovery-${{ github.run_id }}
           path: |
             stage2c4-sealed-family-recovery.json
+            stage2c4-sealed-family-recovery-i2.json
             stage2c4-sealed-family-recovery-receipt.json
           retention-days: 90
           if-no-files-found: error
