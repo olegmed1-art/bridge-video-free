@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from unittest.mock import patch
 
@@ -184,7 +185,10 @@ def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():
         ".github/workflows/oracle-autopilot-shadow-activation.yml", encoding="utf-8"
     ).read()
     assert "EXPECTED_STAGED_REVISION: edc7e8530f0aa3efa84910cb09ee459ec25f1cf6" in workflow
-    assert "EXPECTED_UNIT_SHA256: 8b18b232d7b6f0f369e1544e2abc63a0da09f20674c902855955700bc46d335f" in workflow
+    unit_sha256 = hashlib.sha256(
+        open("deploy/oracle-autopilot/school-autopilot-shadow.service", "rb").read()
+    ).hexdigest()
+    assert f"EXPECTED_UNIT_SHA256: {unit_sha256}" in workflow
     assert "request['activation_scope'] == 'SHADOW_ONLY'" in workflow
     assert "request['no_instance_stop'] is True" in workflow
     assert "request['neon_min_cu'] == 0.25" in workflow
