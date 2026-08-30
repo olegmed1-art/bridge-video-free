@@ -60,6 +60,16 @@ if (( disk_available_kb < MIN_FREE_KB )); then
     fi
   done
   disk_available_kb="$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $4}')"
+  root_cache=/root/.cache
+  if (( disk_available_kb < MIN_FREE_KB )) && [[ -d "$root_cache" && ! -L "$root_cache" ]]; then
+    stale_cache_files="$(find "$root_cache" -xdev -type f -mtime +14 -print | wc -l)"
+    disk_before_kb="$disk_available_kb"
+    find "$root_cache" -xdev -type f -mtime +14 -delete
+    find "$root_cache" -xdev -depth -type d -empty -delete
+    disk_available_kb="$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $4}')"
+    disk_freed_kb=$(( disk_available_kb - disk_before_kb ))
+    printf 'UNIVERSAL_VIDEO_CONTAINER_CLEANUP area=root-cache age_days=14 files=%s freed_kb=%s\n' "$stale_cache_files" "$disk_freed_kb"
+  fi
 fi
 printf 'UNIVERSAL_VIDEO_CONTAINER_RESOURCE disk_available_kb=%s disk_required_kb=%s\n' "$disk_available_kb" "$MIN_FREE_KB"
 if (( disk_available_kb < MIN_FREE_KB )); then
