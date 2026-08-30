@@ -193,24 +193,30 @@ def build_mutation_manifest(request: RepairRequest) -> dict[str, object]:
         },
     ]
     for index, change in enumerate(request.changes):
+        preflight: dict[str, object] = {
+            "method": "GET",
+            "path": f"{repo_path}/contents/{change.path}",
+            "ref": request.expected_base_sha,
+            "purpose": f"file_preflight_{index}",
+        }
         if change.operation == "UPDATE":
-            operations.append(
-                {
-                    "method": "GET",
-                    "path": f"{repo_path}/contents/{change.path}",
-                    "expect_blob_sha": change.expected_blob_sha,
-                    "ref": request.expected_base_sha,
-                    "purpose": f"file_preflight_{index}",
-                }
-            )
+            preflight["expect_blob_sha"] = change.expected_blob_sha
+        else:
+            # Git's tree API replaces an existing path even when the caller
+            # labels the change CREATE.  Bind CREATE to an explicit 404 proof
+            # so it cannot bypass the UPDATE blob precondition.
+            preflight["expect_absent"] = True
+        operations.append(preflight)
         operations.append(
             {
                 "method": "POST",
                 "path": f"{repo_path}/git/blobs",
                 "body_shape": {"encoding": "utf-8"},
+                "content_source": f"request.changes[{index}].content_utf8",
                 "content_sha256": hashlib.sha256(
                     change.content_utf8.encode("utf-8")
                 ).hexdigest(),
+                "result_key": f"blob_{index}_sha",
                 "purpose": f"create_blob_{index}",
             }
         )
@@ -220,15 +226,25 @@ def build_mutation_manifest(request: RepairRequest) -> dict[str, object]:
                 "method": "POST",
                 "path": f"{repo_path}/git/trees",
                 "base_tree_source": "base_tree_lookup.tree.sha",
-                "file_mode": "100644",
-                "paths": [change.path for change in request.changes],
+                "entries": [
+                    {
+                        "path": change.path,
+                        "mode": "100644",
+                        "type": "blob",
+                        "sha_source": f"blob_{index}_sha",
+                    }
+                    for index, change in enumerate(request.changes)
+                ],
+                "result_key": "tree_sha",
                 "purpose": "create_tree",
             },
             {
                 "method": "POST",
                 "path": f"{repo_path}/git/commits",
+                "tree_sha_source": "tree_sha",
                 "parent_sha": request.expected_base_sha,
                 "message": f"autopilot: bounded repair {fingerprint[:16]}",
+                "result_key": "commit_sha",
                 "purpose": "create_commit",
             },
             {
@@ -241,6 +257,7 @@ def build_mutation_manifest(request: RepairRequest) -> dict[str, object]:
                 "method": "POST",
                 "path": f"{repo_path}/git/refs",
                 "ref": f"refs/heads/{request.branch_name}",
+                "sha_source": "commit_sha",
                 "force": False,
                 "purpose": "create_namespaced_branch",
             },
