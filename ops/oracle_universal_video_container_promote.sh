@@ -56,6 +56,7 @@ systemctl is-active --quiet "$OLD_SERVICE" && fail UV_CONTAINER_PROMOTION_LEGACY
 [[ "$(docker inspect --format '{{.Image}}' universal-video-container)" == "$EXPECTED_DIGEST" ]] || fail UV_CONTAINER_PROMOTION_RUNNING_IMAGE_MISMATCH
 
 deadline=$((SECONDS + 45))
+fresh_status=0
 while (( SECONDS < deadline )); do
   if [[ -f "$STATUS" && ! -L "$STATUS" ]] && STATUS_PATH="$STATUS" EXPECTED_COMMIT="$EXPECTED_COMMIT" STARTED_UNIX="$started_unix" python3 - <<'PY'
 import json,os
@@ -67,16 +68,23 @@ assert x.get('active_jobs') == []
 assert float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])
 PY
   then
+    fresh_status=1
     break
   fi
   sleep 2
 done
-[[ -f "$STATUS" ]] || fail UV_CONTAINER_PROMOTION_STATUS_MISSING
-STATUS_PATH="$STATUS" EXPECTED_COMMIT="$EXPECTED_COMMIT" python3 - <<'PY'
+if (( fresh_status != 1 )); then
+  [[ -f "$STATUS" && ! -L "$STATUS" ]] || fail UV_CONTAINER_PROMOTION_STATUS_MISSING
+  fail UV_CONTAINER_PROMOTION_STATUS_STALE
+fi
+STATUS_PATH="$STATUS" EXPECTED_COMMIT="$EXPECTED_COMMIT" STARTED_UNIX="$started_unix" python3 - <<'PY'
 import json,os
 x=json.load(open(os.environ['STATUS_PATH'],encoding='utf-8'))
+assert x.get('schema') == 'universal-video-resident-status-v2'
+assert x.get('instance_state') == 'RUNNING'
 assert x.get('installed_runtime_commit') == os.environ['EXPECTED_COMMIT']
 assert x.get('active_jobs') == []
+assert float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])
 PY
 
 [[ "$(systemctl is-active assistant-lab.service)" == "$before_assistant" ]] || fail UV_CONTAINER_PROMOTION_PROTECTED_SERVICE_CHANGED
