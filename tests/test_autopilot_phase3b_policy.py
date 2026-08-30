@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import replace
 
 import pytest
@@ -13,6 +14,7 @@ from autopilot_phase3b.policy import (
     repair_fingerprint,
     validate_repair_request,
 )
+from tools.verify_autopilot_phase3b_manifest import verify
 
 
 TASK_KEY = "phase3b-canary-20260830"
@@ -53,6 +55,92 @@ def test_valid_request_is_deterministic_and_secret_free():
         op["path"].endswith("/merges") or op.get("force") is True
         for op in manifest["operations"]
     )
+
+
+def test_create_preflight_and_git_object_outputs_are_bound():
+    manifest = build_mutation_manifest(_request())
+    operations = manifest["operations"]
+    preflight = next(
+        operation
+        for operation in operations
+        if operation.get("purpose") == "file_preflight_0"
+    )
+    blob = next(
+        operation
+        for operation in operations
+        if operation.get("purpose") == "create_blob_0"
+    )
+    tree = next(
+        operation
+        for operation in operations
+        if operation.get("purpose") == "create_tree"
+    )
+    commit = next(
+        operation
+        for operation in operations
+        if operation.get("purpose") == "create_commit"
+    )
+    ref = next(
+        operation
+        for operation in operations
+        if operation.get("purpose") == "create_namespaced_branch"
+    )
+
+    assert preflight["expect_absent"] is True
+    assert "expect_blob_sha" not in preflight
+    assert preflight["ref"] == "a" * 40
+    assert blob["content_source"] == "request.changes[0].content_utf8"
+    assert blob["result_key"] == "blob_0_sha"
+    assert tree["entries"] == [
+        {
+            "path": "docs/evidence/autopilot/phase3b-canary.md",
+            "mode": "100644",
+            "type": "blob",
+            "sha_source": "blob_0_sha",
+        }
+    ]
+    assert tree["result_key"] == "tree_sha"
+    assert commit["tree_sha_source"] == "tree_sha"
+    assert commit["result_key"] == "commit_sha"
+    assert ref["sha_source"] == "commit_sha"
+    assert verify(manifest)["result"] == "PASS"
+
+
+@pytest.mark.parametrize(
+    "purpose,field,value,code",
+    [
+        (
+            "file_preflight_0",
+            "expect_absent",
+            False,
+            "CREATE_ABSENCE_UNBOUND",
+        ),
+        ("create_commit", "tree_sha_source", "base_tree_lookup.tree.sha", "COMMIT_BINDING_INVALID"),
+        ("create_namespaced_branch", "sha_source", "base_sha", "REF_TARGET_UNBOUND"),
+    ],
+)
+def test_independent_model_rejects_unbound_write_targets(
+    purpose, field, value, code
+):
+    manifest = deepcopy(build_mutation_manifest(_request()))
+    operation = next(
+        item for item in manifest["operations"] if item.get("purpose") == purpose
+    )
+    operation[field] = value
+    with pytest.raises(SystemExit, match=code):
+        verify(manifest)
+
+
+def test_independent_model_rejects_tree_blob_substitution():
+    manifest = deepcopy(build_mutation_manifest(_request()))
+    tree = next(
+        item
+        for item in manifest["operations"]
+        if item.get("purpose") == "create_tree"
+    )
+    tree["entries"][0]["sha_source"] = "attacker_blob_sha"
+    with pytest.raises(SystemExit, match="TREE_ENTRY_INVALID"):
+        verify(manifest)
 
 
 @pytest.mark.parametrize(
@@ -100,9 +188,18 @@ def test_update_requires_exact_blob_precondition():
     )
     with pytest.raises(DraftRepairPolicyError, match="UPDATE_PRECONDITION_INVALID"):
         validate_repair_request(replace(_request(), changes=(update,)))
-    validate_repair_request(
-        replace(_request(), changes=(replace(update, expected_blob_sha="b" * 40),))
+    valid_update = replace(
+        _request(), changes=(replace(update, expected_blob_sha="b" * 40),)
     )
+    validate_repair_request(valid_update)
+    preflight = next(
+        operation
+        for operation in build_mutation_manifest(valid_update)["operations"]
+        if operation.get("purpose") == "file_preflight_0"
+    )
+    assert preflight["expect_blob_sha"] == "b" * 40
+    assert "expect_absent" not in preflight
+    assert preflight["ref"] == "a" * 40
 
 
 def test_file_and_total_size_limits_are_enforced():
