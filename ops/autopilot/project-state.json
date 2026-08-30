@@ -70,11 +70,13 @@
     "openai_api_global_cap_usd": 20,
     "default_shadow_task_cap_usd": 0.5,
     "increase_requires_director": true,
-    "neon_continuous_compute_approved": false,
+    "neon_continuous_compute_approved": true,
     "neon_min_cu": 0.25,
     "neon_max_cu": 8,
     "neon_estimated_baseline_usd_monthly": 40.52,
-    "runtime_connection_limit": 4
+    "runtime_connection_limit": 4,
+    "neon_continuous_compute_approved_at": "2026-08-30",
+    "neon_cost_decision": "DIRECTOR_APPROVED_WITH_FINANCIAL_CAUTION"
   },
   "promotion_blocks": [
     "main_branch_unprotected",
@@ -295,13 +297,36 @@
       "running": 0,
       "nonterminal": 0,
       "nonzero_cost_tasks": 0
+    },
+    "continuation_health": {
+      "checked_at": "2026-08-30T18:34:17Z",
+      "diagnostic_workflow_run_id": 33328431268,
+      "diagnostic_commit_sha": "33c7ff78baf0d663f844f35fa12eb99562d452b1",
+      "service_active": true,
+      "service_enabled": true,
+      "restarts": 0,
+      "systemd_result": "success",
+      "exec_main_status": 0,
+      "worker_started_count": 1,
+      "listener_reconnect_count_last_2h": 0,
+      "database_error_count_last_2h": 0,
+      "traceback_count_last_2h": 0,
+      "historical_permission_failure_retained": true,
+      "read_only_diagnostic": true,
+      "oracle_instance_stop_requested": false,
+      "neon_endpoint_active": true,
+      "queue_nonterminal": 0,
+      "queue_ready_or_running": 0,
+      "nonzero_cost_tasks": 0,
+      "total_task_cost_actual_microusd": 0,
+      "runtime_login_valid_until": "2026-09-06T15:20:39.243Z"
     }
   },
   "next_actions": [
     "keep_oracle_instance_running_until_explicit_director_order",
     "keep_autopilot_in_shadow_only_mode_and_do_not_merge_or_promote_to_production",
+    "complete_scheduled_24_hour_shadow_stability_checkpoint_without_media_or_model_workloads",
     "renew_or_replace_the_temporary_runtime_login_before_2026_09_06",
-    "observe_24_hour_shadow_stability_without_launching_media_or_model_workloads",
     "complete_production_canary_881_and_idle_guard_627_before_any_production_promotion"
   ]
 }
