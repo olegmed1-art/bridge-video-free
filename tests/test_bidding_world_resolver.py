@@ -18,12 +18,19 @@ def rule(key, lane, action, *, profile=PROFILE, priority=1, specificity=1, confi
 
 
 def gap(school_id, fingerprint, _profile):
-    return CanonGapReceipt("gap-1", school_id, fingerprint, True)
+    return "gap-1"
+
+
+def verified(gap_id, school_id, fingerprint, profile):
+    profile_key = "|".join((profile.system_profile, profile.system_version, profile.learner_level,
+                            profile.auction_context_id, profile.effective_at.isoformat()))
+    return CanonGapReceipt(gap_id, school_id, fingerprint, profile_key, NOW)
 
 
 def resolve(canon, world):
     return resolve_two_lane(school_id="school-1", request_fingerprint="request-1", profile=PROFILE,
                             canon_rules=canon, persist_canon_gap=gap,
+                            verify_committed_gap=verified,
                             world_supplier=lambda _receipt, _profile: world)
 
 
@@ -32,7 +39,7 @@ def test_canon_match_does_not_persist_gap_or_query_world():
         raise AssertionError("unexpected call")
     result = resolve_two_lane(school_id="school-1", request_fingerprint="request-1", profile=PROFILE,
                               canon_rules=[rule("c", "school_canon", "1H")],
-                              persist_canon_gap=forbidden, world_supplier=forbidden)
+                              persist_canon_gap=forbidden, verify_committed_gap=forbidden, world_supplier=forbidden)
     assert result.outcome == "CANON_MATCH" and result.trace["world_searched"] is False
 
 
@@ -41,7 +48,7 @@ def test_canon_conflict_stops_before_gap_and_world():
         raise AssertionError("unexpected call")
     result = resolve_two_lane(school_id="school-1", request_fingerprint="request-1", profile=PROFILE,
                               canon_rules=[rule("c1", "school_canon", "1H"), rule("c2", "school_canon", "1S")],
-                              persist_canon_gap=forbidden, world_supplier=forbidden)
+                              persist_canon_gap=forbidden, verify_committed_gap=forbidden, world_supplier=forbidden)
     assert result.outcome == CANON_CONFLICT and learner_response(result)["action"] is None
 
 
@@ -49,13 +56,17 @@ def test_gap_is_committed_before_world_supplier_runs():
     events = []
     def persisted(school_id, fingerprint, _profile):
         events.append("gap_committed")
-        return CanonGapReceipt("gap-1", school_id, fingerprint, True)
+        return "gap-1"
+    def checked(gap_id, school_id, fingerprint, profile):
+        events.append("gap_verified_post_commit")
+        return verified(gap_id, school_id, fingerprint, profile)
     def supplied(_receipt, _profile):
         events.append("world_queried")
         return [rule("w", "external", "1S", confidence="reproducible")]
     result = resolve_two_lane(school_id="school-1", request_fingerprint="request-1", profile=PROFILE,
-                              canon_rules=[], persist_canon_gap=persisted, world_supplier=supplied)
-    assert events == ["gap_committed", "world_queried"] and result.outcome == WORLD_FALLBACK
+                              canon_rules=[], persist_canon_gap=persisted, verify_committed_gap=checked,
+                              world_supplier=supplied)
+    assert events == ["gap_committed", "gap_verified_post_commit", "world_queried"] and result.outcome == WORLD_FALLBACK
 
 
 def test_uncommitted_or_wrong_scope_gap_blocks_world():
@@ -66,7 +77,8 @@ def test_uncommitted_or_wrong_scope_gap_blocks_world():
         return []
     with pytest.raises(RuntimeError):
         resolve_two_lane(school_id="school-1", request_fingerprint="request-1", profile=PROFILE,
-                         canon_rules=[], persist_canon_gap=lambda *_: CanonGapReceipt("g", "other", "request-1", True),
+                         canon_rules=[], persist_canon_gap=lambda *_: "g",
+                         verify_committed_gap=lambda *_: None,
                          world_supplier=supplied)
     assert called is False
 

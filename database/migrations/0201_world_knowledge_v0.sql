@@ -19,6 +19,21 @@ SELECT EXISTS (SELECT 1 FROM keys WHERE key IN
  ('deal','fulldeal','hand','hands','cards','card','holding','holdings','partnerhand','opponenthand','hiddenhand','hiddencards'));
 $$;
 
+CREATE OR REPLACE FUNCTION bidding.contains_card_token(payload jsonb)
+RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
+WITH RECURSIVE walk(value) AS (
+  SELECT payload
+  UNION ALL
+  SELECT child.value FROM walk w CROSS JOIN LATERAL (
+    SELECT value FROM jsonb_array_elements(CASE WHEN jsonb_typeof(w.value)='array' THEN w.value ELSE '[]'::jsonb END)
+    UNION ALL
+    SELECT value FROM jsonb_each(CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END)
+  ) child
+)
+SELECT EXISTS (SELECT 1 FROM walk WHERE jsonb_typeof(value)='string'
+ AND trim(both '"' from value::text) ~ '^[2-9TJQKA][CDHS]$');
+$$;
+
 CREATE OR REPLACE FUNCTION bidding.valid_acting_hand(payload jsonb)
 RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
 SELECT jsonb_typeof(payload)='object'
@@ -37,7 +52,7 @@ RETURNS boolean LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE AS $$
 DECLARE allowed text[];
 BEGIN
   IF jsonb_typeof(payload) <> 'object' OR bidding.contains_forbidden_hidden_key(payload)
-     OR bidding.contains_nonpublic_card_material(payload) THEN RETURN false; END IF;
+     OR bidding.contains_nonpublic_card_material(payload) OR bidding.contains_card_token(payload) THEN RETURN false; END IF;
   allowed := CASE kind
     WHEN 'auction' THEN ARRAY['calls','dealer','vulnerability','alerts','explanations']
     WHEN 'context' THEN ARRAY['board_number','dealer','vulnerability','scoring','acting_seat','public_inferences']
@@ -63,8 +78,8 @@ CREATE TABLE bidding.world_robot (
  model_hash text NOT NULL CHECK(model_hash ~ '^[0-9a-f]{64}$'),
  license_boundary jsonb NOT NULL CHECK(jsonb_typeof(license_boundary)='object' AND license_boundary <> '{}'::jsonb
    AND license_boundary ?& ARRAY['license_name','license_version','usage_scope','api_boundary']
-   AND btrim(license_boundary->>'license_name')<>'' AND btrim(license_boundary->>'license_version')<>''
-   AND btrim(license_boundary->>'usage_scope')<>'' AND btrim(license_boundary->>'api_boundary')<>''
+   AND COALESCE(btrim(license_boundary->>'license_name'),'')<>'' AND COALESCE(btrim(license_boundary->>'license_version'),'')<>''
+   AND COALESCE(btrim(license_boundary->>'usage_scope'),'')<>'' AND COALESCE(btrim(license_boundary->>'api_boundary'),'')<>''
    AND NOT bidding.contains_forbidden_hidden_key(license_boundary)),
  status text NOT NULL DEFAULT 'research' CHECK(status IN ('research','available','retired')), created_at timestamptz NOT NULL DEFAULT now());
 
@@ -94,10 +109,12 @@ BEGIN
  SELECT * INTO c FROM bidding.world_robot_configuration WHERE world_robot_configuration_id=NEW.world_robot_configuration_id;
  SELECT * INTO r FROM bidding.world_robot WHERE world_robot_id=c.world_robot_id;
  IF NOT (NEW.decision_trace ?& ARRAY['mode','request_id','engine_key','engine_version','model_hash','configuration_hash','input_fingerprint','started_at','completed_at','steps','raw_response_sha256'])
-    OR NEW.decision_trace->>'mode'<>NEW.decision_mode OR NEW.decision_trace->>'engine_key'<>r.robot_key
-    OR NEW.decision_trace->>'engine_version'<>r.engine_version OR NEW.decision_trace->>'model_hash'<>r.model_hash
-    OR NEW.decision_trace->>'configuration_hash'<>c.configuration_hash
-    OR NEW.decision_trace->>'raw_response_sha256'<>encode(digest(NEW.raw_response::text,'sha256'),'hex')
+    OR EXISTS (SELECT 1 FROM unnest(ARRAY['mode','request_id','engine_key','engine_version','model_hash','configuration_hash','input_fingerprint','started_at','completed_at','raw_response_sha256']) k
+               WHERE jsonb_typeof(NEW.decision_trace->k) IS DISTINCT FROM 'string')
+    OR NEW.decision_trace->>'mode' IS DISTINCT FROM NEW.decision_mode OR NEW.decision_trace->>'engine_key' IS DISTINCT FROM r.robot_key
+    OR NEW.decision_trace->>'engine_version' IS DISTINCT FROM r.engine_version OR NEW.decision_trace->>'model_hash' IS DISTINCT FROM r.model_hash
+    OR NEW.decision_trace->>'configuration_hash' IS DISTINCT FROM c.configuration_hash
+    OR NEW.decision_trace->>'raw_response_sha256' IS DISTINCT FROM encode(digest(NEW.raw_response::text,'sha256'),'hex')
     OR jsonb_typeof(NEW.decision_trace->'steps')<>'array' OR jsonb_array_length(NEW.decision_trace->'steps')=0
  THEN RAISE EXCEPTION 'BID_WORLD_ROBOT_TRACE_INCOMPLETE_OR_UNPINNED' USING ERRCODE='23514'; END IF;
  RETURN NEW;
@@ -123,15 +140,22 @@ CREATE TABLE bidding.world_resolution_trace (
 CREATE OR REPLACE FUNCTION bidding.validate_world_resolution_trace()
 RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
- IF NEW.knowledge_gap_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.knowledge_gap g WHERE g.knowledge_gap_id=NEW.knowledge_gap_id AND g.school_id=NEW.school_id)
+ IF NEW.knowledge_gap_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.knowledge_gap g
+   WHERE g.knowledge_gap_id=NEW.knowledge_gap_id AND g.school_id=NEW.school_id
+     AND g.context_scope->>'request_fingerprint' IS NOT DISTINCT FROM NEW.request_fingerprint
+     AND g.context_scope->>'system_profile_key' IS NOT DISTINCT FROM NEW.system_profile_key
+     AND g.context_scope->>'system_version' IS NOT DISTINCT FROM NEW.system_version
+     AND g.context_scope->>'learner_level' IS NOT DISTINCT FROM NEW.learner_level
+     AND g.context_scope->>'auction_context_id' IS NOT DISTINCT FROM NEW.auction_context_id
+     AND (g.context_scope->>'effective_at')::timestamptz IS NOT DISTINCT FROM NEW.effective_at)
  THEN RAISE EXCEPTION 'BID_WORLD_TRACE_GAP_SCHOOL_MISMATCH' USING ERRCODE='23514'; END IF;
  IF EXISTS (
    SELECT 1 FROM unnest(NEW.canon_rule_ids||NEW.world_rule_ids) x(rule_id)
    JOIN bidding.rule br ON br.rule_id=x.rule_id JOIN public.knowledge_version kv ON kv.knowledge_version_id=br.knowledge_version_id
-   WHERE br.school_id<>NEW.school_id OR kv.bidding_system_key<>NEW.system_profile_key OR kv.method_version<>NEW.system_version
-      OR COALESCE(kv.level_scope->>'level','')<>NEW.learner_level
+   WHERE br.school_id IS DISTINCT FROM NEW.school_id OR kv.bidding_system_key IS DISTINCT FROM NEW.system_profile_key
+      OR kv.method_version IS DISTINCT FROM NEW.system_version OR kv.level_scope->>'level' IS DISTINCT FROM NEW.learner_level
       OR NEW.effective_at<COALESCE(kv.effective_from,'-infinity') OR NEW.effective_at>=COALESCE(kv.effective_to,'infinity')
-      OR COALESCE(br.auction_pattern->>'context_id','')<>NEW.auction_context_id
+      OR br.auction_pattern->>'context_id' IS DISTINCT FROM NEW.auction_context_id
  ) THEN RAISE EXCEPTION 'BID_WORLD_TRACE_PROFILE_MISMATCH' USING ERRCODE='23514'; END IF;
  IF EXISTS(SELECT 1 FROM unnest(NEW.canon_rule_ids) x(rule_id) LEFT JOIN bidding.rule br ON br.rule_id=x.rule_id
    LEFT JOIN public.knowledge_version kv ON kv.knowledge_version_id=br.knowledge_version_id

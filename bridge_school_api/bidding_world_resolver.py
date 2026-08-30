@@ -61,7 +61,8 @@ class CanonGapReceipt:
     gap_id: str
     school_id: str
     request_fingerprint: str
-    committed: bool
+    profile_fingerprint: str
+    committed_at: datetime
 
 
 @dataclass(frozen=True)
@@ -98,9 +99,15 @@ def _winner_or_conflict(rules: tuple[KnowledgeRule, ...]) -> tuple[KnowledgeRule
     return (top if len(actions) == 1 else None), len(actions) > 1
 
 
+def _profile_fingerprint(profile: ResolutionProfile) -> str:
+    return "|".join((profile.system_profile, profile.system_version, profile.learner_level,
+                     profile.auction_context_id, profile.effective_at.isoformat()))
+
+
 def resolve_two_lane(*, school_id: str, request_fingerprint: str, profile: ResolutionProfile,
                      canon_rules: Iterable[KnowledgeRule],
-                     persist_canon_gap: Callable[[str, str, ResolutionProfile], CanonGapReceipt],
+                     persist_canon_gap: Callable[[str, str, ResolutionProfile], str],
+                     verify_committed_gap: Callable[[str, str, str, ResolutionProfile], CanonGapReceipt | None],
                      world_supplier: Callable[[CanonGapReceipt, ResolutionProfile], Iterable[KnowledgeRule]]) -> Resolution:
     """Resolve Canon first; commit its gap before invoking a lazy WORLD supplier."""
     canon = _rank((r for r in canon_rules if r.authority_class == "school_canon"), profile)
@@ -117,9 +124,15 @@ def resolve_two_lane(*, school_id: str, request_fingerprint: str, profile: Resol
         trace["canon_stage"] = "CANON_MATCH"
         return Resolution("CANON_MATCH", canon_winner, canon, (), trace)
 
-    receipt = persist_canon_gap(school_id, request_fingerprint, profile)
-    if not receipt.committed or receipt.school_id != school_id or receipt.request_fingerprint != request_fingerprint:
-        raise RuntimeError("CANON_GAP must be committed for the same school and request before WORLD lookup")
+    gap_id = persist_canon_gap(school_id, request_fingerprint, profile)
+    # This must be an independent, post-commit read (normally a fresh database
+    # transaction), not a boolean returned by the inserting transaction.
+    receipt = verify_committed_gap(gap_id, school_id, request_fingerprint, profile)
+    if (receipt is None or receipt.gap_id != gap_id or receipt.school_id != school_id
+            or receipt.request_fingerprint != request_fingerprint
+            or receipt.profile_fingerprint != _profile_fingerprint(profile)
+            or receipt.committed_at.tzinfo is None):
+        raise RuntimeError("CANON_GAP needs an independently read, request-bound post-commit receipt before WORLD")
     trace.update({"canon_stage": CANON_GAP, "knowledge_gap_id": receipt.gap_id})
     world = _rank((r for r in world_supplier(receipt, profile) if r.authority_class == "external"), profile)
     trace.update({"world_searched": True, "world_rule_ids": [r.rule_id for r in world]})

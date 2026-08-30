@@ -2,12 +2,18 @@
 BEGIN;
 DO $$
 DECLARE
- s uuid; oi uuid; ov uuid; wr uuid; gap uuid; robot uuid; config uuid; decision uuid;
+ s uuid; oi uuid; ov uuid; wr uuid; oi2 uuid; ov2 uuid; wr2 uuid; gap uuid; old_gap uuid; robot uuid; config uuid; decision uuid;
  failed boolean; raw jsonb := '{"bid":"1S"}'::jsonb; trace jsonb;
 BEGIN
  SELECT school_id INTO s FROM public.school WHERE stable_name='Школа спортивного бриджа';
  INSERT INTO public.knowledge_gap(school_id,question,context_scope,status)
- VALUES(s,'CI canon gap','{"request":"world-ci"}','open') RETURNING knowledge_gap_id INTO gap;
+ VALUES(s,'CI canon gap',jsonb_build_object('request_fingerprint','valid-fallback','system_profile_key','natural',
+  'system_version','v1','learner_level','L1','auction_context_id','auction-1','effective_at',now()),'open')
+ RETURNING knowledge_gap_id INTO gap;
+ INSERT INTO public.knowledge_gap(school_id,question,context_scope,status)
+ VALUES(s,'Old unrelated gap',jsonb_build_object('request_fingerprint','old-request','system_profile_key','natural',
+  'system_version','v1','learner_level','L1','auction_context_id','auction-1','effective_at',now()),'open')
+ RETURNING knowledge_gap_id INTO old_gap;
  INSERT INTO public.knowledge_item(school_id,stable_key,knowledge_type,title,status)
  VALUES(s,'ci-world-0201','bidding_rule','CI WORLD 0201','active') RETURNING knowledge_item_id INTO oi;
  INSERT INTO public.knowledge_version(knowledge_item_id,version_no,content,authority_class,review_status,
@@ -23,11 +29,22 @@ BEGIN
 
  failed:=false; BEGIN
   INSERT INTO bidding.world_resolution_trace(school_id,request_fingerprint,system_profile_key,system_version,learner_level,
+   effective_at,auction_context_id,canon_outcome,world_outcome,world_rule_ids,selected_world_rule_id,knowledge_gap_id,trace,resolver_version)
+  VALUES(s,'new-request','natural','v1','L1',now(),'auction-1','CANON_GAP','WORLD_FALLBACK',ARRAY[wr],wr,old_gap,'{}','world-v0');
+ EXCEPTION WHEN check_violation THEN failed:=true; END;
+ IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_UNRELATED_GAP_ACCEPTED'; END IF;
+
+ UPDATE public.knowledge_gap SET context_scope=jsonb_set(context_scope,'{request_fingerprint}','"fallback-without-selection"')
+ WHERE knowledge_gap_id=gap;
+ failed:=false; BEGIN
+  INSERT INTO bidding.world_resolution_trace(school_id,request_fingerprint,system_profile_key,system_version,learner_level,
    effective_at,auction_context_id,canon_outcome,world_outcome,world_rule_ids,knowledge_gap_id,trace,resolver_version)
   VALUES(s,'fallback-without-selection','natural','v1','L1',now(),'auction-1','CANON_GAP','WORLD_FALLBACK',ARRAY[wr],gap,'{}','world-v0');
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_FALLBACK_WITHOUT_SELECTION_ACCEPTED'; END IF;
 
+ UPDATE public.knowledge_gap SET context_scope=jsonb_set(context_scope,'{request_fingerprint}','"conflict-with-selection"')
+ WHERE knowledge_gap_id=gap;
  failed:=false; BEGIN
   INSERT INTO bidding.world_resolution_trace(school_id,request_fingerprint,system_profile_key,system_version,learner_level,
    effective_at,auction_context_id,canon_outcome,world_outcome,world_rule_ids,selected_world_rule_id,knowledge_gap_id,trace,resolver_version)
@@ -35,6 +52,8 @@ BEGIN
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_CONFLICT_WITH_SELECTION_ACCEPTED'; END IF;
 
+ UPDATE public.knowledge_gap SET context_scope=jsonb_set(jsonb_set(context_scope,'{request_fingerprint}','"profile-mix"'),'{system_profile_key}','"sayc"')
+ WHERE knowledge_gap_id=gap;
  failed:=false; BEGIN
   INSERT INTO bidding.world_resolution_trace(school_id,request_fingerprint,system_profile_key,system_version,learner_level,
    effective_at,auction_context_id,canon_outcome,world_outcome,world_rule_ids,selected_world_rule_id,knowledge_gap_id,trace,resolver_version)
@@ -42,11 +61,32 @@ BEGIN
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_PROFILE_MISMATCH_ACCEPTED'; END IF;
 
+ INSERT INTO public.knowledge_item(school_id,stable_key,knowledge_type,title,status)
+ VALUES(s,'ci-world-null-profile','bidding_rule','CI null profile','active') RETURNING knowledge_item_id INTO oi2;
+ INSERT INTO public.knowledge_version(knowledge_item_id,version_no,content,authority_class,review_status,level_scope,status)
+ VALUES(oi2,1,'{}','external','reviewed','{"level":"L1"}','candidate') RETURNING knowledge_version_id INTO ov2;
+ INSERT INTO bidding.rule(school_id,knowledge_version_id,rule_key,rule_kind,auction_pattern,action,lifecycle_status)
+ VALUES(s,ov2,'ci.world.null-profile','bid','{"context_id":"auction-1"}','{"call":"1H"}','validated') RETURNING rule_id INTO wr2;
+ UPDATE public.knowledge_gap SET context_scope=jsonb_set(jsonb_set(context_scope,'{request_fingerprint}','"null-profile"'),'{system_profile_key}','"natural"')
+ WHERE knowledge_gap_id=gap;
+ failed:=false; BEGIN
+  INSERT INTO bidding.world_resolution_trace(school_id,request_fingerprint,system_profile_key,system_version,learner_level,
+   effective_at,auction_context_id,canon_outcome,world_outcome,world_rule_ids,selected_world_rule_id,knowledge_gap_id,trace,resolver_version)
+  VALUES(s,'null-profile','natural','v1','L1',now(),'auction-1','CANON_GAP','WORLD_FALLBACK',ARRAY[wr2],wr2,gap,'{}','world-v0');
+ EXCEPTION WHEN check_violation THEN failed:=true; END;
+ IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_NULL_PROFILE_ACCEPTED'; END IF;
+
  failed:=false; BEGIN
   INSERT INTO bidding.world_robot(robot_key,display_name,engine_version,model_hash,license_boundary)
   VALUES('bad-robot','Bad','v1',repeat('a',64),'{}');
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_EMPTY_LICENSE_ACCEPTED'; END IF;
+ failed:=false; BEGIN
+  INSERT INTO bidding.world_robot(robot_key,display_name,engine_version,model_hash,license_boundary)
+  VALUES('null-license','Bad','v1',repeat('a',64),
+   '{"license_name":null,"license_version":null,"usage_scope":null,"api_boundary":null}');
+ EXCEPTION WHEN check_violation THEN failed:=true; END;
+ IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_NULL_LICENSE_ACCEPTED'; END IF;
 
  INSERT INTO bidding.world_robot(robot_key,display_name,engine_version,model_hash,license_boundary)
  VALUES('ben-ci','BEN CI','commit-1',repeat('b',64),
@@ -73,6 +113,24 @@ BEGIN
    '{"calls":[]}','{}','{"deal":{"N":[]}}','{"bid":"1S"}','high',trace);
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_HIDDEN_DEAL_ACCEPTED'; END IF;
+
+ failed:=false; BEGIN
+  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
+   public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
+  VALUES(s,config,'ROBOT_LIVE_DECISION','N',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"calls":[]}','{}','{"engine_output":{"private_material":["AS","KS"]}}','{"bid":"1S"}','high',trace);
+ EXCEPTION WHEN check_violation THEN failed:=true; END;
+ IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_NESTED_CARD_TOKENS_ACCEPTED'; END IF;
+
+ failed:=false; BEGIN
+  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
+   public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
+  VALUES(s,config,'ROBOT_LIVE_DECISION','N',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"calls":[]}','{}',raw,'{"bid":"1S"}','high',jsonb_set(trace,'{engine_key}','null'::jsonb));
+ EXCEPTION WHEN check_violation THEN failed:=true; END;
+ IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_NULL_TRACE_PIN_ACCEPTED'; END IF;
 
  failed:=false; BEGIN
   UPDATE bidding.world_robot_decision SET confidence='low' WHERE world_robot_decision_id=decision;
