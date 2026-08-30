@@ -18,6 +18,10 @@ from .skill_catalog import (
     resolve_reviewed_skill,
     validate_catalog,
 )
+from .longitudinal_pilot import (
+    LONGITUDINAL_PILOT_SCHEMA,
+    run_multi_lesson_pilot,
+)
 from .methodology_queue import (
     DECISION_SCHEMA,
     QUEUE_SCHEMA,
@@ -60,6 +64,7 @@ __all__ = [
     "PILOT_SCHEMA",
     "MASTERY_POLICY_SCHEMA",
     "MASTERY_REPORT_SCHEMA",
+    "LONGITUDINAL_PILOT_SCHEMA",
     "MasteryEvidenceError",
     "MethodologyQueueError",
     "QUEUE_SCHEMA",
@@ -75,6 +80,7 @@ __all__ = [
     "validate_catalog",
     "validate_episode",
     "run_longitudinal_pilot",
+    "run_multi_lesson_pilot",
     "eligible_next_skills",
     "evaluate_mastery_evidence",
     "validate_mastery_policy",
