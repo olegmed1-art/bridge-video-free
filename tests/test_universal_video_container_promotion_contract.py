@@ -88,3 +88,11 @@ def test_promotion_waits_boundedly_for_named_container_before_inspect() -> None:
     assert "systemctl is-active --quiet \"$NEW_SERVICE\" || break" in SCRIPT
     assert "(( process_ready == 1 )) || fail UV_CONTAINER_PROMOTION_PROCESS_INACTIVE" in SCRIPT
     assert SCRIPT.index("process_deadline=") < SCRIPT.index("CURRENT_STAGE='resident-status'")
+
+
+def test_promotion_waits_boundedly_for_systemd_service_before_process_probe() -> None:
+    assert "service_deadline=$((SECONDS + 30))" in SCRIPT
+    assert "service_ready=0" in SCRIPT
+    assert "while (( SECONDS < service_deadline ))" in SCRIPT
+    assert "(( service_ready == 1 )) || fail UV_CONTAINER_PROMOTION_SERVICE_INACTIVE" in SCRIPT
+    assert SCRIPT.index("service_deadline=") < SCRIPT.index("process_deadline=")
