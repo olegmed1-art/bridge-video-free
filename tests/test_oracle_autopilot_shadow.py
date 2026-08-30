@@ -188,14 +188,17 @@ def test_github_pr_snapshot_uses_bounded_public_get(monkeypatch):
             observed["read_limit"] = limit
             return json.dumps(payload).encode()
 
-    def fake_urlopen(request, timeout):
+    def fake_open(request, timeout):
         observed["url"] = request.full_url
         observed["method"] = request.get_method()
         observed["authorization"] = request.get_header("Authorization")
         observed["timeout"] = timeout
         return Response()
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    class Opener:
+        open = staticmethod(fake_open)
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: Opener())
     summary = fetch_github_pr_snapshot(
         {
             "repository": "olegmed1-art/bridge-video-free",
@@ -242,7 +245,10 @@ def test_github_pr_snapshot_fails_closed_on_head_change(monkeypatch):
                 }
             ).encode()
 
-    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: Response())
+    class Opener:
+        open = staticmethod(lambda *_args, **_kwargs: Response())
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: Opener())
     with pytest.raises(AutopilotContractError, match="GITHUB_PR_HEAD_CHANGED"):
         fetch_github_pr_snapshot(
             {
@@ -252,6 +258,43 @@ def test_github_pr_snapshot_fails_closed_on_head_change(monkeypatch):
                 "require_draft": True,
             }
         )
+
+
+def test_github_pr_snapshot_rejects_redirect_before_following(monkeypatch):
+    observed = {"redirect_attempts": 0}
+
+    class RedirectResponse:
+        def geturl(self):
+            return "https://attacker.invalid/collect"
+
+    class Opener:
+        def open(self, request, timeout):
+            handler = observed["handler"]
+            observed["redirect_attempts"] += 1
+            return handler.redirect_request(
+                request,
+                RedirectResponse(),
+                302,
+                "Found",
+                {},
+                "https://attacker.invalid/collect",
+            )
+
+    def fake_build_opener(handler):
+        observed["handler"] = handler
+        return Opener()
+
+    monkeypatch.setattr("urllib.request.build_opener", fake_build_opener)
+    with pytest.raises(AutopilotContractError, match="GITHUB_API_REDIRECT_REJECTED"):
+        fetch_github_pr_snapshot(
+            {
+                "repository": "olegmed1-art/bridge-video-free",
+                "pr_number": 991,
+                "expected_head_sha": "b" * 40,
+                "require_draft": True,
+            }
+        )
+    assert observed["redirect_attempts"] == 1
 
 
 def test_fencing_and_cost_state_are_checked_before_execution():

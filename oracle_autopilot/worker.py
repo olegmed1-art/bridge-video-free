@@ -47,6 +47,13 @@ GITHUB_REPOSITORY = "olegmed1-art/bridge-video-free"
 GITHUB_RESPONSE_LIMIT_BYTES = 1_048_576
 
 
+class _RejectRedirects(urllib.request.HTTPRedirectHandler):
+    """Reject every redirect before urllib can contact the new origin."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        raise AutopilotContractError("GITHUB_API_REDIRECT_REJECTED")
+
+
 @dataclass(frozen=True)
 class WorkerConfig:
     dsn: str
@@ -228,7 +235,8 @@ def fetch_github_pr_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
+        opener = urllib.request.build_opener(_RejectRedirects())
+        with opener.open(request, timeout=15) as response:
             final_url = response.geturl()
             _validate_github_api_url(final_url)
             if final_url != url or response.status != 200:
