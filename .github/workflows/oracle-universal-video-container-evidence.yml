@@ -1,0 +1,90 @@
+name: Oracle Universal Video Container Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: 'Pinned 40-character commit to attest'
+        required: true
+        default: '0c76c24626e790af2b07303c5f3f2121f5524aa5'
+        type: string
+      expected_host_fingerprint:
+        description: 'SSH host fingerprint'
+        required: true
+        default: 'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-universal-video-container-evidence
+  cancel-in-progress: false
+
+jobs:
+  evidence:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate exact requested revision
+        env:
+          REF: ${{ inputs.git_ref }}
+          FINGERPRINT: ${{ inputs.expected_host_fingerprint }}
+        run: |
+          set -euo pipefail
+          [[ "$REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$FINGERPRINT" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]
+          git cat-file -e "$REF^{commit}"
+          git show "$REF:ops/oracle_universal_video_run_command.sh" > "$RUNNER_TEMP/prepare.sh"
+          git show "$REF:ops/oracle_universal_video_container_install.sh" > "$RUNNER_TEMP/container-install.sh"
+          chmod 0700 "$RUNNER_TEMP/prepare.sh" "$RUNNER_TEMP/container-install.sh"
+      - name: Establish pinned SSH transport
+        id: ssh
+        env:
+          FINGERPRINT: ${{ inputs.expected_host_fingerprint }}
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]] || { echo ORACLE_SSH_PRIVATE_KEY_NOT_CONFIGURED >&2; exit 1; }
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+      - name: Build and attest container without submitting a video job
+        env:
+          REF: ${{ inputs.git_ref }}
+        run: |
+          set -euo pipefail
+          ssh_base=(ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          "${ssh_base[@]}" "sudo -n env UNIVERSAL_VIDEO_GIT_REF='$REF' UNIVERSAL_VIDEO_ACTIVATE=1 UNIVERSAL_VIDEO_PREWARM_MODEL=1 UNIVERSAL_VIDEO_RUN_SMOKE=0 bash -s" < "$RUNNER_TEMP/prepare.sh" > "$RUNNER_TEMP/prepare.log" 2>&1
+          grep -Fx UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS "$RUNNER_TEMP/prepare.log"
+          "${ssh_base[@]}" 'sudo -n env UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=0 bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_install.sh' > "$RUNNER_TEMP/container.log" 2>&1
+          grep -E '^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=[0-9a-f]{40} image_digest=sha256:[0-9a-f]{64} activated=0$' "$RUNNER_TEMP/container.log"
+          grep -Fx DDS3_AFTER_PASS "$RUNNER_TEMP/prepare.log"
+          {
+            echo '## Oracle Universal Video Container Evidence'
+            grep -E '^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS ' "$RUNNER_TEMP/container.log"
+            echo 'fallback_used=false'
+            echo 'video_job_submitted=false'
+          } >> "$GITHUB_STEP_SUMMARY"
