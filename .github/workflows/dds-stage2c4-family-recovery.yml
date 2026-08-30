@@ -1,0 +1,91 @@
+name: DDS Stage 2C.4 family identity recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type RECOVER_IDENTITIES_ONLY
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: dds-stage2c4-family-recovery
+  cancel-in-progress: false
+
+env:
+  TRAIN_DRIVE_LOCATOR: dds_training/artifact_locations/dds-main-train-32060398288.json
+  TRAIN_ARTIFACT_ZIP_SHA256: c46cda2fb127371cbc1ab836c74580b25f0a0bb8ab358dfaab97cf591dd8a246
+  SEALED_TASK_ID_DIGEST: dd98b5e146d5b78fe93a21249ce26452a0d8cbbf0b0add4108cc7e2c1a091dcb
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  recover-identities:
+    if: github.actor == 'olegmed1-art' && inputs.confirmation == 'RECOVER_IDENTITIES_ONLY'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact dispatched commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Verify metadata-only recovery contract
+        run: |
+          set -euo pipefail
+          python -m compileall -q tools/recover_stage2c4_sealed_families.py tests/test_recover_stage2c4_sealed_families.py
+          PYTHONPATH=. python -m pytest -q tests/test_recover_stage2c4_sealed_families.py
+          PYTHONPATH=. python tools/restore_drive_split_artifact.py \
+            --locator "$TRAIN_DRIVE_LOCATOR" \
+            --output /tmp/unused-main-train.zip \
+            --validate-only
+
+      - name: Restore exact immutable main corpus
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/main-train/parts /tmp/main-train/extracted /tmp/train-state
+          PYTHONPATH=. python tools/restore_drive_split_artifact.py \
+            --locator "$TRAIN_DRIVE_LOCATOR" \
+            --output /tmp/main-train/artifact.zip \
+            --work-dir /tmp/main-train/parts
+          echo "$TRAIN_ARTIFACT_ZIP_SHA256  /tmp/main-train/artifact.zip" | sha256sum -c -
+          unzip -q /tmp/main-train/artifact.zip -d /tmp/main-train/extracted
+          state="$(find /tmp/main-train/extracted -name 'dds-main-train-progress-state.tgz' -print -quit)"
+          test -n "$state"
+          tar -xzf "$state" -C /tmp/train-state
+
+      - name: Recover family identities without DDS or results
+        run: |
+          set -euo pipefail
+          tasks="$(find /tmp/train-state -name blind_tasks_crossfit_main.jsonl -print -quit)"
+          test -n "$tasks"
+          PYTHONPATH=. python tools/recover_stage2c4_sealed_families.py \
+            --tasks "$tasks" \
+            --expected-sealed-task-digest "$SEALED_TASK_ID_DIGEST" \
+            --source-total 650 \
+            --output stage2c4-sealed-family-recovery.json
+          python - <<'PY'
+          import json
+          evidence=json.load(open('stage2c4-sealed-family-recovery.json', encoding='utf-8'))
+          assert evidence['status']=='RECOVERED'
+          assert evidence['identity_only'] is True
+          assert evidence['dds_called'] is False and evidence['results_read'] is False
+          assert evidence['manifests']['all_sealed']['count']==3000
+          assert evidence['manifests']['stage2c4_selected']['count']==650
+          assert evidence['manifests']['remaining_unused']['count']==2350
+          assert evidence['split_family_overlap']=={'train_validation':0,'train_sealed':0,'validation_sealed':0}
+          print({'identity_recovery':'PASS','selected':650,'remaining':2350,'dds_called':False,'results_read':False})
+          PY
+
+      - name: Upload identity-only evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: dds-stage2c4-family-identity-recovery-${{ github.run_id }}
+          path: stage2c4-sealed-family-recovery.json
+          retention-days: 30
+          if-no-files-found: error
