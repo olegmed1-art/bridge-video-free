@@ -8,7 +8,7 @@ Governance: `ASSURED`
 
 Tracker: #782
 
-Status: `VERIFIED_ON_TEMPORARY_CONTOUR / INDEPENDENT_REVIEW_PASS / NOT ACTIVATED`
+Status: `INDEPENDENT_REVIEW_FINDING_REPAIRED / REVALIDATION_PENDING / NOT ACTIVATED`
 
 Draft PR: #991
 
@@ -74,20 +74,28 @@ Independent review evidence:
 
 - Vercel Agent Code Review completed against exact PR head
   `7ce601547449cdca2ffa555ea1385e5a2fd9e617`;
-- result: PASS with 0 suggestions;
+- result: one actionable logic finding, not PASS;
 - review duration: 7 minutes 2 seconds;
 - exact review-line cost: USD 1.83 (the usage summary rounds the aggregate to
   USD 2);
-- no executable source changed between the verified implementation revision
-  `d56be00b421dfd824b5960f62852fe101522cf70` and the reviewed head; intervening
-  commits only recorded evidence and project-state metadata.
+- finding: `ingest_external_event` could publish a resumed task as `READY` when
+  `attempts = max_attempts`; the next claim incremented beyond the retry budget,
+  so a verified external answer could be discarded by the worker contract;
+- repair: exhausted resumptions now retain and link the verified event, then
+  terminalize explicitly as `EXTERNAL_RESUME_BUDGET_EXHAUSTED`; claims also
+  exclude retry-exhausted READY rows;
+- regression coverage: PostgreSQL integration proof plus the independent
+  bounded state model cover the exact retry-boundary transition;
+- the repaired executable revision requires fresh CI and PostgreSQL 18
+  revalidation before the finding can be considered closed.
 
 Assurance:
 
 - I0: implementation self-check PASS;
 - I2: independent bounded exhaustive abstract state-model checker PASS;
 - I3: external PostgreSQL 18 / Neon state-machine execution PASS;
-- independent external Vercel Agent code review: PASS with 0 suggestions.
+- independent external Vercel Agent code review: one finding, repaired on the
+  PR branch, exact-head revalidation pending.
 
 ## Cost and latency
 
@@ -108,6 +116,8 @@ staged with its dedicated login.
 
 ## Remaining risk and promotion blocks
 
+- Vercel review finding repair has not yet passed exact-head CI/PostgreSQL 18
+  revalidation;
 - current `main` branch protection is not proven/enforced;
 - dedicated LOGIN credential is not provisioned;
 - Oracle service is not staged or activated;

@@ -87,18 +87,24 @@ def successors(state: State) -> set[State]:
             retry_state,
         }
     if state.status == "WAITING_EXTERNAL":
+        expiry = replace(
+            state,
+            status="FAILED_CLOSED",
+            wait_active=False,
+            terminal_reason=True,
+        )
+        if state.attempts >= state.max_attempts:
+            return {
+                expiry,
+                replace(expiry, event_seen=True),
+            }
         return {
+            expiry,
             replace(
                 state,
                 status="READY",
                 wait_active=False,
                 event_seen=True,
-            ),
-            replace(
-                state,
-                status="FAILED_CLOSED",
-                wait_active=False,
-                terminal_reason=True,
             ),
         }
     raise AssertionError(f"unmodelled state: {state.status}")
@@ -114,6 +120,8 @@ def assert_invariants(state: State) -> None:
         assert state.evidence_retained
     if state.status in TERMINAL:
         assert not successors(state)
+    if state.status == "READY" and state.event_seen:
+        assert state.attempts < state.max_attempts
 
 
 def test_bounded_state_space_preserves_safety_invariants():

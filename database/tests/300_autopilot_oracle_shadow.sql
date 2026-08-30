@@ -5,6 +5,7 @@ DO $$
 DECLARE
     smoke_id uuid;
     wait_id uuid;
+    exhausted_wait_id uuid;
     expired_wait_id uuid;
     owner_id uuid;
     budget_id uuid;
@@ -109,6 +110,44 @@ BEGIN
         '{"production_mutation":false,"duplicate_side_effects":0}'::jsonb
     ) THEN
         RAISE EXCEPTION 'AUTOPILOT_WAIT_COMPLETION_FAILED';
+    END IF;
+
+    -- A verified event at the retry boundary is retained and terminalized
+    -- explicitly; it must never create a READY task whose next claim exceeds
+    -- max_attempts.
+    SELECT task_id INTO exhausted_wait_id
+      FROM autopilot.create_shadow_task(
+        'sql-wait-exhausted-1', 'EXTERNAL_WAIT_SHADOW_V1',
+        '{"correlation_id":"sql:wait:exhausted:1"}'::jsonb, 20, 0,
+        'database-test', 'SQL_TEST'
+      );
+    SELECT * INTO claimed FROM autopilot.claim_next_task('sql-worker-1', 60);
+    IF claimed.task_id <> exhausted_wait_id OR NOT autopilot.mark_waiting_external(
+        exhausted_wait_id, 'sql-worker-1', claimed.lease_epoch,
+        'SYNTHETIC', 'sql:wait:exhausted:1', 'SHADOW_RESUME', 300
+    ) THEN
+        RAISE EXCEPTION 'AUTOPILOT_EXHAUSTED_WAIT_SETUP_FAILED';
+    END IF;
+    UPDATE autopilot.task SET attempts = max_attempts
+     WHERE task_id = exhausted_wait_id AND status = 'WAITING_EXTERNAL';
+    SELECT * INTO result FROM autopilot.ingest_external_event(
+        'SYNTHETIC', 'sql-event-exhausted-1', 'SHADOW_RESUME',
+        'sql:wait:exhausted:1', repeat('e', 64), true
+    );
+    IF NOT result.accepted OR result.resumed_task_id <> exhausted_wait_id
+       OR result.resulting_state <> 'FAILED_CLOSED'
+       OR (SELECT terminal_reason_code FROM autopilot.task
+            WHERE task_id = exhausted_wait_id) <> 'EXTERNAL_RESUME_BUDGET_EXHAUSTED'
+       OR NOT EXISTS (
+            SELECT 1 FROM autopilot.wait_condition
+             WHERE task_id = exhausted_wait_id AND status = 'SATISFIED'
+               AND satisfied_by_event_id IS NOT NULL
+       )
+       OR EXISTS (
+            SELECT 1 FROM autopilot.task
+             WHERE task_id = exhausted_wait_id AND status = 'READY'
+       ) THEN
+        RAISE EXCEPTION 'AUTOPILOT_EXHAUSTED_WAIT_EVENT_DISCARDED';
     END IF;
 
     -- An unanswered external wait expires closed instead of hanging forever.

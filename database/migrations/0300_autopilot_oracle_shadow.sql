@@ -569,6 +569,7 @@ BEGIN
         SELECT t.task_id
           FROM autopilot.task t
          WHERE t.status = 'READY' AND t.not_before <= now()
+           AND t.attempts < t.max_attempts
          ORDER BY t.priority, t.not_before, t.created_at
          FOR UPDATE SKIP LOCKED
          LIMIT 1
@@ -761,9 +762,36 @@ BEGIN
        AND status = 'WAITING_EXTERNAL';
     UPDATE autopilot.task
        SET status = 'READY', current_step_key = 'shadow.wait', not_before = now()
-     WHERE task_id = wait_row.task_id AND status = 'WAITING_EXTERNAL';
+     WHERE task_id = wait_row.task_id AND status = 'WAITING_EXTERNAL'
+       AND attempts < max_attempts;
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'AUTOPILOT_WAIT_TASK_STATE_MISMATCH';
+        -- The verified event is retained and linked to the satisfied wait, but
+        -- an exhausted retry budget must never be bypassed by a resume claim.
+        -- Terminalize explicitly instead of publishing an unclaimable READY
+        -- task or allowing the next claim to exceed max_attempts.
+        UPDATE autopilot.task
+           SET status = 'FAILED_CLOSED',
+               terminal_reason_code = 'EXTERNAL_RESUME_BUDGET_EXHAUSTED',
+               completed_at = now()
+         WHERE task_id = wait_row.task_id AND status = 'WAITING_EXTERNAL'
+           AND attempts >= max_attempts;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'AUTOPILOT_WAIT_TASK_STATE_MISMATCH';
+        END IF;
+        PERFORM autopilot.record_event(
+            wait_row.task_id, 'EXTERNAL_EVENT_ACCEPTED',
+            'WAITING_EXTERNAL', 'FAILED_CLOSED',
+            jsonb_build_object(
+                'provider', p_provider,
+                'provider_event_id', p_provider_event_id,
+                'event_type', p_event_type,
+                'reason_code', 'EXTERNAL_RESUME_BUDGET_EXHAUSTED'
+            ),
+            'EXTERNAL_EVENT', p_provider,
+            'external:' || p_provider || ':' || p_provider_event_id
+        );
+        RETURN QUERY SELECT true, wait_row.task_id, 'FAILED_CLOSED'::text;
+        RETURN;
     END IF;
     PERFORM autopilot.record_event(
         wait_row.task_id, 'EXTERNAL_EVENT_ACCEPTED', 'WAITING_EXTERNAL', 'READY',
