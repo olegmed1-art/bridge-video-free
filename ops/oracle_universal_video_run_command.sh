@@ -118,7 +118,14 @@ log "Install bounded generic Universal Video operator"
 SOURCE_FILE="$SOURCE_DIR/ops/universal_video_operator.sh" \
 EXPECTED_RUNTIME_COMMIT="$RESOLVED_COMMIT" \
   bash "$SOURCE_DIR/ops/install_universal_video_operator.sh"
-sudo -u ocarun sudo -n /usr/local/sbin/universal-video status install-smoke >/dev/null
+set +e
+operator_smoke="$(sudo -u ocarun sudo -n /usr/local/sbin/universal-video status .. 2>&1)"
+operator_smoke_rc=$?
+set -e
+[[ "$operator_smoke_rc" -eq 1 ]] || die 'bounded Universal Video operator rejection smoke returned an unexpected code'
+grep -Fx 'UV_STATE=REJECTED' <<<"$operator_smoke" >/dev/null || die 'bounded Universal Video operator rejection state missing'
+grep -Fx 'UV_ERROR=invalid job id' <<<"$operator_smoke" >/dev/null || die 'bounded Universal Video operator rejection reason missing'
+echo 'UNIVERSAL_VIDEO_OPERATOR_REJECTION_SMOKE_PASS'
 
 # Keep the fixed evidence-export entrypoint and its root-owned source pin on
 # the same exact revision as the resident worker. The installer exposes only

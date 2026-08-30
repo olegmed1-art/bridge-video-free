@@ -44,6 +44,13 @@ def test_job_invokes_only_fixed_resident_admin_surfaces():
     assert "legacy universal-video.service still active" in operator
 
 
+def test_bootstrap_smoke_does_not_require_container_before_promotion():
+    bootstrap = (ROOT / "ops/oracle_universal_video_run_command.sh").read_text(encoding="utf-8")
+    assert "/usr/local/sbin/universal-video status .." in bootstrap
+    assert "UNIVERSAL_VIDEO_OPERATOR_REJECTION_SMOKE_PASS" in bootstrap
+    assert "/usr/local/sbin/universal-video status install-smoke" not in bootstrap
+
+
 def test_job_payload_binds_request_and_requested_runtime_for_resident_attestation():
     assert "metadata['request_commit']=os.environ['GITHUB_SHA'].lower()" in WORKFLOW
     assert "metadata['requested_runtime_commit']=requested" in WORKFLOW
