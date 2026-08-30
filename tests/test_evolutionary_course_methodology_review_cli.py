@@ -7,18 +7,28 @@ import sys
 CANDIDATE = Path("data/research/evolutionary_course_diana2_club_split_skill_candidate_v1.json")
 CATALOG = Path("data/research/evolutionary_course_skill_catalog_v1.json")
 REQUEST = Path("data/research/evolutionary_course_diana2_methodology_review_request_v1.json")
-def _run(request: Path, output: Path):
+def _preapproval_catalog(path: Path) -> Path:
+    catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    skill = next(item for item in catalog["skills"] if item["skill_id"] == (
+        "candidate.skill.estimate-five-card-split"
+    ))
+    skill["review_state"] = "REVIEW_REQUIRED"
+    path.write_text(json.dumps(catalog), encoding="utf-8")
+    return path
+
+
+def _run(request: Path, output: Path, catalog: Path):
     return subprocess.run([
         sys.executable, "-m", "evolutionary_course.methodology_review_cli",
         "--candidate", str(CANDIDATE),
-        "--catalog", str(CATALOG), "--request", str(request),
+        "--catalog", str(catalog), "--request", str(request),
         "--output", str(output),
     ], text=True, capture_output=True, check=False)
 
 
 def test_blank_request_cannot_create_decision_receipt(tmp_path):
     output = tmp_path / "receipt.json"
-    result = _run(REQUEST, output)
+    result = _run(REQUEST, output, _preapproval_catalog(tmp_path / "catalog.json"))
     assert result.returncode != 0
     assert "invalid candidate review decision" in result.stderr
     assert not output.exists()
@@ -36,7 +46,7 @@ def test_explicit_authorized_decision_creates_non_mutating_receipt(tmp_path):
     request_path = tmp_path / "request.json"
     request_path.write_text(json.dumps(request), encoding="utf-8")
     output = tmp_path / "receipt.json"
-    result = _run(request_path, output)
+    result = _run(request_path, output, _preapproval_catalog(tmp_path / "catalog.json"))
     assert result.returncode == 0, result.stderr
     receipt = json.loads(output.read_text(encoding="utf-8"))
     assert receipt["decision"] == "APPROVE"
@@ -51,7 +61,7 @@ def test_tampered_request_binding_fails_closed(tmp_path):
     request_path = tmp_path / "request.json"
     request_path.write_text(json.dumps(request), encoding="utf-8")
     output = tmp_path / "receipt.json"
-    result = _run(request_path, output)
+    result = _run(request_path, output, _preapproval_catalog(tmp_path / "catalog.json"))
     assert result.returncode != 0
     assert "review request binding mismatch" in result.stderr
     assert not output.exists()

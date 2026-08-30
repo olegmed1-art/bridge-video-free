@@ -6,11 +6,13 @@ import pytest
 
 from evolutionary_course.methodology_queue import (
     MethodologyQueueError,
+    apply_approved_candidate_to_catalog,
     build_candidate_review_request,
     build_methodology_review_queue,
     record_candidate_review_decision,
     record_methodology_decision,
 )
+from evolutionary_course.skill_catalog import validate_catalog
 
 
 def _report():
@@ -114,6 +116,8 @@ def _real_candidate_and_catalog():
     catalog = json.loads(Path(
         "data/research/evolutionary_course_skill_catalog_v1.json"
     ).read_text(encoding="utf-8"))
+    _skill = next(item for item in catalog["skills"] if item["skill_id"] == candidate["skill_id"])
+    _skill["review_state"] = "REVIEW_REQUIRED"
     return candidate, catalog
 
 
@@ -201,3 +205,33 @@ def test_candidate_review_requires_review_required_state_and_human_gate():
             reviewer_authority="SCHOOL_DIRECTOR", reviewed_at="2026-08-30T12:00:00Z",
             rationale="Reviewed.",
         )
+
+
+def test_exact_approved_receipt_applies_only_catalog_candidate_state():
+    candidate, catalog = _real_candidate_and_catalog()
+    receipt = json.loads(Path(
+        "data/research/evolutionary_course_diana2_methodology_decision_receipt_v1.json"
+    ).read_text(encoding="utf-8"))
+    updated = apply_approved_candidate_to_catalog(
+        candidate, catalog=catalog, receipt=receipt
+    )
+    changed = next(skill for skill in updated["skills"] if skill["skill_id"] == candidate["skill_id"])
+    assert changed["review_state"] == "APPROVED_CANDIDATE"
+    assert updated["authority"] == catalog["authority"]
+    committed = json.loads(Path(
+        "data/research/evolutionary_course_skill_catalog_v1.json"
+    ).read_text(encoding="utf-8"))
+    assert validate_catalog(committed) == updated
+
+
+def test_tampered_or_non_approve_receipt_cannot_mutate_catalog():
+    candidate, catalog = _real_candidate_and_catalog()
+    receipt = json.loads(Path(
+        "data/research/evolutionary_course_diana2_methodology_decision_receipt_v1.json"
+    ).read_text(encoding="utf-8"))
+    receipt["candidate_sha256"] = "0" * 64
+    with pytest.raises(MethodologyQueueError, match="receipt mismatch"):
+        apply_approved_candidate_to_catalog(candidate, catalog=catalog, receipt=receipt)
+    receipt["decision"] = "REJECT"
+    with pytest.raises(MethodologyQueueError, match="approved candidate receipt"):
+        apply_approved_candidate_to_catalog(candidate, catalog=catalog, receipt=receipt)

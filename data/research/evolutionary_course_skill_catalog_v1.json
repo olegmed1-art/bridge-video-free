@@ -23,7 +23,7 @@
         "INDEPENDENT": ["До выбора линии розыгрыша самостоятельно считает отсутствующие карты и называет вероятность расклада 3-2."],
         "TRANSFERRED": ["Применяет оценку распределения пяти отсутствующих карт в другой масти и новой раздаче."]
       },
-      "review_state": "REVIEW_REQUIRED"
+      "review_state": "APPROVED_CANDIDATE"
     },
     {
       "skill_id": "candidate.skill.trump-long-hand",

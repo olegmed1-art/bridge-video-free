@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import re
+from copy import deepcopy
 from datetime import datetime
 from typing import Any, Mapping
 
@@ -348,9 +349,38 @@ def record_candidate_review_decision(
     }
 
 
+def apply_approved_candidate_to_catalog(
+    candidate: Mapping[str, Any], *, catalog: Mapping[str, Any], receipt: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Apply one exact director/methodologist approval to the research catalog only."""
+    if not isinstance(receipt, Mapping) or receipt.get("decision") != "APPROVE":
+        raise MethodologyQueueError("approved candidate receipt required")
+    reviewer = receipt.get("reviewer")
+    if not isinstance(reviewer, Mapping):
+        raise MethodologyQueueError("reviewer receipt required")
+    expected = record_candidate_review_decision(
+        candidate,
+        catalog=catalog,
+        decision="APPROVE",
+        reviewer_id=reviewer.get("reviewer_id"),
+        reviewer_authority=reviewer.get("authority"),
+        reviewed_at=receipt.get("reviewed_at"),
+        rationale=receipt.get("rationale"),
+    )
+    if dict(receipt) != expected:
+        raise MethodologyQueueError("candidate approval receipt mismatch")
+    updated = deepcopy(validate_catalog(catalog))
+    for skill in updated["skills"]:
+        if skill["skill_id"] == receipt["skill_id"]:
+            skill["review_state"] = "APPROVED_CANDIDATE"
+            break
+    return validate_catalog(updated)
+
+
 __all__ = [
     "CANDIDATE_DECISION_SCHEMA", "CANDIDATE_REVIEW_REQUEST_SCHEMA",
     "DECISION_SCHEMA", "MethodologyQueueError", "QUEUE_SCHEMA",
-    "build_candidate_review_request", "build_methodology_review_queue",
+    "apply_approved_candidate_to_catalog", "build_candidate_review_request",
+    "build_methodology_review_queue",
     "record_candidate_review_decision", "record_methodology_decision",
 ]
