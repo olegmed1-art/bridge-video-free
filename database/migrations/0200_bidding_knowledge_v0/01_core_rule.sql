@@ -546,7 +546,7 @@ WITH RECURSIVE walk(value,key_path) AS (
                    AND (
                        (
                            regexp_replace(lower(seat_field.key),'[^a-z0-9]','','g')='owner'
-                           AND lower(seat_field.value #>> '{}') IN (
+                           AND lower(btrim(seat_field.value #>> '{}')) IN (
                                'partner','opponent','opponents','other','others'
                            )
                        )
@@ -559,7 +559,7 @@ WITH RECURSIVE walk(value,key_path) AS (
                            AND regexp_replace(
                                lower(seat_field.key),'[^a-z0-9]','','g'
                            ) IN ('seat','owner')
-                           AND upper(seat_field.value #>> '{}') IN (
+                           AND upper(btrim(seat_field.value #>> '{}')) IN (
                                'N','E','S','W','NORTH','EAST','SOUTH','WEST'
                            )
                        )
@@ -601,7 +601,7 @@ WITH RECURSIVE walk(value,key_path) AS (
                           ) AS cards_field(key,value)
                          WHERE regexp_replace(
                                    lower(cards_field.key),'[^a-z0-9]','','g'
-                               ) IN ('card','cards')
+                               ) ~ '^cards?(metadata|context|data|info|details|payload|attributes|stats|summary|byseat)*$'
                            AND jsonb_typeof(cards_field.value) <> 'null'
                     )
             )
