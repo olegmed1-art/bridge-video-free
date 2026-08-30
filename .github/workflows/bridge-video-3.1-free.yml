@@ -63,6 +63,10 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
 
+      - name: Enforce single active production compute route
+        shell: bash
+        run: python ops/validate_universal_video_runtime_routing.py --require-active github_actions_legacy
+
       - name: Resolve job and Diana longitudinal context
         shell: bash
         env:
