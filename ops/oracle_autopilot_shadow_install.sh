@@ -84,8 +84,8 @@ log "Create bounded Python runtime"
 python3 -m venv "$AUTOPILOT_DIR/.venv"
 "$AUTOPILOT_DIR/.venv/bin/python" -m pip install --disable-pip-version-check --no-cache-dir \
   "psycopg[binary]==$PSYCOPG_VERSION" >/dev/null
-chown -R root:root "$AUTOPILOT_DIR/.venv"
-chmod -R go-w "$AUTOPILOT_DIR/.venv"
+chown -R root:"$AUTOPILOT_GROUP" "$AUTOPILOT_DIR/.venv"
+chmod -R g+rX,o-rwx "$AUTOPILOT_DIR/.venv"
 
 log "Validate direct Neon DSN and least-privilege RPC boundary"
 AUTOPILOT_EXPECTED_DB_USER="$EXPECTED_DB_USER" \
