@@ -13,6 +13,7 @@ OLD_SERVICE="${UNIVERSAL_VIDEO_SERVICE_NAME:-universal-video.service}"
 ACTIVATE="${UNIVERSAL_VIDEO_CONTAINER_ACTIVATE:-0}"
 BUILD_IMAGE="${UNIVERSAL_VIDEO_CONTAINER_BUILD:-1}"
 MIN_FREE_KB="${UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB:-8388608}"
+BUILD_TIMEOUT_SECONDS="${UNIVERSAL_VIDEO_CONTAINER_BUILD_TIMEOUT_SECONDS:-1200}"
 IMAGE_REPO="${UNIVERSAL_VIDEO_IMAGE_REPO:-bridge-school/universal-video}"
 STATUS_DIR="${UNIVERSAL_VIDEO_STATUS_DIR:-/run/bridge-school}"
 
@@ -42,6 +43,7 @@ service_status(){
 [[ "$ACTIVATE" =~ ^[01]$ ]] || die 'UNIVERSAL_VIDEO_CONTAINER_ACTIVATE must be 0 or 1'
 [[ "$BUILD_IMAGE" =~ ^[01]$ ]] || die 'UNIVERSAL_VIDEO_CONTAINER_BUILD must be 0 or 1'
 [[ "$MIN_FREE_KB" =~ ^[0-9]+$ && "$MIN_FREE_KB" -gt 0 ]] || die 'UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB must be a positive integer'
+[[ "$BUILD_TIMEOUT_SECONDS" =~ ^[0-9]+$ && "$BUILD_TIMEOUT_SECONDS" -ge 60 ]] || die 'UNIVERSAL_VIDEO_CONTAINER_BUILD_TIMEOUT_SECONDS must be at least 60'
 [[ -d "$SOURCE_DIR/.git" ]] || die 'isolated source checkout missing'
 [[ -f "$SOURCE_DIR/deploy/oracle-universal-video/Dockerfile" ]] || die 'container Dockerfile missing'
 [[ -f "$SOURCE_DIR/deploy/oracle-universal-video/$SERVICE_NAME" ]] || die 'container service unit missing'
@@ -138,7 +140,14 @@ fi
 
 log "Build immutable container image for $commit"
 if [[ "$BUILD_IMAGE" == 1 ]]; then
-  docker build --pull --build-arg "UNIVERSAL_VIDEO_SOURCE_COMMIT=$commit" --tag "$image" -f "$SOURCE_DIR/deploy/oracle-universal-video/Dockerfile" "$SOURCE_DIR" || die 'container image build failed'
+  set +e
+  timeout --foreground --signal=TERM --kill-after=30s "$BUILD_TIMEOUT_SECONDS" docker build --pull --build-arg "UNIVERSAL_VIDEO_SOURCE_COMMIT=$commit" --tag "$image" -f "$SOURCE_DIR/deploy/oracle-universal-video/Dockerfile" "$SOURCE_DIR"
+  build_rc=$?
+  set -e
+  if (( build_rc == 124 || build_rc == 137 )); then
+    runtime_fail UV_CONTAINER_IMAGE_BUILD_TIMEOUT
+  fi
+  (( build_rc == 0 )) || die 'container image build failed'
 else
   docker image inspect "$image" >/dev/null || die 'attested container image unavailable'
 fi
