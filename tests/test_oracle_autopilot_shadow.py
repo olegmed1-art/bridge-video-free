@@ -184,6 +184,7 @@ def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():
         ".github/workflows/oracle-autopilot-shadow-activation.yml", encoding="utf-8"
     ).read()
     assert "EXPECTED_STAGED_REVISION: edc7e8530f0aa3efa84910cb09ee459ec25f1cf6" in workflow
+    assert "EXPECTED_UNIT_SHA256: 8b18b232d7b6f0f369e1544e2abc63a0da09f20674c902855955700bc46d335f" in workflow
     assert "request['activation_scope'] == 'SHADOW_ONLY'" in workflow
     assert "request['no_instance_stop'] is True" in workflow
     assert "request['neon_min_cu'] == 0.25" in workflow
@@ -196,6 +197,8 @@ def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():
     assert 'active_since="$(systemctl show -p ActiveEnterTimestamp --value' in workflow
     assert 'systemctl disable --now "$service"' in workflow
     assert "AUTOPILOT_SHADOW_ACTIVATION_ROLLED_BACK" in workflow
+    assert 'sha256sum "$unit"' in workflow
+    assert 'cmp -s "$unit" "$release/deploy/' not in workflow
     for forbidden in (
         "--action " + "STOP",
         "systemctl " + "stop",
