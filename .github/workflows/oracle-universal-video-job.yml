@@ -284,6 +284,24 @@ jobs:
                 code='UV_SUBMIT_SPOOL_MISSING'
               elif grep -qx 'UV_ERROR=unsafe staging directory' <<<"$initial"; then
                 code='UV_SUBMIT_STAGING_UNSAFE'
+              elif grep -qx 'UV_ERROR=legacy universal-video.service still active' <<<"$initial"; then
+                code='UV_SUBMIT_LEGACY_SERVICE_ACTIVE'
+              elif grep -qx 'UV_ERROR=unsafe spool or staging directory' <<<"$initial"; then
+                code='UV_SUBMIT_INTAKE_ROOT_UNSAFE'
+              elif grep -qx 'UV_ERROR=unsafe spool inbox' <<<"$initial"; then
+                code='UV_SUBMIT_INBOX_UNSAFE'
+              elif grep -Eq '^UV_ERROR=\[Errno 13\] Permission denied' <<<"$initial"; then
+                code='UV_SUBMIT_INTAKE_PERMISSION_DENIED'
+              elif grep -Eq '^UV_ERROR=\[Errno 18\] Invalid cross-device link' <<<"$initial"; then
+                code='UV_SUBMIT_INTAKE_CROSS_DEVICE'
+              elif grep -Eq '^UV_ERROR=\[Errno 28\] No space left on device' <<<"$initial"; then
+                code='UV_SUBMIT_INTAKE_DISK_FULL'
+              elif grep -Eq '^UV_ERROR=\[Errno 30\] Read-only file system' <<<"$initial"; then
+                code='UV_SUBMIT_INTAKE_READ_ONLY'
+              elif grep -Eq '^UV_ERROR=\[Errno 17\] File exists' <<<"$initial"; then
+                code='UV_SUBMIT_INTAKE_COLLISION'
+              elif grep -Eq '^UV_ERROR=(invalid |unsupported source kind|unknown video profile|.* (outside bounded range|must be (an integer|numeric|an object)))' <<<"$initial"; then
+                code='UV_SUBMIT_CONTRACT_REJECTED'
               fi
               echo "PRE_SUBMIT_ERROR_CODE=$code" >> "$GITHUB_ENV"
               exit 1
