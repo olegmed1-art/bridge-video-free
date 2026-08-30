@@ -82,10 +82,57 @@ jobs:
           print({'identity_recovery':'PASS','selected':650,'remaining':2350,'dds_called':False,'results_read':False})
           PY
 
+      - name: Create terminal receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+
+          evidence_path = 'stage2c4-sealed-family-recovery.json'
+          evidence = json.load(open(evidence_path, encoding='utf-8'))
+          evidence_sha = hashlib.sha256(open(evidence_path, 'rb').read()).hexdigest()
+          receipt = {
+              'schema': 'dds-stage2c4-family-recovery-receipt-v1',
+              'status': 'PASS',
+              'identity_only': True,
+              'dds_called': False,
+              'results_read': False,
+              'github_run_id': int(os.environ['GITHUB_RUN_ID']),
+              'github_run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
+              'github_sha': os.environ['GITHUB_SHA'],
+              'source_artifact_sha256': os.environ['TRAIN_ARTIFACT_ZIP_SHA256'],
+              'sealed_task_id_digest': evidence['sealed_task_id_digest'],
+              'evidence_sha256': evidence_sha,
+              'manifests': {
+                  name: {
+                      'count': value['count'],
+                      'sha256': value['sha256'],
+                  }
+                  for name, value in evidence['manifests'].items()
+              },
+          }
+          with open('stage2c4-sealed-family-recovery-receipt.json', 'w', encoding='utf-8') as handle:
+              json.dump(receipt, handle, ensure_ascii=False, sort_keys=True, indent=2)
+              handle.write('\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a', encoding='utf-8') as summary:
+              summary.write('## DDS Stage 2C.4 identity recovery\n\n')
+              summary.write(f"- Status: `PASS`\n- Run: `{receipt['github_run_id']}` attempt `{receipt['github_run_attempt']}`\n")
+              summary.write(f"- Commit: `{receipt['github_sha']}`\n- Evidence SHA-256: `{evidence_sha}`\n")
+              for name, value in receipt['manifests'].items():
+                  summary.write(f"- {name}: `{value['count']}` families, `{value['sha256']}`\n")
+              summary.write('- DDS called: `false`; results read: `false`\n')
+          print(json.dumps(receipt, sort_keys=True))
+          PY
+
       - name: Upload identity-only evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: dds-stage2c4-family-identity-recovery-${{ github.run_id }}
-          path: stage2c4-sealed-family-recovery.json
-          retention-days: 30
+          path: |
+            stage2c4-sealed-family-recovery.json
+            stage2c4-sealed-family-recovery-receipt.json
+          retention-days: 90
           if-no-files-found: error
