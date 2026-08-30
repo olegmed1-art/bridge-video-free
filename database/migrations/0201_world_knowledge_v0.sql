@@ -44,6 +44,10 @@ SELECT EXISTS (SELECT 1 FROM walk WHERE jsonb_typeof(value)='string'
         regexp_replace(translate(value #>> '{}','♣♦♥♠','CDHS'),'10','T','gi'),
         '[^a-z0-9]','','gi')
       ~* '^([2-9TJQKA][CDHS])+$'
+   OR regexp_replace(
+        regexp_replace(translate(value #>> '{}','♣♦♥♠','CDHS'),'10','T','gi'),
+        '[^a-z0-9]','','gi')
+      ~* '([CDHS][2-9TJQKA]{2,13}|[2-9TJQKA]{2,13}[CDHS])'
  ));
 $$;
 
@@ -57,7 +61,15 @@ SELECT jsonb_typeof(payload)='object'
       FROM jsonb_array_elements_text(payload->'cards') c(value)
       WHERE value ~ '^[2-9TJQKA][CDHS]$')
  AND (payload->'hcp' IS NULL OR jsonb_typeof(payload->'hcp')='number')
- AND (payload->'shape' IS NULL OR jsonb_typeof(payload->'shape')='array');
+ AND (payload->'shape' IS NULL OR (
+   jsonb_typeof(payload->'shape')='array'
+   AND jsonb_array_length(payload->'shape')=4
+   AND (SELECT count(*)=4
+          AND bool_and(jsonb_typeof(value)='number' AND value #>> '{}' ~ '^(0|[1-9]|1[0-3])$')
+          AND sum(CASE WHEN jsonb_typeof(value)='number' AND value #>> '{}' ~ '^(0|[1-9]|1[0-3])$'
+                       THEN (value #>> '{}')::integer ELSE 100 END)=13
+        FROM jsonb_array_elements(payload->'shape'))
+ ));
 $$;
 
 CREATE OR REPLACE FUNCTION bidding.valid_public_robot_payload(kind text, payload jsonb)
@@ -161,6 +173,9 @@ BEGIN
     OR NEW.decision_trace->>'mode' IS DISTINCT FROM NEW.decision_mode OR NEW.decision_trace->>'engine_key' IS DISTINCT FROM r.robot_key
     OR NEW.decision_trace->>'engine_version' IS DISTINCT FROM r.engine_version OR NEW.decision_trace->>'model_hash' IS DISTINCT FROM r.model_hash
     OR NEW.decision_trace->>'configuration_hash' IS DISTINCT FROM c.configuration_hash
+    OR NEW.decision_trace->>'input_fingerprint' IS DISTINCT FROM encode(digest(jsonb_build_object(
+         'acting_seat',NEW.acting_seat,'acting_hand',NEW.acting_hand,
+         'public_auction',NEW.public_auction,'public_context',NEW.public_context)::text,'sha256'),'hex')
     OR NEW.decision_trace->>'raw_response_sha256' IS DISTINCT FROM encode(digest(NEW.raw_response::text,'sha256'),'hex')
     OR jsonb_typeof(NEW.decision_trace->'steps')<>'array' OR jsonb_array_length(NEW.decision_trace->'steps')=0
     OR COALESCE(btrim(NEW.decision_trace->>'request_id'),'')='' OR COALESCE(btrim(NEW.decision_trace->>'input_fingerprint'),'')=''
@@ -188,6 +203,7 @@ BEGIN
         WHERE (step->>'seq')::numeric <> ord
            OR (previous_at IS NOT NULL AND (step->>'at')::timestamptz < previous_at)
     )
+    OR NEW.decision_trace->'steps'->0->>'input_hash' IS DISTINCT FROM NEW.decision_trace->>'input_fingerprint'
  THEN RAISE EXCEPTION 'BID_WORLD_ROBOT_TRACE_INCOMPLETE_OR_UNPINNED' USING ERRCODE='23514'; END IF;
  RETURN NEW;
 END $$;

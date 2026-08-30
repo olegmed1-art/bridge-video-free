@@ -3,7 +3,7 @@ BEGIN;
 DO $$
 DECLARE
  s uuid; oi uuid; ov uuid; wr uuid; oi2 uuid; ov2 uuid; wr2 uuid; gap uuid; old_gap uuid; role_gap uuid; robot uuid; config uuid; decision uuid;
- failed boolean; raw jsonb := '{"bid":"1S"}'::jsonb; bad_raw jsonb; trace jsonb; bad_trace jsonb; v_constraint text;
+ failed boolean; raw jsonb := '{"bid":"1S"}'::jsonb; bad_raw jsonb; trace jsonb; bad_trace jsonb; v_constraint text; request_hash text;
 BEGIN
  SELECT school_id INTO s FROM public.school WHERE stable_name='Школа спортивного бриджа';
  INSERT INTO public.knowledge_gap(school_id,question,context_scope,status)
@@ -108,11 +108,16 @@ BEGIN
  RETURNING world_robot_id INTO robot;
  INSERT INTO bidding.world_robot_configuration(world_robot_id,configuration_hash,convention_card,configuration)
  VALUES(robot,repeat('c',64),'{"system":"natural"}','{"temperature":0}') RETURNING world_robot_configuration_id INTO config;
+ request_hash:=encode(digest(jsonb_build_object(
+  'acting_seat','N',
+  'acting_hand','{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10,"shape":[13,0,0,0]}'::jsonb,
+  'public_auction','{"calls":[],"dealer":"N"}'::jsonb,
+  'public_context','{"scoring":"IMP","acting_seat":"N"}'::jsonb)::text,'sha256'),'hex');
  trace:=jsonb_build_object('mode','ROBOT_LIVE_DECISION','request_id','req-1','engine_key','ben-ci',
   'engine_version','commit-1','model_hash',repeat('b',64),'configuration_hash',repeat('c',64),
-  'input_fingerprint','input-1','started_at','2026-08-30T00:00:00Z','completed_at','2026-08-30T00:00:01Z',
+  'input_fingerprint',request_hash,'started_at','2026-08-30T00:00:00Z','completed_at','2026-08-30T00:00:01Z',
   'steps',jsonb_build_array(
-    jsonb_build_object('seq',1,'event','request','at','2026-08-30T00:00:00Z','status','ok','input_hash',repeat('1',64),'output_hash',repeat('2',64)),
+    jsonb_build_object('seq',1,'event','request','at','2026-08-30T00:00:00Z','status','ok','input_hash',request_hash,'output_hash',repeat('2',64)),
     jsonb_build_object('seq',2,'event','response','at','2026-08-30T00:00:01Z','status','ok','input_hash',repeat('2',64),'output_hash',repeat('3',64))),
   'raw_response_sha256',encode(digest(raw::text,'sha256'),'hex'));
  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
@@ -126,8 +131,8 @@ BEGIN
  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
   public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
  VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-  '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
-  '{"calls":["1S","PASS"],"dealer":"N"}','{}','{"bid":"2H"}','{"bid":"2H"}','high',
+  '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10,"shape":[13,0,0,0]}',
+  '{"calls":[],"dealer":"N"}','{"scoring":"IMP","acting_seat":"N"}','{"bid":"2H"}','{"bid":"2H"}','high',
   jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest('{"bid":"2H"}'::jsonb::text,'sha256'),'hex'))));
 
  bad_raw:='{"deal":{"N":[]}}';
@@ -217,6 +222,35 @@ BEGIN
    '{"calls":[]}','{}',bad_raw,'{"bid":"1S"}','high',bad_trace);
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_GROUPED_SUFFIX_HOLDING_ACCEPTED'; END IF;
+
+ bad_raw:='{"explanation":"♠ AKQ ♥ JT9"}';
+ bad_trace:=jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
+ failed:=false; BEGIN
+  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
+   public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
+  VALUES(s,config,'ROBOT_LIVE_DECISION','N',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"calls":[]}','{}',bad_raw,'{"bid":"1S"}','high',bad_trace);
+ EXCEPTION WHEN check_violation THEN failed:=true; END;
+ IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_SEPARATED_GROUPED_HOLDING_ACCEPTED'; END IF;
+
+ failed:=false; BEGIN
+  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
+   public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
+  VALUES(s,config,'ROBOT_LIVE_DECISION','N',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"shape":[["AS","KS"],0,0,0]}',
+   '{"calls":[]}','{}',raw,'{"bid":"1S"}','high',trace);
+ EXCEPTION WHEN check_violation THEN failed:=true; END;
+ IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_NESTED_ACTING_SHAPE_ACCEPTED'; END IF;
+
+ failed:=false; BEGIN
+  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
+   public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
+  VALUES(s,config,'ROBOT_LIVE_DECISION','N',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10,"shape":[13,0,0,0]}',
+   '{"calls":["1S"],"dealer":"N"}','{"scoring":"IMP","acting_seat":"N"}',raw,'{"bid":"1S"}','high',trace);
+ EXCEPTION WHEN check_violation THEN failed:=true; END;
+ IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_REUSED_TRACE_INPUT_ACCEPTED'; END IF;
 
  failed:=false; v_constraint:=NULL; BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
