@@ -497,6 +497,8 @@ def run_forever(spool_root: Path, poll_seconds: float) -> None:
             "/run/bridge-school/universal-video-status.json",
         )
     )
+    # Publish resident readiness before accepting a potentially long queued job.
+    write_resident_status(spool_root, status_path)
     while True:
         processed = process_one(spool_root)
         queue_configured = bool(
