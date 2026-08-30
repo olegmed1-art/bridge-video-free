@@ -215,6 +215,27 @@ def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():
         assert forbidden not in workflow
 
 
+def test_shadow_diagnostics_are_read_only_and_secret_free():
+    workflow = open(
+        ".github/workflows/oracle-autopilot-shadow-diagnostics.yml", encoding="utf-8"
+    ).read()
+    assert "AUTOPILOT_DIAGNOSTIC_READ_ONLY=YES" in workflow
+    assert "ORACLE_INSTANCE_STOP_REQUESTED=NO" in workflow
+    assert "AUTOPILOT_DIAG_MODULE_IMPORT_COUNT" in workflow
+    assert "AUTOPILOT_DIAG_CONFIG_COUNT" in workflow
+    assert "AUTOPILOT_DIAG_DATABASE_COUNT" in workflow
+    for forbidden in (
+        "systemctl " + "start",
+        "systemctl " + "stop",
+        "systemctl " + "restart",
+        "systemctl " + "enable",
+        "systemctl " + "disable",
+        "echo \"$journal\"",
+        'cat "$root/autopilot-shadow.env"',
+    ):
+        assert forbidden not in workflow
+
+
 def test_oracle_power_workflow_has_no_automatic_trigger():
     workflow = open(
         ".github/workflows/oracle-instance-power.yml", encoding="utf-8"
