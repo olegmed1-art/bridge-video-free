@@ -52,7 +52,7 @@ disk_available_kb="$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $4}')"
 [[ "$disk_available_kb" =~ ^[0-9]+$ ]] || die 'container disk capacity unavailable'
 if (( disk_available_kb < MIN_FREE_KB )); then
   log 'Reclaim unused Universal Video build cache before image build'
-  docker builder prune --force >/dev/null 2>&1 || true
+  docker builder prune --all --force >/dev/null 2>&1 || true
   mapfile -t old_image_ids < <(docker image ls --filter "reference=$IMAGE_REPO:*" --format '{{.ID}}' | sort -u)
   for old_image_id in "${old_image_ids[@]}"; do
     if [[ -z "$(docker ps -aq --filter "ancestor=$old_image_id")" ]]; then
