@@ -8,7 +8,7 @@ Governance: `ASSURED`
 
 Tracker: #782
 
-Status: `INDEPENDENT_REVIEW_REPAIR_PASS / NOT ACTIVATED`
+Status: `STAGING_LOGIN_PROVISIONED / ORACLE_HOST_UNREACHABLE / NOT ACTIVATED`
 
 Draft PR: #991
 
@@ -54,6 +54,24 @@ PostgreSQL 18 integration results:
 | runtime direct SELECT on `autopilot.task` | denied |
 | runtime `claim_next_task` RPC | allowed |
 
+Post-review staging preflight:
+
+- the temporary branch was reconciled to repair head `8356725`; the deployed
+  `claim_next_task` now excludes exhausted READY rows and
+  `ingest_external_event` contains the explicit
+  `EXTERNAL_RESUME_BUDGET_EXHAUSTED` terminal path;
+- the full SQL state-machine regression passed again under a unique task-key
+  namespace inside a savepoint and was rolled back, preserving prior evidence;
+- dedicated LOGIN `autopilot_runtime_login` was created only on temporary
+  branch `br-still-tooth-b1ilkfcj`, with a four-connection limit and automatic
+  expiry at `2026-09-06T15:20:39.243Z`;
+- the LOGIN is not superuser, cannot create databases or roles, cannot
+  replicate or bypass RLS, has no direct task/event table access, and inherits
+  only the bounded runtime RPC capability chain;
+- task creation and external-event ingress RPCs remain denied to the Oracle
+  execution LOGIN;
+- the credential value was not printed, committed, or written to evidence.
+
 Local checks:
 
 - `14 passed` Python contract/model tests;
@@ -62,7 +80,7 @@ Local checks:
 - systemd unit verification PASS (expected missing-path warning before staging);
 - JSON parse and `git diff --check` PASS.
 
-GitHub evidence at head `d56be00b421dfd824b5960f62852fe101522cf70`:
+GitHub evidence at current PR head `1c4eb4907af7a0f11009d6a323f8d0882e850a69`:
 
 - all eight triggered workflows PASS;
 - full Bridge School Database CI PASS on a clean PostgreSQL 18 service;
@@ -116,11 +134,17 @@ five seconds. A lost notification falls back to polling within 30 seconds.
 Actual Oracle runtime latency is intentionally not claimed until the service is
 staged with its dedicated login.
 
+The temporary branch compute was observed active with a 0.25-CU minimum and
+`suspend_timeout_seconds=0`. It must not be mistaken for a free idle staging
+state; retaining it while Oracle is unavailable consumes the same variable
+compute class discussed above.
+
 ## Remaining risk and promotion blocks
 
 - current `main` branch protection is not proven/enforced;
-- dedicated LOGIN credential is not provisioned;
-- Oracle service is not staged or activated;
+- dedicated LOGIN exists only on the temporary branch and expires automatically;
+- Oracle service is not staged or activated: both the protected cloud browser
+  and a pinned-fingerprint GitHub runner could not reach the Oracle host;
 - real notification/restart latency is not measured;
 - incremental always-on Neon compute cost is not approved or measured;
 - production canary #881 is not proven;
@@ -132,5 +156,6 @@ Before activation, rollback is deletion of the temporary Neon branch and
 removal of the unmerged code branch. After staging, keep
 `AUTOPILOT_ACTIVATE=0`; disabling/removing only
 `school-autopilot-shadow.service` leaves Assistant Lab, DDS3, BEN and video
-services untouched. Production database rollback is not applicable because no
-production migration has occurred.
+services untouched. The temporary LOGIN can be revoked independently and also
+expires at the timestamp recorded above. Production database rollback is not
+applicable because no production migration has occurred.
