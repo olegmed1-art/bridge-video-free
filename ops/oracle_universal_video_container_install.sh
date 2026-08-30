@@ -63,6 +63,16 @@ if (( disk_available_kb < MIN_FREE_KB )); then
 fi
 printf 'UNIVERSAL_VIDEO_CONTAINER_RESOURCE disk_available_kb=%s disk_required_kb=%s\n' "$disk_available_kb" "$MIN_FREE_KB"
 if (( disk_available_kb < MIN_FREE_KB )); then
+  for storage_area in spool output media model-cache; do
+    storage_used_kb="$(du -skx "$BASE_DIR/$storage_area" | awk '{print $1}')"
+    printf 'UNIVERSAL_VIDEO_CONTAINER_STORAGE area=%s used_kb=%s\n' "$storage_area" "$storage_used_kb"
+  done
+  if [[ -d /var/lib/docker && ! -L /var/lib/docker ]]; then
+    storage_used_kb="$(du -skx /var/lib/docker | awk '{print $1}')"
+    printf 'UNIVERSAL_VIDEO_CONTAINER_STORAGE area=docker used_kb=%s\n' "$storage_used_kb"
+  fi
+  storage_used_kb="$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $3}')"
+  printf 'UNIVERSAL_VIDEO_CONTAINER_STORAGE area=rootfs used_kb=%s\n' "$storage_used_kb"
   printf '{"error_code":"UV_CONTAINER_DISK_INSUFFICIENT","status":"FAILED"}\n' >&2
   exit 78
 fi
