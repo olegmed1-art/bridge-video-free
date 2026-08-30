@@ -45,3 +45,24 @@ def test_diana2_private_review_request_matches_bounded_rerun_receipt():
     assert request["allowed_decisions"] == ["ACCEPT", "REVISE", "REJECT"]
     assert all(value is None for value in request["decision_input"].values())
     assert all(value is False for value in request["authority"].values())
+
+
+def test_diana2_private_episode_acceptance_is_hash_bound_and_non_persisting():
+    request = json.loads(Path(
+        "data/research/evolutionary_course_diana2_private_episode_review_request_v1.json"
+    ).read_text(encoding="utf-8"))
+    decision = json.loads(Path(
+        "data/research/evolutionary_course_diana2_private_episode_decision_receipt_v1.json"
+    ).read_text(encoding="utf-8"))
+    assert decision["decision"] == "ACCEPT"
+    assert decision["disposition"] == "PRIVATE_RESEARCH_ACCEPTED"
+    assert decision["episode_id"] == request["episode_id"]
+    assert decision["episode_sha256"] == request["episode_sha256"]
+    assert decision["skill_id"] == request["skill_id"]
+    assert decision["reviewer"]["authority"] == "SCHOOL_DIRECTOR"
+    assert decision["episode_persisted"] is False
+    assert decision["canonical_promoted"] is False
+    assert decision["curriculum_activated"] is False
+    assert decision["student_profile_written"] is False
+    assert decision["publication_allowed"] is False
+    assert decision["follow_up_required"] is True
