@@ -27,6 +27,7 @@ def _quality() -> dict:
                 "teacher_intervention": "Преподаватель предложил считать отдельно по мастям.",
                 "student_followup": "Ученица пересчитала и получила семь взяток.",
                 "observed_outcome": "Наблюдается содержательный ответ после вмешательства.",
+                "outcome_status": "PARTIAL",
                 "help_state": "after_observed_intervention",
                 "actor_attribution_status": "SUPPORTED",
                 "evidence_refs": ["s1", "s2", "s3", "s4"],
@@ -90,7 +91,7 @@ def test_adapter_accepts_only_complete_evidence_cycle():
     assert episode["learning_task"]["skill_id"].startswith("candidate.skill.")
     assert episode["mastery_transition"] == {
         "from_state": "INTRODUCED",
-        "to_state": "SUPPORTED",
+        "to_state": "INTRODUCED",
         "evidence_claim_ids": [f"{episode['episode_id']}:claim-1"],
     }
     assert episode["claims"][0]["epistemic_class"] == "INFERENCE"
@@ -155,7 +156,11 @@ def test_prior_candidate_state_is_explicit_and_bounded():
         source=_source(),
         prior_skill_states={skill_id: "UNSTABLE"},
     )
-    assert report["episodes"][0]["mastery_transition"]["from_state"] == "UNSTABLE"
+    assert report["episodes"][0]["mastery_transition"] == {
+        "from_state": "UNSTABLE",
+        "to_state": "UNSTABLE",
+        "evidence_claim_ids": [report["episodes"][0]["claims"][0]["claim_id"]],
+    }
 
     with pytest.raises(Video31AdapterError, match="invalid prior skill state"):
         adapt_video31_quality(
@@ -181,3 +186,28 @@ def test_invalid_frame_reference_rejects_interaction():
     )
     assert report["accepted_episode_count"] == 0
     assert "INVALID_FRAME_EVIDENCE" in report["rejected_interactions"][0]["reason_codes"]
+
+
+def test_wrong_schema_and_missing_job_identity_fail_closed():
+    quality = _quality()
+    quality["schema"] = "diana-longitudinal-quality-v1"
+    with pytest.raises(Video31AdapterError, match="unsupported quality schema"):
+        adapt_video31_quality(quality, lesson_identity=_lesson(), source=_source())
+
+    quality = _quality()
+    quality["job_id"] = ""
+    with pytest.raises(Video31AdapterError, match="source job identity required"):
+        adapt_video31_quality(quality, lesson_identity=_lesson(), source=_source())
+
+
+def test_outcome_is_not_inferred_from_free_text():
+    quality = _quality()
+    interaction = quality["learning_interactions"][0]
+    interaction.pop("outcome_status")
+    interaction["observed_outcome"] = "Правильный самостоятельный ответ"
+    report = adapt_video31_quality(
+        quality, lesson_identity=_lesson(), source=_source()
+    )
+    episode = report["episodes"][0]
+    assert episode["interaction"]["outcome"] == "NOT_ASSESSED"
+    assert episode["mastery_transition"]["from_state"] == episode["mastery_transition"]["to_state"]
