@@ -27,29 +27,6 @@ permissions:
   contents: read
 
 jobs:
-  oracle-host-key-evidence:
-    if: ${{ github.event_name == 'pull_request' && github.event.pull_request.number == 991 }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 3
-    steps:
-      - name: Checkout pinned host-key verifier
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-
-      - name: Emit verified public RSA host key
-        shell: bash
-        env:
-          ORACLE_HOST: 158.180.47.161
-          EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
-        run: |
-          set -euo pipefail
-          known="$RUNNER_TEMP/oracle-autopilot-known-hosts"
-          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
-          line="$(grep 'ssh-rsa' "$known")"
-          test -n "$line"
-          printf 'AUTOPILOT_ORACLE_RSA_HOST_KEY=%s\n' "$line"
-
   oracle-shadow-contract:
     runs-on: ubuntu-24.04
     timeout-minutes: 8
