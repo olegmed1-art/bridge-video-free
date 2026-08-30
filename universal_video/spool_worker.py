@@ -19,7 +19,7 @@ from .drive_stage import DriveStageError, remove_staged_job, stage_drive_job
 from .finops_observation import build_video_finops_observation, directory_bytes
 from .result_conformance import ResultConformanceError, verify_result
 from .runner import run_job
-from .runtime_preflight import VideoRuntimeUnavailable, validate_video_runtime
+from .runtime_preflight import VideoRuntimeUnavailable, validate_staged_video, validate_video_runtime
 from .server_review import ServerReviewError, build_server_review
 
 
@@ -367,6 +367,7 @@ def process_one(spool_root: Path) -> bool:
         if intake_job.source.get("kind") == "google_drive":
             _write_progress(paths, intake_job.job_id, "DOWNLOADING_FROM_DRIVE")
             payload, staged_job_dir = stage_drive_job(intake_job, payload, media_root)
+            validate_staged_video(Path(str((payload.get("source") or {}).get("path") or "")))
             _write_progress(paths, intake_job.job_id, "SOURCE_READY_ON_ORACLE")
         validated_job = validate_from_env(payload)
         _write_progress(paths, validated_job.job_id, "PROCESSING")

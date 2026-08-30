@@ -88,6 +88,61 @@ def test_drive_metadata_name_does_not_change_request_identity(tmp_path: Path, mo
     assert canonical_job_hash(staged) == canonical_job_hash(original)
 
 
+
+def test_truncated_drive_download_never_leaves_part_or_becomes_a_staged_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    import universal_video.drive_stage as stage
+
+    media = tmp_path / "media"
+    media.mkdir()
+    metadata = {
+        "id": SOURCE_ID,
+        "name": "lesson.mp4",
+        "mimeType": "video/mp4",
+        "size": str(len(CONTENT)),
+    }
+    monkeypatch.setattr(stage, "access_token", lambda: "token")
+    monkeypatch.setattr(stage, "file_metadata", lambda *_: dict(metadata))
+
+    def truncated_download(_file_id, destination, _token, **_kwargs):
+        destination.write_bytes(CONTENT[:-1])
+        return dict(metadata)
+
+    monkeypatch.setattr(stage, "download_file", truncated_download)
+    with pytest.raises(DriveStageError) as caught:
+        stage_drive_job(validate_job(_payload()), _payload(), media)
+    assert caught.value.error_code == "UV_DRIVE_SOURCE_SIZE_MISMATCH"
+    job_dir = media / "drive-ready" / "generic-video-001"
+    assert not (job_dir / "source.mp4").exists()
+
+
+def test_non_video_drive_mime_is_rejected_before_download(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import universal_video.drive_stage as stage
+
+    media = tmp_path / "media"
+    media.mkdir()
+    metadata = {
+        "id": SOURCE_ID,
+        "name": "not-a-video.pdf",
+        "mimeType": "application/pdf",
+        "size": str(len(CONTENT)),
+    }
+    monkeypatch.setattr(stage, "access_token", lambda: "token")
+    monkeypatch.setattr(stage, "file_metadata", lambda *_: dict(metadata))
+    called = False
+
+    def should_not_download(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("non-video source reached download")
+
+    monkeypatch.setattr(stage, "download_file", should_not_download)
+    with pytest.raises(DriveStageError) as caught:
+        stage_drive_job(validate_job(_payload()), _payload(), media)
+    assert caught.value.error_code == "UV_DRIVE_SOURCE_MIME_UNSUPPORTED"
+    assert called is False
+
 def test_cleanup_refuses_path_outside_job_staging(tmp_path: Path):
     media = tmp_path / "media"
     media.mkdir()

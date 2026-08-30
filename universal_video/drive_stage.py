@@ -15,6 +15,10 @@ from .drive_adapter import access_token, download_file, file_metadata
 class DriveStageError(RuntimeError):
     """A bounded Drive-to-Oracle transfer failure."""
 
+    def __init__(self, message: str, *, error_code: str = "UV_DRIVE_STAGE_FAILED") -> None:
+        self.error_code = error_code
+        super().__init__(message)
+
 
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
@@ -27,6 +31,42 @@ def _sha256(path: Path) -> str:
 def _safe_suffix(name: str) -> str:
     suffix = Path(name).suffix.lower()
     return suffix if re.fullmatch(r"\.[a-z0-9]{1,10}", suffix) else ".video"
+
+
+def _require_video_mime(meta: dict[str, Any]) -> str:
+    """Reject non-video Drive objects before they consume Oracle media space."""
+
+    mime = str(meta.get("mimeType") or "").strip().lower()
+    if not mime.startswith("video/"):
+        raise DriveStageError(
+            "Drive source MIME type is not a video",
+            error_code="UV_DRIVE_SOURCE_MIME_UNSUPPORTED",
+        )
+    return mime
+
+
+def _verify_staged_bytes(path: Path, *, declared_size: int, expected_sha: str) -> str:
+    """Require a complete local source before it can leave ``.part``."""
+
+    try:
+        observed_size = path.stat().st_size
+    except OSError as exc:
+        raise DriveStageError(
+            "staged Drive source is unavailable",
+            error_code="UV_DRIVE_SOURCE_UNAVAILABLE",
+        ) from exc
+    if observed_size != declared_size:
+        raise DriveStageError(
+            "staged Drive source size mismatch",
+            error_code="UV_DRIVE_SOURCE_SIZE_MISMATCH",
+        )
+    observed_sha = _sha256(path)
+    if expected_sha and observed_sha != expected_sha:
+        raise DriveStageError(
+            "staged Drive source checksum mismatch",
+            error_code="UV_DRIVE_SOURCE_CHECKSUM_MISMATCH",
+        )
+    return observed_sha
 
 
 def stage_drive_job(job: VideoJob, payload: dict[str, Any], media_root: Path) -> tuple[dict[str, Any], Path]:
@@ -54,6 +94,7 @@ def stage_drive_job(job: VideoJob, payload: dict[str, Any], media_root: Path) ->
     max_bytes = int(job.options.get("max_source_bytes") or MAX_SOURCE_BYTES)
     if not 0 < declared_size <= max_bytes:
         raise DriveStageError("Drive source size is outside configured bounds")
+    mime_type = _require_video_mime(meta)
 
     drive_name = str(meta.get("name") or job.source.get("name") or "source.video")
     request_name = str(job.source.get("name") or "").strip()
@@ -61,17 +102,16 @@ def stage_drive_job(job: VideoJob, payload: dict[str, Any], media_root: Path) ->
     partial = job_dir / f".{final.name}.part"
     expected_sha = str(meta.get("sha256Checksum") or "").strip().lower()
     if final.exists():
-        if final.is_symlink() or not final.is_file() or final.stat().st_size != declared_size:
+        if final.is_symlink() or not final.is_file():
             raise DriveStageError("existing staged Drive source is not reusable")
-        observed_sha = _sha256(final)
-        if expected_sha and observed_sha != expected_sha:
-            raise DriveStageError("existing staged Drive source checksum mismatch")
+        observed_sha = _verify_staged_bytes(final, declared_size=declared_size, expected_sha=expected_sha)
         downloaded = dict(meta)
         downloaded["_download_sha256"] = observed_sha
     else:
         partial.unlink(missing_ok=True)
         downloaded = download_file(
-            str(job.source["file_id"]),
+            str(job.source["file_id"],
+            ),
             partial,
             token,
             max_bytes=max_bytes,
@@ -79,6 +119,7 @@ def stage_drive_job(job: VideoJob, payload: dict[str, Any], media_root: Path) ->
         )
         with partial.open("rb") as handle:
             os.fsync(handle.fileno())
+        _verify_staged_bytes(partial, declared_size=declared_size, expected_sha=expected_sha)
         os.replace(partial, final)
         directory_fd = os.open(job_dir, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
         try:
@@ -93,7 +134,7 @@ def stage_drive_job(job: VideoJob, payload: dict[str, Any], media_root: Path) ->
         "file_id": str(job.source["file_id"]),
         **({"name": request_name[:500]} if request_name else {}),
         "drive_name": drive_name[:500],
-        "mime_type": str(downloaded.get("mimeType") or "application/octet-stream")[:200],
+        "mime_type": mime_type,
         "size_bytes": declared_size,
         "sha256": str(downloaded.get("_download_sha256") or _sha256(final)).lower(),
         "modified_time": str(downloaded.get("modifiedTime") or "")[:100],
