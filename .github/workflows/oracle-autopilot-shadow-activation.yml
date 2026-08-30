@@ -16,10 +16,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: oracle-instance-workload-mutation
-  cancel-in-progress: false
-
 jobs:
   contract:
     runs-on: ubuntu-24.04
@@ -61,6 +57,9 @@ jobs:
     needs: contract
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    concurrency:
+      group: oracle-instance-workload-mutation
+      cancel-in-progress: false
     env:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
