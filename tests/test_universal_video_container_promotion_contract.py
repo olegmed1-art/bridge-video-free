@@ -43,3 +43,11 @@ def test_promotion_requires_a_fresh_status_from_the_new_resident() -> None:
     assert "UV_CONTAINER_PROMOTION_STATUS_MISSING" in SCRIPT
     assert "UV_CONTAINER_PROMOTION_STATUS_STALE" in SCRIPT
     assert SCRIPT.count("float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])") == 2
+
+
+def test_promotion_exposes_only_structured_container_runtime_failure_code() -> None:
+    assert 'journalctl -u "$NEW_SERVICE" -n 80 --no-pager -o cat' in SCRIPT
+    assert 'set(value)=={"error_code","status"}' in SCRIPT
+    assert 're.fullmatch(r"UV_CONTAINER_[A-Z0-9_]+"' in SCRIPT
+    assert 'json.dumps(value,separators=(",",":"),sort_keys=True)' in SCRIPT
+    assert '\\{"error_code":"UV_CONTAINER_[A-Z0-9_]+","status":"FAILED"\\}' in WORKFLOW
