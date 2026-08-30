@@ -35,7 +35,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: oracle-universal-video-activation
+  group: ${{ github.event_name == 'pull_request' && format('oracle-universal-video-activation-pr-{0}', github.run_id) || 'oracle-instance-workload-mutation' }}
   cancel-in-progress: false
 
 jobs:

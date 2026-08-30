@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/oracle-universal-video-container-evidence.yml'
       - '.github/workflows/oracle-universal-video-container-promote.yml'
+      - '.github/workflows/oracle-universal-video-activation.yml'
       - 'deploy/oracle-universal-video/Dockerfile'
       - 'deploy/oracle-universal-video/universal-video-container-entrypoint.sh'
       - 'deploy/oracle-universal-video/universal-video-container.service'
@@ -32,7 +33,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: oracle-universal-video-container-evidence
+  group: oracle-instance-workload-mutation
   cancel-in-progress: false
 
 jobs:

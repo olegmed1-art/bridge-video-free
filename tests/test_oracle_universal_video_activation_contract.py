@@ -74,3 +74,8 @@ def test_activation_installs_export_boundary_from_the_exact_resolved_revision():
         "universal_video_admin=installed_revision_bound"
     )
     assert "UNIVERSAL_VIDEO_RUN_SMOKE=1" not in command
+
+def test_production_activation_shares_oracle_video_mutation_mutex():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "'oracle-instance-workload-mutation'" in text
+    assert "oracle-universal-video-activation-pr-{0}" in text
