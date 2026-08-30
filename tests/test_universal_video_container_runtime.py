@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import pytest
@@ -76,6 +77,33 @@ def test_container_image_keeps_credentials_and_media_out_of_layers() -> None:
     assert "GOOGLE_DRIVE_OAUTH" not in dockerfile
     assert "COPY universal_video" in dockerfile
     assert "USER universal-video:universal-video" in dockerfile
+
+
+def test_container_image_contains_neon_processor_dependency_closure() -> None:
+    root = Path(__file__).resolve().parents[1]
+    dockerfile = (root / "deploy/oracle-universal-video/Dockerfile").read_text(encoding="utf-8")
+    assert "requirements-universal-video-neon.txt" in dockerfile
+
+    local_modules = {path.stem: path for path in root.glob("*.py")}
+    pending = ["bridge_worker_3_1_free", "bridge_runtime_hardening_r25_16", "route_drive_job_outputs"]
+    required: set[str] = set()
+    while pending:
+        module = pending.pop()
+        if module in required:
+            continue
+        required.add(module)
+        tree = ast.parse(local_modules[module].read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imports = [alias.name.split(".")[0] for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imports = [node.module.split(".")[0]]
+            else:
+                imports = []
+            pending.extend(name for name in imports if name in local_modules and name not in required)
+
+    missing = sorted(f"{module}.py" for module in required if f"{module}.py" not in dockerfile)
+    assert missing == []
 
 
 def test_oracle_container_service_is_read_only_and_explicitly_activated() -> None:
