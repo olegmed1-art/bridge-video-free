@@ -20,6 +20,8 @@ NativeDetectorInjection = Callable[[Path], dict[str, Any]]
 
 LegacyParserInjection = Callable[[Path], dict[str, Any]]
 
+FRAME_EVIDENCE_SCHEMA = "universal-video-frame-evidence-v1"
+
 
 def _bounded_speech_declarations(
     declarations: Iterable[Mapping[str, Any]] | None,
@@ -123,6 +125,91 @@ def _safe_frame_path(job_dir: Path, file_name: Any) -> Path:
     return frame
 
 
+def _frame_evidence_index(
+    manifest: Mapping[str, Any],
+    frame_times: Mapping[str, float],
+) -> tuple[dict[str, list[dict[str, Any]]], dict[str, Any], int]:
+    """Validate optional media-worker packet metadata and index it by frame."""
+
+    raw = manifest.get("frame_evidence")
+    if raw is None:
+        return {}, {}, 0
+    if not isinstance(raw, Mapping) or raw.get("schema") != FRAME_EVIDENCE_SCHEMA:
+        raise ValueError("unsupported frame evidence contract")
+    strategy = str(raw.get("strategy") or "")
+    if strategy not in {"anchor-only-v1", "anchor-neighbors-v1"}:
+        raise ValueError("unsupported frame evidence strategy")
+    regions = raw.get("regions") or {}
+    if not isinstance(regions, Mapping):
+        raise ValueError("frame evidence regions must be an object")
+    for name, region in regions.items():
+        if name not in {"N", "E", "S", "W", "CENTER"} or not isinstance(region, Mapping):
+            raise ValueError("invalid frame evidence region")
+        values = [region.get(key) for key in ("x", "y", "width", "height")]
+        try:
+            x, y, width, height = (float(value) for value in values)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("frame evidence region must be numeric") from exc
+        if min(x, y, width, height) < 0 or width <= 0 or height <= 0 or x + width > 1 or y + height > 1:
+            raise ValueError("frame evidence region is outside normalized bounds")
+    expected_regions = {"N", "E", "S", "W", "CENTER"} if strategy == "anchor-neighbors-v1" else set()
+    if set(regions) != expected_regions:
+        raise ValueError("frame evidence regions do not match strategy")
+
+    bundles = raw.get("bundles")
+    if not isinstance(bundles, list):
+        raise ValueError("frame evidence bundles must be an array")
+    index: dict[str, list[dict[str, Any]]] = {}
+    seen_bundle_ids: set[str] = set()
+    for bundle in bundles:
+        if not isinstance(bundle, Mapping):
+            raise ValueError("frame evidence bundle must be an object")
+        bundle_id = str(bundle.get("bundle_id") or "").strip()
+        if not bundle_id or bundle_id in seen_bundle_ids:
+            raise ValueError("unsafe or duplicate frame evidence bundle id")
+        seen_bundle_ids.add(bundle_id)
+        try:
+            anchor_time = float(bundle.get("anchor_time"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("frame evidence anchor time must be numeric") from exc
+        if not math.isfinite(anchor_time) or anchor_time < 0:
+            raise ValueError("frame evidence anchor time must be non-negative")
+        members = bundle.get("members")
+        if not isinstance(members, list) or not members:
+            raise ValueError("frame evidence bundle must contain members")
+        roles: set[str] = set()
+        for member in members:
+            if not isinstance(member, Mapping):
+                raise ValueError("frame evidence member must be an object")
+            role = str(member.get("role") or "").upper()
+            file_name = str(member.get("file") or "")
+            if role not in {"BEFORE", "CENTER", "AFTER"} or role in roles:
+                raise ValueError("invalid or duplicate frame evidence role")
+            if file_name not in frame_times:
+                raise ValueError("frame evidence references an unknown frame")
+            try:
+                member_time = float(member.get("time"))
+                offset = float(member.get("offset_seconds"))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("frame evidence member time and offset must be numeric") from exc
+            if (
+                not math.isfinite(member_time)
+                or not math.isfinite(offset)
+                or member_time < 0
+                or abs(float(frame_times[file_name]) - member_time) > 0.001
+                or abs((member_time - anchor_time) - offset) > 0.001
+            ):
+                raise ValueError("frame evidence member time or offset mismatch")
+            roles.add(role)
+            index.setdefault(file_name, []).append({
+                "bundle_id": bundle_id,
+                "role": role,
+                "anchor_time": anchor_time,
+                "offset_seconds": member.get("offset_seconds"),
+            })
+    return index, dict(regions), len(bundles)
+
+
 def _wrap_injected_parser(parser: LegacyParserInjection):
     """Compatibility shim for explicit callers/tests; never selected implicitly."""
     def detector(frame: Path) -> dict[str, Any]:
@@ -183,6 +270,12 @@ def process_job_frames(
     frames = manifest.get("frames")
     if not isinstance(frames, list):
         raise TypeError("manifest frames must be an array")
+    frame_times = {
+        str(item.get("file")): float(item.get("time"))
+        for item in frames
+        if isinstance(item, Mapping) and item.get("file") is not None and item.get("time") is not None
+    }
+    evidence_index, crop_regions, evidence_bundle_count = _frame_evidence_index(manifest, frame_times)
 
     if parser is not None:
         vision = BridgeVisionEngine({"explicit-injected-parser": _wrap_injected_parser(parser)})
@@ -225,6 +318,11 @@ def process_job_frames(
         result["time"] = frame_meta.get("time")
         result["frame_file"] = frame.name
         result["frame_sha256"] = actual_frame_sha or frame_meta.get("sha256")
+        result["frame_evidence"] = {
+            "schema": FRAME_EVIDENCE_SCHEMA,
+            "memberships": evidence_index.get(frame.name, []),
+            "crop_regions": crop_regions,
+        }
         if speech:
             selected_speech_rows = _speech_for_frame(
                 speech,
@@ -297,7 +395,10 @@ def process_job_frames(
             "legacy_old_bbo_enabled": bool(allow_legacy_old_bbo),
             "profiled_challenger_enabled": profiled_shadow,
             "result_scope": "SHADOW_ONLY" if profiled_shadow else "CANONICAL_PIPELINE_INPUT",
-            "canonical_promotion_allowed": not profiled_shadow,
+            "canonical_promotion_allowed": False,
+            "frame_evidence_schema": FRAME_EVIDENCE_SCHEMA if evidence_bundle_count else None,
+            "frame_evidence_bundle_count": evidence_bundle_count,
+            "full_deal_validation_stage": "bridge_vision.multiframe",
             "job_id": manifest.get("job_id"),
             "source_fingerprint": manifest.get("source_fingerprint"),
             "input_frames": len(frames),

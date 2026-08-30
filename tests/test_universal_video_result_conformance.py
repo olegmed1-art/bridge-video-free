@@ -256,6 +256,41 @@ def test_frame_tamper_symlink_and_raw_media_fail_closed(tmp_path: Path):
         _verify(job_dir)
 
 
+def test_frame_evidence_packet_is_bound_to_hashed_frame_inventory(tmp_path: Path):
+    job_dir, manifest = _bundle(tmp_path)
+    manifest["frame_evidence"] = {
+        "schema": "universal-video-frame-evidence-v1",
+        "strategy": "anchor-neighbors-v1",
+        "neighbor_offset_seconds": 1.5,
+        "regions": {
+            "N": {"x": 0.15, "y": 0.0, "width": 0.7, "height": 0.3},
+            "E": {"x": 0.7, "y": 0.15, "width": 0.3, "height": 0.7},
+            "S": {"x": 0.15, "y": 0.7, "width": 0.7, "height": 0.3},
+            "W": {"x": 0.0, "y": 0.15, "width": 0.3, "height": 0.7},
+            "CENTER": {"x": 0.25, "y": 0.25, "width": 0.5, "height": 0.5},
+        },
+        "frame_count": 1,
+        "bundle_count": 1,
+        "bundles": [{
+            "bundle_id": "evidence-0000",
+            "anchor_time": 0.0,
+            "members": [{
+                "role": "CENTER",
+                "time": 0.0,
+                "offset_seconds": 0.0,
+                "file": "frame-001.jpg",
+            }],
+        }],
+    }
+    (job_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    assert _verify(job_dir)["state"] == "PASS"
+
+    manifest["frame_evidence"]["bundles"][0]["members"][0]["file"] = "missing.jpg"
+    (job_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ResultConformanceError, match="unknown keyframe"):
+        _verify(job_dir)
+
+
 def test_generation_inventory_detects_later_artifact_change(tmp_path: Path):
     job_dir, _ = _bundle(tmp_path)
     report = _verify(job_dir, evidence_phase="GENERATION_FINALIZATION")

@@ -52,6 +52,7 @@ MAX_SERVER_REVIEW_EXCERPT_CHARS = 500
 DEFAULT_MAX_FILE_BYTES = 256 * 1024**2
 DEFAULT_MAX_TOTAL_BYTES = 512 * 1024**2
 DEFAULT_MAX_FRAMES = 300
+FRAME_EVIDENCE_SCHEMA = "universal-video-frame-evidence-v1"
 RUNNER_IMPLEMENTED_STAGES = RUNNER_EXECUTED_STAGES
 QC_FAILURE_REASONS = (
     "EMPTY_ASR",
@@ -121,6 +122,76 @@ def _required_hex(value: Any, field: str, pattern: re.Pattern[str] = HEX64) -> s
     if not pattern.fullmatch(text):
         raise ResultConformanceError(f"invalid {field}")
     return text
+
+
+def _validate_frame_evidence(manifest: dict[str, Any], frame_times: dict[str, float]) -> None:
+    packet = manifest.get("frame_evidence")
+    if packet is None:
+        return
+    if not isinstance(packet, dict) or packet.get("schema") != FRAME_EVIDENCE_SCHEMA:
+        raise ResultConformanceError("invalid frame evidence contract")
+    frame_names = set(frame_times)
+    if _exact_int(packet.get("frame_count"), "frame_evidence.frame_count") != len(frame_names):
+        raise ResultConformanceError("frame evidence count mismatch")
+    strategy = str(packet.get("strategy") or "")
+    if strategy not in {"anchor-only-v1", "anchor-neighbors-v1"}:
+        raise ResultConformanceError("invalid frame evidence strategy")
+    regions = packet.get("regions")
+    if not isinstance(regions, dict):
+        raise ResultConformanceError("frame evidence regions must be an object")
+    required_regions = {"N", "E", "S", "W", "CENTER"} if strategy == "anchor-neighbors-v1" else set()
+    if set(regions) != required_regions:
+        raise ResultConformanceError("frame evidence regions do not match strategy")
+    for region in regions.values():
+        if not isinstance(region, dict) or set(region) != {"x", "y", "width", "height"}:
+            raise ResultConformanceError("invalid frame evidence region")
+        x = _bounded_number(region["x"], "frame evidence region x")
+        y = _bounded_number(region["y"], "frame evidence region y")
+        width = _bounded_number(region["width"], "frame evidence region width")
+        height = _bounded_number(region["height"], "frame evidence region height")
+        if width <= 0 or height <= 0 or x + width > 1 or y + height > 1:
+            raise ResultConformanceError("frame evidence region is outside normalized bounds")
+    bundles = packet.get("bundles")
+    if not isinstance(bundles, list) or not bundles:
+        raise ResultConformanceError("frame evidence bundles are missing")
+    if _exact_int(packet.get("bundle_count"), "frame_evidence.bundle_count") != len(bundles):
+        raise ResultConformanceError("frame evidence bundle count mismatch")
+    seen_ids: set[str] = set()
+    referenced: set[str] = set()
+    for bundle in bundles:
+        if not isinstance(bundle, dict):
+            raise ResultConformanceError("invalid frame evidence bundle")
+        bundle_id = str(bundle.get("bundle_id") or "")
+        if not re.fullmatch(r"evidence-[0-9]{4}", bundle_id) or bundle_id in seen_ids:
+            raise ResultConformanceError("unsafe or duplicate frame evidence bundle id")
+        seen_ids.add(bundle_id)
+        anchor_time = _bounded_number(bundle.get("anchor_time"), "frame evidence anchor time", maximum=12 * 3600)
+        members = bundle.get("members")
+        if not isinstance(members, list) or not members:
+            raise ResultConformanceError("frame evidence bundle members are missing")
+        roles: set[str] = set()
+        for member in members:
+            if not isinstance(member, dict):
+                raise ResultConformanceError("invalid frame evidence member")
+            role = str(member.get("role") or "")
+            name = str(member.get("file") or "")
+            if role not in {"BEFORE", "CENTER", "AFTER"} or role in roles:
+                raise ResultConformanceError("invalid frame evidence role")
+            if name not in frame_names:
+                raise ResultConformanceError("frame evidence references an unknown keyframe")
+            roles.add(role)
+            referenced.add(name)
+            member_time = _bounded_number(member.get("time"), "frame evidence member time", maximum=12 * 3600)
+            if abs(frame_times[name] - member_time) > 0.001:
+                raise ResultConformanceError("frame evidence member time mismatch")
+            try:
+                offset = float(member.get("offset_seconds"))
+            except (TypeError, ValueError) as exc:
+                raise ResultConformanceError("invalid frame evidence member offset") from exc
+            if not math.isfinite(offset) or abs((member_time - anchor_time) - offset) > 0.001:
+                raise ResultConformanceError("frame evidence member offset mismatch")
+    if referenced != frame_names:
+        raise ResultConformanceError("frame evidence does not cover keyframe inventory")
 
 
 def _positive_number(value: Any, field: str) -> float:
@@ -1029,6 +1100,7 @@ def verify_result(
     if len(manifest_frames) > max_frames:
         raise ResultConformanceError("keyframe count exceeds cap")
     seen_frames: set[str] = set()
+    frame_times: dict[str, float] = {}
     for item in manifest_frames:
         if not isinstance(item, dict):
             raise ResultConformanceError("invalid keyframe manifest entry")
@@ -1036,6 +1108,7 @@ def verify_result(
         if Path(name).name != name or Path(name).suffix.lower() not in FRAME_EXTENSIONS or name in seen_frames:
             raise ResultConformanceError("unsafe or duplicate keyframe name")
         seen_frames.add(name)
+        frame_times[name] = _bounded_number(item.get("time"), "keyframe time", maximum=12 * 3600)
         artifact = _artifact(job_dir / "frames" / name, f"frames/{name}", max_file_bytes=max_file_bytes)
         if artifact["sha256"] != _required_hex(item.get("sha256"), "frame sha256"):
             raise ResultConformanceError("keyframe hash mismatch")
@@ -1049,6 +1122,7 @@ def verify_result(
         }
         if disk_frames != seen_frames:
             raise ResultConformanceError("keyframe inventory mismatch")
+    _validate_frame_evidence(manifest, frame_times)
 
     base_artifact_set_sha256 = _artifact_set_sha256(artifacts)
     server_review_path = job_dir / SERVER_REVIEW_FILE
