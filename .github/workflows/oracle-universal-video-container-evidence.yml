@@ -132,8 +132,8 @@ jobs:
           set -e
           if (( prepare_rc != 0 )); then
             python ops/bounded_container_log_diagnostic.py "$RUNNER_TEMP/prepare.log" || true
-            disk_available_kb="$("${ssh_base[@]}" "df -Pk /opt/bridge-school | awk 'NR==2 {print \\$4}'")"
-            [[ "$disk_available_kb" =~ ^[0-9]+$ ]] && printf 'UNIVERSAL_VIDEO_CONTAINER_RESOURCE disk_available_kb=%s disk_required_kb=8388608\\n' "$disk_available_kb"
+            disk_available_kb="$("${ssh_base[@]}" "df -Pk /opt/bridge-school | tail -n 1 | tr -s ' ' | cut -d ' ' -f 4")"
+            [[ "$disk_available_kb" =~ ^[0-9]+$ ]] && echo "UNIVERSAL_VIDEO_CONTAINER_RESOURCE disk_available_kb=$disk_available_kb disk_required_kb=8388608"
             echo '{"error_code":"UV_CONTAINER_SOURCE_PREPARE_FAILED","status":"FAILED"}'
             exit "$prepare_rc"
           fi
