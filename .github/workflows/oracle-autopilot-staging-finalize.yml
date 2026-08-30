@@ -137,7 +137,7 @@ jobs:
              sudo -n /usr/local/sbin/oracle-idle-state
              printf "AUTOPILOT_SERVICE_ACTIVE=%s\n" "$(systemctl is-active school-autopilot-shadow.service 2>/dev/null || true)"
              printf "AUTOPILOT_SERVICE_ENABLED=%s\n" "$(systemctl is-enabled school-autopilot-shadow.service 2>/dev/null || true)"
-             printf "AUTOPILOT_STAGED_REVISION=%s\n" "$(cat /opt/bridge-school/school-autopilot/current/SOURCE_REVISION)"' \
+             printf "AUTOPILOT_STAGED_REVISION=%s\n" "$(sudo -n cat /opt/bridge-school/school-autopilot/current/SOURCE_REVISION)"' \
             | tee "$proof"
           grep -Fx 'ORACLE_IDLE_STATE=IDLE' "$proof" >/dev/null
           grep -Eq '^ORACLE_IDLE_REASON=[A-Za-z0-9_,.=-]+$' "$proof"
@@ -219,4 +219,3 @@ jobs:
           [[ "$state" == STOPPED ]] || { echo "instance did not reach STOPPED" >&2; exit 1; }
           echo 'AUTOPILOT_FINALIZE_IDLE_PASS'
           echo 'AUTOPILOT_FINALIZE_INSTANCE_STOPPED'
-

@@ -2,7 +2,7 @@
   "action": "stop_after_idle",
   "expected_staged_revision": "edc7e8530f0aa3efa84910cb09ee459ec25f1cf6",
   "instance_ocid": "ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq",
-  "request_id": "autopilot-stage-20260830-01-stop",
+  "request_id": "autopilot-stage-20260830-02-stop",
   "require_autopilot_inactive": true,
   "staging_run_id": 33321948279,
   "target_host": "158.180.47.161"
