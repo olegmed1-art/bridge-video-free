@@ -58,6 +58,7 @@ def test_container_installer_reclaims_only_unused_video_images_before_build() ->
 
     assert 'UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB:-8388608' in installer
     assert 'docker builder prune --all --force' in installer
+    assert 'docker image prune --all --force' in installer
     assert 'docker image ls --filter "reference=$IMAGE_REPO:*"' in installer
     assert 'docker ps -aq --filter "ancestor=$old_image_id"' in installer
     assert 'UV_CONTAINER_DISK_INSUFFICIENT' in installer
@@ -100,8 +101,6 @@ def test_bounded_storage_inventory_has_fixed_non_secret_areas() -> None:
         [
             "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=media used_kb=1048576",
             "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=var-log used_kb=2048",
-        "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=root-cache used_kb=4096",
-        "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=uv-cache used_kb=3072",
             "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=root-cache used_kb=4096",
             "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=uv-cache used_kb=3072",
             "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=private-path used_kb=1",
@@ -109,6 +108,8 @@ def test_bounded_storage_inventory_has_fixed_non_secret_areas() -> None:
     ) == [
         "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=media used_kb=1048576",
         "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=var-log used_kb=2048",
+        "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=root-cache used_kb=4096",
+        "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=uv-cache used_kb=3072",
     ]
 
 
