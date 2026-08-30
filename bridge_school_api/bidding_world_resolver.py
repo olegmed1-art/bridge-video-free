@@ -102,8 +102,11 @@ def _winner_or_conflict(rules: tuple[KnowledgeRule, ...]) -> tuple[KnowledgeRule
 
 
 def _profile_fingerprint(profile: ResolutionProfile) -> str:
-    raw = "|".join((profile.system_profile, profile.system_version, profile.learner_level,
-                    profile.auction_context_id, profile.effective_at.isoformat()))
+    raw = json.dumps(
+        [profile.system_profile, profile.system_version, profile.learner_level,
+         profile.auction_context_id, profile.effective_at.isoformat()],
+        ensure_ascii=False, separators=(",", ":"),
+    )
     return hashlib.sha256(raw.encode()).hexdigest()
 
 

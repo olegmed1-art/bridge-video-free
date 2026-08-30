@@ -7,6 +7,7 @@ from bridge_school_api.bidding_world_resolver import (
     CANON_CONFLICT, UNRESOLVED_GAP, WORLD_CONFLICT, WORLD_FALLBACK,
     CanonGapReceipt, KnowledgeRule, PostgresCanonGapStore, ResolutionProfile, learner_response, resolve_two_lane,
 )
+from bridge_school_api.bidding_world_resolver import _profile_fingerprint
 
 NOW = datetime(2026, 8, 30, tzinfo=timezone.utc)
 PROFILE = ResolutionProfile("natural", "v1", "L1", "auction-1", NOW)
@@ -19,9 +20,7 @@ def rule(key, lane, action, *, profile=PROFILE, priority=1, specificity=1, confi
 
 
 def verified(gap_id, school_id, fingerprint, profile):
-    import hashlib
-    profile_key = hashlib.sha256("|".join((profile.system_profile, profile.system_version,
-        profile.learner_level, profile.auction_context_id, profile.effective_at.isoformat())).encode()).hexdigest()
+    profile_key = _profile_fingerprint(profile)
     return CanonGapReceipt(gap_id, school_id, fingerprint, profile_key, NOW)
 
 
@@ -124,6 +123,12 @@ def test_incompatible_profile_candidates_are_not_ranked_together():
     result = resolve([], [rule("natural", "external", "1S"),
                           rule("sayc", "external", "1H", profile=sayc, priority=999)])
     assert result.outcome == WORLD_FALLBACK and result.selected.rule_id == "natural"
+
+
+def test_profile_fingerprint_is_not_ambiguous_when_fields_contain_delimiters():
+    left = ResolutionProfile("natural|v1", "L1", "beginner", "auction-1", NOW)
+    right = ResolutionProfile("natural", "v1|L1", "beginner", "auction-1", NOW)
+    assert _profile_fingerprint(left) != _profile_fingerprint(right)
 
 
 def test_world_disagreement_and_low_confidence_remain_unselected():

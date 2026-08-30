@@ -163,6 +163,17 @@ BEGIN
  EXCEPTION WHEN check_violation THEN GET STACKED DIAGNOSTICS v_constraint=CONSTRAINT_NAME; failed:=(v_constraint='world_robot_decision_public_raw_response'); END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_PACKED_CARD_TOKENS_ACCEPTED'; END IF;
 
+ bad_raw:='{"explanation":"AsKs"}';
+ bad_trace:=jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
+ failed:=false; v_constraint:=NULL; BEGIN
+  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
+   public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
+  VALUES(s,config,'ROBOT_LIVE_DECISION','N',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
+   '{"calls":[]}','{}',bad_raw,'{"bid":"1S"}','high',bad_trace);
+ EXCEPTION WHEN check_violation THEN GET STACKED DIAGNOSTICS v_constraint=CONSTRAINT_NAME; failed:=(v_constraint='world_robot_decision_public_raw_response'); END;
+ IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_CASE_VARIANT_PACKED_CARD_TOKENS_ACCEPTED'; END IF;
+
  failed:=false; v_constraint:=NULL; BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)

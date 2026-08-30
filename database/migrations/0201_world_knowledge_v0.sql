@@ -39,7 +39,7 @@ SELECT EXISTS (SELECT 1 FROM walk WHERE jsonb_typeof(value)='string'
  AND (
    value #>> '{}' ~* '(^|[^a-z0-9])[2-9tjqka][cdhs]([^a-z0-9]|$)'
    OR regexp_replace(value #>> '{}','[^a-z0-9]','','gi')
-      ~ '^([2-9TJQKA][CDHS])+$'
+      ~* '^([2-9TJQKA][CDHS])+$'
  ));
 $$;
 
