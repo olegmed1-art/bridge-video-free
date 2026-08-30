@@ -119,7 +119,23 @@ jobs:
         run: |
           set -euo pipefail
           expected_blob="$(gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_container_promote.sh?ref=$EXPECTED_COMMIT" --jq .sha)"
+          expected_prepare_blob="$(gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_run_command.sh?ref=$EXPECTED_COMMIT" --jq .sha)"
+          gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_run_command.sh?ref=$EXPECTED_COMMIT" --jq .content | tr -d '\\n' | base64 --decode > "$RUNNER_TEMP/prepare.sh"
+          [[ "$(git hash-object "$RUNNER_TEMP/prepare.sh")" == "$expected_prepare_blob" ]]
+          /bin/bash -n "$RUNNER_TEMP/prepare.sh"
           ssh_base=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          if ! "${ssh_base[@]}" 'sudo -n systemctl is-active --quiet universal-video-container.service'; then
+            set +e
+            "${ssh_base[@]}" "sudo -n env UNIVERSAL_VIDEO_GIT_REF='$EXPECTED_COMMIT' UNIVERSAL_VIDEO_ACTIVATE=1 UNIVERSAL_VIDEO_PREWARM_MODEL=1 UNIVERSAL_VIDEO_RUN_SMOKE=0 /bin/bash -s" < "$RUNNER_TEMP/prepare.sh" > "$RUNNER_TEMP/prepare.log" 2>&1
+            prepare_rc=$?
+            set -e
+            if (( prepare_rc != 0 )); then
+              echo UV_CONTAINER_PROMOTION_SOURCE_PREPARE_FAILED
+              exit "$prepare_rc"
+            fi
+            grep -Fx UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS "$RUNNER_TEMP/prepare.log"
+            echo UV_CONTAINER_PROMOTION_SOURCE_PREPARE_PASS
+          fi
           remote_head="$("${ssh_base[@]}" 'sudo -n git -C /opt/bridge-school/universal-video-src rev-parse HEAD')" || { echo UV_CONTAINER_PROMOTION_SOURCE_UNAVAILABLE; exit 1; }
           [[ "$remote_head" == "$EXPECTED_COMMIT" ]] || { echo UV_CONTAINER_PROMOTION_SOURCE_MISMATCH; exit 1; }
           "${ssh_base[@]}" 'sudo -n test -f /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh' || { echo UV_CONTAINER_PROMOTION_ENTRYPOINT_MISSING; exit 1; }
