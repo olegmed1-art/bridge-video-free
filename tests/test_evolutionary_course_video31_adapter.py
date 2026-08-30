@@ -29,6 +29,7 @@ def _quality() -> dict:
                 "teacher_intervention": "Преподаватель предложил считать отдельно по мастям.",
                 "student_followup": "Ученица пересчитала и получила семь взяток.",
                 "observed_outcome": "Наблюдается содержательный ответ после вмешательства.",
+                "outcome_status": "PARTIAL",
                 "help_state": "after_observed_intervention",
                 "actor_attribution_status": "SUPPORTED",
                 "evidence_refs": ["s1", "s2", "s3", "s4"],
@@ -119,7 +120,7 @@ def test_adapter_accepts_only_complete_evidence_cycle():
     assert episode["learning_task"]["skill_id"].startswith("candidate.skill.")
     assert episode["mastery_transition"] == {
         "from_state": "INTRODUCED",
-        "to_state": "SUPPORTED",
+        "to_state": "INTRODUCED",
         "evidence_claim_ids": [f"{episode['episode_id']}:claim-1"],
     }
     assert episode["claims"][0]["epistemic_class"] == "INFERENCE"
@@ -219,6 +220,7 @@ def test_prior_candidate_state_is_explicit_and_bounded():
         prior_skill_states={skill_id: "UNSTABLE"},
     )
     assert report["episodes"][0]["mastery_transition"]["from_state"] == "UNSTABLE"
+    assert report["episodes"][0]["mastery_transition"]["to_state"] == "UNSTABLE"
 
     with pytest.raises(Video31AdapterError, match="invalid prior skill state"):
         adapt_video31_quality(
@@ -244,3 +246,101 @@ def test_invalid_frame_reference_rejects_interaction():
     )
     assert report["accepted_episode_count"] == 0
     assert "INVALID_FRAME_EVIDENCE" in report["rejected_interactions"][0]["reason_codes"]
+
+
+def _reviewed_catalog() -> dict:
+    return {
+        "schema": "school-skill-catalog-v1",
+        "catalog_version": "SCHOOL SKILL CATALOG v1",
+        "authority": {
+            "authority_class": "CANDIDATE_RESEARCH",
+            "school_canon_activation_allowed": False,
+            "curriculum_activation_allowed": False,
+            "student_profile_write_allowed": False,
+            "publication_allowed": False,
+        },
+        "skills": [{
+            "skill_id": "candidate.skill.count-top-tricks",
+            "title": "Подсчитать верхние взятки",
+            "aliases": ["Сколько верхних взяток в контракте без козыря?"],
+            "prerequisite_skill_ids": [],
+            "mastery_criteria": {
+                "RECOGNIZED": ["Различает готовые и развиваемые взятки."],
+                "SUPPORTED": ["Считает по мастям после вопроса."],
+                "INDEPENDENT": ["Считает без подсказки."],
+                "TRANSFERRED": ["Считает в новой структуре рук."],
+            },
+            "review_state": "APPROVED_CANDIDATE",
+        }],
+    }
+
+
+def test_catalog_bound_mode_uses_stable_reviewed_skill_id():
+    report = adapt_video31_quality(
+        _quality(),
+        lesson_identity=_lesson(),
+        source=_source(),
+        skill_catalog=_reviewed_catalog(),
+        require_catalog_binding=True,
+    )
+    assert report["skill_binding_mode"] == "REVIEWED_CATALOG"
+    episode = report["episodes"][0]
+    assert episode["learning_task"]["skill_id"] == "candidate.skill.count-top-tricks"
+    assert episode["mastery_transition"]["from_state"] == episode["mastery_transition"]["to_state"]
+
+
+def test_catalog_bound_mode_rejects_unknown_or_unreviewed_wording():
+    quality = _quality()
+    quality["learning_interactions"][0]["task"] = "Похожая, но не проверенная формулировка"
+    report = adapt_video31_quality(
+        quality,
+        lesson_identity=_lesson(),
+        source=_source(),
+        skill_catalog=_reviewed_catalog(),
+        require_catalog_binding=True,
+    )
+    assert report["accepted_episode_count"] == 0
+    assert report["rejected_interactions"][0]["reason_codes"] == [
+        "SKILL_WORDING_NOT_REVIEWED"
+    ]
+
+    catalog = _reviewed_catalog()
+    catalog["skills"][0]["review_state"] = "REVIEW_REQUIRED"
+    report = adapt_video31_quality(
+        _quality(),
+        lesson_identity=_lesson(),
+        source=_source(),
+        skill_catalog=catalog,
+        require_catalog_binding=True,
+    )
+    assert report["accepted_episode_count"] == 0
+
+
+def test_required_catalog_binding_fails_without_catalog():
+    with pytest.raises(Video31AdapterError, match="catalog binding required"):
+        adapt_video31_quality(
+            _quality(),
+            lesson_identity=_lesson(),
+            source=_source(),
+            require_catalog_binding=True,
+        )
+
+
+def test_wrong_schema_job_and_free_text_outcome_fail_closed():
+    quality = _quality()
+    quality["schema"] = "diana-longitudinal-quality-v1"
+    with pytest.raises(Video31AdapterError, match="unsupported quality schema"):
+        adapt_video31_quality(quality, lesson_identity=_lesson(), source=_source())
+
+    quality = _quality()
+    quality["job_id"] = ""
+    with pytest.raises(Video31AdapterError, match="source job identity required"):
+        adapt_video31_quality(quality, lesson_identity=_lesson(), source=_source())
+
+    quality = _quality()
+    quality["learning_interactions"][0].pop("outcome_status")
+    quality["learning_interactions"][0]["observed_outcome"] = "Правильный ответ"
+    report = adapt_video31_quality(
+        quality, lesson_identity=_lesson(), source=_source()
+    )
+    assert report["episodes"][0]["interaction"]["outcome"] == "NOT_ASSESSED"

@@ -12,6 +12,8 @@ from .skill_catalog import SkillCatalogError, resolve_reviewed_skill, validate_c
 ADAPTER_SCHEMA = "evolutionary-course-video31-adapter-report-v1"
 CATALOG_ADAPTER_SCHEMA = "evolutionary-course-video31-catalog-adapter-report-v1"
 _COMPLETE = "COMPLETE_EVIDENCE_CANDIDATE"
+_EXPECTED_QUALITY_SCHEMA = "diana-longitudinal-quality-v2"
+_EXPLICIT_OUTCOMES = {"SUCCESS", "PARTIAL", "ERROR", "UNRESOLVED", "NOT_ASSESSED"}
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -86,13 +88,9 @@ def _support_level(interaction: Mapping[str, Any]) -> str:
 
 
 def _outcome(interaction: Mapping[str, Any]) -> str:
-    value = _text(interaction.get("observed_outcome")).casefold()
-    if not value:
-        return "NOT_ASSESSED"
-    if any(token in value for token in ("невер", "ошиб", "incorrect", "wrong")):
-        return "ERROR"
-    # A complete observed cycle is not proof of mastery or correctness.
-    return "PARTIAL"
+    """Use only explicit upstream assessment; never infer correctness from prose."""
+    value = _text(interaction.get("outcome_status")).upper()
+    return value if value in _EXPLICIT_OUTCOMES else "NOT_ASSESSED"
 
 
 def _candidate_skill(task: str) -> str:
@@ -105,10 +103,26 @@ def adapt_video31_quality(
     lesson_identity: Mapping[str, Any],
     source: Mapping[str, Any],
     prior_skill_states: Mapping[str, str] | None = None,
+    skill_catalog: Mapping[str, Any] | None = None,
+    require_catalog_binding: bool = False,
 ) -> dict[str, Any]:
     """Adapt complete Video 3.1 interactions without activating any authority."""
     if not isinstance(quality, Mapping):
         raise Video31AdapterError("quality payload must be an object")
+    if quality.get("schema") != _EXPECTED_QUALITY_SCHEMA:
+        raise Video31AdapterError("unsupported quality schema")
+    source_job_id = _text(quality.get("job_id"))
+    if not source_job_id:
+        raise Video31AdapterError("source job identity required")
+    if require_catalog_binding and skill_catalog is None:
+        raise Video31AdapterError("catalog binding required")
+    try:
+        normalized_catalog = validate_catalog(skill_catalog) if skill_catalog is not None else None
+    except SkillCatalogError as exc:
+        raise Video31AdapterError("invalid skill catalog") from exc
+    catalog_skills = {
+        item["skill_id"]: item for item in (normalized_catalog or {}).get("skills", [])
+    }
     authority = quality.get("authority")
     if not isinstance(authority, Mapping) or any(
         authority.get(field) != "DENY"
@@ -197,9 +211,22 @@ def adapt_video31_quality(
             continue
 
         task = _text(interaction.get("task"))
-        skill_id = _candidate_skill(task)
+        prerequisites: list[str] = []
+        if normalized_catalog is not None:
+            try:
+                skill_id = resolve_reviewed_skill(normalized_catalog, task)
+            except SkillCatalogError:
+                rejected.append({
+                    "interaction_id": interaction_id or None,
+                    "reason_codes": ["SKILL_WORDING_NOT_REVIEWED"],
+                })
+                continue
+            prerequisites = list(catalog_skills[skill_id]["prerequisite_skill_ids"])
+        else:
+            skill_id = _candidate_skill(task)
         from_state = prior.get(skill_id, "INTRODUCED")
-        to_state = "SUPPORTED"
+        # Interaction completeness is not evidence of mastery progression.
+        to_state = from_state
         episode_token = _digest(file_id, interaction_id, start, end)
         episode_id = f"evc.video31.{episode_token}"
         claim_id = f"{episode_id}:claim-1"
@@ -222,7 +249,7 @@ def adapt_video31_quality(
             "learning_task": {
                 "skill_id": skill_id,
                 "title": task,
-                "prerequisite_skill_ids": [],
+                "prerequisite_skill_ids": prerequisites,
             },
             "interaction": {
                 "teacher_actions": [_text(interaction.get("teacher_intervention"))],
@@ -270,7 +297,8 @@ def adapt_video31_quality(
     return {
         "schema": ADAPTER_SCHEMA,
         "source_quality_schema": quality.get("schema"),
-        "source_job_id": quality.get("job_id"),
+        "source_job_id": source_job_id,
+        "skill_binding_mode": "REVIEWED_CATALOG" if normalized_catalog is not None else "LEGACY_TASK_HASH",
         "lesson_date": lesson_identity.get("lesson_date"),
         "accepted_episode_count": len(episodes),
         "rejected_interaction_count": len(rejected),
