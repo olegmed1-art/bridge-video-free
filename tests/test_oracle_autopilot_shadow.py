@@ -187,7 +187,8 @@ def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():
     assert "request['activation_scope'] == 'SHADOW_ONLY'" in workflow
     assert "request['no_instance_stop'] is True" in workflow
     assert "request['neon_min_cu'] == 0.25" in workflow
-    assert "request['neon_max_cu'] == 0.25" in workflow
+    assert "request['neon_max_cu'] == 8" in workflow
+    assert "request['runtime_connection_limit'] == 4" in workflow
     assert 'systemctl enable --now "$service"' in workflow
     assert "AUTOPILOT_PRODUCTION_MUTATIONS=NO" in workflow
     assert "ORACLE_INSTANCE_STOP_REQUESTED=NO" in workflow
