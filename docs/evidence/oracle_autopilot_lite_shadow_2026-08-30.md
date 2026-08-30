@@ -10,6 +10,8 @@ Tracker: #782
 
 Status: `VERIFIED_ON_TEMPORARY_CONTOUR / NOT ACTIVATED`
 
+Draft PR: #991
+
 ## Purpose and scope
 
 Replace the one-hour chat/schedule gap with a persistent, event-driven Oracle
@@ -59,6 +61,14 @@ Local checks:
 - install-script Bash syntax PASS;
 - systemd unit verification PASS (expected missing-path warning before staging);
 - JSON parse and `git diff --check` PASS.
+
+GitHub evidence at head `d56be00b421dfd824b5960f62852fe101522cf70`:
+
+- all eight triggered workflows PASS;
+- full Bridge School Database CI PASS on a clean PostgreSQL 18 service;
+- Oracle Autopilot Lite shadow CI PASS;
+- secret, governance, migration namespace, deployment architecture, META and
+  Vercel compatibility gates PASS.
 
 Assurance:
 

@@ -3,7 +3,7 @@
   "project_id": "SCHOOL-AUTOPILOT-CONTROLLER-V1",
   "title": "School Autopilot Controller v1",
   "decision": "BUILD_ORACLE_AUTOPILOT_LITE_SHADOW",
-  "status": "SHADOW_CODE_AND_TEMP_NEON_VERIFIED_NOT_ACTIVATED",
+  "status": "DRAFT_PR_991_CI_PASS_NOT_ACTIVATED",
   "governance_mode": "ASSURED",
   "work_class": "STRATEGIC",
   "urgency": "HIGH",
@@ -68,6 +68,7 @@
   },
   "promotion_blocks": [
     "main_branch_unprotected",
+    "independent_pr_review_pending",
     "oracle_shadow_runtime_not_staged",
     "dedicated_runtime_login_not_provisioned",
     "actual_oracle_dispatch_latency_not_measured",
@@ -108,6 +109,9 @@
     "verified_at": "2026-08-30",
     "temporary_neon_branch_id": "br-still-tooth-b1ilkfcj",
     "temporary_neon_branch_name": "autopilot-shadow-final-20260830",
+    "draft_pr": "https://github.com/olegmed1-art/bridge-video-free/pull/991",
+    "draft_pr_head_sha": "d56be00b421dfd824b5960f62852fe101522cf70",
+    "github_ci": "8_PASS",
     "production_neon_changed": false,
     "migration_0300_clean_apply": "PASS",
     "postgresql_18_state_machine_test": "PASS",
@@ -125,7 +129,6 @@
     "production_runtime_activated": false
   },
   "next_actions": [
-    "open_draft_pr_and_run_required_ci",
     "obtain_independent_pr_review_before_merge",
     "provision_dedicated_runtime_login_outside_git_after_review",
     "stage_oracle_service_without_activation",
