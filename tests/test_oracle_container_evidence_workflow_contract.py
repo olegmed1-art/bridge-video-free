@@ -101,7 +101,9 @@ def test_bounded_storage_inventory_has_fixed_non_secret_areas() -> None:
             "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=media used_kb=1048576",
             "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=var-log used_kb=2048",
         "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=root-cache used_kb=4096",
+        "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=uv-cache used_kb=3072",
             "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=root-cache used_kb=4096",
+            "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=uv-cache used_kb=3072",
             "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=private-path used_kb=1",
         ]
     ) == [
