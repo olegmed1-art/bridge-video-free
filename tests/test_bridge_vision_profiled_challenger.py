@@ -593,6 +593,7 @@ def test_profiled_shadow_fuses_attributed_student_speech_with_layout_without_pro
         "start": 9.0,
         "end": 11.0,
         "frame_sha256": frame_sha(frame),
+        "source_fingerprint": "source-1",
     }]
 
     summary = process_job_frames(
@@ -607,6 +608,8 @@ def test_profiled_shadow_fuses_attributed_student_speech_with_layout_without_pro
     assert summary["speech_declarations_input"] == 1
     assert summary["speech_declarations_matched"] == 1
     assert summary["speech_unmatched_declarations"] == 0
+    assert summary["speech_multi_frame_associations"] == 0
+    assert summary["speech_frame_binding_schema"] == "bridge-speech-frame-binding-v1"
     record = json.loads(
         (tmp_path / "bridge_positions_profiled_shadow.jsonl").read_text().splitlines()[0]
     )
@@ -616,6 +619,19 @@ def test_profiled_shadow_fuses_attributed_student_speech_with_layout_without_pro
     assert suggestion["resolution"] == "CORROBORATES_LAYOUT_SUGGESTION"
     assert suggestion["accepted_as_observation"] is False
     assert record["speech_fusion"]["canonical_promotion_allowed"] is False
+    assert record["speech_frame_bindings"] == [{
+        "schema": "bridge-speech-frame-binding-v1",
+        "method": "EXPLICIT_FRAME_SHA256",
+        "frame_sha256": frame_sha(frame),
+        "frame_file": frame.name,
+        "frame_time": 10.0,
+        "speech_start": 9.0,
+        "speech_end": 11.0,
+        "transcript_locator": "transcript.jsonl#segment=7",
+        "distance_to_midpoint_seconds": 0.0,
+        "source_fingerprint": "source-1",
+        "single_frame_binding": True,
+    }]
 
 
 def test_speech_fusion_is_rejected_outside_profiled_shadow(tmp_path: Path):
