@@ -1,0 +1,95 @@
+name: Oracle Universal Video Container Promotion
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-universal-video-container-promotion-requests/*.json'
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Validate promotion request and successful evidence gate
+        id: request
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^ops/oracle-universal-video-container-promotion-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]]
+          REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json,os,re
+          x=json.load(open(os.environ['REQUEST_FILE'],encoding='utf-8'))
+          assert set(x) == {'request_id','expected_commit','evidence_run_id','image_digest'}
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
+          assert re.fullmatch(r'[0-9a-f]{40}', str(x['expected_commit']))
+          assert isinstance(x['evidence_run_id'],int) and x['evidence_run_id'] > 0
+          assert re.fullmatch(r'sha256:[0-9a-f]{64}', str(x['image_digest']))
+          print('expected_commit='+x['expected_commit'])
+          print('evidence_run_id='+str(x['evidence_run_id']))
+          print('image_digest='+x['image_digest'])
+          PY
+          expected_commit="$(sed -n 's/^expected_commit=//p' "$GITHUB_OUTPUT" | tail -n1)"
+          evidence_run_id="$(sed -n 's/^evidence_run_id=//p' "$GITHUB_OUTPUT" | tail -n1)"
+          run="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$evidence_run_id")"
+          RUN_JSON="$run" EXPECTED_COMMIT="$expected_commit" python - <<'PY'
+          import json,os
+          x=json.loads(os.environ['RUN_JSON'])
+          assert x.get('name') == 'Oracle Universal Video Container Evidence'
+          assert x.get('conclusion') == 'success'
+          assert x.get('head_sha') == os.environ['EXPECTED_COMMIT']
+          PY
+      - name: Resolve pinned SSH transport
+        id: ssh
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      - name: Promote attested image with rollback
+        env:
+          EXPECTED_COMMIT: ${{ steps.request.outputs.expected_commit }}
+          IMAGE_DIGEST: ${{ steps.request.outputs.image_digest }}
+        run: |
+          set -euo pipefail
+          set +e
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env UNIVERSAL_VIDEO_EXPECTED_COMMIT='$EXPECTED_COMMIT' UNIVERSAL_VIDEO_EXPECTED_IMAGE_DIGEST='$IMAGE_DIGEST' bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh" \
+            > "$RUNNER_TEMP/promotion.log" 2>&1
+          rc=$?
+          set -e
+          grep -E '^UNIVERSAL_VIDEO_CONTAINER_(INSTALL_PASS|PROMOTION_(PASS|FAILED)) ' "$RUNNER_TEMP/promotion.log" || echo 'UV_CONTAINER_PROMOTION_BOUNDED_DIAGNOSTIC_UNAVAILABLE'
+          exit "$rc"

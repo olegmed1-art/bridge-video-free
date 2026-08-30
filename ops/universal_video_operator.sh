@@ -19,7 +19,8 @@ verify(){
   [[ -x "$PYTHON" && -d "$SOURCE_DIR/.git" && -f "$RECEIPT_READER" && ! -L "$RECEIPT_READER" ]] || fail 'universal video runtime missing'
   [[ -d "$SPOOL/inbox" && -d "$SPOOL/running" && -d "$SPOOL/done" && -d "$SPOOL/failed" && -d "$SPOOL/progress" ]] || fail 'universal video spool missing'
   [[ -d "$STAGING" && ! -L "$STAGING" && "$(stat -c '%U:%G:%a' "$STAGING")" == root:root:700 ]] || fail 'unsafe staging directory'
-  systemctl is-active --quiet universal-video.service || fail 'universal-video.service inactive'
+  systemctl is-active --quiet universal-video-container.service || fail 'universal-video-container.service inactive'
+  systemctl is-active --quiet universal-video.service && fail 'legacy universal-video.service still active'
 }
 submit_drive(){
   [[ $# -eq 1 && ${#1} -le 350000 ]] || fail 'invalid encoded job'

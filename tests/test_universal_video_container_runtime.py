@@ -85,4 +85,9 @@ def test_oracle_container_service_is_read_only_and_explicitly_activated() -> Non
     assert "--read-only" in service
     assert "--memory=8g" in service
     assert "UNIVERSAL_VIDEO_CONTAINER_ACTIVATE:-0" in installer
+    assert "UNIVERSAL_VIDEO_CONTAINER_BUILD:-1" in installer
     assert "docker run --rm" in installer
+    assert "UNIVERSAL_VIDEO_STATUS_PATH=/run/bridge-school/universal-video-status.json" in installer
+    assert '--mount "type=bind,src=$STATUS_DIR,dst=/run/bridge-school"' in installer
+    assert "--mount type=bind,src=/run/bridge-school,dst=/run/bridge-school" in service
+    assert "ReadWritePaths=/run/bridge-school" in service

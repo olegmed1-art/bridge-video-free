@@ -10,7 +10,8 @@ User=root
 EnvironmentFile=/opt/bridge-school/universal-video/universal-video-container.env
 ExecStartPre=/usr/bin/docker image inspect ${UNIVERSAL_VIDEO_IMAGE}
 ExecStartPre=-/usr/bin/docker rm -f universal-video-container
-ExecStart=/usr/bin/docker run --name universal-video-container --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g --pids-limit=512 --cpus=4 --memory=8g --memory-reservation=6g --user=${UNIVERSAL_VIDEO_CONTAINER_UID}:${UNIVERSAL_VIDEO_CONTAINER_GID} --env-file /opt/bridge-school/universal-video/universal-video-container.env --mount type=bind,src=/opt/bridge-school/universal-video/spool,dst=/var/lib/universal-video/spool --mount type=bind,src=/opt/bridge-school/universal-video/output,dst=/var/lib/universal-video/output --mount type=bind,src=/opt/bridge-school/universal-video/media,dst=/var/lib/universal-video/media --mount type=bind,src=/opt/bridge-school/universal-video/model-cache,dst=/var/lib/universal-video/model-cache --mount type=bind,src=/opt/bridge-school/universal-video/secrets,dst=/run/secrets,readonly ${UNIVERSAL_VIDEO_IMAGE}
+ExecStartPre=/usr/bin/install -d -o universal-video -g universal-video -m 0750 /run/bridge-school
+ExecStart=/usr/bin/docker run --name universal-video-container --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g --pids-limit=512 --cpus=4 --memory=8g --memory-reservation=6g --user=${UNIVERSAL_VIDEO_CONTAINER_UID}:${UNIVERSAL_VIDEO_CONTAINER_GID} --env-file /opt/bridge-school/universal-video/universal-video-container.env --mount type=bind,src=/opt/bridge-school/universal-video/spool,dst=/var/lib/universal-video/spool --mount type=bind,src=/opt/bridge-school/universal-video/output,dst=/var/lib/universal-video/output --mount type=bind,src=/opt/bridge-school/universal-video/media,dst=/var/lib/universal-video/media --mount type=bind,src=/opt/bridge-school/universal-video/model-cache,dst=/var/lib/universal-video/model-cache --mount type=bind,src=/run/bridge-school,dst=/run/bridge-school --mount type=bind,src=/opt/bridge-school/universal-video/secrets,dst=/run/secrets,readonly ${UNIVERSAL_VIDEO_IMAGE}
 ExecStop=/usr/bin/docker stop --time=30 universal-video-container
 Restart=on-failure
 RestartSec=3
@@ -34,6 +35,7 @@ SystemCallArchitectures=native
 ReadWritePaths=/var/lib/docker
 ReadWritePaths=/run/docker.sock
 ReadWritePaths=/opt/bridge-school/universal-video
+ReadWritePaths=/run/bridge-school
 UMask=0027
 
 [Install]

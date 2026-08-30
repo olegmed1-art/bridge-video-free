@@ -1,0 +1,24 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = (ROOT / "ops/oracle_universal_video_container_promote.sh").read_text(encoding="utf-8")
+WORKFLOW = (ROOT / ".github/workflows/oracle-universal-video-container-promote.yml").read_text(encoding="utf-8")
+
+
+def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
+    assert "assert x.get('conclusion') == 'success'" in WORKFLOW
+    assert "assert x.get('head_sha') == os.environ['EXPECTED_COMMIT']" in WORKFLOW
+    assert "group: oracle-instance-workload-mutation" in WORKFLOW
+    assert "rollback" in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_ROLLED_BACK" in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_JOB_RUNNING" in SCRIPT
+    assert "UNIVERSAL_VIDEO_CONTAINER_BUILD=0" in SCRIPT
+
+
+def test_promotion_selects_exact_image_and_excludes_legacy_worker() -> None:
+    assert '"$(docker inspect --format \'{{.Image}}\' universal-video-container)" == "$EXPECTED_DIGEST"' in SCRIPT
+    assert 'systemctl is-active --quiet "$OLD_SERVICE" && fail UV_CONTAINER_PROMOTION_LEGACY_ACTIVE' in SCRIPT
+    assert "x.get('active_jobs') == []" in SCRIPT
+    assert "observed_at_unix" in SCRIPT
+    assert "fallback_used=false active_jobs=0" in SCRIPT
