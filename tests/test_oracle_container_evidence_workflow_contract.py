@@ -73,11 +73,13 @@ def test_bounded_parser_reports_build_and_disk_failures_without_raw_log() -> Non
         [
             "https://private.example/token=must-not-leak",
             "ERROR: container image build failed",
+            "UNIVERSAL_VIDEO_CONTAINER_RESOURCE disk_available_kb=7340032 disk_required_kb=8388608",
             '{"status":"FAILED","error_code":"UV_CONTAINER_DISK_INSUFFICIENT"}',
         ]
     )
 
     assert result == [
         "ERROR: container image build failed",
+        "UNIVERSAL_VIDEO_CONTAINER_RESOURCE disk_available_kb=7340032 disk_required_kb=8388608",
         '{"error_code":"UV_CONTAINER_DISK_INSUFFICIENT","status":"FAILED"}',
     ]
