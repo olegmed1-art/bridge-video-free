@@ -12,6 +12,9 @@ def _environment(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
     for name in ("UNIVERSAL_VIDEO_SPOOL_ROOT", "UNIVERSAL_VIDEO_OUTPUT_ROOT", "UNIVERSAL_VIDEO_MEDIA_ROOT", "HF_HOME"):
         directory = root / name.lower()
         directory.mkdir()
+        if name == "UNIVERSAL_VIDEO_SPOOL_ROOT":
+            for leaf in ("inbox", "running", "done", "failed", "results", "progress"):
+                (directory / leaf).mkdir()
         monkeypatch.setenv(name, str(directory))
 
 
@@ -38,6 +41,32 @@ def test_container_runtime_reports_ready_without_fallback(monkeypatch: pytest.Mo
     report = validate_container_runtime()
     assert report["status"] == "READY"
     assert report["fallback_used"] is False
+
+
+def test_container_accepts_protected_spool_root_with_writable_leaves(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _environment(monkeypatch, tmp_path)
+    spool = tmp_path / "universal_video_spool_root"
+    from universal_video import container_runtime
+
+    real_probe = container_runtime._write_probe
+
+    def protected_root_probe(path: Path) -> None:
+        if path == spool:
+            raise PermissionError("protected spool root")
+        real_probe(path)
+
+    monkeypatch.setattr("universal_video.container_runtime._write_probe", protected_root_probe)
+    monkeypatch.setattr(
+        "universal_video.container_runtime.validate_video_runtime",
+        lambda: {"ffmpeg": "/usr/bin/ffmpeg", "ffprobe": "/usr/bin/ffprobe", "asr": "faster_whisper"},
+    )
+    monkeypatch.setattr("universal_video.container_runtime._load_model", lambda: object())
+
+    report = validate_container_runtime()
+
+    assert report["status"] == "READY"
 
 
 def test_container_image_keeps_credentials_and_media_out_of_layers() -> None:
