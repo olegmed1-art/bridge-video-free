@@ -588,13 +588,22 @@ WITH RECURSIVE walk(value,key_path) AS (
                 )
                 SELECT 1
                   FROM descendants
-                  CROSS JOIN LATERAL jsonb_each(
-                      CASE WHEN jsonb_typeof(descendants.value)='object'
-                           THEN descendants.value ELSE '{}'::jsonb END
-                  ) AS cards_field(key,value)
-                 WHERE regexp_replace(lower(cards_field.key),'[^a-z0-9]','','g')
-                       IN ('card','cards')
-                   AND jsonb_typeof(cards_field.value) <> 'null'
+                 WHERE (
+                        descendants.depth=4
+                        AND jsonb_typeof(descendants.value) IN ('object','array')
+                        AND descendants.value NOT IN ('{}'::jsonb,'[]'::jsonb)
+                    )
+                    OR EXISTS (
+                        SELECT 1
+                          FROM jsonb_each(
+                              CASE WHEN jsonb_typeof(descendants.value)='object'
+                                   THEN descendants.value ELSE '{}'::jsonb END
+                          ) AS cards_field(key,value)
+                         WHERE regexp_replace(
+                                   lower(cards_field.key),'[^a-z0-9]','','g'
+                               ) IN ('card','cards')
+                           AND jsonb_typeof(cards_field.value) <> 'null'
+                    )
             )
         )
      LIMIT 1

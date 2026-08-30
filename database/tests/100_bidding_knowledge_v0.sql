@@ -249,6 +249,11 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_HIDDEN_WRAPPED_OWNER_RECORD_NOT_BLOCKED';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
+        '{"players":[{"owner":"partner","a":{"b":{"c":{"d":{"e":{"cards":[51]}}}}}}]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_DEEP_OWNER_RECORD_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
         '{"hands":[{"owner":"east","cards":["AS"]},{"seat":"West","card":"KS"}]}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_FULL_COMPASS_VALUE_RECORD_NOT_BLOCKED';
@@ -451,6 +456,20 @@ BEGIN
     RETURNING rule_test_id INTO v_test;
     INSERT INTO bidding.rule_test_run(school_id,rule_test_id,result,result_details,method_version)
     VALUES (v_school,v_test,'pass','{"ok":true}'::jsonb,'ci-smoke-v1');
+    INSERT INTO bidding.rule_test_run(
+        school_id,rule_test_id,result,result_details,method_version,created_at
+    ) VALUES (
+        v_school,v_test,'pass','{"server_timestamp":true}'::jsonb,
+        'ci-smoke-v1','2000-01-01 00:00:00+00'::timestamptz
+    );
+    IF EXISTS (
+        SELECT 1 FROM bidding.rule_test_run
+         WHERE rule_test_id=v_test
+           AND result_details='{"server_timestamp":true}'::jsonb
+           AND created_at < clock_timestamp()-interval '1 minute'
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_TEST_RUN_CREATED_AT_CALLER_CONTROLLED';
+    END IF;
 
     INSERT INTO bidding.rule_test(school_id,rule_id,test_key,test_type,fixture,expected,method_version)
     VALUES (v_school,v_rule,'negative','negative','{"hand":"negative"}'::jsonb,'{"applicable":false}'::jsonb,'ci-smoke-v1')

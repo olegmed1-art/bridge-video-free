@@ -50,6 +50,10 @@ DECLARE
     v_test_school uuid;
     v_evidence_school uuid;
 BEGIN
+    -- Evidence order is server-assigned at insertion.  Even the table owner
+    -- must not be able to backdate a late failure behind an earlier pass.
+    NEW.created_at := clock_timestamp();
+
     SELECT school_id INTO v_test_school FROM bidding.rule_test WHERE rule_test_id=NEW.rule_test_id;
     IF v_test_school IS NULL OR v_test_school <> NEW.school_id THEN
         RAISE EXCEPTION 'BID_RULE_TEST_RUN_SCHOOL_MISMATCH' USING ERRCODE='23514';
