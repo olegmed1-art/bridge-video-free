@@ -267,3 +267,11 @@ def test_evidence_stuck_run_recovery_is_explicit_and_fail_closed() -> None:
     recovery = "cancel-in-progress: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[UV_EVIDENCE_RECOVER_STUCK]') }}"
     assert recovery in text
     assert "cancel-in-progress: true" not in text
+
+
+def test_container_activation_restarts_already_active_service_for_exact_image() -> None:
+    installer = (ROOT / "ops/oracle_universal_video_container_install.sh").read_text(encoding="utf-8")
+
+    assert 'systemctl enable "$SERVICE_NAME"' in installer
+    assert 'systemctl restart "$SERVICE_NAME"' in installer
+    assert 'systemctl enable --now "$SERVICE_NAME"' not in installer

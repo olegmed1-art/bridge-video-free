@@ -197,7 +197,7 @@ systemctl daemon-reload
 systemd-analyze verify "/etc/systemd/system/$SERVICE_NAME" >/dev/null
 if [[ "$ACTIVATE" == 1 ]]; then
   systemctl is-active --quiet "$OLD_SERVICE" && systemctl stop "$OLD_SERVICE"
-  if ! systemctl enable --now "$SERVICE_NAME"; then
+  if ! systemctl enable "$SERVICE_NAME" || ! systemctl restart "$SERVICE_NAME"; then
     service_status
     runtime_fail UV_CONTAINER_SERVICE_ACTIVATION_FAILED
   fi
