@@ -37,8 +37,10 @@ SELECT EXISTS (SELECT 1 FROM walk WHERE jsonb_typeof(value)='string'
    AND value #>> '{}' ~* '^(pass|p|x|xx|[1-7](c|d|h|s|nt|n))$'
  )
  AND (
-   value #>> '{}' ~* '(^|[^a-z0-9])[2-9tjqka][cdhs]([^a-z0-9]|$)'
-   OR regexp_replace(value #>> '{}','[^a-z0-9]','','gi')
+   value #>> '{}' ~* '(^|[^a-z0-9])(10|[2-9tjqka])([cdhs]|♣|♦|♥|♠)([^a-z0-9]|$)'
+   OR regexp_replace(
+        regexp_replace(translate(value #>> '{}','♣♦♥♠','CDHS'),'10','T','gi'),
+        '[^a-z0-9]','','gi')
       ~* '^([2-9TJQKA][CDHS])+$'
  ));
 $$;
@@ -247,6 +249,9 @@ GRANT SELECT ON bidding.world_robot,bidding.world_robot_configuration TO bridge_
 GRANT SELECT ON bidding.rule TO bridge_school_app,bridge_school_worker;
 GRANT SELECT ON public.knowledge_version,public.knowledge_gap TO bridge_school_app,bridge_school_worker;
 GRANT INSERT(school_id,question,context_scope,status) ON public.knowledge_gap TO bridge_school_app,bridge_school_worker;
+GRANT EXECUTE ON FUNCTION bidding.contains_forbidden_hidden_key(jsonb) TO bridge_school_app,bridge_school_worker;
+GRANT EXECUTE ON FUNCTION bidding.contains_nonpublic_card_material(jsonb),bidding.contains_card_token(jsonb),
+ bidding.valid_acting_hand(jsonb),bidding.valid_public_robot_payload(text,jsonb) TO bridge_school_worker;
 REVOKE ALL ON FUNCTION bidding.validate_world_canon_gap_binding() FROM PUBLIC,bridge_school_reader,bridge_school_app,bridge_school_worker;
 REVOKE ALL ON FUNCTION bidding.validate_world_resolution_trace() FROM PUBLIC,bridge_school_reader,bridge_school_app,bridge_school_worker;
 REVOKE ALL ON FUNCTION bidding.validate_world_robot_decision() FROM PUBLIC,bridge_school_reader,bridge_school_app,bridge_school_worker;
