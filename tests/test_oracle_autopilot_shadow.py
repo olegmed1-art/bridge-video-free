@@ -224,6 +224,9 @@ def test_shadow_diagnostics_are_read_only_and_secret_free():
     assert "AUTOPILOT_DIAG_MODULE_IMPORT_COUNT" in workflow
     assert "AUTOPILOT_DIAG_CONFIG_COUNT" in workflow
     assert "AUTOPILOT_DIAG_DATABASE_COUNT" in workflow
+    assert "AUTOPILOT_DIAG_CHDIR_PERMISSION_COUNT" in workflow
+    assert "AUTOPILOT_DIAG_EXEC_PERMISSION_COUNT" in workflow
+    assert "AUTOPILOT_DIAG_ENV_PERMISSION_COUNT" in workflow
     for forbidden in (
         "systemctl " + "start",
         "systemctl " + "stop",
