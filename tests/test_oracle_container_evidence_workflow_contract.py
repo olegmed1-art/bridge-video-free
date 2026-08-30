@@ -150,3 +150,4 @@ def test_activation_does_not_run_build_disk_cleanup_or_delete_attested_image() -
     activation_inspect = installer.index(image_inspect)
     assert first_guard < first_disk_probe < build_branch < activation_inspect
     assert installer.count('docker builder prune --all --force') == 1
+    assert 'docker image prune --all' not in installer
