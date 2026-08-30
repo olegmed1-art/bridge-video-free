@@ -70,7 +70,7 @@
     "openai_api_global_cap_usd": 20,
     "default_shadow_task_cap_usd": 0.5,
     "increase_requires_director": true,
-    "neon_continuous_compute_approved": true,
+    "neon_continuous_compute_approved": false,
     "neon_min_cu": 0.25,
     "neon_max_cu": 8,
     "neon_estimated_baseline_usd_monthly": 40.52,
