@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+import re
 
 import pytest
 
@@ -15,6 +16,7 @@ from oracle_autopilot.contract import (
 
 ALLOWED_REPOSITORY = "olegmed1-art/bridge-video-free"
 ALLOWED_HEAD = "a" * 40
+OTHER_ALLOWED_HEAD = "b" * 40
 
 
 def _model_accepts(goal: dict, *, step: str, cost: int) -> bool:
@@ -24,7 +26,8 @@ def _model_accepts(goal: dict, *, step: str, cost: int) -> bool:
         and goal.get("repository") == ALLOWED_REPOSITORY
         and type(goal.get("pr_number")) is int
         and 1 <= goal["pr_number"] <= 1_000_000
-        and goal.get("expected_head_sha") == ALLOWED_HEAD
+        and isinstance(goal.get("expected_head_sha"), str)
+        and re.fullmatch(r"[0-9a-f]{40}", goal["expected_head_sha"]) is not None
         and goal.get("require_draft") is True
         and step == "github.pr.snapshot"
         and cost == 0
@@ -56,7 +59,7 @@ def _implementation_accepts(goal: dict, *, step: str, cost: int) -> bool:
     itertools.product(
         [ALLOWED_REPOSITORY, "other/repository", "", None],
         [991, 1, 1_000_000, 0, 1_000_001, True, "991", None],
-        [ALLOWED_HEAD, "A" * 40, "main", "a" * 39, None],
+        [ALLOWED_HEAD, OTHER_ALLOWED_HEAD, "A" * 40, "main", "a" * 39, None],
         [True, False, 1, None],
         ["github.pr.snapshot", "shell.exec", "", None],
         [0, 1, -1],
