@@ -50,11 +50,10 @@ def test_unknown_and_unreviewed_wording_fail_closed():
         resolve_reviewed_skill(_catalog(), "Подсчёт потерь")
     with pytest.raises(SkillCatalogError, match="not uniquely reviewed"):
         resolve_reviewed_skill(_catalog(), "Похожая неизвестная формулировка")
-    with pytest.raises(SkillCatalogError, match="not uniquely reviewed"):
-        resolve_reviewed_skill(
-            _catalog(),
-            "Какие у нас шансы, примерно? А какие у нас шансы разыграть трефу?",
-        )
+    assert resolve_reviewed_skill(
+        _catalog(),
+        "Какие у нас шансы, примерно? А какие у нас шансы разыграть трефу?",
+    ) == "candidate.skill.estimate-five-card-split"
 
 
 def test_exact_reviewed_alias_resolves_without_similarity_guess():
