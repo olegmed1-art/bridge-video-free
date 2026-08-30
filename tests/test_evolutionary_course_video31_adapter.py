@@ -69,6 +69,7 @@ def _source() -> dict:
     return {
         "video_file_id": "synthetic-drive-file",
         "source_name": "synthetic-diana-lesson.mp4",
+        "evidence_state": "VERIFIED",
         "transcript_segment_ids": ["s1", "s2", "s3", "s4", "s5"],
         "frame_sha256": ["a" * 64],
     }
@@ -163,3 +164,20 @@ def test_prior_candidate_state_is_explicit_and_bounded():
             source=_source(),
             prior_skill_states={skill_id: "CANON_MASTERED"},
         )
+
+
+def test_source_cannot_self_promote_unverified_evidence():
+    source = _source()
+    source["evidence_state"] = "OBSERVED"
+    with pytest.raises(Video31AdapterError, match="source evidence is not verified"):
+        adapt_video31_quality(_quality(), lesson_identity=_lesson(), source=source)
+
+
+def test_invalid_frame_reference_rejects_interaction():
+    quality = _quality()
+    quality["learning_interactions"][0]["visual_evidence_refs"] = ["not-a-sha"]
+    report = adapt_video31_quality(
+        quality, lesson_identity=_lesson(), source=_source()
+    )
+    assert report["accepted_episode_count"] == 0
+    assert "INVALID_FRAME_EVIDENCE" in report["rejected_interactions"][0]["reason_codes"]
