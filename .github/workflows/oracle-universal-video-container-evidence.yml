@@ -22,7 +22,7 @@ on:
       git_ref:
         description: 'Pinned 40-character commit to attest'
         required: true
-        default: '0c76c24626e790af2b07303c5f3f2121f5524aa5'
+        default: '6a4debedb87f74678ece5a02771d36f8d6569346'
         type: string
       expected_host_fingerprint:
         description: 'SSH host fingerprint'
