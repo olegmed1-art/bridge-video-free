@@ -8,7 +8,7 @@ Governance: `ASSURED`
 
 Tracker: #782
 
-Status: `STAGING_LOGIN_PROVISIONED / ORACLE_HOST_UNREACHABLE / NOT ACTIVATED`
+Status: `ORACLE_STAGED_INACTIVE / IDLE_VERIFIED / INSTANCE_STOPPED / NOT ACTIVATED`
 
 Draft PR: #991
 
@@ -31,7 +31,10 @@ change or production route change exists in the executable capability set.
 - pre-call budget reservation and terminal `BUDGET_STOP`;
 - least-privilege runtime RPC role with no direct task-table access;
 - hardened, `Restart=always`, shadow-only systemd unit;
-- staged-by-default installation script.
+- staged-by-default installation script;
+- immutable, root-owned Autopilot releases isolated from the shared DDS3/BEN/
+  Assistant Lab checkout;
+- RSA-OAEP-SHA256 delivery of the staging DSN to the pinned Oracle host key.
 
 ## Evidence
 
@@ -72,6 +75,30 @@ Post-review staging preflight:
   execution LOGIN;
 - the credential value was not printed, committed, or written to evidence.
 
+Oracle staging and shutdown evidence:
+
+- the exact Frankfurt instance was started by bounded lifecycle run
+  `33320421993`; it reached `RUNNING`, and external DDS3 health remained
+  `ready` with `fallback_used=false`;
+- the host identity and SSH login were independently pinned and verified;
+- the direct Neon DSN was encrypted to the verified 3072-bit Oracle RSA host
+  key with OAEP-SHA256. Only ciphertext was committed or transported by
+  GitHub; plaintext existed only in protected memory and on the target host;
+- staging run `33321948279` installed immutable source revision
+  `edc7e8530f0aa3efa84910cb09ee459ec25f1cf6`, passed the real Neon LOGIN/
+  capability preflight, and proved `AUTOPILOT_ACTIVATE=0` with the systemd
+  service both inactive and disabled;
+- the same run rechecked external DDS3 health after staging and passed without
+  fallback;
+- the canonical stop run `33322010503` failed closed without stopping when OCI
+  Run Command remained `ACCEPTED` and therefore yielded `UNKNOWN`;
+- SSH finalizer run `33322464874` then executed the same server-owned idle
+  classifier, proved `ORACLE_IDLE_STATE=IDLE` with
+  `jobs=0,research=0,control=0`, re-proved the exact staged revision and
+  inactive/disabled service, and stopped only the exact OCI instance;
+- independent read-only lifecycle run `33322547501` confirmed final state
+  `STOPPED`.
+
 Local checks:
 
 - `14 passed` Python contract/model tests;
@@ -80,9 +107,10 @@ Local checks:
 - systemd unit verification PASS (expected missing-path warning before staging);
 - JSON parse and `git diff --check` PASS.
 
-GitHub evidence at current PR head `1c4eb4907af7a0f11009d6a323f8d0882e850a69`:
+GitHub evidence:
 
-- all eight triggered workflows PASS;
+- all applicable implementation, staging-contract, governance, secret,
+  migration and PostgreSQL checks passed before this evidence update;
 - full Bridge School Database CI PASS on a clean PostgreSQL 18 service;
 - Oracle Autopilot Lite shadow CI PASS;
 - secret, governance, migration namespace, deployment architecture, META and
@@ -131,8 +159,10 @@ project and can be removed after the review evidence window.
 The code path has no sleep between consecutive READY tasks. Normal wake-up is
 event-driven; the target for real Oracle notification-to-claim p95 is at most
 five seconds. A lost notification falls back to polling within 30 seconds.
-Actual Oracle runtime latency is intentionally not claimed until the service is
-staged with its dedicated login.
+The service is now staged with its dedicated login, but actual notification and
+restart latency is intentionally not claimed because activation and task
+claiming remained disabled throughout this run. Measuring it requires a
+separately authorized shadow activation and synthetic task.
 
 The temporary branch compute was observed active with a 0.25-CU minimum and
 `suspend_timeout_seconds=0`. It must not be mistaken for a free idle staging
@@ -143,19 +173,19 @@ compute class discussed above.
 
 - current `main` branch protection is not proven/enforced;
 - dedicated LOGIN exists only on the temporary branch and expires automatically;
-- Oracle service is not staged or activated: both the protected cloud browser
-  and a pinned-fingerprint GitHub runner could not reach the Oracle host;
+- Oracle service is staged but inactive and disabled; the instance is stopped;
 - real notification/restart latency is not measured;
 - incremental always-on Neon compute cost is not approved or measured;
 - production canary #881 is not proven;
-- Oracle idle-stop guard #627 is not closed.
+- Oracle idle-stop guard #627 is not closed: its OCI Run Command path failed
+  closed at `UNKNOWN`, and the verified SSH fallback is still PR-local.
 
 ## Rollback and restoration
 
-Before activation, rollback is deletion of the temporary Neon branch and
-removal of the unmerged code branch. After staging, keep
-`AUTOPILOT_ACTIVATE=0`; disabling/removing only
-`school-autopilot-shadow.service` leaves Assistant Lab, DDS3, BEN and video
-services untouched. The temporary LOGIN can be revoked independently and also
-expires at the timestamp recorded above. Production database rollback is not
+Before activation, rollback is removal of the staged inactive unit/release,
+deletion of the temporary Neon branch and removal of the unmerged code branch.
+Keeping `AUTOPILOT_ACTIVATE=0` and the instance stopped leaves Assistant Lab,
+DDS3, BEN and video execution unchanged. The root-owned environment file can
+be removed independently; the temporary LOGIN can be revoked and also expires
+at the timestamp recorded above. Production database rollback is not
 applicable because no production migration has occurred.

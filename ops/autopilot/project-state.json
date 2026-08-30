@@ -3,7 +3,7 @@
   "project_id": "SCHOOL-AUTOPILOT-CONTROLLER-V1",
   "title": "School Autopilot Controller v1",
   "decision": "BUILD_ORACLE_AUTOPILOT_LITE_SHADOW",
-  "status": "TEMP_LOGIN_PROVISIONED_ORACLE_HOST_UNREACHABLE_NOT_ACTIVATED",
+  "status": "ORACLE_STAGED_INACTIVE_INSTANCE_STOPPED_NOT_ACTIVATED",
   "governance_mode": "ASSURED",
   "work_class": "STRATEGIC",
   "urgency": "HIGH",
@@ -27,6 +27,10 @@
     "target_project": "existing_oracle_frankfurt_vm",
     "target_root_directory": "oracle_autopilot/",
     "target_service": "school-autopilot-shadow.service",
+    "staged_source_revision": "edc7e8530f0aa3efa84910cb09ee459ec25f1cf6",
+    "instance_lifecycle_state": "STOPPED",
+    "service_active": false,
+    "service_enabled": false,
     "production_activated": false,
     "shadow_only": true
   },
@@ -68,8 +72,6 @@
   },
   "promotion_blocks": [
     "main_branch_unprotected",
-    "oracle_shadow_runtime_not_staged",
-    "oracle_instance_unreachable_for_staging",
     "actual_oracle_dispatch_latency_not_measured",
     "continuous_neon_compute_cost_mode_not_approved",
     "production_canary_881_not_proven",
@@ -163,7 +165,29 @@
       "external_event_ingress_rpc": false,
       "secret_disclosed": false
     },
-    "oracle_staging_transport": "BLOCKED_HOST_UNREACHABLE",
+    "oracle_staging_transport": "RSA_OAEP_SHA256_TO_PINNED_ORACLE_HOST_KEY",
+    "oracle_staging": {
+      "source_revision": "edc7e8530f0aa3efa84910cb09ee459ec25f1cf6",
+      "workflow_run_id": 33321948279,
+      "database_preflight": "PASS",
+      "activate": 0,
+      "service_active": false,
+      "service_enabled": false,
+      "shared_checkout_isolated": true,
+      "dds3_non_regression": "PASS",
+      "secret_disclosed": false
+    },
+    "oracle_idle_stop": {
+      "canonical_run_id": 33322010503,
+      "canonical_result": "FAILED_CLOSED_UNKNOWN_INSTANCE_AGENT_ACCEPTED",
+      "ssh_fallback_run_id": 33322464874,
+      "idle_state": "IDLE",
+      "idle_reason": "jobs=0,research=0,control=0",
+      "autopilot_inactive": true,
+      "autopilot_disabled": true,
+      "final_lifecycle_state": "STOPPED",
+      "independent_status_run_id": 33322547501
+    },
     "terminal_outcomes_proven": {
       "DONE": 3,
       "OWNER_REQUIRED": 1,
@@ -175,9 +199,9 @@
     "production_runtime_activated": false
   },
   "next_actions": [
-    "restore_or_explicitly_start_the_existing_oracle_instance_for_staging",
-    "stage_oracle_service_without_activation",
-    "measure_real_oracle_notification_and_recovery_latency",
+    "keep_the_existing_oracle_instance_stopped_until_a_heavy_or_explicit_shadow_task",
+    "measure_real_oracle_notification_and_recovery_latency_only_after_separate_shadow_activation_approval",
+    "integrate_the_verified_ssh_idle_fallback_into_the_canonical_idle_stop_guard_627",
     "keep_runtime_disabled_until_canary_881_and_idle_guard_627_are_proven"
   ]
 }

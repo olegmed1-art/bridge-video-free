@@ -27,49 +27,6 @@ permissions:
   contents: read
 
 jobs:
-  oracle-host-encryption-key:
-    if: \${{ github.event_name == 'pull_request' && github.event.pull_request.number == 991 }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 3
-    steps:
-      - name: Checkout pinned host-key verifier
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-
-      - name: Emit verified public RSA host key
-        shell: bash
-        env:
-          ORACLE_HOST: 158.180.47.161
-        run: |
-          set -euo pipefail
-          known="$RUNNER_TEMP/oracle-autopilot-known-hosts"
-          : > "$known"
-          index=0
-          for expected in \
-            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
-            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
-            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64'; do
-            part="$RUNNER_TEMP/oracle-autopilot-known-hosts.$index"
-            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$expected" "$part"
-            cat "$part" >> "$known"
-            index=$((index + 1))
-          done
-          sort -u -o "$known" "$known"
-          rsa_line="$(awk '$2 == "ssh-rsa" {print; exit}' "$known")"
-          test -n "$rsa_line"
-          public_key="$RUNNER_TEMP/oracle-autopilot-rsa.pub"
-          printf '%s\n' "$rsa_line" | awk '{print $2, $3}' > "$public_key"
-          fingerprint="$(ssh-keygen -lf "$public_key" | awk '{print $2}')"
-          case "$fingerprint" in
-            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk'|\
-            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc'|\
-            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64') ;;
-            *) echo 'Oracle RSA host key is not in the pinned key set' >&2; exit 1 ;;
-          esac
-          printf 'AUTOPILOT_ORACLE_RSA_FINGERPRINT=%s\n' "$fingerprint"
-          printf 'AUTOPILOT_ORACLE_RSA_HOST_KEY=%s\n' "$(cat "$public_key")"
-
   oracle-shadow-contract:
     runs-on: ubuntu-24.04
     timeout-minutes: 8
