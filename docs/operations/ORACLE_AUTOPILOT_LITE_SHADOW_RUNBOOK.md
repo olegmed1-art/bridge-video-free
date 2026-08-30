@@ -4,7 +4,8 @@
 
 Tracker: #782
 
-Runtime dependency: #881 and #627
+Promotion dependencies: #881 for real video/production capabilities; #627 before
+any automatic Oracle stop path can be enabled again.
 
 ## Purpose
 
@@ -14,7 +15,8 @@ without Vercel Workflows in the scheduling path. It is shadow-only:
 - no model calls;
 - no arbitrary shell;
 - no GitHub, Drive, media, canon or production mutation;
-- no new fixed subscription;
+- no model or video spend; the approved Neon shadow endpoint is hard-bounded to
+  `0.25-0.25 CU` for the activation request;
 - service installation is staged by default and leaves the service inactive and
   disabled;
 - the Autopilot source is copied into an immutable, root-owned release under
@@ -27,7 +29,9 @@ without Vercel Workflows in the scheduling path. It is shadow-only:
 - `database/tests/300_autopilot_oracle_shadow.sql` — state-machine, dedupe, budget and ACL proof;
 - `oracle_autopilot/worker.py` — resident direct-Neon dispatcher;
 - `deploy/oracle-autopilot/school-autopilot-shadow.service` — bounded systemd unit;
-- `ops/oracle_autopilot_shadow_install.sh` — fail-closed staging/activation script.
+- `ops/oracle_autopilot_shadow_install.sh` — fail-closed staging/activation script;
+- `.github/workflows/oracle-autopilot-shadow-activation.yml` — exact-revision,
+  request-driven `SHADOW_ONLY` activation with no Oracle lifecycle action.
 
 ## Connection requirement
 
@@ -79,11 +83,18 @@ Activation requires all of the following:
 
 - temporary Neon branch SQL evidence is PASS;
 - independent assurance reaches I2;
-- #881 provides the required production canary proof;
-- #627 proves that the idle-stop guard cannot stop active/unknown Autopilot work;
-- the director accepts the measured incremental Neon compute cost of the
-  persistent fast-wake mode;
-- the director authorizes the bounded shadow activation scope.
+- the exact staged source revision is immutable and matches the reviewed
+  activation request;
+- the activation workflow itself passes an exact-head independent review;
+- the director accepts the measured incremental Neon compute cost and the
+  endpoint is bounded to `0.25-0.25 CU`;
+- the director authorizes the bounded `SHADOW_ONLY` scope and requires the
+  Oracle instance to remain running.
+
+#881 is not a gate for an empty deterministic shadow dispatcher because this
+runtime has no video capability. It remains a hard gate before adding video or
+production work. #627 is likewise not a gate while all automatic stop behavior
+is prohibited; it remains a hard gate before any stop automation is restored.
 
 Even then the exact activation input must include:
 
@@ -93,6 +104,8 @@ AUTOPILOT_ACTIVATION_SCOPE=SHADOW_ONLY
 ```
 
 No setting in this v1.1 implementation enables production mutation.
+The activation workflow does not call OCI lifecycle APIs and cannot stop the
+Oracle instance.
 
 ## Recovery
 
