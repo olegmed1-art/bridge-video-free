@@ -14,7 +14,14 @@ EXPECTED_DIGEST="${UNIVERSAL_VIDEO_EXPECTED_IMAGE_DIGEST:-}"
 switch_started=0
 CURRENT_STAGE='validation'
 
-fail(){ printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_FAILED code=%s\n' "$1" >&2; exit 1; }
+fail(){
+  local code="$1"
+  printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_FAILED code=%s\n' "$code" >&2
+  if (( switch_started == 1 )); then
+    rollback 1
+  fi
+  exit 1
+}
 has_running_job(){ find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit | grep -q .; }
 emit_runtime_code(){
   local since="@${started_unix:-0}"
@@ -49,7 +56,7 @@ elif fallback:
 ' || true
 }
 rollback(){
-  local rc=$?
+  local rc="${1:-$?}"
   trap - ERR
   emit_runtime_code
   if (( switch_started == 1 )) && ! has_running_job; then
