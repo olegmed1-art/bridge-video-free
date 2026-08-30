@@ -452,3 +452,12 @@ Each entry records:
 **Database effect:** Disposable branch only. No real SCHOOL CANON or WORLD knowledge, rule or activation was inserted. Protected production was read-only and unchanged.  
 **Status:** Exact-head migration, rollback, integrity and independent I2 evidence are complete. Production promotion remains a separate irreversible decision and has not occurred.  
 **Next:** Persist cleanup of the disposable branch, rerun exact-head documentation checks/I2, then issue the final GO/NO-GO recommendation without changing production.
+
+
+## 2026-08-30 / LOG-0041 - Final disposable preflight branch removed
+
+**Role:** Database custodian  
+**Action:** Deleted disposable Neon branch `br-spring-poetry-b1jjyq44` after LOG-0040 evidence was committed.  
+**Database effect:** Test-only schema and zero-row fixtures were removed with the branch. Protected production was not changed.  
+**Recovery:** The branch itself is not the durable evidence source; the exact Git commit, checksum, CI runs, smoke sentinel result, zero-residual query and this append-only log are retained. Any later validation must create a fresh production-derived branch.  
+**Next:** Complete exact-head documentation CI and independent I2, then publish the production readiness recommendation.
