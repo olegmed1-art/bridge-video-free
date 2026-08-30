@@ -78,7 +78,20 @@ if (( disk_available_kb < MIN_FREE_KB )); then
     "var-log:/var/log" \
     "home:/home" \
     "tmp:/tmp" \
-    "root:/root"; do
+    "root:/root" \
+    "video-venv:$BASE_DIR/.venv" \
+    "var-bridge:/var/lib/bridge-school" \
+    "containerd:/var/lib/containerd" \
+    "snapd:/var/lib/snapd" \
+    "apt:/var/lib/apt" \
+    "postgresql:/var/lib/postgresql" \
+    "root-cache:/root/.cache" \
+    "root-local:/root/.local" \
+    "root-npm:/root/.npm" \
+    "root-cargo:/root/.cargo" \
+    "root-rustup:/root/.rustup" \
+    "pip-cache:/root/.cache/pip" \
+    "hf-cache:/root/.cache/huggingface"; do
     storage_area="${storage_spec%%:*}"
     storage_path="${storage_spec#*:}"
     if [[ -d "$storage_path" && ! -L "$storage_path" ]]; then
