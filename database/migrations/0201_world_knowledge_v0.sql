@@ -138,7 +138,7 @@ CREATE TABLE bidding.world_robot_decision (
  world_robot_configuration_id uuid NOT NULL REFERENCES bidding.world_robot_configuration ON DELETE RESTRICT,
  decision_mode text NOT NULL CHECK(decision_mode IN ('ROBOT_RECONSTRUCTED_SURFACE','ROBOT_LIVE_DECISION')),
  acting_seat text NOT NULL CHECK(acting_seat IN ('N','E','S','W')), acting_hand jsonb NOT NULL CHECK(bidding.valid_acting_hand(acting_hand)),
- public_auction jsonb NOT NULL CHECK(bidding.valid_public_robot_payload('auction',public_auction)),
+ public_auction jsonb NOT NULL CONSTRAINT world_robot_decision_public_auction CHECK(bidding.valid_public_robot_payload('auction',public_auction)),
  public_context jsonb NOT NULL CHECK(bidding.valid_public_robot_payload('context',public_context)),
  raw_response jsonb NOT NULL CONSTRAINT world_robot_decision_public_raw_response CHECK(bidding.valid_public_robot_payload('response',raw_response)),
  interpretation jsonb NOT NULL CHECK(bidding.valid_public_robot_payload('interpretation',interpretation)),
