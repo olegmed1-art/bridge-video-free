@@ -167,6 +167,9 @@ AS $$
 DECLARE
     step_id uuid;
     old_state text;
+    task_goal_type text;
+    task_goal_json jsonb;
+    github_summary_keys text[];
 BEGIN
     IF p_evidence_class NOT IN (
         'SYNTHETIC_SHADOW_COMPLETION',
@@ -177,7 +180,9 @@ BEGIN
        OR octet_length(COALESCE(p_summary, '{}'::jsonb)::text) > 8192 THEN
         RAISE EXCEPTION 'AUTOPILOT_EVIDENCE_INVALID';
     END IF;
-    SELECT status INTO old_state FROM autopilot.task
+    SELECT status, goal_type, goal_json
+      INTO old_state, task_goal_type, task_goal_json
+      FROM autopilot.task
      WHERE task_id = p_task_id AND status = 'RUNNING'
        AND lease_owner = p_worker_id AND lease_epoch = p_lease_epoch
      FOR UPDATE;
@@ -202,6 +207,38 @@ BEGIN
            )
     ) THEN
         RAISE EXCEPTION 'AUTOPILOT_GITHUB_EVIDENCE_MISMATCH';
+    END IF;
+
+    -- The runtime principal can execute this SECURITY DEFINER RPC but cannot
+    -- read task rows directly. Bind every accepted GitHub summary field to the
+    -- locked goal so a buggy or compromised worker cannot retain forged proof.
+    IF task_goal_type = 'GITHUB_PR_READ_ONLY_V1' THEN
+        SELECT array_agg(key ORDER BY key) INTO github_summary_keys
+          FROM jsonb_object_keys(p_summary) AS keys(key);
+        IF github_summary_keys IS DISTINCT FROM ARRAY[
+               'api_host', 'cost_actual_microusd', 'draft', 'head_sha',
+               'http_method', 'mergeable', 'model_calls', 'pr_number',
+               'production_mutation', 'repository', 'runtime', 'state',
+               'task_id', 'task_kind', 'updated_at'
+           ]
+           OR p_summary->'repository' IS DISTINCT FROM task_goal_json->'repository'
+           OR p_summary->'pr_number' IS DISTINCT FROM task_goal_json->'pr_number'
+           OR p_summary->'head_sha' IS DISTINCT FROM task_goal_json->'expected_head_sha'
+           OR p_summary->'state' IS DISTINCT FROM '"open"'::jsonb
+           OR p_summary->'draft' IS DISTINCT FROM task_goal_json->'require_draft'
+           OR jsonb_typeof(p_summary->'mergeable') NOT IN ('boolean', 'null')
+           OR jsonb_typeof(p_summary->'updated_at') <> 'string'
+           OR length(p_summary->>'updated_at') NOT BETWEEN 1 AND 40
+           OR p_summary->'api_host' IS DISTINCT FROM '"api.github.com"'::jsonb
+           OR p_summary->'http_method' IS DISTINCT FROM '"GET"'::jsonb
+           OR p_summary->'production_mutation' IS DISTINCT FROM 'false'::jsonb
+           OR p_summary->'model_calls' IS DISTINCT FROM '0'::jsonb
+           OR p_summary->'cost_actual_microusd' IS DISTINCT FROM '0'::jsonb
+           OR p_summary->'task_id' IS DISTINCT FROM to_jsonb(p_task_id::text)
+           OR p_summary->'task_kind' IS DISTINCT FROM '"GITHUB_PR_READ_ONLY_V1"'::jsonb
+           OR p_summary->'runtime' IS DISTINCT FROM '"ORACLE_RESIDENT"'::jsonb THEN
+            RAISE EXCEPTION 'AUTOPILOT_GITHUB_EVIDENCE_INVALID';
+        END IF;
     END IF;
 
     INSERT INTO autopilot.evidence (
