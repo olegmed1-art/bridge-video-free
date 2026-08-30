@@ -3,7 +3,7 @@
   "project_id": "SCHOOL-AUTOPILOT-CONTROLLER-V1",
   "title": "School Autopilot Controller v1",
   "decision": "BUILD_ORACLE_AUTOPILOT_LITE_SHADOW",
-  "status": "DRAFT_PR_991_CI_AND_REPAIR_REVIEW_PASS_NOT_ACTIVATED",
+  "status": "TEMP_LOGIN_PROVISIONED_ORACLE_HOST_UNREACHABLE_NOT_ACTIVATED",
   "governance_mode": "ASSURED",
   "work_class": "STRATEGIC",
   "urgency": "HIGH",
@@ -69,7 +69,7 @@
   "promotion_blocks": [
     "main_branch_unprotected",
     "oracle_shadow_runtime_not_staged",
-    "dedicated_runtime_login_not_provisioned",
+    "oracle_instance_unreachable_for_staging",
     "actual_oracle_dispatch_latency_not_measured",
     "continuous_neon_compute_cost_mode_not_approved",
     "production_canary_881_not_proven",
@@ -150,6 +150,20 @@
     "python_contract_tests": "14_PASS",
     "bounded_state_model_checker_i2": "PASS",
     "external_postgresql_18_contour_i3": "PASS",
+    "post_review_temporary_branch_reconciliation": "PASS",
+    "post_review_sql_regression_unique_namespace_rollback": "PASS",
+    "temporary_runtime_login": {
+      "role_name": "autopilot_runtime_login",
+      "branch_id": "br-still-tooth-b1ilkfcj",
+      "connection_limit": 4,
+      "valid_until": "2026-09-06T15:20:39.243Z",
+      "direct_table_access": false,
+      "bounded_runtime_rpcs": true,
+      "task_ingress_rpc": false,
+      "external_event_ingress_rpc": false,
+      "secret_disclosed": false
+    },
+    "oracle_staging_transport": "BLOCKED_HOST_UNREACHABLE",
     "terminal_outcomes_proven": {
       "DONE": 3,
       "OWNER_REQUIRED": 1,
@@ -161,7 +175,7 @@
     "production_runtime_activated": false
   },
   "next_actions": [
-    "provision_dedicated_runtime_login_outside_git_after_review",
+    "restore_or_explicitly_start_the_existing_oracle_instance_for_staging",
     "stage_oracle_service_without_activation",
     "measure_real_oracle_notification_and_recovery_latency",
     "keep_runtime_disabled_until_canary_881_and_idle_guard_627_are_proven"
