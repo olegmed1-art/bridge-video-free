@@ -71,6 +71,12 @@ if (( disk_available_kb < MIN_FREE_KB )); then
     storage_used_kb="$(du -skx /var/lib/docker | awk '{print $1}')"
     printf 'UNIVERSAL_VIDEO_CONTAINER_STORAGE area=docker used_kb=%s\n' "$storage_used_kb"
   fi
+  for storage_area in opt var usr home root tmp; do
+    if [[ -d "/$storage_area" && ! -L "/$storage_area" ]]; then
+      storage_used_kb="$(du -skx "/$storage_area" | awk '{print $1}')"
+      printf 'UNIVERSAL_VIDEO_CONTAINER_STORAGE area=%s used_kb=%s\n' "$storage_area" "$storage_used_kb"
+    fi
+  done
   storage_used_kb="$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $3}')"
   printf 'UNIVERSAL_VIDEO_CONTAINER_STORAGE area=rootfs used_kb=%s\n' "$storage_used_kb"
   printf '{"error_code":"UV_CONTAINER_DISK_INSUFFICIENT","status":"FAILED"}\n' >&2

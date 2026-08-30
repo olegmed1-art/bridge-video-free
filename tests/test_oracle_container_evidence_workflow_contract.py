@@ -96,9 +96,14 @@ def test_bounded_storage_inventory_has_fixed_non_secret_areas() -> None:
     spec.loader.exec_module(module)
 
     assert "for storage_area in spool output media model-cache" in installer
+    assert "for storage_area in opt var usr home root tmp" in installer
     assert module.bounded_diagnostics(
         [
             "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=media used_kb=1048576",
+            "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=var used_kb=20971520",
             "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=private-path used_kb=1",
         ]
-    ) == ["UNIVERSAL_VIDEO_CONTAINER_STORAGE area=media used_kb=1048576"]
+    ) == [
+        "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=media used_kb=1048576",
+        "UNIVERSAL_VIDEO_CONTAINER_STORAGE area=var used_kb=20971520",
+    ]
