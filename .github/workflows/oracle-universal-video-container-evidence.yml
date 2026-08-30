@@ -11,6 +11,7 @@ on:
       - 'deploy/oracle-universal-video/universal-video-container-entrypoint.sh'
       - 'deploy/oracle-universal-video/universal-video-container.service'
       - 'ops/oracle_universal_video_container_install.sh'
+      - 'ops/bounded_container_log_diagnostic.py'
       - 'ops/oracle_universal_video_container_promote.sh'
       - 'ops/oracle_universal_video_run_command.sh'
       - 'requirements-universal-video.txt'
