@@ -33,8 +33,10 @@ WITH RECURSIVE walk(value,key_name) AS (
 )
 SELECT EXISTS (SELECT 1 FROM walk WHERE jsonb_typeof(value)='string'
  AND NOT (
-   key_name IN ('bid','action','calls')
-   AND value #>> '{}' ~* '^(pass|p|x|xx|[1-7](c|d|h|s|nt|n))$'
+   (key_name IN ('bid','action','calls')
+    AND value #>> '{}' ~* '^(pass|p|x|xx|[1-7](c|d|h|s|nt|n))$')
+   OR (key_name IN ('inputfingerprint','rawresponsesha256','inputhash','outputhash','modelhash','configurationhash')
+       AND value #>> '{}' ~ '^[0-9a-f]{64}$')
  )
  AND (
    value #>> '{}' ~* '(^|[^a-z0-9])(10|[2-9tjqka])([cdhs]|♣|♦|♥|♠)([^a-z0-9]|$)'

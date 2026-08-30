@@ -17,6 +17,7 @@ def test_robot_paths_are_information_firewalled_and_not_canon_activations():
     assert "contains_nonpublic_card_material" in sql
     assert "BID_WORLD_ROBOT_TRACE_INCOMPLETE_OR_UNPINNED" in sql
     assert "key_name IN ('bid','action','calls')" in sql
+    assert "key_name IN ('inputfingerprint','rawresponsesha256','inputhash','outputhash','modelhash','configurationhash')" in sql
     assert "WITH ORDINALITY AS s(step,ord)" in sql
     assert "step->>'input_hash' !~ '^[0-9a-f]{64}$'" in sql
     assert "canon_activation" not in sql.lower()
