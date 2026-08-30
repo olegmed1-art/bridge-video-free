@@ -126,7 +126,17 @@ jobs:
         run: |
           set -euo pipefail
           ssh_base=(ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          set +e
           "${ssh_base[@]}" "sudo -n env UNIVERSAL_VIDEO_GIT_REF='$REF' UNIVERSAL_VIDEO_ACTIVATE=1 UNIVERSAL_VIDEO_PREWARM_MODEL=1 UNIVERSAL_VIDEO_RUN_SMOKE=0 bash -s" < "$RUNNER_TEMP/prepare.sh" > "$RUNNER_TEMP/prepare.log" 2>&1
+          prepare_rc=$?
+          set -e
+          if (( prepare_rc != 0 )); then
+            python ops/bounded_container_log_diagnostic.py "$RUNNER_TEMP/prepare.log" || true
+            disk_available_kb="$("${ssh_base[@]}" "df -Pk /opt/bridge-school | awk 'NR==2 {print \\$4}'")"
+            [[ "$disk_available_kb" =~ ^[0-9]+$ ]] && printf 'UNIVERSAL_VIDEO_CONTAINER_RESOURCE disk_available_kb=%s disk_required_kb=8388608\\n' "$disk_available_kb"
+            echo '{"error_code":"UV_CONTAINER_SOURCE_PREPARE_FAILED","status":"FAILED"}'
+            exit "$prepare_rc"
+          fi
           grep -Fx UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS "$RUNNER_TEMP/prepare.log"
           expected_promotion_blob="$(git rev-parse "$REF:ops/oracle_universal_video_container_promote.sh")"
           remote_head="$("${ssh_base[@]}" 'sudo -n git -C /opt/bridge-school/universal-video-src rev-parse HEAD')"
