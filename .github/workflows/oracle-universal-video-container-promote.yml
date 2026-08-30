@@ -149,5 +149,5 @@ jobs:
             > "$RUNNER_TEMP/promotion.log" 2>&1
           rc=$?
           set -e
-          grep -E '^(UNIVERSAL_VIDEO_CONTAINER_(INSTALL_PASS|PROMOTION_(PASS|FAILED)) |\{"error_code":"UV_CONTAINER_[A-Z0-9_]+","status":"FAILED"\}$|Result=[A-Za-z-]+$|ExecMain(Code|Status)=[0-9]+$|NRestarts=[0-9]+$)' "$RUNNER_TEMP/promotion.log" || echo 'UV_CONTAINER_PROMOTION_BOUNDED_DIAGNOSTIC_UNAVAILABLE'
+          grep -E '^(UNIVERSAL_VIDEO_CONTAINER_(INSTALL_PASS|PROMOTION_(PASS|FAILED)) |\{"error_code":"UV_CONTAINER_[A-Z0-9_]+","status":"FAILED"\}$|Result=[A-Za-z-]+$|ExecMain(Code|Status)=[0-9]+$|ExecStart(Pre)?Status[0-9]+=[0-9]+$|NRestarts=[0-9]+$)' "$RUNNER_TEMP/promotion.log" || echo 'UV_CONTAINER_PROMOTION_BOUNDED_DIAGNOSTIC_UNAVAILABLE'
           exit "$rc"

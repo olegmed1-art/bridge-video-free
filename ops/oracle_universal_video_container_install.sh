@@ -19,10 +19,23 @@ STATUS_DIR="${UNIVERSAL_VIDEO_STATUS_DIR:-/run/bridge-school}"
 die(){ printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 log(){ printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 runtime_fail(){ printf '{"error_code":"%s","status":"FAILED"}\n' "$1" >&2; exit 1; }
+service_exec_status(){
+  local property="$1" prefix="$2" status index=0
+  while IFS= read -r status; do
+    [[ "$status" =~ ^[0-9]+$ ]] || continue
+    printf '%sStatus%s=%s\n' "$prefix" "$index" "$status"
+    index=$((index + 1))
+  done < <(
+    systemctl show "$SERVICE_NAME" --no-pager --value --property="$property" 2>/dev/null \
+      | grep -oE 'status=[0-9]+' | cut -d= -f2 || true
+  )
+}
 service_status(){
   systemctl show "$SERVICE_NAME" --no-pager \
     -p Result -p ExecMainCode -p ExecMainStatus -p NRestarts \
     | sed -nE '/^(Result|ExecMainCode|ExecMainStatus|NRestarts)=/p'
+  service_exec_status ExecStartPre ExecStartPre
+  service_exec_status ExecStart ExecStart
 }
 
 [[ "$(id -u)" -eq 0 ]] || die 'run as root on the Oracle host'
