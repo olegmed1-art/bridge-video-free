@@ -91,3 +91,19 @@ def test_job_keeps_remote_output_fail_closed_and_bounded():
     assert "PRE_SUBMIT_ERROR_CODE=UV_STATUS_COMMAND_FAILED" in WORKFLOW
     assert "PRE_SUBMIT_ERROR_CODE=UV_STATUS_STATE_INVALID" in WORKFLOW
     assert "UV_OPERATOR_ERROR_CODE=$code" in WORKFLOW
+
+
+def test_submit_maps_intake_failures_without_logging_private_paths() -> None:
+    for code in (
+        "UV_SUBMIT_LEGACY_SERVICE_ACTIVE",
+        "UV_SUBMIT_INTAKE_ROOT_UNSAFE",
+        "UV_SUBMIT_INBOX_UNSAFE",
+        "UV_SUBMIT_INTAKE_PERMISSION_DENIED",
+        "UV_SUBMIT_INTAKE_CROSS_DEVICE",
+        "UV_SUBMIT_INTAKE_DISK_FULL",
+        "UV_SUBMIT_INTAKE_READ_ONLY",
+        "UV_SUBMIT_INTAKE_COLLISION",
+        "UV_SUBMIT_CONTRACT_REJECTED",
+    ):
+        assert f"code='{code}'" in WORKFLOW
+    assert 'echo "$initial"' not in WORKFLOW
