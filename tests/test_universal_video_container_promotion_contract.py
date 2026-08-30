@@ -79,3 +79,12 @@ def test_promotion_runtime_diagnostic_is_fresh_bounded_and_secret_safe() -> None
     ):
         assert code in SCRIPT
     assert "print(line)" not in SCRIPT
+
+
+def test_promotion_waits_boundedly_for_named_container_before_inspect() -> None:
+    assert "process_deadline=$((SECONDS + 30))" in SCRIPT
+    assert "process_ready=0" in SCRIPT
+    assert "while (( SECONDS < process_deadline ))" in SCRIPT
+    assert "systemctl is-active --quiet \"$NEW_SERVICE\" || break" in SCRIPT
+    assert "(( process_ready == 1 )) || fail UV_CONTAINER_PROMOTION_PROCESS_INACTIVE" in SCRIPT
+    assert SCRIPT.index("process_deadline=") < SCRIPT.index("CURRENT_STAGE='resident-status'")
