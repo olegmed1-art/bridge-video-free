@@ -209,11 +209,35 @@ assert x.get('active_jobs') == []
 assert float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])
 PY
 
-CURRENT_STAGE='operator-sync'
-SOURCE_FILE="$SOURCE_DIR/ops/universal_video_operator.sh" \
-EXPECTED_RUNTIME_COMMIT="$EXPECTED_COMMIT" \
-  bash "$SOURCE_DIR/ops/install_universal_video_operator.sh"
+CURRENT_STAGE='operator-install'
+if ! operator_install_output="$(
+  SOURCE_FILE="$SOURCE_DIR/ops/universal_video_operator.sh" \
+  EXPECTED_RUNTIME_COMMIT="$EXPECTED_COMMIT" \
+    bash "$SOURCE_DIR/ops/install_universal_video_operator.sh" 2>&1
+)"; then
+  case "$operator_install_output" in
+    *'operator source must be regular'*) code=UV_CONTAINER_PROMOTION_OPERATOR_SOURCE_UNSAFE ;;
+    *'invalid runtime commit'*) code=UV_CONTAINER_PROMOTION_OPERATOR_COMMIT_INVALID ;;
+    *'runtime commit mismatch'*) code=UV_CONTAINER_PROMOTION_OPERATOR_COMMIT_MISMATCH ;;
+    *'runtime checkout is dirty'*) code=UV_CONTAINER_PROMOTION_OPERATOR_SOURCE_DIRTY ;;
+    *'operator does not match checkout'*) code=UV_CONTAINER_PROMOTION_OPERATOR_SOURCE_MISMATCH ;;
+    *'staging directory install failed'*) code=UV_CONTAINER_PROMOTION_OPERATOR_STAGING_FAILED ;;
+    *'temporary sudoers file unavailable'*) code=UV_CONTAINER_PROMOTION_OPERATOR_TEMP_UNAVAILABLE ;;
+    *'temporary sudoers mode failed'*) code=UV_CONTAINER_PROMOTION_OPERATOR_TEMP_MODE_FAILED ;;
+    *'operator sudoers validation failed'*) code=UV_CONTAINER_PROMOTION_OPERATOR_SUDOERS_INVALID ;;
+    *'operator target install failed'*) code=UV_CONTAINER_PROMOTION_OPERATOR_TARGET_INSTALL_FAILED ;;
+    *'operator sudoers install failed'*) code=UV_CONTAINER_PROMOTION_OPERATOR_SUDOERS_INSTALL_FAILED ;;
+    *'system sudoers validation failed'*) code=UV_CONTAINER_PROMOTION_SYSTEM_SUDOERS_INVALID ;;
+    *'post-retirement sudoers validation failed'*) code=UV_CONTAINER_PROMOTION_POST_RETIREMENT_SUDOERS_INVALID ;;
+    *'unsafe obsolete ingress target:'*) code=UV_CONTAINER_PROMOTION_OPERATOR_OBSOLETE_UNSAFE ;;
+    *) code=UV_CONTAINER_PROMOTION_OPERATOR_INSTALL_FAILED ;;
+  esac
+  fail "$code"
+fi
+grep -Fx 'UNIVERSAL_VIDEO_OPERATOR_INSTALL_PASS' <<<"$operator_install_output" >/dev/null || fail UV_CONTAINER_PROMOTION_OPERATOR_INSTALL_ATTESTATION_MISSING
+CURRENT_STAGE='operator-blob'
 [[ "$(git hash-object "$OPERATOR_TARGET")" == "$(git -C "$SOURCE_DIR" rev-parse "$EXPECTED_COMMIT:ops/universal_video_operator.sh")" ]] || fail UV_CONTAINER_PROMOTION_OPERATOR_MISMATCH
+CURRENT_STAGE='operator-smoke'
 set +e
 operator_smoke="$(sudo -u ocarun sudo -n "$OPERATOR_TARGET" status .. 2>&1)"
 operator_smoke_rc=$?
