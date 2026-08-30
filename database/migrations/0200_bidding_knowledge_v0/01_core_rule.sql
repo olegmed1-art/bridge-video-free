@@ -546,9 +546,15 @@ WITH RECURSIVE walk(value,key_path) AS (
                    AND (
                        (
                            regexp_replace(lower(seat_field.key),'[^a-z0-9]','','g')='owner'
-                           AND lower(regexp_replace(
+                           AND lower(btrim(
                                seat_field.value #>> '{}',
-                               '^[[:space:]]+|[[:space:]]+$','','g'
+                               E' \t\n\r\f' || chr(11) || chr(133) || chr(160)
+                               || chr(5760) || chr(8192) || chr(8193)
+                               || chr(8194) || chr(8195) || chr(8196)
+                               || chr(8197) || chr(8198) || chr(8199)
+                               || chr(8200) || chr(8201) || chr(8202)
+                               || chr(8232) || chr(8233) || chr(8239)
+                               || chr(8287) || chr(12288) || chr(65279)
                            )) IN (
                                'partner','opponent','opponents','other','others'
                            )
@@ -562,9 +568,15 @@ WITH RECURSIVE walk(value,key_path) AS (
                            AND regexp_replace(
                                lower(seat_field.key),'[^a-z0-9]','','g'
                            ) IN ('seat','owner')
-                           AND upper(regexp_replace(
+                           AND upper(btrim(
                                seat_field.value #>> '{}',
-                               '^[[:space:]]+|[[:space:]]+$','','g'
+                               E' \t\n\r\f' || chr(11) || chr(133) || chr(160)
+                               || chr(5760) || chr(8192) || chr(8193)
+                               || chr(8194) || chr(8195) || chr(8196)
+                               || chr(8197) || chr(8198) || chr(8199)
+                               || chr(8200) || chr(8201) || chr(8202)
+                               || chr(8232) || chr(8233) || chr(8239)
+                               || chr(8287) || chr(12288) || chr(65279)
                            )) IN (
                                'N','E','S','W','NORTH','EAST','SOUTH','WEST'
                            )
@@ -607,7 +619,7 @@ WITH RECURSIVE walk(value,key_path) AS (
                           ) AS cards_field(key,value)
                          WHERE regexp_replace(
                                    lower(cards_field.key),'[^a-z0-9]','','g'
-                               ) ~ '^cards?(metadata|context|data|info|details|payload|attributes|stats|summary|byseat|played|count|counts|total|totals|rate|rates|average|averages|avg|percentage|percentages|pct)*$'
+                               ) ~ '^(metadata|context|data|info|details|payload|attributes|stats|summary|byseat|played|count|counts|total|totals|rate|rates|average|averages|avg|percentage|percentages|pct)*cards?(metadata|context|data|info|details|payload|attributes|stats|summary|byseat|played|count|counts|total|totals|rate|rates|average|averages|avg|percentage|percentages|pct)*$'
                            AND jsonb_typeof(cards_field.value) <> 'null'
                            AND NOT (
                                jsonb_typeof(cards_field.value)='number'

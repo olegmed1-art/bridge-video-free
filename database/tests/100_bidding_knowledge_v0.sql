@@ -264,6 +264,15 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_HIDDEN_WHITESPACE_OWNER_VALUE_NOT_BLOCKED';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
+        jsonb_build_object(
+            'players',jsonb_build_array(jsonb_build_object(
+                'owner',chr(160) || 'partner' || chr(160),'cards','[51]'::jsonb
+            ))
+        )
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_UNICODE_WHITESPACE_OWNER_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
         '{"players":[{"owner":"partner","metadata":{"cardPayloadCount":[51]}}]}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_CARD_METRIC_ARRAY_NOT_BLOCKED';
@@ -272,6 +281,16 @@ BEGIN
         '{"players":[{"owner":"partner","metadata":{"cardPayloadCount":13}}]}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_PUBLIC_CARD_METRIC_NUMBER_FALSE_POSITIVE';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
+        '{"players":[{"owner":"partner","metadata":{"payloadCardsCount":[51]}}]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_PREFIXED_CARD_METRIC_ARRAY_NOT_BLOCKED';
+    END IF;
+    IF bidding.contains_forbidden_hidden_key(
+        '{"players":[{"owner":"partner","metadata":{"payloadCardsCount":13}}]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_PUBLIC_PREFIXED_CARD_METRIC_NUMBER_FALSE_POSITIVE';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
         '{"players":[{"owner":"partner","a":{"b":{"c":{"d":{"e":{"cards":[51]}}}}}}]}'::jsonb
