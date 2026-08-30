@@ -32,7 +32,7 @@ jobs:
           workflow='.github/workflows/oracle-autopilot-shadow-activation.yml'
           grep -F "request['activation_scope'] == 'SHADOW_ONLY'" "$workflow" >/dev/null
           grep -F "request['no_instance_stop'] is True" "$workflow" >/dev/null
-          grep -F "EXPECTED_STAGED_REVISION='edc7e8530f0aa3efa84910cb09ee459ec25f1cf6'" "$workflow" >/dev/null
+          grep -F "EXPECTED_STAGED_REVISION='e9c9381f0aed388ef72718cdcf67ac9928947aef'" "$workflow" >/dev/null
           grep -F 'EXPECTED_UNIT_SHA256: feb2d95d543045c0e0ca80115bed256f6746f8c64e51b475be4c7941e6bef2ae' "$workflow" >/dev/null
           grep -F 'Environment=AUTOPILOT_RUNTIME_MODE=SHADOW' \
             deploy/oracle-autopilot/school-autopilot-shadow.service >/dev/null
@@ -68,7 +68,7 @@ jobs:
     env:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
-      EXPECTED_STAGED_REVISION: edc7e8530f0aa3efa84910cb09ee459ec25f1cf6
+      EXPECTED_STAGED_REVISION: e9c9381f0aed388ef72718cdcf67ac9928947aef
       EXPECTED_UNIT_SHA256: feb2d95d543045c0e0ca80115bed256f6746f8c64e51b475be4c7941e6bef2ae
       SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
       SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
