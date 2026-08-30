@@ -40,7 +40,7 @@ jobs:
         run: python -m pip install --disable-pip-version-check -q pytest
       - name: Validate schema JSON
         run: python -m json.tool schemas/evolutionary-course-learning-episode-v1.schema.json >/dev/null
-      - name: Run Evolutionary Course v1 contract tests
-        run: python -m pytest -q tests/test_evolutionary_course_v1.py
+      - name: Run Evolutionary Course v1 tests
+        run: python -m pytest -q tests/test_evolutionary_course_*.py
       - name: Compile package
         run: python -m compileall -q evolutionary_course
