@@ -45,10 +45,23 @@ def _docker_error_code(line: str) -> str | None:
         return None
     if "no space left on device" in text:
         return "UV_CONTAINER_DOCKER_DISK_FULL"
-    if "mount" in text:
-        return "UV_CONTAINER_DOCKER_MOUNT_FAILED"
     if "permission denied" in text or "operation not permitted" in text:
         return "UV_CONTAINER_DOCKER_PERMISSION_DENIED"
+    if "mount" in text:
+        fixed_mounts = {
+            "/universal-video/spool": "SPOOL",
+            "/universal-video/output": "OUTPUT",
+            "/universal-video/media": "MEDIA",
+            "/universal-video/model-cache": "MODEL_CACHE",
+            "/run/bridge-school": "STATUS",
+            "/run/secrets": "SECRETS",
+        }
+        for marker, area in fixed_mounts.items():
+            if marker in text:
+                return f"UV_CONTAINER_DOCKER_MOUNT_{area}_FAILED"
+        if "bind source path does not exist" in text:
+            return "UV_CONTAINER_DOCKER_MOUNT_SOURCE_MISSING"
+        return "UV_CONTAINER_DOCKER_MOUNT_FAILED"
     if "oci runtime" in text:
         return "UV_CONTAINER_OCI_RUNTIME_FAILED"
     if "network" in text or "iptables" in text:
