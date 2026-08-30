@@ -17,13 +17,13 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from bridge_contracts.video_auction import validate_auction_prefix
 from bridge_contracts.video_deal import SEATS, canonicalize_video_deal
 
 SCHEMA = "bridge-3.1-free-deal-review-pdf/v1"
 SUITS = ("S", "H", "D", "C")
 SUIT_SYMBOLS = {"S": "♠", "H": "♥", "D": "♦", "C": "♣"}
 RANK_ORDER = "AKQJT98765432"
-CALL_RE = re.compile(r"^(?:PASS|X|XX|[1-7](?:C|D|H|S|NT))$", re.I)
 MAX_DISPLAYED_AUCTION_CALLS = 24
 
 
@@ -111,13 +111,24 @@ def _normalise_auction(deal: Mapping[str, Any]) -> dict[str, Any]:
         status = "REVIEW"
     if not isinstance(calls, Sequence) or isinstance(calls, (str, bytes)):
         raise DealReviewPdfError("auction calls must be an array")
-    normalised = [str(call).strip().upper() for call in calls]
-    if any(not CALL_RE.fullmatch(call) for call in normalised):
-        raise DealReviewPdfError("auction contains an invalid call")
     dealer_text = str(dealer or "").upper()
     if dealer_text and dealer_text not in SEATS:
         raise DealReviewPdfError("auction dealer must be N, E, S, or W")
-    return {"status": status[:48], "dealer": dealer_text, "calls": normalised}
+    if calls and not dealer_text:
+        raise DealReviewPdfError("auction with calls must identify the dealer")
+    if not calls:
+        return {"status": status[:48], "dealer": dealer_text, "calls": []}
+    try:
+        legality = validate_auction_prefix(calls, dealer=dealer_text)
+    except Exception as exc:
+        raise DealReviewPdfError("auction violates the mechanics contract") from exc
+    if status.upper() == "COMPLETE_CONFIRMED" and not legality["terminated"]:
+        raise DealReviewPdfError("confirmed auction is not complete")
+    return {
+        "status": status[:48],
+        "dealer": legality["dealer"],
+        "calls": legality["normalized_calls"],
+    }
 
 
 def _evidence_ids(deal: Mapping[str, Any]) -> list[str]:

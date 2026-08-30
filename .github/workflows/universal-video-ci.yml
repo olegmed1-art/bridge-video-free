@@ -6,6 +6,7 @@ on:
       - 'universal_video/**'
       - 'bridge_vision/**'
       - 'bridge_contracts/video_deal.py'
+      - 'bridge_contracts/video_auction.py'
       - 'bridge_contracts/video_frame.py'
       - 'bridge_contracts/__init__.py'
       - 'tools/bridge_video_positions.py'
@@ -94,7 +95,7 @@ jobs:
           ! grep -q 'set -x' ops/oracle_universal_video_productionize.sh
       - name: Enforce student-agnostic core
         run: |
-          ! grep -Rni 'Diana' universal_video bridge_vision tests/test_universal_video_*.py tests/test_bridge_vision_*.py bridge_contracts/video_deal.py bridge_contracts/video_frame.py tools/bridge_video_positions.py tools/bridge_video_deals.py tests/test_bridge_video_*.py
+          ! grep -Rni 'Diana' universal_video bridge_vision tests/test_universal_video_*.py tests/test_bridge_vision_*.py bridge_contracts/video_deal.py bridge_contracts/video_auction.py bridge_contracts/video_frame.py tools/bridge_video_positions.py tools/bridge_video_deals.py tests/test_bridge_video_*.py
       - name: Enforce native vision default
         run: |
           grep -q 'BridgeVisionEngine' tools/bridge_video_positions.py

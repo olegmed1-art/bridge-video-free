@@ -30,6 +30,8 @@ from bridge_contracts.video_deal import (
     BridgeVideoDealContractError,
     canonicalize_video_deal,
 )
+from bridge_vision.auction_observer import SCHEMA as AUCTION_OBSERVER_SCHEMA
+from bridge_vision.auction_observer import observe_bridgit_auction
 from bridge_vision.native_cards import (
     NativeCardDetectorError,
     observations_from_backend,
@@ -215,6 +217,27 @@ def _observed_metadata_field(raw: Any, field_name: str) -> tuple[Any, dict[str, 
         "confidence": confidence,
         "source": source,
         "evidence_locator": locator,
+    }
+
+
+def _pointer_corroboration(raw: Any) -> dict[str, Any] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise ProfiledChallengerError("pointer corroboration must be an object")
+    if str(raw.get("source") or "").upper() != "VISUAL_POINTER":
+        raise ProfiledChallengerError("unsupported pointer corroboration source")
+    confidence = _probability(raw.get("confidence"), "pointer corroboration confidence")
+    if confidence < 0.90:
+        raise ProfiledChallengerError("pointer corroboration confidence below gate")
+    locator = str(raw.get("evidence_locator") or "").strip()
+    if not locator or len(locator) > 256:
+        raise ProfiledChallengerError("invalid pointer corroboration evidence locator")
+    return {
+        "source": "VISUAL_POINTER",
+        "confidence": confidence,
+        "evidence_locator": locator,
+        "accepted_as_card_observation": False,
     }
 
 
@@ -831,6 +854,8 @@ class ProfiledCardChallenger:
             }
             if len(compatible) == 1:
                 suggestion["suggested_card"] = compatible[0]["card"]
+            if item.get("pointer_corroboration") is not None:
+                suggestion["pointer_corroboration"] = dict(item["pointer_corroboration"])
             suggestions.append(suggestion)
         return suggestions
 
@@ -908,6 +933,9 @@ class ProfiledCardChallenger:
                         "seat": seat,
                         "box": registered_box,
                         "candidates": candidates,
+                        "pointer_corroboration": _pointer_corroboration(
+                            observation.get("pointer_corroboration")
+                        ),
                     })
                 except (BridgeVideoDealContractError, ProfiledChallengerError, TypeError, ValueError) as exc:
                     channel_rejections.append({
@@ -986,15 +1014,6 @@ class ProfiledCardChallenger:
             geometry_cards,
         )
 
-        if not frame_hands:
-            return self._review(
-                frame_sha,
-                "NO_ACCEPTED_CARD_OBSERVATIONS",
-                channel_rejections=channel_rejections,
-                geometry_rejections=geometry["rejected"],
-                layout_suggestions=layout_suggestions,
-            )
-
         if deal_key not in self._tracks:
             if len(self._tracks) >= MAX_TRACKS:
                 return self._review(frame_sha, "TRACK_LIMIT_REACHED")
@@ -1015,6 +1034,32 @@ class ProfiledCardChallenger:
             track.board_metadata_votes.setdefault(metadata_key, set()).add(frame_sha)
             track.board_metadata_values.setdefault(metadata_key, board_metadata_candidate)
         board_metadata = _board_metadata_state(track, self.profile)
+
+        auction_observation = None
+        if raw.get("auction") is not None:
+            if board_metadata_candidate is None:
+                auction_observation = {
+                    "schema": AUCTION_OBSERVER_SCHEMA,
+                    "status": "REVIEW",
+                    "reason": "AUCTION_WITHOUT_OBSERVED_BOARD_NUMBER",
+                    "frame_sha256": frame_sha,
+                    "accepted_as_observation": False,
+                    "canonical_promotion_allowed": False,
+                }
+            else:
+                auction_observation = observe_bridgit_auction(
+                    raw.get("auction"),
+                    board_number=board_metadata_candidate["board_number"],
+                    dealer=board_metadata_candidate["dealer"],
+                    frame_sha256=frame_sha,
+                    board_confirmed=board_metadata.get("status") == "CONFIRMED",
+                )
+        auction_evidence = (
+            {"auction_observation": auction_observation}
+            if auction_observation is not None
+            else {}
+        )
+
         if board_metadata["status"] == "CONFLICT":
             return {
                 "status": "CONFLICT",
@@ -1032,9 +1077,23 @@ class ProfiledCardChallenger:
                     "deal_identity": deal_identity,
                     "board_metadata": board_metadata,
                     "registration": registration,
+                    **auction_evidence,
                     "canonical_promotion_allowed": False,
                 },
             }
+
+        if not frame_hands:
+            return self._review(
+                frame_sha,
+                "NO_ACCEPTED_CARD_OBSERVATIONS",
+                deal_identity=deal_identity,
+                board_metadata=board_metadata,
+                registration=registration,
+                channel_rejections=channel_rejections,
+                geometry_rejections=geometry["rejected"],
+                layout_suggestions=layout_suggestions,
+                **auction_evidence,
+            )
 
         accepted_by_pair: dict[tuple[str, str], dict[str, Any]] = {}
         for item in geometry["accepted"]:
@@ -1071,6 +1130,7 @@ class ProfiledCardChallenger:
                     "deal_identity": deal_identity,
                     "board_metadata": board_metadata,
                     "registration": registration,
+                    **auction_evidence,
                     "canonical_promotion_allowed": False,
                 },
             }
@@ -1117,6 +1177,7 @@ class ProfiledCardChallenger:
                 "channel_rejections": channel_rejections,
                 "geometry_rejections": geometry["rejected"],
                 "layout_suggestions": layout_suggestions,
+                **auction_evidence,
                 "canonical_promotion_allowed": False,
             },
         }
