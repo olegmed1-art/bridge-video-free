@@ -192,6 +192,9 @@ def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():
     assert 'systemctl enable --now "$service"' in workflow
     assert "AUTOPILOT_PRODUCTION_MUTATIONS=NO" in workflow
     assert "ORACLE_INSTANCE_STOP_REQUESTED=NO" in workflow
+    assert 'active_since="$(systemctl show -p ActiveEnterTimestamp --value' in workflow
+    assert 'systemctl disable --now "$service"' in workflow
+    assert "AUTOPILOT_SHADOW_ACTIVATION_ROLLED_BACK" in workflow
     for forbidden in (
         "--action " + "STOP",
         "systemctl " + "stop",
