@@ -239,3 +239,14 @@ def test_docker_mount_diagnostic_prioritizes_permission_and_fixed_area() -> None
         '{"error_code":"UV_CONTAINER_DOCKER_PERMISSION_DENIED","status":"FAILED"}',
         '{"error_code":"UV_CONTAINER_DOCKER_MOUNT_MODEL_CACHE_FAILED","status":"FAILED"}',
     ]
+
+
+def test_status_mount_is_refreshed_after_long_image_build_before_readiness() -> None:
+    installer = (ROOT / "ops/oracle_universal_video_container_install.sh").read_text(encoding="utf-8")
+
+    build = installer.index('docker build --pull')
+    refresh = installer.index("Refresh ephemeral host status mount immediately before readiness")
+    readiness = installer.index("docker run --rm", refresh)
+    assert build < refresh < readiness
+    assert installer.count('install -d -o "$USER_NAME" -g "$GROUP_NAME" -m 0750 "$STATUS_DIR"') >= 2
+    assert '[[ ! -L "$STATUS_DIR" ]]' in installer[refresh:readiness]
