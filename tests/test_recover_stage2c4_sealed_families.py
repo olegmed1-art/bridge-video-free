@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import heapq
 import json
+import random
 from pathlib import Path
 
 import pytest
@@ -37,6 +39,43 @@ def test_recovers_exact_historical_order_and_partition(tmp_path: Path):
     assert result["manifests"]["all_sealed"]["count"] == 7
     assert result["manifests"]["remaining_unused"]["count"] == 3
     assert result["dds_called"] is False and result["results_read"] is False
+
+
+def test_independent_family_minimum_oracle_matches_across_permutations(tmp_path: Path):
+    """I2: verify selection using per-family minima, not the runner's global scan."""
+    base_rows = []
+    for family_index in range(19):
+        family = f"F-{family_index:02d}"
+        for task_index in range(1 + family_index % 4):
+            base_rows.append({
+                "task_id": f"S-{family_index:02d}-{task_index:02d}",
+                "root_deal_id": family,
+                "split": "sealed_test",
+                "task_type": "contract_tricks",
+            })
+
+    family_minima = {}
+    for row in base_rows:
+        rank = hashlib.sha256(
+            f"{PROTOCOL}:{row['root_deal_id']}:{row['task_id']}".encode()
+        ).hexdigest()
+        candidate = (rank, row["task_id"])
+        family_minima[row["root_deal_id"]] = min(
+            candidate, family_minima.get(row["root_deal_id"], candidate)
+        )
+    expected = sorted(
+        family for family, _rank in heapq.nsmallest(
+            11, family_minima.items(), key=lambda item: item[1]
+        )
+    )
+
+    for seed in range(12):
+        rows = list(base_rows)
+        random.Random(seed).shuffle(rows)
+        path = tmp_path / f"tasks-{seed}.jsonl"
+        digest = _write(path, rows)
+        result = recover(path, expected_sealed_task_digest=digest, source_total=11)
+        assert result["manifests"]["stage2c4_selected"]["family_ids"] == expected
 
 
 def test_fails_closed_on_task_digest_mismatch(tmp_path: Path):
