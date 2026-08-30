@@ -161,3 +161,29 @@ def test_evidence_bounds_source_prepare_failure_before_container_build() -> None
     assert "UV_CONTAINER_SOURCE_PREPARE_FAILED" in text
     assert "disk_available_kb=" in text
     assert 'cat "$RUNNER_TEMP/prepare.log"' not in text
+
+
+def test_source_prepare_emits_only_fixed_bounded_stages() -> None:
+    run_command = (ROOT / "ops/oracle_universal_video_run_command.sh").read_text(encoding="utf-8")
+    parser_path = ROOT / "ops/bounded_container_log_diagnostic.py"
+    spec = importlib.util.spec_from_file_location("bounded_prepare_stages", parser_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    for stage in (
+        "protected-preflight",
+        "service-quiesce",
+        "source-checkout",
+        "legacy-install",
+        "operator-install",
+        "protected-postflight",
+        "complete",
+    ):
+        assert f"UNIVERSAL_VIDEO_PREPARE_STAGE stage={stage}" in run_command
+    assert module.bounded_diagnostics(
+        [
+            "UNIVERSAL_VIDEO_PREPARE_STAGE stage=source-checkout",
+            "UNIVERSAL_VIDEO_PREPARE_STAGE stage=private-secret",
+        ]
+    ) == ["UNIVERSAL_VIDEO_PREPARE_STAGE stage=source-checkout"]
