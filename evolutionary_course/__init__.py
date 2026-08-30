@@ -18,6 +18,12 @@ from .skill_catalog import (
     resolve_reviewed_skill,
     validate_catalog,
 )
+from .legacy_report_adapter import (
+    ANNOTATION_QUEUE_SCHEMA,
+    LEGACY_REPORT_SCHEMA,
+    LegacyReportAdapterError,
+    adapt_legacy_report_pointers,
+)
 from .longitudinal_pilot import (
     LONGITUDINAL_PILOT_SCHEMA,
     run_multi_lesson_pilot,
@@ -55,6 +61,7 @@ from .adaptive_selector import (
 
 __all__ = [
     "ADAPTER_SCHEMA",
+    "ANNOTATION_QUEUE_SCHEMA",
     "CATALOG_ADAPTER_SCHEMA",
     "AUTHORITY_CLASS",
     "CATALOG_SCHEMA",
@@ -70,7 +77,9 @@ __all__ = [
     "PILOT_SCHEMA",
     "MASTERY_POLICY_SCHEMA",
     "MASTERY_REPORT_SCHEMA",
+    "LEGACY_REPORT_SCHEMA",
     "LONGITUDINAL_PILOT_SCHEMA",
+    "LegacyReportAdapterError",
     "MasteryEvidenceError",
     "MethodologyQueueError",
     "QUEUE_SCHEMA",
@@ -79,6 +88,7 @@ __all__ = [
     "SELECTOR_POLICY_SCHEMA",
     "SELECTOR_SCHEMA",
     "AdaptiveSelectorError",
+    "adapt_legacy_report_pointers",
     "adapt_video31_quality",
     "adapt_video31_quality_with_catalog",
     "build_methodology_review_queue",
