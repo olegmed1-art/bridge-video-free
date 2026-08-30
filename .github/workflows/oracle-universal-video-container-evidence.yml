@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/oracle-universal-video-container-evidence.yml'
+      - '.github/workflows/oracle-universal-video-container-promote.yml'
       - 'deploy/oracle-universal-video/Dockerfile'
       - 'deploy/oracle-universal-video/universal-video-container-entrypoint.sh'
       - 'deploy/oracle-universal-video/universal-video-container.service'
@@ -92,6 +93,11 @@ jobs:
           ssh_base=(ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
           "${ssh_base[@]}" "sudo -n env UNIVERSAL_VIDEO_GIT_REF='$REF' UNIVERSAL_VIDEO_ACTIVATE=1 UNIVERSAL_VIDEO_PREWARM_MODEL=1 UNIVERSAL_VIDEO_RUN_SMOKE=0 bash -s" < "$RUNNER_TEMP/prepare.sh" > "$RUNNER_TEMP/prepare.log" 2>&1
           grep -Fx UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS "$RUNNER_TEMP/prepare.log"
+          expected_promotion_blob="$(git rev-parse "$REF:ops/oracle_universal_video_container_promote.sh")"
+          remote_head="$("${ssh_base[@]}" 'sudo -n git -C /opt/bridge-school/universal-video-src rev-parse HEAD')"
+          remote_promotion_blob="$("${ssh_base[@]}" 'sudo -n git hash-object -- /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh')"
+          [[ "$remote_head" == "$REF" && "$remote_promotion_blob" == "$expected_promotion_blob" ]]
+          echo UNIVERSAL_VIDEO_PROMOTION_ENTRYPOINT_ATTEST_PASS
           set +e
           "${ssh_base[@]}" 'sudo -n env UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=0 bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_install.sh' > "$RUNNER_TEMP/container.log" 2>&1
           container_rc=$?

@@ -43,3 +43,5 @@ def test_evidence_workflow_remains_non_activating_and_media_free() -> None:
     assert "'ops/oracle_universal_video_run_command.sh'" in text
     assert "'ops/oracle_universal_video_container_promote.sh'" in text
     assert "'deploy/oracle-universal-video/Dockerfile'" in text
+    assert "'.github/workflows/oracle-universal-video-container-promote.yml'" in text
+    assert "UNIVERSAL_VIDEO_PROMOTION_ENTRYPOINT_ATTEST_PASS" in text
