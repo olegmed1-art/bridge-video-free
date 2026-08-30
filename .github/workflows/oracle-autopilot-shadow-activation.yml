@@ -93,7 +93,7 @@ jobs:
           assert set(request) == {
               'request_id', 'action', 'target_host', 'source_revision',
               'activation_scope', 'expected_db_user', 'no_instance_stop',
-              'neon_min_cu', 'neon_max_cu',
+              'neon_min_cu', 'neon_max_cu', 'runtime_connection_limit',
           }
           assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', request['request_id'])
           assert request['action'] == 'activate_shadow'
@@ -103,7 +103,8 @@ jobs:
           assert request['expected_db_user'] == 'autopilot_runtime_login'
           assert request['no_instance_stop'] is True
           assert request['neon_min_cu'] == 0.25
-          assert request['neon_max_cu'] == 0.25
+          assert request['neon_max_cu'] == 8
+          assert request['runtime_connection_limit'] == 4
           print(f"request_id={request['request_id']}")
           print(f"source_revision={request['source_revision']}")
           PY
@@ -236,6 +237,7 @@ jobs:
             echo '- runtime scope: `SHADOW_ONLY`'
             echo '- production mutations: `NO`'
             echo '- Oracle stop requested: `NO`'
-            echo '- Neon compute: `0.25-0.25 CU`'
+            echo '- Neon compute: `0.25 CU` minimum, configured `8 CU` ceiling'
+            echo '- runtime database connection limit: `4`'
             echo '- secrets in repository/logs: `NO`'
           } >> "$GITHUB_STEP_SUMMARY"
