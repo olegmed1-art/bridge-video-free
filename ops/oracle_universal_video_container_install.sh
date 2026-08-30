@@ -168,6 +168,11 @@ EOF
 chown root:root "$BASE_DIR/universal-video-container.env"
 chmod 0640 "$BASE_DIR/universal-video-container.env"
 
+log 'Refresh ephemeral host status mount immediately before readiness'
+[[ ! -L "$STATUS_DIR" ]] || die "unsafe or missing mount: $STATUS_DIR"
+install -d -o "$USER_NAME" -g "$GROUP_NAME" -m 0750 "$STATUS_DIR"
+[[ -d "$STATUS_DIR" ]] || die "unsafe or missing mount: $STATUS_DIR"
+
 log 'Run container-only readiness gate; no job is submitted'
 docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g --user="$uid:$gid" \
   --env-file "$BASE_DIR/universal-video-container.env" \
