@@ -21,7 +21,32 @@ def _text(value: Any) -> str:
 
 
 def _key(value: Any) -> str:
-    return _text(value).casefold()
+    # Aliases are reviewed explicitly; normalization only removes presentation
+    # differences and never guesses semantic similarity.
+    return re.sub(r"[\W_]+", " ", _text(value).casefold(), flags=re.UNICODE).strip()
+
+
+def _reject_prerequisite_cycles(skills: list[dict[str, Any]]) -> None:
+    graph = {
+        skill["skill_id"]: tuple(skill["prerequisite_skill_ids"])
+        for skill in skills
+    }
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(skill_id: str) -> None:
+        if skill_id in visiting:
+            raise SkillCatalogError("cyclic prerequisite dependency")
+        if skill_id in visited:
+            return
+        visiting.add(skill_id)
+        for prerequisite in graph[skill_id]:
+            visit(prerequisite)
+        visiting.remove(skill_id)
+        visited.add(skill_id)
+
+    for skill_id in sorted(graph):
+        visit(skill_id)
 
 
 def _strings(value: Any, label: str, *, allow_empty: bool = False) -> list[str]:
@@ -111,6 +136,7 @@ def validate_catalog(candidate: Mapping[str, Any]) -> dict[str, Any]:
     }
     if unknown:
         raise SkillCatalogError("unknown prerequisite skill")
+    _reject_prerequisite_cycles(normalized)
     result = deepcopy(dict(candidate))
     result["skills"] = sorted(normalized, key=lambda item: item["skill_id"])
     return result
