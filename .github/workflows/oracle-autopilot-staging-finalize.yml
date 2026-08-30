@@ -1,0 +1,222 @@
+name: Oracle Autopilot staging finalizer
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-autopilot-staging-finalize.yml'
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths:
+      - 'ops/oracle-autopilot-finalize-requests/*.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Validate fail-closed finalizer contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'sudo -n /usr/local/sbin/oracle-idle-state' \
+            .github/workflows/oracle-autopilot-staging-finalize.yml >/dev/null
+          grep -F "grep -Fx 'ORACLE_IDLE_STATE=IDLE'" \
+            .github/workflows/oracle-autopilot-staging-finalize.yml >/dev/null
+          grep -F 'AUTOPILOT_SERVICE_ACTIVE=inactive' \
+            .github/workflows/oracle-autopilot-staging-finalize.yml >/dev/null
+          grep -F 'AUTOPILOT_SERVICE_ENABLED=disabled' \
+            .github/workflows/oracle-autopilot-staging-finalize.yml >/dev/null
+          grep -F -- '--action STOP' \
+            .github/workflows/oracle-autopilot-staging-finalize.yml >/dev/null
+
+  finalize:
+    if: ${{ github.event_name == 'push' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      OCI_REGION: eu-frankfurt-1
+      OCI_INSTANCE_OCID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Validate exact finalize request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+            | grep -E '^ops/oracle-autopilot-finalize-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one finalize request' >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import re
+
+          request = json.load(open(os.environ["REQUEST_FILE"], encoding="utf-8"))
+          assert set(request) == {
+              "request_id", "action", "target_host", "instance_ocid",
+              "expected_staged_revision", "staging_run_id",
+              "require_autopilot_inactive",
+          }
+          assert re.fullmatch(r"[A-Za-z0-9._-]{1,80}", request["request_id"])
+          assert request["action"] == "stop_after_idle"
+          assert request["target_host"] == "158.180.47.161"
+          assert request["instance_ocid"] == os.environ["OCI_INSTANCE_OCID"]
+          assert re.fullmatch(r"[0-9a-f]{40}", request["expected_staged_revision"])
+          assert isinstance(request["staging_run_id"], int) and request["staging_run_id"] > 0
+          assert request["require_autopilot_inactive"] is True
+          print(f"request_id={request['request_id']}")
+          print(f"expected_staged_revision={request['expected_staged_revision']}")
+          print(f"staging_run_id={request['staging_run_id']}")
+          PY
+
+      - name: Verify pinned Oracle identity and SSH access
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/oracle-finalize-known-hosts"
+          : > "$known"
+          index=0
+          for expected in \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64'; do
+            part="$RUNNER_TEMP/oracle-finalize-known-hosts.$index"
+            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$expected" "$part"
+            cat "$part" >> "$known"
+            index=$((index + 1))
+          done
+          sort -u -o "$known" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]] || { echo 'Oracle SSH credential unavailable' >&2; exit 1; }
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Prove IDLE and inactive Autopilot over SSH
+        id: idle
+        shell: bash
+        env:
+          EXPECTED_REVISION: ${{ steps.request.outputs.expected_staged_revision }}
+        run: |
+          set -euo pipefail
+          proof="$RUNNER_TEMP/oracle-finalize-proof.log"
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            'set -Eeuo pipefail
+             sudo -n /usr/local/sbin/oracle-idle-state
+             printf "AUTOPILOT_SERVICE_ACTIVE=%s\n" "$(systemctl is-active school-autopilot-shadow.service 2>/dev/null || true)"
+             printf "AUTOPILOT_SERVICE_ENABLED=%s\n" "$(systemctl is-enabled school-autopilot-shadow.service 2>/dev/null || true)"
+             printf "AUTOPILOT_STAGED_REVISION=%s\n" "$(cat /opt/bridge-school/school-autopilot/current/SOURCE_REVISION)"' \
+            | tee "$proof"
+          grep -Fx 'ORACLE_IDLE_STATE=IDLE' "$proof" >/dev/null
+          grep -Eq '^ORACLE_IDLE_REASON=[A-Za-z0-9_,.=-]+$' "$proof"
+          grep -Fx 'AUTOPILOT_SERVICE_ACTIVE=inactive' "$proof" >/dev/null
+          grep -Fx 'AUTOPILOT_SERVICE_ENABLED=disabled' "$proof" >/dev/null
+          grep -Fx "AUTOPILOT_STAGED_REVISION=$EXPECTED_REVISION" "$proof" >/dev/null
+          echo 'SSH_IDLE_AND_INACTIVE_PASS'
+
+      - name: Configure bounded OCI client
+        env:
+          OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${OCI_CLI_CONFIG:-}"
+          test -n "${OCI_CLI_KEY_CONTENT:-}"
+          python -m pip install --disable-pip-version-check --quiet 'oci-cli==3.90.3'
+          umask 077
+          mkdir -p "$HOME/.oci"
+          if [[ "$OCI_CLI_KEY_CONTENT" == base64:* ]]; then
+            printf '%s' "${OCI_CLI_KEY_CONTENT#base64:}" | base64 --decode > "$HOME/.oci/oci_api_key.pem"
+          else
+            printf '%s\n' "$OCI_CLI_KEY_CONTENT" > "$HOME/.oci/oci_api_key.pem"
+          fi
+          printf '%s\n' "$OCI_CLI_CONFIG" > "$HOME/.oci/config"
+          openssl pkey -in "$HOME/.oci/oci_api_key.pem" -noout -check >/dev/null 2>&1
+          openssl pkey -in "$HOME/.oci/oci_api_key.pem" -traditional \
+            -out "$HOME/.oci/oci_api_key.pkcs1.pem"
+          mv "$HOME/.oci/oci_api_key.pkcs1.pem" "$HOME/.oci/oci_api_key.pem"
+          actual_fingerprint="$(openssl pkey -in "$HOME/.oci/oci_api_key.pem" -pubout -outform DER \
+            | openssl md5 -r | awk '{print $1}' | sed 's/../&:/g;s/:$//')"
+          export OCI_DERIVED_FINGERPRINT="$actual_fingerprint"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          path = Path.home() / ".oci/config"
+          lines = []
+          found = {"key": False, "region": False, "fingerprint": False}
+          for line in path.read_text().splitlines():
+              if line.strip().startswith("key_file="):
+                  lines.append(f"key_file={Path.home()}/.oci/oci_api_key.pem")
+                  found["key"] = True
+              elif line.strip().startswith("region="):
+                  lines.append("region=eu-frankfurt-1")
+                  found["region"] = True
+              elif line.strip().startswith("fingerprint="):
+                  lines.append(f"fingerprint={os.environ['OCI_DERIVED_FINGERPRINT']}")
+                  found["fingerprint"] = True
+              else:
+                  lines.append(line)
+          if not found["key"]:
+              lines.append(f"key_file={Path.home()}/.oci/oci_api_key.pem")
+          if not found["region"]:
+              lines.append("region=eu-frankfurt-1")
+          if not found["fingerprint"]:
+              lines.append(f"fingerprint={os.environ['OCI_DERIVED_FINGERPRINT']}")
+          path.write_text("\n".join(lines) + "\n")
+          PY
+          oci iam region list --output json >/dev/null
+
+      - name: Stop exact instance after fresh IDLE proof
+        shell: bash
+        run: |
+          set -euo pipefail
+          state="$(oci compute instance get --instance-id "$OCI_INSTANCE_OCID" \
+            --query 'data."lifecycle-state"' --raw-output)"
+          [[ "$state" == RUNNING ]] || { echo "refusing stop from state=$state" >&2; exit 1; }
+          oci compute instance action --instance-id "$OCI_INSTANCE_OCID" --action STOP >/dev/null
+          for _ in $(seq 1 60); do
+            state="$(oci compute instance get --instance-id "$OCI_INSTANCE_OCID" \
+              --query 'data."lifecycle-state"' --raw-output)"
+            [[ "$state" == STOPPED ]] && break
+            [[ "$state" == STOPPING || "$state" == RUNNING ]] \
+              || { echo "unexpected stop state: $state" >&2; exit 1; }
+            sleep 10
+          done
+          [[ "$state" == STOPPED ]] || { echo "instance did not reach STOPPED" >&2; exit 1; }
+          echo 'AUTOPILOT_FINALIZE_IDLE_PASS'
+          echo 'AUTOPILOT_FINALIZE_INSTANCE_STOPPED'
+
