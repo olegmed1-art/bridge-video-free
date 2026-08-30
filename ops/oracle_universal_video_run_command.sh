@@ -12,6 +12,7 @@ GIT_REF="${UNIVERSAL_VIDEO_GIT_REF:-main}"
 ACTIVATE="${UNIVERSAL_VIDEO_ACTIVATE:-1}"
 PREWARM="${UNIVERSAL_VIDEO_PREWARM_MODEL:-1}"
 RUN_SMOKE="${UNIVERSAL_VIDEO_RUN_SMOKE:-0}"
+SOURCE_ONLY="${UNIVERSAL_VIDEO_SOURCE_ONLY:-0}"
 
 log(){ printf '\n[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
@@ -20,6 +21,7 @@ die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$ACTIVATE" =~ ^[01]$ ]] || die "UNIVERSAL_VIDEO_ACTIVATE must be 0 or 1"
 [[ "$PREWARM" =~ ^[01]$ ]] || die "UNIVERSAL_VIDEO_PREWARM_MODEL must be 0 or 1"
 [[ "$RUN_SMOKE" =~ ^[01]$ ]] || die "UNIVERSAL_VIDEO_RUN_SMOKE must be 0 or 1"
+[[ "$SOURCE_ONLY" =~ ^[01]$ ]] || die "UNIVERSAL_VIDEO_SOURCE_ONLY must be 0 or 1"
 
 log "Capture protected service state before changes"
 echo 'UNIVERSAL_VIDEO_PREPARE_STAGE stage=protected-preflight'
@@ -103,6 +105,32 @@ elif [[ -n "$OLD_DIR" ]]; then
   # Keep the prior clean tree until the installer has successfully restarted the
   # service; removal happens only after the post-install non-regression gate.
   echo "UNIVERSAL_VIDEO_PREVIOUS_DIR=STAGED_CLEAN"
+fi
+
+if [[ "$SOURCE_ONLY" == "1" ]]; then
+  if [[ "$VIDEO_WAS_ACTIVE" == "1" ]]; then
+    systemctl start universal-video.service
+    systemctl is-active --quiet universal-video.service || die "universal-video failed to restart after source-only preparation"
+  fi
+  echo 'UNIVERSAL_VIDEO_PREPARE_STAGE stage=protected-postflight'
+  [[ "$(systemctl is-active assistant-lab.service)" == "$BEFORE_ASSISTANT" ]] || die "assistant-lab state changed"
+  AFTER_READY="$(curl -fsS --max-time 8 http://127.0.0.1:8080/readyz)" || die "DDS3 readyz failed after activation"
+  AFTER_READY="$AFTER_READY" python3 - <<'PY'
+import json, os
+x=json.loads(os.environ['AFTER_READY'])
+assert x.get('status') == 'ready', x
+assert x.get('engine') == 'DDS3', x
+assert x.get('fallback_used') is False, x
+print('DDS3_AFTER_PASS')
+PY
+  if [[ "$OLD_DIRTY" == "0" && -n "$OLD_DIR" && -e "$OLD_DIR" ]]; then
+    rm -rf "$OLD_DIR"
+    OLD_DIR=""
+  fi
+  echo 'UNIVERSAL_VIDEO_SOURCE_ONLY_PREPARE_PASS'
+  echo 'UNIVERSAL_VIDEO_PREPARE_STAGE stage=complete'
+  echo UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS
+  exit 0
 fi
 
 echo 'UNIVERSAL_VIDEO_PREPARE_STAGE stage=legacy-install'
