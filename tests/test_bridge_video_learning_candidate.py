@@ -18,7 +18,7 @@ def _candidate() -> dict:
     return {
         "schema": "video31-learning-candidate-v1",
         "status": "CANDIDATE_RESEARCH",
-        "candidate_id": "diana13.interaction.7",
+        "candidate_id": "canary.interaction.7",
         "observed_episode": {
             "interaction_id": "interaction-7",
             "start": 9.0,
@@ -31,10 +31,10 @@ def _candidate() -> dict:
             "actor_attribution_status": "SUPPORTED",
         },
         "source": {
-            "video_file_id": "drive-file-diana-13",
-            "source_name": "Diana-13.mp4",
+            "video_file_id": "drive-file-canary",
+            "source_name": "canary-lesson.mp4",
             "source_sha256": "a" * 64,
-            "source_fingerprint": "source-diana-13",
+            "source_fingerprint": "source-canary",
         },
         "transcript_evidence": [{
             "locator": locator,
@@ -54,7 +54,7 @@ def _candidate() -> dict:
             "speech_end": 11.0,
             "transcript_locator": locator,
             "distance_to_midpoint_seconds": 0.0,
-            "source_fingerprint": "source-diana-13",
+            "source_fingerprint": "source-canary",
             "single_frame_binding": True,
         }],
         "bridge_context": {
@@ -117,7 +117,7 @@ def test_rejects_unbound_or_unproven_evidence(mutation, match):
 
 def test_unknown_speaker_cannot_acquire_an_unverified_name():
     candidate = _candidate()
-    candidate["transcript_evidence"][0]["speaker_id"] = "Diana"
+    candidate["transcript_evidence"][0]["speaker_id"] = "Named Student"
     with pytest.raises(LearningCandidateError, match="must remain UNKNOWN"):
         validate_learning_candidate(candidate)
 
