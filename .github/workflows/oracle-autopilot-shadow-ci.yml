@@ -56,7 +56,15 @@ jobs:
         run: |
           set -euo pipefail
           bash -n ops/oracle_autopilot_shadow_install.sh
-          systemd-analyze verify deploy/oracle-autopilot/school-autopilot-shadow.service
+          verify_output="$(systemd-analyze verify \
+            deploy/oracle-autopilot/school-autopilot-shadow.service 2>&1 || true)"
+          unexpected_output="$(printf '%s\n' "$verify_output" | grep -vF \
+            'Command /opt/bridge-school/school-autopilot/.venv/bin/python is not executable: No such file or directory' \
+            | sed '/^[[:space:]]*$/d' || true)"
+          test -z "$unexpected_output" || {
+            printf '%s\n' "$unexpected_output" >&2
+            exit 1
+          }
           grep -F 'AUTOPILOT_ACTIVATE:-0' ops/oracle_autopilot_shadow_install.sh >/dev/null
           grep -F 'AUTOPILOT_ACTIVATION_SCOPE=SHADOW_ONLY' ops/oracle_autopilot_shadow_install.sh >/dev/null
           grep -F 'Environment=AUTOPILOT_RUNTIME_MODE=SHADOW' deploy/oracle-autopilot/school-autopilot-shadow.service >/dev/null
