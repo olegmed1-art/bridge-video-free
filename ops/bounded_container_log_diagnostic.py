@@ -23,7 +23,7 @@ ALLOWED_ERRORS = {
 MOUNT_ERROR_RE = re.compile(r"ERROR: unsafe or missing mount: [A-Za-z0-9._/-]+")
 ERROR_CODE_RE = re.compile(r"UV_CONTAINER_[A-Z0-9_]+")
 RESOURCE_RE = re.compile(r"UNIVERSAL_VIDEO_CONTAINER_RESOURCE disk_available_kb=[0-9]+ disk_required_kb=[0-9]+")
-STORAGE_RE = re.compile(r"UNIVERSAL_VIDEO_CONTAINER_STORAGE area=(?:spool|output|media|model-cache|docker|source|bridge-school|var-lib|var-log|home|tmp|root|video-venv|var-bridge|containerd|snapd|apt|postgresql|root-cache|root-local|root-npm|root-cargo|root-rustup|pip-cache|hf-cache|rootfs) used_kb=[0-9]+")
+STORAGE_RE = re.compile(r"UNIVERSAL_VIDEO_CONTAINER_STORAGE area=(?:spool|output|media|model-cache|docker|source|bridge-school|var-lib|var-log|home|tmp|root|video-venv|var-bridge|containerd|snapd|apt|postgresql|root-cache|root-local|root-npm|root-cargo|root-rustup|pip-cache|hf-cache|uv-cache|torch-cache|whisper-cache|playwright-cache|containerd-content|containerd-snapshots|rootfs) used_kb=[0-9]+")
 
 
 def bounded_diagnostics(lines: Iterable[str]) -> list[str]:
