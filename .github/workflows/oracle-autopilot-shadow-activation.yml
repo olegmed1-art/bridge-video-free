@@ -178,9 +178,20 @@ jobs:
             *) echo "refusing mixed pre-activation state: $active/$enabled" >&2; exit 1 ;;
           esac
 
-          started_at="$(date --iso-8601=seconds)"
+          activated_here=0
+          rollback_new_activation() {
+            rc=$?
+            if [[ $rc -ne 0 && "$activated_here" == 1 ]]; then
+              systemctl disable --now "$service" >/dev/null 2>&1 || true
+              echo 'AUTOPILOT_SHADOW_ACTIVATION_ROLLED_BACK' >&2
+            fi
+            exit "$rc"
+          }
+          trap rollback_new_activation EXIT
+
           systemctl daemon-reload
           if [[ "$active:$enabled" == inactive:disabled ]]; then
+            activated_here=1
             systemctl enable --now "$service"
           fi
           sleep 12
@@ -194,9 +205,12 @@ jobs:
           actual_uid="$(awk '/^Uid:/{print $2}' "/proc/$pid/status")"
           [[ "$actual_uid" == "$expected_uid" ]]
 
-          journal="$(journalctl -u "$service" --since "$started_at" --no-pager -n 100)"
+          active_since="$(systemctl show -p ActiveEnterTimestamp --value "$service")"
+          test -n "$active_since"
+          journal="$(journalctl -u "$service" --since "$active_since" --no-pager -n 100)"
           grep -F 'worker_started' <<<"$journal" >/dev/null
           ! grep -Eq 'listener_reconnect|Traceback|RuntimeError' <<<"$journal"
+          trap - EXIT
           echo 'AUTOPILOT_SHADOW_ACTIVATION_PASS'
           echo 'AUTOPILOT_RUNTIME_MODE=SHADOW'
           echo 'AUTOPILOT_PRODUCTION_MUTATIONS=NO'
