@@ -15,8 +15,8 @@ RUN apt-get update \
  && useradd --uid 10001 --gid universal-video --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin universal-video
 
 WORKDIR /opt/bridge-school/universal-video-src
-COPY requirements-universal-video.txt requirements-universal-video-speaker.txt requirements-universal-video-neon.txt ./
-RUN pip install --no-cache-dir -r requirements-universal-video-speaker.txt -r requirements-universal-video-neon.txt
+COPY requirements-worker.txt ./
+RUN pip install --no-cache-dir -r requirements-worker.txt
 COPY universal_video ./universal_video
 # The resident entrypoint conditionally enables the Neon consumer. Keep the
 # exact stable Video 3.1 processor dependency closure in the same immutable
@@ -37,6 +37,7 @@ COPY bridge_neon_persistence.py bridge_output_scoped_idempotency.py \
      run_drive_3_1_free_oidc.py run_master_3_1_free.py \
      run_master_3_1_free_semantic.py run_master_3_1_free_semantic_v2.py \
      transcript_stage_checkpoint_v1.py ./
+COPY bridge_vision ./bridge_vision
 COPY deploy/oracle-universal-video/universal-video-container-entrypoint.sh /usr/local/bin/universal-video-container-entrypoint
 RUN chmod 0755 /usr/local/bin/universal-video-container-entrypoint \
  && install -d -o universal-video -g universal-video -m 0750 \
