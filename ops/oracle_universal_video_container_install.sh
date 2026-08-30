@@ -91,7 +91,13 @@ if (( disk_available_kb < MIN_FREE_KB )); then
     "root-cargo:/root/.cargo" \
     "root-rustup:/root/.rustup" \
     "pip-cache:/root/.cache/pip" \
-    "hf-cache:/root/.cache/huggingface"; do
+    "hf-cache:/root/.cache/huggingface" \
+    "uv-cache:/root/.cache/uv" \
+    "torch-cache:/root/.cache/torch" \
+    "whisper-cache:/root/.cache/whisper" \
+    "playwright-cache:/root/.cache/ms-playwright" \
+    "containerd-content:/var/lib/containerd/io.containerd.content.v1.content" \
+    "containerd-snapshots:/var/lib/containerd/io.containerd.snapshotter.v1.overlayfs"; do
     storage_area="${storage_spec%%:*}"
     storage_path="${storage_spec#*:}"
     if [[ -d "$storage_path" && ! -L "$storage_path" ]]; then
