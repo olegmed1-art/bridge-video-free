@@ -151,3 +151,13 @@ def test_activation_does_not_run_build_disk_cleanup_or_delete_attested_image() -
     assert first_guard < first_disk_probe < build_branch < activation_inspect
     assert installer.count('docker builder prune --all --force') == 1
     assert 'docker image prune --all' not in installer
+
+
+def test_evidence_bounds_source_prepare_failure_before_container_build() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+
+    assert "prepare_rc=$?" in text
+    assert 'bounded_container_log_diagnostic.py "$RUNNER_TEMP/prepare.log"' in text
+    assert "UV_CONTAINER_SOURCE_PREPARE_FAILED" in text
+    assert "disk_available_kb=" in text
+    assert 'cat "$RUNNER_TEMP/prepare.log"' not in text
