@@ -10,6 +10,8 @@ from .contract import COURSE_VERSION, SCHEMA, SKILL_STATES, validate_episode
 
 ADAPTER_SCHEMA = "evolutionary-course-video31-adapter-report-v1"
 _COMPLETE = "COMPLETE_EVIDENCE_CANDIDATE"
+_EXPECTED_QUALITY_SCHEMA = "diana-longitudinal-quality-v2"
+_EXPLICIT_OUTCOMES = {"SUCCESS", "PARTIAL", "ERROR", "UNRESOLVED", "NOT_ASSESSED"}
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -84,13 +86,9 @@ def _support_level(interaction: Mapping[str, Any]) -> str:
 
 
 def _outcome(interaction: Mapping[str, Any]) -> str:
-    value = _text(interaction.get("observed_outcome")).casefold()
-    if not value:
-        return "NOT_ASSESSED"
-    if any(token in value for token in ("невер", "ошиб", "incorrect", "wrong")):
-        return "ERROR"
-    # A complete observed cycle is not proof of mastery or correctness.
-    return "PARTIAL"
+    """Use only an explicit upstream assessment; never infer correctness from prose."""
+    value = _text(interaction.get("outcome_status")).upper()
+    return value if value in _EXPLICIT_OUTCOMES else "NOT_ASSESSED"
 
 
 def _candidate_skill(task: str) -> str:
@@ -107,6 +105,11 @@ def adapt_video31_quality(
     """Adapt complete Video 3.1 interactions without activating any authority."""
     if not isinstance(quality, Mapping):
         raise Video31AdapterError("quality payload must be an object")
+    if quality.get("schema") != _EXPECTED_QUALITY_SCHEMA:
+        raise Video31AdapterError("unsupported quality schema")
+    source_job_id = _text(quality.get("job_id"))
+    if not source_job_id:
+        raise Video31AdapterError("source job identity required")
     authority = quality.get("authority")
     if not isinstance(authority, Mapping) or any(
         authority.get(field) != "DENY"
@@ -197,7 +200,9 @@ def adapt_video31_quality(
         task = _text(interaction.get("task"))
         skill_id = _candidate_skill(task)
         from_state = prior.get(skill_id, "INTRODUCED")
-        to_state = "SUPPORTED"
+        # A complete learning cycle proves interaction completeness, not mastery.
+        # State changes require a separate reviewed longitudinal evaluator.
+        to_state = from_state
         episode_token = _digest(file_id, interaction_id, start, end)
         episode_id = f"evc.video31.{episode_token}"
         claim_id = f"{episode_id}:claim-1"
@@ -268,7 +273,7 @@ def adapt_video31_quality(
     return {
         "schema": ADAPTER_SCHEMA,
         "source_quality_schema": quality.get("schema"),
-        "source_job_id": quality.get("job_id"),
+        "source_job_id": source_job_id,
         "lesson_date": lesson_identity.get("lesson_date"),
         "accepted_episode_count": len(episodes),
         "rejected_interaction_count": len(rejected),
