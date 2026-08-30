@@ -202,6 +202,10 @@ def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():
     assert 'systemctl disable --now "$service"' in workflow
     assert "AUTOPILOT_SHADOW_ACTIVATION_ROLLED_BACK" in workflow
     assert 'sha256sum "$unit"' in workflow
+    assert "AUTOPILOT_DIAG_NRESTARTS" in workflow
+    assert "AUTOPILOT_DIAG_WORKER_STARTED_COUNT" in workflow
+    assert "AUTOPILOT_DIAG_UNSAFE_JOURNAL_COUNT" in workflow
+    assert 'echo "$journal"' not in workflow
     assert 'cmp -s "$unit" "$release/deploy/' not in workflow
     for forbidden in (
         "--action " + "STOP",
