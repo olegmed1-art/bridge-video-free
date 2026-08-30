@@ -220,3 +220,22 @@ def test_bounded_parser_maps_docker_errors_without_leaking_raw_daemon_text() -> 
         '{"error_code":"UV_CONTAINER_DOCKER_RUN_FAILED","status":"FAILED"}',
     ]
     assert all("private" not in line and "secret" not in line for line in result)
+
+
+def test_docker_mount_diagnostic_prioritizes_permission_and_fixed_area() -> None:
+    path = ROOT / "ops/bounded_container_log_diagnostic.py"
+    spec = importlib.util.spec_from_file_location("bounded_mount_area", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    result = module.bounded_diagnostics(
+        [
+            "docker: Error response from daemon: mount /run/bridge-school: operation not permitted secret=x",
+            "docker: Error response from daemon: invalid mount /opt/bridge-school/universal-video/model-cache private=x",
+        ]
+    )
+    assert result == [
+        '{"error_code":"UV_CONTAINER_DOCKER_PERMISSION_DENIED","status":"FAILED"}',
+        '{"error_code":"UV_CONTAINER_DOCKER_MOUNT_MODEL_CACHE_FAILED","status":"FAILED"}',
+    ]
