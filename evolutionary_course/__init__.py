@@ -26,6 +26,14 @@ from .video31_adapter import (
     adapt_video31_quality_with_catalog,
 )
 from .pilot import PILOT_SCHEMA, run_longitudinal_pilot
+from .mastery import (
+    MASTERY_POLICY_SCHEMA,
+    MASTERY_REPORT_SCHEMA,
+    MasteryEvidenceError,
+    eligible_next_skills,
+    evaluate_mastery_evidence,
+    validate_mastery_policy,
+)
 
 __all__ = [
     "ADAPTER_SCHEMA",
@@ -41,6 +49,9 @@ __all__ = [
     "SKILL_STATES",
     "Video31AdapterError",
     "PILOT_SCHEMA",
+    "MASTERY_POLICY_SCHEMA",
+    "MASTERY_REPORT_SCHEMA",
+    "MasteryEvidenceError",
     "adapt_video31_quality",
     "adapt_video31_quality_with_catalog",
     "build_skill_trajectory",
@@ -49,4 +60,7 @@ __all__ = [
     "validate_catalog",
     "validate_episode",
     "run_longitudinal_pilot",
+    "eligible_next_skills",
+    "evaluate_mastery_evidence",
+    "validate_mastery_policy",
 ]
