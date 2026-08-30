@@ -14,6 +14,8 @@ on:
       - 'ops/bounded_container_log_diagnostic.py'
       - 'ops/oracle_universal_video_container_promote.sh'
       - 'ops/oracle_universal_video_run_command.sh'
+      - 'ops/universal_video_operator.sh'
+      - 'ops/install_universal_video_operator.sh'
       - 'requirements-universal-video.txt'
       - 'requirements-universal-video-speaker.txt'
       - 'universal_video/container_runtime.py'
