@@ -216,9 +216,11 @@ WITH RECURSIVE walk(value,key_path) AS (
                AND substring(compact.segment FROM length(owner.word)+1) ~ (
                    SELECT '^(' || string_agg(wrapper.word,'|') || ')+'
                           || '(' || string_agg(suffix.word,'|') || ')+'
+                          || '(' || string_agg(metric.word,'|') || ')*'
                           || chr(36)
                      FROM structural_wrapper AS wrapper
                      CROSS JOIN sensitive_suffix AS suffix
+                     CROSS JOIN metric_word AS metric
                )
                AND NOT (
                    jsonb_typeof(w.value)='number'
