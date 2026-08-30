@@ -18,12 +18,12 @@ from .runtime_preflight import validate_video_runtime
 
 
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
-ROOT_ENV = (
-    "UNIVERSAL_VIDEO_SPOOL_ROOT",
+WRITABLE_ROOT_ENV = (
     "UNIVERSAL_VIDEO_OUTPUT_ROOT",
     "UNIVERSAL_VIDEO_MEDIA_ROOT",
     "HF_HOME",
 )
+SPOOL_LEAVES = ("inbox", "running", "done", "failed", "results", "progress")
 
 
 class ContainerRuntimeUnavailable(RuntimeError):
@@ -32,20 +32,38 @@ class ContainerRuntimeUnavailable(RuntimeError):
         super().__init__(error_code)
 
 
-def _require_writable_directory(value: str) -> Path:
+def _require_directory(value: str) -> Path:
     path = Path(value)
+    if not path.is_absolute() or path.is_symlink() or not path.is_dir():
+        raise ContainerRuntimeUnavailable("UV_CONTAINER_MOUNT_UNAVAILABLE")
+    return path
+
+
+def _write_probe(path: Path) -> None:
+    marker = path / f".container-write-check-{os.getpid()}"
+    descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(descriptor)
+    marker.unlink()
+
+
+def _require_writable_directory(value: str) -> Path:
+    path = _require_directory(value)
     try:
-        if not path.is_absolute() or path.is_symlink() or not path.is_dir():
-            raise ContainerRuntimeUnavailable("UV_CONTAINER_MOUNT_UNAVAILABLE")
-        marker = path / f".container-write-check-{os.getpid()}"
-        descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        os.close(descriptor)
-        marker.unlink()
+        _write_probe(path)
         return path
     except ContainerRuntimeUnavailable:
         raise
     except OSError as exc:
         raise ContainerRuntimeUnavailable("UV_CONTAINER_MOUNT_UNAVAILABLE") from exc
+
+
+def _require_spool_directory(value: str) -> Path:
+    """Validate the protected spool root and each worker-owned state leaf."""
+
+    root = _require_directory(value)
+    for leaf in SPOOL_LEAVES:
+        _require_writable_directory(str(root / leaf))
+    return root
 
 
 def validate_container_runtime() -> dict[str, object]:
@@ -54,7 +72,10 @@ def validate_container_runtime() -> dict[str, object]:
     commit = os.getenv("UNIVERSAL_VIDEO_SOURCE_COMMIT", "").strip().lower()
     if not COMMIT_RE.fullmatch(commit):
         raise ContainerRuntimeUnavailable("UV_CONTAINER_PROVENANCE_INVALID")
-    mounts = {name: _require_writable_directory(os.getenv(name, "")) for name in ROOT_ENV}
+    mounts = {
+        "UNIVERSAL_VIDEO_SPOOL_ROOT": _require_spool_directory(os.getenv("UNIVERSAL_VIDEO_SPOOL_ROOT", "")),
+        **{name: _require_writable_directory(os.getenv(name, "")) for name in WRITABLE_ROOT_ENV},
+    }
     try:
         runtime = validate_video_runtime()
         # ``HF_HUB_OFFLINE`` is exported by the entrypoint.  Loading the model
