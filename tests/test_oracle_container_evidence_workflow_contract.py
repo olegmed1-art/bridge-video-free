@@ -250,3 +250,12 @@ def test_status_mount_is_refreshed_after_long_image_build_before_readiness() -> 
     assert build < refresh < readiness
     assert installer.count('install -d -o "$USER_NAME" -g "$GROUP_NAME" -m 0750 "$STATUS_DIR"') >= 2
     assert '[[ ! -L "$STATUS_DIR" ]]' in installer[refresh:readiness]
+
+
+def test_container_image_build_has_its_own_graceful_timeout() -> None:
+    installer = (ROOT / "ops/oracle_universal_video_container_install.sh").read_text(encoding="utf-8")
+
+    assert "UNIVERSAL_VIDEO_CONTAINER_BUILD_TIMEOUT_SECONDS:-1200" in installer
+    assert 'timeout --foreground --signal=TERM --kill-after=30s "$BUILD_TIMEOUT_SECONDS" docker build' in installer
+    assert "build_rc == 124 || build_rc == 137" in installer
+    assert "UV_CONTAINER_IMAGE_BUILD_TIMEOUT" in installer
