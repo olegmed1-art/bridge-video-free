@@ -8,7 +8,7 @@ Governance: `ASSURED`
 
 Tracker: #782
 
-Status: `INDEPENDENT_REVIEW_FINDING_REPAIRED / REVALIDATION_PENDING / NOT ACTIVATED`
+Status: `INDEPENDENT_REVIEW_REPAIR_PASS / NOT ACTIVATED`
 
 Draft PR: #991
 
@@ -72,12 +72,10 @@ GitHub evidence at head `d56be00b421dfd824b5960f62852fe101522cf70`:
 
 Independent review evidence:
 
-- Vercel Agent Code Review completed against exact PR head
-  `7ce601547449cdca2ffa555ea1385e5a2fd9e617`;
-- result: one actionable logic finding, not PASS;
-- review duration: 7 minutes 2 seconds;
-- exact review-line cost: USD 1.83 (the usage summary rounds the aggregate to
-  USD 2);
+- baseline Vercel Agent review of `7ce601547449cdca2ffa555ea1385e5a2fd9e617`:
+  0 suggestions, 7 minutes 2 seconds, USD 1.83;
+- focused Vercel Agent review of the same head: 1 actionable logic finding,
+  12 minutes 19 seconds, USD 2.13;
 - finding: `ingest_external_event` could publish a resumed task as `READY` when
   `attempts = max_attempts`; the next claim incremented beyond the retry budget,
   so a verified external answer could be discarded by the worker contract;
@@ -86,16 +84,20 @@ Independent review evidence:
   exclude retry-exhausted READY rows;
 - regression coverage: PostgreSQL integration proof plus the independent
   bounded state model cover the exact retry-boundary transition;
-- the repaired executable revision requires fresh CI and PostgreSQL 18
-  revalidation before the finding can be considered closed.
+- repair head `83567256bf91d1b1fd83b4b94c94f9efb2b7dbe1`: all eight
+  workflows PASS, including PostgreSQL 18 migration/invariant/idempotence tests;
+- exact-head Vercel Agent re-review: 0 suggestions, 3 minutes 15 seconds,
+  USD 0.87; the original finding was marked resolved;
+- actual Code Reviews cost across the three rows is USD 4.83; the dashboard
+  rounds the aggregate display to USD 5.
 
 Assurance:
 
 - I0: implementation self-check PASS;
 - I2: independent bounded exhaustive abstract state-model checker PASS;
 - I3: external PostgreSQL 18 / Neon state-machine execution PASS;
-- independent external Vercel Agent code review: one finding, repaired on the
-  PR branch, exact-head revalidation pending.
+- independent external Vercel Agent code review: finding repaired and confirmed
+  on the exact executable repair head.
 
 ## Cost and latency
 
@@ -116,8 +118,6 @@ staged with its dedicated login.
 
 ## Remaining risk and promotion blocks
 
-- Vercel review finding repair has not yet passed exact-head CI/PostgreSQL 18
-  revalidation;
 - current `main` branch protection is not proven/enforced;
 - dedicated LOGIN credential is not provisioned;
 - Oracle service is not staged or activated;

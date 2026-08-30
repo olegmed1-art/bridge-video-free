@@ -3,7 +3,7 @@
   "project_id": "SCHOOL-AUTOPILOT-CONTROLLER-V1",
   "title": "School Autopilot Controller v1",
   "decision": "BUILD_ORACLE_AUTOPILOT_LITE_SHADOW",
-  "status": "DRAFT_PR_991_REVIEW_FINDING_REPAIRED_REVALIDATION_PENDING_NOT_ACTIVATED",
+  "status": "DRAFT_PR_991_CI_AND_REPAIR_REVIEW_PASS_NOT_ACTIVATED",
   "governance_mode": "ASSURED",
   "work_class": "STRATEGIC",
   "urgency": "HIGH",
@@ -67,7 +67,6 @@
     "increase_requires_director": true
   },
   "promotion_blocks": [
-    "independent_review_finding_revalidation_pending",
     "main_branch_unprotected",
     "oracle_shadow_runtime_not_staged",
     "dedicated_runtime_login_not_provisioned",
@@ -110,19 +109,40 @@
     "temporary_neon_branch_id": "br-still-tooth-b1ilkfcj",
     "temporary_neon_branch_name": "autopilot-shadow-final-20260830",
     "draft_pr": "https://github.com/olegmed1-art/bridge-video-free/pull/991",
-    "verified_implementation_head_sha": "d56be00b421dfd824b5960f62852fe101522cf70",
+    "verified_implementation_head_sha": "83567256bf91d1b1fd83b4b94c94f9efb2b7dbe1",
     "github_ci_at_verified_implementation_head": "8_PASS",
     "independent_review": {
       "provider": "Vercel Agent Code Review",
-      "reviewed_pr_head_sha": "7ce601547449cdca2ffa555ea1385e5a2fd9e617",
+      "reviewed_pr_head_sha": "83567256bf91d1b1fd83b4b94c94f9efb2b7dbe1",
       "completed_at": "2026-08-30",
-      "result": "ACTIONABLE_FINDING",
-      "suggestions": 1,
+      "result": "REPAIR_CONFIRMED",
+      "suggestions_total": 1,
+      "repair_head_suggestions": 0,
       "finding": "external_wait_resume_could_exceed_retry_budget",
       "repair": "retain_event_and_fail_closed_at_exhausted_resume_budget",
-      "repair_revalidation": "PENDING",
-      "duration_seconds": 422,
-      "cost_usd": 1.83
+      "repair_revalidation": "PASS",
+      "review_runs": [
+        {
+          "head_sha": "7ce601547449cdca2ffa555ea1385e5a2fd9e617",
+          "suggestions": 0,
+          "duration_seconds": 422,
+          "cost_usd": 1.83
+        },
+        {
+          "head_sha": "7ce601547449cdca2ffa555ea1385e5a2fd9e617",
+          "suggestions": 1,
+          "duration_seconds": 739,
+          "cost_usd": 2.13
+        },
+        {
+          "head_sha": "83567256bf91d1b1fd83b4b94c94f9efb2b7dbe1",
+          "suggestions": 0,
+          "duration_seconds": 195,
+          "cost_usd": 0.87
+        }
+      ],
+      "total_cost_usd": 4.83,
+      "dashboard_rounded_cost_usd": 5
     },
     "production_neon_changed": false,
     "migration_0300_clean_apply": "PASS",
@@ -141,7 +161,6 @@
     "production_runtime_activated": false
   },
   "next_actions": [
-    "revalidate_review_finding_repair_on_exact_head",
     "provision_dedicated_runtime_login_outside_git_after_review",
     "stage_oracle_service_without_activation",
     "measure_real_oracle_notification_and_recovery_latency",
