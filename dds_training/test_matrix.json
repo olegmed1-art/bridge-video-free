@@ -57,6 +57,13 @@
       "description": "Oracle-only 30k TRAIN task/prediction identity, locked-input and holdout boundary."
     },
     {
+      "id": "oracle-main30k-reconcile",
+      "path": "oracle_main30k_reconcile_selftest.py",
+      "suite": "fast",
+      "timeout_seconds": 30,
+      "description": "Offline Main-30k investigation reconciliation, idempotency, sealed provenance and no-DDS boundary."
+    },
+    {
       "id": "predictor-pipeline",
       "path": "predictor_pipeline_selftest.py",
       "suite": "fast",
@@ -528,6 +535,9 @@
       ],
       "oracle_main_30k_dispatch.py": [
         "oracle-main-30k"
+      ],
+      "oracle_main30k_reconcile.py": [
+        "oracle-main30k-reconcile"
       ]
     },
     "runtime_coverage": {
