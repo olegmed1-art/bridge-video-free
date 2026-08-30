@@ -16,8 +16,24 @@ CURRENT_STAGE='validation'
 
 fail(){ printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_FAILED code=%s\n' "$1" >&2; exit 1; }
 has_running_job(){ find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit | grep -q .; }
+emit_runtime_code(){
+  journalctl -u "$NEW_SERVICE" -n 80 --no-pager -o cat 2>/dev/null | python3 -c '
+import json,re,sys
+last=None
+for line in sys.stdin:
+    try: value=json.loads(line)
+    except (TypeError,ValueError): continue
+    if (isinstance(value,dict) and set(value)=={"error_code","status"}
+            and value.get("status")=="FAILED"
+            and re.fullmatch(r"UV_CONTAINER_[A-Z0-9_]+",str(value.get("error_code","")))):
+        last=json.dumps(value,separators=(",",":"),sort_keys=True)
+if last: print(last)
+' || true
+}
 rollback(){
   local rc=$?
+  trap - ERR
+  emit_runtime_code
   if (( switch_started == 1 )) && ! has_running_job; then
     systemctl disable --now "$NEW_SERVICE" >/dev/null 2>&1 || true
     systemctl start "$OLD_SERVICE" >/dev/null 2>&1 || true
