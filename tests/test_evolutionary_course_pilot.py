@@ -85,6 +85,31 @@ def test_unknown_real_wording_goes_to_methodology_review_without_episode():
     assert "review_candidate" in rejected[0]
 
 
+def test_rejected_evidence_cannot_be_reported_ready_for_private_review():
+    payload = _payload()
+    payload["quality_v2"]["learning_interactions"][0]["evidence_refs"] = [
+        "segment_not_in_source"
+    ]
+    report = run_longitudinal_pilot(
+        payload, confirmation=_confirmation(), catalog=_catalog()
+    )
+    assert report["status"] == "EVIDENCE_REVIEW_REQUIRED"
+    assert report["adapter_report"]["accepted_episode_count"] == 0
+    assert report["adapter_report"]["rejected_interactions"][0]["reason_codes"] == [
+        "EVIDENCE_OUTSIDE_SOURCE_TRANSCRIPT"
+    ]
+
+
+def test_empty_interaction_set_cannot_be_reported_ready_for_private_review():
+    payload = _payload()
+    payload["quality_v2"]["learning_interactions"] = []
+    report = run_longitudinal_pilot(
+        payload, confirmation=_confirmation(), catalog=_catalog()
+    )
+    assert report["status"] == "EVIDENCE_REVIEW_REQUIRED"
+    assert report["adapter_report"]["accepted_episode_count"] == 0
+
+
 def test_real_quality_schema_requires_exact_version_two():
     payload = _payload()
     payload["quality_v2"]["schema_version"] = 3
