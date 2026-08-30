@@ -29,6 +29,8 @@ def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
     assert "systemctl is-active --quiet universal-video-container.service" in WORKFLOW
     assert "expected_prepare_blob" in WORKFLOW
     assert 'git hash-object "$RUNNER_TEMP/prepare.sh"' in WORKFLOW
+    assert '--jq .content | base64 --decode > "$RUNNER_TEMP/prepare.sh"' in WORKFLOW
+    assert "tr -d" not in WORKFLOW
     assert "UV_CONTAINER_PROMOTION_ENTRYPOINT_MISSING" in WORKFLOW
     assert "UV_CONTAINER_PROMOTION_BLOB_MISMATCH" in WORKFLOW
     assert " /bin/bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh" in WORKFLOW
