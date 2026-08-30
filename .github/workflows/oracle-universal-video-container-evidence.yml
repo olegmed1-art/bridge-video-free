@@ -88,25 +88,10 @@ jobs:
           container_rc=$?
           set -e
           if (( container_rc != 0 )); then
-            grep -E '^(ERROR: (docker is unavailable; install and attest Docker separately|docker daemon is unavailable|universal-video Unix user missing|unsafe or missing mount: [A-Za-z0-9._/-]+|a video job is running; refusing container rollout|protected Google Drive OAuth file missing|container image digest unavailable)|\\{"error_code":"UV_CONTAINER_[A-Z0-9_]+","status":"FAILED"\\})          grep -Fx DDS3_AFTER_PASS "$RUNNER_TEMP/prepare.log"
-          {
-            echo '## Oracle Universal Video Container Evidence'
-            grep -E '^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS ' "$RUNNER_TEMP/container.log"
-            echo 'fallback_used=false'
-            echo 'video_job_submitted=false'
-          } >> "$GITHUB_STEP_SUMMARY"
- "$RUNNER_TEMP/container.log" || echo 'UV_CONTAINER_BOUNDED_DIAGNOSTIC_UNAVAILABLE'
+            grep -E '^(ERROR: (docker is unavailable; install and attest Docker separately|docker daemon is unavailable|universal-video Unix user missing|unsafe or missing mount: [A-Za-z0-9._/-]+|a video job is running; refusing container rollout|protected Google Drive OAuth file missing|container image digest unavailable)|\{"error_code":"UV_CONTAINER_[A-Z0-9_]+","status":"FAILED"\})$' "$RUNNER_TEMP/container.log" || echo 'UV_CONTAINER_BOUNDED_DIAGNOSTIC_UNAVAILABLE'
             exit "$container_rc"
           fi
-          grep -E '^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=[0-9a-f]{40} image_digest=sha256:[0-9a-f]{64} activated=0          grep -Fx DDS3_AFTER_PASS "$RUNNER_TEMP/prepare.log"
-          {
-            echo '## Oracle Universal Video Container Evidence'
-            grep -E '^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS ' "$RUNNER_TEMP/container.log"
-            echo 'fallback_used=false'
-            echo 'video_job_submitted=false'
-          } >> "$GITHUB_STEP_SUMMARY"
- "$RUNNER_TEMP/container.log"
-          grep -Fx DDS3_AFTER_PASS "$RUNNER_TEMP/prepare.log"
+          grep -E '^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=[0-9a-f]{40} image_digest=sha256:[0-9a-f]{64} activated=0$' "$RUNNER_TEMP/container.log"
           {
             echo '## Oracle Universal Video Container Evidence'
             grep -E '^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS ' "$RUNNER_TEMP/container.log"
