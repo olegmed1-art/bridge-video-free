@@ -113,3 +113,23 @@ def test_promotion_disables_legacy_and_rollback_restores_original_state() -> Non
     assert 'systemctl enable "$OLD_SERVICE"' in SCRIPT
     assert 'if [[ "$old_active_before" == active ]]; then' in SCRIPT
     assert "UV_CONTAINER_PROMOTION_LEGACY_ENABLED" in SCRIPT
+
+
+def test_promotion_atomically_syncs_revision_bound_operator() -> None:
+    assert "CURRENT_STAGE='operator-snapshot'" in SCRIPT
+    assert 'EXPECTED_RUNTIME_COMMIT="$EXPECTED_COMMIT"' in SCRIPT
+    assert 'bash "$SOURCE_DIR/ops/install_universal_video_operator.sh"' in SCRIPT
+    assert 'git hash-object "$OPERATOR_TARGET"' in SCRIPT
+    assert 'rev-parse "$EXPECTED_COMMIT:ops/universal_video_operator.sh"' in SCRIPT
+    assert "CURRENT_STAGE='operator-sync'" in SCRIPT
+    assert 'sudo -u ocarun sudo -n "$OPERATOR_TARGET" status ..' in SCRIPT
+
+
+def test_operator_sync_is_restored_by_promotion_rollback() -> None:
+    assert 'operator_snapshot_ready=0' in SCRIPT
+    assert 'install -o root -g root -m 0600 "$OPERATOR_TARGET"' in SCRIPT
+    assert 'install -o root -g root -m 0600 "$OPERATOR_SUDOERS"' in SCRIPT
+    assert 'install -o root -g root -m 0755 "$operator_backup_root/operator" "$OPERATOR_TARGET"' in SCRIPT
+    assert 'install -o root -g root -m 0440 "$operator_backup_root/sudoers" "$OPERATOR_SUDOERS"' in SCRIPT
+    assert 'rm -f -- "$OPERATOR_TARGET"' in SCRIPT
+    assert 'rm -f -- "$OPERATOR_SUDOERS"' in SCRIPT
