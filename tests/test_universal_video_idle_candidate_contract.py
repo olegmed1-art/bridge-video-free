@@ -24,6 +24,8 @@ def test_idle_candidate_waits_and_fails_closed_before_bounded_stop():
     assert "cancel-in-progress: true" in text
     assert "sleep 600" in text
     assert "assistant_lab.oracle_idle_snapshot()" in text
+    assert "video_queue.job_status" in text
+    assert "video_jobs" in text
     assert "oracle-universal-video-job.yml/runs?per_page=100" in text
     assert '{"queued","in_progress","waiting","requested","pending"}' in text
     assert "active == 0 && uv_active == 0" in text

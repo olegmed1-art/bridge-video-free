@@ -84,6 +84,8 @@ PostgreSQL 18 migration package for the School of Sports Bridge.
 - `0013_projection_invalidation_recompute.sql` — automatic derived-object dependency registration, causal invalidation batches, stale-profile state, current-generation-only recompute scheduling, durable/coalescing recompute queue and guarded claim/fail/retry/complete lifecycle.
 - `0014_operational_health.sql` — technical health policy plus read-only database fingerprint/signals/issue/summary views for migration integrity, stuck work, outbox, ingestion/analysis/projection/publication, recompute backlog, stale profiles, pending references and explicit storage unavailability.
 - `0015_operational_health_checksum_fix.sql` — forward correction of the migration-checksum health signal so it counts only rows whose checksum is actually missing; public issue/summary views are rebound to the corrected signal view.
+- `0056_universal_video_queue.sql` — project-neutral Drive video queue with atomic bulk intake, canary release, fenced leases and permanent SHADOW/REVIEW-only result guards.
+- `rollbacks/0056_universal_video_queue.sql` — fail-closed rollback; refuses to remove a non-empty queue.
 
 The exact production state is the `schema_migration` registry in Neon, protected by migration checksums.
 
@@ -110,6 +112,7 @@ This layer deliberately does **not** create a scheduled production monitor using
 - `007_student_profile_projections.sql` — student/metric/skill/topic scope, exact profile inputs, analysis-publication barrier, tournament identity provenance, immutable snapshots, atomic generation activation, recommendation provenance and runtime boundaries.
 - `008_projection_invalidation_recompute.sql` — automatic dependency registration, recursive invalidation depth, stale profile state, recommendation/plan invalidation, active-scope queue coalescing, worker claim/fail/retry, activation-before-completion requirement and current-profile read-model switch.
 - `009_operational_health.sql` — runtime fingerprint, baseline signal registry including corrected migration-checksum status, critical classification for stuck changesets/analysis/recompute/pending references/explicit unavailable storage, roll-up summary and read-only runtime permissions.
+- `041_universal_video_queue.sql` — idempotent intake, canary gating, independent claims, fencing, heartbeat, REVIEW terminalization and capability isolation.
 
 All tests execute inside transactions and finish with `ROLLBACK`; they leave no test records in production-style databases.
 

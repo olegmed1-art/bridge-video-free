@@ -23,6 +23,8 @@ cat >"$tmp" <<'EOF'
 # Bounded generic Universal Video controls.
 ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video submit-drive-base64 *
 ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video status *
+ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video enqueue-batch-base64 *
+ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video batch-status *
 EOF
 chmod 0440 "$tmp"; visudo -cf "$tmp" >/dev/null
 install -o root -g root -m 0755 "$SOURCE_FILE" "$TARGET"

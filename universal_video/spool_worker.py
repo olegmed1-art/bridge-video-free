@@ -499,6 +499,15 @@ def run_forever(spool_root: Path, poll_seconds: float) -> None:
     )
     while True:
         processed = process_one(spool_root)
+        queue_configured = bool(
+            os.getenv("BRIDGE_VIDEO_QUEUE_DATABASE_URL", "").strip()
+            or os.getenv("BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE", "").strip()
+            or os.getenv("BRIDGE_WORKER_DATABASE_URL", "").strip()
+        )
+        if not processed and queue_configured:
+            from .neon_worker import process_one_neon
+
+            processed = process_one_neon()
         write_resident_status(spool_root, status_path)
         if processed:
             continue
