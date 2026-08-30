@@ -39,7 +39,9 @@ jobs:
       - name: Install test runner
         run: python -m pip install --disable-pip-version-check -q pytest
       - name: Validate schema JSON
-        run: python -m json.tool schemas/evolutionary-course-learning-episode-v1.schema.json >/dev/null
+        run: |
+          python -m json.tool schemas/evolutionary-course-learning-episode-v1.schema.json >/dev/null
+          python -m json.tool schemas/evolutionary-course-learning-module-v1.schema.json >/dev/null
       - name: Validate skill catalog schema and seed
         run: |
           python -m json.tool schemas/school-skill-catalog-v1.schema.json >/dev/null

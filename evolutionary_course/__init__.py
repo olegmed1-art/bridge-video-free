@@ -41,6 +41,7 @@ from .mastery import (
     evaluate_mastery_evidence,
     validate_mastery_policy,
 )
+from .learning_module import MODULE_SCHEMA, LearningModuleError, validate_learning_module
 
 __all__ = [
     "ADAPTER_SCHEMA",
@@ -62,6 +63,8 @@ __all__ = [
     "MasteryEvidenceError",
     "MethodologyQueueError",
     "QUEUE_SCHEMA",
+    "MODULE_SCHEMA",
+    "LearningModuleError",
     "adapt_video31_quality",
     "adapt_video31_quality_with_catalog",
     "build_methodology_review_queue",
@@ -75,4 +78,5 @@ __all__ = [
     "eligible_next_skills",
     "evaluate_mastery_evidence",
     "validate_mastery_policy",
+    "validate_learning_module",
 ]
