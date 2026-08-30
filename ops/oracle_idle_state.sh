@@ -11,6 +11,7 @@ set -Eeuo pipefail
 LAB_DIR="${ASSISTANT_LAB_DIR:-/opt/bridge-school/assistant-lab}"
 LAB_ENV="${ASSISTANT_LAB_ENV_FILE:-$LAB_DIR/assistant-lab.env}"
 PYTHON="${ASSISTANT_LAB_PYTHON:-$LAB_DIR/.venv/bin/python}"
+QUEUE_DSN_FILE="${BRIDGE_VIDEO_QUEUE_DSN_FILE:-/opt/bridge-school/universal-video/secrets/video-queue-dsn}"
 
 state="UNKNOWN"
 reason="unclassified"
@@ -62,6 +63,11 @@ dsn_line="$(grep -m1 '^ASSISTANT_LAB_DATABASE_URL=' "$LAB_ENV" 2>/dev/null || tr
 [[ -n "$dsn_line" ]] || { reason="assistant_lab_dsn_missing"; exit 0; }
 export ASSISTANT_LAB_DATABASE_URL="${dsn_line#ASSISTANT_LAB_DATABASE_URL=}"
 [[ -n "$ASSISTANT_LAB_DATABASE_URL" ]] || { reason="assistant_lab_dsn_empty"; exit 0; }
+if [[ -f "$QUEUE_DSN_FILE" && ! -L "$QUEUE_DSN_FILE" ]]; then
+  export BRIDGE_VIDEO_QUEUE_DATABASE_URL="$(tr -d '\n\r' < "$QUEUE_DSN_FILE")"
+else
+  export BRIDGE_VIDEO_QUEUE_DATABASE_URL=''
+fi
 
 DB_RESULT="$("$PYTHON" - <<'PY' 2>/dev/null || true
 import os
@@ -85,18 +91,26 @@ try:
                 print("UNKNOWN:idle_snapshot_missing")
                 raise SystemExit
             active_jobs, active_research, active_control = map(int, row)
-    if min(active_jobs, active_research, active_control) < 0:
+    video_jobs = 0
+    queue_dsn = os.environ.get("BRIDGE_VIDEO_QUEUE_DATABASE_URL", "")
+    if queue_dsn:
+        with psycopg.connect(queue_dsn, connect_timeout=8, application_name="oracle-idle-video-queue") as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT count(*) FROM video_queue.job_status WHERE status IN ('PENDING_CANARY','QUEUED','LEASED')")
+                video_jobs = int(cur.fetchone()[0])
+    if min(active_jobs, active_research, active_control, video_jobs) < 0:
         print("UNKNOWN:invalid_idle_snapshot")
-    elif active_jobs or active_research or active_control:
-        print(f"BUSY:jobs={active_jobs},research={active_research},control={active_control}")
+    elif active_jobs or active_research or active_control or video_jobs:
+        print(f"BUSY:jobs={active_jobs},research={active_research},control={active_control},video={video_jobs}")
     else:
-        print("IDLE:jobs=0,research=0,control=0")
+        print("IDLE:jobs=0,research=0,control=0,video=0")
 except Exception:
     # Do not expose driver errors because they may contain connection details.
     print("UNKNOWN:database_check_failed")
 PY
 )"
 unset ASSISTANT_LAB_DATABASE_URL
+unset BRIDGE_VIDEO_QUEUE_DATABASE_URL
 
 case "$DB_RESULT" in
   IDLE:*) state="IDLE"; reason="${DB_RESULT#IDLE:}" ;;

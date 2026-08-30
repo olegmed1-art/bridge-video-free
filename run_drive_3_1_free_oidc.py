@@ -10,12 +10,13 @@ Zero-cost invariant:
 The heavy video runtime is imported lazily so lightweight Drive/status tools can
 reuse ``user_oauth_token`` without importing ASR and database dependencies.
 
-GOOGLE_DRIVE_OAUTH_JSON must contain:
+GOOGLE_DRIVE_OAUTH_JSON (or the file named by GOOGLE_DRIVE_OAUTH_JSON_FILE) must contain:
   client_id, client_secret, refresh_token
 """
 
 import json
 import os
+from pathlib import Path
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -26,6 +27,18 @@ TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 def _oauth_parts():
     packed = os.getenv("GOOGLE_DRIVE_OAUTH_JSON", "").strip()
+    if not packed:
+        file_name = os.getenv("GOOGLE_DRIVE_OAUTH_JSON_FILE", "").strip()
+        if file_name:
+            path = Path(file_name)
+            if not path.is_absolute():
+                raise RuntimeError("BLOCKED_ACCESS: GOOGLE_DRIVE_OAUTH_JSON_FILE must be absolute")
+            try:
+                packed = path.read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                raise RuntimeError("BLOCKED_ACCESS: cannot read GOOGLE_DRIVE_OAUTH_JSON_FILE") from exc
+            if not packed:
+                raise RuntimeError("BLOCKED_ACCESS: GOOGLE_DRIVE_OAUTH_JSON_FILE is empty")
     if packed:
         try:
             data = json.loads(packed)

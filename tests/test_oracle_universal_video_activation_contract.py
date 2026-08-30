@@ -63,6 +63,20 @@ def test_generic_operator_owns_a_dedicated_sudoers_file():
         retired = (ROOT / "ops" / name).read_text(encoding="utf-8")
         assert "RETIRED: use /usr/local/sbin/universal-video submit-drive-base64" in retired
         assert "exit 78" in retired
+    assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video enqueue-batch-base64 *" in installer
+    assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video batch-status *" in installer
+
+
+def test_batch_intake_uses_file_backed_secrets_and_no_project_binding():
+    operator = (ROOT / "ops/universal_video_operator.sh").read_text(encoding="utf-8")
+    schema = json.loads((ROOT / "ops/universal-video-batch-intake.schema.json").read_text(encoding="utf-8"))
+    assert "GOOGLE_DRIVE_OAUTH_JSON_FILE" in operator
+    assert "BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE" in operator
+    assert "enqueue-batch-base64" in operator
+    assert "batch-status" in operator
+    assert "project" not in schema["properties"]
+    assert schema["properties"]["processing_profile"]["pattern"]
+    assert schema["properties"]["algorithm_revision"]["pattern"]
 
 
 def test_activation_installs_export_boundary_from_the_exact_resolved_revision():

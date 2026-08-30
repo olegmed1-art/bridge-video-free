@@ -13,6 +13,10 @@
       "kind": "infrastructure",
       "policy": "Authentication and Google Drive transport only; must not make bridge-content decisions."
     },
+    "psycopg": {
+      "kind": "infrastructure",
+      "policy": "PostgreSQL queue transport, atomic leasing and receipt persistence only; must not make bridge-content or canonical decisions."
+    },
     "requests": {
       "kind": "infrastructure",
       "policy": "HTTP transport only; must not make bridge-content decisions."
