@@ -12,6 +12,7 @@ SERVICE_NAME="universal-video-container.service"
 OLD_SERVICE="${UNIVERSAL_VIDEO_SERVICE_NAME:-universal-video.service}"
 ACTIVATE="${UNIVERSAL_VIDEO_CONTAINER_ACTIVATE:-0}"
 BUILD_IMAGE="${UNIVERSAL_VIDEO_CONTAINER_BUILD:-1}"
+MIN_FREE_KB="${UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB:-8388608}"
 IMAGE_REPO="${UNIVERSAL_VIDEO_IMAGE_REPO:-bridge-school/universal-video}"
 STATUS_DIR="${UNIVERSAL_VIDEO_STATUS_DIR:-/run/bridge-school}"
 
@@ -21,6 +22,7 @@ log(){ printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 [[ "$(id -u)" -eq 0 ]] || die 'run as root on the Oracle host'
 [[ "$ACTIVATE" =~ ^[01]$ ]] || die 'UNIVERSAL_VIDEO_CONTAINER_ACTIVATE must be 0 or 1'
 [[ "$BUILD_IMAGE" =~ ^[01]$ ]] || die 'UNIVERSAL_VIDEO_CONTAINER_BUILD must be 0 or 1'
+[[ "$MIN_FREE_KB" =~ ^[0-9]+$ && "$MIN_FREE_KB" -gt 0 ]] || die 'UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB must be a positive integer'
 [[ -d "$SOURCE_DIR/.git" ]] || die 'isolated source checkout missing'
 [[ -f "$SOURCE_DIR/deploy/oracle-universal-video/Dockerfile" ]] || die 'container Dockerfile missing'
 [[ -f "$SOURCE_DIR/deploy/oracle-universal-video/$SERVICE_NAME" ]] || die 'container service unit missing'
@@ -40,9 +42,28 @@ if find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -qui
   die 'a video job is running; refusing container rollout'
 fi
 
+disk_available_kb="$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $4}')"
+[[ "$disk_available_kb" =~ ^[0-9]+$ ]] || die 'container disk capacity unavailable'
+if (( disk_available_kb < MIN_FREE_KB )); then
+  log 'Reclaim unused Universal Video build cache before image build'
+  docker builder prune --force >/dev/null 2>&1 || true
+  mapfile -t old_image_ids < <(docker image ls --filter "reference=$IMAGE_REPO:*" --format '{{.ID}}' | sort -u)
+  for old_image_id in "${old_image_ids[@]}"; do
+    if [[ -z "$(docker ps -aq --filter "ancestor=$old_image_id")" ]]; then
+      docker image rm "$old_image_id" >/dev/null 2>&1 || true
+    fi
+  done
+  disk_available_kb="$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $4}')"
+fi
+printf 'UNIVERSAL_VIDEO_CONTAINER_RESOURCE disk_available_kb=%s disk_required_kb=%s\n' "$disk_available_kb" "$MIN_FREE_KB"
+if (( disk_available_kb < MIN_FREE_KB )); then
+  printf '{"error_code":"UV_CONTAINER_DISK_INSUFFICIENT","status":"FAILED"}\n' >&2
+  exit 78
+fi
+
 log "Build immutable container image for $commit"
 if [[ "$BUILD_IMAGE" == 1 ]]; then
-  docker build --pull --build-arg "UNIVERSAL_VIDEO_SOURCE_COMMIT=$commit" --tag "$image" -f "$SOURCE_DIR/deploy/oracle-universal-video/Dockerfile" "$SOURCE_DIR"
+  docker build --pull --build-arg "UNIVERSAL_VIDEO_SOURCE_COMMIT=$commit" --tag "$image" -f "$SOURCE_DIR/deploy/oracle-universal-video/Dockerfile" "$SOURCE_DIR" || die 'container image build failed'
 else
   docker image inspect "$image" >/dev/null || die 'attested container image unavailable'
 fi
