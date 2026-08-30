@@ -23,6 +23,7 @@ from .video31_adapter import (
     Video31AdapterError,
     adapt_video31_quality,
 )
+from .pilot import PILOT_SCHEMA, run_longitudinal_pilot
 
 __all__ = [
     "ADAPTER_SCHEMA",
@@ -36,10 +37,12 @@ __all__ = [
     "SkillCatalogError",
     "SKILL_STATES",
     "Video31AdapterError",
+    "PILOT_SCHEMA",
     "adapt_video31_quality",
     "build_skill_trajectory",
     "canonical_sha256",
     "resolve_reviewed_skill",
     "validate_catalog",
     "validate_episode",
+    "run_longitudinal_pilot",
 ]
