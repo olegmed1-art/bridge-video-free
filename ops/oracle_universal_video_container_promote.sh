@@ -17,17 +17,35 @@ CURRENT_STAGE='validation'
 fail(){ printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_FAILED code=%s\n' "$1" >&2; exit 1; }
 has_running_job(){ find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit | grep -q .; }
 emit_runtime_code(){
-  journalctl -u "$NEW_SERVICE" -n 80 --no-pager -o cat 2>/dev/null | python3 -c '
+  local since="@${started_unix:-0}"
+  journalctl -u "$NEW_SERVICE" --since "$since" --no-pager -o cat 2>/dev/null | python3 -c '
 import json,re,sys
 last=None
+fallback=None
 for line in sys.stdin:
+    text=line.lower()
     try: value=json.loads(line)
-    except (TypeError,ValueError): continue
+    except (TypeError,ValueError): value=None
     if (isinstance(value,dict) and set(value)=={"error_code","status"}
             and value.get("status")=="FAILED"
             and re.fullmatch(r"UV_CONTAINER_[A-Z0-9_]+",str(value.get("error_code","")))):
         last=json.dumps(value,separators=(",",":"),sort_keys=True)
-if last: print(last)
+    elif "permission denied" in text:
+        fallback="UV_CONTAINER_STARTUP_PERMISSION_DENIED"
+    elif "no space left on device" in text:
+        fallback="UV_CONTAINER_STARTUP_DISK_FULL"
+    elif "cannot allocate memory" in text or "out of memory" in text:
+        fallback="UV_CONTAINER_STARTUP_MEMORY_UNAVAILABLE"
+    elif "container name" in text and "already in use" in text:
+        fallback="UV_CONTAINER_STARTUP_NAME_CONFLICT"
+    elif "error response from daemon" in text:
+        fallback="UV_CONTAINER_DOCKER_RUN_FAILED"
+    elif "traceback (most recent call last)" in text:
+        fallback="UV_CONTAINER_WORKER_STARTUP_EXCEPTION"
+if last:
+    print(last)
+elif fallback:
+    print(json.dumps({"error_code":fallback,"status":"FAILED"},separators=(",",":"),sort_keys=True))
 ' || true
 }
 rollback(){
