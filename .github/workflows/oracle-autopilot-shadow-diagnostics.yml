@@ -163,6 +163,13 @@ jobs:
           printf 'AUTOPILOT_DIAG_MODULE_IMPORT_COUNT=%s\n' "$(count 'ModuleNotFoundError|ImportError|No module named')"
           printf 'AUTOPILOT_DIAG_CONFIG_COUNT=%s\n' "$(count 'AUTOPILOT_DATABASE_URL|required|must be SHADOW|direct Neon endpoint')"
           printf 'AUTOPILOT_DIAG_PERMISSION_COUNT=%s\n' "$(count 'Permission denied|PermissionError')"
+          printf 'AUTOPILOT_DIAG_CHDIR_PERMISSION_COUNT=%s\n' "$(count 'Failed at step CHDIR|status=200/CHDIR|working directory.*Permission denied')"
+          printf 'AUTOPILOT_DIAG_EXEC_PERMISSION_COUNT=%s\n' "$(count 'Failed at step EXEC|status=203/EXEC|Failed to execute.*Permission denied')"
+          printf 'AUTOPILOT_DIAG_USER_PERMISSION_COUNT=%s\n' "$(count 'status=217/USER|Failed to determine user')"
+          printf 'AUTOPILOT_DIAG_ENV_PERMISSION_COUNT=%s\n' "$(count 'autopilot-shadow.env.*Permission denied|Permission denied.*autopilot-shadow.env')"
+          printf 'AUTOPILOT_DIAG_CURRENT_PERMISSION_COUNT=%s\n' "$(count 'school-autopilot/current.*Permission denied|Permission denied.*school-autopilot/current')"
+          printf 'AUTOPILOT_DIAG_VENV_PERMISSION_COUNT=%s\n' "$(count '\.venv/bin/python.*Permission denied|Permission denied.*\.venv/bin/python')"
+          printf 'AUTOPILOT_DIAG_SANDBOX_PERMISSION_COUNT=%s\n' "$(count 'mount namespacing|Read-only file system')"
           printf 'AUTOPILOT_DIAG_DATABASE_COUNT=%s\n' "$(count 'OperationalError|authentication failed|connection refused|could not connect')"
           printf 'AUTOPILOT_DIAG_TRACEBACK_COUNT=%s\n' "$(count 'Traceback|RuntimeError')"
           echo 'AUTOPILOT_DIAGNOSTIC_READ_ONLY=YES'
