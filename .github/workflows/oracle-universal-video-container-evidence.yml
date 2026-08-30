@@ -1,6 +1,10 @@
 name: Oracle Universal Video Container Evidence
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/oracle-universal-video-container-evidence.yml'
   workflow_dispatch:
     inputs:
       git_ref:
@@ -41,8 +45,8 @@ jobs:
           fetch-depth: 0
       - name: Validate exact requested revision
         env:
-          REF: ${{ inputs.git_ref }}
-          FINGERPRINT: ${{ inputs.expected_host_fingerprint }}
+          REF: ${{ inputs.git_ref || github.sha }}
+          FINGERPRINT: ${{ inputs.expected_host_fingerprint || 'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' }}
         run: |
           set -euo pipefail
           [[ "$REF" =~ ^[0-9a-f]{40}$ ]]
@@ -54,7 +58,7 @@ jobs:
       - name: Establish pinned SSH transport
         id: ssh
         env:
-          FINGERPRINT: ${{ inputs.expected_host_fingerprint }}
+          FINGERPRINT: ${{ inputs.expected_host_fingerprint || 'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' }}
         run: |
           set -euo pipefail
           known="$RUNNER_TEMP/known_hosts"
@@ -73,7 +77,7 @@ jobs:
           echo "known=$known" >> "$GITHUB_OUTPUT"
       - name: Build and attest container without submitting a video job
         env:
-          REF: ${{ inputs.git_ref }}
+          REF: ${{ inputs.git_ref || github.sha }}
         run: |
           set -euo pipefail
           ssh_base=(ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
