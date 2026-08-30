@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (ROOT / "ops/oracle_universal_video_container_promote.sh").read_text(encoding="utf-8")
 WORKFLOW = (ROOT / ".github/workflows/oracle-universal-video-container-promote.yml").read_text(encoding="utf-8")
+EVIDENCE_WORKFLOW = (ROOT / ".github/workflows/oracle-universal-video-container-evidence.yml").read_text(encoding="utf-8")
 OPERATOR_INSTALL = (ROOT / "ops/install_universal_video_operator.sh").read_text(encoding="utf-8")
 
 
@@ -164,3 +165,8 @@ def test_operator_sync_is_restored_by_promotion_rollback() -> None:
     assert 'install -o root -g root -m 0440 "$operator_backup_root/sudoers" "$OPERATOR_SUDOERS"' in SCRIPT
     assert 'rm -f -- "$OPERATOR_TARGET"' in SCRIPT
     assert 'rm -f -- "$OPERATOR_SUDOERS"' in SCRIPT
+
+
+def test_operator_changes_require_fresh_container_evidence() -> None:
+    assert "- 'ops/universal_video_operator.sh'" in EVIDENCE_WORKFLOW
+    assert "- 'ops/install_universal_video_operator.sh'" in EVIDENCE_WORKFLOW
