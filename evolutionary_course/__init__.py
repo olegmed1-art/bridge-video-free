@@ -20,13 +20,16 @@ from .skill_catalog import (
 )
 from .video31_adapter import (
     ADAPTER_SCHEMA,
+    CATALOG_ADAPTER_SCHEMA,
     Video31AdapterError,
     adapt_video31_quality,
+    adapt_video31_quality_with_catalog,
 )
 from .pilot import PILOT_SCHEMA, run_longitudinal_pilot
 
 __all__ = [
     "ADAPTER_SCHEMA",
+    "CATALOG_ADAPTER_SCHEMA",
     "AUTHORITY_CLASS",
     "CATALOG_SCHEMA",
     "CATALOG_VERSION",
@@ -39,6 +42,7 @@ __all__ = [
     "Video31AdapterError",
     "PILOT_SCHEMA",
     "adapt_video31_quality",
+    "adapt_video31_quality_with_catalog",
     "build_skill_trajectory",
     "canonical_sha256",
     "resolve_reviewed_skill",

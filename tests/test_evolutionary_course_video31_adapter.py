@@ -7,8 +7,10 @@ import pytest
 from evolutionary_course.contract import validate_episode
 from evolutionary_course.video31_adapter import (
     ADAPTER_SCHEMA,
+    CATALOG_ADAPTER_SCHEMA,
     Video31AdapterError,
     adapt_video31_quality,
+    adapt_video31_quality_with_catalog,
 )
 
 
@@ -75,6 +77,33 @@ def _source() -> dict:
     }
 
 
+def _catalog(*, reviewed: bool = True) -> dict:
+    return {
+        "schema": "school-skill-catalog-v1",
+        "catalog_version": "SCHOOL SKILL CATALOG v1",
+        "authority": {
+            "authority_class": "CANDIDATE_RESEARCH",
+            "school_canon_activation_allowed": False,
+            "curriculum_activation_allowed": False,
+            "student_profile_write_allowed": False,
+            "publication_allowed": False,
+        },
+        "skills": [{
+            "skill_id": "candidate.skill.count-top-tricks",
+            "title": "Подсчитать верхние взятки",
+            "aliases": ["Сколько верхних взяток в контракте без козыря?"],
+            "prerequisite_skill_ids": [],
+            "mastery_criteria": {
+                "RECOGNIZED": ["Узнаёт задачу с подсказкой."],
+                "SUPPORTED": ["Решает после направляющего вопроса."],
+                "INDEPENDENT": ["Решает типовую задачу без подсказки."],
+                "TRANSFERRED": ["Применяет в новой структуре."],
+            },
+            "review_state": "APPROVED_CANDIDATE" if reviewed else "REVIEW_REQUIRED",
+        }],
+    }
+
+
 def test_adapter_accepts_only_complete_evidence_cycle():
     report = adapt_video31_quality(
         _quality(), lesson_identity=_lesson(), source=_source()
@@ -108,6 +137,40 @@ def test_adapter_is_deterministic_for_identical_evidence():
         deepcopy(_quality()), lesson_identity=deepcopy(_lesson()), source=deepcopy(_source())
     )
     assert first == second
+
+
+def test_catalog_adapter_uses_stable_reviewed_skill_id():
+    report = adapt_video31_quality_with_catalog(
+        _quality(), lesson_identity=_lesson(), source=_source(), catalog=_catalog()
+    )
+    assert report["schema"] == CATALOG_ADAPTER_SCHEMA
+    assert report["accepted_episode_count"] == 1
+    assert report["catalog_review_item_count"] == 0
+    assert report["episodes"][0]["learning_task"]["skill_id"] == (
+        "candidate.skill.count-top-tricks"
+    )
+
+
+def test_unknown_or_unreviewed_alias_never_creates_skill():
+    report = adapt_video31_quality_with_catalog(
+        _quality(), lesson_identity=_lesson(), source=_source(),
+        catalog=_catalog(reviewed=False),
+    )
+    assert report["accepted_episode_count"] == 0
+    assert report["catalog_review_item_count"] == 1
+    assert report["catalog_review_items"][0]["match_status"] == "REVIEW_REQUIRED"
+    assert report["episodes"] == []
+
+
+def test_catalog_adapter_is_idempotent_and_uses_stable_prior_state():
+    kwargs = dict(
+        lesson_identity=_lesson(), source=_source(), catalog=_catalog(),
+        prior_skill_states={"candidate.skill.count-top-tricks": "RECOGNIZED"},
+    )
+    first = adapt_video31_quality_with_catalog(_quality(), **kwargs)
+    second = adapt_video31_quality_with_catalog(deepcopy(_quality()), **deepcopy(kwargs))
+    assert first == second
+    assert first["episodes"][0]["mastery_transition"]["from_state"] == "RECOGNIZED"
 
 
 def test_unconfirmed_chronology_fails_closed():
