@@ -12,11 +12,20 @@ readonly STATUS='/run/bridge-school/universal-video-status.json'
 EXPECTED_COMMIT="${UNIVERSAL_VIDEO_EXPECTED_COMMIT:-}"
 EXPECTED_DIGEST="${UNIVERSAL_VIDEO_EXPECTED_IMAGE_DIGEST:-}"
 switch_started=0
+failure_stage='PRECHECK'
 
 fail(){ printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_FAILED code=%s\n' "$1" >&2; exit 1; }
 has_running_job(){ find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit | grep -q .; }
 rollback(){
   local rc=$?
+  trap - ERR
+  # The container readiness gate emits exactly one structured UV_CONTAINER
+  # code.  Preserve only that allow-listed fact; never expose raw journal
+  # content, paths, environment values, or media metadata.
+  journalctl -u "$NEW_SERVICE" -n 80 --no-pager -o cat 2>/dev/null \
+    | grep -E '^\{"error_code": "UV_CONTAINER_[A-Z0-9_]+", "status": "FAILED"\}$' \
+    | tail -n1 || true
+  printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_FAILED code=UV_CONTAINER_PROMOTION_STAGE_%s\n' "$failure_stage" >&2
   if (( switch_started == 1 )) && ! has_running_job; then
     systemctl disable --now "$NEW_SERVICE" >/dev/null 2>&1 || true
     systemctl start "$OLD_SERVICE" >/dev/null 2>&1 || true
@@ -48,13 +57,20 @@ observed="$(docker image inspect --format '{{.Id}}' "bridge-school/universal-vid
 [[ "$observed" == "$EXPECTED_DIGEST" ]] || fail UV_CONTAINER_PROMOTION_IMAGE_MISMATCH
 started_unix="$(date +%s)"
 switch_started=1
+failure_stage='SWITCH_INSTALL'
 UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=1 UNIVERSAL_VIDEO_CONTAINER_BUILD=0 bash "$SOURCE_DIR/ops/oracle_universal_video_container_install.sh"
+failure_stage='SERVICE_ACTIVE'
 systemctl is-active --quiet "$NEW_SERVICE" || fail UV_CONTAINER_PROMOTION_SERVICE_INACTIVE
+failure_stage='SERVICE_ENABLED'
 [[ "$(systemctl is-enabled "$NEW_SERVICE")" == enabled ]] || fail UV_CONTAINER_PROMOTION_SERVICE_DISABLED
+failure_stage='LEGACY_INACTIVE'
 systemctl is-active --quiet "$OLD_SERVICE" && fail UV_CONTAINER_PROMOTION_LEGACY_ACTIVE
+failure_stage='PROCESS_RUNNING'
 [[ "$(docker inspect --format '{{.State.Running}}' universal-video-container)" == true ]] || fail UV_CONTAINER_PROMOTION_PROCESS_INACTIVE
+failure_stage='IMAGE_MATCH'
 [[ "$(docker inspect --format '{{.Image}}' universal-video-container)" == "$EXPECTED_DIGEST" ]] || fail UV_CONTAINER_PROMOTION_RUNNING_IMAGE_MISMATCH
 
+failure_stage='STATUS_FRESH'
 deadline=$((SECONDS + 45))
 fresh_status=0
 while (( SECONDS < deadline )); do
@@ -87,7 +103,9 @@ assert x.get('active_jobs') == []
 assert float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])
 PY
 
+failure_stage='PROTECTED_SERVICE'
 [[ "$(systemctl is-active assistant-lab.service)" == "$before_assistant" ]] || fail UV_CONTAINER_PROMOTION_PROTECTED_SERVICE_CHANGED
+failure_stage='DDS3_NONREGRESSION'
 after_dds="$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)"
 BEFORE_DDS="$before_dds" AFTER_DDS="$after_dds" python3 - <<'PY'
 import json,os
@@ -97,5 +115,6 @@ for x in (before,after):
     assert x.get('engine') == 'DDS3'
     assert x.get('fallback_used') is False
 PY
+failure_stage='COMPLETE'
 switch_started=0
 printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_PASS commit=%s image_digest=%s fallback_used=false active_jobs=0\n' "$EXPECTED_COMMIT" "$EXPECTED_DIGEST"

@@ -38,3 +38,13 @@ def test_promotion_requires_a_fresh_status_from_the_new_resident() -> None:
     assert "UV_CONTAINER_PROMOTION_STATUS_MISSING" in SCRIPT
     assert "UV_CONTAINER_PROMOTION_STATUS_STALE" in SCRIPT
     assert SCRIPT.count("float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])") == 2
+
+
+def test_promotion_failure_reports_only_bounded_stage_and_runtime_code() -> None:
+    assert "failure_stage='SWITCH_INSTALL'" in SCRIPT
+    assert "failure_stage='SERVICE_ACTIVE'" in SCRIPT
+    assert "failure_stage='STATUS_FRESH'" in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_STAGE_%s" in SCRIPT
+    assert "journalctl -u \"$NEW_SERVICE\" -n 80 --no-pager -o cat" in SCRIPT
+    assert "UV_CONTAINER_[A-Z0-9_]+" in SCRIPT
+    assert "tail -n1 || true" in SCRIPT
