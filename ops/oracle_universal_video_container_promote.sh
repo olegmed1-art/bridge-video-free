@@ -238,10 +238,11 @@ grep -Fx 'UNIVERSAL_VIDEO_OPERATOR_INSTALL_PASS' <<<"$operator_install_output" >
 CURRENT_STAGE='operator-blob'
 [[ "$(git hash-object "$OPERATOR_TARGET")" == "$(git -C "$SOURCE_DIR" rev-parse "$EXPECTED_COMMIT:ops/universal_video_operator.sh")" ]] || fail UV_CONTAINER_PROMOTION_OPERATOR_MISMATCH
 CURRENT_STAGE='operator-smoke'
-set +e
-operator_smoke="$(sudo -u ocarun sudo -n "$OPERATOR_TARGET" status .. 2>&1)"
-operator_smoke_rc=$?
-set -e
+if operator_smoke="$(sudo -u ocarun sudo -n "$OPERATOR_TARGET" status .. 2>&1)"; then
+  operator_smoke_rc=0
+else
+  operator_smoke_rc=$?
+fi
 [[ "$operator_smoke_rc" -eq 1 ]] || fail UV_CONTAINER_PROMOTION_OPERATOR_SMOKE_RC
 grep -Fx 'UV_STATE=REJECTED' <<<"$operator_smoke" >/dev/null || fail UV_CONTAINER_PROMOTION_OPERATOR_SMOKE_STATE
 grep -Fx 'UV_ERROR=invalid job id' <<<"$operator_smoke" >/dev/null || fail UV_CONTAINER_PROMOTION_OPERATOR_SMOKE_REASON

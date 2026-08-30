@@ -126,6 +126,11 @@ def test_promotion_atomically_syncs_revision_bound_operator() -> None:
     assert "CURRENT_STAGE='operator-blob'" in SCRIPT
     assert "CURRENT_STAGE='operator-smoke'" in SCRIPT
     assert 'sudo -u ocarun sudo -n "$OPERATOR_TARGET" status ..' in SCRIPT
+    assert 'if operator_smoke="$(sudo -u ocarun sudo -n "$OPERATOR_TARGET" status .. 2>&1)"; then' in SCRIPT
+    assert "operator_smoke_rc=0" in SCRIPT
+    assert "operator_smoke_rc=$?" in SCRIPT
+    smoke = SCRIPT[SCRIPT.index("CURRENT_STAGE='operator-smoke'"):SCRIPT.index("CURRENT_STAGE='protected-postflight'")]
+    assert "set +e" not in smoke
 
 
 def test_operator_installer_failures_have_bounded_nonsecret_codes() -> None:
