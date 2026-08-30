@@ -7,8 +7,10 @@ import re
 from typing import Any, Mapping, Sequence
 
 from .contract import COURSE_VERSION, SCHEMA, SKILL_STATES, validate_episode
+from .skill_catalog import SkillCatalogError, resolve_reviewed_skill, validate_catalog
 
 ADAPTER_SCHEMA = "evolutionary-course-video31-adapter-report-v1"
+CATALOG_ADAPTER_SCHEMA = "evolutionary-course-video31-catalog-adapter-report-v1"
 _COMPLETE = "COMPLETE_EVIDENCE_CANDIDATE"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
@@ -284,4 +286,72 @@ def adapt_video31_quality(
     }
 
 
-__all__ = ["ADAPTER_SCHEMA", "Video31AdapterError", "adapt_video31_quality"]
+def adapt_video31_quality_with_catalog(
+    quality: Mapping[str, Any],
+    *,
+    lesson_identity: Mapping[str, Any],
+    source: Mapping[str, Any],
+    catalog: Mapping[str, Any],
+    prior_skill_states: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """Match evidence-complete episodes to reviewed catalog skills only.
+
+    Unknown or unreviewed wording is retained as a review item.  This function
+    never creates a skill identifier from lesson text.
+    """
+    normalized_catalog = validate_catalog(catalog)
+    prior = dict(prior_skill_states or {})
+    if any(state not in SKILL_STATES for state in prior.values()):
+        raise Video31AdapterError("invalid prior skill state")
+    base = adapt_video31_quality(
+        quality,
+        lesson_identity=lesson_identity,
+        source=source,
+    )
+    skills = {
+        skill["skill_id"]: skill for skill in normalized_catalog["skills"]
+    }
+    episodes: list[dict[str, Any]] = []
+    review_items: list[dict[str, Any]] = []
+    for episode in base["episodes"]:
+        wording = episode["learning_task"]["title"]
+        try:
+            skill_id = resolve_reviewed_skill(normalized_catalog, wording)
+        except SkillCatalogError:
+            review_items.append({
+                "episode_id": episode["episode_id"],
+                "proposed_alias": wording,
+                "match_status": "REVIEW_REQUIRED",
+                "reason_codes": ["SKILL_ALIAS_UNKNOWN_OR_UNREVIEWED"],
+            })
+            continue
+        matched = skills[skill_id]
+        candidate = dict(episode)
+        candidate["learning_task"] = {
+            "skill_id": skill_id,
+            "title": matched["title"],
+            "prerequisite_skill_ids": matched["prerequisite_skill_ids"],
+        }
+        transition = dict(candidate["mastery_transition"])
+        transition["from_state"] = prior.get(skill_id, "INTRODUCED")
+        candidate["mastery_transition"] = transition
+        episodes.append(validate_episode(candidate))
+
+    return {
+        **base,
+        "schema": CATALOG_ADAPTER_SCHEMA,
+        "catalog_version": normalized_catalog["catalog_version"],
+        "accepted_episode_count": len(episodes),
+        "catalog_review_item_count": len(review_items),
+        "episodes": episodes,
+        "catalog_review_items": review_items,
+    }
+
+
+__all__ = [
+    "ADAPTER_SCHEMA",
+    "CATALOG_ADAPTER_SCHEMA",
+    "Video31AdapterError",
+    "adapt_video31_quality",
+    "adapt_video31_quality_with_catalog",
+]
