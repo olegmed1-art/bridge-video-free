@@ -13,12 +13,24 @@ ADAPTER_SCHEMA = "evolutionary-course-video31-adapter-report-v1"
 CATALOG_ADAPTER_SCHEMA = "evolutionary-course-video31-catalog-adapter-report-v1"
 _COMPLETE = "COMPLETE_EVIDENCE_CANDIDATE"
 _EXPECTED_QUALITY_SCHEMA = "diana-longitudinal-quality-v2"
+_REAL_QUALITY_SCHEMA = "diana-longitudinal-quality"
 _EXPLICIT_OUTCOMES = {"SUCCESS", "PARTIAL", "ERROR", "UNRESOLVED", "NOT_ASSESSED"}
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class Video31AdapterError(ValueError):
     """Video 3.1 evidence cannot be safely adapted."""
+
+
+def _validate_quality_schema(quality: Mapping[str, Any]) -> None:
+    schema = quality.get("schema")
+    if schema == _EXPECTED_QUALITY_SCHEMA:
+        if quality.get("schema_version") not in (None, 2):
+            raise Video31AdapterError("unsupported quality schema version")
+        return
+    if schema == _REAL_QUALITY_SCHEMA and quality.get("schema_version") == 2:
+        return
+    raise Video31AdapterError("unsupported quality schema")
 
 
 def _text(value: Any) -> str:
@@ -109,8 +121,7 @@ def adapt_video31_quality(
     """Adapt complete Video 3.1 interactions without activating any authority."""
     if not isinstance(quality, Mapping):
         raise Video31AdapterError("quality payload must be an object")
-    if quality.get("schema") != _EXPECTED_QUALITY_SCHEMA:
-        raise Video31AdapterError("unsupported quality schema")
+    _validate_quality_schema(quality)
     source_job_id = _text(quality.get("job_id"))
     if not source_job_id:
         raise Video31AdapterError("source job identity required")
