@@ -68,6 +68,11 @@ from .artifact_readiness import (
     ArtifactReadinessError,
     assess_artifact_readiness,
 )
+from .episode_review import (
+    EPISODE_REVIEW_REQUEST_SCHEMA,
+    EpisodeReviewError,
+    build_episode_review_request,
+)
 
 __all__ = [
     "ADAPTER_SCHEMA",
@@ -102,6 +107,8 @@ __all__ = [
     "AdaptiveSelectorError",
     "ARTIFACT_READINESS_SCHEMA",
     "ArtifactReadinessError",
+    "EPISODE_REVIEW_REQUEST_SCHEMA",
+    "EpisodeReviewError",
     "apply_approved_candidate_to_catalog",
     "adapt_legacy_report_pointers",
     "adapt_video31_quality",
@@ -109,6 +116,7 @@ __all__ = [
     "build_methodology_review_queue",
     "build_candidate_review_request",
     "build_skill_trajectory",
+    "build_episode_review_request",
     "canonical_sha256",
     "record_methodology_decision",
     "record_candidate_review_decision",

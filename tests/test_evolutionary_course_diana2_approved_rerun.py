@@ -30,3 +30,18 @@ def test_diana2_episode_skill_resolves_from_approved_catalog():
     ).read_text(encoding="utf-8"))
     wording = "Какие у нас шансы, примерно? А какие у нас шансы разыграть трефу?"
     assert resolve_reviewed_skill(catalog, wording) == receipt["result"]["skill_id"]
+
+
+def test_diana2_private_review_request_matches_bounded_rerun_receipt():
+    rerun = json.loads(Path(
+        "data/research/evolutionary_course_diana2_approved_rerun_receipt_v1.json"
+    ).read_text(encoding="utf-8"))
+    request = json.loads(Path(
+        "data/research/evolutionary_course_diana2_private_episode_review_request_v1.json"
+    ).read_text(encoding="utf-8"))
+    assert request["status"] == "AWAITING_PRIVATE_REVIEW"
+    assert request["episode_id"] == rerun["result"]["episode_id"]
+    assert request["skill_id"] == rerun["result"]["skill_id"]
+    assert request["allowed_decisions"] == ["ACCEPT", "REVISE", "REJECT"]
+    assert all(value is None for value in request["decision_input"].values())
+    assert all(value is False for value in request["authority"].values())
