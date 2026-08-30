@@ -1,0 +1,61 @@
+{
+  "schema": "evolutionary-course-artifact-readiness-v1",
+  "as_of": "2026-08-30T00:00:00Z",
+  "minimum_distinct_lessons": 3,
+  "candidates": [
+    {
+      "lesson_id": "diana-2",
+      "source_name": "Диана 2",
+      "source_video_file_id": null,
+      "source_job_id": "41daa4ca6e09d13e366c578b7c53ae31",
+      "terminal_status": "COMPLETED",
+      "evidence_refs": [
+        "docs/evidence/r25_15_operational_diana2_2026-08-19.md",
+        "docs/evidence/r29_operational_diana2_2026-08-19.md"
+      ],
+      "exact_source_identity_verified": false,
+      "terminal_result_verified": true,
+      "role_attribution_supported": true,
+      "course_adapter_report_available": false,
+      "reviewed_catalog_binding": false
+    },
+    {
+      "lesson_id": "diana-10",
+      "source_name": "Диана 10.mp4",
+      "source_video_file_id": "1OiATQaU9umBYoyynnGGR6qpnIjV-bmPH",
+      "source_job_id": "diana10-video31-20260828-01",
+      "terminal_status": "NOT_CONFIRMED",
+      "evidence_refs": [
+        "ops/oracle-universal-video-job-requests/diana10-video31-20260828-01.json"
+      ],
+      "exact_source_identity_verified": true,
+      "terminal_result_verified": false,
+      "role_attribution_supported": false,
+      "course_adapter_report_available": false,
+      "reviewed_catalog_binding": false
+    },
+    {
+      "lesson_id": "diana-14",
+      "source_name": "Диана 14.mp4",
+      "source_video_file_id": null,
+      "source_job_id": null,
+      "terminal_status": "INCONCLUSIVE",
+      "evidence_refs": [
+        "docs/VIDEO_ANALYSIS_3_1_TEST_R5_FIELD_EVIDENCE_2026-08-29.md"
+      ],
+      "exact_source_identity_verified": false,
+      "terminal_result_verified": false,
+      "role_attribution_supported": false,
+      "course_adapter_report_available": false,
+      "reviewed_catalog_binding": false
+    }
+  ],
+  "authority": {
+    "authority_class": "CANDIDATE_RESEARCH",
+    "media_processing_allowed": false,
+    "episode_creation_allowed": false,
+    "curriculum_activation_allowed": false,
+    "student_profile_write_allowed": false,
+    "publication_allowed": false
+  }
+}
