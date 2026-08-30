@@ -1,9 +1,9 @@
 {
-  "schema_version": "1.2",
+  "schema_version": "1.3",
   "project_id": "SCHOOL-AUTOPILOT-CONTROLLER-V1",
   "title": "School Autopilot Controller v1",
   "decision": "BUILD_ORACLE_AUTOPILOT_LITE_SHADOW",
-  "status": "ORACLE_SHADOW_ACTIVE_LIVE_PILOTS_COMPLETE",
+  "status": "ORACLE_SHADOW_PHASE3A_CI_TRIAGE_ACTIVE",
   "governance_mode": "ASSURED",
   "work_class": "STRATEGIC",
   "urgency": "HIGH",
@@ -27,16 +27,16 @@
     "target_project": "existing_oracle_frankfurt_vm",
     "target_root_directory": "oracle_autopilot/",
     "target_service": "school-autopilot-shadow.service",
-    "staged_source_revision": "e9c9381f0aed388ef72718cdcf67ac9928947aef",
+    "staged_source_revision": "e2445f94c70c56ac9c1db9d3f3cdf930299196fa",
     "instance_lifecycle_state": "RUNNING",
     "service_active": true,
     "service_enabled": true,
     "production_activated": false,
     "shadow_only": true,
-    "activation_workflow_run_id": 33327022666
+    "activation_workflow_run_id": 33333151629
   },
   "phase": {
-    "current": "PHASE_1_ORACLE_SHADOW_LIVE_PILOTS_COMPLETE",
+    "current": "PHASE_1_READ_ONLY_CI_TRIAGE_ACTIVE",
     "ordered": [
       "PHASE_0_DESIGN",
       "PHASE_1_ORACLE_SHADOW_BUILD",
@@ -118,8 +118,10 @@
     "temporary_neon_branch_id": "br-still-tooth-b1ilkfcj",
     "temporary_neon_branch_name": "autopilot-shadow-final-20260830",
     "draft_pr": "https://github.com/olegmed1-art/bridge-video-free/pull/991",
-    "verified_implementation_head_sha": "a802836dada489deb97329dad9abfcea29734cc4",
-    "github_ci_at_verified_implementation_head": "11_PASS",
+    "verified_implementation_head_sha": "c489c8902a3689fb552bc68b2c3763cfcb254f25",
+    "github_ci_at_verified_implementation_head": "12_PASS",
+    "phase3a_runtime_source_revision": "e2445f94c70c56ac9c1db9d3f3cdf930299196fa",
+    "phase3a_activation_head_sha": "cd86882d645a2a1b1099963594021487c50c3a50",
     "independent_review": {
       "provider": "Vercel Agent Code Review",
       "reviewed_pr_head_sha": "83567256bf91d1b1fd83b4b94c94f9efb2b7dbe1",
@@ -155,9 +157,12 @@
     },
     "production_neon_changed": false,
     "migration_0300_clean_apply": "PASS",
+    "migration_0302_temporary_branch_apply": "PASS",
+    "migration_0302_production_apply": "NOT_RUN",
     "postgresql_18_state_machine_test": "PASS",
-    "python_contract_tests": "18_PASS",
+    "python_contract_tests": "18460_PASS",
     "bounded_state_model_checker_i2": "PASS",
+    "bounded_github_ci_contract_model_i2": "PASS",
     "external_postgresql_18_contour_i3": "PASS",
     "post_review_temporary_branch_reconciliation": "PASS",
     "post_review_sql_regression_unique_namespace_rollback": "PASS",
@@ -174,8 +179,8 @@
     },
     "oracle_staging_transport": "RSA_OAEP_SHA256_TO_PINNED_ORACLE_HOST_KEY",
     "oracle_staging": {
-      "source_revision": "e9c9381f0aed388ef72718cdcf67ac9928947aef",
-      "workflow_run_id": 33326832192,
+      "source_revision": "e2445f94c70c56ac9c1db9d3f3cdf930299196fa",
+      "workflow_run_id": 33333031661,
       "database_preflight": "PASS",
       "activate": 0,
       "service_active": false,
@@ -199,18 +204,18 @@
       "current_lifecycle_state": "RUNNING"
     },
     "terminal_outcomes_proven": {
-      "DONE": 3,
-      "OWNER_REQUIRED": 1,
+      "DONE": 7,
+      "OWNER_REQUIRED": 2,
       "BUDGET_STOP": 1,
       "FAILED_CLOSED": 1
     },
-    "retained_evidence_rows": 4,
+    "retained_evidence_rows": 9,
     "unfinished_step_attempts": 0,
     "production_runtime_activated": false,
     "oracle_activation": {
-      "workflow_run_id": 33327022666,
-      "workflow_attempt": 2,
-      "source_revision": "e9c9381f0aed388ef72718cdcf67ac9928947aef",
+      "workflow_run_id": 33333151629,
+      "workflow_attempt": 1,
+      "source_revision": "e2445f94c70c56ac9c1db9d3f3cdf930299196fa",
       "service_active": true,
       "service_enabled": true,
       "restarts": 0,
@@ -292,11 +297,33 @@
       "cost_actual_microusd": 0,
       "production_mutation": false
     },
+    "phase3a_ci_canary": {
+      "task_key": "phase3-ci-pr991-cd86882-20260830",
+      "task_id": "36ca641e-cf6f-4d3a-82a6-805a59f2e33c",
+      "goal_type": "GITHUB_CI_READ_ONLY_V1",
+      "pr_number": 991,
+      "exact_head_sha": "cd86882d645a2a1b1099963594021487c50c3a50",
+      "terminal_state": "DONE",
+      "terminal_reason_code": "ACCEPTANCE_EVIDENCE_RETAINED",
+      "overall_ci_state": "PASS",
+      "check_total": 17,
+      "success": 14,
+      "skipped": 3,
+      "failed": 0,
+      "pending": 0,
+      "retained_evidence_rows": 1,
+      "evidence_sha256": "02e15b7f50f6b59384e1ece8406f20e0485f6c9fac80c1a59d1bb931beaa2e60",
+      "model_calls": 0,
+      "usage_rows": 0,
+      "cost_actual_microusd": 0,
+      "production_mutation": false
+    },
     "final_queue": {
       "ready": 0,
       "running": 0,
       "nonterminal": 0,
-      "nonzero_cost_tasks": 0
+      "nonzero_cost_tasks": 0,
+      "total_cost_actual_microusd": 0
     },
     "continuation_health": {
       "checked_at": "2026-08-30T18:34:17Z",
@@ -325,6 +352,8 @@
   "next_actions": [
     "keep_oracle_instance_running_until_explicit_director_order",
     "keep_autopilot_in_shadow_only_mode_and_do_not_merge_or_promote_to_production",
+    "observe_phase3a_read_only_ci_triage_without_automatic_github_mutation",
+    "design_phase3b_own_draft_branch_repair_as_a_separate_bounded_write_gate",
     "complete_scheduled_24_hour_shadow_stability_checkpoint_without_media_or_model_workloads",
     "renew_or_replace_the_temporary_runtime_login_before_2026_09_06",
     "complete_production_canary_881_and_idle_guard_627_before_any_production_promotion"
