@@ -38,6 +38,14 @@ def test_exact_reviewed_alias_resolves_without_similarity_guess():
     assert resolve_reviewed_skill(catalog, "  ПОДСЧЁТ   ПОТЕРЬ ") == "candidate.skill.count-losers"
 
 
+def test_reviewed_alias_ignores_presentation_punctuation_only():
+    catalog = _catalog()
+    catalog["skills"][1]["review_state"] = "APPROVED_CANDIDATE"
+    assert resolve_reviewed_skill(catalog, "Подсчёт: потерь!") == "candidate.skill.count-losers"
+    with pytest.raises(SkillCatalogError, match="not uniquely reviewed"):
+        resolve_reviewed_skill(catalog, "Оценка потерь")
+
+
 def test_ambiguous_alias_across_skills_is_rejected():
     catalog = _catalog()
     catalog["skills"][2]["aliases"].append("Подсчёт потерь")
@@ -53,6 +61,15 @@ def test_unknown_and_self_prerequisites_are_rejected():
     catalog = _catalog()
     catalog["skills"][0]["prerequisite_skill_ids"] = [catalog["skills"][0]["skill_id"]]
     with pytest.raises(SkillCatalogError, match="require itself"):
+        validate_catalog(catalog)
+
+
+def test_multi_skill_prerequisite_cycle_is_rejected():
+    catalog = _catalog()
+    catalog["skills"][0]["prerequisite_skill_ids"] = [
+        "candidate.skill.eliminate-extra-loser"
+    ]
+    with pytest.raises(SkillCatalogError, match="cyclic prerequisite"):
         validate_catalog(catalog)
 
 
