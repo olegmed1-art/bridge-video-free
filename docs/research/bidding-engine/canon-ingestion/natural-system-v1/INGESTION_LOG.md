@@ -437,3 +437,18 @@ Each entry records:
 **Residual gate:** The final exact head has CI and I2 evidence but has not yet received a fresh production-derived Neon preflight with its final composite checksum, rollback smoke, zero-residual verification and idempotent rerun.  
 **Status:** Infrastructure code candidate is I2-clean; production promotion remains `NO-GO` until the fresh preflight, rollback evidence and a separate irreversible production decision. PR #798 remains draft.  
 **Next:** Reconcile this append-only log, then prepare the final migration preflight without changing protected production.
+
+
+## 2026-08-30 / LOG-0040 - Final exact-head Neon preflight passed
+
+**Role:** Database custodian / Technical owner / Red Team  
+**Candidate:** Draft PR #798 exact head `c3c668caec81fc53d4b556d2a0b8c03a21ccf4b2`.  
+**Action:** Reconfirmed protected production read-only, computed the repository composite checksum, then created disposable production-derived Neon branch `br-spring-poetry-b1jjyq44` and applied the exact eight `0200_bidding_knowledge_v0` components as 126 SQL statements in one connector transaction.  
+**Final checksum:** `1737eedba6110440220b814c2d104c06e5ced1050f558fd9fcdab256bde70557`.  
+**Structure:** 9 base tables, 3 views, 22 functions and 18 non-internal triggers.  
+**Smoke verification:** The exact `database/tests/100_bidding_knowledge_v0.sql` DO block completed and the following deliberate `BID_SMOKE_ROLLBACK_SENTINEL` aborted the transaction as intended. Post-rollback verification found zero rows across all nine bidding runtime tables and no isolated smoke school.  
+**Idempotence verification:** A second registry/checksum and zero-residual gate completed successfully without schema or data mutation.  
+**Production verification:** Before and after the disposable preflight, protected production contained 62 registered migrations, no `0200_bidding_knowledge_v0` row and no `bidding` schema.  
+**Database effect:** Disposable branch only. No real SCHOOL CANON or WORLD knowledge, rule or activation was inserted. Protected production was read-only and unchanged.  
+**Status:** Exact-head migration, rollback, integrity and independent I2 evidence are complete. Production promotion remains a separate irreversible decision and has not occurred.  
+**Next:** Persist cleanup of the disposable branch, rerun exact-head documentation checks/I2, then issue the final GO/NO-GO recommendation without changing production.
