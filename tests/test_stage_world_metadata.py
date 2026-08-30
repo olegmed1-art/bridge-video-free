@@ -34,5 +34,22 @@ def test_metadata_stage_rejects_id_only_rows_without_tab_schema(tmp_path):
     completed = subprocess.run([sys.executable, "scripts/stage_world_metadata.py", str(source),
                                 "--emit-manifest", str(output)], capture_output=True, text=True)
     assert completed.returncode != 0
-    assert "requires nonempty scalar fields" in completed.stderr
+    assert "requires nonempty text fields" in completed.stderr
+    assert not output.exists()
+
+
+def test_metadata_stage_rejects_nontext_required_values(tmp_path):
+    def repeat(row, count, id_field):
+        return [dict(row, **{id_field: f"{id_field}-{n}"}) for n in range(count)]
+    source = tmp_path / "bad_types.json"; output = tmp_path / "manifest.json"
+    source.write_text(json.dumps({
+        "sources": repeat({"title": False, "source_type": "book", "locator": 0}, 245, "source_id"),
+        "authors": repeat({"name": True}, 42, "author_id"),
+        "bridgeclub_audit": repeat({"source_id": "s", "status": False, "evidence": "e"}, 95, "audit_id"),
+        "material_queue": repeat({"title": "t", "source_locator": "u", "status": False}, 20, "material_id"),
+    }))
+    completed = subprocess.run([sys.executable, "scripts/stage_world_metadata.py", str(source),
+                                "--emit-manifest", str(output)], capture_output=True, text=True)
+    assert completed.returncode != 0
+    assert "requires nonempty text fields" in completed.stderr
     assert not output.exists()

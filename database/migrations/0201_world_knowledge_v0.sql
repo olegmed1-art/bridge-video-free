@@ -38,6 +38,8 @@ SELECT EXISTS (SELECT 1 FROM walk WHERE jsonb_typeof(value)='string'
  )
  AND (
    value #>> '{}' ~* '(^|[^a-z0-9])(10|[2-9tjqka])([cdhs]|♣|♦|♥|♠)([^a-z0-9]|$)'
+   OR value #>> '{}' ~* '([♣♦♥♠](10|[2-9tjqka]){1,13}|(10|[2-9tjqka]){1,13}[♣♦♥♠])'
+   OR value #>> '{}' ~* '(^|[^a-z0-9])([cdhs](10|[2-9tjqka]){2,13}|(10|[2-9tjqka]){2,13}[cdhs])([^a-z0-9]|$)'
    OR regexp_replace(
         regexp_replace(translate(value #>> '{}','♣♦♥♠','CDHS'),'10','T','gi'),
         '[^a-z0-9]','','gi')

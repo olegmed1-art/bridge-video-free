@@ -19,9 +19,7 @@ REQUIRED_FIELDS = {
 }
 
 def _present_scalar(value: object) -> bool:
-    return isinstance(value, (str, int, float, bool)) and not isinstance(value, str) or (
-        isinstance(value, str) and bool(value.strip())
-    )
+    return isinstance(value, str) and bool(value.strip())
 
 def main() -> None:
     parser = argparse.ArgumentParser()
@@ -49,7 +47,7 @@ def main() -> None:
             missing = [field for field in required if not _present_scalar(row.get(field))]
             if missing:
                 raise SystemExit(
-                    f"WORLD-META-001 {key} row {row_number} requires nonempty scalar fields: "
+                    f"WORLD-META-001 {key} row {row_number} requires nonempty text fields: "
                     + ", ".join(missing)
                 )
     manifest = {"batch_key":"WORLD-META-001", "authority_class":"external", "activation_allowed":False,
