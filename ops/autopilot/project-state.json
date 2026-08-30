@@ -3,7 +3,7 @@
   "project_id": "SCHOOL-AUTOPILOT-CONTROLLER-V1",
   "title": "School Autopilot Controller v1",
   "decision": "BUILD_ORACLE_AUTOPILOT_LITE_SHADOW",
-  "status": "ORACLE_SHADOW_ACTIVE_ALWAYS_ON",
+  "status": "ORACLE_SHADOW_ACTIVE_LIVE_PILOTS_COMPLETE",
   "governance_mode": "ASSURED",
   "work_class": "STRATEGIC",
   "urgency": "HIGH",
@@ -36,7 +36,7 @@
     "activation_workflow_run_id": 33327022666
   },
   "phase": {
-    "current": "PHASE_1_ORACLE_SHADOW_ACTIVE",
+    "current": "PHASE_1_ORACLE_SHADOW_LIVE_PILOTS_COMPLETE",
     "ordered": [
       "PHASE_0_DESIGN",
       "PHASE_1_ORACLE_SHADOW_BUILD",
@@ -260,13 +260,48 @@
       "historical_permission_failure_retained": true,
       "read_only_diagnostic": true,
       "oracle_instance_stop_requested": false
+    },
+    "live_external_wait": {
+      "task_key": "director-live-wait-20260830-01",
+      "task_id": "dfdad39d-56fb-42fc-aaa9-777d433f9db4",
+      "initial_state": "READY",
+      "wait_state": "WAITING_EXTERNAL",
+      "wait_condition_state": "SATISFIED",
+      "external_event_result": "READY",
+      "terminal_state": "DONE",
+      "attempts": 2,
+      "task_events": 6,
+      "step_attempts": 2,
+      "evidence_rows": 1,
+      "duplicate_event_result": "DUPLICATE",
+      "model_calls": 0,
+      "cost_actual_microusd": 0,
+      "production_mutation": false
+    },
+    "live_owner_boundary": {
+      "task_key": "director-owner-boundary-20260830-01",
+      "task_id": "e72bb35d-955a-487f-b931-9f43ed5cc798",
+      "terminal_state": "OWNER_REQUIRED",
+      "terminal_reason_code": "ACCOUNT_OWNER_ACTION_REQUIRED",
+      "attempts": 1,
+      "task_events": 3,
+      "step_attempts": 1,
+      "evidence_rows": 1,
+      "cost_actual_microusd": 0,
+      "production_mutation": false
+    },
+    "final_queue": {
+      "ready": 0,
+      "running": 0,
+      "nonterminal": 0,
+      "nonzero_cost_tasks": 0
     }
   },
   "next_actions": [
     "keep_oracle_instance_running_until_explicit_director_order",
     "keep_autopilot_in_shadow_only_mode_and_do_not_merge_or_promote_to_production",
     "renew_or_replace_the_temporary_runtime_login_before_2026_09_06",
-    "observe_bounded_shadow_health_without_launching_media_or_model_workloads",
+    "observe_24_hour_shadow_stability_without_launching_media_or_model_workloads",
     "complete_production_canary_881_and_idle_guard_627_before_any_production_promotion"
   ]
 }
