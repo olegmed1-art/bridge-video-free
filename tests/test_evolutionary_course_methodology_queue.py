@@ -1,8 +1,14 @@
+from copy import deepcopy
+import json
+from pathlib import Path
+
 import pytest
 
 from evolutionary_course.methodology_queue import (
     MethodologyQueueError,
+    build_candidate_review_request,
     build_methodology_review_queue,
+    record_candidate_review_decision,
     record_methodology_decision,
 )
 
@@ -99,3 +105,99 @@ def test_new_candidate_is_proposal_only():
     assert receipt["proposed_candidate_id"] == "candidate.skill.new-proposal"
     assert receipt["catalog_mutated"] is False
     assert receipt["school_canon_mutated"] is False
+
+
+def _real_candidate_and_catalog():
+    candidate = json.loads(Path(
+        "data/research/evolutionary_course_diana2_club_split_skill_candidate_v1.json"
+    ).read_text(encoding="utf-8"))
+    catalog = json.loads(Path(
+        "data/research/evolutionary_course_skill_catalog_v1.json"
+    ).read_text(encoding="utf-8"))
+    return candidate, catalog
+
+
+def test_candidate_review_request_is_unsigned_deterministic_and_non_mutating():
+    candidate, catalog = _real_candidate_and_catalog()
+    request = build_candidate_review_request(candidate, catalog=catalog)
+    assert request == build_candidate_review_request(candidate, catalog=catalog)
+    assert request["status"] == "AWAITING_HUMAN_DECISION"
+    assert request["decision_input"] == {
+        "decision": None, "reviewer_id": None, "reviewer_authority": None,
+        "reviewed_at": None, "rationale": None,
+    }
+    assert request["allowed_decisions"] == ["APPROVE", "REVISE", "REJECT"]
+    assert request["evidence_summary"]["numerator"] == 44616
+    assert all(value is False for value in request["authority"].values())
+    committed = json.loads(Path(
+        "data/research/evolutionary_course_diana2_methodology_review_request_v1.json"
+    ).read_text(encoding="utf-8"))
+    assert committed == request
+
+
+@pytest.mark.parametrize("decision", ["APPROVE", "REVISE", "REJECT"])
+def test_candidate_review_receipt_is_human_attributed_and_non_mutating(decision):
+    candidate, catalog = _real_candidate_and_catalog()
+    receipt = record_candidate_review_decision(
+        candidate, catalog=catalog, decision=decision, reviewer_id="reviewer-17",
+        reviewer_authority="AUTHORIZED_METHODOLOGY_REVIEWER",
+        reviewed_at="2026-08-30T12:00:00+00:00", rationale="Evidence reviewed.",
+    )
+    assert receipt["candidate_sha256"]
+    assert receipt["catalog_mutated"] is False
+    assert receipt["curriculum_activated"] is False
+    assert receipt["proposed_review_state"] == (
+        "APPROVED_CANDIDATE" if decision == "APPROVE" else None
+    )
+    assert receipt["catalog_removal_proposed"] is (decision == "REJECT")
+
+
+def test_candidate_review_rejects_tampered_math_and_catalog_binding():
+    candidate, catalog = _real_candidate_and_catalog()
+    candidate["independent_probability_check"]["splits"][0]["numerator"] += 1
+    kwargs = dict(
+        catalog=catalog, decision="APPROVE", reviewer_id="director",
+        reviewer_authority="SCHOOL_DIRECTOR", reviewed_at="2026-08-30T12:00:00Z",
+        rationale="Reviewed.",
+    )
+    with pytest.raises(MethodologyQueueError, match="probability evidence mismatch"):
+        record_candidate_review_decision(candidate, **kwargs)
+    candidate, catalog = _real_candidate_and_catalog()
+    catalog["skills"][0]["mastery_criteria"]["SUPPORTED"] = ["Changed criterion"]
+    with pytest.raises(MethodologyQueueError, match="criteria do not match"):
+        record_candidate_review_decision(candidate, **{**kwargs, "catalog": catalog})
+
+    candidate, catalog = _real_candidate_and_catalog()
+    candidate["independent_probability_check"]["splits"][0]["probability"] = "0.67"
+    with pytest.raises(MethodologyQueueError, match="probability evidence mismatch"):
+        record_candidate_review_decision(candidate, **{**kwargs, "catalog": catalog})
+
+
+@pytest.mark.parametrize("field,value,error", [
+    ("reviewer_id", " ", "reviewer identity"),
+    ("reviewer_authority", "BOT", "authorized reviewer"),
+    ("reviewed_at", "2026-08-30T12:00:00", "timezone"),
+    ("rationale", "", "rationale"),
+])
+def test_candidate_review_requires_attributed_authorized_human_decision(field, value, error):
+    candidate, catalog = _real_candidate_and_catalog()
+    kwargs = dict(
+        catalog=catalog, decision="APPROVE", reviewer_id="director",
+        reviewer_authority="SCHOOL_DIRECTOR", reviewed_at="2026-08-30T12:00:00Z",
+        rationale="Reviewed.",
+    )
+    kwargs[field] = value
+    with pytest.raises(MethodologyQueueError, match=error):
+        record_candidate_review_decision(candidate, **kwargs)
+
+
+def test_candidate_review_requires_review_required_state_and_human_gate():
+    candidate, catalog = _real_candidate_and_catalog()
+    catalog = deepcopy(catalog)
+    catalog["skills"][0]["review_state"] = "APPROVED_CANDIDATE"
+    with pytest.raises(MethodologyQueueError, match="review-required catalog skill"):
+        record_candidate_review_decision(
+            candidate, catalog=catalog, decision="APPROVE", reviewer_id="director",
+            reviewer_authority="SCHOOL_DIRECTOR", reviewed_at="2026-08-30T12:00:00Z",
+            rationale="Reviewed.",
+        )

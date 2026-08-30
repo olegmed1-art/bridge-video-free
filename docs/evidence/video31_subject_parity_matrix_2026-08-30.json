@@ -1,0 +1,222 @@
+{
+  "schema": "video31-subject-parity-matrix-v1",
+  "audited_at": "2026-08-30",
+  "audited_main_commit": "ea221bd75132c12d870b65f25d9aa915c717c342",
+  "target": "Video 3.1 FREE production-parity gate PR #890",
+  "overall_verdict": "FAIL",
+  "production_activation_allowed": false,
+  "real_video_evidence": {
+    "diana13": "INCONCLUSIVE",
+    "diana14": "OPERATOR_INTAKE_FAILED_SUBJECT_NOT_ASSESSED",
+    "holdout_metrics_computable": false
+  },
+  "quality_gate": {
+    "precision_min": 0.995,
+    "recall_min": 0.95,
+    "seat_errors_max": 0,
+    "measured_precision": null,
+    "measured_recall": null,
+    "measured_seat_errors": null,
+    "status": "INCONCLUSIVE"
+  },
+  "capabilities": [
+    {
+      "capability": "source_identity",
+      "code": "IMPLEMENTED",
+      "tests": "COVERED",
+      "real_video": "PARTIAL_DIANA13_REQUEST_ONLY",
+      "runtime": "WIRED",
+      "parity": "PARTIAL",
+      "evidence": ["issue #819 Diana 13 source-binding receipt"],
+      "blocker": "Per-job runtime revision and complete result-manifest source receipt are absent."
+    },
+    {
+      "capability": "offline_asr",
+      "code": "IMPLEMENTED",
+      "tests": "COVERED",
+      "real_video": "ABSENT",
+      "runtime": "WIRED",
+      "parity": "IMPLEMENTED_NOT_PROVEN",
+      "evidence": ["ops/universal-video-r25-16-feature-parity.json"],
+      "blocker": "No Diana 13 transcript locator, hash, duration or source-bound bundle."
+    },
+    {
+      "capability": "asr_qc",
+      "code": "IMPLEMENTED",
+      "tests": "COVERED",
+      "real_video": "ABSENT",
+      "runtime": "WIRED",
+      "parity": "IMPLEMENTED_NOT_PROVEN",
+      "evidence": ["ops/universal-video-r25-16-feature-parity.json"],
+      "blocker": "No real transcript QC metrics or retained QC receipt."
+    },
+    {
+      "capability": "diarization",
+      "code": "IMPLEMENTED",
+      "tests": "COVERED",
+      "real_video": "ABSENT",
+      "runtime": "WIRED",
+      "parity": "IMPLEMENTED_NOT_PROVEN",
+      "evidence": ["speaker diarization contract tests"],
+      "blocker": "No real speaker count, segment timestamps, confidence or fragmentation evidence."
+    },
+    {
+      "capability": "named_speaker",
+      "code": "MISSING",
+      "tests": "FAIL_CLOSED_UNKNOWN_COVERED",
+      "real_video": "ABSENT",
+      "runtime": "NOT_WIRED",
+      "parity": "MISSING",
+      "evidence": ["PR #968 UNKNOWN identity gate"],
+      "blocker": "No private source-bound identity proof or complete named-speaker overlay."
+    },
+    {
+      "capability": "role_attribution",
+      "code": "IMPLEMENTED",
+      "tests": "COVERED",
+      "real_video": "ABSENT",
+      "runtime": "SHADOW_ONLY",
+      "parity": "IMPLEMENTED_NOT_PROVEN",
+      "evidence": ["PR #968", "PR #977"],
+      "blocker": "No real teacher/student attribution evidence linked to exact transcript segments."
+    },
+    {
+      "capability": "frame_extraction",
+      "code": "IMPLEMENTED",
+      "tests": "COVERED",
+      "real_video": "ABSENT",
+      "runtime": "WIRED",
+      "parity": "IMPLEMENTED_NOT_PROVEN",
+      "evidence": ["Universal Video frame contracts"],
+      "blocker": "No Diana 13 frame manifest with timestamps and verified SHA-256 inventory."
+    },
+    {
+      "capability": "card_recognition",
+      "code": "PARTIAL",
+      "tests": "SYNTHETIC_COVERED",
+      "real_video": "ABSENT",
+      "runtime": "NOT_PRODUCTION_WIRED",
+      "parity": "PARTIAL",
+      "evidence": ["PR #917", "issue #733"],
+      "blocker": "No human-verified independent holdout; TP/FP/FN, precision and recall are not computable."
+    },
+    {
+      "capability": "seat_geometry",
+      "code": "PARTIAL",
+      "tests": "SYNTHETIC_COVERED",
+      "real_video": "ABSENT",
+      "runtime": "SHADOW_ONLY",
+      "parity": "PARTIAL",
+      "evidence": ["PR #917", "PR #933"],
+      "blocker": "No real N/E/S/W orientation holdout and seat_errors measurement."
+    },
+    {
+      "capability": "board_dealer_vulnerability",
+      "code": "PARTIAL",
+      "tests": "SYNTHETIC_COVERED",
+      "real_video": "ABSENT",
+      "runtime": "NOT_MAIN_WIRED",
+      "parity": "PARTIAL",
+      "evidence": ["PR #933"],
+      "blocker": "Open implementation is not merged and no real source-bound board context exists."
+    },
+    {
+      "capability": "auction_extraction",
+      "code": "PARTIAL",
+      "tests": "SYNTHETIC_COVERED",
+      "real_video": "ABSENT",
+      "runtime": "NOT_MAIN_WIRED",
+      "parity": "PARTIAL",
+      "evidence": ["PR #940"],
+      "blocker": "No real two-channel auction, dealer-order or legality evidence."
+    },
+    {
+      "capability": "deal_validation",
+      "code": "PARTIAL",
+      "tests": "SYNTHETIC_COVERED",
+      "real_video": "ABSENT",
+      "runtime": "NOT_MAIN_WIRED",
+      "parity": "PARTIAL",
+      "evidence": ["PR #940", "PR #950"],
+      "blocker": "Safe no-hidden-hand chain remains open and no complete human-verified deal exists."
+    },
+    {
+      "capability": "pbn",
+      "code": "PARTIAL",
+      "tests": "SYNTHETIC_COVERED",
+      "real_video": "ABSENT",
+      "runtime": "NOT_MAIN_WIRED",
+      "parity": "PARTIAL",
+      "evidence": ["PR #940"],
+      "blocker": "No real complete legal auction/deal accepted into standard PBN."
+    },
+    {
+      "capability": "bridge_semantics",
+      "code": "PARTIAL",
+      "tests": "COMPONENT_COVERED",
+      "real_video": "ABSENT",
+      "runtime": "COMPONENT_ONLY",
+      "parity": "PARTIAL",
+      "evidence": ["auction and deal validation components"],
+      "blocker": "Components validate mechanics but no source-bound full lesson semantic result exists."
+    },
+    {
+      "capability": "methodology_analysis",
+      "code": "MISSING",
+      "tests": "NO_END_TO_END_COVERAGE",
+      "real_video": "ABSENT",
+      "runtime": "NOT_WIRED",
+      "parity": "MISSING",
+      "evidence": ["ops/universal-video-r25-16-feature-parity.json"],
+      "blocker": "No verified methodology-analysis output from Video 3.1."
+    },
+    {
+      "capability": "learning_episodes",
+      "code": "PARTIAL",
+      "tests": "SYNTHETIC_COVERED",
+      "real_video": "ABSENT",
+      "runtime": "NOT_MAIN_WIRED",
+      "parity": "PARTIAL",
+      "evidence": ["PR #977"],
+      "blocker": "Research-only contract is open; no real accepted episode and no independent review."
+    },
+    {
+      "capability": "drive_artifacts",
+      "code": "IMPLEMENTED",
+      "tests": "COVERED",
+      "real_video": "ABSENT_FOR_DIANA13",
+      "runtime": "WIRED",
+      "parity": "IMPLEMENTED_NOT_PROVEN",
+      "evidence": ["Drive result publication contracts", "issue #819"],
+      "blocker": "No approved exact-job Diana 13 result bundle was found."
+    },
+    {
+      "capability": "terminal_receipt",
+      "code": "IMPLEMENTED",
+      "tests": "COVERED",
+      "real_video": "PARTIAL_STATE_ONLY",
+      "runtime": "WIRED",
+      "parity": "PARTIAL",
+      "evidence": ["issue #881 FAILED state receipts", "issue #634 Diana 14 submit failures"],
+      "blocker": "State/error receipts exist, but no complete subject evidence receipt exists."
+    },
+    {
+      "capability": "idempotent_repeat",
+      "code": "IMPLEMENTED",
+      "tests": "COVERED",
+      "real_video": "NOT_PROVEN",
+      "runtime": "WIRED",
+      "parity": "IMPLEMENTED_NOT_PROVEN",
+      "evidence": ["idempotency contract tests"],
+      "blocker": "Repeated Diana 14 request IDs all failed intake and do not prove one-result replay semantics."
+    }
+  ],
+  "governance": {
+    "unit_tests_are_not_parity_proof": true,
+    "diana14_or_later_launch_allowed": false,
+    "threshold_reduction_allowed": false,
+    "hidden_hand_inference_allowed": false,
+    "school_canon_write_allowed": false,
+    "student_profile_write_allowed": false
+  }
+}

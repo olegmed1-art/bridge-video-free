@@ -29,10 +29,14 @@ from .longitudinal_pilot import (
     run_multi_lesson_pilot,
 )
 from .methodology_queue import (
+    CANDIDATE_DECISION_SCHEMA,
+    CANDIDATE_REVIEW_REQUEST_SCHEMA,
     DECISION_SCHEMA,
     QUEUE_SCHEMA,
     MethodologyQueueError,
     build_methodology_review_queue,
+    build_candidate_review_request,
+    record_candidate_review_decision,
     record_methodology_decision,
 )
 from .video31_adapter import (
@@ -72,6 +76,8 @@ __all__ = [
     "CATALOG_SCHEMA",
     "CATALOG_VERSION",
     "COURSE_VERSION",
+    "CANDIDATE_DECISION_SCHEMA",
+    "CANDIDATE_REVIEW_REQUEST_SCHEMA",
     "DECISION_SCHEMA",
     "EPISTEMIC_CLASSES",
     "EpisodeContractError",
@@ -99,9 +105,11 @@ __all__ = [
     "adapt_video31_quality",
     "adapt_video31_quality_with_catalog",
     "build_methodology_review_queue",
+    "build_candidate_review_request",
     "build_skill_trajectory",
     "canonical_sha256",
     "record_methodology_decision",
+    "record_candidate_review_decision",
     "resolve_reviewed_skill",
     "validate_catalog",
     "validate_episode",
