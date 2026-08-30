@@ -22,6 +22,7 @@ ALLOWED_ERRORS = {
 }
 MOUNT_ERROR_RE = re.compile(r"ERROR: unsafe or missing mount: [A-Za-z0-9._/-]+")
 ERROR_CODE_RE = re.compile(r"UV_CONTAINER_[A-Z0-9_]+")
+RESOURCE_RE = re.compile(r"UNIVERSAL_VIDEO_CONTAINER_RESOURCE disk_available_kb=[0-9]+ disk_required_kb=[0-9]+")
 
 
 def bounded_diagnostics(lines: Iterable[str]) -> list[str]:
@@ -30,7 +31,7 @@ def bounded_diagnostics(lines: Iterable[str]) -> list[str]:
     output: list[str] = []
     for raw in lines:
         line = raw.strip()
-        if line in ALLOWED_ERRORS or MOUNT_ERROR_RE.fullmatch(line):
+        if line in ALLOWED_ERRORS or MOUNT_ERROR_RE.fullmatch(line) or RESOURCE_RE.fullmatch(line):
             output.append(line)
             continue
         try:
