@@ -4,6 +4,9 @@ Status: **RESEARCH CANDIDATE / NOT ACTIVE CURRICULUM**
 
 Tracker: [#875](https://github.com/olegmed1-art/bridge-video-free/issues/875)
 
+Independent implementation audit:
+[INDEPENDENT_AUDIT_V1.md](./INDEPENDENT_AUDIT_V1.md)
+
 ## Purpose
 
 Evolutionary Course v1 turns evidence from the five-year Diana lesson archive into
@@ -84,7 +87,7 @@ The tests cover canonicalization, source binding, authority escalation, claim
 classification, mastery evidence, ordering, duplicate identities, and
 discontinuous longitudinal histories.
 
-## Next bounded milestone
+## Historical first milestone
 
 After this contract passes CI:
 
@@ -95,3 +98,7 @@ After this contract passes CI:
 5. propose the first skill dependency graph for methodology review.
 
 No batch of 254 videos should be launched by this milestone.
+
+The items above have since been implemented as research-only contracts. See the
+independent audit for the current verified status, remaining gaps, and next safe
+step. Their implementation does not activate a curriculum.
