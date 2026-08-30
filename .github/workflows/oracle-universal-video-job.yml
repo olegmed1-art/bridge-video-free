@@ -260,7 +260,7 @@ jobs:
           submit_rc=$?
           set -e
           if (( submit_rc != 0 )); then
-            if grep -qx 'UV_ERROR=job id already exists; use status or a new id' <<<"$initial"; then
+            if grep -qx 'UV_ERROR_CODE=UV_INTAKE_JOB_EXISTS' <<<"$initial"; then
               # A previous observer can lose its SSH session after the resident
               # intake has durably accepted the job.  Resume the exact same
               # immutable job id instead of submitting a duplicate workload.
@@ -286,23 +286,23 @@ jobs:
                 code='UV_SUBMIT_STAGING_UNSAFE'
               elif grep -qx 'UV_ERROR=legacy universal-video.service still active' <<<"$initial"; then
                 code='UV_SUBMIT_LEGACY_SERVICE_ACTIVE'
-              elif grep -qx 'UV_ERROR=unsafe spool or staging directory' <<<"$initial"; then
+              elif grep -qx 'UV_ERROR_CODE=UV_INTAKE_ROOT_UNSAFE' <<<"$initial"; then
                 code='UV_SUBMIT_INTAKE_ROOT_UNSAFE'
-              elif grep -qx 'UV_ERROR=unsafe spool inbox' <<<"$initial"; then
+              elif grep -qx 'UV_ERROR_CODE=UV_INTAKE_INBOX_UNSAFE' <<<"$initial"; then
                 code='UV_SUBMIT_INBOX_UNSAFE'
-              elif grep -Eq '^UV_ERROR=\[Errno 13\] Permission denied' <<<"$initial"; then
+              elif grep -qx 'UV_ERROR_CODE=UV_INTAKE_PERMISSION_DENIED' <<<"$initial"; then
                 code='UV_SUBMIT_INTAKE_PERMISSION_DENIED'
-              elif grep -Eq '^UV_ERROR=\[Errno 18\] Invalid cross-device link' <<<"$initial"; then
+              elif grep -qx 'UV_ERROR_CODE=UV_INTAKE_CROSS_DEVICE' <<<"$initial"; then
                 code='UV_SUBMIT_INTAKE_CROSS_DEVICE'
-              elif grep -Eq '^UV_ERROR=\[Errno 28\] No space left on device' <<<"$initial"; then
+              elif grep -qx 'UV_ERROR_CODE=UV_INTAKE_DISK_FULL' <<<"$initial"; then
                 code='UV_SUBMIT_INTAKE_DISK_FULL'
-              elif grep -Eq '^UV_ERROR=\[Errno 30\] Read-only file system' <<<"$initial"; then
+              elif grep -qx 'UV_ERROR_CODE=UV_INTAKE_READ_ONLY' <<<"$initial"; then
                 code='UV_SUBMIT_INTAKE_READ_ONLY'
-              elif grep -Eq '^UV_ERROR=\[Errno 17\] File exists' <<<"$initial"; then
+              elif grep -qx 'UV_ERROR_CODE=UV_INTAKE_COLLISION' <<<"$initial"; then
                 code='UV_SUBMIT_INTAKE_COLLISION'
-              elif grep -Eq '^UV_ERROR=(invalid |unsupported source kind|unknown video profile|.* (outside bounded range|must be (an integer|numeric|an object)))' <<<"$initial"; then
+              elif grep -Eq '^UV_ERROR_CODE=UV_INTAKE_(CONTRACT_INVALID|SOURCE_UNSUPPORTED|USAGE_INVALID)$' <<<"$initial"; then
                 code='UV_SUBMIT_CONTRACT_REJECTED'
-              elif grep -qx 'UV_ERROR=server intake command failed' <<<"$initial"; then
+              elif grep -Eq '^UV_ERROR_CODE=UV_INTAKE_(IO_FAILED|EXECUTION_FAILED|REJECTED)$' <<<"$initial"; then
                 code='UV_SUBMIT_INTAKE_RUNTIME_FAILED'
               fi
               echo "PRE_SUBMIT_ERROR_CODE=$code" >> "$GITHUB_ENV"

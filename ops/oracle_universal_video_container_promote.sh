@@ -247,6 +247,16 @@ fi
 grep -Fx 'UV_STATE=REJECTED' <<<"$operator_smoke" >/dev/null || fail UV_CONTAINER_PROMOTION_OPERATOR_SMOKE_STATE
 grep -Fx 'UV_ERROR=invalid job id' <<<"$operator_smoke" >/dev/null || fail UV_CONTAINER_PROMOTION_OPERATOR_SMOKE_REASON
 
+CURRENT_STAGE='operator-submit-smoke'
+if operator_submit_smoke="$(sudo -u ocarun sudo -n "$OPERATOR_TARGET" submit-drive-base64 e30= 2>&1)"; then
+  operator_submit_smoke_rc=0
+else
+  operator_submit_smoke_rc=$?
+fi
+[[ "$operator_submit_smoke_rc" -eq 1 ]] || fail UV_CONTAINER_PROMOTION_OPERATOR_SUBMIT_SMOKE_RC
+grep -Fx 'UV_STATE=REJECTED' <<<"$operator_submit_smoke" >/dev/null || fail UV_CONTAINER_PROMOTION_OPERATOR_SUBMIT_SMOKE_STATE
+grep -Fx 'UV_ERROR_CODE=UV_INTAKE_CONTRACT_INVALID' <<<"$operator_submit_smoke" >/dev/null || fail UV_CONTAINER_PROMOTION_OPERATOR_SUBMIT_SMOKE_REASON
+
 CURRENT_STAGE='protected-postflight'
 [[ "$(systemctl is-active assistant-lab.service)" == "$before_assistant" ]] || fail UV_CONTAINER_PROMOTION_PROTECTED_SERVICE_CHANGED
 after_dds="$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)"

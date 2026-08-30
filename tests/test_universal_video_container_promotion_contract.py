@@ -132,6 +132,10 @@ def test_promotion_atomically_syncs_revision_bound_operator() -> None:
     assert "operator_smoke_rc=$?" in SCRIPT
     smoke = SCRIPT[SCRIPT.index("CURRENT_STAGE='operator-smoke'"):SCRIPT.index("CURRENT_STAGE='protected-postflight'")]
     assert "set +e" not in smoke
+    assert "CURRENT_STAGE='operator-submit-smoke'" in smoke
+    assert 'submit-drive-base64 e30=' in smoke
+    assert "UV_ERROR_CODE=UV_INTAKE_CONTRACT_INVALID" in smoke
+    assert "UV_CONTAINER_PROMOTION_OPERATOR_SUBMIT_SMOKE_REASON" in smoke
 
 
 def test_operator_installer_failures_have_bounded_nonsecret_codes() -> None:

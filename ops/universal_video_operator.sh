@@ -67,12 +67,13 @@ submit_drive(){
   local intake_output
   if intake_output="$(UNIVERSAL_VIDEO_STAGING_ROOT="$STAGING" PYTHONPATH="$SOURCE_DIR" "$SYSTEM_PYTHON" -m universal_video.server_intake submit "$tmp" "$SPOOL" 2>&1)"; then
     printf '%s\n' "$intake_output"
-  elif grep -qx 'UV_ERROR=job id already exists; use status or a new id' <<<"$intake_output"; then
-    echo 'UV_STATE=REJECTED'
-    echo 'UV_ERROR=job id already exists; use status or a new id'
-    return 1
   else
-    fail 'server intake command failed'
+    local intake_code
+    intake_code="$(sed -nE 's/^UV_ERROR_CODE=(UV_INTAKE_[A-Z0-9_]{1,96})$/\1/p' <<<"$intake_output" | tail -n1)"
+    [[ -n "$intake_code" ]] || intake_code='UV_INTAKE_EXECUTION_FAILED'
+    echo 'UV_STATE=REJECTED'
+    echo "UV_ERROR_CODE=$intake_code"
+    return 1
   fi
   rm -f "$tmp"; trap - EXIT
 }

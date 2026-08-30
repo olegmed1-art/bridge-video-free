@@ -59,7 +59,7 @@ def test_job_payload_binds_request_and_requested_runtime_for_resident_attestatio
 
 
 def test_existing_job_resumes_by_exact_id_instead_of_duplicate_submission():
-    assert "UV_ERROR=job id already exists; use status or a new id" in WORKFLOW
+    assert "UV_ERROR_CODE=UV_INTAKE_JOB_EXISTS" in WORKFLOW
     assert "PRE_SUBMIT_ERROR_CODE=UV_EXISTING_JOB_RESUMED" in WORKFLOW
     assert "PRE_SUBMIT_ERROR_CODE=UV_RESUME_STATUS_COMMAND_FAILED" in WORKFLOW
     assert "entry='RESUMED'" in WORKFLOW
@@ -109,6 +109,7 @@ def test_submit_maps_intake_failures_without_logging_private_paths() -> None:
     ):
         assert f"code='{code}'" in WORKFLOW
     assert 'echo "$initial"' not in WORKFLOW
+    assert "^UV_ERROR_CODE=UV_INTAKE_" in WORKFLOW
 
 
 def test_submit_intake_does_not_depend_on_legacy_host_venv() -> None:
@@ -117,5 +118,5 @@ def test_submit_intake_does_not_depend_on_legacy_host_venv() -> None:
     assert "readonly SYSTEM_PYTHON='/usr/bin/python3'" in OPERATOR
     assert '"$SYSTEM_PYTHON" -m universal_video.server_intake submit' in submit
     assert '"$PYTHON" -m universal_video.server_intake submit' not in submit
-    assert "fail 'server intake command failed'" in submit
-    assert "job id already exists; use status or a new id" in submit
+    assert "UV_INTAKE_EXECUTION_FAILED" in submit
+    assert "UV_ERROR_CODE=$intake_code" in submit
