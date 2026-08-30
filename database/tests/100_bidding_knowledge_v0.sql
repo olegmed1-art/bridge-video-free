@@ -289,6 +289,11 @@ BEGIN
         RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_OWNER_WRAPPER_TAIL_NOT_BLOCKED';
     END IF;
     IF NOT bidding.contains_forbidden_hidden_key(
+        '{"partnermetadatahandscount":[["AS"]]}'::jsonb
+    ) THEN
+        RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_OWNER_WRAPPED_METRIC_CONTAINER_NOT_BLOCKED';
+    END IF;
+    IF NOT bidding.contains_forbidden_hidden_key(
         '{"opponentcontextdetailshand":"AKQ"}'::jsonb
     ) THEN
         RAISE EXCEPTION 'SMOKE_HIDDEN_COMPACT_OWNER_WRAPPER_HAND_NOT_BLOCKED';
