@@ -120,7 +120,7 @@ jobs:
           set -euo pipefail
           expected_blob="$(gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_container_promote.sh?ref=$EXPECTED_COMMIT" --jq .sha)"
           expected_prepare_blob="$(gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_run_command.sh?ref=$EXPECTED_COMMIT" --jq .sha)"
-          gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_run_command.sh?ref=$EXPECTED_COMMIT" --jq .content | tr -d '\\n' | base64 --decode > "$RUNNER_TEMP/prepare.sh"
+          gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_run_command.sh?ref=$EXPECTED_COMMIT" --jq .content | base64 --decode > "$RUNNER_TEMP/prepare.sh"
           [[ "$(git hash-object "$RUNNER_TEMP/prepare.sh")" == "$expected_prepare_blob" ]]
           /bin/bash -n "$RUNNER_TEMP/prepare.sh"
           ssh_base=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
