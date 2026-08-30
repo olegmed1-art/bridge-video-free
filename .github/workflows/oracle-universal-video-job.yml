@@ -253,33 +253,50 @@ jobs:
           submit_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video submit-drive-base64 '$payload'"
           status_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video status '$JOB_ID'"
           label="Universal Video / $PROFILE / $JOB_ID"
+          entry='SUBMITTED'
 
           set +e
           initial="$(run_remote "$submit_cmd")"
           submit_rc=$?
           set -e
           if (( submit_rc != 0 )); then
-            code='UV_SUBMIT_COMMAND_FAILED'
-            if grep -qx 'UV_ERROR=universal-video-container.service inactive' <<<"$initial"; then
-              code='UV_SUBMIT_SERVICE_INACTIVE'
-            elif grep -qx 'UV_ERROR=universal video runtime missing' <<<"$initial"; then
-              code='UV_SUBMIT_RUNTIME_MISSING'
-            elif grep -qx 'UV_ERROR=universal video spool missing' <<<"$initial"; then
-              code='UV_SUBMIT_SPOOL_MISSING'
-            elif grep -qx 'UV_ERROR=unsafe staging directory' <<<"$initial"; then
-              code='UV_SUBMIT_STAGING_UNSAFE'
+            if grep -qx 'UV_ERROR=job id already exists; use status or a new id' <<<"$initial"; then
+              # A previous observer can lose its SSH session after the resident
+              # intake has durably accepted the job.  Resume the exact same
+              # immutable job id instead of submitting a duplicate workload.
+              set +e
+              initial="$(run_remote "$status_cmd")"
+              resume_rc=$?
+              set -e
+              if (( resume_rc != 0 )); then
+                echo 'PRE_SUBMIT_ERROR_CODE=UV_RESUME_STATUS_COMMAND_FAILED' >> "$GITHUB_ENV"
+                exit 1
+              fi
+              entry='RESUMED'
+              echo 'PRE_SUBMIT_ERROR_CODE=UV_EXISTING_JOB_RESUMED' >> "$GITHUB_ENV"
+            else
+              code='UV_SUBMIT_COMMAND_FAILED'
+              if grep -qx 'UV_ERROR=universal-video-container.service inactive' <<<"$initial"; then
+                code='UV_SUBMIT_SERVICE_INACTIVE'
+              elif grep -qx 'UV_ERROR=universal video runtime missing' <<<"$initial"; then
+                code='UV_SUBMIT_RUNTIME_MISSING'
+              elif grep -qx 'UV_ERROR=universal video spool missing' <<<"$initial"; then
+                code='UV_SUBMIT_SPOOL_MISSING'
+              elif grep -qx 'UV_ERROR=unsafe staging directory' <<<"$initial"; then
+                code='UV_SUBMIT_STAGING_UNSAFE'
+              fi
+              echo "PRE_SUBMIT_ERROR_CODE=$code" >> "$GITHUB_ENV"
+              exit 1
             fi
-            echo "PRE_SUBMIT_ERROR_CODE=$code" >> "$GITHUB_ENV"
-            exit 1
           fi
           state="$(printf '%s\n' "$initial" | sed -n 's/^UV_STATE=//p' | tail -n1)"
-          if [[ ! "$state" =~ ^(DOWNLOAD_QUEUED|DOWNLOADING_FROM_DRIVE|SOURCE_READY_ON_ORACLE|PROCESSING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]]; then
+          if [[ ! "$state" =~ ^(DOWNLOAD_QUEUED|DOWNLOADING_FROM_DRIVE|SOURCE_READY_ON_ORACLE|RUNNING|PROCESSING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]]; then
             echo 'PRE_SUBMIT_ERROR_CODE=UV_SUBMIT_STATE_INVALID' >> "$GITHUB_ENV"
             exit 1
           fi
           echo 'PRE_SUBMIT_ERROR_CODE=UV_SUBMIT_ACCEPTED' >> "$GITHUB_ENV"
           initial_safe="$(printf '%s\n' "$initial" | grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|CONFORMANCE_STATE|ATTESTATION_MODE|ARTIFACT_SET_SHA256|MANIFEST_SHA256|ARTIFACT_COUNT|TOTAL_BYTES|DOMAIN_ANALYSIS_STATUS|TECHNICAL_BUNDLE_READY|BRIDGE_PRODUCTION_READY|PEDAGOGICAL_STATUS|PUBLICATION_STATE|ERROR_TYPE|ERROR_CODE)=' | head -n 20 || true)"
-          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус **$label**: **SUBMITTED → $state**.\n\n\`\`\`text\n$initial_safe\n\`\`\`\nТехническая готовность не означает предметную или педагогическую готовность. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус **$label**: **$entry → $state**.\n\n\`\`\`text\n$initial_safe\n\`\`\`\nТехническая готовность не означает предметную или педагогическую готовность. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
           last="$state"
 
           for _ in $(seq 1 300); do
@@ -300,7 +317,7 @@ jobs:
               exit 1
             fi
             state="$(printf '%s\n' "$out" | sed -n 's/^UV_STATE=//p' | tail -n1)"
-            if [[ ! "$state" =~ ^(DOWNLOAD_QUEUED|DOWNLOADING_FROM_DRIVE|SOURCE_READY_ON_ORACLE|PROCESSING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]]; then
+            if [[ ! "$state" =~ ^(DOWNLOAD_QUEUED|DOWNLOADING_FROM_DRIVE|SOURCE_READY_ON_ORACLE|RUNNING|PROCESSING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]]; then
               echo 'PRE_SUBMIT_ERROR_CODE=UV_STATUS_STATE_INVALID' >> "$GITHUB_ENV"
               exit 1
             fi
