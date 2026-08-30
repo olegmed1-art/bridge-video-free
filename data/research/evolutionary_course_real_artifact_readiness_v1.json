@@ -6,14 +6,16 @@
     {
       "lesson_id": "diana-2",
       "source_name": "Диана 2",
-      "source_video_file_id": null,
+      "source_video_file_id": "1ACfY5ksRaYPKsUfd23cvcoSQbCe6GJr8",
       "source_job_id": "41daa4ca6e09d13e366c578b7c53ae31",
       "terminal_status": "COMPLETED",
       "evidence_refs": [
         "docs/evidence/r25_15_operational_diana2_2026-08-19.md",
-        "docs/evidence/r29_operational_diana2_2026-08-19.md"
+        "docs/evidence/r29_operational_diana2_2026-08-19.md",
+        "meta_school/evidence/DIANA_2_PREFLIGHT_20260818.md",
+        "meta_school/evidence/DIANA_2_MIGRATION_0049_READBACK_20260818.md"
       ],
-      "exact_source_identity_verified": false,
+      "exact_source_identity_verified": true,
       "terminal_result_verified": true,
       "role_attribution_supported": true,
       "course_adapter_report_available": false,

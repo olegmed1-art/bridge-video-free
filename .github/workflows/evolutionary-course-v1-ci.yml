@@ -41,6 +41,7 @@ jobs:
       - name: Validate schema JSON
         run: |
           python -m json.tool schemas/evolutionary-course-artifact-readiness-v1.schema.json >/dev/null
+          python -m json.tool schemas/evolutionary-course-source-handoff-v1.schema.json >/dev/null
           python -m json.tool schemas/evolutionary-course-learning-episode-v1.schema.json >/dev/null
           python -m json.tool schemas/evolutionary-course-learning-module-v1.schema.json >/dev/null
       - name: Validate skill catalog schema and seed
