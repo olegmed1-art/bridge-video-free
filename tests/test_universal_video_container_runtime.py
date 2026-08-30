@@ -83,27 +83,63 @@ def test_container_image_contains_neon_processor_dependency_closure() -> None:
     root = Path(__file__).resolve().parents[1]
     dockerfile = (root / "deploy/oracle-universal-video/Dockerfile").read_text(encoding="utf-8")
     assert "requirements-worker.txt" in dockerfile
-    assert "COPY bridge_vision ./bridge_vision" in dockerfile
+    local_modules: dict[str, Path] = {}
+    for path in root.rglob("*.py"):
+        if any(part in {".git", "tests", "__pycache__"} for part in path.parts):
+            continue
+        parts = list(path.relative_to(root).with_suffix("").parts)
+        if parts[-1] == "__init__":
+            parts.pop()
+        if parts:
+            local_modules[".".join(parts)] = path
 
-    local_modules = {path.stem: path for path in root.glob("*.py")}
     pending = ["bridge_worker_3_1_free", "bridge_runtime_hardening_r25_16", "route_drive_job_outputs"]
     required: set[str] = set()
+
+    def enqueue(module: str) -> None:
+        parts = module.split(".")
+        for length in range(1, len(parts) + 1):
+            candidate = ".".join(parts[:length])
+            if candidate in local_modules and candidate not in required:
+                pending.append(candidate)
+
     while pending:
         module = pending.pop()
         if module in required:
             continue
         required.add(module)
-        tree = ast.parse(local_modules[module].read_text(encoding="utf-8"))
+        path = local_modules[module]
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        package = module if path.name == "__init__.py" else module.rpartition(".")[0]
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
-                imports = [alias.name.split(".")[0] for alias in node.names]
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                imports = [node.module.split(".")[0]]
-            else:
-                imports = []
-            pending.extend(name for name in imports if name in local_modules and name not in required)
+                for alias in node.names:
+                    enqueue(alias.name)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    package_parts = package.split(".") if package else []
+                    base_parts = package_parts[: max(0, len(package_parts) - (node.level - 1))]
+                    if node.module:
+                        base_parts.extend(node.module.split("."))
+                    base = ".".join(base_parts)
+                else:
+                    base = node.module or ""
+                if base:
+                    enqueue(base)
+                for alias in node.names:
+                    if alias.name != "*":
+                        enqueue(".".join(part for part in (base, alias.name) if part))
 
-    missing = sorted(f"{module}.py" for module in required if f"{module}.py" not in dockerfile)
+    required_packages = {
+        module.split(".", 1)[0]
+        for module in required
+        if "." in module or local_modules[module].name == "__init__.py"
+    }
+    required_files = {module for module in required if module not in required_packages and "." not in module}
+    missing = sorted(
+        [f"{module}.py" for module in required_files if f"{module}.py" not in dockerfile]
+        + [package for package in required_packages if f"COPY {package} ./{package}" not in dockerfile]
+    )
     assert missing == []
 
 
