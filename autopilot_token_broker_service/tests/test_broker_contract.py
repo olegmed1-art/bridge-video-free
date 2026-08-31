@@ -54,6 +54,7 @@ BASE_TREE_SHA = "b" * 40
 BLOB_SHA = "c" * 40
 TREE_SHA = "d" * 40
 COMMIT_SHA = "e" * 40
+BASE_COMMIT_DATE = "2026-08-31T00:00:00Z"
 
 
 def _decode_segment(value: str) -> dict[str, object]:
@@ -95,7 +96,7 @@ def _repair_request(
 
 
 class _FakeResponse:
-    def __init__(self, payload: dict[str, object], *, url: str, status: int = 200):
+    def __init__(self, payload: object, *, url: str, status: int = 200):
         self.payload = payload
         self.url = url
         self.status = status
@@ -131,17 +132,41 @@ class _RepairOpener:
         token_payload: dict[str, object],
         *,
         base_sha: str = BASE_SHA,
-        branch_exists: bool = False,
+        branch_sha: str | None = None,
+        existing_pull: bool = False,
     ):
         self.token_payload = token_payload
         self.base_sha = base_sha
-        self.branch_exists = branch_exists
+        self.branch_sha = branch_sha
+        self.existing_pull = existing_pull
+        self.request = _repair_request()
         self.requests = []
+
+    def _pull_payload(self) -> dict[str, object]:
+        request = self.request
+        body = (
+            "Bounded Phase 3B canary/repair.\n\n"
+            f"Task: \`{request.task_key}\`\n"
+            f"Action fingerprint: \`{request.action_fingerprint}\`\n\n"
+            "Draft only. Autopilot merge is forbidden."
+        )
+        return {
+            "number": 1234,
+            "html_url": (
+                "https://github.com/olegmed1-art/bridge-video-free/pull/1234"
+            ),
+            "state": "open",
+            "draft": True,
+            "title": request.title,
+            "body": body,
+            "head": {"ref": request.branch_name, "sha": COMMIT_SHA},
+            "base": {"ref": "main", "sha": BASE_SHA},
+        }
 
     def open(self, request, *, timeout):
         self.requests.append(request)
         parsed = urllib.parse.urlsplit(request.full_url)
-        path = parsed.path
+        path = urllib.parse.unquote(parsed.path)
         method = request.get_method()
         body = json.loads(request.data) if request.data is not None else None
 
@@ -155,13 +180,21 @@ class _RepairOpener:
             )
         if path.endswith(f"/git/commits/{BASE_SHA}") and method == "GET":
             return _FakeResponse(
-                {"sha": BASE_SHA, "tree": {"sha": BASE_TREE_SHA}},
+                {
+                    "sha": BASE_SHA,
+                    "tree": {"sha": BASE_TREE_SHA},
+                    "committer": {"date": BASE_COMMIT_DATE},
+                },
                 url=request.full_url,
             )
         if "/git/ref/heads/autopilot/repair/" in path and method == "GET":
-            if self.branch_exists:
+            if self.branch_sha is not None:
+                branch_name = path.split("/git/ref/heads/", 1)[1]
                 return _FakeResponse(
-                    {"ref": "refs/heads/autopilot/repair/existing"},
+                    {
+                        "ref": f"refs/heads/{branch_name}",
+                        "object": {"sha": self.branch_sha},
+                    },
                     url=request.full_url,
                 )
             raise urllib.error.HTTPError(
@@ -191,32 +224,49 @@ class _RepairOpener:
             }
             return _FakeResponse({"sha": TREE_SHA}, url=request.full_url, status=201)
         if path.endswith("/git/commits") and method == "POST":
-            assert body["parents"] == [BASE_SHA]
-            assert body["tree"] == TREE_SHA
+            identity = {
+                "name": "Bridge School Autopilot",
+                "email": "noreply@github.com",
+                "date": BASE_COMMIT_DATE,
+            }
+            assert body == {
+                "message": (
+                    f"autopilot: bounded repair "
+                    f"{self.request.action_fingerprint}"
+                ),
+                "parents": [BASE_SHA],
+                "tree": TREE_SHA,
+                "author": identity,
+                "committer": identity,
+            }
             return _FakeResponse(
                 {"sha": COMMIT_SHA}, url=request.full_url, status=201
             )
         if path.endswith("/git/refs") and method == "POST":
-            assert body["sha"] == COMMIT_SHA
+            assert body == {
+                "ref": f"refs/heads/{self.request.branch_name}",
+                "sha": COMMIT_SHA,
+            }
+            self.branch_sha = COMMIT_SHA
             return _FakeResponse(
                 {"ref": body["ref"], "object": {"sha": COMMIT_SHA}},
                 url=request.full_url,
                 status=201,
             )
+        if path.endswith("/pulls") and method == "GET":
+            payload: object = [self._pull_payload()] if self.existing_pull else []
+            return _FakeResponse(payload, url=request.full_url)
         if path.endswith("/pulls") and method == "POST":
-            return _FakeResponse(
-                {
-                    "number": 1234,
-                    "html_url": (
-                        "https://github.com/olegmed1-art/bridge-video-free/pull/1234"
-                    ),
-                    "draft": True,
-                    "head": {"ref": body["head"], "sha": COMMIT_SHA},
-                    "base": {"ref": "main", "sha": BASE_SHA},
-                },
-                url=request.full_url,
-                status=201,
-            )
+            expected = self._pull_payload()
+            assert body == {
+                "base": "main",
+                "body": expected["body"],
+                "draft": True,
+                "head": self.request.branch_name,
+                "title": self.request.title,
+            }
+            self.existing_pull = True
+            return _FakeResponse(expected, url=request.full_url, status=201)
         raise AssertionError(f"unexpected request: {method} {request.full_url}")
 
 
@@ -444,6 +494,7 @@ class BrokerContractTests(unittest.TestCase):
         self.assertFalse(result["merge_allowed"])
         self.assertEqual(result["operation_count"], 10)
         self.assertEqual(result["pull_request_number"], 1234)
+        self.assertFalse(result["replayed"])
 
         methods = [request.get_method() for request in opener.requests]
         self.assertEqual(
@@ -489,16 +540,69 @@ class BrokerContractTests(unittest.TestCase):
         ]
         self.assertEqual(repository_methods, ["GET"])
 
-    def test_replay_stops_at_existing_branch_before_object_writes(self):
-        opener = _RepairOpener(self._token_payload(), branch_exists=True)
+    def test_replay_recovers_exact_branch_and_pull_after_main_advances(self):
+        opener = _RepairOpener(
+            self._token_payload(),
+            base_sha="f" * 40,
+            branch_sha=COMMIT_SHA,
+            existing_pull=True,
+        )
+        result = execute_bounded_draft_repair(
+            self.config, _repair_request(), now_epoch=NOW, opener=opener
+        )
+        self.assertEqual(result["status"], "existing")
+        self.assertTrue(result["replayed"])
+        self.assertEqual(result["commit_sha"], COMMIT_SHA)
+        write_urls = [
+            item.full_url
+            for item in opener.requests
+            if item.get_method() == "POST" and "/repos/" in item.full_url
+        ]
+        self.assertFalse(any(url.endswith("/git/refs") for url in write_urls))
+        self.assertFalse(any(url.endswith("/pulls") for url in write_urls))
+        self.assertFalse(
+            any(url.endswith("/git/ref/heads/main") for url in write_urls)
+        )
+
+    def test_replay_completes_missing_pull_for_exact_existing_branch(self):
+        opener = _RepairOpener(
+            self._token_payload(),
+            branch_sha=COMMIT_SHA,
+            existing_pull=False,
+        )
+        result = execute_bounded_draft_repair(
+            self.config, _repair_request(), now_epoch=NOW, opener=opener
+        )
+        self.assertEqual(result["status"], "created")
+        self.assertTrue(result["replayed"])
+        repository_posts = [
+            item.full_url
+            for item in opener.requests
+            if item.get_method() == "POST" and "/repos/" in item.full_url
+        ]
+        self.assertFalse(any(url.endswith("/git/refs") for url in repository_posts))
+        self.assertEqual(
+            sum(url.endswith("/pulls") for url in repository_posts),
+            1,
+        )
+
+    def test_replay_rejects_foreign_existing_branch(self):
+        opener = _RepairOpener(
+            self._token_payload(),
+            branch_sha="f" * 40,
+        )
         with self.assertRaises(DraftRepairConflictError):
             execute_bounded_draft_repair(
                 self.config, _repair_request(), now_epoch=NOW, opener=opener
             )
-        repository_methods = [
-            item.get_method() for item in opener.requests if "/repos/" in item.full_url
+        repository_writes = [
+            item.full_url
+            for item in opener.requests
+            if item.get_method() == "POST" and "/repos/" in item.full_url
         ]
-        self.assertEqual(repository_methods, ["GET", "GET", "GET"])
+        self.assertFalse(any(url.endswith("/git/refs") for url in repository_writes))
+        self.assertFalse(any(url.endswith("/pulls") for url in repository_writes))
+
 
     def test_http_response_is_no_store_and_contains_only_safe_evidence(self):
         request = _repair_request()
