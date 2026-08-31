@@ -1,6 +1,6 @@
 # Autopilot Phase 3B — bounded GitHub draft repair
 
-Status: `BOUNDED_BROKER_SOURCE_READY / PREVIEW_REDEPLOY_PENDING`.
+Status: `BOUNDED_BROKER_PREVIEW_READY / ORACLE_CONSUMER_PENDING`.
 
 ## Purpose
 
@@ -18,20 +18,20 @@ readback on 2026-08-31 confirmed:
 - GitHub App `Bridge School Oracle Autopilot` (`app_id=4776443`) exists with
   Metadata read, Contents read/write, Pull requests read/write, and Checks read;
 - isolated Vercel project `bridge-school-autopilot`
-  (`prj_KvQo3rPnwNs488hyDiMZ9hMU9d5R`) has no Git connection and contains one
-  protected Preview deployment, `dpl_AcsA2EbMhCW3Y2iJmrG6keVzRSzH`; project
-  `live` is false and no production domain or alias exists.
+  (`prj_KvQo3rPnwNs488hyDiMZ9hMU9d5R`) has no Git connection and contains two
+  protected Preview deployments. The bounded-executor deployment
+  `dpl_7cqY6DUSdcvWLGTAkZi8jZf8HSXv` is the latest and the legacy deployment
+  `dpl_AcsA2EbMhCW3Y2iJmrG6keVzRSzH` is retained temporarily as rollback;
+  project `live` is false and no production domain or alias exists.
 
 The App installation is limited to `olegmed1-art/bridge-video-free`. Its RSA
 private key and the separate high-entropy broker ingress secret exist only as
-Preview-scoped Vercel environment variables. The currently deployed Preview
-passed `/healthz`, but it is pinned to legacy source `a204ba9d`, whose response
-still exposes the installation token to its caller. The replacement source
-keeps that token inside the broker and is not deployed yet. Neither secret has
-been transferred to Oracle, and no credentialed Phase 3B adapter is installed
-there. Therefore the live draft-PR canary remains blocked until the bounded
-source is independently reviewed, redeployed to Preview, and the separate
-Oracle credential boundary is explicitly authorized and verified.
+Preview-scoped Vercel environment variables. The bounded deployment is pinned
+to source `2735ecbb4a455bec58007064210913c341795896`, keeps the installation
+token inside the broker, and passed the versioned `/healthz` contract. Neither
+secret has been transferred to Oracle, and no credentialed Phase 3B adapter is
+installed there. Therefore the live draft-PR canary remains blocked until the
+separate Oracle credential boundary is explicitly authorized and verified.
 
 1. Protect `main` with a repository ruleset that requires a pull request and
    blocks force pushes and branch deletion. The Autopilot App must not bypass
@@ -91,6 +91,6 @@ The first live canary creates only
 draft PR. It costs no model tokens. The canary is forbidden until both owner
 gates are verified from GitHub primary state, the bounded broker source is
 reviewed and deployed to Preview, and the separately authorized Oracle broker
-consumer is installed with fail-closed secret handling. The owner gates are
-verified, but bounded Preview redeployment and the Oracle consumer gate remain
-open, so the canary has not run.
+consumer is installed with fail-closed secret handling. The owner and bounded
+Preview gates are verified; only the Oracle consumer gate remains open, so the
+canary has not run.
