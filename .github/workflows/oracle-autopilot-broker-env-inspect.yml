@@ -1,0 +1,165 @@
+name: Oracle Autopilot broker env metadata inspect
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-autopilot-broker-env-inspect.yml'
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths:
+      - 'ops/oracle-autopilot-broker-env-inspect-requests/*.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-autopilot-read-only-inspect
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Validate metadata-only boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow='.github/workflows/oracle-autopilot-broker-env-inspect.yml'
+          grep -F "request['action'] == 'inspect_broker_env_metadata'" "$workflow" >/dev/null
+          grep -F "request['no_instance_stop'] is True" "$workflow" >/dev/null
+          grep -F 'AUTOPILOT_BROKER_ENV_VALUES_READ=NO' "$workflow" >/dev/null
+          grep -F 'AUTOPILOT_BROKER_ENV_INSPECTION_READ_ONLY=YES' "$workflow" >/dev/null
+          grep -F 'ORACLE_INSTANCE_STOP_REQUESTED=NO' "$workflow" >/dev/null
+          python - <<'PY'
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/oracle-autopilot-broker-env-inspect.yml').read_text()
+          for forbidden in (
+              'systemctl ' + 'start',
+              'systemctl ' + 'stop',
+              'systemctl ' + 'restart',
+              'systemctl ' + 'enable',
+              'systemctl ' + 'disable',
+              '--action ' + 'STOP',
+              'oci compute instance ' + 'action',
+              'cat ' + '"$broker_env"',
+              'source ' + '"$broker_env"',
+              '. ' + '"$broker_env"',
+              'rm ' + '"$broker_env"',
+              'chmod ' + '"$broker_env"',
+              'chown ' + '"$broker_env"',
+          ):
+              assert forbidden not in workflow
+          PY
+
+  inspect:
+    if: ${{ github.event_name == 'push' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Validate exact inspection request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+            | grep -E '^ops/oracle-autopilot-broker-env-inspect-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one broker-env inspection request' >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python - <<'PY'
+          import json
+          import os
+          import re
+
+          request = json.load(open(os.environ['REQUEST_FILE'], encoding='utf-8'))
+          assert set(request) == {
+              'request_id', 'action', 'target_host', 'no_instance_stop',
+          }
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', request['request_id'])
+          assert request['action'] == 'inspect_broker_env_metadata'
+          assert request['target_host'] == '158.180.47.161'
+          assert request['no_instance_stop'] is True
+          PY
+
+      - name: Verify pinned Oracle identity and SSH access
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/oracle-autopilot-broker-env-known-hosts"
+          : > "$known"
+          index=0
+          for expected in \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64'; do
+            part="$RUNNER_TEMP/oracle-autopilot-broker-env-known-hosts.$index"
+            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$expected" "$part"
+            cat "$part" >> "$known"
+            index=$((index + 1))
+          done
+          sort -u -o "$known" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]] || { echo 'Oracle SSH credential unavailable' >&2; exit 1; }
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Inspect broker env metadata without reading values
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          broker_env=/opt/bridge-school/school-autopilot/autopilot-broker.env
+          present=NO
+          metadata=ABSENT
+          boundary=ABSENT
+
+          if [[ -e "$broker_env" || -L "$broker_env" ]]; then
+            present=YES
+            metadata="$(stat -c '%U:%G:%a:%F' -- "$broker_env" 2>/dev/null || printf 'STAT_FAILED')"
+            if [[ "$metadata" == 'root:root:600:regular file' ]]; then
+              boundary=SAFE_ROOT_0600_REGULAR
+            else
+              boundary=UNSAFE_METADATA
+            fi
+          fi
+
+          printf 'AUTOPILOT_BROKER_ENV_PRESENT=%s\n' "$present"
+          printf 'AUTOPILOT_BROKER_ENV_METADATA=%s\n' "$metadata"
+          printf 'AUTOPILOT_BROKER_ENV_BOUNDARY=%s\n' "$boundary"
+          echo 'AUTOPILOT_BROKER_ENV_VALUES_READ=NO'
+          echo 'AUTOPILOT_BROKER_ENV_INSPECTION_READ_ONLY=YES'
+          echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
+          REMOTE
