@@ -1,0 +1,104 @@
+name: Autopilot owner credential boundary preflight (one-shot)
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths: ['.github/workflows/autopilot-owner-auth-preflight-once.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+      VERCEL_TOKEN_PRIMARY: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_TOKEN_ACCESS: ${{ secrets.VERCEL_ACCESS_TOKEN }}
+      VERCEL_TOKEN_API: ${{ secrets.VERCEL_API_TOKEN }}
+      VERCEL_TOKEN_CLI: ${{ secrets.VERCEL_CLI_TOKEN }}
+      VERCEL_TOKEN_DEPLOY: ${{ secrets.VERCEL_DEPLOY_TOKEN }}
+      VERCEL_TOKEN_AUTOMATION: ${{ secrets.VERCEL_AUTOMATION_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Report protected credential availability without values
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh_count=0
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            [[ -n "${!name:-}" ]] && ssh_count=$((ssh_count + 1))
+          done
+          vercel_count=0
+          for name in VERCEL_TOKEN_PRIMARY VERCEL_TOKEN_ACCESS VERCEL_TOKEN_API VERCEL_TOKEN_CLI VERCEL_TOKEN_DEPLOY VERCEL_TOKEN_AUTOMATION; do
+            [[ -n "${!name:-}" ]] && vercel_count=$((vercel_count + 1))
+          done
+          echo "AUTOPILOT_SSH_CREDENTIAL_CANDIDATES=$ssh_count"
+          echo "AUTOPILOT_VERCEL_TOKEN_CANDIDATES=$vercel_count"
+          [[ "$ssh_count" -ge 1 ]]
+
+      - name: Verify Oracle identity and SSH access
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/autopilot-owner-preflight"
+          mkdir -p "$work"
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          index=0
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            raw="${!name:-}"
+            [[ -n "$raw" ]] || continue
+            index=$((index + 1))
+            key="$work/key-$index"
+            printf '%s\n' "$raw" | tr -d '\r' > "$key"
+            chmod 0600 "$key"
+            ssh-keygen -y -f "$key" >/dev/null 2>&1 || continue
+            if ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+              -o ConnectTimeout=10 "$ORACLE_USER@$ORACLE_HOST" \
+              'sudo -n systemctl is-active school-autopilot-shadow.service'; then
+              selected="$key"
+              break
+            fi
+          done
+          [[ -n "$selected" ]]
+          echo 'AUTOPILOT_ORACLE_SSH_PREFLIGHT=PASS'
+          echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
+
+      - name: Check whether an existing Vercel token can access the Preview project
+        shell: bash
+        run: |
+          set -euo pipefail
+          valid=0
+          for name in VERCEL_TOKEN_PRIMARY VERCEL_TOKEN_ACCESS VERCEL_TOKEN_API VERCEL_TOKEN_CLI VERCEL_TOKEN_DEPLOY VERCEL_TOKEN_AUTOMATION; do
+            token="${!name:-}"
+            [[ -n "$token" ]] || continue
+            if curl -fsS --max-time 15 \
+              -H "Authorization: Bearer $token" \
+              'https://api.vercel.com/v9/projects/prj_KvQo3rPnwNs488hyDiMZ9hMU9d5R?teamId=team_qXr2smag8blW1WWeS10CDRXb' \
+              -o /dev/null; then
+              valid=1
+              break
+            fi
+          done
+          echo "AUTOPILOT_VERCEL_SCOPED_TOKEN_VALID=$([[ "$valid" == 1 ]] && echo YES || echo NO)"
