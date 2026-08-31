@@ -1,5 +1,5 @@
 {
-  "request_id": "director-shadow-stability-20260831-01",
+  "request_id": "director-shadow-stability-20260831-02",
   "action": "inspect_shadow_failure",
   "target_host": "158.180.47.161",
   "source_revision": "e9c9381f0aed388ef72718cdcf67ac9928947aef",
