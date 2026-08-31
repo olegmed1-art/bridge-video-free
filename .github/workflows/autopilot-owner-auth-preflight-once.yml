@@ -1,4 +1,4 @@
-name: Autopilot temporary Neon owner preflight (one-shot)
+name: Autopilot temporary Neon runtime queue audit (one-shot)
 
 on:
   push:
@@ -13,46 +13,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  temp-neon-owner-preflight:
+  audit:
     if: github.repository == 'olegmed1-art/bridge-video-free'
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
-    environment: database-production
+    timeout-minutes: 5
     env:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
       EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
-      TARGET_ENDPOINT_ID: ep-floral-field-b1pjs2of
       SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
-      OWNER_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
 
-      - name: Require protected inputs
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ -n "${SSH_KEY_ORACLE:-}" ]]
-          [[ -n "${OWNER_DATABASE_URL:-}" ]]
-          echo 'AUTOPILOT_DATABASE_PRODUCTION_SECRET_PRESENT=YES'
-          echo 'AUTOPILOT_DATABASE_PRODUCTION_TARGET_ACCESSED=NO'
-
-      - name: Install PostgreSQL client
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y postgresql-client >/dev/null
-
-      - name: Resolve temporary endpoint from Oracle SHADOW runtime
-        id: target
+      - name: Resolve verified Oracle SSH key
+        id: ssh
         shell: bash
         run: |
           set -Eeuo pipefail
-          work="$RUNNER_TEMP/temp-neon-owner"
+          work="$RUNNER_TEMP/oracle-runtime-audit"
           mkdir -p "$work"
           key="$work/id_oracle"
           printf '%s\n' "$SSH_KEY_ORACLE" | tr -d '\r' > "$key"
@@ -60,74 +41,68 @@ jobs:
           ssh-keygen -y -f "$key" >/dev/null
           known="$work/known_hosts"
           ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
-          target_host="$(ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 \
-            "$ORACLE_USER@$ORACLE_HOST" 'sudo -n python3 -' <<'PY'
-          import os
-          import re
-          from urllib.parse import urlparse
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            'sudo -n systemctl is-active school-autopilot-shadow.service' >/dev/null
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo 'AUTOPILOT_ORACLE_SSH_PREFLIGHT=PASS'
 
-          path = '/opt/bridge-school/school-autopilot/autopilot-shadow.env'
-          assert os.path.isfile(path) and not os.path.islink(path)
-          value = ''
-          for raw in open(path, encoding='utf-8'):
-              if raw.startswith('AUTOPILOT_DATABASE_URL='):
-                  value = raw.rstrip('\n').split('=', 1)[1].strip().strip('"').strip("'")
-                  break
-          parsed = urlparse(value)
-          host = parsed.hostname or ''
-          pattern = r'ep-floral-field-b1pjs2of(?:-pooler)?(?:\.[a-z0-9-]+)+\.aws\.neon\.tech'
-          assert re.fullmatch(pattern, host), host
-          print(host)
-          PY
-          )"
-          [[ "$target_host" == "$TARGET_ENDPOINT_ID."* || "$target_host" == "$TARGET_ENDPOINT_ID-pooler."* ]]
-          printf '%s' "$target_host" > "$work/target-host"
-          chmod 0600 "$work/target-host"
-          echo "host_file=$work/target-host" >> "$GITHUB_OUTPUT"
-          echo 'AUTOPILOT_TEMP_NEON_ENDPOINT_RESOLVED=YES'
-
-      - name: Derive branch-scoped owner DSN and perform read-only privilege check
+      - name: Query branch-local runtime privileges and queue without credentials
         shell: bash
-        env:
-          TARGET_HOST_FILE: ${{ steps.target.outputs.host_file }}
         run: |
           set -Eeuo pipefail
-          umask 077
-          work="$RUNNER_TEMP/temp-neon-owner"
-          dsn_file="$work/owner-dsn"
-          python3 - "$TARGET_HOST_FILE" "$dsn_file" <<'PY'
+          ssh -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
+            "$ORACLE_USER@$ORACLE_HOST" 'sudo -n /opt/bridge-school/school-autopilot/venv/bin/python -' <<'PY'
           import os
           import re
-          import sys
-          from urllib.parse import urlparse, urlunparse
+          from pathlib import Path
+          from urllib.parse import urlparse
+          import psycopg
 
-          owner = os.environ['OWNER_DATABASE_URL']
-          target_host = open(sys.argv[1], encoding='utf-8').read().strip()
-          parsed = urlparse(owner)
-          assert parsed.scheme in {'postgres', 'postgresql'}
-          assert '@' in parsed.netloc and parsed.hostname
-          assert parsed.hostname != target_host
-          pattern = r'ep-floral-field-b1pjs2of(?:-pooler)?(?:\.[a-z0-9-]+)+\.aws\.neon\.tech'
-          assert re.fullmatch(pattern, target_host)
-          userinfo = parsed.netloc.rsplit('@', 1)[0]
-          port = parsed.port or 5432
-          netloc = f'{userinfo}@{target_host}:{port}'
-          target = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
-          with open(sys.argv[2], 'w', encoding='utf-8') as handle:
-              handle.write(target)
-          os.chmod(sys.argv[2], 0o600)
+          env_path = Path('/opt/bridge-school/school-autopilot/autopilot-shadow.env')
+          assert env_path.is_file() and not env_path.is_symlink()
+          dsn = ''
+          for raw in env_path.read_text(encoding='utf-8').splitlines():
+              if raw.startswith('AUTOPILOT_DATABASE_URL='):
+                  dsn = raw.split('=', 1)[1].strip().strip('"').strip("'")
+                  break
+          parsed = urlparse(dsn)
+          assert re.fullmatch(r'ep-floral-field-b1pjs2of(?:-pooler)?(?:\.[a-z0-9-]+)+\.aws\.neon\.tech', parsed.hostname or '')
+
+          with psycopg.connect(dsn, connect_timeout=15, application_name='autopilot-runtime-queue-audit') as conn:
+              with conn.cursor() as cur:
+                  cur.execute("""
+                      SELECT current_user,
+                             has_function_privilege(
+                                 current_user,
+                                 'autopilot.create_shadow_task(text,text,jsonb,integer,bigint,text,text)',
+                                 'EXECUTE'
+                             ),
+                             has_schema_privilege(current_user, 'autopilot', 'USAGE')
+                  """)
+                  user, can_create, schema_usage = cur.fetchone()
+                  print(f'AUTOPILOT_RUNTIME_USER={user}')
+                  print(f'AUTOPILOT_RUNTIME_CREATE_TASK_EXECUTE={"YES" if can_create else "NO"}')
+                  print(f'AUTOPILOT_RUNTIME_SCHEMA_USAGE={"YES" if schema_usage else "NO"}')
+
+                  cur.execute("""
+                      SELECT task_id::text, task_key, status, attempts, max_attempts
+                        FROM autopilot.task_status
+                       WHERE goal_type = 'GITHUB_DRAFT_REPAIR_V1'
+                       ORDER BY created_at DESC
+                       LIMIT 10
+                  """)
+                  rows = cur.fetchall()
+                  print(f'AUTOPILOT_DRAFT_TASK_COUNT_VISIBLE={len(rows)}')
+                  for index, row in enumerate(rows, 1):
+                      task_id, task_key, status, attempts, max_attempts = row
+                      safe_key = re.sub(r'[^A-Za-z0-9._:-]', '_', task_key)[:200]
+                      print(f'AUTOPILOT_DRAFT_TASK_{index}={task_id}|{safe_key}|{status}|{attempts}/{max_attempts}')
+          print('AUTOPILOT_DATABASE_CREDENTIAL_VALUES_EXPOSED=NO')
+          print('AUTOPILOT_DATABASE_MUTATED=NO')
+          print('ORACLE_INSTANCE_STOP_REQUESTED=NO')
           PY
-
-          target_dsn="$(cat "$dsn_file")"
-          result="$(psql "$target_dsn" -X -A -t -F '|' -v ON_ERROR_STOP=1 -c \
-            "SELECT current_database(), current_user, EXISTS (SELECT 1 FROM public.schema_migration WHERE migration_key='0303_autopilot_github_draft_repair'), to_regprocedure('autopilot.create_shadow_task(text,text,jsonb,integer,bigint,text,text)') IS NOT NULL, has_function_privilege(current_user, 'autopilot.create_shadow_task(text,text,jsonb,integer,bigint,text,text)', 'EXECUTE');")"
-          IFS='|' read -r db user m0303 function_present can_execute <<< "$result"
-          [[ "$db" == neondb ]]
-          [[ "$user" != autopilot_runtime_login ]]
-          [[ "$m0303" == t && "$function_present" == t && "$can_execute" == t ]]
-          echo 'AUTOPILOT_TEMP_NEON_OWNER_PREFLIGHT=PASS'
-          echo 'AUTOPILOT_TEMP_NEON_MIGRATION_0303=PASS'
-          echo 'AUTOPILOT_CREATE_SHADOW_TASK_PRIVILEGE=PASS'
-          echo 'AUTOPILOT_DATABASE_PRODUCTION_TARGET_ACCESSED=NO'
-          shred -u "$dsn_file" 2>/dev/null || rm -f "$dsn_file"
