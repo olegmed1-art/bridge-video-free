@@ -143,18 +143,37 @@ jobs:
           release="$root/releases/$EXPECTED_REVISION"
           unit=/etc/systemd/system/$service
 
-          [[ "$(readlink -f "$root/current")" == "$release" ]]
-          [[ "$(cat "$root/current/SOURCE_REVISION")" == "$EXPECTED_REVISION" ]]
-          [[ "$(stat -c '%U:%G:%a' "$root/autopilot-shadow.env")" == root:root:600 ]]
-          [[ -f "$unit" ]]
-          grep -Fx 'Environment=AUTOPILOT_RUNTIME_MODE=SHADOW' "$unit" >/dev/null
+          current_target="$(readlink -f "$root/current" 2>/dev/null || true)"
+          current_revision="$(cat "$root/current/SOURCE_REVISION" 2>/dev/null || true)"
+          env_metadata="$(stat -c '%U:%G:%a' "$root/autopilot-shadow.env" 2>/dev/null || true)"
+          unit_present=NO
+          unit_shadow_mode=NO
+          [[ -f "$unit" ]] && unit_present=YES
+          if [[ -f "$unit" ]] && grep -Fx 'Environment=AUTOPILOT_RUNTIME_MODE=SHADOW' "$unit" >/dev/null; then
+            unit_shadow_mode=YES
+          fi
+
+          printf 'AUTOPILOT_DIAG_EXPECTED_RELEASE=%s\n' "$release"
+          printf 'AUTOPILOT_DIAG_CURRENT_RELEASE=%s\n' "$current_target"
+          printf 'AUTOPILOT_DIAG_EXPECTED_REVISION=%s\n' "$EXPECTED_REVISION"
+          printf 'AUTOPILOT_DIAG_CURRENT_REVISION=%s\n' "$current_revision"
+          printf 'AUTOPILOT_DIAG_ENV_METADATA=%s\n' "$env_metadata"
+          printf 'AUTOPILOT_DIAG_UNIT_PRESENT=%s\n' "$unit_present"
+          printf 'AUTOPILOT_DIAG_UNIT_SHADOW_MODE=%s\n' "$unit_shadow_mode"
+
+          precondition=PASS
+          [[ "$current_target" == "$release" ]] || precondition=FAIL
+          [[ "$current_revision" == "$EXPECTED_REVISION" ]] || precondition=FAIL
+          [[ "$env_metadata" == root:root:600 ]] || precondition=FAIL
+          [[ "$unit_present" == YES ]] || precondition=FAIL
+          [[ "$unit_shadow_mode" == YES ]] || precondition=FAIL
 
           printf 'AUTOPILOT_DIAG_ACTIVE=%s\n' "$(systemctl is-active "$service" 2>/dev/null || true)"
           printf 'AUTOPILOT_DIAG_ENABLED=%s\n' "$(systemctl is-enabled "$service" 2>/dev/null || true)"
-          printf 'AUTOPILOT_DIAG_NRESTARTS=%s\n' "$(systemctl show -p NRestarts --value "$service")"
-          printf 'AUTOPILOT_DIAG_RESULT=%s\n' "$(systemctl show -p Result --value "$service")"
-          printf 'AUTOPILOT_DIAG_EXEC_MAIN_CODE=%s\n' "$(systemctl show -p ExecMainCode --value "$service")"
-          printf 'AUTOPILOT_DIAG_EXEC_MAIN_STATUS=%s\n' "$(systemctl show -p ExecMainStatus --value "$service")"
+          printf 'AUTOPILOT_DIAG_NRESTARTS=%s\n' "$(systemctl show -p NRestarts --value "$service" 2>/dev/null || true)"
+          printf 'AUTOPILOT_DIAG_RESULT=%s\n' "$(systemctl show -p Result --value "$service" 2>/dev/null || true)"
+          printf 'AUTOPILOT_DIAG_EXEC_MAIN_CODE=%s\n' "$(systemctl show -p ExecMainCode --value "$service" 2>/dev/null || true)"
+          printf 'AUTOPILOT_DIAG_EXEC_MAIN_STATUS=%s\n' "$(systemctl show -p ExecMainStatus --value "$service" 2>/dev/null || true)"
 
           journal="$(journalctl -u "$service" --since '2 hours ago' --no-pager -n 300 2>/dev/null || true)"
           count() { grep -Ec "$1" <<<"$journal" || true; }
@@ -174,4 +193,6 @@ jobs:
           printf 'AUTOPILOT_DIAG_TRACEBACK_COUNT=%s\n' "$(count 'Traceback|RuntimeError')"
           echo 'AUTOPILOT_DIAGNOSTIC_READ_ONLY=YES'
           echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
+          printf 'AUTOPILOT_DIAG_PRECONDITION=%s\n' "$precondition"
+          [[ "$precondition" == PASS ]] || exit 74
           REMOTE
