@@ -200,7 +200,8 @@ def _open_json(
     response_limit: int,
     opener: Any | None,
     not_found_ok: bool = False,
-) -> dict[str, object] | None:
+    allow_list: bool = False,
+) -> object | None:
     client = opener or urllib.request.build_opener(_RejectRedirects())
     try:
         with client.open(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
@@ -223,7 +224,7 @@ def _open_json(
         payload = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise BrokerContractError("GITHUB_RESPONSE_INVALID") from exc
-    if not isinstance(payload, dict):
+    if not isinstance(payload, (dict, list) if allow_list else dict):
         raise BrokerContractError("GITHUB_RESPONSE_INVALID")
     return payload
 
@@ -299,7 +300,8 @@ def _api_json(
     body: Mapping[str, object] | None = None,
     opener: Any | None = None,
     not_found_ok: bool = False,
-) -> dict[str, object] | None:
+    allow_list: bool = False,
+) -> object | None:
     request = _installation_request(
         credential, method=method, path=path, body=body
     )
@@ -309,6 +311,7 @@ def _api_json(
         response_limit=API_RESPONSE_LIMIT_BYTES,
         opener=opener,
         not_found_ok=not_found_ok,
+        allow_list=allow_list,
     )
 
 
@@ -343,6 +346,161 @@ def _require_expected_base(
         raise DraftRepairConflictError("GITHUB_BASE_SHA_CHANGED")
 
 
+def _base_commit_contract(
+    payload: object, *, expected_sha: str
+) -> tuple[str, str]:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("sha") != expected_sha
+        or not isinstance(payload.get("tree"), dict)
+        or not isinstance(payload.get("committer"), dict)
+    ):
+        raise BrokerContractError("GITHUB_BASE_COMMIT_INVALID")
+    tree_sha = _sha(
+        payload["tree"].get("sha"), error="GITHUB_BASE_COMMIT_INVALID"
+    )
+    date = payload["committer"].get("date")
+    if not isinstance(date, str):
+        raise BrokerContractError("GITHUB_BASE_COMMIT_INVALID")
+    try:
+        parsed = datetime.fromisoformat(date.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise BrokerContractError("GITHUB_BASE_COMMIT_INVALID") from exc
+    if parsed.tzinfo is None:
+        raise BrokerContractError("GITHUB_BASE_COMMIT_INVALID")
+    return tree_sha, date
+
+
+def _expected_ref(request: DraftRepairRequest) -> str:
+    return f"refs/heads/{request.branch_name}"
+
+
+def _validate_branch(
+    payload: object,
+    request: DraftRepairRequest,
+    *,
+    expected_commit_sha: str,
+) -> None:
+    if (
+        not isinstance(payload, dict)
+        or payload.get("ref") != _expected_ref(request)
+        or not isinstance(payload.get("object"), dict)
+        or payload["object"].get("sha") != expected_commit_sha
+    ):
+        raise DraftRepairConflictError("GITHUB_BRANCH_CHANGED")
+
+
+def _pull_body(request: DraftRepairRequest) -> str:
+    return (
+        "Bounded Phase 3B canary/repair.\n\n"
+        f"Task: `{request.task_key}`\n"
+        f"Action fingerprint: `{request.action_fingerprint}`\n\n"
+        "Draft only. Autopilot merge is forbidden."
+    )
+
+
+def _validate_pull(
+    payload: object,
+    request: DraftRepairRequest,
+    *,
+    expected_commit_sha: str,
+) -> tuple[int, str]:
+    if not isinstance(payload, dict):
+        raise BrokerContractError("GITHUB_PULL_RESPONSE_INVALID")
+    number = payload.get("number")
+    html_url = payload.get("html_url")
+    head = payload.get("head")
+    base = payload.get("base")
+    if (
+        type(number) is not int
+        or not 1 <= number <= 1_000_000
+        or html_url != f"https://github.com/{REPOSITORY_FULL_NAME}/pull/{number}"
+        or payload.get("state") != "open"
+        or payload.get("draft") is not True
+        or payload.get("title") != request.title
+        or payload.get("body") != _pull_body(request)
+        or not isinstance(head, dict)
+        or head.get("ref") != request.branch_name
+        or head.get("sha") != expected_commit_sha
+        or not isinstance(base, dict)
+        or base.get("ref") != "main"
+    ):
+        raise BrokerContractError("GITHUB_PULL_RESPONSE_INVALID")
+    return number, html_url
+
+
+def _existing_pull(
+    credential: InstallationCredential,
+    request: DraftRepairRequest,
+    *,
+    expected_commit_sha: str,
+    opener: Any | None,
+) -> tuple[int, str] | None:
+    query = urllib.parse.urlencode(
+        {
+            "base": "main",
+            "head": f"{REPOSITORY_OWNER}:{request.branch_name}",
+            "per_page": 2,
+            "state": "all",
+        }
+    )
+    payload = _api_json(
+        credential,
+        method="GET",
+        path=f"{REPOSITORY_API_PATH}/pulls?{query}",
+        expected_status=200,
+        opener=opener,
+        allow_list=True,
+    )
+    if not isinstance(payload, list):
+        raise BrokerContractError("GITHUB_PULL_LOOKUP_INVALID")
+    if not payload:
+        return None
+    if len(payload) != 1:
+        raise DraftRepairConflictError("GITHUB_PULL_LOOKUP_AMBIGUOUS")
+    return _validate_pull(
+        payload[0], request, expected_commit_sha=expected_commit_sha
+    )
+
+
+def _create_pull(
+    credential: InstallationCredential,
+    request: DraftRepairRequest,
+    *,
+    expected_commit_sha: str,
+    opener: Any | None,
+) -> tuple[int, str]:
+    body = {
+        "base": "main",
+        "body": _pull_body(request),
+        "draft": True,
+        "head": request.branch_name,
+        "title": request.title,
+    }
+    try:
+        payload = _api_json(
+            credential,
+            method="POST",
+            path=f"{REPOSITORY_API_PATH}/pulls",
+            expected_status=201,
+            body=body,
+            opener=opener,
+        )
+    except DraftRepairConflictError:
+        existing = _existing_pull(
+            credential,
+            request,
+            expected_commit_sha=expected_commit_sha,
+            opener=opener,
+        )
+        if existing is None:
+            raise
+        return existing
+    return _validate_pull(
+        payload, request, expected_commit_sha=expected_commit_sha
+    )
+
+
 def execute_bounded_draft_repair(
     config: BrokerConfig,
     request: DraftRepairRequest,
@@ -350,7 +508,7 @@ def execute_bounded_draft_repair(
     now_epoch: int,
     opener: Any | None = None,
 ) -> dict[str, object]:
-    """Execute the only allowed Phase 3B GitHub write sequence."""
+    """Execute or recover the only allowed Phase 3B GitHub write sequence."""
 
     credential = issue_installation_token(config, now_epoch=now_epoch, opener=opener)
     _require_expected_base(credential, request.expected_base_sha, opener=opener)
@@ -362,12 +520,8 @@ def execute_bounded_draft_repair(
         expected_status=200,
         opener=opener,
     )
-    if not isinstance(commit_payload, dict) or not isinstance(
-        commit_payload.get("tree"), dict
-    ):
-        raise BrokerContractError("GITHUB_BASE_COMMIT_INVALID")
-    base_tree_sha = _sha(
-        commit_payload["tree"].get("sha"), error="GITHUB_BASE_COMMIT_INVALID"
+    base_tree_sha, base_date = _base_commit_contract(
+        commit_payload, expected_sha=request.expected_base_sha
     )
 
     branch_payload = _api_json(
@@ -378,8 +532,6 @@ def execute_bounded_draft_repair(
         opener=opener,
         not_found_ok=True,
     )
-    if branch_payload is not None:
-        raise DraftRepairConflictError("GITHUB_BRANCH_ALREADY_EXISTS")
 
     tree_entries: list[dict[str, str]] = []
     for change in request.changes:
@@ -437,15 +589,22 @@ def execute_bounded_draft_repair(
         raise BrokerContractError("GITHUB_TREE_RESPONSE_INVALID")
     tree_sha = _sha(tree_payload.get("sha"), error="GITHUB_TREE_RESPONSE_INVALID")
 
+    identity = {
+        "name": "Bridge School Autopilot",
+        "email": "noreply@github.com",
+        "date": base_date,
+    }
     new_commit_payload = _api_json(
         credential,
         method="POST",
         path=f"{REPOSITORY_API_PATH}/git/commits",
         expected_status=201,
         body={
-            "message": f"autopilot: bounded repair {request.action_fingerprint[:16]}",
+            "message": f"autopilot: bounded repair {request.action_fingerprint}",
             "parents": [request.expected_base_sha],
             "tree": tree_sha,
+            "author": identity,
+            "committer": identity,
         },
         opener=opener,
     )
@@ -455,69 +614,62 @@ def execute_bounded_draft_repair(
         new_commit_payload.get("sha"), error="GITHUB_COMMIT_RESPONSE_INVALID"
     )
 
-    _require_expected_base(credential, request.expected_base_sha, opener=opener)
+    replayed = branch_payload is not None
+    if branch_payload is not None:
+        _validate_branch(
+            branch_payload, request, expected_commit_sha=new_commit_sha
+        )
+    else:
+        _require_expected_base(
+            credential, request.expected_base_sha, opener=opener
+        )
+        try:
+            ref_payload = _api_json(
+                credential,
+                method="POST",
+                path=f"{REPOSITORY_API_PATH}/git/refs",
+                expected_status=201,
+                body={
+                    "ref": _expected_ref(request),
+                    "sha": new_commit_sha,
+                },
+                opener=opener,
+            )
+        except DraftRepairConflictError:
+            ref_payload = _api_json(
+                credential,
+                method="GET",
+                path=f"{REPOSITORY_API_PATH}/git/ref/heads/{request.branch_name}",
+                expected_status=200,
+                opener=opener,
+            )
+            replayed = True
+        _validate_branch(
+            ref_payload, request, expected_commit_sha=new_commit_sha
+        )
 
-    ref_payload = _api_json(
-        credential,
-        method="POST",
-        path=f"{REPOSITORY_API_PATH}/git/refs",
-        expected_status=201,
-        body={
-            "ref": f"refs/heads/{request.branch_name}",
-            "sha": new_commit_sha,
-        },
-        opener=opener,
-    )
-    expected_ref = f"refs/heads/{request.branch_name}"
-    if (
-        not isinstance(ref_payload, dict)
-        or ref_payload.get("ref") != expected_ref
-        or not isinstance(ref_payload.get("object"), dict)
-        or ref_payload["object"].get("sha") != new_commit_sha
-    ):
-        raise BrokerContractError("GITHUB_REF_RESPONSE_INVALID")
-
-    pull_payload = _api_json(
-        credential,
-        method="POST",
-        path=f"{REPOSITORY_API_PATH}/pulls",
-        expected_status=201,
-        body={
-            "base": "main",
-            "body": (
-                "Bounded Phase 3B canary/repair.\n\n"
-                f"Task: `{request.task_key}`\n"
-                f"Action fingerprint: `{request.action_fingerprint}`\n\n"
-                "Draft only. Autopilot merge is forbidden."
-            ),
-            "draft": True,
-            "head": request.branch_name,
-            "title": request.title,
-        },
-        opener=opener,
-    )
-    if not isinstance(pull_payload, dict):
-        raise BrokerContractError("GITHUB_PULL_RESPONSE_INVALID")
-    number = pull_payload.get("number")
-    html_url = pull_payload.get("html_url")
-    head = pull_payload.get("head")
-    base = pull_payload.get("base")
-    if (
-        type(number) is not int
-        or not 1 <= number <= 1_000_000
-        or html_url != f"https://github.com/{REPOSITORY_FULL_NAME}/pull/{number}"
-        or pull_payload.get("draft") is not True
-        or not isinstance(head, dict)
-        or head.get("ref") != request.branch_name
-        or head.get("sha") != new_commit_sha
-        or not isinstance(base, dict)
-        or base.get("ref") != "main"
-        or base.get("sha") != request.expected_base_sha
-    ):
-        raise BrokerContractError("GITHUB_PULL_RESPONSE_INVALID")
+    existing_pull = None
+    if replayed:
+        existing_pull = _existing_pull(
+            credential,
+            request,
+            expected_commit_sha=new_commit_sha,
+            opener=opener,
+        )
+    if existing_pull is None:
+        number, html_url = _create_pull(
+            credential,
+            request,
+            expected_commit_sha=new_commit_sha,
+            opener=opener,
+        )
+        status_value = "created"
+    else:
+        number, html_url = existing_pull
+        status_value = "existing"
 
     return {
-        "status": "created",
+        "status": status_value,
         "repository": REPOSITORY_FULL_NAME,
         "task_key": request.task_key,
         "action_fingerprint": request.action_fingerprint,
@@ -528,6 +680,7 @@ def execute_bounded_draft_repair(
         "pull_request_number": number,
         "pull_request_url": html_url,
         "draft": True,
+        "replayed": replayed,
         "token_exposed": False,
         "merge_allowed": False,
         "production_mutation": False,
