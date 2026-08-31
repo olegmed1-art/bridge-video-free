@@ -143,14 +143,14 @@ def load_token_broker_config() -> TokenBrokerConfig:
 
     secret = _require_env("AUTOPILOT_TOKEN_BROKER_SECRET")
     bypass = _require_env("AUTOPILOT_VERCEL_BYPASS_SECRET")
-    for value, error in (
-        (secret, "TOKEN_BROKER_SECRET_INVALID"),
-        (bypass, "VERCEL_BYPASS_SECRET_INVALID"),
+    if not 43 <= len(secret) <= 512 or any(
+        character in secret for character in "\r\n"
     ):
-        if not 43 <= len(value) <= 512 or any(
-            character in value for character in "\r\n"
-        ):
-            raise AutopilotContractError(error)
+        raise AutopilotContractError("TOKEN_BROKER_SECRET_INVALID")
+    if not 32 <= len(bypass) <= 512 or any(
+        character in bypass for character in "\r\n"
+    ):
+        raise AutopilotContractError("VERCEL_BYPASS_SECRET_INVALID")
     return TokenBrokerConfig(
         url=raw_url,
         host=host,

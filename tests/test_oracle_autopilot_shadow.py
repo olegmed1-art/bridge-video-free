@@ -880,6 +880,31 @@ def test_shadow_diagnostics_are_read_only_and_secret_free():
         assert forbidden not in workflow
 
 
+def test_one_shot_broker_provision_is_narrow_and_secret_free():
+    workflow = open(
+        ".github/workflows/autopilot-oracle-broker-provision-once.yml",
+        encoding="utf-8",
+    ).read()
+    assert "paths:\n      - '.github/workflows/autopilot-oracle-broker-provision-once.yml'" in workflow
+    assert "vercel project protection enable" in workflow
+    assert "--protection-bypass" in workflow
+    assert "vercel env run -e preview -- node /runner/extract.mjs" in workflow
+    assert "AUTOPILOT_TOKEN_BROKER_SECRET" in workflow
+    assert "VERCEL_AUTOMATION_BYPASS_SECRET" in workflow
+    assert "AUTOPILOT_GITHUB_PRIVATE_KEY" not in workflow
+    assert "install -m 0600 -o root -g root" in workflow
+    assert "AUTOPILOT_SERVICE_REMAINED_ACTIVE=YES" in workflow
+    assert "ORACLE_INSTANCE_STOP_REQUESTED=NO" in workflow
+    assert "docker rm -f" in workflow
+    for forbidden in (
+        "--prod",
+        "systemctl stop",
+        "oci compute instance action",
+        "ghs_",
+    ):
+        assert forbidden not in workflow
+
+
 def test_oracle_power_workflow_has_no_automatic_trigger():
     workflow = open(
         ".github/workflows/oracle-instance-power.yml", encoding="utf-8"
