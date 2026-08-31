@@ -57,7 +57,6 @@ jobs:
     env:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
-      EXPECTED_STAGED_REVISION: e9c9381f0aed388ef72718cdcf67ac9928947aef
       SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
       SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
       SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
@@ -91,9 +90,10 @@ jobs:
           assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', request['request_id'])
           assert request['action'] == 'inspect_shadow_failure'
           assert request['target_host'] == '158.180.47.161'
-          assert request['source_revision'] == os.environ['EXPECTED_STAGED_REVISION']
+          assert re.fullmatch(r'[0-9a-f]{40}', request['source_revision'])
           assert request['no_instance_stop'] is True
           print(f"request_id={request['request_id']}")
+          print(f"source_revision={request['source_revision']}")
           PY
 
       - name: Verify pinned Oracle identity and SSH access
@@ -136,7 +136,7 @@ jobs:
           ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n env EXPECTED_REVISION='$EXPECTED_STAGED_REVISION' bash -s" <<'REMOTE'
+            "sudo -n env EXPECTED_REVISION='${{ steps.request.outputs.source_revision }}' bash -s" <<'REMOTE'
           set -Eeuo pipefail
           service=school-autopilot-shadow.service
           root=/opt/bridge-school/school-autopilot
