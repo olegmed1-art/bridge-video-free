@@ -1,6 +1,6 @@
 # Autopilot Phase 3B — bounded GitHub draft repair
 
-Status: `OWNER_GATES_VERIFIED / TOKEN_BROKER_BUILD`, not installed on Oracle.
+Status: `TOKEN_BROKER_PREVIEW_READY / ORACLE_ADAPTER_NOT_INSTALLED`.
 
 ## Purpose
 
@@ -18,13 +18,18 @@ readback on 2026-08-31 confirmed:
 - GitHub App `Bridge School Oracle Autopilot` (`app_id=4776443`) exists with
   Metadata read, Contents read/write, Pull requests read/write, and Checks read;
 - isolated Vercel project `bridge-school-autopilot`
-  (`prj_KvQo3rPnwNs488hyDiMZ9hMU9d5R`) exists with no Git connection and zero
-  deployments.
+  (`prj_KvQo3rPnwNs488hyDiMZ9hMU9d5R`) has no Git connection and contains one
+  protected Preview deployment, `dpl_AcsA2EbMhCW3Y2iJmrG6keVzRSzH`; project
+  `live` is false and no production domain or alias exists.
 
-The App is still uninstalled and has no private key.  The Vercel project still
-has no deployment or protected secret.  Therefore no GitHub write credential is
-active and the live canary remains blocked until broker deployment and App
-installation readback both pass.
+The App installation is limited to `olegmed1-art/bridge-video-free`. Its RSA
+private key and the separate high-entropy broker ingress secret exist only as
+Preview-scoped Vercel environment variables. The Preview `/healthz` contract
+passed and reports the broker enabled with production mutations disabled.
+Neither secret has been transferred to Oracle, and no credentialed Phase 3B
+adapter is installed there. Therefore the live draft-PR canary remains blocked
+until that separate Oracle credential boundary is explicitly authorized,
+implemented, and verified.
 
 1. Protect `main` with a repository ruleset that requires a pull request and
    blocks force pushes and branch deletion. The Autopilot App must not bypass
@@ -33,7 +38,7 @@ installation readback both pass.
    `olegmed1-art/bridge-video-free`. Grant Metadata read, Contents read/write,
    Pull requests read/write, and Checks read. Do not grant Administration,
    Actions write, Workflows write, Deployments, Secrets, or Members. **App and
-   permissions verified; installation still pending.**
+   permissions and repository-limited installation verified 2026-08-31.**
 
 ## Credential broker boundary
 
@@ -77,4 +82,7 @@ stale SHA, unexpected path, oversized change, or identity mismatch fails closed.
 The first live canary creates only
 `docs/evidence/autopilot/phase3b-canary.md` in its namespaced branch and opens a
 draft PR. It costs no model tokens. The canary is forbidden until both owner
-gates are verified from GitHub primary state.
+gates are verified from GitHub primary state and the separately authorized
+Oracle broker consumer is installed with fail-closed secret handling. The owner
+gates and Preview broker are now verified; the Oracle consumer gate remains
+open, so the canary has not run.

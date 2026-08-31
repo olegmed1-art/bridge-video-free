@@ -79,7 +79,8 @@
     "neon_cost_decision": "DIRECTOR_APPROVED_WITH_FINANCIAL_CAUTION"
   },
   "promotion_blocks": [
-    "main_branch_unprotected",
+    "phase3b_oracle_broker_consumer_not_installed",
+    "phase3b_live_draft_canary_not_proven",
     "actual_oracle_dispatch_latency_not_measured",
     "production_canary_881_not_proven",
     "oracle_idle_stop_guard_627_not_closed"
@@ -318,6 +319,22 @@
       "cost_actual_microusd": 0,
       "production_mutation": false
     },
+    "phase3b_token_broker_preview": {
+      "verified_at": "2026-08-31",
+      "github_app_installation_repository": "olegmed1-art/bridge-video-free",
+      "vercel_project_id": "prj_KvQo3rPnwNs488hyDiMZ9hMU9d5R",
+      "deployment_id": "dpl_AcsA2EbMhCW3Y2iJmrG6keVzRSzH",
+      "deployment_state": "READY",
+      "deployment_target": null,
+      "deployment_aliases": 0,
+      "project_live": false,
+      "project_domains": 0,
+      "health_contract": "PASS",
+      "preview_scoped_secrets_only": true,
+      "oracle_broker_consumer_installed": false,
+      "live_draft_canary_run": false,
+      "production_mutation": false
+    },
     "final_queue": {
       "ready": 0,
       "running": 0,
@@ -353,7 +370,7 @@
     "keep_oracle_instance_running_until_explicit_director_order",
     "keep_autopilot_in_shadow_only_mode_and_do_not_merge_or_promote_to_production",
     "observe_phase3a_read_only_ci_triage_without_automatic_github_mutation",
-    "design_phase3b_own_draft_branch_repair_as_a_separate_bounded_write_gate",
+    "authorize_and_install_the_bounded_phase3b_oracle_broker_consumer_before_any_live_draft_canary",
     "complete_scheduled_24_hour_shadow_stability_checkpoint_without_media_or_model_workloads",
     "renew_or_replace_the_temporary_runtime_login_before_2026_09_06",
     "complete_production_canary_881_and_idle_guard_627_before_any_production_promotion"
