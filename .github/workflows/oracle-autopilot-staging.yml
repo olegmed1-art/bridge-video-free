@@ -150,6 +150,7 @@ jobs:
           tar -czf "$bundle" \
             AUTOPILOT_SOURCE_REVISION \
             oracle_autopilot \
+            autopilot_phase3b \
             deploy/oracle-autopilot/school-autopilot-shadow.service \
             ops/oracle_autopilot_shadow_install.sh
           echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
@@ -222,6 +223,7 @@ jobs:
           install -d -m 0700 -o root -g root "$work/source"
           tar -xzf "$AUTOPILOT_BUNDLE_PATH" -C "$work/source"
           test -f "$work/source/oracle_autopilot/worker.py"
+          test -f "$work/source/autopilot_phase3b/policy.py"
           test -f "$work/source/ops/oracle_autopilot_shadow_install.sh"
           database_url="$(cat "$work/database-url")"
           active="$(systemctl is-active "$service" 2>/dev/null || true)"

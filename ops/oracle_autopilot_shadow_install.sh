@@ -48,6 +48,7 @@ fi
 [[ "$(cat "$REPO_DIR/AUTOPILOT_SOURCE_REVISION")" == "$SOURCE_REVISION" ]] \
   || die "source revision marker does not match AUTOPILOT_SOURCE_REVISION"
 [[ -f "$REPO_DIR/oracle_autopilot/worker.py" ]] || die "Oracle Autopilot worker code is missing"
+[[ -f "$REPO_DIR/autopilot_phase3b/policy.py" ]] || die "Phase 3B policy code is missing"
 [[ -f "$SERVICE_SRC" ]] || die "systemd unit template is missing"
 command -v python3 >/dev/null 2>&1 || die "python3 is required"
 command -v systemctl >/dev/null 2>&1 || die "systemd is required"
@@ -77,6 +78,8 @@ log "Install immutable Autopilot source release"
 install -d -m 0755 -o root -g root "$RELEASE_DIR"
 install -d -m 0755 -o root -g root "$RELEASE_DIR/oracle_autopilot"
 install -m 0644 -o root -g root "$REPO_DIR"/oracle_autopilot/*.py "$RELEASE_DIR/oracle_autopilot/"
+install -d -m 0755 -o root -g root "$RELEASE_DIR/autopilot_phase3b"
+install -m 0644 -o root -g root "$REPO_DIR"/autopilot_phase3b/*.py "$RELEASE_DIR/autopilot_phase3b/"
 printf '%s\n' "$SOURCE_REVISION" > "$RELEASE_DIR/SOURCE_REVISION"
 chmod 0444 "$RELEASE_DIR/SOURCE_REVISION"
 

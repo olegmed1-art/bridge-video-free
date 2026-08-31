@@ -1,6 +1,6 @@
 # Autopilot Phase 3B — bounded GitHub draft repair
 
-Status: `BOUNDED_BROKER_PREVIEW_READY / ORACLE_CONSUMER_PENDING`.
+Status: `ORACLE_CONSUMER_SOURCE_READY / ACTIVATION_PENDING`.
 
 ## Purpose
 
@@ -29,9 +29,10 @@ private key and the separate high-entropy broker ingress secret exist only as
 Preview-scoped Vercel environment variables. The bounded deployment is pinned
 to source `2735ecbb4a455bec58007064210913c341795896`, keeps the installation
 token inside the broker, and passed the versioned `/healthz` contract. Neither
-secret has been transferred to Oracle, and no credentialed Phase 3B adapter is
-installed there. Therefore the live draft-PR canary remains blocked until the
-separate Oracle credential boundary is explicitly authorized and verified.
+secret has been transferred to Oracle. The v1.4 Oracle consumer source and
+temporary-branch migration are now independently verified, but neither is
+installed yet. Therefore the live draft-PR canary remains blocked until the
+secret boundary, migration, immutable release, and activation are verified.
 
 1. Protect `main` with a repository ruleset that requires a pull request and
    blocks force pushes and branch deletion. The Autopilot App must not bypass
@@ -63,6 +64,15 @@ Redirects, unexpected permissions, invalid repository identity,
 oversized responses, weak configuration, and stale/long-lived tokens fail
 closed. Oracle never receives the App private key or installation token.
 
+The Oracle consumer accepts no arbitrary URL. Its root-owned environment pins
+one exact Preview deployment path and contains separate broker-ingress and
+Vercel automation-bypass secrets. It sends the complete locked task manifest,
+rejects all redirects, caps request/response sizes, and accepts only an exact
+token-free evidence object whose repository, task key, fingerprint, base SHA,
+branch, draft PR identity, and operation count match the task. Migration `0303`
+adds only `GITHUB_DRAFT_REPAIR_V1`, `github.draft_repair`, and
+`GITHUB_DRAFT_REPAIR_EVIDENCE` to the temporary Autopilot schema.
+
 ## Pilot policy
 
 - repository: exactly `olegmed1-art/bridge-video-free`;
@@ -91,6 +101,6 @@ The first live canary creates only
 draft PR. It costs no model tokens. The canary is forbidden until both owner
 gates are verified from GitHub primary state, the bounded broker source is
 reviewed and deployed to Preview, and the separately authorized Oracle broker
-consumer is installed with fail-closed secret handling. The owner and bounded
-Preview gates are verified; only the Oracle consumer gate remains open, so the
-canary has not run.
+consumer is installed with fail-closed secret handling. The owner, bounded
+Preview, and consumer-source gates are verified; migration, secret transfer,
+immutable Oracle activation, and one live canary remain open.

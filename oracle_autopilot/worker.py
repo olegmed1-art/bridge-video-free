@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import socket
 import threading
 import time
@@ -34,6 +35,7 @@ from .contract import (
     AutopilotContractError,
     AutopilotRetryableError,
     ClaimedTask,
+    build_draft_repair_broker_payload,
     claimed_task_from_row,
     validate_task_contract,
 )
@@ -76,6 +78,12 @@ GITHUB_HARD_FAILURES = frozenset(
         "timed_out",
     }
 )
+TOKEN_BROKER_RESPONSE_LIMIT_BYTES = 32_768
+TOKEN_BROKER_REQUEST_LIMIT_BYTES = 65_536
+TOKEN_BROKER_PATH = "/v1/github/draft-repair"
+TOKEN_BROKER_HOST_PATTERN = re.compile(
+    r"bridge-school-autopilot-[a-z0-9]+-olegmed1-4368s-projects\.vercel\.app"
+)
 
 
 class _RejectRedirects(urllib.request.HTTPRedirectHandler):
@@ -83,6 +91,21 @@ class _RejectRedirects(urllib.request.HTTPRedirectHandler):
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
         raise AutopilotContractError("GITHUB_API_REDIRECT_REJECTED")
+
+
+class _RejectBrokerRedirects(urllib.request.HTTPRedirectHandler):
+    """Reject every broker redirect before credentials can change origin."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        raise AutopilotContractError("TOKEN_BROKER_REDIRECT_REJECTED")
+
+
+@dataclass(frozen=True)
+class TokenBrokerConfig:
+    url: str
+    host: str
+    secret: str
+    vercel_bypass_secret: str
 
 
 @dataclass(frozen=True)
@@ -99,6 +122,41 @@ def _require_env(name: str) -> str:
     if not value:
         raise RuntimeError(f"{name} is required")
     return value
+
+
+def load_token_broker_config() -> TokenBrokerConfig:
+    raw_url = _require_env("AUTOPILOT_TOKEN_BROKER_URL")
+    parsed = urllib.parse.urlsplit(raw_url)
+    host = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme != "https"
+        or TOKEN_BROKER_HOST_PATTERN.fullmatch(host) is None
+        or parsed.path != TOKEN_BROKER_PATH
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.port is not None
+        or parsed.query
+        or parsed.fragment
+        or raw_url != f"https://{host}{TOKEN_BROKER_PATH}"
+    ):
+        raise AutopilotContractError("TOKEN_BROKER_ORIGIN_INVALID")
+
+    secret = _require_env("AUTOPILOT_TOKEN_BROKER_SECRET")
+    bypass = _require_env("AUTOPILOT_VERCEL_BYPASS_SECRET")
+    for value, error in (
+        (secret, "TOKEN_BROKER_SECRET_INVALID"),
+        (bypass, "VERCEL_BYPASS_SECRET_INVALID"),
+    ):
+        if not 43 <= len(value) <= 512 or any(
+            character in value for character in "\r\n"
+        ):
+            raise AutopilotContractError(error)
+    return TokenBrokerConfig(
+        url=raw_url,
+        host=host,
+        secret=secret,
+        vercel_bypass_secret=bypass,
+    )
 
 
 def validate_neon_direct_dsn(raw: str) -> str:
@@ -507,6 +565,119 @@ def fetch_github_ci_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _validate_token_broker_result(
+    payload: Any,
+    *,
+    request_payload: dict[str, Any],
+    broker_host: str,
+) -> dict[str, Any]:
+    expected_keys = {
+        "action_fingerprint",
+        "base_sha",
+        "branch_name",
+        "commit_sha",
+        "draft",
+        "manifest_version",
+        "merge_allowed",
+        "operation_count",
+        "production_mutation",
+        "pull_request_number",
+        "pull_request_url",
+        "replayed",
+        "repository",
+        "status",
+        "task_key",
+        "token_exposed",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected_keys:
+        raise AutopilotContractError("TOKEN_BROKER_RESPONSE_INVALID")
+    pull_number = payload.get("pull_request_number")
+    commit_sha = payload.get("commit_sha")
+    replayed = payload.get("replayed")
+    status_value = payload.get("status")
+    expected_operation_count = 8 + 2 * len(request_payload["changes"])
+    if (
+        status_value not in {"created", "existing"}
+        or type(replayed) is not bool
+        or (status_value == "existing" and replayed is not True)
+        or payload.get("repository") != request_payload["repository"]
+        or payload.get("task_key") != request_payload["task_key"]
+        or payload.get("action_fingerprint") != request_payload["action_fingerprint"]
+        or payload.get("manifest_version") != 1
+        or payload.get("base_sha") != request_payload["expected_base_sha"]
+        or payload.get("branch_name") != request_payload["branch_name"]
+        or not isinstance(commit_sha, str)
+        or re.fullmatch(r"[0-9a-f]{40}", commit_sha) is None
+        or type(pull_number) is not int
+        or not 1 <= pull_number <= 1_000_000
+        or payload.get("pull_request_url")
+        != f"https://github.com/{request_payload['repository']}/pull/{pull_number}"
+        or payload.get("draft") is not True
+        or payload.get("token_exposed") is not False
+        or payload.get("merge_allowed") is not False
+        or payload.get("production_mutation") is not False
+        or payload.get("operation_count") != expected_operation_count
+    ):
+        raise AutopilotContractError("TOKEN_BROKER_RESPONSE_INVALID")
+
+    result = dict(payload)
+    result.update(
+        {
+            "broker_host": broker_host,
+            "http_method": "POST",
+            "model_calls": 0,
+            "cost_actual_microusd": 0,
+        }
+    )
+    return result
+
+
+def execute_bounded_draft_repair(goal_json: dict[str, Any]) -> dict[str, Any]:
+    """Call only the pinned Preview broker and retain token-free evidence."""
+
+    request_payload = build_draft_repair_broker_payload(goal_json)
+    config = load_token_broker_config()
+    encoded = json.dumps(
+        request_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    if len(encoded) > TOKEN_BROKER_REQUEST_LIMIT_BYTES:
+        raise AutopilotContractError("TOKEN_BROKER_REQUEST_TOO_LARGE")
+    request = urllib.request.Request(
+        config.url,
+        data=encoded,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {config.secret}",
+            "Content-Type": "application/json",
+            "User-Agent": "bridge-school-autopilot-oracle/1.4",
+            "X-Vercel-Protection-Bypass": config.vercel_bypass_secret,
+        },
+    )
+    try:
+        opener = urllib.request.build_opener(_RejectBrokerRedirects())
+        with opener.open(request, timeout=30) as response:
+            if response.status != 200 or response.geturl() != config.url:
+                raise AutopilotContractError("TOKEN_BROKER_RESPONSE_INVALID")
+            raw = response.read(TOKEN_BROKER_RESPONSE_LIMIT_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        if exc.code in {408, 425, 429} or 500 <= exc.code <= 599:
+            raise AutopilotRetryableError("TOKEN_BROKER_TRANSIENT_ERROR") from exc
+        if exc.code == 409:
+            raise AutopilotContractError("TOKEN_BROKER_PRECONDITION_FAILED") from exc
+        raise AutopilotContractError("TOKEN_BROKER_HTTP_ERROR") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise AutopilotRetryableError("TOKEN_BROKER_TRANSIENT_ERROR") from exc
+    if len(raw) > TOKEN_BROKER_RESPONSE_LIMIT_BYTES:
+        raise AutopilotContractError("TOKEN_BROKER_RESPONSE_TOO_LARGE")
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AutopilotContractError("TOKEN_BROKER_RESPONSE_INVALID") from exc
+    return _validate_token_broker_result(
+        payload, request_payload=request_payload, broker_host=config.host
+    )
+
+
 def _complete(
     config: WorkerConfig,
     task: ClaimedTask,
@@ -585,6 +756,19 @@ def execute_task(config: WorkerConfig, task: ClaimedTask) -> None:
             config,
             task,
             evidence_class="GITHUB_CI_READ_ONLY_SNAPSHOT",
+            summary=summary,
+        )
+        return
+
+    if task.goal_type == "GITHUB_DRAFT_REPAIR_V1":
+        summary = execute_bounded_draft_repair(task.goal_json)
+        summary["task_id"] = task.task_id
+        summary["task_kind"] = task.goal_type
+        summary["runtime"] = "ORACLE_RESIDENT"
+        _complete(
+            config,
+            task,
+            evidence_class="GITHUB_DRAFT_REPAIR_EVIDENCE",
             summary=summary,
         )
         return

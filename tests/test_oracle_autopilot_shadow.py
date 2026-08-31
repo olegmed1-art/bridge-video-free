@@ -10,16 +10,25 @@ import pytest
 from oracle_autopilot.contract import (
     AutopilotContractError,
     ClaimedTask,
+    build_draft_repair_broker_payload,
     claimed_task_from_row,
     validate_task_contract,
 )
 from oracle_autopilot.worker import (
     WorkerConfig,
     drain_ready,
+    execute_bounded_draft_repair,
     fetch_github_ci_snapshot,
     fetch_github_pr_snapshot,
     load_config,
+    load_token_broker_config,
     validate_neon_direct_dsn,
+)
+from autopilot_phase3b.policy import (
+    FileChange,
+    RepairRequest,
+    expected_branch_name,
+    repair_fingerprint,
 )
 
 
@@ -45,6 +54,42 @@ def _task(**overrides):
     }
     values.update(overrides)
     return ClaimedTask(**values)
+
+
+def _draft_goal(**overrides):
+    task_key = "phase3b-live-canary-20260831-01"
+    values = {
+        "task_key": task_key,
+        "repository": "olegmed1-art/bridge-video-free",
+        "base_branch": "main",
+        "expected_base_sha": "a" * 40,
+        "branch_name": expected_branch_name(task_key),
+        "title": "[Autopilot draft] Phase 3B live canary",
+        "changes": [
+            {
+                "path": "docs/evidence/autopilot/phase3b-canary.md",
+                "operation": "CREATE",
+                "content_utf8": "Bounded Phase 3B canary.\n",
+                "expected_blob_sha": None,
+            }
+        ],
+        "require_draft": True,
+        "allow_merge": False,
+        "allow_force_push": False,
+        "production_mutation": False,
+    }
+    request = RepairRequest(
+        task_key=values["task_key"],
+        repository=values["repository"],
+        base_branch=values["base_branch"],
+        expected_base_sha=values["expected_base_sha"],
+        branch_name=values["branch_name"],
+        title=values["title"],
+        changes=tuple(FileChange(**change) for change in values["changes"]),
+    )
+    values["action_fingerprint"] = repair_fingerprint(request)
+    values.update(overrides)
+    return values
 
 
 def test_direct_neon_dsn_is_required_for_listen_notify(monkeypatch):
@@ -181,6 +226,189 @@ def test_github_ci_task_is_exactly_bounded():
                 current_step_key="github.pr.snapshot",
             )
         )
+
+
+def test_github_draft_repair_task_is_exactly_bounded():
+    goal = _draft_goal()
+    task = _task(
+        goal_type="GITHUB_DRAFT_REPAIR_V1",
+        goal_json=goal,
+        current_step_key="github.draft_repair",
+    )
+    validate_task_contract(task)
+    payload = build_draft_repair_broker_payload(goal)
+    assert payload["manifest_version"] == 1
+    assert len(payload["action_fingerprint"]) == 64
+
+    for bad_goal in (
+        {**goal, "allow_merge": True},
+        {**goal, "branch_name": "autopilot/repair/forged"},
+        {**goal, "command": "id"},
+    ):
+        with pytest.raises(AutopilotContractError):
+            validate_task_contract(
+                _task(
+                    goal_type="GITHUB_DRAFT_REPAIR_V1",
+                    goal_json=bad_goal,
+                    current_step_key="github.draft_repair",
+                )
+            )
+
+
+def test_token_broker_config_pins_preview_origin(monkeypatch):
+    env = {
+        "AUTOPILOT_TOKEN_BROKER_URL": (
+            "https://bridge-school-autopilot-cslfiz83g-"
+            "olegmed1-4368s-projects.vercel.app/v1/github/draft-repair"
+        ),
+        "AUTOPILOT_TOKEN_BROKER_SECRET": "s" * 64,
+        "AUTOPILOT_VERCEL_BYPASS_SECRET": "b" * 64,
+    }
+    with patch.dict(os.environ, env, clear=True):
+        config = load_token_broker_config()
+    assert config.host.endswith("-olegmed1-4368s-projects.vercel.app")
+
+    with patch.dict(
+        os.environ,
+        {**env, "AUTOPILOT_TOKEN_BROKER_URL": "https://example.com/v1/github/draft-repair"},
+        clear=True,
+    ):
+        with pytest.raises(AutopilotContractError, match="ORIGIN_INVALID"):
+            load_token_broker_config()
+
+
+def test_bounded_draft_repair_posts_only_to_pinned_broker(monkeypatch):
+    goal = _draft_goal()
+    request_payload = build_draft_repair_broker_payload(goal)
+    response_payload = {
+        "status": "created",
+        "repository": goal["repository"],
+        "task_key": goal["task_key"],
+        "action_fingerprint": request_payload["action_fingerprint"],
+        "manifest_version": 1,
+        "base_sha": goal["expected_base_sha"],
+        "branch_name": goal["branch_name"],
+        "commit_sha": "b" * 40,
+        "pull_request_number": 1001,
+        "pull_request_url": "https://github.com/olegmed1-art/bridge-video-free/pull/1001",
+        "draft": True,
+        "replayed": False,
+        "token_exposed": False,
+        "merge_allowed": False,
+        "production_mutation": False,
+        "operation_count": 10,
+    }
+    broker_url = (
+        "https://bridge-school-autopilot-cslfiz83g-"
+        "olegmed1-4368s-projects.vercel.app/v1/github/draft-repair"
+    )
+    observed = {}
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def geturl(self):
+            return broker_url
+
+        def read(self, limit):
+            observed["read_limit"] = limit
+            return json.dumps(response_payload).encode()
+
+    class Opener:
+        @staticmethod
+        def open(request, timeout):
+            observed.update(
+                {
+                    "url": request.full_url,
+                    "method": request.get_method(),
+                    "authorization": request.get_header("Authorization"),
+                    "bypass": request.get_header("X-vercel-protection-bypass"),
+                    "timeout": timeout,
+                    "request": json.loads(request.data),
+                }
+            )
+            return Response()
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: Opener())
+    with patch.dict(
+        os.environ,
+        {
+            "AUTOPILOT_TOKEN_BROKER_URL": broker_url,
+            "AUTOPILOT_TOKEN_BROKER_SECRET": "s" * 64,
+            "AUTOPILOT_VERCEL_BYPASS_SECRET": "b" * 64,
+        },
+        clear=True,
+    ):
+        summary = execute_bounded_draft_repair(goal)
+
+    assert summary["pull_request_number"] == 1001
+    assert summary["token_exposed"] is False
+    assert observed == {
+        "url": broker_url,
+        "method": "POST",
+        "authorization": f"Bearer {'s' * 64}",
+        "bypass": "b" * 64,
+        "timeout": 30,
+        "request": request_payload,
+        "read_limit": 32_769,
+    }
+
+
+def test_bounded_draft_repair_rejects_forged_evidence(monkeypatch):
+    goal = _draft_goal()
+    request_payload = build_draft_repair_broker_payload(goal)
+    response_payload = {
+        "status": "created",
+        "repository": goal["repository"],
+        "task_key": goal["task_key"],
+        "action_fingerprint": request_payload["action_fingerprint"],
+        "manifest_version": 1,
+        "base_sha": goal["expected_base_sha"],
+        "branch_name": goal["branch_name"],
+        "commit_sha": "b" * 40,
+        "pull_request_number": 1001,
+        "pull_request_url": "https://github.com/olegmed1-art/bridge-video-free/pull/1001",
+        "draft": True,
+        "replayed": False,
+        "token_exposed": True,
+        "merge_allowed": False,
+        "production_mutation": False,
+        "operation_count": 10,
+    }
+    broker_url = (
+        "https://bridge-school-autopilot-cslfiz83g-"
+        "olegmed1-4368s-projects.vercel.app/v1/github/draft-repair"
+    )
+
+    class Response:
+        status = 200
+
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def geturl(self): return broker_url
+        def read(self, _limit): return json.dumps(response_payload).encode()
+
+    class Opener:
+        open = staticmethod(lambda *_args, **_kwargs: Response())
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: Opener())
+    with patch.dict(
+        os.environ,
+        {
+            "AUTOPILOT_TOKEN_BROKER_URL": broker_url,
+            "AUTOPILOT_TOKEN_BROKER_SECRET": "s" * 64,
+            "AUTOPILOT_VERCEL_BYPASS_SECRET": "b" * 64,
+        },
+        clear=True,
+    ):
+        with pytest.raises(AutopilotContractError, match="RESPONSE_INVALID"):
+            execute_bounded_draft_repair(goal)
 
 
 def test_github_pr_snapshot_uses_bounded_public_get(monkeypatch):
@@ -528,8 +756,9 @@ def test_worker_source_has_no_arbitrary_execution_primitives():
     source = open("oracle_autopilot/worker.py", encoding="utf-8").read()
     for forbidden in ("subprocess", "os.system", "shell=True", "exec(", "eval("):
         assert forbidden not in source
-    assert "Authorization" not in source
     assert "GITHUB_TOKEN" not in source
+    assert "ghs_" not in source
+    assert "X-Vercel-Protection-Bypass" in source
 
 
 def test_systemd_unit_is_shadow_only_and_resource_bounded():
@@ -544,6 +773,10 @@ def test_systemd_unit_is_shadow_only_and_resource_bounded():
     assert "WorkingDirectory=/opt/bridge-school/school-autopilot/current" in unit
     assert "WorkingDirectory=/opt/bridge-school/bridge-video-free" not in unit
     assert "ReadWritePaths=/opt/bridge-school/school-autopilot/runtime" in unit
+    assert (
+        "EnvironmentFile=/opt/bridge-school/school-autopilot/autopilot-broker.env"
+        in unit
+    )
 
 
 def test_staging_installs_an_immutable_isolated_source_release():
@@ -556,6 +789,7 @@ def test_staging_installs_an_immutable_isolated_source_release():
     assert 'staging refuses to replace an active service' in installer
     assert 'staging refuses to retain an enabled service' in installer
     assert 'activated=0 inactive=1 disabled=1' in installer
+    assert '"$REPO_DIR"/autopilot_phase3b/*.py' in installer
 
 
 def test_staging_update_stops_only_autopilot_and_rolls_back_on_failure():

@@ -91,6 +91,11 @@ PostgreSQL 18 migration package for the School of Sports Bridge.
 - `0301_autopilot_github_pr_read_only.sql` — first real external capability:
   an exact-head, draft-only, zero-cost public GitHub PR snapshot executed by the
   Oracle worker without credentials or mutation.
+- `0302_autopilot_github_ci_read_only.sql` — exact-head, zero-cost public CI
+  triage with bounded failure evidence and no credential or mutation.
+- `0303_autopilot_github_draft_repair.sql` — Preview-brokered bounded repair:
+  one canonical manifest, one namespaced branch, one draft PR, and token-free
+  retained evidence; merge, force push, `main`, and production stay forbidden.
 - `rollbacks/0056_universal_video_queue.sql` — fail-closed rollback; refuses to remove a non-empty queue.
 
 The exact production state is the `schema_migration` registry in Neon, protected by migration checksums.
