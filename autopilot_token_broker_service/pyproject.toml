@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling==1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bridge-school-autopilot-token-broker"
+version = "0.1.0"
+description = "Isolated GitHub App installation-token broker for School Autopilot Phase 3B"
+requires-python = ">=3.12"
+dependencies = [
+  "cryptography==46.0.0",
+  "fastapi==0.141.1",
+  "pydantic>=2.12,<3",
+  "uvicorn[standard]==0.52.2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["broker_app"]
+
+[tool.vercel]
+entrypoint = "broker_app.main:app"

@@ -1,6 +1,6 @@
 # Autopilot Phase 3B — bounded GitHub draft repair
 
-Status: `PREPARED_OWNER_GATE`, not installed on Oracle.
+Status: `OWNER_GATES_VERIFIED / TOKEN_BROKER_BUILD`, not installed on Oracle.
 
 ## Purpose
 
@@ -10,18 +10,46 @@ launch Video or TRAIN, or receive an unrestricted user token.
 
 ## Confirmed external boundary
 
-As reconciled on 2026-08-30, GitHub reports `main.protected=false` and no active
-repository rulesets. No separate GitHub App identity for Oracle is present in
-the repository or the staged Autopilot contract. Therefore no GitHub write
-credential may be installed until both owner gates below are complete.
+The original 2026-08-30 owner gates are now complete.  Fresh primary-state
+readback on 2026-08-31 confirmed:
+
+- active repository ruleset `21895987` protects the default branch, requires a
+  pull request, and blocks deletion and non-fast-forward updates with no bypass;
+- GitHub App `Bridge School Oracle Autopilot` (`app_id=4776443`) exists with
+  Metadata read, Contents read/write, Pull requests read/write, and Checks read;
+- isolated Vercel project `bridge-school-autopilot`
+  (`prj_KvQo3rPnwNs488hyDiMZ9hMU9d5R`) exists with no Git connection and zero
+  deployments.
+
+The App is still uninstalled and has no private key.  The Vercel project still
+has no deployment or protected secret.  Therefore no GitHub write credential is
+active and the live canary remains blocked until broker deployment and App
+installation readback both pass.
 
 1. Protect `main` with a repository ruleset that requires a pull request and
    blocks force pushes and branch deletion. The Autopilot App must not bypass
-   that ruleset.
+   that ruleset. **Verified 2026-08-31.**
 2. Create and install a dedicated GitHub App only on
    `olegmed1-art/bridge-video-free`. Grant Metadata read, Contents read/write,
    Pull requests read/write, and Checks read. Do not grant Administration,
-   Actions write, Workflows write, Deployments, Secrets, or Members.
+   Actions write, Workflows write, Deployments, Secrets, or Members. **App and
+   permissions verified; installation still pending.**
+
+## Credential broker boundary
+
+`autopilot_token_broker_service/` is the isolated Vercel source root.  It may:
+
+- keep the GitHub App RSA private key only in a Preview-scoped Vercel secret;
+- authenticate the Oracle caller with a separate high-entropy ingress secret;
+- mint an installation token for exactly `olegmed1-art/bridge-video-free`;
+- request only Checks read, Contents write, and Pull requests write;
+- return a token accepted only when GitHub proves the exact repository,
+  permissions, and an expiry no more than 65 minutes away.
+
+It has no merge, ref-update, ref-delete, Actions, Deployments, or production
+endpoint.  Redirects, unexpected permissions, invalid repository identity,
+oversized responses, weak configuration, and stale/long-lived tokens fail
+closed.  Oracle never receives the App private key.
 
 ## Pilot policy
 
