@@ -146,15 +146,68 @@ jobs:
           vercel link --yes --project "$VERCEL_PROJECT" --scope "$VERCEL_SCOPE" >/dev/null
 
           node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('base64url'))" > /tmp/broker-secret
-          vercel env add AUTOPILOT_TOKEN_BROKER_SECRET preview --sensitive --force \
-            --scope "$VERCEL_SCOPE" < /tmp/broker-secret >/dev/null
-
-          vercel project protection enable "$VERCEL_PROJECT" --protection-bypass \
-            --scope "$VERCEL_SCOPE" --format json > /tmp/protection.json
           node - <<'NODE'
           const fs = require('node:fs');
-          const payload = JSON.parse(fs.readFileSync('/tmp/protection.json', 'utf8'));
-          const secret = payload && payload.protectionBypass;
+          const path = require('node:path');
+          const home = process.env.HOME;
+          const candidates = [
+            path.join(home, '.local/share/com.vercel.cli/auth.json'),
+            path.join(home, '.vercel/auth.json'),
+          ];
+          let token = '';
+          for (const candidate of candidates) {
+            if (!fs.existsSync(candidate)) continue;
+            const payload = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+            if (typeof payload.token === 'string') token = payload.token;
+          }
+          if (!/^[A-Za-z0-9._-]{20,512}$/.test(token)) {
+            throw new Error('Vercel CLI credential unavailable');
+          }
+          fs.writeFileSync('/tmp/vercel-token', token, {encoding: 'utf8', flag: 'wx', mode: 0o600});
+
+          const broker = fs.readFileSync('/tmp/broker-secret', 'utf8');
+          if (!/^[A-Za-z0-9_-]{43,512}$/.test(broker)) {
+            throw new Error('generated broker secret invalid');
+          }
+          fs.writeFileSync('/tmp/env-request.json', JSON.stringify([{
+            key: 'AUTOPILOT_TOKEN_BROKER_SECRET',
+            value: broker,
+            type: 'sensitive',
+            target: ['preview'],
+            comment: 'Oracle Autopilot Preview broker ingress',
+          }]), {encoding: 'utf8', flag: 'wx', mode: 0o600});
+          fs.writeFileSync('/tmp/protection-request.json', JSON.stringify({
+            generate: {note: 'Oracle Autopilot Preview canary'},
+          }), {encoding: 'utf8', flag: 'wx', mode: 0o600});
+          NODE
+
+          vercel_token="$(cat /tmp/vercel-token)"
+          curl -fsS --max-time 30 --request POST \
+            "https://api.vercel.com/v10/projects/$VERCEL_PROJECT/env?upsert=true&slug=$VERCEL_SCOPE" \
+            -H "Authorization: Bearer $vercel_token" \
+            -H 'Content-Type: application/json' \
+            --data-binary @/tmp/env-request.json > /tmp/env-response.json
+          curl -fsS --max-time 30 --request PATCH \
+            "https://api.vercel.com/v1/projects/$VERCEL_PROJECT/protection-bypass?slug=$VERCEL_SCOPE" \
+            -H "Authorization: Bearer $vercel_token" \
+            -H 'Content-Type: application/json' \
+            --data-binary @/tmp/protection-request.json > /tmp/protection-response.json
+          unset vercel_token
+
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const envPayload = JSON.parse(fs.readFileSync('/tmp/env-response.json', 'utf8'));
+          const entries = Array.isArray(envPayload.created)
+            ? envPayload.created
+            : [envPayload.created];
+          if (!entries.some(item => item && item.key === 'AUTOPILOT_TOKEN_BROKER_SECRET')) {
+            throw new Error('broker environment upsert response invalid');
+          }
+          if (Array.isArray(envPayload.failed) && envPayload.failed.length !== 0) {
+            throw new Error('broker environment upsert reported failures');
+          }
+          const protection = JSON.parse(fs.readFileSync('/tmp/protection-response.json', 'utf8'));
+          const secret = protection && protection.protectionBypass;
           if (typeof secret !== 'string' || !/^[A-Za-z0-9]{32}$/.test(secret)) {
             throw new Error('automation bypass response invalid');
           }
