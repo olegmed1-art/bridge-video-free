@@ -79,6 +79,7 @@
     "neon_cost_decision": "DIRECTOR_APPROVED_WITH_FINANCIAL_CAUTION"
   },
   "promotion_blocks": [
+    "main_branch_unprotected",
     "phase3b_oracle_broker_consumer_not_installed",
     "phase3b_live_draft_canary_not_proven",
     "actual_oracle_dispatch_latency_not_measured",
