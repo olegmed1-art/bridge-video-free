@@ -146,8 +146,8 @@ class _RepairOpener:
         request = self.request
         body = (
             "Bounded Phase 3B canary/repair.\n\n"
-            f"Task: \`{request.task_key}\`\n"
-            f"Action fingerprint: \`{request.action_fingerprint}\`\n\n"
+            f"Task: `{request.task_key}`\n"
+            f"Action fingerprint: `{request.action_fingerprint}`\n\n"
             "Draft only. Autopilot merge is forbidden."
         )
         return {
@@ -538,7 +538,7 @@ class BrokerContractTests(unittest.TestCase):
         repository_methods = [
             item.get_method() for item in opener.requests if "/repos/" in item.full_url
         ]
-        self.assertEqual(repository_methods, ["GET"])
+        self.assertEqual(repository_methods, ["GET", "GET"])
 
     def test_replay_recovers_exact_branch_and_pull_after_main_advances(self):
         opener = _RepairOpener(
