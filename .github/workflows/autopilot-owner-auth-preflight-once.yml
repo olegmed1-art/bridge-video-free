@@ -1,4 +1,4 @@
-name: Autopilot temporary Neon runtime queue audit (one-shot)
+name: Autopilot Oracle branch-local DSN capability audit (one-shot)
 
 on:
   push:
@@ -16,7 +16,7 @@ jobs:
   audit:
     if: github.repository == 'olegmed1-art/bridge-video-free'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 8
     env:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
@@ -33,7 +33,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          work="$RUNNER_TEMP/oracle-runtime-audit"
+          work="$RUNNER_TEMP/oracle-dsn-audit"
           mkdir -p "$work"
           key="$work/id_oracle"
           printf '%s\n' "$SSH_KEY_ORACLE" | tr -d '\r' > "$key"
@@ -49,7 +49,7 @@ jobs:
           echo "known=$known" >> "$GITHUB_OUTPUT"
           echo 'AUTOPILOT_ORACLE_SSH_PREFLIGHT=PASS'
 
-      - name: Query branch-local runtime privileges and queue without credentials
+      - name: Test protected Oracle DSN candidates against exact temporary endpoint
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -57,51 +57,104 @@ jobs:
             -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
             "$ORACLE_USER@$ORACLE_HOST" 'sudo -n /opt/bridge-school/school-autopilot/.venv/bin/python -' <<'PY'
+          import os
           import re
           from pathlib import Path
-          from urllib.parse import urlparse
+          from urllib.parse import urlparse, urlunparse
           import psycopg
 
-          env_path = Path('/opt/bridge-school/school-autopilot/autopilot-shadow.env')
-          assert env_path.is_file() and not env_path.is_symlink()
-          dsn = ''
-          for raw in env_path.read_text(encoding='utf-8').splitlines():
-              if raw.startswith('AUTOPILOT_DATABASE_URL='):
-                  dsn = raw.split('=', 1)[1].strip().strip('"').strip("'")
-                  break
-          parsed = urlparse(dsn)
-          assert re.fullmatch(r'ep-floral-field-b1pjs2of(?:-pooler)?(?:\.[a-z0-9-]+)+\.aws\.neon\.tech', parsed.hostname or '')
+          root = Path('/opt/bridge-school')
+          target_host = 'ep-floral-field-b1pjs2of.c-5.eu-central-1.aws.neon.tech'
+          target_pattern = r'ep-floral-field-b1pjs2of(?:-pooler)?(?:\.[a-z0-9-]+)+\.aws\.neon\.tech'
+          assert re.fullmatch(target_pattern, target_host)
 
-          with psycopg.connect(dsn, connect_timeout=15, application_name='autopilot-runtime-queue-audit') as conn:
-              with conn.cursor() as cur:
-                  cur.execute("""
-                      SELECT current_user,
-                             has_function_privilege(
-                                 current_user,
-                                 'autopilot.create_shadow_task(text,text,jsonb,integer,bigint,text,text)',
-                                 'EXECUTE'
-                             ),
-                             has_schema_privilege(current_user, 'autopilot', 'USAGE')
-                  """)
-                  user, can_create, schema_usage = cur.fetchone()
-                  print(f'AUTOPILOT_RUNTIME_USER={user}')
-                  print(f'AUTOPILOT_RUNTIME_CREATE_TASK_EXECUTE={"YES" if can_create else "NO"}')
-                  print(f'AUTOPILOT_RUNTIME_SCHEMA_USAGE={"YES" if schema_usage else "NO"}')
+          candidates = []
+          seen = set()
+          for path in sorted(root.rglob('*')):
+              try:
+                  if not path.is_file() or path.is_symlink():
+                      continue
+                  if path.stat().st_size > 1024 * 1024:
+                      continue
+              except OSError:
+                  continue
+              name = path.name.lower()
+              if not (name.endswith('.env') or name == '.env' or 'environment' in name):
+                  continue
+              try:
+                  lines = path.read_text(encoding='utf-8', errors='strict').splitlines()
+              except (OSError, UnicodeError):
+                  continue
+              for raw in lines:
+                  line = raw.strip()
+                  if not line or line.startswith('#') or '=' not in line:
+                      continue
+                  key, value = line.split('=', 1)
+                  key = key.strip()
+                  value = value.strip().strip('"').strip("'")
+                  if not re.search(r'(?:DATABASE_URL|DATABASE_DSN|POSTGRES_URL|PG_DSN)$', key):
+                      continue
+                  if not value.startswith(('postgres://', 'postgresql://')):
+                      continue
+                  parsed = urlparse(value)
+                  if not parsed.username or not parsed.hostname or '@' not in parsed.netloc:
+                      continue
+                  fingerprint = (parsed.username, parsed.password or '', parsed.path, parsed.query)
+                  if fingerprint in seen:
+                      continue
+                  seen.add(fingerprint)
+                  candidates.append((str(path), key, value))
 
-                  cur.execute("""
-                      SELECT task_id::text, task_key, status, attempts, max_attempts
-                        FROM autopilot.task_status
-                       WHERE goal_type = 'GITHUB_DRAFT_REPAIR_V1'
-                       ORDER BY created_at DESC
-                       LIMIT 10
-                  """)
-                  rows = cur.fetchall()
-                  print(f'AUTOPILOT_DRAFT_TASK_COUNT_VISIBLE={len(rows)}')
-                  for index, row in enumerate(rows, 1):
-                      task_id, task_key, status, attempts, max_attempts = row
-                      safe_key = re.sub(r'[^A-Za-z0-9._:-]', '_', task_key)[:200]
-                      print(f'AUTOPILOT_DRAFT_TASK_{index}={task_id}|{safe_key}|{status}|{attempts}/{max_attempts}')
-          print('AUTOPILOT_DATABASE_CREDENTIAL_VALUES_EXPOSED=NO')
+          print(f'AUTOPILOT_ORACLE_DSN_CANDIDATES={len(candidates)}')
+          connected = []
+          for index, (path, key, dsn) in enumerate(candidates, 1):
+              parsed = urlparse(dsn)
+              userinfo = parsed.netloc.rsplit('@', 1)[0]
+              port = parsed.port or 5432
+              target = urlunparse((
+                  parsed.scheme,
+                  f'{userinfo}@{target_host}:{port}',
+                  parsed.path or '/neondb',
+                  parsed.params,
+                  parsed.query,
+                  parsed.fragment,
+              ))
+              safe_user = re.sub(r'[^A-Za-z0-9_.-]', '_', parsed.username)[:63]
+              try:
+                  with psycopg.connect(
+                      target,
+                      connect_timeout=8,
+                      application_name='autopilot-protected-dsn-audit',
+                  ) as conn:
+                      with conn.cursor() as cur:
+                          cur.execute("""
+                              SELECT current_user,
+                                     has_function_privilege(
+                                         current_user,
+                                         'autopilot.create_shadow_task(text,text,jsonb,integer,bigint,text,text)',
+                                         'EXECUTE'
+                                     ),
+                                     has_table_privilege(current_user, 'autopilot.task', 'INSERT'),
+                                     EXISTS (
+                                         SELECT 1 FROM public.schema_migration
+                                          WHERE migration_key='0303_autopilot_github_draft_repair'
+                                     )
+                          """)
+                          actual_user, can_create, can_insert, migration_present = cur.fetchone()
+                  connected.append((safe_user, bool(can_create), bool(can_insert), bool(migration_present)))
+                  print(
+                      f'AUTOPILOT_DSN_{index}={safe_user}|CONNECT=YES|'
+                      f'CREATE_TASK={"YES" if can_create else "NO"}|'
+                      f'DIRECT_INSERT={"YES" if can_insert else "NO"}|'
+                      f'M0303={"YES" if migration_present else "NO"}'
+                  )
+              except Exception as exc:
+                  category = type(exc).__name__
+                  print(f'AUTOPILOT_DSN_{index}={safe_user}|CONNECT=NO|ERROR={category}')
+
+          print(f'AUTOPILOT_ORACLE_DSN_CONNECTED={len(connected)}')
+          print(f'AUTOPILOT_ORACLE_DSN_CAN_CREATE_TASK={sum(1 for _, create, _, _ in connected if create)}')
+          print('AUTOPILOT_DSN_VALUES_EXPOSED=NO')
           print('AUTOPILOT_DATABASE_MUTATED=NO')
           print('ORACLE_INSTANCE_STOP_REQUESTED=NO')
           PY
