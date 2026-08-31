@@ -249,7 +249,7 @@ def build_mutation_manifest(request: RepairRequest) -> dict[str, object]:
                 "path": f"{repo_path}/git/commits",
                 "tree_sha_source": "tree_sha",
                 "parent_sha": request.expected_base_sha,
-                "message": f"autopilot: bounded repair {fingerprint[:16]}",
+                "message": f"autopilot: bounded repair {fingerprint}",
                 "result_key": "commit_sha",
                 "purpose": "create_commit",
             },
