@@ -1,4 +1,4 @@
-name: Autopilot owner credential boundary preflight (one-shot)
+name: Autopilot temporary Neon owner preflight (one-shot)
 
 on:
   push:
@@ -13,180 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  preflight:
-    if: github.repository == 'olegmed1-art/bridge-video-free'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 8
-    env:
-      ORACLE_HOST: 158.180.47.161
-      ORACLE_USER: ubuntu
-      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
-      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
-      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
-      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
-      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
-      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
-      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
-      VERCEL_TOKEN_PRIMARY: ${{ secrets.VERCEL_TOKEN }}
-      VERCEL_TOKEN_ACCESS: ${{ secrets.VERCEL_ACCESS_TOKEN }}
-      VERCEL_TOKEN_API: ${{ secrets.VERCEL_API_TOKEN }}
-      VERCEL_TOKEN_CLI: ${{ secrets.VERCEL_CLI_TOKEN }}
-      VERCEL_TOKEN_DEPLOY: ${{ secrets.VERCEL_DEPLOY_TOKEN }}
-      VERCEL_TOKEN_AUTOMATION: ${{ secrets.VERCEL_AUTOMATION_TOKEN }}
-      BROKER_SECRET: ${{ secrets.AUTOPILOT_TOKEN_BROKER_SECRET }}
-      BYPASS_SECRET_PRIMARY: ${{ secrets.AUTOPILOT_VERCEL_BYPASS_SECRET }}
-      BYPASS_SECRET_VERCEL: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-      GITHUB_APP_ID_SECRET: ${{ secrets.AUTOPILOT_GITHUB_APP_ID }}
-      GITHUB_INSTALLATION_ID_SECRET: ${{ secrets.AUTOPILOT_GITHUB_INSTALLATION_ID }}
-      GITHUB_PRIVATE_KEY_SECRET: ${{ secrets.AUTOPILOT_GITHUB_PRIVATE_KEY }}
-      NEON_TEMP_OWNER_URL: ${{ secrets.AUTOPILOT_NEON_DATABASE_URL }}
-      NEON_TEMP_OWNER_URL_ALT: ${{ secrets.NEON_AUTOPILOT_DATABASE_URL }}
-
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          persist-credentials: false
-
-      - name: Report protected credential availability without values
-        shell: bash
-        run: |
-          set -euo pipefail
-          ssh_count=0
-          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
-            [[ -n "${!name:-}" ]] && ssh_count=$((ssh_count + 1))
-          done
-          vercel_count=0
-          for name in VERCEL_TOKEN_PRIMARY VERCEL_TOKEN_ACCESS VERCEL_TOKEN_API VERCEL_TOKEN_CLI VERCEL_TOKEN_DEPLOY VERCEL_TOKEN_AUTOMATION; do
-            [[ -n "${!name:-}" ]] && vercel_count=$((vercel_count + 1))
-          done
-          app_count=0
-          for name in GITHUB_APP_ID_SECRET GITHUB_INSTALLATION_ID_SECRET GITHUB_PRIVATE_KEY_SECRET; do
-            [[ -n "${!name:-}" ]] && app_count=$((app_count + 1))
-          done
-          bypass_count=0
-          for name in BYPASS_SECRET_PRIMARY BYPASS_SECRET_VERCEL; do
-            [[ -n "${!name:-}" ]] && bypass_count=$((bypass_count + 1))
-          done
-          neon_temp_count=0
-          for name in NEON_TEMP_OWNER_URL NEON_TEMP_OWNER_URL_ALT; do
-            [[ -n "${!name:-}" ]] && neon_temp_count=$((neon_temp_count + 1))
-          done
-          echo "AUTOPILOT_SSH_CREDENTIAL_CANDIDATES=$ssh_count"
-          echo "AUTOPILOT_VERCEL_TOKEN_CANDIDATES=$vercel_count"
-          echo "AUTOPILOT_BROKER_SECRET_PRESENT=$([[ -n "${BROKER_SECRET:-}" ]] && echo YES || echo NO)"
-          echo "AUTOPILOT_BYPASS_SECRET_CANDIDATES=$bypass_count"
-          echo "AUTOPILOT_GITHUB_APP_SECRET_COMPONENTS=$app_count"
-          echo "AUTOPILOT_TEMP_NEON_OWNER_URL_CANDIDATES=$neon_temp_count"
-          [[ "$ssh_count" -ge 1 ]]
-
-      - name: Resolve verified Oracle SSH credential
-        id: ssh
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          work="$RUNNER_TEMP/autopilot-owner-preflight"
-          mkdir -p "$work"
-          known="$work/known_hosts"
-          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
-          selected=''
-          index=0
-          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
-            raw="${!name:-}"
-            [[ -n "$raw" ]] || continue
-            index=$((index + 1))
-            base="$work/key-$index"
-            printf '%s\n' "$raw" > "$base.raw"
-            tr -d '\r' < "$base.raw" > "$base.crlf"
-            printf '%s' "$raw" | python -c '
-          import sys
-          raw = sys.stdin.read()
-          path = sys.argv[1]
-          if "\\n" in raw and "\n" not in raw:
-              raw = raw.replace("\\r", "").replace("\\n", "\n")
-          with open(path, "w", newline="\n") as handle:
-              handle.write(raw)
-              if not raw.endswith("\n"):
-                  handle.write("\n")
-          ' "$base.escaped"
-            for key in "$base.raw" "$base.crlf" "$base.escaped"; do
-              chmod 0600 "$key"
-              ssh-keygen -y -f "$key" >/dev/null 2>&1 || continue
-              if ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
-                -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
-                -o ConnectTimeout=10 "$ORACLE_USER@$ORACLE_HOST" \
-                'sudo -n systemctl is-active school-autopilot-shadow.service' >/dev/null; then
-                selected="$key"
-                break 2
-              fi
-            done
-          done
-          [[ -n "$selected" ]]
-          cp "$selected" "$work/id_oracle"
-          chmod 0600 "$work/id_oracle"
-          echo "key=$work/id_oracle" >> "$GITHUB_OUTPUT"
-          echo "known=$known" >> "$GITHUB_OUTPUT"
-          echo 'AUTOPILOT_ORACLE_SSH_PREFLIGHT=PASS'
-          echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
-
-      - name: Check repository Vercel tokens
-        shell: bash
-        run: |
-          set -euo pipefail
-          valid=0
-          for name in VERCEL_TOKEN_PRIMARY VERCEL_TOKEN_ACCESS VERCEL_TOKEN_API VERCEL_TOKEN_CLI VERCEL_TOKEN_DEPLOY VERCEL_TOKEN_AUTOMATION; do
-            token="${!name:-}"
-            [[ -n "$token" ]] || continue
-            if curl -fsS --max-time 15 \
-              -H "Authorization: Bearer $token" \
-              'https://api.vercel.com/v9/projects/prj_KvQo3rPnwNs488hyDiMZ9hMU9d5R?teamId=team_qXr2smag8blW1WWeS10CDRXb' \
-              -o /dev/null; then
-              valid=1
-              break
-            fi
-          done
-          echo "AUTOPILOT_VERCEL_SCOPED_TOKEN_VALID=$([[ "$valid" == 1 ]] && echo YES || echo NO)"
-
-      - name: Inspect persistent Oracle Vercel CLI sessions without exposing values
-        shell: bash
-        run: |
-          set -euo pipefail
-          ssh -i '${{ steps.ssh.outputs.key }}' \
-            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
-            "$ORACLE_USER@$ORACLE_HOST" 'sudo -n python3 -' <<'PY'
-          import json, os, re, urllib.error, urllib.request
-          candidates = [
-              '/root/.local/share/com.vercel.cli/auth.json', '/root/.vercel/auth.json',
-              '/home/ubuntu/.local/share/com.vercel.cli/auth.json', '/home/ubuntu/.vercel/auth.json',
-              '/opt/bridge-school/.local/share/com.vercel.cli/auth.json', '/opt/bridge-school/.vercel/auth.json',
-          ]
-          present = valid = 0
-          for path in candidates:
-              if not os.path.isfile(path) or os.path.islink(path):
-                  continue
-              present += 1
-              try:
-                  payload = json.load(open(path, encoding='utf-8'))
-                  token = payload.get('token', '') if isinstance(payload, dict) else ''
-                  if not isinstance(token, str) or not re.fullmatch(r'[A-Za-z0-9._-]{20,512}', token):
-                      continue
-                  request = urllib.request.Request(
-                      'https://api.vercel.com/v9/projects/prj_KvQo3rPnwNs488hyDiMZ9hMU9d5R?teamId=team_qXr2smag8blW1WWeS10CDRXb',
-                      headers={'Authorization': f'Bearer {token}'},
-                  )
-                  with urllib.request.urlopen(request, timeout=15) as response:
-                      if response.status == 200:
-                          valid = 1
-                          break
-              except (OSError, ValueError, urllib.error.URLError):
-                  continue
-          print(f'AUTOPILOT_ORACLE_VERCEL_AUTH_FILES={present}')
-          print(f'AUTOPILOT_ORACLE_VERCEL_AUTH_VALID={"YES" if valid else "NO"}')
-          print('AUTOPILOT_ORACLE_VERCEL_AUTH_VALUES_EXPOSED=NO')
-          PY
-
   temp-neon-owner-preflight:
-    needs: preflight
     if: github.repository == 'olegmed1-art/bridge-video-free'
     runs-on: ubuntu-24.04
     timeout-minutes: 8
@@ -236,18 +63,21 @@ jobs:
           target_host="$(ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 \
             "$ORACLE_USER@$ORACLE_HOST" 'sudo -n python3 -' <<'PY'
-          import os, re
+          import os
+          import re
           from urllib.parse import urlparse
+
           path = '/opt/bridge-school/school-autopilot/autopilot-shadow.env'
           assert os.path.isfile(path) and not os.path.islink(path)
           value = ''
           for raw in open(path, encoding='utf-8'):
               if raw.startswith('AUTOPILOT_DATABASE_URL='):
-                  value = raw.rstrip('\n').split('=', 1)[1]
+                  value = raw.rstrip('\n').split('=', 1)[1].strip().strip('"').strip("'")
                   break
           parsed = urlparse(value)
           host = parsed.hostname or ''
-          assert re.fullmatch(r'ep-floral-field-b1pjs2of(?:-pooler)?\.[a-z0-9-]+\.aws\.neon\.tech', host), host
+          pattern = r'ep-floral-field-b1pjs2of(?:-pooler)?(?:\.[a-z0-9-]+)+\.aws\.neon\.tech'
+          assert re.fullmatch(pattern, host), host
           print(host)
           PY
           )"
@@ -264,18 +94,23 @@ jobs:
         run: |
           set -Eeuo pipefail
           umask 077
-          dsn_file="$RUNNER_TEMP/temp-neon-owner/owner-dsn"
+          work="$RUNNER_TEMP/temp-neon-owner"
+          dsn_file="$work/owner-dsn"
           python3 - "$TARGET_HOST_FILE" "$dsn_file" <<'PY'
-          import os, re, sys
+          import os
+          import re
+          import sys
           from urllib.parse import urlparse, urlunparse
+
           owner = os.environ['OWNER_DATABASE_URL']
           target_host = open(sys.argv[1], encoding='utf-8').read().strip()
           parsed = urlparse(owner)
           assert parsed.scheme in {'postgres', 'postgresql'}
-          assert parsed.username and parsed.password and parsed.hostname
+          assert '@' in parsed.netloc and parsed.hostname
           assert parsed.hostname != target_host
-          assert re.fullmatch(r'ep-floral-field-b1pjs2of(?:-pooler)?\.[a-z0-9-]+\.aws\.neon\.tech', target_host)
-          userinfo = f'{parsed.username}:{parsed.password}'
+          pattern = r'ep-floral-field-b1pjs2of(?:-pooler)?(?:\.[a-z0-9-]+)+\.aws\.neon\.tech'
+          assert re.fullmatch(pattern, target_host)
+          userinfo = parsed.netloc.rsplit('@', 1)[0]
           port = parsed.port or 5432
           netloc = f'{userinfo}@{target_host}:{port}'
           target = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
@@ -283,6 +118,7 @@ jobs:
               handle.write(target)
           os.chmod(sys.argv[2], 0o600)
           PY
+
           target_dsn="$(cat "$dsn_file")"
           result="$(psql "$target_dsn" -X -A -t -F '|' -v ON_ERROR_STOP=1 -c \
             "SELECT current_database(), current_user, EXISTS (SELECT 1 FROM public.schema_migration WHERE migration_key='0303_autopilot_github_draft_repair'), to_regprocedure('autopilot.create_shadow_task(text,text,jsonb,integer,bigint,text,text)') IS NOT NULL, has_function_privilege(current_user, 'autopilot.create_shadow_task(text,text,jsonb,integer,bigint,text,text)', 'EXECUTE');")"
