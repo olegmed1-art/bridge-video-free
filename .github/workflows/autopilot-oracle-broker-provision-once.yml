@@ -207,8 +207,21 @@ jobs:
             throw new Error('broker environment upsert reported failures');
           }
           const protection = JSON.parse(fs.readFileSync('/tmp/protection-response.json', 'utf8'));
-          const secret = protection && protection.protectionBypass;
-          if (typeof secret !== 'string' || !/^[A-Za-z0-9]{32}$/.test(secret)) {
+          const boundary = protection && protection.protectionBypass;
+          const candidates = [];
+          if (typeof boundary === 'string') candidates.push(boundary);
+          if (boundary && typeof boundary === 'object') {
+            for (const [key, value] of Object.entries(boundary)) {
+              if (/^[A-Za-z0-9_-]{32,512}$/.test(key)) candidates.push(key);
+              if ((key === 'secret' || key === 'value') && typeof value === 'string') {
+                candidates.push(value);
+              }
+            }
+          }
+          const secret = [...new Set(candidates)].find(
+            value => /^[A-Za-z0-9_-]{32,512}$/.test(value),
+          );
+          if (!secret) {
             throw new Error('automation bypass response invalid');
           }
           fs.writeFileSync('/tmp/bypass-secret', secret, {encoding: 'utf8', flag: 'wx', mode: 0o600});
@@ -223,9 +236,9 @@ jobs:
           broker="$(cat /tmp/broker-secret)"
           bypass="$(cat /tmp/bypass-secret)"
           case "$broker" in *[!A-Za-z0-9_-]*|'') exit 72;; esac
-          case "$bypass" in *[!A-Za-z0-9]*|'') exit 73;; esac
+          case "$bypass" in *[!A-Za-z0-9_-]*|'') exit 73;; esac
           [ "${#broker}" -ge 43 ] && [ "${#broker}" -le 512 ]
-          [ "${#bypass}" -eq 32 ]
+          [ "${#bypass}" -ge 32 ] && [ "${#bypass}" -le 512 ]
 
           health="$(curl -fsS --max-time 20 \
             -H "x-vercel-protection-bypass: $bypass" "$preview_url/healthz")"
@@ -289,7 +302,7 @@ jobs:
               values['AUTOPILOT_TOKEN_BROKER_URL'],
           )
           assert re.fullmatch(r'[A-Za-z0-9_-]{43,512}', values['AUTOPILOT_TOKEN_BROKER_SECRET'])
-          assert re.fullmatch(r'[A-Za-z0-9]{32}', values['AUTOPILOT_VERCEL_BYPASS_SECRET'])
+          assert re.fullmatch(r'[A-Za-z0-9_-]{32,512}', values['AUTOPILOT_VERCEL_BYPASS_SECRET'])
           PY
           install -m 0600 -o root -g root "$candidate" "$final"
           [[ "$(stat -c '%U:%G:%a' "$final")" == root:root:600 ]]
