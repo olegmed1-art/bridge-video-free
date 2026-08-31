@@ -511,7 +511,18 @@ def execute_bounded_draft_repair(
     """Execute or recover the only allowed Phase 3B GitHub write sequence."""
 
     credential = issue_installation_token(config, now_epoch=now_epoch, opener=opener)
-    _require_expected_base(credential, request.expected_base_sha, opener=opener)
+    branch_payload = _api_json(
+        credential,
+        method="GET",
+        path=f"{REPOSITORY_API_PATH}/git/ref/heads/{request.branch_name}",
+        expected_status=200,
+        opener=opener,
+        not_found_ok=True,
+    )
+    if branch_payload is None:
+        _require_expected_base(
+            credential, request.expected_base_sha, opener=opener
+        )
 
     commit_payload = _api_json(
         credential,
@@ -522,15 +533,6 @@ def execute_bounded_draft_repair(
     )
     base_tree_sha, base_date = _base_commit_contract(
         commit_payload, expected_sha=request.expected_base_sha
-    )
-
-    branch_payload = _api_json(
-        credential,
-        method="GET",
-        path=f"{REPOSITORY_API_PATH}/git/ref/heads/{request.branch_name}",
-        expected_status=200,
-        opener=opener,
-        not_found_ok=True,
     )
 
     tree_entries: list[dict[str, str]] = []
