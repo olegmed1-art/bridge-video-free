@@ -1,4 +1,4 @@
-name: Autopilot Oracle branch-local DSN capability audit (one-shot)
+name: Autopilot Oracle Cursor agent boundary diagnostic (one-shot)
 
 on:
   push:
@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  audit:
+  diagnostic:
     if: github.repository == 'olegmed1-art/bridge-video-free'
     runs-on: ubuntu-24.04
     timeout-minutes: 8
@@ -33,7 +33,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          work="$RUNNER_TEMP/oracle-dsn-audit"
+          work="$RUNNER_TEMP/oracle-cursor-diagnostic"
           mkdir -p "$work"
           key="$work/id_oracle"
           printf '%s\n' "$SSH_KEY_ORACLE" | tr -d '\r' > "$key"
@@ -43,118 +43,95 @@ jobs:
           ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
           ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
-            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            'sudo -n systemctl is-active school-autopilot-shadow.service' >/dev/null
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
           echo "key=$key" >> "$GITHUB_OUTPUT"
           echo "known=$known" >> "$GITHUB_OUTPUT"
           echo 'AUTOPILOT_ORACLE_SSH_PREFLIGHT=PASS'
 
-      - name: Test protected Oracle DSN candidates against exact temporary endpoint
+      - name: Inspect Cursor agent service and wrapper without credential values
         shell: bash
         run: |
           set -Eeuo pipefail
           ssh -i '${{ steps.ssh.outputs.key }}' \
             -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
-            "$ORACLE_USER@$ORACLE_HOST" 'sudo -n /opt/bridge-school/school-autopilot/.venv/bin/python -' <<'PY'
-          import os
-          import re
+            "$ORACLE_USER@$ORACLE_HOST" 'sudo -n bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          echo "CURSOR_AGENT_ACTIVE=$(systemctl is-active cursor-agent.service 2>/dev/null || true)"
+          echo "CURSOR_AGENT_ENABLED=$(systemctl is-enabled cursor-agent.service 2>/dev/null || true)"
+          systemctl show cursor-agent.service --no-pager \
+            -p LoadState -p ActiveState -p SubState -p ExecMainStatus \
+            -p Result -p User -p Group -p FragmentPath \
+            | sed -E 's#(^FragmentPath=).*#\1<redacted-path>#'
+
+          wrapper=/opt/bridge-school/bin/cursor-agent.sh
+          if [[ -f "$wrapper" && ! -L "$wrapper" ]]; then
+            echo 'CURSOR_AGENT_WRAPPER_PRESENT=YES'
+            stat -c 'CURSOR_AGENT_WRAPPER_METADATA=%U:%G:%a:%s' "$wrapper"
+            echo "CURSOR_AGENT_WRAPPER_EXECUTABLE=$([[ -x "$wrapper" ]] && echo YES || echo NO)"
+            sha256sum "$wrapper" | awk '{print "CURSOR_AGENT_WRAPPER_SHA256=" $1}'
+          else
+            echo 'CURSOR_AGENT_WRAPPER_PRESENT=NO'
+          fi
+
+          final=/opt/bridge-school/school-autopilot/autopilot-broker.env
+          if [[ -f "$final" && ! -L "$final" ]]; then
+            echo 'AUTOPILOT_BROKER_ENV_PRESENT=YES'
+            stat -c 'AUTOPILOT_BROKER_ENV_METADATA=%U:%G:%a:%s' "$final"
+          else
+            echo 'AUTOPILOT_BROKER_ENV_PRESENT=NO'
+          fi
+
+          echo 'CURSOR_AGENT_HOME_METADATA_BEGIN'
+          python3 - <<'PY'
           from pathlib import Path
-          from urllib.parse import urlparse, urlunparse
-          import psycopg
-
-          root = Path('/opt/bridge-school')
-          target_host = 'ep-floral-field-b1pjs2of.c-5.eu-central-1.aws.neon.tech'
-          target_pattern = r'ep-floral-field-b1pjs2of(?:-pooler)?(?:\.[a-z0-9-]+)+\.aws\.neon\.tech'
-          assert re.fullmatch(target_pattern, target_host)
-
-          candidates = []
-          seen = set()
-          for path in sorted(root.rglob('*')):
-              try:
-                  if not path.is_file() or path.is_symlink():
-                      continue
-                  if path.stat().st_size > 1024 * 1024:
-                      continue
-              except OSError:
+          roots = [Path('/opt/bridge-school/autopilot'), Path('/home/bridge-school-autopilot')]
+          allow = {'config.json', 'auth.json', 'credentials.json', 'settings.json', '.env'}
+          count = 0
+          for root in roots:
+              if not root.exists():
                   continue
-              name = path.name.lower()
-              if not (name.endswith('.env') or name == '.env' or 'environment' in name):
-                  continue
-              try:
-                  lines = path.read_text(encoding='utf-8', errors='strict').splitlines()
-              except (OSError, UnicodeError):
-                  continue
-              for raw in lines:
-                  line = raw.strip()
-                  if not line or line.startswith('#') or '=' not in line:
+              for path in root.rglob('*'):
+                  try:
+                      if not path.is_file() or path.is_symlink():
+                          continue
+                      if path.name not in allow and not any(part in {'.cursor', '.config'} for part in path.parts):
+                          continue
+                      stat = path.stat()
+                      rel = path.relative_to(root)
+                      print(f'CURSOR_AGENT_HOME_FILE={root.name}/{rel}|mode={stat.st_mode & 0o777:o}|size={stat.st_size}')
+                      count += 1
+                      if count >= 40:
+                          break
+                  except OSError:
                       continue
-                  key, value = line.split('=', 1)
-                  key = key.strip()
-                  value = value.strip().strip('"').strip("'")
-                  if not re.search(r'(?:DATABASE_URL|DATABASE_DSN|POSTGRES_URL|PG_DSN)$', key):
-                      continue
-                  if not value.startswith(('postgres://', 'postgresql://')):
-                      continue
-                  parsed = urlparse(value)
-                  if not parsed.username or not parsed.hostname or '@' not in parsed.netloc:
-                      continue
-                  fingerprint = (parsed.username, parsed.password or '', parsed.path, parsed.query)
-                  if fingerprint in seen:
-                      continue
-                  seen.add(fingerprint)
-                  candidates.append((str(path), key, value))
-
-          print(f'AUTOPILOT_ORACLE_DSN_CANDIDATES={len(candidates)}')
-          connected = []
-          for index, (path, key, dsn) in enumerate(candidates, 1):
-              parsed = urlparse(dsn)
-              userinfo = parsed.netloc.rsplit('@', 1)[0]
-              port = parsed.port or 5432
-              target = urlunparse((
-                  parsed.scheme,
-                  f'{userinfo}@{target_host}:{port}',
-                  parsed.path or '/neondb',
-                  parsed.params,
-                  parsed.query,
-                  parsed.fragment,
-              ))
-              safe_user = re.sub(r'[^A-Za-z0-9_.-]', '_', parsed.username)[:63]
-              try:
-                  with psycopg.connect(
-                      target,
-                      connect_timeout=8,
-                      application_name='autopilot-protected-dsn-audit',
-                  ) as conn:
-                      with conn.cursor() as cur:
-                          cur.execute("""
-                              SELECT current_user,
-                                     has_function_privilege(
-                                         current_user,
-                                         'autopilot.create_shadow_task(text,text,jsonb,integer,bigint,text,text)',
-                                         'EXECUTE'
-                                     ),
-                                     has_table_privilege(current_user, 'autopilot.task', 'INSERT'),
-                                     EXISTS (
-                                         SELECT 1 FROM public.schema_migration
-                                          WHERE migration_key='0303_autopilot_github_draft_repair'
-                                     )
-                          """)
-                          actual_user, can_create, can_insert, migration_present = cur.fetchone()
-                  connected.append((safe_user, bool(can_create), bool(can_insert), bool(migration_present)))
-                  print(
-                      f'AUTOPILOT_DSN_{index}={safe_user}|CONNECT=YES|'
-                      f'CREATE_TASK={"YES" if can_create else "NO"}|'
-                      f'DIRECT_INSERT={"YES" if can_insert else "NO"}|'
-                      f'M0303={"YES" if migration_present else "NO"}'
-                  )
-              except Exception as exc:
-                  category = type(exc).__name__
-                  print(f'AUTOPILOT_DSN_{index}={safe_user}|CONNECT=NO|ERROR={category}')
-
-          print(f'AUTOPILOT_ORACLE_DSN_CONNECTED={len(connected)}')
-          print(f'AUTOPILOT_ORACLE_DSN_CAN_CREATE_TASK={sum(1 for _, create, _, _ in connected if create)}')
-          print('AUTOPILOT_DSN_VALUES_EXPOSED=NO')
-          print('AUTOPILOT_DATABASE_MUTATED=NO')
-          print('ORACLE_INSTANCE_STOP_REQUESTED=NO')
+              if count >= 40:
+                  break
+          print(f'CURSOR_AGENT_HOME_FILE_COUNT_SHOWN={count}')
           PY
+          echo 'CURSOR_AGENT_HOME_METADATA_END'
+
+          echo 'CURSOR_AGENT_RECENT_DIAGNOSTIC_BEGIN'
+          journalctl -u cursor-agent.service --no-pager -n 120 -o cat 2>/dev/null \
+            | python3 -c '
+          import re, sys
+          keep = re.compile(r"error|fail|denied|auth|login|token|timeout|rate|limit|permission|credential|session", re.I)
+          shown = 0
+          for raw in sys.stdin:
+              if not keep.search(raw):
+                  continue
+              line = raw.rstrip("\n")
+              line = re.sub(r"(?:postgres(?:ql)?|https?|ssh)://\S+", "<redacted-url>", line, flags=re.I)
+              line = re.sub(r"(?i)(authorization|bearer|token|secret|password|key)(\s*[:=]\s*)\S+", r"\1\2<redacted>", line)
+              line = re.sub(r"[A-Za-z0-9_./+=-]{32,}", "<redacted-long-value>", line)
+              print(line[:600])
+              shown += 1
+              if shown >= 40:
+                  break
+          print(f"CURSOR_AGENT_RECENT_DIAGNOSTIC_LINES={shown}")
+          '
+          echo 'CURSOR_AGENT_RECENT_DIAGNOSTIC_END'
+          echo 'CURSOR_AGENT_CREDENTIAL_VALUES_EXPOSED=NO'
+          echo 'AUTOPILOT_SERVICE_RESTARTED=NO'
+          echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
+          REMOTE
