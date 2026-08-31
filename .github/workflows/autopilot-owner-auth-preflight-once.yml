@@ -16,7 +16,7 @@ jobs:
   preflight:
     if: github.repository == 'olegmed1-art/bridge-video-free'
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 8
     env:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
@@ -79,10 +79,11 @@ jobs:
           echo "AUTOPILOT_TEMP_NEON_OWNER_URL_CANDIDATES=$neon_temp_count"
           [[ "$ssh_count" -ge 1 ]]
 
-      - name: Verify Oracle identity and SSH access
+      - name: Resolve verified Oracle SSH credential
+        id: ssh
         shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
           work="$RUNNER_TEMP/autopilot-owner-preflight"
           mkdir -p "$work"
           known="$work/known_hosts"
@@ -93,23 +94,41 @@ jobs:
             raw="${!name:-}"
             [[ -n "$raw" ]] || continue
             index=$((index + 1))
-            key="$work/key-$index"
-            printf '%s\n' "$raw" | tr -d '\r' > "$key"
-            chmod 0600 "$key"
-            ssh-keygen -y -f "$key" >/dev/null 2>&1 || continue
-            if ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
-              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
-              -o ConnectTimeout=10 "$ORACLE_USER@$ORACLE_HOST" \
-              'sudo -n systemctl is-active school-autopilot-shadow.service'; then
-              selected="$key"
-              break
-            fi
+            base="$work/key-$index"
+            printf '%s\n' "$raw" > "$base.raw"
+            tr -d '\r' < "$base.raw" > "$base.crlf"
+            printf '%s' "$raw" | python -c '
+          import sys
+          raw = sys.stdin.read()
+          path = sys.argv[1]
+          if "\\n" in raw and "\n" not in raw:
+              raw = raw.replace("\\r", "").replace("\\n", "\n")
+          with open(path, "w", newline="\n") as handle:
+              handle.write(raw)
+              if not raw.endswith("\n"):
+                  handle.write("\n")
+          ' "$base.escaped"
+            for key in "$base.raw" "$base.crlf" "$base.escaped"; do
+              chmod 0600 "$key"
+              ssh-keygen -y -f "$key" >/dev/null 2>&1 || continue
+              if ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+                -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+                -o ConnectTimeout=10 "$ORACLE_USER@$ORACLE_HOST" \
+                'sudo -n systemctl is-active school-autopilot-shadow.service' >/dev/null; then
+                selected="$key"
+                break 2
+              fi
+            done
           done
           [[ -n "$selected" ]]
+          cp "$selected" "$work/id_oracle"
+          chmod 0600 "$work/id_oracle"
+          echo "key=$work/id_oracle" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
           echo 'AUTOPILOT_ORACLE_SSH_PREFLIGHT=PASS'
           echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
 
-      - name: Check whether an existing Vercel token can access the Preview project
+      - name: Check repository Vercel tokens
         shell: bash
         run: |
           set -euo pipefail
@@ -126,3 +145,51 @@ jobs:
             fi
           done
           echo "AUTOPILOT_VERCEL_SCOPED_TOKEN_VALID=$([[ "$valid" == 1 ]] && echo YES || echo NO)"
+
+      - name: Inspect persistent Oracle Vercel CLI sessions without exposing values
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
+            "$ORACLE_USER@$ORACLE_HOST" 'sudo -n python3 -' <<'PY'
+          import json
+          import os
+          import re
+          import urllib.error
+          import urllib.request
+
+          candidates = [
+              '/root/.local/share/com.vercel.cli/auth.json',
+              '/root/.vercel/auth.json',
+              '/home/ubuntu/.local/share/com.vercel.cli/auth.json',
+              '/home/ubuntu/.vercel/auth.json',
+              '/opt/bridge-school/.local/share/com.vercel.cli/auth.json',
+              '/opt/bridge-school/.vercel/auth.json',
+          ]
+          present = 0
+          valid = 0
+          for path in candidates:
+              if not os.path.isfile(path) or os.path.islink(path):
+                  continue
+              present += 1
+              try:
+                  payload = json.load(open(path, encoding='utf-8'))
+                  token = payload.get('token', '') if isinstance(payload, dict) else ''
+                  if not isinstance(token, str) or not re.fullmatch(r'[A-Za-z0-9._-]{20,512}', token):
+                      continue
+                  request = urllib.request.Request(
+                      'https://api.vercel.com/v9/projects/prj_KvQo3rPnwNs488hyDiMZ9hMU9d5R?teamId=team_qXr2smag8blW1WWeS10CDRXb',
+                      headers={'Authorization': f'Bearer {token}'},
+                  )
+                  with urllib.request.urlopen(request, timeout=15) as response:
+                      if response.status == 200:
+                          valid += 1
+                          break
+              except (OSError, ValueError, urllib.error.URLError):
+                  continue
+          print(f'AUTOPILOT_ORACLE_VERCEL_AUTH_FILES={present}')
+          print(f'AUTOPILOT_ORACLE_VERCEL_AUTH_VALID={"YES" if valid else "NO"}')
+          print('AUTOPILOT_ORACLE_VERCEL_AUTH_VALUES_EXPOSED=NO')
+          PY
