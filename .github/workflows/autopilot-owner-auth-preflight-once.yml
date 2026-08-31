@@ -33,6 +33,14 @@ jobs:
       VERCEL_TOKEN_CLI: ${{ secrets.VERCEL_CLI_TOKEN }}
       VERCEL_TOKEN_DEPLOY: ${{ secrets.VERCEL_DEPLOY_TOKEN }}
       VERCEL_TOKEN_AUTOMATION: ${{ secrets.VERCEL_AUTOMATION_TOKEN }}
+      BROKER_SECRET: ${{ secrets.AUTOPILOT_TOKEN_BROKER_SECRET }}
+      BYPASS_SECRET_PRIMARY: ${{ secrets.AUTOPILOT_VERCEL_BYPASS_SECRET }}
+      BYPASS_SECRET_VERCEL: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+      GITHUB_APP_ID_SECRET: ${{ secrets.AUTOPILOT_GITHUB_APP_ID }}
+      GITHUB_INSTALLATION_ID_SECRET: ${{ secrets.AUTOPILOT_GITHUB_INSTALLATION_ID }}
+      GITHUB_PRIVATE_KEY_SECRET: ${{ secrets.AUTOPILOT_GITHUB_PRIVATE_KEY }}
+      NEON_TEMP_OWNER_URL: ${{ secrets.AUTOPILOT_NEON_DATABASE_URL }}
+      NEON_TEMP_OWNER_URL_ALT: ${{ secrets.NEON_AUTOPILOT_DATABASE_URL }}
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -51,8 +59,24 @@ jobs:
           for name in VERCEL_TOKEN_PRIMARY VERCEL_TOKEN_ACCESS VERCEL_TOKEN_API VERCEL_TOKEN_CLI VERCEL_TOKEN_DEPLOY VERCEL_TOKEN_AUTOMATION; do
             [[ -n "${!name:-}" ]] && vercel_count=$((vercel_count + 1))
           done
+          app_count=0
+          for name in GITHUB_APP_ID_SECRET GITHUB_INSTALLATION_ID_SECRET GITHUB_PRIVATE_KEY_SECRET; do
+            [[ -n "${!name:-}" ]] && app_count=$((app_count + 1))
+          done
+          bypass_count=0
+          for name in BYPASS_SECRET_PRIMARY BYPASS_SECRET_VERCEL; do
+            [[ -n "${!name:-}" ]] && bypass_count=$((bypass_count + 1))
+          done
+          neon_temp_count=0
+          for name in NEON_TEMP_OWNER_URL NEON_TEMP_OWNER_URL_ALT; do
+            [[ -n "${!name:-}" ]] && neon_temp_count=$((neon_temp_count + 1))
+          done
           echo "AUTOPILOT_SSH_CREDENTIAL_CANDIDATES=$ssh_count"
           echo "AUTOPILOT_VERCEL_TOKEN_CANDIDATES=$vercel_count"
+          echo "AUTOPILOT_BROKER_SECRET_PRESENT=$([[ -n "${BROKER_SECRET:-}" ]] && echo YES || echo NO)"
+          echo "AUTOPILOT_BYPASS_SECRET_CANDIDATES=$bypass_count"
+          echo "AUTOPILOT_GITHUB_APP_SECRET_COMPONENTS=$app_count"
+          echo "AUTOPILOT_TEMP_NEON_OWNER_URL_CANDIDATES=$neon_temp_count"
           [[ "$ssh_count" -ge 1 ]]
 
       - name: Verify Oracle identity and SSH access
