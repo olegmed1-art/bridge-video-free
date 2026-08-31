@@ -1,3 +1,3 @@
-"""Isolated GitHub App token broker for School Autopilot Phase 3B."""
+"""Isolated bounded GitHub draft executor for School Autopilot Phase 3B."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

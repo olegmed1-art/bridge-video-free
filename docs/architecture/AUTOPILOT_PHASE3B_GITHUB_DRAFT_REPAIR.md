@@ -1,6 +1,6 @@
 # Autopilot Phase 3B — bounded GitHub draft repair
 
-Status: `TOKEN_BROKER_PREVIEW_READY / ORACLE_ADAPTER_NOT_INSTALLED`.
+Status: `BOUNDED_BROKER_SOURCE_READY / PREVIEW_REDEPLOY_PENDING`.
 
 ## Purpose
 
@@ -24,12 +24,14 @@ readback on 2026-08-31 confirmed:
 
 The App installation is limited to `olegmed1-art/bridge-video-free`. Its RSA
 private key and the separate high-entropy broker ingress secret exist only as
-Preview-scoped Vercel environment variables. The Preview `/healthz` contract
-passed and reports the broker enabled with production mutations disabled.
-Neither secret has been transferred to Oracle, and no credentialed Phase 3B
-adapter is installed there. Therefore the live draft-PR canary remains blocked
-until that separate Oracle credential boundary is explicitly authorized,
-implemented, and verified.
+Preview-scoped Vercel environment variables. The currently deployed Preview
+passed `/healthz`, but it is pinned to legacy source `a204ba9d`, whose response
+still exposes the installation token to its caller. The replacement source
+keeps that token inside the broker and is not deployed yet. Neither secret has
+been transferred to Oracle, and no credentialed Phase 3B adapter is installed
+there. Therefore the live draft-PR canary remains blocked until the bounded
+source is independently reviewed, redeployed to Preview, and the separate
+Oracle credential boundary is explicitly authorized and verified.
 
 1. Protect `main` with a repository ruleset that requires a pull request and
    blocks force pushes and branch deletion. The Autopilot App must not bypass
@@ -46,15 +48,20 @@ implemented, and verified.
 
 - keep the GitHub App RSA private key only in a Preview-scoped Vercel secret;
 - authenticate the Oracle caller with a separate high-entropy ingress secret;
-- mint an installation token for exactly `olegmed1-art/bridge-video-free`;
+- mint and retain an internal installation token for exactly
+  `olegmed1-art/bridge-video-free`;
 - request only Checks read, Contents write, and Pull requests write;
-- return a token accepted only when GitHub proves the exact repository,
-  permissions, and an expiry no more than 65 minutes away.
+- accept the complete repair request and recompute its canonical action
+  fingerprint before minting a credential;
+- validate the repository, permissions, and expiry no more than 65 minutes
+  away, execute only the exact manifest sequence, and return safe PR evidence;
+- never return the installation token or its expiry to Oracle.
 
 It has no merge, ref-update, ref-delete, Actions, Deployments, or production
-endpoint.  Redirects, unexpected permissions, invalid repository identity,
+endpoint. Runtime execution additionally requires `VERCEL_ENV=preview`.
+Redirects, unexpected permissions, invalid repository identity,
 oversized responses, weak configuration, and stale/long-lived tokens fail
-closed.  Oracle never receives the App private key.
+closed. Oracle never receives the App private key or installation token.
 
 ## Pilot policy
 
@@ -82,7 +89,8 @@ stale SHA, unexpected path, oversized change, or identity mismatch fails closed.
 The first live canary creates only
 `docs/evidence/autopilot/phase3b-canary.md` in its namespaced branch and opens a
 draft PR. It costs no model tokens. The canary is forbidden until both owner
-gates are verified from GitHub primary state and the separately authorized
-Oracle broker consumer is installed with fail-closed secret handling. The owner
-gates and Preview broker are now verified; the Oracle consumer gate remains
+gates are verified from GitHub primary state, the bounded broker source is
+reviewed and deployed to Preview, and the separately authorized Oracle broker
+consumer is installed with fail-closed secret handling. The owner gates are
+verified, but bounded Preview redeployment and the Oracle consumer gate remain
 open, so the canary has not run.

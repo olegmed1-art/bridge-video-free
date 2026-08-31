@@ -57,6 +57,7 @@ def verify(manifest: dict[str, object]) -> dict[str, object]:
     branch_writes = 0
     draft_pr_writes = 0
     main_reads = 0
+    branch_preflights = 0
 
     for operation in operations:
         if not isinstance(operation, dict):
@@ -86,10 +87,23 @@ def verify(manifest: dict[str, object]) -> dict[str, object]:
         if method == "GET" and path == f"{REPOSITORY_PATH}/git/commits/{'a' * 40}":
             if state != "BASE_PREFLIGHT" or operation.get("expect_commit_sha") != "a" * 40:
                 raise SystemExit("PHASE3B_MODEL_BASE_TREE_LOOKUP_INVALID")
+            state = "BASE_TREE_LOOKED_UP"
+            continue
+
+        if method == "GET" and path.startswith(
+            f"{REPOSITORY_PATH}/git/ref/heads/autopilot/repair/"
+        ):
+            if (
+                state != "BASE_TREE_LOOKED_UP"
+                or operation.get("expect_absent") is not True
+            ):
+                raise SystemExit("PHASE3B_MODEL_BRANCH_PREFLIGHT_INVALID")
+            branch_preflights += 1
+            state = "BRANCH_ABSENT"
             continue
 
         if method == "GET" and "/contents/" in path:
-            if state != "BASE_PREFLIGHT":
+            if state != "BRANCH_ABSENT":
                 raise SystemExit("PHASE3B_MODEL_FILE_PREFLIGHT_ORDER")
             if operation.get("ref") != "a" * 40:
                 raise SystemExit("PHASE3B_MODEL_FILE_PREFLIGHT_UNPINNED")
@@ -100,7 +114,7 @@ def verify(manifest: dict[str, object]) -> dict[str, object]:
             continue
 
         if method == "POST" and path == f"{REPOSITORY_PATH}/git/blobs":
-            if state not in {"BASE_PREFLIGHT", "BLOBS_BUILT"}:
+            if state not in {"BRANCH_ABSENT", "BLOBS_BUILT"}:
                 raise SystemExit("PHASE3B_MODEL_BLOB_ORDER")
             index = len(blob_results)
             result_key = operation.get("result_key")
@@ -186,6 +200,7 @@ def verify(manifest: dict[str, object]) -> dict[str, object]:
     if (
         state != "DRAFT_PR_CREATED"
         or main_reads != 2
+        or branch_preflights != 1
         or object_writes != 3
         or blob_results != {"blob_0_sha"}
         or branch_writes != 1
@@ -195,6 +210,7 @@ def verify(manifest: dict[str, object]) -> dict[str, object]:
     return {
         "assurance": "I2_INDEPENDENT_FINITE_STATE_CHECK",
         "branch_writes": branch_writes,
+        "branch_preflights": branch_preflights,
         "draft_pr_writes": draft_pr_writes,
         "main_reads": main_reads,
         "main_writes": 0,

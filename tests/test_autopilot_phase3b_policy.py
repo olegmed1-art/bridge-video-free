@@ -106,6 +106,23 @@ def test_create_preflight_and_git_object_outputs_are_bound():
     assert verify(manifest)["result"] == "PASS"
 
 
+def test_branch_absence_is_proven_before_object_writes():
+    operations = build_mutation_manifest(_request())["operations"]
+    branch_index = next(
+        index
+        for index, operation in enumerate(operations)
+        if operation.get("purpose") == "branch_preflight"
+    )
+    first_write_index = next(
+        index for index, operation in enumerate(operations) if operation["method"] == "POST"
+    )
+    assert operations[branch_index]["expect_absent"] is True
+    assert operations[branch_index]["path"].startswith(
+        "/repos/olegmed1-art/bridge-video-free/git/ref/heads/autopilot/repair/"
+    )
+    assert branch_index < first_write_index
+
+
 @pytest.mark.parametrize(
     "purpose,field,value,code",
     [

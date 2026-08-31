@@ -191,6 +191,12 @@ def build_mutation_manifest(request: RepairRequest) -> dict[str, object]:
             "expect_commit_sha": request.expected_base_sha,
             "purpose": "base_tree_lookup",
         },
+        {
+            "method": "GET",
+            "path": f"{repo_path}/git/ref/heads/{request.branch_name}",
+            "expect_absent": True,
+            "purpose": "branch_preflight",
+        },
     ]
     for index, change in enumerate(request.changes):
         preflight: dict[str, object] = {

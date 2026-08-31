@@ -1,4 +1,4 @@
-"""Isolated, preview-only ingress for GitHub App installation tokens."""
+"""Preview-only ingress for bounded GitHub draft repairs."""
 
 from __future__ import annotations
 
@@ -6,21 +6,20 @@ import asyncio
 import hmac
 import os
 import time
-from typing import Literal
-
 from fastapi import FastAPI, Header, HTTPException, status
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
 
 from broker_app import __version__
 from broker_app.github import (
     BrokerConfigurationError,
     BrokerContractError,
     BrokerRetryableError,
+    DraftRepairConflictError,
     REPOSITORY_FULL_NAME,
-    issue_installation_token,
+    execute_bounded_draft_repair,
     load_config,
 )
+from broker_app.policy import DraftRepairRequest
 
 
 NO_STORE_HEADERS = {
@@ -39,15 +38,12 @@ app = FastAPI(
 )
 
 
-class InstallationTokenRequest(BaseModel):
-    task_key: str = Field(
-        min_length=1,
-        max_length=200,
-        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
-    )
-    action_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
-    repository: Literal["olegmed1-art/bridge-video-free"]
-    manifest_version: Literal[1]
+@app.middleware("http")
+async def add_no_store_headers(request, call_next):  # noqa: ANN001
+    response = await call_next(request)
+    for name, value in NO_STORE_HEADERS.items():
+        response.headers[name] = value
+    return response
 
 
 def _broker_secret() -> str:
@@ -61,18 +57,30 @@ def _require_broker_authorization(authorization: str | None) -> None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="TOKEN_BROKER_NOT_CONFIGURED",
+            headers=NO_STORE_HEADERS,
         )
     wanted = f"Bearer {expected}"
     if not hmac.compare_digest(authorization or "", wanted):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="TOKEN_BROKER_AUTH_INVALID",
+            headers=NO_STORE_HEADERS,
+        )
+
+
+def _require_preview_runtime() -> None:
+    if os.getenv("VERCEL_ENV", "") != "preview":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="TOKEN_BROKER_PREVIEW_ONLY",
+            headers=NO_STORE_HEADERS,
         )
 
 
 def _broker_enabled() -> bool:
     return bool(
-        _broker_secret()
+        os.getenv("VERCEL_ENV", "") == "preview"
+        and _broker_secret()
         and os.getenv("AUTOPILOT_GITHUB_APP_ID", "").strip()
         and os.getenv("AUTOPILOT_GITHUB_INSTALLATION_ID", "").strip()
         and os.getenv("AUTOPILOT_GITHUB_PRIVATE_KEY", "").strip()
@@ -89,44 +97,52 @@ async def healthz() -> dict[str, object]:
         "preview_only": True,
         "production_mutations_enabled": False,
         "github_token_broker_enabled": _broker_enabled(),
+        "raw_installation_token_exposed": False,
+        "bounded_draft_executor_enabled": _broker_enabled(),
     }
 
 
-@app.post("/v1/github/installation-token")
-async def installation_token(
-    request: InstallationTokenRequest,
+@app.post("/v1/github/draft-repair")
+async def draft_repair(
+    request: DraftRepairRequest,
     authorization: str | None = Header(default=None),
 ) -> JSONResponse:
+    _require_preview_runtime()
     _require_broker_authorization(authorization)
     try:
         config = load_config()
-        token_payload = await asyncio.to_thread(
-            issue_installation_token,
+        result = await asyncio.to_thread(
+            execute_bounded_draft_repair,
             config,
+            request,
             now_epoch=int(time.time()),
         )
     except BrokerConfigurationError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="TOKEN_BROKER_NOT_CONFIGURED",
+            headers=NO_STORE_HEADERS,
         ) from exc
     except BrokerRetryableError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="GITHUB_TOKEN_TRANSIENT_ERROR",
+            headers=NO_STORE_HEADERS,
+        ) from exc
+    except DraftRepairConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="DRAFT_REPAIR_PRECONDITION_FAILED",
+            headers=NO_STORE_HEADERS,
         ) from exc
     except BrokerContractError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="GITHUB_TOKEN_CONTRACT_ERROR",
+            headers=NO_STORE_HEADERS,
         ) from exc
 
     return JSONResponse(
-        {
-            **token_payload,
-            "task_key": request.task_key,
-            "action_fingerprint": request.action_fingerprint,
-            "manifest_version": request.manifest_version,
-        },
+        result,
         headers=NO_STORE_HEADERS,
     )

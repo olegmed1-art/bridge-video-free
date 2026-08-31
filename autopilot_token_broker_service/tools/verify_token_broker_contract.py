@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 GITHUB_SOURCE = ROOT / "broker_app" / "github.py"
 MAIN_SOURCE = ROOT / "broker_app" / "main.py"
+POLICY_SOURCE = ROOT / "broker_app" / "policy.py"
 
 
 def _assignments(tree: ast.AST) -> dict[str, object]:
@@ -31,9 +32,12 @@ def _assignments(tree: ast.AST) -> dict[str, object]:
 def verify() -> dict[str, object]:
     github_text = GITHUB_SOURCE.read_text(encoding="utf-8")
     main_text = MAIN_SOURCE.read_text(encoding="utf-8")
+    policy_text = POLICY_SOURCE.read_text(encoding="utf-8")
     github_tree = ast.parse(github_text)
     main_tree = ast.parse(main_text)
+    policy_tree = ast.parse(policy_text)
     assignments = _assignments(github_tree)
+    policy_assignments = _assignments(policy_tree)
 
     expected_permissions = {
         "checks": "read",
@@ -48,6 +52,18 @@ def verify() -> dict[str, object]:
         raise SystemExit("BROKER_REPOSITORY_INVALID")
     if assignments.get("TOKEN_PERMISSIONS") != expected_permissions:
         raise SystemExit("BROKER_PERMISSIONS_INVALID")
+    if policy_assignments.get("REPOSITORY") != "olegmed1-art/bridge-video-free":
+        raise SystemExit("BROKER_POLICY_REPOSITORY_INVALID")
+    if policy_assignments.get("BASE_BRANCH") != "main":
+        raise SystemExit("BROKER_POLICY_BASE_INVALID")
+    if policy_assignments.get("BRANCH_PREFIX") != "autopilot/repair/":
+        raise SystemExit("BROKER_POLICY_BRANCH_INVALID")
+    if (
+        policy_assignments.get("MAX_FILES") != 3
+        or policy_assignments.get("MAX_FILE_BYTES") != 16_384
+        or policy_assignments.get("MAX_TOTAL_BYTES") != 32_768
+    ):
+        raise SystemExit("BROKER_POLICY_SIZE_INVALID")
 
     imports = {
         alias.name.split(".")[0]
@@ -62,9 +78,20 @@ def verify() -> dict[str, object]:
     )
     if imports & {"requests", "httpx", "subprocess", "socket"}:
         raise SystemExit("BROKER_UNBOUNDED_PRIMITIVE")
-    for forbidden in ("/merges", "/actions", "/deployments", "force_push"):
+    for forbidden in (
+        "/merges",
+        "/actions",
+        "/deployments",
+        'method="PATCH"',
+        'method="DELETE"',
+        'method="PUT"',
+    ):
         if forbidden in github_text:
             raise SystemExit("BROKER_FORBIDDEN_CAPABILITY")
+    if "execute_bounded_draft_repair" not in main_text:
+        raise SystemExit("BROKER_BOUNDED_EXECUTOR_MISSING")
+    if "issue_installation_token" in main_text:
+        raise SystemExit("BROKER_RAW_TOKEN_ROUTE_PRESENT")
 
     routes: set[tuple[str, str]] = set()
     for node in ast.walk(main_tree):
@@ -86,11 +113,15 @@ def verify() -> dict[str, object]:
                 routes.add((decorator.func.attr.upper(), decorator.args[0].value))
     if routes != {
         ("GET", "/healthz"),
-        ("POST", "/v1/github/installation-token"),
+        ("POST", "/v1/github/draft-repair"),
     }:
         raise SystemExit("BROKER_ROUTE_SURFACE_INVALID")
     if '"production_mutations_enabled": False' not in main_text:
         raise SystemExit("BROKER_PRODUCTION_GUARD_MISSING")
+    if 'os.getenv("VERCEL_ENV", "") != "preview"' not in main_text:
+        raise SystemExit("BROKER_PREVIEW_RUNTIME_GUARD_MISSING")
+    if '"raw_installation_token_exposed": False' not in main_text:
+        raise SystemExit("BROKER_RAW_TOKEN_GUARD_MISSING")
 
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = set(pyproject["project"]["dependencies"])
@@ -118,6 +149,7 @@ def verify() -> dict[str, object]:
         "merge_routes": 0,
         "permissions": expected_permissions,
         "production_mutations": 0,
+        "raw_token_responses": 0,
         "repository": "olegmed1-art/bridge-video-free",
         "result": "PASS",
         "write_route_count": 1,
