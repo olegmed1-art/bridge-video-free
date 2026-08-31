@@ -1,0 +1,6 @@
+{
+  "request_id": "director-broker-env-metadata-20260901-01",
+  "action": "inspect_broker_env_metadata",
+  "target_host": "158.180.47.161",
+  "no_instance_stop": true
+}
