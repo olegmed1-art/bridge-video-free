@@ -1,0 +1,74 @@
+{
+  "schema_version": "1.0",
+  "kind": "AUTOPILOT_BLOCKER",
+  "blocker_id": "PHASE3B_ORACLE_BROKER_ENV_ABSENT",
+  "status": "OWNER_REQUIRED_CREDENTIAL_ARTIFACT",
+  "recorded_at": "2026-08-31T21:09:11Z",
+  "tracker_issue": 782,
+  "draft_pr": 991,
+  "scope": "PHASE3B_ORACLE_SHADOW_CONSUMER_ACTIVATION",
+  "target": {
+    "oracle_host_observed": "158.180.47.161",
+    "service": "school-autopilot-shadow.service",
+    "broker_env_path": "/opt/bridge-school/school-autopilot/autopilot-broker.env",
+    "mode": "SHADOW_ONLY"
+  },
+  "read_only_observation": {
+    "workflow_run_id": 33439822765,
+    "workflow_job_id": 99645044725,
+    "request_commit": "3879c514733fb837152b7909fa79a5db5a125468",
+    "pinned_ssh_identity_verified": true,
+    "sudo_boundary_verified": true,
+    "broker_env_present": false,
+    "broker_env_metadata": "ABSENT",
+    "broker_env_boundary": "ABSENT",
+    "broker_env_values_read": false,
+    "inspection_read_only": true,
+    "oracle_instance_stop_requested": false
+  },
+  "impact": {
+    "phase3b_shadow_consumer_install": "BLOCKED",
+    "shadow_service_restart": "NOT_ATTEMPTED",
+    "draft_only_canary": "NOT_ATTEMPTED",
+    "production_mutation": false,
+    "oracle_instance_power_change": false,
+    "media_or_training_started": false
+  },
+  "neon_context": {
+    "temporary_branch_id": "br-still-tooth-b1ilkfcj",
+    "migration_0303_manual_ui_observation": "PRESENT_TRUE",
+    "independent_connector_verification": "BLOCKED_BY_ADAPTER_ARGUMENT_SCHEMA_MISMATCH",
+    "production_default_branch_targeted": false
+  },
+  "fail_closed_rules": [
+    "DO_NOT_STAGE_OR_ACTIVATE_A_UNIT_THAT_REQUIRES_THE_MISSING_BROKER_ENV",
+    "DO_NOT_RECREATE_OR_TRANSPORT_BROKER_CREDENTIALS_THROUGH_GITHUB_WORKFLOW_LOGS_OR_REPOSITORY_FILES",
+    "DO_NOT_READ_OR_EXPOSE_SECRET_VALUES",
+    "DO_NOT_RESTART_SCHOOL_AUTOPILOT_SHADOW_SERVICE",
+    "DO_NOT_RUN_DRAFT_REPAIR_CANARY",
+    "KEEP_EXISTING_AUTOPILOT_RUNTIME_SHADOW_ONLY",
+    "KEEP_ORACLE_RUNNING",
+    "NO_MERGE_OR_PRODUCTION_PROMOTION"
+  ],
+  "unblock_criteria": [
+    "An authorized owner provisions autopilot-broker.env through an approved secret channel",
+    "The artifact is a root-owned regular file with mode 0600 at the reviewed path",
+    "A metadata-only readback confirms the boundary without reading values",
+    "The reviewed exact-head Phase 3B release and service unit are revalidated",
+    "Only school-autopilot-shadow.service is restarted and remains SHADOW_ONLY",
+    "Exactly one bounded draft-only canary runs with no merge or production routing"
+  ],
+  "evidence": {
+    "inspection_workflow_conclusion": "SUCCESS",
+    "contract_job_conclusion": "SUCCESS",
+    "inspect_job_conclusion": "SUCCESS",
+    "observed_output": [
+      "AUTOPILOT_BROKER_ENV_PRESENT=NO",
+      "AUTOPILOT_BROKER_ENV_METADATA=ABSENT",
+      "AUTOPILOT_BROKER_ENV_BOUNDARY=ABSENT",
+      "AUTOPILOT_BROKER_ENV_VALUES_READ=NO",
+      "AUTOPILOT_BROKER_ENV_INSPECTION_READ_ONLY=YES",
+      "ORACLE_INSTANCE_STOP_REQUESTED=NO"
+    ]
+  }
+}
