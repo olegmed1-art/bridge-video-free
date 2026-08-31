@@ -1,0 +1,60 @@
+{
+  "schema_version": "1.0",
+  "kind": "AUTOPILOT_BLOCKER",
+  "blocker_id": "PHASE3B_NEON_CONNECTOR_SCHEMA_MISMATCH",
+  "status": "BLOCKED",
+  "recorded_at": "2026-08-31T17:15:00Z",
+  "tracker_issue": 782,
+  "draft_pr": 991,
+  "scope": "PHASE3B_TEMPORARY_NEON_MIGRATION",
+  "target": {
+    "neon_project_id": "misty-poetry-18012774",
+    "temporary_branch_id": "br-still-tooth-b1ilkfcj",
+    "temporary_branch_name": "autopilot-shadow-final-20260830",
+    "database_name": "neondb",
+    "migration": "database/migrations/0303_autopilot_github_draft_repair.sql"
+  },
+  "observed_failure": {
+    "boundary": "CONNECTOR_ARGUMENT_VALIDATION_BEFORE_SQL",
+    "exposed_argument_names": [
+      "projectId",
+      "branchId",
+      "databaseName"
+    ],
+    "implementation_required_argument_names": [
+      "project_id",
+      "branch_id",
+      "database_name"
+    ],
+    "sql_executed": false,
+    "connection_string_retrieved": false,
+    "database_mutated": false
+  },
+  "verified_target_state": {
+    "branch_default": false,
+    "branch_protected": false,
+    "branch_available": true,
+    "migration_0303_applied": false,
+    "production_neon_changed": false
+  },
+  "fail_closed_rules": [
+    "NEVER_OMIT_TEMPORARY_BRANCH_ID",
+    "NEVER_FALL_BACK_TO_DEFAULT_NEON_BRANCH",
+    "DO_NOT_CREATE_SECRET_BEARING_PROVISIONING_WORKFLOW_AS_A_BYPASS",
+    "DO_NOT_RUN_STALE_ORACLE_STAGING_OR_FINALIZER_WORKFLOWS",
+    "KEEP_ORACLE_RUNNING",
+    "KEEP_AUTOPILOT_SHADOW_ONLY",
+    "NO_MERGE_OR_PRODUCTION_PROMOTION"
+  ],
+  "unblock_criteria": [
+    "A branch-scoped SQL execution path accepts explicit branch br-still-tooth-b1ilkfcj",
+    "Preflight proves migration 0302 prerequisites on that same branch",
+    "Migration 0303 applies and validates on that same temporary branch only",
+    "Production/default Neon branch remains untouched"
+  ],
+  "evidence": {
+    "issue_comment_id": 5481766542,
+    "safe_head_before_record": "2354b1e3177adf6ceefc0fb8eb35209f1a88f108",
+    "safe_head_ci": "13_PASS"
+  }
+}
