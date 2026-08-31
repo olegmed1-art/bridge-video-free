@@ -56,8 +56,7 @@ jobs:
           ssh -i '${{ steps.ssh.outputs.key }}' \
             -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
-            "$ORACLE_USER@$ORACLE_HOST" 'sudo -n /opt/bridge-school/school-autopilot/venv/bin/python -' <<'PY'
-          import os
+            "$ORACLE_USER@$ORACLE_HOST" 'sudo -n /opt/bridge-school/school-autopilot/.venv/bin/python -' <<'PY'
           import re
           from pathlib import Path
           from urllib.parse import urlparse
