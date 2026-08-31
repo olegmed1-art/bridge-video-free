@@ -144,6 +144,9 @@ jobs:
           npm install --global --no-audit --no-fund "vercel@${VERCEL_CLI_VERSION}"
           cli=vercel
           $cli --version
+          apt-get update -qq
+          apt-get install -y --no-install-recommends curl >/dev/null
+          rm -rf /var/lib/apt/lists/*
           node - <<'NODE'
           const response = await fetch('https://vercel.com/.well-known/openid-configuration');
           console.log(`vercel_oidc_discovery_status=${response.status}`);
@@ -156,7 +159,7 @@ jobs:
             exit 74
           fi
           $cli link --yes --project "$VERCEL_PROJECT" --scope "$VERCEL_SCOPE"
-          preview_url="$($cli deploy --yes --scope "$VERCEL_SCOPE")"
+          preview_url="$($cli deploy --yes --target=preview --scope "$VERCEL_SCOPE")"
           case "$preview_url" in
             https://*.vercel.app) ;;
             *) echo 'preview_url_invalid' >&2; exit 71 ;;
