@@ -1,4 +1,4 @@
-name: Autopilot Oracle Cursor agent boundary diagnostic (one-shot)
+name: Autopilot Oracle GitHub deploy boundary audit (one-shot)
 
 on:
   push:
@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  diagnostic:
+  audit:
     if: github.repository == 'olegmed1-art/bridge-video-free'
     runs-on: ubuntu-24.04
     timeout-minutes: 8
@@ -33,7 +33,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          work="$RUNNER_TEMP/oracle-cursor-diagnostic"
+          work="$RUNNER_TEMP/oracle-github-boundary"
           mkdir -p "$work"
           key="$work/id_oracle"
           printf '%s\n' "$SSH_KEY_ORACLE" | tr -d '\r' > "$key"
@@ -48,90 +48,151 @@ jobs:
           echo "known=$known" >> "$GITHUB_OUTPUT"
           echo 'AUTOPILOT_ORACLE_SSH_PREFLIGHT=PASS'
 
-      - name: Inspect Cursor agent service and wrapper without credential values
+      - name: Audit existing Oracle GitHub credentials and dry-run push capability
         shell: bash
         run: |
           set -Eeuo pipefail
           ssh -i '${{ steps.ssh.outputs.key }}' \
             -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
-            "$ORACLE_USER@$ORACLE_HOST" 'sudo -n bash -s' <<'REMOTE'
-          set -Eeuo pipefail
-          echo "CURSOR_AGENT_ACTIVE=$(systemctl is-active cursor-agent.service 2>/dev/null || true)"
-          echo "CURSOR_AGENT_ENABLED=$(systemctl is-enabled cursor-agent.service 2>/dev/null || true)"
-          systemctl show cursor-agent.service --no-pager \
-            -p LoadState -p ActiveState -p SubState -p ExecMainStatus \
-            -p Result -p User -p Group -p FragmentPath \
-            | sed -E 's#(^FragmentPath=).*#\1<redacted-path>#'
-
-          wrapper=/opt/bridge-school/bin/cursor-agent.sh
-          if [[ -f "$wrapper" && ! -L "$wrapper" ]]; then
-            echo 'CURSOR_AGENT_WRAPPER_PRESENT=YES'
-            stat -c 'CURSOR_AGENT_WRAPPER_METADATA=%U:%G:%a:%s' "$wrapper"
-            echo "CURSOR_AGENT_WRAPPER_EXECUTABLE=$([[ -x "$wrapper" ]] && echo YES || echo NO)"
-            sha256sum "$wrapper" | awk '{print "CURSOR_AGENT_WRAPPER_SHA256=" $1}'
-          else
-            echo 'CURSOR_AGENT_WRAPPER_PRESENT=NO'
-          fi
-
-          final=/opt/bridge-school/school-autopilot/autopilot-broker.env
-          if [[ -f "$final" && ! -L "$final" ]]; then
-            echo 'AUTOPILOT_BROKER_ENV_PRESENT=YES'
-            stat -c 'AUTOPILOT_BROKER_ENV_METADATA=%U:%G:%a:%s' "$final"
-          else
-            echo 'AUTOPILOT_BROKER_ENV_PRESENT=NO'
-          fi
-
-          echo 'CURSOR_AGENT_HOME_METADATA_BEGIN'
-          python3 - <<'PY'
+            "$ORACLE_USER@$ORACLE_HOST" 'sudo -n python3 -' <<'PY'
+          import os
+          import re
+          import subprocess
           from pathlib import Path
-          roots = [Path('/opt/bridge-school/autopilot'), Path('/home/bridge-school-autopilot')]
-          allow = {'config.json', 'auth.json', 'credentials.json', 'settings.json', '.env'}
-          count = 0
+          from urllib.parse import urlparse
+
+          repo_slug = 'olegmed1-art/bridge-video-free'
+          roots = [Path('/opt/bridge-school'), Path('/home/ubuntu'), Path('/srv')]
+          git_dirs = []
           for root in roots:
               if not root.exists():
                   continue
-              for path in root.rglob('*'):
+              try:
+                  for path in root.rglob('.git'):
+                      if len(path.parts) - len(root.parts) > 7:
+                          continue
+                      if path.is_dir() and not path.is_symlink():
+                          git_dirs.append(path.parent)
+                          if len(git_dirs) >= 40:
+                              break
+              except OSError:
+                  continue
+              if len(git_dirs) >= 40:
+                  break
+
+          candidates = []
+          for repo in git_dirs:
+              try:
+                  result = subprocess.run(
+                      ['git', '-C', str(repo), 'remote', 'get-url', 'origin'],
+                      text=True, capture_output=True, timeout=5,
+                  )
+              except (OSError, subprocess.TimeoutExpired):
+                  continue
+              if result.returncode != 0:
+                  continue
+              raw = result.stdout.strip()
+              safe = ''
+              mode = 'unknown'
+              if raw.startswith('git@github.com:'):
+                  mode = 'ssh'
+                  safe = raw.removeprefix('git@github.com:').removesuffix('.git')
+              elif raw.startswith('ssh://git@github.com/'):
+                  mode = 'ssh'
+                  safe = raw.removeprefix('ssh://git@github.com/').removesuffix('.git')
+              elif raw.startswith(('https://github.com/', 'http://github.com/')):
+                  mode = 'https'
+                  parsed = urlparse(raw)
+                  safe = parsed.path.strip('/').removesuffix('.git')
+              elif 'github.com' in raw:
+                  mode = 'credentialed-or-custom'
+                  safe = repo_slug if repo_slug in raw else 'other'
+              if safe == repo_slug:
+                  candidates.append((repo, mode))
+
+          print(f'AUTOPILOT_ORACLE_REPO_CANDIDATES={len(candidates)}')
+
+          homes = [Path('/root'), Path('/home/ubuntu'), Path('/opt/bridge-school/autopilot')]
+          key_count = 0
+          for home in homes:
+              ssh_dir = home / '.ssh'
+              if not ssh_dir.is_dir():
+                  continue
+              for path in sorted(ssh_dir.iterdir()):
                   try:
                       if not path.is_file() or path.is_symlink():
                           continue
-                      if path.name not in allow and not any(part in {'.cursor', '.config'} for part in path.parts):
+                      if path.suffix == '.pub' or path.name in {'known_hosts', 'authorized_keys', 'config'}:
                           continue
                       stat = path.stat()
-                      rel = path.relative_to(root)
-                      print(f'CURSOR_AGENT_HOME_FILE={root.name}/{rel}|mode={stat.st_mode & 0o777:o}|size={stat.st_size}')
-                      count += 1
-                      if count >= 40:
-                          break
-                  except OSError:
+                      if stat.st_size > 32768:
+                          continue
+                      probe = subprocess.run(
+                          ['ssh-keygen', '-y', '-f', str(path)],
+                          text=True, capture_output=True, timeout=5,
+                      )
+                      if probe.returncode != 0:
+                          continue
+                      fp = subprocess.run(
+                          ['ssh-keygen', '-lf', str(path)],
+                          text=True, capture_output=True, timeout=5,
+                      )
+                      digest = 'unknown'
+                      match = re.search(r'(SHA256:[A-Za-z0-9+/=]+)', fp.stdout)
+                      if match:
+                          digest = match.group(1)
+                      print(f'AUTOPILOT_ORACLE_SSH_KEY_{key_count + 1}=owner={stat.st_uid}|mode={stat.st_mode & 0o777:o}|fingerprint={digest}')
+                      key_count += 1
+                  except (OSError, subprocess.TimeoutExpired):
                       continue
-              if count >= 40:
-                  break
-          print(f'CURSOR_AGENT_HOME_FILE_COUNT_SHOWN={count}')
-          PY
-          echo 'CURSOR_AGENT_HOME_METADATA_END'
+          print(f'AUTOPILOT_ORACLE_PRIVATE_KEY_COUNT={key_count}')
 
-          echo 'CURSOR_AGENT_RECENT_DIAGNOSTIC_BEGIN'
-          journalctl -u cursor-agent.service --no-pager -n 120 -o cat 2>/dev/null \
-            | python3 -c '
-          import re, sys
-          keep = re.compile(r"error|fail|denied|auth|login|token|timeout|rate|limit|permission|credential|session", re.I)
-          shown = 0
-          for raw in sys.stdin:
-              if not keep.search(raw):
+          for index, (repo, mode) in enumerate(candidates, 1):
+              env = os.environ.copy()
+              env['GIT_TERMINAL_PROMPT'] = '0'
+              env['GIT_ASKPASS'] = '/bin/false'
+              read_ok = False
+              write_dry_run = False
+              try:
+                  read = subprocess.run(
+                      ['git', '-C', str(repo), 'ls-remote', '--exit-code', 'origin', 'refs/heads/main'],
+                      env=env, text=True, capture_output=True, timeout=20,
+                  )
+                  read_ok = read.returncode == 0
+                  if read_ok:
+                      head = subprocess.run(
+                          ['git', '-C', str(repo), 'rev-parse', 'HEAD'],
+                          env=env, text=True, capture_output=True, timeout=5,
+                      )
+                      if head.returncode == 0 and re.fullmatch(r'[0-9a-f]{40}\n?', head.stdout):
+                          ref = 'refs/heads/autopilot/credential-boundary-dry-run'
+                          push = subprocess.run(
+                              ['git', '-C', str(repo), 'push', '--dry-run', 'origin', f'{head.stdout.strip()}:{ref}'],
+                              env=env, text=True, capture_output=True, timeout=30,
+                          )
+                          write_dry_run = push.returncode == 0
+              except (OSError, subprocess.TimeoutExpired):
+                  pass
+              print(
+                  f'AUTOPILOT_ORACLE_REPO_{index}=mode={mode}|READ={"YES" if read_ok else "NO"}|'
+                  f'WRITE_DRY_RUN={"YES" if write_dry_run else "NO"}'
+              )
+
+          helper_count = 0
+          for home in homes:
+              config = home / '.gitconfig'
+              if not config.is_file() or config.is_symlink():
                   continue
-              line = raw.rstrip("\n")
-              line = re.sub(r"(?:postgres(?:ql)?|https?|ssh)://\S+", "<redacted-url>", line, flags=re.I)
-              line = re.sub(r"(?i)(authorization|bearer|token|secret|password|key)(\s*[:=]\s*)\S+", r"\1\2<redacted>", line)
-              line = re.sub(r"[A-Za-z0-9_./+=-]{32,}", "<redacted-long-value>", line)
-              print(line[:600])
-              shown += 1
-              if shown >= 40:
-                  break
-          print(f"CURSOR_AGENT_RECENT_DIAGNOSTIC_LINES={shown}")
-          '
-          echo 'CURSOR_AGENT_RECENT_DIAGNOSTIC_END'
-          echo 'CURSOR_AGENT_CREDENTIAL_VALUES_EXPOSED=NO'
-          echo 'AUTOPILOT_SERVICE_RESTARTED=NO'
-          echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
-          REMOTE
+              try:
+                  text = config.read_text(encoding='utf-8', errors='ignore')
+              except OSError:
+                  continue
+              if re.search(r'credential\s*=|credential\.|helper\s*=', text, re.I):
+                  helper_count += 1
+          print(f'AUTOPILOT_ORACLE_GIT_CREDENTIAL_CONFIGS={helper_count}')
+          print('AUTOPILOT_GITHUB_CREDENTIAL_VALUES_EXPOSED=NO')
+          print('AUTOPILOT_GITHUB_REFS_MUTATED=NO')
+          print('AUTOPILOT_SERVICE_RESTARTED=NO')
+          print('ORACLE_INSTANCE_STOP_REQUESTED=NO')
+          PY
