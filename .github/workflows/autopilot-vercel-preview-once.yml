@@ -1,0 +1,200 @@
+name: One-shot Autopilot Vercel Preview on Oracle
+
+on:
+  push:
+    branches:
+      - codex/oracle-autopilot-lite-shadow
+    paths:
+      - '.github/workflows/autopilot-vercel-preview-once.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autopilot-vercel-preview-once
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SOURCE_REV: a204ba9dfbb70542383262026c0c772e04019a6c
+      EXPECTED_SOURCE_TREE: 5f227f3885535365d4e9c77815aac8b40d08e9ba
+      VERCEL_PROJECT: bridge-school-autopilot
+      VERCEL_SCOPE: olegmed1-4368s-projects
+      NODE_IMAGE: node:24.19.0-bookworm-slim
+      VERCEL_CLI_VERSION: 59.10.0
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+
+    steps:
+      - name: Check out exact workflow revision
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Resolve verified Oracle SSH credential
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/oracle-vercel-preview"
+          mkdir -p "$work"
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+
+          selected=''
+          index=0
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            raw="${!name:-}"
+            [[ -n "$raw" ]] || continue
+            index=$((index + 1))
+            base="$work/key-$index"
+            printf '%s\n' "$raw" > "$base.raw"
+            tr -d '\r' < "$base.raw" > "$base.crlf"
+            printf '%s' "$raw" | python -c '
+          import sys
+          raw = sys.stdin.read()
+          path = sys.argv[1]
+          if "\\n" in raw and "\n" not in raw:
+              raw = raw.replace("\\r", "").replace("\\n", "\n")
+          with open(path, "w", newline="\n") as handle:
+              handle.write(raw)
+              if not raw.endswith("\n"):
+                  handle.write("\n")
+          ' "$base.escaped"
+            for key in "$base.raw" "$base.crlf" "$base.escaped"; do
+              chmod 0600 "$key"
+              ssh-keygen -y -f "$key" >/dev/null 2>&1 || continue
+              if ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+                   -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+                   -o ConnectTimeout=10 "$ORACLE_USER@$ORACLE_HOST" true >/dev/null 2>&1; then
+                selected="$key"
+                break 2
+              fi
+            done
+          done
+          [[ -n "$selected" ]]
+          cp "$selected" "$work/id_oracle"
+          chmod 0600 "$work/id_oracle"
+          echo "key=$work/id_oracle" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Run bounded disposable Preview deployment
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
+            "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env SOURCE_REV='$SOURCE_REV' EXPECTED_SOURCE_TREE='$EXPECTED_SOURCE_TREE' VERCEL_PROJECT='$VERCEL_PROJECT' VERCEL_SCOPE='$VERCEL_SCOPE' NODE_IMAGE='$NODE_IMAGE' VERCEL_CLI_VERSION='$VERCEL_CLI_VERSION' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+
+          repo=/opt/bridge-school/bridge-video-free
+          container="autopilot-vercel-preview-once-$(date +%s)"
+          work="$(mktemp -d /var/tmp/autopilot-vercel-preview.XXXXXX)"
+
+          cleanup() {
+            docker rm -f "$container" >/dev/null 2>&1 || true
+            if [[ "$work" == /var/tmp/autopilot-vercel-preview.* && -d "$work" ]]; then
+              find "$work" -depth -delete
+            fi
+          }
+          trap cleanup EXIT HUP INT TERM
+
+          systemctl is-active --quiet school-autopilot-shadow.service
+          command -v docker >/dev/null
+          [[ -d "$repo/.git" ]]
+
+          git -C "$repo" fetch --quiet --no-tags origin "$SOURCE_REV"
+          git -C "$repo" cat-file -e "$SOURCE_REV^{commit}"
+          actual_tree="$(git -C "$repo" rev-parse "$SOURCE_REV:autopilot_token_broker_service")"
+          [[ "$actual_tree" == "$EXPECTED_SOURCE_TREE" ]]
+
+          mkdir -p "$work/source"
+          git -C "$repo" archive "$SOURCE_REV" autopilot_token_broker_service \
+            | tar -x -C "$work/source" --strip-components=1
+
+          cat > "$work/run-preview.sh" <<'CONTAINER'
+          #!/bin/sh
+          set -eu
+          umask 077
+          export HOME=/tmp/vercel-home
+          export npm_config_cache=/tmp/npm-cache
+          export NO_UPDATE_NOTIFIER=1
+          export VERCEL_TELEMETRY_DISABLED=1
+          export NO_COLOR=1
+          mkdir -p "$HOME" /tmp/source
+          cp -a /input/. /tmp/source/
+          cd /tmp/source
+
+          cli="npx --yes vercel@${VERCEL_CLI_VERSION}"
+          $cli login
+          $cli link --yes --project "$VERCEL_PROJECT" --scope "$VERCEL_SCOPE"
+          preview_url="$($cli deploy --yes --scope "$VERCEL_SCOPE")"
+          case "$preview_url" in
+            https://*.vercel.app) ;;
+            *) echo 'preview_url_invalid' >&2; exit 71 ;;
+          esac
+
+          health="$($cli curl /healthz --deployment "$preview_url")"
+          HEALTH_JSON="$health" node - <<'NODE'
+          const payload = JSON.parse(process.env.HEALTH_JSON);
+          const expected = {
+            status: 'ok',
+            service: 'school-autopilot-github-token-broker',
+            preview_only: true,
+            production_mutations_enabled: false,
+            github_token_broker_enabled: true,
+          };
+          for (const [key, value] of Object.entries(expected)) {
+            if (payload[key] !== value) throw new Error(`health mismatch: ${key}`);
+          }
+          NODE
+          printf 'PREVIEW_DEPLOYMENT_URL=%s\n' "$preview_url"
+          printf 'PREVIEW_HEALTH=PASS\n'
+          $cli logout >/dev/null 2>&1 || true
+          find "$HOME" -depth -delete
+          CONTAINER
+          chmod 0700 "$work/run-preview.sh"
+
+          docker pull "$NODE_IMAGE" >/dev/null
+          resolved_image="$(docker image inspect --format '{{index .RepoDigests 0}}' "$NODE_IMAGE")"
+          [[ "$resolved_image" == node@sha256:* ]]
+          printf 'container_image=%s\n' "$resolved_image"
+
+          docker run --rm -t --name "$container" --cpus=1 --memory=1g --pids-limit=256 \
+            --cap-drop=ALL --security-opt=no-new-privileges \
+            --tmpfs /tmp:rw,nosuid,nodev,size=1024m \
+            --mount type=bind,src="$work/source",dst=/input,readonly \
+            --mount type=bind,src="$work/run-preview.sh",dst=/runner/run-preview.sh,readonly \
+            -e VERCEL_PROJECT -e VERCEL_SCOPE -e VERCEL_CLI_VERSION \
+            "$resolved_image" /bin/sh /runner/run-preview.sh
+
+          systemctl is-active --quiet school-autopilot-shadow.service
+          REMOTE
+
+      - name: Confirm bounded result
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'source_revision=%s\n' "$SOURCE_REV"
+          printf 'oracle_instance_stop_requested=false\n'
+          printf 'production_requested=false\n'
+          printf 'video_requested=false\n'
+          printf 'train_requested=false\n'
+          [[ '${{ steps.deploy.outcome }}' == 'success' ]]
