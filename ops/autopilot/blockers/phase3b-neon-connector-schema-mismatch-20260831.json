@@ -1,8 +1,8 @@
 {
-  "schema_version": "1.0",
+  "schema_version": "1.1",
   "kind": "AUTOPILOT_BLOCKER",
   "blocker_id": "PHASE3B_NEON_CONNECTOR_SCHEMA_MISMATCH",
-  "status": "BLOCKED",
+  "status": "BLOCKED_EXTERNAL_ADAPTER",
   "recorded_at": "2026-08-31T17:15:00Z",
   "tracker_issue": 782,
   "draft_pr": 991,
@@ -34,12 +34,36 @@
     "branch_default": false,
     "branch_protected": false,
     "branch_available": true,
+    "migration_0302_previously_proven": true,
     "migration_0303_applied": false,
     "production_neon_changed": false
+  },
+  "safe_paths_exhausted": {
+    "direct_run_sql": "BLOCKED_BY_ADAPTER_ARGUMENT_SCHEMA_MISMATCH",
+    "direct_connection_string": "BLOCKED_BY_ADAPTER_ARGUMENT_SCHEMA_MISMATCH",
+    "schema_introspection": "BLOCKED_BY_ADAPTER_ARGUMENT_SCHEMA_MISMATCH",
+    "branch_compute_introspection": "BLOCKED_BY_ADAPTER_ARGUMENT_SCHEMA_MISMATCH",
+    "runtime_login_upgrade": "NOT_ALLOWED_RUNTIME_ROLE_HAS_BOUNDED_RPC_ONLY_NO_DDL",
+    "prepare_database_migration": "NOT_APPLICABLE_CREATES_OWN_TEMP_BRANCH_AND_IS_DESIGNED_TO_APPLY_TO_PARENT_MAIN",
+    "github_workflow_dispatch": "UNAVAILABLE_IN_CONNECTED_GITHUB_ACTIONS",
+    "existing_repo_neon_api_workflow": "ABSENT_NO_NEON_API_KEY_OR_NEONCTL_PATH_FOUND",
+    "alternate_postgres_plugin": "NOT_AVAILABLE",
+    "local_operator_credentials": "NOT_MOUNTED",
+    "stale_oracle_workflow_bypass": "REJECTED_HARDCODED_OLD_HOST_AND_FINALIZER_CAN_STOP_INSTANCE",
+    "secret_bearing_push_workflow": "REJECTED_BY_FAIL_CLOSED_POLICY"
+  },
+  "independent_readiness": {
+    "migration_0303_postgresql18_ci": "PASS",
+    "draft_pr_exact_head_ci_before_this_evidence_update": "13_PASS",
+    "oracle_canonical_identity": "OCI_OCID",
+    "oracle_lifecycle_state": "RUNNING",
+    "oracle_dynamic_ip_pattern_proven_in_main": true,
+    "production_promotion": "BLOCKED"
   },
   "fail_closed_rules": [
     "NEVER_OMIT_TEMPORARY_BRANCH_ID",
     "NEVER_FALL_BACK_TO_DEFAULT_NEON_BRANCH",
+    "DO_NOT_ELEVATE_AUTOPILOT_RUNTIME_LOGIN_FOR_MIGRATIONS",
     "DO_NOT_CREATE_SECRET_BEARING_PROVISIONING_WORKFLOW_AS_A_BYPASS",
     "DO_NOT_RUN_STALE_ORACLE_STAGING_OR_FINALIZER_WORKFLOWS",
     "KEEP_ORACLE_RUNNING",
@@ -47,6 +71,7 @@
     "NO_MERGE_OR_PRODUCTION_PROMOTION"
   ],
   "unblock_criteria": [
+    "The Neon connector accepts its exposed branch-scoped argument contract or an equivalent authorized branch-scoped SQL executor becomes available",
     "A branch-scoped SQL execution path accepts explicit branch br-still-tooth-b1ilkfcj",
     "Preflight proves migration 0302 prerequisites on that same branch",
     "Migration 0303 applies and validates on that same temporary branch only",
@@ -55,6 +80,8 @@
   "evidence": {
     "issue_comment_id": 5481766542,
     "safe_head_before_record": "2354b1e3177adf6ceefc0fb8eb35209f1a88f108",
-    "safe_head_ci": "13_PASS"
+    "previous_evidence_head": "9c7393529071e2df3737fcc3c325e3075145b437",
+    "previous_exact_head_ci": "13_PASS",
+    "oracle_status_run_id": 33419692249
   }
 }
