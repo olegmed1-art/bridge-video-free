@@ -154,22 +154,13 @@ jobs:
             -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
             "$ORACLE_USER@$ORACLE_HOST" 'sudo -n python3 -' <<'PY'
-          import json
-          import os
-          import re
-          import urllib.error
-          import urllib.request
-
+          import json, os, re, urllib.error, urllib.request
           candidates = [
-              '/root/.local/share/com.vercel.cli/auth.json',
-              '/root/.vercel/auth.json',
-              '/home/ubuntu/.local/share/com.vercel.cli/auth.json',
-              '/home/ubuntu/.vercel/auth.json',
-              '/opt/bridge-school/.local/share/com.vercel.cli/auth.json',
-              '/opt/bridge-school/.vercel/auth.json',
+              '/root/.local/share/com.vercel.cli/auth.json', '/root/.vercel/auth.json',
+              '/home/ubuntu/.local/share/com.vercel.cli/auth.json', '/home/ubuntu/.vercel/auth.json',
+              '/opt/bridge-school/.local/share/com.vercel.cli/auth.json', '/opt/bridge-school/.vercel/auth.json',
           ]
-          present = 0
-          valid = 0
+          present = valid = 0
           for path in candidates:
               if not os.path.isfile(path) or os.path.islink(path):
                   continue
@@ -185,7 +176,7 @@ jobs:
                   )
                   with urllib.request.urlopen(request, timeout=15) as response:
                       if response.status == 200:
-                          valid += 1
+                          valid = 1
                           break
               except (OSError, ValueError, urllib.error.URLError):
                   continue
@@ -193,3 +184,114 @@ jobs:
           print(f'AUTOPILOT_ORACLE_VERCEL_AUTH_VALID={"YES" if valid else "NO"}')
           print('AUTOPILOT_ORACLE_VERCEL_AUTH_VALUES_EXPOSED=NO')
           PY
+
+  temp-neon-owner-preflight:
+    needs: preflight
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    environment: database-production
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      TARGET_ENDPOINT_ID: ep-floral-field-b1pjs2of
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      OWNER_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Require protected inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ -n "${SSH_KEY_ORACLE:-}" ]]
+          [[ -n "${OWNER_DATABASE_URL:-}" ]]
+          echo 'AUTOPILOT_DATABASE_PRODUCTION_SECRET_PRESENT=YES'
+          echo 'AUTOPILOT_DATABASE_PRODUCTION_TARGET_ACCESSED=NO'
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Resolve temporary endpoint from Oracle SHADOW runtime
+        id: target
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/temp-neon-owner"
+          mkdir -p "$work"
+          key="$work/id_oracle"
+          printf '%s\n' "$SSH_KEY_ORACLE" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          target_host="$(ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 \
+            "$ORACLE_USER@$ORACLE_HOST" 'sudo -n python3 -' <<'PY'
+          import os, re
+          from urllib.parse import urlparse
+          path = '/opt/bridge-school/school-autopilot/autopilot-shadow.env'
+          assert os.path.isfile(path) and not os.path.islink(path)
+          value = ''
+          for raw in open(path, encoding='utf-8'):
+              if raw.startswith('AUTOPILOT_DATABASE_URL='):
+                  value = raw.rstrip('\n').split('=', 1)[1]
+                  break
+          parsed = urlparse(value)
+          host = parsed.hostname or ''
+          assert re.fullmatch(r'ep-floral-field-b1pjs2of(?:-pooler)?\.[a-z0-9-]+\.aws\.neon\.tech', host), host
+          print(host)
+          PY
+          )"
+          [[ "$target_host" == "$TARGET_ENDPOINT_ID."* || "$target_host" == "$TARGET_ENDPOINT_ID-pooler."* ]]
+          printf '%s' "$target_host" > "$work/target-host"
+          chmod 0600 "$work/target-host"
+          echo "host_file=$work/target-host" >> "$GITHUB_OUTPUT"
+          echo 'AUTOPILOT_TEMP_NEON_ENDPOINT_RESOLVED=YES'
+
+      - name: Derive branch-scoped owner DSN and perform read-only privilege check
+        shell: bash
+        env:
+          TARGET_HOST_FILE: ${{ steps.target.outputs.host_file }}
+        run: |
+          set -Eeuo pipefail
+          umask 077
+          dsn_file="$RUNNER_TEMP/temp-neon-owner/owner-dsn"
+          python3 - "$TARGET_HOST_FILE" "$dsn_file" <<'PY'
+          import os, re, sys
+          from urllib.parse import urlparse, urlunparse
+          owner = os.environ['OWNER_DATABASE_URL']
+          target_host = open(sys.argv[1], encoding='utf-8').read().strip()
+          parsed = urlparse(owner)
+          assert parsed.scheme in {'postgres', 'postgresql'}
+          assert parsed.username and parsed.password and parsed.hostname
+          assert parsed.hostname != target_host
+          assert re.fullmatch(r'ep-floral-field-b1pjs2of(?:-pooler)?\.[a-z0-9-]+\.aws\.neon\.tech', target_host)
+          userinfo = f'{parsed.username}:{parsed.password}'
+          port = parsed.port or 5432
+          netloc = f'{userinfo}@{target_host}:{port}'
+          target = urlunparse((parsed.scheme, netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+          with open(sys.argv[2], 'w', encoding='utf-8') as handle:
+              handle.write(target)
+          os.chmod(sys.argv[2], 0o600)
+          PY
+          target_dsn="$(cat "$dsn_file")"
+          result="$(psql "$target_dsn" -X -A -t -F '|' -v ON_ERROR_STOP=1 -c \
+            "SELECT current_database(), current_user, EXISTS (SELECT 1 FROM public.schema_migration WHERE migration_key='0303_autopilot_github_draft_repair'), to_regprocedure('autopilot.create_shadow_task(text,text,jsonb,integer,bigint,text,text)') IS NOT NULL, has_function_privilege(current_user, 'autopilot.create_shadow_task(text,text,jsonb,integer,bigint,text,text)', 'EXECUTE');")"
+          IFS='|' read -r db user m0303 function_present can_execute <<< "$result"
+          [[ "$db" == neondb ]]
+          [[ "$user" != autopilot_runtime_login ]]
+          [[ "$m0303" == t && "$function_present" == t && "$can_execute" == t ]]
+          echo 'AUTOPILOT_TEMP_NEON_OWNER_PREFLIGHT=PASS'
+          echo 'AUTOPILOT_TEMP_NEON_MIGRATION_0303=PASS'
+          echo 'AUTOPILOT_CREATE_SHADOW_TASK_PRIVILEGE=PASS'
+          echo 'AUTOPILOT_DATABASE_PRODUCTION_TARGET_ACCESSED=NO'
+          shred -u "$dsn_file" 2>/dev/null || rm -f "$dsn_file"
