@@ -14,6 +14,8 @@ from oracle_autopilot.ibf_read_only import (
     IBF_SOURCE_AUTHORITY,
     _canonical_session_url,
     _canonical_total_url,
+    _extract_personal_result_tokens,
+    _parse_document,
     _validate_official_url,
     fetch_ibf_read_only_snapshot,
 )
@@ -206,6 +208,17 @@ def test_snapshot_selects_latest_actual_participation_and_verifies_field_pages()
     assert result["production_mutation"] is False
     assert result["model_calls"] == 0
     assert result["analysis_scope"] == "SOURCE_RETRIEVAL_AND_FIELD_EVIDENCE_ONLY"
+
+
+def test_personal_tokens_do_not_capture_two_digit_board_number():
+    document = _parse_document(
+        """<table><tr>
+        <td>10</td><td>EW</td><td>-100</td><td></td><td>50.00</td>
+        <td>♣8</td><td>3♦-1 [S]</td>
+        </tr></table>"""
+    )
+
+    assert _extract_personal_result_tokens(document.rows[0]) == ("50.00", "-100")
 
 
 def test_missing_board_links_fail_closed_instead_of_inventing_data():

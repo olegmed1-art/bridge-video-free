@@ -384,6 +384,37 @@ def _find_personal_link(
     return None
 
 
+def _extract_personal_result_tokens(
+    row: tuple[tuple[str, tuple[str, ...]], ...]
+) -> tuple[str | None, str | None]:
+    """Read score and percentage from the contiguous result cells, not the board number."""
+
+    numeric_cells: list[str] = []
+    started = False
+    for cell_text, _links in row[2:]:
+        token = cell_text.strip()
+        if not token:
+            continue
+        if re.fullmatch(r"[-+]?[0-9]{1,5}(?:\.[0-9]+)?", token):
+            numeric_cells.append(token)
+            started = True
+            continue
+        if started:
+            break
+
+    percentage_token: str | None = None
+    score_token: str | None = None
+    if numeric_cells and re.fullmatch(
+        r"(?:100(?:\.0+)?|[0-9]{1,2}(?:\.[0-9]+)?)", numeric_cells[-1]
+    ):
+        percentage_token = numeric_cells[-1]
+        for candidate in numeric_cells[:-1]:
+            if re.fullmatch(r"[-+]?[0-9]{1,5}", candidate):
+                score_token = candidate
+                break
+    return percentage_token, score_token
+
+
 def _extract_personal_boards(
     document: _ParsedDocument, personal_url: str, event_id: int, round_id: int
 ) -> list[dict[str, Any]]:
@@ -412,21 +443,16 @@ def _extract_personal_boards(
         cells = [cell[0].strip() for cell in row]
         direction = cells[1][:8] or None if len(cells) > 1 else None
         if len(cells) >= 8:
-            score_text = next((value for value in cells[2:4] if value), "")
-            percentage_text = cells[4]
             lead = cells[5][:12] or None
             contract = cells[6][:32] or None
         else:
-            score_text = cells[2] if len(cells) > 2 else ""
-            percentage_text = cells[3] if len(cells) > 3 else ""
             lead = cells[4][:12] or None if len(cells) > 4 else None
             contract = cells[5][:32] or None if len(cells) > 5 else None
-        percent_match = re.fullmatch(r"100(?:\.0+)?|[0-9]{1,2}(?:\.[0-9]+)?", percentage_text)
-        score_match = re.fullmatch(r"[-+]?[1-9][0-9]{1,4}", score_text)
+        percentage_token, score_token = _extract_personal_result_tokens(row)
         evidence_excerpt = _normalize_text(
             " | ".join(
                 value
-                for value in (first, direction, score_text, percentage_text, lead, contract)
+                for value in (first, direction, score_token, percentage_token, lead, contract)
                 if value
             )
         )[:IBF_ROW_EXCERPT_LIMIT]
@@ -435,8 +461,8 @@ def _extract_personal_boards(
                 "board_number": board_number,
                 "board_url": board_url,
                 "personal_row_excerpt": evidence_excerpt,
-                "percentage_token": percent_match.group(0) if percent_match else None,
-                "score_token": score_match.group(0) if score_match else None,
+                "percentage_token": percentage_token,
+                "score_token": score_token,
             }
         )
         seen_numbers.add(board_number)
