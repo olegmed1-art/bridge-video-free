@@ -51,47 +51,45 @@ jobs:
           env_file="$root/autopilot-shadow.env"
 
           active="$(systemctl is-active "$service" 2>/dev/null || true)"
-          echo "AUTOPILOT_SERVICE_ACTIVE=$active"
-          [[ "$active" == active ]] || fail service_active
-
           enabled="$(systemctl is-enabled "$service" 2>/dev/null || true)"
-          echo "AUTOPILOT_SERVICE_ENABLED=$enabled"
-          [[ "$enabled" == enabled ]] || fail service_enabled
-
           restarts="$(systemctl show -p NRestarts --value "$service" 2>/dev/null || true)"
-          echo "AUTOPILOT_SERVICE_NRESTARTS=${restarts:-unavailable}"
-          [[ "$restarts" =~ ^[0-9]+$ ]] || fail service_restart_counter
-
           env_meta="$(stat -c '%U:%G:%a' "$env_file" 2>/dev/null || true)"
+          echo "AUTOPILOT_SERVICE_ACTIVE=$active"
+          echo "AUTOPILOT_SERVICE_ENABLED=$enabled"
+          echo "AUTOPILOT_SERVICE_NRESTARTS=${restarts:-unavailable}"
           echo "AUTOPILOT_ENV_METADATA=${env_meta:-missing}"
+          [[ "$active" == active ]] || fail service_active
+          [[ "$enabled" == enabled ]] || fail service_enabled
+          [[ "$restarts" =~ ^[0-9]+$ ]] || fail service_restart_counter
           [[ "$env_meta" == root:root:600 ]] || fail environment_metadata
 
           release="$(readlink -f "$root/current" 2>/dev/null || true)"
           [[ -n "$release" && -d "$release" ]] || fail current_release
-          echo 'AUTOPILOT_CURRENT_RELEASE_PRESENT=YES'
-
           python_bin=''
-          for candidate in \
-            "$release/.venv/bin/python" \
-            "$root/.venv/bin/python" \
-            /opt/bridge-school/bridge-video-free/.venv/bin/python; do
-            if [[ -x "$candidate" ]]; then
-              python_bin="$candidate"
-              break
-            fi
+          for candidate in "$release/.venv/bin/python" "$root/.venv/bin/python"; do
+            if [[ -x "$candidate" ]]; then python_bin="$candidate"; break; fi
           done
           [[ -n "$python_bin" ]] || fail python_runtime
+          echo 'AUTOPILOT_CURRENT_RELEASE_PRESENT=YES'
           echo 'AUTOPILOT_PYTHON_RUNTIME_PRESENT=YES'
 
-          set +u
-          set -a
-          source "$env_file" || fail environment_load
-          set +a
-          set -u
-          [[ -n "${AUTOPILOT_DATABASE_URL:-}" ]] || fail database_url_absent
+          pid="$(systemctl show -p MainPID --value "$service" 2>/dev/null || true)"
+          [[ "$pid" =~ ^[1-9][0-9]*$ && -r "/proc/$pid/environ" ]] || fail service_process_environment
+          db_url="$("$python_bin" - "$pid" <<'PY'
+          import sys
+
+          pid = sys.argv[1]
+          prefix = b'AUTOPILOT_DATABASE_URL='
+          for entry in open(f'/proc/{pid}/environ', 'rb').read().split(b'\0'):
+              if entry.startswith(prefix):
+                  print(entry[len(prefix):].decode())
+                  break
+          PY
+          )"
+          [[ -n "$db_url" ]] || fail database_url_absent
           echo 'AUTOPILOT_DATABASE_URL_PRESENT=YES'
 
-          AUTOPILOT_DATABASE_URL="$AUTOPILOT_DATABASE_URL" "$python_bin" - <<'PY'
+          AUTOPILOT_DATABASE_URL="$db_url" "$python_bin" - <<'PY'
           import os
           import sys
           import urllib.parse
@@ -104,13 +102,15 @@ jobs:
               parsed = urllib.parse.urlsplit(dsn)
               host = (parsed.hostname or '').lower()
               endpoint_ok = host.startswith('ep-floral-field-b1pjs2of.')
-              print(f'AUTOPILOT_DSN_ROLE_MATCH={str(parsed.username == "autopilot_runtime_login").upper()}', flush=True)
-              print(f'AUTOPILOT_DSN_DATABASE_MATCH={str((parsed.path.lstrip("/") or "neondb") == "neondb").upper()}', flush=True)
+              role_ok = parsed.username == 'autopilot_runtime_login'
+              database_ok = (parsed.path.lstrip('/') or 'neondb') == 'neondb'
+              direct_ok = 'pooler' not in host
+              print(f'AUTOPILOT_DSN_ROLE_MATCH={str(role_ok).upper()}', flush=True)
+              print(f'AUTOPILOT_DSN_DATABASE_MATCH={str(database_ok).upper()}', flush=True)
               print(f'AUTOPILOT_DSN_TEMP_ENDPOINT_MATCH={str(endpoint_ok).upper()}', flush=True)
-              print(f'AUTOPILOT_DSN_DIRECT_ENDPOINT={str("pooler" not in host).upper()}', flush=True)
-              assert parsed.username == 'autopilot_runtime_login'
-              assert (parsed.path.lstrip('/') or 'neondb') == 'neondb'
-              assert endpoint_ok and host.endswith('.neon.tech') and 'pooler' not in host
+              print(f'AUTOPILOT_DSN_DIRECT_ENDPOINT={str(direct_ok).upper()}', flush=True)
+              assert role_ok and database_ok and endpoint_ok
+              assert host.endswith('.neon.tech') and direct_ok
 
               stage = 'connect_read_only'
               with psycopg.connect(
@@ -132,20 +132,19 @@ jobs:
                       print('AUTOPILOT_DATABASE_READ_ONLY=YES', flush=True)
 
                       stage = 'ingress_function'
-                      cur.execute(
-                          "SELECT to_regprocedure(" 
-                          "'autopilot.register_approved_ibf_analysis(text,text,text,integer)'"
-                          ")"
+                      signature = (
+                          'autopilot.register_approved_ibf_analysis'
+                          '(text,text,text,integer)'
                       )
-                      ingress_oid = cur.fetchone()[0]
+                      cur.execute(
+                          "SELECT to_regprocedure(%s)::oid, "
+                          "has_function_privilege(current_user, "
+                          "to_regprocedure(%s)::oid, 'EXECUTE')",
+                          (signature, signature),
+                      )
+                      ingress_oid, ingress_execute_value = cur.fetchone()
                       ingress_function = ingress_oid is not None
-                      ingress_execute = False
-                      if ingress_function:
-                          cur.execute(
-                              "SELECT has_function_privilege(current_user, %s::oid, 'EXECUTE')",
-                              (ingress_oid,),
-                          )
-                          ingress_execute = bool(cur.fetchone()[0])
+                      ingress_execute = bool(ingress_execute_value)
 
                       stage = 'migration_registry'
                       migration_0306 = None
@@ -177,12 +176,12 @@ jobs:
                           queue = {'SELECT_PRIVILEGE': 'UNAVAILABLE'}
                           active_tasks = None
 
-              print('AUTOPILOT_TEMP_ENDPOINT_VERIFIED=YES', flush=True)
               migration_text = 'UNAVAILABLE' if migration_0306 is None else str(migration_0306).upper()
+              active_text = 'UNAVAILABLE' if active_tasks is None else str(active_tasks)
+              print('AUTOPILOT_TEMP_ENDPOINT_VERIFIED=YES', flush=True)
               print(f'AUTOPILOT_MIGRATION_0306_PRESENT={migration_text}', flush=True)
               print(f'AUTOPILOT_BOUNDED_INGRESS_PRESENT={str(ingress_function).upper()}', flush=True)
               print(f'AUTOPILOT_RUNTIME_CAN_EXECUTE_INGRESS={str(ingress_execute).upper()}', flush=True)
-              active_text = 'UNAVAILABLE' if active_tasks is None else str(active_tasks)
               print(f'AUTOPILOT_ACTIVE_TASK_COUNT={active_text}', flush=True)
               print('AUTOPILOT_QUEUE_COUNTS=' + ','.join(
                   f'{key}:{queue[key]}' for key in sorted(queue)
@@ -198,6 +197,5 @@ jobs:
           PY
           py_rc=$?
           [[ $py_rc -eq 0 ]] || fail python_database_preflight
-
           echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
           REMOTE
