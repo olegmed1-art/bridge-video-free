@@ -12,7 +12,7 @@ BEGIN
           'sql-ibf-completion-0307',
           '15031',
           'github:issue:1013#director-go',
-          1
+          10
       );
     IF NOT task_row.created OR task_row.status <> 'READY' THEN
         RAISE EXCEPTION 'AUTOPILOT_IBF_COMPLETION_SETUP_FAILED';
