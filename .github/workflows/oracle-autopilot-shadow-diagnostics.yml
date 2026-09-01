@@ -191,6 +191,14 @@ jobs:
           printf 'AUTOPILOT_DIAG_SANDBOX_PERMISSION_COUNT=%s\n' "$(count 'mount namespacing|Read-only file system')"
           printf 'AUTOPILOT_DIAG_DATABASE_COUNT=%s\n' "$(count 'OperationalError|authentication failed|connection refused|could not connect')"
           printf 'AUTOPILOT_DIAG_TRACEBACK_COUNT=%s\n' "$(count 'Traceback|RuntimeError')"
+          printf 'AUTOPILOT_DIAG_TYPEERROR_COUNT=%s\n' "$(count 'TypeError:')"
+          printf 'AUTOPILOT_DIAG_VALUEERROR_COUNT=%s\n' "$(count 'ValueError:')"
+          printf 'AUTOPILOT_DIAG_ATTRIBUTEERROR_COUNT=%s\n' "$(count 'AttributeError:')"
+          printf 'AUTOPILOT_DIAG_KEYERROR_COUNT=%s\n' "$(count 'KeyError:')"
+          printf 'AUTOPILOT_DIAG_INDEXERROR_COUNT=%s\n' "$(count 'IndexError:')"
+          printf 'AUTOPILOT_DIAG_INCOMPLETEREAD_COUNT=%s\n' "$(count 'IncompleteRead')"
+          printf 'AUTOPILOT_DIAG_SSLERROR_COUNT=%s\n' "$(count 'SSLError|SSL:')"
+          printf 'AUTOPILOT_DIAG_TIMEOUTERROR_COUNT=%s\n' "$(count 'TimeoutError|timed out')"
           echo 'AUTOPILOT_DIAGNOSTIC_READ_ONLY=YES'
           echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
           printf 'AUTOPILOT_DIAG_PRECONDITION=%s\n' "$precondition"
