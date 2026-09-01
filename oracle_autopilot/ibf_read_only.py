@@ -28,13 +28,20 @@ IBF_ALLOWED_HOSTS = frozenset(
     {"bridge.co.il", "www.bridge.co.il", "main.bridge.co.il", "www.main.bridge.co.il"}
 )
 IBF_VIEWER_PATHS = frozenset(
-    {"/viewer/membermplist.php", "/viewer/session.php", "/viewer/personal.php", "/viewer/board.php"}
+    {
+        "/viewer/membermplist.php",
+        "/viewer/total.php",
+        "/viewer/session.php",
+        "/viewer/personal.php",
+        "/viewer/board.php",
+    }
 )
 IBF_RESPONSE_LIMIT_BYTES = 1_048_576
-IBF_MAX_SESSION_CANDIDATES = 60
-IBF_MAX_BOARD_PAGES = 32
+IBF_MAX_TOTAL_CANDIDATES = 8
+IBF_MAX_SESSION_CANDIDATES = 40
+IBF_MAX_BOARD_PAGES = 24
 IBF_MAX_REQUESTS = 96
-IBF_ROW_EXCERPT_LIMIT = 160
+IBF_ROW_EXCERPT_LIMIT = 48
 IBF_SOURCE_AUTHORITY = "ISRAEL_BRIDGE_FEDERATION_OFFICIAL_RESULTS"
 
 
@@ -239,6 +246,30 @@ def _canonical_session_url(href: str, base_url: str) -> tuple[str, int, int] | N
     return url, event_id, round_id
 
 
+def _canonical_total_url(href: str, base_url: str, player_id: str) -> tuple[str, int] | None:
+    absolute = _normalize_legacy_viewer_url(urllib.parse.urljoin(base_url, href))
+    try:
+        parsed = _validate_official_url(absolute)
+    except AutopilotContractError:
+        return None
+    if parsed.path != "/viewer/total.php":
+        return None
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=False)
+    if set(query) - {"event", "ibf", "hc"}:
+        return None
+    event_values = query.get("event")
+    player_values = query.get("ibf")
+    if (
+        not event_values
+        or len(event_values) != 1
+        or player_values != [player_id]
+        or re.fullmatch(r"[1-9][0-9]{0,9}", event_values[0]) is None
+    ):
+        return None
+    event_id = int(event_values[0])
+    return f"{IBF_VIEWER_ORIGIN}/viewer/total.php?event={event_id}&ibf={player_id}", event_id
+
+
 def _canonical_personal_url(href: str, base_url: str, event_id: int, round_id: int) -> tuple[str, str] | None:
     absolute = _normalize_legacy_viewer_url(urllib.parse.urljoin(base_url, href))
     try:
@@ -286,17 +317,36 @@ def _validated_board_url(href: str, base_url: str, event_id: int, round_id: int)
     return f"{IBF_VIEWER_ORIGIN}/viewer/board.php?{normalized_query}"
 
 
+def _total_candidates(
+    documents: list[tuple[str, _ParsedDocument]], player_id: str
+) -> list[tuple[str, int]]:
+    found: list[tuple[str, int]] = []
+    seen: set[int] = set()
+    for base_url, document in documents:
+        for href in document.anchors:
+            candidate = _canonical_total_url(href, base_url, player_id)
+            if candidate is None or candidate[1] in seen:
+                continue
+            found.append(candidate)
+            seen.add(candidate[1])
+            if len(found) >= IBF_MAX_TOTAL_CANDIDATES:
+                return found
+    return found
+
+
 def _session_candidates(documents: list[tuple[str, _ParsedDocument]]) -> list[tuple[str, int, int]]:
-    found: dict[tuple[int, int], str] = {}
+    found: list[tuple[str, int, int]] = []
+    seen: set[tuple[int, int]] = set()
     for base_url, document in documents:
         for href in document.anchors:
             candidate = _canonical_session_url(href, base_url)
-            if candidate is None:
+            if candidate is None or (candidate[1], candidate[2]) in seen:
                 continue
-            url, event_id, round_id = candidate
-            found[(event_id, round_id)] = url
-    ordered = sorted(found.items(), key=lambda item: item[0], reverse=True)
-    return [(url, event_id, round_id) for (event_id, round_id), url in ordered[:IBF_MAX_SESSION_CANDIDATES]]
+            found.append(candidate)
+            seen.add((candidate[1], candidate[2]))
+            if len(found) >= IBF_MAX_SESSION_CANDIDATES:
+                return found
+    return found
 
 
 def _row_text(row: tuple[tuple[str, tuple[str, ...]], ...]) -> str:
@@ -390,13 +440,27 @@ def _extract_personal_boards(
                 break
         if board_url is None:
             continue
-        text = _row_text(row)
+        cells = [cell[0].strip() for cell in row]
+        direction = cells[1][:8] or None if len(cells) > 1 else None
+        if len(cells) >= 8:
+            lead = cells[5][:12] or None
+            contract = cells[6][:32] or None
+        else:
+            lead = cells[4][:12] or None if len(cells) > 4 else None
+            contract = cells[5][:32] or None if len(cells) > 5 else None
         percentage_token, score_token = _extract_personal_result_tokens(row)
+        evidence_excerpt = _normalize_text(
+            " | ".join(
+                value
+                for value in (first, direction, score_token, percentage_token, lead, contract)
+                if value
+            )
+        )[:IBF_ROW_EXCERPT_LIMIT]
         boards.append(
             {
                 "board_number": board_number,
                 "board_url": board_url,
-                "personal_row_excerpt": text[:IBF_ROW_EXCERPT_LIMIT],
+                "personal_row_excerpt": evidence_excerpt,
                 "percentage_token": percentage_token,
                 "score_token": score_token,
             }
@@ -437,7 +501,15 @@ def fetch_ibf_read_only_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
 
     index_html = _ibf_get_html(IBF_INDEX_URL, budget)
     index_doc = _parse_document(index_html)
-    candidates = _session_candidates([(member_url, member_doc), (IBF_INDEX_URL, index_doc)])
+    total_documents: list[tuple[str, _ParsedDocument]] = []
+    for total_url, _event_id in _total_candidates(
+        [(member_url, member_doc), (IBF_INDEX_URL, index_doc)], player_id
+    ):
+        total_html = _ibf_get_html(total_url, budget)
+        total_documents.append((total_url, _parse_document(total_html)))
+    candidates = _session_candidates(
+        [*total_documents, (member_url, member_doc), (IBF_INDEX_URL, index_doc)]
+    )
     if not candidates:
         raise AutopilotContractError("IBF_DISCOVERY_NO_SESSION_LINKS")
 
