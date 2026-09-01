@@ -29,22 +29,55 @@ verify(){
 enqueue_batch(){
   [[ $# -eq 1 && ${#1} -le 24000 ]] || fail 'invalid encoded batch intake'
   verify
-  [[ -d "$INTAKE" && ! -L "$INTAKE" && "$(stat -c '%U:%G:%a' "$INTAKE")" == universal-video:universal-video:750 ]] || fail 'unsafe intake directory'
+  [[ -d "$INTAKE" && ! -L "$INTAKE" && "$(stat -c '%U:%G:%a' "$INTAKE" 2>/dev/null)" == universal-video:universal-video:750 ]] || fail 'unsafe intake directory'
   [[ -f "$DRIVE_OAUTH_FILE" && ! -L "$DRIVE_OAUTH_FILE" ]] || fail 'Drive credential unavailable'
   [[ -f "$QUEUE_DSN_FILE" && ! -L "$QUEUE_DSN_FILE" ]] || fail 'video queue credential unavailable'
-  local root_tmp request_tmp
-  root_tmp="$(mktemp -p "$STAGING" batch.XXXXXXXX.json)"
-  request_tmp="$(runuser -u universal-video -- mktemp -p "$INTAKE" batch.XXXXXXXX.json)"
-  trap 'rm -f "${root_tmp:-}" "${request_tmp:-}"' EXIT
-  printf '%s' "$1" | base64 --decode >"$root_tmp" 2>/dev/null || fail 'invalid batch encoding'
-  [[ $(stat -c '%s' "$root_tmp") -le 16384 ]] || fail 'batch intake too large'
-  install -o universal-video -g universal-video -m 0600 "$root_tmp" "$request_tmp"
+  local root_tmp='' request_tmp='' raw_size='' cleanup_cmd='' queue_rc=0
+  if ! stage_job_payload "$1" root_tmp; then
+    return 1
+  fi
+  printf -v cleanup_cmd 'rm -f -- %q' "$root_tmp"
+  trap "$cleanup_cmd" EXIT
+  if ! raw_size="$(stat -c '%s' -- "$root_tmp" 2>/dev/null)" \
+     || [[ ! "$raw_size" =~ ^[0-9]+$ ]] \
+     || (( raw_size > 16384 )); then
+    rm -f -- "$root_tmp" 2>/dev/null || true
+    trap - EXIT
+    intake_reject 'UV_INTAKE_CONTRACT_INVALID'
+    return 1
+  fi
+  if ! request_tmp="$(runuser -u universal-video -- mktemp -p "$INTAKE" batch.XXXXXXXX.json 2>/dev/null)"; then
+    rm -f -- "$root_tmp" 2>/dev/null || true
+    trap - EXIT
+    intake_reject 'UV_INTAKE_IO_FAILED'
+    return 1
+  fi
+  printf -v cleanup_cmd 'rm -f -- %q %q' "$root_tmp" "$request_tmp"
+  trap "$cleanup_cmd" EXIT
+  if [[ ! "$request_tmp" =~ ^/opt/bridge-school/universal-video/intake/batch\.[A-Za-z0-9._-]+\.json$ \
+        || ! -f "$request_tmp" || -L "$request_tmp" ]]; then
+    rm -f -- "$root_tmp" "$request_tmp" 2>/dev/null || true
+    trap - EXIT
+    intake_reject 'UV_INTAKE_EXECUTION_FAILED'
+    return 1
+  fi
+  if ! install -o universal-video -g universal-video -m 0600 "$root_tmp" "$request_tmp" 2>/dev/null; then
+    rm -f -- "$root_tmp" "$request_tmp" 2>/dev/null || true
+    trap - EXIT
+    intake_reject 'UV_INTAKE_IO_FAILED'
+    return 1
+  fi
+  set +e
   runuser -u universal-video -- env \
     PYTHONPATH="$SOURCE_DIR" \
     GOOGLE_DRIVE_OAUTH_JSON_FILE="$DRIVE_OAUTH_FILE" \
     BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE="$QUEUE_DSN_FILE" \
     "$PYTHON" -m universal_video.video_queue_intake enqueue "$request_tmp"
-  rm -f "$root_tmp" "$request_tmp"; trap - EXIT
+  queue_rc=$?
+  set -e
+  rm -f -- "$root_tmp" "$request_tmp" 2>/dev/null || true
+  trap - EXIT
+  return "$queue_rc"
 }
 batch_status(){
   [[ $# -eq 1 ]] && safe_id "$1" || fail 'invalid request key'
@@ -144,6 +177,7 @@ except BaseException:
   fi
   stage_path="$(sed -nE 's#^UV_STAGE_PATH=(/opt/bridge-school/\.universal-video-staging/request\.[A-Za-z0-9._-]+\.json)$#\1#p' <<<"$stage_output" | tail -n1)"
   if [[ -z "$stage_path" || ! -f "$stage_path" || -L "$stage_path" ]]; then
+    [[ -z "$stage_path" ]] || rm -f -- "$stage_path" 2>/dev/null || true
     intake_reject 'UV_INTAKE_EXECUTION_FAILED'
     return 1
   fi
@@ -152,22 +186,26 @@ except BaseException:
 submit_drive(){
   [[ $# -eq 1 && ${#1} -le 350000 ]] || { intake_reject 'UV_INTAKE_CONTRACT_INVALID'; return 1; }
   verify
-  local tmp=''
+  local tmp='' cleanup_cmd='' intake_output='' intake_code=''
   if ! stage_job_payload "$1" tmp; then
     return 1
   fi
-  trap 'rm -f "${tmp:-}"' EXIT
-  local intake_output
+  printf -v cleanup_cmd 'rm -f -- %q' "$tmp"
+  trap "$cleanup_cmd" EXIT
   if intake_output="$(UNIVERSAL_VIDEO_STAGING_ROOT="$STAGING" PYTHONPATH="$SOURCE_DIR" "$SYSTEM_PYTHON" -m universal_video.server_intake submit "$tmp" "$SPOOL" 2>&1)"; then
     printf '%s\n' "$intake_output"
   else
-    local intake_code
     intake_code="$(sed -nE 's/^UV_ERROR_CODE=(UV_INTAKE_[A-Z0-9_]{1,96})$/\1/p' <<<"$intake_output" | tail -n1)"
     [[ -n "$intake_code" ]] || intake_code='UV_INTAKE_EXECUTION_FAILED'
+    rm -f -- "$tmp" 2>/dev/null || true
+    tmp=''
+    trap - EXIT
     intake_reject "$intake_code"
     return 1
   fi
-  rm -f "$tmp"; trap - EXIT
+  rm -f -- "$tmp" 2>/dev/null || true
+  tmp=''
+  trap - EXIT
 }
 status(){
   [[ $# -eq 1 ]] && safe_id "$1" || fail 'invalid job id'
