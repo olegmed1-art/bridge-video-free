@@ -1,4 +1,4 @@
-name: Autopilot Oracle GitHub deploy boundary audit (one-shot)
+name: Autopilot Oracle transient GitHub token boundary (one-shot)
 
 on:
   push:
@@ -6,14 +6,14 @@ on:
     paths: ['.github/workflows/autopilot-owner-auth-preflight-once.yml']
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: oracle-instance-workload-mutation
   cancel-in-progress: false
 
 jobs:
-  audit:
+  probe:
     if: github.repository == 'olegmed1-art/bridge-video-free'
     runs-on: ubuntu-24.04
     timeout-minutes: 8
@@ -33,7 +33,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          work="$RUNNER_TEMP/oracle-github-boundary"
+          work="$RUNNER_TEMP/oracle-github-transient-boundary"
           mkdir -p "$work"
           key="$work/id_oracle"
           printf '%s\n' "$SSH_KEY_ORACLE" | tr -d '\r' > "$key"
@@ -43,156 +43,106 @@ jobs:
           ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
           ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
-            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'true'
           echo "key=$key" >> "$GITHUB_OUTPUT"
           echo "known=$known" >> "$GITHUB_OUTPUT"
           echo 'AUTOPILOT_ORACLE_SSH_PREFLIGHT=PASS'
 
-      - name: Audit existing Oracle GitHub credentials and dry-run push capability
+      - name: Create and delete one synthetic SHADOW ref from Oracle
+        env:
+          GH_TRANSIENT_TOKEN: ${{ github.token }}
+          PROBE_REPO: ${{ github.repository }}
+          PROBE_SHA: ${{ github.sha }}
+          PROBE_REF: refs/heads/autopilot/shadow-token-boundary-${{ github.run_id }}-${{ github.run_attempt }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          ssh -i '${{ steps.ssh.outputs.key }}' \
+          python3 - <<'PY' | ssh -i '${{ steps.ssh.outputs.key }}' \
             -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
-            "$ORACLE_USER@$ORACLE_HOST" 'sudo -n python3 -' <<'PY'
+            "$ORACLE_USER@$ORACLE_HOST" 'python3 -'
+          import json
           import os
-          import re
-          import subprocess
-          from pathlib import Path
-          from urllib.parse import urlparse
 
-          repo_slug = 'olegmed1-art/bridge-video-free'
-          roots = [Path('/opt/bridge-school'), Path('/home/ubuntu'), Path('/srv')]
-          git_dirs = []
-          for root in roots:
-              if not root.exists():
-                  continue
+          cfg = {
+              "token": os.environ["GH_TRANSIENT_TOKEN"],
+              "repo": os.environ["PROBE_REPO"],
+              "sha": os.environ["PROBE_SHA"],
+              "ref": os.environ["PROBE_REF"],
+          }
+          source = r"""
+          import json
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+
+          cfg = json.loads(__CONFIG__)
+          token = cfg.pop("token")
+          repo = cfg["repo"]
+          sha = cfg["sha"]
+          ref = cfg["ref"]
+
+          if repo != "olegmed1-art/bridge-video-free":
+              raise SystemExit("unexpected repository")
+          if not ref.startswith("refs/heads/autopilot/shadow-token-boundary-"):
+              raise SystemExit("unsafe probe ref")
+          if len(sha) != 40 or any(ch not in "0123456789abcdef" for ch in sha):
+              raise SystemExit("invalid sha")
+
+          api = f"https://api.github.com/repos/{repo}"
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "bridge-school-autopilot-shadow-boundary",
+          }
+          ref_path = urllib.parse.quote(ref.removeprefix("refs/"), safe="/")
+          created = False
+          deleted = False
+
+          def request(url, method="GET", payload=None, expected=()):
+              data = None if payload is None else json.dumps(payload).encode("utf-8")
+              req = urllib.request.Request(url, data=data, headers=headers, method=method)
               try:
-                  for path in root.rglob('.git'):
-                      if len(path.parts) - len(root.parts) > 7:
-                          continue
-                      if path.is_dir() and not path.is_symlink():
-                          git_dirs.append(path.parent)
-                          if len(git_dirs) >= 40:
-                              break
-              except OSError:
-                  continue
-              if len(git_dirs) >= 40:
-                  break
+                  with urllib.request.urlopen(req, timeout=30) as response:
+                      status = response.status
+                      body = response.read()
+              except urllib.error.HTTPError as exc:
+                  status = exc.code
+                  body = b""
+              if status not in expected:
+                  raise RuntimeError(f"unexpected GitHub status {status} for {method}")
+              return status, body
 
-          candidates = []
-          for repo in git_dirs:
-              try:
-                  result = subprocess.run(
-                      ['git', '-C', str(repo), 'remote', 'get-url', 'origin'],
-                      text=True, capture_output=True, timeout=5,
-                  )
-              except (OSError, subprocess.TimeoutExpired):
-                  continue
-              if result.returncode != 0:
-                  continue
-              raw = result.stdout.strip()
-              safe = ''
-              mode = 'unknown'
-              if raw.startswith('git@github.com:'):
-                  mode = 'ssh'
-                  safe = raw.removeprefix('git@github.com:').removesuffix('.git')
-              elif raw.startswith('ssh://git@github.com/'):
-                  mode = 'ssh'
-                  safe = raw.removeprefix('ssh://git@github.com/').removesuffix('.git')
-              elif raw.startswith(('https://github.com/', 'http://github.com/')):
-                  mode = 'https'
-                  parsed = urlparse(raw)
-                  safe = parsed.path.strip('/').removesuffix('.git')
-              elif 'github.com' in raw:
-                  mode = 'credentialed-or-custom'
-                  safe = repo_slug if repo_slug in raw else 'other'
-              if safe == repo_slug:
-                  candidates.append((repo, mode))
-
-          print(f'AUTOPILOT_ORACLE_REPO_CANDIDATES={len(candidates)}')
-
-          homes = [Path('/root'), Path('/home/ubuntu'), Path('/opt/bridge-school/autopilot')]
-          key_count = 0
-          for home in homes:
-              ssh_dir = home / '.ssh'
-              if not ssh_dir.is_dir():
-                  continue
-              for path in sorted(ssh_dir.iterdir()):
-                  try:
-                      if not path.is_file() or path.is_symlink():
-                          continue
-                      if path.suffix == '.pub' or path.name in {'known_hosts', 'authorized_keys', 'config'}:
-                          continue
-                      stat = path.stat()
-                      if stat.st_size > 32768:
-                          continue
-                      probe = subprocess.run(
-                          ['ssh-keygen', '-y', '-f', str(path)],
-                          text=True, capture_output=True, timeout=5,
-                      )
-                      if probe.returncode != 0:
-                          continue
-                      fp = subprocess.run(
-                          ['ssh-keygen', '-lf', str(path)],
-                          text=True, capture_output=True, timeout=5,
-                      )
-                      digest = 'unknown'
-                      match = re.search(r'(SHA256:[A-Za-z0-9+/=]+)', fp.stdout)
-                      if match:
-                          digest = match.group(1)
-                      print(f'AUTOPILOT_ORACLE_SSH_KEY_{key_count + 1}=owner={stat.st_uid}|mode={stat.st_mode & 0o777:o}|fingerprint={digest}')
-                      key_count += 1
-                  except (OSError, subprocess.TimeoutExpired):
-                      continue
-          print(f'AUTOPILOT_ORACLE_PRIVATE_KEY_COUNT={key_count}')
-
-          for index, (repo, mode) in enumerate(candidates, 1):
-              env = os.environ.copy()
-              env['GIT_TERMINAL_PROMPT'] = '0'
-              env['GIT_ASKPASS'] = '/bin/false'
-              read_ok = False
-              write_dry_run = False
-              try:
-                  read = subprocess.run(
-                      ['git', '-C', str(repo), 'ls-remote', '--exit-code', 'origin', 'refs/heads/main'],
-                      env=env, text=True, capture_output=True, timeout=20,
-                  )
-                  read_ok = read.returncode == 0
-                  if read_ok:
-                      head = subprocess.run(
-                          ['git', '-C', str(repo), 'rev-parse', 'HEAD'],
-                          env=env, text=True, capture_output=True, timeout=5,
-                      )
-                      if head.returncode == 0 and re.fullmatch(r'[0-9a-f]{40}\n?', head.stdout):
-                          ref = 'refs/heads/autopilot/credential-boundary-dry-run'
-                          push = subprocess.run(
-                              ['git', '-C', str(repo), 'push', '--dry-run', 'origin', f'{head.stdout.strip()}:{ref}'],
-                              env=env, text=True, capture_output=True, timeout=30,
-                          )
-                          write_dry_run = push.returncode == 0
-              except (OSError, subprocess.TimeoutExpired):
-                  pass
-              print(
-                  f'AUTOPILOT_ORACLE_REPO_{index}=mode={mode}|READ={"YES" if read_ok else "NO"}|'
-                  f'WRITE_DRY_RUN={"YES" if write_dry_run else "NO"}'
+          try:
+              _, body = request(
+                  f"{api}/git/refs",
+                  method="POST",
+                  payload={"ref": ref, "sha": sha},
+                  expected=(201,),
               )
+              created = True
+              _, body = request(f"{api}/git/ref/{ref_path}", expected=(200,))
+              observed = json.loads(body.decode("utf-8"))["object"]["sha"]
+              if observed != sha:
+                  raise RuntimeError("created probe ref points to unexpected SHA")
+          finally:
+              if created:
+                  request(f"{api}/git/refs/{ref_path}", method="DELETE", expected=(204,))
+                  deleted = True
 
-          helper_count = 0
-          for home in homes:
-              config = home / '.gitconfig'
-              if not config.is_file() or config.is_symlink():
-                  continue
-              try:
-                  text = config.read_text(encoding='utf-8', errors='ignore')
-              except OSError:
-                  continue
-              if re.search(r'credential\s*=|credential\.|helper\s*=', text, re.I):
-                  helper_count += 1
-          print(f'AUTOPILOT_ORACLE_GIT_CREDENTIAL_CONFIGS={helper_count}')
-          print('AUTOPILOT_GITHUB_CREDENTIAL_VALUES_EXPOSED=NO')
-          print('AUTOPILOT_GITHUB_REFS_MUTATED=NO')
-          print('AUTOPILOT_SERVICE_RESTARTED=NO')
-          print('ORACLE_INSTANCE_STOP_REQUESTED=NO')
+          status, _ = request(f"{api}/git/ref/{ref_path}", expected=(404,))
+          if status != 404 or not created or not deleted:
+              raise RuntimeError("probe cleanup verification failed")
+
+          token = None
+          print("AUTOPILOT_ORACLE_GITHUB_TRANSIENT_WRITE=PASS")
+          print("AUTOPILOT_ORACLE_GITHUB_PROBE_REF_CREATED=YES")
+          print("AUTOPILOT_ORACLE_GITHUB_PROBE_REF_DELETED=YES")
+          print("AUTOPILOT_GITHUB_TOKEN_PERSISTED=NO")
+          print("AUTOPILOT_GITHUB_TOKEN_EXPOSED=NO")
+          print("AUTOPILOT_SERVICE_RESTARTED=NO")
+          print("ORACLE_INSTANCE_STOP_REQUESTED=NO")
+          """
+          print(source.replace("__CONFIG__", repr(json.dumps(cfg))))
           PY
