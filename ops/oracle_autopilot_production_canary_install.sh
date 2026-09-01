@@ -139,14 +139,46 @@ with psycopg.connect(
               FROM information_schema.tables
              WHERE table_schema NOT IN ('pg_catalog', 'information_schema', 'autopilot')
                AND (
-                   has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'SELECT')
-                   OR has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'INSERT')
+                   has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'INSERT')
                    OR has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'UPDATE')
                    OR has_table_privilege(current_user, quote_ident(table_schema) || '.' || quote_ident(table_name), 'DELETE')
                )
             """
         )
-        non_autopilot_table_access = cur.fetchone()[0]
+        non_autopilot_write_access = cur.fetchone()[0]
+        cur.execute(
+            """
+            SELECT count(*)
+              FROM information_schema.tables
+             WHERE table_schema NOT IN ('pg_catalog', 'information_schema', 'autopilot')
+               AND has_table_privilege(
+                   current_user,
+                   quote_ident(table_schema) || '.' || quote_ident(table_name),
+                   'SELECT'
+               )
+               AND NOT (
+                   table_schema = 'public'
+                   AND table_type = 'VIEW'
+                   AND table_name IN ('pg_stat_statements', 'pg_stat_statements_info')
+               )
+            """
+        )
+        unexpected_non_autopilot_select_access = cur.fetchone()[0]
+        cur.execute(
+            """
+            SELECT count(*)
+              FROM information_schema.tables
+             WHERE table_schema = 'public'
+               AND table_type = 'VIEW'
+               AND table_name IN ('pg_stat_statements', 'pg_stat_statements_info')
+               AND has_table_privilege(
+                   current_user,
+                   quote_ident(table_schema) || '.' || quote_ident(table_name),
+                   'SELECT'
+               )
+            """
+        )
+        allowed_postgres_telemetry_views = cur.fetchone()[0]
         cur.execute(
             """
             SELECT count(*)
@@ -178,7 +210,9 @@ assert branch_id == os.environ["EXPECTED_BRANCH_ID"], branch_id
 assert primary is True
 assert schema_usage and status_select and can_claim and can_complete
 assert not task_select and not task_insert and not can_create
-assert non_autopilot_table_access == 0, non_autopilot_table_access
+assert non_autopilot_write_access == 0, non_autopilot_write_access
+assert unexpected_non_autopilot_select_access == 0, unexpected_non_autopilot_select_access
+assert allowed_postgres_telemetry_views == 2, allowed_postgres_telemetry_views
 assert direct_autopilot_table_access == 0, direct_autopilot_table_access
 assert role_attributes == (True, False, False, False, False, False, 1), role_attributes
 print("AUTOPILOT_PRODUCTION_CANARY_DB_PREFLIGHT_PASS")

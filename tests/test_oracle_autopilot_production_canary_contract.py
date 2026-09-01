@@ -80,3 +80,7 @@ def test_installer_pins_target_identity_and_separate_service() -> None:
     assert '"$RELEASE_DIR/autopilot_phase3b"' in installer
     assert "has_table_privilege(current_user, 'autopilot.task', 'SELECT')" in installer
     assert "not task_select and not task_insert and not can_create" in installer
+    assert "non_autopilot_write_access == 0" in installer
+    assert "unexpected_non_autopilot_select_access == 0" in installer
+    assert "allowed_postgres_telemetry_views == 2" in installer
+    assert "pg_stat_statements_info" in installer
