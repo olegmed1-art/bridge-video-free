@@ -113,6 +113,8 @@ except OSError as exc:
     }.get(exc.errno, "UV_INTAKE_IO_FAILED")
     print("UV_ERROR_CODE=" + code)
     raise SystemExit(1)
+except SystemExit:
+    raise
 except BaseException:
     if path:
         try:
