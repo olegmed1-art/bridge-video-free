@@ -21,9 +21,9 @@ from typing import Any
 from .contract import AutopilotContractError, AutopilotRetryableError
 
 
-IBF_INDEX_URL = "https://www.main.bridge.co.il/results/"
-IBF_MEMBER_URL = "https://www.bridge.co.il/viewer/membermplist.php?id={player_id}"
-IBF_VIEWER_ORIGIN = "https://www.bridge.co.il"
+IBF_INDEX_URL = "https://main.bridge.co.il/results/"
+IBF_MEMBER_URL = "https://bridge.co.il/viewer/membermplist.php?id={player_id}"
+IBF_VIEWER_ORIGIN = "https://bridge.co.il"
 IBF_ALLOWED_HOSTS = frozenset(
     {"bridge.co.il", "www.bridge.co.il", "main.bridge.co.il", "www.main.bridge.co.il"}
 )
