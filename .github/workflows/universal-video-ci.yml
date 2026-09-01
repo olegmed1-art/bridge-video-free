@@ -8,6 +8,7 @@ on:
       - 'bridge_contracts/**'
       - 'database/**'
       - 'bridge_*.py'
+      - 'route_drive_job_outputs.py'
       - 'run_*.py'
       - 'diana_longitudinal_quality_v2.py'
       - 'r29_identity_overlay_probe.py'
