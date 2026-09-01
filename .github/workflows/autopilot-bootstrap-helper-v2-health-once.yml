@@ -91,8 +91,10 @@ jobs:
           PY
           chmod 0600 "$work/url"
           source "$work/url"
+          jar="$work/cookies"
           curl --fail --silent --show-error --location --max-redirs 6 \
-            --connect-timeout 10 --max-time 60 "$URL" -o "$work/health.json"
+            --connect-timeout 10 --max-time 60 -c "$jar" -b "$jar" \
+            "$URL" -o "$work/health.json"
           HEALTH="$work/health.json" EXPECTED_SHA="$EXPECTED_SHA" python3 - <<'PY'
           import json, os
           p=json.load(open(os.environ['HEALTH'], encoding='utf-8'))
