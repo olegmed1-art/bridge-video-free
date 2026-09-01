@@ -34,6 +34,11 @@ def test_failure_path_applies_both_kill_switches() -> None:
         in workflow
     )
     assert "ALTER ROLE autopilot_prod_canary_login NOLOGIN" in workflow
+    assert (
+        "ALTER ROLE autopilot_prod_canary_login WITH LOGIN PASSWORD %L CONNECTION LIMIT 1"
+        in workflow
+    )
+    assert "WITH LOGIN PASSWORD %L INHERIT NOSUPERUSER" not in workflow
     assert "ORACLE_INSTANCE_STOP_REQUESTED=NO" in workflow
 
     forbidden = (
