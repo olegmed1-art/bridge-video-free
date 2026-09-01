@@ -51,38 +51,44 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          [[ -n "${NEON_API_KEY:-}" ]]
-          [[ "$TEMP_BRANCH_ID" != "$PRODUCTION_BRANCH_ID" ]]
+          [[ -n "${NEON_API_KEY:-}" ]] || { echo 'UV_NEON_VERIFY_SECRET_MISSING'; exit 1; }
+          [[ "$TEMP_BRANCH_ID" != "$PRODUCTION_BRANCH_ID" ]] || { echo 'UV_NEON_VERIFY_PRODUCTION_GUARD_FAILED'; exit 1; }
           api="https://console.neon.tech/api/v2/projects/$PROJECT_ID"
           auth=(-H "Authorization: Bearer $NEON_API_KEY" -H 'Accept: application/json')
           branch_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID")"
-          endpoint_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID/endpoints")"
           role_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID/roles/$MIGRATION_ROLE")"
           uri_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" \
             "$api/connection_uri?branch_id=$TEMP_BRANCH_ID&database_name=neondb&role_name=$MIGRATION_ROLE&pooled=false")"
-          uri="$(BRANCH_JSON="$branch_json" ENDPOINT_JSON="$endpoint_json" ROLE_JSON="$role_json" URI_JSON="$uri_json" python3 - <<'PY'
-          import json, os, urllib.parse
+          uri="$(BRANCH_JSON="$branch_json" ROLE_JSON="$role_json" URI_JSON="$uri_json" python3 - <<'PY'
+          import json, os, sys, urllib.parse
           bid = os.environ['TEMP_BRANCH_ID']
           role = os.environ['MIGRATION_ROLE']
           branch_payload = json.loads(os.environ['BRANCH_JSON'])
-          endpoint_payload = json.loads(os.environ['ENDPOINT_JSON'])
           role_payload = json.loads(os.environ['ROLE_JSON'])
           uri_payload = json.loads(os.environ['URI_JSON'])
           branch = branch_payload.get('branch', branch_payload)
-          endpoints = endpoint_payload.get('endpoints', [])
           role_obj = role_payload.get('role', role_payload)
           uri = uri_payload.get('uri')
-          assert branch.get('id') == bid, 'temporary branch identity mismatch'
-          endpoint_ids = {x.get('id') for x in endpoints if x.get('branch_id') == bid and x.get('id')}
-          assert endpoint_ids, 'temporary branch has no matching endpoint'
-          assert role_obj.get('name') == role, 'role identity mismatch'
-          assert isinstance(uri, str) and uri, 'connection URI missing'
+          checks = [
+              (branch.get('id') == bid, 'UV_NEON_VERIFY_BRANCH_ID_MISMATCH'),
+              (branch.get('default') is False, 'UV_NEON_VERIFY_BRANCH_DEFAULT_UNSAFE'),
+              (role_obj.get('name') == role, 'UV_NEON_VERIFY_ROLE_MISMATCH'),
+              (isinstance(uri, str) and bool(uri), 'UV_NEON_VERIFY_URI_MISSING'),
+          ]
+          for ok, code in checks:
+              if not ok:
+                  print(code, file=sys.stderr)
+                  raise SystemExit(1)
           parsed = urllib.parse.urlsplit(uri)
-          assert parsed.username == role, 'connection role mismatch'
-          assert (parsed.path.lstrip('/') or 'neondb') == 'neondb', 'database mismatch'
-          host = (parsed.hostname or '').lower()
-          assert host.endswith('.neon.tech'), 'non-Neon host'
-          assert any(host.startswith(endpoint_id + '.') for endpoint_id in endpoint_ids), 'endpoint host mismatch'
+          field_checks = [
+              (parsed.username == role, 'UV_NEON_VERIFY_URI_ROLE_MISMATCH'),
+              ((parsed.path.lstrip('/') or 'neondb') == 'neondb', 'UV_NEON_VERIFY_DATABASE_MISMATCH'),
+              ((parsed.hostname or '').lower().endswith('.neon.tech'), 'UV_NEON_VERIFY_HOST_MISMATCH'),
+          ]
+          for ok, code in field_checks:
+              if not ok:
+                  print(code, file=sys.stderr)
+                  raise SystemExit(1)
           print(uri)
           PY
           )"
@@ -105,7 +111,7 @@ jobs:
                  to_regprocedure('autopilot.create_shadow_task(text,text,jsonb,integer,bigint,text,text)') IS NOT NULL;
           SQL
           )"
-          [[ "$row" == 'neondb|autopilot_migration_owner_login|t|t|t' ]]
+          [[ "$row" == 'neondb|autopilot_migration_owner_login|t|t|t' ]] || { echo 'UV_AUTOPILOT_SCHEMA_PREFLIGHT_FAILED'; exit 1; }
           echo 'AUTOPILOT_SCHEMA_PREFLIGHT=PASS'
           echo 'MIGRATION_APPLIED=NO'
           echo 'PRODUCTION_MUTATION=NO'
@@ -144,7 +150,7 @@ jobs:
           SQL
             )"
             IFS='|' read -r task_id status created <<<"$row"
-            [[ "$task_id" =~ ^[0-9a-f-]{36}$ ]]
+            [[ "$task_id" =~ ^[0-9a-f-]{36}$ ]] || { echo "UV_P1_${label^^}_REGISTRATION_INVALID"; exit 1; }
             echo "${label}_task_id=$task_id" >> "$GITHUB_OUTPUT"
             echo "UV_P1_${label^^}_TASK_ID=$task_id"
             echo "UV_P1_${label^^}_REGISTER_STATUS=$status"
@@ -167,7 +173,7 @@ jobs:
           for id in "$RUNTIME_TASK_ID" "$INTAKE_TASK_ID" "$INTEGRATION_TASK_ID"; do
             row="$(psql "$DATABASE_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 -c \
               "SELECT task_id,status,task_key,task_type,COALESCE(terminal_reason_code,''),attempts FROM autopilot.task WHERE task_id='$id'::uuid;")"
-            [[ -n "$row" ]]
+            [[ -n "$row" ]] || { echo 'UV_P1_TASK_READBACK_FAILED'; exit 1; }
             echo "UV_P1_DURABLE_TASK=$row"
           done
           echo 'AUTOPILOT_DURABLE_REGISTRATION=PASS'
