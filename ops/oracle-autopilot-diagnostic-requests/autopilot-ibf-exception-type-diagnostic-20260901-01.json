@@ -1,0 +1,7 @@
+{
+  "request_id": "autopilot-ibf-exception-type-diagnostic-20260901-01",
+  "action": "inspect_shadow_failure",
+  "target_host": "158.180.47.161",
+  "source_revision": "b633211a8673f66a84761f026050af71a4b1da0b",
+  "no_instance_stop": true
+}
