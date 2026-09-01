@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "kind": "AUTOPILOT_CONTINUATION_REQUEST",
+  "requested_at": "2026-09-01T07:45:00Z",
+  "requested_by": "director-authorized-chat",
+  "scope": "PHASE3B_SHADOW_ONLY",
+  "exact_constraints": {
+    "keep_pull_request_draft": true,
+    "no_merge": true,
+    "no_production_neon": true,
+    "keep_oracle_running": true,
+    "restart_only_school_autopilot_shadow_service": true,
+    "canary_limit": 1,
+    "canary_kind": "DRAFT_ONLY"
+  },
+  "requested_next_action": "RUN_EXISTING_FAIL_CLOSED_OWNER_AUTH_PREFLIGHT_ONLY",
+  "notes": "This file contains no credentials and authorizes no production mutation. It exists only to trigger or document an existing fail-closed preflight path."
+}
