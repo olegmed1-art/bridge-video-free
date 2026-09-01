@@ -1,0 +1,549 @@
+name: Oracle Autopilot production canary
+
+on:
+  pull_request:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths:
+      - '.github/workflows/oracle-autopilot-production-canary.yml'
+      - 'deploy/oracle-autopilot/school-autopilot-production-canary.service'
+      - 'ops/oracle_autopilot_production_canary_install.sh'
+      - 'tests/test_oracle_autopilot_production_canary_contract.py'
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths:
+      - 'ops/oracle-autopilot-production-canary-requests/*.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Validate fail-closed production-canary contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" \
+            .github/workflows/oracle-autopilot-production-canary.yml
+          bash -n ops/oracle_autopilot_production_canary_install.sh
+          verify_output="$(systemd-analyze verify \
+            deploy/oracle-autopilot/school-autopilot-production-canary.service 2>&1 || true)"
+          unexpected_output="$(printf '%s\n' "$verify_output" | grep -vF \
+            'Command /opt/bridge-school/school-autopilot-production-canary/.venv/bin/python is not executable: No such file or directory' \
+            | sed '/^[[:space:]]*$/d' || true)"
+          [[ -z "$unexpected_output" ]] || {
+            printf '%s\n' "$unexpected_output" >&2
+            exit 1
+          }
+          python -m pytest -q tests/test_oracle_autopilot_production_canary_contract.py
+
+  canary:
+    if: ${{ github.event_name == 'push' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: database-production
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_PROJECT_ID: misty-poetry-18012774
+      EXPECTED_BRANCH_ID: br-wispy-lab-b1rq54of
+      EXPECTED_MIGRATION_KEY: 0300_autopilot_oracle_shadow
+      EXPECTED_MIGRATION_SHA256: 188762a81fc55071ab2ce26596626dafeab2374e977b4f2dd8e01fbb1bfc8d5f
+      EXPECTED_DB_USER: autopilot_prod_canary_login
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Validate exact production-canary request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+            | grep -E '^ops/oracle-autopilot-production-canary-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]] || {
+            echo 'expected exactly one production-canary request' >&2
+            exit 1
+          }
+          REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import hashlib
+          import json
+          import os
+          import re
+          import subprocess
+
+          request = json.load(open(os.environ["REQUEST_FILE"], encoding="utf-8"))
+          assert set(request) == {
+              "request_id",
+              "action",
+              "target_host",
+              "target_project_id",
+              "target_branch_id",
+              "source_revision",
+              "migration_key",
+              "migration_sha256",
+              "expected_db_user",
+              "task_key",
+              "max_runtime_seconds",
+              "zero_cost",
+              "task_production_mutation",
+              "no_instance_stop",
+              "leave_idle_on_pass",
+          }
+          assert re.fullmatch(r"[A-Za-z0-9._-]{1,80}", request["request_id"])
+          assert request["action"] == "run_zero_cost_production_canary"
+          assert request["target_host"] == "158.180.47.161"
+          assert request["target_project_id"] == "misty-poetry-18012774"
+          assert request["target_branch_id"] == "br-wispy-lab-b1rq54of"
+          assert re.fullmatch(r"[0-9a-f]{40}", request["source_revision"])
+          subprocess.run(
+              ["git", "merge-base", "--is-ancestor", request["source_revision"], os.environ["GITHUB_SHA"]],
+              check=True,
+          )
+          assert request["migration_key"] == "0300_autopilot_oracle_shadow"
+          assert request["migration_sha256"] == "188762a81fc55071ab2ce26596626dafeab2374e977b4f2dd8e01fbb1bfc8d5f"
+          actual_migration_sha = hashlib.sha256(
+              subprocess.check_output(
+                  ["git", "show", f"{request['source_revision']}:database/migrations/0300_autopilot_oracle_shadow.sql"]
+              )
+          ).hexdigest()
+          assert actual_migration_sha == request["migration_sha256"]
+          assert request["expected_db_user"] == "autopilot_prod_canary_login"
+          assert re.fullmatch(r"production-canary-[0-9]{8}-[0-9]{2}", request["task_key"])
+          assert request["max_runtime_seconds"] == 120
+          assert request["zero_cost"] is True
+          assert request["task_production_mutation"] is False
+          assert request["no_instance_stop"] is True
+          assert request["leave_idle_on_pass"] is True
+          print(f"request_id={request['request_id']}")
+          print(f"source_revision={request['source_revision']}")
+          print(f"task_key={request['task_key']}")
+          print(f"max_runtime_seconds={request['max_runtime_seconds']}")
+          PY
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Verify exact protected production target
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${DATABASE_URL:-}" || {
+            echo 'NEON_DATABASE_URL is unavailable in database-production' >&2
+            exit 1
+          }
+          readarray -t target < <(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 <<'SQL'
+          SELECT current_setting('neon.project_id', true);
+          SELECT current_setting('neon.branch_id', true);
+          SELECT current_database();
+          SELECT current_user;
+          SELECT current_setting('server_version_num');
+          SELECT NOT pg_is_in_recovery();
+          SELECT count(*) FROM public.operational_health_issue WHERE severity = 'critical';
+          SQL
+          )
+          [[ "${target[0]}" == "$EXPECTED_PROJECT_ID" ]]
+          [[ "${target[1]}" == "$EXPECTED_BRANCH_ID" ]]
+          [[ "${target[2]}" == neondb ]]
+          [[ "${target[3]}" == neondb_owner ]]
+          [[ "${target[4]}" -ge 180000 ]]
+          [[ "${target[5]}" == t ]]
+          [[ "${target[6]}" == 0 ]]
+          echo 'AUTOPILOT_PRODUCTION_TARGET_PREFLIGHT_PASS'
+
+      - name: Apply exact isolated migration and provision bounded login
+        id: database
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          migration=database/migrations/0300_autopilot_oracle_shadow.sql
+          [[ "$(sha256sum "$migration" | awk '{print $1}')" == "$EXPECTED_MIGRATION_SHA256" ]]
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -v migration_key="$EXPECTED_MIGRATION_KEY" \
+            -v migration_file="$migration" <<'PSQL'
+          SELECT pg_advisory_lock(hashtext(current_database()), hashtext('bridge_school_schema_migrations'));
+          SELECT EXISTS (
+              SELECT 1 FROM public.schema_migration WHERE migration_key = :'migration_key'
+          ) AS migration_already_applied \gset
+          \if :migration_already_applied
+            \echo 'Exact Autopilot migration already registered; verifying immutable checksum.'
+          \else
+            \i :migration_file
+          \endif
+          SELECT pg_advisory_unlock(hashtext(current_database()), hashtext('bridge_school_schema_migrations'));
+          PSQL
+          checksum_state="$(psql "$DATABASE_URL" -X -q -A -t -v ON_ERROR_STOP=1 \
+            -v migration_key="$EXPECTED_MIGRATION_KEY" \
+            -v checksum="$EXPECTED_MIGRATION_SHA256" <<'PSQL'
+          UPDATE public.schema_migration
+             SET checksum = :'checksum'
+           WHERE migration_key = :'migration_key' AND checksum IS NULL;
+          SELECT CASE WHEN checksum = :'checksum' THEN 'checksum-pass'
+                      ELSE 'checksum-fail' END
+            FROM public.schema_migration
+           WHERE migration_key = :'migration_key';
+          PSQL
+          )"
+          [[ "$checksum_state" == checksum-pass ]]
+
+          password_file="$RUNNER_TEMP/autopilot-production-canary-password"
+          runtime_dsn_file="$RUNNER_TEMP/autopilot-production-canary-dsn"
+          umask 077
+          openssl rand -base64 36 | tr '+/' '-_' | tr -d '=\n' > "$password_file"
+          runtime_password="$(<"$password_file")"
+          [[ "$runtime_password" =~ ^[A-Za-z0-9_-]{40,64}$ ]]
+
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -v runtime_password="$runtime_password" <<'PSQL'
+          SELECT 'CREATE ROLE autopilot_prod_canary_login LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 1'
+           WHERE NOT EXISTS (
+               SELECT 1 FROM pg_roles WHERE rolname = 'autopilot_prod_canary_login'
+           ) \gexec
+          SELECT format(
+              'ALTER ROLE autopilot_prod_canary_login WITH LOGIN PASSWORD %L INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 1',
+              :'runtime_password'
+          ) \gexec
+          GRANT autopilot_runtime TO autopilot_prod_canary_login;
+          PSQL
+          unexpected_memberships="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM pg_auth_members m JOIN pg_roles member ON member.oid=m.member JOIN pg_roles granted ON granted.oid=m.roleid WHERE member.rolname='autopilot_prod_canary_login' AND granted.rolname <> 'autopilot_runtime';")"
+          [[ "$unexpected_memberships" == 0 ]]
+
+          OWNER_DATABASE_URL="$DATABASE_URL" \
+          PASSWORD_FILE="$password_file" \
+          RUNTIME_DSN_FILE="$runtime_dsn_file" \
+          python - <<'PY'
+          import os
+          import pathlib
+          import urllib.parse
+
+          parsed = urllib.parse.urlsplit(os.environ["OWNER_DATABASE_URL"])
+          host = (parsed.hostname or "").lower()
+          assert host.endswith(".neon.tech")
+          host = host.replace("-pooler.", ".", 1)
+          assert "-pooler." not in host
+          assert parsed.path == "/neondb"
+          password = pathlib.Path(os.environ["PASSWORD_FILE"]).read_text().strip()
+          assert password and all(ch.isalnum() or ch in "_-" for ch in password)
+          netloc = f"autopilot_prod_canary_login:{urllib.parse.quote(password, safe='')}@{host}"
+          if parsed.port:
+              netloc += f":{parsed.port}"
+          runtime_dsn = urllib.parse.urlunsplit(
+              ("postgresql", netloc, "/neondb", "sslmode=require&channel_binding=require", "")
+          )
+          path = pathlib.Path(os.environ["RUNTIME_DSN_FILE"])
+          path.write_text(runtime_dsn)
+          path.chmod(0o600)
+          PY
+          rm -f -- "$password_file"
+
+          runtime_dsn="$(<"$runtime_dsn_file")"
+          readarray -t runtime_check < <(psql "$runtime_dsn" -X -A -t -v ON_ERROR_STOP=1 <<'SQL'
+          SELECT current_user;
+          SELECT current_setting('neon.project_id', true);
+          SELECT current_setting('neon.branch_id', true);
+          SELECT has_table_privilege(current_user, 'autopilot.task', 'SELECT');
+          SELECT has_table_privilege(current_user, 'autopilot.task', 'INSERT');
+          SELECT has_table_privilege(current_user, 'autopilot.task_status', 'SELECT');
+          SELECT has_function_privilege(current_user, 'autopilot.claim_next_task(text,integer)', 'EXECUTE');
+          SELECT has_function_privilege(current_user, 'autopilot.complete_task(uuid,text,bigint,text,text,jsonb)', 'EXECUTE');
+          SELECT has_function_privilege(current_user, 'autopilot.create_shadow_task(text,text,jsonb,integer,bigint,text,text)', 'EXECUTE');
+          SQL
+          )
+          [[ "${runtime_check[0]}" == "$EXPECTED_DB_USER" ]]
+          [[ "${runtime_check[1]}" == "$EXPECTED_PROJECT_ID" ]]
+          [[ "${runtime_check[2]}" == "$EXPECTED_BRANCH_ID" ]]
+          [[ "${runtime_check[3]}" == f ]]
+          [[ "${runtime_check[4]}" == f ]]
+          [[ "${runtime_check[5]}" == t ]]
+          [[ "${runtime_check[6]}" == t ]]
+          [[ "${runtime_check[7]}" == t ]]
+          [[ "${runtime_check[8]}" == f ]]
+          echo "runtime_dsn_file=$runtime_dsn_file" >> "$GITHUB_OUTPUT"
+          echo 'AUTOPILOT_PRODUCTION_RUNTIME_ROLE_PASS'
+
+      - name: Verify pinned Oracle identity and SSH access
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/oracle-autopilot-production-canary-known-hosts"
+          : > "$known"
+          index=0
+          for expected in \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64'; do
+            part="$RUNNER_TEMP/oracle-autopilot-production-canary-known-hosts.$index"
+            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$expected" "$part"
+            cat "$part" >> "$known"
+            index=$((index + 1))
+          done
+          sort -u -o "$known" "$known"
+          rsa_line="$(awk '$2 == "ssh-rsa" {print; exit}' "$known")"
+          test -n "$rsa_line"
+          printf '%s\n' "$rsa_line" | awk '{print $2, $3}' > "$RUNNER_TEMP/oracle-rsa.pub"
+          [[ "$(ssh-keygen -lf "$RUNNER_TEMP/oracle-rsa.pub" | awk '{print $2}')" == \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64' ]]
+
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]] || { echo 'Oracle SSH credential unavailable' >&2; exit 1; }
+          key="$RUNNER_TEMP/id_oracle_autopilot_production_canary"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "rsa_public=$RUNNER_TEMP/oracle-rsa.pub" >> "$GITHUB_OUTPUT"
+
+      - name: Package pinned source and encrypt runtime DSN
+        id: package
+        shell: bash
+        env:
+          SOURCE_REVISION: ${{ steps.request.outputs.source_revision }}
+          RUNTIME_DSN_FILE: ${{ steps.database.outputs.runtime_dsn_file }}
+        run: |
+          set -euo pipefail
+          package_root="$RUNNER_TEMP/autopilot-production-canary-source"
+          bundle="$RUNNER_TEMP/autopilot-production-canary-source.tgz"
+          cipher="$RUNNER_TEMP/autopilot-production-canary-dsn.oaep"
+          install -d -m 0700 "$package_root"
+          git archive "$SOURCE_REVISION" \
+            oracle_autopilot \
+            deploy/oracle-autopilot/school-autopilot-production-canary.service \
+            ops/oracle_autopilot_production_canary_install.sh \
+            | tar -x -C "$package_root"
+          printf '%s\n' "$SOURCE_REVISION" > "$package_root/AUTOPILOT_SOURCE_REVISION"
+          tar -czf "$bundle" -C "$package_root" .
+          plaintext_length="$(wc -c < "$RUNTIME_DSN_FILE")"
+          [[ "$plaintext_length" -ge 1 && "$plaintext_length" -le 318 ]]
+          openssl pkeyutl -encrypt -pubin \
+            -inkey '${{ steps.ssh.outputs.rsa_public }}' \
+            -in "$RUNTIME_DSN_FILE" -out "$cipher" \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
+            -pkeyopt rsa_mgf1_md:sha256
+          [[ "$(wc -c < "$cipher")" == 384 ]]
+          rm -f -- "$RUNTIME_DSN_FILE"
+          echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
+          echo "cipher=$cipher" >> "$GITHUB_OUTPUT"
+          echo "plaintext_length=$plaintext_length" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy isolated production-canary service
+        id: deploy
+        shell: bash
+        env:
+          SOURCE_REVISION: ${{ steps.request.outputs.source_revision }}
+          PLAINTEXT_LENGTH: ${{ steps.package.outputs.plaintext_length }}
+        run: |
+          set -euo pipefail
+          ssh_base=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          scp_base=(scp -q -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15)
+          remote_bundle="/tmp/autopilot-production-canary-source-${GITHUB_RUN_ID}.tgz"
+          remote_cipher="/tmp/autopilot-production-canary-dsn-${GITHUB_RUN_ID}.oaep"
+          "${scp_base[@]}" '${{ steps.package.outputs.bundle }}' \
+            "$ORACLE_USER@$ORACLE_HOST:$remote_bundle"
+          "${scp_base[@]}" '${{ steps.package.outputs.cipher }}' \
+            "$ORACLE_USER@$ORACLE_HOST:$remote_cipher"
+          "${ssh_base[@]}" \
+            "sudo -n env AUTOPILOT_SOURCE_REVISION='$SOURCE_REVISION' AUTOPILOT_PLAINTEXT_LENGTH='$PLAINTEXT_LENGTH' AUTOPILOT_BUNDLE_PATH='$remote_bundle' AUTOPILOT_CIPHER_PATH='$remote_cipher' bash -s" \
+            <<'REMOTE' | tee "$RUNNER_TEMP/autopilot-production-canary-install-safe.log"
+          set -Eeuo pipefail
+          umask 077
+          [[ "$AUTOPILOT_SOURCE_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$AUTOPILOT_PLAINTEXT_LENGTH" =~ ^[0-9]{1,3}$ ]]
+          [[ "$AUTOPILOT_BUNDLE_PATH" =~ ^/tmp/autopilot-production-canary-source-[0-9]+\.tgz$ ]]
+          [[ "$AUTOPILOT_CIPHER_PATH" =~ ^/tmp/autopilot-production-canary-dsn-[0-9]+\.oaep$ ]]
+          work="$(mktemp -d /var/tmp/autopilot-production-canary.XXXXXXXX)"
+          cleanup() {
+            rm -f -- "$AUTOPILOT_BUNDLE_PATH" "$AUTOPILOT_CIPHER_PATH"
+            rm -rf -- "$work"
+          }
+          trap cleanup EXIT
+          install -d -m 0700 "$work/source"
+          tar -xzf "$AUTOPILOT_BUNDLE_PATH" -C "$work/source"
+          [[ "$(<"$work/source/AUTOPILOT_SOURCE_REVISION")" == "$AUTOPILOT_SOURCE_REVISION" ]]
+          install -m 0600 -o root -g root /etc/ssh/ssh_host_rsa_key "$work/host-rsa"
+          ssh-keygen -q -p -m PEM -P '' -N '' -f "$work/host-rsa" >/dev/null 2>&1
+          openssl pkeyutl -decrypt -inkey "$work/host-rsa" \
+            -in "$AUTOPILOT_CIPHER_PATH" -out "$work/database-url" \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
+            -pkeyopt rsa_mgf1_md:sha256
+          [[ "$(wc -c < "$work/database-url")" == "$AUTOPILOT_PLAINTEXT_LENGTH" ]]
+          AUTOPILOT_DATABASE_URL="$(<"$work/database-url")" \
+          AUTOPILOT_SOURCE_REVISION="$AUTOPILOT_SOURCE_REVISION" \
+          AUTOPILOT_REPO_DIR="$work/source" \
+          AUTOPILOT_ACTIVATION_SCOPE=PRODUCTION_CANARY_ZERO_COST \
+            bash "$work/source/ops/oracle_autopilot_production_canary_install.sh"
+          REMOTE
+          grep -Fx 'AUTOPILOT_PRODUCTION_CANARY_INSTALL_PASS' \
+            "$RUNNER_TEMP/autopilot-production-canary-install-safe.log" >/dev/null
+          grep -Fx 'AUTOPILOT_EXECUTION_CONTRACT=SHADOW' \
+            "$RUNNER_TEMP/autopilot-production-canary-install-safe.log" >/dev/null
+          grep -Fx 'AUTOPILOT_TASK_COST_CAP_MICROUSD=0' \
+            "$RUNNER_TEMP/autopilot-production-canary-install-safe.log" >/dev/null
+          grep -Fx 'ORACLE_INSTANCE_STOP_REQUESTED=NO' \
+            "$RUNNER_TEMP/autopilot-production-canary-install-safe.log" >/dev/null
+
+      - name: Register and verify one zero-cost production task
+        id: smoke
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          TASK_KEY: ${{ steps.request.outputs.task_key }}
+          MAX_RUNTIME_SECONDS: ${{ steps.request.outputs.max_runtime_seconds }}
+        run: |
+          set -euo pipefail
+          task_id="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 \
+            -v task_key="$TASK_KEY" -c \
+            "SELECT task_id FROM autopilot.create_shadow_task(:'task_key','AUTOPILOT_SMOKE_V1','{}'::jsonb,20,0,'production-canary','GITHUB_ACTIONS');")"
+          [[ "$task_id" =~ ^[0-9a-f-]{36}$ ]]
+          terminal=''
+          for _ in $(seq 1 $((MAX_RUNTIME_SECONDS / 2))); do
+            terminal="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -v task_id="$task_id" -c \
+              "SELECT status FROM autopilot.task_status WHERE task_id=:'task_id'::uuid;")"
+            [[ "$terminal" == DONE ]] && break
+            case "$terminal" in
+              FAILED_CLOSED|BUDGET_STOP|OWNER_REQUIRED|CANCELLED) break ;;
+            esac
+            sleep 2
+          done
+          [[ "$terminal" == DONE ]] || {
+            echo "production-canary terminal state: ${terminal:-missing}" >&2
+            exit 1
+          }
+          verified="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -v task_id="$task_id" -c \
+            "SELECT count(*) = 1 FROM autopilot.task t WHERE t.task_id=:'task_id'::uuid AND t.goal_type='AUTOPILOT_SMOKE_V1' AND t.status='DONE' AND t.cost_cap_microusd=0 AND t.cost_reserved_microusd=0 AND t.cost_actual_microusd=0 AND t.safe_summary_json->>'production_mutation'='false' AND t.safe_summary_json->>'model_calls'='0' AND EXISTS (SELECT 1 FROM autopilot.evidence e WHERE e.task_id=t.task_id AND e.retained AND e.evidence_class='SYNTHETIC_SHADOW_COMPLETION') AND EXISTS (SELECT 1 FROM autopilot.step_attempt s WHERE s.task_id=t.task_id AND s.worker_id='oracle-autopilot-production-canary-1' AND s.status='DONE') AND EXISTS (SELECT 1 FROM autopilot.task_event ev WHERE ev.task_id=t.task_id AND ev.event_type='TASK_DONE');")"
+          [[ "$verified" == t ]]
+          evidence="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -v task_id="$task_id" -c \
+            "SELECT jsonb_build_object('task_id',task_id,'status',status,'goal_type',goal_type,'attempts',attempts,'cost_cap_microusd',cost_cap_microusd,'cost_actual_microusd',cost_actual_microusd,'summary',safe_summary_json) FROM autopilot.task_status WHERE task_id=:'task_id'::uuid;")"
+          echo "$evidence"
+          critical="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.operational_health_issue WHERE severity='critical';")"
+          missing_checksums="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c \
+            "SELECT count(*) FROM public.schema_migration WHERE checksum IS NULL;")"
+          [[ "$critical" == 0 ]]
+          [[ "$missing_checksums" == 0 ]]
+          echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
+          echo 'AUTOPILOT_PRODUCTION_ZERO_COST_TASK_PASS'
+
+      - name: Verify service isolation and DDS3 non-regression
+        shell: bash
+        env:
+          SOURCE_REVISION: ${{ steps.request.outputs.source_revision }}
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env EXPECTED_REVISION='$SOURCE_REVISION' bash -s" <<'REMOTE'
+          set -euo pipefail
+          service=school-autopilot-production-canary.service
+          systemctl is-active --quiet "$service"
+          [[ "$(systemctl is-enabled "$service")" == enabled ]]
+          [[ "$(systemctl show -p User --value "$service")" == school-autopilot-canary ]]
+          [[ "$(systemctl show -p NRestarts --value "$service")" == 0 ]]
+          [[ "$(cat /opt/bridge-school/school-autopilot-production-canary/current/SOURCE_REVISION)" == "$EXPECTED_REVISION" ]]
+          journalctl -u "$service" --no-pager | grep -F 'worker_started' >/dev/null
+          systemctl is-active --quiet school-autopilot-shadow.service
+          echo 'AUTOPILOT_PRODUCTION_CANARY_SERVICE_PASS'
+          echo 'AUTOPILOT_SHADOW_SERVICE_NONREGRESSION_PASS'
+          REMOTE
+          READY_JSON="$(curl -fsS --retry 3 --retry-delay 3 --max-time 20 "https://$ORACLE_HOST/readyz")" \
+            python - <<'PY'
+          import json
+          import os
+
+          payload = json.loads(os.environ["READY_JSON"])
+          assert payload.get("status") == "ready", payload
+          assert payload.get("engine") == "DDS3", payload
+          assert payload.get("fallback_used") is False, payload
+          print("AUTOPILOT_PRODUCTION_CANARY_DDS3_NONREGRESSION_PASS")
+          PY
+
+      - name: Disable canary access after any failure
+        if: ${{ failure() || cancelled() }}
+        shell: bash
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          SSH_KEY_PATH: ${{ steps.ssh.outputs.key }}
+          KNOWN_HOSTS_PATH: ${{ steps.ssh.outputs.known }}
+        run: |
+          set +e
+          if [[ -n "${SSH_KEY_PATH:-}" && -f "$SSH_KEY_PATH" && \
+                -n "${KNOWN_HOSTS_PATH:-}" && -f "$KNOWN_HOSTS_PATH" ]]; then
+            ssh -i "$SSH_KEY_PATH" -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$KNOWN_HOSTS_PATH" \
+              -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+              'sudo -n systemctl disable --now school-autopilot-production-canary.service'
+          fi
+          if [[ -n "${DATABASE_URL:-}" ]]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'PSQL'
+            SELECT 'ALTER ROLE autopilot_prod_canary_login NOLOGIN'
+             WHERE EXISTS (
+                 SELECT 1 FROM pg_roles WHERE rolname = 'autopilot_prod_canary_login'
+             ) \gexec
+            PSQL
+          fi
+          echo 'AUTOPILOT_PRODUCTION_CANARY_KILL_SWITCH_APPLIED'
+          echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
+
+      - name: Publish production-canary summary
+        if: ${{ always() }}
+        shell: bash
+        env:
+          REQUEST_ID: ${{ steps.request.outputs.request_id }}
+          SOURCE_REVISION: ${{ steps.request.outputs.source_revision }}
+          TASK_ID: ${{ steps.smoke.outputs.task_id }}
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+        run: |
+          {
+            echo '### Oracle Autopilot production canary'
+            echo "- request: ${REQUEST_ID:-unresolved}"
+            echo "- source revision: ${SOURCE_REVISION:-unresolved}"
+            echo "- task: ${TASK_ID:-not-created}"
+            echo "- deploy: ${DEPLOY_OUTCOME:-not-run}"
+            echo "- zero-cost smoke: ${SMOKE_OUTCOME:-not-run}"
+            echo '- execution contract: `SHADOW`'
+            echo '- task production mutation: `NO`'
+            echo '- model calls: `0`'
+            echo '- Oracle instance stop: `NO`'
+            echo '- kill switch: disable canary unit + set runtime role `NOLOGIN`'
+          } >> "$GITHUB_STEP_SUMMARY"
