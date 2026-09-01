@@ -84,3 +84,5 @@ jobs:
           echo 'AUTOPILOT_SERVICE_RESTARTED=NO'
           echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
           REMOTE
+
+# continuation-metadata-readback: 2026-09-01T05:02:30Z
