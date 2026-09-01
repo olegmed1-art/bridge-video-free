@@ -5,11 +5,16 @@ on:
     paths:
       - 'universal_video/**'
       - 'bridge_vision/**'
-      - 'bridge_contracts/video_deal.py'
-      - 'bridge_contracts/video_frame.py'
-      - 'bridge_contracts/__init__.py'
+      - 'bridge_contracts/**'
+      - 'database/**'
+      - 'bridge_*.py'
+      - 'run_*.py'
+      - 'diana_longitudinal_quality_v2.py'
+      - 'r29_identity_overlay_probe.py'
+      - 'transcript_stage_checkpoint_v1.py'
       - 'tools/bridge_video_positions.py'
       - 'tools/bridge_video_deals.py'
+      - 'requirements-worker.txt'
       - 'requirements-universal-video.txt'
       - 'requirements-universal-video-speaker.txt'
       - 'deploy/oracle-universal-video/**'
@@ -107,4 +112,4 @@ jobs:
       - name: Compile Python modules
         run: python -m compileall -q universal_video bridge_vision bridge_contracts tools/bridge_video_positions.py tools/bridge_video_deals.py
       - name: Record requirements checksum
-        run: sha256sum requirements-universal-video.txt requirements-universal-video-speaker.txt
+        run: sha256sum requirements-worker.txt requirements-universal-video.txt requirements-universal-video-speaker.txt
