@@ -404,7 +404,7 @@ BEGIN
                 OR jsonb_typeof(item->'percentage_token') NOT IN ('string', 'null')
                 OR (jsonb_typeof(item->'percentage_token') = 'string'
                     AND (item->>'percentage_token') !~
-                        '^(100(\\.0+)?|[0-9]{1,2}(\\.[0-9]+)?)$')
+                        '^(100(\.0+)?|[0-9]{1,2}(\.[0-9]+)?)$')
                 OR jsonb_typeof(item->'score_token') NOT IN ('string', 'null')
                 OR (jsonb_typeof(item->'score_token') = 'string'
                     AND (item->>'score_token') !~ '^[-+]?[1-9][0-9]{1,4}$')
