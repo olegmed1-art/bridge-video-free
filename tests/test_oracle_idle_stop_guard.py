@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -23,6 +25,8 @@ def _run_guard(
     video_dsn: str | None = "postgres://video",
     observer_busy: bool = False,
     video_spool_leaf: str | None = None,
+    progress_state: str = "PROCESSING",
+    malformed_progress: bool = False,
     video_spool_present: bool = True,
 ) -> str:
     bindir = tmp_path / "bin"
@@ -46,7 +50,24 @@ def _run_guard(
         for leaf in ("inbox", "running", "progress", "done", "failed", "results"):
             (video_spool / leaf).mkdir()
         if video_spool_leaf is not None:
-            (video_spool / video_spool_leaf / "work.json").write_text("{}", encoding="utf-8")
+            target = video_spool / video_spool_leaf / "work.json"
+            if video_spool_leaf == "progress":
+                if malformed_progress:
+                    target.write_text("not-json", encoding="utf-8")
+                else:
+                    target.write_text(
+                        json.dumps(
+                            {
+                                "schema": "universal-video-pipeline-progress-v1",
+                                "job_id": "work",
+                                "state": progress_state,
+                                "observed_at_unix": time.time(),
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+            else:
+                target.write_text("{}", encoding="utf-8")
 
     env = os.environ.copy()
     env.update(
@@ -54,6 +75,7 @@ def _run_guard(
             "PATH": f"{bindir}:{env.get('PATH', '')}",
             "ASSISTANT_LAB_ENV_FILE": str(env_file),
             "ASSISTANT_LAB_PYTHON": str(fake_python),
+            "ORACLE_IDLE_SYSTEM_PYTHON": sys.executable,
             "BRIDGE_VIDEO_QUEUE_DSN_FILE": str(queue_file),
             "BRIDGE_VIDEO_SPOOL_ROOT": str(video_spool),
             "ORACLE_HOST_LEASE_FILE": str(lease_file),
@@ -104,13 +126,36 @@ def test_missing_video_spool_telemetry_is_unknown(tmp_path: Path) -> None:
     assert "ORACLE_IDLE_STATE=UNKNOWN" in out
 
 
-def test_local_video_spool_pending_running_and_progress_are_busy(tmp_path: Path) -> None:
-    for leaf in ("inbox", "running", "progress"):
+def test_local_video_spool_inbox_and_running_are_busy(tmp_path: Path) -> None:
+    for leaf in ("inbox", "running"):
         case = tmp_path / leaf
         case.mkdir()
         out = _run_guard(case, video_spool_leaf=leaf)
         assert f"ORACLE_IDLE_REASON=video_spool_{leaf}_pending" in out
         assert "ORACLE_IDLE_STATE=BUSY" in out
+
+
+def test_active_video_progress_is_busy(tmp_path: Path) -> None:
+    for progress_state in ("DOWNLOADING_FROM_DRIVE", "SOURCE_READY_ON_ORACLE", "PROCESSING"):
+        case = tmp_path / progress_state.lower()
+        case.mkdir()
+        out = _run_guard(case, video_spool_leaf="progress", progress_state=progress_state)
+        assert "ORACLE_IDLE_REASON=video_spool_progress_active" in out
+        assert "ORACLE_IDLE_STATE=BUSY" in out
+
+
+def test_terminal_progress_receipts_do_not_block_idle(tmp_path: Path) -> None:
+    for progress_state in ("RESULT_READY", "REVIEW", "FAILED"):
+        case = tmp_path / progress_state.lower()
+        case.mkdir()
+        out = _run_guard(case, video_spool_leaf="progress", progress_state=progress_state)
+        assert "ORACLE_IDLE_STATE=IDLE" in out
+
+
+def test_malformed_progress_is_unknown(tmp_path: Path) -> None:
+    out = _run_guard(tmp_path, video_spool_leaf="progress", malformed_progress=True)
+    assert "ORACLE_IDLE_REASON=video_spool_progress_invalid" in out
+    assert "ORACLE_IDLE_STATE=UNKNOWN" in out
 
 
 def test_terminal_video_spool_files_do_not_block_idle(tmp_path: Path) -> None:
@@ -119,6 +164,13 @@ def test_terminal_video_spool_files_do_not_block_idle(tmp_path: Path) -> None:
         case.mkdir()
         out = _run_guard(case, video_spool_leaf=leaf)
         assert "ORACLE_IDLE_STATE=IDLE" in out
+
+
+def test_guard_never_treats_find_failure_as_empty_spool() -> None:
+    script = SCRIPT.read_text(encoding="utf-8")
+    assert "spool_rc=$?" in script
+    assert 'if (( spool_rc != 0 )); then' in script
+    assert 'reason="spool_traversal_failed"' in script
 
 
 def test_observer_experiment_is_busy(tmp_path: Path) -> None:
