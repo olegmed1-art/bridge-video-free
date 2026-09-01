@@ -5,7 +5,11 @@ from unittest.mock import patch
 
 import pytest
 
-from oracle_autopilot.contract import AutopilotContractError, ClaimedTask, validate_task_contract
+from oracle_autopilot.contract import (
+    AutopilotContractError,
+    ClaimedTask,
+    validate_task_contract,
+)
 from oracle_autopilot.ibf_read_only import (
     IBF_INDEX_URL,
     IBF_MAX_BOARD_PAGES,
@@ -14,6 +18,7 @@ from oracle_autopilot.ibf_read_only import (
     IBF_SOURCE_AUTHORITY,
     _canonical_session_url,
     _canonical_total_url,
+    _count_field_rows,
     _extract_personal_result_tokens,
     _parse_document,
     _validate_official_url,
@@ -221,6 +226,24 @@ def test_personal_tokens_do_not_capture_two_digit_board_number():
     assert _extract_personal_result_tokens(document.rows[0]) == ("50.00", "-100")
 
 
+def test_field_count_ignores_numeric_double_dummy_rows_when_seat_links_exist():
+    document = _parse_document(
+        """
+        <table class='dd'>
+          <tr><td>N</td><td>10</td><td>11</td><td>9</td><td>8</td><td>7</td></tr>
+          <tr><td>S</td><td>9</td><td>10</td><td>8</td><td>7</td><td>6</td></tr>
+        </table>
+        <table class='resultsTable'>
+          <tr><th>EW</th><th>EW%</th><th colspan='3'>result</th><th>lead</th><th>contract</th><th>NS%</th><th>NS</th></tr>
+          <tr><td><a href='personal.php?event=29692&amp;round=9&amp;seat=4'>EW</a></td><td>0.00</td><td></td><td></td><td>50</td><td>D7</td><td>6C-1</td><td>100.00</td><td><a href='personal.php?event=29692&amp;round=9&amp;seat=5'>NS</a></td></tr>
+          <tr><td><a href='/viewer//personal.php?event=29692&amp;round=9&amp;seat=2'>EW</a></td><td>33.33</td><td></td><td>-450</td><td></td><td>DQ</td><td>4S+1</td><td>66.67</td><td><a href='/viewer/personal.php?event=29692&amp;round=9&amp;seat=6'>NS</a></td></tr>
+        </table>
+        """
+    )
+
+    assert _count_field_rows(document) == 2
+
+
 def test_missing_board_links_fail_closed_instead_of_inventing_data():
     member_url = IBF_MEMBER_URL.format(player_id="15031")
     session = "https://bridge.co.il/viewer/session.php?event=30041&round=3"
@@ -236,9 +259,11 @@ def test_missing_board_links_fail_closed_instead_of_inventing_data():
         budget.consume()
         return pages[url]
 
-    with patch("oracle_autopilot.ibf_read_only._ibf_get_html", side_effect=fake_get):
-        with pytest.raises(AutopilotContractError, match="IBF_PERSONAL_BOARD_LINKS_MISSING"):
-            fetch_ibf_read_only_snapshot(_task().goal_json)
+    with (
+        patch("oracle_autopilot.ibf_read_only._ibf_get_html", side_effect=fake_get),
+        pytest.raises(AutopilotContractError, match="IBF_PERSONAL_BOARD_LINKS_MISSING"),
+    ):
+        fetch_ibf_read_only_snapshot(_task().goal_json)
 
 
 def test_maximum_pilot_snapshot_stays_below_database_evidence_limit():

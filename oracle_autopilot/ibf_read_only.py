@@ -479,6 +479,35 @@ def _extract_personal_boards(
 
 
 def _count_field_rows(document: _ParsedDocument) -> int:
+    # Official board pages contain several numeric tables (deal, DD/Par and
+    # field results).  Count the result rows by their paired personal-seat
+    # links first so two-digit DD trick values cannot inflate the compact
+    # count.  Keep the bounded legacy fallback for older/minimal pages that do
+    # not expose seat links.
+    linked_result_count = 0
+    for row in document.rows:
+        if len(row) not in {8, 9}:
+            continue
+        endpoint_links = (*row[0][1], *row[-1][1])
+        seat_links = 0
+        for href in endpoint_links:
+            parsed = urllib.parse.urlsplit(href)
+            if parsed.path not in {
+                "personal.php",
+                "/viewer/personal.php",
+                "/viewer//personal.php",
+            }:
+                continue
+            seats = urllib.parse.parse_qs(
+                parsed.query, keep_blank_values=False
+            ).get("seat", [])
+            if len(seats) == 1 and re.fullmatch(r"[A-Za-z0-9:-]{1,24}", seats[0]):
+                seat_links += 1
+        if seat_links >= 2:
+            linked_result_count += 1
+    if linked_result_count:
+        return linked_result_count
+
     count = 0
     for row in document.rows:
         text = _row_text(row)
