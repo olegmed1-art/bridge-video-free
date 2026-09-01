@@ -23,11 +23,10 @@ jobs:
       ORACLE_USER: ubuntu
       EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
       SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
-      BOOTSTRAP_HELPER_HOST: bridge-school-autopilot-8sxii3w3k-olegmed1-4368s-projects.vercel.app
+      BOOTSTRAP_HELPER_HOST: bridge-school-autopilot-obrpqd725-olegmed1-4368s-projects.vercel.app
       EXPECTED_RECIPIENT_SHA256: 5149590b81e3a5e6dd3efb1ccbaccc72f5a27d404654ad37cf08bf9f52d4d079
-      SHARE_URL_CIPHERTEXT_SHA256: b064c7eb53f3b34d5eca99576e1f3044ef89944d54fd49762ab870c4a9d1d1b3
-      SHARE_URL_CIPHERTEXT_B64: C+8b9RXt3foQaHcbDYzxK3A10rORf2hk9h8dflA0p2L2wHqUjyPTsZSuofKTfaierCkcTkIFhSmtg+AXtTfHgxe7NtsREgTc/vmDRDrcgtU8zjYCo7kyBAl/sP7IKe+/Mue+JzEDawinpnadriZDocW6/Dv2nH2FWCPjHDQ7OiAce3NEeE/RUGd4PTtypDuSf+c/W/dZLKjjaDiHrJqvCXKFAIAKSJKKvwMpd0HXDrRSs/xCoF8aPfRSfqbgWc9enl4XXFjJrBIZAk+VDpETR7G5LkZNDNotuXp4+5qHfbFBr/M1Xkl1BnXEhE+4tL/jCNje80PlJOZCdpZ81pivR6oWTld3n/K3L476cMWbIyrofHHEywg2NyQO8a5KGxvXKDnnaCP8KJZEQUhAAZytkxIAVTax+56tNzrab+Ab9/nUbS6XR+/5Q77fLqiNA+RPQYmPQlUNGPbYESX2o2eHsIS6TO81Az9Re5fPZcyXt6slLdcrUGx8DtbkYgs2JZSN
-
+      SHARE_URL_CIPHERTEXT_SHA256: 09c3fcbf7f43723e3947c896a3a22054d69d6277d3b5df0696e1e0b58e34f422
+      SHARE_URL_CIPHERTEXT_B64: Y7fnhZzdv+JBHJW+9CiRK7ejjlNLxwp0rWEzVfaAtLIEzuUt9QUIN3g3FVGLSHvgEjhKll4oamD0h5vVQDdomLx1bwvTRroXU3A92NXu+2czs1ygoJmjR+oeBOZXPkFoDev7OeNIyWJwdffgMs4znXctYXwWVisBajJ1PsJ9VoHm7Hn6U+mdol0lvd23d0HaKofPigwJcLFIbHJiyjtvT3hpR00VeKFQu69m5CJ+EYlb8qv89n4uqKRjUy4Uuf47Kosa9gTMDeaTiHFxWC5hZZ3pORmLX8pu4zVbfyVMSSBoqyQV/DGp6I1NOP6gQZEIT9YTyfB7gKAN4ZDZAS8Xo4XeYQxE7eWr3x532BVY/mgcuJ+z6mlYLzB9xQ+xx6wDjRzIvNRBsN2AhakKg4Vk1Dgnl90hLOtw/YBNFyYcdu7elmzUoU/GEBryU+fDWshuQg9UvOfwSZh32K5SB5RuojgKyOpr9gA83+EVHDBObf8SiWknxA93z8HoZzstkAXE
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -348,3 +347,5 @@ jobs:
             echo '- Oracle stop requested: `NO`'
           } >> "$GITHUB_STEP_SUMMARY"
           [[ '${{ steps.install.outcome }}' == success ]]
+
+# continuation-bootstrap-retry: 2026-09-01T04:55:30Z helper-v2-health-run-33471535531
