@@ -100,6 +100,8 @@ PostgreSQL 18 migration package for the School of Sports Bridge.
   a least-privilege tick RPC, one-task queue boundary, rolling rate cap, durable
   findings and a fail-closed circuit breaker; model calls, cost and production
   mutations remain forbidden.
+- `0305_autopilot_online_pilot_identity.sql` — deterministic online result
+  evaluation through the exact `last_task_id` retained by the pilot state.
 - `rollbacks/0056_universal_video_queue.sql` — fail-closed rollback; refuses to remove a non-empty queue.
 
 The exact production state is the `schema_migration` registry in Neon, protected by migration checksums.
