@@ -17,6 +17,9 @@ def _environment(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:
             for leaf in ("inbox", "running", "done", "failed", "results", "progress"):
                 (directory / leaf).mkdir()
         monkeypatch.setenv(name, str(directory))
+    speaker_cache = root / "universal_video_speaker_model_cache"
+    speaker_cache.mkdir()
+    monkeypatch.setenv("UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE", str(speaker_cache))
 
 
 def test_container_rejects_missing_provenance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -30,6 +33,14 @@ def test_container_rejects_missing_provenance(monkeypatch: pytest.MonkeyPatch, t
 def test_container_rejects_unwritable_mount_before_model(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _environment(monkeypatch, tmp_path)
     monkeypatch.setenv("HF_HOME", str(tmp_path / "missing"))
+    with pytest.raises(ContainerRuntimeUnavailable) as error:
+        validate_container_runtime()
+    assert error.value.error_code == "UV_CONTAINER_MOUNT_UNAVAILABLE"
+
+
+def test_container_rejects_missing_speaker_cache_before_model(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _environment(monkeypatch, tmp_path)
+    monkeypatch.setenv("UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE", str(tmp_path / "missing-speaker-cache"))
     with pytest.raises(ContainerRuntimeUnavailable) as error:
         validate_container_runtime()
     assert error.value.error_code == "UV_CONTAINER_MOUNT_UNAVAILABLE"
@@ -77,6 +88,7 @@ def test_container_image_keeps_credentials_and_media_out_of_layers() -> None:
     assert "GOOGLE_DRIVE_OAUTH" not in dockerfile
     assert "COPY universal_video" in dockerfile
     assert "USER universal-video:universal-video" in dockerfile
+    assert "UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE=/var/lib/universal-video/model-cache/speaker" in dockerfile
 
 
 def test_container_image_contains_neon_processor_dependency_closure() -> None:
@@ -153,6 +165,8 @@ def test_oracle_container_service_is_read_only_and_explicitly_activated() -> Non
     assert "UNIVERSAL_VIDEO_CONTAINER_BUILD:-1" in installer
     assert "docker run --rm" in installer
     assert "UNIVERSAL_VIDEO_STATUS_PATH=/run/bridge-school/universal-video-status.json" in installer
+    assert "UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE=/var/lib/universal-video/model-cache/speaker" in installer
+    assert 'install -d -o "$USER_NAME" -g "$GROUP_NAME" -m 0750 "$BASE_DIR/model-cache/speaker"' in installer
     assert '--mount "type=bind,src=$STATUS_DIR,dst=/run/bridge-school"' in installer
     assert "--mount type=bind,src=/run/bridge-school,dst=/run/bridge-school" in service
     assert "ReadWritePaths=/run/bridge-school" in service
