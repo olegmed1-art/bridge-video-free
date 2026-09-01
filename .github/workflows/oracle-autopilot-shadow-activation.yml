@@ -163,7 +163,9 @@ jobs:
             <<'REMOTE' | tee "$proof"
           set -Eeuo pipefail
           service=school-autopilot-shadow.service
+          observer_service=school-autopilot-online-observer.service
           root=/opt/bridge-school/school-autopilot
+          observer_restore_marker="$root/runtime/restore-online-observer-after-staging"
           release="$root/releases/$EXPECTED_REVISION"
           unit=/etc/systemd/system/$service
 
@@ -180,6 +182,14 @@ jobs:
           grep -Fx 'NoNewPrivileges=true' "$unit" >/dev/null
           ! grep -Eq 'AUTOPILOT_RUNTIME_MODE=(ACTIVE|PRODUCTION)|production_mutations_enabled' "$unit"
 
+          restore_observer=0
+          if [[ -e "$observer_restore_marker" ]]; then
+            [[ "$(stat -c '%U:%G:%a' "$observer_restore_marker")" == root:root:600 ]]
+            [[ "$(systemctl is-active "$observer_service" 2>/dev/null || true)" == inactive ]]
+            [[ "$(systemctl is-enabled "$observer_service" 2>/dev/null || true)" == disabled ]]
+            restore_observer=1
+          fi
+
           active="$(systemctl is-active "$service" 2>/dev/null || true)"
           enabled="$(systemctl is-enabled "$service" 2>/dev/null || true)"
           case "$active:$enabled" in
@@ -189,8 +199,13 @@ jobs:
           esac
 
           activated_here=0
+          observer_activated_here=0
           rollback_new_activation() {
             rc=$?
+            if [[ $rc -ne 0 && "$observer_activated_here" == 1 ]]; then
+              systemctl disable --now "$observer_service" >/dev/null 2>&1 || true
+              echo 'AUTOPILOT_OBSERVER_ACTIVATION_ROLLED_BACK' >&2
+            fi
             if [[ $rc -ne 0 && "$activated_here" == 1 ]]; then
               systemctl disable --now "$service" >/dev/null 2>&1 || true
               echo 'AUTOPILOT_SHADOW_ACTIVATION_ROLLED_BACK' >&2
@@ -238,6 +253,18 @@ jobs:
             [[ "$worker_started_count" -ge 1 ]]
             [[ "$unsafe_journal_count" == 0 ]]
           fi
+
+          if [[ "$restore_observer" == 1 ]]; then
+            observer_activated_here=1
+            systemctl enable --now "$observer_service"
+            sleep 2
+            [[ "$(systemctl is-active "$observer_service" 2>/dev/null || true)" == active ]]
+            [[ "$(systemctl is-enabled "$observer_service" 2>/dev/null || true)" == enabled ]]
+            rm -f -- "$observer_restore_marker"
+            echo 'AUTOPILOT_DIAG_OBSERVER_RESTORED=yes'
+          else
+            echo 'AUTOPILOT_DIAG_OBSERVER_RESTORED=not-required'
+          fi
           trap - EXIT
           echo 'AUTOPILOT_SHADOW_ACTIVATION_PASS'
           echo 'AUTOPILOT_RUNTIME_MODE=SHADOW'
@@ -247,6 +274,7 @@ jobs:
           grep -Fx 'AUTOPILOT_SHADOW_ACTIVATION_PASS' "$proof" >/dev/null
           grep -Fx 'AUTOPILOT_RUNTIME_MODE=SHADOW' "$proof" >/dev/null
           grep -Fx 'AUTOPILOT_PRODUCTION_MUTATIONS=NO' "$proof" >/dev/null
+          grep -E '^AUTOPILOT_DIAG_OBSERVER_RESTORED=(yes|not-required)$' "$proof" >/dev/null
           grep -Fx 'ORACLE_INSTANCE_STOP_REQUESTED=NO' "$proof" >/dev/null
 
       - name: Verify DDS3 non-regression

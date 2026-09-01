@@ -800,7 +800,16 @@ def test_staging_update_stops_only_autopilot_and_rolls_back_on_failure():
     assert 'AUTOPILOT_REPLACE_ACTIVE' in workflow
     assert 'systemctl disable --now "$service"' in workflow
     assert 'systemctl enable --now "$service"' in workflow
+    assert 'systemctl disable --now "$observer_service"' in workflow
+    assert "restore-online-observer-after-staging" in workflow
+    assert "default_transaction_read_only=on" in workflow
+    assert "FROM autopilot.task_status" in workflow
+    assert "status IN ('READY', 'RUNNING', 'WAITING_EXTERNAL')" in workflow
+    assert "AUTOPILOT_DEPLOY_INGRESS_QUIESCED=YES" in workflow
+    assert "AUTOPILOT_DEPLOY_DRAIN_PASS active=0" in workflow
+    assert "AUTOPILOT_ACTIVE_TASKS_AT_STOP=0" in workflow
     assert "AUTOPILOT_UPDATE_ROLLBACK_SERVICE_RESTORED" in workflow
+    assert "AUTOPILOT_UPDATE_ROLLBACK_OBSERVER_RESTORED" in workflow
     assert "AUTOPILOT_UPDATE_STOPPED_SERVICE_ONLY=YES" in workflow
     assert "ORACLE_INSTANCE_STOP_REQUESTED=NO" in workflow
     assert "oci compute instance" not in workflow
@@ -836,6 +845,10 @@ def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():
     assert "request['neon_max_cu'] == 8" in workflow
     assert "request['runtime_connection_limit'] == 4" in workflow
     assert 'systemctl enable --now "$service"' in workflow
+    assert 'systemctl enable --now "$observer_service"' in workflow
+    assert "restore-online-observer-after-staging" in workflow
+    assert "AUTOPILOT_DIAG_OBSERVER_RESTORED" in workflow
+    assert "circuit-open.json" not in workflow
     assert "AUTOPILOT_PRODUCTION_MUTATIONS=NO" in workflow
     assert "ORACLE_INSTANCE_STOP_REQUESTED=NO" in workflow
     assert 'if [[ "$activated_here" == 1 ]]; then' in workflow
