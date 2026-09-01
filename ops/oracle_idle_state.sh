@@ -12,6 +12,7 @@ LAB_DIR="${ASSISTANT_LAB_DIR:-/opt/bridge-school/assistant-lab}"
 LAB_ENV="${ASSISTANT_LAB_ENV_FILE:-$LAB_DIR/assistant-lab.env}"
 PYTHON="${ASSISTANT_LAB_PYTHON:-$LAB_DIR/.venv/bin/python}"
 QUEUE_DSN_FILE="${BRIDGE_VIDEO_QUEUE_DSN_FILE:-/opt/bridge-school/universal-video/secrets/video-queue-dsn}"
+HOST_LEASE_FILE="${ORACLE_HOST_LEASE_FILE:-/run/bridge-school/oracle-host-lease}"
 
 state="UNKNOWN"
 reason="unclassified"
@@ -35,6 +36,32 @@ if command -v systemctl >/dev/null 2>&1; then
   esac
 else
   reason="systemctl_missing"
+  exit 0
+fi
+
+# A bounded operator may own the host with a local lease. The lease file has one
+# line: expires_at_epoch=<unix-seconds>. A live lease is BUSY. A malformed or
+# expired-but-not-cleared lease is UNKNOWN, never IDLE, so stale lease telemetry
+# cannot accidentally authorize STOP.
+if [[ -e "$HOST_LEASE_FILE" || -L "$HOST_LEASE_FILE" ]]; then
+  if [[ ! -f "$HOST_LEASE_FILE" || -L "$HOST_LEASE_FILE" || ! -r "$HOST_LEASE_FILE" ]]; then
+    reason="host_lease_unreadable"
+    exit 0
+  fi
+  lease_line="$(cat "$HOST_LEASE_FILE" 2>/dev/null || true)"
+  if [[ ! "$lease_line" =~ ^expires_at_epoch=([0-9]{10,})$ ]]; then
+    reason="host_lease_invalid"
+    exit 0
+  fi
+  lease_expires="${BASH_REMATCH[1]}"
+  now_epoch="$(date +%s 2>/dev/null || true)"
+  [[ "$now_epoch" =~ ^[0-9]+$ ]] || { reason="clock_unavailable"; exit 0; }
+  if (( lease_expires > now_epoch )); then
+    state="BUSY"
+    reason="host_lease_active"
+    exit 0
+  fi
+  reason="host_lease_stale"
   exit 0
 fi
 
@@ -63,10 +90,21 @@ dsn_line="$(grep -m1 '^ASSISTANT_LAB_DATABASE_URL=' "$LAB_ENV" 2>/dev/null || tr
 [[ -n "$dsn_line" ]] || { reason="assistant_lab_dsn_missing"; exit 0; }
 export ASSISTANT_LAB_DATABASE_URL="${dsn_line#ASSISTANT_LAB_DATABASE_URL=}"
 [[ -n "$ASSISTANT_LAB_DATABASE_URL" ]] || { reason="assistant_lab_dsn_empty"; exit 0; }
-if [[ -f "$QUEUE_DSN_FILE" && ! -L "$QUEUE_DSN_FILE" ]]; then
-  export BRIDGE_VIDEO_QUEUE_DATABASE_URL="$(tr -d '\n\r' < "$QUEUE_DSN_FILE")"
-else
-  export BRIDGE_VIDEO_QUEUE_DATABASE_URL=''
+
+# Universal Video is a required workload family for the stop proof. Missing,
+# unreadable, symlinked, or empty telemetry is UNKNOWN rather than an implicit
+# zero-job result.
+if [[ ! -f "$QUEUE_DSN_FILE" || -L "$QUEUE_DSN_FILE" || ! -r "$QUEUE_DSN_FILE" ]]; then
+  unset ASSISTANT_LAB_DATABASE_URL
+  reason="video_queue_dsn_unavailable"
+  exit 0
+fi
+export BRIDGE_VIDEO_QUEUE_DATABASE_URL="$(tr -d '\n\r' < "$QUEUE_DSN_FILE")"
+if [[ -z "$BRIDGE_VIDEO_QUEUE_DATABASE_URL" ]]; then
+  unset ASSISTANT_LAB_DATABASE_URL
+  unset BRIDGE_VIDEO_QUEUE_DATABASE_URL
+  reason="video_queue_dsn_empty"
+  exit 0
 fi
 
 DB_RESULT="$("$PYTHON" - <<'PY' 2>/dev/null || true
@@ -78,8 +116,12 @@ except Exception:
     raise SystemExit
 
 dsn = os.environ.get("ASSISTANT_LAB_DATABASE_URL", "")
+queue_dsn = os.environ.get("BRIDGE_VIDEO_QUEUE_DATABASE_URL", "")
 if not dsn:
     print("UNKNOWN:dsn_missing")
+    raise SystemExit
+if not queue_dsn:
+    print("UNKNOWN:video_queue_dsn_missing")
     raise SystemExit
 
 try:
@@ -91,13 +133,10 @@ try:
                 print("UNKNOWN:idle_snapshot_missing")
                 raise SystemExit
             active_jobs, active_research, active_control = map(int, row)
-    video_jobs = 0
-    queue_dsn = os.environ.get("BRIDGE_VIDEO_QUEUE_DATABASE_URL", "")
-    if queue_dsn:
-        with psycopg.connect(queue_dsn, connect_timeout=8, application_name="oracle-idle-video-queue") as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT count(*) FROM video_queue.job_status WHERE status IN ('PENDING_CANARY','QUEUED','LEASED')")
-                video_jobs = int(cur.fetchone()[0])
+    with psycopg.connect(queue_dsn, connect_timeout=8, application_name="oracle-idle-video-queue") as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM video_queue.job_status WHERE status IN ('PENDING_CANARY','QUEUED','LEASED')")
+            video_jobs = int(cur.fetchone()[0])
     if min(active_jobs, active_research, active_control, video_jobs) < 0:
         print("UNKNOWN:invalid_idle_snapshot")
     elif active_jobs or active_research or active_control or video_jobs:
