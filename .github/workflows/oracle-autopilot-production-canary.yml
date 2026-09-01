@@ -316,9 +316,13 @@ jobs:
           sort -u -o "$known" "$known"
           rsa_line="$(awk '$2 == "ssh-rsa" {print; exit}' "$known")"
           test -n "$rsa_line"
-          printf '%s\n' "$rsa_line" | awk '{print $2, $3}' > "$RUNNER_TEMP/oracle-rsa.pub"
-          [[ "$(ssh-keygen -lf "$RUNNER_TEMP/oracle-rsa.pub" | awk '{print $2}')" == \
+          rsa_openssh="$RUNNER_TEMP/oracle-rsa.openssh.pub"
+          rsa_public="$RUNNER_TEMP/oracle-rsa.pkcs8.pem"
+          printf '%s\n' "$rsa_line" | awk '{print $2, $3}' > "$rsa_openssh"
+          [[ "$(ssh-keygen -lf "$rsa_openssh" | awk '{print $2}')" == \
             'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64' ]]
+          ssh-keygen -e -m PKCS8 -f "$rsa_openssh" > "$rsa_public"
+          openssl pkey -pubin -in "$rsa_public" -noout
 
           selected=''
           for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
@@ -334,7 +338,7 @@ jobs:
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
           echo "key=$key" >> "$GITHUB_OUTPUT"
           echo "known=$known" >> "$GITHUB_OUTPUT"
-          echo "rsa_public=$RUNNER_TEMP/oracle-rsa.pub" >> "$GITHUB_OUTPUT"
+          echo "rsa_public=$rsa_public" >> "$GITHUB_OUTPUT"
 
       - name: Package pinned source and encrypt runtime DSN
         id: package
