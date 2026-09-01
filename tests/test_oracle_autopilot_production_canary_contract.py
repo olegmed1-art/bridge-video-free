@@ -21,6 +21,8 @@ def test_workflow_is_request_gated_and_exactly_targets_production() -> None:
     assert "run_zero_cost_production_canary" in workflow
     assert "AUTOPILOT_SMOKE_V1" in workflow
     assert "cost_cap_microusd=0" in workflow
+    assert 'ssh-keygen -e -m PKCS8 -f "$rsa_openssh"' in workflow
+    assert 'openssl pkey -pubin -in "$rsa_public" -noout' in workflow
     assert "task_production_mutation" in workflow
     assert "request[\"task_production_mutation\"] is False" in workflow
 
