@@ -1,0 +1,350 @@
+name: Autopilot Oracle encrypted broker bootstrap (one-shot)
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths: ['.github/workflows/autopilot-oracle-bootstrap-envelope-once.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      OCI_REGION: eu-frankfurt-1
+      OCI_INSTANCE_OCID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      BOOTSTRAP_HELPER_HOST: bridge-school-autopilot-8sxii3w3k-olegmed1-4368s-projects.vercel.app
+      EXPECTED_RECIPIENT_SHA256: 5149590b81e3a5e6dd3efb1ccbaccc72f5a27d404654ad37cf08bf9f52d4d079
+      SHARE_URL_CIPHERTEXT_SHA256: b064c7eb53f3b34d5eca99576e1f3044ef89944d54fd49762ab870c4a9d1d1b3
+      SHARE_URL_CIPHERTEXT_B64: C+8b9RXt3foQaHcbDYzxK3A10rORf2hk9h8dflA0p2L2wHqUjyPTsZSuofKTfaierCkcTkIFhSmtg+AXtTfHgxe7NtsREgTc/vmDRDrcgtU8zjYCo7kyBAl/sP7IKe+/Mue+JzEDawinpnadriZDocW6/Dv2nH2FWCPjHDQ7OiAce3NEeE/RUGd4PTtypDuSf+c/W/dZLKjjaDiHrJqvCXKFAIAKSJKKvwMpd0HXDrRSs/xCoF8aPfRSfqbgWc9enl4XXFjJrBIZAk+VDpETR7G5LkZNDNotuXp4+5qHfbFBr/M1Xkl1BnXEhE+4tL/jCNje80PlJOZCdpZ81pivR6oWTld3n/K3L476cMWbIyrofHHEywg2NyQO8a5KGxvXKDnnaCP8KJZEQUhAAZytkxIAVTax+56tNzrab+Ab9/nUbS6XR+/5Q77fLqiNA+RPQYmPQlUNGPbYESX2o2eHsIS6TO81Az9Re5fPZcyXt6slLdcrUGx8DtbkYgs2JZSN
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Configure bounded OCI client
+        env:
+          OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "${OCI_CLI_CONFIG:-}"
+          test -n "${OCI_CLI_KEY_CONTENT:-}"
+          python -m pip install --disable-pip-version-check --quiet 'oci-cli==3.90.3'
+          umask 077
+          mkdir -p "$HOME/.oci"
+          if [[ "$OCI_CLI_KEY_CONTENT" == base64:* ]]; then
+            printf '%s' "${OCI_CLI_KEY_CONTENT#base64:}" | base64 --decode > "$HOME/.oci/oci_api_key.pem"
+          else
+            printf '%s\n' "$OCI_CLI_KEY_CONTENT" > "$HOME/.oci/oci_api_key.pem"
+          fi
+          printf '%s\n' "$OCI_CLI_CONFIG" > "$HOME/.oci/config"
+          openssl pkey -in "$HOME/.oci/oci_api_key.pem" -traditional -out "$HOME/.oci/key.pkcs1.pem"
+          mv "$HOME/.oci/key.pkcs1.pem" "$HOME/.oci/oci_api_key.pem"
+          actual_fingerprint="$(openssl pkey -in "$HOME/.oci/oci_api_key.pem" -pubout -outform DER | openssl md5 -r | awk '{print $1}' | sed 's/../&:/g;s/:$//')"
+          export OCI_DERIVED_FINGERPRINT="$actual_fingerprint"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          p = Path.home() / '.oci/config'
+          lines=[]; key=False; region=False; fingerprint=False
+          for line in p.read_text().splitlines():
+              if line.strip().startswith('key_file='):
+                  lines.append(f'key_file={Path.home()}/.oci/oci_api_key.pem'); key=True
+              elif line.strip().startswith('region='):
+                  lines.append('region=eu-frankfurt-1'); region=True
+              elif line.strip().startswith('fingerprint='):
+                  lines.append(f'fingerprint={os.environ["OCI_DERIVED_FINGERPRINT"]}'); fingerprint=True
+              else:
+                  lines.append(line)
+          if not key: lines.append(f'key_file={Path.home()}/.oci/oci_api_key.pem')
+          if not region: lines.append('region=eu-frankfurt-1')
+          if not fingerprint: lines.append(f'fingerprint={os.environ["OCI_DERIVED_FINGERPRINT"]}')
+          p.write_text('\n'.join(lines) + '\n')
+          PY
+          oci iam region list --output json >/dev/null
+
+      - name: Resolve running Oracle endpoint and verified SSH boundary
+        id: ssh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          state="$(oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --query 'data."lifecycle-state"' --raw-output)"
+          [[ "$state" == RUNNING ]]
+          host="$(oci compute instance list-vnics --instance-id "$OCI_INSTANCE_OCID" --all --query 'data[0]."public-ip"' --raw-output)"
+          test -n "$host" && [[ "$host" != null ]]
+          work="$RUNNER_TEMP/autopilot-encrypted-bootstrap"
+          mkdir -p "$work"
+          key="$work/id_oracle"
+          printf '%s\n' "$SSH_KEY_ORACLE" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$host" "$EXPECTED_FINGERPRINT" "$known"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$host" 'sudo -n true'
+          echo "host=$host" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo 'ORACLE_RUNNING=YES'
+          echo 'ORACLE_SSH_PREFLIGHT=PASS'
+
+      - name: Prepare public encrypted payload
+        id: cipher
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cipher="$RUNNER_TEMP/share-url.oaep"
+          printf '%s' "$SHARE_URL_CIPHERTEXT_B64" | base64 --decode > "$cipher"
+          [[ "$(wc -c < "$cipher")" == 384 ]]
+          [[ "$(sha256sum "$cipher" | awk '{print $1}')" == "$SHARE_URL_CIPHERTEXT_SHA256" ]]
+          chmod 0600 "$cipher"
+          echo "path=$cipher" >> "$GITHUB_OUTPUT"
+          echo 'ENCRYPTED_SHARE_URL_CONTRACT=PASS'
+
+      - name: Install root-only broker environment from encrypted envelope
+        id: install
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh_base=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@${{ steps.ssh.outputs.host }}")
+          scp_base=(scp -q -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15)
+          remote_cipher="/tmp/autopilot-share-${GITHUB_RUN_ID}.oaep"
+          "${scp_base[@]}" '${{ steps.cipher.outputs.path }}' \
+            "$ORACLE_USER@${{ steps.ssh.outputs.host }}:$remote_cipher"
+          "${ssh_base[@]}" \
+            "sudo -n env AUTOPILOT_REMOTE_CIPHER='$remote_cipher' AUTOPILOT_HELPER_HOST='$BOOTSTRAP_HELPER_HOST' AUTOPILOT_EXPECTED_RECIPIENT_SHA256='$EXPECTED_RECIPIENT_SHA256' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+          private=/opt/bridge-school/school-autopilot/bootstrap/oracle-bootstrap-rsa.pem
+          target=/opt/bridge-school/school-autopilot/autopilot-broker.env
+          expected_broker_host=bridge-school-autopilot-qd6hpze0y-olegmed1-4368s-projects.vercel.app
+          work="$(mktemp -d /var/tmp/autopilot-envelope.XXXXXXXX)"
+          cleanup() {
+            rm -f -- "$AUTOPILOT_REMOTE_CIPHER"
+            if [[ "$work" == /var/tmp/autopilot-envelope.* && -d "$work" ]]; then
+              find "$work" -depth -delete
+            fi
+          }
+          trap cleanup EXIT HUP INT TERM
+
+          [[ "$AUTOPILOT_REMOTE_CIPHER" =~ ^/tmp/autopilot-share-[0-9]+\.oaep$ ]]
+          [[ "$AUTOPILOT_HELPER_HOST" =~ ^bridge-school-autopilot-[a-z0-9]+-olegmed1-4368s-projects\.vercel\.app$ ]]
+          [[ "$AUTOPILOT_EXPECTED_RECIPIENT_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ -s "$private" ]]
+          [[ "$(stat -c '%U:%G:%a' "$private")" == root:root:600 ]]
+          actual_recipient="$(openssl pkey -in "$private" -pubout -outform DER | sha256sum | awk '{print $1}')"
+          [[ "$actual_recipient" == "$AUTOPILOT_EXPECTED_RECIPIENT_SHA256" ]]
+
+          openssl pkeyutl -decrypt -inkey "$private" \
+            -in "$AUTOPILOT_REMOTE_CIPHER" -out "$work/share-url" \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 \
+            -pkeyopt rsa_mgf1_md:sha256
+          chmod 0600 "$work/share-url"
+          SHARE_FILE="$work/share-url" EXPECTED_HOST="$AUTOPILOT_HELPER_HOST" \
+            python3 - <<'PY' > "$work/urls"
+          import os
+          import re
+          import urllib.parse
+          from pathlib import Path
+
+          raw = Path(os.environ['SHARE_FILE']).read_text().strip()
+          parsed = urllib.parse.urlsplit(raw)
+          query = urllib.parse.parse_qs(parsed.query, strict_parsing=True)
+          assert parsed.scheme == 'https'
+          assert parsed.hostname == os.environ['EXPECTED_HOST']
+          assert parsed.path == '/'
+          assert parsed.username is None and parsed.password is None and parsed.port is None
+          assert not parsed.fragment
+          assert set(query) == {'_vercel_share'} and len(query['_vercel_share']) == 1
+          token = query['_vercel_share'][0]
+          assert re.fullmatch(r'[A-Za-z0-9]{20,128}', token)
+          base = f"https://{parsed.hostname}"
+          print(f"HEALTH_URL={base}/healthz?_vercel_share={token}")
+          print(f"ENVELOPE_URL={base}/v1/bootstrap-envelope?_vercel_share={token}")
+          PY
+          chmod 0600 "$work/urls"
+          set -a
+          source "$work/urls"
+          set +a
+          jar="$work/cookies"
+          curl --fail --silent --show-error --location --max-redirs 6 \
+            --connect-timeout 10 --max-time 60 -c "$jar" -b "$jar" \
+            "$HEALTH_URL" -o "$work/health.json"
+          HEALTH_FILE="$work/health.json" EXPECTED_SHA="$AUTOPILOT_EXPECTED_RECIPIENT_SHA256" \
+            python3 - <<'PY'
+          import json, os
+          payload = json.load(open(os.environ['HEALTH_FILE'], encoding='utf-8'))
+          expected = {
+              'status': 'ok',
+              'service': 'school-autopilot-bootstrap-envelope',
+              'preview_only': True,
+              'production_mutations_enabled': False,
+              'broker_secret_present': True,
+              'vercel_bypass_present': True,
+              'github_app_config_present': True,
+              'recipient_key_present': True,
+              'recipient_key_sha256': os.environ['EXPECTED_SHA'],
+              'broker_url_valid': True,
+              'plaintext_secret_exposed': False,
+          }
+          for key, value in expected.items():
+              assert payload.get(key) == value, (key, payload.get(key))
+          print('AUTOPILOT_BOOTSTRAP_HELPER_HEALTH=PASS')
+          PY
+          curl --fail --silent --show-error --location --max-redirs 6 \
+            --connect-timeout 10 --max-time 60 -c "$jar" -b "$jar" \
+            "$ENVELOPE_URL" -o "$work/envelope.json"
+
+          python3 -m venv "$work/venv"
+          "$work/venv/bin/python" -m pip install --disable-pip-version-check --quiet \
+            'cryptography==46.0.0'
+          ENVELOPE_FILE="$work/envelope.json" PRIVATE_KEY="$private" \
+          TARGET_FILE="$work/autopilot-broker.env" EXPECTED_SHA="$AUTOPILOT_EXPECTED_RECIPIENT_SHA256" \
+          EXPECTED_BROKER_HOST="$expected_broker_host" \
+            "$work/venv/bin/python" - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          import re
+          import urllib.parse
+          from pathlib import Path
+          from cryptography.hazmat.primitives import hashes, serialization
+          from cryptography.hazmat.primitives.asymmetric import padding, rsa
+          from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+          envelope = json.load(open(os.environ['ENVELOPE_FILE'], encoding='utf-8'))
+          assert set(envelope) == {
+              'schema_version', 'algorithm', 'aad_b64', 'wrapped_key_b64',
+              'nonce_b64', 'ciphertext_b64', 'recipient_key_sha256',
+              'plaintext_secret_exposed',
+          }
+          assert envelope['schema_version'] == 1
+          assert envelope['algorithm'] == 'RSA-OAEP-SHA256+A256GCM'
+          assert envelope['recipient_key_sha256'] == os.environ['EXPECTED_SHA']
+          assert envelope['plaintext_secret_exposed'] is False
+          private = serialization.load_pem_private_key(
+              Path(os.environ['PRIVATE_KEY']).read_bytes(), password=None
+          )
+          assert isinstance(private, rsa.RSAPrivateKey) and private.key_size >= 3072
+          derived = private.public_key().public_bytes(
+              serialization.Encoding.DER,
+              serialization.PublicFormat.SubjectPublicKeyInfo,
+          )
+          assert hashlib.sha256(derived).hexdigest() == os.environ['EXPECTED_SHA']
+          aad = base64.b64decode(envelope['aad_b64'], validate=True)
+          assert aad == b'school-autopilot-bootstrap-v1'
+          aes_key = private.decrypt(
+              base64.b64decode(envelope['wrapped_key_b64'], validate=True),
+              padding.OAEP(
+                  mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                  algorithm=hashes.SHA256(), label=None,
+              ),
+          )
+          assert len(aes_key) == 32
+          plaintext = AESGCM(aes_key).decrypt(
+              base64.b64decode(envelope['nonce_b64'], validate=True),
+              base64.b64decode(envelope['ciphertext_b64'], validate=True),
+              aad,
+          )
+          values = json.loads(plaintext)
+          assert set(values) == {
+              'schema_version', 'autopilot_token_broker_url',
+              'autopilot_token_broker_secret', 'autopilot_vercel_bypass_secret',
+          }
+          assert values['schema_version'] == 1
+          url = values['autopilot_token_broker_url']
+          parsed = urllib.parse.urlsplit(url)
+          assert parsed.scheme == 'https'
+          assert parsed.hostname == os.environ['EXPECTED_BROKER_HOST']
+          assert parsed.path == '/v1/github/draft-repair'
+          assert parsed.username is None and parsed.password is None and parsed.port is None
+          assert not parsed.query and not parsed.fragment
+          broker = values['autopilot_token_broker_secret']
+          bypass = values['autopilot_vercel_bypass_secret']
+          for value, lower in ((broker, 43), (bypass, 32)):
+              assert isinstance(value, str) and lower <= len(value) <= 512
+              assert all(32 < ord(ch) < 127 for ch in value)
+              assert '\r' not in value and '\n' not in value
+          def quote(value: str) -> str:
+              return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
+          content = (
+              f"AUTOPILOT_TOKEN_BROKER_URL={quote(url)}\n"
+              f"AUTOPILOT_TOKEN_BROKER_SECRET={quote(broker)}\n"
+              f"AUTOPILOT_VERCEL_BYPASS_SECRET={quote(bypass)}\n"
+          )
+          Path(os.environ['TARGET_FILE']).write_text(content, encoding='utf-8')
+          os.chmod(os.environ['TARGET_FILE'], 0o600)
+          print('AUTOPILOT_BOOTSTRAP_ENVELOPE_DECRYPT=PASS')
+          PY
+          install -d -m 0750 -o root -g school-autopilot /opt/bridge-school/school-autopilot
+          install -m 0600 -o root -g root "$work/autopilot-broker.env" "$target"
+          [[ "$(stat -c '%U:%G:%a' "$target")" == root:root:600 ]]
+
+          set -a
+          source "$target"
+          set +a
+          broker_health="${AUTOPILOT_TOKEN_BROKER_URL%/v1/github/draft-repair}/healthz"
+          curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+            -H "X-Vercel-Protection-Bypass: $AUTOPILOT_VERCEL_BYPASS_SECRET" \
+            "$broker_health" -o "$work/broker-health.json"
+          BROKER_HEALTH_FILE="$work/broker-health.json" python3 - <<'PY'
+          import json, os
+          payload = json.load(open(os.environ['BROKER_HEALTH_FILE'], encoding='utf-8'))
+          expected = {
+              'status': 'ok',
+              'service': 'school-autopilot-github-token-broker',
+              'preview_only': True,
+              'production_mutations_enabled': False,
+              'github_token_broker_enabled': True,
+              'raw_installation_token_exposed': False,
+              'bounded_draft_executor_enabled': True,
+          }
+          for key, value in expected.items():
+              assert payload.get(key) == value, (key, payload.get(key))
+          print('AUTOPILOT_REAL_BROKER_HEALTH=PASS')
+          PY
+          unset AUTOPILOT_TOKEN_BROKER_URL AUTOPILOT_TOKEN_BROKER_SECRET AUTOPILOT_VERCEL_BYPASS_SECRET
+          echo 'AUTOPILOT_BROKER_ENV_PRESENT=YES'
+          echo 'AUTOPILOT_BROKER_ENV_MODE=0600'
+          echo 'AUTOPILOT_BROKER_ENV_OWNER=root:root'
+          echo 'AUTOPILOT_PLAINTEXT_SECRET_EXPOSED=NO'
+          echo 'AUTOPILOT_SERVICE_RESTARTED=NO'
+          echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
+          echo 'PRODUCTION_REQUESTED=NO'
+          REMOTE
+
+      - name: Safe terminal summary
+        if: always()
+        shell: bash
+        env:
+          INSTALL_OUTCOME: ${{ steps.install.outcome }}
+        run: |
+          {
+            echo '### Autopilot encrypted broker bootstrap'
+            echo "- install outcome: ${INSTALL_OUTCOME:-not-run}"
+            echo '- scope: `SHADOW_ONLY`'
+            echo '- plaintext secrets in repository/logs: `NO`'
+            echo '- service restart: `NO`'
+            echo '- production requested: `NO`'
+            echo '- Oracle stop requested: `NO`'
+          } >> "$GITHUB_STEP_SUMMARY"
+          [[ '${{ steps.install.outcome }}' == success ]]
