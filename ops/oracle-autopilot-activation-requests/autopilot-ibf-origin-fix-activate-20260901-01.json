@@ -1,0 +1,12 @@
+{
+  "request_id": "autopilot-ibf-origin-fix-activate-20260901-01",
+  "action": "activate_shadow",
+  "target_host": "158.180.47.161",
+  "source_revision": "1346ffa92135dd7cab85bd28c9f3194b0c4e0ca1",
+  "activation_scope": "SHADOW_ONLY",
+  "expected_db_user": "autopilot_runtime_login",
+  "no_instance_stop": true,
+  "neon_min_cu": 0.25,
+  "neon_max_cu": 8,
+  "runtime_connection_limit": 4
+}
