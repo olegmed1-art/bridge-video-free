@@ -442,14 +442,32 @@ jobs:
           MAX_RUNTIME_SECONDS: ${{ steps.request.outputs.max_runtime_seconds }}
         run: |
           set -euo pipefail
-          task_id="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 \
-            -v task_key="$TASK_KEY" -c \
-            "SELECT task_id FROM autopilot.create_shadow_task(:'task_key','AUTOPILOT_SMOKE_V1','{}'::jsonb,20,0,'production-canary','GITHUB_ACTIONS');")"
+          task_id="$(
+            psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 \
+              -v task_key="$TASK_KEY" <<'PSQL'
+          SELECT task_id
+          FROM autopilot.create_shadow_task(
+            :'task_key',
+            'AUTOPILOT_SMOKE_V1',
+            '{}'::jsonb,
+            20,
+            0,
+            'production-canary',
+            'GITHUB_ACTIONS'
+          );
+          PSQL
+          )"
           [[ "$task_id" =~ ^[0-9a-f-]{36}$ ]]
           terminal=''
           for _ in $(seq 1 $((MAX_RUNTIME_SECONDS / 2))); do
-            terminal="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -v task_id="$task_id" -c \
-              "SELECT status FROM autopilot.task_status WHERE task_id=:'task_id'::uuid;")"
+            terminal="$(
+              psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 \
+                -v task_id="$task_id" <<'PSQL'
+          SELECT status
+          FROM autopilot.task_status
+          WHERE task_id = :'task_id'::uuid;
+          PSQL
+            )"
             [[ "$terminal" == DONE ]] && break
             case "$terminal" in
               FAILED_CLOSED|BUDGET_STOP|OWNER_REQUIRED|CANCELLED) break ;;
@@ -460,11 +478,55 @@ jobs:
             echo "production-canary terminal state: ${terminal:-missing}" >&2
             exit 1
           }
-          verified="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -v task_id="$task_id" -c \
-            "SELECT count(*) = 1 FROM autopilot.task t WHERE t.task_id=:'task_id'::uuid AND t.goal_type='AUTOPILOT_SMOKE_V1' AND t.status='DONE' AND t.cost_cap_microusd=0 AND t.cost_reserved_microusd=0 AND t.cost_actual_microusd=0 AND t.safe_summary_json->>'production_mutation'='false' AND t.safe_summary_json->>'model_calls'='0' AND EXISTS (SELECT 1 FROM autopilot.evidence e WHERE e.task_id=t.task_id AND e.retained AND e.evidence_class='SYNTHETIC_SHADOW_COMPLETION') AND EXISTS (SELECT 1 FROM autopilot.step_attempt s WHERE s.task_id=t.task_id AND s.worker_id='oracle-autopilot-production-canary-1' AND s.status='DONE') AND EXISTS (SELECT 1 FROM autopilot.task_event ev WHERE ev.task_id=t.task_id AND ev.event_type='TASK_DONE');")"
+          verified="$(
+            psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 \
+              -v task_id="$task_id" <<'PSQL'
+          SELECT count(*) = 1
+          FROM autopilot.task t
+          WHERE t.task_id = :'task_id'::uuid
+            AND t.goal_type = 'AUTOPILOT_SMOKE_V1'
+            AND t.status = 'DONE'
+            AND t.cost_cap_microusd = 0
+            AND t.cost_reserved_microusd = 0
+            AND t.cost_actual_microusd = 0
+            AND t.safe_summary_json->>'production_mutation' = 'false'
+            AND t.safe_summary_json->>'model_calls' = '0'
+            AND EXISTS (
+              SELECT 1 FROM autopilot.evidence e
+              WHERE e.task_id = t.task_id
+                AND e.retained
+                AND e.evidence_class = 'SYNTHETIC_SHADOW_COMPLETION'
+            )
+            AND EXISTS (
+              SELECT 1 FROM autopilot.step_attempt s
+              WHERE s.task_id = t.task_id
+                AND s.worker_id = 'oracle-autopilot-production-canary-1'
+                AND s.status = 'DONE'
+            )
+            AND EXISTS (
+              SELECT 1 FROM autopilot.task_event ev
+              WHERE ev.task_id = t.task_id
+                AND ev.event_type = 'TASK_DONE'
+            );
+          PSQL
+          )"
           [[ "$verified" == t ]]
-          evidence="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -v task_id="$task_id" -c \
-            "SELECT jsonb_build_object('task_id',task_id,'status',status,'goal_type',goal_type,'attempts',attempts,'cost_cap_microusd',cost_cap_microusd,'cost_actual_microusd',cost_actual_microusd,'summary',safe_summary_json) FROM autopilot.task_status WHERE task_id=:'task_id'::uuid;")"
+          evidence="$(
+            psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 \
+              -v task_id="$task_id" <<'PSQL'
+          SELECT jsonb_build_object(
+            'task_id', task_id,
+            'status', status,
+            'goal_type', goal_type,
+            'attempts', attempts,
+            'cost_cap_microusd', cost_cap_microusd,
+            'cost_actual_microusd', cost_actual_microusd,
+            'summary', safe_summary_json
+          )
+          FROM autopilot.task_status
+          WHERE task_id = :'task_id'::uuid;
+          PSQL
+          )"
           echo "$evidence"
           critical="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c \
             "SELECT count(*) FROM public.operational_health_issue WHERE severity='critical';")"
