@@ -2,7 +2,7 @@
   "schema_version": "1.0",
   "kind": "AUTOPILOT_BLOCKER",
   "blocker_id": "PHASE3B_ORACLE_BROKER_ENV_ABSENT",
-  "status": "OWNER_REQUIRED_CREDENTIAL_ARTIFACT",
+  "status": "RESOLVED_SHADOW_CANARY_PROVEN",
   "recorded_at": "2026-08-31T21:09:11Z",
   "tracker_issue": 782,
   "draft_pr": 991,
@@ -27,9 +27,9 @@
     "oracle_instance_stop_requested": false
   },
   "impact": {
-    "phase3b_shadow_consumer_install": "BLOCKED",
-    "shadow_service_restart": "NOT_ATTEMPTED",
-    "draft_only_canary": "NOT_ATTEMPTED",
+    "phase3b_shadow_consumer_install": "COMPLETED_SHADOW_ONLY",
+    "shadow_service_restart": "COMPLETED_ONLY_REVIEWED_SERVICE",
+    "draft_only_canary": "COMPLETED_EXACTLY_ONCE",
     "production_mutation": false,
     "oracle_instance_power_change": false,
     "media_or_training_started": false
@@ -37,8 +37,9 @@
   "neon_context": {
     "temporary_branch_id": "br-still-tooth-b1ilkfcj",
     "migration_0303_manual_ui_observation": "PRESENT_TRUE",
-    "independent_connector_verification": "BLOCKED_BY_ADAPTER_ARGUMENT_SCHEMA_MISMATCH",
-    "production_default_branch_targeted": false
+    "independent_connector_verification": "PASS_EXPLICIT_TEMPORARY_BRANCH",
+    "production_default_branch_targeted": false,
+    "migration_0303_temporary_branch_apply": "PASS"
   },
   "fail_closed_rules": [
     "DO_NOT_STAGE_OR_ACTIVATE_A_UNIT_THAT_REQUIRES_THE_MISSING_BROKER_ENV",
@@ -70,5 +71,36 @@
       "AUTOPILOT_BROKER_ENV_INSPECTION_READ_ONLY=YES",
       "ORACLE_INSTANCE_STOP_REQUESTED=NO"
     ]
+  },
+  "resolved_at": "2026-09-01T05:13:08Z",
+  "fail_closed_rules_status": "HISTORICAL_RULES_SATISFIED_BY_AUTHORIZED_RESOLUTION",
+  "resolution": {
+    "authorized_scope": "ROOT_OWNED_0600_ENV_RESTART_ONLY_SHADOW_SERVICE_ONE_DRAFT_CANARY",
+    "broker_bootstrap_workflow_run_id": 33471943068,
+    "broker_metadata_workflow_run_id": 33472074872,
+    "broker_env_present": true,
+    "broker_env_owner": "root:root",
+    "broker_env_mode": "0600",
+    "broker_env_size_bytes": 292,
+    "broker_env_values_read": false,
+    "staged_source_revision": "d908565a5de4481f0bf9a1d2a489f04f8893af65",
+    "staging_workflow_run_id": 33472296531,
+    "activation_workflow_run_id": 33472414879,
+    "post_canary_diagnostic_workflow_run_id": 33472731272,
+    "service_active": true,
+    "service_enabled": true,
+    "runtime_mode": "SHADOW_ONLY",
+    "canary_task_key": "phase3b-canary-20260901-01",
+    "canary_task_id": "601eee5b-c82c-4b4e-b8d3-cdcfbcace382",
+    "canary_terminal_state": "DONE",
+    "canary_draft_pr": "https://github.com/olegmed1-art/bridge-video-free/pull/1011",
+    "canary_merged": false,
+    "model_calls": 0,
+    "cost_actual_microusd": 0,
+    "production_mutation": false,
+    "production_routing_changed": false,
+    "oracle_instance_stop_requested": false,
+    "secrets_exposed": false,
+    "evidence_document": "docs/evidence/autopilot_phase3b_live_canary_2026-09-01.md"
   }
 }
