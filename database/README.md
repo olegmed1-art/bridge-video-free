@@ -96,6 +96,10 @@ PostgreSQL 18 migration package for the School of Sports Bridge.
 - `0303_autopilot_github_draft_repair.sql` — Preview-brokered bounded repair:
   one canonical manifest, one namespaced branch, one draft PR, and token-free
   retained evidence; merge, force push, `main`, and production stay forbidden.
+- `0304_autopilot_online_pilot.sql` — guarded Oracle-resident online smoke pilot:
+  a least-privilege tick RPC, one-task queue boundary, rolling rate cap, durable
+  findings and a fail-closed circuit breaker; model calls, cost and production
+  mutations remain forbidden.
 - `rollbacks/0056_universal_video_queue.sql` — fail-closed rollback; refuses to remove a non-empty queue.
 
 The exact production state is the `schema_migration` registry in Neon, protected by migration checksums.
