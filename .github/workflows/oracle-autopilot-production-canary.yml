@@ -354,6 +354,7 @@ jobs:
           install -d -m 0700 "$package_root"
           git archive "$SOURCE_REVISION" \
             oracle_autopilot \
+            autopilot_phase3b \
             deploy/oracle-autopilot/school-autopilot-production-canary.service \
             ops/oracle_autopilot_production_canary_install.sh \
             | tar -x -C "$package_root"

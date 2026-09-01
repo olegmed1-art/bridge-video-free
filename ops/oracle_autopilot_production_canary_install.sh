@@ -36,6 +36,7 @@ die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$(<"$REPO_DIR/AUTOPILOT_SOURCE_REVISION")" == "$SOURCE_REVISION" ]] \
   || die 'source marker does not match the pinned revision'
 [[ -f "$REPO_DIR/oracle_autopilot/worker.py" ]] || die 'bounded worker is missing'
+[[ -f "$REPO_DIR/autopilot_phase3b/policy.py" ]] || die 'bounded policy module is missing'
 [[ -f "$SERVICE_SRC" ]] || die 'production-canary unit is missing'
 command -v python3 >/dev/null 2>&1 || die 'python3 is required'
 command -v systemctl >/dev/null 2>&1 || die 'systemctl is required'
@@ -57,6 +58,9 @@ log 'Install the immutable canary source release'
 install -d -m 0755 -o root -g root "$RELEASE_DIR/oracle_autopilot"
 install -m 0644 -o root -g root "$REPO_DIR"/oracle_autopilot/*.py \
   "$RELEASE_DIR/oracle_autopilot/"
+install -d -m 0755 -o root -g root "$RELEASE_DIR/autopilot_phase3b"
+install -m 0644 -o root -g root "$REPO_DIR"/autopilot_phase3b/*.py \
+  "$RELEASE_DIR/autopilot_phase3b/"
 printf '%s\n' "$SOURCE_REVISION" > "$RELEASE_DIR/SOURCE_REVISION"
 chmod 0444 "$RELEASE_DIR/SOURCE_REVISION"
 
