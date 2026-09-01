@@ -334,6 +334,37 @@ def _find_personal_link(
     return None
 
 
+def _extract_personal_result_tokens(
+    row: tuple[tuple[str, tuple[str, ...]], ...]
+) -> tuple[str | None, str | None]:
+    """Read score and percentage from the contiguous result cells, not the board number."""
+
+    numeric_cells: list[str] = []
+    started = False
+    for cell_text, _links in row[2:]:
+        token = cell_text.strip()
+        if not token:
+            continue
+        if re.fullmatch(r"[-+]?[0-9]{1,5}(?:\.[0-9]+)?", token):
+            numeric_cells.append(token)
+            started = True
+            continue
+        if started:
+            break
+
+    percentage_token: str | None = None
+    score_token: str | None = None
+    if numeric_cells and re.fullmatch(
+        r"(?:100(?:\.0+)?|[0-9]{1,2}(?:\.[0-9]+)?)", numeric_cells[-1]
+    ):
+        percentage_token = numeric_cells[-1]
+        for candidate in numeric_cells[:-1]:
+            if re.fullmatch(r"[-+]?[0-9]{1,5}", candidate):
+                score_token = candidate
+                break
+    return percentage_token, score_token
+
+
 def _extract_personal_boards(
     document: _ParsedDocument, personal_url: str, event_id: int, round_id: int
 ) -> list[dict[str, Any]]:
@@ -360,15 +391,14 @@ def _extract_personal_boards(
         if board_url is None:
             continue
         text = _row_text(row)
-        percent_match = re.search(r"(?<![0-9])(100(?:\.0+)?|[0-9]{1,2}(?:\.[0-9]+)?)(?![0-9])", text)
-        score_match = re.search(r"(?<![0-9])[-+]?[1-9][0-9]{1,4}(?![0-9])", text)
+        percentage_token, score_token = _extract_personal_result_tokens(row)
         boards.append(
             {
                 "board_number": board_number,
                 "board_url": board_url,
                 "personal_row_excerpt": text[:IBF_ROW_EXCERPT_LIMIT],
-                "percentage_token": percent_match.group(1) if percent_match else None,
-                "score_token": score_match.group(0) if score_match else None,
+                "percentage_token": percentage_token,
+                "score_token": score_token,
             }
         )
         seen_numbers.add(board_number)
