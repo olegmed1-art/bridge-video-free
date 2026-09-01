@@ -229,12 +229,14 @@ jobs:
 
           psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
             -v runtime_password="$runtime_password" <<'PSQL'
-          SELECT 'CREATE ROLE autopilot_prod_canary_login LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 1'
+          -- The resident LISTEN connection and one short-lived bounded RPC
+          -- connection can overlap while a task is claimed or completed.
+          SELECT 'CREATE ROLE autopilot_prod_canary_login LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 2'
            WHERE NOT EXISTS (
                SELECT 1 FROM pg_roles WHERE rolname = 'autopilot_prod_canary_login'
            ) \gexec
           SELECT format(
-              'ALTER ROLE autopilot_prod_canary_login WITH LOGIN PASSWORD %L CONNECTION LIMIT 1',
+              'ALTER ROLE autopilot_prod_canary_login WITH LOGIN PASSWORD %L CONNECTION LIMIT 2',
               :'runtime_password'
           ) \gexec
           GRANT autopilot_runtime TO autopilot_prod_canary_login;

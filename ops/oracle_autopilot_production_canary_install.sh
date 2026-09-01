@@ -214,7 +214,7 @@ assert non_autopilot_write_access == 0, non_autopilot_write_access
 assert unexpected_non_autopilot_select_access == 0, unexpected_non_autopilot_select_access
 assert allowed_postgres_telemetry_views == 2, allowed_postgres_telemetry_views
 assert direct_autopilot_table_access == 0, direct_autopilot_table_access
-assert role_attributes == (True, False, False, False, False, False, 1), role_attributes
+assert role_attributes == (True, False, False, False, False, False, 2), role_attributes
 print("AUTOPILOT_PRODUCTION_CANARY_DB_PREFLIGHT_PASS")
 PY
 
