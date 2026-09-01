@@ -872,6 +872,9 @@ def test_shadow_diagnostics_are_read_only_and_secret_free():
     assert "AUTOPILOT_DIAG_INCOMPLETEREAD_COUNT" in workflow
     assert "AUTOPILOT_DIAG_SSLERROR_COUNT" in workflow
     assert "AUTOPILOT_DIAG_TIMEOUTERROR_COUNT" in workflow
+    assert "AUTOPILOT_DIAG_EXCEPTION_TYPE" in workflow
+    assert "sed -nE" in workflow
+    assert "sort -u" in workflow
     assert "AUTOPILOT_DIAG_CHDIR_PERMISSION_COUNT" in workflow
     assert "AUTOPILOT_DIAG_EXEC_PERMISSION_COUNT" in workflow
     assert "AUTOPILOT_DIAG_ENV_PERMISSION_COUNT" in workflow
