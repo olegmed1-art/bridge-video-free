@@ -146,3 +146,5 @@ jobs:
           """
           print(source.replace("__CONFIG__", repr(json.dumps(cfg))))
           PY
+
+# continuation-preflight-request: 2026-09-01T04:51:03Z db6e0af02b373374b9bcf645ac46ea03ef8e5ebf
