@@ -1,0 +1,192 @@
+name: Autopilot Universal Video P1 task registration
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths: ['.github/workflows/autopilot-uv-p1-register.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autopilot-universal-video-p1-registration
+  cancel-in-progress: false
+
+jobs:
+  register:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    environment: database-production
+    env:
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      PROJECT_ID: misty-poetry-18012774
+      TEMP_BRANCH_ID: br-still-tooth-b1ilkfcj
+      PRODUCTION_BRANCH_ID: br-cold-moon-a1sgkzfd
+      TEMP_ENDPOINT_ID: ep-floral-field-b1pjs2of
+      MIGRATION_ROLE: autopilot_migration_owner_login
+      REPOSITORY: olegmed1-art/bridge-video-free
+      RUNTIME_TASK_KEY: uv-p1-runtime-pr997-1eeaa3ed-20260901
+      RUNTIME_PR: '997'
+      RUNTIME_HEAD: 1eeaa3ed27506237ff76b07c94e29523eccf8f79
+      INTAKE_TASK_KEY: uv-p1-intake-pr1000-8f1ace18-20260901
+      INTAKE_PR: '1000'
+      INTAKE_HEAD: 8f1ace183e90b7ff2454b669e4c9013bcc29be1e
+      INTEGRATION_TASK_KEY: uv-p1-integration-pr1047-621ab073-20260901
+      INTEGRATION_PR: '1047'
+      INTEGRATION_HEAD: 621ab073418b3f3d1b75cb6abb074dba4ea305cb
+    steps:
+      - name: Checkout exact Autopilot source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Resolve only the exact temporary Neon branch URI
+        id: neon
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -n "${NEON_API_KEY:-}" ]]
+          [[ "$TEMP_BRANCH_ID" != "$PRODUCTION_BRANCH_ID" ]]
+          api="https://console.neon.tech/api/v2/projects/$PROJECT_ID"
+          auth=(-H "Authorization: Bearer $NEON_API_KEY" -H 'Accept: application/json')
+          branch_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID")"
+          endpoint_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID/endpoints")"
+          role_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID/roles/$MIGRATION_ROLE")"
+          uri_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" \
+            "$api/connection_uri?branch_id=$TEMP_BRANCH_ID&database_name=neondb&role_name=$MIGRATION_ROLE&pooled=false")"
+          BRANCH_JSON="$branch_json" ENDPOINT_JSON="$endpoint_json" ROLE_JSON="$role_json" URI_JSON="$uri_json" python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, urllib.parse
+          bid=os.environ['TEMP_BRANCH_ID']; eid=os.environ['TEMP_ENDPOINT_ID']; role=os.environ['MIGRATION_ROLE']
+          b=json.loads(os.environ['BRANCH_JSON']); e=json.loads(os.environ['ENDPOINT_JSON']); r=json.loads(os.environ['ROLE_JSON']); u=json.loads(os.environ['URI_JSON'])
+          branch=b.get('branch', b); assert branch.get('id') == bid
+          endpoints=e.get('endpoints', []); assert any(x.get('id') == eid and x.get('branch_id') == bid for x in endpoints)
+          role_obj=r.get('role', r); assert role_obj.get('name') == role
+          uri=u.get('uri'); assert isinstance(uri, str) and uri
+          p=urllib.parse.urlsplit(uri); assert p.username == role and (p.path.lstrip('/') or 'neondb') == 'neondb'
+          host=(p.hostname or '').lower(); assert host.startswith(eid + '.') and host.endswith('.neon.tech')
+          print(f'::add-mask::{uri}')
+          print(f'database_url={uri}')
+          print('NEON_TARGET_BRANCH_VERIFIED=YES')
+          print('NEON_PRODUCTION_BRANCH_TARGETED=NO')
+          PY
+
+      - name: Verify active Autopilot schema without applying migrations
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.database_url }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          row="$(psql "$DATABASE_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 <<'SQL'
+          SELECT current_database(),
+                 current_user,
+                 EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0302_autopilot_github_ci_read_only'),
+                 EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0303_autopilot_github_draft_repair'),
+                 to_regprocedure('autopilot.create_shadow_task(text,text,jsonb,integer,bigint,text,text)') IS NOT NULL;
+          SQL
+          )"
+          [[ "$row" == 'neondb|autopilot_migration_owner_login|t|t|t' ]]
+          echo 'AUTOPILOT_SCHEMA_PREFLIGHT=PASS'
+          echo 'MIGRATION_APPLIED=NO'
+          echo 'PRODUCTION_MUTATION=NO'
+
+      - name: Register three exact-head durable tasks
+        id: tasks
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.database_url }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          register_task() {
+            local label="$1" task_key="$2" pr_number="$3" head_sha="$4"
+            local row task_id status created
+            row="$(psql "$DATABASE_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 \
+              -v task_key="$task_key" -v pr_number="$pr_number" -v head_sha="$head_sha" <<'SQL'
+          SELECT task_id,status,created
+            FROM autopilot.create_shadow_task(
+              :'task_key',
+              'GITHUB_CI_READ_ONLY_V1',
+              jsonb_build_object(
+                'repository', 'olegmed1-art/bridge-video-free',
+                'pr_number', (:'pr_number')::integer,
+                'expected_head_sha', :'head_sha',
+                'require_draft', true
+              ),
+              10,
+              0,
+              'DIRECTOR_P1_20260901',
+              'UV_READY_FOR_ONE_CANARY_DISPATCH'
+            );
+          SQL
+            )"
+            IFS='|' read -r task_id status created <<<"$row"
+            [[ "$task_id" =~ ^[0-9a-f-]{36}$ ]]
+            [[ "$status" =~ ^(READY|RUNNING|WAITING_EXTERNAL|EVALUATING|DONE|FAILED_CLOSED|OWNER_REQUIRED|BUDGET_STOP)$ ]]
+            echo "${label}_task_id=$task_id" >> "$GITHUB_OUTPUT"
+            echo "UV_P1_${label^^}_TASK_ID=$task_id"
+            echo "UV_P1_${label^^}_REGISTER_STATUS=$status"
+            echo "UV_P1_${label^^}_REGISTER_CREATED=$created"
+          }
+          register_task runtime "$RUNTIME_TASK_KEY" "$RUNTIME_PR" "$RUNTIME_HEAD"
+          register_task intake "$INTAKE_TASK_KEY" "$INTAKE_PR" "$INTAKE_HEAD"
+          register_task integration "$INTEGRATION_TASK_KEY" "$INTEGRATION_PR" "$INTEGRATION_HEAD"
+          echo 'AUTOPILOT_DURABLE_TASK_COUNT=3'
+
+      - name: Observe controller claim or external-wait transition
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.database_url }}
+          RUNTIME_TASK_ID: ${{ steps.tasks.outputs.runtime_task_id }}
+          INTAKE_TASK_ID: ${{ steps.tasks.outputs.intake_task_id }}
+          INTEGRATION_TASK_ID: ${{ steps.tasks.outputs.integration_task_id }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ids=("$RUNTIME_TASK_ID" "$INTAKE_TASK_ID" "$INTEGRATION_TASK_ID")
+          for _ in $(seq 1 24); do
+            ready=0
+            for id in "${ids[@]}"; do
+              status="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT status FROM autopilot.task WHERE task_id='$id'::uuid;")"
+              [[ "$status" == READY ]] && ready=$((ready + 1))
+            done
+            [[ "$ready" -eq 0 ]] && break
+            sleep 5
+          done
+          for id in "${ids[@]}"; do
+            row="$(psql "$DATABASE_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 -c \
+              "SELECT status,attempts,COALESCE(terminal_reason_code,''),(SELECT count(*) FROM autopilot.task_event e WHERE e.task_id=t.task_id),(SELECT count(*) FROM autopilot.evidence v WHERE v.task_id=t.task_id AND v.retained) FROM autopilot.task t WHERE task_id='$id'::uuid;")"
+            IFS='|' read -r status attempts reason events evidence <<<"$row"
+            echo "UV_P1_TASK_STATE=$id|$status|attempts=$attempts|reason=${reason:-none}|events=$events|retained_evidence=$evidence"
+            [[ "$status" != READY ]]
+          done
+          echo 'AUTOPILOT_CONTROLLER_CLAIMED_ALL=PASS'
+          echo 'REAL_VIDEO_EXECUTION=NO'
+          echo 'DRIVE_WRITE=NO'
+          echo 'PRODUCTION_MUTATION=NO'
+
+      - name: Publish registration receipt
+        if: ${{ always() }}
+        env:
+          RUNTIME_TASK_ID: ${{ steps.tasks.outputs.runtime_task_id }}
+          INTAKE_TASK_ID: ${{ steps.tasks.outputs.intake_task_id }}
+          INTEGRATION_TASK_ID: ${{ steps.tasks.outputs.integration_task_id }}
+        shell: bash
+        run: |
+          {
+            echo '### Universal Video P1 Autopilot registration'
+            echo "- temporary Neon branch: \`$TEMP_BRANCH_ID\`"
+            echo '- production/default branch targeted: `NO`'
+            echo '- migration applied: `NO`'
+            echo "- runtime task: \`${RUNTIME_TASK_ID:-unresolved}\` — PR #$RUNTIME_PR @ \`$RUNTIME_HEAD\`"
+            echo "- intake task: \`${INTAKE_TASK_ID:-unresolved}\` — PR #$INTAKE_PR @ \`$INTAKE_HEAD\`"
+            echo "- integration task: \`${INTEGRATION_TASK_ID:-unresolved}\` — PR #$INTEGRATION_PR @ \`$INTEGRATION_HEAD\`"
+            echo '- real media execution: `NO`'
+            echo '- Drive write: `NO`'
+            echo '- production mutation: `NO`'
+          } >> "$GITHUB_STEP_SUMMARY"
