@@ -1,0 +1,137 @@
+name: Autopilot temp ingress preflight once
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/autopilot-temp-ingress-preflight-once.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Read only the installed shadow runtime and temporary Neon state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -n "${SSH_KEY_ORACLE:-}" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          known="$RUNNER_TEMP/known_hosts"
+          printf '%s\n' "$SSH_KEY_ORACLE" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          service=school-autopilot-shadow.service
+          root=/opt/bridge-school/school-autopilot
+          env_file="$root/autopilot-shadow.env"
+          python_bin="$root/current/.venv/bin/python"
+
+          [[ "$(systemctl is-active "$service")" == active ]]
+          [[ "$(systemctl is-enabled "$service")" == enabled ]]
+          [[ "$(stat -c '%U:%G:%a' "$env_file")" == root:root:600 ]]
+          [[ -x "$python_bin" ]]
+
+          set -a
+          source "$env_file"
+          set +a
+          [[ -n "${AUTOPILOT_DATABASE_URL:-}" ]]
+
+          AUTOPILOT_DATABASE_URL="$AUTOPILOT_DATABASE_URL" "$python_bin" - <<'PY'
+          import os
+          import urllib.parse
+          import psycopg
+
+          dsn = os.environ['AUTOPILOT_DATABASE_URL']
+          parsed = urllib.parse.urlsplit(dsn)
+          host = (parsed.hostname or '').lower()
+          assert parsed.username == 'autopilot_runtime_login'
+          assert (parsed.path.lstrip('/') or 'neondb') == 'neondb'
+          assert host.startswith('ep-floral-field-b1pjs2of.')
+          assert host.endswith('.neon.tech')
+          assert 'pooler' not in host
+
+          with psycopg.connect(
+              dsn,
+              connect_timeout=10,
+              options='-c default_transaction_read_only=on',
+          ) as conn:
+              with conn.cursor() as cur:
+                  cur.execute(
+                      "SELECT current_database(), current_user, "
+                      "current_setting('transaction_read_only')"
+                  )
+                  database_name, role_name, read_only = cur.fetchone()
+                  assert database_name == 'neondb'
+                  assert role_name == 'autopilot_runtime_login'
+                  assert read_only == 'on'
+
+                  cur.execute(
+                      "SELECT EXISTS (SELECT 1 FROM public.schema_migration "
+                      "WHERE migration_key='0306_autopilot_bounded_task_ingress')"
+                  )
+                  migration_0306 = bool(cur.fetchone()[0])
+
+                  cur.execute(
+                      "SELECT to_regprocedure(" 
+                      "'autopilot.register_approved_ibf_analysis(text,text,text,integer)'"
+                      ") IS NOT NULL"
+                  )
+                  ingress_function = bool(cur.fetchone()[0])
+
+                  cur.execute(
+                      "SELECT CASE WHEN to_regprocedure(" 
+                      "'autopilot.register_approved_ibf_analysis(text,text,text,integer)'"
+                      ") IS NULL THEN false ELSE has_function_privilege(" 
+                      "current_user, "
+                      "'autopilot.register_approved_ibf_analysis(text,text,text,integer)', "
+                      "'EXECUTE') END"
+                  )
+                  ingress_execute = bool(cur.fetchone()[0])
+
+                  cur.execute(
+                      "SELECT status, count(*)::bigint FROM autopilot.task "
+                      "GROUP BY status ORDER BY status"
+                  )
+                  queue = {status: int(count) for status, count in cur.fetchall()}
+
+                  cur.execute(
+                      "SELECT count(*)::bigint FROM autopilot.task "
+                      "WHERE status IN ('NEW','VALIDATING','READY','RUNNING'," 
+                      "'WAITING_EXTERNAL','EVALUATING')"
+                  )
+                  active_tasks = int(cur.fetchone()[0])
+
+          print('AUTOPILOT_TEMP_ENDPOINT_VERIFIED=YES')
+          print(f'AUTOPILOT_MIGRATION_0306_PRESENT={str(migration_0306).upper()}')
+          print(f'AUTOPILOT_BOUNDED_INGRESS_PRESENT={str(ingress_function).upper()}')
+          print(f'AUTOPILOT_RUNTIME_CAN_EXECUTE_INGRESS={str(ingress_execute).upper()}')
+          print(f'AUTOPILOT_ACTIVE_TASK_COUNT={active_tasks}')
+          print('AUTOPILOT_QUEUE_COUNTS=' + ','.join(
+              f'{key}:{queue[key]}' for key in sorted(queue)
+          ))
+          print('AUTOPILOT_DATABASE_MUTATED=NO')
+          print('AUTOPILOT_PRODUCTION_TARGETED=NO')
+          PY
+
+          echo "AUTOPILOT_SERVICE_ACTIVE=$(systemctl is-active "$service")"
+          echo "AUTOPILOT_SERVICE_ENABLED=$(systemctl is-enabled "$service")"
+          echo "AUTOPILOT_SERVICE_NRESTARTS=$(systemctl show -p NRestarts --value "$service")"
+          echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
+          REMOTE
