@@ -18,6 +18,7 @@ readonly DRIVE_OAUTH_FILE="$BASE_DIR/secrets/google-drive-oauth.json"
 readonly QUEUE_DSN_FILE="$BASE_DIR/secrets/video-queue-dsn"
 
 fail(){ echo "UV_STATE=REJECTED"; echo "UV_ERROR=$1"; exit 1; }
+intake_reject(){ echo 'UV_STATE=REJECTED'; echo "UV_ERROR_CODE=$1"; }
 safe_id(){ [[ "$1" =~ ^[A-Za-z0-9._:-]{1,160}$ && "$1" != . && "$1" != .. ]]; }
 verify(){
   [[ -x "$PYTHON" && -d "$SOURCE_DIR/.git" && -f "$RECEIPT_READER" && ! -L "$RECEIPT_READER" ]] || fail 'universal video runtime missing'
@@ -55,15 +56,95 @@ batch_status(){
     BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE="$QUEUE_DSN_FILE" \
     "$PYTHON" -m universal_video.video_queue_intake status "$1"
 }
+stage_job_payload(){
+  [[ $# -eq 2 ]] || return 2
+  local encoded="$1" output_var="$2" stage_output stage_rc stage_code stage_path
+  set +e
+  stage_output="$(printf '%s' "$encoded" | UNIVERSAL_VIDEO_STAGING_ROOT="$STAGING" "$SYSTEM_PYTHON" -c '
+import base64
+import binascii
+import errno
+import os
+import sys
+import tempfile
+
+root = os.environ["UNIVERSAL_VIDEO_STAGING_ROOT"]
+path = None
+try:
+    raw = base64.b64decode(sys.stdin.buffer.read(), validate=True)
+    if len(raw) > 262144:
+        print("UV_ERROR_CODE=UV_INTAKE_CONTRACT_INVALID")
+        raise SystemExit(1)
+    fd, path = tempfile.mkstemp(prefix="request.", suffix=".json", dir=root)
+    try:
+        with os.fdopen(fd, "wb", closefd=True) as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+    os.chmod(path, 0o600)
+    print("UV_STAGE_PATH=" + path)
+except (binascii.Error, ValueError):
+    if path:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    print("UV_ERROR_CODE=UV_INTAKE_CONTRACT_INVALID")
+    raise SystemExit(1)
+except OSError as exc:
+    if path:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    code = {
+        errno.EACCES: "UV_INTAKE_PERMISSION_DENIED",
+        errno.EPERM: "UV_INTAKE_PERMISSION_DENIED",
+        errno.EXDEV: "UV_INTAKE_CROSS_DEVICE",
+        errno.ENOSPC: "UV_INTAKE_DISK_FULL",
+        errno.EROFS: "UV_INTAKE_READ_ONLY",
+        errno.EEXIST: "UV_INTAKE_COLLISION",
+    }.get(exc.errno, "UV_INTAKE_IO_FAILED")
+    print("UV_ERROR_CODE=" + code)
+    raise SystemExit(1)
+except BaseException:
+    if path:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    print("UV_ERROR_CODE=UV_INTAKE_EXECUTION_FAILED")
+    raise SystemExit(1)
+')"
+  stage_rc=$?
+  set -e
+  if (( stage_rc != 0 )); then
+    stage_code="$(sed -nE 's/^UV_ERROR_CODE=(UV_INTAKE_[A-Z0-9_]{1,96})$/\1/p' <<<"$stage_output" | tail -n1)"
+    [[ -n "$stage_code" ]] || stage_code='UV_INTAKE_EXECUTION_FAILED'
+    intake_reject "$stage_code"
+    return 1
+  fi
+  stage_path="$(sed -nE 's#^UV_STAGE_PATH=(/opt/bridge-school/\.universal-video-staging/request\.[A-Za-z0-9._-]+\.json)$#\1#p' <<<"$stage_output" | tail -n1)"
+  if [[ -z "$stage_path" || ! -f "$stage_path" || -L "$stage_path" ]]; then
+    intake_reject 'UV_INTAKE_EXECUTION_FAILED'
+    return 1
+  fi
+  printf -v "$output_var" '%s' "$stage_path"
+}
 submit_drive(){
-  [[ $# -eq 1 && ${#1} -le 350000 ]] || fail 'invalid encoded job'
+  [[ $# -eq 1 && ${#1} -le 350000 ]] || { intake_reject 'UV_INTAKE_CONTRACT_INVALID'; return 1; }
   verify
-  local tmp
-  tmp="$(mktemp -p "$STAGING" request.XXXXXXXX.json)"
+  local tmp=''
+  if ! stage_job_payload "$1" tmp; then
+    return 1
+  fi
   trap 'rm -f "${tmp:-}"' EXIT
-  printf '%s' "$1" | base64 --decode >"$tmp" 2>/dev/null || fail 'invalid job encoding'
-  [[ $(stat -c '%s' "$tmp") -le 262144 ]] || fail 'job payload too large'
-  chown root:root "$tmp"; chmod 0600 "$tmp"
   local intake_output
   if intake_output="$(UNIVERSAL_VIDEO_STAGING_ROOT="$STAGING" PYTHONPATH="$SOURCE_DIR" "$SYSTEM_PYTHON" -m universal_video.server_intake submit "$tmp" "$SPOOL" 2>&1)"; then
     printf '%s\n' "$intake_output"
@@ -71,8 +152,7 @@ submit_drive(){
     local intake_code
     intake_code="$(sed -nE 's/^UV_ERROR_CODE=(UV_INTAKE_[A-Z0-9_]{1,96})$/\1/p' <<<"$intake_output" | tail -n1)"
     [[ -n "$intake_code" ]] || intake_code='UV_INTAKE_EXECUTION_FAILED'
-    echo 'UV_STATE=REJECTED'
-    echo "UV_ERROR_CODE=$intake_code"
+    intake_reject "$intake_code"
     return 1
   fi
   rm -f "$tmp"; trap - EXIT
