@@ -31,7 +31,13 @@ jobs:
           grep -F 'PRODUCTION_BRANCH_ID: br-cold-moon-a1sgkzfd' "$workflow" >/dev/null
           grep -F 'EXPECTED_MIGRATION_BLOB: ff02d6f7155e407c6ac7a9227e6f52efab85c3a1' "$workflow" >/dev/null
           grep -F "[[ \"\$TEMP_BRANCH_ID\" != \"\$PRODUCTION_BRANCH_ID\" ]]" "$workflow" >/dev/null
-          ! grep -F 'database/scripts/migrate.sh' "$workflow"
+          python - <<'PY'
+          from pathlib import Path
+
+          text = Path('.github/workflows/autopilot-temp-neon-0308-structured-artifact-once.yml').read_text()
+          apply_job = text.split('  apply-temporary-only:', 1)[1]
+          assert 'database/scripts/' + 'migrate.sh' not in apply_job
+          PY
 
   apply-temporary-only:
     if: github.event_name == 'push' && github.repository == 'olegmed1-art/bridge-video-free'
