@@ -12,7 +12,9 @@ LAB_DIR="${ASSISTANT_LAB_DIR:-/opt/bridge-school/assistant-lab}"
 LAB_ENV="${ASSISTANT_LAB_ENV_FILE:-$LAB_DIR/assistant-lab.env}"
 PYTHON="${ASSISTANT_LAB_PYTHON:-$LAB_DIR/.venv/bin/python}"
 QUEUE_DSN_FILE="${BRIDGE_VIDEO_QUEUE_DSN_FILE:-/opt/bridge-school/universal-video/secrets/video-queue-dsn}"
+VIDEO_SPOOL_ROOT="${BRIDGE_VIDEO_SPOOL_ROOT:-/opt/bridge-school/universal-video/spool}"
 HOST_LEASE_FILE="${ORACLE_HOST_LEASE_FILE:-/run/bridge-school/oracle-host-lease}"
+MAX_OPERATOR_LEASE_SECONDS="${ORACLE_IDLE_MAX_OPERATOR_LEASE_SECONDS:-3600}"
 
 state="UNKNOWN"
 reason="unclassified"
@@ -23,6 +25,10 @@ finish() {
 }
 trap finish EXIT
 
+[[ "$MAX_OPERATOR_LEASE_SECONDS" =~ ^[0-9]+$ ]] && (( MAX_OPERATOR_LEASE_SECONDS >= 60 && MAX_OPERATOR_LEASE_SECONDS <= 86400 )) || {
+  reason="operator_lease_policy_invalid"
+  exit 0
+}
 [[ -r "$LAB_ENV" ]] || { reason="assistant_lab_env_unreadable"; exit 0; }
 [[ -x "$PYTHON" ]] || { reason="assistant_lab_python_missing"; exit 0; }
 
@@ -40,9 +46,9 @@ else
 fi
 
 # A bounded operator may own the host with a local lease. The lease file has one
-# line: expires_at_epoch=<unix-seconds>. A live lease is BUSY. A malformed or
-# expired-but-not-cleared lease is UNKNOWN, never IDLE, so stale lease telemetry
-# cannot accidentally authorize STOP.
+# line: expires_at_epoch=<unix-seconds>. A live lease inside the bounded policy
+# horizon is BUSY. Expired, malformed, unreadable, or implausibly far-future
+# lease telemetry is UNKNOWN, never IDLE.
 if [[ -e "$HOST_LEASE_FILE" || -L "$HOST_LEASE_FILE" ]]; then
   if [[ ! -f "$HOST_LEASE_FILE" || -L "$HOST_LEASE_FILE" || ! -r "$HOST_LEASE_FILE" ]]; then
     reason="host_lease_unreadable"
@@ -56,12 +62,16 @@ if [[ -e "$HOST_LEASE_FILE" || -L "$HOST_LEASE_FILE" ]]; then
   lease_expires="${BASH_REMATCH[1]}"
   now_epoch="$(date +%s 2>/dev/null || true)"
   [[ "$now_epoch" =~ ^[0-9]+$ ]] || { reason="clock_unavailable"; exit 0; }
-  if (( lease_expires > now_epoch )); then
-    state="BUSY"
-    reason="host_lease_active"
+  if (( lease_expires <= now_epoch )); then
+    reason="host_lease_stale"
     exit 0
   fi
-  reason="host_lease_stale"
+  if (( lease_expires - now_epoch > MAX_OPERATOR_LEASE_SECONDS )); then
+    reason="host_lease_horizon_invalid"
+    exit 0
+  fi
+  state="BUSY"
+  reason="host_lease_active"
   exit 0
 fi
 
@@ -85,15 +95,35 @@ do
   fi
 done
 
+# Universal Video has a host-side spool independent of the Neon queue. Missing
+# or structurally unsafe spool telemetry is UNKNOWN. Any pending, running, or
+# progress receipt is BUSY. Terminal done/failed/results files do not block idle.
+if [[ ! -d "$VIDEO_SPOOL_ROOT" || -L "$VIDEO_SPOOL_ROOT" || ! -r "$VIDEO_SPOOL_ROOT" ]]; then
+  reason="video_spool_unavailable"
+  exit 0
+fi
+for leaf in inbox running progress; do
+  path="$VIDEO_SPOOL_ROOT/$leaf"
+  if [[ ! -d "$path" || -L "$path" || ! -r "$path" ]]; then
+    reason="video_spool_${leaf}_unavailable"
+    exit 0
+  fi
+  if find "$path" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null | grep -q .; then
+    state="BUSY"
+    reason="video_spool_${leaf}_pending"
+    exit 0
+  fi
+done
+
 # Read only the exact DSN assignment; do not source the environment file as shell code.
 dsn_line="$(grep -m1 '^ASSISTANT_LAB_DATABASE_URL=' "$LAB_ENV" 2>/dev/null || true)"
 [[ -n "$dsn_line" ]] || { reason="assistant_lab_dsn_missing"; exit 0; }
 export ASSISTANT_LAB_DATABASE_URL="${dsn_line#ASSISTANT_LAB_DATABASE_URL=}"
 [[ -n "$ASSISTANT_LAB_DATABASE_URL" ]] || { reason="assistant_lab_dsn_empty"; exit 0; }
 
-# Universal Video is a required workload family for the stop proof. Missing,
-# unreadable, symlinked, or empty telemetry is UNKNOWN rather than an implicit
-# zero-job result.
+# Universal Video queue is a required live telemetry family for the stop proof.
+# Missing/unreadable credentials or a failed live query are UNKNOWN. The live
+# query itself avoids accepting a stale cached queue snapshot.
 if [[ ! -f "$QUEUE_DSN_FILE" || -L "$QUEUE_DSN_FILE" || ! -r "$QUEUE_DSN_FILE" ]]; then
   unset ASSISTANT_LAB_DATABASE_URL
   reason="video_queue_dsn_unavailable"
