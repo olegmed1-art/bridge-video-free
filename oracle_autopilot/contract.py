@@ -22,6 +22,7 @@ TaskKind = Literal[
     "GITHUB_PR_READ_ONLY_V1",
     "GITHUB_CI_READ_ONLY_V1",
     "GITHUB_DRAFT_REPAIR_V1",
+    "IBF_READ_ONLY_ANALYSIS",
 ]
 
 ALLOWED_TASK_KINDS = frozenset(
@@ -32,6 +33,7 @@ ALLOWED_TASK_KINDS = frozenset(
         "GITHUB_PR_READ_ONLY_V1",
         "GITHUB_CI_READ_ONLY_V1",
         "GITHUB_DRAFT_REPAIR_V1",
+        "IBF_READ_ONLY_ANALYSIS",
     }
 )
 
@@ -54,6 +56,10 @@ DRAFT_REPAIR_GOAL_KEYS = frozenset(
 DRAFT_REPAIR_CHANGE_KEYS = frozenset(
     {"content_utf8", "expected_blob_sha", "operation", "path"}
 )
+IBF_GOAL_KEYS = frozenset(
+    {"approval_ref", "ibf_player_id", "source_authority"}
+)
+IBF_SOURCE_AUTHORITY = "ISRAEL_BRIDGE_FEDERATION_OFFICIAL_RESULTS"
 
 
 class AutopilotContractError(RuntimeError):
@@ -236,6 +242,25 @@ def validate_task_contract(task: ClaimedTask) -> None:
             raise AutopilotContractError("AUTOPILOT_DRAFT_REPAIR_STATE_INVALID")
         if task.cost_cap_microusd != 0 or task.cost_reserved_microusd != 0:
             raise AutopilotContractError("AUTOPILOT_DRAFT_REPAIR_COST_INVALID")
+        return
+
+    if task.goal_type == "IBF_READ_ONLY_ANALYSIS":
+        if set(task.goal_json) != IBF_GOAL_KEYS:
+            raise AutopilotContractError("AUTOPILOT_IBF_FIELDS_INVALID")
+        player_id = task.goal_json.get("ibf_player_id")
+        if not isinstance(player_id, str) or re.fullmatch(r"[1-9][0-9]{0,9}", player_id) is None:
+            raise AutopilotContractError("AUTOPILOT_IBF_PLAYER_ID_INVALID")
+        approval_ref = task.goal_json.get("approval_ref")
+        if not isinstance(approval_ref, str) or re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._:/#-]{0,255}", approval_ref
+        ) is None:
+            raise AutopilotContractError("AUTOPILOT_APPROVAL_REF_INVALID")
+        if task.goal_json.get("source_authority") != IBF_SOURCE_AUTHORITY:
+            raise AutopilotContractError("AUTOPILOT_IBF_SOURCE_AUTHORITY_INVALID")
+        if task.current_step_key != "ibf.read_only_analysis" or task.step_cursor != 0:
+            raise AutopilotContractError("AUTOPILOT_IBF_STATE_INVALID")
+        if task.cost_cap_microusd != 0 or task.cost_reserved_microusd != 0:
+            raise AutopilotContractError("AUTOPILOT_IBF_COST_INVALID")
         return
 
     correlation_id = task.goal_json.get("correlation_id")
