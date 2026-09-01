@@ -19,22 +19,21 @@ jobs:
     timeout-minutes: 8
     environment: database-production
     env:
-      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      SOURCE_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
       PROJECT_ID: misty-poetry-18012774
       TEMP_BRANCH_ID: br-still-tooth-b1ilkfcj
-      PRODUCTION_BRANCH_ID: br-cold-moon-a1sgkzfd
+      PRODUCTION_BRANCH_ID: br-wispy-lab-b1rq54of
       TEMP_ENDPOINT_ID: ep-floral-field-b1pjs2of
-      MIGRATION_ROLE: autopilot_migration_owner_login
       REPOSITORY: olegmed1-art/bridge-video-free
-      RUNTIME_TASK_KEY: uv-p1-runtime-pr997-1eeaa3ed-20260901
+      RUNTIME_TASK_KEY: uv-p1-runtime-pr997-545ef013-20260901
       RUNTIME_PR: '997'
-      RUNTIME_HEAD: 1eeaa3ed27506237ff76b07c94e29523eccf8f79
-      INTAKE_TASK_KEY: uv-p1-intake-pr1000-8f1ace18-20260901
+      RUNTIME_HEAD: 545ef0135e3cfe436b918c3ec26f5e2b77500977
+      INTAKE_TASK_KEY: uv-p1-intake-pr1000-5af0675a-20260901
       INTAKE_PR: '1000'
-      INTAKE_HEAD: 8f1ace183e90b7ff2454b669e4c9013bcc29be1e
-      INTEGRATION_TASK_KEY: uv-p1-integration-pr1047-621ab073-20260901
-      INTEGRATION_PR: '1047'
-      INTEGRATION_HEAD: 621ab073418b3f3d1b75cb6abb074dba4ea305cb
+      INTAKE_HEAD: 5af0675a9e13a9725348661be297abc5f52ff0e4
+      IDLE_TASK_KEY: uv-p1-idle-pr1047-621ab073-20260901
+      IDLE_PR: '1047'
+      IDLE_HEAD: 621ab073418b3f3d1b75cb6abb074dba4ea305cb
     steps:
       - name: Checkout exact Autopilot source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -48,36 +47,41 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y postgresql-client >/dev/null
 
-      - name: Resolve only the exact temporary Neon branch URI
+      - name: Derive exact temporary-branch DSN without contacting source host
         id: neon
         shell: bash
         run: |
           set -Eeuo pipefail
-          [[ -n "${NEON_API_KEY:-}" ]]
+          test -n "${SOURCE_DATABASE_URL:-}" || { echo 'NEON_DATABASE_URL unavailable'; exit 1; }
           [[ "$TEMP_BRANCH_ID" != "$PRODUCTION_BRANCH_ID" ]]
-          api="https://console.neon.tech/api/v2/projects/$PROJECT_ID"
-          auth=(-H "Authorization: Bearer $NEON_API_KEY" -H 'Accept: application/json')
-          branch_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID")"
-          endpoint_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID/endpoints")"
-          role_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID/roles/$MIGRATION_ROLE")"
-          uri_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" \
-            "$api/connection_uri?branch_id=$TEMP_BRANCH_ID&database_name=neondb&role_name=$MIGRATION_ROLE&pooled=false")"
-          BRANCH_JSON="$branch_json" ENDPOINT_JSON="$endpoint_json" ROLE_JSON="$role_json" URI_JSON="$uri_json" python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, os, urllib.parse
-          bid=os.environ['TEMP_BRANCH_ID']; eid=os.environ['TEMP_ENDPOINT_ID']; role=os.environ['MIGRATION_ROLE']
-          b=json.loads(os.environ['BRANCH_JSON']); e=json.loads(os.environ['ENDPOINT_JSON']); r=json.loads(os.environ['ROLE_JSON']); u=json.loads(os.environ['URI_JSON'])
-          branch=b.get('branch', b); assert branch.get('id') == bid
-          endpoints=e.get('endpoints', []); assert any(x.get('id') == eid and x.get('branch_id') == bid for x in endpoints)
-          role_obj=r.get('role', r); assert role_obj.get('name') == role
-          uri=u.get('uri'); assert isinstance(uri, str) and uri
-          p=urllib.parse.urlsplit(uri); assert p.username == role and (p.path.lstrip('/') or 'neondb') == 'neondb'
-          host=(p.hostname or '').lower(); assert host.startswith(eid + '.') and host.endswith('.neon.tech')
-          print(f'::add-mask::{uri}')
-          print(f'database_url={uri}')
-          print('NEON_TARGET_BRANCH_VERIFIED=YES')
-          print('NEON_PRODUCTION_BRANCH_TARGETED=NO')
-          PY
+          SOURCE_DATABASE_URL="$SOURCE_DATABASE_URL" TEMP_ENDPOINT_ID="$TEMP_ENDPOINT_ID" python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import hashlib, os, re, urllib.parse
 
+          raw = os.environ["SOURCE_DATABASE_URL"]
+          endpoint_id = os.environ["TEMP_ENDPOINT_ID"]
+          parsed = urllib.parse.urlsplit(raw)
+          source_host = (parsed.hostname or "").lower()
+          assert parsed.scheme in {"postgres", "postgresql"}
+          assert source_host.endswith(".neon.tech")
+          assert re.fullmatch(r"ep-[a-z0-9-]+(?:-pooler)?\..+\.neon\.tech", source_host)
+          first, suffix = source_host.split(".", 1)
+          pooled = first.endswith("-pooler")
+          temp_endpoint = endpoint_id + ("-pooler" if pooled else "")
+          temp_host = temp_endpoint + "." + suffix
+          assert temp_host != source_host
+          user = urllib.parse.quote(parsed.username or "", safe="")
+          password = urllib.parse.quote(parsed.password or "", safe="")
+          assert user and password
+          port = f":{parsed.port}" if parsed.port else ""
+          temp = urllib.parse.urlunsplit(
+              (parsed.scheme, f"{user}:{password}@{temp_host}{port}", parsed.path, parsed.query, parsed.fragment)
+          )
+          print(f"::add-mask::{temp}")
+          print(f"database_url={temp}")
+          print(f"temp_host_sha256={hashlib.sha256(temp_host.encode()).hexdigest()}")
+          print("SOURCE_NEON_HOST_CONTACTED=NO")
+          print("NEON_PRODUCTION_BRANCH_TARGETED=NO")
+          PY
       - name: Verify active Autopilot schema without applying migrations
         env:
           DATABASE_URL: ${{ steps.neon.outputs.database_url }}
@@ -85,18 +89,26 @@ jobs:
         run: |
           set -Eeuo pipefail
           row="$(psql "$DATABASE_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 <<'SQL'
-          SELECT current_database(),
+          SELECT current_setting('neon.project_id', true),
+                 current_setting('neon.branch_id', true),
+                 current_database(),
                  current_user,
                  EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0302_autopilot_github_ci_read_only'),
                  EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0303_autopilot_github_draft_repair'),
-                 to_regprocedure('autopilot.create_shadow_task(text,text,jsonb,integer,bigint,text,text)') IS NOT NULL;
+                 to_regprocedure('autopilot.create_shadow_task(text,text,jsonb,integer,bigint,text,text)') IS NOT NULL,
+                 has_function_privilege(current_user, 'autopilot.create_shadow_task(text,text,jsonb,integer,bigint,text,text)', 'EXECUTE');
           SQL
           )"
-          [[ "$row" == 'neondb|autopilot_migration_owner_login|t|t|t' ]]
+          IFS='|' read -r project_id branch_id database_name database_user migration_0302 migration_0303 function_present caller_can_execute <<<"$row"
+          [[ "$project_id" == "$PROJECT_ID" ]]
+          [[ "$branch_id" == "$TEMP_BRANCH_ID" ]]
+          [[ "$database_name" == neondb ]]
+          [[ "$database_user" != autopilot_runtime_login && "$database_user" != autopilot_prod_canary_login ]]
+          [[ "$migration_0302" == t && "$migration_0303" == t ]]
+          [[ "$function_present" == t && "$caller_can_execute" == t ]]
           echo 'AUTOPILOT_SCHEMA_PREFLIGHT=PASS'
           echo 'MIGRATION_APPLIED=NO'
           echo 'PRODUCTION_MUTATION=NO'
-
       - name: Register three exact-head durable tasks
         id: tasks
         env:
@@ -121,8 +133,8 @@ jobs:
               ),
               10,
               0,
-              'DIRECTOR_P1_20260901',
-              'UV_READY_FOR_ONE_CANARY_DISPATCH'
+              'DIRECTOR_CHAT_GO_20260901',
+              'UV_P1_READ_ONLY_REGISTRATION'
             );
           SQL
             )"
@@ -136,7 +148,7 @@ jobs:
           }
           register_task runtime "$RUNTIME_TASK_KEY" "$RUNTIME_PR" "$RUNTIME_HEAD"
           register_task intake "$INTAKE_TASK_KEY" "$INTAKE_PR" "$INTAKE_HEAD"
-          register_task integration "$INTEGRATION_TASK_KEY" "$INTEGRATION_PR" "$INTEGRATION_HEAD"
+          register_task idle "$IDLE_TASK_KEY" "$IDLE_PR" "$IDLE_HEAD"
           echo 'AUTOPILOT_DURABLE_TASK_COUNT=3'
 
       - name: Observe controller claim or external-wait transition
@@ -144,11 +156,11 @@ jobs:
           DATABASE_URL: ${{ steps.neon.outputs.database_url }}
           RUNTIME_TASK_ID: ${{ steps.tasks.outputs.runtime_task_id }}
           INTAKE_TASK_ID: ${{ steps.tasks.outputs.intake_task_id }}
-          INTEGRATION_TASK_ID: ${{ steps.tasks.outputs.integration_task_id }}
+          IDLE_TASK_ID: ${{ steps.tasks.outputs.idle_task_id }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          ids=("$RUNTIME_TASK_ID" "$INTAKE_TASK_ID" "$INTEGRATION_TASK_ID")
+          ids=("$RUNTIME_TASK_ID" "$INTAKE_TASK_ID" "$IDLE_TASK_ID")
           for _ in $(seq 1 24); do
             ready=0
             for id in "${ids[@]}"; do
@@ -175,7 +187,7 @@ jobs:
         env:
           RUNTIME_TASK_ID: ${{ steps.tasks.outputs.runtime_task_id }}
           INTAKE_TASK_ID: ${{ steps.tasks.outputs.intake_task_id }}
-          INTEGRATION_TASK_ID: ${{ steps.tasks.outputs.integration_task_id }}
+          IDLE_TASK_ID: ${{ steps.tasks.outputs.idle_task_id }}
         shell: bash
         run: |
           {
@@ -185,7 +197,7 @@ jobs:
             echo '- migration applied: `NO`'
             echo "- runtime task: \`${RUNTIME_TASK_ID:-unresolved}\` — PR #$RUNTIME_PR @ \`$RUNTIME_HEAD\`"
             echo "- intake task: \`${INTAKE_TASK_ID:-unresolved}\` — PR #$INTAKE_PR @ \`$INTAKE_HEAD\`"
-            echo "- integration task: \`${INTEGRATION_TASK_ID:-unresolved}\` — PR #$INTEGRATION_PR @ \`$INTEGRATION_HEAD\`"
+            echo "- idle-guard task: \`${IDLE_TASK_ID:-unresolved}\` — PR #$IDLE_PR @ \`$IDLE_HEAD\`"
             echo '- real media execution: `NO`'
             echo '- Drive write: `NO`'
             echo '- production mutation: `NO`'
