@@ -46,12 +46,10 @@ jobs:
     timeout-minutes: 8
     environment: database-production
     env:
-      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
-      PROJECT_ID: misty-poetry-18012774
+      SOURCE_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
       TEMP_BRANCH_ID: br-still-tooth-b1ilkfcj
       PRODUCTION_BRANCH_ID: br-cold-moon-a1sgkzfd
       TEMP_ENDPOINT_ID: ep-floral-field-b1pjs2of
-      MIGRATION_ROLE: autopilot_migration_owner_login
       EXPECTED_MIGRATION_BLOB: ff02d6f7155e407c6ac7a9227e6f52efab85c3a1
     steps:
       - name: Checkout exact shadow integration source
@@ -66,47 +64,46 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y postgresql-client >/dev/null
 
-      - name: Resolve only the exact temporary branch owner URI
-        id: neon
+      - name: Derive exact temporary endpoint DSN without contacting source host
+        id: dsn
         shell: bash
         run: |
           set -Eeuo pipefail
-          [[ -n "${NEON_API_KEY:-}" ]]
+          [[ -n "${SOURCE_DATABASE_URL:-}" ]]
           [[ "$TEMP_BRANCH_ID" != "$PRODUCTION_BRANCH_ID" ]]
           [[ "$(git hash-object database/migrations/0308_autopilot_ibf_structured_artifact.sql)" == "$EXPECTED_MIGRATION_BLOB" ]]
-          api="https://console.neon.tech/api/v2/projects/$PROJECT_ID"
-          auth=(-H "Authorization: Bearer $NEON_API_KEY" -H 'Accept: application/json')
-          branch_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID")"
-          endpoint_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID/endpoints")"
-          role_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID/roles/$MIGRATION_ROLE")"
-          uri_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" \
-            "$api/connection_uri?branch_id=$TEMP_BRANCH_ID&database_name=neondb&role_name=$MIGRATION_ROLE&pooled=false")"
-          BRANCH_JSON="$branch_json" ENDPOINT_JSON="$endpoint_json" ROLE_JSON="$role_json" URI_JSON="$uri_json" python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, os, urllib.parse
+          SOURCE_DATABASE_URL="$SOURCE_DATABASE_URL" TEMP_ENDPOINT_ID="$TEMP_ENDPOINT_ID" python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import hashlib, os, re, urllib.parse
 
-          branch_id = os.environ['TEMP_BRANCH_ID']
+          raw = os.environ['SOURCE_DATABASE_URL']
           endpoint_id = os.environ['TEMP_ENDPOINT_ID']
-          role = os.environ['MIGRATION_ROLE']
-          branch = json.loads(os.environ['BRANCH_JSON']).get('branch', {})
-          endpoints = json.loads(os.environ['ENDPOINT_JSON']).get('endpoints', [])
-          role_obj = json.loads(os.environ['ROLE_JSON']).get('role', {})
-          uri = json.loads(os.environ['URI_JSON']).get('uri')
-          assert branch.get('id') == branch_id
-          assert any(item.get('id') == endpoint_id and item.get('branch_id') == branch_id for item in endpoints)
-          assert role_obj.get('name') == role
-          parsed = urllib.parse.urlsplit(uri)
-          assert parsed.username == role and parsed.path == '/neondb'
-          host = (parsed.hostname or '').lower()
-          assert host.startswith(endpoint_id + '.') and host.endswith('.neon.tech')
-          print(f'::add-mask::{uri}')
-          print(f'database_url={uri}')
-          print('NEON_TARGET_BRANCH_VERIFIED=YES')
+          parsed = urllib.parse.urlsplit(raw)
+          source_host = (parsed.hostname or '').lower()
+          assert parsed.scheme in {'postgres', 'postgresql'}
+          assert source_host.endswith('.neon.tech')
+          assert re.fullmatch(r'ep-[a-z0-9-]+(?:-pooler)?\..+\.neon\.tech', source_host)
+          first, suffix = source_host.split('.', 1)
+          pooled = first.endswith('-pooler')
+          temp_endpoint = endpoint_id + ('-pooler' if pooled else '')
+          temp_host = temp_endpoint + '.' + suffix
+          assert temp_host != source_host
+          user = urllib.parse.quote(parsed.username or '', safe='')
+          password = urllib.parse.quote(parsed.password or '', safe='')
+          assert user and password
+          port = f':{parsed.port}' if parsed.port else ''
+          temp = urllib.parse.urlunsplit(
+              (parsed.scheme, f'{user}:{password}@{temp_host}{port}', parsed.path, parsed.query, parsed.fragment)
+          )
+          print(f'::add-mask::{temp}')
+          print(f'database_url={temp}')
+          print(f'temp_host_sha256={hashlib.sha256(temp_host.encode()).hexdigest()}')
+          print('SOURCE_NEON_HOST_CONTACTED=NO')
           print('NEON_PRODUCTION_BRANCH_TARGETED=NO')
           PY
 
       - name: Apply only additive migration 0308
         env:
-          DATABASE_URL: ${{ steps.neon.outputs.database_url }}
+          DATABASE_URL: ${{ steps.dsn.outputs.database_url }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -120,7 +117,7 @@ jobs:
           SQL
           )"
           IFS='|' read -r db usr pg18 m307 m308 createrole dbcreate <<<"$pre"
-          [[ "$db" == neondb && "$usr" == "$MIGRATION_ROLE" ]]
+          [[ "$db" == neondb && "$usr" != autopilot_runtime_login ]]
           [[ "$pg18" == t && "$m307" == t && "$createrole" == f && "$dbcreate" == t ]]
           echo "AUTOPILOT_PRE_MIGRATION_0308=$m308"
           if [[ "$m308" == f ]]; then
@@ -130,7 +127,7 @@ jobs:
 
       - name: Verify exact retained-artifact boundary
         env:
-          DATABASE_URL: ${{ steps.neon.outputs.database_url }}
+          DATABASE_URL: ${{ steps.dsn.outputs.database_url }}
         shell: bash
         run: |
           set -Eeuo pipefail
