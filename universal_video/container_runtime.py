@@ -22,6 +22,7 @@ WRITABLE_ROOT_ENV = (
     "UNIVERSAL_VIDEO_OUTPUT_ROOT",
     "UNIVERSAL_VIDEO_MEDIA_ROOT",
     "HF_HOME",
+    "UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE",
 )
 SPOOL_LEAVES = ("inbox", "running", "done", "failed", "results", "progress")
 
