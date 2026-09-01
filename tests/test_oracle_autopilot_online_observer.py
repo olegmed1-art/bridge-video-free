@@ -151,6 +151,7 @@ def test_installer_and_workflow_never_restart_consumer_or_stop_oracle():
         ".github/workflows/oracle-autopilot-online-observer.yml"
     ).read_text()
     assert "school-autopilot-shadow.service" in installer
+    assert '"$REPO_DIR"/autopilot_phase3b/*.py' in installer
     assert "AUTOPILOT_CONSUMER_RESTARTED=NO" in installer
     assert "systemctl restart" not in installer
     assert "systemctl stop" not in installer

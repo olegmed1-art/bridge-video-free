@@ -139,6 +139,7 @@ jobs:
             || { echo 'observer source must be the request parent' >&2; exit 1; }
           git diff --quiet "$source_revision" "$GITHUB_SHA" -- \
             oracle_autopilot \
+            autopilot_phase3b \
             deploy/oracle-autopilot/school-autopilot-online-observer.service \
             ops/oracle_autopilot_online_observer_install.sh
 
@@ -187,6 +188,7 @@ jobs:
           tar --sort=name --owner=0 --group=0 --numeric-owner -czf "$bundle" \
             AUTOPILOT_OBSERVER_SOURCE_REVISION \
             oracle_autopilot \
+            autopilot_phase3b \
             deploy/oracle-autopilot/school-autopilot-online-observer.service \
             ops/oracle_autopilot_online_observer_install.sh
           echo "bundle=$bundle" >> "$GITHUB_OUTPUT"
