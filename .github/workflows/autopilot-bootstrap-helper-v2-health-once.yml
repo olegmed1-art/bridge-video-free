@@ -1,0 +1,118 @@
+name: Autopilot bootstrap helper v2 health (one-shot)
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths: ['.github/workflows/autopilot-bootstrap-helper-v2-health-once.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      HELPER_HOST: bridge-school-autopilot-obrpqd725-olegmed1-4368s-projects.vercel.app
+      EXPECTED_RECIPIENT_SHA256: 5149590b81e3a5e6dd3efb1ccbaccc72f5a27d404654ad37cf08bf9f52d4d079
+      SHARE_URL_CIPHERTEXT_SHA256: 09c3fcbf7f43723e3947c896a3a22054d69d6277d3b5df0696e1e0b58e34f422
+      SHARE_URL_CIPHERTEXT_B64: Y7fnhZzdv+JBHJW+9CiRK7ejjlNLxwp0rWEzVfaAtLIEzuUt9QUIN3g3FVGLSHvgEjhKll4oamD0h5vVQDdomLx1bwvTRroXU3A92NXu+2czs1ygoJmjR+oeBOZXPkFoDev7OeNIyWJwdffgMs4znXctYXwWVisBajJ1PsJ9VoHm7Hn6U+mdol0lvd23d0HaKofPigwJcLFIbHJiyjtvT3hpR00VeKFQu69m5CJ+EYlb8qv89n4uqKRjUy4Uuf47Kosa9gTMDeaTiHFxWC5hZZ3pORmLX8pu4zVbfyVMSSBoqyQV/DGp6I1NOP6gQZEIT9YTyfB7gKAN4ZDZAS8Xo4XeYQxE7eWr3x532BVY/mgcuJ+z6mlYLzB9xQ+xx6wDjRzIvNRBsN2AhakKg4Vk1Dgnl90hLOtw/YBNFyYcdu7elmzUoU/GEBryU+fDWshuQg9UvOfwSZh32K5SB5RuojgKyOpr9gA83+EVHDBObf8SiWknxA93z8HoZzstkAXE
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Verify fresh Oracle SSH boundary
+        id: ssh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/helper-v2"
+          mkdir -p "$work"
+          key="$work/id_oracle"
+          printf '%s\n' "$SSH_KEY_ORACLE" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo 'ORACLE_SSH_PREFLIGHT=PASS'
+
+      - name: Probe helper without exposing credentials
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          cipher="$RUNNER_TEMP/helper-v2/share.oaep"
+          printf '%s' "$SHARE_URL_CIPHERTEXT_B64" | base64 --decode > "$cipher"
+          [[ "$(wc -c < "$cipher")" == 384 ]]
+          [[ "$(sha256sum "$cipher" | awk '{print $1}')" == "$SHARE_URL_CIPHERTEXT_SHA256" ]]
+          remote="/tmp/autopilot-helper-v2-${GITHUB_RUN_ID}.oaep"
+          scp -q -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$cipher" "$ORACLE_USER@$ORACLE_HOST:$remote"
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env CIPHER='$remote' EXPECTED_HOST='$HELPER_HOST' EXPECTED_SHA='$EXPECTED_RECIPIENT_SHA256' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+          private=/opt/bridge-school/school-autopilot/bootstrap/oracle-bootstrap-rsa.pem
+          work="$(mktemp -d /var/tmp/autopilot-helper-v2.XXXXXXXX)"
+          cleanup(){ rm -f -- "$CIPHER"; find "$work" -depth -delete; }
+          trap cleanup EXIT HUP INT TERM
+          [[ "$(stat -c '%U:%G:%a' "$private")" == root:root:600 ]]
+          [[ "$(openssl pkey -in "$private" -pubout -outform DER | sha256sum | awk '{print $1}')" == "$EXPECTED_SHA" ]]
+          openssl pkeyutl -decrypt -inkey "$private" -in "$CIPHER" -out "$work/share" \
+            -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256
+          SHARE_FILE="$work/share" EXPECTED_HOST="$EXPECTED_HOST" python3 - <<'PY' > "$work/url"
+          import os, re, urllib.parse
+          from pathlib import Path
+          parsed=urllib.parse.urlsplit(Path(os.environ['SHARE_FILE']).read_text().strip())
+          query=urllib.parse.parse_qs(parsed.query, strict_parsing=True)
+          assert parsed.scheme == 'https' and parsed.hostname == os.environ['EXPECTED_HOST'] and parsed.path == '/'
+          assert set(query) == {'_vercel_share'} and len(query['_vercel_share']) == 1
+          token=query['_vercel_share'][0]
+          assert re.fullmatch(r'[A-Za-z0-9]{20,128}', token)
+          print(f"URL=https://{parsed.hostname}/healthz?_vercel_share={token}")
+          PY
+          chmod 0600 "$work/url"
+          source "$work/url"
+          curl --fail --silent --show-error --location --max-redirs 6 \
+            --connect-timeout 10 --max-time 60 "$URL" -o "$work/health.json"
+          HEALTH="$work/health.json" EXPECTED_SHA="$EXPECTED_SHA" python3 - <<'PY'
+          import json, os
+          p=json.load(open(os.environ['HEALTH'], encoding='utf-8'))
+          fields=(
+              'broker_secret_present','vercel_bypass_present','github_app_config_present',
+              'recipient_key_present','broker_url_valid'
+          )
+          print('AUTOPILOT_HELPER_SAFE_FLAGS=' + ','.join(f'{k}:{str(p.get(k)).lower()}' for k in fields))
+          expected={
+              'status':'ok','service':'school-autopilot-bootstrap-envelope','service_version':'1.0.1',
+              'preview_only':True,'production_mutations_enabled':False,
+              'broker_secret_present':True,'vercel_bypass_present':True,
+              'github_app_config_present':True,'recipient_key_present':True,
+              'recipient_key_sha256':os.environ['EXPECTED_SHA'],'broker_url_valid':True,
+              'plaintext_secret_exposed':False,
+          }
+          for key,value in expected.items(): assert p.get(key) == value, (key,p.get(key))
+          print('AUTOPILOT_BOOTSTRAP_HELPER_V2_HEALTH=PASS')
+          PY
+          echo 'PLAINTEXT_SECRET_EXPOSED=NO'
+          echo 'AUTOPILOT_SERVICE_RESTARTED=NO'
+          echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
+          REMOTE
