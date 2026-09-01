@@ -1,4 +1,4 @@
-name: Autopilot temporary Neon owner ingress (one-shot)
+name: Autopilot temporary Neon 0306 + IBF acceptance (one-shot)
 
 on:
   push:
@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  preflight:
+  apply-and-accept:
     if: github.repository == 'olegmed1-art/bridge-video-free'
     runs-on: ubuntu-24.04
     timeout-minutes: 8
@@ -22,7 +22,14 @@ jobs:
       SOURCE_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
       TEMP_ENDPOINT_ID: ep-floral-field-b1pjs2of
       EXPECTED_TEMP_BRANCH_ID: br-still-tooth-b1ilkfcj
+      EXPECTED_MIGRATION_BLOB: 7258d7ce8d8265bd4de87907d40eca20da4bef15
+      TASK_KEY: ibf-15031-issue-1013-20260901
     steps:
+      - name: Checkout exact shadow integration source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
       - name: Install PostgreSQL client
         shell: bash
         run: |
@@ -37,10 +44,7 @@ jobs:
           set -Eeuo pipefail
           test -n "${SOURCE_DATABASE_URL:-}" || { echo 'NEON_DATABASE_URL unavailable'; exit 1; }
           SOURCE_DATABASE_URL="$SOURCE_DATABASE_URL" TEMP_ENDPOINT_ID="$TEMP_ENDPOINT_ID" python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import os
-          import re
-          import urllib.parse
-
+          import os, re, urllib.parse, hashlib
           raw = os.environ['SOURCE_DATABASE_URL']
           parsed = urllib.parse.urlsplit(raw)
           host = (parsed.hostname or '').lower()
@@ -55,41 +59,122 @@ jobs:
           user = urllib.parse.quote(parsed.username or '', safe='')
           password = urllib.parse.quote(parsed.password or '', safe='')
           assert user and password
-          credentials = f'{user}:{password}@'
           port = f':{parsed.port}' if parsed.port else ''
-          netloc = credentials + temp_host + port
-          temp = urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+          temp = urllib.parse.urlunsplit((parsed.scheme, f'{user}:{password}@{temp_host}{port}', parsed.path, parsed.query, parsed.fragment))
           print(f'::add-mask::{temp}')
           print(f'temp_database_url={temp}')
-          print(f'temp_host_sha256={__import__("hashlib").sha256(temp_host.encode()).hexdigest()}')
-          print(f'temp_endpoint_id={os.environ["TEMP_ENDPOINT_ID"]}')
+          print(f'temp_host_sha256={hashlib.sha256(temp_host.encode()).hexdigest()}')
           print('source_host_contacted=NO')
           PY
 
-      - name: Verify only the explicit temporary Neon endpoint
+      - name: Prove temporary boundary and exact migration input
         env:
           TEMP_DATABASE_URL: ${{ steps.dsn.outputs.temp_database_url }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          test -n "$TEMP_DATABASE_URL"
+          [[ "$(git hash-object database/migrations/0306_autopilot_bounded_task_ingress.sql)" == "$EXPECTED_MIGRATION_BLOB" ]]
           result="$(psql "$TEMP_DATABASE_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 <<'SQL'
-          SELECT current_database(),
-                 current_user,
-                 EXISTS (SELECT 1 FROM public.schema_migration WHERE migration_key='0302_autopilot_github_ci_read_only'),
+          SELECT current_database(), current_user,
+                 current_setting('server_version_num')::integer >= 180000,
                  EXISTS (SELECT 1 FROM public.schema_migration WHERE migration_key='0303_autopilot_github_draft_repair'),
-                 to_regprocedure('autopilot.create_shadow_task(text,text,jsonb,integer,bigint,text,text)') IS NOT NULL,
-                 has_function_privilege(current_user,'autopilot.create_shadow_task(text,text,jsonb,integer,bigint,text,text)','EXECUTE'),
-                 current_setting('server_version_num')::integer >= 180000;
+                 EXISTS (SELECT 1 FROM public.schema_migration WHERE migration_key='0306_autopilot_bounded_task_ingress'),
+                 (SELECT rolcreaterole FROM pg_roles WHERE rolname=current_user),
+                 has_database_privilege(current_user,current_database(),'CREATE');
           SQL
           )"
-          IFS='|' read -r database_name database_user migration_0302 migration_0303 function_present can_execute pg18 <<<"$result"
+          IFS='|' read -r database_name database_user pg18 migration_0303 migration_0306 can_create_role can_create_db_objects <<<"$result"
           [[ "$database_name" == neondb ]]
           [[ "$database_user" != autopilot_runtime_login ]]
-          [[ "$migration_0302" == t && "$migration_0303" == t ]]
-          [[ "$function_present" == t && "$can_execute" == t && "$pg18" == t ]]
-          echo 'AUTOPILOT_TEMP_NEON_OWNER_INGRESS=PASS'
-          echo 'AUTOPILOT_TEMP_NEON_MIGRATION_0303=PASS'
+          [[ "$pg18" == t && "$migration_0303" == t ]]
+          [[ "$can_create_role" == f && "$can_create_db_objects" == t ]]
+          echo "AUTOPILOT_TEMP_BRANCH_ID=$EXPECTED_TEMP_BRANCH_ID"
+          echo "AUTOPILOT_PRE_MIGRATION_0306=$migration_0306"
           echo 'SOURCE_NEON_HOST_CONTACTED=NO'
-          echo 'DATABASE_MUTATED=NO'
           echo 'PRODUCTION_MUTATION=NO'
+
+      - name: Apply only migration 0306 on explicit temporary endpoint
+        env:
+          TEMP_DATABASE_URL: ${{ steps.dsn.outputs.temp_database_url }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          psql "$TEMP_DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -f database/migrations/0306_autopilot_bounded_task_ingress.sql >/dev/null
+          verify="$(psql "$TEMP_DATABASE_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 <<'SQL'
+          SELECT EXISTS (SELECT 1 FROM public.schema_migration WHERE migration_key='0306_autopilot_bounded_task_ingress'),
+                 to_regprocedure('autopilot.register_approved_ibf_analysis(text,text,text,integer)') IS NOT NULL,
+                 has_function_privilege('autopilot_runtime','autopilot.register_approved_ibf_analysis(text,text,text,integer)','EXECUTE');
+          SQL
+          )"
+          IFS='|' read -r migration_present function_present runtime_can_execute <<<"$verify"
+          [[ "$migration_present" == t && "$function_present" == t && "$runtime_can_execute" == t ]]
+          echo 'AUTOPILOT_TEMP_NEON_MIGRATION_0306=PASS'
+          echo 'PRODUCTION_MUTATION=NO'
+
+      - name: Register exact Director-approved IBF task
+        id: register
+        env:
+          TEMP_DATABASE_URL: ${{ steps.dsn.outputs.temp_database_url }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          row="$(psql "$TEMP_DATABASE_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 -c \
+            "SELECT task_id,status,created FROM autopilot.register_approved_ibf_analysis('$TASK_KEY','15031','github:issue:1013#director-go',10);")"
+          IFS='|' read -r task_id task_status created <<<"$row"
+          [[ "$task_id" =~ ^[0-9a-f-]{36}$ ]]
+          [[ "$task_status" =~ ^(READY|RUNNING|DONE|FAILED_CLOSED|OWNER_REQUIRED)$ ]]
+          echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
+          echo "created=$created" >> "$GITHUB_OUTPUT"
+          echo "AUTOPILOT_IBF_TASK_ID=$task_id"
+          echo "AUTOPILOT_IBF_REGISTER_STATUS=$task_status"
+          echo "AUTOPILOT_IBF_REGISTER_CREATED=$created"
+
+      - name: Wait for Oracle CLAIM and terminal evidence
+        id: terminal
+        env:
+          TEMP_DATABASE_URL: ${{ steps.dsn.outputs.temp_database_url }}
+          TASK_ID: ${{ steps.register.outputs.task_id }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          terminal=''
+          for _ in $(seq 1 36); do
+            status="$(psql "$TEMP_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT status FROM autopilot.task WHERE task_id='$TASK_ID'::uuid;")"
+            case "$status" in
+              DONE|FAILED_CLOSED|OWNER_REQUIRED|BUDGET_STOP|CANCELLED) terminal="$status"; break ;;
+            esac
+            sleep 5
+          done
+          claimed="$(psql "$TEMP_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM autopilot.task_event WHERE task_id='$TASK_ID'::uuid AND event_type='TASK_CLAIMED' AND actor_type='ORACLE_WORKER' AND state_to='RUNNING';")"
+          evidence="$(psql "$TEMP_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM autopilot.evidence WHERE task_id='$TASK_ID'::uuid AND retained;")"
+          events="$(psql "$TEMP_DATABASE_URL" -X -A -t -F ':' -v ON_ERROR_STOP=1 -c "SELECT sequence_no,event_type,COALESCE(state_to,'') FROM autopilot.task_event WHERE task_id='$TASK_ID'::uuid ORDER BY sequence_no;")"
+          final_status="$(psql "$TEMP_DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT status FROM autopilot.task WHERE task_id='$TASK_ID'::uuid;")"
+          echo "AUTOPILOT_IBF_FINAL_STATUS=$final_status"
+          echo "AUTOPILOT_IBF_CLAIM_EVENT_COUNT=$claimed"
+          echo "AUTOPILOT_IBF_RETAINED_EVIDENCE_COUNT=$evidence"
+          printf 'AUTOPILOT_IBF_EVENTS=%s\n' "$(tr '\n' ',' <<<"$events")"
+          [[ "$claimed" -ge 1 ]]
+          [[ "$final_status" == DONE ]]
+          [[ "$evidence" -ge 1 ]]
+          echo "final_status=$final_status" >> "$GITHUB_OUTPUT"
+          echo 'AUTOPILOT_IBF_ACCEPTANCE=PASS'
+          echo 'PRODUCTION_MUTATION=NO'
+
+      - name: Publish bounded receipt
+        if: ${{ always() }}
+        shell: bash
+        env:
+          TASK_ID: ${{ steps.register.outputs.task_id }}
+          FINAL_STATUS: ${{ steps.terminal.outputs.final_status }}
+        run: |
+          {
+            echo '### Autopilot IBF shadow acceptance'
+            echo "- temporary Neon branch: \`$EXPECTED_TEMP_BRANCH_ID\`"
+            echo '- production/default Neon targeted: `NO`'
+            echo '- migration: `0306` only'
+            echo "- task: \`${TASK_ID:-unresolved}\`"
+            echo "- terminal: \`${FINAL_STATUS:-not-DONE}\`"
+            echo '- runtime: `Oracle SHADOW_ONLY / worker_v16`'
+            echo '- production mutations: `NO`'
+          } >> "$GITHUB_STEP_SUMMARY"
