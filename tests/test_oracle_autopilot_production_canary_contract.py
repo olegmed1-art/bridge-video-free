@@ -30,6 +30,11 @@ def test_workflow_is_request_gated_and_exactly_targets_production() -> None:
     assert "-v task_key=\"$TASK_KEY\" <<'PSQL'" in workflow
     assert "-v task_id=\"$task_id\" <<'PSQL'" in workflow
     assert "create_shadow_task(:'task_key'" not in workflow
+    assert "s.executor_type = 'ORACLE_RESIDENT'" in workflow
+    assert "s.capability_name = 'shadow.noop'" in workflow
+    assert "s.status = 'COMPLETED'" in workflow
+    assert "ev.actor_ref = 'oracle-autopilot-production-canary-1'" in workflow
+    assert "s.worker_id" not in workflow
 
 
 def test_failure_path_applies_both_kill_switches() -> None:
