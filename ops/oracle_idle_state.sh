@@ -11,6 +11,7 @@ set -Eeuo pipefail
 LAB_DIR="${ASSISTANT_LAB_DIR:-/opt/bridge-school/assistant-lab}"
 LAB_ENV="${ASSISTANT_LAB_ENV_FILE:-$LAB_DIR/assistant-lab.env}"
 PYTHON="${ASSISTANT_LAB_PYTHON:-$LAB_DIR/.venv/bin/python}"
+SYSTEM_PYTHON="${ORACLE_IDLE_SYSTEM_PYTHON:-/usr/bin/python3}"
 QUEUE_DSN_FILE="${BRIDGE_VIDEO_QUEUE_DSN_FILE:-/opt/bridge-school/universal-video/secrets/video-queue-dsn}"
 VIDEO_SPOOL_ROOT="${BRIDGE_VIDEO_SPOOL_ROOT:-/opt/bridge-school/universal-video/spool}"
 HOST_LEASE_FILE="${ORACLE_HOST_LEASE_FILE:-/run/bridge-school/oracle-host-lease}"
@@ -31,6 +32,7 @@ trap finish EXIT
 }
 [[ -r "$LAB_ENV" ]] || { reason="assistant_lab_env_unreadable"; exit 0; }
 [[ -x "$PYTHON" ]] || { reason="assistant_lab_python_missing"; exit 0; }
+[[ -x "$SYSTEM_PYTHON" ]] || { reason="system_python_missing"; exit 0; }
 
 # The resident daemon being active is expected and does not itself make the host busy.
 # An unhealthy/transitioning worker makes the state unknowable, so STOP stays blocked.
@@ -88,32 +90,103 @@ for spool in \
   /var/lib/bridge-school/uv-spool \
   /var/lib/bridge-school/feedback-spool
 do
-  if [[ -d "$spool" ]] && find "$spool" -type f -print -quit 2>/dev/null | grep -q .; then
-    state="BUSY"
-    reason="pending_spool:${spool}"
-    exit 0
+  if [[ -d "$spool" ]]; then
+    set +e
+    spool_probe="$(find "$spool" -type f -print -quit 2>/dev/null)"
+    spool_rc=$?
+    set -e
+    if (( spool_rc != 0 )); then
+      reason="spool_traversal_failed"
+      exit 0
+    fi
+    if [[ -n "$spool_probe" ]]; then
+      state="BUSY"
+      reason="pending_spool:${spool}"
+      exit 0
+    fi
   fi
 done
 
-# Universal Video has a host-side spool independent of the Neon queue. Missing
-# or structurally unsafe spool telemetry is UNKNOWN. Any pending, running, or
-# progress receipt is BUSY. Terminal done/failed/results files do not block idle.
-if [[ ! -d "$VIDEO_SPOOL_ROOT" || -L "$VIDEO_SPOOL_ROOT" || ! -r "$VIDEO_SPOOL_ROOT" ]]; then
-  reason="video_spool_unavailable"
-  exit 0
-fi
-for leaf in inbox running progress; do
-  path="$VIDEO_SPOOL_ROOT/$leaf"
-  if [[ ! -d "$path" || -L "$path" || ! -r "$path" ]]; then
-    reason="video_spool_${leaf}_unavailable"
-    exit 0
-  fi
-  if find "$path" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null | grep -q .; then
-    state="BUSY"
-    reason="video_spool_${leaf}_pending"
-    exit 0
-  fi
-done
+# Universal Video has a host-side spool independent of the Neon queue.  A
+# bounded parser distinguishes active work from terminal progress receipts and
+# treats malformed, symlinked or unreadable telemetry as UNKNOWN.
+VIDEO_SPOOL_RESULT="$(BRIDGE_VIDEO_SPOOL_ROOT="$VIDEO_SPOOL_ROOT" "$SYSTEM_PYTHON" - <<'PY' 2>/dev/null || true
+import json
+import os
+import stat
+from pathlib import Path
+
+root = Path(os.environ.get("BRIDGE_VIDEO_SPOOL_ROOT", ""))
+active_progress = {"DOWNLOADING_FROM_DRIVE", "SOURCE_READY_ON_ORACLE", "PROCESSING"}
+terminal_progress = {"RESULT_READY", "REVIEW", "FAILED"}
+
+def fail(reason: str) -> None:
+    print("UNKNOWN:" + reason)
+    raise SystemExit
+
+try:
+    root_info = root.lstat()
+    if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
+        fail("video_spool_unavailable")
+    leaves = {}
+    for name in ("inbox", "running", "progress"):
+        path = root / name
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            fail("video_spool_" + name + "_unavailable")
+        leaves[name] = path
+
+    for name in ("inbox", "running"):
+        try:
+            entries = list(leaves[name].iterdir())
+        except OSError:
+            fail("video_spool_" + name + "_traversal_failed")
+        for item in entries:
+            if not item.name.endswith(".json"):
+                continue
+            info = item.lstat()
+            if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+                fail("video_spool_" + name + "_entry_invalid")
+            print("BUSY:video_spool_" + name + "_pending")
+            raise SystemExit
+
+    try:
+        progress_entries = list(leaves["progress"].iterdir())
+    except OSError:
+        fail("video_spool_progress_traversal_failed")
+    for item in progress_entries:
+        if not item.name.endswith(".json"):
+            continue
+        info = item.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            fail("video_spool_progress_entry_invalid")
+        try:
+            payload = json.loads(item.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            fail("video_spool_progress_invalid")
+        if not isinstance(payload, dict) or payload.get("schema") != "universal-video-pipeline-progress-v1":
+            fail("video_spool_progress_invalid")
+        state = str(payload.get("state") or "")
+        if state in active_progress:
+            print("BUSY:video_spool_progress_active")
+            raise SystemExit
+        if state not in terminal_progress:
+            fail("video_spool_progress_state_unknown")
+    print("IDLE:video_spool_clear")
+except FileNotFoundError:
+    print("UNKNOWN:video_spool_unavailable")
+except PermissionError:
+    print("UNKNOWN:video_spool_permission_denied")
+except OSError:
+    print("UNKNOWN:video_spool_io_failed")
+PY
+)"
+case "$VIDEO_SPOOL_RESULT" in
+  IDLE:*) ;;
+  BUSY:*) state="BUSY"; reason="${VIDEO_SPOOL_RESULT#BUSY:}"; exit 0 ;;
+  UNKNOWN:*) reason="${VIDEO_SPOOL_RESULT#UNKNOWN:}"; exit 0 ;;
+  *) reason="video_spool_classifier_invalid"; exit 0 ;;
+esac
 
 # Read only the exact DSN assignment; do not source the environment file as shell code.
 dsn_line="$(grep -m1 '^ASSISTANT_LAB_DATABASE_URL=' "$LAB_ENV" 2>/dev/null || true)"
