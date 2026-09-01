@@ -234,7 +234,7 @@ jobs:
                SELECT 1 FROM pg_roles WHERE rolname = 'autopilot_prod_canary_login'
            ) \gexec
           SELECT format(
-              'ALTER ROLE autopilot_prod_canary_login WITH LOGIN PASSWORD %L INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS CONNECTION LIMIT 1',
+              'ALTER ROLE autopilot_prod_canary_login WITH LOGIN PASSWORD %L CONNECTION LIMIT 1',
               :'runtime_password'
           ) \gexec
           GRANT autopilot_runtime TO autopilot_prod_canary_login;
@@ -522,11 +522,11 @@ jobs:
           fi
           if [[ -n "${DATABASE_URL:-}" ]]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'PSQL'
-            SELECT 'ALTER ROLE autopilot_prod_canary_login NOLOGIN'
-             WHERE EXISTS (
-                 SELECT 1 FROM pg_roles WHERE rolname = 'autopilot_prod_canary_login'
-             ) \gexec
-            PSQL
+          SELECT 'ALTER ROLE autopilot_prod_canary_login NOLOGIN'
+           WHERE EXISTS (
+               SELECT 1 FROM pg_roles WHERE rolname = 'autopilot_prod_canary_login'
+           ) \gexec
+          PSQL
           fi
           echo 'AUTOPILOT_PRODUCTION_CANARY_KILL_SWITCH_APPLIED'
           echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
