@@ -127,10 +127,22 @@ def test_submit_staging_failures_are_errno_classified_and_secret_safe() -> None:
         "UV_INTAKE_EXECUTION_FAILED",
     ):
         assert code in staging
+    assert "os.lstat(root)" in staging
+    assert "stat.S_IMODE(root_stat.st_mode) != 0o700" in staging
+    assert "root_stat.st_uid != 0" in staging
+    assert "root_stat.st_gid != 0" in staging
     assert "tempfile.mkstemp" in staging
     assert "base64.b64decode" in staging
     assert "print(str(exc))" not in staging
     assert "repr(exc)" not in staging
+
+
+def test_generic_verifier_cannot_leak_staging_path_before_safe_classifier() -> None:
+    start = OPERATOR.index("verify(){")
+    end = OPERATOR.index("\nenqueue_batch(){", start)
+    verifier = OPERATOR[start:end]
+    assert "STAGING" not in verifier
+    assert "stat -c" not in verifier
 
 
 def test_submit_intake_does_not_depend_on_legacy_host_venv() -> None:
