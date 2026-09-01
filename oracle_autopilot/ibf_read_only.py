@@ -194,8 +194,19 @@ def _ibf_get_html(url: str, budget: _ReadBudget) -> str:
     return _decode_html(raw, charset)
 
 
+def _normalize_legacy_viewer_url(url: str) -> str:
+    """Normalize only the IBF viewer's known duplicate-slash legacy paths."""
+
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.path.startswith("/viewer//"):
+        normalized_path = f"/viewer/{parsed.path.removeprefix('/viewer//')}"
+        if normalized_path in IBF_VIEWER_PATHS:
+            return urllib.parse.urlunsplit(parsed._replace(path=normalized_path))
+    return url
+
+
 def _canonical_session_url(href: str, base_url: str) -> tuple[str, int, int] | None:
-    absolute = urllib.parse.urljoin(base_url, href)
+    absolute = _normalize_legacy_viewer_url(urllib.parse.urljoin(base_url, href))
     try:
         parsed = _validate_official_url(absolute)
     except AutopilotContractError:
@@ -220,7 +231,7 @@ def _canonical_session_url(href: str, base_url: str) -> tuple[str, int, int] | N
 
 
 def _canonical_personal_url(href: str, base_url: str, event_id: int, round_id: int) -> tuple[str, str] | None:
-    absolute = urllib.parse.urljoin(base_url, href)
+    absolute = _normalize_legacy_viewer_url(urllib.parse.urljoin(base_url, href))
     try:
         parsed = _validate_official_url(absolute)
     except AutopilotContractError:
@@ -243,7 +254,7 @@ def _canonical_personal_url(href: str, base_url: str, event_id: int, round_id: i
 
 
 def _validated_board_url(href: str, base_url: str, event_id: int, round_id: int) -> str | None:
-    absolute = urllib.parse.urljoin(base_url, href)
+    absolute = _normalize_legacy_viewer_url(urllib.parse.urljoin(base_url, href))
     try:
         parsed = _validate_official_url(absolute)
     except AutopilotContractError:
