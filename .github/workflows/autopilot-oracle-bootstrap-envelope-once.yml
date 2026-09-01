@@ -349,3 +349,5 @@ jobs:
           [[ '${{ steps.install.outcome }}' == success ]]
 
 # continuation-bootstrap-retry: 2026-09-01T04:55:30Z helper-v2-health-run-33471535531
+
+# continuation-bootstrap-rerun: 2026-09-01T05:00:00Z exact-head-006b8aea
