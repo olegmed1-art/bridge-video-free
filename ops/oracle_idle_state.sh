@@ -53,9 +53,9 @@ if [[ -e "$HOST_LEASE_FILE" || -L "$HOST_LEASE_FILE" ]]; then
     reason="host_lease_invalid"
     exit 0
   fi
+  lease_expires="${BASH_REMATCH[1]}"
   now_epoch="$(date +%s 2>/dev/null || true)"
   [[ "$now_epoch" =~ ^[0-9]+$ ]] || { reason="clock_unavailable"; exit 0; }
-  lease_expires="${BASH_REMATCH[1]}"
   if (( lease_expires > now_epoch )); then
     state="BUSY"
     reason="host_lease_active"
