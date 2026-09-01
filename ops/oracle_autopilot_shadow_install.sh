@@ -48,6 +48,7 @@ fi
 [[ "$(cat "$REPO_DIR/AUTOPILOT_SOURCE_REVISION")" == "$SOURCE_REVISION" ]] \
   || die "source revision marker does not match AUTOPILOT_SOURCE_REVISION"
 [[ -f "$REPO_DIR/oracle_autopilot/worker.py" ]] || die "Oracle Autopilot worker code is missing"
+[[ -f "$REPO_DIR/oracle_autopilot/worker_v17.py" ]] || die "Oracle Autopilot structured IBF worker code is missing"
 [[ -f "$REPO_DIR/autopilot_phase3b/policy.py" ]] || die "Phase 3B policy code is missing"
 [[ -f "$SERVICE_SRC" ]] || die "systemd unit template is missing"
 command -v python3 >/dev/null 2>&1 || die "python3 is required"
@@ -108,13 +109,23 @@ with psycopg.connect(dsn, connect_timeout=10, application_name="autopilot-shadow
                    has_table_privilege(current_user, 'autopilot.task', 'SELECT'),
                    has_table_privilege(current_user, 'autopilot.task', 'INSERT'),
                    has_function_privilege(current_user, 'autopilot.claim_next_task(text,integer)', 'EXECUTE'),
-                   has_function_privilege(current_user, 'autopilot.complete_task(uuid,text,bigint,text,text,jsonb)', 'EXECUTE')
+                   has_function_privilege(current_user, 'autopilot.complete_task(uuid,text,bigint,text,text,jsonb)', 'EXECUTE'),
+                   has_function_privilege(current_user, 'autopilot.store_ibf_structured_artifact(uuid,text,bigint,text,text,bytea,jsonb)', 'EXECUTE'),
+                   has_table_privilege(current_user, 'autopilot.ibf_structured_artifact', 'SELECT'),
+                   has_table_privilege(current_user, 'autopilot.ibf_structured_artifact', 'INSERT')
         """)
-        user, schema_usage, table_select, table_insert, can_claim, can_complete = cur.fetchone()
+        (
+            user, schema_usage, table_select, table_insert, can_claim, can_complete,
+            can_store_ibf, artifact_select, artifact_insert,
+        ) = cur.fetchone()
 expected = os.environ["AUTOPILOT_EXPECTED_DB_USER"]
 assert user == expected, (user, expected)
-assert schema_usage and not table_select and not table_insert and can_claim and can_complete, (
-    schema_usage, table_select, table_insert, can_claim, can_complete
+assert (
+    schema_usage and not table_select and not table_insert and can_claim and can_complete
+    and can_store_ibf and not artifact_select and not artifact_insert
+), (
+    schema_usage, table_select, table_insert, can_claim, can_complete,
+    can_store_ibf, artifact_select, artifact_insert,
 )
 print("AUTOPILOT_DB_PREFLIGHT_PASS")
 PY
