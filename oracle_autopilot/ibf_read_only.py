@@ -1,9 +1,10 @@
 """Bounded read-only retrieval for the first real Autopilot IBF task.
 
 This module deliberately performs no bridge inference. It discovers the latest
-actual participation from official IBF pages, retrieves the personal board list
-and verifies each linked field page. The retained result is compact evidence for
-later analysis; missing source data fails closed instead of being invented.
+actual participation from official IBF pages, retrieves the personal board list,
+and verifies each linked field page. Callers may retain the compact completion
+summary alone or the complete structured source artifact beside it; missing
+source data fails closed instead of being invented.
 """
 
 from __future__ import annotations
@@ -19,7 +20,10 @@ from html.parser import HTMLParser
 from typing import Any
 
 from .contract import AutopilotContractError, AutopilotRetryableError
-
+from .ibf_board_structured import (
+    build_structured_tournament_artifact,
+    extract_structured_board,
+)
 
 IBF_INDEX_URL = "https://main.bridge.co.il/results/"
 IBF_MEMBER_URL = "https://bridge.co.il/viewer/membermplist.php?id={player_id}"
@@ -46,7 +50,7 @@ IBF_SOURCE_AUTHORITY = "ISRAEL_BRIDGE_FEDERATION_OFFICIAL_RESULTS"
 
 
 class _RejectIBFRedirects(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise AutopilotContractError("IBF_REDIRECT_REJECTED")
 
 
@@ -483,8 +487,10 @@ def _count_field_rows(document: _ParsedDocument) -> int:
     return count
 
 
-def fetch_ibf_read_only_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
-    """Discover latest actual participation and retain compact official evidence."""
+def _fetch_ibf_read_only_bundle(
+    goal_json: dict[str, Any], *, include_structured: bool
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """Fetch each official page once and optionally build the complete artifact."""
 
     player_id = goal_json.get("ibf_player_id")
     if not isinstance(player_id, str) or re.fullmatch(r"[1-9][0-9]{0,9}", player_id) is None:
@@ -550,6 +556,7 @@ def fetch_ibf_read_only_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
     )
 
     compact_boards: list[dict[str, Any]] = []
+    structured_boards: list[dict[str, Any]] = []
     for board in boards:
         board_html = _ibf_get_html(board["board_url"], budget)
         board_doc = _parse_document(board_html)
@@ -566,8 +573,16 @@ def fetch_ibf_read_only_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
                 "field_page_sha256": hashlib.sha256(board_html.encode("utf-8")).hexdigest(),
             }
         )
+        if include_structured:
+            structured_boards.append(
+                extract_structured_board(
+                    board_html,
+                    expected_board_number=board["board_number"],
+                    target_seat=latest["seat"],
+                )
+            )
 
-    return {
+    snapshot = {
         "source_authority": IBF_SOURCE_AUTHORITY,
         "ibf_player_id": player_id,
         "latest_participation": {
@@ -591,3 +606,31 @@ def fetch_ibf_read_only_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
         "cost_actual_microusd": 0,
         "analysis_scope": "SOURCE_RETRIEVAL_AND_FIELD_EVIDENCE_ONLY",
     }
+    structured_artifact = (
+        build_structured_tournament_artifact(snapshot, structured_boards)
+        if include_structured
+        else None
+    )
+    return snapshot, structured_artifact
+
+
+def fetch_ibf_read_only_snapshot(goal_json: dict[str, Any]) -> dict[str, Any]:
+    """Discover latest actual participation and retain compact official evidence."""
+
+    snapshot, _structured_artifact = _fetch_ibf_read_only_bundle(
+        goal_json, include_structured=False
+    )
+    return snapshot
+
+
+def fetch_ibf_structured_evidence(
+    goal_json: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Return compact completion evidence plus the complete official artifact."""
+
+    snapshot, structured_artifact = _fetch_ibf_read_only_bundle(
+        goal_json, include_structured=True
+    )
+    if structured_artifact is None:  # Defensive type narrowing; cannot occur above.
+        raise AutopilotContractError("IBF_STRUCTURED_ARTIFACT_MISSING")
+    return snapshot, structured_artifact
