@@ -47,7 +47,8 @@ RUN chmod 0755 /usr/local/bin/universal-video-container-entrypoint \
       /var/lib/universal-video/spool \
       /var/lib/universal-video/output \
       /var/lib/universal-video/media \
-      /var/lib/universal-video/model-cache
+      /var/lib/universal-video/model-cache \
+      /var/lib/universal-video/model-cache/speaker
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -55,6 +56,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UNIVERSAL_VIDEO_SPOOL_ROOT=/var/lib/universal-video/spool \
     UNIVERSAL_VIDEO_OUTPUT_ROOT=/var/lib/universal-video/output \
     UNIVERSAL_VIDEO_MEDIA_ROOT=/var/lib/universal-video/media \
+    UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE=/var/lib/universal-video/model-cache/speaker \
     HF_HOME=/var/lib/universal-video/model-cache \
     HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1
