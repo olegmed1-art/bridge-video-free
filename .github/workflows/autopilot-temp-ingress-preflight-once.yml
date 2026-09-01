@@ -37,101 +37,167 @@ jobs:
           ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n bash -s' <<'REMOTE'
-          set -Eeuo pipefail
+          set -Euo pipefail
+          fail() {
+            echo "AUTOPILOT_PREFLIGHT_FAILURE_STAGE=$1"
+            echo 'AUTOPILOT_DATABASE_MUTATED=NO'
+            echo 'AUTOPILOT_PRODUCTION_TARGETED=NO'
+            echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
+            exit 1
+          }
+
           service=school-autopilot-shadow.service
           root=/opt/bridge-school/school-autopilot
           env_file="$root/autopilot-shadow.env"
-          python_bin="$root/current/.venv/bin/python"
 
-          [[ "$(systemctl is-active "$service")" == active ]]
-          [[ "$(systemctl is-enabled "$service")" == enabled ]]
-          [[ "$(stat -c '%U:%G:%a' "$env_file")" == root:root:600 ]]
-          [[ -x "$python_bin" ]]
+          active="$(systemctl is-active "$service" 2>/dev/null || true)"
+          echo "AUTOPILOT_SERVICE_ACTIVE=$active"
+          [[ "$active" == active ]] || fail service_active
 
+          enabled="$(systemctl is-enabled "$service" 2>/dev/null || true)"
+          echo "AUTOPILOT_SERVICE_ENABLED=$enabled"
+          [[ "$enabled" == enabled ]] || fail service_enabled
+
+          restarts="$(systemctl show -p NRestarts --value "$service" 2>/dev/null || true)"
+          echo "AUTOPILOT_SERVICE_NRESTARTS=${restarts:-unavailable}"
+          [[ "$restarts" =~ ^[0-9]+$ ]] || fail service_restart_counter
+
+          env_meta="$(stat -c '%U:%G:%a' "$env_file" 2>/dev/null || true)"
+          echo "AUTOPILOT_ENV_METADATA=${env_meta:-missing}"
+          [[ "$env_meta" == root:root:600 ]] || fail environment_metadata
+
+          release="$(readlink -f "$root/current" 2>/dev/null || true)"
+          [[ -n "$release" && -d "$release" ]] || fail current_release
+          echo 'AUTOPILOT_CURRENT_RELEASE_PRESENT=YES'
+
+          python_bin=''
+          for candidate in \
+            "$release/.venv/bin/python" \
+            "$root/.venv/bin/python" \
+            /opt/bridge-school/bridge-video-free/.venv/bin/python; do
+            if [[ -x "$candidate" ]]; then
+              python_bin="$candidate"
+              break
+            fi
+          done
+          [[ -n "$python_bin" ]] || fail python_runtime
+          echo 'AUTOPILOT_PYTHON_RUNTIME_PRESENT=YES'
+
+          set +u
           set -a
-          source "$env_file"
+          source "$env_file" || fail environment_load
           set +a
-          [[ -n "${AUTOPILOT_DATABASE_URL:-}" ]]
+          set -u
+          [[ -n "${AUTOPILOT_DATABASE_URL:-}" ]] || fail database_url_absent
+          echo 'AUTOPILOT_DATABASE_URL_PRESENT=YES'
 
           AUTOPILOT_DATABASE_URL="$AUTOPILOT_DATABASE_URL" "$python_bin" - <<'PY'
           import os
+          import sys
           import urllib.parse
+
           import psycopg
 
-          dsn = os.environ['AUTOPILOT_DATABASE_URL']
-          parsed = urllib.parse.urlsplit(dsn)
-          host = (parsed.hostname or '').lower()
-          assert parsed.username == 'autopilot_runtime_login'
-          assert (parsed.path.lstrip('/') or 'neondb') == 'neondb'
-          assert host.startswith('ep-floral-field-b1pjs2of.')
-          assert host.endswith('.neon.tech')
-          assert 'pooler' not in host
+          stage = 'parse_dsn'
+          try:
+              dsn = os.environ['AUTOPILOT_DATABASE_URL']
+              parsed = urllib.parse.urlsplit(dsn)
+              host = (parsed.hostname or '').lower()
+              endpoint_ok = host.startswith('ep-floral-field-b1pjs2of.')
+              print(f'AUTOPILOT_DSN_ROLE_MATCH={str(parsed.username == "autopilot_runtime_login").upper()}', flush=True)
+              print(f'AUTOPILOT_DSN_DATABASE_MATCH={str((parsed.path.lstrip("/") or "neondb") == "neondb").upper()}', flush=True)
+              print(f'AUTOPILOT_DSN_TEMP_ENDPOINT_MATCH={str(endpoint_ok).upper()}', flush=True)
+              print(f'AUTOPILOT_DSN_DIRECT_ENDPOINT={str("pooler" not in host).upper()}', flush=True)
+              assert parsed.username == 'autopilot_runtime_login'
+              assert (parsed.path.lstrip('/') or 'neondb') == 'neondb'
+              assert endpoint_ok and host.endswith('.neon.tech') and 'pooler' not in host
 
-          with psycopg.connect(
-              dsn,
-              connect_timeout=10,
-              options='-c default_transaction_read_only=on',
-          ) as conn:
-              with conn.cursor() as cur:
-                  cur.execute(
-                      "SELECT current_database(), current_user, "
-                      "current_setting('transaction_read_only')"
-                  )
-                  database_name, role_name, read_only = cur.fetchone()
-                  assert database_name == 'neondb'
-                  assert role_name == 'autopilot_runtime_login'
-                  assert read_only == 'on'
+              stage = 'connect_read_only'
+              with psycopg.connect(
+                  dsn,
+                  connect_timeout=10,
+                  autocommit=True,
+                  options='-c default_transaction_read_only=on',
+              ) as conn:
+                  with conn.cursor() as cur:
+                      stage = 'identity'
+                      cur.execute(
+                          "SELECT current_database(), current_user, "
+                          "current_setting('transaction_read_only')"
+                      )
+                      database_name, role_name, read_only = cur.fetchone()
+                      assert database_name == 'neondb'
+                      assert role_name == 'autopilot_runtime_login'
+                      assert read_only == 'on'
+                      print('AUTOPILOT_DATABASE_READ_ONLY=YES', flush=True)
 
-                  cur.execute(
-                      "SELECT EXISTS (SELECT 1 FROM public.schema_migration "
-                      "WHERE migration_key='0306_autopilot_bounded_task_ingress')"
-                  )
-                  migration_0306 = bool(cur.fetchone()[0])
+                      stage = 'ingress_function'
+                      cur.execute(
+                          "SELECT to_regprocedure(" 
+                          "'autopilot.register_approved_ibf_analysis(text,text,text,integer)'"
+                          ")"
+                      )
+                      ingress_oid = cur.fetchone()[0]
+                      ingress_function = ingress_oid is not None
+                      ingress_execute = False
+                      if ingress_function:
+                          cur.execute(
+                              "SELECT has_function_privilege(current_user, %s::oid, 'EXECUTE')",
+                              (ingress_oid,),
+                          )
+                          ingress_execute = bool(cur.fetchone()[0])
 
-                  cur.execute(
-                      "SELECT to_regprocedure(" 
-                      "'autopilot.register_approved_ibf_analysis(text,text,text,integer)'"
-                      ") IS NOT NULL"
-                  )
-                  ingress_function = bool(cur.fetchone()[0])
+                      stage = 'migration_registry'
+                      migration_0306 = None
+                      try:
+                          cur.execute(
+                              "SELECT EXISTS (SELECT 1 FROM public.schema_migration "
+                              "WHERE migration_key='0306_autopilot_bounded_task_ingress')"
+                          )
+                          migration_0306 = bool(cur.fetchone()[0])
+                      except psycopg.errors.InsufficientPrivilege:
+                          migration_0306 = None
 
-                  cur.execute(
-                      "SELECT CASE WHEN to_regprocedure(" 
-                      "'autopilot.register_approved_ibf_analysis(text,text,text,integer)'"
-                      ") IS NULL THEN false ELSE has_function_privilege(" 
-                      "current_user, "
-                      "'autopilot.register_approved_ibf_analysis(text,text,text,integer)', "
-                      "'EXECUTE') END"
-                  )
-                  ingress_execute = bool(cur.fetchone()[0])
+                      stage = 'queue_counts'
+                      queue = {}
+                      active_tasks = None
+                      try:
+                          cur.execute(
+                              "SELECT status, count(*)::bigint FROM autopilot.task "
+                              "GROUP BY status ORDER BY status"
+                          )
+                          queue = {status: int(count) for status, count in cur.fetchall()}
+                          cur.execute(
+                              "SELECT count(*)::bigint FROM autopilot.task "
+                              "WHERE status IN ('NEW','VALIDATING','READY','RUNNING'," 
+                              "'WAITING_EXTERNAL','EVALUATING')"
+                          )
+                          active_tasks = int(cur.fetchone()[0])
+                      except psycopg.errors.InsufficientPrivilege:
+                          queue = {'SELECT_PRIVILEGE': 'UNAVAILABLE'}
+                          active_tasks = None
 
-                  cur.execute(
-                      "SELECT status, count(*)::bigint FROM autopilot.task "
-                      "GROUP BY status ORDER BY status"
-                  )
-                  queue = {status: int(count) for status, count in cur.fetchall()}
-
-                  cur.execute(
-                      "SELECT count(*)::bigint FROM autopilot.task "
-                      "WHERE status IN ('NEW','VALIDATING','READY','RUNNING'," 
-                      "'WAITING_EXTERNAL','EVALUATING')"
-                  )
-                  active_tasks = int(cur.fetchone()[0])
-
-          print('AUTOPILOT_TEMP_ENDPOINT_VERIFIED=YES')
-          print(f'AUTOPILOT_MIGRATION_0306_PRESENT={str(migration_0306).upper()}')
-          print(f'AUTOPILOT_BOUNDED_INGRESS_PRESENT={str(ingress_function).upper()}')
-          print(f'AUTOPILOT_RUNTIME_CAN_EXECUTE_INGRESS={str(ingress_execute).upper()}')
-          print(f'AUTOPILOT_ACTIVE_TASK_COUNT={active_tasks}')
-          print('AUTOPILOT_QUEUE_COUNTS=' + ','.join(
-              f'{key}:{queue[key]}' for key in sorted(queue)
-          ))
-          print('AUTOPILOT_DATABASE_MUTATED=NO')
-          print('AUTOPILOT_PRODUCTION_TARGETED=NO')
+              print('AUTOPILOT_TEMP_ENDPOINT_VERIFIED=YES', flush=True)
+              migration_text = 'UNAVAILABLE' if migration_0306 is None else str(migration_0306).upper()
+              print(f'AUTOPILOT_MIGRATION_0306_PRESENT={migration_text}', flush=True)
+              print(f'AUTOPILOT_BOUNDED_INGRESS_PRESENT={str(ingress_function).upper()}', flush=True)
+              print(f'AUTOPILOT_RUNTIME_CAN_EXECUTE_INGRESS={str(ingress_execute).upper()}', flush=True)
+              active_text = 'UNAVAILABLE' if active_tasks is None else str(active_tasks)
+              print(f'AUTOPILOT_ACTIVE_TASK_COUNT={active_text}', flush=True)
+              print('AUTOPILOT_QUEUE_COUNTS=' + ','.join(
+                  f'{key}:{queue[key]}' for key in sorted(queue)
+              ), flush=True)
+              print('AUTOPILOT_DATABASE_MUTATED=NO', flush=True)
+              print('AUTOPILOT_PRODUCTION_TARGETED=NO', flush=True)
+          except Exception as exc:
+              print(f'AUTOPILOT_PYTHON_FAILURE_STAGE={stage}', flush=True)
+              print(f'AUTOPILOT_PYTHON_FAILURE_TYPE={type(exc).__name__}', flush=True)
+              print('AUTOPILOT_DATABASE_MUTATED=NO', flush=True)
+              print('AUTOPILOT_PRODUCTION_TARGETED=NO', flush=True)
+              sys.exit(1)
           PY
+          py_rc=$?
+          [[ $py_rc -eq 0 ]] || fail python_database_preflight
 
-          echo "AUTOPILOT_SERVICE_ACTIVE=$(systemctl is-active "$service")"
-          echo "AUTOPILOT_SERVICE_ENABLED=$(systemctl is-enabled "$service")"
-          echo "AUTOPILOT_SERVICE_NRESTARTS=$(systemctl show -p NRestarts --value "$service")"
           echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
           REMOTE
