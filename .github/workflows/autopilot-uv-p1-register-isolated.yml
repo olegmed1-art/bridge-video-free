@@ -60,14 +60,18 @@ jobs:
           role_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID/roles/$MIGRATION_ROLE")"
           uri_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" \
             "$api/connection_uri?branch_id=$TEMP_BRANCH_ID&database_name=neondb&role_name=$MIGRATION_ROLE&pooled=false")"
-          BRANCH_JSON="$branch_json" ENDPOINT_JSON="$endpoint_json" ROLE_JSON="$role_json" URI_JSON="$uri_json" python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          uri="$(BRANCH_JSON="$branch_json" ENDPOINT_JSON="$endpoint_json" ROLE_JSON="$role_json" URI_JSON="$uri_json" python3 - <<'PY'
           import json, os, urllib.parse
           bid = os.environ['TEMP_BRANCH_ID']
           role = os.environ['MIGRATION_ROLE']
-          branch = json.loads(os.environ['BRANCH_JSON']).get('branch', json.loads(os.environ['BRANCH_JSON']))
-          endpoints = json.loads(os.environ['ENDPOINT_JSON']).get('endpoints', [])
-          role_obj = json.loads(os.environ['ROLE_JSON']).get('role', json.loads(os.environ['ROLE_JSON']))
-          uri = json.loads(os.environ['URI_JSON']).get('uri')
+          branch_payload = json.loads(os.environ['BRANCH_JSON'])
+          endpoint_payload = json.loads(os.environ['ENDPOINT_JSON'])
+          role_payload = json.loads(os.environ['ROLE_JSON'])
+          uri_payload = json.loads(os.environ['URI_JSON'])
+          branch = branch_payload.get('branch', branch_payload)
+          endpoints = endpoint_payload.get('endpoints', [])
+          role_obj = role_payload.get('role', role_payload)
+          uri = uri_payload.get('uri')
           assert branch.get('id') == bid, 'temporary branch identity mismatch'
           endpoint_ids = {x.get('id') for x in endpoints if x.get('branch_id') == bid and x.get('id')}
           assert endpoint_ids, 'temporary branch has no matching endpoint'
@@ -79,10 +83,11 @@ jobs:
           host = (parsed.hostname or '').lower()
           assert host.endswith('.neon.tech'), 'non-Neon host'
           assert any(host.startswith(endpoint_id + '.') for endpoint_id in endpoint_ids), 'endpoint host mismatch'
-          print(f'::add-mask::{uri}')
-          print(f'database_url={uri}')
-          print(f'endpoint_count={len(endpoint_ids)}')
+          print(uri)
           PY
+          )"
+          echo "::add-mask::$uri"
+          echo "database_url=$uri" >> "$GITHUB_OUTPUT"
           echo 'NEON_TARGET_BRANCH_VERIFIED=YES'
           echo 'NEON_PRODUCTION_BRANCH_TARGETED=NO'
 
