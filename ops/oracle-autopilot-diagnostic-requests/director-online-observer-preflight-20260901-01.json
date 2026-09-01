@@ -1,0 +1,7 @@
+{
+  "request_id": "director-online-observer-preflight-20260901-01",
+  "action": "inspect_shadow_failure",
+  "target_host": "158.180.47.161",
+  "source_revision": "d908565a5de4481f0bf9a1d2a489f04f8893af65",
+  "no_instance_stop": true
+}
