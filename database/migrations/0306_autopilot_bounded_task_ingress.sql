@@ -77,7 +77,9 @@ BEGIN
     );
 
     -- Exact replay is always allowed and returns the canonical task identity.
-    SELECT * INTO existing FROM autopilot.task WHERE task_key = p_task_key;
+    SELECT t.* INTO existing
+      FROM autopilot.task AS t
+     WHERE t.task_key = p_task_key;
     IF FOUND THEN
         IF existing.goal_type <> 'IBF_READ_ONLY_ANALYSIS'
            OR existing.goal_json <> goal_payload
@@ -95,17 +97,17 @@ BEGIN
     PERFORM pg_advisory_xact_lock(hashtextextended('autopilot:ibf_read_only_ingress', 1015));
 
     SELECT count(*) INTO active_count
-      FROM autopilot.task
-     WHERE goal_type = 'IBF_READ_ONLY_ANALYSIS'
-       AND status NOT IN ('OWNER_REQUIRED', 'FAILED_CLOSED', 'BUDGET_STOP', 'DONE', 'CANCELLED');
+      FROM autopilot.task AS t
+     WHERE t.goal_type = 'IBF_READ_ONLY_ANALYSIS'
+       AND t.status NOT IN ('OWNER_REQUIRED', 'FAILED_CLOSED', 'BUDGET_STOP', 'DONE', 'CANCELLED');
     IF active_count >= 3 THEN
         RAISE EXCEPTION 'AUTOPILOT_INGRESS_ACTIVE_LIMIT';
     END IF;
 
     SELECT count(*) INTO recent_count
-      FROM autopilot.task
-     WHERE goal_type = 'IBF_READ_ONLY_ANALYSIS'
-       AND created_at > now() - interval '1 hour';
+      FROM autopilot.task AS t
+     WHERE t.goal_type = 'IBF_READ_ONLY_ANALYSIS'
+       AND t.created_at > now() - interval '1 hour';
     IF recent_count >= 12 THEN
         RAISE EXCEPTION 'AUTOPILOT_INGRESS_RATE_LIMIT';
     END IF;
@@ -135,7 +137,9 @@ BEGIN
     RETURNING * INTO inserted;
 
     IF inserted.task_id IS NULL THEN
-        SELECT * INTO existing FROM autopilot.task WHERE task_key = p_task_key;
+        SELECT t.* INTO existing
+          FROM autopilot.task AS t
+         WHERE t.task_key = p_task_key;
         IF NOT FOUND
            OR existing.goal_type <> 'IBF_READ_ONLY_ANALYSIS'
            OR existing.goal_json <> goal_payload
