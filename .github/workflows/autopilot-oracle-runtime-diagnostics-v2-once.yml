@@ -1,0 +1,86 @@
+name: Autopilot Oracle runtime diagnostics v2 (one-shot)
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths: ['.github/workflows/autopilot-oracle-runtime-diagnostics-v2-once.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  diagnose:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Verify Oracle SSH boundary
+        id: ssh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          work="$RUNNER_TEMP/autopilot-runtime-diagnostics-v2"
+          mkdir -p "$work"
+          key="$work/id_oracle"
+          printf '%s\n' "$SSH_KEY_ORACLE" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo 'ORACLE_SSH_PREFLIGHT=PASS'
+
+      - name: Read metadata-only service environment contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          root=/opt/bridge-school/school-autopilot
+          env_file="$root/autopilot-shadow.env"
+          echo "AUTOPILOT_ENV_FILE_PRESENT=$([[ -s "$env_file" ]] && echo YES || echo NO)"
+          if [[ -s "$env_file" ]]; then
+            echo "AUTOPILOT_ENV_FILE_METADATA=$(stat -c '%U:%G:%a:%s' "$env_file")"
+            while IFS= read -r key; do
+              [[ "$key" =~ ^[A-Z0-9_]+$ ]] && echo "AUTOPILOT_ENV_KEY=$key"
+            done < <(sed -n 's/^\([A-Z0-9_][A-Z0-9_]*\)=.*/\1/p' "$env_file" | sort -u)
+          fi
+          broker="$root/autopilot-broker.env"
+          echo "AUTOPILOT_BROKER_ENV_PRESENT=$([[ -s "$broker" ]] && echo YES || echo NO)"
+          if [[ -s "$broker" ]]; then
+            echo "AUTOPILOT_BROKER_ENV_METADATA=$(stat -c '%U:%G:%a:%s' "$broker")"
+          fi
+          current_revision=missing
+          if [[ -L "$root/current" && -s "$root/current/SOURCE_REVISION" ]]; then
+            current_revision="$(cat "$root/current/SOURCE_REVISION")"
+          fi
+          echo "AUTOPILOT_CURRENT_REVISION=$current_revision"
+          echo "AUTOPILOT_SERVICE_ACTIVE=$(systemctl is-active school-autopilot-shadow.service 2>/dev/null || true)"
+          echo "AUTOPILOT_SERVICE_ENABLED=$(systemctl is-enabled school-autopilot-shadow.service 2>/dev/null || true)"
+          echo "AUTOPILOT_UNIT_ENV_FILES_BEGIN"
+          systemctl cat school-autopilot-shadow.service 2>/dev/null \
+            | sed -n 's/^[[:space:]]*EnvironmentFile=//p' \
+            | sed 's/^/AUTOPILOT_UNIT_ENV_FILE=/' || true
+          echo "AUTOPILOT_UNIT_ENV_FILES_END"
+          echo 'AUTOPILOT_SERVICE_RESTARTED=NO'
+          echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
+          REMOTE
