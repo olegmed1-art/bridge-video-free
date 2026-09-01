@@ -502,13 +502,16 @@ jobs:
             AND EXISTS (
               SELECT 1 FROM autopilot.step_attempt s
               WHERE s.task_id = t.task_id
-                AND s.worker_id = 'oracle-autopilot-production-canary-1'
-                AND s.status = 'DONE'
+                AND s.executor_type = 'ORACLE_RESIDENT'
+                AND s.capability_name = 'shadow.noop'
+                AND s.status = 'COMPLETED'
             )
             AND EXISTS (
               SELECT 1 FROM autopilot.task_event ev
               WHERE ev.task_id = t.task_id
                 AND ev.event_type = 'TASK_DONE'
+                AND ev.actor_type = 'ORACLE_WORKER'
+                AND ev.actor_ref = 'oracle-autopilot-production-canary-1'
             );
           PSQL
           )"
