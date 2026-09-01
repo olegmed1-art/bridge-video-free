@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,7 +15,16 @@ def _write_executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
-def _run_guard(tmp_path: Path, *, python_output: str = "IDLE:jobs=0,research=0,control=0,video=0", lease: str | None = None, video_dsn: str | None = "postgres://video", observer_busy: bool = False) -> str:
+def _run_guard(
+    tmp_path: Path,
+    *,
+    python_output: str = "IDLE:jobs=0,research=0,control=0,video=0",
+    lease: str | None = None,
+    video_dsn: str | None = "postgres://video",
+    observer_busy: bool = False,
+    video_spool_leaf: str | None = None,
+    video_spool_present: bool = True,
+) -> str:
     bindir = tmp_path / "bin"
     bindir.mkdir()
     _write_executable(bindir / "systemctl", "#!/bin/sh\necho active\n")
@@ -30,6 +40,13 @@ def _run_guard(tmp_path: Path, *, python_output: str = "IDLE:jobs=0,research=0,c
     lease_file = tmp_path / "oracle-host-lease"
     if lease is not None:
         lease_file.write_text(lease, encoding="utf-8")
+    video_spool = tmp_path / "video-spool"
+    if video_spool_present:
+        video_spool.mkdir()
+        for leaf in ("inbox", "running", "progress", "done", "failed", "results"):
+            (video_spool / leaf).mkdir()
+        if video_spool_leaf is not None:
+            (video_spool / video_spool_leaf / "work.json").write_text("{}", encoding="utf-8")
 
     env = os.environ.copy()
     env.update(
@@ -38,7 +55,9 @@ def _run_guard(tmp_path: Path, *, python_output: str = "IDLE:jobs=0,research=0,c
             "ASSISTANT_LAB_ENV_FILE": str(env_file),
             "ASSISTANT_LAB_PYTHON": str(fake_python),
             "BRIDGE_VIDEO_QUEUE_DSN_FILE": str(queue_file),
+            "BRIDGE_VIDEO_SPOOL_ROOT": str(video_spool),
             "ORACLE_HOST_LEASE_FILE": str(lease_file),
+            "ORACLE_IDLE_MAX_OPERATOR_LEASE_SECONDS": "3600",
             "ORACLE_IDLE_TEST_RESULT": python_output,
         }
     )
@@ -58,7 +77,7 @@ def test_schema_counts_every_nonterminal_research_stage() -> None:
     assert "assistant_lab.control_command" in sql
 
 
-def test_idle_requires_all_database_families_idle(tmp_path: Path) -> None:
+def test_idle_requires_all_database_families_and_local_spool_idle(tmp_path: Path) -> None:
     out = _run_guard(tmp_path)
     assert "ORACLE_IDLE_STATE=IDLE" in out
 
@@ -68,10 +87,38 @@ def test_active_database_family_is_busy(tmp_path: Path) -> None:
     assert "ORACLE_IDLE_STATE=BUSY" in out
 
 
-def test_missing_video_telemetry_is_unknown(tmp_path: Path) -> None:
+def test_video_queue_nonterminal_states_are_part_of_live_query() -> None:
+    script = SCRIPT.read_text(encoding="utf-8")
+    assert "status IN ('PENDING_CANARY','QUEUED','LEASED')" in script
+
+
+def test_missing_video_queue_telemetry_is_unknown(tmp_path: Path) -> None:
     out = _run_guard(tmp_path, video_dsn=None)
     assert "ORACLE_IDLE_REASON=video_queue_dsn_unavailable" in out
     assert "ORACLE_IDLE_STATE=UNKNOWN" in out
+
+
+def test_missing_video_spool_telemetry_is_unknown(tmp_path: Path) -> None:
+    out = _run_guard(tmp_path, video_spool_present=False)
+    assert "ORACLE_IDLE_REASON=video_spool_unavailable" in out
+    assert "ORACLE_IDLE_STATE=UNKNOWN" in out
+
+
+def test_local_video_spool_pending_running_and_progress_are_busy(tmp_path: Path) -> None:
+    for leaf in ("inbox", "running", "progress"):
+        case = tmp_path / leaf
+        case.mkdir()
+        out = _run_guard(case, video_spool_leaf=leaf)
+        assert f"ORACLE_IDLE_REASON=video_spool_{leaf}_pending" in out
+        assert "ORACLE_IDLE_STATE=BUSY" in out
+
+
+def test_terminal_video_spool_files_do_not_block_idle(tmp_path: Path) -> None:
+    for leaf in ("done", "failed", "results"):
+        case = tmp_path / leaf
+        case.mkdir()
+        out = _run_guard(case, video_spool_leaf=leaf)
+        assert "ORACLE_IDLE_STATE=IDLE" in out
 
 
 def test_observer_experiment_is_busy(tmp_path: Path) -> None:
@@ -81,14 +128,23 @@ def test_observer_experiment_is_busy(tmp_path: Path) -> None:
 
 
 def test_live_operator_lease_is_busy(tmp_path: Path) -> None:
-    out = _run_guard(tmp_path, lease="expires_at_epoch=4102444800\n")
+    expires = int(time.time()) + 300
+    out = _run_guard(tmp_path, lease=f"expires_at_epoch={expires}\n")
     assert "ORACLE_IDLE_REASON=host_lease_active" in out
     assert "ORACLE_IDLE_STATE=BUSY" in out
 
 
 def test_stale_operator_lease_fails_closed(tmp_path: Path) -> None:
-    out = _run_guard(tmp_path, lease="expires_at_epoch=1000000000\n")
+    expires = int(time.time()) - 10
+    out = _run_guard(tmp_path, lease=f"expires_at_epoch={expires}\n")
     assert "ORACLE_IDLE_REASON=host_lease_stale" in out
+    assert "ORACLE_IDLE_STATE=UNKNOWN" in out
+
+
+def test_implausibly_long_operator_lease_fails_closed(tmp_path: Path) -> None:
+    expires = int(time.time()) + 7200
+    out = _run_guard(tmp_path, lease=f"expires_at_epoch={expires}\n")
+    assert "ORACLE_IDLE_REASON=host_lease_horizon_invalid" in out
     assert "ORACLE_IDLE_STATE=UNKNOWN" in out
 
 
