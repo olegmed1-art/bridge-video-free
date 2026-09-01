@@ -57,6 +57,7 @@ image="$IMAGE_REPO:$commit"
 for dir in spool output media model-cache secrets; do
   [[ -d "$BASE_DIR/$dir" && ! -L "$BASE_DIR/$dir" ]] || die "unsafe or missing mount: $BASE_DIR/$dir"
 done
+install -d -o "$USER_NAME" -g "$GROUP_NAME" -m 0750 "$BASE_DIR/model-cache/speaker"
 [[ ! -L "$STATUS_DIR" ]] || die "unsafe or missing mount: $STATUS_DIR"
 install -d -o "$USER_NAME" -g "$GROUP_NAME" -m 0750 "$STATUS_DIR"
 if find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit | grep -q .; then
@@ -166,6 +167,7 @@ UNIVERSAL_VIDEO_IMAGE=$image
 UNIVERSAL_VIDEO_SPOOL_ROOT=/var/lib/universal-video/spool
 UNIVERSAL_VIDEO_OUTPUT_ROOT=/var/lib/universal-video/output
 UNIVERSAL_VIDEO_MEDIA_ROOT=/var/lib/universal-video/media
+UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE=/var/lib/universal-video/model-cache/speaker
 UNIVERSAL_VIDEO_STATUS_PATH=/run/bridge-school/universal-video-status.json
 HF_HOME=/var/lib/universal-video/model-cache
 GOOGLE_DRIVE_OAUTH_JSON_FILE=/run/secrets/google-drive-oauth.json
