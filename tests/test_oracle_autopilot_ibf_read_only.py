@@ -54,14 +54,16 @@ def test_ibf_contract_is_exact_and_zero_cost():
 
 
 def test_ibf_url_boundary_rejects_non_official_and_credentials():
+    assert IBF_INDEX_URL == "https://main.bridge.co.il/results/"
+    assert IBF_MEMBER_URL == "https://bridge.co.il/viewer/membermplist.php?id={player_id}"
     _validate_official_url(IBF_INDEX_URL)
-    _validate_official_url("https://www.bridge.co.il/viewer/session.php?event=30041&round=3")
+    _validate_official_url("https://bridge.co.il/viewer/session.php?event=30041&round=3")
 
     for url in (
         "https://example.com/viewer/session.php?event=30041&round=3",
         "https://user:pass@www.bridge.co.il/viewer/session.php?event=30041&round=3",
         "http://www.bridge.co.il/viewer/session.php?event=30041&round=3",
-        "https://www.bridge.co.il/../../etc/passwd",
+        "https://bridge.co.il/../../etc/passwd",
     ):
         with pytest.raises(AutopilotContractError):
             _validate_official_url(url)
@@ -69,11 +71,11 @@ def test_ibf_url_boundary_rejects_non_official_and_credentials():
 
 def test_snapshot_selects_latest_actual_participation_and_verifies_field_pages():
     member_url = IBF_MEMBER_URL.format(player_id="15031")
-    session4 = "https://www.bridge.co.il/viewer/session.php?event=30041&round=4"
-    session3 = "https://www.bridge.co.il/viewer/session.php?event=30041&round=3"
-    personal3 = "https://www.bridge.co.il/viewer/personal.php?event=30041&round=3&seat=7"
-    board1 = "https://www.bridge.co.il/viewer/board.php?event=30041&round=3&board=1"
-    board2 = "https://www.bridge.co.il/viewer/board.php?event=30041&round=3&board=2"
+    session4 = "https://bridge.co.il/viewer/session.php?event=30041&round=4"
+    session3 = "https://bridge.co.il/viewer/session.php?event=30041&round=3"
+    personal3 = "https://bridge.co.il/viewer/personal.php?event=30041&round=3&seat=7"
+    board1 = "https://bridge.co.il/viewer/board.php?event=30041&round=3&board=1"
+    board2 = "https://bridge.co.il/viewer/board.php?event=30041&round=3&board=2"
 
     pages = {
         member_url: """
@@ -83,8 +85,8 @@ def test_snapshot_selects_latest_actual_participation_and_verifies_field_pages()
         """,
         IBF_INDEX_URL: """
             <html><body>
-            <a href='https://www.bridge.co.il/viewer/session.php?event=30041&round=4'>29 Aug</a>
-            <a href='https://www.bridge.co.il/viewer/session.php?event=30041&round=3'>22 Aug</a>
+            <a href='https://bridge.co.il/viewer/session.php?event=30041&round=4'>29 Aug</a>
+            <a href='https://bridge.co.il/viewer/session.php?event=30041&round=3'>22 Aug</a>
             </body></html>
         """,
         session4: """
@@ -121,7 +123,7 @@ def test_snapshot_selects_latest_actual_participation_and_verifies_field_pages()
               <tr><td>2</td><td>3NT S</td><td>400</td><td>50.00</td></tr>
             </table></body></html>
         """,
-        "https://www.bridge.co.il/viewer/session.php?event=29912&round=4": """
+        "https://bridge.co.il/viewer/session.php?event=29912&round=4": """
             <html><body>date 05/08/26<table><tr><td>old</td><td>99999</td></tr></table></body></html>
         """,
     }
@@ -151,11 +153,11 @@ def test_snapshot_selects_latest_actual_participation_and_verifies_field_pages()
 
 def test_missing_board_links_fail_closed_instead_of_inventing_data():
     member_url = IBF_MEMBER_URL.format(player_id="15031")
-    session = "https://www.bridge.co.il/viewer/session.php?event=30041&round=3"
-    personal = "https://www.bridge.co.il/viewer/personal.php?event=30041&round=3&seat=7"
+    session = "https://bridge.co.il/viewer/session.php?event=30041&round=3"
+    personal = "https://bridge.co.il/viewer/personal.php?event=30041&round=3&seat=7"
     pages = {
         member_url: "member 15031 <a href='/viewer/session.php?event=30041&round=3'>s</a>",
-        IBF_INDEX_URL: "<a href='https://www.bridge.co.il/viewer/session.php?event=30041&round=3'>s</a>",
+        IBF_INDEX_URL: "<a href='https://bridge.co.il/viewer/session.php?event=30041&round=3'>s</a>",
         session: "22/08/26 <table><tr><td><a href='/viewer/personal.php?event=30041&round=3&seat=7'>P</a></td><td>15031</td></tr></table>",
         personal: "personal 15031 <table><tr><td>1</td><td>NS</td><td>-450</td></tr></table>",
     }
