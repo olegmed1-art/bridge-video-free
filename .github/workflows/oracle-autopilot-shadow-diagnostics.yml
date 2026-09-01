@@ -199,6 +199,12 @@ jobs:
           printf 'AUTOPILOT_DIAG_INCOMPLETEREAD_COUNT=%s\n' "$(count 'IncompleteRead')"
           printf 'AUTOPILOT_DIAG_SSLERROR_COUNT=%s\n' "$(count 'SSLError|SSL:')"
           printf 'AUTOPILOT_DIAG_TIMEOUTERROR_COUNT=%s\n' "$(count 'TimeoutError|timed out')"
+          while IFS= read -r exception_type; do
+            [[ "$exception_type" =~ ^[A-Za-z_][A-Za-z0-9_.]{0,80}$ ]] || continue
+            printf 'AUTOPILOT_DIAG_EXCEPTION_TYPE=%s\n' "$exception_type"
+          done < <(
+            sed -nE 's/.*\]: ([A-Za-z_][A-Za-z0-9_.]{0,80}):.*/\1/p' <<<"$journal" | sort -u
+          )
           echo 'AUTOPILOT_DIAGNOSTIC_READ_ONLY=YES'
           echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
           printf 'AUTOPILOT_DIAG_PRECONDITION=%s\n' "$precondition"
