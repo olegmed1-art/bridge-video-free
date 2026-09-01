@@ -21,6 +21,8 @@ def test_workflow_is_request_gated_and_exactly_targets_production() -> None:
     assert "run_zero_cost_production_canary" in workflow
     assert "AUTOPILOT_SMOKE_V1" in workflow
     assert "cost_cap_microusd=0" in workflow
+    assert "git archive \"$SOURCE_REVISION\"" in workflow
+    assert "autopilot_phase3b" in workflow
     assert 'ssh-keygen -e -m PKCS8 -f "$rsa_openssh"' in workflow
     assert 'openssl pkey -pubin -in "$rsa_public" -noout' in workflow
     assert "task_production_mutation" in workflow
@@ -74,5 +76,7 @@ def test_installer_pins_target_identity_and_separate_service() -> None:
     assert "AUTOPILOT_ACTIVATION_SCOPE=PRODUCTION_CANARY_ZERO_COST" in installer
     assert "school-autopilot-production-canary.service" in installer
     assert "school-autopilot-shadow.service" not in installer
+    assert "bounded policy module is missing" in installer
+    assert '"$RELEASE_DIR/autopilot_phase3b"' in installer
     assert "has_table_privilege(current_user, 'autopilot.task', 'SELECT')" in installer
     assert "not task_select and not task_insert and not can_create" in installer
