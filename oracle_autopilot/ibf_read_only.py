@@ -195,14 +195,23 @@ def _ibf_get_html(url: str, budget: _ReadBudget) -> str:
 
 
 def _normalize_legacy_viewer_url(url: str) -> str:
-    """Normalize only the IBF viewer's known duplicate-slash legacy paths."""
+    """Canonicalize only known legacy href forms before strict validation."""
 
     parsed = urllib.parse.urlsplit(url)
-    if parsed.path.startswith("/viewer//"):
-        normalized_path = f"/viewer/{parsed.path.removeprefix('/viewer//')}"
+    normalized = parsed
+    host = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme == "http"
+        and host in IBF_ALLOWED_HOSTS
+        and parsed.netloc.lower() == host
+        and not parsed.fragment
+    ):
+        normalized = normalized._replace(scheme="https")
+    if normalized.path.startswith("/viewer//"):
+        normalized_path = f"/viewer/{normalized.path.removeprefix('/viewer//')}"
         if normalized_path in IBF_VIEWER_PATHS:
-            return urllib.parse.urlunsplit(parsed._replace(path=normalized_path))
-    return url
+            normalized = normalized._replace(path=normalized_path)
+    return urllib.parse.urlunsplit(normalized)
 
 
 def _canonical_session_url(href: str, base_url: str) -> tuple[str, int, int] | None:
