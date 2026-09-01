@@ -15,7 +15,7 @@ Environment=PYTHONUNBUFFERED=1
 Environment=AUTOPILOT_RUNTIME_MODE=SHADOW
 EnvironmentFile=/opt/bridge-school/school-autopilot/autopilot-shadow.env
 EnvironmentFile=/opt/bridge-school/school-autopilot/autopilot-broker.env
-ExecStart=/opt/bridge-school/school-autopilot/.venv/bin/python -m oracle_autopilot.worker
+ExecStart=/opt/bridge-school/school-autopilot/.venv/bin/python -m oracle_autopilot.worker_v16
 Restart=always
 RestartSec=2
 TimeoutStopSec=20
