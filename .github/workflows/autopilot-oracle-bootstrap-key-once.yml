@@ -1,0 +1,128 @@
+name: Autopilot Oracle bootstrap recipient key (one-shot)
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths: ['.github/workflows/autopilot-oracle-bootstrap-key-once.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  create-key:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      OCI_REGION: eu-frankfurt-1
+      OCI_INSTANCE_OCID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Configure bounded OCI client
+        env:
+          OCI_CLI_CONFIG: ${{ secrets.OCI_CLI_CONFIG }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          test -n "${OCI_CLI_CONFIG:-}"
+          test -n "${OCI_CLI_KEY_CONTENT:-}"
+          python -m pip install --disable-pip-version-check --quiet 'oci-cli==3.90.3'
+          umask 077
+          mkdir -p "$HOME/.oci"
+          if [[ "$OCI_CLI_KEY_CONTENT" == base64:* ]]; then
+            printf '%s' "${OCI_CLI_KEY_CONTENT#base64:}" | base64 --decode > "$HOME/.oci/oci_api_key.pem"
+          else
+            printf '%s\n' "$OCI_CLI_KEY_CONTENT" > "$HOME/.oci/oci_api_key.pem"
+          fi
+          printf '%s\n' "$OCI_CLI_CONFIG" > "$HOME/.oci/config"
+          openssl pkey -in "$HOME/.oci/oci_api_key.pem" -traditional -out "$HOME/.oci/key.pkcs1.pem"
+          mv "$HOME/.oci/key.pkcs1.pem" "$HOME/.oci/oci_api_key.pem"
+          actual_fingerprint="$(openssl pkey -in "$HOME/.oci/oci_api_key.pem" -pubout -outform DER | openssl md5 -r | awk '{print $1}' | sed 's/../&:/g;s/:$//')"
+          export OCI_DERIVED_FINGERPRINT="$actual_fingerprint"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          p=Path.home()/'.oci/config'
+          lines=[]; key=False; region=False; fingerprint=False
+          for line in p.read_text().splitlines():
+              if line.strip().startswith('key_file='):
+                  lines.append(f'key_file={Path.home()}/.oci/oci_api_key.pem'); key=True
+              elif line.strip().startswith('region='):
+                  lines.append('region=eu-frankfurt-1'); region=True
+              elif line.strip().startswith('fingerprint='):
+                  lines.append(f'fingerprint={os.environ["OCI_DERIVED_FINGERPRINT"]}'); fingerprint=True
+              else:
+                  lines.append(line)
+          if not key: lines.append(f'key_file={Path.home()}/.oci/oci_api_key.pem')
+          if not region: lines.append('region=eu-frankfurt-1')
+          if not fingerprint: lines.append(f'fingerprint={os.environ["OCI_DERIVED_FINGERPRINT"]}')
+          p.write_text('\n'.join(lines)+'\n')
+          PY
+          oci iam region list --output json >/dev/null
+
+      - name: Resolve running Oracle endpoint and SSH boundary
+        id: ssh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          state="$(oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --query 'data."lifecycle-state"' --raw-output)"
+          [[ "$state" == RUNNING ]]
+          host="$(oci compute instance list-vnics --instance-id "$OCI_INSTANCE_OCID" --all --query 'data[0]."public-ip"' --raw-output)"
+          test -n "$host" && [[ "$host" != null ]]
+          work="$RUNNER_TEMP/autopilot-bootstrap-key"
+          mkdir -p "$work"
+          key="$work/id_oracle"
+          printf '%s\n' "$SSH_KEY_ORACLE" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$host" "$EXPECTED_FINGERPRINT" "$known"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$host" 'true'
+          echo "host=$host" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo 'ORACLE_RUNNING=YES'
+          echo 'ORACLE_SSH_PREFLIGHT=PASS'
+
+      - name: Create root-only recipient key and publish public half
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
+            "$ORACLE_USER@${{ steps.ssh.outputs.host }}" 'bash -se' <<'REMOTE'
+          set -Eeuo pipefail
+          private=/opt/bridge-school/school-autopilot/bootstrap/oracle-bootstrap-rsa.pem
+          public=/opt/bridge-school/school-autopilot/bootstrap/oracle-bootstrap-rsa.pub.pem
+          sudo install -d -o root -g root -m 0700 "$(dirname "$private")"
+          if ! sudo test -s "$private"; then
+            sudo openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$private" >/dev/null 2>&1
+          fi
+          sudo openssl pkey -in "$private" -pubout -out "$public"
+          sudo chown root:root "$private" "$public"
+          sudo chmod 0600 "$private"
+          sudo chmod 0644 "$public"
+          sudo openssl pkey -pubin -in "$public" -outform DER | sha256sum | awk '{print "AUTOPILOT_BOOTSTRAP_PUBLIC_KEY_SHA256=" $1}'
+          printf 'AUTOPILOT_BOOTSTRAP_PUBLIC_KEY_B64='
+          sudo base64 -w0 "$public"
+          printf '\n'
+          echo 'AUTOPILOT_BOOTSTRAP_PRIVATE_KEY_MODE=0600'
+          echo 'AUTOPILOT_BOOTSTRAP_PRIVATE_KEY_OWNER=root:root'
+          echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
+          echo 'AUTOPILOT_SERVICE_RESTARTED=NO'
+          REMOTE
