@@ -23,7 +23,6 @@ safe_id(){ [[ "$1" =~ ^[A-Za-z0-9._:-]{1,160}$ && "$1" != . && "$1" != .. ]]; }
 verify(){
   [[ -x "$PYTHON" && -d "$SOURCE_DIR/.git" && -f "$RECEIPT_READER" && ! -L "$RECEIPT_READER" ]] || fail 'universal video runtime missing'
   [[ -d "$SPOOL/inbox" && -d "$SPOOL/running" && -d "$SPOOL/done" && -d "$SPOOL/failed" && -d "$SPOOL/progress" ]] || fail 'universal video spool missing'
-  [[ -d "$STAGING" && ! -L "$STAGING" && "$(stat -c '%U:%G:%a' "$STAGING")" == root:root:700 ]] || fail 'unsafe staging directory'
   systemctl is-active --quiet universal-video-container.service || fail 'universal-video-container.service inactive'
   systemctl is-active --quiet universal-video.service && fail 'legacy universal-video.service still active'
 }
@@ -65,12 +64,23 @@ import base64
 import binascii
 import errno
 import os
+import stat
 import sys
 import tempfile
 
 root = os.environ["UNIVERSAL_VIDEO_STAGING_ROOT"]
 path = None
 try:
+    root_stat = os.lstat(root)
+    if (
+        not stat.S_ISDIR(root_stat.st_mode)
+        or stat.S_ISLNK(root_stat.st_mode)
+        or root_stat.st_uid != 0
+        or root_stat.st_gid != 0
+        or stat.S_IMODE(root_stat.st_mode) != 0o700
+    ):
+        print("UV_ERROR_CODE=UV_INTAKE_PERMISSION_DENIED")
+        raise SystemExit(1)
     raw = base64.b64decode(sys.stdin.buffer.read(), validate=True)
     if len(raw) > 262144:
         print("UV_ERROR_CODE=UV_INTAKE_CONTRACT_INVALID")
