@@ -865,6 +865,13 @@ def test_shadow_diagnostics_are_read_only_and_secret_free():
     assert "AUTOPILOT_DIAG_MODULE_IMPORT_COUNT" in workflow
     assert "AUTOPILOT_DIAG_CONFIG_COUNT" in workflow
     assert "AUTOPILOT_DIAG_DATABASE_COUNT" in workflow
+    assert "AUTOPILOT_DIAG_TYPEERROR_COUNT" in workflow
+    assert "AUTOPILOT_DIAG_VALUEERROR_COUNT" in workflow
+    assert "AUTOPILOT_DIAG_ATTRIBUTEERROR_COUNT" in workflow
+    assert "AUTOPILOT_DIAG_KEYERROR_COUNT" in workflow
+    assert "AUTOPILOT_DIAG_INCOMPLETEREAD_COUNT" in workflow
+    assert "AUTOPILOT_DIAG_SSLERROR_COUNT" in workflow
+    assert "AUTOPILOT_DIAG_TIMEOUTERROR_COUNT" in workflow
     assert "AUTOPILOT_DIAG_CHDIR_PERMISSION_COUNT" in workflow
     assert "AUTOPILOT_DIAG_EXEC_PERMISSION_COUNT" in workflow
     assert "AUTOPILOT_DIAG_ENV_PERMISSION_COUNT" in workflow
