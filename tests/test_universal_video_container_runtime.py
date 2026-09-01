@@ -89,6 +89,7 @@ def test_container_image_keeps_credentials_and_media_out_of_layers() -> None:
     assert "COPY universal_video" in dockerfile
     assert "USER universal-video:universal-video" in dockerfile
     assert "UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE=/var/lib/universal-video/model-cache/speaker" in dockerfile
+    assert "fonts-dejavu-core" in dockerfile
 
 
 def test_container_image_contains_neon_processor_dependency_closure() -> None:
