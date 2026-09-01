@@ -9,6 +9,7 @@ from oracle_autopilot.ibf_read_only import (
     IBF_INDEX_URL,
     IBF_MEMBER_URL,
     IBF_SOURCE_AUTHORITY,
+    _canonical_session_url,
     _validate_official_url,
     fetch_ibf_read_only_snapshot,
 )
@@ -58,6 +59,10 @@ def test_ibf_url_boundary_rejects_non_official_and_credentials():
     assert IBF_MEMBER_URL == "https://bridge.co.il/viewer/membermplist.php?id={player_id}"
     _validate_official_url(IBF_INDEX_URL)
     _validate_official_url("https://bridge.co.il/viewer/session.php?event=30041&round=3")
+    assert _canonical_session_url(
+        "https://www.bridge.co.il/viewer//session.php?event=30041&ibf=15031&round=3",
+        IBF_MEMBER_URL.format(player_id="15031"),
+    ) == ("https://bridge.co.il/viewer/session.php?event=30041&round=3", 30041, 3)
 
     for url in (
         "https://example.com/viewer/session.php?event=30041&round=3",
@@ -74,19 +79,19 @@ def test_snapshot_selects_latest_actual_participation_and_verifies_field_pages()
     session4 = "https://bridge.co.il/viewer/session.php?event=30041&round=4"
     session3 = "https://bridge.co.il/viewer/session.php?event=30041&round=3"
     personal3 = "https://bridge.co.il/viewer/personal.php?event=30041&round=3&seat=7"
-    board1 = "https://bridge.co.il/viewer/board.php?event=30041&round=3&board=1"
-    board2 = "https://bridge.co.il/viewer/board.php?event=30041&round=3&board=2"
+    board1 = "https://bridge.co.il/viewer/board.php?board=1&event=30041&ibf=15031&round=3&seat=7"
+    board2 = "https://bridge.co.il/viewer/board.php?board=2&event=30041&ibf=15031&round=3&seat=7"
 
     pages = {
         member_url: """
             <html><body>member 15031
-            <a href='/viewer/session.php?event=29912&round=4'>older</a>
+            <a href='/viewer//session.php?event=29912&ibf=15031&round=4'>older</a>
             </body></html>
         """,
         IBF_INDEX_URL: """
             <html><body>
-            <a href='https://bridge.co.il/viewer/session.php?event=30041&round=4'>29 Aug</a>
-            <a href='https://bridge.co.il/viewer/session.php?event=30041&round=3'>22 Aug</a>
+            <a href='https://www.bridge.co.il/viewer//session.php?event=30041&ibf=15031&round=4'>29 Aug</a>
+            <a href='https://www.bridge.co.il/viewer//session.php?event=30041&ibf=15031&round=3'>22 Aug</a>
             </body></html>
         """,
         session4: """
@@ -97,7 +102,7 @@ def test_snapshot_selects_latest_actual_participation_and_verifies_field_pages()
         session3: """
             <html><body>Session 3 date 22/08/26
             <table><tr>
-              <td><a href='/viewer/personal.php?event=30041&round=3&seat=7'>Oleg - Partner</a></td>
+              <td><a href='/viewer//personal.php?event=30041&ibf=15031&round=3&seat=7'>Oleg - Partner</a></td>
               <td>15031 42137</td><td>60.45</td>
             </tr></table></body></html>
         """,
@@ -105,8 +110,8 @@ def test_snapshot_selects_latest_actual_participation_and_verifies_field_pages()
             <html><body>personal 15031
             <table>
               <tr><th>Board</th><th>Dir</th><th>Score</th><th>%</th><th>Lead</th><th>Contract</th></tr>
-              <tr><td><a href='/viewer/board.php?event=30041&round=3&board=1'>1</a></td><td>NS</td><td>-450</td><td>33.33</td><td>DT</td><td>4S+1 E</td></tr>
-              <tr><td><a href='/viewer/board.php?event=30041&round=3&board=2'>2</a></td><td>EW</td><td>420</td><td>75.00</td><td>C2</td><td>4H S</td></tr>
+              <tr><td><a href='/viewer//board.php?board=1&event=30041&ibf=15031&round=3&seat=7'>1</a></td><td>NS</td><td>-450</td><td>33.33</td><td>DT</td><td>4S+1 E</td></tr>
+              <tr><td><a href='/viewer//board.php?board=2&event=30041&ibf=15031&round=3&seat=7'>2</a></td><td>EW</td><td>420</td><td>75.00</td><td>C2</td><td>4H S</td></tr>
             </table></body></html>
         """,
         board1: """
