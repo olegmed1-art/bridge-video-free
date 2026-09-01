@@ -9,7 +9,7 @@ LABEL org.opencontainers.image.title="bridge-school-universal-video" \
       org.opencontainers.image.revision="${UNIVERSAL_VIDEO_SOURCE_COMMIT}"
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates ffmpeg tini \
+ && apt-get install -y --no-install-recommends ca-certificates ffmpeg fonts-dejavu-core tini \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --gid 10001 universal-video \
  && useradd --uid 10001 --gid universal-video --home-dir /nonexistent --no-create-home --shell /usr/sbin/nologin universal-video
