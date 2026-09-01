@@ -112,11 +112,35 @@ def test_submit_maps_intake_failures_without_logging_private_paths() -> None:
     assert "^UV_ERROR_CODE=UV_INTAKE_" in WORKFLOW
 
 
+def test_submit_staging_failures_are_errno_classified_and_secret_safe() -> None:
+    start = OPERATOR.index("stage_job_payload(){")
+    end = OPERATOR.index("\nsubmit_drive(){", start)
+    staging = OPERATOR[start:end]
+    for code in (
+        "UV_INTAKE_PERMISSION_DENIED",
+        "UV_INTAKE_CROSS_DEVICE",
+        "UV_INTAKE_DISK_FULL",
+        "UV_INTAKE_READ_ONLY",
+        "UV_INTAKE_COLLISION",
+        "UV_INTAKE_IO_FAILED",
+        "UV_INTAKE_CONTRACT_INVALID",
+        "UV_INTAKE_EXECUTION_FAILED",
+    ):
+        assert code in staging
+    assert "tempfile.mkstemp" in staging
+    assert "base64.b64decode" in staging
+    assert "print(str(exc))" not in staging
+    assert "repr(exc)" not in staging
+
+
 def test_submit_intake_does_not_depend_on_legacy_host_venv() -> None:
     start = OPERATOR.index("submit_drive(){")
     submit = OPERATOR[start:OPERATOR.index("\nstatus(){", start)]
     assert "readonly SYSTEM_PYTHON='/usr/bin/python3'" in OPERATOR
     assert '"$SYSTEM_PYTHON" -m universal_video.server_intake submit' in submit
     assert '"$PYTHON" -m universal_video.server_intake submit' not in submit
+    assert "stage_job_payload" in submit
+    assert 'mktemp -p "$STAGING" request.' not in submit
+    assert 'base64 --decode >"$tmp"' not in submit
     assert "UV_INTAKE_EXECUTION_FAILED" in submit
-    assert "UV_ERROR_CODE=$intake_code" in submit
+    assert "intake_reject" in submit
