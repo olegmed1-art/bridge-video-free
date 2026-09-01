@@ -118,3 +118,5 @@ jobs:
           echo 'AUTOPILOT_SERVICE_RESTARTED=NO'
           echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
           REMOTE
+
+# continuation-health-refresh: 2026-09-01T04:52:30Z
