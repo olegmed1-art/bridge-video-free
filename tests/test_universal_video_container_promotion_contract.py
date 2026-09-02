@@ -54,6 +54,8 @@ def test_promotion_runs_exact_queue_and_speaker_gates_before_source_preparation(
     assert "/opt/bridge-school/universal-video/.venv/bin/python -" in WORKFLOW
     assert "validate-video-queue-dsn.py" in WORKFLOW
     assert "test ! -L /opt/bridge-school/universal-video/secrets/video-queue-dsn" in WORKFLOW
+    assert 'credential_meta="$(sudo -n stat -c' in WORKFLOW
+    assert 'credential_meta="$(stat -c' not in WORKFLOW
 
 
 def test_promotion_selects_exact_image_and_excludes_legacy_worker() -> None:

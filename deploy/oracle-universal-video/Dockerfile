@@ -57,6 +57,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     UNIVERSAL_VIDEO_OUTPUT_ROOT=/var/lib/universal-video/output \
     UNIVERSAL_VIDEO_MEDIA_ROOT=/var/lib/universal-video/media \
     UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE=/var/lib/universal-video/model-cache/speaker \
+    BRIDGE_SPEAKER_ALLOW_NEMO_COMPAT=0 \
     HF_HOME=/var/lib/universal-video/model-cache \
     HF_HUB_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1

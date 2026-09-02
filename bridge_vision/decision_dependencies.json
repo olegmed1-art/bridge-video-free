@@ -27,7 +27,7 @@
     },
     "sherpa_onnx": {
       "kind": "model",
-      "policy": "Offline speaker segmentation and anonymous embedding inference only, using the two exact checksum-pinned artifacts; it must not assign real-person identity or make bridge-content or canonical decisions."
+      "policy": "Offline speaker segmentation and anonymous embedding inference only. The Oracle container disables the unpinned NeMo compatibility path and uses only the two exact checksum-pinned artifacts; sherpa-onnx must not assign real-person identity or make bridge-content or canonical decisions."
     }
   }
 }

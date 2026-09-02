@@ -134,7 +134,7 @@ jobs:
           ssh_base=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
           # These exact-revision gates run before source preparation can stop,
           # restart, or replace either resident checkout.
-          "${ssh_base[@]}" 'sudo -n test -f /opt/bridge-school/universal-video/secrets/video-queue-dsn && sudo -n test ! -L /opt/bridge-school/universal-video/secrets/video-queue-dsn && sudo -n test "$(stat -c "%U:%G:%a" /opt/bridge-school/universal-video/secrets/video-queue-dsn)" = root:universal-video:640'
+          "${ssh_base[@]}" 'sudo -n test -f /opt/bridge-school/universal-video/secrets/video-queue-dsn && sudo -n test ! -L /opt/bridge-school/universal-video/secrets/video-queue-dsn && credential_meta="$(sudo -n stat -c "%U:%G:%a" /opt/bridge-school/universal-video/secrets/video-queue-dsn)" && test "$credential_meta" = root:universal-video:640'
           "${ssh_base[@]}" 'sudo -n /opt/bridge-school/universal-video/.venv/bin/python - /opt/bridge-school/universal-video/secrets/video-queue-dsn' \
             < "$RUNNER_TEMP/validate-video-queue-dsn.py" \
             | grep -Fx VIDEO_QUEUE_DSN_PREFLIGHT_PASS
