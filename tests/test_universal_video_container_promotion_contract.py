@@ -113,6 +113,15 @@ def test_promotion_disables_legacy_and_rollback_restores_original_state() -> Non
     assert SCRIPT.index("CURRENT_STAGE='queue-credential-preflight'") < SCRIPT.index(
         "CURRENT_STAGE='legacy-quiesce'"
     )
+    assert SCRIPT.index("CURRENT_STAGE='speaker-model-preflight'") < SCRIPT.index(
+        "CURRENT_STAGE='legacy-quiesce'"
+    )
+    speaker_preflight = SCRIPT[
+        SCRIPT.index("CURRENT_STAGE='speaker-model-preflight'") :
+        SCRIPT.index("CURRENT_STAGE='legacy-quiesce'")
+    ]
+    assert '"$EXPECTED_DIGEST" true' in speaker_preflight
+    assert "UV_CONTAINER_PROMOTION_SPEAKER_MODEL_INVALID" in speaker_preflight
     assert 'old_enabled_before="$(systemctl is-enabled "$OLD_SERVICE"' in SCRIPT
     assert 'old_active_before="$(systemctl is-active "$OLD_SERVICE"' in SCRIPT
     assert 'systemctl disable --now "$OLD_SERVICE" || fail UV_CONTAINER_PROMOTION_LEGACY_QUIESCE_FAILED' in SCRIPT
