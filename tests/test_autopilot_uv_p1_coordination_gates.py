@@ -37,6 +37,21 @@ def test_monitor_rejects_missing_or_malformed_durable_task_ids() -> None:
     assert 'if [[ "$task_id" != NOT_FOUND ]]' not in validation
 
 
+def test_monitor_rechecks_all_pr_heads_after_polling_before_receipt() -> None:
+    workflow = _read(".github/workflows/autopilot-uv-p1-oracle-monitor.yml")
+
+    polling = workflow.index("Query acting Autopilot task store through its live process")
+    recheck = workflow.index("Re-resolve exact PR heads after task polling")
+    publish = workflow.index("Publish exact task receipt to issue 946")
+    assert polling < recheck < publish
+    assert 'runtime:997:"$EXPECTED_RUNTIME_SHA"' in workflow
+    assert 'canary:1062:"$EXPECTED_CANARY_SHA"' in workflow
+    assert 'idle:1047:"$EXPECTED_IDLE_SHA"' in workflow
+    assert "UV_AUTOPILOT_POST_POLL_HEAD_DRIFT" in workflow
+    assert "UV_AUTOPILOT_POST_POLL_HEADS_VERIFIED=PASS" in workflow
+    assert '[[ "$live" =~ ^[0-9a-f]{40}$ && "$live" == "$expected" ]]' in workflow
+
+
 def test_monitor_selects_exact_shadow_worker_and_allows_only_observer_peer() -> None:
     workflow = _read(".github/workflows/autopilot-uv-p1-oracle-monitor.yml")
 
