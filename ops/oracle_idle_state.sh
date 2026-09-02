@@ -20,7 +20,8 @@ AUTOPILOT_ENV="${AUTOPILOT_ENV_FILE:-/opt/bridge-school/school-autopilot/autopil
 OBSERVER_DIR="${ASSISTANT_LAB_OBSERVER_DIR:-/opt/bridge-school/assistant-lab-observer}"
 VIDEO_DIR="${UNIVERSAL_VIDEO_DIR:-/opt/bridge-school/universal-video}"
 PYTHON="${ASSISTANT_LAB_PYTHON:-$LAB_DIR/.venv/bin/python}"
-QUEUE_DSN_FILE="${BRIDGE_VIDEO_QUEUE_DSN_FILE:-/opt/bridge-school/universal-video/secrets/video-queue-dsn}"
+UV_SECRETS_ENV="${UNIVERSAL_VIDEO_SECRETS_ENV_FILE:-$VIDEO_DIR/universal-video-secrets.env}"
+QUEUE_DSN_FILE="${BRIDGE_VIDEO_QUEUE_DSN_FILE:-}"
 HOST_LEASE_FILE="${ORACLE_HOST_LEASE_FILE:-/run/bridge-school/oracle-host-lease}"
 MAX_SOURCE_AGE_SECONDS="${ORACLE_IDLE_MAX_SOURCE_AGE_SECONDS:-60}"
 MAX_FUTURE_SKEW_SECONDS="${ORACLE_IDLE_MAX_FUTURE_SKEW_SECONDS:-5}"
@@ -29,7 +30,7 @@ MAX_HOST_LEASE_REMAINING_SECONDS="${ORACLE_IDLE_MAX_HOST_LEASE_REMAINING_SECONDS
 # done/failed/results/progress and Observer terminal jobs under done/failed are
 # durable evidence, not active work. The container mounts VIDEO_DIR/spool at
 # /var/lib/universal-video/spool, so the host proof must inspect the host path.
-REQUIRED_LOCAL_SPOOLS="${ORACLE_IDLE_REQUIRED_LOCAL_SPOOLS:-$LAB_DIR/spool:$LAB_DIR/feedback-spool:$VIDEO_DIR/spool/inbox:$VIDEO_DIR/spool/running:$OBSERVER_DIR/jobs/pending:$OBSERVER_DIR/jobs/running}"
+REQUIRED_LOCAL_SPOOLS="${ORACLE_IDLE_REQUIRED_LOCAL_SPOOLS:-$VIDEO_DIR/spool/inbox:$VIDEO_DIR/spool/running:$OBSERVER_DIR/jobs/pending:$OBSERVER_DIR/jobs/running}"
 CANONICAL_IDLE_REASON='jobs=0,research=0,research_children=0,control=0,operator_lease=0,autopilot=0,video=0'
 
 started_at_epoch="0"
@@ -214,6 +215,8 @@ read_single_assignment() {
   local matches_text=""
   local grep_rc=0
   local value=""
+  local first=""
+  local last=""
   local -a matches=()
 
   printf -v "$destination" '%s' ''
@@ -240,7 +243,17 @@ read_single_assignment() {
     return 1
   fi
   value="${matches[0]#${key}=}"
-  if [[ -z "$value" || "$value" == *$'\r'* ]]; then
+  first="${value:0:1}"
+  last="${value: -1}"
+  if [[ "$first" == \" || "$first" == \' || "$last" == \" || "$last" == \' ]]; then
+    if [[ "$first" == "$last" ]] && { [[ "$first" == \" ]] || [[ "$first" == \' ]]; } && (( ${#value} >= 2 )); then
+      value="${value:1:${#value}-2}"
+    else
+      mark_unknown "${source}_dsn_quote_invalid"
+      return 1
+    fi
+  fi
+  if [[ -z "$value" || "$value" == *$'\r'* || "$value" == *$'\n'* ]]; then
     mark_unknown "${source}_dsn_empty_or_invalid"
     return 1
   fi
@@ -254,7 +267,12 @@ queue_dsn=""
 read_single_assignment "$LAB_ENV" 'ASSISTANT_LAB_DATABASE_URL' 'assistant_lab' assistant_dsn || true
 read_single_assignment "$AUTOPILOT_ENV" 'AUTOPILOT_DATABASE_URL' 'autopilot' autopilot_dsn || true
 
-if [[ ! -f "$QUEUE_DSN_FILE" || -L "$QUEUE_DSN_FILE" || ! -r "$QUEUE_DSN_FILE" ]]; then
+if [[ -z "$QUEUE_DSN_FILE" ]]; then
+  read_single_assignment "$UV_SECRETS_ENV" 'BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE' 'video_queue_file' QUEUE_DSN_FILE || true
+fi
+if [[ -z "$QUEUE_DSN_FILE" || "$QUEUE_DSN_FILE" != /* || "$QUEUE_DSN_FILE" == *'..'* ]]; then
+  mark_unknown "video_queue_dsn_path_invalid"
+elif [[ ! -f "$QUEUE_DSN_FILE" || -L "$QUEUE_DSN_FILE" || ! -r "$QUEUE_DSN_FILE" ]]; then
   mark_unknown "video_queue_dsn_unavailable"
 else
   queue_lines=()
