@@ -8,6 +8,9 @@ def test_shell_is_read_only_and_routes_through_collector_and_evaluator() -> None
     assert "oracle_idle_collect.py" in text
     assert "oracle_idle_guard.py" in text
     assert "ORACLE_IDLE_STATE=UNKNOWN" in text
+    assert '"schema":"oracle-idle-verdict-v1"' in text
+    assert '"evidence":{}' in text
+    assert 'printf \'%s\\n\' "$json_line"' in text
     lowered = text.lower()
     assert "oci compute" not in lowered
     assert "instance action" not in lowered
