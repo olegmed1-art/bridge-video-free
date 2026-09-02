@@ -13,6 +13,11 @@ CLASSIFIER = ROOT / "ops" / "oracle_idle_state.sh"
 AUTHORIZER = ROOT / "ops" / "oracle_idle_stop_guard.py"
 SCHEMA = ROOT / "assistant_lab" / "oracle_idle_schema.sql"
 FINALIZER = ROOT / ".github" / "workflows" / "oracle-autopilot-staging-finalize.yml"
+INSTANCE_POWER = ROOT / ".github" / "workflows" / "oracle-instance-power.yml"
+CANONICAL_IDLE_REASON = (
+    "jobs=0,research=0,research_children=0,control=0,"
+    "operator_lease=0,autopilot=0,video=0"
+)
 
 
 def _write_executable(path: Path, body: str) -> None:
@@ -45,6 +50,11 @@ class ClassifierHarness:
             "ASSISTANT_LAB_DATABASE_URL=postgres://assistant-lab\n",
             encoding="utf-8",
         )
+        self.autopilot_env_file = self.root / "autopilot-shadow.env"
+        self.autopilot_env_file.write_text(
+            "AUTOPILOT_DATABASE_URL=postgres://autopilot\n",
+            encoding="utf-8",
+        )
         self.queue_file = self.root / "video-queue-dsn"
         self.queue_file.write_text("postgres://video\n", encoding="utf-8")
         self.lease_file = self.root / "oracle-host-lease"
@@ -65,6 +75,7 @@ class ClassifierHarness:
         observer_busy: bool = False,
         video_dsn_present: bool = True,
         env_present: bool = True,
+        autopilot_env_present: bool = True,
         lease_text: str | None = None,
         python_exit_code: int = 0,
         python_stderr: str = "",
@@ -84,6 +95,13 @@ class ClassifierHarness:
             )
         else:
             self.env_file.unlink(missing_ok=True)
+        if autopilot_env_present:
+            self.autopilot_env_file.write_text(
+                "AUTOPILOT_DATABASE_URL=postgres://autopilot\n",
+                encoding="utf-8",
+            )
+        else:
+            self.autopilot_env_file.unlink(missing_ok=True)
         if lease_text is None:
             self.lease_file.unlink(missing_ok=True)
         else:
@@ -95,6 +113,7 @@ class ClassifierHarness:
             {
                 "PATH": f"{self.bindir}:{env.get('PATH', '')}",
                 "ASSISTANT_LAB_ENV_FILE": str(self.env_file),
+                "AUTOPILOT_ENV_FILE": str(self.autopilot_env_file),
                 "ASSISTANT_LAB_PYTHON": str(self.fake_python),
                 "BRIDGE_VIDEO_QUEUE_DSN_FILE": str(self.queue_file),
                 "ORACLE_HOST_LEASE_FILE": str(self.lease_file),
@@ -118,7 +137,7 @@ def _proof_text(
     *,
     started: int | None = None,
     observed: int | None = None,
-    reason: str = "all_sources_proved_empty",
+    reason: str = CANONICAL_IDLE_REASON,
 ) -> str:
     now = int(time.time())
     observed = now if observed is None else observed
@@ -229,6 +248,15 @@ class OracleIdleClassifierTests(unittest.TestCase):
         )
         self.assert_state(completed.stdout, "BUSY")
 
+    def test_autopilot_active_task_is_busy(self) -> None:
+        completed = self.harness.run(
+            result=(
+                "BUSY:jobs=0,research=0,research_children=0,"
+                "control=0,operator_lease=0,autopilot=1,video=0"
+            )
+        )
+        self.assert_state(completed.stdout, "BUSY")
+
     # Required negative family 5: local spool.
     def test_local_spool_with_work_is_busy(self) -> None:
         (self.harness.spool / "queued-work.json").write_text(
@@ -281,6 +309,14 @@ class OracleIdleClassifierTests(unittest.TestCase):
         completed = self.harness.run(video_dsn_present=False)
         self.assertIn(
             "ORACLE_IDLE_REASON=video_queue_dsn_unavailable",
+            completed.stdout,
+        )
+        self.assert_state(completed.stdout, "UNKNOWN")
+
+    def test_missing_autopilot_telemetry_is_unknown(self) -> None:
+        completed = self.harness.run(autopilot_env_present=False)
+        self.assertIn(
+            "ORACLE_IDLE_REASON=autopilot_env_unavailable",
             completed.stdout,
         )
         self.assert_state(completed.stdout, "UNKNOWN")
@@ -387,6 +423,14 @@ class OracleStopAuthorizerTests(unittest.TestCase):
             "state_busy_forbids_stop",
         )
 
+    def test_contradictory_idle_reason_forbids_stop(self) -> None:
+        self.assert_forbidden(
+            _run_authorizer(
+                _proof_text("IDLE", reason="database_check_failed")
+            ),
+            "idle_reason_not_canonical",
+        )
+
     # Explicit required invariant: UNKNOWN -> STOP forbidden.
     def test_unknown_forbids_stop(self) -> None:
         self.assert_forbidden(
@@ -456,6 +500,13 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
         self.assertIn("assistant_lab.operator_maintenance_lease", sql)
         self.assertIn("stale_operator_maintenance_leases", sql)
 
+        classifier = CLASSIFIER.read_text(encoding="utf-8")
+        self.assertIn("FROM autopilot.task_status", classifier)
+        self.assertIn(
+            "status IN ('READY', 'RUNNING', 'WAITING_EXTERNAL')",
+            classifier,
+        )
+
     def test_universal_video_statuses_are_exactly_covered(self) -> None:
         script = CLASSIFIER.read_text(encoding="utf-8")
         self.assertIn(
@@ -480,6 +531,20 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
         self.assertLess(exact_yes, stop)
         self.assertIn("idle_stderr", workflow)
         self.assertNotIn("schedule:", workflow)
+
+    def test_instance_power_stop_uses_exact_authorizer(self) -> None:
+        workflow = INSTANCE_POWER.read_text(encoding="utf-8")
+        self.assertNotIn(
+            "steps.idle.outputs.idle_state == 'IDLE'", workflow
+        )
+        authorizer = workflow.index("ops/oracle_idle_stop_guard.py")
+        exact_yes = workflow.index("ORACLE_STOP_AUTHORIZED=YES", authorizer)
+        stop = workflow.index(
+            "oci compute instance action --instance-id "
+            '"$OCI_INSTANCE_OCID" --action STOP'
+        )
+        self.assertLess(authorizer, exact_yes)
+        self.assertLess(exact_yes, stop)
 
     def test_no_stop_command_exists_in_classifier_or_authorizer(self) -> None:
         combined = (

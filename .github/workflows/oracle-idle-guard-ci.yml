@@ -12,6 +12,7 @@ on:
       - 'tests/test_oracle_idle_stop_guard.py'
       - '.github/workflows/oracle-idle-guard-ci.yml'
       - '.github/workflows/oracle-autopilot-staging-finalize.yml'
+      - '.github/workflows/oracle-instance-power.yml'
   pull_request:
     paths:
       - 'assistant_lab/oracle_idle_schema.sql'
@@ -21,6 +22,7 @@ on:
       - 'tests/test_oracle_idle_stop_guard.py'
       - '.github/workflows/oracle-idle-guard-ci.yml'
       - '.github/workflows/oracle-autopilot-staging-finalize.yml'
+      - '.github/workflows/oracle-instance-power.yml'
 
 permissions:
   contents: read

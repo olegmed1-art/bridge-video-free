@@ -14,6 +14,7 @@ set -Eeuo pipefail
 
 LAB_DIR="${ASSISTANT_LAB_DIR:-/opt/bridge-school/assistant-lab}"
 LAB_ENV="${ASSISTANT_LAB_ENV_FILE:-$LAB_DIR/assistant-lab.env}"
+AUTOPILOT_ENV="${AUTOPILOT_ENV_FILE:-/opt/bridge-school/school-autopilot/autopilot-shadow.env}"
 PYTHON="${ASSISTANT_LAB_PYTHON:-$LAB_DIR/.venv/bin/python}"
 QUEUE_DSN_FILE="${BRIDGE_VIDEO_QUEUE_DSN_FILE:-/opt/bridge-school/universal-video/secrets/video-queue-dsn}"
 HOST_LEASE_FILE="${ORACLE_HOST_LEASE_FILE:-/run/bridge-school/oracle-host-lease}"
@@ -135,6 +136,27 @@ dsn_line="$(grep -m1 '^ASSISTANT_LAB_DATABASE_URL=' "$LAB_ENV" 2>/dev/null || tr
 export ASSISTANT_LAB_DATABASE_URL="${dsn_line#ASSISTANT_LAB_DATABASE_URL=}"
 [[ -n "$ASSISTANT_LAB_DATABASE_URL" ]] || { reason="assistant_lab_dsn_empty"; exit 0; }
 
+# Autopilot task state is a distinct authoritative workload family. Read the
+# dedicated runtime DSN without sourcing the root-owned environment file.
+if [[ ! -f "$AUTOPILOT_ENV" || -L "$AUTOPILOT_ENV" || ! -r "$AUTOPILOT_ENV" ]]; then
+  unset ASSISTANT_LAB_DATABASE_URL
+  reason="autopilot_env_unavailable"
+  exit 0
+fi
+autopilot_dsn_line="$(grep -m1 '^AUTOPILOT_DATABASE_URL=' "$AUTOPILOT_ENV" 2>/dev/null || true)"
+if [[ -z "$autopilot_dsn_line" ]]; then
+  unset ASSISTANT_LAB_DATABASE_URL
+  reason="autopilot_dsn_missing"
+  exit 0
+fi
+export AUTOPILOT_DATABASE_URL="${autopilot_dsn_line#AUTOPILOT_DATABASE_URL=}"
+if [[ -z "$AUTOPILOT_DATABASE_URL" ]]; then
+  unset ASSISTANT_LAB_DATABASE_URL
+  unset AUTOPILOT_DATABASE_URL
+  reason="autopilot_dsn_empty"
+  exit 0
+fi
+
 # Universal Video is an authoritative workload family. Missing, unreadable,
 # symlinked, or empty connection telemetry is UNKNOWN.
 if [[ ! -f "$QUEUE_DSN_FILE" || -L "$QUEUE_DSN_FILE" || ! -r "$QUEUE_DSN_FILE" ]]; then
@@ -166,6 +188,7 @@ except Exception:
     raise SystemExit
 
 assistant_dsn = os.environ.get("ASSISTANT_LAB_DATABASE_URL", "")
+autopilot_dsn = os.environ.get("AUTOPILOT_DATABASE_URL", "")
 video_dsn = os.environ.get("BRIDGE_VIDEO_QUEUE_DATABASE_URL", "")
 try:
     max_age = int(os.environ["ORACLE_IDLE_MAX_SOURCE_AGE_SECONDS"])
@@ -176,6 +199,9 @@ except Exception:
 
 if not assistant_dsn:
     print("UNKNOWN:assistant_lab_dsn_missing")
+    raise SystemExit
+if not autopilot_dsn:
+    print("UNKNOWN:autopilot_dsn_missing")
     raise SystemExit
 if not video_dsn:
     print("UNKNOWN:video_queue_dsn_missing")
@@ -238,6 +264,32 @@ try:
         raise SystemExit
 
     with psycopg.connect(
+        autopilot_dsn,
+        connect_timeout=8,
+        application_name="oracle-idle-autopilot",
+    ) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    count(*)::bigint,
+                    extract(epoch FROM current_timestamp)::bigint
+                FROM autopilot.task_status
+                WHERE status IN ('READY', 'RUNNING', 'WAITING_EXTERNAL')
+                """
+            )
+            row = cur.fetchone()
+            if row is None or len(row) != 2:
+                print("UNKNOWN:autopilot_snapshot_missing")
+                raise SystemExit
+            active_autopilot, autopilot_observed = map(int, row)
+
+    problem = freshness_problem(autopilot_observed, "autopilot")
+    if problem:
+        print(f"UNKNOWN:{problem}")
+        raise SystemExit
+
+    with psycopg.connect(
         video_dsn,
         connect_timeout=8,
         application_name="oracle-idle-video-queue",
@@ -270,6 +322,7 @@ try:
         "control": active_control,
         "operator_lease": active_operator_lease,
         "stale_operator_lease": stale_operator_lease,
+        "autopilot": active_autopilot,
         "video": video_jobs,
     }
     if min(counts.values()) < 0:
@@ -282,6 +335,7 @@ try:
             "research_children",
             "control",
             "operator_lease",
+            "autopilot",
             "video",
         )
     ):
@@ -295,6 +349,7 @@ try:
                     "research_children",
                     "control",
                     "operator_lease",
+                    "autopilot",
                     "video",
                 )
             )
@@ -312,6 +367,7 @@ try:
                     "research_children",
                     "control",
                     "operator_lease",
+                    "autopilot",
                     "video",
                 )
             )
@@ -324,6 +380,7 @@ PY
 db_rc=$?
 set -e
 unset ASSISTANT_LAB_DATABASE_URL
+unset AUTOPILOT_DATABASE_URL
 unset BRIDGE_VIDEO_QUEUE_DATABASE_URL
 unset ORACLE_IDLE_MAX_SOURCE_AGE_SECONDS
 unset ORACLE_IDLE_MAX_FUTURE_SKEW_SECONDS

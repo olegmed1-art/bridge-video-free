@@ -201,16 +201,34 @@ jobs:
             exit 0
           fi
 
-          idle_state="$(printf '%s\n' "$text" | sed -n 's/^ORACLE_IDLE_STATE=//p' | tail -n1)"
-          idle_reason="$(printf '%s\n' "$text" | sed -n 's/^ORACLE_IDLE_REASON=//p' | tail -n1)"
-          case "$idle_state" in IDLE|BUSY|UNKNOWN) ;; *) idle_state=UNKNOWN; idle_reason=invalid_idle_proof ;; esac
-          printf 'idle proof: %s (%s)\n' "$idle_state" "$idle_reason"
+          proof="$RUNNER_TEMP/oracle-idle-proof.txt"
+          printf '%s' "$text" > "$proof"
+          set +e
+          authorization="$(python3 ops/oracle_idle_stop_guard.py \
+            --proof "$proof" \
+            --max-age-seconds 30 \
+            --max-duration-seconds 30 \
+            --max-future-skew-seconds 5 2>/dev/null)"
+          authorization_rc=$?
+          set -e
+          expected_authorization=$'ORACLE_STOP_AUTHORIZED=YES\nORACLE_STOP_AUTHORIZATION_REASON=fresh_exact_idle'
+          if [[ $authorization_rc -eq 0 && "$authorization" == "$expected_authorization" ]]; then
+            stop_authorized=YES
+            idle_state=IDLE
+            idle_reason=fresh_exact_idle
+          else
+            stop_authorized=NO
+            idle_state=UNKNOWN
+            idle_reason=exact_idle_authorization_absent
+          fi
+          printf 'idle authorization: %s (%s)\n' "$stop_authorized" "$idle_reason"
           echo "idle_state=$idle_state" >> "$GITHUB_OUTPUT"
           echo "idle_reason=$idle_reason" >> "$GITHUB_OUTPUT"
+          echo "stop_authorized=$stop_authorized" >> "$GITHUB_OUTPUT"
 
       - name: Revalidate automatic stop epoch
         id: epoch
-        if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state == 'RUNNING' && steps.idle.outputs.idle_state == 'IDLE' }}
+        if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state == 'RUNNING' && steps.idle.outputs.stop_authorized == 'YES' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -270,7 +288,7 @@ jobs:
           exit 4
 
       - name: Stop exact instance only with IDLE proof
-        if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state == 'RUNNING' && steps.idle.outputs.idle_state == 'IDLE' && (steps.epoch.outputs.epoch_state == 'CURRENT' || steps.epoch.outputs.epoch_state == 'MANUAL') }}
+        if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state == 'RUNNING' && steps.idle.outputs.stop_authorized == 'YES' && (steps.epoch.outputs.epoch_state == 'CURRENT' || steps.epoch.outputs.epoch_state == 'MANUAL') }}
         run: |
           set -euo pipefail
           oci compute instance action --instance-id "$OCI_INSTANCE_OCID" --action STOP >/dev/null
@@ -285,13 +303,13 @@ jobs:
           echo "instance reached STOPPED after IDLE proof"
 
       - name: Refuse stop unless IDLE is proven
-        if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state == 'RUNNING' && steps.idle.outputs.idle_state != 'IDLE' }}
+        if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state == 'RUNNING' && steps.idle.outputs.stop_authorized != 'YES' }}
         run: |
           echo "STOP REFUSED: host idle state is ${{ steps.idle.outputs.idle_state || 'UNKNOWN' }}" >&2
           exit 3
 
       - name: Refuse stale automatic stop
-        if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state == 'RUNNING' && steps.idle.outputs.idle_state == 'IDLE' && steps.epoch.outputs.epoch_state != 'CURRENT' && steps.epoch.outputs.epoch_state != 'MANUAL' }}
+        if: ${{ steps.command.outputs.action == 'stop' && steps.state.outputs.current_state == 'RUNNING' && steps.idle.outputs.stop_authorized == 'YES' && steps.epoch.outputs.epoch_state != 'CURRENT' && steps.epoch.outputs.epoch_state != 'MANUAL' }}
         run: |
           echo "STOP REFUSED: automatic idle epoch is ${{ steps.epoch.outputs.epoch_state || 'UNKNOWN' }}" >&2
           exit 3

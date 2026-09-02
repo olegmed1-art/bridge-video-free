@@ -25,6 +25,10 @@ EXPECTED_KEYS = (
     "ORACLE_IDLE_REASON",
     "ORACLE_IDLE_STATE",
 )
+CANONICAL_IDLE_REASON = (
+    "jobs=0,research=0,research_children=0,control=0,"
+    "operator_lease=0,autopilot=0,video=0"
+)
 
 
 @dataclass(frozen=True)
@@ -122,6 +126,8 @@ def authorize(
         raise ProofError("proof_from_future")
     if proof.state != "IDLE":
         raise ProofError(f"state_{proof.state.lower()}_forbids_stop")
+    if proof.reason != CANONICAL_IDLE_REASON:
+        raise ProofError("idle_reason_not_canonical")
 
 
 def _emit(authorized: bool, reason: str) -> int:
