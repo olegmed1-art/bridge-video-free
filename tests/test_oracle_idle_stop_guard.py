@@ -11,6 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CLASSIFIER = ROOT / "ops" / "oracle_idle_state.sh"
 STOP_GUARD = ROOT / "ops" / "oracle_stop_guard.sh"
 SCHEMA = ROOT / "assistant_lab" / "oracle_idle_schema.sql"
+FINALIZER_WORKFLOW = ROOT / ".github" / "workflows" / "oracle-autopilot-staging-finalize.yml"
+POWER_WORKFLOW = ROOT / ".github" / "workflows" / "oracle-instance-power.yml"
 
 
 def _exe(path: Path, body: str) -> None:
@@ -38,9 +40,13 @@ class Cursor:
         if self.app == "oracle-idle-state":
             if fail == "assistant":
                 raise RuntimeError("assistant failure")
+            if os.environ.get("ORACLE_TEST_CORE_EMPTY") == "1":
+                return None
             return json.loads(os.environ["ORACLE_TEST_CORE_ROW"])
         if fail == "video":
             raise RuntimeError("video failure")
+        if os.environ.get("ORACLE_TEST_VIDEO_EMPTY") == "1":
+            return None
         return json.loads(os.environ["ORACLE_TEST_VIDEO_ROW"])
 
 class Connection:
@@ -68,6 +74,8 @@ def _run_classifier(
     video_count: int = 0,
     video_observed: int | None = None,
     db_fail: str = "",
+    core_empty: bool = False,
+    video_empty: bool = False,
     queue_dsn: bool = True,
     generic_spool_present: bool = True,
     generic_spool_work: bool = False,
@@ -78,12 +86,14 @@ def _run_classifier(
     lease_purpose: str | None = None,
     lease_issued: int | None = None,
     lease_expires: int | None = None,
+    service_active: bool = False,
+    observer_process_active: bool = False,
 ) -> str:
     now = int(time.time())
     bindir = tmp_path / "bin"
     bindir.mkdir(parents=True)
-    _exe(bindir / "systemctl", "#!/bin/sh\necho active\nexit 0\n")
-    _exe(bindir / "pgrep", "#!/bin/sh\nexit 1\n")
+    _exe(bindir / "systemctl", f"#!/bin/sh\nexit {0 if service_active else 3}\n")
+    _exe(bindir / "pgrep", f"#!/bin/sh\nexit {0 if observer_process_active else 1}\n")
 
     module_dir = tmp_path / "modules"
     module_dir.mkdir()
@@ -152,6 +162,8 @@ def _run_classifier(
                 ["universal-video-idle-v1", video_observed if video_observed is not None else now, video_count]
             ),
             "ORACLE_TEST_DB_FAIL": db_fail,
+            "ORACLE_TEST_CORE_EMPTY": "1" if core_empty else "0",
+            "ORACLE_TEST_VIDEO_EMPTY": "1" if video_empty else "0",
         }
     )
     return subprocess.run(
@@ -159,13 +171,22 @@ def _run_classifier(
     ).stdout
 
 
-def _run_stop_guard(tmp_path: Path, state: str, *, rc: int = 0, extra: str = "") -> subprocess.CompletedProcess[str]:
+def _run_stop_guard(
+    tmp_path: Path,
+    state: str,
+    *,
+    rc: int = 0,
+    extra: str = "",
+    reason: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     probe = tmp_path / "probe"
+    if reason is None:
+        reason = "all_required_sources_proved_idle" if state == "IDLE" else "test"
     _exe(
         probe,
         "#!/bin/sh\n"
         f"printf '{extra}'\n"
-        "printf 'ORACLE_IDLE_REASON=test\\n'\n"
+        f"printf 'ORACLE_IDLE_REASON={reason}\\n'\n"
         f"printf 'ORACLE_IDLE_STATE={state}\\n'\n"
         f"exit {rc}\n",
     )
@@ -198,6 +219,15 @@ def test_research_job_forbids_idle(tmp_path: Path) -> None:
 
 def test_research_child_forbids_idle(tmp_path: Path) -> None:
     assert "ORACLE_IDLE_STATE=BUSY" in _run_classifier(tmp_path, core_counts=(0, 0, 1, 0))
+
+
+def test_active_service_or_observer_process_forbids_idle(tmp_path: Path) -> None:
+    service = tmp_path / "service"
+    process = tmp_path / "process"
+    service.mkdir()
+    process.mkdir()
+    assert "ORACLE_IDLE_STATE=BUSY" in _run_classifier(service, service_active=True)
+    assert "ORACLE_IDLE_STATE=BUSY" in _run_classifier(process, observer_process_active=True)
 
 
 def test_universal_video_pending_canary_forbids_idle(tmp_path: Path) -> None:
@@ -252,6 +282,18 @@ def test_stale_database_telemetry_is_unknown(tmp_path: Path) -> None:
     assert "assistant_lab_telemetry_stale" in out and "ORACLE_IDLE_STATE=UNKNOWN" in out
 
 
+def test_empty_database_rows_are_unknown(tmp_path: Path) -> None:
+    core_case = tmp_path / "core-empty"
+    video_case = tmp_path / "video-empty"
+    core_case.mkdir()
+    video_case.mkdir()
+    core = _run_classifier(core_case, core_empty=True)
+    video = _run_classifier(video_case, video_empty=True)
+    assert "assistant_lab_telemetry_empty" in core and "ORACLE_IDLE_STATE=UNKNOWN" in core
+    assert "video_queue_telemetry_empty_after_assistant_lab_success" in video
+    assert "ORACLE_IDLE_STATE=UNKNOWN" in video
+
+
 def test_stale_video_progress_is_unknown(tmp_path: Path) -> None:
     out = _run_classifier(tmp_path, video_leaf="progress", progress_observed=int(time.time()) - 1000)
     assert "video_spool_progress_stale" in out and "ORACLE_IDLE_STATE=UNKNOWN" in out
@@ -284,6 +326,13 @@ def test_partial_success_then_video_failure_is_unknown(tmp_path: Path) -> None:
     assert "ORACLE_IDLE_STATE=UNKNOWN" in out
 
 
+def test_default_observer_spools_and_daemon_process_are_mandatory() -> None:
+    script = CLASSIFIER.read_text(encoding="utf-8")
+    assert "/opt/bridge-school/assistant-lab-observer/jobs/pending" in script
+    assert "/opt/bridge-school/assistant-lab-observer/jobs/running" in script
+    assert "assistant_lab\\.observer[[:space:]]+(daemon|run)" in script
+
+
 def test_unknown_always_forbids_stop(tmp_path: Path) -> None:
     result = _run_stop_guard(tmp_path, "UNKNOWN")
     assert result.returncode != 0 and "ORACLE_STOP_ALLOWED=NO" in result.stdout
@@ -296,7 +345,19 @@ def test_busy_forbids_stop(tmp_path: Path) -> None:
 
 def test_only_exact_idle_authorizes_future_stop_consumer(tmp_path: Path) -> None:
     result = _run_stop_guard(tmp_path, "IDLE")
-    assert result.returncode == 0 and "ORACLE_STOP_ALLOWED=YES" in result.stdout
+    assert result.returncode == 0
+    assert result.stdout == (
+        "ORACLE_STOP_REASON=all_required_sources_proved_idle\n"
+        "ORACLE_STOP_ALLOWED=YES\n"
+    )
+
+
+def test_empty_or_wrong_idle_reason_forbids_stop(tmp_path: Path) -> None:
+    empty = _run_stop_guard(tmp_path / "empty", "IDLE", reason="")
+    wrong = _run_stop_guard(tmp_path / "wrong", "IDLE", reason="test")
+    assert empty.returncode != 0 and wrong.returncode != 0
+    assert "ORACLE_STOP_ALLOWED=NO" in empty.stdout
+    assert "ORACLE_STOP_ALLOWED=NO" in wrong.stdout
 
 
 def test_failed_or_extra_output_probe_forbids_stop(tmp_path: Path) -> None:
@@ -310,6 +371,16 @@ def test_failed_or_extra_output_probe_forbids_stop(tmp_path: Path) -> None:
 def test_unknown_precedes_known_busy_when_any_source_is_missing(tmp_path: Path) -> None:
     out = _run_classifier(tmp_path, core_counts=(1, 0, 0, 0), queue_dsn=False)
     assert "ORACLE_IDLE_STATE=UNKNOWN" in out
+
+
+def test_real_stop_consumers_use_strict_guard() -> None:
+    finalizer = FINALIZER_WORKFLOW.read_text(encoding="utf-8")
+    power = POWER_WORKFLOW.read_text(encoding="utf-8")
+    assert "sudo -n /usr/local/sbin/oracle-stop-guard" in finalizer
+    assert "sudo -n /usr/local/sbin/oracle-stop-guard" in power
+    assert "ORACLE_STOP_ALLOWED=YES" in finalizer
+    assert "ORACLE_STOP_ALLOWED=YES" in power
+    assert "ORACLE_IDLE_STATE=IDLE" not in finalizer
 
 
 def test_guard_scripts_contain_no_stop_restart_or_reboot_side_effect() -> None:
