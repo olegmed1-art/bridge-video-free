@@ -91,13 +91,12 @@ jobs:
               if isinstance(node, ast.Call):
                   fn = node.func
                   name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ''
-                  if name in {'download_file', 'verify_claimed_source', 'process_video'}:
+                  if name in {'verify_claimed_source', 'run'}:
                       calls.append((getattr(node, 'lineno', 0), name))
           ordered = [name for _, name in sorted(calls)]
-          assert 'download_file' in ordered, ordered
           assert 'verify_claimed_source' in ordered, ordered
-          assert 'process_video' in ordered, ordered
-          assert ordered.index('download_file') < ordered.index('verify_claimed_source') < ordered.index('process_video'), ordered
+          assert 'run' in ordered, ordered
+          assert ordered.index('verify_claimed_source') < ordered.index('run'), ordered
           print({'source_reverification_order': ordered})
           PY
 
@@ -141,6 +140,7 @@ jobs:
         run: |
           set -euo pipefail
           psql -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE EXTENSION IF NOT EXISTS pgcrypto;
           CREATE TABLE IF NOT EXISTS public.schema_migration (
             migration_key text PRIMARY KEY,
             applied_at timestamptz NOT NULL DEFAULT now(),

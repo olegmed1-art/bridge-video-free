@@ -32,6 +32,7 @@ def test_pr_only_workflow_provisions_roles_and_uses_the_dockerfile_runtime_arg()
     for role in ("bridge_school_reader", "bridge_school_app", "bridge_school_worker"):
         assert f"'{role}'" in workflow
     assert "CREATE ROLE %I NOLOGIN" in workflow
+    assert "CREATE EXTENSION IF NOT EXISTS pgcrypto" in workflow
     assert "CREATE TABLE IF NOT EXISTS public.schema_migration" in workflow
     assert "python -m pytest -q tests/test_canary_gate.py tests/test_one_canary.py" in workflow
     assert '--build-arg "UNIVERSAL_VIDEO_SOURCE_COMMIT=$runtime_sha"' in workflow
