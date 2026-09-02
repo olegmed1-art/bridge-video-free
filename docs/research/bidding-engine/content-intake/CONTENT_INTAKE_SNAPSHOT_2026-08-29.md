@@ -96,7 +96,7 @@ Google Sheets ID `1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo` указывае
 - категории по оценке руки, общей и конкурентной торговле, конвенциям, шлемовой торговле, розыгрышу, висту, ошибкам/эвристикам, педагогике и противоречиям;
 - исследования BEN, BBA/EPBot, Pons, Bridgit, открытых и закрытых роботов, BBO-100 и сравнительных стендов.
 
-Допуск после подтверждения immutable identity: metadata/evidence/research only. WORLD → SCHOOL CANON запрещён по умолчанию и требует решения владельца канона, точных source/target versions, SHA-256, semantic diff/scope, provenance, regressions и I2. Любое `CANON_CONFLICT` возвращает явный gap без школьного ответа; не-владелец и неполное/устаревшее evidence не могут разрешить promotion.
+Допуск после подтверждения immutable identity: metadata/evidence/research only. WORLD → SCHOOL CANON запрещён по умолчанию и требует решения владельца канона, точных source/target versions, SHA-256, semantic diff/scope, provenance, regressions и I2. Любое `CANON_CONFLICT` возвращает точный статус `CANON_CONFLICT` без действия и без вызова WORLD; не-владелец и неполное/устаревшее evidence не могут разрешить promotion.
 
 ## Очередь наполнения
 
