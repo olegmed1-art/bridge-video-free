@@ -49,8 +49,16 @@ def test_downstream_power_boundary_remains_exact_and_idle_gated():
     assert 'r.get("event")!="pull_request"' in text
     assert "steps.epoch.outputs.epoch_state == 'CURRENT'" in text
     assert "Refuse stale automatic stop" in text
-    assert "steps.idle.outputs.idle_state == 'IDLE'" in text
+    assert "steps.idle.outputs.stop_authorized == 'YES'" in text
+    assert "steps.idle.outputs.idle_state == 'IDLE'" not in text
     assert "Stop exact instance only with IDLE proof" in text
+    stop_step = text.index("Stop exact instance only with IDLE proof")
+    final_probe = text.index(
+        "bridge-school-oracle-final-idle-proof-${GITHUB_RUN_ID}", stop_step
+    )
+    final_authorizer = text.index("--proof \"$proof\"", final_probe)
+    stop_action = text.index("--action STOP", final_authorizer)
+    assert stop_step < final_probe < final_authorizer < stop_action
     assert "controller: manual only" in text
 
 
