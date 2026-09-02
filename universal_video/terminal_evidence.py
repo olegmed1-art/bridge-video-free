@@ -19,6 +19,10 @@ from .drive_adapter import DRIVE, file_metadata
 MAX_AI_DONE_BYTES = 2 * 1024 * 1024
 MAX_MASTER_PDF_BYTES = 2 * 1024**3
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+MD5_RE = re.compile(r"^[0-9a-f]{32}$")
+SOURCE_CHECKSUM_RE = re.compile(
+    r"^(?:sha256:[0-9a-f]{64}|sha1:[0-9a-f]{40}|md5:[0-9a-f]{32})$"
+)
 DRIVE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{10,200}$")
 
 
@@ -53,6 +57,36 @@ def _drive_id(value: Any) -> str:
     if not DRIVE_ID_RE.fullmatch(result):
         raise TerminalEvidenceError("UV_TERMINAL_LOCATOR_INVALID")
     return result
+
+
+def _mapping(value: Any, error_code: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise TerminalEvidenceError(error_code)
+    return dict(value)
+
+
+def source_identity_from_claim(claim: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the complete immutable source identity required by the gate."""
+
+    try:
+        size_bytes = int(claim.get("source_size_bytes") or 0)
+    except (TypeError, ValueError) as exc:
+        raise TerminalEvidenceError("UV_SOURCE_IDENTITY_INVALID") from exc
+    checksum = str(claim.get("source_checksum") or "").strip().lower()
+    if size_bytes <= 0 or not SOURCE_CHECKSUM_RE.fullmatch(checksum):
+        raise TerminalEvidenceError("UV_SOURCE_IDENTITY_INVALID")
+    return {
+        "file_id": _drive_id(claim.get("source_file_id")),
+        "name": _text(claim.get("source_name"), "UV_SOURCE_IDENTITY_INVALID"),
+        "mime_type": _text(
+            claim.get("source_mime_type"),
+            "UV_SOURCE_IDENTITY_INVALID",
+            maximum=200,
+        ),
+        "size_bytes": size_bytes,
+        "parent_folder_id": _drive_id(claim.get("source_folder_id")),
+        "checksum": checksum,
+    }
 
 
 def readback_drive_bytes(
@@ -148,8 +182,13 @@ def build_terminal_evidence(
 ) -> dict[str, Any]:
     """Return the exact output fields required for a terminal queue receipt."""
 
-    source_file_id = _drive_id(claim.get("source_file_id"))
-    stable_job_key = _text(claim.get("stable_job_key"), "UV_TERMINAL_JOB_IDENTITY_MISMATCH", maximum=160)
+    source_identity = source_identity_from_claim(claim)
+    source_file_id = source_identity["file_id"]
+    stable_job_key = _text(
+        claim.get("stable_job_key"),
+        "UV_TERMINAL_JOB_IDENTITY_MISMATCH",
+        maximum=160,
+    )
     algorithm_revision = _text(
         claim.get("algorithm_revision"),
         "UV_TERMINAL_JOB_IDENTITY_MISMATCH",
@@ -213,11 +252,13 @@ def build_terminal_evidence(
             raise TerminalEvidenceError("UV_TERMINAL_RESULT_PARENT_MISMATCH")
         if not SHA256_RE.fullmatch(str(item.get("sha256") or "")):
             raise TerminalEvidenceError("UV_TERMINAL_READBACK_CHECKSUM_MISMATCH")
+        if not MD5_RE.fullmatch(str(item.get("md5") or "")):
+            raise TerminalEvidenceError("UV_TERMINAL_READBACK_CHECKSUM_MISMATCH")
     if master.get("file_id") != locators["master_pdf"] or master.get("mime_type") != "application/pdf":
         raise TerminalEvidenceError("UV_TERMINAL_MASTER_PDF_IDENTITY_MISMATCH")
     if master.get("sha256") != expected_master_sha:
         raise TerminalEvidenceError("UV_TERMINAL_MASTER_PDF_CHECKSUM_MISMATCH")
-    if ai_done.get("file_id") != locators["ai_done"]:
+    if ai_done.get("file_id") != locators["ai_done"] or ai_done.get("mime_type") != "application/json":
         raise TerminalEvidenceError("UV_TERMINAL_AI_DONE_IDENTITY_MISMATCH")
     try:
         readback_done = json.loads(bytes(ai_done.get("body") or b"").decode("utf-8-sig"))
@@ -244,6 +285,7 @@ def build_terminal_evidence(
         "schema": "universal-video-terminal-manifest-v1",
         "job_id": stable_job_key,
         "source_file_id": source_file_id,
+        "source_identity": source_identity,
         "algorithm_revision": algorithm_revision,
         "result_mode": "SHADOW_REVIEW_ONLY",
         "publication_state": "NOT_PUBLISHED",
@@ -256,6 +298,7 @@ def build_terminal_evidence(
         "schema": "universal-video-terminal-receipt-v1",
         "job_id": stable_job_key,
         "source_file_id": source_file_id,
+        "source_identity": source_identity,
         "source_identity_verified": True,
         "route_readback_verified": True,
         "result_readback_verified": True,
@@ -263,10 +306,12 @@ def build_terminal_evidence(
         "manifest_sha256": manifest_sha256,
         "artifact_count": len(artifacts),
         "publication_state": "NOT_PUBLISHED",
+        "canonical_promotion_allowed": False,
+        "database_persistence_allowed": False,
         "media_execution_evidence_only": True,
     }
     evidence_sha256 = hashlib.sha256(_canonical_bytes(evidence_core)).hexdigest()
-    return {
+    result = {
         "manifest": manifest,
         "artifact_locators": {
             "master_pdf_drive_id": locators["master_pdf"],
@@ -275,6 +320,125 @@ def build_terminal_evidence(
         "terminal_receipt": {**evidence_core, "evidence_sha256": evidence_sha256},
         "terminal_evidence_sha256": evidence_sha256,
     }
+    validate_terminal_output(claim, result)
+    return result
+
+
+def validate_terminal_output(
+    claim: Mapping[str, Any],
+    output: Mapping[str, Any],
+) -> None:
+    """Validate the complete terminal contract immediately before queue finish.
+
+    This second gate prevents supported/custom processors from transitioning a
+    job to REVIEW_READY with a legacy or partial result mapping.
+    """
+
+    manifest = _mapping(output.get("manifest"), "UV_TERMINAL_MANIFEST_INVALID")
+    locators = _mapping(output.get("artifact_locators"), "UV_TERMINAL_LOCATOR_INVALID")
+    receipt = _mapping(output.get("terminal_receipt"), "UV_TERMINAL_RECEIPT_INVALID")
+    source_identity = source_identity_from_claim(claim)
+    job_id = _text(
+        claim.get("stable_job_key"),
+        "UV_TERMINAL_JOB_IDENTITY_MISMATCH",
+        maximum=160,
+    )
+    algorithm_revision = _text(
+        claim.get("algorithm_revision"),
+        "UV_TERMINAL_JOB_IDENTITY_MISMATCH",
+        maximum=80,
+    )
+    target_folder_id = _drive_id(claim.get("output_folder_id"))
+
+    if set(locators) != {"master_pdf_drive_id", "ai_done_drive_id"}:
+        raise TerminalEvidenceError("UV_TERMINAL_LOCATOR_INVALID")
+    master_id = _drive_id(locators.get("master_pdf_drive_id"))
+    ai_done_id = _drive_id(locators.get("ai_done_drive_id"))
+    if master_id == ai_done_id or source_identity["file_id"] in {master_id, ai_done_id}:
+        raise TerminalEvidenceError("UV_TERMINAL_LOCATOR_INVALID")
+
+    expected_manifest_fields = {
+        "schema": "universal-video-terminal-manifest-v1",
+        "job_id": job_id,
+        "source_file_id": source_identity["file_id"],
+        "source_identity": source_identity,
+        "algorithm_revision": algorithm_revision,
+        "result_mode": "SHADOW_REVIEW_ONLY",
+        "publication_state": "NOT_PUBLISHED",
+        "canonical_promotion_allowed": False,
+        "database_persistence_allowed": False,
+    }
+    for key, expected in expected_manifest_fields.items():
+        if manifest.get(key) != expected:
+            raise TerminalEvidenceError("UV_TERMINAL_MANIFEST_INVALID")
+
+    raw_artifacts = manifest.get("artifacts")
+    if not isinstance(raw_artifacts, list) or len(raw_artifacts) != 2:
+        raise TerminalEvidenceError("UV_TERMINAL_MANIFEST_INVALID")
+    artifacts: dict[str, dict[str, Any]] = {}
+    for raw in raw_artifacts:
+        artifact = _mapping(raw, "UV_TERMINAL_MANIFEST_INVALID")
+        kind = str(artifact.get("kind") or "")
+        if kind in artifacts:
+            raise TerminalEvidenceError("UV_TERMINAL_MANIFEST_INVALID")
+        artifacts[kind] = artifact
+    if set(artifacts) != {"master_pdf", "ai_done"}:
+        raise TerminalEvidenceError("UV_TERMINAL_MANIFEST_INVALID")
+
+    expected_artifacts = {
+        "master_pdf": (master_id, "application/pdf"),
+        "ai_done": (ai_done_id, "application/json"),
+    }
+    for kind, (expected_id, expected_mime) in expected_artifacts.items():
+        artifact = artifacts[kind]
+        try:
+            size_bytes = int(artifact.get("size_bytes") or 0)
+        except (TypeError, ValueError) as exc:
+            raise TerminalEvidenceError("UV_TERMINAL_MANIFEST_INVALID") from exc
+        if (
+            _drive_id(artifact.get("drive_file_id")) != expected_id
+            or _text(
+                artifact.get("name"),
+                "UV_TERMINAL_MANIFEST_INVALID",
+            )
+            != artifact.get("name")
+            or artifact.get("mime_type") != expected_mime
+            or size_bytes <= 0
+            or artifact.get("parent_folder_id") != target_folder_id
+            or not SHA256_RE.fullmatch(str(artifact.get("sha256") or ""))
+            or not MD5_RE.fullmatch(str(artifact.get("md5") or ""))
+        ):
+            raise TerminalEvidenceError("UV_TERMINAL_MANIFEST_INVALID")
+
+    manifest_sha256 = hashlib.sha256(_canonical_bytes(manifest)).hexdigest()
+    expected_receipt_fields = {
+        "schema": "universal-video-terminal-receipt-v1",
+        "job_id": job_id,
+        "source_file_id": source_identity["file_id"],
+        "source_identity": source_identity,
+        "source_identity_verified": True,
+        "route_readback_verified": True,
+        "result_readback_verified": True,
+        "checksum_verified": True,
+        "manifest_sha256": manifest_sha256,
+        "artifact_count": 2,
+        "publication_state": "NOT_PUBLISHED",
+        "canonical_promotion_allowed": False,
+        "database_persistence_allowed": False,
+        "media_execution_evidence_only": True,
+    }
+    for key, expected in expected_receipt_fields.items():
+        if receipt.get(key) != expected:
+            raise TerminalEvidenceError("UV_TERMINAL_RECEIPT_INVALID")
+    if set(receipt) != set(expected_receipt_fields) | {"evidence_sha256"}:
+        raise TerminalEvidenceError("UV_TERMINAL_RECEIPT_INVALID")
+    evidence_sha256 = str(receipt.get("evidence_sha256") or "")
+    if (
+        not SHA256_RE.fullmatch(evidence_sha256)
+        or hashlib.sha256(_canonical_bytes(expected_receipt_fields)).hexdigest() != evidence_sha256
+        or output.get("terminal_evidence_sha256") != evidence_sha256
+    ):
+        raise TerminalEvidenceError("UV_TERMINAL_RECEIPT_INVALID")
 
 
 __all__ = [
@@ -283,4 +447,6 @@ __all__ = [
     "TerminalEvidenceError",
     "build_terminal_evidence",
     "readback_drive_bytes",
+    "source_identity_from_claim",
+    "validate_terminal_output",
 ]

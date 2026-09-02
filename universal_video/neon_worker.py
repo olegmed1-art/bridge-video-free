@@ -13,7 +13,11 @@ from bridge_worker_3_1_free import stable_job_id
 
 from .drive_adapter import access_token, file_metadata
 from .runtime_preflight import validate_video_runtime
-from .terminal_evidence import build_terminal_evidence
+from .terminal_evidence import (
+    build_terminal_evidence,
+    source_identity_from_claim,
+    validate_terminal_output,
+)
 from .video_queue import claim_job, database_url_from_env, finish_job, heartbeat_job, retry_job
 
 APPROVED_PROFILE = "bridge_3_1_free"
@@ -77,32 +81,29 @@ def _metadata_checksum(meta: Mapping[str, Any]) -> str | None:
     return None
 
 
-def verify_claimed_source(claim: Mapping[str, Any], token: str) -> None:
+def verify_claimed_source(claim: Mapping[str, Any], token: str) -> dict[str, Any]:
+    """Read and exactly match all six source-identity fields."""
+
     if claim.get("processing_profile") != APPROVED_PROFILE:
         raise NeonVideoWorkerError("VIDEO_QUEUE_PROFILE_NOT_APPROVED")
     if claim.get("algorithm_revision") != APPROVED_REVISION:
         raise NeonVideoWorkerError("VIDEO_QUEUE_REVISION_NOT_APPROVED")
     if claim.get("stable_job_key") != stable_job_id("drive", str(claim.get("source_file_id") or "")):
         raise NeonVideoWorkerError("VIDEO_QUEUE_STABLE_ID_MISMATCH")
+    expected = source_identity_from_claim(claim)
     meta = file_metadata(str(claim["source_file_id"]), token)
+    parents = [str(value) for value in (meta.get("parents") or [])]
     observed = {
-        "id": str(meta.get("id") or ""),
+        "file_id": str(meta.get("id") or ""),
         "name": str(meta.get("name") or ""),
         "mime_type": str(meta.get("mimeType") or ""),
         "size_bytes": int(meta.get("size") or 0),
-        "parents": [str(value) for value in (meta.get("parents") or [])],
+        "parent_folder_id": parents[0] if len(parents) == 1 else "",
         "checksum": _metadata_checksum(meta),
-    }
-    expected = {
-        "id": claim["source_file_id"],
-        "name": claim["source_name"],
-        "mime_type": claim["source_mime_type"],
-        "size_bytes": int(claim["source_size_bytes"]),
-        "parents": [claim["source_folder_id"]],
-        "checksum": claim.get("source_checksum"),
     }
     if observed != expected:
         raise NeonVideoWorkerError("VIDEO_QUEUE_SOURCE_READBACK_MISMATCH")
+    return observed
 
 
 @contextmanager
@@ -136,8 +137,8 @@ def _stable_environment(claim: Mapping[str, Any]) -> Iterator[None]:
 
 
 def stable_review_processor(claim: Mapping[str, Any]) -> dict[str, Any]:
-    token = access_token()
-    verify_claimed_source(claim, token)
+    source_token = access_token()
+    verify_claimed_source(claim, source_token)
     with _stable_environment(claim):
         import bridge_runtime_hardening_r25_16 as hardening
         import route_drive_job_outputs
@@ -152,7 +153,10 @@ def stable_review_processor(claim: Mapping[str, Any]) -> dict[str, Any]:
         ):
             raise NeonVideoWorkerError("VIDEO_QUEUE_AI_DONE_MISMATCH")
         route_receipt = route_drive_job_outputs.route_outputs()
-        terminal = build_terminal_evidence(claim, done, route_receipt, token)
+        # Processing and routing can outlive a Drive access token. Acquire a
+        # new credential immediately before the terminal metadata/media reads.
+        terminal_token = access_token()
+        terminal = build_terminal_evidence(claim, done, route_receipt, terminal_token)
     master_pdf = done.get("masterPdf") if isinstance(done.get("masterPdf"), dict) else {}
     return {
         "master_pdf_drive_id": master_pdf.get("driveId"),
@@ -227,15 +231,38 @@ def process_claim(
     output = _base_output(claim)
     outcome = "REVIEW_READY"
     error_code: str | None = None
+    initial_source: dict[str, Any] | None = None
+
     with _Heartbeat(database_url, claim, worker_key) as heartbeat:
         with _processing_timeout():
             try:
-                output.update(dict(processor(claim)))
+                # Supported custom processors cannot bypass the same pre-run
+                # identity gate used by the production processor.
+                initial_source = verify_claimed_source(claim, access_token())
+                candidate = dict(processor(claim))
+                validate_terminal_output(claim, candidate)
+                output.update(candidate)
+                # A processor may not override fail-closed lifecycle fields.
+                output.update(_base_output(claim))
             except Exception as exc:
                 outcome, error_code = _failure(exc)
                 output["error_type"] = type(exc).__name__
         if heartbeat.error is not None:
             raise NeonVideoWorkerError("VIDEO_QUEUE_HEARTBEAT_LOST") from heartbeat.error
+
+    if outcome == "REVIEW_READY":
+        try:
+            # Revalidate the cryptographic receipt first, then perform the
+            # source metadata/checksum read as the final external observation
+            # immediately before the fenced queue transition.
+            validate_terminal_output(claim, output)
+            final_source = verify_claimed_source(claim, access_token())
+            if initial_source is None or final_source != initial_source:
+                raise NeonVideoWorkerError("VIDEO_QUEUE_SOURCE_CHANGED_DURING_PROCESSING")
+        except Exception as exc:
+            outcome, error_code = _failure(exc)
+            output["error_type"] = type(exc).__name__
+
     if outcome == "FAILED":
         return retry_job(
             database_url,

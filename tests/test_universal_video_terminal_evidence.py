@@ -9,15 +9,18 @@ from universal_video.terminal_evidence import (
     TerminalEvidenceError,
     build_terminal_evidence,
     readback_drive_bytes,
+    validate_terminal_output,
 )
 
 
 SOURCE_ID = "sourcefile0001"
+SOURCE_FOLDER_ID = "sourcefolder01"
 MASTER_ID = "masterpdf00001"
 DONE_ID = "aidonefile0001"
 TARGET_ID = "targetfolder001"
 JOB_ID = "a" * 32
 REVISION = "3.1-free-r25.16"
+SOURCE_CHECKSUM = "md5:" + "1" * 32
 
 
 def _fixture():
@@ -41,6 +44,11 @@ def _fixture():
     ).encode("utf-8")
     claim = {
         "source_file_id": SOURCE_ID,
+        "source_name": "lesson-13.mp4",
+        "source_mime_type": "video/mp4",
+        "source_size_bytes": 2_000_000,
+        "source_folder_id": SOURCE_FOLDER_ID,
+        "source_checksum": SOURCE_CHECKSUM,
         "stable_job_key": JOB_ID,
         "algorithm_revision": REVISION,
         "output_folder_id": TARGET_ID,
@@ -99,12 +107,23 @@ def test_build_terminal_evidence_requires_readable_checksums_and_locators():
     assert result["manifest"]["publication_state"] == "NOT_PUBLISHED"
     assert result["manifest"]["canonical_promotion_allowed"] is False
     assert result["manifest"]["database_persistence_allowed"] is False
+    assert result["manifest"]["source_identity"] == {
+        "file_id": SOURCE_ID,
+        "name": "lesson-13.mp4",
+        "mime_type": "video/mp4",
+        "size_bytes": 2_000_000,
+        "parent_folder_id": SOURCE_FOLDER_ID,
+        "checksum": SOURCE_CHECKSUM,
+    }
     receipt = result["terminal_receipt"]
     assert receipt["result_readback_verified"] is True
     assert receipt["checksum_verified"] is True
     assert receipt["artifact_count"] == 2
+    assert receipt["canonical_promotion_allowed"] is False
+    assert receipt["publication_state"] == "NOT_PUBLISHED"
     assert len(receipt["manifest_sha256"]) == 64
     assert result["terminal_evidence_sha256"] == receipt["evidence_sha256"]
+    validate_terminal_output(claim, result)
 
 
 @pytest.mark.parametrize(
@@ -115,6 +134,7 @@ def test_build_terminal_evidence_requires_readable_checksums_and_locators():
         (lambda claim, done, route, objects: objects[MASTER_ID].update(parents=["wrongfolder0001"]), "UV_TERMINAL_RESULT_PARENT_MISMATCH"),
         (lambda claim, done, route, objects: objects[MASTER_ID].update(sha256="0" * 64), "UV_TERMINAL_MASTER_PDF_CHECKSUM_MISMATCH"),
         (lambda claim, done, route, objects: objects[DONE_ID].update(body=b"{}"), "UV_TERMINAL_AI_DONE_MISMATCH"),
+        (lambda claim, done, route, objects: objects[DONE_ID].update(mime_type="text/plain"), "UV_TERMINAL_AI_DONE_IDENTITY_MISMATCH"),
     ],
 )
 def test_terminal_evidence_fails_closed(mutation, error_code):
@@ -123,6 +143,33 @@ def test_terminal_evidence_fails_closed(mutation, error_code):
     with pytest.raises(TerminalEvidenceError) as caught:
         build_terminal_evidence(claim, done, route, "token", readback=readback)
     assert caught.value.error_code == error_code
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda result: result.pop("terminal_receipt"),
+        lambda result: result["manifest"].update(publication_state="PUBLISHED"),
+        lambda result: result["terminal_receipt"].update(result_readback_verified=False),
+        lambda result: result["artifact_locators"].update(ai_done_drive_id=MASTER_ID),
+        lambda result: result["manifest"]["source_identity"].update(checksum="md5:" + "2" * 32),
+        lambda result: result.update(terminal_evidence_sha256="0" * 64),
+    ],
+)
+def test_validate_terminal_output_rejects_partial_or_tampered_receipts(mutate):
+    claim, done, route, _objects, readback = _fixture()
+    result = build_terminal_evidence(claim, done, route, "token", readback=readback)
+    mutate(result)
+    with pytest.raises(TerminalEvidenceError):
+        validate_terminal_output(claim, result)
+
+
+def test_terminal_evidence_requires_claimed_source_checksum():
+    claim, done, route, _objects, readback = _fixture()
+    claim["source_checksum"] = None
+    with pytest.raises(TerminalEvidenceError) as caught:
+        build_terminal_evidence(claim, done, route, "token", readback=readback)
+    assert caught.value.error_code == "UV_SOURCE_IDENTITY_INVALID"
 
 
 class _Response:
