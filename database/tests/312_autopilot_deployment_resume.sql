@@ -269,8 +269,12 @@ BEGIN
     END IF;
     SELECT * INTO online_claim
       FROM autopilot.claim_next_task('sql-deployment-online-worker', 60);
-    IF online_claim.task_key <> first_online_tick.task_key
-       OR online_claim.lease_epoch <> 1 THEN
+    IF online_claim.lease_epoch <> 1
+       OR NOT EXISTS (
+            SELECT 1 FROM autopilot.task
+             WHERE task_id = online_claim.task_id
+               AND task_key = first_online_tick.task_key
+       ) THEN
         RAISE EXCEPTION 'AUTOPILOT_DEPLOYMENT_RESUME_ONLINE_CLAIM_INVALID';
     END IF;
     IF NOT autopilot.complete_task(
