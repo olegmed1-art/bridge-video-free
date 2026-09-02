@@ -31,13 +31,25 @@ def test_batch_enqueue_reuses_the_bounded_staging_classifier() -> None:
 
 def test_server_intake_rejection_deletes_payload_before_return() -> None:
     submit = _function("submit_drive", "status")
-    rejection = submit[submit.index("else\n    intake_code=") : submit.index("  fi\n", submit.index("else\n    intake_code="))]
+    failure_start = submit.index('if ! intake_output=')
+    cleanup_gate = submit.index('if ! rm -f -- "$tmp" 2>/dev/null', failure_start)
+    rejection = submit[failure_start:cleanup_gate]
     cleanup_at = rejection.index('rm -f -- "$tmp" 2>/dev/null || true')
     reject_at = rejection.index('intake_reject "$intake_code"')
     return_at = rejection.index("return 1")
     assert cleanup_at < reject_at < return_at
     assert "tmp=''" in rejection
     assert "trap - EXIT" in rejection
+
+
+def test_server_intake_success_is_not_published_before_confirmed_cleanup() -> None:
+    submit = _function("submit_drive", "status")
+    cleanup_gate = submit.index('if ! rm -f -- "$tmp" 2>/dev/null')
+    cleanup_reject = submit.index("intake_reject 'UV_INTAKE_CLEANUP_FAILED'", cleanup_gate)
+    clear_trap = submit.index("trap - EXIT", cleanup_reject)
+    publish = submit.index("printf '%s\\n' \"$intake_output\"", clear_trap)
+    assert cleanup_gate < cleanup_reject < clear_trap < publish
+    assert '[[ -e "$tmp" || -L "$tmp" ]]' in submit
 
 
 def test_exit_trap_captures_the_actual_staged_path() -> None:
