@@ -183,9 +183,8 @@ jobs:
           done
 
           exit_code="$(printf '%s' "$execution_json" | python -c 'import json,sys; value=json.load(sys.stdin).get("data",{}).get("content",{}).get("exit-code",None); print("" if value is None else value)' 2>/dev/null || true)"
-          text="$(printf '%s' "$execution_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("content",{}).get("text","") or "")' 2>/dev/null || true)"
           if [[ "$lifecycle" != "SUCCEEDED" ]]; then
-            diagnostic="$(printf '%s\n' "$text" | grep -E '^(OCARUN_SUDO_NOT_CONFIGURED|ORACLE_IDLE_REASON=|ORACLE_IDLE_STATE=)' | tail -n2 | tr '\n' ',' | sed 's/,$//' || true)"
+            diagnostic="$(printf '%s' "$execution_json" | python -c 'import json,sys; value=json.load(sys.stdin).get("data",{}).get("content",{}).get("text",""); sys.stdout.write(value if isinstance(value,str) else "")' 2>/dev/null | grep -E '^(OCARUN_SUDO_NOT_CONFIGURED|ORACLE_IDLE_REASON=|ORACLE_IDLE_STATE=)' | tail -n2 | tr '\n' ',' | sed 's/,$//' || true)"
             printf 'idle command failed: lifecycle=%s exit=%s diagnostic=%s\n' "${lifecycle:-timeout}" "${exit_code:-unknown}" "${diagnostic:-unavailable}"
             echo "idle_state=UNKNOWN" >> "$GITHUB_OUTPUT"
             if [[ "$diagnostic" == *OCARUN_SUDO_NOT_CONFIGURED* ]]; then
@@ -202,7 +201,11 @@ jobs:
           fi
 
           proof="$RUNNER_TEMP/oracle-idle-proof.txt"
-          printf '%s\n' "$text" > "$proof"
+          if ! printf '%s' "$execution_json" | python -c 'import json,sys; value=json.load(sys.stdin).get("data",{}).get("content",{}).get("text",None); isinstance(value,str) or sys.exit(2); sys.stdout.write(value)' > "$proof"; then
+            echo "idle_state=UNKNOWN" >> "$GITHUB_OUTPUT"
+            echo "idle_reason=classifier_output_unavailable" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           set +e
           authorization="$(python3 ops/oracle_idle_stop_guard.py \
             --proof "$proof" \
@@ -285,14 +288,16 @@ jobs:
             sleep 5
           done
           exit_code="$(printf '%s' "$execution_json" | python -c 'import json,sys; value=json.load(sys.stdin).get("data",{}).get("content",{}).get("exit-code",None); print("" if value is None else value)' 2>/dev/null || true)"
-          text="$(printf '%s' "$execution_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("content",{}).get("text","") or "")' 2>/dev/null || true)"
           if [[ "$lifecycle" != 'SUCCEEDED' || -z "$exit_code" || "$exit_code" != '0' ]]; then
             echo 'STOP REFUSED: final host idle classifier did not succeed' >&2
             exit 3
           fi
 
           proof="$RUNNER_TEMP/oracle-idle-proof-final.txt"
-          printf '%s\n' "$text" > "$proof"
+          if ! printf '%s' "$execution_json" | python -c 'import json,sys; value=json.load(sys.stdin).get("data",{}).get("content",{}).get("text",None); isinstance(value,str) or sys.exit(2); sys.stdout.write(value)' > "$proof"; then
+            echo 'STOP REFUSED: final host idle proof payload is unavailable' >&2
+            exit 3
+          fi
           set +e
           authorization="$(python3 ops/oracle_idle_stop_guard.py \
             --proof "$proof" \
