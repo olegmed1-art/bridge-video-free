@@ -153,6 +153,25 @@ PY
 CURRENT_STAGE='image-preflight'
 observed="$(docker image inspect --format '{{.Id}}' "bridge-school/universal-video:$EXPECTED_COMMIT")"
 [[ "$observed" == "$EXPECTED_DIGEST" ]] || fail UV_CONTAINER_PROMOTION_IMAGE_MISMATCH
+CURRENT_STAGE='speaker-model-preflight'
+runtime_uid="$(id -u universal-video)"
+runtime_gid="$(id -g universal-video)"
+[[ -d "$BASE_DIR/model-cache/speaker" && ! -L "$BASE_DIR/model-cache/speaker" ]] \
+  || fail UV_CONTAINER_PROMOTION_SPEAKER_CACHE_UNAVAILABLE
+docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g \
+  --user="$runtime_uid:$runtime_gid" \
+  --env "UNIVERSAL_VIDEO_SOURCE_COMMIT=$EXPECTED_COMMIT" \
+  --env UNIVERSAL_VIDEO_SPOOL_ROOT=/var/lib/universal-video/spool \
+  --env UNIVERSAL_VIDEO_OUTPUT_ROOT=/var/lib/universal-video/output \
+  --env UNIVERSAL_VIDEO_MEDIA_ROOT=/var/lib/universal-video/media \
+  --env UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE=/var/lib/universal-video/model-cache/speaker \
+  --env HF_HOME=/var/lib/universal-video/model-cache \
+  --mount "type=bind,src=$BASE_DIR/spool,dst=/var/lib/universal-video/spool" \
+  --mount "type=bind,src=$BASE_DIR/output,dst=/var/lib/universal-video/output" \
+  --mount "type=bind,src=$BASE_DIR/media,dst=/var/lib/universal-video/media" \
+  --mount "type=bind,src=$BASE_DIR/model-cache,dst=/var/lib/universal-video/model-cache" \
+  "$EXPECTED_DIGEST" true \
+  || fail UV_CONTAINER_PROMOTION_SPEAKER_MODEL_INVALID
 started_unix="$(date +%s)"
 old_enabled_before="$(systemctl is-enabled "$OLD_SERVICE" 2>/dev/null || true)"
 old_active_before="$(systemctl is-active "$OLD_SERVICE" 2>/dev/null || true)"

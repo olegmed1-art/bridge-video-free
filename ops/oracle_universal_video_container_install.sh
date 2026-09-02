@@ -208,12 +208,14 @@ UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE=/var/lib/universal-video/model-cache/speaker
 UNIVERSAL_VIDEO_STATUS_PATH=/run/bridge-school/universal-video-status.json
 HF_HOME=/var/lib/universal-video/model-cache
 GOOGLE_DRIVE_OAUTH_JSON_FILE=/run/secrets/google-drive-oauth.json
-BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE=/run/secrets/video-queue-dsn
 UNIVERSAL_VIDEO_REQUIRE_STAGED_SOURCE=1
 UNIVERSAL_VIDEO_WHISPER_MODEL=${UNIVERSAL_VIDEO_WHISPER_MODEL:-small}
 UNIVERSAL_VIDEO_ASR_THREADS=${UNIVERSAL_VIDEO_ASR_THREADS:-6}
 UNIVERSAL_VIDEO_POLL_SECONDS=${UNIVERSAL_VIDEO_POLL_SECONDS:-2}
 EOF
+if [[ "$ACTIVATE" == 1 ]]; then
+  printf '%s\n' 'BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE=/run/secrets/video-queue-dsn' >>"$env_tmp"
+fi
 chown root:root "$env_tmp"
 chmod 0640 "$env_tmp"
 mv -fT -- "$env_tmp" "$ENV_FILE"
@@ -236,6 +238,7 @@ docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g --user="$uid:$
   --mount "type=bind,src=$BASE_DIR/secrets,dst=/run/secrets,readonly" "$image_id" true
 
 if [[ "$ACTIVATE" == 1 ]]; then
+  [[ "$ENV_FILE" == "$PERSISTENT_ENV_FILE" ]] || die 'activation environment path mismatch'
   install -m 0644 -o root -g root "$SOURCE_DIR/deploy/oracle-universal-video/$SERVICE_NAME" "/etc/systemd/system/$SERVICE_NAME"
   systemctl daemon-reload
   systemd-analyze verify "/etc/systemd/system/$SERVICE_NAME" >/dev/null

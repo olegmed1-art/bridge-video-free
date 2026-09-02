@@ -58,7 +58,7 @@ def test_container_installer_reclaims_only_unused_video_images_before_build() ->
 
     assert 'UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB:-8388608' in installer
     assert 'docker builder prune --all --force' in installer
-    assert 'docker image prune --all --force' in installer
+    assert 'docker image prune --all --force' not in installer
     assert 'docker image ls --filter "reference=$IMAGE_REPO:*"' in installer
     assert 'docker ps -aq --filter "ancestor=$old_image_id"' in installer
     assert 'UV_CONTAINER_DISK_INSUFFICIENT' in installer
