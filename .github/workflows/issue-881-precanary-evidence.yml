@@ -67,5 +67,5 @@ jobs:
           grep -F 'github.actor == github.repository_owner' "$workflow"
           grep -F "github.repository == 'olegmed1-art/bridge-video-free'" "$workflow"
           grep -F 'verify_live_gate(){' "$workflow"
-          test "$(grep -c '^[[:space:]]*verify_live_gate$' "$workflow")" -ge 3
+          test "$(grep -c '^[[:space:]]*verify_live_gate$' "$workflow")" -eq 2
           grep -F 'pulls/1062" --jq' "$workflow"
