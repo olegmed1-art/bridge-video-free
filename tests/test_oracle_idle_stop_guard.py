@@ -535,6 +535,12 @@ class OracleStopAuthorizerTests(unittest.TestCase):
             "proof_line_count_invalid",
         )
 
+    def test_extra_terminal_newline_forbids_stop(self) -> None:
+        self.assert_forbidden(
+            _run_authorizer(_proof_text("IDLE") + "\n"),
+            "proof_framing_invalid",
+        )
+
     def test_long_running_probe_forbids_stop(self) -> None:
         now = int(time.time())
         self.assert_forbidden(
@@ -564,7 +570,7 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
         classifier = CLASSIFIER.read_text(encoding="utf-8")
         self.assertIn("FROM autopilot.task_status", classifier)
         self.assertIn(
-            "status IN ('READY', 'RUNNING', 'WAITING_EXTERNAL')",
+            "status IN ('READY', 'RUNNING', 'WAITING_EXTERNAL', 'EVALUATING')",
             classifier,
         )
 
@@ -624,8 +630,10 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
     def test_instance_power_preserves_zero_exit_and_proof_framing(self) -> None:
         workflow = INSTANCE_POWER.read_text(encoding="utf-8")
         self.assertNotIn('get("exit-code","") or ""', workflow)
+        self.assertNotIn('printf \'%s\\n\' "$text" > "$proof"', workflow)
+        self.assertNotIn('text="$(printf \'%s\' "$execution_json"', workflow)
         self.assertGreaterEqual(
-            workflow.count('printf \'%s\\n\' "$text" > "$proof"'),
+            workflow.count("sys.stdout.write(value)' > \"$proof\""),
             2,
         )
 
