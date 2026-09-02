@@ -102,28 +102,82 @@ def test_assistant_lab_resident_inactive_is_unknown() -> None:
     assert result["state"] == "UNKNOWN"
 
 
-def test_observer_external_process_is_busy() -> None:
-    with patch.object(collect, "_process_match", side_effect=[True, False, False]):
+def _observer_tree(root: Path) -> None:
+    for relative in ("jobs/pending", "jobs/running", "work"):
+        (root / relative).mkdir(parents=True, exist_ok=True)
+
+
+def test_observer_pending_queue_is_busy_primary_evidence(tmp_path: Path) -> None:
+    _observer_tree(tmp_path)
+    (tmp_path / "jobs/pending/exp.json").write_text("{}", encoding="utf-8")
+    with patch.object(collect, "OBSERVER_ROOT", tmp_path), patch.object(
+        collect, "_systemctl_state", return_value="inactive"
+    ):
+        result = collect._observer_workload(2_000_000_000.0)
+    assert result["state"] == "BUSY"
+
+
+def test_observer_running_queue_is_busy_primary_evidence(tmp_path: Path) -> None:
+    _observer_tree(tmp_path)
+    (tmp_path / "jobs/running/exp.json").write_text("{}", encoding="utf-8")
+    with patch.object(collect, "OBSERVER_ROOT", tmp_path):
+        result = collect._observer_workload(2_000_000_000.0)
+    assert result["state"] == "BUSY"
+
+
+def test_observer_work_directory_is_busy_primary_evidence(tmp_path: Path) -> None:
+    _observer_tree(tmp_path)
+    (tmp_path / "work/EXP-1").mkdir()
+    with patch.object(collect, "OBSERVER_ROOT", tmp_path):
+        result = collect._observer_workload(2_000_000_000.0)
+    assert result["state"] == "BUSY"
+
+
+def test_observer_missing_queue_is_unknown(tmp_path: Path) -> None:
+    with patch.object(collect, "OBSERVER_ROOT", tmp_path):
+        result = collect._observer_workload(2_000_000_000.0)
+    assert result["state"] == "UNKNOWN"
+
+
+def test_observer_empty_queue_requires_active_daemon(tmp_path: Path) -> None:
+    _observer_tree(tmp_path)
+    with patch.object(collect, "OBSERVER_ROOT", tmp_path), patch.object(
+        collect, "_systemctl_state", return_value="active"
+    ):
+        result = collect._observer_workload(2_000_000_000.0)
+    assert result["state"] == "IDLE"
+
+
+def test_observer_external_family_is_busy() -> None:
+    with patch.object(collect, "_observer_workload", return_value={"state": "BUSY", "observed_at": 2_000_000_000.0}), patch.object(
+        collect, "_process_match", side_effect=[False, False]
+    ):
         result = collect._external_processes(2_000_000_000.0)
     assert result["state"] == "BUSY"
     assert "observer" in result["evidence"]["active_process_families"]
 
 
 def test_ben_external_process_is_busy() -> None:
-    with patch.object(collect, "_process_match", side_effect=[False, True, False]):
+    with patch.object(collect, "_observer_workload", return_value={"state": "IDLE", "observed_at": 2_000_000_000.0}), patch.object(
+        collect, "_process_match", side_effect=[True, False]
+    ):
         result = collect._external_processes(2_000_000_000.0)
     assert result["state"] == "BUSY"
     assert "ben" in result["evidence"]["active_process_families"]
 
 
 def test_bulk_external_process_is_busy() -> None:
-    with patch.object(collect, "_process_match", side_effect=[False, False, True]):
+    with patch.object(collect, "_observer_workload", return_value={"state": "IDLE", "observed_at": 2_000_000_000.0}), patch.object(
+        collect, "_process_match", side_effect=[False, True]
+    ):
         result = collect._external_processes(2_000_000_000.0)
     assert result["state"] == "BUSY"
     assert "bulk" in result["evidence"]["active_process_families"]
 
 
 def test_process_telemetry_failure_is_unknown() -> None:
-    with patch.object(collect, "_process_match", return_value=None):
+    with patch.object(collect, "_observer_workload", return_value={"state": "IDLE", "observed_at": 2_000_000_000.0}), patch.object(
+        collect, "_process_match", return_value=None
+    ):
         result = collect._external_processes(2_000_000_000.0)
     assert result["state"] == "UNKNOWN"
