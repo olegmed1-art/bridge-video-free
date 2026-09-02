@@ -64,6 +64,7 @@ jobs:
           git show "$EXACT_SHA:ops/oracle_universal_video_run_command.sh" > "$RUNNER_TEMP/prepare.sh"
           chmod 0700 "$RUNNER_TEMP/prepare.sh"
       - name: Ensure Oracle is running
+        if: github.event_name == 'workflow_dispatch'
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check -q oci-cli
@@ -77,6 +78,7 @@ jobs:
           state="$(oci --config-file "$RUNNER_TEMP/oci/config" compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
           case "$state" in RUNNING);; STOPPED) oci --config-file "$RUNNER_TEMP/oci/config" compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null;; *) exit 1;; esac
       - name: Pinned SSH
+        if: github.event_name == 'workflow_dispatch'
         id: ssh
         run: |
           set -euo pipefail
@@ -86,6 +88,7 @@ jobs:
           ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
           echo "key=$key" >> "$GITHUB_OUTPUT"; echo "known=$known" >> "$GITHUB_OUTPUT"
       - name: Build exact image and run metadata-only gates
+        if: github.event_name == 'workflow_dispatch'
         run: |
           set -euo pipefail
           evidence="$RUNNER_TEMP/issue-881-attestation.txt"
@@ -151,5 +154,5 @@ jobs:
             echo 'automatic_batch_release=false'
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: github.event_name == 'workflow_dispatch' && always()
         with: {name: 'issue-881-precanary-${{ env.EXACT_SHA }}', path: '${{ runner.temp }}/issue-881-attestation.txt', if-no-files-found: warn, retention-days: 14}
