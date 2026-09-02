@@ -62,7 +62,7 @@ jobs:
           echo "key=$key" >> "$GITHUB_OUTPUT"
           echo "known=$known" >> "$GITHUB_OUTPUT"
 
-      - name: Discover authoritative runtime layout read-only
+      - name: Discover authoritative runtime layout and env keys read-only
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -72,24 +72,39 @@ jobs:
             'sudo -n bash -s' <<'REMOTE'
           set -Eeuo pipefail
           echo "GUARD_SHA256=$(sha256sum /usr/local/sbin/oracle-idle-state | awk '{print $1}')"
-          for unit in assistant-lab.service school-autopilot-shadow.service; do
+          for unit in assistant-lab.service school-autopilot-shadow.service universal-video-container.service universal-video.service; do
             echo "UNIT=$unit"
-            systemctl show "$unit" --property=FragmentPath --property=WorkingDirectory --property=ExecStart --property=User --no-pager 2>/dev/null || true
+            systemctl show "$unit" --property=LoadState --property=ActiveState --property=FragmentPath --property=WorkingDirectory --property=ExecStart --property=User --no-pager 2>/dev/null || true
             systemctl cat "$unit" --no-pager 2>/dev/null \
               | grep -E '^(EnvironmentFile|WorkingDirectory|ExecStart|User|RuntimeDirectory|StateDirectory)=' || true
           done
 
+          echo ENV_KEY_NAMES_BEGIN
+          for path in \
+            /opt/bridge-school/assistant-lab/assistant-lab.env \
+            /opt/bridge-school/school-autopilot/autopilot-shadow.env \
+            /opt/bridge-school/universal-video/universal-video.env \
+            /opt/bridge-school/universal-video/universal-video-secrets.env; do
+            if [[ -f "$path" && ! -L "$path" ]]; then
+              echo "ENV_FILE=$path"
+              awk -F= '/^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/{k=$1; sub(/^[[:space:]]*export[[:space:]]+/,"",k); gsub(/[[:space:]]/,"",k); print "ENV_KEY=" k}' "$path" | sort -u
+            else
+              echo "ENV_FILE_MISSING=$path"
+            fi
+          done
+          echo ENV_KEY_NAMES_END
+
           echo DISCOVERED_ENV_AND_DSN_PATHS_BEGIN
           find /opt/bridge-school /var/lib/bridge-school /run/bridge-school \
             -maxdepth 7 \( -type f -o -type l \) \
-            \( -name 'assistant-lab.env' -o -name 'autopilot-shadow.env' -o -name 'video-queue-dsn' -o -name '*observer*.env' \) \
+            \( -name '*.env' -o -name '*dsn*' -o -name '*database*url*' \) \
             -print 2>/dev/null | sort -u || true
           echo DISCOVERED_ENV_AND_DSN_PATHS_END
 
           echo DISCOVERED_WORK_DIRS_BEGIN
           find /opt/bridge-school /var/lib/bridge-school /run/bridge-school \
             -maxdepth 7 -type d \
-            \( -name spool -o -name pending -o -name running -o -name inbox -o -name jobs -o -name secrets \) \
+            \( -name spool -o -name pending -o -name running -o -name inbox -o -name progress -o -name jobs \) \
             -print 2>/dev/null | sort -u || true
           echo DISCOVERED_WORK_DIRS_END
 
@@ -107,14 +122,17 @@ jobs:
 
           check LAB_ENV /opt/bridge-school/assistant-lab/assistant-lab.env
           check AUTOPILOT_ENV /opt/bridge-school/school-autopilot/autopilot-shadow.env
-          check VIDEO_DSN /opt/bridge-school/universal-video/secrets/video-queue-dsn
+          check UV_ENV /opt/bridge-school/universal-video/universal-video.env
+          check UV_SECRETS_ENV /opt/bridge-school/universal-video/universal-video-secrets.env
           check ASSISTANT_PYTHON /opt/bridge-school/assistant-lab/.venv/bin/python
           check LAB_SPOOL /opt/bridge-school/assistant-lab/spool
           check LAB_FEEDBACK_SPOOL /opt/bridge-school/assistant-lab/feedback-spool
           check VIDEO_INBOX /opt/bridge-school/universal-video/spool/inbox
           check VIDEO_RUNNING /opt/bridge-school/universal-video/spool/running
+          check VIDEO_PROGRESS /opt/bridge-school/universal-video/spool/progress
           check OBSERVER_PENDING /opt/bridge-school/assistant-lab-observer/jobs/pending
           check OBSERVER_RUNNING /opt/bridge-school/assistant-lab-observer/jobs/running
+          check AUTOPILOT_RUNNING /opt/bridge-school/school-autopilot/runtime/running
           check HOST_LEASE_PARENT /run/bridge-school
           check HOST_LEASE /run/bridge-school/oracle-host-lease
 
