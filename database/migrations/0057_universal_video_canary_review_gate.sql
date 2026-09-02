@@ -50,6 +50,30 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION video_queue.canonical_json_text(jsonb) FROM PUBLIC;
+COMMENT ON FUNCTION video_queue.canonical_json_text(jsonb) IS
+    'Internal compact UTF-8 canonical JSON used to bind Universal Video terminal evidence';
+
+CREATE OR REPLACE FUNCTION video_queue.precanary_idle_snapshot()
+RETURNS TABLE(claimable_jobs bigint, leased_jobs bigint)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, video_queue
+AS $$
+    SELECT
+        count(*) FILTER (
+            WHERE status IN ('PENDING_CANARY','QUEUED','LEASED')
+        )::bigint,
+        count(*) FILTER (
+            WHERE status = 'LEASED' AND lease_expires_at > CURRENT_TIMESTAMP
+        )::bigint
+    FROM video_queue.job
+$$;
+
+REVOKE ALL ON FUNCTION video_queue.precanary_idle_snapshot() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION video_queue.precanary_idle_snapshot() TO bridge_school_worker;
+COMMENT ON FUNCTION video_queue.precanary_idle_snapshot() IS
+    'Bounded aggregate queue state for fail-closed pre-canary no-media proof';
 
 CREATE OR REPLACE FUNCTION video_queue.finish_job(
     p_job_id uuid,
@@ -68,24 +92,29 @@ DECLARE
     v_job video_queue.job%ROWTYPE;
     v_batch video_queue.batch%ROWTYPE;
     v_batch_status text;
+    v_manifest jsonb;
+    v_artifacts jsonb;
+    v_source_identity jsonb;
+    v_receipt jsonb;
+    v_receipt_core jsonb;
+    v_locators jsonb;
     v_manifest_sha text;
     v_manifest_computed_sha text;
     v_evidence_sha text;
     v_evidence_computed_sha text;
-    v_receipt_core jsonb;
     v_master_id text;
     v_master_sha text;
     v_ai_done_id text;
     v_ai_done_sha text;
 BEGIN
-    IF p_outcome NOT IN ('REVIEW_READY','AMBIGUOUS','FAILED')
+    IF p_outcome IS NULL OR p_outcome NOT IN ('REVIEW_READY','AMBIGUOUS','FAILED')
        OR p_worker_key IS NULL OR p_worker_key !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$'
-       OR p_output IS NULL OR jsonb_typeof(p_output) <> 'object'
+       OR p_output IS NULL OR jsonb_typeof(p_output) IS DISTINCT FROM 'object'
        OR length(p_output::text) > 131072
-       OR p_output->>'result_mode' <> 'SHADOW_REVIEW_ONLY'
+       OR p_output->>'result_mode' IS DISTINCT FROM 'SHADOW_REVIEW_ONLY'
        OR p_output->'canonical_promotion_allowed' IS DISTINCT FROM 'false'::jsonb
        OR p_output->'database_persistence_allowed' IS DISTINCT FROM 'false'::jsonb
-       OR p_output->>'publication_state' <> 'NOT_PUBLISHED'
+       OR p_output->>'publication_state' IS DISTINCT FROM 'NOT_PUBLISHED'
        OR (p_error_code IS NOT NULL AND p_error_code !~ '^UV_[A-Z0-9_]{1,96}$') THEN
         RAISE EXCEPTION 'VIDEO_QUEUE_FINISH_ARGUMENT_INVALID';
     END IF;
@@ -95,9 +124,10 @@ BEGIN
      WHERE j.job_id = p_job_id
      FOR UPDATE;
     IF NOT FOUND
-       OR v_job.status <> 'LEASED'
-       OR v_job.lease_token <> p_lease_token
-       OR v_job.lease_owner <> p_worker_key
+       OR v_job.status IS DISTINCT FROM 'LEASED'
+       OR v_job.lease_token IS DISTINCT FROM p_lease_token
+       OR v_job.lease_owner IS DISTINCT FROM p_worker_key
+       OR v_job.lease_expires_at IS NULL
        OR v_job.lease_expires_at <= clock_timestamp() THEN
         RAISE EXCEPTION 'VIDEO_QUEUE_LEASE_LOST';
     END IF;
@@ -106,29 +136,52 @@ BEGIN
       FROM video_queue.batch b
      WHERE b.batch_id = v_job.batch_id
      FOR UPDATE;
-    IF p_output->>'source_file_id' <> v_job.source_file_id
-       OR p_output->>'stable_job_key' <> v_job.stable_job_key
-       OR p_output->>'algorithm_revision' <> v_batch.algorithm_revision THEN
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'VIDEO_QUEUE_BATCH_MISSING';
+    END IF;
+
+    IF p_output->>'source_file_id' IS DISTINCT FROM v_job.source_file_id
+       OR p_output->>'stable_job_key' IS DISTINCT FROM v_job.stable_job_key
+       OR p_output->>'algorithm_revision' IS DISTINCT FROM v_batch.algorithm_revision THEN
         RAISE EXCEPTION 'VIDEO_QUEUE_RESULT_IDENTITY_MISMATCH';
     END IF;
 
     IF p_outcome = 'REVIEW_READY' THEN
+        v_manifest := p_output->'artifact_manifest';
+        v_locators := p_output->'artifact_locators';
+        v_receipt := p_output->'terminal_receipt';
         v_manifest_sha := p_output->>'artifact_manifest_sha256';
+        v_evidence_sha := p_output->>'terminal_evidence_sha256';
         v_master_id := p_output->>'master_pdf_drive_id';
         v_master_sha := p_output->>'master_pdf_sha256';
         v_ai_done_id := p_output->>'ai_done_drive_id';
         v_ai_done_sha := p_output->>'ai_done_sha256';
+
+        IF jsonb_typeof(v_manifest) IS DISTINCT FROM 'object'
+           OR jsonb_typeof(v_locators) IS DISTINCT FROM 'object'
+           OR jsonb_typeof(v_receipt) IS DISTINCT FROM 'object'
+           OR jsonb_typeof(v_manifest->'source_identity') IS DISTINCT FROM 'object'
+           OR jsonb_typeof(v_manifest->'artifacts') IS DISTINCT FROM 'array'
+           OR jsonb_array_length(v_manifest->'artifacts') IS DISTINCT FROM 2 THEN
+            RAISE EXCEPTION 'VIDEO_QUEUE_RESULT_CONTRACT_INVALID';
+        END IF;
+
+        v_artifacts := v_manifest->'artifacts';
+        v_source_identity := v_manifest->'source_identity';
+        v_receipt_core := v_receipt - 'evidence_sha256';
+
         v_manifest_computed_sha := encode(
             public.digest(
-                convert_to(video_queue.canonical_json_text(p_output->'artifact_manifest'), 'UTF8'),
+                convert_to(video_queue.canonical_json_text(v_manifest), 'UTF8'),
                 'sha256'
             ),
             'hex'
         );
-        v_evidence_sha := p_output->>'terminal_evidence_sha256';
-        v_receipt_core := (p_output->'terminal_receipt') - 'evidence_sha256';
         v_evidence_computed_sha := encode(
-            public.digest(convert_to(video_queue.canonical_json_text(v_receipt_core), 'UTF8'), 'sha256'),
+            public.digest(
+                convert_to(video_queue.canonical_json_text(v_receipt_core), 'UTF8'),
+                'sha256'
+            ),
             'hex'
         );
 
@@ -136,62 +189,84 @@ BEGIN
            OR v_manifest_computed_sha IS DISTINCT FROM v_manifest_sha
            OR v_evidence_sha IS NULL OR v_evidence_sha !~ '^[0-9a-f]{64}$'
            OR v_evidence_computed_sha IS DISTINCT FROM v_evidence_sha
-           OR p_output->'terminal_receipt'->>'evidence_sha256' IS DISTINCT FROM v_evidence_sha
+           OR v_receipt->>'evidence_sha256' IS DISTINCT FROM v_evidence_sha
            OR v_master_id IS NULL OR v_master_id !~ '^[A-Za-z0-9_-]{10,200}$'
            OR v_ai_done_id IS NULL OR v_ai_done_id !~ '^[A-Za-z0-9_-]{10,200}$'
-           OR v_master_id = v_ai_done_id
-           OR v_master_id = v_job.source_file_id
-           OR v_ai_done_id = v_job.source_file_id
+           OR v_master_id IS NOT DISTINCT FROM v_ai_done_id
+           OR v_master_id IS NOT DISTINCT FROM v_job.source_file_id
+           OR v_ai_done_id IS NOT DISTINCT FROM v_job.source_file_id
            OR v_master_sha IS NULL OR v_master_sha !~ '^[0-9a-f]{64}$'
            OR v_ai_done_sha IS NULL OR v_ai_done_sha !~ '^[0-9a-f]{64}$'
-           OR jsonb_typeof(p_output->'artifact_locators') <> 'object'
-           OR p_output->'artifact_locators'->>'master_pdf' <> v_master_id
-           OR p_output->'artifact_locators'->>'ai_done' <> v_ai_done_id
-           OR jsonb_typeof(p_output->'artifact_manifest') <> 'object'
-           OR p_output->'artifact_manifest'->>'schema_version' <> 'universal-video-artifact-manifest/v1'
-           OR p_output->'artifact_manifest'->>'job_id' <> v_job.stable_job_key
-           OR p_output->'artifact_manifest'->>'source_file_id' <> v_job.source_file_id
-           OR p_output->'artifact_manifest'->>'algorithm_revision' <> v_batch.algorithm_revision
-           OR p_output->'artifact_manifest'->>'result_mode' <> 'SHADOW_REVIEW_ONLY'
-           OR p_output->'artifact_manifest'->'canonical_promotion_allowed' IS DISTINCT FROM 'false'::jsonb
-           OR p_output->'artifact_manifest'->'database_persistence_allowed' IS DISTINCT FROM 'false'::jsonb
-           OR p_output->'artifact_manifest'->>'publication_state' <> 'NOT_PUBLISHED'
-           OR p_output->'artifact_manifest'->'source_identity'->>'file_id' <> v_job.source_file_id
-           OR p_output->'artifact_manifest'->'source_identity'->>'name' <> v_job.source_name
-           OR p_output->'artifact_manifest'->'source_identity'->>'mime_type' <> v_job.source_mime_type
-           OR (p_output->'artifact_manifest'->'source_identity'->>'size_bytes')::bigint <> v_job.source_size_bytes
-           OR p_output->'artifact_manifest'->'source_identity'->>'parent_folder_id' <> v_batch.source_folder_id
-           OR p_output->'artifact_manifest'->'source_identity'->>'checksum' IS DISTINCT FROM v_job.source_checksum
-           OR jsonb_typeof(p_output->'artifact_manifest'->'artifacts') <> 'array'
-           OR jsonb_array_length(p_output->'artifact_manifest'->'artifacts') <> 2
-           OR p_output->'artifact_manifest'->'artifacts'->0->>'kind' <> 'master_pdf'
-           OR p_output->'artifact_manifest'->'artifacts'->0->>'drive_id' <> v_master_id
-           OR p_output->'artifact_manifest'->'artifacts'->0->>'locator' <> 'gdrive:file:' || v_master_id
-           OR p_output->'artifact_manifest'->'artifacts'->0->>'mime_type' <> 'application/pdf'
-           OR p_output->'artifact_manifest'->'artifacts'->0->>'parent_id' <> v_batch.output_folder_id
-           OR p_output->'artifact_manifest'->'artifacts'->0->>'sha256' <> v_master_sha
-           OR coalesce((p_output->'artifact_manifest'->'artifacts'->0->>'size_bytes')::bigint, 0) <= 0
-           OR p_output->'artifact_manifest'->'artifacts'->1->>'kind' <> 'ai_done'
-           OR p_output->'artifact_manifest'->'artifacts'->1->>'drive_id' <> v_ai_done_id
-           OR p_output->'artifact_manifest'->'artifacts'->1->>'locator' <> 'gdrive:file:' || v_ai_done_id
-           OR p_output->'artifact_manifest'->'artifacts'->1->>'mime_type' <> 'application/json'
-           OR p_output->'artifact_manifest'->'artifacts'->1->>'parent_id' <> v_batch.output_folder_id
-           OR p_output->'artifact_manifest'->'artifacts'->1->>'sha256' <> v_ai_done_sha
-           OR coalesce((p_output->'artifact_manifest'->'artifacts'->1->>'size_bytes')::bigint, 0) <= 0
-           OR jsonb_typeof(p_output->'terminal_receipt') <> 'object'
-           OR p_output->'terminal_receipt'->>'schema_version' <> 'universal-video-terminal-receipt/v1'
-           OR p_output->'terminal_receipt'->>'status' <> 'PASS'
-           OR p_output->'terminal_receipt'->>'job_id' <> v_job.stable_job_key
-           OR p_output->'terminal_receipt'->>'source_file_id' <> v_job.source_file_id
-           OR p_output->'terminal_receipt'->'source_identity_verified' IS DISTINCT FROM 'true'::jsonb
-           OR p_output->'terminal_receipt'->'drive_readback_verified' IS DISTINCT FROM 'true'::jsonb
-           OR p_output->'terminal_receipt'->'result_readback_verified' IS DISTINCT FROM 'true'::jsonb
-           OR p_output->'terminal_receipt'->'checksum_verified' IS DISTINCT FROM 'true'::jsonb
-           OR (p_output->'terminal_receipt'->>'artifact_count')::integer <> 2
-           OR p_output->'terminal_receipt'->>'artifact_manifest_sha256' <> v_manifest_sha
-           OR p_output->'terminal_receipt'->'canonical_promotion_allowed' IS DISTINCT FROM 'false'::jsonb
-           OR p_output->'terminal_receipt'->'database_persistence_allowed' IS DISTINCT FROM 'false'::jsonb
-           OR p_output->'terminal_receipt'->>'publication_state' <> 'NOT_PUBLISHED' THEN
+           OR v_locators->>'master_pdf' IS DISTINCT FROM v_master_id
+           OR v_locators->>'ai_done' IS DISTINCT FROM v_ai_done_id
+
+           OR v_manifest->>'schema_version' IS DISTINCT FROM 'universal-video-artifact-manifest/v1'
+           OR v_manifest->>'job_id' IS DISTINCT FROM v_job.stable_job_key
+           OR v_manifest->>'source_file_id' IS DISTINCT FROM v_job.source_file_id
+           OR v_manifest->>'algorithm_revision' IS DISTINCT FROM v_batch.algorithm_revision
+           OR v_manifest->>'result_mode' IS DISTINCT FROM 'SHADOW_REVIEW_ONLY'
+           OR v_manifest->'canonical_promotion_allowed' IS DISTINCT FROM 'false'::jsonb
+           OR v_manifest->'database_persistence_allowed' IS DISTINCT FROM 'false'::jsonb
+           OR v_manifest->>'publication_state' IS DISTINCT FROM 'NOT_PUBLISHED'
+
+           OR v_source_identity->>'file_id' IS DISTINCT FROM v_job.source_file_id
+           OR v_source_identity->>'name' IS DISTINCT FROM v_job.source_name
+           OR v_source_identity->>'mime_type' IS DISTINCT FROM v_job.source_mime_type
+           OR jsonb_typeof(v_source_identity->'size_bytes') IS DISTINCT FROM 'number'
+           OR CASE
+                WHEN jsonb_typeof(v_source_identity->'size_bytes') = 'number'
+                THEN (v_source_identity->>'size_bytes')::numeric IS DISTINCT FROM v_job.source_size_bytes::numeric
+                ELSE true
+              END
+           OR v_source_identity->>'parent_folder_id' IS DISTINCT FROM v_batch.source_folder_id
+           OR v_source_identity->>'checksum' IS DISTINCT FROM v_job.source_checksum
+
+           OR jsonb_typeof(v_artifacts->0) IS DISTINCT FROM 'object'
+           OR v_artifacts->0->>'kind' IS DISTINCT FROM 'master_pdf'
+           OR v_artifacts->0->>'drive_id' IS DISTINCT FROM v_master_id
+           OR v_artifacts->0->>'locator' IS DISTINCT FROM ('gdrive:file:' || v_master_id)
+           OR v_artifacts->0->>'mime_type' IS DISTINCT FROM 'application/pdf'
+           OR v_artifacts->0->>'parent_id' IS DISTINCT FROM v_batch.output_folder_id
+           OR v_artifacts->0->>'sha256' IS DISTINCT FROM v_master_sha
+           OR jsonb_typeof(v_artifacts->0->'size_bytes') IS DISTINCT FROM 'number'
+           OR CASE
+                WHEN jsonb_typeof(v_artifacts->0->'size_bytes') = 'number'
+                THEN (v_artifacts->0->>'size_bytes')::numeric <= 0
+                ELSE true
+              END
+
+           OR jsonb_typeof(v_artifacts->1) IS DISTINCT FROM 'object'
+           OR v_artifacts->1->>'kind' IS DISTINCT FROM 'ai_done'
+           OR v_artifacts->1->>'drive_id' IS DISTINCT FROM v_ai_done_id
+           OR v_artifacts->1->>'locator' IS DISTINCT FROM ('gdrive:file:' || v_ai_done_id)
+           OR v_artifacts->1->>'mime_type' IS DISTINCT FROM 'application/json'
+           OR v_artifacts->1->>'parent_id' IS DISTINCT FROM v_batch.output_folder_id
+           OR v_artifacts->1->>'sha256' IS DISTINCT FROM v_ai_done_sha
+           OR jsonb_typeof(v_artifacts->1->'size_bytes') IS DISTINCT FROM 'number'
+           OR CASE
+                WHEN jsonb_typeof(v_artifacts->1->'size_bytes') = 'number'
+                THEN (v_artifacts->1->>'size_bytes')::numeric <= 0
+                ELSE true
+              END
+
+           OR v_receipt->>'schema_version' IS DISTINCT FROM 'universal-video-terminal-receipt/v1'
+           OR v_receipt->>'status' IS DISTINCT FROM 'PASS'
+           OR v_receipt->>'job_id' IS DISTINCT FROM v_job.stable_job_key
+           OR v_receipt->>'source_file_id' IS DISTINCT FROM v_job.source_file_id
+           OR v_receipt->'source_identity_verified' IS DISTINCT FROM 'true'::jsonb
+           OR v_receipt->'drive_readback_verified' IS DISTINCT FROM 'true'::jsonb
+           OR v_receipt->'result_readback_verified' IS DISTINCT FROM 'true'::jsonb
+           OR v_receipt->'checksum_verified' IS DISTINCT FROM 'true'::jsonb
+           OR jsonb_typeof(v_receipt->'artifact_count') IS DISTINCT FROM 'number'
+           OR CASE
+                WHEN jsonb_typeof(v_receipt->'artifact_count') = 'number'
+                THEN (v_receipt->>'artifact_count')::numeric IS DISTINCT FROM 2::numeric
+                ELSE true
+              END
+           OR v_receipt->>'artifact_manifest_sha256' IS DISTINCT FROM v_manifest_sha
+           OR v_receipt->'canonical_promotion_allowed' IS DISTINCT FROM 'false'::jsonb
+           OR v_receipt->'database_persistence_allowed' IS DISTINCT FROM 'false'::jsonb
+           OR v_receipt->>'publication_state' IS DISTINCT FROM 'NOT_PUBLISHED' THEN
             RAISE EXCEPTION 'VIDEO_QUEUE_RESULT_CONTRACT_INVALID';
         END IF;
     END IF;
@@ -240,7 +315,9 @@ BEGIN
          WHERE batch_id = v_job.batch_id;
     END IF;
 
-    SELECT b.status INTO v_batch_status FROM video_queue.batch b WHERE b.batch_id = v_job.batch_id;
+    SELECT b.status INTO v_batch_status
+      FROM video_queue.batch b
+     WHERE b.batch_id = v_job.batch_id;
     RETURN QUERY SELECT p_outcome, v_batch_status, 0;
 END;
 $$;
@@ -248,7 +325,7 @@ $$;
 REVOKE ALL ON FUNCTION video_queue.finish_job(uuid,uuid,text,text,jsonb,text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION video_queue.finish_job(uuid,uuid,text,text,jsonb,text) TO bridge_school_worker;
 COMMENT ON FUNCTION video_queue.finish_job(uuid,uuid,text,text,jsonb,text) IS
-    'Fail-closed result finalization; verified canary enters CANARY_REVIEW and releases zero jobs';
+    'Fail-closed v2 terminal finalization; verified canary enters CANARY_REVIEW and releases zero jobs';
 
 INSERT INTO schema_migration(migration_key)
 VALUES ('0057_universal_video_canary_review_gate')
