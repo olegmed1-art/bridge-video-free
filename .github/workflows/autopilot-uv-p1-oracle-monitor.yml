@@ -339,6 +339,31 @@ jobs:
             echo "${lane}_production_mutation=$production_mutation" >> "$GITHUB_OUTPUT"
           done
 
+      - name: Re-resolve exact PR heads after task polling
+        env:
+          EXPECTED_RUNTIME_SHA: ${{ steps.refs.outputs.runtime_sha }}
+          EXPECTED_CANARY_SHA: ${{ steps.refs.outputs.canary_sha }}
+          EXPECTED_IDLE_SHA: ${{ steps.refs.outputs.idle_sha }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          api="https://api.github.com/repos/$REPOSITORY"
+          auth=(-H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json')
+          for spec in runtime:997:"$EXPECTED_RUNTIME_SHA" canary:1062:"$EXPECTED_CANARY_SHA" idle:1047:"$EXPECTED_IDLE_SHA"; do
+            lane="${spec%%:*}"
+            rest="${spec#*:}"
+            pr="${rest%%:*}"
+            expected="${rest##*:}"
+            data="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/pulls/$pr")"
+            live="$(jq -er '.head.sha' <<<"$data")"
+            jq -e '.state == "open" and .draft == true' <<<"$data" >/dev/null
+            [[ "$live" =~ ^[0-9a-f]{40}$ && "$live" == "$expected" ]] || {
+              echo "UV_AUTOPILOT_POST_POLL_HEAD_DRIFT lane=$lane pr=$pr expected=$expected live=$live" >&2
+              exit 77
+            }
+          done
+          echo 'UV_AUTOPILOT_POST_POLL_HEADS_VERIFIED=PASS'
+
       - name: Publish exact task receipt to issue 946
         env:
           MAIN_SHA: ${{ steps.refs.outputs.main_sha }}
