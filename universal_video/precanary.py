@@ -126,6 +126,8 @@ def _synthetic_terminal_v2() -> dict[str, Any]:
             "mimeType": "application/pdf",
             "size": str(len(master_bytes)),
             "parents": [claim["output_folder_id"]],
+            "modifiedTime": "2026-09-02T00:00:00Z",
+            "version": "1",
         },
         ai_done_id: {
             "id": ai_done_id,
@@ -133,6 +135,8 @@ def _synthetic_terminal_v2() -> dict[str, Any]:
             "mimeType": "application/json",
             "size": str(len(ai_bytes)),
             "parents": [claim["output_folder_id"]],
+            "modifiedTime": "2026-09-02T00:00:01Z",
+            "version": "1",
         },
     }
     payloads = {master_id: master_bytes, ai_done_id: ai_bytes}

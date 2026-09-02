@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -106,3 +108,17 @@ def test_terminal_readback_rejects_same_size_drive_version_change():
         build_terminal_evidence(
             claim, done, route, "mock", metadata_reader=changing_metadata, downloader=download
         )
+
+
+def test_precanary_synthetic_terminal_v2_cli_passes_without_network():
+    completed = subprocess.run(
+        [sys.executable, "-m", "universal_video.precanary", "synthetic-result-contract"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    receipt = json.loads(completed.stdout)
+    assert receipt["status"] == "PASS"
+    assert receipt["gate"] == "SYNTHETIC_RESULT_CONTRACT_V2"
+    assert receipt["artifact_count"] == 2
+    assert receipt["drive_write_performed"] is False
