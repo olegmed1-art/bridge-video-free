@@ -137,7 +137,7 @@ jobs:
           trap cleanup_remote EXIT
 
           bounded_failure(){
-            rc=$?
+            rc="${1:-$?}"
             trap - ERR
             {
               echo "runtime_sha=$EXACT_SHA"
@@ -183,7 +183,9 @@ jobs:
             bash '$remote_root/attest.sh'" > "$session_log" 2>&1
           session_rc=$?
           set -e
-          (( session_rc == 0 )) || return "$session_rc"
+          if (( session_rc != 0 )); then
+            bounded_failure "$session_rc"
+          fi
 
           grep -E "^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} activated=0$" "$session_log"
           grep -E "^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$" "$session_log"
