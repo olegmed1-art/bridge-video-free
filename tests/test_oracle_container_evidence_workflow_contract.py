@@ -12,7 +12,12 @@ def test_legacy_evidence_workflow_is_pr_only_and_static() -> None:
     assert "pull_request:" in text
     assert "workflow_dispatch:" not in text
     assert "push:" not in text
-    assert "  evidence:" in text
+    assert text.startswith(
+        "name: Retired Oracle Universal Video Container Evidence Contract\n"
+    )
+    assert "name: Oracle Universal Video Container Evidence\n" not in text
+    assert "  retired-evidence-contract:" in text
+    assert "name: Retired legacy evidence entrypoint contract" in text
     assert "head.repo.full_name" not in text
     assert "UNIVERSAL_VIDEO_LEGACY_CONTAINER_EVIDENCE_RETIRED=true" in text
     assert ".github/workflows/issue-881-authoritative-external-evidence.yml" in text

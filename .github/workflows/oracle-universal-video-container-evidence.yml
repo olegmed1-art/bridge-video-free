@@ -1,9 +1,9 @@
-name: Oracle Universal Video Container Evidence
+name: Retired Oracle Universal Video Container Evidence Contract
 
-# Retired legacy entrypoint. This PR-only job preserves a visible required-check
-# name while proving that the sole Issue 881 external pre-canary evidence path
-# is Director-gated. It has no secrets, dispatch trigger, OCI, SSH, Docker, or
-# host action.
+# Retired legacy entrypoint. This PR-only job uses a deliberately non-promotable
+# workflow and check identity while proving that the sole Issue 881 external
+# pre-canary evidence path is Director-gated. It has no secrets, dispatch
+# trigger, OCI, SSH, Docker, or host action.
 on:
   pull_request:
     paths:
@@ -20,7 +20,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  evidence:
+  retired-evidence-contract:
+    name: Retired legacy evidence entrypoint contract
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
