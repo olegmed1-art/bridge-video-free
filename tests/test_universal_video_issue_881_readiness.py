@@ -404,6 +404,10 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "pid_descends_from" in script
     assert "resident_worker_pid" in script
     assert "restored_service_ready" in script
+    assert "resident_status_ready" in script
+    assert "universal-video-resident-status-v2" in script
+    assert 'float(value.get("observed_at_unix") or 0) >= int(os.environ["STARTED_UNIX"])' in script
+    assert 'value.get("installed_runtime_commit") == os.environ["EXPECTED_COMMIT"]' in script
     assert "RESTORE_STABLE_SECONDS" in script
     assert "stable_seconds=%s result=PASS" in script
     assert "services_stop_attempted=1" in script
@@ -450,6 +454,10 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
         container_recheck_index,
     )
     unlock_index = script.index("flock --unlock 9", script.index("cleanup(){"))
+    restore_body = script[
+        script.index("restore_service(){") : script.index("restore_source_checkout(){")
+    ]
+    assert 'resident_status_ready "$service" "$started_unix"' in restore_body
     assert (
         restore_source_index
         > unlock_index
