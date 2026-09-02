@@ -14,6 +14,7 @@ BUILD_IMAGE="${UNIVERSAL_VIDEO_PRECANARY_BUILD_IMAGE:-0}"
 MIN_FREE_KB="${UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB:-5242880}"
 RECLAIM_ROOT_CACHE="${UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE:-0}"
 ENV_FILE="${UNIVERSAL_VIDEO_CONTAINER_ENV_FILE:-}"
+PERSISTENT_ENV_FILE="$BASE_DIR/universal-video-container.env"
 if [[ -z "$ENV_FILE" ]]; then
   if [[ "$BUILD_IMAGE" == 1 ]]; then
     ENV_FILE="$BASE_DIR/universal-video-container-candidate.env"
@@ -55,7 +56,9 @@ container_was_active=0
 window_started=0
 lock_held=0
 source_had_original=0
+source_candidate_path_owned=0
 source_backup_dir=""
+resident_image_id=""
 declare -a added_runtime_masks=()
 
 service_state(){
@@ -72,7 +75,7 @@ restore_service(){
 
 restore_source_checkout(){
   [[ "$BUILD_IMAGE" == 1 ]] || return 0
-  if [[ -e "$SOURCE_DIR" || -L "$SOURCE_DIR" ]]; then
+  if [[ "$source_candidate_path_owned" == 1 && ( -e "$SOURCE_DIR" || -L "$SOURCE_DIR" ) ]]; then
     rm -rf --one-file-system -- "$SOURCE_DIR" || return 1
   fi
   if [[ "$source_had_original" == 1 ]]; then
@@ -179,6 +182,16 @@ assert_known_state "$SOURCE_SERVICE" "$source_state_before"
 assert_known_state "$CONTAINER_SERVICE" "$container_state_before"
 [[ "$source_state_before" == active ]] && source_was_active=1
 [[ "$container_state_before" == active ]] && container_was_active=1
+if [[ "$container_was_active" == 1 ]]; then
+  [[ -f "$PERSISTENT_ENV_FILE" && ! -L "$PERSISTENT_ENV_FILE" ]] \
+    || die 'active container resident environment is unsafe or missing'
+  mapfile -t resident_image_lines < <(grep -E '^UNIVERSAL_VIDEO_IMAGE=sha256:[0-9a-f]{64}$' "$PERSISTENT_ENV_FILE" || true)
+  [[ "${#resident_image_lines[@]}" -eq 1 ]] \
+    || die 'active container resident image is missing or ambiguous'
+  resident_image_id="${resident_image_lines[0]#UNIVERSAL_VIDEO_IMAGE=}"
+  docker image inspect "$resident_image_id" >/dev/null \
+    || die 'active container resident image is unavailable'
+fi
 window_started=1
 
 # Acquire the exclusive fence before source checkout, cache reclamation, image
@@ -206,6 +219,9 @@ if [[ "$BUILD_IMAGE" == 1 ]]; then
   else
     printf 'UNIVERSAL_VIDEO_SOURCE_CHECKOUT mode=ephemeral prior_tree=absent restore_on_exit=true\n'
   fi
+  # From this point onward only the candidate path may be removed by cleanup.
+  # Unsafe pre-existing paths fail above before ownership is recorded.
+  source_candidate_path_owned=1
 
   env \
     UNIVERSAL_VIDEO_GIT_REF="$EXPECTED_SHA" \
@@ -236,6 +252,7 @@ if [[ "$BUILD_IMAGE" == 1 ]]; then
   env \
     UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=0 \
     UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB="$MIN_FREE_KB" \
+    UNIVERSAL_VIDEO_CONTAINER_PRESERVE_IMAGE_ID="$resident_image_id" \
     bash "$SOURCE_DIR/ops/oracle_universal_video_container_install.sh"
   assert_quiescent
 fi
