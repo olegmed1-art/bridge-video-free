@@ -167,6 +167,7 @@ def test_oracle_container_service_is_read_only_and_explicitly_activated() -> Non
     assert "docker run --rm" in installer
     assert "UNIVERSAL_VIDEO_STATUS_PATH=/run/bridge-school/universal-video-status.json" in installer
     assert "UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE=/var/lib/universal-video/model-cache/speaker" in installer
+    assert "BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE=/run/secrets/video-queue-dsn" in installer
     assert 'install -d -o "$USER_NAME" -g "$GROUP_NAME" -m 0750 "$BASE_DIR/model-cache/speaker"' in installer
     assert '--mount "type=bind,src=$STATUS_DIR,dst=/run/bridge-school"' in installer
     assert "--mount type=bind,src=/run/bridge-school,dst=/run/bridge-school" in service
@@ -177,3 +178,21 @@ def test_oracle_container_service_is_read_only_and_explicitly_activated() -> Non
     assert "service_exec_status ExecStartPre ExecStartPre" in installer
     assert "service_exec_status ExecStart ExecStart" in installer
     assert 'runtime_fail(){ printf \'{"error_code":"%s","status":"FAILED"}' in installer
+
+
+def test_container_activation_requires_a_bounded_protected_queue_credential() -> None:
+    root = Path(__file__).resolve().parents[1]
+    installer = (root / "ops/oracle_universal_video_container_install.sh").read_text(
+        encoding="utf-8"
+    )
+
+    credential_gate = installer.index('if [[ "$ACTIVATE" == 1 ]]; then')
+    service_activation = installer.rindex('if [[ "$ACTIVATE" == 1 ]]; then')
+    assert credential_gate < service_activation
+    gate = installer[credential_gate:service_activation]
+    assert 'queue_dsn_file="$BASE_DIR/secrets/video-queue-dsn"' in installer
+    assert '[[ -f "$queue_dsn_file" && ! -L "$queue_dsn_file" ]]' in gate
+    assert "protected video queue credential metadata invalid" in gate
+    assert "BASH_REMATCH[1] <= 4096" in gate
+    assert 'value.startswith(("postgresql://", "postgres://"))' in gate
+    assert 'assert "\\n" not in value and "\\r" not in value' in gate
