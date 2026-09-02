@@ -61,7 +61,9 @@ def test_downstream_power_boundary_remains_exact_and_idle_gated():
     )
     final_authorizer = text.index("--proof \"$proof\"", final_probe)
     stop_action = text.index("--action STOP", final_authorizer)
-    assert stop_step < final_probe < final_authorizer < stop_action
+    final_epoch = text.index("final_epoch_state=", stop_step)
+    paginated = text.index("gh api --paginate --slurp", final_epoch)
+    assert stop_step < final_epoch < paginated < final_probe < final_authorizer < stop_action
     assert "controller: manual only" in text
 
 
