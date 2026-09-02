@@ -43,14 +43,35 @@ def test_downstream_power_boundary_remains_exact_and_idle_gated():
     assert "options: [status, start, stop]" in text
     assert "idle_source_run_id:" in text
     assert "actions: read" in text
-    assert "group: oracle-instance-workload-mutation" in text
+    assert "group: ${{ github.event_name == 'workflow_dispatch'" in text
+    assert "contains(fromJSON('[\"/oracle-instance status\",\"/oracle-instance start\",\"/oracle-instance stop\"]'), github.event.comment.body)" in text
+    assert "format('oracle-instance-power-noop-{0}', github.run_id) }}" in text
     assert "Revalidate automatic stop epoch" in text
+    assert "gh api --paginate --slurp" in text
+    assert "final_epoch_state" in text
+    assert "len(runs)==total" in text
     assert 'row.get("status")!="completed"' in text
     assert 'r.get("event")!="pull_request"' in text
     assert "steps.epoch.outputs.epoch_state == 'CURRENT'" in text
     assert "Refuse stale automatic stop" in text
-    assert "steps.idle.outputs.idle_state == 'IDLE'" in text
+    assert "steps.idle.outputs.stop_authorized == 'YES'" in text
+    assert "steps.idle.outputs.idle_state == 'IDLE'" not in text
     assert "Stop exact instance only with IDLE proof" in text
+    stop_step = text.index("Stop exact instance only with IDLE proof")
+    final_probe = text.index(
+        "bridge-school-oracle-final-idle-proof-${GITHUB_RUN_ID}", stop_step
+    )
+    final_authorizer = text.index("--proof \"$proof\"", final_probe)
+    post_probe_epoch = text.index("post_probe_epoch_state=", final_authorizer)
+    second_paginated = text.index("gh api --paginate --slurp", post_probe_epoch)
+    second_authorizer = text.index("--proof \"$proof\"", second_paginated)
+    stop_action = text.index("--action STOP", second_authorizer)
+    final_epoch = text.index("final_epoch_state=", stop_step)
+    paginated = text.index("gh api --paginate --slurp", final_epoch)
+    assert (
+        stop_step < final_epoch < paginated < final_probe < final_authorizer
+        < post_probe_epoch < second_paginated < second_authorizer < stop_action
+    )
     assert "controller: manual only" in text
 
 
@@ -59,7 +80,8 @@ def test_video_and_power_mutations_share_a_non_cancelling_lock():
     power = POWER.read_text(encoding="utf-8")
     assert "'oracle-instance-workload-mutation'" in video
     assert "oracle-universal-video-pr-{0}" in video
-    assert "group: oracle-instance-workload-mutation" in power
+    assert "oracle-instance-workload-mutation" in power
+    assert "oracle-instance-power-noop-{0}" in power
     for text in (video, power):
         assert "cancel-in-progress: false" in text
 

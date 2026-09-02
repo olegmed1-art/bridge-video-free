@@ -1,0 +1,67 @@
+name: Oracle idle STOP guard CI
+
+# Exact-head validation trigger after deployed-source-model correction.
+on:
+  push:
+    branches:
+      - codex/issue-627-final-main-20260902
+    paths:
+      - 'assistant_lab/oracle_idle_schema.sql'
+      - 'ops/oracle_idle_state.sh'
+      - 'ops/oracle_idle_stop_guard.py'
+      - 'ops/install_oracle_idle_state_ocarun.sh'
+      - 'tests/test_oracle_idle_stop_guard.py'
+      - 'tests/test_oracle_idle_unknown_precedence.py'
+      - 'tests/test_oracle_idle_workload_fence.py'
+      - 'tests/test_universal_video_idle_candidate_contract.py'
+      - '.github/workflows/oracle-idle-guard-ci.yml'
+      - '.github/workflows/oracle-instance-power.yml'
+      - '.github/workflows/oracle-diana11-002-job.yml'
+      - '.github/workflows/oracle-diana11-003-one-shadow-execution.yml'
+      - '.github/workflows/research-job-dds3-canary.yml'
+      - '.github/workflows/research-job-neon-operator.yml'
+  pull_request:
+    paths:
+      - 'assistant_lab/oracle_idle_schema.sql'
+      - 'ops/oracle_idle_state.sh'
+      - 'ops/oracle_idle_stop_guard.py'
+      - 'ops/install_oracle_idle_state_ocarun.sh'
+      - 'tests/test_oracle_idle_stop_guard.py'
+      - 'tests/test_oracle_idle_unknown_precedence.py'
+      - 'tests/test_oracle_idle_workload_fence.py'
+      - 'tests/test_universal_video_idle_candidate_contract.py'
+      - '.github/workflows/oracle-idle-guard-ci.yml'
+      - '.github/workflows/oracle-instance-power.yml'
+      - '.github/workflows/oracle-diana11-002-job.yml'
+      - '.github/workflows/oracle-diana11-003-one-shadow-execution.yml'
+      - '.github/workflows/research-job-dds3-canary.yml'
+      - '.github/workflows/research-job-neon-operator.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  fail-closed-guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/oracle_idle_state.sh
+          bash -n ops/install_oracle_idle_state_ocarun.sh
+          python -m py_compile \
+            ops/oracle_idle_stop_guard.py \
+            tests/test_oracle_idle_stop_guard.py \
+            tests/test_oracle_idle_unknown_precedence.py
+      - name: Negative and integration tests
+        run: |
+          python -m pytest -q \
+            tests/test_oracle_idle_stop_guard.py \
+            tests/test_oracle_idle_unknown_precedence.py \
+            tests/test_oracle_idle_workload_fence.py \
+            tests/test_universal_video_idle_candidate_contract.py
