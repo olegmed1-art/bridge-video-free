@@ -1,0 +1,183 @@
+name: Autopilot Universal Video latest idle-guard task registration
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths: ['.github/workflows/autopilot-uv-idle-latest-register.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autopilot-uv-idle-latest-registration-ef5f6401
+  cancel-in-progress: false
+
+jobs:
+  register:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    environment: database-production
+    env:
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      PROJECT_ID: misty-poetry-18012774
+      TEMP_BRANCH_ID: br-still-tooth-b1ilkfcj
+      TEMP_ENDPOINT_ID: ep-floral-field-b1pjs2of
+      PRODUCTION_BRANCH_ID: br-wispy-lab-b1rq54of
+      MIGRATION_ROLE: autopilot_migration_owner_login
+      TASK_KEY: uv-p1-idle-pr1047-ef5f6401-20260902
+      TARGET_PR: '1047'
+      TARGET_HEAD: ef5f6401e7ba423c063d7c260fdd91733540c7b8
+    steps:
+      - name: Checkout exact Autopilot source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Resolve only the exact temporary Autopilot branch URI
+        id: neon
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -n "${NEON_API_KEY:-}" ]]
+          [[ "$TEMP_BRANCH_ID" != "$PRODUCTION_BRANCH_ID" ]]
+          api="https://console.neon.tech/api/v2/projects/$PROJECT_ID"
+          auth=(-H "Authorization: Bearer $NEON_API_KEY" -H 'Accept: application/json')
+          branch_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID")"
+          endpoint_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID/endpoints")"
+          role_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID/roles/$MIGRATION_ROLE")"
+          uri_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/connection_uri?branch_id=$TEMP_BRANCH_ID&database_name=neondb&role_name=$MIGRATION_ROLE&pooled=false")"
+          BRANCH_JSON="$branch_json" ENDPOINT_JSON="$endpoint_json" ROLE_JSON="$role_json" URI_JSON="$uri_json" python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, urllib.parse
+          bid=os.environ['TEMP_BRANCH_ID']; eid=os.environ['TEMP_ENDPOINT_ID']; role=os.environ['MIGRATION_ROLE']
+          b=json.loads(os.environ['BRANCH_JSON']); e=json.loads(os.environ['ENDPOINT_JSON']); r=json.loads(os.environ['ROLE_JSON']); u=json.loads(os.environ['URI_JSON'])
+          branch=b.get('branch', b); assert branch.get('id') == bid
+          endpoints=e.get('endpoints', []); assert any(x.get('id') == eid and x.get('branch_id') == bid for x in endpoints)
+          role_obj=r.get('role', r); assert role_obj.get('name') == role
+          uri=u.get('uri'); assert isinstance(uri, str) and uri
+          p=urllib.parse.urlsplit(uri); assert p.username == role and p.path.lstrip('/') == 'neondb'
+          host=(p.hostname or '').lower(); assert host.startswith(eid + '.') and host.endswith('.neon.tech')
+          print(f'::add-mask::{uri}')
+          print(f'database_url={uri}')
+          print('NEON_TARGET_BRANCH_VERIFIED=YES')
+          print('NEON_PRODUCTION_BRANCH_TARGETED=NO')
+          PY
+
+      - name: Verify active Autopilot schema without migration
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.database_url }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          row="$(psql "$DATABASE_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 <<'SQL'
+          SELECT current_database(), current_user,
+                 to_regclass('autopilot.task') IS NOT NULL,
+                 to_regprocedure('autopilot.create_shadow_task(text,text,jsonb,integer,bigint,text,text)') IS NOT NULL;
+          SQL
+          )"
+          [[ "$row" == 'neondb|autopilot_migration_owner_login|t|t' ]]
+          echo 'AUTOPILOT_SCHEMA_PREFLIGHT=PASS'
+          echo 'MIGRATION_APPLIED=NO'
+          echo 'PRODUCTION_MUTATION=NO'
+
+      - name: Register idempotent latest-head task
+        id: task
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.database_url }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          row="$(psql "$DATABASE_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 \
+            -v task_key="$TASK_KEY" -v pr_number="$TARGET_PR" -v head_sha="$TARGET_HEAD" <<'SQL'
+          SELECT task_id,status,created
+          FROM autopilot.create_shadow_task(
+            :'task_key',
+            'GITHUB_CI_READ_ONLY_V1',
+            jsonb_build_object(
+              'repository','olegmed1-art/bridge-video-free',
+              'pr_number',(:'pr_number')::integer,
+              'expected_head_sha',:'head_sha',
+              'require_draft',true
+            ),
+            10,
+            0,
+            'DIRECTOR_P1_20260902',
+            'UV_READY_FOR_ONE_CANARY_IDLE_LATEST'
+          );
+          SQL
+          )"
+          IFS='|' read -r task_id status created <<<"$row"
+          [[ "$task_id" =~ ^[0-9a-f-]{36}$ ]]
+          [[ "$status" =~ ^(READY|RUNNING|WAITING_EXTERNAL|EVALUATING|DONE|FAILED_CLOSED|OWNER_REQUIRED|BUDGET_STOP)$ ]]
+          echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
+          echo "UV_IDLE_LATEST_TASK_ID=$task_id"
+          echo "UV_IDLE_LATEST_TASK_STATUS=$status"
+          echo "UV_IDLE_LATEST_TASK_CREATED=$created"
+
+      - name: Observe controller transition and retained evidence
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.database_url }}
+          TASK_ID: ${{ steps.task.outputs.task_id }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for _ in $(seq 1 30); do
+            status="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT status FROM autopilot.task WHERE task_id='$TASK_ID'::uuid;")"
+            [[ "$status" != READY && "$status" != RUNNING && "$status" != EVALUATING ]] && break
+            sleep 5
+          done
+          row="$(psql "$DATABASE_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 -c "SELECT status,attempts,COALESCE(terminal_reason_code,''),(SELECT count(*) FROM autopilot.task_event e WHERE e.task_id=t.task_id),(SELECT count(*) FROM autopilot.evidence v WHERE v.task_id=t.task_id AND v.retained) FROM autopilot.task t WHERE task_id='$TASK_ID'::uuid;")"
+          IFS='|' read -r status attempts reason events evidence <<<"$row"
+          [[ "$status" != READY && "$status" != RUNNING && "$status" != EVALUATING ]]
+          (( events >= 1 ))
+          (( evidence >= 1 ))
+          printf '%s\n' "$TASK_ID" > "$RUNNER_TEMP/uv-idle-latest-task-id"
+          printf '%s\n' "$status" > "$RUNNER_TEMP/uv-idle-latest-task-status"
+          printf '%s\n' "$attempts" > "$RUNNER_TEMP/uv-idle-latest-task-attempts"
+          printf '%s\n' "$events" > "$RUNNER_TEMP/uv-idle-latest-task-events"
+          printf '%s\n' "$evidence" > "$RUNNER_TEMP/uv-idle-latest-task-evidence"
+          echo "UV_IDLE_LATEST_TASK_FINAL=$status"
+          echo "UV_IDLE_LATEST_TASK_ATTEMPTS=$attempts"
+          echo "UV_IDLE_LATEST_TASK_EVENTS=$events"
+          echo "UV_IDLE_LATEST_TASK_RETAINED_EVIDENCE=$evidence"
+          echo 'REAL_VIDEO_EXECUTION=NO'
+          echo 'DRIVE_WRITE=NO'
+          echo 'PRODUCTION_MUTATION=NO'
+
+      - name: Build retained registration receipt
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          task_id="$(cat "$RUNNER_TEMP/uv-idle-latest-task-id" 2>/dev/null || echo UNRESOLVED)"
+          task_status="$(cat "$RUNNER_TEMP/uv-idle-latest-task-status" 2>/dev/null || echo UNKNOWN)"
+          attempts="$(cat "$RUNNER_TEMP/uv-idle-latest-task-attempts" 2>/dev/null || echo UNKNOWN)"
+          events="$(cat "$RUNNER_TEMP/uv-idle-latest-task-events" 2>/dev/null || echo UNKNOWN)"
+          evidence="$(cat "$RUNNER_TEMP/uv-idle-latest-task-evidence" 2>/dev/null || echo UNKNOWN)"
+          jq -n --arg gate 'UV_IDLE_LATEST_AUTOPILOT_REGISTRATION' --arg task_id "$task_id" --arg task_status "$task_status" --arg target_head "$TARGET_HEAD" --arg workflow_head "$GITHUB_SHA" --arg attempts "$attempts" --arg events "$events" --arg evidence "$evidence" '{gate:$gate,task_id:$task_id,task_status:$task_status,target_pr:1047,target_head:$target_head,workflow_head:$workflow_head,attempts:$attempts,events:$events,retained_evidence:$evidence,temporary_branch:"br-still-tooth-b1ilkfcj",production_branch_targeted:false,migration_applied:false,real_video:false,drive_write:false,oracle_lifecycle_action:"NONE"}' > uv-idle-latest-registration-receipt.json
+          cat uv-idle-latest-registration-receipt.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload retained receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: uv-idle-latest-registration-${{ github.run_id }}-${{ github.run_attempt }}
+          path: uv-idle-latest-registration-receipt.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce bounded registration gate
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          jq -e '.task_id | test("^[0-9a-f-]{36}$")' uv-idle-latest-registration-receipt.json >/dev/null
+          jq -e '.target_head == "ef5f6401e7ba423c063d7c260fdd91733540c7b8" and .production_branch_targeted == false and .migration_applied == false and .real_video == false and .drive_write == false and .oracle_lifecycle_action == "NONE"' uv-idle-latest-registration-receipt.json >/dev/null
+          echo 'UV_IDLE_LATEST_AUTOPILOT_REGISTRATION=PASS'
