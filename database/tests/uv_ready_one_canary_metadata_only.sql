@@ -1,5 +1,6 @@
 \set ON_ERROR_STOP on
 SET client_min_messages = warning;
+BEGIN;
 
 -- Queue-only safety proof. This script creates exactly two synthetic metadata
 -- rows in an exclusive disposable Neon branch. It never references media bytes,
@@ -402,3 +403,5 @@ SELECT json_build_object(
     'canonical_promotion_allowed', false,
     'database_persistence_allowed', false
 )::text AS bounded_receipt;
+
+ROLLBACK;
