@@ -1,0 +1,32 @@
+{
+  "request_id": "uv003-execute-one-shadow-20260826-01",
+  "issue": 612,
+  "experiment_id": "UV-DIANA11-DURABLE-003",
+  "job": {
+    "job_id": "diana11-shadow-20260826-001",
+    "profile": "bridge_lesson",
+    "source": {
+      "kind": "google_drive",
+      "file_id": "1PGRLozLJKG8tl-JYGPTCcS_lT-nn-T7C",
+      "name": "Диана 11"
+    },
+    "project": "Школа спортивного бриджа",
+    "metadata": {
+      "purpose": "UV-DIANA11-DURABLE-003 fresh provenance shadow",
+      "human_requested": true
+    },
+    "options": {
+      "chunk_seconds": 600,
+      "max_source_bytes": 2147483648,
+      "max_duration_seconds": 43200.0
+    }
+  },
+  "expected_job_hash": "a43e11beb0765aa91551d4c4a69767f02c4dcb3b5e485cd5bb0f2996e734d73d",
+  "expected_runtime_commit": "6a4e8248eedd00f849fcefd1bf41a51b26f5e7c6",
+  "expected_whisper_model": "small",
+  "expected_processing_fingerprint": "371661d2a1858e576e2f618ddf504da724edc30089a9af88f9dd3a140ca30951",
+  "destination_folder_id": "1I8cSuA-p0MpaZIbA33slks19KyvfJDMK",
+  "submit_limit": 1,
+  "automatic_retries": 0,
+  "incremental_cost_cap_eur": 3
+}

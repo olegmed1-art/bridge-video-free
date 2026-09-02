@@ -1,0 +1,161 @@
+name: Oracle Universal Video OCI Auth Probe
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-universal-video-oci-auth-probe.yml'
+      - 'tests/test_oracle_universal_video_oci_auth_probe_contract.py'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-universal-video-oci-probes/*.json'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oracle-universal-video-oci-auth-probe
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Validate passive-probe contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import runpy
+          scope = runpy.run_path('tests/test_oracle_universal_video_oci_auth_probe_contract.py')
+          for name, value in sorted(scope.items()):
+              if name.startswith('test_') and callable(value):
+                  value()
+          print('ORACLE_UNIVERSAL_VIDEO_OCI_AUTH_PROBE_CONTRACT_PASS')
+          PY
+
+  probe:
+    if: ${{ github.event_name == 'push' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      ISSUE_NUMBER: '318'
+      EXPECTED_INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+
+      OCI_CLI_USER_SLOT: ${{ secrets.OCI_CLI_USER }}
+      OCI_CLI_TENANCY_SLOT: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_CLI_FINGERPRINT_SLOT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_CLI_KEY_CONTENT_SLOT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_CLI_REGION_SLOT: ${{ secrets.OCI_CLI_REGION }}
+
+      OCI_USER_OCID_SLOT: ${{ secrets.OCI_USER_OCID }}
+      OCI_TENANCY_OCID_SLOT: ${{ secrets.OCI_TENANCY_OCID }}
+      OCI_FINGERPRINT_SLOT: ${{ secrets.OCI_FINGERPRINT }}
+      OCI_PRIVATE_KEY_SLOT: ${{ secrets.OCI_PRIVATE_KEY }}
+      OCI_REGION_SLOT: ${{ secrets.OCI_REGION }}
+
+      OCI_API_USER_SLOT: ${{ secrets.OCI_API_USER }}
+      OCI_API_TENANCY_SLOT: ${{ secrets.OCI_API_TENANCY }}
+      OCI_API_FINGERPRINT_SLOT: ${{ secrets.OCI_API_FINGERPRINT }}
+      OCI_API_PRIVATE_KEY_SLOT: ${{ secrets.OCI_API_PRIVATE_KEY }}
+      OCI_API_REGION_SLOT: ${{ secrets.OCI_API_REGION }}
+
+      OCI_CONFIG_SLOT: ${{ secrets.OCI_CONFIG }}
+      OCI_CONFIG_B64_SLOT: ${{ secrets.OCI_CONFIG_B64 }}
+      OCI_CLI_CONFIG_SLOT: ${{ secrets.OCI_CLI_CONFIG }}
+      OCI_CREDENTIALS_JSON_SLOT: ${{ secrets.OCI_CREDENTIALS_JSON }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Validate one bounded probe request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+            | grep -E '^ops/oracle-universal-video-oci-probes/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]] || {
+            echo "Expected exactly one OCI auth probe request; found ${#files[@]}" >&2
+            exit 1
+          }
+          REQUEST_JSON="$(cat "${files[0]}")" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          x = json.loads(os.environ['REQUEST_JSON'])
+          required = {'request_id', 'issue', 'instance_id'}
+          assert set(x) == required, x
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
+          assert x['issue'] == 318
+          assert x['instance_id'] == os.environ['EXPECTED_INSTANCE_ID']
+          print(f"request_id={x['request_id']}")
+          PY
+
+      - name: Evaluate secret-set completeness without reading values
+        id: auth
+        shell: bash
+        run: |
+          set -euo pipefail
+          auth_state=NOT_CONFIGURED
+          auth_model=NONE
+
+          if [[ -n "${OCI_CLI_USER_SLOT:-}" \
+             && -n "${OCI_CLI_TENANCY_SLOT:-}" \
+             && -n "${OCI_CLI_FINGERPRINT_SLOT:-}" \
+             && -n "${OCI_CLI_KEY_CONTENT_SLOT:-}" \
+             && -n "${OCI_CLI_REGION_SLOT:-}" ]]; then
+            auth_state=CONFIGURED
+            auth_model=OCI_CLI_STANDARD
+          elif [[ -n "${OCI_USER_OCID_SLOT:-}" \
+               && -n "${OCI_TENANCY_OCID_SLOT:-}" \
+               && -n "${OCI_FINGERPRINT_SLOT:-}" \
+               && -n "${OCI_PRIVATE_KEY_SLOT:-}" \
+               && -n "${OCI_REGION_SLOT:-}" ]]; then
+            auth_state=CONFIGURED
+            auth_model=OCI_INDIVIDUAL_STANDARD
+          elif [[ -n "${OCI_API_USER_SLOT:-}" \
+               && -n "${OCI_API_TENANCY_SLOT:-}" \
+               && -n "${OCI_API_FINGERPRINT_SLOT:-}" \
+               && -n "${OCI_API_PRIVATE_KEY_SLOT:-}" \
+               && -n "${OCI_API_REGION_SLOT:-}" ]]; then
+            auth_state=CONFIGURED
+            auth_model=OCI_API_STANDARD
+          elif [[ -n "${OCI_CONFIG_SLOT:-}" || -n "${OCI_CONFIG_B64_SLOT:-}" \
+               || -n "${OCI_CLI_CONFIG_SLOT:-}" || -n "${OCI_CREDENTIALS_JSON_SLOT:-}" ]]; then
+            auth_state=PARTIAL_OR_BUNDLED
+            auth_model=OCI_CONFIG_BUNDLE
+          fi
+
+          echo "auth_state=$auth_state" >> "$GITHUB_OUTPUT"
+          echo "auth_model=$auth_model" >> "$GITHUB_OUTPUT"
+          echo "OCI_AUTH_STATE=$auth_state"
+          echo "OCI_AUTH_MODEL=$auth_model"
+          echo ORACLE_UNIVERSAL_VIDEO_OCI_AUTH_PRESENCE_PROBE_PASS
+
+      - name: Report presence-only evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          AUTH_STATE: ${{ steps.auth.outputs.auth_state }}
+          AUTH_MODEL: ${{ steps.auth.outputs.auth_model }}
+        run: |
+          set -euo pipefail
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+            "Oracle Universal Video OCI credential presence probe PASS. Request: \`${{ steps.request.outputs.request_id }}\`. OCI API credential state: \`$AUTH_STATE\`; model: \`$AUTH_MODEL\`. No OCI API call, SSH login, host command, or service change occurred. No credential value was read into output. Run: $RUN_URL"
+          {
+            echo '## OCI credential presence probe'
+            echo "- State: \`$AUTH_STATE\`"
+            echo "- Model: \`$AUTH_MODEL\`"
+            echo '- OCI API calls: `0`'
+            echo '- Host commands: `0`'
+          } >> "$GITHUB_STEP_SUMMARY"

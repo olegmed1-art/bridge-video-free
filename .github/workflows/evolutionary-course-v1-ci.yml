@@ -1,0 +1,55 @@
+name: Evolutionary Course v1 CI
+
+on:
+  pull_request:
+    paths:
+      - 'evolutionary_course/**'
+      - 'schemas/evolutionary-course-*.json'
+      - 'tests/test_evolutionary_course_*.py'
+      - 'docs/research/evolutionary-course/**'
+      - '.github/workflows/evolutionary-course-v1-ci.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'evolutionary_course/**'
+      - 'schemas/evolutionary-course-*.json'
+      - 'tests/test_evolutionary_course_*.py'
+      - 'docs/research/evolutionary-course/**'
+      - '.github/workflows/evolutionary-course-v1-ci.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: evolutionary-course-v1-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install test runner
+        run: python -m pip install --disable-pip-version-check -q pytest
+      - name: Validate schema JSON
+        run: |
+          python -m json.tool schemas/evolutionary-course-artifact-readiness-v1.schema.json >/dev/null
+          python -m json.tool schemas/evolutionary-course-source-handoff-v1.schema.json >/dev/null
+          python -m json.tool schemas/evolutionary-course-learning-episode-v1.schema.json >/dev/null
+          python -m json.tool schemas/evolutionary-course-learning-module-v1.schema.json >/dev/null
+      - name: Validate skill catalog schema and seed
+        run: |
+          python -m json.tool schemas/school-skill-catalog-v1.schema.json >/dev/null
+          python -m json.tool schemas/evolutionary-course-legacy-report-pointers-v1.schema.json >/dev/null
+          python -m json.tool data/research/evolutionary_course_skill_catalog_v1.json >/dev/null
+      - name: Run Evolutionary Course v1 tests
+        run: python -m pytest -q tests/test_evolutionary_course_*.py
+      - name: Compile package
+        run: python -m compileall -q evolutionary_course

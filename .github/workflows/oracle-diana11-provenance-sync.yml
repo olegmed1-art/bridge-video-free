@@ -1,0 +1,229 @@
+name: Oracle Diana 11 Provenance Sync
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-diana11-provenance-sync.yml'
+      - 'ops/universal_video_diana11_provenance_sync.sh'
+      - 'ops/oracle_known_hosts_from_scan.sh'
+      - 'tests/test_diana11_provenance_sync.py'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-diana11-provenance-sync-requests/*.json'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oracle-diana11-provenance-sync
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      issue: ${{ steps.request.outputs.issue }}
+      expected_runtime_commit: ${{ steps.request.outputs.expected_runtime_commit }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Validate guarded provenance sync contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/universal_video_diana11_provenance_sync.sh
+          bash -n ops/oracle_known_hosts_from_scan.sh
+          python tests/test_diana11_provenance_sync.py
+      - name: Validate exact sync request
+        id: request
+        if: ${{ github.event_name == 'push' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+            | grep -E '^ops/oracle-diana11-provenance-sync-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one UV003 provenance sync request' >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json,os,re
+          x=json.load(open(os.environ['REQUEST_FILE'], encoding='utf-8'))
+          assert set(x)=={'request_id','issue','expected_runtime_commit'}
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
+          assert x['issue']==566
+          assert re.fullmatch(r'[0-9a-f]{40}', str(x['expected_runtime_commit']))
+          print('issue=566')
+          print('expected_runtime_commit='+x['expected_runtime_commit'])
+          PY
+
+  sync:
+    if: ${{ github.event_name == 'push' }}
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      GH_TOKEN: ${{ github.token }}
+      ISSUE_NUMBER: ${{ needs.validate.outputs.issue }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Verify host identity and key
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SSH_KEY"
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "$SSH_KEY" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          known="$RUNNER_TEMP/known_hosts"
+          : > "$known"
+          index=0
+          for expected in \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64'; do
+            part="$RUNNER_TEMP/known_hosts.$index"
+            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$expected" "$part"
+            cat "$part" >> "$known"
+            index=$((index + 1))
+          done
+          sort -u -o "$known" "$known"
+          test -s "$known"
+          actual="$(ssh-keygen -lf "$known" | awk '{print $2}' | sort -u | paste -sd, -)"
+          expected="$(printf '%s\n' \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64' | sort -u | paste -sd, -)"
+          [[ "$actual" == "$expected" ]] || { echo UV003_SYNC_HOST_KEY_SET_MISMATCH >&2; exit 1; }
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+      - name: Verify DDS3 before sidecar-only sync
+        id: dds3_before
+        shell: bash
+        run: |
+          set -euo pipefail
+          READY="$(curl -fsS --retry 3 --retry-delay 3 --max-time 20 https://158.180.47.161/readyz)" python - <<'PY'
+          import json,os
+          x=json.loads(os.environ['READY'])
+          assert x.get('status')=='ready', x
+          assert x.get('engine')=='DDS3', x
+          assert x.get('fallback_used') is False, x
+          assert x.get('position_solver')=='ready', x
+          print('UV003_SYNC_DDS3_BEFORE=PASS')
+          PY
+      - name: Synchronize exact non-secret provenance key if needed
+        id: provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh_cmd=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          "${ssh_cmd[@]}" 'sudo -n true'
+          cat ops/universal_video_diana11_provenance_sync.sh | "${ssh_cmd[@]}" 'cat > /tmp/uv003_provenance_sync.sh && chmod 0700 /tmp/uv003_provenance_sync.sh'
+          raw=''
+          if ! raw="$("${ssh_cmd[@]}" "sudo -n env EXPECTED_RUNTIME_COMMIT='${{ needs.validate.outputs.expected_runtime_commit }}' bash /tmp/uv003_provenance_sync.sh; rm -f /tmp/uv003_provenance_sync.sh" 2>/dev/null)"; then
+            raw=$'UV003_SYNC_STATUS=FAIL\nUV003_SYNC_CODE=REMOTE_TRANSPORT_FAILURE'
+          fi
+          RAW="$raw" SAFE_FILE="$RUNNER_TEMP/uv003-provenance-safe.txt" python - <<'PY'
+          import os,re
+          patterns=(
+            r'UV003_SYNC_EXPECTED_REVISION=[0-9a-f]{40}',
+            r'UV003_SYNC_SOURCE_REVISION=[0-9a-f]{40}',
+            r'UV003_SYNC_PREVIOUS_REVISION=[0-9a-f]{40}',
+            r'UV003_SYNC_MODEL=[A-Za-z0-9._/-]{1,80}',
+            r'UV003_SYNC_SOURCE_CHECKOUT=CLEAN',
+            r'UV003_SYNC_PROCESS_PRECONDITION=PASS',
+            r'UV003_SYNC_SERVICE_RESTARTED=(?:YES|NO)',
+            r'UV003_SYNC_PROCESS_POSTCONDITION=PASS',
+            r'UV003_SYNC_STATUS=(?:PASS|FAIL)',
+            r'UV003_SYNC_CODE=(?:ALREADY_ALIGNED|PROVENANCE_ALIGNED|NOT_ROOT|EXPECTED_REVISION_INVALID|RUNTIME_ENV_UNSAFE|SOURCE_CHECKOUT_UNSAFE|SPOOL_ROOT_UNSAFE|SERVICE_NOT_ACTIVE|JOB_QUEUE_NOT_EMPTY|SOURCE_HEAD_INVALID|SOURCE_HEAD_MISMATCH|SOURCE_TRACKED_DIRTY|GIT_STATUS_UNREADABLE|SOURCE_UNTRACKED_DIRTY|RUNTIME_ENV_PARSE_FAILED|RUNTIME_ENV_REVISION_INVALID|RUNTIME_MODEL_INVALID|SERVICE_PROCESS_UNSAFE|SERVICE_PROCESS_ENV_UNREADABLE|SERVICE_PROCESS_REVISION_INVALID|SERVICE_PROCESS_MODEL_INVALID|SERVICE_PROCESS_ENV_MISMATCH|SERVICE_STOP_FAILED|JOB_QUEUE_CHANGED|ENV_REWRITE_FAILED|SERVICE_START_FAILED|ROLLBACK_FAILED|UNEXPECTED_SYNC_FAILURE|REMOTE_TRANSPORT_FAILURE|UNSAFE_SYNC_OUTPUT)',
+          )
+          safe=[]
+          for line in os.environ['RAW'].splitlines():
+              if any(re.fullmatch(p,line) for p in patterns) and line not in safe:
+                  safe.append(line)
+          statuses=[x.split('=',1)[1] for x in safe if x.startswith('UV003_SYNC_STATUS=')]
+          codes=[x.split('=',1)[1] for x in safe if x.startswith('UV003_SYNC_CODE=')]
+          pass_codes={'ALREADY_ALIGNED','PROVENANCE_ALIGNED'}
+          if len(statuses)!=1 or len(codes)!=1:
+              status,code='FAIL','UNSAFE_SYNC_OUTPUT'
+          else:
+              status,code=statuses[0],codes[0]
+              if (status=='PASS') != (code in pass_codes):
+                  status,code='FAIL','UNSAFE_SYNC_OUTPUT'
+          safe=[x for x in safe if not x.startswith(('UV003_SYNC_STATUS=','UV003_SYNC_CODE='))]
+          safe.extend([f'UV003_SYNC_STATUS={status}',f'UV003_SYNC_CODE={code}'])
+          with open(os.environ['SAFE_FILE'],'w',encoding='utf-8') as f:
+              f.write('\n'.join(safe)+'\n')
+          with open(os.environ['GITHUB_OUTPUT'],'a',encoding='utf-8') as f:
+              f.write('status='+status+'\n')
+              f.write('code='+code+'\n')
+          PY
+          cat "$RUNNER_TEMP/uv003-provenance-safe.txt"
+      - name: Verify DDS3 after sidecar-only sync
+        id: dds3_after
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          READY="$(curl -fsS --retry 3 --retry-delay 3 --max-time 20 https://158.180.47.161/readyz)" python - <<'PY'
+          import json,os
+          x=json.loads(os.environ['READY'])
+          assert x.get('status')=='ready', x
+          assert x.get('engine')=='DDS3', x
+          assert x.get('fallback_used') is False, x
+          assert x.get('position_solver')=='ready', x
+          print('UV003_SYNC_DDS3_AFTER=PASS')
+          PY
+      - name: Record bounded provenance evidence
+        if: ${{ always() }}
+        shell: bash
+        env:
+          SYNC_STATUS: ${{ steps.provenance.outputs.status }}
+          SYNC_CODE: ${{ steps.provenance.outputs.code }}
+          DDS3_BEFORE: ${{ steps.dds3_before.outcome }}
+          DDS3_AFTER: ${{ steps.dds3_after.outcome }}
+        run: |
+          set -euo pipefail
+          body="$RUNNER_TEMP/uv003-provenance-comment.md"
+          {
+            echo '[OBSERVATORY] UV003 guarded sidecar provenance sync.'
+            echo
+            if [[ -s "$RUNNER_TEMP/uv003-provenance-safe.txt" ]]; then
+              echo '```text'
+              cat "$RUNNER_TEMP/uv003-provenance-safe.txt"
+              echo '```'
+            else
+              echo '```text'
+              echo 'UV003_SYNC_STATUS=FAIL'
+              echo 'UV003_SYNC_CODE=UNSAFE_SYNC_OUTPUT'
+              echo '```'
+            fi
+            echo
+            echo "DDS3 before: ${DDS3_BEFORE:-NOT_RUN}; DDS3 after: ${DDS3_AFTER:-NOT_RUN}."
+            echo 'No job submit, ASR/media processing, Drive publication, or production promotion was authorized or attempted.'
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > "$body"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+      - name: Enforce fail-closed sync verdict
+        if: ${{ always() }}
+        shell: bash
+        env:
+          SYNC_STATUS: ${{ steps.provenance.outputs.status }}
+          SYNC_CODE: ${{ steps.provenance.outputs.code }}
+          DDS3_BEFORE: ${{ steps.dds3_before.outcome }}
+          DDS3_AFTER: ${{ steps.dds3_after.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "$SYNC_STATUS" == PASS ]]
+          [[ "$SYNC_CODE" == ALREADY_ALIGNED || "$SYNC_CODE" == PROVENANCE_ALIGNED ]]
+          [[ "$DDS3_BEFORE" == success && "$DDS3_AFTER" == success ]]
+          echo UV003_PROVENANCE_SYNC_PASS

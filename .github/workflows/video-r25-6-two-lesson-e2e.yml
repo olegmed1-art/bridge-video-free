@@ -1,0 +1,253 @@
+name: Bridge Video r25.6 Two-Lesson E2E
+
+on:
+  push:
+    branches:
+      - algorithm/3.1-free-r25.6-pdf-presentation
+    paths:
+      - '.github/workflows/video-r25-6-two-lesson-e2e.yml'
+      - 'bridge_runtime_hardening_r25_6.py'
+      - 'run_master_3_1_free.py'
+      - 'run_drive_3_1_free_generic.py'
+      - 'tests/test_asr_policy_r25_6.py'
+      - 'tests/test_pdf_presentation_r25_6.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: bridge-video-r25-6-two-lesson-e2e
+  cancel-in-progress: false
+
+jobs:
+  lesson-e2e:
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: logic-r25.5-isolated-zero
+            job_id: 86e814014cabee88785a53340ab85666
+            baseline_pdf_id: 19sGj5XlTZKNZI7MFB-U7wDM7HjfvK3q6
+            expect_isolated_zero: 'true'
+          - label: sunday-known-good
+            job_id: fb1800d20b82f2e0de94b46599f18fdb
+            baseline_pdf_id: 1WeueHnoAJLxXpfZT3Zad_B8KWyAvtohM
+            expect_isolated_zero: 'false'
+    env:
+      BRIDGE_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+      BRIDGE_RUNNER_LABEL: ubuntu-24.04
+      BRIDGE_LARGER_RUNNER: 'false'
+      BRIDGE_PAID_CLOUD: 'false'
+      BRIDGE_BILLING_FALLBACK: 'false'
+      BRIDGE_JOB_ID: ${{ matrix.job_id }}
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: 3.1-free-r25.6
+      PYTHONUNBUFFERED: '1'
+      WHISPER_MODEL: small
+
+    steps:
+      - name: Checkout r25.6 candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+
+      - name: Install free open-source runtime
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+          python -m pip install --disable-pip-version-check -r requirements-worker.txt
+
+      - name: Run r25.6 regressions
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python tests/test_asr_policy_r25_6.py
+          PYTHONPATH=. python tests/test_late_oauth_r25_3.py
+          PYTHONPATH=. python tests/test_unreliable_asr_isolation_r25_4.py
+          PYTHONPATH=. python tests/test_pdf_presentation_r25_6.py
+          python -m py_compile bridge_runtime_hardening_r25_6.py run_master_3_1_free.py run_drive_3_1_free_generic.py
+
+      - name: Authenticate to Google Cloud with Workload Identity Federation
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        with:
+          project_id: bridge-video-automation
+          workload_identity_provider: projects/499454355457/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: bridge-video-worker@bridge-video-automation.iam.gserviceaccount.com
+          create_credentials_file: true
+
+      - name: Google Drive user OAuth preflight
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from run_drive_3_1_free_oidc import user_oauth_token
+          assert user_oauth_token(), 'BLOCKED_ACCESS: Drive OAuth unavailable'
+          print('Google Drive user OAuth preflight: PASS')
+          PY
+
+      - name: Worker database runtime preflight
+        env:
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${BRIDGE_WORKER_DATABASE_URL:-}" || { echo 'BLOCKED_DATABASE: missing worker DSN' >&2; exit 1; }
+          python database/runtime_worker_preflight.py
+          echo "BRIDGE_WORKER_DATABASE_URL=${BRIDGE_WORKER_DATABASE_URL}" >> "$GITHUB_ENV"
+
+      - name: FREE-GUARD
+        run: python bridge_worker_3_1_free.py
+
+      - name: Process known lesson with r25.6
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          python run_drive_3_1_free_oidc.py
+
+      - name: Validate E2E PDF, ASR isolation, evidence and persistence
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+          CONTROL_LABEL: ${{ matrix.label }}
+          CONTROL_JOB_ID: ${{ matrix.job_id }}
+          BASELINE_PDF_ID: ${{ matrix.baseline_pdf_id }}
+          EXPECT_ISOLATED_ZERO: ${{ matrix.expect_isolated_zero }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import tempfile
+          from pathlib import Path
+
+          import pymupdf
+
+          import run_drive_3_1_free as io
+          import run_master_3_1_free as base
+          from bridge_neon_persistence import persist_completed_drive_job
+          from run_drive_3_1_free_oidc import user_oauth_token
+
+          label=os.environ['CONTROL_LABEL']
+          job=os.environ['CONTROL_JOB_ID']
+          baseline_id=os.environ['BASELINE_PDF_ID']
+          expect_zero=os.environ['EXPECT_ISOLATED_ZERO']=='true'
+          revision='3.1-free-r25.6'
+          token=user_oauth_token()
+
+          files=io.search(token, f"trashed=false and name='AI_DONE_{job}.json'")
+          files.sort(key=lambda x:x.get('modifiedTime') or '', reverse=True)
+          done=None
+          for item in files:
+              try:
+                  payload=json.loads(base._read_text(token,item))
+              except Exception:
+                  continue
+              if payload.get('status')=='AI_DONE' and payload.get('algorithmRevision')==revision:
+                  done=payload
+                  break
+          if done is None:
+              raise SystemExit(f'{label}: missing AI_DONE for {revision}')
+
+          pdf_info=done.get('masterPdf') or {}
+          pdf_id=pdf_info.get('driveId')
+          if not pdf_id:
+              raise SystemExit(f'{label}: missing master PDF id')
+
+          with tempfile.TemporaryDirectory() as td:
+              td=Path(td)
+              new_path=td/'new.pdf'
+              old_path=td/'baseline.pdf'
+              io.download(token,pdf_id,new_path)
+              io.download(token,baseline_id,old_path)
+
+              new_doc=pymupdf.open(new_path)
+              old_doc=pymupdf.open(old_path)
+              new_pages=new_doc.page_count
+              old_pages=old_doc.page_count
+              text='\n'.join(page.get_text() for page in new_doc)
+              if 'master_analysis.json' not in set(new_doc.embfile_names()):
+                  raise SystemExit(f'{label}: embedded master missing')
+              raw=new_doc.embfile_get('master_analysis.json')
+              master=json.loads(raw.decode('utf-8'))
+              new_doc.close()
+              old_doc.close()
+
+          attachment_sha=hashlib.sha256(raw).hexdigest()
+          if attachment_sha != pdf_info.get('masterJsonSha256'):
+              raise SystemExit(f'{label}: embedded master checksum mismatch')
+          if new_pages >= old_pages:
+              raise SystemExit(f'{label}: full E2E page count did not improve: old={old_pages} new={new_pages}')
+          if f'Алгоритм: 3.1 FREE / {revision}' not in text:
+              raise SystemExit(f'{label}: PDF revision mismatch')
+          if text.count('Действие ученика: не установлено') != 0:
+              raise SystemExit(f'{label}: repeated empty actor cycles remain')
+          if 'Надёжных меток говорящих нет.' not in text:
+              raise SystemExit(f'{label}: honest actor-attribution summary missing')
+          if text.count('(score') > 20:
+              raise SystemExit(f'{label}: printed canon list exceeds 20')
+          if 'Контроль ASR:' not in text or '"transcript_segments"' in text:
+              raise SystemExit(f'{label}: technical QC is still raw')
+          if 'утечки ненадёжных доказательств в производные выводы — 0' not in text:
+              raise SystemExit(f'{label}: zero leakage is not visible')
+
+          quality=master.get('content_quality') or {}
+          gate=quality.get('r24Gate') or {}
+          if int(gate.get('unreliableDerivedEvidenceCount') or 0) != 0:
+              raise SystemExit(f'{label}: unreliable evidence leaked into derivation: {gate}')
+          if quality.get('unreliable_segments_excluded_from_semantic_derivation') is not True:
+              raise SystemExit(f'{label}: ASR isolation flag missing')
+          if int(quality.get('selected_report_visuals') or 0) <= 0:
+              raise SystemExit(f'{label}: visual evidence disappeared')
+
+          failed=[
+              q for q in ((master.get('technical_qc') or {}).get('transcript') or {}).get('qc') or []
+              if not q.get('ok')
+          ]
+          halluc=[
+              q for q in failed
+              if 'REPEATED_NONSPEECH_HALLUCINATION' in (q.get('failureReasons') or [])
+          ]
+          if halluc:
+              raise SystemExit(f'{label}: hallucination should have hard-stopped before PDF')
+
+          transcript=master.get('transcript') or []
+          isolated_empty=0
+          for q in failed:
+              start=float(q.get('start') or 0)
+              end=float(q.get('end') or start)
+              overlap=[
+                  s for s in transcript
+                  if float(s.get('end') or 0)>start and float(s.get('start') or 0)<end
+              ]
+              if not overlap:
+                  isolated_empty+=1
+              elif not all(bool(s.get('unreliable')) for s in overlap):
+                  raise SystemExit(f'{label}: failed QC window overlaps non-isolated transcript')
+
+          if expect_zero:
+              zero=[q for q in failed if float(q.get('similarity') or 0)<=0.05]
+              if not zero or isolated_empty < 1:
+                  raise SystemExit(f'{label}: isolated zero-overlap control was not represented')
+          elif int(quality.get('unreliable_transcript_segments') or 0) <= 0:
+              raise SystemExit(f'{label}: known-good unreliable segment control was not exercised')
+
+          persist_completed_drive_job(user_oauth_token())
+          print(
+              f'R25_6_TWO_LESSON_E2E: PASS label={label} old_pages={old_pages} '
+              f'new_pages={new_pages} master_sha256={attachment_sha} '
+              f'visuals={quality.get("selected_report_visuals")} '
+              f'unreliable={quality.get("unreliable_transcript_segments")} '
+              f'isolated_empty_windows={isolated_empty} database=persisted'
+          )
+          PY

@@ -1,0 +1,9 @@
+{
+  "request_id": "uv-container-source-activate-20260830-01",
+  "mode": "activate",
+  "git_ref": "bfe329e52fae1392a3292833da2db43778c3943f",
+  "expected_host_fingerprint": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}

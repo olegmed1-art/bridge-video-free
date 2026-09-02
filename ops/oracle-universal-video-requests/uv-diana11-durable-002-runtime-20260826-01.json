@@ -1,0 +1,9 @@
+{
+  "request_id": "uv-diana11-durable-002-runtime-20260826-01",
+  "mode": "activate",
+  "git_ref": "6a4e8248eedd00f849fcefd1bf41a51b26f5e7c6",
+  "expected_host_fingerprint": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}

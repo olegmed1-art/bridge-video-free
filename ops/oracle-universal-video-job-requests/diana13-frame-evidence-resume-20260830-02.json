@@ -1,0 +1,28 @@
+{
+  "request_id": "diana13-frame-evidence-resume-20260830-02",
+  "issue": 881,
+  "job": {
+    "job_id": "diana13-frame-evidence-canary-20260830-01",
+    "profile": "bridge_lesson",
+    "source": {
+      "kind": "google_drive",
+      "file_id": "198-2v3JBlNQobdsPYQQWzrrCqQ1zBZOI",
+      "name": "Диана 13.mp4"
+    },
+    "project": "Школа спортивного бриджа",
+    "metadata": {
+      "human_requested": true,
+      "purpose": "Resume bounded observation of the existing frame-evidence canary by exact job id",
+      "requested_runtime_commit": "2d050d3851f8544579b4993a09c31049dc10497b",
+      "source_folder": "Диана Конвеер",
+      "canonical_promotion_allowed": false,
+      "publication_state": "NOT_PUBLISHED"
+    },
+    "options": {
+      "chunk_seconds": 600,
+      "frame_interval_seconds": 60,
+      "max_source_bytes": 2147483648,
+      "max_duration_seconds": 43200
+    }
+  }
+}

@@ -1,0 +1,118 @@
+spec_version: '1.0'
+status: DESIGNED_SHADOW_ONLY
+policy:
+  governing_spec: meta_school/META_CLOSED_LOOP_EXECUTABLE_SPEC_V2.yaml
+  governing_operations: meta_school/META_OPERATIONS_V1.md
+  stable_write: forbidden
+  production_database_write: forbidden
+  canonical_material_write: forbidden
+  evidence_store: append_only
+  promotion_authority: NONE
+  methodology_change_class: R4
+  methodology_autonomous_promotion: forbidden
+
+loops:
+  TEACHER_TRACE_MINER:
+    purpose: Extract reusable teaching patterns from verified teacher interventions and outcomes.
+    risk_class: R1
+    state: DESIGNED
+    inputs: [verified_lesson_cycles, teacher_interventions, outcome_evidence]
+    outputs: [candidate_teaching_patterns, evidence_bundle]
+    hard_gates: [verified_attribution, evidence_present, no_canonical_write]
+
+  TOURNAMENT_SWING_MINER:
+    purpose: Mine recurring costly decisions from tournament and DDS swing trajectories.
+    risk_class: R1
+    state: DESIGNED
+    inputs: [tournament_boards, dds_value_trajectories, alternative_card_regret]
+    outputs: [candidate_error_patterns, training_case_candidates]
+    hard_gates: [dds_reproducible, equal_optimal_moves_preserved, provenance_present]
+
+  STUDENT_TRANSFER_LOOP:
+    purpose: Test whether a verified lesson transfers to later comparable decisions instead of only being repeated verbally.
+    risk_class: R1
+    state: DESIGNED
+    inputs: [student_decisions, verified_lesson_targets, later_comparable_decisions]
+    outputs: [transfer_observations, candidate_student_learning_signal]
+    hard_gates: [student_identity_verified, comparability_contract_frozen, student_profile_read_only]
+
+  CORRECTION_COMPILER:
+    purpose: Convert confirmed corrections with evidence into deterministic candidate regression cases.
+    risk_class: R1
+    state: CANDIDATE_IMPLEMENTATION
+    inputs: [correction_record, evidence]
+    outputs: [candidate_regression_cases, skipped_records, evidence_bundle]
+    hard_gates:
+      - correction_confirmed_or_resolved
+      - regression_required
+      - evidence_present_and_not_quarantined
+      - protected_methodology_requires_teacher_approval
+      - expected_contract_explicit
+      - target_component_explicit
+      - test_reference_explicit
+      - deterministic_deduplication
+      - no_production_write
+
+  UNKNOWN_DISAGREEMENT_EXPLORER:
+    purpose: Collect unresolved disagreements and UNKNOWN states for targeted evidence acquisition rather than guessing.
+    risk_class: R0
+    state: DESIGNED
+    inputs: [unknown_evidence, conflicted_evidence, disagreement_records]
+    outputs: [investigation_queue, evidence_requests]
+    hard_gates: [no_correctness_inference_without_evidence, no_canonical_write]
+
+  ROBOT_CAPABILITY_DISTILLER:
+    purpose: Distill verified strengths and failure boundaries from bridge robots and solvers into training hypotheses.
+    risk_class: R1
+    state: DESIGNED
+    inputs: [robot_outputs, solver_outputs, reproducible_comparisons]
+    outputs: [candidate_capability_rules, failure_boundaries]
+    hard_gates: [tool_identity_pinned, reproducible_result, no_methodology_promotion]
+
+  COUNTERFACTUAL_PAIR_FACTORY:
+    purpose: Build paired examples that differ by one material bridge feature to isolate why a decision changes.
+    risk_class: R1
+    state: DESIGNED
+    inputs: [verified_cases, generated_counterfactuals, solver_checks]
+    outputs: [paired_training_cases, contrast_explanations]
+    hard_gates: [single_material_change, legality_check, solver_or_teacher_validation]
+
+  ADVERSARIAL_SELF_PLAY_ACADEMY:
+    purpose: Generate difficult bridge positions through bounded self-play and retain only independently verified cases.
+    risk_class: R1
+    state: DESIGNED
+    inputs: [legal_deal_generator, solver, bounded_self_play]
+    outputs: [hard_case_candidates, failure_clusters]
+    hard_gates: [fixed_seed_or_replay, legality_check, independent_validation, bounded_cost]
+
+  CONFIDENCE_ABSTENTION_CALIBRATOR:
+    purpose: Calibrate when the AI trainer should answer, qualify an answer, ask for evidence, or abstain.
+    risk_class: R1
+    state: DESIGNED
+    inputs: [historical_answers, verified_assessments, unknown_and_conflicted_cases]
+    outputs: [candidate_confidence_policy, calibration_metrics]
+    hard_gates: [verified_labels_only, no_post_hoc_threshold_selection, methodology_boundary_preserved]
+
+  FAILURE_ROOT_CAUSE_SHADOW_LEAGUE:
+    purpose: Re-run confirmed failures against candidate fixes in isolation and retain only reproducible improvements.
+    risk_class: R1
+    state: DESIGNED
+    inputs: [failure_records, root_causes, candidate_fixes, regression_suite]
+    outputs: [verified_fix_candidates, rejected_hypotheses, recovery_evidence]
+    hard_gates: [frozen_failure_case, sandbox_only, regression_pass, recovery_readback]
+
+activation_order:
+  - CORRECTION_COMPILER
+  - UNKNOWN_DISAGREEMENT_EXPLORER
+  - STUDENT_TRANSFER_LOOP
+  - TEACHER_TRACE_MINER
+  - TOURNAMENT_SWING_MINER
+  - CONFIDENCE_ABSTENTION_CALIBRATOR
+  - FAILURE_ROOT_CAUSE_SHADOW_LEAGUE
+  - COUNTERFACTUAL_PAIR_FACTORY
+  - ROBOT_CAPABILITY_DISTILLER
+  - ADVERSARIAL_SELF_PLAY_ACADEMY
+
+promotion:
+  shadow_to_stable: OWNER_REVIEW_REQUIRED
+  R4: OWNER_REVIEW_ALWAYS_REQUIRED

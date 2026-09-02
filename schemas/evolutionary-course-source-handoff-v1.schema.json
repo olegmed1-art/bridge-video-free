@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Evolutionary Course source-bound adapter handoff v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "handoff_id", "status", "lesson_identity", "source", "existing_result", "evidence_refs", "required_before_adapter", "effects", "authority"],
+  "properties": {
+    "schema": {"const": "evolutionary-course-source-handoff-v1"},
+    "handoff_id": {"type": "string", "minLength": 1},
+    "status": {"const": "SOURCE_BOUND_ADAPTER_INPUT_MISSING"},
+    "lesson_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lesson_id", "lesson_date", "lesson_date_status"],
+      "properties": {
+        "lesson_id": {"type": "string", "minLength": 1},
+        "lesson_date": {"type": "string", "format": "date"},
+        "lesson_date_status": {"const": "CONFIRMED"}
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["video_file_id", "source_name", "source_size_bytes", "source_job_id", "identity_status"],
+      "properties": {
+        "video_file_id": {"type": "string", "minLength": 10},
+        "source_name": {"type": "string", "minLength": 1},
+        "source_size_bytes": {"type": "integer", "minimum": 1},
+        "source_job_id": {"type": "string", "minLength": 1},
+        "identity_status": {"const": "VERIFIED_FROM_REPOSITORY_EVIDENCE"}
+      }
+    },
+    "existing_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["master_pdf_drive_id", "master_pdf_sha256", "embedded_master_analysis_sha256", "video31_revision", "identity_overlay_revision"],
+      "properties": {
+        "master_pdf_drive_id": {"type": "string", "minLength": 10},
+        "master_pdf_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "embedded_master_analysis_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "video31_revision": {"type": "string", "minLength": 1},
+        "identity_overlay_revision": {"type": "string", "minLength": 1}
+      }
+    },
+    "evidence_refs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "required_before_adapter": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+    "effects": {
+      "const": {
+        "media_processed": false,
+        "adapter_report_created": false,
+        "learning_episode_created": false,
+        "catalog_mutated": false,
+        "student_profile_written": false
+      }
+    },
+    "authority": {
+      "const": {
+        "authority_class": "CANDIDATE_RESEARCH",
+        "canonical_promotion_allowed": false,
+        "curriculum_activation_allowed": false,
+        "publication_allowed": false
+      }
+    }
+  }
+}

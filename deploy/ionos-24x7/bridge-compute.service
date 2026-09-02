@@ -1,0 +1,18 @@
+[Unit]
+Description=Bridge School IONOS 24/7 Compute Plane
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/srv/bridge/compose
+ExecStart=/usr/bin/docker compose --env-file /srv/bridge/env/production.env up -d --remove-orphans
+ExecReload=/usr/bin/docker compose --env-file /srv/bridge/env/production.env up -d --remove-orphans
+ExecStop=/usr/bin/docker compose --env-file /srv/bridge/env/production.env stop
+TimeoutStartSec=180
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

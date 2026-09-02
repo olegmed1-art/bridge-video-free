@@ -1,0 +1,152 @@
+name: Diana Semantic Refinement v2
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: "Completed Bridge Video job id"
+        required: true
+        type: string
+      output_folder_id:
+        description: "Drive folder for ready results"
+        required: true
+        type: string
+      work_folder_id:
+        description: "Drive folder for receipts"
+        required: true
+        type: string
+      original_source_drive_id:
+        description: "Historical original file ID used only for date metadata"
+        required: false
+        type: string
+      lesson_number:
+        description: "Historical lesson number"
+        required: true
+        type: string
+      lesson_date_candidate:
+        description: "Optional YYYY-MM-DD candidate"
+        required: false
+        type: string
+      persist_database:
+        description: "Persist candidates to staging when migration is present"
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches:
+      - main
+      - 'candidate/**'
+    paths:
+      - 'semantic_requests/*.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: diana-semantic-refinement
+  cancel-in-progress: false
+
+jobs:
+  semantic-only:
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      PYTHONUNBUFFERED: "1"
+      BRIDGE_PAID_CLOUD: "false"
+      BRIDGE_BILLING_FALLBACK: "false"
+
+    steps:
+      - name: Checkout public technical code only
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Resolve refinement request
+        shell: bash
+        env:
+          INPUT_JOB_ID: ${{ inputs.job_id }}
+          INPUT_OUTPUT_FOLDER_ID: ${{ inputs.output_folder_id }}
+          INPUT_WORK_FOLDER_ID: ${{ inputs.work_folder_id }}
+          INPUT_ORIGINAL_SOURCE_DRIVE_ID: ${{ inputs.original_source_drive_id }}
+          INPUT_LESSON_NUMBER: ${{ inputs.lesson_number }}
+          INPUT_LESSON_DATE_CANDIDATE: ${{ inputs.lesson_date_candidate }}
+          INPUT_PERSIST_DATABASE: ${{ inputs.persist_database }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            JOB_ID="$INPUT_JOB_ID"
+            OUTPUT_FOLDER_ID="$INPUT_OUTPUT_FOLDER_ID"
+            WORK_FOLDER_ID="$INPUT_WORK_FOLDER_ID"
+            ORIGINAL_SOURCE_DRIVE_ID="$INPUT_ORIGINAL_SOURCE_DRIVE_ID"
+            LESSON_NUMBER="$INPUT_LESSON_NUMBER"
+            LESSON_DATE_CANDIDATE="$INPUT_LESSON_DATE_CANDIDATE"
+            LESSON_DATE_SOURCE="workflow_dispatch_candidate"
+            LESSON_DATE_EVIDENCE_JSON=""
+            PERSIST_DATABASE="${INPUT_PERSIST_DATABASE:-false}"
+          else
+            REQUEST_FILE="$(git show --pretty='' --name-only "$GITHUB_SHA" | grep -E '^semantic_requests/.*\.txt$' | head -n 1 || true)"
+            test -n "$REQUEST_FILE" || { echo 'No semantic request file' >&2; exit 2; }
+            JOB_ID="$(sed -n 's/^JOB_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            OUTPUT_FOLDER_ID="$(sed -n 's/^OUTPUT_FOLDER_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            WORK_FOLDER_ID="$(sed -n 's/^WORK_FOLDER_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            ORIGINAL_SOURCE_DRIVE_ID="$(sed -n 's/^ORIGINAL_SOURCE_DRIVE_ID=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            LESSON_NUMBER="$(sed -n 's/^LESSON_NUMBER=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            LESSON_DATE_CANDIDATE="$(sed -n 's/^LESSON_DATE_CANDIDATE=//p' "$REQUEST_FILE" | tail -n 1 | tr -d '[:space:]')"
+            LESSON_DATE_SOURCE="$(sed -n 's/^LESSON_DATE_SOURCE=//p' "$REQUEST_FILE" | tail -n 1)"
+            LESSON_DATE_EVIDENCE_JSON="$(sed -n 's/^LESSON_DATE_EVIDENCE_JSON=//p' "$REQUEST_FILE" | tail -n 1)"
+            PERSIST_DATABASE="$(sed -n 's/^PERSIST_DATABASE=//p' "$REQUEST_FILE" | tail -n 1 | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+            PERSIST_DATABASE="${PERSIST_DATABASE:-false}"
+          fi
+          test "${#JOB_ID}" -eq 32
+          test -n "$OUTPUT_FOLDER_ID" -a -n "$WORK_FOLDER_ID" -a -n "$LESSON_NUMBER"
+          case "$JOB_ID" in *[!0-9a-f]*) exit 2 ;; esac
+          case "$LESSON_NUMBER" in *[!0-9]*) exit 2 ;; esac
+          case "$PERSIST_DATABASE" in true|false) ;; *) exit 2 ;; esac
+          {
+            echo "BRIDGE_JOB_ID=$JOB_ID"
+            echo "BRIDGE_OUTPUT_FOLDER_ID=$OUTPUT_FOLDER_ID"
+            echo "BRIDGE_WORK_FOLDER_ID=$WORK_FOLDER_ID"
+            echo "BRIDGE_ORIGINAL_SOURCE_DRIVE_ID=$ORIGINAL_SOURCE_DRIVE_ID"
+            echo "BRIDGE_LESSON_NUMBER=$LESSON_NUMBER"
+            echo "BRIDGE_LESSON_DATE_CANDIDATE=$LESSON_DATE_CANDIDATE"
+            echo "BRIDGE_LESSON_DATE_SOURCE=$LESSON_DATE_SOURCE"
+            echo "BRIDGE_PERSIST_DATABASE=$PERSIST_DATABASE"
+          } >> "$GITHUB_ENV"
+          if [ -n "$LESSON_DATE_EVIDENCE_JSON" ]; then
+            {
+              echo 'BRIDGE_LESSON_DATE_EVIDENCE_JSON<<BRIDGE_DATE_EOF'
+              echo "$LESSON_DATE_EVIDENCE_JSON"
+              echo 'BRIDGE_DATE_EOF'
+            } >> "$GITHUB_ENV"
+          fi
+
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install semantic-only dependencies
+        run: |
+          python -m pip install --disable-pip-version-check \
+            'requests==2.34.2' 'google-auth==2.56.3' 'pymupdf==1.28.2' \
+            'psycopg[binary]==3.3.4'
+
+      - name: Cost and source guard
+        run: |
+          python - <<'PY'
+          import os
+          assert os.environ.get('BRIDGE_PAID_CLOUD') == 'false'
+          assert os.environ.get('BRIDGE_BILLING_FALLBACK') == 'false'
+          print('COST_GATE_PASS: semantic-only; original video is not downloaded or transcribed')
+          PY
+
+      - name: Build Teacher Brief, learning cards and staging candidates
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+        run: python diana_longitudinal_postprocess.py
+
+      # The workflow downloads only the existing master PDF/embedded JSON.
+      # It does not touch, move, duplicate or transcribe the MASTER video.

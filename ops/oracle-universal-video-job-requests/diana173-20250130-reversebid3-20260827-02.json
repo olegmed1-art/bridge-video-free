@@ -1,0 +1,23 @@
+{
+  "request_id": "diana173-20250130-reversebid3-20260827-02",
+  "issue": 634,
+  "job": {
+    "job_id": "diana173-20250130-reversebid3-20260827-02",
+    "profile": "bridge_lesson",
+    "source": {
+      "kind": "google_drive",
+      "file_id": "1gm8NJp7rVN2xIYHL-IgKMdrzqtZRG0rl",
+      "name": "Диана 173. 30.01.2025. Реверс бид. Ч. 3-я.mp4"
+    },
+    "project": "Школа спортивного бриджа",
+    "metadata": {
+      "human_requested": true,
+      "purpose": "Расшифровка занятия и бриджевый контекст"
+    },
+    "options": {
+      "chunk_seconds": 600,
+      "max_source_bytes": 2147483648,
+      "max_duration_seconds": 43200
+    }
+  }
+}

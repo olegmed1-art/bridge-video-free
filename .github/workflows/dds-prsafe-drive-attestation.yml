@@ -1,0 +1,127 @@
+name: DDS PR-safe Drive preparation attestation
+
+on:
+  workflow_run:
+    workflows:
+      - 'DDS main 30k — prepare from preserved pilot'
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+jobs:
+  attest:
+    if: >-
+      ${{
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'pull_request_target' &&
+        github.event.workflow_run.actor.login == 'olegmed1-art'
+      }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Resolve and verify trusted preparation context
+        id: context
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREP_RUN_ID: ${{ github.event.workflow_run.id }}
+          EXPECTED_PILOT_ZIP_SHA256: ef126c6842dda691b08325392b9d7fe5319acdba34b2db6b8981f03d56f8e130
+          EXPECTED_OWNER: olegmed1-art
+        run: |
+          set -euo pipefail
+          [[ "$PREP_RUN_ID" =~ ^[0-9]+$ ]]
+          ARTIFACT_NAME="dds-prsafe-attestation-${PREP_RUN_ID}"
+          gh api \
+            "/repos/${GITHUB_REPOSITORY}/actions/runs/${PREP_RUN_ID}/artifacts?per_page=100" \
+            > "$RUNNER_TEMP/artifacts.json"
+          ARTIFACT_ID="$(ARTIFACT_NAME="$ARTIFACT_NAME" python - <<'PY'
+          import json, os
+          from pathlib import Path
+          payload = json.loads((Path(os.environ['RUNNER_TEMP']) / 'artifacts.json').read_text(encoding='utf-8'))
+          name = os.environ['ARTIFACT_NAME']
+          matches = [item for item in payload.get('artifacts') or [] if item.get('name') == name and not item.get('expired')]
+          if len(matches) != 1:
+              raise SystemExit(f'expected exactly one live attestation artifact {name!r}; found {len(matches)}')
+          print(matches[0]['id'])
+          PY
+          )"
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]]
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > "$RUNNER_TEMP/attestation.zip"
+          rm -rf "$RUNNER_TEMP/attestation"
+          mkdir -p "$RUNNER_TEMP/attestation"
+          unzip -q "$RUNNER_TEMP/attestation.zip" -d "$RUNNER_TEMP/attestation"
+          test -f "$RUNNER_TEMP/attestation/context.json"
+
+          eval "$(python - <<'PY'
+          import json, os, shlex
+          from pathlib import Path
+          path = Path(os.environ['RUNNER_TEMP']) / 'attestation' / 'context.json'
+          payload = json.loads(path.read_text(encoding='utf-8'))
+          if payload.get('schema') != 'dds-prsafe-drive-attestation-context-v1':
+              raise SystemExit('invalid attestation context schema')
+          pr = payload.get('pr_number')
+          head = str(payload.get('head_sha') or '')
+          run_id = payload.get('source_run_id')
+          pilot = str(payload.get('pilot_zip_sha256') or '')
+          if not isinstance(pr, int) or pr <= 0:
+              raise SystemExit('invalid PR number in attestation context')
+          if len(head) != 40 or any(ch not in '0123456789abcdef' for ch in head):
+              raise SystemExit('invalid head SHA in attestation context')
+          if str(run_id) != os.environ['PREP_RUN_ID']:
+              raise SystemExit('attestation source run mismatch')
+          if pilot != os.environ['EXPECTED_PILOT_ZIP_SHA256']:
+              raise SystemExit('pilot ZIP digest mismatch')
+          print('PR_NUMBER=' + shlex.quote(str(pr)))
+          print('HEAD_SHA=' + shlex.quote(head))
+          print('PILOT_ZIP_SHA256=' + shlex.quote(pilot))
+          PY
+          )"
+
+          gh api "/repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" > "$RUNNER_TEMP/pr.json"
+          PR_NUMBER="$PR_NUMBER" HEAD_SHA="$HEAD_SHA" python - <<'PY'
+          import json, os
+          from pathlib import Path
+          pr = json.loads((Path(os.environ['RUNNER_TEMP']) / 'pr.json').read_text(encoding='utf-8'))
+          expected_repo = os.environ['GITHUB_REPOSITORY']
+          expected_owner = os.environ['EXPECTED_OWNER']
+          if int(pr.get('number') or 0) != int(os.environ['PR_NUMBER']):
+              raise SystemExit('PR number verification mismatch')
+          if (pr.get('head') or {}).get('sha') != os.environ['HEAD_SHA']:
+              raise SystemExit('PR head SHA changed before attestation')
+          if ((pr.get('head') or {}).get('repo') or {}).get('full_name') != expected_repo:
+              raise SystemExit('attested PR is not same-repository')
+          if (pr.get('user') or {}).get('login') != expected_owner:
+              raise SystemExit('attested PR author is not the trusted owner')
+          if (pr.get('base') or {}).get('ref') != 'main':
+              raise SystemExit('attested PR base is not main')
+          if pr.get('state') != 'open':
+              raise SystemExit('attested PR is no longer open')
+          print({'pr_context_verified': True, 'pr_number': pr['number'], 'head_sha': os.environ['HEAD_SHA']})
+          PY
+
+          {
+            echo "pr_number=$PR_NUMBER"
+            echo "head_sha=$HEAD_SHA"
+            echo "pilot_zip_sha256=$PILOT_ZIP_SHA256"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish fixed success attestation without candidate checkout
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
+          HEAD_SHA: ${{ steps.context.outputs.head_sha }}
+          PREP_RUN_ID: ${{ github.event.workflow_run.id }}
+          PILOT_ZIP_SHA256: ${{ steps.context.outputs.pilot_zip_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PREP_RUN_ID" =~ ^[0-9]+$ ]]
+          body="DDS_PRSAFE_DRIVE_PREPARE_PASS run_id=${PREP_RUN_ID} head_sha=${HEAD_SHA} pilot_zip_sha256=${PILOT_ZIP_SHA256}"
+          gh api --method POST \
+            "/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+            -f body="$body"

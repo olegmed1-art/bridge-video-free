@@ -1,0 +1,20 @@
+{
+  "job_id": "replace-with-one-stable-test-job-id",
+  "profile": "bridge_lesson_3_1_test",
+  "project": "school-bridge-video-3.1-test",
+  "source": {
+    "kind": "google_drive",
+    "file_id": "replace-with-google-drive-file-id",
+    "name": "replace-with-source-video-name"
+  },
+  "metadata": {
+    "test_scope": "one-video-shadow-canary",
+    "algorithm_revision": "3.1-test-r3",
+    "canonical_promotion_allowed": false,
+    "next_video_auto_start_allowed": false
+  },
+  "options": {
+    "chunk_seconds": 300,
+    "frame_interval_seconds": 120
+  }
+}

@@ -1,0 +1,193 @@
+{
+  "schema": "dds-stage2c6-validation-evidence-v1",
+  "recorded_at": "2026-08-22",
+  "stage": "2C.6",
+  "status": "validation_complete",
+  "authority": "EVIDENCE_ONLY",
+  "owner_validation_authorized": true,
+  "candidate_policy": "defense_suit_learned__defense_nt_baseline__declarer_baseline",
+  "train_prerequisite": {
+    "status": "train_shadow_complete",
+    "train_gate_pass": true,
+    "methodology_gate_pass": true,
+    "locked_train_prediction_sha256": "84c3c6e78fd0a4d1a4699c34fc6cb92c5dd97b99496edffc91bc9bf4cc28a92e",
+    "validation_accessed": false,
+    "sealed_accessed": false
+  },
+  "validation": {
+    "opened": true,
+    "completed": true,
+    "positions": 2000,
+    "families_in_selected_wave": 645,
+    "selected_by_actor": {
+      "declarer": 1000,
+      "defense": 1000
+    },
+    "source_selection": {
+      "policy": "fresh deterministic validation wave; Stage 2C.4 and Stage 2C.5 validation source families excluded before DDS",
+      "validation_families_available": 3000,
+      "stage2c4_validation_source_families_excluded": 650,
+      "stage2c5_validation_source_families_excluded": 650,
+      "prior_validation_union_excluded": 1300,
+      "fresh_validation_source_families": 650,
+      "prior_fresh_validation_family_overlap": 0,
+      "pairwise_family_overlap": {
+        "train_validation": 0,
+        "train_sealed": 0,
+        "validation_sealed": 0
+      },
+      "sealed_task_count_preserved": 6000,
+      "sealed_task_id_digest": "dd98b5e146d5b78fe93a21249ce26452a0d8cbbf0b0add4108cc7e2c1a091dcb"
+    },
+    "candidate_fit_scope": "Stage 2B/2C.2 TRAIN-only",
+    "candidate_fit_rows": 2000,
+    "prior_validation_outcomes_used_for_fitting": false,
+    "prior_validation_outcomes_used_for_tuning": false,
+    "predictions_locked_before_dds": true,
+    "locked_prediction_sha256": "6b2b4abbc13e6d70930441f9e7162f526f2caaf2f4d2e290499d4fb679ffe7d5",
+    "validation_used_for_learning": false,
+    "validation_used_for_gate_tuning": false,
+    "sealed_accessed": false,
+    "learning_allowed": false,
+    "learning_mutated": false,
+    "historical_database_mutated": false
+  },
+  "results": {
+    "declarer": {
+      "old": {
+        "n": 1000,
+        "optimal": 754,
+        "optimal_rate": 0.754,
+        "mean_regret": 0.36,
+        "regret_2plus": 71
+      },
+      "policy": {
+        "n": 1000,
+        "optimal": 754,
+        "optimal_rate": 0.754,
+        "mean_regret": 0.36,
+        "regret_2plus": 71
+      },
+      "policy_switches": 0
+    },
+    "defense": {
+      "old": {
+        "n": 1000,
+        "optimal": 669,
+        "optimal_rate": 0.669,
+        "mean_regret": 0.474,
+        "regret_2plus": 89
+      },
+      "learned": {
+        "n": 1000,
+        "optimal": 669,
+        "optimal_rate": 0.669,
+        "mean_regret": 0.474,
+        "regret_2plus": 92
+      },
+      "policy": {
+        "n": 1000,
+        "optimal": 674,
+        "optimal_rate": 0.674,
+        "mean_regret": 0.463,
+        "regret_2plus": 83
+      },
+      "policy_switches": 804
+    },
+    "defense_by_strain_class": {
+      "nt": {
+        "old": {
+          "n": 196,
+          "optimal": 125,
+          "optimal_rate": 0.6377551020408163,
+          "mean_regret": 0.75,
+          "regret_2plus": 35
+        },
+        "learned": {
+          "n": 196,
+          "optimal": 120,
+          "optimal_rate": 0.6122448979591837,
+          "mean_regret": 0.8061224489795918,
+          "regret_2plus": 44
+        },
+        "policy": {
+          "n": 196,
+          "optimal": 125,
+          "optimal_rate": 0.6377551020408163,
+          "mean_regret": 0.75,
+          "regret_2plus": 35
+        },
+        "policy_switches": 0
+      },
+      "suit": {
+        "old": {
+          "n": 804,
+          "optimal": 544,
+          "optimal_rate": 0.6766169154228856,
+          "mean_regret": 0.40671641791044777,
+          "regret_2plus": 54
+        },
+        "learned": {
+          "n": 804,
+          "optimal": 549,
+          "optimal_rate": 0.6828358208955224,
+          "mean_regret": 0.39303482587064675,
+          "regret_2plus": 48
+        },
+        "policy": {
+          "n": 804,
+          "optimal": 549,
+          "optimal_rate": 0.6828358208955224,
+          "mean_regret": 0.39303482587064675,
+          "regret_2plus": 48
+        },
+        "policy_switches": 804
+      }
+    }
+  },
+  "predeclared_validation_gate": {
+    "defense_policy_mean_regret_lt_old": true,
+    "defense_policy_regret_2plus_lt_old": true,
+    "defense_policy_optimal_rate_ge_old": true,
+    "defense_suit_policy_mean_regret_lt_old": true,
+    "defense_suit_policy_regret_2plus_lt_old": true,
+    "defense_suit_policy_optimal_rate_ge_old": true,
+    "declarer_policy_identical_to_old": true,
+    "defense_nt_policy_identical_to_old": true
+  },
+  "gate_outcomes": {
+    "defense_policy_mean_regret_lt_old": true,
+    "defense_policy_regret_2plus_lt_old": true,
+    "defense_policy_optimal_rate_ge_old": true,
+    "defense_suit_policy_mean_regret_lt_old": true,
+    "defense_suit_policy_regret_2plus_lt_old": true,
+    "defense_suit_policy_optimal_rate_ge_old": true,
+    "declarer_policy_identical_to_old": true,
+    "defense_nt_policy_identical_to_old": true
+  },
+  "validation_gate_pass": true,
+  "automatic_promotion": false,
+  "next_gate": "owner_decision_on_new_sealed",
+  "execution_provenance": {
+    "execution_pr": 280,
+    "execution_branch": "dds-stage2c6-fresh-validation-20260822",
+    "execution_head_sha": "c3f8ac4c2cf248095a730a34c2d999891d883d75",
+    "workflow_run_id": 32554317456,
+    "workflow_name": "DDS Stage 2C.6 — fresh validation",
+    "workflow_job_id": 96986004905,
+    "workflow_conclusion": "success",
+    "artifact_id": 9470992353,
+    "artifact_name": "dds-stage2c6-validation-32554317456",
+    "artifact_size_bytes": 688751,
+    "artifact_digest": "sha256:fa53eb64d11539fde49948e3fbe2852fd244866845fb224562edcad650170a6c",
+    "inner_archive_sha256": "3aade4653a6357ed228fa8960b6760993c6fffd47c5ec7a4cd687df626b40b1f",
+    "tracked_source_diff_observed": false
+  },
+  "source_evidence": {
+    "stage2b_artifact_id": 9318545935,
+    "stage2b_artifact_digest": "sha256:efdd62ab9a2643f231d3faea5c9475fe519cbd5b2e94dc9a764ca6087c043604",
+    "stage2c2_artifact_id": 9352988318,
+    "stage2c2_artifact_digest": "sha256:1fd61be6816df747824467266167dc22e6a88ae4a62794643f14fd176e566da2",
+    "main_train_logical_zip_sha256": "c46cda2fb127371cbc1ab836c74580b25f0a0bb8ab358dfaab97cf591dd8a246"
+  }
+}

@@ -1,0 +1,104 @@
+name: DDS3 tournament baseline
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/dds3_tournament_baseline.py'
+      - 'data/tournaments/**'
+      - 'dds3_runtime/**'
+      - 'bridge_school_api/dds3/**'
+      - 'Dockerfile.dds3'
+      - '.github/workflows/dds3-tournament-baseline.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diana-30041-round2:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Compile tournament runner
+        run: python3 -m py_compile scripts/dds3_tournament_baseline.py
+
+      - name: Build pinned DDS3 core
+        run: docker build -f Dockerfile.dds3 -t bridge-school-dds3 .
+
+      - name: Build production DDS3 runtime
+        run: docker build -f dds3_runtime/Dockerfile -t bridge-school-dds3-runtime:tournament .
+
+      - name: Start DDS3 runtime
+        run: docker run -d --rm --name dds3-tournament-runtime -p 18080:8080 -e DDS3_RUNTIME_TOKEN=tournament-ci-secret bridge-school-dds3-runtime:tournament
+
+      - name: Require canonical DDS3 readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/readyz > dds3-tournament-ready.json; then
+              cat dds3-tournament-ready.json
+              python3 - <<'PY'
+          import json
+          r=json.load(open('dds3-tournament-ready.json', encoding='utf-8'))
+          assert r['status']=='ready'
+          assert r['engine']=='DDS3'
+          assert r['fallback_used'] is False
+          PY
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs dds3-tournament-runtime
+          exit 1
+
+      - name: Run Diana tournament 30041 round 2 through DDS3
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/dds3_tournament_baseline.py \
+            --data data/tournaments/tournament_30041_round2_diana_facts_v1.json \
+            --base-url http://127.0.0.1:18080 \
+            --token tournament-ci-secret \
+            --output-json diana-30041-round2-dds3.json \
+            --output-md diana-30041-round2-dds3.md
+          cat diana-30041-round2-dds3.md
+
+      - name: Enforce facts-only tournament contract
+        run: |
+          python3 - <<'PY'
+          import json
+          r=json.load(open('diana-30041-round2-dds3.json', encoding='utf-8'))
+          assert r['schema']=='bridge-dds3-tournament-baseline-v1'
+          assert r['mode']=='FACTS_ONLY_DDS3_BASELINE'
+          assert r['policy']['engine']=='DDS3'
+          assert r['policy']['fallback_used'] is False
+          assert r['policy']['card_level_attribution_allowed'] is False
+          assert r['policy']['student_skill_writes_allowed'] is False
+          assert r['summary']['boards_total']==24
+          assert r['summary']['dds3_baselines_computed']==24
+          assert r['summary']['played_contracts_compared']==21
+          assert all(b['dds3']['engine']=='DDS3' and b['dds3']['fallback_used'] is False for b in r['boards'])
+          print('DIANA_30041_DDS3_TOURNAMENT_PASS')
+          PY
+
+      - name: Runtime logs on failure
+        if: failure()
+        run: docker logs dds3-tournament-runtime || true
+
+      - name: Upload tournament DDS3 evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: diana-30041-round2-dds3
+          path: |
+            dds3-tournament-ready.json
+            diana-30041-round2-dds3.json
+            diana-30041-round2-dds3.md
+          if-no-files-found: error
+          retention-days: 30

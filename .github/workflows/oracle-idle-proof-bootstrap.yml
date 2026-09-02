@@ -1,0 +1,73 @@
+name: Oracle idle proof bounded bootstrap
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-idle-proof-bootstrap-requests/*.json'
+
+permissions:
+  contents: read
+
+jobs:
+  bootstrap:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Validate exact bounded request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^ops/oracle-idle-proof-bootstrap-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]]
+          python - "${files[0]}" <<'PY' >> "$GITHUB_OUTPUT"
+          import json,re,sys
+          x=json.load(open(sys.argv[1]))
+          assert set(x)=={'request_id','expected_host_fingerprint','host','user'}
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}',x['request_id'])
+          assert x['expected_host_fingerprint']=='SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk'
+          assert x['host']=='158.180.47.161' and x['user']=='ubuntu'
+          print('expected_fingerprint='+x['expected_host_fingerprint'])
+          PY
+      - name: Select SSH credential and pin host
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" '${{ steps.request.outputs.expected_fingerprint }}' "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"; printf '%s\n' "${!selected}" > "$key"; chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "key=$key" >> "$GITHUB_OUTPUT"; echo "known=$known" >> "$GITHUB_OUTPUT"
+      - name: Install exact no-argument classifier privilege
+        shell: bash
+        run: |
+          set -euo pipefail
+          key='${{ steps.ssh.outputs.key }}'; known='${{ steps.ssh.outputs.known }}'
+          scp -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            ops/oracle_idle_state.sh ops/install_oracle_idle_state_ocarun.sh "$ORACLE_USER@$ORACLE_HOST:/tmp/"
+          digest="$(sha256sum ops/oracle_idle_state.sh | awk '{print $1}')"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env SOURCE_FILE=/tmp/oracle_idle_state.sh SOURCE_SHA256='$digest' bash /tmp/install_oracle_idle_state_ocarun.sh"
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            "$ORACLE_USER@$ORACLE_HOST" 'rm -f /tmp/install_oracle_idle_state_ocarun.sh'

@@ -1,0 +1,77 @@
+name: Tournament Analyzer v3 Preanalysis Gate
+
+on:
+  pull_request:
+    paths:
+      - "bridge_school_api/tournament_preanalysis_gate_v3.py"
+      - "tools/tournament_preanalysis_gate_v3.py"
+      - "tests/test_tournament_preanalysis_gate_v3.py"
+      - "bridge_school_api/tournament_structural_validation_v3.py"
+      - "bridge_school_api/tournament_duplicate_scoring_v3.py"
+      - "bridge_school_api/tournament_input_manifest_v3.py"
+      - "data/tournaments/tournament_30041_round2_diana_facts_v1.json"
+      - ".github/workflows/tournament-analyzer-v3-preanalysis-gate.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-30041-preanalysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Compile gate modules
+        run: |
+          python -m py_compile bridge_school_api/tournament_preanalysis_gate_v3.py
+          python -m py_compile tools/tournament_preanalysis_gate_v3.py
+      - name: Run pre-analysis contracts
+        run: python -m pytest -q tests/test_tournament_preanalysis_gate_v3.py
+      - name: Build real 30041 pre-analysis gate
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$PWD" python tools/tournament_preanalysis_gate_v3.py \
+            --facts data/tournaments/tournament_30041_round2_diana_facts_v1.json \
+            --received-at 2026-08-21T11:05:01Z \
+            --commit 0158e506c022fd20051898a3161ab8b576d51f9b \
+            --algorithm-revision 'AIroW35dhYwaAOQ1dDxMCkYjVKitrJKTII3Zx0IS7RNHuQDBE8iXBw-l2Ux9qF42DTU1gUWmWDu3kn9XVb1ne2cTls8HTLvblELsTAZRRuY' \
+            --out tournament-30041-preanalysis-gate.json
+      - name: Enforce v1.4 evidence boundary
+        run: |
+          python - <<'PY'
+          import json
+          p=json.load(open('tournament-30041-preanalysis-gate.json', encoding='utf-8'))
+          assert p['schema']=='tournament-preanalysis-gate-v1'
+          assert p['facts_only_analysis_ready'] is True
+          assert p['full_causal_replay_ready'] is False
+          assert p['hard_stop_conditions']==[]
+          assert p['gates']['coverage_complete'] is True
+          assert p['gates']['structure_pass'] is True
+          assert p['gates']['dealer_cycle_pass'] is True
+          assert p['gates']['vulnerability_cycle_pass'] is True
+          assert p['gates']['hands_13x4_pass'] is True
+          assert p['gates']['cards_52_unique_pass'] is True
+          assert p['gates']['opening_lead_gate_pass'] is True
+          assert p['gates']['duplicate_score_gate_pass'] is True
+          assert p['gates']['played_scores_checked']==21
+          assert p['evidence_availability']['played_boards']==21
+          assert p['evidence_availability']['actual_auction_boards']==0
+          assert p['evidence_availability']['actual_full_play_boards']==0
+          assert p['evidence_availability']['partial_play_boards']==21
+          assert 'CONTRACT_LEVEL_DD_OPPORTUNITY' in p['allowed_analyses']
+          assert 'OPENING_LEAD_DD_WHERE_LEAD_IS_ACTUAL' in p['allowed_analyses']
+          assert 'BIDDING_DECISION_ATTRIBUTION_WITHOUT_ACTUAL_AUCTION' in p['blocked_attributions']
+          assert 'LATER_CARD_ATTRIBUTION_WITHOUT_FULL_PLAY_RECORD' in p['blocked_attributions']
+          print('TOURNAMENT_30041_PREANALYSIS_V14_GATE_PASS')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tournament-analyzer-v3-30041-preanalysis-gate
+          path: tournament-30041-preanalysis-gate.json
+          if-no-files-found: error
+          retention-days: 30

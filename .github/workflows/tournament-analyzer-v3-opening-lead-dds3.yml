@@ -1,0 +1,114 @@
+name: Tournament Analyzer v3 Opening Lead DDS3
+
+on:
+  pull_request:
+    paths:
+      - "bridge_school_api/tournament_opening_lead_dds3_v3.py"
+      - "tools/tournament_opening_lead_dds3_v3.py"
+      - "tests/test_tournament_opening_lead_dds3_v3.py"
+      - "data/tournaments/tournament_30041_round2_diana_facts_v1.json"
+      - "bridge_school_api/dds3/**"
+      - "dds/dds_position_worker.cpp"
+      - "Dockerfile.dds3"
+      - "dds3_runtime/**"
+      - ".github/workflows/tournament-analyzer-v3-opening-lead-dds3.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  real-30041-opening-leads:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install unit test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Compile and unit test opening-lead layer
+        run: |
+          python -m py_compile \
+            bridge_school_api/tournament_opening_lead_dds3_v3.py \
+            tools/tournament_opening_lead_dds3_v3.py
+          python -m pytest -q tests/test_tournament_opening_lead_dds3_v3.py
+      - name: Build pinned DDS3 core
+        run: docker build -f Dockerfile.dds3 -t bridge-school-dds3 .
+      - name: Build production DDS3 runtime image
+        run: docker build -f dds3_runtime/Dockerfile -t bridge-school-dds3-runtime:opening-lead .
+      - name: Start isolated DDS3 runtime
+        run: |
+          docker run -d --rm --name dds3-opening-lead-runtime \
+            -p 18080:8080 \
+            -e DDS3_RUNTIME_TOKEN=opening-lead-ci-secret \
+            bridge-school-dds3-runtime:opening-lead
+      - name: Require canonical DDS3 readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 45); do
+            if curl -fsS http://127.0.0.1:18080/readyz > dds3-opening-lead-ready.json; then
+              python - <<'PY'
+          import json
+          r=json.load(open('dds3-opening-lead-ready.json', encoding='utf-8'))
+          assert r['status']=='ready'
+          assert r['engine']=='DDS3'
+          assert r['fallback_used'] is False
+          PY
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs dds3-opening-lead-runtime
+          exit 1
+      - name: Analyze all real 30041 actual opening leads
+        run: |
+          set -euo pipefail
+          PYTHONPATH="$PWD" python tools/tournament_opening_lead_dds3_v3.py \
+            --facts data/tournaments/tournament_30041_round2_diana_facts_v1.json \
+            --base-url http://127.0.0.1:18080 \
+            --token opening-lead-ci-secret \
+            --out-json tournament-30041-opening-lead-dds3.json \
+            --out-md tournament-30041-opening-lead-dds3.md
+          cat tournament-30041-opening-lead-dds3.md
+      - name: Enforce real evidence and no-attribution boundary
+        run: |
+          python - <<'PY'
+          import json
+          r=json.load(open('tournament-30041-opening-lead-dds3.json', encoding='utf-8'))
+          assert r['schema']=='tournament-opening-lead-dds3-v1'
+          assert r['provider_native_key']=='bridge.co.il:event:30041:round:2'
+          assert r['event_id']=='30041'
+          assert r['session_id']=='round-2'
+          assert r['played_leads_analyzed']==21
+          assert 0 < r['target_pair_opening_leads_analyzed'] <= 21
+          assert r['engine']=='DDS3'
+          assert r['fallback_used'] is False
+          assert r['engine_versions']==['v3.0.0+cdd13cf5b700788ac8c1391501b42445b3129b45']
+          assert len(r['results'])==21
+          assert all(x['deal_id'].startswith('30041:round-2:') for x in r['results'])
+          assert all(x['engine']=='DDS3' and x['fallback_used'] is False for x in r['results'])
+          assert all(x['causal_error_attribution']=='NOT_ESTABLISHED' for x in r['results'])
+          assert all(x['student_error_attribution'] is None and x['methodology_mapping'] is None for x in r['results'])
+          assert all(x['teacher_review_required'] is True and x['coverage_eligible'] is False for x in r['teacher_review_candidates'])
+          print('TOURNAMENT_30041_OPENING_LEAD_DDS3_PASS')
+          print('target_pair_opening_leads_analyzed', r['target_pair_opening_leads_analyzed'])
+          print('dd_optimal_actual_leads', r['dd_optimal_actual_leads'])
+          print('positive_regret_actual_leads', r['positive_regret_actual_leads'])
+          print('target_pair_positive_regret_candidates', r['target_pair_positive_regret_candidates'])
+          PY
+      - name: Runtime logs on failure
+        if: failure()
+        run: docker logs dds3-opening-lead-runtime || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tournament-analyzer-v3-30041-opening-lead-dds3
+          path: |
+            dds3-opening-lead-ready.json
+            tournament-30041-opening-lead-dds3.json
+            tournament-30041-opening-lead-dds3.md
+          if-no-files-found: error
+          retention-days: 30

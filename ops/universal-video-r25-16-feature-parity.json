@@ -1,0 +1,85 @@
+{
+  "schema": "universal-video-feature-parity-v1",
+  "source_revision": "3.1-free-r25.16",
+  "target_route": "oracle_container",
+  "overall_status": "BLOCKED",
+  "capabilities": {
+    "deterministic_source_identity": {
+      "state": "IMPLEMENTED_NOT_PARITY_PROVEN",
+      "legacy_evidence": ["bridge_worker_3_1_free.py", "check_completed_job.py"],
+      "oracle_evidence": ["universal_video/contract.py", "universal_video/runner.py"],
+      "proof": [],
+      "blocker": "UV_PARITY_SOURCE_IDENTITY_PROOF_MISSING"
+    },
+    "offline_asr_and_quality_control": {
+      "state": "IMPLEMENTED_NOT_PARITY_PROVEN",
+      "legacy_evidence": ["run_master_3_1_free_semantic_v2.py"],
+      "oracle_evidence": ["universal_video/runner.py"],
+      "proof": [],
+      "blocker": "UV_PARITY_ASR_QC_PROOF_MISSING"
+    },
+    "speaker_diarization_and_role_gates": {
+      "state": "IMPLEMENTED_NOT_PARITY_PROVEN",
+      "legacy_evidence": ["bridge_speaker_diarization_v3.py"],
+      "oracle_evidence": ["universal_video/speaker_structure.py", "universal_video/speaker_role_verifier.py"],
+      "proof": [],
+      "blocker": "UV_PARITY_SPEAKER_PROOF_MISSING"
+    },
+    "named_speaker_identity_overlay": {
+      "state": "MISSING",
+      "legacy_evidence": ["bridge_speaker_identity_postprocess.py"],
+      "oracle_evidence": [],
+      "proof": [],
+      "blocker": "UV_PARITY_IDENTITY_OVERLAY_MISSING"
+    },
+    "frame_and_card_evidence": {
+      "state": "COMPONENT_ONLY",
+      "legacy_evidence": ["run_master_3_1_free.py"],
+      "oracle_evidence": ["universal_video/runner.py", "bridge_vision/engine.py"],
+      "proof": [],
+      "blocker": "UV_PARITY_CARD_PIPELINE_NOT_WIRED"
+    },
+    "bridge_semantic_and_methodology_analysis": {
+      "state": "MISSING",
+      "legacy_evidence": ["run_master_3_1_free_semantic_v2.py"],
+      "oracle_evidence": [],
+      "proof": [],
+      "blocker": "UV_PARITY_METHODOLOGY_ANALYSIS_MISSING"
+    },
+    "r25_16_deal_review_pdf": {
+      "state": "COMPONENT_ONLY",
+      "legacy_evidence": ["bridge_runtime_hardening_r25_16.py", "bridge_vision/deal_review_pdf.py"],
+      "oracle_evidence": ["bridge_vision/deal_review_pdf.py"],
+      "proof": [],
+      "blocker": "UV_PARITY_DEAL_REVIEW_NOT_WIRED"
+    },
+    "longitudinal_learning_candidates": {
+      "state": "MISSING",
+      "legacy_evidence": ["diana_longitudinal_postprocess_v3.py"],
+      "oracle_evidence": [],
+      "proof": [],
+      "blocker": "UV_PARITY_LONGITUDINAL_MISSING"
+    },
+    "neon_result_persistence": {
+      "state": "MISSING",
+      "legacy_evidence": ["bridge_neon_persistence.py"],
+      "oracle_evidence": [],
+      "proof": [],
+      "blocker": "UV_PARITY_NEON_PERSISTENCE_MISSING"
+    },
+    "drive_result_publication": {
+      "state": "IMPLEMENTED_NOT_PARITY_PROVEN",
+      "legacy_evidence": ["route_drive_job_outputs.py"],
+      "oracle_evidence": ["universal_video/drive_results.py"],
+      "proof": [],
+      "blocker": "UV_PARITY_DRIVE_PUBLICATION_PROOF_MISSING"
+    },
+    "terminal_receipts_and_idempotency": {
+      "state": "IMPLEMENTED_NOT_PARITY_PROVEN",
+      "legacy_evidence": ["check_completed_job.py"],
+      "oracle_evidence": ["universal_video/result_conformance.py", "universal_video/spool_worker.py"],
+      "proof": [],
+      "blocker": "UV_PARITY_TERMINAL_RECEIPT_PROOF_MISSING"
+    }
+  }
+}

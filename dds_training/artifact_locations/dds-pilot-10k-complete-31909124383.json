@@ -1,0 +1,26 @@
+{
+  "schema": "bridge-school-drive-artifact-v1",
+  "lifecycle_class": "P2",
+  "source": {
+    "github_run_id": 31909124383,
+    "github_artifact_id": 9254171121,
+    "github_artifact_name": "dds-pilot-10k-complete-state-31909124383"
+  },
+  "logical_file": {
+    "name": "dds-pilot-10k-complete-state-31909124383.zip",
+    "size": 20820609,
+    "sha256": "ef126c6842dda691b08325392b9d7fe5319acdba34b2db6b8981f03d56f8e130"
+  },
+  "storage": {
+    "provider": "google_drive",
+    "layout": "single-file",
+    "drive_file_id": "1CVInlmO73-BvdIpJM1ZGvoUegiKTnjYU",
+    "size": 20820609,
+    "sha256": "ef126c6842dda691b08325392b9d7fe5319acdba34b2db6b8981f03d56f8e130"
+  },
+  "verification": {
+    "method": "google_drive_roundtrip_sha256",
+    "github_digest_verified": true,
+    "internal_state_tgz_sha256": "f472b1361c879e890ffeab0e9184736a7dcd39cbc3a4c33541eb7156df9176d6"
+  }
+}

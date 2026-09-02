@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "fastapi",
+  "fluid": true,
+  "regions": ["fra1"],
+  "functions": {
+    "autopilot_app/main.py": {
+      "maxDuration": 60
+    }
+  }
+}

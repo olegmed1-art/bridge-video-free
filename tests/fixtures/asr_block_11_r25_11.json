@@ -1,0 +1,21 @@
+{
+  "job_id": "86e814014cabee88785a53340ab85666",
+  "algorithmRevision": "3.1-free-r25.11",
+  "block": 11,
+  "primaryTextEmpty": true,
+  "ok": false,
+  "similarity": 0.0,
+  "failureReasons": [
+    "EMPTY_CONTROL_ASR",
+    "LOW_TEXT_SIMILARITY",
+    "REPEATED_NONSPEECH_HALLUCINATION"
+  ],
+  "estimatedErrorRisk": 0.97,
+  "riskBand": "CRITICAL",
+  "qcEvidence": [
+    {
+      "attempt": 1,
+      "text": "you you you you you you you you you you you you"
+    }
+  ]
+}

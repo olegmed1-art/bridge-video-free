@@ -1,0 +1,138 @@
+{
+  "schema": "dds-stage2c4-sealed-evidence-v1",
+  "recorded_at": "2026-08-21",
+  "stage": "2C.4",
+  "status": "sealed_complete",
+  "owner_sealed_authorized": true,
+  "validation_prerequisite": {
+    "status": "validation_complete",
+    "validation_gate_pass": true,
+    "locked_validation_prediction_sha256": "2be61c3b70fb43aeb91f41240ff31fb252cb20170e2b2e3580305e0de7368a0d",
+    "used_for_learning": false,
+    "used_for_gate_tuning": false
+  },
+  "sealed": {
+    "opened": true,
+    "completed": true,
+    "positions": 2000,
+    "families_in_selected_wave": 646,
+    "selected_by_actor": {
+      "declarer": 1000,
+      "defense": 1000
+    },
+    "source_selection": {
+      "policy": "deterministic SHA-256 order, one sealed_test contract source per family before balanced continuation selection, no DDS outcome used for selection",
+      "contract_source_families_selected_before_continuation_balance": 650,
+      "sealed_families_available": 3000,
+      "pairwise_family_overlap": {
+        "train_validation": 0,
+        "train_sealed": 0,
+        "validation_sealed": 0
+      },
+      "line_cards": 16,
+      "sealed_task_count": 6000,
+      "sealed_task_id_digest": "dd98b5e146d5b78fe93a21249ce26452a0d8cbbf0b0add4108cc7e2c1a091dcb"
+    },
+    "predictions_locked_before_dds": true,
+    "locked_prediction_sha256": "49afd9f7bc5d1905f13fef0f0ef61d99ff6a32ceac5c9646b202dc636872c484",
+    "candidate_training_scope": "TRAIN-only",
+    "candidate_training_rows": 2000,
+    "gate_training_scope": "5-fold family-disjoint OOF TRAIN evidence",
+    "gate_margin": 0.08,
+    "learning_allowed": false,
+    "learning_mutated": false,
+    "historical_database_mutated": false
+  },
+  "results": {
+    "declarer": {
+      "old": {
+        "n": 1000,
+        "optimal": 753,
+        "optimal_rate": 0.753,
+        "mean_regret": 0.331,
+        "regret_2plus": 56
+      },
+      "candidate": {
+        "n": 1000,
+        "optimal": 734,
+        "optimal_rate": 0.734,
+        "mean_regret": 0.363,
+        "regret_2plus": 63
+      },
+      "hybrid": {
+        "n": 1000,
+        "optimal": 741,
+        "optimal_rate": 0.741,
+        "mean_regret": 0.352,
+        "regret_2plus": 60
+      },
+      "hybrid_switches": 139
+    },
+    "defense": {
+      "old": {
+        "n": 1000,
+        "optimal": 655,
+        "optimal_rate": 0.655,
+        "mean_regret": 0.472,
+        "regret_2plus": 79
+      },
+      "candidate": {
+        "n": 1000,
+        "optimal": 656,
+        "optimal_rate": 0.656,
+        "mean_regret": 0.46,
+        "regret_2plus": 80
+      },
+      "hybrid": {
+        "n": 1000,
+        "optimal": 647,
+        "optimal_rate": 0.647,
+        "mean_regret": 0.47,
+        "regret_2plus": 81
+      },
+      "hybrid_switches": 767
+    }
+  },
+  "predeclared_sealed_gate": {
+    "defense_hybrid_mean_regret_lt_old": true,
+    "defense_hybrid_regret_2plus_lt_old": true,
+    "declarer_hybrid_mean_regret_le_old_plus": 0.01
+  },
+  "gate_outcomes": {
+    "defense_mean_regret_condition": true,
+    "defense_regret_2plus_condition": false,
+    "declarer_mean_regret_condition": false
+  },
+  "sealed_gate_pass": false,
+  "automatic_promotion": false,
+  "next_gate": "return_to_train_new_candidate",
+  "execution_provenance": {
+    "execution_pr": 222,
+    "execution_branch": "dds-stage2c4-sealed-20260821",
+    "execution_head_sha": "3df02564e21196c134348bf8bd35e692f28726a6",
+    "workflow_run_id": 32465500905,
+    "workflow_name": "DDS Stage 2C.4 — sealed final blind gate",
+    "workflow_job_id": 96721114545,
+    "artifact_id": 9440546595,
+    "artifact_name": "dds-stage2c4-sealed-32465500905",
+    "artifact_size_bytes": 798124,
+    "artifact_digest": "sha256:45deb40694ceba2fb3eb12da798f89af2246127cec7082813f032aad3a0a5776",
+    "inner_archive_sha256": "bb77d9a9580414a6b576327c255605fd5ebb515f505f91fcd1f1adfdf6b03357",
+    "substantive_sealed_steps": "success",
+    "sealed_evidence_verification_step": "success",
+    "artifact_upload_step": "success",
+    "workflow_conclusion": "failure",
+    "workflow_failure_scope": "post-sealed generic repository-cleanliness guard",
+    "tracked_source_diff_observed": false,
+    "failure_effect_on_sealed_result": "none; all 2000 DDS evaluations, sealed evidence verification, packaging and artifact upload completed before the hygiene failure"
+  },
+  "source_evidence": {
+    "stage2b_artifact_id": 9318545935,
+    "stage2b_artifact_digest": "sha256:efdd62ab9a2643f231d3faea5c9475fe519cbd5b2e94dc9a764ca6087c043604",
+    "stage2c2_artifact_id": 9352988318,
+    "stage2c2_artifact_digest": "sha256:1fd61be6816df747824467266167dc22e6a88ae4a62794643f14fd176e566da2",
+    "stage2c4_artifact_id": 9410795030,
+    "stage2c4_artifact_digest": "sha256:a2bc363fe9309232f1a8377961a4e19eabc72b911c94497b3c896a9d1f4d4bbd",
+    "main_train_logical_zip_sha256": "c46cda2fb127371cbc1ab836c74580b25f0a0bb8ab358dfaab97cf591dd8a246"
+  }
+}

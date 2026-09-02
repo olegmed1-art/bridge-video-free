@@ -1,0 +1,23 @@
+{
+  "request_id": "diana11-statuscheck-20260825-0858",
+  "issue": 441,
+  "job": {
+    "job_id": "diana11-transcript-20260825-01",
+    "profile": "transcript_only",
+    "source": {
+      "kind": "google_drive",
+      "file_id": "1PGRLozLJKG8tl-JYGPTCcS_lT-nn-T7C",
+      "name": "Диана 11"
+    },
+    "project": "Школа спортивного бриджа",
+    "metadata": {
+      "purpose": "status check after OAuth repair",
+      "human_requested": true
+    },
+    "options": {
+      "chunk_seconds": 600,
+      "max_source_bytes": 2147483648,
+      "max_duration_seconds": 43200
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "request_id": "diana13-evidence-export-activate-20260829-01",
+  "mode": "activate",
+  "git_ref": "edbb4cae625323146fcab3ad4f80ed3d9a9abc90",
+  "expected_host_fingerprint": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}

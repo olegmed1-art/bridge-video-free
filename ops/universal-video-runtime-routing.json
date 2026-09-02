@@ -1,0 +1,29 @@
+{
+  "schema": "universal-video-runtime-routing-v1",
+  "active_production_route": "github_actions_legacy",
+  "policy_target_route": "oracle_container",
+  "routes": {
+    "github_actions_legacy": {
+      "entrypoint": ".github/workflows/bridge-video-3.1-free.yml",
+      "compute_location": "github_actions",
+      "production_default": true,
+      "explicit_attested_jobs": false
+    },
+    "oracle_container": {
+      "entrypoint": ".github/workflows/oracle-universal-video-job.yml",
+      "compute_location": "oracle",
+      "production_default": false,
+      "explicit_attested_jobs": true
+    }
+  },
+  "cutover": {
+    "state": "BLOCKED_ON_FEATURE_PARITY",
+    "required_evidence": [
+      "resident_container_promotion_pass",
+      "r25_16_feature_parity_pass",
+      "one_bounded_end_to_end_pass",
+      "rollback_proof_pass"
+    ],
+    "switch_must_be_committed": true
+  }
+}

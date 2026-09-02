@@ -1,0 +1,5 @@
+{
+  "request_id": "uv003-runtime-pin-repair-20260826-05",
+  "issue": 566,
+  "expected_runtime_commit": "6a4e8248eedd00f849fcefd1bf41a51b26f5e7c6"
+}

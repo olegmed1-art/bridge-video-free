@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://bridge-school.example/schemas/school-skill-catalog-v1.schema.json",
+  "title": "SCHOOL SKILL CATALOG v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "catalog_version", "authority", "skills"],
+  "properties": {
+    "schema": {"const": "school-skill-catalog-v1"},
+    "catalog_version": {"const": "SCHOOL SKILL CATALOG v1"},
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authority_class", "school_canon_activation_allowed", "curriculum_activation_allowed", "student_profile_write_allowed", "publication_allowed"],
+      "properties": {
+        "authority_class": {"const": "CANDIDATE_RESEARCH"},
+        "school_canon_activation_allowed": {"const": false},
+        "curriculum_activation_allowed": {"const": false},
+        "student_profile_write_allowed": {"const": false},
+        "publication_allowed": {"const": false}
+      }
+    },
+    "skills": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["skill_id", "title", "aliases", "prerequisite_skill_ids", "mastery_criteria", "review_state"],
+        "properties": {
+          "skill_id": {"type": "string", "pattern": "^candidate\\.skill\\.[a-z0-9][a-z0-9._-]{2,95}$"},
+          "title": {"type": "string", "minLength": 1},
+          "aliases": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+          "prerequisite_skill_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+          "mastery_criteria": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["RECOGNIZED", "SUPPORTED", "INDEPENDENT", "TRANSFERRED"],
+            "properties": {
+              "RECOGNIZED": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+              "SUPPORTED": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+              "INDEPENDENT": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+              "TRANSFERRED": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+            }
+          },
+          "review_state": {"enum": ["DRAFT", "REVIEW_REQUIRED", "APPROVED_CANDIDATE"]}
+        }
+      }
+    }
+  }
+}

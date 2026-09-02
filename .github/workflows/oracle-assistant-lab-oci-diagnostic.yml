@@ -1,0 +1,119 @@
+name: Oracle Assistant Lab OCI diagnostic
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-assistant-lab-oci-diagnostics/*.json'
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: oracle-assistant-lab-oci-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      ISSUE_NUMBER: '374'
+      INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      OCI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Validate bounded request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^ops/oracle-assistant-lab-oci-diagnostics/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]]
+          python - "${files[0]}" <<'PY'
+          import json,re,sys
+          x=json.load(open(sys.argv[1]))
+          assert set(x)=={'request_id','instance_id'}
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}',x['request_id'])
+          assert x['instance_id']=='ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq'
+          PY
+      - name: Configure OCI CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q oci-cli
+          mkdir -p "$HOME/.oci"
+          printf '%s\n' "$OCI_KEY" > "$HOME/.oci/key.pem"
+          chmod 600 "$HOME/.oci/key.pem"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$OCI_USER
+          fingerprint=$OCI_FINGERPRINT
+          tenancy=$OCI_TENANCY
+          region=$OCI_REGION
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+          oci iam region list --output json >/dev/null
+      - name: Read instance and run nonprivileged diagnostic
+        id: diag
+        shell: bash
+        run: |
+          set -euo pipefail
+          compartment="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."compartment-id"' --raw-output)"
+          state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
+          [[ "$state" == RUNNING ]]
+          remote=$(cat <<'REMOTE'
+          set -u
+          echo OCI_DIAG_START
+          echo user=$(id -un)
+          echo sudo_n=$(if sudo -n true 2>/dev/null; then echo yes; else echo no; fi)
+          echo repo_readable=$(if test -d /opt/bridge-school/bridge-video-free/.git; then echo yes; else echo no; fi)
+          echo repo_head=$(git -C /opt/bridge-school/bridge-video-free rev-parse HEAD 2>/dev/null || echo unreadable)
+          for s in assistant-lab.service assistant-lab-observer.service assistant-lab-control.service assistant-lab-control-bridge.service; do echo "$s=$(systemctl is-active "$s" 2>/dev/null || true)"; done
+          echo dds3=$(curl -fsS --max-time 5 http://127.0.0.1:8080/readyz 2>/dev/null || echo unavailable)
+          echo control_health=$(curl -fsS --max-time 5 http://127.0.0.1:8765/healthz 2>/dev/null || echo unavailable)
+          echo OCI_DIAG_END
+          REMOTE
+          )
+          content="$(SCRIPT_TEXT="$remote" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":os.environ["SCRIPT_TEXT"]},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
+          target="$(python -c 'import json,os; print(json.dumps({"instanceId":os.environ["INSTANCE_ID"]},separators=(",",":")))')"
+          cmd="$(oci instance-agent command create --compartment-id "$compartment" --content "$content" --target "$target" --timeout-in-seconds 120 --display-name assistant-lab-oci-readonly-diagnostic --query data.id --raw-output)"
+          execution=''
+          state=''
+          for _ in $(seq 1 60); do
+            execution="$(oci instance-agent command-execution get --command-id "$cmd" --instance-id "$INSTANCE_ID" --output json 2>/dev/null || true)"
+            [[ -n "$execution" ]] || { sleep 2; continue; }
+            state="$(printf '%s' "$execution" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state",""))')"
+            case "$state" in SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break;; esac
+            sleep 2
+          done
+          text="$(printf '%s' "$execution" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}); print((d.get("content") or {}).get("text","") or "")')"
+          printf '%s\n' "$text" | tee "$RUNNER_TEMP/diag.txt"
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          [[ "$state" == SUCCEEDED ]]
+      - name: Publish sanitized diagnostic
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIAG_STATE: ${{ steps.diag.outputs.state }}
+        run: |
+          set -euo pipefail
+          body="$RUNNER_TEMP/body.md"
+          {
+            echo "Assistant Lab OCI diagnostic state: **${DIAG_STATE:-UNKNOWN}**"
+            echo
+            echo '```text'
+            test -f "$RUNNER_TEMP/diag.txt" && sed -n '1,80p' "$RUNNER_TEMP/diag.txt" || echo 'diagnostic output unavailable'
+            echo '```'
+            echo 'No secret values were published. No service or database mutation was requested.'
+          } > "$body"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$body"

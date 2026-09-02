@@ -1,0 +1,7 @@
+{
+  "request_id": "finops-ledger-writer-20260825",
+  "git_ref": "099e1ec3222dc35af392d3487cd3abe2f7ade82a",
+  "expected_host_fingerprint": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
+  "host": "158.180.47.161",
+  "user": "ubuntu"
+}

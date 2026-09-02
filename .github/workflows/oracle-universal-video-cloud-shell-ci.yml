@@ -1,0 +1,35 @@
+name: Oracle Universal Video Cloud Shell CI
+
+on:
+  pull_request:
+    paths:
+      - 'ops/cloud_shell_activate_universal_video.sh'
+      - 'docs/UNIVERSAL_VIDEO_ORACLE_CLOUD_SHELL_RUNBOOK_RU.md'
+      - 'tests/test_cloud_shell_activate_universal_video_contract.py'
+      - '.github/workflows/oracle-universal-video-cloud-shell-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Validate bounded Cloud Shell launcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/cloud_shell_activate_universal_video.sh
+          python - <<'PY'
+          import runpy
+          scope = runpy.run_path('tests/test_cloud_shell_activate_universal_video_contract.py')
+          for name, value in sorted(scope.items()):
+              if name.startswith('test_') and callable(value):
+                  value()
+          print('ORACLE_UNIVERSAL_VIDEO_CLOUD_SHELL_CONTRACT_PASS')
+          PY

@@ -1,0 +1,44 @@
+{
+    admin off
+}
+
+{$COMPUTE_HOST} {
+    encode zstd gzip
+
+    @ready path /readyz
+    handle @ready {
+        reverse_proxy dds3:8080
+    }
+
+    @compute {
+        method POST
+        path /v1/compute
+    }
+    handle @compute {
+        request_body {
+            max_size 16MB
+        }
+        reverse_proxy dds3:8080
+    }
+
+    handle {
+        respond "not found" 404
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        -Server
+    }
+
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 10MB
+            roll_keep 5
+            roll_keep_for 168h
+        }
+        format json
+    }
+}

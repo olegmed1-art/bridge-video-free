@@ -1,0 +1,5 @@
+{"event_id":"INGEST-0001","date":"2026-08-27","action":"START_CONTROLLED_INGESTION","status":"VERIFIED","semantic_effect":"none","rules_activated":0}
+{"event_id":"INGEST-0002","date":"2026-08-27","action":"FINGERPRINT_AND_RAW_EXTRACT","status":"LOCAL_EVIDENCE_READY","semantic_effect":"none","rules_activated":0}
+{"event_id":"INGEST-0003","date":"2026-08-27","action":"BUILD_CONSERVATIVE_FRAGMENT_INVENTORY","status":"LOCAL_EVIDENCE_READY","semantic_effect":"none","rules_activated":0}
+{"event_id":"INGEST-0004","date":"2026-08-27","action":"REGISTER_CANONICAL_SOURCE","target":"public.source","idempotency_key":"gdrive://1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf","status":"WRITE_ISSUED_READBACK_REQUIRED","semantic_effect":"source authority only","rules_activated":0}
+{"event_id":"INGEST-0005","date":"2026-08-27","action":"REGISTER_DIRECTOR_APPROVAL_EVIDENCE","target":"public.evidence","idempotency_key":"natural-system-2p-director-approval-2026-08-27","status":"WRITE_ISSUED_READBACK_REQUIRED","semantic_effect":"approval evidence only","rules_activated":0}

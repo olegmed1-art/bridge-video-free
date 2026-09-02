@@ -1,0 +1,33 @@
+{
+  "schema": "bbo100-blind-predictions-v1",
+  "model": "GPT-5.6 Sol",
+  "gate_commit": "5a6c0f015effc7a9a916591f52da100110fa7beb",
+  "blind_task_packet_sha256": "4ee99c708bb997f28101c03367ef74eaf8c7242a413d1869685723d7b6b46c0f",
+  "task_count": 20,
+  "dds_used": false,
+  "hidden_hands_inspected": false,
+  "recorded_actions_inspected": false,
+  "prediction_policy": "single legal card using only auction/contract/vulnerability, own remaining hand, exposed dummy when available, prior public play, current trick and legal cards",
+  "predictions": [
+    {"task_id":"BBO100-H01-opening_lead","predicted_card":"DA","confidence":0.66,"reason":"Cash/establish the solid diamond holding before declarer develops the spade contract."},
+    {"task_id":"BBO100-H02-declarer_continuation","predicted_card":"H4","confidence":0.93,"reason":"Void in clubs after the ace continuation; ruff with the lowest trump and preserve honors."},
+    {"task_id":"BBO100-H03-defense_continuation","predicted_card":"H2","confidence":0.78,"reason":"Partner led the heart king; preserve higher hearts and follow low."},
+    {"task_id":"BBO100-H04-opening_lead","predicted_card":"HT","confidence":0.60,"reason":"Attack the long advertised heart suit against 6NT, leading the top of the internal sequence."},
+    {"task_id":"BBO100-H05-declarer_continuation","predicted_card":"D2","confidence":0.96,"reason":"West's diamond ace is winning the trick; follow with the lowest diamond."},
+    {"task_id":"BBO100-H06-defense_continuation","predicted_card":"H2","confidence":0.91,"reason":"Partner's heart queen is currently high; follow low and preserve higher spot cards."},
+    {"task_id":"BBO100-H07-opening_lead","predicted_card":"CA","confidence":0.58,"reason":"Lead the club ace from AQJxx to inspect dummy and retain control before committing to another suit."},
+    {"task_id":"BBO100-H08-declarer_continuation","predicted_card":"H4","confidence":0.92,"reason":"The heart king is winning; conserve the jack and follow with the lowest heart."},
+    {"task_id":"BBO100-H09-defense_continuation","predicted_card":"CQ","confidence":0.83,"reason":"Third hand over declarer's low club; play the queen to force/cover the visible club king structure."},
+    {"task_id":"BBO100-H10-opening_lead","predicted_card":"DT","confidence":0.67,"reason":"Lead partner's opened diamond suit against the doubled heart contract rather than declarer's known spades."},
+    {"task_id":"BBO100-H11-declarer_continuation","predicted_card":"D5","confidence":0.72,"reason":"Dummy's club king is already winning while declarer is void; discard a low diamond loser instead of ruffing partner's winner."},
+    {"task_id":"BBO100-H12-defense_continuation","predicted_card":"S5","confidence":0.88,"reason":"Declarer's spade ace is winning; follow low and preserve QJ."},
+    {"task_id":"BBO100-H13-opening_lead","predicted_card":"CA","confidence":0.57,"reason":"Cash the club ace from AQxx to see dummy and avoid an immediate trump or speculative side-suit lead."},
+    {"task_id":"BBO100-H14-declarer_continuation","predicted_card":"H3","confidence":0.95,"reason":"West's heart ace has won the trick; follow with the low heart and preserve the king."},
+    {"task_id":"BBO100-H15-defense_continuation","predicted_card":"S3","confidence":0.61,"reason":"Partner led the spade king; preserve QJ and contribute a low spade absent a need to unblock."},
+    {"task_id":"BBO100-H16-opening_lead","predicted_card":"DA","confidence":0.84,"reason":"Against a small slam, cash the sure diamond ace before declarer can establish/discard losers."},
+    {"task_id":"BBO100-H17-declarer_continuation","predicted_card":"H2","confidence":0.97,"reason":"Dummy's heart jack is already winning the first trick; duck from AK2 to preserve both top honors."},
+    {"task_id":"BBO100-H18-defense_continuation","predicted_card":"DK","confidence":0.86,"reason":"Partner led a low diamond and dummy played low; third hand should pressure declarer with the king."},
+    {"task_id":"BBO100-H19-opening_lead","predicted_card":"C5","confidence":0.45,"reason":"Avoid declarer's known majors and attack the longest minor from QTxxx against the heart partscore."},
+    {"task_id":"BBO100-H20-declarer_continuation","predicted_card":"C6","confidence":0.69,"reason":"Dummy's heart ace is winning while declarer is void; discard the small club and preserve diamond control and trump length."}
+  ]
+}

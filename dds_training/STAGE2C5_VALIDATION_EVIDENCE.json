@@ -1,0 +1,52 @@
+{
+  "authority": "EVIDENCE_ONLY",
+  "automatic_promotion": false,
+  "by_actor": {
+    "declarer": {
+      "learned": {"mean_regret": 0.346, "n": 1000, "optimal": 747, "optimal_rate": 0.747, "regret_2plus": 67},
+      "old": {"mean_regret": 0.349, "n": 1000, "optimal": 751, "optimal_rate": 0.751, "regret_2plus": 69},
+      "policy": {"mean_regret": 0.349, "n": 1000, "optimal": 751, "optimal_rate": 0.751, "regret_2plus": 69},
+      "policy_switches": 0
+    },
+    "defense": {
+      "learned": {"mean_regret": 0.464, "n": 1000, "optimal": 653, "optimal_rate": 0.653, "regret_2plus": 79},
+      "old": {"mean_regret": 0.471, "n": 1000, "optimal": 646, "optimal_rate": 0.646, "regret_2plus": 71},
+      "policy": {"mean_regret": 0.464, "n": 1000, "optimal": 653, "optimal_rate": 0.653, "regret_2plus": 79},
+      "policy_switches": 1000
+    }
+  },
+  "families": 644,
+  "gate_outcomes": {
+    "declarer_identical_condition": true,
+    "defense_mean_regret_condition": true,
+    "defense_optimal_rate_condition": true,
+    "defense_regret_2plus_condition": false
+  },
+  "historical_database_mutated": false,
+  "learning_allowed": false,
+  "learning_mutated": false,
+  "locked_prediction_sha256": "718b2428bf7e01984852d7b3a31542484c3e11e42ca761e827b0dc3b7038b5a5",
+  "next_gate": "return_to_train_new_candidate",
+  "owner_validation_authorized": true,
+  "positions": 2000,
+  "predictions_locked_before_dds": true,
+  "schema": "dds-stage2c5-validation-v1-result",
+  "sealed_accessed": false,
+  "stage": "2C.5",
+  "status": "validation_complete",
+  "validation_gate_pass": false,
+  "validation_used_for_gate_tuning": false,
+  "validation_used_for_learning": false,
+  "execution_provenance": {
+    "execution_pr": 258,
+    "execution_branch": "dds-stage2c5-validation-20260821",
+    "execution_head_sha": "bbb899dc64cb31bea4a4bbcddacb2b754fad0223",
+    "workflow_run_id": 32510692975,
+    "workflow_job_id": 96860827320,
+    "workflow_conclusion": "success",
+    "artifact_id": 9456931482,
+    "artifact_name": "dds-stage2c5-validation-32510692975",
+    "artifact_size_bytes": 681285,
+    "artifact_digest": "sha256:6bc1be2c1199994a8141ef3b7c8b0454260ac6c83ec8eb6fdbe0054032d2211c"
+  }
+}

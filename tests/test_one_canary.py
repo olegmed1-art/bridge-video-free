@@ -42,7 +42,7 @@ def test_pr_only_workflow_provisions_roles_and_uses_the_dockerfile_runtime_arg()
 
 def isolated_job():
     return {
-        "id": JOB_ID,
+        "job_id": JOB_ID,
         "batch_id": "22222222-2222-2222-2222-222222222222",
         "stable_job_key": "uv-canary-test",
         "source_file_id": "source-video-id",
@@ -109,6 +109,51 @@ def test_strict_processor_binds_result_to_runtime_image_and_source(monkeypatch):
     assert observed["runtime_sha"] == RUNTIME_SHA
     assert observed["image_digest"] == IMAGE_DIGEST
     assert observed["job"]["source_file_id"] == "source-video-id"
+    assert observed["processor_result"]["result_mode"] == "SHADOW_REVIEW_ONLY"
+    assert observed["processor_result"]["publication_state"] == "NOT_PUBLISHED"
+    assert observed["processor_result"]["canonical_promotion_allowed"] is False
+    assert observed["processor_result"]["database_persistence_allowed"] is False
+    assert observed["processor_result"]["source_file_id"] == "source-video-id"
+
+
+def test_canary_queries_match_migration_0056_identifiers() -> None:
+    source = Path(one_canary.__file__).read_text(encoding="utf-8")
+    assert "j.job_id" in source
+    assert "b.batch_id" in source
+    assert "j.output AS result_manifest" in source
+    assert "j.error_code AS error" in source
+    assert "j.id" not in source
+    assert "b.id" not in source
+    assert "NeonWorker" not in source
+
+
+def test_director_go_uses_resident_worker_api(monkeypatch, capsys):
+    monkeypatch.setattr(one_canary, "_load_isolated_target", lambda **_: isolated_job())
+    monkeypatch.setattr(one_canary, "_dsn", lambda: "postgresql://metadata-only")
+    monkeypatch.setattr(
+        one_canary,
+        "_postflight",
+        lambda target, runtime_sha, image_digest: {
+            "job_id": target.job_id,
+            "runtime_sha": runtime_sha,
+            "image_digest": image_digest,
+        },
+    )
+    observed = {}
+    fake_module = types.ModuleType("universal_video.neon_worker")
+
+    def fake_process_one_neon(**kwargs):
+        observed.update(kwargs)
+        return True
+
+    fake_module.process_one_neon = fake_process_one_neon
+    monkeypatch.setitem(sys.modules, "universal_video.neon_worker", fake_module)
+
+    assert one_canary.main(arguments("--director-go")) == 0
+    assert observed["database_url"] == "postgresql://metadata-only"
+    assert observed["worker_key"] == "director-one-canary-" + RUNTIME_SHA[:12]
+    assert observed["processor"] is one_canary._strict_processor
+    assert json.loads(capsys.readouterr().out)["job_id"] == JOB_ID
 
 
 def test_strict_processor_rejects_missing_source_checksum_before_worker_import(monkeypatch):

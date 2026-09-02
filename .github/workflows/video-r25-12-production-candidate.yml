@@ -1,0 +1,153 @@
+name: Bridge Video r25.12 one-time production candidate
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'run_requests/2026-08-18-logic-bridge-r25-12-meta.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bridge-video-heavy
+  cancel-in-progress: false
+
+jobs:
+  technical-candidate:
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      BRIDGE_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+      BRIDGE_RUNNER_LABEL: ubuntu-24.04
+      BRIDGE_LARGER_RUNNER: "false"
+      BRIDGE_PAID_CLOUD: "false"
+      BRIDGE_BILLING_FALLBACK: "false"
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: "3.1-free-r25.12-meta"
+      BRIDGE_REQUESTED_WHISPER_MODEL: medium
+      WHISPER_MODEL: medium
+      PYTHONUNBUFFERED: "1"
+      BRIDGE_JOB_ID: "86e814014cabee88785a53340ab85666"
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Verify immutable request
+        run: |
+          set -euo pipefail
+          grep -Fx 'JOB_ID=86e814014cabee88785a53340ab85666' run_requests/2026-08-18-logic-bridge-r25-12-meta.txt
+          grep -Fx 'REVISION=3.1-free-r25.12-meta' run_requests/2026-08-18-logic-bridge-r25-12-meta.txt
+          grep -Fx 'SOURCE_DRIVE_ID=1rGX92YskXRtXHc53lyj9JMU3g24H5vCI' run_requests/2026-08-18-logic-bridge-r25-12-meta.txt
+
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+
+      - name: Terminal receipt preflight
+        id: terminal
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: python check_completed_job.py
+
+      - name: Install free candidate runtime
+        if: steps.terminal.outputs.already_completed != 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+          python -m pip install --disable-pip-version-check -r requirements-worker.txt
+          python -m pip install --disable-pip-version-check             'requests==2.34.2' 'google-auth==2.56.3' 'pymupdf==1.28.2'             'psycopg[binary]==3.3.4' 'numpy==2.2.6'
+
+      - name: Access and database preflight
+        if: steps.terminal.outputs.already_completed != 'true'
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${GOOGLE_DRIVE_OAUTH_JSON:-}"
+          test -n "${BRIDGE_WORKER_DATABASE_URL:-}"
+          python database/runtime_worker_preflight.py
+          python - <<'PY'
+          from run_drive_3_1_free_oidc import user_oauth_token
+          if not user_oauth_token():
+              raise SystemExit("BLOCKED_ACCESS: Drive OAuth unavailable")
+          print("DRIVE_PREFLIGHT: PASS")
+          PY
+
+      - name: FREE-GUARD
+        if: steps.terminal.outputs.already_completed != 'true'
+        run: python bridge_worker_3_1_free.py
+
+      - name: Process one r25.12 technical candidate
+        if: steps.terminal.outputs.already_completed != 'true'
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+        run: |
+          python - <<'PY'
+          from run_drive_3_1_free_oidc import drive_token
+          import bridge_runtime_hardening_r25_12_meta as candidate
+          candidate.run(drive_token)
+          PY
+
+      - name: Persist candidate to staging
+        if: steps.terminal.outputs.already_completed != 'true'
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+        run: |
+          python - <<'PY'
+          import json
+          from run_drive_3_1_free_oidc import user_oauth_token
+          from bridge_neon_persistence import persist_completed_drive_job
+          result = persist_completed_drive_job(user_oauth_token())
+          if not result or not result.get("persisted"):
+              raise SystemExit("CANDIDATE_TECHNICAL_PERSISTENCE_FAILED")
+          print(json.dumps(result, sort_keys=True))
+          PY
+
+      - name: Verify fail-closed staging state
+        if: steps.terminal.outputs.already_completed != 'true'
+        env:
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+        run: |
+          python - <<'PY'
+          import json
+          import psycopg
+          from database.runtime_worker_preflight import normalize_dsn
+          sql = """
+          SELECT analysis_run_id::text, run_status, technical_record_status,
+                 quality_confirmation_status, publication_authorization_status,
+                 parameters_snapshot->>'source_drive_id',
+                 checkpoint->>'report_drive_id',
+                 qc_summary->'meta_evidence_gate'
+            FROM analysis_run
+           WHERE algorithm_key='bridge-video-master-analysis'
+             AND algorithm_version='3.1-free-r25.12-meta'
+             AND parameters_snapshot->>'job_id'='86e814014cabee88785a53340ab85666'
+           ORDER BY started_at DESC LIMIT 1
+          """
+          with psycopg.connect(normalize_dsn(__import__('os').environ['BRIDGE_WORKER_DATABASE_URL'])) as conn:
+              with conn.cursor() as cur:
+                  cur.execute(sql)
+                  row = cur.fetchone()
+          if not row:
+              raise SystemExit("R25_12_STAGING_RUN_MISSING")
+          run_id, run_status, technical, quality, publication, source_id, report_id, gate = row
+          assert (run_status, technical, quality, publication) == ("running", "recorded", "pending", "blocked")
+          assert source_id == "1rGX92YskXRtXHc53lyj9JMU3g24H5vCI"
+          assert report_id and gate
+          assert gate.get("publicationAllowed") is False
+          assert gate.get("selfReportedApproval") is False
+          print(json.dumps({"analysis_run_id": run_id, "report_drive_id": report_id,
+                            "meta_evidence_gate": gate}, sort_keys=True))
+          PY
+
+      - name: Completed candidate no-op
+        if: steps.terminal.outputs.already_completed == 'true'
+        run: echo 'ALREADY_COMPLETED_FOR_R25_12_META'

@@ -1,0 +1,118 @@
+name: Bridge Video r25.2 Diana 9 E2E
+
+on:
+  push:
+    branches:
+      - algorithm/3.1-free-r25.2-semantic-confidence-gate
+    paths:
+      - '.github/workflows/video-r25-2-diana9-e2e.yml'
+      - 'bridge_runtime_hardening_r25_2.py'
+      - 'bridge_runtime_hardening_r25_1.py'
+      - 'run_drive_3_1_free_generic.py'
+      - 'tests/test_semantic_gate_r25_2.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: bridge-video-r25-2-diana9-e2e
+  cancel-in-progress: false
+
+jobs:
+  diana9-e2e:
+    if: ${{ github.event.repository.private == false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      BRIDGE_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+      BRIDGE_RUNNER_LABEL: ubuntu-24.04
+      BRIDGE_LARGER_RUNNER: "false"
+      BRIDGE_PAID_CLOUD: "false"
+      BRIDGE_BILLING_FALLBACK: "false"
+      BRIDGE_JOB_ID: 50b5b5c4c77e4b49f1dd745275066012
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: 3.1-free-r25.2
+      PYTHONUNBUFFERED: "1"
+      WHISPER_MODEL: small
+
+    steps:
+      - name: Checkout r25.2 candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Install free open-source runtime
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+          python -m pip install --disable-pip-version-check -r requirements-worker.txt
+      - name: Run r25.2 regression tests
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python tests/test_asr_qc_r25_1.py
+          PYTHONPATH=. python tests/test_semantic_gate_r25_2.py
+          python -m py_compile bridge_runtime_hardening_r25_1.py bridge_runtime_hardening_r25_2.py run_drive_3_1_free_generic.py
+      - name: Authenticate to Google Cloud with Workload Identity Federation
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
+        with:
+          project_id: bridge-video-automation
+          workload_identity_provider: projects/499454355457/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: bridge-video-worker@bridge-video-automation.iam.gserviceaccount.com
+          create_credentials_file: true
+      - name: Google Drive user OAuth preflight
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from run_drive_3_1_free_oidc import user_oauth_token
+          assert user_oauth_token(), 'BLOCKED_ACCESS: Drive OAuth unavailable'
+          print('Google Drive user OAuth preflight: PASS')
+          PY
+      - name: Worker database runtime preflight
+        env:
+          BRIDGE_WORKER_DATABASE_URL: ${{ secrets.BRIDGE_WORKER_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          test -n "${BRIDGE_WORKER_DATABASE_URL:-}" || { echo 'BLOCKED_DATABASE: missing worker DSN' >&2; exit 1; }
+          python database/runtime_worker_preflight.py
+          echo "BRIDGE_WORKER_DATABASE_URL=${BRIDGE_WORKER_DATABASE_URL}" >> "$GITHUB_ENV"
+      - name: FREE-GUARD
+        run: python bridge_worker_3_1_free.py
+      - name: Validate Diana 9 remains fail-closed
+        env:
+          GOOGLE_DRIVE_OAUTH_JSON: ${{ secrets.GOOGLE_DRIVE_OAUTH_JSON }}
+        run: |
+          set -euo pipefail
+          LOG_PATH="${RUNNER_TEMP}/diana9-r25-2.log"
+          set +e
+          python run_drive_3_1_free_oidc.py 2>&1 | tee "$LOG_PATH"
+          worker_exit="${PIPESTATUS[0]}"
+          set -e
+          WORKER_EXIT="$worker_exit" LOG_PATH="$LOG_PATH" python - <<'PY'
+          import json, os
+          from pathlib import Path
+          worker_exit = int(os.environ['WORKER_EXIT'])
+          text = Path(os.environ['LOG_PATH']).read_text(encoding='utf-8', errors='replace')
+          events=[]
+          for line in text.splitlines():
+              pos=line.find('{')
+              if pos < 0: continue
+              try: event=json.loads(line[pos:])
+              except json.JSONDecodeError: continue
+              if event.get('stage') == 'ASR_QC_STRICT_R25_1': events.append(event)
+          if worker_exit == 0: raise SystemExit('Diana 9 unexpectedly passed r25.2')
+          if not events: raise SystemExit('missing strict ASR QC evidence')
+          final=events[-1]
+          if final.get('exit_code') != 1 or int(final.get('qc_failed') or 0) < 1:
+              raise SystemExit(f'invalid strict failure: {final}')
+          if 'RuntimeError: ASR_QC_FAILED' not in text:
+              raise SystemExit('ASR failure did not stop worker')
+          if '"stage": "PDF_QC"' in text or '"status": "AI_DONE"' in text:
+              raise SystemExit('bad ASR continued into publication')
+          print(f"R25_2_DIANA9_FAIL_CLOSED: PASS qc_failed={final.get('qc_failed')} qc_total={final.get('qc_total')}")
+          PY

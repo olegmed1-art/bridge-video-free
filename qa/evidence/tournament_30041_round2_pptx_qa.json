@@ -1,0 +1,113 @@
+{
+  "bridge_board_check": {
+    "board_numbers": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24
+    ],
+    "board_slide_count": 24,
+    "failed": 0,
+    "passed": 24
+  },
+  "errors": [],
+  "file": "Разбор_турнира_30041_для_Дианы_Векслер_v1.2 (1).pptx",
+  "render": {
+    "blank_pages": [],
+    "nonwhite_ratio_max": 0.400487,
+    "nonwhite_ratio_mean": 0.39441,
+    "nonwhite_ratio_min": 0.369397,
+    "pages": 27,
+    "status": "PASS"
+  },
+  "schema": "bridge-pptx-artifact-qa-v1",
+  "slide_count": 27,
+  "slide_size_emu": {
+    "height": 7877175,
+    "width": 14020800
+  },
+  "status": "PASS",
+  "structural": {
+    "empty_slide_count": 0,
+    "minimum_explicit_font_pt": 9.75,
+    "off_canvas_shape_count": 0,
+    "warning_count": 6,
+    "zero_size_shape_count": 0
+  },
+  "warnings": [
+    {
+      "estimated_capacity": 1,
+      "estimated_lines": 2,
+      "font_pt": 12.0,
+      "shape_id": 35,
+      "slide": 1,
+      "text_preview": "1 СРЕДНИЙ · 2 ПРОПУЩЕНЫ",
+      "type": "TEXT_OVERFLOW_RISK"
+    },
+    {
+      "estimated_capacity": 1,
+      "estimated_lines": 2,
+      "font_pt": 12.75,
+      "shape_id": 53,
+      "slide": 2,
+      "text_preview": "сильные · стабильные · сложные",
+      "type": "TEXT_OVERFLOW_RISK"
+    },
+    {
+      "estimated_capacity": 1,
+      "estimated_lines": 2,
+      "font_pt": 12.0,
+      "shape_id": 35,
+      "slide": 27,
+      "text_preview": "ПРАКТИКА НА 8 СДАЧАХ",
+      "type": "TEXT_OVERFLOW_RISK"
+    },
+    {
+      "estimated_capacity": 1,
+      "estimated_lines": 2,
+      "font_pt": 9.75,
+      "shape_id": 47,
+      "slide": 27,
+      "text_preview": "8 упражнений",
+      "type": "TEXT_OVERFLOW_RISK"
+    },
+    {
+      "estimated_capacity": 1,
+      "estimated_lines": 2,
+      "font_pt": 12.75,
+      "shape_id": 53,
+      "slide": 27,
+      "text_preview": "до заявки или первого хода",
+      "type": "TEXT_OVERFLOW_RISK"
+    },
+    {
+      "estimated_capacity": 1,
+      "estimated_lines": 2,
+      "font_pt": 12.75,
+      "shape_id": 54,
+      "slide": 27,
+      "text_preview": "счёт · информация · альтернатива",
+      "type": "TEXT_OVERFLOW_RISK"
+    }
+  ]
+}

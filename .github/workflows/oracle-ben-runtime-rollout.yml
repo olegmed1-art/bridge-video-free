@@ -1,0 +1,119 @@
+name: Oracle BEN Runtime Rollout
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-ben-runtime-rollout.yml'
+      - 'ops/install_ben_runtime.sh'
+      - 'ops/oracle_known_hosts_from_scan.sh'
+  pull_request_target:
+    paths:
+      - 'ops/oracle-ben-runtime-requests/*.json'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-ben-runtime-requests/*.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-ben-runtime-rollout
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Validate trusted rollout workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -F 'ghcr.io/lorserker/ben@sha256:' .github/workflows/oracle-ben-runtime-rollout.yml >/dev/null
+          bash -n ops/install_ben_runtime.sh ops/oracle_known_hosts_from_scan.sh
+          grep -F '127.0.0.1:8085:8085' ops/install_ben_runtime.sh >/dev/null
+          grep -F -- '--cap-drop=ALL' ops/install_ben_runtime.sh >/dev/null
+          grep -F 'EXPECTED_FINGERPRINT' .github/workflows/oracle-ben-runtime-rollout.yml >/dev/null
+
+  rollout:
+    if: ${{ github.event_name == 'pull_request_target' || github.event_name == 'push' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      BEN_IMAGE: ghcr.io/lorserker/ben@sha256:474065d99c796a54e32cab4a83dee09685749cff2fbde5edc84ab2b961ba514d
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - name: Resolve one bounded request
+        id: request
+        shell: bash
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [[ '${{ github.event_name }}' == 'pull_request_target' ]]; then
+            git fetch --quiet origin "$PR_HEAD_SHA"
+            mapfile -t files < <(git diff --name-only '${{ github.event.pull_request.base.sha }}' "$PR_HEAD_SHA" | grep -E '^ops/oracle-ben-runtime-requests/[^/]+\.json$' | sort -u)
+            [[ ${#files[@]} -eq 1 ]]
+            REQUEST_JSON="$(git show "$PR_HEAD_SHA:${files[0]}")"
+          else
+            mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^ops/oracle-ben-runtime-requests/[^/]+\.json$' | sort -u)
+            [[ ${#files[@]} -eq 1 ]]
+            REQUEST_JSON="$(cat "${files[0]}")"
+          fi
+          REQUEST_JSON="$REQUEST_JSON" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          x=json.loads(os.environ['REQUEST_JSON'])
+          required={'request_id','host','user','expected_host_fingerprint'}
+          assert set(x)==required, x
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', x['request_id'])
+          assert x['host']=='158.180.47.161'
+          assert x['user']=='ubuntu'
+          assert x['expected_host_fingerprint']=='SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk'
+          print('request_id='+x['request_id'])
+          PY
+
+      - name: Verify host key and SSH credential
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/oracle-ben"
+          mkdir -p "$work"
+          known="$work/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$work/id_oracle"; printf '%s\n' "${!selected}" > "$key"; chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Install pinned BEN localhost runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env BEN_IMAGE='$BEN_IMAGE' bash -s" < ops/install_ben_runtime.sh

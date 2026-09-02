@@ -1,0 +1,23 @@
+name: DDS pilot 10k — archived train phase
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dds-pilot-10k-train-archive
+  cancel-in-progress: false
+
+jobs:
+  archived:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Preserve historical pilot route as non-executable evidence
+        run: |
+          set -euo pipefail
+          echo 'The legacy 10k pilot TRAIN workflow is archived and intentionally non-executable.'
+          echo 'Use the one-time receipt authorization architecture for any future DDS execution.'
+          echo '{"archived":true,"training_started":false,"historical_results_preserved":true}'

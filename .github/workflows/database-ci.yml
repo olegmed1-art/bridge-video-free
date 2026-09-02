@@ -1,0 +1,191 @@
+name: Bridge School Database CI
+
+on:
+  pull_request:
+    paths:
+      - 'database/**'
+      - 'tests/test_worker_dsn_contract.py'
+      - 'tests/test_health_dsn_contract.py'
+      - '.github/workflows/database-ci.yml'
+      - '.github/workflows/database-production.yml'
+      - '.github/workflows/database-app-runtime-smoke.yml'
+      - '.github/workflows/database-health-monitor.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'database/**'
+      - 'tests/test_worker_dsn_contract.py'
+      - 'tests/test_health_dsn_contract.py'
+      - '.github/workflows/database-ci.yml'
+      - '.github/workflows/database-production.yml'
+      - '.github/workflows/database-app-runtime-smoke.yml'
+      - '.github/workflows/database-health-monitor.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-18-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: bridge_school_ci
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d bridge_school_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bridge_school_ci
+      DATABASE_URL: postgresql://bridge_ci_owner:bridge_ci_owner@localhost:5432/bridge_school_ci
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Compile video persistence adapters
+        run: |
+          python -m py_compile \
+            database/runtime_worker_preflight.py \
+            database/runtime_health_preflight.py \
+            database/runtime_app_preflight.py \
+            database/outbox_publisher.py \
+            database/video_result_persistence.py \
+            database/runtime_worker_persistence_smoke.py \
+            database/backfill_video_results.py \
+            bridge_neon_persistence.py \
+            run_master_3_1_free_semantic.py \
+            tests/test_worker_dsn_contract.py \
+            tests/test_health_dsn_contract.py
+
+      - name: Install runtime DSN test dependency
+        run: python -m pip install --disable-pip-version-check 'psycopg[binary]==3.3.4'
+
+      - name: Run runtime DSN contract regression tests
+        run: |
+          PYTHONPATH=. python tests/test_worker_dsn_contract.py
+          PYTHONPATH=. python tests/test_health_dsn_contract.py
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Bootstrap managed-owner-compatible CI role
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$ADMIN_DATABASE_URL" -X -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE EXTENSION IF NOT EXISTS pgcrypto;
+          CREATE EXTENSION IF NOT EXISTS btree_gist;
+          CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+          DO $$
+          BEGIN
+              IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='bridge_ci_owner') THEN
+                  CREATE ROLE bridge_ci_owner LOGIN PASSWORD 'bridge_ci_owner' CREATEROLE NOSUPERUSER NOCREATEDB NOREPLICATION;
+              END IF;
+          END $$;
+          ALTER DATABASE bridge_school_ci OWNER TO bridge_ci_owner;
+          ALTER SCHEMA public OWNER TO bridge_ci_owner;
+          SQL
+
+      - name: Verify PostgreSQL 18 and non-superuser migration owner
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_num="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c 'SHOW server_version_num')"
+          echo "CI PostgreSQL server_version_num=${version_num}"
+          test "$version_num" -ge 180000
+          attrs="$(psql "$DATABASE_URL" -X -A -t -F ',' -v ON_ERROR_STOP=1 -c "SELECT rolsuper, rolcreaterole, rolcreatedb FROM pg_roles WHERE rolname=current_user;")"
+          echo "CI migration owner attributes=${attrs}"
+          test "$attrs" = "f,t,f"
+
+      - name: Apply migrations to ephemeral CI database
+        shell: bash
+        run: |
+          chmod +x database/scripts/migrate.sh
+          bash -n database/scripts/migrate.sh
+          database/scripts/migrate.sh
+
+      - name: Run invariant tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for test_file in database/tests/*.sql; do
+            echo "Running ${test_file}"
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$test_file"
+          done
+
+      - name: Verify migration idempotence
+        shell: bash
+        run: database/scripts/migrate.sh
+
+      - name: Verify audited external-history guard
+        shell: bash
+        run: |
+          set -euo pipefail
+          external_key='2026-08-20-ai-decision-layer-v1'
+          external_checksum='5b87f7a2cb3491fb60b88238482b35c1aefb3f500253432b6b87de1e94daa9bb'
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+            "INSERT INTO schema_migration(migration_key,checksum) VALUES ('${external_key}','${external_checksum}');"
+          database/scripts/migrate.sh
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+            "UPDATE schema_migration SET checksum=repeat('0',64) WHERE migration_key='${external_key}';"
+          if database/scripts/migrate.sh; then
+            echo 'External-history guard accepted a mismatched checksum' >&2
+            exit 1
+          fi
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -c \
+            "DELETE FROM schema_migration WHERE migration_key='${external_key}';"
+
+      - name: Verify checksum guard rejects edited history
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="database/migrations/0001_global_registry.sql"
+          backup="$(mktemp)"
+          cp "$target" "$backup"
+          trap 'mv "$backup" "$target"' EXIT
+          printf '\n-- CI tamper probe\n' >> "$target"
+          if database/scripts/migrate.sh; then
+            echo 'Checksum guard failed to reject modified historical migration' >&2
+            exit 1
+          fi
+          mv "$backup" "$target"
+          trap - EXIT
+
+      - name: Verify composite checksum rejects an edited migration component
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="database/migrations/0200_bidding_knowledge_v0/01_core_rule.sql"
+          backup="$(mktemp)"
+          cp "$target" "$backup"
+          trap 'mv "$backup" "$target"' EXIT
+          printf '\n-- CI composite tamper probe\n' >> "$target"
+          if database/scripts/migrate.sh; then
+            echo 'Composite checksum guard accepted a modified migration component' >&2
+            exit 1
+          fi
+          mv "$backup" "$target"
+          trap - EXIT
+
+      - name: Verify migration registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$DATABASE_URL" -X -A -F ',' -v ON_ERROR_STOP=1 -c \
+            "SELECT migration_key, checksum IS NOT NULL AS checksum_recorded FROM schema_migration ORDER BY migration_key;"
+          missing="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM schema_migration WHERE checksum IS NULL;")"
+          test "$missing" -eq 0

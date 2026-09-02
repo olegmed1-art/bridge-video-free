@@ -1,0 +1,2 @@
+DDS PR-safe Drive observable verifier v1 on fully pinned DDS workflow base.
+No methodology, bidding, DDS result, holdout, or teacher-authority change.

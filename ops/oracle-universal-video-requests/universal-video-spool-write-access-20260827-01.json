@@ -1,0 +1,9 @@
+{
+  "request_id": "universal-video-spool-write-access-20260827-01",
+  "mode": "activate",
+  "git_ref": "74b042e5c7482d9f834308d17fac865f629865c4",
+  "expected_host_fingerprint": "SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}

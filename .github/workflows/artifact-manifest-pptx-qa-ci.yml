@@ -1,0 +1,50 @@
+name: ArtifactManifest and PPTX QA CI
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/artifact_manifest_v1.py'
+      - 'tools/pptx_artifact_qa.py'
+      - 'qa/evidence/**'
+      - 'qa/manifests/**'
+      - 'tests/test_artifact_manifest_pptx_qa.py'
+      - '.github/workflows/artifact-manifest-pptx-qa-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'tools/artifact_manifest_v1.py'
+      - 'tools/pptx_artifact_qa.py'
+      - 'qa/evidence/**'
+      - 'qa/manifests/**'
+      - 'tests/test_artifact_manifest_pptx_qa.py'
+      - '.github/workflows/artifact-manifest-pptx-qa-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  artifact-qa-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install focused QA dependencies
+        run: python -m pip install --disable-pip-version-check 'pytest==9.1.1' 'python-pptx==1.0.2'
+      - name: Compile QA tools
+        run: python -m py_compile tools/artifact_manifest_v1.py tools/pptx_artifact_qa.py
+      - name: Verify manifest and PPTX structural contracts
+        run: PYTHONPATH=. python -m pytest -q tests/test_artifact_manifest_pptx_qa.py
+      - name: Verify committed tournament manifest
+        run: PYTHONPATH=. python tools/artifact_manifest_v1.py --verify qa/manifests/tournament_30041_artifact_manifest_v1.json
+
+# Full render QA is deliberately performed on the actual private/source PPTX before
+# the evidence JSON is committed. CI verifies the immutable evidence digest and
+# reusable structural/bridge-board QA contracts without publishing source media.

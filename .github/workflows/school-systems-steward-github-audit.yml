@@ -1,0 +1,128 @@
+name: School Systems Steward - GitHub read-only audit
+
+on:
+  pull_request:
+    paths:
+      - "steward/github_inventory.py"
+      - "tests/test_school_systems_github_inventory.py"
+      - ".github/workflows/school-systems-steward-github-audit.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "steward/github_inventory.py"
+      - ".github/workflows/school-systems-steward-github-audit.yml"
+  schedule:
+    - cron: "41 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: school-systems-steward-github-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install bounded dependencies
+        run: python -m pip install -q pytest requests==2.32.5
+
+      - name: Run GitHub inventory contracts
+        run: python -m pytest -q tests/test_school_systems_github_inventory.py
+
+      - name: Compile collector
+        run: python -m py_compile steward/github_inventory.py
+
+  github-audit:
+    if: github.event_name != 'pull_request'
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      TARGET_REPOSITORY: ${{ github.repository }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install bounded dependencies
+        run: python -m pip install -q requests==2.32.5
+
+      - name: Run complete read-only GitHub traversal
+        id: inventory
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/school-steward-github-${GITHUB_RUN_ID}"
+          mkdir -p "$out"
+          python -m steward.github_inventory \
+            --repository "$TARGET_REPOSITORY" \
+            --output-dir "$out"
+          echo "output_dir=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Validate complete inventory boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="${{ steps.inventory.outputs.output_dir }}/github-inventory.json"
+          python - "$manifest" "$TARGET_REPOSITORY" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          path = Path(sys.argv[1])
+          expected_repository = sys.argv[2]
+          if not path.is_file() or path.stat().st_size == 0:
+              raise SystemExit("SCHOOL_STEWARD_GITHUB_AUDIT_FAIL code=MANIFEST_MISSING")
+          payload = json.loads(path.read_text(encoding="utf-8"))
+          if payload.get("status") != "COMPLETE":
+              raise SystemExit("SCHOOL_STEWARD_GITHUB_AUDIT_FAIL code=NOT_COMPLETE")
+          if (payload.get("repository") or {}).get("full_name") != expected_repository:
+              raise SystemExit("SCHOOL_STEWARD_GITHUB_AUDIT_FAIL code=REPOSITORY_MISMATCH")
+          digest = str(payload.get("inventory_sha256") or "")
+          if not re.fullmatch(r"[0-9a-f]{64}", digest):
+              raise SystemExit("SCHOOL_STEWARD_GITHUB_AUDIT_FAIL code=CHECKSUM_INVALID")
+          counts = payload.get("counts")
+          required = ("branches", "open_pull_requests", "open_issues", "workflows")
+          if not isinstance(counts, dict) or not all(
+              isinstance(counts.get(key), int) for key in required
+          ):
+              raise SystemExit("SCHOOL_STEWARD_GITHUB_AUDIT_FAIL code=COUNTS_INVALID")
+          print(
+              "SCHOOL_STEWARD_GITHUB_MANIFEST_PASS "
+              f"branches={counts['branches']} prs={counts['open_pull_requests']} "
+              f"issues={counts['open_issues']} workflows={counts['workflows']} "
+              f"sha256={digest}"
+          )
+          PY
+
+      - name: Print bounded non-sensitive summary
+        run: cat "${{ steps.inventory.outputs.output_dir }}/github-inventory-summary.txt"
+
+      - name: Keep detailed inventory runner-local only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "${{ steps.inventory.outputs.output_dir }}/github-inventory.json"
+          echo "SCHOOL_STEWARD_GITHUB_PRIVATE_EVIDENCE_PASS detailed_artifact_uploaded=0"

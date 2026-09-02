@@ -1,0 +1,40 @@
+[Unit]
+Description=Bridge School Assistant Lab Oracle Observer v0.2
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=assistant-lab-observer
+Group=assistant-lab-observer
+WorkingDirectory=/opt/bridge-school/bridge-video-free
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=ASSISTANT_LAB_OBSERVER_STATE_ROOT=/opt/bridge-school/assistant-lab-observer
+EnvironmentFile=/opt/bridge-school/assistant-lab-observer/observer.env
+ExecStart=/opt/bridge-school/assistant-lab-observer/.venv/bin/python -m assistant_lab.observer daemon
+Restart=always
+RestartSec=2
+TimeoutStopSec=20
+# Start directly inside the dedicated bwrap AppArmor profile so that
+# NoNewPrivileges remains enabled while bubblewrap can create user namespaces.
+AppArmorProfile=bwrap
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+# Deliberately omit ProtectKernelTunables: its /proc/sys submount makes the
+# kernel reject bwrap's fresh procfs mount inside an unprivileged user namespace.
+# The service user is unprivileged and NoNewPrivileges remains enforced.
+# ProtectKernelLogs is also deliberately omitted: masking /proc/kmsg creates
+# another submount that prevents bwrap from mounting its isolated procfs.
+# This unprivileged service has no CAP_SYSLOG and keeps NoNewPrivileges enabled.
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+ReadWritePaths=/opt/bridge-school/assistant-lab-observer
+
+[Install]
+WantedBy=multi-user.target

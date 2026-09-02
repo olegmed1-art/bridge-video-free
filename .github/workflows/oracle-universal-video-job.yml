@@ -1,0 +1,369 @@
+name: Oracle Universal Video Job
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-universal-video-job.yml'
+      - 'tests/test_universal_video_job_ssh_contract.py'
+  push:
+    branches: [main]
+    paths:
+      - 'ops/oracle-universal-video-job-requests/*.json'
+  # Rare recovery watchdog for commits made by integration tokens that do not
+  # emit a push event. A durable issue receipt prevents replay of handled jobs.
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+  issues: write
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('oracle-universal-video-pr-{0}', github.run_id) || 'oracle-instance-workload-mutation' }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    # Temporary operator pause (2026-08-28): the hourly recovery watchdog is
+    # dormant; PR, request-push and explicit manual paths remain available.
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      request_id: ${{ steps.request.outputs.request_id }}
+      issue: ${{ steps.request.outputs.issue }}
+      job_id: ${{ steps.request.outputs.job_id }}
+      profile: ${{ steps.request.outputs.profile }}
+      should_execute: ${{ steps.request.outputs.should_execute }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Validate generic explicit Drive request
+        id: request
+        if: ${{ github.event_name != 'pull_request' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == 'push' ]]; then
+            mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+              | grep -E '^ops/oracle-universal-video-job-requests/[^/]+\.json$' | sort -u)
+          else
+            mapfile -t files < <(for f in ops/oracle-universal-video-job-requests/*.json; do
+              [[ -f "$f" ]] || continue
+              printf '%s %s\n' "$(git log -1 --format=%ct -- "$f")" "$f"
+            done | sort -nr | head -n1 | cut -d' ' -f2-)
+          fi
+          [[ ${#files[@]} -eq 1 ]] || { echo "expected exactly one job request" >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re
+          x=json.load(open(os.environ['REQUEST_FILE'], encoding='utf-8'))
+          assert set(x)=={'request_id','issue','job'}, x
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
+          assert isinstance(x['issue'], int) and x['issue'] > 0
+          job=x['job']
+          jid=job.get('job_id')
+          profile=job.get('profile')
+          from universal_video.contract import validate_job
+          validated=validate_job(job)
+          assert validated.source['kind']=='google_drive'
+          print('request_id='+x['request_id'])
+          print('issue='+str(x['issue']))
+          print('job_id='+jid)
+          print('profile='+profile)
+          PY
+
+          issue="$(sed -n 's/^issue=//p' "$GITHUB_OUTPUT" | tail -n1)"
+          job_id="$(sed -n 's/^job_id=//p' "$GITHUB_OUTPUT" | tail -n1)"
+          profile="$(sed -n 's/^profile=//p' "$GITHUB_OUTPUT" | tail -n1)"
+          [[ "$issue" =~ ^[1-9][0-9]*$ && -n "$job_id" && -n "$profile" ]]
+
+          if [[ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]]; then
+            receipt_count=0
+          else
+            marker="Universal Video / $profile / $job_id"
+            receipt_count="$(gh api --paginate --slurp \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/$GITHUB_REPOSITORY/issues/$issue/comments?per_page=100" \
+              | MARKER="$marker" python -c 'import json,os,sys; marker=os.environ["MARKER"]; data=json.load(sys.stdin); walk=lambda x: ([x] if isinstance(x,dict) else sum((walk(y) for y in x),[]) if isinstance(x,list) else []); print(sum(marker in str(x.get("body","")) for x in walk(data)))')"
+          fi
+          [[ "$receipt_count" =~ ^[0-9]+$ ]]
+          if (( receipt_count == 0 )); then
+            echo 'should_execute=true' >> "$GITHUB_OUTPUT"
+            echo 'durable request receipt absent; execution allowed'
+          else
+            echo 'should_execute=false' >> "$GITHUB_OUTPUT"
+            echo 'durable request receipt present; replay refused'
+          fi
+      - name: Contract-only PR validation
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          python - <<'PY'
+          import yaml
+          yaml.safe_load(open('.github/workflows/oracle-universal-video-job.yml', encoding='utf-8'))
+          path = 'tests/test_universal_video_job_ssh_contract.py'
+          ns = {'__file__': path, '__name__': 'uv_job_ssh_contract'}
+          exec(open(path, encoding='utf-8').read(), ns)
+          for name, fn in sorted(ns.items()):
+              if name.startswith('test_') and callable(fn):
+                  fn()
+          print('ORACLE_UNIVERSAL_VIDEO_JOB_CONTRACT_PASS')
+          PY
+
+  execute:
+    if: ${{ github.event_name != 'pull_request' && github.event_name != 'schedule' && needs.validate.outputs.should_execute == 'true' }}
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 330
+    env:
+      INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      OCI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+      ISSUE_NUMBER: ${{ needs.validate.outputs.issue }}
+      JOB_ID: ${{ needs.validate.outputs.job_id }}
+      PROFILE: ${{ needs.validate.outputs.profile }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Configure OCI CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q oci-cli
+          # Accept either the intended one-line OCID or the matching line from
+          # an accidentally pasted Oracle configuration preview.  Never echo it.
+          oci_user="$(printf '%s\n' "$OCI_USER" | sed -nE 's/^[[:space:]]*(user=)?(ocid1\.user\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p' | head -n1)"
+          oci_fingerprint="$(printf '%s\n' "$OCI_FINGERPRINT" | sed -nE 's/^[[:space:]]*(fingerprint=)?([0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){15})[[:space:]]*$/\2/p' | head -n1)"
+          oci_tenancy="$(printf '%s\n' "$OCI_TENANCY" | sed -nE 's/^[[:space:]]*(tenancy=)?(ocid1\.tenancy\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p' | head -n1)"
+          [[ -n "$oci_user" ]] || { echo 'OCI_CLI_USER is not a valid user OCID' >&2; exit 1; }
+          [[ -n "$oci_fingerprint" ]] || { echo 'OCI_CLI_FINGERPRINT is not a valid fingerprint' >&2; exit 1; }
+          [[ -n "$oci_tenancy" ]] || { echo 'OCI_CLI_TENANCY is not a valid tenancy OCID' >&2; exit 1; }
+          mkdir -p "$HOME/.oci"
+          printf '%s\n' "$OCI_KEY" > "$HOME/.oci/key.pem"
+          chmod 600 "$HOME/.oci/key.pem"
+          cat > "$HOME/.oci/config" <<EOF
+          [DEFAULT]
+          user=$oci_user
+          fingerprint=$oci_fingerprint
+          tenancy=$oci_tenancy
+          region=$OCI_REGION
+          key_file=$HOME/.oci/key.pem
+          EOF
+          chmod 600 "$HOME/.oci/config"
+          oci iam region list --output json >/dev/null
+          state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
+          case "$state" in
+            RUNNING) ;;
+            STOPPED)
+              oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null
+              ;;
+            *) echo "Oracle instance is not runnable: $state" >&2; exit 1 ;;
+          esac
+          echo ORACLE_UNIVERSAL_VIDEO_JOB_OCI_PASS
+
+      - name: Resolve trusted SSH transport
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+
+      - name: Submit and monitor generic resident job
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_remote() {
+            local command="$1"
+            timeout 180 ssh -i '${{ steps.ssh.outputs.key }}' \
+              -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+              -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
+              "$ORACLE_USER@$ORACLE_HOST" "$command" 2>/dev/null
+          }
+
+          # Cross the same exact ocarun sudo boundary installed and audited by
+          # the resident bootstrap. The SSH principal never invokes the
+          # root-owned Universal Video surfaces directly.
+          repair_cmd='sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video-spool-repair'
+          set +e
+          repair_out="$(run_remote "$repair_cmd")"
+          repair_rc=$?
+          set -e
+          if (( repair_rc != 0 )); then
+            echo 'PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_COMMAND_FAILED' >> "$GITHUB_ENV"
+            exit 1
+          fi
+          if ! grep -qx 'UNIVERSAL_VIDEO_SPOOL_RUNTIME_REPAIR_PASS' <<<"$repair_out"; then
+            echo 'PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_MARKER_MISSING' >> "$GITHUB_ENV"
+            exit 1
+          fi
+          echo 'PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_PASS' >> "$GITHUB_ENV"
+
+          if [[ "$GITHUB_EVENT_NAME" == 'push' ]]; then
+            request_file="$(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^ops/oracle-universal-video-job-requests/[^/]+\.json$' | head -n1)"
+          else
+            request_file="$(find ops/oracle-universal-video-job-requests -maxdepth 1 -type f -name '*.json' -printf '%T@ %p\n' | sort -nr | head -n1 | cut -d' ' -f2-)"
+          fi
+          payload="$(REQUEST_FILE="$request_file" python - <<'PY'
+          import base64,json,os
+          x=json.load(open(os.environ['REQUEST_FILE'],encoding='utf-8'))
+          job=dict(x['job'])
+          metadata=dict(job.get('metadata') or {})
+          requested=str(metadata.get('requested_runtime_commit') or '').strip().lower()
+          if not __import__('re').fullmatch(r'[0-9a-f]{40}', requested):
+              raise SystemExit('requested_runtime_commit is required for resident attestation')
+          metadata['request_commit']=os.environ['GITHUB_SHA'].lower()
+          metadata['requested_runtime_commit']=requested
+          job['metadata']=metadata
+          print(base64.b64encode(json.dumps(job,ensure_ascii=False,separators=(',',':')).encode()).decode())
+          PY
+          )"
+          submit_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video submit-drive-base64 '$payload'"
+          status_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video status '$JOB_ID'"
+          label="Universal Video / $PROFILE / $JOB_ID"
+          entry='SUBMITTED'
+
+          set +e
+          initial="$(run_remote "$submit_cmd")"
+          submit_rc=$?
+          set -e
+          if (( submit_rc != 0 )); then
+            if grep -qx 'UV_ERROR=job id already exists; use status or a new id' <<<"$initial"; then
+              # A previous observer can lose its SSH session after the resident
+              # intake has durably accepted the job.  Resume the exact same
+              # immutable job id instead of submitting a duplicate workload.
+              set +e
+              initial="$(run_remote "$status_cmd")"
+              resume_rc=$?
+              set -e
+              if (( resume_rc != 0 )); then
+                echo 'PRE_SUBMIT_ERROR_CODE=UV_RESUME_STATUS_COMMAND_FAILED' >> "$GITHUB_ENV"
+                exit 1
+              fi
+              entry='RESUMED'
+              echo 'PRE_SUBMIT_ERROR_CODE=UV_EXISTING_JOB_RESUMED' >> "$GITHUB_ENV"
+            else
+              code='UV_SUBMIT_COMMAND_FAILED'
+              if grep -qx 'UV_ERROR=universal-video-container.service inactive' <<<"$initial"; then
+                code='UV_SUBMIT_SERVICE_INACTIVE'
+              elif grep -qx 'UV_ERROR=universal video runtime missing' <<<"$initial"; then
+                code='UV_SUBMIT_RUNTIME_MISSING'
+              elif grep -qx 'UV_ERROR=universal video spool missing' <<<"$initial"; then
+                code='UV_SUBMIT_SPOOL_MISSING'
+              elif grep -qx 'UV_ERROR=unsafe staging directory' <<<"$initial"; then
+                code='UV_SUBMIT_STAGING_UNSAFE'
+              elif grep -qx 'UV_ERROR=legacy universal-video.service still active' <<<"$initial"; then
+                code='UV_SUBMIT_LEGACY_SERVICE_ACTIVE'
+              elif grep -qx 'UV_ERROR=unsafe spool or staging directory' <<<"$initial"; then
+                code='UV_SUBMIT_INTAKE_ROOT_UNSAFE'
+              elif grep -qx 'UV_ERROR=unsafe spool inbox' <<<"$initial"; then
+                code='UV_SUBMIT_INBOX_UNSAFE'
+              elif grep -Eq '^UV_ERROR=\[Errno 13\] Permission denied' <<<"$initial"; then
+                code='UV_SUBMIT_INTAKE_PERMISSION_DENIED'
+              elif grep -Eq '^UV_ERROR=\[Errno 18\] Invalid cross-device link' <<<"$initial"; then
+                code='UV_SUBMIT_INTAKE_CROSS_DEVICE'
+              elif grep -Eq '^UV_ERROR=\[Errno 28\] No space left on device' <<<"$initial"; then
+                code='UV_SUBMIT_INTAKE_DISK_FULL'
+              elif grep -Eq '^UV_ERROR=\[Errno 30\] Read-only file system' <<<"$initial"; then
+                code='UV_SUBMIT_INTAKE_READ_ONLY'
+              elif grep -Eq '^UV_ERROR=\[Errno 17\] File exists' <<<"$initial"; then
+                code='UV_SUBMIT_INTAKE_COLLISION'
+              elif grep -Eq '^UV_ERROR=(invalid |unsupported source kind|unknown video profile|.* (outside bounded range|must be (an integer|numeric|an object)))' <<<"$initial"; then
+                code='UV_SUBMIT_CONTRACT_REJECTED'
+              elif grep -qx 'UV_ERROR=server intake command failed' <<<"$initial"; then
+                code='UV_SUBMIT_INTAKE_RUNTIME_FAILED'
+              fi
+              echo "PRE_SUBMIT_ERROR_CODE=$code" >> "$GITHUB_ENV"
+              exit 1
+            fi
+          fi
+          state="$(printf '%s\n' "$initial" | sed -n 's/^UV_STATE=//p' | tail -n1)"
+          if [[ ! "$state" =~ ^(DOWNLOAD_QUEUED|DOWNLOADING_FROM_DRIVE|SOURCE_READY_ON_ORACLE|RUNNING|PROCESSING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]]; then
+            echo 'PRE_SUBMIT_ERROR_CODE=UV_SUBMIT_STATE_INVALID' >> "$GITHUB_ENV"
+            exit 1
+          fi
+          echo 'PRE_SUBMIT_ERROR_CODE=UV_SUBMIT_ACCEPTED' >> "$GITHUB_ENV"
+          initial_safe="$(printf '%s\n' "$initial" | grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|CONFORMANCE_STATE|ATTESTATION_MODE|ARTIFACT_SET_SHA256|MANIFEST_SHA256|ARTIFACT_COUNT|TOTAL_BYTES|DOMAIN_ANALYSIS_STATUS|TECHNICAL_BUNDLE_READY|BRIDGE_PRODUCTION_READY|PEDAGOGICAL_STATUS|PUBLICATION_STATE|ERROR_TYPE|ERROR_CODE)=' | head -n 20 || true)"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус **$label**: **$entry → $state**.\n\n\`\`\`text\n$initial_safe\n\`\`\`\nТехническая готовность не означает предметную или педагогическую готовность. Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          last="$state"
+
+          for _ in $(seq 1 300); do
+            case "$last" in
+              TECHNICAL_CONFORMANT) echo ORACLE_UNIVERSAL_VIDEO_JOB_TECHNICAL_CONFORMANCE_PASS; exit 0;;
+              REVIEW|NONCONFORMANT|CONFLICT|FAILED)
+                echo "PRE_SUBMIT_ERROR_CODE=UV_JOB_TERMINAL_$last" >> "$GITHUB_ENV"
+                exit 1
+                ;;
+            esac
+            sleep 60
+            set +e
+            out="$(run_remote "$status_cmd")"
+            status_rc=$?
+            set -e
+            if (( status_rc != 0 )); then
+              echo 'PRE_SUBMIT_ERROR_CODE=UV_STATUS_COMMAND_FAILED' >> "$GITHUB_ENV"
+              exit 1
+            fi
+            state="$(printf '%s\n' "$out" | sed -n 's/^UV_STATE=//p' | tail -n1)"
+            if [[ ! "$state" =~ ^(DOWNLOAD_QUEUED|DOWNLOADING_FROM_DRIVE|SOURCE_READY_ON_ORACLE|RUNNING|PROCESSING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]]; then
+              echo 'PRE_SUBMIT_ERROR_CODE=UV_STATUS_STATE_INVALID' >> "$GITHUB_ENV"
+              exit 1
+            fi
+            if [[ "$state" != "$last" ]]; then
+              safe="$(printf '%s\n' "$out" | grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|CONFORMANCE_STATE|ATTESTATION_MODE|ARTIFACT_SET_SHA256|MANIFEST_SHA256|ARTIFACT_COUNT|TOTAL_BYTES|DOMAIN_ANALYSIS_STATUS|TECHNICAL_BUNDLE_READY|BRIDGE_PRODUCTION_READY|PEDAGOGICAL_STATUS|PUBLICATION_STATE|ERROR_TYPE|ERROR_CODE)=' | head -n 20)"
+              gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Статус **$label**: **$last → $state**.\n\n\`\`\`text\n$safe\n\`\`\`\nRun: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+              last="$state"
+            fi
+          done
+          echo 'PRE_SUBMIT_ERROR_CODE=UV_STATUS_TIMEOUT' >> "$GITHUB_ENV"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "**$label** остаётся **$last** после 5-часового окна наблюдения; resident job не остановлен."
+          exit 2
+
+      - name: Report failure
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          code="${PRE_SUBMIT_ERROR_CODE:-UV_EXECUTION_FAILED}"
+          gh issue comment "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --body "Оператор **Universal Video / $PROFILE / $JOB_ID** завершился fail-closed до подтверждённого COMPLETED.\n\n\`\`\`text\nUV_OPERATOR_ERROR_CODE=$code\n\`\`\`\nRun: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+      - name: Signal external idle candidate
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run oracle-instance-idle-candidate.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f source_run_id="$GITHUB_RUN_ID"
+          echo "external idle candidate dispatched; OCI privilege remains in the bounded power workflow"

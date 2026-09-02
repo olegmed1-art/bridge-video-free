@@ -1,0 +1,69 @@
+name: Bridge Video operational resume CI
+
+on:
+  pull_request:
+    paths:
+      - 'database/run_checkpoint_persistence.py'
+      - 'database/source_identity_persistence.py'
+      - 'bridge_neon_persistence.py'
+      - 'transcript_stage_checkpoint_v1.py'
+      - 'bridge_runtime_hardening_r25_15.py'
+      - '.github/workflows/bridge-video-3.1-free.yml'
+      - 'tests/test_operational_resume.py'
+      - '.github/workflows/bridge-video-operational-resume-ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'database/run_checkpoint_persistence.py'
+      - 'database/source_identity_persistence.py'
+      - 'bridge_neon_persistence.py'
+      - 'transcript_stage_checkpoint_v1.py'
+      - 'bridge_runtime_hardening_r25_15.py'
+      - '.github/workflows/bridge-video-3.1-free.yml'
+      - 'tests/test_operational_resume.py'
+      - '.github/workflows/bridge-video-operational-resume-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  operational-resume-static:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - name: Install focused test dependencies
+        run: python -m pip install --disable-pip-version-check 'pytest==9.1.1' 'psycopg[binary]==3.3.4'
+      - name: Compile changed runtime modules
+        run: |
+          python -m py_compile \
+            database/run_checkpoint_persistence.py \
+            database/source_identity_persistence.py \
+            bridge_neon_persistence.py \
+            transcript_stage_checkpoint_v1.py \
+            bridge_runtime_hardening_r25_15.py
+      - name: Verify deterministic resume and identity contracts
+        run: PYTHONPATH=. python -m pytest -q tests/test_operational_resume.py
+      - name: Verify workflow hardening is present
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path('.github/workflows/bridge-video-3.1-free.yml').read_text(encoding='utf-8')
+          required = [
+              'Record durable worker start checkpoint',
+              'Process one opaque Drive job with heartbeat',
+              '--stage process_job --state progress',
+              'Record durable workflow final checkpoint',
+          ]
+          missing = [item for item in required if item not in text]
+          if missing:
+              raise SystemExit(f'missing workflow hardening: {missing}')
+          print('workflow hardening: PASS')
+          PY

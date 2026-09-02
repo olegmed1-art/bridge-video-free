@@ -1,0 +1,8 @@
+{
+  "request_id": "diana11-ssh-probe-20260825-01",
+  "mode": "probe",
+  "git_ref": "2de4b904b6156a1f855cb08755723b69b3028ae0",
+  "host": "158.180.47.161",
+  "user": "ubuntu",
+  "issue": 318
+}

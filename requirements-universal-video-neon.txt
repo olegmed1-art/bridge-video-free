@@ -1,0 +1,3 @@
+# Optional Neon/Postgres persistence runtime. Not installed by the Universal Video core service.
+-r requirements-universal-video.txt
+psycopg[binary]==3.3.4

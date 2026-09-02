@@ -1,0 +1,44 @@
+{
+  "schema": "bridge-school-drive-artifact-v1",
+  "lifecycle_class": "P2",
+  "source": {
+    "github_run_id": 32060398288,
+    "github_artifact_id": 9302550154,
+    "github_artifact_name": "dds-main-train-progress-32060398288-a1"
+  },
+  "logical_file": {
+    "name": "dds-main-train-progress-32060398288-a1.zip",
+    "size": 240301101,
+    "sha256": "c46cda2fb127371cbc1ab836c74580b25f0a0bb8ab358dfaab97cf591dd8a246"
+  },
+  "storage": {
+    "provider": "google_drive",
+    "layout": "split-concatenate",
+    "manifest_drive_file_id": "1xkcEclEi7PCWIBXFhM_stUDyeXnr0zZS",
+    "parts": [
+      {
+        "index": 1,
+        "drive_file_id": "1_EbKF-3SMdbBqGcCuQNTa9972nlI8nH0",
+        "size": 83886080,
+        "sha256": "b86814676775f9d9d0eacb316a0900081bf42ace1ba55ae6a74f5068af83d2d7"
+      },
+      {
+        "index": 2,
+        "drive_file_id": "1t8-ejbf1SuBV6NFZ9ner2k2wTb6yRS9Y",
+        "size": 83886080,
+        "sha256": "07a6a5c177bfe23a32b76d5280fbbdca6e9fbd637c90c78aa9931f0b4bf26640"
+      },
+      {
+        "index": 3,
+        "drive_file_id": "1AcrlBnlciYfsFZMKYheufTFgWq3HKd0t",
+        "size": 72528941,
+        "sha256": "1e265e9736cfb678a25805448450cdc15d8afb4bdb8dbf10639685e345aa12be"
+      }
+    ]
+  },
+  "verification": {
+    "method": "google_drive_roundtrip_sha256",
+    "neon_registered": true,
+    "github_actions_source_deleted_after_verified_offload": true
+  }
+}

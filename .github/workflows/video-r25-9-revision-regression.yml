@@ -1,0 +1,53 @@
+name: Bridge Video r25.9 Quality Contract
+
+on:
+  push:
+    branches:
+      - agent/video-r25-9-revision-idempotency
+    paths:
+      - '.github/workflows/video-r25-9-revision-regression.yml'
+      - '.github/workflows/bridge-video-3.1-free.yml'
+      - 'bridge_runtime_hardening_r25_9.py'
+      - 'bridge_runtime_hardening_r25_8.py'
+      - 'bridge_runtime_hardening_r25_7.py'
+      - 'run_master_3_1_free.py'
+      - 'check_completed_job.py'
+      - 'run_drive_3_1_free_generic.py'
+      - 'run_master_3_1_free_semantic.py'
+      - 'tests/test_revision_idempotency_r25_9.py'
+      - 'tests/test_quality_contract_r25_8.py'
+      - 'tests/test_asr_policy_r25_6.py'
+      - 'tests/test_pdf_presentation_r25_6.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      BRIDGE_REQUESTED_ALGORITHM_REVISION: 3.1-free-r25.9
+      BRIDGE_REQUESTED_WHISPER_MODEL: medium
+      WHISPER_MODEL: medium
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: Checkout r25.9 candidate
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
+      - name: Install test runtime
+        run: python -m pip install --disable-pip-version-check -r requirements-worker.txt
+      - name: Run r25.9 and inherited regressions
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. python tests/test_revision_idempotency_r25_9.py
+          PYTHONPATH=. python tests/test_quality_contract_r25_8.py
+          PYTHONPATH=. python tests/test_asr_policy_r25_6.py
+          PYTHONPATH=. python tests/test_pdf_presentation_r25_6.py
+          python -m py_compile bridge_runtime_hardening_r25_9.py bridge_runtime_hardening_r25_8.py bridge_runtime_hardening_r25_7.py check_completed_job.py run_drive_3_1_free_generic.py run_master_3_1_free.py run_master_3_1_free_semantic.py
