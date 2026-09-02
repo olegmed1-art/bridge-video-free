@@ -53,7 +53,7 @@ jobs:
             tests/test_oracle_idle_stop_guard.py \
             tests/test_oracle_idle_unknown_precedence.py
       - name: Install test runner
-        run: python -m pip install -q pytest
+        run: python -m pip install -q pytest pyyaml
       - name: Negative and integration tests
         run: |
           python -m pytest -q \
