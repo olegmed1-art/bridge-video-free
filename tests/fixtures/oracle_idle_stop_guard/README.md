@@ -1,0 +1,1 @@
+Synthetic-only fixtures for issue #627. Tests construct telemetry in memory so CI cannot contact Oracle, Neon, Drive, or production services. No credential or production payload belongs in this directory.
