@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import os
 import subprocess
 from contextlib import contextmanager
 from pathlib import Path
@@ -770,13 +771,18 @@ def test_signal_ignored_cleanup_bounds_exact_source_tree_restore() -> None:
     assert "timeout --foreground --signal=TERM --kill-after=5s 30s" in wrapper
     assert 'bounded_filesystem rm -rf --one-file-system -- "$SOURCE_DIR"' in restore
     assert 'bounded_filesystem mv -- "$source_backup_dir" "$SOURCE_DIR"' in restore
+    assert 'bounded_filesystem mv -- "$SOURCE_DIR" "$source_abandoned_candidate"' in restore
+    assert 'source_checkout_restored=1' in restore
+    assert 'result=RECOVERED cleanup_degraded=true' in restore
     assert '\n    rm -rf --one-file-system -- "$SOURCE_DIR"' not in restore
     assert '\n    mv -- "$source_backup_dir" "$SOURCE_DIR"' not in restore
     cleanup = script[script.index("cleanup(){") : script.index("assert_known_state(){")]
     restore_call = cleanup.index("if ! restore_source_checkout; then")
-    source_failure_exit = cleanup.index("exit 1", restore_call)
+    restore_gate = cleanup.index('if [[ "$source_checkout_restored" != 1 ]]', restore_call)
+    source_failure_exit = cleanup.index("exit 1", restore_gate)
     unmask = cleanup.index("bounded_systemctl unmask --runtime", restore_call)
-    assert restore_call < source_failure_exit < unmask
+    assert restore_call < restore_gate < source_failure_exit < unmask
+    assert cleanup.index("record_restore_failure source_checkout", restore_call) < restore_gate
 
     signal_guard = script[
         script.index("exact_process_signal(){") :
@@ -795,6 +801,57 @@ def test_signal_ignored_cleanup_bounds_exact_source_tree_restore() -> None:
     assert "while (( SECONDS < deadline ))" in script
     assert 'bounded_systemctl start --no-block "$service"' in script
     assert 'exact_process_signal "$worker_pid" "$expected_start_ticks" CHECK' in script
+
+
+def test_slow_candidate_cleanup_restores_backup_before_reporting_failure(tmp_path):
+    script = (ROOT / "ops/oracle_universal_video_precanary_attest.sh").read_text(
+        encoding="utf-8"
+    )
+    restore = script[
+        script.index("restore_source_checkout(){") : script.index("cleanup(){")
+    ]
+    probe = restore + r'''
+set -euo pipefail
+BUILD_IMAGE=1
+EXPECTED_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+SOURCE_DIR="$TEST_ROOT/source"
+source_backup_dir="$TEST_ROOT/source.backup"
+source_had_original=1
+source_candidate_path_owned=1
+source_abandoned_candidate=''
+source_checkout_restored=0
+mkdir -p "$SOURCE_DIR" "$source_backup_dir"
+printf candidate > "$SOURCE_DIR/candidate"
+printf original > "$source_backup_dir/original"
+rm_calls=0
+bounded_filesystem(){
+  if [[ "$1" == rm ]]; then
+    ((rm_calls += 1))
+    if (( rm_calls == 1 )); then
+      return 124
+    fi
+  fi
+  command "$@"
+}
+rc=0
+restore_source_checkout || rc=$?
+[[ "$rc" == 1 ]]
+[[ "$source_checkout_restored" == 1 ]]
+[[ "$source_candidate_path_owned" == 0 ]]
+[[ -f "$SOURCE_DIR/original" ]]
+[[ ! -e "$SOURCE_DIR/candidate" ]]
+[[ -z "$source_backup_dir" ]]
+[[ -z "$source_abandoned_candidate" ]]
+'''
+    completed = subprocess.run(
+        ["bash"],
+        input=probe,
+        text=True,
+        capture_output=True,
+        timeout=10,
+        env={**os.environ, "TEST_ROOT": str(tmp_path)},
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_pidfd_guard_behavior_rejects_stopped_and_stale_process_identity():

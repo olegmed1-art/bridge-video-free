@@ -84,6 +84,8 @@ lock_held=0
 source_had_original=0
 source_candidate_path_owned=0
 source_backup_dir=""
+source_abandoned_candidate=""
+source_checkout_restored=0
 resident_image_id=""
 isolated_peer_service=""
 isolated_peer_pid=""
@@ -805,15 +807,59 @@ restore_service(){
 }
 
 restore_source_checkout(){
+  local cleanup_degraded=0
   [[ "$BUILD_IMAGE" == 1 ]] || return 0
-  if [[ "$source_candidate_path_owned" == 1 && ( -e "$SOURCE_DIR" || -L "$SOURCE_DIR" ) ]]; then
-    bounded_filesystem rm -rf --one-file-system -- "$SOURCE_DIR" || return 1
+  if [[ "$source_candidate_path_owned" == 1 ]]; then
+    if [[ -e "$SOURCE_DIR" || -L "$SOURCE_DIR" ]]; then
+      if ! bounded_filesystem rm -rf --one-file-system -- "$SOURCE_DIR"; then
+        cleanup_degraded=1
+        if [[ -e "$SOURCE_DIR" || -L "$SOURCE_DIR" ]]; then
+          source_abandoned_candidate="${SOURCE_DIR}.precanary-abandoned.${EXPECTED_SHA:0:12}.$$"
+          [[ ! -e "$source_abandoned_candidate" && ! -L "$source_abandoned_candidate" ]] \
+            || return 1
+          # A same-filesystem rename is the bounded recovery path when recursive
+          # candidate deletion cannot finish. It immediately frees SOURCE_DIR so
+          # the preserved resident tree can be restored before cleanup reports
+          # the storage fault.
+          if ! bounded_filesystem mv -- "$SOURCE_DIR" "$source_abandoned_candidate"; then
+            [[ ! -e "$SOURCE_DIR" && ! -L "$SOURCE_DIR" \
+                  && -d "$source_abandoned_candidate" && ! -L "$source_abandoned_candidate" ]] \
+              || return 1
+          fi
+        fi
+      fi
+    fi
+    [[ ! -e "$SOURCE_DIR" && ! -L "$SOURCE_DIR" ]] || return 1
+    source_candidate_path_owned=0
   fi
+  [[ ! -e "$SOURCE_DIR" && ! -L "$SOURCE_DIR" ]] || return 1
   if [[ "$source_had_original" == 1 ]]; then
     [[ -n "$source_backup_dir" && -e "$source_backup_dir" && ! -L "$source_backup_dir" ]] \
       || return 1
-    bounded_filesystem mv -- "$source_backup_dir" "$SOURCE_DIR" || return 1
+    if ! bounded_filesystem mv -- "$source_backup_dir" "$SOURCE_DIR"; then
+      # mv is atomic within this parent directory. Accept only its exact
+      # completed postcondition if timeout raced with command completion.
+      [[ ! -e "$source_backup_dir" && ! -L "$source_backup_dir" \
+            && -d "$SOURCE_DIR" && ! -L "$SOURCE_DIR" ]] || return 1
+    fi
     source_backup_dir=""
+  else
+    [[ ! -e "$SOURCE_DIR" && ! -L "$SOURCE_DIR" ]] || return 1
+  fi
+  source_checkout_restored=1
+  if [[ -n "$source_abandoned_candidate" ]]; then
+    if ! bounded_filesystem rm -rf --one-file-system -- "$source_abandoned_candidate"; then
+      cleanup_degraded=1
+    fi
+    if [[ -e "$source_abandoned_candidate" || -L "$source_abandoned_candidate" ]]; then
+      cleanup_degraded=1
+    else
+      source_abandoned_candidate=""
+    fi
+  fi
+  if (( cleanup_degraded != 0 )); then
+    printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE component=source_checkout result=RECOVERED cleanup_degraded=true\n' >&2
+    return 1
   fi
   printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE component=source_checkout result=PASS\n'
   return 0
@@ -902,6 +948,9 @@ cleanup(){
       fi
       if ! restore_source_checkout; then
         record_restore_failure source_checkout
+      fi
+      if [[ "$source_checkout_restored" != 1 ]]; then
+        record_restore_failure source_checkout_unrestored
         printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=%s source_service=%s container_service=%s\n' \
           "$(IFS=,; echo "${restore_failures[*]}")" \
           "$(service_state "$SOURCE_SERVICE")" "$(service_state "$CONTAINER_SERVICE")" >&2
