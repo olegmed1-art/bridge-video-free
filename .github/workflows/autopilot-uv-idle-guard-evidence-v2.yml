@@ -1,0 +1,89 @@
+name: Autopilot Oracle idle STOP guard exact-head evidence v2
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths: ['.github/workflows/autopilot-uv-idle-guard-evidence-v2.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autopilot-uv-idle-guard-evidence-621ab073-v2
+  cancel-in-progress: false
+
+jobs:
+  idle-guard:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      EXACT_IDLE_SHA: 621ab073418b3f3d1b75cb6abb074dba4ea305cb
+    steps:
+      - name: Checkout exact idle-guard head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: 621ab073418b3f3d1b75cb6abb074dba4ea305cb
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Run exact-head classifier suite
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$(git rev-parse HEAD)" == "$EXACT_IDLE_SHA" ]]
+          bash -n ops/oracle_idle_state.sh
+          python -m pip install --disable-pip-version-check -q pytest
+          python -m pytest -q tests/test_oracle_idle_stop_guard.py
+          echo 'ORACLE_IDLE_CLASSIFIER_TESTS=PASS'
+
+      - name: Prove fail-closed finalizer ordering
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/oracle-autopilot-staging-finalize.yml')
+          text = path.read_text(encoding='utf-8')
+          idle_step = text.index('- name: Prove IDLE and inactive Autopilot over SSH')
+          exact_idle = text.index("grep -Fx 'ORACLE_IDLE_STATE=IDLE'", idle_step)
+          stop_step = text.index('- name: Stop exact instance after fresh IDLE proof')
+          assert idle_step < exact_idle < stop_step
+          section = text[idle_step:stop_step]
+          assert 'continue-on-error:' not in section
+          assert 'sudo -n /usr/local/sbin/oracle-idle-state' in section
+          assert "grep -Fx 'ORACLE_IDLE_STATE=IDLE'" in section
+          assert 'AUTOPILOT_SERVICE_ACTIVE=inactive' in section
+          assert 'AUTOPILOT_SERVICE_ENABLED=disabled' in section
+          stop = text[stop_step:]
+          assert '--action STOP' in stop
+          print('ORACLE_UNKNOWN_BLOCKS_STOP=PASS')
+          print('ORACLE_BUSY_BLOCKS_STOP=PASS')
+          print('ORACLE_EXACT_IDLE_ONLY=PASS')
+          print('ORACLE_STOP_EXECUTED=NO')
+          PY
+
+      - name: Retain exact receipt
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          result=FAIL; [[ "${{ job.status }}" == success ]] && result=PASS
+          jq -n --arg result "$result" --arg idle_sha "$EXACT_IDLE_SHA" --arg workflow_sha "$GITHUB_SHA" \
+            '{gate:"ORACLE_IDLE_STOP_GUARD_EXACT_HEAD",result:$result,idle_guard_sha:$idle_sha,workflow_sha:$workflow_sha,busy_semantics:"BLOCK_STOP",unknown_semantics:"BLOCK_STOP",idle_semantics:"ONLY_ELIGIBLE_STATE",video_states_busy:["PENDING_CANARY","QUEUED","LEASED"],local_spool_busy:true,stale_telemetry_unknown:true,missing_telemetry_unknown:true,oracle_stop_executed:false,oracle_restart_executed:false,production_mutation:false,real_video:false}' \
+            > oracle-idle-stop-guard-v2.json
+          cat oracle-idle-stop-guard-v2.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: oracle-idle-stop-guard-v2-${{ github.run_id }}-${{ github.run_attempt }}
+          path: oracle-idle-stop-guard-v2.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Enforce terminal gate
+        if: always()
+        shell: bash
+        run: jq -e '.result == "PASS" and .idle_guard_sha == "621ab073418b3f3d1b75cb6abb074dba4ea305cb" and .oracle_stop_executed == false and .production_mutation == false' oracle-idle-stop-guard-v2.json >/dev/null
