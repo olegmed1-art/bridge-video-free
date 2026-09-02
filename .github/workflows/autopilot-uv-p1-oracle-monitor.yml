@@ -26,6 +26,7 @@ jobs:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
       EXPECTED_HOST_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      EXPECTED_PROJECT_ID: misty-poetry-18012774
       EXPECTED_TEMP_BRANCH_ID: br-still-tooth-b1ilkfcj
       EXPECTED_TEMP_ENDPOINT_ID: ep-floral-field-b1pjs2of
       FORBIDDEN_BRANCH_ID_A: br-cold-moon-a1sgkzfd
@@ -105,95 +106,202 @@ jobs:
           set -Eeuo pipefail
           umask 077
           runtime_key="$1"; canary_key="$2"; idle_key="$3"
-          expected_branch="$4"; expected_endpoint="$5"; forbidden_a="$6"; forbidden_b="$7"
+          expected_project="$4"; expected_branch="$5"; expected_endpoint="$6"
+          forbidden_a="$7"; forbidden_b="$8"
           for value in "$runtime_key" "$canary_key" "$idle_key"; do
             [[ "$value" =~ ^uv-p1-[a-z]+-pr[0-9]+-[0-9a-f]{12}-20260902$ ]] || { echo 'UV_AUTOPILOT_TASK_KEY_INVALID'; exit 60; }
           done
-          mapfile -t units < <(systemctl list-units --all --type=service --no-legend 2>/dev/null | awk '$1 == "school-autopilot-shadow.service" {print $1}' | sort -u)
-          (( ${#units[@]} == 1 )) || { echo "UV_AUTOPILOT_UNIT_COUNT=${#units[@]}"; exit 61; }
-          unit="${units[0]}"
-          active="$(systemctl is-active "$unit" 2>/dev/null || true)"
-          [[ "$active" == active ]] || { echo 'UV_AUTOPILOT_SERVICE_NOT_ACTIVE'; exit 62; }
-          pid="$(systemctl show -p MainPID --value "$unit")"
-          [[ "$pid" =~ ^[1-9][0-9]*$ && -r "/proc/$pid/environ" ]] || { echo 'UV_AUTOPILOT_PROCESS_UNREADABLE'; exit 63; }
-          mapfile -d '' -t env_items < "/proc/$pid/environ"
-          candidates=()
-          for item in "${env_items[@]}"; do
-            key="${item%%=*}"; value="${item#*=}"
-            case "$key" in
-              AUTOPILOT_DATABASE_URL|AUTOPILOT_NEON_DATABASE_URL|NEON_DATABASE_URL|DATABASE_URL|POSTGRES_URL|BRIDGE_AUTOPILOT_DATABASE_URL)
-                [[ -n "$value" ]] && candidates+=("$value")
-                ;;
-            esac
+          worker=school-autopilot-shadow.service
+          observer=school-autopilot-online-observer.service
+          canary=school-autopilot-production-canary.service
+          [[ "$(systemctl is-active "$worker" 2>/dev/null || true)" == active ]] \
+            || { echo 'UV_AUTOPILOT_SHADOW_NOT_ACTIVE'; exit 61; }
+          [[ "$(systemctl is-enabled "$worker" 2>/dev/null || true)" == enabled ]] \
+            || { echo 'UV_AUTOPILOT_SHADOW_NOT_ENABLED'; exit 62; }
+          [[ "$(systemctl is-active "$observer" 2>/dev/null || true)" == active ]] \
+            || { echo 'UV_AUTOPILOT_OBSERVER_NOT_ACTIVE'; exit 63; }
+          [[ "$(systemctl is-enabled "$observer" 2>/dev/null || true)" == enabled ]] \
+            || { echo 'UV_AUTOPILOT_OBSERVER_NOT_ENABLED'; exit 64; }
+          [[ "$(systemctl is-active "$canary" 2>/dev/null || true)" == inactive ]] \
+            || { echo 'UV_AUTOPILOT_PRODUCTION_CANARY_ACTIVE'; exit 65; }
+          [[ "$(systemctl is-enabled "$canary" 2>/dev/null || true)" == disabled ]] \
+            || { echo 'UV_AUTOPILOT_PRODUCTION_CANARY_ENABLED'; exit 66; }
+          systemctl cat "$worker" | grep -Fx 'Environment=AUTOPILOT_RUNTIME_MODE=SHADOW' >/dev/null \
+            || { echo 'UV_AUTOPILOT_SHADOW_MODE_INVALID'; exit 68; }
+          systemctl cat "$observer" | grep -Fx 'Environment=AUTOPILOT_RUNTIME_MODE=SHADOW' >/dev/null \
+            || { echo 'UV_AUTOPILOT_OBSERVER_MODE_INVALID'; exit 69; }
+          mapfile -t active_autopilot_units < <(
+            systemctl list-units --type=service --state=active --no-legend --full 2>/dev/null \
+              | awk '$1 ~ /autopilot/ {print $1}' | sort -u
+          )
+          for active_unit in "${active_autopilot_units[@]}"; do
+            [[ "$active_unit" == "$worker" || "$active_unit" == "$observer" ]] \
+              || { echo "UV_AUTOPILOT_UNEXPECTED_ACTIVE_UNIT=$active_unit"; exit 70; }
           done
-          (( ${#candidates[@]} >= 1 )) || { echo 'UV_AUTOPILOT_PROCESS_DSN_MISSING'; exit 64; }
-          selected=''; selected_branch=''
-          for dsn in "${candidates[@]}"; do
-            host="$(DSN="$dsn" python3 - <<'PY'
-          import os, urllib.parse
-          print((urllib.parse.urlsplit(os.environ['DSN']).hostname or '').lower())
-          PY
-            )"
-            [[ "$host" =~ \.neon\.tech$ ]] || continue
-            branch=''
-            if command -v psql >/dev/null 2>&1; then
-              set +e
-              branch="$(PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=5000 -c lock_timeout=1000' \
-                psql "$dsn" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT COALESCE(current_setting('neon.branch_id',true),'');" 2>/dev/null)"
-              rc=$?
-              set -e
-              (( rc == 0 )) || continue
-            else
-              continue
-            fi
-            [[ "$branch" != "$forbidden_a" && "$branch" != "$forbidden_b" ]] || continue
-            host_match=0; branch_match=0
-            [[ "$host" =~ ^${expected_endpoint}(-pooler)?\. ]] && host_match=1
-            [[ "$branch" == "$expected_branch" ]] && branch_match=1
-            if (( host_match == 1 || branch_match == 1 )); then
-              [[ -z "$branch" || "$branch" == "$expected_branch" ]] || { echo 'UV_AUTOPILOT_BRANCH_IDENTITY_CONFLICT'; exit 65; }
-              selected="$dsn"; selected_branch="${branch:-$expected_branch}"
-              break
-            fi
-          done
-          [[ -n "$selected" ]] || { echo 'UV_AUTOPILOT_TEMP_DSN_NOT_FOUND_IN_LIVE_PROCESS'; exit 66; }
-          [[ "$selected_branch" == "$expected_branch" ]]
-          query_tasks() {
-            PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=5000 -c lock_timeout=1000' \
-              psql "$selected" -X -A -t -F '|' -v ON_ERROR_STOP=1 \
-              -v runtime_key="$runtime_key" -v canary_key="$canary_key" -v idle_key="$idle_key" <<'SQL'
+          pid="$(systemctl show -p MainPID --value "$worker")"
+          [[ "$pid" =~ ^[1-9][0-9]*$ && -r "/proc/$pid/environ" ]] \
+            || { echo 'UV_AUTOPILOT_PROCESS_UNREADABLE'; exit 71; }
+          runtime_python=/opt/bridge-school/school-autopilot/.venv/bin/python
+          [[ -x "$runtime_python" ]] \
+            || { echo 'UV_AUTOPILOT_RUNTIME_PYTHON_UNAVAILABLE'; exit 72; }
+          WORKER_PID="$pid" RUNTIME_KEY="$runtime_key" CANARY_KEY="$canary_key" \
+            IDLE_KEY="$idle_key" EXPECTED_PROJECT="$expected_project" \
+            EXPECTED_BRANCH="$expected_branch" EXPECTED_ENDPOINT="$expected_endpoint" \
+            FORBIDDEN_A="$forbidden_a" FORBIDDEN_B="$forbidden_b" \
+            "$runtime_python" - <<'PY'
+          from __future__ import annotations
+
+          import os
+          import re
+          import sys
+          import time
+          import urllib.parse
+          from pathlib import Path
+
+          import psycopg
+
+          ALLOWED_DSN_KEYS = {
+              'AUTOPILOT_DATABASE_URL',
+              'AUTOPILOT_NEON_DATABASE_URL',
+              'NEON_DATABASE_URL',
+              'DATABASE_URL',
+              'POSTGRES_URL',
+              'BRIDGE_AUTOPILOT_DATABASE_URL',
+          }
+
+          def fail(marker: str, code: int) -> None:
+              print(marker, flush=True)
+              raise SystemExit(code)
+
+          pid = os.environ['WORKER_PID']
+          runtime_key = os.environ['RUNTIME_KEY']
+          canary_key = os.environ['CANARY_KEY']
+          idle_key = os.environ['IDLE_KEY']
+          expected_project = os.environ['EXPECTED_PROJECT']
+          expected_branch = os.environ['EXPECTED_BRANCH']
+          expected_endpoint = os.environ['EXPECTED_ENDPOINT']
+          forbidden = {os.environ['FORBIDDEN_A'], os.environ['FORBIDDEN_B']}
+
+          entries = Path(f'/proc/{pid}/environ').read_bytes().split(b'\0')
+          modes: list[str] = []
+          candidates: set[str] = set()
+          for entry in entries:
+              if b'=' not in entry:
+                  continue
+              key_bytes, value_bytes = entry.split(b'=', 1)
+              key = key_bytes.decode('ascii', errors='ignore')
+              if key == 'AUTOPILOT_RUNTIME_MODE':
+                  modes.append(value_bytes.decode('utf-8', errors='strict'))
+              elif key in ALLOWED_DSN_KEYS and value_bytes.startswith((b'postgres://', b'postgresql://')):
+                  candidates.add(value_bytes.decode('utf-8', errors='strict'))
+          if modes != ['SHADOW']:
+              fail('UV_AUTOPILOT_LIVE_RUNTIME_MODE_INVALID', 73)
+          if not candidates:
+              fail('UV_AUTOPILOT_PROCESS_DSN_MISSING', 74)
+
+          options = '-c default_transaction_read_only=on -c statement_timeout=5000 -c lock_timeout=1000'
+          valid: list[str] = []
+          for dsn in sorted(candidates):
+              try:
+                  parsed = urllib.parse.urlsplit(dsn)
+              except ValueError:
+                  continue
+              host = (parsed.hostname or '').lower()
+              endpoint = host.split('.', 1)[0]
+              if not host.endswith('.neon.tech') or endpoint not in {
+                  expected_endpoint,
+                  expected_endpoint + '-pooler',
+              }:
+                  continue
+              try:
+                  with psycopg.connect(
+                      dsn,
+                      autocommit=True,
+                      connect_timeout=5,
+                      options=options,
+                      application_name='autopilot-uv-p1-readonly-monitor',
+                  ) as connection:
+                      with connection.cursor() as cursor:
+                          cursor.execute(
+                              "SELECT current_user, current_setting('neon.project_id', true), "
+                              "current_setting('neon.branch_id', true)"
+                          )
+                          user, project, branch = cursor.fetchone()
+              except psycopg.Error:
+                  continue
+              if branch in forbidden:
+                  continue
+              if (user, project, branch) == (
+                  'autopilot_runtime_login',
+                  expected_project,
+                  expected_branch,
+              ):
+                  valid.append(dsn)
+          if len(valid) != 1:
+              print(f'UV_AUTOPILOT_VALID_TEMP_DSN_COUNT={len(valid)}', flush=True)
+              fail('UV_AUTOPILOT_TEMP_DSN_NOT_FOUND_IN_LIVE_PROCESS', 75)
+
+          query = """
           WITH wanted(lane,task_key) AS (
-            VALUES ('runtime', :'runtime_key'), ('canary', :'canary_key'), ('idle', :'idle_key')
+            VALUES (%s::text,%s::text), (%s::text,%s::text), (%s::text,%s::text)
           )
           SELECT w.lane,
                  COALESCE(t.task_id::text,'NOT_FOUND'),
                  COALESCE(t.status,'PENDING_INGESTION'),
                  COALESCE(t.attempts,0),
                  COALESCE(t.terminal_reason_code,''),
-                 COALESCE((SELECT count(*) FROM autopilot.task_event e WHERE e.task_id=t.task_id),0),
-                 COALESCE((SELECT count(*) FROM autopilot.evidence v WHERE v.task_id=t.task_id AND v.retained),0)
-          FROM wanted w
-          LEFT JOIN autopilot.task t ON t.task_key=w.task_key
-          ORDER BY w.lane;
-          SQL
-          }
-          rows=''
-          for _ in $(seq 1 30); do
-            rows="$(query_tasks)"
-            missing="$(awk -F'|' '$2=="NOT_FOUND"{n++} END{print n+0}' <<<"$rows")"
-            (( missing == 0 )) && break
-            sleep 10
-          done
-          (( missing == 0 )) || { echo "UV_AUTOPILOT_DURABLE_TASKS_MISSING=$missing"; exit 67; }
-          echo 'UV_AUTOPILOT_LIVE_BRANCH_VERIFIED=PASS'
-          while IFS='|' read -r lane task_id status attempts reason events evidence; do
-            [[ "$lane" =~ ^(runtime|canary|idle)$ ]]
-            [[ "$task_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
-            [[ "$status" =~ ^(READY|RUNNING|WAITING_EXTERNAL|EVALUATING|DONE|FAILED_CLOSED|OWNER_REQUIRED|BUDGET_STOP)$ ]]
-            [[ "$attempts" =~ ^[0-9]+$ && "$events" =~ ^[0-9]+$ && "$evidence" =~ ^[0-9]+$ ]]
-            reason="$(tr -cd 'A-Za-z0-9._:-' <<<"$reason" | cut -c1-96)"
-            echo "UV_P1_TASK=$lane|$task_id|$status|$attempts|${reason:-none}|$events|$evidence"
-          done <<<"$rows"
+                 COALESCE(t.cost_actual_microusd,0),
+                 COALESCE(t.safe_summary_json->>'model_calls','unknown'),
+                 COALESCE(t.safe_summary_json->>'production_mutation','unknown')
+            FROM wanted w
+            LEFT JOIN autopilot.task_status t ON t.task_key=w.task_key
+           ORDER BY w.lane
+          """
+          parameters = (
+              'runtime', runtime_key,
+              'canary', canary_key,
+              'idle', idle_key,
+          )
+          with psycopg.connect(
+              valid[0],
+              autocommit=True,
+              connect_timeout=5,
+              options=options,
+              application_name='autopilot-uv-p1-readonly-monitor',
+          ) as connection:
+              for _ in range(30):
+                  with connection.cursor() as cursor:
+                      cursor.execute(query, parameters)
+                      rows = cursor.fetchall()
+                  missing = sum(task_id == 'NOT_FOUND' for _, task_id, *_ in rows)
+                  if missing == 0:
+                      break
+                  time.sleep(10)
+              else:
+                  print(f'UV_AUTOPILOT_DURABLE_TASKS_MISSING={missing}', flush=True)
+                  raise SystemExit(76)
+
+          print('UV_AUTOPILOT_LIVE_BRANCH_VERIFIED=PASS', flush=True)
+          for row in rows:
+              lane, task_id, status, attempts, reason, cost, model_calls, production_mutation = row
+              safe_reason = re.sub(r'[^A-Za-z0-9._:-]', '', str(reason))[:96] or 'none'
+              fields = (
+                  lane,
+                  task_id,
+                  status,
+                  attempts,
+                  safe_reason,
+                  cost,
+                  model_calls,
+                  production_mutation,
+              )
+              print('UV_P1_TASK=' + '|'.join(map(str, fields)), flush=True)
+          PY
+          echo 'UV_AUTOPILOT_SHADOW_ACTIVE=YES'
+          echo 'UV_AUTOPILOT_OBSERVER_ACTIVE=YES'
+          echo 'UV_AUTOPILOT_PRODUCTION_CANARY_DISABLED=YES'
+          echo 'UV_AUTOPILOT_ACTIVE_UNIT_ALLOWLIST=PASS'
+          echo 'UV_AUTOPILOT_LIVE_RUNTIME_MODE=SHADOW'
           echo 'UV_AUTOPILOT_DB_MUTATION=NO'
           echo 'ORACLE_LIFECYCLE_ACTION=NO'
           REMOTE
@@ -201,22 +309,34 @@ jobs:
           ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n bash -s -- '$RUNTIME_KEY' '$CANARY_KEY' '$IDLE_KEY' '$EXPECTED_TEMP_BRANCH_ID' '$EXPECTED_TEMP_ENDPOINT_ID' '$FORBIDDEN_BRANCH_ID_A' '$FORBIDDEN_BRANCH_ID_B'" \
+            "sudo -n bash -s -- '$RUNTIME_KEY' '$CANARY_KEY' '$IDLE_KEY' '$EXPECTED_PROJECT_ID' '$EXPECTED_TEMP_BRANCH_ID' '$EXPECTED_TEMP_ENDPOINT_ID' '$FORBIDDEN_BRANCH_ID_A' '$FORBIDDEN_BRANCH_ID_B'" \
             < "$remote" | tee "$RUNNER_TEMP/uv-p1-task-status.txt"
           grep -Fx 'UV_AUTOPILOT_LIVE_BRANCH_VERIFIED=PASS' "$RUNNER_TEMP/uv-p1-task-status.txt" >/dev/null
           grep -Fx 'UV_AUTOPILOT_DB_MUTATION=NO' "$RUNNER_TEMP/uv-p1-task-status.txt" >/dev/null
+          grep -Fx 'UV_AUTOPILOT_SHADOW_ACTIVE=YES' "$RUNNER_TEMP/uv-p1-task-status.txt" >/dev/null
+          grep -Fx 'UV_AUTOPILOT_OBSERVER_ACTIVE=YES' "$RUNNER_TEMP/uv-p1-task-status.txt" >/dev/null
+          grep -Fx 'UV_AUTOPILOT_PRODUCTION_CANARY_DISABLED=YES' "$RUNNER_TEMP/uv-p1-task-status.txt" >/dev/null
+          grep -Fx 'UV_AUTOPILOT_ACTIVE_UNIT_ALLOWLIST=PASS' "$RUNNER_TEMP/uv-p1-task-status.txt" >/dev/null
+          grep -Fx 'UV_AUTOPILOT_LIVE_RUNTIME_MODE=SHADOW' "$RUNNER_TEMP/uv-p1-task-status.txt" >/dev/null
           [[ "$(grep -c '^UV_P1_TASK=' "$RUNNER_TEMP/uv-p1-task-status.txt")" == 3 ]]
           for lane in runtime canary idle; do
             line="$(sed -nE "s/^UV_P1_TASK=${lane}\|/\0/p" "$RUNNER_TEMP/uv-p1-task-status.txt" | tail -n1)"
             value="${line#UV_P1_TASK=}"
-            IFS='|' read -r got task_id status attempts reason events evidence <<<"$value"
+            IFS='|' read -r got task_id status attempts reason cost model_calls production_mutation <<<"$value"
             [[ "$got" == "$lane" ]]
+            [[ "$task_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]]
+            [[ "$status" =~ ^(READY|RUNNING|WAITING_EXTERNAL|EVALUATING|DONE|FAILED_CLOSED|OWNER_REQUIRED|BUDGET_STOP|CANCELLED)$ ]]
+            [[ "$attempts" =~ ^[0-9]+$ && "$cost" =~ ^[0-9]+$ ]]
+            [[ "$model_calls" =~ ^([0-9]+|unknown)$ ]]
+            [[ "$production_mutation" =~ ^(true|false|unknown)$ ]]
+            reason="$(tr -cd 'A-Za-z0-9._:-' <<<"$reason" | cut -c1-96)"
             echo "${lane}_task_id=$task_id" >> "$GITHUB_OUTPUT"
             echo "${lane}_status=$status" >> "$GITHUB_OUTPUT"
             echo "${lane}_attempts=$attempts" >> "$GITHUB_OUTPUT"
-            echo "${lane}_reason=$reason" >> "$GITHUB_OUTPUT"
-            echo "${lane}_events=$events" >> "$GITHUB_OUTPUT"
-            echo "${lane}_evidence=$evidence" >> "$GITHUB_OUTPUT"
+            echo "${lane}_reason=${reason:-none}" >> "$GITHUB_OUTPUT"
+            echo "${lane}_cost=$cost" >> "$GITHUB_OUTPUT"
+            echo "${lane}_model_calls=$model_calls" >> "$GITHUB_OUTPUT"
+            echo "${lane}_production_mutation=$production_mutation" >> "$GITHUB_OUTPUT"
           done
 
       - name: Publish exact task receipt to issue 946
@@ -227,22 +347,25 @@ jobs:
           RUNTIME_TASK_ID: ${{ steps.tasks.outputs.runtime_task_id }}
           RUNTIME_STATUS: ${{ steps.tasks.outputs.runtime_status }}
           RUNTIME_ATTEMPTS: ${{ steps.tasks.outputs.runtime_attempts }}
-          RUNTIME_EVENTS: ${{ steps.tasks.outputs.runtime_events }}
-          RUNTIME_EVIDENCE: ${{ steps.tasks.outputs.runtime_evidence }}
+          RUNTIME_COST: ${{ steps.tasks.outputs.runtime_cost }}
+          RUNTIME_MODEL_CALLS: ${{ steps.tasks.outputs.runtime_model_calls }}
+          RUNTIME_PRODUCTION_MUTATION: ${{ steps.tasks.outputs.runtime_production_mutation }}
           CANARY_SHA: ${{ steps.refs.outputs.canary_sha }}
           CANARY_BRANCH: ${{ steps.refs.outputs.canary_branch }}
           CANARY_TASK_ID: ${{ steps.tasks.outputs.canary_task_id }}
           CANARY_STATUS: ${{ steps.tasks.outputs.canary_status }}
           CANARY_ATTEMPTS: ${{ steps.tasks.outputs.canary_attempts }}
-          CANARY_EVENTS: ${{ steps.tasks.outputs.canary_events }}
-          CANARY_EVIDENCE: ${{ steps.tasks.outputs.canary_evidence }}
+          CANARY_COST: ${{ steps.tasks.outputs.canary_cost }}
+          CANARY_MODEL_CALLS: ${{ steps.tasks.outputs.canary_model_calls }}
+          CANARY_PRODUCTION_MUTATION: ${{ steps.tasks.outputs.canary_production_mutation }}
           IDLE_SHA: ${{ steps.refs.outputs.idle_sha }}
           IDLE_BRANCH: ${{ steps.refs.outputs.idle_branch }}
           IDLE_TASK_ID: ${{ steps.tasks.outputs.idle_task_id }}
           IDLE_STATUS: ${{ steps.tasks.outputs.idle_status }}
           IDLE_ATTEMPTS: ${{ steps.tasks.outputs.idle_attempts }}
-          IDLE_EVENTS: ${{ steps.tasks.outputs.idle_events }}
-          IDLE_EVIDENCE: ${{ steps.tasks.outputs.idle_evidence }}
+          IDLE_COST: ${{ steps.tasks.outputs.idle_cost }}
+          IDLE_MODEL_CALLS: ${{ steps.tasks.outputs.idle_model_calls }}
+          IDLE_PRODUCTION_MUTATION: ${{ steps.tasks.outputs.idle_production_mutation }}
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -251,11 +374,11 @@ jobs:
 
           Task rows were read through the live Oracle Autopilot process after verifying its temporary Neon branch identity. The monitor performed no database mutation and no Oracle lifecycle action.
 
-          | lane | durable task UUID | state | exact head | owner | attempts / events / retained evidence |
+          | lane | durable task UUID | state | exact head | owner | attempts / cost µUSD / model calls / production mutation |
           |---|---|---|---|---|---|
-          | runtime | \`$RUNTIME_TASK_ID\` | \`$RUNTIME_STATUS\` | PR #997 \`$RUNTIME_SHA\` | \`$RUNTIME_BRANCH\` | $RUNTIME_ATTEMPTS / $RUNTIME_EVENTS / $RUNTIME_EVIDENCE |
-          | exactly-one-canary readiness | \`$CANARY_TASK_ID\` | \`$CANARY_STATUS\` | PR #1062 \`$CANARY_SHA\` | \`$CANARY_BRANCH\` | $CANARY_ATTEMPTS / $CANARY_EVENTS / $CANARY_EVIDENCE |
-          | Oracle idle guard | \`$IDLE_TASK_ID\` | \`$IDLE_STATUS\` | PR #1047 \`$IDLE_SHA\` | \`$IDLE_BRANCH\` | $IDLE_ATTEMPTS / $IDLE_EVENTS / $IDLE_EVIDENCE |
+          | runtime | \`$RUNTIME_TASK_ID\` | \`$RUNTIME_STATUS\` | PR #997 \`$RUNTIME_SHA\` | \`$RUNTIME_BRANCH\` | $RUNTIME_ATTEMPTS / $RUNTIME_COST / $RUNTIME_MODEL_CALLS / $RUNTIME_PRODUCTION_MUTATION |
+          | exactly-one-canary readiness | \`$CANARY_TASK_ID\` | \`$CANARY_STATUS\` | PR #1062 \`$CANARY_SHA\` | \`$CANARY_BRANCH\` | $CANARY_ATTEMPTS / $CANARY_COST / $CANARY_MODEL_CALLS / $CANARY_PRODUCTION_MUTATION |
+          | Oracle idle guard | \`$IDLE_TASK_ID\` | \`$IDLE_STATUS\` | PR #1047 \`$IDLE_SHA\` | \`$IDLE_BRANCH\` | $IDLE_ATTEMPTS / $IDLE_COST / $IDLE_MODEL_CALLS / $IDLE_PRODUCTION_MUTATION |
 
           - observed main: \`$MAIN_SHA\`
           - Autopilot Neon branch identity: **verified temporary branch**

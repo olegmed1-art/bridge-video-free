@@ -30,11 +30,42 @@ def test_monitor_rejects_missing_or_malformed_durable_task_ids() -> None:
 
     assert "runtime:997 canary:1062 idle:1047" in workflow
     assert "PR #1000" not in workflow
-    assert 'UV_AUTOPILOT_DURABLE_TASKS_MISSING=$missing' in workflow
-    assert "exit 67" in workflow
+    assert "UV_AUTOPILOT_DURABLE_TASKS_MISSING={missing}" in workflow
+    assert "raise SystemExit(76)" in workflow
     assert "[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}" in workflow
-    validation = workflow.split("echo 'UV_AUTOPILOT_LIVE_BRANCH_VERIFIED=PASS'", 1)[1]
+    validation = workflow.split("UV_AUTOPILOT_LIVE_BRANCH_VERIFIED=PASS", 1)[1]
     assert 'if [[ "$task_id" != NOT_FOUND ]]' not in validation
+
+
+def test_monitor_selects_exact_shadow_worker_and_allows_only_observer_peer() -> None:
+    workflow = _read(".github/workflows/autopilot-uv-p1-oracle-monitor.yml")
+
+    assert "worker=school-autopilot-shadow.service" in workflow
+    assert "observer=school-autopilot-online-observer.service" in workflow
+    assert "canary=school-autopilot-production-canary.service" in workflow
+    assert 'MainPID --value "$worker"' in workflow
+    assert "UV_AUTOPILOT_PRODUCTION_CANARY_DISABLED=YES" in workflow
+    assert "UV_AUTOPILOT_ACTIVE_UNIT_ALLOWLIST=PASS" in workflow
+    assert "UV_AUTOPILOT_LIVE_RUNTIME_MODE=SHADOW" in workflow
+    assert "modes != ['SHADOW']" in workflow
+    assert '[[ "$active_unit" == "$worker" || "$active_unit" == "$observer" ]]' in workflow
+    assert "systemctl list-units --all" not in workflow
+    assert "UV_AUTOPILOT_UNIT_COUNT" not in workflow
+
+
+def test_monitor_uses_runtime_psycopg_and_only_the_granted_status_view() -> None:
+    workflow = _read(".github/workflows/autopilot-uv-p1-oracle-monitor.yml")
+
+    assert "runtime_python=/opt/bridge-school/school-autopilot/.venv/bin/python" in workflow
+    assert "import psycopg" in workflow
+    assert "default_transaction_read_only=on" in workflow
+    assert "LEFT JOIN autopilot.task_status" in workflow
+    assert "FROM autopilot.task " not in workflow
+    assert "autopilot.task_event" not in workflow
+    assert "autopilot.evidence" not in workflow
+    assert "command -v psql" not in workflow
+    assert 'EXPECTED_PROJECT_ID: misty-poetry-18012774' in workflow
+    assert "safe_reason = re.sub" in workflow
 
 
 def test_runtime_gate_paginates_and_trusts_only_designated_reviewers() -> None:
