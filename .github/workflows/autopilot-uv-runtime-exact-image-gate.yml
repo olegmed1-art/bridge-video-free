@@ -3,8 +3,18 @@ name: Autopilot Universal Video runtime exact-image gate
 on:
   push:
     branches: [codex/oracle-autopilot-lite-shadow]
-    paths: ['.github/workflows/autopilot-uv-runtime-exact-image-gate.yml']
+    paths:
+      - '.github/workflows/autopilot-uv-runtime-exact-image-gate.yml'
+      - 'ops/verify_uv_runtime_pr_gate.sh'
+      - 'ops/oracle_universal_video_container_build_preflight.sh'
   workflow_dispatch:
+    inputs:
+      allow_oracle_image_build:
+        description: 'Explicitly authorize one non-activated Oracle image build'
+        required: true
+        type: choice
+        default: 'NO'
+        options: ['NO', 'YES']
 
 permissions:
   contents: read
@@ -18,7 +28,7 @@ concurrency:
 
 jobs:
   exact-image:
-    if: github.repository == 'olegmed1-art/bridge-video-free'
+    if: github.repository == 'olegmed1-art/bridge-video-free' && github.event_name == 'workflow_dispatch' && inputs.allow_oracle_image_build == 'YES'
     runs-on: ubuntu-24.04
     timeout-minutes: 70
     env:
@@ -45,37 +55,15 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          owner="${REPOSITORY%%/*}"; repo="${REPOSITORY##*/}"
-          api="https://api.github.com/repos/$REPOSITORY"
-          auth=(-H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json')
           final_head=''; final_branch=''; final_unresolved=-1; final_ci='UNKNOWN'; final_review='UNKNOWN'
           for _ in $(seq 1 36); do
-            pr="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/pulls/997")"
-            head="$(jq -er '.head.sha' <<<"$pr")"
-            branch="$(jq -er '.head.ref' <<<"$pr")"
-            draft="$(jq -r '.draft' <<<"$pr")"
-            [[ "$head" =~ ^[0-9a-f]{40}$ && "$branch" =~ ^[A-Za-z0-9._/-]{1,240}$ && "$draft" == true ]]
-            checks="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/commits/$head/check-runs?per_page=100")"
-            total="$(jq '.total_count' <<<"$checks")"
-            pending="$(jq '[.check_runs[] | select(.status != "completed")] | length' <<<"$checks")"
-            bad="$(jq '[.check_runs[] | select(.status == "completed" and (.conclusion | IN("success","neutral","skipped") | not))] | length' <<<"$checks")"
-            if (( total > 0 && pending == 0 && bad == 0 )); then final_ci=PASS; else final_ci=WAITING; fi
-            graphql=$(cat <<'GRAPHQL'
-          query($owner:String!,$repo:String!,$number:Int!){
-            repository(owner:$owner,name:$repo){
-              pullRequest(number:$number){
-                reviewThreads(first:100){nodes{isResolved}}
-                reviews(last:50){nodes{state submittedAt commit{oid} author{login}}}
-              }
-            }
-          }
-          GRAPHQL
-            )
-            review_json="$(gh api graphql -f query="$graphql" -F owner="$owner" -F repo="$repo" -F number=997)"
-            unresolved="$(jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length' <<<"$review_json")"
-            exact_reviews="$(jq --arg head "$head" '[.data.repository.pullRequest.reviews.nodes[] | select(.commit.oid == $head and (.author.login != "olegmed1-art") and (.state == "COMMENTED" or .state == "APPROVED"))] | length' <<<"$review_json")"
-            if (( unresolved == 0 && exact_reviews > 0 )); then final_review=PASS; else final_review=WAITING; fi
-            final_head="$head"; final_branch="$branch"; final_unresolved="$unresolved"
+            gate="$(UV_GATE_PR_NUMBER=997 bash ops/verify_uv_runtime_pr_gate.sh)"
+            final_head="$(sed -n 's/^head=//p' <<<"$gate")"
+            final_branch="$(sed -n 's/^branch=//p' <<<"$gate")"
+            final_ci="$(sed -n 's/^ci=//p' <<<"$gate")"
+            final_review="$(sed -n 's/^review=//p' <<<"$gate")"
+            final_unresolved="$(sed -n 's/^unresolved=//p' <<<"$gate")"
+            [[ "$final_head" =~ ^[0-9a-f]{40}$ && "$final_branch" =~ ^[A-Za-z0-9._/-]{1,240}$ ]]
             if [[ "$final_ci" == PASS && "$final_review" == PASS ]]; then break; fi
             sleep 60
           done
@@ -175,24 +163,52 @@ jobs:
             exit 80
           fi
 
-      - name: Prepare exact source and build non-activated image with import preflight
+      - name: Revalidate live gates immediately before image build
+        env:
+          EXPECTED_HEAD_SHA: ${{ steps.gate.outputs.head }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          gate="$(UV_GATE_PR_NUMBER=997 bash ops/verify_uv_runtime_pr_gate.sh)"
+          grep -Fx "head=$EXPECTED_HEAD_SHA" <<<"$gate" >/dev/null
+          grep -Fx 'ci=PASS' <<<"$gate" >/dev/null
+          grep -Fx 'review=PASS' <<<"$gate" >/dev/null
+          grep -Fx 'unresolved=0' <<<"$gate" >/dev/null
+          grep -Fx 'changes_requested=0' <<<"$gate" >/dev/null
+          echo 'UV_RUNTIME_LAST_SECOND_GATE=PASS'
+
+      - name: Prepare isolated source and build non-activated image with import preflight
+        id: build
         env:
           REF: ${{ steps.gate.outputs.head }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          git fetch --no-tags origin "$REF"
-          git cat-file -e "$REF^{commit}"
-          git show "$REF:ops/oracle_universal_video_run_command.sh" > "$RUNNER_TEMP/prepare.sh"
-          git show "$REF:ops/oracle_universal_video_container_install.sh" > "$RUNNER_TEMP/container-install.sh"
-          chmod 0700 "$RUNNER_TEMP/prepare.sh" "$RUNNER_TEMP/container-install.sh"
+          [[ "$REF" =~ ^[0-9a-f]{40}$ ]]
+          build_script="$RUNNER_TEMP/container-build-preflight.sh"
+          install -m 0700 ops/oracle_universal_video_container_build_preflight.sh "$build_script"
           ssh_base=(ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
-          "${ssh_base[@]}" "sudo -n env UNIVERSAL_VIDEO_GIT_REF='$REF' UNIVERSAL_VIDEO_ACTIVATE=0 UNIVERSAL_VIDEO_PREWARM_MODEL=0 UNIVERSAL_VIDEO_RUN_SMOKE=0 UNIVERSAL_VIDEO_SOURCE_ONLY=1 bash -s" \
-            < "$RUNNER_TEMP/prepare.sh" > "$RUNNER_TEMP/prepare.log" 2>&1
-          grep -Fx 'UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS' "$RUNNER_TEMP/prepare.log" >/dev/null
-          "${ssh_base[@]}" 'sudo -n env UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=0 UNIVERSAL_VIDEO_PREWARM_MODEL=0 bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_install.sh' \
-            > "$RUNNER_TEMP/container.log" 2>&1
-          receipt="$(grep -E '^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=[0-9a-f]{40} image_digest=sha256:[0-9a-f]{64} activated=0$' "$RUNNER_TEMP/container.log" | tail -n1)"
+          remote_script="/tmp/uv-container-build-preflight-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sh"
+          scp -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" \
+            -o ConnectTimeout=15 "$build_script" "$ORACLE_USER@$ORACLE_HOST:$remote_script"
+          "${ssh_base[@]}" "sudo -n env EXPECTED_COMMIT='$REF' BUILD_SCRIPT='$remote_script' REPO_URL='https://github.com/olegmed1-art/bridge-video-free.git' bash -s" \
+            > "$RUNNER_TEMP/container.log" 2>&1 <<'REMOTE'
+          set -Eeuo pipefail
+          [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$BUILD_SCRIPT" == /tmp/uv-container-build-preflight-* && -f "$BUILD_SCRIPT" && ! -L "$BUILD_SCRIPT" ]]
+          stage="$(mktemp -d /opt/bridge-school/.universal-video-image-build.XXXXXX)"
+          cleanup(){ rm -rf -- "$stage" "$BUILD_SCRIPT"; }
+          trap cleanup EXIT
+          git clone --quiet --no-tags --filter=blob:none "$REPO_URL" "$stage/source"
+          git -C "$stage/source" fetch --quiet --no-tags origin "$EXPECTED_COMMIT"
+          git -C "$stage/source" checkout --quiet --detach "$EXPECTED_COMMIT"
+          [[ "$(git -C "$stage/source" rev-parse HEAD)" == "$EXPECTED_COMMIT" ]]
+          env UNIVERSAL_VIDEO_BUILD_SOURCE_DIR="$stage/source" \
+            UNIVERSAL_VIDEO_EXPECTED_COMMIT="$EXPECTED_COMMIT" \
+            bash "$BUILD_SCRIPT"
+          REMOTE
+          receipt="$(grep -E '^UNIVERSAL_VIDEO_CONTAINER_BUILD_PREFLIGHT_PASS commit=[0-9a-f]{40} image_digest=sha256:[0-9a-f]{64} activated=0 lifecycle_action=0$' "$RUNNER_TEMP/container.log" | tail -n1)"
           [[ -n "$receipt" ]]
           commit="$(sed -nE 's/.* commit=([0-9a-f]{40}).*/\1/p' <<<"$receipt")"
           digest="$(sed -nE 's/.* image_digest=(sha256:[0-9a-f]{64}).*/\1/p' <<<"$receipt")"

@@ -5,7 +5,7 @@ DO $$
 DECLARE
     runtime_row record;
     replay_row record;
-    intake_row record;
+    canary_row record;
     idle_row record;
 BEGIN
     IF NOT has_function_privilege(
@@ -37,7 +37,7 @@ BEGIN
 
     SELECT * INTO runtime_row
       FROM autopilot.register_approved_uv_p1_ci(
-          'uv-p1-runtime-pr997-545ef013-20260901'
+          'uv-p1-runtime-pr997-17b74b86b309-20260902'
       );
     IF NOT runtime_row.created OR runtime_row.status <> 'READY' THEN
         RAISE EXCEPTION 'AUTOPILOT_UV_P1_CREATE_INVALID';
@@ -49,7 +49,7 @@ BEGIN
            AND goal_json = jsonb_build_object(
                'repository', 'olegmed1-art/bridge-video-free',
                'pr_number', 997,
-               'expected_head_sha', '545ef0135e3cfe436b918c3ec26f5e2b77500977',
+               'expected_head_sha', '17b74b86b30905f61a47e578b77d18c940691fed',
                'require_draft', true
            )
            AND current_step_key = 'github.ci.snapshot'
@@ -68,7 +68,7 @@ BEGIN
 
     SELECT * INTO replay_row
       FROM autopilot.register_approved_uv_p1_ci(
-          'uv-p1-runtime-pr997-545ef013-20260901'
+          'uv-p1-runtime-pr997-17b74b86b309-20260902'
       );
     IF replay_row.created OR replay_row.task_id <> runtime_row.task_id THEN
         RAISE EXCEPTION 'AUTOPILOT_UV_P1_REPLAY_FAILED';
@@ -76,7 +76,7 @@ BEGIN
 
     BEGIN
         PERFORM * FROM autopilot.register_approved_uv_p1_ci(
-            'uv-p1-intake-pr1000-5af0675a-20260901'
+            'uv-p1-canary-pr1062-164d0d509fa3-20260902'
         );
         RAISE EXCEPTION 'AUTOPILOT_UV_P1_ACTIVE_LIMIT_BYPASSED';
     EXCEPTION WHEN OTHERS THEN
@@ -89,11 +89,11 @@ BEGIN
            completed_at = now()
      WHERE task_id = runtime_row.task_id;
 
-    SELECT * INTO intake_row
+    SELECT * INTO canary_row
       FROM autopilot.register_approved_uv_p1_ci(
-          'uv-p1-intake-pr1000-5af0675a-20260901'
+          'uv-p1-canary-pr1062-164d0d509fa3-20260902'
       );
-    IF NOT intake_row.created THEN
+    IF NOT canary_row.created THEN
         RAISE EXCEPTION 'AUTOPILOT_UV_P1_SECOND_CREATE_FAILED';
     END IF;
 
@@ -101,11 +101,11 @@ BEGIN
        SET status = 'DONE',
            terminal_reason_code = 'SQL_TEST_TERMINAL',
            completed_at = now()
-     WHERE task_id = intake_row.task_id;
+     WHERE task_id = canary_row.task_id;
 
     SELECT * INTO idle_row
       FROM autopilot.register_approved_uv_p1_ci(
-          'uv-p1-idle-pr1047-621ab073-20260901'
+          'uv-p1-idle-pr1047-e8e71b569f81-20260902'
       );
     IF NOT idle_row.created THEN
         RAISE EXCEPTION 'AUTOPILOT_UV_P1_THIRD_CREATE_FAILED';

@@ -6,9 +6,18 @@ on:
     paths:
       - '.github/workflows/autopilot-uv-p1-register-v3.yml'
       - 'ops/autopilot/register_uv_p1_runtime.py'
+  workflow_dispatch:
+    inputs:
+      allow_temporary_registration:
+        description: 'Explicitly authorize temporary-Neon registration from Oracle'
+        required: true
+        type: choice
+        default: 'NO'
+        options: ['NO', 'YES']
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: autopilot-universal-video-p1-registration-v3
@@ -16,7 +25,7 @@ concurrency:
 
 jobs:
   register:
-    if: github.repository == 'olegmed1-art/bridge-video-free'
+    if: github.repository == 'olegmed1-art/bridge-video-free' && github.event_name == 'workflow_dispatch' && inputs.allow_temporary_registration == 'YES'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     environment: database-production
@@ -46,6 +55,27 @@ jobs:
             ops/autopilot/register_uv_p1_runtime.py
           echo 'AUTOPILOT_UV_P1_SOURCE_CONTRACT=PASS'
 
+      - name: Resolve live PR heads immediately before registration
+        id: refs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: olegmed1-art/bridge-video-free
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          auth=(-H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json')
+          api="https://api.github.com/repos/$REPOSITORY"
+          for spec in runtime:997 canary:1062 idle:1047; do
+            lane="${spec%%:*}"
+            pr="${spec##*:}"
+            payload="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/pulls/$pr")"
+            jq -e '.state == "open" and .draft == true' <<<"$payload" >/dev/null
+            head="$(jq -er '.head.sha' <<<"$payload")"
+            [[ "$head" =~ ^[0-9a-f]{40}$ ]]
+            echo "${lane}_head=$head" >> "$GITHUB_OUTPUT"
+          done
+          echo 'AUTOPILOT_UV_P1_LIVE_HEADS_RESOLVED=PASS'
+
       - name: Register and observe through runtime-only ingress
         id: register
         shell: bash
@@ -67,7 +97,7 @@ jobs:
             -o UserKnownHostsFile="$known" \
             -o ConnectTimeout=15 \
             "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n env PROJECT_ID='$PROJECT_ID' TEMP_BRANCH_ID='$TEMP_BRANCH_ID' PRODUCTION_BRANCH_ID='$PRODUCTION_BRANCH_ID' TEMP_ENDPOINT_ID='$TEMP_ENDPOINT_ID' /opt/bridge-school/school-autopilot/.venv/bin/python -" \
+            "sudo -n env PROJECT_ID='$PROJECT_ID' TEMP_BRANCH_ID='$TEMP_BRANCH_ID' PRODUCTION_BRANCH_ID='$PRODUCTION_BRANCH_ID' TEMP_ENDPOINT_ID='$TEMP_ENDPOINT_ID' LIVE_RUNTIME_HEAD_SHA='${{ steps.refs.outputs.runtime_head }}' LIVE_CANARY_HEAD_SHA='${{ steps.refs.outputs.canary_head }}' LIVE_IDLE_HEAD_SHA='${{ steps.refs.outputs.idle_head }}' /opt/bridge-school/school-autopilot/.venv/bin/python -" \
             < ops/autopilot/register_uv_p1_runtime.py | tee "$log"
           rc=${PIPESTATUS[0]}
           set -e
