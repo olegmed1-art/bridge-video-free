@@ -1,0 +1,260 @@
+#!/usr/bin/env python3
+"""Read-only collector for the Oracle idle STOP guard.
+
+No power or workload mutation exists in this module.  It samples every required
+workload family, emits one bounded telemetry object, then the separate
+``oracle_idle_guard`` module performs the tri-state decision.
+
+Collector failures are represented as UNKNOWN family states.  This is
+intentional: an unavailable source can never be interpreted as zero work.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import time
+from pathlib import Path
+from typing import Any, Callable
+
+MAX_AGE_SECONDS = int(os.getenv("ORACLE_IDLE_MAX_AGE_SECONDS", "120"))
+LAB_ENV = Path(os.getenv("ASSISTANT_LAB_ENV_FILE", "/opt/bridge-school/assistant-lab/assistant-lab.env"))
+VIDEO_DSN = Path(os.getenv("BRIDGE_VIDEO_QUEUE_DSN_FILE", "/opt/bridge-school/universal-video/secrets/video-queue-dsn"))
+LEASE_FILE = Path(os.getenv("ORACLE_HOST_LEASE_FILE", "/run/bridge-school/oracle-host-lease"))
+UV_STATUS = Path(os.getenv("UNIVERSAL_VIDEO_STATUS_PATH", "/run/bridge-school/universal-video-status.json"))
+UV_SPOOL = Path(os.getenv("UNIVERSAL_VIDEO_SPOOL_ROOT", "/opt/bridge-school/universal-video/spool"))
+
+
+def _now() -> float:
+    return time.time()
+
+
+def _entry(state: str, observed_at: float, **evidence: Any) -> dict[str, Any]:
+    value: dict[str, Any] = {"state": state, "observed_at": observed_at}
+    if evidence:
+        value["evidence"] = evidence
+    return value
+
+
+def _unknown(observed_at: float, reason: str) -> dict[str, Any]:
+    return _entry("UNKNOWN", observed_at, reason=reason)
+
+
+def _read_assignment(path: Path, key: str) -> str | None:
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith(key + "="):
+                value = line.split("=", 1)[1].strip()
+                return value or None
+    except OSError:
+        return None
+    return None
+
+
+def _read_secret(path: Path) -> str | None:
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None
+        value = path.read_text(encoding="utf-8").strip()
+        return value or None
+    except OSError:
+        return None
+
+
+def _db_snapshot(observed_at: float) -> dict[str, dict[str, Any]]:
+    names = (
+        "assistant_lab_job",
+        "assistant_lab_control_command",
+        "assistant_lab_research_job",
+        "assistant_lab_research_children",
+        "ben",
+        "bulk",
+        "other_allowed_workloads",
+    )
+    dsn = _read_assignment(LAB_ENV, "ASSISTANT_LAB_DATABASE_URL")
+    if not dsn:
+        return {name: _unknown(observed_at, "assistant_lab_dsn_unavailable") for name in names}
+    try:
+        import psycopg  # type: ignore
+    except Exception:
+        return {name: _unknown(observed_at, "psycopg_unavailable") for name in names}
+
+    query = """
+    WITH active_jobs AS (
+      SELECT kind, source, provenance_json
+      FROM assistant_lab.job
+      WHERE status IN ('QUEUED','RUNNING')
+    ), active_research AS (
+      SELECT research_id, child_job_id
+      FROM assistant_lab.research_job
+      WHERE stage IN ('QUEUED','ACCEPTED','RUNNING','CHECKPOINTED','VALIDATING')
+    )
+    SELECT
+      clock_timestamp(),
+      (SELECT count(*) FROM active_jobs),
+      (SELECT count(*) FROM assistant_lab.control_command WHERE status IN ('QUEUED','RUNNING')),
+      (SELECT count(*) FROM active_research),
+      (SELECT count(*) FROM active_research r JOIN assistant_lab.job j ON j.job_id=r.child_job_id
+         WHERE j.status IN ('QUEUED','RUNNING')),
+      (SELECT count(*) FROM active_jobs WHERE kind='BEN_COMPUTE'),
+      (SELECT count(*) FROM active_jobs WHERE lower(coalesce(source,'')) LIKE '%bulk%'
+          OR lower(coalesce(provenance_json->>'workload_family',''))='bulk'),
+      (SELECT count(*) FROM active_jobs WHERE kind <> 'BEN_COMPUTE'
+          AND NOT (lower(coalesce(source,'')) LIKE '%bulk%'
+          OR lower(coalesce(provenance_json->>'workload_family',''))='bulk'))
+    """
+    try:
+        with psycopg.connect(dsn, connect_timeout=8, application_name="oracle-idle-collector") as conn:
+            with conn.cursor() as cur:
+                cur.execute(query)
+                row = cur.fetchone()
+        if row is None or len(row) != 8:
+            raise RuntimeError("invalid assistant snapshot")
+        server_time = row[0].timestamp()
+        counts = [int(v) for v in row[1:]]
+        if any(v < 0 for v in counts):
+            raise RuntimeError("negative count")
+    except Exception:
+        return {name: _unknown(observed_at, "assistant_lab_query_failed") for name in names}
+
+    labels = names
+    return {
+        name: _entry("BUSY" if count else "IDLE", server_time, active_count=count)
+        for name, count in zip(labels, counts)
+    }
+
+
+def _video_neon(observed_at: float) -> dict[str, Any]:
+    dsn = _read_secret(VIDEO_DSN)
+    if not dsn:
+        return _unknown(observed_at, "video_queue_dsn_unavailable")
+    try:
+        import psycopg  # type: ignore
+        with psycopg.connect(dsn, connect_timeout=8, application_name="oracle-idle-video") as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT clock_timestamp(), count(*) FROM video_queue.job "
+                    "WHERE status IN ('PENDING_CANARY','QUEUED','LEASED')"
+                )
+                row = cur.fetchone()
+        if row is None or len(row) != 2:
+            raise RuntimeError("invalid video snapshot")
+        count = int(row[1])
+        if count < 0:
+            raise RuntimeError("negative count")
+        return _entry("BUSY" if count else "IDLE", row[0].timestamp(), active_count=count)
+    except Exception:
+        return _unknown(observed_at, "video_queue_query_failed")
+
+
+def _spool(observed_at: float) -> dict[str, Any]:
+    try:
+        if UV_SPOOL.is_symlink() or not UV_SPOOL.is_dir():
+            return _unknown(observed_at, "uv_spool_unavailable")
+        busy_files: list[str] = []
+        for name in ("inbox", "running"):
+            directory = UV_SPOOL / name
+            if directory.is_symlink() or not directory.is_dir():
+                return _unknown(observed_at, f"uv_spool_{name}_unavailable")
+            for path in directory.iterdir():
+                if path.is_symlink() or not path.is_file():
+                    return _unknown(observed_at, f"uv_spool_{name}_invalid_entry")
+                if path.suffix == ".json":
+                    busy_files.append(f"{name}/{path.name}")
+        return _entry("BUSY" if busy_files else "IDLE", observed_at, active_count=len(busy_files))
+    except OSError:
+        return _unknown(observed_at, "uv_spool_read_failed")
+
+
+def _systemctl_state(service: str) -> str | None:
+    try:
+        result = subprocess.run(
+            ["systemctl", "is-active", service], capture_output=True, text=True, timeout=5
+        )
+        value = result.stdout.strip()
+        return value or None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _resident(observed_at: float) -> dict[str, Any]:
+    source_state = _systemctl_state("universal-video.service")
+    container_state = _systemctl_state("universal-video-container.service")
+    if source_state is None or container_state is None:
+        return _unknown(observed_at, "resident_service_state_unavailable")
+    if source_state not in {"active", "inactive", "failed"} or container_state not in {"active", "inactive", "failed"}:
+        return _unknown(observed_at, "resident_service_state_transitional")
+    if source_state == "failed" or container_state == "failed":
+        return _unknown(observed_at, "resident_service_failed")
+    if source_state == "active" and container_state == "active":
+        return _unknown(observed_at, "conflicting_resident_services")
+    if "active" not in {source_state, container_state}:
+        return _entry("IDLE", observed_at, source_service=source_state, container_service=container_state)
+
+    try:
+        if UV_STATUS.is_symlink() or not UV_STATUS.is_file():
+            return _unknown(observed_at, "resident_status_missing")
+        status = json.loads(UV_STATUS.read_text(encoding="utf-8"))
+        if not isinstance(status, dict) or status.get("schema") != "universal-video-resident-status-v2":
+            return _unknown(observed_at, "resident_status_invalid")
+        status_time = float(status.get("observed_at_unix"))
+        active_jobs = status.get("active_jobs")
+        if not isinstance(active_jobs, list):
+            return _unknown(observed_at, "resident_active_jobs_invalid")
+        return _entry("BUSY" if active_jobs else "IDLE", status_time, active_count=len(active_jobs))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return _unknown(observed_at, "resident_status_read_failed")
+
+
+def _lease(observed_at: float) -> dict[str, Any]:
+    try:
+        if not LEASE_FILE.exists() and not LEASE_FILE.is_symlink():
+            return _entry("IDLE", observed_at, lease_present=False)
+        if LEASE_FILE.is_symlink() or not LEASE_FILE.is_file():
+            return _unknown(observed_at, "operator_lease_unreadable")
+        text = LEASE_FILE.read_text(encoding="utf-8").strip()
+        match = re.fullmatch(r"expires_at_epoch=([0-9]{10,})", text)
+        if not match:
+            return _unknown(observed_at, "operator_lease_invalid")
+        expires = int(match.group(1))
+        if expires <= observed_at:
+            return _unknown(observed_at, "operator_lease_stale")
+        return _entry("BUSY", observed_at, lease_present=True, expires_at_epoch=expires)
+    except OSError:
+        return _unknown(observed_at, "operator_lease_read_failed")
+
+
+def collect() -> dict[str, Any]:
+    observed = _now()
+    families = _db_snapshot(observed)
+    families["universal_video_neon"] = _video_neon(observed)
+    families["universal_video_spool"] = _spool(observed)
+    families["universal_video_resident"] = _resident(observed)
+    families["operator_maintenance_lease"] = _lease(observed)
+
+    # Cross-source contradiction: a fresh resident claims zero active jobs while
+    # the local running spool positively contains work.  Do not choose either
+    # side; mark the telemetry contradictory so the evaluator returns UNKNOWN.
+    resident = families["universal_video_resident"]
+    spool = families["universal_video_spool"]
+    if resident.get("state") == "IDLE" and spool.get("state") == "BUSY":
+        resident["conflict"] = True
+
+    return {
+        "schema": "oracle-idle-telemetry-v1",
+        "generated_at": observed,
+        "max_age_seconds": MAX_AGE_SECONDS,
+        "families": families,
+    }
+
+
+def main() -> int:
+    print(json.dumps(collect(), sort_keys=True, separators=(",", ":")))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
