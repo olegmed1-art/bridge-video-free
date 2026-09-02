@@ -89,6 +89,7 @@ def _inputs(tmp_path: Path, *, status_v2: bool = True):
             "resident_id": "source",
             "process_id": 1234,
             "process_started_at_unix": 990.0,
+            "process_start_ticks": 987654,
             "process_nonce": "b" * 32,
             "job_attestations": [attestation],
         }

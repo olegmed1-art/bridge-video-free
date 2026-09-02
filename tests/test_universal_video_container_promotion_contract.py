@@ -74,6 +74,7 @@ def test_promotion_requires_a_fresh_status_from_the_new_resident() -> None:
     assert "UV_CONTAINER_PROMOTION_STATUS_STALE" in SCRIPT
     assert SCRIPT.count("float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])") == 2
     assert SCRIPT.count("x.get('resident_id') == 'container'") == 2
+    assert SCRIPT.count("type(x.get('process_start_ticks')) is int") == 2
     assert SCRIPT.count("re.fullmatch(r'[0-9a-f]{32}', x['process_nonce'])") == 2
     assert "import json,os,re" in SCRIPT
 

@@ -223,6 +223,7 @@ assert x.get('resident_id') == 'container'
 assert type(x.get('process_id')) is int and x['process_id'] > 0
 assert float(x.get('process_started_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])
 assert float(x.get('process_started_at_unix') or 0) <= float(x.get('observed_at_unix') or 0)
+assert type(x.get('process_start_ticks')) is int and x['process_start_ticks'] > 0
 assert isinstance(x.get('process_nonce'), str) and re.fullmatch(r'[0-9a-f]{32}', x['process_nonce'])
 PY
   then
@@ -247,6 +248,7 @@ assert x.get('resident_id') == 'container'
 assert type(x.get('process_id')) is int and x['process_id'] > 0
 assert float(x.get('process_started_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])
 assert float(x.get('process_started_at_unix') or 0) <= float(x.get('observed_at_unix') or 0)
+assert type(x.get('process_start_ticks')) is int and x['process_start_ticks'] > 0
 assert isinstance(x.get('process_nonce'), str) and re.fullmatch(r'[0-9a-f]{32}', x['process_nonce'])
 PY
 

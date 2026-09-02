@@ -105,6 +105,27 @@ pid_descends_from(){
   [[ "$child" == "$ancestor" ]]
 }
 
+process_start_ticks(){
+  local process_id="$1"
+  [[ "$process_id" =~ ^[1-9][0-9]*$ ]] || return 1
+  PROCESS_STAT="/proc/$process_id/stat" python3 - <<'PY'
+import os
+from pathlib import Path
+
+raw = Path(os.environ["PROCESS_STAT"]).read_text(encoding="utf-8")
+tail = raw.rsplit(")", 1)
+if len(tail) != 2:
+    raise SystemExit(1)
+fields = tail[1].split()
+if len(fields) <= 19:
+    raise SystemExit(1)
+value = int(fields[19])
+if value <= 0:
+    raise SystemExit(1)
+print(value)
+PY
+}
+
 resident_worker_pid(){
   local service="$1" root_pid worker_pid
   if [[ "$service" == "$SOURCE_SERVICE" ]]; then
@@ -133,7 +154,7 @@ restored_service_ready(){
 }
 
 resident_status_ready(){
-  local service="$1" started_unix="$2" worker_pid="$3" expected_commit expected_resident expected_process_id image_id
+  local service="$1" started_unix="$2" worker_pid="$3" expected_commit expected_resident expected_process_id expected_process_start_ticks image_id
   [[ -f "$STATUS_FILE" && ! -L "$STATUS_FILE" ]] || return 1
   [[ "$worker_pid" =~ ^[1-9][0-9]*$ ]] || return 1
   if [[ "$service" == "$SOURCE_SERVICE" ]]; then
@@ -149,9 +170,12 @@ resident_status_ready(){
     return 1
   fi
   [[ "$expected_process_id" =~ ^[1-9][0-9]*$ ]] || return 1
+  expected_process_start_ticks="$(process_start_ticks "$worker_pid" 2>/dev/null || true)"
+  [[ "$expected_process_start_ticks" =~ ^[1-9][0-9]*$ ]] || return 1
   [[ "$expected_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
   STATUS_PATH="$STATUS_FILE" EXPECTED_COMMIT="$expected_commit" \
     EXPECTED_RESIDENT="$expected_resident" EXPECTED_PROCESS_ID="$expected_process_id" \
+    EXPECTED_PROCESS_START_TICKS="$expected_process_start_ticks" \
     STARTED_UNIX="$started_unix" \
     python3 - <<'PY' >/dev/null 2>&1
 import json
@@ -173,6 +197,8 @@ if not (
     and value.get("resident_id") == os.environ["EXPECTED_RESIDENT"]
     and type(value.get("process_id")) is int
     and value["process_id"] == int(os.environ["EXPECTED_PROCESS_ID"])
+    and type(value.get("process_start_ticks")) is int
+    and value["process_start_ticks"] == int(os.environ["EXPECTED_PROCESS_START_TICKS"])
     and float(value.get("process_started_at_unix") or 0) >= int(os.environ["STARTED_UNIX"])
     and float(value.get("process_started_at_unix") or 0) <= float(value.get("observed_at_unix") or 0)
     and isinstance(value.get("process_nonce"), str)

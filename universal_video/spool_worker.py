@@ -155,6 +155,23 @@ def _runtime_attestation(
     }
 
 
+def _process_start_ticks(process_id: int) -> int:
+    """Return Linux boot-relative start ticks for one exact process."""
+
+    stat_path = Path("/proc/self/stat") if process_id == os.getpid() else Path(f"/proc/{process_id}/stat")
+    raw = stat_path.read_text(encoding="utf-8")
+    tail = raw.rsplit(")", 1)
+    if len(tail) != 2:
+        raise RuntimeError("resident process stat is malformed")
+    fields = tail[1].split()
+    if len(fields) <= 19:
+        raise RuntimeError("resident process stat is incomplete")
+    value = int(fields[19])
+    if value <= 0:
+        raise RuntimeError("resident process start ticks are invalid")
+    return value
+
+
 def write_resident_status(
     spool_root: Path,
     status_path: Path,
@@ -162,6 +179,7 @@ def write_resident_status(
     resident_id: str | None = None,
     process_id: int | None = None,
     process_started_at_unix: float | None = None,
+    process_start_ticks: int | None = None,
     process_nonce: str | None = None,
 ) -> dict[str, Any]:
     """Publish a fresh v2 status from resident-owned spool receipts."""
@@ -175,11 +193,14 @@ def write_resident_status(
         raise RuntimeError("resident identity is unavailable")
     pid = os.getpid() if process_id is None else process_id
     started_at = time.time() if process_started_at_unix is None else process_started_at_unix
+    start_ticks = _process_start_ticks(pid) if process_start_ticks is None else process_start_ticks
     nonce = secrets.token_hex(16) if process_nonce is None else process_nonce
     if type(pid) is not int or pid <= 0:
         raise RuntimeError("resident process id is invalid")
     if isinstance(started_at, bool) or not isinstance(started_at, (int, float)):
         raise RuntimeError("resident process start is invalid")
+    if type(start_ticks) is not int or start_ticks <= 0:
+        raise RuntimeError("resident process start ticks are invalid")
     if not re.fullmatch(r"^[0-9a-f]{32}$", nonce):
         raise RuntimeError("resident process nonce is invalid")
     active_jobs = sorted(path.stem for path in paths["running"].glob("*.json"))[:32]
@@ -210,6 +231,7 @@ def write_resident_status(
         "resident_id": resident,
         "process_id": pid,
         "process_started_at_unix": float(started_at),
+        "process_start_ticks": start_ticks,
         "process_nonce": nonce,
         "job_attestations": attestations,
     }
@@ -530,11 +552,13 @@ def run_forever(spool_root: Path, poll_seconds: float) -> None:
     resident_id = os.getenv("UNIVERSAL_VIDEO_RESIDENT_ID", "").strip().lower()
     process_id = os.getpid()
     process_started_at_unix = time.time()
+    process_start_ticks = _process_start_ticks(process_id)
     process_nonce = secrets.token_hex(16)
     status_identity = {
         "resident_id": resident_id,
         "process_id": process_id,
         "process_started_at_unix": process_started_at_unix,
+        "process_start_ticks": process_start_ticks,
         "process_nonce": process_nonce,
     }
     # Both resident implementations share this spool. Serialize startup

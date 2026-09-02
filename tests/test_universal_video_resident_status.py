@@ -86,6 +86,7 @@ def test_resident_status_copies_only_worker_bound_attestations(monkeypatch, tmp_
     assert status["resident_id"] == "source"
     assert status["process_id"] > 0
     assert status["process_started_at_unix"] <= status["observed_at_unix"]
+    assert status["process_start_ticks"] > 0
     assert len(status["process_nonce"]) == 32
     assert status["job_attestations"] == [attestation]
     assert json.loads(status_path.read_text(encoding="utf-8")) == status
@@ -122,4 +123,5 @@ def test_resident_publishes_status_before_accepting_first_job() -> None:
     first_process = run_forever.index("processed = process_one(spool_root)")
     assert first_status < first_process
     assert "process_nonce = secrets.token_hex(16)" in run_forever
+    assert "process_start_ticks = _process_start_ticks(process_id)" in run_forever
     assert '"resident_id": resident_id' in run_forever

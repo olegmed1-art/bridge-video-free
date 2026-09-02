@@ -37,7 +37,8 @@ ALLOWED_REQUEST_FIELDS = frozenset({
 ALLOWED_STATUS_FIELDS = frozenset({
     "schema", "instance_state", "active_jobs", "observed_at_unix",
     "installed_runtime_commit", "resident_id", "process_id",
-    "process_started_at_unix", "process_nonce", "job_attestations",
+    "process_started_at_unix", "process_start_ticks", "process_nonce",
+    "job_attestations",
 })
 ALLOWED_ATTESTATION_FIELDS = frozenset({
     "schema", "job_id", "request_commit", "requested_runtime_commit",
@@ -160,6 +161,9 @@ def _validate_status(status: dict[str, Any], *, now: float) -> dict[str, Any]:
     process_started_number = float(process_started)
     if not math.isfinite(process_started_number) or process_started_number > observed_number:
         raise EvidenceExportError("invalid resident process start")
+    process_start_ticks = status.get("process_start_ticks")
+    if type(process_start_ticks) is not int or process_start_ticks <= 0:
+        raise EvidenceExportError("invalid resident process start ticks")
     process_nonce = str(status.get("process_nonce") or "")
     if not re.fullmatch(r"^[0-9a-f]{32}$", process_nonce):
         raise EvidenceExportError("invalid resident process nonce")
@@ -203,6 +207,7 @@ def _validate_status(status: dict[str, Any], *, now: float) -> dict[str, Any]:
         "resident_id": resident_id,
         "process_id": process_id,
         "process_started_at_unix": process_started_number,
+        "process_start_ticks": process_start_ticks,
         "process_nonce": process_nonce,
         "job_attestations": list(raw),
     }

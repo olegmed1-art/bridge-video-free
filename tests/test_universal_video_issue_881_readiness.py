@@ -413,6 +413,9 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert 'awk \'$1 == "NSpid:" {print $NF}\' "/proc/$worker_pid/status"' in script
     assert 'EXPECTED_PROCESS_ID="$expected_process_id"' in script
     assert 'value["process_id"] == int(os.environ["EXPECTED_PROCESS_ID"])' in script
+    assert 'expected_process_start_ticks="$(process_start_ticks "$worker_pid"' in script
+    assert 'EXPECTED_PROCESS_START_TICKS="$expected_process_start_ticks"' in script
+    assert 'value["process_start_ticks"] == int(os.environ["EXPECTED_PROCESS_START_TICKS"])' in script
     assert 'float(value.get("process_started_at_unix") or 0) >= int(os.environ["STARTED_UNIX"])' in script
     assert 're.fullmatch(r"[0-9a-f]{32}", value["process_nonce"])' in script
     assert "RESTORE_STABLE_SECONDS" in script
