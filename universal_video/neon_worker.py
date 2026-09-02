@@ -14,6 +14,7 @@ from bridge_worker_3_1_free import stable_job_id
 from .drive_adapter import access_token, file_metadata
 from .runtime_preflight import validate_video_runtime
 from .terminal_evidence import (
+    TerminalEvidenceError,
     build_terminal_evidence,
     source_identity_from_claim,
     validate_terminal_output,
@@ -232,14 +233,18 @@ def process_claim(
     outcome = "REVIEW_READY"
     error_code: str | None = None
     initial_source: dict[str, Any] | None = None
+    trusted_terminal_processor = processor is stable_review_processor
 
     with _Heartbeat(database_url, claim, worker_key) as heartbeat:
         with _processing_timeout():
             try:
-                # Supported custom processors cannot bypass the same pre-run
-                # identity gate used by the production processor.
+                # Custom processors remain useful for failure/recovery tests,
+                # but they may not supply terminal success evidence. Only the
+                # production processor performs the required live Drive reads.
                 initial_source = verify_claimed_source(claim, access_token())
                 candidate = dict(processor(claim))
+                if not trusted_terminal_processor:
+                    raise TerminalEvidenceError("UV_TERMINAL_CUSTOM_PROCESSOR_FORBIDDEN")
                 validate_terminal_output(claim, candidate)
                 output.update(candidate)
                 # A processor may not override fail-closed lifecycle fields.
