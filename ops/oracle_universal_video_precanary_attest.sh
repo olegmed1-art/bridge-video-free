@@ -4,6 +4,7 @@ set -Eeuo pipefail
 BASE_DIR="${UNIVERSAL_VIDEO_DIR:-/opt/bridge-school/universal-video}"
 SOURCE_DIR="${UNIVERSAL_VIDEO_SOURCE_DIR:-/opt/bridge-school/universal-video-src}"
 STATUS_DIR="${UNIVERSAL_VIDEO_STATUS_DIR:-/run/bridge-school}"
+STATUS_FILE="$STATUS_DIR/universal-video-status.json"
 IMAGE_REPO="${UNIVERSAL_VIDEO_IMAGE_REPO:-bridge-school/universal-video}"
 SOURCE_SERVICE="${UNIVERSAL_VIDEO_SERVICE_NAME:-universal-video.service}"
 CONTAINER_SERVICE="universal-video-container.service"
@@ -131,6 +132,40 @@ restored_service_ready(){
   [[ "$worker_pid" =~ ^[1-9][0-9]*$ ]]
 }
 
+resident_status_ready(){
+  local service="$1" started_unix="$2" expected_commit image_id
+  [[ -f "$STATUS_FILE" && ! -L "$STATUS_FILE" ]] || return 1
+  if [[ "$service" == "$SOURCE_SERVICE" ]]; then
+    expected_commit="$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || true)"
+  elif [[ "$service" == "$CONTAINER_SERVICE" ]]; then
+    image_id="$(docker inspect --format '{{.Image}}' universal-video-container 2>/dev/null || true)"
+    expected_commit="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_id" 2>/dev/null || true)"
+  else
+    return 1
+  fi
+  [[ "$expected_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+  STATUS_PATH="$STATUS_FILE" EXPECTED_COMMIT="$expected_commit" STARTED_UNIX="$started_unix" \
+    python3 - <<'PY' >/dev/null 2>&1
+import json
+import os
+from pathlib import Path
+
+path = Path(os.environ["STATUS_PATH"])
+if path.stat().st_size > 1024 * 1024:
+    raise SystemExit(1)
+value = json.loads(path.read_text(encoding="utf-8"))
+if not (
+    isinstance(value, dict)
+    and value.get("schema") == "universal-video-resident-status-v2"
+    and value.get("instance_state") == "RUNNING"
+    and isinstance(value.get("active_jobs"), list)
+    and float(value.get("observed_at_unix") or 0) >= int(os.environ["STARTED_UNIX"])
+    and value.get("installed_runtime_commit") == os.environ["EXPECTED_COMMIT"]
+):
+    raise SystemExit(1)
+PY
+}
+
 record_restore_failure(){
   restore_failures+=("$1")
 }
@@ -147,7 +182,7 @@ service_failure_snapshot(){
 }
 
 restore_service(){
-  local service="$1" target_state="$2" attempt state worker_pid last_worker_pid="" stable=0
+  local service="$1" target_state="$2" attempt state worker_pid last_worker_pid="" stable=0 started_unix
   if [[ "$target_state" == inactive ]]; then
     state="$(service_state "$service")"
     case "$state" in
@@ -165,6 +200,7 @@ restore_service(){
   fi
 
   systemctl reset-failed "$service" >/dev/null 2>&1 || true
+  started_unix="$(date +%s)"
   if ! systemctl start "$service" >/dev/null 2>&1; then
     service_failure_snapshot "$service"
     return 1
@@ -180,7 +216,7 @@ restore_service(){
           last_worker_pid="$worker_pid"
           stable=1
         fi
-        if (( stable >= RESTORE_STABLE_SECONDS )); then
+        if (( stable >= RESTORE_STABLE_SECONDS )) && resident_status_ready "$service" "$started_unix"; then
           printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE service=%s target=active observed=active worker_pid=%s stable_seconds=%s result=PASS\n' \
             "$service" "$worker_pid" "$stable"
           return 0
