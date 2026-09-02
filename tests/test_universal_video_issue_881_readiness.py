@@ -351,6 +351,10 @@ def test_external_precanary_runs_same_repo_and_compares_install_digest():
         "github.event.pull_request.head.repo.full_name == github.repository"
     )
     assert workflow.count(condition) == 1
+    assert workflow.splitlines().count(
+        "        if: github.event_name == 'workflow_dispatch'"
+    ) == 3
+    assert "if: github.event_name == 'workflow_dispatch' && always()" in workflow
     assert 'attested_digest="$(sed' in workflow
     assert '"$attested_digest" == "$installed_digest"' in workflow
     assert "198-2v3JBlNQobdsPYQQWzrrCqQ1zBZOI" in workflow
