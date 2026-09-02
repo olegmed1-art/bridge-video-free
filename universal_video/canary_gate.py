@@ -37,14 +37,14 @@ class CanaryGateError(RuntimeError):
 
 
 def validate_runtime_sha(value: str) -> str:
-    value = str(value or "").strip().lower()
+    value = str(value or "").strip()
     if not _SHA_RE.fullmatch(value):
         raise CanaryGateError("runtime SHA must be exactly 40 lowercase hex characters")
     return value
 
 
 def validate_image_digest(value: str) -> str:
-    value = str(value or "").strip().lower()
+    value = str(value or "").strip()
     if not _IMAGE_DIGEST_RE.fullmatch(value):
         raise CanaryGateError("image digest must be an immutable sha256:<64-hex> value")
     return value

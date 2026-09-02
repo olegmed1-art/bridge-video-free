@@ -54,8 +54,8 @@ jobs:
           set -euo pipefail
           first_from="$(awk '/^FROM / {print; exit}' deploy/oracle-universal-video/Dockerfile)"
           test "$first_from" = "FROM $PYTHON_BASE"
-          grep -F 'ARG RUNTIME_SHA' deploy/oracle-universal-video/Dockerfile
-          grep -F 'org.opencontainers.image.revision="${RUNTIME_SHA}"' deploy/oracle-universal-video/Dockerfile
+          grep -F 'ARG UNIVERSAL_VIDEO_SOURCE_COMMIT' deploy/oracle-universal-video/Dockerfile
+          grep -F 'org.opencontainers.image.revision="${UNIVERSAL_VIDEO_SOURCE_COMMIT}"' deploy/oracle-universal-video/Dockerfile
           ! grep -Eiq 'bridge-school/universal-video:(latest|main)([^A-Za-z0-9_.-]|$)' .github/workflows/uv-ready-one-canary.yml
 
       - name: Install minimal test dependencies
@@ -140,6 +140,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          DECLARE
+            required_role text;
+          BEGIN
+            FOREACH required_role IN ARRAY ARRAY[
+              'bridge_school_reader',
+              'bridge_school_app',
+              'bridge_school_worker'
+            ] LOOP
+              IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = required_role) THEN
+                EXECUTE format('CREATE ROLE %I NOLOGIN', required_role);
+              END IF;
+            END LOOP;
+          END
+          $$;
+          SQL
           psql -v ON_ERROR_STOP=1 -f database/migrations/0056_universal_video_queue.sql
           psql -v ON_ERROR_STOP=1 -f database/tests/uv_ready_one_canary_metadata_only.sql | tee recovery-evidence.log
           grep -F 'ROLLBACK' recovery-evidence.log
@@ -181,6 +198,7 @@ jobs:
   exact-oracle-image:
     name: Exact Oracle image and source metadata (no media)
     needs: [contract-tests, recovery-tests]
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -253,7 +271,7 @@ jobs:
             'FROM python:3.12-slim-bookworm@sha256:ff054eb6f4094b8d8e0af937ac9108bbb8544d1fc69d0dc34d5713d9ffbc0e9e'
 
           docker build \
-            --build-arg "RUNTIME_SHA=$runtime_sha" \
+            --build-arg "UNIVERSAL_VIDEO_SOURCE_COMMIT=$runtime_sha" \
             --tag "$image_tag" \
             --file deploy/oracle-universal-video/Dockerfile \
             .

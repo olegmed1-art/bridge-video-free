@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -12,6 +13,29 @@ from universal_video.canary_gate import CanaryGateError
 RUNTIME_SHA = "a" * 40
 IMAGE_DIGEST = "sha256:" + "b" * 64
 JOB_ID = "11111111-1111-1111-1111-111111111111"
+
+
+def test_pr_only_workflow_provisions_roles_and_uses_the_dockerfile_runtime_arg() -> None:
+    root = Path(__file__).resolve().parents[1]
+    workflow = (root / ".github/workflows/uv-ready-one-canary.yml").read_text(
+        encoding="utf-8"
+    )
+    dockerfile = (root / "deploy/oracle-universal-video/Dockerfile").read_text(
+        encoding="utf-8"
+    )
+
+    first_from = next(line for line in dockerfile.splitlines() if line.startswith("FROM "))
+    assert first_from == (
+        "FROM python:3.12-slim-bookworm@sha256:"
+        "ff054eb6f4094b8d8e0af937ac9108bbb8544d1fc69d0dc34d5713d9ffbc0e9e"
+    )
+    for role in ("bridge_school_reader", "bridge_school_app", "bridge_school_worker"):
+        assert f"'{role}'" in workflow
+    assert "CREATE ROLE %I NOLOGIN" in workflow
+    assert '--build-arg "UNIVERSAL_VIDEO_SOURCE_COMMIT=$runtime_sha"' in workflow
+    assert "ARG UNIVERSAL_VIDEO_SOURCE_COMMIT" in workflow
+    exact_oracle = workflow.split("  exact-oracle-image:", 1)[1]
+    assert "if: github.event_name == 'workflow_dispatch'" in exact_oracle.split("    steps:", 1)[0]
 
 
 def isolated_job():
