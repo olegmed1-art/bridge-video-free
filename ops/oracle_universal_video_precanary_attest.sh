@@ -13,6 +13,8 @@ PREPARE_SCRIPT="${UNIVERSAL_VIDEO_PREPARE_SCRIPT:-}"
 BUILD_IMAGE="${UNIVERSAL_VIDEO_PRECANARY_BUILD_IMAGE:-0}"
 MIN_FREE_KB="${UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB:-5242880}"
 RECLAIM_ROOT_CACHE="${UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE:-0}"
+RECOVER_CONTAINER_FROM_RUN="${UNIVERSAL_VIDEO_RECOVER_CONTAINER_ACTIVE_FROM_RUN:-}"
+RESTORE_TIMEOUT_SECONDS="${UNIVERSAL_VIDEO_RESTORE_TIMEOUT_SECONDS:-45}"
 ENV_FILE="${UNIVERSAL_VIDEO_CONTAINER_ENV_FILE:-}"
 PERSISTENT_ENV_FILE="$BASE_DIR/universal-video-container.env"
 if [[ -z "$ENV_FILE" ]]; then
@@ -35,6 +37,10 @@ die(){ printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$BUILD_IMAGE" =~ ^[01]$ ]] || die 'UNIVERSAL_VIDEO_PRECANARY_BUILD_IMAGE must be 0 or 1'
 [[ "$RECLAIM_ROOT_CACHE" =~ ^[01]$ ]] || die 'UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE must be 0 or 1'
 [[ "$MIN_FREE_KB" =~ ^[0-9]+$ && "$MIN_FREE_KB" -gt 0 ]] || die 'invalid build free-space threshold'
+[[ "$RESTORE_TIMEOUT_SECONDS" =~ ^[0-9]+$ && "$RESTORE_TIMEOUT_SECONDS" -ge 5 && "$RESTORE_TIMEOUT_SECONDS" -le 180 ]] \
+  || die 'invalid resident restore timeout'
+[[ -z "$RECOVER_CONTAINER_FROM_RUN" || "$RECOVER_CONTAINER_FROM_RUN" =~ ^[0-9]{8,20}$ ]] \
+  || die 'invalid bounded prior-run recovery reference'
 case "$SOURCE_DIR" in
   /opt/bridge-school/*) ;;
   *) die 'source checkout path is outside the bounded bridge-school root' ;;
@@ -53,6 +59,7 @@ source_state_before=""
 container_state_before=""
 source_was_active=0
 container_was_active=0
+container_recovery_requested=0
 window_started=0
 lock_held=0
 source_had_original=0
@@ -60,17 +67,59 @@ source_candidate_path_owned=0
 source_backup_dir=""
 resident_image_id=""
 declare -a added_runtime_masks=()
+declare -a restore_failures=()
 
 service_state(){
   systemctl show "$1" --property=ActiveState --value 2>/dev/null || true
 }
 
+record_restore_failure(){
+  restore_failures+=("$1")
+}
+
+service_failure_snapshot(){
+  local service="$1" state result code status restarts
+  state="$(service_state "$service")"
+  result="$(systemctl show "$service" --property=Result --value 2>/dev/null || true)"
+  code="$(systemctl show "$service" --property=ExecMainCode --value 2>/dev/null || true)"
+  status="$(systemctl show "$service" --property=ExecMainStatus --value 2>/dev/null || true)"
+  restarts="$(systemctl show "$service" --property=NRestarts --value 2>/dev/null || true)"
+  printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE service=%s result=FAILED state=%s unit_result=%s exec_code=%s exec_status=%s restarts=%s\n' \
+    "$service" "${state:-unknown}" "${result:-unknown}" "${code:-unknown}" "${status:-unknown}" "${restarts:-unknown}" >&2
+}
+
 restore_service(){
-  local service="$1" should_be_active="$2"
-  if [[ "$should_be_active" == 1 ]]; then
-    systemctl start "$service" >/dev/null 2>&1 || return 1
-    systemctl is-active --quiet "$service" || return 1
+  local service="$1" should_be_active="$2" attempt state
+  if [[ "$should_be_active" != 1 ]]; then
+    state="$(service_state "$service")"
+    case "$state" in
+      inactive|failed)
+        printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE service=%s target=inactive observed=%s result=PASS\n' "$service" "$state"
+        return 0
+        ;;
+      *)
+        service_failure_snapshot "$service"
+        return 1
+        ;;
+    esac
   fi
+
+  systemctl reset-failed "$service" >/dev/null 2>&1 || true
+  if ! systemctl start "$service" >/dev/null 2>&1; then
+    service_failure_snapshot "$service"
+    return 1
+  fi
+  for (( attempt=0; attempt<RESTORE_TIMEOUT_SECONDS; attempt++ )); do
+    state="$(service_state "$service")"
+    if [[ "$state" == active ]]; then
+      printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE service=%s target=active observed=active result=PASS\n' "$service"
+      return 0
+    fi
+    [[ "$state" == failed ]] && break
+    sleep 1
+  done
+  service_failure_snapshot "$service"
+  return 1
 }
 
 restore_source_checkout(){
@@ -84,38 +133,58 @@ restore_source_checkout(){
     mv -- "$source_backup_dir" "$SOURCE_DIR" || return 1
     source_backup_dir=""
   fi
+  printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE component=source_checkout result=PASS\n'
   return 0
 }
 
 cleanup(){
-  local rc=$? service cleanup_failed=0
+  local rc=$? service source_after container_after
   trap - EXIT INT TERM
   if [[ "$window_started" == 1 ]]; then
     # Keep the exclusive workload fence while claim paths are quiet, candidate
     # files are removed, and the exact pre-existing source tree is restored.
-    systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE" >/dev/null 2>&1 || cleanup_failed=1
+    systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE" >/dev/null 2>&1 \
+      || record_restore_failure service_stop
     if [[ "$BUILD_IMAGE" == 1 ]]; then
       if [[ "$ENV_FILE" == "$BASE_DIR/universal-video-container-candidate.env" ]]; then
-        rm -f -- "$ENV_FILE" >/dev/null 2>&1 || cleanup_failed=1
+        rm -f -- "$ENV_FILE" >/dev/null 2>&1 \
+          || record_restore_failure candidate_env_remove
       else
-        cleanup_failed=1
+        record_restore_failure candidate_env_scope
       fi
-      restore_source_checkout || cleanup_failed=1
+      restore_source_checkout || record_restore_failure source_checkout
     fi
     for service in "${added_runtime_masks[@]}"; do
-      systemctl unmask --runtime "$service" >/dev/null 2>&1 || cleanup_failed=1
+      systemctl unmask --runtime "$service" >/dev/null 2>&1 \
+        || record_restore_failure "unmask_${service}"
     done
+    systemctl daemon-reload >/dev/null 2>&1 \
+      || record_restore_failure daemon_reload
+    if [[ "$container_was_active" == 1 && -n "$resident_image_id" ]]; then
+      docker image inspect "$resident_image_id" >/dev/null 2>&1 \
+        || record_restore_failure resident_image_missing
+    fi
     if [[ "$lock_held" == 1 ]]; then
-      flock --unlock 9 >/dev/null 2>&1 || cleanup_failed=1
+      flock --unlock 9 >/dev/null 2>&1 \
+        || record_restore_failure workload_unlock
       exec 9>&-
       lock_held=0
     fi
-    restore_service "$SOURCE_SERVICE" "$source_was_active" || cleanup_failed=1
-    restore_service "$CONTAINER_SERVICE" "$container_was_active" || cleanup_failed=1
-  fi
-  if (( cleanup_failed != 0 && rc == 0 )); then
-    printf 'ERROR: failed to restore pre-attestation resident state\n' >&2
-    rc=1
+    restore_service "$SOURCE_SERVICE" "$source_was_active" \
+      || record_restore_failure source_service
+    restore_service "$CONTAINER_SERVICE" "$container_was_active" \
+      || record_restore_failure container_service
+
+    source_after="$(service_state "$SOURCE_SERVICE")"
+    container_after="$(service_state "$CONTAINER_SERVICE")"
+    if [[ "${#restore_failures[@]}" -eq 0 ]]; then
+      printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service=%s container_service=%s prior_container_recovery=%s\n' \
+        "$source_after" "$container_after" "$container_recovery_requested"
+    else
+      printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=%s source_service=%s container_service=%s\n' \
+        "$(IFS=,; echo "${restore_failures[*]}")" "${source_after:-unknown}" "${container_after:-unknown}" >&2
+      if [[ "$rc" == 0 ]]; then rc=1; fi
+    fi
   fi
   exit "$rc"
 }
@@ -182,6 +251,15 @@ assert_known_state "$SOURCE_SERVICE" "$source_state_before"
 assert_known_state "$CONTAINER_SERVICE" "$container_state_before"
 [[ "$source_state_before" == active ]] && source_was_active=1
 [[ "$container_state_before" == active ]] && container_was_active=1
+if [[ -n "$RECOVER_CONTAINER_FROM_RUN" && "$container_state_before" != active ]]; then
+  # A prior exact external run recorded container_service_before=active and
+  # then failed only while restoring that state. This bounded one-shot input
+  # asks the next exact run to restore the recorded state after all gates.
+  container_was_active=1
+  container_recovery_requested=1
+  printf 'UNIVERSAL_VIDEO_PRECANARY_RECOVERY prior_run=%s observed_container=%s target_container=active\n' \
+    "$RECOVER_CONTAINER_FROM_RUN" "$container_state_before"
+fi
 if [[ "$container_was_active" == 1 ]]; then
   [[ -f "$PERSISTENT_ENV_FILE" && ! -L "$PERSISTENT_ENV_FILE" ]] \
     || die 'active container resident environment is unsafe or missing'
