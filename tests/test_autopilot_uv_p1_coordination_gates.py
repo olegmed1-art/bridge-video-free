@@ -125,6 +125,21 @@ def test_registration_restores_0309_and_applies_only_forward_upgrade_before_ingr
     assert "database/scripts/migrate.sh" not in apply_body
     assert "current_setting('neon.branch_id', true)" in apply_body
     assert '[[ "$post" == "t|$EXPECTED_0313_SHA256|t|t|t|t|t|t|t|t|f" ]]' in apply_body
+    preflight = apply_body.index('pre="$(psql')
+    head_recheck = apply_body.index("revalidate_pr_heads", preflight)
+    migration_write = apply_body.index(
+        '-f database/migrations/0313_autopilot_uv_p1_allowlist_upgrade.sql',
+        head_recheck,
+    )
+    ledger_write = apply_body.index("UPDATE public.schema_migration", migration_write)
+    assert preflight < head_recheck < migration_write < ledger_write
+    assert "AUTOPILOT_UV_P1_PRE_MIGRATION_HEADS_VERIFIED=PASS" in apply_body
+    for binding in (
+        '"runtime:997:$EXPECTED_RUNTIME_HEAD"',
+        '"canary:1062:$EXPECTED_CANARY_HEAD"',
+        '"idle:1047:$EXPECTED_IDLE_HEAD"',
+    ):
+        assert binding in apply_body
     assert "github.event_name == 'workflow_dispatch'" in workflow
     assert "MIGRATION_APPLIED_BY_THIS_RUN" in workflow
 

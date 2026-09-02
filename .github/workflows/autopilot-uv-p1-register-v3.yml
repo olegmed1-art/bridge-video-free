@@ -155,9 +155,31 @@ jobs:
         id: migration
         env:
           DATABASE_URL: ${{ steps.neon.outputs.database_url }}
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_RUNTIME_HEAD: ${{ steps.refs.outputs.runtime_head }}
+          EXPECTED_CANARY_HEAD: ${{ steps.refs.outputs.canary_head }}
+          EXPECTED_IDLE_HEAD: ${{ steps.refs.outputs.idle_head }}
         shell: bash
         run: |
           set -Eeuo pipefail
+          revalidate_pr_heads(){
+            local spec lane pr expected payload live
+            local auth=(-H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json')
+            local api="https://api.github.com/repos/olegmed1-art/bridge-video-free"
+            for spec in \
+              "runtime:997:$EXPECTED_RUNTIME_HEAD" \
+              "canary:1062:$EXPECTED_CANARY_HEAD" \
+              "idle:1047:$EXPECTED_IDLE_HEAD"; do
+              IFS=: read -r lane pr expected <<<"$spec"
+              [[ "$expected" =~ ^[0-9a-f]{40}$ ]]
+              payload="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/pulls/$pr")"
+              jq -e '.state == "open" and .draft == true' <<<"$payload" >/dev/null
+              live="$(jq -er '.head.sha' <<<"$payload")"
+              [[ "$live" == "$expected" ]] \
+                || { echo "AUTOPILOT_UV_P1_PRE_MIGRATION_HEAD_DRIFT lane=$lane pr=$pr" >&2; return 1; }
+            done
+            echo 'AUTOPILOT_UV_P1_PRE_MIGRATION_HEADS_VERIFIED=PASS'
+          }
           [[ "$(git hash-object database/migrations/0309_autopilot_uv_p1_bounded_ingress.sql)" == "$EXPECTED_0309_BLOB" ]]
           [[ "$(sha256sum database/migrations/0309_autopilot_uv_p1_bounded_ingress.sql | awk '{print $1}')" == "$EXPECTED_0309_SHA256" ]]
           [[ "$(git hash-object database/migrations/0313_autopilot_uv_p1_allowlist_upgrade.sql)" == "$EXPECTED_0313_BLOB" ]]
@@ -189,6 +211,9 @@ jobs:
           [[ "$migration_0309" == t && "$checksum_0309" == "$EXPECTED_0309_SHA256" ]]
           [[ "$can_create_role" == f && "$can_create_objects" == t ]]
           applied=NO
+          # This is the final primary-source comparison before either forward
+          # migration or checksum-ledger mutation reaches temporary Neon.
+          revalidate_pr_heads
           if [[ "$migration_0313" == f ]]; then
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
               -f database/migrations/0313_autopilot_uv_p1_allowlist_upgrade.sql >/dev/null
