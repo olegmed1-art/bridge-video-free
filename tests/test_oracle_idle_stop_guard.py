@@ -636,6 +636,39 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
         self.assertIn("idle_stderr", workflow)
         self.assertNotIn("schedule:", workflow)
 
+    def test_finalizer_rechecks_autopilot_service_at_final_idle_boundary(self) -> None:
+        workflow = FINALIZER.read_text(encoding="utf-8")
+        final_step = workflow.index(
+            "Stop exact instance only after fresh exact IDLE authorization"
+        )
+        final_gate = workflow.index("FINAL_AUTOPILOT_SERVICE_GATE", final_step)
+        active = workflow.index(
+            "systemctl is-active school-autopilot-shadow.service", final_gate
+        )
+        enabled = workflow.index(
+            "systemctl is-enabled school-autopilot-shadow.service", final_gate
+        )
+        inactive_check = workflow.index(
+            '[[ "$active" == inactive && "$enabled" == disabled ]]',
+            final_gate,
+        )
+        idle_probe = workflow.index(
+            "sudo -n /usr/local/sbin/oracle-idle-state", final_gate
+        )
+        authorizer = workflow.index(
+            "authorization=\"$(python3 ops/oracle_idle_stop_guard.py", idle_probe
+        )
+        stop = workflow.index(
+            "oci compute instance action --instance-id "
+            "\"$OCI_INSTANCE_OCID\" --action STOP",
+            authorizer,
+        )
+        self.assertLess(active, enabled)
+        self.assertLess(enabled, inactive_check)
+        self.assertLess(inactive_check, idle_probe)
+        self.assertLess(idle_probe, authorizer)
+        self.assertLess(authorizer, stop)
+
     def test_instance_power_stop_uses_exact_authorizer(self) -> None:
         workflow = INSTANCE_POWER.read_text(encoding="utf-8")
         self.assertNotIn(
