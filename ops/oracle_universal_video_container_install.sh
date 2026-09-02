@@ -16,10 +16,24 @@ MIN_FREE_KB="${UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB:-8388608}"
 BUILD_TIMEOUT_SECONDS="${UNIVERSAL_VIDEO_CONTAINER_BUILD_TIMEOUT_SECONDS:-1200}"
 IMAGE_REPO="${UNIVERSAL_VIDEO_IMAGE_REPO:-bridge-school/universal-video}"
 STATUS_DIR="${UNIVERSAL_VIDEO_STATUS_DIR:-/run/bridge-school}"
+PERSISTENT_ENV_FILE="$BASE_DIR/universal-video-container.env"
+CANDIDATE_ENV_FILE="$BASE_DIR/universal-video-container-candidate.env"
+ENV_FILE="$PERSISTENT_ENV_FILE"
+[[ "$ACTIVATE" == 1 ]] || ENV_FILE="$CANDIDATE_ENV_FILE"
+CANDIDATE_ENV_READY=0
 
 die(){ printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 log(){ printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
 runtime_fail(){ printf '{"error_code":"%s","status":"FAILED"}\n' "$1" >&2; exit 1; }
+cleanup_candidate_env(){
+  local rc=$?
+  trap - EXIT
+  if [[ "$ACTIVATE" == 0 && "$CANDIDATE_ENV_READY" != 1 ]]; then
+    rm -f -- "$CANDIDATE_ENV_FILE"
+  fi
+  exit "$rc"
+}
+trap cleanup_candidate_env EXIT
 service_exec_status(){
   local property="$1" prefix="$2" status index=0
   while IFS= read -r status; do
@@ -50,6 +64,8 @@ service_status(){
 command -v docker >/dev/null || die 'docker is unavailable; install and attest Docker separately'
 docker info >/dev/null || die 'docker daemon is unavailable'
 id "$USER_NAME" >/dev/null || die 'universal-video Unix user missing'
+[[ ! -L "$ENV_FILE" ]] || die 'container environment path is unsafe'
+if [[ "$ACTIVATE" == 0 ]]; then rm -f -- "$CANDIDATE_ENV_FILE"; fi
 
 commit="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
 [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || die 'cannot resolve source commit'
@@ -175,7 +191,8 @@ if [[ "$ACTIVATE" == 1 ]]; then
     || die 'protected video queue credential content invalid'
   log 'Protected video queue credential validated for activation'
 fi
-cat >"$BASE_DIR/universal-video-container.env" <<EOF
+env_tmp="$(mktemp "$BASE_DIR/.universal-video-container.env.XXXXXX")"
+cat >"$env_tmp" <<EOF
 UNIVERSAL_VIDEO_SOURCE_COMMIT=$commit
 UNIVERSAL_VIDEO_CONTAINER_UID=$uid
 UNIVERSAL_VIDEO_CONTAINER_GID=$gid
@@ -193,8 +210,9 @@ UNIVERSAL_VIDEO_WHISPER_MODEL=${UNIVERSAL_VIDEO_WHISPER_MODEL:-small}
 UNIVERSAL_VIDEO_ASR_THREADS=${UNIVERSAL_VIDEO_ASR_THREADS:-6}
 UNIVERSAL_VIDEO_POLL_SECONDS=${UNIVERSAL_VIDEO_POLL_SECONDS:-2}
 EOF
-chown root:root "$BASE_DIR/universal-video-container.env"
-chmod 0640 "$BASE_DIR/universal-video-container.env"
+chown root:root "$env_tmp"
+chmod 0640 "$env_tmp"
+mv -fT -- "$env_tmp" "$ENV_FILE"
 
 log 'Refresh ephemeral host status mount immediately before readiness'
 [[ ! -L "$STATUS_DIR" ]] || die "unsafe or missing mount: $STATUS_DIR"
@@ -205,7 +223,7 @@ log 'Run container-only readiness gate by captured image ID; no job is submitted
 [[ "$(docker image inspect --format '{{.Id}}' "$image")" == "$image_id" ]] || die 'container image tag changed before readiness'
 [[ "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_id")" == "$commit" ]] || die 'captured image revision changed before readiness'
 docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g --user="$uid:$gid" \
-  --env-file "$BASE_DIR/universal-video-container.env" \
+  --env-file "$ENV_FILE" \
   --mount "type=bind,src=$BASE_DIR/spool,dst=/var/lib/universal-video/spool" \
   --mount "type=bind,src=$BASE_DIR/output,dst=/var/lib/universal-video/output" \
   --mount "type=bind,src=$BASE_DIR/media,dst=/var/lib/universal-video/media" \
@@ -213,10 +231,10 @@ docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g --user="$uid:$
   --mount "type=bind,src=$STATUS_DIR,dst=/run/bridge-school" \
   --mount "type=bind,src=$BASE_DIR/secrets,dst=/run/secrets,readonly" "$image_id" true
 
-install -m 0644 -o root -g root "$SOURCE_DIR/deploy/oracle-universal-video/$SERVICE_NAME" "/etc/systemd/system/$SERVICE_NAME"
-systemctl daemon-reload
-systemd-analyze verify "/etc/systemd/system/$SERVICE_NAME" >/dev/null
 if [[ "$ACTIVATE" == 1 ]]; then
+  install -m 0644 -o root -g root "$SOURCE_DIR/deploy/oracle-universal-video/$SERVICE_NAME" "/etc/systemd/system/$SERVICE_NAME"
+  systemctl daemon-reload
+  systemd-analyze verify "/etc/systemd/system/$SERVICE_NAME" >/dev/null
   systemctl is-active --quiet "$OLD_SERVICE" && systemctl stop "$OLD_SERVICE"
   if ! systemctl enable "$SERVICE_NAME" || ! systemctl restart "$SERVICE_NAME"; then
     service_status
@@ -227,4 +245,5 @@ if [[ "$ACTIVATE" == 1 ]]; then
     runtime_fail UV_CONTAINER_SERVICE_INACTIVE
   fi
 fi
+CANDIDATE_ENV_READY=1
 printf 'UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=%s image_digest=%s activated=%s\n' "$commit" "$image_id" "$ACTIVATE"
