@@ -5,13 +5,13 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 SHARED_FENCE = "oracle-instance-workload-mutation"
 POWER_GROUP = (
-    "group: ${{ github.event_name == 'workflow_dispatch' && "
+    "group: ${{ (github.event_name == 'workflow_dispatch' && inputs.action != 'status') && "
     "'oracle-instance-workload-mutation' || (github.event_name == "
     "'issue_comment' && github.actor == github.repository_owner && "
-    "contains(fromJSON('[\"/oracle-instance status\",\"/oracle-instance start\","
+    "contains(fromJSON('[\"/oracle-instance start\","
     "\"/oracle-instance stop\"]'), github.event.comment.body)) && "
     "'oracle-instance-workload-mutation' || "
-    "format('oracle-instance-power-noop-{0}', github.run_id) }}"
+    "format('oracle-instance-power-readonly-{0}', github.run_id) }}"
 )
 
 
@@ -32,6 +32,7 @@ def test_all_submit_bridge_oracle_producers_preserve_each_request() -> None:
         assert "github.event_name == 'pull_request'" in text, name
         assert "github.event.pull_request.number" in text, name
         assert "cancel-in-progress: false" in text, name
+        assert "flock -w 180 /run/lock/oracle-workload-mutation.lock" in text, name
 
 
 def test_direct_mass_and_operator_producers_share_stop_fence() -> None:
@@ -52,6 +53,16 @@ def test_stop_consumer_uses_same_non_cancelling_fence() -> None:
     group_lines = [line.strip() for line in power.splitlines() if line.strip().startswith("group:")]
     assert group_lines == [POWER_GROUP]
     assert "cancel-in-progress: false" in power
+    assert "flock -n 9 || exit 73" in power
+    assert "holder_state" in power
+    assert "STOP REFUSED: host fence was lost" in power
+
+
+def test_read_only_status_cannot_replace_pending_mutation() -> None:
+    power = _workflow_text("oracle-instance-power.yml")
+    assert "inputs.action != 'status'" in power
+    assert """fromJSON('["/oracle-instance start","/oracle-instance stop"]')""" in power
+    assert "oracle-instance-power-readonly-{0}" in power
 
 
 def test_research_job_production_canaries_share_stop_fence() -> None:

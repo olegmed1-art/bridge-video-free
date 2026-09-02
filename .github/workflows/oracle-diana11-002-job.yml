@@ -142,7 +142,7 @@ jobs:
           }
 
           [[ "$MODE" == bridge ]] || { echo 'unexpected mode after validation' >&2; exit 64; }
-          submit_cmd='sudo -n /usr/local/sbin/universal-video-diana11-002 submit-bridge'
+          submit_cmd='sudo -n flock -w 180 /run/lock/oracle-workload-mutation.lock /usr/local/sbin/universal-video-diana11-002 submit-bridge'
           status_cmd='sudo -n /usr/local/sbin/universal-video-diana11-002 status-bridge'
           label='UV-DIANA11-DURABLE-002 / bridge_lesson'
 

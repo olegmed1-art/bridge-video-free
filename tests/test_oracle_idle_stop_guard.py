@@ -716,7 +716,7 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
         workflow = INSTANCE_POWER.read_text(encoding="utf-8")
         final_step = workflow.index("Stop exact instance only with IDLE proof")
         final_probe = workflow.index(
-            "bridge-school-oracle-final-idle-proof-${GITHUB_RUN_ID}", final_step
+            "bridge-school-oracle-final-idle-fence-${GITHUB_RUN_ID}", final_step
         )
         authorizer = workflow.index(
             "authorization=\"$(python3 ops/oracle_idle_stop_guard.py", final_probe
@@ -745,7 +745,7 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
         workflow = INSTANCE_POWER.read_text(encoding="utf-8")
         final_step = workflow.index("Stop exact instance only with IDLE proof")
         final_probe = workflow.index(
-            "bridge-school-oracle-final-idle-proof-${GITHUB_RUN_ID}", final_step
+            "bridge-school-oracle-final-idle-fence-${GITHUB_RUN_ID}", final_step
         )
         first_authorizer = workflow.index(
             "authorization=\"$(python3 ops/oracle_idle_stop_guard.py", final_probe

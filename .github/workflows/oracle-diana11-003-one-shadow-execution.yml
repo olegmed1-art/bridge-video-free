@@ -263,7 +263,7 @@ jobs:
           PY
           }
           raw=''; rc=0
-          if raw="$("${ssh_cmd[@]}" 'sudo -n /usr/local/sbin/universal-video-diana11-003 submit-bridge' 2>&1)"; then rc=0; else rc=$?; fi
+          if raw="$("${ssh_cmd[@]}" 'sudo -n flock -w 180 /run/lock/oracle-workload-mutation.lock /usr/local/sbin/universal-video-diana11-003 submit-bridge' 2>&1)"; then rc=0; else rc=$?; fi
           filter_status "$raw" > "$RUNNER_TEMP/uv003-submit-safe.txt"
           cat "$RUNNER_TEMP/uv003-submit-safe.txt"
           [[ "$rc" == 0 ]]
