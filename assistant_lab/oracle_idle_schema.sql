@@ -17,10 +17,12 @@ AS $$
         (SELECT count(*) FROM assistant_lab.control_command WHERE status IN ('QUEUED', 'RUNNING'))::bigint;
 $$;
 
-CREATE OR REPLACE FUNCTION assistant_lab.oracle_idle_snapshot_v2()
+DROP FUNCTION IF EXISTS assistant_lab.oracle_idle_snapshot_v2();
+CREATE OR REPLACE FUNCTION assistant_lab.oracle_idle_snapshot_v2(p_stale_after_seconds integer DEFAULT 900)
 RETURNS TABLE(
     observed_at timestamptz,
     active_jobs bigint,
+    stale_running_jobs bigint,
     active_control_commands bigint,
     active_research_jobs bigint,
     active_research_children bigint,
@@ -34,7 +36,8 @@ STABLE
 SET search_path = pg_catalog, assistant_lab
 AS $$
     WITH active_jobs_cte AS (
-        SELECT job_id, kind, source, provenance_json
+        SELECT job_id, kind, source, provenance_json, status,
+               coalesce(heartbeat_at, claimed_at, updated_at) AS lease_observed_at
           FROM assistant_lab.job
          WHERE status IN ('QUEUED','RUNNING')
     ), active_research_cte AS (
@@ -51,6 +54,13 @@ AS $$
     SELECT
         clock_timestamp(),
         (SELECT count(*) FROM active_jobs_cte)::bigint,
+        (SELECT count(*) FROM active_jobs_cte
+          WHERE status = 'RUNNING'
+            AND (
+                p_stale_after_seconds NOT BETWEEN 120 AND 86400
+                OR lease_observed_at IS NULL
+                OR lease_observed_at < clock_timestamp() - make_interval(secs => p_stale_after_seconds)
+            ))::bigint,
         (SELECT count(*) FROM assistant_lab.control_command
           WHERE status IN ('QUEUED','RUNNING'))::bigint,
         (SELECT count(*) FROM active_research_cte)::bigint,
@@ -64,11 +74,11 @@ AS $$
 $$;
 
 REVOKE ALL ON FUNCTION assistant_lab.oracle_idle_snapshot() FROM PUBLIC;
-REVOKE ALL ON FUNCTION assistant_lab.oracle_idle_snapshot_v2() FROM PUBLIC;
+REVOKE ALL ON FUNCTION assistant_lab.oracle_idle_snapshot_v2(integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION assistant_lab.oracle_idle_snapshot() TO assistant_lab_worker;
-GRANT EXECUTE ON FUNCTION assistant_lab.oracle_idle_snapshot_v2() TO assistant_lab_worker;
+GRANT EXECUTE ON FUNCTION assistant_lab.oracle_idle_snapshot_v2(integer) TO assistant_lab_worker;
 
 COMMENT ON FUNCTION assistant_lab.oracle_idle_snapshot() IS
 'Compatibility read-only snapshot for fail-closed Oracle VM stop decisions. Every nonterminal ResearchJob stage is active.';
-COMMENT ON FUNCTION assistant_lab.oracle_idle_snapshot_v2() IS
-'Least-privilege fresh idle snapshot for Oracle STOP guard. Reports job/control/research/child/BEN/bulk/other active counts and database observation time; never mutates work state.';
+COMMENT ON FUNCTION assistant_lab.oracle_idle_snapshot_v2(integer) IS
+'Least-privilege fresh idle snapshot for Oracle STOP guard. Reports active workloads plus stale RUNNING heartbeat evidence using the worker stale timeout; never mutates work state.';
