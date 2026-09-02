@@ -8,6 +8,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_TEST = ROOT / "tests" / "test_oracle_idle_stop_guard.py"
+INSTANCE_POWER = ROOT / ".github" / "workflows" / "oracle-instance-power.yml"
 
 spec = importlib.util.spec_from_file_location("oracle_idle_base_tests", BASE_TEST)
 if spec is None or spec.loader is None:
@@ -95,6 +96,14 @@ class OracleIdleUnknownPrecedenceTests(unittest.TestCase):
             completed.stdout,
         )
         self.assert_state(completed.stdout, "BUSY")
+
+    def test_preliminary_missing_exit_code_is_rejected(self) -> None:
+        workflow = INSTANCE_POWER.read_text(encoding="utf-8")
+        self.assertNotIn(
+            'if [[ -n "$exit_code" && "$exit_code" != "0" ]]',
+            workflow,
+        )
+        self.assertIn('if [[ "$exit_code" != "0" ]]', workflow)
 
 
 if __name__ == "__main__":

@@ -195,7 +195,7 @@ jobs:
             fi
             exit 0
           fi
-          if [[ -n "$exit_code" && "$exit_code" != "0" ]]; then
+          if [[ "$exit_code" != "0" ]]; then
             echo "idle_state=UNKNOWN" >> "$GITHUB_OUTPUT"
             echo "idle_reason=classifier_exit_${exit_code:-unknown}" >> "$GITHUB_OUTPUT"
             exit 0
