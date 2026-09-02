@@ -1,0 +1,39 @@
+name: Issue 627 Oracle Idle STOP Guard CI
+
+on:
+  pull_request:
+    paths:
+      - 'assistant_lab/oracle_idle_schema.sql'
+      - 'ops/oracle_idle_*.py'
+      - 'ops/oracle_idle_state.sh'
+      - 'ops/oracle_stop_consumer.py'
+      - 'tests/test_oracle_idle_stop_guard*.py'
+      - '.github/workflows/issue-627-oracle-idle-stop-guard-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guard-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@82c7e631bb3cdc910f68e0081d67478d79c6982d
+        with:
+          python-version: '3.12'
+      - name: Static fail-closed contract
+        run: |
+          set -euo pipefail
+          bash -n ops/oracle_idle_state.sh
+          python -m py_compile ops/oracle_idle_guard.py ops/oracle_idle_collect.py ops/oracle_stop_consumer.py
+          grep -F 'ORACLE_IDLE_STATE=UNKNOWN' ops/oracle_idle_state.sh
+          grep -F 'verdict.state != "IDLE"' ops/oracle_stop_consumer.py
+          ! grep -Eiq 'oci[[:space:]]+compute|instance[[:space:]]+action|--action[[:space:]]+STOP' ops/oracle_stop_consumer.py
+      - name: Negative workload and STOP tests
+        run: |
+          python -m pip install --disable-pip-version-check -q pytest
+          python -m pytest -q tests/test_oracle_idle_stop_guard_v2.py
