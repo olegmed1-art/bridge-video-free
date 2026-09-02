@@ -54,6 +54,11 @@ def _read_exact_lines(path: Path) -> list[str]:
         raise ProofError("proof_size_invalid")
     if b"\x00" in raw or b"\r" in raw:
         raise ProofError("proof_encoding_invalid")
+    # One and only one terminal LF is part of the signed framing contract.
+    # Reject duplicate terminal newlines before splitlines can reinterpret the
+    # second one as an additional empty record.
+    if raw.endswith(b"\n\n"):
+        raise ProofError("proof_framing_invalid")
     try:
         text = raw.decode("utf-8", errors="strict")
     except UnicodeDecodeError as exc:
