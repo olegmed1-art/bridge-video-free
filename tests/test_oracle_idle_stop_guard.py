@@ -31,7 +31,7 @@ class ClassifierHarness:
         self.root = Path(self._temp.name)
         self.bindir = self.root / "bin"
         self.bindir.mkdir()
-        _write_executable(self.bindir / "systemctl", "#!/bin/sh\necho active\n")
+        self.set_mass_service_states()
         _write_executable(self.bindir / "pgrep", "#!/bin/sh\nexit 1\n")
 
         self.fake_python = self.root / "python"
@@ -77,6 +77,22 @@ class ClassifierHarness:
             self.observer_running,
         ):
             path.mkdir(parents=True)
+
+    def set_mass_service_states(
+        self,
+        *,
+        pilot: tuple[str, int] = ("inactive", 3),
+        main: tuple[str, int] = ("inactive", 3),
+    ) -> None:
+        script = f"""#!/bin/sh
+case "$*" in
+  "is-active assistant-lab.service") echo active; exit 0 ;;
+  "is-active dds3-mass@10000.service") echo {pilot[0]}; exit {pilot[1]} ;;
+  "is-active dds3-mass@30000.service") echo {main[0]}; exit {main[1]} ;;
+  *) echo unknown; exit 4 ;;
+esac
+"""
+        _write_executable(self.bindir / "systemctl", script)
 
     def close(self) -> None:
         self._temp.cleanup()
@@ -285,6 +301,46 @@ class OracleIdleClassifierTests(unittest.TestCase):
             )
         )
         self.assert_state(completed.stdout, "BUSY")
+
+    def test_dds3_pilot_mass_service_is_busy(self) -> None:
+        self.harness.set_mass_service_states(pilot=("active", 0))
+        completed = self.harness.run()
+        self.assertIn(
+            "ORACLE_IDLE_REASON=dds3_mass_service_active", completed.stdout
+        )
+        self.assert_state(completed.stdout, "BUSY")
+
+    def test_dds3_main_mass_service_is_busy(self) -> None:
+        self.harness.set_mass_service_states(main=("active", 0))
+        completed = self.harness.run()
+        self.assertIn(
+            "ORACLE_IDLE_REASON=dds3_mass_service_active", completed.stdout
+        )
+        self.assert_state(completed.stdout, "BUSY")
+
+    def test_missing_dds3_mass_unit_telemetry_is_unknown(self) -> None:
+        self.harness.set_mass_service_states(pilot=("unknown", 4))
+        completed = self.harness.run()
+        self.assertIn(
+            "ORACLE_IDLE_REASON=dds3_mass_service_unknown", completed.stdout
+        )
+        self.assert_state(completed.stdout, "UNKNOWN")
+
+    def test_failed_dds3_mass_unit_is_unknown(self) -> None:
+        self.harness.set_mass_service_states(main=("failed", 3))
+        completed = self.harness.run()
+        self.assertIn(
+            "ORACLE_IDLE_REASON=dds3_mass_service_failed", completed.stdout
+        )
+        self.assert_state(completed.stdout, "UNKNOWN")
+
+    def test_transitioning_dds3_mass_unit_is_unknown(self) -> None:
+        self.harness.set_mass_service_states(pilot=("activating", 3))
+        completed = self.harness.run()
+        self.assertIn(
+            "ORACLE_IDLE_REASON=dds3_mass_service_activating", completed.stdout
+        )
+        self.assert_state(completed.stdout, "UNKNOWN")
 
     # Required negative family 5: local spool.
     def test_local_spool_with_work_is_busy(self) -> None:
