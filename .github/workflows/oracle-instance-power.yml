@@ -20,7 +20,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: oracle-instance-workload-mutation
+  # Only an authorized lifecycle command enters the production fence. Other
+  # issue comments get a unique no-op group and cannot replace a pending
+  # workload or power run before their job-level condition skips them.
+  group: ${{ github.event_name == 'workflow_dispatch' && 'oracle-instance-workload-mutation' || (github.event_name == 'issue_comment' && github.actor == github.repository_owner && contains(fromJSON('["/oracle-instance status","/oracle-instance start","/oracle-instance stop"]'), github.event.comment.body)) && 'oracle-instance-workload-mutation' || format('oracle-instance-power-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:

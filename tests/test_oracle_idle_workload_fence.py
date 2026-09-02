@@ -26,7 +26,15 @@ def test_all_submit_bridge_oracle_producers_share_stop_fence() -> None:
 
 def test_stop_consumer_uses_same_non_cancelling_fence() -> None:
     power = _workflow_text("oracle-instance-power.yml")
-    assert f"group: {SHARED_FENCE}" in power
+    assert SHARED_FENCE in power
+    assert "oracle-instance-power-noop-{0}" in power
+    assert "github.run_id" in power
+    for command in (
+        "/oracle-instance status",
+        "/oracle-instance start",
+        "/oracle-instance stop",
+    ):
+        assert command in power
     assert "cancel-in-progress: false" in power
 
 
@@ -41,4 +49,7 @@ def test_research_job_production_canaries_share_stop_fence() -> None:
         assert SHARED_FENCE in workflow, name
         assert "github.event_name == 'pull_request'" in workflow, name
         assert "github.event.pull_request.number" in workflow, name
+        assert "github.event.comment.body == '/research-job " in workflow, name
+        assert "noop-{0}" in workflow, name
+        assert "github.run_id" in workflow, name
         assert "cancel-in-progress: false" in workflow, name
