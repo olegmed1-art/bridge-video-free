@@ -109,14 +109,14 @@ DECLARE
     v_master_id text;
     v_master_sha text;
 BEGIN
-    IF p_outcome NOT IN ('REVIEW_READY','AMBIGUOUS','FAILED')
+    IF p_outcome IS NULL OR p_outcome NOT IN ('REVIEW_READY','AMBIGUOUS','FAILED')
        OR p_worker_key IS NULL OR p_worker_key !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$'
        OR p_output IS NULL OR jsonb_typeof(p_output) <> 'object'
        OR length(p_output::text) > 65536
-       OR p_output->>'result_mode' <> 'SHADOW_REVIEW_ONLY'
+       OR p_output->>'result_mode' IS DISTINCT FROM 'SHADOW_REVIEW_ONLY'
        OR p_output->'canonical_promotion_allowed' IS DISTINCT FROM 'false'::jsonb
        OR p_output->'database_persistence_allowed' IS DISTINCT FROM 'false'::jsonb
-       OR p_output->>'publication_state' <> 'NOT_PUBLISHED'
+       OR p_output->>'publication_state' IS DISTINCT FROM 'NOT_PUBLISHED'
        OR (p_error_code IS NOT NULL AND p_error_code !~ '^UV_[A-Z0-9_]{1,96}$') THEN
         RAISE EXCEPTION 'VIDEO_QUEUE_FINISH_ARGUMENT_INVALID';
     END IF;
@@ -137,9 +137,9 @@ BEGIN
       FROM video_queue.batch b
      WHERE b.batch_id = v_job.batch_id
      FOR UPDATE;
-    IF p_output->>'source_file_id' <> v_job.source_file_id
-       OR p_output->>'stable_job_key' <> v_job.stable_job_key
-       OR p_output->>'algorithm_revision' <> v_batch.algorithm_revision THEN
+    IF p_output->>'source_file_id' IS DISTINCT FROM v_job.source_file_id
+       OR p_output->>'stable_job_key' IS DISTINCT FROM v_job.stable_job_key
+       OR p_output->>'algorithm_revision' IS DISTINCT FROM v_batch.algorithm_revision THEN
         RAISE EXCEPTION 'VIDEO_QUEUE_RESULT_IDENTITY_MISMATCH';
     END IF;
 
@@ -163,32 +163,32 @@ BEGIN
            OR v_master_id = v_job.source_file_id
            OR v_master_sha IS NULL OR v_master_sha !~ '^[0-9a-f]{64}$'
            OR jsonb_typeof(p_output->'artifact_manifest') <> 'object'
-           OR p_output->'artifact_manifest'->>'schema_version' <> 'universal-video-artifact-manifest/v1'
+           OR p_output->'artifact_manifest'->>'schema_version' IS DISTINCT FROM 'universal-video-artifact-manifest/v1'
            OR jsonb_typeof(p_output->'artifact_manifest'->'artifacts') <> 'array'
            OR jsonb_array_length(p_output->'artifact_manifest'->'artifacts') < 1
-           OR p_output->'artifact_manifest'->>'job_id' <> v_job.stable_job_key
-           OR p_output->'artifact_manifest'->>'source_file_id' <> v_job.source_file_id
-           OR p_output->'artifact_manifest'->>'result_mode' <> 'SHADOW_REVIEW_ONLY'
+           OR p_output->'artifact_manifest'->>'job_id' IS DISTINCT FROM v_job.stable_job_key
+           OR p_output->'artifact_manifest'->>'source_file_id' IS DISTINCT FROM v_job.source_file_id
+           OR p_output->'artifact_manifest'->>'result_mode' IS DISTINCT FROM 'SHADOW_REVIEW_ONLY'
            OR p_output->'artifact_manifest'->'canonical_promotion_allowed' IS DISTINCT FROM 'false'::jsonb
            OR p_output->'artifact_manifest'->'database_persistence_allowed' IS DISTINCT FROM 'false'::jsonb
-           OR p_output->'artifact_manifest'->>'publication_state' <> 'NOT_PUBLISHED'
-           OR p_output->'artifact_manifest'->'artifacts'->0->>'kind' <> 'master_pdf'
-           OR p_output->'artifact_manifest'->'artifacts'->0->>'drive_id' <> v_master_id
-           OR p_output->'artifact_manifest'->'artifacts'->0->>'locator' <> 'gdrive:file:' || v_master_id
-           OR p_output->'artifact_manifest'->'artifacts'->0->>'mime_type' <> 'application/pdf'
-           OR p_output->'artifact_manifest'->'artifacts'->0->>'parent_id' <> v_batch.output_folder_id
-           OR p_output->'artifact_manifest'->'artifacts'->0->>'sha256' <> v_master_sha
+           OR p_output->'artifact_manifest'->>'publication_state' IS DISTINCT FROM 'NOT_PUBLISHED'
+           OR p_output->'artifact_manifest'->'artifacts'->0->>'kind' IS DISTINCT FROM 'master_pdf'
+           OR p_output->'artifact_manifest'->'artifacts'->0->>'drive_id' IS DISTINCT FROM v_master_id
+           OR p_output->'artifact_manifest'->'artifacts'->0->>'locator' IS DISTINCT FROM ('gdrive:file:' || v_master_id)
+           OR p_output->'artifact_manifest'->'artifacts'->0->>'mime_type' IS DISTINCT FROM 'application/pdf'
+           OR p_output->'artifact_manifest'->'artifacts'->0->>'parent_id' IS DISTINCT FROM v_batch.output_folder_id
+           OR p_output->'artifact_manifest'->'artifacts'->0->>'sha256' IS DISTINCT FROM v_master_sha
            OR coalesce((p_output->'artifact_manifest'->'artifacts'->0->>'size_bytes')::bigint, 0) <= 0
            OR jsonb_typeof(p_output->'terminal_receipt') <> 'object'
-           OR p_output->'terminal_receipt'->>'schema_version' <> 'universal-video-terminal-receipt/v1'
-           OR p_output->'terminal_receipt'->>'status' <> 'PASS'
-           OR p_output->'terminal_receipt'->>'job_id' <> v_job.stable_job_key
-           OR p_output->'terminal_receipt'->>'source_file_id' <> v_job.source_file_id
+           OR p_output->'terminal_receipt'->>'schema_version' IS DISTINCT FROM 'universal-video-terminal-receipt/v1'
+           OR p_output->'terminal_receipt'->>'status' IS DISTINCT FROM 'PASS'
+           OR p_output->'terminal_receipt'->>'job_id' IS DISTINCT FROM v_job.stable_job_key
+           OR p_output->'terminal_receipt'->>'source_file_id' IS DISTINCT FROM v_job.source_file_id
            OR p_output->'terminal_receipt'->'drive_readback_verified' IS DISTINCT FROM 'true'::jsonb
-           OR p_output->'terminal_receipt'->>'artifact_manifest_sha256' <> v_manifest_sha
+           OR p_output->'terminal_receipt'->>'artifact_manifest_sha256' IS DISTINCT FROM v_manifest_sha
            OR p_output->'terminal_receipt'->'canonical_promotion_allowed' IS DISTINCT FROM 'false'::jsonb
            OR p_output->'terminal_receipt'->'database_persistence_allowed' IS DISTINCT FROM 'false'::jsonb
-           OR p_output->'terminal_receipt'->>'publication_state' <> 'NOT_PUBLISHED' THEN
+           OR p_output->'terminal_receipt'->>'publication_state' IS DISTINCT FROM 'NOT_PUBLISHED' THEN
             RAISE EXCEPTION 'VIDEO_QUEUE_RESULT_CONTRACT_INVALID';
         END IF;
     END IF;

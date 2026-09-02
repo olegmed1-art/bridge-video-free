@@ -72,11 +72,22 @@ def test_promotion_requires_a_fresh_status_from_the_new_resident() -> None:
     assert "(( fresh_status != 1 ))" in SCRIPT
     assert "UV_CONTAINER_PROMOTION_STATUS_MISSING" in SCRIPT
     assert "UV_CONTAINER_PROMOTION_STATUS_STALE" in SCRIPT
-    assert SCRIPT.count("float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])") == 2
-    assert SCRIPT.count("x.get('resident_id') == 'container'") == 2
-    assert SCRIPT.count("type(x.get('process_start_ticks')) is int") == 2
-    assert SCRIPT.count("re.fullmatch(r'[0-9a-f]{32}', x['process_nonce'])") == 2
-    assert "import json,os,re" in SCRIPT
+    assert "float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])" in SCRIPT
+    assert "x.get('resident_id') == 'container'" in SCRIPT
+    assert "x['process_id'] == int(os.environ['EXPECTED_PROCESS_ID'])" in SCRIPT
+    assert "x['process_start_ticks'] == int(os.environ['EXPECTED_PROCESS_START_TICKS'])" in SCRIPT
+    assert "re.fullmatch(r'[0-9a-f]{32}', x['process_nonce'])" in SCRIPT
+    assert "docker inspect --format '{{.State.Pid}}' universal-video-container" in SCRIPT
+    assert "pid_descends_from \"$worker_pid\" \"$container_root_pid\"" in SCRIPT
+    assert "NSpid:" in SCRIPT
+    assert 'PROCESS_STAT="/proc/$process_id/stat"' in SCRIPT
+    assert '[[ "$(process_start_ticks "$worker_pid"' in SCRIPT
+    assert "if resident_status_ready; then" in SCRIPT
+    assert "CURRENT_STAGE='resident-status-final'" in SCRIPT
+    assert "resident_status_ready || fail UV_CONTAINER_PROMOTION_STATUS_STALE" in SCRIPT
+    assert SCRIPT.index("CURRENT_STAGE='protected-postflight'") < SCRIPT.index(
+        "CURRENT_STAGE='resident-status-final'"
+    ) < SCRIPT.index("CURRENT_STAGE='complete'")
 
 
 def test_promotion_exposes_only_structured_container_runtime_failure_code() -> None:

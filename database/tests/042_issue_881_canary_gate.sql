@@ -1,7 +1,7 @@
 \set ON_ERROR_STOP on
 BEGIN;
 DO $$
-DECLARE b record; same record; c record; f record; r record; c2 record; c3 record; bad record; out jsonb; manifest jsonb; manifest_sha text; n integer; old uuid;
+DECLARE b record; same record; c record; f record; r record; c2 record; c3 record; bad record; out jsonb; bad_out jsonb; manifest jsonb; bad_manifest jsonb; manifest_sha text; bad_manifest_sha text; n integer; old uuid;
 BEGIN
   IF video_queue.canonical_json_text('{"z":"δ","a":[true,1,null]}'::jsonb) <> '{"a":[true,1,null],"z":"δ"}' THEN
     RAISE EXCEPTION 'canonical json mismatch';
@@ -25,6 +25,47 @@ BEGIN
   out:=jsonb_build_object('result_mode','SHADOW_REVIEW_ONLY','canonical_promotion_allowed',false,'database_persistence_allowed',false,'publication_state','NOT_PUBLISHED','source_file_id',c.source_file_id,'stable_job_key',c.stable_job_key,'algorithm_revision',c.algorithm_revision,'master_pdf_drive_id','result-file-123456','master_pdf_sha256',repeat('b',64),'artifact_manifest_sha256',manifest_sha,
     'artifact_manifest',manifest,
     'terminal_receipt',jsonb_build_object('schema_version','universal-video-terminal-receipt/v1','status','PASS','job_id',c.stable_job_key,'source_file_id',c.source_file_id,'drive_readback_verified',true,'artifact_manifest_sha256',manifest_sha,'canonical_promotion_allowed',false,'database_persistence_allowed',false,'publication_state','NOT_PUBLISHED'));
+  FOREACH bad_out IN ARRAY ARRAY[
+    out - 'publication_state',
+    jsonb_set(out,'{publication_state}','null'::jsonb)
+  ] LOOP
+    BEGIN
+      PERFORM * FROM video_queue.finish_job(c.job_id,c.lease_token,'worker-issue881','REVIEW_READY',bad_out,NULL);
+      RAISE EXCEPTION 'invalid top-level publication_state accepted';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM NOT LIKE '%VIDEO_QUEUE_FINISH_ARGUMENT_INVALID%' THEN RAISE; END IF;
+    END;
+  END LOOP;
+  FOREACH bad_manifest IN ARRAY ARRAY[
+    manifest - 'publication_state',
+    jsonb_set(manifest,'{publication_state}','null'::jsonb)
+  ] LOOP
+    bad_manifest_sha:=encode(public.digest(convert_to(video_queue.canonical_json_text(bad_manifest),'UTF8'),'sha256'),'hex');
+    bad_out:=jsonb_set(
+      jsonb_set(
+        jsonb_set(out,'{artifact_manifest}',bad_manifest),
+        '{artifact_manifest_sha256}',to_jsonb(bad_manifest_sha)
+      ),
+      '{terminal_receipt,artifact_manifest_sha256}',to_jsonb(bad_manifest_sha)
+    );
+    BEGIN
+      PERFORM * FROM video_queue.finish_job(c.job_id,c.lease_token,'worker-issue881','REVIEW_READY',bad_out,NULL);
+      RAISE EXCEPTION 'invalid manifest publication_state accepted';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM NOT LIKE '%VIDEO_QUEUE_RESULT_CONTRACT_INVALID%' THEN RAISE; END IF;
+    END;
+  END LOOP;
+  FOREACH bad_out IN ARRAY ARRAY[
+    out #- '{terminal_receipt,publication_state}',
+    jsonb_set(out,'{terminal_receipt,publication_state}','null'::jsonb)
+  ] LOOP
+    BEGIN
+      PERFORM * FROM video_queue.finish_job(c.job_id,c.lease_token,'worker-issue881','REVIEW_READY',bad_out,NULL);
+      RAISE EXCEPTION 'invalid receipt publication_state accepted';
+    EXCEPTION WHEN OTHERS THEN
+      IF SQLERRM NOT LIKE '%VIDEO_QUEUE_RESULT_CONTRACT_INVALID%' THEN RAISE; END IF;
+    END;
+  END LOOP;
   BEGIN
     PERFORM * FROM video_queue.finish_job(c.job_id,c.lease_token,'worker-issue881','REVIEW_READY',jsonb_set(jsonb_set(out,'{artifact_manifest_sha256}',to_jsonb(repeat('c',64))),'{terminal_receipt,artifact_manifest_sha256}',to_jsonb(repeat('c',64))),NULL);
     RAISE EXCEPTION 'repeated forged manifest hash accepted';

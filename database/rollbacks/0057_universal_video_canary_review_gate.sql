@@ -38,17 +38,16 @@ AS $$
 DECLARE
     v_job video_queue.job%ROWTYPE;
     v_batch video_queue.batch%ROWTYPE;
-    v_released integer := 0;
     v_batch_status text;
 BEGIN
-    IF p_outcome NOT IN ('REVIEW_READY','AMBIGUOUS','FAILED')
+    IF p_outcome IS NULL OR p_outcome NOT IN ('REVIEW_READY','AMBIGUOUS','FAILED')
        OR p_worker_key IS NULL OR p_worker_key !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$'
        OR p_output IS NULL OR jsonb_typeof(p_output) <> 'object'
        OR length(p_output::text) > 65536
-       OR p_output->>'result_mode' <> 'SHADOW_REVIEW_ONLY'
+       OR p_output->>'result_mode' IS DISTINCT FROM 'SHADOW_REVIEW_ONLY'
        OR p_output->'canonical_promotion_allowed' IS DISTINCT FROM 'false'::jsonb
        OR p_output->'database_persistence_allowed' IS DISTINCT FROM 'false'::jsonb
-       OR p_output->>'publication_state' <> 'NOT_PUBLISHED'
+       OR p_output->>'publication_state' IS DISTINCT FROM 'NOT_PUBLISHED'
        OR (p_error_code IS NOT NULL AND p_error_code !~ '^UV_[A-Z0-9_]{1,96}$') THEN
         RAISE EXCEPTION 'VIDEO_QUEUE_FINISH_ARGUMENT_INVALID';
     END IF;
@@ -67,9 +66,9 @@ BEGIN
       FROM video_queue.batch b
      WHERE b.batch_id = v_job.batch_id
      FOR UPDATE;
-    IF p_output->>'source_file_id' <> v_job.source_file_id
-       OR p_output->>'stable_job_key' <> v_job.stable_job_key
-       OR p_output->>'algorithm_revision' <> v_batch.algorithm_revision THEN
+    IF p_output->>'source_file_id' IS DISTINCT FROM v_job.source_file_id
+       OR p_output->>'stable_job_key' IS DISTINCT FROM v_job.stable_job_key
+       OR p_output->>'algorithm_revision' IS DISTINCT FROM v_batch.algorithm_revision THEN
         RAISE EXCEPTION 'VIDEO_QUEUE_RESULT_IDENTITY_MISMATCH';
     END IF;
 
@@ -93,18 +92,10 @@ BEGIN
         jsonb_build_object('error_code', p_error_code)
     );
 
-    IF v_job.is_canary AND p_outcome = 'REVIEW_READY' THEN
-        UPDATE video_queue.job
-           SET status = 'QUEUED', updated_at = clock_timestamp()
-         WHERE batch_id = v_job.batch_id AND status = 'PENDING_CANARY';
-        GET DIAGNOSTICS v_released = ROW_COUNT;
-        UPDATE video_queue.batch
-           SET status = 'RUNNING', updated_at = clock_timestamp()
-         WHERE batch_id = v_job.batch_id;
-        IF v_released > 0 THEN
-            PERFORM pg_notify('video_queue_ready', v_job.batch_id::text);
-        END IF;
-    ELSIF v_job.is_canary THEN
+    -- Rolling back schema helpers must never roll back the canary safety
+    -- invariant. Every canary outcome is terminalized without releasing the
+    -- pending batch; a later, separately authorized migration may release it.
+    IF v_job.is_canary THEN
         UPDATE video_queue.batch
            SET status = 'CANARY_BLOCKED',
                updated_at = clock_timestamp(),
@@ -112,7 +103,7 @@ BEGIN
          WHERE batch_id = v_job.batch_id;
     END IF;
 
-    IF NOT v_job.is_canary OR p_outcome = 'REVIEW_READY' THEN
+    IF NOT v_job.is_canary THEN
         IF NOT EXISTS (
             SELECT 1 FROM video_queue.job
              WHERE batch_id = v_job.batch_id
@@ -128,7 +119,7 @@ BEGIN
     SELECT b.status INTO v_batch_status
       FROM video_queue.batch b
      WHERE b.batch_id = v_job.batch_id;
-    RETURN QUERY SELECT p_outcome, v_batch_status, v_released;
+    RETURN QUERY SELECT p_outcome, v_batch_status, 0;
 END;
 $$;
 

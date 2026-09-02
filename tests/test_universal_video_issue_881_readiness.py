@@ -403,10 +403,11 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "authoritative Neon claimable/LEASED state is busy or unverifiable" in script
     assert "pid_descends_from" in script
     assert "resident_worker_pid" in script
+    assert '[[ "${#matches[@]}" -eq 1 ]] || return 1' in script
     assert "restored_service_ready" in script
     assert "resident_status_ready" in script
     assert "universal-video-resident-status-v2" in script
-    assert 'float(value.get("observed_at_unix") or 0) >= int(os.environ["STARTED_UNIX"])' in script
+    assert 'observed_at >= int(os.environ["STARTED_UNIX"])' in script
     assert 'value.get("installed_runtime_commit") == os.environ["EXPECTED_COMMIT"]' in script
     assert 'value.get("resident_id") == os.environ["EXPECTED_RESIDENT"]' in script
     assert 'expected_process_id="$worker_pid"' in script
@@ -416,8 +417,17 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert 'expected_process_start_ticks="$(process_start_ticks "$worker_pid"' in script
     assert 'EXPECTED_PROCESS_START_TICKS="$expected_process_start_ticks"' in script
     assert 'value["process_start_ticks"] == int(os.environ["EXPECTED_PROCESS_START_TICKS"])' in script
-    assert 'float(value.get("process_started_at_unix") or 0) >= int(os.environ["STARTED_UNIX"])' in script
+    assert 'process_started_at >= int(os.environ["STARTED_UNIX"])' in script
     assert 're.fullmatch(r"[0-9a-f]{32}", value["process_nonce"])' in script
+    assert "identity_fields = {" in script
+    assert 'transitional = identity_fields - {"process_start_ticks"}' in script
+    assert "if not present:" in script
+    assert "elif present == transitional or present == strong:" in script
+    assert 'os.environ["LEGACY_PEER_SAME_COMMIT"] != "0"' in script
+    assert "observed_at <= time.time() + 5" in script
+    assert 'value.get("active_jobs") == []' in script
+    assert 'if ! clear_restore_status; then' in script
+    assert script.count('if ! clear_restore_status; then') == 2
     assert "RESTORE_STABLE_SECONDS" in script
     assert "stable_seconds=%s result=PASS" in script
     assert "services_stop_attempted=1" in script
@@ -502,41 +512,32 @@ def test_installer_readiness_and_service_env_use_captured_image_id():
     assert 'systemctl daemon-reload' in activation
 
 
-def test_external_precanary_runs_same_repo_and_compares_install_digest():
+def test_external_precanary_is_pr_only_exact_head_validation():
     workflow = (ROOT / ".github/workflows/issue-881-precanary-evidence.yml").read_text(
         encoding="utf-8"
     )
-    condition = (
-        "if: github.event_name == 'workflow_dispatch' || "
-        "github.event.pull_request.head.repo.full_name == github.repository"
-    )
-    assert workflow.count(condition) == 1
-    assert workflow.splitlines().count(
-        "        if: github.event_name == 'workflow_dispatch'"
-    ) == 3
-    assert "        if: always()" not in workflow
-    assert "if: github.event_name == 'workflow_dispatch' && always()" in workflow
-    assert "UNIVERSAL_VIDEO_EXPECTED_SHA='$EXACT_SHA'" in workflow
-    assert "UNIVERSAL_VIDEO_PRECANARY_BUILD_IMAGE=1" in workflow
-    assert "UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE=1" in workflow
-    assert "UNIVERSAL_VIDEO_PREPARE_SCRIPT='$remote_root/prepare.sh'" in workflow
-    assert 'attested_digest="$(sed' in workflow
-    assert '"$attested_digest" == "$installed_digest"' in workflow
-    assert "198-2v3JBlNQobdsPYQQWzrrCqQ1zBZOI" in workflow
-    assert "Диана 13.mp4" in workflow
-    assert "696237577" in workflow
-    assert "1Fr-H2NgBKEpp3q_H4FzNmQwCV6bj2x6b" in workflow
-    stopped_branch = workflow[
-        workflow.index("            STOPPED)") : workflow.index("            *)", workflow.index("            STOPPED)"))
-    ]
-    assert "--action START" not in stopped_branch
-    assert "explicit Director lifecycle authorization is required" in stopped_branch
+    assert "workflow_dispatch:" not in workflow
+    assert "inputs.git_ref" not in workflow
+    assert "${{ secrets." not in workflow
+    assert "ssh " not in workflow and "scp " not in workflow
+    assert "oci " not in workflow
+    assert "UNIVERSAL_VIDEO_PRECANARY_BUILD_IMAGE=1" not in workflow
+    assert "EXACT_SHA: ${{ github.event.pull_request.head.sha }}" in workflow
+    assert "if: github.event.pull_request.head.repo.full_name == github.repository" in workflow
+    assert "ref: ${{ env.EXACT_SHA }}" in workflow
+    assert 'test "$(git rev-parse HEAD)" = "$EXACT_SHA"' in workflow
+    assert "Prove the only external entrypoint is Director-gated" in workflow
 
 
 def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery():
     workflow = (
         ROOT / ".github/workflows/issue-881-authoritative-external-evidence.yml"
     ).read_text(encoding="utf-8")
+    assert "exact_sha:" in workflow
+    assert "director_go:" in workflow
+    assert "if: ${{ inputs.director_go && github.actor == github.repository_owner && github.repository == 'olegmed1-art/bridge-video-free' }}" in workflow
+    assert "actions: read" in workflow
+    assert "pull-requests: read" in workflow
     assert 'pulls/1062" --jq \'.head.sha\'' in workflow
     assert ".commit_id ==" in workflow and "$EXACT_SHA" in workflow
     assert "required_workflows=(" in workflow
@@ -556,3 +557,27 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
         '"${s[@]}" "umask 077; rm -rf', final_head_check
     )
     assert final_head_check < first_remote_mutation
+
+
+def test_canary_sql_and_rollback_remain_null_safe_and_fail_closed():
+    migration = (
+        ROOT / "database/migrations/0057_universal_video_canary_review_gate.sql"
+    ).read_text(encoding="utf-8")
+    rollback = (
+        ROOT / "database/rollbacks/0057_universal_video_canary_review_gate.sql"
+    ).read_text(encoding="utf-8")
+    rollback_test = (
+        ROOT / "database/rollback_tests/0057_universal_video_canary_review_gate.sql"
+    ).read_text(encoding="utf-8")
+
+    assert migration.count("publication_state' IS DISTINCT FROM 'NOT_PUBLISHED'") == 3
+    assert "publication_state' <> 'NOT_PUBLISHED'" not in migration
+    assert "p_output->>'result_mode' IS DISTINCT FROM 'SHADOW_REVIEW_ONLY'" in migration
+    assert "p_output->>'source_file_id' IS DISTINCT FROM v_job.source_file_id" in migration
+    assert "publication_state' IS DISTINCT FROM 'NOT_PUBLISHED'" in rollback
+    rollback_finish = rollback[rollback.index("CREATE OR REPLACE FUNCTION video_queue.finish_job") :]
+    assert "SET status = 'QUEUED'" not in rollback_finish
+    assert "pg_notify('video_queue_ready'" not in rollback_finish
+    assert "RETURN QUERY SELECT p_outcome, v_batch_status, 0;" in rollback_finish
+    assert "rollback restored automatic canary release" in rollback_test
+    assert "rollback released pending jobs" in rollback_test

@@ -128,6 +128,7 @@ PY
 
 resident_worker_pid(){
   local service="$1" root_pid worker_pid
+  local -a matches=()
   if [[ "$service" == "$SOURCE_SERVICE" ]]; then
     root_pid="$(systemctl show "$service" --property=MainPID --value 2>/dev/null || true)"
   elif [[ "$service" == "$CONTAINER_SERVICE" ]]; then
@@ -138,11 +139,11 @@ resident_worker_pid(){
   [[ "$root_pid" =~ ^[1-9][0-9]*$ ]] || return 1
   while read -r worker_pid; do
     if pid_descends_from "$worker_pid" "$root_pid"; then
-      printf '%s\n' "$worker_pid"
-      return 0
+      matches+=("$worker_pid")
     fi
   done < <(pgrep -f '[u]niversal_video[.]spool_worker' || true)
-  return 1
+  [[ "${#matches[@]}" -eq 1 ]] || return 1
+  printf '%s\n' "${matches[0]}"
 }
 
 restored_service_ready(){
@@ -153,57 +154,118 @@ restored_service_ready(){
   [[ "$worker_pid" =~ ^[1-9][0-9]*$ ]]
 }
 
+resident_expected_commit(){
+  local service="$1" image_id
+  if [[ "$service" == "$SOURCE_SERVICE" ]]; then
+    git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || true
+  elif [[ "$service" == "$CONTAINER_SERVICE" ]]; then
+    image_id="$(docker inspect --format '{{.Image}}' universal-video-container 2>/dev/null || true)"
+    docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_id" 2>/dev/null || true
+  else
+    return 1
+  fi
+}
+
+clear_restore_status(){
+  if [[ -L "$STATUS_FILE" || -f "$STATUS_FILE" ]]; then
+    rm -f -- "$STATUS_FILE"
+  elif [[ -e "$STATUS_FILE" ]]; then
+    return 1
+  fi
+}
+
 resident_status_ready(){
-  local service="$1" started_unix="$2" worker_pid="$3" expected_commit expected_resident expected_process_id expected_process_start_ticks image_id
+  local service="$1" started_unix="$2" worker_pid="$3" expected_commit expected_resident expected_process_id expected_process_start_ticks peer_service peer_commit legacy_peer_same_commit=0
   [[ -f "$STATUS_FILE" && ! -L "$STATUS_FILE" ]] || return 1
   [[ "$worker_pid" =~ ^[1-9][0-9]*$ ]] || return 1
   if [[ "$service" == "$SOURCE_SERVICE" ]]; then
     expected_resident=source
     expected_process_id="$worker_pid"
-    expected_commit="$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || true)"
+    peer_service="$CONTAINER_SERVICE"
   elif [[ "$service" == "$CONTAINER_SERVICE" ]]; then
     expected_resident=container
     expected_process_id="$(awk '$1 == "NSpid:" {print $NF}' "/proc/$worker_pid/status" 2>/dev/null || true)"
-    image_id="$(docker inspect --format '{{.Image}}' universal-video-container 2>/dev/null || true)"
-    expected_commit="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_id" 2>/dev/null || true)"
+    peer_service="$SOURCE_SERVICE"
   else
     return 1
   fi
+  expected_commit="$(resident_expected_commit "$service")"
   [[ "$expected_process_id" =~ ^[1-9][0-9]*$ ]] || return 1
   expected_process_start_ticks="$(process_start_ticks "$worker_pid" 2>/dev/null || true)"
   [[ "$expected_process_start_ticks" =~ ^[1-9][0-9]*$ ]] || return 1
   [[ "$expected_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+  if [[ "$(service_state "$peer_service")" == active ]]; then
+    peer_commit="$(resident_expected_commit "$peer_service")"
+    legacy_peer_same_commit=1
+    if [[ "$peer_commit" =~ ^[0-9a-f]{40}$ && "$peer_commit" != "$expected_commit" ]]; then
+      legacy_peer_same_commit=0
+    fi
+  fi
   STATUS_PATH="$STATUS_FILE" EXPECTED_COMMIT="$expected_commit" \
     EXPECTED_RESIDENT="$expected_resident" EXPECTED_PROCESS_ID="$expected_process_id" \
     EXPECTED_PROCESS_START_TICKS="$expected_process_start_ticks" \
-    STARTED_UNIX="$started_unix" \
+    STARTED_UNIX="$started_unix" LEGACY_PEER_SAME_COMMIT="$legacy_peer_same_commit" \
     python3 - <<'PY' >/dev/null 2>&1
 import json
+import math
 import os
 import re
+import time
 from pathlib import Path
 
 path = Path(os.environ["STATUS_PATH"])
 if path.stat().st_size > 1024 * 1024:
     raise SystemExit(1)
 value = json.loads(path.read_text(encoding="utf-8"))
+if not isinstance(value, dict):
+    raise SystemExit(1)
+try:
+    observed_at = float(value.get("observed_at_unix"))
+except (TypeError, ValueError):
+    raise SystemExit(1)
 if not (
-    isinstance(value, dict)
-    and value.get("schema") == "universal-video-resident-status-v2"
+    value.get("schema") == "universal-video-resident-status-v2"
     and value.get("instance_state") == "RUNNING"
-    and isinstance(value.get("active_jobs"), list)
-    and float(value.get("observed_at_unix") or 0) >= int(os.environ["STARTED_UNIX"])
+    and value.get("active_jobs") == []
+    and math.isfinite(observed_at)
+    and observed_at >= int(os.environ["STARTED_UNIX"])
+    and observed_at <= time.time() + 5
     and value.get("installed_runtime_commit") == os.environ["EXPECTED_COMMIT"]
-    and value.get("resident_id") == os.environ["EXPECTED_RESIDENT"]
-    and type(value.get("process_id")) is int
-    and value["process_id"] == int(os.environ["EXPECTED_PROCESS_ID"])
-    and type(value.get("process_start_ticks")) is int
-    and value["process_start_ticks"] == int(os.environ["EXPECTED_PROCESS_START_TICKS"])
-    and float(value.get("process_started_at_unix") or 0) >= int(os.environ["STARTED_UNIX"])
-    and float(value.get("process_started_at_unix") or 0) <= float(value.get("observed_at_unix") or 0)
-    and isinstance(value.get("process_nonce"), str)
-    and re.fullmatch(r"[0-9a-f]{32}", value["process_nonce"])
 ):
+    raise SystemExit(1)
+
+identity_fields = {
+    "resident_id", "process_id", "process_started_at_unix",
+    "process_start_ticks", "process_nonce",
+}
+present = identity_fields.intersection(value)
+strong = identity_fields
+transitional = identity_fields - {"process_start_ticks"}
+if not present:
+    if os.environ["LEGACY_PEER_SAME_COMMIT"] != "0":
+        raise SystemExit(1)
+elif present == transitional or present == strong:
+    try:
+        process_started_at = float(value.get("process_started_at_unix"))
+    except (TypeError, ValueError):
+        raise SystemExit(1)
+    if not (
+        value.get("resident_id") == os.environ["EXPECTED_RESIDENT"]
+        and type(value.get("process_id")) is int
+        and value["process_id"] == int(os.environ["EXPECTED_PROCESS_ID"])
+        and math.isfinite(process_started_at)
+        and process_started_at >= int(os.environ["STARTED_UNIX"])
+        and process_started_at <= observed_at
+        and isinstance(value.get("process_nonce"), str)
+        and re.fullmatch(r"[0-9a-f]{32}", value["process_nonce"])
+    ):
+        raise SystemExit(1)
+    if present == strong and not (
+        type(value.get("process_start_ticks")) is int
+        and value["process_start_ticks"] == int(os.environ["EXPECTED_PROCESS_START_TICKS"])
+    ):
+        raise SystemExit(1)
+else:
     raise SystemExit(1)
 PY
 }
@@ -242,6 +304,10 @@ restore_service(){
   fi
 
   systemctl reset-failed "$service" >/dev/null 2>&1 || true
+  if ! clear_restore_status; then
+    service_failure_snapshot "$service"
+    return 1
+  fi
   started_unix="$(date +%s)"
   if ! systemctl start "$service" >/dev/null 2>&1; then
     service_failure_snapshot "$service"
@@ -255,6 +321,10 @@ restore_service(){
         if [[ "$worker_pid" == "$last_worker_pid" ]]; then
           ((stable += 1))
         else
+          if ! clear_restore_status; then
+            service_failure_snapshot "$service"
+            return 1
+          fi
           last_worker_pid="$worker_pid"
           stable=1
         fi

@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   exact-external-precanary:
-    if: ${{ inputs.director_go && github.repository == 'olegmed1-art/bridge-video-free' }}
+    if: ${{ inputs.director_go && github.actor == github.repository_owner && github.repository == 'olegmed1-art/bridge-video-free' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
