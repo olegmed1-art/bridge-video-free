@@ -10,6 +10,7 @@ on:
       - 'ops/oracle_idle_stop_guard.py'
       - 'ops/install_oracle_idle_state_ocarun.sh'
       - 'tests/test_oracle_idle_stop_guard.py'
+      - 'tests/test_oracle_idle_unknown_precedence.py'
       - '.github/workflows/oracle-idle-guard-ci.yml'
       - '.github/workflows/oracle-autopilot-staging-finalize.yml'
       - '.github/workflows/oracle-instance-power.yml'
@@ -20,6 +21,7 @@ on:
       - 'ops/oracle_idle_stop_guard.py'
       - 'ops/install_oracle_idle_state_ocarun.sh'
       - 'tests/test_oracle_idle_stop_guard.py'
+      - 'tests/test_oracle_idle_unknown_precedence.py'
       - '.github/workflows/oracle-idle-guard-ci.yml'
       - '.github/workflows/oracle-autopilot-staging-finalize.yml'
       - '.github/workflows/oracle-instance-power.yml'
@@ -43,10 +45,11 @@ jobs:
           bash -n ops/install_oracle_idle_state_ocarun.sh
           python -m py_compile \
             ops/oracle_idle_stop_guard.py \
-            tests/test_oracle_idle_stop_guard.py
+            tests/test_oracle_idle_stop_guard.py \
+            tests/test_oracle_idle_unknown_precedence.py
       - name: Negative and integration tests
         run: |
           python -m unittest discover \
             -s tests \
-            -p 'test_oracle_idle_stop_guard.py' \
+            -p 'test_oracle_idle*.py' \
             -v
