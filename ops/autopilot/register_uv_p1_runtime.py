@@ -49,9 +49,9 @@ APPROVED: Final[tuple[tuple[str, str, int, str], ...]] = (
     ),
     (
         "CANARY",
-        "uv-p1-canary-pr1062-8aa4f80b8d20-20260902",
+        "uv-p1-canary-pr1062-79aec3f732fd-20260902",
         1062,
-        "8aa4f80b8d2003e86bb0603183d8513001d4e28b",
+        "79aec3f732fdcd8ca9f5f8a4a6ba5a88f4bba8d4",
     ),
     (
         "IDLE",

@@ -20,7 +20,7 @@ def _load_registration_runtime(monkeypatch: pytest.MonkeyPatch):
         "PRODUCTION_BRANCH_ID": "br-wispy-lab-b1rq54of",
         "TEMP_ENDPOINT_ID": "ep-floral-field-b1pjs2of",
         "LIVE_RUNTIME_HEAD_SHA": "c1515c5af4a47c7468d7c4769e91082f7afd163c",
-        "LIVE_CANARY_HEAD_SHA": "8aa4f80b8d2003e86bb0603183d8513001d4e28b",
+        "LIVE_CANARY_HEAD_SHA": "79aec3f732fdcd8ca9f5f8a4a6ba5a88f4bba8d4",
         "LIVE_IDLE_HEAD_SHA": "8ab8d74c2a0ffd281ae4ccea9e5c8e55eea2ab45",
     }
     for name, value in values.items():
@@ -122,17 +122,17 @@ def test_registration_restores_0309_and_applies_only_forward_upgrade_before_ingr
         "e6184520c9df8d3ab8565fc80eb81c604b79a056e8ced4d1ec5b7246c9ccfd39"
     )
     assert hashlib.sha256(upgrade_bytes).hexdigest() == (
-        "69be0dd729f9056d36478ee3fcc16326cfc631ae9f6cdbad85f8c8e7f9c1f2d1"
+        "5c6ef525ce306b460e96b050b0930e793919b7fe5bd1b902f635627418569cc1"
     )
     git_blob = hashlib.sha1(
         f"blob {len(upgrade_bytes)}\0".encode() + upgrade_bytes,
         usedforsecurity=False,
     ).hexdigest()
-    assert git_blob == "fa2598af4866dd070a6e6623bd670d772cb35028"
+    assert git_blob == "a7c4bd9087e3bd8978c1be6460e717b02769f755"
     for value in (
         "0314_autopilot_uv_p1_allowlist_upgrade",
         "uv-p1-runtime-pr997-c1515c5af4a4-20260902",
-        "uv-p1-canary-pr1062-8aa4f80b8d20-20260902",
+        "uv-p1-canary-pr1062-79aec3f732fd-20260902",
         "uv-p1-idle-pr1061-8ab8d74c2a0f-20260902",
     ):
         assert value in upgrade
@@ -169,7 +169,7 @@ def test_registration_restores_0309_and_applies_only_forward_upgrade_before_ingr
         assert binding in apply_body
     for approved in (
         "APPROVED_RUNTIME_HEAD: c1515c5af4a47c7468d7c4769e91082f7afd163c",
-        "APPROVED_CANARY_HEAD: 8aa4f80b8d2003e86bb0603183d8513001d4e28b",
+        "APPROVED_CANARY_HEAD: 79aec3f732fdcd8ca9f5f8a4a6ba5a88f4bba8d4",
         "APPROVED_IDLE_HEAD: 8ab8d74c2a0ffd281ae4ccea9e5c8e55eea2ab45",
     ):
         assert approved in workflow

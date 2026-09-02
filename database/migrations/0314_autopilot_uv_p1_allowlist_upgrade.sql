@@ -42,9 +42,9 @@ BEGIN
         WHEN 'uv-p1-runtime-pr997-c1515c5af4a4-20260902' THEN
             approved_pr := 997;
             approved_head := 'c1515c5af4a47c7468d7c4769e91082f7afd163c';
-        WHEN 'uv-p1-canary-pr1062-8aa4f80b8d20-20260902' THEN
+        WHEN 'uv-p1-canary-pr1062-79aec3f732fd-20260902' THEN
             approved_pr := 1062;
-            approved_head := '8aa4f80b8d2003e86bb0603183d8513001d4e28b';
+            approved_head := '79aec3f732fdcd8ca9f5f8a4a6ba5a88f4bba8d4';
         WHEN 'uv-p1-idle-pr1061-8ab8d74c2a0f-20260902' THEN
             approved_pr := 1061;
             approved_head := '8ab8d74c2a0ffd281ae4ccea9e5c8e55eea2ab45';

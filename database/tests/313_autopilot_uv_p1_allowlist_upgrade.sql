@@ -27,7 +27,7 @@ BEGIN
         'autopilot.register_approved_uv_p1_ci(text)'::regprocedure
     ) INTO function_body;
     IF position('uv-p1-runtime-pr997-c1515c5af4a4-20260902' in function_body) = 0
-       OR position('uv-p1-canary-pr1062-8aa4f80b8d20-20260902' in function_body) = 0
+       OR position('uv-p1-canary-pr1062-79aec3f732fd-20260902' in function_body) = 0
        OR position('uv-p1-idle-pr1061-8ab8d74c2a0f-20260902' in function_body) = 0
        OR position('uv-p1-runtime-pr997-17b74b86b309-20260902' in function_body) <> 0
        OR position('uv-p1-canary-pr1062-164d0d509fa3-20260902' in function_body) <> 0
