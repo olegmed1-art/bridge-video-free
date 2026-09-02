@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/issue-881-precanary-evidence.yml'
       - '.github/workflows/issue-881-authoritative-external-evidence.yml'
+      - '.github/workflows/oracle-universal-video-container-evidence.yml'
       - 'deploy/oracle-universal-video/Dockerfile'
       - 'ops/oracle_universal_video_container_install.sh'
       - 'ops/oracle_universal_video_precanary_attest.sh'
@@ -69,3 +70,7 @@ jobs:
           grep -F 'verify_live_gate(){' "$workflow"
           test "$(grep -c '^[[:space:]]*verify_live_gate$' "$workflow")" -eq 2
           grep -F 'pulls/1062" --jq' "$workflow"
+          retired=.github/workflows/oracle-universal-video-container-evidence.yml
+          grep -F 'UNIVERSAL_VIDEO_LEGACY_CONTAINER_EVIDENCE_RETIRED=true' "$retired"
+          ! grep -E 'workflow[_]dispatch:' "$retired"
+          ! grep -F 'push:' "$retired"

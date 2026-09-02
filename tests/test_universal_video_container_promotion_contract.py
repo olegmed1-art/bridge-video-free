@@ -216,6 +216,10 @@ def test_operator_sync_is_restored_by_promotion_rollback() -> None:
     assert 'rm -f -- "$OPERATOR_SUDOERS"' in SCRIPT
 
 
-def test_operator_changes_require_fresh_container_evidence() -> None:
-    assert "- 'ops/universal_video_operator.sh'" in EVIDENCE_WORKFLOW
-    assert "- 'ops/install_universal_video_operator.sh'" in EVIDENCE_WORKFLOW
+def test_retired_container_evidence_cannot_run_on_operator_changes() -> None:
+    assert "pull_request:" in EVIDENCE_WORKFLOW
+    assert "workflow_dispatch:" not in EVIDENCE_WORKFLOW
+    assert "push:" not in EVIDENCE_WORKFLOW
+    assert "- 'ops/universal_video_operator.sh'" not in EVIDENCE_WORKFLOW
+    assert "- 'ops/install_universal_video_operator.sh'" not in EVIDENCE_WORKFLOW
+    assert "UNIVERSAL_VIDEO_LEGACY_CONTAINER_EVIDENCE_RETIRED=true" in EVIDENCE_WORKFLOW

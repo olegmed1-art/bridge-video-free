@@ -85,11 +85,37 @@ source_had_original=0
 source_candidate_path_owned=0
 source_backup_dir=""
 resident_image_id=""
+isolated_peer_service=""
+isolated_peer_pid=""
+isolated_peer_start_ticks=""
+restored_source_pid=""
+restored_source_start_ticks=""
+restored_container_pid=""
+restored_container_start_ticks=""
 declare -a added_runtime_masks=()
 declare -a restore_failures=()
+declare -a prestop_frozen_services=()
+declare -a prestop_frozen_pids=()
+declare -a prestop_frozen_start_ticks=()
+
+bounded_systemctl(){
+  timeout --foreground --signal=TERM --kill-after=5s 30s systemctl "$@"
+}
+
+bounded_docker(){
+  timeout --foreground --signal=TERM --kill-after=5s 15s docker "$@"
+}
+
+bounded_systemctl_query(){
+  timeout --foreground --signal=TERM --kill-after=2s 5s systemctl "$@"
+}
+
+bounded_docker_query(){
+  timeout --foreground --signal=TERM --kill-after=2s 5s docker "$@"
+}
 
 service_state(){
-  systemctl show "$1" --property=ActiveState --value 2>/dev/null || true
+  bounded_systemctl_query show "$1" --property=ActiveState --value 2>/dev/null || true
 }
 
 pid_descends_from(){
@@ -130,9 +156,9 @@ resident_worker_pid(){
   local service="$1" root_pid worker_pid
   local -a matches=()
   if [[ "$service" == "$SOURCE_SERVICE" ]]; then
-    root_pid="$(systemctl show "$service" --property=MainPID --value 2>/dev/null || true)"
+    root_pid="$(bounded_systemctl_query show "$service" --property=MainPID --value 2>/dev/null || true)"
   elif [[ "$service" == "$CONTAINER_SERVICE" ]]; then
-    root_pid="$(docker inspect --format '{{.State.Pid}}' universal-video-container 2>/dev/null || true)"
+    root_pid="$(bounded_docker_query inspect --format '{{.State.Pid}}' universal-video-container 2>/dev/null || true)"
   else
     return 1
   fi
@@ -147,11 +173,15 @@ resident_worker_pid(){
 }
 
 restored_service_ready(){
-  local service="$1" target_state="$2" worker_pid
+  local service="$1" target_state="$2" expected_worker_pid="${3:-}" expected_start_ticks="${4:-}" worker_pid
   [[ "$(service_state "$service")" == "$target_state" ]] || return 1
   [[ "$target_state" == inactive ]] && return 0
   worker_pid="$(resident_worker_pid "$service")" || return 1
-  [[ "$worker_pid" =~ ^[1-9][0-9]*$ ]]
+  [[ "$worker_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ "$expected_worker_pid" =~ ^[1-9][0-9]*$ \
+        && "$expected_start_ticks" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ "$worker_pid" == "$expected_worker_pid" ]] || return 1
+  exact_process_signal "$worker_pid" "$expected_start_ticks" CHECK
 }
 
 resident_expected_commit(){
@@ -159,8 +189,11 @@ resident_expected_commit(){
   if [[ "$service" == "$SOURCE_SERVICE" ]]; then
     git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || true
   elif [[ "$service" == "$CONTAINER_SERVICE" ]]; then
-    image_id="$(docker inspect --format '{{.Image}}' universal-video-container 2>/dev/null || true)"
-    docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_id" 2>/dev/null || true
+    image_id="$(bounded_docker_query inspect --format '{{.Image}}' universal-video-container 2>/dev/null || true)"
+    if [[ ! "$image_id" =~ ^sha256:[0-9a-f]{64}$ && "$resident_image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+      image_id="$resident_image_id"
+    fi
+    bounded_docker_query image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_id" 2>/dev/null || true
   else
     return 1
   fi
@@ -174,8 +207,307 @@ clear_restore_status(){
   fi
 }
 
+process_state(){
+  local process_id="$1"
+  [[ "$process_id" =~ ^[1-9][0-9]*$ ]] || return 1
+  awk '$1 == "State:" {print substr($2,1,1)}' "/proc/$process_id/status" 2>/dev/null
+}
+
+process_is_runnable(){
+  local process_id="$1" state
+  state="$(process_state "$process_id" 2>/dev/null || true)"
+  [[ -n "$state" && "$state" != T && "$state" != t \
+        && "$state" != Z && "$state" != X && "$state" != x ]]
+}
+
+# Open a pidfd first, re-read the expected boot-relative start ticks, and send
+# the signal through that descriptor. If the numeric PID was recycled at any
+# point, the signal is delivered only to the process referenced by the pidfd
+# (or fails with ESRCH), never to the replacement process.
+exact_process_signal(){
+  local process_id="$1" expected_ticks="$2" signal_name="$3"
+  [[ "$process_id" =~ ^[1-9][0-9]*$ && "$expected_ticks" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ "$signal_name" == STOP || "$signal_name" == CONT \
+        || "$signal_name" == TERM || "$signal_name" == CHECK ]] || return 1
+  PROCESS_ID="$process_id" EXPECTED_START_TICKS="$expected_ticks" SIGNAL_NAME="$signal_name" \
+    python3 - <<'PY' >/dev/null 2>&1
+import os
+import signal
+from pathlib import Path
+
+pid = int(os.environ["PROCESS_ID"])
+expected_ticks = int(os.environ["EXPECTED_START_TICKS"])
+signal_value = {
+    "STOP": signal.SIGSTOP,
+    "CONT": signal.SIGCONT,
+    "TERM": signal.SIGTERM,
+    "CHECK": 0,
+}[os.environ["SIGNAL_NAME"]]
+
+pidfd = os.pidfd_open(pid, 0)
+try:
+    raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+    tail = raw.rsplit(")", 1)
+    if len(tail) != 2:
+        raise SystemExit(1)
+    fields = tail[1].split()
+    if len(fields) <= 19 or int(fields[19]) != expected_ticks:
+        raise SystemExit(1)
+    if os.environ["SIGNAL_NAME"] == "CHECK" and fields[0] in {"T", "t", "Z", "X", "x"}:
+        raise SystemExit(1)
+    signal.pidfd_send_signal(pidfd, signal_value, None, 0)
+finally:
+    os.close(pidfd)
+PY
+}
+
+resume_prestop_frozen(){
+  local mode="${1:-preserve}" index service process_id expected_ticks current_ticks state attempt rc=0
+  local -a remaining_services=() remaining_pids=() remaining_start_ticks=()
+  [[ "$mode" == preserve || "$mode" == stopping ]] || return 1
+  if [[ "$mode" == stopping ]]; then
+    # A cancellation can arrive before stop_frozen_residents queues anything.
+    # Queue the unit stop and TERM every exact pidfd identity before any CONT,
+    # so cleanup can never resume a legacy claimant into the idle-proof gap.
+    bounded_systemctl stop --no-block "$SOURCE_SERVICE" "$CONTAINER_SERVICE" \
+      >/dev/null 2>&1 || rc=1
+    for index in "${!prestop_frozen_pids[@]}"; do
+      process_id="${prestop_frozen_pids[$index]}"
+      expected_ticks="${prestop_frozen_start_ticks[$index]}"
+      current_ticks="$(process_start_ticks "$process_id" 2>/dev/null || true)"
+      if [[ "$current_ticks" != "$expected_ticks" ]]; then
+        # The exact frozen identity is already gone. Never signal a recycled
+        # numeric PID; there is no legacy claimant left to resume.
+        continue
+      fi
+      state="$(process_state "$process_id" 2>/dev/null || true)"
+      if [[ "$current_ticks" != "$expected_ticks" \
+            || ( "$state" != T && "$state" != t ) ]]; then
+        rc=1
+        continue
+      fi
+      if ! exact_process_signal "$process_id" "$expected_ticks" TERM; then
+        # ESRCH after pidfd_open is safe only if the exact identity vanished.
+        # Otherwise retain every worker frozen and let bounded systemd stop
+        # finish or fail closed; never enter the CONT phase.
+        current_ticks="$(process_start_ticks "$process_id" 2>/dev/null || true)"
+        [[ "$current_ticks" != "$expected_ticks" ]] || rc=1
+      fi
+    done
+    (( rc == 0 )) || return "$rc"
+  fi
+  for index in "${!prestop_frozen_pids[@]}"; do
+    service="${prestop_frozen_services[$index]}"
+    process_id="${prestop_frozen_pids[$index]}"
+    expected_ticks="${prestop_frozen_start_ticks[$index]}"
+    current_ticks="$(process_start_ticks "$process_id" 2>/dev/null || true)"
+    if [[ -z "$current_ticks" && "$mode" == stopping ]]; then
+      continue
+    fi
+    if [[ "$current_ticks" != "$expected_ticks" ]]; then
+      rc=1
+      continue
+    fi
+    if ! exact_process_signal "$process_id" "$expected_ticks" CONT; then
+      current_ticks="$(process_start_ticks "$process_id" 2>/dev/null || true)"
+      if [[ "$current_ticks" == "$expected_ticks" ]]; then
+        remaining_services+=("$service")
+        remaining_pids+=("$process_id")
+        remaining_start_ticks+=("$expected_ticks")
+        rc=1
+      fi
+      continue
+    fi
+    if [[ "$mode" == preserve ]]; then
+      for (( attempt=0; attempt<50; attempt++ )); do
+        state="$(process_state "$process_id" 2>/dev/null || true)"
+        if process_is_runnable "$process_id" \
+              && "$(resident_worker_pid "$service" 2>/dev/null || true)" == "$process_id" \
+              && "$(process_start_ticks "$process_id" 2>/dev/null || true)" == "$expected_ticks" ]]; then
+          break
+        fi
+        sleep 0.1
+      done
+      state="$(process_state "$process_id" 2>/dev/null || true)"
+      if ! process_is_runnable "$process_id" \
+        || [[ "$(resident_worker_pid "$service" 2>/dev/null || true)" != "$process_id" ]] \
+        || [[ "$(process_start_ticks "$process_id" 2>/dev/null || true)" != "$expected_ticks" ]]; then
+        rc=1
+        state="$(process_state "$process_id" 2>/dev/null || true)"
+        current_ticks="$(process_start_ticks "$process_id" 2>/dev/null || true)"
+        if [[ "$current_ticks" == "$expected_ticks" \
+              && ( "$state" == T || "$state" == t ) ]]; then
+          remaining_services+=("$service")
+          remaining_pids+=("$process_id")
+          remaining_start_ticks+=("$expected_ticks")
+        fi
+      fi
+    fi
+  done
+  # Retain every exact identity that still exists but could not be resumed.
+  # Cleanup must retry it or refuse restoration; it may never forget a frozen
+  # worker merely because a pidfd CONT failed.
+  prestop_frozen_services=("${remaining_services[@]}")
+  prestop_frozen_pids=("${remaining_pids[@]}")
+  prestop_frozen_start_ticks=("${remaining_start_ticks[@]}")
+  return "$rc"
+}
+
+freeze_residents_for_idle_snapshot(){
+  local service target_state process_id start_ticks index attempt state all_frozen
+  for service in "$SOURCE_SERVICE" "$CONTAINER_SERVICE"; do
+    if [[ "$service" == "$SOURCE_SERVICE" ]]; then
+      target_state="$source_state_before"
+    else
+      target_state="$container_state_before"
+    fi
+    [[ "$target_state" == active ]] || continue
+    process_id="$(resident_worker_pid "$service" 2>/dev/null || true)"
+    start_ticks="$(process_start_ticks "$process_id" 2>/dev/null || true)"
+    if [[ ! "$process_id" =~ ^[1-9][0-9]*$ || ! "$start_ticks" =~ ^[1-9][0-9]*$ ]]; then
+      resume_prestop_frozen preserve >/dev/null 2>&1 || true
+      return 1
+    fi
+    prestop_frozen_services+=("$service")
+    prestop_frozen_pids+=("$process_id")
+    prestop_frozen_start_ticks+=("$start_ticks")
+    if [[ "$service" == "$SOURCE_SERVICE" ]]; then
+      restored_source_pid="$process_id"
+      restored_source_start_ticks="$start_ticks"
+    else
+      restored_container_pid="$process_id"
+      restored_container_start_ticks="$start_ticks"
+    fi
+    if ! exact_process_signal "$process_id" "$start_ticks" STOP; then
+      resume_prestop_frozen preserve >/dev/null 2>&1 || true
+      return 1
+    fi
+  done
+  for (( attempt=0; attempt<50; attempt++ )); do
+    all_frozen=1
+    for index in "${!prestop_frozen_pids[@]}"; do
+      service="${prestop_frozen_services[$index]}"
+      process_id="${prestop_frozen_pids[$index]}"
+      start_ticks="${prestop_frozen_start_ticks[$index]}"
+      state="$(process_state "$process_id" 2>/dev/null || true)"
+      if [[ "$state" != T && "$state" != t ]] \
+        || [[ "$(resident_worker_pid "$service" 2>/dev/null || true)" != "$process_id" ]] \
+        || [[ "$(process_start_ticks "$process_id" 2>/dev/null || true)" != "$start_ticks" ]]; then
+        all_frozen=0
+        break
+      fi
+    done
+    if [[ "$all_frozen" == 1 ]]; then
+      printf 'UNIVERSAL_VIDEO_PRECANARY_PRESTOP_FREEZE residents=%s result=PASS\n' \
+        "${#prestop_frozen_pids[@]}"
+      return 0
+    fi
+    sleep 0.1
+  done
+  resume_prestop_frozen preserve >/dev/null 2>&1 || true
+  return 1
+}
+
+stop_frozen_residents(){
+  local rc=0
+  # stopping mode queues the stop plus TERM for every exact frozen identity
+  # before it resumes any process. The blocking stop then completes shutdown.
+  resume_prestop_frozen stopping || rc=1
+  bounded_systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE" >/dev/null 2>&1 || rc=1
+  return "$rc"
+}
+
+resume_isolated_peer(){
+  local attempt state worker_pid rc=1
+  [[ -n "$isolated_peer_pid" ]] || return 0
+  [[ "$isolated_peer_pid" =~ ^[1-9][0-9]*$ \
+        && "$isolated_peer_start_ticks" =~ ^[1-9][0-9]*$ \
+        && -n "$isolated_peer_service" ]] || return 1
+  if [[ "$(process_start_ticks "$isolated_peer_pid" 2>/dev/null || true)" == "$isolated_peer_start_ticks" ]] \
+    && exact_process_signal "$isolated_peer_pid" "$isolated_peer_start_ticks" CONT; then
+    for (( attempt=0; attempt<50; attempt++ )); do
+      state="$(process_state "$isolated_peer_pid" 2>/dev/null || true)"
+      worker_pid="$(resident_worker_pid "$isolated_peer_service" 2>/dev/null || true)"
+      if process_is_runnable "$isolated_peer_pid" \
+            && "$worker_pid" == "$isolated_peer_pid" \
+            && "$(process_start_ticks "$isolated_peer_pid" 2>/dev/null || true)" == "$isolated_peer_start_ticks" ]]; then
+        rc=0
+        break
+      fi
+      sleep 0.1
+    done
+  fi
+  # A final best-effort CONT prevents an interrupted validation from leaving
+  # a still-existing prior resident paused, while the nonzero result keeps the
+  # overall restoration receipt fail-closed if identity was lost.
+  if [[ "$(process_start_ticks "$isolated_peer_pid" 2>/dev/null || true)" == "$isolated_peer_start_ticks" ]]; then
+    exact_process_signal "$isolated_peer_pid" "$isolated_peer_start_ticks" CONT || true
+  fi
+  if [[ "$rc" == 0 ]]; then
+    isolated_peer_service=""
+    isolated_peer_pid=""
+    isolated_peer_start_ticks=""
+  fi
+  return "$rc"
+}
+
+isolate_ambiguous_legacy_peer(){
+  local service="$1" peer_service target_commit peer_commit peer_pid peer_ticks attempt state
+  [[ -z "$isolated_peer_pid" ]] || return 1
+  if [[ "$service" == "$SOURCE_SERVICE" ]]; then
+    peer_service="$CONTAINER_SERVICE"
+  elif [[ "$service" == "$CONTAINER_SERVICE" ]]; then
+    peer_service="$SOURCE_SERVICE"
+  else
+    return 1
+  fi
+  [[ "$(service_state "$peer_service")" == active ]] || return 0
+  target_commit="$(resident_expected_commit "$service")"
+  peer_commit="$(resident_expected_commit "$peer_service")"
+  if [[ "$target_commit" =~ ^[0-9a-f]{40}$ && "$peer_commit" =~ ^[0-9a-f]{40}$ \
+        && "$target_commit" != "$peer_commit" ]]; then
+    return 0
+  fi
+  peer_pid="$(resident_worker_pid "$peer_service" 2>/dev/null || true)"
+  peer_ticks="$(process_start_ticks "$peer_pid" 2>/dev/null || true)"
+  [[ "$peer_pid" =~ ^[1-9][0-9]*$ && "$peer_ticks" =~ ^[1-9][0-9]*$ ]] || return 1
+  isolated_peer_service="$peer_service"
+  isolated_peer_pid="$peer_pid"
+  isolated_peer_start_ticks="$peer_ticks"
+  if ! exact_process_signal "$peer_pid" "$peer_ticks" STOP; then
+    isolated_peer_service=""
+    isolated_peer_pid=""
+    isolated_peer_start_ticks=""
+    return 1
+  fi
+  for (( attempt=0; attempt<50; attempt++ )); do
+    state="$(process_state "$peer_pid" 2>/dev/null || true)"
+    if [[ "$state" == T || "$state" == t ]]; then
+      [[ "$(resident_worker_pid "$peer_service" 2>/dev/null || true)" == "$peer_pid" ]] || break
+      [[ "$(process_start_ticks "$peer_pid" 2>/dev/null || true)" == "$peer_ticks" ]] || break
+      printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_ISOLATION peer_service=%s peer_pid=%s target_service=%s result=PASS\n' \
+        "$peer_service" "$peer_pid" "$service"
+      return 0
+    fi
+    sleep 0.1
+  done
+  resume_isolated_peer >/dev/null 2>&1 || true
+  return 1
+}
+
+isolated_peer_still_quiesced(){
+  local peer_service="$1" state
+  [[ -n "$peer_service" && "$isolated_peer_service" == "$peer_service" ]] || return 1
+  [[ "$isolated_peer_pid" =~ ^[1-9][0-9]*$ \
+        && "$isolated_peer_start_ticks" =~ ^[1-9][0-9]*$ ]] || return 1
+  state="$(process_state "$isolated_peer_pid" 2>/dev/null || true)"
+  [[ "$state" == T || "$state" == t ]] || return 1
+  [[ "$(resident_worker_pid "$peer_service" 2>/dev/null || true)" == "$isolated_peer_pid" ]] || return 1
+  [[ "$(process_start_ticks "$isolated_peer_pid" 2>/dev/null || true)" == "$isolated_peer_start_ticks" ]]
+}
+
 resident_status_ready(){
-  local service="$1" started_unix="$2" worker_pid="$3" expected_commit expected_resident expected_process_id expected_process_start_ticks peer_service peer_commit legacy_peer_same_commit=0
+  local service="$1" started_unix="$2" worker_pid="$3" legacy_peer_quiesced="${4:-0}" expected_commit expected_resident expected_process_id expected_process_start_ticks peer_service peer_commit legacy_peer_same_commit=0
   [[ -f "$STATUS_FILE" && ! -L "$STATUS_FILE" ]] || return 1
   [[ "$worker_pid" =~ ^[1-9][0-9]*$ ]] || return 1
   if [[ "$service" == "$SOURCE_SERVICE" ]]; then
@@ -194,6 +526,7 @@ resident_status_ready(){
   expected_process_start_ticks="$(process_start_ticks "$worker_pid" 2>/dev/null || true)"
   [[ "$expected_process_start_ticks" =~ ^[1-9][0-9]*$ ]] || return 1
   [[ "$expected_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [[ "$legacy_peer_quiesced" =~ ^[01]$ ]] || return 1
   if [[ "$(service_state "$peer_service")" == active ]]; then
     peer_commit="$(resident_expected_commit "$peer_service")"
     legacy_peer_same_commit=1
@@ -201,10 +534,14 @@ resident_status_ready(){
       legacy_peer_same_commit=0
     fi
   fi
-  STATUS_PATH="$STATUS_FILE" EXPECTED_COMMIT="$expected_commit" \
+  if [[ "$legacy_peer_quiesced" == 1 ]]; then
+    isolated_peer_still_quiesced "$peer_service" || return 1
+  fi
+  if ! STATUS_PATH="$STATUS_FILE" EXPECTED_COMMIT="$expected_commit" \
     EXPECTED_RESIDENT="$expected_resident" EXPECTED_PROCESS_ID="$expected_process_id" \
     EXPECTED_PROCESS_START_TICKS="$expected_process_start_ticks" \
     STARTED_UNIX="$started_unix" LEGACY_PEER_SAME_COMMIT="$legacy_peer_same_commit" \
+    LEGACY_PEER_QUIESCED="$legacy_peer_quiesced" \
     python3 - <<'PY' >/dev/null 2>&1
 import json
 import math
@@ -242,7 +579,10 @@ present = identity_fields.intersection(value)
 strong = identity_fields
 transitional = identity_fields - {"process_start_ticks"}
 if not present:
-    if os.environ["LEGACY_PEER_SAME_COMMIT"] != "0":
+    if (
+        os.environ["LEGACY_PEER_SAME_COMMIT"] != "0"
+        and os.environ["LEGACY_PEER_QUIESCED"] != "1"
+    ):
         raise SystemExit(1)
 elif present == transitional or present == strong:
     try:
@@ -268,6 +608,12 @@ elif present == transitional or present == strong:
 else:
     raise SystemExit(1)
 PY
+  then
+    return 1
+  fi
+  if [[ "$legacy_peer_quiesced" == 1 ]]; then
+    isolated_peer_still_quiesced "$peer_service" || return 1
+  fi
 }
 
 record_restore_failure(){
@@ -277,16 +623,16 @@ record_restore_failure(){
 service_failure_snapshot(){
   local service="$1" state result code status restarts
   state="$(service_state "$service")"
-  result="$(systemctl show "$service" --property=Result --value 2>/dev/null || true)"
-  code="$(systemctl show "$service" --property=ExecMainCode --value 2>/dev/null || true)"
-  status="$(systemctl show "$service" --property=ExecMainStatus --value 2>/dev/null || true)"
-  restarts="$(systemctl show "$service" --property=NRestarts --value 2>/dev/null || true)"
+  result="$(bounded_systemctl_query show "$service" --property=Result --value 2>/dev/null || true)"
+  code="$(bounded_systemctl_query show "$service" --property=ExecMainCode --value 2>/dev/null || true)"
+  status="$(bounded_systemctl_query show "$service" --property=ExecMainStatus --value 2>/dev/null || true)"
+  restarts="$(bounded_systemctl_query show "$service" --property=NRestarts --value 2>/dev/null || true)"
   printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE service=%s result=FAILED state=%s unit_result=%s exec_code=%s exec_status=%s restarts=%s\n' \
     "$service" "${state:-unknown}" "${result:-unknown}" "${code:-unknown}" "${status:-unknown}" "${restarts:-unknown}" >&2
 }
 
 restore_service(){
-  local service="$1" target_state="$2" attempt state worker_pid last_worker_pid="" stable=0 started_unix
+  local service="$1" target_state="$2" state worker_pid last_worker_pid="" stable=0 started_unix deadline legacy_peer_quiesced=0 verified_start_ticks
   if [[ "$target_state" == inactive ]]; then
     state="$(service_state "$service")"
     case "$state" in
@@ -303,17 +649,25 @@ restore_service(){
     return 1
   fi
 
-  systemctl reset-failed "$service" >/dev/null 2>&1 || true
+  bounded_systemctl reset-failed "$service" >/dev/null 2>&1 || true
+  if ! isolate_ambiguous_legacy_peer "$service"; then
+    service_failure_snapshot "$service"
+    return 1
+  fi
+  [[ -n "$isolated_peer_pid" ]] && legacy_peer_quiesced=1
   if ! clear_restore_status; then
+    resume_isolated_peer >/dev/null 2>&1 || true
     service_failure_snapshot "$service"
     return 1
   fi
   started_unix="$(date +%s)"
-  if ! systemctl start "$service" >/dev/null 2>&1; then
+  deadline=$((SECONDS + RESTORE_TIMEOUT_SECONDS))
+  if ! bounded_systemctl start --no-block "$service" >/dev/null 2>&1; then
+    resume_isolated_peer >/dev/null 2>&1 || true
     service_failure_snapshot "$service"
     return 1
   fi
-  for (( attempt=0; attempt<RESTORE_TIMEOUT_SECONDS; attempt++ )); do
+  while (( SECONDS < deadline )); do
     state="$(service_state "$service")"
     if [[ "$state" == active ]]; then
       worker_pid="$(resident_worker_pid "$service" 2>/dev/null || true)"
@@ -322,13 +676,37 @@ restore_service(){
           ((stable += 1))
         else
           if ! clear_restore_status; then
+            resume_isolated_peer >/dev/null 2>&1 || true
             service_failure_snapshot "$service"
             return 1
           fi
           last_worker_pid="$worker_pid"
           stable=1
         fi
-        if (( stable >= RESTORE_STABLE_SECONDS )) && resident_status_ready "$service" "$started_unix" "$worker_pid"; then
+        if (( stable >= RESTORE_STABLE_SECONDS )) \
+          && resident_status_ready "$service" "$started_unix" "$worker_pid" "$legacy_peer_quiesced"; then
+          verified_start_ticks="$(process_start_ticks "$worker_pid" 2>/dev/null || true)"
+          if [[ ! "$verified_start_ticks" =~ ^[1-9][0-9]*$ ]]; then
+            resume_isolated_peer >/dev/null 2>&1 || true
+            service_failure_snapshot "$service"
+            return 1
+          fi
+          if ! resume_isolated_peer; then
+            service_failure_snapshot "$service"
+            return 1
+          fi
+          if [[ "$(resident_worker_pid "$service" 2>/dev/null || true)" != "$worker_pid" ]] \
+            || ! exact_process_signal "$worker_pid" "$verified_start_ticks" CHECK; then
+            service_failure_snapshot "$service"
+            return 1
+          fi
+          if [[ "$service" == "$SOURCE_SERVICE" ]]; then
+            restored_source_pid="$worker_pid"
+            restored_source_start_ticks="$verified_start_ticks"
+          else
+            restored_container_pid="$worker_pid"
+            restored_container_start_ticks="$verified_start_ticks"
+          fi
           printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE service=%s target=active observed=active worker_pid=%s stable_seconds=%s result=PASS\n' \
             "$service" "$worker_pid" "$stable"
           return 0
@@ -344,6 +722,7 @@ restore_service(){
     [[ "$state" == failed ]] && break
     sleep 1
   done
+  resume_isolated_peer >/dev/null 2>&1 || true
   service_failure_snapshot "$service"
   return 1
 }
@@ -365,13 +744,72 @@ restore_source_checkout(){
 
 cleanup(){
   local rc=$? service source_after container_after
-  trap - EXIT INT TERM
+  trap - EXIT
+  # Once cleanup starts, finish the bounded restore instead of allowing a
+  # second signal to strand a frozen worker or a runtime-masked service.
+  trap '' INT TERM
+  if [[ "${#prestop_frozen_pids[@]}" -gt 0 ]]; then
+    if [[ "$services_stop_attempted" == 1 ]]; then
+      resume_prestop_frozen stopping || record_restore_failure prestop_resume
+    else
+      resume_prestop_frozen preserve || record_restore_failure prestop_resume
+    fi
+  fi
   if [[ "$window_started" == 1 ]]; then
+    if [[ "$services_stop_attempted" != 1 ]]; then
+      for service in "${added_runtime_masks[@]}"; do
+        bounded_systemctl unmask --runtime "$service" >/dev/null 2>&1 \
+          || record_restore_failure "unmask_${service}"
+      done
+      bounded_systemctl daemon-reload >/dev/null 2>&1 \
+        || record_restore_failure daemon_reload
+      if [[ "$lock_held" == 1 ]]; then
+        if ! flock --unlock 9 >/dev/null 2>&1; then
+          record_restore_failure workload_unlock
+        fi
+        exec 9>&-
+        lock_held=0
+      fi
+      source_after="$(service_state "$SOURCE_SERVICE")"
+      container_after="$(service_state "$CONTAINER_SERVICE")"
+      [[ "$source_after" == "$source_state_before" ]] \
+        || record_restore_failure source_state_mismatch
+      [[ "$container_after" == "$container_state_before" ]] \
+        || record_restore_failure container_state_mismatch
+      restored_service_ready "$SOURCE_SERVICE" "$source_state_before" \
+        "$restored_source_pid" "$restored_source_start_ticks" \
+        || record_restore_failure source_readiness_mismatch
+      restored_service_ready "$CONTAINER_SERVICE" "$container_state_before" \
+        "$restored_container_pid" "$restored_container_start_ticks" \
+        || record_restore_failure container_readiness_mismatch
+      if [[ "${#restore_failures[@]}" -eq 0 ]]; then
+        printf 'UNIVERSAL_VIDEO_PRECANARY_PRESTOP_ABORT_RESTORE_PASS source_service=%s container_service=%s\n' \
+          "$source_after" "$container_after"
+      else
+        printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=%s source_service=%s container_service=%s\n' \
+          "$(IFS=,; echo "${restore_failures[*]}")" "${source_after:-unknown}" "${container_after:-unknown}" >&2
+        if [[ "$rc" == 0 ]]; then rc=1; fi
+      fi
+      trap - INT TERM
+      exit "$rc"
+    fi
     # Keep the exclusive workload fence while claim paths are quiet, candidate
     # files are removed, and the exact pre-existing source tree is restored.
     if [[ "$services_stop_attempted" == 1 ]]; then
-      systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE" >/dev/null 2>&1 \
+      bounded_systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE" >/dev/null 2>&1 \
         || record_restore_failure service_stop
+      if [[ "${#prestop_frozen_pids[@]}" -gt 0 ]]; then
+        resume_prestop_frozen stopping \
+          || record_restore_failure prestop_stop_completion
+      fi
+      if [[ "${#prestop_frozen_pids[@]}" -gt 0 ]]; then
+        record_restore_failure prestop_identity_still_frozen
+        printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=%s source_service=%s container_service=%s\n' \
+          "$(IFS=,; echo "${restore_failures[*]}")" \
+          "$(service_state "$SOURCE_SERVICE")" "$(service_state "$CONTAINER_SERVICE")" >&2
+        trap - INT TERM
+        exit 1
+      fi
     fi
     if [[ "$BUILD_IMAGE" == 1 ]]; then
       if [[ "$ENV_FILE" == "$BASE_DIR/universal-video-container-candidate.env" ]]; then
@@ -383,13 +821,13 @@ cleanup(){
       restore_source_checkout || record_restore_failure source_checkout
     fi
     for service in "${added_runtime_masks[@]}"; do
-      systemctl unmask --runtime "$service" >/dev/null 2>&1 \
+      bounded_systemctl unmask --runtime "$service" >/dev/null 2>&1 \
         || record_restore_failure "unmask_${service}"
     done
-    systemctl daemon-reload >/dev/null 2>&1 \
+    bounded_systemctl daemon-reload >/dev/null 2>&1 \
       || record_restore_failure daemon_reload
     if [[ "$container_was_active" == 1 && -n "$resident_image_id" ]]; then
-      docker image inspect "$resident_image_id" >/dev/null 2>&1 \
+      bounded_docker image inspect "$resident_image_id" >/dev/null 2>&1 \
         || record_restore_failure resident_image_missing
     fi
     # Release the attestation fence before starting either resident. A current
@@ -411,6 +849,7 @@ cleanup(){
       || record_restore_failure source_service
     restore_service "$CONTAINER_SERVICE" "$container_target_state" \
       || record_restore_failure container_service
+    resume_isolated_peer || record_restore_failure legacy_peer_resume
 
     source_after="$(service_state "$SOURCE_SERVICE")"
     container_after="$(service_state "$CONTAINER_SERVICE")"
@@ -419,8 +858,10 @@ cleanup(){
     [[ "$container_after" == "$container_target_state" ]] \
       || record_restore_failure container_state_mismatch
     restored_service_ready "$SOURCE_SERVICE" "$source_state_before" \
+      "$restored_source_pid" "$restored_source_start_ticks" \
       || record_restore_failure source_readiness_mismatch
     restored_service_ready "$CONTAINER_SERVICE" "$container_target_state" \
+      "$restored_container_pid" "$restored_container_start_ticks" \
       || record_restore_failure container_readiness_mismatch
     if [[ "${#restore_failures[@]}" -eq 0 ]]; then
       printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service_before=%s source_service=%s container_service_before=%s container_target=%s container_service=%s prior_container_recovery=%s\n' \
@@ -432,6 +873,7 @@ cleanup(){
       if [[ "$rc" == 0 ]]; then rc=1; fi
     fi
   fi
+  trap - INT TERM
   exit "$rc"
 }
 trap cleanup EXIT
@@ -455,7 +897,7 @@ assert_quiescent(){
   if pgrep -fa '[u]niversal_video[.]spool_worker' >/dev/null; then
     die 'a Universal Video worker process is active'
   fi
-  if docker ps --filter 'name=^/universal-video-container$' --format '{{.ID}}' | grep -q .; then
+  if bounded_docker ps --filter 'name=^/universal-video-container$' --format '{{.ID}}' | grep -q .; then
     die 'the Universal Video container is active'
   fi
   if find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit | grep -q .; then
@@ -488,8 +930,8 @@ verify_prior_recovery_evidence(){
 
 assert_pre_stop_idle(){
   local source_pid container_pid worker_pid dsn_result
-  source_pid="$(systemctl show "$SOURCE_SERVICE" --property=MainPID --value 2>/dev/null || true)"
-  container_pid="$(docker inspect --format '{{.State.Pid}}' universal-video-container 2>/dev/null || true)"
+  source_pid="$(bounded_systemctl_query show "$SOURCE_SERVICE" --property=MainPID --value 2>/dev/null || true)"
+  container_pid="$(bounded_docker_query inspect --format '{{.State.Pid}}' universal-video-container 2>/dev/null || true)"
   [[ "$source_state_before" != active || "$source_pid" =~ ^[1-9][0-9]*$ ]] \
     || die 'active source resident has no authoritative worker PID'
   [[ "$container_state_before" != active || "$container_pid" =~ ^[1-9][0-9]*$ ]] \
@@ -535,11 +977,11 @@ PY
 
 mask_service_for_window(){
   local service="$1" enabled_state
-  enabled_state="$(systemctl is-enabled "$service" 2>/dev/null || true)"
+  enabled_state="$(bounded_systemctl_query is-enabled "$service" 2>/dev/null || true)"
   case "$enabled_state" in
     masked|masked-runtime) return ;;
   esac
-  systemctl mask --runtime "$service" >/dev/null
+  bounded_systemctl mask --runtime "$service" >/dev/null
   added_runtime_masks+=("$service")
 }
 
@@ -547,6 +989,9 @@ command -v flock >/dev/null || die 'flock is unavailable'
 command -v docker >/dev/null || die 'docker is unavailable'
 command -v runuser >/dev/null || die 'runuser is unavailable'
 command -v sha256sum >/dev/null || die 'sha256sum is unavailable'
+command -v timeout >/dev/null || die 'timeout is unavailable'
+python3 -c 'import os,signal; assert hasattr(os,"pidfd_open") and hasattr(signal,"pidfd_send_signal")' \
+  >/dev/null 2>&1 || die 'pidfd signaling is unavailable'
 [[ -d "$BASE_DIR/spool" && ! -L "$BASE_DIR/spool" ]] || die 'unsafe or missing spool mount'
 [[ -d "$BASE_DIR/spool/running" && ! -L "$BASE_DIR/spool/running" ]] || die 'unsafe or missing running spool'
 if [[ -L "$WORKLOAD_LOCK" || ( -e "$WORKLOAD_LOCK" && ! -f "$WORKLOAD_LOCK" ) ]]; then
@@ -588,7 +1033,7 @@ if [[ "$container_was_active" == 1 ]]; then
   [[ "${#resident_image_lines[@]}" -eq 1 ]] \
     || die 'active container resident image is missing or ambiguous'
   resident_image_id="${resident_image_lines[0]#UNIVERSAL_VIDEO_IMAGE=}"
-  docker image inspect "$resident_image_id" >/dev/null \
+  bounded_docker image inspect "$resident_image_id" >/dev/null \
     || die 'active container resident image is unavailable'
 fi
 window_started=1
@@ -598,9 +1043,14 @@ window_started=1
 # shared lock and make this operation fail closed before any mutation.
 mask_service_for_window "$SOURCE_SERVICE"
 mask_service_for_window "$CONTAINER_SERVICE"
+if ! freeze_residents_for_idle_snapshot; then
+  record_restore_failure prestop_freeze
+  die 'unable to freeze exact resident workers before the idle snapshot'
+fi
 assert_pre_stop_idle
 services_stop_attempted=1
-systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE" >/dev/null
+stop_frozen_residents \
+  || die 'unable to stop exact frozen resident workers safely'
 assert_quiescent
 printf 'UNIVERSAL_VIDEO_PRECANARY_WINDOW source_service_before=%s container_service_before=%s workload_fence=exclusive services_quiescent=true restore_on_exit=true\n' \
   "$source_state_before" "$container_state_before"
@@ -666,13 +1116,13 @@ if [[ -n "$EXPECTED_SHA" && "$commit" != "$EXPECTED_SHA" ]]; then
   die 'attested source commit does not match expected SHA'
 fi
 image="$IMAGE_REPO:$commit"
-image_id="$(docker image inspect --format '{{.Id}}' "$image")"
+image_id="$(bounded_docker image inspect --format '{{.Id}}' "$image")"
 [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || die 'captured image ID is unavailable'
 
 verify_image_identity(){
   local current_id revision
-  current_id="$(docker image inspect --format '{{.Id}}' "$image")"
-  revision="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_id")"
+  current_id="$(bounded_docker image inspect --format '{{.Id}}' "$image")"
+  revision="$(bounded_docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_id")"
   [[ "$current_id" == "$image_id" ]] || die 'mutable image tag changed after capture'
   [[ "$revision" == "$commit" ]] || die 'captured image revision label does not match source commit'
 }
