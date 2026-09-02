@@ -1,0 +1,33 @@
+name: Resolve exact Python base image
+
+on:
+  push:
+    branches:
+      - autopilot/uv-ready-one-canary-20260901
+    paths:
+      - .github/workflows/uv-resolve-python-base.yml
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Resolve immutable multi-platform digest
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ref='python:3.12-slim-bookworm'
+          digest="$(docker buildx imagetools inspect "$ref" | awk '/^Digest:/ {print $2; exit}')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'BASE_IMAGE_REF=%s@%s\n' "$ref" "$digest" | tee base-image-ref.txt
+          printf 'BASE_IMAGE_DIGEST=%s\n' "$digest" | tee -a base-image-ref.txt
+      - name: Upload resolver evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: uv-python-base-digest
+          path: base-image-ref.txt
+          if-no-files-found: error
+          retention-days: 3
