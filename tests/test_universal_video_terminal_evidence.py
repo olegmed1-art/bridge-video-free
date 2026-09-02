@@ -79,9 +79,12 @@ def _fixture():
         },
     }
 
-    def readback(file_id, _token, *, max_bytes):
+    def readback(file_id, _token, *, max_bytes, retain_body=False):
         assert len(objects[file_id]["body"]) <= max_bytes
-        return dict(objects[file_id])
+        result = dict(objects[file_id])
+        if not retain_body:
+            result.pop("body", None)
+        return result
 
     return claim, done, route, objects, readback
 
@@ -139,9 +142,8 @@ class _Response:
         yield from self._chunks
 
 
-def test_readback_drive_bytes_streams_and_matches_metadata():
-    body = b"readback-object"
-    metadata = {
+def _metadata(body):
+    return {
         "id": MASTER_ID,
         "name": "MASTER.pdf",
         "mimeType": "application/pdf",
@@ -151,9 +153,13 @@ def test_readback_drive_bytes_streams_and_matches_metadata():
         "sha256Checksum": hashlib.sha256(body).hexdigest(),
     }
 
+
+def test_readback_drive_bytes_streams_and_matches_metadata():
+    body = b"readback-object"
+
     def metadata_loader(file_id, token):
         assert file_id == MASTER_ID and token == "token"
-        return metadata
+        return _metadata(body)
 
     def get(*_args, **_kwargs):
         return _Response([body[:4], body[4:]])
@@ -162,12 +168,27 @@ def test_readback_drive_bytes_streams_and_matches_metadata():
         MASTER_ID,
         "token",
         max_bytes=1024,
+        retain_body=True,
         metadata_loader=metadata_loader,
         get=get,
     )
     assert result["body"] == body
     assert result["sha256"] == hashlib.sha256(body).hexdigest()
     assert result["parents"] == [TARGET_ID]
+
+
+def test_readback_drive_bytes_does_not_retain_large_body_by_default():
+    body = b"large-result-stream"
+    result = readback_drive_bytes(
+        MASTER_ID,
+        "token",
+        max_bytes=1024,
+        metadata_loader=lambda _file_id, _token: _metadata(body),
+        get=lambda *_args, **_kwargs: _Response([body]),
+    )
+    assert "body" not in result
+    assert result["size_bytes"] == len(body)
+    assert result["sha256"] == hashlib.sha256(body).hexdigest()
 
 
 def test_readback_drive_bytes_refuses_declared_size_mismatch():
