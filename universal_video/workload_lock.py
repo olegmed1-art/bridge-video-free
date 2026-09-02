@@ -26,6 +26,7 @@ def shared_workload_lock(
     spool_root: Path | None = None,
     *,
     blocking: bool = True,
+    exclusive: bool = False,
 ) -> Iterator[Path]:
     """Hold the shared claim lock while a worker can mutate or claim work.
 
@@ -43,7 +44,9 @@ def shared_workload_lock(
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             raise RuntimeError("UV_WORKLOAD_LOCK_INVALID")
-        operation = fcntl.LOCK_SH if blocking else fcntl.LOCK_SH | fcntl.LOCK_NB
+        operation = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+        if not blocking:
+            operation |= fcntl.LOCK_NB
         fcntl.flock(fd, operation)
         yield path
     finally:

@@ -21,6 +21,7 @@ on:
       - 'deploy/oracle-universal-video/**'
       - 'deploy/oracle-universal-video/Dockerfile'
       - 'ops/oracle_universal_video_*.sh'
+      - 'ops/validate_video_queue_dsn.py'
       - 'ops/universal_video_receipt_reader.py'
       - 'tests/test_universal_video_*.py'
       - 'tests/test_bridge_video_*.py'
@@ -40,7 +41,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install test dependencies
-        run: python -m pip install -q pytest requests google-auth
+        run: python -m pip install -q pytest requests google-auth 'psycopg[binary]==3.3.4'
       - name: Syntax-check host scripts
         run: |
           bash -n ops/oracle_universal_video_preflight.sh

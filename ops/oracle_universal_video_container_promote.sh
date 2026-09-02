@@ -37,6 +37,92 @@ fail(){
   exit 1
 }
 has_running_job(){ find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit | grep -q .; }
+pid_descends_from(){
+  local child="$1" ancestor="$2" parent hops=0
+  [[ "$child" =~ ^[1-9][0-9]*$ && "$ancestor" =~ ^[1-9][0-9]*$ ]] || return 1
+  while (( child > 1 && hops < 64 )); do
+    [[ "$child" == "$ancestor" ]] && return 0
+    parent="$(ps -o ppid= -p "$child" 2>/dev/null | tr -d '[:space:]')"
+    [[ "$parent" =~ ^[0-9]+$ && "$parent" != "$child" ]] || return 1
+    child="$parent"
+    ((hops += 1))
+  done
+  [[ "$child" == "$ancestor" ]]
+}
+process_start_ticks(){
+  local process_id="$1"
+  [[ "$process_id" =~ ^[1-9][0-9]*$ ]] || return 1
+  PROCESS_STAT="/proc/$process_id/stat" python3 - <<'PY'
+import os
+from pathlib import Path
+
+raw = Path(os.environ["PROCESS_STAT"]).read_text(encoding="utf-8")
+tail = raw.rsplit(")", 1)
+if len(tail) != 2:
+    raise SystemExit(1)
+fields = tail[1].split()
+if len(fields) <= 19:
+    raise SystemExit(1)
+value = int(fields[19])
+if value <= 0:
+    raise SystemExit(1)
+print(value)
+PY
+}
+resident_worker_pid(){
+  local container_root_pid="$1" candidate
+  local -a matches=()
+  while read -r candidate; do
+    if pid_descends_from "$candidate" "$container_root_pid"; then
+      matches+=("$candidate")
+    fi
+  done < <(pgrep -f '[u]niversal_video[.]spool_worker' || true)
+  [[ "${#matches[@]}" -eq 1 ]] || return 1
+  printf '%s\n' "${matches[0]}"
+}
+resident_status_ready(){
+  local container_root_pid worker_pid expected_process_id expected_process_start_ticks
+  [[ -f "$STATUS" && ! -L "$STATUS" ]] || return 1
+  container_root_pid="$(docker inspect --format '{{.State.Pid}}' universal-video-container 2>/dev/null || true)"
+  [[ "$container_root_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  worker_pid="$(resident_worker_pid "$container_root_pid" 2>/dev/null || true)"
+  [[ "$worker_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  expected_process_id="$(awk '$1 == "NSpid:" {print $NF}' "/proc/$worker_pid/status" 2>/dev/null || true)"
+  expected_process_start_ticks="$(process_start_ticks "$worker_pid" 2>/dev/null || true)"
+  [[ "$expected_process_id" =~ ^[1-9][0-9]*$ && "$expected_process_start_ticks" =~ ^[1-9][0-9]*$ ]] || return 1
+  if ! STATUS_PATH="$STATUS" EXPECTED_COMMIT="$EXPECTED_COMMIT" STARTED_UNIX="$started_unix" \
+      EXPECTED_PROCESS_ID="$expected_process_id" \
+      EXPECTED_PROCESS_START_TICKS="$expected_process_start_ticks" \
+      python3 - <<'PY'
+import json, os, re
+from pathlib import Path
+
+path = Path(os.environ['STATUS_PATH'])
+if path.stat().st_size > 1024 * 1024:
+    raise SystemExit(1)
+x = json.loads(path.read_text(encoding='utf-8'))
+assert x.get('schema') == 'universal-video-resident-status-v2'
+assert x.get('instance_state') == 'RUNNING'
+assert x.get('installed_runtime_commit') == os.environ['EXPECTED_COMMIT']
+assert x.get('active_jobs') == []
+assert float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])
+assert x.get('resident_id') == 'container'
+assert type(x.get('process_id')) is int
+assert x['process_id'] == int(os.environ['EXPECTED_PROCESS_ID'])
+assert float(x.get('process_started_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])
+assert float(x.get('process_started_at_unix') or 0) <= float(x.get('observed_at_unix') or 0)
+assert type(x.get('process_start_ticks')) is int
+assert x['process_start_ticks'] == int(os.environ['EXPECTED_PROCESS_START_TICKS'])
+assert isinstance(x.get('process_nonce'), str) and re.fullmatch(r'[0-9a-f]{32}', x['process_nonce'])
+PY
+  then
+    return 1
+  fi
+  [[ "$(docker inspect --format '{{.State.Pid}}' universal-video-container 2>/dev/null || true)" == "$container_root_pid" ]] || return 1
+  pid_descends_from "$worker_pid" "$container_root_pid" || return 1
+  [[ "$(awk '$1 == "NSpid:" {print $NF}' "/proc/$worker_pid/status" 2>/dev/null || true)" == "$expected_process_id" ]] || return 1
+  [[ "$(process_start_ticks "$worker_pid" 2>/dev/null || true)" == "$expected_process_start_ticks" ]] || return 1
+}
 emit_runtime_code(){
   local since="@${started_unix:-0}"
   journalctl -u "$NEW_SERVICE" --since "$since" --no-pager -o cat 2>/dev/null | python3 -c '
@@ -113,6 +199,18 @@ trap cleanup EXIT
 [[ -d "$BASE_DIR/spool/running" && ! -L "$BASE_DIR/spool/running" ]] || fail UV_CONTAINER_PROMOTION_SPOOL_UNAVAILABLE
 has_running_job && fail UV_CONTAINER_PROMOTION_JOB_RUNNING
 
+CURRENT_STAGE='queue-credential-preflight'
+queue_dsn_file="$BASE_DIR/secrets/video-queue-dsn"
+[[ -f "$queue_dsn_file" && ! -L "$queue_dsn_file" ]] \
+  || fail UV_CONTAINER_PROMOTION_QUEUE_CREDENTIAL_MISSING
+queue_dsn_meta="$(stat -c '%U:%G:%a:%s' "$queue_dsn_file" 2>/dev/null || true)"
+[[ "$queue_dsn_meta" =~ ^root:universal-video:640:([1-9][0-9]{0,3})$ ]] \
+  || fail UV_CONTAINER_PROMOTION_QUEUE_CREDENTIAL_METADATA_INVALID
+(( BASH_REMATCH[1] <= 4096 )) \
+  || fail UV_CONTAINER_PROMOTION_QUEUE_CREDENTIAL_OVERSIZED
+python3 "$SOURCE_DIR/ops/validate_video_queue_dsn.py" "$queue_dsn_file" >/dev/null \
+  || fail UV_CONTAINER_PROMOTION_QUEUE_CREDENTIAL_INVALID
+
 CURRENT_STAGE='operator-snapshot'
 operator_backup_root="$(mktemp -d)"
 if [[ -e "$OPERATOR_TARGET" || -L "$OPERATOR_TARGET" ]]; then
@@ -131,7 +229,7 @@ CURRENT_STAGE='protected-preflight'
 before_assistant="$(systemctl is-active assistant-lab.service)"
 before_dds="$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)"
 BEFORE_DDS="$before_dds" python3 - <<'PY'
-import json,os
+import json,os,re
 x=json.loads(os.environ['BEFORE_DDS'])
 assert x.get('status') == 'ready'
 assert x.get('engine') == 'DDS3'
@@ -141,6 +239,25 @@ PY
 CURRENT_STAGE='image-preflight'
 observed="$(docker image inspect --format '{{.Id}}' "bridge-school/universal-video:$EXPECTED_COMMIT")"
 [[ "$observed" == "$EXPECTED_DIGEST" ]] || fail UV_CONTAINER_PROMOTION_IMAGE_MISMATCH
+CURRENT_STAGE='speaker-model-preflight'
+runtime_uid="$(id -u universal-video)"
+runtime_gid="$(id -g universal-video)"
+[[ -d "$BASE_DIR/model-cache/speaker" && ! -L "$BASE_DIR/model-cache/speaker" ]] \
+  || fail UV_CONTAINER_PROMOTION_SPEAKER_CACHE_UNAVAILABLE
+docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g \
+  --user="$runtime_uid:$runtime_gid" \
+  --env "UNIVERSAL_VIDEO_SOURCE_COMMIT=$EXPECTED_COMMIT" \
+  --env UNIVERSAL_VIDEO_SPOOL_ROOT=/var/lib/universal-video/spool \
+  --env UNIVERSAL_VIDEO_OUTPUT_ROOT=/var/lib/universal-video/output \
+  --env UNIVERSAL_VIDEO_MEDIA_ROOT=/var/lib/universal-video/media \
+  --env UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE=/var/lib/universal-video/model-cache/speaker \
+  --env HF_HOME=/var/lib/universal-video/model-cache \
+  --mount "type=bind,src=$BASE_DIR/spool,dst=/var/lib/universal-video/spool" \
+  --mount "type=bind,src=$BASE_DIR/output,dst=/var/lib/universal-video/output" \
+  --mount "type=bind,src=$BASE_DIR/media,dst=/var/lib/universal-video/media" \
+  --mount "type=bind,src=$BASE_DIR/model-cache,dst=/var/lib/universal-video/model-cache" \
+  "$EXPECTED_DIGEST" true \
+  || fail UV_CONTAINER_PROMOTION_SPEAKER_MODEL_INVALID
 started_unix="$(date +%s)"
 old_enabled_before="$(systemctl is-enabled "$OLD_SERVICE" 2>/dev/null || true)"
 old_active_before="$(systemctl is-active "$OLD_SERVICE" 2>/dev/null || true)"
@@ -180,16 +297,7 @@ CURRENT_STAGE='resident-status'
 deadline=$((SECONDS + 45))
 fresh_status=0
 while (( SECONDS < deadline )); do
-  if [[ -f "$STATUS" && ! -L "$STATUS" ]] && STATUS_PATH="$STATUS" EXPECTED_COMMIT="$EXPECTED_COMMIT" STARTED_UNIX="$started_unix" python3 - <<'PY'
-import json,os
-x=json.load(open(os.environ['STATUS_PATH'],encoding='utf-8'))
-assert x.get('schema') == 'universal-video-resident-status-v2'
-assert x.get('instance_state') == 'RUNNING'
-assert x.get('installed_runtime_commit') == os.environ['EXPECTED_COMMIT']
-assert x.get('active_jobs') == []
-assert float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])
-PY
-  then
+  if resident_status_ready; then
     fresh_status=1
     break
   fi
@@ -199,15 +307,6 @@ if (( fresh_status != 1 )); then
   [[ -f "$STATUS" && ! -L "$STATUS" ]] || fail UV_CONTAINER_PROMOTION_STATUS_MISSING
   fail UV_CONTAINER_PROMOTION_STATUS_STALE
 fi
-STATUS_PATH="$STATUS" EXPECTED_COMMIT="$EXPECTED_COMMIT" STARTED_UNIX="$started_unix" python3 - <<'PY'
-import json,os
-x=json.load(open(os.environ['STATUS_PATH'],encoding='utf-8'))
-assert x.get('schema') == 'universal-video-resident-status-v2'
-assert x.get('instance_state') == 'RUNNING'
-assert x.get('installed_runtime_commit') == os.environ['EXPECTED_COMMIT']
-assert x.get('active_jobs') == []
-assert float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])
-PY
 
 CURRENT_STAGE='operator-install'
 if ! operator_install_output="$(
@@ -258,6 +357,8 @@ for x in (before,after):
     assert x.get('engine') == 'DDS3'
     assert x.get('fallback_used') is False
 PY
+CURRENT_STAGE='resident-status-final'
+resident_status_ready || fail UV_CONTAINER_PROMOTION_STATUS_STALE
 switch_started=0
 CURRENT_STAGE='complete'
 printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_PASS commit=%s image_digest=%s fallback_used=false active_jobs=0\n' "$EXPECTED_COMMIT" "$EXPECTED_DIGEST"

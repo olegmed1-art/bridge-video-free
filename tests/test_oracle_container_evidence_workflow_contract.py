@@ -38,7 +38,7 @@ def test_evidence_workflow_remains_non_activating_and_media_free() -> None:
     assert "video_job_submitted=false" in text
     assert "workflow_dispatch:" in text
     assert "paths:" in text
-    assert "'universal_video/container_runtime.py'" in text
+    assert "'universal_video/**'" in text
     assert "'ops/oracle_universal_video_container_install.sh'" in text
     assert "'ops/bounded_container_log_diagnostic.py'" in text
     assert "'ops/oracle_universal_video_run_command.sh'" in text
@@ -58,7 +58,7 @@ def test_container_installer_reclaims_only_unused_video_images_before_build() ->
 
     assert 'UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB:-8388608' in installer
     assert 'docker builder prune --all --force' in installer
-    assert 'docker image prune --all --force' in installer
+    assert 'docker image prune --all --force' not in installer
     assert 'docker image ls --filter "reference=$IMAGE_REPO:*"' in installer
     assert 'docker ps -aq --filter "ancestor=$old_image_id"' in installer
     assert 'UV_CONTAINER_DISK_INSUFFICIENT' in installer

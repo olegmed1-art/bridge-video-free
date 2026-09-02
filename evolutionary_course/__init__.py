@@ -29,10 +29,15 @@ from .longitudinal_pilot import (
     run_multi_lesson_pilot,
 )
 from .methodology_queue import (
+    CANDIDATE_DECISION_SCHEMA,
+    CANDIDATE_REVIEW_REQUEST_SCHEMA,
     DECISION_SCHEMA,
     QUEUE_SCHEMA,
     MethodologyQueueError,
+    apply_approved_candidate_to_catalog,
     build_methodology_review_queue,
+    build_candidate_review_request,
+    record_candidate_review_decision,
     record_methodology_decision,
 )
 from .video31_adapter import (
@@ -63,6 +68,13 @@ from .artifact_readiness import (
     ArtifactReadinessError,
     assess_artifact_readiness,
 )
+from .episode_review import (
+    EPISODE_REVIEW_DECISION_SCHEMA,
+    EPISODE_REVIEW_REQUEST_SCHEMA,
+    EpisodeReviewError,
+    build_episode_review_request,
+    record_episode_review_decision,
+)
 
 __all__ = [
     "ADAPTER_SCHEMA",
@@ -72,6 +84,8 @@ __all__ = [
     "CATALOG_SCHEMA",
     "CATALOG_VERSION",
     "COURSE_VERSION",
+    "CANDIDATE_DECISION_SCHEMA",
+    "CANDIDATE_REVIEW_REQUEST_SCHEMA",
     "DECISION_SCHEMA",
     "EPISTEMIC_CLASSES",
     "EpisodeContractError",
@@ -95,13 +109,21 @@ __all__ = [
     "AdaptiveSelectorError",
     "ARTIFACT_READINESS_SCHEMA",
     "ArtifactReadinessError",
+    "EPISODE_REVIEW_REQUEST_SCHEMA",
+    "EPISODE_REVIEW_DECISION_SCHEMA",
+    "EpisodeReviewError",
+    "apply_approved_candidate_to_catalog",
     "adapt_legacy_report_pointers",
     "adapt_video31_quality",
     "adapt_video31_quality_with_catalog",
     "build_methodology_review_queue",
+    "build_candidate_review_request",
     "build_skill_trajectory",
+    "build_episode_review_request",
+    "record_episode_review_decision",
     "canonical_sha256",
     "record_methodology_decision",
+    "record_candidate_review_decision",
     "resolve_reviewed_skill",
     "validate_catalog",
     "validate_episode",
