@@ -96,8 +96,11 @@ def test_precanary_fences_services_claims_and_uses_captured_image_id():
     run_image=script[script.index("run_image(){"):script.index("verify_image_identity\nprintf",script.index("run_image(){"))]
     assert 'mask_service_for_window "$SOURCE_SERVICE"' in script
     assert 'mask_service_for_window "$CONTAINER_SERVICE"' in script
-    assert 'quiesce_service "$SOURCE_SERVICE"' in script
-    assert 'quiesce_service "$CONTAINER_SERVICE"' in script
+    assert 'quiesce_residents' in script
+    assert 'quiesce_service "$SOURCE_SERVICE" "$source_state"' in script
+    assert 'quiesce_service "$CONTAINER_SERVICE" "$container_state"' in script
+    assert "active but masked and cannot be restored safely" in script
+    assert "both Universal Video residents are active; refusing ambiguous restore" in script
     assert 'stopped_services+=("$service")' in script
     assert 'systemctl start "$service"' in script
     assert 'systemctl is-active --quiet "$service"' in script
