@@ -16,6 +16,7 @@ MIN_FREE_KB="${UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB:-8388608}"
 BUILD_TIMEOUT_SECONDS="${UNIVERSAL_VIDEO_CONTAINER_BUILD_TIMEOUT_SECONDS:-1200}"
 IMAGE_REPO="${UNIVERSAL_VIDEO_IMAGE_REPO:-bridge-school/universal-video}"
 STATUS_DIR="${UNIVERSAL_VIDEO_STATUS_DIR:-/run/bridge-school}"
+PRESERVE_IMAGE_ID="${UNIVERSAL_VIDEO_CONTAINER_PRESERVE_IMAGE_ID:-}"
 PERSISTENT_ENV_FILE="$BASE_DIR/universal-video-container.env"
 CANDIDATE_ENV_FILE="$BASE_DIR/universal-video-container-candidate.env"
 ENV_FILE="$PERSISTENT_ENV_FILE"
@@ -58,6 +59,8 @@ service_status(){
 [[ "$BUILD_IMAGE" =~ ^[01]$ ]] || die 'UNIVERSAL_VIDEO_CONTAINER_BUILD must be 0 or 1'
 [[ "$MIN_FREE_KB" =~ ^[0-9]+$ && "$MIN_FREE_KB" -gt 0 ]] || die 'UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB must be a positive integer'
 [[ "$BUILD_TIMEOUT_SECONDS" =~ ^[0-9]+$ && "$BUILD_TIMEOUT_SECONDS" -ge 60 ]] || die 'UNIVERSAL_VIDEO_CONTAINER_BUILD_TIMEOUT_SECONDS must be at least 60'
+[[ -z "$PRESERVE_IMAGE_ID" || "$PRESERVE_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] \
+  || die 'UNIVERSAL_VIDEO_CONTAINER_PRESERVE_IMAGE_ID must be an exact image ID'
 [[ -d "$SOURCE_DIR/.git" ]] || die 'isolated source checkout missing'
 [[ -f "$SOURCE_DIR/deploy/oracle-universal-video/Dockerfile" ]] || die 'container Dockerfile missing'
 [[ -f "$SOURCE_DIR/deploy/oracle-universal-video/$SERVICE_NAME" ]] || die 'container service unit missing'
@@ -88,6 +91,7 @@ if [[ "$BUILD_IMAGE" == 1 ]]; then
     docker builder prune --all --force >/dev/null 2>&1 || true
     mapfile -t old_image_ids < <(docker image ls --filter "reference=$IMAGE_REPO:*" --format '{{.ID}}' | sort -u)
     for old_image_id in "${old_image_ids[@]}"; do
+      [[ -n "$PRESERVE_IMAGE_ID" && "$old_image_id" == "$PRESERVE_IMAGE_ID" ]] && continue
       if [[ -z "$(docker ps -aq --filter "ancestor=$old_image_id")" ]]; then
         docker image rm "$old_image_id" >/dev/null 2>&1 || true
       fi
