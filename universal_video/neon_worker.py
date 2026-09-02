@@ -112,7 +112,7 @@ def verify_claimed_source(claim: Mapping[str, Any], token: str) -> dict[str, Any
 
     # Preserve the established observer/test shape while v2 evidence itself uses
     # source_identity_from_claim(). Both represent the same six facts.
-    return {
+    observed = {
         "id": normalized["file_id"],
         "name": normalized["name"],
         "mime_type": normalized["mime_type"],
@@ -120,6 +120,16 @@ def verify_claimed_source(claim: Mapping[str, Any], token: str) -> dict[str, Any
         "parents": [normalized["parent_folder_id"]],
         "checksum": normalized["checksum"],
     }
+    # Some Drive providers do not expose a content checksum. In that case the
+    # immutable start/end fence must also bind the object revision; otherwise a
+    # same-size replacement could preserve all six queue identity fields.
+    if normalized["checksum"] is None:
+        modified_time = str(meta.get("modifiedTime") or "")
+        version = str(meta.get("version") or "")
+        if not modified_time or not version:
+            raise NeonVideoWorkerError("VIDEO_SOURCE_REVISION_MISSING")
+        observed.update({"modified_time": modified_time, "version": version})
+    return observed
 
 
 @contextmanager

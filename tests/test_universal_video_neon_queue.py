@@ -180,6 +180,32 @@ def test_live_source_readback_is_exact_and_fail_closed():
             verify_claimed_source(item, "token")
 
 
+def test_checksum_null_source_is_fenced_by_drive_revision():
+    item = claim()
+    item["source_checksum"] = None
+    meta = drive_item(14)
+    meta.pop("md5Checksum")
+    meta.update({"modifiedTime": "2026-09-02T21:00:00Z", "version": "17"})
+    with patch("universal_video.neon_worker.file_metadata", return_value=meta):
+        observed = verify_claimed_source(item, "token")
+    assert observed["checksum"] is None
+    assert observed["modified_time"] == "2026-09-02T21:00:00Z"
+    assert observed["version"] == "17"
+
+
+@pytest.mark.parametrize("missing", ["modifiedTime", "version"])
+def test_checksum_null_source_without_revision_fails_closed(missing):
+    item = claim()
+    item["source_checksum"] = None
+    meta = drive_item(14)
+    meta.pop("md5Checksum")
+    meta.update({"modifiedTime": "2026-09-02T21:00:00Z", "version": "17"})
+    meta.pop(missing)
+    with patch("universal_video.neon_worker.file_metadata", return_value=meta):
+        with pytest.raises(NeonVideoWorkerError, match="REVISION_MISSING"):
+            verify_claimed_source(item, "token")
+
+
 def test_stable_environment_hides_legacy_database_persistence(monkeypatch):
     monkeypatch.setenv("BRIDGE_WORKER_DATABASE_URL", "postgresql://must-not-leak")
     with _stable_environment(claim()):

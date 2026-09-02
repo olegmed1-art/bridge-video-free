@@ -306,7 +306,7 @@ jobs:
           [[ "$installed_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$attested_digest" == "$installed_digest" ]]
           grep -F '"gate":"IMPORT_CLOSURE"' "$session_log"
-          grep -F '"gate":"SYNTHETIC_RESULT_CONTRACT"' "$session_log"
+          grep -F '"gate":"SYNTHETIC_RESULT_CONTRACT_V2"' "$session_log"
           grep -F '"gate":"SOURCE_IDENTITY_METADATA_ONLY"' "$session_log"
           grep -F '"file_id":"198-2v3JBlNQobdsPYQQWzrrCqQ1zBZOI"' "$session_log"
           grep -F '"checksum_type":"md5"' "$session_log"
@@ -318,7 +318,7 @@ jobs:
           {
             echo "runtime_sha=$EXACT_SHA"
             grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|RESTORE_PASS)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|CLEANUP|INSTALL_PASS)) ' "$session_log"
-            grep -E '"gate":"(IMPORT_CLOSURE|SYNTHETIC_RESULT_CONTRACT|SOURCE_IDENTITY_METADATA_ONLY)"' "$session_log"
+            grep -E '"gate":"(IMPORT_CLOSURE|SYNTHETIC_RESULT_CONTRACT_V2|SOURCE_IDENTITY_METADATA_ONLY)"' "$session_log"
             echo "image_digest=$installed_digest"
             echo 'real_media_canary_run=false'
             echo 'source_media_downloaded=false'
