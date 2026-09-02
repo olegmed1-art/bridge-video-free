@@ -409,6 +409,10 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert 'float(value.get("observed_at_unix") or 0) >= int(os.environ["STARTED_UNIX"])' in script
     assert 'value.get("installed_runtime_commit") == os.environ["EXPECTED_COMMIT"]' in script
     assert 'value.get("resident_id") == os.environ["EXPECTED_RESIDENT"]' in script
+    assert 'expected_process_id="$worker_pid"' in script
+    assert 'awk \'$1 == "NSpid:" {print $NF}\' "/proc/$worker_pid/status"' in script
+    assert 'EXPECTED_PROCESS_ID="$expected_process_id"' in script
+    assert 'value["process_id"] == int(os.environ["EXPECTED_PROCESS_ID"])' in script
     assert 'float(value.get("process_started_at_unix") or 0) >= int(os.environ["STARTED_UNIX"])' in script
     assert 're.fullmatch(r"[0-9a-f]{32}", value["process_nonce"])' in script
     assert "RESTORE_STABLE_SECONDS" in script
@@ -460,7 +464,7 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     restore_body = script[
         script.index("restore_service(){") : script.index("restore_source_checkout(){")
     ]
-    assert 'resident_status_ready "$service" "$started_unix"' in restore_body
+    assert 'resident_status_ready "$service" "$started_unix" "$worker_pid"' in restore_body
     assert (
         restore_source_index
         > unlock_index

@@ -212,7 +212,7 @@ deadline=$((SECONDS + 45))
 fresh_status=0
 while (( SECONDS < deadline )); do
   if [[ -f "$STATUS" && ! -L "$STATUS" ]] && STATUS_PATH="$STATUS" EXPECTED_COMMIT="$EXPECTED_COMMIT" STARTED_UNIX="$started_unix" python3 - <<'PY'
-import json,os
+import json,os,re
 x=json.load(open(os.environ['STATUS_PATH'],encoding='utf-8'))
 assert x.get('schema') == 'universal-video-resident-status-v2'
 assert x.get('instance_state') == 'RUNNING'
