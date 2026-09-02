@@ -1,6 +1,11 @@
 import pytest
 
 from bridge_school_api.l1_canonical_runtime import evaluate, resolve
+from bridge_school_api.l1_canonical_registry import ACTIVE_DOMAIN_RULE_IDS
+from bridge_school_api.l1_canonical_runtime_v2 import (
+    evaluate as evaluate_registered,
+    resolve_registered_with_world_fallback,
+)
 
 
 def test_hcp_values():
@@ -210,17 +215,32 @@ def test_defense_signal_is_blocked():
 
 
 def test_runtime_conflict_gate():
-    a = type(evaluate("RULE-L1-OPEN-1H", {"HCP": 13, "H": 5, "S": 4}))("A", "MATCH", "1H", 100, 5, 5)
-    b = type(a)("B", "MATCH", "1S", 100, 5, 5)
+    context = {
+        "HCP": 10,
+        "legal_entry_level": 1,
+        "called_suit": "S",
+        "called_suit_length": 5,
+        "stopper": True,
+    }
+    rule_ids = (
+        "RULE-L1-DIRECT-OVERCALL-1SUIT",
+        "RULE-L1-DOUBLE-NT-RESPONSE-BANDS",
+    )
+    assert all(rule_id in ACTIVE_DOMAIN_RULE_IDS for rule_id in rule_ids)
+    a, b = (evaluate_registered(rule_id, context) for rule_id in rule_ids)
+    assert a.matched and b.matched and a.action != b.action
+    assert (a.specificity, a.scope_rank, a.priority) == (
+        b.specificity,
+        b.scope_rank,
+        b.priority,
+    )
     world_calls = []
 
     def world_lookup():
         world_calls.append("called")
         raise AssertionError("WORLD must not run across CANON_CONFLICT")
 
-    result = resolve([a, b])
-    if result.status == "NO_MATCH":
-        world_lookup()
+    result = resolve_registered_with_world_fallback([a, b], world_lookup)
     assert result.status == "CANON_CONFLICT"
     assert result.action is None
     assert world_calls == []
