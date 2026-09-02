@@ -35,13 +35,18 @@ def source_identity_from_claim(claim: Mapping[str, Any]) -> dict[str, Any]:
         size = int(claim.get("source_size_bytes"))
     except (TypeError, ValueError) as exc:
         raise TerminalEvidenceV2Error("UV_SOURCE_IDENTITY_SIZE_INVALID") from exc
+    raw_checksum = claim.get("source_checksum")
+    checksum = None if raw_checksum is None else str(raw_checksum).strip().lower()
     identity = {
         "file_id": str(claim.get("source_file_id") or ""),
         "name": str(claim.get("source_name") or ""),
         "mime_type": str(claim.get("source_mime_type") or ""),
         "size_bytes": size,
         "parent_folder_id": str(claim.get("source_folder_id") or ""),
-        "checksum": str(claim.get("source_checksum") or "").strip().lower(),
+        # Migration 0056 deliberately permits providers that expose no content
+        # checksum.  Preserve that absence as JSON null; an empty or malformed
+        # non-null value is still invalid and fails closed.
+        "checksum": checksum,
     }
     if (
         not identity["file_id"]
@@ -49,7 +54,7 @@ def source_identity_from_claim(claim: Mapping[str, Any]) -> dict[str, Any]:
         or not identity["mime_type"]
         or identity["size_bytes"] <= 0
         or not identity["parent_folder_id"]
-        or not _CHECKSUM_RE.fullmatch(identity["checksum"])
+        or (checksum is not None and not _CHECKSUM_RE.fullmatch(checksum))
     ):
         raise TerminalEvidenceV2Error("UV_SOURCE_IDENTITY_INVALID")
     return identity
