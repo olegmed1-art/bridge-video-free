@@ -56,7 +56,7 @@ def test_world_promotion_and_canon_conflict_fail_closed() -> None:
     assert promotion["non_owner_approval_accepted"] is False
     assert promotion["silent_promotion_allowed"] is False
     assert promotion["on_missing_or_stale_evidence"] == "FAIL_CLOSED_NO_PROMOTION"
-    assert promotion["on_canon_conflict"] == "RETURN_EXPLICIT_GAP_NO_SCHOOL_ANSWER"
+    assert promotion["on_canon_conflict"] == "RETURN_CANON_CONFLICT_NO_ACTION_WORLD_NOT_CALLED"
     assert {
         "exact_world_source_version_and_sha256",
         "exact_target_canon_version",
