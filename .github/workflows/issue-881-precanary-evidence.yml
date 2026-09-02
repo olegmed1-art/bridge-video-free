@@ -70,7 +70,8 @@ jobs:
           bash -n ops/oracle_universal_video_container_install.sh
           grep -F 'flock --exclusive --nonblock 9' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'bash "$PREPARE_SCRIPT"' ops/oracle_universal_video_precanary_attest.sh
-          grep -F 'restore_service "$SOURCE_SERVICE" "$source_was_active"' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'restore_service "$SOURCE_SERVICE" "$source_state_before"' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'restore_service "$CONTAINER_SERVICE" "$container_target_state"' ops/oracle_universal_video_precanary_attest.sh
           grep -F '"$image_id" "$@"' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'UNIVERSAL_VIDEO_IMAGE=$image_id' ops/oracle_universal_video_container_install.sh
           grep -F '"$image_id" true' ops/oracle_universal_video_container_install.sh
