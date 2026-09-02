@@ -581,3 +581,29 @@ def test_canary_sql_and_rollback_remain_null_safe_and_fail_closed():
     assert "RETURN QUERY SELECT p_outcome, v_batch_status, 0;" in rollback_finish
     assert "rollback restored automatic canary release" in rollback_test
     assert "rollback released pending jobs" in rollback_test
+
+
+def test_semantic_v2_returns_exact_ai_done_payload_uploaded(monkeypatch):
+    import run_master_3_1_free_semantic_v2 as semantic_v2
+
+    job_id = "1" * 32
+    quality = {
+        "readiness": {"technical_status": "TECHNICAL_PARTIAL"},
+        "counts": {"episodes": 3},
+    }
+    uploaded = []
+    monkeypatch.setitem(semantic_v2._QUALITY_BY_JOB, job_id, quality)
+    monkeypatch.setattr(
+        semantic_v2,
+        "_previous_upload_json",
+        lambda _token, _parent, _name, value: uploaded.append(dict(value)) or {"id": "ai-done"},
+    )
+    done = {"job_id": job_id, "masterPdf": {"driveId": "master-pdf"}}
+
+    semantic_v2.upload_json_with_readiness_v2(
+        "mock", "output-folder", f"AI_DONE_{job_id}.json", done
+    )
+
+    assert done["readinessV2"] == quality["readiness"]
+    assert done["qualityV2Counts"] == quality["counts"]
+    assert uploaded[0] == done
