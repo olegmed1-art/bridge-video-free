@@ -803,6 +803,69 @@ def test_signal_ignored_cleanup_bounds_exact_source_tree_restore() -> None:
     assert 'exact_process_signal "$worker_pid" "$expected_start_ticks" CHECK' in script
 
 
+def test_source_scope_guard_rejects_aliases_and_accepts_missing_canonical_target(
+    tmp_path: Path,
+) -> None:
+    script = (ROOT / "ops/oracle_universal_video_precanary_attest.sh").read_text(
+        encoding="utf-8"
+    )
+    validation = script[
+        script.index("validate_source_dir_scope(){") : script.index('[[ "$(id -u)"')
+    ]
+    scope = tmp_path / "bridge-school"
+    outside = tmp_path / "outside"
+    scope.mkdir()
+    outside.mkdir()
+    (scope / "nested").mkdir()
+    (scope / "linked-parent").symlink_to(outside, target_is_directory=True)
+    mutation_log = tmp_path / "mutation.log"
+    valid = scope / "universal-video-src"
+    dotdot_escape = scope / "nested" / ".." / ".." / "outside" / "source"
+    symlink_escape = scope / "linked-parent" / "source"
+    duplicate_separator = f"{scope}//universal-video-src"
+    dot_alias = f"{scope}/./universal-video-src"
+
+    probe = validation + rf'''
+set -u
+scope={json.dumps(str(scope))}
+mutation_log={json.dumps(str(mutation_log))}
+attempt(){{
+  if validate_source_dir_scope "$1" "$scope"; then
+    printf 'mutation:%s\n' "$1" >> "$mutation_log"
+    return 0
+  fi
+  return 1
+}}
+! attempt {json.dumps(str(dotdot_escape))}
+! attempt {json.dumps(str(symlink_escape))}
+! attempt {json.dumps(duplicate_separator)}
+! attempt {json.dumps(dot_alias)}
+attempt {json.dumps(str(valid))}
+[[ "$canonical_source_dir" == {json.dumps(str(valid))} ]]
+[[ "$canonical_source_parent" == "$scope" ]]
+'''
+    completed = subprocess.run(
+        ["bash"], input=probe, text=True, capture_output=True, timeout=10
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert mutation_log.read_text(encoding="utf-8").splitlines() == [
+        f"mutation:{valid}"
+    ]
+    assert 'realpath -m -- "$requested"' in validation
+    assert 'realpath -e -- "$requested_parent"' in validation
+    assert 'validate_source_dir_scope "$SOURCE_DIR" /opt/bridge-school' in script
+
+    execution = script[script.index('validate_source_dir_scope "$SOURCE_DIR"') :]
+    validation_index = execution.index('validate_source_dir_scope "$SOURCE_DIR"')
+    lock_create_index = execution.index(
+        'install -o universal-video -g universal-video -m 0640 /dev/null "$WORKLOAD_LOCK"'
+    )
+    source_move_index = execution.index('mv -- "$SOURCE_DIR" "$source_backup_dir"')
+    assert validation_index < lock_create_index < source_move_index
+    assert "rm -rf" not in validation
+    assert "mv --" not in validation
+
+
 def test_candidate_delete_timeout_quarantines_candidate_and_restores_services(
     tmp_path: Path,
 ) -> None:
@@ -814,7 +877,7 @@ def test_candidate_delete_timeout_quarantines_candidate_and_restores_services(
     ]
     cleanup = script[script.index("cleanup(){") : script.index("assert_known_state(){")]
     source_dir = tmp_path / "source"
-    backup_dir = tmp_path / "source.backup"
+    backup_dir = tmp_path / f"source.precanary-backup.{'a' * 12}.123"
     service_log = tmp_path / "services.log"
     source_dir.mkdir()
     (source_dir / "candidate").write_text("partial candidate", encoding="utf-8")
@@ -827,6 +890,7 @@ set -u
 BUILD_IMAGE=1
 EXPECTED_SHA={'a' * 40}
 SOURCE_DIR={json.dumps(str(source_dir))}
+SOURCE_PARENT={json.dumps(str(tmp_path))}
 source_candidate_path_owned=1
 source_had_original=1
 source_backup_dir={json.dumps(str(backup_dir))}
@@ -905,7 +969,7 @@ def test_candidate_delete_timeout_after_success_still_restores_and_fails_run(
         script.index("restore_source_checkout(){") : script.index("cleanup(){")
     ]
     source_dir = tmp_path / "source"
-    backup_dir = tmp_path / "source.backup"
+    backup_dir = tmp_path / f"source.precanary-backup.{'c' * 12}.123"
     action_log = tmp_path / "actions.log"
     source_dir.mkdir()
     (source_dir / "candidate").write_text("candidate", encoding="utf-8")
@@ -918,6 +982,7 @@ set -u
 BUILD_IMAGE=1
 EXPECTED_SHA={'c' * 40}
 SOURCE_DIR={json.dumps(str(source_dir))}
+SOURCE_PARENT={json.dumps(str(tmp_path))}
 source_candidate_path_owned=1
 source_had_original=1
 source_backup_dir={json.dumps(str(backup_dir))}
@@ -969,7 +1034,7 @@ def test_candidate_quarantine_failure_keeps_services_fail_closed(tmp_path: Path)
     ]
     cleanup = script[script.index("cleanup(){") : script.index("assert_known_state(){")]
     source_dir = tmp_path / "source"
-    backup_dir = tmp_path / "source.backup"
+    backup_dir = tmp_path / f"source.precanary-backup.{'b' * 12}.123"
     service_log = tmp_path / "services.log"
     unmask_log = tmp_path / "unmask.log"
     source_dir.mkdir()
@@ -982,6 +1047,7 @@ set -u
 BUILD_IMAGE=1
 EXPECTED_SHA={'b' * 40}
 SOURCE_DIR={json.dumps(str(source_dir))}
+SOURCE_PARENT={json.dumps(str(tmp_path))}
 source_candidate_path_owned=1
 source_had_original=1
 source_backup_dir={json.dumps(str(backup_dir))}

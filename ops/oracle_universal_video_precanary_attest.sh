@@ -38,6 +38,44 @@ PARENT="${UNIVERSAL_VIDEO_CANARY_PARENT:?missing exact canary parent}"
 
 die(){ printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
+canonical_source_dir=""
+canonical_source_parent=""
+validate_source_dir_scope(){
+  local requested="$1" scope_root="$2" requested_parent resolved_root resolved_parent resolved_source
+  canonical_source_dir=""
+  canonical_source_parent=""
+  [[ "$scope_root" == /* && "$scope_root" != */ \
+    && "$scope_root" != *'//'* && "$scope_root" != */./* && "$scope_root" != */../* \
+    && "$scope_root" != *$'\n'* && "$scope_root" != *$'\r'* ]] || return 1
+  [[ -d "$scope_root" && ! -L "$scope_root" ]] || return 1
+  resolved_root="$(realpath -e -- "$scope_root" 2>/dev/null)" || return 1
+  [[ "$resolved_root" == "$scope_root" ]] || return 1
+  [[ "$requested" == "$scope_root/"* && "$requested" != */ ]] || return 1
+  [[ "$requested" != *'//'* && "$requested" != */./* && "$requested" != */../* \
+    && "$requested" != */. && "$requested" != */.. \
+    && "$requested" != *$'\n'* && "$requested" != *$'\r'* ]] || return 1
+  # -m permits the exact candidate leaf to be absent while resolving every
+  # existing parent component and collapsing any lexical escape.
+  resolved_source="$(realpath -m -- "$requested" 2>/dev/null)" || return 1
+  [[ "$resolved_source" == "$requested" ]] || return 1
+  requested_parent="${requested%/*}"
+  [[ -n "$requested_parent" && -d "$requested_parent" && ! -L "$requested_parent" ]] \
+    || return 1
+  resolved_parent="$(realpath -e -- "$requested_parent" 2>/dev/null)" || return 1
+  [[ "$resolved_parent" == "$requested_parent" ]] || return 1
+  [[ "$resolved_parent" == "$resolved_root" || "$resolved_parent" == "$resolved_root/"* ]] \
+    || return 1
+  canonical_source_parent="$resolved_parent"
+  canonical_source_dir="$resolved_parent/${requested##*/}"
+  [[ "$canonical_source_dir" == "$requested" ]] || return 1
+  if [[ -e "$requested" || -L "$requested" ]]; then
+    [[ ! -L "$requested" ]] || return 1
+    resolved_source="$(realpath -e -- "$requested" 2>/dev/null)" || return 1
+    [[ "$resolved_source" == "$canonical_source_dir" ]] || return 1
+  fi
+  return 0
+}
+
 [[ "$(id -u)" -eq 0 ]] || die 'run as root on the Oracle host'
 [[ "$SIZE" =~ ^[0-9]+$ && "$SIZE" -gt 0 ]] || die 'invalid source size'
 [[ "$BUILD_IMAGE" =~ ^[01]$ ]] || die 'UNIVERSAL_VIDEO_PRECANARY_BUILD_IMAGE must be 0 or 1'
@@ -58,12 +96,11 @@ else
   [[ -z "$RECOVERY_EVIDENCE_FILE" && -z "$RECOVERY_EVIDENCE_SHA256" ]] \
     || die 'unrequested prior-run recovery evidence is forbidden'
 fi
-case "$SOURCE_DIR" in
-  /opt/bridge-school/*) ;;
-  *) die 'source checkout path is outside the bounded bridge-school root' ;;
-esac
-[[ "$SOURCE_DIR" != /opt/bridge-school && "$SOURCE_DIR" != /opt/bridge-school/ ]] \
-  || die 'source checkout path is too broad'
+command -v realpath >/dev/null || die 'realpath is unavailable'
+validate_source_dir_scope "$SOURCE_DIR" /opt/bridge-school \
+  || die 'source checkout path is noncanonical or outside the bounded bridge-school root'
+SOURCE_DIR="$canonical_source_dir"
+SOURCE_PARENT="$canonical_source_parent"
 if [[ -n "$EXPECTED_SHA" ]]; then
   [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || die 'invalid expected source SHA'
 fi
@@ -822,8 +859,7 @@ restore_source_checkout(){
       quarantine_prefix="${SOURCE_DIR}.precanary-quarantine.${EXPECTED_SHA:0:12}.$$."
       for attempt in {1..8}; do
         source_quarantine_dir="${quarantine_prefix}${RANDOM}.${attempt}"
-        [[ "$(dirname -- "$source_quarantine_dir")" == "$(dirname -- "$SOURCE_DIR")" ]] \
-          || return 1
+        [[ "${source_quarantine_dir%/*}" == "$SOURCE_PARENT" ]] || return 1
         case "$source_quarantine_dir" in
           "$quarantine_prefix"*) ;;
           *) return 1 ;;
@@ -861,6 +897,11 @@ restore_source_checkout(){
   if [[ "$source_had_original" == 1 ]]; then
     [[ -n "$source_backup_dir" && -e "$source_backup_dir" && ! -L "$source_backup_dir" ]] \
       || return 1
+    [[ "${source_backup_dir%/*}" == "$SOURCE_PARENT" ]] || return 1
+    case "$source_backup_dir" in
+      "${SOURCE_DIR}.precanary-backup.${EXPECTED_SHA:0:12}."*) ;;
+      *) return 1 ;;
+    esac
     [[ -n "$source_backup_device_inode" \
       && "$(stat -Lc '%d:%i' -- "$source_backup_dir")" == "$source_backup_device_inode" ]] \
       || return 1
@@ -1201,6 +1242,12 @@ if [[ "$BUILD_IMAGE" == 1 ]]; then
   if [[ -e "$SOURCE_DIR" || -L "$SOURCE_DIR" ]]; then
     [[ -d "$SOURCE_DIR" && ! -L "$SOURCE_DIR" ]] || die 'existing source checkout is unsafe'
     source_backup_dir="${SOURCE_DIR}.precanary-backup.${EXPECTED_SHA:0:12}.$$"
+    [[ "${source_backup_dir%/*}" == "$SOURCE_PARENT" ]] \
+      || die 'source backup destination escaped the canonical parent'
+    case "$source_backup_dir" in
+      "${SOURCE_DIR}.precanary-backup.${EXPECTED_SHA:0:12}."*) ;;
+      *) die 'source backup destination is outside the exact source scope' ;;
+    esac
     [[ ! -e "$source_backup_dir" && ! -L "$source_backup_dir" ]] \
       || die 'source backup destination already exists'
     source_backup_device_inode="$(stat -Lc '%d:%i' -- "$SOURCE_DIR")"
