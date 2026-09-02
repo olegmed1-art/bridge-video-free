@@ -17,7 +17,10 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: research-job-dds3-canary-${{ github.event.issue.number || github.run_id }}
+  # The production canary enqueues work for the Oracle resident worker, so it
+  # must serialize with the final STOP proof. Pull-request contract validation
+  # has no workload authority and remains isolated from the lifecycle fence.
+  group: ${{ github.event_name == 'pull_request' && format('research-job-dds3-pr-{0}', github.event.pull_request.number) || 'oracle-instance-workload-mutation' }}
   cancel-in-progress: false
 
 jobs:

@@ -28,3 +28,17 @@ def test_stop_consumer_uses_same_non_cancelling_fence() -> None:
     power = _workflow_text("oracle-instance-power.yml")
     assert f"group: {SHARED_FENCE}" in power
     assert "cancel-in-progress: false" in power
+
+
+def test_research_job_production_canaries_share_stop_fence() -> None:
+    producers = {
+        path.name: path.read_text(encoding="utf-8")
+        for path in WORKFLOWS.glob("*.yml")
+        if "research_runtime import enqueue" in path.read_text(encoding="utf-8")
+    }
+    assert producers
+    for name, workflow in producers.items():
+        assert SHARED_FENCE in workflow, name
+        assert "github.event_name == 'pull_request'" in workflow, name
+        assert "github.event.pull_request.number" in workflow, name
+        assert "cancel-in-progress: false" in workflow, name
