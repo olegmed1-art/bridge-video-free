@@ -62,7 +62,7 @@ jobs:
           echo "key=$key" >> "$GITHUB_OUTPUT"
           echo "known=$known" >> "$GITHUB_OUTPUT"
 
-      - name: Discover authoritative runtime layout and env keys read-only
+      - name: Resolve authoritative telemetry sources read-only
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -71,70 +71,84 @@ jobs:
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
             'sudo -n bash -s' <<'REMOTE'
           set -Eeuo pipefail
-          echo "GUARD_SHA256=$(sha256sum /usr/local/sbin/oracle-idle-state | awk '{print $1}')"
-          for unit in assistant-lab.service school-autopilot-shadow.service universal-video-container.service universal-video.service; do
-            echo "UNIT=$unit"
-            systemctl show "$unit" --property=LoadState --property=ActiveState --property=FragmentPath --property=WorkingDirectory --property=ExecStart --property=User --no-pager 2>/dev/null || true
-            systemctl cat "$unit" --no-pager 2>/dev/null \
-              | grep -E '^(EnvironmentFile|WorkingDirectory|ExecStart|User|RuntimeDirectory|StateDirectory)=' || true
-          done
+          LAB_ENV=/opt/bridge-school/assistant-lab/assistant-lab.env
+          AUTO_ENV=/opt/bridge-school/school-autopilot/autopilot-shadow.env
+          UV_SECRET_ENV=/opt/bridge-school/universal-video/universal-video-secrets.env
+          PY=/opt/bridge-school/assistant-lab/.venv/bin/python
 
-          echo ENV_KEY_NAMES_BEGIN
-          for path in \
-            /opt/bridge-school/assistant-lab/assistant-lab.env \
-            /opt/bridge-school/school-autopilot/autopilot-shadow.env \
-            /opt/bridge-school/universal-video/universal-video.env \
-            /opt/bridge-school/universal-video/universal-video-secrets.env; do
-            if [[ -f "$path" && ! -L "$path" ]]; then
-              echo "ENV_FILE=$path"
-              awk -F= '/^[[:space:]]*(export[[:space:]]+)?[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=/{k=$1; sub(/^[[:space:]]*export[[:space:]]+/,"",k); gsub(/[[:space:]]/,"",k); print "ENV_KEY=" k}' "$path" | sort -u
-            else
-              echo "ENV_FILE_MISSING=$path"
-            fi
-          done
-          echo ENV_KEY_NAMES_END
-
-          echo DISCOVERED_ENV_AND_DSN_PATHS_BEGIN
-          find /opt/bridge-school /var/lib/bridge-school /run/bridge-school \
-            -maxdepth 7 \( -type f -o -type l \) \
-            \( -name '*.env' -o -name '*dsn*' -o -name '*database*url*' \) \
-            -print 2>/dev/null | sort -u || true
-          echo DISCOVERED_ENV_AND_DSN_PATHS_END
-
-          echo DISCOVERED_WORK_DIRS_BEGIN
-          find /opt/bridge-school /var/lib/bridge-school /run/bridge-school \
-            -maxdepth 7 -type d \
-            \( -name spool -o -name pending -o -name running -o -name inbox -o -name progress -o -name jobs \) \
-            -print 2>/dev/null | sort -u || true
-          echo DISCOVERED_WORK_DIRS_END
-
-          check() {
-            local label="$1" path="$2"
-            if [[ -L "$path" ]]; then echo "$label=SYMLINK"
-            elif [[ -d "$path" ]]; then
-              if first="$(find "$path" -mindepth 1 -print -quit 2>/dev/null)"; then
-                [[ -n "$first" ]] && echo "$label=DIR_NONEMPTY" || echo "$label=DIR_EMPTY"
-              else echo "$label=DIR_SCAN_FAILED"; fi
-            elif [[ -f "$path" ]]; then echo "$label=FILE_PRESENT"
-            elif [[ -e "$path" ]]; then echo "$label=OTHER_PRESENT"
-            else echo "$label=MISSING"; fi
+          env_value() {
+            local file="$1" key="$2"
+            awk -F= -v key="$key" '$1==key {sub(/^[^=]*=/,""); print; exit}' "$file" 2>/dev/null
           }
 
-          check LAB_ENV /opt/bridge-school/assistant-lab/assistant-lab.env
-          check AUTOPILOT_ENV /opt/bridge-school/school-autopilot/autopilot-shadow.env
-          check UV_ENV /opt/bridge-school/universal-video/universal-video.env
-          check UV_SECRETS_ENV /opt/bridge-school/universal-video/universal-video-secrets.env
-          check ASSISTANT_PYTHON /opt/bridge-school/assistant-lab/.venv/bin/python
-          check LAB_SPOOL /opt/bridge-school/assistant-lab/spool
-          check LAB_FEEDBACK_SPOOL /opt/bridge-school/assistant-lab/feedback-spool
-          check VIDEO_INBOX /opt/bridge-school/universal-video/spool/inbox
-          check VIDEO_RUNNING /opt/bridge-school/universal-video/spool/running
-          check VIDEO_PROGRESS /opt/bridge-school/universal-video/spool/progress
-          check OBSERVER_PENDING /opt/bridge-school/assistant-lab-observer/jobs/pending
-          check OBSERVER_RUNNING /opt/bridge-school/assistant-lab-observer/jobs/running
-          check AUTOPILOT_RUNNING /opt/bridge-school/school-autopilot/runtime/running
-          check HOST_LEASE_PARENT /run/bridge-school
-          check HOST_LEASE /run/bridge-school/oracle-host-lease
+          assistant_dsn="$(env_value "$LAB_ENV" ASSISTANT_LAB_DATABASE_URL)"
+          autopilot_dsn="$(env_value "$AUTO_ENV" AUTOPILOT_DATABASE_URL)"
+          video_file="$(env_value "$UV_SECRET_ENV" BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE)"
+          if [[ "$video_file" =~ ^/[A-Za-z0-9_./-]+$ && -f "$video_file" && ! -L "$video_file" ]]; then
+            video_dsn="$(tr -d '\r\n' < "$video_file")"
+            echo "VIDEO_QUEUE_DSN_FILE_PATH=$video_file"
+            echo VIDEO_QUEUE_DSN_FILE_STATUS=PRESENT
+          else
+            video_dsn=''
+            echo VIDEO_QUEUE_DSN_FILE_PATH=UNRESOLVED
+            echo VIDEO_QUEUE_DSN_FILE_STATUS=UNAVAILABLE
+          fi
+          [[ -n "$assistant_dsn" ]] && echo ASSISTANT_DSN=AVAILABLE || echo ASSISTANT_DSN=UNAVAILABLE
+          [[ -n "$autopilot_dsn" ]] && echo AUTOPILOT_DSN=AVAILABLE || echo AUTOPILOT_DSN=UNAVAILABLE
+          [[ -n "$video_dsn" ]] && echo VIDEO_DSN=AVAILABLE || echo VIDEO_DSN=UNAVAILABLE
+
+          ASSISTANT_DSN="$assistant_dsn" AUTOPILOT_DSN="$autopilot_dsn" VIDEO_DSN="$video_dsn" "$PY" - <<'PY'
+          import os
+          try:
+              import psycopg
+          except Exception:
+              print('PSYCOPG=UNAVAILABLE')
+              raise SystemExit(0)
+
+          def probe(label, dsn, sql):
+              if not dsn:
+                  print(f'{label}=DSN_UNAVAILABLE')
+                  return
+              try:
+                  with psycopg.connect(
+                      dsn,
+                      connect_timeout=5,
+                      application_name='oracle-idle-627-readonly-probe',
+                      options='-c default_transaction_read_only=on -c statement_timeout=5000 -c lock_timeout=1000',
+                  ) as conn:
+                      with conn.cursor() as cur:
+                          cur.execute(sql)
+                          row = cur.fetchone()
+                  print(f"{label}=PASS:{','.join(str(x) for x in row)}")
+              except Exception as exc:
+                  print(f'{label}=FAIL:{type(exc).__name__}')
+
+          probe(
+              'ASSISTANT_IDLE_RPC',
+              os.environ.get('ASSISTANT_DSN',''),
+              "SELECT schema_version,active_jobs,active_research_jobs,active_research_child_jobs,active_control_commands,active_operator_maintenance_leases,stale_operator_maintenance_leases FROM assistant_lab.oracle_idle_snapshot()",
+          )
+          probe(
+              'AUTOPILOT_ACTIVE',
+              os.environ.get('AUTOPILOT_DSN',''),
+              "SELECT count(*)::bigint FROM autopilot.task_status WHERE status NOT IN ('OWNER_REQUIRED','FAILED_CLOSED','BUDGET_STOP','DONE','CANCELLED')",
+          )
+          probe(
+              'VIDEO_ACTIVE',
+              os.environ.get('VIDEO_DSN',''),
+              "SELECT count(*)::bigint FROM video_queue.job_status WHERE status IN ('PENDING_CANARY','QUEUED','LEASED')",
+          )
+          PY
+
+          for p in \
+            /opt/bridge-school/universal-video/spool/inbox \
+            /opt/bridge-school/universal-video/spool/running \
+            /opt/bridge-school/assistant-lab-observer/jobs/pending \
+            /opt/bridge-school/assistant-lab-observer/jobs/running; do
+            [[ -d "$p" && ! -L "$p" ]] || { echo "REQUIRED_SPOOL=$p:UNAVAILABLE"; continue; }
+            first="$(find "$p" -mindepth 1 -print -quit 2>/dev/null || true)"
+            [[ -n "$first" ]] && echo "REQUIRED_SPOOL=$p:NONEMPTY" || echo "REQUIRED_SPOOL=$p:EMPTY"
+          done
 
           echo GUARD_PROOF_BEGIN
           /usr/local/sbin/oracle-idle-state
