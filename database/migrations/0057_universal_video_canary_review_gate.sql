@@ -62,6 +62,31 @@ REVOKE ALL ON FUNCTION video_queue.canonical_json_text(jsonb) FROM PUBLIC;
 COMMENT ON FUNCTION video_queue.canonical_json_text(jsonb) IS
     'Internal compact UTF-8 canonical JSON used to bind Universal Video artifact manifests';
 
+-- The worker principal intentionally has no direct table/view access. Expose
+-- only the aggregate state needed by the pre-canary no-media proof, without
+-- leaking job identities, source metadata, or lease tokens.
+CREATE OR REPLACE FUNCTION video_queue.precanary_idle_snapshot()
+RETURNS TABLE(claimable_jobs bigint, leased_jobs bigint)
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, video_queue
+AS $$
+    SELECT
+        count(*) FILTER (
+            WHERE status IN ('PENDING_CANARY','QUEUED','LEASED')
+        )::bigint,
+        count(*) FILTER (
+            WHERE status = 'LEASED' AND lease_expires_at > CURRENT_TIMESTAMP
+        )::bigint
+    FROM video_queue.job
+$$;
+
+REVOKE ALL ON FUNCTION video_queue.precanary_idle_snapshot() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION video_queue.precanary_idle_snapshot() TO bridge_school_worker;
+COMMENT ON FUNCTION video_queue.precanary_idle_snapshot() IS
+    'Bounded aggregate queue state for fail-closed pre-canary no-media proof';
+
 CREATE OR REPLACE FUNCTION video_queue.finish_job(
     p_job_id uuid,
     p_lease_token uuid,

@@ -192,6 +192,10 @@ cleanup(){
 
     source_after="$(service_state "$SOURCE_SERVICE")"
     container_after="$(service_state "$CONTAINER_SERVICE")"
+    [[ "$source_after" == "$source_state_before" ]] \
+      || record_restore_failure source_state_mismatch
+    [[ "$container_after" == "$container_target_state" ]] \
+      || record_restore_failure container_state_mismatch
     if [[ "${#restore_failures[@]}" -eq 0 ]]; then
       printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service_before=%s source_service=%s container_service_before=%s container_target=%s container_service=%s prior_container_recovery=%s\n' \
         "$source_state_before" "$source_after" "$container_state_before" "$container_target_state" \
@@ -278,8 +282,22 @@ assert_pre_stop_idle(){
     || die 'inactive source resident still has a worker PID'
   [[ "$container_state_before" != inactive || -z "$container_pid" || "$container_pid" == 0 ]] \
     || die 'inactive container resident still has a worker PID'
+
+  pid_descends_from(){
+    local child="$1" ancestor="$2" parent hops=0
+    [[ "$child" =~ ^[1-9][0-9]*$ && "$ancestor" =~ ^[1-9][0-9]*$ ]] || return 1
+    while (( child > 1 && hops < 64 )); do
+      [[ "$child" == "$ancestor" ]] && return 0
+      parent="$(ps -o ppid= -p "$child" 2>/dev/null | tr -d '[:space:]')"
+      [[ "$parent" =~ ^[0-9]+$ && "$parent" != "$child" ]] || return 1
+      child="$parent"
+      ((hops += 1))
+    done
+    [[ "$child" == "$ancestor" ]]
+  }
   while read -r worker_pid; do
-    [[ "$worker_pid" == "$source_pid" || "$worker_pid" == "$container_pid" ]] \
+    pid_descends_from "$worker_pid" "$source_pid" \
+      || pid_descends_from "$worker_pid" "$container_pid" \
       || die 'an unowned Universal Video worker process is active'
   done < <(pgrep -f '[u]niversal_video[.]spool_worker' || true)
   if find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit | grep -q .; then
@@ -298,12 +316,7 @@ try:
         raise RuntimeError
     with psycopg.connect(dsn, connect_timeout=8, application_name="uv-precanary-idle-proof") as conn:
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT
-                    count(*) FILTER (WHERE status IN ('PENDING_CANARY','QUEUED','LEASED')),
-                    count(*) FILTER (WHERE status = 'LEASED')
-                FROM video_queue.job_status
-            """)
+            cur.execute("SELECT * FROM video_queue.precanary_idle_snapshot()")
             row = cur.fetchone()
     print(f"CLAIMABLE:{int(row[0])},LEASED:{int(row[1])}" if row and len(row) == 2 else "UNKNOWN")
 except Exception:

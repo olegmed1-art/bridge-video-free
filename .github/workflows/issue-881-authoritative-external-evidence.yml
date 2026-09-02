@@ -136,13 +136,6 @@ jobs:
           recovery_sha=''
           recovery_remote_file=''
 
-          # Last-second repository reconciliation precedes the first remote
-          # mutation. Historical or not-yet-reviewed heads fail closed.
-          live_head="$(gh api "repos/$GITHUB_REPOSITORY/pulls/1062" --jq '.head.sha')"
-          [[ "$live_head" == "$EXACT_SHA" ]]
-          review_count="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/1062/reviews" \
-            --jq ".[] | select(.commit_id == \"$EXACT_SHA\" and .user.login == \"chatgpt-codex-connector[bot]\" and (.state == \"COMMENTED\" or .state == \"APPROVED\")) | .id" | wc -l)"
-          (( review_count > 0 ))
           runs_endpoint="repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$EXACT_SHA&event=pull_request&per_page=100"
           required_workflows=(
             'Universal Video Analyzer CI'
@@ -154,11 +147,42 @@ jobs:
             'Universal Video Engine Smoke'
             'Bridge School Database CI'
           )
-          for workflow_name in "${required_workflows[@]}"; do
-            run_count="$(gh api --paginate "$runs_endpoint" \
-              --jq ".workflow_runs[] | select(.name == \"$workflow_name\" and .status == \"completed\" and .conclusion == \"success\") | .id" | wc -l)"
-            (( run_count > 0 )) || { echo "Required exact-head workflow is not green: $workflow_name" >&2; exit 1; }
-          done
+
+          verify_live_gate(){
+            local live_head review_count threads_json blocker_count runs_json workflow_name latest_state
+            live_head="$(gh api "repos/$GITHUB_REPOSITORY/pulls/1062" --jq '.head.sha')"
+            [[ "$live_head" == "$EXACT_SHA" ]] \
+              || { echo 'Exact SHA is no longer the live PR #1062 head' >&2; return 1; }
+
+            review_count="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/1062/reviews" \
+              --jq ".[] | select(.commit_id == \"$EXACT_SHA\" and (.user.login | startswith(\"chatgpt-codex-connector\")) and (.state == \"COMMENTED\" or .state == \"APPROVED\")) | .id" | wc -l)"
+            (( review_count > 0 )) \
+              || { echo 'Exact head has no independent Codex review' >&2; return 1; }
+
+            threads_json="$(gh api graphql \
+              -f owner="${GITHUB_REPOSITORY%%/*}" \
+              -f name="${GITHUB_REPOSITORY#*/}" \
+              -F number=1062 \
+              -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved isOutdated comments(first:100){nodes{author{login}}}}}}}}')"
+            [[ "$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"$threads_json")" == false ]] \
+              || { echo 'Review thread set exceeds the bounded verification page' >&2; return 1; }
+            blocker_count="$(jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select((.isResolved | not) and (.isOutdated | not)) | select(any(.comments.nodes[]; (.author.login // "") | startswith("chatgpt-codex-connector")))] | length' <<<"$threads_json")"
+            [[ "$blocker_count" == 0 ]] \
+              || { echo "Independent review still has $blocker_count unresolved current threads" >&2; return 1; }
+
+            runs_json="$(gh api --paginate --slurp "$runs_endpoint")"
+            for workflow_name in "${required_workflows[@]}"; do
+              latest_state="$(jq -r --arg name "$workflow_name" \
+                '[.[].workflow_runs[] | select(.name == $name)] | if length == 0 then "MISSING" else (max_by([.run_number, .run_attempt]) | (.status + ":" + (.conclusion // ""))) end' \
+                <<<"$runs_json")"
+              [[ "$latest_state" == 'completed:success' ]] \
+                || { echo "Latest exact-head workflow attempt is not green: $workflow_name ($latest_state)" >&2; return 1; }
+            done
+          }
+
+          # Initial reconciliation rejects historical, blocked, or stale-green
+          # heads before any recovery artifact is accepted.
+          verify_live_gate
 
           if [[ -n "$RECOVER_CONTAINER_FROM_RUN" ]]; then
             prior_run="$RUNNER_TEMP/prior-run.json"
@@ -227,8 +251,10 @@ jobs:
           }
           trap bounded_failure ERR
 
-          # This must be the final action before the first SSH-side mutation.
-          [[ "$(gh api "repos/$GITHUB_REPOSITORY/pulls/1062" --jq '.head.sha')" == "$EXACT_SHA" ]]
+          # Repeat the complete primary-source gate as the final action before
+          # the first SSH-side mutation. A new run, review finding, or head
+          # movement during preparation fails closed.
+          verify_live_gate
           "${s[@]}" "umask 077; rm -rf '$remote_stage'; mkdir -m 0700 '$remote_stage'"
           "${c[@]}" "$RUNNER_TEMP/prepare.sh" "$ORACLE_USER@$ORACLE_HOST:$remote_stage/prepare.sh"
           "${c[@]}" "$RUNNER_TEMP/attest.sh" "$ORACLE_USER@$ORACLE_HOST:$remote_stage/attest.sh"

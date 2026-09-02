@@ -399,8 +399,9 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "UNIVERSAL_VIDEO_RUN_SMOKE=0" in script
     assert 'find "$root_cache" -xdev -mindepth 1 -delete' in script
     assert "assert_pre_stop_idle" in script
-    assert "count(*) FILTER (WHERE status = 'LEASED')" in script
+    assert "video_queue.precanary_idle_snapshot()" in script
     assert "authoritative Neon claimable/LEASED state is busy or unverifiable" in script
+    assert "pid_descends_from" in script
     assert "services_stop_attempted=1" in script
     assert "verify_prior_recovery_evidence" in script
     assert "immutable prior-run recovery evidence digest mismatch" in script
@@ -434,8 +435,21 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
         'restore_service "$CONTAINER_SERVICE" "$container_target_state"'
     )
     restore_pass_index = script.index("UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS")
+    source_recheck_index = script.index(
+        '[[ "$source_after" == "$source_state_before" ]]'
+    )
+    container_recheck_index = script.index(
+        '[[ "$container_after" == "$container_target_state" ]]'
+    )
     unlock_index = script.index("flock --unlock 9", restore_container_index)
-    assert restore_source_index < restore_container_index < restore_pass_index < unlock_index
+    assert (
+        restore_source_index
+        < restore_container_index
+        < source_recheck_index
+        < container_recheck_index
+        < restore_pass_index
+        < unlock_index
+    )
 
 
 def test_installer_readiness_and_service_env_use_captured_image_id():
@@ -498,15 +512,18 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert 'pulls/1062" --jq \'.head.sha\'' in workflow
     assert ".commit_id ==" in workflow and "$EXACT_SHA" in workflow
     assert "required_workflows=(" in workflow
+    assert "verify_live_gate(){" in workflow
+    assert workflow.count("verify_live_gate") == 3
+    assert "reviewThreads(first:100)" in workflow
+    assert "unresolved current threads" in workflow
+    assert "max_by([.run_number, .run_attempt])" in workflow
     assert "--action START" not in workflow
     assert "Oracle instance is STOPPED" in workflow
     assert "actions/runs/$RECOVER_CONTAINER_FROM_RUN" in workflow
     assert ".github/workflows/issue-881-authoritative-external-evidence.yml" in workflow
     assert "prior-recovery-evidence.txt" in workflow
     assert "UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_SHA256='$recovery_sha'" in workflow
-    final_head_check = workflow.rindex(
-        'gh api "repos/$GITHUB_REPOSITORY/pulls/1062" --jq \'.head.sha\''
-    )
+    final_head_check = workflow.rindex("          verify_live_gate")
     first_remote_mutation = workflow.index(
         '"${s[@]}" "umask 077; rm -rf', final_head_check
     )
