@@ -23,35 +23,45 @@ jobs:
           set -Eeuo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           p = Path('ops/oracle_idle_state.sh')
           s = p.read_text(encoding='utf-8')
 
-          old = 'QUEUE_DSN_FILE="${BRIDGE_VIDEO_QUEUE_DSN_FILE:-/opt/bridge-school/universal-video/secrets/video-queue-dsn}"\n'
-          new = 'UV_SECRETS_ENV="${UNIVERSAL_VIDEO_SECRETS_ENV_FILE:-$VIDEO_DIR/universal-video-secrets.env}"\nQUEUE_DSN_FILE="${BRIDGE_VIDEO_QUEUE_DSN_FILE:-}"\n'
-          assert old in s
-          s = s.replace(old, new, 1)
+          def one(old, new, label):
+              global s
+              count = s.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one literal match, got {count}')
+              s = s.replace(old, new, 1)
 
-          old = 'REQUIRED_LOCAL_SPOOLS="${ORACLE_IDLE_REQUIRED_LOCAL_SPOOLS:-$LAB_DIR/spool:$LAB_DIR/feedback-spool:$VIDEO_DIR/spool/inbox:$VIDEO_DIR/spool/running:$OBSERVER_DIR/jobs/pending:$OBSERVER_DIR/jobs/running}"'
-          new = 'REQUIRED_LOCAL_SPOOLS="${ORACLE_IDLE_REQUIRED_LOCAL_SPOOLS:-$VIDEO_DIR/spool/inbox:$VIDEO_DIR/spool/running:$OBSERVER_DIR/jobs/pending:$OBSERVER_DIR/jobs/running}"'
-          assert old in s
-          s = s.replace(old, new, 1)
+          one(
+              'QUEUE_DSN_FILE="${BRIDGE_VIDEO_QUEUE_DSN_FILE:-/opt/bridge-school/universal-video/secrets/video-queue-dsn}"',
+              'UV_SECRETS_ENV="${UNIVERSAL_VIDEO_SECRETS_ENV_FILE:-$VIDEO_DIR/universal-video-secrets.env}"\nQUEUE_DSN_FILE="${BRIDGE_VIDEO_QUEUE_DSN_FILE:-}"',
+              'queue dsn declaration',
+          )
+          one(
+              'REQUIRED_LOCAL_SPOOLS="${ORACLE_IDLE_REQUIRED_LOCAL_SPOOLS:-$LAB_DIR/spool:$LAB_DIR/feedback-spool:$VIDEO_DIR/spool/inbox:$VIDEO_DIR/spool/running:$OBSERVER_DIR/jobs/pending:$OBSERVER_DIR/jobs/running}"',
+              'REQUIRED_LOCAL_SPOOLS="${ORACLE_IDLE_REQUIRED_LOCAL_SPOOLS:-$VIDEO_DIR/spool/inbox:$VIDEO_DIR/spool/running:$OBSERVER_DIR/jobs/pending:$OBSERVER_DIR/jobs/running}"',
+              'required spool declaration',
+          )
 
-          old = '''  value="${matches[0]#${key}=}"
-          if [[ -z "$value" || "$value" == *$'\\r'* ]]; then
-            mark_unknown "${source}_dsn_empty_or_invalid"
-            return 1
-          fi
-          printf -v "$destination" '%s' "$value"
-          return 0
-          }
-          '''
-          new = '''  value="${matches[0]#${key}=}"
-          if [[ "$value" == \\"*\\" && "$value" == *\\" ]]; then
+          pattern = re.compile(
+              r'(?m)^  value="\$\{matches\[0\]#\$\{key\}=\}"\n'
+              r'  if \[\[ -z "\$value" \|\| "\$value" == \*\$\x27\\r\x27\* \]\]; then\n'
+              r'    mark_unknown "\$\{source\}_dsn_empty_or_invalid"\n'
+              r'    return 1\n'
+              r'  fi\n'
+              r'  printf -v "\$destination" \x27%s\x27 "\$value"\n'
+              r'  return 0\n'
+              r'\}'
+          )
+          replacement = '''  value="${matches[0]#${key}=}"
+          if [[ "$value" == \"*\" && "$value" == *\" ]]; then
             value="${value:1:${#value}-2}"
-          elif [[ "$value" == \\'*\\' && "$value" == *\\' ]]; then
+          elif [[ "$value" == \'*\' && "$value" == *\' ]]; then
             value="${value:1:${#value}-2}"
-          elif [[ "$value" == \\"* || "$value" == *\\" || "$value" == \\'* || "$value" == *\\' ]]; then
+          elif [[ "$value" == \"* || "$value" == *\" || "$value" == \'* || "$value" == *\' ]]; then
             mark_unknown "${source}_dsn_quote_invalid"
             return 1
           fi
@@ -61,34 +71,24 @@ jobs:
           fi
           printf -v "$destination" '%s' "$value"
           return 0
-          }
-          '''
-          assert old in s
-          s = s.replace(old, new, 1)
+          }'''
+          s2, n = pattern.subn(replacement, s, count=1)
+          if n != 1:
+              raise SystemExit(f'env quote normalization: expected one structural match, got {n}')
+          s = s2
 
-          old = '''assistant_dsn=""
-          autopilot_dsn=""
-          queue_dsn=""
-          read_single_assignment "$LAB_ENV" 'ASSISTANT_LAB_DATABASE_URL' 'assistant_lab' assistant_dsn || true
-          read_single_assignment "$AUTOPILOT_ENV" 'AUTOPILOT_DATABASE_URL' 'autopilot' autopilot_dsn || true
+          anchor = '''read_single_assignment "$AUTOPILOT_ENV" 'AUTOPILOT_DATABASE_URL' 'autopilot' autopilot_dsn || true
 
-          if [[ ! -f "$QUEUE_DSN_FILE" || -L "$QUEUE_DSN_FILE" || ! -r "$QUEUE_DSN_FILE" ]]; then
-          '''
-          new = '''assistant_dsn=""
-          autopilot_dsn=""
-          queue_dsn=""
-          read_single_assignment "$LAB_ENV" 'ASSISTANT_LAB_DATABASE_URL' 'assistant_lab' assistant_dsn || true
-          read_single_assignment "$AUTOPILOT_ENV" 'AUTOPILOT_DATABASE_URL' 'autopilot' autopilot_dsn || true
+          if [[ ! -f "$QUEUE_DSN_FILE" || -L "$QUEUE_DSN_FILE" || ! -r "$QUEUE_DSN_FILE" ]]; then'''
+          insert = '''read_single_assignment "$AUTOPILOT_ENV" 'AUTOPILOT_DATABASE_URL' 'autopilot' autopilot_dsn || true
 
           if [[ -z "$QUEUE_DSN_FILE" ]]; then
             read_single_assignment "$UV_SECRETS_ENV" 'BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE' 'video_queue_file' QUEUE_DSN_FILE || true
           fi
           if [[ -z "$QUEUE_DSN_FILE" || "$QUEUE_DSN_FILE" != /* || "$QUEUE_DSN_FILE" == *'..'* ]]; then
             mark_unknown "video_queue_dsn_path_invalid"
-          elif [[ ! -f "$QUEUE_DSN_FILE" || -L "$QUEUE_DSN_FILE" || ! -r "$QUEUE_DSN_FILE" ]]; then
-          '''
-          assert old in s
-          s = s.replace(old, new, 1)
+          elif [[ ! -f "$QUEUE_DSN_FILE" || -L "$QUEUE_DSN_FILE" || ! -r "$QUEUE_DSN_FILE" ]]; then'''
+          one(anchor, insert, 'video file resolver')
 
           p.write_text(s, encoding='utf-8')
           PY
@@ -96,6 +96,8 @@ jobs:
           bash -n ops/oracle_idle_state.sh
           grep -F 'ORACLE_IDLE_REQUIRED_LOCAL_SPOOLS:-$VIDEO_DIR/spool/inbox:$VIDEO_DIR/spool/running:$OBSERVER_DIR/jobs/pending:$OBSERVER_DIR/jobs/running' ops/oracle_idle_state.sh >/dev/null
           grep -F "BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE" ops/oracle_idle_state.sh >/dev/null
+          grep -F 'video_queue_dsn_path_invalid' ops/oracle_idle_state.sh >/dev/null
+          grep -F 'dsn_quote_invalid' ops/oracle_idle_state.sh >/dev/null
           ! grep -F '$LAB_DIR/spool:$LAB_DIR/feedback-spool' ops/oracle_idle_state.sh >/dev/null
 
           git rm .github/workflows/oracle-idle-source-model-fix-once.yml
