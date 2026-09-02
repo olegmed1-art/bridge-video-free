@@ -19,8 +19,26 @@ BEGIN
         SELECT 1
           FROM public.schema_migration
          WHERE migration_key = '0314_autopilot_uv_p1_allowlist_upgrade'
+    ) OR NOT EXISTS (
+        SELECT 1
+          FROM public.schema_migration
+         WHERE migration_key = '0315_autopilot_uv_p1_allowlist_upgrade'
     ) THEN
         RAISE EXCEPTION 'AUTOPILOT_UV_P1_UPGRADE_HISTORY_MISSING';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+          FROM public.schema_migration
+         WHERE migration_key = '0314_autopilot_uv_p1_allowlist_upgrade'
+           AND checksum = '69be0dd729f9056d36478ee3fcc16326cfc631ae9f6cdbad85f8c8e7f9c1f2d1'
+    ) OR NOT EXISTS (
+        SELECT 1
+          FROM public.schema_migration
+         WHERE migration_key = '0315_autopilot_uv_p1_allowlist_upgrade'
+           AND checksum = '063f07eeb69f1f1cb3e7d2910362f10ae36e211d2ff3b808be648a71815e78d5'
+    ) THEN
+        RAISE EXCEPTION 'AUTOPILOT_UV_P1_UPGRADE_CHECKSUM_HISTORY_INVALID';
     END IF;
 
     SELECT pg_get_functiondef(
@@ -32,6 +50,7 @@ BEGIN
        OR position('uv-p1-runtime-pr997-17b74b86b309-20260902' in function_body) <> 0
        OR position('uv-p1-canary-pr1062-164d0d509fa3-20260902' in function_body) <> 0
        OR position('uv-p1-canary-pr1062-f2a6c0ff3f58-20260902' in function_body) <> 0
+       OR position('uv-p1-canary-pr1062-8aa4f80b8d20-20260902' in function_body) <> 0
        OR position('uv-p1-idle-pr1047-e8e71b569f81-20260902' in function_body) <> 0
        OR position('uv-p1-runtime-pr997-545ef013-20260901' in function_body) <> 0
        OR position('uv-p1-intake-pr1000-5af0675a-20260901' in function_body) <> 0
@@ -63,6 +82,7 @@ BEGIN
         'uv-p1-canary-pr1062-164d0d509fa3-20260902',
         'uv-p1-canary-pr1062-f2a6c0ff3f58-20260902',
         'uv-p1-canary-pr1062-f7685ac91c90-20260902',
+        'uv-p1-canary-pr1062-8aa4f80b8d20-20260902',
         'uv-p1-idle-pr1047-e8e71b569f81-20260902'
     ] LOOP
         BEGIN

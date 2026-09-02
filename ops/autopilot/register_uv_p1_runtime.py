@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Register the three director-approved UV P1 CI snapshots through migration 0314.
+"""Register the three director-approved UV P1 CI snapshots through migration 0315.
 
 This program is intentionally narrow:
 - it rewrites discovered Neon DSNs to one exact temporary endpoint;
-- it accepts only the immutable task keys embedded in migration 0314;
+- it accepts only the immutable task keys embedded in migration 0315;
 - it resolves the relevant public PR immediately before every registration;
 - it observes status only through the runtime-readable task_status view;
 - it never selects Autopilot tables directly and never contacts production.
@@ -132,7 +132,7 @@ def _discover_candidates() -> list[str]:
 
 def _temporary_dsn(
     raw_dsn: str,
-) -> tuple[tuple[str, str, str, str, int | None], str] | None:
+) -> tuple[str, str] | None:
     try:
         parsed = urllib.parse.urlsplit(raw_dsn)
     except ValueError:
@@ -172,13 +172,10 @@ def _temporary_dsn(
             "",
         )
     )
-    identity = (
-        parsed.username,
-        parsed.password,
-        parsed.path,
-        temporary_host,
-        parsed_port,
-    )
+    # The complete normalized connection target is the deduplication identity.
+    # Connection-affecting query options must not allow an earlier bad candidate
+    # to suppress a later usable one with the same credentials and port.
+    identity = dsn
     return identity, dsn
 
 
@@ -188,7 +185,7 @@ def _connect_runtime() -> psycopg.Connection[tuple]:
     if TEMP_BRANCH_ID == PRODUCTION_BRANCH_ID:
         raise RuntimeError("AUTOPILOT_UV_P1_BRANCH_ISOLATION_FAILED")
 
-    tested: set[tuple[str, str, str, str, int | None]] = set()
+    tested: set[str] = set()
     observations: Counter[str] = Counter()
     bounded_failure = "AUTOPILOT_UV_P1_RUNTIME_DSN_UNAVAILABLE"
 
@@ -257,12 +254,12 @@ def _connect_runtime() -> psycopg.Connection[tuple]:
                 continue
             if not row[4]:
                 observations["function_missing"] += 1
-                bounded_failure = "AUTOPILOT_UV_P1_0314_FUNCTION_MISSING"
+                bounded_failure = "AUTOPILOT_UV_P1_0315_FUNCTION_MISSING"
                 connection.close()
                 continue
             if not row[5]:
                 observations["execute_denied"] += 1
-                bounded_failure = "AUTOPILOT_UV_P1_0314_EXECUTE_DENIED"
+                bounded_failure = "AUTOPILOT_UV_P1_0315_EXECUTE_DENIED"
                 connection.close()
                 continue
             if not row[6]:
@@ -277,7 +274,7 @@ def _connect_runtime() -> psycopg.Connection[tuple]:
                 continue
             print("AUTOPILOT_UV_P1_SCHEMA_PREFLIGHT=PASS", flush=True)
             print("AUTOPILOT_UV_P1_CALLER=autopilot_runtime_login", flush=True)
-            print("AUTOPILOT_UV_P1_0314_FUNCTION=AVAILABLE", flush=True)
+            print("AUTOPILOT_UV_P1_0315_FUNCTION=AVAILABLE", flush=True)
             print("AUTOPILOT_UV_P1_STATUS_VIEW=AVAILABLE", flush=True)
             print(
                 "MIGRATION_APPLIED_BY_THIS_RUN="

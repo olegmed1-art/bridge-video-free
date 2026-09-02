@@ -1,8 +1,8 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
--- Forward-only replacement of the UV P1 ingress allowlist. Migration 0309 is
--- immutable because it has already been recorded on the temporary branch.
+-- Forward-only replacement of the UV P1 ingress allowlist. Migrations 0309,
+-- 0313, and 0314 are immutable predecessors and must not be rewritten.
 DO $migration_guard$
 BEGIN
     IF NOT EXISTS (
@@ -18,6 +18,14 @@ BEGIN
          WHERE migration_key = '0313_autopilot_uv_p1_allowlist_upgrade'
     ) THEN
         RAISE EXCEPTION 'AUTOPILOT_UV_P1_0313_REQUIRED';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1
+         FROM public.schema_migration
+         WHERE migration_key = '0314_autopilot_uv_p1_allowlist_upgrade'
+           AND checksum = '69be0dd729f9056d36478ee3fcc16326cfc631ae9f6cdbad85f8c8e7f9c1f2d1'
+    ) THEN
+        RAISE EXCEPTION 'AUTOPILOT_UV_P1_0314_REQUIRED_OR_CHECKSUM_INVALID';
     END IF;
 END
 $migration_guard$;
@@ -42,9 +50,9 @@ BEGIN
         WHEN 'uv-p1-runtime-pr997-c1515c5af4a4-20260902' THEN
             approved_pr := 997;
             approved_head := 'c1515c5af4a47c7468d7c4769e91082f7afd163c';
-        WHEN 'uv-p1-canary-pr1062-8aa4f80b8d20-20260902' THEN
+        WHEN 'uv-p1-canary-pr1062-79aec3f732fd-20260902' THEN
             approved_pr := 1062;
-            approved_head := '8aa4f80b8d2003e86bb0603183d8513001d4e28b';
+            approved_head := '79aec3f732fdcd8ca9f5f8a4a6ba5a88f4bba8d4';
         WHEN 'uv-p1-idle-pr1061-8ab8d74c2a0f-20260902' THEN
             approved_pr := 1061;
             approved_head := '8ab8d74c2a0ffd281ae4ccea9e5c8e55eea2ab45';
@@ -169,10 +177,10 @@ GRANT EXECUTE ON FUNCTION autopilot.register_approved_uv_p1_ci(text)
     TO autopilot_runtime;
 
 COMMENT ON FUNCTION autopilot.register_approved_uv_p1_ci(text) IS
-'Registers only the three director-approved, zero-cost, exact-head UV P1 GitHub CI snapshots, one active task at a time; allowlist upgraded by migration 0314.';
+'Registers only the three director-approved, zero-cost, exact-head UV P1 GitHub CI snapshots, one active task at a time; allowlist upgraded by migration 0315.';
 
 INSERT INTO public.schema_migration(migration_key)
-VALUES ('0314_autopilot_uv_p1_allowlist_upgrade')
+VALUES ('0315_autopilot_uv_p1_allowlist_upgrade')
 ON CONFLICT DO NOTHING;
 
 COMMIT;
