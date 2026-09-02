@@ -123,6 +123,24 @@ else
   if (( worker_rc != 0 )) || [[ "$worker_state" != "active" ]]; then
     mark_unknown "assistant_lab_service_${worker_state:-unknown}"
   fi
+
+  # DDS3 mass launch workflows return while their systemd jobs are still
+  # running. The workflow concurrency fence therefore cannot represent the
+  # full compute lifetime; the final STOP proof must read every supported mass
+  # unit directly. Only an exact inactive result proves absence. Active work is
+  # BUSY, while failed, transitioning, missing, or unreadable unit telemetry is
+  # UNKNOWN and must never authorize STOP.
+  for mass_unit in dds3-mass@10000.service dds3-mass@30000.service; do
+    set +e
+    mass_state="$(systemctl is-active "$mass_unit" 2>/dev/null)"
+    mass_rc=$?
+    set -e
+    case "$mass_state:$mass_rc" in
+      active:0) mark_busy "dds3_mass_service_active" ;;
+      inactive:3) ;;
+      *) mark_unknown "dds3_mass_service_${mass_state:-unknown}" ;;
+    esac
+  done
 fi
 
 # A local operator/maintenance lease is a bounded keep-alive signal. Absence is
