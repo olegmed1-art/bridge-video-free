@@ -65,7 +65,7 @@ jobs:
           (( disk_kb >= 12582912 )) || { echo 'UV_RUNTIME_RESOURCE_DISK_INSUFFICIENT'; exit 78; }
           (( mem_kb >= 4194304 )) || { echo 'UV_RUNTIME_RESOURCE_MEMORY_INSUFFICIENT'; exit 78; }
           (( cpus >= 2 )) || { echo 'UV_RUNTIME_RESOURCE_CPU_INSUFFICIENT'; exit 78; }
-          awk -v load="$load1" -v cpus="$cpus" 'BEGIN { exit !(load <= cpus * 2.0) }' \
+          awk -v load_avg="$load1" -v cpus="$cpus" 'BEGIN { exit !(load_avg <= cpus * 2.0) }' \
             || { echo 'UV_RUNTIME_RESOURCE_LOAD_TOO_HIGH'; exit 78; }
           sed -i 's/^RESOURCE_GATE=.*/RESOURCE_GATE=PASS/' "$RUNNER_TEMP/uv-runtime-state.env"
           echo 'UV_RUNTIME_RESOURCE_GATE=PASS'
