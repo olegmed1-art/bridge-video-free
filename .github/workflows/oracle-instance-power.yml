@@ -331,6 +331,35 @@ jobs:
             exit 3
           fi
 
+          # A workload run can be created while the final Run Command is
+          # polling and remain queued behind this workflow's concurrency
+          # lock. Observe the complete epoch again after the host probe, then
+          # re-authorize the same proof so pagination latency cannot make a
+          # stale proof actionable.
+          if [[ -n "$IDLE_SOURCE_RUN_ID" ]]; then
+            post_probe_epoch_state="$(gh api --paginate --slurp \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/$GITHUB_REPOSITORY/actions/workflows/oracle-universal-video-job.yml/runs?per_page=100" \
+              | IDLE_SOURCE_RUN_ID="$IDLE_SOURCE_RUN_ID" python -c 'import json,os,sys; pages=json.load(sys.stdin); source=int(os.environ["IDLE_SOURCE_RUN_ID"]); valid=isinstance(pages,list) and bool(pages) and all(isinstance(p,dict) and isinstance(p.get("workflow_runs"),list) for p in pages); runs=[r for p in pages for r in p.get("workflow_runs",[])] if valid else []; total=pages[0].get("total_count") if valid else None; ids=[int(r.get("id",0)) for r in runs]; complete=isinstance(total,int) and len(runs)==total and len(ids)==len(set(ids)); row=next((r for r in runs if int(r.get("id",0))==source),None); newer=any(int(r.get("id",0))>source and r.get("event")!="pull_request" for r in runs); print("UNKNOWN" if not complete or row is None or row.get("status")!="completed" else "STALE" if newer else "CURRENT")')"
+            [[ "$post_probe_epoch_state" == CURRENT ]] || {
+              echo "STOP REFUSED: post-probe automatic workload epoch is $post_probe_epoch_state" >&2
+              exit 3
+            }
+
+            set +e
+            authorization="$(python3 ops/oracle_idle_stop_guard.py \
+              --proof "$proof" \
+              --max-age-seconds 30 \
+              --max-duration-seconds 30 \
+              --max-future-skew-seconds 5 2>/dev/null)"
+            authorization_rc=$?
+            set -e
+            if [[ $authorization_rc -ne 0 || "$authorization" != "$expected_authorization" ]]; then
+              echo 'STOP REFUSED: host IDLE proof expired during final workload epoch scan' >&2
+              exit 3
+            fi
+          fi
+
           oci compute instance action --instance-id "$OCI_INSTANCE_OCID" --action STOP >/dev/null
           state=""
           for _ in $(seq 1 60); do
