@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import stat
 import time
 from pathlib import Path
@@ -154,13 +155,33 @@ def _runtime_attestation(
     }
 
 
-def write_resident_status(spool_root: Path, status_path: Path) -> dict[str, Any]:
+def write_resident_status(
+    spool_root: Path,
+    status_path: Path,
+    *,
+    resident_id: str | None = None,
+    process_id: int | None = None,
+    process_started_at_unix: float | None = None,
+    process_nonce: str | None = None,
+) -> dict[str, Any]:
     """Publish a fresh v2 status from resident-owned spool receipts."""
 
     paths = _dirs(spool_root)
     installed_runtime = os.getenv("UNIVERSAL_VIDEO_SOURCE_COMMIT", "").strip().lower()
     if not HEX40_RE.fullmatch(installed_runtime):
         raise RuntimeError("installed runtime commit is unavailable")
+    resident = (resident_id or os.getenv("UNIVERSAL_VIDEO_RESIDENT_ID", "")).strip().lower()
+    if resident not in {"source", "container"}:
+        raise RuntimeError("resident identity is unavailable")
+    pid = os.getpid() if process_id is None else process_id
+    started_at = time.time() if process_started_at_unix is None else process_started_at_unix
+    nonce = secrets.token_hex(16) if process_nonce is None else process_nonce
+    if type(pid) is not int or pid <= 0:
+        raise RuntimeError("resident process id is invalid")
+    if isinstance(started_at, bool) or not isinstance(started_at, (int, float)):
+        raise RuntimeError("resident process start is invalid")
+    if not re.fullmatch(r"^[0-9a-f]{32}$", nonce):
+        raise RuntimeError("resident process nonce is invalid")
     active_jobs = sorted(path.stem for path in paths["running"].glob("*.json"))[:32]
     candidates: list[tuple[float, dict[str, Any]]] = []
     for path in paths["done"].glob("*.json"):
@@ -186,6 +207,10 @@ def write_resident_status(spool_root: Path, status_path: Path) -> dict[str, Any]
         "active_jobs": active_jobs,
         "observed_at_unix": time.time(),
         "installed_runtime_commit": installed_runtime,
+        "resident_id": resident,
+        "process_id": pid,
+        "process_started_at_unix": float(started_at),
+        "process_nonce": nonce,
         "job_attestations": attestations,
     }
     status_path.parent.mkdir(parents=True, exist_ok=True)
@@ -502,6 +527,16 @@ def run_forever(spool_root: Path, poll_seconds: float) -> None:
             "/run/bridge-school/universal-video-status.json",
         )
     )
+    resident_id = os.getenv("UNIVERSAL_VIDEO_RESIDENT_ID", "").strip().lower()
+    process_id = os.getpid()
+    process_started_at_unix = time.time()
+    process_nonce = secrets.token_hex(16)
+    status_identity = {
+        "resident_id": resident_id,
+        "process_id": process_id,
+        "process_started_at_unix": process_started_at_unix,
+        "process_nonce": process_nonce,
+    }
     # Both resident implementations share this spool. Serialize startup
     # recovery on the common fence before either process advertises readiness.
     with shared_workload_lock(spool_root, exclusive=True):
@@ -509,7 +544,7 @@ def run_forever(spool_root: Path, poll_seconds: float) -> None:
         if any(recovery.values()):
             print(json.dumps({"event": "spool_recovery", **recovery}, sort_keys=True), flush=True)
     # Publish resident readiness before accepting a potentially long queued job.
-    write_resident_status(spool_root, status_path)
+    write_resident_status(spool_root, status_path, **status_identity)
     while True:
         processed = process_one(spool_root)
         queue_configured = bool(
@@ -521,7 +556,7 @@ def run_forever(spool_root: Path, poll_seconds: float) -> None:
             from .neon_worker import process_one_neon
 
             processed = process_one_neon()
-        write_resident_status(spool_root, status_path)
+        write_resident_status(spool_root, status_path, **status_identity)
         if processed:
             continue
         time.sleep(poll_seconds)

@@ -408,6 +408,9 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "universal-video-resident-status-v2" in script
     assert 'float(value.get("observed_at_unix") or 0) >= int(os.environ["STARTED_UNIX"])' in script
     assert 'value.get("installed_runtime_commit") == os.environ["EXPECTED_COMMIT"]' in script
+    assert 'value.get("resident_id") == os.environ["EXPECTED_RESIDENT"]' in script
+    assert 'float(value.get("process_started_at_unix") or 0) >= int(os.environ["STARTED_UNIX"])' in script
+    assert 're.fullmatch(r"[0-9a-f]{32}", value["process_nonce"])' in script
     assert "RESTORE_STABLE_SECONDS" in script
     assert "stable_seconds=%s result=PASS" in script
     assert "services_stop_attempted=1" in script

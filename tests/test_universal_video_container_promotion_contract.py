@@ -54,6 +54,8 @@ def test_promotion_runs_exact_queue_and_speaker_gates_before_source_preparation(
     assert "/opt/bridge-school/universal-video/.venv/bin/python -" in WORKFLOW
     assert "validate-video-queue-dsn.py" in WORKFLOW
     assert "test ! -L /opt/bridge-school/universal-video/secrets/video-queue-dsn" in WORKFLOW
+    assert 'credential_meta="$(sudo -n stat -c' in WORKFLOW
+    assert 'credential_meta="$(stat -c' not in WORKFLOW
 
 
 def test_promotion_selects_exact_image_and_excludes_legacy_worker() -> None:
@@ -71,6 +73,8 @@ def test_promotion_requires_a_fresh_status_from_the_new_resident() -> None:
     assert "UV_CONTAINER_PROMOTION_STATUS_MISSING" in SCRIPT
     assert "UV_CONTAINER_PROMOTION_STATUS_STALE" in SCRIPT
     assert SCRIPT.count("float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])") == 2
+    assert SCRIPT.count("x.get('resident_id') == 'container'") == 2
+    assert SCRIPT.count("re.fullmatch(r'[0-9a-f]{32}', x['process_nonce'])") == 2
 
 
 def test_promotion_exposes_only_structured_container_runtime_failure_code() -> None:

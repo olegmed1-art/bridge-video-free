@@ -174,7 +174,23 @@ def test_container_image_keeps_credentials_and_media_out_of_layers() -> None:
     assert "COPY universal_video" in dockerfile
     assert "USER universal-video:universal-video" in dockerfile
     assert "UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE=/var/lib/universal-video/model-cache/speaker" in dockerfile
+    assert "BRIDGE_SPEAKER_ALLOW_NEMO_COMPAT=0" in dockerfile
     assert "fonts-dejavu-core" in dockerfile
+
+
+def test_container_disables_unpinned_nemo_compatibility_model() -> None:
+    root = Path(__file__).resolve().parents[1]
+    diarization = (root / "bridge_speaker_diarization_v3.py").read_text(
+        encoding="utf-8"
+    )
+    policy = (root / "bridge_vision/decision_dependencies.json").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'os.getenv("BRIDGE_SPEAKER_ALLOW_NEMO_COMPAT", "1") == "1"' in diarization
+    assert "if allow_nemo_compat and (" in diarization
+    assert '"compatibility_embedding_enabled": allow_nemo_compat' in diarization
+    assert "disables the unpinned NeMo compatibility path" in policy
 
 
 def test_container_image_contains_neon_processor_dependency_closure() -> None:

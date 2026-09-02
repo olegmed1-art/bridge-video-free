@@ -86,6 +86,10 @@ def _inputs(tmp_path: Path, *, status_v2: bool = True):
             **status,
             "schema": "universal-video-resident-status-v2",
             "installed_runtime_commit": "a" * 40,
+            "resident_id": "source",
+            "process_id": 1234,
+            "process_started_at_unix": 990.0,
+            "process_nonce": "b" * 32,
             "job_attestations": [attestation],
         }
     status_path = tmp_path / "status.json"

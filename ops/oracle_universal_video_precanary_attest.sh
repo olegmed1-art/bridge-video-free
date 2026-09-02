@@ -133,21 +133,25 @@ restored_service_ready(){
 }
 
 resident_status_ready(){
-  local service="$1" started_unix="$2" expected_commit image_id
+  local service="$1" started_unix="$2" expected_commit expected_resident image_id
   [[ -f "$STATUS_FILE" && ! -L "$STATUS_FILE" ]] || return 1
   if [[ "$service" == "$SOURCE_SERVICE" ]]; then
+    expected_resident=source
     expected_commit="$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || true)"
   elif [[ "$service" == "$CONTAINER_SERVICE" ]]; then
+    expected_resident=container
     image_id="$(docker inspect --format '{{.Image}}' universal-video-container 2>/dev/null || true)"
     expected_commit="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_id" 2>/dev/null || true)"
   else
     return 1
   fi
   [[ "$expected_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
-  STATUS_PATH="$STATUS_FILE" EXPECTED_COMMIT="$expected_commit" STARTED_UNIX="$started_unix" \
+  STATUS_PATH="$STATUS_FILE" EXPECTED_COMMIT="$expected_commit" \
+    EXPECTED_RESIDENT="$expected_resident" STARTED_UNIX="$started_unix" \
     python3 - <<'PY' >/dev/null 2>&1
 import json
 import os
+import re
 from pathlib import Path
 
 path = Path(os.environ["STATUS_PATH"])
@@ -161,6 +165,13 @@ if not (
     and isinstance(value.get("active_jobs"), list)
     and float(value.get("observed_at_unix") or 0) >= int(os.environ["STARTED_UNIX"])
     and value.get("installed_runtime_commit") == os.environ["EXPECTED_COMMIT"]
+    and value.get("resident_id") == os.environ["EXPECTED_RESIDENT"]
+    and type(value.get("process_id")) is int
+    and value["process_id"] > 0
+    and float(value.get("process_started_at_unix") or 0) >= int(os.environ["STARTED_UNIX"])
+    and float(value.get("process_started_at_unix") or 0) <= float(value.get("observed_at_unix") or 0)
+    and isinstance(value.get("process_nonce"), str)
+    and re.fullmatch(r"[0-9a-f]{32}", value["process_nonce"])
 ):
     raise SystemExit(1)
 PY

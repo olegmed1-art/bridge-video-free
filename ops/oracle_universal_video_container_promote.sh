@@ -143,7 +143,7 @@ CURRENT_STAGE='protected-preflight'
 before_assistant="$(systemctl is-active assistant-lab.service)"
 before_dds="$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)"
 BEFORE_DDS="$before_dds" python3 - <<'PY'
-import json,os
+import json,os,re
 x=json.loads(os.environ['BEFORE_DDS'])
 assert x.get('status') == 'ready'
 assert x.get('engine') == 'DDS3'
@@ -219,6 +219,11 @@ assert x.get('instance_state') == 'RUNNING'
 assert x.get('installed_runtime_commit') == os.environ['EXPECTED_COMMIT']
 assert x.get('active_jobs') == []
 assert float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])
+assert x.get('resident_id') == 'container'
+assert type(x.get('process_id')) is int and x['process_id'] > 0
+assert float(x.get('process_started_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])
+assert float(x.get('process_started_at_unix') or 0) <= float(x.get('observed_at_unix') or 0)
+assert isinstance(x.get('process_nonce'), str) and re.fullmatch(r'[0-9a-f]{32}', x['process_nonce'])
 PY
   then
     fresh_status=1
@@ -231,13 +236,18 @@ if (( fresh_status != 1 )); then
   fail UV_CONTAINER_PROMOTION_STATUS_STALE
 fi
 STATUS_PATH="$STATUS" EXPECTED_COMMIT="$EXPECTED_COMMIT" STARTED_UNIX="$started_unix" python3 - <<'PY'
-import json,os
+import json,os,re
 x=json.load(open(os.environ['STATUS_PATH'],encoding='utf-8'))
 assert x.get('schema') == 'universal-video-resident-status-v2'
 assert x.get('instance_state') == 'RUNNING'
 assert x.get('installed_runtime_commit') == os.environ['EXPECTED_COMMIT']
 assert x.get('active_jobs') == []
 assert float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])
+assert x.get('resident_id') == 'container'
+assert type(x.get('process_id')) is int and x['process_id'] > 0
+assert float(x.get('process_started_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])
+assert float(x.get('process_started_at_unix') or 0) <= float(x.get('observed_at_unix') or 0)
+assert isinstance(x.get('process_nonce'), str) and re.fullmatch(r'[0-9a-f]{32}', x['process_nonce'])
 PY
 
 CURRENT_STAGE='operator-install'

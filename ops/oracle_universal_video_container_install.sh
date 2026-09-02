@@ -206,6 +206,7 @@ UNIVERSAL_VIDEO_OUTPUT_ROOT=/var/lib/universal-video/output
 UNIVERSAL_VIDEO_MEDIA_ROOT=/var/lib/universal-video/media
 UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE=/var/lib/universal-video/model-cache/speaker
 UNIVERSAL_VIDEO_STATUS_PATH=/run/bridge-school/universal-video-status.json
+UNIVERSAL_VIDEO_RESIDENT_ID=container
 HF_HOME=/var/lib/universal-video/model-cache
 GOOGLE_DRIVE_OAUTH_JSON_FILE=/run/secrets/google-drive-oauth.json
 UNIVERSAL_VIDEO_REQUIRE_STAGED_SOURCE=1
