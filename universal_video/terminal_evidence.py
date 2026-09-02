@@ -2,7 +2,7 @@
 
 The queue may accept REVIEW_READY only after the routed result objects are read
 back from Drive, their identities and checksums are verified, and a canonical
-manifest plus artifact locators are produced.  This module never publishes or
+manifest plus artifact locators are produced. This module never publishes or
 promotes results and never logs credentials, payloads, URLs, or private paths.
 """
 from __future__ import annotations
@@ -60,10 +60,15 @@ def readback_drive_bytes(
     token: str,
     *,
     max_bytes: int,
+    retain_body: bool = False,
     metadata_loader: Callable[[str, str], Mapping[str, Any]] = file_metadata,
     get: Callable[..., Any] = requests.get,
 ) -> dict[str, Any]:
-    """Read one Drive object and return bounded identity plus content hashes."""
+    """Read one Drive object and return bounded identity plus content hashes.
+
+    Large result files are verified as a stream. The body is retained only for
+    small semantic contracts such as AI_DONE, never for the master PDF.
+    """
 
     file_id = _drive_id(file_id)
     if not token or max_bytes <= 0:
@@ -78,7 +83,7 @@ def readback_drive_bytes(
 
     sha256 = hashlib.sha256()
     md5 = hashlib.md5(usedforsecurity=False)
-    body = bytearray()
+    body = bytearray() if retain_body else None
     observed_size = 0
     try:
         with get(
@@ -97,7 +102,8 @@ def readback_drive_bytes(
                     raise TerminalEvidenceError("UV_TERMINAL_READBACK_TOO_LARGE")
                 sha256.update(chunk)
                 md5.update(chunk)
-                body.extend(chunk)
+                if body is not None:
+                    body.extend(chunk)
     except TerminalEvidenceError:
         raise
     except Exception as exc:
@@ -114,7 +120,7 @@ def readback_drive_bytes(
     if expected_md5 and actual_md5 != expected_md5:
         raise TerminalEvidenceError("UV_TERMINAL_READBACK_CHECKSUM_MISMATCH")
 
-    return {
+    result: dict[str, Any] = {
         "file_id": file_id,
         "name": _text(metadata.get("name"), "UV_TERMINAL_READBACK_IDENTITY_MISMATCH"),
         "mime_type": _text(
@@ -126,8 +132,10 @@ def readback_drive_bytes(
         "parents": [str(value) for value in (metadata.get("parents") or [])],
         "sha256": actual_sha256,
         "md5": actual_md5,
-        "body": bytes(body),
     }
+    if body is not None:
+        result["body"] = bytes(body)
+    return result
 
 
 def build_terminal_evidence(
@@ -189,6 +197,7 @@ def build_terminal_evidence(
             locators["master_pdf"],
             token,
             max_bytes=MAX_MASTER_PDF_BYTES,
+            retain_body=False,
         )
     )
     ai_done = dict(
@@ -196,6 +205,7 @@ def build_terminal_evidence(
             locators["ai_done"],
             token,
             max_bytes=MAX_AI_DONE_BYTES,
+            retain_body=True,
         )
     )
     for item in (master, ai_done):
