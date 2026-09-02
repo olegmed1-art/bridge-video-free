@@ -112,6 +112,17 @@ def test_speaker_preflight_hashes_and_validates_both_models(
     embedding = cache / container_runtime.SPEAKER_EMBEDDING_MODEL
     segmentation.write_bytes(b"s" * 2048)
     embedding.write_bytes(b"e" * 3072)
+    monkeypatch.setattr(
+        container_runtime,
+        "SPEAKER_SEGMENTATION_SHA256",
+        hashlib.sha256(segmentation.read_bytes()).hexdigest(),
+    )
+    monkeypatch.setattr(
+        container_runtime,
+        "SPEAKER_EMBEDDING_SHA256",
+        hashlib.sha256(embedding.read_bytes()).hexdigest(),
+    )
+    loaded = []
 
     class Config:
         def __init__(self, **kwargs):
@@ -126,6 +137,7 @@ def test_speaker_preflight_hashes_and_validates_both_models(
         OfflineSpeakerSegmentationPyannoteModelConfig=Config,
         SpeakerEmbeddingExtractorConfig=Config,
         FastClusteringConfig=Config,
+        OfflineSpeakerDiarization=lambda config: loaded.append(config),
     )
     monkeypatch.setitem(sys.modules, "sherpa_onnx", stub)
 
@@ -134,6 +146,24 @@ def test_speaker_preflight_hashes_and_validates_both_models(
         "segmentation_sha256": hashlib.sha256(segmentation.read_bytes()).hexdigest(),
         "embedding_sha256": hashlib.sha256(embedding.read_bytes()).hexdigest(),
     }
+    assert len(loaded) == 1
+
+
+def test_speaker_preflight_rejects_unpinned_model_digest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from universal_video import container_runtime
+
+    cache = tmp_path / "speaker"
+    cache.mkdir()
+    (cache / container_runtime.SPEAKER_SEGMENTATION_MODEL).write_bytes(b"s" * 2048)
+    (cache / container_runtime.SPEAKER_EMBEDDING_MODEL).write_bytes(b"e" * 3072)
+    monkeypatch.setattr(container_runtime, "SPEAKER_SEGMENTATION_SHA256", "0" * 64)
+
+    with pytest.raises(ContainerRuntimeUnavailable) as error:
+        container_runtime._validate_speaker_models(cache)
+
+    assert error.value.error_code == "UV_CONTAINER_SPEAKER_MODEL_DIGEST_MISMATCH"
 
 
 def test_container_image_keeps_credentials_and_media_out_of_layers() -> None:
@@ -253,6 +283,24 @@ def test_container_activation_requires_a_bounded_protected_queue_credential() ->
     assert "assert " not in gate
 
 
+def test_nonactivating_install_cannot_overwrite_resident_queue_configuration() -> None:
+    root = Path(__file__).resolve().parents[1]
+    installer = (root / "ops/oracle_universal_video_container_install.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'PERSISTENT_ENV_FILE="$BASE_DIR/universal-video-container.env"' in installer
+    assert 'ENV_FILE="${UNIVERSAL_VIDEO_CONTAINER_ENV_FILE:-$BASE_DIR/universal-video-container-candidate.env}"' in installer
+    queue_line = "BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE=/run/secrets/video-queue-dsn"
+    assert f"printf '%s\\n' '{queue_line}' >>\"$ENV_FILE\"" in installer
+    assert installer.index(f"printf '%s\\n' '{queue_line}'") > installer.index(
+        'if [[ "$ACTIVATE" == 1 ]]; then',
+        installer.index('cat >"$ENV_FILE"'),
+    )
+    unit_install = 'install -m 0644 -o root -g root "$SOURCE_DIR/deploy/oracle-universal-video/$SERVICE_NAME"'
+    assert installer.index(unit_install) > installer.rindex('if [[ "$ACTIVATE" == 1 ]]; then')
+
+
 def test_queue_dsn_parser_rejects_malformed_and_multiline_values() -> None:
     from ops.validate_video_queue_dsn import QueueDsnError, validate_dsn_text
 
@@ -263,6 +311,10 @@ def test_queue_dsn_parser_rejects_malformed_and_multiline_values() -> None:
         "\npostgresql://worker:secret@db.example/neondb",
         "postgresql://first postgresql://second",
         "postgresql://db.example/neondb",
+        "postgresql://:secret@db.example/neondb",
+        "postgresql://worker:secret@db.example/neondb%ZZ",
+        "postgresql://worker:secret@db.example/neondb#",
+        "postgresql://worker:secret@db.example/neondb\x00",
         "https://worker:secret@db.example/neondb",
     )
     for value in invalid:

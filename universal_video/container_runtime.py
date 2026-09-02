@@ -30,6 +30,12 @@ SPEAKER_SEGMENTATION_MODEL = "pyannote-segmentation-3.0.onnx"
 SPEAKER_EMBEDDING_MODEL = (
     "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
 )
+SPEAKER_SEGMENTATION_SHA256 = (
+    "915e0573bc4e17197a7a893d0eb98e1a851abb64451b2e1a8ad51f5f99040360"
+)
+SPEAKER_EMBEDDING_SHA256 = (
+    "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b"
+)
 MIN_SPEAKER_MODEL_BYTES = 1024
 
 
@@ -73,7 +79,7 @@ def _require_spool_directory(value: str) -> Path:
     return root
 
 
-def _speaker_artifact(cache: Path, filename: str) -> tuple[Path, str]:
+def _speaker_artifact(cache: Path, filename: str, expected_sha256: str) -> tuple[Path, str]:
     path = cache / filename
     if path.is_symlink() or not path.is_file():
         raise ContainerRuntimeUnavailable("UV_CONTAINER_SPEAKER_MODEL_UNAVAILABLE")
@@ -88,14 +94,19 @@ def _speaker_artifact(cache: Path, filename: str) -> tuple[Path, str]:
         raise
     except OSError as exc:
         raise ContainerRuntimeUnavailable("UV_CONTAINER_SPEAKER_MODEL_UNAVAILABLE") from exc
-    return path, digest.hexdigest()
+    observed_sha256 = digest.hexdigest()
+    if observed_sha256 != expected_sha256:
+        raise ContainerRuntimeUnavailable("UV_CONTAINER_SPEAKER_MODEL_DIGEST_MISMATCH")
+    return path, observed_sha256
 
 
 def _validate_speaker_models(cache: Path) -> dict[str, str]:
     segmentation, segmentation_sha = _speaker_artifact(
-        cache, SPEAKER_SEGMENTATION_MODEL
+        cache, SPEAKER_SEGMENTATION_MODEL, SPEAKER_SEGMENTATION_SHA256
     )
-    embedding, embedding_sha = _speaker_artifact(cache, SPEAKER_EMBEDDING_MODEL)
+    embedding, embedding_sha = _speaker_artifact(
+        cache, SPEAKER_EMBEDDING_MODEL, SPEAKER_EMBEDDING_SHA256
+    )
     try:
         import sherpa_onnx
 
@@ -116,6 +127,10 @@ def _validate_speaker_models(cache: Path) -> dict[str, str]:
         )
         if not config.validate():
             raise ContainerRuntimeUnavailable("UV_CONTAINER_SPEAKER_MODEL_INVALID")
+        # Construction loads both ONNX artifacts through the same sherpa-onnx
+        # API used by processing. Config validation alone does not prove that
+        # the runtime can instantiate either model.
+        sherpa_onnx.OfflineSpeakerDiarization(config)
     except ContainerRuntimeUnavailable:
         raise
     except Exception as exc:

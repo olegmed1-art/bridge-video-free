@@ -16,6 +16,12 @@ MIN_FREE_KB="${UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB:-8388608}"
 BUILD_TIMEOUT_SECONDS="${UNIVERSAL_VIDEO_CONTAINER_BUILD_TIMEOUT_SECONDS:-1200}"
 IMAGE_REPO="${UNIVERSAL_VIDEO_IMAGE_REPO:-bridge-school/universal-video}"
 STATUS_DIR="${UNIVERSAL_VIDEO_STATUS_DIR:-/run/bridge-school}"
+PERSISTENT_ENV_FILE="$BASE_DIR/universal-video-container.env"
+if [[ "$ACTIVATE" == 1 ]]; then
+  ENV_FILE="$PERSISTENT_ENV_FILE"
+else
+  ENV_FILE="${UNIVERSAL_VIDEO_CONTAINER_ENV_FILE:-$BASE_DIR/universal-video-container-candidate.env}"
+fi
 
 die(){ printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 log(){ printf '[%s] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$*"; }
@@ -172,7 +178,7 @@ if [[ "$ACTIVATE" == 1 ]]; then
     || die 'protected video queue credential content invalid'
   log 'Protected video queue credential validated for activation'
 fi
-cat >"$BASE_DIR/universal-video-container.env" <<EOF
+cat >"$ENV_FILE" <<EOF
 UNIVERSAL_VIDEO_SOURCE_COMMIT=$commit
 UNIVERSAL_VIDEO_CONTAINER_UID=$uid
 UNIVERSAL_VIDEO_CONTAINER_GID=$gid
@@ -184,14 +190,16 @@ UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE=/var/lib/universal-video/model-cache/speaker
 UNIVERSAL_VIDEO_STATUS_PATH=/run/bridge-school/universal-video-status.json
 HF_HOME=/var/lib/universal-video/model-cache
 GOOGLE_DRIVE_OAUTH_JSON_FILE=/run/secrets/google-drive-oauth.json
-BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE=/run/secrets/video-queue-dsn
 UNIVERSAL_VIDEO_REQUIRE_STAGED_SOURCE=1
 UNIVERSAL_VIDEO_WHISPER_MODEL=${UNIVERSAL_VIDEO_WHISPER_MODEL:-small}
 UNIVERSAL_VIDEO_ASR_THREADS=${UNIVERSAL_VIDEO_ASR_THREADS:-6}
 UNIVERSAL_VIDEO_POLL_SECONDS=${UNIVERSAL_VIDEO_POLL_SECONDS:-2}
 EOF
-chown root:root "$BASE_DIR/universal-video-container.env"
-chmod 0640 "$BASE_DIR/universal-video-container.env"
+if [[ "$ACTIVATE" == 1 ]]; then
+  printf '%s\n' 'BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE=/run/secrets/video-queue-dsn' >>"$ENV_FILE"
+fi
+chown root:root "$ENV_FILE"
+chmod 0640 "$ENV_FILE"
 
 log 'Refresh ephemeral host status mount immediately before readiness'
 [[ ! -L "$STATUS_DIR" ]] || die "unsafe or missing mount: $STATUS_DIR"
@@ -200,7 +208,7 @@ install -d -o "$USER_NAME" -g "$GROUP_NAME" -m 0750 "$STATUS_DIR"
 
 log 'Run container-only readiness gate; no job is submitted'
 docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g --user="$uid:$gid" \
-  --env-file "$BASE_DIR/universal-video-container.env" \
+  --env-file "$ENV_FILE" \
   --mount "type=bind,src=$BASE_DIR/spool,dst=/var/lib/universal-video/spool" \
   --mount "type=bind,src=$BASE_DIR/output,dst=/var/lib/universal-video/output" \
   --mount "type=bind,src=$BASE_DIR/media,dst=/var/lib/universal-video/media" \
@@ -208,10 +216,11 @@ docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g --user="$uid:$
   --mount "type=bind,src=$STATUS_DIR,dst=/run/bridge-school" \
   --mount "type=bind,src=$BASE_DIR/secrets,dst=/run/secrets,readonly" "$image" true
 
-install -m 0644 -o root -g root "$SOURCE_DIR/deploy/oracle-universal-video/$SERVICE_NAME" "/etc/systemd/system/$SERVICE_NAME"
-systemctl daemon-reload
-systemd-analyze verify "/etc/systemd/system/$SERVICE_NAME" >/dev/null
 if [[ "$ACTIVATE" == 1 ]]; then
+  [[ "$ENV_FILE" == "$PERSISTENT_ENV_FILE" ]] || die 'activation environment path mismatch'
+  install -m 0644 -o root -g root "$SOURCE_DIR/deploy/oracle-universal-video/$SERVICE_NAME" "/etc/systemd/system/$SERVICE_NAME"
+  systemctl daemon-reload
+  systemd-analyze verify "/etc/systemd/system/$SERVICE_NAME" >/dev/null
   systemctl is-active --quiet "$OLD_SERVICE" && systemctl stop "$OLD_SERVICE"
   if ! systemctl enable "$SERVICE_NAME" || ! systemctl restart "$SERVICE_NAME"; then
     service_status

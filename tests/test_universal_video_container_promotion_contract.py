@@ -30,12 +30,29 @@ def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
     assert "UNIVERSAL_VIDEO_ACTIVATE=1" in WORKFLOW
     assert "systemctl is-active --quiet universal-video-container.service" in WORKFLOW
     assert "expected_prepare_blob" in WORKFLOW
+    assert "expected_preflight_blob" in WORKFLOW
+    assert "expected_dsn_validator_blob" in WORKFLOW
     assert 'git hash-object "$RUNNER_TEMP/prepare.sh"' in WORKFLOW
+    assert 'git hash-object "$RUNNER_TEMP/prepromotion-preflight.sh"' in WORKFLOW
+    assert 'git hash-object "$RUNNER_TEMP/validate-video-queue-dsn.py"' in WORKFLOW
     assert '--jq .content | base64 --decode > "$RUNNER_TEMP/prepare.sh"' in WORKFLOW
     assert "tr -d" not in WORKFLOW
     assert "UV_CONTAINER_PROMOTION_ENTRYPOINT_MISSING" in WORKFLOW
     assert "UV_CONTAINER_PROMOTION_BLOB_MISMATCH" in WORKFLOW
     assert " /bin/bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh" in WORKFLOW
+
+
+def test_promotion_runs_exact_queue_and_speaker_gates_before_source_preparation() -> None:
+    preflight = WORKFLOW.index('"$RUNNER_TEMP/prepromotion-preflight.sh"')
+    queue_gate = WORKFLOW.index("VIDEO_QUEUE_DSN_PREFLIGHT_PASS", preflight)
+    speaker_gate = WORKFLOW.index("UNIVERSAL_VIDEO_PREPROMOTION_PREFLIGHT_PASS", queue_gate)
+    source_prepare = WORKFLOW.index(
+        "UNIVERSAL_VIDEO_GIT_REF='$EXPECTED_COMMIT'", speaker_gate
+    )
+
+    assert queue_gate < speaker_gate < source_prepare
+    assert "/opt/bridge-school/universal-video/.venv/bin/python -" in WORKFLOW
+    assert "validate-video-queue-dsn.py" in WORKFLOW
 
 
 def test_promotion_selects_exact_image_and_excludes_legacy_worker() -> None:

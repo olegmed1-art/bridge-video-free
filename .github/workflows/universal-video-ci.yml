@@ -21,6 +21,7 @@ on:
       - 'deploy/oracle-universal-video/**'
       - 'deploy/oracle-universal-video/Dockerfile'
       - 'ops/oracle_universal_video_*.sh'
+      - 'ops/validate_video_queue_dsn.py'
       - 'ops/universal_video_receipt_reader.py'
       - 'tests/test_universal_video_*.py'
       - 'tests/test_bridge_video_*.py'

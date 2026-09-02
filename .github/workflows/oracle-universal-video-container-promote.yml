@@ -120,10 +120,28 @@ jobs:
           set -euo pipefail
           expected_blob="$(gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_container_promote.sh?ref=$EXPECTED_COMMIT" --jq .sha)"
           expected_prepare_blob="$(gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_run_command.sh?ref=$EXPECTED_COMMIT" --jq .sha)"
+          expected_preflight_blob="$(gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_prepromotion_preflight.sh?ref=$EXPECTED_COMMIT" --jq .sha)"
+          expected_dsn_validator_blob="$(gh api "/repos/$GITHUB_REPOSITORY/contents/ops/validate_video_queue_dsn.py?ref=$EXPECTED_COMMIT" --jq .sha)"
           gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_run_command.sh?ref=$EXPECTED_COMMIT" --jq .content | base64 --decode > "$RUNNER_TEMP/prepare.sh"
+          gh api "/repos/$GITHUB_REPOSITORY/contents/ops/oracle_universal_video_prepromotion_preflight.sh?ref=$EXPECTED_COMMIT" --jq .content | base64 --decode > "$RUNNER_TEMP/prepromotion-preflight.sh"
+          gh api "/repos/$GITHUB_REPOSITORY/contents/ops/validate_video_queue_dsn.py?ref=$EXPECTED_COMMIT" --jq .content | base64 --decode > "$RUNNER_TEMP/validate-video-queue-dsn.py"
           [[ "$(git hash-object "$RUNNER_TEMP/prepare.sh")" == "$expected_prepare_blob" ]]
+          [[ "$(git hash-object "$RUNNER_TEMP/prepromotion-preflight.sh")" == "$expected_preflight_blob" ]]
+          [[ "$(git hash-object "$RUNNER_TEMP/validate-video-queue-dsn.py")" == "$expected_dsn_validator_blob" ]]
           /bin/bash -n "$RUNNER_TEMP/prepare.sh"
+          /bin/bash -n "$RUNNER_TEMP/prepromotion-preflight.sh"
+          python -m py_compile "$RUNNER_TEMP/validate-video-queue-dsn.py"
           ssh_base=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          # These exact-revision gates run before source preparation can stop,
+          # restart, or replace either resident checkout.
+          "${ssh_base[@]}" 'sudo -n test "$(stat -c "%U:%G:%a" /opt/bridge-school/universal-video/secrets/video-queue-dsn)" = root:universal-video:640'
+          "${ssh_base[@]}" 'sudo -n /opt/bridge-school/universal-video/.venv/bin/python - /opt/bridge-school/universal-video/secrets/video-queue-dsn' \
+            < "$RUNNER_TEMP/validate-video-queue-dsn.py" \
+            | grep -Fx VIDEO_QUEUE_DSN_PREFLIGHT_PASS
+          "${ssh_base[@]}" \
+            "sudo -n env UNIVERSAL_VIDEO_EXPECTED_COMMIT='$EXPECTED_COMMIT' UNIVERSAL_VIDEO_EXPECTED_IMAGE_DIGEST='$IMAGE_DIGEST' /bin/bash -s" \
+            < "$RUNNER_TEMP/prepromotion-preflight.sh" \
+            | grep -E '^UNIVERSAL_VIDEO_PREPROMOTION_PREFLIGHT_PASS commit=[0-9a-f]{40} image_digest=sha256:[0-9a-f]{64}$'
           if ! "${ssh_base[@]}" 'sudo -n systemctl is-active --quiet universal-video-container.service'; then
             set +e
             "${ssh_base[@]}" "sudo -n env UNIVERSAL_VIDEO_GIT_REF='$EXPECTED_COMMIT' UNIVERSAL_VIDEO_ACTIVATE=1 UNIVERSAL_VIDEO_PREWARM_MODEL=1 UNIVERSAL_VIDEO_RUN_SMOKE=0 UNIVERSAL_VIDEO_SOURCE_ONLY=1 /bin/bash -s" < "$RUNNER_TEMP/prepare.sh" > "$RUNNER_TEMP/prepare.log" 2>&1
