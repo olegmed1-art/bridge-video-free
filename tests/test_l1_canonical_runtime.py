@@ -212,8 +212,26 @@ def test_defense_signal_is_blocked():
 def test_runtime_conflict_gate():
     a = type(evaluate("RULE-L1-OPEN-1H", {"HCP": 13, "H": 5, "S": 4}))("A", "MATCH", "1H", 100, 5, 5)
     b = type(a)("B", "MATCH", "1S", 100, 5, 5)
+    world_calls = []
+
+    def world_lookup():
+        world_calls.append("called")
+        raise AssertionError("WORLD must not run across CANON_CONFLICT")
+
     result = resolve([a, b])
-    assert result.status == "BLOCK" and result.action == "RULE_CONFLICT"
+    if result.status == "NO_MATCH":
+        world_lookup()
+    assert result.status == "CANON_CONFLICT"
+    assert result.action is None
+    assert world_calls == []
+
+
+def test_explicit_runtime_conflict_gate_has_no_school_answer():
+    result = resolve(
+        [evaluate("RULE-L1-RUNTIME-CONFLICT-GATE", {"HCP": 0})]
+    )
+    assert result.status == "CANON_CONFLICT"
+    assert result.action is None
 
 
 def test_system_isolation():
