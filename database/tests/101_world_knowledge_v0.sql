@@ -148,7 +148,7 @@ BEGIN
   jsonb_set(jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest('{"meaning":"Stayman standard"}'::jsonb::text,'sha256'),'hex'))),'{steps,1,output_hash}',to_jsonb(encode(digest('{"meaning":"Stayman standard"}'::jsonb::text,'sha256'),'hex'))));
 
  bad_raw:='{"deal":{"N":[]}}';
- bad_trace:=jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
+ bad_trace:=jsonb_set(jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex'))),'{steps,1,output_hash}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
  failed:=false; v_constraint:=NULL; BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
@@ -159,7 +159,7 @@ BEGIN
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_HIDDEN_DEAL_ACCEPTED'; END IF;
 
  bad_raw:='{"explanation":"as ks"}';
- bad_trace:=jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
+ bad_trace:=jsonb_set(jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex'))),'{steps,1,output_hash}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
  failed:=false; v_constraint:=NULL; BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
@@ -170,7 +170,7 @@ BEGIN
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_NESTED_CARD_TOKENS_ACCEPTED'; END IF;
 
  bad_raw:='{"explanation":"ASKS"}';
- bad_trace:=jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
+ bad_trace:=jsonb_set(jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex'))),'{steps,1,output_hash}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
  failed:=false; v_constraint:=NULL; BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
@@ -181,7 +181,7 @@ BEGIN
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_PACKED_CARD_TOKENS_ACCEPTED'; END IF;
 
  bad_raw:='{"explanation":"AsKs"}';
- bad_trace:=jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
+ bad_trace:=jsonb_set(jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex'))),'{steps,1,output_hash}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
  failed:=false; v_constraint:=NULL; BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
@@ -192,7 +192,7 @@ BEGIN
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_CASE_VARIANT_PACKED_CARD_TOKENS_ACCEPTED'; END IF;
 
  bad_raw:='{"explanation":"10C 10D"}';
- bad_trace:=jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
+ bad_trace:=jsonb_set(jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex'))),'{steps,1,output_hash}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
  failed:=false; BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
@@ -203,7 +203,7 @@ BEGIN
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_TEN_CARD_TOKENS_ACCEPTED'; END IF;
 
  bad_raw:='{"explanation":"A♠ K♠"}';
- bad_trace:=jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
+ bad_trace:=jsonb_set(jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex'))),'{steps,1,output_hash}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
  failed:=false; BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
@@ -214,7 +214,7 @@ BEGIN
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_GLYPH_CARD_TOKENS_ACCEPTED'; END IF;
 
  bad_raw:='{"explanation":"♠AKQ ♥JT9"}';
- bad_trace:=jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
+ bad_trace:=jsonb_set(jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex'))),'{steps,1,output_hash}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
  failed:=false; BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
@@ -225,7 +225,7 @@ BEGIN
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_GROUPED_PREFIX_HOLDING_ACCEPTED'; END IF;
 
  bad_raw:='{"explanation":"AKQ♠"}';
- bad_trace:=jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
+ bad_trace:=jsonb_set(jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex'))),'{steps,1,output_hash}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
  failed:=false; BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
@@ -236,7 +236,7 @@ BEGIN
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_GROUPED_SUFFIX_HOLDING_ACCEPTED'; END IF;
 
  bad_raw:='{"explanation":"♠ AKQ ♥ JT9"}';
- bad_trace:=jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
+ bad_trace:=jsonb_set(jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex'))),'{steps,1,output_hash}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
  failed:=false; BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
@@ -247,7 +247,7 @@ BEGIN
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_SEPARATED_GROUPED_HOLDING_ACCEPTED'; END IF;
 
  bad_raw:='{"explanation":"AKQ.JT9.876.5432"}';
- bad_trace:=jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
+ bad_trace:=jsonb_set(jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex'))),'{steps,1,output_hash}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
  failed:=false; BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
