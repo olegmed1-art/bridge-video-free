@@ -34,7 +34,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install test dependencies
-        run: python -m pip install -q pytest requests google-auth
+        run: >-
+          python -m pip install -q pytest requests google-auth
+          'psycopg[binary]==3.3.4'
       - name: Syntax-check host scripts
         run: |
           bash -n ops/oracle_universal_video_preflight.sh
