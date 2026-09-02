@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import ast
+import hashlib
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -50,6 +53,10 @@ def test_container_runtime_reports_ready_without_fallback(monkeypatch: pytest.Mo
     _environment(monkeypatch, tmp_path)
     monkeypatch.setattr("universal_video.container_runtime.validate_video_runtime", lambda: {"ffmpeg": "/usr/bin/ffmpeg", "ffprobe": "/usr/bin/ffprobe", "asr": "faster_whisper"})
     monkeypatch.setattr("universal_video.container_runtime._load_model", lambda: object())
+    monkeypatch.setattr(
+        "universal_video.container_runtime._validate_speaker_models",
+        lambda _path: {"segmentation_sha256": "a" * 64, "embedding_sha256": "b" * 64},
+    )
     report = validate_container_runtime()
     assert report["status"] == "READY"
     assert report["fallback_used"] is False
@@ -75,10 +82,58 @@ def test_container_accepts_protected_spool_root_with_writable_leaves(
         lambda: {"ffmpeg": "/usr/bin/ffmpeg", "ffprobe": "/usr/bin/ffprobe", "asr": "faster_whisper"},
     )
     monkeypatch.setattr("universal_video.container_runtime._load_model", lambda: object())
+    monkeypatch.setattr(
+        "universal_video.container_runtime._validate_speaker_models",
+        lambda _path: {"segmentation_sha256": "a" * 64, "embedding_sha256": "b" * 64},
+    )
 
     report = validate_container_runtime()
 
     assert report["status"] == "READY"
+
+
+def test_container_rejects_empty_speaker_cache_before_runtime(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _environment(monkeypatch, tmp_path)
+    with pytest.raises(ContainerRuntimeUnavailable) as error:
+        validate_container_runtime()
+    assert error.value.error_code == "UV_CONTAINER_SPEAKER_MODEL_UNAVAILABLE"
+
+
+def test_speaker_preflight_hashes_and_validates_both_models(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from universal_video import container_runtime
+
+    cache = tmp_path / "speaker"
+    cache.mkdir()
+    segmentation = cache / container_runtime.SPEAKER_SEGMENTATION_MODEL
+    embedding = cache / container_runtime.SPEAKER_EMBEDDING_MODEL
+    segmentation.write_bytes(b"s" * 2048)
+    embedding.write_bytes(b"e" * 3072)
+
+    class Config:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def validate(self):
+            return True
+
+    stub = types.SimpleNamespace(
+        OfflineSpeakerDiarizationConfig=Config,
+        OfflineSpeakerSegmentationModelConfig=Config,
+        OfflineSpeakerSegmentationPyannoteModelConfig=Config,
+        SpeakerEmbeddingExtractorConfig=Config,
+        FastClusteringConfig=Config,
+    )
+    monkeypatch.setitem(sys.modules, "sherpa_onnx", stub)
+
+    report = container_runtime._validate_speaker_models(cache)
+    assert report == {
+        "segmentation_sha256": hashlib.sha256(segmentation.read_bytes()).hexdigest(),
+        "embedding_sha256": hashlib.sha256(embedding.read_bytes()).hexdigest(),
+    }
 
 
 def test_container_image_keeps_credentials_and_media_out_of_layers() -> None:
