@@ -235,6 +235,13 @@ def _build(
     evidence_sha = _canonical_sha256(receipt_core)
     receipt = {**receipt_core, "evidence_sha256": evidence_sha}
     return {
+        "result_mode": "SHADOW_REVIEW_ONLY",
+        "canonical_promotion_allowed": False,
+        "database_persistence_allowed": False,
+        "publication_state": "NOT_PUBLISHED",
+        "source_file_id": source["file_id"],
+        "stable_job_key": manifest["job_id"],
+        "algorithm_revision": manifest["algorithm_revision"],
         "master_pdf_drive_id": master_id,
         "master_pdf_sha256": master["sha256"],
         "ai_done_drive_id": ai_done_id,
@@ -297,11 +304,22 @@ def validate_terminal_output(claim: Mapping[str, Any], output: Mapping[str, Any]
         raise TerminalEvidenceV2Error("UV_TERMINAL_RECEIPT_HASH_INVALID")
     source = source_identity_from_claim(claim)
     if (
-        manifest.get("source_identity") != source
+        output.get("result_mode") != "SHADOW_REVIEW_ONLY"
+        or output.get("canonical_promotion_allowed") is not False
+        or output.get("database_persistence_allowed") is not False
+        or output.get("publication_state") != "NOT_PUBLISHED"
+        or output.get("source_file_id") != claim.get("source_file_id")
+        or output.get("stable_job_key") != claim.get("stable_job_key")
+        or output.get("algorithm_revision") != claim.get("algorithm_revision")
+        or manifest.get("source_identity") != source
         or manifest.get("job_id") != claim.get("stable_job_key")
         or manifest.get("source_file_id") != claim.get("source_file_id")
         or manifest.get("algorithm_revision") != claim.get("algorithm_revision")
         or receipt.get("status") != "PASS"
+        or receipt.get("source_identity_verified") is not True
+        or receipt.get("drive_readback_verified") is not True
+        or receipt.get("result_readback_verified") is not True
+        or receipt.get("checksum_verified") is not True
         or receipt.get("artifact_count") != 2
         or receipt.get("artifact_manifest_sha256") != manifest_sha
         or locators.get("master_pdf") != output.get("master_pdf_drive_id")
