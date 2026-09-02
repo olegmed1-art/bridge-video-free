@@ -26,30 +26,45 @@ def test_batch_enqueue_reuses_the_bounded_staging_classifier() -> None:
     assert "UV_INTAKE_IO_FAILED" in batch
     assert "UV_INTAKE_EXECUTION_FAILED" in batch
     assert "trap \"$cleanup_cmd\" EXIT" in batch
-    assert 'rm -f -- "$root_tmp" "$request_tmp" 2>/dev/null || true' in batch
+    assert 'cleanup_staged_files "$root_tmp" "$request_tmp"' in batch
+    assert "UV_INTAKE_CLEANUP_FAILED" in batch
+    assert "|| true" not in batch
 
 
 def test_server_intake_rejection_deletes_payload_before_return() -> None:
     submit = _function("submit_drive", "status")
     failure_start = submit.index('if ! intake_output=')
-    cleanup_gate = submit.index('if ! rm -f -- "$tmp" 2>/dev/null', failure_start)
-    rejection = submit[failure_start:cleanup_gate]
-    cleanup_at = rejection.index('rm -f -- "$tmp" 2>/dev/null || true')
-    reject_at = rejection.index('intake_reject "$intake_code"')
-    return_at = rejection.index("return 1")
-    assert cleanup_at < reject_at < return_at
-    assert "tmp=''" in rejection
-    assert "trap - EXIT" in rejection
+    cleanup_at = submit.index('if ! cleanup_staged_files "$tmp"', failure_start)
+    cleanup_reject_at = submit.index(
+        "intake_reject 'UV_INTAKE_CLEANUP_FAILED'", cleanup_at
+    )
+    cleanup_failure_return = submit.index("return 1", cleanup_reject_at)
+    clear_path = submit.index("tmp=''", cleanup_failure_return)
+    clear_trap = submit.index("trap - EXIT", clear_path)
+    reject_at = submit.index('intake_reject "$intake_code"', clear_trap)
+    rejection_return = submit.index("return 1", reject_at)
+    assert (
+        failure_start
+        < cleanup_at
+        < cleanup_reject_at
+        < cleanup_failure_return
+        < clear_path
+        < clear_trap
+        < reject_at
+        < rejection_return
+    )
 
 
 def test_server_intake_success_is_not_published_before_confirmed_cleanup() -> None:
     submit = _function("submit_drive", "status")
-    cleanup_gate = submit.index('if ! rm -f -- "$tmp" 2>/dev/null')
+    rejection_cleanup = submit.index('if ! cleanup_staged_files "$tmp"')
+    cleanup_gate = submit.index(
+        'if ! cleanup_staged_files "$tmp"', rejection_cleanup + 1
+    )
     cleanup_reject = submit.index("intake_reject 'UV_INTAKE_CLEANUP_FAILED'", cleanup_gate)
     clear_trap = submit.index("trap - EXIT", cleanup_reject)
     publish = submit.index("printf '%s\\n' \"$intake_output\"", clear_trap)
     assert cleanup_gate < cleanup_reject < clear_trap < publish
-    assert '[[ -e "$tmp" || -L "$tmp" ]]' in submit
 
 
 def test_exit_trap_captures_the_actual_staged_path() -> None:
@@ -62,5 +77,26 @@ def test_exit_trap_captures_the_actual_staged_path() -> None:
 def test_invalid_stage_receipt_cannot_leave_a_reported_path() -> None:
     staging = _function("stage_job_payload", "submit_drive")
     invalid_receipt = staging[staging.index('if [[ -z "$stage_path"') :]
-    assert 'rm -f -- "$stage_path" 2>/dev/null || true' in invalid_receipt
+    assert 'cleanup_staged_files "$stage_path"' in invalid_receipt
+    assert "UV_INTAKE_CLEANUP_FAILED" in invalid_receipt
     assert "UV_INTAKE_EXECUTION_FAILED" in invalid_receipt
+
+
+def test_cleanup_helper_requires_confirmed_absence() -> None:
+    cleanup = _function("cleanup_staged_files", "verify")
+    assert 'rm -f -- "$path" 2>/dev/null || return 1' in cleanup
+    assert '[[ ! -e "$path" && ! -L "$path" ]] || return 1' in cleanup
+
+
+def test_batch_success_cannot_be_returned_before_confirmed_cleanup() -> None:
+    batch = _function("enqueue_batch", "batch_status")
+    queue_result = batch.index("queue_rc=$?")
+    cleanup_gate = batch.index(
+        'if ! cleanup_staged_files "$root_tmp" "$request_tmp"', queue_result
+    )
+    cleanup_reject = batch.index(
+        "intake_reject 'UV_INTAKE_CLEANUP_FAILED'", cleanup_gate
+    )
+    clear_trap = batch.index("trap - EXIT", cleanup_reject)
+    return_result = batch.index('return "$queue_rc"', clear_trap)
+    assert queue_result < cleanup_gate < cleanup_reject < clear_trap < return_result
