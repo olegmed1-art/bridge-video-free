@@ -95,8 +95,12 @@ jobs:
           grep -Fx UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS "$RUNNER_TEMP/prepare.log"
           test "$("${s[@]}" 'sudo -n git -C /opt/bridge-school/universal-video-src rev-parse HEAD')" = "$EXACT_SHA"
 
+          # The preceding bounded diagnostic proved 6,076,088 KiB free after
+          # safe cache pruning. Five GiB is a conservative build threshold for
+          # this no-model, no-media image and leaves the kernel to fail closed
+          # if actual layer use exceeds the measured filesystem capacity.
           set +e
-          "${s[@]}" 'sudo -n env UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=0 bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_install.sh' > "$RUNNER_TEMP/container.log" 2>&1
+          "${s[@]}" 'sudo -n env UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=0 UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB=5242880 bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_install.sh' > "$RUNNER_TEMP/container.log" 2>&1
           installer_rc=$?
           set -e
           if (( installer_rc != 0 )); then
