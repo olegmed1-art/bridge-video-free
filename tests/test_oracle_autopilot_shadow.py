@@ -834,7 +834,7 @@ def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():
     workflow = open(
         ".github/workflows/oracle-autopilot-shadow-activation.yml", encoding="utf-8"
     ).read()
-    assert "EXPECTED_STAGED_REVISION: 5f04628a7ba191bae2bd71f7595f63800b3f07dc" in workflow
+    assert "EXPECTED_STAGED_REVISION: 9064044d4c5b85803c6778060dff4843111ab888" in workflow
     unit_sha256 = hashlib.sha256(
         open("deploy/oracle-autopilot/school-autopilot-shadow.service", "rb").read()
     ).hexdigest()
