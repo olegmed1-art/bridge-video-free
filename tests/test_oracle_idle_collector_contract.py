@@ -88,3 +88,42 @@ def test_failed_resident_service_is_unknown() -> None:
     with patch.object(collect, "_systemctl_state", side_effect=["failed", "inactive"]):
         result = collect._resident(2_000_000_000.0)
     assert result["state"] == "UNKNOWN"
+
+
+def test_assistant_lab_resident_active_is_idle_source() -> None:
+    with patch.object(collect, "_systemctl_state", return_value="active"):
+        result = collect._assistant_resident(2_000_000_000.0)
+    assert result["state"] == "IDLE"
+
+
+def test_assistant_lab_resident_inactive_is_unknown() -> None:
+    with patch.object(collect, "_systemctl_state", return_value="inactive"):
+        result = collect._assistant_resident(2_000_000_000.0)
+    assert result["state"] == "UNKNOWN"
+
+
+def test_observer_external_process_is_busy() -> None:
+    with patch.object(collect, "_process_match", side_effect=[True, False, False]):
+        result = collect._external_processes(2_000_000_000.0)
+    assert result["state"] == "BUSY"
+    assert "observer" in result["evidence"]["active_process_families"]
+
+
+def test_ben_external_process_is_busy() -> None:
+    with patch.object(collect, "_process_match", side_effect=[False, True, False]):
+        result = collect._external_processes(2_000_000_000.0)
+    assert result["state"] == "BUSY"
+    assert "ben" in result["evidence"]["active_process_families"]
+
+
+def test_bulk_external_process_is_busy() -> None:
+    with patch.object(collect, "_process_match", side_effect=[False, False, True]):
+        result = collect._external_processes(2_000_000_000.0)
+    assert result["state"] == "BUSY"
+    assert "bulk" in result["evidence"]["active_process_families"]
+
+
+def test_process_telemetry_failure_is_unknown() -> None:
+    with patch.object(collect, "_process_match", return_value=None):
+        result = collect._external_processes(2_000_000_000.0)
+    assert result["state"] == "UNKNOWN"
