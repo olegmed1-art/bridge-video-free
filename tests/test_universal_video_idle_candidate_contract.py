@@ -45,6 +45,9 @@ def test_downstream_power_boundary_remains_exact_and_idle_gated():
     assert "actions: read" in text
     assert "group: oracle-instance-workload-mutation" in text
     assert "Revalidate automatic stop epoch" in text
+    assert "gh api --paginate --slurp" in text
+    assert "final_epoch_state" in text
+    assert "len(runs)==total" in text
     assert 'row.get("status")!="completed"' in text
     assert 'r.get("event")!="pull_request"' in text
     assert "steps.epoch.outputs.epoch_state == 'CURRENT'" in text
