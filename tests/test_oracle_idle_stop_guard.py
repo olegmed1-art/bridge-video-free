@@ -707,6 +707,38 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
         self.assertLess(terminal, current)
         self.assertLess(current, stop)
 
+    def test_instance_power_rechecks_epoch_after_final_probe(self) -> None:
+        workflow = INSTANCE_POWER.read_text(encoding="utf-8")
+        final_step = workflow.index("Stop exact instance only with IDLE proof")
+        final_probe = workflow.index(
+            "bridge-school-oracle-final-idle-proof-${GITHUB_RUN_ID}", final_step
+        )
+        first_authorizer = workflow.index(
+            "authorization=\"$(python3 ops/oracle_idle_stop_guard.py", final_probe
+        )
+        post_probe_epoch = workflow.index("post_probe_epoch_state=", first_authorizer)
+        second_paginated = workflow.index(
+            "gh api --paginate --slurp", post_probe_epoch
+        )
+        post_probe_current = workflow.index(
+            '[[ "$post_probe_epoch_state" == CURRENT ]]', second_paginated
+        )
+        second_authorizer = workflow.index(
+            "authorization=\"$(python3 ops/oracle_idle_stop_guard.py",
+            post_probe_current,
+        )
+        stop = workflow.index(
+            "oci compute instance action --instance-id "
+            '"$OCI_INSTANCE_OCID" --action STOP',
+            second_authorizer,
+        )
+        self.assertLess(final_probe, first_authorizer)
+        self.assertLess(first_authorizer, post_probe_epoch)
+        self.assertLess(post_probe_epoch, second_paginated)
+        self.assertLess(second_paginated, post_probe_current)
+        self.assertLess(post_probe_current, second_authorizer)
+        self.assertLess(second_authorizer, stop)
+
     def test_instance_power_stop_uses_exact_authorizer(self) -> None:
         workflow = INSTANCE_POWER.read_text(encoding="utf-8")
         self.assertNotIn(
