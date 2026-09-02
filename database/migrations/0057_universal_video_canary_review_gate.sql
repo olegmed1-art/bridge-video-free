@@ -213,11 +213,11 @@ BEGIN
            OR v_source_identity->>'name' IS DISTINCT FROM v_job.source_name
            OR v_source_identity->>'mime_type' IS DISTINCT FROM v_job.source_mime_type
            OR jsonb_typeof(v_source_identity->'size_bytes') IS DISTINCT FROM 'number'
-           OR CASE
+           OR (CASE
                 WHEN jsonb_typeof(v_source_identity->'size_bytes') = 'number'
                 THEN (v_source_identity->>'size_bytes')::numeric IS DISTINCT FROM v_job.source_size_bytes::numeric
                 ELSE true
-              END
+              END)
            OR v_source_identity->>'parent_folder_id' IS DISTINCT FROM v_batch.source_folder_id
            OR v_source_identity->>'checksum' IS DISTINCT FROM v_job.source_checksum
 
@@ -229,11 +229,11 @@ BEGIN
            OR v_artifacts->0->>'parent_id' IS DISTINCT FROM v_batch.output_folder_id
            OR v_artifacts->0->>'sha256' IS DISTINCT FROM v_master_sha
            OR jsonb_typeof(v_artifacts->0->'size_bytes') IS DISTINCT FROM 'number'
-           OR CASE
+           OR (CASE
                 WHEN jsonb_typeof(v_artifacts->0->'size_bytes') = 'number'
                 THEN (v_artifacts->0->>'size_bytes')::numeric <= 0
                 ELSE true
-              END
+              END)
 
            OR jsonb_typeof(v_artifacts->1) IS DISTINCT FROM 'object'
            OR v_artifacts->1->>'kind' IS DISTINCT FROM 'ai_done'
@@ -243,11 +243,11 @@ BEGIN
            OR v_artifacts->1->>'parent_id' IS DISTINCT FROM v_batch.output_folder_id
            OR v_artifacts->1->>'sha256' IS DISTINCT FROM v_ai_done_sha
            OR jsonb_typeof(v_artifacts->1->'size_bytes') IS DISTINCT FROM 'number'
-           OR CASE
+           OR (CASE
                 WHEN jsonb_typeof(v_artifacts->1->'size_bytes') = 'number'
                 THEN (v_artifacts->1->>'size_bytes')::numeric <= 0
                 ELSE true
-              END
+              END)
 
            OR v_receipt->>'schema_version' IS DISTINCT FROM 'universal-video-terminal-receipt/v1'
            OR v_receipt->>'status' IS DISTINCT FROM 'PASS'
@@ -258,11 +258,11 @@ BEGIN
            OR v_receipt->'result_readback_verified' IS DISTINCT FROM 'true'::jsonb
            OR v_receipt->'checksum_verified' IS DISTINCT FROM 'true'::jsonb
            OR jsonb_typeof(v_receipt->'artifact_count') IS DISTINCT FROM 'number'
-           OR CASE
+           OR (CASE
                 WHEN jsonb_typeof(v_receipt->'artifact_count') = 'number'
                 THEN (v_receipt->>'artifact_count')::numeric IS DISTINCT FROM 2::numeric
                 ELSE true
-              END
+              END)
            OR v_receipt->>'artifact_manifest_sha256' IS DISTINCT FROM v_manifest_sha
            OR v_receipt->'canonical_promotion_allowed' IS DISTINCT FROM 'false'::jsonb
            OR v_receipt->'database_persistence_allowed' IS DISTINCT FROM 'false'::jsonb
