@@ -116,7 +116,7 @@ if [[ "$BUILD_IMAGE" == 1 ]]; then
     done
     if [[ -d /var/lib/docker && ! -L /var/lib/docker ]]; then
       storage_used_kb="$(du -skx /var/lib/docker | awk '{print $1}')"
-      printf 'UNIVERSAL_VIDEO_CONTAINER_STORAGE area=docker used_kb=%s\n' "$storage_area" "$storage_used_kb"
+      printf 'UNIVERSAL_VIDEO_CONTAINER_STORAGE area=docker used_kb=%s\n' "$storage_used_kb"
     fi
     for storage_spec in \
       "source:$SOURCE_DIR" \
