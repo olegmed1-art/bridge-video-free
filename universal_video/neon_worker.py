@@ -12,7 +12,7 @@ from typing import Any, Callable, Iterator, Mapping
 from bridge_worker_3_1_free import stable_job_id
 
 from .drive_adapter import access_token, file_metadata
-from .result_contract import verify_drive_result_contract
+from .result_contract import verify_drive_result_contract, verify_terminal_output_live
 from .runtime_preflight import validate_video_runtime
 from .video_queue import claim_job, database_url_from_env, finish_job, heartbeat_job, retry_job
 from .workload_lock import shared_workload_lock
@@ -78,7 +78,9 @@ def _metadata_checksum(meta: Mapping[str, Any]) -> str | None:
     return None
 
 
-def verify_claimed_source(claim: Mapping[str, Any], token: str) -> None:
+def verify_claimed_source(claim: Mapping[str, Any], token: str) -> dict[str, Any]:
+    """Read and exactly match the six immutable source identity fields."""
+
     if claim.get("processing_profile") != APPROVED_PROFILE:
         raise NeonVideoWorkerError("VIDEO_QUEUE_PROFILE_NOT_APPROVED")
     if claim.get("algorithm_revision") != APPROVED_REVISION:
@@ -104,6 +106,7 @@ def verify_claimed_source(claim: Mapping[str, Any], token: str) -> None:
     }
     if observed != expected:
         raise NeonVideoWorkerError("VIDEO_QUEUE_SOURCE_READBACK_MISMATCH")
+    return observed
 
 
 @contextmanager
@@ -137,9 +140,9 @@ def _stable_environment(claim: Mapping[str, Any]) -> Iterator[None]:
 
 
 def stable_review_processor(claim: Mapping[str, Any]) -> dict[str, Any]:
-    token = access_token()
+    source_token = access_token()
     # This is intentionally the last source operation before processing.
-    verify_claimed_source(claim, token)
+    verify_claimed_source(claim, source_token)
     with _stable_environment(claim):
         import bridge_runtime_hardening_r25_16 as hardening
         import route_drive_job_outputs
@@ -156,9 +159,10 @@ def stable_review_processor(claim: Mapping[str, Any]) -> dict[str, Any]:
         if route_drive_job_outputs.main() != 0:
             raise NeonVideoWorkerError("VIDEO_QUEUE_OUTPUT_ROUTE_FAILED")
 
-    # PASS remains impossible until the uploaded PDF is downloaded from Drive,
-    # byte-checked, re-read as metadata, and bound into a manifest/receipt.
-    contract = verify_drive_result_contract(claim, done, token=token)
+    # Processing can outlive the initial OAuth token. Acquire a fresh token for
+    # the first result readback; process_claim performs another live readback
+    # immediately before the fenced terminal state transition.
+    contract = verify_drive_result_contract(claim, done, token=access_token())
     master_pdf = done.get("masterPdf") if isinstance(done.get("masterPdf"), dict) else {}
     return {
         **contract,
@@ -231,15 +235,33 @@ def process_claim(
     output = _base_output(claim)
     outcome = "REVIEW_READY"
     error_code: str | None = None
+    initial_source: dict[str, Any] | None = None
     with _Heartbeat(database_url, claim, worker_key) as heartbeat:
         with _processing_timeout():
             try:
+                # Custom/test processors cannot bypass the production source gate.
+                initial_source = verify_claimed_source(claim, access_token())
                 output.update(dict(processor(claim)))
+                # Do not let a processor override immutable lifecycle fields.
+                output.update(_base_output(claim))
             except Exception as exc:
                 outcome, error_code = _failure(exc)
                 output["error_type"] = type(exc).__name__
         if heartbeat.error is not None:
             raise NeonVideoWorkerError("VIDEO_QUEUE_HEARTBEAT_LOST") from heartbeat.error
+
+    if outcome == "REVIEW_READY":
+        try:
+            # Structural hashes are not sufficient. Re-download the referenced
+            # artifact and re-read the source immediately before finish_job.
+            verify_terminal_output_live(claim, output, token=access_token())
+            final_source = verify_claimed_source(claim, access_token())
+            if initial_source is None or final_source != initial_source:
+                raise NeonVideoWorkerError("VIDEO_QUEUE_SOURCE_CHANGED_DURING_PROCESSING")
+        except Exception as exc:
+            outcome, error_code = _failure(exc)
+            output["error_type"] = type(exc).__name__
+
     if outcome == "FAILED":
         return retry_job(
             database_url,
