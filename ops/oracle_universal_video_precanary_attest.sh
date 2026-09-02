@@ -34,6 +34,12 @@ die(){ printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$BUILD_IMAGE" =~ ^[01]$ ]] || die 'UNIVERSAL_VIDEO_PRECANARY_BUILD_IMAGE must be 0 or 1'
 [[ "$RECLAIM_ROOT_CACHE" =~ ^[01]$ ]] || die 'UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE must be 0 or 1'
 [[ "$MIN_FREE_KB" =~ ^[0-9]+$ && "$MIN_FREE_KB" -gt 0 ]] || die 'invalid build free-space threshold'
+case "$SOURCE_DIR" in
+  /opt/bridge-school/*) ;;
+  *) die 'source checkout path is outside the bounded bridge-school root' ;;
+esac
+[[ "$SOURCE_DIR" != /opt/bridge-school && "$SOURCE_DIR" != /opt/bridge-school/ ]] \
+  || die 'source checkout path is too broad'
 if [[ -n "$EXPECTED_SHA" ]]; then
   [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || die 'invalid expected source SHA'
 fi
@@ -48,6 +54,8 @@ source_was_active=0
 container_was_active=0
 window_started=0
 lock_held=0
+source_had_original=0
+source_backup_dir=""
 declare -a added_runtime_masks=()
 
 service_state(){
@@ -62,11 +70,26 @@ restore_service(){
   fi
 }
 
+restore_source_checkout(){
+  [[ "$BUILD_IMAGE" == 1 ]] || return 0
+  if [[ -e "$SOURCE_DIR" || -L "$SOURCE_DIR" ]]; then
+    rm -rf --one-file-system -- "$SOURCE_DIR" || return 1
+  fi
+  if [[ "$source_had_original" == 1 ]]; then
+    [[ -n "$source_backup_dir" && -e "$source_backup_dir" && ! -L "$source_backup_dir" ]] \
+      || return 1
+    mv -- "$source_backup_dir" "$SOURCE_DIR" || return 1
+    source_backup_dir=""
+  fi
+  return 0
+}
+
 cleanup(){
   local rc=$? service cleanup_failed=0
   trap - EXIT INT TERM
   if [[ "$window_started" == 1 ]]; then
-    # Keep the exclusive workload fence while both claim paths are forced quiet.
+    # Keep the exclusive workload fence while claim paths are quiet, candidate
+    # files are removed, and the exact pre-existing source tree is restored.
     systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE" >/dev/null 2>&1 || cleanup_failed=1
     if [[ "$BUILD_IMAGE" == 1 ]]; then
       if [[ "$ENV_FILE" == "$BASE_DIR/universal-video-container-candidate.env" ]]; then
@@ -74,6 +97,7 @@ cleanup(){
       else
         cleanup_failed=1
       fi
+      restore_source_checkout || cleanup_failed=1
     fi
     for service in "${added_runtime_masks[@]}"; do
       systemctl unmask --runtime "$service" >/dev/null 2>&1 || cleanup_failed=1
@@ -168,6 +192,21 @@ printf 'UNIVERSAL_VIDEO_PRECANARY_WINDOW source_service_before=%s container_serv
   "$source_state_before" "$container_state_before"
 
 if [[ "$BUILD_IMAGE" == 1 ]]; then
+  # Move the complete prior tree aside atomically. The preparation script sees
+  # an empty candidate path, so it cannot delete or rewrite the resident tree.
+  # The EXIT trap restores this exact directory before either service restarts.
+  if [[ -e "$SOURCE_DIR" || -L "$SOURCE_DIR" ]]; then
+    [[ -d "$SOURCE_DIR" && ! -L "$SOURCE_DIR" ]] || die 'existing source checkout is unsafe'
+    source_backup_dir="${SOURCE_DIR}.precanary-backup.${EXPECTED_SHA:0:12}.$$"
+    [[ ! -e "$source_backup_dir" && ! -L "$source_backup_dir" ]] \
+      || die 'source backup destination already exists'
+    mv -- "$SOURCE_DIR" "$source_backup_dir"
+    source_had_original=1
+    printf 'UNIVERSAL_VIDEO_SOURCE_CHECKOUT mode=ephemeral prior_tree=preserved restore_on_exit=true\n'
+  else
+    printf 'UNIVERSAL_VIDEO_SOURCE_CHECKOUT mode=ephemeral prior_tree=absent restore_on_exit=true\n'
+  fi
+
   env \
     UNIVERSAL_VIDEO_GIT_REF="$EXPECTED_SHA" \
     UNIVERSAL_VIDEO_ACTIVATE=0 \
@@ -185,8 +224,8 @@ if [[ "$BUILD_IMAGE" == 1 ]]; then
     root_cache=/root/.cache
     [[ -d "$root_cache" && ! -L "$root_cache" ]] || die 'root cache is unsafe or missing'
     cache_before_kb="$(du -skx "$root_cache" | awk '{print $1}')"
-    # This is cache-only reclamation under the exclusive workload fence. No
-    # source, model mount, spool, output, media, or database path is touched.
+    # Cache-only reclamation under the exclusive workload fence. No source,
+    # model mount, spool, output, media, or database path is touched.
     find "$root_cache" -xdev -mindepth 1 -delete
     cache_after_kb="$(du -skx "$root_cache" | awk '{print $1}')"
     disk_after_kb="$(df -Pk "$BASE_DIR" | awk 'NR==2 {print $4}')"
