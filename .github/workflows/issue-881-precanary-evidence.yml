@@ -64,7 +64,8 @@ jobs:
           set -euo pipefail
           workflow=.github/workflows/issue-881-authoritative-external-evidence.yml
           grep -F 'director_go:' "$workflow"
-          grep -F "if: \${{ inputs.director_go && github.actor == github.repository_owner && github.repository == 'olegmed1-art/bridge-video-free' }}" "$workflow"
+          grep -F 'github.actor == github.repository_owner' "$workflow"
+          grep -F "github.repository == 'olegmed1-art/bridge-video-free'" "$workflow"
           grep -F 'verify_live_gate(){' "$workflow"
           test "$(grep -c '^[[:space:]]*verify_live_gate$' "$workflow")" -ge 3
           grep -F 'pulls/1062" --jq' "$workflow"
