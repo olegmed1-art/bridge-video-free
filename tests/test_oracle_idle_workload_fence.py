@@ -18,7 +18,9 @@ def test_all_submit_bridge_oracle_producers_share_stop_fence() -> None:
     }
     assert producers
     for name, text in producers.items():
-        assert f"group: {SHARED_FENCE}" in text, name
+        assert SHARED_FENCE in text, name
+        assert "github.event_name == 'pull_request'" in text, name
+        assert "github.event.pull_request.number" in text, name
         assert "cancel-in-progress: false" in text, name
 
 
