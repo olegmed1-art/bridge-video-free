@@ -1,5 +1,5 @@
 {
-  "snapshot_version": "1.0",
+  "snapshot_version": "1.1",
   "observed_at": "2026-08-29",
   "scope": "school_knowledge_database_content_intake",
   "governance_mode": "ASSURED",
@@ -87,7 +87,10 @@
       "source": {
         "title": "Каталог базы знаний школы бриджа",
         "drive_spreadsheet_id": "1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo",
-        "sheet_count": 26
+        "sheet_count": 26,
+        "immutable_export_revision": null,
+        "immutable_export_sha256": null,
+        "identity_verification": "FAIL_CLOSED_UNVERIFIED"
       },
       "datasets": {
         "skills": 121,
@@ -132,7 +135,9 @@
         "UNSET": 298
       },
       "skills_exact_status_confirmed_l1": 70,
-      "blocking_reason": "Drive status labels do not replace exact provenance to the currently approved PDF; source conflicts are present"
+      "blocking_reason": "Drive status labels do not replace exact provenance to the currently approved PDF; source conflicts are present",
+      "catalog_counts_verification": "UNVERIFIED_IMMUTABLE_EXPORT_UNAVAILABLE",
+      "metadata_staging_allowed": false
     },
     {
       "lane_id": "LEARNING_CONTENT",
@@ -154,9 +159,28 @@
         "lessons_complete": 13,
         "lessons_in_progress": 2,
         "lessons_not_started": 1,
-        "canon_source_eligibility": "rejected_for_current_bidding_ingestion",
-        "allowed_use": "curriculum_inventory_and_context_only"
-      }
+        "canon_source_eligibility": "PERSISTENTLY_QUARANTINED",
+        "allowed_use": "curriculum_inventory_and_context_only",
+        "quarantine_decision": {
+          "decision_id": "intake-snapshot-2026-08-29-course-notes-rejection",
+          "recorded_at": "2026-08-29",
+          "decision_owner_role": "canon_owner",
+          "source_binding": {
+            "drive_document_id": "1b8oMiRvgPMcJbfiMK6UA5GEeBmwgnK4-iEoHDbtKxtk",
+            "exact_source_version": "UNVERIFIED_MUTABLE_DRIVE_DOCUMENT"
+          },
+          "applies_to": "ALL_FUTURE_SCHOOL_CANON_INGESTION",
+          "reversal_required": {
+            "approver_role": "canon_owner",
+            "explicit_decision_record": true,
+            "exact_source_version_binding": true,
+            "semantic_scope_binding": true
+          },
+          "fail_closed_if_reversal_missing_or_unbound": true
+        }
+      },
+      "catalog_counts_verification": "UNVERIFIED_IMMUTABLE_EXPORT_UNAVAILABLE",
+      "metadata_staging_allowed": false
     },
     {
       "lane_id": "WORLD_EXTERNAL",
@@ -190,7 +214,24 @@
         "BBO_100",
         "comparison_benchmarks"
       ],
-      "canon_promotion": "forbidden_without_explicit_decision_and_complete_evidence_gate"
+      "canon_promotion": {
+        "status": "FORBIDDEN_BY_DEFAULT",
+        "required_approver_role": "canon_owner",
+        "non_owner_approval_accepted": false,
+        "requirements": [
+          "exact_world_source_version_and_sha256",
+          "exact_target_canon_version",
+          "exact_semantic_diff_and_scope",
+          "provenance_chain",
+          "regression_and_integrity_tests",
+          "minimum_independent_assurance_I2"
+        ],
+        "on_missing_or_stale_evidence": "FAIL_CLOSED_NO_PROMOTION",
+        "on_canon_conflict": "RETURN_EXPLICIT_GAP_NO_SCHOOL_ANSWER",
+        "silent_promotion_allowed": false
+      },
+      "catalog_counts_verification": "UNVERIFIED_IMMUTABLE_EXPORT_UNAVAILABLE",
+      "metadata_staging_allowed": false
     }
   ],
   "intake_batches": [
@@ -209,23 +250,27 @@
     {
       "batch_id": "L1-001",
       "content": "121_skills_175_atoms_591_rules",
-      "readiness": "blocked_by_provenance_and_source_conflict",
-      "activation_allowed": false
+      "readiness": "blocked_until_catalog_snapshot_immutable_identity_verified",
+      "activation_allowed": false,
+      "metadata_staging_allowed": false
     },
     {
       "batch_id": "LEARN-001",
       "content": "exercises_deals_paths_mastery_and_gap_map",
-      "readiness": "ready_for_learning_schema_design_and_link_validation",
-      "activation_allowed": false
+      "readiness": "blocked_until_catalog_snapshot_immutable_identity_verified",
+      "activation_allowed": false,
+      "metadata_staging_allowed": false
     },
     {
       "batch_id": "WORLD-001",
       "content": "external_sources_authors_audit_queue_and_robot_research",
-      "readiness": "ready_for_external_metadata_staging",
-      "activation_allowed": false
+      "readiness": "blocked_until_catalog_snapshot_immutable_identity_verified",
+      "activation_allowed": false,
+      "metadata_staging_allowed": false
     }
   ],
   "global_blockers": [
+    "drive_catalog_snapshot_has_no_immutable_export_revision_or_sha256",
     "32_of_34_approved_pdf_blocks_not_semantically_transcribed",
     "legacy_l1_provenance_incomplete_or_conflicting",
     "bidding_schema_not_applied_in_production",
@@ -233,11 +278,36 @@
     "i2_assurance_required_before_activation"
   ],
   "next_actions": [
+    "capture_exact_drive_catalog_export_revision_and_sha256_then_reconcile_all_reported_counts",
     "stage_SC_001_without_activation",
     "transcribe_SC_002_page_block_line_with_explicit_gaps",
     "reconcile_L1_001_against_approved_pdf_anchors",
     "design_separate_learning_lane_for_LEARN_001",
     "stage_WORLD_001_as_external_metadata_and_evidence",
     "run_regression_integrity_and_independent_i2_before_any_activation"
-  ]
+  ],
+  "catalog_snapshot_identity": {
+    "drive_spreadsheet_id": "1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo",
+    "observed_at": "2026-08-29",
+    "immutable_export_revision": null,
+    "immutable_export_sha256": null,
+    "verification_status": "UNVERIFIED_IMMUTABLE_EXPORT_UNAVAILABLE",
+    "counts_authoritative": false,
+    "dependent_lanes": [
+      "LEGACY_L1_DRIVE",
+      "LEARNING_CONTENT",
+      "WORLD_EXTERNAL"
+    ],
+    "staging_or_activation_authorized": false,
+    "failure_mode": "FAIL_CLOSED_UNTIL_EXACT_EXPORT_REVISION_AND_SHA256_ARE_RECORDED_AND_MATCHED"
+  },
+  "policy_regression_contract": {
+    "executable_test": "tests/test_content_intake_snapshot_policy.py",
+    "required_assertions": [
+      "mutable_catalog_id_without_revision_and_sha256_never_authorizes_staging_or_activation",
+      "rejected_course_notes_remain_quarantined_across_batches_without_exact_canon_owner_reversal",
+      "world_promotion_rejects_non_owner_approval_and_requires_exact_semantic_diff_version_provenance_and_tests",
+      "canon_conflict_returns_explicit_gap_and_never_a_school_answer"
+    ]
+  }
 }
