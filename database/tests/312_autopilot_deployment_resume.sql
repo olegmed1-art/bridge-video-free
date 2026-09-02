@@ -351,16 +351,16 @@ BEGIN
 
     IF (SELECT count(*) FROM autopilot.online_resume_receipt) <> 1
        OR NOT EXISTS (
-            SELECT 1 FROM autopilot.online_resume_receipt
-             WHERE singleton
-               AND resume_status = 'RESUMED_SHADOW_ONLY'
-               AND NOT circuit_open_after
-               AND proof_json->'deployment_verified' = 'true'::jsonb
-               AND proof_json->'resume_scope' = '"SHADOW_ONLY"'::jsonb
-               AND proof_json->'model_calls' = '0'::jsonb
-               AND proof_json->'cost_actual_microusd' = '0'::jsonb
-               AND proof_json->'production_mutation' = 'false'::jsonb
-               AND proof_json->'oracle_instance_stop' = 'false'::jsonb
+            SELECT 1 FROM autopilot.online_resume_receipt AS receipt
+             WHERE receipt.singleton
+               AND receipt.resume_status = 'RESUMED_SHADOW_ONLY'
+               AND NOT receipt.circuit_open_after
+               AND receipt.proof_json->'deployment_verified' = 'true'::jsonb
+               AND receipt.proof_json->'resume_scope' = '"SHADOW_ONLY"'::jsonb
+               AND receipt.proof_json->'model_calls' = '0'::jsonb
+               AND receipt.proof_json->'cost_actual_microusd' = '0'::jsonb
+               AND receipt.proof_json->'production_mutation' = 'false'::jsonb
+               AND receipt.proof_json->'oracle_instance_stop' = 'false'::jsonb
        ) THEN
         RAISE EXCEPTION 'AUTOPILOT_DEPLOYMENT_RESUME_RECEIPT_INVALID';
     END IF;
