@@ -285,11 +285,7 @@ jobs:
           # Hold the same host lock used by durable spool producers until OCI
           # accepts STOP. If a producer already owns it, no proof is created.
           fence_token="stop-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          fence_dir="/run/oracle-stop-guard"
-          fence_proof="${fence_dir}/${fence_token}.proof"
-          fence_token_file="${fence_dir}/${fence_token}.token"
-          fence_pid_file="${fence_dir}/${fence_token}.pid"
-          script_text="sudo -n install -d -m 0755 ${fence_dir}; sudo -n rm -f ${fence_proof} ${fence_token_file} ${fence_pid_file}; sudo -n bash -c 'exec 9>/run/lock/oracle-workload-mutation.lock; flock -n 9 || exit 73; /usr/local/sbin/oracle-idle-state > ${fence_proof}; printf %s ${fence_token} > ${fence_token_file}; printf %s \$\$ > ${fence_pid_file}; sleep 120'"
+          script_text="sudo -n /usr/local/sbin/oracle-idle-stop-fence hold ${fence_token}"
           content_json="$(SCRIPT_TEXT="$script_text" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":os.environ["SCRIPT_TEXT"]},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
           target_json="$(python -c 'import json,os; print(json.dumps({"instanceId":os.environ["OCI_INSTANCE_OCID"]},separators=(",",":")))')"
           if ! command_id="$(oci instance-agent command create \
@@ -306,7 +302,7 @@ jobs:
           # Read the proof through a second bounded command while the first
           # command remains IN_PROGRESS and owns the flock.
           sleep 5
-          reader_text="sudo -n bash -c 'test \"\$(cat ${fence_token_file})\" = \"${fence_token}\"; kill -0 \"\$(cat ${fence_pid_file})\"; ! flock -n /run/lock/oracle-workload-mutation.lock true; cat ${fence_proof}'"
+          reader_text="sudo -n /usr/local/sbin/oracle-idle-stop-fence read ${fence_token}"
           reader_json="$(SCRIPT_TEXT="$reader_text" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":os.environ["SCRIPT_TEXT"]},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
           if ! reader_id="$(oci instance-agent command create \
             --compartment-id "$COMPARTMENT_ID" \

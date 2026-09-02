@@ -10,6 +10,8 @@ on:
       - 'ops/oracle_idle_state.sh'
       - 'ops/oracle_idle_stop_guard.py'
       - 'ops/install_oracle_idle_state_ocarun.sh'
+      - 'ops/universal_video_diana11_002_operator.sh'
+      - 'ops/universal_video_diana11_003_operator.sh'
       - 'tests/test_oracle_idle_stop_guard.py'
       - 'tests/test_oracle_idle_unknown_precedence.py'
       - 'tests/test_oracle_idle_workload_fence.py'
@@ -29,6 +31,8 @@ on:
       - 'ops/oracle_idle_state.sh'
       - 'ops/oracle_idle_stop_guard.py'
       - 'ops/install_oracle_idle_state_ocarun.sh'
+      - 'ops/universal_video_diana11_002_operator.sh'
+      - 'ops/universal_video_diana11_003_operator.sh'
       - 'tests/test_oracle_idle_stop_guard.py'
       - 'tests/test_oracle_idle_unknown_precedence.py'
       - 'tests/test_oracle_idle_workload_fence.py'
@@ -62,6 +66,8 @@ jobs:
           set -euo pipefail
           bash -n ops/oracle_idle_state.sh
           bash -n ops/install_oracle_idle_state_ocarun.sh
+          bash -n ops/universal_video_diana11_002_operator.sh
+          bash -n ops/universal_video_diana11_003_operator.sh
           python -m py_compile \
             ops/oracle_idle_stop_guard.py \
             tests/test_oracle_idle_stop_guard.py \

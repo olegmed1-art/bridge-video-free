@@ -499,7 +499,11 @@ PY
 need_root
 [[ $# -eq 1 ]] || fail USAGE
 case "$1" in
-  submit-bridge) submit_for "$BRIDGE_JOB_ID" bridge_lesson 'UV-DIANA11-DURABLE-003 fresh provenance shadow' ;;
+  submit-bridge)
+    exec 9>/run/lock/oracle-workload-mutation.lock
+    flock -w 180 9
+    submit_for "$BRIDGE_JOB_ID" bridge_lesson 'UV-DIANA11-DURABLE-003 fresh provenance shadow'
+    ;;
   status-bridge) verify_runtime; state_for "$BRIDGE_JOB_ID"; echo 'UNIVERSAL_VIDEO_DIANA11_003_STATUS_PASS' ;;
   conform-bridge)
     verify_runtime
