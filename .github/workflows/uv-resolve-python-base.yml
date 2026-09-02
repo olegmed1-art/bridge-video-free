@@ -13,17 +13,21 @@ permissions:
 jobs:
   resolve:
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
-      - name: Resolve immutable multi-platform digest
+      - name: Resolve immutable linux-amd64 digest
         shell: bash
         run: |
           set -Eeuo pipefail
-          ref='python:3.12-slim-bookworm'
-          digest="$(docker buildx imagetools inspect "$ref" | awk '/^Digest:/ {print $2; exit}')"
+          tag='python:3.12-slim-bookworm'
+          docker pull --platform linux/amd64 "$tag"
+          repo_digest="$(docker image inspect --format='{{index .RepoDigests 0}}' "$tag")"
+          digest="${repo_digest##*@}"
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          printf 'BASE_IMAGE_REF=%s@%s\n' "$ref" "$digest" | tee base-image-ref.txt
+          printf 'BASE_IMAGE_TAG=%s\n' "$tag" | tee base-image-ref.txt
+          printf 'BASE_IMAGE_REF=python@%s\n' "$digest" | tee -a base-image-ref.txt
           printf 'BASE_IMAGE_DIGEST=%s\n' "$digest" | tee -a base-image-ref.txt
+          printf 'BASE_IMAGE_PLATFORM=linux/amd64\n' | tee -a base-image-ref.txt
       - name: Upload resolver evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
