@@ -28,7 +28,14 @@ def test_batch_enqueue_reuses_the_bounded_staging_classifier() -> None:
     assert "trap \"$cleanup_cmd\" EXIT" in batch
     assert 'cleanup_staged_files "$root_tmp" "$request_tmp"' in batch
     assert "UV_INTAKE_CLEANUP_FAILED" in batch
-    assert "|| true" not in batch
+    assert '\n    rm -f -- "$root_tmp"' not in batch
+    assert '\n    rm -f -- "$root_tmp" "$request_tmp"' not in batch
+    queue_call = batch.index('queue_output="$(runuser -u universal-video')
+    cleanup_gate = batch.index(
+        'if ! cleanup_staged_files "$root_tmp" "$request_tmp"', queue_call
+    )
+    publish = batch.index("printf '%s\\n' \"$queue_output\"", cleanup_gate)
+    assert queue_call < cleanup_gate < publish
 
 
 def test_server_intake_rejection_deletes_payload_before_return() -> None:
@@ -69,9 +76,20 @@ def test_server_intake_success_is_not_published_before_confirmed_cleanup() -> No
 
 def test_exit_trap_captures_the_actual_staged_path() -> None:
     submit = _function("submit_drive", "status")
-    assert "printf -v cleanup_cmd 'rm -f -- %q' \"$tmp\"" in submit
+    assert (
+        "printf -v cleanup_cmd 'rm -f -- %q 2>/dev/null || true' \"$tmp\""
+        in submit
+    )
     assert "trap \"$cleanup_cmd\" EXIT" in submit
     assert "${tmp:-}" not in submit
+
+
+def test_cleanup_fallback_traps_are_silent() -> None:
+    batch = _function("enqueue_batch", "batch_status")
+    submit = _function("submit_drive", "status")
+    assert "printf -v cleanup_cmd 'rm -f -- %q 2>/dev/null || true'" in batch
+    assert "printf -v cleanup_cmd 'rm -f -- %q %q 2>/dev/null || true'" in batch
+    assert "printf -v cleanup_cmd 'rm -f -- %q 2>/dev/null || true'" in submit
 
 
 def test_invalid_stage_receipt_cannot_leave_a_reported_path() -> None:
@@ -80,6 +98,17 @@ def test_invalid_stage_receipt_cannot_leave_a_reported_path() -> None:
     assert 'cleanup_staged_files "$stage_path"' in invalid_receipt
     assert "UV_INTAKE_CLEANUP_FAILED" in invalid_receipt
     assert "UV_INTAKE_EXECUTION_FAILED" in invalid_receipt
+
+
+def test_python_staging_cleanup_failure_has_a_bounded_code() -> None:
+    staging = _function("stage_job_payload", "submit_drive")
+    python_start = staging.index("def cleanup_staged(candidate):")
+    python_end = staging.index("')\"", python_start)
+    python_body = staging[python_start:python_end]
+    assert "except FileNotFoundError:" in python_body
+    assert "except OSError:" in python_body
+    assert "UV_ERROR_CODE=UV_INTAKE_CLEANUP_FAILED" in python_body
+    assert "pass\n    print" not in python_body
 
 
 def test_cleanup_helper_requires_confirmed_absence() -> None:
