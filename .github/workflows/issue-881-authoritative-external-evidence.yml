@@ -18,7 +18,9 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
+  pull-requests: read
 
 concurrency:
   group: oracle-instance-workload-mutation
@@ -47,6 +49,7 @@ jobs:
       SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
       SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
       HOST_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      GH_TOKEN: ${{ github.token }}
 
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -129,6 +132,66 @@ jobs:
           set -Eeuo pipefail
           evidence="$RUNNER_TEMP/issue-881-authoritative-external-evidence.txt"
           session_log="$RUNNER_TEMP/precanary-session.log"
+          recovery_evidence=''
+          recovery_sha=''
+          recovery_remote_file=''
+
+          # Last-second repository reconciliation precedes the first remote
+          # mutation. Historical or not-yet-reviewed heads fail closed.
+          live_head="$(gh api "repos/$GITHUB_REPOSITORY/pulls/1062" --jq '.head.sha')"
+          [[ "$live_head" == "$EXACT_SHA" ]]
+          review_count="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/1062/reviews" \
+            --jq ".[] | select(.commit_id == \"$EXACT_SHA\" and .user.login == \"chatgpt-codex-connector[bot]\" and (.state == \"COMMENTED\" or .state == \"APPROVED\")) | .id" | wc -l)"
+          (( review_count > 0 ))
+          runs_endpoint="repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$EXACT_SHA&event=pull_request&per_page=100"
+          required_workflows=(
+            'Universal Video Analyzer CI'
+            'Issue 881 Exact Canary Contract CI'
+            'Issue 881 Exact Pre-Canary Evidence'
+            'Oracle Universal Video Activation'
+            'Migration Namespace Guard'
+            'Secret gate'
+            'Universal Video Engine Smoke'
+            'Bridge School Database CI'
+          )
+          for workflow_name in "${required_workflows[@]}"; do
+            run_count="$(gh api --paginate "$runs_endpoint" \
+              --jq ".workflow_runs[] | select(.name == \"$workflow_name\" and .status == \"completed\" and .conclusion == \"success\") | .id" | wc -l)"
+            (( run_count > 0 )) || { echo "Required exact-head workflow is not green: $workflow_name" >&2; exit 1; }
+          done
+
+          if [[ -n "$RECOVER_CONTAINER_FROM_RUN" ]]; then
+            prior_run="$RUNNER_TEMP/prior-run.json"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RECOVER_CONTAINER_FROM_RUN" > "$prior_run"
+            prior_head="$(jq -r '.head_sha' "$prior_run")"
+            [[ "$prior_head" =~ ^[0-9a-f]{40}$ ]]
+            [[ "$(jq -r '.path' "$prior_run")" == '.github/workflows/issue-881-authoritative-external-evidence.yml' ]]
+            [[ "$(jq -r '.event' "$prior_run")" == workflow_dispatch ]]
+            [[ "$(jq -r '.conclusion' "$prior_run")" == failure ]]
+            mapfile -t artifact_ids < <(gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$RECOVER_CONTAINER_FROM_RUN/artifacts?per_page=100" \
+              --jq ".artifacts[] | select(.expired == false and .name == \"issue-881-authoritative-external-$prior_head\") | .id")
+            [[ "${#artifact_ids[@]}" -eq 1 ]]
+            artifact_zip="$RUNNER_TEMP/prior-recovery.zip"
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/${artifact_ids[0]}/zip" > "$artifact_zip"
+            recovery_evidence="$RUNNER_TEMP/prior-recovery-evidence.txt"
+            python - "$artifact_zip" "$recovery_evidence" <<'PY'
+          import sys, zipfile
+          source, target = sys.argv[1:]
+          with zipfile.ZipFile(source) as archive:
+              files = [item for item in archive.infolist() if not item.is_dir()]
+              if len(files) != 1 or files[0].file_size > 1_000_000:
+                  raise SystemExit("unsafe prior-run artifact")
+              data = archive.read(files[0])
+          open(target, "xb").write(data)
+          PY
+            grep -Fx "runtime_sha=$prior_head" "$recovery_evidence" >/dev/null
+            grep -Eq '^UNIVERSAL_VIDEO_PRECANARY_WINDOW .*container_service_before=active .*restore_on_exit=true$' "$recovery_evidence"
+            grep -Eq '^UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED .*container_service=(inactive|failed)$' "$recovery_evidence"
+            grep -Fx 'real_media_canary_run=false' "$recovery_evidence" >/dev/null
+            recovery_sha="$(sha256sum "$recovery_evidence" | awk '{print $1}')"
+          fi
+
           remote_stage="/tmp/uv-issue881-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           remote_root="/root/uv-issue881-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           s=(ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes \
@@ -164,17 +227,28 @@ jobs:
           }
           trap bounded_failure ERR
 
+          # This must be the final action before the first SSH-side mutation.
+          [[ "$(gh api "repos/$GITHUB_REPOSITORY/pulls/1062" --jq '.head.sha')" == "$EXACT_SHA" ]]
           "${s[@]}" "umask 077; rm -rf '$remote_stage'; mkdir -m 0700 '$remote_stage'"
           "${c[@]}" "$RUNNER_TEMP/prepare.sh" "$ORACLE_USER@$ORACLE_HOST:$remote_stage/prepare.sh"
           "${c[@]}" "$RUNNER_TEMP/attest.sh" "$ORACLE_USER@$ORACLE_HOST:$remote_stage/attest.sh"
+          if [[ -n "$recovery_evidence" ]]; then
+            recovery_remote_file="$remote_root/recovery-evidence.txt"
+            "${c[@]}" "$recovery_evidence" "$ORACLE_USER@$ORACLE_HOST:$remote_stage/recovery-evidence.txt"
+          fi
           prepare_sha="$(sha256sum "$RUNNER_TEMP/prepare.sh" | awk '{print $1}')"
           attest_sha="$(sha256sum "$RUNNER_TEMP/attest.sh" | awk '{print $1}')"
+          recovery_install=''
+          if [[ -n "$recovery_evidence" ]]; then
+            recovery_install="test \"\$(sha256sum '$remote_stage/recovery-evidence.txt' | awk '{print \$1}')\" = '$recovery_sha'; sudo -n install -o root -g root -m 0400 '$remote_stage/recovery-evidence.txt' '$remote_root/recovery-evidence.txt';"
+          fi
           "${s[@]}" "set -e; \
             test \"\$(sha256sum '$remote_stage/prepare.sh' | awk '{print \$1}')\" = '$prepare_sha'; \
             test \"\$(sha256sum '$remote_stage/attest.sh' | awk '{print \$1}')\" = '$attest_sha'; \
             sudo -n install -d -o root -g root -m 0700 '$remote_root'; \
             sudo -n install -o root -g root -m 0700 '$remote_stage/prepare.sh' '$remote_root/prepare.sh'; \
-            sudo -n install -o root -g root -m 0700 '$remote_stage/attest.sh' '$remote_root/attest.sh'"
+            sudo -n install -o root -g root -m 0700 '$remote_stage/attest.sh' '$remote_root/attest.sh'; \
+            $recovery_install"
 
           set +e
           "${s[@]}" "sudo -n env \
@@ -184,6 +258,8 @@ jobs:
             UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB=5242880 \
             UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE=1 \
             UNIVERSAL_VIDEO_RECOVER_CONTAINER_ACTIVE_FROM_RUN='$RECOVER_CONTAINER_FROM_RUN' \
+            UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_FILE='$recovery_remote_file' \
+            UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_SHA256='$recovery_sha' \
             UNIVERSAL_VIDEO_CANARY_FILE_ID='198-2v3JBlNQobdsPYQQWzrrCqQ1zBZOI' \
             UNIVERSAL_VIDEO_CANARY_NAME='Диана 13.mp4' \
             UNIVERSAL_VIDEO_CANARY_MIME='video/mp4' \
@@ -198,7 +274,7 @@ jobs:
 
           grep -E "^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} activated=0$" "$session_log"
           grep -E "^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$" "$session_log"
-          grep -E '^UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service=(inactive|failed) container_service=(active|inactive|failed) prior_container_recovery=[01]$' "$session_log"
+          grep -E '^UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service_before=(active|inactive) source_service=\1 container_service_before=(active|inactive) container_target=(active|inactive) container_service=\3 prior_container_recovery=[01]$' "$session_log"
           installed_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) activated=0$/\\1/p" "$session_log")"
           attested_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$/\\1/p" "$session_log")"
           [[ "$installed_digest" =~ ^sha256:[0-9a-f]{64}$ ]]

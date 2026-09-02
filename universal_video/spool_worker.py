@@ -496,15 +496,18 @@ def process_one(spool_root: Path) -> bool:
 
 
 def run_forever(spool_root: Path, poll_seconds: float) -> None:
-    recovery = recover_orphaned_jobs(spool_root)
-    if any(recovery.values()):
-        print(json.dumps({"event": "spool_recovery", **recovery}, sort_keys=True), flush=True)
     status_path = Path(
         os.getenv(
             "UNIVERSAL_VIDEO_STATUS_PATH",
             "/run/bridge-school/universal-video-status.json",
         )
     )
+    # Both resident implementations share this spool. Serialize startup
+    # recovery on the common fence before either process advertises readiness.
+    with shared_workload_lock(spool_root, exclusive=True):
+        recovery = recover_orphaned_jobs(spool_root)
+        if any(recovery.values()):
+            print(json.dumps({"event": "spool_recovery", **recovery}, sort_keys=True), flush=True)
     # Publish resident readiness before accepting a potentially long queued job.
     write_resident_status(spool_root, status_path)
     while True:

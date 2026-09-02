@@ -366,6 +366,15 @@ def test_attestation_exclusive_lock_blocks_worker_claim_path(tmp_path: Path):
         pass
 
 
+def test_startup_recovery_exclusive_lock_serializes_residents(tmp_path: Path):
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    with shared_workload_lock(spool, blocking=False):
+        with pytest.raises(BlockingIOError):
+            with shared_workload_lock(spool, blocking=False, exclusive=True):
+                pass
+
+
 def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     script = (ROOT / "ops/oracle_universal_video_precanary_attest.sh").read_text(encoding="utf-8")
     run_image = script[
@@ -374,8 +383,8 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert 'mask_service_for_window "$SOURCE_SERVICE"' in script
     assert 'mask_service_for_window "$CONTAINER_SERVICE"' in script
     assert "flock --exclusive --nonblock 9" in script
-    assert 'restore_service "$SOURCE_SERVICE" "$source_was_active"' in script
-    assert 'restore_service "$CONTAINER_SERVICE" "$container_was_active"' in script
+    assert 'restore_service "$SOURCE_SERVICE" "$source_state_before"' in script
+    assert 'restore_service "$CONTAINER_SERVICE" "$container_target_state"' in script
     assert 'source_candidate_path_owned=0' in script
     assert 'source_candidate_path_owned=1' in script
     assert '"$source_candidate_path_owned" == 1' in script
@@ -389,12 +398,19 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "UNIVERSAL_VIDEO_PREWARM_MODEL=0" in script
     assert "UNIVERSAL_VIDEO_RUN_SMOKE=0" in script
     assert 'find "$root_cache" -xdev -mindepth 1 -delete' in script
+    assert "assert_pre_stop_idle" in script
+    assert "count(*) FILTER (WHERE status = 'LEASED')" in script
+    assert "authoritative Neon claimable/LEASED state is busy or unverifiable" in script
+    assert "services_stop_attempted=1" in script
+    assert "verify_prior_recovery_evidence" in script
+    assert "immutable prior-run recovery evidence digest mismatch" in script
 
     lock_index = script.index("flock --exclusive --nonblock 9")
     stop_index = script.index(
         'systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE"',
         lock_index,
     )
+    prestop_index = script.index("assert_pre_stop_idle", lock_index)
     prepare_index = script.index('bash "$PREPARE_SCRIPT"', stop_index)
     cleanup_index = script.index('find "$root_cache" -xdev -mindepth 1 -delete', stop_index)
     installer_index = script.index(
@@ -402,13 +418,24 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
         prepare_index,
     )
     run_index = script.index("run_image python", installer_index)
-    assert lock_index < stop_index < prepare_index < installer_index < run_index
+    assert lock_index < prestop_index < stop_index < prepare_index < installer_index < run_index
     assert stop_index < cleanup_index < installer_index
 
     source_worker = (ROOT / "universal_video/spool_worker.py").read_text(encoding="utf-8")
     neon_worker_source = (ROOT / "universal_video/neon_worker.py").read_text(encoding="utf-8")
     assert "with shared_workload_lock(spool_root):" in source_worker
+    assert "with shared_workload_lock(spool_root, exclusive=True):" in source_worker
     assert "with shared_workload_lock():" in neon_worker_source
+
+    restore_source_index = script.index(
+        'restore_service "$SOURCE_SERVICE" "$source_state_before"'
+    )
+    restore_container_index = script.index(
+        'restore_service "$CONTAINER_SERVICE" "$container_target_state"'
+    )
+    restore_pass_index = script.index("UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS")
+    unlock_index = script.index("flock --unlock 9", restore_container_index)
+    assert restore_source_index < restore_container_index < restore_pass_index < unlock_index
 
 
 def test_installer_readiness_and_service_env_use_captured_image_id():
@@ -457,3 +484,30 @@ def test_external_precanary_runs_same_repo_and_compares_install_digest():
     assert "Диана 13.mp4" in workflow
     assert "696237577" in workflow
     assert "1Fr-H2NgBKEpp3q_H4FzNmQwCV6bj2x6b" in workflow
+    stopped_branch = workflow[
+        workflow.index("            STOPPED)") : workflow.index("            *)", workflow.index("            STOPPED)"))
+    ]
+    assert "--action START" not in stopped_branch
+    assert "explicit Director lifecycle authorization is required" in stopped_branch
+
+
+def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery():
+    workflow = (
+        ROOT / ".github/workflows/issue-881-authoritative-external-evidence.yml"
+    ).read_text(encoding="utf-8")
+    assert 'pulls/1062" --jq \'.head.sha\'' in workflow
+    assert ".commit_id ==" in workflow and "$EXACT_SHA" in workflow
+    assert "required_workflows=(" in workflow
+    assert "--action START" not in workflow
+    assert "Oracle instance is STOPPED" in workflow
+    assert "actions/runs/$RECOVER_CONTAINER_FROM_RUN" in workflow
+    assert ".github/workflows/issue-881-authoritative-external-evidence.yml" in workflow
+    assert "prior-recovery-evidence.txt" in workflow
+    assert "UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_SHA256='$recovery_sha'" in workflow
+    final_head_check = workflow.rindex(
+        'gh api "repos/$GITHUB_REPOSITORY/pulls/1062" --jq \'.head.sha\''
+    )
+    first_remote_mutation = workflow.index(
+        '"${s[@]}" "umask 077; rm -rf', final_head_check
+    )
+    assert final_head_check < first_remote_mutation
