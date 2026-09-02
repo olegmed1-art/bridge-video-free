@@ -196,3 +196,19 @@ def test_container_activation_requires_a_bounded_protected_queue_credential() ->
     assert "BASH_REMATCH[1] <= 4096" in gate
     assert 'value.startswith(("postgresql://", "postgres://"))' in gate
     assert 'assert "\\n" not in value and "\\r" not in value' in gate
+
+def test_container_queue_credential_is_validated_as_the_exact_runtime_identity() -> None:
+    root = Path(__file__).resolve().parents[1]
+    installer = (root / "ops/oracle_universal_video_container_install.sh").read_text(
+        encoding="utf-8"
+    )
+
+    credential_gate = installer.index('if [[ "$ACTIVATE" == 1 ]]; then')
+    service_activation = installer.rindex('if [[ "$ACTIVATE" == 1 ]]; then')
+    gate = installer[credential_gate:service_activation]
+    assert '[[ "$(stat -c \'%g\' "$queue_dsn_file")" == "$(id -g "$USER_NAME")" ]]' in gate
+    assert (
+        'runuser -u "$USER_NAME" -- env QUEUE_DSN_FILE="$queue_dsn_file" '
+        "/usr/bin/python3 - <<'PY' >/dev/null"
+    ) in gate
+    assert 'QUEUE_DSN_FILE="$queue_dsn_file" python3 -' not in gate
