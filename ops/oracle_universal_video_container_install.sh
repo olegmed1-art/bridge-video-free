@@ -168,7 +168,9 @@ if [[ "$ACTIVATE" == 1 ]]; then
     || die 'protected video queue credential metadata invalid'
   (( BASH_REMATCH[1] <= 4096 )) \
     || die 'protected video queue credential is too large'
-  QUEUE_DSN_FILE="$queue_dsn_file" python3 - <<'PY' >/dev/null \
+  [[ "$(stat -c '%g' "$queue_dsn_file")" == "$(id -g "$USER_NAME")" ]] \
+    || die 'protected video queue credential group is not the container runtime group'
+  runuser -u "$USER_NAME" -- env QUEUE_DSN_FILE="$queue_dsn_file" /usr/bin/python3 - <<'PY' >/dev/null \
     || die 'protected video queue credential content invalid'
 import os
 from pathlib import Path
