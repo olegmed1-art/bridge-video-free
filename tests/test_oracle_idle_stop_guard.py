@@ -569,10 +569,33 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
 
         classifier = CLASSIFIER.read_text(encoding="utf-8")
         self.assertIn("FROM autopilot.task_status", classifier)
-        self.assertIn(
+        self.assertNotIn(
             "status IN ('READY', 'RUNNING', 'WAITING_EXTERNAL', 'EVALUATING')",
             classifier,
         )
+        self.assertIn(
+            "status NOT IN (",
+            classifier,
+        )
+        for terminal in (
+            "OWNER_REQUIRED",
+            "FAILED_CLOSED",
+            "BUDGET_STOP",
+            "DONE",
+            "CANCELLED",
+        ):
+            self.assertIn(f"'{terminal}'", classifier)
+        start = classifier.index("WHERE status NOT IN (")
+        terminal_clause = classifier[start : classifier.index(")", start)]
+        for nonterminal in (
+            "NEW",
+            "VALIDATING",
+            "READY",
+            "EVALUATING",
+            "RUNNING",
+            "WAITING_EXTERNAL",
+        ):
+            self.assertNotIn(f"'{nonterminal}'", terminal_clause)
 
     def test_universal_video_statuses_are_exactly_covered(self) -> None:
         script = CLASSIFIER.read_text(encoding="utf-8")
