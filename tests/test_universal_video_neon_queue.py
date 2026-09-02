@@ -149,6 +149,20 @@ def claim():
     }
 
 
+def done_contract(item):
+    return {
+        "status": "AI_DONE",
+        "job_id": item["stable_job_key"],
+        "algorithmRevision": item["algorithm_revision"],
+        "original": {"driveId": item["source_file_id"]},
+        "masterPdf": {
+            "driveId": "masterPdf000001",
+            "sha256": "a" * 64,
+            "pages": 1,
+        },
+    }
+
+
 def terminal_result(item):
     master_body = b"%PDF-1.4\nsynthetic queue terminal\n%%EOF\n"
     master_id = "masterPdf000001"
@@ -270,6 +284,8 @@ def test_stable_environment_hides_legacy_database_persistence(monkeypatch):
 def test_worker_finishes_success_as_review_only_with_complete_receipt():
     item = claim()
     captured = {}
+    terminal = terminal_result(item)
+    done = done_contract(item)
 
     def finish(_dsn, **kwargs):
         captured.update(kwargs)
@@ -280,6 +296,15 @@ def test_worker_finishes_success_as_review_only_with_complete_receipt():
         }
 
     with exact_source(), patch(
+        "bridge_runtime_hardening_r25_16.run",
+        return_value=done,
+    ), patch(
+        "route_drive_job_outputs.route_outputs",
+        return_value={"status": "ROUTED"},
+    ), patch(
+        "universal_video.neon_worker.build_terminal_evidence",
+        return_value=terminal,
+    ), patch(
         "universal_video.neon_worker.finish_job",
         side_effect=finish,
     ):
@@ -287,13 +312,36 @@ def test_worker_finishes_success_as_review_only_with_complete_receipt():
             "postgresql://queue",
             item,
             "worker-1",
-            processor=lambda _: terminal_result(item),
+            processor=stable_review_processor,
         )
     assert result["job_status"] == "REVIEW_READY"
     assert captured["output"]["result_mode"] == "SHADOW_REVIEW_ONLY"
     assert captured["output"]["canonical_promotion_allowed"] is False
     assert captured["output"]["database_persistence_allowed"] is False
     assert captured["output"]["terminal_receipt"]["result_readback_verified"] is True
+
+
+def test_custom_processor_cannot_supply_terminal_success_evidence():
+    item = claim()
+    captured = {}
+
+    def retry(_dsn, **kwargs):
+        captured.update(kwargs)
+        return {"job_status": "QUEUED", "batch_status": "RUNNING"}
+
+    with exact_source(), patch(
+        "universal_video.neon_worker.retry_job",
+        side_effect=retry,
+    ), patch("universal_video.neon_worker.finish_job") as finish:
+        result = process_claim(
+            "postgresql://queue",
+            item,
+            "worker-1",
+            processor=lambda _: terminal_result(item),
+        )
+    assert result["job_status"] == "QUEUED"
+    assert captured["error_code"] == "UV_TERMINAL_CUSTOM_PROCESSOR_FORBIDDEN"
+    finish.assert_not_called()
 
 
 def test_legacy_processor_cannot_finish_without_terminal_receipt():
@@ -315,7 +363,7 @@ def test_legacy_processor_cannot_finish_without_terminal_receipt():
             processor=lambda _: {"master_pdf_drive_id": "masterPdf000001"},
         )
     assert result["job_status"] == "QUEUED"
-    assert captured["error_code"] == "UV_TERMINAL_MANIFEST_INVALID"
+    assert captured["error_code"] == "UV_TERMINAL_CUSTOM_PROCESSOR_FORBIDDEN"
     finish.assert_not_called()
 
 
@@ -323,6 +371,8 @@ def test_source_is_reread_immediately_before_terminal_transition():
     item = claim()
     changed = drive_item(14, name="renamed.mp4")
     captured = {}
+    terminal = terminal_result(item)
+    done = done_contract(item)
 
     def retry(_dsn, **kwargs):
         captured.update(kwargs)
@@ -333,7 +383,16 @@ def test_source_is_reread_immediately_before_terminal_transition():
         return_value="fresh-token",
     ), patch(
         "universal_video.neon_worker.file_metadata",
-        side_effect=[drive_item(14), changed],
+        side_effect=[drive_item(14), drive_item(14), changed],
+    ), patch(
+        "bridge_runtime_hardening_r25_16.run",
+        return_value=done,
+    ), patch(
+        "route_drive_job_outputs.route_outputs",
+        return_value={"status": "ROUTED"},
+    ), patch(
+        "universal_video.neon_worker.build_terminal_evidence",
+        return_value=terminal,
     ), patch(
         "universal_video.neon_worker.retry_job",
         side_effect=retry,
@@ -342,7 +401,7 @@ def test_source_is_reread_immediately_before_terminal_transition():
             "postgresql://queue",
             item,
             "worker-1",
-            processor=lambda _: terminal_result(item),
+            processor=stable_review_processor,
         )
     assert result["job_status"] == "QUEUED"
     finish.assert_not_called()
@@ -350,17 +409,7 @@ def test_source_is_reread_immediately_before_terminal_transition():
 
 def test_stable_processor_refreshes_token_before_terminal_readback():
     item = claim()
-    done = {
-        "status": "AI_DONE",
-        "job_id": item["stable_job_key"],
-        "algorithmRevision": item["algorithm_revision"],
-        "original": {"driveId": item["source_file_id"]},
-        "masterPdf": {
-            "driveId": "masterPdf000001",
-            "sha256": "a" * 64,
-            "pages": 1,
-        },
-    }
+    done = done_contract(item)
     observed = []
     with patch(
         "universal_video.neon_worker.access_token",
