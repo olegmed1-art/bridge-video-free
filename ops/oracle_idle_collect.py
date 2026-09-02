@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 """Read-only collector for the Oracle idle STOP guard.
 
-No power or workload mutation exists in this module.  It samples every required
-workload family, emits one bounded telemetry object, then the separate
-``oracle_idle_guard`` module performs the tri-state decision.
-
-Collector failures are represented as UNKNOWN family states.  This is
-intentional: an unavailable source can never be interpreted as zero work.
+No power or workload mutation exists in this module. It samples every required
+workload family. Collector failures become UNKNOWN, never implicit zero work.
 """
 from __future__ import annotations
 
@@ -16,7 +12,7 @@ import re
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 MAX_AGE_SECONDS = int(os.getenv("ORACLE_IDLE_MAX_AGE_SECONDS", "120"))
 LAB_ENV = Path(os.getenv("ASSISTANT_LAB_ENV_FILE", "/opt/bridge-school/assistant-lab/assistant-lab.env"))
@@ -81,35 +77,15 @@ def _db_snapshot(observed_at: float) -> dict[str, dict[str, Any]]:
         import psycopg  # type: ignore
     except Exception:
         return {name: _unknown(observed_at, "psycopg_unavailable") for name in names}
-
-    query = """
-    WITH active_jobs AS (
-      SELECT kind, source, provenance_json
-      FROM assistant_lab.job
-      WHERE status IN ('QUEUED','RUNNING')
-    ), active_research AS (
-      SELECT research_id, child_job_id
-      FROM assistant_lab.research_job
-      WHERE stage IN ('QUEUED','ACCEPTED','RUNNING','CHECKPOINTED','VALIDATING')
-    )
-    SELECT
-      clock_timestamp(),
-      (SELECT count(*) FROM active_jobs),
-      (SELECT count(*) FROM assistant_lab.control_command WHERE status IN ('QUEUED','RUNNING')),
-      (SELECT count(*) FROM active_research),
-      (SELECT count(*) FROM active_research r JOIN assistant_lab.job j ON j.job_id=r.child_job_id
-         WHERE j.status IN ('QUEUED','RUNNING')),
-      (SELECT count(*) FROM active_jobs WHERE kind='BEN_COMPUTE'),
-      (SELECT count(*) FROM active_jobs WHERE lower(coalesce(source,'')) LIKE '%bulk%'
-          OR lower(coalesce(provenance_json->>'workload_family',''))='bulk'),
-      (SELECT count(*) FROM active_jobs WHERE kind <> 'BEN_COMPUTE'
-          AND NOT (lower(coalesce(source,'')) LIKE '%bulk%'
-          OR lower(coalesce(provenance_json->>'workload_family',''))='bulk'))
-    """
     try:
         with psycopg.connect(dsn, connect_timeout=8, application_name="oracle-idle-collector") as conn:
             with conn.cursor() as cur:
-                cur.execute(query)
+                cur.execute(
+                    "SELECT observed_at, active_jobs, active_control_commands, "
+                    "active_research_jobs, active_research_children, active_ben_jobs, "
+                    "active_bulk_jobs, active_other_jobs "
+                    "FROM assistant_lab.oracle_idle_snapshot_v2()"
+                )
                 row = cur.fetchone()
         if row is None or len(row) != 8:
             raise RuntimeError("invalid assistant snapshot")
@@ -119,11 +95,9 @@ def _db_snapshot(observed_at: float) -> dict[str, dict[str, Any]]:
             raise RuntimeError("negative count")
     except Exception:
         return {name: _unknown(observed_at, "assistant_lab_query_failed") for name in names}
-
-    labels = names
     return {
         name: _entry("BUSY" if count else "IDLE", server_time, active_count=count)
-        for name, count in zip(labels, counts)
+        for name, count in zip(names, counts)
     }
 
 
@@ -193,7 +167,6 @@ def _resident(observed_at: float) -> dict[str, Any]:
         return _unknown(observed_at, "conflicting_resident_services")
     if "active" not in {source_state, container_state}:
         return _entry("IDLE", observed_at, source_service=source_state, container_service=container_state)
-
     try:
         if UV_STATUS.is_symlink() or not UV_STATUS.is_file():
             return _unknown(observed_at, "resident_status_missing")
@@ -234,15 +207,10 @@ def collect() -> dict[str, Any]:
     families["universal_video_spool"] = _spool(observed)
     families["universal_video_resident"] = _resident(observed)
     families["operator_maintenance_lease"] = _lease(observed)
-
-    # Cross-source contradiction: a fresh resident claims zero active jobs while
-    # the local running spool positively contains work.  Do not choose either
-    # side; mark the telemetry contradictory so the evaluator returns UNKNOWN.
     resident = families["universal_video_resident"]
     spool = families["universal_video_spool"]
     if resident.get("state") == "IDLE" and spool.get("state") == "BUSY":
         resident["conflict"] = True
-
     return {
         "schema": "oracle-idle-telemetry-v1",
         "generated_at": observed,
