@@ -5,11 +5,14 @@ on:
     paths:
       - '.github/workflows/issue-881-contract-ci.yml'
       - 'universal_video/**'
+      - 'ops/oracle_universal_video_container_install.sh'
+      - 'ops/validate_video_queue_dsn.py'
       - 'database/migrations/0056_universal_video_queue.sql'
       - 'database/migrations/0057_universal_video_canary_review_gate.sql'
       - 'database/tests/041_universal_video_queue.sql'
       - 'database/tests/042_issue_881_canary_gate.sql'
       - 'tests/test_universal_video_issue_881_readiness.py'
+      - 'tests/test_issue_881_queue_dsn.py'
       - 'deploy/oracle-universal-video/Dockerfile'
   workflow_dispatch:
 
@@ -34,8 +37,10 @@ jobs:
       - name: Exact image and fail-closed recovery contracts
         run: |
           grep -Eq '^FROM python@sha256:[0-9a-f]{64}$' deploy/oracle-universal-video/Dockerfile
-          python -m pytest -q tests/test_universal_video_issue_881_readiness.py
-          python -m compileall -q universal_video
+          python -m pytest -q \
+            tests/test_universal_video_issue_881_readiness.py \
+            tests/test_issue_881_queue_dsn.py
+          python -m compileall -q universal_video ops/validate_video_queue_dsn.py
 
   database-contract:
     runs-on: ubuntu-latest
