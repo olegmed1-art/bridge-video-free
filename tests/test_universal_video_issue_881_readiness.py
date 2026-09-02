@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import subprocess
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Mapping
@@ -382,6 +383,8 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     ]
     assert 'mask_service_for_window "$SOURCE_SERVICE"' in script
     assert 'mask_service_for_window "$CONTAINER_SERVICE"' in script
+    assert "freeze_residents_for_idle_snapshot" in script
+    assert "stop_frozen_residents" in script
     assert "flock --exclusive --nonblock 9" in script
     assert 'restore_service "$SOURCE_SERVICE" "$source_state_before"' in script
     assert 'restore_service "$CONTAINER_SERVICE" "$container_target_state"' in script
@@ -392,7 +395,7 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert 'UNIVERSAL_VIDEO_CONTAINER_PRESERVE_IMAGE_ID="$resident_image_id"' in script
     assert 'rm -f -- "$ENV_FILE"' in script
     assert '"$ENV_FILE" == "$BASE_DIR/universal-video-container-candidate.env"' in script
-    assert 'systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE"' in script
+    assert 'bounded_systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE"' in script
     assert '"$image_id" "$@"' in run_image and '"$image" "$@"' not in run_image
     assert "org.opencontainers.image.revision" in script
     assert "UNIVERSAL_VIDEO_PREWARM_MODEL=0" in script
@@ -435,11 +438,9 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "immutable prior-run recovery evidence digest mismatch" in script
 
     lock_index = script.index("flock --exclusive --nonblock 9")
-    stop_index = script.index(
-        'systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE"',
-        lock_index,
-    )
+    freeze_index = script.index("freeze_residents_for_idle_snapshot", lock_index)
     prestop_index = script.index("assert_pre_stop_idle", lock_index)
+    stop_index = script.index("stop_frozen_residents", prestop_index)
     prepare_index = script.index('bash "$PREPARE_SCRIPT"', stop_index)
     cleanup_index = script.index('find "$root_cache" -xdev -mindepth 1 -delete', stop_index)
     installer_index = script.index(
@@ -447,7 +448,15 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
         prepare_index,
     )
     run_index = script.index("run_image python", installer_index)
-    assert lock_index < prestop_index < stop_index < prepare_index < installer_index < run_index
+    assert (
+        lock_index
+        < freeze_index
+        < prestop_index
+        < stop_index
+        < prepare_index
+        < installer_index
+        < run_index
+    )
     assert stop_index < cleanup_index < installer_index
 
     source_worker = (ROOT / "universal_video/spool_worker.py").read_text(encoding="utf-8")
@@ -464,7 +473,8 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     )
     restore_pass_index = script.index("UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS")
     source_recheck_index = script.index(
-        '[[ "$source_after" == "$source_state_before" ]]'
+        '[[ "$source_after" == "$source_state_before" ]]',
+        restore_container_index,
     )
     container_recheck_index = script.index(
         '[[ "$container_after" == "$container_target_state" ]]'
@@ -488,6 +498,187 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
         < readiness_recheck_index
         < restore_pass_index
     )
+
+
+def test_same_revision_legacy_restore_quiesces_only_the_peer_status_writer():
+    script = (ROOT / "ops/oracle_universal_video_precanary_attest.sh").read_text(
+        encoding="utf-8"
+    )
+    isolation = script[
+        script.index("isolate_ambiguous_legacy_peer(){") :
+        script.index("resident_status_ready(){")
+    ]
+    resume = script[
+        script.index("resume_isolated_peer(){") :
+        script.index("isolate_ambiguous_legacy_peer(){")
+    ]
+    quiesced_check = script[
+        script.index("isolated_peer_still_quiesced(){") :
+        script.index("resident_status_ready(){")
+    ]
+    receipt = script[
+        script.index("resident_status_ready(){") : script.index("record_restore_failure(){")
+    ]
+    restore = script[
+        script.index("restore_service(){") : script.index("restore_source_checkout(){")
+    ]
+    cleanup = script[script.index("cleanup(){") : script.index("assert_known_state(){")]
+
+    assert 'target_commit="$(resident_expected_commit "$service")"' in isolation
+    assert 'peer_commit="$(resident_expected_commit "$peer_service")"' in isolation
+    assert '"$target_commit" != "$peer_commit"' in isolation
+    assert 'peer_pid="$(resident_worker_pid "$peer_service"' in isolation
+    assert 'peer_ticks="$(process_start_ticks "$peer_pid"' in isolation
+    assert 'exact_process_signal "$peer_pid" "$peer_ticks" STOP' in isolation
+    assert '"$(resident_worker_pid "$peer_service"' in isolation
+    assert '"$(process_start_ticks "$peer_pid"' in isolation
+    assert 'exact_process_signal "$isolated_peer_pid" "$isolated_peer_start_ticks" CONT' in resume
+    assert '"$worker_pid" == "$isolated_peer_pid"' in resume
+    assert '"$isolated_peer_start_ticks"' in resume
+    assert '"$isolated_peer_service" == "$peer_service"' in quiesced_check
+    assert '"$state" == T || "$state" == t' in quiesced_check
+    assert '"$(resident_worker_pid "$peer_service"' in quiesced_check
+    assert '"$(process_start_ticks "$isolated_peer_pid"' in quiesced_check
+    assert receipt.count('isolated_peer_still_quiesced "$peer_service"') == 2
+
+    isolate_index = restore.index('isolate_ambiguous_legacy_peer "$service"')
+    clear_index = restore.index("if ! clear_restore_status; then", isolate_index)
+    start_index = restore.index('bounded_systemctl start --no-block "$service"', clear_index)
+    receipt_index = restore.index(
+        'resident_status_ready "$service" "$started_unix" "$worker_pid" '
+        '"$legacy_peer_quiesced"',
+        start_index,
+    )
+    resume_index = restore.index("if ! resume_isolated_peer; then", receipt_index)
+    identity_recheck_index = restore.index(
+        '"$(resident_worker_pid "$service"', resume_index
+    )
+    assert isolate_index < clear_index < start_index < receipt_index
+    assert receipt_index < resume_index < identity_recheck_index
+
+    assert 'LEGACY_PEER_QUIESCED="$legacy_peer_quiesced"' in script
+    assert 'os.environ["LEGACY_PEER_QUIESCED"] != "1"' in script
+    assert 'restored_source_pid="$worker_pid"' in restore
+    assert 'restored_container_pid="$worker_pid"' in restore
+    assert '"$restored_source_pid" "$restored_source_start_ticks"' in cleanup
+    assert '"$restored_container_pid" "$restored_container_start_ticks"' in cleanup
+
+
+def test_prestop_freeze_closes_the_legacy_claim_race_before_shutdown():
+    script = (ROOT / "ops/oracle_universal_video_precanary_attest.sh").read_text(
+        encoding="utf-8"
+    )
+    freeze = script[
+        script.index("freeze_residents_for_idle_snapshot(){") :
+        script.index("stop_frozen_residents(){")
+    ]
+    stop = script[
+        script.index("stop_frozen_residents(){") :
+        script.index("resume_isolated_peer(){")
+    ]
+    resume_frozen = script[
+        script.index("resume_prestop_frozen(){") :
+        script.index("freeze_residents_for_idle_snapshot(){")
+    ]
+    execution = script[script.index("lock_held=1") :]
+    cleanup = script[script.index("cleanup(){") : script.index("assert_known_state(){")]
+
+    assert 'process_id="$(resident_worker_pid "$service"' in freeze
+    assert 'start_ticks="$(process_start_ticks "$process_id"' in freeze
+    assert 'exact_process_signal "$process_id" "$start_ticks" STOP' in freeze
+    assert '"$(resident_worker_pid "$service"' in freeze
+    assert '"$(process_start_ticks "$process_id"' in freeze
+    assert 'bounded_systemctl stop --no-block "$SOURCE_SERVICE" "$CONTAINER_SERVICE"' in resume_frozen
+    assert 'exact_process_signal "$process_id" "$expected_ticks" TERM' in resume_frozen
+    assert 'resume_prestop_frozen stopping' in stop
+    assert resume_frozen.index("bounded_systemctl stop --no-block") < resume_frozen.index(
+        'exact_process_signal "$process_id" "$expected_ticks" TERM'
+    )
+    assert resume_frozen.index(
+        'exact_process_signal "$process_id" "$expected_ticks" TERM'
+    ) < resume_frozen.index(
+        '(( rc == 0 )) || return "$rc"'
+    ) < resume_frozen.index(
+        'exact_process_signal "$process_id" "$expected_ticks" CONT'
+    )
+    assert 'remaining_pids+=("$process_id")' in resume_frozen
+    assert 'prestop_frozen_pids=("${remaining_pids[@]}")' in resume_frozen
+    assert 'exact_process_signal "$process_id" "$expected_ticks" CONT || true' not in resume_frozen
+    assert stop.index("resume_prestop_frozen stopping") < stop.index(
+        'bounded_systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE"'
+    )
+
+    freeze_index = execution.index("freeze_residents_for_idle_snapshot")
+    idle_index = execution.index("assert_pre_stop_idle", freeze_index)
+    attempted_index = execution.index("services_stop_attempted=1", idle_index)
+    stop_index = execution.index("stop_frozen_residents", attempted_index)
+    assert freeze_index < idle_index < attempted_index < stop_index
+    assert "trap '' INT TERM" in cleanup
+    assert "PRESTOP_ABORT_RESTORE_PASS" in cleanup
+
+    signal_guard = script[
+        script.index("exact_process_signal(){") :
+        script.index("resume_prestop_frozen(){")
+    ]
+    assert "pidfd = os.pidfd_open(pid, 0)" in signal_guard
+    assert "signal.pidfd_send_signal(pidfd, signal_value, None, 0)" in signal_guard
+    assert signal_guard.index("os.pidfd_open") < signal_guard.index(
+        'Path(f"/proc/{pid}/stat")'
+    ) < signal_guard.index("signal.pidfd_send_signal")
+    assert "kill -STOP" not in script
+    assert "kill -TERM" not in script
+    assert "kill -CONT" not in script
+    assert 'state" != Z' in script and 'state" != X' in script
+    assert "timeout --foreground --signal=TERM --kill-after=5s" in script
+    assert "while (( SECONDS < deadline ))" in script
+    assert 'bounded_systemctl start --no-block "$service"' in script
+    assert 'exact_process_signal "$worker_pid" "$expected_start_ticks" CHECK' in script
+
+
+def test_pidfd_guard_behavior_rejects_stopped_and_stale_process_identity():
+    script = (ROOT / "ops/oracle_universal_video_precanary_attest.sh").read_text(
+        encoding="utf-8"
+    )
+    definitions = script[
+        script.index("process_start_ticks(){") :
+        script.index("resume_prestop_frozen(){")
+    ]
+    probe = definitions + r'''
+set -euo pipefail
+sleep 30 & child=$!
+trap 'kill "$child" 2>/dev/null || true; wait "$child" 2>/dev/null || true' EXIT
+[[ -r "/proc/$child/stat" ]] || exit 77
+ticks="$(process_start_ticks "$child")"
+exact_process_signal "$child" "$ticks" STOP
+for _ in {1..50}; do
+  state="$(process_state "$child")"
+  [[ "$state" == T || "$state" == t ]] && break
+  sleep 0.02
+done
+[[ "$state" == T || "$state" == t ]]
+! exact_process_signal "$child" "$ticks" CHECK
+! exact_process_signal "$child" "$((ticks + 1))" TERM
+kill -0 "$child"
+exact_process_signal "$child" "$ticks" CONT
+for _ in {1..50}; do
+  process_is_runnable "$child" && break
+  sleep 0.02
+done
+exact_process_signal "$child" "$ticks" CHECK
+exact_process_signal "$child" "$ticks" TERM
+wait "$child" || true
+trap - EXIT
+'''
+    completed = subprocess.run(
+        ["bash"],
+        input=probe,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    if completed.returncode == 77:
+        pytest.skip("test runner PID namespace is not mounted at /proc")
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_installer_readiness_and_service_env_use_captured_image_id():
@@ -527,6 +718,16 @@ def test_external_precanary_is_pr_only_exact_head_validation():
     assert "ref: ${{ env.EXACT_SHA }}" in workflow
     assert 'test "$(git rev-parse HEAD)" = "$EXACT_SHA"' in workflow
     assert "Prove the only external entrypoint is Director-gated" in workflow
+    assert "oracle-universal-video-container-evidence.yml" in workflow
+    assert "UNIVERSAL_VIDEO_LEGACY_CONTAINER_EVIDENCE_RETIRED=true" in workflow
+    retired = (
+        ROOT / ".github/workflows/oracle-universal-video-container-evidence.yml"
+    ).read_text(encoding="utf-8")
+    assert "pull_request:" in retired
+    assert "workflow_dispatch:" not in retired
+    assert "push:" not in retired
+    assert "UNIVERSAL_VIDEO_LEGACY_CONTAINER_EVIDENCE_RETIRED=true" in retired
+    assert "secrets." not in retired and "ssh " not in retired and "oci " not in retired
 
 
 def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery():
