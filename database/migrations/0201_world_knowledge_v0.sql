@@ -39,7 +39,7 @@ SELECT EXISTS (SELECT 1 FROM walk WHERE jsonb_typeof(value)='string'
        AND value #>> '{}' ~ '^[0-9a-f]{64}$')
  )
  AND (
-   value #>> '{}' ~* '(^|[^a-z0-9])(10|[2-9tjqka])([cdhs]|♣|♦|♥|♠)([^a-z0-9]|$)'
+   value #>> '{}' ~ '(^|[^A-Za-z0-9])(10|[2-9TJQKA])([CDHS]|♣|♦|♥|♠)([^A-Za-z0-9]|$)'
    OR value #>> '{}' ~* '([♣♦♥♠](10|[2-9tjqka]){1,13}|(10|[2-9tjqka]){1,13}[♣♦♥♠])'
    OR value #>> '{}' ~* '(^|[^a-z0-9])([cdhs](10|[2-9tjqka]){2,13}|(10|[2-9tjqka]){2,13}[cdhs])([^a-z0-9]|$)'
    OR value #>> '{}' ~* '(^|[^a-z0-9])(([cdhs]|♣|♦|♥|♠)[[:space:]:-]*(10|[2-9tjqka]){2,13}|(10|[2-9tjqka]){2,13}[[:space:]:-]*([cdhs]|♣|♦|♥|♠))([^a-z0-9]|$)'
@@ -47,7 +47,8 @@ SELECT EXISTS (SELECT 1 FROM walk WHERE jsonb_typeof(value)='string'
         regexp_replace(translate(value #>> '{}','♣♦♥♠','CDHS'),'10','T','gi'),
         '[^a-z0-9]','','gi')
       ~* '^([2-9TJQKA][CDHS])+$'
-   OR value #>> '{}' ~* '(^|[^a-z0-9])([2-9tjqka]{0,13}\.){3}[2-9tjqka]{0,13}([^a-z0-9]|$)'
+   OR ((value #>> '{}') ~* '^([2-9tjqka]{0,13}\.){3}[2-9tjqka]{0,13}$'
+       AND length(regexp_replace(value #>> '{}','[^2-9tjqka]','','gi'))=13)
 ));
 $$;
 
@@ -74,7 +75,7 @@ SELECT jsonb_typeof(payload)='object'
        FROM jsonb_array_elements(payload->'shape') WITH ORDINALITY shape(value,ord)
       WHERE (value #>> '{}')::integer IS DISTINCT FROM
         (SELECT count(*) FROM jsonb_array_elements_text(payload->'cards') card(value)
-          WHERE right(card.value,1)=((ARRAY['C','D','H','S'])[shape.ord]))
+          WHERE right(card.value,1)=((ARRAY['S','H','D','C'])[shape.ord]))
    )
  ));
 $$;
@@ -126,8 +127,11 @@ CREATE TABLE bidding.world_canon_gap_binding (
  created_at timestamptz NOT NULL DEFAULT clock_timestamp(), UNIQUE(school_id,request_fingerprint));
 CREATE OR REPLACE FUNCTION bidding.validate_world_canon_gap_binding()
 RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE gap_school_id uuid;
 BEGIN
- IF NOT EXISTS(SELECT 1 FROM public.knowledge_gap g WHERE g.knowledge_gap_id=NEW.knowledge_gap_id AND g.school_id=NEW.school_id)
+ SELECT g.school_id INTO gap_school_id FROM public.knowledge_gap g
+  WHERE g.knowledge_gap_id=NEW.knowledge_gap_id FOR UPDATE;
+ IF gap_school_id IS DISTINCT FROM NEW.school_id
  THEN RAISE EXCEPTION 'BID_WORLD_GAP_BINDING_SCHOOL_MISMATCH' USING ERRCODE='23514'; END IF;
  RETURN NEW;
 END $$;
@@ -237,7 +241,10 @@ CREATE TABLE bidding.world_resolution_trace (
  world_outcome text CHECK(world_outcome IS NULL OR world_outcome IN ('WORLD_FALLBACK','WORLD_CONFLICT','UNRESOLVED_GAP')),
  canon_rule_ids uuid[] NOT NULL DEFAULT '{}', world_rule_ids uuid[] NOT NULL DEFAULT '{}',
  selected_world_rule_id uuid REFERENCES bidding.rule ON DELETE RESTRICT, knowledge_gap_id uuid REFERENCES public.knowledge_gap ON DELETE RESTRICT,
- trace jsonb NOT NULL DEFAULT '{}' CHECK(jsonb_typeof(trace)='object' AND NOT bidding.contains_forbidden_hidden_key(trace)),
+ trace jsonb NOT NULL DEFAULT '{}' CHECK(jsonb_typeof(trace)='object'
+   AND NOT bidding.contains_forbidden_hidden_key(trace)
+   AND NOT bidding.contains_nonpublic_card_material(trace)
+   AND NOT bidding.contains_card_token(trace)),
  resolver_version text NOT NULL CHECK(btrim(resolver_version)<>''), recorded_at timestamptz NOT NULL DEFAULT now(),
  CHECK((canon_outcome='CANON_GAP')=(knowledge_gap_id IS NOT NULL)), CHECK((canon_outcome='CANON_GAP')=(world_outcome IS NOT NULL)),
  CHECK((world_outcome='WORLD_FALLBACK')=(selected_world_rule_id IS NOT NULL)),
@@ -285,6 +292,8 @@ GRANT SELECT ON bidding.world_robot,bidding.world_robot_configuration TO bridge_
 GRANT SELECT ON bidding.rule TO bridge_school_app,bridge_school_worker;
 GRANT SELECT ON public.knowledge_version,public.knowledge_gap TO bridge_school_app,bridge_school_worker;
 GRANT INSERT(school_id,question,context_scope,status) ON public.knowledge_gap TO bridge_school_app,bridge_school_worker;
+REVOKE UPDATE ON public.knowledge_gap FROM bridge_school_worker;
+GRANT UPDATE(question,context_scope,discovered_from_ids,priority,status) ON public.knowledge_gap TO bridge_school_worker;
 GRANT EXECUTE ON FUNCTION bidding.contains_forbidden_hidden_key(jsonb) TO bridge_school_app,bridge_school_worker;
 GRANT EXECUTE ON FUNCTION bidding.contains_nonpublic_card_material(jsonb),bidding.contains_card_token(jsonb),
  bidding.valid_acting_hand(jsonb),bidding.valid_public_robot_payload(text,jsonb) TO bridge_school_worker;

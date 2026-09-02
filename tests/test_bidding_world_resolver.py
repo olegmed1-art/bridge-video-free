@@ -5,15 +5,17 @@ from unittest.mock import patch
 
 from bridge_school_api.bidding_world_resolver import (
     CANON_CONFLICT, UNRESOLVED_GAP, WORLD_CONFLICT, WORLD_FALLBACK,
-    CanonGapReceipt, KnowledgeRule, PostgresCanonGapStore, ResolutionProfile, learner_response, resolve_two_lane,
+    CanonGapReceipt, KnowledgeRule, PostgresCanonGapStore, PostgresCanonRuleStore,
+    ResolutionProfile, learner_response, resolve_two_lane,
 )
-from bridge_school_api.bidding_world_resolver import _profile_fingerprint, _request_fingerprint
+from bridge_school_api.bidding_world_resolver import _gap_fingerprint, _profile_fingerprint, _request_fingerprint
 
 NOW = datetime(2026, 8, 30, tzinfo=timezone.utc)
 PROFILE = ResolutionProfile("natural", "v1", "L1", "auction-1", NOW)
 REQUEST = {"acting_seat": "N", "acting_hand": {"cards": ["AC"]},
            "public_auction": {"calls": []}, "public_context": {"dealer": "N"}}
 REQUEST_HASH = _request_fingerprint(**REQUEST)
+GAP_HASH = _gap_fingerprint(REQUEST_HASH, PROFILE)
 
 
 def rule(key, lane, action, *, profile=PROFILE, priority=1, specificity=1, confidence="high"):
@@ -28,31 +30,29 @@ def verified(gap_id, school_id, fingerprint, profile):
 
 
 STORE = PostgresCanonGapStore(lambda: None)
+CANON_STORE = PostgresCanonRuleStore(lambda: None)
 
 
 def resolve(canon, world):
-    with patch.object(PostgresCanonGapStore, "persist_and_verify",
-                      return_value=verified("gap-1", "school-1", REQUEST_HASH, PROFILE)):
+    with patch.object(PostgresCanonRuleStore, "fetch", return_value=tuple(canon)), \
+         patch.object(PostgresCanonGapStore, "persist_and_verify",
+                      return_value=verified("gap-1", "school-1", GAP_HASH, PROFILE)):
         return resolve_two_lane(school_id="school-1", **REQUEST, profile=PROFILE,
-                                canon_rules=canon, gap_store=STORE,
+                                canon_store=CANON_STORE, gap_store=STORE,
                                 world_supplier=lambda _receipt, _profile: world)
 
 
 def test_canon_match_does_not_persist_gap_or_query_world():
     def forbidden(*_args):
         raise AssertionError("unexpected call")
-    result = resolve_two_lane(school_id="school-1", **REQUEST, profile=PROFILE,
-                              canon_rules=[rule("c", "school_canon", "1H")],
-                              gap_store=STORE, world_supplier=forbidden)
+    result = resolve([rule("c", "school_canon", "1H")], forbidden)
     assert result.outcome == "CANON_MATCH" and result.trace["world_searched"] is False
 
 
 def test_canon_conflict_stops_before_gap_and_world():
     def forbidden(*_args):
         raise AssertionError("unexpected call")
-    result = resolve_two_lane(school_id="school-1", **REQUEST, profile=PROFILE,
-                              canon_rules=[rule("c1", "school_canon", "1H"), rule("c2", "school_canon", "1S")],
-                              gap_store=STORE, world_supplier=forbidden)
+    result = resolve([rule("c1", "school_canon", "1H"), rule("c2", "school_canon", "1S")], forbidden)
     assert result.outcome == CANON_CONFLICT and learner_response(result)["action"] is None
 
 
@@ -64,9 +64,10 @@ def test_gap_is_committed_before_world_supplier_runs():
     def supplied(_receipt, _profile):
         events.append("world_queried")
         return [rule("w", "external", "1S", confidence="reproducible")]
-    with patch.object(PostgresCanonGapStore, "persist_and_verify", side_effect=persisted):
+    with patch.object(PostgresCanonRuleStore, "fetch", return_value=()), \
+         patch.object(PostgresCanonGapStore, "persist_and_verify", side_effect=persisted):
         result = resolve_two_lane(school_id="school-1", **REQUEST, profile=PROFILE,
-                                  canon_rules=[], gap_store=STORE, world_supplier=supplied)
+                                  canon_store=CANON_STORE, gap_store=STORE, world_supplier=supplied)
     assert events == ["gap_committed", "gap_verified_post_commit", "world_queried"] and result.outcome == WORLD_FALLBACK
 
 
@@ -76,10 +77,11 @@ def test_uncommitted_or_wrong_scope_gap_blocks_world():
         nonlocal called
         called = True
         return []
-    with patch.object(PostgresCanonGapStore, "persist_and_verify", side_effect=RuntimeError("not visible")):
+    with patch.object(PostgresCanonRuleStore, "fetch", return_value=()), \
+         patch.object(PostgresCanonGapStore, "persist_and_verify", side_effect=RuntimeError("not visible")):
         with pytest.raises(RuntimeError):
             resolve_two_lane(school_id="school-1", **REQUEST, profile=PROFILE,
-                             canon_rules=[], gap_store=STORE, world_supplier=supplied)
+                             canon_store=CANON_STORE, gap_store=STORE, world_supplier=supplied)
     assert called is False
 
 
@@ -137,6 +139,17 @@ def test_profile_fingerprint_is_not_ambiguous_when_fields_contain_delimiters():
 def test_request_fingerprint_is_derived_from_visible_request_fields():
     changed = {**REQUEST, "public_auction": {"calls": ["1S"]}}
     assert _request_fingerprint(**REQUEST) != _request_fingerprint(**changed)
+
+
+def test_gap_fingerprint_includes_resolution_profile():
+    changed = ResolutionProfile("natural", "v1", "L2", "auction-1", NOW)
+    assert _gap_fingerprint(REQUEST_HASH, PROFILE) != _gap_fingerprint(REQUEST_HASH, changed)
+
+
+def test_untrusted_canon_store_is_rejected():
+    with pytest.raises(TypeError, match="sealed active-catalog"):
+        resolve_two_lane(school_id="school-1", **REQUEST, profile=PROFILE,
+                         canon_store=object(), gap_store=STORE, world_supplier=lambda *_: ())
 
 
 def test_world_disagreement_and_low_confidence_remain_unselected():

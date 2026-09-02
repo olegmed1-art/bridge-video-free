@@ -21,6 +21,8 @@ def test_robot_paths_are_information_firewalled_and_not_canon_activations():
     assert "WITH ORDINALITY AS s(step,ord)" in sql
     assert "step->>'input_hash' !~ '^[0-9a-f]{64}$'" in sql
     assert "canon_activation" not in sql.lower()
+    assert "ARRAY['S','H','D','C']" in sql
+    assert "FOR UPDATE" in sql
 
 
 def test_world_guards_have_ephemeral_database_behavioral_suite():
@@ -32,3 +34,5 @@ def test_world_guards_have_ephemeral_database_behavioral_suite():
     assert "WORLD_SMOKE_NESTED_AUCTION_MATERIAL_ACCEPTED" in smoke
     assert "WORLD_SMOKE_UNPINNED_REVERSED_TRACE_ACCEPTED" in smoke
     assert "WORLD_SMOKE_DECISION_MUTATION_ACCEPTED" in smoke
+    assert "WORLD_SMOKE_ORDINARY_PROSE_REJECTED_AS_CARDS" in smoke
+    assert "WORLD_SMOKE_COMPACT_TRACE_HOLDING_NOT_DETECTED" in smoke

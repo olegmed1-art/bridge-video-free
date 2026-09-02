@@ -270,16 +270,22 @@ BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
   VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"shape":[4,3,3,3]}',
+  '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"shape":[4,3,3,3]}',
    '{"calls":[]}','{}',raw,'{"bid":"1S"}','high',trace);
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_CONTRADICTORY_ACTING_SHAPE_ACCEPTED'; END IF;
+
+ IF bidding.contains_card_token('{"explanation":"As responder, pass"}'::jsonb)
+    OR bidding.contains_card_token('{"status":"..."}'::jsonb)
+ THEN RAISE EXCEPTION 'WORLD_SMOKE_ORDINARY_PROSE_REJECTED_AS_CARDS'; END IF;
+ IF NOT bidding.contains_card_token('{"note":"AKQ.JT9.876.5432"}'::jsonb)
+ THEN RAISE EXCEPTION 'WORLD_SMOKE_COMPACT_TRACE_HOLDING_NOT_DETECTED'; END IF;
 
  failed:=false; BEGIN
   INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
    public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
   VALUES(s,config,'ROBOT_LIVE_DECISION','N',
-   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10,"shape":[13,0,0,0]}',
+   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"],"hcp":10,"shape":[0,0,0,13]}',
    '{"calls":["1S"],"dealer":"N"}','{"scoring":"IMP","acting_seat":"N"}',raw,'{"bid":"1S"}','high',trace);
  EXCEPTION WHEN check_violation THEN failed:=true; END;
  IF NOT failed THEN RAISE EXCEPTION 'WORLD_SMOKE_REUSED_TRACE_INPUT_ACCEPTED'; END IF;
@@ -353,6 +359,9 @@ BEGIN
     OR NOT has_table_privilege('bridge_school_worker','bidding.world_robot_configuration','SELECT')
     OR NOT has_table_privilege('bridge_school_worker','public.knowledge_gap','SELECT')
  THEN RAISE EXCEPTION 'WORLD_SMOKE_WORKER_RUNTIME_ACL_INCOMPLETE'; END IF;
+ IF has_column_privilege('bridge_school_worker','public.knowledge_gap','school_id','UPDATE')
+    OR NOT has_column_privilege('bridge_school_worker','public.knowledge_gap','status','UPDATE')
+ THEN RAISE EXCEPTION 'WORLD_SMOKE_GAP_IDENTITY_UPDATE_ACL_UNSAFE'; END IF;
  IF NOT has_function_privilege('bridge_school_app','bidding.contains_forbidden_hidden_key(jsonb)','EXECUTE')
     OR NOT has_function_privilege('bridge_school_worker','bidding.contains_forbidden_hidden_key(jsonb)','EXECUTE')
     OR NOT has_function_privilege('bridge_school_worker','bidding.valid_acting_hand(jsonb)','EXECUTE')

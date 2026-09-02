@@ -120,6 +120,40 @@ def _request_fingerprint(*, acting_seat: str, acting_hand: dict[str, Any],
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def _gap_fingerprint(request_fingerprint: str, profile: ResolutionProfile) -> str:
+    return hashlib.sha256(f"{request_fingerprint}:{_profile_fingerprint(profile)}".encode()).hexdigest()
+
+
+class PostgresCanonRuleStore:
+    """Sealed adapter: Canon candidates can only originate in the active Canon catalog."""
+    def __init_subclass__(cls, **kwargs):
+        raise TypeError("PostgresCanonRuleStore is sealed")
+
+    def __init__(self, connection_factory: Callable[[], Any]):
+        self._connection_factory = connection_factory
+
+    def fetch(self, school_id: str, profile: ResolutionProfile) -> tuple[KnowledgeRule, ...]:
+        connection = self._connection_factory()
+        with connection:
+            with connection.cursor() as cur:
+                cur.execute(
+                    """SELECT c.rule_id,c.action::text,kv.bidding_system_key,c.method_version,
+                              kv.level_scope->>'level',c.auction_pattern->>'context_id',
+                              c.valid_from,c.valid_to,c.priority,c.specificity
+                         FROM bidding.get_school_runtime_rule_catalog(%s,%s) c
+                         JOIN public.knowledge_version kv USING(knowledge_version_id)
+                        WHERE kv.bidding_system_key=%s AND c.method_version=%s
+                          AND kv.level_scope->>'level'=%s AND c.auction_pattern->>'context_id'=%s
+                          AND c.valid_from<=%s AND (c.valid_to IS NULL OR c.valid_to>%s)""",
+                    (school_id, profile.auction_context_id,
+                     profile.system_profile, profile.system_version, profile.learner_level,
+                     profile.auction_context_id, profile.effective_at, profile.effective_at),
+                )
+                rows = cur.fetchall()
+        return tuple(KnowledgeRule(str(r[0]), "school_canon", r[1], r[2], r[3], r[4], r[5],
+                                   r[6], r[7], r[8], r[9], "verified") for r in rows)
+
+
 class PostgresCanonGapStore:
     """Trusted boundary: commit on one connection, verify on a fresh connection."""
     def __init_subclass__(cls, **kwargs):
@@ -186,15 +220,18 @@ class PostgresCanonGapStore:
 def resolve_two_lane(*, school_id: str, acting_seat: str, acting_hand: dict[str, Any],
                      public_auction: dict[str, Any], public_context: dict[str, Any],
                      profile: ResolutionProfile,
-                     canon_rules: Iterable[KnowledgeRule],
+                     canon_store: PostgresCanonRuleStore,
                      gap_store: PostgresCanonGapStore,
                      world_supplier: Callable[[CanonGapReceipt, ResolutionProfile], Iterable[KnowledgeRule]]) -> Resolution:
     """Resolve Canon first; commit its gap before invoking a lazy WORLD supplier."""
-    request_fingerprint = _request_fingerprint(
+    visible_request_fingerprint = _request_fingerprint(
         acting_seat=acting_seat, acting_hand=acting_hand,
         public_auction=public_auction, public_context=public_context,
     )
-    canon = _rank((r for r in canon_rules if r.authority_class == "school_canon"), profile)
+    request_fingerprint = _gap_fingerprint(visible_request_fingerprint, profile)
+    if type(canon_store) is not PostgresCanonRuleStore:
+        raise TypeError("canon_store must be the sealed active-catalog PostgresCanonRuleStore")
+    canon = _rank(canon_store.fetch(school_id, profile), profile)
     canon_winner, canon_conflict = _winner_or_conflict(canon)
     trace: dict[str, Any] = {"canon_stage": "searched", "canon_rule_ids": [r.rule_id for r in canon],
         "world_searched": False, "school_id": school_id, "request_fingerprint": request_fingerprint,
