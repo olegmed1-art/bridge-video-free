@@ -60,10 +60,16 @@ def test_downstream_power_boundary_remains_exact_and_idle_gated():
         "bridge-school-oracle-final-idle-proof-${GITHUB_RUN_ID}", stop_step
     )
     final_authorizer = text.index("--proof \"$proof\"", final_probe)
-    stop_action = text.index("--action STOP", final_authorizer)
+    post_probe_epoch = text.index("post_probe_epoch_state=", final_authorizer)
+    second_paginated = text.index("gh api --paginate --slurp", post_probe_epoch)
+    second_authorizer = text.index("--proof \"$proof\"", second_paginated)
+    stop_action = text.index("--action STOP", second_authorizer)
     final_epoch = text.index("final_epoch_state=", stop_step)
     paginated = text.index("gh api --paginate --slurp", final_epoch)
-    assert stop_step < final_epoch < paginated < final_probe < final_authorizer < stop_action
+    assert (
+        stop_step < final_epoch < paginated < final_probe < final_authorizer
+        < post_probe_epoch < second_paginated < second_authorizer < stop_action
+    )
     assert "controller: manual only" in text
 
 
