@@ -84,8 +84,8 @@ lock_held=0
 source_had_original=0
 source_candidate_path_owned=0
 source_backup_dir=""
-source_abandoned_candidate=""
-source_checkout_restored=0
+source_backup_device_inode=""
+source_quarantine_dir=""
 resident_image_id=""
 isolated_peer_service=""
 isolated_peer_pid=""
@@ -807,59 +807,76 @@ restore_service(){
 }
 
 restore_source_checkout(){
-  local cleanup_degraded=0
+  local attempt candidate_remove_failed=0 quarantine_prefix restored_device_inode
   [[ "$BUILD_IMAGE" == 1 ]] || return 0
-  if [[ "$source_candidate_path_owned" == 1 ]]; then
-    if [[ -e "$SOURCE_DIR" || -L "$SOURCE_DIR" ]]; then
-      if ! bounded_filesystem rm -rf --one-file-system -- "$SOURCE_DIR"; then
-        cleanup_degraded=1
-        if [[ -e "$SOURCE_DIR" || -L "$SOURCE_DIR" ]]; then
-          source_abandoned_candidate="${SOURCE_DIR}.precanary-abandoned.${EXPECTED_SHA:0:12}.$$"
-          [[ ! -e "$source_abandoned_candidate" && ! -L "$source_abandoned_candidate" ]] \
-            || return 1
-          # A same-filesystem rename is the bounded recovery path when recursive
-          # candidate deletion cannot finish. It immediately frees SOURCE_DIR so
-          # the preserved resident tree can be restored before cleanup reports
-          # the storage fault.
-          if ! bounded_filesystem mv -- "$SOURCE_DIR" "$source_abandoned_candidate"; then
-            [[ ! -e "$SOURCE_DIR" && ! -L "$SOURCE_DIR" \
-                  && -d "$source_abandoned_candidate" && ! -L "$source_abandoned_candidate" ]] \
-              || return 1
-          fi
-        fi
-      fi
+  if [[ "$source_candidate_path_owned" == 1 && ( -e "$SOURCE_DIR" || -L "$SOURCE_DIR" ) ]]; then
+    if ! bounded_filesystem rm -rf --one-file-system -- "$SOURCE_DIR"; then
+      candidate_remove_failed=1
+      record_restore_failure source_candidate_remove
     fi
-    [[ ! -e "$SOURCE_DIR" && ! -L "$SOURCE_DIR" ]] || return 1
-    source_candidate_path_owned=0
+    if [[ -e "$SOURCE_DIR" || -L "$SOURCE_DIR" ]]; then
+      # A timed-out recursive delete must not strand the pre-existing service.
+      # Move only the exact candidate directory aside, then restore the atomic
+      # backup below.  The quarantined partial tree is never used as source.
+      [[ -d "$SOURCE_DIR" && ! -L "$SOURCE_DIR" ]] || return 1
+      quarantine_prefix="${SOURCE_DIR}.precanary-quarantine.${EXPECTED_SHA:0:12}.$$."
+      for attempt in {1..8}; do
+        source_quarantine_dir="${quarantine_prefix}${RANDOM}.${attempt}"
+        [[ "$(dirname -- "$source_quarantine_dir")" == "$(dirname -- "$SOURCE_DIR")" ]] \
+          || return 1
+        case "$source_quarantine_dir" in
+          "$quarantine_prefix"*) ;;
+          *) return 1 ;;
+        esac
+        if [[ ! -e "$source_quarantine_dir" && ! -L "$source_quarantine_dir" ]]; then
+          break
+        fi
+        source_quarantine_dir=""
+      done
+      [[ -n "$source_quarantine_dir" && ! -e "$source_quarantine_dir" && ! -L "$source_quarantine_dir" ]] \
+        || return 1
+      if ! bounded_filesystem mv -T -- "$SOURCE_DIR" "$source_quarantine_dir"; then
+        # timeout(1) can report failure after rename(2) completed. Accept only
+        # the unambiguous postcondition; every other state remains fail-closed.
+        [[ ! -e "$SOURCE_DIR" && ! -L "$SOURCE_DIR" \
+          && -d "$source_quarantine_dir" && ! -L "$source_quarantine_dir" ]] \
+          || return 1
+      fi
+      [[ ! -e "$SOURCE_DIR" && ! -L "$SOURCE_DIR" \
+        && -d "$source_quarantine_dir" && ! -L "$source_quarantine_dir" ]] \
+        || return 1
+      source_candidate_path_owned=0
+      if [[ "$candidate_remove_failed" == 0 ]]; then
+        record_restore_failure source_candidate_remove_incomplete
+      fi
+      record_restore_failure source_candidate_quarantined
+      # Do not echo the configurable source path into external evidence.
+      printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE component=source_candidate result=DEGRADED quarantine=created\n' >&2
+    elif [[ "$candidate_remove_failed" == 1 ]]; then
+      # Even if timeout raced with successful deletion, the run cannot
+      # authorize promotion; restoration may nevertheless safely continue.
+      printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE component=source_candidate result=DEGRADED quarantine=none\n' >&2
+    fi
   fi
-  [[ ! -e "$SOURCE_DIR" && ! -L "$SOURCE_DIR" ]] || return 1
   if [[ "$source_had_original" == 1 ]]; then
     [[ -n "$source_backup_dir" && -e "$source_backup_dir" && ! -L "$source_backup_dir" ]] \
       || return 1
-    if ! bounded_filesystem mv -- "$source_backup_dir" "$SOURCE_DIR"; then
-      # mv is atomic within this parent directory. Accept only its exact
-      # completed postcondition if timeout raced with command completion.
-      [[ ! -e "$source_backup_dir" && ! -L "$source_backup_dir" \
-            && -d "$SOURCE_DIR" && ! -L "$SOURCE_DIR" ]] || return 1
-    fi
-    source_backup_dir=""
-  else
+    [[ -n "$source_backup_device_inode" \
+      && "$(stat -Lc '%d:%i' -- "$source_backup_dir")" == "$source_backup_device_inode" ]] \
+      || return 1
     [[ ! -e "$SOURCE_DIR" && ! -L "$SOURCE_DIR" ]] || return 1
-  fi
-  source_checkout_restored=1
-  if [[ -n "$source_abandoned_candidate" ]]; then
-    if ! bounded_filesystem rm -rf --one-file-system -- "$source_abandoned_candidate"; then
-      cleanup_degraded=1
+    if ! bounded_filesystem mv -T -- "$source_backup_dir" "$SOURCE_DIR"; then
+      [[ ! -e "$source_backup_dir" && ! -L "$source_backup_dir" \
+        && -d "$SOURCE_DIR" && ! -L "$SOURCE_DIR" ]] \
+        || return 1
     fi
-    if [[ -e "$source_abandoned_candidate" || -L "$source_abandoned_candidate" ]]; then
-      cleanup_degraded=1
-    else
-      source_abandoned_candidate=""
-    fi
-  fi
-  if (( cleanup_degraded != 0 )); then
-    printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE component=source_checkout result=RECOVERED cleanup_degraded=true\n' >&2
-    return 1
+    [[ ! -e "$source_backup_dir" && ! -L "$source_backup_dir" \
+      && -d "$SOURCE_DIR" && ! -L "$SOURCE_DIR" ]] \
+      || return 1
+    restored_device_inode="$(stat -Lc '%d:%i' -- "$SOURCE_DIR")"
+    [[ "$restored_device_inode" == "$source_backup_device_inode" ]] || return 1
+    source_backup_dir=""
+    source_backup_device_inode=""
   fi
   printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE component=source_checkout result=PASS\n'
   return 0
@@ -948,9 +965,6 @@ cleanup(){
       fi
       if ! restore_source_checkout; then
         record_restore_failure source_checkout
-      fi
-      if [[ "$source_checkout_restored" != 1 ]]; then
-        record_restore_failure source_checkout_unrestored
         printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=%s source_service=%s container_service=%s\n' \
           "$(IFS=,; echo "${restore_failures[*]}")" \
           "$(service_state "$SOURCE_SERVICE")" "$(service_state "$CONTAINER_SERVICE")" >&2
@@ -1189,8 +1203,13 @@ if [[ "$BUILD_IMAGE" == 1 ]]; then
     source_backup_dir="${SOURCE_DIR}.precanary-backup.${EXPECTED_SHA:0:12}.$$"
     [[ ! -e "$source_backup_dir" && ! -L "$source_backup_dir" ]] \
       || die 'source backup destination already exists'
+    source_backup_device_inode="$(stat -Lc '%d:%i' -- "$SOURCE_DIR")"
+    [[ "$source_backup_device_inode" =~ ^[0-9]+:[0-9]+$ ]] \
+      || die 'source checkout identity is unavailable'
     mv -- "$SOURCE_DIR" "$source_backup_dir"
     source_had_original=1
+    [[ "$(stat -Lc '%d:%i' -- "$source_backup_dir")" == "$source_backup_device_inode" ]] \
+      || die 'source backup identity changed during preservation'
     printf 'UNIVERSAL_VIDEO_SOURCE_CHECKOUT mode=ephemeral prior_tree=preserved restore_on_exit=true\n'
   else
     printf 'UNIVERSAL_VIDEO_SOURCE_CHECKOUT mode=ephemeral prior_tree=absent restore_on_exit=true\n'
