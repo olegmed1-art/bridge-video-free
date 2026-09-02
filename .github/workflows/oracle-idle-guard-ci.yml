@@ -1,5 +1,6 @@
 name: Oracle idle STOP guard CI
 
+# Exact-head validation trigger after deployed-source-model correction.
 on:
   push:
     branches:
