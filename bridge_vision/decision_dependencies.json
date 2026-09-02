@@ -24,6 +24,10 @@
     "reportlab": {
       "kind": "infrastructure",
       "policy": "PDF presentation only; it must render supplied evidence classes without creating card, auction, reconstruction or canon decisions."
+    },
+    "sherpa_onnx": {
+      "kind": "model",
+      "policy": "Offline speaker segmentation and anonymous embedding inference only, using the two exact checksum-pinned artifacts; it must not assign real-person identity or make bridge-content or canonical decisions."
     }
   }
 }
