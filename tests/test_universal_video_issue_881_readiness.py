@@ -972,7 +972,7 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     ).read_text(encoding="utf-8")
     assert "exact_sha:" in workflow
     assert "director_go:" in workflow
-    assert "if: ${{ inputs.director_go && github.actor == github.repository_owner && github.repository == 'olegmed1-art/bridge-video-free' }}" in workflow
+    assert "if: ${{ inputs.director_go && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.repository == 'olegmed1-art/bridge-video-free' }}" in workflow
     assert "actions: read" in workflow
     assert "pull-requests: read" in workflow
     assert 'pulls/1062" --jq \'.head.sha\'' in workflow

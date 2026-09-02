@@ -34,7 +34,7 @@ jobs:
           workflow=.github/workflows/issue-881-authoritative-external-evidence.yml
           test "$(grep -Fxc '      director_go:' "$workflow")" -eq 1
           gate_prefix='    if: $'
-          gate_suffix="{{ inputs.director_go && github.actor == github.repository_owner && github.repository == 'olegmed1-art/bridge-video-free' }}"
+          gate_suffix="{{ inputs.director_go && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.repository == 'olegmed1-art/bridge-video-free' }}"
           test "$(grep -Fxc "$gate_prefix$gate_suffix" "$workflow")" -eq 1
           grep -F 'verify_live_gate(){' "$workflow"
           test "$(grep -c '^[[:space:]]*verify_live_gate$' "$workflow")" -eq 2

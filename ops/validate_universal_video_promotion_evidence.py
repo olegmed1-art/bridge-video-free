@@ -69,6 +69,12 @@ def select_authoritative_artifact(
         isinstance(actor, dict) and actor.get("login") == DIRECTOR_LOGIN,
         "evidence run was not dispatched by the Director",
     )
+    triggering_actor = run.get("triggering_actor")
+    _require(
+        isinstance(triggering_actor, dict)
+        and triggering_actor.get("login") == DIRECTOR_LOGIN,
+        "evidence run or rerun was not initiated by the Director",
+    )
     run_id = run.get("id")
     _require(isinstance(run_id, int) and run_id > 0, "invalid workflow run id")
 

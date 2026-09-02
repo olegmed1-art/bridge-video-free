@@ -32,6 +32,7 @@ def _run() -> dict[str, object]:
         "conclusion": "success",
         "head_sha": COMMIT,
         "actor": {"login": VALIDATOR.DIRECTOR_LOGIN},
+        "triggering_actor": {"login": VALIDATOR.DIRECTOR_LOGIN},
         "repository": {"full_name": VALIDATOR.REPOSITORY_FULL_NAME},
     }
 
@@ -124,6 +125,7 @@ def test_selects_only_exact_authoritative_director_run_artifact() -> None:
         ("conclusion", "failure"),
         ("head_sha", "d" * 40),
         ("actor", {"login": "not-the-director"}),
+        ("triggering_actor", {"login": "not-the-director"}),
         ("repository", {"full_name": "other/repository"}),
     ],
 )
