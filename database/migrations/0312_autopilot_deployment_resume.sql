@@ -350,16 +350,16 @@ BEGIN
         proof_hash, proof
     );
 
-    UPDATE autopilot.online_pilot_state
+    UPDATE autopilot.online_pilot_state AS pilot_state
        SET circuit_open = false,
            circuit_reason_code = NULL,
            last_task_id = NULL,
            last_task_key = NULL,
            last_created_at = NULL,
            updated_at = now()
-     WHERE singleton
-       AND circuit_open
-       AND circuit_reason_code = 'ONLINE_STALE_RUNNING';
+     WHERE pilot_state.singleton
+       AND pilot_state.circuit_open
+       AND pilot_state.circuit_reason_code = 'ONLINE_STALE_RUNNING';
     GET DIAGNOSTICS updated_count = ROW_COUNT;
     IF updated_count <> 1 THEN
         RAISE EXCEPTION 'AUTOPILOT_DEPLOYMENT_RESUME_UPDATE_FAILED';
