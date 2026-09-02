@@ -414,7 +414,10 @@ try:
                     count(*)::bigint,
                     extract(epoch FROM current_timestamp)::bigint
                 FROM autopilot.task_status
-                WHERE status IN ('READY', 'RUNNING', 'WAITING_EXTERNAL', 'EVALUATING')
+                WHERE status NOT IN (
+                    'OWNER_REQUIRED', 'FAILED_CLOSED', 'BUDGET_STOP',
+                    'DONE', 'CANCELLED'
+                )
                 """
             )
             row = cur.fetchone()
