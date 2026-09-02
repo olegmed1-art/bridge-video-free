@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -277,6 +278,65 @@ def test_custom_processor_cannot_bypass_live_artifact_readback(monkeypatch):
     assert events == ["retry:UV_RESULT_DRIVE_READBACK_FAILED"]
 
 
+@pytest.mark.parametrize("terminal_failure", [False, True])
+def test_terminal_gate_and_queue_transition_remain_inside_lease_guards(
+    monkeypatch,
+    terminal_failure,
+):
+    patch_source_gate(monkeypatch)
+    state = {"heartbeat": 0, "timeout": 0}
+
+    class TrackingHeartbeat:
+        def __init__(self, *_args, **_kwargs):
+            self.error = None
+
+        def __enter__(self):
+            state["heartbeat"] += 1
+            return self
+
+        def __exit__(self, *_args):
+            state["heartbeat"] -= 1
+
+    @contextmanager
+    def tracking_timeout():
+        state["timeout"] += 1
+        try:
+            yield
+        finally:
+            state["timeout"] -= 1
+
+    def assert_guarded():
+        assert state == {"heartbeat": 1, "timeout": 1}
+
+    def live_gate(*_args, **_kwargs):
+        assert_guarded()
+        if terminal_failure:
+            raise ResultContractError("UV_RESULT_DRIVE_READBACK_FAILED")
+        return {}
+
+    def finish(_dsn, **kwargs):
+        assert_guarded()
+        return {"job_status": kwargs["outcome"]}
+
+    def retry(_dsn, **kwargs):
+        assert_guarded()
+        return {"job_status": "QUEUED", "error_code": kwargs["error_code"]}
+
+    monkeypatch.setattr(neon_worker, "_Heartbeat", TrackingHeartbeat)
+    monkeypatch.setattr(neon_worker, "_processing_timeout", tracking_timeout)
+    monkeypatch.setattr(neon_worker, "verify_terminal_output_live", live_gate)
+    monkeypatch.setattr(neon_worker, "finish_job", finish)
+    monkeypatch.setattr(neon_worker, "retry_job", retry)
+    result = neon_worker.process_claim(
+        "postgres://unused",
+        claim(),
+        "worker-1",
+        processor=lambda _c: {},
+    )
+    assert result["job_status"] == ("QUEUED" if terminal_failure else "REVIEW_READY")
+    assert state == {"heartbeat": 0, "timeout": 0}
+
+
 def test_interrupted_worker_never_finishes(monkeypatch):
     patch_source_gate(monkeypatch)
     events = []
@@ -309,7 +369,7 @@ def test_attestation_exclusive_lock_blocks_worker_claim_path(tmp_path: Path):
 def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     script = (ROOT / "ops/oracle_universal_video_precanary_attest.sh").read_text(encoding="utf-8")
     run_image = script[
-        script.index("run_image(){") : script.index("verify_image_identity\nprintf", script.index("run_image(){"))
+        script.index("run_image(){") : script.index("verify_image_identity\nassert_quiescent", script.index("run_image(){"))
     ]
     assert 'mask_service_for_window "$SOURCE_SERVICE"' in script
     assert 'mask_service_for_window "$CONTAINER_SERVICE"' in script
@@ -319,13 +379,24 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert 'systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE"' in script
     assert '"$image_id" "$@"' in run_image and '"$image" "$@"' not in run_image
     assert "org.opencontainers.image.revision" in script
+    assert "UNIVERSAL_VIDEO_PREWARM_MODEL=0" in script
+    assert "UNIVERSAL_VIDEO_RUN_SMOKE=0" in script
+    assert 'find "$root_cache" -xdev -mindepth 1 -delete' in script
+
     lock_index = script.index("flock --exclusive --nonblock 9")
     stop_index = script.index(
         'systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE"',
         lock_index,
     )
-    run_index = script.index("run_image python", stop_index)
-    assert lock_index < stop_index < run_index
+    prepare_index = script.index('bash "$PREPARE_SCRIPT"', stop_index)
+    cleanup_index = script.index('find "$root_cache" -xdev -mindepth 1 -delete', stop_index)
+    installer_index = script.index(
+        'bash "$SOURCE_DIR/ops/oracle_universal_video_container_install.sh"',
+        prepare_index,
+    )
+    run_index = script.index("run_image python", installer_index)
+    assert lock_index < stop_index < prepare_index < installer_index < run_index
+    assert stop_index < cleanup_index < installer_index
 
     source_worker = (ROOT / "universal_video/spool_worker.py").read_text(encoding="utf-8")
     neon_worker_source = (ROOT / "universal_video/neon_worker.py").read_text(encoding="utf-8")
@@ -353,8 +424,13 @@ def test_external_precanary_runs_same_repo_and_compares_install_digest():
     assert workflow.count(condition) == 1
     assert workflow.splitlines().count(
         "        if: github.event_name == 'workflow_dispatch'"
-    ) == 3
-    assert "if: github.event_name == 'workflow_dispatch' && always()" in workflow
+    ) == 0
+    assert "        if: always()" in workflow
+    assert "if: github.event_name == 'workflow_dispatch' && always()" not in workflow
+    assert "UNIVERSAL_VIDEO_EXPECTED_SHA='$EXACT_SHA'" in workflow
+    assert "UNIVERSAL_VIDEO_PRECANARY_BUILD_IMAGE=1" in workflow
+    assert "UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE=1" in workflow
+    assert "UNIVERSAL_VIDEO_PREPARE_SCRIPT='$remote_root/prepare.sh'" in workflow
     assert 'attested_digest="$(sed' in workflow
     assert '"$attested_digest" == "$installed_digest"' in workflow
     assert "198-2v3JBlNQobdsPYQQWzrrCqQ1zBZOI" in workflow
