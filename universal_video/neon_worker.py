@@ -13,6 +13,7 @@ from bridge_worker_3_1_free import stable_job_id
 
 from .drive_adapter import access_token, file_metadata
 from .runtime_preflight import validate_video_runtime
+from .terminal_evidence import build_terminal_evidence
 from .video_queue import claim_job, database_url_from_env, finish_job, heartbeat_job, retry_job
 
 APPROVED_PROFILE = "bridge_3_1_free"
@@ -123,8 +124,6 @@ def _stable_environment(claim: Mapping[str, Any]) -> Iterator[None]:
     keys = set(values) | {"BRIDGE_WORKER_DATABASE_URL"}
     previous = {key: os.environ.get(key) for key in keys}
     os.environ.update(values)
-    # The stable algorithm has a legacy optional persistence hook. Queue runs
-    # are explicitly review-only, so that credential is hidden for the call.
     os.environ.pop("BRIDGE_WORKER_DATABASE_URL", None)
     try:
         yield
@@ -152,8 +151,8 @@ def stable_review_processor(claim: Mapping[str, Any]) -> dict[str, Any]:
             or (done.get("original") or {}).get("driveId") != claim["source_file_id"]
         ):
             raise NeonVideoWorkerError("VIDEO_QUEUE_AI_DONE_MISMATCH")
-        if route_drive_job_outputs.main() != 0:
-            raise NeonVideoWorkerError("VIDEO_QUEUE_OUTPUT_ROUTE_FAILED")
+        route_receipt = route_drive_job_outputs.route_outputs()
+        terminal = build_terminal_evidence(claim, done, route_receipt, token)
     master_pdf = done.get("masterPdf") if isinstance(done.get("masterPdf"), dict) else {}
     return {
         "master_pdf_drive_id": master_pdf.get("driveId"),
@@ -162,6 +161,7 @@ def stable_review_processor(claim: Mapping[str, Any]) -> dict[str, Any]:
         "deal_review_pages": master_pdf.get("dealReviewPages"),
         "speech_segment_count": (done.get("speech") or {}).get("segmentCount"),
         "visual_evidence_count": (done.get("visual") or {}).get("evidenceCount"),
+        **terminal,
     }
 
 
