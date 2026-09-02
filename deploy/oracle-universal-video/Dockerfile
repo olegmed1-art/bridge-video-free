@@ -2,7 +2,7 @@
 #
 # The image never carries Drive credentials, source media, results, or a model
 # download. Oracle supplies those only through explicit protected mounts.
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim-bookworm@sha256:ff054eb6f4094b8d8e0af937ac9108bbb8544d1fc69d0dc34d5713d9ffbc0e9e
 
 ARG UNIVERSAL_VIDEO_SOURCE_COMMIT
 LABEL org.opencontainers.image.title="bridge-school-universal-video" \

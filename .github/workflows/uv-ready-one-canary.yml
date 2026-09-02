@@ -1,0 +1,468 @@
+name: Universal Video ready for exactly one canary
+
+on:
+  pull_request:
+    paths:
+      - "universal_video/**"
+      - "deploy/oracle-universal-video/**"
+      - "database/migrations/0056_universal_video_queue.sql"
+      - "database/tests/uv_ready_one_canary_metadata_only.sql"
+      - "tests/test_canary_gate.py"
+      - "tests/test_one_canary.py"
+      - ".github/workflows/uv-ready-one-canary.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: uv-ready-one-canary-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUNTIME_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+  SOURCE_FILE_ID: 198-2v3JBlNQobdsPYQQWzrrCqQ1zBZOI
+  SOURCE_NAME_B64: 0JTQuNCw0L3QsCAxMy5tcDQ=
+  SOURCE_MIME: video/mp4
+  SOURCE_SIZE_BYTES: "696002235"
+  SOURCE_PARENT_ID: 1L3V6xZPF7xjUtBiGKmW5eOD6-OLls5uj
+  PYTHON_BASE: python:3.12-slim-bookworm@sha256:ff054eb6f4094b8d8e0af937ac9108bbb8544d1fc69d0dc34d5713d9ffbc0e9e
+
+jobs:
+  contract-tests:
+    name: Contract tests (no media)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.RUNTIME_SHA }}
+          persist-credentials: false
+
+      - name: Assert exact checked-out SHA
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RUNTIME_SHA"
+          test "${#RUNTIME_SHA}" -eq 40
+          case "$RUNTIME_SHA" in (*[!0-9a-f]*) exit 1;; esac
+
+      - name: Assert immutable Docker base and no floating canary image
+        shell: bash
+        run: |
+          set -euo pipefail
+          first_from="$(awk '/^FROM / {print; exit}' deploy/oracle-universal-video/Dockerfile)"
+          test "$first_from" = "FROM $PYTHON_BASE"
+          grep -F 'ARG UNIVERSAL_VIDEO_SOURCE_COMMIT' deploy/oracle-universal-video/Dockerfile
+          grep -F 'org.opencontainers.image.revision="${UNIVERSAL_VIDEO_SOURCE_COMMIT}"' deploy/oracle-universal-video/Dockerfile
+          ! grep -Eiq 'bridge-school/universal-video:(latest|main)([^A-Za-z0-9_.-]|$)' .github/workflows/uv-ready-one-canary.yml
+
+      - name: Install minimal test dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check --no-cache-dir \
+            pytest 'psycopg[binary]' requests google-auth google-auth-oauthlib
+
+      - name: Compile gates and run fail-closed tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile universal_video/canary_gate.py universal_video/one_canary.py
+          python -m pytest -q tests/test_canary_gate.py tests/test_one_canary.py
+
+      - name: Static proof of immediate source re-verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import ast
+          from pathlib import Path
+
+          tree = ast.parse(Path('universal_video/neon_worker.py').read_text(encoding='utf-8'))
+          target = next(
+              node for node in tree.body
+              if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+              and node.name == 'stable_review_processor'
+          )
+          calls = []
+          for node in ast.walk(target):
+              if isinstance(node, ast.Call):
+                  fn = node.func
+                  name = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else ''
+                  if name in {'verify_claimed_source', 'run'}:
+                      calls.append((getattr(node, 'lineno', 0), name))
+          ordered = [name for _, name in sorted(calls)]
+          assert 'verify_claimed_source' in ordered, ordered
+          assert 'run' in ordered, ordered
+          assert ordered.index('verify_claimed_source') < ordered.index('run'), ordered
+          print({'source_reverification_order': ordered})
+          PY
+
+  recovery-tests:
+    name: Recovery semantics (ephemeral PostgreSQL, no media)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16.4-bookworm
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: uv_recovery
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d uv_recovery"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: uv_recovery
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.RUNTIME_SHA }}
+          persist-credentials: false
+
+      - name: Assert exact checked-out SHA
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$RUNTIME_SHA"
+
+      - name: Apply queue schema and execute rollback-only recovery evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE EXTENSION IF NOT EXISTS pgcrypto;
+          CREATE TABLE IF NOT EXISTS public.schema_migration (
+            migration_key text PRIMARY KEY,
+            applied_at timestamptz NOT NULL DEFAULT now(),
+            checksum text
+          );
+          DO $$
+          DECLARE
+            required_role text;
+          BEGIN
+            FOREACH required_role IN ARRAY ARRAY[
+              'bridge_school_reader',
+              'bridge_school_app',
+              'bridge_school_worker'
+            ] LOOP
+              IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = required_role) THEN
+                EXECUTE format('CREATE ROLE %I NOLOGIN', required_role);
+              END IF;
+            END LOOP;
+          END
+          $$;
+          SQL
+          psql -v ON_ERROR_STOP=1 -f database/migrations/0056_universal_video_queue.sql
+          psql -v ON_ERROR_STOP=1 -f database/tests/uv_ready_one_canary_metadata_only.sql | tee recovery-evidence.log
+          grep -F 'ROLLBACK' recovery-evidence.log
+
+      - name: Record exact-head recovery receipt
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+          receipt = {
+              'runtime_sha': os.environ['RUNTIME_SHA'],
+              'media_canary_started': False,
+              'database_scope': 'ephemeral_postgresql',
+              'transaction_rolled_back': True,
+              'covered': [
+                  'timeout_retry', 'stale_lease', 'fencing', 'duplicate_job',
+                  'interrupted_worker', 'unreadable_output', 'failed_drive_readback',
+              ],
+              'false_pass_allowed': False,
+              'publication_state': 'NOT_PUBLISHED',
+              'canonical_promotion_allowed': False,
+          }
+          with open('recovery-receipt.json', 'w', encoding='utf-8') as handle:
+              json.dump(receipt, handle, ensure_ascii=False, sort_keys=True, indent=2)
+              handle.write('\n')
+          PY
+
+      - name: Upload recovery receipt
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: uv-recovery-${{ env.RUNTIME_SHA }}
+          path: |
+            recovery-receipt.json
+            recovery-evidence.log
+          if-no-files-found: error
+          retention-days: 14
+
+  exact-oracle-image:
+    name: Exact Oracle image and source metadata (no media)
+    needs: [contract-tests, recovery-tests]
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ env.RUNTIME_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Assert exact checked-out SHA and make exact source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RUNTIME_SHA"
+          git archive --format=tar "$RUNTIME_SHA" | gzip -n > "uv-source-$RUNTIME_SHA.tar.gz"
+          sha256sum "uv-source-$RUNTIME_SHA.tar.gz" > "uv-source-$RUNTIME_SHA.tar.gz.sha256"
+
+      - name: Prepare SSH transport
+        shell: bash
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_SSH_KEY: ${{ secrets.ORACLE_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$ORACLE_HOST"
+          test -n "$ORACLE_SSH_KEY"
+          install -d -m 0700 "$HOME/.ssh"
+          printf '%s\n' "$ORACLE_SSH_KEY" > "$HOME/.ssh/uv_oracle_key"
+          chmod 0600 "$HOME/.ssh/uv_oracle_key"
+          ssh-keyscan -H "$ORACLE_HOST" >> "$HOME/.ssh/known_hosts"
+
+      - name: Write no-media Oracle preflight script
+        shell: bash
+        run: |
+          cat > oracle-preflight.sh <<'REMOTE'
+          #!/usr/bin/env bash
+          set -euo pipefail
+
+          runtime_sha="$1"
+          source_file_id="$2"
+          source_name_b64="$3"
+          source_mime="$4"
+          source_size="$5"
+          source_parent="$6"
+          archive="/tmp/uv-source-${runtime_sha}.tar.gz"
+          checksum_file="${archive}.sha256"
+          oauth_path="/opt/bridge-school/universal-video/secrets/google-drive-oauth.json"
+          image_tag="bridge-school/universal-video:${runtime_sha}"
+          source_name="$(printf '%s' "$source_name_b64" | base64 -d)"
+
+          [[ "$runtime_sha" =~ ^[0-9a-f]{40}$ ]]
+          test -s "$archive"
+          test -s "$checksum_file"
+          (cd /tmp && sha256sum -c "$(basename "$checksum_file")")
+          test -s "$oauth_path"
+          docker info >/dev/null
+
+          disk_kb="$(df -Pk /opt | awk 'NR==2 {print $4}')"
+          mem_kb="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)"
+          test "$disk_kb" -ge 12582912
+          test "$mem_kb" -ge 1572864
+
+          work_root="$(mktemp -d /opt/uv-one-canary-preflight.XXXXXX)"
+          trap 'rm -rf "$work_root"' EXIT
+          mkdir -p "$work_root/src" "$work_root/evidence"
+          tar -xzf "$archive" -C "$work_root/src"
+          cd "$work_root/src"
+          test "$(awk '/^FROM / {print; exit}' deploy/oracle-universal-video/Dockerfile)" = \
+            'FROM python:3.12-slim-bookworm@sha256:ff054eb6f4094b8d8e0af937ac9108bbb8544d1fc69d0dc34d5713d9ffbc0e9e'
+
+          docker build \
+            --build-arg "UNIVERSAL_VIDEO_SOURCE_COMMIT=$runtime_sha" \
+            --tag "$image_tag" \
+            --file deploy/oracle-universal-video/Dockerfile \
+            .
+
+          image_digest="$(docker image inspect --format '{{.Id}}' "$image_tag")"
+          [[ "$image_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_tag")" = "$runtime_sha"
+
+          docker run --rm \
+            --entrypoint python \
+            --volume "$work_root/evidence:/evidence" \
+            "$image_tag" - <<'PY'
+          import importlib
+          import json
+          from pathlib import Path
+
+          modules = [
+              'universal_video.neon_worker',
+              'universal_video.canary_gate',
+              'universal_video.one_canary',
+              'bridge_worker_3_1_free',
+              'bridge_runtime_hardening_r25_16',
+              'route_drive_job_outputs',
+              'bridge_vision',
+              'bridge_contracts',
+              'psycopg',
+              'requests',
+              'google.auth',
+          ]
+          imported = []
+          for module in modules:
+              importlib.import_module(module)
+              imported.append(module)
+          migration = Path('/app/database/migrations/0056_universal_video_queue.sql')
+          if not migration.is_file() or migration.stat().st_size <= 0:
+              raise RuntimeError('database migration is absent from exact image')
+          Path('/evidence/import-closure.json').write_text(
+              json.dumps(
+                  {
+                      'imports': imported,
+                      'database_migration': str(migration),
+                      'database_migration_present': True,
+                  },
+                  sort_keys=True,
+                  indent=2,
+              ) + '\n',
+              encoding='utf-8',
+          )
+          PY
+
+          docker run --rm \
+            --entrypoint python \
+            --env GOOGLE_OAUTH_JSON=/run/secrets/google-drive-oauth.json \
+            --volume "$oauth_path:/run/secrets/google-drive-oauth.json:ro" \
+            --volume "$work_root/evidence:/evidence" \
+            "$image_tag" \
+            -m universal_video.canary_gate source-snapshot \
+            --file-id "$source_file_id" \
+            --name "$source_name" \
+            --mime-type "$source_mime" \
+            --size-bytes "$source_size" \
+            --parent-id "$source_parent" \
+            --checksum AUTO \
+            --runtime-sha "$runtime_sha" \
+            --image-digest "$image_digest" \
+            --output /evidence/source-identity.json >/dev/null
+
+          service_state="$(systemctl is-active bridge-school-universal-video.service 2>/dev/null || true)"
+          container_state="$(docker ps -a --filter 'name=universal-video' --format '{{.Names}}|{{.Image}}|{{.Status}}' | paste -sd ';' -)"
+          export runtime_sha image_digest disk_kb mem_kb service_state container_state work_root
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ['work_root']) / 'evidence'
+          source = json.loads((root / 'source-identity.json').read_text(encoding='utf-8'))
+          imports = json.loads((root / 'import-closure.json').read_text(encoding='utf-8'))
+          identity = source['source_identity']
+          required = {'file_id', 'name', 'mime_type', 'size_bytes', 'parent_id', 'checksum'}
+          if not required.issubset(identity) or not identity['checksum']:
+              raise RuntimeError('source identity is incomplete')
+          if source.get('source_media_downloaded') is not False:
+              raise RuntimeError('metadata preflight downloaded source media')
+          evidence = {
+              'runtime_sha': os.environ['runtime_sha'],
+              'image_digest': os.environ['image_digest'],
+              'image_tag': 'bridge-school/universal-video:' + os.environ['runtime_sha'],
+              'runtime_label_verified': True,
+              'source_identity_gate': source,
+              'import_closure': imports,
+              'resource_availability': {
+                  'opt_available_kb_before_build': int(os.environ['disk_kb']),
+                  'memory_available_kb_before_build': int(os.environ['mem_kb']),
+                  'docker_ready': True,
+              },
+              'runtime_state_read_only': {
+                  'service_state': os.environ['service_state'],
+                  'matching_containers': os.environ['container_state'],
+                  'service_mutated': False,
+                  'production_routing_changed': False,
+              },
+              'media_canary_started': False,
+              'batch_released': False,
+              'publication_state': 'NOT_PUBLISHED',
+              'canonical_promotion_allowed': False,
+          }
+          destination = Path('/tmp') / ('uv-ready-one-canary-' + os.environ['runtime_sha'] + '.json')
+          destination.write_text(json.dumps(evidence, ensure_ascii=False, sort_keys=True, indent=2) + '\n', encoding='utf-8')
+          PY
+          sha256sum "/tmp/uv-ready-one-canary-${runtime_sha}.json" > "/tmp/uv-ready-one-canary-${runtime_sha}.json.sha256"
+          REMOTE
+          chmod 0755 oracle-preflight.sh
+
+      - name: Transfer exact source and execute preflight only
+        shell: bash
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_USER: ${{ secrets.ORACLE_USER }}
+        run: |
+          set -euo pipefail
+          test -n "$ORACLE_USER"
+          ssh_args=(-i "$HOME/.ssh/uv_oracle_key" -o BatchMode=yes -o StrictHostKeyChecking=yes)
+          scp "${ssh_args[@]}" \
+            "uv-source-$RUNTIME_SHA.tar.gz" \
+            "uv-source-$RUNTIME_SHA.tar.gz.sha256" \
+            oracle-preflight.sh \
+            "$ORACLE_USER@$ORACLE_HOST:/tmp/"
+          ssh "${ssh_args[@]}" "$ORACLE_USER@$ORACLE_HOST" \
+            "bash /tmp/oracle-preflight.sh '$RUNTIME_SHA' '$SOURCE_FILE_ID' '$SOURCE_NAME_B64' '$SOURCE_MIME' '$SOURCE_SIZE_BYTES' '$SOURCE_PARENT_ID'"
+          scp "${ssh_args[@]}" \
+            "$ORACLE_USER@$ORACLE_HOST:/tmp/uv-ready-one-canary-$RUNTIME_SHA.json" \
+            "$ORACLE_USER@$ORACLE_HOST:/tmp/uv-ready-one-canary-$RUNTIME_SHA.json.sha256" \
+            ./
+
+      - name: Verify exact-image evidence on runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha256sum -c "uv-ready-one-canary-$RUNTIME_SHA.json.sha256"
+          python - <<'PY'
+          import json, os, re
+          path = f"uv-ready-one-canary-{os.environ['RUNTIME_SHA']}.json"
+          payload = json.load(open(path, encoding='utf-8'))
+          assert payload['runtime_sha'] == os.environ['RUNTIME_SHA']
+          assert re.fullmatch(r'sha256:[0-9a-f]{64}', payload['image_digest'])
+          assert payload['runtime_label_verified'] is True
+          assert payload['source_identity_gate']['metadata_only'] is True
+          assert payload['source_identity_gate']['source_media_downloaded'] is False
+          assert payload['media_canary_started'] is False
+          assert payload['batch_released'] is False
+          assert payload['publication_state'] == 'NOT_PUBLISHED'
+          assert payload['canonical_promotion_allowed'] is False
+          assert payload['runtime_state_read_only']['service_mutated'] is False
+          assert payload['runtime_state_read_only']['production_routing_changed'] is False
+          identity = payload['source_identity_gate']['source_identity']
+          for key in ('file_id', 'name', 'mime_type', 'size_bytes', 'parent_id', 'checksum'):
+              assert identity[key]
+          required_imports = {
+              'universal_video.neon_worker', 'bridge_worker_3_1_free',
+              'bridge_runtime_hardening_r25_16', 'route_drive_job_outputs',
+              'bridge_vision', 'bridge_contracts', 'psycopg', 'requests', 'google.auth',
+          }
+          assert required_imports.issubset(payload['import_closure']['imports'])
+          PY
+
+      - name: Upload exact-image and source-identity receipt
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: uv-exact-image-${{ env.RUNTIME_SHA }}
+          path: |
+            uv-ready-one-canary-${{ env.RUNTIME_SHA }}.json
+            uv-ready-one-canary-${{ env.RUNTIME_SHA }}.json.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove transient transfer files only
+        if: always()
+        shell: bash
+        env:
+          ORACLE_HOST: ${{ secrets.ORACLE_HOST }}
+          ORACLE_USER: ${{ secrets.ORACLE_USER }}
+        run: |
+          rm -f "$HOME/.ssh/uv_oracle_key" || true
+          if [ -n "${ORACLE_HOST:-}" ] && [ -n "${ORACLE_USER:-}" ]; then
+            ssh -i "$HOME/.ssh/uv_oracle_key" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+              "$ORACLE_USER@$ORACLE_HOST" \
+              "rm -f '/tmp/uv-source-$RUNTIME_SHA.tar.gz' '/tmp/uv-source-$RUNTIME_SHA.tar.gz.sha256' '/tmp/oracle-preflight.sh'" || true
+          fi
