@@ -163,6 +163,60 @@ def verify_drive_result_contract(
     }
 
 
+def verify_terminal_output_live(
+    claim: Mapping[str, Any],
+    output: Mapping[str, Any],
+    *,
+    token: str,
+    metadata_reader: Callable[[str, str], Mapping[str, Any]] = file_metadata,
+    downloader: Callable[..., Mapping[str, Any]] = download_file,
+) -> dict[str, Any]:
+    """Rebuild terminal evidence from live Drive bytes immediately before finish.
+
+    Structural validation alone is insufficient because a supported/custom
+    processor could return a cached or self-consistent mapping. This gate reads
+    the referenced artifact again and requires the rebuilt manifest and receipt
+    to equal the candidate output exactly.
+    """
+
+    manifest = output.get("artifact_manifest")
+    receipt = output.get("terminal_receipt")
+    if not isinstance(manifest, Mapping) or not isinstance(receipt, Mapping):
+        raise ResultContractError("UV_RESULT_TERMINAL_EVIDENCE_MISSING")
+    candidate_hash = str(output.get("artifact_manifest_sha256") or "").strip().lower()
+    if not _SHA256_RE.fullmatch(candidate_hash) or _canonical_sha256(manifest) != candidate_hash:
+        raise ResultContractError("UV_RESULT_MANIFEST_HASH_MISMATCH")
+    if (
+        output.get("result_mode") != "SHADOW_REVIEW_ONLY"
+        or output.get("canonical_promotion_allowed") is not False
+        or output.get("database_persistence_allowed") is not False
+        or output.get("publication_state") != "NOT_PUBLISHED"
+        or output.get("source_file_id") != claim.get("source_file_id")
+        or output.get("stable_job_key") != claim.get("stable_job_key")
+        or output.get("algorithm_revision") != claim.get("algorithm_revision")
+    ):
+        raise ResultContractError("UV_RESULT_LIFECYCLE_CONTRACT_INVALID")
+
+    drive_id = str(output.get("master_pdf_drive_id") or "")
+    expected_sha256 = str(output.get("master_pdf_sha256") or "").strip().lower()
+    rebuilt = verify_drive_result_contract(
+        claim,
+        {"masterPdf": {"driveId": drive_id, "sha256": expected_sha256}},
+        token=token,
+        metadata_reader=metadata_reader,
+        downloader=downloader,
+    )
+    if (
+        dict(manifest) != rebuilt["artifact_manifest"]
+        or candidate_hash != rebuilt["artifact_manifest_sha256"]
+        or dict(receipt) != rebuilt["terminal_receipt"]
+        or drive_id != rebuilt["master_pdf_drive_id"]
+        or expected_sha256 != rebuilt["master_pdf_sha256"]
+    ):
+        raise ResultContractError("UV_RESULT_TERMINAL_EVIDENCE_MISMATCH")
+    return rebuilt
+
+
 def synthetic_result_contract_self_test() -> dict[str, Any]:
     """Exercise the full verifier without Drive writes or real media."""
 
@@ -196,13 +250,32 @@ def synthetic_result_contract_self_test() -> dict[str, Any]:
         result["_download_md5"] = metadata["md5Checksum"]
         return result
 
+    claim = {
+        "stable_job_key": "0" * 32,
+        "source_file_id": "synthetic-source-file-id",
+        "output_folder_id": "synthetic-output-folder",
+        "algorithm_revision": "3.1-free-r25.16",
+    }
     result = verify_drive_result_contract(
-        {
-            "stable_job_key": "0" * 32,
-            "source_file_id": "synthetic-source-file-id",
-            "output_folder_id": "synthetic-output-folder",
-        },
+        claim,
         {"masterPdf": {"driveId": metadata["id"], "sha256": digest}},
+        token="synthetic-no-network",
+        metadata_reader=read_meta,
+        downloader=read_bytes,
+    )
+    candidate = {
+        "result_mode": "SHADOW_REVIEW_ONLY",
+        "canonical_promotion_allowed": False,
+        "database_persistence_allowed": False,
+        "publication_state": "NOT_PUBLISHED",
+        "source_file_id": claim["source_file_id"],
+        "stable_job_key": claim["stable_job_key"],
+        "algorithm_revision": claim["algorithm_revision"],
+        **result,
+    }
+    verify_terminal_output_live(
+        claim,
+        candidate,
         token="synthetic-no-network",
         metadata_reader=read_meta,
         downloader=read_bytes,
@@ -216,4 +289,5 @@ __all__ = [
     "ResultContractError",
     "synthetic_result_contract_self_test",
     "verify_drive_result_contract",
+    "verify_terminal_output_live",
 ]
