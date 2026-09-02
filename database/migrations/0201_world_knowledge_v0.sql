@@ -108,50 +108,6 @@ BEGIN
   RETURN true;
 END $$;
 
--- The current-active view in 0200 intentionally uses now(). Historical or
--- future replay must instead evaluate both activation intervals at the exact
--- requested time and must keep activation scope distinct from auction context.
-CREATE OR REPLACE FUNCTION bidding.get_school_runtime_rule_catalog_at(
-  p_school_id uuid,
-  p_scope_key text,
-  p_effective_at timestamptz
-)
-RETURNS SETOF bidding.active_school_canon_rule_v
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path=pg_catalog,bidding,public
-AS $$
-SELECT
-  r.school_id,ra.scope_key,ra.runtime_activation_id,ra.valid_from,ra.valid_to,
-  r.rule_id,r.knowledge_version_id,r.rule_key,r.rule_kind,r.auction_pattern,
-  r.hand_constraints,r.public_context_constraints,r.action,r.meaning,
-  r.public_inference,r.alert_semantics,r.forcing_semantics,r.priority,
-  r.specificity,r.explanation,r.condition_schema_version,r.compiled_payload,
-  r.method_version
-FROM bidding.runtime_activation AS ra
-JOIN bidding.rule AS r ON r.rule_id=ra.rule_id
-JOIN public.knowledge_version AS kv ON kv.knowledge_version_id=r.knowledge_version_id
-JOIN public.canon_activation AS ca ON ca.canon_activation_id=ra.canon_activation_id
-WHERE p_effective_at IS NOT NULL
-  AND ra.school_id=p_school_id
-  AND ra.scope_key=p_scope_key
-  AND ra.status='active'
-  AND ra.school_id=r.school_id
-  AND ra.authority_lane='school_canon'
-  AND ra.valid_from<=p_effective_at
-  AND (ra.valid_to IS NULL OR ra.valid_to>p_effective_at)
-  AND r.lifecycle_status='validated'
-  AND kv.authority_class='school_canon'
-  AND ca.status='active'
-  AND ca.knowledge_version_id=r.knowledge_version_id
-  AND ca.scope_key=ra.scope_key
-  AND ca.valid_from<=p_effective_at
-  AND (ca.valid_to IS NULL OR ca.valid_to>p_effective_at)
-  AND bidding.rule_passes_activation_gates(r.rule_id)
-ORDER BY r.priority DESC,r.specificity DESC,r.rule_key;
-$$;
-
 CREATE TABLE bidding.world_intake_batch (
  world_intake_batch_id uuid PRIMARY KEY DEFAULT uuidv7(), school_id uuid NOT NULL REFERENCES public.school(school_id) ON DELETE RESTRICT,
  batch_key text NOT NULL CHECK (btrim(batch_key)<>''), manifest_sha256 text NOT NULL CHECK (manifest_sha256 ~ '^[0-9a-f]{64}$'),
@@ -341,8 +297,6 @@ GRANT UPDATE(question,context_scope,discovered_from_ids,priority,status) ON publ
 GRANT EXECUTE ON FUNCTION bidding.contains_forbidden_hidden_key(jsonb) TO bridge_school_app,bridge_school_worker;
 GRANT EXECUTE ON FUNCTION bidding.contains_nonpublic_card_material(jsonb),bidding.contains_card_token(jsonb),
  bidding.valid_acting_hand(jsonb),bidding.valid_public_robot_payload(text,jsonb) TO bridge_school_app,bridge_school_worker;
-GRANT EXECUTE ON FUNCTION bidding.get_school_runtime_rule_catalog_at(uuid,text,timestamptz)
- TO bridge_school_app,bridge_school_worker;
 REVOKE ALL ON FUNCTION bidding.validate_world_canon_gap_binding() FROM PUBLIC,bridge_school_reader,bridge_school_app,bridge_school_worker;
 REVOKE ALL ON FUNCTION bidding.preserve_bound_knowledge_gap_identity() FROM PUBLIC,bridge_school_reader,bridge_school_app,bridge_school_worker;
 REVOKE ALL ON FUNCTION bidding.validate_world_resolution_trace() FROM PUBLIC,bridge_school_reader,bridge_school_app,bridge_school_worker;

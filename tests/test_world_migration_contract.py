@@ -24,10 +24,6 @@ def test_robot_paths_are_information_firewalled_and_not_canon_activations():
     assert "update public.canon_activation" not in sql.lower()
     assert "ARRAY['S','H','D','C']" in sql
     assert "FOR UPDATE" in sql
-    assert "get_school_runtime_rule_catalog_at" in sql
-    assert "ra.scope_key=p_scope_key" in sql
-    assert "ra.valid_from<=p_effective_at" in sql
-    assert "ca.valid_from<=p_effective_at" in sql
     assert (
         "bidding.valid_public_robot_payload(text,jsonb) TO bridge_school_app,bridge_school_worker"
         in sql

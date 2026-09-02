@@ -10,8 +10,8 @@ from bridge_school_api.bidding_world_resolver import (
 )
 from bridge_school_api.bidding_world_resolver import _gap_fingerprint, _profile_fingerprint, _request_fingerprint
 
-NOW = datetime(2026, 8, 30, tzinfo=timezone.utc)
-PROFILE = ResolutionProfile("natural", "v1", "L1", "auction-1", NOW)
+PROFILE = ResolutionProfile("natural", "v1", "L1", "auction-1")
+NOW = PROFILE.effective_at
 REQUEST = {"acting_seat": "N", "acting_hand": {"cards": ["AC"]},
            "public_auction": {"calls": []}, "public_context": {"dealer": "N"}}
 REQUEST_HASH = _request_fingerprint(**REQUEST)
@@ -124,15 +124,15 @@ def test_postgres_gap_store_commits_then_verifies_on_fresh_connection():
 
 
 def test_incompatible_profile_candidates_are_not_ranked_together():
-    sayc = ResolutionProfile("sayc", "v1", "L1", "auction-1", NOW)
+    sayc = ResolutionProfile("sayc", "v1", "L1", "auction-1")
     result = resolve([], [rule("natural", "external", "1S"),
                           rule("sayc", "external", "1H", profile=sayc, priority=999)])
     assert result.outcome == WORLD_FALLBACK and result.selected.rule_id == "natural"
 
 
 def test_profile_fingerprint_is_not_ambiguous_when_fields_contain_delimiters():
-    left = ResolutionProfile("natural|v1", "L1", "beginner", "auction-1", NOW)
-    right = ResolutionProfile("natural", "v1|L1", "beginner", "auction-1", NOW)
+    left = ResolutionProfile("natural|v1", "L1", "beginner", "auction-1")
+    right = ResolutionProfile("natural", "v1|L1", "beginner", "auction-1")
     assert _profile_fingerprint(left) != _profile_fingerprint(right)
 
 
@@ -142,12 +142,12 @@ def test_request_fingerprint_is_derived_from_visible_request_fields():
 
 
 def test_gap_fingerprint_includes_resolution_profile():
-    changed = ResolutionProfile("natural", "v1", "L2", "auction-1", NOW)
+    changed = ResolutionProfile("natural", "v1", "L2", "auction-1")
     assert _gap_fingerprint(REQUEST_HASH, PROFILE) != _gap_fingerprint(REQUEST_HASH, changed)
 
 
 def test_gap_fingerprint_includes_activation_scope():
-    changed = ResolutionProfile("natural", "v1", "L1", "auction-1", NOW, "advanced")
+    changed = ResolutionProfile("natural", "v1", "L1", "auction-1", "advanced")
     assert _gap_fingerprint(REQUEST_HASH, PROFILE) != _gap_fingerprint(REQUEST_HASH, changed)
 
 
@@ -172,11 +172,16 @@ def test_canon_store_passes_scope_and_effective_time_separately():
         def cursor(self):
             return Cursor()
 
-    profile = ResolutionProfile("natural", "v1", "L1", "auction-1", NOW, "default")
+    profile = ResolutionProfile("natural", "v1", "L1", "auction-1", "default")
     assert PostgresCanonRuleStore(Connection).fetch("school-1", profile) == ()
     sql, params = executed[0]
-    assert "get_school_runtime_rule_catalog_at(%s,%s,%s)" in sql
-    assert params[:3] == ("school-1", "default", NOW)
+    assert "get_school_runtime_rule_catalog(%s,%s)" in sql
+    assert params[:2] == ("school-1", "default")
+
+
+def test_historical_or_future_effective_time_is_not_a_runtime_input():
+    with pytest.raises(TypeError):
+        ResolutionProfile("natural", "v1", "L1", "auction-1", effective_at=NOW)
 
 
 def test_untrusted_canon_store_is_rejected():

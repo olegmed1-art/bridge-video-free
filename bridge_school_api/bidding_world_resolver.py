@@ -20,8 +20,8 @@ class ResolutionProfile:
     system_version: str
     learner_level: str
     auction_context_id: str
-    effective_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     activation_scope: str = "default"
+    effective_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc), init=False)
 
     def __post_init__(self) -> None:
         for value in (self.system_profile, self.system_version, self.learner_level,
@@ -106,8 +106,7 @@ def _winner_or_conflict(rules: tuple[KnowledgeRule, ...]) -> tuple[KnowledgeRule
 def _profile_fingerprint(profile: ResolutionProfile) -> str:
     raw = json.dumps(
         [profile.system_profile, profile.system_version, profile.learner_level,
-         profile.auction_context_id, profile.effective_at.isoformat(),
-         profile.activation_scope],
+         profile.auction_context_id, profile.activation_scope],
         ensure_ascii=False, separators=(",", ":"),
     )
     return hashlib.sha256(raw.encode()).hexdigest()
@@ -143,12 +142,12 @@ class PostgresCanonRuleStore:
                     """SELECT c.rule_id,c.action::text,kv.bidding_system_key,c.method_version,
                               kv.level_scope->>'level',c.auction_pattern->>'context_id',
                               c.valid_from,c.valid_to,c.priority,c.specificity
-                         FROM bidding.get_school_runtime_rule_catalog_at(%s,%s,%s) c
+                         FROM bidding.get_school_runtime_rule_catalog(%s,%s) c
                          JOIN public.knowledge_version kv USING(knowledge_version_id)
                         WHERE kv.bidding_system_key=%s AND c.method_version=%s
                           AND kv.level_scope->>'level'=%s AND c.auction_pattern->>'context_id'=%s
                           AND c.valid_from<=%s AND (c.valid_to IS NULL OR c.valid_to>%s)""",
-                    (school_id, profile.activation_scope, profile.effective_at,
+                    (school_id, profile.activation_scope,
                      profile.system_profile, profile.system_version, profile.learner_level,
                      profile.auction_context_id, profile.effective_at, profile.effective_at),
                 )
