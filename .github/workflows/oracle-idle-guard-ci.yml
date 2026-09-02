@@ -1,0 +1,50 @@
+name: Oracle idle STOP guard CI
+
+on:
+  push:
+    branches:
+      - autopilot/oracle-idle-stop-guard-627-v2
+    paths:
+      - 'assistant_lab/oracle_idle_schema.sql'
+      - 'ops/oracle_idle_state.sh'
+      - 'ops/oracle_idle_stop_guard.py'
+      - 'ops/install_oracle_idle_state_ocarun.sh'
+      - 'tests/test_oracle_idle_stop_guard.py'
+      - '.github/workflows/oracle-idle-guard-ci.yml'
+      - '.github/workflows/oracle-autopilot-staging-finalize.yml'
+  pull_request:
+    paths:
+      - 'assistant_lab/oracle_idle_schema.sql'
+      - 'ops/oracle_idle_state.sh'
+      - 'ops/oracle_idle_stop_guard.py'
+      - 'ops/install_oracle_idle_state_ocarun.sh'
+      - 'tests/test_oracle_idle_stop_guard.py'
+      - '.github/workflows/oracle-idle-guard-ci.yml'
+      - '.github/workflows/oracle-autopilot-staging-finalize.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  fail-closed-guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/oracle_idle_state.sh
+          bash -n ops/install_oracle_idle_state_ocarun.sh
+          python -m py_compile \
+            ops/oracle_idle_stop_guard.py \
+            tests/test_oracle_idle_stop_guard.py
+      - name: Negative and integration tests
+        run: |
+          python -m unittest discover \
+            -s tests \
+            -p 'test_oracle_idle_stop_guard.py' \
+            -v

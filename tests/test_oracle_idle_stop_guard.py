@@ -2,11 +2,17 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
+import tempfile
+import time
+import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "ops" / "oracle_idle_state.sh"
+CLASSIFIER = ROOT / "ops" / "oracle_idle_state.sh"
+AUTHORIZER = ROOT / "ops" / "oracle_idle_stop_guard.py"
 SCHEMA = ROOT / "assistant_lab" / "oracle_idle_schema.sql"
+FINALIZER = ROOT / ".github" / "workflows" / "oracle-autopilot-staging-finalize.yml"
 
 
 def _write_executable(path: Path, body: str) -> None:
@@ -14,91 +20,475 @@ def _write_executable(path: Path, body: str) -> None:
     path.chmod(0o755)
 
 
-def _run_guard(tmp_path: Path, *, python_output: str = "IDLE:jobs=0,research=0,control=0,video=0", lease: str | None = None, video_dsn: str | None = "postgres://video", observer_busy: bool = False) -> str:
-    bindir = tmp_path / "bin"
-    bindir.mkdir()
-    _write_executable(bindir / "systemctl", "#!/bin/sh\necho active\n")
-    _write_executable(bindir / "pgrep", "#!/bin/sh\nexit %d\n" % (0 if observer_busy else 1))
-    fake_python = tmp_path / "python"
-    _write_executable(fake_python, "#!/bin/sh\nprintf '%s\\n' \"$ORACLE_IDLE_TEST_RESULT\"\n")
+class ClassifierHarness:
+    def __init__(self) -> None:
+        self._temp = tempfile.TemporaryDirectory()
+        self.root = Path(self._temp.name)
+        self.bindir = self.root / "bin"
+        self.bindir.mkdir()
+        _write_executable(self.bindir / "systemctl", "#!/bin/sh\necho active\n")
+        _write_executable(self.bindir / "pgrep", "#!/bin/sh\nexit 1\n")
 
-    env_file = tmp_path / "assistant-lab.env"
-    env_file.write_text("ASSISTANT_LAB_DATABASE_URL=postgres://assistant-lab\n", encoding="utf-8")
-    queue_file = tmp_path / "video-queue-dsn"
-    if video_dsn is not None:
-        queue_file.write_text(video_dsn, encoding="utf-8")
-    lease_file = tmp_path / "oracle-host-lease"
-    if lease is not None:
-        lease_file.write_text(lease, encoding="utf-8")
+        self.fake_python = self.root / "python"
+        _write_executable(
+            self.fake_python,
+            (
+                "#!/bin/sh\n"
+                "printf '%s\\n' \"$ORACLE_IDLE_TEST_RESULT\"\n"
+                "if [ -n \"${ORACLE_IDLE_TEST_STDERR:-}\" ]; then "
+                "printf '%s\\n' \"$ORACLE_IDLE_TEST_STDERR\" >&2; fi\n"
+                "exit \"${ORACLE_IDLE_TEST_EXIT_CODE:-0}\"\n"
+            ),
+        )
+        self.env_file = self.root / "assistant-lab.env"
+        self.env_file.write_text(
+            "ASSISTANT_LAB_DATABASE_URL=postgres://assistant-lab\n",
+            encoding="utf-8",
+        )
+        self.queue_file = self.root / "video-queue-dsn"
+        self.queue_file.write_text("postgres://video\n", encoding="utf-8")
+        self.lease_file = self.root / "oracle-host-lease"
+        self.spool = self.root / "spool"
+        self.spool.mkdir()
 
-    env = os.environ.copy()
-    env.update(
-        {
-            "PATH": f"{bindir}:{env.get('PATH', '')}",
-            "ASSISTANT_LAB_ENV_FILE": str(env_file),
-            "ASSISTANT_LAB_PYTHON": str(fake_python),
-            "BRIDGE_VIDEO_QUEUE_DSN_FILE": str(queue_file),
-            "ORACLE_HOST_LEASE_FILE": str(lease_file),
-            "ORACLE_IDLE_TEST_RESULT": python_output,
-        }
+    def close(self) -> None:
+        self._temp.cleanup()
+
+    def run(
+        self,
+        *,
+        result: str = (
+            "IDLE:jobs=0,research=0,research_children=0,"
+            "control=0,operator_lease=0,video=0"
+        ),
+        spool: Path | None = None,
+        observer_busy: bool = False,
+        video_dsn_present: bool = True,
+        env_present: bool = True,
+        lease_text: str | None = None,
+        python_exit_code: int = 0,
+        python_stderr: str = "",
+    ) -> subprocess.CompletedProcess[str]:
+        _write_executable(
+            self.bindir / "pgrep",
+            "#!/bin/sh\nexit %d\n" % (0 if observer_busy else 1),
+        )
+        if video_dsn_present:
+            self.queue_file.write_text("postgres://video\n", encoding="utf-8")
+        else:
+            self.queue_file.unlink(missing_ok=True)
+        if env_present:
+            self.env_file.write_text(
+                "ASSISTANT_LAB_DATABASE_URL=postgres://assistant-lab\n",
+                encoding="utf-8",
+            )
+        else:
+            self.env_file.unlink(missing_ok=True)
+        if lease_text is None:
+            self.lease_file.unlink(missing_ok=True)
+        else:
+            self.lease_file.write_text(lease_text, encoding="utf-8")
+
+        selected_spool = self.spool if spool is None else spool
+        env = os.environ.copy()
+        env.update(
+            {
+                "PATH": f"{self.bindir}:{env.get('PATH', '')}",
+                "ASSISTANT_LAB_ENV_FILE": str(self.env_file),
+                "ASSISTANT_LAB_PYTHON": str(self.fake_python),
+                "BRIDGE_VIDEO_QUEUE_DSN_FILE": str(self.queue_file),
+                "ORACLE_HOST_LEASE_FILE": str(self.lease_file),
+                "ORACLE_IDLE_REQUIRED_LOCAL_SPOOLS": str(selected_spool),
+                "ORACLE_IDLE_TEST_RESULT": result,
+                "ORACLE_IDLE_TEST_EXIT_CODE": str(python_exit_code),
+                "ORACLE_IDLE_TEST_STDERR": python_stderr,
+            }
+        )
+        return subprocess.run(
+            ["bash", str(CLASSIFIER)],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+
+def _proof_text(
+    state: str,
+    *,
+    started: int | None = None,
+    observed: int | None = None,
+    reason: str = "all_sources_proved_empty",
+) -> str:
+    now = int(time.time())
+    observed = now if observed is None else observed
+    started = observed - 1 if started is None else started
+    return (
+        "ORACLE_IDLE_CONTRACT_VERSION=2\n"
+        f"ORACLE_IDLE_STARTED_AT_EPOCH={started}\n"
+        f"ORACLE_IDLE_OBSERVED_AT_EPOCH={observed}\n"
+        f"ORACLE_IDLE_REASON={reason}\n"
+        f"ORACLE_IDLE_STATE={state}\n"
     )
-    return subprocess.run(
-        ["bash", str(SCRIPT)],
-        check=True,
-        capture_output=True,
-        text=True,
-        env=env,
-    ).stdout
 
 
-def test_schema_counts_every_nonterminal_research_stage() -> None:
-    sql = SCHEMA.read_text(encoding="utf-8")
-    assert "status IN ('QUEUED', 'RUNNING')" in sql
-    assert "stage IN ('QUEUED', 'ACCEPTED', 'RUNNING', 'CHECKPOINTED', 'VALIDATING')" in sql
-    assert "assistant_lab.control_command" in sql
+def _run_authorizer(
+    proof_text: str | None,
+    *,
+    max_age: int = 30,
+    max_duration: int = 30,
+) -> subprocess.CompletedProcess[str]:
+    with tempfile.TemporaryDirectory() as tmp:
+        proof = Path(tmp) / "proof.txt"
+        if proof_text is not None:
+            proof.write_text(proof_text, encoding="utf-8")
+        return subprocess.run(
+            [
+                sys.executable,
+                str(AUTHORIZER),
+                "--proof",
+                str(proof),
+                "--max-age-seconds",
+                str(max_age),
+                "--max-duration-seconds",
+                str(max_duration),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
 
 
-def test_idle_requires_all_database_families_idle(tmp_path: Path) -> None:
-    out = _run_guard(tmp_path)
-    assert "ORACLE_IDLE_STATE=IDLE" in out
+class OracleIdleClassifierTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.harness = ClassifierHarness()
+
+    def tearDown(self) -> None:
+        self.harness.close()
+
+    def assert_state(self, output: str, state: str) -> None:
+        lines = output.splitlines()
+        self.assertEqual(5, len(lines), output)
+        self.assertEqual("ORACLE_IDLE_CONTRACT_VERSION=2", lines[0])
+        self.assertRegex(lines[1], r"^ORACLE_IDLE_STARTED_AT_EPOCH=[0-9]+$")
+        self.assertRegex(lines[2], r"^ORACLE_IDLE_OBSERVED_AT_EPOCH=[0-9]+$")
+        self.assertRegex(lines[3], r"^ORACLE_IDLE_REASON=[A-Za-z0-9_./,:=+-]+$")
+        self.assertEqual(f"ORACLE_IDLE_STATE={state}", lines[4])
+
+    def test_all_sources_proved_empty_is_idle(self) -> None:
+        completed = self.harness.run()
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assert_state(completed.stdout, "IDLE")
+
+    # Required negative family 1: assistant_lab.job.
+    def test_assistant_lab_job_queued_claimed_or_running_is_busy(self) -> None:
+        completed = self.harness.run(
+            result=(
+                "BUSY:jobs=1,research=0,research_children=0,"
+                "control=0,operator_lease=0,video=0"
+            )
+        )
+        self.assert_state(completed.stdout, "BUSY")
+
+    # Required negative family 2: assistant_lab.control_command.
+    def test_control_command_active_is_busy(self) -> None:
+        completed = self.harness.run(
+            result=(
+                "BUSY:jobs=0,research=0,research_children=0,"
+                "control=1,operator_lease=0,video=0"
+            )
+        )
+        self.assert_state(completed.stdout, "BUSY")
+
+    # Required negative family 3: assistant_lab.research_job.
+    def test_research_job_nonterminal_is_busy(self) -> None:
+        completed = self.harness.run(
+            result=(
+                "BUSY:jobs=0,research=1,research_children=0,"
+                "control=0,operator_lease=0,video=0"
+            )
+        )
+        self.assert_state(completed.stdout, "BUSY")
+
+    def test_active_research_child_work_is_busy(self) -> None:
+        completed = self.harness.run(
+            result=(
+                "BUSY:jobs=0,research=0,research_children=1,"
+                "control=0,operator_lease=0,video=0"
+            )
+        )
+        self.assert_state(completed.stdout, "BUSY")
+
+    # Required negative family 4: Universal Video queue.
+    def test_universal_video_active_queue_is_busy(self) -> None:
+        completed = self.harness.run(
+            result=(
+                "BUSY:jobs=0,research=0,research_children=0,"
+                "control=0,operator_lease=0,video=1"
+            )
+        )
+        self.assert_state(completed.stdout, "BUSY")
+
+    # Required negative family 5: local spool.
+    def test_local_spool_with_work_is_busy(self) -> None:
+        (self.harness.spool / "queued-work.json").write_text(
+            "{}\n", encoding="utf-8"
+        )
+        completed = self.harness.run()
+        self.assertIn(
+            "ORACLE_IDLE_REASON=local_spool_has_work", completed.stdout
+        )
+        self.assert_state(completed.stdout, "BUSY")
+
+    # Required negative family 6: operator/maintenance lease.
+    def test_bounded_host_operator_lease_is_busy(self) -> None:
+        expiry = int(time.time()) + 300
+        completed = self.harness.run(
+            lease_text=f"expires_at_epoch={expiry}\n"
+        )
+        self.assertIn("ORACLE_IDLE_REASON=host_lease_active", completed.stdout)
+        self.assert_state(completed.stdout, "BUSY")
+
+    def test_database_operator_or_maintenance_lease_is_busy(self) -> None:
+        completed = self.harness.run(
+            result=(
+                "BUSY:jobs=0,research=0,research_children=0,"
+                "control=0,operator_lease=1,video=0"
+            )
+        )
+        self.assert_state(completed.stdout, "BUSY")
+
+    # Required negative family 7: stale telemetry.
+    def test_stale_host_lease_telemetry_is_unknown(self) -> None:
+        completed = self.harness.run(
+            lease_text="expires_at_epoch=1000000000\n"
+        )
+        self.assertIn("ORACLE_IDLE_REASON=host_lease_stale", completed.stdout)
+        self.assert_state(completed.stdout, "UNKNOWN")
+
+    def test_stale_database_snapshot_is_unknown(self) -> None:
+        completed = self.harness.run(
+            result="UNKNOWN:assistant_lab_telemetry_stale"
+        )
+        self.assertIn(
+            "ORACLE_IDLE_REASON=assistant_lab_telemetry_stale",
+            completed.stdout,
+        )
+        self.assert_state(completed.stdout, "UNKNOWN")
+
+    # Required negative family 8: missing telemetry.
+    def test_missing_universal_video_telemetry_is_unknown(self) -> None:
+        completed = self.harness.run(video_dsn_present=False)
+        self.assertIn(
+            "ORACLE_IDLE_REASON=video_queue_dsn_unavailable",
+            completed.stdout,
+        )
+        self.assert_state(completed.stdout, "UNKNOWN")
+
+    def test_missing_local_spool_telemetry_is_unknown(self) -> None:
+        missing = self.harness.root / "missing-spool"
+        completed = self.harness.run(spool=missing)
+        self.assertIn(
+            "ORACLE_IDLE_REASON=local_spool_unavailable",
+            completed.stdout,
+        )
+        self.assert_state(completed.stdout, "UNKNOWN")
+
+    def test_unavailable_database_is_unknown(self) -> None:
+        completed = self.harness.run(
+            result="UNKNOWN:database_check_failed"
+        )
+        self.assertIn(
+            "ORACLE_IDLE_REASON=database_check_failed", completed.stdout
+        )
+        self.assert_state(completed.stdout, "UNKNOWN")
+
+    def test_database_classifier_nonzero_after_idle_text_is_unknown(self) -> None:
+        completed = self.harness.run(
+            result=(
+                "IDLE:jobs=0,research=0,research_children=0,"
+                "control=0,operator_lease=0,video=0"
+            ),
+            python_exit_code=7,
+        )
+        self.assertIn(
+            "ORACLE_IDLE_REASON=database_classifier_failed",
+            completed.stdout,
+        )
+        self.assert_state(completed.stdout, "UNKNOWN")
+
+    def test_database_classifier_stderr_after_idle_text_is_unknown(self) -> None:
+        completed = self.harness.run(
+            result=(
+                "IDLE:jobs=0,research=0,research_children=0,"
+                "control=0,operator_lease=0,video=0"
+            ),
+            python_stderr="partial telemetry failure",
+        )
+        self.assertIn(
+            "ORACLE_IDLE_REASON=database_classifier_stderr",
+            completed.stdout,
+        )
+        self.assert_state(completed.stdout, "UNKNOWN")
+
+    def test_database_classifier_mixed_lines_are_unknown(self) -> None:
+        completed = self.harness.run(
+            result=(
+                "IDLE:jobs=0,research=0,research_children=0,"
+                "control=0,operator_lease=0,video=0\\n"
+                "UNKNOWN:database_check_failed"
+            )
+        )
+        self.assertIn(
+            "ORACLE_IDLE_REASON=invalid_database_classifier_output",
+            completed.stdout,
+        )
+        self.assert_state(completed.stdout, "UNKNOWN")
+
+    def test_unbounded_host_lease_is_unknown(self) -> None:
+        expiry = int(time.time()) + 172800
+        completed = self.harness.run(
+            lease_text=f"expires_at_epoch={expiry}\n"
+        )
+        self.assertIn(
+            "ORACLE_IDLE_REASON=host_lease_unbounded",
+            completed.stdout,
+        )
+        self.assert_state(completed.stdout, "UNKNOWN")
 
 
-def test_active_database_family_is_busy(tmp_path: Path) -> None:
-    out = _run_guard(tmp_path, python_output="BUSY:jobs=0,research=1,control=0,video=0")
-    assert "ORACLE_IDLE_STATE=BUSY" in out
+class OracleStopAuthorizerTests(unittest.TestCase):
+    def assert_forbidden(
+        self, completed: subprocess.CompletedProcess[str], reason: str
+    ) -> None:
+        self.assertNotEqual(0, completed.returncode)
+        self.assertEqual(
+            (
+                "ORACLE_STOP_AUTHORIZED=NO\n"
+                f"ORACLE_STOP_AUTHORIZATION_REASON={reason}\n"
+            ),
+            completed.stdout,
+        )
+
+    def test_fresh_exact_idle_is_the_only_allowed_proof(self) -> None:
+        completed = _run_authorizer(_proof_text("IDLE"))
+        self.assertEqual(0, completed.returncode, completed.stderr)
+        self.assertEqual(
+            (
+                "ORACLE_STOP_AUTHORIZED=YES\n"
+                "ORACLE_STOP_AUTHORIZATION_REASON=fresh_exact_idle\n"
+            ),
+            completed.stdout,
+        )
+
+    def test_busy_forbids_stop(self) -> None:
+        self.assert_forbidden(
+            _run_authorizer(_proof_text("BUSY")),
+            "state_busy_forbids_stop",
+        )
+
+    # Explicit required invariant: UNKNOWN -> STOP forbidden.
+    def test_unknown_forbids_stop(self) -> None:
+        self.assert_forbidden(
+            _run_authorizer(_proof_text("UNKNOWN")),
+            "state_unknown_forbids_stop",
+        )
+
+    def test_stale_proof_forbids_stop(self) -> None:
+        old = int(time.time()) - 120
+        self.assert_forbidden(
+            _run_authorizer(
+                _proof_text("IDLE", started=old - 1, observed=old)
+            ),
+            "proof_stale",
+        )
+
+    def test_missing_proof_forbids_stop(self) -> None:
+        self.assert_forbidden(
+            _run_authorizer(None),
+            "proof_missing_or_unreadable",
+        )
+
+    def test_missing_line_forbids_stop(self) -> None:
+        partial = "\n".join(_proof_text("IDLE").splitlines()[:-1]) + "\n"
+        self.assert_forbidden(
+            _run_authorizer(partial),
+            "proof_line_count_invalid",
+        )
+
+    def test_partially_successful_mixed_output_forbids_stop(self) -> None:
+        mixed = _proof_text("IDLE") + "ORACLE_IDLE_STATE=UNKNOWN\n"
+        self.assert_forbidden(
+            _run_authorizer(mixed),
+            "proof_line_count_invalid",
+        )
+
+    def test_extra_output_forbids_stop(self) -> None:
+        extra = "diagnostic\n" + _proof_text("IDLE")
+        self.assert_forbidden(
+            _run_authorizer(extra),
+            "proof_line_count_invalid",
+        )
+
+    def test_long_running_probe_forbids_stop(self) -> None:
+        now = int(time.time())
+        self.assert_forbidden(
+            _run_authorizer(
+                _proof_text("IDLE", started=now - 60, observed=now),
+                max_duration=30,
+            ),
+            "proof_duration_exceeded",
+        )
 
 
-def test_missing_video_telemetry_is_unknown(tmp_path: Path) -> None:
-    out = _run_guard(tmp_path, video_dsn=None)
-    assert "ORACLE_IDLE_REASON=video_queue_dsn_unavailable" in out
-    assert "ORACLE_IDLE_STATE=UNKNOWN" in out
+class StaticCoverageAndConsumerTests(unittest.TestCase):
+    def test_snapshot_covers_every_required_database_family(self) -> None:
+        sql = SCHEMA.read_text(encoding="utf-8")
+        self.assertIn(
+            "status IN ('QUEUED', 'CLAIMED', 'RUNNING')", sql
+        )
+        self.assertIn(
+            "'QUEUED', 'ACCEPTED', 'RUNNING', 'CHECKPOINTED', 'VALIDATING'",
+            sql,
+        )
+        self.assertIn("active_research_child_jobs", sql)
+        self.assertIn("assistant_lab.control_command", sql)
+        self.assertIn("assistant_lab.operator_maintenance_lease", sql)
+        self.assertIn("stale_operator_maintenance_leases", sql)
+
+    def test_universal_video_statuses_are_exactly_covered(self) -> None:
+        script = CLASSIFIER.read_text(encoding="utf-8")
+        self.assertIn(
+            "status IN ('PENDING_CANARY', 'QUEUED', 'LEASED')",
+            script,
+        )
+
+    def test_stop_consumer_uses_exact_authorizer_not_raw_idle_grep(self) -> None:
+        workflow = FINALIZER.read_text(encoding="utf-8")
+        self.assertNotIn("grep -Fx 'ORACLE_IDLE_STATE=IDLE'", workflow)
+        authorizer = workflow.index(
+            "authorization=\"$(python3 ops/oracle_idle_stop_guard.py"
+        )
+        exact_yes = workflow.index(
+            "ORACLE_STOP_AUTHORIZED=YES", authorizer
+        )
+        stop = workflow.index(
+            "oci compute instance action --instance-id "
+            "\"$OCI_INSTANCE_OCID\" --action STOP"
+        )
+        self.assertLess(authorizer, exact_yes)
+        self.assertLess(exact_yes, stop)
+        self.assertIn("idle_stderr", workflow)
+        self.assertNotIn("schedule:", workflow)
+
+    def test_no_stop_command_exists_in_classifier_or_authorizer(self) -> None:
+        combined = (
+            CLASSIFIER.read_text(encoding="utf-8")
+            + AUTHORIZER.read_text(encoding="utf-8")
+        )
+        self.assertNotIn("oci compute instance action", combined)
+        self.assertNotIn("gcloud compute instances stop", combined)
 
 
-def test_observer_experiment_is_busy(tmp_path: Path) -> None:
-    out = _run_guard(tmp_path, observer_busy=True)
-    assert "ORACLE_IDLE_REASON=observer_experiment_process" in out
-    assert "ORACLE_IDLE_STATE=BUSY" in out
-
-
-def test_live_operator_lease_is_busy(tmp_path: Path) -> None:
-    out = _run_guard(tmp_path, lease="expires_at_epoch=4102444800\n")
-    assert "ORACLE_IDLE_REASON=host_lease_active" in out
-    assert "ORACLE_IDLE_STATE=BUSY" in out
-
-
-def test_stale_operator_lease_fails_closed(tmp_path: Path) -> None:
-    out = _run_guard(tmp_path, lease="expires_at_epoch=1000000000\n")
-    assert "ORACLE_IDLE_REASON=host_lease_stale" in out
-    assert "ORACLE_IDLE_STATE=UNKNOWN" in out
-
-
-def test_malformed_operator_lease_fails_closed(tmp_path: Path) -> None:
-    out = _run_guard(tmp_path, lease="not-a-lease\n")
-    assert "ORACLE_IDLE_REASON=host_lease_invalid" in out
-    assert "ORACLE_IDLE_STATE=UNKNOWN" in out
-
-
-def test_database_failure_is_unknown(tmp_path: Path) -> None:
-    out = _run_guard(tmp_path, python_output="UNKNOWN:database_check_failed")
-    assert "ORACLE_IDLE_REASON=database_check_failed" in out
-    assert "ORACLE_IDLE_STATE=UNKNOWN" in out
+if __name__ == "__main__":
+    unittest.main()
