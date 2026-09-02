@@ -227,7 +227,7 @@
           "minimum_independent_assurance_I2"
         ],
         "on_missing_or_stale_evidence": "FAIL_CLOSED_NO_PROMOTION",
-        "on_canon_conflict": "RETURN_CANON_CONFLICT_NO_ACTION_WORLD_NOT_CALLED",
+        "on_canon_conflict": "RETURN_CANON_CONFLICT_NO_ACTION_NO_SCHOOL_ANSWER_WORLD_NOT_CALLED",
         "silent_promotion_allowed": false
       },
       "catalog_counts_verification": "UNVERIFIED_IMMUTABLE_EXPORT_UNAVAILABLE",
@@ -307,7 +307,7 @@
       "mutable_catalog_id_without_revision_and_sha256_never_authorizes_staging_or_activation",
       "rejected_course_notes_remain_quarantined_across_batches_without_exact_canon_owner_reversal",
       "world_promotion_rejects_non_owner_approval_and_requires_exact_semantic_diff_version_provenance_and_tests",
-      "canon_conflict_returns_CANON_CONFLICT_with_no_action_and_WORLD_not_called"
+      "canon_conflict_returns_CANON_CONFLICT_with_no_action_no_School_answer_and_WORLD_not_called"
     ]
   }
 }
