@@ -1,0 +1,117 @@
+name: Autopilot Universal Video P1 bounded registration v3
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths:
+      - '.github/workflows/autopilot-uv-p1-register-v3.yml'
+      - 'ops/autopilot/register_uv_p1_runtime.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autopilot-universal-video-p1-registration-v3
+  cancel-in-progress: false
+
+jobs:
+  register:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    environment: database-production
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      PROJECT_ID: misty-poetry-18012774
+      TEMP_BRANCH_ID: br-still-tooth-b1ilkfcj
+      PRODUCTION_BRANCH_ID: br-wispy-lab-b1rq54of
+      TEMP_ENDPOINT_ID: ep-floral-field-b1pjs2of
+    steps:
+      - name: Checkout exact Autopilot source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Validate bounded registration source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m py_compile ops/autopilot/register_uv_p1_runtime.py
+          grep -F 'autopilot.register_approved_uv_p1_ci' ops/autopilot/register_uv_p1_runtime.py >/dev/null
+          grep -F 'PRODUCTION_DATABASE_CONTACTED=NO' ops/autopilot/register_uv_p1_runtime.py >/dev/null
+          ! grep -Eiq 'video[_ -]?execution=true|drive[_ -]?write=true|systemctl +(stop|restart)|shutdown|reboot' \
+            ops/autopilot/register_uv_p1_runtime.py
+          echo 'AUTOPILOT_UV_P1_SOURCE_CONTRACT=PASS'
+
+      - name: Register and observe through runtime-only ingress
+        id: register
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$TEMP_BRANCH_ID" != "$PRODUCTION_BRANCH_ID" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          known="$RUNNER_TEMP/known_hosts"
+          log="$RUNNER_TEMP/uv-p1-registration.log"
+          printf '%s\n' "$SSH_KEY_ORACLE" | tr -d '\r' > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          set +e
+          ssh -i "$key" \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 \
+            "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env PROJECT_ID='$PROJECT_ID' TEMP_BRANCH_ID='$TEMP_BRANCH_ID' PRODUCTION_BRANCH_ID='$PRODUCTION_BRANCH_ID' TEMP_ENDPOINT_ID='$TEMP_ENDPOINT_ID' /opt/bridge-school/school-autopilot/.venv/bin/python -" \
+            < ops/autopilot/register_uv_p1_runtime.py | tee "$log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          receipt="$(sed -n 's/^UV_P1_REGISTRATION_RECEIPT=//p' "$log" | tail -n1)"
+          if [[ -n "$receipt" ]]; then
+            printf '%s\n' "$receipt" | jq -e \
+              '.result == "PASS" and .task_count == 3 and
+               .real_video_execution == false and .drive_write == false and
+               .oracle_lifecycle_action == false and
+               .production_database_contacted == false and
+               .production_mutation == false' \
+              > uv-p1-registration-receipt.json
+          else
+            jq -n \
+              --arg result 'FAIL' \
+              --argjson exit_code "$rc" \
+              --arg head_sha "$GITHUB_SHA" \
+              '{gate:"AUTOPILOT_UV_P1_DURABLE_REGISTRATION",result:$result,exit_code:$exit_code,workflow_head_sha:$head_sha,real_video_execution:false,drive_write:false,oracle_lifecycle_action:false,production_mutation:false}' \
+              > uv-p1-registration-receipt.json
+          fi
+          exit "$rc"
+
+      - name: Upload retained bounded receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: autopilot-uv-p1-registration-${{ github.run_id }}-${{ github.run_attempt }}
+          path: uv-p1-registration-receipt.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish bounded summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '### Universal Video P1 Autopilot registration v3'
+            echo '- target: temporary Neon endpoint `ep-floral-field-b1pjs2of` only'
+            echo '- bounded ingress: `autopilot.register_approved_uv_p1_ci(text)`'
+            echo '- observation: exact replay of the same SECURITY DEFINER ingress'
+            echo '- direct Autopilot table reads: `NO`'
+            echo '- migration applied by this run: `NO`'
+            echo '- production database contacted: `NO`'
+            echo '- real media execution: `NO`'
+            echo '- Drive write: `NO`'
+            echo '- Oracle lifecycle action: `NO`'
+          } >> "$GITHUB_STEP_SUMMARY"
