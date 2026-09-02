@@ -45,33 +45,68 @@ jobs:
               'required spool declaration',
           )
 
-          old = '''  value="${matches[0]#${key}=}"
-          if [[ -z "$value" || "$value" == *$'\\r'* ]]; then
-            mark_unknown "${source}_dsn_empty_or_invalid"
-            return 1
-          fi
-          printf -v "$destination" '%s' "$value"
-          return 0
-          }'''
-          new = '''  value="${matches[0]#${key}=}"
-          first="${value:0:1}"
-          last="${value: -1}"
-          if [[ "$first" == \\" || "$first" == \\' || "$last" == \\" || "$last" == \\' ]]; then
-            if [[ "$first" == "$last" ]] && { [[ "$first" == \\" ]] || [[ "$first" == \\' ]]; } && (( ${#value} >= 2 )); then
-              value="${value:1:${#value}-2}"
-            else
-              mark_unknown "${source}_dsn_quote_invalid"
+          start = s.find('read_single_assignment() {')
+          end_marker = '\n}\n\nassistant_dsn=""'
+          end = s.find(end_marker, start)
+          if start < 0 or end < 0:
+              raise SystemExit('env parser function boundaries not found')
+          end += 2
+          new_function = r'''read_single_assignment() {
+            local path="$1"
+            local key="$2"
+            local source="$3"
+            local destination="$4"
+            local matches_text=""
+            local grep_rc=0
+            local value=""
+            local first=""
+            local last=""
+            local -a matches=()
+
+            printf -v "$destination" '%s' ''
+            if [[ ! -f "$path" || -L "$path" || ! -r "$path" ]]; then
+              mark_unknown "${source}_env_unavailable"
               return 1
             fi
-          fi
-          if [[ -z "$value" || "$value" == *$'\\r'* || "$value" == *$'\\n'* ]]; then
-            mark_unknown "${source}_dsn_empty_or_invalid"
-            return 1
-          fi
-          printf -v "$destination" '%s' "$value"
-          return 0
+
+            set +e
+            matches_text="$(grep -E "^${key}=" "$path" 2>/dev/null)"
+            grep_rc=$?
+            set -e
+            if (( grep_rc == 1 )); then
+              mark_unknown "${source}_dsn_missing"
+              return 1
+            elif (( grep_rc != 0 )); then
+              mark_unknown "${source}_env_unreadable"
+              return 1
+            fi
+
+            mapfile -t matches <<< "$matches_text"
+            if (( ${#matches[@]} != 1 )); then
+              mark_unknown "${source}_dsn_ambiguous"
+              return 1
+            fi
+            value="${matches[0]#${key}=}"
+            first="${value:0:1}"
+            last="${value: -1}"
+            if [[ "$first" == \" || "$first" == \' || "$last" == \" || "$last" == \' ]]; then
+              if [[ "$first" == "$last" ]] && { [[ "$first" == \" ]] || [[ "$first" == \' ]]; } && (( ${#value} >= 2 )); then
+                value="${value:1:${#value}-2}"
+              else
+                mark_unknown "${source}_dsn_quote_invalid"
+                return 1
+              fi
+            fi
+            if [[ -z "$value" || "$value" == *$'\r'* || "$value" == *$'\n'* ]]; then
+              mark_unknown "${source}_dsn_empty_or_invalid"
+              return 1
+            fi
+            printf -v "$destination" '%s' "$value"
+            return 0
           }'''
-          one(old, new, 'env quote normalization')
+          # Dedent the YAML block's incidental indentation without changing shell content.
+          new_function = '\n'.join(line[10:] if line.startswith('          ') else line for line in new_function.splitlines())
+          s = s[:start] + new_function + s[end:]
 
           anchor = '''read_single_assignment "$AUTOPILOT_ENV" 'AUTOPILOT_DATABASE_URL' 'autopilot' autopilot_dsn || true
 
@@ -84,6 +119,8 @@ jobs:
           if [[ -z "$QUEUE_DSN_FILE" || "$QUEUE_DSN_FILE" != /* || "$QUEUE_DSN_FILE" == *'..'* ]]; then
             mark_unknown "video_queue_dsn_path_invalid"
           elif [[ ! -f "$QUEUE_DSN_FILE" || -L "$QUEUE_DSN_FILE" || ! -r "$QUEUE_DSN_FILE" ]]; then'''
+          anchor = '\n'.join(line[10:] if line.startswith('          ') else line for line in anchor.splitlines())
+          insert = '\n'.join(line[10:] if line.startswith('          ') else line for line in insert.splitlines())
           one(anchor, insert, 'video file resolver')
 
           p.write_text(s, encoding='utf-8')
