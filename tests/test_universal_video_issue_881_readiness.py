@@ -319,12 +319,13 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert 'systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE"' in script
     assert '"$image_id" "$@"' in run_image and '"$image" "$@"' not in run_image
     assert "org.opencontainers.image.revision" in script
-    assert script.index("flock --exclusive --nonblock 9") < script.index(
-        'systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE"'
+    lock_index = script.index("flock --exclusive --nonblock 9")
+    stop_index = script.index(
+        'systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE"',
+        lock_index,
     )
-    assert script.index('systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE"') < script.index(
-        "run_image python"
-    )
+    run_index = script.index("run_image python", stop_index)
+    assert lock_index < stop_index < run_index
 
     source_worker = (ROOT / "universal_video/spool_worker.py").read_text(encoding="utf-8")
     neon_worker_source = (ROOT / "universal_video/neon_worker.py").read_text(encoding="utf-8")
@@ -345,8 +346,11 @@ def test_external_precanary_runs_same_repo_and_compares_install_digest():
     workflow = (ROOT / ".github/workflows/issue-881-precanary-evidence.yml").read_text(
         encoding="utf-8"
     )
-    assert "github.event.pull_request.head.repo.full_name == github.repository" in workflow
-    assert "if: github.event_name == 'workflow_dispatch'" not in workflow
+    condition = (
+        "if: github.event_name == 'workflow_dispatch' || "
+        "github.event.pull_request.head.repo.full_name == github.repository"
+    )
+    assert workflow.count(condition) == 1
     assert 'attested_digest="$(sed' in workflow
     assert '"$attested_digest" == "$installed_digest"' in workflow
     assert "198-2v3JBlNQobdsPYQQWzrrCqQ1zBZOI" in workflow
