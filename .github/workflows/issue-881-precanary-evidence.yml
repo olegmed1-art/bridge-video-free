@@ -83,6 +83,7 @@ jobs:
           : > "$RUNNER_TEMP/issue-881-attestation.txt"
 
       - name: Ensure Oracle is running
+        if: github.event_name == 'workflow_dispatch'
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check -q oci-cli
@@ -110,6 +111,7 @@ jobs:
 
       - name: Establish pinned SSH identity
         id: ssh
+        if: github.event_name == 'workflow_dispatch'
         run: |
           set -euo pipefail
           known="$RUNNER_TEMP/known_hosts"
@@ -130,6 +132,7 @@ jobs:
           echo "known=$known" >> "$GITHUB_OUTPUT"
 
       - name: Build exact image and run metadata-only gates under one fence
+        if: github.event_name == 'workflow_dispatch'
         run: |
           set -Eeuo pipefail
           evidence="$RUNNER_TEMP/issue-881-attestation.txt"
@@ -227,7 +230,7 @@ jobs:
           cat "$evidence" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: github.event_name == 'workflow_dispatch' && always()
         with:
           name: issue-881-precanary-${{ env.EXACT_SHA }}
           path: ${{ runner.temp }}/issue-881-attestation.txt
