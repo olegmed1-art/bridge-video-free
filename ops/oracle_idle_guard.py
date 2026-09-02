@@ -2,7 +2,7 @@
 """Fail-closed Oracle idle classifier.
 
 The classifier is deliberately pure: collectors provide a bounded telemetry
-snapshot, and this module decides only BUSY / IDLE / UNKNOWN.  STOP is never
+snapshot, and this module decides only BUSY / IDLE / UNKNOWN. STOP is never
 performed here.
 
 Rules:
@@ -28,12 +28,14 @@ REQUIRED_FAMILIES = (
     "assistant_lab_control_command",
     "assistant_lab_research_job",
     "assistant_lab_research_children",
+    "assistant_lab_resident",
     "universal_video_neon",
     "universal_video_spool",
     "universal_video_resident",
     "ben",
     "bulk",
     "other_allowed_workloads",
+    "observer_external_processes",
     "operator_maintenance_lease",
 )
 
