@@ -652,6 +652,13 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
             '[[ "$active" == inactive && "$enabled" == disabled ]]',
             final_gate,
         )
+        revision_read = workflow.index(
+            "current/SOURCE_REVISION", final_gate
+        )
+        revision_check = workflow.index(
+            '[[ "$staged_revision" == "${{ steps.request.outputs.expected_staged_revision }}" ]]',
+            final_gate,
+        )
         idle_probe = workflow.index(
             "sudo -n /usr/local/sbin/oracle-idle-state", final_gate
         )
@@ -664,10 +671,41 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
             authorizer,
         )
         self.assertLess(active, enabled)
-        self.assertLess(enabled, inactive_check)
+        self.assertLess(enabled, revision_read)
+        self.assertLess(revision_read, inactive_check)
         self.assertLess(inactive_check, idle_probe)
+        self.assertLess(revision_check, idle_probe)
         self.assertLess(idle_probe, authorizer)
         self.assertLess(authorizer, stop)
+
+    def test_instance_power_rechecks_automatic_epoch_after_final_proof(self) -> None:
+        workflow = INSTANCE_POWER.read_text(encoding="utf-8")
+        final_step = workflow.index("Stop exact instance only with IDLE proof")
+        final_probe = workflow.index(
+            "bridge-school-oracle-final-idle-proof-${GITHUB_RUN_ID}", final_step
+        )
+        authorizer = workflow.index(
+            "authorization=\"$(python3 ops/oracle_idle_stop_guard.py", final_probe
+        )
+        epoch = workflow.index("final_epoch_state=", authorizer)
+        paginated = workflow.index("gh api --paginate --slurp", epoch)
+        complete = workflow.index("len(runs)==total", paginated)
+        newer = workflow.index('r.get(\"event\")!=\"pull_request\"', complete)
+        terminal = workflow.index('row.get(\"status\")!=\"completed\"', newer)
+        current = workflow.index('[[ \"$final_epoch_state\" == CURRENT ]]', terminal)
+        stop = workflow.index(
+            "oci compute instance action --instance-id "
+            '"$OCI_INSTANCE_OCID" --action STOP',
+            current,
+        )
+        self.assertLess(final_probe, authorizer)
+        self.assertLess(authorizer, epoch)
+        self.assertLess(epoch, paginated)
+        self.assertLess(paginated, complete)
+        self.assertLess(complete, newer)
+        self.assertLess(newer, terminal)
+        self.assertLess(terminal, current)
+        self.assertLess(current, stop)
 
     def test_instance_power_stop_uses_exact_authorizer(self) -> None:
         workflow = INSTANCE_POWER.read_text(encoding="utf-8")
