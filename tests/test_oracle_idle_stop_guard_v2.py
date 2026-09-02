@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import sys
 from pathlib import Path
 
@@ -149,7 +148,6 @@ def test_unknown_source_blocks_even_when_another_source_is_busy() -> None:
     snapshot = idle_snapshot()
     snapshot["families"]["assistant_lab_job"]["state"] = "BUSY"
     snapshot["families"]["universal_video_neon"]["state"] = "UNKNOWN"
-    # Completeness/freshness/consistency is proved before activity classification.
     assert classify(snapshot, now=NOW).state == "UNKNOWN"
 
 
@@ -195,6 +193,9 @@ def test_sql_snapshot_counts_all_nonterminal_research_stages_and_children() -> N
     assert "active_ben_jobs" in sql
     assert "active_bulk_jobs" in sql
     assert "active_other_jobs" in sql
+    assert "stale_running_jobs" in sql
+    assert "heartbeat_at" in sql
+    assert "p_stale_after_seconds" in sql
     assert "clock_timestamp()" in sql
 
 
@@ -207,9 +208,11 @@ def test_video_queue_nonterminal_states_are_explicit_in_collector() -> None:
 def test_collector_has_local_spool_resident_and_lease_sources() -> None:
     source = (ROOT / "ops" / "oracle_idle_collect.py").read_text(encoding="utf-8")
     assert 'for name in ("inbox", "running")' in source
+    assert "assistant-lab.service" in source
     assert "universal-video.service" in source
     assert "universal-video-container.service" in source
     assert "universal-video-resident-status-v2" in source
+    assert "assistant_lab_stale_running_heartbeat" in source
     assert "operator_lease_stale" in source
 
 
