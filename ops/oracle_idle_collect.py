@@ -154,6 +154,15 @@ def _systemctl_state(service: str) -> str | None:
         return None
 
 
+def _assistant_resident(observed_at: float) -> dict[str, Any]:
+    state = _systemctl_state("assistant-lab.service")
+    if state == "active":
+        return _entry("IDLE", observed_at, service_state=state)
+    if state is None:
+        return _unknown(observed_at, "assistant_lab_service_state_unavailable")
+    return _unknown(observed_at, f"assistant_lab_service_{state}")
+
+
 def _resident(observed_at: float) -> dict[str, Any]:
     source_state = _systemctl_state("universal-video.service")
     container_state = _systemctl_state("universal-video-container.service")
@@ -182,6 +191,36 @@ def _resident(observed_at: float) -> dict[str, Any]:
         return _unknown(observed_at, "resident_status_read_failed")
 
 
+def _process_match(pattern: str) -> bool | None:
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", pattern], capture_output=True, text=True, timeout=5
+        )
+        if result.returncode == 0:
+            return True
+        if result.returncode == 1:
+            return False
+        return None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _external_processes(observed_at: float) -> dict[str, Any]:
+    patterns = {
+        "observer": r"[a]ssistant_lab.*observer.*experiment|[o]racle_assistant_lab_observer.*run",
+        "ben": r"[a]ssistant_lab.*ben_runtime|[b]en.*compute",
+        "bulk": r"[a]ssistant_lab.*bulk|[o]racle.*bulk",
+    }
+    active: list[str] = []
+    for name, pattern in patterns.items():
+        matched = _process_match(pattern)
+        if matched is None:
+            return _unknown(observed_at, f"process_telemetry_unavailable:{name}")
+        if matched:
+            active.append(name)
+    return _entry("BUSY" if active else "IDLE", observed_at, active_process_families=active)
+
+
 def _lease(observed_at: float) -> dict[str, Any]:
     try:
         if not LEASE_FILE.exists() and not LEASE_FILE.is_symlink():
@@ -203,9 +242,11 @@ def _lease(observed_at: float) -> dict[str, Any]:
 def collect() -> dict[str, Any]:
     observed = _now()
     families = _db_snapshot(observed)
+    families["assistant_lab_resident"] = _assistant_resident(observed)
     families["universal_video_neon"] = _video_neon(observed)
     families["universal_video_spool"] = _spool(observed)
     families["universal_video_resident"] = _resident(observed)
+    families["observer_external_processes"] = _external_processes(observed)
     families["operator_maintenance_lease"] = _lease(observed)
     resident = families["universal_video_resident"]
     spool = families["universal_video_spool"]
