@@ -83,14 +83,8 @@ def _canonical_json(value: Any) -> str:
 def _r29_idempotent_upload_wrapper(
     original_upload: Callable[[str, str, str, Any], Any],
 ) -> Callable[[str, str, str, Any], Any]:
-    """Wrap ``io.upload_json`` only for stable r29 status receipt names.
+    """Wrap ``io.upload_json`` only for stable r29 status receipt names."""
 
-    Historical duplicates are not deleted.  If all existing same-named receipts
-    are semantically identical, the newest one is reused.  Any conflicting
-    content under the same stable name is treated as a hard integrity failure.
-    Other JSON uploads (including operational evidence produced by the validated
-    r29 probe) retain their original behavior.
-    """
     def guarded(token: str, parent: str, name: str, payload: Any):
         if not str(name).startswith("R29_IDENTITY_STATUS_"):
             return original_upload(token, parent, name, payload)
@@ -118,6 +112,7 @@ def _r29_idempotent_upload_wrapper(
             "historical_identical_count": len(verified),
         }, ensure_ascii=False))
         return result
+
     return guarded
 
 
@@ -127,10 +122,6 @@ def _run_identity_overlay(token: str) -> dict | None:
         return None
     import bridge_speaker_identity_postprocess as identity_module
 
-    # bridge_speaker_identity_postprocess imports the same run_drive_3_1_free
-    # module object. Temporarily wrap only stable status-receipt writes so the
-    # identity discovery/gate itself still executes on every run and can promote
-    # a previously anonymous lesson if new independent evidence appears.
     original_upload = io.upload_json
     guarded_upload = _r29_idempotent_upload_wrapper(original_upload)
     io.upload_json = guarded_upload
@@ -139,10 +130,6 @@ def _run_identity_overlay(token: str) -> dict | None:
         try:
             return identity_module.run(token)
         except RuntimeError as exc:
-            # A truthful r29 Evidence Gate failure must not erase an otherwise valid
-            # anonymous transcript. The r29 probe has already written its BLOCKED
-            # receipt before raising this specific error. Configuration/runtime
-            # defects remain hard failures.
             if str(exc).startswith("R29_EVIDENCE_GATE_FAILED:"):
                 result = {
                     "stage": "R29_IDENTITY_OVERLAY",
@@ -158,27 +145,38 @@ def _run_identity_overlay(token: str) -> dict | None:
         identity_module.io.upload_json = original_upload
 
 
-def main() -> int:
+def route_outputs() -> dict[str, Any]:
+    """Route one job and return exact artifact IDs for terminal readback."""
+
     job_id = os.environ.get("BRIDGE_JOB_ID", "").strip()
     target = os.environ.get("BRIDGE_OUTPUT_FOLDER_ID", "").strip()
     if not job_id:
         raise RuntimeError("BRIDGE_JOB_ID_REQUIRED")
     if not target:
-        print(json.dumps({"stage": "OUTPUT_ROUTE", "job_id": job_id, "status": "NO_TARGET_CONFIGURED"}))
-        return 0
+        return {
+            "stage": "OUTPUT_ROUTE",
+            "job_id": job_id,
+            "status": "NO_TARGET_CONFIGURED",
+            "source_untouched": True,
+            "results": [],
+        }
 
     token = user_oauth_token()
     if not token:
         raise RuntimeError("BLOCKED_ACCESS: Drive OAuth unavailable")
 
-    # On an idempotent repeat, the canonical completion is already in target.
-    # On a fresh run it still sits beside the source until this routing step.
     done_found = _latest_named(token, f"AI_DONE_{job_id}.json", target)
     if done_found is None:
         done_found = _latest_named(token, f"AI_DONE_{job_id}.json")
     if done_found is None:
-        print(json.dumps({"stage": "OUTPUT_ROUTE", "job_id": job_id, "status": "AI_DONE_NOT_FOUND"}))
-        return 0
+        return {
+            "stage": "OUTPUT_ROUTE",
+            "job_id": job_id,
+            "status": "AI_DONE_NOT_FOUND",
+            "target_folder_id": target,
+            "source_untouched": False,
+            "results": [],
+        }
     done_item, done = done_found
     if done.get("status") != "AI_DONE" or done.get("job_id") != job_id:
         raise RuntimeError("OUTPUT_ROUTE_AI_DONE_IDENTITY_MISMATCH")
@@ -211,13 +209,12 @@ def main() -> int:
             raise RuntimeError("OUTPUT_ROUTE_REFUSED_TO_MOVE_SOURCE")
         results.append({"kind": label, "file_id": file_id, "result": _move(token, file_id, target)})
 
-    # Final source read-back proves the master itself was not moved by this operation.
     source = io.meta(token, source_id)
     if target in (source.get("parents") or []):
         raise RuntimeError("OUTPUT_ROUTE_SOURCE_IN_RESULT_FOLDER")
 
     identity = _run_identity_overlay(token)
-    print(json.dumps({
+    return {
         "stage": "OUTPUT_ROUTE",
         "job_id": job_id,
         "status": "ROUTED",
@@ -225,8 +222,13 @@ def main() -> int:
         "source_untouched": True,
         "identity_overlay_status": (identity or {}).get("status") if identity else "NOT_CONFIGURED",
         "results": results,
-    }, ensure_ascii=False))
-    return 0
+    }
+
+
+def main() -> int:
+    receipt = route_outputs()
+    print(json.dumps(receipt, ensure_ascii=False))
+    return 0 if receipt.get("status") in {"ROUTED", "NO_TARGET_CONFIGURED"} else 1
 
 
 if __name__ == "__main__":

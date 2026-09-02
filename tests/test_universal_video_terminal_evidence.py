@@ -1,0 +1,261 @@
+from __future__ import annotations
+
+import hashlib
+import json
+
+import pytest
+
+from universal_video.terminal_evidence import (
+    TerminalEvidenceError,
+    build_terminal_evidence,
+    readback_drive_bytes,
+    validate_terminal_output,
+)
+
+
+SOURCE_ID = "sourcefile0001"
+SOURCE_FOLDER_ID = "sourcefolder01"
+MASTER_ID = "masterpdf00001"
+DONE_ID = "aidonefile0001"
+TARGET_ID = "targetfolder001"
+JOB_ID = "a" * 32
+REVISION = "3.1-free-r25.16"
+SOURCE_CHECKSUM = "md5:" + "1" * 32
+
+
+def _fixture():
+    master_body = b"%PDF-1.4\nsynthetic terminal evidence\n%%EOF\n"
+    done = {
+        "status": "AI_DONE",
+        "job_id": JOB_ID,
+        "algorithmRevision": REVISION,
+        "original": {"driveId": SOURCE_ID},
+        "masterPdf": {
+            "driveId": MASTER_ID,
+            "sha256": hashlib.sha256(master_body).hexdigest(),
+            "pages": 3,
+        },
+    }
+    done_body = json.dumps(
+        done,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    claim = {
+        "source_file_id": SOURCE_ID,
+        "source_name": "lesson-13.mp4",
+        "source_mime_type": "video/mp4",
+        "source_size_bytes": 2_000_000,
+        "source_folder_id": SOURCE_FOLDER_ID,
+        "source_checksum": SOURCE_CHECKSUM,
+        "stable_job_key": JOB_ID,
+        "algorithm_revision": REVISION,
+        "output_folder_id": TARGET_ID,
+    }
+    route = {
+        "stage": "OUTPUT_ROUTE",
+        "status": "ROUTED",
+        "job_id": JOB_ID,
+        "target_folder_id": TARGET_ID,
+        "source_untouched": True,
+        "results": [
+            {"kind": "master_pdf", "file_id": MASTER_ID, "result": "moved"},
+            {"kind": "ai_done", "file_id": DONE_ID, "result": "moved"},
+        ],
+    }
+    objects = {
+        MASTER_ID: {
+            "file_id": MASTER_ID,
+            "name": "MASTER.pdf",
+            "mime_type": "application/pdf",
+            "size_bytes": len(master_body),
+            "parents": [TARGET_ID],
+            "sha256": hashlib.sha256(master_body).hexdigest(),
+            "md5": hashlib.md5(master_body, usedforsecurity=False).hexdigest(),
+            "body": master_body,
+        },
+        DONE_ID: {
+            "file_id": DONE_ID,
+            "name": f"AI_DONE_{JOB_ID}.json",
+            "mime_type": "application/json",
+            "size_bytes": len(done_body),
+            "parents": [TARGET_ID],
+            "sha256": hashlib.sha256(done_body).hexdigest(),
+            "md5": hashlib.md5(done_body, usedforsecurity=False).hexdigest(),
+            "body": done_body,
+        },
+    }
+
+    def readback(file_id, _token, *, max_bytes, retain_body=False):
+        assert len(objects[file_id]["body"]) <= max_bytes
+        result = dict(objects[file_id])
+        if not retain_body:
+            result.pop("body", None)
+        return result
+
+    return claim, done, route, objects, readback
+
+
+def test_build_terminal_evidence_requires_readable_checksums_and_locators():
+    claim, done, route, _objects, readback = _fixture()
+    result = build_terminal_evidence(claim, done, route, "token", readback=readback)
+    assert result["artifact_locators"] == {
+        "master_pdf_drive_id": MASTER_ID,
+        "ai_done_drive_id": DONE_ID,
+    }
+    assert result["manifest"]["publication_state"] == "NOT_PUBLISHED"
+    assert result["manifest"]["canonical_promotion_allowed"] is False
+    assert result["manifest"]["database_persistence_allowed"] is False
+    assert result["manifest"]["source_identity"] == {
+        "file_id": SOURCE_ID,
+        "name": "lesson-13.mp4",
+        "mime_type": "video/mp4",
+        "size_bytes": 2_000_000,
+        "parent_folder_id": SOURCE_FOLDER_ID,
+        "checksum": SOURCE_CHECKSUM,
+    }
+    receipt = result["terminal_receipt"]
+    assert receipt["result_readback_verified"] is True
+    assert receipt["checksum_verified"] is True
+    assert receipt["artifact_count"] == 2
+    assert receipt["canonical_promotion_allowed"] is False
+    assert receipt["publication_state"] == "NOT_PUBLISHED"
+    assert len(receipt["manifest_sha256"]) == 64
+    assert result["terminal_evidence_sha256"] == receipt["evidence_sha256"]
+    validate_terminal_output(claim, result)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "error_code"),
+    [
+        (lambda claim, done, route, objects: route.update(status="AI_DONE_NOT_FOUND"), "UV_TERMINAL_ROUTE_UNVERIFIED"),
+        (lambda claim, done, route, objects: route.update(results=[]), "UV_TERMINAL_LOCATOR_MISSING"),
+        (lambda claim, done, route, objects: objects[MASTER_ID].update(parents=["wrongfolder0001"]), "UV_TERMINAL_RESULT_PARENT_MISMATCH"),
+        (lambda claim, done, route, objects: objects[MASTER_ID].update(sha256="0" * 64), "UV_TERMINAL_MASTER_PDF_CHECKSUM_MISMATCH"),
+        (lambda claim, done, route, objects: objects[DONE_ID].update(body=b"{}"), "UV_TERMINAL_AI_DONE_MISMATCH"),
+        (lambda claim, done, route, objects: objects[DONE_ID].update(mime_type="text/plain"), "UV_TERMINAL_AI_DONE_IDENTITY_MISMATCH"),
+    ],
+)
+def test_terminal_evidence_fails_closed(mutation, error_code):
+    claim, done, route, objects, readback = _fixture()
+    mutation(claim, done, route, objects)
+    with pytest.raises(TerminalEvidenceError) as caught:
+        build_terminal_evidence(claim, done, route, "token", readback=readback)
+    assert caught.value.error_code == error_code
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda result: result.pop("terminal_receipt"),
+        lambda result: result["manifest"].update(publication_state="PUBLISHED"),
+        lambda result: result["terminal_receipt"].update(result_readback_verified=False),
+        lambda result: result["artifact_locators"].update(ai_done_drive_id=MASTER_ID),
+        lambda result: result["manifest"]["source_identity"].update(checksum="md5:" + "2" * 32),
+        lambda result: result.update(terminal_evidence_sha256="0" * 64),
+    ],
+)
+def test_validate_terminal_output_rejects_partial_or_tampered_receipts(mutate):
+    claim, done, route, _objects, readback = _fixture()
+    result = build_terminal_evidence(claim, done, route, "token", readback=readback)
+    mutate(result)
+    with pytest.raises(TerminalEvidenceError):
+        validate_terminal_output(claim, result)
+
+
+def test_terminal_evidence_requires_claimed_source_checksum():
+    claim, done, route, _objects, readback = _fixture()
+    claim["source_checksum"] = None
+    with pytest.raises(TerminalEvidenceError) as caught:
+        build_terminal_evidence(claim, done, route, "token", readback=readback)
+    assert caught.value.error_code == "UV_SOURCE_IDENTITY_INVALID"
+
+
+class _Response:
+    def __init__(self, chunks):
+        self._chunks = chunks
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def raise_for_status(self):
+        return None
+
+    def iter_content(self, _size):
+        yield from self._chunks
+
+
+def _metadata(body):
+    return {
+        "id": MASTER_ID,
+        "name": "MASTER.pdf",
+        "mimeType": "application/pdf",
+        "size": str(len(body)),
+        "parents": [TARGET_ID],
+        "md5Checksum": hashlib.md5(body, usedforsecurity=False).hexdigest(),
+        "sha256Checksum": hashlib.sha256(body).hexdigest(),
+    }
+
+
+def test_readback_drive_bytes_streams_and_matches_metadata():
+    body = b"readback-object"
+
+    def metadata_loader(file_id, token):
+        assert file_id == MASTER_ID and token == "token"
+        return _metadata(body)
+
+    def get(*_args, **_kwargs):
+        return _Response([body[:4], body[4:]])
+
+    result = readback_drive_bytes(
+        MASTER_ID,
+        "token",
+        max_bytes=1024,
+        retain_body=True,
+        metadata_loader=metadata_loader,
+        get=get,
+    )
+    assert result["body"] == body
+    assert result["sha256"] == hashlib.sha256(body).hexdigest()
+    assert result["parents"] == [TARGET_ID]
+
+
+def test_readback_drive_bytes_does_not_retain_large_body_by_default():
+    body = b"large-result-stream"
+    result = readback_drive_bytes(
+        MASTER_ID,
+        "token",
+        max_bytes=1024,
+        metadata_loader=lambda _file_id, _token: _metadata(body),
+        get=lambda *_args, **_kwargs: _Response([body]),
+    )
+    assert "body" not in result
+    assert result["size_bytes"] == len(body)
+    assert result["sha256"] == hashlib.sha256(body).hexdigest()
+
+
+def test_readback_drive_bytes_refuses_declared_size_mismatch():
+    body = b"abc"
+
+    def metadata_loader(_file_id, _token):
+        return {
+            "id": MASTER_ID,
+            "name": "MASTER.pdf",
+            "mimeType": "application/pdf",
+            "size": "4",
+            "parents": [TARGET_ID],
+        }
+
+    with pytest.raises(TerminalEvidenceError) as caught:
+        readback_drive_bytes(
+            MASTER_ID,
+            "token",
+            max_bytes=1024,
+            metadata_loader=metadata_loader,
+            get=lambda *_args, **_kwargs: _Response([body]),
+        )
+    assert caught.value.error_code == "UV_TERMINAL_READBACK_SIZE_MISMATCH"
