@@ -62,6 +62,35 @@ jobs:
           echo "key=$key" >> "$GITHUB_OUTPUT"
           echo "known=$known" >> "$GITHUB_OUTPUT"
 
+      - name: Discover runtime layout read-only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          for unit in assistant-lab.service school-autopilot-shadow.service; do
+            echo "UNIT=$unit"
+            systemctl show "$unit" \
+              --property=FragmentPath \
+              --property=WorkingDirectory \
+              --property=ExecStart \
+              --property=User \
+              --no-pager 2>/dev/null || true
+          done
+          for root in /opt/bridge-school /var/lib/bridge-school /srv/bridge-school /home/ubuntu; do
+            if [[ -d "$root" ]]; then
+              echo "TREE_ROOT=$root"
+              find "$root" -maxdepth 3 -type d -print 2>/dev/null \
+                | sed 's#//*#/#g' \
+                | head -n 250
+            else
+              echo "TREE_ROOT_MISSING=$root"
+            fi
+          done
+          REMOTE
+
       - name: Inventory exact live sources read-only
         shell: bash
         run: |
@@ -128,7 +157,6 @@ jobs:
           check_dir HOST_LEASE_PARENT /run/bridge-school
           check_file HOST_LEASE /run/bridge-school/oracle-host-lease
 
-          # Parse only DSN presence and use values internally; never print them.
           assistant_dsn=''
           autopilot_dsn=''
           video_dsn=''
@@ -173,7 +201,6 @@ jobs:
                           row = cur.fetchone()
                   print(f"DB_{name}=PASS:{','.join(str(x) for x in row)}")
               except Exception as exc:
-                  # Stable class only; never print server error text/DSN.
                   print(f"DB_{name}=FAIL:{type(exc).__name__}")
 
           probe(
