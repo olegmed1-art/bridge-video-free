@@ -122,7 +122,7 @@ BEGIN
   'input_fingerprint',request_hash,'started_at','2026-08-30T00:00:00Z','completed_at','2026-08-30T00:00:01Z',
   'steps',jsonb_build_array(
     jsonb_build_object('seq',1,'event','request','at','2026-08-30T00:00:00Z','status','ok','input_hash',request_hash,'output_hash',repeat('2',64)),
-    jsonb_build_object('seq',2,'event','response','at','2026-08-30T00:00:01Z','status','ok','input_hash',repeat('2',64),'output_hash',repeat('3',64))),
+    jsonb_build_object('seq',2,'event','response','at','2026-08-30T00:00:01Z','status','ok','input_hash',repeat('2',64),'output_hash',encode(digest(raw::text,'sha256'),'hex'))),
   'raw_response_sha256',encode(digest(raw::text,'sha256'),'hex'));
  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
   public_auction,public_context,raw_response,interpretation,confidence,decision_trace)
@@ -137,7 +137,7 @@ BEGIN
  VALUES(s,config,'ROBOT_LIVE_DECISION','N',
   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
   '{"calls":[]}','{}','{"bid":"2H"}','{"bid":"2H"}','high',
-  jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest('{"bid":"2H"}'::jsonb::text,'sha256'),'hex'))));
+  jsonb_set(jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest('{"bid":"2H"}'::jsonb::text,'sha256'),'hex'))),'{steps,1,output_hash}',to_jsonb(encode(digest('{"bid":"2H"}'::jsonb::text,'sha256'),'hex'))));
 
  -- Ordinary convention prose is not mistaken for a holding.
  INSERT INTO bidding.world_robot_decision(school_id,world_robot_configuration_id,decision_mode,acting_seat,acting_hand,
@@ -145,7 +145,7 @@ BEGIN
  VALUES(s,config,'ROBOT_LIVE_DECISION','N',
   '{"cards":["AC","KC","QC","JC","TC","9C","8C","7C","6C","5C","4C","3C","2C"]}',
   '{"calls":[]}','{}','{"meaning":"Stayman standard"}','{"meaning":"Stayman standard"}','high',
-  jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest('{"meaning":"Stayman standard"}'::jsonb::text,'sha256'),'hex'))));
+  jsonb_set(jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest('{"meaning":"Stayman standard"}'::jsonb::text,'sha256'),'hex'))),'{steps,1,output_hash}',to_jsonb(encode(digest('{"meaning":"Stayman standard"}'::jsonb::text,'sha256'),'hex'))));
 
  bad_raw:='{"deal":{"N":[]}}';
  bad_trace:=jsonb_set(trace,'{raw_response_sha256}',to_jsonb(encode(digest(bad_raw::text,'sha256'),'hex')));
