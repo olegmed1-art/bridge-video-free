@@ -7,6 +7,7 @@ available ASR model before starting the resident worker.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import sys
@@ -25,6 +26,11 @@ WRITABLE_ROOT_ENV = (
     "UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE",
 )
 SPOOL_LEAVES = ("inbox", "running", "done", "failed", "results", "progress")
+SPEAKER_SEGMENTATION_MODEL = "pyannote-segmentation-3.0.onnx"
+SPEAKER_EMBEDDING_MODEL = (
+    "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
+)
+MIN_SPEAKER_MODEL_BYTES = 1024
 
 
 class ContainerRuntimeUnavailable(RuntimeError):
@@ -67,6 +73,59 @@ def _require_spool_directory(value: str) -> Path:
     return root
 
 
+def _speaker_artifact(cache: Path, filename: str) -> tuple[Path, str]:
+    path = cache / filename
+    if path.is_symlink() or not path.is_file():
+        raise ContainerRuntimeUnavailable("UV_CONTAINER_SPEAKER_MODEL_UNAVAILABLE")
+    try:
+        if path.stat().st_size <= MIN_SPEAKER_MODEL_BYTES:
+            raise ContainerRuntimeUnavailable("UV_CONTAINER_SPEAKER_MODEL_INVALID")
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except ContainerRuntimeUnavailable:
+        raise
+    except OSError as exc:
+        raise ContainerRuntimeUnavailable("UV_CONTAINER_SPEAKER_MODEL_UNAVAILABLE") from exc
+    return path, digest.hexdigest()
+
+
+def _validate_speaker_models(cache: Path) -> dict[str, str]:
+    segmentation, segmentation_sha = _speaker_artifact(
+        cache, SPEAKER_SEGMENTATION_MODEL
+    )
+    embedding, embedding_sha = _speaker_artifact(cache, SPEAKER_EMBEDDING_MODEL)
+    try:
+        import sherpa_onnx
+
+        config = sherpa_onnx.OfflineSpeakerDiarizationConfig(
+            segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
+                pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(
+                    model=str(segmentation)
+                )
+            ),
+            embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(
+                model=str(embedding)
+            ),
+            clustering=sherpa_onnx.FastClusteringConfig(
+                num_clusters=2, threshold=0.5
+            ),
+            min_duration_on=0.3,
+            min_duration_off=0.5,
+        )
+        if not config.validate():
+            raise ContainerRuntimeUnavailable("UV_CONTAINER_SPEAKER_MODEL_INVALID")
+    except ContainerRuntimeUnavailable:
+        raise
+    except Exception as exc:
+        raise ContainerRuntimeUnavailable("UV_CONTAINER_SPEAKER_MODEL_INVALID") from exc
+    return {
+        "segmentation_sha256": segmentation_sha,
+        "embedding_sha256": embedding_sha,
+    }
+
+
 def validate_container_runtime() -> dict[str, object]:
     """Validate all container-only prerequisites without processing media."""
 
@@ -77,6 +136,9 @@ def validate_container_runtime() -> dict[str, object]:
         "UNIVERSAL_VIDEO_SPOOL_ROOT": _require_spool_directory(os.getenv("UNIVERSAL_VIDEO_SPOOL_ROOT", "")),
         **{name: _require_writable_directory(os.getenv(name, "")) for name in WRITABLE_ROOT_ENV},
     }
+    speaker_models = _validate_speaker_models(
+        mounts["UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE"]
+    )
     try:
         runtime = validate_video_runtime()
         # ``HF_HUB_OFFLINE`` is exported by the entrypoint.  Loading the model
@@ -92,6 +154,7 @@ def validate_container_runtime() -> dict[str, object]:
         "source_commit": commit,
         "python": ".".join(map(str, sys.version_info[:3])),
         "runtime": runtime,
+        "speaker_models": speaker_models,
         "mounts": sorted(str(path) for path in mounts.values()),
         "fallback_used": False,
     }
