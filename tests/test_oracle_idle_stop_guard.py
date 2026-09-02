@@ -621,6 +621,14 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
         self.assertLess(authorizer, exact_yes)
         self.assertLess(exact_yes, stop)
 
+    def test_instance_power_preserves_zero_exit_and_proof_framing(self) -> None:
+        workflow = INSTANCE_POWER.read_text(encoding="utf-8")
+        self.assertNotIn('get("exit-code","") or ""', workflow)
+        self.assertGreaterEqual(
+            workflow.count('printf \'%s\\n\' "$text" > "$proof"'),
+            2,
+        )
+
     def test_no_stop_command_exists_in_classifier_or_authorizer(self) -> None:
         combined = (
             CLASSIFIER.read_text(encoding="utf-8")
