@@ -217,7 +217,17 @@ jobs:
           if ! ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            'set -Eeuo pipefail; sudo -n /usr/local/sbin/oracle-idle-state' \
+            'set -Eeuo pipefail
+             # FINAL_AUTOPILOT_SERVICE_GATE: bind the exact idle proof to a
+             # fresh inactive-and-disabled service observation. Emit no
+             # service text on success so the five-line proof stays exact.
+             active="$(systemctl is-active school-autopilot-shadow.service 2>/dev/null || true)"
+             enabled="$(systemctl is-enabled school-autopilot-shadow.service 2>/dev/null || true)"
+             [[ "$active" == inactive && "$enabled" == disabled ]] || {
+               echo "Autopilot service changed before final IDLE proof; STOP forbidden" >&2
+               exit 1
+             }
+             sudo -n /usr/local/sbin/oracle-idle-state' \
             > "$idle_proof" 2> "$idle_stderr"; then
             echo 'idle probe failed; STOP forbidden' >&2
             exit 1
