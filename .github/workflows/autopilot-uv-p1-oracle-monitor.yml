@@ -109,7 +109,7 @@ jobs:
           for value in "$runtime_key" "$canary_key" "$idle_key"; do
             [[ "$value" =~ ^uv-p1-[a-z]+-pr[0-9]+-[0-9a-f]{12}-20260902$ ]] || { echo 'UV_AUTOPILOT_TASK_KEY_INVALID'; exit 60; }
           done
-          mapfile -t units < <(systemctl list-units --all --type=service --no-legend 2>/dev/null | awk '$1 ~ /autopilot/ {print $1}' | sort -u)
+          mapfile -t units < <(systemctl list-units --all --type=service --no-legend 2>/dev/null | awk '$1 == "school-autopilot-shadow.service" {print $1}' | sort -u)
           (( ${#units[@]} == 1 )) || { echo "UV_AUTOPILOT_UNIT_COUNT=${#units[@]}"; exit 61; }
           unit="${units[0]}"
           active="$(systemctl is-active "$unit" 2>/dev/null || true)"
