@@ -21,9 +21,11 @@ class ResolutionProfile:
     learner_level: str
     auction_context_id: str
     effective_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    activation_scope: str = "default"
 
     def __post_init__(self) -> None:
-        for value in (self.system_profile, self.system_version, self.learner_level, self.auction_context_id):
+        for value in (self.system_profile, self.system_version, self.learner_level,
+                      self.auction_context_id, self.activation_scope):
             if not value.strip():
                 raise ValueError("resolution profile fields must be non-empty")
         if self.effective_at.tzinfo is None:
@@ -104,7 +106,8 @@ def _winner_or_conflict(rules: tuple[KnowledgeRule, ...]) -> tuple[KnowledgeRule
 def _profile_fingerprint(profile: ResolutionProfile) -> str:
     raw = json.dumps(
         [profile.system_profile, profile.system_version, profile.learner_level,
-         profile.auction_context_id, profile.effective_at.isoformat()],
+         profile.auction_context_id, profile.effective_at.isoformat(),
+         profile.activation_scope],
         ensure_ascii=False, separators=(",", ":"),
     )
     return hashlib.sha256(raw.encode()).hexdigest()
@@ -140,12 +143,12 @@ class PostgresCanonRuleStore:
                     """SELECT c.rule_id,c.action::text,kv.bidding_system_key,c.method_version,
                               kv.level_scope->>'level',c.auction_pattern->>'context_id',
                               c.valid_from,c.valid_to,c.priority,c.specificity
-                         FROM bidding.get_school_runtime_rule_catalog(%s,%s) c
+                         FROM bidding.get_school_runtime_rule_catalog_at(%s,%s,%s) c
                          JOIN public.knowledge_version kv USING(knowledge_version_id)
                         WHERE kv.bidding_system_key=%s AND c.method_version=%s
                           AND kv.level_scope->>'level'=%s AND c.auction_pattern->>'context_id'=%s
                           AND c.valid_from<=%s AND (c.valid_to IS NULL OR c.valid_to>%s)""",
-                    (school_id, profile.auction_context_id,
+                    (school_id, profile.activation_scope, profile.effective_at,
                      profile.system_profile, profile.system_version, profile.learner_level,
                      profile.auction_context_id, profile.effective_at, profile.effective_at),
                 )
@@ -237,7 +240,8 @@ def resolve_two_lane(*, school_id: str, acting_seat: str, acting_hand: dict[str,
         "world_searched": False, "school_id": school_id, "request_fingerprint": request_fingerprint,
         "profile": {"system_profile": profile.system_profile, "system_version": profile.system_version,
                     "learner_level": profile.learner_level, "auction_context_id": profile.auction_context_id,
-                    "effective_at": profile.effective_at.isoformat()}}
+                    "effective_at": profile.effective_at.isoformat(),
+                    "activation_scope": profile.activation_scope}}
     if canon_conflict:
         trace["canon_stage"] = CANON_CONFLICT
         return Resolution(CANON_CONFLICT, None, canon, (), trace)

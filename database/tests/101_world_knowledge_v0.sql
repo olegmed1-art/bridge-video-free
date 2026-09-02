@@ -363,6 +363,10 @@ BEGIN
     OR NOT has_column_privilege('bridge_school_worker','public.knowledge_gap','status','UPDATE')
  THEN RAISE EXCEPTION 'WORLD_SMOKE_GAP_IDENTITY_UPDATE_ACL_UNSAFE'; END IF;
  IF NOT has_function_privilege('bridge_school_app','bidding.contains_forbidden_hidden_key(jsonb)','EXECUTE')
+    OR NOT has_function_privilege('bridge_school_app','bidding.contains_nonpublic_card_material(jsonb)','EXECUTE')
+    OR NOT has_function_privilege('bridge_school_app','bidding.contains_card_token(jsonb)','EXECUTE')
+    OR NOT has_function_privilege('bridge_school_app','bidding.valid_public_robot_payload(text,jsonb)','EXECUTE')
+    OR NOT has_function_privilege('bridge_school_app','bidding.get_school_runtime_rule_catalog_at(uuid,text,timestamptz)','EXECUTE')
     OR NOT has_function_privilege('bridge_school_worker','bidding.contains_forbidden_hidden_key(jsonb)','EXECUTE')
     OR NOT has_function_privilege('bridge_school_worker','bidding.valid_acting_hand(jsonb)','EXECUTE')
     OR NOT has_function_privilege('bridge_school_worker','bidding.valid_public_robot_payload(text,jsonb)','EXECUTE')

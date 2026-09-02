@@ -146,6 +146,39 @@ def test_gap_fingerprint_includes_resolution_profile():
     assert _gap_fingerprint(REQUEST_HASH, PROFILE) != _gap_fingerprint(REQUEST_HASH, changed)
 
 
+def test_gap_fingerprint_includes_activation_scope():
+    changed = ResolutionProfile("natural", "v1", "L1", "auction-1", NOW, "advanced")
+    assert _gap_fingerprint(REQUEST_HASH, PROFILE) != _gap_fingerprint(REQUEST_HASH, changed)
+
+
+def test_canon_store_passes_scope_and_effective_time_separately():
+    executed = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return False
+        def execute(self, sql, params):
+            executed.append((sql, params))
+        def fetchall(self):
+            return []
+
+    class Connection:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return False
+        def cursor(self):
+            return Cursor()
+
+    profile = ResolutionProfile("natural", "v1", "L1", "auction-1", NOW, "default")
+    assert PostgresCanonRuleStore(Connection).fetch("school-1", profile) == ()
+    sql, params = executed[0]
+    assert "get_school_runtime_rule_catalog_at(%s,%s,%s)" in sql
+    assert params[:3] == ("school-1", "default", NOW)
+
+
 def test_untrusted_canon_store_is_rejected():
     with pytest.raises(TypeError, match="sealed active-catalog"):
         resolve_two_lane(school_id="school-1", **REQUEST, profile=PROFILE,
