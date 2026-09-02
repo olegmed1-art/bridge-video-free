@@ -12,8 +12,14 @@ from typing import Any, Callable, Iterator, Mapping
 from bridge_worker_3_1_free import stable_job_id
 
 from .drive_adapter import access_token, file_metadata
-from .result_contract import verify_drive_result_contract
+from .route_receipt_v2 import discover_route_receipt
 from .runtime_preflight import validate_video_runtime
+from .terminal_evidence_v2 import (
+    build_terminal_evidence,
+    reverify_terminal_output_live,
+    source_identity_from_claim,
+    validate_terminal_output,
+)
 from .video_queue import claim_job, database_url_from_env, finish_job, heartbeat_job, retry_job
 from .workload_lock import shared_workload_lock
 
@@ -78,32 +84,28 @@ def _metadata_checksum(meta: Mapping[str, Any]) -> str | None:
     return None
 
 
-def verify_claimed_source(claim: Mapping[str, Any], token: str) -> None:
+def verify_claimed_source(claim: Mapping[str, Any], token: str) -> dict[str, Any]:
+    """Read and exactly match file ID, name, MIME, size, parent and checksum."""
     if claim.get("processing_profile") != APPROVED_PROFILE:
         raise NeonVideoWorkerError("VIDEO_QUEUE_PROFILE_NOT_APPROVED")
     if claim.get("algorithm_revision") != APPROVED_REVISION:
         raise NeonVideoWorkerError("VIDEO_QUEUE_REVISION_NOT_APPROVED")
     if claim.get("stable_job_key") != stable_job_id("drive", str(claim.get("source_file_id") or "")):
         raise NeonVideoWorkerError("VIDEO_QUEUE_STABLE_ID_MISMATCH")
+    expected = source_identity_from_claim(claim)
     meta = file_metadata(str(claim["source_file_id"]), token)
+    parents = [str(value) for value in (meta.get("parents") or [])]
     observed = {
-        "id": str(meta.get("id") or ""),
+        "file_id": str(meta.get("id") or ""),
         "name": str(meta.get("name") or ""),
         "mime_type": str(meta.get("mimeType") or ""),
         "size_bytes": int(meta.get("size") or 0),
-        "parents": [str(value) for value in (meta.get("parents") or [])],
+        "parent_folder_id": parents[0] if len(parents) == 1 else "",
         "checksum": _metadata_checksum(meta),
-    }
-    expected = {
-        "id": claim["source_file_id"],
-        "name": claim["source_name"],
-        "mime_type": claim["source_mime_type"],
-        "size_bytes": int(claim["source_size_bytes"]),
-        "parents": [claim["source_folder_id"]],
-        "checksum": claim.get("source_checksum"),
     }
     if observed != expected:
         raise NeonVideoWorkerError("VIDEO_QUEUE_SOURCE_READBACK_MISMATCH")
+    return observed
 
 
 @contextmanager
@@ -137,9 +139,7 @@ def _stable_environment(claim: Mapping[str, Any]) -> Iterator[None]:
 
 
 def stable_review_processor(claim: Mapping[str, Any]) -> dict[str, Any]:
-    token = access_token()
-    # This is intentionally the last source operation before processing.
-    verify_claimed_source(claim, token)
+    """Run the approved processor and construct evidence from live Drive objects."""
     with _stable_environment(claim):
         import bridge_runtime_hardening_r25_16 as hardening
         import route_drive_job_outputs
@@ -155,13 +155,12 @@ def stable_review_processor(claim: Mapping[str, Any]) -> dict[str, Any]:
             raise NeonVideoWorkerError("VIDEO_QUEUE_AI_DONE_MISMATCH")
         if route_drive_job_outputs.main() != 0:
             raise NeonVideoWorkerError("VIDEO_QUEUE_OUTPUT_ROUTE_FAILED")
-
-    # PASS remains impossible until the uploaded PDF is downloaded from Drive,
-    # byte-checked, re-read as metadata, and bound into a manifest/receipt.
-    contract = verify_drive_result_contract(claim, done, token=token)
+        terminal_token = access_token()
+        route_receipt = discover_route_receipt(claim, done, terminal_token)
+        terminal = build_terminal_evidence(claim, done, route_receipt, terminal_token)
     master_pdf = done.get("masterPdf") if isinstance(done.get("masterPdf"), dict) else {}
     return {
-        **contract,
+        **terminal,
         "master_pdf_pages": master_pdf.get("pages"),
         "deal_review_pages": master_pdf.get("dealReviewPages"),
         "speech_segment_count": (done.get("speech") or {}).get("segmentCount"),
@@ -231,15 +230,34 @@ def process_claim(
     output = _base_output(claim)
     outcome = "REVIEW_READY"
     error_code: str | None = None
+    initial_source: dict[str, Any] | None = None
     with _Heartbeat(database_url, claim, worker_key) as heartbeat:
         with _processing_timeout():
             try:
-                output.update(dict(processor(claim)))
+                # This is the final source operation before processor execution.
+                initial_source = verify_claimed_source(claim, access_token())
+                candidate = dict(processor(claim))
+                validate_terminal_output(claim, candidate)
+                output.update(candidate)
+                output.update(_base_output(claim))
             except Exception as exc:
                 outcome, error_code = _failure(exc)
                 output["error_type"] = type(exc).__name__
         if heartbeat.error is not None:
             raise NeonVideoWorkerError("VIDEO_QUEUE_HEARTBEAT_LOST") from heartbeat.error
+
+    if outcome == "REVIEW_READY":
+        try:
+            # Any supported custom processor is subject to the same live Drive
+            # reread. A cached or fabricated mapping cannot cross this gate.
+            reverify_terminal_output_live(claim, output, access_token())
+            final_source = verify_claimed_source(claim, access_token())
+            if initial_source is None or final_source != initial_source:
+                raise NeonVideoWorkerError("VIDEO_QUEUE_SOURCE_CHANGED_DURING_PROCESSING")
+        except Exception as exc:
+            outcome, error_code = _failure(exc)
+            output["error_type"] = type(exc).__name__
+
     if outcome == "FAILED":
         return retry_job(
             database_url,
