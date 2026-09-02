@@ -89,7 +89,7 @@ if [[ "$BUILD_IMAGE" == 1 ]]; then
   if (( disk_available_kb < MIN_FREE_KB )); then
     log 'Reclaim unused Universal Video build cache before image build'
     docker builder prune --all --force >/dev/null 2>&1 || true
-    mapfile -t old_image_ids < <(docker image ls --filter "reference=$IMAGE_REPO:*" --format '{{.ID}}' | sort -u)
+    mapfile -t old_image_ids < <(docker image ls --no-trunc --filter "reference=$IMAGE_REPO:*" --format '{{.ID}}' | sort -u)
     for old_image_id in "${old_image_ids[@]}"; do
       [[ -n "$PRESERVE_IMAGE_ID" && "$old_image_id" == "$PRESERVE_IMAGE_ID" ]] && continue
       if [[ -z "$(docker ps -aq --filter "ancestor=$old_image_id")" ]]; then
