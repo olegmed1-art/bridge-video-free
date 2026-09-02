@@ -20,10 +20,17 @@ def test_robot_paths_are_information_firewalled_and_not_canon_activations():
     assert "key_name IN ('inputfingerprint','rawresponsesha256','inputhash','outputhash','modelhash','configurationhash')" in sql
     assert "WITH ORDINALITY AS s(step,ord)" in sql
     assert "step->>'input_hash' !~ '^[0-9a-f]{64}$'" in sql
+    assert "previous_output_hash" in sql
+    assert "step->>'input_hash' IS DISTINCT FROM previous_output_hash" in sql
+    assert "'steps'->-1->>'output_hash' IS DISTINCT FROM NEW.decision_trace->>'raw_response_sha256'" in sql
     assert "insert into public.canon_activation" not in sql.lower()
     assert "update public.canon_activation" not in sql.lower()
     assert "ARRAY['S','H','D','C']" in sql
     assert "FOR UPDATE" in sql
+    assert "get_school_runtime_rule_catalog_at" in sql
+    assert "ra.scope_key=p_scope_key" in sql
+    assert "ra.valid_from<=p_effective_at" in sql
+    assert "ca.valid_from<=p_effective_at" in sql
     assert (
         "bidding.valid_public_robot_payload(text,jsonb) TO bridge_school_app,bridge_school_worker"
         in sql
