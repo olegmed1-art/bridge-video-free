@@ -33,7 +33,7 @@ def _checksum(meta: Mapping[str, Any]) -> tuple[str, str]:
     ):
         value = str(meta.get(field) or "").strip().lower()
         if value:
-            if not re.fullmatch(rf"[0-9a-f]{{{length}}", value):
+            if not re.fullmatch(rf"[0-9a-f]{{{length}}}", value):
                 raise RuntimeError("UV_SOURCE_IDENTITY_CHECKSUM_INVALID")
             return kind, value
     raise RuntimeError("UV_SOURCE_IDENTITY_CHECKSUM_MISSING")
