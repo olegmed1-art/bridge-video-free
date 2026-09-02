@@ -20,6 +20,14 @@ readonly QUEUE_DSN_FILE="$BASE_DIR/secrets/video-queue-dsn"
 fail(){ echo "UV_STATE=REJECTED"; echo "UV_ERROR=$1"; exit 1; }
 intake_reject(){ echo 'UV_STATE=REJECTED'; echo "UV_ERROR_CODE=$1"; }
 safe_id(){ [[ "$1" =~ ^[A-Za-z0-9._:-]{1,160}$ && "$1" != . && "$1" != .. ]]; }
+cleanup_staged_files(){
+  local path
+  for path in "$@"; do
+    [[ -n "$path" ]] || continue
+    rm -f -- "$path" 2>/dev/null || return 1
+    [[ ! -e "$path" && ! -L "$path" ]] || return 1
+  done
+}
 verify(){
   [[ -x "$PYTHON" && -d "$SOURCE_DIR/.git" && -f "$RECEIPT_READER" && ! -L "$RECEIPT_READER" ]] || fail 'universal video runtime missing'
   [[ -d "$SPOOL/inbox" && -d "$SPOOL/running" && -d "$SPOOL/done" && -d "$SPOOL/failed" && -d "$SPOOL/progress" ]] || fail 'universal video spool missing'
@@ -41,13 +49,21 @@ enqueue_batch(){
   if ! raw_size="$(stat -c '%s' -- "$root_tmp" 2>/dev/null)" \
      || [[ ! "$raw_size" =~ ^[0-9]+$ ]] \
      || (( raw_size > 16384 )); then
-    rm -f -- "$root_tmp" 2>/dev/null || true
+    if ! cleanup_staged_files "$root_tmp"; then
+      intake_reject 'UV_INTAKE_CLEANUP_FAILED'
+      return 1
+    fi
+    root_tmp=''
     trap - EXIT
     intake_reject 'UV_INTAKE_CONTRACT_INVALID'
     return 1
   fi
   if ! request_tmp="$(runuser -u universal-video -- mktemp -p "$INTAKE" batch.XXXXXXXX.json 2>/dev/null)"; then
-    rm -f -- "$root_tmp" 2>/dev/null || true
+    if ! cleanup_staged_files "$root_tmp"; then
+      intake_reject 'UV_INTAKE_CLEANUP_FAILED'
+      return 1
+    fi
+    root_tmp=''
     trap - EXIT
     intake_reject 'UV_INTAKE_IO_FAILED'
     return 1
@@ -56,13 +72,23 @@ enqueue_batch(){
   trap "$cleanup_cmd" EXIT
   if [[ ! "$request_tmp" =~ ^/opt/bridge-school/universal-video/intake/batch\.[A-Za-z0-9._-]+\.json$ \
         || ! -f "$request_tmp" || -L "$request_tmp" ]]; then
-    rm -f -- "$root_tmp" "$request_tmp" 2>/dev/null || true
+    if ! cleanup_staged_files "$root_tmp" "$request_tmp"; then
+      intake_reject 'UV_INTAKE_CLEANUP_FAILED'
+      return 1
+    fi
+    root_tmp=''
+    request_tmp=''
     trap - EXIT
     intake_reject 'UV_INTAKE_EXECUTION_FAILED'
     return 1
   fi
   if ! install -o universal-video -g universal-video -m 0600 "$root_tmp" "$request_tmp" 2>/dev/null; then
-    rm -f -- "$root_tmp" "$request_tmp" 2>/dev/null || true
+    if ! cleanup_staged_files "$root_tmp" "$request_tmp"; then
+      intake_reject 'UV_INTAKE_CLEANUP_FAILED'
+      return 1
+    fi
+    root_tmp=''
+    request_tmp=''
     trap - EXIT
     intake_reject 'UV_INTAKE_IO_FAILED'
     return 1
@@ -75,7 +101,12 @@ enqueue_batch(){
     "$PYTHON" -m universal_video.video_queue_intake enqueue "$request_tmp"
   queue_rc=$?
   set -e
-  rm -f -- "$root_tmp" "$request_tmp" 2>/dev/null || true
+  if ! cleanup_staged_files "$root_tmp" "$request_tmp"; then
+    intake_reject 'UV_INTAKE_CLEANUP_FAILED'
+    return 1
+  fi
+  root_tmp=''
+  request_tmp=''
   trap - EXIT
   return "$queue_rc"
 }
@@ -177,8 +208,11 @@ except BaseException:
   fi
   stage_path="$(sed -nE 's#^UV_STAGE_PATH=(/opt/bridge-school/\.universal-video-staging/request\.[A-Za-z0-9._-]+\.json)$#\1#p' <<<"$stage_output" | tail -n1)"
   if [[ -z "$stage_path" || ! -f "$stage_path" || -L "$stage_path" ]]; then
-    [[ -z "$stage_path" ]] || rm -f -- "$stage_path" 2>/dev/null || true
-    intake_reject 'UV_INTAKE_EXECUTION_FAILED'
+    if [[ -n "$stage_path" ]] && ! cleanup_staged_files "$stage_path"; then
+      intake_reject 'UV_INTAKE_CLEANUP_FAILED'
+    else
+      intake_reject 'UV_INTAKE_EXECUTION_FAILED'
+    fi
     return 1
   fi
   printf -v "$output_var" '%s' "$stage_path"
@@ -195,13 +229,16 @@ submit_drive(){
   if ! intake_output="$(UNIVERSAL_VIDEO_STAGING_ROOT="$STAGING" PYTHONPATH="$SOURCE_DIR" "$SYSTEM_PYTHON" -m universal_video.server_intake submit "$tmp" "$SPOOL" 2>&1)"; then
     intake_code="$(sed -nE 's/^UV_ERROR_CODE=(UV_INTAKE_[A-Z0-9_]{1,96})$/\1/p' <<<"$intake_output" | tail -n1)"
     [[ -n "$intake_code" ]] || intake_code='UV_INTAKE_EXECUTION_FAILED'
-    rm -f -- "$tmp" 2>/dev/null || true
+    if ! cleanup_staged_files "$tmp"; then
+      intake_reject 'UV_INTAKE_CLEANUP_FAILED'
+      return 1
+    fi
     tmp=''
     trap - EXIT
     intake_reject "$intake_code"
     return 1
   fi
-  if ! rm -f -- "$tmp" 2>/dev/null || [[ -e "$tmp" || -L "$tmp" ]]; then
+  if ! cleanup_staged_files "$tmp"; then
     intake_reject 'UV_INTAKE_CLEANUP_FAILED'
     return 1
   fi
