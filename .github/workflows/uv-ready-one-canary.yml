@@ -70,7 +70,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m py_compile universal_video/canary_gate.py universal_video/one_canary.py
-          pytest -q tests/test_canary_gate.py tests/test_one_canary.py
+          python -m pytest -q tests/test_canary_gate.py tests/test_one_canary.py
 
       - name: Static proof of immediate source re-verification
         shell: bash
@@ -141,6 +141,11 @@ jobs:
         run: |
           set -euo pipefail
           psql -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE TABLE IF NOT EXISTS public.schema_migration (
+            migration_key text PRIMARY KEY,
+            applied_at timestamptz NOT NULL DEFAULT now(),
+            checksum text
+          );
           DO $$
           DECLARE
             required_role text;
