@@ -192,9 +192,7 @@ submit_drive(){
   fi
   printf -v cleanup_cmd 'rm -f -- %q' "$tmp"
   trap "$cleanup_cmd" EXIT
-  if intake_output="$(UNIVERSAL_VIDEO_STAGING_ROOT="$STAGING" PYTHONPATH="$SOURCE_DIR" "$SYSTEM_PYTHON" -m universal_video.server_intake submit "$tmp" "$SPOOL" 2>&1)"; then
-    printf '%s\n' "$intake_output"
-  else
+  if ! intake_output="$(UNIVERSAL_VIDEO_STAGING_ROOT="$STAGING" PYTHONPATH="$SOURCE_DIR" "$SYSTEM_PYTHON" -m universal_video.server_intake submit "$tmp" "$SPOOL" 2>&1)"; then
     intake_code="$(sed -nE 's/^UV_ERROR_CODE=(UV_INTAKE_[A-Z0-9_]{1,96})$/\1/p' <<<"$intake_output" | tail -n1)"
     [[ -n "$intake_code" ]] || intake_code='UV_INTAKE_EXECUTION_FAILED'
     rm -f -- "$tmp" 2>/dev/null || true
@@ -203,9 +201,13 @@ submit_drive(){
     intake_reject "$intake_code"
     return 1
   fi
-  rm -f -- "$tmp" 2>/dev/null || true
+  if ! rm -f -- "$tmp" 2>/dev/null || [[ -e "$tmp" || -L "$tmp" ]]; then
+    intake_reject 'UV_INTAKE_CLEANUP_FAILED'
+    return 1
+  fi
   tmp=''
   trap - EXIT
+  printf '%s\n' "$intake_output"
 }
 status(){
   [[ $# -eq 1 ]] && safe_id "$1" || fail 'invalid job id'
