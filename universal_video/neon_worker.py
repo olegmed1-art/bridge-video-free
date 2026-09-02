@@ -236,6 +236,11 @@ def process_claim(
     outcome = "REVIEW_READY"
     error_code: str | None = None
     initial_source: dict[str, Any] | None = None
+
+    # The lease heartbeat and total processing timeout cover the complete
+    # sequence: processing, terminal Drive readback, source revalidation, and
+    # the fenced finish/retry transition. A stalled readback therefore cannot
+    # silently outlive the lease and permit a second worker to repeat side effects.
     with _Heartbeat(database_url, claim, worker_key) as heartbeat:
         with _processing_timeout():
             try:
@@ -247,40 +252,44 @@ def process_claim(
             except Exception as exc:
                 outcome, error_code = _failure(exc)
                 output["error_type"] = type(exc).__name__
-        if heartbeat.error is not None:
-            raise NeonVideoWorkerError("VIDEO_QUEUE_HEARTBEAT_LOST") from heartbeat.error
 
-    if outcome == "REVIEW_READY":
-        try:
-            # Structural hashes are not sufficient. Re-download the referenced
-            # artifact and re-read the source immediately before finish_job.
-            verify_terminal_output_live(claim, output, token=access_token())
-            final_source = verify_claimed_source(claim, access_token())
-            if initial_source is None or final_source != initial_source:
-                raise NeonVideoWorkerError("VIDEO_QUEUE_SOURCE_CHANGED_DURING_PROCESSING")
-        except Exception as exc:
-            outcome, error_code = _failure(exc)
-            output["error_type"] = type(exc).__name__
+            if heartbeat.error is not None:
+                raise NeonVideoWorkerError("VIDEO_QUEUE_HEARTBEAT_LOST") from heartbeat.error
 
-    if outcome == "FAILED":
-        return retry_job(
-            database_url,
-            job_id=str(claim["job_id"]),
-            lease_token=str(claim["lease_token"]),
-            worker_key=worker_key,
-            error_code=error_code or "UV_ITEM_FAILED",
-            max_attempts=3,
-            base_delay_seconds=60,
-        )
-    return finish_job(
-        database_url,
-        job_id=str(claim["job_id"]),
-        lease_token=str(claim["lease_token"]),
-        worker_key=worker_key,
-        outcome=outcome,
-        output=output,
-        error_code=error_code,
-    )
+            if outcome == "REVIEW_READY":
+                try:
+                    # Structural hashes are not sufficient. Re-download the
+                    # artifact and re-read the source immediately before finish_job.
+                    verify_terminal_output_live(claim, output, token=access_token())
+                    final_source = verify_claimed_source(claim, access_token())
+                    if initial_source is None or final_source != initial_source:
+                        raise NeonVideoWorkerError("VIDEO_QUEUE_SOURCE_CHANGED_DURING_PROCESSING")
+                except Exception as exc:
+                    outcome, error_code = _failure(exc)
+                    output["error_type"] = type(exc).__name__
+
+            if heartbeat.error is not None:
+                raise NeonVideoWorkerError("VIDEO_QUEUE_HEARTBEAT_LOST") from heartbeat.error
+
+            if outcome == "FAILED":
+                return retry_job(
+                    database_url,
+                    job_id=str(claim["job_id"]),
+                    lease_token=str(claim["lease_token"]),
+                    worker_key=worker_key,
+                    error_code=error_code or "UV_ITEM_FAILED",
+                    max_attempts=3,
+                    base_delay_seconds=60,
+                )
+            return finish_job(
+                database_url,
+                job_id=str(claim["job_id"]),
+                lease_token=str(claim["lease_token"]),
+                worker_key=worker_key,
+                outcome=outcome,
+                output=output,
+                error_code=error_code,
+            )
 
 
 def process_one_neon(
