@@ -223,6 +223,7 @@ def adapt_video31_quality(
 
         task = _text(interaction.get("task"))
         prerequisites: list[str] = []
+        episode_review_state = "REVIEW_REQUIRED"
         if normalized_catalog is not None:
             try:
                 skill_id = resolve_reviewed_skill(normalized_catalog, task)
@@ -241,6 +242,7 @@ def adapt_video31_quality(
                 })
                 continue
             prerequisites = list(catalog_skills[skill_id]["prerequisite_skill_ids"])
+            episode_review_state = catalog_skills[skill_id]["review_state"]
         else:
             skill_id = _candidate_skill(task)
         from_state = prior.get(skill_id, "INTRODUCED")
@@ -303,7 +305,7 @@ def adapt_video31_quality(
             },
             "authority": {
                 "authority_class": "CANDIDATE_RESEARCH",
-                "review_state": "REVIEW_REQUIRED",
+                "review_state": episode_review_state,
                 "canonical_promotion_allowed": False,
                 "curriculum_activation_allowed": False,
                 "student_profile_write_allowed": False,

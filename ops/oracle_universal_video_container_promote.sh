@@ -113,6 +113,18 @@ trap cleanup EXIT
 [[ -d "$BASE_DIR/spool/running" && ! -L "$BASE_DIR/spool/running" ]] || fail UV_CONTAINER_PROMOTION_SPOOL_UNAVAILABLE
 has_running_job && fail UV_CONTAINER_PROMOTION_JOB_RUNNING
 
+CURRENT_STAGE='queue-credential-preflight'
+queue_dsn_file="$BASE_DIR/secrets/video-queue-dsn"
+[[ -f "$queue_dsn_file" && ! -L "$queue_dsn_file" ]] \
+  || fail UV_CONTAINER_PROMOTION_QUEUE_CREDENTIAL_MISSING
+queue_dsn_meta="$(stat -c '%U:%G:%a:%s' "$queue_dsn_file" 2>/dev/null || true)"
+[[ "$queue_dsn_meta" =~ ^root:universal-video:640:([1-9][0-9]{0,3})$ ]] \
+  || fail UV_CONTAINER_PROMOTION_QUEUE_CREDENTIAL_METADATA_INVALID
+(( BASH_REMATCH[1] <= 4096 )) \
+  || fail UV_CONTAINER_PROMOTION_QUEUE_CREDENTIAL_OVERSIZED
+python3 "$SOURCE_DIR/ops/validate_video_queue_dsn.py" "$queue_dsn_file" >/dev/null \
+  || fail UV_CONTAINER_PROMOTION_QUEUE_CREDENTIAL_INVALID
+
 CURRENT_STAGE='operator-snapshot'
 operator_backup_root="$(mktemp -d)"
 if [[ -e "$OPERATOR_TARGET" || -L "$OPERATOR_TARGET" ]]; then
