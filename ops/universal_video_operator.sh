@@ -40,11 +40,11 @@ enqueue_batch(){
   [[ -d "$INTAKE" && ! -L "$INTAKE" && "$(stat -c '%U:%G:%a' "$INTAKE" 2>/dev/null)" == universal-video:universal-video:750 ]] || fail 'unsafe intake directory'
   [[ -f "$DRIVE_OAUTH_FILE" && ! -L "$DRIVE_OAUTH_FILE" ]] || fail 'Drive credential unavailable'
   [[ -f "$QUEUE_DSN_FILE" && ! -L "$QUEUE_DSN_FILE" ]] || fail 'video queue credential unavailable'
-  local root_tmp='' request_tmp='' raw_size='' cleanup_cmd='' queue_rc=0
+  local root_tmp='' request_tmp='' raw_size='' cleanup_cmd='' queue_output='' queue_rc=0
   if ! stage_job_payload "$1" root_tmp; then
     return 1
   fi
-  printf -v cleanup_cmd 'rm -f -- %q' "$root_tmp"
+  printf -v cleanup_cmd 'rm -f -- %q 2>/dev/null || true' "$root_tmp"
   trap "$cleanup_cmd" EXIT
   if ! raw_size="$(stat -c '%s' -- "$root_tmp" 2>/dev/null)" \
      || [[ ! "$raw_size" =~ ^[0-9]+$ ]] \
@@ -68,7 +68,7 @@ enqueue_batch(){
     intake_reject 'UV_INTAKE_IO_FAILED'
     return 1
   fi
-  printf -v cleanup_cmd 'rm -f -- %q %q' "$root_tmp" "$request_tmp"
+  printf -v cleanup_cmd 'rm -f -- %q %q 2>/dev/null || true' "$root_tmp" "$request_tmp"
   trap "$cleanup_cmd" EXIT
   if [[ ! "$request_tmp" =~ ^/opt/bridge-school/universal-video/intake/batch\.[A-Za-z0-9._-]+\.json$ \
         || ! -f "$request_tmp" || -L "$request_tmp" ]]; then
@@ -94,11 +94,11 @@ enqueue_batch(){
     return 1
   fi
   set +e
-  runuser -u universal-video -- env \
+  queue_output="$(runuser -u universal-video -- env \
     PYTHONPATH="$SOURCE_DIR" \
     GOOGLE_DRIVE_OAUTH_JSON_FILE="$DRIVE_OAUTH_FILE" \
     BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE="$QUEUE_DSN_FILE" \
-    "$PYTHON" -m universal_video.video_queue_intake enqueue "$request_tmp"
+    "$PYTHON" -m universal_video.video_queue_intake enqueue "$request_tmp" 2>&1)"
   queue_rc=$?
   set -e
   if ! cleanup_staged_files "$root_tmp" "$request_tmp"; then
@@ -108,6 +108,7 @@ enqueue_batch(){
   root_tmp=''
   request_tmp=''
   trap - EXIT
+  printf '%s\n' "$queue_output"
   return "$queue_rc"
 }
 batch_status(){
@@ -134,6 +135,24 @@ import tempfile
 
 root = os.environ["UNIVERSAL_VIDEO_STAGING_ROOT"]
 path = None
+
+def cleanup_staged(candidate):
+    if not candidate:
+        return True
+    try:
+        os.unlink(candidate)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    try:
+        os.lstat(candidate)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+    return False
+
 try:
     root_stat = os.lstat(root)
     if (
@@ -164,19 +183,15 @@ try:
     os.chmod(path, 0o600)
     print("UV_STAGE_PATH=" + path)
 except (binascii.Error, ValueError):
-    if path:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+    if not cleanup_staged(path):
+        print("UV_ERROR_CODE=UV_INTAKE_CLEANUP_FAILED")
+        raise SystemExit(1)
     print("UV_ERROR_CODE=UV_INTAKE_CONTRACT_INVALID")
     raise SystemExit(1)
 except OSError as exc:
-    if path:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+    if not cleanup_staged(path):
+        print("UV_ERROR_CODE=UV_INTAKE_CLEANUP_FAILED")
+        raise SystemExit(1)
     code = {
         errno.EACCES: "UV_INTAKE_PERMISSION_DENIED",
         errno.EPERM: "UV_INTAKE_PERMISSION_DENIED",
@@ -190,11 +205,9 @@ except OSError as exc:
 except SystemExit:
     raise
 except BaseException:
-    if path:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+    if not cleanup_staged(path):
+        print("UV_ERROR_CODE=UV_INTAKE_CLEANUP_FAILED")
+        raise SystemExit(1)
     print("UV_ERROR_CODE=UV_INTAKE_EXECUTION_FAILED")
     raise SystemExit(1)
 ')"
@@ -224,7 +237,7 @@ submit_drive(){
   if ! stage_job_payload "$1" tmp; then
     return 1
   fi
-  printf -v cleanup_cmd 'rm -f -- %q' "$tmp"
+  printf -v cleanup_cmd 'rm -f -- %q 2>/dev/null || true' "$tmp"
   trap "$cleanup_cmd" EXIT
   if ! intake_output="$(UNIVERSAL_VIDEO_STAGING_ROOT="$STAGING" PYTHONPATH="$SOURCE_DIR" "$SYSTEM_PYTHON" -m universal_video.server_intake submit "$tmp" "$SPOOL" 2>&1)"; then
     intake_code="$(sed -nE 's/^UV_ERROR_CODE=(UV_INTAKE_[A-Z0-9_]{1,96})$/\1/p' <<<"$intake_output" | tail -n1)"
