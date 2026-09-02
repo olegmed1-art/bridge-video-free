@@ -7,7 +7,7 @@ on:
       - 'ops/oracle_idle_*.py'
       - 'ops/oracle_idle_state.sh'
       - 'ops/oracle_stop_consumer.py'
-      - 'tests/test_oracle_idle_stop_guard*.py'
+      - 'tests/test_oracle_idle_*.py'
       - '.github/workflows/issue-627-oracle-idle-stop-guard-ci.yml'
   workflow_dispatch:
 
@@ -33,7 +33,10 @@ jobs:
           grep -F 'ORACLE_IDLE_STATE=UNKNOWN' ops/oracle_idle_state.sh
           grep -F 'verdict.state != "IDLE"' ops/oracle_stop_consumer.py
           ! grep -Eiq 'oci[[:space:]]+compute|instance[[:space:]]+action|--action[[:space:]]+STOP' ops/oracle_stop_consumer.py
-      - name: Negative workload and STOP tests
+      - name: Negative workload, collector and STOP tests
         run: |
           python -m pip install --disable-pip-version-check -q pytest
-          python -m pytest -q tests/test_oracle_idle_stop_guard_v2.py
+          python -m pytest -q \
+            tests/test_oracle_idle_stop_guard_v2.py \
+            tests/test_oracle_idle_collector_contract.py \
+            tests/test_oracle_idle_state_shell_contract.py
