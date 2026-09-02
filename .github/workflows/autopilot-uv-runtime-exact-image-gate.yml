@@ -125,7 +125,17 @@ jobs:
           cores="$(getconf _NPROCESSORS_ONLN)"
           load1="$(awk '{print $1}' /proc/loadavg)"
           [[ "$mem_kb" =~ ^[0-9]+$ && "$disk_kb" =~ ^[0-9]+$ && "$cores" =~ ^[1-9][0-9]*$ && "$load1" =~ ^[0-9]+([.][0-9]+)?$ ]]
-          heavy="$(pgrep -fa 'docker build|buildkit|ffmpeg|whisper|tesseract|train(_|ing)?|dds3|ben' 2>/dev/null | grep -vE 'pgrep|grep' | wc -l)"
+          set +e
+          heavy_processes="$(pgrep -fa 'docker build|buildkit|ffmpeg|whisper|tesseract|train(_|ing)?|dds3|ben' 2>/dev/null)"
+          heavy_probe_rc=$?
+          set -e
+          (( heavy_probe_rc == 0 || heavy_probe_rc == 1 )) \
+            || { echo "UV_RESOURCE_PROCESS_PROBE_FAILED=$heavy_probe_rc"; exit 81; }
+          if (( heavy_probe_rc == 1 )); then
+            heavy=0
+          else
+            heavy="$(awk '!/pgrep|grep/{count++} END{print count+0}' <<<"$heavy_processes")"
+          fi
           spool_busy=0
           for dir in /opt/bridge-school/universal-video/spool/inbox /opt/bridge-school/universal-video/spool/running; do
             [[ -d "$dir" ]] || continue
@@ -163,7 +173,7 @@ jobs:
             exit 80
           fi
 
-      - name: Revalidate live gates immediately before image build
+      - name: Revalidate live gates before remote source preparation
         env:
           EXPECTED_HEAD_SHA: ${{ steps.gate.outputs.head }}
         shell: bash
@@ -175,10 +185,10 @@ jobs:
           grep -Fx 'review=PASS' <<<"$gate" >/dev/null
           grep -Fx 'unresolved=0' <<<"$gate" >/dev/null
           grep -Fx 'changes_requested=0' <<<"$gate" >/dev/null
-          echo 'UV_RUNTIME_LAST_SECOND_GATE=PASS'
+          echo 'UV_RUNTIME_PREP_GATE=PASS'
 
-      - name: Prepare isolated source and build non-activated image with import preflight
-        id: build
+      - name: Prepare isolated source on Oracle
+        id: source
         env:
           REF: ${{ steps.gate.outputs.head }}
         shell: bash
@@ -189,22 +199,76 @@ jobs:
           install -m 0700 ops/oracle_universal_video_container_build_preflight.sh "$build_script"
           ssh_base=(ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
           remote_script="/tmp/uv-container-build-preflight-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sh"
+          stage="/opt/bridge-school/.universal-video-image-build.${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          [[ "$remote_script" =~ ^/tmp/uv-container-build-preflight-[0-9]+-[0-9]+[.]sh$ ]]
+          [[ "$stage" =~ ^/opt/bridge-school/[.]universal-video-image-build[.][0-9]+[.][0-9]+$ ]]
           scp -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" \
             -o ConnectTimeout=15 "$build_script" "$ORACLE_USER@$ORACLE_HOST:$remote_script"
-          "${ssh_base[@]}" "sudo -n env EXPECTED_COMMIT='$REF' BUILD_SCRIPT='$remote_script' REPO_URL='https://github.com/olegmed1-art/bridge-video-free.git' bash -s" \
+          "${ssh_base[@]}" "sudo -n env EXPECTED_COMMIT='$REF' BUILD_SCRIPT='$remote_script' STAGE='$stage' REPO_URL='https://github.com/olegmed1-art/bridge-video-free.git' bash -s" \
+            > "$RUNNER_TEMP/source-preparation.log" 2>&1 <<'REMOTE'
+          set -Eeuo pipefail
+          [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$BUILD_SCRIPT" =~ ^/tmp/uv-container-build-preflight-[0-9]+-[0-9]+[.]sh$ ]]
+          [[ "$STAGE" =~ ^/opt/bridge-school/[.]universal-video-image-build[.][0-9]+[.][0-9]+$ ]]
+          [[ -f "$BUILD_SCRIPT" && ! -L "$BUILD_SCRIPT" ]]
+          cleanup_script(){ rm -f -- "$BUILD_SCRIPT"; }
+          trap cleanup_script EXIT
+          [[ ! -e "$STAGE" ]]
+          umask 077
+          mkdir -- "$STAGE"
+          cleanup_all(){ rm -rf -- "$STAGE"; rm -f -- "$BUILD_SCRIPT"; }
+          trap cleanup_all EXIT
+          git clone --quiet --no-tags --filter=blob:none "$REPO_URL" "$STAGE/source"
+          git -C "$STAGE/source" fetch --quiet --no-tags origin "$EXPECTED_COMMIT"
+          git -C "$STAGE/source" checkout --quiet --detach "$EXPECTED_COMMIT"
+          [[ "$(git -C "$STAGE/source" rev-parse HEAD)" == "$EXPECTED_COMMIT" ]]
+          [[ -z "$(git -C "$STAGE/source" status --porcelain)" ]]
+          trap - EXIT
+          printf 'UV_RUNTIME_REMOTE_SOURCE_PREPARED commit=%s\n' "$EXPECTED_COMMIT"
+          REMOTE
+          grep -Fx "UV_RUNTIME_REMOTE_SOURCE_PREPARED commit=$REF" "$RUNNER_TEMP/source-preparation.log" >/dev/null
+          echo "stage=$stage" >> "$GITHUB_OUTPUT"
+          echo "build_script=$remote_script" >> "$GITHUB_OUTPUT"
+
+      - name: Revalidate complete live gate after remote source preparation
+        env:
+          EXPECTED_HEAD_SHA: ${{ steps.gate.outputs.head }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          gate="$(UV_GATE_PR_NUMBER=997 bash ops/verify_uv_runtime_pr_gate.sh)"
+          grep -Fx "head=$EXPECTED_HEAD_SHA" <<<"$gate" >/dev/null
+          grep -Fx 'ci=PASS' <<<"$gate" >/dev/null
+          grep -Fx 'review=PASS' <<<"$gate" >/dev/null
+          grep -Fx 'unresolved=0' <<<"$gate" >/dev/null
+          grep -Fx 'changes_requested=0' <<<"$gate" >/dev/null
+          echo 'UV_RUNTIME_POST_CLONE_LAST_SECOND_GATE=PASS'
+
+      - name: Build non-activated image with import preflight
+        id: build
+        env:
+          REF: ${{ steps.gate.outputs.head }}
+          STAGE: ${{ steps.source.outputs.stage }}
+          BUILD_SCRIPT: ${{ steps.source.outputs.build_script }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$REF" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$BUILD_SCRIPT" =~ ^/tmp/uv-container-build-preflight-[0-9]+-[0-9]+[.]sh$ ]]
+          [[ "$STAGE" =~ ^/opt/bridge-school/[.]universal-video-image-build[.][0-9]+[.][0-9]+$ ]]
+          ssh_base=(ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          "${ssh_base[@]}" "sudo -n env EXPECTED_COMMIT='$REF' BUILD_SCRIPT='$BUILD_SCRIPT' STAGE='$STAGE' bash -s" \
             > "$RUNNER_TEMP/container.log" 2>&1 <<'REMOTE'
           set -Eeuo pipefail
           [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$BUILD_SCRIPT" == /tmp/uv-container-build-preflight-* && -f "$BUILD_SCRIPT" && ! -L "$BUILD_SCRIPT" ]]
-          stage="$(mktemp -d /opt/bridge-school/.universal-video-image-build.XXXXXX)"
-          cleanup(){ rm -rf -- "$stage" "$BUILD_SCRIPT"; }
-          trap cleanup EXIT
-          git clone --quiet --no-tags --filter=blob:none "$REPO_URL" "$stage/source"
-          git -C "$stage/source" fetch --quiet --no-tags origin "$EXPECTED_COMMIT"
-          git -C "$stage/source" checkout --quiet --detach "$EXPECTED_COMMIT"
-          [[ "$(git -C "$stage/source" rev-parse HEAD)" == "$EXPECTED_COMMIT" ]]
-          env UNIVERSAL_VIDEO_BUILD_SOURCE_DIR="$stage/source" \
+          [[ "$BUILD_SCRIPT" =~ ^/tmp/uv-container-build-preflight-[0-9]+-[0-9]+[.]sh$ ]]
+          [[ "$STAGE" =~ ^/opt/bridge-school/[.]universal-video-image-build[.][0-9]+[.][0-9]+$ ]]
+          [[ -f "$BUILD_SCRIPT" && ! -L "$BUILD_SCRIPT" ]]
+          [[ -d "$STAGE/source/.git" && ! -L "$STAGE/source" ]]
+          [[ "$(git -C "$STAGE/source" rev-parse HEAD)" == "$EXPECTED_COMMIT" ]]
+          [[ -z "$(git -C "$STAGE/source" status --porcelain)" ]]
+          env UNIVERSAL_VIDEO_BUILD_SOURCE_DIR="$STAGE/source" \
             UNIVERSAL_VIDEO_EXPECTED_COMMIT="$EXPECTED_COMMIT" \
             bash "$BUILD_SCRIPT"
           REMOTE
@@ -218,6 +282,27 @@ jobs:
           echo 'REAL_MEDIA_EXECUTION=NO'
           echo 'CONTAINER_ACTIVATED=NO'
           echo 'ORACLE_LIFECYCLE_ACTION=NO'
+
+      - name: Remove isolated Oracle build source
+        if: ${{ always() && steps.ssh.outcome == 'success' }}
+        env:
+          STAGE: /opt/bridge-school/.universal-video-image-build.${{ github.run_id }}.${{ github.run_attempt }}
+          BUILD_SCRIPT: /tmp/uv-container-build-preflight-${{ github.run_id }}-${{ github.run_attempt }}.sh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$BUILD_SCRIPT" =~ ^/tmp/uv-container-build-preflight-[0-9]+-[0-9]+[.]sh$ ]]
+          [[ "$STAGE" =~ ^/opt/bridge-school/[.]universal-video-image-build[.][0-9]+[.][0-9]+$ ]]
+          ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env STAGE='$STAGE' BUILD_SCRIPT='$BUILD_SCRIPT' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          [[ "$BUILD_SCRIPT" =~ ^/tmp/uv-container-build-preflight-[0-9]+-[0-9]+[.]sh$ ]]
+          [[ "$STAGE" =~ ^/opt/bridge-school/[.]universal-video-image-build[.][0-9]+[.][0-9]+$ ]]
+          rm -rf -- "$STAGE"
+          rm -f -- "$BUILD_SCRIPT"
+          REMOTE
 
       - name: Publish runtime receipt
         env:

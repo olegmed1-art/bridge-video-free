@@ -1,10 +1,20 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
--- Temporary-branch-only, director-approved ingress for the three Universal Video
--- P1 CI snapshots authorized on 2026-09-01. The caller can select only one of
--- three immutable task keys; repository, PR, head SHA, capability, cost, origin,
--- priority and retry policy are fixed inside this SECURITY DEFINER boundary.
+-- Forward-only replacement of the UV P1 ingress allowlist. Migration 0309 is
+-- immutable because it has already been recorded on the temporary branch.
+DO $migration_guard$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM public.schema_migration
+         WHERE migration_key = '0309_autopilot_uv_p1_bounded_ingress'
+    ) THEN
+        RAISE EXCEPTION 'AUTOPILOT_UV_P1_0309_REQUIRED';
+    END IF;
+END
+$migration_guard$;
+
 CREATE OR REPLACE FUNCTION autopilot.register_approved_uv_p1_ci(
     p_task_key text
 )
@@ -22,15 +32,15 @@ DECLARE
     active_count integer;
 BEGIN
     CASE p_task_key
-        WHEN 'uv-p1-runtime-pr997-545ef013-20260901' THEN
+        WHEN 'uv-p1-runtime-pr997-17b74b86b309-20260902' THEN
             approved_pr := 997;
-            approved_head := '545ef0135e3cfe436b918c3ec26f5e2b77500977';
-        WHEN 'uv-p1-intake-pr1000-5af0675a-20260901' THEN
-            approved_pr := 1000;
-            approved_head := '5af0675a9e13a9725348661be297abc5f52ff0e4';
-        WHEN 'uv-p1-idle-pr1047-621ab073-20260901' THEN
+            approved_head := '17b74b86b30905f61a47e578b77d18c940691fed';
+        WHEN 'uv-p1-canary-pr1062-164d0d509fa3-20260902' THEN
+            approved_pr := 1062;
+            approved_head := '164d0d509fa38fdbe81592201699b1a377187eb0';
+        WHEN 'uv-p1-idle-pr1047-e8e71b569f81-20260902' THEN
             approved_pr := 1047;
-            approved_head := '621ab073418b3f3d1b75cb6abb074dba4ea305cb';
+            approved_head := 'e8e71b569f8189dd0e2a88a07597a4098a772a74';
         ELSE
             RAISE EXCEPTION 'AUTOPILOT_UV_P1_TASK_NOT_APPROVED';
     END CASE;
@@ -152,10 +162,10 @@ GRANT EXECUTE ON FUNCTION autopilot.register_approved_uv_p1_ci(text)
     TO autopilot_runtime;
 
 COMMENT ON FUNCTION autopilot.register_approved_uv_p1_ci(text) IS
-'Registers only the three director-approved, zero-cost, exact-head UV P1 GitHub CI snapshots, one active task at a time.';
+'Registers only the three director-approved, zero-cost, exact-head UV P1 GitHub CI snapshots, one active task at a time; allowlist upgraded by migration 0313.';
 
 INSERT INTO public.schema_migration(migration_key)
-VALUES ('0309_autopilot_uv_p1_bounded_ingress')
+VALUES ('0313_autopilot_uv_p1_allowlist_upgrade')
 ON CONFLICT DO NOTHING;
 
 COMMIT;

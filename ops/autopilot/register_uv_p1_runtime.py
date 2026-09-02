@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Register the three director-approved UV P1 CI snapshots through migration 0309.
+"""Register the three director-approved UV P1 CI snapshots through migration 0313.
 
 This program is intentionally narrow:
 - it rewrites discovered Neon DSNs to one exact temporary endpoint;
-- it accepts only the immutable task keys embedded in migration 0309;
-- it observes status by replaying the same SECURITY DEFINER function;
+- it accepts only the immutable task keys embedded in migration 0313;
+- it resolves the relevant public PR immediately before every registration;
+- it observes status only through the runtime-readable task_status view;
 - it never selects Autopilot tables directly and never contacts production.
 """
 
@@ -16,7 +17,9 @@ import re
 import shlex
 import sys
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from collections import Counter
 from pathlib import Path
 from typing import Final
@@ -27,6 +30,10 @@ PROJECT_ID: Final[str] = os.environ["PROJECT_ID"]
 TEMP_BRANCH_ID: Final[str] = os.environ["TEMP_BRANCH_ID"]
 PRODUCTION_BRANCH_ID: Final[str] = os.environ["PRODUCTION_BRANCH_ID"]
 TEMP_ENDPOINT_ID: Final[str] = os.environ["TEMP_ENDPOINT_ID"]
+GITHUB_REPOSITORY: Final[str] = "olegmed1-art/bridge-video-free"
+MIGRATION_APPLIED_BY_THIS_RUN: Final[bool] = (
+    os.environ.get("MIGRATION_APPLIED_BY_THIS_RUN") == "YES"
+)
 LIVE_HEADS: Final[dict[int, str]] = {
     997: os.environ["LIVE_RUNTIME_HEAD_SHA"],
     1062: os.environ["LIVE_CANARY_HEAD_SHA"],
@@ -68,6 +75,10 @@ ROOTS: Final[tuple[Path, ...]] = (
     Path("/etc/systemd/system"),
     Path("/etc/default"),
 )
+UUID_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+REGISTRATION_RETRY_SECONDS: Final[int] = 60
 
 
 def _parse_value(raw: str) -> str:
@@ -190,6 +201,8 @@ def _connect_runtime() -> psycopg.Connection[tuple]:
                     """
                     SELECT current_user,
                            current_database(),
+                           current_setting('neon.project_id', true),
+                           current_setting('neon.branch_id', true),
                            to_regprocedure('autopilot.register_approved_uv_p1_ci(text)') IS NOT NULL,
                            CASE
                                WHEN to_regprocedure('autopilot.register_approved_uv_p1_ci(text)') IS NULL THEN false
@@ -197,6 +210,15 @@ def _connect_runtime() -> psycopg.Connection[tuple]:
                                    current_user,
                                    'autopilot.register_approved_uv_p1_ci(text)',
                                    'EXECUTE'
+                               )
+                           END,
+                           to_regclass('autopilot.task_status') IS NOT NULL,
+                           CASE
+                               WHEN to_regclass('autopilot.task_status') IS NULL THEN false
+                               ELSE has_table_privilege(
+                                   current_user,
+                                   'autopilot.task_status',
+                                   'SELECT'
                                )
                            END
                     """
@@ -211,20 +233,45 @@ def _connect_runtime() -> psycopg.Connection[tuple]:
                 observations["wrong_database"] += 1
                 connection.close()
                 continue
-            if not row[2]:
-                observations["function_missing"] += 1
-                bounded_failure = "AUTOPILOT_UV_P1_0309_FUNCTION_MISSING"
+            if row[2] != PROJECT_ID:
+                observations["wrong_project"] += 1
+                bounded_failure = "AUTOPILOT_UV_P1_PROJECT_IDENTITY_INVALID"
                 connection.close()
                 continue
-            if not row[3]:
+            if row[3] != TEMP_BRANCH_ID:
+                observations["wrong_branch"] += 1
+                bounded_failure = "AUTOPILOT_UV_P1_BRANCH_IDENTITY_INVALID"
+                connection.close()
+                continue
+            if not row[4]:
+                observations["function_missing"] += 1
+                bounded_failure = "AUTOPILOT_UV_P1_0313_FUNCTION_MISSING"
+                connection.close()
+                continue
+            if not row[5]:
                 observations["execute_denied"] += 1
-                bounded_failure = "AUTOPILOT_UV_P1_0309_EXECUTE_DENIED"
+                bounded_failure = "AUTOPILOT_UV_P1_0313_EXECUTE_DENIED"
+                connection.close()
+                continue
+            if not row[6]:
+                observations["status_view_missing"] += 1
+                bounded_failure = "AUTOPILOT_UV_P1_STATUS_VIEW_MISSING"
+                connection.close()
+                continue
+            if not row[7]:
+                observations["status_view_select_denied"] += 1
+                bounded_failure = "AUTOPILOT_UV_P1_STATUS_VIEW_SELECT_DENIED"
                 connection.close()
                 continue
             print("AUTOPILOT_UV_P1_SCHEMA_PREFLIGHT=PASS", flush=True)
             print("AUTOPILOT_UV_P1_CALLER=autopilot_runtime_login", flush=True)
-            print("AUTOPILOT_UV_P1_0309_FUNCTION=AVAILABLE", flush=True)
-            print("MIGRATION_APPLIED_BY_THIS_RUN=NO", flush=True)
+            print("AUTOPILOT_UV_P1_0313_FUNCTION=AVAILABLE", flush=True)
+            print("AUTOPILOT_UV_P1_STATUS_VIEW=AVAILABLE", flush=True)
+            print(
+                "MIGRATION_APPLIED_BY_THIS_RUN="
+                + ("YES" if MIGRATION_APPLIED_BY_THIS_RUN else "NO"),
+                flush=True,
+            )
             print("TEMPORARY_NEON_ENDPOINT_ONLY=YES", flush=True)
             print("PRODUCTION_DATABASE_CONTACTED=NO", flush=True)
             return connection
@@ -252,11 +299,29 @@ def _register(connection: psycopg.Connection[tuple], task_key: str) -> tuple[str
         row = cursor.fetchone()
     if row is None:
         raise RuntimeError("AUTOPILOT_UV_P1_EMPTY_INGRESS_RESULT")
-    return str(row[0]), str(row[1]), bool(row[2])
+    task_id = str(row[0])
+    if not UUID_PATTERN.fullmatch(task_id):
+        raise RuntimeError("AUTOPILOT_UV_P1_MALFORMED_TASK_ID")
+    return task_id, str(row[1]), bool(row[2])
 
 
-def _verify_live_heads() -> None:
-    """Reject stale immutable task keys before any database connection."""
+def _observe(connection: psycopg.Connection[tuple], task_key: str) -> tuple[str, str]:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT task_id,status FROM autopilot.task_status WHERE task_key=%s",
+            (task_key,),
+        )
+        row = cursor.fetchone()
+    if row is None:
+        raise RuntimeError("AUTOPILOT_UV_P1_TASK_MISSING_FROM_STATUS_VIEW")
+    task_id = str(row[0])
+    if not UUID_PATTERN.fullmatch(task_id):
+        raise RuntimeError("AUTOPILOT_UV_P1_MALFORMED_OBSERVED_TASK_ID")
+    return task_id, str(row[1])
+
+
+def _verify_initial_live_heads() -> None:
+    """Reject stale runner-resolved heads before any database connection."""
     for label, _task_key, pr_number, expected_head in APPROVED:
         live_head = LIVE_HEADS.get(pr_number, "")
         if not re.fullmatch(r"[0-9a-f]{40}", live_head):
@@ -265,13 +330,48 @@ def _verify_live_heads() -> None:
             print(f"UV_P1_{label}_EXPECTED_HEAD={expected_head}", flush=True)
             print(f"UV_P1_{label}_LIVE_HEAD={live_head}", flush=True)
             raise RuntimeError(f"AUTOPILOT_UV_P1_{label}_APPROVAL_STALE")
-        print(f"UV_P1_{label}_LIVE_HEAD_VERIFIED={live_head}", flush=True)
+        print(f"UV_P1_{label}_RUNNER_HEAD_VERIFIED={live_head}", flush=True)
+
+
+def _resolve_current_pr_head(label: str, pr_number: int) -> str:
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{GITHUB_REPOSITORY}/pulls/{pr_number}",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "bridge-school-autopilot-uv-p1-registration-v3",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.load(response)
+    except (OSError, ValueError, urllib.error.URLError) as error:
+        raise RuntimeError(
+            f"AUTOPILOT_UV_P1_{label}_LIVE_HEAD_RESOLUTION_FAILED"
+        ) from error
+
+    if payload.get("state") != "open" or payload.get("draft") is not True:
+        raise RuntimeError(f"AUTOPILOT_UV_P1_{label}_PR_NOT_OPEN_DRAFT")
+    head = payload.get("head", {}).get("sha")
+    if not isinstance(head, str) or not re.fullmatch(r"[0-9a-f]{40}", head):
+        raise RuntimeError(f"AUTOPILOT_UV_P1_{label}_LIVE_HEAD_INVALID")
+    return head
+
+
+def _verify_current_live_head(label: str, pr_number: int, expected_head: str) -> None:
+    """Resolve one PR immediately before mutation or receipt publication."""
+    live_head = _resolve_current_pr_head(label, pr_number)
+    if live_head != expected_head:
+        print(f"UV_P1_{label}_EXPECTED_HEAD={expected_head}", flush=True)
+        print(f"UV_P1_{label}_LIVE_HEAD={live_head}", flush=True)
+        raise RuntimeError(f"AUTOPILOT_UV_P1_{label}_APPROVAL_STALE")
+    print(f"UV_P1_{label}_LIVE_HEAD_VERIFIED={live_head}", flush=True)
 
 
 def main() -> int:
     deadline = time.monotonic() + 1_800
     receipts: list[dict[str, object]] = []
-    _verify_live_heads()
+    _verify_initial_live_heads()
     connection = _connect_runtime()
     try:
         for label, task_key, pr_number, expected_head in APPROVED:
@@ -279,6 +379,7 @@ def main() -> int:
             created = False
             registration_wait_logged = False
             while time.monotonic() < deadline:
+                _verify_current_live_head(label, pr_number, expected_head)
                 try:
                     task_id, status, created = _register(connection, task_key)
                     break
@@ -291,7 +392,7 @@ def main() -> int:
                     if not registration_wait_logged:
                         print(f"AUTOPILOT_UV_P1_{label}_REGISTRATION=WAITING_EXTERNAL", flush=True)
                         registration_wait_logged = True
-                    time.sleep(5)
+                    time.sleep(REGISTRATION_RETRY_SECONDS)
             else:
                 print(f"AUTOPILOT_UV_P1_{label}_REGISTRATION=WAIT_TIMEOUT", flush=True)
                 return 22
@@ -307,7 +408,7 @@ def main() -> int:
             last_status: str | None = None
             while time.monotonic() < deadline:
                 try:
-                    observed_task_id, status, _ = _register(connection, task_key)
+                    observed_task_id, status = _observe(connection, task_key)
                 except psycopg.Error as error:
                     print(f"AUTOPILOT_UV_P1_{label}_OBSERVATION=FAILED_CLOSED", flush=True)
                     print(f"AUTOPILOT_UV_P1_{label}_OBSERVATION_SQLSTATE={error.sqlstate or 'UNKNOWN'}", flush=True)
@@ -325,6 +426,7 @@ def main() -> int:
                 print(f"AUTOPILOT_UV_P1_{label}_OBSERVATION=WAITING_EXTERNAL_TIMEOUT", flush=True)
                 return 25
 
+            _verify_current_live_head(label, pr_number, expected_head)
             receipts.append(
                 {
                     "lane": label,
@@ -345,7 +447,7 @@ def main() -> int:
             "temporary_endpoint_id": TEMP_ENDPOINT_ID,
             "task_count": len(receipts),
             "tasks": receipts,
-            "migration_applied_by_this_run": False,
+            "migration_applied_by_this_run": MIGRATION_APPLIED_BY_THIS_RUN,
             "real_video_execution": False,
             "drive_write": False,
             "oracle_lifecycle_action": False,

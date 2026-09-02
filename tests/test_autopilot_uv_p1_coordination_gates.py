@@ -1,4 +1,9 @@
+import hashlib
+import importlib.util
+import json
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -8,14 +13,42 @@ def _read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
-def test_registration_reconciles_all_live_heads_before_database_connection() -> None:
+def _load_registration_runtime(monkeypatch: pytest.MonkeyPatch):
+    values = {
+        "PROJECT_ID": "misty-poetry-18012774",
+        "TEMP_BRANCH_ID": "br-still-tooth-b1ilkfcj",
+        "PRODUCTION_BRANCH_ID": "br-wispy-lab-b1rq54of",
+        "TEMP_ENDPOINT_ID": "ep-floral-field-b1pjs2of",
+        "LIVE_RUNTIME_HEAD_SHA": "17b74b86b30905f61a47e578b77d18c940691fed",
+        "LIVE_CANARY_HEAD_SHA": "164d0d509fa38fdbe81592201699b1a377187eb0",
+        "LIVE_IDLE_HEAD_SHA": "e8e71b569f8189dd0e2a88a07597a4098a772a74",
+    }
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    path = ROOT / "ops/autopilot/register_uv_p1_runtime.py"
+    spec = importlib.util.spec_from_file_location("register_uv_p1_runtime_test", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_registration_reconciles_all_live_heads_before_database_connection_and_each_mutation() -> None:
     runtime = _read("ops/autopilot/register_uv_p1_runtime.py")
     workflow = _read(".github/workflows/autopilot-uv-p1-register-v3.yml")
 
-    assert runtime.index("_verify_live_heads()") < runtime.index("connection = _connect_runtime()")
+    assert runtime.index("_verify_initial_live_heads()") < runtime.index("connection = _connect_runtime()")
     for name in ("LIVE_RUNTIME_HEAD_SHA", "LIVE_CANARY_HEAD_SHA", "LIVE_IDLE_HEAD_SHA"):
         assert name in runtime
         assert name in workflow
+    registration_loop = runtime.split("for label, task_key, pr_number, expected_head in APPROVED:", 1)[1]
+    mutation = registration_loop.index("task_id, status, created = _register(connection, task_key)")
+    assert registration_loop.rindex("_verify_current_live_head", 0, mutation) < mutation
+    assert registration_loop.count("_register(connection, task_key)") == 1
+    assert "urllib.request.urlopen(request, timeout=10)" in runtime
+    assert "REGISTRATION_RETRY_SECONDS: Final[int] = 60" in runtime
+    assert "observed_task_id, status = _observe(connection, task_key)" in runtime
+    assert "FROM autopilot.task_status WHERE task_key=%s" in runtime
     assert "runtime:997 canary:1062 idle:1047" in workflow
     assert "1000" not in runtime
     assert workflow.index("Resolve live PR heads immediately before registration") < workflow.index(
@@ -23,6 +56,77 @@ def test_registration_reconciles_all_live_heads_before_database_connection() -> 
     )
     assert "github.event_name == 'workflow_dispatch'" in workflow
     assert "allow_temporary_registration == 'YES'" in workflow
+
+
+def test_registration_live_resolver_fails_closed_on_head_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _load_registration_runtime(monkeypatch)
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "state": "open",
+                    "draft": True,
+                    "head": {"sha": "bd6dbea5a935ed8f5410ce8eb328c36829667235"},
+                }
+            ).encode()
+
+    monkeypatch.setattr(runtime.urllib.request, "urlopen", lambda *_args, **_kwargs: Response())
+    with pytest.raises(RuntimeError, match="AUTOPILOT_UV_P1_RUNTIME_APPROVAL_STALE"):
+        runtime._verify_current_live_head(
+            "RUNTIME",
+            997,
+            "17b74b86b30905f61a47e578b77d18c940691fed",
+        )
+
+
+def test_registration_restores_0309_and_applies_only_forward_upgrade_before_ingress() -> None:
+    historical_path = ROOT / "database/migrations/0309_autopilot_uv_p1_bounded_ingress.sql"
+    historical = historical_path.read_bytes()
+    upgrade_path = ROOT / "database/migrations/0313_autopilot_uv_p1_allowlist_upgrade.sql"
+    upgrade_bytes = upgrade_path.read_bytes()
+    upgrade = upgrade_bytes.decode()
+    workflow = _read(".github/workflows/autopilot-uv-p1-register-v3.yml")
+
+    assert hashlib.sha256(historical).hexdigest() == (
+        "14db4783f63375e79f8340be4c6f26ff27211eb0f920deec8455777098343422"
+    )
+    assert "uv-p1-intake-pr1000-5af0675a-20260901" in historical.decode()
+    assert hashlib.sha256(upgrade_bytes).hexdigest() == (
+        "e6184520c9df8d3ab8565fc80eb81c604b79a056e8ced4d1ec5b7246c9ccfd39"
+    )
+    git_blob = hashlib.sha1(
+        f"blob {len(upgrade_bytes)}\0".encode() + upgrade_bytes,
+        usedforsecurity=False,
+    ).hexdigest()
+    assert git_blob == "fa86391dd960ec19752099c83147faf8a9d3c5ae"
+    for value in (
+        "0313_autopilot_uv_p1_allowlist_upgrade",
+        "uv-p1-runtime-pr997-17b74b86b309-20260902",
+        "uv-p1-canary-pr1062-164d0d509fa3-20260902",
+        "uv-p1-idle-pr1047-e8e71b569f81-20260902",
+    ):
+        assert value in upgrade
+        assert value in workflow
+    assert "uv-p1-intake-pr1000-5af0675a-20260901" not in upgrade
+    apply_step = workflow.index("Apply and verify only forward migration 0313")
+    register_step = workflow.index("Register and observe through runtime-only ingress")
+    assert apply_step < register_step
+    apply_body = workflow[apply_step:register_step]
+    assert "-f database/migrations/0313_autopilot_uv_p1_allowlist_upgrade.sql" in apply_body
+    assert "database/scripts/migrate.sh" not in apply_body
+    assert "current_setting('neon.branch_id', true)" in apply_body
+    assert '[[ "$post" == "t|$EXPECTED_0313_SHA256|t|t|t|t|t|t|t|t|f" ]]' in apply_body
+    assert "github.event_name == 'workflow_dispatch'" in workflow
+    assert "MIGRATION_APPLIED_BY_THIS_RUN" in workflow
 
 
 def test_monitor_rejects_missing_or_malformed_durable_task_ids() -> None:
@@ -96,16 +200,43 @@ def test_runtime_gate_paginates_and_trusts_only_designated_reviewers() -> None:
     assert "trusted > 0 && changes_requested == 0 && unresolved == 0" in gate
 
 
-def test_runtime_image_build_has_a_last_second_exact_head_gate() -> None:
+def test_runtime_image_build_rechecks_complete_gate_after_clone_and_before_build() -> None:
     workflow = _read(".github/workflows/autopilot-uv-runtime-exact-image-gate.yml")
 
-    recheck = workflow.index("Revalidate live gates immediately before image build")
-    build = workflow.index("Prepare isolated source and build non-activated image")
-    assert recheck < build
-    assert 'grep -Fx "head=$EXPECTED_HEAD_SHA"' in workflow
-    assert "grep -Fx 'changes_requested=0'" in workflow
+    prepare = workflow.index("Prepare isolated source on Oracle")
+    recheck = workflow.index("Revalidate complete live gate after remote source preparation")
+    build = workflow.index("Build non-activated image with import preflight")
+    cleanup = workflow.index("Remove isolated Oracle build source")
+    assert prepare < recheck < build < cleanup
+    preparation_body = workflow[prepare:recheck]
+    recheck_body = workflow[recheck:build]
+    build_body = workflow[build:cleanup]
+    assert 'git clone --quiet --no-tags --filter=blob:none "$REPO_URL" "$STAGE/source"' in preparation_body
+    assert 'git -C "$STAGE/source" fetch --quiet --no-tags origin "$EXPECTED_COMMIT"' in preparation_body
+    assert "UV_RUNTIME_REMOTE_SOURCE_PREPARED" in preparation_body
+    assert "UV_GATE_PR_NUMBER=997 bash ops/verify_uv_runtime_pr_gate.sh" in recheck_body
+    assert 'grep -Fx "head=$EXPECTED_HEAD_SHA"' in recheck_body
+    assert "grep -Fx 'ci=PASS'" in recheck_body
+    assert "grep -Fx 'review=PASS'" in recheck_body
+    assert "grep -Fx 'unresolved=0'" in recheck_body
+    assert "grep -Fx 'changes_requested=0'" in recheck_body
+    assert "git clone" not in build_body
+    assert 'bash "$BUILD_SCRIPT"' in build_body
     assert "github.event_name == 'workflow_dispatch'" in workflow
     assert "allow_oracle_image_build == 'YES'" in workflow
+
+
+def test_idle_resource_probe_accepts_only_pgrep_match_or_no_match() -> None:
+    workflow = _read(".github/workflows/autopilot-uv-runtime-exact-image-gate.yml")
+
+    resources = workflow.split("Check Oracle resource availability and active-work exclusions", 1)[1]
+    resources = resources.split("Revalidate live gates before remote source preparation", 1)[0]
+    assert "set +e" in resources
+    assert "heavy_probe_rc=$?" in resources
+    assert "heavy_probe_rc == 0 || heavy_probe_rc == 1" in resources
+    assert "UV_RESOURCE_PROCESS_PROBE_FAILED=$heavy_probe_rc" in resources
+    assert "if (( heavy_probe_rc == 1 )); then" in resources
+    assert "heavy=0" in resources
 
 
 def test_image_preflight_cannot_control_services_or_replace_resident_source() -> None:

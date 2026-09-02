@@ -6,6 +6,8 @@ on:
     paths:
       - '.github/workflows/autopilot-uv-p1-register-v3.yml'
       - 'ops/autopilot/register_uv_p1_runtime.py'
+      - 'database/migrations/0309_autopilot_uv_p1_bounded_ingress.sql'
+      - 'database/migrations/0313_autopilot_uv_p1_allowlist_upgrade.sql'
   workflow_dispatch:
     inputs:
       allow_temporary_registration:
@@ -37,7 +39,13 @@ jobs:
       PROJECT_ID: misty-poetry-18012774
       TEMP_BRANCH_ID: br-still-tooth-b1ilkfcj
       PRODUCTION_BRANCH_ID: br-wispy-lab-b1rq54of
+      LEGACY_PRODUCTION_BRANCH_ID: br-cold-moon-a1sgkzfd
       TEMP_ENDPOINT_ID: ep-floral-field-b1pjs2of
+      MIGRATION_ROLE: autopilot_migration_owner_login
+      EXPECTED_0309_BLOB: c0cbc59177c5926079c8657b4d7649b5a6a4181f
+      EXPECTED_0309_SHA256: 14db4783f63375e79f8340be4c6f26ff27211eb0f920deec8455777098343422
+      EXPECTED_0313_BLOB: fa86391dd960ec19752099c83147faf8a9d3c5ae
+      EXPECTED_0313_SHA256: e6184520c9df8d3ab8565fc80eb81c604b79a056e8ced4d1ec5b7246c9ccfd39
     steps:
       - name: Checkout exact Autopilot source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -49,6 +57,10 @@ jobs:
         run: |
           set -Eeuo pipefail
           python -m py_compile ops/autopilot/register_uv_p1_runtime.py
+          [[ "$(git hash-object database/migrations/0309_autopilot_uv_p1_bounded_ingress.sql)" == "$EXPECTED_0309_BLOB" ]]
+          [[ "$(sha256sum database/migrations/0309_autopilot_uv_p1_bounded_ingress.sql | awk '{print $1}')" == "$EXPECTED_0309_SHA256" ]]
+          [[ "$(git hash-object database/migrations/0313_autopilot_uv_p1_allowlist_upgrade.sql)" == "$EXPECTED_0313_BLOB" ]]
+          [[ "$(sha256sum database/migrations/0313_autopilot_uv_p1_allowlist_upgrade.sql | awk '{print $1}')" == "$EXPECTED_0313_SHA256" ]]
           grep -F 'autopilot.register_approved_uv_p1_ci' ops/autopilot/register_uv_p1_runtime.py >/dev/null
           grep -F 'PRODUCTION_DATABASE_CONTACTED=NO' ops/autopilot/register_uv_p1_runtime.py >/dev/null
           ! grep -Eiq 'video[_ -]?execution=true|drive[_ -]?write=true|systemctl +(stop|restart)|shutdown|reboot' \
@@ -76,6 +88,153 @@ jobs:
           done
           echo 'AUTOPILOT_UV_P1_LIVE_HEADS_RESOLVED=PASS'
 
+      - name: Install PostgreSQL client for the bounded forward migration
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Resolve only the exact temporary-branch migration-owner URI
+        id: neon
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -n "${NEON_API_KEY:-}" ]]
+          [[ "$TEMP_BRANCH_ID" != "$PRODUCTION_BRANCH_ID" ]]
+          [[ "$TEMP_BRANCH_ID" != "$LEGACY_PRODUCTION_BRANCH_ID" ]]
+          api="https://console.neon.tech/api/v2/projects/$PROJECT_ID"
+          auth=(-H "Authorization: Bearer $NEON_API_KEY" -H 'Accept: application/json')
+          branch_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID")"
+          endpoint_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID/endpoints")"
+          role_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID/roles/$MIGRATION_ROLE")"
+          uri_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" \
+            "$api/connection_uri?branch_id=$TEMP_BRANCH_ID&database_name=neondb&role_name=$MIGRATION_ROLE&pooled=false")"
+          BRANCH_JSON="$branch_json" ENDPOINT_JSON="$endpoint_json" ROLE_JSON="$role_json" URI_JSON="$uri_json" \
+            python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import sys
+          import urllib.parse
+
+          project = os.environ['PROJECT_ID']
+          branch_id = os.environ['TEMP_BRANCH_ID']
+          endpoint_id = os.environ['TEMP_ENDPOINT_ID']
+          role = os.environ['MIGRATION_ROLE']
+          branch_payload = json.loads(os.environ['BRANCH_JSON'])
+          endpoint_payload = json.loads(os.environ['ENDPOINT_JSON'])
+          role_payload = json.loads(os.environ['ROLE_JSON'])
+          uri_payload = json.loads(os.environ['URI_JSON'])
+          branch = branch_payload.get('branch', branch_payload)
+          assert branch.get('id') == branch_id
+          endpoints = endpoint_payload.get('endpoints', [])
+          assert any(
+              item.get('id') == endpoint_id and item.get('branch_id') == branch_id
+              for item in endpoints
+          )
+          role_object = role_payload.get('role', role_payload)
+          assert role_object.get('name') == role
+          uri = uri_payload.get('uri')
+          assert isinstance(uri, str) and uri
+          parsed = urllib.parse.urlsplit(uri)
+          assert parsed.username == role
+          assert (parsed.path.lstrip('/') or 'neondb') == 'neondb'
+          host = (parsed.hostname or '').lower()
+          assert host.startswith(endpoint_id + '.') and host.endswith('.neon.tech')
+          print(f'::add-mask::{uri}', file=sys.stderr)
+          print(f'database_url={uri}')
+          print(f'project_id={project}')
+          print(f'branch_id={branch_id}')
+          print(f'endpoint_id={endpoint_id}')
+          print('NEON_PRODUCTION_BRANCH_TARGETED=NO')
+          PY
+
+      - name: Apply and verify only forward migration 0313
+        id: migration
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.database_url }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$(git hash-object database/migrations/0309_autopilot_uv_p1_bounded_ingress.sql)" == "$EXPECTED_0309_BLOB" ]]
+          [[ "$(sha256sum database/migrations/0309_autopilot_uv_p1_bounded_ingress.sql | awk '{print $1}')" == "$EXPECTED_0309_SHA256" ]]
+          [[ "$(git hash-object database/migrations/0313_autopilot_uv_p1_allowlist_upgrade.sql)" == "$EXPECTED_0313_BLOB" ]]
+          [[ "$(sha256sum database/migrations/0313_autopilot_uv_p1_allowlist_upgrade.sql | awk '{print $1}')" == "$EXPECTED_0313_SHA256" ]]
+          pre="$(psql "$DATABASE_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 <<'SQL'
+          SELECT current_database(), current_user,
+                 current_setting('neon.project_id', true),
+                 current_setting('neon.branch_id', true),
+                 EXISTS (
+                     SELECT 1 FROM public.schema_migration
+                      WHERE migration_key='0309_autopilot_uv_p1_bounded_ingress'
+                 ),
+                 COALESCE((
+                     SELECT checksum FROM public.schema_migration
+                      WHERE migration_key='0309_autopilot_uv_p1_bounded_ingress'
+                 ), ''),
+                 EXISTS (
+                     SELECT 1 FROM public.schema_migration
+                      WHERE migration_key='0313_autopilot_uv_p1_allowlist_upgrade'
+                 ),
+                 (SELECT rolcreaterole FROM pg_roles WHERE rolname=current_user),
+                 has_database_privilege(current_user,current_database(),'CREATE');
+          SQL
+          )"
+          IFS='|' read -r database_name database_user project_id branch_id migration_0309 checksum_0309 migration_0313 can_create_role can_create_objects <<<"$pre"
+          [[ "$database_name" == neondb && "$database_user" == "$MIGRATION_ROLE" ]]
+          [[ "$project_id" == "$PROJECT_ID" && "$branch_id" == "$TEMP_BRANCH_ID" ]]
+          [[ "$branch_id" != "$PRODUCTION_BRANCH_ID" && "$branch_id" != "$LEGACY_PRODUCTION_BRANCH_ID" ]]
+          [[ "$migration_0309" == t && "$checksum_0309" == "$EXPECTED_0309_SHA256" ]]
+          [[ "$can_create_role" == f && "$can_create_objects" == t ]]
+          applied=NO
+          if [[ "$migration_0313" == f ]]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+              -f database/migrations/0313_autopilot_uv_p1_allowlist_upgrade.sql >/dev/null
+            applied=YES
+          fi
+          psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+            -v migration_checksum="$EXPECTED_0313_SHA256" <<'SQL' >/dev/null
+          UPDATE public.schema_migration
+             SET checksum = :'migration_checksum'
+           WHERE migration_key = '0313_autopilot_uv_p1_allowlist_upgrade'
+             AND checksum IS NULL;
+          SQL
+          post="$(psql "$DATABASE_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 <<'SQL'
+          WITH definition AS (
+              SELECT pg_get_functiondef(
+                  'autopilot.register_approved_uv_p1_ci(text)'::regprocedure
+              ) AS body
+          )
+          SELECT EXISTS (
+                     SELECT 1 FROM public.schema_migration
+                      WHERE migration_key='0313_autopilot_uv_p1_allowlist_upgrade'
+                 ),
+                 (SELECT checksum FROM public.schema_migration
+                   WHERE migration_key='0313_autopilot_uv_p1_allowlist_upgrade'),
+                 position('uv-p1-runtime-pr997-17b74b86b309-20260902' in body) > 0,
+                 position('uv-p1-canary-pr1062-164d0d509fa3-20260902' in body) > 0,
+                 position('uv-p1-idle-pr1047-e8e71b569f81-20260902' in body) > 0,
+                 position('uv-p1-runtime-pr997-545ef013-20260901' in body) = 0,
+                 position('uv-p1-intake-pr1000-5af0675a-20260901' in body) = 0,
+                 position('uv-p1-idle-pr1047-621ab073-20260901' in body) = 0,
+                 has_function_privilege(
+                     'autopilot_runtime',
+                     'autopilot.register_approved_uv_p1_ci(text)',
+                     'EXECUTE'
+                 ),
+                 has_table_privilege('autopilot_runtime','autopilot.task_status','SELECT'),
+                 has_table_privilege('autopilot_runtime','autopilot.task','SELECT')
+            FROM definition;
+          SQL
+          )"
+          [[ "$post" == "t|$EXPECTED_0313_SHA256|t|t|t|t|t|t|t|t|f" ]]
+          echo "applied=$applied" >> "$GITHUB_OUTPUT"
+          echo 'AUTOPILOT_TEMP_NEON_MIGRATION_0313=PASS'
+          echo 'AUTOPILOT_RUNTIME_DIRECT_TABLE_ACCESS=NO'
+          echo 'PRODUCTION_MUTATION=NO'
+
       - name: Register and observe through runtime-only ingress
         id: register
         shell: bash
@@ -97,7 +256,7 @@ jobs:
             -o UserKnownHostsFile="$known" \
             -o ConnectTimeout=15 \
             "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n env PROJECT_ID='$PROJECT_ID' TEMP_BRANCH_ID='$TEMP_BRANCH_ID' PRODUCTION_BRANCH_ID='$PRODUCTION_BRANCH_ID' TEMP_ENDPOINT_ID='$TEMP_ENDPOINT_ID' LIVE_RUNTIME_HEAD_SHA='${{ steps.refs.outputs.runtime_head }}' LIVE_CANARY_HEAD_SHA='${{ steps.refs.outputs.canary_head }}' LIVE_IDLE_HEAD_SHA='${{ steps.refs.outputs.idle_head }}' /opt/bridge-school/school-autopilot/.venv/bin/python -" \
+            "sudo -n env PROJECT_ID='$PROJECT_ID' TEMP_BRANCH_ID='$TEMP_BRANCH_ID' PRODUCTION_BRANCH_ID='$PRODUCTION_BRANCH_ID' TEMP_ENDPOINT_ID='$TEMP_ENDPOINT_ID' MIGRATION_APPLIED_BY_THIS_RUN='${{ steps.migration.outputs.applied }}' LIVE_RUNTIME_HEAD_SHA='${{ steps.refs.outputs.runtime_head }}' LIVE_CANARY_HEAD_SHA='${{ steps.refs.outputs.canary_head }}' LIVE_IDLE_HEAD_SHA='${{ steps.refs.outputs.idle_head }}' /opt/bridge-school/school-autopilot/.venv/bin/python -" \
             < ops/autopilot/register_uv_p1_runtime.py | tee "$log"
           rc=${PIPESTATUS[0]}
           set -e
@@ -108,7 +267,8 @@ jobs:
                .real_video_execution == false and .drive_write == false and
                .oracle_lifecycle_action == false and
                .production_database_contacted == false and
-               .production_mutation == false' \
+               .production_mutation == false and
+               (.migration_applied_by_this_run | type) == "boolean"' \
               > uv-p1-registration-receipt.json
           else
             jq -n \
@@ -137,9 +297,10 @@ jobs:
             echo '### Universal Video P1 Autopilot registration v3'
             echo '- target: temporary Neon endpoint `ep-floral-field-b1pjs2of` only'
             echo '- bounded ingress: `autopilot.register_approved_uv_p1_ci(text)`'
-            echo '- observation: exact replay of the same SECURITY DEFINER ingress'
+            echo '- migration: restored immutable `0309`; applied/verified forward-only `0313`'
+            echo '- migration applied by this run: `${{ steps.migration.outputs.applied }}`'
+            echo '- observation: least-privilege `autopilot.task_status` view'
             echo '- direct Autopilot table reads: `NO`'
-            echo '- migration applied by this run: `NO`'
             echo '- production database contacted: `NO`'
             echo '- real media execution: `NO`'
             echo '- Drive write: `NO`'
