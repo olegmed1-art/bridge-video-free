@@ -96,7 +96,7 @@ if [[ "$BUILD_IMAGE" == 1 ]]; then
     done
     if [[ -d /var/lib/docker && ! -L /var/lib/docker ]]; then
       storage_used_kb="$(du -skx /var/lib/docker | awk '{print $1}')"
-      printf 'UNIVERSAL_VIDEO_CONTAINER_STORAGE area=docker used_kb=%s\n' "$storage_used_kb"
+      printf 'UNIVERSAL_VIDEO_CONTAINER_STORAGE area=docker used_kb=%s\n' "$storage_area" "$storage_used_kb"
     fi
     for storage_spec in \
       "source:$SOURCE_DIR" \
@@ -162,6 +162,19 @@ uid="$(id -u "$USER_NAME")"
 gid="$(id -g "$USER_NAME")"
 oauth_file="$BASE_DIR/secrets/google-drive-oauth.json"
 [[ -f "$oauth_file" && ! -L "$oauth_file" ]] || die 'protected Google Drive OAuth file missing'
+queue_dsn_file="$BASE_DIR/secrets/video-queue-dsn"
+if [[ "$ACTIVATE" == 1 ]]; then
+  [[ -f "$queue_dsn_file" && ! -L "$queue_dsn_file" ]] \
+    || die 'protected video queue credential missing'
+  queue_dsn_meta="$(stat -c '%U:%G:%a:%s' "$queue_dsn_file" 2>/dev/null || true)"
+  [[ "$queue_dsn_meta" =~ ^root:${GROUP_NAME}:640:([1-9][0-9]{0,3})$ ]] \
+    || die 'protected video queue credential metadata invalid'
+  (( BASH_REMATCH[1] <= 4096 )) \
+    || die 'protected video queue credential is too large'
+  python3 "$SOURCE_DIR/ops/validate_video_queue_dsn.py" "$queue_dsn_file" >/dev/null \
+    || die 'protected video queue credential content invalid'
+  log 'Protected video queue credential validated for activation'
+fi
 cat >"$BASE_DIR/universal-video-container.env" <<EOF
 UNIVERSAL_VIDEO_SOURCE_COMMIT=$commit
 UNIVERSAL_VIDEO_CONTAINER_UID=$uid
@@ -174,6 +187,7 @@ UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE=/var/lib/universal-video/model-cache/speaker
 UNIVERSAL_VIDEO_STATUS_PATH=/run/bridge-school/universal-video-status.json
 HF_HOME=/var/lib/universal-video/model-cache
 GOOGLE_DRIVE_OAUTH_JSON_FILE=/run/secrets/google-drive-oauth.json
+BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE=/run/secrets/video-queue-dsn
 UNIVERSAL_VIDEO_REQUIRE_STAGED_SOURCE=1
 UNIVERSAL_VIDEO_WHISPER_MODEL=${UNIVERSAL_VIDEO_WHISPER_MODEL:-small}
 UNIVERSAL_VIDEO_ASR_THREADS=${UNIVERSAL_VIDEO_ASR_THREADS:-6}
