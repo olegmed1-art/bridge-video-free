@@ -1,0 +1,230 @@
+name: Issue 881 Authoritative External Pre-Canary Evidence
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/issue-881-authoritative-external-evidence.yml'
+      - 'deploy/oracle-universal-video/Dockerfile'
+      - 'ops/oracle_universal_video_container_install.sh'
+      - 'ops/oracle_universal_video_precanary_attest.sh'
+      - 'ops/oracle_universal_video_run_command.sh'
+      - 'ops/validate_video_queue_dsn.py'
+      - 'universal_video/**'
+      - 'bridge_vision/**'
+      - 'bridge_contracts/**'
+      - 'database/**'
+      - 'bridge_*.py'
+      - 'route_drive_job_outputs.py'
+      - 'requirements-worker.txt'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  exact-external-precanary:
+    if: >-
+      github.event.pull_request.number == 1062 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'exec2/issue-881-exact-canary-readiness'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      EXACT_SHA: ${{ github.event.pull_request.head.sha }}
+      INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      OCI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+      HOST_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ env.EXACT_SHA }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Validate exact authoritative head
+        run: |
+          set -euo pipefail
+          [[ "$EXACT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXACT_SHA"
+          grep -Eq '^FROM python@sha256:[0-9a-f]{64}$' deploy/oracle-universal-video/Dockerfile
+          bash -n ops/oracle_universal_video_precanary_attest.sh
+          bash -n ops/oracle_universal_video_container_install.sh
+          grep -F 'flock --exclusive --nonblock 9' ops/oracle_universal_video_precanary_attest.sh
+          grep -F '"$image_id" "$@"' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'UNIVERSAL_VIDEO_IMAGE=$image_id' ops/oracle_universal_video_container_install.sh
+          grep -F '"$image_id" true' ops/oracle_universal_video_container_install.sh
+          git show "$EXACT_SHA:ops/oracle_universal_video_run_command.sh" > "$RUNNER_TEMP/prepare.sh"
+          chmod 0700 "$RUNNER_TEMP/prepare.sh"
+          cp ops/oracle_universal_video_precanary_attest.sh "$RUNNER_TEMP/attest.sh"
+          chmod 0700 "$RUNNER_TEMP/attest.sh"
+          : > "$RUNNER_TEMP/issue-881-authoritative-external-evidence.txt"
+
+      - name: Ensure Oracle capacity is reachable
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q oci-cli
+          u="$(printf '%s\n' "$OCI_USER" | sed -nE 's/^[[:space:]]*(user=)?(ocid1\.user\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p' | head -n1)"
+          f="$(printf '%s\n' "$OCI_FINGERPRINT" | sed -nE 's/^[[:space:]]*(fingerprint=)?([0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){15})[[:space:]]*$/\2/p' | head -n1)"
+          t="$(printf '%s\n' "$OCI_TENANCY" | sed -nE 's/^[[:space:]]*(tenancy=)?(ocid1\.tenancy\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p' | head -n1)"
+          [[ -n "$u" && -n "$f" && -n "$t" ]]
+          install -d -m 0700 "$RUNNER_TEMP/oci"
+          printf '%s\n' "$OCI_KEY" > "$RUNNER_TEMP/oci/key.pem"
+          chmod 0600 "$RUNNER_TEMP/oci/key.pem"
+          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s\n' \
+            "$u" "$f" "$t" "$OCI_REGION" "$RUNNER_TEMP/oci/key.pem" > "$RUNNER_TEMP/oci/config"
+          chmod 0600 "$RUNNER_TEMP/oci/config"
+          state="$(oci --config-file "$RUNNER_TEMP/oci/config" compute instance get \
+            --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
+          case "$state" in
+            RUNNING) ;;
+            STOPPED)
+              oci --config-file "$RUNNER_TEMP/oci/config" compute instance action \
+                --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING \
+                --max-wait-seconds 600 >/dev/null
+              ;;
+            *) exit 1 ;;
+          esac
+
+      - name: Establish pinned SSH identity
+        id: ssh
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$HOST_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Build exact image and attest metadata only under one fence
+        run: |
+          set -Eeuo pipefail
+          evidence="$RUNNER_TEMP/issue-881-authoritative-external-evidence.txt"
+          session_log="$RUNNER_TEMP/precanary-session.log"
+          remote_stage="/tmp/uv-issue881-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          remote_root="/root/uv-issue881-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          s=(ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          c=(scp -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" \
+            -o ConnectTimeout=15)
+
+          cleanup_remote(){
+            trap - EXIT
+            "${s[@]}" "sudo -n rm -rf '$remote_root'; rm -rf '$remote_stage'" >/dev/null 2>&1 || true
+          }
+          trap cleanup_remote EXIT
+
+          bounded_failure(){
+            rc=$?
+            trap - ERR
+            {
+              echo "runtime_sha=$EXACT_SHA"
+              echo "step_exit=$rc"
+              grep -E '^UNIVERSAL_VIDEO_(PRECANARY_WINDOW|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|STORAGE|CLEANUP|INSTALL_PASS)|PRECANARY_(RUNTIME|STATE|ATTEST_PASS)) |^\{"error_code":"UV_[A-Z0-9_]+","status":"FAILED"\}$|^ERROR:' \
+                "$session_log" 2>/dev/null || true
+              echo 'real_media_canary_run=false'
+              echo 'source_media_downloaded=false'
+              echo 'drive_write_performed=false'
+              echo 'automatic_batch_release=false'
+              echo 'canonical_promotion_allowed=false'
+              echo 'publication_state=NOT_PUBLISHED'
+            } > "$evidence"
+            cat "$evidence" >> "$GITHUB_STEP_SUMMARY"
+            exit "$rc"
+          }
+          trap bounded_failure ERR
+
+          "${s[@]}" "umask 077; rm -rf '$remote_stage'; mkdir -m 0700 '$remote_stage'"
+          "${c[@]}" "$RUNNER_TEMP/prepare.sh" "$ORACLE_USER@$ORACLE_HOST:$remote_stage/prepare.sh"
+          "${c[@]}" "$RUNNER_TEMP/attest.sh" "$ORACLE_USER@$ORACLE_HOST:$remote_stage/attest.sh"
+          prepare_sha="$(sha256sum "$RUNNER_TEMP/prepare.sh" | awk '{print $1}')"
+          attest_sha="$(sha256sum "$RUNNER_TEMP/attest.sh" | awk '{print $1}')"
+          "${s[@]}" "set -e; \
+            test \"\$(sha256sum '$remote_stage/prepare.sh' | awk '{print \$1}')\" = '$prepare_sha'; \
+            test \"\$(sha256sum '$remote_stage/attest.sh' | awk '{print \$1}')\" = '$attest_sha'; \
+            sudo -n install -d -o root -g root -m 0700 '$remote_root'; \
+            sudo -n install -o root -g root -m 0700 '$remote_stage/prepare.sh' '$remote_root/prepare.sh'; \
+            sudo -n install -o root -g root -m 0700 '$remote_stage/attest.sh' '$remote_root/attest.sh'"
+
+          set +e
+          "${s[@]}" "sudo -n env \
+            UNIVERSAL_VIDEO_EXPECTED_SHA='$EXACT_SHA' \
+            UNIVERSAL_VIDEO_PREPARE_SCRIPT='$remote_root/prepare.sh' \
+            UNIVERSAL_VIDEO_PRECANARY_BUILD_IMAGE=1 \
+            UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB=5242880 \
+            UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE=1 \
+            UNIVERSAL_VIDEO_CANARY_FILE_ID='198-2v3JBlNQobdsPYQQWzrrCqQ1zBZOI' \
+            UNIVERSAL_VIDEO_CANARY_NAME='Диана 13.mp4' \
+            UNIVERSAL_VIDEO_CANARY_MIME='video/mp4' \
+            UNIVERSAL_VIDEO_CANARY_SIZE='696237577' \
+            UNIVERSAL_VIDEO_CANARY_PARENT='1Fr-H2NgBKEpp3q_H4FzNmQwCV6bj2x6b' \
+            bash '$remote_root/attest.sh'" > "$session_log" 2>&1
+          session_rc=$?
+          set -e
+          (( session_rc == 0 )) || return "$session_rc"
+
+          grep -E "^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} activated=0$" "$session_log"
+          grep -E "^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$" "$session_log"
+          installed_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) activated=0$/\\1/p" "$session_log")"
+          attested_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$/\\1/p" "$session_log")"
+          [[ "$installed_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$attested_digest" == "$installed_digest" ]]
+          grep -F '"gate":"IMPORT_CLOSURE"' "$session_log"
+          grep -F '"gate":"SYNTHETIC_RESULT_CONTRACT"' "$session_log"
+          grep -F '"gate":"SOURCE_IDENTITY_METADATA_ONLY"' "$session_log"
+          grep -F '"file_id":"198-2v3JBlNQobdsPYQQWzrrCqQ1zBZOI"' "$session_log"
+          grep -F '"checksum_type":"md5"' "$session_log"
+          grep -F '"checksum_value":"b6ebeec5be5909d00d3902c92c380b07"' "$session_log"
+          grep -F '"source_media_downloaded":false' "$session_log"
+          grep -E '^UNIVERSAL_VIDEO_PRECANARY_WINDOW .*workload_fence=exclusive .*services_quiescent=true .*restore_on_exit=true$' "$session_log"
+
+          trap - ERR
+          {
+            echo "runtime_sha=$EXACT_SHA"
+            grep -E '^UNIVERSAL_VIDEO_(PRECANARY_WINDOW|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|CLEANUP|INSTALL_PASS)|PRECANARY_(RUNTIME|STATE|ATTEST_PASS)) ' "$session_log"
+            grep -E '"gate":"(IMPORT_CLOSURE|SYNTHETIC_RESULT_CONTRACT|SOURCE_IDENTITY_METADATA_ONLY)"' "$session_log"
+            echo "image_digest=$installed_digest"
+            echo 'real_media_canary_run=false'
+            echo 'source_media_downloaded=false'
+            echo 'drive_write_performed=false'
+            echo 'automatic_batch_release=false'
+            echo 'canonical_promotion_allowed=false'
+            echo 'publication_state=NOT_PUBLISHED'
+          } > "$evidence"
+          cat "$evidence" >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: issue-881-authoritative-external-${{ env.EXACT_SHA }}
+          path: ${{ runner.temp }}/issue-881-authoritative-external-evidence.txt
+          if-no-files-found: error
+          retention-days: 14
