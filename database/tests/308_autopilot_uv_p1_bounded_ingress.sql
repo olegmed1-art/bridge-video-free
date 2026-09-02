@@ -37,7 +37,7 @@ BEGIN
 
     SELECT * INTO runtime_row
       FROM autopilot.register_approved_uv_p1_ci(
-          'uv-p1-runtime-pr997-17b74b86b309-20260902'
+          'uv-p1-runtime-pr997-c1515c5af4a4-20260902'
       );
     IF NOT runtime_row.created OR runtime_row.status <> 'READY' THEN
         RAISE EXCEPTION 'AUTOPILOT_UV_P1_CREATE_INVALID';
@@ -49,7 +49,7 @@ BEGIN
            AND goal_json = jsonb_build_object(
                'repository', 'olegmed1-art/bridge-video-free',
                'pr_number', 997,
-               'expected_head_sha', '17b74b86b30905f61a47e578b77d18c940691fed',
+               'expected_head_sha', 'c1515c5af4a47c7468d7c4769e91082f7afd163c',
                'require_draft', true
            )
            AND current_step_key = 'github.ci.snapshot'
@@ -68,7 +68,7 @@ BEGIN
 
     SELECT * INTO replay_row
       FROM autopilot.register_approved_uv_p1_ci(
-          'uv-p1-runtime-pr997-17b74b86b309-20260902'
+          'uv-p1-runtime-pr997-c1515c5af4a4-20260902'
       );
     IF replay_row.created OR replay_row.task_id <> runtime_row.task_id THEN
         RAISE EXCEPTION 'AUTOPILOT_UV_P1_REPLAY_FAILED';
@@ -76,7 +76,7 @@ BEGIN
 
     BEGIN
         PERFORM * FROM autopilot.register_approved_uv_p1_ci(
-            'uv-p1-canary-pr1062-164d0d509fa3-20260902'
+            'uv-p1-canary-pr1062-8aa4f80b8d20-20260902'
         );
         RAISE EXCEPTION 'AUTOPILOT_UV_P1_ACTIVE_LIMIT_BYPASSED';
     EXCEPTION WHEN OTHERS THEN
@@ -91,7 +91,7 @@ BEGIN
 
     SELECT * INTO canary_row
       FROM autopilot.register_approved_uv_p1_ci(
-          'uv-p1-canary-pr1062-164d0d509fa3-20260902'
+          'uv-p1-canary-pr1062-8aa4f80b8d20-20260902'
       );
     IF NOT canary_row.created THEN
         RAISE EXCEPTION 'AUTOPILOT_UV_P1_SECOND_CREATE_FAILED';
@@ -105,7 +105,7 @@ BEGIN
 
     SELECT * INTO idle_row
       FROM autopilot.register_approved_uv_p1_ci(
-          'uv-p1-idle-pr1047-e8e71b569f81-20260902'
+          'uv-p1-idle-pr1061-8ab8d74c2a0f-20260902'
       );
     IF NOT idle_row.created THEN
         RAISE EXCEPTION 'AUTOPILOT_UV_P1_THIRD_CREATE_FAILED';

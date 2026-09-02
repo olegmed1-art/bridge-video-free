@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Register the three director-approved UV P1 CI snapshots through migration 0313.
+"""Register the three director-approved UV P1 CI snapshots through migration 0314.
 
 This program is intentionally narrow:
 - it rewrites discovered Neon DSNs to one exact temporary endpoint;
-- it accepts only the immutable task keys embedded in migration 0313;
+- it accepts only the immutable task keys embedded in migration 0314;
 - it resolves the relevant public PR immediately before every registration;
 - it observes status only through the runtime-readable task_status view;
 - it never selects Autopilot tables directly and never contacts production.
@@ -37,27 +37,27 @@ MIGRATION_APPLIED_BY_THIS_RUN: Final[bool] = (
 LIVE_HEADS: Final[dict[int, str]] = {
     997: os.environ["LIVE_RUNTIME_HEAD_SHA"],
     1062: os.environ["LIVE_CANARY_HEAD_SHA"],
-    1047: os.environ["LIVE_IDLE_HEAD_SHA"],
+    1061: os.environ["LIVE_IDLE_HEAD_SHA"],
 }
 
 APPROVED: Final[tuple[tuple[str, str, int, str], ...]] = (
     (
         "RUNTIME",
-        "uv-p1-runtime-pr997-17b74b86b309-20260902",
+        "uv-p1-runtime-pr997-c1515c5af4a4-20260902",
         997,
-        "17b74b86b30905f61a47e578b77d18c940691fed",
+        "c1515c5af4a47c7468d7c4769e91082f7afd163c",
     ),
     (
         "CANARY",
-        "uv-p1-canary-pr1062-164d0d509fa3-20260902",
+        "uv-p1-canary-pr1062-8aa4f80b8d20-20260902",
         1062,
-        "164d0d509fa38fdbe81592201699b1a377187eb0",
+        "8aa4f80b8d2003e86bb0603183d8513001d4e28b",
     ),
     (
         "IDLE",
-        "uv-p1-idle-pr1047-e8e71b569f81-20260902",
-        1047,
-        "e8e71b569f8189dd0e2a88a07597a4098a772a74",
+        "uv-p1-idle-pr1061-8ab8d74c2a0f-20260902",
+        1061,
+        "8ab8d74c2a0ffd281ae4ccea9e5c8e55eea2ab45",
     ),
 )
 TERMINAL: Final[set[str]] = {
@@ -245,12 +245,12 @@ def _connect_runtime() -> psycopg.Connection[tuple]:
                 continue
             if not row[4]:
                 observations["function_missing"] += 1
-                bounded_failure = "AUTOPILOT_UV_P1_0313_FUNCTION_MISSING"
+                bounded_failure = "AUTOPILOT_UV_P1_0314_FUNCTION_MISSING"
                 connection.close()
                 continue
             if not row[5]:
                 observations["execute_denied"] += 1
-                bounded_failure = "AUTOPILOT_UV_P1_0313_EXECUTE_DENIED"
+                bounded_failure = "AUTOPILOT_UV_P1_0314_EXECUTE_DENIED"
                 connection.close()
                 continue
             if not row[6]:
@@ -265,7 +265,7 @@ def _connect_runtime() -> psycopg.Connection[tuple]:
                 continue
             print("AUTOPILOT_UV_P1_SCHEMA_PREFLIGHT=PASS", flush=True)
             print("AUTOPILOT_UV_P1_CALLER=autopilot_runtime_login", flush=True)
-            print("AUTOPILOT_UV_P1_0313_FUNCTION=AVAILABLE", flush=True)
+            print("AUTOPILOT_UV_P1_0314_FUNCTION=AVAILABLE", flush=True)
             print("AUTOPILOT_UV_P1_STATUS_VIEW=AVAILABLE", flush=True)
             print(
                 "MIGRATION_APPLIED_BY_THIS_RUN="

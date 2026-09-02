@@ -19,9 +19,9 @@ def _load_registration_runtime(monkeypatch: pytest.MonkeyPatch):
         "TEMP_BRANCH_ID": "br-still-tooth-b1ilkfcj",
         "PRODUCTION_BRANCH_ID": "br-wispy-lab-b1rq54of",
         "TEMP_ENDPOINT_ID": "ep-floral-field-b1pjs2of",
-        "LIVE_RUNTIME_HEAD_SHA": "17b74b86b30905f61a47e578b77d18c940691fed",
-        "LIVE_CANARY_HEAD_SHA": "164d0d509fa38fdbe81592201699b1a377187eb0",
-        "LIVE_IDLE_HEAD_SHA": "e8e71b569f8189dd0e2a88a07597a4098a772a74",
+        "LIVE_RUNTIME_HEAD_SHA": "c1515c5af4a47c7468d7c4769e91082f7afd163c",
+        "LIVE_CANARY_HEAD_SHA": "8aa4f80b8d2003e86bb0603183d8513001d4e28b",
+        "LIVE_IDLE_HEAD_SHA": "8ab8d74c2a0ffd281ae4ccea9e5c8e55eea2ab45",
     }
     for name, value in values.items():
         monkeypatch.setenv(name, value)
@@ -49,7 +49,7 @@ def test_registration_reconciles_all_live_heads_before_database_connection_and_e
     assert "REGISTRATION_RETRY_SECONDS: Final[int] = 60" in runtime
     assert "observed_task_id, status = _observe(connection, task_key)" in runtime
     assert "FROM autopilot.task_status WHERE task_key=%s" in runtime
-    assert "runtime:997 canary:1062 idle:1047" in workflow
+    assert "runtime:997 canary:1062 idle:1061" in workflow
     assert "1000" not in runtime
     assert workflow.index("Resolve live PR heads immediately before registration") < workflow.index(
         "Register and observe through runtime-only ingress"
@@ -84,14 +84,16 @@ def test_registration_live_resolver_fails_closed_on_head_drift(
         runtime._verify_current_live_head(
             "RUNTIME",
             997,
-            "17b74b86b30905f61a47e578b77d18c940691fed",
+            "c1515c5af4a47c7468d7c4769e91082f7afd163c",
         )
 
 
 def test_registration_restores_0309_and_applies_only_forward_upgrade_before_ingress() -> None:
     historical_path = ROOT / "database/migrations/0309_autopilot_uv_p1_bounded_ingress.sql"
     historical = historical_path.read_bytes()
-    upgrade_path = ROOT / "database/migrations/0313_autopilot_uv_p1_allowlist_upgrade.sql"
+    predecessor_path = ROOT / "database/migrations/0313_autopilot_uv_p1_allowlist_upgrade.sql"
+    predecessor = predecessor_path.read_bytes()
+    upgrade_path = ROOT / "database/migrations/0314_autopilot_uv_p1_allowlist_upgrade.sql"
     upgrade_bytes = upgrade_path.read_bytes()
     upgrade = upgrade_bytes.decode()
     workflow = _read(".github/workflows/autopilot-uv-p1-register-v3.yml")
@@ -100,35 +102,44 @@ def test_registration_restores_0309_and_applies_only_forward_upgrade_before_ingr
         "14db4783f63375e79f8340be4c6f26ff27211eb0f920deec8455777098343422"
     )
     assert "uv-p1-intake-pr1000-5af0675a-20260901" in historical.decode()
-    assert hashlib.sha256(upgrade_bytes).hexdigest() == (
+    assert hashlib.sha256(predecessor).hexdigest() == (
         "e6184520c9df8d3ab8565fc80eb81c604b79a056e8ced4d1ec5b7246c9ccfd39"
+    )
+    assert hashlib.sha256(upgrade_bytes).hexdigest() == (
+        "69be0dd729f9056d36478ee3fcc16326cfc631ae9f6cdbad85f8c8e7f9c1f2d1"
     )
     git_blob = hashlib.sha1(
         f"blob {len(upgrade_bytes)}\0".encode() + upgrade_bytes,
         usedforsecurity=False,
     ).hexdigest()
-    assert git_blob == "fa86391dd960ec19752099c83147faf8a9d3c5ae"
+    assert git_blob == "fa2598af4866dd070a6e6623bd670d772cb35028"
     for value in (
-        "0313_autopilot_uv_p1_allowlist_upgrade",
-        "uv-p1-runtime-pr997-17b74b86b309-20260902",
-        "uv-p1-canary-pr1062-164d0d509fa3-20260902",
-        "uv-p1-idle-pr1047-e8e71b569f81-20260902",
+        "0314_autopilot_uv_p1_allowlist_upgrade",
+        "uv-p1-runtime-pr997-c1515c5af4a4-20260902",
+        "uv-p1-canary-pr1062-8aa4f80b8d20-20260902",
+        "uv-p1-idle-pr1061-8ab8d74c2a0f-20260902",
     ):
         assert value in upgrade
         assert value in workflow
+    assert "0313_autopilot_uv_p1_allowlist_upgrade" in upgrade
+    assert "AUTOPILOT_UV_P1_0313_REQUIRED" in upgrade
+    assert "EXPECTED_0313_BLOB: fa86391dd960ec19752099c83147faf8a9d3c5ae" in workflow
+    assert "EXPECTED_0313_SHA256: e6184520c9df8d3ab8565fc80eb81c604b79a056e8ced4d1ec5b7246c9ccfd39" in workflow
+    assert 'git hash-object database/migrations/0313_autopilot_uv_p1_allowlist_upgrade.sql' in workflow
+    assert '[[ "$migration_0313" == t && "$checksum_0313" == "$EXPECTED_0313_SHA256" ]]' in workflow
     assert "uv-p1-intake-pr1000-5af0675a-20260901" not in upgrade
-    apply_step = workflow.index("Apply and verify only forward migration 0313")
+    apply_step = workflow.index("Apply and verify only forward migration 0314")
     register_step = workflow.index("Register and observe through runtime-only ingress")
     assert apply_step < register_step
     apply_body = workflow[apply_step:register_step]
-    assert "-f database/migrations/0313_autopilot_uv_p1_allowlist_upgrade.sql" in apply_body
+    assert "-f database/migrations/0314_autopilot_uv_p1_allowlist_upgrade.sql" in apply_body
     assert "database/scripts/migrate.sh" not in apply_body
     assert "current_setting('neon.branch_id', true)" in apply_body
-    assert '[[ "$post" == "t|$EXPECTED_0313_SHA256|t|t|t|t|t|t|t|t|f" ]]' in apply_body
+    assert '[[ "$post" == "t|$EXPECTED_0314_SHA256|t|t|t|t|t|t|t|t|f" ]]' in apply_body
     preflight = apply_body.index('pre="$(psql')
     head_recheck = apply_body.index("revalidate_pr_heads", preflight)
     migration_write = apply_body.index(
-        '-f database/migrations/0313_autopilot_uv_p1_allowlist_upgrade.sql',
+        '-f database/migrations/0314_autopilot_uv_p1_allowlist_upgrade.sql',
         head_recheck,
     )
     ledger_write = apply_body.index("UPDATE public.schema_migration", migration_write)
@@ -137,13 +148,13 @@ def test_registration_restores_0309_and_applies_only_forward_upgrade_before_ingr
     for binding in (
         '"runtime:997:$APPROVED_RUNTIME_HEAD:$EXPECTED_RUNTIME_HEAD"',
         '"canary:1062:$APPROVED_CANARY_HEAD:$EXPECTED_CANARY_HEAD"',
-        '"idle:1047:$APPROVED_IDLE_HEAD:$EXPECTED_IDLE_HEAD"',
+        '"idle:1061:$APPROVED_IDLE_HEAD:$EXPECTED_IDLE_HEAD"',
     ):
         assert binding in apply_body
     for approved in (
-        "APPROVED_RUNTIME_HEAD: 17b74b86b30905f61a47e578b77d18c940691fed",
-        "APPROVED_CANARY_HEAD: 164d0d509fa38fdbe81592201699b1a377187eb0",
-        "APPROVED_IDLE_HEAD: e8e71b569f8189dd0e2a88a07597a4098a772a74",
+        "APPROVED_RUNTIME_HEAD: c1515c5af4a47c7468d7c4769e91082f7afd163c",
+        "APPROVED_CANARY_HEAD: 8aa4f80b8d2003e86bb0603183d8513001d4e28b",
+        "APPROVED_IDLE_HEAD: 8ab8d74c2a0ffd281ae4ccea9e5c8e55eea2ab45",
     ):
         assert approved in workflow
     assert "AUTOPILOT_UV_P1_MIGRATION_APPROVAL_STALE" in workflow
@@ -155,7 +166,7 @@ def test_registration_restores_0309_and_applies_only_forward_upgrade_before_ingr
 def test_monitor_rejects_missing_or_malformed_durable_task_ids() -> None:
     workflow = _read(".github/workflows/autopilot-uv-p1-oracle-monitor.yml")
 
-    assert "runtime:997 canary:1062 idle:1047" in workflow
+    assert "runtime:997 canary:1062 idle:1061" in workflow
     assert "PR #1000" not in workflow
     assert "UV_AUTOPILOT_DURABLE_TASKS_MISSING={missing}" in workflow
     assert "raise SystemExit(76)" in workflow
@@ -173,7 +184,7 @@ def test_monitor_rechecks_all_pr_heads_after_polling_before_receipt() -> None:
     assert polling < recheck < publish
     assert 'runtime:997:"$EXPECTED_RUNTIME_SHA"' in workflow
     assert 'canary:1062:"$EXPECTED_CANARY_SHA"' in workflow
-    assert 'idle:1047:"$EXPECTED_IDLE_SHA"' in workflow
+    assert 'idle:1061:"$EXPECTED_IDLE_SHA"' in workflow
     assert "UV_AUTOPILOT_POST_POLL_HEAD_DRIFT" in workflow
     assert "UV_AUTOPILOT_POST_POLL_HEADS_VERIFIED=PASS" in workflow
     assert '[[ "$live" =~ ^[0-9a-f]{40}$ && "$live" == "$expected" ]]' in workflow

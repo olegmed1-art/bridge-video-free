@@ -50,7 +50,7 @@ jobs:
           set -Eeuo pipefail
           api="https://api.github.com/repos/$REPOSITORY"
           auth=(-H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json')
-          for spec in runtime:997 canary:1062 idle:1047; do
+          for spec in runtime:997 canary:1062 idle:1061; do
             lane="${spec%%:*}"; pr="${spec##*:}"
             data="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/pulls/$pr")"
             sha="$(jq -er '.head.sha' <<<"$data")"
@@ -349,7 +349,7 @@ jobs:
           set -Eeuo pipefail
           api="https://api.github.com/repos/$REPOSITORY"
           auth=(-H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json')
-          for spec in runtime:997:"$EXPECTED_RUNTIME_SHA" canary:1062:"$EXPECTED_CANARY_SHA" idle:1047:"$EXPECTED_IDLE_SHA"; do
+          for spec in runtime:997:"$EXPECTED_RUNTIME_SHA" canary:1062:"$EXPECTED_CANARY_SHA" idle:1061:"$EXPECTED_IDLE_SHA"; do
             lane="${spec%%:*}"
             rest="${spec#*:}"
             pr="${rest%%:*}"
@@ -403,7 +403,7 @@ jobs:
           |---|---|---|---|---|---|
           | runtime | \`$RUNTIME_TASK_ID\` | \`$RUNTIME_STATUS\` | PR #997 \`$RUNTIME_SHA\` | \`$RUNTIME_BRANCH\` | $RUNTIME_ATTEMPTS / $RUNTIME_COST / $RUNTIME_MODEL_CALLS / $RUNTIME_PRODUCTION_MUTATION |
           | exactly-one-canary readiness | \`$CANARY_TASK_ID\` | \`$CANARY_STATUS\` | PR #1062 \`$CANARY_SHA\` | \`$CANARY_BRANCH\` | $CANARY_ATTEMPTS / $CANARY_COST / $CANARY_MODEL_CALLS / $CANARY_PRODUCTION_MUTATION |
-          | Oracle idle guard | \`$IDLE_TASK_ID\` | \`$IDLE_STATUS\` | PR #1047 \`$IDLE_SHA\` | \`$IDLE_BRANCH\` | $IDLE_ATTEMPTS / $IDLE_COST / $IDLE_MODEL_CALLS / $IDLE_PRODUCTION_MUTATION |
+          | Oracle idle guard | \`$IDLE_TASK_ID\` | \`$IDLE_STATUS\` | PR #1061 \`$IDLE_SHA\` | \`$IDLE_BRANCH\` | $IDLE_ATTEMPTS / $IDLE_COST / $IDLE_MODEL_CALLS / $IDLE_PRODUCTION_MUTATION |
 
           - observed main: \`$MAIN_SHA\`
           - Autopilot Neon branch identity: **verified temporary branch**
