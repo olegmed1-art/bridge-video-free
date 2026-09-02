@@ -678,7 +678,7 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
         self.assertLess(idle_probe, authorizer)
         self.assertLess(authorizer, stop)
 
-    def test_instance_power_rechecks_automatic_epoch_after_final_proof(self) -> None:
+    def test_instance_power_gets_final_proof_after_paginated_epoch(self) -> None:
         workflow = INSTANCE_POWER.read_text(encoding="utf-8")
         final_step = workflow.index("Stop exact instance only with IDLE proof")
         final_probe = workflow.index(
@@ -687,7 +687,7 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
         authorizer = workflow.index(
             "authorization=\"$(python3 ops/oracle_idle_stop_guard.py", final_probe
         )
-        epoch = workflow.index("final_epoch_state=", authorizer)
+        epoch = workflow.index("final_epoch_state=", final_step)
         paginated = workflow.index("gh api --paginate --slurp", epoch)
         complete = workflow.index("len(runs)==total", paginated)
         newer = workflow.index('r.get(\"event\")!=\"pull_request\"', complete)
@@ -698,10 +698,10 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
             '"$OCI_INSTANCE_OCID" --action STOP',
             current,
         )
-        self.assertLess(final_probe, authorizer)
-        self.assertLess(authorizer, epoch)
         self.assertLess(epoch, paginated)
         self.assertLess(paginated, complete)
+        self.assertLess(complete, final_probe)
+        self.assertLess(final_probe, authorizer)
         self.assertLess(complete, newer)
         self.assertLess(newer, terminal)
         self.assertLess(terminal, current)
