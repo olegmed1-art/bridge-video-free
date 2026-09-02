@@ -449,15 +449,16 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
         'restored_service_ready "$SOURCE_SERVICE" "$source_state_before"',
         container_recheck_index,
     )
-    unlock_index = script.index("flock --unlock 9", restore_container_index)
+    unlock_index = script.index("flock --unlock 9", script.index("cleanup(){"))
     assert (
         restore_source_index
+        > unlock_index
+        and restore_source_index
         < restore_container_index
         < source_recheck_index
         < container_recheck_index
         < readiness_recheck_index
         < restore_pass_index
-        < unlock_index
     )
 
 

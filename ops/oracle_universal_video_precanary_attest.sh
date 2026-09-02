@@ -244,8 +244,21 @@ cleanup(){
       docker image inspect "$resident_image_id" >/dev/null 2>&1 \
         || record_restore_failure resident_image_missing
     fi
-    # Keep the exclusive fence while both residents are restored and their
-    # exact target states are observed. Fresh workers block in startup recovery.
+    # Release the attestation fence before starting either resident. A current
+    # worker performs startup recovery under this same lock and publishes its
+    # readiness only after the lock is released; checking it while fd 9 is held
+    # would prove only that the process is blocked, not that startup succeeded.
+    if [[ "$lock_held" == 1 ]]; then
+      if ! flock --unlock 9 >/dev/null 2>&1; then
+        record_restore_failure workload_unlock
+      fi
+      exec 9>&-
+      lock_held=0
+    fi
+
+    # Start and validate the prior residents sequentially after the handoff.
+    # restore_service requires the same descendant worker PID to remain live
+    # for the bounded stability interval after startup recovery can run.
     restore_service "$SOURCE_SERVICE" "$source_state_before" \
       || record_restore_failure source_service
     restore_service "$CONTAINER_SERVICE" "$container_target_state" \
@@ -269,16 +282,6 @@ cleanup(){
       printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=%s source_service=%s container_service=%s\n' \
         "$(IFS=,; echo "${restore_failures[*]}")" "${source_after:-unknown}" "${container_after:-unknown}" >&2
       if [[ "$rc" == 0 ]]; then rc=1; fi
-    fi
-    if [[ "$lock_held" == 1 ]]; then
-      if ! flock --unlock 9 >/dev/null 2>&1; then
-        record_restore_failure workload_unlock
-        printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=workload_unlock source_service=%s container_service=%s\n' \
-          "${source_after:-unknown}" "${container_after:-unknown}" >&2
-        rc=1
-      fi
-      exec 9>&-
-      lock_held=0
     fi
   fi
   exit "$rc"
