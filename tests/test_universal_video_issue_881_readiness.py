@@ -376,6 +376,11 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "flock --exclusive --nonblock 9" in script
     assert 'restore_service "$SOURCE_SERVICE" "$source_was_active"' in script
     assert 'restore_service "$CONTAINER_SERVICE" "$container_was_active"' in script
+    assert 'source_candidate_path_owned=0' in script
+    assert 'source_candidate_path_owned=1' in script
+    assert '"$source_candidate_path_owned" == 1' in script
+    assert "active container resident image is missing or ambiguous" in script
+    assert 'UNIVERSAL_VIDEO_CONTAINER_PRESERVE_IMAGE_ID="$resident_image_id"' in script
     assert 'rm -f -- "$ENV_FILE"' in script
     assert '"$ENV_FILE" == "$BASE_DIR/universal-video-container-candidate.env"' in script
     assert 'systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE"' in script
@@ -415,6 +420,8 @@ def test_installer_readiness_and_service_env_use_captured_image_id():
     assert "org.opencontainers.image.revision" in readiness
     assert 'CANDIDATE_ENV_FILE="$BASE_DIR/universal-video-container-candidate.env"' in installer
     assert '[[ "$ACTIVATE" == 1 ]] || ENV_FILE="$CANDIDATE_ENV_FILE"' in installer
+    assert 'PRESERVE_IMAGE_ID="${UNIVERSAL_VIDEO_CONTAINER_PRESERVE_IMAGE_ID:-}"' in installer
+    assert '"$old_image_id" == "$PRESERVE_IMAGE_ID"' in installer
     assert '--env-file "$ENV_FILE"' in installer
     activation = installer[
         installer.index(
