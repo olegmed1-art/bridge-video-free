@@ -11,11 +11,13 @@ from fastapi.responses import JSONResponse
 
 from broker_app import __version__
 from broker_app.github import (
+    BROKER_POLICY_VERSION,
     BrokerConfigurationError,
     BrokerContractError,
     BrokerRetryableError,
     DraftRepairConflictError,
     REPOSITORY_FULL_NAME,
+    broker_policy_sha256,
     execute_bounded_draft_repair,
     load_config,
 )
@@ -80,11 +82,40 @@ def _require_preview_runtime() -> None:
 def _broker_enabled() -> bool:
     return bool(
         os.getenv("VERCEL_ENV", "") == "preview"
+        and _source_revision() != "UNATTESTED"
+        and _artifact_sha256() != "UNATTESTED"
         and _broker_secret()
         and os.getenv("AUTOPILOT_GITHUB_APP_ID", "").strip()
         and os.getenv("AUTOPILOT_GITHUB_INSTALLATION_ID", "").strip()
         and os.getenv("AUTOPILOT_GITHUB_PRIVATE_KEY", "").strip()
     )
+
+
+def _source_revision() -> str:
+    """Return only a validated immutable revision, never arbitrary env text."""
+
+    value = os.getenv("AUTOPILOT_BROKER_SOURCE_SHA", "").strip()
+    if len(value) == 40 and all(character in "0123456789abcdef" for character in value):
+        return value
+    return "UNATTESTED"
+
+
+def _artifact_sha256() -> str:
+    """Return the deployment artifact digest only in canonical form."""
+
+    value = os.getenv("AUTOPILOT_BROKER_ARTIFACT_SHA256", "").strip()
+    if len(value) == 64 and all(character in "0123456789abcdef" for character in value):
+        return value
+    return "UNATTESTED"
+
+
+def _require_source_attestation() -> None:
+    if _source_revision() == "UNATTESTED" or _artifact_sha256() == "UNATTESTED":
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="TOKEN_BROKER_SOURCE_UNATTESTED",
+            headers=NO_STORE_HEADERS,
+        )
 
 
 @app.get("/healthz")
@@ -99,6 +130,16 @@ async def healthz() -> dict[str, object]:
         "github_token_broker_enabled": _broker_enabled(),
         "raw_installation_token_exposed": False,
         "bounded_draft_executor_enabled": _broker_enabled(),
+        "broker_policy_version": BROKER_POLICY_VERSION,
+        "source_revision": _source_revision(),
+        "source_attested": _source_revision() != "UNATTESTED",
+        "artifact_sha256": _artifact_sha256(),
+        "artifact_attested": _artifact_sha256() != "UNATTESTED",
+        "policy_sha256": broker_policy_sha256(),
+        "merge_endpoint_enabled": False,
+        "ref_update_delete_enabled": False,
+        "actions_endpoint_enabled": False,
+        "deployments_endpoint_enabled": False,
     }
 
 
@@ -108,6 +149,7 @@ async def draft_repair(
     authorization: str | None = Header(default=None),
 ) -> JSONResponse:
     _require_preview_runtime()
+    _require_source_attestation()
     _require_broker_authorization(authorization)
     try:
         config = load_config()
@@ -142,6 +184,13 @@ async def draft_repair(
             headers=NO_STORE_HEADERS,
         ) from exc
 
+    result = {
+        **result,
+        "broker_policy_version": BROKER_POLICY_VERSION,
+        "broker_source_sha": _source_revision(),
+        "broker_artifact_sha256": _artifact_sha256(),
+        "broker_policy_sha256": broker_policy_sha256(),
+    }
     return JSONResponse(
         result,
         headers=NO_STORE_HEADERS,

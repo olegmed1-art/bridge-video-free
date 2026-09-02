@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bridge-school-autopilot-token-broker"
-version = "0.2.0"
+version = "0.3.0"
 description = "Bounded GitHub draft-repair broker for School Autopilot Phase 3B"
 requires-python = ">=3.12"
 dependencies = [

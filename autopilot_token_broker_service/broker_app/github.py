@@ -8,6 +8,7 @@ new namespaced branch, and one draft pull request.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import re
@@ -21,7 +22,7 @@ from typing import Any, Mapping
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-from broker_app.policy import DraftRepairRequest
+from broker_app.policy import ALLOWED_PATH_PATTERNS, DraftRepairRequest
 
 
 GITHUB_API_URL = "https://api.github.com"
@@ -37,6 +38,46 @@ TOKEN_PERMISSIONS = {
 TOKEN_RESPONSE_LIMIT_BYTES = 32_768
 API_RESPONSE_LIMIT_BYTES = 65_536
 HTTP_TIMEOUT_SECONDS = 15
+BROKER_POLICY_VERSION = "physical-no-merge-v1"
+
+_SHA = r"[0-9a-f]{40}"
+_REPAIR_BRANCH = r"autopilot/repair/[0-9a-f]{16}"
+_ALLOWED_EXACT_OPERATIONS = (
+    ("GET", "/repos/olegmed1-art/bridge-video-free/git/ref/heads/main"),
+    ("POST", "/repos/olegmed1-art/bridge-video-free/git/blobs"),
+    ("POST", "/repos/olegmed1-art/bridge-video-free/git/trees"),
+    ("POST", "/repos/olegmed1-art/bridge-video-free/git/commits"),
+    ("POST", "/repos/olegmed1-art/bridge-video-free/git/refs"),
+    ("POST", "/repos/olegmed1-art/bridge-video-free/pulls"),
+)
+_FORBIDDEN_ENDPOINT_PARTS = (
+    "/merge",
+    "/merges",
+    "/actions",
+    "/deployments",
+    "/hooks",
+    "/rulesets",
+    "/branches/main",
+)
+
+
+def broker_policy_sha256() -> str:
+    """Digest the complete credentialed operation policy canonically."""
+
+    policy = {
+        "allowed_exact_operations": sorted([list(item) for item in _ALLOWED_EXACT_OPERATIONS]),
+        "allowed_methods": ["GET", "POST"],
+        "branch_pattern": _REPAIR_BRANCH,
+        "content_path_patterns": sorted(
+            pattern.pattern for pattern in ALLOWED_PATH_PATTERNS
+        ),
+        "forbidden_endpoint_parts": sorted(_FORBIDDEN_ENDPOINT_PARTS),
+        "policy_version": BROKER_POLICY_VERSION,
+        "repository": REPOSITORY_FULL_NAME,
+        "sha_pattern": _SHA,
+        "token_permissions": TOKEN_PERMISSIONS,
+    }
+    return hashlib.sha256(_canonical_json(policy)).hexdigest()
 
 
 class BrokerConfigurationError(RuntimeError):
@@ -265,6 +306,61 @@ def issue_installation_token(
     return _validate_token_response(payload, now_epoch=now_epoch)
 
 
+def _authorize_github_operation(*, method: str, path: str) -> None:
+    """Accept only the finite draft-repair operation graph.
+
+    Token permissions cannot distinguish branch construction from PR merge, so
+    this dispatcher is the physical capability boundary.  It intentionally
+    rejects generic repository paths even when GitHub would authorize them.
+    """
+
+    if method not in {"GET", "POST"} or any(
+        part in path.lower() for part in _FORBIDDEN_ENDPOINT_PARTS
+    ):
+        raise BrokerContractError("GITHUB_OPERATION_NOT_ALLOWED")
+
+    parsed = urllib.parse.urlsplit(path)
+    if parsed.scheme or parsed.netloc or parsed.fragment:
+        raise BrokerContractError("GITHUB_OPERATION_NOT_ALLOWED")
+    clean_path = parsed.path
+    if (method, clean_path) in _ALLOWED_EXACT_OPERATIONS and not parsed.query:
+        return
+    if method == "GET" and re.fullmatch(
+        rf"{re.escape(REPOSITORY_API_PATH)}/git/ref/heads/{_REPAIR_BRANCH}",
+        clean_path,
+    ) and not parsed.query:
+        return
+    if method == "GET" and re.fullmatch(
+        rf"{re.escape(REPOSITORY_API_PATH)}/git/commits/{_SHA}", clean_path
+    ) and not parsed.query:
+        return
+    if method == "GET" and clean_path.startswith(f"{REPOSITORY_API_PATH}/contents/"):
+        query = urllib.parse.parse_qs(parsed.query, strict_parsing=True)
+        encoded_file = clean_path.removeprefix(f"{REPOSITORY_API_PATH}/contents/")
+        decoded_file = urllib.parse.unquote(encoded_file)
+        if (
+            urllib.parse.quote(decoded_file, safe="/") == encoded_file
+            and re.fullmatch(_SHA, query.get("ref", [""])[0])
+            and set(query) == {"ref"}
+            and any(pattern.fullmatch(decoded_file) for pattern in ALLOWED_PATH_PATTERNS)
+        ):
+            return
+    if method == "GET" and clean_path == f"{REPOSITORY_API_PATH}/pulls":
+        query = urllib.parse.parse_qs(parsed.query, strict_parsing=True)
+        if (
+            set(query) == {"base", "head", "per_page", "state"}
+            and query["base"] == ["main"]
+            and query["per_page"] == ["2"]
+            and query["state"] == ["all"]
+            and re.fullmatch(
+                rf"{re.escape(REPOSITORY_OWNER)}:{_REPAIR_BRANCH}",
+                query.get("head", [""])[0],
+            )
+        ):
+            return
+    raise BrokerContractError("GITHUB_OPERATION_NOT_ALLOWED")
+
+
 def _installation_request(
     credential: InstallationCredential,
     *,
@@ -272,8 +368,7 @@ def _installation_request(
     path: str,
     body: Mapping[str, object] | None = None,
 ) -> urllib.request.Request:
-    if method not in {"GET", "POST"} or not path.startswith(f"{REPOSITORY_API_PATH}/"):
-        raise BrokerContractError("GITHUB_OPERATION_NOT_ALLOWED")
+    _authorize_github_operation(method=method, path=path)
     headers = {
         "Accept": "application/vnd.github+json",
         "Authorization": f"Bearer {credential.token}",

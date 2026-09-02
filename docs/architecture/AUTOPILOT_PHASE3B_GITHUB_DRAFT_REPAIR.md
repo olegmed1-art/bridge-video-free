@@ -64,6 +64,40 @@ Redirects, unexpected permissions, invalid repository identity,
 oversized responses, weak configuration, and stale/long-lived tokens fail
 closed. Oracle never receives the App private key or installation token.
 
+### Physical no-merge attestation
+
+The installation credential needs `contents:write` to construct Git objects
+and a namespaced branch. GitHub does not offer a permission that grants those
+object writes while independently denying the pull-request merge API. The
+reviewed broker artifact is therefore the physical capability boundary, rather
+than the token permission label alone.
+
+Policy `physical-no-merge-v1` strengthens that boundary as follows:
+
+- every credentialed repository request passes a finite typed dispatcher;
+- only the exact GET/POST shapes needed for preflight, Git object construction,
+  namespaced ref creation, and draft-PR creation are accepted;
+- merge, ref update/delete, Actions, Deployments, hooks, rulesets, arbitrary
+  origins, encoded path escapes, extra query parameters, and PUT/PATCH/DELETE
+  requests fail closed before network dispatch;
+- `/healthz` reports the policy version and a validated immutable source SHA;
+- the mutation endpoint returns 503 unless `AUTOPILOT_BROKER_SOURCE_SHA` is an
+  exact lowercase 40-character commit SHA and
+  `AUTOPILOT_BROKER_ARTIFACT_SHA256` is an exact lowercase 64-character digest
+  of the deployed immutable artifact;
+- every successful mutation receipt includes that exact source SHA, artifact
+  digest, immutable broker policy version, and a canonical SHA-256 digest of
+  the finite operation policy, so downstream evidence can reject a receipt from
+  an unreviewed build, artifact, or policy;
+- the raw installation token remains process-local and no route returns it or
+  its expiry.
+
+The source SHA is an attestation input, not self-authenticating proof. A future
+deployment gate must bind it to the exact reviewed artifact and read it back
+from the protected Preview. Missing or mismatched deployment evidence remains
+`UNKNOWN`, never PASS. This source contract does not deploy, rotate credentials,
+change Vercel environment variables, or authorize production promotion.
+
 The Oracle consumer accepts no arbitrary URL. Its root-owned environment pins
 one exact Preview deployment path and contains separate broker-ingress and
 Vercel automation-bypass secrets. It sends the complete locked task manifest,

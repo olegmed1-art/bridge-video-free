@@ -52,6 +52,23 @@ def verify() -> dict[str, object]:
         raise SystemExit("BROKER_REPOSITORY_INVALID")
     if assignments.get("TOKEN_PERMISSIONS") != expected_permissions:
         raise SystemExit("BROKER_PERMISSIONS_INVALID")
+    if assignments.get("BROKER_POLICY_VERSION") != "physical-no-merge-v1":
+        raise SystemExit("BROKER_POLICY_VERSION_INVALID")
+    expected_exact_operations = {
+        ("GET", "/repos/olegmed1-art/bridge-video-free/git/ref/heads/main"),
+        ("POST", "/repos/olegmed1-art/bridge-video-free/git/blobs"),
+        ("POST", "/repos/olegmed1-art/bridge-video-free/git/trees"),
+        ("POST", "/repos/olegmed1-art/bridge-video-free/git/commits"),
+        ("POST", "/repos/olegmed1-art/bridge-video-free/git/refs"),
+        ("POST", "/repos/olegmed1-art/bridge-video-free/pulls"),
+    }
+    if set(assignments.get("_ALLOWED_EXACT_OPERATIONS", ())) != expected_exact_operations:
+        raise SystemExit("BROKER_TYPED_OPERATION_SET_INVALID")
+    forbidden_parts = set(assignments.get("_FORBIDDEN_ENDPOINT_PARTS", ()))
+    if not {
+        "/merge", "/merges", "/actions", "/deployments", "/rulesets"
+    }.issubset(forbidden_parts):
+        raise SystemExit("BROKER_EXPLICIT_REJECTIONS_MISSING")
     if policy_assignments.get("REPOSITORY") != "olegmed1-art/bridge-video-free":
         raise SystemExit("BROKER_POLICY_REPOSITORY_INVALID")
     if policy_assignments.get("BASE_BRANCH") != "main":
@@ -78,16 +95,10 @@ def verify() -> dict[str, object]:
     )
     if imports & {"requests", "httpx", "subprocess", "socket"}:
         raise SystemExit("BROKER_UNBOUNDED_PRIMITIVE")
-    for forbidden in (
-        "/merges",
-        "/actions",
-        "/deployments",
-        'method="PATCH"',
-        'method="DELETE"',
-        'method="PUT"',
-    ):
-        if forbidden in github_text:
-            raise SystemExit("BROKER_FORBIDDEN_CAPABILITY")
+    if "_authorize_github_operation(method=method, path=path)" not in github_text:
+        raise SystemExit("BROKER_TYPED_DISPATCH_NOT_ENFORCED")
+    if "urllib.request.Request(" in main_text:
+        raise SystemExit("BROKER_MAIN_RAW_HTTP_PRIMITIVE")
     if "execute_bounded_draft_repair" not in main_text:
         raise SystemExit("BROKER_BOUNDED_EXECUTOR_MISSING")
     if "issue_installation_token" in main_text:
@@ -122,6 +133,23 @@ def verify() -> dict[str, object]:
         raise SystemExit("BROKER_PREVIEW_RUNTIME_GUARD_MISSING")
     if '"raw_installation_token_exposed": False' not in main_text:
         raise SystemExit("BROKER_RAW_TOKEN_GUARD_MISSING")
+    for required in (
+        '"broker_policy_version": BROKER_POLICY_VERSION',
+        '"source_revision": _source_revision()',
+        '"source_attested": _source_revision() != "UNATTESTED"',
+        '"artifact_sha256": _artifact_sha256()',
+        '"artifact_attested": _artifact_sha256() != "UNATTESTED"',
+        '"policy_sha256": broker_policy_sha256()',
+        '"broker_policy_version": BROKER_POLICY_VERSION',
+        '"broker_source_sha": _source_revision()',
+        '"broker_artifact_sha256": _artifact_sha256()',
+        '"broker_policy_sha256": broker_policy_sha256()',
+        '"merge_endpoint_enabled": False',
+        '"ref_update_delete_enabled": False',
+        "_require_source_attestation()",
+    ):
+        if required not in main_text:
+            raise SystemExit("BROKER_ATTESTATION_GUARD_MISSING")
 
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = set(pyproject["project"]["dependencies"])
@@ -147,6 +175,7 @@ def verify() -> dict[str, object]:
         "delete_routes": 0,
         "github_origin": "api.github.com",
         "merge_routes": 0,
+        "policy_version": "physical-no-merge-v1",
         "permissions": expected_permissions,
         "production_mutations": 0,
         "raw_token_responses": 0,

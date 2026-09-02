@@ -22,6 +22,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -35,5 +37,21 @@ jobs:
         run: python -m unittest discover -s autopilot_token_broker_service/tests -p 'test_*.py' -v
       - name: Independent static boundary
         run: python autopilot_token_broker_service/tools/verify_token_broker_contract.py
+      - name: Physical no-merge contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          result="$(python autopilot_token_broker_service/tools/verify_token_broker_contract.py)"
+          python - "$result" <<'PY'
+          import json
+          import sys
+
+          result = json.loads(sys.argv[1])
+          assert result["result"] == "PASS"
+          assert result["policy_version"] == "physical-no-merge-v1"
+          assert result["merge_routes"] == 0
+          assert result["delete_routes"] == 0
+          assert result["raw_token_responses"] == 0
+          PY
       - name: Secret scan
         run: bash ops/check_no_committed_secrets.sh
