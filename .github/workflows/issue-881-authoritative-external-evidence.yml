@@ -1,21 +1,16 @@
 name: Issue 881 Authoritative External Pre-Canary Evidence
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/issue-881-authoritative-external-evidence.yml'
-      - 'deploy/oracle-universal-video/Dockerfile'
-      - 'ops/oracle_universal_video_container_install.sh'
-      - 'ops/oracle_universal_video_precanary_attest.sh'
-      - 'ops/oracle_universal_video_run_command.sh'
-      - 'ops/validate_video_queue_dsn.py'
-      - 'universal_video/**'
-      - 'bridge_vision/**'
-      - 'bridge_contracts/**'
-      - 'database/**'
-      - 'bridge_*.py'
-      - 'route_drive_job_outputs.py'
-      - 'requirements-worker.txt'
+  workflow_dispatch:
+    inputs:
+      exact_sha:
+        description: Exact reviewed PR head to attest
+        required: true
+        type: string
+      director_go:
+        description: Explicit Director GO for the bounded external pre-canary run
+        required: true
+        type: boolean
 
 permissions:
   contents: read
@@ -26,14 +21,11 @@ concurrency:
 
 jobs:
   exact-external-precanary:
-    if: >-
-      github.event.pull_request.number == 1062 &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.event.pull_request.head.ref == 'exec2/issue-881-exact-canary-readiness'
+    if: ${{ inputs.director_go && github.repository == 'olegmed1-art/bridge-video-free' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
-      EXACT_SHA: ${{ github.event.pull_request.head.sha }}
+      EXACT_SHA: ${{ inputs.exact_sha }}
       INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
       OCI_USER: ${{ secrets.OCI_CLI_USER }}
       OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
@@ -75,7 +67,7 @@ jobs:
           chmod 0700 "$RUNNER_TEMP/attest.sh"
           : > "$RUNNER_TEMP/issue-881-authoritative-external-evidence.txt"
 
-      - name: Ensure Oracle capacity is reachable
+      - name: Verify Oracle is already running
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check -q oci-cli
@@ -94,11 +86,13 @@ jobs:
           case "$state" in
             RUNNING) ;;
             STOPPED)
-              oci --config-file "$RUNNER_TEMP/oci/config" compute instance action \
-                --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING \
-                --max-wait-seconds 600 >/dev/null
+              echo 'Oracle instance is STOPPED; owner restoration and a new explicit Director GO are required' >&2
+              exit 1
               ;;
-            *) exit 1 ;;
+            *)
+              echo "Oracle instance state is unsafe or unknown: $state" >&2
+              exit 1
+              ;;
           esac
 
       - name: Establish pinned SSH identity
