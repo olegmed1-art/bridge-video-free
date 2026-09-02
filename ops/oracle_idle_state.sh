@@ -414,7 +414,7 @@ try:
                     count(*)::bigint,
                     extract(epoch FROM current_timestamp)::bigint
                 FROM autopilot.task_status
-                WHERE status IN ('READY', 'RUNNING', 'WAITING_EXTERNAL')
+                WHERE status IN ('READY', 'RUNNING', 'WAITING_EXTERNAL', 'EVALUATING')
                 """
             )
             row = cur.fetchone()
