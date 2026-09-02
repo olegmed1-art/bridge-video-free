@@ -33,8 +33,8 @@ def _entry(state: str, observed_at: float, **evidence: Any) -> dict[str, Any]:
     return value
 
 
-def _unknown(observed_at: float, reason: str) -> dict[str, Any]:
-    return _entry("UNKNOWN", observed_at, reason=reason)
+def _unknown(observed_at: float, reason: str, **evidence: Any) -> dict[str, Any]:
+    return _entry("UNKNOWN", observed_at, reason=reason, **evidence)
 
 
 def _read_assignment(path: Path, key: str) -> str | None:
@@ -60,6 +60,17 @@ def _read_secret(path: Path) -> str | None:
         return None
 
 
+def _assistant_stale_after() -> int | None:
+    raw = os.getenv("ASSISTANT_LAB_STALE_AFTER_SECONDS", "").strip()
+    if not raw:
+        raw = (_read_assignment(LAB_ENV, "ASSISTANT_LAB_STALE_AFTER_SECONDS") or "900").strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if 120 <= value <= 86400 else None
+
+
 def _db_snapshot(observed_at: float) -> dict[str, dict[str, Any]]:
     names = (
         "assistant_lab_job",
@@ -73,6 +84,9 @@ def _db_snapshot(observed_at: float) -> dict[str, dict[str, Any]]:
     dsn = _read_assignment(LAB_ENV, "ASSISTANT_LAB_DATABASE_URL")
     if not dsn:
         return {name: _unknown(observed_at, "assistant_lab_dsn_unavailable") for name in names}
+    stale_after = _assistant_stale_after()
+    if stale_after is None:
+        return {name: _unknown(observed_at, "assistant_lab_stale_timeout_invalid") for name in names}
     try:
         import psycopg  # type: ignore
     except Exception:
@@ -81,24 +95,36 @@ def _db_snapshot(observed_at: float) -> dict[str, dict[str, Any]]:
         with psycopg.connect(dsn, connect_timeout=8, application_name="oracle-idle-collector") as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT observed_at, active_jobs, active_control_commands, "
+                    "SELECT observed_at, active_jobs, stale_running_jobs, active_control_commands, "
                     "active_research_jobs, active_research_children, active_ben_jobs, "
                     "active_bulk_jobs, active_other_jobs "
-                    "FROM assistant_lab.oracle_idle_snapshot_v2()"
+                    "FROM assistant_lab.oracle_idle_snapshot_v2(%s)",
+                    (stale_after,),
                 )
                 row = cur.fetchone()
-        if row is None or len(row) != 8:
+        if row is None or len(row) != 9:
             raise RuntimeError("invalid assistant snapshot")
         server_time = row[0].timestamp()
-        counts = [int(v) for v in row[1:]]
-        if any(v < 0 for v in counts):
+        active_jobs = int(row[1])
+        stale_running = int(row[2])
+        counts = [active_jobs] + [int(v) for v in row[3:]]
+        if stale_running < 0 or any(v < 0 for v in counts):
             raise RuntimeError("negative count")
     except Exception:
         return {name: _unknown(observed_at, "assistant_lab_query_failed") for name in names}
-    return {
+    result = {
         name: _entry("BUSY" if count else "IDLE", server_time, active_count=count)
         for name, count in zip(names, counts)
     }
+    if stale_running:
+        result["assistant_lab_job"] = _unknown(
+            server_time,
+            "assistant_lab_stale_running_heartbeat",
+            active_count=active_jobs,
+            stale_running_count=stale_running,
+            stale_after_seconds=stale_after,
+        )
+    return result
 
 
 def _video_neon(observed_at: float) -> dict[str, Any]:
