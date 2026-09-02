@@ -53,8 +53,12 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXACT_SHA"
           grep -Eq '^FROM python@sha256:[0-9a-f]{64}$' deploy/oracle-universal-video/Dockerfile
           bash -n ops/oracle_universal_video_precanary_attest.sh
+          bash -n ops/oracle_universal_video_container_install.sh
           grep -F 'flock --exclusive --nonblock 9' ops/oracle_universal_video_precanary_attest.sh
           grep -F '"$image_id" "$@"' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'UNIVERSAL_VIDEO_IMAGE=$image_id' ops/oracle_universal_video_container_install.sh
+          grep -F '"$image_id" true' ops/oracle_universal_video_container_install.sh
+          grep -F 'systemctl start "$service"' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'with shared_workload_lock():' universal_video/neon_worker.py
           git show "$EXACT_SHA:ops/oracle_universal_video_run_command.sh" > "$RUNNER_TEMP/prepare.sh"
           chmod 0700 "$RUNNER_TEMP/prepare.sh"

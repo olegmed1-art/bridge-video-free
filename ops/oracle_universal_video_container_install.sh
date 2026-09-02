@@ -155,6 +155,15 @@ fi
 image_id="$(docker image inspect --format '{{.Id}}' "$image")"
 [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || die 'container image digest unavailable'
 
+verify_image_identity(){
+  local current_id revision
+  current_id="$(docker image inspect --format '{{.Id}}' "$image")"
+  revision="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_id")"
+  [[ "$current_id" == "$image_id" ]] || die 'mutable image tag changed after capture'
+  [[ "$revision" == "$commit" ]] || die 'captured image revision label does not match source commit'
+}
+verify_image_identity
+
 uid="$(id -u "$USER_NAME")"
 gid="$(id -g "$USER_NAME")"
 oauth_file="$BASE_DIR/secrets/google-drive-oauth.json"
@@ -163,7 +172,7 @@ cat >"$BASE_DIR/universal-video-container.env" <<EOF
 UNIVERSAL_VIDEO_SOURCE_COMMIT=$commit
 UNIVERSAL_VIDEO_CONTAINER_UID=$uid
 UNIVERSAL_VIDEO_CONTAINER_GID=$gid
-UNIVERSAL_VIDEO_IMAGE=$image
+UNIVERSAL_VIDEO_IMAGE=$image_id
 UNIVERSAL_VIDEO_SPOOL_ROOT=/var/lib/universal-video/spool
 UNIVERSAL_VIDEO_OUTPUT_ROOT=/var/lib/universal-video/output
 UNIVERSAL_VIDEO_MEDIA_ROOT=/var/lib/universal-video/media
@@ -185,6 +194,7 @@ install -d -o "$USER_NAME" -g "$GROUP_NAME" -m 0750 "$STATUS_DIR"
 [[ -d "$STATUS_DIR" ]] || die "unsafe or missing mount: $STATUS_DIR"
 
 log 'Run container-only readiness gate; no job is submitted'
+verify_image_identity
 docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g --user="$uid:$gid" \
   --env-file "$BASE_DIR/universal-video-container.env" \
   --mount "type=bind,src=$BASE_DIR/spool,dst=/var/lib/universal-video/spool" \
@@ -192,7 +202,7 @@ docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g --user="$uid:$
   --mount "type=bind,src=$BASE_DIR/media,dst=/var/lib/universal-video/media" \
   --mount "type=bind,src=$BASE_DIR/model-cache,dst=/var/lib/universal-video/model-cache" \
   --mount "type=bind,src=$STATUS_DIR,dst=/run/bridge-school" \
-  --mount "type=bind,src=$BASE_DIR/secrets,dst=/run/secrets,readonly" "$image" true
+  --mount "type=bind,src=$BASE_DIR/secrets,dst=/run/secrets,readonly" "$image_id" true
 
 install -m 0644 -o root -g root "$SOURCE_DIR/deploy/oracle-universal-video/$SERVICE_NAME" "/etc/systemd/system/$SERVICE_NAME"
 systemctl daemon-reload

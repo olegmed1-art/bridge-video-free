@@ -17,14 +17,22 @@ PARENT="${UNIVERSAL_VIDEO_CANARY_PARENT:?missing exact canary parent}"
 die(){ printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 declare -a added_runtime_masks=()
+declare -a stopped_services=()
 cleanup(){
   local rc=$? service cleanup_failed=0
   trap - EXIT
   for service in "${added_runtime_masks[@]}"; do
     systemctl unmask --runtime "$service" >/dev/null 2>&1 || cleanup_failed=1
   done
+  if [[ -e /proc/$$/fd/9 ]]; then
+    flock --unlock 9 >/dev/null 2>&1 || cleanup_failed=1
+  fi
+  for service in "${stopped_services[@]}"; do
+    systemctl start "$service" >/dev/null 2>&1 || cleanup_failed=1
+    systemctl is-active --quiet "$service" >/dev/null 2>&1 || cleanup_failed=1
+  done
   if (( cleanup_failed != 0 && rc == 0 )); then
-    printf 'ERROR: failed to restore runtime service masks\n' >&2
+    printf 'ERROR: failed to restore prior service state\n' >&2
     rc=1
   fi
   exit "$rc"
@@ -50,6 +58,19 @@ assert_quiescent(){
   if find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit | grep -q .; then
     die 'a video job is active'
   fi
+}
+
+quiesce_service(){
+  local service="$1" state
+  state="$(service_state "$service")"
+  case "$state" in
+    active|activating|reloading)
+      systemctl stop "$service"
+      stopped_services+=("$service")
+      ;;
+    inactive|failed) ;;
+    *) die "$service state is unavailable: ${state:-unknown}" ;;
+  esac
 }
 
 mask_service_for_window(){
@@ -79,9 +100,11 @@ verify_image_identity(){
 command -v flock >/dev/null || die 'flock is unavailable'
 [[ -d "$BASE_DIR/spool" && ! -L "$BASE_DIR/spool" ]] || die 'unsafe or missing spool mount'
 [[ -d "$BASE_DIR/spool/running" && ! -L "$BASE_DIR/spool/running" ]] || die 'unsafe or missing running spool'
-assert_quiescent
+quiesce_service "$SOURCE_SERVICE"
+quiesce_service "$CONTAINER_SERVICE"
 mask_service_for_window "$SOURCE_SERVICE"
 mask_service_for_window "$CONTAINER_SERVICE"
+assert_quiescent
 
 if [[ -L "$WORKLOAD_LOCK" || ( -e "$WORKLOAD_LOCK" && ! -f "$WORKLOAD_LOCK" ) ]]; then
   die 'unsafe workload lock'
