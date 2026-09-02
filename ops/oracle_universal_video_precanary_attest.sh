@@ -13,6 +13,14 @@ PREPARE_SCRIPT="${UNIVERSAL_VIDEO_PREPARE_SCRIPT:-}"
 BUILD_IMAGE="${UNIVERSAL_VIDEO_PRECANARY_BUILD_IMAGE:-0}"
 MIN_FREE_KB="${UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB:-5242880}"
 RECLAIM_ROOT_CACHE="${UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE:-0}"
+ENV_FILE="${UNIVERSAL_VIDEO_CONTAINER_ENV_FILE:-}"
+if [[ -z "$ENV_FILE" ]]; then
+  if [[ "$BUILD_IMAGE" == 1 ]]; then
+    ENV_FILE="$BASE_DIR/universal-video-container-candidate.env"
+  else
+    ENV_FILE="$BASE_DIR/universal-video-container.env"
+  fi
+fi
 FILE_ID="${UNIVERSAL_VIDEO_CANARY_FILE_ID:?missing exact canary file id}"
 NAME="${UNIVERSAL_VIDEO_CANARY_NAME:?missing exact canary name}"
 MIME="${UNIVERSAL_VIDEO_CANARY_MIME:?missing exact canary MIME}"
@@ -60,6 +68,13 @@ cleanup(){
   if [[ "$window_started" == 1 ]]; then
     # Keep the exclusive workload fence while both claim paths are forced quiet.
     systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE" >/dev/null 2>&1 || cleanup_failed=1
+    if [[ "$BUILD_IMAGE" == 1 ]]; then
+      if [[ "$ENV_FILE" == "$BASE_DIR/universal-video-container-candidate.env" ]]; then
+        rm -f -- "$ENV_FILE" >/dev/null 2>&1 || cleanup_failed=1
+      else
+        cleanup_failed=1
+      fi
+    fi
     for service in "${added_runtime_masks[@]}"; do
       systemctl unmask --runtime "$service" >/dev/null 2>&1 || cleanup_failed=1
     done
@@ -186,6 +201,8 @@ if [[ "$BUILD_IMAGE" == 1 ]]; then
   assert_quiescent
 fi
 
+[[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || die 'safe container environment is unavailable'
+
 commit="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
 [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || die 'source commit is unavailable'
 if [[ -n "$EXPECTED_SHA" && "$commit" != "$EXPECTED_SHA" ]]; then
@@ -209,7 +226,7 @@ run_image(){
   verify_image_identity
   docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g \
     --user="$uid:$gid" \
-    --env-file "$BASE_DIR/universal-video-container.env" \
+    --env-file "$ENV_FILE" \
     --mount "type=bind,src=$BASE_DIR/spool,dst=/var/lib/universal-video/spool" \
     --mount "type=bind,src=$BASE_DIR/output,dst=/var/lib/universal-video/output" \
     --mount "type=bind,src=$BASE_DIR/media,dst=/var/lib/universal-video/media" \
