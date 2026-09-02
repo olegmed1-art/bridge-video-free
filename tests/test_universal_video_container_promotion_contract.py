@@ -108,6 +108,11 @@ def test_post_switch_failures_invoke_rollback_directly() -> None:
 
 
 def test_promotion_disables_legacy_and_rollback_restores_original_state() -> None:
+    assert "CURRENT_STAGE='queue-credential-preflight'" in SCRIPT
+    assert 'validate_video_queue_dsn.py" "$queue_dsn_file"' in SCRIPT
+    assert SCRIPT.index("CURRENT_STAGE='queue-credential-preflight'") < SCRIPT.index(
+        "CURRENT_STAGE='legacy-quiesce'"
+    )
     assert 'old_enabled_before="$(systemctl is-enabled "$OLD_SERVICE"' in SCRIPT
     assert 'old_active_before="$(systemctl is-active "$OLD_SERVICE"' in SCRIPT
     assert 'systemctl disable --now "$OLD_SERVICE" || fail UV_CONTAINER_PROMOTION_LEGACY_QUIESCE_FAILED' in SCRIPT

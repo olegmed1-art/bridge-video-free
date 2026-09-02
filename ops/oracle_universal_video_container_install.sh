@@ -168,16 +168,8 @@ if [[ "$ACTIVATE" == 1 ]]; then
     || die 'protected video queue credential metadata invalid'
   (( BASH_REMATCH[1] <= 4096 )) \
     || die 'protected video queue credential is too large'
-  QUEUE_DSN_FILE="$queue_dsn_file" python3 - <<'PY' >/dev/null \
+  python3 "$SOURCE_DIR/ops/validate_video_queue_dsn.py" "$queue_dsn_file" >/dev/null \
     || die 'protected video queue credential content invalid'
-import os
-from pathlib import Path
-
-raw = Path(os.environ["QUEUE_DSN_FILE"]).read_text(encoding="utf-8")
-value = raw.strip()
-assert value.startswith(("postgresql://", "postgres://"))
-assert "\n" not in value and "\r" not in value
-PY
   log 'Protected video queue credential validated for activation'
 fi
 cat >"$BASE_DIR/universal-video-container.env" <<EOF

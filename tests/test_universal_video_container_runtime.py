@@ -194,5 +194,22 @@ def test_container_activation_requires_a_bounded_protected_queue_credential() ->
     assert '[[ -f "$queue_dsn_file" && ! -L "$queue_dsn_file" ]]' in gate
     assert "protected video queue credential metadata invalid" in gate
     assert "BASH_REMATCH[1] <= 4096" in gate
-    assert 'value.startswith(("postgresql://", "postgres://"))' in gate
-    assert 'assert "\\n" not in value and "\\r" not in value' in gate
+    assert 'validate_video_queue_dsn.py" "$queue_dsn_file"' in gate
+    assert "assert " not in gate
+
+
+def test_queue_dsn_parser_rejects_malformed_and_multiline_values() -> None:
+    from ops.validate_video_queue_dsn import QueueDsnError, validate_dsn_text
+
+    validate_dsn_text("postgresql://worker:secret@db.example/neondb?sslmode=require")
+    invalid = (
+        "postgresql://[",
+        "postgresql://worker:secret@db.example/neondb\n",
+        "\npostgresql://worker:secret@db.example/neondb",
+        "postgresql://first postgresql://second",
+        "postgresql://db.example/neondb",
+        "https://worker:secret@db.example/neondb",
+    )
+    for value in invalid:
+        with pytest.raises(QueueDsnError):
+            validate_dsn_text(value)
