@@ -63,6 +63,38 @@ def test_v2_binds_source_pdf_and_routed_ai_done_without_credentials():
     assert evidence["terminal_receipt"]["artifact_count"] == 2
 
 
+def test_v2_preserves_nullable_source_checksum_contract():
+    claim, done, _items, folder, download, metadata = _fixture()
+    claim["source_checksum"] = None
+    route = discover_route_receipt(claim, done, "mock", folder_lister=folder, metadata_reader=metadata)
+    evidence = build_terminal_evidence(
+        claim, done, route, "mock", metadata_reader=metadata, downloader=download
+    )
+    candidate = {
+        "result_mode": "SHADOW_REVIEW_ONLY",
+        "canonical_promotion_allowed": False,
+        "database_persistence_allowed": False,
+        "publication_state": "NOT_PUBLISHED",
+        "source_file_id": claim["source_file_id"],
+        "stable_job_key": claim["stable_job_key"],
+        "algorithm_revision": claim["algorithm_revision"],
+        **evidence,
+    }
+    assert evidence["artifact_manifest"]["source_identity"]["checksum"] is None
+    validate_terminal_output(claim, candidate)
+
+
+@pytest.mark.parametrize("checksum", ["", "md5:not-hex", 7])
+def test_v2_rejects_invalid_non_null_source_checksum(checksum):
+    claim, done, _items, folder, download, metadata = _fixture()
+    claim["source_checksum"] = checksum
+    route = discover_route_receipt(claim, done, "mock", folder_lister=folder, metadata_reader=metadata)
+    with pytest.raises(Exception, match="UV_SOURCE_IDENTITY_INVALID"):
+        build_terminal_evidence(
+            claim, done, route, "mock", metadata_reader=metadata, downloader=download
+        )
+
+
 def test_route_receipt_rejects_missing_duplicate_and_mismatched_content():
     claim, done, items, _folder, download, _metadata = _fixture()
     metadata = lambda file_id, _token: next(dict(item) for item in items if item["id"] == file_id)
