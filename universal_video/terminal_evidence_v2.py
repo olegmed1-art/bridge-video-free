@@ -66,6 +66,11 @@ def _metadata(meta: Mapping[str, Any]) -> dict[str, Any]:
         "mime_type": str(meta.get("mimeType") or ""),
         "size_bytes": size,
         "parents": [str(v) for v in (meta.get("parents") or []) if v],
+        "modified_time": str(meta.get("modifiedTime") or ""),
+        "version": str(meta.get("version") or ""),
+        "md5_checksum": str(meta.get("md5Checksum") or "").strip().lower(),
+        "sha1_checksum": str(meta.get("sha1Checksum") or "").strip().lower(),
+        "sha256_checksum": str(meta.get("sha256Checksum") or "").strip().lower(),
     }
 
 
@@ -93,6 +98,8 @@ def _read_live(
         or before["mime_type"] != expected_mime
         or before["size_bytes"] <= 0
         or before["parents"] != [expected_parent]
+        or not before["modified_time"]
+        or not before["version"]
     ):
         raise TerminalEvidenceV2Error("UV_TERMINAL_METADATA_MISMATCH")
 

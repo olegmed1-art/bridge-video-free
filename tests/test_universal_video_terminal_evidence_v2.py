@@ -29,9 +29,11 @@ def _fixture():
     ai = json.dumps(done, ensure_ascii=False).encode()
     items = [
         {"id": "master-pdf-123456", "name": "master.pdf", "mimeType": "application/pdf",
-         "size": str(len(pdf)), "parents": [claim["output_folder_id"]]},
+         "size": str(len(pdf)), "parents": [claim["output_folder_id"]],
+         "modifiedTime": "2026-09-02T20:00:00Z", "version": "101"},
         {"id": "ai-done-file-123456", "name": f"AI_DONE_{claim['stable_job_key']}.json",
-         "mimeType": "application/json", "size": str(len(ai)), "parents": [claim["output_folder_id"]]},
+         "mimeType": "application/json", "size": str(len(ai)), "parents": [claim["output_folder_id"]],
+         "modifiedTime": "2026-09-02T20:00:01Z", "version": "102"},
     ]
 
     def folder(_folder, _token): return [dict(item) for item in items]
@@ -84,3 +86,23 @@ def test_terminal_validation_rejects_missing_null_type_and_mismatch():
                 {**base, "source_file_id": "wrong"}):
         with pytest.raises(Exception):
             validate_terminal_output(claim, bad)
+
+
+def test_terminal_readback_rejects_same_size_drive_version_change():
+    claim, done, items, folder, download, _metadata = _fixture()
+    reads = {item["id"]: 0 for item in items}
+
+    def changing_metadata(file_id, _token):
+        item = next(dict(value) for value in items if value["id"] == file_id)
+        reads[file_id] += 1
+        if reads[file_id] > 1:
+            item["version"] = str(int(item["version"]) + reads[file_id] - 1)
+        return item
+
+    route = discover_route_receipt(
+        claim, done, "mock", folder_lister=folder, metadata_reader=changing_metadata
+    )
+    with pytest.raises(Exception, match="UV_TERMINAL_METADATA_CHANGED"):
+        build_terminal_evidence(
+            claim, done, route, "mock", metadata_reader=changing_metadata, downloader=download
+        )

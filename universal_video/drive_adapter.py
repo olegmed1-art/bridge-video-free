@@ -121,7 +121,7 @@ def file_metadata(file_id: str, token: str) -> dict:
         headers={"Authorization": f"Bearer {token}"},
         params={
             "fields": (
-                "id,name,mimeType,size,modifiedTime,parents,"
+                "id,name,mimeType,size,modifiedTime,version,parents,"
                 "md5Checksum,sha1Checksum,sha256Checksum"
             )
         },
@@ -143,7 +143,7 @@ def list_folder_files(folder_id: str, token: str) -> list[dict]:
         params = {
             "q": f"'{folder_id}' in parents and trashed=false",
             "fields": (
-                "nextPageToken,files(id,name,mimeType,size,parents,modifiedTime,"
+                "nextPageToken,files(id,name,mimeType,size,parents,modifiedTime,version,"
                 "md5Checksum,sha1Checksum,sha256Checksum)"
             ),
             "pageSize": 1000,
