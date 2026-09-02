@@ -19,7 +19,7 @@ def _workflow_text(name: str) -> str:
     return (WORKFLOWS / name).read_text(encoding="utf-8")
 
 
-def test_all_submit_bridge_oracle_producers_share_stop_fence() -> None:
+def test_all_submit_bridge_oracle_producers_preserve_each_request() -> None:
     producers = {
         path.name: path.read_text(encoding="utf-8")
         for path in WORKFLOWS.glob("*.yml")
@@ -27,10 +27,24 @@ def test_all_submit_bridge_oracle_producers_share_stop_fence() -> None:
     }
     assert producers
     for name, text in producers.items():
-        assert SHARED_FENCE in text, name
+        assert "format('oracle-diana11-" in text, name
+        assert "-request-{0}', github.sha)" in text, name
         assert "github.event_name == 'pull_request'" in text, name
         assert "github.event.pull_request.number" in text, name
         assert "cancel-in-progress: false" in text, name
+
+
+def test_direct_mass_and_operator_producers_share_stop_fence() -> None:
+    for name in (
+        "oracle-dds3-pilot10k-launch.yml",
+        "oracle-dds3-pilot10k-operator.yml",
+        "oracle-operator-v2.yml",
+    ):
+        workflow = _workflow_text(name)
+        assert SHARED_FENCE in workflow, name
+        assert "noop-{0}" in workflow, name
+        assert "github.run_id" in workflow, name
+        assert "cancel-in-progress: false" in workflow, name
 
 
 def test_stop_consumer_uses_same_non_cancelling_fence() -> None:

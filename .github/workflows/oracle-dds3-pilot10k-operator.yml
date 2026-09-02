@@ -10,7 +10,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: oracle-dds3-pilot10k-operator
+  group: ${{ github.event_name == 'issue_comment' && github.event.comment.user.login == github.repository_owner && contains(fromJSON('["/dds3-pilot10k start","/dds3-pilot10k status","/dds3-main30k deploy","/dds3-main30k stage","/dds3-main30k start","/dds3-main30k reconcile"]'), github.event.comment.body) && 'oracle-instance-workload-mutation' || format('oracle-dds3-pilot10k-operator-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 env:
@@ -29,7 +29,7 @@ env:
 jobs:
   operate:
     if: >-
-      github.event.comment.user.login == 'olegmed1-art' &&
+      github.event.comment.user.login == github.repository_owner &&
       (github.event.comment.body == '/dds3-pilot10k start' ||
        github.event.comment.body == '/dds3-pilot10k status' ||
        github.event.comment.body == '/dds3-main30k deploy' ||

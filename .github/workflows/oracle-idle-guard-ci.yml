@@ -20,6 +20,9 @@ on:
       - '.github/workflows/oracle-diana11-003-one-shadow-execution.yml'
       - '.github/workflows/research-job-dds3-canary.yml'
       - '.github/workflows/research-job-neon-operator.yml'
+      - '.github/workflows/oracle-operator-v2.yml'
+      - '.github/workflows/oracle-dds3-pilot10k-launch.yml'
+      - '.github/workflows/oracle-dds3-pilot10k-operator.yml'
   pull_request:
     paths:
       - 'assistant_lab/oracle_idle_schema.sql'
@@ -36,6 +39,9 @@ on:
       - '.github/workflows/oracle-diana11-003-one-shadow-execution.yml'
       - '.github/workflows/research-job-dds3-canary.yml'
       - '.github/workflows/research-job-neon-operator.yml'
+      - '.github/workflows/oracle-operator-v2.yml'
+      - '.github/workflows/oracle-dds3-pilot10k-launch.yml'
+      - '.github/workflows/oracle-dds3-pilot10k-operator.yml'
 
 permissions:
   contents: read

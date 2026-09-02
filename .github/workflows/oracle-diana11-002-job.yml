@@ -18,7 +18,9 @@ concurrency:
   # queued dispatch must not be able to submit work after the final IDLE
   # proof but before OCI accepts the STOP action. PR validation has no
   # workload authority and stays out of the production lifecycle fence.
-  group: ${{ github.event_name == 'pull_request' && format('oracle-diana11-002-pr-{0}', github.event.pull_request.number) || 'oracle-instance-workload-mutation' }}
+  # Request commits are durable and must never replace one another in GitHub's
+  # single-pending concurrency slot. Each production request keeps its own run.
+  group: ${{ github.event_name == 'pull_request' && format('oracle-diana11-002-pr-{0}', github.event.pull_request.number) || format('oracle-diana11-002-request-{0}', github.sha) }}
   cancel-in-progress: false
 
 jobs:
