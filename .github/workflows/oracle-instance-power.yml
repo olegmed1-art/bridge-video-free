@@ -262,6 +262,23 @@ jobs:
           IDLE_SOURCE_RUN_ID: ${{ steps.command.outputs.idle_source_run_id }}
         run: |
           set -euo pipefail
+
+          # Complete the potentially slow paginated epoch scan before asking
+          # the host for the final short-lived IDLE proof. This leaves no API
+          # pagination latency between authorization and the OCI STOP call.
+          if [[ -n "$IDLE_SOURCE_RUN_ID" ]]; then
+            final_epoch_state="$(gh api --paginate --slurp \
+              -H 'Accept: application/vnd.github+json' \
+              "/repos/$GITHUB_REPOSITORY/actions/workflows/oracle-universal-video-job.yml/runs?per_page=100" \
+              | IDLE_SOURCE_RUN_ID="$IDLE_SOURCE_RUN_ID" python -c 'import json,os,sys; pages=json.load(sys.stdin); source=int(os.environ["IDLE_SOURCE_RUN_ID"]); valid=isinstance(pages,list) and bool(pages) and all(isinstance(p,dict) and isinstance(p.get("workflow_runs"),list) for p in pages); runs=[r for p in pages for r in p.get("workflow_runs",[])] if valid else []; total=pages[0].get("total_count") if valid else None; ids=[int(r.get("id",0)) for r in runs]; complete=isinstance(total,int) and len(runs)==total and len(ids)==len(set(ids)); row=next((r for r in runs if int(r.get("id",0))==source),None); newer=any(int(r.get("id",0))>source and r.get("event")!="pull_request" for r in runs); print("UNKNOWN" if not complete or row is None or row.get("status")!="completed" else "STALE" if newer else "CURRENT")')"
+            [[ "$final_epoch_state" == CURRENT ]] || {
+              echo "STOP REFUSED: final automatic workload epoch is $final_epoch_state" >&2
+              exit 3
+            }
+          else
+            echo 'manual stop: final workload epoch binding not applicable'
+          fi
+
           script_text="sudo -n /usr/local/sbin/oracle-idle-state"
           content_json="$(SCRIPT_TEXT="$script_text" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":os.environ["SCRIPT_TEXT"]},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
           target_json="$(python -c 'import json,os; print(json.dumps({"instanceId":os.environ["OCI_INSTANCE_OCID"]},separators=(",",":")))')"
@@ -312,23 +329,6 @@ jobs:
           if [[ $authorization_rc -ne 0 || "$authorization" != "$expected_authorization" ]]; then
             echo 'STOP REFUSED: final fresh host IDLE proof is absent' >&2
             exit 3
-          fi
-
-          # The final host proof can poll for three minutes. Re-resolve the
-          # automatic workload epoch after that window and immediately before
-          # STOP so a newly queued non-PR workload cannot be hidden behind the
-          # shared mutation lock. Manual STOP retains its independent proof.
-          if [[ -n "$IDLE_SOURCE_RUN_ID" ]]; then
-            final_epoch_state="$(gh api --paginate --slurp \
-              -H 'Accept: application/vnd.github+json' \
-              "/repos/$GITHUB_REPOSITORY/actions/workflows/oracle-universal-video-job.yml/runs?per_page=100" \
-              | IDLE_SOURCE_RUN_ID="$IDLE_SOURCE_RUN_ID" python -c 'import json,os,sys; pages=json.load(sys.stdin); source=int(os.environ["IDLE_SOURCE_RUN_ID"]); valid=isinstance(pages,list) and bool(pages) and all(isinstance(p,dict) and isinstance(p.get("workflow_runs"),list) for p in pages); runs=[r for p in pages for r in p.get("workflow_runs",[])] if valid else []; total=pages[0].get("total_count") if valid else None; ids=[int(r.get("id",0)) for r in runs]; complete=isinstance(total,int) and len(runs)==total and len(ids)==len(set(ids)); row=next((r for r in runs if int(r.get("id",0))==source),None); newer=any(int(r.get("id",0))>source and r.get("event")!="pull_request" for r in runs); print("UNKNOWN" if not complete or row is None or row.get("status")!="completed" else "STALE" if newer else "CURRENT")')"
-            [[ "$final_epoch_state" == CURRENT ]] || {
-              echo "STOP REFUSED: final automatic workload epoch is $final_epoch_state" >&2
-              exit 3
-            }
-          else
-            echo 'manual stop: final workload epoch binding not applicable'
           fi
 
           oci compute instance action --instance-id "$OCI_INSTANCE_OCID" --action STOP >/dev/null
