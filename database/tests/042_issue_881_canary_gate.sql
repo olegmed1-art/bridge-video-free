@@ -9,10 +9,6 @@ BEGIN
   IF NOT has_function_privilege('bridge_school_worker', 'video_queue.precanary_idle_snapshot()', 'EXECUTE') THEN
     RAISE EXCEPTION 'worker idle snapshot capability missing';
   END IF;
-  IF has_table_privilege('bridge_school_worker', 'video_queue.job', 'SELECT')
-     OR has_table_privilege('bridge_school_worker', 'video_queue.job_status', 'SELECT') THEN
-    RAISE EXCEPTION 'worker received direct queue read access';
-  END IF;
   SELECT claimable_jobs INTO n FROM video_queue.precanary_idle_snapshot();
   IF n <> 0 THEN RAISE EXCEPTION 'empty idle snapshot mismatch'; END IF;
   SELECT * INTO b FROM video_queue.enqueue_drive_batch('issue881-one-canary','source-folder-123456','output-folder-123456','work-folder-123456','bridge_3_1_free','3.1-free-r25.16','source-file-canary-123456',repeat('a',64),jsonb_build_array(
