@@ -1,0 +1,200 @@
+name: Oracle idle guard host inventory
+
+on:
+  push:
+    branches:
+      - autopilot/oracle-idle-stop-guard-627-v2
+    paths:
+      - '.github/workflows/oracle-idle-host-inventory.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-idle-host-inventory-627
+  cancel-in-progress: false
+
+jobs:
+  inventory:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Prepare pinned SSH identity
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/oracle-idle-inventory-known-hosts"
+          : > "$known"
+          index=0
+          for expected in \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64'; do
+            part="$RUNNER_TEMP/oracle-idle-inventory-known-hosts.$index"
+            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$expected" "$part"
+            cat "$part" >> "$known"
+            index=$((index + 1))
+          done
+          sort -u -o "$known" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]] || { echo 'Oracle SSH credential unavailable' >&2; exit 1; }
+          key="$RUNNER_TEMP/id_oracle_idle_inventory"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Inventory exact live sources read-only
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+          LAB_DIR=/opt/bridge-school/assistant-lab
+          OBSERVER_DIR=/opt/bridge-school/assistant-lab-observer
+          VIDEO_DIR=/opt/bridge-school/universal-video
+          LAB_ENV="$LAB_DIR/assistant-lab.env"
+          AUTOPILOT_ENV=/opt/bridge-school/school-autopilot/autopilot-shadow.env
+          VIDEO_DSN=/opt/bridge-school/universal-video/secrets/video-queue-dsn
+          PYTHON="$LAB_DIR/.venv/bin/python"
+
+          echo "INVENTORY_GUARD_SHA256=$(sha256sum /usr/local/sbin/oracle-idle-state | awk '{print $1}')"
+          echo "INVENTORY_ASSISTANT_SERVICE=$(systemctl is-active assistant-lab.service 2>/dev/null || true)"
+          echo "INVENTORY_AUTOPILOT_SERVICE=$(systemctl is-active school-autopilot-shadow.service 2>/dev/null || true)"
+          echo "INVENTORY_AUTOPILOT_ENABLED=$(systemctl is-enabled school-autopilot-shadow.service 2>/dev/null || true)"
+
+          check_file() {
+            local label="$1" path="$2"
+            if [[ -f "$path" && ! -L "$path" && -r "$path" ]]; then
+              echo "SOURCE_${label}=PRESENT_READABLE"
+            elif [[ -e "$path" || -L "$path" ]]; then
+              echo "SOURCE_${label}=PRESENT_UNSAFE_OR_UNREADABLE"
+            else
+              echo "SOURCE_${label}=MISSING"
+            fi
+          }
+          check_dir() {
+            local label="$1" path="$2"
+            if [[ -d "$path" && ! -L "$path" && -r "$path" && -x "$path" ]]; then
+              local first=''
+              set +e
+              first="$(find "$path" -mindepth 1 -print -quit 2>/dev/null)"
+              local rc=$?
+              set -e
+              if (( rc != 0 )); then
+                echo "SOURCE_${label}=PRESENT_SCAN_FAILED"
+              elif [[ -n "$first" ]]; then
+                echo "SOURCE_${label}=PRESENT_NONEMPTY"
+              else
+                echo "SOURCE_${label}=PRESENT_EMPTY"
+              fi
+            elif [[ -e "$path" || -L "$path" ]]; then
+              echo "SOURCE_${label}=PRESENT_UNSAFE_OR_UNREADABLE"
+            else
+              echo "SOURCE_${label}=MISSING"
+            fi
+          }
+
+          check_file LAB_ENV "$LAB_ENV"
+          check_file AUTOPILOT_ENV "$AUTOPILOT_ENV"
+          check_file VIDEO_DSN "$VIDEO_DSN"
+          [[ -x "$PYTHON" ]] && echo SOURCE_ASSISTANT_PYTHON=PRESENT_EXECUTABLE || echo SOURCE_ASSISTANT_PYTHON=MISSING_OR_NONEXECUTABLE
+          check_dir LAB_SPOOL "$LAB_DIR/spool"
+          check_dir LAB_FEEDBACK_SPOOL "$LAB_DIR/feedback-spool"
+          check_dir VIDEO_INBOX "$VIDEO_DIR/spool/inbox"
+          check_dir VIDEO_RUNNING "$VIDEO_DIR/spool/running"
+          check_dir OBSERVER_PENDING "$OBSERVER_DIR/jobs/pending"
+          check_dir OBSERVER_RUNNING "$OBSERVER_DIR/jobs/running"
+          check_dir HOST_LEASE_PARENT /run/bridge-school
+          check_file HOST_LEASE /run/bridge-school/oracle-host-lease
+
+          # Parse only DSN presence and use values internally; never print them.
+          assistant_dsn=''
+          autopilot_dsn=''
+          video_dsn=''
+          if [[ -r "$LAB_ENV" ]]; then
+            mapfile -t rows < <(grep '^ASSISTANT_LAB_DATABASE_URL=' "$LAB_ENV" || true)
+            (( ${#rows[@]} == 1 )) && assistant_dsn="${rows[0]#ASSISTANT_LAB_DATABASE_URL=}"
+          fi
+          if [[ -r "$AUTOPILOT_ENV" ]]; then
+            mapfile -t rows < <(grep '^AUTOPILOT_DATABASE_URL=' "$AUTOPILOT_ENV" || true)
+            (( ${#rows[@]} == 1 )) && autopilot_dsn="${rows[0]#AUTOPILOT_DATABASE_URL=}"
+          fi
+          if [[ -r "$VIDEO_DSN" ]]; then
+            mapfile -t rows < "$VIDEO_DSN"
+            (( ${#rows[@]} == 1 )) && video_dsn="${rows[0]}"
+          fi
+          [[ -n "$assistant_dsn" ]] && echo DSN_ASSISTANT=AVAILABLE || echo DSN_ASSISTANT=UNAVAILABLE
+          [[ -n "$autopilot_dsn" ]] && echo DSN_AUTOPILOT=AVAILABLE || echo DSN_AUTOPILOT=UNAVAILABLE
+          [[ -n "$video_dsn" ]] && echo DSN_VIDEO=AVAILABLE || echo DSN_VIDEO=UNAVAILABLE
+
+          if [[ -x "$PYTHON" ]]; then
+            ASSISTANT_DSN="$assistant_dsn" AUTOPILOT_DSN="$autopilot_dsn" VIDEO_QUEUE_DSN="$video_dsn" "$PYTHON" - <<'PY'
+          import os
+          try:
+              import psycopg
+          except Exception:
+              print("DB_DRIVER=UNAVAILABLE")
+              raise SystemExit(0)
+
+          def probe(name, dsn, sql):
+              if not dsn:
+                  print(f"DB_{name}=DSN_UNAVAILABLE")
+                  return
+              try:
+                  with psycopg.connect(
+                      dsn,
+                      connect_timeout=5,
+                      application_name="oracle-idle-readonly-inventory",
+                      options="-c statement_timeout=5000 -c lock_timeout=1000 -c default_transaction_read_only=on",
+                  ) as conn:
+                      with conn.cursor() as cur:
+                          cur.execute(sql)
+                          row = cur.fetchone()
+                  print(f"DB_{name}=PASS:{','.join(str(x) for x in row)}")
+              except Exception as exc:
+                  # Stable class only; never print server error text/DSN.
+                  print(f"DB_{name}=FAIL:{type(exc).__name__}")
+
+          probe(
+              "ASSISTANT_IDLE_RPC",
+              os.environ.get("ASSISTANT_DSN", ""),
+              "SELECT schema_version, active_jobs, active_research_jobs, active_research_child_jobs, active_control_commands, active_operator_maintenance_leases, stale_operator_maintenance_leases FROM assistant_lab.oracle_idle_snapshot()",
+          )
+          probe(
+              "AUTOPILOT_ACTIVE",
+              os.environ.get("AUTOPILOT_DSN", ""),
+              "SELECT count(*)::bigint FROM autopilot.task_status WHERE status NOT IN ('OWNER_REQUIRED','FAILED_CLOSED','BUDGET_STOP','DONE','CANCELLED')",
+          )
+          probe(
+              "VIDEO_ACTIVE",
+              os.environ.get("VIDEO_QUEUE_DSN", ""),
+              "SELECT count(*)::bigint FROM video_queue.job_status WHERE status IN ('PENDING_CANARY','QUEUED','LEASED')",
+          )
+          PY
+          fi
+
+          echo INVENTORY_GUARD_PROOF_BEGIN
+          sudo -n /usr/local/sbin/oracle-idle-state
+          echo INVENTORY_GUARD_PROOF_END
+          REMOTE
