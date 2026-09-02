@@ -11,6 +11,11 @@ on:
         description: Explicit Director GO for the bounded external pre-canary run
         required: true
         type: boolean
+      recover_container_from_run:
+        description: Optional prior failed external run whose recorded active container state must be restored
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
@@ -26,6 +31,7 @@ jobs:
     timeout-minutes: 120
     env:
       EXACT_SHA: ${{ inputs.exact_sha }}
+      RECOVER_CONTAINER_FROM_RUN: ${{ inputs.recover_container_from_run }}
       INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
       OCI_USER: ${{ secrets.OCI_CLI_USER }}
       OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
@@ -54,10 +60,12 @@ jobs:
           set -euo pipefail
           [[ "$EXACT_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$EXACT_SHA"
+          [[ -z "$RECOVER_CONTAINER_FROM_RUN" || "$RECOVER_CONTAINER_FROM_RUN" =~ ^[0-9]{8,20}$ ]]
           grep -Eq '^FROM python@sha256:[0-9a-f]{64}$' deploy/oracle-universal-video/Dockerfile
           bash -n ops/oracle_universal_video_precanary_attest.sh
           bash -n ops/oracle_universal_video_container_install.sh
           grep -F 'flock --exclusive --nonblock 9' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS' ops/oracle_universal_video_precanary_attest.sh
           grep -F '"$image_id" "$@"' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'UNIVERSAL_VIDEO_IMAGE=$image_id' ops/oracle_universal_video_container_install.sh
           grep -F '"$image_id" true' ops/oracle_universal_video_container_install.sh
@@ -142,7 +150,7 @@ jobs:
             {
               echo "runtime_sha=$EXACT_SHA"
               echo "step_exit=$rc"
-              grep -E '^UNIVERSAL_VIDEO_(PRECANARY_WINDOW|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|STORAGE|CLEANUP|INSTALL_PASS)|PRECANARY_(RUNTIME|STATE|ATTEST_PASS)) |^\{"error_code":"UV_[A-Z0-9_]+","status":"FAILED"\}$|^ERROR:' \
+              grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|RESTORE(_PASS|_FAILED)?)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|STORAGE|CLEANUP|INSTALL_PASS)) |^\{"error_code":"UV_[A-Z0-9_]+","status":"FAILED"\}$|^ERROR:' \
                 "$session_log" 2>/dev/null || true
               echo 'real_media_canary_run=false'
               echo 'source_media_downloaded=false'
@@ -175,6 +183,7 @@ jobs:
             UNIVERSAL_VIDEO_PRECANARY_BUILD_IMAGE=1 \
             UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB=5242880 \
             UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE=1 \
+            UNIVERSAL_VIDEO_RECOVER_CONTAINER_ACTIVE_FROM_RUN='$RECOVER_CONTAINER_FROM_RUN' \
             UNIVERSAL_VIDEO_CANARY_FILE_ID='198-2v3JBlNQobdsPYQQWzrrCqQ1zBZOI' \
             UNIVERSAL_VIDEO_CANARY_NAME='Диана 13.mp4' \
             UNIVERSAL_VIDEO_CANARY_MIME='video/mp4' \
@@ -189,6 +198,7 @@ jobs:
 
           grep -E "^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} activated=0$" "$session_log"
           grep -E "^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$" "$session_log"
+          grep -E '^UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service=(inactive|failed) container_service=(active|inactive|failed) prior_container_recovery=[01]$' "$session_log"
           installed_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) activated=0$/\\1/p" "$session_log")"
           attested_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$/\\1/p" "$session_log")"
           [[ "$installed_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
@@ -205,7 +215,7 @@ jobs:
           trap - ERR
           {
             echo "runtime_sha=$EXACT_SHA"
-            grep -E '^UNIVERSAL_VIDEO_(PRECANARY_WINDOW|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|CLEANUP|INSTALL_PASS)|PRECANARY_(RUNTIME|STATE|ATTEST_PASS)) ' "$session_log"
+            grep -E '^UNIVERSAL_VIDEO_(PRECANARY_(WINDOW|RECOVERY|RUNTIME|STATE|ATTEST_PASS|RESTORE_PASS)|SOURCE_CHECKOUT|CONTAINER_(RESOURCE|CLEANUP|INSTALL_PASS)) ' "$session_log"
             grep -E '"gate":"(IMPORT_CLOSURE|SYNTHETIC_RESULT_CONTRACT|SOURCE_IDENTITY_METADATA_ONLY)"' "$session_log"
             echo "image_digest=$installed_digest"
             echo 'real_media_canary_run=false'
