@@ -223,8 +223,13 @@ jobs:
              # service text on success so the five-line proof stays exact.
              active="$(systemctl is-active school-autopilot-shadow.service 2>/dev/null || true)"
              enabled="$(systemctl is-enabled school-autopilot-shadow.service 2>/dev/null || true)"
+             staged_revision="$(sudo -n cat /opt/bridge-school/school-autopilot/current/SOURCE_REVISION)"
              [[ "$active" == inactive && "$enabled" == disabled ]] || {
                echo "Autopilot service changed before final IDLE proof; STOP forbidden" >&2
+               exit 1
+             }
+             [[ "$staged_revision" == "${{ steps.request.outputs.expected_staged_revision }}" ]] || {
+               echo "Autopilot staged revision changed before final IDLE proof; STOP forbidden" >&2
                exit 1
              }
              sudo -n /usr/local/sbin/oracle-idle-state' \
