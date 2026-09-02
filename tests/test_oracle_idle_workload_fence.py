@@ -4,6 +4,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 SHARED_FENCE = "oracle-instance-workload-mutation"
+POWER_GROUP = (
+    "group: ${{ github.event_name == 'workflow_dispatch' && "
+    "'oracle-instance-workload-mutation' || (github.event_name == "
+    "'issue_comment' && github.actor == github.repository_owner && "
+    "contains(fromJSON('[\"/oracle-instance status\",\"/oracle-instance start\","
+    "\"/oracle-instance stop\"]'), github.event.comment.body)) && "
+    "'oracle-instance-workload-mutation' || "
+    "format('oracle-instance-power-noop-{0}', github.run_id) }}"
+)
 
 
 def _workflow_text(name: str) -> str:
@@ -26,15 +35,8 @@ def test_all_submit_bridge_oracle_producers_share_stop_fence() -> None:
 
 def test_stop_consumer_uses_same_non_cancelling_fence() -> None:
     power = _workflow_text("oracle-instance-power.yml")
-    assert SHARED_FENCE in power
-    assert "oracle-instance-power-noop-{0}" in power
-    assert "github.run_id" in power
-    for command in (
-        "/oracle-instance status",
-        "/oracle-instance start",
-        "/oracle-instance stop",
-    ):
-        assert command in power
+    group_lines = [line.strip() for line in power.splitlines() if line.strip().startswith("group:")]
+    assert group_lines == [POWER_GROUP]
     assert "cancel-in-progress: false" in power
 
 
