@@ -149,18 +149,47 @@ def classify(snapshot: Mapping[str, Any], *, now: float | None = None) -> Verdic
     return Verdict("IDLE", "all_required_telemetry_fresh_consistent_idle")
 
 
+def bounded_evidence(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    """Return secret-free evidence suitable for the guard command output."""
+    families = snapshot.get("families")
+    evidence: dict[str, Any] = {
+        "telemetry_schema": snapshot.get("schema"),
+        "generated_at": snapshot.get("generated_at"),
+        "max_age_seconds": snapshot.get("max_age_seconds"),
+        "families": {},
+    }
+    if isinstance(families, Mapping):
+        safe: dict[str, Any] = {}
+        for name in REQUIRED_FAMILIES:
+            entry = families.get(name)
+            if isinstance(entry, Mapping):
+                safe[name] = {
+                    "state": entry.get("state"),
+                    "observed_at": entry.get("observed_at"),
+                    "conflict": bool(entry.get("conflict") is True),
+                }
+            else:
+                safe[name] = {"state": "MISSING", "observed_at": None, "conflict": False}
+        evidence["families"] = safe
+    return evidence
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("snapshot", type=Path)
     args = parser.parse_args()
+    payload: dict[str, Any] = {}
     try:
-        payload = json.loads(args.snapshot.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict):
+        loaded = json.loads(args.snapshot.read_text(encoding="utf-8"))
+        if not isinstance(loaded, dict):
             raise ValueError("snapshot is not an object")
+        payload = loaded
         verdict = classify(payload)
     except Exception:
         verdict = Verdict("UNKNOWN", "snapshot_read_failed")
-    print(json.dumps(verdict.as_dict(), sort_keys=True, separators=(",", ":")))
+    result = verdict.as_dict()
+    result["evidence"] = bounded_evidence(payload)
+    print(json.dumps(result, sort_keys=True, separators=(",", ":")))
     print(f"ORACLE_IDLE_REASON={verdict.reason}")
     print(f"ORACLE_IDLE_STATE={verdict.state}")
     return 0
