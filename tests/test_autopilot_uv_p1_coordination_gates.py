@@ -58,6 +58,22 @@ def test_registration_reconciles_all_live_heads_before_database_connection_and_e
     assert "allow_temporary_registration == 'YES'" in workflow
 
 
+def test_registration_rechecks_every_approved_head_immediately_before_aggregate_pass() -> None:
+    runtime = _read("ops/autopilot/register_uv_p1_runtime.py")
+
+    helper = runtime[
+        runtime.index("def _verify_all_current_live_heads()") : runtime.index("def main()")
+    ]
+    assert "for label, _task_key, pr_number, expected_head in APPROVED:" in helper
+    assert "_verify_current_live_head(label, pr_number, expected_head)" in helper
+    assert "AUTOPILOT_UV_P1_FINAL_ALL_HEADS_VERIFIED=PASS" in helper
+
+    final_recheck = runtime.index("_verify_all_current_live_heads()", runtime.index("def main()"))
+    receipt = runtime.index('"gate": "AUTOPILOT_UV_P1_DURABLE_REGISTRATION"', final_recheck)
+    output = runtime.index('print("UV_P1_REGISTRATION_RECEIPT="', receipt)
+    assert final_recheck < receipt < output
+
+
 def test_registration_live_resolver_fails_closed_on_head_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

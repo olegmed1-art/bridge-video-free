@@ -368,6 +368,13 @@ def _verify_current_live_head(label: str, pr_number: int, expected_head: str) ->
     print(f"UV_P1_{label}_LIVE_HEAD_VERIFIED={live_head}", flush=True)
 
 
+def _verify_all_current_live_heads() -> None:
+    """Reconcile every approved PR immediately before aggregate PASS."""
+    for label, _task_key, pr_number, expected_head in APPROVED:
+        _verify_current_live_head(label, pr_number, expected_head)
+    print("AUTOPILOT_UV_P1_FINAL_ALL_HEADS_VERIFIED=PASS", flush=True)
+
+
 def main() -> int:
     deadline = time.monotonic() + 1_800
     receipts: list[dict[str, object]] = []
@@ -439,6 +446,10 @@ def main() -> int:
             )
             print(f"UV_P1_{label}_TERMINAL_STATUS={status}", flush=True)
 
+        # Earlier lanes may have been terminal for most of the shared deadline
+        # while a later lane completed. Never publish one aggregate PASS from
+        # those cached receipts without re-reading every authoritative PR.
+        _verify_all_current_live_heads()
         receipt = {
             "gate": "AUTOPILOT_UV_P1_DURABLE_REGISTRATION",
             "result": "PASS",
