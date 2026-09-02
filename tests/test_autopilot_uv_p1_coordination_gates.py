@@ -104,6 +104,21 @@ def test_registration_live_resolver_fails_closed_on_head_drift(
         )
 
 
+@pytest.mark.parametrize("port", ["not-a-port", "65536"])
+def test_registration_dsn_discovery_skips_invalid_ports(
+    monkeypatch: pytest.MonkeyPatch,
+    port: str,
+) -> None:
+    runtime = _load_registration_runtime(monkeypatch)
+
+    assert (
+        runtime._temporary_dsn(
+            f"postgresql://runtime:secret@ep-example.neon.tech:{port}/neondb"
+        )
+        is None
+    )
+
+
 def test_registration_restores_0309_and_applies_only_forward_upgrade_before_ingress() -> None:
     historical_path = ROOT / "database/migrations/0309_autopilot_uv_p1_bounded_ingress.sql"
     historical = historical_path.read_bytes()

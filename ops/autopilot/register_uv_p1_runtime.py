@@ -146,10 +146,14 @@ def _temporary_dsn(raw_dsn: str) -> tuple[tuple[str, str, str, str], str] | None
     first, separator, suffix = host.partition(".")
     if not separator or not first.startswith("ep-"):
         return None
+    try:
+        parsed_port = parsed.port
+    except ValueError:
+        return None
     temporary_host = TEMP_ENDPOINT_ID + ("-pooler" if first.endswith("-pooler") else "") + "." + suffix
     username = urllib.parse.quote(parsed.username, safe="")
     password = urllib.parse.quote(parsed.password, safe="")
-    port = f":{parsed.port}" if parsed.port else ""
+    port = f":{parsed_port}" if parsed_port else ""
     query = [
         (key, value)
         for key, value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
