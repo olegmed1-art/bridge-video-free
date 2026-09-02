@@ -130,7 +130,9 @@ def _discover_candidates() -> list[str]:
     return candidates
 
 
-def _temporary_dsn(raw_dsn: str) -> tuple[tuple[str, str, str, str], str] | None:
+def _temporary_dsn(
+    raw_dsn: str,
+) -> tuple[tuple[str, str, str, str, int | None], str] | None:
     try:
         parsed = urllib.parse.urlsplit(raw_dsn)
     except ValueError:
@@ -170,7 +172,13 @@ def _temporary_dsn(raw_dsn: str) -> tuple[tuple[str, str, str, str], str] | None
             "",
         )
     )
-    identity = (parsed.username, parsed.password, parsed.path, temporary_host)
+    identity = (
+        parsed.username,
+        parsed.password,
+        parsed.path,
+        temporary_host,
+        parsed_port,
+    )
     return identity, dsn
 
 
@@ -180,7 +188,7 @@ def _connect_runtime() -> psycopg.Connection[tuple]:
     if TEMP_BRANCH_ID == PRODUCTION_BRANCH_ID:
         raise RuntimeError("AUTOPILOT_UV_P1_BRANCH_ISOLATION_FAILED")
 
-    tested: set[tuple[str, str, str, str]] = set()
+    tested: set[tuple[str, str, str, str, int | None]] = set()
     observations: Counter[str] = Counter()
     bounded_failure = "AUTOPILOT_UV_P1_RUNTIME_DSN_UNAVAILABLE"
 

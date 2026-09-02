@@ -119,6 +119,24 @@ def test_registration_dsn_discovery_skips_invalid_ports(
     )
 
 
+def test_registration_dsn_identity_distinguishes_ports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _load_registration_runtime(monkeypatch)
+
+    stale = runtime._temporary_dsn(
+        "postgresql://runtime:secret@ep-example.neon.tech:5433/neondb"
+    )
+    live = runtime._temporary_dsn(
+        "postgresql://runtime:secret@ep-example.neon.tech:5432/neondb"
+    )
+
+    assert stale is not None and live is not None
+    assert stale[0] != live[0]
+    assert stale[0][-1] == 5433
+    assert live[0][-1] == 5432
+
+
 def test_registration_restores_0309_and_applies_only_forward_upgrade_before_ingress() -> None:
     historical_path = ROOT / "database/migrations/0309_autopilot_uv_p1_bounded_ingress.sql"
     historical = historical_path.read_bytes()
