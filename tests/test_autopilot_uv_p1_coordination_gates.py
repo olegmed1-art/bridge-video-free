@@ -135,11 +135,19 @@ def test_registration_restores_0309_and_applies_only_forward_upgrade_before_ingr
     assert preflight < head_recheck < migration_write < ledger_write
     assert "AUTOPILOT_UV_P1_PRE_MIGRATION_HEADS_VERIFIED=PASS" in apply_body
     for binding in (
-        '"runtime:997:$EXPECTED_RUNTIME_HEAD"',
-        '"canary:1062:$EXPECTED_CANARY_HEAD"',
-        '"idle:1047:$EXPECTED_IDLE_HEAD"',
+        '"runtime:997:$APPROVED_RUNTIME_HEAD:$EXPECTED_RUNTIME_HEAD"',
+        '"canary:1062:$APPROVED_CANARY_HEAD:$EXPECTED_CANARY_HEAD"',
+        '"idle:1047:$APPROVED_IDLE_HEAD:$EXPECTED_IDLE_HEAD"',
     ):
         assert binding in apply_body
+    for approved in (
+        "APPROVED_RUNTIME_HEAD: 17b74b86b30905f61a47e578b77d18c940691fed",
+        "APPROVED_CANARY_HEAD: 164d0d509fa38fdbe81592201699b1a377187eb0",
+        "APPROVED_IDLE_HEAD: e8e71b569f8189dd0e2a88a07597a4098a772a74",
+    ):
+        assert approved in workflow
+    assert "AUTOPILOT_UV_P1_MIGRATION_APPROVAL_STALE" in workflow
+    assert "AUTOPILOT_UV_P1_CACHED_APPROVAL_MISMATCH" in apply_body
     assert "github.event_name == 'workflow_dispatch'" in workflow
     assert "MIGRATION_APPLIED_BY_THIS_RUN" in workflow
 

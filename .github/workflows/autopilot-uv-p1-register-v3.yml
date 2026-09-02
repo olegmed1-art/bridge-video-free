@@ -46,6 +46,9 @@ jobs:
       EXPECTED_0309_SHA256: 14db4783f63375e79f8340be4c6f26ff27211eb0f920deec8455777098343422
       EXPECTED_0313_BLOB: fa86391dd960ec19752099c83147faf8a9d3c5ae
       EXPECTED_0313_SHA256: e6184520c9df8d3ab8565fc80eb81c604b79a056e8ced4d1ec5b7246c9ccfd39
+      APPROVED_RUNTIME_HEAD: 17b74b86b30905f61a47e578b77d18c940691fed
+      APPROVED_CANARY_HEAD: 164d0d509fa38fdbe81592201699b1a377187eb0
+      APPROVED_IDLE_HEAD: e8e71b569f8189dd0e2a88a07597a4098a772a74
     steps:
       - name: Checkout exact Autopilot source
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -84,6 +87,9 @@ jobs:
             jq -e '.state == "open" and .draft == true' <<<"$payload" >/dev/null
             head="$(jq -er '.head.sha' <<<"$payload")"
             [[ "$head" =~ ^[0-9a-f]{40}$ ]]
+            approved_var="APPROVED_${lane^^}_HEAD"
+            [[ "$head" == "${!approved_var}" ]] \
+              || { echo "AUTOPILOT_UV_P1_MIGRATION_APPROVAL_STALE lane=$lane pr=$pr" >&2; exit 1; }
             echo "${lane}_head=$head" >> "$GITHUB_OUTPUT"
           done
           echo 'AUTOPILOT_UV_P1_LIVE_HEADS_RESOLVED=PASS'
@@ -167,11 +173,13 @@ jobs:
             local auth=(-H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json')
             local api="https://api.github.com/repos/olegmed1-art/bridge-video-free"
             for spec in \
-              "runtime:997:$EXPECTED_RUNTIME_HEAD" \
-              "canary:1062:$EXPECTED_CANARY_HEAD" \
-              "idle:1047:$EXPECTED_IDLE_HEAD"; do
-              IFS=: read -r lane pr expected <<<"$spec"
+              "runtime:997:$APPROVED_RUNTIME_HEAD:$EXPECTED_RUNTIME_HEAD" \
+              "canary:1062:$APPROVED_CANARY_HEAD:$EXPECTED_CANARY_HEAD" \
+              "idle:1047:$APPROVED_IDLE_HEAD:$EXPECTED_IDLE_HEAD"; do
+              IFS=: read -r lane pr expected cached <<<"$spec"
               [[ "$expected" =~ ^[0-9a-f]{40}$ ]]
+              [[ "$cached" == "$expected" ]] \
+                || { echo "AUTOPILOT_UV_P1_CACHED_APPROVAL_MISMATCH lane=$lane pr=$pr" >&2; return 1; }
               payload="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/pulls/$pr")"
               jq -e '.state == "open" and .draft == true' <<<"$payload" >/dev/null
               live="$(jq -er '.head.sha' <<<"$payload")"
