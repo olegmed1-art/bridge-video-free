@@ -1,0 +1,270 @@
+name: Autopilot Universal Video P1 Oracle monitor
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths: ['.github/workflows/autopilot-uv-p1-oracle-monitor.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+
+concurrency:
+  group: autopilot-universal-video-p1-oracle-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: olegmed1-art/bridge-video-free
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_HOST_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      EXPECTED_TEMP_BRANCH_ID: br-still-tooth-b1ilkfcj
+      EXPECTED_TEMP_ENDPOINT_ID: ep-floral-field-b1pjs2of
+      FORBIDDEN_BRANCH_ID_A: br-cold-moon-a1sgkzfd
+      FORBIDDEN_BRANCH_ID_B: br-wispy-lab-b1rq54of
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Resolve exact heads and durable task keys
+        id: refs
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          api="https://api.github.com/repos/$REPOSITORY"
+          auth=(-H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json')
+          for spec in runtime:997 intake:1000 integration:1047; do
+            lane="${spec%%:*}"; pr="${spec##*:}"
+            data="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/pulls/$pr")"
+            sha="$(jq -er '.head.sha' <<<"$data")"
+            branch="$(jq -er '.head.ref' <<<"$data")"
+            jq -e '.state == "open" and .draft == true' <<<"$data" >/dev/null
+            [[ "$sha" =~ ^[0-9a-f]{40}$ && "$branch" =~ ^[A-Za-z0-9._/-]{1,240}$ ]]
+            key="uv-p1-${lane}-pr${pr}-${sha:0:12}-20260902"
+            echo "${lane}_sha=$sha" >> "$GITHUB_OUTPUT"
+            echo "${lane}_branch=$branch" >> "$GITHUB_OUTPUT"
+            echo "${lane}_key=$key" >> "$GITHUB_OUTPUT"
+          done
+          main_sha="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/commits/main" | jq -er '.sha')"
+          [[ "$main_sha" =~ ^[0-9a-f]{40}$ ]]
+          echo "main_sha=$main_sha" >> "$GITHUB_OUTPUT"
+
+      - name: Establish pinned read-only SSH transport
+        id: ssh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_HOST_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            [[ -n "${!name:-}" ]] || continue
+            selected="$name"
+            break
+          done
+          [[ -n "$selected" ]] || { echo 'UV_AUTOPILOT_ORACLE_SSH_KEY_MISSING'; exit 51; }
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$known" -o ConnectTimeout=15 \
+            "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo 'ORACLE_LIFECYCLE_ACTION=NO'
+
+      - name: Query acting Autopilot task store through its live process
+        id: tasks
+        env:
+          RUNTIME_KEY: ${{ steps.refs.outputs.runtime_key }}
+          INTAKE_KEY: ${{ steps.refs.outputs.intake_key }}
+          INTEGRATION_KEY: ${{ steps.refs.outputs.integration_key }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          remote="$RUNNER_TEMP/uv-autopilot-readonly-monitor.sh"
+          cat > "$remote" <<'REMOTE'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+          umask 077
+          runtime_key="$1"; intake_key="$2"; integration_key="$3"
+          expected_branch="$4"; expected_endpoint="$5"; forbidden_a="$6"; forbidden_b="$7"
+          for value in "$runtime_key" "$intake_key" "$integration_key"; do
+            [[ "$value" =~ ^uv-p1-[a-z]+-pr[0-9]+-[0-9a-f]{12}-20260902$ ]] || { echo 'UV_AUTOPILOT_TASK_KEY_INVALID'; exit 60; }
+          done
+          mapfile -t units < <(systemctl list-units --all --type=service --no-legend 2>/dev/null | awk '$1 ~ /autopilot/ {print $1}' | sort -u)
+          (( ${#units[@]} == 1 )) || { echo "UV_AUTOPILOT_UNIT_COUNT=${#units[@]}"; exit 61; }
+          unit="${units[0]}"
+          active="$(systemctl is-active "$unit" 2>/dev/null || true)"
+          [[ "$active" == active ]] || { echo 'UV_AUTOPILOT_SERVICE_NOT_ACTIVE'; exit 62; }
+          pid="$(systemctl show -p MainPID --value "$unit")"
+          [[ "$pid" =~ ^[1-9][0-9]*$ && -r "/proc/$pid/environ" ]] || { echo 'UV_AUTOPILOT_PROCESS_UNREADABLE'; exit 63; }
+          mapfile -d '' -t env_items < "/proc/$pid/environ"
+          candidates=()
+          for item in "${env_items[@]}"; do
+            key="${item%%=*}"; value="${item#*=}"
+            case "$key" in
+              AUTOPILOT_DATABASE_URL|AUTOPILOT_NEON_DATABASE_URL|NEON_DATABASE_URL|DATABASE_URL|POSTGRES_URL|BRIDGE_AUTOPILOT_DATABASE_URL)
+                [[ -n "$value" ]] && candidates+=("$value")
+                ;;
+            esac
+          done
+          (( ${#candidates[@]} >= 1 )) || { echo 'UV_AUTOPILOT_PROCESS_DSN_MISSING'; exit 64; }
+          selected=''; selected_branch=''
+          for dsn in "${candidates[@]}"; do
+            host="$(DSN="$dsn" python3 - <<'PY'
+          import os, urllib.parse
+          print((urllib.parse.urlsplit(os.environ['DSN']).hostname or '').lower())
+          PY
+            )"
+            [[ "$host" =~ \.neon\.tech$ ]] || continue
+            branch=''
+            if command -v psql >/dev/null 2>&1; then
+              set +e
+              branch="$(PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=5000 -c lock_timeout=1000' \
+                psql "$dsn" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT COALESCE(current_setting('neon.branch_id',true),'');" 2>/dev/null)"
+              rc=$?
+              set -e
+              (( rc == 0 )) || continue
+            else
+              continue
+            fi
+            [[ "$branch" != "$forbidden_a" && "$branch" != "$forbidden_b" ]] || continue
+            host_match=0; branch_match=0
+            [[ "$host" =~ ^${expected_endpoint}(-pooler)?\. ]] && host_match=1
+            [[ "$branch" == "$expected_branch" ]] && branch_match=1
+            if (( host_match == 1 || branch_match == 1 )); then
+              [[ -z "$branch" || "$branch" == "$expected_branch" ]] || { echo 'UV_AUTOPILOT_BRANCH_IDENTITY_CONFLICT'; exit 65; }
+              selected="$dsn"; selected_branch="${branch:-$expected_branch}"
+              break
+            fi
+          done
+          [[ -n "$selected" ]] || { echo 'UV_AUTOPILOT_TEMP_DSN_NOT_FOUND_IN_LIVE_PROCESS'; exit 66; }
+          [[ "$selected_branch" == "$expected_branch" ]]
+          query_tasks() {
+            PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=5000 -c lock_timeout=1000' \
+              psql "$selected" -X -A -t -F '|' -v ON_ERROR_STOP=1 \
+              -v runtime_key="$runtime_key" -v intake_key="$intake_key" -v integration_key="$integration_key" <<'SQL'
+          WITH wanted(lane,task_key) AS (
+            VALUES ('runtime', :'runtime_key'), ('intake', :'intake_key'), ('integration', :'integration_key')
+          )
+          SELECT w.lane,
+                 COALESCE(t.task_id::text,'NOT_FOUND'),
+                 COALESCE(t.status,'PENDING_INGESTION'),
+                 COALESCE(t.attempts,0),
+                 COALESCE(t.terminal_reason_code,''),
+                 COALESCE((SELECT count(*) FROM autopilot.task_event e WHERE e.task_id=t.task_id),0),
+                 COALESCE((SELECT count(*) FROM autopilot.evidence v WHERE v.task_id=t.task_id AND v.retained),0)
+          FROM wanted w
+          LEFT JOIN autopilot.task t ON t.task_key=w.task_key
+          ORDER BY w.lane;
+          SQL
+          }
+          rows=''
+          for _ in $(seq 1 30); do
+            rows="$(query_tasks)"
+            missing="$(awk -F'|' '$2=="NOT_FOUND"{n++} END{print n+0}' <<<"$rows")"
+            (( missing == 0 )) && break
+            sleep 10
+          done
+          echo 'UV_AUTOPILOT_LIVE_BRANCH_VERIFIED=PASS'
+          while IFS='|' read -r lane task_id status attempts reason events evidence; do
+            [[ "$lane" =~ ^(runtime|intake|integration)$ ]]
+            if [[ "$task_id" != NOT_FOUND ]]; then
+              [[ "$task_id" =~ ^[0-9a-f-]{36}$ ]]
+            fi
+            [[ "$status" =~ ^(READY|RUNNING|WAITING_EXTERNAL|EVALUATING|DONE|FAILED_CLOSED|OWNER_REQUIRED|BUDGET_STOP|PENDING_INGESTION)$ ]]
+            [[ "$attempts" =~ ^[0-9]+$ && "$events" =~ ^[0-9]+$ && "$evidence" =~ ^[0-9]+$ ]]
+            reason="$(tr -cd 'A-Za-z0-9._:-' <<<"$reason" | cut -c1-96)"
+            echo "UV_P1_TASK=$lane|$task_id|$status|$attempts|${reason:-none}|$events|$evidence"
+          done <<<"$rows"
+          echo 'UV_AUTOPILOT_DB_MUTATION=NO'
+          echo 'ORACLE_LIFECYCLE_ACTION=NO'
+          REMOTE
+          chmod 0700 "$remote"
+          ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n bash -s -- '$RUNTIME_KEY' '$INTAKE_KEY' '$INTEGRATION_KEY' '$EXPECTED_TEMP_BRANCH_ID' '$EXPECTED_TEMP_ENDPOINT_ID' '$FORBIDDEN_BRANCH_ID_A' '$FORBIDDEN_BRANCH_ID_B'" \
+            < "$remote" | tee "$RUNNER_TEMP/uv-p1-task-status.txt"
+          grep -Fx 'UV_AUTOPILOT_LIVE_BRANCH_VERIFIED=PASS' "$RUNNER_TEMP/uv-p1-task-status.txt" >/dev/null
+          grep -Fx 'UV_AUTOPILOT_DB_MUTATION=NO' "$RUNNER_TEMP/uv-p1-task-status.txt" >/dev/null
+          [[ "$(grep -c '^UV_P1_TASK=' "$RUNNER_TEMP/uv-p1-task-status.txt")" == 3 ]]
+          for lane in runtime intake integration; do
+            line="$(sed -nE "s/^UV_P1_TASK=${lane}\|/\0/p" "$RUNNER_TEMP/uv-p1-task-status.txt" | tail -n1)"
+            value="${line#UV_P1_TASK=}"
+            IFS='|' read -r got task_id status attempts reason events evidence <<<"$value"
+            [[ "$got" == "$lane" ]]
+            echo "${lane}_task_id=$task_id" >> "$GITHUB_OUTPUT"
+            echo "${lane}_status=$status" >> "$GITHUB_OUTPUT"
+            echo "${lane}_attempts=$attempts" >> "$GITHUB_OUTPUT"
+            echo "${lane}_reason=$reason" >> "$GITHUB_OUTPUT"
+            echo "${lane}_events=$events" >> "$GITHUB_OUTPUT"
+            echo "${lane}_evidence=$evidence" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Publish exact task receipt to issue 946
+        env:
+          MAIN_SHA: ${{ steps.refs.outputs.main_sha }}
+          RUNTIME_SHA: ${{ steps.refs.outputs.runtime_sha }}
+          RUNTIME_BRANCH: ${{ steps.refs.outputs.runtime_branch }}
+          RUNTIME_TASK_ID: ${{ steps.tasks.outputs.runtime_task_id }}
+          RUNTIME_STATUS: ${{ steps.tasks.outputs.runtime_status }}
+          RUNTIME_ATTEMPTS: ${{ steps.tasks.outputs.runtime_attempts }}
+          RUNTIME_EVENTS: ${{ steps.tasks.outputs.runtime_events }}
+          RUNTIME_EVIDENCE: ${{ steps.tasks.outputs.runtime_evidence }}
+          INTAKE_SHA: ${{ steps.refs.outputs.intake_sha }}
+          INTAKE_BRANCH: ${{ steps.refs.outputs.intake_branch }}
+          INTAKE_TASK_ID: ${{ steps.tasks.outputs.intake_task_id }}
+          INTAKE_STATUS: ${{ steps.tasks.outputs.intake_status }}
+          INTAKE_ATTEMPTS: ${{ steps.tasks.outputs.intake_attempts }}
+          INTAKE_EVENTS: ${{ steps.tasks.outputs.intake_events }}
+          INTAKE_EVIDENCE: ${{ steps.tasks.outputs.intake_evidence }}
+          INTEGRATION_SHA: ${{ steps.refs.outputs.integration_sha }}
+          INTEGRATION_BRANCH: ${{ steps.refs.outputs.integration_branch }}
+          INTEGRATION_TASK_ID: ${{ steps.tasks.outputs.integration_task_id }}
+          INTEGRATION_STATUS: ${{ steps.tasks.outputs.integration_status }}
+          INTEGRATION_ATTEMPTS: ${{ steps.tasks.outputs.integration_attempts }}
+          INTEGRATION_EVENTS: ${{ steps.tasks.outputs.integration_events }}
+          INTEGRATION_EVIDENCE: ${{ steps.tasks.outputs.integration_evidence }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          body=$(cat <<EOF
+          ## P1 acting-Autopilot task receipt
+
+          Task rows were read through the live Oracle Autopilot process after verifying its temporary Neon branch identity. The monitor performed no database mutation and no Oracle lifecycle action.
+
+          | lane | durable task UUID | state | exact head | owner | attempts / events / retained evidence |
+          |---|---|---|---|---|---|
+          | runtime | \`$RUNTIME_TASK_ID\` | \`$RUNTIME_STATUS\` | PR #997 \`$RUNTIME_SHA\` | \`$RUNTIME_BRANCH\` | $RUNTIME_ATTEMPTS / $RUNTIME_EVENTS / $RUNTIME_EVIDENCE |
+          | intake/evidence | \`$INTAKE_TASK_ID\` | \`$INTAKE_STATUS\` | PR #1000 \`$INTAKE_SHA\` | \`$INTAKE_BRANCH\` | $INTAKE_ATTEMPTS / $INTAKE_EVENTS / $INTAKE_EVIDENCE |
+          | queue/Oracle integration | \`$INTEGRATION_TASK_ID\` | \`$INTEGRATION_STATUS\` | PR #1047 \`$INTEGRATION_SHA\` | \`$INTEGRATION_BRANCH\` | $INTEGRATION_ATTEMPTS / $INTEGRATION_EVENTS / $INTEGRATION_EVIDENCE |
+
+          - observed main: \`$MAIN_SHA\`
+          - Autopilot Neon branch identity: **verified temporary branch**
+          - database mutation by monitor: **NO**
+          - media execution / Drive write / production mutation / merge / Oracle stop or restart: **NO**
+
+          \`READY\`, \`RUNNING\`, and \`WAITING_EXTERNAL\` are non-terminal for this coordination gate. No canary is authorized by this receipt.
+          EOF
+          )
+          gh api "repos/$REPOSITORY/issues/946/comments" --method POST -f body="$body" >/dev/null
+          echo 'ISSUE_946_AUTOPILOT_TASK_RECEIPT=PASS'
