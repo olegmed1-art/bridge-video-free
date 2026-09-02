@@ -75,6 +75,10 @@ def test_resume_workflow_archives_marker_without_lifecycle_actions():
     assert "br-still-tooth-b1ilkfcj" in workflow
     assert "br-wispy-lab-b1rq54of" in workflow
     assert "autopilot.online_resume_status()" in workflow
+    assert "/proc/{os.environ['OBSERVER_PID']}/environ" in workflow
+    assert "autopilot_runtime_login" in workflow
+    assert "os.environ['AUTOPILOT_DATABASE_URL']" not in workflow
+    assert '. "$env_file"' not in workflow
     assert 'mv -- "$marker" "$archive"' in workflow
     assert 'mv -- "$archive" "$marker"' in workflow
     assert "trap restore_marker EXIT" in workflow

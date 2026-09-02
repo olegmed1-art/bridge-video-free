@@ -171,7 +171,6 @@ jobs:
           marker="$state_dir/circuit-open.json"
           archive_dir="$state_dir/resumed"
           archive="$archive_dir/$REQUEST_ID-$RESUME_PROOF_SHA256.json"
-          env_file=/opt/bridge-school/school-autopilot/autopilot-shadow.env
 
           [[ "$EXPECTED_TEMP_BRANCH_ID" != "$EXPECTED_PRODUCTION_BRANCH_ID" ]]
           [[ "$(systemctl is-active "$worker")" == active ]]
@@ -198,32 +197,57 @@ jobs:
           assert payload['finding_code'] == os.environ['EXPECTED_CIRCUIT_CODE'], payload
           PY
 
-          set -a
-          . "$env_file"
-          set +a
-          baseline="$(/opt/bridge-school/school-autopilot/.venv/bin/python - <<'PY'
+          baseline="$(OBSERVER_PID="$observer_pid_before" \
+            /opt/bridge-school/school-autopilot/.venv/bin/python - <<'PY'
           import os
+          import re
+          from pathlib import Path
+
           import psycopg
           from psycopg.rows import dict_row
 
-          with psycopg.connect(
-              os.environ['AUTOPILOT_DATABASE_URL'],
-              autocommit=True,
-              connect_timeout=10,
-              application_name='autopilot-online-resume-preflight',
-              row_factory=dict_row,
-          ) as conn:
-              with conn.cursor() as cur:
-                  cur.execute(
-                      "SELECT current_setting('neon.project_id', true) project_id, "
-                      "current_setting('neon.branch_id', true) branch_id"
-                  )
-                  identity = cur.fetchone()
-                  assert identity['project_id'] == 'misty-poetry-18012774', identity
-                  assert identity['branch_id'] == os.environ['EXPECTED_TEMP_BRANCH_ID'], identity
-                  assert identity['branch_id'] != os.environ['EXPECTED_PRODUCTION_BRANCH_ID'], identity
-                  cur.execute('SELECT * FROM autopilot.online_resume_status()')
-                  row = cur.fetchone()
+          pattern = re.compile(
+              r'^[A-Z0-9_]*(?:DATABASE_URL|POSTGRES_URL|DIRECT_URL|NEON_DSN|DATABASE_DSN)[A-Z0-9_]*$'
+          )
+          entries = Path(f"/proc/{os.environ['OBSERVER_PID']}/environ").read_bytes().split(b'\0')
+          candidates = set()
+          for entry in entries:
+              if b'=' not in entry:
+                  continue
+              key_bytes, value_bytes = entry.split(b'=', 1)
+              key = key_bytes.decode('ascii', errors='ignore')
+              if pattern.fullmatch(key) and value_bytes.startswith((b'postgres://', b'postgresql://')):
+                  candidates.add(value_bytes.decode('utf-8', errors='strict'))
+          assert 1 <= len(candidates) <= 16
+          valid = []
+          for dsn in candidates:
+              try:
+                  with psycopg.connect(
+                      dsn,
+                      autocommit=True,
+                      connect_timeout=10,
+                      application_name='autopilot-online-resume-preflight',
+                      row_factory=dict_row,
+                  ) as conn:
+                      with conn.cursor() as cur:
+                          cur.execute(
+                              "SELECT current_user AS db_user, "
+                              "current_setting('neon.project_id', true) AS project_id, "
+                              "current_setting('neon.branch_id', true) AS branch_id"
+                          )
+                          identity = cur.fetchone()
+                          if identity != {
+                              'db_user': 'autopilot_runtime_login',
+                              'project_id': 'misty-poetry-18012774',
+                              'branch_id': os.environ['EXPECTED_TEMP_BRANCH_ID'],
+                          }:
+                              continue
+                          cur.execute('SELECT * FROM autopilot.online_resume_status()')
+                          valid.append(cur.fetchone())
+              except psycopg.Error:
+                  continue
+          assert len(valid) == 1
+          row = valid[0]
           assert row['resume_status'] == 'RESUMED_SHADOW_ONLY', row
           assert row['deployment_revision_sha'] == os.environ['EXPECTED_DEPLOYED_REVISION'], row
           assert row['staging_run_id'] == int(os.environ['EXPECTED_STAGING_RUN_ID']), row
@@ -257,24 +281,61 @@ jobs:
           trap restore_marker EXIT
           mv -- "$marker" "$archive"
 
-          CREATED_BEFORE="$created_before" PASS_BEFORE="$pass_before" \
+          OBSERVER_PID="$observer_pid_before" CREATED_BEFORE="$created_before" PASS_BEFORE="$pass_before" \
             /opt/bridge-school/school-autopilot/.venv/bin/python - <<'PY'
           import os
+          import re
           import time
+          from pathlib import Path
 
           import psycopg
           from psycopg.rows import dict_row
 
           created_before = int(os.environ['CREATED_BEFORE'])
           pass_before = int(os.environ['PASS_BEFORE'])
+          pattern = re.compile(
+              r'^[A-Z0-9_]*(?:DATABASE_URL|POSTGRES_URL|DIRECT_URL|NEON_DSN|DATABASE_DSN)[A-Z0-9_]*$'
+          )
+          entries = Path(f"/proc/{os.environ['OBSERVER_PID']}/environ").read_bytes().split(b'\0')
+          candidates = set()
+          for entry in entries:
+              if b'=' not in entry:
+                  continue
+              key_bytes, value_bytes = entry.split(b'=', 1)
+              key = key_bytes.decode('ascii', errors='ignore')
+              if pattern.fullmatch(key) and value_bytes.startswith((b'postgres://', b'postgresql://')):
+                  candidates.add(value_bytes.decode('utf-8', errors='strict'))
+          selected = None
+          for dsn in candidates:
+              try:
+                  conn = psycopg.connect(
+                      dsn,
+                      autocommit=True,
+                      connect_timeout=10,
+                      application_name='autopilot-online-resume-observer',
+                      row_factory=dict_row,
+                  )
+                  with conn.cursor() as cur:
+                      cur.execute(
+                          "SELECT current_user AS db_user, "
+                          "current_setting('neon.project_id', true) AS project_id, "
+                          "current_setting('neon.branch_id', true) AS branch_id"
+                      )
+                      identity = cur.fetchone()
+                  if identity == {
+                      'db_user': 'autopilot_runtime_login',
+                      'project_id': 'misty-poetry-18012774',
+                      'branch_id': os.environ['EXPECTED_TEMP_BRANCH_ID'],
+                  }:
+                      assert selected is None
+                      selected = conn
+                  else:
+                      conn.close()
+              except psycopg.Error:
+                  continue
+          assert selected is not None
           deadline = time.monotonic() + 90
-          with psycopg.connect(
-              os.environ['AUTOPILOT_DATABASE_URL'],
-              autocommit=True,
-              connect_timeout=10,
-              application_name='autopilot-online-resume-observer',
-              row_factory=dict_row,
-          ) as conn:
+          with selected as conn:
               while time.monotonic() < deadline:
                   with conn.cursor() as cur:
                       cur.execute('SELECT * FROM autopilot.online_resume_status()')
