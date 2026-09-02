@@ -1,122 +1,52 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Classify whether the existing Frankfurt Oracle VM is safe to stop.
-# Output contract (exactly one terminal marker):
-#   ORACLE_IDLE_STATE=IDLE
-#   ORACLE_IDLE_STATE=BUSY
-#   ORACLE_IDLE_STATE=UNKNOWN
-# Any inability to prove the required inputs is UNKNOWN (fail closed).
+# Read-only Oracle power-idle classifier. It NEVER performs STOP.
+# Output contract:
+#   one bounded JSON verdict/evidence line;
+#   ORACLE_IDLE_REASON=...;
+#   ORACLE_IDLE_STATE=BUSY|IDLE|UNKNOWN.
+# Only the separate STOP consumer may use IDLE, and all other states block.
 
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 LAB_DIR="${ASSISTANT_LAB_DIR:-/opt/bridge-school/assistant-lab}"
-LAB_ENV="${ASSISTANT_LAB_ENV_FILE:-$LAB_DIR/assistant-lab.env}"
 PYTHON="${ASSISTANT_LAB_PYTHON:-$LAB_DIR/.venv/bin/python}"
-QUEUE_DSN_FILE="${BRIDGE_VIDEO_QUEUE_DSN_FILE:-/opt/bridge-school/universal-video/secrets/video-queue-dsn}"
+COLLECTOR="${ORACLE_IDLE_COLLECTOR:-$SCRIPT_DIR/oracle_idle_collect.py}"
+EVALUATOR="${ORACLE_IDLE_EVALUATOR:-$SCRIPT_DIR/oracle_idle_guard.py}"
 
-state="UNKNOWN"
-reason="unclassified"
-
-finish() {
-  printf 'ORACLE_IDLE_REASON=%s\n' "$reason"
-  printf 'ORACLE_IDLE_STATE=%s\n' "$state"
+unknown() {
+  local why="$1"
+  printf '{"evidence":{},"reason":"%s","schema":"oracle-idle-verdict-v1","state":"UNKNOWN","stop_allowed":false}\n' "$why"
+  printf 'ORACLE_IDLE_REASON=%s\n' "$why"
+  printf 'ORACLE_IDLE_STATE=UNKNOWN\n'
+  exit 0
 }
-trap finish EXIT
 
-[[ -r "$LAB_ENV" ]] || { reason="assistant_lab_env_unreadable"; exit 0; }
-[[ -x "$PYTHON" ]] || { reason="assistant_lab_python_missing"; exit 0; }
+[[ -x "$PYTHON" ]] || unknown assistant_lab_python_missing
+[[ -f "$COLLECTOR" && ! -L "$COLLECTOR" ]] || unknown idle_collector_unavailable
+[[ -f "$EVALUATOR" && ! -L "$EVALUATOR" ]] || unknown idle_evaluator_unavailable
 
-# The resident daemon being active is expected and does not itself make the host busy.
-# An unhealthy/transitioning worker makes the state unknowable, so STOP stays blocked.
-if command -v systemctl >/dev/null 2>&1; then
-  worker_state="$(systemctl is-active assistant-lab.service 2>/dev/null || true)"
-  case "$worker_state" in
-    active) ;;
-    *) reason="assistant_lab_service_${worker_state:-unknown}"; exit 0 ;;
-  esac
-else
-  reason="systemctl_missing"
-  exit 0
+snapshot="$(mktemp)" || unknown snapshot_tempfile_failed
+cleanup(){ rm -f -- "$snapshot"; }
+trap cleanup EXIT INT TERM
+chmod 0600 "$snapshot" || unknown snapshot_tempfile_permissions_failed
+
+if ! "$PYTHON" "$COLLECTOR" >"$snapshot" 2>/dev/null; then
+  unknown telemetry_collection_failed
+fi
+if [[ ! -s "$snapshot" ]]; then
+  unknown telemetry_collection_empty
 fi
 
-# Observer experiments and durable-delivery work are independent keep-alive reasons.
-if pgrep -f '[a]ssistant_lab.*observer.*experiment|[o]racle_assistant_lab_observer.*run' >/dev/null 2>&1; then
-  state="BUSY"
-  reason="observer_experiment_process"
-  exit 0
+output="$({ "$PYTHON" "$EVALUATOR" "$snapshot"; } 2>/dev/null || true)"
+state_count="$(printf '%s\n' "$output" | grep -Ec '^ORACLE_IDLE_STATE=(BUSY|IDLE|UNKNOWN)$' || true)"
+reason_count="$(printf '%s\n' "$output" | grep -Ec '^ORACLE_IDLE_REASON=[A-Za-z0-9_.:-]+$' || true)"
+json_line="$(printf '%s\n' "$output" | sed -n '1p')"
+if [[ "$state_count" != 1 || "$reason_count" != 1 || -z "$json_line" ]]; then
+  unknown invalid_idle_evaluator_output
 fi
-
-for spool in \
-  /opt/bridge-school/assistant-lab/spool \
-  /opt/bridge-school/assistant-lab/feedback-spool \
-  /var/lib/bridge-school/uv-spool \
-  /var/lib/bridge-school/feedback-spool
-do
-  if [[ -d "$spool" ]] && find "$spool" -type f -print -quit 2>/dev/null | grep -q .; then
-    state="BUSY"
-    reason="pending_spool:${spool}"
-    exit 0
-  fi
-done
-
-# Read only the exact DSN assignment; do not source the environment file as shell code.
-dsn_line="$(grep -m1 '^ASSISTANT_LAB_DATABASE_URL=' "$LAB_ENV" 2>/dev/null || true)"
-[[ -n "$dsn_line" ]] || { reason="assistant_lab_dsn_missing"; exit 0; }
-export ASSISTANT_LAB_DATABASE_URL="${dsn_line#ASSISTANT_LAB_DATABASE_URL=}"
-[[ -n "$ASSISTANT_LAB_DATABASE_URL" ]] || { reason="assistant_lab_dsn_empty"; exit 0; }
-if [[ -f "$QUEUE_DSN_FILE" && ! -L "$QUEUE_DSN_FILE" ]]; then
-  export BRIDGE_VIDEO_QUEUE_DATABASE_URL="$(tr -d '\n\r' < "$QUEUE_DSN_FILE")"
-else
-  export BRIDGE_VIDEO_QUEUE_DATABASE_URL=''
+if ! printf '%s\n' "$json_line" | "$PYTHON" -c 'import json,sys; v=json.load(sys.stdin); assert v.get("schema")=="oracle-idle-verdict-v1"; assert v.get("state") in {"BUSY","IDLE","UNKNOWN"}; assert v.get("stop_allowed") is (v.get("state")=="IDLE"); assert isinstance(v.get("evidence"),dict)' >/dev/null 2>&1; then
+  unknown invalid_idle_evidence_output
 fi
-
-DB_RESULT="$("$PYTHON" - <<'PY' 2>/dev/null || true
-import os
-try:
-    import psycopg
-except Exception:
-    print("UNKNOWN:psycopg_unavailable")
-    raise SystemExit
-
-dsn = os.environ.get("ASSISTANT_LAB_DATABASE_URL", "")
-if not dsn:
-    print("UNKNOWN:dsn_missing")
-    raise SystemExit
-
-try:
-    with psycopg.connect(dsn, connect_timeout=8, application_name="oracle-idle-state") as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT active_jobs, active_research_jobs, active_control_commands FROM assistant_lab.oracle_idle_snapshot()")
-            row = cur.fetchone()
-            if row is None or len(row) != 3:
-                print("UNKNOWN:idle_snapshot_missing")
-                raise SystemExit
-            active_jobs, active_research, active_control = map(int, row)
-    video_jobs = 0
-    queue_dsn = os.environ.get("BRIDGE_VIDEO_QUEUE_DATABASE_URL", "")
-    if queue_dsn:
-        with psycopg.connect(queue_dsn, connect_timeout=8, application_name="oracle-idle-video-queue") as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT count(*) FROM video_queue.job_status WHERE status IN ('PENDING_CANARY','QUEUED','LEASED')")
-                video_jobs = int(cur.fetchone()[0])
-    if min(active_jobs, active_research, active_control, video_jobs) < 0:
-        print("UNKNOWN:invalid_idle_snapshot")
-    elif active_jobs or active_research or active_control or video_jobs:
-        print(f"BUSY:jobs={active_jobs},research={active_research},control={active_control},video={video_jobs}")
-    else:
-        print("IDLE:jobs=0,research=0,control=0,video=0")
-except Exception:
-    # Do not expose driver errors because they may contain connection details.
-    print("UNKNOWN:database_check_failed")
-PY
-)"
-unset ASSISTANT_LAB_DATABASE_URL
-unset BRIDGE_VIDEO_QUEUE_DATABASE_URL
-
-case "$DB_RESULT" in
-  IDLE:*) state="IDLE"; reason="${DB_RESULT#IDLE:}" ;;
-  BUSY:*) state="BUSY"; reason="${DB_RESULT#BUSY:}" ;;
-  UNKNOWN:*) state="UNKNOWN"; reason="${DB_RESULT#UNKNOWN:}" ;;
-  *) state="UNKNOWN"; reason="invalid_database_classifier_output" ;;
-esac
-
-exit 0
+printf '%s\n' "$json_line"
+printf '%s\n' "$output" | grep -E '^ORACLE_IDLE_(REASON|STATE)='
