@@ -20,6 +20,7 @@ VIDEO_DSN = Path(os.getenv("BRIDGE_VIDEO_QUEUE_DSN_FILE", "/opt/bridge-school/un
 LEASE_FILE = Path(os.getenv("ORACLE_HOST_LEASE_FILE", "/run/bridge-school/oracle-host-lease"))
 UV_STATUS = Path(os.getenv("UNIVERSAL_VIDEO_STATUS_PATH", "/run/bridge-school/universal-video-status.json"))
 UV_SPOOL = Path(os.getenv("UNIVERSAL_VIDEO_SPOOL_ROOT", "/opt/bridge-school/universal-video/spool"))
+OBSERVER_ROOT = Path(os.getenv("ASSISTANT_LAB_OBSERVER_STATE_ROOT", "/opt/bridge-school/assistant-lab-observer"))
 
 
 def _now() -> float:
@@ -231,13 +232,46 @@ def _process_match(pattern: str) -> bool | None:
         return None
 
 
+def _observer_workload(observed_at: float) -> dict[str, Any]:
+    """Read primary observer queue/work state; never infer idle from daemon name."""
+    try:
+        if OBSERVER_ROOT.is_symlink() or not OBSERVER_ROOT.is_dir():
+            return _unknown(observed_at, "observer_state_root_unavailable")
+        active_paths: list[str] = []
+        for relative in (Path("jobs/pending"), Path("jobs/running"), Path("work")):
+            directory = OBSERVER_ROOT / relative
+            if directory.is_symlink() or not directory.is_dir():
+                return _unknown(observed_at, f"observer_{str(relative).replace('/', '_')}_unavailable")
+            for path in directory.iterdir():
+                if path.is_symlink():
+                    return _unknown(observed_at, "observer_queue_symlink")
+                if path.is_file() or path.is_dir():
+                    active_paths.append(str(relative / path.name))
+                else:
+                    return _unknown(observed_at, "observer_queue_invalid_entry")
+        if active_paths:
+            return _entry("BUSY", observed_at, active_count=len(active_paths))
+    except OSError:
+        return _unknown(observed_at, "observer_queue_read_failed")
+    service_state = _systemctl_state("assistant-lab-observer.service")
+    if service_state == "active":
+        return _entry("IDLE", observed_at, active_count=0, service_state=service_state)
+    if service_state is None:
+        return _unknown(observed_at, "observer_service_state_unavailable")
+    return _unknown(observed_at, f"observer_service_{service_state}")
+
+
 def _external_processes(observed_at: float) -> dict[str, Any]:
+    observer = _observer_workload(observed_at)
+    if observer.get("state") == "UNKNOWN":
+        return observer
+    active: list[str] = []
+    if observer.get("state") == "BUSY":
+        active.append("observer")
     patterns = {
-        "observer": r"[a]ssistant_lab.*observer.*experiment|[o]racle_assistant_lab_observer.*run",
         "ben": r"[a]ssistant_lab.*ben_runtime|[b]en.*compute",
         "bulk": r"[a]ssistant_lab.*bulk|[o]racle.*bulk",
     }
-    active: list[str] = []
     for name, pattern in patterns.items():
         matched = _process_match(pattern)
         if matched is None:
