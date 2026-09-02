@@ -487,7 +487,7 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     restore_body = script[
         script.index("restore_service(){") : script.index("restore_source_checkout(){")
     ]
-    assert 'resident_status_ready "$service" "$started_unix" "$worker_pid"' in restore_body
+    assert 'verified_start_ticks="$(resident_status_ready "$service" "$started_unix" "$worker_pid"' in restore_body
     assert (
         restore_source_index
         > unlock_index
@@ -545,7 +545,7 @@ def test_same_revision_legacy_restore_quiesces_only_the_peer_status_writer():
     clear_index = restore.index("if ! clear_restore_status; then", isolate_index)
     start_index = restore.index('bounded_systemctl start --no-block "$service"', clear_index)
     receipt_index = restore.index(
-        'resident_status_ready "$service" "$started_unix" "$worker_pid" '
+        'verified_start_ticks="$(resident_status_ready "$service" "$started_unix" "$worker_pid" '
         '"$legacy_peer_quiesced"',
         start_index,
     )
@@ -562,6 +562,64 @@ def test_same_revision_legacy_restore_quiesces_only_the_peer_status_writer():
     assert 'restored_container_pid="$worker_pid"' in restore
     assert '"$restored_source_pid" "$restored_source_start_ticks"' in cleanup
     assert '"$restored_container_pid" "$restored_container_start_ticks"' in cleanup
+
+    first_identity_check = receipt.index(
+        'exact_process_signal "$worker_pid" "$expected_process_start_ticks" CHECK'
+    )
+    status_check = receipt.index("STATUS_PATH=", first_identity_check)
+    second_identity_check = receipt.index(
+        'exact_process_signal "$worker_pid" "$expected_process_start_ticks" CHECK',
+        status_check,
+    )
+    bound_ticks = receipt.index("printf '%s\\n' \"$expected_process_start_ticks\"")
+    assert first_identity_check < status_check < second_identity_check < bound_ticks
+    assert 'verified_start_ticks="$(process_start_ticks' not in restore
+
+
+def test_status_receipt_returns_exact_identity_binding_and_rejects_same_pid_replacement(
+    tmp_path: Path,
+) -> None:
+    script = (ROOT / "ops/oracle_universal_video_precanary_attest.sh").read_text(
+        encoding="utf-8"
+    )
+    receipt = script[
+        script.index("resident_status_ready(){") : script.index("record_restore_failure(){")
+    ]
+    status_file = tmp_path / "resident-status.json"
+    status_file.write_text(
+        '{"schema":"universal-video-resident-status-v2",'
+        '"instance_state":"RUNNING","active_jobs":[],'
+        '"observed_at_unix":1001,"installed_runtime_commit":"' + "a" * 40 + '",'
+        '"resident_id":"source","process_id":111,'
+        '"process_started_at_unix":1000,"process_start_ticks":222,'
+        '"process_nonce":"' + "b" * 32 + '"}',
+        encoding="utf-8",
+    )
+    probe = receipt + rf'''
+set -euo pipefail
+SOURCE_SERVICE=source.service
+CONTAINER_SERVICE=container.service
+STATUS_FILE={status_file!s}
+current_ticks=222
+process_start_ticks(){{ printf '%s\n' "$current_ticks"; }}
+exact_process_signal(){{ [[ "$2" == "$current_ticks" ]]; }}
+resident_expected_commit(){{ printf '%040d\n' 0 | tr 0 a; }}
+service_state(){{ printf '%s\n' inactive; }}
+resident_worker_pid(){{ printf '%s\n' 111; }}
+isolated_peer_still_quiesced(){{ return 1; }}
+bound="$(resident_status_ready source.service 999 111 0)"
+[[ "$bound" == 222 ]]
+current_ticks=333
+! exact_process_signal 111 "$bound" CHECK
+'''
+    completed = subprocess.run(
+        ["bash"],
+        input=probe,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_prestop_freeze_closes_the_legacy_claim_race_before_shutdown():
@@ -603,9 +661,17 @@ def test_prestop_freeze_closes_the_legacy_claim_race_before_shutdown():
     )
     assert 'remaining_pids+=("$process_id")' in resume_frozen
     assert 'prestop_frozen_pids=("${remaining_pids[@]}")' in resume_frozen
+    assert 'if [[ "$mode" == stopping ]]; then' in resume_frozen
+    assert "not proof that it exited" in resume_frozen
+    assert '[[ "$mode" == stopping ]] || rc=1' in resume_frozen
     assert 'exact_process_signal "$process_id" "$expected_ticks" CONT || true' not in resume_frozen
     assert stop.index("resume_prestop_frozen stopping") < stop.index(
         'bounded_systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE"'
+    )
+    assert stop.index(
+        'bounded_systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE"'
+    ) < stop.index("confirm_prestop_identities_exited") < stop.index(
+        "residents_are_quiescent"
     )
 
     freeze_index = execution.index("freeze_residents_for_idle_snapshot")
@@ -615,6 +681,102 @@ def test_prestop_freeze_closes_the_legacy_claim_race_before_shutdown():
     assert freeze_index < idle_index < attempted_index < stop_index
     assert "trap '' INT TERM" in cleanup
     assert "PRESTOP_ABORT_RESTORE_PASS" in cleanup
+    assert "prestop_preserve_requires_restart" in cleanup
+    preserve_failure_start = cleanup.index("if ! resume_prestop_frozen preserve; then")
+    preserve_failure = cleanup[
+        preserve_failure_start : cleanup.index(
+            'if [[ "${#prestop_frozen_pids[@]}" -gt 0 ]]',
+            preserve_failure_start,
+        )
+    ]
+    assert "record_restore_failure prestop_resume" in preserve_failure
+    assert "services_stop_attempted=1" in preserve_failure
+    stop_completion = cleanup.index("stop_frozen_residents")
+    quiescence_gate = cleanup.index("! residents_are_quiescent", stop_completion)
+    unmask_after_stop = cleanup.index("bounded_systemctl unmask --runtime", quiescence_gate)
+    unlock_after_stop = cleanup.index("flock --unlock 9", unmask_after_stop)
+    first_restore_start = cleanup.index("restore_service", unlock_after_stop)
+    assert stop_completion < quiescence_gate < unmask_after_stop < unlock_after_stop < first_restore_start
+
+
+def test_freeze_failure_forces_bounded_restart_even_after_preserve_clears_identities() -> None:
+    script = (ROOT / "ops/oracle_universal_video_precanary_attest.sh").read_text(
+        encoding="utf-8"
+    )
+    freeze = script[
+        script.index("freeze_residents_for_idle_snapshot(){") :
+        script.index("stop_frozen_residents(){")
+    ]
+    assert freeze.count("if ! resume_prestop_frozen preserve") == 3
+    assert freeze.count("services_stop_attempted=1") == 3
+    probe = freeze + r'''
+set -euo pipefail
+SOURCE_SERVICE=source.service
+CONTAINER_SERVICE=container.service
+source_state_before=active
+container_state_before=inactive
+restored_source_pid=
+restored_source_start_ticks=
+restored_container_pid=
+restored_container_start_ticks=
+sleep(){ :; }
+resume_prestop_frozen(){
+  prestop_frozen_services=()
+  prestop_frozen_pids=()
+  prestop_frozen_start_ticks=()
+  return 1
+}
+resident_worker_pid(){ [[ "$scenario" != invalid ]] && printf '%s\n' 111; }
+process_start_ticks(){ [[ "$scenario" != invalid ]] && printf '%s\n' 222; }
+exact_process_signal(){ [[ "$scenario" != stop_failure ]]; }
+process_state(){ printf '%s\n' S; }
+run_failure(){
+  prestop_frozen_services=()
+  prestop_frozen_pids=()
+  prestop_frozen_start_ticks=()
+  services_stop_attempted=0
+  ! freeze_residents_for_idle_snapshot
+  [[ "$services_stop_attempted" == 1 ]]
+  [[ "${#prestop_frozen_pids[@]}" -eq 0 ]]
+}
+scenario=invalid
+run_failure
+scenario=stop_failure
+run_failure
+scenario=timeout
+run_failure
+'''
+    completed = subprocess.run(
+        ["bash"],
+        input=probe,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_signal_ignored_cleanup_bounds_exact_source_tree_restore() -> None:
+    script = (ROOT / "ops/oracle_universal_video_precanary_attest.sh").read_text(
+        encoding="utf-8"
+    )
+    restore = script[
+        script.index("restore_source_checkout(){") : script.index("cleanup(){")
+    ]
+    wrapper = script[
+        script.index("bounded_filesystem(){") : script.index("service_state(){")
+    ]
+
+    assert "timeout --foreground --signal=TERM --kill-after=5s 30s" in wrapper
+    assert 'bounded_filesystem rm -rf --one-file-system -- "$SOURCE_DIR"' in restore
+    assert 'bounded_filesystem mv -- "$source_backup_dir" "$SOURCE_DIR"' in restore
+    assert '\n    rm -rf --one-file-system -- "$SOURCE_DIR"' not in restore
+    assert '\n    mv -- "$source_backup_dir" "$SOURCE_DIR"' not in restore
+    cleanup = script[script.index("cleanup(){") : script.index("assert_known_state(){")]
+    restore_call = cleanup.index("if ! restore_source_checkout; then")
+    source_failure_exit = cleanup.index("exit 1", restore_call)
+    unmask = cleanup.index("bounded_systemctl unmask --runtime", restore_call)
+    assert restore_call < source_failure_exit < unmask
 
     signal_guard = script[
         script.index("exact_process_signal(){") :
@@ -678,6 +840,80 @@ trap - EXIT
     )
     if completed.returncode == 77:
         pytest.skip("test runner PID namespace is not mounted at /proc")
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_stopping_identity_is_retained_until_exact_process_exits() -> None:
+    script = (ROOT / "ops/oracle_universal_video_precanary_attest.sh").read_text(
+        encoding="utf-8"
+    )
+    definitions = script[
+        script.index("confirm_prestop_identities_exited(){") :
+        script.index("residents_are_quiescent(){")
+    ]
+    probe = definitions + r'''
+set -euo pipefail
+live=1
+process_start_ticks(){ [[ "$live" == 1 ]] && printf '%s\n' 222; }
+child=111
+ticks=222
+prestop_frozen_services=(universal-video.service)
+prestop_frozen_pids=("$child")
+prestop_frozen_start_ticks=("$ticks")
+! confirm_prestop_identities_exited
+[[ "${#prestop_frozen_pids[@]}" -eq 1 ]]
+[[ "${prestop_frozen_pids[0]}" == "$child" ]]
+live=0
+confirm_prestop_identities_exited
+[[ "${#prestop_frozen_pids[@]}" -eq 0 ]]
+'''
+    completed = subprocess.run(
+        ["bash"],
+        input=probe,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_stopping_retry_terms_runnable_identity_without_redundant_cont() -> None:
+    script = (ROOT / "ops/oracle_universal_video_precanary_attest.sh").read_text(
+        encoding="utf-8"
+    )
+    resume = script[
+        script.index("resume_prestop_frozen(){") :
+        script.index("confirm_prestop_identities_exited(){")
+    ]
+    probe = resume + r'''
+set -euo pipefail
+SOURCE_SERVICE=source.service
+CONTAINER_SERVICE=container.service
+mock_state=S
+signals=()
+bounded_systemctl(){ return 0; }
+process_start_ticks(){ printf '%s\n' 222; }
+process_state(){ printf '%s\n' "$mock_state"; }
+exact_process_signal(){ signals+=("$3"); }
+prestop_frozen_services=(source.service)
+prestop_frozen_pids=(111)
+prestop_frozen_start_ticks=(222)
+resume_prestop_frozen stopping
+[[ "${signals[*]}" == TERM ]]
+[[ "${#prestop_frozen_pids[@]}" -eq 1 ]]
+mock_state=T
+signals=()
+resume_prestop_frozen stopping
+[[ "${signals[*]}" == "TERM CONT" ]]
+[[ "${#prestop_frozen_pids[@]}" -eq 1 ]]
+'''
+    completed = subprocess.run(
+        ["bash"],
+        input=probe,
+        text=True,
+        capture_output=True,
+        timeout=10,
+    )
     assert completed.returncode == 0, completed.stderr
 
 
