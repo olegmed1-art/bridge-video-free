@@ -10,8 +10,8 @@ from bridge_school_api.bidding_world_resolver import (
 )
 from bridge_school_api.bidding_world_resolver import _gap_fingerprint, _profile_fingerprint, _request_fingerprint
 
-PROFILE = ResolutionProfile("natural", "v1", "L1", "auction-1")
-NOW = PROFILE.effective_at
+NOW = datetime(2026, 8, 30, tzinfo=timezone.utc)
+PROFILE = ResolutionProfile("natural", "v1", "L1", "auction-1", NOW)
 REQUEST = {"acting_seat": "N", "acting_hand": {"cards": ["AC"]},
            "public_auction": {"calls": []}, "public_context": {"dealer": "N"}}
 REQUEST_HASH = _request_fingerprint(**REQUEST)
@@ -26,7 +26,7 @@ def rule(key, lane, action, *, profile=PROFILE, priority=1, specificity=1, confi
 
 def verified(gap_id, school_id, fingerprint, profile):
     profile_key = _profile_fingerprint(profile)
-    return CanonGapReceipt(gap_id, school_id, fingerprint, profile_key, NOW)
+    return CanonGapReceipt(gap_id, school_id, fingerprint, profile_key, profile.effective_at, NOW)
 
 
 STORE = PostgresCanonGapStore(lambda: None)
@@ -34,7 +34,8 @@ CANON_STORE = PostgresCanonRuleStore(lambda: None)
 
 
 def resolve(canon, world):
-    with patch.object(PostgresCanonRuleStore, "fetch", return_value=tuple(canon)), \
+    with patch.object(PostgresCanonRuleStore, "fetch_current",
+                      side_effect=[(PROFILE, tuple(canon)), (PROFILE, ())]), \
          patch.object(PostgresCanonGapStore, "persist_and_verify",
                       return_value=verified("gap-1", "school-1", GAP_HASH, PROFILE)):
         return resolve_two_lane(school_id="school-1", **REQUEST, profile=PROFILE,
@@ -64,7 +65,8 @@ def test_gap_is_committed_before_world_supplier_runs():
     def supplied(_receipt, _profile):
         events.append("world_queried")
         return [rule("w", "external", "1S", confidence="reproducible")]
-    with patch.object(PostgresCanonRuleStore, "fetch", return_value=()), \
+    with patch.object(PostgresCanonRuleStore, "fetch_current",
+                      side_effect=[(PROFILE, ()), (PROFILE, ())]), \
          patch.object(PostgresCanonGapStore, "persist_and_verify", side_effect=persisted):
         result = resolve_two_lane(school_id="school-1", **REQUEST, profile=PROFILE,
                                   canon_store=CANON_STORE, gap_store=STORE, world_supplier=supplied)
@@ -77,7 +79,7 @@ def test_uncommitted_or_wrong_scope_gap_blocks_world():
         nonlocal called
         called = True
         return []
-    with patch.object(PostgresCanonRuleStore, "fetch", return_value=()), \
+    with patch.object(PostgresCanonRuleStore, "fetch_current", return_value=(PROFILE, ())), \
          patch.object(PostgresCanonGapStore, "persist_and_verify", side_effect=RuntimeError("not visible")):
         with pytest.raises(RuntimeError):
             resolve_two_lane(school_id="school-1", **REQUEST, profile=PROFILE,
@@ -115,7 +117,7 @@ def test_postgres_gap_store_commits_then_verifies_on_fresh_connection():
     profile_hash = verified("gap-1", "school-1", "request-1", PROFILE).profile_fingerprint
     connections = iter((
         Connection("writer", [None, ("gap-1",)]),
-        Connection("reader", [("gap-1", "school-1", "request-1", profile_hash, NOW)]),
+        Connection("reader", [("gap-1", "school-1", "request-1", profile_hash, NOW, NOW)]),
     ))
     receipt = PostgresCanonGapStore(lambda: next(connections)).persist_and_verify(
         "school-1", "request-1", PROFILE)
@@ -124,15 +126,15 @@ def test_postgres_gap_store_commits_then_verifies_on_fresh_connection():
 
 
 def test_incompatible_profile_candidates_are_not_ranked_together():
-    sayc = ResolutionProfile("sayc", "v1", "L1", "auction-1")
+    sayc = ResolutionProfile("sayc", "v1", "L1", "auction-1", NOW)
     result = resolve([], [rule("natural", "external", "1S"),
                           rule("sayc", "external", "1H", profile=sayc, priority=999)])
     assert result.outcome == WORLD_FALLBACK and result.selected.rule_id == "natural"
 
 
 def test_profile_fingerprint_is_not_ambiguous_when_fields_contain_delimiters():
-    left = ResolutionProfile("natural|v1", "L1", "beginner", "auction-1")
-    right = ResolutionProfile("natural", "v1|L1", "beginner", "auction-1")
+    left = ResolutionProfile("natural|v1", "L1", "beginner", "auction-1", NOW)
+    right = ResolutionProfile("natural", "v1|L1", "beginner", "auction-1", NOW)
     assert _profile_fingerprint(left) != _profile_fingerprint(right)
 
 
@@ -142,46 +144,123 @@ def test_request_fingerprint_is_derived_from_visible_request_fields():
 
 
 def test_gap_fingerprint_includes_resolution_profile():
-    changed = ResolutionProfile("natural", "v1", "L2", "auction-1")
+    changed = ResolutionProfile("natural", "v1", "L2", "auction-1", NOW)
     assert _gap_fingerprint(REQUEST_HASH, PROFILE) != _gap_fingerprint(REQUEST_HASH, changed)
 
 
 def test_gap_fingerprint_includes_activation_scope():
-    changed = ResolutionProfile("natural", "v1", "L1", "auction-1", "advanced")
+    changed = ResolutionProfile("natural", "v1", "L1", "auction-1", NOW, "advanced")
     assert _gap_fingerprint(REQUEST_HASH, PROFILE) != _gap_fingerprint(REQUEST_HASH, changed)
 
 
-def test_canon_store_passes_scope_and_effective_time_separately():
+def test_canon_store_binds_database_time_and_returns_visible_predicates():
     executed = []
 
     class Cursor:
-        def __enter__(self):
-            return self
-        def __exit__(self, *_args):
-            return False
-        def execute(self, sql, params):
-            executed.append((sql, params))
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def execute(self, sql, params=None): executed.append((sql, params))
+        def fetchone(self): return (NOW,)
         def fetchall(self):
-            return []
+            return [("rule-1", "1S", "natural", "v1", "L1", "auction-1",
+                     NOW, None, 10, 5, {"context_id": "auction-1", "calls": ["1H"]},
+                     {"HCP": {"min": 10}}, {"dealer": "N"})]
 
     class Connection:
-        def __enter__(self):
-            return self
-        def __exit__(self, *_args):
-            return False
-        def cursor(self):
-            return Cursor()
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def cursor(self): return Cursor()
 
-    profile = ResolutionProfile("natural", "v1", "L1", "auction-1", "default")
-    assert PostgresCanonRuleStore(Connection).fetch("school-1", profile) == ()
-    sql, params = executed[0]
-    assert "get_school_runtime_rule_catalog(%s,%s)" in sql
-    assert params[:2] == ("school-1", "default")
+    bound, rules = PostgresCanonRuleStore(Connection).fetch_current("school-1", PROFILE)
+    assert bound.effective_at == NOW
+    assert rules[0].hand_constraints == {"HCP": {"min": 10}}
+    assert executed[0][0] == "SELECT clock_timestamp()"
+    assert "c.auction_pattern,c.hand_constraints,c.public_context_constraints" in executed[1][0]
+    assert executed[1][1][:3] == ("school-1", "default", NOW)
 
 
-def test_historical_or_future_effective_time_is_not_a_runtime_input():
-    with pytest.raises(TypeError):
-        ResolutionProfile("natural", "v1", "L1", "auction-1", effective_at=NOW)
+def test_existing_gap_returns_its_original_effective_time():
+    profile_hash = _profile_fingerprint(PROFILE)
+
+    class Cursor:
+        def __init__(self, rows): self.rows = iter(rows)
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def execute(self, *_args): pass
+        def fetchone(self): return next(self.rows)
+
+    class Connection:
+        def __init__(self, rows): self.rows = rows
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def cursor(self): return Cursor(self.rows)
+        def commit(self): pass
+
+    connections = iter((
+        Connection([("gap-1", profile_hash, NOW)]),
+        Connection([("gap-1", "school-1", "request-1", profile_hash, NOW, NOW)]),
+    ))
+    later = ResolutionProfile(
+        PROFILE.system_profile, PROFILE.system_version, PROFILE.learner_level,
+        PROFILE.auction_context_id, datetime(2026, 8, 30, 0, 2, tzinfo=timezone.utc),
+    )
+    receipt = PostgresCanonGapStore(lambda: next(connections)).persist_and_verify(
+        "school-1", "request-1", later
+    )
+    assert receipt.effective_at == NOW
+
+
+def test_canon_constraints_are_matched_against_visible_request():
+    applicable = rule("match", "school_canon", "1S")
+    applicable = KnowledgeRule(
+        **{**applicable.__dict__,
+           "auction_pattern": {"context_id": "auction-1", "calls": ["1H"]},
+           "hand_constraints": {"HCP": {"min": 10}},
+           "public_context_constraints": {"dealer": "N"}}
+    )
+    wrong_hand = KnowledgeRule(
+        **{**applicable.__dict__, "rule_id": "wrong", "hand_constraints": {"HCP": {"min": 20}}}
+    )
+    request = {**REQUEST, "acting_hand": {"HCP": 12}, "public_auction": {"calls": ["1H"]}}
+    with patch.object(PostgresCanonRuleStore, "fetch_current", return_value=(PROFILE, (applicable, wrong_hand))):
+        result = resolve_two_lane(
+            school_id="school-1", **request, profile=PROFILE,
+            canon_store=CANON_STORE, gap_store=STORE,
+            world_supplier=lambda *_: (_ for _ in ()).throw(AssertionError("WORLD called")),
+        )
+    assert result.outcome == "CANON_MATCH"
+    assert result.selected.rule_id == "match"
+
+
+def test_canon_is_rechecked_immediately_before_world():
+    activated = rule("late-canon", "school_canon", "2S")
+    events = []
+    with patch.object(
+        PostgresCanonRuleStore,
+        "fetch_current",
+        side_effect=[(PROFILE, ()), (PROFILE, (activated,))],
+    ), patch.object(
+        PostgresCanonGapStore,
+        "persist_and_verify",
+        return_value=verified("gap-1", "school-1", GAP_HASH, PROFILE),
+    ):
+        result = resolve_two_lane(
+            school_id="school-1", **REQUEST, profile=PROFILE,
+            canon_store=CANON_STORE, gap_store=STORE,
+            world_supplier=lambda *_: events.append("WORLD"),
+        )
+    assert result.outcome == "CANON_MATCH"
+    assert result.selected.rule_id == "late-canon"
+    assert events == []
+
+
+def test_profile_fingerprint_reuses_durable_gap_across_boundary_times():
+    later = ResolutionProfile(
+        PROFILE.system_profile, PROFILE.system_version, PROFILE.learner_level,
+        PROFILE.auction_context_id, datetime(2026, 8, 30, 0, 1, tzinfo=timezone.utc),
+        PROFILE.activation_scope,
+    )
+    assert _profile_fingerprint(PROFILE) == _profile_fingerprint(later)
 
 
 def test_untrusted_canon_store_is_rejected():
