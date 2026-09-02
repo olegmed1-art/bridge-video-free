@@ -376,6 +376,8 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "flock --exclusive --nonblock 9" in script
     assert 'restore_service "$SOURCE_SERVICE" "$source_was_active"' in script
     assert 'restore_service "$CONTAINER_SERVICE" "$container_was_active"' in script
+    assert 'rm -f -- "$ENV_FILE"' in script
+    assert '"$ENV_FILE" == "$BASE_DIR/universal-video-container-candidate.env"' in script
     assert 'systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE"' in script
     assert '"$image_id" "$@"' in run_image and '"$image" "$@"' not in run_image
     assert "org.opencontainers.image.revision" in script
@@ -411,6 +413,17 @@ def test_installer_readiness_and_service_env_use_captured_image_id():
     assert '"$image_id" true' in readiness
     assert '"$image" true' not in readiness
     assert "org.opencontainers.image.revision" in readiness
+    assert 'CANDIDATE_ENV_FILE="$BASE_DIR/universal-video-container-candidate.env"' in installer
+    assert '[[ "$ACTIVATE" == 1 ]] || ENV_FILE="$CANDIDATE_ENV_FILE"' in installer
+    assert '--env-file "$ENV_FILE"' in installer
+    activation = installer[
+        installer.index(
+            'if [[ "$ACTIVATE" == 1 ]]; then',
+            installer.index("log 'Run container-only readiness gate"),
+        ) :
+    ]
+    assert 'install -m 0644 -o root -g root' in activation
+    assert 'systemctl daemon-reload' in activation
 
 
 def test_external_precanary_runs_same_repo_and_compares_install_digest():
