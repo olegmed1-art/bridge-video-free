@@ -154,6 +154,9 @@ else
 fi
 image_id="$(docker image inspect --format '{{.Id}}' "$image")"
 [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || die 'container image digest unavailable'
+image_revision="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_id")"
+[[ "$image_revision" == "$commit" ]] || die 'captured container image revision mismatch'
+[[ "$(docker image inspect --format '{{.Id}}' "$image")" == "$image_id" ]] || die 'container image tag changed after capture'
 
 uid="$(id -u "$USER_NAME")"
 gid="$(id -g "$USER_NAME")"
@@ -163,7 +166,7 @@ cat >"$BASE_DIR/universal-video-container.env" <<EOF
 UNIVERSAL_VIDEO_SOURCE_COMMIT=$commit
 UNIVERSAL_VIDEO_CONTAINER_UID=$uid
 UNIVERSAL_VIDEO_CONTAINER_GID=$gid
-UNIVERSAL_VIDEO_IMAGE=$image
+UNIVERSAL_VIDEO_IMAGE=$image_id
 UNIVERSAL_VIDEO_SPOOL_ROOT=/var/lib/universal-video/spool
 UNIVERSAL_VIDEO_OUTPUT_ROOT=/var/lib/universal-video/output
 UNIVERSAL_VIDEO_MEDIA_ROOT=/var/lib/universal-video/media
@@ -184,7 +187,9 @@ log 'Refresh ephemeral host status mount immediately before readiness'
 install -d -o "$USER_NAME" -g "$GROUP_NAME" -m 0750 "$STATUS_DIR"
 [[ -d "$STATUS_DIR" ]] || die "unsafe or missing mount: $STATUS_DIR"
 
-log 'Run container-only readiness gate; no job is submitted'
+log 'Run container-only readiness gate by captured image ID; no job is submitted'
+[[ "$(docker image inspect --format '{{.Id}}' "$image")" == "$image_id" ]] || die 'container image tag changed before readiness'
+[[ "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_id")" == "$commit" ]] || die 'captured image revision changed before readiness'
 docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g --user="$uid:$gid" \
   --env-file "$BASE_DIR/universal-video-container.env" \
   --mount "type=bind,src=$BASE_DIR/spool,dst=/var/lib/universal-video/spool" \
@@ -192,7 +197,7 @@ docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g --user="$uid:$
   --mount "type=bind,src=$BASE_DIR/media,dst=/var/lib/universal-video/media" \
   --mount "type=bind,src=$BASE_DIR/model-cache,dst=/var/lib/universal-video/model-cache" \
   --mount "type=bind,src=$STATUS_DIR,dst=/run/bridge-school" \
-  --mount "type=bind,src=$BASE_DIR/secrets,dst=/run/secrets,readonly" "$image" true
+  --mount "type=bind,src=$BASE_DIR/secrets,dst=/run/secrets,readonly" "$image_id" true
 
 install -m 0644 -o root -g root "$SOURCE_DIR/deploy/oracle-universal-video/$SERVICE_NAME" "/etc/systemd/system/$SERVICE_NAME"
 systemctl daemon-reload
