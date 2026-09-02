@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from .l1_canonical_registry import (
     ACTIVE_DOMAIN_RULE_IDS,
@@ -103,3 +103,18 @@ def resolve_registered(
 ) -> RuleEvaluation:
     """Use the existing deterministic specificity/scope/priority resolver."""
     return resolve(evaluations)
+
+
+def resolve_registered_with_world_fallback(
+    evaluations: Iterable[RuleEvaluation],
+    world_lookup: Callable[[], RuleEvaluation],
+) -> RuleEvaluation:
+    """Cross the production WORLD boundary only for an exact Canon gap.
+
+    A registered Canon conflict is a terminal authority result: it carries no
+    School action and must never be converted into a WORLD lookup.
+    """
+    result = resolve_registered(evaluations)
+    if result.status == "NO_MATCH":
+        return world_lookup()
+    return result
