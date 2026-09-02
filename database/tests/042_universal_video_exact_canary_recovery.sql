@@ -81,7 +81,7 @@ BEGIN
       FROM video_queue.enqueue_drive_batch(
         'exact-canary-readback-retry-001','sourceFolder000002','outputFolder00002','workFolder0000002',
         'bridge_3_1_free_exact_canary','3.1-free-r25.16','sourceVideo000002',repeat('b',64),
-        '[{"sequence":1,"file_id":"sourceVideo000002","name":"Recovery B.mp4","mime_type":"video/mp4","size_bytes":1000000,"checksum":"md5:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]'::jsonb
+        '[{"sequence":1,"file_id":"sourceVideo000002","name":"Recovery B.mp4","mime_type":"video/mp4","size_bytes":2000000,"checksum":"md5:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]'::jsonb
       ) e;
     SELECT c.job_id,c.lease_token INTO v_job,v_token1
       FROM video_queue.claim_job('exact-worker-5',900,'bridge_3_1_free_exact_canary','3.1-free-r25.16') c;
@@ -97,7 +97,7 @@ BEGIN
       FROM video_queue.enqueue_drive_batch(
         'exact-canary-success-001','sourceFolder000003','outputFolder00003','workFolder0000003',
         'bridge_3_1_free_exact_canary','3.1-free-r25.16','sourceVideo000003',repeat('c',64),
-        '[{"sequence":1,"file_id":"sourceVideo000003","name":"Recovery C.mp4","mime_type":"video/mp4","size_bytes":2000000,"checksum":"md5:cccccccccccccccccccccccccccccccc"}]'::jsonb
+        '[{"sequence":1,"file_id":"sourceVideo000003","name":"Recovery C.mp4","mime_type":"video/mp4","size_bytes":3000000,"checksum":"md5:cccccccccccccccccccccccccccccccc"}]'::jsonb
       ) e;
     SELECT c.job_id,c.lease_token INTO v_job,v_token1
       FROM video_queue.claim_job('exact-worker-6',900,'bridge_3_1_free_exact_canary','3.1-free-r25.16') c;
