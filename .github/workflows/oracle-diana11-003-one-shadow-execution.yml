@@ -18,7 +18,10 @@ permissions:
   issues: write
 
 concurrency:
-  group: oracle-diana11-003-one-shadow-execution
+  # Serialize every workload ingress with the lifecycle STOP boundary. A
+  # queued dispatch must not be able to submit work after the final IDLE
+  # proof but before OCI accepts the STOP action.
+  group: oracle-instance-workload-mutation
   cancel-in-progress: false
 
 jobs:
