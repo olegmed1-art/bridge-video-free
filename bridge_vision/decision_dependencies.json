@@ -24,6 +24,10 @@
     "reportlab": {
       "kind": "infrastructure",
       "policy": "PDF presentation only; it must render supplied evidence classes without creating card, auction, reconstruction or canon decisions."
+    },
+    "sherpa_onnx": {
+      "kind": "model",
+      "policy": "Offline structural validation of pinned speaker segmentation and embedding artifacts only; it must not infer bridge content or canonical facts, and any missing, unreadable or incompatible artifact must fail readiness closed."
     }
   }
 }
