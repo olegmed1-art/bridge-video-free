@@ -437,9 +437,9 @@ def test_external_precanary_runs_same_repo_and_compares_install_digest():
     assert workflow.count(condition) == 1
     assert workflow.splitlines().count(
         "        if: github.event_name == 'workflow_dispatch'"
-    ) == 0
-    assert "        if: always()" in workflow
-    assert "if: github.event_name == 'workflow_dispatch' && always()" not in workflow
+    ) == 3
+    assert "        if: always()" not in workflow
+    assert "if: github.event_name == 'workflow_dispatch' && always()" in workflow
     assert "UNIVERSAL_VIDEO_EXPECTED_SHA='$EXACT_SHA'" in workflow
     assert "UNIVERSAL_VIDEO_PRECANARY_BUILD_IMAGE=1" in workflow
     assert "UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE=1" in workflow
