@@ -12,7 +12,7 @@ on:
       - 'database/rollbacks/0057_universal_video_canary_review_gate.sql'
       - 'database/tests/041_universal_video_queue.sql'
       - 'database/tests/042_issue_881_canary_gate.sql'
-      - 'database/tests/043_issue_881_canary_gate_rollback.sql'
+      - 'database/rollback_tests/0057_universal_video_canary_review_gate.sql'
       - 'tests/test_universal_video_issue_881_readiness.py'
       - 'tests/test_issue_881_queue_dsn.py'
       - 'ops/oracle_universal_video_precanary_attest.sh'
@@ -98,4 +98,4 @@ jobs:
            WHERE request_key='issue881-rollback-preserve';
           SQL
           psql -v ON_ERROR_STOP=1 -f database/rollbacks/0057_universal_video_canary_review_gate.sql
-          psql -v ON_ERROR_STOP=1 -f database/tests/043_issue_881_canary_gate_rollback.sql
+          psql -v ON_ERROR_STOP=1 -f database/rollback_tests/0057_universal_video_canary_review_gate.sql
