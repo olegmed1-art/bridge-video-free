@@ -402,6 +402,10 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "video_queue.precanary_idle_snapshot()" in script
     assert "authoritative Neon claimable/LEASED state is busy or unverifiable" in script
     assert "pid_descends_from" in script
+    assert "resident_worker_pid" in script
+    assert "restored_service_ready" in script
+    assert "RESTORE_STABLE_SECONDS" in script
+    assert "stable_seconds=%s result=PASS" in script
     assert "services_stop_attempted=1" in script
     assert "verify_prior_recovery_evidence" in script
     assert "immutable prior-run recovery evidence digest mismatch" in script
@@ -441,12 +445,17 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     container_recheck_index = script.index(
         '[[ "$container_after" == "$container_target_state" ]]'
     )
+    readiness_recheck_index = script.index(
+        'restored_service_ready "$SOURCE_SERVICE" "$source_state_before"',
+        container_recheck_index,
+    )
     unlock_index = script.index("flock --unlock 9", restore_container_index)
     assert (
         restore_source_index
         < restore_container_index
         < source_recheck_index
         < container_recheck_index
+        < readiness_recheck_index
         < restore_pass_index
         < unlock_index
     )

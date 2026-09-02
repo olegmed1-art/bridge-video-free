@@ -17,6 +17,7 @@ RECOVER_CONTAINER_FROM_RUN="${UNIVERSAL_VIDEO_RECOVER_CONTAINER_ACTIVE_FROM_RUN:
 RECOVERY_EVIDENCE_FILE="${UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_FILE:-}"
 RECOVERY_EVIDENCE_SHA256="${UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_SHA256:-}"
 RESTORE_TIMEOUT_SECONDS="${UNIVERSAL_VIDEO_RESTORE_TIMEOUT_SECONDS:-45}"
+RESTORE_STABLE_SECONDS="${UNIVERSAL_VIDEO_RESTORE_STABLE_SECONDS:-5}"
 QUEUE_DSN_FILE="${UNIVERSAL_VIDEO_QUEUE_DSN_FILE:-$BASE_DIR/secrets/video-queue-dsn}"
 QUEUE_PYTHON="${UNIVERSAL_VIDEO_QUEUE_PYTHON:-$BASE_DIR/.venv/bin/python}"
 ENV_FILE="${UNIVERSAL_VIDEO_CONTAINER_ENV_FILE:-}"
@@ -43,6 +44,8 @@ die(){ printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$MIN_FREE_KB" =~ ^[0-9]+$ && "$MIN_FREE_KB" -gt 0 ]] || die 'invalid build free-space threshold'
 [[ "$RESTORE_TIMEOUT_SECONDS" =~ ^[0-9]+$ && "$RESTORE_TIMEOUT_SECONDS" -ge 5 && "$RESTORE_TIMEOUT_SECONDS" -le 180 ]] \
   || die 'invalid resident restore timeout'
+[[ "$RESTORE_STABLE_SECONDS" =~ ^[0-9]+$ && "$RESTORE_STABLE_SECONDS" -ge 3 && "$RESTORE_STABLE_SECONDS" -le 30 ]] \
+  || die 'invalid resident stability interval'
 [[ -z "$RECOVER_CONTAINER_FROM_RUN" || "$RECOVER_CONTAINER_FROM_RUN" =~ ^[0-9]{8,20}$ ]] \
   || die 'invalid bounded prior-run recovery reference'
 if [[ -n "$RECOVER_CONTAINER_FROM_RUN" ]]; then
@@ -88,6 +91,46 @@ service_state(){
   systemctl show "$1" --property=ActiveState --value 2>/dev/null || true
 }
 
+pid_descends_from(){
+  local child="$1" ancestor="$2" parent hops=0
+  [[ "$child" =~ ^[1-9][0-9]*$ && "$ancestor" =~ ^[1-9][0-9]*$ ]] || return 1
+  while (( child > 1 && hops < 64 )); do
+    [[ "$child" == "$ancestor" ]] && return 0
+    parent="$(ps -o ppid= -p "$child" 2>/dev/null | tr -d '[:space:]')"
+    [[ "$parent" =~ ^[0-9]+$ && "$parent" != "$child" ]] || return 1
+    child="$parent"
+    ((hops += 1))
+  done
+  [[ "$child" == "$ancestor" ]]
+}
+
+resident_worker_pid(){
+  local service="$1" root_pid worker_pid
+  if [[ "$service" == "$SOURCE_SERVICE" ]]; then
+    root_pid="$(systemctl show "$service" --property=MainPID --value 2>/dev/null || true)"
+  elif [[ "$service" == "$CONTAINER_SERVICE" ]]; then
+    root_pid="$(docker inspect --format '{{.State.Pid}}' universal-video-container 2>/dev/null || true)"
+  else
+    return 1
+  fi
+  [[ "$root_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  while read -r worker_pid; do
+    if pid_descends_from "$worker_pid" "$root_pid"; then
+      printf '%s\n' "$worker_pid"
+      return 0
+    fi
+  done < <(pgrep -f '[u]niversal_video[.]spool_worker' || true)
+  return 1
+}
+
+restored_service_ready(){
+  local service="$1" target_state="$2" worker_pid
+  [[ "$(service_state "$service")" == "$target_state" ]] || return 1
+  [[ "$target_state" == inactive ]] && return 0
+  worker_pid="$(resident_worker_pid "$service")" || return 1
+  [[ "$worker_pid" =~ ^[1-9][0-9]*$ ]]
+}
+
 record_restore_failure(){
   restore_failures+=("$1")
 }
@@ -104,7 +147,7 @@ service_failure_snapshot(){
 }
 
 restore_service(){
-  local service="$1" target_state="$2" attempt state
+  local service="$1" target_state="$2" attempt state worker_pid last_worker_pid="" stable=0
   if [[ "$target_state" == inactive ]]; then
     state="$(service_state "$service")"
     case "$state" in
@@ -129,8 +172,26 @@ restore_service(){
   for (( attempt=0; attempt<RESTORE_TIMEOUT_SECONDS; attempt++ )); do
     state="$(service_state "$service")"
     if [[ "$state" == active ]]; then
-      printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE service=%s target=active observed=active result=PASS\n' "$service"
-      return 0
+      worker_pid="$(resident_worker_pid "$service" 2>/dev/null || true)"
+      if [[ "$worker_pid" =~ ^[1-9][0-9]*$ ]]; then
+        if [[ "$worker_pid" == "$last_worker_pid" ]]; then
+          ((stable += 1))
+        else
+          last_worker_pid="$worker_pid"
+          stable=1
+        fi
+        if (( stable >= RESTORE_STABLE_SECONDS )); then
+          printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE service=%s target=active observed=active worker_pid=%s stable_seconds=%s result=PASS\n' \
+            "$service" "$worker_pid" "$stable"
+          return 0
+        fi
+      else
+        last_worker_pid=""
+        stable=0
+      fi
+    else
+      last_worker_pid=""
+      stable=0
     fi
     [[ "$state" == failed ]] && break
     sleep 1
@@ -196,6 +257,10 @@ cleanup(){
       || record_restore_failure source_state_mismatch
     [[ "$container_after" == "$container_target_state" ]] \
       || record_restore_failure container_state_mismatch
+    restored_service_ready "$SOURCE_SERVICE" "$source_state_before" \
+      || record_restore_failure source_readiness_mismatch
+    restored_service_ready "$CONTAINER_SERVICE" "$container_target_state" \
+      || record_restore_failure container_readiness_mismatch
     if [[ "${#restore_failures[@]}" -eq 0 ]]; then
       printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_PASS source_service_before=%s source_service=%s container_service_before=%s container_target=%s container_service=%s prior_container_recovery=%s\n' \
         "$source_state_before" "$source_after" "$container_state_before" "$container_target_state" \
@@ -283,18 +348,6 @@ assert_pre_stop_idle(){
   [[ "$container_state_before" != inactive || -z "$container_pid" || "$container_pid" == 0 ]] \
     || die 'inactive container resident still has a worker PID'
 
-  pid_descends_from(){
-    local child="$1" ancestor="$2" parent hops=0
-    [[ "$child" =~ ^[1-9][0-9]*$ && "$ancestor" =~ ^[1-9][0-9]*$ ]] || return 1
-    while (( child > 1 && hops < 64 )); do
-      [[ "$child" == "$ancestor" ]] && return 0
-      parent="$(ps -o ppid= -p "$child" 2>/dev/null | tr -d '[:space:]')"
-      [[ "$parent" =~ ^[0-9]+$ && "$parent" != "$child" ]] || return 1
-      child="$parent"
-      ((hops += 1))
-    done
-    [[ "$child" == "$ancestor" ]]
-  }
   while read -r worker_pid; do
     pid_descends_from "$worker_pid" "$source_pid" \
       || pid_descends_from "$worker_pid" "$container_pid" \
