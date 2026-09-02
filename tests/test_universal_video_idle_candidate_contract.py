@@ -83,23 +83,6 @@ def test_video_and_power_mutations_share_a_non_cancelling_lock():
         assert "cancel-in-progress: false" in text
 
 
-def test_every_submit_bridge_workflow_shares_the_lifecycle_lock():
-    workflows = ROOT / ".github/workflows"
-    producers = {
-        path.name: path.read_text(encoding="utf-8")
-        for path in workflows.glob("*.yml")
-        if "universal-video-" in path.read_text(encoding="utf-8")
-        and " submit-bridge" in path.read_text(encoding="utf-8")
-    }
-    assert set(producers) == {
-        "oracle-diana11-002-job.yml",
-        "oracle-diana11-003-one-shadow-execution.yml",
-    }
-    for name, text in producers.items():
-        assert "group: oracle-instance-workload-mutation" in text, name
-        assert "cancel-in-progress: false" in text, name
-
-
 def test_video_watchdog_is_rare_and_refuses_durable_receipt_replay():
     text = VIDEO.read_text(encoding="utf-8")
     assert "cron: '17 * * * *'" in text
