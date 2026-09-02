@@ -15,6 +15,7 @@ from .drive_adapter import access_token, file_metadata
 from .result_contract import verify_drive_result_contract
 from .runtime_preflight import validate_video_runtime
 from .video_queue import claim_job, database_url_from_env, finish_job, heartbeat_job, retry_job
+from .workload_lock import shared_workload_lock
 
 APPROVED_PROFILE = "bridge_3_1_free"
 APPROVED_REVISION = "3.1-free-r25.16"
@@ -266,20 +267,21 @@ def process_one_neon(
     worker_key: str | None = None,
     processor: Callable[[Mapping[str, Any]], Mapping[str, Any]] = stable_review_processor,
 ) -> bool:
-    validate_video_runtime()
-    dsn = database_url or database_url_from_env()
-    key = worker_key or worker_key_from_env()
-    claim = claim_job(
-        dsn,
-        key,
-        lease_seconds=900,
-        processing_profile=APPROVED_PROFILE,
-        algorithm_revision=APPROVED_REVISION,
-    )
-    if claim is None:
-        return False
-    process_claim(dsn, claim, key, processor=processor)
-    return True
+    with shared_workload_lock():
+        validate_video_runtime()
+        dsn = database_url or database_url_from_env()
+        key = worker_key or worker_key_from_env()
+        claim = claim_job(
+            dsn,
+            key,
+            lease_seconds=900,
+            processing_profile=APPROVED_PROFILE,
+            algorithm_revision=APPROVED_REVISION,
+        )
+        if claim is None:
+            return False
+        process_claim(dsn, claim, key, processor=processor)
+        return True
 
 
 __all__ = [

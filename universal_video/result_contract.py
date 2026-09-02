@@ -21,9 +21,14 @@ class ResultContractError(RuntimeError):
         self.error_code = error_code
 
 
+def _canonical_json(value: Mapping[str, Any]) -> str:
+    """Match the database's compact, UTF-8 canonical JSON serializer."""
+
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
 def _canonical_sha256(value: Mapping[str, Any]) -> str:
-    packed = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    return hashlib.sha256(packed.encode("utf-8")).hexdigest()
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
 def _metadata_identity(meta: Mapping[str, Any]) -> dict[str, Any]:

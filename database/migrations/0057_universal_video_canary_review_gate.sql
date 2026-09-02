@@ -16,6 +16,52 @@ ALTER TABLE video_queue.batch
         (status IN ('CANARY_BLOCKED','REVIEW')) = (completed_at IS NOT NULL)
     );
 
+-- PostgreSQL jsonb::text is stable but is not the compact, lexicographically
+-- sorted JSON emitted by the worker.  Keep the canonicalization algorithm on
+-- the server so finish_job can recompute, rather than trust, the manifest hash.
+CREATE OR REPLACE FUNCTION video_queue.canonical_json_text(p_value jsonb)
+RETURNS text
+LANGUAGE plpgsql
+IMMUTABLE
+STRICT
+SET search_path = pg_catalog, video_queue
+AS $$
+DECLARE
+    v_type text := jsonb_typeof(p_value);
+    v_result text;
+BEGIN
+    CASE v_type
+      WHEN 'object' THEN
+        SELECT '{' || coalesce(
+            string_agg(
+                to_json(e.key)::text || ':' || video_queue.canonical_json_text(e.value),
+                ',' ORDER BY e.key COLLATE "C"
+            ),
+            ''
+        ) || '}'
+          INTO v_result
+          FROM jsonb_each(p_value) AS e(key, value);
+      WHEN 'array' THEN
+        SELECT '[' || coalesce(
+            string_agg(
+                video_queue.canonical_json_text(e.value),
+                ',' ORDER BY e.ordinality
+            ),
+            ''
+        ) || ']'
+          INTO v_result
+          FROM jsonb_array_elements(p_value) WITH ORDINALITY AS e(value, ordinality);
+      ELSE
+        v_result := p_value::text;
+    END CASE;
+    RETURN v_result;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION video_queue.canonical_json_text(jsonb) FROM PUBLIC;
+COMMENT ON FUNCTION video_queue.canonical_json_text(jsonb) IS
+    'Internal compact UTF-8 canonical JSON used to bind Universal Video artifact manifests';
+
 CREATE OR REPLACE FUNCTION video_queue.finish_job(
     p_job_id uuid,
     p_lease_token uuid,
@@ -34,6 +80,7 @@ DECLARE
     v_batch video_queue.batch%ROWTYPE;
     v_batch_status text;
     v_manifest_sha text;
+    v_manifest_computed_sha text;
     v_master_id text;
     v_master_sha text;
 BEGIN
@@ -75,11 +122,23 @@ BEGIN
         v_manifest_sha := p_output->>'artifact_manifest_sha256';
         v_master_id := p_output->>'master_pdf_drive_id';
         v_master_sha := p_output->>'master_pdf_sha256';
+        v_manifest_computed_sha := encode(
+            public.digest(
+                convert_to(
+                    video_queue.canonical_json_text(p_output->'artifact_manifest'),
+                    'UTF8'
+                ),
+                'sha256'
+            ),
+            'hex'
+        );
         IF v_manifest_sha IS NULL OR v_manifest_sha !~ '^[0-9a-f]{64}$'
+           OR v_manifest_computed_sha IS DISTINCT FROM v_manifest_sha
            OR v_master_id IS NULL OR v_master_id !~ '^[A-Za-z0-9_-]{10,200}$'
            OR v_master_id = v_job.source_file_id
            OR v_master_sha IS NULL OR v_master_sha !~ '^[0-9a-f]{64}$'
            OR jsonb_typeof(p_output->'artifact_manifest') <> 'object'
+           OR p_output->'artifact_manifest'->>'schema_version' <> 'universal-video-artifact-manifest/v1'
            OR jsonb_typeof(p_output->'artifact_manifest'->'artifacts') <> 'array'
            OR jsonb_array_length(p_output->'artifact_manifest'->'artifacts') < 1
            OR p_output->'artifact_manifest'->>'job_id' <> v_job.stable_job_key
@@ -96,6 +155,7 @@ BEGIN
            OR p_output->'artifact_manifest'->'artifacts'->0->>'sha256' <> v_master_sha
            OR coalesce((p_output->'artifact_manifest'->'artifacts'->0->>'size_bytes')::bigint, 0) <= 0
            OR jsonb_typeof(p_output->'terminal_receipt') <> 'object'
+           OR p_output->'terminal_receipt'->>'schema_version' <> 'universal-video-terminal-receipt/v1'
            OR p_output->'terminal_receipt'->>'status' <> 'PASS'
            OR p_output->'terminal_receipt'->>'job_id' <> v_job.stable_job_key
            OR p_output->'terminal_receipt'->>'source_file_id' <> v_job.source_file_id

@@ -7,6 +7,7 @@ on:
       - 'universal_video/**'
       - 'database/migrations/0056_universal_video_queue.sql'
       - 'database/migrations/0057_universal_video_canary_review_gate.sql'
+      - 'database/tests/041_universal_video_queue.sql'
       - 'database/tests/042_issue_881_canary_gate.sql'
       - 'tests/test_universal_video_issue_881_readiness.py'
       - 'deploy/oracle-universal-video/Dockerfile'
@@ -59,6 +60,7 @@ jobs:
           CREATE ROLE bridge_school_reader NOLOGIN;
           CREATE ROLE bridge_school_app NOLOGIN;
           CREATE ROLE bridge_school_worker NOLOGIN;
+          CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
           CREATE TABLE schema_migration (migration_key text PRIMARY KEY);
           SQL
           psql -v ON_ERROR_STOP=1 -f database/migrations/0056_universal_video_queue.sql

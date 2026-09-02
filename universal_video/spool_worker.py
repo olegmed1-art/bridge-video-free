@@ -21,6 +21,7 @@ from .result_conformance import ResultConformanceError, verify_result
 from .runner import run_job
 from .runtime_preflight import VideoRuntimeUnavailable, validate_staged_video, validate_video_runtime
 from .server_review import ServerReviewError, build_server_review
+from .workload_lock import shared_workload_lock
 
 
 ERROR_CODE_RE = re.compile(r"^UV_[A-Z0-9_]{1,96}$")
@@ -318,7 +319,7 @@ def recover_orphaned_jobs(spool_root: Path) -> dict[str, int]:
     }
 
 
-def process_one(spool_root: Path) -> bool:
+def _process_one_locked(spool_root: Path) -> bool:
     paths = _dirs(spool_root)
     candidates: list[tuple[float, str, Path]] = []
     for path in paths["inbox"].glob("*.json"):
@@ -485,6 +486,13 @@ def process_one(spool_root: Path) -> bool:
                 # later quarantine an undeletable staging directory.
                 pass
     return True
+
+
+def process_one(spool_root: Path) -> bool:
+    """Process at most one local job while honoring the attestation fence."""
+
+    with shared_workload_lock(spool_root):
+        return _process_one_locked(spool_root)
 
 
 def run_forever(spool_root: Path, poll_seconds: float) -> None:

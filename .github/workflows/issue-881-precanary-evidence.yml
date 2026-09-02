@@ -53,9 +53,13 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXACT_SHA"
           grep -Eq '^FROM python@sha256:[0-9a-f]{64}$' deploy/oracle-universal-video/Dockerfile
           bash -n ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'flock --exclusive --nonblock 9' ops/oracle_universal_video_precanary_attest.sh
+          grep -F '"$image_id" "$@"' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'with shared_workload_lock():' universal_video/neon_worker.py
           git show "$EXACT_SHA:ops/oracle_universal_video_run_command.sh" > "$RUNNER_TEMP/prepare.sh"
           chmod 0700 "$RUNNER_TEMP/prepare.sh"
       - name: Ensure Oracle is running
+        if: github.event_name == 'workflow_dispatch'
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check -q oci-cli
@@ -68,6 +72,7 @@ jobs:
           state="$(oci --config-file "$RUNNER_TEMP/oci/config" compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
           case "$state" in RUNNING);; STOPPED) oci --config-file "$RUNNER_TEMP/oci/config" compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null;; *) exit 1;; esac
       - name: Pinned SSH
+        if: github.event_name == 'workflow_dispatch'
         id: ssh
         run: |
           set -euo pipefail
@@ -77,6 +82,7 @@ jobs:
           ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
           echo "key=$key" >> "$GITHUB_OUTPUT"; echo "known=$known" >> "$GITHUB_OUTPUT"
       - name: Build exact image and run metadata-only gates
+        if: github.event_name == 'workflow_dispatch'
         run: |
           set -euo pipefail
           s=(ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
@@ -87,7 +93,11 @@ jobs:
           grep -E "^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} activated=0$" "$RUNNER_TEMP/container.log"
           "${s[@]}" "sudo -n env UNIVERSAL_VIDEO_CANARY_FILE_ID='1Fs41f1U73-g4CL_xbrE-XjlCBGOp4jKT' UNIVERSAL_VIDEO_CANARY_NAME='test_short_1.mp4' UNIVERSAL_VIDEO_CANARY_MIME='video/mp4' UNIVERSAL_VIDEO_CANARY_SIZE='12339062' UNIVERSAL_VIDEO_CANARY_PARENT='1NjC-EbZwEQ_TSuFeVMx3gY7QBex2cAE6' bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_precanary_attest.sh" > "$RUNNER_TEMP/precanary.log" 2>&1
           grep -E "^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$" "$RUNNER_TEMP/precanary.log"
+          installed_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) activated=0$/\\1/p" "$RUNNER_TEMP/container.log")"
+          attested_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$/\\1/p" "$RUNNER_TEMP/precanary.log")"
+          [[ "$installed_digest" =~ ^sha256:[0-9a-f]{64}$ && "$attested_digest" == "$installed_digest" ]]
           cat "$RUNNER_TEMP/container.log" "$RUNNER_TEMP/precanary.log" > "$RUNNER_TEMP/issue-881-attestation.txt"
           { echo '## Issue #881 exact pre-canary evidence'; echo "runtime_sha=$EXACT_SHA"; grep -E '^UNIVERSAL_VIDEO_CONTAINER_RESOURCE |^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS ' "$RUNNER_TEMP/container.log"; grep -E '^UNIVERSAL_VIDEO_PRECANARY_RUNTIME |^UNIVERSAL_VIDEO_PRECANARY_STATE |"gate":"(IMPORT_CLOSURE|SYNTHETIC_RESULT_CONTRACT|SOURCE_IDENTITY_METADATA_ONLY)"|^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS ' "$RUNNER_TEMP/precanary.log"; echo 'real_media_canary_run=false'; echo 'automatic_batch_release=false'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
         with: {name: 'issue-881-precanary-${{ env.EXACT_SHA }}', path: '${{ runner.temp }}/issue-881-attestation.txt', if-no-files-found: error, retention-days: 14}
