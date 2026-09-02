@@ -1,264 +1,378 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-# Classify whether the existing Frankfurt Oracle VM is safe to stop.
-# Output contract (exactly one terminal marker):
-#   ORACLE_IDLE_STATE=IDLE
-#   ORACLE_IDLE_STATE=BUSY
-#   ORACLE_IDLE_STATE=UNKNOWN
-# Any inability to prove the required inputs is UNKNOWN (fail closed).
+# Read-only Oracle state classifier. It never stops, restarts, or mutates work.
+# IDLE is emitted only when every required source freshly proves no work.
+# Any unavailable, stale, malformed, or only partially checked source is UNKNOWN.
 
 LAB_DIR="${ASSISTANT_LAB_DIR:-/opt/bridge-school/assistant-lab}"
-LAB_ENV="${ASSISTANT_LAB_ENV_FILE:-$LAB_DIR/assistant-lab.env}"
 PYTHON="${ASSISTANT_LAB_PYTHON:-$LAB_DIR/.venv/bin/python}"
-SYSTEM_PYTHON="${ORACLE_IDLE_SYSTEM_PYTHON:-/usr/bin/python3}"
-QUEUE_DSN_FILE="${BRIDGE_VIDEO_QUEUE_DSN_FILE:-/opt/bridge-school/universal-video/secrets/video-queue-dsn}"
-VIDEO_SPOOL_ROOT="${BRIDGE_VIDEO_SPOOL_ROOT:-/opt/bridge-school/universal-video/spool}"
-HOST_LEASE_FILE="${ORACLE_HOST_LEASE_FILE:-/run/bridge-school/oracle-host-lease}"
-MAX_OPERATOR_LEASE_SECONDS="${ORACLE_IDLE_MAX_OPERATOR_LEASE_SECONDS:-3600}"
+export ASSISTANT_LAB_ENV_FILE="${ASSISTANT_LAB_ENV_FILE:-$LAB_DIR/assistant-lab.env}"
+export BRIDGE_VIDEO_QUEUE_DSN_FILE="${BRIDGE_VIDEO_QUEUE_DSN_FILE:-/opt/bridge-school/universal-video/secrets/video-queue-dsn}"
+export BRIDGE_VIDEO_SPOOL_ROOT="${BRIDGE_VIDEO_SPOOL_ROOT:-/opt/bridge-school/universal-video/spool}"
+export ORACLE_HOST_LEASE_FILE="${ORACLE_HOST_LEASE_FILE:-/run/bridge-school/oracle-host-lease}"
+export ORACLE_IDLE_SPOOL_PATHS="${ORACLE_IDLE_SPOOL_PATHS:-/opt/bridge-school/assistant-lab/spool:/opt/bridge-school/assistant-lab/feedback-spool:/var/lib/bridge-school/uv-spool:/var/lib/bridge-school/feedback-spool}"
+export ORACLE_IDLE_MAX_TELEMETRY_AGE_SECONDS="${ORACLE_IDLE_MAX_TELEMETRY_AGE_SECONDS:-120}"
+export ORACLE_IDLE_MAX_LEASE_SECONDS="${ORACLE_IDLE_MAX_LEASE_SECONDS:-3600}"
+export ORACLE_IDLE_CLOCK_SKEW_SECONDS="${ORACLE_IDLE_CLOCK_SKEW_SECONDS:-5}"
 
-state="UNKNOWN"
-reason="unclassified"
-
-finish() {
-  printf 'ORACLE_IDLE_REASON=%s\n' "$reason"
-  printf 'ORACLE_IDLE_STATE=%s\n' "$state"
-}
-trap finish EXIT
-
-[[ "$MAX_OPERATOR_LEASE_SECONDS" =~ ^[0-9]+$ ]] && (( MAX_OPERATOR_LEASE_SECONDS >= 60 && MAX_OPERATOR_LEASE_SECONDS <= 86400 )) || {
-  reason="operator_lease_policy_invalid"
-  exit 0
-}
-[[ -r "$LAB_ENV" ]] || { reason="assistant_lab_env_unreadable"; exit 0; }
-[[ -x "$PYTHON" ]] || { reason="assistant_lab_python_missing"; exit 0; }
-[[ -x "$SYSTEM_PYTHON" ]] || { reason="system_python_missing"; exit 0; }
-
-# The resident daemon being active is expected and does not itself make the host busy.
-# An unhealthy/transitioning worker makes the state unknowable, so STOP stays blocked.
-if command -v systemctl >/dev/null 2>&1; then
-  worker_state="$(systemctl is-active assistant-lab.service 2>/dev/null || true)"
-  case "$worker_state" in
-    active) ;;
-    *) reason="assistant_lab_service_${worker_state:-unknown}"; exit 0 ;;
-  esac
-else
-  reason="systemctl_missing"
+if [[ ! -x "$PYTHON" ]]; then
+  printf 'ORACLE_IDLE_REASON=assistant_lab_python_missing\n'
+  printf 'ORACLE_IDLE_STATE=UNKNOWN\n'
   exit 0
 fi
 
-# A bounded operator may own the host with a local lease. The lease file has one
-# line: expires_at_epoch=<unix-seconds>. A live lease inside the bounded policy
-# horizon is BUSY. Expired, malformed, unreadable, or implausibly far-future
-# lease telemetry is UNKNOWN, never IDLE.
-if [[ -e "$HOST_LEASE_FILE" || -L "$HOST_LEASE_FILE" ]]; then
-  if [[ ! -f "$HOST_LEASE_FILE" || -L "$HOST_LEASE_FILE" || ! -r "$HOST_LEASE_FILE" ]]; then
-    reason="host_lease_unreadable"
-    exit 0
-  fi
-  lease_line="$(cat "$HOST_LEASE_FILE" 2>/dev/null || true)"
-  if [[ ! "$lease_line" =~ ^expires_at_epoch=([0-9]{10,})$ ]]; then
-    reason="host_lease_invalid"
-    exit 0
-  fi
-  lease_expires="${BASH_REMATCH[1]}"
-  now_epoch="$(date +%s 2>/dev/null || true)"
-  [[ "$now_epoch" =~ ^[0-9]+$ ]] || { reason="clock_unavailable"; exit 0; }
-  if (( lease_expires <= now_epoch )); then
-    reason="host_lease_stale"
-    exit 0
-  fi
-  if (( lease_expires - now_epoch > MAX_OPERATOR_LEASE_SECONDS )); then
-    reason="host_lease_horizon_invalid"
-    exit 0
-  fi
-  state="BUSY"
-  reason="host_lease_active"
-  exit 0
-fi
+set +e
+result="$("$PYTHON" - <<'PY' 2>/dev/null
+from __future__ import annotations
 
-# Observer experiments and durable-delivery work are independent keep-alive reasons.
-if pgrep -f '[a]ssistant_lab.*observer.*experiment|[o]racle_assistant_lab_observer.*run' >/dev/null 2>&1; then
-  state="BUSY"
-  reason="observer_experiment_process"
-  exit 0
-fi
-
-for spool in \
-  /opt/bridge-school/assistant-lab/spool \
-  /opt/bridge-school/assistant-lab/feedback-spool \
-  /var/lib/bridge-school/uv-spool \
-  /var/lib/bridge-school/feedback-spool
-do
-  if [[ -d "$spool" ]]; then
-    set +e
-    spool_probe="$(find "$spool" -type f -print -quit 2>/dev/null)"
-    spool_rc=$?
-    set -e
-    if (( spool_rc != 0 )); then
-      reason="spool_traversal_failed"
-      exit 0
-    fi
-    if [[ -n "$spool_probe" ]]; then
-      state="BUSY"
-      reason="pending_spool:${spool}"
-      exit 0
-    fi
-  fi
-done
-
-# Universal Video has a host-side spool independent of the Neon queue.  A
-# bounded parser distinguishes active work from terminal progress receipts and
-# treats malformed, symlinked or unreadable telemetry as UNKNOWN.
-VIDEO_SPOOL_RESULT="$(BRIDGE_VIDEO_SPOOL_ROOT="$VIDEO_SPOOL_ROOT" "$SYSTEM_PYTHON" - <<'PY' 2>/dev/null || true
 import json
 import os
+import shutil
 import stat
+import subprocess
+import time
 from pathlib import Path
+from typing import Any
 
-root = Path(os.environ.get("BRIDGE_VIDEO_SPOOL_ROOT", ""))
+unknown: list[str] = []
+busy: list[str] = []
+
+
+def mark_unknown(reason: str) -> None:
+    if reason not in unknown:
+        unknown.append(reason)
+
+
+def mark_busy(reason: str) -> None:
+    if reason not in busy:
+        busy.append(reason)
+
+
+def bounded_int(name: str, *, minimum: int, maximum: int) -> int | None:
+    raw = os.environ.get(name, "")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        mark_unknown(f"invalid_config:{name}")
+        return None
+    if not minimum <= value <= maximum:
+        mark_unknown(f"invalid_config:{name}")
+        return None
+    return value
+
+
+max_age = bounded_int("ORACLE_IDLE_MAX_TELEMETRY_AGE_SECONDS", minimum=1, maximum=3600)
+max_lease = bounded_int("ORACLE_IDLE_MAX_LEASE_SECONDS", minimum=60, maximum=86400)
+clock_skew = bounded_int("ORACLE_IDLE_CLOCK_SKEW_SECONDS", minimum=0, maximum=60)
+now = int(time.time())
+
+
+def fresh(value: Any) -> bool:
+    if max_age is None or clock_skew is None or isinstance(value, bool):
+        return False
+    try:
+        epoch = int(value)
+    except (TypeError, ValueError):
+        return False
+    return now - max_age <= epoch <= now + clock_skew
+
+
+def run_probe(argv: list[str], *, timeout: int = 5) -> subprocess.CompletedProcess[str] | None:
+    if shutil.which(argv[0]) is None:
+        mark_unknown(f"{argv[0]}_missing")
+        return None
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+    except (OSError, subprocess.SubprocessError):
+        mark_unknown(f"{argv[0]}_unavailable")
+        return None
+
+
+service = run_probe(["systemctl", "is-active", "assistant-lab.service"])
+if service is not None and (service.returncode != 0 or service.stdout.strip() != "active"):
+    mark_unknown(f"assistant_lab_service_{service.stdout.strip() or 'unknown'}")
+
+observer = run_probe([
+    "pgrep",
+    "-f",
+    r"[a]ssistant_lab.*observer.*experiment|[o]racle_assistant_lab_observer.*run",
+])
+if observer is not None:
+    if observer.returncode == 0:
+        mark_busy("observer_experiment_process")
+    elif observer.returncode != 1:
+        mark_unknown("process_telemetry_unavailable")
+
+
+def checked_dir(path: Path, reason: str) -> bool:
+    try:
+        info = path.lstat()
+    except (FileNotFoundError, PermissionError, OSError):
+        mark_unknown(reason)
+        return False
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        mark_unknown(reason)
+        return False
+    return True
+
+
+def scan_generic_spool(path: Path) -> None:
+    if not checked_dir(path, f"spool_unavailable:{path}"):
+        return
+    stack = [path]
+    try:
+        while stack:
+            current = stack.pop()
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    if entry.is_symlink():
+                        mark_unknown(f"spool_entry_unsafe:{path}")
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(Path(entry.path))
+                    elif entry.is_file(follow_symlinks=False):
+                        mark_busy(f"pending_spool:{path}")
+                    else:
+                        mark_unknown(f"spool_entry_unsafe:{path}")
+    except (PermissionError, OSError):
+        mark_unknown(f"spool_enumeration_failed:{path}")
+
+
+spool_raw = os.environ.get("ORACLE_IDLE_SPOOL_PATHS", "")
+spool_paths = [Path(item) for item in spool_raw.split(":") if item]
+if not spool_paths:
+    mark_unknown("spool_configuration_empty")
+for spool_path in spool_paths:
+    scan_generic_spool(spool_path)
+
+# Universal Video host spool is a separate mandatory family. Only terminal
+# progress receipts may remain without making the host busy.
+video_root = Path(os.environ.get("BRIDGE_VIDEO_SPOOL_ROOT", ""))
 active_progress = {"DOWNLOADING_FROM_DRIVE", "SOURCE_READY_ON_ORACLE", "PROCESSING"}
 terminal_progress = {"RESULT_READY", "REVIEW", "FAILED"}
-
-def fail(reason: str) -> None:
-    print("UNKNOWN:" + reason)
-    raise SystemExit
-
-try:
-    root_info = root.lstat()
-    if stat.S_ISLNK(root_info.st_mode) or not stat.S_ISDIR(root_info.st_mode):
-        fail("video_spool_unavailable")
-    leaves = {}
-    for name in ("inbox", "running", "progress"):
-        path = root / name
-        info = path.lstat()
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-            fail("video_spool_" + name + "_unavailable")
-        leaves[name] = path
-
-    for name in ("inbox", "running"):
-        try:
-            entries = list(leaves[name].iterdir())
-        except OSError:
-            fail("video_spool_" + name + "_traversal_failed")
-        for item in entries:
-            if not item.name.endswith(".json"):
-                continue
-            info = item.lstat()
-            if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-                fail("video_spool_" + name + "_entry_invalid")
-            print("BUSY:video_spool_" + name + "_pending")
-            raise SystemExit
-
-    try:
-        progress_entries = list(leaves["progress"].iterdir())
-    except OSError:
-        fail("video_spool_progress_traversal_failed")
-    for item in progress_entries:
-        if not item.name.endswith(".json"):
+if checked_dir(video_root, "video_spool_unavailable"):
+    video_leaves: dict[str, Path] = {}
+    for leaf in ("inbox", "running", "progress"):
+        candidate = video_root / leaf
+        if checked_dir(candidate, f"video_spool_{leaf}_unavailable"):
+            video_leaves[leaf] = candidate
+    for leaf in ("inbox", "running"):
+        path = video_leaves.get(leaf)
+        if path is None:
             continue
-        info = item.lstat()
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-            fail("video_spool_progress_entry_invalid")
         try:
-            payload = json.loads(item.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            fail("video_spool_progress_invalid")
-        if not isinstance(payload, dict) or payload.get("schema") != "universal-video-pipeline-progress-v1":
-            fail("video_spool_progress_invalid")
-        state = str(payload.get("state") or "")
-        if state in active_progress:
-            print("BUSY:video_spool_progress_active")
-            raise SystemExit
-        if state not in terminal_progress:
-            fail("video_spool_progress_state_unknown")
-    print("IDLE:video_spool_clear")
-except FileNotFoundError:
-    print("UNKNOWN:video_spool_unavailable")
-except PermissionError:
-    print("UNKNOWN:video_spool_permission_denied")
-except OSError:
-    print("UNKNOWN:video_spool_io_failed")
-PY
-)"
-case "$VIDEO_SPOOL_RESULT" in
-  IDLE:*) ;;
-  BUSY:*) state="BUSY"; reason="${VIDEO_SPOOL_RESULT#BUSY:}"; exit 0 ;;
-  UNKNOWN:*) reason="${VIDEO_SPOOL_RESULT#UNKNOWN:}"; exit 0 ;;
-  *) reason="video_spool_classifier_invalid"; exit 0 ;;
-esac
+            with os.scandir(path) as entries:
+                for entry in entries:
+                    if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+                        mark_unknown(f"video_spool_{leaf}_entry_invalid")
+                    elif not entry.name.endswith(".json"):
+                        mark_unknown(f"video_spool_{leaf}_entry_unknown")
+                    else:
+                        mark_busy(f"video_spool_{leaf}_pending")
+        except (PermissionError, OSError):
+            mark_unknown(f"video_spool_{leaf}_traversal_failed")
+    progress = video_leaves.get("progress")
+    if progress is not None:
+        try:
+            with os.scandir(progress) as entries:
+                for entry in entries:
+                    if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+                        mark_unknown("video_spool_progress_entry_invalid")
+                        continue
+                    if not entry.name.endswith(".json"):
+                        mark_unknown("video_spool_progress_entry_unknown")
+                        continue
+                    try:
+                        payload = json.loads(Path(entry.path).read_text(encoding="utf-8"))
+                    except (OSError, UnicodeError, json.JSONDecodeError):
+                        mark_unknown("video_spool_progress_invalid")
+                        continue
+                    if not isinstance(payload, dict) or payload.get("schema") != "universal-video-pipeline-progress-v1":
+                        mark_unknown("video_spool_progress_invalid")
+                        continue
+                    progress_state = str(payload.get("state") or "")
+                    if progress_state in active_progress:
+                        if not fresh(payload.get("observed_at_unix")):
+                            mark_unknown("video_spool_progress_stale")
+                        else:
+                            mark_busy("video_spool_progress_active")
+                    elif progress_state not in terminal_progress:
+                        mark_unknown("video_spool_progress_state_unknown")
+        except (PermissionError, OSError):
+            mark_unknown("video_spool_progress_traversal_failed")
 
-# Read only the exact DSN assignment; do not source the environment file as shell code.
-dsn_line="$(grep -m1 '^ASSISTANT_LAB_DATABASE_URL=' "$LAB_ENV" 2>/dev/null || true)"
-[[ -n "$dsn_line" ]] || { reason="assistant_lab_dsn_missing"; exit 0; }
-export ASSISTANT_LAB_DATABASE_URL="${dsn_line#ASSISTANT_LAB_DATABASE_URL=}"
-[[ -n "$ASSISTANT_LAB_DATABASE_URL" ]] || { reason="assistant_lab_dsn_empty"; exit 0; }
+# A missing lease is a proved absence only if its parent can be inspected.
+lease_path = Path(os.environ.get("ORACLE_HOST_LEASE_FILE", ""))
+lease_parent = lease_path.parent
+if checked_dir(lease_parent, "host_lease_directory_unavailable"):
+    try:
+        lease_info = lease_path.lstat()
+    except FileNotFoundError:
+        lease_info = None
+    except (PermissionError, OSError):
+        mark_unknown("host_lease_unreadable")
+        lease_info = None
+    if lease_info is not None:
+        if stat.S_ISLNK(lease_info.st_mode) or not stat.S_ISREG(lease_info.st_mode):
+            mark_unknown("host_lease_unreadable")
+        else:
+            try:
+                lines = lease_path.read_text(encoding="utf-8").splitlines()
+            except (OSError, UnicodeError):
+                mark_unknown("host_lease_unreadable")
+                lines = []
+            purpose = "operator"
+            issued: int | None = None
+            expires: int | None = None
+            try:
+                if len(lines) == 1 and lines[0].startswith("expires_at_epoch="):
+                    expires = int(lines[0].split("=", 1)[1])
+                elif len(lines) == 4:
+                    if lines[0] != "schema=oracle-host-lease-v1":
+                        raise ValueError
+                    key, purpose = lines[1].split("=", 1)
+                    if key != "purpose" or purpose not in {"operator", "maintenance"}:
+                        raise ValueError
+                    if not lines[2].startswith("issued_at_epoch=") or not lines[3].startswith("expires_at_epoch="):
+                        raise ValueError
+                    issued = int(lines[2].split("=", 1)[1])
+                    expires = int(lines[3].split("=", 1)[1])
+                else:
+                    raise ValueError
+            except (ValueError, IndexError):
+                mark_unknown("host_lease_invalid")
+            if expires is not None and max_lease is not None and clock_skew is not None:
+                if issued is not None and (issued > now + clock_skew or expires <= issued or expires - issued > max_lease):
+                    mark_unknown("host_lease_unbounded_or_invalid")
+                elif expires <= now:
+                    mark_unknown("host_lease_stale")
+                elif expires - now > max_lease:
+                    mark_unknown("host_lease_horizon_invalid")
+                else:
+                    mark_busy(f"host_lease_active:{purpose}")
 
-# Universal Video queue is a required live telemetry family for the stop proof.
-# Missing/unreadable credentials or a failed live query are UNKNOWN. The live
-# query itself avoids accepting a stale cached queue snapshot.
-if [[ ! -f "$QUEUE_DSN_FILE" || -L "$QUEUE_DSN_FILE" || ! -r "$QUEUE_DSN_FILE" ]]; then
-  unset ASSISTANT_LAB_DATABASE_URL
-  reason="video_queue_dsn_unavailable"
-  exit 0
-fi
-export BRIDGE_VIDEO_QUEUE_DATABASE_URL="$(tr -d '\n\r' < "$QUEUE_DSN_FILE")"
-if [[ -z "$BRIDGE_VIDEO_QUEUE_DATABASE_URL" ]]; then
-  unset ASSISTANT_LAB_DATABASE_URL
-  unset BRIDGE_VIDEO_QUEUE_DATABASE_URL
-  reason="video_queue_dsn_empty"
-  exit 0
-fi
 
-DB_RESULT="$("$PYTHON" - <<'PY' 2>/dev/null || true
-import os
-try:
-    import psycopg
-except Exception:
-    print("UNKNOWN:psycopg_unavailable")
-    raise SystemExit
+def regular_text(path: Path, missing_reason: str) -> str | None:
+    try:
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            raise OSError
+        value = path.read_text(encoding="utf-8").strip()
+    except (FileNotFoundError, PermissionError, OSError, UnicodeError):
+        mark_unknown(missing_reason)
+        return None
+    if not value:
+        mark_unknown(missing_reason.replace("unavailable", "empty"))
+        return None
+    return value
 
-dsn = os.environ.get("ASSISTANT_LAB_DATABASE_URL", "")
-queue_dsn = os.environ.get("BRIDGE_VIDEO_QUEUE_DATABASE_URL", "")
-if not dsn:
-    print("UNKNOWN:dsn_missing")
-    raise SystemExit
-if not queue_dsn:
-    print("UNKNOWN:video_queue_dsn_missing")
-    raise SystemExit
 
-try:
-    with psycopg.connect(dsn, connect_timeout=8, application_name="oracle-idle-state") as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT active_jobs, active_research_jobs, active_control_commands FROM assistant_lab.oracle_idle_snapshot()")
-            row = cur.fetchone()
-            if row is None or len(row) != 3:
-                print("UNKNOWN:idle_snapshot_missing")
-                raise SystemExit
-            active_jobs, active_research, active_control = map(int, row)
-    with psycopg.connect(queue_dsn, connect_timeout=8, application_name="oracle-idle-video-queue") as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT count(*) FROM video_queue.job_status WHERE status IN ('PENDING_CANARY','QUEUED','LEASED')")
-            video_jobs = int(cur.fetchone()[0])
-    if min(active_jobs, active_research, active_control, video_jobs) < 0:
-        print("UNKNOWN:invalid_idle_snapshot")
-    elif active_jobs or active_research or active_control or video_jobs:
-        print(f"BUSY:jobs={active_jobs},research={active_research},control={active_control},video={video_jobs}")
+env_path = Path(os.environ.get("ASSISTANT_LAB_ENV_FILE", ""))
+env_text = regular_text(env_path, "assistant_lab_env_unavailable")
+assistant_dsn: str | None = None
+if env_text is not None:
+    matches = [line.split("=", 1)[1] for line in env_text.splitlines() if line.startswith("ASSISTANT_LAB_DATABASE_URL=")]
+    if len(matches) != 1 or not matches[0]:
+        mark_unknown("assistant_lab_dsn_missing_or_ambiguous")
     else:
-        print("IDLE:jobs=0,research=0,control=0,video=0")
-except Exception:
-    # Do not expose driver errors because they may contain connection details.
-    print("UNKNOWN:database_check_failed")
+        assistant_dsn = matches[0]
+queue_dsn = regular_text(Path(os.environ.get("BRIDGE_VIDEO_QUEUE_DSN_FILE", "")), "video_queue_dsn_unavailable")
+
+# Query both live databases only after their credentials are proved. The second
+# failure is explicitly distinguished to prove partial success cannot authorize STOP.
+if assistant_dsn is not None and queue_dsn is not None and max_age is not None and clock_skew is not None:
+    try:
+        import psycopg
+    except Exception:
+        mark_unknown("psycopg_unavailable")
+    else:
+        core: Any = None
+        try:
+            with psycopg.connect(assistant_dsn, connect_timeout=8, application_name="oracle-idle-state") as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT telemetry_schema, observed_at_epoch, active_jobs, active_research_jobs, "
+                        "active_research_child_jobs, active_control_commands "
+                        "FROM assistant_lab.oracle_idle_snapshot()"
+                    )
+                    core = cursor.fetchone()
+        except Exception:
+            mark_unknown("assistant_lab_telemetry_unavailable")
+        core_valid = False
+        if core is not None:
+            if len(core) != 6 or core[0] != "assistant-lab-oracle-idle-v2":
+                mark_unknown("assistant_lab_telemetry_invalid")
+            elif not fresh(core[1]):
+                mark_unknown("assistant_lab_telemetry_stale")
+            else:
+                try:
+                    core_counts = [int(value) for value in core[2:]]
+                    if any(value < 0 for value in core_counts):
+                        raise ValueError
+                except (TypeError, ValueError):
+                    mark_unknown("assistant_lab_counts_invalid")
+                else:
+                    core_valid = True
+                    if any(core_counts):
+                        mark_busy(
+                            "assistant_lab_active:"
+                            f"jobs={core_counts[0]},research={core_counts[1]},"
+                            f"research_children={core_counts[2]},control={core_counts[3]}"
+                        )
+        if core_valid:
+            video: Any = None
+            try:
+                with psycopg.connect(queue_dsn, connect_timeout=8, application_name="oracle-idle-video-queue") as connection:
+                    with connection.cursor() as cursor:
+                        cursor.execute(
+                            "SELECT 'universal-video-idle-v1', "
+                            "floor(extract(epoch FROM clock_timestamp()))::bigint, count(*)::bigint "
+                            "FROM video_queue.job_status "
+                            "WHERE status IN ('PENDING_CANARY','QUEUED','LEASED')"
+                        )
+                        video = cursor.fetchone()
+            except Exception:
+                mark_unknown("video_queue_telemetry_unavailable_after_assistant_lab_success")
+            if video is not None:
+                if len(video) != 3 or video[0] != "universal-video-idle-v1":
+                    mark_unknown("video_queue_telemetry_invalid")
+                elif not fresh(video[1]):
+                    mark_unknown("video_queue_telemetry_stale")
+                else:
+                    try:
+                        video_count = int(video[2])
+                        if video_count < 0:
+                            raise ValueError
+                    except (TypeError, ValueError):
+                        mark_unknown("video_queue_count_invalid")
+                    else:
+                        if video_count:
+                            mark_busy(f"universal_video_active:{video_count}")
+
+if unknown:
+    final_state = "UNKNOWN"
+    reasons = unknown + busy
+elif busy:
+    final_state = "BUSY"
+    reasons = busy
+else:
+    final_state = "IDLE"
+    reasons = ["all_required_sources_proved_idle"]
+print("ORACLE_IDLE_REASON=" + ";".join(reasons))
+print("ORACLE_IDLE_STATE=" + final_state)
 PY
 )"
-unset ASSISTANT_LAB_DATABASE_URL
-unset BRIDGE_VIDEO_QUEUE_DATABASE_URL
+python_rc=$?
+set -e
 
-case "$DB_RESULT" in
-  IDLE:*) state="IDLE"; reason="${DB_RESULT#IDLE:}" ;;
-  BUSY:*) state="BUSY"; reason="${DB_RESULT#BUSY:}" ;;
-  UNKNOWN:*) state="UNKNOWN"; reason="${DB_RESULT#UNKNOWN:}" ;;
-  *) state="UNKNOWN"; reason="invalid_database_classifier_output" ;;
-esac
-
+if ((python_rc != 0)) \
+   || [[ "$(printf '%s\n' "$result" | grep -Ec '^ORACLE_IDLE_REASON=' || true)" != "1" ]] \
+   || [[ "$(printf '%s\n' "$result" | grep -Ec '^ORACLE_IDLE_STATE=(IDLE|BUSY|UNKNOWN)$' || true)" != "1" ]] \
+   || [[ "$(printf '%s\n' "$result" | grep -Ec '.*' || true)" != "2" ]]; then
+  printf 'ORACLE_IDLE_REASON=classifier_failed_or_malformed\n'
+  printf 'ORACLE_IDLE_STATE=UNKNOWN\n'
+  exit 0
+fi
+printf '%s\n' "$result"
 exit 0
