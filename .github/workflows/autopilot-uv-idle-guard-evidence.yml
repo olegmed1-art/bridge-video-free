@@ -1,0 +1,84 @@
+name: Autopilot Oracle idle STOP guard exact-head evidence
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths: ['.github/workflows/autopilot-uv-idle-guard-evidence.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autopilot-uv-idle-guard-evidence-621ab073
+  cancel-in-progress: false
+
+jobs:
+  idle-guard:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      EXACT_IDLE_SHA: 621ab073418b3f3d1b75cb6abb074dba4ea305cb
+    steps:
+      - name: Checkout exact idle-guard head
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: 621ab073418b3f3d1b75cb6abb074dba4ea305cb
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Bind evidence to exact source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$(git rev-parse HEAD)" == "$EXACT_IDLE_SHA" ]]
+          bash -n ops/oracle_idle_state.sh
+          echo 'ORACLE_IDLE_EXACT_SOURCE=PASS'
+
+      - name: Run fail-closed classifier tests
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m pip install --disable-pip-version-check -q pytest
+          python -m pytest -q tests/test_oracle_idle_stop_guard.py
+          echo 'ORACLE_IDLE_CLASSIFIER_TESTS=PASS'
+
+      - name: Prove exact-IDLE-only finalizer boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          workflow='.github/workflows/oracle-autopilot-staging-finalize.yml'
+          [[ -f "$workflow" ]]
+          grep -F 'sudo -n bash /opt/bridge-school/school-autopilot/ops/oracle_idle_state.sh' "$workflow" >/dev/null
+          grep -F "grep -Fx 'ORACLE_IDLE_STATE=IDLE'" "$workflow" >/dev/null
+          grep -F 'if: steps.preflight.outputs.stop_permitted == ' "$workflow" >/dev/null
+          ! grep -Eiq 'ORACLE_IDLE_STATE=(UNKNOWN|BUSY).*stop_permitted=true' "$workflow"
+          echo 'ORACLE_UNKNOWN_BLOCKS_STOP=PASS'
+          echo 'ORACLE_BUSY_BLOCKS_STOP=PASS'
+          echo 'ORACLE_EXACT_IDLE_ONLY=PASS'
+          echo 'ORACLE_STOP_EXECUTED=NO'
+
+      - name: Build retained receipt
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          result='PASS'
+          [[ "${{ job.status }}" == 'success' ]] || result='FAIL'
+          jq -n \
+            --arg gate 'ORACLE_IDLE_STOP_GUARD_EXACT_HEAD' \
+            --arg result "$result" \
+            --arg idle_sha "$EXACT_IDLE_SHA" \
+            --arg workflow_sha "$GITHUB_SHA" \
+            '{gate:$gate,result:$result,idle_guard_sha:$idle_sha,workflow_sha:$workflow_sha,busy_semantics:"BLOCK_STOP",unknown_semantics:"BLOCK_STOP",idle_semantics:"ONLY_ELIGIBLE_STATE",video_states_busy:["PENDING_CANARY","QUEUED","LEASED"],local_spool_busy:true,stale_telemetry_unknown:true,missing_telemetry_unknown:true,oracle_stop_executed:false,oracle_restart_executed:false,production_mutation:false,real_video:false}' \
+            > oracle-idle-stop-guard-receipt.json
+          cat oracle-idle-stop-guard-receipt.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload retained receipt
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: oracle-idle-stop-guard-${{ github.run_id }}-${{ github.run_attempt }}
+          path: oracle-idle-stop-guard-receipt.json
+          if-no-files-found: error
+          retention-days: 30
