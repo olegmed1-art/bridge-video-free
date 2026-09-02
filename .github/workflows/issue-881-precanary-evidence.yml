@@ -69,17 +69,20 @@ jobs:
           bash -n ops/oracle_universal_video_precanary_attest.sh
           bash -n ops/oracle_universal_video_container_install.sh
           grep -F 'flock --exclusive --nonblock 9' ops/oracle_universal_video_precanary_attest.sh
+          grep -F 'bash "$PREPARE_SCRIPT"' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'restore_service "$SOURCE_SERVICE" "$source_was_active"' ops/oracle_universal_video_precanary_attest.sh
           grep -F '"$image_id" "$@"' ops/oracle_universal_video_precanary_attest.sh
           grep -F 'UNIVERSAL_VIDEO_IMAGE=$image_id' ops/oracle_universal_video_container_install.sh
           grep -F '"$image_id" true' ops/oracle_universal_video_container_install.sh
           grep -F 'with shared_workload_lock():' universal_video/neon_worker.py
+          grep -F 'verify_terminal_output_live(claim, output' universal_video/neon_worker.py
           git show "$EXACT_SHA:ops/oracle_universal_video_run_command.sh" > "$RUNNER_TEMP/prepare.sh"
           chmod 0700 "$RUNNER_TEMP/prepare.sh"
+          cp ops/oracle_universal_video_precanary_attest.sh "$RUNNER_TEMP/attest.sh"
+          chmod 0700 "$RUNNER_TEMP/attest.sh"
           : > "$RUNNER_TEMP/issue-881-attestation.txt"
 
       - name: Ensure Oracle is running
-        if: github.event_name == 'workflow_dispatch'
         run: |
           set -euo pipefail
           python -m pip install --disable-pip-version-check -q oci-cli
@@ -106,7 +109,6 @@ jobs:
           esac
 
       - name: Establish pinned SSH identity
-        if: github.event_name == 'workflow_dispatch'
         id: ssh
         run: |
           set -euo pipefail
@@ -127,22 +129,34 @@ jobs:
           echo "key=$key" >> "$GITHUB_OUTPUT"
           echo "known=$known" >> "$GITHUB_OUTPUT"
 
-      - name: Build exact image and run metadata-only gates
-        if: github.event_name == 'workflow_dispatch'
+      - name: Build exact image and run metadata-only gates under one fence
         run: |
           set -Eeuo pipefail
           evidence="$RUNNER_TEMP/issue-881-attestation.txt"
+          session_log="$RUNNER_TEMP/precanary-session.log"
+          remote_stage="/tmp/uv-issue881-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          remote_root="/root/uv-issue881-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           s=(ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          c=(scp -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" \
+            -o ConnectTimeout=15)
+
+          cleanup_remote(){
+            trap - EXIT
+            "${s[@]}" "sudo -n rm -rf '$remote_root'; rm -rf '$remote_stage'" >/dev/null 2>&1 || true
+          }
+          trap cleanup_remote EXIT
+
           bounded_failure(){
             rc=$?
             trap - ERR
             {
               echo "runtime_sha=$EXACT_SHA"
               echo "step_exit=$rc"
-              grep -E '^UNIVERSAL_VIDEO_CONTAINER_(RESOURCE|STORAGE|CLEANUP) |^UNIVERSAL_VIDEO_PRECANARY_(RUNTIME|STATE) |^\{"error_code":"UV_[A-Z0-9_]+","status":"FAILED"\}$|^ERROR:' \
-                "$RUNNER_TEMP/container.log" "$RUNNER_TEMP/precanary.log" 2>/dev/null || true
+              grep -E '^UNIVERSAL_VIDEO_(PRECANARY_WINDOW|CONTAINER_(RESOURCE|STORAGE|CLEANUP|INSTALL_PASS)|PRECANARY_(RUNTIME|STATE|ATTEST_PASS)) |^\{"error_code":"UV_[A-Z0-9_]+","status":"FAILED"\}$|^ERROR:' \
+                "$session_log" 2>/dev/null || true
               echo 'real_media_canary_run=false'
               echo 'drive_write_performed=false'
               echo 'automatic_batch_release=false'
@@ -154,57 +168,66 @@ jobs:
           }
           trap bounded_failure ERR
 
-          "${s[@]}" "sudo -n env UNIVERSAL_VIDEO_GIT_REF='$EXACT_SHA' \
-            UNIVERSAL_VIDEO_ACTIVATE=0 UNIVERSAL_VIDEO_PREWARM_MODEL=1 \
-            UNIVERSAL_VIDEO_RUN_SMOKE=0 UNIVERSAL_VIDEO_SOURCE_ONLY=1 bash -s" \
-            < "$RUNNER_TEMP/prepare.sh" > "$RUNNER_TEMP/prepare.log" 2>&1
-          grep -Fx UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS "$RUNNER_TEMP/prepare.log"
-          test "$("${s[@]}" 'sudo -n git -C /opt/bridge-school/universal-video-src rev-parse HEAD')" = "$EXACT_SHA"
+          "${s[@]}" "umask 077; rm -rf '$remote_stage'; mkdir -m 0700 '$remote_stage'"
+          "${c[@]}" "$RUNNER_TEMP/prepare.sh" "$ORACLE_USER@$ORACLE_HOST:$remote_stage/prepare.sh"
+          "${c[@]}" "$RUNNER_TEMP/attest.sh" "$ORACLE_USER@$ORACLE_HOST:$remote_stage/attest.sh"
+          prepare_sha="$(sha256sum "$RUNNER_TEMP/prepare.sh" | awk '{print $1}')"
+          attest_sha="$(sha256sum "$RUNNER_TEMP/attest.sh" | awk '{print $1}')"
+          "${s[@]}" "set -e; \
+            test \"\$(sha256sum '$remote_stage/prepare.sh' | awk '{print \$1}')\" = '$prepare_sha'; \
+            test \"\$(sha256sum '$remote_stage/attest.sh' | awk '{print \$1}')\" = '$attest_sha'; \
+            sudo -n install -d -o root -g root -m 0700 '$remote_root'; \
+            sudo -n install -o root -g root -m 0700 '$remote_stage/prepare.sh' '$remote_root/prepare.sh'; \
+            sudo -n install -o root -g root -m 0700 '$remote_stage/attest.sh' '$remote_root/attest.sh'"
 
-          "${s[@]}" 'sudo -n env UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=0 \
-            UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB=5242880 \
-            bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_install.sh' \
-            > "$RUNNER_TEMP/container.log" 2>&1
-          grep -E "^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} activated=0$" \
-            "$RUNNER_TEMP/container.log"
-
+          set +e
           "${s[@]}" "sudo -n env \
+            UNIVERSAL_VIDEO_EXPECTED_SHA='$EXACT_SHA' \
+            UNIVERSAL_VIDEO_PREPARE_SCRIPT='$remote_root/prepare.sh' \
+            UNIVERSAL_VIDEO_PRECANARY_BUILD_IMAGE=1 \
+            UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB=5242880 \
+            UNIVERSAL_VIDEO_RECLAIM_ROOT_CACHE=1 \
             UNIVERSAL_VIDEO_CANARY_FILE_ID='198-2v3JBlNQobdsPYQQWzrrCqQ1zBZOI' \
             UNIVERSAL_VIDEO_CANARY_NAME='Диана 13.mp4' \
             UNIVERSAL_VIDEO_CANARY_MIME='video/mp4' \
             UNIVERSAL_VIDEO_CANARY_SIZE='696237577' \
             UNIVERSAL_VIDEO_CANARY_PARENT='1Fr-H2NgBKEpp3q_H4FzNmQwCV6bj2x6b' \
-            bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_precanary_attest.sh" \
-            > "$RUNNER_TEMP/precanary.log" 2>&1
-          grep -E "^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$" \
-            "$RUNNER_TEMP/precanary.log"
+            bash '$remote_root/attest.sh'" > "$session_log" 2>&1
+          session_rc=$?
+          set -e
+          (( session_rc == 0 )) || return "$session_rc"
 
-          installed_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) activated=0$/\\1/p" "$RUNNER_TEMP/container.log")"
-          attested_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$/\\1/p" "$RUNNER_TEMP/precanary.log")"
+          grep -E "^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} activated=0$" "$session_log"
+          grep -E "^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$" "$session_log"
+          installed_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) activated=0$/\\1/p" "$session_log")"
+          attested_digest="$(sed -nE "s/^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=(sha256:[0-9a-f]{64}) video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$/\\1/p" "$session_log")"
           [[ "$installed_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "$attested_digest" == "$installed_digest" ]]
-          grep -F '"gate":"IMPORT_CLOSURE"' "$RUNNER_TEMP/precanary.log"
-          grep -F '"gate":"SYNTHETIC_RESULT_CONTRACT"' "$RUNNER_TEMP/precanary.log"
-          grep -F '"gate":"SOURCE_IDENTITY_METADATA_ONLY"' "$RUNNER_TEMP/precanary.log"
-          grep -F '"file_id":"198-2v3JBlNQobdsPYQQWzrrCqQ1zBZOI"' "$RUNNER_TEMP/precanary.log"
-          grep -F '"source_media_downloaded":false' "$RUNNER_TEMP/precanary.log"
+          grep -F '"gate":"IMPORT_CLOSURE"' "$session_log"
+          grep -F '"gate":"SYNTHETIC_RESULT_CONTRACT"' "$session_log"
+          grep -F '"gate":"SOURCE_IDENTITY_METADATA_ONLY"' "$session_log"
+          grep -F '"file_id":"198-2v3JBlNQobdsPYQQWzrrCqQ1zBZOI"' "$session_log"
+          grep -F '"checksum_type":"md5"' "$session_log"
+          grep -F '"checksum_value":"b6ebeec5be5909d00d3902c92c380b07"' "$session_log"
+          grep -F '"source_media_downloaded":false' "$session_log"
+          grep -E '^UNIVERSAL_VIDEO_PRECANARY_WINDOW .*workload_fence=exclusive .*services_quiescent=true .*restore_on_exit=true$' "$session_log"
 
           trap - ERR
-          cat "$RUNNER_TEMP/container.log" "$RUNNER_TEMP/precanary.log" > "$evidence"
           {
-            echo '## Issue #881 exact pre-canary evidence'
             echo "runtime_sha=$EXACT_SHA"
-            grep -E '^UNIVERSAL_VIDEO_CONTAINER_RESOURCE |^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS ' "$RUNNER_TEMP/container.log"
-            grep -E '^UNIVERSAL_VIDEO_PRECANARY_RUNTIME |^UNIVERSAL_VIDEO_PRECANARY_STATE |"gate":"(IMPORT_CLOSURE|SYNTHETIC_RESULT_CONTRACT|SOURCE_IDENTITY_METADATA_ONLY)"|^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS ' "$RUNNER_TEMP/precanary.log"
+            grep -E '^UNIVERSAL_VIDEO_(PRECANARY_WINDOW|CONTAINER_(RESOURCE|CLEANUP|INSTALL_PASS)|PRECANARY_(RUNTIME|STATE|ATTEST_PASS)) ' "$session_log"
+            grep -E '"gate":"(IMPORT_CLOSURE|SYNTHETIC_RESULT_CONTRACT|SOURCE_IDENTITY_METADATA_ONLY)"' "$session_log"
+            echo "image_digest=$installed_digest"
             echo 'real_media_canary_run=false'
             echo 'drive_write_performed=false'
             echo 'automatic_batch_release=false'
             echo 'canonical_promotion_allowed=false'
             echo 'publication_state=NOT_PUBLISHED'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } > "$evidence"
+          cat "$evidence" >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
-        if: github.event_name == 'workflow_dispatch' && always()
+        if: always()
         with:
           name: issue-881-precanary-${{ env.EXACT_SHA }}
           path: ${{ runner.temp }}/issue-881-attestation.txt
