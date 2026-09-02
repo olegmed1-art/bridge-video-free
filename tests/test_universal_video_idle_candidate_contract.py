@@ -43,7 +43,8 @@ def test_downstream_power_boundary_remains_exact_and_idle_gated():
     assert "options: [status, start, stop]" in text
     assert "idle_source_run_id:" in text
     assert "actions: read" in text
-    assert "group: oracle-instance-workload-mutation" in text
+    assert "oracle-instance-workload-mutation" in text
+    assert "oracle-instance-power-noop-{0}" in text
     assert "Revalidate automatic stop epoch" in text
     assert "gh api --paginate --slurp" in text
     assert "final_epoch_state" in text
@@ -78,7 +79,8 @@ def test_video_and_power_mutations_share_a_non_cancelling_lock():
     power = POWER.read_text(encoding="utf-8")
     assert "'oracle-instance-workload-mutation'" in video
     assert "oracle-universal-video-pr-{0}" in video
-    assert "group: oracle-instance-workload-mutation" in power
+    assert "oracle-instance-workload-mutation" in power
+    assert "oracle-instance-power-noop-{0}" in power
     for text in (video, power):
         assert "cancel-in-progress: false" in text
 
