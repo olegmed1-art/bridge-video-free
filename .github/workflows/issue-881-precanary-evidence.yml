@@ -1,0 +1,93 @@
+name: Issue 881 Exact Pre-Canary Evidence
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/issue-881-precanary-evidence.yml'
+      - 'deploy/oracle-universal-video/Dockerfile'
+      - 'ops/oracle_universal_video_container_install.sh'
+      - 'ops/oracle_universal_video_precanary_attest.sh'
+      - 'ops/oracle_universal_video_run_command.sh'
+      - 'universal_video/**'
+      - 'bridge_vision/**'
+      - 'bridge_contracts/**'
+      - 'database/**'
+      - 'bridge_*.py'
+      - 'route_drive_job_outputs.py'
+      - 'requirements-worker.txt'
+  workflow_dispatch:
+    inputs:
+      git_ref: {description: 'Pinned 40-character commit to attest', required: true, type: string}
+
+permissions: {contents: read}
+concurrency: {group: oracle-instance-workload-mutation, cancel-in-progress: false}
+
+jobs:
+  exact-precanary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      EXACT_SHA: ${{ github.event.pull_request.head.sha || inputs.git_ref || github.sha }}
+      INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
+      OCI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+      HOST_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with: {ref: '${{ env.EXACT_SHA }}', persist-credentials: false, fetch-depth: 0}
+      - name: Validate exact revision
+        run: |
+          set -euo pipefail
+          [[ "$EXACT_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXACT_SHA"
+          grep -Eq '^FROM python@sha256:[0-9a-f]{64}$' deploy/oracle-universal-video/Dockerfile
+          bash -n ops/oracle_universal_video_precanary_attest.sh
+          git show "$EXACT_SHA:ops/oracle_universal_video_run_command.sh" > "$RUNNER_TEMP/prepare.sh"
+          chmod 0700 "$RUNNER_TEMP/prepare.sh"
+      - name: Ensure Oracle is running
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -q oci-cli
+          u="$(printf '%s\n' "$OCI_USER"|sed -nE 's/^[[:space:]]*(user=)?(ocid1\.user\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p'|head -n1)"
+          f="$(printf '%s\n' "$OCI_FINGERPRINT"|sed -nE 's/^[[:space:]]*(fingerprint=)?([0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){15})[[:space:]]*$/\2/p'|head -n1)"
+          t="$(printf '%s\n' "$OCI_TENANCY"|sed -nE 's/^[[:space:]]*(tenancy=)?(ocid1\.tenancy\.[A-Za-z0-9._-]+)[[:space:]]*$/\2/p'|head -n1)"
+          [[ -n "$u" && -n "$f" && -n "$t" ]]
+          install -d -m 0700 "$RUNNER_TEMP/oci"; printf '%s\n' "$OCI_KEY" > "$RUNNER_TEMP/oci/key.pem"; chmod 0600 "$RUNNER_TEMP/oci/key.pem"
+          printf '[DEFAULT]\nuser=%s\nfingerprint=%s\ntenancy=%s\nregion=%s\nkey_file=%s\n' "$u" "$f" "$t" "$OCI_REGION" "$RUNNER_TEMP/oci/key.pem" > "$RUNNER_TEMP/oci/config"
+          state="$(oci --config-file "$RUNNER_TEMP/oci/config" compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
+          case "$state" in RUNNING);; STOPPED) oci --config-file "$RUNNER_TEMP/oci/config" compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null;; *) exit 1;; esac
+      - name: Pinned SSH
+        id: ssh
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"; ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$HOST_FINGERPRINT" "$known"
+          selected=''; for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi; done
+          [[ -n "$selected" ]]; key="$RUNNER_TEMP/id_oracle"; printf '%s\n' "${!selected}" > "$key"; chmod 0600 "$key"; ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"; echo "known=$known" >> "$GITHUB_OUTPUT"
+      - name: Build exact image and run metadata-only gates
+        run: |
+          set -euo pipefail
+          s=(ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          "${s[@]}" "sudo -n env UNIVERSAL_VIDEO_GIT_REF='$EXACT_SHA' UNIVERSAL_VIDEO_ACTIVATE=0 UNIVERSAL_VIDEO_PREWARM_MODEL=1 UNIVERSAL_VIDEO_RUN_SMOKE=0 UNIVERSAL_VIDEO_SOURCE_ONLY=1 bash -s" < "$RUNNER_TEMP/prepare.sh" > "$RUNNER_TEMP/prepare.log" 2>&1
+          grep -Fx UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS "$RUNNER_TEMP/prepare.log"
+          test "$("${s[@]}" 'sudo -n git -C /opt/bridge-school/universal-video-src rev-parse HEAD')" = "$EXACT_SHA"
+          "${s[@]}" 'sudo -n env UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=0 bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_install.sh' > "$RUNNER_TEMP/container.log" 2>&1
+          grep -E "^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} activated=0$" "$RUNNER_TEMP/container.log"
+          "${s[@]}" "sudo -n env UNIVERSAL_VIDEO_CANARY_FILE_ID='1Fs41f1U73-g4CL_xbrE-XjlCBGOp4jKT' UNIVERSAL_VIDEO_CANARY_NAME='test_short_1.mp4' UNIVERSAL_VIDEO_CANARY_MIME='video/mp4' UNIVERSAL_VIDEO_CANARY_SIZE='12339062' UNIVERSAL_VIDEO_CANARY_PARENT='1NjC-EbZwEQ_TSuFeVMx3gY7QBex2cAE6' bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_precanary_attest.sh" > "$RUNNER_TEMP/precanary.log" 2>&1
+          grep -E "^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS commit=$EXACT_SHA image_digest=sha256:[0-9a-f]{64} video_job_submitted=false drive_write_performed=false canonical_promotion_allowed=false publication_state=NOT_PUBLISHED$" "$RUNNER_TEMP/precanary.log"
+          cat "$RUNNER_TEMP/container.log" "$RUNNER_TEMP/precanary.log" > "$RUNNER_TEMP/issue-881-attestation.txt"
+          { echo '## Issue #881 exact pre-canary evidence'; echo "runtime_sha=$EXACT_SHA"; grep -E '^UNIVERSAL_VIDEO_CONTAINER_RESOURCE |^UNIVERSAL_VIDEO_CONTAINER_INSTALL_PASS ' "$RUNNER_TEMP/container.log"; grep -E '^UNIVERSAL_VIDEO_PRECANARY_RUNTIME |^UNIVERSAL_VIDEO_PRECANARY_STATE |"gate":"(IMPORT_CLOSURE|SYNTHETIC_RESULT_CONTRACT|SOURCE_IDENTITY_METADATA_ONLY)"|^UNIVERSAL_VIDEO_PRECANARY_ATTEST_PASS ' "$RUNNER_TEMP/precanary.log"; echo 'real_media_canary_run=false'; echo 'automatic_batch_release=false'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with: {name: 'issue-881-precanary-${{ env.EXACT_SHA }}', path: '${{ runner.temp }}/issue-881-attestation.txt', if-no-files-found: error, retention-days: 14}

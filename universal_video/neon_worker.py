@@ -12,6 +12,7 @@ from typing import Any, Callable, Iterator, Mapping
 from bridge_worker_3_1_free import stable_job_id
 
 from .drive_adapter import access_token, file_metadata
+from .result_contract import verify_drive_result_contract
 from .runtime_preflight import validate_video_runtime
 from .video_queue import claim_job, database_url_from_env, finish_job, heartbeat_job, retry_job
 
@@ -123,8 +124,6 @@ def _stable_environment(claim: Mapping[str, Any]) -> Iterator[None]:
     keys = set(values) | {"BRIDGE_WORKER_DATABASE_URL"}
     previous = {key: os.environ.get(key) for key in keys}
     os.environ.update(values)
-    # The stable algorithm has a legacy optional persistence hook. Queue runs
-    # are explicitly review-only, so that credential is hidden for the call.
     os.environ.pop("BRIDGE_WORKER_DATABASE_URL", None)
     try:
         yield
@@ -138,6 +137,7 @@ def _stable_environment(claim: Mapping[str, Any]) -> Iterator[None]:
 
 def stable_review_processor(claim: Mapping[str, Any]) -> dict[str, Any]:
     token = access_token()
+    # This is intentionally the last source operation before processing.
     verify_claimed_source(claim, token)
     with _stable_environment(claim):
         import bridge_runtime_hardening_r25_16 as hardening
@@ -154,10 +154,13 @@ def stable_review_processor(claim: Mapping[str, Any]) -> dict[str, Any]:
             raise NeonVideoWorkerError("VIDEO_QUEUE_AI_DONE_MISMATCH")
         if route_drive_job_outputs.main() != 0:
             raise NeonVideoWorkerError("VIDEO_QUEUE_OUTPUT_ROUTE_FAILED")
+
+    # PASS remains impossible until the uploaded PDF is downloaded from Drive,
+    # byte-checked, re-read as metadata, and bound into a manifest/receipt.
+    contract = verify_drive_result_contract(claim, done, token=token)
     master_pdf = done.get("masterPdf") if isinstance(done.get("masterPdf"), dict) else {}
     return {
-        "master_pdf_drive_id": master_pdf.get("driveId"),
-        "master_pdf_sha256": master_pdf.get("sha256"),
+        **contract,
         "master_pdf_pages": master_pdf.get("pages"),
         "deal_review_pages": master_pdf.get("dealReviewPages"),
         "speech_segment_count": (done.get("speech") or {}).get("segmentCount"),

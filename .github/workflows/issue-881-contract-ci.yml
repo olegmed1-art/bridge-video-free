@@ -1,0 +1,67 @@
+name: Issue 881 Exact Canary Contract CI
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/issue-881-contract-ci.yml'
+      - 'universal_video/**'
+      - 'database/migrations/0056_universal_video_queue.sql'
+      - 'database/migrations/0057_universal_video_canary_review_gate.sql'
+      - 'database/tests/042_issue_881_canary_gate.sql'
+      - 'tests/test_universal_video_issue_881_readiness.py'
+      - 'deploy/oracle-universal-video/Dockerfile'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  EXACT_RUNTIME_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  python-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXACT_RUNTIME_SHA }}
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "$EXACT_RUNTIME_SHA"
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install -q pytest requests google-auth psycopg[binary]
+      - name: Exact image and fail-closed recovery contracts
+        run: |
+          grep -Eq '^FROM python@sha256:[0-9a-f]{64}$' deploy/oracle-universal-video/Dockerfile
+          python -m pytest -q tests/test_universal_video_issue_881_readiness.py
+          python -m compileall -q universal_video
+
+  database-contract:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16.4-bookworm
+        env: {POSTGRES_PASSWORD: postgres, POSTGRES_DB: issue881}
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres -d issue881"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env: {PGHOST: localhost, PGPORT: 5432, PGUSER: postgres, PGPASSWORD: postgres, PGDATABASE: issue881}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.EXACT_RUNTIME_SHA }}
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "$EXACT_RUNTIME_SHA"
+      - name: Install exact queue schema
+        run: |
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE bridge_school_reader NOLOGIN;
+          CREATE ROLE bridge_school_app NOLOGIN;
+          CREATE ROLE bridge_school_worker NOLOGIN;
+          CREATE TABLE schema_migration (migration_key text PRIMARY KEY);
+          SQL
+          psql -v ON_ERROR_STOP=1 -f database/migrations/0056_universal_video_queue.sql
+          psql -v ON_ERROR_STOP=1 -f database/migrations/0057_universal_video_canary_review_gate.sql
+      - name: Prove no false PASS and no automatic batch release
+        run: psql -v ON_ERROR_STOP=1 -f database/tests/042_issue_881_canary_gate.sql
