@@ -113,6 +113,7 @@ def test_registration_restores_0309_and_applies_only_forward_upgrade_before_ingr
     upgrade_bytes = upgrade_path.read_bytes()
     upgrade = upgrade_bytes.decode()
     workflow = _read(".github/workflows/autopilot-uv-p1-register-v3.yml")
+    chain_invariants = _read("database/tests/308_autopilot_uv_p1_bounded_ingress.sql")
 
     assert hashlib.sha256(historical).hexdigest() == (
         "14db4783f63375e79f8340be4c6f26ff27211eb0f920deec8455777098343422"
@@ -144,6 +145,8 @@ def test_registration_restores_0309_and_applies_only_forward_upgrade_before_ingr
     assert 'git hash-object database/migrations/0313_autopilot_uv_p1_allowlist_upgrade.sql' in workflow
     assert '[[ "$migration_0313" == t && "$checksum_0313" == "$EXPECTED_0313_SHA256" ]]' in workflow
     assert "uv-p1-intake-pr1000-5af0675a-20260901" not in upgrade
+    assert "uv-p1-canary-pr1062-79aec3f732fd-20260902" in chain_invariants
+    assert "uv-p1-canary-pr1062-8aa4f80b8d20-20260902" not in chain_invariants
     apply_step = workflow.index("Apply and verify only forward migration 0314")
     register_step = workflow.index("Register and observe through runtime-only ingress")
     assert apply_step < register_step

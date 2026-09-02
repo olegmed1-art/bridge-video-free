@@ -76,7 +76,7 @@ BEGIN
 
     BEGIN
         PERFORM * FROM autopilot.register_approved_uv_p1_ci(
-            'uv-p1-canary-pr1062-8aa4f80b8d20-20260902'
+            'uv-p1-canary-pr1062-79aec3f732fd-20260902'
         );
         RAISE EXCEPTION 'AUTOPILOT_UV_P1_ACTIVE_LIMIT_BYPASSED';
     EXCEPTION WHEN OTHERS THEN
@@ -91,7 +91,7 @@ BEGIN
 
     SELECT * INTO canary_row
       FROM autopilot.register_approved_uv_p1_ci(
-          'uv-p1-canary-pr1062-8aa4f80b8d20-20260902'
+          'uv-p1-canary-pr1062-79aec3f732fd-20260902'
       );
     IF NOT canary_row.created THEN
         RAISE EXCEPTION 'AUTOPILOT_UV_P1_SECOND_CREATE_FAILED';
