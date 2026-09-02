@@ -17,14 +17,22 @@ PARENT="${UNIVERSAL_VIDEO_CANARY_PARENT:?missing exact canary parent}"
 die(){ printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 declare -a added_runtime_masks=()
+declare -a stopped_services=()
 cleanup(){
   local rc=$? service cleanup_failed=0
   trap - EXIT
   for service in "${added_runtime_masks[@]}"; do
     systemctl unmask --runtime "$service" >/dev/null 2>&1 || cleanup_failed=1
   done
+  if [[ -e /proc/$$/fd/9 ]]; then
+    flock --unlock 9 >/dev/null 2>&1 || cleanup_failed=1
+  fi
+  for service in "${stopped_services[@]}"; do
+    systemctl start "$service" >/dev/null 2>&1 || cleanup_failed=1
+    systemctl is-active --quiet "$service" >/dev/null 2>&1 || cleanup_failed=1
+  done
   if (( cleanup_failed != 0 && rc == 0 )); then
-    printf 'ERROR: failed to restore runtime service masks\n' >&2
+    printf 'ERROR: failed to restore prior service state\n' >&2
     rc=1
   fi
   exit "$rc"
@@ -50,6 +58,33 @@ assert_quiescent(){
   if find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit | grep -q .; then
     die 'a video job is active'
   fi
+}
+
+quiesce_service(){
+  local service="$1" state="$2" enabled_state
+  case "$state" in
+    active|activating|reloading)
+      enabled_state="$(systemctl is-enabled "$service" 2>/dev/null || true)"
+      case "$enabled_state" in
+        masked|masked-runtime) die "$service is active but masked and cannot be restored safely" ;;
+      esac
+      systemctl stop "$service"
+      stopped_services+=("$service")
+      ;;
+    inactive|failed) ;;
+    *) die "$service state is unavailable: ${state:-unknown}" ;;
+  esac
+}
+
+quiesce_residents(){
+  local source_state container_state active_count=0
+  source_state="$(service_state "$SOURCE_SERVICE")"
+  container_state="$(service_state "$CONTAINER_SERVICE")"
+  case "$source_state" in active|activating|reloading) active_count=$((active_count + 1));; inactive|failed) ;; *) die "$SOURCE_SERVICE state is unavailable: ${source_state:-unknown}" ;; esac
+  case "$container_state" in active|activating|reloading) active_count=$((active_count + 1));; inactive|failed) ;; *) die "$CONTAINER_SERVICE state is unavailable: ${container_state:-unknown}" ;; esac
+  (( active_count <= 1 )) || die 'both Universal Video residents are active; refusing ambiguous restore'
+  quiesce_service "$SOURCE_SERVICE" "$source_state"
+  quiesce_service "$CONTAINER_SERVICE" "$container_state"
 }
 
 mask_service_for_window(){
@@ -79,9 +114,10 @@ verify_image_identity(){
 command -v flock >/dev/null || die 'flock is unavailable'
 [[ -d "$BASE_DIR/spool" && ! -L "$BASE_DIR/spool" ]] || die 'unsafe or missing spool mount'
 [[ -d "$BASE_DIR/spool/running" && ! -L "$BASE_DIR/spool/running" ]] || die 'unsafe or missing running spool'
-assert_quiescent
+quiesce_residents
 mask_service_for_window "$SOURCE_SERVICE"
 mask_service_for_window "$CONTAINER_SERVICE"
+assert_quiescent
 
 if [[ -L "$WORKLOAD_LOCK" || ( -e "$WORKLOAD_LOCK" && ! -f "$WORKLOAD_LOCK" ) ]]; then
   die 'unsafe workload lock'

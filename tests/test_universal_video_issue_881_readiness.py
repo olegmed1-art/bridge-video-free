@@ -96,6 +96,14 @@ def test_precanary_fences_services_claims_and_uses_captured_image_id():
     run_image=script[script.index("run_image(){"):script.index("verify_image_identity\nprintf",script.index("run_image(){"))]
     assert 'mask_service_for_window "$SOURCE_SERVICE"' in script
     assert 'mask_service_for_window "$CONTAINER_SERVICE"' in script
+    assert 'quiesce_residents' in script
+    assert 'quiesce_service "$SOURCE_SERVICE" "$source_state"' in script
+    assert 'quiesce_service "$CONTAINER_SERVICE" "$container_state"' in script
+    assert "active but masked and cannot be restored safely" in script
+    assert "both Universal Video residents are active; refusing ambiguous restore" in script
+    assert 'stopped_services+=("$service")' in script
+    assert 'systemctl start "$service"' in script
+    assert 'systemctl is-active --quiet "$service"' in script
     assert "flock --exclusive --nonblock 9" in script
     assert '"$image_id" "$@"' in run_image and '"$image" "$@"' not in run_image
     assert 'org.opencontainers.image.revision' in script
@@ -105,6 +113,20 @@ def test_precanary_fences_services_claims_and_uses_captured_image_id():
     neon_worker_source=(ROOT/"universal_video/neon_worker.py").read_text(encoding="utf-8")
     assert "with shared_workload_lock(spool_root):" in source_worker
     assert "with shared_workload_lock():" in neon_worker_source
+
+
+def test_installer_readiness_and_service_pin_use_captured_image_id():
+    installer=(ROOT/"ops/oracle_universal_video_container_install.sh").read_text(encoding="utf-8")
+    captured=installer.index('image_id="$(docker image inspect')
+    readiness=installer.index("Run container-only readiness gate")
+    readiness_run=installer.index("docker run --rm",readiness)
+    install_unit=installer.index('install -m 0644',readiness_run)
+    readiness_block=installer[readiness:install_unit]
+    assert 'UNIVERSAL_VIDEO_IMAGE=$image_id' in installer[captured:readiness]
+    assert 'verify_image_identity' in readiness_block
+    assert 'org.opencontainers.image.revision' in installer[captured:readiness]
+    assert '"$image_id" true' in readiness_block
+    assert '"$image" true' not in readiness_block
 
 
 def test_external_precanary_is_manual_and_compares_install_digest():
