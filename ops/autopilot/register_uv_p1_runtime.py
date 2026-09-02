@@ -27,25 +27,30 @@ PROJECT_ID: Final[str] = os.environ["PROJECT_ID"]
 TEMP_BRANCH_ID: Final[str] = os.environ["TEMP_BRANCH_ID"]
 PRODUCTION_BRANCH_ID: Final[str] = os.environ["PRODUCTION_BRANCH_ID"]
 TEMP_ENDPOINT_ID: Final[str] = os.environ["TEMP_ENDPOINT_ID"]
+LIVE_HEADS: Final[dict[int, str]] = {
+    997: os.environ["LIVE_RUNTIME_HEAD_SHA"],
+    1062: os.environ["LIVE_CANARY_HEAD_SHA"],
+    1047: os.environ["LIVE_IDLE_HEAD_SHA"],
+}
 
 APPROVED: Final[tuple[tuple[str, str, int, str], ...]] = (
     (
         "RUNTIME",
-        "uv-p1-runtime-pr997-545ef013-20260901",
+        "uv-p1-runtime-pr997-17b74b86b309-20260902",
         997,
-        "545ef0135e3cfe436b918c3ec26f5e2b77500977",
+        "17b74b86b30905f61a47e578b77d18c940691fed",
     ),
     (
-        "INTAKE",
-        "uv-p1-intake-pr1000-5af0675a-20260901",
-        1000,
-        "5af0675a9e13a9725348661be297abc5f52ff0e4",
+        "CANARY",
+        "uv-p1-canary-pr1062-164d0d509fa3-20260902",
+        1062,
+        "164d0d509fa38fdbe81592201699b1a377187eb0",
     ),
     (
         "IDLE",
-        "uv-p1-idle-pr1047-621ab073-20260901",
+        "uv-p1-idle-pr1047-e8e71b569f81-20260902",
         1047,
-        "621ab073418b3f3d1b75cb6abb074dba4ea305cb",
+        "e8e71b569f8189dd0e2a88a07597a4098a772a74",
     ),
 )
 TERMINAL: Final[set[str]] = {
@@ -250,9 +255,23 @@ def _register(connection: psycopg.Connection[tuple], task_key: str) -> tuple[str
     return str(row[0]), str(row[1]), bool(row[2])
 
 
+def _verify_live_heads() -> None:
+    """Reject stale immutable task keys before any database connection."""
+    for label, _task_key, pr_number, expected_head in APPROVED:
+        live_head = LIVE_HEADS.get(pr_number, "")
+        if not re.fullmatch(r"[0-9a-f]{40}", live_head):
+            raise RuntimeError(f"AUTOPILOT_UV_P1_{label}_LIVE_HEAD_INVALID")
+        if live_head != expected_head:
+            print(f"UV_P1_{label}_EXPECTED_HEAD={expected_head}", flush=True)
+            print(f"UV_P1_{label}_LIVE_HEAD={live_head}", flush=True)
+            raise RuntimeError(f"AUTOPILOT_UV_P1_{label}_APPROVAL_STALE")
+        print(f"UV_P1_{label}_LIVE_HEAD_VERIFIED={live_head}", flush=True)
+
+
 def main() -> int:
     deadline = time.monotonic() + 1_800
     receipts: list[dict[str, object]] = []
+    _verify_live_heads()
     connection = _connect_runtime()
     try:
         for label, task_key, pr_number, expected_head in APPROVED:

@@ -1,0 +1,250 @@
+name: Autopilot Universal Video runtime exact-image gate
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths:
+      - '.github/workflows/autopilot-uv-runtime-exact-image-gate.yml'
+      - 'ops/verify_uv_runtime_pr_gate.sh'
+      - 'ops/oracle_universal_video_container_build_preflight.sh'
+  workflow_dispatch:
+    inputs:
+      allow_oracle_image_build:
+        description: 'Explicitly authorize one non-activated Oracle image build'
+        required: true
+        type: choice
+        default: 'NO'
+        options: ['NO', 'YES']
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+  checks: read
+
+concurrency:
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  exact-image:
+    if: github.repository == 'olegmed1-art/bridge-video-free' && github.event_name == 'workflow_dispatch' && inputs.allow_oracle_image_build == 'YES'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: olegmed1-art/bridge-video-free
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_HOST_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - name: Checkout coordinator source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Wait for exact-head CI and independent review
+        id: gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          final_head=''; final_branch=''; final_unresolved=-1; final_ci='UNKNOWN'; final_review='UNKNOWN'
+          for _ in $(seq 1 36); do
+            gate="$(UV_GATE_PR_NUMBER=997 bash ops/verify_uv_runtime_pr_gate.sh)"
+            final_head="$(sed -n 's/^head=//p' <<<"$gate")"
+            final_branch="$(sed -n 's/^branch=//p' <<<"$gate")"
+            final_ci="$(sed -n 's/^ci=//p' <<<"$gate")"
+            final_review="$(sed -n 's/^review=//p' <<<"$gate")"
+            final_unresolved="$(sed -n 's/^unresolved=//p' <<<"$gate")"
+            [[ "$final_head" =~ ^[0-9a-f]{40}$ && "$final_branch" =~ ^[A-Za-z0-9._/-]{1,240}$ ]]
+            if [[ "$final_ci" == PASS && "$final_review" == PASS ]]; then break; fi
+            sleep 60
+          done
+          echo "head=$final_head" >> "$GITHUB_OUTPUT"
+          echo "branch=$final_branch" >> "$GITHUB_OUTPUT"
+          echo "ci=$final_ci" >> "$GITHUB_OUTPUT"
+          echo "review=$final_review" >> "$GITHUB_OUTPUT"
+          echo "unresolved=$final_unresolved" >> "$GITHUB_OUTPUT"
+          if [[ "$final_ci" != PASS || "$final_review" != PASS ]]; then
+            body=$(cat <<EOF
+          ## Runtime exact-image gate — WAITING_EXTERNAL
+
+          - PR #997 exact head: \`$final_head\`
+          - exclusive writer: \`$final_branch\`
+          - CI: \`$final_ci\`
+          - latest-head independent review: \`$final_review\`
+          - unresolved review threads: \`$final_unresolved\`
+          - image build: **NOT STARTED**
+          - Oracle lifecycle / media / Drive / production mutation: **NO**
+
+          The gate remains fail-closed and may be retried after CI/review changes; no Director continuation command is required by the task contract.
+          EOF
+            )
+            gh api "repos/$REPOSITORY/issues/946/comments" --method POST -f body="$body" >/dev/null
+            exit 78
+          fi
+          echo 'UV_RUNTIME_EXACT_HEAD_GATE=PASS'
+
+      - name: Establish pinned SSH transport without starting or restarting Oracle
+        id: ssh
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_HOST_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            [[ -n "${!name:-}" ]] || continue
+            selected="$name"; break
+          done
+          [[ -n "$selected" ]] || { echo 'UV_RUNTIME_SSH_KEY_MISSING'; exit 79; }
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"; chmod 0600 "$key"; ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"; echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo 'ORACLE_LIFECYCLE_ACTION=NO'
+
+      - name: Check Oracle resource availability and active-work exclusions
+        id: resources
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh_base=(ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          "${ssh_base[@]}" 'sudo -n bash -s' > "$RUNNER_TEMP/resource.txt" <<'REMOTE'
+          set -Eeuo pipefail
+          mem_kb="$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)"
+          disk_kb="$(df -Pk /opt/bridge-school 2>/dev/null | awk 'NR==2{print $4}')"
+          cores="$(getconf _NPROCESSORS_ONLN)"
+          load1="$(awk '{print $1}' /proc/loadavg)"
+          [[ "$mem_kb" =~ ^[0-9]+$ && "$disk_kb" =~ ^[0-9]+$ && "$cores" =~ ^[1-9][0-9]*$ && "$load1" =~ ^[0-9]+([.][0-9]+)?$ ]]
+          heavy="$(pgrep -fa 'docker build|buildkit|ffmpeg|whisper|tesseract|train(_|ing)?|dds3|ben' 2>/dev/null | grep -vE 'pgrep|grep' | wc -l)"
+          spool_busy=0
+          for dir in /opt/bridge-school/universal-video/spool/inbox /opt/bridge-school/universal-video/spool/running; do
+            [[ -d "$dir" ]] || continue
+            find "$dir" -mindepth 1 -maxdepth 1 -type f -print -quit | grep -q . && spool_busy=1
+          done
+          allowed="$(MEM="$mem_kb" DISK="$disk_kb" CORES="$cores" LOAD="$load1" HEAVY="$heavy" SPOOL="$spool_busy" python3 - <<'PY'
+          import os
+          mem=int(os.environ['MEM']); disk=int(os.environ['DISK']); cores=int(os.environ['CORES']); load=float(os.environ['LOAD']); heavy=int(os.environ['HEAVY']); spool=int(os.environ['SPOOL'])
+          print('YES' if mem >= 8*1024*1024 and disk >= 12*1024*1024 and load <= max(1.0, cores*0.75) and heavy == 0 and spool == 0 else 'NO')
+          PY
+          )"
+          echo "UV_RESOURCE_MEM_AVAILABLE_KB=$mem_kb"
+          echo "UV_RESOURCE_DISK_AVAILABLE_KB=$disk_kb"
+          echo "UV_RESOURCE_CPU_CORES=$cores"
+          echo "UV_RESOURCE_LOAD1=$load1"
+          echo "UV_RESOURCE_HEAVY_PROCESS_COUNT=$heavy"
+          echo "UV_RESOURCE_SPOOL_BUSY=$spool_busy"
+          echo "UV_RESOURCE_BUILD_ALLOWED=$allowed"
+          REMOTE
+          cat "$RUNNER_TEMP/resource.txt"
+          allowed="$(sed -nE 's/^UV_RESOURCE_BUILD_ALLOWED=(YES|NO)$/\1/p' "$RUNNER_TEMP/resource.txt" | tail -n1)"
+          echo "allowed=$allowed" >> "$GITHUB_OUTPUT"
+          if [[ "$allowed" != YES ]]; then
+            body=$(cat <<EOF
+          ## Runtime exact-image resource gate — WAITING_EXTERNAL
+
+          PR #997 head \`${{ steps.gate.outputs.head }}\` passed CI/review, but the Oracle resource gate did not prove safe capacity. Image build was not started.
+
+          \`$(tr '\n' ' ' < "$RUNNER_TEMP/resource.txt")\`
+
+          No Oracle lifecycle action, media execution, Drive write, or production mutation occurred.
+          EOF
+            )
+            gh api "repos/$REPOSITORY/issues/946/comments" --method POST -f body="$body" >/dev/null
+            exit 80
+          fi
+
+      - name: Revalidate live gates immediately before image build
+        env:
+          EXPECTED_HEAD_SHA: ${{ steps.gate.outputs.head }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          gate="$(UV_GATE_PR_NUMBER=997 bash ops/verify_uv_runtime_pr_gate.sh)"
+          grep -Fx "head=$EXPECTED_HEAD_SHA" <<<"$gate" >/dev/null
+          grep -Fx 'ci=PASS' <<<"$gate" >/dev/null
+          grep -Fx 'review=PASS' <<<"$gate" >/dev/null
+          grep -Fx 'unresolved=0' <<<"$gate" >/dev/null
+          grep -Fx 'changes_requested=0' <<<"$gate" >/dev/null
+          echo 'UV_RUNTIME_LAST_SECOND_GATE=PASS'
+
+      - name: Prepare isolated source and build non-activated image with import preflight
+        id: build
+        env:
+          REF: ${{ steps.gate.outputs.head }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ "$REF" =~ ^[0-9a-f]{40}$ ]]
+          build_script="$RUNNER_TEMP/container-build-preflight.sh"
+          install -m 0700 ops/oracle_universal_video_container_build_preflight.sh "$build_script"
+          ssh_base=(ssh -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          remote_script="/tmp/uv-container-build-preflight-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sh"
+          scp -i "${{ steps.ssh.outputs.key }}" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="${{ steps.ssh.outputs.known }}" \
+            -o ConnectTimeout=15 "$build_script" "$ORACLE_USER@$ORACLE_HOST:$remote_script"
+          "${ssh_base[@]}" "sudo -n env EXPECTED_COMMIT='$REF' BUILD_SCRIPT='$remote_script' REPO_URL='https://github.com/olegmed1-art/bridge-video-free.git' bash -s" \
+            > "$RUNNER_TEMP/container.log" 2>&1 <<'REMOTE'
+          set -Eeuo pipefail
+          [[ "$EXPECTED_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$BUILD_SCRIPT" == /tmp/uv-container-build-preflight-* && -f "$BUILD_SCRIPT" && ! -L "$BUILD_SCRIPT" ]]
+          stage="$(mktemp -d /opt/bridge-school/.universal-video-image-build.XXXXXX)"
+          cleanup(){ rm -rf -- "$stage" "$BUILD_SCRIPT"; }
+          trap cleanup EXIT
+          git clone --quiet --no-tags --filter=blob:none "$REPO_URL" "$stage/source"
+          git -C "$stage/source" fetch --quiet --no-tags origin "$EXPECTED_COMMIT"
+          git -C "$stage/source" checkout --quiet --detach "$EXPECTED_COMMIT"
+          [[ "$(git -C "$stage/source" rev-parse HEAD)" == "$EXPECTED_COMMIT" ]]
+          env UNIVERSAL_VIDEO_BUILD_SOURCE_DIR="$stage/source" \
+            UNIVERSAL_VIDEO_EXPECTED_COMMIT="$EXPECTED_COMMIT" \
+            bash "$BUILD_SCRIPT"
+          REMOTE
+          receipt="$(grep -E '^UNIVERSAL_VIDEO_CONTAINER_BUILD_PREFLIGHT_PASS commit=[0-9a-f]{40} image_digest=sha256:[0-9a-f]{64} activated=0 lifecycle_action=0$' "$RUNNER_TEMP/container.log" | tail -n1)"
+          [[ -n "$receipt" ]]
+          commit="$(sed -nE 's/.* commit=([0-9a-f]{40}).*/\1/p' <<<"$receipt")"
+          digest="$(sed -nE 's/.* image_digest=(sha256:[0-9a-f]{64}).*/\1/p' <<<"$receipt")"
+          [[ "$commit" == "$REF" ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "receipt=$receipt" >> "$GITHUB_OUTPUT"
+          echo 'REAL_MEDIA_EXECUTION=NO'
+          echo 'CONTAINER_ACTIVATED=NO'
+          echo 'ORACLE_LIFECYCLE_ACTION=NO'
+
+      - name: Publish runtime receipt
+        env:
+          REF: ${{ steps.gate.outputs.head }}
+          BRANCH: ${{ steps.gate.outputs.branch }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          digest="${DIGEST:-$(sed -nE 's/.* image_digest=(sha256:[0-9a-f]{64}).*/\1/p' "$RUNNER_TEMP/container.log" | tail -n1)}"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          body=$(cat <<EOF
+          ## RUNTIME_READY_FOR_SYNTHETIC receipt
+
+          - PR #997 exact head: \`$REF\`
+          - exclusive writer: \`$BRANCH\`
+          - exact-head CI: **PASS**
+          - exact-head independent review and resolved threads: **PASS**
+          - Oracle resource gate: **PASS**
+          - exact image digest: \`$digest\`
+          - container activation: **NO**
+          - real media execution: **NO**
+          - Drive write / production routing / merge / Oracle lifecycle action: **NO**
+
+          Terminal: \`RUNTIME_READY_FOR_SYNTHETIC\`. This receipt does not authorize a canary.
+          EOF
+          )
+          gh api "repos/$REPOSITORY/issues/946/comments" --method POST -f body="$body" >/dev/null
+          gh api "repos/$REPOSITORY/issues/881/comments" --method POST -f body="$body" >/dev/null
+          echo 'UV_RUNTIME_RECEIPT_PUBLISHED=PASS'

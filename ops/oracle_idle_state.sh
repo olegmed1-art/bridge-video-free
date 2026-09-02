@@ -15,13 +15,19 @@ set -Eeuo pipefail
 LAB_DIR="${ASSISTANT_LAB_DIR:-/opt/bridge-school/assistant-lab}"
 LAB_ENV="${ASSISTANT_LAB_ENV_FILE:-$LAB_DIR/assistant-lab.env}"
 AUTOPILOT_ENV="${AUTOPILOT_ENV_FILE:-/opt/bridge-school/school-autopilot/autopilot-shadow.env}"
+OBSERVER_DIR="${ASSISTANT_LAB_OBSERVER_DIR:-/opt/bridge-school/assistant-lab-observer}"
+VIDEO_DIR="${UNIVERSAL_VIDEO_DIR:-/opt/bridge-school/universal-video}"
 PYTHON="${ASSISTANT_LAB_PYTHON:-$LAB_DIR/.venv/bin/python}"
 QUEUE_DSN_FILE="${BRIDGE_VIDEO_QUEUE_DSN_FILE:-/opt/bridge-school/universal-video/secrets/video-queue-dsn}"
 HOST_LEASE_FILE="${ORACLE_HOST_LEASE_FILE:-/run/bridge-school/oracle-host-lease}"
 MAX_SOURCE_AGE_SECONDS="${ORACLE_IDLE_MAX_SOURCE_AGE_SECONDS:-60}"
 MAX_FUTURE_SKEW_SECONDS="${ORACLE_IDLE_MAX_FUTURE_SKEW_SECONDS:-5}"
 MAX_HOST_LEASE_REMAINING_SECONDS="${ORACLE_IDLE_MAX_HOST_LEASE_REMAINING_SECONDS:-86400}"
-REQUIRED_LOCAL_SPOOLS="${ORACLE_IDLE_REQUIRED_LOCAL_SPOOLS:-$LAB_DIR/spool:$LAB_DIR/feedback-spool:/var/lib/bridge-school/uv-spool:/var/lib/bridge-school/feedback-spool}"
+# Only active leaves belong here. Universal Video terminal receipts under
+# done/failed/results/progress and Observer terminal jobs under done/failed are
+# durable evidence, not active work. The container mounts VIDEO_DIR/spool at
+# /var/lib/universal-video/spool, so the host proof must inspect the host path.
+REQUIRED_LOCAL_SPOOLS="${ORACLE_IDLE_REQUIRED_LOCAL_SPOOLS:-$LAB_DIR/spool:$LAB_DIR/feedback-spool:$VIDEO_DIR/spool/inbox:$VIDEO_DIR/spool/running:$OBSERVER_DIR/jobs/pending:$OBSERVER_DIR/jobs/running}"
 
 state="UNKNOWN"
 reason="unclassified"

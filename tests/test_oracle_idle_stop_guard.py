@@ -60,6 +60,23 @@ class ClassifierHarness:
         self.lease_file = self.root / "oracle-host-lease"
         self.spool = self.root / "spool"
         self.spool.mkdir()
+        self.video_inbox = self.root / "universal-video" / "spool" / "inbox"
+        self.video_running = (
+            self.root / "universal-video" / "spool" / "running"
+        )
+        self.observer_pending = (
+            self.root / "assistant-lab-observer" / "jobs" / "pending"
+        )
+        self.observer_running = (
+            self.root / "assistant-lab-observer" / "jobs" / "running"
+        )
+        for path in (
+            self.video_inbox,
+            self.video_running,
+            self.observer_pending,
+            self.observer_running,
+        ):
+            path.mkdir(parents=True)
 
     def close(self) -> None:
         self._temp.cleanup()
@@ -69,9 +86,9 @@ class ClassifierHarness:
         *,
         result: str = (
             "IDLE:jobs=0,research=0,research_children=0,"
-            "control=0,operator_lease=0,video=0"
+            "control=0,operator_lease=0,autopilot=0,video=0"
         ),
-        spool: Path | None = None,
+        spool: Path | str | None = None,
         observer_busy: bool = False,
         video_dsn_present: bool = True,
         env_present: bool = True,
@@ -129,6 +146,18 @@ class ClassifierHarness:
             capture_output=True,
             text=True,
             env=env,
+        )
+
+    @property
+    def active_work_spools(self) -> str:
+        return ":".join(
+            str(path)
+            for path in (
+                self.video_inbox,
+                self.video_running,
+                self.observer_pending,
+                self.observer_running,
+            )
         )
 
 
@@ -204,7 +233,7 @@ class OracleIdleClassifierTests(unittest.TestCase):
         completed = self.harness.run(
             result=(
                 "BUSY:jobs=1,research=0,research_children=0,"
-                "control=0,operator_lease=0,video=0"
+                "control=0,operator_lease=0,autopilot=0,video=0"
             )
         )
         self.assert_state(completed.stdout, "BUSY")
@@ -214,7 +243,7 @@ class OracleIdleClassifierTests(unittest.TestCase):
         completed = self.harness.run(
             result=(
                 "BUSY:jobs=0,research=0,research_children=0,"
-                "control=1,operator_lease=0,video=0"
+                "control=1,operator_lease=0,autopilot=0,video=0"
             )
         )
         self.assert_state(completed.stdout, "BUSY")
@@ -224,7 +253,7 @@ class OracleIdleClassifierTests(unittest.TestCase):
         completed = self.harness.run(
             result=(
                 "BUSY:jobs=0,research=1,research_children=0,"
-                "control=0,operator_lease=0,video=0"
+                "control=0,operator_lease=0,autopilot=0,video=0"
             )
         )
         self.assert_state(completed.stdout, "BUSY")
@@ -233,7 +262,7 @@ class OracleIdleClassifierTests(unittest.TestCase):
         completed = self.harness.run(
             result=(
                 "BUSY:jobs=0,research=0,research_children=1,"
-                "control=0,operator_lease=0,video=0"
+                "control=0,operator_lease=0,autopilot=0,video=0"
             )
         )
         self.assert_state(completed.stdout, "BUSY")
@@ -243,7 +272,7 @@ class OracleIdleClassifierTests(unittest.TestCase):
         completed = self.harness.run(
             result=(
                 "BUSY:jobs=0,research=0,research_children=0,"
-                "control=0,operator_lease=0,video=1"
+                "control=0,operator_lease=0,autopilot=0,video=1"
             )
         )
         self.assert_state(completed.stdout, "BUSY")
@@ -268,6 +297,38 @@ class OracleIdleClassifierTests(unittest.TestCase):
         )
         self.assert_state(completed.stdout, "BUSY")
 
+    def test_universal_video_inbox_job_is_busy(self) -> None:
+        (self.harness.video_inbox / "queued.json").write_text(
+            "{}\n", encoding="utf-8"
+        )
+        completed = self.harness.run(spool=self.harness.active_work_spools)
+        self.assertIn("ORACLE_IDLE_REASON=local_spool_has_work", completed.stdout)
+        self.assert_state(completed.stdout, "BUSY")
+
+    def test_universal_video_running_job_is_busy(self) -> None:
+        (self.harness.video_running / "running.json").write_text(
+            "{}\n", encoding="utf-8"
+        )
+        completed = self.harness.run(spool=self.harness.active_work_spools)
+        self.assertIn("ORACLE_IDLE_REASON=local_spool_has_work", completed.stdout)
+        self.assert_state(completed.stdout, "BUSY")
+
+    def test_observer_pending_job_is_busy(self) -> None:
+        (self.harness.observer_pending / "queued.json").write_text(
+            "{}\n", encoding="utf-8"
+        )
+        completed = self.harness.run(spool=self.harness.active_work_spools)
+        self.assertIn("ORACLE_IDLE_REASON=local_spool_has_work", completed.stdout)
+        self.assert_state(completed.stdout, "BUSY")
+
+    def test_observer_running_job_is_busy(self) -> None:
+        (self.harness.observer_running / "running.json").write_text(
+            "{}\n", encoding="utf-8"
+        )
+        completed = self.harness.run(spool=self.harness.active_work_spools)
+        self.assertIn("ORACLE_IDLE_REASON=local_spool_has_work", completed.stdout)
+        self.assert_state(completed.stdout, "BUSY")
+
     # Required negative family 6: operator/maintenance lease.
     def test_bounded_host_operator_lease_is_busy(self) -> None:
         expiry = int(time.time()) + 300
@@ -281,7 +342,7 @@ class OracleIdleClassifierTests(unittest.TestCase):
         completed = self.harness.run(
             result=(
                 "BUSY:jobs=0,research=0,research_children=0,"
-                "control=0,operator_lease=1,video=0"
+                "control=0,operator_lease=1,autopilot=0,video=0"
             )
         )
         self.assert_state(completed.stdout, "BUSY")
@@ -343,7 +404,7 @@ class OracleIdleClassifierTests(unittest.TestCase):
         completed = self.harness.run(
             result=(
                 "IDLE:jobs=0,research=0,research_children=0,"
-                "control=0,operator_lease=0,video=0"
+                "control=0,operator_lease=0,autopilot=0,video=0"
             ),
             python_exit_code=7,
         )
@@ -357,7 +418,7 @@ class OracleIdleClassifierTests(unittest.TestCase):
         completed = self.harness.run(
             result=(
                 "IDLE:jobs=0,research=0,research_children=0,"
-                "control=0,operator_lease=0,video=0"
+                "control=0,operator_lease=0,autopilot=0,video=0"
             ),
             python_stderr="partial telemetry failure",
         )
@@ -371,7 +432,7 @@ class OracleIdleClassifierTests(unittest.TestCase):
         completed = self.harness.run(
             result=(
                 "IDLE:jobs=0,research=0,research_children=0,"
-                "control=0,operator_lease=0,video=0\\n"
+                "control=0,operator_lease=0,autopilot=0,video=0\\n"
                 "UNKNOWN:database_check_failed"
             )
         )
@@ -513,6 +574,20 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
             "status IN ('PENDING_CANARY', 'QUEUED', 'LEASED')",
             script,
         )
+
+    def test_default_spool_inventory_matches_deployed_active_leaves(self) -> None:
+        script = CLASSIFIER.read_text(encoding="utf-8")
+        default_line = next(
+            line for line in script.splitlines()
+            if line.startswith("REQUIRED_LOCAL_SPOOLS=")
+        )
+        self.assertIn("$VIDEO_DIR/spool/inbox", default_line)
+        self.assertIn("$VIDEO_DIR/spool/running", default_line)
+        self.assertIn("$OBSERVER_DIR/jobs/pending", default_line)
+        self.assertIn("$OBSERVER_DIR/jobs/running", default_line)
+        self.assertNotIn("/var/lib/bridge-school/uv-spool", default_line)
+        for terminal_leaf in ("/done", "/failed", "/results", "/progress"):
+            self.assertNotIn(terminal_leaf, default_line)
 
     def test_stop_consumer_uses_exact_authorizer_not_raw_idle_grep(self) -> None:
         workflow = FINALIZER.read_text(encoding="utf-8")

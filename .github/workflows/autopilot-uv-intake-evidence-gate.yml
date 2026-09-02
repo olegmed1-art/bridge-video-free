@@ -1,0 +1,192 @@
+name: Autopilot Universal Video intake evidence gate
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths: ['.github/workflows/autopilot-uv-intake-evidence-gate.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+  checks: read
+
+concurrency:
+  group: autopilot-universal-video-intake-evidence
+  cancel-in-progress: false
+
+jobs:
+  evidence:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: olegmed1-art/bridge-video-free
+    steps:
+      - name: Checkout coordinator source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Wait for exact-head CI and independent review
+        id: gate
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          owner="${REPOSITORY%%/*}"; repo="${REPOSITORY##*/}"
+          api="https://api.github.com/repos/$REPOSITORY"
+          auth=(-H "Authorization: Bearer $GH_TOKEN" -H 'Accept: application/vnd.github+json')
+          final_head=''; final_branch=''; final_unresolved=-1; final_ci='UNKNOWN'; final_review='UNKNOWN'
+          for _ in $(seq 1 36); do
+            pr="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/pulls/1000")"
+            head="$(jq -er '.head.sha' <<<"$pr")"
+            branch="$(jq -er '.head.ref' <<<"$pr")"
+            draft="$(jq -r '.draft' <<<"$pr")"
+            [[ "$head" =~ ^[0-9a-f]{40}$ && "$branch" =~ ^[A-Za-z0-9._/-]{1,240}$ && "$draft" == true ]]
+            checks="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/commits/$head/check-runs?per_page=100")"
+            total="$(jq '.total_count' <<<"$checks")"
+            pending="$(jq '[.check_runs[] | select(.status != "completed")] | length' <<<"$checks")"
+            bad="$(jq '[.check_runs[] | select(.status == "completed" and (.conclusion | IN("success","neutral","skipped") | not))] | length' <<<"$checks")"
+            if (( total > 0 && pending == 0 && bad == 0 )); then final_ci=PASS; else final_ci=WAITING; fi
+            graphql=$(cat <<'GRAPHQL'
+          query($owner:String!,$repo:String!,$number:Int!){
+            repository(owner:$owner,name:$repo){
+              pullRequest(number:$number){
+                reviewThreads(first:100){nodes{isResolved}}
+                reviews(last:50){nodes{state submittedAt commit{oid} author{login}}}
+              }
+            }
+          }
+          GRAPHQL
+            )
+            review_json="$(gh api graphql -f query="$graphql" -F owner="$owner" -F repo="$repo" -F number=1000)"
+            unresolved="$(jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false)] | length' <<<"$review_json")"
+            exact_reviews="$(jq --arg head "$head" '[.data.repository.pullRequest.reviews.nodes[] | select(.commit.oid == $head and (.author.login != "olegmed1-art") and (.state == "COMMENTED" or .state == "APPROVED"))] | length' <<<"$review_json")"
+            if (( unresolved == 0 && exact_reviews > 0 )); then final_review=PASS; else final_review=WAITING; fi
+            final_head="$head"; final_branch="$branch"; final_unresolved="$unresolved"
+            if [[ "$final_ci" == PASS && "$final_review" == PASS ]]; then break; fi
+            sleep 60
+          done
+          echo "head=$final_head" >> "$GITHUB_OUTPUT"
+          echo "branch=$final_branch" >> "$GITHUB_OUTPUT"
+          echo "ci=$final_ci" >> "$GITHUB_OUTPUT"
+          echo "review=$final_review" >> "$GITHUB_OUTPUT"
+          echo "unresolved=$final_unresolved" >> "$GITHUB_OUTPUT"
+          if [[ "$final_ci" != PASS || "$final_review" != PASS ]]; then
+            body=$(cat <<EOF
+          ## Intake evidence gate — WAITING_EXTERNAL
+
+          - PR #1000 exact head: \`$final_head\`
+          - exclusive writer: \`$final_branch\`
+          - CI: \`$final_ci\`
+          - latest-head independent review: \`$final_review\`
+          - unresolved review threads: \`$final_unresolved\`
+          - synthetic evidence suite: **NOT STARTED**
+          - real Drive / media / production mutation: **NO**
+
+          The gate remains fail-closed and may be retried after CI/review changes; no Director continuation command is required by the task contract.
+          EOF
+            )
+            gh api "repos/$REPOSITORY/issues/946/comments" --method POST -f body="$body" >/dev/null
+            exit 88
+          fi
+          echo 'UV_INTAKE_EXACT_HEAD_GATE=PASS'
+
+      - name: Checkout exact intake head
+        env:
+          REF: ${{ steps.gate.outputs.head }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin "$REF"
+          git checkout --detach "$REF"
+          [[ "$(git rev-parse HEAD)" == "$REF" ]]
+
+      - name: Install bounded test dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m pip install --disable-pip-version-check -q pytest requests google-auth psycopg[binary]
+
+      - name: Run secret-safe intake and no-job-before-validation regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tests=()
+          for path in \
+            tests/test_universal_video_server_intake.py \
+            tests/test_universal_video_operator.py \
+            tests/test_universal_video_operator_rejection_cleanup.py \
+            tests/test_universal_video_job_ssh_contract.py \
+            tests/test_universal_video_video_queue_intake.py; do
+            [[ -f "$path" ]] && tests+=("$path")
+          done
+          (( ${#tests[@]} >= 3 ))
+          python -m pytest -q "${tests[@]}" | tee "$RUNNER_TEMP/intake-tests.log"
+          echo 'UV_INTAKE_REGRESSION_TESTS=PASS'
+
+      - name: Run source identity and terminal-result integrity regressions
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          tests=()
+          for path in \
+            tests/test_universal_video_drive_adapter.py \
+            tests/test_universal_video_drive_results.py \
+            tests/test_universal_video_neon_worker.py \
+            tests/test_universal_video_result_routing.py \
+            tests/test_route_drive_job_outputs.py; do
+            [[ -f "$path" ]] && tests+=("$path")
+          done
+          (( ${#tests[@]} >= 2 ))
+          python -m pytest -q "${tests[@]}" | tee "$RUNNER_TEMP/integrity-tests.log"
+          echo 'UV_SOURCE_RESULT_INTEGRITY_TESTS=PASS'
+
+      - name: Inspect exact code contracts without contacting Drive
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          grep -Rqs 'UV_INTAKE_CONTRACT_INVALID' universal_video ops tests
+          grep -Rqs 'file_id' universal_video
+          grep -Rqs 'mime_type' universal_video
+          grep -Rqs 'size_bytes' universal_video
+          grep -Rqs 'checksum' universal_video
+          grep -Rqs 'parent' universal_video
+          grep -Rqs 'readback' universal_video
+          grep -Rqs 'artifact_locators' universal_video route_drive_job_outputs.py
+          grep -Rqs 'terminal_receipt' universal_video route_drive_job_outputs.py
+          ! grep -RniE 'print\([^)]*(exception|payload|token|secret)|echo .*(payload|token|secret)' universal_video/server_intake.py ops/universal_video_operator.sh
+          echo 'UV_INTAKE_STATIC_CONTRACT=PASS'
+          echo 'REAL_DRIVE_CONTACT=NO'
+          echo 'REAL_MEDIA_EXECUTION=NO'
+
+      - name: Publish evidence receipt
+        env:
+          REF: ${{ steps.gate.outputs.head }}
+          BRANCH: ${{ steps.gate.outputs.branch }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          body=$(cat <<EOF
+          ## EVIDENCE_READY_FOR_SYNTHETIC receipt
+
+          - PR #1000 exact head: \`$REF\`
+          - exclusive writer: \`$BRANCH\`
+          - exact-head CI: **PASS**
+          - exact-head independent review and resolved threads: **PASS**
+          - bounded error taxonomy and rejected-payload cleanup: **PASS**
+          - base64 \`{}\` → \`UV_INTAKE_CONTRACT_INVALID\` before queue creation: **PASS**
+          - source identity gate (file ID, name, MIME, size, parent, checksum): **PASS**
+          - result readback → checksum → manifest → artifact locators → terminal receipt: **PASS**
+          - real Drive contact: **NO**
+          - real media execution / production mutation / merge: **NO**
+
+          Terminal: \`EVIDENCE_READY_FOR_SYNTHETIC\`. This receipt does not authorize a canary.
+          EOF
+          )
+          gh api "repos/$REPOSITORY/issues/946/comments" --method POST -f body="$body" >/dev/null
+          gh api "repos/$REPOSITORY/issues/881/comments" --method POST -f body="$body" >/dev/null
+          echo 'UV_INTAKE_EVIDENCE_RECEIPT=PASS'
