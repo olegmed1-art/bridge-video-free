@@ -35,7 +35,9 @@ jobs:
 
           ssh-keyscan -T 10 -t ed25519 "$OLD_HOST" >"$known_hosts" 2>/dev/null
           actual_fingerprint="$(ssh-keygen -lf "$known_hosts" | awk 'NR==1 {print $2}')"
+          echo "ACTUAL_OLD_HOST_FINGERPRINT=$actual_fingerprint"
           test "$actual_fingerprint" = "$OLD_HOST_FINGERPRINT"
+          echo "OLD_HOST_FINGERPRINT_VERIFIED=YES"
 
           ssh \
             -i "$key" \
