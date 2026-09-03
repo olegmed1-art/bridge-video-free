@@ -10,6 +10,10 @@ from bridge_contracts.video_dds_decision_comparison import (
     VideoDDSComparisonError,
     build_offline_dds_comparison,
 )
+from bridge_contracts.video_learning_feedback import (
+    VideoLearningFeedbackError,
+    build_learning_feedback,
+)
 
 
 SCHEMA = "video-extended-extraction-v1"
@@ -203,6 +207,17 @@ def build_extended_extraction(
             "OFFLINE_EVALUATED",
         ))
 
+    try:
+        feedback = build_learning_feedback(master, quality)
+    except VideoLearningFeedbackError as exc:
+        feedback = None
+        gap = {"stable_key": f"learning-feedback:{_digest(master.get('job_id'))}", "gap_type": "LEARNING_FEEDBACK_INVALID", "status": "OPEN", "reason": str(exc), "evidence_refs": []}
+        records.append(_record(job_id, "GAP_OR_CONFLICT", gap, "OPEN"))
+    if feedback is not None:
+        for example in feedback["training_examples"]:
+            records.append(_record(job_id, "ANALYZER_TRAINING_EXAMPLE", example, "REVIEWED_LABEL"))
+        records.append(_record(job_id, "MODEL_IMPROVEMENT_PROPOSAL", feedback["model_improvement_proposal"], feedback["model_improvement_proposal"]["status"]))
+
     # A detected rule without a source-bound explanation is useful evidence,
     # but not yet a teachable unit.  Record the missing "why" explicitly.
     explained_rule_keys = {
@@ -253,6 +268,7 @@ def build_extended_extraction(
                 "CONSEQUENCES", "REJECTED_ALTERNATIVES",
             ],
         },
+        "learning_feedback": feedback,
         "authority": {
             "canon_activation": "DENY",
             "curriculum_activation": "DENY",
