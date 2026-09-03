@@ -314,15 +314,24 @@ def _authorize_github_operation(*, method: str, path: str) -> None:
     rejects generic repository paths even when GitHub would authorize them.
     """
 
-    if method not in {"GET", "POST"} or any(
-        part in path.lower() for part in _FORBIDDEN_ENDPOINT_PARTS
-    ):
+    if method not in {"GET", "POST"}:
         raise BrokerContractError("GITHUB_OPERATION_NOT_ALLOWED")
 
     parsed = urllib.parse.urlsplit(path)
     if parsed.scheme or parsed.netloc or parsed.fragment:
         raise BrokerContractError("GITHUB_OPERATION_NOT_ALLOWED")
     clean_path = parsed.path
+    contents_prefix = f"{REPOSITORY_API_PATH}/contents/"
+    # A validated content filename is data, not an API route.  Apply endpoint
+    # denials only to the route portion so allowed files such as actions.py do
+    # not become false positives; the finite allowlist below remains decisive.
+    route_path = (
+        f"{REPOSITORY_API_PATH}/contents"
+        if clean_path.startswith(contents_prefix)
+        else clean_path
+    )
+    if any(part in route_path.lower() for part in _FORBIDDEN_ENDPOINT_PARTS):
+        raise BrokerContractError("GITHUB_OPERATION_NOT_ALLOWED")
     if (method, clean_path) in _ALLOWED_EXACT_OPERATIONS and not parsed.query:
         return
     if method == "GET" and re.fullmatch(
@@ -334,9 +343,9 @@ def _authorize_github_operation(*, method: str, path: str) -> None:
         rf"{re.escape(REPOSITORY_API_PATH)}/git/commits/{_SHA}", clean_path
     ) and not parsed.query:
         return
-    if method == "GET" and clean_path.startswith(f"{REPOSITORY_API_PATH}/contents/"):
+    if method == "GET" and clean_path.startswith(contents_prefix):
         query = urllib.parse.parse_qs(parsed.query, strict_parsing=True)
-        encoded_file = clean_path.removeprefix(f"{REPOSITORY_API_PATH}/contents/")
+        encoded_file = clean_path.removeprefix(contents_prefix)
         decoded_file = urllib.parse.unquote(encoded_file)
         if (
             urllib.parse.quote(decoded_file, safe="/") == encoded_file

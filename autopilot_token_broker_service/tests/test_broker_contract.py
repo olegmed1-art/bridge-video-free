@@ -516,6 +516,8 @@ class BrokerContractTests(unittest.TestCase):
             ("DELETE", f"/repos/{REPOSITORY_FULL_NAME}/git/refs/heads/main"),
             ("POST", f"/repos/{REPOSITORY_FULL_NAME}/actions/workflows/x/dispatches"),
             ("POST", f"/repos/{REPOSITORY_FULL_NAME}/deployments"),
+            ("POST", f"/repos/{REPOSITORY_FULL_NAME}/hooks"),
+            ("GET", f"/repos/{REPOSITORY_FULL_NAME}/rulesets"),
             ("GET", f"/repos/{REPOSITORY_FULL_NAME}/contents/%2e%2e/ops/x?ref={'a' * 40}"),
             ("GET", f"/repos/{REPOSITORY_FULL_NAME}/contents/%252e%252e/ops/x?ref={'a' * 40}"),
             ("GET", f"/repos/{REPOSITORY_FULL_NAME}/contents/docs%2fevidence%2fautopilot%2fx.md?ref={'a' * 40}"),
@@ -535,6 +537,14 @@ class BrokerContractTests(unittest.TestCase):
         _authorize_github_operation(
             method="POST", path=f"/repos/{REPOSITORY_FULL_NAME}/pulls"
         )
+        for filename in ("actions.py", "merge_helper.py"):
+            _authorize_github_operation(
+                method="GET",
+                path=(
+                    f"/repos/{REPOSITORY_FULL_NAME}/contents/oracle_autopilot/"
+                    f"{filename}?ref={'a' * 40}"
+                ),
+            )
 
     def test_runtime_guard_rejects_every_non_preview_environment(self):
         for value in ("", "production", "development"):
