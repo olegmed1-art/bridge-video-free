@@ -1292,6 +1292,10 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "root_pr_number=991" in workflow
     assert "pr_number=1070" in workflow
     assert "Root Autopilot PR #991 is not merged" in workflow
+    assert 'git show -s --format=%P "$EXACT_SHA"' in workflow
+    assert '"${exact_parents[0]}" == "$root_merge_sha"' in workflow
+    assert '"${exact_parents[1]}" == "$reviewed_sha"' in workflow
+    assert "Exact main is not the direct reviewed merge of PR #1070 onto root PR #991" in workflow
     assert 'main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq' in workflow
     assert "Reviewed head has no independent approval" in workflow
     assert "root_required_workflows=(" in workflow
