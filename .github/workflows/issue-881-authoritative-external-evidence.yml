@@ -165,8 +165,7 @@ jobs:
           )
 
           verify_live_gate(){
-            local live_head live_state main_sha root_pr_json root_merge_sha root_reviewed_sha prior_gate_pr_json prior_gate_merge_sha review_count codex_comments_json codex_clean_count reviews_json approval_count threads_json blocker_count runs_json root_runs_json workflow_name latest_state
-            local -a exact_parents
+            local live_head live_state main_sha root_pr_json root_merge_sha root_reviewed_sha prior_gate_pr_json prior_gate_merge_sha gate_merge_sha review_count codex_comments_json codex_clean_count reviews_json approval_count threads_json blocker_count runs_json root_runs_json workflow_name latest_state
             pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
             live_state="$(jq -r '.state' <<<"$pr_json")"
             [[ "$live_state" == 'closed' && "$(jq -r '.merged' <<<"$pr_json")" == true ]] \
