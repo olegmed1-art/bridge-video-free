@@ -6,6 +6,11 @@ import json
 import re
 from typing import Any, Mapping, Sequence
 
+from bridge_contracts.video_dds_decision_comparison import (
+    VideoDDSComparisonError,
+    build_offline_dds_comparison,
+)
+
 
 SCHEMA = "video-extended-extraction-v1"
 _LOGIC_CUES = {
@@ -178,6 +183,24 @@ def build_extended_extraction(
         records.append(_record(
             job_id, "EXPLANATION_CANDIDATE", item,
             str(item.get("status") or "REVIEW_REQUIRED"),
+        ))
+
+    for raw in _items(master.get("dds_decision_evaluations")):
+        try:
+            comparison = build_offline_dds_comparison(raw)
+        except VideoDDSComparisonError as exc:
+            gap = {
+                "stable_key": f"dds-gap:{_digest(raw)}",
+                "gap_type": "DDS_DECISION_EVALUATION_INVALID",
+                "status": "OPEN",
+                "reason": str(exc),
+                "evidence_refs": _refs(raw.get("decision") if isinstance(raw.get("decision"), Mapping) else {}),
+            }
+            records.append(_record(job_id, "GAP_OR_CONFLICT", gap, "OPEN"))
+            continue
+        records.append(_record(
+            job_id, "DDS_DECISION_COMPARISON", comparison,
+            "OFFLINE_EVALUATED",
         ))
 
     # A detected rule without a source-bound explanation is useful evidence,
