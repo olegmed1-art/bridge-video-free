@@ -254,6 +254,36 @@ def test_explicit_runtime_conflict_gate_has_no_school_answer():
     assert result.action is None
 
 
+def test_only_explicit_empty_catalog_gap_can_cross_world_boundary():
+    world = type(evaluate("RULE-L1-OPEN-1H", {"HCP": 13, "H": 5, "S": 4}))(
+        "WORLD-1", "MATCH", "WORLD_FALLBACK:1H", 0, 0, 0
+    )
+    calls = []
+
+    def lookup():
+        calls.append("called")
+        return world
+
+    result = resolve_registered_with_world_fallback([], lookup)
+    assert result is world
+    assert calls == ["called"]
+
+
+@pytest.mark.parametrize(
+    "evaluation",
+    [
+        evaluate_registered("RULE-L1-OPEN-1H", {"HCP": 13, "H": 5}, system_version="wrong-system"),
+        evaluate_registered("RULE-L1-OPEN-1H", {}),
+    ],
+)
+def test_isolation_or_incomplete_context_no_match_never_calls_world(evaluation):
+    def forbidden():
+        raise AssertionError("WORLD must not run for unproven Canon gap")
+
+    result = resolve_registered_with_world_fallback([evaluation], forbidden)
+    assert result.status == "NO_MATCH"
+
+
 def test_system_isolation():
     result = evaluate("RULE-L1-OPEN-1H", {"HCP": 13, "H": 5, "S": 4}, system_version="SCHOOL_TOURNAMENT_CURRENT_V1")
     assert result.status == "NO_MATCH"
