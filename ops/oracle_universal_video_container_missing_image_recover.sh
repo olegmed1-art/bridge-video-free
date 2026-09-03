@@ -55,7 +55,7 @@ from bridge_speaker_diarization_v3 import _ensure_embedding, _ensure_segmentatio
 
 root=Path(os.environ['SPEAKER_CACHE'])
 expected={
-    root/'pyannote-segmentation-3.0.onnx': '915e0573bc4e17197a7a893d0eb98e1a851abb64451b2e1a8ad51f5f99040360',
+    root/'pyannote-segmentation-3.0.onnx': '220ad67ca923bef2fa91f2390c786097bf305bceb5e261d4af67b38e938e1079',
     root/'3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx': '1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b',
 }
 for path,digest in expected.items():
