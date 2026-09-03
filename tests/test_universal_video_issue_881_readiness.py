@@ -1289,12 +1289,30 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "if: ${{ inputs.director_go && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.repository == 'olegmed1-art/bridge-video-free' }}" in workflow
     assert "actions: read" in workflow
     assert "pull-requests: read" in workflow
-    assert 'pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/1062")"' in workflow
-    assert '[[ "$live_state" == \'open\' ]]' in workflow
+    assert "root_pr_number=991" in workflow
+    assert "pr_number=1070" in workflow
+    assert "Root Autopilot PR #991 is not merged" in workflow
+    assert 'git show -s --format=%P "$EXACT_SHA"' in workflow
+    assert '"${exact_parents[0]}" == "$root_merge_sha"' in workflow
+    assert '"${exact_parents[1]}" == "$reviewed_sha"' in workflow
+    assert "Exact main is not the direct reviewed merge of PR #1070 onto root PR #991" in workflow
+    assert 'main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq' in workflow
+    assert "Reviewed head has no current independent approval at final reconciliation" in workflow
+    assert "root_required_workflows=(" in workflow
+    assert "Oracle idle STOP guard CI" in workflow
+    assert "Retired Oracle Universal Video Container Evidence Contract" in workflow
+    assert "root_reviewed_sha" in workflow
+    assert "group_by(.user.login) | map(max_by(.submitted_at))" in workflow
+    assert "Main changed while live review and CI gates were evaluated" in workflow
+    assert workflow.count('git/ref/heads/main" --jq') >= 2
+    approval_recheck = workflow.rindex('reviews?per_page=100')
+    final_main_fence = workflow.rindex('git/ref/heads/main" --jq')
+    assert approval_recheck < final_main_fence
+    assert '[[ "$live_state" == \'closed\'' in workflow
     assert 'git/ref/heads/main" --jq \'.object.sha\'' in workflow
-    assert 'compare/$main_sha...$base_sha"' in workflow
-    assert "base_relation\" == $'ahead\\t0'" in workflow
-    assert ".commit_id ==" in workflow and "$EXACT_SHA" in workflow
+    assert '"$main_sha" == "$EXACT_SHA"' in workflow
+    assert 'git merge-base --is-ancestor "$reviewed_sha" "$EXACT_SHA"' in workflow
+    assert ".commit_id ==" in workflow and "$reviewed_sha" in workflow
     assert "required_workflows=(" in workflow
     assert "verify_live_gate(){" in workflow
     # One gate before preparation and one fresh gate after all SSH/SCP staging.

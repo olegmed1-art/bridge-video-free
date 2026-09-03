@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       exact_sha:
-        description: Exact reviewed PR head to attest
+        description: Exact current main commit to attest after reviewed merge
         required: true
         type: string
       director_go:
@@ -136,8 +136,22 @@ jobs:
           recovery_sha=''
           recovery_remote_file=''
 
-          runs_endpoint="repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$EXACT_SHA&event=pull_request&per_page=100"
+          root_pr_number=991
+          pr_number=1070
+          pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
+          reviewed_sha="$(jq -r '.head.sha' <<<"$pr_json")"
+          [[ "$reviewed_sha" =~ ^[0-9a-f]{40}$ ]]
+          runs_endpoint="repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$reviewed_sha&event=pull_request&per_page=100"
           required_workflows=(
+            'Universal Video Analyzer CI'
+            'Issue 881 Exact Canary Contract CI'
+            'Issue 881 Exact Pre-Canary Evidence'
+            'Secret gate'
+            'Universal Video Engine Smoke'
+            'Oracle idle STOP guard CI'
+            'Retired Oracle Universal Video Container Evidence Contract'
+          )
+          root_required_workflows=(
             'Universal Video Analyzer CI'
             'Issue 881 Exact Canary Contract CI'
             'Issue 881 Exact Pre-Canary Evidence'
@@ -149,30 +163,43 @@ jobs:
           )
 
           verify_live_gate(){
-            local pr_json live_head live_state base_sha main_sha base_relation review_count threads_json blocker_count runs_json workflow_name latest_state
-            pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/1062")"
+            local live_head live_state main_sha root_pr_json root_merge_sha root_reviewed_sha review_count reviews_json approval_count threads_json blocker_count runs_json root_runs_json workflow_name latest_state
+            local -a exact_parents
+            pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
             live_state="$(jq -r '.state' <<<"$pr_json")"
-            [[ "$live_state" == 'open' ]] \
-              || { echo 'PR #1062 is no longer open' >&2; return 1; }
+            [[ "$live_state" == 'closed' && "$(jq -r '.merged' <<<"$pr_json")" == true ]] \
+              || { echo 'Canary gate PR #1070 is not merged' >&2; return 1; }
             live_head="$(jq -r '.head.sha' <<<"$pr_json")"
-            [[ "$live_head" == "$EXACT_SHA" ]] \
-              || { echo 'Exact SHA is no longer the live PR #1062 head' >&2; return 1; }
-
-            base_sha="$(jq -r '.base.sha' <<<"$pr_json")"
+            [[ "$live_head" == "$reviewed_sha" ]] \
+              || { echo 'Reviewed canary gate head changed unexpectedly' >&2; return 1; }
             main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
-            base_relation="$(gh api "repos/$GITHUB_REPOSITORY/compare/$main_sha...$base_sha" --jq '[.status, .behind_by] | @tsv')"
-            [[ "$base_relation" == $'ahead\t0' || "$base_relation" == $'identical\t0' ]] \
-              || { echo 'PR #1062 base is not synchronized with current main' >&2; return 1; }
+            [[ "$main_sha" == "$EXACT_SHA" && "$(jq -r '.merge_commit_sha' <<<"$pr_json")" == "$EXACT_SHA" ]] \
+              || { echo 'Exact SHA is not the immutable current main merge of canary gate PR #1070' >&2; return 1; }
+            git merge-base --is-ancestor "$reviewed_sha" "$EXACT_SHA" \
+              || { echo 'Reviewed canary gate head is not an ancestor of exact main' >&2; return 1; }
+            root_pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$root_pr_number")"
+            [[ "$(jq -r '.merged' <<<"$root_pr_json")" == true ]] \
+              || { echo 'Root Autopilot PR #991 is not merged' >&2; return 1; }
+            root_merge_sha="$(jq -r '.merge_commit_sha' <<<"$root_pr_json")"
+            [[ "$root_merge_sha" =~ ^[0-9a-f]{40}$ ]]
+            read -r -a exact_parents <<<"$(git show -s --format=%P "$EXACT_SHA")"
+            [[ ${#exact_parents[@]} -eq 2 \
+              && "${exact_parents[0]}" == "$root_merge_sha" \
+              && "${exact_parents[1]}" == "$reviewed_sha" ]] \
+              || { echo 'Exact main is not the direct reviewed merge of PR #1070 onto root PR #991' >&2; return 1; }
+            root_reviewed_sha="$(jq -r '.head.sha' <<<"$root_pr_json")"
+            [[ "$root_reviewed_sha" =~ ^[0-9a-f]{40}$ ]]
 
-            review_count="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/1062/reviews" \
-              --jq ".[] | select(.commit_id == \"$EXACT_SHA\" and (.user.login | startswith(\"chatgpt-codex-connector\")) and (.state == \"COMMENTED\" or .state == \"APPROVED\")) | .id" | wc -l)"
+            reviews_json="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$pr_number/reviews?per_page=100")"
+            review_count="$(jq --arg sha "$reviewed_sha" \
+              '[.[].[] | select(.commit_id == $sha and (.user.login | startswith("chatgpt-codex-connector")) and (.state == "COMMENTED" or .state == "APPROVED"))] | length' \
+              <<<"$reviews_json")"
             (( review_count > 0 )) \
               || { echo 'Exact head has no independent Codex review' >&2; return 1; }
-
             threads_json="$(gh api graphql \
               -f owner="${GITHUB_REPOSITORY%%/*}" \
               -f name="${GITHUB_REPOSITORY#*/}" \
-              -F number=1062 \
+              -F number="$pr_number" \
               -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved isOutdated comments(first:100){nodes{author{login}}}}}}}}')"
             [[ "$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"$threads_json")" == false ]] \
               || { echo 'Review thread set exceeds the bounded verification page' >&2; return 1; }
@@ -188,6 +215,23 @@ jobs:
               [[ "$latest_state" == 'completed:success' ]] \
                 || { echo "Latest exact-head workflow attempt is not green: $workflow_name ($latest_state)" >&2; return 1; }
             done
+            root_runs_json="$(gh api --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$root_reviewed_sha&event=pull_request&per_page=100")"
+            for workflow_name in "${root_required_workflows[@]}"; do
+              latest_state="$(jq -r --arg name "$workflow_name" \
+                '[.[].workflow_runs[] | select(.name == $name)] | if length == 0 then "MISSING" else (max_by([.run_number, .run_attempt]) | (.status + ":" + (.conclusion // ""))) end' \
+                <<<"$root_runs_json")"
+              [[ "$latest_state" == 'completed:success' ]] \
+                || { echo "Latest root exact-head workflow attempt is not green: $workflow_name ($latest_state)" >&2; return 1; }
+            done
+            reviews_json="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$pr_number/reviews?per_page=100")"
+            approval_count="$(jq --arg sha "$reviewed_sha" --arg owner "$GITHUB_REPOSITORY_OWNER" \
+              '[.[].[] | select(.commit_id == $sha and .user.login != $owner)] | group_by(.user.login) | map(max_by(.submitted_at)) | map(select(.state == "APPROVED")) | length' \
+              <<<"$reviews_json")"
+            (( approval_count > 0 )) \
+              || { echo 'Reviewed head has no current independent approval at final reconciliation' >&2; return 1; }
+            [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" == "$EXACT_SHA" ]] \
+              || { echo 'Main changed while live review and CI gates were evaluated' >&2; return 1; }
           }
 
           # Initial reconciliation rejects historical, blocked, or stale-green
