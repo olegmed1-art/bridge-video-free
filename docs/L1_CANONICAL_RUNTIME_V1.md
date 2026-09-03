@@ -8,7 +8,7 @@ This module is a deterministic, side-effect-free executable mirror of the approv
 - Tournament-system rules are ignored unless an explicit system switch is made outside this runtime.
 - `PARTIAL_CANON_SCOPE` and `BLOCKED_PENDING_TEACHER` content cannot be auto-promoted.
 - The Lesson 15 attitude/count/suit-preference signalling code remains undefined and is explicitly blocked.
-- Same-rank rules that still disagree return `RULE_CONFLICT`; the runtime never guesses a winner.
+- Same-rank active School rules that disagree return `CANON_CONFLICT` with no action; WORLD is not called and the runtime never guesses a winner.
 - No Drive, Neon, DDS, network, or production writes are performed.
 
 ## Scope
