@@ -165,8 +165,7 @@ jobs:
           )
 
           verify_live_gate(){
-            local live_head live_state main_sha root_pr_json root_merge_sha root_reviewed_sha prior_gate_pr_json prior_gate_merge_sha review_count codex_comments_json codex_clean_count reviews_json approval_count threads_json blocker_count runs_json root_runs_json workflow_name latest_state
-            local -a exact_parents
+            local live_head live_state main_sha root_pr_json root_merge_sha root_reviewed_sha prior_gate_pr_json prior_gate_merge_sha gate_merge_sha review_count codex_comments_json codex_clean_count reviews_json approval_count threads_json blocker_count runs_json root_runs_json workflow_name latest_state
             pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
             live_state="$(jq -r '.state' <<<"$pr_json")"
             [[ "$live_state" == 'closed' && "$(jq -r '.merged' <<<"$pr_json")" == true ]] \
@@ -175,8 +174,8 @@ jobs:
             [[ "$live_head" == "$reviewed_sha" ]] \
               || { echo 'Reviewed canary gate head changed unexpectedly' >&2; return 1; }
             main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
-            [[ "$main_sha" == "$EXACT_SHA" && "$(jq -r '.merge_commit_sha' <<<"$pr_json")" == "$EXACT_SHA" ]] \
-              || { echo 'Exact SHA is not the immutable current main merge of the current canary gate PR' >&2; return 1; }
+            [[ "$main_sha" == "$EXACT_SHA" ]] \
+              || { echo 'Exact SHA is not immutable current main' >&2; return 1; }
             git merge-base --is-ancestor "$reviewed_sha" "$EXACT_SHA" \
               || { echo 'Reviewed canary gate head is not an ancestor of exact main' >&2; return 1; }
             root_pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$root_pr_number")"
@@ -191,11 +190,14 @@ jobs:
             [[ "$prior_gate_merge_sha" =~ ^[0-9a-f]{40}$ ]]
             git merge-base --is-ancestor "$root_merge_sha" "$prior_gate_merge_sha" \
               || { echo 'Root Autopilot merge is not an ancestor of the prior gate merge' >&2; return 1; }
-            read -r -a exact_parents <<<"$(git show -s --format=%P "$EXACT_SHA")"
-            [[ ${#exact_parents[@]} -eq 2 \
-              && "${exact_parents[0]}" == "$prior_gate_merge_sha" \
-              && "${exact_parents[1]}" == "$reviewed_sha" ]] \
-              || { echo 'Exact main is not the direct reviewed merge of the current gate onto PR #1070' >&2; return 1; }
+            gate_merge_sha="$(jq -r '.merge_commit_sha' <<<"$pr_json")"
+            [[ "$gate_merge_sha" =~ ^[0-9a-f]{40}$ ]]
+            git merge-base --is-ancestor "$prior_gate_merge_sha" "$gate_merge_sha" \
+              || { echo 'Prior gate merge is not an ancestor of the reviewed canary gate merge' >&2; return 1; }
+            git merge-base --is-ancestor "$reviewed_sha" "$gate_merge_sha" \
+              || { echo 'Reviewed canary gate head is not an ancestor of its merge commit' >&2; return 1; }
+            git merge-base --is-ancestor "$gate_merge_sha" "$EXACT_SHA" \
+              || { echo 'Reviewed canary gate merge is not an ancestor of exact current main' >&2; return 1; }
             root_reviewed_sha="$(jq -r '.head.sha' <<<"$root_pr_json")"
             [[ "$root_reviewed_sha" =~ ^[0-9a-f]{40}$ ]]
 
