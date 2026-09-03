@@ -1300,6 +1300,9 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "Exact main is not the direct reviewed merge of the current gate onto PR #1070" in workflow
     assert "chatgpt-codex-connector[bot]" in workflow
     assert "Codex Review: Didn\\u0027t find any major issues." in workflow
+    assert 'git rev-parse --verify "${review_prefix}^{commit}"' in workflow
+    assert '"$resolved_review_sha" == "$reviewed_sha"' in workflow
+    assert "Codex reviewed commit prefix is not uniquely resolvable" in workflow
     assert "exact clean Codex bot receipt" in workflow
     assert 'main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq' in workflow
     assert "Reviewed head has no current independent approval at final reconciliation" in workflow
