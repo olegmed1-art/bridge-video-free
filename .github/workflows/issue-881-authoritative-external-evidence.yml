@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       exact_sha:
-        description: Exact reviewed PR head to attest
+        description: Exact current main commit to attest after reviewed merge
         required: true
         type: string
       director_go:
@@ -136,7 +136,11 @@ jobs:
           recovery_sha=''
           recovery_remote_file=''
 
-          runs_endpoint="repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$EXACT_SHA&event=pull_request&per_page=100"
+          pr_number=991
+          pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
+          reviewed_sha="$(jq -r '.head.sha' <<<"$pr_json")"
+          [[ "$reviewed_sha" =~ ^[0-9a-f]{40}$ ]]
+          runs_endpoint="repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$reviewed_sha&event=pull_request&per_page=100"
           required_workflows=(
             'Universal Video Analyzer CI'
             'Issue 881 Exact Canary Contract CI'
@@ -149,30 +153,33 @@ jobs:
           )
 
           verify_live_gate(){
-            local pr_json live_head live_state base_sha main_sha base_relation review_count threads_json blocker_count runs_json workflow_name latest_state
-            pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/1062")"
+            local live_head live_state main_sha review_count approval_count threads_json blocker_count runs_json workflow_name latest_state
+            pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
             live_state="$(jq -r '.state' <<<"$pr_json")"
-            [[ "$live_state" == 'open' ]] \
-              || { echo 'PR #1062 is no longer open' >&2; return 1; }
+            [[ "$live_state" == 'closed' && "$(jq -r '.merged' <<<"$pr_json")" == true ]] \
+              || { echo 'PR #991 is not merged' >&2; return 1; }
             live_head="$(jq -r '.head.sha' <<<"$pr_json")"
-            [[ "$live_head" == "$EXACT_SHA" ]] \
-              || { echo 'Exact SHA is no longer the live PR #1062 head' >&2; return 1; }
-
-            base_sha="$(jq -r '.base.sha' <<<"$pr_json")"
+            [[ "$live_head" == "$reviewed_sha" ]] \
+              || { echo 'Reviewed PR #991 head changed unexpectedly' >&2; return 1; }
             main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
-            base_relation="$(gh api "repos/$GITHUB_REPOSITORY/compare/$main_sha...$base_sha" --jq '[.status, .behind_by] | @tsv')"
-            [[ "$base_relation" == $'ahead\t0' || "$base_relation" == $'identical\t0' ]] \
-              || { echo 'PR #1062 base is not synchronized with current main' >&2; return 1; }
+            [[ "$main_sha" == "$EXACT_SHA" && "$(jq -r '.merge_commit_sha' <<<"$pr_json")" == "$EXACT_SHA" ]] \
+              || { echo 'Exact SHA is not the immutable current main merge of PR #991' >&2; return 1; }
+            git merge-base --is-ancestor "$reviewed_sha" "$EXACT_SHA" \
+              || { echo 'Reviewed PR #991 head is not an ancestor of exact main' >&2; return 1; }
 
-            review_count="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/1062/reviews" \
-              --jq ".[] | select(.commit_id == \"$EXACT_SHA\" and (.user.login | startswith(\"chatgpt-codex-connector\")) and (.state == \"COMMENTED\" or .state == \"APPROVED\")) | .id" | wc -l)"
+            review_count="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$pr_number/reviews" \
+              --jq ".[] | select(.commit_id == \"$reviewed_sha\" and (.user.login | startswith(\"chatgpt-codex-connector\")) and (.state == \"COMMENTED\" or .state == \"APPROVED\")) | .id" | wc -l)"
             (( review_count > 0 )) \
               || { echo 'Exact head has no independent Codex review' >&2; return 1; }
+            approval_count="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$pr_number/reviews" \
+              --jq ".[] | select(.commit_id == \"$reviewed_sha\" and .state == \"APPROVED\" and .user.login != \"$GITHUB_REPOSITORY_OWNER\") | .id" | wc -l)"
+            (( approval_count > 0 )) \
+              || { echo 'Reviewed head has no independent approval' >&2; return 1; }
 
             threads_json="$(gh api graphql \
               -f owner="${GITHUB_REPOSITORY%%/*}" \
               -f name="${GITHUB_REPOSITORY#*/}" \
-              -F number=1062 \
+              -F number="$pr_number" \
               -f query='query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved isOutdated comments(first:100){nodes{author{login}}}}}}}}')"
             [[ "$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"$threads_json")" == false ]] \
               || { echo 'Review thread set exceeds the bounded verification page' >&2; return 1; }
