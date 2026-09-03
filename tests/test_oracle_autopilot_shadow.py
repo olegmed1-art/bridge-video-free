@@ -1022,6 +1022,8 @@ def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():
     assert "SELECT autopilot.verify_broker_schema_v0321()" in workflow
     assert 'source "$root/autopilot-shadow.env"' not in workflow
     assert "parse_environment_file" in workflow
+    assert "RejectRedirects" in workflow
+    assert "response.read(32_769)" in workflow
     assert "AUTOPILOT_SHADOW_EXISTING_STATE_RESTORED" in workflow
     assert "AUTOPILOT_SHADOW_EXISTING_STATE_ROLLBACK_FAILED_SNAPSHOT_RETAINED" in workflow
     assert 'ln -sfn "$previous_release" "$root/current"' in workflow

@@ -211,6 +211,10 @@ jobs:
           import json, os, re, shlex, urllib.request
           import psycopg
 
+          class RejectRedirects(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, req, fp, code, msg, headers, newurl):
+                  raise RuntimeError('TOKEN_BROKER_REDIRECT_REJECTED')
+
           def parse_environment_file(path):
               values = {}
               for raw in open(path, encoding='utf-8'):
@@ -244,9 +248,12 @@ jobs:
           request = urllib.request.Request(health_url, headers={
               'X-Vercel-Protection-Bypass': values['AUTOPILOT_VERCEL_BYPASS_SECRET'],
           })
-          with urllib.request.urlopen(request, timeout=30) as response:
+          opener = urllib.request.build_opener(RejectRedirects())
+          with opener.open(request, timeout=30) as response:
               assert response.status == 200 and response.geturl() == health_url
-              payload = json.load(response)
+              raw_health = response.read(32_769)
+          assert len(raw_health) <= 32_768
+          payload = json.loads(raw_health)
           expected = {
               'source_revision': os.environ['EXPECTED_BROKER_SOURCE_SHA'],
               'artifact_sha256': os.environ['EXPECTED_BROKER_ARTIFACT_SHA256'],
