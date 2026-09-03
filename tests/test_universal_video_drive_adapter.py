@@ -78,7 +78,7 @@ def test_drive_declared_size_is_rejected_before_download(monkeypatch, tmp_path):
     monkeypatch.setattr(
         drive_adapter,
         "file_metadata",
-        lambda file_id, token: {"mimeType": "video/mp4", "size": "1001"},
+        lambda file_id, token: {"mimeType": "video/mp4", "size": "1001", "trashed": False},
     )
 
     def unexpected_get(*args, **kwargs):
@@ -93,7 +93,7 @@ def test_streaming_size_limit_removes_partial_download(monkeypatch, tmp_path):
     monkeypatch.setattr(
         drive_adapter,
         "file_metadata",
-        lambda file_id, token: {"mimeType": "video/mp4", "size": "0"},
+        lambda file_id, token: {"mimeType": "video/mp4", "size": "0", "trashed": False},
     )
 
     class Response:
@@ -126,6 +126,7 @@ def test_download_verifies_drive_checksum_and_returns_stream_digest(monkeypatch,
         "size": str(len(payload)),
         "md5Checksum": md5,
         "sha256Checksum": sha256,
+        "trashed": False,
     }
 
     class Response:
@@ -161,6 +162,7 @@ def test_checksum_mismatch_removes_download(monkeypatch, tmp_path):
         "mimeType": "video/mp4",
         "size": str(len(payload)),
         "md5Checksum": "0" * 32,
+        "trashed": False,
     }
 
     class Response:
@@ -187,3 +189,18 @@ def test_checksum_mismatch_removes_download(monkeypatch, tmp_path):
             metadata=meta,
         )
     assert not destination.exists()
+
+
+def test_download_rejects_trashed_metadata_before_media_request(monkeypatch, tmp_path):
+    def unexpected_get(*args, **kwargs):
+        pytest.fail("media request must not start for trashed Drive object")
+
+    monkeypatch.setattr(drive_adapter.requests, "get", unexpected_get)
+    with pytest.raises(RuntimeError, match="trashed"):
+        download_file(
+            "file-id-12345",
+            tmp_path / "video.mp4",
+            "token",
+            max_bytes=1000,
+            metadata={"mimeType": "video/mp4", "size": "10", "trashed": True},
+        )

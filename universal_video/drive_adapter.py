@@ -121,14 +121,23 @@ def file_metadata(file_id: str, token: str) -> dict:
         headers={"Authorization": f"Bearer {token}"},
         params={
             "fields": (
-                "id,name,mimeType,size,modifiedTime,parents,"
+                "id,name,mimeType,size,modifiedTime,version,trashed,parents,"
                 "md5Checksum,sha1Checksum,sha256Checksum"
             )
         },
         timeout=30,
     )
     response.raise_for_status()
-    return response.json()
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise RuntimeError("invalid Google Drive metadata response")
+    # Every live source/artifact metadata read is fail-closed on trash state.
+    # files.get can still read recoverable trashed objects, so allowing a true
+    # or omitted state would let a source/artifact disappear from its folder
+    # while retaining the same id, checksum, size and revision.
+    if payload.get("trashed") is not False:
+        raise RuntimeError("Google Drive file is trashed or trash state unavailable")
+    return payload
 
 
 def list_folder_files(folder_id: str, token: str) -> list[dict]:
@@ -143,7 +152,7 @@ def list_folder_files(folder_id: str, token: str) -> list[dict]:
         params = {
             "q": f"'{folder_id}' in parents and trashed=false",
             "fields": (
-                "nextPageToken,files(id,name,mimeType,size,parents,modifiedTime,"
+                "nextPageToken,files(id,name,mimeType,size,parents,modifiedTime,version,trashed,"
                 "md5Checksum,sha1Checksum,sha256Checksum)"
             ),
             "pageSize": 1000,
@@ -172,6 +181,8 @@ def _validate_binary_metadata(meta: dict, *, max_bytes: int | None) -> None:
     mime = str(meta.get("mimeType") or "")
     if mime.startswith("application/vnd.google-apps."):
         raise RuntimeError("native Google Workspace files are not video sources")
+    if meta.get("trashed") is not False:
+        raise RuntimeError("Google Drive binary is trashed or trash state unavailable")
     if max_bytes is not None:
         try:
             declared = int(meta.get("size") or 0)

@@ -12,10 +12,17 @@ from typing import Any, Callable, Iterator, Mapping
 from bridge_worker_3_1_free import stable_job_id
 
 from .drive_adapter import access_token, file_metadata
-from .result_contract import verify_drive_result_contract, verify_terminal_output_live
+from .route_receipt_v2 import discover_route_receipt
 from .runtime_preflight import validate_video_runtime
+from .terminal_evidence_v2 import (
+    build_terminal_evidence,
+    reverify_terminal_output_live,
+    source_identity_from_claim,
+)
 from .video_queue import claim_job, database_url_from_env, finish_job, heartbeat_job, retry_job
 from .workload_lock import shared_workload_lock
+
+verify_terminal_output_live = reverify_terminal_output_live
 
 APPROVED_PROFILE = "bridge_3_1_free"
 APPROVED_REVISION = "3.1-free-r25.16"
@@ -79,34 +86,44 @@ def _metadata_checksum(meta: Mapping[str, Any]) -> str | None:
 
 
 def verify_claimed_source(claim: Mapping[str, Any], token: str) -> dict[str, Any]:
-    """Read and exactly match the six immutable source identity fields."""
-
+    """Read and exactly match source identity plus the observed Drive revision."""
     if claim.get("processing_profile") != APPROVED_PROFILE:
         raise NeonVideoWorkerError("VIDEO_QUEUE_PROFILE_NOT_APPROVED")
     if claim.get("algorithm_revision") != APPROVED_REVISION:
         raise NeonVideoWorkerError("VIDEO_QUEUE_REVISION_NOT_APPROVED")
     if claim.get("stable_job_key") != stable_job_id("drive", str(claim.get("source_file_id") or "")):
         raise NeonVideoWorkerError("VIDEO_QUEUE_STABLE_ID_MISMATCH")
+
+    expected = source_identity_from_claim(claim)
     meta = file_metadata(str(claim["source_file_id"]), token)
-    observed = {
-        "id": str(meta.get("id") or ""),
+    if meta.get("trashed") is not False:
+        raise NeonVideoWorkerError("VIDEO_SOURCE_TRASHED_OR_UNKNOWN")
+    parents = [str(value) for value in (meta.get("parents") or [])]
+    normalized = {
+        "file_id": str(meta.get("id") or ""),
         "name": str(meta.get("name") or ""),
         "mime_type": str(meta.get("mimeType") or ""),
         "size_bytes": int(meta.get("size") or 0),
-        "parents": [str(value) for value in (meta.get("parents") or [])],
+        "parent_folder_id": parents[0] if len(parents) == 1 else "",
         "checksum": _metadata_checksum(meta),
     }
-    expected = {
-        "id": claim["source_file_id"],
-        "name": claim["source_name"],
-        "mime_type": claim["source_mime_type"],
-        "size_bytes": int(claim["source_size_bytes"]),
-        "parents": [claim["source_folder_id"]],
-        "checksum": claim.get("source_checksum"),
-    }
-    if observed != expected:
+    if normalized != expected:
         raise NeonVideoWorkerError("VIDEO_QUEUE_SOURCE_READBACK_MISMATCH")
-    return observed
+
+    modified_time = str(meta.get("modifiedTime") or "")
+    version = str(meta.get("version") or "")
+    if not modified_time or not version:
+        raise NeonVideoWorkerError("VIDEO_SOURCE_REVISION_MISSING")
+    return {
+        "id": normalized["file_id"],
+        "name": normalized["name"],
+        "mime_type": normalized["mime_type"],
+        "size_bytes": normalized["size_bytes"],
+        "parents": [normalized["parent_folder_id"]],
+        "checksum": normalized["checksum"],
+        "modified_time": modified_time,
+        "version": version,
+    }
 
 
 @contextmanager
@@ -140,9 +157,7 @@ def _stable_environment(claim: Mapping[str, Any]) -> Iterator[None]:
 
 
 def stable_review_processor(claim: Mapping[str, Any]) -> dict[str, Any]:
-    source_token = access_token()
-    # This is intentionally the last source operation before processing.
-    verify_claimed_source(claim, source_token)
+    """Run the approved processor and construct v2 evidence from live Drive objects."""
     with _stable_environment(claim):
         import bridge_runtime_hardening_r25_16 as hardening
         import route_drive_job_outputs
@@ -158,14 +173,13 @@ def stable_review_processor(claim: Mapping[str, Any]) -> dict[str, Any]:
             raise NeonVideoWorkerError("VIDEO_QUEUE_AI_DONE_MISMATCH")
         if route_drive_job_outputs.main() != 0:
             raise NeonVideoWorkerError("VIDEO_QUEUE_OUTPUT_ROUTE_FAILED")
+        terminal_token = access_token()
+        route_receipt = discover_route_receipt(claim, done, terminal_token)
+        terminal = build_terminal_evidence(claim, done, route_receipt, terminal_token)
 
-    # Processing can outlive the initial OAuth token. Acquire a fresh token for
-    # the first result readback; process_claim performs another live readback
-    # immediately before the fenced terminal state transition.
-    contract = verify_drive_result_contract(claim, done, token=access_token())
     master_pdf = done.get("masterPdf") if isinstance(done.get("masterPdf"), dict) else {}
     return {
-        **contract,
+        **terminal,
         "master_pdf_pages": master_pdf.get("pages"),
         "deal_review_pages": master_pdf.get("dealReviewPages"),
         "speech_segment_count": (done.get("speech") or {}).get("segmentCount"),
@@ -237,17 +251,11 @@ def process_claim(
     error_code: str | None = None
     initial_source: dict[str, Any] | None = None
 
-    # The lease heartbeat and total processing timeout cover the complete
-    # sequence: processing, terminal Drive readback, source revalidation, and
-    # the fenced finish/retry transition. A stalled readback therefore cannot
-    # silently outlive the lease and permit a second worker to repeat side effects.
     with _Heartbeat(database_url, claim, worker_key) as heartbeat:
         with _processing_timeout():
             try:
-                # Custom/test processors cannot bypass the production source gate.
                 initial_source = verify_claimed_source(claim, access_token())
                 output.update(dict(processor(claim)))
-                # Do not let a processor override immutable lifecycle fields.
                 output.update(_base_output(claim))
             except Exception as exc:
                 outcome, error_code = _failure(exc)
@@ -258,9 +266,7 @@ def process_claim(
 
             if outcome == "REVIEW_READY":
                 try:
-                    # Structural hashes are not sufficient. Re-download the
-                    # artifact and re-read the source immediately before finish_job.
-                    verify_terminal_output_live(claim, output, token=access_token())
+                    verify_terminal_output_live(claim, output, access_token())
                     final_source = verify_claimed_source(claim, access_token())
                     if initial_source is None or final_source != initial_source:
                         raise NeonVideoWorkerError("VIDEO_QUEUE_SOURCE_CHANGED_DURING_PROCESSING")
@@ -324,5 +330,6 @@ __all__ = [
     "process_one_neon",
     "stable_review_processor",
     "verify_claimed_source",
+    "verify_terminal_output_live",
     "worker_key_from_env",
 ]
