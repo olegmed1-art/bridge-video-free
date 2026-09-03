@@ -47,8 +47,8 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
     def test_visual_evidence_creates_partial_not_full_board(self):
         quality = build_quality_layer(base_master(), {'lesson_id': 'lesson-test', 'lesson_number': 5})
         counts = quality['counts']
-        self.assertEqual(quality['method_version'], 'diana-quality-v4.2')
-        self.assertEqual(quality['schema_version'], 5)
+        self.assertEqual(quality['method_version'], 'diana-quality-v4.3')
+        self.assertEqual(quality['schema_version'], 6)
         self.assertEqual(counts['verified_full_boards'], 0)
         self.assertGreaterEqual(counts['partial_boards'], 1)
         self.assertEqual(counts['report_visual_partial_boards_v4_2'], 1)
@@ -69,6 +69,31 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
         self.assertFalse(quality['incremental_processing']['raw_asr_mutated'])
         self.assertFalse(quality['cost_gate']['paid_ai_api_required'])
         self.assertFalse(quality['cost_gate']['paid_cloud_required'])
+
+    def test_extended_knowledge_harvest_is_staging_only(self):
+        master = base_master()
+        master['terminology_observations'] = [{
+            'stable_key': 'term:forcing', 'term': 'форсинг',
+            'status': 'REVIEW_REQUIRED', 'evidence_refs': ['segment-7'],
+        }]
+        master['system_evolution_observations'] = [{
+            'stable_key': 'evolution:lesson-5', 'status': 'REVIEW_REQUIRED',
+            'observed_version': 'candidate-v2', 'evidence_refs': ['segment-8'],
+        }]
+        master['world_comparison_links'] = [{
+            'stable_key': 'world:link-1', 'status': 'REVIEW_REQUIRED',
+            'world_object_id': 'world-rule-1', 'evidence_refs': ['segment-9'],
+        }]
+        quality = build_quality_layer(master, {'lesson_id': 'lesson-test', 'lesson_number': 5})
+        extraction = quality['extended_knowledge_extraction']
+        self.assertEqual(extraction['status'], 'STAGING_ONLY')
+        self.assertEqual(extraction['authority']['canon_activation'], 'DENY')
+        kinds = {row['candidate_type'] for row in extraction['candidate_records']}
+        self.assertTrue({
+            'SCHOOL_TERMINOLOGY', 'SYSTEM_EVOLUTION_OBSERVATION',
+            'WORLD_COMPARISON_LINK', 'ANALYSIS_QUALITY_EVIDENCE',
+        } <= kinds)
+        self.assertTrue(all(row['promotion_allowed'] is False for row in extraction['candidate_records']))
 
     def test_quality_created_at_is_master_derived_and_repeat_stable(self):
         master = base_master()
