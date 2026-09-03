@@ -196,12 +196,9 @@ BEGIN
      WHERE database_role=current_user AND status='active';
     IF NOT FOUND OR NEW.verifier_family<>v_principal.verifier_family
        OR NOT (NEW.check_id=ANY(v_principal.allowed_check_ids))
-       OR CASE v_principal.max_assurance_level
-            WHEN 'I1' THEN NEW.assurance_level NOT IN ('I0','I1')
-            WHEN 'I2' THEN NEW.assurance_level NOT IN ('I0','I1','I2')
-            WHEN 'I3' THEN false
-            ELSE true
-          END THEN
+       OR (v_principal.max_assurance_level='I1' AND NEW.assurance_level NOT IN ('I0','I1'))
+       OR (v_principal.max_assurance_level='I2' AND NEW.assurance_level NOT IN ('I0','I1','I2'))
+       OR v_principal.max_assurance_level NOT IN ('I1','I2','I3') THEN
         RAISE EXCEPTION 'VIDEO_CANON_VERIFIER_PRINCIPAL_MISMATCH' USING ERRCODE='42501';
     END IF;
     SELECT * INTO v_bundle FROM bidding.video_canon_ai_verification_bundle

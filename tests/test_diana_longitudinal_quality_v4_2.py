@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 import unittest
 
+import diana_longitudinal_quality_v4_2 as v42
 from diana_longitudinal_quality_v4_2 import build_quality_layer
 
 
@@ -145,20 +146,35 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
         self.assertFalse(pipeline['world_lookup_performed'])
 
     def test_video_canon_candidates_enter_the_shared_persistence_stream(self):
-        from tests.test_video_canon_ai_promotion import _bundle
-        from tests.test_video_canon_evidence import _assertion, _learning
-        from bridge_contracts.video_canon_evidence import build_video_canon_candidate
-
         master = base_master()
-        assertion = _assertion()
-        assertion['semantic_confidence'] = 0.99
-        candidate = build_video_canon_candidate(_learning(), assertion)
-        master['video_canon_learning_candidate'] = _learning()
-        master['video_canon_assertions'] = [assertion]
-        master['video_canon_verification_bundles'] = {
-            assertion['assertion_id']: _bundle(candidate),
+        master['video_canon_learning_candidate'] = {'candidate': 'input'}
+        master['video_canon_assertions'] = [{'assertion_id': 'rule-1'}]
+        master['video_canon_verification_bundles'] = {'rule-1': {'bundle': 'input'}}
+        candidate = {
+            'candidate_type': 'video_school_canon_candidate',
+            'stable_key': 'rule-1',
+            'quality_status': 'AI_VERIFICATION_PENDING',
+            'promotion_status': 'STAGING_ONLY',
+            'payload': {'schema': 'video-canon-evidence-v2'},
+            'payload_hash': 'a' * 64,
+            'evidence_refs': ['transcript#1'],
+            'method_version': 'video-canon-evidence-v2',
         }
-        quality = build_quality_layer(master, {'lesson_id': 'lesson-test', 'lesson_number': 5})
+        old_pipeline = v42.run_video_canon_auto_pipeline
+        try:
+            v42.run_video_canon_auto_pipeline = lambda *_: {
+                'schema': 'video-canon-auto-pipeline-v1',
+                'status': 'AUTO_PROMOTION_READY',
+                'candidates': [candidate],
+                'promotion_commands': [{'operation': 'ACTIVATE_AI_VERIFIED_VIDEO_CANON'}],
+                'gaps': [],
+                'human_approval_required': False,
+                'world_lookup_performed': False,
+                'authoritative_write_performed': False,
+            }
+            quality = build_quality_layer(master, {'lesson_id': 'lesson-test', 'lesson_number': 5})
+        finally:
+            v42.run_video_canon_auto_pipeline = old_pipeline
         persisted = [
             row for row in quality['candidate_staging_records']
             if row.get('candidate_type') == 'video_school_canon_candidate'
