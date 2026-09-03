@@ -37,6 +37,55 @@ DIRECT_DSN = (
     "ep-shadow.eu-central-1.aws.neon.tech/neondb"
     "?sslmode=require&channel_binding=require"
 )
+BROKER_SOURCE_SHA = "e" * 40
+BROKER_ARTIFACT_SHA256 = "c" * 64
+BROKER_POLICY_SHA256 = "d" * 64
+BROKER_PROVENANCE_SHA256 = hashlib.sha256(
+    json.dumps(
+        {
+            "artifact_sha256": BROKER_ARTIFACT_SHA256,
+            "policy_sha256": BROKER_POLICY_SHA256,
+            "policy_version": "physical-no-merge-v1",
+            "source_sha": BROKER_SOURCE_SHA,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+).hexdigest()
+
+
+def _broker_release_env() -> dict[str, str]:
+    return {
+        "AUTOPILOT_TOKEN_BROKER_EXPECTED_SOURCE_SHA": BROKER_SOURCE_SHA,
+        "AUTOPILOT_TOKEN_BROKER_EXPECTED_ARTIFACT_SHA256": (
+            BROKER_ARTIFACT_SHA256
+        ),
+        "AUTOPILOT_TOKEN_BROKER_EXPECTED_POLICY_SHA256": BROKER_POLICY_SHA256,
+        "AUTOPILOT_TOKEN_BROKER_EXPECTED_PROVENANCE_SHA256": (
+            BROKER_PROVENANCE_SHA256
+        ),
+    }
+
+
+def _approved_health_payload() -> dict[str, object]:
+    return {
+        "source_revision": BROKER_SOURCE_SHA,
+        "artifact_sha256": BROKER_ARTIFACT_SHA256,
+        "policy_sha256": BROKER_POLICY_SHA256,
+        "provenance_sha256": BROKER_PROVENANCE_SHA256,
+        "broker_policy_version": "physical-no-merge-v1",
+        "source_attested": True,
+        "artifact_attested": True,
+        "preview_only": True,
+        "production_mutations_enabled": False,
+        "github_token_broker_enabled": True,
+        "bounded_draft_executor_enabled": True,
+        "raw_installation_token_exposed": False,
+        "merge_endpoint_enabled": False,
+        "ref_update_delete_enabled": False,
+        "actions_endpoint_enabled": False,
+        "deployments_endpoint_enabled": False,
+    }
 
 
 def _task(**overrides):
@@ -263,6 +312,7 @@ def test_token_broker_config_pins_preview_origin(monkeypatch):
         ),
         "AUTOPILOT_TOKEN_BROKER_SECRET": "s" * 64,
         "AUTOPILOT_VERCEL_BYPASS_SECRET": "b" * 64,
+        **_broker_release_env(),
     }
     with patch.dict(os.environ, env, clear=True):
         config = load_token_broker_config()
@@ -338,6 +388,17 @@ def test_bounded_draft_repair_posts_only_to_pinned_broker(monkeypatch):
     class Opener:
         @staticmethod
         def open(request, timeout):
+            if request.get_method() == "GET":
+                class HealthResponse(Response):
+                    def geturl(self):
+                        return broker_url.replace(
+                            "/v1/github/draft-repair", "/healthz"
+                        )
+
+                    def read(self, limit):
+                        return json.dumps(_approved_health_payload()).encode()
+
+                return HealthResponse()
             observed.update(
                 {
                     "url": request.full_url,
@@ -357,6 +418,7 @@ def test_bounded_draft_repair_posts_only_to_pinned_broker(monkeypatch):
             "AUTOPILOT_TOKEN_BROKER_URL": broker_url,
             "AUTOPILOT_TOKEN_BROKER_SECRET": "s" * 64,
             "AUTOPILOT_VERCEL_BYPASS_SECRET": "b" * 64,
+            **_broker_release_env(),
         },
         clear=True,
     ):
@@ -417,7 +479,18 @@ def test_bounded_draft_repair_rejects_forged_evidence(monkeypatch):
         def read(self, _limit): return json.dumps(response_payload).encode()
 
     class Opener:
-        open = staticmethod(lambda *_args, **_kwargs: Response())
+        @staticmethod
+        def open(request, **_kwargs):
+            if request.get_method() == "GET":
+                class HealthResponse(Response):
+                    def geturl(self):
+                        return broker_url.replace("/v1/github/draft-repair", "/healthz")
+
+                    def read(self, _limit):
+                        return json.dumps(_approved_health_payload()).encode()
+
+                return HealthResponse()
+            return Response()
 
     monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: Opener())
     with patch.dict(
@@ -426,11 +499,52 @@ def test_bounded_draft_repair_rejects_forged_evidence(monkeypatch):
             "AUTOPILOT_TOKEN_BROKER_URL": broker_url,
             "AUTOPILOT_TOKEN_BROKER_SECRET": "s" * 64,
             "AUTOPILOT_VERCEL_BYPASS_SECRET": "b" * 64,
+            **_broker_release_env(),
         },
         clear=True,
     ):
         with pytest.raises(AutopilotContractError, match="RESPONSE_INVALID"):
             execute_bounded_draft_repair(goal)
+
+
+def test_bounded_draft_repair_rejects_unapproved_release_before_post(monkeypatch):
+    broker_url = (
+        "https://bridge-school-autopilot-cslfiz83g-"
+        "olegmed1-4368s-projects.vercel.app/v1/github/draft-repair"
+    )
+    methods = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def geturl(self):
+            return broker_url.replace("/v1/github/draft-repair", "/healthz")
+        def read(self, _limit):
+            return json.dumps(
+                {**_approved_health_payload(), "source_revision": "f" * 40}
+            ).encode()
+
+    class Opener:
+        @staticmethod
+        def open(request, **_kwargs):
+            methods.append(request.get_method())
+            return Response()
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: Opener())
+    with patch.dict(
+        os.environ,
+        {
+            "AUTOPILOT_TOKEN_BROKER_URL": broker_url,
+            "AUTOPILOT_TOKEN_BROKER_SECRET": "s" * 64,
+            "AUTOPILOT_VERCEL_BYPASS_SECRET": "b" * 64,
+            **_broker_release_env(),
+        },
+        clear=True,
+    ), pytest.raises(AutopilotContractError, match="RELEASE_UNAPPROVED"):
+        execute_bounded_draft_repair(_draft_goal())
+    assert methods == ["GET"]
 
 
 def test_github_pr_snapshot_uses_bounded_public_get(monkeypatch):

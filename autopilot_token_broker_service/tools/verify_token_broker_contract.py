@@ -148,6 +148,7 @@ def verify() -> dict[str, object]:
         '"merge_endpoint_enabled": False',
         '"ref_update_delete_enabled": False',
         "_require_source_attestation()",
+        'service_root / "uv.lock"',
     ):
         if required not in main_text:
             raise SystemExit("BROKER_ATTESTATION_GUARD_MISSING")
@@ -161,6 +162,10 @@ def verify() -> dict[str, object]:
         "uvicorn[standard]==0.52.2",
     }:
         raise SystemExit("BROKER_DEPENDENCIES_INVALID")
+    lock_text = (ROOT / "uv.lock").read_text(encoding="utf-8")
+    for package in ("cryptography", "fastapi", "pydantic", "uvicorn"):
+        if f'name = "{package}"' not in lock_text:
+            raise SystemExit("BROKER_DEPENDENCY_LOCK_INVALID")
 
     vercel = json.loads((ROOT / "vercel.json").read_text(encoding="utf-8"))
     if (

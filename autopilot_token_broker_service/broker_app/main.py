@@ -103,13 +103,17 @@ def _source_revision() -> str:
 
 
 def _artifact_sha256() -> str:
-    """Hash the security-relevant Python artifact actually loaded by the runtime."""
+    """Hash runtime code and the fully resolved dependency manifest."""
 
-    root = Path(__file__).resolve().parent
+    service_root = Path(__file__).resolve().parent.parent
+    root = service_root / "broker_app"
     digest = hashlib.sha256()
-    for path in sorted(root.glob("*.py"), key=lambda item: item.name):
+    paths = [*root.glob("*.py"), service_root / "uv.lock"]
+    for path in sorted(
+        paths, key=lambda item: item.relative_to(service_root).as_posix()
+    ):
         data = path.read_bytes()
-        digest.update(path.name.encode("utf-8"))
+        digest.update(path.relative_to(service_root).as_posix().encode("utf-8"))
         digest.update(b"\0")
         digest.update(len(data).to_bytes(8, "big"))
         digest.update(data)
