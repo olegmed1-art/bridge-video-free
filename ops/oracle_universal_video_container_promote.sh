@@ -22,6 +22,8 @@ operator_sudoers_existed=0
 operator_backup_root=''
 old_enabled_before=''
 old_active_before=''
+new_enabled_before=''
+new_active_before=''
 CURRENT_STAGE='validation'
 
 cleanup(){
@@ -174,6 +176,16 @@ rollback(){
     # old resident is stopped, immediately before restoring a resident.
     release_workload_fence
     systemctl disable --now "$NEW_SERVICE" >/dev/null 2>&1 || true
+    if [[ "$new_enabled_before" == enabled ]]; then
+      systemctl enable "$NEW_SERVICE" >/dev/null 2>&1 || true
+    else
+      systemctl disable "$NEW_SERVICE" >/dev/null 2>&1 || true
+    fi
+    if [[ "$new_active_before" == active ]]; then
+      systemctl start "$NEW_SERVICE" >/dev/null 2>&1 || true
+    else
+      systemctl stop "$NEW_SERVICE" >/dev/null 2>&1 || true
+    fi
     if [[ "$old_enabled_before" == enabled ]]; then
       systemctl enable "$OLD_SERVICE" >/dev/null 2>&1 || true
     else
@@ -283,9 +295,17 @@ docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g \
 started_unix="$(date +%s)"
 old_enabled_before="$(systemctl is-enabled "$OLD_SERVICE" 2>/dev/null || true)"
 old_active_before="$(systemctl is-active "$OLD_SERVICE" 2>/dev/null || true)"
+new_enabled_before="$(systemctl is-enabled "$NEW_SERVICE" 2>/dev/null || true)"
+new_active_before="$(systemctl is-active "$NEW_SERVICE" 2>/dev/null || true)"
+[[ "$old_active_before" != active || "$new_active_before" != active ]] \
+  || fail UV_CONTAINER_PROMOTION_DUAL_RESIDENT
 switch_started=1
 CURRENT_STAGE='legacy-quiesce'
 systemctl disable --now "$OLD_SERVICE" || fail UV_CONTAINER_PROMOTION_LEGACY_QUIESCE_FAILED
+CURRENT_STAGE='container-quiesce'
+if [[ "$new_active_before" == active || "$new_enabled_before" == enabled ]]; then
+  systemctl disable --now "$NEW_SERVICE" || fail UV_CONTAINER_PROMOTION_CONTAINER_QUIESCE_FAILED
+fi
 CURRENT_STAGE='workload-handoff'
 if ! flock --unlock 9; then
   fail UV_CONTAINER_PROMOTION_WORKLOAD_UNLOCK_FAILED

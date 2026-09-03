@@ -54,13 +54,16 @@ def test_promotion_hands_off_exclusive_fence_after_old_resident_stops() -> None:
     lock_acquire = SCRIPT.index("flock --exclusive --nonblock 9", lock_metadata)
     final_idle = SCRIPT.index("has_running_job && fail UV_CONTAINER_PROMOTION_JOB_RUNNING", lock_acquire)
     legacy_stop = SCRIPT.index('systemctl disable --now "$OLD_SERVICE"', final_idle)
-    unlock = SCRIPT.index("flock --unlock 9", legacy_stop)
+    container_stop = SCRIPT.index('systemctl disable --now "$NEW_SERVICE"', legacy_stop)
+    unlock = SCRIPT.index("flock --unlock 9", container_stop)
     new_start = SCRIPT.index('oracle_universal_video_container_install.sh', unlock)
-    assert lock_path < lock_metadata < lock_acquire < final_idle < legacy_stop < unlock < new_start
+    assert lock_path < lock_metadata < lock_acquire < final_idle < legacy_stop < container_stop < unlock < new_start
     assert 'exec 9<"$WORKLOAD_LOCK"' in SCRIPT
     assert "workload_lock_held=1" in SCRIPT
     assert "release_workload_fence" in SCRIPT
     assert "UV_CONTAINER_PROMOTION_WORKLOAD_UNLOCK_FAILED" in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_CONTAINER_QUIESCE_FAILED" in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_DUAL_RESIDENT" in SCRIPT
 
 
 def test_promotion_runs_exact_queue_and_speaker_gates_before_source_preparation() -> None:
@@ -184,6 +187,10 @@ def test_promotion_disables_legacy_and_rollback_restores_original_state() -> Non
     assert 'CURRENT_STAGE=\'legacy-quiesce\'' in SCRIPT
     assert 'systemctl enable "$OLD_SERVICE"' in SCRIPT
     assert 'if [[ "$old_active_before" == active ]]; then' in SCRIPT
+    assert 'new_enabled_before="$(systemctl is-enabled "$NEW_SERVICE"' in SCRIPT
+    assert 'new_active_before="$(systemctl is-active "$NEW_SERVICE"' in SCRIPT
+    assert 'if [[ "$new_enabled_before" == enabled ]]; then' in SCRIPT
+    assert 'if [[ "$new_active_before" == active ]]; then' in SCRIPT
     assert "UV_CONTAINER_PROMOTION_LEGACY_ENABLED" in SCRIPT
 
 
