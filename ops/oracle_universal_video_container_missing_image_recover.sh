@@ -48,18 +48,22 @@ chmod -R a+rX,u-w,g-w,o-w "$source_dir/repo"
 
 speaker_cache="$BASE_DIR/model-cache/speaker"
 install -d -o universal-video -g universal-video -m 0750 "$speaker_cache"
-PYTHONPATH="$source_dir/repo" SPEAKER_CACHE="$speaker_cache" python3 - <<'PY'
-import hashlib, os
+PYTHONPATH="$source_dir/repo" SPEAKER_CACHE="$speaker_cache" RECOVERY_ROOT="$RECOVERY_ROOT" python3 - <<'PY'
+import hashlib, os, time
 from pathlib import Path
 from bridge_speaker_diarization_v3 import _ensure_embedding, _ensure_segmentation
 
 root=Path(os.environ['SPEAKER_CACHE'])
+expected={
+    root/'pyannote-segmentation-3.0.onnx': '915e0573bc4e17197a7a893d0eb98e1a851abb64451b2e1a8ad51f5f99040360',
+    root/'3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx': '1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b',
+}
+for path,digest in expected.items():
+    if path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+        quarantine=Path(os.environ['RECOVERY_ROOT'])/f'{path.name}.{int(time.time())}.invalid'
+        path.replace(quarantine)
 seg=_ensure_segmentation(root)
 emb=_ensure_embedding(root, '3dspeaker')
-expected={
-    seg: '915e0573bc4e17197a7a893d0eb98e1a851abb64451b2e1a8ad51f5f99040360',
-    emb: '1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b',
-}
 for path,digest in expected.items():
     observed=hashlib.sha256(path.read_bytes()).hexdigest()
     if observed != digest:
