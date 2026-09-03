@@ -49,3 +49,70 @@ def test_source_bound_why_is_a_separate_explanation_candidate():
         row["payload"].get("gap_type") == "EXPLANATION_MISSING"
         for row in result["candidate_records"]
     )
+
+
+def test_extracts_explicit_causal_teacher_speech_from_real_analysis_shape():
+    master = {
+        "job_id": "job-1",
+        "transcript": [{
+            "segment_id": "segment-7",
+            "speaker": "teacher:diana",
+            "speaker_role": "teacher",
+            "speaker_role_confidence": 0.96,
+            "start": 10.0,
+            "end": 14.0,
+            "text": "Мы не пасуем, потому что эта заявка форсирует.",
+        }],
+    }
+    quality = {
+        "canon_candidates": [{
+            "canon_observation_id": "rule-7",
+            "classification": "RULE_PARAPHRASE_MATCH",
+            "evidence_refs": ["segment-7"],
+        }],
+        "authority": {"canon_activation": "DENY"},
+    }
+    result = build_extended_extraction(master, quality)
+    explanation = next(
+        row for row in result["candidate_records"]
+        if row["candidate_type"] == "EXPLANATION_CANDIDATE"
+    )
+    assert explanation["payload"]["extraction_class"] == "EXPLICIT_CAUSAL_TEACHER_STATEMENT"
+    assert explanation["payload"]["why_chain"] == [
+        "Мы не пасуем, потому что эта заявка форсирует."
+    ]
+    assert explanation["payload"]["generated_rationale_allowed"] is False
+    assert result["explanation_extraction"]["automatic_explicit_causal"] == 1
+    assert not any(
+        row["payload"].get("gap_type") == "EXPLANATION_MISSING"
+        for row in result["candidate_records"]
+    )
+
+
+def test_does_not_treat_student_or_low_confidence_causal_speech_as_teacher_why():
+    for role, confidence in (("student", 0.99), ("teacher", 0.79)):
+        master = {
+            "job_id": "job-1",
+            "transcript": [{
+                "segment_id": "segment-7", "speaker_role": role,
+                "speaker_role_confidence": confidence,
+                "text": "Потому что это форсирует.",
+            }],
+        }
+        quality = {
+            "canon_candidates": [{
+                "canon_observation_id": "rule-7",
+                "classification": "RULE_PARAPHRASE_MATCH",
+                "evidence_refs": ["segment-7"],
+            }],
+            "authority": {"canon_activation": "DENY"},
+        }
+        result = build_extended_extraction(master, quality)
+        assert not any(
+            row["candidate_type"] == "EXPLANATION_CANDIDATE"
+            for row in result["candidate_records"]
+        )
+        assert any(
+            row["payload"].get("gap_type") == "EXPLANATION_MISSING"
+            for row in result["candidate_records"]
+        )
