@@ -19,6 +19,7 @@ on:
       - 'tests/test_universal_video_issue_881_readiness.py'
       - 'tests/test_universal_video_neon_queue.py'
       - 'tests/test_universal_video_terminal_evidence_v2.py'
+      - 'tests/test_universal_video_drive_adapter.py'
       - 'tests/test_issue_881_queue_dsn.py'
       - 'ops/oracle_universal_video_precanary_attest.sh'
       - 'ops/validate_universal_video_promotion_evidence.py'
@@ -56,6 +57,7 @@ jobs:
             tests/test_universal_video_issue_881_readiness.py \
             tests/test_universal_video_neon_queue.py \
             tests/test_universal_video_terminal_evidence_v2.py \
+            tests/test_universal_video_drive_adapter.py \
             tests/test_issue_881_queue_dsn.py \
             tests/test_universal_video_container_promotion_contract.py \
             tests/test_universal_video_promotion_evidence_validator.py
@@ -141,5 +143,10 @@ jobs:
               RAISE EXCEPTION '0058 forward re-migration not recorded';
             END IF;
           END $$;
+          DELETE FROM video_queue.job_event
+           WHERE batch_id IN (SELECT batch_id FROM video_queue.batch WHERE request_key='issue881-rollback-preserve');
+          DELETE FROM video_queue.job
+           WHERE batch_id IN (SELECT batch_id FROM video_queue.batch WHERE request_key='issue881-rollback-preserve');
+          DELETE FROM video_queue.batch WHERE request_key='issue881-rollback-preserve';
           SQL
           psql -v ON_ERROR_STOP=1 -f database/tests/042_issue_881_canary_gate.sql
