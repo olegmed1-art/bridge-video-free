@@ -46,3 +46,10 @@ counterexample. The analyzer must preserve the teacher's reason rather than
 generate a plausible replacement. A rule observation without such evidence
 creates an explicit `EXPLANATION_MISSING` gap. It may still be reviewed as a
 rule candidate, but it is not a complete teachable knowledge unit.
+
+The analyzer now extracts an explanation candidate directly when the same
+source-bound transcript segment is attributed to the teacher with confidence
+at least 0.8 and contains an explicit causal marker such as “потому что”,
+“поэтому” or “так как”. The exact speech, speaker evidence and timestamps are
+preserved. This first pass intentionally records a partial explanation rather
+than completing missing premises, alternatives or examples with generated text.
