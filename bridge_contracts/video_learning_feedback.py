@@ -73,7 +73,12 @@ def build_learning_feedback(
         receipt_sha = _sha(receipt.get("receipt_sha256"))
         if receipt_sha != _digest(sealed):
             raise VideoLearningFeedbackError("correction review receipt digest mismatch")
-        trusted = correction_receipt_resolver(receipt_sha) if correction_receipt_resolver else None
+        try:
+            trusted = correction_receipt_resolver(receipt_sha) if correction_receipt_resolver else None
+        except Exception as exc:
+            raise VideoLearningFeedbackError(
+                "trusted correction review storage unavailable"
+            ) from exc
         if not isinstance(trusted, Mapping) or dict(trusted) != dict(receipt):
             raise VideoLearningFeedbackError("correction review receipt is not in trusted storage")
         receipts[receipt_id] = receipt

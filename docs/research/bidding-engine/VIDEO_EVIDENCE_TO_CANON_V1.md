@@ -133,7 +133,11 @@ records. Human corrections remain useful but are not a prerequisite for every
 Canon rule. A self-hash and claimed reviewer are insufficient: the receipt must
 resolve byte-for-byte through a trusted review-store resolver supplied outside
 the analyzer master. Without that trust dependency the correction becomes an
-explicit gap and is not training-eligible. A candidate model is only represented by a
+explicit gap and is not training-eligible. The production Diana entrypoint
+resolves through the worker's read-only access to the append-only
+`bidding.video_correction_review_receipt` store. Only the authenticated control
+verifier capability may attest a receipt there; app and worker roles cannot
+insert or mutate it. A candidate model is only represented by a
 `MODEL_IMPROVEMENT_PROPOSAL` when a named holdout compares it with a baseline
 and records a rollback model version. Model deployment remains a separate
 gate; a model passing holdout is not itself permission to change Canon.

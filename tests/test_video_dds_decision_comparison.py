@@ -190,3 +190,4 @@ def test_real_diana_postprocessor_wires_the_pinned_dds_executor():
     source = (ROOT / "diana_longitudinal_postprocess_v4_2.py").read_text()
     assert "from bridge_school_api.dds3.service import compute as execute_pinned_dds3" in source
     assert "dds_request_executor=execute_pinned_dds3" in source
+    assert "correction_receipt_resolver=_trusted_correction_receipt_resolver()" in source

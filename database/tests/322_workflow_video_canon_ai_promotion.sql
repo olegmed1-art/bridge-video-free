@@ -46,6 +46,12 @@ BEGIN
      OR has_table_privilege('bridge_school_canon_promoter','bidding.video_canon_ai_promotion_receipt','INSERT') THEN
     RAISE EXCEPTION 'VIDEO_CANON_DIRECT_WRITE_NOT_BLOCKED';
   END IF;
+  IF has_table_privilege('bridge_school_worker','bidding.video_correction_review_receipt','INSERT')
+     OR has_table_privilege('bridge_school_app','bidding.video_correction_review_receipt','INSERT')
+     OR NOT has_table_privilege('bridge_school_worker','bidding.video_correction_review_receipt','SELECT')
+     OR NOT has_table_privilege('bridge_school_canon_control_verifier','bidding.video_correction_review_receipt','INSERT') THEN
+    RAISE EXCEPTION 'VIDEO_CORRECTION_REVIEW_ACL_INVALID';
+  END IF;
 
   v_failed:=false;
   BEGIN

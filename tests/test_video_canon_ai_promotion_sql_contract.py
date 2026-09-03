@@ -18,6 +18,10 @@ def test_ai_promotion_is_narrow_guarded_and_not_granted_to_general_workers():
     assert "bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,bridge_school_canon_promoter" in MIGRATION
     assert "promotion_mode','AI_VERIFIED_TEACHER_VIDEO'" in MIGRATION
     assert "'human_approval_required',false" in MIGRATION
+    assert "CREATE TABLE bidding.video_correction_review_receipt" in MIGRATION
+    assert "'CORRECTION_REVIEW'=ANY(v_principal.allowed_check_ids)" in MIGRATION
+    assert "GRANT INSERT ON bidding.video_correction_review_receipt TO bridge_school_canon_control_verifier" in MIGRATION
+    assert "GRANT SELECT ON bidding.video_correction_review_receipt TO bridge_school_worker" in MIGRATION
 
 
 def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests():
@@ -64,3 +68,4 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "WHERE analysis_candidate_id=p_analysis_candidate_id FOR UPDATE" in MIGRATION
     assert "RETURN v_existing.video_canon_ai_promotion_receipt_id" in MIGRATION
     assert "rollback refused: Video-to-Canon state exists" in ROLLBACK
+    assert "EXISTS (SELECT 1 FROM bidding.video_correction_review_receipt)" in ROLLBACK

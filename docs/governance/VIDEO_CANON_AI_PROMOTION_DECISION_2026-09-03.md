@@ -67,3 +67,8 @@ provenance, verifier receipts and the rejected/revoked version remain stored.
 The bounded promotion RPC is immediate-only: it rejects a future
 `valid_from`. Future scheduling must be implemented as a separate reviewed
 control path so the currently active version cannot be closed early.
+
+Analyzer correction receipts use a separate append-only trust store. The
+analysis worker has read-only resolution, while an authenticated control
+verifier capability alone may attest new receipts. These training candidates
+remain non-canonical and cannot execute training or deployment by themselves.

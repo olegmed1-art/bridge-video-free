@@ -97,7 +97,7 @@ INSERT INTO bidding.video_canon_verifier_registry(
     'SOURCE_AUTHORITY','SOURCE_BINDING','SPEAKER_IDENTITY','TRANSCRIPT_BINDING',
     'EXPLANATION_COMPLETENESS','POSITIVE_TESTS','NEGATIVE_TESTS','BOUNDARY_TESTS',
     'INTERFERENCE_TESTS','CANON_REGRESSION','CANON_INTEGRITY','CANON_CONFLICT_SCAN',
-    'ROLLBACK_RESTORE'
+    'ROLLBACK_RESTORE','CORRECTION_REVIEW'
   ],'I1');
 
 CREATE TABLE bidding.video_canon_ai_verification (
@@ -142,6 +142,59 @@ CREATE TABLE bidding.video_canon_ai_promotion_receipt (
     human_approval_required boolean NOT NULL CHECK (human_approval_required=false),
     promoted_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE TABLE bidding.video_correction_review_receipt (
+    receipt_sha256 text PRIMARY KEY CHECK (receipt_sha256 ~ '^[0-9a-f]{64}$'),
+    receipt_canonical_json text NOT NULL CHECK (btrim(receipt_canonical_json)<>''),
+    receipt_payload jsonb NOT NULL CHECK (jsonb_typeof(receipt_payload)='object'),
+    recorded_by_role text NOT NULL DEFAULT current_user,
+    recorded_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE OR REPLACE FUNCTION bidding.validate_video_correction_review_receipt()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    v_principal bidding.video_canon_verifier_registry%ROWTYPE;
+    v_decoded jsonb;
+    v_computed text;
+BEGIN
+    SELECT * INTO v_principal FROM bidding.video_canon_verifier_registry
+     WHERE database_role=current_user AND status='active';
+    IF NOT FOUND OR NOT ('CORRECTION_REVIEW'=ANY(v_principal.allowed_check_ids))
+       OR v_principal.max_assurance_level NOT IN ('I1','I2','I3')
+       OR NEW.recorded_by_role<>current_user THEN
+        RAISE EXCEPTION 'VIDEO_CORRECTION_REVIEW_PRINCIPAL_MISMATCH' USING ERRCODE='42501';
+    END IF;
+    BEGIN
+        v_decoded := NEW.receipt_canonical_json::jsonb;
+    EXCEPTION WHEN OTHERS THEN
+        RAISE EXCEPTION 'VIDEO_CORRECTION_REVIEW_CANONICAL_JSON_INVALID' USING ERRCODE='23514';
+    END;
+    v_computed := encode(public.digest(convert_to(NEW.receipt_canonical_json,'UTF8'),'sha256'),'hex');
+    IF v_decoded<>(NEW.receipt_payload-'receipt_sha256')
+       OR v_computed<>NEW.receipt_sha256
+       OR NEW.receipt_payload->>'receipt_sha256'<>NEW.receipt_sha256
+       OR jsonb_object_length(NEW.receipt_payload)<>8
+       OR NOT (NEW.receipt_payload ?& ARRAY[
+         'correction_id','reviewer_ref','source_sha256','input_ref',
+         'corrected_value_sha256','evidence_refs','status','receipt_sha256'
+       ])
+       OR NEW.receipt_payload->>'status'<>'VERIFIED'
+       OR NOT ((NEW.receipt_payload->>'source_sha256') ~ '^[0-9a-f]{64}$')
+       OR NOT ((NEW.receipt_payload->>'corrected_value_sha256') ~ '^[0-9a-f]{64}$')
+       OR jsonb_typeof(NEW.receipt_payload->'evidence_refs')<>'array'
+       OR jsonb_array_length(NEW.receipt_payload->'evidence_refs')=0 THEN
+        RAISE EXCEPTION 'VIDEO_CORRECTION_REVIEW_RECEIPT_INVALID' USING ERRCODE='23514';
+    END IF;
+    RETURN NEW;
+END $$;
+
+CREATE TRIGGER video_correction_review_receipt_guard
+BEFORE INSERT ON bidding.video_correction_review_receipt
+FOR EACH ROW EXECUTE FUNCTION bidding.validate_video_correction_review_receipt();
+CREATE TRIGGER video_correction_review_receipt_append_only
+BEFORE UPDATE OR DELETE ON bidding.video_correction_review_receipt
+FOR EACH ROW EXECUTE FUNCTION bidding.reject_append_only_mutation();
 
 CREATE OR REPLACE FUNCTION bidding.validate_video_canon_verification_bundle()
 RETURNS trigger LANGUAGE plpgsql AS $$
@@ -601,14 +654,24 @@ GRANT EXECUTE ON FUNCTION bidding.activate_ai_verified_video_canon(uuid,uuid,tex
 GRANT SELECT ON bidding.video_canon_source_policy,bidding.video_canon_ai_verification_bundle,
   bidding.video_canon_verifier_registry,
   bidding.video_canon_ai_verification,
-  bidding.video_canon_ai_promotion_receipt TO bridge_school_reader;
+  bidding.video_canon_ai_promotion_receipt,bidding.video_correction_review_receipt
+  TO bridge_school_reader;
+GRANT SELECT ON bidding.video_correction_review_receipt TO bridge_school_worker;
+GRANT INSERT ON bidding.video_correction_review_receipt TO bridge_school_canon_control_verifier;
 GRANT INSERT ON bidding.video_canon_ai_verification_bundle TO bridge_school_canon_verifier;
 GRANT INSERT ON bidding.video_canon_ai_verification TO
   bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
   bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier;
 REVOKE INSERT,UPDATE,DELETE,TRUNCATE ON bidding.video_canon_source_policy,
-  bidding.video_canon_verifier_registry,bidding.video_canon_ai_promotion_receipt
+  bidding.video_canon_verifier_registry,bidding.video_canon_ai_promotion_receipt,
+  bidding.video_correction_review_receipt
   FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,bridge_school_canon_promoter;
+REVOKE UPDATE,DELETE,TRUNCATE ON bidding.video_correction_review_receipt
+  FROM bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
+  bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier;
+REVOKE INSERT ON bidding.video_correction_review_receipt FROM
+  bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
+  bridge_school_canon_firewall_verifier,bridge_school_canon_promoter;
 REVOKE UPDATE,DELETE,TRUNCATE ON bidding.video_canon_ai_verification_bundle,bidding.video_canon_ai_verification
   FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,
   bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
@@ -624,9 +687,15 @@ REVOKE ALL ON FUNCTION bidding.validate_video_canon_verification() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_bound_video_canon_candidate() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_video_canon_source_policy_lifecycle() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_video_canon_verifier_registry_lifecycle() FROM PUBLIC;
+REVOKE ALL ON FUNCTION bidding.validate_video_correction_review_receipt() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION bidding.validate_video_canon_verification_bundle(),
   bidding.guard_bound_video_canon_candidate(),bidding.guard_video_canon_source_policy_lifecycle(),
   bidding.guard_video_canon_verifier_registry_lifecycle()
+  FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,
+  bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
+  bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier,
+  bridge_school_canon_promoter;
+REVOKE EXECUTE ON FUNCTION bidding.validate_video_correction_review_receipt()
   FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,
   bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
   bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier,

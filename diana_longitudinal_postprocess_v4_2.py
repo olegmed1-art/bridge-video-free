@@ -23,6 +23,14 @@ from diana_longitudinal_quality_v4_2 import (
 SCHEMA_VERSION = 5
 
 
+def _trusted_correction_receipt_resolver():
+    raw_dsn = os.environ.get('BRIDGE_WORKER_DATABASE_URL', '').strip()
+    if not raw_dsn:
+        return None
+    from database.video_correction_review_store import DatabaseCorrectionReceiptResolver
+    return DatabaseCorrectionReceiptResolver(raw_dsn)
+
+
 def _safe_filename(value: str) -> str:
     return re.sub(r'[\\/:*?"<>|]+', '_', value).strip()[:160]
 
@@ -158,6 +166,7 @@ def main() -> int:
         working_master,
         lesson,
         dds_request_executor=execute_pinned_dds3,
+        correction_receipt_resolver=_trusted_correction_receipt_resolver(),
     )
     curriculum = base._curriculum(working_master, lesson, quality)
     gaps = list(working_master.get('knowledge_gaps') or [])
