@@ -121,6 +121,8 @@ BEGIN
           'mime_type','application/pdf',
           'size_bytes',2048,
           'parent_id','outputFolder00001',
+          'modified_time','2026-09-03T00:00:00Z',
+          'version','101',
           'sha256',repeat('c',64)
         ),
         jsonb_build_object(
@@ -131,6 +133,8 @@ BEGIN
           'mime_type','application/json',
           'size_bytes',1024,
           'parent_id','outputFolder00001',
+          'modified_time','2026-09-03T00:00:01Z',
+          'version','102',
           'sha256',repeat('d',64)
         )
       )
@@ -188,9 +192,6 @@ BEGIN
         RAISE EXCEPTION 'successful canary escaped explicit review gate';
     END IF;
 
-    -- Simulate a separate, explicit Director release so the generic queue
-    -- concurrency and terminalization invariants remain covered. finish_job
-    -- itself must never perform these mutations.
     UPDATE video_queue.batch
        SET status='RUNNING', updated_at=clock_timestamp()
      WHERE batch_id=v_batch AND status='CANARY_REVIEW';
