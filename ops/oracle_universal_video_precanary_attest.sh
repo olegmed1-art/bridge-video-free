@@ -41,7 +41,8 @@ die(){ printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 canonical_source_dir=""
 canonical_source_parent=""
 validate_source_dir_scope(){
-  local requested="$1" scope_root="$2" requested_parent resolved_root resolved_parent resolved_source
+  local requested="$1" scope_root="$2" protected_root="$3"
+  local requested_parent resolved_root resolved_parent resolved_source resolved_protected
   canonical_source_dir=""
   canonical_source_parent=""
   [[ "$scope_root" == /* && "$scope_root" != */ \
@@ -50,6 +51,10 @@ validate_source_dir_scope(){
   [[ -d "$scope_root" && ! -L "$scope_root" ]] || return 1
   resolved_root="$(realpath -e -- "$scope_root" 2>/dev/null)" || return 1
   [[ "$resolved_root" == "$scope_root" ]] || return 1
+  [[ "$protected_root" == /* && -d "$protected_root" && ! -L "$protected_root" ]] \
+    || return 1
+  resolved_protected="$(realpath -e -- "$protected_root" 2>/dev/null)" || return 1
+  [[ "$resolved_protected" == "$protected_root" ]] || return 1
   [[ "$requested" == "$scope_root/"* && "$requested" != */ ]] || return 1
   [[ "$requested" != *'//'* && "$requested" != */./* && "$requested" != */../* \
     && "$requested" != */. && "$requested" != */.. \
@@ -68,6 +73,11 @@ validate_source_dir_scope(){
   canonical_source_parent="$resolved_parent"
   canonical_source_dir="$resolved_parent/${requested##*/}"
   [[ "$canonical_source_dir" == "$requested" ]] || return 1
+  # This checkout is moved aside and replaced, so it must be disjoint from
+  # the protected runtime root (including its spool and secrets).
+  [[ "$canonical_source_dir" != "$resolved_protected" \
+    && "$canonical_source_dir" != "$resolved_protected/"* \
+    && "$resolved_protected" != "$canonical_source_dir/"* ]] || return 1
   if [[ -e "$requested" || -L "$requested" ]]; then
     [[ ! -L "$requested" ]] || return 1
     resolved_source="$(realpath -e -- "$requested" 2>/dev/null)" || return 1
@@ -97,8 +107,8 @@ else
     || die 'unrequested prior-run recovery evidence is forbidden'
 fi
 command -v realpath >/dev/null || die 'realpath is unavailable'
-validate_source_dir_scope "$SOURCE_DIR" /opt/bridge-school \
-  || die 'source checkout path is noncanonical or outside the bounded bridge-school root'
+validate_source_dir_scope "$SOURCE_DIR" /opt/bridge-school "$BASE_DIR" \
+  || die 'source checkout path is noncanonical, out of scope, or overlaps the protected runtime tree'
 SOURCE_DIR="$canonical_source_dir"
 SOURCE_PARENT="$canonical_source_parent"
 if [[ -n "$EXPECTED_SHA" ]]; then

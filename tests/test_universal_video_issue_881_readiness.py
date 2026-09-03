@@ -816,6 +816,10 @@ def test_source_scope_guard_rejects_aliases_and_accepts_missing_canonical_target
     outside = tmp_path / "outside"
     scope.mkdir()
     outside.mkdir()
+    protected = scope / "universal-video"
+    protected.mkdir()
+    (protected / "spool").mkdir()
+    (protected / "secrets").mkdir()
     (scope / "nested").mkdir()
     (scope / "linked-parent").symlink_to(outside, target_is_directory=True)
     mutation_log = tmp_path / "mutation.log"
@@ -828,9 +832,10 @@ def test_source_scope_guard_rejects_aliases_and_accepts_missing_canonical_target
     probe = validation + rf'''
 set -u
 scope={json.dumps(str(scope))}
+protected={json.dumps(str(protected))}
 mutation_log={json.dumps(str(mutation_log))}
 attempt(){{
-  if validate_source_dir_scope "$1" "$scope"; then
+  if validate_source_dir_scope "$1" "$scope" "$protected"; then
     printf 'mutation:%s\n' "$1" >> "$mutation_log"
     return 0
   fi
@@ -840,6 +845,10 @@ attempt(){{
 ! attempt {json.dumps(str(symlink_escape))}
 ! attempt {json.dumps(duplicate_separator)}
 ! attempt {json.dumps(dot_alias)}
+! attempt {json.dumps(str(protected))}
+! attempt {json.dumps(str(protected / "spool"))}
+! attempt {json.dumps(str(protected / "secrets"))}
+! attempt {json.dumps(str(scope))}
 attempt {json.dumps(str(valid))}
 [[ "$canonical_source_dir" == {json.dumps(str(valid))} ]]
 [[ "$canonical_source_parent" == "$scope" ]]
@@ -853,7 +862,7 @@ attempt {json.dumps(str(valid))}
     ]
     assert 'realpath -m -- "$requested"' in validation
     assert 'realpath -e -- "$requested_parent"' in validation
-    assert 'validate_source_dir_scope "$SOURCE_DIR" /opt/bridge-school' in script
+    assert 'validate_source_dir_scope "$SOURCE_DIR" /opt/bridge-school "$BASE_DIR"' in script
 
     execution = script[script.index('validate_source_dir_scope "$SOURCE_DIR"') :]
     validation_index = execution.index('validate_source_dir_scope "$SOURCE_DIR"')
@@ -1279,7 +1288,7 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert ".commit_id ==" in workflow and "$EXACT_SHA" in workflow
     assert "required_workflows=(" in workflow
     assert "verify_live_gate(){" in workflow
-    assert workflow.count("verify_live_gate") == 3
+    assert workflow.count("verify_live_gate") == 4
     assert "reviewThreads(first:100)" in workflow
     assert "unresolved current threads" in workflow
     assert "max_by([.run_number, .run_attempt])" in workflow
@@ -1289,11 +1298,15 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert ".github/workflows/issue-881-authoritative-external-evidence.yml" in workflow
     assert "prior-recovery-evidence.txt" in workflow
     assert "UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_SHA256='$recovery_sha'" in workflow
-    final_head_check = workflow.rindex("          verify_live_gate")
-    first_remote_mutation = workflow.index(
-        '"${s[@]}" "umask 077; rm -rf', final_head_check
+    staging_check = workflow.index(
+        "          verify_live_gate", workflow.index("          verify_live_gate") + 1
     )
-    assert final_head_check < first_remote_mutation
+    first_remote_mutation = workflow.index(
+        '"${s[@]}" "umask 077; rm -rf', staging_check
+    )
+    final_head_check = workflow.rindex("          verify_live_gate")
+    attestation_call = workflow.index("          set +e", final_head_check)
+    assert staging_check < first_remote_mutation < final_head_check < attestation_call
 
 
 def test_canary_sql_and_rollback_remain_null_safe_and_fail_closed():

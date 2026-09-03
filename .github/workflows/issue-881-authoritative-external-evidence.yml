@@ -276,6 +276,12 @@ jobs:
             sudo -n install -o root -g root -m 0700 '$remote_stage/attest.sh' '$remote_root/attest.sh'; \
             $recovery_install"
 
+          # Staging can outlive the evidence used by the earlier gate. Check
+          # the live head, review threads, and CI again as the final action
+          # before invoking the attestation that may quiesce resident services
+          # or replace protected runtime files.
+          verify_live_gate
+
           set +e
           "${s[@]}" "sudo -n env \
             UNIVERSAL_VIDEO_EXPECTED_SHA='$EXACT_SHA' \
