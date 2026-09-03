@@ -35,6 +35,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "guard_video_canon_source_policy_lifecycle",
         "status='superseded',valid_to=v_valid_from",
         "p.valid_from<=statement_timestamp()",
+        "v_valid_from>statement_timestamp()",
         "p.system_profile=v_bundle.bundle_payload->>'system_profile'",
         "p.learner_level=v_bundle.bundle_payload->>'learner_level'",
         "VIDEO_CANON_VERIFIER_PRINCIPAL_MISMATCH",

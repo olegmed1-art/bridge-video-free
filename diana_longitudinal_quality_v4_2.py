@@ -36,6 +36,52 @@ def _stable_quality_created_at(master: Mapping[str, Any]) -> str:
     return "1970-01-01T00:00:00Z"
 
 
+def _pass_verified_integration_evidence(
+    master: Mapping[str, Any], quality: dict[str, Any]
+) -> None:
+    """Route upstream proof receipts to their fail-closed consumers.
+
+    The v4.2 master is the integration boundary used by the real Diana job.
+    Keeping these collections only in synthetic ``quality`` dictionaries made
+    the standalone validators unreachable in production.  This adapter does
+    not declare any item valid: it preserves the supplied collection exactly,
+    records whether its container was admissible, and lets the dedicated DDS
+    and correction validators prove every field and digest.
+    """
+    fields = (
+        "verified_full_board_evidence",
+        "source_bound_logic_evidence",
+        "correction_review_receipts",
+    )
+    integration: dict[str, Any] = {
+        "source": "analysis_master",
+        "validation": "DEDICATED_DOWNSTREAM_FAIL_CLOSED",
+        "collections": {},
+    }
+    for field in fields:
+        raw = master.get(field)
+        if raw is None:
+            quality[field] = []
+            integration["collections"][field] = {
+                "status": "NOT_SUPPLIED", "item_count": 0,
+            }
+        elif isinstance(raw, list):
+            quality[field] = deepcopy(raw)
+            integration["collections"][field] = {
+                "status": "PASSED_TO_VALIDATOR", "item_count": len(raw),
+            }
+        else:
+            # Preserve the invalid value so the dedicated consumer emits an
+            # explicit gap instead of silently treating malformed proof as
+            # absent evidence.
+            quality[field] = deepcopy(raw)
+            integration["collections"][field] = {
+                "status": "INVALID_CONTAINER_PASSED_TO_VALIDATOR",
+                "item_count": 0,
+            }
+    quality["integrated_verification_evidence"] = integration
+
+
 def build_quality_layer(
     master: Mapping[str, Any],
     lesson_identity: Mapping[str, Any] | None = None,
@@ -120,6 +166,7 @@ def build_quality_layer(
         "heavy_video_reprocessing_for_this_layer": False,
         "reuses_existing_transcript_and_evidence": True,
     })
+    _pass_verified_integration_evidence(working, quality)
     extended = build_extended_extraction(working, quality)
     quality["extended_knowledge_extraction"] = extended
     staging = quality.setdefault("candidate_staging_records", [])
@@ -159,5 +206,6 @@ __all__ = [
     "QUALITY_SCHEMA_VERSION",
     "QUALITY_METHOD_VERSION",
     "_stable_quality_created_at",
+    "_pass_verified_integration_evidence",
     "build_quality_layer",
 ]

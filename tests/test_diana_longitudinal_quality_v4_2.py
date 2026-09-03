@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 import unittest
 
 import diana_longitudinal_quality_v4_2 as v42
+from bridge_school_api.dds3.service import DDS_UPSTREAM
 from diana_longitudinal_quality_v4_2 import build_quality_layer
+
+
+def digest(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+    ).hexdigest()
 
 
 def base_master() -> dict:
@@ -183,6 +192,97 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
         self.assertEqual(quality['counts']['video_canon_candidates'], 1)
         self.assertEqual(
             quality['counts']['staging_records'], len(quality['candidate_staging_records'])
+        )
+
+    def test_integrated_master_routes_verified_dds_proofs_to_comparison(self):
+        master = base_master()
+        master['dds_decision_evaluations'] = [{
+            'decision': {
+                'decision_id': 'play-7', 'domain': 'PLAY', 'selected_action': 'SA',
+                'logic_candidate_id': 'why:rule-7:segment-7',
+                'source_sha256': 'c' * 64,
+                'public_context': {'auction': ['1NT', '3NT'], 'played_cards': []},
+                'evidence_refs': ['segment-7'],
+            },
+            'full_deal_evidence': {
+                'board_evidence_id': 'board-proof-7',
+                'deal_pbn_sha256': 'a' * 64, 'source_refs': ['frame-52'],
+                'verified_full_board': True,
+            },
+            'dds_result': {
+                'engine': 'DDS3', 'engine_version': DDS_UPSTREAM,
+                'fallback_used': False, 'operation': 'position_all_moves',
+                'deal_pbn_sha256': 'a' * 64, 'request_sha256': 'b' * 64,
+                'moves': [
+                    {'card': 'SA', 'tricks': 10, 'regret': 0, 'optimal': True},
+                    {'card': 'SK', 'tricks': 9, 'regret': 1, 'optimal': False},
+                ],
+            },
+        }]
+        master['verified_full_board_evidence'] = [{
+            'status': 'VERIFIED_FULL_BOARD', 'board_evidence_id': 'board-proof-7',
+            'deal_pbn_sha256': 'a' * 64, 'card_count': 52,
+            'unique_card_count': 52, 'source_refs': ['frame-52'],
+            'evidence_sha256': 'd' * 64,
+        }]
+        master['source_bound_logic_evidence'] = [{
+            'status': 'SOURCE_BOUND',
+            'logic_candidate_id': 'why:rule-7:segment-7',
+            'source_sha256': 'c' * 64, 'evidence_refs': ['segment-7'],
+        }]
+
+        quality = build_quality_layer(master, {'lesson_id': 'lesson-test', 'lesson_number': 5})
+        records = quality['extended_knowledge_extraction']['candidate_records']
+        self.assertTrue(any(row['candidate_type'] == 'DDS_DECISION_COMPARISON' for row in records))
+        routed = quality['integrated_verification_evidence']['collections']
+        self.assertEqual(routed['verified_full_board_evidence']['status'], 'PASSED_TO_VALIDATOR')
+        self.assertEqual(routed['source_bound_logic_evidence']['status'], 'PASSED_TO_VALIDATOR')
+
+    def test_integrated_master_routes_verified_teacher_correction_receipt(self):
+        master = base_master()
+        master['source'] = {'sha256': 'a' * 64}
+        correction = {
+            'correction_id': 'c-1', 'kind': 'ASR', 'input_ref': 'segment-7',
+            'corrected_value': 'форсирует', 'reviewer_ref': 'teacher:diana',
+            'evidence_refs': ['segment-7'],
+        }
+        master['human_corrections'] = [correction]
+        receipt = {
+            'correction_id': 'c-1', 'reviewer_ref': 'teacher:diana',
+            'source_sha256': 'a' * 64, 'input_ref': 'segment-7',
+            'corrected_value_sha256': digest('форсирует'),
+            'evidence_refs': ['segment-7'], 'status': 'VERIFIED',
+        }
+        receipt['receipt_sha256'] = digest(receipt)
+        master['correction_review_receipts'] = [receipt]
+
+        quality = build_quality_layer(master, {'lesson_id': 'lesson-test', 'lesson_number': 5})
+        records = quality['extended_knowledge_extraction']['candidate_records']
+        examples = [row for row in records if row['candidate_type'] == 'ANALYZER_TRAINING_EXAMPLE']
+        self.assertEqual(len(examples), 1)
+        self.assertEqual(examples[0]['payload']['review_receipt_sha256'], receipt['receipt_sha256'])
+        routed = quality['integrated_verification_evidence']['collections']
+        self.assertEqual(routed['correction_review_receipts']['status'], 'PASSED_TO_VALIDATOR')
+
+    def test_malformed_integrated_evidence_fails_to_explicit_gap(self):
+        master = base_master()
+        master['source'] = {'sha256': 'a' * 64}
+        master['human_corrections'] = [{
+            'correction_id': 'c-1', 'kind': 'ASR', 'input_ref': 'segment-7',
+            'corrected_value': 'форсирует', 'reviewer_ref': 'teacher:diana',
+            'evidence_refs': ['segment-7'],
+        }]
+        master['correction_review_receipts'] = {'not': 'a list'}
+        quality = build_quality_layer(master, {'lesson_id': 'lesson-test', 'lesson_number': 5})
+        records = quality['extended_knowledge_extraction']['candidate_records']
+        self.assertTrue(any(
+            row['payload'].get('gap_type') == 'LEARNING_FEEDBACK_INVALID'
+            for row in records
+        ))
+        routed = quality['integrated_verification_evidence']['collections']
+        self.assertEqual(
+            routed['correction_review_receipts']['status'],
+            'INVALID_CONTAINER_PASSED_TO_VALIDATOR',
         )
 
 

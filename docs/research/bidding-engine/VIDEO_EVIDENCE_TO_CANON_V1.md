@@ -56,6 +56,10 @@ a guarded lifecycle transition.
 When the same knowledge item already has an active version, activation closes
 the prior Canon and runtime rows in the same transaction. Their exact IDs are
 required in the restore-tested bundle and retained in the promotion receipt.
+This RPC admits only an effective `valid_from` at or before transaction time.
+A future-dated transition requires a separate scheduler; rejecting it here
+prevents the current version from being superseded before the replacement is
+actually effective.
 The existing runtime invariant remains unchanged:
 `CANON_CONFLICT` stops and does not call WORLD; only a recorded `CANON_GAP`
 permits the WORLD lookup.
@@ -68,6 +72,10 @@ Implementation boundaries:
 - the Diana quality layer appends every generated Video-to-Canon candidate to
   the shared `candidate_staging_records` stream consumed by the database
   persister;
+- the same integration layer explicitly routes full-board proofs,
+  source-bound logic proofs and correction-review receipts from the analysis
+  master to the strict DDS and learning-feedback validators; malformed or
+  absent proof produces a gap, never an inferred success;
 - migration `0322_workflow_video_canon_ai_promotion.sql` separates verifier and promoter
   roles and performs the atomic database activation;
 - the Diana v4.2 quality layer invokes the pipeline when a complete

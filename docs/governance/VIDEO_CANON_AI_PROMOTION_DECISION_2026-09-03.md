@@ -61,3 +61,7 @@ knowledge item and scope, preserving both prior activation identities in the
 receipt. Rollback of a promoted rule revokes its activation and restores that
 preceding version for the same system profile, learner level and scope. History,
 provenance, verifier receipts and the rejected/revoked version remain stored.
+
+The bounded promotion RPC is immediate-only: it rejects a future
+`valid_from`. Future scheduling must be implemented as a separate reviewed
+control path so the currently active version cannot be closed early.

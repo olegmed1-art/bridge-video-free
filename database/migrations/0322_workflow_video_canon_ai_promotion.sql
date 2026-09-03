@@ -356,7 +356,8 @@ BEGIN
     END;
     IF v_policy_version<>'school-video-auto-canon-v1'
        OR btrim(COALESCE(v_scope_key,''))=''
-       OR v_valid_from IS NULL OR (v_valid_to IS NOT NULL AND v_valid_to<=v_valid_from) THEN
+       OR v_valid_from IS NULL OR v_valid_from>statement_timestamp()
+       OR (v_valid_to IS NOT NULL AND v_valid_to<=v_valid_from) THEN
         RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_ARGUMENT_INVALID' USING ERRCODE='23514';
     END IF;
 
