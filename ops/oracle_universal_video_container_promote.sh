@@ -14,6 +14,7 @@ readonly STATUS='/run/bridge-school/universal-video-status.json'
 readonly WORKLOAD_LOCK="$BASE_DIR/spool/.workload.lock"
 readonly OPERATOR_TARGET='/usr/local/sbin/universal-video'
 readonly OPERATOR_SUDOERS='/etc/sudoers.d/universal-video-operator-ocarun'
+readonly RECOVERY_ROOT='/var/lib/bridge-school/universal-video-promotion-recovery'
 EXPECTED_COMMIT="${UNIVERSAL_VIDEO_EXPECTED_COMMIT:-}"
 EXPECTED_DIGEST="${UNIVERSAL_VIDEO_EXPECTED_IMAGE_DIGEST:-}"
 switch_started=0
@@ -24,6 +25,7 @@ operator_sudoers_existed=0
 new_service_unit_existed=0
 new_service_env_existed=0
 operator_backup_root=''
+preserve_recovery_snapshot=0
 old_enabled_before=''
 old_active_before=''
 new_enabled_before=''
@@ -31,7 +33,8 @@ new_active_before=''
 CURRENT_STAGE='validation'
 
 cleanup(){
-  if [[ -n "$operator_backup_root" && -d "$operator_backup_root" ]]; then
+  if (( preserve_recovery_snapshot == 0 )) \
+      && [[ -n "$operator_backup_root" && -d "$operator_backup_root" ]]; then
     rm -rf -- "$operator_backup_root"
   fi
 }
@@ -302,7 +305,9 @@ rollback(){
     fi
   fi
   if (( rollback_failed == 1 )); then
-    printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_FAILED code=UV_CONTAINER_PROMOTION_ROLLBACK_FAILED stage=%s rc=%s\n' "$CURRENT_STAGE" "$rc" >&2
+    preserve_recovery_snapshot=1
+    printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_FAILED code=UV_CONTAINER_PROMOTION_ROLLBACK_FAILED stage=%s rc=%s recovery_snapshot=%s\n' \
+      "$CURRENT_STAGE" "$rc" "$operator_backup_root" >&2
     exit 1
   fi
   printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_FAILED code=UV_CONTAINER_PROMOTION_ROLLED_BACK stage=%s rc=%s\n' "$CURRENT_STAGE" "$rc" >&2
@@ -341,7 +346,13 @@ python3 "$SOURCE_DIR/ops/validate_video_queue_dsn.py" "$queue_dsn_file" >/dev/nu
   || fail UV_CONTAINER_PROMOTION_QUEUE_CREDENTIAL_INVALID
 
 CURRENT_STAGE='operator-snapshot'
-operator_backup_root="$(mktemp -d)"
+[[ ! -L "$RECOVERY_ROOT" ]] || fail UV_CONTAINER_PROMOTION_RECOVERY_ROOT_UNSAFE
+install -d -o root -g root -m 0700 "$RECOVERY_ROOT"
+[[ "$(stat -c '%U:%G:%a:%h' "$RECOVERY_ROOT" 2>/dev/null || true)" == 'root:root:700:1' ]] \
+  || fail UV_CONTAINER_PROMOTION_RECOVERY_ROOT_UNSAFE
+operator_backup_root="$(mktemp -d "$RECOVERY_ROOT/snapshot.XXXXXX")"
+[[ "$(stat -c '%U:%G:%a:%h' "$operator_backup_root" 2>/dev/null || true)" == 'root:root:700:1' ]] \
+  || fail UV_CONTAINER_PROMOTION_RECOVERY_SNAPSHOT_UNSAFE
 if [[ -e "$OPERATOR_TARGET" || -L "$OPERATOR_TARGET" ]]; then
   [[ -f "$OPERATOR_TARGET" && ! -L "$OPERATOR_TARGET" ]] || fail UV_CONTAINER_PROMOTION_OPERATOR_UNSAFE
   install -o root -g root -m 0600 "$OPERATOR_TARGET" "$operator_backup_root/operator"

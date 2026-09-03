@@ -207,6 +207,12 @@ def test_promotion_disables_legacy_and_rollback_restores_original_state() -> Non
     assert 'runtime_files_match_snapshot || rollback_failed=1' in SCRIPT
     assert 'cmp -s "$operator_backup_root/container-unit" "$NEW_SERVICE_UNIT"' in SCRIPT
     assert 'cmp -s "$operator_backup_root/container-env" "$NEW_SERVICE_ENV"' in SCRIPT
+    assert "readonly RECOVERY_ROOT='/var/lib/bridge-school/universal-video-promotion-recovery'" in SCRIPT
+    assert 'operator_backup_root="$(mktemp -d "$RECOVERY_ROOT/snapshot.XXXXXX")"' in SCRIPT
+    assert 'preserve_recovery_snapshot=1' in SCRIPT
+    assert 'recovery_snapshot=%s' in SCRIPT
+    cleanup = SCRIPT[SCRIPT.index("cleanup(){") : SCRIPT.index("release_workload_fence(){")]
+    assert "preserve_recovery_snapshot == 0" in cleanup
     assert "rollback_failed=1" in SCRIPT
     assert "if has_running_job; then\n      rollback_failed=1" in SCRIPT
     assert 'enabled|disabled|static|indirect|masked|masked-runtime|not-found' in SCRIPT
