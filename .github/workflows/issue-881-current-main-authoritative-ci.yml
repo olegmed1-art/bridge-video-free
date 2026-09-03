@@ -1,0 +1,144 @@
+name: Issue 881 Current-Main Authoritative CI
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/issue-881-current-main-authoritative-ci.yml'
+      - '.github/workflows/issue-881-authoritative-external-evidence.yml'
+      - 'deploy/oracle-universal-video/Dockerfile'
+      - 'universal_video/**'
+      - 'ops/oracle_universal_video_precanary_attest.sh'
+      - 'ops/oracle_universal_video_container_install.sh'
+      - 'ops/oracle_universal_video_container_missing_image_recover.sh'
+      - 'database/migrations/0056_universal_video_queue.sql'
+      - 'database/migrations/0057_universal_video_canary_review_gate.sql'
+      - 'database/migrations/0058_universal_video_terminal_v2_gate.sql'
+      - 'database/migrations/0058_universal_video_terminal_v2_gate/**'
+      - 'database/rollbacks/0058_universal_video_terminal_v2_gate.sql'
+      - 'database/tests/041_universal_video_queue.sql'
+      - 'database/tests/042_issue_881_canary_gate.sql'
+      - 'tests/test_universal_video_issue_881_readiness.py'
+      - 'tests/test_universal_video_neon_queue.py'
+      - 'tests/test_universal_video_terminal_evidence_v2.py'
+      - 'tests/test_universal_video_drive_adapter.py'
+      - 'tests/test_universal_video_container_runtime.py'
+      - 'tests/test_universal_video_missing_image_recovery.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  EXACT_RUNTIME_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  current-main-contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ env.EXACT_RUNTIME_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Prove exact head descends from live current main
+        run: |
+          set -euo pipefail
+          [[ "$EXACT_RUNTIME_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXACT_RUNTIME_SHA"
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          main_sha="$(git rev-parse refs/remotes/origin/main)"
+          merge_base="$(git merge-base HEAD refs/remotes/origin/main)"
+          test "$merge_base" = "$main_sha"
+          git merge-base --is-ancestor cfe1ed898df41dd436f7e09bafa962682730c2e1 HEAD
+          git merge-base --is-ancestor 774010759f3ea1d1cae7c19fdbef6248bd89a555 HEAD
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -q pytest requests google-auth psycopg[binary]
+      - name: Prove no-media runtime and terminal-v2 contracts
+        run: |
+          set -euo pipefail
+          grep -Eq '^FROM python@sha256:[0-9a-f]{64}$' deploy/oracle-universal-video/Dockerfile
+          python -m universal_video.precanary imports
+          python -m universal_video.precanary synthetic-result-contract
+          python -m pytest -q \
+            tests/test_universal_video_issue_881_readiness.py \
+            tests/test_universal_video_neon_queue.py \
+            tests/test_universal_video_terminal_evidence_v2.py \
+            tests/test_universal_video_drive_adapter.py \
+            tests/test_universal_video_container_runtime.py \
+            tests/test_universal_video_missing_image_recovery.py
+          python -m compileall -q universal_video
+      - name: Build exact immutable image identity without activation
+        run: |
+          set -euo pipefail
+          docker build \
+            --build-arg "UNIVERSAL_VIDEO_SOURCE_COMMIT=$EXACT_RUNTIME_SHA" \
+            -t "issue881:$EXACT_RUNTIME_SHA" \
+            -f deploy/oracle-universal-video/Dockerfile .
+          image_id="$(docker image inspect --format '{{.Id}}' "issue881:$EXACT_RUNTIME_SHA")"
+          revision="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "issue881:$EXACT_RUNTIME_SHA")"
+          [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
+          test "$revision" = "$EXACT_RUNTIME_SHA"
+          printf 'runtime_sha=%s\nimmutable_image_id=%s\ncanonical_promotion_allowed=false\npublication_state=NOT_PUBLISHED\nreal_media_canary_run=false\n' \
+            "$EXACT_RUNTIME_SHA" "$image_id" | tee "$RUNNER_TEMP/issue881-image.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: issue-881-current-main-image-${{ env.EXACT_RUNTIME_SHA }}
+          path: ${{ runner.temp }}/issue881-image.txt
+          retention-days: 14
+
+  database-contract:
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:16.4-bookworm
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: issue881
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d issue881"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      PGDATABASE: issue881
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ env.EXACT_RUNTIME_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - run: test "$(git rev-parse HEAD)" = "$EXACT_RUNTIME_SHA"
+      - name: Install exact queue contract
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE bridge_school_reader NOLOGIN;
+          CREATE ROLE bridge_school_app NOLOGIN;
+          CREATE ROLE bridge_school_worker NOLOGIN;
+          CREATE EXTENSION IF NOT EXISTS pgcrypto WITH SCHEMA public;
+          CREATE TABLE schema_migration (migration_key text PRIMARY KEY);
+          SQL
+          psql -v ON_ERROR_STOP=1 -f database/migrations/0056_universal_video_queue.sql
+          psql -v ON_ERROR_STOP=1 -f database/migrations/0057_universal_video_canary_review_gate.sql
+          psql -v ON_ERROR_STOP=1 -f database/migrations/0058_universal_video_terminal_v2_gate.sql
+      - name: Prove fail-closed result and zero batch release
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 -f database/tests/041_universal_video_queue.sql
+          psql -v ON_ERROR_STOP=1 -f database/tests/042_issue_881_canary_gate.sql
+          grep -F "RETURN QUERY SELECT p_outcome, v_batch_status, 0;" \
+            database/migrations/0058_universal_video_terminal_v2_gate/001_apply_terminal_v2.sql
+          grep -F "'released_jobs', 0" \
+            database/migrations/0058_universal_video_terminal_v2_gate/001_apply_terminal_v2.sql
+      - name: Prove coherent rollback and forward recovery
+        run: |
+          set -euo pipefail
+          psql -v ON_ERROR_STOP=1 -f database/rollbacks/0058_universal_video_terminal_v2_gate.sql
+          psql -v ON_ERROR_STOP=1 -f database/migrations/0058_universal_video_terminal_v2_gate.sql
+          psql -v ON_ERROR_STOP=1 -f database/tests/042_issue_881_canary_gate.sql
