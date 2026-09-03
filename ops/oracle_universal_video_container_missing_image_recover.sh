@@ -97,10 +97,12 @@ docker image inspect "$candidate_image" >/dev/null || die CANDIDATE_IMAGE_MISSIN
 find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit | grep -q . && die JOB_APPEARED
 
 install -o root -g root -m 0600 "$ENV_FILE" "$backup"
+# From this point onward every failure must restore the previous environment and
+# restart the sole service this bounded recovery is allowed to touch.
+activated=1
 systemctl stop "$SERVICE"
 install -o root -g root -m 0640 "$CANDIDATE_ENV" "$ENV_FILE"
 rm -f -- "$CANDIDATE_ENV"
-activated=1
 systemctl restart "$SERVICE"
 for _ in $(seq 1 20); do
   [[ "$(systemctl is-active "$SERVICE" 2>/dev/null || true)" == active ]] && break

@@ -37,6 +37,16 @@ SPEAKER_EMBEDDING_SHA256 = (
     "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b"
 )
 MIN_SPEAKER_MODEL_BYTES = 1024
+ENTRYPOINT_SELF_TEST = "entrypoint-self-test"
+PRECANARY_STARTUP_PROBE_ENV = "UNIVERSAL_VIDEO_PRECANARY_STARTUP_PROBE"
+PRECANARY_STATUS_PATH = "/run/bridge-school/precanary-startup-status.json"
+PRECANARY_SPOOL_ROOT = "/tmp/issue881/spool"
+DEFAULT_WORKER_COMMAND = ["python", "-m", "universal_video.spool_worker"]
+QUEUE_ENV_NAMES = (
+    "BRIDGE_VIDEO_QUEUE_DATABASE_URL",
+    "BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE",
+    "BRIDGE_WORKER_DATABASE_URL",
+)
 
 
 class ContainerRuntimeUnavailable(RuntimeError):
@@ -127,9 +137,6 @@ def _validate_speaker_models(cache: Path) -> dict[str, str]:
         )
         if not config.validate():
             raise ContainerRuntimeUnavailable("UV_CONTAINER_SPEAKER_MODEL_INVALID")
-        # Construction loads both ONNX artifacts through the same sherpa-onnx
-        # API used by processing. Config validation alone does not prove that
-        # the runtime can instantiate either model.
         sherpa_onnx.OfflineSpeakerDiarization(config)
     except ContainerRuntimeUnavailable:
         raise
@@ -156,8 +163,6 @@ def validate_container_runtime() -> dict[str, object]:
     )
     try:
         runtime = validate_video_runtime()
-        # ``HF_HUB_OFFLINE`` is exported by the entrypoint.  Loading the model
-        # here proves it is present locally and prevents a network fallback.
         _load_model()
     except ContainerRuntimeUnavailable:
         raise
@@ -175,10 +180,57 @@ def validate_container_runtime() -> dict[str, object]:
     }
 
 
+def _validate_precanary_startup_probe(command: Sequence[str]) -> None:
+    """Allow one no-media startup probe only under an unmistakable CI contract.
+
+    The probe still execs the image's configured worker command.  It merely
+    bypasses model readiness so an empty isolated spool can prove the real
+    ENTRYPOINT -> container_runtime -> CMD -> spool_worker.__main__ chain.
+    Production queue configuration is explicitly forbidden in this mode.
+    """
+
+    commit = os.getenv("UNIVERSAL_VIDEO_SOURCE_COMMIT", "").strip().lower()
+    if not COMMIT_RE.fullmatch(commit):
+        raise ContainerRuntimeUnavailable("UV_CONTAINER_STARTUP_PROBE_INVALID")
+    if list(command) != DEFAULT_WORKER_COMMAND:
+        raise ContainerRuntimeUnavailable("UV_CONTAINER_STARTUP_PROBE_INVALID")
+    if os.getenv("UNIVERSAL_VIDEO_STATUS_PATH", "") != PRECANARY_STATUS_PATH:
+        raise ContainerRuntimeUnavailable("UV_CONTAINER_STARTUP_PROBE_INVALID")
+    if os.getenv("UNIVERSAL_VIDEO_SPOOL_ROOT", "") != PRECANARY_SPOOL_ROOT:
+        raise ContainerRuntimeUnavailable("UV_CONTAINER_STARTUP_PROBE_INVALID")
+    if os.getenv("UNIVERSAL_VIDEO_RESIDENT_ID", "") != "container":
+        raise ContainerRuntimeUnavailable("UV_CONTAINER_STARTUP_PROBE_INVALID")
+    if any(os.getenv(name, "").strip() for name in QUEUE_ENV_NAMES):
+        raise ContainerRuntimeUnavailable("UV_CONTAINER_STARTUP_PROBE_QUEUE_FORBIDDEN")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     command = list(sys.argv[1:] if argv is None else argv)
+    if command == [ENTRYPOINT_SELF_TEST]:
+        print(
+            json.dumps(
+                {
+                    "schema": "universal-video-entrypoint-self-test-v1",
+                    "status": "PASS",
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        return 0
     if not command:
-        command = ["python", "-m", "universal_video.spool_worker"]
+        command = list(DEFAULT_WORKER_COMMAND)
+    if os.getenv(PRECANARY_STARTUP_PROBE_ENV, "") == "1":
+        try:
+            _validate_precanary_startup_probe(command)
+        except ContainerRuntimeUnavailable as exc:
+            print(
+                json.dumps({"status": "FAILED", "error_code": exc.error_code}, sort_keys=True),
+                file=sys.stderr,
+            )
+            return 78
+        os.execvp(command[0], command)
+        return 127
     try:
         readiness = validate_container_runtime()
     except ContainerRuntimeUnavailable as exc:
