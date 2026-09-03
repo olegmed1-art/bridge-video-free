@@ -82,6 +82,12 @@ def test_extracts_explicit_causal_teacher_speech_from_real_analysis_shape():
         "Мы не пасуем, потому что эта заявка форсирует."
     ]
     assert explanation["payload"]["generated_rationale_allowed"] is False
+    assert explanation["payload"]["logic_relations"] == [{
+        "relation_type": "CAUSE",
+        "cue": "потому что",
+        "left_clause": "Мы не пасуем",
+        "right_clause": "эта заявка форсирует",
+    }]
     assert result["explanation_extraction"]["automatic_explicit_causal"] == 1
     assert not any(
         row["payload"].get("gap_type") == "EXPLANATION_MISSING"
@@ -116,3 +122,37 @@ def test_does_not_treat_student_or_low_confidence_causal_speech_as_teacher_why()
             row["payload"].get("gap_type") == "EXPLANATION_MISSING"
             for row in result["candidate_records"]
         )
+
+
+def test_extracts_why_and_what_for_as_distinct_logic_relations():
+    master = {
+        "job_id": "job-purpose",
+        "transcript": [{
+            "segment_id": "segment-purpose",
+            "speaker_role": "teacher",
+            "speaker_role_confidence": 0.95,
+            "text": "Мы делаем трансфер, чтобы передать право выбора партнёру.",
+        }],
+    }
+    quality = {
+        "canon_candidates": [{
+            "canon_observation_id": "rule-purpose",
+            "classification": "RULE_PARAPHRASE_MATCH",
+            "evidence_refs": ["segment-purpose"],
+        }],
+        "authority": {"canon_activation": "DENY"},
+    }
+    result = build_extended_extraction(master, quality)
+    explanation = next(
+        row["payload"] for row in result["candidate_records"]
+        if row["candidate_type"] == "EXPLANATION_CANDIDATE"
+    )
+    assert explanation["explanation_dimensions"] == ["PURPOSE"]
+    assert explanation["logic_relations"][0] == {
+        "relation_type": "PURPOSE",
+        "cue": "чтобы",
+        "left_clause": "Мы делаем трансфер",
+        "right_clause": "передать право выбора партнёру",
+    }
+    assert "CAUSE" in result["explanation_extraction"]["logic_dimensions"]
+    assert "PURPOSE" in result["explanation_extraction"]["logic_dimensions"]
