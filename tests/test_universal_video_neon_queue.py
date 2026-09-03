@@ -49,6 +49,9 @@ def drive_item(
         "size": str(2_000_000 + number),
         "parents": [parent],
         "md5Checksum": f"{number:032x}"[-32:],
+        "modifiedTime": "2026-09-02T21:00:00Z",
+        "version": str(1000 + number),
+        "trashed": False,
     }
 
 
@@ -146,7 +149,7 @@ def claim():
     }
 
 
-def observed_source(item):
+def observed_source(item, *, modified_time="2026-09-02T21:00:00Z", version="1014"):
     return {
         "id": item["source_file_id"],
         "name": item["source_name"],
@@ -154,6 +157,8 @@ def observed_source(item):
         "size_bytes": item["source_size_bytes"],
         "parents": [item["source_folder_id"]],
         "checksum": item["source_checksum"],
+        "modified_time": modified_time,
+        "version": version,
     }
 
 
@@ -203,6 +208,19 @@ def test_checksum_null_source_without_revision_fails_closed(missing):
     meta.pop(missing)
     with patch("universal_video.neon_worker.file_metadata", return_value=meta):
         with pytest.raises(NeonVideoWorkerError, match="REVISION_MISSING"):
+            verify_claimed_source(item, "token")
+
+
+@pytest.mark.parametrize("trash_state", [True, None])
+def test_source_trash_state_fails_closed(trash_state):
+    item = claim()
+    meta = drive_item(14)
+    if trash_state is None:
+        meta.pop("trashed")
+    else:
+        meta["trashed"] = trash_state
+    with patch("universal_video.neon_worker.file_metadata", return_value=meta):
+        with pytest.raises(NeonVideoWorkerError, match="TRASHED_OR_UNKNOWN"):
             verify_claimed_source(item, "token")
 
 
