@@ -18,10 +18,11 @@ from copy import deepcopy
 from typing import Any, Mapping
 
 import diana_longitudinal_quality_v4_1 as v41
+from bridge_contracts.video_extended_extraction import build_extended_extraction
 
 QUALITY_SCHEMA = v41.QUALITY_SCHEMA
-QUALITY_SCHEMA_VERSION = 5
-QUALITY_METHOD_VERSION = "diana-quality-v4.2"
+QUALITY_SCHEMA_VERSION = 6
+QUALITY_METHOD_VERSION = "diana-quality-v4.3"
 
 
 def _stable_quality_created_at(master: Mapping[str, Any]) -> str:
@@ -118,6 +119,13 @@ def build_quality_layer(
         "heavy_video_reprocessing_for_this_layer": False,
         "reuses_existing_transcript_and_evidence": True,
     })
+    extended = build_extended_extraction(working, quality)
+    quality["extended_knowledge_extraction"] = extended
+    staging = quality.setdefault("candidate_staging_records", [])
+    staging.extend(extended["candidate_records"])
+    counts["extended_knowledge_candidates"] = len(extended["candidate_records"])
+    counts["extended_knowledge_by_type"] = extended["counts_by_type"]
+    counts["staging_records"] = len(staging)
     return quality
 
 
