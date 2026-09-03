@@ -45,7 +45,7 @@ if [[ -e "$SUDOERS" || -L "$SUDOERS" ]]; then
   SUDOERS_BACKUP="$BACKUP_DIR/oracle-idle-state-ocarun-sudoers-${old_sudoers_sha}"
 fi
 
-tmp_sudoers="$(mktemp)"
+tmp_sudoers="$(mktemp --tmpdir="$BACKUP_DIR" .oracle-idle-sudoers.install.XXXXXX)"
 tmp_target=''
 tmp_backup=''
 tmp_sudoers_backup=''
@@ -53,8 +53,13 @@ restore_probe=''
 sudoers_restore_probe=''
 trusted_source=''
 trusted_authorizer=''
-proof='/tmp/oracle-idle-state-install-proof.txt'
-authorizer_stderr='/tmp/oracle-idle-state-install-authorizer.stderr'
+proof="$(mktemp --tmpdir="$BACKUP_DIR" .oracle-idle-install-proof.XXXXXX)"
+authorizer_stderr="$(mktemp --tmpdir="$BACKUP_DIR" .oracle-idle-authorizer.stderr.XXXXXX)"
+chmod 0600 "$proof" "$authorizer_stderr"
+for capture in "$proof" "$authorizer_stderr"; do
+  [[ -f "$capture" && ! -L "$capture" ]] || fail 'unsafe install proof capture'
+  [[ "$(stat -c '%U:%G:%a' "$capture")" == 'root:root:600' ]] || fail 'install proof capture ownership/mode invalid'
+done
 promoted=0
 committed=0
 

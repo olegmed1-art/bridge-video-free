@@ -45,6 +45,18 @@ MASS_OPERATOR_GROUP = (
     "format('oracle-dds3-pilot10k-operator-noop-{0}', github.run_id) }}"
 )
 
+ORACLE_V2_GROUP = (
+    "${{ github.event_name == 'issue_comment' && "
+    "github.event.comment.user.login == github.repository_owner && "
+    "contains(fromJSON('[\"/oracle-v2 rollout-worker\","
+    "\"/oracle-v2 rollout-dds3-runtime\",\"/oracle-v2 canary-worlds\","
+    "\"/oracle-v2 rollout-ben\",\"/oracle-v2 diagnose-ben\","
+    "\"/oracle-v2 canary-ben\",\"/oracle-v2 canary-ben-dds3\","
+    "\"/oracle-v2 benchmark-ben-100-500\"]'), github.event.comment.body) && "
+    "'oracle-instance-workload-mutation' || "
+    "format('oracle-operator-v2-noop-{0}', github.run_id) }}"
+)
+
 EXPECTED_PRODUCERS = {
     "oracle-diana11-002-job.yml": (
         {"pull_request", "push"},
@@ -152,8 +164,38 @@ def test_guard_install_serializes_with_stop_and_gates_after_uploads() -> None:
     third_upload = workflow.index("ops/install_oracle_idle_state_ocarun.sh")
     late_head = workflow.index("INSTALL_FINAL_HEAD_MOVED", third_upload)
     late_auth = workflow.index("INSTALL_FINAL_AUTHORIZATION_MISSING", late_head)
-    remote_install = workflow.index("sudo -n env SOURCE_FILE=", late_auth)
+    remote_install = workflow.index("sudo -n env UPLOADED_INSTALLER=", late_auth)
     assert third_upload < late_head < late_auth < remote_install
+
+
+def test_guard_install_executes_only_verified_root_owned_installer_copy() -> None:
+    workflow = _workflow_text("oracle-idle-guard-exact-install.yml")
+    copy = workflow.index("install -o root -g root -m 0700")
+    regular = workflow.index("test -f", copy)
+    mode = workflow.index("root:root:700", regular)
+    digest = workflow.index("INSTALLER_SHA256", mode)
+    syntax = workflow.index("bash -n", digest)
+    execute = workflow.index("; \\\"\\$trusted\\\"'", syntax)
+    assert copy < regular < mode < digest < syntax < execute
+    assert "sudo -n env SOURCE_FILE=" not in workflow
+
+
+def test_install_proof_captures_are_exclusive_root_only_regular_files() -> None:
+    installer = (ROOT / "ops" / "install_oracle_idle_state_ocarun.sh").read_text(encoding="utf-8")
+    assert 'mktemp --tmpdir="$BACKUP_DIR" .oracle-idle-install-proof.' in installer
+    assert 'mktemp --tmpdir="$BACKUP_DIR" .oracle-idle-authorizer.stderr.' in installer
+    assert '[[ -f "$capture" && ! -L "$capture" ]]' in installer
+    assert "root:root:600" in installer
+    assert "'/tmp/oracle-idle-state-install-proof.txt'" not in installer
+
+
+def test_oracle_v2_operator_mutations_share_stop_fence() -> None:
+    _assert_workflow_mapping(
+        "oracle-operator-v2.yml",
+        {"pull_request", "issue_comment"},
+        ORACLE_V2_GROUP,
+    )
+    assert SHARED_FENCE in ORACLE_V2_GROUP
 
 
 def test_installer_executes_verified_root_owned_authorizer_copy() -> None:
