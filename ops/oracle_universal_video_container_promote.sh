@@ -9,6 +9,7 @@ readonly BASE_DIR='/opt/bridge-school/universal-video'
 readonly OLD_SERVICE='universal-video.service'
 readonly NEW_SERVICE='universal-video-container.service'
 readonly STATUS='/run/bridge-school/universal-video-status.json'
+readonly WORKLOAD_LOCK="$BASE_DIR/spool/.workload.lock"
 readonly OPERATOR_TARGET='/usr/local/sbin/universal-video'
 readonly OPERATOR_SUDOERS='/etc/sudoers.d/universal-video-operator-ocarun'
 EXPECTED_COMMIT="${UNIVERSAL_VIDEO_EXPECTED_COMMIT:-}"
@@ -197,6 +198,14 @@ trap cleanup EXIT
 [[ "$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || true)" == "$EXPECTED_COMMIT" ]] || fail UV_CONTAINER_PROMOTION_SOURCE_MISMATCH
 [[ -z "$(git -C "$SOURCE_DIR" status --porcelain=v1 --untracked-files=all)" ]] || fail UV_CONTAINER_PROMOTION_SOURCE_DIRTY
 [[ -d "$BASE_DIR/spool/running" && ! -L "$BASE_DIR/spool/running" ]] || fail UV_CONTAINER_PROMOTION_SPOOL_UNAVAILABLE
+has_running_job && fail UV_CONTAINER_PROMOTION_JOB_RUNNING
+[[ -f "$WORKLOAD_LOCK" && ! -L "$WORKLOAD_LOCK" ]] \
+  || fail UV_CONTAINER_PROMOTION_WORKLOAD_LOCK_INVALID
+[[ "$(stat -c '%U:%G:%a:%h' "$WORKLOAD_LOCK" 2>/dev/null || true)" == 'root:universal-video:640:1' ]] \
+  || fail UV_CONTAINER_PROMOTION_WORKLOAD_LOCK_INVALID
+CURRENT_STAGE='workload-fence'
+exec 9<"$WORKLOAD_LOCK"
+flock --exclusive --nonblock 9 || fail UV_CONTAINER_PROMOTION_WORKLOAD_BUSY
 has_running_job && fail UV_CONTAINER_PROMOTION_JOB_RUNNING
 
 CURRENT_STAGE='queue-credential-preflight'
