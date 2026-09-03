@@ -40,6 +40,7 @@ MIN_SPEAKER_MODEL_BYTES = 1024
 ENTRYPOINT_SELF_TEST = "entrypoint-self-test"
 PRECANARY_STARTUP_PROBE_ENV = "UNIVERSAL_VIDEO_PRECANARY_STARTUP_PROBE"
 PRECANARY_STATUS_PATH = "/run/bridge-school/precanary-startup-status.json"
+PRECANARY_SPOOL_ROOT = "/tmp/issue881/spool"
 DEFAULT_WORKER_COMMAND = ["python", "-m", "universal_video.spool_worker"]
 QUEUE_ENV_NAMES = (
     "BRIDGE_VIDEO_QUEUE_DATABASE_URL",
@@ -194,6 +195,8 @@ def _validate_precanary_startup_probe(command: Sequence[str]) -> None:
     if list(command) != DEFAULT_WORKER_COMMAND:
         raise ContainerRuntimeUnavailable("UV_CONTAINER_STARTUP_PROBE_INVALID")
     if os.getenv("UNIVERSAL_VIDEO_STATUS_PATH", "") != PRECANARY_STATUS_PATH:
+        raise ContainerRuntimeUnavailable("UV_CONTAINER_STARTUP_PROBE_INVALID")
+    if os.getenv("UNIVERSAL_VIDEO_SPOOL_ROOT", "") != PRECANARY_SPOOL_ROOT:
         raise ContainerRuntimeUnavailable("UV_CONTAINER_STARTUP_PROBE_INVALID")
     if os.getenv("UNIVERSAL_VIDEO_RESIDENT_ID", "") != "container":
         raise ContainerRuntimeUnavailable("UV_CONTAINER_STARTUP_PROBE_INVALID")
