@@ -217,6 +217,11 @@ resident_worker_pid(){
   fi
   [[ "$root_pid" =~ ^[1-9][0-9]*$ ]] || return 1
   while read -r worker_pid; do
+    # The container root is tini. Its command line includes the child command,
+    # so pgrep also matches it even though it is not the spool worker itself.
+    if [[ "$service" == "$CONTAINER_SERVICE" && "$worker_pid" == "$root_pid" ]]; then
+      continue
+    fi
     if pid_descends_from "$worker_pid" "$root_pid"; then
       matches+=("$worker_pid")
     fi
