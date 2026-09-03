@@ -82,6 +82,39 @@ else
   echo 'source_head=unknown'
 fi
 
+# Report only numeric process identity and ancestry metadata. Command lines and
+# environments are intentionally excluded so the diagnostic remains secret-safe.
+readonly SOURCE_SERVICE='universal-video.service'
+source_root_pid="$(systemctl show "$SOURCE_SERVICE" -p MainPID --value 2>/dev/null || true)"
+container_root_pid="$(docker inspect --type container --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || true)"
+printf 'source_service_state=%s source_root_pid=%s container_root_pid=%s\n' \
+  "$(systemctl is-active "$SOURCE_SERVICE" 2>/dev/null || true)" \
+  "${source_root_pid:-unknown}" "${container_root_pid:-unknown}"
+
+descends_from(){
+  local child="$1" root="$2" parent
+  [[ "$child" =~ ^[1-9][0-9]*$ && "$root" =~ ^[1-9][0-9]*$ ]] || return 1
+  while [[ "$child" =~ ^[1-9][0-9]*$ ]]; do
+    [[ "$child" == "$root" ]] && return 0
+    parent="$(awk '/^PPid:/ {print $2}' "/proc/$child/status" 2>/dev/null || true)"
+    [[ "$parent" =~ ^[1-9][0-9]*$ && "$parent" != "$child" ]] || return 1
+    child="$parent"
+  done
+  return 1
+}
+
+mapfile -t worker_pids < <(pgrep -f '[u]niversal_video[.]spool_worker' 2>/dev/null || true)
+printf 'resident_worker_count=%s\n' "${#worker_pids[@]}"
+for worker_pid in "${worker_pids[@]}"; do
+  worker_state="$(awk '/^State:/ {print $2}' "/proc/$worker_pid/status" 2>/dev/null || true)"
+  source_descendant=false
+  container_descendant=false
+  descends_from "$worker_pid" "$source_root_pid" && source_descendant=true
+  descends_from "$worker_pid" "$container_root_pid" && container_descendant=true
+  printf 'resident_worker pid=%s state=%s source_descendant=%s container_descendant=%s\n' \
+    "$worker_pid" "${worker_state:-unknown}" "$source_descendant" "$container_descendant"
+done
+
 echo 'real_media_canary_run=false'
 echo 'service_mutation=false'
 echo 'docker_mutation=false'
