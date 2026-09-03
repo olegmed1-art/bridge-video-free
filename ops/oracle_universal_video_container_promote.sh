@@ -45,6 +45,14 @@ service_matches_captured_state(){
   local observed_enabled observed_active
   observed_enabled="$(systemctl is-enabled "$service" 2>/dev/null || true)"
   observed_active="$(systemctl is-active "$service" 2>/dev/null || true)"
+  case "$observed_enabled" in
+    enabled|disabled|static|indirect|masked|masked-runtime|not-found) ;;
+    *) return 1 ;;
+  esac
+  case "$observed_active" in
+    active|inactive|failed) ;;
+    *) return 1 ;;
+  esac
   if [[ "$expected_enabled" == enabled ]]; then
     [[ "$observed_enabled" == enabled ]] || return 1
   else
@@ -189,7 +197,10 @@ rollback(){
   local rollback_failed=0
   trap - ERR
   emit_runtime_code
-  if (( switch_started == 1 )) && ! has_running_job; then
+  if (( switch_started == 1 )); then
+    if has_running_job; then
+      rollback_failed=1
+    else
     # Resident startup recovery uses this same lock. Release it only after the
     # old resident is stopped, immediately before restoring a resident.
     release_workload_fence
@@ -231,6 +242,7 @@ rollback(){
       || rollback_failed=1
     service_matches_captured_state "$OLD_SERVICE" "$old_enabled_before" "$old_active_before" \
       || rollback_failed=1
+    fi
   fi
   if (( rollback_failed == 1 )); then
     printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_FAILED code=UV_CONTAINER_PROMOTION_ROLLBACK_FAILED stage=%s rc=%s\n' "$CURRENT_STAGE" "$rc" >&2

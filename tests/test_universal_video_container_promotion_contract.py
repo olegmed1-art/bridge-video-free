@@ -195,6 +195,10 @@ def test_promotion_disables_legacy_and_rollback_restores_original_state() -> Non
     assert 'service_matches_captured_state "$NEW_SERVICE" "$new_enabled_before" "$new_active_before"' in SCRIPT
     assert 'service_matches_captured_state "$OLD_SERVICE" "$old_enabled_before" "$old_active_before"' in SCRIPT
     assert "rollback_failed=1" in SCRIPT
+    assert "if has_running_job; then\n      rollback_failed=1" in SCRIPT
+    assert 'enabled|disabled|static|indirect|masked|masked-runtime|not-found' in SCRIPT
+    assert 'active|inactive|failed' in SCRIPT
+    assert '*) return 1 ;;' in SCRIPT
     assert "UV_CONTAINER_PROMOTION_LEGACY_ENABLED" in SCRIPT
 
 
