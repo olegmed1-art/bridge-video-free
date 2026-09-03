@@ -2,27 +2,6 @@ name: Issue 881 Current-Main Authoritative CI
 
 on:
   pull_request:
-    paths:
-      - '.github/workflows/issue-881-current-main-authoritative-ci.yml'
-      - '.github/workflows/issue-881-authoritative-external-evidence.yml'
-      - 'deploy/oracle-universal-video/Dockerfile'
-      - 'universal_video/**'
-      - 'ops/oracle_universal_video_precanary_attest.sh'
-      - 'ops/oracle_universal_video_container_install.sh'
-      - 'ops/oracle_universal_video_container_missing_image_recover.sh'
-      - 'database/migrations/0056_universal_video_queue.sql'
-      - 'database/migrations/0057_universal_video_canary_review_gate.sql'
-      - 'database/migrations/0058_universal_video_terminal_v2_gate.sql'
-      - 'database/migrations/0058_universal_video_terminal_v2_gate/**'
-      - 'database/rollbacks/0058_universal_video_terminal_v2_gate.sql'
-      - 'database/tests/041_universal_video_queue.sql'
-      - 'database/tests/042_issue_881_canary_gate.sql'
-      - 'tests/test_universal_video_issue_881_readiness.py'
-      - 'tests/test_universal_video_neon_queue.py'
-      - 'tests/test_universal_video_terminal_evidence_v2.py'
-      - 'tests/test_universal_video_drive_adapter.py'
-      - 'tests/test_universal_video_container_runtime.py'
-      - 'tests/test_issue_881_current_main_recovery_contract.py'
   workflow_dispatch:
 
 permissions:
@@ -82,11 +61,27 @@ jobs:
           test "$revision" = "$EXACT_RUNTIME_SHA"
           printf 'runtime_sha=%s\nimmutable_image_id=%s\ncanonical_promotion_allowed=false\npublication_state=NOT_PUBLISHED\nreal_media_canary_run=false\n' \
             "$EXACT_RUNTIME_SHA" "$image_id" | tee "$RUNNER_TEMP/issue881-image.txt"
+      - name: Recheck live current main before publishing evidence
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --force origin main:refs/remotes/origin/main
+          main_sha="$(git rev-parse refs/remotes/origin/main)"
+          merge_base="$(git merge-base HEAD refs/remotes/origin/main)"
+          test "$merge_base" = "$main_sha"
+          test "$(git rev-parse HEAD)" = "$EXACT_RUNTIME_SHA"
       - uses: actions/upload-artifact@v4
         with:
           name: issue-881-current-main-image-${{ env.EXACT_RUNTIME_SHA }}
           path: ${{ runner.temp }}/issue881-image.txt
           retention-days: 14
+      - name: Recheck live current main before final PASS
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --force origin main:refs/remotes/origin/main
+          main_sha="$(git rev-parse refs/remotes/origin/main)"
+          merge_base="$(git merge-base HEAD refs/remotes/origin/main)"
+          test "$merge_base" = "$main_sha"
+          test "$(git rev-parse HEAD)" = "$EXACT_RUNTIME_SHA"
 
   database-contract:
     runs-on: ubuntu-24.04
