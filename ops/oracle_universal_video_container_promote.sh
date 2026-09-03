@@ -8,6 +8,7 @@ readonly SOURCE_DIR='/opt/bridge-school/universal-video-src'
 readonly BASE_DIR='/opt/bridge-school/universal-video'
 readonly OLD_SERVICE='universal-video.service'
 readonly NEW_SERVICE='universal-video-container.service'
+readonly NEW_SERVICE_UNIT='/etc/systemd/system/universal-video-container.service'
 readonly STATUS='/run/bridge-school/universal-video-status.json'
 readonly WORKLOAD_LOCK="$BASE_DIR/spool/.workload.lock"
 readonly OPERATOR_TARGET='/usr/local/sbin/universal-video'
@@ -70,16 +71,8 @@ service_matches_captured_state(){
   observed_enabled="$(systemctl is-enabled "$service" 2>/dev/null || true)"
   observed_active="$(systemctl is-active "$service" 2>/dev/null || true)"
   service_state_is_known "$observed_enabled" "$observed_active" || return 1
-  if [[ "$expected_enabled" == enabled ]]; then
-    [[ "$observed_enabled" == enabled ]] || return 1
-  else
-    [[ "$observed_enabled" != enabled ]] || return 1
-  fi
-  if [[ "$expected_active" == active ]]; then
-    [[ "$observed_active" == active ]] || return 1
-  else
-    [[ "$observed_active" != active ]] || return 1
-  fi
+  [[ "$observed_enabled" == "$expected_enabled" ]] || return 1
+  [[ "$observed_active" == "$expected_active" ]] || return 1
 }
 
 fail(){
@@ -227,12 +220,17 @@ rollback(){
     else
     systemctl disable --now "$NEW_SERVICE" >/dev/null 2>&1 || rollback_failed=1
     release_workload_fence
-    if [[ "$new_enabled_before" == enabled ]]; then
+    if [[ "$new_enabled_before" == not-found ]]; then
+      rm -f -- "$NEW_SERVICE_UNIT" || rollback_failed=1
+      systemctl daemon-reload >/dev/null 2>&1 || rollback_failed=1
+    elif [[ "$new_enabled_before" == enabled ]]; then
       systemctl enable "$NEW_SERVICE" >/dev/null 2>&1 || true
     else
       systemctl disable "$NEW_SERVICE" >/dev/null 2>&1 || true
     fi
-    if [[ "$new_active_before" == active ]]; then
+    if [[ "$new_enabled_before" == not-found ]]; then
+      :
+    elif [[ "$new_active_before" == active ]]; then
       systemctl start "$NEW_SERVICE" >/dev/null 2>&1 || true
     else
       systemctl stop "$NEW_SERVICE" >/dev/null 2>&1 || true

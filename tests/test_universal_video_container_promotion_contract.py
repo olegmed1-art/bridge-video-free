@@ -196,6 +196,11 @@ def test_promotion_disables_legacy_and_rollback_restores_original_state() -> Non
     assert 'if [[ "$new_active_before" == active ]]; then' in SCRIPT
     assert 'service_matches_captured_state "$NEW_SERVICE" "$new_enabled_before" "$new_active_before"' in SCRIPT
     assert 'service_matches_captured_state "$OLD_SERVICE" "$old_enabled_before" "$old_active_before"' in SCRIPT
+    assert '[[ "$observed_enabled" == "$expected_enabled" ]] || return 1' in SCRIPT
+    assert '[[ "$observed_active" == "$expected_active" ]] || return 1' in SCRIPT
+    assert 'if [[ "$new_enabled_before" == not-found ]]; then' in SCRIPT
+    assert 'rm -f -- "$NEW_SERVICE_UNIT" || rollback_failed=1' in SCRIPT
+    assert 'systemctl daemon-reload >/dev/null 2>&1 || rollback_failed=1' in SCRIPT
     assert "rollback_failed=1" in SCRIPT
     assert "if has_running_job; then\n      rollback_failed=1" in SCRIPT
     assert 'enabled|disabled|static|indirect|masked|masked-runtime|not-found' in SCRIPT
