@@ -1294,10 +1294,10 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "prior_gate_pr_number=1070" in workflow
     assert "pr_number=1071" in workflow
     assert "Root Autopilot PR #991 is not merged" in workflow
-    assert 'git show -s --format=%P "$EXACT_SHA"' in workflow
-    assert '"${exact_parents[0]}" == "$prior_gate_merge_sha"' in workflow
-    assert '"${exact_parents[1]}" == "$reviewed_sha"' in workflow
-    assert "Exact main is not the direct reviewed merge of the current gate onto PR #1070" in workflow
+    assert 'gate_merge_sha="$(jq -r' in workflow
+    assert 'git merge-base --is-ancestor "$prior_gate_merge_sha" "$gate_merge_sha"' in workflow
+    assert 'git merge-base --is-ancestor "$reviewed_sha" "$gate_merge_sha"' in workflow
+    assert 'git merge-base --is-ancestor "$gate_merge_sha" "$EXACT_SHA"' in workflow
     assert "chatgpt-codex-connector[bot]" in workflow
     assert "Codex Review: Didn\\u0027t find any major issues." in workflow
     assert 'jq --arg sha "$reviewed_sha"' in workflow
