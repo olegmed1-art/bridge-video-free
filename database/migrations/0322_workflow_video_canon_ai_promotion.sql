@@ -228,7 +228,7 @@ SELECT EXISTS (
   SELECT 1 FROM walk AS w
    WHERE jsonb_typeof(w.value)='string'
      AND (
-       (w.value#>>'{}') ~* E'(^|[[:space:]])[NESW][[:space:]]*:[[:space:]]*[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}'
+       (w.value#>>'{}') ~* E'(^|[^[:alnum:]])[NESW][[:space:]]*:[[:space:]]*[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}'
        OR (w.value#>>'{}') ~* E'(partner|opponent|north|east|south|west)[ _-]*(hand|cards)[[:space:]]*[:=][[:space:]]*[-AKQJT2-9.]'
        OR (w.value#>>'{}') ~* E'(рука|карты)[[:space:]]+(партн[её]ра|соперника)[[:space:]]*[:=][[:space:]]*[-AKQJT2-9.]'
      )
@@ -292,10 +292,11 @@ WITH active_runtime AS (
   FROM public.knowledge_version_source kvs
   JOIN public.source s ON s.source_id=kvs.source_id
   WHERE EXISTS (
-    SELECT 1 FROM bidding.runtime_activation ra
-    JOIN bidding.rule r ON r.rule_id=ra.rule_id
-     WHERE ra.school_id=p_school_id AND r.knowledge_version_id=kvs.knowledge_version_id
-       AND ra.authority_lane='school_canon' AND ra.status='active'
+    SELECT 1 FROM public.canon_activation ca
+    JOIN public.knowledge_version kv ON kv.knowledge_version_id=ca.knowledge_version_id
+    JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
+     WHERE ki.school_id=p_school_id AND ca.status='active'
+       AND ca.knowledge_version_id=kvs.knowledge_version_id
   )
 )
 SELECT encode(public.digest(convert_to(jsonb_build_object(
@@ -860,6 +861,7 @@ DECLARE
     v_new_canon public.canon_activation%ROWTYPE;
     v_new_runtime bidding.runtime_activation%ROWTYPE;
     v_prior_runtime bidding.runtime_activation%ROWTYPE;
+    v_prior_promotion bidding.video_canon_ai_promotion_receipt%ROWTYPE;
     v_state jsonb;
     v_original_valid_to timestamptz;
     v_restored_runtime_ids uuid[] := '{}'::uuid[];
@@ -887,7 +889,7 @@ BEGIN
     LOCK TABLE public.canon_activation,public.knowledge_item,public.knowledge_version,
       public.source,public.knowledge_version_source,
       bidding.runtime_activation,bidding.rule,bidding.rule_test,bidding.rule_test_run,
-      bidding.rule_conflict IN SHARE MODE;
+      bidding.rule_conflict,bidding.video_canon_source_policy IN SHARE MODE;
     SELECT * INTO v_existing FROM bidding.video_canon_ai_restore_receipt
      WHERE video_canon_ai_promotion_receipt_id=p_video_canon_ai_promotion_receipt_id;
     IF FOUND THEN
@@ -928,6 +930,35 @@ BEGIN
            AND status='superseded' AND valid_to=v_new_canon.valid_from FOR UPDATE;
         IF NOT FOUND THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_TARGET_MISMATCH' USING ERRCODE='23514';
+        END IF;
+        SELECT * INTO v_prior_promotion
+          FROM bidding.video_canon_ai_promotion_receipt
+         WHERE canon_activation_id=v_promotion.superseded_canon_activation_id;
+        IF FOUND AND NOT EXISTS (
+          SELECT 1
+            FROM public.analysis_candidate c
+            JOIN bidding.video_canon_source_policy p
+              ON p.school_id=c.school_id AND p.source_id=c.source_id
+            JOIN public.source s ON s.source_id=p.source_id AND s.status='active'
+           WHERE c.analysis_candidate_id=v_prior_promotion.analysis_candidate_id
+             AND c.payload_hash=v_prior_promotion.candidate_payload_hash
+             AND c.payload->>'source_class'='SCHOOL_PRIMARY_EVIDENCE'
+             AND c.payload#>>'{source_authorization,policy_version}'=p.policy_version
+             AND p.status='active' AND p.policy_version=v_prior_promotion.policy_version
+             AND p.valid_from<=statement_timestamp()
+             AND (p.valid_to IS NULL OR p.valid_to>statement_timestamp())
+             AND (p.valid_to IS NULL OR (
+               v_promotion.superseded_canon_valid_to IS NOT NULL
+               AND v_promotion.superseded_canon_valid_to<=p.valid_to
+             ))
+             AND p.source_sha256=c.payload#>>'{source,source_sha256}'
+             AND p.video_file_id=c.payload#>>'{source,video_file_id}'
+             AND (c.payload#>>'{teacher_assertion,speaker_id}')=ANY(p.teacher_ids)
+             AND v_prior_promotion.scope_key=ANY(p.semantic_scopes)
+             AND p.authorization_evidence_sha256=
+                   c.payload#>>'{source_authorization,authorization_evidence_sha256}'
+        ) THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_SOURCE_POLICY_INACTIVE' USING ERRCODE='23514';
         END IF;
         UPDATE public.canon_activation
            SET status='active',valid_to=v_promotion.superseded_canon_valid_to

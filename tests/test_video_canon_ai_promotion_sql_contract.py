@@ -60,8 +60,10 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "contains_forbidden_hidden_value(v_candidate.payload)",
         "'active_rule_tests',active_rule_tests.rows",
         "'active_rule_sources',active_rule_sources.rows",
+        "SELECT 1 FROM public.canon_activation ca",
         "bidding.video_canon_verifier_registry IN SHARE MODE",
         "VIDEO_CANON_RESTORE_VALIDATION_GATES_FAILED",
+        "VIDEO_CANON_RESTORE_SOURCE_POLICY_INACTIVE",
     ):
         assert marker in MIGRATION
 

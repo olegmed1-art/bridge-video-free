@@ -110,17 +110,24 @@ DO $$
 DECLARE
   v_school uuid:=uuidv7();
   v_source uuid:=uuidv7();
+  v_orphan_source uuid:=uuidv7();
   v_item uuid:=uuidv7();
+  v_orphan_item uuid:=uuidv7();
   v_old_version uuid:=uuidv7();
   v_new_version uuid:=uuidv7();
+  v_orphan_version uuid:=uuidv7();
+  v_old_candidate uuid:=uuidv7();
   v_candidate uuid:=uuidv7();
   v_old_rule uuid:=uuidv7();
   v_new_rule uuid:=uuidv7();
   v_old_canon uuid:=uuidv7();
   v_new_canon uuid:=uuidv7();
+  v_orphan_canon uuid:=uuidv7();
   v_old_runtime uuid:=uuidv7();
   v_new_runtime uuid:=uuidv7();
   v_promotion uuid:=uuidv7();
+  v_old_promotion uuid:=uuidv7();
+  v_policy uuid:=uuidv7();
   v_restore uuid;
   v_repeat uuid;
   v_rule_id uuid;
@@ -129,12 +136,15 @@ DECLARE
   v_snapshot_before text;
   v_snapshot_after text;
   v_restore_failed boolean:=false;
+  v_policy_failed boolean:=false;
   v_new_from timestamptz:=statement_timestamp()-interval '1 hour';
 BEGIN
   INSERT INTO public.school(school_id,stable_name)
   VALUES (v_school,'video-canon-restore-test-'||v_school::text);
   INSERT INTO public.knowledge_item(knowledge_item_id,school_id,stable_key,knowledge_type,title)
   VALUES (v_item,v_school,'restore-item-'||v_item::text,'bidding_rule','restore test');
+  INSERT INTO public.knowledge_item(knowledge_item_id,school_id,stable_key,knowledge_type,title)
+  VALUES (v_orphan_item,v_school,'orphan-item-'||v_orphan_item::text,'bidding_rule','orphan Canon test');
   INSERT INTO public.knowledge_version(
     knowledge_version_id,knowledge_item_id,version_no,content,authority_class,
     review_status,bidding_system_key,level_scope,status
@@ -143,10 +153,30 @@ BEGIN
       '{"level_key":"beginner-1"}','approved'),
     (v_new_version,v_item,2,'{}','school_canon','approved','natural-v1',
       '{"level_key":"beginner-1"}','approved');
+  INSERT INTO public.knowledge_version(
+    knowledge_version_id,knowledge_item_id,version_no,content,authority_class,
+    review_status,bidding_system_key,level_scope,status
+  ) VALUES (
+    v_orphan_version,v_orphan_item,1,'{}','school_canon','approved','natural-v1',
+    '{"level_key":"beginner-1"}','approved'
+  );
   INSERT INTO public.source(source_id,school_id,source_type,title,status)
   VALUES (v_source,v_school,'video','restore test source','active');
+  INSERT INTO public.source(source_id,school_id,source_type,title,status)
+  VALUES (v_orphan_source,v_school,'video','orphan Canon source','active');
   INSERT INTO public.knowledge_version_source(knowledge_version_id,source_id)
-  VALUES (v_old_version,v_source),(v_new_version,v_source);
+  VALUES (v_old_version,v_source),(v_new_version,v_source),
+    (v_orphan_version,v_orphan_source);
+  INSERT INTO bidding.video_canon_source_policy(
+    video_canon_source_policy_id,school_id,source_id,source_sha256,video_file_id,
+    teacher_ids,semantic_scopes,system_profile,learner_level,policy_version,
+    authorization_evidence_sha256,status,valid_from
+  ) VALUES (
+    v_policy,v_school,v_source,repeat('e',64),'restore-video-old',
+    ARRAY['teacher:restore'],ARRAY['restore-scope'],'natural-v1','beginner-1',
+    'school-video-auto-canon-v1',repeat('9',64),'active',
+    statement_timestamp()-interval '2 years'
+  );
   INSERT INTO bidding.rule(
     rule_id,school_id,knowledge_version_id,rule_key,rule_kind,action,lifecycle_status
   ) VALUES
@@ -170,16 +200,33 @@ BEGIN
   END LOOP;
   INSERT INTO public.analysis_candidate(
     analysis_candidate_id,school_id,candidate_type,stable_key,input_fingerprint,
-    quality_status,promotion_status,payload,payload_hash,method_version
-  ) VALUES (
+    quality_status,promotion_status,payload,payload_hash,method_version,source_id
+  ) VALUES
+  (
+    v_old_candidate,v_school,'video_school_canon_candidate','restore-'||v_old_candidate::text,
+    repeat('f',64),'AI_VERIFIED','promoted',jsonb_build_object(
+      'source_class','SCHOOL_PRIMARY_EVIDENCE',
+      'source',jsonb_build_object('source_sha256',repeat('e',64),'video_file_id','restore-video-old'),
+      'teacher_assertion',jsonb_build_object('speaker_id','teacher:restore'),
+      'source_authorization',jsonb_build_object(
+        'policy_version','school-video-auto-canon-v1',
+        'authorization_evidence_sha256',repeat('9',64)
+      )
+    ),repeat('1',64),'video-canon-evidence-v2',v_source
+  ),(
     v_candidate,v_school,'video_school_canon_candidate','restore-'||v_candidate::text,
-    repeat('f',64),'AI_VERIFIED','promoted','{}',repeat('a',64),'video-canon-evidence-v2'
+    repeat('f',64),'AI_VERIFIED','promoted','{}',repeat('a',64),'video-canon-evidence-v2',v_source
   );
   INSERT INTO public.canon_activation(
     canon_activation_id,knowledge_version_id,scope_key,valid_from,valid_to,status
   ) VALUES
     (v_old_canon,v_old_version,'restore-scope',statement_timestamp()-interval '1 year',v_new_from,'superseded'),
     (v_new_canon,v_new_version,'restore-scope',v_new_from,NULL,'active');
+  INSERT INTO public.canon_activation(
+    canon_activation_id,knowledge_version_id,scope_key,valid_from,valid_to,status
+  ) VALUES (
+    v_orphan_canon,v_orphan_version,'orphan-scope',v_new_from,NULL,'active'
+  );
   INSERT INTO bidding.runtime_activation(
     runtime_activation_id,school_id,rule_id,authority_lane,canon_activation_id,
     scope_key,valid_from,valid_to,status
@@ -188,6 +235,23 @@ BEGIN
       statement_timestamp()-interval '1 year',v_new_from,'superseded'),
     (v_new_runtime,v_school,v_new_rule,'school_canon',v_new_canon,'restore-scope',
       v_new_from,NULL,'active');
+  INSERT INTO bidding.video_canon_ai_promotion_receipt(
+    video_canon_ai_promotion_receipt_id,school_id,analysis_candidate_id,
+    candidate_payload_hash,verification_bundle_sha256,policy_version,scope_key,
+    rule_content_sha256,rule_id,canon_activation_id,runtime_activation_id,
+    promotion_mode,human_approval_required
+  ) VALUES (
+    v_old_promotion,v_school,v_old_candidate,repeat('1',64),repeat('2',64),
+    'school-video-auto-canon-v1','restore-scope',repeat('3',64),v_old_rule,
+    v_old_canon,v_old_runtime,'AI_VERIFIED_TEACHER_VIDEO',false
+  );
+  v_snapshot_before:=bidding.current_school_canon_snapshot_sha256(v_school);
+  UPDATE public.source SET status='revoked' WHERE source_id=v_orphan_source;
+  v_snapshot_after:=bidding.current_school_canon_snapshot_sha256(v_school);
+  IF v_snapshot_before=v_snapshot_after THEN
+    RAISE EXCEPTION 'VIDEO_CANON_SNAPSHOT_IGNORES_CANON_WITHOUT_RUNTIME_SOURCE';
+  END IF;
+  UPDATE public.source SET status='active' WHERE source_id=v_orphan_source;
   v_snapshot_before:=bidding.current_school_canon_snapshot_sha256(v_school);
   SELECT rule_test_id INTO v_test_id FROM bidding.rule_test
    WHERE rule_id=v_new_rule AND test_type='positive';
@@ -213,6 +277,23 @@ BEGIN
       'runtime_activation_id',v_old_runtime,'valid_to',NULL
     )),'AI_VERIFIED_TEACHER_VIDEO',false
   );
+
+  BEGIN
+    UPDATE bidding.video_canon_source_policy
+       SET status='revoked',valid_to=statement_timestamp()
+     WHERE video_canon_source_policy_id=v_policy;
+    PERFORM bidding.restore_ai_verified_video_canon(
+      v_promotion,repeat('c',64),repeat('d',64)
+    );
+  EXCEPTION WHEN check_violation THEN
+    v_policy_failed:=true;
+  END;
+  IF NOT v_policy_failed OR EXISTS (
+       SELECT 1 FROM bidding.video_canon_ai_restore_receipt
+        WHERE video_canon_ai_promotion_receipt_id=v_promotion
+     ) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_REVOKED_SOURCE_RESTORE_NOT_BLOCKED';
+  END IF;
 
   SELECT rule_test_id INTO v_test_id FROM bidding.rule_test
    WHERE rule_id=v_old_rule AND test_type='positive';

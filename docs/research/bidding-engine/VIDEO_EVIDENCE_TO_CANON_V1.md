@@ -164,7 +164,8 @@ high-assurance executions must come from distinct principals. The four
 state-dependent checks (`CANON_REGRESSION`, `CANON_INTEGRITY`,
 `CANON_CONFLICT_SCAN`, `ROLLBACK_RESTORE`) carry the same deterministic active
 Canon snapshot SHA-256. The snapshot includes active rules, knowledge versions,
-activations, open conflicts, latest test runs and source bindings. Activation
+all active Canon activations, open conflicts, latest test runs and every active
+Canon version's source bindings, including versions without a runtime row. Activation
 serializes by school, locks the underlying Canon/rule/test/source/conflict and
 verifier-registry state, and rejects a stale digest.
 
@@ -176,3 +177,7 @@ then emits an append-only restore receipt. No application, worker, verifier or
 promoter receives direct activation-table writes. Before restoration succeeds,
 the same rule/test/source/conflict tables are locked and the restored rule must
 pass the current runtime activation gates.
+When the prior target came from an earlier AI video promotion, restoration also
+requires its exact source policy to remain active, current and long enough for
+the restored validity interval; a revoked teacher-video authorization cannot be
+reactivated through rollback.

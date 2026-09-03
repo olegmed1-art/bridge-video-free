@@ -29,7 +29,7 @@ _FORBIDDEN_KEYS = {
     "partner_cards", "opponent_cards", "all_hands",
 }
 _PBN_DEAL = re.compile(
-    r"(?:^|\s)[NESW]\s*:\s*[-AKQJT2-9]{0,13}\."
+    r"(?:^|[^A-Za-z0-9])[NESW]\s*:\s*[-AKQJT2-9]{0,13}\."
     r"[-AKQJT2-9]{0,13}\.[-AKQJT2-9]{0,13}\.[-AKQJT2-9]{0,13}",
     re.IGNORECASE,
 )
