@@ -28,6 +28,17 @@ _FORBIDDEN_KEYS = {
     "actual_partner_hand", "actual_opponent_hand", "actual_opponent_hands",
     "partner_cards", "opponent_cards", "all_hands",
 }
+_NORMALIZED_RULE_FIELDS = {
+    "rule_key", "rule_kind", "auction_pattern", "hand_constraints",
+    "public_context_constraints", "action", "meaning", "public_inference",
+    "alert_semantics", "forcing_semantics", "priority", "specificity",
+    "condition_schema_version", "compiled_payload", "method_version",
+}
+_RULE_JSON_FIELDS = {
+    "auction_pattern", "hand_constraints", "public_context_constraints", "action",
+    "meaning", "public_inference", "alert_semantics", "forcing_semantics",
+    "compiled_payload",
+}
 
 
 class VideoCanonEvidenceError(ValueError):
@@ -60,7 +71,7 @@ def _has_forbidden_key(value: Any) -> bool:
             str(key).casefold() in _FORBIDDEN_KEYS or _has_forbidden_key(child)
             for key, child in value.items()
         )
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return any(_has_forbidden_key(child) for child in value)
     return False
 
@@ -180,11 +191,26 @@ def build_video_canon_candidate(
         _fail("unapproved source must not carry approval evidence")
 
     normalized_rule = assertion.get("normalized_rule")
-    if not isinstance(normalized_rule, Mapping) or not normalized_rule:
-        _fail("normalized rule required")
+    if not isinstance(normalized_rule, Mapping):
+        _fail("normalized rule fields mismatch")
     if _has_forbidden_key(normalized_rule):
         _fail("normalized rule contains hidden information")
-
+    if set(normalized_rule) != _NORMALIZED_RULE_FIELDS:
+        _fail("normalized rule fields mismatch")
+    _text(normalized_rule.get("rule_key"), "normalized rule_key")
+    if normalized_rule.get("rule_kind") not in {"bid", "inference", "priority", "exception", "fallback"}:
+        _fail("invalid normalized rule_kind")
+    for field in _RULE_JSON_FIELDS:
+        if not isinstance(normalized_rule.get(field), Mapping):
+            _fail(f"normalized {field} must be an object")
+    for field in ("priority", "specificity"):
+        value = normalized_rule.get(field)
+        if isinstance(value, bool) or not isinstance(value, int):
+            _fail(f"normalized {field} must be an integer")
+    if normalized_rule["specificity"] < 0:
+        _fail("normalized specificity must be non-negative")
+    _text(normalized_rule.get("condition_schema_version"), "normalized condition_schema_version")
+    _text(normalized_rule.get("method_version"), "normalized method_version")
     explanation = assertion.get("explanation")
     if not isinstance(explanation, Mapping) or set(explanation) != {
         "why_or_purpose", "consequences", "rejected_alternatives", "evidence_refs"

@@ -102,7 +102,7 @@ PostgreSQL 18 migration package for the School of Sports Bridge.
   mutations remain forbidden.
 - `0305_autopilot_online_pilot_identity.sql` — deterministic online result
   evaluation through the exact `last_task_id` retained by the pilot state.
-- `0322_video_canon_ai_promotion.sql` — source-bound, independently verified
+- `0322_workflow_video_canon_ai_promotion.sql` — source-bound, independently verified
   automatic promotion of trusted teacher-video rules into SCHOOL CANON; no
   per-rule human approval and no WORLD promotion path.
 - `rollbacks/0056_universal_video_queue.sql` — fail-closed rollback; refuses to remove a non-empty queue.
@@ -133,7 +133,7 @@ This layer deliberately does **not** create a scheduled production monitor using
 - `008_projection_invalidation_recompute.sql` — automatic dependency registration, recursive invalidation depth, stale profile state, recommendation/plan invalidation, active-scope queue coalescing, worker claim/fail/retry, activation-before-completion requirement and current-profile read-model switch.
 - `009_operational_health.sql` — runtime fingerprint, baseline signal registry including corrected migration-checksum status, critical classification for stuck changesets/analysis/recompute/pending references/explicit unavailable storage, roll-up summary and read-only runtime permissions.
 - `041_universal_video_queue.sql` — idempotent intake, canary gating, independent claims, fencing, heartbeat, REVIEW terminalization and capability isolation.
-- `322_video_canon_ai_promotion.sql` — verifier/promoter capability separation,
+- `322_workflow_video_canon_ai_promotion.sql` — verifier/promoter capability separation,
   no direct activation writes and fail-closed activation RPC boundary.
 - `300_autopilot_oracle_shadow.sql` — task/event idempotency, fencing,
   wait/resume/dedupe/expiry, stale recovery, evidence, budget stop and runtime

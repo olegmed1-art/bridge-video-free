@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import hashlib
 
 import pytest
 
@@ -49,7 +50,8 @@ def _bundle(candidate: dict) -> dict:
         "checks": checks,
         "rollback": {
             "strategy": "revoke activation and restore prior version",
-            "target_version": "natural-v1-before-video-rule",
+            "target_knowledge_version_id": None,
+            "target_canon_activation_id": None,
             "restore_test_sha256": "a" * 64,
             "result": "PASS",
         },
@@ -66,6 +68,11 @@ def test_all_ai_checks_create_sealed_automatic_promotion_command():
     assert result["promotion_command"]["operation"] == "ACTIVATE_AI_VERIFIED_VIDEO_CANON"
     assert result["safety"]["world_evidence_used"] is False
     assert len(result["verification_bundle_sha256"]) == 64
+    assert result["verification_bundle"]["candidate_payload"] == candidate["payload"]
+    assert result["verification_bundle_canonical_json"]
+    assert hashlib.sha256(
+        result["verification_bundle_canonical_json"].encode("utf-8")
+    ).hexdigest() == result["verification_bundle_sha256"]
 
 
 @pytest.mark.parametrize("mutation, match", [
@@ -87,7 +94,7 @@ def test_verification_cannot_be_replayed_for_changed_candidate():
     candidate = _candidate()
     bundle = _bundle(candidate)
     changed = deepcopy(candidate)
-    changed["payload"]["normalized_rule"]["action"] = "2D"
+    changed["payload"]["normalized_rule"]["action"] = {"call": "2D"}
     with pytest.raises(VideoCanonAIPromotionError, match="payload hash mismatch"):
         build_ai_canon_promotion(changed, bundle)
 
@@ -98,3 +105,11 @@ def test_conflict_never_auto_promotes():
     candidate["payload_hash"] = "0" * 64
     with pytest.raises(VideoCanonAIPromotionError):
         build_ai_canon_promotion(candidate, _bundle(_candidate()))
+
+
+def test_rollback_target_requires_exact_database_identity():
+    candidate = _candidate()
+    bundle = _bundle(candidate)
+    bundle["rollback"]["target_knowledge_version_id"] = "not-a-uuid"
+    with pytest.raises(VideoCanonAIPromotionError, match="invalid rollback target"):
+        build_ai_canon_promotion(candidate, bundle)

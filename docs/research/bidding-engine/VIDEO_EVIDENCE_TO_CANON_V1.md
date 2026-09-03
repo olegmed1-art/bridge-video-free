@@ -1,7 +1,7 @@
 # Video evidence to School Canon — v2 contract
 
 Status: `AI AUTO-PROMOTION IMPLEMENTED / PRODUCTION NOT ACTIVATED`
-Governance mode: `ASSURED`  
+Governance mode: `ASSURED`
 Tracker: #609; upstream video runtime: #881
 
 ## Boundary
@@ -42,7 +42,18 @@ hidden-information firewall must also be I2/I3. Regression, integrity,
 conflict scan and a tested restore path are mandatory.
 
 The activation command binds both candidate SHA-256 and verification-bundle
-SHA-256 and is idempotent. The existing runtime invariant remains unchanged:
+SHA-256 and is idempotent. The persisted bundle contains the exact candidate,
+effective period, activation scope, checks and rollback target; the promoter
+cannot supply replacements for those fields. The database locks the candidate
+and rule, recomputes a digest across all executable rule fields plus the
+explanation, and compares that content with the sealed candidate before any
+activation is written. Source authorization can be revoked immediately through
+a guarded lifecycle transition.
+
+When the same knowledge item already has an active version, activation closes
+the prior Canon and runtime rows in the same transaction. Their exact IDs are
+required in the restore-tested bundle and retained in the promotion receipt.
+The existing runtime invariant remains unchanged:
 `CANON_CONFLICT` stops and does not call WORLD; only a recorded `CANON_GAP`
 permits the WORLD lookup.
 
@@ -51,7 +62,7 @@ Implementation boundaries:
 - `video_canon_evidence.py` seals exact source, speech, logic and tests;
 - `video_canon_ai_promotion.py` evaluates the 16-check bundle;
 - `video_canon_auto_pipeline.py` produces promotion commands or explicit gaps;
-- migration `0322_video_canon_ai_promotion.sql` separates verifier and promoter
+- migration `0322_workflow_video_canon_ai_promotion.sql` separates verifier and promoter
   roles and performs the atomic database activation;
 - the Diana v4.2 quality layer invokes the pipeline when a complete
   `video_canon_*` input bundle is present.

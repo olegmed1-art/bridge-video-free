@@ -406,6 +406,7 @@ def test_precanary_fences_quiesces_restores_and_uses_captured_image_id():
     assert "authoritative Neon claimable/LEASED state is busy or unverifiable" in script
     assert "pid_descends_from" in script
     assert "resident_worker_pid" in script
+    assert '[[ "$service" == "$CONTAINER_SERVICE" && "$worker_pid" == "$root_pid" ]]' in script
     assert '[[ "${#matches[@]}" -eq 1 ]] || return 1' in script
     assert "restored_service_ready" in script
     assert "resident_status_ready" in script

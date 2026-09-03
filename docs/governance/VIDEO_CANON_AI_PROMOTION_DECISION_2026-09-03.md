@@ -1,8 +1,8 @@
 # Video-to-Canon AI promotion decision — 2026-09-03
 
-Status: `DIRECTOR_APPROVED / POLICY ACTIVE / PRODUCTION NOT DEPLOYED`  
-Governance mode: `ASSURED`  
-Policy version: `school-video-auto-canon-v1`  
+Status: `DIRECTOR_APPROVED / POLICY ACTIVE / PRODUCTION NOT DEPLOYED`
+Governance mode: `ASSURED`
+Policy version: `school-video-auto-canon-v1`
 Tracker: issue #609; implementation: draft PR #1086
 
 ## Decision
@@ -41,7 +41,10 @@ and tested rollback.
 - rollback named but not restoration-tested.
 
 Every class must fail closed. The promotion object is content-addressed by both
-candidate and verification-bundle SHA-256.
+candidate and verification-bundle SHA-256. The bundle is stored as canonical
+JSON and rehashed by the database; it seals the candidate, validity interval,
+scope, checks and exact prior activation IDs. Activation also recomputes a hash
+over the locked executable rule rather than trusting a compiler-supplied marker.
 
 ## Activation and rollback
 
@@ -50,6 +53,8 @@ database/runtime change and remains blocked until migration regression,
 integrity, rollback and independent I2 review pass. No current Canon row is
 changed by this decision record or its draft implementation.
 
-Rollback of a promoted rule revokes its activation and restores the preceding
-version for the same system profile, learner level and scope. History,
+Promotion atomically supersedes an overlapping prior version for the same
+knowledge item and scope, preserving both prior activation identities in the
+receipt. Rollback of a promoted rule revokes its activation and restores that
+preceding version for the same system profile, learner level and scope. History,
 provenance, verifier receipts and the rejected/revoked version remain stored.

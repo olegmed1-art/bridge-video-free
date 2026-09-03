@@ -4,7 +4,7 @@ BEGIN;
 DO $$
 DECLARE r record; v_failed boolean;
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM public.schema_migration WHERE migration_key='0322_video_canon_ai_promotion') THEN
+  IF NOT EXISTS (SELECT 1 FROM public.schema_migration WHERE migration_key='0322_workflow_video_canon_ai_promotion') THEN
     RAISE EXCEPTION 'VIDEO_CANON_MIGRATION_MISSING';
   END IF;
   FOR r IN SELECT rolname,rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolreplication
@@ -14,16 +14,19 @@ BEGIN
     END IF;
   END LOOP;
   IF has_function_privilege('bridge_school_worker',
-       'bidding.activate_ai_verified_video_canon(uuid,uuid,text,text,text,timestamptz,timestamptz)','EXECUTE')
+       'bidding.activate_ai_verified_video_canon(uuid,uuid,text)','EXECUTE')
      OR has_function_privilege('bridge_school_canon_verifier',
-       'bidding.activate_ai_verified_video_canon(uuid,uuid,text,text,text,timestamptz,timestamptz)','EXECUTE')
+       'bidding.activate_ai_verified_video_canon(uuid,uuid,text)','EXECUTE')
      OR NOT has_function_privilege('bridge_school_canon_promoter',
-       'bidding.activate_ai_verified_video_canon(uuid,uuid,text,text,text,timestamptz,timestamptz)','EXECUTE') THEN
+       'bidding.activate_ai_verified_video_canon(uuid,uuid,text)','EXECUTE') THEN
     RAISE EXCEPTION 'VIDEO_CANON_PROMOTION_RPC_ACL_INVALID';
   END IF;
   IF has_table_privilege('bridge_school_worker','bidding.video_canon_ai_verification','INSERT')
      OR has_table_privilege('bridge_school_canon_promoter','bidding.video_canon_ai_verification','INSERT')
-     OR NOT has_table_privilege('bridge_school_canon_verifier','bidding.video_canon_ai_verification','INSERT') THEN
+     OR NOT has_table_privilege('bridge_school_canon_verifier','bidding.video_canon_ai_verification','INSERT')
+     OR has_table_privilege('bridge_school_worker','bidding.video_canon_ai_verification_bundle','INSERT')
+     OR has_table_privilege('bridge_school_canon_promoter','bidding.video_canon_ai_verification_bundle','INSERT')
+     OR NOT has_table_privilege('bridge_school_canon_verifier','bidding.video_canon_ai_verification_bundle','INSERT') THEN
     RAISE EXCEPTION 'VIDEO_CANON_VERIFICATION_ACL_INVALID';
   END IF;
   IF has_table_privilege('bridge_school_canon_promoter','public.canon_activation','INSERT')
@@ -35,7 +38,7 @@ BEGIN
   v_failed:=false;
   BEGIN
     PERFORM bidding.activate_ai_verified_video_canon(
-      uuidv7(),uuidv7(),'scope',repeat('a',64),'school-video-auto-canon-v1',now(),NULL
+      uuidv7(),uuidv7(),repeat('a',64)
     );
   EXCEPTION WHEN check_violation THEN v_failed:=true;
   END;

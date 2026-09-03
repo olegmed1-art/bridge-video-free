@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 from typing import Any, Mapping
+from uuid import UUID
 
 
 SCHEMA = "video-canon-ai-promotion-v1"
@@ -59,8 +60,21 @@ def _sha(value: Any, label: str) -> str:
 
 
 def _digest(value: Any) -> str:
-    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _optional_uuid(value: Any, label: str) -> str | None:
+    if value is None:
+        return None
+    try:
+        result = str(UUID(_text(value, label)))
+    except ValueError:
+        _fail(f"invalid {label}")
+    return result
 
 
 def build_ai_canon_promotion(
@@ -155,14 +169,20 @@ def build_ai_canon_promotion(
 
     rollback = verification_bundle.get("rollback")
     if not isinstance(rollback, Mapping) or set(rollback) != {
-        "strategy", "target_version", "restore_test_sha256", "result"
+        "strategy", "target_knowledge_version_id", "target_canon_activation_id",
+        "restore_test_sha256", "result"
     }:
         _fail("rollback fields mismatch")
     if rollback.get("result") != "PASS":
         _fail("rollback restore test did not pass")
     normalized_rollback = {
         "strategy": _text(rollback.get("strategy"), "rollback strategy"),
-        "target_version": _text(rollback.get("target_version"), "rollback target_version"),
+        "target_knowledge_version_id": _optional_uuid(
+            rollback.get("target_knowledge_version_id"), "rollback target_knowledge_version_id"
+        ),
+        "target_canon_activation_id": _optional_uuid(
+            rollback.get("target_canon_activation_id"), "rollback target_canon_activation_id"
+        ),
         "restore_test_sha256": _sha(rollback.get("restore_test_sha256"), "restore_test_sha256"),
         "result": "PASS",
     }
@@ -171,6 +191,7 @@ def build_ai_canon_promotion(
         "schema": SCHEMA,
         "policy_version": POLICY,
         "candidate_payload_hash": candidate_hash,
+        "candidate_payload": json.loads(_canonical_json(payload)),
         "system_profile": _text(verification_bundle.get("system_profile"), "system_profile"),
         "learner_level": _text(verification_bundle.get("learner_level"), "learner_level"),
         "effective_period": {"valid_from": valid_from, "valid_to": valid_to},
@@ -178,7 +199,8 @@ def build_ai_canon_promotion(
         "checks": [normalized[key] for key in sorted(normalized)],
         "rollback": normalized_rollback,
     }
-    bundle_hash = _digest(sealed_bundle)
+    bundle_canonical_json = _canonical_json(sealed_bundle)
+    bundle_hash = hashlib.sha256(bundle_canonical_json.encode("utf-8")).hexdigest()
     return {
         "schema": SCHEMA,
         "status": "AUTO_PROMOTION_READY",
@@ -186,6 +208,7 @@ def build_ai_canon_promotion(
         "candidate_id": payload.get("candidate_id"),
         "candidate_payload_hash": candidate_hash,
         "verification_bundle": sealed_bundle,
+        "verification_bundle_canonical_json": bundle_canonical_json,
         "verification_bundle_sha256": bundle_hash,
         "human_approval_required": False,
         "promotion_command": {

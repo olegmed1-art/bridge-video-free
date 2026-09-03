@@ -44,9 +44,21 @@ def _assertion() -> dict:
         },
         "semantic_scope": "bidding/natural/v1/response-to-1h",
         "normalized_rule": {
-            "auction_pattern": ["1H", "PASS", "?"],
-            "action": "2C",
-            "forcing": True,
+            "rule_key": "video-rule:diana:lesson-1:9-11",
+            "rule_kind": "bid",
+            "auction_pattern": {"calls": ["1H", "PASS", "?"]},
+            "hand_constraints": {},
+            "public_context_constraints": {},
+            "action": {"call": "2C"},
+            "meaning": {"description": "Форсирующий ответ."},
+            "public_inference": {},
+            "alert_semantics": {"alert": False},
+            "forcing_semantics": {"forcing": True},
+            "priority": 100,
+            "specificity": 10,
+            "condition_schema_version": "bidding-condition-v0",
+            "compiled_payload": {},
+            "method_version": "video-canon-evidence-v2",
         },
         "semantic_confidence": 0.91,
         "ambiguities": [],
@@ -128,6 +140,15 @@ def test_ambiguity_or_conflict_prevents_review_eligibility():
 def test_low_confidence_remains_evidence_only():
     result = build_video_canon_candidate(_learning(), _assertion())
     assert result["quality_status"] == "EVIDENCE_ONLY"
+
+
+def test_hidden_information_is_rejected_inside_json_serializable_tuple():
+    assertion = _assertion()
+    assertion["normalized_rule"]["compiled_payload"] = {
+        "nested": ({"partner_hand": "AKQ"},)
+    }
+    with pytest.raises(VideoCanonEvidenceError, match="hidden information"):
+        build_video_canon_candidate(_learning(), assertion)
 
 
 def test_payload_hash_is_deterministic_and_source_bound():

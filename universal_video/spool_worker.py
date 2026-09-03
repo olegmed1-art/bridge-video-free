@@ -28,6 +28,8 @@ from .workload_lock import shared_workload_lock
 ERROR_CODE_RE = re.compile(r"^UV_[A-Z0-9_]{1,96}$")
 ERROR_TYPE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.]{0,119}$")
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
+PRECANARY_STARTUP_PROBE_ENV = "UNIVERSAL_VIDEO_PRECANARY_STARTUP_PROBE"
+PRECANARY_SPOOL_ROOT = Path("/tmp/issue881/spool")
 RUNTIME_ATTESTATION_FIELDS = frozenset({
     "schema", "job_id", "request_commit", "requested_runtime_commit",
     "installed_runtime_commit", "observed_job_runtime_commit", "profile",
@@ -586,9 +588,25 @@ def run_forever(spool_root: Path, poll_seconds: float) -> None:
         time.sleep(poll_seconds)
 
 
+def _run_precanary_startup_probe(spool_root: Path, poll_seconds: float) -> None:
+    """Publish startup identity without recovering or polling any job."""
+
+    if spool_root != PRECANARY_SPOOL_ROOT:
+        raise RuntimeError("pre-canary startup probe spool is not isolated")
+    paths = _dirs(spool_root)
+    if any(any(path.iterdir()) for path in paths.values()):
+        raise RuntimeError("pre-canary startup probe spool is not empty")
+    write_resident_status(spool_root, Path(os.environ["UNIVERSAL_VIDEO_STATUS_PATH"]))
+    while True:
+        time.sleep(poll_seconds)
+
+
 def main() -> None:
     root = Path(os.getenv("UNIVERSAL_VIDEO_SPOOL_ROOT", "/opt/bridge-school/universal-video/spool"))
     poll = max(1.0, float(os.getenv("UNIVERSAL_VIDEO_POLL_SECONDS", "2")))
+    if os.getenv(PRECANARY_STARTUP_PROBE_ENV, "") == "1":
+        _run_precanary_startup_probe(root, poll)
+        return
     run_forever(root, poll)
 
 
