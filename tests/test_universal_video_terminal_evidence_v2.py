@@ -60,7 +60,10 @@ def test_v2_binds_source_pdf_and_routed_ai_done_without_credentials():
                  "source_file_id": claim["source_file_id"], "stable_job_key": claim["stable_job_key"],
                  "algorithm_revision": claim["algorithm_revision"], **evidence}
     validate_terminal_output(claim, candidate)
-    assert [a["kind"] for a in evidence["artifact_manifest"]["artifacts"]] == ["master_pdf", "ai_done"]
+    artifacts = evidence["artifact_manifest"]["artifacts"]
+    assert [a["kind"] for a in artifacts] == ["master_pdf", "ai_done"]
+    assert [a["version"] for a in artifacts] == ["101", "102"]
+    assert all(a["modified_time"] for a in artifacts)
     assert evidence["terminal_receipt"]["artifact_count"] == 2
 
 
@@ -182,9 +185,6 @@ def test_terminal_reverify_rejects_identical_bytes_at_new_drive_revision():
         **evidence,
     }
 
-    # Simulate Drive replacing the PDF with byte-identical content. Content
-    # hashes stay stable, but the immutable attestation must not cross the
-    # revision boundary.
     items[0]["version"] = "103"
     items[0]["modifiedTime"] = "2026-09-02T20:00:02Z"
 
@@ -203,6 +203,9 @@ def test_precanary_synthetic_terminal_v2_cli_passes_without_network():
     )
     receipt = json.loads(completed.stdout)
     assert receipt["status"] == "PASS"
-    assert receipt["gate"] == "SYNTHETIC_RESULT_CONTRACT_V2"
+    assert receipt["gate"] == "SYNTHETIC_RESULT_CONTRACT"
+    assert receipt["terminal_contract_version"] == "v2"
     assert receipt["artifact_count"] == 2
+    assert receipt["master_pdf_verified"] is True
+    assert receipt["ai_done_verified"] is True
     assert receipt["drive_write_performed"] is False
