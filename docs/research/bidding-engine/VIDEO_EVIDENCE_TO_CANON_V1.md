@@ -38,7 +38,10 @@ gap, but cannot enter automatic Canon promotion.
 `AI_VERIFICATION_PENDING` becomes `AUTO_PROMOTION_READY` only after all 16
 checks in `video-canon-ai-promotion-v1` pass. Semantic parsing and bridge-logic
 verification must be I2/I3 and come from different verifier families. The
-hidden-information firewall must also be I2/I3. Regression, integrity,
+hidden-information firewall must also be I2/I3. These families are not
+caller-supplied labels at the database boundary: separate NOLOGIN capability
+roles are mapped through an immutable verifier registry to disjoint check sets.
+Regression, integrity,
 conflict scan and a tested restore path are mandatory.
 
 The activation command binds both candidate SHA-256 and verification-bundle
@@ -62,6 +65,9 @@ Implementation boundaries:
 - `video_canon_evidence.py` seals exact source, speech, logic and tests;
 - `video_canon_ai_promotion.py` evaluates the 16-check bundle;
 - `video_canon_auto_pipeline.py` produces promotion commands or explicit gaps;
+- the Diana quality layer appends every generated Video-to-Canon candidate to
+  the shared `candidate_staging_records` stream consumed by the database
+  persister;
 - migration `0322_workflow_video_canon_ai_promotion.sql` separates verifier and promoter
   roles and performs the atomic database activation;
 - the Diana v4.2 quality layer invokes the pipeline when a complete

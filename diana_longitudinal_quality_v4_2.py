@@ -146,8 +146,11 @@ def build_quality_layer(
             "authoritative_write_performed": False,
         }
     quality["video_canon_auto_pipeline"] = auto_pipeline
+    staging.extend(auto_pipeline["candidates"])
     counts["video_canon_auto_promotions_ready"] = len(auto_pipeline["promotion_commands"])
     counts["video_canon_auto_gaps"] = len(auto_pipeline["gaps"])
+    counts["video_canon_candidates"] = len(auto_pipeline["candidates"])
+    counts["staging_records"] = len(staging)
     return quality
 
 

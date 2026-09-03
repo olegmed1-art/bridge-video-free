@@ -8,7 +8,11 @@ BEGIN
     RAISE EXCEPTION 'VIDEO_CANON_MIGRATION_MISSING';
   END IF;
   FOR r IN SELECT rolname,rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolreplication
-             FROM pg_roles WHERE rolname IN ('bridge_school_canon_verifier','bridge_school_canon_promoter') LOOP
+             FROM pg_roles WHERE rolname=ANY(ARRAY[
+               'bridge_school_canon_verifier','bridge_school_canon_semantic_verifier',
+               'bridge_school_canon_bridge_verifier','bridge_school_canon_firewall_verifier',
+               'bridge_school_canon_control_verifier','bridge_school_canon_promoter'
+             ]) LOOP
     IF r.rolcanlogin OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication THEN
       RAISE EXCEPTION 'VIDEO_CANON_UNSAFE_ROLE_%',r.rolname;
     END IF;
@@ -23,11 +27,19 @@ BEGIN
   END IF;
   IF has_table_privilege('bridge_school_worker','bidding.video_canon_ai_verification','INSERT')
      OR has_table_privilege('bridge_school_canon_promoter','bidding.video_canon_ai_verification','INSERT')
-     OR NOT has_table_privilege('bridge_school_canon_verifier','bidding.video_canon_ai_verification','INSERT')
+     OR has_table_privilege('bridge_school_canon_verifier','bidding.video_canon_ai_verification','INSERT')
+     OR NOT has_table_privilege('bridge_school_canon_semantic_verifier','bidding.video_canon_ai_verification','INSERT')
+     OR NOT has_table_privilege('bridge_school_canon_bridge_verifier','bidding.video_canon_ai_verification','INSERT')
+     OR NOT has_table_privilege('bridge_school_canon_firewall_verifier','bidding.video_canon_ai_verification','INSERT')
+     OR NOT has_table_privilege('bridge_school_canon_control_verifier','bidding.video_canon_ai_verification','INSERT')
      OR has_table_privilege('bridge_school_worker','bidding.video_canon_ai_verification_bundle','INSERT')
      OR has_table_privilege('bridge_school_canon_promoter','bidding.video_canon_ai_verification_bundle','INSERT')
+     OR has_table_privilege('bridge_school_canon_semantic_verifier','bidding.video_canon_ai_verification_bundle','INSERT')
      OR NOT has_table_privilege('bridge_school_canon_verifier','bidding.video_canon_ai_verification_bundle','INSERT') THEN
     RAISE EXCEPTION 'VIDEO_CANON_VERIFICATION_ACL_INVALID';
+  END IF;
+  IF (SELECT count(*) FROM bidding.video_canon_verifier_registry WHERE status='active')<>4 THEN
+    RAISE EXCEPTION 'VIDEO_CANON_VERIFIER_REGISTRY_INVALID';
   END IF;
   IF has_table_privilege('bridge_school_canon_promoter','public.canon_activation','INSERT')
      OR has_table_privilege('bridge_school_canon_promoter','bidding.runtime_activation','INSERT')

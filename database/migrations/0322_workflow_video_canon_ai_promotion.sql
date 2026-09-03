@@ -2,16 +2,23 @@
 BEGIN;
 
 DO $$
-DECLARE r record;
+DECLARE r record; v_role text;
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='bridge_school_canon_verifier') THEN
-        CREATE ROLE bridge_school_canon_verifier NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
-    END IF;
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='bridge_school_canon_promoter') THEN
-        CREATE ROLE bridge_school_canon_promoter NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
-    END IF;
+    FOREACH v_role IN ARRAY ARRAY[
+      'bridge_school_canon_verifier','bridge_school_canon_semantic_verifier',
+      'bridge_school_canon_bridge_verifier','bridge_school_canon_firewall_verifier',
+      'bridge_school_canon_control_verifier','bridge_school_canon_promoter'
+    ] LOOP
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname=v_role) THEN
+            EXECUTE format('CREATE ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION',v_role);
+        END IF;
+    END LOOP;
     FOR r IN SELECT rolname,rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolreplication
-               FROM pg_roles WHERE rolname IN ('bridge_school_canon_verifier','bridge_school_canon_promoter') LOOP
+               FROM pg_roles WHERE rolname=ANY(ARRAY[
+                 'bridge_school_canon_verifier','bridge_school_canon_semantic_verifier',
+                 'bridge_school_canon_bridge_verifier','bridge_school_canon_firewall_verifier',
+                 'bridge_school_canon_control_verifier','bridge_school_canon_promoter'
+               ]) LOOP
         IF r.rolcanlogin OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication THEN
             RAISE EXCEPTION 'unsafe Video-to-Canon role: %',r.rolname;
         END IF;
@@ -19,12 +26,25 @@ BEGIN
 END $$;
 
 COMMENT ON ROLE bridge_school_canon_verifier IS
-  'NOLOGIN capability that records content-bound AI verification receipts but cannot activate Canon';
+  'NOLOGIN capability that records sealed verification bundles but cannot attest checks or activate Canon';
+COMMENT ON ROLE bridge_school_canon_semantic_verifier IS
+  'NOLOGIN capability for authenticated semantic-parser attestations only';
+COMMENT ON ROLE bridge_school_canon_bridge_verifier IS
+  'NOLOGIN capability for authenticated bridge-logic attestations only';
+COMMENT ON ROLE bridge_school_canon_firewall_verifier IS
+  'NOLOGIN capability for authenticated hidden-information firewall attestations only';
+COMMENT ON ROLE bridge_school_canon_control_verifier IS
+  'NOLOGIN capability for non-independent control attestations only';
 COMMENT ON ROLE bridge_school_canon_promoter IS
   'NOLOGIN capability for the guarded AI-verified teacher-video Canon activation RPC';
-GRANT bridge_school_reader TO bridge_school_canon_verifier;
-GRANT bridge_school_reader TO bridge_school_canon_promoter;
-REVOKE CREATE ON SCHEMA public,bidding FROM bridge_school_canon_verifier,bridge_school_canon_promoter;
+GRANT bridge_school_reader TO bridge_school_canon_verifier,
+  bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
+  bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier,
+  bridge_school_canon_promoter;
+REVOKE CREATE ON SCHEMA public,bidding FROM bridge_school_canon_verifier,
+  bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
+  bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier,
+  bridge_school_canon_promoter;
 
 CREATE TABLE bidding.video_canon_source_policy (
     video_canon_source_policy_id uuid PRIMARY KEY DEFAULT uuidv7(),
@@ -57,6 +77,28 @@ CREATE TABLE bidding.video_canon_ai_verification_bundle (
     recorded_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (analysis_candidate_id,candidate_payload_hash,verification_bundle_sha256)
 );
+
+CREATE TABLE bidding.video_canon_verifier_registry (
+    database_role text PRIMARY KEY,
+    verifier_family text NOT NULL UNIQUE CHECK (btrim(verifier_family)<>''),
+    allowed_check_ids text[] NOT NULL CHECK (cardinality(allowed_check_ids)>0),
+    max_assurance_level text NOT NULL CHECK (max_assurance_level IN ('I1','I2','I3')),
+    status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked')),
+    registered_at timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO bidding.video_canon_verifier_registry(
+  database_role,verifier_family,allowed_check_ids,max_assurance_level
+) VALUES
+  ('bridge_school_canon_semantic_verifier','semantic-model-a',ARRAY['SEMANTIC_PARSE'],'I3'),
+  ('bridge_school_canon_bridge_verifier','bridge-engine-b',ARRAY['BRIDGE_LOGIC'],'I3'),
+  ('bridge_school_canon_firewall_verifier','taint-analyzer',ARRAY['HIDDEN_INFORMATION_FIREWALL'],'I3'),
+  ('bridge_school_canon_control_verifier','formal-checker',ARRAY[
+    'SOURCE_AUTHORITY','SOURCE_BINDING','SPEAKER_IDENTITY','TRANSCRIPT_BINDING',
+    'EXPLANATION_COMPLETENESS','POSITIVE_TESTS','NEGATIVE_TESTS','BOUNDARY_TESTS',
+    'INTERFERENCE_TESTS','CANON_REGRESSION','CANON_INTEGRITY','CANON_CONFLICT_SCAN',
+    'ROLLBACK_RESTORE'
+  ],'I1');
 
 CREATE TABLE bidding.video_canon_ai_verification (
     video_canon_ai_verification_id uuid PRIMARY KEY DEFAULT uuidv7(),
@@ -136,7 +178,11 @@ FOR EACH ROW EXECUTE FUNCTION bidding.validate_video_canon_verification_bundle()
 
 CREATE OR REPLACE FUNCTION bidding.validate_video_canon_verification()
 RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE v_school uuid; v_hash text; v_bundle bidding.video_canon_ai_verification_bundle%ROWTYPE;
+DECLARE
+    v_school uuid;
+    v_hash text;
+    v_bundle bidding.video_canon_ai_verification_bundle%ROWTYPE;
+    v_principal bidding.video_canon_verifier_registry%ROWTYPE;
 BEGIN
     SELECT school_id,payload_hash INTO v_school,v_hash
       FROM public.analysis_candidate WHERE analysis_candidate_id=NEW.analysis_candidate_id;
@@ -145,6 +191,18 @@ BEGIN
     END IF;
     IF v_hash<>NEW.candidate_payload_hash THEN
         RAISE EXCEPTION 'VIDEO_CANON_VERIFICATION_PAYLOAD_MISMATCH' USING ERRCODE='23514';
+    END IF;
+    SELECT * INTO v_principal FROM bidding.video_canon_verifier_registry
+     WHERE database_role=current_user AND status='active';
+    IF NOT FOUND OR NEW.verifier_family<>v_principal.verifier_family
+       OR NOT (NEW.check_id=ANY(v_principal.allowed_check_ids))
+       OR CASE v_principal.max_assurance_level
+            WHEN 'I1' THEN NEW.assurance_level NOT IN ('I0','I1')
+            WHEN 'I2' THEN NEW.assurance_level NOT IN ('I0','I1','I2')
+            WHEN 'I3' THEN false
+            ELSE true
+          END THEN
+        RAISE EXCEPTION 'VIDEO_CANON_VERIFIER_PRINCIPAL_MISMATCH' USING ERRCODE='42501';
     END IF;
     SELECT * INTO v_bundle FROM bidding.video_canon_ai_verification_bundle
      WHERE video_canon_ai_verification_bundle_id=NEW.video_canon_ai_verification_bundle_id;
@@ -226,6 +284,19 @@ FOR EACH ROW EXECUTE FUNCTION bidding.guard_video_canon_source_policy_lifecycle(
 CREATE TRIGGER video_canon_verification_bundle_append_only
 BEFORE UPDATE OR DELETE ON bidding.video_canon_ai_verification_bundle
 FOR EACH ROW EXECUTE FUNCTION bidding.reject_append_only_mutation();
+CREATE OR REPLACE FUNCTION bidding.guard_video_canon_verifier_registry_lifecycle()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP='DELETE' OR OLD.status<>'active' OR NEW.status<>'revoked'
+       OR (to_jsonb(NEW)-'status')<>(to_jsonb(OLD)-'status') THEN
+        RAISE EXCEPTION 'VIDEO_CANON_VERIFIER_REGISTRY_MUTATION_FORBIDDEN' USING ERRCODE='55000';
+    END IF;
+    RETURN NEW;
+END $$;
+
+CREATE TRIGGER video_canon_verifier_registry_lifecycle_guard
+BEFORE UPDATE OR DELETE ON bidding.video_canon_verifier_registry
+FOR EACH ROW EXECUTE FUNCTION bidding.guard_video_canon_verifier_registry_lifecycle();
 CREATE TRIGGER video_canon_verification_append_only
 BEFORE UPDATE OR DELETE ON bidding.video_canon_ai_verification
 FOR EACH ROW EXECUTE FUNCTION bidding.reject_append_only_mutation();
@@ -362,13 +433,18 @@ BEGIN
      WHERE p.school_id=v_candidate.school_id
        AND p.source_id=v_candidate.source_id
        AND p.status='active'
+       AND p.valid_from<=statement_timestamp()
+       AND (p.valid_to IS NULL OR p.valid_to>statement_timestamp())
        AND p.valid_from<=v_valid_from AND (p.valid_to IS NULL OR p.valid_to>v_valid_from)
+       AND (p.valid_to IS NULL OR (v_valid_to IS NOT NULL AND v_valid_to<=p.valid_to))
        AND p.source_sha256=v_candidate.payload#>>'{source,source_sha256}'
        AND p.video_file_id=v_candidate.payload#>>'{source,video_file_id}'
        AND (v_candidate.payload#>>'{teacher_assertion,speaker_id}')=ANY(p.teacher_ids)
        AND v_scope_key=ANY(p.semantic_scopes)
        AND p.policy_version=v_policy_version
        AND p.authorization_evidence_sha256=v_candidate.payload#>>'{source_authorization,authorization_evidence_sha256}'
+       AND p.system_profile=v_bundle.bundle_payload->>'system_profile'
+       AND p.learner_level=v_bundle.bundle_payload->>'learner_level'
        AND p.system_profile=v_version.bidding_system_key
        AND p.learner_level=v_version.level_scope->>'level_key'
      FOR SHARE OF p,s;
@@ -495,24 +571,43 @@ GRANT EXECUTE ON FUNCTION bidding.activate_ai_verified_video_canon(uuid,uuid,tex
   TO bridge_school_canon_promoter;
 
 GRANT SELECT ON bidding.video_canon_source_policy,bidding.video_canon_ai_verification_bundle,
+  bidding.video_canon_verifier_registry,
   bidding.video_canon_ai_verification,
   bidding.video_canon_ai_promotion_receipt TO bridge_school_reader;
-GRANT INSERT ON bidding.video_canon_ai_verification_bundle,bidding.video_canon_ai_verification
-  TO bridge_school_canon_verifier;
+GRANT INSERT ON bidding.video_canon_ai_verification_bundle TO bridge_school_canon_verifier;
+GRANT INSERT ON bidding.video_canon_ai_verification TO
+  bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
+  bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier;
 REVOKE INSERT,UPDATE,DELETE,TRUNCATE ON bidding.video_canon_source_policy,
-  bidding.video_canon_ai_promotion_receipt
+  bidding.video_canon_verifier_registry,bidding.video_canon_ai_promotion_receipt
   FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,bridge_school_canon_promoter;
 REVOKE UPDATE,DELETE,TRUNCATE ON bidding.video_canon_ai_verification_bundle,bidding.video_canon_ai_verification
-  FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,bridge_school_canon_promoter;
+  FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,
+  bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
+  bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier,
+  bridge_school_canon_promoter;
+REVOKE INSERT ON bidding.video_canon_ai_verification FROM bridge_school_canon_verifier,bridge_school_canon_promoter;
+REVOKE INSERT ON bidding.video_canon_ai_verification_bundle FROM
+  bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
+  bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier,
+  bridge_school_canon_promoter;
 REVOKE ALL ON FUNCTION bidding.validate_video_canon_verification_bundle() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.validate_video_canon_verification() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_bound_video_canon_candidate() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_video_canon_source_policy_lifecycle() FROM PUBLIC;
+REVOKE ALL ON FUNCTION bidding.guard_video_canon_verifier_registry_lifecycle() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION bidding.validate_video_canon_verification_bundle(),
-  bidding.guard_bound_video_canon_candidate(),bidding.guard_video_canon_source_policy_lifecycle()
-  FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,bridge_school_canon_promoter;
+  bidding.guard_bound_video_canon_candidate(),bidding.guard_video_canon_source_policy_lifecycle(),
+  bidding.guard_video_canon_verifier_registry_lifecycle()
+  FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,
+  bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
+  bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier,
+  bridge_school_canon_promoter;
 REVOKE EXECUTE ON FUNCTION bidding.validate_video_canon_verification()
-  FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,bridge_school_canon_promoter;
+  FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,
+  bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
+  bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier,
+  bridge_school_canon_promoter;
 
 INSERT INTO public.schema_migration(migration_key)
 VALUES ('0322_workflow_video_canon_ai_promotion') ON CONFLICT DO NOTHING;

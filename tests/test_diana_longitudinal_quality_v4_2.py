@@ -144,6 +144,31 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
         self.assertFalse(pipeline['authoritative_write_performed'])
         self.assertFalse(pipeline['world_lookup_performed'])
 
+    def test_video_canon_candidates_enter_the_shared_persistence_stream(self):
+        from tests.test_video_canon_ai_promotion import _bundle
+        from tests.test_video_canon_evidence import _assertion, _learning
+        from bridge_contracts.video_canon_evidence import build_video_canon_candidate
+
+        master = base_master()
+        assertion = _assertion()
+        assertion['semantic_confidence'] = 0.99
+        candidate = build_video_canon_candidate(_learning(), assertion)
+        master['video_canon_learning_candidate'] = _learning()
+        master['video_canon_assertions'] = [assertion]
+        master['video_canon_verification_bundles'] = {
+            assertion['assertion_id']: _bundle(candidate),
+        }
+        quality = build_quality_layer(master, {'lesson_id': 'lesson-test', 'lesson_number': 5})
+        persisted = [
+            row for row in quality['candidate_staging_records']
+            if row.get('candidate_type') == 'video_school_canon_candidate'
+        ]
+        self.assertEqual(len(persisted), 1)
+        self.assertEqual(quality['counts']['video_canon_candidates'], 1)
+        self.assertEqual(
+            quality['counts']['staging_records'], len(quality['candidate_staging_records'])
+        )
+
 
 if __name__ == '__main__':
     unittest.main()

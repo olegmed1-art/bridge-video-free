@@ -19,6 +19,7 @@ def test_pipeline_prepares_automatic_activation_without_human_review():
     assert result["human_approval_required"] is False
     assert result["authoritative_write_performed"] is False
     assert len(result["promotion_commands"]) == 1
+    assert len(result["candidates"]) == 1
     assert result["gaps"] == []
 
 

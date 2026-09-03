@@ -45,6 +45,9 @@ candidate and verification-bundle SHA-256. The bundle is stored as canonical
 JSON and rehashed by the database; it seals the candidate, validity interval,
 scope, checks and exact prior activation IDs. Activation also recomputes a hash
 over the locked executable rule rather than trusting a compiler-supplied marker.
+Semantic, bridge, hidden-information and control attestations use separate
+database capability roles whose authenticated principals are mapped to disjoint
+check sets; free-form family labels cannot establish independence.
 
 ## Activation and rollback
 

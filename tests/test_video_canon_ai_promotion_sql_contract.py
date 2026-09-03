@@ -7,12 +7,14 @@ ROLLBACK = (ROOT / "database/rollbacks/0322_workflow_video_canon_ai_promotion.sq
 
 
 def test_ai_promotion_is_narrow_guarded_and_not_granted_to_general_workers():
-    assert "CREATE ROLE bridge_school_canon_verifier NOLOGIN" in MIGRATION
-    assert "CREATE ROLE bridge_school_canon_promoter NOLOGIN" in MIGRATION
+    assert "bridge_school_canon_verifier','bridge_school_canon_semantic_verifier" in MIGRATION
+    assert "bridge_school_canon_bridge_verifier','bridge_school_canon_firewall_verifier" in MIGRATION
+    assert "bridge_school_canon_control_verifier','bridge_school_canon_promoter" in MIGRATION
     assert "SECURITY DEFINER" in MIGRATION
     assert "GRANT EXECUTE ON FUNCTION bidding.activate_ai_verified_video_canon" in MIGRATION
     assert "TO bridge_school_canon_promoter" in MIGRATION
-    assert "GRANT INSERT ON bidding.video_canon_ai_verification_bundle,bidding.video_canon_ai_verification" in MIGRATION
+    assert "GRANT INSERT ON bidding.video_canon_ai_verification_bundle TO bridge_school_canon_verifier" in MIGRATION
+    assert "GRANT INSERT ON bidding.video_canon_ai_verification TO" in MIGRATION
     assert "bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,bridge_school_canon_promoter" in MIGRATION
     assert "promotion_mode','AI_VERIFIED_TEACHER_VIDEO'" in MIGRATION
     assert "'human_approval_required',false" in MIGRATION
@@ -32,6 +34,11 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "public.source s ON s.source_id=p.source_id AND s.status='active'",
         "guard_video_canon_source_policy_lifecycle",
         "status='superseded',valid_to=v_valid_from",
+        "p.valid_from<=statement_timestamp()",
+        "p.system_profile=v_bundle.bundle_payload->>'system_profile'",
+        "p.learner_level=v_bundle.bundle_payload->>'learner_level'",
+        "VIDEO_CANON_VERIFIER_PRINCIPAL_MISMATCH",
+        "database_role=current_user",
     ):
         assert marker in MIGRATION
 
