@@ -84,10 +84,31 @@ def build_extended_extraction(
         ("terminology_observations", "SCHOOL_TERMINOLOGY"),
         ("system_evolution_observations", "SYSTEM_EVOLUTION_OBSERVATION"),
         ("world_comparison_links", "WORLD_COMPARISON_LINK"),
+        ("explanation_observations", "EXPLANATION_CANDIDATE"),
     ):
         for item in _items(master.get(field)):
             status = str(item.get("status") or "REVIEW_REQUIRED")
             records.append(_record(job_id, kind, item, status))
+
+    # A detected rule without a source-bound explanation is useful evidence,
+    # but not yet a teachable unit.  Record the missing "why" explicitly.
+    explained_rule_keys = {
+        str(item.get("rule_stable_key") or "")
+        for item in _items(master.get("explanation_observations"))
+        if item.get("rule_stable_key")
+    }
+    for item in _items(quality.get("canon_candidates")):
+        rule_key = str(item.get("stable_key") or item.get("canon_observation_id") or "")
+        if rule_key and rule_key not in explained_rule_keys:
+            gap = {
+                "stable_key": f"explanation-gap:{rule_key}",
+                "gap_type": "EXPLANATION_MISSING",
+                "rule_stable_key": rule_key,
+                "question": "Почему применяется это правило и почему отклоняются альтернативы?",
+                "status": "OPEN",
+                "evidence_refs": _refs(item),
+            }
+            records.append(_record(job_id, "GAP_OR_CONFLICT", gap, "OPEN"))
 
     technical = quality.get("readiness")
     technical = dict(technical) if isinstance(technical, Mapping) else {}
