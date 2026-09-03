@@ -307,6 +307,8 @@ jobs:
           observer_activated_here=0
           rollback_new_activation() {
             rc=$?
+            trap - EXIT
+            rollback_failed=0
             if [[ $rc -ne 0 && "$observer_activated_here" == 1 ]]; then
               systemctl disable --now "$observer_service" >/dev/null 2>&1 || true
               echo 'AUTOPILOT_OBSERVER_ACTIVATION_ROLLED_BACK' >&2
@@ -317,12 +319,40 @@ jobs:
             fi
             if [[ $rc -ne 0 && "$existing_restarted" == 1 ]]; then
               install -m 0600 -o root -g root "$previous_broker_env" \
-                "$root/autopilot-broker.env"
-              ln -sfn "$previous_release" "$root/current"
-              systemctl restart "$service" >/dev/null 2>&1 || true
-              echo 'AUTOPILOT_SHADOW_EXISTING_STATE_RESTORED' >&2
+                "$root/autopilot-broker.env" || rollback_failed=1
+              ln -sfn "$previous_release" "$root/current" || rollback_failed=1
+              systemctl restart "$service" >/dev/null 2>&1 || rollback_failed=1
+              restored_pid="$(systemctl show -p MainPID --value "$service")"
+              [[ "$(systemctl is-active "$service" 2>/dev/null || true)" == active ]] \
+                || rollback_failed=1
+              [[ "$restored_pid" =~ ^[1-9][0-9]*$ ]] || rollback_failed=1
+              [[ "$(readlink -f "/proc/$restored_pid/cwd" 2>/dev/null || true)" == \
+                 "$previous_release" ]] || rollback_failed=1
+              if [[ "$rollback_failed" == 0 ]]; then
+                PROCESS_ENVIRON="/proc/$restored_pid/environ" \
+                  EXPECTED_ENV="$previous_broker_env" python3 - <<'PY' || rollback_failed=1
+          import os, shlex
+          expected = {}
+          for line in open(os.environ['EXPECTED_ENV'], encoding='utf-8'):
+              key, value = line.rstrip('\n').split('=', 1)
+              expected[key] = shlex.split(value)[0]
+          observed = {}
+          for item in open(os.environ['PROCESS_ENVIRON'], 'rb').read().split(b'\0'):
+              if b'=' in item:
+                  key, value = item.split(b'=', 1)
+                  observed[key.decode()] = value.decode()
+          assert all(observed.get(key) == value for key, value in expected.items())
+          PY
+              fi
+              if [[ "$rollback_failed" == 0 ]]; then
+                echo 'AUTOPILOT_SHADOW_EXISTING_STATE_RESTORED' >&2
+              else
+                echo 'AUTOPILOT_SHADOW_EXISTING_STATE_ROLLBACK_FAILED_SNAPSHOT_RETAINED' >&2
+              fi
             fi
-            [[ -z "$previous_broker_env" ]] || rm -f -- "$previous_broker_env"
+            if [[ "$rollback_failed" == 0 && -n "$previous_broker_env" ]]; then
+              rm -f -- "$previous_broker_env"
+            fi
             exit "$rc"
           }
           trap rollback_new_activation EXIT

@@ -83,6 +83,17 @@ BEGIN
         'task_kind', 'GITHUB_DRAFT_REPAIR_V1',
         'runtime', 'ORACLE_RESIDENT'
     );
+    valid_summary := jsonb_set(
+        valid_summary, '{broker_provenance_sha256}', to_jsonb(encode(public.digest(
+            convert_to(
+                '{"artifact_sha256":"' || (valid_summary->>'broker_artifact_sha256') ||
+                '","policy_sha256":"' || (valid_summary->>'broker_policy_sha256') ||
+                '","policy_version":"' || (valid_summary->>'broker_policy_version') ||
+                '","source_sha":"' || (valid_summary->>'broker_source_sha') || '"}',
+                'UTF8'
+            ), 'sha256'
+        ), 'hex'))
+    );
 
     BEGIN
         PERFORM autopilot.complete_task(
@@ -91,6 +102,17 @@ BEGIN
             jsonb_set(valid_summary, '{token_exposed}', 'true'::jsonb)
         );
         RAISE EXCEPTION 'AUTOPILOT_DRAFT_REPAIR_TOKEN_EVIDENCE_ACCEPTED';
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM NOT LIKE '%AUTOPILOT_DRAFT_REPAIR_EVIDENCE_INVALID%' THEN RAISE; END IF;
+    END;
+
+    BEGIN
+        PERFORM autopilot.complete_task(
+            repair_id, 'sql-draft-repair-worker-1', claimed.lease_epoch,
+            'GITHUB_DRAFT_REPAIR_EVIDENCE', repeat('d', 64),
+            jsonb_set(valid_summary, '{broker_provenance_sha256}', to_jsonb(repeat('2', 64)))
+        );
+        RAISE EXCEPTION 'AUTOPILOT_DRAFT_REPAIR_FORGED_PROVENANCE_ACCEPTED';
     EXCEPTION WHEN OTHERS THEN
         IF SQLERRM NOT LIKE '%AUTOPILOT_DRAFT_REPAIR_EVIDENCE_INVALID%' THEN RAISE; END IF;
     END;

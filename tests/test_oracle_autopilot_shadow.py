@@ -1021,6 +1021,7 @@ def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():
     assert '"$root/.venv/bin/python"' in workflow
     assert "SELECT autopilot.verify_broker_schema()" in workflow
     assert "AUTOPILOT_SHADOW_EXISTING_STATE_RESTORED" in workflow
+    assert "AUTOPILOT_SHADOW_EXISTING_STATE_ROLLBACK_FAILED_SNAPSHOT_RETAINED" in workflow
     assert 'ln -sfn "$previous_release" "$root/current"' in workflow
     assert workflow.index("AUTOPILOT_DIAG_OBSERVER_RESTORED=not-required") < workflow.index(
         "previous_broker_env=''", workflow.index("AUTOPILOT_DIAG_OBSERVER_RESTORED=not-required")
