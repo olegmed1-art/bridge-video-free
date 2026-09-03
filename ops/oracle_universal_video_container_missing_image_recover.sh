@@ -46,11 +46,41 @@ git -C "$source_dir/repo" checkout --quiet --detach FETCH_HEAD
 [[ -z "$(git -C "$source_dir/repo" status --porcelain)" ]] || die SOURCE_DIRTY
 chmod -R a+rX,u-w,g-w,o-w "$source_dir/repo"
 
+speaker_cache="$BASE_DIR/model-cache/speaker"
+install -d -o universal-video -g universal-video -m 0750 "$speaker_cache"
+PYTHONPATH="$source_dir/repo" SPEAKER_CACHE="$speaker_cache" python3 - <<'PY'
+import hashlib, os
+from pathlib import Path
+from bridge_speaker_diarization_v3 import _ensure_embedding, _ensure_segmentation
+
+root=Path(os.environ['SPEAKER_CACHE'])
+seg=_ensure_segmentation(root)
+emb=_ensure_embedding(root, '3dspeaker')
+expected={
+    seg: '915e0573bc4e17197a7a893d0eb98e1a851abb64451b2e1a8ad51f5f99040360',
+    emb: '1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b',
+}
+for path,digest in expected.items():
+    observed=hashlib.sha256(path.read_bytes()).hexdigest()
+    if observed != digest:
+        raise SystemExit(f'model digest mismatch: {path.name}')
+PY
+chown universal-video:universal-video \
+  "$speaker_cache/pyannote-segmentation-3.0.onnx" \
+  "$speaker_cache/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
+chmod 0640 \
+  "$speaker_cache/pyannote-segmentation-3.0.onnx" \
+  "$speaker_cache/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx"
+
 image_tag="bridge-school/universal-video:$EXPECTED_SHA"
+build=1
+if [[ "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image_tag" 2>/dev/null || true)" == "$EXPECTED_SHA" ]]; then
+  build=0
+fi
 UNIVERSAL_VIDEO_SOURCE_DIR="$source_dir/repo" \
 UNIVERSAL_VIDEO_DIR="$BASE_DIR" \
 UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=0 \
-UNIVERSAL_VIDEO_CONTAINER_BUILD=1 \
+UNIVERSAL_VIDEO_CONTAINER_BUILD="$build" \
 UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB=5242880 \
   bash "$source_dir/repo/ops/oracle_universal_video_container_install.sh"
 
