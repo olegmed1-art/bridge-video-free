@@ -283,7 +283,9 @@ BEGIN
         SELECT array_agg(key ORDER BY key) INTO github_summary_keys
           FROM jsonb_object_keys(p_summary) AS keys(key);
         IF github_summary_keys IS DISTINCT FROM ARRAY[
-               'action_fingerprint', 'base_sha', 'branch_name', 'broker_host',
+               'action_fingerprint', 'base_sha', 'branch_name',
+               'broker_artifact_sha256', 'broker_host', 'broker_policy_sha256',
+               'broker_policy_version', 'broker_provenance_sha256', 'broker_source_sha',
                'commit_sha', 'cost_actual_microusd', 'draft', 'http_method',
                'manifest_version', 'merge_allowed', 'model_calls',
                'operation_count', 'production_mutation', 'pull_request_number',
@@ -313,6 +315,11 @@ BEGIN
            OR p_summary->'production_mutation' IS DISTINCT FROM 'false'::jsonb
            OR p_summary->'operation_count' IS DISTINCT FROM
               to_jsonb(8 + 2 * jsonb_array_length(task_goal_json->'changes'))
+           OR p_summary->>'broker_policy_version' <> 'physical-no-merge-v1'
+           OR COALESCE(p_summary->>'broker_source_sha', '') !~ '^[0-9a-f]{40}$'
+           OR COALESCE(p_summary->>'broker_artifact_sha256', '') !~ '^[0-9a-f]{64}$'
+           OR COALESCE(p_summary->>'broker_policy_sha256', '') !~ '^[0-9a-f]{64}$'
+           OR COALESCE(p_summary->>'broker_provenance_sha256', '') !~ '^[0-9a-f]{64}$'
            OR COALESCE(p_summary->>'broker_host', '') !~
               '^bridge-school-autopilot-[a-z0-9]+-olegmed1-4368s-projects\.vercel\.app$'
            OR p_summary->'http_method' IS DISTINCT FROM '"POST"'::jsonb

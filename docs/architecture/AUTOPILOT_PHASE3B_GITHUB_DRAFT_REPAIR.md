@@ -80,20 +80,23 @@ Policy `physical-no-merge-v1` strengthens that boundary as follows:
 - merge, ref update/delete, Actions, Deployments, hooks, rulesets, arbitrary
   origins, encoded path escapes, extra query parameters, and PUT/PATCH/DELETE
   requests fail closed before network dispatch;
-- `/healthz` reports the policy version and a validated immutable source SHA;
-- the mutation endpoint returns 503 unless `AUTOPILOT_BROKER_SOURCE_SHA` is an
-  exact lowercase 40-character commit SHA and
-  `AUTOPILOT_BROKER_ARTIFACT_SHA256` is an exact lowercase 64-character digest
-  of the deployed immutable artifact;
+- `/healthz` reports the policy version and Vercel's immutable
+  `VERCEL_GIT_COMMIT_SHA`; caller-supplied source/artifact attestation variables
+  are ignored;
+- the mutation endpoint returns 503 unless the platform supplies an exact
+  lowercase deployment commit SHA; at runtime the broker hashes the loaded
+  security-relevant Python artifact and binds that digest, the platform commit,
+  policy version, and policy digest into a canonical provenance SHA-256;
 - every successful mutation receipt includes that exact source SHA, artifact
-  digest, immutable broker policy version, and a canonical SHA-256 digest of
-  the finite operation policy, so downstream evidence can reject a receipt from
-  an unreviewed build, artifact, or policy;
+  digest, immutable broker policy version, canonical policy SHA-256, and bound
+  provenance SHA-256; the Oracle consumer recomputes the binding and migration
+  `0307` requires the complete receipt fields;
 - the raw installation token remains process-local and no route returns it or
   its expiry.
 
-The source SHA is an attestation input, not self-authenticating proof. A future
-deployment gate must bind it to the exact reviewed artifact and read it back
+The provenance receipt proves internal binding, but broker isolation is not a
+GitHub-level prohibition on merge. A deployment gate must still compare its
+source/artifact/policy values with the exact reviewed release and read them back
 from the protected Preview. Missing or mismatched deployment evidence remains
 `UNKNOWN`, never PASS. This source contract does not deploy, rotate credentials,
 change Vercel environment variables, or authorize production promotion.

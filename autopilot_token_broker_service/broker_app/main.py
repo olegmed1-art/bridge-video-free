@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
+import json
 import os
+from pathlib import Path
 import time
 from fastapi import FastAPI, Header, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -82,8 +85,7 @@ def _require_preview_runtime() -> None:
 def _broker_enabled() -> bool:
     return bool(
         os.getenv("VERCEL_ENV", "") == "preview"
-        and _source_revision() != "UNATTESTED"
-        and _artifact_sha256() != "UNATTESTED"
+        and _deployment_provenance() is not None
         and _broker_secret()
         and os.getenv("AUTOPILOT_GITHUB_APP_ID", "").strip()
         and os.getenv("AUTOPILOT_GITHUB_INSTALLATION_ID", "").strip()
@@ -92,25 +94,46 @@ def _broker_enabled() -> bool:
 
 
 def _source_revision() -> str:
-    """Return only a validated immutable revision, never arbitrary env text."""
+    """Return Vercel's immutable deployment revision, never a user attestation."""
 
-    value = os.getenv("AUTOPILOT_BROKER_SOURCE_SHA", "").strip()
+    value = os.getenv("VERCEL_GIT_COMMIT_SHA", "").strip()
     if len(value) == 40 and all(character in "0123456789abcdef" for character in value):
         return value
     return "UNATTESTED"
 
 
 def _artifact_sha256() -> str:
-    """Return the deployment artifact digest only in canonical form."""
+    """Hash the security-relevant Python artifact actually loaded by the runtime."""
 
-    value = os.getenv("AUTOPILOT_BROKER_ARTIFACT_SHA256", "").strip()
-    if len(value) == 64 and all(character in "0123456789abcdef" for character in value):
-        return value
-    return "UNATTESTED"
+    root = Path(__file__).resolve().parent
+    digest = hashlib.sha256()
+    for path in sorted(root.glob("*.py"), key=lambda item: item.name):
+        data = path.read_bytes()
+        digest.update(path.name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+    return digest.hexdigest()
+
+
+def _deployment_provenance() -> dict[str, str] | None:
+    """Bind the platform source revision to the loaded artifact and policy."""
+
+    source_sha = _source_revision()
+    if source_sha == "UNATTESTED":
+        return None
+    statement = {
+        "artifact_sha256": _artifact_sha256(),
+        "policy_sha256": broker_policy_sha256(),
+        "policy_version": BROKER_POLICY_VERSION,
+        "source_sha": source_sha,
+    }
+    encoded = json.dumps(statement, sort_keys=True, separators=(",", ":")).encode()
+    return {**statement, "provenance_sha256": hashlib.sha256(encoded).hexdigest()}
 
 
 def _require_source_attestation() -> None:
-    if _source_revision() == "UNATTESTED" or _artifact_sha256() == "UNATTESTED":
+    if _deployment_provenance() is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="TOKEN_BROKER_SOURCE_UNATTESTED",
@@ -120,6 +143,7 @@ def _require_source_attestation() -> None:
 
 @app.get("/healthz")
 async def healthz() -> dict[str, object]:
+    provenance = _deployment_provenance()
     return {
         "status": "ok",
         "service": "school-autopilot-github-token-broker",
@@ -134,8 +158,9 @@ async def healthz() -> dict[str, object]:
         "source_revision": _source_revision(),
         "source_attested": _source_revision() != "UNATTESTED",
         "artifact_sha256": _artifact_sha256(),
-        "artifact_attested": _artifact_sha256() != "UNATTESTED",
+        "artifact_attested": provenance is not None,
         "policy_sha256": broker_policy_sha256(),
+        "provenance_sha256": provenance["provenance_sha256"] if provenance else "UNATTESTED",
         "merge_endpoint_enabled": False,
         "ref_update_delete_enabled": False,
         "actions_endpoint_enabled": False,
@@ -184,12 +209,16 @@ async def draft_repair(
             headers=NO_STORE_HEADERS,
         ) from exc
 
+    provenance = _deployment_provenance()
+    if provenance is None:  # The preflight above is fail-closed; retain type safety.
+        raise HTTPException(status_code=503, detail="TOKEN_BROKER_SOURCE_UNATTESTED")
     result = {
         **result,
         "broker_policy_version": BROKER_POLICY_VERSION,
-        "broker_source_sha": _source_revision(),
-        "broker_artifact_sha256": _artifact_sha256(),
-        "broker_policy_sha256": broker_policy_sha256(),
+        "broker_source_sha": provenance["source_sha"],
+        "broker_artifact_sha256": provenance["artifact_sha256"],
+        "broker_policy_sha256": provenance["policy_sha256"],
+        "broker_provenance_sha256": provenance["provenance_sha256"],
     }
     return JSONResponse(
         result,

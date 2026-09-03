@@ -474,7 +474,7 @@ class BrokerContractTests(unittest.TestCase):
         self.assertEqual(payload["broker_policy_version"], "physical-no-merge-v1")
         self.assertEqual(payload["source_revision"], "UNATTESTED")
         self.assertFalse(payload["source_attested"])
-        self.assertEqual(payload["artifact_sha256"], "UNATTESTED")
+        self.assertRegex(payload["artifact_sha256"], r"^[0-9a-f]{64}$")
         self.assertFalse(payload["artifact_attested"])
         self.assertRegex(payload["policy_sha256"], r"^[0-9a-f]{64}$")
         self.assertFalse(payload["merge_endpoint_enabled"])
@@ -483,31 +483,25 @@ class BrokerContractTests(unittest.TestCase):
     def test_source_attestation_is_exact_and_fail_closed(self):
         for value in ("", "main", "A" * 40, "a" * 39, "a" * 41):
             with self.subTest(value=value), patch.dict(
-                os.environ, {"AUTOPILOT_BROKER_SOURCE_SHA": value}, clear=True
+                os.environ, {"VERCEL_GIT_COMMIT_SHA": value}, clear=True
             ), self.assertRaises(HTTPException) as context:
                 _require_source_attestation()
             self.assertEqual(context.exception.detail, "TOKEN_BROKER_SOURCE_UNATTESTED")
         with patch.dict(
             os.environ,
             {
-                "AUTOPILOT_BROKER_SOURCE_SHA": "a" * 40,
-                "AUTOPILOT_BROKER_ARTIFACT_SHA256": "b" * 64,
+                "VERCEL_GIT_COMMIT_SHA": "a" * 40,
             },
             clear=True,
         ):
             _require_source_attestation()
 
-    def test_source_attestation_requires_canonical_artifact_digest(self):
-        for value in ("", "sha256:abc", "B" * 64, "b" * 63, "b" * 65):
-            with self.subTest(value=value), patch.dict(
-                os.environ,
-                {
-                    "AUTOPILOT_BROKER_SOURCE_SHA": "a" * 40,
-                    "AUTOPILOT_BROKER_ARTIFACT_SHA256": value,
-                },
-                clear=True,
-            ), self.assertRaises(HTTPException):
-                _require_source_attestation()
+    def test_user_supplied_well_shaped_attestation_is_ignored(self):
+        with patch.dict(os.environ, {
+            "AUTOPILOT_BROKER_SOURCE_SHA": "a" * 40,
+            "AUTOPILOT_BROKER_ARTIFACT_SHA256": "b" * 64,
+        }, clear=True), self.assertRaises(HTTPException):
+            _require_source_attestation()
 
     def test_policy_digest_is_stable_and_bound_to_policy(self):
         self.assertRegex(broker_policy_sha256(), r"^[0-9a-f]{64}$")
@@ -703,8 +697,7 @@ class BrokerContractTests(unittest.TestCase):
                 os.environ,
                 {
                     "AUTOPILOT_TOKEN_BROKER_SECRET": STRONG_BROKER_SECRET,
-                    "AUTOPILOT_BROKER_SOURCE_SHA": "a" * 40,
-                    "AUTOPILOT_BROKER_ARTIFACT_SHA256": "b" * 64,
+                    "VERCEL_GIT_COMMIT_SHA": "a" * 40,
                     "VERCEL_ENV": "preview",
                 },
                 clear=True,
@@ -727,8 +720,9 @@ class BrokerContractTests(unittest.TestCase):
         self.assertIn('"token_exposed":false', body)
         self.assertIn('"broker_policy_version":"physical-no-merge-v1"', body)
         self.assertIn(f'"broker_source_sha":"{"a" * 40}"', body)
-        self.assertIn(f'"broker_artifact_sha256":"{"b" * 64}"', body)
+        self.assertRegex(body, r'"broker_artifact_sha256":"[0-9a-f]{64}"')
         self.assertIn(f'"broker_policy_sha256":"{broker_policy_sha256()}"', body)
+        self.assertRegex(body, r'"broker_provenance_sha256":"[0-9a-f]{64}"')
         self.assertNotIn("ghs_", body)
         self.assertNotIn(self.private_key_pem, body)
 
@@ -760,8 +754,7 @@ class BrokerContractTests(unittest.TestCase):
                 os.environ,
                 {
                     "AUTOPILOT_TOKEN_BROKER_SECRET": STRONG_BROKER_SECRET,
-                    "AUTOPILOT_BROKER_SOURCE_SHA": "a" * 40,
-                    "AUTOPILOT_BROKER_ARTIFACT_SHA256": "b" * 64,
+                    "VERCEL_GIT_COMMIT_SHA": "a" * 40,
                     "VERCEL_ENV": "preview",
                 },
                 clear=True,

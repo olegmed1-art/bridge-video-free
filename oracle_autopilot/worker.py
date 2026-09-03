@@ -575,6 +575,11 @@ def _validate_token_broker_result(
         "action_fingerprint",
         "base_sha",
         "branch_name",
+        "broker_artifact_sha256",
+        "broker_policy_sha256",
+        "broker_policy_version",
+        "broker_provenance_sha256",
+        "broker_source_sha",
         "commit_sha",
         "draft",
         "manifest_version",
@@ -596,6 +601,15 @@ def _validate_token_broker_result(
     replayed = payload.get("replayed")
     status_value = payload.get("status")
     expected_operation_count = 8 + 2 * len(request_payload["changes"])
+    provenance_statement = {
+        "artifact_sha256": payload.get("broker_artifact_sha256"),
+        "policy_sha256": payload.get("broker_policy_sha256"),
+        "policy_version": payload.get("broker_policy_version"),
+        "source_sha": payload.get("broker_source_sha"),
+    }
+    expected_provenance = hashlib.sha256(
+        json.dumps(provenance_statement, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
     if (
         status_value not in {"created", "existing"}
         or type(replayed) is not bool
@@ -617,6 +631,11 @@ def _validate_token_broker_result(
         or payload.get("merge_allowed") is not False
         or payload.get("production_mutation") is not False
         or payload.get("operation_count") != expected_operation_count
+        or payload.get("broker_policy_version") != "physical-no-merge-v1"
+        or re.fullmatch(r"[0-9a-f]{40}", payload.get("broker_source_sha", "")) is None
+        or re.fullmatch(r"[0-9a-f]{64}", payload.get("broker_artifact_sha256", "")) is None
+        or re.fullmatch(r"[0-9a-f]{64}", payload.get("broker_policy_sha256", "")) is None
+        or payload.get("broker_provenance_sha256") != expected_provenance
     ):
         raise AutopilotContractError("TOKEN_BROKER_RESPONSE_INVALID")
 

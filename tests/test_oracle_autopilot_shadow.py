@@ -298,6 +298,21 @@ def test_bounded_draft_repair_posts_only_to_pinned_broker(monkeypatch):
         "production_mutation": False,
         "operation_count": 10,
     }
+    provenance = {
+        "artifact_sha256": "c" * 64,
+        "policy_sha256": "d" * 64,
+        "policy_version": "physical-no-merge-v1",
+        "source_sha": "e" * 40,
+    }
+    response_payload.update({
+        "broker_artifact_sha256": provenance["artifact_sha256"],
+        "broker_policy_sha256": provenance["policy_sha256"],
+        "broker_policy_version": provenance["policy_version"],
+        "broker_source_sha": provenance["source_sha"],
+        "broker_provenance_sha256": hashlib.sha256(
+            json.dumps(provenance, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    })
     broker_url = (
         "https://bridge-school-autopilot-cslfiz83g-"
         "olegmed1-4368s-projects.vercel.app/v1/github/draft-repair"
@@ -376,11 +391,18 @@ def test_bounded_draft_repair_rejects_forged_evidence(monkeypatch):
         "pull_request_url": "https://github.com/olegmed1-art/bridge-video-free/pull/1001",
         "draft": True,
         "replayed": False,
-        "token_exposed": True,
+        "token_exposed": False,
         "merge_allowed": False,
         "production_mutation": False,
         "operation_count": 10,
     }
+    response_payload.update({
+        "broker_artifact_sha256": "c" * 64,
+        "broker_policy_sha256": "d" * 64,
+        "broker_policy_version": "physical-no-merge-v1",
+        "broker_source_sha": "e" * 40,
+        "broker_provenance_sha256": "f" * 64,
+    })
     broker_url = (
         "https://bridge-school-autopilot-cslfiz83g-"
         "olegmed1-4368s-projects.vercel.app/v1/github/draft-repair"
