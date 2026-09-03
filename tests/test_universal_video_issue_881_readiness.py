@@ -1297,7 +1297,7 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert '"${exact_parents[1]}" == "$reviewed_sha"' in workflow
     assert "Exact main is not the direct reviewed merge of PR #1070 onto root PR #991" in workflow
     assert 'main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq' in workflow
-    assert "Reviewed head has no independent approval" in workflow
+    assert "Reviewed head has no current independent approval at final reconciliation" in workflow
     assert "root_required_workflows=(" in workflow
     assert "Oracle idle STOP guard CI" in workflow
     assert "Retired Oracle Universal Video Container Evidence Contract" in workflow
@@ -1305,6 +1305,9 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "group_by(.user.login) | map(max_by(.submitted_at))" in workflow
     assert "Main changed while live review and CI gates were evaluated" in workflow
     assert workflow.count('git/ref/heads/main" --jq') >= 2
+    approval_recheck = workflow.rindex('reviews?per_page=100')
+    final_main_fence = workflow.rindex('git/ref/heads/main" --jq')
+    assert approval_recheck < final_main_fence
     assert '[[ "$live_state" == \'closed\'' in workflow
     assert 'git/ref/heads/main" --jq \'.object.sha\'' in workflow
     assert '"$main_sha" == "$EXACT_SHA"' in workflow
