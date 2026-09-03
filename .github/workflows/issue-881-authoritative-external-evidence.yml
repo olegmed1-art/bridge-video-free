@@ -164,6 +164,7 @@ jobs:
 
           verify_live_gate(){
             local live_head live_state main_sha root_pr_json root_merge_sha root_reviewed_sha review_count reviews_json approval_count threads_json blocker_count runs_json root_runs_json workflow_name latest_state
+            local -a exact_parents
             pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
             live_state="$(jq -r '.state' <<<"$pr_json")"
             [[ "$live_state" == 'closed' && "$(jq -r '.merged' <<<"$pr_json")" == true ]] \
@@ -181,8 +182,11 @@ jobs:
               || { echo 'Root Autopilot PR #991 is not merged' >&2; return 1; }
             root_merge_sha="$(jq -r '.merge_commit_sha' <<<"$root_pr_json")"
             [[ "$root_merge_sha" =~ ^[0-9a-f]{40}$ ]]
-            git merge-base --is-ancestor "$root_merge_sha" "$EXACT_SHA" \
-              || { echo 'Root Autopilot merge is not an ancestor of exact main' >&2; return 1; }
+            read -r -a exact_parents <<<"$(git show -s --format=%P "$EXACT_SHA")"
+            [[ ${#exact_parents[@]} -eq 2 \
+              && "${exact_parents[0]}" == "$root_merge_sha" \
+              && "${exact_parents[1]}" == "$reviewed_sha" ]] \
+              || { echo 'Exact main is not the direct reviewed merge of PR #1070 onto root PR #991' >&2; return 1; }
             root_reviewed_sha="$(jq -r '.head.sha' <<<"$root_pr_json")"
             [[ "$root_reviewed_sha" =~ ^[0-9a-f]{40}$ ]]
 
