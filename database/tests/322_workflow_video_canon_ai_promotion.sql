@@ -280,7 +280,7 @@ BEGIN
 
   BEGIN
     UPDATE bidding.video_canon_source_policy
-       SET status='revoked',valid_to=statement_timestamp()
+       SET status='revoked',valid_to=now()
      WHERE video_canon_source_policy_id=v_policy;
     PERFORM bidding.restore_ai_verified_video_canon(
       v_promotion,repeat('c',64),repeat('d',64)
