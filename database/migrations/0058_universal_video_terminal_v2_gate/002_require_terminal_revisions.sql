@@ -1,10 +1,11 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
--- Defense in depth for rolling deployments: even an older authorized worker
--- cannot persist REVIEW_READY unless both terminal Drive artifacts are bound
--- to explicit Drive revision metadata. The Python verifier also hash-binds
--- these values in the manifest and rereads them immediately before finish_job.
+-- Defense in depth for rolling deployments: new/updated REVIEW_READY rows must
+-- bind both terminal Drive artifacts to explicit revision metadata. Historical
+-- 0057 REVIEW_READY rows may predate those fields, so install NOT VALID: PostgreSQL
+-- still enforces the check for every new or updated row without rejecting legacy
+-- rows during migration. Historical remediation/VALIDATE is a separate operation.
 ALTER TABLE video_queue.job
     DROP CONSTRAINT IF EXISTS video_job_terminal_revision_check;
 
@@ -17,9 +18,9 @@ ALTER TABLE video_queue.job
             AND NULLIF(output #>> '{artifact_manifest,artifacts,1,modified_time}', '') IS NOT NULL
             AND (output #>> '{artifact_manifest,artifacts,1,version}') ~ '^[0-9]+$'
         )
-    );
+    ) NOT VALID;
 
 COMMENT ON CONSTRAINT video_job_terminal_revision_check ON video_queue.job IS
-    'REVIEW_READY requires hash-bound Drive modified_time/version for master PDF and AI_DONE';
+    'New/updated REVIEW_READY requires hash-bound Drive modified_time/version; legacy rows staged NOT VALID';
 
 COMMIT;
