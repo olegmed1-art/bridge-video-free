@@ -209,6 +209,12 @@ def test_promotion_disables_legacy_and_rollback_restores_original_state() -> Non
     assert 'cmp -s "$operator_backup_root/operator" "$OPERATOR_TARGET"' in SCRIPT
     assert 'cmp -s "$operator_backup_root/sudoers" "$OPERATOR_SUDOERS"' in SCRIPT
     assert 'visudo -cf /etc/sudoers >/dev/null 2>&1 || return 1' in SCRIPT
+    assert 'readonly -a OBSOLETE_OPERATOR_PATHS=(' in SCRIPT
+    assert 'readonly -a OBSOLETE_SUDOERS_PATHS=(' in SCRIPT
+    assert 'obsolete_operator_existed=(0 0 0)' in SCRIPT
+    assert 'obsolete_sudoers_existed=(0 0 0)' in SCRIPT
+    assert '"$operator_backup_root/obsolete-operator-$index"' in SCRIPT
+    assert '"$operator_backup_root/obsolete-sudoers-$index"' in SCRIPT
     assert 'cmp -s "$operator_backup_root/container-unit" "$NEW_SERVICE_UNIT"' in SCRIPT
     assert 'cmp -s "$operator_backup_root/container-env" "$NEW_SERVICE_ENV"' in SCRIPT
     assert "readonly RECOVERY_ROOT='/var/lib/bridge-school/universal-video-promotion-recovery'" in SCRIPT

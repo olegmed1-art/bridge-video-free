@@ -15,6 +15,16 @@ readonly WORKLOAD_LOCK="$BASE_DIR/spool/.workload.lock"
 readonly OPERATOR_TARGET='/usr/local/sbin/universal-video'
 readonly OPERATOR_SUDOERS='/etc/sudoers.d/universal-video-operator-ocarun'
 readonly RECOVERY_ROOT='/var/lib/bridge-school/universal-video-promotion-recovery'
+readonly -a OBSOLETE_OPERATOR_PATHS=(
+  '/usr/local/sbin/universal-video-diana11'
+  '/usr/local/sbin/universal-video-diana11-002'
+  '/usr/local/sbin/universal-video-diana11-003'
+)
+readonly -a OBSOLETE_SUDOERS_PATHS=(
+  '/etc/sudoers.d/universal-video-diana11-ocarun'
+  '/etc/sudoers.d/universal-video-diana11-002-ocarun'
+  '/etc/sudoers.d/universal-video-diana11-003-ocarun'
+)
 EXPECTED_COMMIT="${UNIVERSAL_VIDEO_EXPECTED_COMMIT:-}"
 EXPECTED_DIGEST="${UNIVERSAL_VIDEO_EXPECTED_IMAGE_DIGEST:-}"
 switch_started=0
@@ -24,6 +34,8 @@ operator_existed=0
 operator_sudoers_existed=0
 new_service_unit_existed=0
 new_service_env_existed=0
+obsolete_operator_existed=(0 0 0)
+obsolete_sudoers_existed=(0 0 0)
 operator_backup_root=''
 preserve_recovery_snapshot=0
 old_enabled_before=''
@@ -97,6 +109,7 @@ runtime_files_match_snapshot(){
 }
 
 operator_files_match_snapshot(){
+  local index path
   if (( operator_existed == 1 )); then
     [[ -f "$OPERATOR_TARGET" && ! -L "$OPERATOR_TARGET" ]] || return 1
     cmp -s "$operator_backup_root/operator" "$OPERATOR_TARGET" || return 1
@@ -109,6 +122,24 @@ operator_files_match_snapshot(){
   else
     [[ ! -e "$OPERATOR_SUDOERS" && ! -L "$OPERATOR_SUDOERS" ]] || return 1
   fi
+  for index in "${!OBSOLETE_OPERATOR_PATHS[@]}"; do
+    path="${OBSOLETE_OPERATOR_PATHS[$index]}"
+    if (( obsolete_operator_existed[index] == 1 )); then
+      [[ -f "$path" && ! -L "$path" ]] || return 1
+      cmp -s "$operator_backup_root/obsolete-operator-$index" "$path" || return 1
+    else
+      [[ ! -e "$path" && ! -L "$path" ]] || return 1
+    fi
+  done
+  for index in "${!OBSOLETE_SUDOERS_PATHS[@]}"; do
+    path="${OBSOLETE_SUDOERS_PATHS[$index]}"
+    if (( obsolete_sudoers_existed[index] == 1 )); then
+      [[ -f "$path" && ! -L "$path" ]] || return 1
+      cmp -s "$operator_backup_root/obsolete-sudoers-$index" "$path" || return 1
+    else
+      [[ ! -e "$path" && ! -L "$path" ]] || return 1
+    fi
+  done
   visudo -cf /etc/sudoers >/dev/null 2>&1 || return 1
 }
 
@@ -242,7 +273,7 @@ elif fallback:
 rollback(){
   local rc="${1:-$?}"
   local rollback_failed=0
-  local current_new_enabled current_new_active
+  local current_new_enabled current_new_active index path
   trap - ERR
   emit_runtime_code
   if (( switch_started == 1 )); then
@@ -312,6 +343,24 @@ rollback(){
       else
         rm -f -- "$OPERATOR_SUDOERS" || rollback_failed=1
       fi
+      for index in "${!OBSOLETE_OPERATOR_PATHS[@]}"; do
+        path="${OBSOLETE_OPERATOR_PATHS[$index]}"
+        if (( obsolete_operator_existed[index] == 1 )); then
+          install -o root -g root -m 0755 "$operator_backup_root/obsolete-operator-$index" "$path" \
+            || rollback_failed=1
+        else
+          rm -f -- "$path" || rollback_failed=1
+        fi
+      done
+      for index in "${!OBSOLETE_SUDOERS_PATHS[@]}"; do
+        path="${OBSOLETE_SUDOERS_PATHS[$index]}"
+        if (( obsolete_sudoers_existed[index] == 1 )); then
+          install -o root -g root -m 0440 "$operator_backup_root/obsolete-sudoers-$index" "$path" \
+            || rollback_failed=1
+        else
+          rm -f -- "$path" || rollback_failed=1
+        fi
+      done
       operator_files_match_snapshot || rollback_failed=1
     fi
     service_matches_captured_state "$NEW_SERVICE" "$new_enabled_before" "$new_active_before" \
@@ -385,6 +434,22 @@ if [[ -e "$OPERATOR_SUDOERS" || -L "$OPERATOR_SUDOERS" ]]; then
   install -o root -g root -m 0600 "$OPERATOR_SUDOERS" "$operator_backup_root/sudoers"
   operator_sudoers_existed=1
 fi
+for index in "${!OBSOLETE_OPERATOR_PATHS[@]}"; do
+  path="${OBSOLETE_OPERATOR_PATHS[$index]}"
+  if [[ -e "$path" || -L "$path" ]]; then
+    [[ -f "$path" && ! -L "$path" ]] || fail UV_CONTAINER_PROMOTION_OPERATOR_OBSOLETE_UNSAFE
+    install -o root -g root -m 0600 "$path" "$operator_backup_root/obsolete-operator-$index"
+    obsolete_operator_existed[index]=1
+  fi
+done
+for index in "${!OBSOLETE_SUDOERS_PATHS[@]}"; do
+  path="${OBSOLETE_SUDOERS_PATHS[$index]}"
+  if [[ -e "$path" || -L "$path" ]]; then
+    [[ -f "$path" && ! -L "$path" ]] || fail UV_CONTAINER_PROMOTION_OPERATOR_OBSOLETE_UNSAFE
+    install -o root -g root -m 0600 "$path" "$operator_backup_root/obsolete-sudoers-$index"
+    obsolete_sudoers_existed[index]=1
+  fi
+done
 operator_snapshot_ready=1
 
 if [[ -e "$NEW_SERVICE_UNIT" || -L "$NEW_SERVICE_UNIT" ]]; then
