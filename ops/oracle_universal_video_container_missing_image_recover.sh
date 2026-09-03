@@ -44,14 +44,13 @@ git -C "$source_dir/repo" fetch --quiet origin "$EXPECTED_SHA"
 git -C "$source_dir/repo" checkout --quiet --detach FETCH_HEAD
 [[ "$(git -C "$source_dir/repo" rev-parse HEAD)" == "$EXPECTED_SHA" ]] || die SOURCE_MISMATCH
 [[ -z "$(git -C "$source_dir/repo" status --porcelain)" ]] || die SOURCE_DIRTY
+chmod -R a+rX,u-w,g-w,o-w "$source_dir/repo"
 
 image_tag="bridge-school/universal-video:$EXPECTED_SHA"
-build=1
-docker image inspect "$image_tag" >/dev/null 2>&1 && build=0
 UNIVERSAL_VIDEO_SOURCE_DIR="$source_dir/repo" \
 UNIVERSAL_VIDEO_DIR="$BASE_DIR" \
 UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=0 \
-UNIVERSAL_VIDEO_CONTAINER_BUILD="$build" \
+UNIVERSAL_VIDEO_CONTAINER_BUILD=1 \
 UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB=5242880 \
   bash "$source_dir/repo/ops/oracle_universal_video_container_install.sh"
 
