@@ -11,6 +11,7 @@ import pytest
 from universal_video.route_receipt_v2 import RouteReceiptV2Error, discover_route_receipt
 from universal_video.terminal_evidence_v2 import (
     build_terminal_evidence,
+    reverify_terminal_output_live,
     validate_terminal_output,
 )
 
@@ -159,6 +160,37 @@ def test_terminal_readback_rejects_artifact_moved_to_trash_after_route():
     with pytest.raises(Exception, match="UV_TERMINAL_ARTIFACT_TRASHED"):
         build_terminal_evidence(
             claim, done, route, "mock", metadata_reader=trashed_metadata, downloader=download
+        )
+
+
+def test_terminal_reverify_rejects_identical_bytes_at_new_drive_revision():
+    claim, done, items, folder, download, metadata = _fixture()
+    route = discover_route_receipt(
+        claim, done, "mock", folder_lister=folder, metadata_reader=metadata
+    )
+    evidence = build_terminal_evidence(
+        claim, done, route, "mock", metadata_reader=metadata, downloader=download
+    )
+    candidate = {
+        "result_mode": "SHADOW_REVIEW_ONLY",
+        "canonical_promotion_allowed": False,
+        "database_persistence_allowed": False,
+        "publication_state": "NOT_PUBLISHED",
+        "source_file_id": claim["source_file_id"],
+        "stable_job_key": claim["stable_job_key"],
+        "algorithm_revision": claim["algorithm_revision"],
+        **evidence,
+    }
+
+    # Simulate Drive replacing the PDF with byte-identical content. Content
+    # hashes stay stable, but the immutable attestation must not cross the
+    # revision boundary.
+    items[0]["version"] = "103"
+    items[0]["modifiedTime"] = "2026-09-02T20:00:02Z"
+
+    with pytest.raises(Exception, match="UV_TERMINAL_LIVE_EVIDENCE_MISMATCH"):
+        reverify_terminal_output_live(
+            claim, candidate, "mock", metadata_reader=metadata, downloader=download
         )
 
 

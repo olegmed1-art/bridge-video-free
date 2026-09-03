@@ -164,6 +164,12 @@ def _read_live(
         "mime_type": before["mime_type"],
         "size_bytes": before["size_bytes"],
         "parent_id": expected_parent,
+        # Bind the attestation to the exact Drive revision, not only to the
+        # current bytes. Drive can replace an object with identical content
+        # while advancing these fields; the terminal re-verification must
+        # detect that replacement.
+        "modified_time": before["modified_time"],
+        "version": before["version"],
         "sha256": actual_sha,
     }, payload
 
