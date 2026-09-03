@@ -6,6 +6,7 @@ umask 077
 # No service, Docker, media, queue, source, or filesystem mutation is allowed.
 readonly SERVICE='universal-video-container.service'
 readonly CONTAINER='universal-video-container'
+readonly SOURCE_DIR='/opt/bridge-school/universal-video-src'
 
 fail(){ printf 'UV_CONTAINER_DIAGNOSTIC_FAIL=%s\n' "$1" >&2; exit 1; }
 [[ $# -eq 0 ]] || fail USAGE
@@ -56,8 +57,29 @@ if command -v docker >/dev/null 2>&1; then
     echo 'resident_image_configured=false'
     echo 'resident_image_present=unknown'
   fi
+  readonly CANDIDATE_ENV_FILE='/opt/bridge-school/universal-video/universal-video-container-candidate.env'
+  mapfile -t candidate_lines < <(grep -E '^UNIVERSAL_VIDEO_IMAGE=sha256:[0-9a-f]{64}$' "$CANDIDATE_ENV_FILE" 2>/dev/null || true)
+  if [[ ${#candidate_lines[@]} -eq 1 ]]; then
+    echo 'candidate_image_configured=true'
+    candidate_id="${candidate_lines[0]#UNIVERSAL_VIDEO_IMAGE=}"
+    if docker image inspect "$candidate_id" >/dev/null 2>&1; then
+      echo 'candidate_image_present=true'
+    else
+      echo 'candidate_image_present=false'
+    fi
+  else
+    echo 'candidate_image_configured=false'
+    echo 'candidate_image_present=unknown'
+  fi
 else
   echo 'docker_available=false'
+fi
+
+source_head="$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || true)"
+if [[ "$source_head" =~ ^[0-9a-f]{40}$ ]]; then
+  printf 'source_head=%s\n' "$source_head"
+else
+  echo 'source_head=unknown'
 fi
 
 echo 'real_media_canary_run=false'
