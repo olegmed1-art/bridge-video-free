@@ -8,10 +8,12 @@ from typing import Any, Mapping, Sequence
 
 
 SCHEMA = "video-extended-extraction-v1"
-_CAUSAL_CUES = (
-    "потому что", "поэтому", "так как", "из-за того", "причина",
-    "иначе", "для того чтобы", "следовательно",
-)
+_LOGIC_CUES = {
+    "CAUSE": ("потому что", "так как", "из-за того", "причина"),
+    "PURPOSE": ("для того чтобы", "чтобы", "для этого", "это нужно для"),
+    "CONSEQUENCE": ("поэтому", "следовательно", "значит", "в результате"),
+    "ALTERNATIVE_CONSEQUENCE": ("иначе",),
+}
 
 
 def _digest(value: object) -> str:
@@ -56,6 +58,26 @@ def _items(value: object) -> list[Mapping[str, Any]]:
     return [item for item in (value or []) if isinstance(item, Mapping)] if isinstance(value, list) else []
 
 
+def _logic_relations(text: str) -> list[dict[str, str]]:
+    """Preserve explicit logical links without filling either side."""
+    low = text.casefold()
+    relations: list[dict[str, str]] = []
+    for relation_type, cues in _LOGIC_CUES.items():
+        for cue in cues:
+            offset = low.find(cue)
+            if offset < 0:
+                continue
+            left = text[:offset].strip(" ,;:.-")
+            right = text[offset + len(cue):].strip(" ,;:.-")
+            relations.append({
+                "relation_type": relation_type,
+                "cue": cue,
+                "left_clause": left,
+                "right_clause": right,
+            })
+    return relations
+
+
 def _automatic_explanations(
     master: Mapping[str, Any], quality: Mapping[str, Any]
 ) -> list[dict[str, Any]]:
@@ -81,8 +103,8 @@ def _automatic_explanations(
                 confidence = 0.0
             text = re.sub(r"\s+", " ", str(segment.get("text") or "")).strip()
             low = text.casefold()
-            cues = [cue for cue in _CAUSAL_CUES if cue in low]
-            if role != "teacher" or confidence < 0.8 or not text or not cues:
+            relations = _logic_relations(text)
+            if role != "teacher" or confidence < 0.8 or not text or not relations:
                 continue
             out.append({
                 "stable_key": f"why:{rule_key}:{ref}",
@@ -90,7 +112,10 @@ def _automatic_explanations(
                 "extraction_class": "EXPLICIT_CAUSAL_TEACHER_STATEMENT",
                 "statement": text,
                 "why_chain": [text],
-                "causal_cues": cues,
+                "logic_relations": relations,
+                "explanation_dimensions": sorted({
+                    relation["relation_type"] for relation in relations
+                }),
                 "speaker_role": "teacher",
                 "speaker_role_confidence": confidence,
                 "speaker_id": segment.get("speaker") or segment.get("speaker_id"),
@@ -199,6 +224,11 @@ def build_extended_extraction(
             "automatic_explicit_causal": len(automatic_explanations),
             "generated_rationale_allowed": False,
             "minimum_teacher_role_confidence": 0.8,
+            "logic_dimensions": sorted(_LOGIC_CUES),
+            "target_model": [
+                "CONDITIONS", "CAUSE_OR_PURPOSE", "CONCLUSION", "ACTION",
+                "CONSEQUENCES", "REJECTED_ALTERNATIVES",
+            ],
         },
         "authority": {
             "canon_activation": "DENY",
