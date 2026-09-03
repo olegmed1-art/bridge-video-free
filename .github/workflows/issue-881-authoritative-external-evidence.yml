@@ -20,6 +20,7 @@ on:
 permissions:
   actions: read
   contents: read
+  issues: read
   pull-requests: read
 
 concurrency:
@@ -137,7 +138,8 @@ jobs:
           recovery_remote_file=''
 
           root_pr_number=991
-          pr_number=1070
+          prior_gate_pr_number=1070
+          pr_number=1071
           pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
           reviewed_sha="$(jq -r '.head.sha' <<<"$pr_json")"
           [[ "$reviewed_sha" =~ ^[0-9a-f]{40}$ ]]
@@ -163,18 +165,18 @@ jobs:
           )
 
           verify_live_gate(){
-            local live_head live_state main_sha root_pr_json root_merge_sha root_reviewed_sha review_count reviews_json approval_count threads_json blocker_count runs_json root_runs_json workflow_name latest_state
+            local live_head live_state main_sha root_pr_json root_merge_sha root_reviewed_sha prior_gate_pr_json prior_gate_merge_sha review_count codex_comments_json codex_clean_count reviews_json approval_count threads_json blocker_count runs_json root_runs_json workflow_name latest_state
             local -a exact_parents
             pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
             live_state="$(jq -r '.state' <<<"$pr_json")"
             [[ "$live_state" == 'closed' && "$(jq -r '.merged' <<<"$pr_json")" == true ]] \
-              || { echo 'Canary gate PR #1070 is not merged' >&2; return 1; }
+              || { echo 'Current canary gate PR is not merged' >&2; return 1; }
             live_head="$(jq -r '.head.sha' <<<"$pr_json")"
             [[ "$live_head" == "$reviewed_sha" ]] \
               || { echo 'Reviewed canary gate head changed unexpectedly' >&2; return 1; }
             main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
             [[ "$main_sha" == "$EXACT_SHA" && "$(jq -r '.merge_commit_sha' <<<"$pr_json")" == "$EXACT_SHA" ]] \
-              || { echo 'Exact SHA is not the immutable current main merge of canary gate PR #1070' >&2; return 1; }
+              || { echo 'Exact SHA is not the immutable current main merge of the current canary gate PR' >&2; return 1; }
             git merge-base --is-ancestor "$reviewed_sha" "$EXACT_SHA" \
               || { echo 'Reviewed canary gate head is not an ancestor of exact main' >&2; return 1; }
             root_pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$root_pr_number")"
@@ -182,11 +184,18 @@ jobs:
               || { echo 'Root Autopilot PR #991 is not merged' >&2; return 1; }
             root_merge_sha="$(jq -r '.merge_commit_sha' <<<"$root_pr_json")"
             [[ "$root_merge_sha" =~ ^[0-9a-f]{40}$ ]]
+            prior_gate_pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$prior_gate_pr_number")"
+            [[ "$(jq -r '.merged' <<<"$prior_gate_pr_json")" == true ]] \
+              || { echo 'Prior canary gate PR #1070 is not merged' >&2; return 1; }
+            prior_gate_merge_sha="$(jq -r '.merge_commit_sha' <<<"$prior_gate_pr_json")"
+            [[ "$prior_gate_merge_sha" =~ ^[0-9a-f]{40}$ ]]
+            git merge-base --is-ancestor "$root_merge_sha" "$prior_gate_merge_sha" \
+              || { echo 'Root Autopilot merge is not an ancestor of the prior gate merge' >&2; return 1; }
             read -r -a exact_parents <<<"$(git show -s --format=%P "$EXACT_SHA")"
             [[ ${#exact_parents[@]} -eq 2 \
-              && "${exact_parents[0]}" == "$root_merge_sha" \
+              && "${exact_parents[0]}" == "$prior_gate_merge_sha" \
               && "${exact_parents[1]}" == "$reviewed_sha" ]] \
-              || { echo 'Exact main is not the direct reviewed merge of PR #1070 onto root PR #991' >&2; return 1; }
+              || { echo 'Exact main is not the direct reviewed merge of the current gate onto PR #1070' >&2; return 1; }
             root_reviewed_sha="$(jq -r '.head.sha' <<<"$root_pr_json")"
             [[ "$root_reviewed_sha" =~ ^[0-9a-f]{40}$ ]]
 
@@ -194,8 +203,13 @@ jobs:
             review_count="$(jq --arg sha "$reviewed_sha" \
               '[.[].[] | select(.commit_id == $sha and (.user.login | startswith("chatgpt-codex-connector")) and (.state == "COMMENTED" or .state == "APPROVED"))] | length' \
               <<<"$reviews_json")"
-            (( review_count > 0 )) \
-              || { echo 'Exact head has no independent Codex review' >&2; return 1; }
+            codex_comments_json="$(gh api --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/issues/$pr_number/comments?per_page=100")"
+            codex_clean_count="$(jq --arg sha "$reviewed_sha" \
+              '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | select(.body | contains("Codex Review: Didn\u0027t find any major issues.")) | select(.body | contains("**Reviewed commit:** `" + $sha + "`"))] | length' \
+              <<<"$codex_comments_json")"
+            (( review_count > 0 || codex_clean_count > 0 )) \
+              || { echo 'Exact head has neither a Codex review object nor an exact clean Codex bot receipt' >&2; return 1; }
             threads_json="$(gh api graphql \
               -f owner="${GITHUB_REPOSITORY%%/*}" \
               -f name="${GITHUB_REPOSITORY#*/}" \

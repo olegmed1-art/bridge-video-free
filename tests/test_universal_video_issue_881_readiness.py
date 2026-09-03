@@ -1289,13 +1289,22 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "if: ${{ inputs.director_go && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.repository == 'olegmed1-art/bridge-video-free' }}" in workflow
     assert "actions: read" in workflow
     assert "pull-requests: read" in workflow
+    assert "issues: read" in workflow
     assert "root_pr_number=991" in workflow
-    assert "pr_number=1070" in workflow
+    assert "prior_gate_pr_number=1070" in workflow
+    assert "pr_number=1071" in workflow
     assert "Root Autopilot PR #991 is not merged" in workflow
     assert 'git show -s --format=%P "$EXACT_SHA"' in workflow
-    assert '"${exact_parents[0]}" == "$root_merge_sha"' in workflow
+    assert '"${exact_parents[0]}" == "$prior_gate_merge_sha"' in workflow
     assert '"${exact_parents[1]}" == "$reviewed_sha"' in workflow
-    assert "Exact main is not the direct reviewed merge of PR #1070 onto root PR #991" in workflow
+    assert "Exact main is not the direct reviewed merge of the current gate onto PR #1070" in workflow
+    assert "chatgpt-codex-connector[bot]" in workflow
+    assert "Codex Review: Didn\\u0027t find any major issues." in workflow
+    assert 'jq --arg sha "$reviewed_sha"' in workflow
+    assert '"**Reviewed commit:** `" + $sha + "`"' in workflow
+    assert "review_prefix" not in workflow
+    assert "resolved_review_sha" not in workflow
+    assert "exact clean Codex bot receipt" in workflow
     assert 'main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq' in workflow
     assert "Reviewed head has no current independent approval at final reconciliation" in workflow
     assert "root_required_workflows=(" in workflow
