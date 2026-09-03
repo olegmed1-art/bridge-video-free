@@ -46,3 +46,23 @@ def test_installer_binds_validated_queue_credential_without_disclosure():
     assert "BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE=/run/secrets/video-queue-dsn" in installer
     assert "cat \"$queue_dsn_file\"" not in installer
     assert "printf '%s' \"$queue_dsn" not in installer
+
+
+def test_credential_only_workflow_is_owner_gated_and_never_mutates_services():
+    workflow = (
+        ROOT / ".github/workflows/oracle-universal-video-queue-credential-install.yml"
+    ).read_text(encoding="utf-8")
+    assert "director_go:" in workflow
+    assert "github.actor == github.repository_owner" in workflow
+    assert "github.triggering_actor == github.repository_owner" in workflow
+    assert 'ref: ${{ env.EXACT_SHA }}' in workflow
+    assert "BRIDGE_WORKER_DATABASE_URL" in workflow
+    assert "validate_video_queue_dsn.py" in workflow
+    assert "root:universal-video:640" in workflow
+    assert "service_mutation=false" in workflow
+    assert "docker_mutation=false" in workflow
+    assert "media_execution=false" in workflow
+    assert "systemctl start" not in workflow
+    assert "systemctl stop" not in workflow
+    assert "systemctl restart" not in workflow
+    assert "docker run" not in workflow
