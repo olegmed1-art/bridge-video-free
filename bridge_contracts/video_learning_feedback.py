@@ -7,15 +7,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 
-SCHEMA = "video-analyzer-learning-feedback-v1"
+SCHEMA = "video-analyzer-learning-feedback-v2"
 _KINDS = {"ASR", "SPEAKER", "CARD", "AUCTION", "EXTRACTION", "PEDAGOGY"}
 
 
 class VideoLearningFeedbackError(ValueError):
     pass
+
+
+CorrectionReceiptResolver = Callable[[str], Mapping[str, Any] | None]
 
 
 def _text(value: Any, label: str) -> str:
@@ -36,7 +39,12 @@ def _digest(value: object) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def build_learning_feedback(master: Mapping[str, Any], quality: Mapping[str, Any]) -> dict[str, Any]:
+def build_learning_feedback(
+    master: Mapping[str, Any],
+    quality: Mapping[str, Any],
+    *,
+    correction_receipt_resolver: CorrectionReceiptResolver | None = None,
+) -> dict[str, Any]:
     """Create immutable example candidates and a holdout-gated proposal."""
     source = master.get("source") if isinstance(master.get("source"), Mapping) else {}
     corrections = master.get("human_corrections") or []
@@ -48,6 +56,8 @@ def build_learning_feedback(master: Mapping[str, Any], quality: Mapping[str, Any
     raw_receipts = quality.get("correction_review_receipts") or []
     if not isinstance(raw_receipts, list):
         raise VideoLearningFeedbackError("correction_review_receipts must be a list")
+    if raw_receipts and correction_receipt_resolver is None:
+        raise VideoLearningFeedbackError("trusted correction review receipt resolver required")
     receipts: dict[str, Mapping[str, Any]] = {}
     for receipt in raw_receipts:
         fields = {
@@ -60,8 +70,12 @@ def build_learning_feedback(master: Mapping[str, Any], quality: Mapping[str, Any
         if receipt_id in receipts:
             raise VideoLearningFeedbackError("duplicate correction review receipt")
         sealed = {key: receipt[key] for key in sorted(fields - {"receipt_sha256"})}
-        if _sha(receipt.get("receipt_sha256")) != _digest(sealed):
+        receipt_sha = _sha(receipt.get("receipt_sha256"))
+        if receipt_sha != _digest(sealed):
             raise VideoLearningFeedbackError("correction review receipt digest mismatch")
+        trusted = correction_receipt_resolver(receipt_sha) if correction_receipt_resolver else None
+        if not isinstance(trusted, Mapping) or dict(trusted) != dict(receipt):
+            raise VideoLearningFeedbackError("correction review receipt is not in trusted storage")
         receipts[receipt_id] = receipt
     examples: list[dict[str, Any]] = []
     for raw in corrections:
@@ -110,6 +124,7 @@ def build_learning_feedback(master: Mapping[str, Any], quality: Mapping[str, Any
             "corrected_value": raw.get("corrected_value"),
             "reviewer_ref": reviewer_ref,
             "review_receipt_sha256": receipt["receipt_sha256"],
+            "review_receipt_authentication": "TRUSTED_STORAGE_RESOLVED",
             "evidence_refs": evidence_refs,
             "training_eligible": True,
             "canon_write_allowed": False,
@@ -171,4 +186,7 @@ def build_learning_feedback(master: Mapping[str, Any], quality: Mapping[str, Any
     }
 
 
-__all__ = ["SCHEMA", "VideoLearningFeedbackError", "build_learning_feedback"]
+__all__ = [
+    "SCHEMA", "CorrectionReceiptResolver", "VideoLearningFeedbackError",
+    "build_learning_feedback",
+]

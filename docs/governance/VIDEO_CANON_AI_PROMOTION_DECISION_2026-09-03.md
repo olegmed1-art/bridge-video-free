@@ -47,7 +47,9 @@ scope, checks and exact prior activation IDs. Activation also recomputes a hash
 over the locked executable rule rather than trusting a compiler-supplied marker.
 Semantic, bridge, hidden-information and control attestations use separate
 database capability roles whose authenticated principals are mapped to disjoint
-check sets; free-form family labels cannot establish independence.
+check sets; free-form family labels cannot establish independence. The
+promotion transaction rechecks that each selected verifier family is still
+active and still authorized for that check and assurance level.
 
 ## Activation and rollback
 

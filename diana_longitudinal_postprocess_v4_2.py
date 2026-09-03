@@ -13,6 +13,7 @@ from typing import Any, Mapping
 
 import diana_longitudinal_postprocess as base
 from bridge_report_board_reconstruction import reconstruct_report_visual_deals
+from bridge_school_api.dds3.service import compute as execute_pinned_dds3
 from diana_longitudinal_quality_v4_2 import (
     QUALITY_METHOD_VERSION,
     QUALITY_SCHEMA_VERSION,
@@ -153,7 +154,11 @@ def main() -> int:
         'parser_scope': reconstruction.get('parser_scope'),
         'qc': reconstruction.get('qc') or {},
     }
-    quality = build_quality_layer(working_master, lesson)
+    quality = build_quality_layer(
+        working_master,
+        lesson,
+        dds_request_executor=execute_pinned_dds3,
+    )
     curriculum = base._curriculum(working_master, lesson, quality)
     gaps = list(working_master.get('knowledge_gaps') or [])
     if lesson.get('lesson_date_status') != 'CONFIRMED':

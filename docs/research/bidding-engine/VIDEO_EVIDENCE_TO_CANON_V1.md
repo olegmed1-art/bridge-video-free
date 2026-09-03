@@ -41,6 +41,9 @@ verification must be I2/I3 and come from different verifier families. The
 hidden-information firewall must also be I2/I3. These families are not
 caller-supplied labels at the database boundary: separate NOLOGIN capability
 roles are mapped through an immutable verifier registry to disjoint check sets.
+Promotion re-resolves every PASS receipt against that registry and requires the
+lane to remain active at promotion time; revoking a compromised lane therefore
+invalidates its earlier receipts for future activation.
 Regression, integrity,
 conflict scan and a tested restore path are mandatory.
 
@@ -115,14 +118,22 @@ play/defense action to DDS3 alternatives. It stores a hash and source references
 for the full deal, but never the deal or hidden hands in the student-visible
 payload. DDS is explicitly `offline_only`: it measures consequences after the
 fact and does not validate a bidding rule, become Canon evidence, or enter a
-live resolver request.
+live resolver request. The integrated postprocessor reruns the exact bounded
+position request through the pinned DDS3 implementation and validates the
+freshly returned result before recording `OFFLINE_EVALUATED`; caller-supplied
+DDS labels or moves are neither accepted nor used. Every allowed public-context
+field has a bridge-specific value validator, so PBN/hand strings cannot hide in
+an otherwise permitted field.
 
 ## Learning feedback loop
 
 Evidence-bound corrections for ASR, speaker, card, auction, extraction and
 pedagogy are emitted as immutable versioned `ANALYZER_TRAINING_EXAMPLE`
 records. Human corrections remain useful but are not a prerequisite for every
-Canon rule. A candidate model is only represented by a
+Canon rule. A self-hash and claimed reviewer are insufficient: the receipt must
+resolve byte-for-byte through a trusted review-store resolver supplied outside
+the analyzer master. Without that trust dependency the correction becomes an
+explicit gap and is not training-eligible. A candidate model is only represented by a
 `MODEL_IMPROVEMENT_PROPOSAL` when a named holdout compares it with a baseline
 and records a rollback model version. Model deployment remains a separate
 gate; a model passing holdout is not itself permission to change Canon.

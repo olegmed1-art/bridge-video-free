@@ -10,6 +10,10 @@ from bridge_school_api.dds3.service import DDS_UPSTREAM
 from diana_longitudinal_quality_v4_2 import build_quality_layer
 
 
+PBN = 'N:AKQJ.T98.765.432 T987.654.32.AKQ 6543.AKQ.JT98.76 2.J732.AKQ4.JT985'
+DEAL_SHA = hashlib.sha256(PBN.encode()).hexdigest()
+
+
 def digest(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
@@ -196,7 +200,19 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
 
     def test_integrated_master_routes_verified_dds_proofs_to_comparison(self):
         master = base_master()
+        dds_result = {
+            'engine': 'DDS3', 'engine_version': DDS_UPSTREAM,
+            'fallback_used': False, 'operation': 'position_all_moves',
+            'moves': [
+                {'card': 'SA', 'tricks': 10, 'regret': 0, 'optimal': True},
+                {'card': 'SK', 'tricks': 9, 'regret': 1, 'optimal': False},
+            ],
+        }
         master['dds_decision_evaluations'] = [{
+            'dds_request': {
+                'operation': 'position_all_moves',
+                'position': {'pbn': PBN, 'trump': 'NT', 'first': 'S'},
+            },
             'decision': {
                 'decision_id': 'play-7', 'domain': 'PLAY', 'selected_action': 'SA',
                 'logic_candidate_id': 'why:rule-7:segment-7',
@@ -206,22 +222,13 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
             },
             'full_deal_evidence': {
                 'board_evidence_id': 'board-proof-7',
-                'deal_pbn_sha256': 'a' * 64, 'source_refs': ['frame-52'],
+                'deal_pbn_sha256': DEAL_SHA, 'source_refs': ['frame-52'],
                 'verified_full_board': True,
-            },
-            'dds_result': {
-                'engine': 'DDS3', 'engine_version': DDS_UPSTREAM,
-                'fallback_used': False, 'operation': 'position_all_moves',
-                'deal_pbn_sha256': 'a' * 64, 'request_sha256': 'b' * 64,
-                'moves': [
-                    {'card': 'SA', 'tricks': 10, 'regret': 0, 'optimal': True},
-                    {'card': 'SK', 'tricks': 9, 'regret': 1, 'optimal': False},
-                ],
             },
         }]
         master['verified_full_board_evidence'] = [{
             'status': 'VERIFIED_FULL_BOARD', 'board_evidence_id': 'board-proof-7',
-            'deal_pbn_sha256': 'a' * 64, 'card_count': 52,
+            'deal_pbn_sha256': DEAL_SHA, 'card_count': 52,
             'unique_card_count': 52, 'source_refs': ['frame-52'],
             'evidence_sha256': 'd' * 64,
         }]
@@ -231,7 +238,10 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
             'source_sha256': 'c' * 64, 'evidence_refs': ['segment-7'],
         }]
 
-        quality = build_quality_layer(master, {'lesson_id': 'lesson-test', 'lesson_number': 5})
+        quality = build_quality_layer(
+            master, {'lesson_id': 'lesson-test', 'lesson_number': 5},
+            dds_request_executor=lambda _: dds_result,
+        )
         records = quality['extended_knowledge_extraction']['candidate_records']
         self.assertTrue(any(row['candidate_type'] == 'DDS_DECISION_COMPARISON' for row in records))
         routed = quality['integrated_verification_evidence']['collections']
@@ -256,13 +266,48 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
         receipt['receipt_sha256'] = digest(receipt)
         master['correction_review_receipts'] = [receipt]
 
-        quality = build_quality_layer(master, {'lesson_id': 'lesson-test', 'lesson_number': 5})
+        quality = build_quality_layer(
+            master, {'lesson_id': 'lesson-test', 'lesson_number': 5},
+            correction_receipt_resolver=(
+                lambda receipt_sha: receipt
+                if receipt_sha == receipt['receipt_sha256'] else None
+            ),
+        )
         records = quality['extended_knowledge_extraction']['candidate_records']
         examples = [row for row in records if row['candidate_type'] == 'ANALYZER_TRAINING_EXAMPLE']
         self.assertEqual(len(examples), 1)
         self.assertEqual(examples[0]['payload']['review_receipt_sha256'], receipt['receipt_sha256'])
         routed = quality['integrated_verification_evidence']['collections']
         self.assertEqual(routed['correction_review_receipts']['status'], 'PASSED_TO_VALIDATOR')
+
+    def test_self_hashed_teacher_correction_is_not_trusted_by_default(self):
+        master = base_master()
+        master['source'] = {'sha256': 'a' * 64}
+        correction = {
+            'correction_id': 'c-1', 'kind': 'ASR', 'input_ref': 'segment-7',
+            'corrected_value': 'форсирует', 'reviewer_ref': 'teacher:diana',
+            'evidence_refs': ['segment-7'],
+        }
+        master['human_corrections'] = [correction]
+        receipt = {
+            'correction_id': 'c-1', 'reviewer_ref': 'teacher:diana',
+            'source_sha256': 'a' * 64, 'input_ref': 'segment-7',
+            'corrected_value_sha256': digest('форсирует'),
+            'evidence_refs': ['segment-7'], 'status': 'VERIFIED',
+        }
+        receipt['receipt_sha256'] = digest(receipt)
+        master['correction_review_receipts'] = [receipt]
+        quality = build_quality_layer(
+            master, {'lesson_id': 'lesson-test', 'lesson_number': 5}
+        )
+        records = quality['extended_knowledge_extraction']['candidate_records']
+        self.assertFalse(any(
+            row['candidate_type'] == 'ANALYZER_TRAINING_EXAMPLE' for row in records
+        ))
+        self.assertTrue(any(
+            row['payload'].get('gap_type') == 'LEARNING_FEEDBACK_INVALID'
+            for row in records
+        ))
 
     def test_malformed_integrated_evidence_fails_to_explicit_gap(self):
         master = base_master()

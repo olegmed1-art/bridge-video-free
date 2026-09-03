@@ -4,21 +4,41 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
-from bridge_contracts.assistant_lab import LabContractError, verify_dds3_result
+from bridge_contracts.assistant_lab import (
+    LabContractError,
+    validate_job_payload,
+    verify_dds3_result,
+)
 
 
-SCHEMA = "video-decision-logic-dds-v2"
+SCHEMA = "video-decision-logic-dds-v3"
 _REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#=-]{0,159}$")
+_HIDDEN_REF = re.compile(r"(?:^|[^A-Z0-9])[NESW]:[AKQJT2-9.-]{3,}", re.IGNORECASE)
+_HIDDEN_REF_KEYS = ("partner_hand", "opponent_hand", "hidden_hand", "full_deal")
 _PUBLIC_CONTEXT = {
     "auction", "played_cards", "contract", "declarer", "vulnerability",
     "trick_no", "lead", "seat_to_play",
 }
+_CALL = re.compile(r"^(?:P|PASS|X|XX|DBL|RDBL|[1-7](?:C|D|H|S|NT))$", re.IGNORECASE)
+_CARD = re.compile(r"^(?:[2-9TJQKA][CDHS])$", re.IGNORECASE)
+_CONTRACT = re.compile(r"^[1-7](?:C|D|H|S|NT)(?:X|XX)?$", re.IGNORECASE)
+_SEAT = {"N", "E", "S", "W"}
+_VULNERABILITY = {"NONE", "NS", "EW", "BOTH", "ALL"}
 
 
 class VideoDDSComparisonError(ValueError):
     pass
+
+
+DDSRequestExecutor = Callable[[Mapping[str, Any]], Mapping[str, Any]]
+
+
+def _digest(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def _text(value: Any, label: str) -> str:
@@ -37,7 +57,12 @@ def _sha(value: Any, label: str) -> str:
 
 def _ref(value: Any, label: str) -> str:
     value = _text(value, label)
-    if not _REF.fullmatch(value) or re.match(r"^[NESW]:", value, re.IGNORECASE):
+    lowered = value.casefold()
+    if (
+        not _REF.fullmatch(value)
+        or _HIDDEN_REF.search(value)
+        or any(marker in lowered for marker in _HIDDEN_REF_KEYS)
+    ):
         raise VideoDDSComparisonError(f"invalid {label}")
     return value
 
@@ -54,20 +79,90 @@ def _refs(value: Any, label: str) -> list[str]:
 def _public_context(value: Any) -> dict[str, Any]:
     if not isinstance(value, Mapping) or not set(value) <= _PUBLIC_CONTEXT:
         raise VideoDDSComparisonError("decision public context fields invalid")
-    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    if len(raw) > 4096 or any(marker in raw for marker in ('["N:', '["E:', '["S:', '["W:')):
-        raise VideoDDSComparisonError("decision public context contains hidden information")
-    return dict(value)
+    result: dict[str, Any] = {}
+    for field, raw in value.items():
+        if field == "auction":
+            if not isinstance(raw, list) or len(raw) > 80 or any(
+                not isinstance(call, str) or not _CALL.fullmatch(call.strip()) for call in raw
+            ):
+                raise VideoDDSComparisonError("decision public auction invalid")
+            result[field] = [call.strip().upper() for call in raw]
+        elif field == "played_cards":
+            if not isinstance(raw, list) or len(raw) > 52 or any(
+                not isinstance(card, str) or not _CARD.fullmatch(card.strip()) for card in raw
+            ):
+                raise VideoDDSComparisonError("decision public played cards invalid")
+            cards = [card.strip().upper() for card in raw]
+            if len(cards) != len(set(cards)):
+                raise VideoDDSComparisonError("decision public played cards duplicate")
+            result[field] = cards
+        elif field == "contract":
+            if not isinstance(raw, str) or not _CONTRACT.fullmatch(raw.strip()):
+                raise VideoDDSComparisonError("decision public contract invalid")
+            result[field] = raw.strip().upper()
+        elif field in {"declarer", "seat_to_play"}:
+            seat = raw.strip().upper() if isinstance(raw, str) else ""
+            if seat not in _SEAT:
+                raise VideoDDSComparisonError(f"decision public {field} invalid")
+            result[field] = seat
+        elif field == "vulnerability":
+            vulnerability = raw.strip().upper() if isinstance(raw, str) else ""
+            if vulnerability not in _VULNERABILITY:
+                raise VideoDDSComparisonError("decision public vulnerability invalid")
+            result[field] = vulnerability
+        elif field == "trick_no":
+            if isinstance(raw, bool) or not isinstance(raw, int) or not 1 <= raw <= 13:
+                raise VideoDDSComparisonError("decision public trick_no invalid")
+            result[field] = raw
+        elif field == "lead":
+            if not isinstance(raw, str) or not _CARD.fullmatch(raw.strip()):
+                raise VideoDDSComparisonError("decision public lead invalid")
+            result[field] = raw.strip().upper()
+    encoded = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    if len(encoded) > 4096:
+        raise VideoDDSComparisonError("decision public context too large")
+    return result
+
+
+def _rerun_authenticated_dds_request(
+    observation: Mapping[str, Any], executor: DDSRequestExecutor | None
+) -> tuple[dict[str, Any], str, str, str]:
+    if executor is None:
+        raise VideoDDSComparisonError("pinned DDS request executor required")
+    try:
+        payload = validate_job_payload("DDS3_COMPUTE", observation.get("dds_request"))
+    except LabContractError as exc:
+        raise VideoDDSComparisonError(str(exc)) from exc
+    if payload.get("operation") != "position_all_moves":
+        raise VideoDDSComparisonError("DDS request operation invalid")
+    try:
+        rerun_result = executor(dict(payload))
+    except Exception as exc:
+        raise VideoDDSComparisonError("pinned DDS request rerun failed") from exc
+    if not isinstance(rerun_result, Mapping):
+        raise VideoDDSComparisonError("pinned DDS request returned an invalid result")
+    try:
+        dds = verify_dds3_result(rerun_result, expected_operation="position_all_moves")
+    except LabContractError as exc:
+        raise VideoDDSComparisonError(str(exc)) from exc
+    position = payload.get("position")
+    pbn = _text(position.get("pbn") if isinstance(position, Mapping) else None, "DDS position pbn")
+    deal_sha = hashlib.sha256(pbn.encode("utf-8")).hexdigest()
+    request_sha = _digest(payload)
+    result_sha = _digest(dds)
+    return dds, deal_sha, request_sha, result_sha
 
 
 def build_offline_dds_comparison(
     observation: Mapping[str, Any],
     verified_board_evidence: Mapping[str, Any],
     source_bound_logic_evidence: Mapping[str, Any],
+    *,
+    dds_request_executor: DDSRequestExecutor | None = None,
 ) -> dict[str, Any]:
     """Derive public alternatives from a verified DDS position result."""
     if not isinstance(observation, Mapping) or set(observation) != {
-        "decision", "dds_result", "full_deal_evidence"
+        "decision", "dds_request", "full_deal_evidence"
     }:
         raise VideoDDSComparisonError("DDS comparison fields mismatch")
     decision = observation["decision"]
@@ -125,13 +220,11 @@ def build_offline_dds_comparison(
         raise VideoDDSComparisonError("full-board assertion does not match verified reconstruction")
     board_evidence_sha = _sha(verified_board_evidence.get("evidence_sha256"), "board evidence_sha256")
 
-    try:
-        dds = verify_dds3_result(observation["dds_result"], expected_operation="position_all_moves")
-    except LabContractError as exc:
-        raise VideoDDSComparisonError(str(exc)) from exc
-    if _sha(dds.get("deal_pbn_sha256"), "DDS deal_pbn_sha256") != deal_sha:
+    dds, trusted_deal_sha, request_sha, result_sha = _rerun_authenticated_dds_request(
+        observation, dds_request_executor
+    )
+    if trusted_deal_sha != deal_sha:
         raise VideoDDSComparisonError("DDS result not bound to verified full deal")
-    request_sha = _sha(dds.get("request_sha256"), "DDS request_sha256")
     moves = dds.get("moves")
     if not isinstance(moves, list) or not moves:
         raise VideoDDSComparisonError("DDS result has no moves")
@@ -166,7 +259,9 @@ def build_offline_dds_comparison(
         },
         "dds_provenance": {
             "engine": dds["engine"], "engine_version": dds["engine_version"],
-            "operation": "position_all_moves", "request_sha256": request_sha,
+            "operation": "position_all_moves",
+            "request_sha256": request_sha, "result_sha256": result_sha,
+            "verification_mode": "PINNED_DDS_RERUN",
         },
         "full_deal_evidence": {
             "board_evidence_id": board_id, "board_evidence_sha256": board_evidence_sha,
@@ -181,4 +276,7 @@ def build_offline_dds_comparison(
     return payload
 
 
-__all__ = ["SCHEMA", "VideoDDSComparisonError", "build_offline_dds_comparison"]
+__all__ = [
+    "SCHEMA", "DDSRequestExecutor", "VideoDDSComparisonError",
+    "build_offline_dds_comparison",
+]

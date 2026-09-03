@@ -464,6 +464,13 @@ BEGIN
         ) req(check_id)
         WHERE NOT EXISTS (
           SELECT 1 FROM bidding.video_canon_ai_verification v
+          JOIN bidding.video_canon_verifier_registry vr
+            ON vr.verifier_family=v.verifier_family
+           AND vr.status='active'
+           AND v.check_id=ANY(vr.allowed_check_ids)
+           AND (vr.max_assurance_level='I3'
+                OR (vr.max_assurance_level='I2' AND v.assurance_level IN ('I0','I1','I2'))
+                OR (vr.max_assurance_level='I1' AND v.assurance_level IN ('I0','I1')))
            WHERE v.analysis_candidate_id=p_analysis_candidate_id
              AND v.candidate_payload_hash=v_candidate.payload_hash
              AND v.verification_bundle_sha256=p_verification_bundle_sha256
@@ -471,20 +478,43 @@ BEGIN
         )
     ) THEN RAISE EXCEPTION 'VIDEO_CANON_AI_CHECKS_INCOMPLETE' USING ERRCODE='23514'; END IF;
 
-    SELECT verifier_family INTO v_semantic_family FROM bidding.video_canon_ai_verification
-     WHERE analysis_candidate_id=p_analysis_candidate_id AND candidate_payload_hash=v_candidate.payload_hash
-       AND verification_bundle_sha256=p_verification_bundle_sha256
-       AND check_id='SEMANTIC_PARSE' AND result='PASS' AND assurance_level IN ('I2','I3') LIMIT 1;
-    SELECT verifier_family INTO v_bridge_family FROM bidding.video_canon_ai_verification
-     WHERE analysis_candidate_id=p_analysis_candidate_id AND candidate_payload_hash=v_candidate.payload_hash
-       AND verification_bundle_sha256=p_verification_bundle_sha256
-       AND check_id='BRIDGE_LOGIC' AND result='PASS' AND assurance_level IN ('I2','I3') LIMIT 1;
+    SELECT v.verifier_family INTO v_semantic_family
+      FROM bidding.video_canon_ai_verification v
+      JOIN bidding.video_canon_verifier_registry vr
+       ON vr.verifier_family=v.verifier_family AND vr.status='active'
+       AND v.check_id=ANY(vr.allowed_check_ids)
+       AND vr.max_assurance_level IN ('I2','I3')
+       AND (vr.max_assurance_level='I3' OR v.assurance_level='I2')
+     WHERE v.analysis_candidate_id=p_analysis_candidate_id
+       AND v.candidate_payload_hash=v_candidate.payload_hash
+       AND v.verification_bundle_sha256=p_verification_bundle_sha256
+       AND v.check_id='SEMANTIC_PARSE' AND v.result='PASS'
+       AND v.assurance_level IN ('I2','I3') LIMIT 1;
+    SELECT v.verifier_family INTO v_bridge_family
+      FROM bidding.video_canon_ai_verification v
+      JOIN bidding.video_canon_verifier_registry vr
+       ON vr.verifier_family=v.verifier_family AND vr.status='active'
+       AND v.check_id=ANY(vr.allowed_check_ids)
+       AND vr.max_assurance_level IN ('I2','I3')
+       AND (vr.max_assurance_level='I3' OR v.assurance_level='I2')
+     WHERE v.analysis_candidate_id=p_analysis_candidate_id
+       AND v.candidate_payload_hash=v_candidate.payload_hash
+       AND v.verification_bundle_sha256=p_verification_bundle_sha256
+       AND v.check_id='BRIDGE_LOGIC' AND v.result='PASS'
+       AND v.assurance_level IN ('I2','I3') LIMIT 1;
     IF v_semantic_family IS NULL OR v_bridge_family IS NULL OR v_semantic_family=v_bridge_family
        OR NOT EXISTS (
-         SELECT 1 FROM bidding.video_canon_ai_verification
-          WHERE analysis_candidate_id=p_analysis_candidate_id AND candidate_payload_hash=v_candidate.payload_hash
-            AND verification_bundle_sha256=p_verification_bundle_sha256
-            AND check_id='HIDDEN_INFORMATION_FIREWALL' AND result='PASS' AND assurance_level IN ('I2','I3')
+         SELECT 1 FROM bidding.video_canon_ai_verification v
+         JOIN bidding.video_canon_verifier_registry vr
+           ON vr.verifier_family=v.verifier_family AND vr.status='active'
+          AND v.check_id=ANY(vr.allowed_check_ids)
+          AND vr.max_assurance_level IN ('I2','I3')
+          AND (vr.max_assurance_level='I3' OR v.assurance_level='I2')
+          WHERE v.analysis_candidate_id=p_analysis_candidate_id
+            AND v.candidate_payload_hash=v_candidate.payload_hash
+            AND v.verification_bundle_sha256=p_verification_bundle_sha256
+            AND v.check_id='HIDDEN_INFORMATION_FIREWALL' AND v.result='PASS'
+            AND v.assurance_level IN ('I2','I3')
        ) THEN RAISE EXCEPTION 'VIDEO_CANON_I2_INDEPENDENCE_MISSING' USING ERRCODE='23514'; END IF;
 
     IF EXISTS (

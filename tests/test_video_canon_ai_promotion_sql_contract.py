@@ -40,6 +40,9 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "p.learner_level=v_bundle.bundle_payload->>'learner_level'",
         "VIDEO_CANON_VERIFIER_PRINCIPAL_MISMATCH",
         "database_role=current_user",
+        "JOIN bidding.video_canon_verifier_registry vr",
+        "vr.status='active'",
+        "v.check_id=ANY(vr.allowed_check_ids)",
     ):
         assert marker in MIGRATION
 

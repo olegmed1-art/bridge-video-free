@@ -32,9 +32,17 @@ def _quality(master=None):
     return {"correction_review_receipts": [receipt]}
 
 
+def _resolver(quality):
+    receipts = {item["receipt_sha256"]: item for item in quality["correction_review_receipts"]}
+    return lambda receipt_sha: receipts.get(receipt_sha)
+
+
 def test_creates_versioned_examples_but_never_trains_or_deploys():
     master = _master()
-    result = build_learning_feedback(master, _quality(master))
+    quality = _quality(master)
+    result = build_learning_feedback(
+        master, quality, correction_receipt_resolver=_resolver(quality)
+    )
     assert len(result["training_examples"]) == 1
     assert result["authority"]["training_execution_allowed"] is False
     assert result["model_improvement_proposal"]["status"] == "HOLDOUT_NOT_PROVEN"
@@ -48,15 +56,21 @@ def test_holdout_proposal_requires_baseline_comparison_and_rollback():
         "metrics": {"wer": {"baseline": 0.8, "candidate": 0.7,
                               "direction": "LOWER_IS_BETTER", "minimum_delta": 0.05}},
     }
-    result = build_learning_feedback(master, _quality(master))
+    quality = _quality(master)
+    result = build_learning_feedback(
+        master, quality, correction_receipt_resolver=_resolver(quality)
+    )
     assert result["model_improvement_proposal"]["status"] == "HOLDOUT_PASS_CANDIDATE"
     assert result["model_improvement_proposal"]["deployment_allowed"] is False
 
 
 def test_rejects_unreviewed_or_unknown_label_kind():
     master = _master(); master["human_corrections"][0]["kind"] = "INVENTED"
+    quality = _quality(master)
     with pytest.raises(VideoLearningFeedbackError, match="unsupported"):
-        build_learning_feedback(master, _quality(master))
+        build_learning_feedback(
+            master, quality, correction_receipt_resolver=_resolver(quality)
+        )
 
 
 def test_rejects_forged_review_receipt_and_versions_changed_content():
@@ -64,12 +78,22 @@ def test_rejects_forged_review_receipt_and_versions_changed_content():
     quality = _quality(master)
     quality["correction_review_receipts"][0]["reviewer_ref"] = "forged"
     with pytest.raises(VideoLearningFeedbackError, match="digest mismatch"):
-        build_learning_feedback(master, quality)
+        build_learning_feedback(
+            master, quality, correction_receipt_resolver=_resolver(quality)
+        )
 
-    first = build_learning_feedback(master, _quality(master))["training_examples"][0]
+    first_quality = _quality(master)
+    first = build_learning_feedback(
+        master, first_quality,
+        correction_receipt_resolver=_resolver(first_quality),
+    )["training_examples"][0]
     changed = _master()
     changed["human_corrections"][0]["corrected_value"] = "не форсирует"
-    second = build_learning_feedback(changed, _quality(changed))["training_examples"][0]
+    changed_quality = _quality(changed)
+    second = build_learning_feedback(
+        changed, changed_quality,
+        correction_receipt_resolver=_resolver(changed_quality),
+    )["training_examples"][0]
     assert first["training_example_id"] != second["training_example_id"]
 
 
@@ -81,5 +105,19 @@ def test_holdout_metric_direction_is_enforced():
         "metrics": {"wer": {"baseline": 0.8, "candidate": 0.85,
                               "direction": "LOWER_IS_BETTER", "minimum_delta": 0.0}},
     }
-    result = build_learning_feedback(master, _quality(master))
+    quality = _quality(master)
+    result = build_learning_feedback(
+        master, quality, correction_receipt_resolver=_resolver(quality)
+    )
     assert result["model_improvement_proposal"]["status"] == "HOLDOUT_NOT_PROVEN"
+
+
+def test_self_hashed_receipt_is_not_trusted_without_authoritative_resolver():
+    master = _master()
+    quality = _quality(master)
+    with pytest.raises(VideoLearningFeedbackError, match="trusted correction"):
+        build_learning_feedback(master, quality)
+    with pytest.raises(VideoLearningFeedbackError, match="trusted storage"):
+        build_learning_feedback(
+            master, quality, correction_receipt_resolver=lambda _: None
+        )

@@ -7,10 +7,12 @@ import re
 from typing import Any, Mapping, Sequence
 
 from bridge_contracts.video_dds_decision_comparison import (
+    DDSRequestExecutor,
     VideoDDSComparisonError,
     build_offline_dds_comparison,
 )
 from bridge_contracts.video_learning_feedback import (
+    CorrectionReceiptResolver,
     VideoLearningFeedbackError,
     build_learning_feedback,
 )
@@ -216,7 +218,11 @@ def _automatic_explanations(
 
 
 def build_extended_extraction(
-    master: Mapping[str, Any], quality: Mapping[str, Any]
+    master: Mapping[str, Any],
+    quality: Mapping[str, Any],
+    *,
+    dds_request_executor: DDSRequestExecutor | None = None,
+    correction_receipt_resolver: CorrectionReceiptResolver | None = None,
 ) -> dict[str, Any]:
     """Normalize all useful video-derived artifacts without promoting any of them."""
     job_id = str(master.get("job_id") or "unknown")
@@ -276,7 +282,10 @@ def build_extended_extraction(
             if item.get("logic_candidate_id") == decision.get("logic_candidate_id")
         ), {})
         try:
-            comparison = build_offline_dds_comparison(raw, board_evidence, logic_evidence)
+            comparison = build_offline_dds_comparison(
+                raw, board_evidence, logic_evidence,
+                dds_request_executor=dds_request_executor,
+            )
         except VideoDDSComparisonError as exc:
             gap = {
                 "stable_key": f"dds-gap:{_digest(raw)}",
@@ -293,7 +302,10 @@ def build_extended_extraction(
         ))
 
     try:
-        feedback = build_learning_feedback(master, quality)
+        feedback = build_learning_feedback(
+            master, quality,
+            correction_receipt_resolver=correction_receipt_resolver,
+        )
     except VideoLearningFeedbackError as exc:
         feedback = None
         gap = {"stable_key": f"learning-feedback:{_digest(master.get('job_id'))}", "gap_type": "LEARNING_FEEDBACK_INVALID", "status": "OPEN", "reason": str(exc), "evidence_refs": []}

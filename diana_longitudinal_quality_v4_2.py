@@ -18,7 +18,9 @@ from copy import deepcopy
 from typing import Any, Mapping
 
 import diana_longitudinal_quality_v4_1 as v41
+from bridge_contracts.video_dds_decision_comparison import DDSRequestExecutor
 from bridge_contracts.video_extended_extraction import build_extended_extraction
+from bridge_contracts.video_learning_feedback import CorrectionReceiptResolver
 from bridge_contracts.video_canon_auto_pipeline import run_video_canon_auto_pipeline
 
 QUALITY_SCHEMA = v41.QUALITY_SCHEMA
@@ -85,6 +87,9 @@ def _pass_verified_integration_evidence(
 def build_quality_layer(
     master: Mapping[str, Any],
     lesson_identity: Mapping[str, Any] | None = None,
+    *,
+    dds_request_executor: DDSRequestExecutor | None = None,
+    correction_receipt_resolver: CorrectionReceiptResolver | None = None,
 ) -> dict[str, Any]:
     working = deepcopy(dict(master))
     raw_deals = [dict(item) for item in (working.get("deals") or []) if isinstance(item, Mapping)]
@@ -167,7 +172,16 @@ def build_quality_layer(
         "reuses_existing_transcript_and_evidence": True,
     })
     _pass_verified_integration_evidence(working, quality)
-    extended = build_extended_extraction(working, quality)
+    quality["integrated_verification_evidence"]["trusted_resolvers"] = {
+        "pinned_dds_rerun": dds_request_executor is not None,
+        "correction_review_storage": correction_receipt_resolver is not None,
+    }
+    extended = build_extended_extraction(
+        working,
+        quality,
+        dds_request_executor=dds_request_executor,
+        correction_receipt_resolver=correction_receipt_resolver,
+    )
     quality["extended_knowledge_extraction"] = extended
     staging = quality.setdefault("candidate_staging_records", [])
     staging.extend(extended["candidate_records"])
