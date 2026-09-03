@@ -46,7 +46,8 @@ jobs:
             tests/test_universal_video_terminal_evidence_v2.py \
             tests/test_universal_video_drive_adapter.py \
             tests/test_universal_video_container_runtime.py \
-            tests/test_issue_881_current_main_recovery_contract.py
+            tests/test_issue_881_current_main_recovery_contract.py \
+            tests/test_issue_881_entrypoint_self_test.py
           python -m compileall -q universal_video
       - name: Build and preflight exact immutable image without activation
         run: |
@@ -63,6 +64,12 @@ jobs:
             --tmpfs /tmp:rw,noexec,nosuid,size=64m \
             --entrypoint /bin/sh "$image_id" \
             -n /usr/local/bin/universal-video-container-entrypoint
+          docker run --rm --network none --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            "$image_id" entrypoint-self-test | tee "$RUNNER_TEMP/issue881-entrypoint.txt"
+          grep -F '"schema": "universal-video-entrypoint-self-test-v1"' "$RUNNER_TEMP/issue881-entrypoint.txt"
+          grep -F '"status": "PASS"' "$RUNNER_TEMP/issue881-entrypoint.txt"
           docker run --rm --network none --read-only \
             --tmpfs /tmp:rw,noexec,nosuid,size=64m \
             -e PYTHONDONTWRITEBYTECODE=1 \
