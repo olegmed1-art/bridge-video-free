@@ -1,0 +1,211 @@
+"""Fail-closed AI-only promotion gate for teacher-video Canon knowledge.
+
+This module emits a sealed, idempotent activation command.  A database writer
+may execute it only through the corresponding guarded SQL promotion function.
+No per-rule human approval is part of the contract.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from typing import Any, Mapping
+
+
+SCHEMA = "video-canon-ai-promotion-v1"
+POLICY = "school-video-auto-canon-v1"
+_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_ASSURANCE = {"I0", "I1", "I2", "I3"}
+REQUIRED_CHECKS = frozenset({
+    "SOURCE_AUTHORITY",
+    "SOURCE_BINDING",
+    "SPEAKER_IDENTITY",
+    "TRANSCRIPT_BINDING",
+    "SEMANTIC_PARSE",
+    "EXPLANATION_COMPLETENESS",
+    "BRIDGE_LOGIC",
+    "HIDDEN_INFORMATION_FIREWALL",
+    "POSITIVE_TESTS",
+    "NEGATIVE_TESTS",
+    "BOUNDARY_TESTS",
+    "INTERFERENCE_TESTS",
+    "CANON_REGRESSION",
+    "CANON_INTEGRITY",
+    "CANON_CONFLICT_SCAN",
+    "ROLLBACK_RESTORE",
+})
+
+
+class VideoCanonAIPromotionError(ValueError):
+    """Candidate is not safe to promote automatically."""
+
+
+def _fail(message: str) -> None:
+    raise VideoCanonAIPromotionError(message)
+
+
+def _text(value: Any, label: str) -> str:
+    result = str(value or "").strip()
+    if not result:
+        _fail(f"{label} required")
+    return result
+
+
+def _sha(value: Any, label: str) -> str:
+    result = str(value or "").strip().lower()
+    if not _SHA256.fullmatch(result):
+        _fail(f"invalid {label}")
+    return result
+
+
+def _digest(value: Any) -> str:
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def build_ai_canon_promotion(
+    candidate: Mapping[str, Any], verification_bundle: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Return ``AUTO_PROMOTION_READY`` only when every AI gate is proven."""
+    if not isinstance(candidate, Mapping):
+        _fail("candidate must be an object")
+    payload = candidate.get("payload")
+    if not isinstance(payload, Mapping) or payload.get("schema") != "video-canon-evidence-v2":
+        _fail("unsupported candidate schema")
+    if candidate.get("candidate_type") != "video_school_canon_candidate":
+        _fail("candidate type mismatch")
+    candidate_hash = _sha(candidate.get("payload_hash"), "candidate payload_hash")
+    if _digest(payload) != candidate_hash:
+        _fail("candidate payload hash mismatch")
+    if payload.get("review_eligibility") != "AI_VERIFICATION_PENDING":
+        _fail("candidate is not eligible for AI verification")
+    if payload.get("source_class") != "SCHOOL_PRIMARY_EVIDENCE":
+        _fail("only School primary evidence may auto-promote")
+    if payload.get("ambiguities") or payload.get("contradictions"):
+        _fail("ambiguous or conflicting evidence cannot auto-promote")
+    if float(payload.get("semantic_confidence", 0)) < 0.95:
+        _fail("semantic confidence below automatic promotion threshold")
+
+    expected = {
+        "schema", "policy_version", "candidate_payload_hash", "system_profile",
+        "learner_level", "effective_period", "activation_scope", "checks", "rollback",
+    }
+    if not isinstance(verification_bundle, Mapping) or set(verification_bundle) != expected:
+        _fail("verification bundle fields mismatch")
+    if verification_bundle.get("schema") != SCHEMA:
+        _fail("verification schema mismatch")
+    if verification_bundle.get("policy_version") != POLICY:
+        _fail("promotion policy mismatch")
+    if _sha(verification_bundle.get("candidate_payload_hash"), "candidate_payload_hash") != candidate_hash:
+        _fail("verification is not bound to candidate")
+    authorization = payload.get("source_authorization") or {}
+    if authorization.get("policy_version") != POLICY:
+        _fail("source authorization policy mismatch")
+
+    checks = verification_bundle.get("checks")
+    if not isinstance(checks, list):
+        _fail("checks must be a list")
+    normalized: dict[str, dict[str, str]] = {}
+    for row in checks:
+        fields = {
+            "check_id", "result", "verifier_family", "verifier_version",
+            "assurance_level", "evidence_sha256",
+        }
+        if not isinstance(row, Mapping) or set(row) != fields:
+            _fail("verification check fields mismatch")
+        check_id = _text(row.get("check_id"), "check_id")
+        if check_id in normalized:
+            _fail("duplicate verification check")
+        if row.get("result") != "PASS":
+            _fail(f"verification check did not pass: {check_id}")
+        assurance = row.get("assurance_level")
+        if assurance not in _ASSURANCE:
+            _fail("invalid assurance level")
+        normalized[check_id] = {
+            "check_id": check_id,
+            "result": "PASS",
+            "verifier_family": _text(row.get("verifier_family"), "verifier_family"),
+            "verifier_version": _text(row.get("verifier_version"), "verifier_version"),
+            "assurance_level": assurance,
+            "evidence_sha256": _sha(row.get("evidence_sha256"), "evidence_sha256"),
+        }
+    if set(normalized) != REQUIRED_CHECKS:
+        missing = sorted(REQUIRED_CHECKS - set(normalized))
+        extra = sorted(set(normalized) - REQUIRED_CHECKS)
+        _fail(f"verification check set mismatch: missing={missing}, extra={extra}")
+
+    semantic = normalized["SEMANTIC_PARSE"]
+    bridge_logic = normalized["BRIDGE_LOGIC"]
+    if semantic["assurance_level"] not in {"I2", "I3"}:
+        _fail("semantic verification requires I2 or I3")
+    if bridge_logic["assurance_level"] not in {"I2", "I3"}:
+        _fail("bridge logic verification requires I2 or I3")
+    if semantic["verifier_family"] == bridge_logic["verifier_family"]:
+        _fail("semantic and bridge verifiers must be independent")
+    if normalized["HIDDEN_INFORMATION_FIREWALL"]["assurance_level"] not in {"I2", "I3"}:
+        _fail("hidden-information firewall requires I2 or I3")
+
+    period = verification_bundle.get("effective_period")
+    if not isinstance(period, Mapping) or set(period) != {"valid_from", "valid_to"}:
+        _fail("effective period fields mismatch")
+    valid_from = _text(period.get("valid_from"), "valid_from")
+    valid_to = period.get("valid_to")
+    if valid_to is not None:
+        valid_to = _text(valid_to, "valid_to")
+
+    rollback = verification_bundle.get("rollback")
+    if not isinstance(rollback, Mapping) or set(rollback) != {
+        "strategy", "target_version", "restore_test_sha256", "result"
+    }:
+        _fail("rollback fields mismatch")
+    if rollback.get("result") != "PASS":
+        _fail("rollback restore test did not pass")
+    normalized_rollback = {
+        "strategy": _text(rollback.get("strategy"), "rollback strategy"),
+        "target_version": _text(rollback.get("target_version"), "rollback target_version"),
+        "restore_test_sha256": _sha(rollback.get("restore_test_sha256"), "restore_test_sha256"),
+        "result": "PASS",
+    }
+
+    sealed_bundle = {
+        "schema": SCHEMA,
+        "policy_version": POLICY,
+        "candidate_payload_hash": candidate_hash,
+        "system_profile": _text(verification_bundle.get("system_profile"), "system_profile"),
+        "learner_level": _text(verification_bundle.get("learner_level"), "learner_level"),
+        "effective_period": {"valid_from": valid_from, "valid_to": valid_to},
+        "activation_scope": _text(verification_bundle.get("activation_scope"), "activation_scope"),
+        "checks": [normalized[key] for key in sorted(normalized)],
+        "rollback": normalized_rollback,
+    }
+    bundle_hash = _digest(sealed_bundle)
+    return {
+        "schema": SCHEMA,
+        "status": "AUTO_PROMOTION_READY",
+        "authority_class": "SCHOOL_CANON",
+        "candidate_id": payload.get("candidate_id"),
+        "candidate_payload_hash": candidate_hash,
+        "verification_bundle": sealed_bundle,
+        "verification_bundle_sha256": bundle_hash,
+        "human_approval_required": False,
+        "promotion_command": {
+            "operation": "ACTIVATE_AI_VERIFIED_VIDEO_CANON",
+            "idempotency_key": f"video-canon:{candidate_hash}:{bundle_hash}",
+            "activation_scope": sealed_bundle["activation_scope"],
+            "expected_candidate_payload_hash": candidate_hash,
+            "expected_verification_bundle_sha256": bundle_hash,
+        },
+        "safety": {
+            "world_evidence_used": False,
+            "world_to_canon_promotion_allowed": False,
+            "activation_on_conflict_allowed": False,
+            "activation_on_gap_allowed": False,
+            "rollback_required": True,
+        },
+    }
+
+
+__all__ = [
+    "POLICY", "REQUIRED_CHECKS", "SCHEMA", "VideoCanonAIPromotionError",
+    "build_ai_canon_promotion",
+]

@@ -22,6 +22,9 @@ Build one school-owned bidding algorithm that can model an auction from the acti
 
 ## Durable role split
 - School director / bridge expert: owner decides bridge-domain canon where expert judgment is genuinely required.
+- For authorized teacher videos, per-rule human confirmation is not required:
+  the AI may activate source-bound rules after the complete independent
+  Video-to-Canon evidence gate. Ambiguity or conflict still escalates.
 - Technical + research owner: ChatGPT owns architecture, databases, code, tooling, experiments, infrastructure, benchmarks, integration and technical decisions.
 - Research Lab: an R&D execution layer inside the bidding-engine program, not the owner of the whole project. It receives bounded research questions, runs reproducible experiments/compute, and returns evidence, traces, measurements and confidence.
 - Research Lab must not silently promote external findings into SCHOOL CANON and must not become an independent competing architecture.
@@ -39,6 +42,9 @@ Build one school-owned bidding algorithm that can model an auction from the acti
 9. Existing GitHub, Neon, Drive and already-provisioned compute may be used autonomously. New paid tools/features/resources require owner approval before spend.
 10. Current scope is bidding first. Defense and declarer play are future extensions unless a shared infrastructure choice clearly benefits bidding.
 11. Research Lab is used actively for world-research, BEN/BBA/Pons/Bridgit analysis, DDS/Monte-Carlo/mass compute, benchmarking and evidence generation; the main engine architecture remains centrally owned by ChatGPT.
+12. Authorized teacher video may populate SCHOOL CANON automatically only
+    under policy `school-video-auto-canon-v1`; WORLD evidence, generated repair,
+    gaps and conflicts cannot use this route.
 
 ## Current known infrastructure
 - Production Neon project: `bridge-school-core` (`misty-poetry-18012774`).

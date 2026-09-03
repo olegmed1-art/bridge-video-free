@@ -1,0 +1,100 @@
+from __future__ import annotations
+
+from copy import deepcopy
+
+import pytest
+
+from bridge_contracts.video_canon_ai_promotion import (
+    REQUIRED_CHECKS,
+    VideoCanonAIPromotionError,
+    build_ai_canon_promotion,
+)
+from bridge_contracts.video_canon_evidence import build_video_canon_candidate
+from tests.test_video_canon_evidence import _assertion, _learning
+
+
+def _candidate() -> dict:
+    assertion = _assertion()
+    assertion["semantic_confidence"] = 0.98
+    return build_video_canon_candidate(_learning(), assertion)
+
+
+def _bundle(candidate: dict) -> dict:
+    checks = []
+    for check_id in sorted(REQUIRED_CHECKS):
+        family = "formal-checker"
+        assurance = "I1"
+        if check_id == "SEMANTIC_PARSE":
+            family, assurance = "semantic-model-a", "I2"
+        elif check_id == "BRIDGE_LOGIC":
+            family, assurance = "bridge-engine-b", "I3"
+        elif check_id == "HIDDEN_INFORMATION_FIREWALL":
+            family, assurance = "taint-analyzer", "I2"
+        checks.append({
+            "check_id": check_id,
+            "result": "PASS",
+            "verifier_family": family,
+            "verifier_version": "pinned-v1",
+            "assurance_level": assurance,
+            "evidence_sha256": "f" * 64,
+        })
+    return {
+        "schema": "video-canon-ai-promotion-v1",
+        "policy_version": "school-video-auto-canon-v1",
+        "candidate_payload_hash": candidate["payload_hash"],
+        "system_profile": "natural-v1",
+        "learner_level": "beginner-1",
+        "effective_period": {"valid_from": "2026-09-03T00:00:00Z", "valid_to": None},
+        "activation_scope": "bidding/natural/v1/response-to-1h",
+        "checks": checks,
+        "rollback": {
+            "strategy": "revoke activation and restore prior version",
+            "target_version": "natural-v1-before-video-rule",
+            "restore_test_sha256": "a" * 64,
+            "result": "PASS",
+        },
+    }
+
+
+def test_all_ai_checks_create_sealed_automatic_promotion_command():
+    candidate = _candidate()
+    result = build_ai_canon_promotion(candidate, _bundle(candidate))
+
+    assert result["status"] == "AUTO_PROMOTION_READY"
+    assert result["authority_class"] == "SCHOOL_CANON"
+    assert result["human_approval_required"] is False
+    assert result["promotion_command"]["operation"] == "ACTIVATE_AI_VERIFIED_VIDEO_CANON"
+    assert result["safety"]["world_evidence_used"] is False
+    assert len(result["verification_bundle_sha256"]) == 64
+
+
+@pytest.mark.parametrize("mutation, match", [
+    (lambda b: b["checks"].pop(), "check set mismatch"),
+    (lambda b: b["checks"][0].update(result="FAIL"), "did not pass"),
+    (lambda b: next(x for x in b["checks"] if x["check_id"] == "BRIDGE_LOGIC").update(verifier_family="semantic-model-a"), "must be independent"),
+    (lambda b: next(x for x in b["checks"] if x["check_id"] == "HIDDEN_INFORMATION_FIREWALL").update(assurance_level="I1"), "requires I2 or I3"),
+    (lambda b: b["rollback"].update(result="FAIL"), "restore test did not pass"),
+])
+def test_promotion_fails_closed_when_any_ai_gate_is_unproven(mutation, match):
+    candidate = _candidate()
+    bundle = _bundle(candidate)
+    mutation(bundle)
+    with pytest.raises(VideoCanonAIPromotionError, match=match):
+        build_ai_canon_promotion(candidate, bundle)
+
+
+def test_verification_cannot_be_replayed_for_changed_candidate():
+    candidate = _candidate()
+    bundle = _bundle(candidate)
+    changed = deepcopy(candidate)
+    changed["payload"]["normalized_rule"]["action"] = "2D"
+    with pytest.raises(VideoCanonAIPromotionError, match="payload hash mismatch"):
+        build_ai_canon_promotion(changed, bundle)
+
+
+def test_conflict_never_auto_promotes():
+    candidate = _candidate()
+    candidate["payload"]["contradictions"] = ["conflicts with active rule"]
+    candidate["payload_hash"] = "0" * 64
+    with pytest.raises(VideoCanonAIPromotionError):
+        build_ai_canon_promotion(candidate, _bundle(_candidate()))

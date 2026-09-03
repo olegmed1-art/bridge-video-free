@@ -47,8 +47,8 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
     def test_visual_evidence_creates_partial_not_full_board(self):
         quality = build_quality_layer(base_master(), {'lesson_id': 'lesson-test', 'lesson_number': 5})
         counts = quality['counts']
-        self.assertEqual(quality['method_version'], 'diana-quality-v4.3')
-        self.assertEqual(quality['schema_version'], 6)
+        self.assertEqual(quality['method_version'], 'diana-quality-v4.2')
+        self.assertEqual(quality['schema_version'], 5)
         self.assertEqual(counts['verified_full_boards'], 0)
         self.assertGreaterEqual(counts['partial_boards'], 1)
         self.assertEqual(counts['report_visual_partial_boards_v4_2'], 1)
@@ -94,6 +94,15 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
             'counterexample': {'auction': ['1NT', '3NT']},
             'evidence_refs': ['segment-10'],
         }]
+        master['transcript'] = [{
+            'segment_id': 'segment-10', 'speaker_role': 'teacher',
+            'speaker_role_confidence': 0.99,
+            'text': 'У партнёра ограничена сила. Поэтому гейм не форсируется.',
+        }]
+        master['canon_links'] = [{
+            'stable_key': 'rule-1', 'classification': 'RULE_PARAPHRASE_MATCH',
+            'evidence_refs': ['segment-10'],
+        }]
         quality = build_quality_layer(master, {'lesson_id': 'lesson-test', 'lesson_number': 5})
         extraction = quality['extended_knowledge_extraction']
         self.assertEqual(extraction['status'], 'STAGING_ONLY')
@@ -102,8 +111,12 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
         self.assertTrue({
             'SCHOOL_TERMINOLOGY', 'SYSTEM_EVOLUTION_OBSERVATION',
             'WORLD_COMPARISON_LINK', 'ANALYSIS_QUALITY_EVIDENCE',
-            'EXPLANATION_CANDIDATE',
+            'GAP_OR_CONFLICT',
         } <= kinds)
+        self.assertTrue(any(
+            row['payload'].get('gap_type') == 'EXPLANATION_EVIDENCE_INVALID'
+            for row in extraction['candidate_records']
+        ))
         self.assertTrue(all(row['promotion_allowed'] is False for row in extraction['candidate_records']))
 
     def test_quality_created_at_is_master_derived_and_repeat_stable(self):
@@ -122,6 +135,14 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
         second = build_quality_layer(master, {'lesson_id': 'lesson-test', 'lesson_number': 5})
         self.assertEqual(first['created_at'], '1970-01-01T00:00:00Z')
         self.assertEqual(first, second)
+
+    def test_video_canon_auto_pipeline_is_wired_but_not_a_direct_database_write(self):
+        quality = build_quality_layer(base_master(), {'lesson_id': 'lesson-test', 'lesson_number': 5})
+        pipeline = quality['video_canon_auto_pipeline']
+        self.assertEqual(pipeline['status'], 'NOT_REQUESTED')
+        self.assertFalse(pipeline['human_approval_required'])
+        self.assertFalse(pipeline['authoritative_write_performed'])
+        self.assertFalse(pipeline['world_lookup_performed'])
 
 
 if __name__ == '__main__':

@@ -1,8 +1,8 @@
-"""Convert source-bound video observations into canon-review staging records.
+"""Convert source-bound teacher video into AI-verifiable Canon candidates.
 
-This module is deliberately a one-way, non-promoting adapter.  It produces a
-payload suitable for ``public.analysis_candidate`` but has no database writer
-and cannot create or activate ``bidding.rule`` rows.
+The adapter does not itself write authoritative tables.  It seals the exact
+source, transcript assertion, teaching logic and tests that a separate guarded
+AI promotion gate must verify before automatic Canon activation.
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from bridge_contracts.video_learning_candidate import (
 )
 
 
-SCHEMA = "video-canon-evidence-v1"
+SCHEMA = "video-canon-evidence-v2"
 AUTHORITY_CLASS = "SCHOOL_CANON_CANDIDATE"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SOURCE_CLASSES = {"SCHOOL_PRIMARY_EVIDENCE", "TEACHING_CONTEXT", "WORLD_EXTERNAL"}
@@ -70,6 +70,22 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _sha(value: Any, label: str) -> str:
+    result = str(value or "").strip().lower()
+    if not _SHA256.fullmatch(result):
+        _fail(f"invalid {label}")
+    return result
+
+
+def _texts(value: Any, label: str, *, allow_empty: bool = False) -> list[str]:
+    if not isinstance(value, list) or (not value and not allow_empty):
+        _fail(f"{label} must be a list")
+    result = [_text(item, label) for item in value]
+    if len(result) != len(set(result)):
+        _fail(f"duplicate {label}")
+    return result
+
+
 def build_video_canon_candidate(
     learning_candidate: Mapping[str, Any],
     assertion: Mapping[str, Any],
@@ -78,29 +94,33 @@ def build_video_canon_candidate(
 
     ``assertion`` must be an explicit, locally evidenced teacher statement.  A
     teaching example or model inference cannot be relabelled as a statement.
-    Source authorization only controls review eligibility; even an eligible
-    record remains a candidate and requires the separate Canon approval gates.
+    Source authorization is source-level, not per-rule human approval.  A
+    complete candidate remains non-authoritative until the separate AI gate
+    proves every required check and atomically activates the sealed payload.
     """
     learning = validate_learning_candidate(learning_candidate)
     expected = {
-        "assertion_id", "statement", "speaker_id", "transcript_locators",
+        "assertion_id", "statement", "statement_sha256", "speaker_id", "transcript_locators",
         "source_class", "source_authorization", "semantic_scope",
         "normalized_rule", "semantic_confidence", "ambiguities",
-        "contradictions", "tests",
+        "contradictions", "explanation", "tests",
     }
     if not isinstance(assertion, Mapping) or set(assertion) != expected:
         _fail("assertion fields mismatch")
 
     assertion_id = _text(assertion.get("assertion_id"), "assertion_id")
     statement = _text(assertion.get("statement"), "statement")
+    statement_sha = _sha(assertion.get("statement_sha256"), "statement_sha256")
+    if hashlib.sha256(statement.encode("utf-8")).hexdigest() != statement_sha:
+        _fail("statement_sha256 does not match statement")
     speaker_id = _text(assertion.get("speaker_id"), "speaker_id")
     source_class = assertion.get("source_class")
     if source_class not in _SOURCE_CLASSES:
         _fail("invalid source class")
 
     locators = assertion.get("transcript_locators")
-    if not isinstance(locators, list) or not locators:
-        _fail("transcript locators required")
+    if not isinstance(locators, list) or len(locators) != 1:
+        _fail("one exact transcript locator required per assertion")
     locators = [_text(value, "transcript locator") for value in locators]
     if len(locators) != len(set(locators)):
         _fail("duplicate transcript locator")
@@ -115,16 +135,26 @@ def build_video_canon_candidate(
             _fail("teacher assertion requires verified speaker identity")
         if transcript["speaker_id"] != speaker_id:
             _fail("teacher assertion speaker mismatch")
+        if transcript["text_sha256"] != statement_sha:
+            _fail("teacher statement is not bound to transcript digest")
 
     authorization = assertion.get("source_authorization")
-    if not isinstance(authorization, Mapping) or set(authorization) != {
-        "status", "decision_ref", "approved_semantic_scopes"
-    }:
+    authorization_fields = {
+        "status", "decision_ref", "policy_version", "authorized_source_sha256",
+        "authorized_video_file_id", "authorized_teacher_ids",
+        "approved_semantic_scopes", "authorization_evidence_sha256",
+    }
+    if not isinstance(authorization, Mapping) or set(authorization) != authorization_fields:
         _fail("source authorization fields mismatch")
     status = authorization.get("status")
     if status not in {"APPROVED", "NOT_APPROVED"}:
         _fail("invalid source authorization status")
     decision_ref = str(authorization.get("decision_ref") or "").strip()
+    policy_version = str(authorization.get("policy_version") or "").strip()
+    authorized_source_sha = str(authorization.get("authorized_source_sha256") or "").strip().lower()
+    authorized_video_file_id = str(authorization.get("authorized_video_file_id") or "").strip()
+    authorization_evidence_sha = str(authorization.get("authorization_evidence_sha256") or "").strip().lower()
+    teacher_ids = authorization.get("authorized_teacher_ids")
     scopes = authorization.get("approved_semantic_scopes")
     if not isinstance(scopes, list):
         _fail("approved semantic scopes must be a list")
@@ -132,9 +162,21 @@ def build_video_canon_candidate(
     if len(scopes) != len(set(scopes)):
         _fail("duplicate approved semantic scope")
     semantic_scope = _text(assertion.get("semantic_scope"), "semantic_scope")
-    if status == "APPROVED" and (not decision_ref or semantic_scope not in scopes):
-        _fail("approved source lacks exact semantic scope authorization")
-    if status == "NOT_APPROVED" and (decision_ref or scopes):
+    if status == "APPROVED":
+        if not decision_ref or not policy_version or semantic_scope not in scopes:
+            _fail("approved source lacks exact semantic scope authorization")
+        if not _SHA256.fullmatch(authorized_source_sha) or not _SHA256.fullmatch(authorization_evidence_sha):
+            _fail("approved source lacks immutable authorization evidence")
+        if authorized_source_sha != learning["source"]["source_sha256"]:
+            _fail("authorization source sha256 mismatch")
+        if authorized_video_file_id != learning["source"]["video_file_id"]:
+            _fail("authorization video file mismatch")
+        teacher_ids = _texts(teacher_ids, "authorized teacher id")
+        if speaker_id not in teacher_ids:
+            _fail("teacher is outside source authorization")
+    if status == "NOT_APPROVED" and any((decision_ref, policy_version, authorized_source_sha,
+                                           authorized_video_file_id, authorization_evidence_sha,
+                                           scopes, teacher_ids)):
         _fail("unapproved source must not carry approval evidence")
 
     normalized_rule = assertion.get("normalized_rule")
@@ -142,6 +184,22 @@ def build_video_canon_candidate(
         _fail("normalized rule required")
     if _has_forbidden_key(normalized_rule):
         _fail("normalized rule contains hidden information")
+
+    explanation = assertion.get("explanation")
+    if not isinstance(explanation, Mapping) or set(explanation) != {
+        "why_or_purpose", "consequences", "rejected_alternatives", "evidence_refs"
+    }:
+        _fail("explanation fields mismatch")
+    why_or_purpose = _texts(explanation.get("why_or_purpose"), "why or purpose")
+    consequences = _texts(explanation.get("consequences"), "consequence")
+    rejected_alternatives = _texts(
+        explanation.get("rejected_alternatives"), "rejected alternative", allow_empty=True
+    )
+    explanation_refs = _texts(explanation.get("evidence_refs"), "explanation evidence ref")
+    if not set(explanation_refs) <= set(locators):
+        _fail("explanation references evidence outside assertion")
+    if _has_forbidden_key(explanation):
+        _fail("explanation contains hidden information")
 
     tests = assertion.get("tests")
     if not isinstance(tests, Mapping) or set(tests) != {
@@ -161,11 +219,12 @@ def build_video_canon_candidate(
     contradictions = [_text(value, "contradiction") for value in contradictions]
     confidence = _confidence(assertion.get("semantic_confidence"))
 
-    review_eligible = (
+    ai_verification_eligible = (
         source_class == "SCHOOL_PRIMARY_EVIDENCE"
         and status == "APPROVED"
         and not ambiguities
         and not contradictions
+        and confidence >= 0.95
     )
     payload = {
         "schema": SCHEMA,
@@ -177,6 +236,7 @@ def build_video_canon_candidate(
         "learning_candidate_sha256": learning_candidate_sha256(learning),
         "teacher_assertion": {
             "statement": statement,
+            "statement_sha256": statement_sha,
             "speaker_id": speaker_id,
             "transcript_locators": locators,
         },
@@ -184,22 +244,37 @@ def build_video_canon_candidate(
         "source_authorization": {
             "status": status,
             "decision_ref": decision_ref or None,
+            "policy_version": policy_version or None,
+            "authorized_source_sha256": authorized_source_sha or None,
+            "authorized_video_file_id": authorized_video_file_id or None,
+            "authorized_teacher_ids": teacher_ids or [],
             "approved_semantic_scopes": scopes,
+            "authorization_evidence_sha256": authorization_evidence_sha or None,
         },
         "semantic_scope": semantic_scope,
         "normalized_rule": deepcopy(dict(normalized_rule)),
         "semantic_confidence": confidence,
         "ambiguities": ambiguities,
         "contradictions": contradictions,
+        "explanation": {
+            "why_or_purpose": why_or_purpose,
+            "consequences": consequences,
+            "rejected_alternatives": rejected_alternatives,
+            "evidence_refs": explanation_refs,
+        },
         "tests": deepcopy(dict(tests)),
-        "review_eligibility": "ELIGIBLE" if review_eligible else "EVIDENCE_ONLY",
+        "review_eligibility": (
+            "AI_VERIFICATION_PENDING" if ai_verification_eligible else "EVIDENCE_ONLY"
+        ),
         "activation": {
             "school_canon_write_allowed": False,
-            "approval_required": True,
+            "human_approval_required": False,
+            "ai_verification_required": True,
             "regression_required": True,
             "integrity_required": True,
             "rollback_proof_required": True,
             "i2_review_required": True,
+            "automatic_activation_after_all_gates": True,
         },
     }
     payload_hash = _digest(payload)

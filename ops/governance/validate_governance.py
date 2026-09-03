@@ -52,7 +52,7 @@ def validate_state(state: dict[str, Any]) -> None:
     require(isinstance(system, dict), "governance_system must be an object")
     require(system.get("status") == "ACTIVE", "governance system must be ACTIVE")
     require(system.get("authority") == "CANONICAL", "governance authority must be CANONICAL")
-    require(system.get("version") == "1.0", "active governance version must be 1.0")
+    require(system.get("version") == "1.1", "active governance version must be 1.1")
     require(system.get("director_accountable_owner") is True, "director accountability must be explicit")
     require(system.get("ai_delegated_operator") is True, "AI delegated operation must be explicit")
 
@@ -63,7 +63,24 @@ def validate_state(state: dict[str, Any]) -> None:
     require(canonical_path.is_file(), f"canonical governance document does not exist: {canonical_rel}")
     canonical_text = canonical_path.read_text(encoding="utf-8")
     require("ACTIVE / CANONICAL" in canonical_text, "canonical document must declare ACTIVE / CANONICAL")
-    require("Версия: **1.0**" in canonical_text, "canonical document version marker is missing")
+    require("Версия: **1.1**" in canonical_text, "canonical document version marker is missing")
+
+    video_policy = state.get("video_canon_auto_promotion")
+    require(isinstance(video_policy, dict), "video_canon_auto_promotion must be an object")
+    require(
+        video_policy.get("status") == "ACTIVE_POLICY_NOT_PRODUCTION_DEPLOYED",
+        "video Canon policy deployment boundary must be explicit",
+    )
+    require(video_policy.get("per_rule_human_approval_required") is False,
+            "video Canon must not require per-rule human approval")
+    require(video_policy.get("minimum_independence") == "I2",
+            "video Canon minimum independence must be I2")
+    require(video_policy.get("world_to_canon_allowed") is False,
+            "WORLD must not auto-promote to Canon")
+    require(video_policy.get("conflict_auto_promotion_allowed") is False,
+            "Canon conflicts must fail closed")
+    require(video_policy.get("rollback_required") is True,
+            "video Canon rollback must be required")
 
     reviews = state.get("reviews")
     require(isinstance(reviews, dict), "reviews must be an object")

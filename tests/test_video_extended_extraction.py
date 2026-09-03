@@ -24,6 +24,11 @@ def test_rule_without_why_creates_explanation_gap():
 def test_source_bound_why_is_a_separate_explanation_candidate():
     master = {
         "job_id": "job-1",
+        "transcript": [{
+            "segment_id": "segment-7", "speaker_role": "teacher",
+            "speaker_role_confidence": 0.99,
+            "text": "premise conclusion",
+        }],
         "explanation_observations": [{
             "stable_key": "why:rule-7",
             "rule_stable_key": "rule-7",
@@ -156,3 +161,50 @@ def test_extracts_why_and_what_for_as_distinct_logic_relations():
     }
     assert "CAUSE" in result["explanation_extraction"]["logic_dimensions"]
     assert "PURPOSE" in result["explanation_extraction"]["logic_dimensions"]
+
+
+def test_logic_cues_require_token_boundaries_and_use_adjacent_clauses():
+    quality = {
+        "canon_candidates": [{
+            "canon_observation_id": "rule-7", "classification": "RULE_PARAPHRASE_MATCH",
+            "evidence_refs": ["segment-7"],
+        }],
+        "authority": {"canon_activation": "DENY"},
+    }
+    master = {"job_id": "job", "transcript": [{
+        "segment_id": "segment-7", "speaker_role": "teacher",
+        "speaker_role_confidence": 0.99,
+        "text": "Нужно назначить масть.",
+    }]}
+    result = build_extended_extraction(master, quality)
+    assert not any(row["candidate_type"] == "EXPLANATION_CANDIDATE" for row in result["candidate_records"])
+
+    master["transcript"][0]["text"] = "Не пасуем, потому что форсинг. Баланс есть, поэтому заявляем гейм."
+    result = build_extended_extraction(master, quality)
+    explanation = next(row["payload"] for row in result["candidate_records"] if row["candidate_type"] == "EXPLANATION_CANDIDATE")
+    assert explanation["logic_relations"][0]["right_clause"] == "форсинг"
+    assert explanation["logic_relations"][1]["left_clause"] == "Баланс есть"
+
+
+def test_unbound_explicit_explanation_becomes_gap_and_does_not_hide_missing_why():
+    master = {"job_id": "job", "explanation_observations": [{
+        "stable_key": "why:rule-7", "rule_stable_key": "rule-7",
+        "why_chain": ["generated guess"], "evidence_refs": ["missing-segment"],
+    }]}
+    quality = {"canon_candidates": [{
+        "canon_observation_id": "rule-7", "classification": "RULE_PARAPHRASE_MATCH",
+        "evidence_refs": ["segment-7"],
+    }], "authority": {"canon_activation": "DENY"}}
+    result = build_extended_extraction(master, quality)
+    gap_types = {row["payload"].get("gap_type") for row in result["candidate_records"]}
+    assert "EXPLANATION_EVIDENCE_INVALID" in gap_types
+    assert "EXPLANATION_MISSING" in gap_types
+
+
+def test_retrieval_or_gap_classification_does_not_create_fake_explanation_gap():
+    quality = {"canon_candidates": [{
+        "canon_observation_id": "lookup-1", "classification": "NO_CANON_MATCH",
+        "evidence_refs": ["segment-7"],
+    }], "authority": {"canon_activation": "DENY"}}
+    result = build_extended_extraction({"job_id": "job"}, quality)
+    assert not any(row["payload"].get("gap_type") == "EXPLANATION_MISSING" for row in result["candidate_records"])

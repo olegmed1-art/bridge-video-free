@@ -2,10 +2,11 @@
   "schema_version": "1.0",
   "governance_system": {
     "id": "SCHOOL-GOVERNANCE-SYSTEM",
-    "version": "1.0",
+    "version": "1.1",
     "status": "ACTIVE",
     "authority": "CANONICAL",
     "effective_at": "2026-08-26",
+    "last_policy_change_at": "2026-09-03",
     "canonical_document": "docs/governance/SCHOOL_GOVERNANCE_SYSTEM_V1.md",
     "director_accountable_owner": true,
     "ai_delegated_operator": true,
@@ -14,8 +15,18 @@
     ],
     "design_evidence": [
       "docs/governance/SCHOOL_GOVERNANCE_SYSTEM_V1_PROPOSED.md",
-      "docs/governance/SCHOOL_GOVERNANCE_SYSTEM_V1_AUDIT_RU.md"
+      "docs/governance/SCHOOL_GOVERNANCE_SYSTEM_V1_AUDIT_RU.md",
+      "docs/governance/VIDEO_CANON_AI_PROMOTION_DECISION_2026-09-03.md"
     ]
+  },
+  "video_canon_auto_promotion": {
+    "status": "ACTIVE_POLICY_NOT_PRODUCTION_DEPLOYED",
+    "policy_version": "school-video-auto-canon-v1",
+    "per_rule_human_approval_required": false,
+    "minimum_independence": "I2",
+    "world_to_canon_allowed": false,
+    "conflict_auto_promotion_allowed": false,
+    "rollback_required": true
   },
   "reviews": {
     "first_operational_audit_due": "2026-09-25",

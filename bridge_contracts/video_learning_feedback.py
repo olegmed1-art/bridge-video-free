@@ -45,6 +45,24 @@ def build_learning_feedback(master: Mapping[str, Any], quality: Mapping[str, Any
     source_sha = None
     if corrections:
         source_sha = _sha(source.get("sha256") or source.get("source_sha256"))
+    raw_receipts = quality.get("correction_review_receipts") or []
+    if not isinstance(raw_receipts, list):
+        raise VideoLearningFeedbackError("correction_review_receipts must be a list")
+    receipts: dict[str, Mapping[str, Any]] = {}
+    for receipt in raw_receipts:
+        fields = {
+            "correction_id", "reviewer_ref", "source_sha256", "input_ref",
+            "corrected_value_sha256", "evidence_refs", "status", "receipt_sha256",
+        }
+        if not isinstance(receipt, Mapping) or set(receipt) != fields:
+            raise VideoLearningFeedbackError("correction review receipt fields mismatch")
+        receipt_id = _text(receipt.get("correction_id"), "receipt correction_id")
+        if receipt_id in receipts:
+            raise VideoLearningFeedbackError("duplicate correction review receipt")
+        sealed = {key: receipt[key] for key in sorted(fields - {"receipt_sha256"})}
+        if _sha(receipt.get("receipt_sha256")) != _digest(sealed):
+            raise VideoLearningFeedbackError("correction review receipt digest mismatch")
+        receipts[receipt_id] = receipt
     examples: list[dict[str, Any]] = []
     for raw in corrections:
         if not isinstance(raw, Mapping) or set(raw) != {
@@ -57,14 +75,42 @@ def build_learning_feedback(master: Mapping[str, Any], quality: Mapping[str, Any
         refs = raw.get("evidence_refs")
         if not isinstance(refs, list) or not refs:
             raise VideoLearningFeedbackError("correction evidence refs required")
+        evidence_refs = [_text(ref, "correction evidence ref") for ref in refs]
+        correction_id = _text(raw.get("correction_id"), "correction_id")
+        input_ref = _text(raw.get("input_ref"), "input_ref")
+        reviewer_ref = _text(raw.get("reviewer_ref"), "reviewer_ref")
+        corrected_value_sha = _digest(raw.get("corrected_value"))
+        receipt = receipts.get(correction_id)
+        if not receipt or receipt.get("status") != "VERIFIED":
+            raise VideoLearningFeedbackError("verified correction review receipt required")
+        if (
+            _sha(receipt.get("source_sha256")) != source_sha
+            or receipt.get("input_ref") != input_ref
+            or receipt.get("reviewer_ref") != reviewer_ref
+            or _sha(receipt.get("corrected_value_sha256")) != corrected_value_sha
+            or receipt.get("evidence_refs") != evidence_refs
+        ):
+            raise VideoLearningFeedbackError("correction review receipt binding mismatch")
+        content_version = _digest({
+            "source_sha256": source_sha,
+            "correction_id": correction_id,
+            "kind": kind,
+            "input_ref": input_ref,
+            "corrected_value_sha256": corrected_value_sha,
+            "reviewer_ref": reviewer_ref,
+            "evidence_refs": evidence_refs,
+            "receipt_sha256": receipt["receipt_sha256"],
+        })
         payload = {
-            "training_example_id": f"train_{_digest([source_sha, raw['correction_id']])[:20]}",
+            "training_example_id": f"train_{content_version[:20]}",
+            "content_version_sha256": content_version,
             "source_sha256": source_sha,
             "kind": kind,
-            "input_ref": _text(raw.get("input_ref"), "input_ref"),
+            "input_ref": input_ref,
             "corrected_value": raw.get("corrected_value"),
-            "reviewer_ref": _text(raw.get("reviewer_ref"), "reviewer_ref"),
-            "evidence_refs": [str(ref) for ref in refs],
+            "reviewer_ref": reviewer_ref,
+            "review_receipt_sha256": receipt["receipt_sha256"],
+            "evidence_refs": evidence_refs,
             "training_eligible": True,
             "canon_write_allowed": False,
         }
@@ -75,10 +121,28 @@ def build_learning_feedback(master: Mapping[str, Any], quality: Mapping[str, Any
     proposal: dict[str, Any]
     if set(evaluation) == required and isinstance(evaluation.get("metrics"), Mapping):
         metrics = evaluation["metrics"]
-        try:
-            improved = all(float(row["candidate"]) >= float(row["baseline"]) for row in metrics.values() if isinstance(row, Mapping))
-        except (KeyError, TypeError, ValueError):
-            improved = False
+        improved = bool(metrics)
+        for row in metrics.values():
+            if not isinstance(row, Mapping) or set(row) != {
+                "candidate", "baseline", "direction", "minimum_delta"
+            }:
+                improved = False
+                break
+            try:
+                candidate_value = float(row["candidate"])
+                baseline_value = float(row["baseline"])
+                minimum_delta = float(row["minimum_delta"])
+            except (TypeError, ValueError):
+                improved = False
+                break
+            if minimum_delta < 0 or row["direction"] not in {"HIGHER_IS_BETTER", "LOWER_IS_BETTER"}:
+                improved = False
+                break
+            delta = candidate_value - baseline_value
+            if row["direction"] == "HIGHER_IS_BETTER":
+                improved = improved and delta >= minimum_delta
+            else:
+                improved = improved and -delta >= minimum_delta
         proposal = {
             "status": "HOLDOUT_PASS_CANDIDATE" if improved and metrics else "HOLDOUT_NOT_PROVEN",
             "candidate_model_version": _text(evaluation["candidate_model_version"], "candidate_model_version"),

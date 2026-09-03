@@ -1,42 +1,60 @@
-# Video evidence to School Canon — v1 contract
+# Video evidence to School Canon — v2 contract
 
-Status: `IMPLEMENTED / NOT ACTIVATED`  
+Status: `AI AUTO-PROMOTION IMPLEMENTED / PRODUCTION NOT ACTIVATED`
 Governance mode: `ASSURED`  
 Tracker: #609; upstream video runtime: #881
 
 ## Boundary
 
-Video analysis is a high-value evidence source, not an authority shortcut.
+Authorized teacher video is a canonical learning source after the AI gate.
 Artifacts move through:
 
-`RAW_VIDEO -> TRANSCRIPT -> OBSERVATION -> TEACHER_ASSERTION -> RULE_CANDIDATE`
+`RAW_VIDEO -> TRANSCRIPT -> OBSERVATION -> TEACHER_ASSERTION -> RULE_CANDIDATE -> AI_VERIFIED -> ACTIVE`
 
-The adapter stops at `public.analysis_candidate`-compatible staging. It has no
-database writer and cannot insert or activate `bidding.rule`.
+The evidence adapter stops at `public.analysis_candidate`-compatible staging.
+The separate promotion gate seals an idempotent activation command only after
+all required checks pass. Per-rule human approval is not required.
 
-## Review eligibility
+## AI verification eligibility
 
-A video-derived rule candidate is eligible for Canon review only when:
+A video-derived rule candidate enters AI verification only when:
 
 - the source is classified `SCHOOL_PRIMARY_EVIDENCE`;
-- a Director decision explicitly approves the exact semantic scope;
+- source policy explicitly binds the exact video SHA-256, Drive file identity,
+  trusted teacher and semantic scope;
 - the teacher identity is verified for every cited transcript segment;
-- the assertion refers only to transcript/frame evidence bound to the same
-  immutable source video;
+- the assertion text SHA-256 exactly matches its single transcript span;
+- the rule includes source-backed why/purpose and consequences;
 - normalized rule and tests contain no hidden-hand fields;
 - positive, negative, boundary and interference tests all exist;
 - no ambiguity or contradiction remains.
 
-`TEACHING_CONTEXT`, `WORLD_EXTERNAL`, unapproved sources, ambiguous statements
-and conflicts remain `EVIDENCE_ONLY`. They may help review or identify a gap,
-but cannot enter the Canon review lane.
+`TEACHING_CONTEXT`, `WORLD_EXTERNAL`, unapproved sources, low-confidence or
+ambiguous statements and conflicts remain `EVIDENCE_ONLY`. They may identify a
+gap, but cannot enter automatic Canon promotion.
 
-## Activation remains separate
+## Automatic activation gate
 
-Even `ELIGIBLE` means only eligible for human/independent review. Canon still
-requires explicit approval plus regression, integrity, rollback proof and I2.
-The existing runtime invariant remains unchanged: `CANON_CONFLICT` stops and
-does not call WORLD; only a recorded `CANON_GAP` permits the WORLD lookup.
+`AI_VERIFICATION_PENDING` becomes `AUTO_PROMOTION_READY` only after all 16
+checks in `video-canon-ai-promotion-v1` pass. Semantic parsing and bridge-logic
+verification must be I2/I3 and come from different verifier families. The
+hidden-information firewall must also be I2/I3. Regression, integrity,
+conflict scan and a tested restore path are mandatory.
+
+The activation command binds both candidate SHA-256 and verification-bundle
+SHA-256 and is idempotent. The existing runtime invariant remains unchanged:
+`CANON_CONFLICT` stops and does not call WORLD; only a recorded `CANON_GAP`
+permits the WORLD lookup.
+
+Implementation boundaries:
+
+- `video_canon_evidence.py` seals exact source, speech, logic and tests;
+- `video_canon_ai_promotion.py` evaluates the 16-check bundle;
+- `video_canon_auto_pipeline.py` produces promotion commands or explicit gaps;
+- migration `0322_video_canon_ai_promotion.sql` separates verifier and promoter
+  roles and performs the atomic database activation;
+- the Diana v4.2 quality layer invokes the pipeline when a complete
+  `video_canon_*` input bundle is present.
 
 ## Explanation is part of knowledge
 
@@ -76,9 +94,10 @@ live resolver request.
 
 ## Learning feedback loop
 
-Reviewed human corrections for ASR, speaker, card, auction, extraction and
+Evidence-bound corrections for ASR, speaker, card, auction, extraction and
 pedagogy are emitted as immutable versioned `ANALYZER_TRAINING_EXAMPLE`
-records. A candidate model is only represented by a
+records. Human corrections remain useful but are not a prerequisite for every
+Canon rule. A candidate model is only represented by a
 `MODEL_IMPROVEMENT_PROPOSAL` when a named holdout compares it with a baseline
-and records a rollback model version. Training execution, deployment, Canon
-change and automatic promotion are all denied by the analyzer contract.
+and records a rollback model version. Model deployment remains a separate
+gate; a model passing holdout is not itself permission to change Canon.

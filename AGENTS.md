@@ -60,9 +60,9 @@ Maintain two distinct knowledge contours:
 
 Never silently replace school canon with world practice. Never mix incompatible bidding systems into a synthetic “universal” system. Record system profile, level, version, date/effective range, auction context, source, confidence, and dependencies where applicable.
 
-The AI is the delegated canon steward. It may autonomously perform non-semantic maintenance when provenance and tests are sufficient: correct formatting or obvious technical errors, restore provenance, add tests, deduplicate, migrate representations, and version or retire knowledge without changing its bridge meaning. A material semantic change requires director-level bridge judgment unless the director has already explicitly approved the exact meaning for the same scope.
+The AI is the delegated canon steward. It may autonomously perform non-semantic maintenance when provenance and tests are sufficient: correct formatting or obvious technical errors, restore provenance, add tests, deduplicate, migrate representations, and version or retire knowledge without changing its bridge meaning. A material semantic change normally requires director-level bridge judgment. The authorized Video-to-Canon exception in governance §5.4 permits automatic semantic promotion from trusted teacher video after the complete independent AI evidence gate; it does not permit promotion from WORLD, ambiguous speech, conflicts or generated reconstruction.
 
-Ask the bridge expert only for material unresolved ambiguity or semantic choice. A teacher’s spontaneous statement is evidence, not automatic truth: check it against context, repeated explanations, current canon, and bridge logic.
+Ask the bridge expert only for material unresolved ambiguity or semantic choice. A teacher’s spontaneous statement is evidence, not automatic truth: check it against context, exact transcript binding, current canon, bridge logic and the independent Video-to-Canon gates before any automatic activation.
 
 Bidding meanings evolve by learner level and system version. An advanced convention may replace a natural beginner meaning only in its own profile/version. Preserve the earlier meaning and mark its applicability; do not overwrite history.
 

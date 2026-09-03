@@ -19,10 +19,11 @@ from typing import Any, Mapping
 
 import diana_longitudinal_quality_v4_1 as v41
 from bridge_contracts.video_extended_extraction import build_extended_extraction
+from bridge_contracts.video_canon_auto_pipeline import run_video_canon_auto_pipeline
 
 QUALITY_SCHEMA = v41.QUALITY_SCHEMA
-QUALITY_SCHEMA_VERSION = 6
-QUALITY_METHOD_VERSION = "diana-quality-v4.3"
+QUALITY_SCHEMA_VERSION = 5
+QUALITY_METHOD_VERSION = "diana-quality-v4.2"
 
 
 def _stable_quality_created_at(master: Mapping[str, Any]) -> str:
@@ -126,6 +127,27 @@ def build_quality_layer(
     counts["extended_knowledge_candidates"] = len(extended["candidate_records"])
     counts["extended_knowledge_by_type"] = extended["counts_by_type"]
     counts["staging_records"] = len(staging)
+    learning_candidate = working.get("video_canon_learning_candidate")
+    assertions = working.get("video_canon_assertions")
+    verifications = working.get("video_canon_verification_bundles")
+    if isinstance(learning_candidate, Mapping) and isinstance(assertions, list) and isinstance(verifications, Mapping):
+        auto_pipeline = run_video_canon_auto_pipeline(
+            learning_candidate, assertions, verifications
+        )
+    else:
+        auto_pipeline = {
+            "schema": "video-canon-auto-pipeline-v1",
+            "status": "NOT_REQUESTED",
+            "candidates": [],
+            "promotion_commands": [],
+            "gaps": [],
+            "human_approval_required": False,
+            "world_lookup_performed": False,
+            "authoritative_write_performed": False,
+        }
+    quality["video_canon_auto_pipeline"] = auto_pipeline
+    counts["video_canon_auto_promotions_ready"] = len(auto_pipeline["promotion_commands"])
+    counts["video_canon_auto_gaps"] = len(auto_pipeline["gaps"])
     return quality
 
 

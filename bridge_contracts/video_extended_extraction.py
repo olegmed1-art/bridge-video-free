@@ -70,21 +70,94 @@ def _items(value: object) -> list[Mapping[str, Any]]:
 def _logic_relations(text: str) -> list[dict[str, str]]:
     """Preserve explicit logical links without filling either side."""
     low = text.casefold()
-    relations: list[dict[str, str]] = []
+    matches: list[tuple[int, int, str, str]] = []
     for relation_type, cues in _LOGIC_CUES.items():
         for cue in cues:
-            offset = low.find(cue)
-            if offset < 0:
-                continue
-            left = text[:offset].strip(" ,;:.-")
-            right = text[offset + len(cue):].strip(" ,;:.-")
-            relations.append({
-                "relation_type": relation_type,
-                "cue": cue,
-                "left_clause": left,
-                "right_clause": right,
-            })
+            pattern = re.compile(rf"(?<!\w){re.escape(cue)}(?!\w)", re.IGNORECASE)
+            matches.extend(
+                (match.start(), match.end(), relation_type, cue)
+                for match in pattern.finditer(low)
+            )
+    matches.sort(key=lambda row: (row[0], -(row[1] - row[0])))
+    # Prefer the longest cue when alternatives begin at the same character.
+    matches = [
+        row for index, row in enumerate(matches)
+        if index == 0 or row[0] != matches[index - 1][0]
+    ]
+    relations: list[dict[str, str]] = []
+    for index, (start, end, relation_type, cue) in enumerate(matches):
+        left_start = matches[index - 1][1] if index else 0
+        right_end = matches[index + 1][0] if index + 1 < len(matches) else len(text)
+        left_raw = text[left_start:start]
+        right_raw = text[end:right_end]
+        left_punctuation = max((left_raw.rfind(mark) for mark in ".!?;"), default=-1)
+        if left_punctuation >= 0:
+            left_raw = left_raw[left_punctuation + 1:]
+        right_positions = [right_raw.find(mark) for mark in ".!?;" if right_raw.find(mark) >= 0]
+        if right_positions:
+            right_raw = right_raw[:min(right_positions)]
+        left = left_raw.strip(" ,;:.-")
+        right = right_raw.strip(" ,;:.-")
+        if not left or not right:
+            continue
+        relations.append({
+            "relation_type": relation_type,
+            "cue": cue,
+            "left_clause": left,
+            "right_clause": right,
+        })
     return relations
+
+
+def _validated_explicit_explanations(
+    master: Mapping[str, Any], quality: Mapping[str, Any]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    transcripts = {
+        str(item.get("segment_id")): item
+        for item in _items(master.get("transcript")) if item.get("segment_id")
+    }
+    rules = {
+        str(item.get("stable_key") or item.get("canon_observation_id")): item
+        for item in _items(quality.get("canon_candidates"))
+        if str(item.get("classification") or "").startswith("RULE_")
+    }
+    valid: list[dict[str, Any]] = []
+    invalid: list[dict[str, Any]] = []
+    for item in _items(master.get("explanation_observations")):
+        rule_key = str(item.get("rule_stable_key") or "")
+        refs = _refs(item)
+        segments = [transcripts.get(ref) for ref in refs]
+        why_chain = item.get("why_chain")
+        cited_text = " ".join(str(segment.get("text") or "") for segment in segments if segment)
+        reason = None
+        if not rule_key or rule_key not in rules:
+            reason = "explanation does not resolve to a rule observation"
+        elif not refs or any(segment is None for segment in segments):
+            reason = "explanation references an unknown transcript segment"
+        elif not set(refs) <= set(_refs(rules[rule_key])):
+            reason = "explanation and rule evidence are not source-bound"
+        elif any(
+            str(segment.get("speaker_role") or segment.get("speaker_role_candidate") or "").casefold() != "teacher"
+            or float(segment.get("speaker_role_confidence") or 0) < 0.8
+            for segment in segments if segment
+        ):
+            reason = "explanation requires verified teacher speech"
+        elif not isinstance(why_chain, list) or not why_chain:
+            reason = "explanation why_chain missing"
+        elif any(not str(clause).strip() or str(clause).strip() not in cited_text for clause in why_chain):
+            reason = "explanation text is not present in cited transcript"
+        if reason:
+            invalid.append({
+                "stable_key": f"invalid-explanation:{rule_key or _digest(item)}",
+                "gap_type": "EXPLANATION_EVIDENCE_INVALID",
+                "rule_stable_key": rule_key or None,
+                "status": "OPEN",
+                "reason": reason,
+                "evidence_refs": refs,
+            })
+        else:
+            valid.append(dict(item))
+    return valid, invalid
 
 
 def _automatic_explanations(
@@ -171,9 +244,11 @@ def build_extended_extraction(
 
     # These three families require explicit upstream observations.  The
     # adapter never invents terminology, chronology or external agreement.
-    explicit_explanations = [dict(item) for item in _items(master.get("explanation_observations"))]
+    explicit_explanations, invalid_explanations = _validated_explicit_explanations(master, quality)
     automatic_explanations = _automatic_explanations(master, quality)
     explanations = explicit_explanations + automatic_explanations
+    for gap in invalid_explanations:
+        records.append(_record(job_id, "GAP_OR_CONFLICT", gap, "OPEN"))
 
     for field, kind in (
         ("terminology_observations", "SCHOOL_TERMINOLOGY"),
@@ -190,8 +265,18 @@ def build_extended_extraction(
         ))
 
     for raw in _items(master.get("dds_decision_evaluations")):
+        decision = raw.get("decision") if isinstance(raw.get("decision"), Mapping) else {}
+        full_deal = raw.get("full_deal_evidence") if isinstance(raw.get("full_deal_evidence"), Mapping) else {}
+        board_evidence = next((
+            item for item in _items(quality.get("verified_full_board_evidence"))
+            if item.get("board_evidence_id") == full_deal.get("board_evidence_id")
+        ), {})
+        logic_evidence = next((
+            item for item in _items(quality.get("source_bound_logic_evidence"))
+            if item.get("logic_candidate_id") == decision.get("logic_candidate_id")
+        ), {})
         try:
-            comparison = build_offline_dds_comparison(raw)
+            comparison = build_offline_dds_comparison(raw, board_evidence, logic_evidence)
         except VideoDDSComparisonError as exc:
             gap = {
                 "stable_key": f"dds-gap:{_digest(raw)}",
@@ -226,6 +311,8 @@ def build_extended_extraction(
         if item.get("rule_stable_key")
     }
     for item in _items(quality.get("canon_candidates")):
+        if not str(item.get("classification") or "").startswith("RULE_"):
+            continue
         rule_key = str(item.get("stable_key") or item.get("canon_observation_id") or "")
         if rule_key and rule_key not in explained_rule_keys:
             gap = {
