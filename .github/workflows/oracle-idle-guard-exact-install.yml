@@ -9,6 +9,7 @@ on:
       - 'ops/oracle_idle_state.sh'
       - 'ops/oracle_idle_stop_guard.py'
       - 'ops/install_oracle_idle_state_ocarun.sh'
+      - 'tests/test_universal_video_idle_candidate_contract.py'
 
 permissions:
   contents: read
