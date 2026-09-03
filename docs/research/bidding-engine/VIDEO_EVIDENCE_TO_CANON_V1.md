@@ -63,3 +63,13 @@ clauses around the teacher's connective. The target teachable logic is:
 
 Missing links remain explicit completeness gaps; plausible model-generated
 links are not evidence.
+
+## Offline DDS consequence comparison
+
+When a full board is independently verified, the analyzer can stage a
+`DDS_DECISION_COMPARISON` linking the player's source-bound logic and chosen
+play/defense action to DDS3 alternatives. It stores a hash and source references
+for the full deal, but never the deal or hidden hands in the student-visible
+payload. DDS is explicitly `offline_only`: it measures consequences after the
+fact and does not validate a bidding rule, become Canon evidence, or enter a
+live resolver request.
