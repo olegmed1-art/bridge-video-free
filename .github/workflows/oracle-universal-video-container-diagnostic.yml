@@ -1,0 +1,103 @@
+name: Oracle Universal Video Container Read-only Diagnostic
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-universal-video-container-diagnostic.yml'
+      - 'ops/oracle_universal_video_container_diagnostic.sh'
+      - 'ops/oracle-universal-video-container-diagnostic-requests/*.json'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/oracle-universal-video-container-diagnostic.yml'
+      - 'ops/oracle_universal_video_container_diagnostic.sh'
+      - 'ops/oracle-universal-video-container-diagnostic-requests/*.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('uv-container-diagnostic-pr-{0}', github.run_id) || 'oracle-instance-workload-mutation' }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Validate read-only diagnostic contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/oracle_universal_video_container_diagnostic.sh
+          ! grep -Eiq 'systemctl[[:space:]]+(start|stop|restart|reload|enable|disable)|docker[[:space:]]+(run|rm|stop|start|restart|kill)|curl|wget|scp' ops/oracle_universal_video_container_diagnostic.sh
+          grep -Fx "echo 'real_media_canary_run=false'" ops/oracle_universal_video_container_diagnostic.sh
+          grep -Fx "echo 'service_mutation=false'" ops/oracle_universal_video_container_diagnostic.sh
+
+  diagnose:
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Validate one diagnostic request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^ops/oracle-universal-video-container-diagnostic-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]]
+          REQUEST_FILE="${files[0]}" python - <<'PY'
+          import json, os, re
+          x=json.load(open(os.environ['REQUEST_FILE'], encoding='utf-8'))
+          assert set(x) == {'request_id','operation'}
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', str(x['request_id']))
+          assert x['operation'] == 'diagnose'
+          PY
+      - name: Resolve pinned SSH identity
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]]
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      - name: Read fixed container lifecycle fields
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' \
+            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
+            "$ORACLE_USER@$ORACLE_HOST" 'sudo -n /bin/bash -s' \
+            < ops/oracle_universal_video_container_diagnostic.sh | tee "$RUNNER_TEMP/container-diagnostic.txt"
+          grep -Fx 'real_media_canary_run=false' "$RUNNER_TEMP/container-diagnostic.txt"
+          grep -Fx 'service_mutation=false' "$RUNNER_TEMP/container-diagnostic.txt"
+          grep -Fx 'docker_mutation=false' "$RUNNER_TEMP/container-diagnostic.txt"
+          grep -Fx 'UV_CONTAINER_DIAGNOSTIC_PASS' "$RUNNER_TEMP/container-diagnostic.txt"
