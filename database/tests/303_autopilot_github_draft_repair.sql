@@ -99,6 +99,17 @@ BEGIN
         PERFORM autopilot.complete_task(
             repair_id, 'sql-draft-repair-worker-1', claimed.lease_epoch,
             'GITHUB_DRAFT_REPAIR_EVIDENCE', repeat('d', 64),
+            jsonb_set(valid_summary, '{broker_policy_version}', 'null'::jsonb)
+        );
+        RAISE EXCEPTION 'AUTOPILOT_DRAFT_REPAIR_NULL_POLICY_ACCEPTED';
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM NOT LIKE '%AUTOPILOT_DRAFT_REPAIR_EVIDENCE_INVALID%' THEN RAISE; END IF;
+    END;
+
+    BEGIN
+        PERFORM autopilot.complete_task(
+            repair_id, 'sql-draft-repair-worker-1', claimed.lease_epoch,
+            'GITHUB_DRAFT_REPAIR_EVIDENCE', repeat('d', 64),
             jsonb_set(valid_summary, '{branch_name}', '"autopilot/repair/forged0000000000"'::jsonb)
         );
         RAISE EXCEPTION 'AUTOPILOT_DRAFT_REPAIR_FORGED_BRANCH_ACCEPTED';

@@ -92,6 +92,7 @@ jobs:
           [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one activation request' >&2; exit 1; }
           REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
+          import hashlib
           import os
           import re
 
@@ -100,6 +101,8 @@ jobs:
               'request_id', 'action', 'target_host', 'source_revision',
               'activation_scope', 'expected_db_user', 'no_instance_stop',
               'neon_min_cu', 'neon_max_cu', 'runtime_connection_limit',
+              'broker_url', 'broker_source_sha', 'broker_artifact_sha256',
+              'broker_policy_sha256', 'broker_provenance_sha256',
           }
           assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', request['request_id'])
           assert request['action'] == 'activate_shadow'
@@ -111,8 +114,32 @@ jobs:
           assert request['neon_min_cu'] == 0.25
           assert request['neon_max_cu'] == 8
           assert request['runtime_connection_limit'] == 4
+          assert re.fullmatch(
+              r'https://bridge-school-autopilot-[a-z0-9]+-olegmed1-4368s-projects'
+              r'\.vercel\.app/v1/github/draft-repair', request['broker_url']
+          )
+          assert re.fullmatch(r'[0-9a-f]{40}', request['broker_source_sha'])
+          for key in (
+              'broker_artifact_sha256', 'broker_policy_sha256',
+              'broker_provenance_sha256',
+          ):
+              assert re.fullmatch(r'[0-9a-f]{64}', request[key])
+          statement = {
+              'artifact_sha256': request['broker_artifact_sha256'],
+              'policy_sha256': request['broker_policy_sha256'],
+              'policy_version': 'physical-no-merge-v1',
+              'source_sha': request['broker_source_sha'],
+          }
+          assert request['broker_provenance_sha256'] == hashlib.sha256(
+              json.dumps(statement, sort_keys=True, separators=(',', ':')).encode()
+          ).hexdigest()
           print(f"request_id={request['request_id']}")
           print(f"source_revision={request['source_revision']}")
+          print(f"broker_url={request['broker_url']}")
+          print(f"broker_source_sha={request['broker_source_sha']}")
+          print(f"broker_artifact_sha256={request['broker_artifact_sha256']}")
+          print(f"broker_policy_sha256={request['broker_policy_sha256']}")
+          print(f"broker_provenance_sha256={request['broker_provenance_sha256']}")
           PY
 
       - name: Verify pinned Oracle identity and SSH access
@@ -153,13 +180,18 @@ jobs:
         shell: bash
         env:
           SOURCE_REVISION: ${{ steps.request.outputs.source_revision }}
+          BROKER_URL: ${{ steps.request.outputs.broker_url }}
+          BROKER_SOURCE_SHA: ${{ steps.request.outputs.broker_source_sha }}
+          BROKER_ARTIFACT_SHA256: ${{ steps.request.outputs.broker_artifact_sha256 }}
+          BROKER_POLICY_SHA256: ${{ steps.request.outputs.broker_policy_sha256 }}
+          BROKER_PROVENANCE_SHA256: ${{ steps.request.outputs.broker_provenance_sha256 }}
         run: |
           set -euo pipefail
           proof="$RUNNER_TEMP/oracle-autopilot-activation-proof.log"
           ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n env EXPECTED_REVISION='$SOURCE_REVISION' EXPECTED_UNIT_SHA256='$EXPECTED_UNIT_SHA256' bash -s" \
+            "sudo -n env EXPECTED_REVISION='$SOURCE_REVISION' EXPECTED_UNIT_SHA256='$EXPECTED_UNIT_SHA256' EXPECTED_BROKER_URL='$BROKER_URL' EXPECTED_BROKER_SOURCE_SHA='$BROKER_SOURCE_SHA' EXPECTED_BROKER_ARTIFACT_SHA256='$BROKER_ARTIFACT_SHA256' EXPECTED_BROKER_POLICY_SHA256='$BROKER_POLICY_SHA256' EXPECTED_BROKER_PROVENANCE_SHA256='$BROKER_PROVENANCE_SHA256' bash -s" \
             <<'REMOTE' | tee "$proof"
           set -Eeuo pipefail
           service=school-autopilot-shadow.service
@@ -175,14 +207,37 @@ jobs:
           [[ "$(cat "$root/current/SOURCE_REVISION")" == "$EXPECTED_REVISION" ]]
           [[ "$(stat -c '%U:%G:%a' "$root/autopilot-shadow.env")" == root:root:600 ]]
           [[ "$(stat -c '%U:%G:%a' "$root/autopilot-broker.env")" == root:root:600 ]]
-          grep -Eq '^AUTOPILOT_TOKEN_BROKER_EXPECTED_SOURCE_SHA="?[0-9a-f]{40}"?$' \
-            "$root/autopilot-broker.env"
-          for pin in \
-            AUTOPILOT_TOKEN_BROKER_EXPECTED_ARTIFACT_SHA256 \
-            AUTOPILOT_TOKEN_BROKER_EXPECTED_POLICY_SHA256 \
-            AUTOPILOT_TOKEN_BROKER_EXPECTED_PROVENANCE_SHA256; do
-            grep -Eq "^${pin}=\"?[0-9a-f]{64}\"?$" "$root/autopilot-broker.env"
-          done
+          set -a
+          source "$root/autopilot-broker.env"
+          set +a
+          [[ "$AUTOPILOT_TOKEN_BROKER_URL" == "$EXPECTED_BROKER_URL" ]]
+          [[ "$AUTOPILOT_TOKEN_BROKER_EXPECTED_SOURCE_SHA" == "$EXPECTED_BROKER_SOURCE_SHA" ]]
+          [[ "$AUTOPILOT_TOKEN_BROKER_EXPECTED_ARTIFACT_SHA256" == "$EXPECTED_BROKER_ARTIFACT_SHA256" ]]
+          [[ "$AUTOPILOT_TOKEN_BROKER_EXPECTED_POLICY_SHA256" == "$EXPECTED_BROKER_POLICY_SHA256" ]]
+          [[ "$AUTOPILOT_TOKEN_BROKER_EXPECTED_PROVENANCE_SHA256" == "$EXPECTED_BROKER_PROVENANCE_SHA256" ]]
+          broker_health="${AUTOPILOT_TOKEN_BROKER_URL%/v1/github/draft-repair}/healthz"
+          health_file="$(mktemp /var/tmp/autopilot-activation-health.XXXXXXXX)"
+          trap 'rm -f -- "$health_file"' EXIT
+          curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
+            -H "X-Vercel-Protection-Bypass: $AUTOPILOT_VERCEL_BYPASS_SECRET" \
+            "$broker_health" -o "$health_file"
+          BROKER_HEALTH_FILE="$health_file" python3 - <<'PY'
+          import json, os
+          payload = json.load(open(os.environ['BROKER_HEALTH_FILE'], encoding='utf-8'))
+          expected = {
+              'source_revision': os.environ['EXPECTED_BROKER_SOURCE_SHA'],
+              'artifact_sha256': os.environ['EXPECTED_BROKER_ARTIFACT_SHA256'],
+              'policy_sha256': os.environ['EXPECTED_BROKER_POLICY_SHA256'],
+              'provenance_sha256': os.environ['EXPECTED_BROKER_PROVENANCE_SHA256'],
+              'broker_policy_version': 'physical-no-merge-v1',
+              'source_attested': True,
+              'artifact_attested': True,
+              'preview_only': True,
+              'production_mutations_enabled': False,
+              'github_token_broker_enabled': True,
+          }
+          assert all(payload.get(key) == value for key, value in expected.items())
+          PY
           [[ -f "$unit" ]]
           [[ "$(sha256sum "$unit" | awk '{print $1}')" == "$EXPECTED_UNIT_SHA256" ]]
           grep -Fx 'User=school-autopilot' "$unit" >/dev/null
