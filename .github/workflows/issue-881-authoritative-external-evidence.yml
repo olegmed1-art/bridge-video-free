@@ -136,7 +136,8 @@ jobs:
           recovery_sha=''
           recovery_remote_file=''
 
-          pr_number=991
+          root_pr_number=991
+          pr_number=1070
           pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
           reviewed_sha="$(jq -r '.head.sha' <<<"$pr_json")"
           [[ "$reviewed_sha" =~ ^[0-9a-f]{40}$ ]]
@@ -153,19 +154,26 @@ jobs:
           )
 
           verify_live_gate(){
-            local live_head live_state main_sha review_count approval_count threads_json blocker_count runs_json workflow_name latest_state
+            local live_head live_state main_sha root_pr_json root_merge_sha review_count approval_count threads_json blocker_count runs_json workflow_name latest_state
             pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
             live_state="$(jq -r '.state' <<<"$pr_json")"
             [[ "$live_state" == 'closed' && "$(jq -r '.merged' <<<"$pr_json")" == true ]] \
-              || { echo 'PR #991 is not merged' >&2; return 1; }
+              || { echo 'Canary gate PR #1070 is not merged' >&2; return 1; }
             live_head="$(jq -r '.head.sha' <<<"$pr_json")"
             [[ "$live_head" == "$reviewed_sha" ]] \
-              || { echo 'Reviewed PR #991 head changed unexpectedly' >&2; return 1; }
+              || { echo 'Reviewed canary gate head changed unexpectedly' >&2; return 1; }
             main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
             [[ "$main_sha" == "$EXACT_SHA" && "$(jq -r '.merge_commit_sha' <<<"$pr_json")" == "$EXACT_SHA" ]] \
-              || { echo 'Exact SHA is not the immutable current main merge of PR #991' >&2; return 1; }
+              || { echo 'Exact SHA is not the immutable current main merge of canary gate PR #1070' >&2; return 1; }
             git merge-base --is-ancestor "$reviewed_sha" "$EXACT_SHA" \
-              || { echo 'Reviewed PR #991 head is not an ancestor of exact main' >&2; return 1; }
+              || { echo 'Reviewed canary gate head is not an ancestor of exact main' >&2; return 1; }
+            root_pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$root_pr_number")"
+            [[ "$(jq -r '.merged' <<<"$root_pr_json")" == true ]] \
+              || { echo 'Root Autopilot PR #991 is not merged' >&2; return 1; }
+            root_merge_sha="$(jq -r '.merge_commit_sha' <<<"$root_pr_json")"
+            [[ "$root_merge_sha" =~ ^[0-9a-f]{40}$ ]]
+            git merge-base --is-ancestor "$root_merge_sha" "$EXACT_SHA" \
+              || { echo 'Root Autopilot merge is not an ancestor of exact main' >&2; return 1; }
 
             review_count="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$pr_number/reviews" \
               --jq ".[] | select(.commit_id == \"$reviewed_sha\" and (.user.login | startswith(\"chatgpt-codex-connector\")) and (.state == \"COMMENTED\" or .state == \"APPROVED\")) | .id" | wc -l)"
