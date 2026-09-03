@@ -5,12 +5,22 @@ fail(){ echo "ERROR: $*" >&2; exit 1; }
 [[ $(id -u) -eq 0 ]] || fail 'must run as root'
 : "${SOURCE_FILE:?SOURCE_FILE is required}"
 : "${SOURCE_SHA256:?SOURCE_SHA256 is required}"
+: "${AUTHORIZER_FILE:?AUTHORIZER_FILE is required}"
+: "${AUTHORIZER_SHA256:?AUTHORIZER_SHA256 is required}"
 [[ "$SOURCE_FILE" == /tmp/oracle_idle_state.sh ]] || fail 'unexpected source path'
+[[ "$AUTHORIZER_FILE" == /tmp/oracle_idle_stop_guard.py ]] || fail 'unexpected authorizer path'
 [[ "$SOURCE_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail 'invalid source sha256'
+[[ "$AUTHORIZER_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail 'invalid authorizer sha256'
 id ocarun >/dev/null 2>&1 || fail 'ocarun user does not exist'
 command -v visudo >/dev/null || fail 'visudo is required'
+command -v python3 >/dev/null || fail 'python3 is required'
 [[ "$(sha256sum "$SOURCE_FILE" | awk '{print $1}')" == "$SOURCE_SHA256" ]] || fail 'source digest mismatch'
+[[ "$(sha256sum "$AUTHORIZER_FILE" | awk '{print $1}')" == "$AUTHORIZER_SHA256" ]] || fail 'authorizer digest mismatch'
 bash -n "$SOURCE_FILE"
+python3 - "$AUTHORIZER_FILE" <<'PY'
+import ast, pathlib, sys
+ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"), filename=sys.argv[1])
+PY
 grep -Fq 'ORACLE_IDLE_STATE=IDLE|BUSY|UNKNOWN' "$SOURCE_FILE" || fail 'unexpected classifier contract'
 
 readonly TARGET='/usr/local/sbin/oracle-idle-state'
@@ -42,6 +52,7 @@ tmp_sudoers_backup=''
 restore_probe=''
 sudoers_restore_probe=''
 proof='/tmp/oracle-idle-state-install-proof.txt'
+authorizer_stderr='/tmp/oracle-idle-state-install-authorizer.stderr'
 promoted=0
 committed=0
 
@@ -115,13 +126,12 @@ cleanup_and_rollback() {
     fi
   fi
   rm -f "$tmp_sudoers" "$tmp_target" "$tmp_backup" "$tmp_sudoers_backup" \
-    "$restore_probe" "$sudoers_restore_probe" "$SOURCE_FILE" "$proof"
+    "$restore_probe" "$sudoers_restore_probe" "$SOURCE_FILE" "$AUTHORIZER_FILE" \
+    "$proof" "$authorizer_stderr"
   exit "$rc"
 }
 trap cleanup_and_rollback EXIT
 
-# Persist an exact, non-sudoers-included backup of the currently installed
-# executable before any promotion. Reuse is allowed only by matching digest.
 if [[ -e "$BACKUP" || -L "$BACKUP" ]]; then
   [[ -f "$BACKUP" && ! -L "$BACKUP" ]] || fail 'rollback backup path is unsafe'
   [[ "$(sha256sum "$BACKUP" | awk '{print $1}')" == "$old_sha" ]] || fail 'rollback backup digest mismatch'
@@ -134,8 +144,6 @@ else
   tmp_backup=''
 fi
 
-# Persist the pre-install sudoers state outside /etc/sudoers.d so the backup
-# cannot itself grant privileges. If the file was absent, absence is the state.
 if (( old_sudoers_present == 1 )); then
   if [[ -e "$SUDOERS_BACKUP" || -L "$SUDOERS_BACKUP" ]]; then
     [[ -f "$SUDOERS_BACKUP" && ! -L "$SUDOERS_BACKUP" ]] || fail 'sudoers rollback backup path is unsafe'
@@ -151,8 +159,6 @@ if (( old_sudoers_present == 1 )); then
   fi
 fi
 
-# Exercise the exact executable restore primitive against a sacrificial path on
-# the target filesystem before promotion.
 restore_probe="/usr/local/sbin/.oracle-idle-state-restore-probe.$$"
 [[ ! -e "$restore_probe" && ! -L "$restore_probe" ]] || fail 'restore probe path collision'
 atomic_copy_executable_verified "$BACKUP" "$old_sha" "$restore_probe" || fail 'rollback restore probe failed'
@@ -161,9 +167,6 @@ rm -f "$restore_probe"
 restore_probe=''
 printf 'ORACLE_IDLE_ROLLBACK_GUARD_PROBE=PASS\n'
 
-# Exercise the exact sudoers restore primitive on a sacrificial path. For an
-# originally absent sudoers file, first create a valid dummy and prove restore
-# removes it; for a present one, prove exact digest/mode/syntax restoration.
 sudoers_restore_probe="/etc/sudoers.d/oracle-idle-state-ocarun-restore-probe-$$"
 [[ ! -e "$sudoers_restore_probe" && ! -L "$sudoers_restore_probe" ]] || fail 'sudoers restore probe path collision'
 if (( old_sudoers_present == 0 )); then
@@ -182,8 +185,6 @@ fi
 sudoers_restore_probe=''
 printf 'ORACLE_IDLE_ROLLBACK_SUDOERS_PROBE=PASS\n'
 
-# Stage the exact candidate on the same filesystem and atomically rename it
-# into place only after source, backup and restore validation have passed.
 tmp_target="$(mktemp --tmpdir=/usr/local/sbin .oracle-idle-state.install.XXXXXX)"
 install -o root -g root -m 0755 "$SOURCE_FILE" "$tmp_target"
 [[ "$(sha256sum "$tmp_target" | awk '{print $1}')" == "$SOURCE_SHA256" ]] || fail 'staged target digest mismatch'
@@ -211,8 +212,36 @@ mapfile -t lines < "$proof"
 [[ "${lines[2]}" =~ ^ORACLE_IDLE_OBSERVED_AT_EPOCH=[0-9]+$ ]] || fail 'classifier observation timestamp invalid'
 [[ "${lines[3]}" =~ ^ORACLE_IDLE_REASON=[A-Za-z0-9_./,:=+-]+$ ]] || fail 'classifier reason invalid'
 [[ "${lines[4]}" =~ ^ORACLE_IDLE_STATE=(IDLE|BUSY|UNKNOWN)$ ]] || fail 'classifier state invalid'
+state="${lines[4]#ORACLE_IDLE_STATE=}"
 
-# All post-promotion validation passed. Disable rollback only now.
+# The exact STOP authorizer is part of the installation transaction. A proof
+# that is syntactically valid but stale, contradictory, or otherwise rejected
+# must roll the promoted guard and sudoers state back before this script exits.
+set +e
+authorization="$(python3 "$AUTHORIZER_FILE" --proof "$proof" --max-age-seconds 30 --max-duration-seconds 30 --max-future-skew-seconds 5 2>"$authorizer_stderr")"
+authorization_rc=$?
+set -e
+[[ ! -s "$authorizer_stderr" ]] || { cat "$authorizer_stderr" >&2; fail 'exact authorizer emitted stderr'; }
+printf '%s\n' "$authorization"
+case "$state" in
+  IDLE)
+    [[ $authorization_rc -eq 0 ]] || fail 'exact IDLE authorizer rejected proof'
+    [[ "$authorization" == $'ORACLE_STOP_AUTHORIZED=YES\nORACLE_STOP_AUTHORIZATION_REASON=fresh_exact_idle' ]] || fail 'exact IDLE authorization mismatch'
+    ;;
+  BUSY)
+    [[ $authorization_rc -ne 0 ]] || fail 'BUSY unexpectedly authorized STOP'
+    [[ "$authorization" == $'ORACLE_STOP_AUTHORIZED=NO\nORACLE_STOP_AUTHORIZATION_REASON=state_busy_forbids_stop' ]] || fail 'BUSY refusal mismatch'
+    ;;
+  UNKNOWN)
+    [[ $authorization_rc -ne 0 ]] || fail 'UNKNOWN unexpectedly authorized STOP'
+    [[ "$authorization" == $'ORACLE_STOP_AUTHORIZED=NO\nORACLE_STOP_AUTHORIZATION_REASON=state_unknown_forbids_stop' ]] || fail 'UNKNOWN refusal mismatch'
+    ;;
+  *) fail 'unreachable classifier state' ;;
+esac
+
+authorizer_sha_readback="$(sha256sum "$AUTHORIZER_FILE" | awk '{print $1}')"
+[[ "$authorizer_sha_readback" == "$AUTHORIZER_SHA256" ]] || fail 'authorizer changed during transaction'
+
 committed=1
 printf 'ORACLE_IDLE_BACKUP_PATH=%s\n' "$BACKUP"
 printf 'ORACLE_IDLE_BACKUP_SHA256=%s\n' "$old_sha"
@@ -222,5 +251,6 @@ if (( old_sudoers_present == 1 )); then
 else
   printf 'ORACLE_IDLE_SUDOERS_BACKUP_STATE=ABSENT\n'
 fi
+printf 'ORACLE_IDLE_AUTHORIZER_SHA256=%s\n' "$AUTHORIZER_SHA256"
 printf 'ORACLE_IDLE_INSTALLED_SHA256=%s\n' "$SOURCE_SHA256"
 echo ORACLE_IDLE_STATE_OCARUN_INSTALL_PASS
