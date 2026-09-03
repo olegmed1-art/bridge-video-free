@@ -174,7 +174,7 @@ BEGIN
   bad_out := jsonb_set(out,'{artifact_manifest}',(out->'artifact_manifest') #- '{artifacts,0,modified_time}');
   bad_out := jsonb_set(bad_out,'{artifact_manifest_sha256}',to_jsonb(encode(public.digest(convert_to(video_queue.canonical_json_text(bad_out->'artifact_manifest'),'UTF8'),'sha256'),'hex')));
   bad_out := jsonb_set(bad_out,'{terminal_receipt,artifact_manifest_sha256}',bad_out->'artifact_manifest_sha256');
-  receipt_core := bad_out->'terminal_receipt' - 'evidence_sha256';
+  receipt_core := (bad_out->'terminal_receipt') - 'evidence_sha256'::text;
   evidence_sha := encode(public.digest(convert_to(video_queue.canonical_json_text(receipt_core),'UTF8'),'sha256'),'hex');
   bad_out := jsonb_set(bad_out,'{terminal_receipt,evidence_sha256}',to_jsonb(evidence_sha));
   bad_out := jsonb_set(bad_out,'{terminal_evidence_sha256}',to_jsonb(evidence_sha));
