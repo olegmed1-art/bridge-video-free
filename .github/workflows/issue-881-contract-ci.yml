@@ -9,6 +9,8 @@ on:
       - 'ops/validate_video_queue_dsn.py'
       - 'database/migrations/0056_universal_video_queue.sql'
       - 'database/migrations/0057_universal_video_canary_review_gate.sql'
+      - 'database/migrations/0058_universal_video_terminal_v2_gate.sql'
+      - 'database/migrations/0058_universal_video_terminal_v2_gate/**'
       - 'database/rollbacks/0057_universal_video_canary_review_gate.sql'
       - 'database/tests/041_universal_video_queue.sql'
       - 'database/tests/042_issue_881_canary_gate.sql'
@@ -63,7 +65,7 @@ jobs:
           ref: ${{ env.EXACT_RUNTIME_SHA }}
           persist-credentials: false
       - run: test "$(git rev-parse HEAD)" = "$EXACT_RUNTIME_SHA"
-      - name: Install exact queue schema
+      - name: Install exact queue schema through historical and forward migrations
         run: |
           psql -v ON_ERROR_STOP=1 <<'SQL'
           CREATE ROLE bridge_school_reader NOLOGIN;
@@ -74,6 +76,7 @@ jobs:
           SQL
           psql -v ON_ERROR_STOP=1 -f database/migrations/0056_universal_video_queue.sql
           psql -v ON_ERROR_STOP=1 -f database/migrations/0057_universal_video_canary_review_gate.sql
+          psql -v ON_ERROR_STOP=1 -f database/migrations/0058_universal_video_terminal_v2_gate.sql
       - name: Prove no false PASS and no automatic batch release
         run: psql -v ON_ERROR_STOP=1 -f database/tests/042_issue_881_canary_gate.sql
       - name: Prove bounded data-preserving rollback
