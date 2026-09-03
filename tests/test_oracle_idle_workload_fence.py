@@ -46,19 +46,19 @@ MASS_OPERATOR_GROUP = (
 )
 
 ORACLE_V2_GROUP = (
-    "${{ github.event_name == 'issue_comment' && "
-    "github.event.comment.user.login == github.repository_owner && "
-    "github.event.comment.body == '/oracle-v2 diagnose-ben' && "
-    "format('oracle-operator-v2-diagnose-{0}', github.run_id) || "
-    "github.event_name == 'issue_comment' && "
-    "github.event.comment.user.login == github.repository_owner && "
-    "contains(fromJSON('[\"/oracle-v2 rollout-worker\","
+    "${{ github.event_name == 'issue_comment' &&\n"
+    "    github.event.comment.user.login == github.repository_owner &&\n"
+    "    github.event.comment.body == '/oracle-v2 diagnose-ben' &&\n"
+    "    format('oracle-operator-v2-diagnose-{0}', github.run_id) ||\n"
+    "    github.event_name == 'issue_comment' &&\n"
+    "    github.event.comment.user.login == github.repository_owner &&\n"
+    "    contains(fromJSON('[\"/oracle-v2 rollout-worker\","
     "\"/oracle-v2 rollout-dds3-runtime\",\"/oracle-v2 canary-worlds\","
     "\"/oracle-v2 rollout-ben\",\"/oracle-v2 canary-ben\","
     "\"/oracle-v2 canary-ben-dds3\","
-    "\"/oracle-v2 benchmark-ben-100-500\"]'), github.event.comment.body) && "
-    "'oracle-instance-workload-mutation' || "
-    "format('oracle-operator-v2-noop-{0}', github.run_id) }}"
+    "\"/oracle-v2 benchmark-ben-100-500\"]'), github.event.comment.body) &&\n"
+    "    'oracle-instance-workload-mutation' ||\n"
+    "    format('oracle-operator-v2-noop-{0}', github.run_id) }}"
 )
 
 EXPECTED_PRODUCERS = {
