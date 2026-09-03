@@ -239,24 +239,15 @@ jobs:
           }
           assert all(payload.get(key) == value for key, value in expected.items())
           PY
-          "$release/.venv/bin/python" - <<'PY'
+          "$root/.venv/bin/python" - <<'PY'
           import os
           import psycopg
 
-          expected = {
-              '0316_autopilot_broker_receipt_attestation':
-                  '8eb7d2bc23e72c2dcfdb6ef0798f9d65caeecd3f13d709f017a5398355819cba',
-              '0317_autopilot_broker_policy_null_guard':
-                  '737359a67dec22fa97a9c3e23a84fa8f4b57adda5b2b73b9a810b0ade07479b4',
-          }
           with psycopg.connect(os.environ['AUTOPILOT_DATABASE_URL']) as connection:
               with connection.cursor() as cursor:
-                  cursor.execute(
-                      "SELECT migration_key, checksum FROM public.schema_migration "
-                      "WHERE migration_key = ANY(%s)", (list(expected),)
-                  )
-                  observed = dict(cursor.fetchall())
-          assert observed == expected
+                  cursor.execute("SELECT autopilot.verify_broker_schema()")
+                  row = cursor.fetchone()
+          assert row == (True,)
           PY
           [[ -f "$unit" ]]
           [[ "$(sha256sum "$unit" | awk '{print $1}')" == "$EXPECTED_UNIT_SHA256" ]]
@@ -384,9 +375,6 @@ jobs:
           }
           assert all(effective.get(key) == value for key, value in expected.items())
           PY
-          [[ -z "$previous_broker_env" ]] || rm -f -- "$previous_broker_env"
-          previous_broker_env=''
-
           if [[ "$activated_here" == 1 ]]; then
             active_since="$(systemctl show -p ActiveEnterTimestamp --value "$service")"
             test -n "$active_since"
@@ -410,6 +398,8 @@ jobs:
           else
             echo 'AUTOPILOT_DIAG_OBSERVER_RESTORED=not-required'
           fi
+          [[ -z "$previous_broker_env" ]] || rm -f -- "$previous_broker_env"
+          previous_broker_env=''
           trap - EXIT
           echo 'AUTOPILOT_SHADOW_ACTIVATION_PASS'
           echo 'AUTOPILOT_RUNTIME_MODE=SHADOW'
