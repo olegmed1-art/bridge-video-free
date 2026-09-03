@@ -299,13 +299,16 @@ jobs:
           activated_here=0
           existing_restarted=0
           previous_broker_env=''
+          previous_snapshot_dir=''
           previous_release=''
           if [[ "$active:$enabled" == active:enabled ]]; then
             previous_pid="$(systemctl show -p MainPID --value "$service")"
             [[ "$previous_pid" =~ ^[1-9][0-9]*$ ]]
             previous_release="$(readlink -f "/proc/$previous_pid/cwd")"
             [[ "$previous_release" =~ ^$root/releases/[0-9a-f]{40}$ ]]
-            previous_broker_env="$(mktemp "$root/runtime/activation-rollback-env.XXXXXXXX")"
+            previous_snapshot_dir="$(mktemp -d /var/tmp/autopilot-activation-rollback.XXXXXXXX)"
+            [[ "$(stat -c '%U:%G:%a' "$previous_snapshot_dir")" == root:root:700 ]]
+            previous_broker_env="$previous_snapshot_dir/broker.env"
             PROCESS_ENVIRON="/proc/$previous_pid/environ" \
               TARGET_ENV="$previous_broker_env" python3 - <<'PY'
           import os, shlex
@@ -322,10 +325,11 @@ jobs:
               'AUTOPILOT_VERCEL_BYPASS_SECRET',
           }
           assert required <= values.keys()
-          with open(os.environ['TARGET_ENV'], 'w', encoding='utf-8') as output:
+          flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+          descriptor = os.open(os.environ['TARGET_ENV'], flags, 0o600)
+          with os.fdopen(descriptor, 'w', encoding='utf-8') as output:
               for key in sorted(values):
                   output.write(f'{key}={shlex.quote(values[key])}\n')
-          os.chmod(os.environ['TARGET_ENV'], 0o600)
           PY
           fi
           observer_activated_here=0
@@ -376,6 +380,7 @@ jobs:
             fi
             if [[ "$rollback_failed" == 0 && -n "$previous_broker_env" ]]; then
               rm -f -- "$previous_broker_env"
+              rmdir -- "$previous_snapshot_dir"
             fi
             exit "$rc"
           }
@@ -453,7 +458,9 @@ jobs:
             echo 'AUTOPILOT_DIAG_OBSERVER_RESTORED=not-required'
           fi
           [[ -z "$previous_broker_env" ]] || rm -f -- "$previous_broker_env"
+          [[ -z "$previous_snapshot_dir" ]] || rmdir -- "$previous_snapshot_dir"
           previous_broker_env=''
+          previous_snapshot_dir=''
           trap - EXIT
           echo 'AUTOPILOT_SHADOW_ACTIVATION_PASS'
           echo 'AUTOPILOT_RUNTIME_MODE=SHADOW'

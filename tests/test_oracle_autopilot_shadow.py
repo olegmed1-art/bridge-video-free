@@ -1026,6 +1026,8 @@ def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():
     assert "response.read(32_769)" in workflow
     assert "AUTOPILOT_SHADOW_EXISTING_STATE_RESTORED" in workflow
     assert "AUTOPILOT_SHADOW_EXISTING_STATE_ROLLBACK_FAILED_SNAPSHOT_RETAINED" in workflow
+    assert "mktemp -d /var/tmp/autopilot-activation-rollback" in workflow
+    assert "os.O_EXCL | os.O_NOFOLLOW" in workflow
     assert 'ln -sfn "$previous_release" "$root/current"' in workflow
     assert workflow.index("AUTOPILOT_DIAG_OBSERVER_RESTORED=not-required") < workflow.index(
         "previous_broker_env=''", workflow.index("AUTOPILOT_DIAG_OBSERVER_RESTORED=not-required")
