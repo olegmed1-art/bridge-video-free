@@ -69,7 +69,9 @@ jobs:
           grep -F "github.repository == 'olegmed1-art/bridge-video-free'" "$workflow"
           grep -F 'verify_live_gate(){' "$workflow"
           test "$(grep -c '^[[:space:]]*verify_live_gate$' "$workflow")" -eq 2
-          grep -F 'pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/1062")"' "$workflow"
+          grep -F 'pr_number=991' "$workflow"
+          grep -F 'main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq' "$workflow"
+          grep -F 'PR #991 is not merged' "$workflow"
           grep -F 'git/ref/heads/main" --jq' "$workflow"
           grep -F 'compare/$main_sha...$base_sha"' "$workflow"
           retired=.github/workflows/oracle-universal-video-container-evidence.yml
