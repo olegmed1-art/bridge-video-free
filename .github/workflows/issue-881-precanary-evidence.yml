@@ -69,7 +69,9 @@ jobs:
           grep -F "github.repository == 'olegmed1-art/bridge-video-free'" "$workflow"
           grep -F 'verify_live_gate(){' "$workflow"
           test "$(grep -c '^[[:space:]]*verify_live_gate$' "$workflow")" -eq 2
-          grep -F 'pulls/1062" --jq' "$workflow"
+          grep -F 'pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/1062")"' "$workflow"
+          grep -F 'git/ref/heads/main" --jq' "$workflow"
+          grep -F 'compare/$main_sha...$base_sha"' "$workflow"
           retired=.github/workflows/oracle-universal-video-container-evidence.yml
           grep -F 'UNIVERSAL_VIDEO_LEGACY_CONTAINER_EVIDENCE_RETIRED=true' "$retired"
           ! grep -E 'workflow[_]dispatch:' "$retired"
