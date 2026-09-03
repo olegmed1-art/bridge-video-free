@@ -67,6 +67,7 @@ def test_legacy_job_without_request_commit_remains_unattested(monkeypatch):
 
 def test_resident_status_copies_only_worker_bound_attestations(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("UNIVERSAL_VIDEO_SOURCE_COMMIT", "a" * 40)
+    monkeypatch.setenv("UNIVERSAL_VIDEO_RESIDENT_ID", "source")
     spool = tmp_path / "spool"
     for name in ("inbox", "running", "done", "failed", "results"):
         (spool / name).mkdir(parents=True)
@@ -82,12 +83,18 @@ def test_resident_status_copies_only_worker_bound_attestations(monkeypatch, tmp_
     assert status["schema"] == "universal-video-resident-status-v2"
     assert status["active_jobs"] == []
     assert status["installed_runtime_commit"] == "a" * 40
+    assert status["resident_id"] == "source"
+    assert status["process_id"] > 0
+    assert status["process_started_at_unix"] <= status["observed_at_unix"]
+    assert status["process_start_ticks"] > 0
+    assert len(status["process_nonce"]) == 32
     assert status["job_attestations"] == [attestation]
     assert json.loads(status_path.read_text(encoding="utf-8")) == status
 
 
 def test_resident_status_reports_active_job_fail_closed(monkeypatch, tmp_path: Path):
     monkeypatch.setenv("UNIVERSAL_VIDEO_SOURCE_COMMIT", "a" * 40)
+    monkeypatch.setenv("UNIVERSAL_VIDEO_RESIDENT_ID", "source")
     spool = tmp_path / "spool"
     for name in ("inbox", "running", "done", "failed", "results"):
         (spool / name).mkdir(parents=True)
@@ -102,6 +109,7 @@ def test_systemd_grants_only_resident_status_runtime_directory():
     assert "RuntimeDirectory=bridge-school" in UNIT
     assert "RuntimeDirectoryMode=0750" in UNIT
     assert "UNIVERSAL_VIDEO_STATUS_PATH=/run/bridge-school/universal-video-status.json" in UNIT
+    assert "UNIVERSAL_VIDEO_RESIDENT_ID=source" in UNIT
     assert "ReadWritePaths=/run/bridge-school" in UNIT
 
 
@@ -109,6 +117,11 @@ def test_resident_publishes_status_before_accepting_first_job() -> None:
     worker = (ROOT / "universal_video/spool_worker.py").read_text(encoding="utf-8")
     start = worker.index("def run_forever")
     run_forever = worker[start:worker.index("\ndef main()", start)]
-    first_status = run_forever.index("write_resident_status(spool_root, status_path)")
+    first_status = run_forever.index(
+        "write_resident_status(spool_root, status_path, **status_identity)"
+    )
     first_process = run_forever.index("processed = process_one(spool_root)")
     assert first_status < first_process
+    assert "process_nonce = secrets.token_hex(16)" in run_forever
+    assert "process_start_ticks = _process_start_ticks(process_id)" in run_forever
+    assert '"resident_id": resident_id' in run_forever

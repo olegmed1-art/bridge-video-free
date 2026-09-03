@@ -18,6 +18,9 @@ DECLARE
     v_third_token uuid;
     v_state text;
     v_released integer;
+    v_stable_job_key text;
+    v_manifest jsonb;
+    v_manifest_sha text;
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM schema_migration WHERE migration_key='0056_universal_video_queue') THEN
         RAISE EXCEPTION 'video queue migration is not registered';
@@ -98,6 +101,32 @@ BEGIN
     EXCEPTION WHEN raise_exception THEN
         IF SQLERRM <> 'VIDEO_QUEUE_LEASE_LOST' THEN RAISE; END IF;
     END;
+    SELECT stable_job_key INTO v_stable_job_key
+      FROM video_queue.job
+     WHERE job_id=v_job;
+    v_manifest := jsonb_build_object(
+      'schema_version','universal-video-artifact-manifest/v1',
+      'job_id',v_stable_job_key,
+      'source_file_id','driveVideo00000002',
+      'result_mode','SHADOW_REVIEW_ONLY',
+      'canonical_promotion_allowed',false,
+      'database_persistence_allowed',false,
+      'publication_state','NOT_PUBLISHED',
+      'artifacts',jsonb_build_array(jsonb_build_object(
+        'kind','master_pdf',
+        'locator','gdrive:file:resultDrive000001',
+        'drive_id','resultDrive000001',
+        'name','Lesson 2 review.pdf',
+        'mime_type','application/pdf',
+        'size_bytes',2048,
+        'parent_id','outputFolder00001',
+        'sha256',repeat('c',64)
+      ))
+    );
+    v_manifest_sha := encode(
+      public.digest(convert_to(video_queue.canonical_json_text(v_manifest),'UTF8'),'sha256'),
+      'hex'
+    );
     SELECT f.batch_status, f.released_jobs INTO v_state, v_released
       FROM video_queue.finish_job(
         v_job, v_token, 'worker-1', 'REVIEW_READY',
@@ -105,14 +134,39 @@ BEGIN
           'result_mode','SHADOW_REVIEW_ONLY','canonical_promotion_allowed',false,
           'database_persistence_allowed',false,'publication_state','NOT_PUBLISHED',
           'source_file_id','driveVideo00000002',
-          'stable_job_key',(SELECT stable_job_key FROM video_queue.job WHERE job_id=v_job),
-          'algorithm_revision','3.1-free-r25.16'
+          'stable_job_key',v_stable_job_key,
+          'algorithm_revision','3.1-free-r25.16',
+          'master_pdf_drive_id','resultDrive000001',
+          'master_pdf_sha256',repeat('c',64),
+          'artifact_manifest',v_manifest,
+          'artifact_manifest_sha256',v_manifest_sha,
+          'terminal_receipt',jsonb_build_object(
+            'schema_version','universal-video-terminal-receipt/v1',
+            'status','PASS',
+            'job_id',v_stable_job_key,
+            'source_file_id','driveVideo00000002',
+            'drive_readback_verified',true,
+            'artifact_manifest_sha256',v_manifest_sha,
+            'canonical_promotion_allowed',false,
+            'database_persistence_allowed',false,
+            'publication_state','NOT_PUBLISHED'
+          )
         ), NULL
       ) f;
-    IF v_state <> 'RUNNING' OR v_released <> 2
-       OR (SELECT count(*) FROM video_queue.job WHERE batch_id=v_batch AND status='QUEUED') <> 2 THEN
-        RAISE EXCEPTION 'successful canary did not release remaining jobs';
+    IF v_state <> 'CANARY_REVIEW' OR v_released <> 0
+       OR (SELECT count(*) FROM video_queue.job WHERE batch_id=v_batch AND status='PENDING_CANARY') <> 2 THEN
+        RAISE EXCEPTION 'successful canary escaped explicit review gate';
     END IF;
+
+    -- Simulate a separate, explicit Director release so the generic queue
+    -- concurrency and terminalization invariants remain covered. finish_job
+    -- itself must never perform these mutations.
+    UPDATE video_queue.batch
+       SET status='RUNNING', updated_at=clock_timestamp()
+     WHERE batch_id=v_batch AND status='CANARY_REVIEW';
+    UPDATE video_queue.job
+       SET status='QUEUED', updated_at=clock_timestamp()
+     WHERE batch_id=v_batch AND status='PENDING_CANARY';
 
     SELECT c.job_id, c.lease_token INTO v_second, v_second_token
       FROM video_queue.claim_job('worker-2',900,'bridge_3_1_free','3.1-free-r25.16') c;

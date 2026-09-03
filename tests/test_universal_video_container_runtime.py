@@ -306,13 +306,15 @@ def test_nonactivating_install_cannot_overwrite_resident_queue_configuration() -
     )
 
     assert 'PERSISTENT_ENV_FILE="$BASE_DIR/universal-video-container.env"' in installer
-    assert 'ENV_FILE="${UNIVERSAL_VIDEO_CONTAINER_ENV_FILE:-$BASE_DIR/universal-video-container-candidate.env}"' in installer
+    assert 'CANDIDATE_ENV_FILE="$BASE_DIR/universal-video-container-candidate.env"' in installer
+    assert '[[ "$ACTIVATE" == 1 ]] || ENV_FILE="$CANDIDATE_ENV_FILE"' in installer
     queue_line = "BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE=/run/secrets/video-queue-dsn"
-    assert f"printf '%s\\n' '{queue_line}' >>\"$ENV_FILE\"" in installer
+    assert f"printf '%s\\n' '{queue_line}' >>\"$env_tmp\"" in installer
     assert installer.index(f"printf '%s\\n' '{queue_line}'") > installer.index(
         'if [[ "$ACTIVATE" == 1 ]]; then',
-        installer.index('cat >"$ENV_FILE"'),
+        installer.index('cat >"$env_tmp"'),
     )
+    assert 'mv -fT -- "$env_tmp" "$ENV_FILE"' in installer
     unit_install = 'install -m 0644 -o root -g root "$SOURCE_DIR/deploy/oracle-universal-video/$SERVICE_NAME"'
     assert installer.index(unit_install) > installer.rindex('if [[ "$ACTIVATE" == 1 ]]; then')
 

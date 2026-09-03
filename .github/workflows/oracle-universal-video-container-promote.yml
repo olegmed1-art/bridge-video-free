@@ -60,14 +60,27 @@ jobs:
           PY
           expected_commit="$(sed -n 's/^expected_commit=//p' "$GITHUB_OUTPUT" | tail -n1)"
           evidence_run_id="$(sed -n 's/^evidence_run_id=//p' "$GITHUB_OUTPUT" | tail -n1)"
-          run="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$evidence_run_id")"
-          RUN_JSON="$run" EXPECTED_COMMIT="$expected_commit" python - <<'PY'
-          import json,os
-          x=json.loads(os.environ['RUN_JSON'])
-          assert x.get('name') == 'Oracle Universal Video Container Evidence'
-          assert x.get('conclusion') == 'success'
-          assert x.get('head_sha') == os.environ['EXPECTED_COMMIT']
-          PY
+          image_digest="$(sed -n 's/^image_digest=//p' "$GITHUB_OUTPUT" | tail -n1)"
+          run_json="$RUNNER_TEMP/authoritative-evidence-run.json"
+          artifacts_json="$RUNNER_TEMP/authoritative-evidence-artifacts.json"
+          artifact_zip="$RUNNER_TEMP/authoritative-evidence.zip"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$evidence_run_id" > "$run_json"
+          gh api --paginate --slurp \
+            "/repos/$GITHUB_REPOSITORY/actions/runs/$evidence_run_id/artifacts?per_page=100" \
+            > "$artifacts_json"
+          selection="$(python ops/validate_universal_video_promotion_evidence.py select-artifact \
+            --run-json "$run_json" \
+            --artifacts-json "$artifacts_json" \
+            --expected-commit "$expected_commit")"
+          artifact_id="$(jq -er '.artifact_id' <<<"$selection")"
+          artifact_digest="$(jq -er '.artifact_digest' <<<"$selection")"
+          gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$artifact_zip"
+          python ops/validate_universal_video_promotion_evidence.py verify-archive \
+            --archive "$artifact_zip" \
+            --expected-artifact-digest "$artifact_digest" \
+            --expected-commit "$expected_commit" \
+            --expected-image-digest "$image_digest"
+          printf 'evidence_artifact_digest=%s\n' "$artifact_digest" >> "$GITHUB_OUTPUT"
       - name: Ensure Oracle instance is running
         run: |
           set -euo pipefail
