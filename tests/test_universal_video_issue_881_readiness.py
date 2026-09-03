@@ -1284,7 +1284,11 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "if: ${{ inputs.director_go && github.actor == github.repository_owner && github.triggering_actor == github.repository_owner && github.repository == 'olegmed1-art/bridge-video-free' }}" in workflow
     assert "actions: read" in workflow
     assert "pull-requests: read" in workflow
-    assert 'pulls/1062" --jq \'.head.sha\'' in workflow
+    assert 'pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/1062")"' in workflow
+    assert '[[ "$live_state" == \'open\' ]]' in workflow
+    assert 'git/ref/heads/main" --jq \'.object.sha\'' in workflow
+    assert 'compare/$main_sha...$base_sha"' in workflow
+    assert "base_relation\" == $'ahead\\t0'" in workflow
     assert ".commit_id ==" in workflow and "$EXACT_SHA" in workflow
     assert "required_workflows=(" in workflow
     assert "verify_live_gate(){" in workflow
