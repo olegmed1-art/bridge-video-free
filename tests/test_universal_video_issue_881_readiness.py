@@ -867,10 +867,15 @@ attempt {json.dumps(str(valid))}
     execution = script[script.index('validate_source_dir_scope "$SOURCE_DIR"') :]
     validation_index = execution.index('validate_source_dir_scope "$SOURCE_DIR"')
     lock_create_index = execution.index(
-        'install -o universal-video -g universal-video -m 0640 /dev/null "$WORKLOAD_LOCK"'
+        'install -o root -g universal-video -m 0640 /dev/null "$WORKLOAD_LOCK"'
     )
     source_move_index = execution.index('mv -- "$SOURCE_DIR" "$source_backup_dir"')
     assert validation_index < lock_create_index < source_move_index
+    assert 'chown root:universal-video "$WORKLOAD_LOCK"' in execution
+    assert "root:universal-video:640:1" in execution
+    assert "unsafe workload lock link count" in execution
+    assert 'runuser -u universal-video -- test -r "$WORKLOAD_LOCK"' in execution
+    assert 'exec 9<"$WORKLOAD_LOCK"' in execution
     assert "rm -rf" not in validation
     assert "mv --" not in validation
 

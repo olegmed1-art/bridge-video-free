@@ -1190,11 +1190,16 @@ fi
 uid="$(id -u universal-video)"
 gid="$(id -g universal-video)"
 if [[ ! -e "$WORKLOAD_LOCK" ]]; then
-  install -o universal-video -g universal-video -m 0640 /dev/null "$WORKLOAD_LOCK"
+  install -o root -g universal-video -m 0640 /dev/null "$WORKLOAD_LOCK"
 fi
-chown universal-video:universal-video "$WORKLOAD_LOCK"
+[[ "$(stat -c '%h' "$WORKLOAD_LOCK")" == 1 ]] || die 'unsafe workload lock link count'
+chown root:universal-video "$WORKLOAD_LOCK"
 chmod 0640 "$WORKLOAD_LOCK"
-exec 9<>"$WORKLOAD_LOCK"
+[[ "$(stat -c '%U:%G:%a:%h' "$WORKLOAD_LOCK")" == 'root:universal-video:640:1' ]] \
+  || die 'unexpected workload lock metadata'
+runuser -u universal-video -- test -r "$WORKLOAD_LOCK" \
+  || die 'worker cannot open workload lock'
+exec 9<"$WORKLOAD_LOCK"
 flock --exclusive --nonblock 9 || die 'a worker holds the workload claim fence'
 lock_held=1
 

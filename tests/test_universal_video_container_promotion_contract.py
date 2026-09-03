@@ -48,15 +48,19 @@ def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
     assert " /bin/bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh" in WORKFLOW
 
 
-def test_promotion_holds_exclusive_workload_fence_through_resident_switch() -> None:
+def test_promotion_hands_off_exclusive_fence_after_old_resident_stops() -> None:
     lock_path = SCRIPT.index('readonly WORKLOAD_LOCK="$BASE_DIR/spool/.workload.lock"')
     lock_metadata = SCRIPT.index("root:universal-video:640:1", lock_path)
     lock_acquire = SCRIPT.index("flock --exclusive --nonblock 9", lock_metadata)
     final_idle = SCRIPT.index("has_running_job && fail UV_CONTAINER_PROMOTION_JOB_RUNNING", lock_acquire)
     legacy_stop = SCRIPT.index('systemctl disable --now "$OLD_SERVICE"', final_idle)
-    new_start = SCRIPT.index('oracle_universal_video_container_install.sh', legacy_stop)
-    assert lock_path < lock_metadata < lock_acquire < final_idle < legacy_stop < new_start
+    unlock = SCRIPT.index("flock --unlock 9", legacy_stop)
+    new_start = SCRIPT.index('oracle_universal_video_container_install.sh', unlock)
+    assert lock_path < lock_metadata < lock_acquire < final_idle < legacy_stop < unlock < new_start
     assert 'exec 9<"$WORKLOAD_LOCK"' in SCRIPT
+    assert "workload_lock_held=1" in SCRIPT
+    assert "release_workload_fence" in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_WORKLOAD_UNLOCK_FAILED" in SCRIPT
 
 
 def test_promotion_runs_exact_queue_and_speaker_gates_before_source_preparation() -> None:

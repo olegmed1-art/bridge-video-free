@@ -15,6 +15,7 @@ readonly OPERATOR_SUDOERS='/etc/sudoers.d/universal-video-operator-ocarun'
 EXPECTED_COMMIT="${UNIVERSAL_VIDEO_EXPECTED_COMMIT:-}"
 EXPECTED_DIGEST="${UNIVERSAL_VIDEO_EXPECTED_IMAGE_DIGEST:-}"
 switch_started=0
+workload_lock_held=0
 operator_snapshot_ready=0
 operator_existed=0
 operator_sudoers_existed=0
@@ -26,6 +27,14 @@ CURRENT_STAGE='validation'
 cleanup(){
   if [[ -n "$operator_backup_root" && -d "$operator_backup_root" ]]; then
     rm -rf -- "$operator_backup_root"
+  fi
+}
+
+release_workload_fence(){
+  if (( workload_lock_held == 1 )); then
+    flock --unlock 9 >/dev/null 2>&1 || true
+    exec 9<&-
+    workload_lock_held=0
   fi
 }
 
@@ -161,6 +170,9 @@ rollback(){
   trap - ERR
   emit_runtime_code
   if (( switch_started == 1 )) && ! has_running_job; then
+    # Resident startup recovery uses this same lock. Release it only after the
+    # old resident is stopped, immediately before restoring a resident.
+    release_workload_fence
     systemctl disable --now "$NEW_SERVICE" >/dev/null 2>&1 || true
     if [[ "$old_enabled_before" == enabled ]]; then
       systemctl enable "$OLD_SERVICE" >/dev/null 2>&1 || true
@@ -206,6 +218,7 @@ has_running_job && fail UV_CONTAINER_PROMOTION_JOB_RUNNING
 CURRENT_STAGE='workload-fence'
 exec 9<"$WORKLOAD_LOCK"
 flock --exclusive --nonblock 9 || fail UV_CONTAINER_PROMOTION_WORKLOAD_BUSY
+workload_lock_held=1
 has_running_job && fail UV_CONTAINER_PROMOTION_JOB_RUNNING
 
 CURRENT_STAGE='queue-credential-preflight'
@@ -273,6 +286,12 @@ old_active_before="$(systemctl is-active "$OLD_SERVICE" 2>/dev/null || true)"
 switch_started=1
 CURRENT_STAGE='legacy-quiesce'
 systemctl disable --now "$OLD_SERVICE" || fail UV_CONTAINER_PROMOTION_LEGACY_QUIESCE_FAILED
+CURRENT_STAGE='workload-handoff'
+if ! flock --unlock 9; then
+  fail UV_CONTAINER_PROMOTION_WORKLOAD_UNLOCK_FAILED
+fi
+exec 9<&-
+workload_lock_held=0
 CURRENT_STAGE='installer-activation'
 UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=1 UNIVERSAL_VIDEO_CONTAINER_BUILD=0 bash "$SOURCE_DIR/ops/oracle_universal_video_container_install.sh"
 CURRENT_STAGE='service-verification'
