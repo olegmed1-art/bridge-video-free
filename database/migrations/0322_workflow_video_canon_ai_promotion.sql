@@ -84,8 +84,10 @@ CREATE TABLE bidding.video_canon_source_policy (
     status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','revoked','superseded')),
     valid_from timestamptz NOT NULL,
     valid_to timestamptz,
+    retired_at timestamptz,
     recorded_at timestamptz NOT NULL DEFAULT now(),
     CHECK (valid_to IS NULL OR valid_to>valid_from),
+    CHECK ((status='active')=(retired_at IS NULL)),
     UNIQUE (school_id,source_id,source_sha256,video_file_id,policy_version)
 );
 
@@ -229,7 +231,7 @@ SELECT EXISTS (
    WHERE jsonb_typeof(w.value)='string'
      AND (
        (w.value#>>'{}') ~* E'(^|[^[:alnum:]])[NESW][[:space:]]*:[[:space:]]*[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}'
-       OR (w.value#>>'{}') ~* E'(partner|opponent|north|east|south|west)[ _-]*(hand|cards)[[:space:]]*[:=][[:space:]]*[-AKQJT2-9.]'
+       OR (w.value#>>'{}') ~* E'(partner|opponent|north|east|south|west)[[:space:]]*([''’]s)?[ _-]*(hand|cards)[[:space:]]*[:=][[:space:]]*[-AKQJT2-9.]'
        OR (w.value#>>'{}') ~* E'(рука|карты)[[:space:]]+(партн[её]ра|соперника)[[:space:]]*[:=][[:space:]]*[-AKQJT2-9.]'
      )
 );
@@ -267,6 +269,13 @@ WITH active_runtime AS (
   JOIN public.knowledge_version kv ON kv.knowledge_version_id=ca.knowledge_version_id
   JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
   WHERE ki.school_id=p_school_id AND ca.status='active'
+), active_canon_rules AS (
+  SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.rule_id::text),'[]'::jsonb) AS rows
+  FROM public.canon_activation ca
+  JOIN public.knowledge_version kv ON kv.knowledge_version_id=ca.knowledge_version_id
+  JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
+  JOIN bidding.rule r ON r.knowledge_version_id=kv.knowledge_version_id
+  WHERE ki.school_id=p_school_id AND ca.status='active'
 ), open_conflicts AS (
   SELECT COALESCE(jsonb_agg(to_jsonb(c) ORDER BY c.rule_conflict_id::text),'[]'::jsonb) AS rows
   FROM bidding.rule_conflict c WHERE c.school_id=p_school_id AND c.status='open'
@@ -281,9 +290,11 @@ WITH active_runtime AS (
   ) ORDER BY t.rule_test_id::text),'[]'::jsonb) AS rows
   FROM bidding.rule_test t
   WHERE EXISTS (
-    SELECT 1 FROM bidding.runtime_activation ra
-     WHERE ra.school_id=p_school_id AND ra.rule_id=t.rule_id
-       AND ra.authority_lane='school_canon' AND ra.status='active'
+    SELECT 1 FROM public.canon_activation ca
+    JOIN public.knowledge_version kv ON kv.knowledge_version_id=ca.knowledge_version_id
+    JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
+    JOIN bidding.rule r ON r.knowledge_version_id=kv.knowledge_version_id
+     WHERE ki.school_id=p_school_id AND ca.status='active' AND r.rule_id=t.rule_id
   )
 ), active_rule_sources AS (
   SELECT COALESCE(jsonb_agg(jsonb_build_object(
@@ -301,10 +312,11 @@ WITH active_runtime AS (
 )
 SELECT encode(public.digest(convert_to(jsonb_build_object(
   'school_id',p_school_id,'active_runtime',active_runtime.rows,
-  'active_canon',active_canon.rows,'open_conflicts',open_conflicts.rows,
+  'active_canon',active_canon.rows,'active_canon_rules',active_canon_rules.rows,
+  'open_conflicts',open_conflicts.rows,
   'active_rule_tests',active_rule_tests.rows,'active_rule_sources',active_rule_sources.rows
 )::text,'UTF8'),'sha256'),'hex')
-FROM active_runtime,active_canon,open_conflicts,active_rule_tests,active_rule_sources;
+FROM active_runtime,active_canon,active_canon_rules,open_conflicts,active_rule_tests,active_rule_sources;
 $$;
 
 CREATE OR REPLACE FUNCTION bidding.validate_video_correction_review_receipt()
@@ -375,6 +387,20 @@ BEGIN
        OR NEW.bundle_payload->'candidate_payload'<>v_candidate.payload
        OR NOT ((NEW.bundle_payload->>'canon_snapshot_sha256') ~ '^[0-9a-f]{64}$')
        OR jsonb_typeof(NEW.bundle_payload->'checks')<>'array'
+       OR jsonb_array_length(NEW.bundle_payload->'checks')<>16
+       OR EXISTS (
+         SELECT 1 FROM jsonb_array_elements(NEW.bundle_payload->'checks') AS c(value)
+          WHERE c.value->>'result' IS DISTINCT FROM 'PASS'
+             OR c.value->>'check_id' NOT IN (
+               'SOURCE_AUTHORITY','SOURCE_BINDING','SPEAKER_IDENTITY','TRANSCRIPT_BINDING',
+               'SEMANTIC_PARSE','EXPLANATION_COMPLETENESS','BRIDGE_LOGIC',
+               'HIDDEN_INFORMATION_FIREWALL','POSITIVE_TESTS','NEGATIVE_TESTS',
+               'BOUNDARY_TESTS','INTERFERENCE_TESTS','CANON_REGRESSION','CANON_INTEGRITY',
+               'CANON_CONFLICT_SCAN','ROLLBACK_RESTORE'
+             )
+       )
+       OR (SELECT count(DISTINCT c.value->>'check_id')
+             FROM jsonb_array_elements(NEW.bundle_payload->'checks') AS c(value))<>16
        OR jsonb_typeof(NEW.bundle_payload->'effective_period')<>'object'
        OR jsonb_typeof(NEW.bundle_payload->'rollback')<>'object' THEN
         RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_CONTENT_MISMATCH' USING ERRCODE='23514';
@@ -394,6 +420,14 @@ DECLARE
     v_bundle bidding.video_canon_ai_verification_bundle%ROWTYPE;
     v_principal bidding.video_canon_verifier_registry%ROWTYPE;
 BEGIN
+    IF EXISTS (
+        SELECT 1 FROM bidding.video_canon_ai_promotion_receipt
+         WHERE analysis_candidate_id=NEW.analysis_candidate_id
+           AND candidate_payload_hash=NEW.candidate_payload_hash
+           AND verification_bundle_sha256=NEW.verification_bundle_sha256
+    ) THEN
+        RAISE EXCEPTION 'VIDEO_CANON_PROMOTED_VERIFICATION_SET_CLOSED' USING ERRCODE='55000';
+    END IF;
     SELECT school_id,payload_hash INTO v_school,v_hash
       FROM public.analysis_candidate WHERE analysis_candidate_id=NEW.analysis_candidate_id;
     IF v_school IS NULL OR v_school<>NEW.school_id THEN
@@ -480,9 +514,14 @@ BEGIN
     IF TG_OP='DELETE' THEN
         RAISE EXCEPTION 'VIDEO_CANON_SOURCE_POLICY_DELETE_FORBIDDEN' USING ERRCODE='55000';
     END IF;
+    NEW.retired_at := statement_timestamp();
     IF OLD.status<>'active' OR NEW.status NOT IN ('revoked','superseded')
-       OR NEW.valid_to IS NULL OR NEW.valid_to>now()
-       OR (to_jsonb(NEW)-ARRAY['status','valid_to'])<>(to_jsonb(OLD)-ARRAY['status','valid_to']) THEN
+       OR (OLD.valid_from<statement_timestamp()
+           AND (NEW.valid_to IS NULL OR NEW.valid_to>statement_timestamp()))
+       OR (OLD.valid_from>=statement_timestamp()
+           AND NEW.valid_to IS DISTINCT FROM OLD.valid_to)
+       OR (to_jsonb(NEW)-ARRAY['status','valid_to','retired_at'])
+          <>(to_jsonb(OLD)-ARRAY['status','valid_to','retired_at']) THEN
         RAISE EXCEPTION 'VIDEO_CANON_SOURCE_POLICY_MUTATION_FORBIDDEN' USING ERRCODE='55000';
     END IF;
     RETURN NEW;
@@ -599,7 +638,9 @@ BEGIN
     LOCK TABLE public.canon_activation,public.knowledge_item,public.knowledge_version,
       public.source,public.knowledge_version_source,
       bidding.runtime_activation,bidding.rule,bidding.rule_test,bidding.rule_test_run,
-      bidding.rule_conflict,bidding.video_canon_verifier_registry IN SHARE MODE;
+      bidding.rule_conflict,bidding.video_canon_verifier_registry,
+      bidding.video_canon_ai_verification_bundle,
+      bidding.video_canon_ai_verification IN SHARE MODE;
     v_canon_snapshot_sha256 := bidding.current_school_canon_snapshot_sha256(v_candidate.school_id);
     IF v_bundle.bundle_payload->>'canon_snapshot_sha256'<>v_canon_snapshot_sha256 THEN
         RAISE EXCEPTION 'VIDEO_CANON_STATE_CHECKS_STALE' USING ERRCODE='23514';
