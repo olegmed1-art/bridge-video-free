@@ -1303,6 +1303,8 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert "Retired Oracle Universal Video Container Evidence Contract" in workflow
     assert "root_reviewed_sha" in workflow
     assert "group_by(.user.login) | map(max_by(.submitted_at))" in workflow
+    assert "Main changed while live review and CI gates were evaluated" in workflow
+    assert workflow.count('git/ref/heads/main" --jq') >= 2
     assert '[[ "$live_state" == \'closed\'' in workflow
     assert 'git/ref/heads/main" --jq \'.object.sha\'' in workflow
     assert '"$main_sha" == "$EXACT_SHA"' in workflow
