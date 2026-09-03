@@ -37,3 +37,12 @@ Even `ELIGIBLE` means only eligible for human/independent review. Canon still
 requires explicit approval plus regression, integrity, rollback proof and I2.
 The existing runtime invariant remains unchanged: `CANON_CONFLICT` stops and
 does not call WORLD; only a recorded `CANON_GAP` permits the WORLD lookup.
+
+## Explanation is part of knowledge
+
+A teachable rule needs a source-bound explanation candidate containing the
+reasoning chain, prerequisites, rejected alternatives, an example and a
+counterexample. The analyzer must preserve the teacher's reason rather than
+generate a plausible replacement. A rule observation without such evidence
+creates an explicit `EXPLANATION_MISSING` gap. It may still be reviewed as a
+rule candidate, but it is not a complete teachable knowledge unit.
