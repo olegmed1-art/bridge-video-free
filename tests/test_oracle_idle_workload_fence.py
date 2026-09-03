@@ -48,10 +48,14 @@ MASS_OPERATOR_GROUP = (
 ORACLE_V2_GROUP = (
     "${{ github.event_name == 'issue_comment' && "
     "github.event.comment.user.login == github.repository_owner && "
+    "github.event.comment.body == '/oracle-v2 diagnose-ben' && "
+    "format('oracle-operator-v2-diagnose-{0}', github.run_id) || "
+    "github.event_name == 'issue_comment' && "
+    "github.event.comment.user.login == github.repository_owner && "
     "contains(fromJSON('[\"/oracle-v2 rollout-worker\","
     "\"/oracle-v2 rollout-dds3-runtime\",\"/oracle-v2 canary-worlds\","
-    "\"/oracle-v2 rollout-ben\",\"/oracle-v2 diagnose-ben\","
-    "\"/oracle-v2 canary-ben\",\"/oracle-v2 canary-ben-dds3\","
+    "\"/oracle-v2 rollout-ben\",\"/oracle-v2 canary-ben\","
+    "\"/oracle-v2 canary-ben-dds3\","
     "\"/oracle-v2 benchmark-ben-100-500\"]'), github.event.comment.body) && "
     "'oracle-instance-workload-mutation' || "
     "format('oracle-operator-v2-noop-{0}', github.run_id) }}"
@@ -196,6 +200,9 @@ def test_oracle_v2_operator_mutations_share_stop_fence() -> None:
         ORACLE_V2_GROUP,
     )
     assert SHARED_FENCE in ORACLE_V2_GROUP
+    assert "oracle-operator-v2-diagnose-{0}" in ORACLE_V2_GROUP
+    mutation_commands = ORACLE_V2_GROUP.split("contains(fromJSON(", 1)[1]
+    assert "/oracle-v2 diagnose-ben" not in mutation_commands
 
 
 def test_installer_executes_verified_root_owned_authorizer_copy() -> None:
