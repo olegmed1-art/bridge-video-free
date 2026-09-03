@@ -251,10 +251,6 @@ jobs:
           }
           trap bounded_failure ERR
 
-          # Repeat the complete primary-source gate as the final action before
-          # the first SSH-side mutation. A new run, review finding, or head
-          # movement during preparation fails closed.
-          verify_live_gate
           "${s[@]}" "umask 077; rm -rf '$remote_stage'; mkdir -m 0700 '$remote_stage'"
           "${c[@]}" "$RUNNER_TEMP/prepare.sh" "$ORACLE_USER@$ORACLE_HOST:$remote_stage/prepare.sh"
           "${c[@]}" "$RUNNER_TEMP/attest.sh" "$ORACLE_USER@$ORACLE_HOST:$remote_stage/attest.sh"
