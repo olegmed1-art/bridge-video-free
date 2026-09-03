@@ -37,6 +37,8 @@ jobs:
           ! grep -Eiq 'systemctl[[:space:]]+(start|stop|restart|reload|enable|disable)|docker[[:space:]]+(run|rm|stop|start|restart|kill)|curl|wget|scp' ops/oracle_universal_video_container_diagnostic.sh
           grep -Fx "echo 'real_media_canary_run=false'" ops/oracle_universal_video_container_diagnostic.sh
           grep -Fx "echo 'service_mutation=false'" ops/oracle_universal_video_container_diagnostic.sh
+          grep -F "pgrep -f '[u]niversal_video[.]spool_worker'" ops/oracle_universal_video_container_diagnostic.sh
+          ! grep -F '/proc/$worker_pid/cmdline' ops/oracle_universal_video_container_diagnostic.sh
 
   diagnose:
     if: ${{ github.event_name == 'push' }}
