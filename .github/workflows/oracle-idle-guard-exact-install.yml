@@ -1,0 +1,229 @@
+name: Oracle idle guard exact install
+
+on:
+  push:
+    branches:
+      - autopilot/oracle-idle-stop-guard-627-v2
+    paths:
+      - '.github/workflows/oracle-idle-guard-exact-install.yml'
+      - 'ops/oracle_idle_state.sh'
+      - 'ops/oracle_idle_stop_guard.py'
+      - 'ops/install_oracle_idle_state_ocarun.sh'
+      - 'tests/test_universal_video_idle_candidate_contract.py'
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  # Guard promotion is a lifecycle mutation and serializes with STOP.
+  group: oracle-instance-workload-mutation
+  cancel-in-progress: false
+
+jobs:
+  install-guard-only:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - name: Gate exact reviewed install authorization
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          expected="$GITHUB_SHA"
+          [[ "$expected" =~ ^[0-9a-f]{40}$ ]]
+          current="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/1061" --jq '.head.sha')"
+          [[ "$current" == "$expected" ]] || {
+            echo "INSTALL_HEAD_MOVED expected=$expected actual=$current" >&2
+            exit 70
+          }
+          attempt="${GITHUB_RUN_ATTEMPT:-1}"
+          [[ "$attempt" =~ ^[0-9]+$ ]] || {
+            echo "INSTALL_RUN_ATTEMPT_INVALID value=$attempt" >&2
+            exit 72
+          }
+          if (( attempt < 2 )); then
+            echo "INSTALL_REQUIRES_RERUN exact_sha=$expected run_attempt=$attempt" >&2
+            exit 72
+          fi
+          command="/oracle-idle-guard-install-reviewed $expected"
+          authorized="$(
+            gh api --method GET --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/issues/1061/comments?per_page=100" \
+            | jq --arg command "$command" \
+              '[.[][] | select(.user.login == "olegmed1-art" and .body == $command)] | length'
+          )"
+          [[ "$authorized" =~ ^[1-9][0-9]*$ ]] || {
+            echo "INSTALL_AUTHORIZATION_MISSING exact_sha=$expected" >&2
+            echo "Expected owner-only PR comment: $command" >&2
+            exit 71
+          }
+          echo "INSTALL_AUTHORIZATION=PASS exact_sha=$expected run_attempt=$attempt"
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Recheck exact branch head before SSH preparation
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          current="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/1061" --jq '.head.sha')"
+          test "$current" = "$GITHUB_SHA"
+          echo "EXACT_HEAD_RECHECK=PASS sha=$GITHUB_SHA"
+
+      - name: Verify bounded installer has no lifecycle mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash -n ops/oracle_idle_state.sh
+          bash -n ops/install_oracle_idle_state_ocarun.sh
+          python3 -m py_compile ops/oracle_idle_stop_guard.py
+          forbidden='oci compute instance action|systemctl (stop|restart|start|enable)|shutdown|reboot|poweroff'
+          ! grep -E "$forbidden" ops/install_oracle_idle_state_ocarun.sh
+          ! grep -E "$forbidden" ops/oracle_idle_state.sh
+          ! grep -E "$forbidden" ops/oracle_idle_stop_guard.py
+          sha256sum ops/oracle_idle_state.sh ops/oracle_idle_stop_guard.py
+
+      - name: Prepare pinned SSH identity
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/oracle-idle-install-known-hosts"
+          : > "$known"
+          index=0
+          for expected in \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64'; do
+            part="$RUNNER_TEMP/oracle-idle-install-known-hosts.$index"
+            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$expected" "$part"
+            cat "$part" >> "$known"
+            index=$((index + 1))
+          done
+          sort -u -o "$known" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]] || { echo 'Oracle SSH credential unavailable' >&2; exit 1; }
+          key="$RUNNER_TEMP/id_oracle_idle_install"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Install exact guard only
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          current="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/1061" --jq '.head.sha')"
+          [[ "$current" == "$GITHUB_SHA" ]] || {
+            echo "INSTALL_BOUNDARY_HEAD_MOVED expected=$GITHUB_SHA actual=$current" >&2
+            exit 70
+          }
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          command="/oracle-idle-guard-install-reviewed $GITHUB_SHA"
+          authorized="$(
+            gh api --method GET --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/issues/1061/comments?per_page=100" \
+            | jq --arg command "$command" \
+              '[.[][] | select(.user.login == "olegmed1-art" and .body == $command)] | length'
+          )"
+          [[ "$authorized" =~ ^[1-9][0-9]*$ ]] || {
+            echo "INSTALL_BOUNDARY_AUTHORIZATION_MISSING exact_sha=$GITHUB_SHA" >&2
+            exit 71
+          }
+          echo "INSTALL_BOUNDARY_HEAD_RECHECK=PASS sha=$GITHUB_SHA"
+          echo "INSTALL_BOUNDARY_AUTHORIZATION=PASS sha=$GITHUB_SHA"
+          guard_sha="$(sha256sum ops/oracle_idle_state.sh | awk '{print $1}')"
+          authorizer_sha="$(sha256sum ops/oracle_idle_stop_guard.py | awk '{print $1}')"
+          installer_sha="$(sha256sum ops/install_oracle_idle_state_ocarun.sh | awk '{print $1}')"
+          scp -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            ops/oracle_idle_state.sh "$ORACLE_USER@$ORACLE_HOST:/tmp/oracle_idle_state.sh"
+          scp -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            ops/oracle_idle_stop_guard.py "$ORACLE_USER@$ORACLE_HOST:/tmp/oracle_idle_stop_guard.py"
+          scp -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            ops/install_oracle_idle_state_ocarun.sh "$ORACLE_USER@$ORACLE_HOST:/tmp/install_oracle_idle_state_ocarun.sh"
+          # Actual mutation boundary: transfers are complete, but no privileged
+          # installer code has run. Re-read both primary sources now.
+          current="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/1061" --jq '.head.sha')"
+          [[ "$current" == "$GITHUB_SHA" ]] || {
+            echo "INSTALL_FINAL_HEAD_MOVED expected=$GITHUB_SHA actual=$current" >&2
+            exit 70
+          }
+          command="/oracle-idle-guard-install-reviewed $GITHUB_SHA"
+          authorized="$(
+            gh api --method GET --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/issues/1061/comments?per_page=100" \
+            | jq --arg command "$command" \
+              '[.[][] | select(.user.login == "olegmed1-art" and .body == $command)] | length'
+          )"
+          [[ "$authorized" =~ ^[1-9][0-9]*$ ]] || {
+            echo "INSTALL_FINAL_AUTHORIZATION_MISSING exact_sha=$GITHUB_SHA" >&2
+            exit 71
+          }
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          echo "INSTALL_FINAL_HEAD_RECHECK=PASS sha=$GITHUB_SHA"
+          echo "INSTALL_FINAL_AUTHORIZATION=PASS sha=$GITHUB_SHA"
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env UPLOADED_INSTALLER=/tmp/install_oracle_idle_state_ocarun.sh INSTALLER_SHA256=$installer_sha SOURCE_FILE=/tmp/oracle_idle_state.sh SOURCE_SHA256=$guard_sha AUTHORIZER_FILE=/tmp/oracle_idle_stop_guard.py AUTHORIZER_SHA256=$authorizer_sha bash -c 'set -Eeuo pipefail; txn=/var/backups/oracle-idle-guard; install -d -o root -g root -m 0700 \"\$txn\"; trusted=\$(mktemp --tmpdir=\"\$txn\" .oracle-idle-installer.source.XXXXXX); trap \"rm -f -- \\\"\$trusted\\\"\" EXIT; install -o root -g root -m 0700 \"\$UPLOADED_INSTALLER\" \"\$trusted\"; test -f \"\$trusted\"; test ! -L \"\$trusted\"; test \"\$(stat -c %U:%G:%a \"\$trusted\")\" = root:root:700; test \"\$(sha256sum \"\$trusted\" | awk '\''{print \$1}'\'')\" = \"\$INSTALLER_SHA256\"; bash -n \"\$trusted\"; \"\$trusted\"'; rm -f /tmp/install_oracle_idle_state_ocarun.sh; printf 'INSTALLED_GUARD_SHA256=%s\\n' \"\$(sha256sum /usr/local/sbin/oracle-idle-state | awk '{print \$1}')\"; test \"\$(sha256sum /usr/local/sbin/oracle-idle-state | awk '{print \$1}')\" = '$guard_sha'"
+
+      - name: Capture post-install read-only proof
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          proof="$RUNNER_TEMP/oracle-idle-post-install-proof.txt"
+          stderr="$RUNNER_TEMP/oracle-idle-post-install.stderr"
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            'set -Eeuo pipefail; sudo -n /usr/local/sbin/oracle-idle-state' \
+            > "$proof" 2> "$stderr"
+          [[ ! -s "$stderr" ]] || { echo 'guard emitted stderr' >&2; cat "$stderr" >&2; exit 1; }
+          cat "$proof"
+          mapfile -t lines < "$proof"
+          [[ ${#lines[@]} -eq 5 ]]
+          [[ "${lines[0]}" == 'ORACLE_IDLE_CONTRACT_VERSION=2' ]]
+          [[ "${lines[4]}" =~ ^ORACLE_IDLE_STATE=(BUSY|IDLE|UNKNOWN)$ ]]
+          state="${BASH_REMATCH[1]}"
+          set +e
+          authorization="$(python3 ops/oracle_idle_stop_guard.py --proof "$proof" --max-age-seconds 30 --max-duration-seconds 30 --max-future-skew-seconds 5 2>/dev/null)"
+          authorization_rc=$?
+          set -e
+          printf '%s\n' "$authorization"
+          if [[ "$state" == IDLE ]]; then
+            [[ $authorization_rc -eq 0 ]]
+            [[ "$authorization" == $'ORACLE_STOP_AUTHORIZED=YES\nORACLE_STOP_AUTHORIZATION_REASON=fresh_exact_idle' ]]
+          elif [[ "$state" == BUSY ]]; then
+            [[ $authorization_rc -ne 0 ]]
+            [[ "$authorization" == $'ORACLE_STOP_AUTHORIZED=NO\nORACLE_STOP_AUTHORIZATION_REASON=state_busy_forbids_stop' ]]
+          else
+            [[ $authorization_rc -ne 0 ]]
+            [[ "$authorization" == $'ORACLE_STOP_AUTHORIZED=NO\nORACLE_STOP_AUTHORIZATION_REASON=state_unknown_forbids_stop' ]]
+          fi
+          echo 'GUARD_ONLY_INSTALL_AND_PROOF_PASS'

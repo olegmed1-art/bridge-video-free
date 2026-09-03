@@ -14,6 +14,7 @@ Environment=PYTHONPATH=/opt/bridge-school/universal-video-src
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=HF_HOME=/opt/bridge-school/universal-video/model-cache
 Environment=UNIVERSAL_VIDEO_STATUS_PATH=/run/bridge-school/universal-video-status.json
+Environment=UNIVERSAL_VIDEO_RESIDENT_ID=source
 RuntimeDirectory=bridge-school
 RuntimeDirectoryMode=0750
 ExecStart=/opt/bridge-school/universal-video/.venv/bin/python -m universal_video.spool_worker

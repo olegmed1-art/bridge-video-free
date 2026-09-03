@@ -203,25 +203,8 @@ class BridgeVisionEngine:
 
         deal = canonicalize_video_deal(
             {"hands": {seat: sorted(cards) for seat, cards in merged.items()}},
-            derive_fourth_hand=True,
         ).to_dict()
         observed = len(card_to_seat)
-        confidence_by_detector = {candidate.detector: candidate.confidence for candidate in candidates}
-        for derivation in deal["derivations"]:
-            source_seats = set(derivation.get("from_seats") or [])
-            source_detectors = {
-                detector
-                for card, seat in card_to_seat.items()
-                if seat in source_seats
-                for detector in card_sources.get(card, [])
-            }
-            source_floor = min(
-                (confidence_by_detector[name] for name in source_detectors),
-                default=None,
-            )
-            confidence = derivation.get("confidence")
-            if isinstance(confidence, dict):
-                confidence["source_observation_floor"] = source_floor
         status = "PARTIAL_BOARD_OBSERVATION" if observed >= 4 else "INSUFFICIENT"
         return VisionResult(status, deal, tuple(candidates), (), diagnostics=tuple(diagnostics))
 

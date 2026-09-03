@@ -70,6 +70,11 @@ BEGIN
         'merge_allowed', false,
         'production_mutation', false,
         'operation_count', 10,
+        'broker_policy_version', 'physical-no-merge-v1',
+        'broker_source_sha', repeat('e', 40),
+        'broker_artifact_sha256', repeat('f', 64),
+        'broker_policy_sha256', repeat('1', 64),
+        'broker_provenance_sha256', repeat('2', 64),
         'broker_host', 'bridge-school-autopilot-cslfiz83g-olegmed1-4368s-projects.vercel.app',
         'http_method', 'POST',
         'model_calls', 0,
@@ -77,6 +82,17 @@ BEGIN
         'task_id', repair_id::text,
         'task_kind', 'GITHUB_DRAFT_REPAIR_V1',
         'runtime', 'ORACLE_RESIDENT'
+    );
+    valid_summary := jsonb_set(
+        valid_summary, '{broker_provenance_sha256}', to_jsonb(encode(public.digest(
+            convert_to(
+                '{"artifact_sha256":"' || (valid_summary->>'broker_artifact_sha256') ||
+                '","policy_sha256":"' || (valid_summary->>'broker_policy_sha256') ||
+                '","policy_version":"' || (valid_summary->>'broker_policy_version') ||
+                '","source_sha":"' || (valid_summary->>'broker_source_sha') || '"}',
+                'UTF8'
+            ), 'sha256'
+        ), 'hex'))
     );
 
     BEGIN
@@ -86,6 +102,28 @@ BEGIN
             jsonb_set(valid_summary, '{token_exposed}', 'true'::jsonb)
         );
         RAISE EXCEPTION 'AUTOPILOT_DRAFT_REPAIR_TOKEN_EVIDENCE_ACCEPTED';
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM NOT LIKE '%AUTOPILOT_DRAFT_REPAIR_EVIDENCE_INVALID%' THEN RAISE; END IF;
+    END;
+
+    BEGIN
+        PERFORM autopilot.complete_task(
+            repair_id, 'sql-draft-repair-worker-1', claimed.lease_epoch,
+            'GITHUB_DRAFT_REPAIR_EVIDENCE', repeat('d', 64),
+            jsonb_set(valid_summary, '{broker_provenance_sha256}', to_jsonb(repeat('2', 64)))
+        );
+        RAISE EXCEPTION 'AUTOPILOT_DRAFT_REPAIR_FORGED_PROVENANCE_ACCEPTED';
+    EXCEPTION WHEN OTHERS THEN
+        IF SQLERRM NOT LIKE '%AUTOPILOT_DRAFT_REPAIR_EVIDENCE_INVALID%' THEN RAISE; END IF;
+    END;
+
+    BEGIN
+        PERFORM autopilot.complete_task(
+            repair_id, 'sql-draft-repair-worker-1', claimed.lease_epoch,
+            'GITHUB_DRAFT_REPAIR_EVIDENCE', repeat('d', 64),
+            jsonb_set(valid_summary, '{broker_policy_version}', 'null'::jsonb)
+        );
+        RAISE EXCEPTION 'AUTOPILOT_DRAFT_REPAIR_NULL_POLICY_ACCEPTED';
     EXCEPTION WHEN OTHERS THEN
         IF SQLERRM NOT LIKE '%AUTOPILOT_DRAFT_REPAIR_EVIDENCE_INVALID%' THEN RAISE; END IF;
     END;
@@ -146,6 +184,16 @@ BEGIN
        OR NOT has_function_privilege(
            'autopilot_runtime_principal',
            'autopilot.complete_task(uuid,text,bigint,text,text,jsonb)',
+           'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+           'autopilot_runtime_principal',
+           'autopilot.verify_broker_schema()',
+           'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+           'autopilot_runtime_principal',
+           'autopilot.verify_broker_schema_v0321()',
            'EXECUTE'
        ) THEN
         RAISE EXCEPTION 'AUTOPILOT_DRAFT_REPAIR_RUNTIME_BOUNDARY_INVALID';

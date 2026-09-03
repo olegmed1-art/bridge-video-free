@@ -3,12 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import urllib.error
 from unittest.mock import patch
 
 import pytest
 
 from oracle_autopilot.contract import (
     AutopilotContractError,
+    AutopilotRetryableError,
     ClaimedTask,
     build_draft_repair_broker_payload,
     claimed_task_from_row,
@@ -37,6 +39,55 @@ DIRECT_DSN = (
     "ep-shadow.eu-central-1.aws.neon.tech/neondb"
     "?sslmode=require&channel_binding=require"
 )
+BROKER_SOURCE_SHA = "e" * 40
+BROKER_ARTIFACT_SHA256 = "c" * 64
+BROKER_POLICY_SHA256 = "d" * 64
+BROKER_PROVENANCE_SHA256 = hashlib.sha256(
+    json.dumps(
+        {
+            "artifact_sha256": BROKER_ARTIFACT_SHA256,
+            "policy_sha256": BROKER_POLICY_SHA256,
+            "policy_version": "physical-no-merge-v1",
+            "source_sha": BROKER_SOURCE_SHA,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+).hexdigest()
+
+
+def _broker_release_env() -> dict[str, str]:
+    return {
+        "AUTOPILOT_TOKEN_BROKER_EXPECTED_SOURCE_SHA": BROKER_SOURCE_SHA,
+        "AUTOPILOT_TOKEN_BROKER_EXPECTED_ARTIFACT_SHA256": (
+            BROKER_ARTIFACT_SHA256
+        ),
+        "AUTOPILOT_TOKEN_BROKER_EXPECTED_POLICY_SHA256": BROKER_POLICY_SHA256,
+        "AUTOPILOT_TOKEN_BROKER_EXPECTED_PROVENANCE_SHA256": (
+            BROKER_PROVENANCE_SHA256
+        ),
+    }
+
+
+def _approved_health_payload() -> dict[str, object]:
+    return {
+        "source_revision": BROKER_SOURCE_SHA,
+        "artifact_sha256": BROKER_ARTIFACT_SHA256,
+        "policy_sha256": BROKER_POLICY_SHA256,
+        "provenance_sha256": BROKER_PROVENANCE_SHA256,
+        "broker_policy_version": "physical-no-merge-v1",
+        "source_attested": True,
+        "artifact_attested": True,
+        "preview_only": True,
+        "production_mutations_enabled": False,
+        "github_token_broker_enabled": True,
+        "bounded_draft_executor_enabled": True,
+        "raw_installation_token_exposed": False,
+        "merge_endpoint_enabled": False,
+        "ref_update_delete_enabled": False,
+        "actions_endpoint_enabled": False,
+        "deployments_endpoint_enabled": False,
+    }
 
 
 def _task(**overrides):
@@ -263,6 +314,7 @@ def test_token_broker_config_pins_preview_origin(monkeypatch):
         ),
         "AUTOPILOT_TOKEN_BROKER_SECRET": "s" * 64,
         "AUTOPILOT_VERCEL_BYPASS_SECRET": "b" * 64,
+        **_broker_release_env(),
     }
     with patch.dict(os.environ, env, clear=True):
         config = load_token_broker_config()
@@ -298,6 +350,21 @@ def test_bounded_draft_repair_posts_only_to_pinned_broker(monkeypatch):
         "production_mutation": False,
         "operation_count": 10,
     }
+    provenance = {
+        "artifact_sha256": "c" * 64,
+        "policy_sha256": "d" * 64,
+        "policy_version": "physical-no-merge-v1",
+        "source_sha": "e" * 40,
+    }
+    response_payload.update({
+        "broker_artifact_sha256": provenance["artifact_sha256"],
+        "broker_policy_sha256": provenance["policy_sha256"],
+        "broker_policy_version": provenance["policy_version"],
+        "broker_source_sha": provenance["source_sha"],
+        "broker_provenance_sha256": hashlib.sha256(
+            json.dumps(provenance, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    })
     broker_url = (
         "https://bridge-school-autopilot-cslfiz83g-"
         "olegmed1-4368s-projects.vercel.app/v1/github/draft-repair"
@@ -323,6 +390,17 @@ def test_bounded_draft_repair_posts_only_to_pinned_broker(monkeypatch):
     class Opener:
         @staticmethod
         def open(request, timeout):
+            if request.get_method() == "GET":
+                class HealthResponse(Response):
+                    def geturl(self):
+                        return broker_url.replace(
+                            "/v1/github/draft-repair", "/healthz"
+                        )
+
+                    def read(self, limit):
+                        return json.dumps(_approved_health_payload()).encode()
+
+                return HealthResponse()
             observed.update(
                 {
                     "url": request.full_url,
@@ -342,6 +420,7 @@ def test_bounded_draft_repair_posts_only_to_pinned_broker(monkeypatch):
             "AUTOPILOT_TOKEN_BROKER_URL": broker_url,
             "AUTOPILOT_TOKEN_BROKER_SECRET": "s" * 64,
             "AUTOPILOT_VERCEL_BYPASS_SECRET": "b" * 64,
+            **_broker_release_env(),
         },
         clear=True,
     ):
@@ -376,11 +455,18 @@ def test_bounded_draft_repair_rejects_forged_evidence(monkeypatch):
         "pull_request_url": "https://github.com/olegmed1-art/bridge-video-free/pull/1001",
         "draft": True,
         "replayed": False,
-        "token_exposed": True,
+        "token_exposed": False,
         "merge_allowed": False,
         "production_mutation": False,
         "operation_count": 10,
     }
+    response_payload.update({
+        "broker_artifact_sha256": "c" * 64,
+        "broker_policy_sha256": "d" * 64,
+        "broker_policy_version": "physical-no-merge-v1",
+        "broker_source_sha": "e" * 40,
+        "broker_provenance_sha256": "f" * 64,
+    })
     broker_url = (
         "https://bridge-school-autopilot-cslfiz83g-"
         "olegmed1-4368s-projects.vercel.app/v1/github/draft-repair"
@@ -395,7 +481,18 @@ def test_bounded_draft_repair_rejects_forged_evidence(monkeypatch):
         def read(self, _limit): return json.dumps(response_payload).encode()
 
     class Opener:
-        open = staticmethod(lambda *_args, **_kwargs: Response())
+        @staticmethod
+        def open(request, **_kwargs):
+            if request.get_method() == "GET":
+                class HealthResponse(Response):
+                    def geturl(self):
+                        return broker_url.replace("/v1/github/draft-repair", "/healthz")
+
+                    def read(self, _limit):
+                        return json.dumps(_approved_health_payload()).encode()
+
+                return HealthResponse()
+            return Response()
 
     monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: Opener())
     with patch.dict(
@@ -404,11 +501,84 @@ def test_bounded_draft_repair_rejects_forged_evidence(monkeypatch):
             "AUTOPILOT_TOKEN_BROKER_URL": broker_url,
             "AUTOPILOT_TOKEN_BROKER_SECRET": "s" * 64,
             "AUTOPILOT_VERCEL_BYPASS_SECRET": "b" * 64,
+            **_broker_release_env(),
         },
         clear=True,
     ):
         with pytest.raises(AutopilotContractError, match="RESPONSE_INVALID"):
             execute_bounded_draft_repair(goal)
+
+
+def test_bounded_draft_repair_rejects_unapproved_release_before_post(monkeypatch):
+    broker_url = (
+        "https://bridge-school-autopilot-cslfiz83g-"
+        "olegmed1-4368s-projects.vercel.app/v1/github/draft-repair"
+    )
+    methods = []
+
+    class Response:
+        status = 200
+
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def geturl(self):
+            return broker_url.replace("/v1/github/draft-repair", "/healthz")
+        def read(self, _limit):
+            return json.dumps(
+                {**_approved_health_payload(), "source_revision": "f" * 40}
+            ).encode()
+
+    class Opener:
+        @staticmethod
+        def open(request, **_kwargs):
+            methods.append(request.get_method())
+            return Response()
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: Opener())
+    with patch.dict(
+        os.environ,
+        {
+            "AUTOPILOT_TOKEN_BROKER_URL": broker_url,
+            "AUTOPILOT_TOKEN_BROKER_SECRET": "s" * 64,
+            "AUTOPILOT_VERCEL_BYPASS_SECRET": "b" * 64,
+            **_broker_release_env(),
+        },
+        clear=True,
+    ), pytest.raises(AutopilotContractError, match="RELEASE_UNAPPROVED"):
+        execute_bounded_draft_repair(_draft_goal())
+    assert methods == ["GET"]
+
+
+@pytest.mark.parametrize("status", [408, 425, 429, 500, 503])
+def test_broker_health_transient_status_is_retryable_before_post(
+    monkeypatch, status
+):
+    broker_url = (
+        "https://bridge-school-autopilot-cslfiz83g-"
+        "olegmed1-4368s-projects.vercel.app/v1/github/draft-repair"
+    )
+
+    class Opener:
+        @staticmethod
+        def open(request, **_kwargs):
+            raise urllib.error.HTTPError(
+                request.full_url, status, "transient", {}, None
+            )
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: Opener())
+    with patch.dict(
+        os.environ,
+        {
+            "AUTOPILOT_TOKEN_BROKER_URL": broker_url,
+            "AUTOPILOT_TOKEN_BROKER_SECRET": "s" * 64,
+            "AUTOPILOT_VERCEL_BYPASS_SECRET": "b" * 64,
+            **_broker_release_env(),
+        },
+        clear=True,
+    ), pytest.raises(
+        AutopilotRetryableError, match="TOKEN_BROKER_TRANSIENT_ERROR"
+    ):
+        execute_bounded_draft_repair(_draft_goal())
 
 
 def test_github_pr_snapshot_uses_bounded_public_get(monkeypatch):
@@ -834,7 +1004,7 @@ def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():
     workflow = open(
         ".github/workflows/oracle-autopilot-shadow-activation.yml", encoding="utf-8"
     ).read()
-    assert "EXPECTED_STAGED_REVISION: 9064044d4c5b85803c6778060dff4843111ab888" in workflow
+    assert "EXPECTED_STAGED_REVISION: 5b2e91846d1f94c40c1ba5e919253e47afa372db" in workflow
     unit_sha256 = hashlib.sha256(
         open("deploy/oracle-autopilot/school-autopilot-shadow.service", "rb").read()
     ).hexdigest()
@@ -845,6 +1015,23 @@ def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():
     assert "request['neon_max_cu'] == 8" in workflow
     assert "request['runtime_connection_limit'] == 4" in workflow
     assert 'systemctl enable --now "$service"' in workflow
+    assert 'systemctl restart "$service"' in workflow
+    assert 'PROCESS_ENVIRON="/proc/$pid/environ"' in workflow
+    assert "broker_provenance_sha256" in workflow
+    assert '"$root/.venv/bin/python"' in workflow
+    assert "SELECT autopilot.verify_broker_schema_v0321()" in workflow
+    assert 'source "$root/autopilot-shadow.env"' not in workflow
+    assert "parse_environment_file" in workflow
+    assert "RejectRedirects" in workflow
+    assert "response.read(32_769)" in workflow
+    assert "AUTOPILOT_SHADOW_EXISTING_STATE_RESTORED" in workflow
+    assert "AUTOPILOT_SHADOW_EXISTING_STATE_ROLLBACK_FAILED_SNAPSHOT_RETAINED" in workflow
+    assert "mktemp -d /var/tmp/autopilot-activation-rollback" in workflow
+    assert "os.O_EXCL | os.O_NOFOLLOW" in workflow
+    assert 'ln -sfn "$previous_release" "$root/current"' in workflow
+    assert workflow.index("AUTOPILOT_DIAG_OBSERVER_RESTORED=not-required") < workflow.index(
+        "previous_broker_env=''", workflow.index("AUTOPILOT_DIAG_OBSERVER_RESTORED=not-required")
+    )
     assert 'systemctl enable --now "$observer_service"' in workflow
     assert "restore-online-observer-after-staging" in workflow
     assert "AUTOPILOT_DIAG_OBSERVER_RESTORED" in workflow

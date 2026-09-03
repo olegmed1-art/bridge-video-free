@@ -64,6 +64,43 @@ Redirects, unexpected permissions, invalid repository identity,
 oversized responses, weak configuration, and stale/long-lived tokens fail
 closed. Oracle never receives the App private key or installation token.
 
+### Physical no-merge attestation
+
+The installation credential needs `contents:write` to construct Git objects
+and a namespaced branch. GitHub does not offer a permission that grants those
+object writes while independently denying the pull-request merge API. The
+reviewed broker artifact is therefore the physical capability boundary, rather
+than the token permission label alone.
+
+Policy `physical-no-merge-v1` strengthens that boundary as follows:
+
+- every credentialed repository request passes a finite typed dispatcher;
+- only the exact GET/POST shapes needed for preflight, Git object construction,
+  namespaced ref creation, and draft-PR creation are accepted;
+- merge, ref update/delete, Actions, Deployments, hooks, rulesets, arbitrary
+  origins, encoded path escapes, extra query parameters, and PUT/PATCH/DELETE
+  requests fail closed before network dispatch;
+- `/healthz` reports the policy version and Vercel's immutable
+  `VERCEL_GIT_COMMIT_SHA`; caller-supplied source/artifact attestation variables
+  are ignored;
+- the mutation endpoint returns 503 unless the platform supplies an exact
+  lowercase deployment commit SHA; at runtime the broker hashes the loaded
+  security-relevant Python artifact and binds that digest, the platform commit,
+  policy version, and policy digest into a canonical provenance SHA-256;
+- every successful mutation receipt includes that exact source SHA, artifact
+  digest, immutable broker policy version, canonical policy SHA-256, and bound
+  provenance SHA-256; the Oracle consumer recomputes the binding and migration
+  `0307` requires the complete receipt fields;
+- the raw installation token remains process-local and no route returns it or
+  its expiry.
+
+The provenance receipt proves internal binding, but broker isolation is not a
+GitHub-level prohibition on merge. A deployment gate must still compare its
+source/artifact/policy values with the exact reviewed release and read them back
+from the protected Preview. Missing or mismatched deployment evidence remains
+`UNKNOWN`, never PASS. This source contract does not deploy, rotate credentials,
+change Vercel environment variables, or authorize production promotion.
+
 The Oracle consumer accepts no arbitrary URL. Its root-owned environment pins
 one exact Preview deployment path and contains separate broker-ingress and
 Vercel automation-bypass secrets. It sends the complete locked task manifest,

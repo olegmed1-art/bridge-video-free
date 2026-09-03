@@ -1,10 +1,9 @@
 """Evidence-preserving deal-review pages for the stable 3.1 FREE PDF.
 
 The renderer is deliberately presentation-only. It accepts cards already held
-in the master-analysis deal contract, keeps observed and human-verified cards
-separate from deterministic reconstruction, and never promotes review data to
-school canon. The only supported reconstruction is the canonical 39-to-13 deck
-subtraction implemented by :mod:`bridge_contracts.video_deal`.
+in the master-analysis deal contract, preserves observed and human-verified
+provenance, and never reconstructs a hidden hand or promotes review data to
+school canon.
 """
 from __future__ import annotations
 
@@ -19,7 +18,7 @@ from typing import Any
 
 from bridge_contracts.video_deal import SEATS, canonicalize_video_deal
 
-SCHEMA = "bridge-3.1-free-deal-review-pdf/v1"
+SCHEMA = "bridge-3.1-free-deal-review-pdf/v2"
 SUITS = ("S", "H", "D", "C")
 SUIT_SYMBOLS = {"S": "♠", "H": "♥", "D": "♦", "C": "♣"}
 RANK_ORDER = "AKQJT98765432"
@@ -175,19 +174,10 @@ def build_deal_review_views(master: Mapping[str, Any], shots: Sequence[Mapping[s
         hands = _normalise_hands(deal)
         try:
             observed = canonicalize_video_deal({"hands": hands}).to_dict()
-            reconstructed = canonicalize_video_deal(
-                {"hands": hands}, derive_fourth_hand=True
-            ).to_dict()
         except Exception as exc:
             raise DealReviewPdfError("deal cards violate the canonical 52-card contract") from exc
         observed_count = sum(len(observed["hands"][seat]["cards"]) for seat in SEATS)
-        derivations = reconstructed.get("derivations") or []
-        if derivations:
-            reconstruction_status = "DERIVED_39_TO_13"
-        elif observed_count == 52:
-            reconstruction_status = "OBSERVED_COMPLETE"
-        else:
-            reconstruction_status = "NOT_DERIVED_INSUFFICIENT_OBSERVATIONS"
+        evidence_status = "OBSERVED_COMPLETE" if observed_count == 52 else "PARTIAL_OBSERVATION"
         chosen = next((by_id[item] for item in _evidence_ids(deal) if item in by_id), None)
         safe_shot = _safe_shot(chosen)
         views.append({
@@ -196,8 +186,8 @@ def build_deal_review_views(master: Mapping[str, Any], shots: Sequence[Mapping[s
             "status": str(deal.get("status") or "REVIEW"),
             "observed": observed,
             "observed_count": observed_count,
-            "reconstructed": reconstructed,
-            "reconstruction_status": reconstruction_status,
+            "evidence_deal": observed,
+            "evidence_status": evidence_status,
             "verified_seats": _verified_seats(deal, safe_shot),
             "auction": _normalise_auction(deal),
             "shot": safe_shot,
@@ -242,9 +232,7 @@ def _draw_hand(
 ) -> None:
     from reportlab.lib.colors import HexColor
 
-    colour = "#A65D00" if evidence_class == "DERIVED" else "#0B6B4B"
-    if evidence_class == "UNKNOWN":
-        colour = "#667085"
+    colour = "#667085" if evidence_class == "UNKNOWN" else "#0B6B4B"
     canvas.setFillColor(HexColor(colour))
     canvas.setFont("DealReviewSans-Bold", 6.8 if compact else 7.4)
     canvas.drawString(x, y, f"{seat} - {evidence_class}")
@@ -253,9 +241,7 @@ def _draw_hand(
     for suit, line in _hand_lines(
         list(hand.get("cards") or []), int(hand.get("unknown_count") or 0)
     ):
-        if evidence_class == "DERIVED":
-            text_colour = "#A65D00"
-        elif suit in {"H", "D"}:
+        if suit in {"H", "D"}:
             text_colour = "#C52A35"
         else:
             text_colour = "#202838"
@@ -275,7 +261,6 @@ def _draw_deal(
     deal: Mapping[str, Any],
     title: str,
     verified_seats: set[str],
-    derived_seats: set[str],
     note: str,
 ) -> None:
     from reportlab.lib.colors import HexColor
@@ -286,8 +271,6 @@ def _draw_deal(
     hand_width = width * (0.42 if compact else 0.46)
 
     def evidence_class(seat: str) -> str:
-        if seat in derived_seats:
-            return "DERIVED"
         if not (hands.get(seat) or {}).get("cards"):
             return "UNKNOWN"
         return "HUMAN_VERIFIED" if seat in verified_seats else "OBSERVED"
@@ -442,30 +425,18 @@ def _render_appendix(path: Path, views: Sequence[Mapping[str, Any]], source: str
             deal=view.get("observed") or {},
             title=f"Распознано (OBSERVED / HUMAN_VERIFIED) - {int(view.get('observed_count') or 0)}/52",
             verified_seats=set(view.get("verified_seats") or set()),
-            derived_seats=set(),
             note="Показываются только сохраненные наблюдения; подтверждение помечено отдельно",
         )
-        reconstructed = view.get("reconstructed") or {}
-        derived_seats = {
-            str(item.get("seat"))
-            for item in reconstructed.get("derivations") or []
-            if isinstance(item, Mapping)
-        }
         _draw_deal(
             canvas,
             x=28,
             y=31,
             width=389,
             height=218,
-            deal=reconstructed,
-            title=f"Достроенный расклад - {view.get('reconstruction_status')}",
+            deal=view.get("evidence_deal") or {},
+            title=f"Проверяемая полнота - {view.get('evidence_status')}",
             verified_seats=set(view.get("verified_seats") or set()),
-            derived_seats=derived_seats,
-            note=(
-                "DERIVED допускается только как точное 39-to-13 вычитание колоды"
-                if derived_seats
-                else "Недостающие карты не угадываются"
-            ),
+            note="Скрытые и недостающие карты остаются UNKNOWN; 39-to-13 запрещено",
         )
         _draw_auction(
             canvas,
@@ -477,7 +448,7 @@ def _render_appendix(path: Path, views: Sequence[Mapping[str, Any]], source: str
         )
         canvas.setFillColor(HexColor("#667085"))
         canvas.setFont("DealReviewSans", 6)
-        canvas.drawString(28, 15, "EVIDENCE REVIEW - HUMAN_VERIFIED/OBSERVED is not automatic SCHOOL CANON; orange cards are DERIVED")
+        canvas.drawString(28, 15, "EVIDENCE REVIEW - HUMAN_VERIFIED/OBSERVED is not automatic SCHOOL CANON; hidden cards stay UNKNOWN")
         canvas.drawRightString(page_width - 28, 15, f"{page_number}/{len(views)}")
         canvas.showPage()
     canvas.save()
@@ -498,7 +469,7 @@ def _validate_tail(pdf: Path, expected_pages: int) -> None:
             for marker in (
                 "3.1 FREE - DEAL REVIEW",
                 "Распознано",
-                "Достроенный расклад",
+                "Проверяемая полнота",
                 "Торговля",
                 "EVIDENCE REVIEW",
             ):
@@ -525,6 +496,7 @@ def append_deal_review_pages(
             "deals": 0,
             "screenshots_embedded": 0,
             "canon_promotion_performed": False,
+            "hidden_hand_reconstruction_performed": False,
         }
     pdf_path = Path(pdf_path)
     source = str((master.get("source") or {}).get("name") or "Bridge Video")
@@ -548,7 +520,8 @@ def append_deal_review_pages(
         "deals": len(views),
         "screenshots_embedded": screenshots,
         "canon_promotion_performed": False,
-        "reconstruction_rule": "deck_subtraction_from_three_complete_hands_only",
+        "reconstruction_rule": "PROHIBITED_HIDDEN_CARDS_REMAIN_UNKNOWN",
+        "hidden_hand_reconstruction_performed": False,
     }
 
 

@@ -338,7 +338,7 @@ def pdfqc(p,expected_deal_review_pages=0):
             for page in list(d)[-expected_deal_review_pages:]:
                 text=page.get_text()
                 if page.rect.width<=page.rect.height:issues.append('deal-review-not-landscape')
-                for marker in ('3.1 FREE - DEAL REVIEW','Распознано','Достроенный расклад','Торговля','EVIDENCE REVIEW'):
+                for marker in ('3.1 FREE - DEAL REVIEW','Распознано','Проверяемая полнота','Торговля','EVIDENCE REVIEW'):
                     if marker not in text:issues.append('deal-review-marker')
     embedded=set(d.embfile_names()) if hasattr(d,'embfile_names') else set();ok='master_analysis.json' in embedded
     if not ok:issues.append('master-json-not-embedded')

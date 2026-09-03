@@ -268,8 +268,11 @@ jobs:
           assert set(values) == {
               'schema_version', 'autopilot_token_broker_url',
               'autopilot_token_broker_secret', 'autopilot_vercel_bypass_secret',
+              'broker_expected_source_sha', 'broker_expected_artifact_sha256',
+              'broker_expected_policy_sha256',
+              'broker_expected_provenance_sha256',
           }
-          assert values['schema_version'] == 1
+          assert values['schema_version'] == 2
           url = values['autopilot_token_broker_url']
           parsed = urllib.parse.urlsplit(url)
           assert parsed.scheme == 'https'
@@ -283,12 +286,33 @@ jobs:
               assert isinstance(value, str) and lower <= len(value) <= 512
               assert all(32 < ord(ch) < 127 for ch in value)
               assert '\r' not in value and '\n' not in value
+          source_sha = values['broker_expected_source_sha']
+          artifact_sha = values['broker_expected_artifact_sha256']
+          policy_sha = values['broker_expected_policy_sha256']
+          provenance_sha = values['broker_expected_provenance_sha256']
+          assert re.fullmatch(r'[0-9a-f]{40}', source_sha)
+          for value in (artifact_sha, policy_sha, provenance_sha):
+              assert re.fullmatch(r'[0-9a-f]{64}', value)
+          statement = {
+              'artifact_sha256': artifact_sha,
+              'policy_sha256': policy_sha,
+              'policy_version': 'physical-no-merge-v1',
+              'source_sha': source_sha,
+          }
+          expected_provenance = hashlib.sha256(json.dumps(
+              statement, sort_keys=True, separators=(',', ':'),
+          ).encode()).hexdigest()
+          assert provenance_sha == expected_provenance
           def quote(value: str) -> str:
               return '"' + value.replace('\\', '\\\\').replace('"', '\\"') + '"'
           content = (
               f"AUTOPILOT_TOKEN_BROKER_URL={quote(url)}\n"
               f"AUTOPILOT_TOKEN_BROKER_SECRET={quote(broker)}\n"
               f"AUTOPILOT_VERCEL_BYPASS_SECRET={quote(bypass)}\n"
+              f"AUTOPILOT_TOKEN_BROKER_EXPECTED_SOURCE_SHA={quote(source_sha)}\n"
+              f"AUTOPILOT_TOKEN_BROKER_EXPECTED_ARTIFACT_SHA256={quote(artifact_sha)}\n"
+              f"AUTOPILOT_TOKEN_BROKER_EXPECTED_POLICY_SHA256={quote(policy_sha)}\n"
+              f"AUTOPILOT_TOKEN_BROKER_EXPECTED_PROVENANCE_SHA256={quote(provenance_sha)}\n"
           )
           Path(os.environ['TARGET_FILE']).write_text(content, encoding='utf-8')
           os.chmod(os.environ['TARGET_FILE'], 0o600)
@@ -319,9 +343,22 @@ jobs:
           }
           for key, value in expected.items():
               assert payload.get(key) == value, (key, payload.get(key))
+          pins = {
+              'source_revision': os.environ['AUTOPILOT_TOKEN_BROKER_EXPECTED_SOURCE_SHA'],
+              'artifact_sha256': os.environ['AUTOPILOT_TOKEN_BROKER_EXPECTED_ARTIFACT_SHA256'],
+              'policy_sha256': os.environ['AUTOPILOT_TOKEN_BROKER_EXPECTED_POLICY_SHA256'],
+              'provenance_sha256': os.environ['AUTOPILOT_TOKEN_BROKER_EXPECTED_PROVENANCE_SHA256'],
+          }
+          for key, value in pins.items():
+              assert payload.get(key) == value, (key, payload.get(key))
           print('AUTOPILOT_REAL_BROKER_HEALTH=PASS')
           PY
-          unset AUTOPILOT_TOKEN_BROKER_URL AUTOPILOT_TOKEN_BROKER_SECRET AUTOPILOT_VERCEL_BYPASS_SECRET
+          unset AUTOPILOT_TOKEN_BROKER_URL AUTOPILOT_TOKEN_BROKER_SECRET \
+            AUTOPILOT_VERCEL_BYPASS_SECRET \
+            AUTOPILOT_TOKEN_BROKER_EXPECTED_SOURCE_SHA \
+            AUTOPILOT_TOKEN_BROKER_EXPECTED_ARTIFACT_SHA256 \
+            AUTOPILOT_TOKEN_BROKER_EXPECTED_POLICY_SHA256 \
+            AUTOPILOT_TOKEN_BROKER_EXPECTED_PROVENANCE_SHA256
           echo 'AUTOPILOT_BROKER_ENV_PRESENT=YES'
           echo 'AUTOPILOT_BROKER_ENV_MODE=0600'
           echo 'AUTOPILOT_BROKER_ENV_OWNER=root:root'

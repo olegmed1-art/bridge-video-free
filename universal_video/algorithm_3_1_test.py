@@ -17,7 +17,7 @@ from .speaker_structure import MIN_TEST_LABEL_COVERAGE
 
 SCHEMA = "bridge-video-algorithm-definition-v1"
 ALGORITHM_VERSION = "3.1-test"
-ALGORITHM_REVISION = "3.1-test-r6-speaker-selection"
+ALGORITHM_REVISION = "3.1-test-r7-source-bound-speech"
 BASE_ALGORITHM_VERSION = "3.1 FREE"
 PROFILE_NAME = "bridge_lesson_3_1_test"
 DEFINITION_FILE = "algorithm_3_1_test.json"
@@ -43,11 +43,11 @@ BRIDGE_EVIDENCE_POLICY: dict[str, Any] = {
     "minimum_independent_frame_hashes_per_card": 2,
     "rank_and_suit_required": True,
     "independent_full_card_channel_required": True,
-    "teacher_exact_card": "OBSERVATION_ONLY_AFTER_VERIFIED_ROLE_IDENTITY_AND_CONFIDENCE_GATES",
+    "teacher_exact_card": "CORROBORATION_OR_CONFLICT_ONLY_REQUIRES_VISUAL_OBSERVATION",
     "student_exact_card": "SUGGESTION_OR_CORROBORATION_ONLY",
     "board_number": "OBSERVED_WITH_INDEPENDENT_FRAME_CONSENSUS",
-    "dealer_and_vulnerability": "DERIVED_FROM_CONFIRMED_DUPLICATE_BOARD_CYCLE_AND_CONFLICT_CHECKED",
-    "fourth_hand": "DERIVED_ONLY_FROM_39_UNIQUE_OBSERVED_CARDS_IN_THREE_COMPLETE_HANDS",
+    "dealer_and_vulnerability": "SOURCE_BOUND_VISUAL_OR_PARTIAL_DERIVATION_NEVER_CONFIRMED_BY_CYCLE_ALONE",
+    "fourth_hand": "PROHIBITED_HIDDEN_CARDS_REMAIN_UNKNOWN",
     "verified_full_board": "REQUIRES_52_UNIQUE_OBSERVED_CARDS",
     "canonical_promotion_allowed": False,
 }
@@ -59,6 +59,8 @@ SPEAKER_EVIDENCE_POLICY: dict[str, Any] = {
     "minimum_distinct_clusters": 2,
     "real_person_identity_claimed": False,
     "teacher_student_attribution": "SUGGESTION_ONLY",
+    "named_identity": "UNKNOWN_UNLESS_SEPARATE_PRIVATE_SOURCE_BOUND_EVIDENCE_PASSES",
+    "segment_to_frame_binding": "EXACTLY_ONE_SOURCE_BOUND_SHA256_FRAME_OR_REVIEW",
 }
 
 CAPABILITIES: tuple[dict[str, Any], ...] = (
@@ -125,26 +127,32 @@ CAPABILITIES: tuple[dict[str, Any], ...] = (
     {
         "id": "verified_layout_and_rotation",
         "state": "SHADOW_COMPONENT",
-        "modules": ["bridge_vision.profiled_challenger"],
+        "modules": ["bridge_vision.evidence_fusion", "tools.bridge_video_positions"],
         "boundary": "H-C-D-S ordering and 0/90/180/270 rotation are profile-bound suggestions",
     },
     {
         "id": "direct_speech_card_evidence",
         "state": "SHADOW_COMPONENT",
         "modules": ["bridge_vision.profiled_challenger"],
-        "boundary": "verified teacher evidence may observe; student speech can only suggest/corroborate",
+        "boundary": "speech may corroborate visual evidence or expose conflict; it never creates a card",
     },
     {
         "id": "board_metadata",
         "state": "SHADOW_COMPONENT",
         "modules": ["bridge_vision.profiled_challenger"],
-        "boundary": "board number needs independent-frame consensus; dealer/vulnerability follow duplicate cycles",
+        "boundary": "board/dealer/vulnerability need source-bound visual evidence; cycle derivation stays PARTIAL",
     },
     {
-        "id": "deal_reconstruction_39_to_13",
-        "state": "SHADOW_COMPONENT",
-        "modules": ["bridge_vision.canonical", "bridge_vision.profiled_challenger"],
-        "boundary": "only an exact conflict-free 39-card observation may derive the fourth hand",
+        "id": "hidden_hand_unknown_gate_v1",
+        "state": "IMPLEMENTED_FAIL_CLOSED",
+        "modules": ["bridge_contracts.video_deal", "bridge_vision.engine"],
+        "boundary": "hidden and fourth-hand cards remain UNKNOWN even when the deck complement is unique",
+    },
+    {
+        "id": "source_bound_speech_frame_binding_v1",
+        "state": "IMPLEMENTED_SHADOW",
+        "modules": ["tools.bridge_video_positions"],
+        "boundary": "one phrase binds to one source-bound frame SHA-256 or remains review evidence",
     },
     {
         "id": "dds3_optional",

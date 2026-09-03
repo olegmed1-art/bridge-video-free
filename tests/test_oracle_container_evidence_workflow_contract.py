@@ -6,11 +6,21 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/oracle-universal-video-container-evidence.yml"
 
 
-def test_bounded_diagnostic_accepts_runtime_json_format() -> None:
+def test_legacy_evidence_workflow_is_pr_only_and_static() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
 
-    assert 'python ops/bounded_container_log_diagnostic.py "$RUNNER_TEMP/container.log"' in text
-    assert "python - <<'PY'" not in text
+    assert "pull_request:" in text
+    assert "workflow_dispatch:" not in text
+    assert "push:" not in text
+    assert text.startswith(
+        "name: Retired Oracle Universal Video Container Evidence Contract\n"
+    )
+    assert "name: Oracle Universal Video Container Evidence\n" not in text
+    assert "  retired-evidence-contract:" in text
+    assert "name: Retired legacy evidence entrypoint contract" in text
+    assert "head.repo.full_name" not in text
+    assert "UNIVERSAL_VIDEO_LEGACY_CONTAINER_EVIDENCE_RETIRED=true" in text
+    assert ".github/workflows/issue-881-authoritative-external-evidence.yml" in text
 
 
 def test_bounded_parser_canonicalizes_runtime_json_without_leaking_raw_log() -> None:
@@ -31,26 +41,20 @@ def test_bounded_parser_canonicalizes_runtime_json_without_leaking_raw_log() -> 
     assert result == ['{"error_code":"UV_CONTAINER_MODEL_UNAVAILABLE","status":"FAILED"}']
 
 
-def test_evidence_workflow_remains_non_activating_and_media_free() -> None:
+def test_legacy_evidence_workflow_has_no_external_mutation_capability() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
 
-    assert "UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=0" in text
-    assert "video_job_submitted=false" in text
-    assert "workflow_dispatch:" in text
-    assert "paths:" in text
-    assert "'universal_video/container_runtime.py'" in text
-    assert "'ops/oracle_universal_video_container_install.sh'" in text
-    assert "'ops/bounded_container_log_diagnostic.py'" in text
-    assert "'ops/oracle_universal_video_run_command.sh'" in text
-    assert "'ops/oracle_universal_video_container_promote.sh'" in text
-    assert "'deploy/oracle-universal-video/Dockerfile'" in text
-    assert "'.github/workflows/oracle-universal-video-container-promote.yml'" in text
-    assert "UNIVERSAL_VIDEO_PROMOTION_ENTRYPOINT_ATTEST_PASS" in text
-    assert "group: oracle-instance-workload-mutation" in text
-    assert "'.github/workflows/oracle-universal-video-activation.yml'" in text
-    assert "ORACLE_INSTANCE_RUNNING_PASS" in text
-    assert "compute instance action --instance-id \"$INSTANCE_ID\" --action START" in text
-    assert "'ops/bounded_container_log_diagnostic.py'" in text
+    for forbidden in (
+        "secrets.",
+        "oci ",
+        "ssh ",
+        "systemctl ",
+        "docker ",
+        "UNIVERSAL_VIDEO_ACTIVATE",
+        "UNIVERSAL_VIDEO_SOURCE_ONLY",
+        "oracle-instance-workload-mutation",
+    ):
+        assert forbidden not in text
 
 
 def test_container_installer_reclaims_only_unused_video_images_before_build() -> None:
@@ -58,8 +62,8 @@ def test_container_installer_reclaims_only_unused_video_images_before_build() ->
 
     assert 'UNIVERSAL_VIDEO_CONTAINER_MIN_FREE_KB:-8388608' in installer
     assert 'docker builder prune --all --force' in installer
-    assert 'docker image prune --all --force' in installer
-    assert 'docker image ls --filter "reference=$IMAGE_REPO:*"' in installer
+    assert 'docker image prune --all --force' not in installer
+    assert 'docker image ls --no-trunc --filter "reference=$IMAGE_REPO:*"' in installer
     assert 'docker ps -aq --filter "ancestor=$old_image_id"' in installer
     assert 'UV_CONTAINER_DISK_INSUFFICIENT' in installer
     assert "docker system prune" not in installer
@@ -153,16 +157,6 @@ def test_activation_does_not_run_build_disk_cleanup_or_delete_attested_image() -
     assert 'docker image prune --all' not in installer
 
 
-def test_evidence_bounds_source_prepare_failure_before_container_build() -> None:
-    text = WORKFLOW.read_text(encoding="utf-8")
-
-    assert "prepare_rc=$?" in text
-    assert 'bounded_container_log_diagnostic.py "$RUNNER_TEMP/prepare.log"' in text
-    assert "UV_CONTAINER_SOURCE_PREPARE_FAILED" in text
-    assert "disk_available_kb=" in text
-    assert 'cat "$RUNNER_TEMP/prepare.log"' not in text
-
-
 def test_source_prepare_emits_only_fixed_bounded_stages() -> None:
     run_command = (ROOT / "ops/oracle_universal_video_run_command.sh").read_text(encoding="utf-8")
     parser_path = ROOT / "ops/bounded_container_log_diagnostic.py"
@@ -191,14 +185,12 @@ def test_source_prepare_emits_only_fixed_bounded_stages() -> None:
 
 def test_container_gates_prepare_source_without_reinstalling_legacy_runtime() -> None:
     run_command = (ROOT / "ops/oracle_universal_video_run_command.sh").read_text(encoding="utf-8")
-    evidence = WORKFLOW.read_text(encoding="utf-8")
     promotion = (ROOT / ".github/workflows/oracle-universal-video-container-promote.yml").read_text(encoding="utf-8")
 
     assert 'SOURCE_ONLY="${UNIVERSAL_VIDEO_SOURCE_ONLY:-0}"' in run_command
     assert '[[ "$SOURCE_ONLY" =~ ^[01]$ ]]' in run_command
     assert 'if [[ "$SOURCE_ONLY" == "1" ]]; then' in run_command
     assert "UNIVERSAL_VIDEO_SOURCE_ONLY_PREPARE_PASS" in run_command
-    assert "UNIVERSAL_VIDEO_SOURCE_ONLY=1" in evidence
     assert "UNIVERSAL_VIDEO_SOURCE_ONLY=1" in promotion
 
 
@@ -261,11 +253,11 @@ def test_container_image_build_has_its_own_graceful_timeout() -> None:
     assert "UV_CONTAINER_IMAGE_BUILD_TIMEOUT" in installer
 
 
-def test_evidence_stuck_run_recovery_is_explicit_and_fail_closed() -> None:
+def test_legacy_evidence_workflow_cannot_restart_from_commit_messages() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
 
-    recovery = "cancel-in-progress: ${{ github.event_name == 'push' && contains(github.event.head_commit.message, '[UV_EVIDENCE_RECOVER_STUCK]') }}"
-    assert recovery in text
+    assert "UV_EVIDENCE_RECOVER_STUCK" not in text
+    assert "github.event.head_commit" not in text
     assert "cancel-in-progress: true" not in text
 
 

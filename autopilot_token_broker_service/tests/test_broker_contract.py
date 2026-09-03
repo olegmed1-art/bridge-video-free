@@ -28,6 +28,8 @@ from broker_app.github import (
     DraftRepairConflictError,
     REPOSITORY_FULL_NAME,
     TOKEN_PERMISSIONS,
+    _authorize_github_operation,
+    broker_policy_sha256,
     build_app_jwt,
     execute_bounded_draft_repair,
     issue_installation_token,
@@ -36,6 +38,7 @@ from broker_app.github import (
 from broker_app.main import (
     _require_broker_authorization,
     _require_preview_runtime,
+    _require_source_attestation,
     draft_repair,
     healthz,
 )
@@ -468,6 +471,80 @@ class BrokerContractTests(unittest.TestCase):
         self.assertFalse(payload["production_mutations_enabled"])
         self.assertFalse(payload["github_token_broker_enabled"])
         self.assertFalse(payload["raw_installation_token_exposed"])
+        self.assertEqual(payload["broker_policy_version"], "physical-no-merge-v1")
+        self.assertEqual(payload["source_revision"], "UNATTESTED")
+        self.assertFalse(payload["source_attested"])
+        self.assertRegex(payload["artifact_sha256"], r"^[0-9a-f]{64}$")
+        self.assertFalse(payload["artifact_attested"])
+        self.assertRegex(payload["policy_sha256"], r"^[0-9a-f]{64}$")
+        self.assertFalse(payload["merge_endpoint_enabled"])
+        self.assertFalse(payload["ref_update_delete_enabled"])
+
+    def test_source_attestation_is_exact_and_fail_closed(self):
+        for value in ("", "main", "A" * 40, "a" * 39, "a" * 41):
+            with self.subTest(value=value), patch.dict(
+                os.environ, {"VERCEL_GIT_COMMIT_SHA": value}, clear=True
+            ), self.assertRaises(HTTPException) as context:
+                _require_source_attestation()
+            self.assertEqual(context.exception.detail, "TOKEN_BROKER_SOURCE_UNATTESTED")
+        with patch.dict(
+            os.environ,
+            {
+                "VERCEL_GIT_COMMIT_SHA": "a" * 40,
+            },
+            clear=True,
+        ):
+            _require_source_attestation()
+
+    def test_user_supplied_well_shaped_attestation_is_ignored(self):
+        with patch.dict(os.environ, {
+            "AUTOPILOT_BROKER_SOURCE_SHA": "a" * 40,
+            "AUTOPILOT_BROKER_ARTIFACT_SHA256": "b" * 64,
+        }, clear=True), self.assertRaises(HTTPException):
+            _require_source_attestation()
+
+    def test_policy_digest_is_stable_and_bound_to_policy(self):
+        self.assertRegex(broker_policy_sha256(), r"^[0-9a-f]{64}$")
+        self.assertEqual(broker_policy_sha256(), broker_policy_sha256())
+
+    def test_typed_operation_allowlist_rejects_merge_and_escape_shapes(self):
+        forbidden = (
+            ("PUT", f"/repos/{REPOSITORY_FULL_NAME}/pulls/1/merge"),
+            ("POST", f"/repos/{REPOSITORY_FULL_NAME}/merges"),
+            ("POST", f"/repos/{REPOSITORY_FULL_NAME}/git/refs/heads/main"),
+            ("PATCH", f"/repos/{REPOSITORY_FULL_NAME}/git/refs/heads/main"),
+            ("DELETE", f"/repos/{REPOSITORY_FULL_NAME}/git/refs/heads/main"),
+            ("POST", f"/repos/{REPOSITORY_FULL_NAME}/actions/workflows/x/dispatches"),
+            ("POST", f"/repos/{REPOSITORY_FULL_NAME}/deployments"),
+            ("POST", f"/repos/{REPOSITORY_FULL_NAME}/hooks"),
+            ("GET", f"/repos/{REPOSITORY_FULL_NAME}/rulesets"),
+            ("GET", f"/repos/{REPOSITORY_FULL_NAME}/contents/%2e%2e/ops/x?ref={'a' * 40}"),
+            ("GET", f"/repos/{REPOSITORY_FULL_NAME}/contents/%252e%252e/ops/x?ref={'a' * 40}"),
+            ("GET", f"/repos/{REPOSITORY_FULL_NAME}/contents/docs%2fevidence%2fautopilot%2fx.md?ref={'a' * 40}"),
+            ("GET", f"/repos/{REPOSITORY_FULL_NAME}/contents/docs/evidence/autopilot/x.md?ref={'a' * 40}%26extra=1"),
+            ("GET", f"/repos/{REPOSITORY_FULL_NAME}/pulls?base=main&head=olegmed1-art:autopilot/repair/{'a' * 16}&per_page=2&state=all&extra=1"),
+            ("GET", f"https://evil.example/repos/{REPOSITORY_FULL_NAME}/git/ref/heads/main"),
+        )
+        for method, path in forbidden:
+            with self.subTest(method=method, path=path), self.assertRaisesRegex(
+                BrokerContractError, "GITHUB_OPERATION_NOT_ALLOWED"
+            ):
+                _authorize_github_operation(method=method, path=path)
+
+        _authorize_github_operation(
+            method="GET", path=f"/repos/{REPOSITORY_FULL_NAME}/git/ref/heads/main"
+        )
+        _authorize_github_operation(
+            method="POST", path=f"/repos/{REPOSITORY_FULL_NAME}/pulls"
+        )
+        for filename in ("actions.py", "merge_helper.py"):
+            _authorize_github_operation(
+                method="GET",
+                path=(
+                    f"/repos/{REPOSITORY_FULL_NAME}/contents/oracle_autopilot/"
+                    f"{filename}?ref={'a' * 40}"
+                ),
+            )
 
     def test_runtime_guard_rejects_every_non_preview_environment(self):
         for value in ("", "production", "development"):
@@ -630,6 +707,7 @@ class BrokerContractTests(unittest.TestCase):
                 os.environ,
                 {
                     "AUTOPILOT_TOKEN_BROKER_SECRET": STRONG_BROKER_SECRET,
+                    "VERCEL_GIT_COMMIT_SHA": "a" * 40,
                     "VERCEL_ENV": "preview",
                 },
                 clear=True,
@@ -650,6 +728,11 @@ class BrokerContractTests(unittest.TestCase):
         self.assertEqual(response.headers["cache-control"], "no-store, max-age=0")
         self.assertEqual(response.headers["x-content-type-options"], "nosniff")
         self.assertIn('"token_exposed":false', body)
+        self.assertIn('"broker_policy_version":"physical-no-merge-v1"', body)
+        self.assertIn(f'"broker_source_sha":"{"a" * 40}"', body)
+        self.assertRegex(body, r'"broker_artifact_sha256":"[0-9a-f]{64}"')
+        self.assertIn(f'"broker_policy_sha256":"{broker_policy_sha256()}"', body)
+        self.assertRegex(body, r'"broker_provenance_sha256":"[0-9a-f]{64}"')
         self.assertNotIn("ghs_", body)
         self.assertNotIn(self.private_key_pem, body)
 
@@ -681,6 +764,7 @@ class BrokerContractTests(unittest.TestCase):
                 os.environ,
                 {
                     "AUTOPILOT_TOKEN_BROKER_SECRET": STRONG_BROKER_SECRET,
+                    "VERCEL_GIT_COMMIT_SHA": "a" * 40,
                     "VERCEL_ENV": "preview",
                 },
                 clear=True,

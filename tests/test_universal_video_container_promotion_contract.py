@@ -9,8 +9,12 @@ OPERATOR_INSTALL = (ROOT / "ops/install_universal_video_operator.sh").read_text(
 
 
 def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
-    assert "assert x.get('conclusion') == 'success'" in WORKFLOW
-    assert "assert x.get('head_sha') == os.environ['EXPECTED_COMMIT']" in WORKFLOW
+    assert "validate_universal_video_promotion_evidence.py select-artifact" in WORKFLOW
+    assert "validate_universal_video_promotion_evidence.py verify-archive" in WORKFLOW
+    assert "actions/runs/$evidence_run_id/artifacts?per_page=100" in WORKFLOW
+    assert "actions/artifacts/$artifact_id/zip" in WORKFLOW
+    assert '--expected-artifact-digest "$artifact_digest"' in WORKFLOW
+    assert '--expected-image-digest "$image_digest"' in WORKFLOW
     assert "group: oracle-instance-workload-mutation" in WORKFLOW
     assert "ORACLE_INSTANCE_RUNNING_PASS" in WORKFLOW
     assert "compute instance action --instance-id \"$INSTANCE_ID\" --action START" in WORKFLOW
@@ -30,12 +34,32 @@ def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
     assert "UNIVERSAL_VIDEO_ACTIVATE=1" in WORKFLOW
     assert "systemctl is-active --quiet universal-video-container.service" in WORKFLOW
     assert "expected_prepare_blob" in WORKFLOW
+    assert "expected_preflight_blob" in WORKFLOW
+    assert "expected_dsn_validator_blob" in WORKFLOW
     assert 'git hash-object "$RUNNER_TEMP/prepare.sh"' in WORKFLOW
+    assert 'git hash-object "$RUNNER_TEMP/prepromotion-preflight.sh"' in WORKFLOW
+    assert 'git hash-object "$RUNNER_TEMP/validate-video-queue-dsn.py"' in WORKFLOW
     assert '--jq .content | base64 --decode > "$RUNNER_TEMP/prepare.sh"' in WORKFLOW
     assert "tr -d" not in WORKFLOW
     assert "UV_CONTAINER_PROMOTION_ENTRYPOINT_MISSING" in WORKFLOW
     assert "UV_CONTAINER_PROMOTION_BLOB_MISMATCH" in WORKFLOW
     assert " /bin/bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh" in WORKFLOW
+
+
+def test_promotion_runs_exact_queue_and_speaker_gates_before_source_preparation() -> None:
+    preflight = WORKFLOW.index('"$RUNNER_TEMP/prepromotion-preflight.sh"')
+    queue_gate = WORKFLOW.index("VIDEO_QUEUE_DSN_PREFLIGHT_PASS", preflight)
+    speaker_gate = WORKFLOW.index("UNIVERSAL_VIDEO_PREPROMOTION_PREFLIGHT_PASS", queue_gate)
+    source_prepare = WORKFLOW.index(
+        "UNIVERSAL_VIDEO_GIT_REF='$EXPECTED_COMMIT'", speaker_gate
+    )
+
+    assert queue_gate < speaker_gate < source_prepare
+    assert "/opt/bridge-school/universal-video/.venv/bin/python -" in WORKFLOW
+    assert "validate-video-queue-dsn.py" in WORKFLOW
+    assert "test ! -L /opt/bridge-school/universal-video/secrets/video-queue-dsn" in WORKFLOW
+    assert 'credential_meta="$(sudo -n stat -c' in WORKFLOW
+    assert 'credential_meta="$(stat -c' not in WORKFLOW
 
 
 def test_promotion_selects_exact_image_and_excludes_legacy_worker() -> None:
@@ -52,7 +76,22 @@ def test_promotion_requires_a_fresh_status_from_the_new_resident() -> None:
     assert "(( fresh_status != 1 ))" in SCRIPT
     assert "UV_CONTAINER_PROMOTION_STATUS_MISSING" in SCRIPT
     assert "UV_CONTAINER_PROMOTION_STATUS_STALE" in SCRIPT
-    assert SCRIPT.count("float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])") == 2
+    assert "float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])" in SCRIPT
+    assert "x.get('resident_id') == 'container'" in SCRIPT
+    assert "x['process_id'] == int(os.environ['EXPECTED_PROCESS_ID'])" in SCRIPT
+    assert "x['process_start_ticks'] == int(os.environ['EXPECTED_PROCESS_START_TICKS'])" in SCRIPT
+    assert "re.fullmatch(r'[0-9a-f]{32}', x['process_nonce'])" in SCRIPT
+    assert "docker inspect --format '{{.State.Pid}}' universal-video-container" in SCRIPT
+    assert "pid_descends_from \"$worker_pid\" \"$container_root_pid\"" in SCRIPT
+    assert "NSpid:" in SCRIPT
+    assert 'PROCESS_STAT="/proc/$process_id/stat"' in SCRIPT
+    assert '[[ "$(process_start_ticks "$worker_pid"' in SCRIPT
+    assert "if resident_status_ready; then" in SCRIPT
+    assert "CURRENT_STAGE='resident-status-final'" in SCRIPT
+    assert "resident_status_ready || fail UV_CONTAINER_PROMOTION_STATUS_STALE" in SCRIPT
+    assert SCRIPT.index("CURRENT_STAGE='protected-postflight'") < SCRIPT.index(
+        "CURRENT_STAGE='resident-status-final'"
+    ) < SCRIPT.index("CURRENT_STAGE='complete'")
 
 
 def test_promotion_exposes_only_structured_container_runtime_failure_code() -> None:
@@ -108,6 +147,20 @@ def test_post_switch_failures_invoke_rollback_directly() -> None:
 
 
 def test_promotion_disables_legacy_and_rollback_restores_original_state() -> None:
+    assert "CURRENT_STAGE='queue-credential-preflight'" in SCRIPT
+    assert 'validate_video_queue_dsn.py" "$queue_dsn_file"' in SCRIPT
+    assert SCRIPT.index("CURRENT_STAGE='queue-credential-preflight'") < SCRIPT.index(
+        "CURRENT_STAGE='legacy-quiesce'"
+    )
+    assert SCRIPT.index("CURRENT_STAGE='speaker-model-preflight'") < SCRIPT.index(
+        "CURRENT_STAGE='legacy-quiesce'"
+    )
+    speaker_preflight = SCRIPT[
+        SCRIPT.index("CURRENT_STAGE='speaker-model-preflight'") :
+        SCRIPT.index("CURRENT_STAGE='legacy-quiesce'")
+    ]
+    assert '"$EXPECTED_DIGEST" true' in speaker_preflight
+    assert "UV_CONTAINER_PROMOTION_SPEAKER_MODEL_INVALID" in speaker_preflight
     assert 'old_enabled_before="$(systemctl is-enabled "$OLD_SERVICE"' in SCRIPT
     assert 'old_active_before="$(systemctl is-active "$OLD_SERVICE"' in SCRIPT
     assert 'systemctl disable --now "$OLD_SERVICE" || fail UV_CONTAINER_PROMOTION_LEGACY_QUIESCE_FAILED' in SCRIPT
@@ -167,6 +220,16 @@ def test_operator_sync_is_restored_by_promotion_rollback() -> None:
     assert 'rm -f -- "$OPERATOR_SUDOERS"' in SCRIPT
 
 
-def test_operator_changes_require_fresh_container_evidence() -> None:
-    assert "- 'ops/universal_video_operator.sh'" in EVIDENCE_WORKFLOW
-    assert "- 'ops/install_universal_video_operator.sh'" in EVIDENCE_WORKFLOW
+def test_retired_container_evidence_cannot_run_on_operator_changes() -> None:
+    assert EVIDENCE_WORKFLOW.startswith(
+        "name: Retired Oracle Universal Video Container Evidence Contract\n"
+    )
+    assert "name: Oracle Universal Video Container Evidence\n" not in EVIDENCE_WORKFLOW
+    assert "  retired-evidence-contract:" in EVIDENCE_WORKFLOW
+    assert "name: Retired legacy evidence entrypoint contract" in EVIDENCE_WORKFLOW
+    assert "pull_request:" in EVIDENCE_WORKFLOW
+    assert "workflow_dispatch:" not in EVIDENCE_WORKFLOW
+    assert "push:" not in EVIDENCE_WORKFLOW
+    assert "- 'ops/universal_video_operator.sh'" not in EVIDENCE_WORKFLOW
+    assert "- 'ops/install_universal_video_operator.sh'" not in EVIDENCE_WORKFLOW
+    assert "UNIVERSAL_VIDEO_LEGACY_CONTAINER_EVIDENCE_RETIRED=true" in EVIDENCE_WORKFLOW

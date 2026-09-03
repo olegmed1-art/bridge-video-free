@@ -81,6 +81,7 @@ GITHUB_HARD_FAILURES = frozenset(
 TOKEN_BROKER_RESPONSE_LIMIT_BYTES = 32_768
 TOKEN_BROKER_REQUEST_LIMIT_BYTES = 65_536
 TOKEN_BROKER_PATH = "/v1/github/draft-repair"
+TOKEN_BROKER_HEALTH_PATH = "/healthz"
 TOKEN_BROKER_HOST_PATTERN = re.compile(
     r"bridge-school-autopilot-[a-z0-9]+-olegmed1-4368s-projects\.vercel\.app"
 )
@@ -106,6 +107,10 @@ class TokenBrokerConfig:
     host: str
     secret: str
     vercel_bypass_secret: str
+    expected_source_sha: str
+    expected_artifact_sha256: str
+    expected_policy_sha256: str
+    expected_provenance_sha256: str
 
 
 @dataclass(frozen=True)
@@ -151,11 +156,38 @@ def load_token_broker_config() -> TokenBrokerConfig:
         character in bypass for character in "\r\n"
     ):
         raise AutopilotContractError("VERCEL_BYPASS_SECRET_INVALID")
+    expected_source = _require_env("AUTOPILOT_TOKEN_BROKER_EXPECTED_SOURCE_SHA")
+    expected_artifact = _require_env("AUTOPILOT_TOKEN_BROKER_EXPECTED_ARTIFACT_SHA256")
+    expected_policy = _require_env("AUTOPILOT_TOKEN_BROKER_EXPECTED_POLICY_SHA256")
+    expected_provenance = _require_env(
+        "AUTOPILOT_TOKEN_BROKER_EXPECTED_PROVENANCE_SHA256"
+    )
+    statement = {
+        "artifact_sha256": expected_artifact,
+        "policy_sha256": expected_policy,
+        "policy_version": "physical-no-merge-v1",
+        "source_sha": expected_source,
+    }
+    calculated_provenance = hashlib.sha256(
+        json.dumps(statement, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    if (
+        re.fullmatch(r"[0-9a-f]{40}", expected_source) is None
+        or re.fullmatch(r"[0-9a-f]{64}", expected_artifact) is None
+        or re.fullmatch(r"[0-9a-f]{64}", expected_policy) is None
+        or re.fullmatch(r"[0-9a-f]{64}", expected_provenance) is None
+        or expected_provenance != calculated_provenance
+    ):
+        raise AutopilotContractError("TOKEN_BROKER_RELEASE_PIN_INVALID")
     return TokenBrokerConfig(
         url=raw_url,
         host=host,
         secret=secret,
         vercel_bypass_secret=bypass,
+        expected_source_sha=expected_source,
+        expected_artifact_sha256=expected_artifact,
+        expected_policy_sha256=expected_policy,
+        expected_provenance_sha256=expected_provenance,
     )
 
 
@@ -570,11 +602,17 @@ def _validate_token_broker_result(
     *,
     request_payload: dict[str, Any],
     broker_host: str,
+    config: TokenBrokerConfig,
 ) -> dict[str, Any]:
     expected_keys = {
         "action_fingerprint",
         "base_sha",
         "branch_name",
+        "broker_artifact_sha256",
+        "broker_policy_sha256",
+        "broker_policy_version",
+        "broker_provenance_sha256",
+        "broker_source_sha",
         "commit_sha",
         "draft",
         "manifest_version",
@@ -596,6 +634,15 @@ def _validate_token_broker_result(
     replayed = payload.get("replayed")
     status_value = payload.get("status")
     expected_operation_count = 8 + 2 * len(request_payload["changes"])
+    provenance_statement = {
+        "artifact_sha256": payload.get("broker_artifact_sha256"),
+        "policy_sha256": payload.get("broker_policy_sha256"),
+        "policy_version": payload.get("broker_policy_version"),
+        "source_sha": payload.get("broker_source_sha"),
+    }
+    expected_provenance = hashlib.sha256(
+        json.dumps(provenance_statement, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
     if (
         status_value not in {"created", "existing"}
         or type(replayed) is not bool
@@ -617,6 +664,16 @@ def _validate_token_broker_result(
         or payload.get("merge_allowed") is not False
         or payload.get("production_mutation") is not False
         or payload.get("operation_count") != expected_operation_count
+        or payload.get("broker_policy_version") != "physical-no-merge-v1"
+        or payload.get("broker_source_sha") != config.expected_source_sha
+        or payload.get("broker_artifact_sha256") != config.expected_artifact_sha256
+        or payload.get("broker_policy_sha256") != config.expected_policy_sha256
+        or payload.get("broker_provenance_sha256")
+        != config.expected_provenance_sha256
+        or re.fullmatch(r"[0-9a-f]{40}", payload.get("broker_source_sha", "")) is None
+        or re.fullmatch(r"[0-9a-f]{64}", payload.get("broker_artifact_sha256", "")) is None
+        or re.fullmatch(r"[0-9a-f]{64}", payload.get("broker_policy_sha256", "")) is None
+        or payload.get("broker_provenance_sha256") != expected_provenance
     ):
         raise AutopilotContractError("TOKEN_BROKER_RESPONSE_INVALID")
 
@@ -630,6 +687,61 @@ def _validate_token_broker_result(
         }
     )
     return result
+
+
+def _require_approved_broker_release(
+    *, config: TokenBrokerConfig, opener: Any
+) -> None:
+    """Verify the deployed release before sending any mutating broker request."""
+
+    health_url = f"https://{config.host}{TOKEN_BROKER_HEALTH_PATH}"
+    request = urllib.request.Request(
+        health_url,
+        method="GET",
+        headers={
+            "User-Agent": "bridge-school-autopilot-oracle/1.4",
+            "X-Vercel-Protection-Bypass": config.vercel_bypass_secret,
+        },
+    )
+    try:
+        with opener.open(request, timeout=15) as response:
+            if response.status != 200 or response.geturl() != health_url:
+                raise AutopilotContractError("TOKEN_BROKER_RELEASE_UNAPPROVED")
+            raw = response.read(TOKEN_BROKER_RESPONSE_LIMIT_BYTES + 1)
+    except urllib.error.HTTPError as exc:
+        if exc.code in {408, 425, 429} or 500 <= exc.code <= 599:
+            raise AutopilotRetryableError("TOKEN_BROKER_TRANSIENT_ERROR") from exc
+        raise AutopilotContractError("TOKEN_BROKER_RELEASE_UNAPPROVED") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise AutopilotRetryableError("TOKEN_BROKER_TRANSIENT_ERROR") from exc
+    if len(raw) > TOKEN_BROKER_RESPONSE_LIMIT_BYTES:
+        raise AutopilotContractError("TOKEN_BROKER_RESPONSE_TOO_LARGE")
+    try:
+        payload = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise AutopilotContractError("TOKEN_BROKER_RELEASE_UNAPPROVED") from exc
+    expected = {
+        "source_revision": config.expected_source_sha,
+        "artifact_sha256": config.expected_artifact_sha256,
+        "policy_sha256": config.expected_policy_sha256,
+        "provenance_sha256": config.expected_provenance_sha256,
+        "broker_policy_version": "physical-no-merge-v1",
+        "source_attested": True,
+        "artifact_attested": True,
+        "preview_only": True,
+        "production_mutations_enabled": False,
+        "github_token_broker_enabled": True,
+        "bounded_draft_executor_enabled": True,
+        "raw_installation_token_exposed": False,
+        "merge_endpoint_enabled": False,
+        "ref_update_delete_enabled": False,
+        "actions_endpoint_enabled": False,
+        "deployments_endpoint_enabled": False,
+    }
+    if not isinstance(payload, dict) or any(
+        payload.get(key) != value for key, value in expected.items()
+    ):
+        raise AutopilotContractError("TOKEN_BROKER_RELEASE_UNAPPROVED")
 
 
 def execute_bounded_draft_repair(goal_json: dict[str, Any]) -> dict[str, Any]:
@@ -653,8 +765,9 @@ def execute_bounded_draft_repair(goal_json: dict[str, Any]) -> dict[str, Any]:
             "X-Vercel-Protection-Bypass": config.vercel_bypass_secret,
         },
     )
+    opener = urllib.request.build_opener(_RejectBrokerRedirects())
+    _require_approved_broker_release(config=config, opener=opener)
     try:
-        opener = urllib.request.build_opener(_RejectBrokerRedirects())
         with opener.open(request, timeout=30) as response:
             if response.status != 200 or response.geturl() != config.url:
                 raise AutopilotContractError("TOKEN_BROKER_RESPONSE_INVALID")
@@ -674,7 +787,10 @@ def execute_bounded_draft_repair(goal_json: dict[str, Any]) -> dict[str, Any]:
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise AutopilotContractError("TOKEN_BROKER_RESPONSE_INVALID") from exc
     return _validate_token_broker_result(
-        payload, request_payload=request_payload, broker_host=config.host
+        payload,
+        request_payload=request_payload,
+        broker_host=config.host,
+        config=config,
     )
 
 

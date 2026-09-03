@@ -199,8 +199,14 @@ def test_failed_comparison_candidate_does_not_discard_valid_open_set_result(
         "_extract_pcm",
         lambda _video, wav: wav.write_bytes(b"bounded-test-wav"),
     )
+    requested_embeddings = []
     monkeypatch.setattr(diarization, "_ensure_segmentation", lambda _cache: model)
-    monkeypatch.setattr(diarization, "_ensure_embedding", lambda _cache, _kind: model)
+    monkeypatch.setattr(
+        diarization,
+        "_ensure_embedding",
+        lambda _cache, kind: requested_embeddings.append(kind) or model,
+    )
+    monkeypatch.setenv("BRIDGE_SPEAKER_ALLOW_NEMO_COMPAT", "0")
     monkeypatch.setattr(
         diarization,
         "diarize_with_open_set_embeddings",
@@ -234,6 +240,8 @@ def test_failed_comparison_candidate_does_not_discard_valid_open_set_result(
         and item.get("status") == "FAILED_SOFT"
         for item in report["hypotheses"]
     )
+    assert requested_embeddings == ["3dspeaker", "3dspeaker"]
+    assert report["models"]["compatibility_embedding_enabled"] is False
     assert sum(bool(item.get("speaker")) for item in output) == 20
 
 

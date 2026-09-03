@@ -1,5 +1,10 @@
 # 3.1 FREE r25.16 — evidence-preserving deal-review PDF
 
+> **SUPERSEDED for Video 3.1 FREE card identity.** The 39-to-13 reconstruction
+> described below was disabled by `video31-hidden-hand-prohibition-v1` on
+> 2026-08-30. Historical outputs remain evidence of the old behavior, not proof
+> that a hidden hand was visually observed.
+
 Date: 2026-08-29
 
 Change ID: `3.1-free-r25.16-deal-review-pdf`

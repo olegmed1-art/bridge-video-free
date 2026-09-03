@@ -17,7 +17,10 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: research-job-neon-${{ github.event.issue.number || github.run_id }}
+  # The production canary enqueues work for the Oracle resident worker, so it
+  # must serialize with the final STOP proof. Pull-request contract validation
+  # has no workload authority and remains isolated from the lifecycle fence.
+  group: ${{ github.event_name == 'pull_request' && format('research-job-neon-pr-{0}', github.event.pull_request.number) || (github.event_name == 'issue_comment' && github.event.comment.user.login == 'olegmed1-art' && github.event.comment.body == '/research-job migrate-neon-and-canary') && 'oracle-instance-workload-mutation' || format('research-job-neon-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:

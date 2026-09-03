@@ -1,0 +1,22 @@
+{
+  "candidate_id": "methodology.diana-2.estimate-five-card-split",
+  "candidate_sha256": "51bebeffc36d5132639fb6bc2f35ac36211f1da6216bd228361e0d8d484c62a4",
+  "catalog_mutated": false,
+  "catalog_removal_proposed": false,
+  "catalog_version": "SCHOOL SKILL CATALOG v1",
+  "curriculum_activated": false,
+  "decision": "APPROVE",
+  "follow_up_required": true,
+  "proposed_review_state": "APPROVED_CANDIDATE",
+  "publication_allowed": false,
+  "rationale": "Математическая проверка пройдена, формулировка соответствует методике школы.",
+  "reviewed_at": "2026-08-30T17:54:55Z",
+  "reviewer": {
+    "authority": "SCHOOL_DIRECTOR",
+    "reviewer_id": "school-director"
+  },
+  "schema": "evolutionary-course-candidate-review-decision-v1",
+  "school_canon_mutated": false,
+  "skill_id": "candidate.skill.estimate-five-card-split",
+  "student_profile_written": false
+}

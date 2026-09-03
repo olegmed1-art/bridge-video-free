@@ -1,0 +1,157 @@
+name: Oracle idle guard read-only host proof
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-idle-host-proof.yml'
+      - 'ops/oracle_idle_state.sh'
+      - 'ops/oracle_idle_stop_guard.py'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: oracle-idle-host-proof-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  prove-installed-guard:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Pin exact candidate digest
+        id: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf 'sha=%s\n' "$(sha256sum ops/oracle_idle_state.sh | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          printf 'head=%s\n' '${{ github.event.pull_request.head.sha }}' >> "$GITHUB_OUTPUT"
+
+      - name: Prepare pinned SSH identity
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/oracle-idle-proof-known-hosts"
+          : > "$known"
+          index=0
+          for expected in \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64'; do
+            part="$RUNNER_TEMP/oracle-idle-proof-known-hosts.$index"
+            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$expected" "$part"
+            cat "$part" >> "$known"
+            index=$((index + 1))
+          done
+          sort -u -o "$known" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]] || { echo 'Oracle SSH credential unavailable' >&2; exit 1; }
+          key="$RUNNER_TEMP/id_oracle_idle_proof"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Capture read-only installed guard evidence
+        id: remote
+        shell: bash
+        run: |
+          set -euo pipefail
+          meta="$RUNNER_TEMP/oracle-idle-host-meta.txt"
+          proof="$RUNNER_TEMP/oracle-idle-host-proof.txt"
+          proof_err="$RUNNER_TEMP/oracle-idle-host-proof.stderr"
+
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            'set -Eeuo pipefail
+             test -x /usr/local/sbin/oracle-idle-state
+             printf "REMOTE_GUARD_SHA256=%s\n" "$(sha256sum /usr/local/sbin/oracle-idle-state | awk '\''{print $1}'\'')"
+             printf "ASSISTANT_LAB_SERVICE=%s\n" "$(systemctl is-active assistant-lab.service 2>/dev/null || true)"
+             printf "AUTOPILOT_SERVICE=%s\n" "$(systemctl is-active school-autopilot-shadow.service 2>/dev/null || true)"
+             printf "AUTOPILOT_ENABLED=%s\n" "$(systemctl is-enabled school-autopilot-shadow.service 2>/dev/null || true)"' \
+            > "$meta"
+
+          if ! ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            'set -Eeuo pipefail; sudo -n /usr/local/sbin/oracle-idle-state' \
+            > "$proof" 2> "$proof_err"; then
+            echo 'REMOTE_GUARD_EXECUTION=FAILED'
+            cat "$meta"
+            exit 1
+          fi
+          [[ ! -s "$proof_err" ]] || {
+            echo 'REMOTE_GUARD_STDERR=NONEMPTY'
+            cat "$meta"
+            exit 1
+          }
+
+          cat "$meta"
+          cat "$proof"
+          remote_sha="$(sed -n 's/^REMOTE_GUARD_SHA256=//p' "$meta")"
+          [[ "$remote_sha" =~ ^[0-9a-f]{64}$ ]] || { echo 'REMOTE_GUARD_SHA_INVALID' >&2; exit 1; }
+          echo "remote_sha=$remote_sha" >> "$GITHUB_OUTPUT"
+          echo "proof=$proof" >> "$GITHUB_OUTPUT"
+
+      - name: Verify exact install and fail-closed decision
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected='${{ steps.candidate.outputs.sha }}'
+          actual='${{ steps.remote.outputs.remote_sha }}'
+          printf 'CANDIDATE_HEAD=%s\n' '${{ steps.candidate.outputs.head }}'
+          printf 'CANDIDATE_GUARD_SHA256=%s\n' "$expected"
+          printf 'INSTALLED_GUARD_SHA256=%s\n' "$actual"
+          [[ "$actual" == "$expected" ]] || {
+            echo 'EXACT_INSTALL=FAIL'
+            exit 2
+          }
+          echo 'EXACT_INSTALL=PASS'
+
+          proof='${{ steps.remote.outputs.proof }}'
+          mapfile -t lines < "$proof"
+          [[ ${#lines[@]} -eq 5 ]] || { echo 'PROOF_CONTRACT=FAIL'; exit 3; }
+          [[ "${lines[0]}" == 'ORACLE_IDLE_CONTRACT_VERSION=2' ]] || { echo 'PROOF_CONTRACT=FAIL'; exit 3; }
+          [[ "${lines[4]}" =~ ^ORACLE_IDLE_STATE=(BUSY|IDLE|UNKNOWN)$ ]] || { echo 'PROOF_CONTRACT=FAIL'; exit 3; }
+          state="${BASH_REMATCH[1]}"
+          echo "HOST_STATE=$state"
+
+          set +e
+          authorization="$(python3 ops/oracle_idle_stop_guard.py --proof "$proof" --max-age-seconds 30 --max-duration-seconds 30 --max-future-skew-seconds 5 2>/dev/null)"
+          authorization_rc=$?
+          set -e
+          printf '%s\n' "$authorization"
+          if [[ "$state" == IDLE ]]; then
+            [[ $authorization_rc -eq 0 && "$authorization" == $'ORACLE_STOP_AUTHORIZED=YES\nORACLE_STOP_AUTHORIZATION_REASON=fresh_exact_idle' ]] || {
+              echo 'HOST_DECISION_CONTRACT=FAIL'
+              exit 4
+            }
+          else
+            [[ $authorization_rc -ne 0 && "$authorization" == ORACLE_STOP_AUTHORIZED=NO$'\n'* ]] || {
+              echo 'HOST_DECISION_CONTRACT=FAIL'
+              exit 4
+            }
+          fi
+          echo 'HOST_DECISION_CONTRACT=PASS'
+          echo 'READ_ONLY_HOST_PROOF=PASS'
