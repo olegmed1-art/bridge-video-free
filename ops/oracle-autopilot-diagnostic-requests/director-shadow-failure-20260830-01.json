@@ -1,0 +1,7 @@
+{
+  "request_id": "director-shadow-failure-20260830-01",
+  "action": "inspect_shadow_failure",
+  "target_host": "158.180.47.161",
+  "source_revision": "edc7e8530f0aa3efa84910cb09ee459ec25f1cf6",
+  "no_instance_stop": true
+}

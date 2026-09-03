@@ -1,0 +1,161 @@
+name: Autopilot temporary Neon 0308 structured artifact
+
+on:
+  pull_request:
+    paths: ['.github/workflows/autopilot-temp-neon-0308-structured-artifact-once.yml']
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths: ['.github/workflows/autopilot-temp-neon-0308-structured-artifact-once.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autopilot-temporary-neon-owner-ingress
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Validate exact temporary-only migration contract
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          workflow='.github/workflows/autopilot-temp-neon-0308-structured-artifact-once.yml'
+          grep -F 'TEMP_BRANCH_ID: br-still-tooth-b1ilkfcj' "$workflow" >/dev/null
+          grep -F 'PRODUCTION_BRANCH_ID: br-cold-moon-a1sgkzfd' "$workflow" >/dev/null
+          grep -F 'EXPECTED_MIGRATION_BLOB: ff02d6f7155e407c6ac7a9227e6f52efab85c3a1' "$workflow" >/dev/null
+          grep -F "[[ \"\$TEMP_BRANCH_ID\" != \"\$PRODUCTION_BRANCH_ID\" ]]" "$workflow" >/dev/null
+          python - <<'PY'
+          from pathlib import Path
+
+          text = Path('.github/workflows/autopilot-temp-neon-0308-structured-artifact-once.yml').read_text()
+          apply_job = text.split('  apply-temporary-only:', 1)[1]
+          assert 'database/scripts/' + 'migrate.sh' not in apply_job
+          PY
+
+  apply-temporary-only:
+    if: github.event_name == 'push' && github.repository == 'olegmed1-art/bridge-video-free'
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    environment: database-production
+    env:
+      SOURCE_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      TEMP_BRANCH_ID: br-still-tooth-b1ilkfcj
+      PRODUCTION_BRANCH_ID: br-cold-moon-a1sgkzfd
+      TEMP_ENDPOINT_ID: ep-floral-field-b1pjs2of
+      EXPECTED_MIGRATION_BLOB: ff02d6f7155e407c6ac7a9227e6f52efab85c3a1
+    steps:
+      - name: Checkout exact shadow integration source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Derive exact temporary endpoint DSN without contacting source host
+        id: dsn
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -n "${SOURCE_DATABASE_URL:-}" ]]
+          [[ "$TEMP_BRANCH_ID" != "$PRODUCTION_BRANCH_ID" ]]
+          [[ "$(git hash-object database/migrations/0308_autopilot_ibf_structured_artifact.sql)" == "$EXPECTED_MIGRATION_BLOB" ]]
+          SOURCE_DATABASE_URL="$SOURCE_DATABASE_URL" TEMP_ENDPOINT_ID="$TEMP_ENDPOINT_ID" python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import hashlib, os, re, urllib.parse
+
+          raw = os.environ['SOURCE_DATABASE_URL']
+          endpoint_id = os.environ['TEMP_ENDPOINT_ID']
+          parsed = urllib.parse.urlsplit(raw)
+          source_host = (parsed.hostname or '').lower()
+          assert parsed.scheme in {'postgres', 'postgresql'}
+          assert source_host.endswith('.neon.tech')
+          assert re.fullmatch(r'ep-[a-z0-9-]+(?:-pooler)?\..+\.neon\.tech', source_host)
+          first, suffix = source_host.split('.', 1)
+          pooled = first.endswith('-pooler')
+          temp_endpoint = endpoint_id + ('-pooler' if pooled else '')
+          temp_host = temp_endpoint + '.' + suffix
+          assert temp_host != source_host
+          user = urllib.parse.quote(parsed.username or '', safe='')
+          password = urllib.parse.quote(parsed.password or '', safe='')
+          assert user and password
+          port = f':{parsed.port}' if parsed.port else ''
+          temp = urllib.parse.urlunsplit(
+              (parsed.scheme, f'{user}:{password}@{temp_host}{port}', parsed.path, parsed.query, parsed.fragment)
+          )
+          print(f'::add-mask::{temp}')
+          print(f'database_url={temp}')
+          print(f'temp_host_sha256={hashlib.sha256(temp_host.encode()).hexdigest()}')
+          print('SOURCE_NEON_HOST_CONTACTED=NO')
+          print('NEON_PRODUCTION_BRANCH_TARGETED=NO')
+          PY
+
+      - name: Apply only additive migration 0308
+        env:
+          DATABASE_URL: ${{ steps.dsn.outputs.database_url }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pre="$(psql "$DATABASE_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 <<'SQL'
+          SELECT current_database(),current_user,
+                 current_setting('server_version_num')::integer >= 180000,
+                 EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0307_autopilot_ibf_completion'),
+                 EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0308_autopilot_ibf_structured_artifact'),
+                 (SELECT rolcreaterole FROM pg_roles WHERE rolname=current_user),
+                 has_database_privilege(current_user,current_database(),'CREATE');
+          SQL
+          )"
+          IFS='|' read -r db usr pg18 m307 m308 createrole dbcreate <<<"$pre"
+          [[ "$db" == neondb && "$usr" != autopilot_runtime_login ]]
+          [[ "$pg18" == t && "$m307" == t && "$createrole" == f && "$dbcreate" == t ]]
+          echo "AUTOPILOT_PRE_MIGRATION_0308=$m308"
+          if [[ "$m308" == f ]]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 \
+              -f database/migrations/0308_autopilot_ibf_structured_artifact.sql >/dev/null
+          fi
+
+      - name: Verify exact retained-artifact boundary
+        env:
+          DATABASE_URL: ${{ steps.dsn.outputs.database_url }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          post="$(psql "$DATABASE_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 <<'SQL'
+          SELECT EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0308_autopilot_ibf_structured_artifact'),
+                 to_regclass('autopilot.ibf_structured_artifact') IS NOT NULL,
+                 to_regprocedure('autopilot.store_ibf_structured_artifact(uuid,text,bigint,text,text,bytea,jsonb)') IS NOT NULL,
+                 has_function_privilege('autopilot_runtime','autopilot.store_ibf_structured_artifact(uuid,text,bigint,text,text,bytea,jsonb)','EXECUTE'),
+                 has_table_privilege('autopilot_runtime','autopilot.ibf_structured_artifact','SELECT'),
+                 has_table_privilege('autopilot_runtime','autopilot.ibf_structured_artifact','INSERT'),
+                 has_table_privilege('autopilot_runtime','autopilot.ibf_structured_artifact','UPDATE'),
+                 has_table_privilege('autopilot_runtime','autopilot.ibf_structured_artifact','DELETE');
+          SQL
+          )"
+          [[ "$post" == 't|t|t|t|f|f|f|f' ]]
+          echo 'AUTOPILOT_TEMP_NEON_MIGRATION_0308=PASS'
+          echo 'AUTOPILOT_RUNTIME_DIRECT_TABLE_ACCESS=NO'
+          echo 'PRODUCTION_MUTATION=NO'
+
+      - name: Publish bounded receipt
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          {
+            echo '### Autopilot temporary Neon structured artifact boundary'
+            echo '- temporary branch: `br-still-tooth-b1ilkfcj`'
+            echo '- production/default branch targeted: `NO`'
+            echo '- migration: `0308` only'
+            echo '- runtime direct table access: `NO`'
+            echo '- production mutations: `NO`'
+          } >> "$GITHUB_STEP_SUMMARY"

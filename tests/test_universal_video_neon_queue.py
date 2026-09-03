@@ -1,10 +1,10 @@
 import json
 import time
 from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from pathlib import Path
 
 from universal_video.neon_worker import (
     NeonVideoWorkerError,
@@ -35,7 +35,13 @@ def request(**overrides):
     return value
 
 
-def drive_item(number: int, *, name: str | None = None, mime: str = "video/mp4", parent: str = "sourceFolder000001"):
+def drive_item(
+    number: int,
+    *,
+    name: str | None = None,
+    mime: str = "video/mp4",
+    parent: str = "sourceFolder000001",
+):
     return {
         "id": f"driveVideo{number:08d}",
         "name": name or f"Lesson {number}.mp4",
@@ -43,6 +49,9 @@ def drive_item(number: int, *, name: str | None = None, mime: str = "video/mp4",
         "size": str(2_000_000 + number),
         "parents": [parent],
         "md5Checksum": f"{number:032x}"[-32:],
+        "modifiedTime": "2026-09-02T21:00:00Z",
+        "version": str(1000 + number),
+        "trashed": False,
     }
 
 
@@ -61,10 +70,12 @@ def test_intake_is_project_neutral_and_review_only():
 
 
 def test_generic_queue_accepts_another_bounded_adapter_identity():
-    validated = validate_intake_request(request(
-        processing_profile="lecture_transcript",
-        algorithm_revision="transcript-r1",
-    ))
+    validated = validate_intake_request(
+        request(
+            processing_profile="lecture_transcript",
+            algorithm_revision="transcript-r1",
+        )
+    )
     assert validated["processing_profile"] == "lecture_transcript"
     assert validated["algorithm_revision"] == "transcript-r1"
 
@@ -94,7 +105,10 @@ def test_inventory_excludes_nonvideo_and_derived_parts_but_rejects_identity_drif
     )
     assert [item["file_id"] for item in files] == ["driveVideo00000001"]
     with pytest.raises(VideoQueueError, match="direct child"):
-        normalize_drive_inventory("sourceFolder000001", [drive_item(1, parent="differentFolder0001")])
+        normalize_drive_inventory(
+            "sourceFolder000001",
+            [drive_item(1, parent="differentFolder0001")],
+        )
 
 
 def test_254_item_intake_is_deterministic_and_locally_bounded():
@@ -126,20 +140,87 @@ def claim():
         "source_mime_type": "video/mp4",
         "source_size_bytes": 2_000_014,
         "source_checksum": "md5:0000000000000000000000000000000e",
-        "stable_job_key": __import__("bridge_worker_3_1_free").stable_job_id("drive", "driveVideo00000014"),
+        "stable_job_key": __import__("bridge_worker_3_1_free").stable_job_id(
+            "drive",
+            "driveVideo00000014",
+        ),
         "is_canary": True,
         "attempt_count": 1,
     }
+
+
+def observed_source(item, *, modified_time="2026-09-02T21:00:00Z", version="1014"):
+    return {
+        "id": item["source_file_id"],
+        "name": item["source_name"],
+        "mime_type": item["source_mime_type"],
+        "size_bytes": item["source_size_bytes"],
+        "parents": [item["source_folder_id"]],
+        "checksum": item["source_checksum"],
+        "modified_time": modified_time,
+        "version": version,
+    }
+
+
+@contextmanager
+def exact_source_gate(item):
+    with patch(
+        "universal_video.neon_worker.access_token",
+        return_value="drive-token",
+    ), patch(
+        "universal_video.neon_worker.verify_claimed_source",
+        return_value=observed_source(item),
+    ):
+        yield
 
 
 def test_live_source_readback_is_exact_and_fail_closed():
     item = claim()
     meta = drive_item(14)
     with patch("universal_video.neon_worker.file_metadata", return_value=meta):
-        verify_claimed_source(item, "token")
+        assert verify_claimed_source(item, "token") == observed_source(item)
     meta["name"] = "renamed.mp4"
     with patch("universal_video.neon_worker.file_metadata", return_value=meta):
         with pytest.raises(NeonVideoWorkerError, match="READBACK_MISMATCH"):
+            verify_claimed_source(item, "token")
+
+
+def test_checksum_null_source_is_fenced_by_drive_revision():
+    item = claim()
+    item["source_checksum"] = None
+    meta = drive_item(14)
+    meta.pop("md5Checksum")
+    meta.update({"modifiedTime": "2026-09-02T21:00:00Z", "version": "17"})
+    with patch("universal_video.neon_worker.file_metadata", return_value=meta):
+        observed = verify_claimed_source(item, "token")
+    assert observed["checksum"] is None
+    assert observed["modified_time"] == "2026-09-02T21:00:00Z"
+    assert observed["version"] == "17"
+
+
+@pytest.mark.parametrize("missing", ["modifiedTime", "version"])
+def test_checksum_null_source_without_revision_fails_closed(missing):
+    item = claim()
+    item["source_checksum"] = None
+    meta = drive_item(14)
+    meta.pop("md5Checksum")
+    meta.update({"modifiedTime": "2026-09-02T21:00:00Z", "version": "17"})
+    meta.pop(missing)
+    with patch("universal_video.neon_worker.file_metadata", return_value=meta):
+        with pytest.raises(NeonVideoWorkerError, match="REVISION_MISSING"):
+            verify_claimed_source(item, "token")
+
+
+@pytest.mark.parametrize("trash_state", [True, None])
+def test_source_trash_state_fails_closed(trash_state):
+    item = claim()
+    meta = drive_item(14)
+    if trash_state is None:
+        meta.pop("trashed")
+    else:
+        meta["trashed"] = trash_state
+    with patch("universal_video.neon_worker.file_metadata", return_value=meta):
+        with pytest.raises(NeonVideoWorkerError, match="TRASHED_OR_UNKNOWN"):
             verify_claimed_source(item, "token")
 
 
@@ -148,21 +229,51 @@ def test_stable_environment_hides_legacy_database_persistence(monkeypatch):
     with _stable_environment(claim()):
         assert "BRIDGE_WORKER_DATABASE_URL" not in __import__("os").environ
         assert __import__("os").environ["BRIDGE_PERSIST_DATABASE"] == "false"
-        assert __import__("os").environ["BRIDGE_REQUESTED_ALGORITHM_REVISION"] == "3.1-free-r25.16"
-    assert __import__("os").environ["BRIDGE_WORKER_DATABASE_URL"] == "postgresql://must-not-leak"
+        assert (
+            __import__("os").environ["BRIDGE_REQUESTED_ALGORITHM_REVISION"]
+            == "3.1-free-r25.16"
+        )
+    assert (
+        __import__("os").environ["BRIDGE_WORKER_DATABASE_URL"]
+        == "postgresql://must-not-leak"
+    )
 
 
-def test_worker_finishes_success_as_review_only():
+def test_worker_finishes_success_as_review_only_after_live_evidence():
     item = claim()
     captured = {}
 
     def finish(_dsn, **kwargs):
         captured.update(kwargs)
-        return {"job_status": kwargs["outcome"], "batch_status": "RUNNING", "released_jobs": 253}
+        return {
+            "job_status": kwargs["outcome"],
+            "batch_status": "CANARY_REVIEW",
+            "released_jobs": 0,
+        }
 
-    with patch("universal_video.neon_worker.finish_job", side_effect=finish):
-        result = process_claim("postgresql://queue", item, "worker-1", processor=lambda _: {"master_pdf_drive_id": "pdf-id"})
+    candidate = {
+        "artifact_manifest": {"synthetic": True},
+        "artifact_manifest_sha256": "a" * 64,
+        "terminal_receipt": {"status": "PASS"},
+        "master_pdf_drive_id": "master-pdf-0001",
+        "master_pdf_sha256": "b" * 64,
+    }
+    with exact_source_gate(item), patch(
+        "universal_video.neon_worker.verify_terminal_output_live",
+        return_value=candidate,
+    ), patch(
+        "universal_video.neon_worker.finish_job",
+        side_effect=finish,
+    ):
+        result = process_claim(
+            "postgresql://queue",
+            item,
+            "worker-1",
+            processor=lambda _: dict(candidate),
+        )
     assert result["job_status"] == "REVIEW_READY"
+    assert result["batch_status"] == "CANARY_REVIEW"
+    assert result["released_jobs"] == 0
     assert captured["output"]["result_mode"] == "SHADOW_REVIEW_ONLY"
     assert captured["output"]["canonical_promotion_allowed"] is False
     assert captured["output"]["database_persistence_allowed"] is False
@@ -177,10 +288,22 @@ def test_content_failure_is_ambiguous_and_independent():
 
     def finish(_dsn, **kwargs):
         captured.update(kwargs)
-        return {"job_status": kwargs["outcome"], "batch_status": "CANARY_BLOCKED", "released_jobs": 0}
+        return {
+            "job_status": kwargs["outcome"],
+            "batch_status": "CANARY_BLOCKED",
+            "released_jobs": 0,
+        }
 
-    with patch("universal_video.neon_worker.finish_job", side_effect=finish):
-        result = process_claim("postgresql://queue", item, "worker-1", processor=processor)
+    with exact_source_gate(item), patch(
+        "universal_video.neon_worker.finish_job",
+        side_effect=finish,
+    ):
+        result = process_claim(
+            "postgresql://queue",
+            item,
+            "worker-1",
+            processor=processor,
+        )
     assert result["job_status"] == "AMBIGUOUS"
     assert captured["error_code"] == "UV_CONTENT_AMBIGUOUS"
     assert captured["output"]["publication_state"] == "NOT_PUBLISHED"
@@ -195,12 +318,22 @@ def test_technical_failure_is_bounded_retry_not_false_terminal_success():
 
     def retry(_dsn, **kwargs):
         captured.update(kwargs)
-        return {"job_status": "QUEUED", "batch_status": "RUNNING", "retry_after": "later"}
+        return {
+            "job_status": "QUEUED",
+            "batch_status": "RUNNING",
+            "retry_after": "later",
+        }
 
-    with patch("universal_video.neon_worker.retry_job", side_effect=retry), patch(
-        "universal_video.neon_worker.finish_job"
-    ) as finish:
-        result = process_claim("postgresql://queue", item, "worker-1", processor=processor)
+    with exact_source_gate(item), patch(
+        "universal_video.neon_worker.retry_job",
+        side_effect=retry,
+    ), patch("universal_video.neon_worker.finish_job") as finish:
+        result = process_claim(
+            "postgresql://queue",
+            item,
+            "worker-1",
+            processor=processor,
+        )
     assert result["job_status"] == "QUEUED"
     assert captured["max_attempts"] == 3
     assert captured["base_delay_seconds"] == 60
@@ -211,11 +344,18 @@ def test_technical_failure_is_bounded_retry_not_false_terminal_success():
 def test_processing_timeout_is_bounded(monkeypatch):
     monkeypatch.setenv("UNIVERSAL_VIDEO_JOB_TIMEOUT_SECONDS", "899")
     with pytest.raises(NeonVideoWorkerError, match="TIMEOUT_INVALID"):
-        process_claim("postgresql://queue", claim(), "worker-1", processor=lambda _: {})
+        process_claim(
+            "postgresql://queue",
+            claim(),
+            "worker-1",
+            processor=lambda _: {},
+        )
 
 
 def test_sql_serializes_enqueue_and_bounds_retry_contract():
-    sql = (Path(__file__).parents[1] / "database/migrations/0056_universal_video_queue.sql").read_text()
+    sql = (
+        Path(__file__).parents[1] / "database/migrations/0056_universal_video_queue.sql"
+    ).read_text()
     assert "pg_advisory_xact_lock(hashtextextended(p_request_key, 0))" in sql
     assert "CREATE OR REPLACE FUNCTION video_queue.retry_job" in sql
     assert "p_max_attempts NOT BETWEEN 1 AND 10" in sql
@@ -226,6 +366,8 @@ def test_sql_serializes_enqueue_and_bounds_retry_contract():
 
 
 def test_queue_migration_has_fail_closed_rollback():
-    rollback = (Path(__file__).parents[1] / "database/rollbacks/0056_universal_video_queue.sql").read_text()
+    rollback = (
+        Path(__file__).parents[1] / "database/rollbacks/0056_universal_video_queue.sql"
+    ).read_text()
     assert "VIDEO_QUEUE_ROLLBACK_REFUSES_NONEMPTY_QUEUE" in rollback
     assert "DROP SCHEMA IF EXISTS video_queue CASCADE" in rollback

@@ -1,0 +1,7 @@
+{
+  "request_id": "director-shadow-post-smoke-20260830-01",
+  "action": "inspect_shadow_failure",
+  "target_host": "158.180.47.161",
+  "source_revision": "e9c9381f0aed388ef72718cdcf67ac9928947aef",
+  "no_instance_stop": true
+}

@@ -8,24 +8,139 @@ readonly SOURCE_DIR='/opt/bridge-school/universal-video-src'
 readonly BASE_DIR='/opt/bridge-school/universal-video'
 readonly OLD_SERVICE='universal-video.service'
 readonly NEW_SERVICE='universal-video-container.service'
+readonly NEW_SERVICE_UNIT='/etc/systemd/system/universal-video-container.service'
+readonly NEW_SERVICE_ENV="$BASE_DIR/universal-video-container.env"
 readonly STATUS='/run/bridge-school/universal-video-status.json'
+readonly WORKLOAD_LOCK="$BASE_DIR/spool/.workload.lock"
 readonly OPERATOR_TARGET='/usr/local/sbin/universal-video'
 readonly OPERATOR_SUDOERS='/etc/sudoers.d/universal-video-operator-ocarun'
+readonly RECOVERY_ROOT='/var/lib/bridge-school/universal-video-promotion-recovery'
+readonly -a OBSOLETE_OPERATOR_PATHS=(
+  '/usr/local/sbin/universal-video-diana11'
+  '/usr/local/sbin/universal-video-diana11-002'
+  '/usr/local/sbin/universal-video-diana11-003'
+)
+readonly -a OBSOLETE_SUDOERS_PATHS=(
+  '/etc/sudoers.d/universal-video-diana11-ocarun'
+  '/etc/sudoers.d/universal-video-diana11-002-ocarun'
+  '/etc/sudoers.d/universal-video-diana11-003-ocarun'
+)
 EXPECTED_COMMIT="${UNIVERSAL_VIDEO_EXPECTED_COMMIT:-}"
 EXPECTED_DIGEST="${UNIVERSAL_VIDEO_EXPECTED_IMAGE_DIGEST:-}"
 switch_started=0
+workload_lock_held=0
 operator_snapshot_ready=0
 operator_existed=0
 operator_sudoers_existed=0
+new_service_unit_existed=0
+new_service_env_existed=0
+obsolete_operator_existed=(0 0 0)
+obsolete_sudoers_existed=(0 0 0)
 operator_backup_root=''
+preserve_recovery_snapshot=0
 old_enabled_before=''
 old_active_before=''
+new_enabled_before=''
+new_active_before=''
 CURRENT_STAGE='validation'
 
 cleanup(){
-  if [[ -n "$operator_backup_root" && -d "$operator_backup_root" ]]; then
+  if (( preserve_recovery_snapshot == 0 )) \
+      && [[ -n "$operator_backup_root" && -d "$operator_backup_root" ]]; then
     rm -rf -- "$operator_backup_root"
   fi
+}
+
+release_workload_fence(){
+  if (( workload_lock_held == 1 )); then
+    flock --unlock 9 >/dev/null 2>&1 || true
+    exec 9<&-
+    workload_lock_held=0
+  fi
+}
+
+acquire_workload_fence(){
+  if (( workload_lock_held == 1 )); then
+    return 0
+  fi
+  exec 9<"$WORKLOAD_LOCK" || return 1
+  if ! flock --exclusive --nonblock 9; then
+    exec 9<&-
+    return 1
+  fi
+  workload_lock_held=1
+}
+
+service_state_is_known(){
+  local enabled_state="$1" active_state="$2"
+  case "$enabled_state" in
+    enabled|disabled|static|indirect|masked|masked-runtime|not-found) ;;
+    *) return 1 ;;
+  esac
+  case "$active_state" in
+    active|inactive|failed) ;;
+    *) return 1 ;;
+  esac
+}
+
+service_matches_captured_state(){
+  local service="$1" expected_enabled="$2" expected_active="$3"
+  local observed_enabled observed_active
+  observed_enabled="$(systemctl is-enabled "$service" 2>/dev/null || true)"
+  observed_active="$(systemctl is-active "$service" 2>/dev/null || true)"
+  service_state_is_known "$observed_enabled" "$observed_active" || return 1
+  [[ "$observed_enabled" == "$expected_enabled" ]] || return 1
+  [[ "$observed_active" == "$expected_active" ]] || return 1
+}
+
+runtime_files_match_snapshot(){
+  if (( new_service_unit_existed == 1 )); then
+    [[ -f "$NEW_SERVICE_UNIT" && ! -L "$NEW_SERVICE_UNIT" ]] || return 1
+    cmp -s "$operator_backup_root/container-unit" "$NEW_SERVICE_UNIT" || return 1
+  else
+    [[ ! -e "$NEW_SERVICE_UNIT" && ! -L "$NEW_SERVICE_UNIT" ]] || return 1
+  fi
+  if (( new_service_env_existed == 1 )); then
+    [[ -f "$NEW_SERVICE_ENV" && ! -L "$NEW_SERVICE_ENV" ]] || return 1
+    cmp -s "$operator_backup_root/container-env" "$NEW_SERVICE_ENV" || return 1
+  else
+    [[ ! -e "$NEW_SERVICE_ENV" && ! -L "$NEW_SERVICE_ENV" ]] || return 1
+  fi
+}
+
+operator_files_match_snapshot(){
+  local index path
+  if (( operator_existed == 1 )); then
+    [[ -f "$OPERATOR_TARGET" && ! -L "$OPERATOR_TARGET" ]] || return 1
+    cmp -s "$operator_backup_root/operator" "$OPERATOR_TARGET" || return 1
+  else
+    [[ ! -e "$OPERATOR_TARGET" && ! -L "$OPERATOR_TARGET" ]] || return 1
+  fi
+  if (( operator_sudoers_existed == 1 )); then
+    [[ -f "$OPERATOR_SUDOERS" && ! -L "$OPERATOR_SUDOERS" ]] || return 1
+    cmp -s "$operator_backup_root/sudoers" "$OPERATOR_SUDOERS" || return 1
+  else
+    [[ ! -e "$OPERATOR_SUDOERS" && ! -L "$OPERATOR_SUDOERS" ]] || return 1
+  fi
+  for index in "${!OBSOLETE_OPERATOR_PATHS[@]}"; do
+    path="${OBSOLETE_OPERATOR_PATHS[$index]}"
+    if (( obsolete_operator_existed[index] == 1 )); then
+      [[ -f "$path" && ! -L "$path" ]] || return 1
+      cmp -s "$operator_backup_root/obsolete-operator-$index" "$path" || return 1
+    else
+      [[ ! -e "$path" && ! -L "$path" ]] || return 1
+    fi
+  done
+  for index in "${!OBSOLETE_SUDOERS_PATHS[@]}"; do
+    path="${OBSOLETE_SUDOERS_PATHS[$index]}"
+    if (( obsolete_sudoers_existed[index] == 1 )); then
+      [[ -f "$path" && ! -L "$path" ]] || return 1
+      cmp -s "$operator_backup_root/obsolete-sudoers-$index" "$path" || return 1
+    else
+      [[ ! -e "$path" && ! -L "$path" ]] || return 1
+    fi
+  done
+  visudo -cf /etc/sudoers >/dev/null 2>&1 || return 1
 }
 
 fail(){
@@ -37,6 +152,92 @@ fail(){
   exit 1
 }
 has_running_job(){ find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit | grep -q .; }
+pid_descends_from(){
+  local child="$1" ancestor="$2" parent hops=0
+  [[ "$child" =~ ^[1-9][0-9]*$ && "$ancestor" =~ ^[1-9][0-9]*$ ]] || return 1
+  while (( child > 1 && hops < 64 )); do
+    [[ "$child" == "$ancestor" ]] && return 0
+    parent="$(ps -o ppid= -p "$child" 2>/dev/null | tr -d '[:space:]')"
+    [[ "$parent" =~ ^[0-9]+$ && "$parent" != "$child" ]] || return 1
+    child="$parent"
+    ((hops += 1))
+  done
+  [[ "$child" == "$ancestor" ]]
+}
+process_start_ticks(){
+  local process_id="$1"
+  [[ "$process_id" =~ ^[1-9][0-9]*$ ]] || return 1
+  PROCESS_STAT="/proc/$process_id/stat" python3 - <<'PY'
+import os
+from pathlib import Path
+
+raw = Path(os.environ["PROCESS_STAT"]).read_text(encoding="utf-8")
+tail = raw.rsplit(")", 1)
+if len(tail) != 2:
+    raise SystemExit(1)
+fields = tail[1].split()
+if len(fields) <= 19:
+    raise SystemExit(1)
+value = int(fields[19])
+if value <= 0:
+    raise SystemExit(1)
+print(value)
+PY
+}
+resident_worker_pid(){
+  local container_root_pid="$1" candidate
+  local -a matches=()
+  while read -r candidate; do
+    if pid_descends_from "$candidate" "$container_root_pid"; then
+      matches+=("$candidate")
+    fi
+  done < <(pgrep -f '[u]niversal_video[.]spool_worker' || true)
+  [[ "${#matches[@]}" -eq 1 ]] || return 1
+  printf '%s\n' "${matches[0]}"
+}
+resident_status_ready(){
+  local container_root_pid worker_pid expected_process_id expected_process_start_ticks
+  [[ -f "$STATUS" && ! -L "$STATUS" ]] || return 1
+  container_root_pid="$(docker inspect --format '{{.State.Pid}}' universal-video-container 2>/dev/null || true)"
+  [[ "$container_root_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  worker_pid="$(resident_worker_pid "$container_root_pid" 2>/dev/null || true)"
+  [[ "$worker_pid" =~ ^[1-9][0-9]*$ ]] || return 1
+  expected_process_id="$(awk '$1 == "NSpid:" {print $NF}' "/proc/$worker_pid/status" 2>/dev/null || true)"
+  expected_process_start_ticks="$(process_start_ticks "$worker_pid" 2>/dev/null || true)"
+  [[ "$expected_process_id" =~ ^[1-9][0-9]*$ && "$expected_process_start_ticks" =~ ^[1-9][0-9]*$ ]] || return 1
+  if ! STATUS_PATH="$STATUS" EXPECTED_COMMIT="$EXPECTED_COMMIT" STARTED_UNIX="$started_unix" \
+      EXPECTED_PROCESS_ID="$expected_process_id" \
+      EXPECTED_PROCESS_START_TICKS="$expected_process_start_ticks" \
+      python3 - <<'PY'
+import json, os, re
+from pathlib import Path
+
+path = Path(os.environ['STATUS_PATH'])
+if path.stat().st_size > 1024 * 1024:
+    raise SystemExit(1)
+x = json.loads(path.read_text(encoding='utf-8'))
+assert x.get('schema') == 'universal-video-resident-status-v2'
+assert x.get('instance_state') == 'RUNNING'
+assert x.get('installed_runtime_commit') == os.environ['EXPECTED_COMMIT']
+assert x.get('active_jobs') == []
+assert float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])
+assert x.get('resident_id') == 'container'
+assert type(x.get('process_id')) is int
+assert x['process_id'] == int(os.environ['EXPECTED_PROCESS_ID'])
+assert float(x.get('process_started_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])
+assert float(x.get('process_started_at_unix') or 0) <= float(x.get('observed_at_unix') or 0)
+assert type(x.get('process_start_ticks')) is int
+assert x['process_start_ticks'] == int(os.environ['EXPECTED_PROCESS_START_TICKS'])
+assert isinstance(x.get('process_nonce'), str) and re.fullmatch(r'[0-9a-f]{32}', x['process_nonce'])
+PY
+  then
+    return 1
+  fi
+  [[ "$(docker inspect --format '{{.State.Pid}}' universal-video-container 2>/dev/null || true)" == "$container_root_pid" ]] || return 1
+  pid_descends_from "$worker_pid" "$container_root_pid" || return 1
+  [[ "$(awk '$1 == "NSpid:" {print $NF}' "/proc/$worker_pid/status" 2>/dev/null || true)" == "$expected_process_id" ]] || return 1
+  [[ "$(process_start_ticks "$worker_pid" 2>/dev/null || true)" == "$expected_process_start_ticks" ]] || return 1
+}
 emit_runtime_code(){
   local since="@${started_unix:-0}"
   journalctl -u "$NEW_SERVICE" --since "$since" --no-pager -o cat 2>/dev/null | python3 -c '
@@ -71,10 +272,54 @@ elif fallback:
 }
 rollback(){
   local rc="${1:-$?}"
+  local rollback_failed=0
+  local current_new_enabled current_new_active index path
   trap - ERR
   emit_runtime_code
-  if (( switch_started == 1 )) && ! has_running_job; then
-    systemctl disable --now "$NEW_SERVICE" >/dev/null 2>&1 || true
+  if (( switch_started == 1 )); then
+    if has_running_job || ! acquire_workload_fence; then
+      rollback_failed=1
+    else
+    # Recheck local work after acquiring the same fence used by Neon claims.
+    # Stop the replacement under that fence, then release before starting a
+    # restored resident, whose startup recovery also needs the fence.
+    if has_running_job; then
+      rollback_failed=1
+      release_workload_fence
+    else
+    current_new_enabled="$(systemctl is-enabled "$NEW_SERVICE" 2>/dev/null || true)"
+    current_new_active="$(systemctl is-active "$NEW_SERVICE" 2>/dev/null || true)"
+    if ! service_state_is_known "$current_new_enabled" "$current_new_active"; then
+      rollback_failed=1
+    elif [[ "$current_new_enabled" != not-found || "$current_new_active" != inactive ]]; then
+      systemctl disable --now "$NEW_SERVICE" >/dev/null 2>&1 || rollback_failed=1
+    fi
+    release_workload_fence
+    if (( new_service_unit_existed == 1 )); then
+      install -o root -g root -m 0644 "$operator_backup_root/container-unit" "$NEW_SERVICE_UNIT" \
+        || rollback_failed=1
+    else
+      rm -f -- "$NEW_SERVICE_UNIT" || rollback_failed=1
+    fi
+    if (( new_service_env_existed == 1 )); then
+      install -o root -g root -m 0640 "$operator_backup_root/container-env" "$NEW_SERVICE_ENV" \
+        || rollback_failed=1
+    else
+      rm -f -- "$NEW_SERVICE_ENV" || rollback_failed=1
+    fi
+    systemctl daemon-reload >/dev/null 2>&1 || rollback_failed=1
+    if [[ "$new_enabled_before" == enabled ]]; then
+      systemctl enable "$NEW_SERVICE" >/dev/null 2>&1 || true
+    elif [[ "$new_enabled_before" != not-found ]]; then
+      systemctl disable "$NEW_SERVICE" >/dev/null 2>&1 || true
+    fi
+    if [[ "$new_enabled_before" == not-found ]]; then
+      :
+    elif [[ "$new_active_before" == active ]]; then
+      systemctl start "$NEW_SERVICE" >/dev/null 2>&1 || true
+    else
+      systemctl stop "$NEW_SERVICE" >/dev/null 2>&1 || true
+    fi
     if [[ "$old_enabled_before" == enabled ]]; then
       systemctl enable "$OLD_SERVICE" >/dev/null 2>&1 || true
     else
@@ -87,17 +332,50 @@ rollback(){
     fi
     if (( operator_snapshot_ready == 1 )); then
       if (( operator_existed == 1 )); then
-        install -o root -g root -m 0755 "$operator_backup_root/operator" "$OPERATOR_TARGET" || true
+        install -o root -g root -m 0755 "$operator_backup_root/operator" "$OPERATOR_TARGET" \
+          || rollback_failed=1
       else
-        rm -f -- "$OPERATOR_TARGET" || true
+        rm -f -- "$OPERATOR_TARGET" || rollback_failed=1
       fi
       if (( operator_sudoers_existed == 1 )); then
-        install -o root -g root -m 0440 "$operator_backup_root/sudoers" "$OPERATOR_SUDOERS" || true
+        install -o root -g root -m 0440 "$operator_backup_root/sudoers" "$OPERATOR_SUDOERS" \
+          || rollback_failed=1
       else
-        rm -f -- "$OPERATOR_SUDOERS" || true
+        rm -f -- "$OPERATOR_SUDOERS" || rollback_failed=1
       fi
-      visudo -cf /etc/sudoers >/dev/null 2>&1 || true
+      for index in "${!OBSOLETE_OPERATOR_PATHS[@]}"; do
+        path="${OBSOLETE_OPERATOR_PATHS[$index]}"
+        if (( obsolete_operator_existed[index] == 1 )); then
+          install -o root -g root -m 0755 "$operator_backup_root/obsolete-operator-$index" "$path" \
+            || rollback_failed=1
+        else
+          rm -f -- "$path" || rollback_failed=1
+        fi
+      done
+      for index in "${!OBSOLETE_SUDOERS_PATHS[@]}"; do
+        path="${OBSOLETE_SUDOERS_PATHS[$index]}"
+        if (( obsolete_sudoers_existed[index] == 1 )); then
+          install -o root -g root -m 0440 "$operator_backup_root/obsolete-sudoers-$index" "$path" \
+            || rollback_failed=1
+        else
+          rm -f -- "$path" || rollback_failed=1
+        fi
+      done
+      operator_files_match_snapshot || rollback_failed=1
     fi
+    service_matches_captured_state "$NEW_SERVICE" "$new_enabled_before" "$new_active_before" \
+      || rollback_failed=1
+    service_matches_captured_state "$OLD_SERVICE" "$old_enabled_before" "$old_active_before" \
+      || rollback_failed=1
+    runtime_files_match_snapshot || rollback_failed=1
+    fi
+    fi
+  fi
+  if (( rollback_failed == 1 )); then
+    preserve_recovery_snapshot=1
+    printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_FAILED code=UV_CONTAINER_PROMOTION_ROLLBACK_FAILED stage=%s rc=%s recovery_snapshot=%s\n' \
+      "$CURRENT_STAGE" "$rc" "$operator_backup_root" >&2
+    exit 1
   fi
   printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_FAILED code=UV_CONTAINER_PROMOTION_ROLLED_BACK stage=%s rc=%s\n' "$CURRENT_STAGE" "$rc" >&2
   exit "$rc"
@@ -112,9 +390,40 @@ trap cleanup EXIT
 [[ -z "$(git -C "$SOURCE_DIR" status --porcelain=v1 --untracked-files=all)" ]] || fail UV_CONTAINER_PROMOTION_SOURCE_DIRTY
 [[ -d "$BASE_DIR/spool/running" && ! -L "$BASE_DIR/spool/running" ]] || fail UV_CONTAINER_PROMOTION_SPOOL_UNAVAILABLE
 has_running_job && fail UV_CONTAINER_PROMOTION_JOB_RUNNING
+[[ -f "$WORKLOAD_LOCK" && ! -L "$WORKLOAD_LOCK" ]] \
+  || fail UV_CONTAINER_PROMOTION_WORKLOAD_LOCK_INVALID
+[[ "$(stat -c '%U:%G:%a:%h' "$WORKLOAD_LOCK" 2>/dev/null || true)" == 'root:universal-video:640:1' ]] \
+  || fail UV_CONTAINER_PROMOTION_WORKLOAD_LOCK_INVALID
+CURRENT_STAGE='workload-fence'
+exec 9<"$WORKLOAD_LOCK"
+flock --exclusive --nonblock 9 || fail UV_CONTAINER_PROMOTION_WORKLOAD_BUSY
+workload_lock_held=1
+has_running_job && fail UV_CONTAINER_PROMOTION_JOB_RUNNING
+
+CURRENT_STAGE='queue-credential-preflight'
+queue_dsn_file="$BASE_DIR/secrets/video-queue-dsn"
+[[ -f "$queue_dsn_file" && ! -L "$queue_dsn_file" ]] \
+  || fail UV_CONTAINER_PROMOTION_QUEUE_CREDENTIAL_MISSING
+queue_dsn_meta="$(stat -c '%U:%G:%a:%s' "$queue_dsn_file" 2>/dev/null || true)"
+[[ "$queue_dsn_meta" =~ ^root:universal-video:640:([1-9][0-9]{0,3})$ ]] \
+  || fail UV_CONTAINER_PROMOTION_QUEUE_CREDENTIAL_METADATA_INVALID
+(( BASH_REMATCH[1] <= 4096 )) \
+  || fail UV_CONTAINER_PROMOTION_QUEUE_CREDENTIAL_OVERSIZED
+python3 "$SOURCE_DIR/ops/validate_video_queue_dsn.py" "$queue_dsn_file" >/dev/null \
+  || fail UV_CONTAINER_PROMOTION_QUEUE_CREDENTIAL_INVALID
 
 CURRENT_STAGE='operator-snapshot'
-operator_backup_root="$(mktemp -d)"
+[[ ! -L "$RECOVERY_ROOT" ]] || fail UV_CONTAINER_PROMOTION_RECOVERY_ROOT_UNSAFE
+install -d -o root -g root -m 0700 "$RECOVERY_ROOT"
+[[ -d "$RECOVERY_ROOT" && ! -L "$RECOVERY_ROOT" ]] \
+  || fail UV_CONTAINER_PROMOTION_RECOVERY_ROOT_UNSAFE
+[[ "$(stat -c '%U:%G:%a' "$RECOVERY_ROOT" 2>/dev/null || true)" == 'root:root:700' ]] \
+  || fail UV_CONTAINER_PROMOTION_RECOVERY_ROOT_UNSAFE
+operator_backup_root="$(mktemp -d "$RECOVERY_ROOT/snapshot.XXXXXX")"
+[[ -d "$operator_backup_root" && ! -L "$operator_backup_root" ]] \
+  || fail UV_CONTAINER_PROMOTION_RECOVERY_SNAPSHOT_UNSAFE
+[[ "$(stat -c '%U:%G:%a' "$operator_backup_root" 2>/dev/null || true)" == 'root:root:700' ]] \
+  || fail UV_CONTAINER_PROMOTION_RECOVERY_SNAPSHOT_UNSAFE
 if [[ -e "$OPERATOR_TARGET" || -L "$OPERATOR_TARGET" ]]; then
   [[ -f "$OPERATOR_TARGET" && ! -L "$OPERATOR_TARGET" ]] || fail UV_CONTAINER_PROMOTION_OPERATOR_UNSAFE
   install -o root -g root -m 0600 "$OPERATOR_TARGET" "$operator_backup_root/operator"
@@ -125,13 +434,42 @@ if [[ -e "$OPERATOR_SUDOERS" || -L "$OPERATOR_SUDOERS" ]]; then
   install -o root -g root -m 0600 "$OPERATOR_SUDOERS" "$operator_backup_root/sudoers"
   operator_sudoers_existed=1
 fi
+for index in "${!OBSOLETE_OPERATOR_PATHS[@]}"; do
+  path="${OBSOLETE_OPERATOR_PATHS[$index]}"
+  if [[ -e "$path" || -L "$path" ]]; then
+    [[ -f "$path" && ! -L "$path" ]] || fail UV_CONTAINER_PROMOTION_OPERATOR_OBSOLETE_UNSAFE
+    install -o root -g root -m 0600 "$path" "$operator_backup_root/obsolete-operator-$index"
+    obsolete_operator_existed[index]=1
+  fi
+done
+for index in "${!OBSOLETE_SUDOERS_PATHS[@]}"; do
+  path="${OBSOLETE_SUDOERS_PATHS[$index]}"
+  if [[ -e "$path" || -L "$path" ]]; then
+    [[ -f "$path" && ! -L "$path" ]] || fail UV_CONTAINER_PROMOTION_OPERATOR_OBSOLETE_UNSAFE
+    install -o root -g root -m 0600 "$path" "$operator_backup_root/obsolete-sudoers-$index"
+    obsolete_sudoers_existed[index]=1
+  fi
+done
 operator_snapshot_ready=1
+
+if [[ -e "$NEW_SERVICE_UNIT" || -L "$NEW_SERVICE_UNIT" ]]; then
+  [[ -f "$NEW_SERVICE_UNIT" && ! -L "$NEW_SERVICE_UNIT" ]] \
+    || fail UV_CONTAINER_PROMOTION_CONTAINER_UNIT_UNSAFE
+  install -o root -g root -m 0600 "$NEW_SERVICE_UNIT" "$operator_backup_root/container-unit"
+  new_service_unit_existed=1
+fi
+if [[ -e "$NEW_SERVICE_ENV" || -L "$NEW_SERVICE_ENV" ]]; then
+  [[ -f "$NEW_SERVICE_ENV" && ! -L "$NEW_SERVICE_ENV" ]] \
+    || fail UV_CONTAINER_PROMOTION_CONTAINER_ENV_UNSAFE
+  install -o root -g root -m 0600 "$NEW_SERVICE_ENV" "$operator_backup_root/container-env"
+  new_service_env_existed=1
+fi
 
 CURRENT_STAGE='protected-preflight'
 before_assistant="$(systemctl is-active assistant-lab.service)"
 before_dds="$(curl -fsS --max-time 10 http://127.0.0.1:8080/readyz)"
 BEFORE_DDS="$before_dds" python3 - <<'PY'
-import json,os
+import json,os,re
 x=json.loads(os.environ['BEFORE_DDS'])
 assert x.get('status') == 'ready'
 assert x.get('engine') == 'DDS3'
@@ -141,12 +479,49 @@ PY
 CURRENT_STAGE='image-preflight'
 observed="$(docker image inspect --format '{{.Id}}' "bridge-school/universal-video:$EXPECTED_COMMIT")"
 [[ "$observed" == "$EXPECTED_DIGEST" ]] || fail UV_CONTAINER_PROMOTION_IMAGE_MISMATCH
+CURRENT_STAGE='speaker-model-preflight'
+runtime_uid="$(id -u universal-video)"
+runtime_gid="$(id -g universal-video)"
+[[ -d "$BASE_DIR/model-cache/speaker" && ! -L "$BASE_DIR/model-cache/speaker" ]] \
+  || fail UV_CONTAINER_PROMOTION_SPEAKER_CACHE_UNAVAILABLE
+docker run --rm --read-only --tmpfs /tmp:rw,noexec,nosuid,size=1g \
+  --user="$runtime_uid:$runtime_gid" \
+  --env "UNIVERSAL_VIDEO_SOURCE_COMMIT=$EXPECTED_COMMIT" \
+  --env UNIVERSAL_VIDEO_SPOOL_ROOT=/var/lib/universal-video/spool \
+  --env UNIVERSAL_VIDEO_OUTPUT_ROOT=/var/lib/universal-video/output \
+  --env UNIVERSAL_VIDEO_MEDIA_ROOT=/var/lib/universal-video/media \
+  --env UNIVERSAL_VIDEO_SPEAKER_MODEL_CACHE=/var/lib/universal-video/model-cache/speaker \
+  --env HF_HOME=/var/lib/universal-video/model-cache \
+  --mount "type=bind,src=$BASE_DIR/spool,dst=/var/lib/universal-video/spool" \
+  --mount "type=bind,src=$BASE_DIR/output,dst=/var/lib/universal-video/output" \
+  --mount "type=bind,src=$BASE_DIR/media,dst=/var/lib/universal-video/media" \
+  --mount "type=bind,src=$BASE_DIR/model-cache,dst=/var/lib/universal-video/model-cache" \
+  "$EXPECTED_DIGEST" true \
+  || fail UV_CONTAINER_PROMOTION_SPEAKER_MODEL_INVALID
 started_unix="$(date +%s)"
 old_enabled_before="$(systemctl is-enabled "$OLD_SERVICE" 2>/dev/null || true)"
 old_active_before="$(systemctl is-active "$OLD_SERVICE" 2>/dev/null || true)"
+new_enabled_before="$(systemctl is-enabled "$NEW_SERVICE" 2>/dev/null || true)"
+new_active_before="$(systemctl is-active "$NEW_SERVICE" 2>/dev/null || true)"
+service_state_is_known "$old_enabled_before" "$old_active_before" \
+  || fail UV_CONTAINER_PROMOTION_LEGACY_STATE_UNKNOWN
+service_state_is_known "$new_enabled_before" "$new_active_before" \
+  || fail UV_CONTAINER_PROMOTION_CONTAINER_STATE_UNKNOWN
+[[ "$old_active_before" != active || "$new_active_before" != active ]] \
+  || fail UV_CONTAINER_PROMOTION_DUAL_RESIDENT
 switch_started=1
 CURRENT_STAGE='legacy-quiesce'
 systemctl disable --now "$OLD_SERVICE" || fail UV_CONTAINER_PROMOTION_LEGACY_QUIESCE_FAILED
+CURRENT_STAGE='container-quiesce'
+if [[ "$new_active_before" == active || "$new_enabled_before" == enabled ]]; then
+  systemctl disable --now "$NEW_SERVICE" || fail UV_CONTAINER_PROMOTION_CONTAINER_QUIESCE_FAILED
+fi
+CURRENT_STAGE='workload-handoff'
+if ! flock --unlock 9; then
+  fail UV_CONTAINER_PROMOTION_WORKLOAD_UNLOCK_FAILED
+fi
+exec 9<&-
+workload_lock_held=0
 CURRENT_STAGE='installer-activation'
 UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=1 UNIVERSAL_VIDEO_CONTAINER_BUILD=0 bash "$SOURCE_DIR/ops/oracle_universal_video_container_install.sh"
 CURRENT_STAGE='service-verification'
@@ -180,16 +555,7 @@ CURRENT_STAGE='resident-status'
 deadline=$((SECONDS + 45))
 fresh_status=0
 while (( SECONDS < deadline )); do
-  if [[ -f "$STATUS" && ! -L "$STATUS" ]] && STATUS_PATH="$STATUS" EXPECTED_COMMIT="$EXPECTED_COMMIT" STARTED_UNIX="$started_unix" python3 - <<'PY'
-import json,os
-x=json.load(open(os.environ['STATUS_PATH'],encoding='utf-8'))
-assert x.get('schema') == 'universal-video-resident-status-v2'
-assert x.get('instance_state') == 'RUNNING'
-assert x.get('installed_runtime_commit') == os.environ['EXPECTED_COMMIT']
-assert x.get('active_jobs') == []
-assert float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])
-PY
-  then
+  if resident_status_ready; then
     fresh_status=1
     break
   fi
@@ -199,15 +565,6 @@ if (( fresh_status != 1 )); then
   [[ -f "$STATUS" && ! -L "$STATUS" ]] || fail UV_CONTAINER_PROMOTION_STATUS_MISSING
   fail UV_CONTAINER_PROMOTION_STATUS_STALE
 fi
-STATUS_PATH="$STATUS" EXPECTED_COMMIT="$EXPECTED_COMMIT" STARTED_UNIX="$started_unix" python3 - <<'PY'
-import json,os
-x=json.load(open(os.environ['STATUS_PATH'],encoding='utf-8'))
-assert x.get('schema') == 'universal-video-resident-status-v2'
-assert x.get('instance_state') == 'RUNNING'
-assert x.get('installed_runtime_commit') == os.environ['EXPECTED_COMMIT']
-assert x.get('active_jobs') == []
-assert float(x.get('observed_at_unix') or 0) >= int(os.environ['STARTED_UNIX'])
-PY
 
 CURRENT_STAGE='operator-install'
 if ! operator_install_output="$(
@@ -258,6 +615,8 @@ for x in (before,after):
     assert x.get('engine') == 'DDS3'
     assert x.get('fallback_used') is False
 PY
+CURRENT_STAGE='resident-status-final'
+resident_status_ready || fail UV_CONTAINER_PROMOTION_STATUS_STALE
 switch_started=0
 CURRENT_STAGE='complete'
 printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_PASS commit=%s image_digest=%s fallback_used=false active_jobs=0\n' "$EXPECTED_COMMIT" "$EXPECTED_DIGEST"

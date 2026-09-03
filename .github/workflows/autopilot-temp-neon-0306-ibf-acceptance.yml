@@ -1,0 +1,168 @@
+name: Autopilot temp Neon 0306 and IBF acceptance
+
+on:
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths: ['.github/workflows/autopilot-temp-neon-0306-ibf-acceptance.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autopilot-temporary-neon-owner-ingress
+  cancel-in-progress: false
+
+jobs:
+  accept:
+    if: github.repository == 'olegmed1-art/bridge-video-free'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    environment: database-production
+    env:
+      NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+      PROJECT_ID: misty-poetry-18012774
+      TEMP_BRANCH_ID: br-still-tooth-b1ilkfcj
+      PRODUCTION_BRANCH_ID: br-cold-moon-a1sgkzfd
+      TEMP_ENDPOINT_ID: ep-floral-field-b1pjs2of
+      MIGRATION_ROLE: autopilot_migration_owner_login
+      EXPECTED_MIGRATION_BLOB: 7258d7ce8d8265bd4de87907d40eca20da4bef15
+      TASK_KEY: ibf-15031-issue-1013-20260901
+    steps:
+      - name: Checkout exact integration source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y postgresql-client >/dev/null
+
+      - name: Resolve only the exact temporary branch migration-owner URI
+        id: neon
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          [[ -n "${NEON_API_KEY:-}" ]]
+          [[ "$TEMP_BRANCH_ID" != "$PRODUCTION_BRANCH_ID" ]]
+          [[ "$(git hash-object database/migrations/0306_autopilot_bounded_task_ingress.sql)" == "$EXPECTED_MIGRATION_BLOB" ]]
+          api="https://console.neon.tech/api/v2/projects/$PROJECT_ID"
+          auth=(-H "Authorization: Bearer $NEON_API_KEY" -H 'Accept: application/json')
+          branch_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID")"
+          endpoint_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID/endpoints")"
+          role_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" "$api/branches/$TEMP_BRANCH_ID/roles/$MIGRATION_ROLE")"
+          uri_json="$(curl -fsS --retry 2 --retry-all-errors --max-time 20 "${auth[@]}" \
+            "$api/connection_uri?branch_id=$TEMP_BRANCH_ID&database_name=neondb&role_name=$MIGRATION_ROLE&pooled=false")"
+          BRANCH_JSON="$branch_json" ENDPOINT_JSON="$endpoint_json" ROLE_JSON="$role_json" URI_JSON="$uri_json" python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, re, urllib.parse
+          bid=os.environ['TEMP_BRANCH_ID']; eid=os.environ['TEMP_ENDPOINT_ID']; role=os.environ['MIGRATION_ROLE']
+          b=json.loads(os.environ['BRANCH_JSON']); e=json.loads(os.environ['ENDPOINT_JSON']); r=json.loads(os.environ['ROLE_JSON']); u=json.loads(os.environ['URI_JSON'])
+          branch=b.get('branch',b); assert branch.get('id')==bid
+          endpoints=e.get('endpoints',[]); assert any(x.get('id')==eid and x.get('branch_id')==bid for x in endpoints)
+          role_obj=r.get('role',r); assert role_obj.get('name')==role
+          uri=u.get('uri'); assert isinstance(uri,str) and uri
+          p=urllib.parse.urlsplit(uri); assert p.username==role and (p.path.lstrip('/') or 'neondb')=='neondb'
+          host=(p.hostname or '').lower(); assert host.startswith(eid+'.') and host.endswith('.neon.tech')
+          print(f'::add-mask::{uri}')
+          print(f'database_url={uri}')
+          print('NEON_TARGET_BRANCH_VERIFIED=YES')
+          print('NEON_PRODUCTION_BRANCH_TARGETED=NO')
+          PY
+
+      - name: Prove owner boundary and apply only migration 0306
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.database_url }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          pre="$(psql "$DATABASE_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 <<'SQL'
+          SELECT current_database(),current_user,
+                 current_setting('server_version_num')::integer >= 180000,
+                 EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0303_autopilot_github_draft_repair'),
+                 EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0306_autopilot_bounded_task_ingress'),
+                 (SELECT rolcreaterole FROM pg_roles WHERE rolname=current_user),
+                 has_database_privilege(current_user,current_database(),'CREATE');
+          SQL
+          )"
+          IFS='|' read -r db usr pg18 m303 m306 createrole dbcreate <<<"$pre"
+          [[ "$db" == neondb && "$usr" == "$MIGRATION_ROLE" ]]
+          [[ "$pg18" == t && "$m303" == t && "$createrole" == f && "$dbcreate" == t ]]
+          echo "AUTOPILOT_PRE_MIGRATION_0306=$m306"
+          if [[ "$m306" == f ]]; then
+            psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f database/migrations/0306_autopilot_bounded_task_ingress.sql >/dev/null
+          fi
+          post="$(psql "$DATABASE_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 <<'SQL'
+          SELECT EXISTS(SELECT 1 FROM public.schema_migration WHERE migration_key='0306_autopilot_bounded_task_ingress'),
+                 to_regprocedure('autopilot.register_approved_ibf_analysis(text,text,text,integer)') IS NOT NULL,
+                 has_function_privilege('autopilot_runtime','autopilot.register_approved_ibf_analysis(text,text,text,integer)','EXECUTE');
+          SQL
+          )"
+          [[ "$post" == 't|t|t' ]]
+          echo 'AUTOPILOT_TEMP_NEON_MIGRATION_0306=PASS'
+          echo 'PRODUCTION_MUTATION=NO'
+
+      - name: Register exact Director-approved IBF 15031 task
+        id: register
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.database_url }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          row="$(psql "$DATABASE_URL" -X -A -t -F '|' -v ON_ERROR_STOP=1 -c \
+            "SELECT task_id,status,created FROM autopilot.register_approved_ibf_analysis('$TASK_KEY','15031','github:issue:1013#director-go',10);")"
+          IFS='|' read -r task_id status created <<<"$row"
+          [[ "$task_id" =~ ^[0-9a-f-]{36}$ ]]
+          echo "task_id=$task_id" >> "$GITHUB_OUTPUT"
+          echo "AUTOPILOT_IBF_TASK_ID=$task_id"
+          echo "AUTOPILOT_IBF_REGISTER_STATUS=$status"
+          echo "AUTOPILOT_IBF_REGISTER_CREATED=$created"
+
+      - name: Require retained Oracle CLAIM and terminal DONE evidence
+        id: terminal
+        env:
+          DATABASE_URL: ${{ steps.neon.outputs.database_url }}
+          TASK_ID: ${{ steps.register.outputs.task_id }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          for _ in $(seq 1 48); do
+            status="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT status FROM autopilot.task WHERE task_id='$TASK_ID'::uuid;")"
+            case "$status" in DONE|FAILED_CLOSED|OWNER_REQUIRED|BUDGET_STOP|CANCELLED) break;; esac
+            sleep 5
+          done
+          status="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT status FROM autopilot.task WHERE task_id='$TASK_ID'::uuid;")"
+          claimed="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM autopilot.task_event WHERE task_id='$TASK_ID'::uuid AND event_type='TASK_CLAIMED' AND actor_type='ORACLE_WORKER' AND state_to='RUNNING';")"
+          evidence="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT count(*) FROM autopilot.evidence WHERE task_id='$TASK_ID'::uuid AND retained;")"
+          events="$(psql "$DATABASE_URL" -X -A -t -F ':' -v ON_ERROR_STOP=1 -c "SELECT sequence_no,event_type,COALESCE(state_to,'') FROM autopilot.task_event WHERE task_id='$TASK_ID'::uuid ORDER BY sequence_no;")"
+          summary="$(psql "$DATABASE_URL" -X -A -t -v ON_ERROR_STOP=1 -c "SELECT safe_summary_json::text FROM autopilot.task WHERE task_id='$TASK_ID'::uuid;")"
+          echo "AUTOPILOT_IBF_FINAL_STATUS=$status"
+          echo "AUTOPILOT_IBF_CLAIM_EVENT_COUNT=$claimed"
+          echo "AUTOPILOT_IBF_RETAINED_EVIDENCE_COUNT=$evidence"
+          printf 'AUTOPILOT_IBF_EVENTS=%s\n' "$(tr '\n' ',' <<<"$events")"
+          printf 'AUTOPILOT_IBF_SAFE_SUMMARY=%s\n' "$summary"
+          echo "final_status=$status" >> "$GITHUB_OUTPUT"
+          [[ "$claimed" -ge 1 ]]
+          [[ "$status" == DONE ]]
+          [[ "$evidence" -ge 1 ]]
+          echo 'AUTOPILOT_IBF_ACCEPTANCE=PASS'
+          echo 'PRODUCTION_MUTATION=NO'
+
+      - name: Publish receipt
+        if: ${{ always() }}
+        env:
+          TASK_ID: ${{ steps.register.outputs.task_id }}
+          FINAL_STATUS: ${{ steps.terminal.outputs.final_status }}
+        shell: bash
+        run: |
+          {
+            echo '### Autopilot IBF bounded acceptance'
+            echo "- temporary Neon branch: \`$TEMP_BRANCH_ID\`"
+            echo '- production/default branch targeted: `NO`'
+            echo '- migration: `0306` only'
+            echo "- task id: \`${TASK_ID:-unresolved}\`"
+            echo "- terminal: \`${FINAL_STATUS:-not-DONE}\`"
+            echo '- Oracle runtime: `SHADOW_ONLY / worker_v16`'
+            echo '- production mutations: `NO`'
+          } >> "$GITHUB_STEP_SUMMARY"

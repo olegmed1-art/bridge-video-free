@@ -1,0 +1,212 @@
+name: Oracle Autopilot shadow diagnostics
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/oracle-autopilot-shadow-diagnostics.yml'
+      - 'tests/test_oracle_autopilot_shadow.py'
+  push:
+    branches: [codex/oracle-autopilot-lite-shadow]
+    paths:
+      - 'ops/oracle-autopilot-diagnostic-requests/*.json'
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Validate read-only diagnostic boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow='.github/workflows/oracle-autopilot-shadow-diagnostics.yml'
+          grep -F "request['action'] == 'inspect_shadow_failure'" "$workflow" >/dev/null
+          grep -F "request['no_instance_stop'] is True" "$workflow" >/dev/null
+          grep -F 'AUTOPILOT_DIAGNOSTIC_READ_ONLY=YES' "$workflow" >/dev/null
+          grep -F 'ORACLE_INSTANCE_STOP_REQUESTED=NO' "$workflow" >/dev/null
+          python - <<'PY'
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/oracle-autopilot-shadow-diagnostics.yml').read_text()
+          for forbidden in (
+              'systemctl ' + 'start',
+              'systemctl ' + 'stop',
+              'systemctl ' + 'restart',
+              'systemctl ' + 'enable',
+              'systemctl ' + 'disable',
+              '--action ' + 'STOP',
+              'oci compute instance ' + 'action',
+              'echo ' + '"$journal"',
+              'cat ' + '"$root/autopilot-shadow.env"',
+          ):
+              assert forbidden not in workflow
+          PY
+
+  inspect:
+    if: ${{ github.event_name == 'push' }}
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
+      SSH_KEY_VM: ${{ secrets.ORACLE_VM_SSH_PRIVATE_KEY }}
+      SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
+      SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
+      SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+
+      - name: Validate exact diagnostic request
+        id: request
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" \
+            | grep -E '^ops/oracle-autopilot-diagnostic-requests/[^/]+\.json$' | sort -u)
+          [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one diagnostic request' >&2; exit 1; }
+          REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import re
+
+          request = json.load(open(os.environ['REQUEST_FILE'], encoding='utf-8'))
+          assert set(request) == {
+              'request_id', 'action', 'target_host', 'source_revision',
+              'no_instance_stop',
+          }
+          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}', request['request_id'])
+          assert request['action'] == 'inspect_shadow_failure'
+          assert request['target_host'] == '158.180.47.161'
+          assert re.fullmatch(r'[0-9a-f]{40}', request['source_revision'])
+          assert request['no_instance_stop'] is True
+          print(f"request_id={request['request_id']}")
+          print(f"source_revision={request['source_revision']}")
+          PY
+
+      - name: Verify pinned Oracle identity and SSH access
+        id: ssh
+        shell: bash
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/oracle-autopilot-diagnostic-known-hosts"
+          : > "$known"
+          index=0
+          for expected in \
+            'SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk' \
+            'SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc' \
+            'SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64'; do
+            part="$RUNNER_TEMP/oracle-autopilot-diagnostic-known-hosts.$index"
+            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$expected" "$part"
+            cat "$part" >> "$known"
+            index=$((index + 1))
+          done
+          sort -u -o "$known" "$known"
+          selected=''
+          for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
+            if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
+          done
+          [[ -n "$selected" ]] || { echo 'Oracle SSH credential unavailable' >&2; exit 1; }
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "${!selected}" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n true'
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+
+      - name: Inspect retained failure evidence without mutation
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env EXPECTED_REVISION='${{ steps.request.outputs.source_revision }}' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          service=school-autopilot-shadow.service
+          root=/opt/bridge-school/school-autopilot
+          release="$root/releases/$EXPECTED_REVISION"
+          unit=/etc/systemd/system/$service
+
+          current_target="$(readlink -f "$root/current" 2>/dev/null || true)"
+          current_revision="$(cat "$root/current/SOURCE_REVISION" 2>/dev/null || true)"
+          env_metadata="$(stat -c '%U:%G:%a' "$root/autopilot-shadow.env" 2>/dev/null || true)"
+          unit_present=NO
+          unit_shadow_mode=NO
+          [[ -f "$unit" ]] && unit_present=YES
+          if [[ -f "$unit" ]] && grep -Fx 'Environment=AUTOPILOT_RUNTIME_MODE=SHADOW' "$unit" >/dev/null; then
+            unit_shadow_mode=YES
+          fi
+
+          printf 'AUTOPILOT_DIAG_EXPECTED_RELEASE=%s\n' "$release"
+          printf 'AUTOPILOT_DIAG_CURRENT_RELEASE=%s\n' "$current_target"
+          printf 'AUTOPILOT_DIAG_EXPECTED_REVISION=%s\n' "$EXPECTED_REVISION"
+          printf 'AUTOPILOT_DIAG_CURRENT_REVISION=%s\n' "$current_revision"
+          printf 'AUTOPILOT_DIAG_ENV_METADATA=%s\n' "$env_metadata"
+          printf 'AUTOPILOT_DIAG_UNIT_PRESENT=%s\n' "$unit_present"
+          printf 'AUTOPILOT_DIAG_UNIT_SHADOW_MODE=%s\n' "$unit_shadow_mode"
+
+          precondition=PASS
+          [[ "$current_target" == "$release" ]] || precondition=FAIL
+          [[ "$current_revision" == "$EXPECTED_REVISION" ]] || precondition=FAIL
+          [[ "$env_metadata" == root:root:600 ]] || precondition=FAIL
+          [[ "$unit_present" == YES ]] || precondition=FAIL
+          [[ "$unit_shadow_mode" == YES ]] || precondition=FAIL
+
+          printf 'AUTOPILOT_DIAG_ACTIVE=%s\n' "$(systemctl is-active "$service" 2>/dev/null || true)"
+          printf 'AUTOPILOT_DIAG_ENABLED=%s\n' "$(systemctl is-enabled "$service" 2>/dev/null || true)"
+          printf 'AUTOPILOT_DIAG_NRESTARTS=%s\n' "$(systemctl show -p NRestarts --value "$service" 2>/dev/null || true)"
+          printf 'AUTOPILOT_DIAG_RESULT=%s\n' "$(systemctl show -p Result --value "$service" 2>/dev/null || true)"
+          printf 'AUTOPILOT_DIAG_EXEC_MAIN_CODE=%s\n' "$(systemctl show -p ExecMainCode --value "$service" 2>/dev/null || true)"
+          printf 'AUTOPILOT_DIAG_EXEC_MAIN_STATUS=%s\n' "$(systemctl show -p ExecMainStatus --value "$service" 2>/dev/null || true)"
+
+          journal="$(journalctl -u "$service" --since '2 hours ago' --no-pager -n 300 2>/dev/null || true)"
+          count() { grep -Ec "$1" <<<"$journal" || true; }
+          printf 'AUTOPILOT_DIAG_WORKER_STARTED_COUNT=%s\n' "$(count 'worker_started')"
+          printf 'AUTOPILOT_DIAG_LISTENER_RECONNECT_COUNT=%s\n' "$(count 'listener_reconnect')"
+          printf 'AUTOPILOT_DIAG_MODULE_IMPORT_COUNT=%s\n' "$(count 'ModuleNotFoundError|ImportError|No module named')"
+          printf 'AUTOPILOT_DIAG_CONFIG_COUNT=%s\n' "$(count 'AUTOPILOT_DATABASE_URL|required|must be SHADOW|direct Neon endpoint')"
+          printf 'AUTOPILOT_DIAG_PERMISSION_COUNT=%s\n' "$(count 'Permission denied|PermissionError')"
+          printf 'AUTOPILOT_DIAG_CHDIR_PERMISSION_COUNT=%s\n' "$(count 'Failed at step CHDIR|status=200/CHDIR|working directory.*Permission denied')"
+          printf 'AUTOPILOT_DIAG_EXEC_PERMISSION_COUNT=%s\n' "$(count 'Failed at step EXEC|status=203/EXEC|Failed to execute.*Permission denied')"
+          printf 'AUTOPILOT_DIAG_USER_PERMISSION_COUNT=%s\n' "$(count 'status=217/USER|Failed to determine user')"
+          printf 'AUTOPILOT_DIAG_ENV_PERMISSION_COUNT=%s\n' "$(count 'autopilot-shadow.env.*Permission denied|Permission denied.*autopilot-shadow.env')"
+          printf 'AUTOPILOT_DIAG_CURRENT_PERMISSION_COUNT=%s\n' "$(count 'school-autopilot/current.*Permission denied|Permission denied.*school-autopilot/current')"
+          printf 'AUTOPILOT_DIAG_VENV_PERMISSION_COUNT=%s\n' "$(count '\.venv/bin/python.*Permission denied|Permission denied.*\.venv/bin/python')"
+          printf 'AUTOPILOT_DIAG_SANDBOX_PERMISSION_COUNT=%s\n' "$(count 'mount namespacing|Read-only file system')"
+          printf 'AUTOPILOT_DIAG_DATABASE_COUNT=%s\n' "$(count 'OperationalError|authentication failed|connection refused|could not connect')"
+          printf 'AUTOPILOT_DIAG_TRACEBACK_COUNT=%s\n' "$(count 'Traceback|RuntimeError')"
+          printf 'AUTOPILOT_DIAG_TYPEERROR_COUNT=%s\n' "$(count 'TypeError:')"
+          printf 'AUTOPILOT_DIAG_VALUEERROR_COUNT=%s\n' "$(count 'ValueError:')"
+          printf 'AUTOPILOT_DIAG_ATTRIBUTEERROR_COUNT=%s\n' "$(count 'AttributeError:')"
+          printf 'AUTOPILOT_DIAG_KEYERROR_COUNT=%s\n' "$(count 'KeyError:')"
+          printf 'AUTOPILOT_DIAG_INDEXERROR_COUNT=%s\n' "$(count 'IndexError:')"
+          printf 'AUTOPILOT_DIAG_INCOMPLETEREAD_COUNT=%s\n' "$(count 'IncompleteRead')"
+          printf 'AUTOPILOT_DIAG_SSLERROR_COUNT=%s\n' "$(count 'SSLError|SSL:')"
+          printf 'AUTOPILOT_DIAG_TIMEOUTERROR_COUNT=%s\n' "$(count 'TimeoutError|timed out')"
+          while IFS= read -r exception_type; do
+            [[ "$exception_type" =~ ^[A-Za-z_][A-Za-z0-9_.]{0,80}$ ]] || continue
+            printf 'AUTOPILOT_DIAG_EXCEPTION_TYPE=%s\n' "$exception_type"
+          done < <(
+            sed -nE 's/.*\]: ([A-Za-z_][A-Za-z0-9_.]{0,80}):.*/\1/p' <<<"$journal" | sort -u
+          )
+          echo 'AUTOPILOT_DIAGNOSTIC_READ_ONLY=YES'
+          echo 'ORACLE_INSTANCE_STOP_REQUESTED=NO'
+          printf 'AUTOPILOT_DIAG_PRECONDITION=%s\n' "$precondition"
+          [[ "$precondition" == PASS ]] || exit 74
+          REMOTE

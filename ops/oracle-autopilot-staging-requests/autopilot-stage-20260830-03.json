@@ -1,0 +1,10 @@
+{
+  "activate": 0,
+  "ciphertext_b64": "dzMHQkDr3dWvuGaYISg0dT3Su+sEyqQuz1rUoemWk/la4yyuFwfYM1V66xmdbn3v7KSh9o6Ehls0XH3PPrCN2aLYAxq9/s0JvCCUWW65FXOkerPswmXDTCBdwEfCU0cyLJwVS8oo3j2QOpe9OjL1r12oDxR5jWaeE8FrlHxiHaGNNPxh80swV+lixg2zRxO4QaS8xgCSsZb/1DvD3h6lZ7Ohfj7yQmvnE8K7Q0SV9mTbyTfIgf0jdkdr/9wgJyzytih0PbGDqbVA8AS/6VQFmv9juhJyrEAJjnTVmu3zO1MB0x8FMhf4LI8Dj2/5MDRiBSZB9nfbwyzYOTKseK14XS4WdZFCnevjSv0CxUx7DZ+IQpyluFtd+VTeYV8QlSgJeIiPTrt9yYT1pgKclzwCjHXoCQ5mdd7DJEP4nqM6e9Y6FNOp3xLmDJPSqkU5NKFMehsfh60yoXISc/+X9rDrNfWqMZ9G3xnjkJkWOtO6976eXvHIhq1DcdCAJO6LnhaA",
+  "ciphertext_sha256": "a849b8db75088391d52d74854b43df72628ef11642f01f0d1779d8ae08800d21",
+  "expected_db_user": "autopilot_runtime_login",
+  "plaintext_length": 204,
+  "request_id": "autopilot-stage-20260830-03",
+  "rsa_fingerprint": "SHA256:eRCJ8c4V7HCBlIoNVSlpPSWZE5xPUMjBD6f0PvHDj64",
+  "target_host": "158.180.47.161"
+}

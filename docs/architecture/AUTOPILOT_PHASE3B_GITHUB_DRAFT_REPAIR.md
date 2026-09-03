@@ -1,0 +1,143 @@
+# Autopilot Phase 3B — bounded GitHub draft repair
+
+Status: `ORACLE_CONSUMER_SOURCE_READY / ACTIVATION_PENDING`.
+
+## Purpose
+
+Phase 3B lets Autopilot prepare one small repair in its own branch and open a
+draft pull request. It does not merge, write to `main`, change production,
+launch Video or TRAIN, or receive an unrestricted user token.
+
+## Confirmed external boundary
+
+The original 2026-08-30 owner gates are now complete.  Fresh primary-state
+readback on 2026-08-31 confirmed:
+
+- active repository ruleset `21895987` protects the default branch, requires a
+  pull request, and blocks deletion and non-fast-forward updates with no bypass;
+- GitHub App `Bridge School Oracle Autopilot` (`app_id=4776443`) exists with
+  Metadata read, Contents read/write, Pull requests read/write, and Checks read;
+- isolated Vercel project `bridge-school-autopilot`
+  (`prj_KvQo3rPnwNs488hyDiMZ9hMU9d5R`) has no Git connection and contains two
+  protected Preview deployments. The bounded-executor deployment
+  `dpl_7cqY6DUSdcvWLGTAkZi8jZf8HSXv` is the latest and the legacy deployment
+  `dpl_AcsA2EbMhCW3Y2iJmrG6keVzRSzH` is retained temporarily as rollback;
+  project `live` is false and no production domain or alias exists.
+
+The App installation is limited to `olegmed1-art/bridge-video-free`. Its RSA
+private key and the separate high-entropy broker ingress secret exist only as
+Preview-scoped Vercel environment variables. The bounded deployment is pinned
+to source `2735ecbb4a455bec58007064210913c341795896`, keeps the installation
+token inside the broker, and passed the versioned `/healthz` contract. Neither
+secret has been transferred to Oracle. The v1.4 Oracle consumer source and
+temporary-branch migration are now independently verified, but neither is
+installed yet. Therefore the live draft-PR canary remains blocked until the
+secret boundary, migration, immutable release, and activation are verified.
+
+1. Protect `main` with a repository ruleset that requires a pull request and
+   blocks force pushes and branch deletion. The Autopilot App must not bypass
+   that ruleset. **Verified 2026-08-31.**
+2. Create and install a dedicated GitHub App only on
+   `olegmed1-art/bridge-video-free`. Grant Metadata read, Contents read/write,
+   Pull requests read/write, and Checks read. Do not grant Administration,
+   Actions write, Workflows write, Deployments, Secrets, or Members. **App and
+   permissions and repository-limited installation verified 2026-08-31.**
+
+## Credential broker boundary
+
+`autopilot_token_broker_service/` is the isolated Vercel source root.  It may:
+
+- keep the GitHub App RSA private key only in a Preview-scoped Vercel secret;
+- authenticate the Oracle caller with a separate high-entropy ingress secret;
+- mint and retain an internal installation token for exactly
+  `olegmed1-art/bridge-video-free`;
+- request only Checks read, Contents write, and Pull requests write;
+- accept the complete repair request and recompute its canonical action
+  fingerprint before minting a credential;
+- validate the repository, permissions, and expiry no more than 65 minutes
+  away, execute only the exact manifest sequence, and return safe PR evidence;
+- never return the installation token or its expiry to Oracle.
+
+It has no merge, ref-update, ref-delete, Actions, Deployments, or production
+endpoint. Runtime execution additionally requires `VERCEL_ENV=preview`.
+Redirects, unexpected permissions, invalid repository identity,
+oversized responses, weak configuration, and stale/long-lived tokens fail
+closed. Oracle never receives the App private key or installation token.
+
+### Physical no-merge attestation
+
+The installation credential needs `contents:write` to construct Git objects
+and a namespaced branch. GitHub does not offer a permission that grants those
+object writes while independently denying the pull-request merge API. The
+reviewed broker artifact is therefore the physical capability boundary, rather
+than the token permission label alone.
+
+Policy `physical-no-merge-v1` strengthens that boundary as follows:
+
+- every credentialed repository request passes a finite typed dispatcher;
+- only the exact GET/POST shapes needed for preflight, Git object construction,
+  namespaced ref creation, and draft-PR creation are accepted;
+- merge, ref update/delete, Actions, Deployments, hooks, rulesets, arbitrary
+  origins, encoded path escapes, extra query parameters, and PUT/PATCH/DELETE
+  requests fail closed before network dispatch;
+- `/healthz` reports the policy version and Vercel's immutable
+  `VERCEL_GIT_COMMIT_SHA`; caller-supplied source/artifact attestation variables
+  are ignored;
+- the mutation endpoint returns 503 unless the platform supplies an exact
+  lowercase deployment commit SHA; at runtime the broker hashes the loaded
+  security-relevant Python artifact and binds that digest, the platform commit,
+  policy version, and policy digest into a canonical provenance SHA-256;
+- every successful mutation receipt includes that exact source SHA, artifact
+  digest, immutable broker policy version, canonical policy SHA-256, and bound
+  provenance SHA-256; the Oracle consumer recomputes the binding and migration
+  `0307` requires the complete receipt fields;
+- the raw installation token remains process-local and no route returns it or
+  its expiry.
+
+The provenance receipt proves internal binding, but broker isolation is not a
+GitHub-level prohibition on merge. A deployment gate must still compare its
+source/artifact/policy values with the exact reviewed release and read them back
+from the protected Preview. Missing or mismatched deployment evidence remains
+`UNKNOWN`, never PASS. This source contract does not deploy, rotate credentials,
+change Vercel environment variables, or authorize production promotion.
+
+The Oracle consumer accepts no arbitrary URL. Its root-owned environment pins
+one exact Preview deployment path and contains separate broker-ingress and
+Vercel automation-bypass secrets. It sends the complete locked task manifest,
+rejects all redirects, caps request/response sizes, and accepts only an exact
+token-free evidence object whose repository, task key, fingerprint, base SHA,
+branch, draft PR identity, and operation count match the task. Migration `0303`
+adds only `GITHUB_DRAFT_REPAIR_V1`, `github.draft_repair`, and
+`GITHUB_DRAFT_REPAIR_EVIDENCE` to the temporary Autopilot schema.
+
+## Pilot policy
+
+- repository: exactly `olegmed1-art/bridge-video-free`;
+- base: exactly `main`, bound to a fresh 40-character commit SHA;
+- branch: deterministic `autopilot/repair/<fingerprint>` only;
+- maximum three UTF-8 regular files, 16 KiB each and 32 KiB total;
+- allowed paths: Autopilot Python, its tests, and bounded evidence only;
+- forbidden paths: `.github`, `database`, `deploy`, `ops`, and all other paths;
+- updates require the exact previous blob SHA;
+- create Git objects, one new branch, and one draft PR only;
+- no update/delete ref, force push, merge endpoint, production mutation, model
+  call, or credential in the task/evidence payload.
+
+## Rollback and failure behavior
+
+Before creating the branch, the executor reads `main` twice and stops if its
+SHA changes. Git objects created before the branch are unreferenced and harmless.
+If draft-PR creation fails after branch creation, the branch is retained for
+inspection; Phase 3B does not delete it automatically. Every missing permission,
+stale SHA, unexpected path, oversized change, or identity mismatch fails closed.
+
+## Canary
+
+The first live canary creates only
+`docs/evidence/autopilot/phase3b-canary.md` in its namespaced branch and opens a
+draft PR. It costs no model tokens. The canary is forbidden until both owner
+gates are verified from GitHub primary state, the bounded broker source is
+reviewed and deployed to Preview, and the separately authorized Oracle broker
+consumer is installed with fail-closed secret handling. The owner, bounded
+Preview, and consumer-source gates are verified; migration, secret transfer,
+immutable Oracle activation, and one live canary remain open.

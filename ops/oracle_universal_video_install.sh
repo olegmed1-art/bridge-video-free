@@ -89,6 +89,21 @@ ensure_real_dir(){
 
 ensure_real_dir "$BASE_DIR" root "$GROUP_NAME" 0750
 ensure_real_dir "$BASE_DIR/spool" root "$GROUP_NAME" 0750
+WORKLOAD_LOCK="$BASE_DIR/spool/.workload.lock"
+if [[ -e "$WORKLOAD_LOCK" || -L "$WORKLOAD_LOCK" ]]; then
+  [[ -f "$WORKLOAD_LOCK" && ! -L "$WORKLOAD_LOCK" ]] \
+    || die "unsafe workload lock path"
+  [[ "$(stat -c '%h' "$WORKLOAD_LOCK")" == 1 ]] \
+    || die "unsafe workload lock link count"
+else
+  install -o root -g "$GROUP_NAME" -m 0640 /dev/null "$WORKLOAD_LOCK"
+fi
+chown root:"$GROUP_NAME" "$WORKLOAD_LOCK"
+chmod 0640 "$WORKLOAD_LOCK"
+[[ "$(stat -c '%U:%G:%a:%h' "$WORKLOAD_LOCK")" == "root:$GROUP_NAME:640:1" ]] \
+  || die "unexpected workload lock metadata"
+runuser -u "$USER_NAME" -- test -r "$WORKLOAD_LOCK" \
+  || die "worker cannot open workload lock"
 for d in inbox running done failed results progress; do
   ensure_real_dir "$BASE_DIR/spool/$d" "$USER_NAME" "$GROUP_NAME" 0750
   chown "$USER_NAME:$GROUP_NAME" "$BASE_DIR/spool/$d"

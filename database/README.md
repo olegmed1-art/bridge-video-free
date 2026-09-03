@@ -85,6 +85,23 @@ PostgreSQL 18 migration package for the School of Sports Bridge.
 - `0014_operational_health.sql` — technical health policy plus read-only database fingerprint/signals/issue/summary views for migration integrity, stuck work, outbox, ingestion/analysis/projection/publication, recompute backlog, stale profiles, pending references and explicit storage unavailability.
 - `0015_operational_health_checksum_fix.sql` — forward correction of the migration-checksum health signal so it counts only rows whose checksum is actually missing; public issue/summary views are rebound to the corrected signal view.
 - `0056_universal_video_queue.sql` — project-neutral Drive video queue with atomic bulk intake, canary release, fenced leases and permanent SHADOW/REVIEW-only result guards.
+- `0300_autopilot_oracle_shadow.sql` — Oracle-resident Autopilot shadow queue with
+  allow-listed tasks, event dedupe, leases/fencing, external waits, evidence,
+  budget stops and least-privilege RPCs.
+- `0301_autopilot_github_pr_read_only.sql` — first real external capability:
+  an exact-head, draft-only, zero-cost public GitHub PR snapshot executed by the
+  Oracle worker without credentials or mutation.
+- `0302_autopilot_github_ci_read_only.sql` — exact-head, zero-cost public CI
+  triage with bounded failure evidence and no credential or mutation.
+- `0303_autopilot_github_draft_repair.sql` — Preview-brokered bounded repair:
+  one canonical manifest, one namespaced branch, one draft PR, and token-free
+  retained evidence; merge, force push, `main`, and production stay forbidden.
+- `0304_autopilot_online_pilot.sql` — guarded Oracle-resident online smoke pilot:
+  a least-privilege tick RPC, one-task queue boundary, rolling rate cap, durable
+  findings and a fail-closed circuit breaker; model calls, cost and production
+  mutations remain forbidden.
+- `0305_autopilot_online_pilot_identity.sql` — deterministic online result
+  evaluation through the exact `last_task_id` retained by the pilot state.
 - `rollbacks/0056_universal_video_queue.sql` — fail-closed rollback; refuses to remove a non-empty queue.
 
 The exact production state is the `schema_migration` registry in Neon, protected by migration checksums.
@@ -113,6 +130,11 @@ This layer deliberately does **not** create a scheduled production monitor using
 - `008_projection_invalidation_recompute.sql` — automatic dependency registration, recursive invalidation depth, stale profile state, recommendation/plan invalidation, active-scope queue coalescing, worker claim/fail/retry, activation-before-completion requirement and current-profile read-model switch.
 - `009_operational_health.sql` — runtime fingerprint, baseline signal registry including corrected migration-checksum status, critical classification for stuck changesets/analysis/recompute/pending references/explicit unavailable storage, roll-up summary and read-only runtime permissions.
 - `041_universal_video_queue.sql` — idempotent intake, canary gating, independent claims, fencing, heartbeat, REVIEW terminalization and capability isolation.
+- `300_autopilot_oracle_shadow.sql` — task/event idempotency, fencing,
+  wait/resume/dedupe/expiry, stale recovery, evidence, budget stop and runtime
+  ACL boundaries.
+- `301_autopilot_github_pr_read_only.sql` — strict GitHub target/payload gates,
+  zero-cost enforcement, exact capability mapping and retained evidence.
 
 All tests execute inside transactions and finish with `ROLLBACK`; they leave no test records in production-style databases.
 

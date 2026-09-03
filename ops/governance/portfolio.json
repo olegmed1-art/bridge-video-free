@@ -1,7 +1,7 @@
 {
   "schema_version": "1.0",
   "registry_status": "ACTIVE_PARTIAL_INVENTORY",
-  "last_verified_at": "2026-08-28",
+  "last_verified_at": "2026-08-30",
   "primary_tracker_repository": "olegmed1-art/bridge-video-free",
   "value_portfolio": [
     {
@@ -75,9 +75,9 @@
       "urgency": "HIGH",
       "strategic_rank": "S1",
       "governance_mode": "ASSURED",
-      "status": "ACTIVE_DISCOVERY",
+      "status": "ACTIVE_SHADOW_BUILD",
       "problem_statement": "External waits currently end an ordinary ChatGPT turn and force the school director to act as a manual scheduler by repeatedly sending continuation commands without making a substantive decision.",
-      "benefit_hypothesis": "A durable event-driven controller using the existing Vercel, Neon, GitHub and Oracle stack will continue eligible technical tasks to factual completion or a real owner boundary while reducing model turns and director intervention.",
+      "benefit_hypothesis": "A durable Oracle-resident event-driven controller using Neon as canonical state, with existing Vercel, GitHub and Oracle adapters, will continue eligible technical tasks to factual completion or a real owner boundary while reducing model turns and director intervention.",
       "target_users": [
         "school_director",
         "ai_management_system",

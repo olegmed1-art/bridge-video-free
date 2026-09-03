@@ -10,7 +10,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: oracle-dds3-pilot10k-launch
+  # An authorized request can start an Oracle mass workload, so it shares the
+  # lifecycle fence with STOP. Non-authoritative PR-target runs use a unique
+  # group and cannot hold the production fence before their job is skipped.
+  group: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.user.login == github.repository_owner && github.event.pull_request.base.ref == 'main' && github.event.pull_request.changed_files == 1 && 'oracle-instance-workload-mutation' || format('oracle-dds3-pilot10k-launch-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 env:
@@ -29,7 +32,7 @@ jobs:
     if: >-
       ${{
         github.event.pull_request.head.repo.full_name == github.repository &&
-        github.event.pull_request.user.login == 'olegmed1-art' &&
+        github.event.pull_request.user.login == github.repository_owner &&
         github.event.pull_request.base.ref == 'main' &&
         github.event.pull_request.changed_files == 1
       }}
