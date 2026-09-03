@@ -48,7 +48,7 @@ chmod -R a+rX,u-w,g-w,o-w "$source_dir/repo"
 
 speaker_cache="$BASE_DIR/model-cache/speaker"
 install -d -o universal-video -g universal-video -m 0750 "$speaker_cache"
-PYTHONPATH="$source_dir/repo" SPEAKER_CACHE="$speaker_cache" RECOVERY_ROOT="$RECOVERY_ROOT" python3 - <<'PY'
+PYTHONPATH="$source_dir/repo" SPEAKER_CACHE="$speaker_cache" MODEL_QUARANTINE_ROOT="$RECOVERY_ROOT" python3 - <<'PY'
 import hashlib, os, time
 from pathlib import Path
 from bridge_speaker_diarization_v3 import _ensure_embedding, _ensure_segmentation
@@ -60,7 +60,7 @@ expected={
 }
 for path,digest in expected.items():
     if path.exists() and hashlib.sha256(path.read_bytes()).hexdigest() != digest:
-        quarantine=Path(os.environ['RECOVERY_ROOT'])/f'{path.name}.{int(time.time())}.invalid'
+        quarantine=Path(os.environ['MODEL_QUARANTINE_ROOT'])/f'{path.name}.{int(time.time())}.invalid'
         path.replace(quarantine)
 seg=_ensure_segmentation(root)
 emb=_ensure_embedding(root, '3dspeaker')
