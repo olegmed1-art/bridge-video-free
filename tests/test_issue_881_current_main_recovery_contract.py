@@ -29,14 +29,17 @@ def test_recovery_repairs_only_runtime_pinned_speaker_models() -> None:
     assert "path.replace(quarantine)" in SCRIPT
 
 
-def test_recovery_preserves_bounded_rollback_order() -> None:
+def test_recovery_arms_rollback_before_service_stop() -> None:
     readiness = SCRIPT.index("UNIVERSAL_VIDEO_CONTAINER_ACTIVATE=0")
     backup = SCRIPT.index('install -o root -g root -m 0600 "$ENV_FILE" "$backup"')
+    armed = SCRIPT.index("activated=1", backup)
     stop = SCRIPT.index('systemctl stop "$SERVICE"')
+    candidate_install = SCRIPT.index(
+        'install -o root -g root -m 0640 "$CANDIDATE_ENV" "$ENV_FILE"'
+    )
     restart = SCRIPT.index('systemctl restart "$SERVICE"', stop)
-    assert readiness < backup < stop < restart
+    disarmed = SCRIPT.rindex("activated=0")
+    assert readiness < backup < armed < stop < candidate_install < restart < disarmed
     assert "if (( rc != 0 && activated == 1 )); then" in SCRIPT
     assert 'install -o root -g root -m 0640 "$backup" "$ENV_FILE"' in SCRIPT
     assert "rollback=attempted" in SCRIPT
-    assert "activated=1" in SCRIPT
-    assert "activated=0" in SCRIPT
