@@ -46,6 +46,80 @@ git -C "$source_dir/repo" checkout --quiet --detach FETCH_HEAD
 [[ -z "$(git -C "$source_dir/repo" status --porcelain)" ]] || die SOURCE_DIRTY
 chmod -R a+rX,u-w,g-w,o-w "$source_dir/repo"
 
+# The resident cache is deliberately outside the image. A missing cache must
+# be repaired before readiness. Accept only the exact runtime-pinned digests
+# and replace assets atomically.
+speaker_cache="$BASE_DIR/model-cache/speaker"
+install -d -o universal-video -g universal-video -m 0750 "$speaker_cache"
+UV_SPEAKER_CACHE="$speaker_cache" \
+UV_SPEAKER_UID="$(id -u universal-video)" \
+UV_SPEAKER_GID="$(id -g universal-video)" python3 - <<'PY'
+import hashlib
+import os
+import tarfile
+import tempfile
+import urllib.request
+from pathlib import Path
+
+cache = Path(os.environ["UV_SPEAKER_CACHE"])
+owner = (int(os.environ["UV_SPEAKER_UID"]), int(os.environ["UV_SPEAKER_GID"]))
+assets = {
+    "pyannote-segmentation-3.0.onnx": (
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
+        "speaker-segmentation-models/"
+        "sherpa-onnx-pyannote-segmentation-3-0.tar.bz2",
+        "915e0573bc4e17197a7a893d0eb98e1a851abb64451b2e1a8ad51f5f99040360",
+        True,
+    ),
+    "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx": (
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
+        "speaker-recongition-models/"
+        "3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx",
+        "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b",
+        False,
+    ),
+}
+
+def digest(path: Path) -> str:
+    value = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
+            value.update(block)
+    return value.hexdigest()
+
+for filename, (url, expected, archived) in assets.items():
+    target = cache / filename
+    if target.is_file() and not target.is_symlink() and digest(target) == expected:
+        continue
+    with tempfile.TemporaryDirectory(dir=cache) as temporary:
+        downloaded = Path(temporary) / "asset"
+        request = urllib.request.Request(url, headers={"User-Agent": "bridge-video-free-recovery"})
+        with urllib.request.urlopen(request, timeout=180) as response, downloaded.open("wb") as output:
+            while block := response.read(8 * 1024 * 1024):
+                output.write(block)
+        candidate = downloaded
+        if archived:
+            with tarfile.open(downloaded, "r:bz2") as bundle:
+                member = next(
+                    (item for item in bundle.getmembers() if item.isfile() and item.name.endswith("/model.onnx")),
+                    None,
+                )
+                if member is None:
+                    raise RuntimeError("speaker archive has no model.onnx")
+                candidate = Path(temporary) / filename
+                source = bundle.extractfile(member)
+                if source is None:
+                    raise RuntimeError("speaker model extraction failed")
+                with candidate.open("wb") as output:
+                    while block := source.read(8 * 1024 * 1024):
+                        output.write(block)
+        if digest(candidate) != expected:
+            raise RuntimeError(f"speaker model digest mismatch: {filename}")
+        os.chmod(candidate, 0o640)
+        os.chown(candidate, *owner)
+        os.replace(candidate, target)
+PY
+
 image_tag="bridge-school/universal-video:$EXPECTED_SHA"
 UNIVERSAL_VIDEO_SOURCE_DIR="$source_dir/repo" \
 UNIVERSAL_VIDEO_DIR="$BASE_DIR" \
