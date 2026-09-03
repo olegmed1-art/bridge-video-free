@@ -28,6 +28,13 @@ def _digest(value: object) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
 
 
+def _versioned_stable_key(candidate_type: str, stable_key: str, payload_hash: str) -> str:
+    if candidate_type != "video_school_canon_candidate":
+        return stable_key
+    suffix = f":sha256:{payload_hash}"
+    return stable_key if stable_key.endswith(suffix) else f"{stable_key}{suffix}"
+
+
 def _table_exists(cursor) -> bool:
     cursor.execute("SELECT to_regclass('public.analysis_candidate') IS NOT NULL")
     return bool(cursor.fetchone()[0])
@@ -116,6 +123,7 @@ def persist_quality_candidates(raw_dsn: str, payload: Mapping[str, Any]) -> dict
                     promotion_status = "staging"
                 candidate_payload = record.get("payload") if isinstance(record.get("payload"), Mapping) else record
                 payload_hash = _digest(candidate_payload)
+                stable_key = _versioned_stable_key(candidate_type, stable_key, payload_hash)
                 candidate_id = _stable_uuid(
                     "analysis-candidate",
                     school_id,

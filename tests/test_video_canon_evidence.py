@@ -151,6 +151,18 @@ def test_hidden_information_is_rejected_inside_json_serializable_tuple():
         build_video_canon_candidate(_learning(), assertion)
 
 
+@pytest.mark.parametrize("field,value", [
+    ("notes", "N:AKQJ.T98.765.432 E:T987.654.32.AKQ S:... W:..."),
+    ("comment", "partner_hand = AKQJ.T98.765.432"),
+    ("comment", "карты партнера: AKQJ.T98.765.432"),
+])
+def test_hidden_deal_is_rejected_inside_innocuous_allowed_value(field, value):
+    assertion = _assertion()
+    assertion["normalized_rule"]["compiled_payload"] = {field: value}
+    with pytest.raises(VideoCanonEvidenceError, match="hidden information"):
+        build_video_canon_candidate(_learning(), assertion)
+
+
 def test_payload_hash_is_deterministic_and_source_bound():
     first = build_video_canon_candidate(_learning(), _assertion())
     second = build_video_canon_candidate(deepcopy(_learning()), deepcopy(_assertion()))
@@ -162,3 +174,6 @@ def test_payload_hash_is_deterministic_and_source_bound():
     changed_assertion["source_authorization"]["authorized_source_sha256"] = "d" * 64
     third = build_video_canon_candidate(changed, changed_assertion)
     assert third["payload_hash"] != first["payload_hash"]
+    assert third["stable_key"] != first["stable_key"]
+    assert first["stable_key"].endswith(first["payload_hash"])
+    assert third["stable_key"].endswith(third["payload_hash"])

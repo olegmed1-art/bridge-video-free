@@ -35,6 +35,9 @@ REQUIRED_CHECKS = frozenset({
     "CANON_CONFLICT_SCAN",
     "ROLLBACK_RESTORE",
 })
+STATE_DEPENDENT_CHECKS = frozenset({
+    "CANON_REGRESSION", "CANON_INTEGRITY", "CANON_CONFLICT_SCAN", "ROLLBACK_RESTORE",
+})
 
 
 class VideoCanonAIPromotionError(ValueError):
@@ -102,7 +105,8 @@ def build_ai_canon_promotion(
 
     expected = {
         "schema", "policy_version", "candidate_payload_hash", "system_profile",
-        "learner_level", "effective_period", "activation_scope", "checks", "rollback",
+        "learner_level", "effective_period", "activation_scope", "canon_snapshot_sha256",
+        "checks", "rollback",
     }
     if not isinstance(verification_bundle, Mapping) or set(verification_bundle) != expected:
         _fail("verification bundle fields mismatch")
@@ -116,14 +120,18 @@ def build_ai_canon_promotion(
     if authorization.get("policy_version") != POLICY:
         _fail("source authorization policy mismatch")
 
+    canon_snapshot_sha = _sha(
+        verification_bundle.get("canon_snapshot_sha256"), "canon_snapshot_sha256"
+    )
     checks = verification_bundle.get("checks")
     if not isinstance(checks, list):
         _fail("checks must be a list")
-    normalized: dict[str, dict[str, str]] = {}
+    normalized: dict[str, dict[str, Any]] = {}
     for row in checks:
         fields = {
             "check_id", "result", "verifier_family", "verifier_version",
-            "assurance_level", "evidence_sha256",
+            "execution_principal", "assurance_level", "evidence_sha256",
+            "canon_snapshot_sha256",
         }
         if not isinstance(row, Mapping) or set(row) != fields:
             _fail("verification check fields mismatch")
@@ -135,13 +143,22 @@ def build_ai_canon_promotion(
         assurance = row.get("assurance_level")
         if assurance not in _ASSURANCE:
             _fail("invalid assurance level")
+        check_snapshot = row.get("canon_snapshot_sha256")
+        if check_id in STATE_DEPENDENT_CHECKS:
+            if _sha(check_snapshot, "check canon_snapshot_sha256") != canon_snapshot_sha:
+                _fail(f"state-dependent check is stale: {check_id}")
+            check_snapshot = canon_snapshot_sha
+        elif check_snapshot is not None:
+            _fail(f"stateless check must not claim Canon snapshot: {check_id}")
         normalized[check_id] = {
             "check_id": check_id,
             "result": "PASS",
             "verifier_family": _text(row.get("verifier_family"), "verifier_family"),
             "verifier_version": _text(row.get("verifier_version"), "verifier_version"),
+            "execution_principal": _text(row.get("execution_principal"), "execution_principal"),
             "assurance_level": assurance,
             "evidence_sha256": _sha(row.get("evidence_sha256"), "evidence_sha256"),
+            "canon_snapshot_sha256": check_snapshot,
         }
     if set(normalized) != REQUIRED_CHECKS:
         missing = sorted(REQUIRED_CHECKS - set(normalized))
@@ -156,8 +173,14 @@ def build_ai_canon_promotion(
         _fail("bridge logic verification requires I2 or I3")
     if semantic["verifier_family"] == bridge_logic["verifier_family"]:
         _fail("semantic and bridge verifiers must be independent")
-    if normalized["HIDDEN_INFORMATION_FIREWALL"]["assurance_level"] not in {"I2", "I3"}:
+    firewall = normalized["HIDDEN_INFORMATION_FIREWALL"]
+    if firewall["assurance_level"] not in {"I2", "I3"}:
         _fail("hidden-information firewall requires I2 or I3")
+    if len({
+        semantic["execution_principal"], bridge_logic["execution_principal"],
+        firewall["execution_principal"],
+    }) != 3:
+        _fail("semantic, bridge and firewall executions must be independent")
 
     period = verification_bundle.get("effective_period")
     if not isinstance(period, Mapping) or set(period) != {"valid_from", "valid_to"}:
@@ -196,6 +219,7 @@ def build_ai_canon_promotion(
         "learner_level": _text(verification_bundle.get("learner_level"), "learner_level"),
         "effective_period": {"valid_from": valid_from, "valid_to": valid_to},
         "activation_scope": _text(verification_bundle.get("activation_scope"), "activation_scope"),
+        "canon_snapshot_sha256": canon_snapshot_sha,
         "checks": [normalized[key] for key in sorted(normalized)],
         "rollback": normalized_rollback,
     }
@@ -229,6 +253,7 @@ def build_ai_canon_promotion(
 
 
 __all__ = [
-    "POLICY", "REQUIRED_CHECKS", "SCHEMA", "VideoCanonAIPromotionError",
+    "POLICY", "REQUIRED_CHECKS", "SCHEMA", "STATE_DEPENDENT_CHECKS",
+    "VideoCanonAIPromotionError",
     "build_ai_canon_promotion",
 ]

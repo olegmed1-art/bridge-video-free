@@ -75,3 +75,16 @@ remain non-canonical and cannot execute training or deployment by themselves.
 All Video-to-Canon verifier/promoter capabilities have explicit evidence-table
 reads only; they do not inherit the broad school reader role or student/person
 data access.
+
+Verifier independence is bound to authenticated executions, not only model
+labels or capability roles: every receipt records the database `session_user`,
+and the semantic, bridge and hidden-information I2/I3 checks require three
+different login principals. Canon regression, integrity, conflict-scan and
+rollback receipts are bound to a deterministic digest of the locked active
+Canon state and fail closed if that state changes before activation.
+
+Every promotion receipt supports a separate guarded restoration RPC. Only the
+dedicated NOLOGIN restorer capability may invoke it; it revokes the promoted
+Canon/runtime rows, restores the exact prior activation IDs and original
+validity intervals retained in the promotion receipt, and writes an immutable
+restore receipt. It never grants direct table-write privileges.

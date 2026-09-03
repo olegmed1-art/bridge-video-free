@@ -7,7 +7,8 @@ BEGIN
     FOREACH v_role IN ARRAY ARRAY[
       'bridge_school_canon_verifier','bridge_school_canon_semantic_verifier',
       'bridge_school_canon_bridge_verifier','bridge_school_canon_firewall_verifier',
-      'bridge_school_canon_control_verifier','bridge_school_canon_promoter'
+      'bridge_school_canon_control_verifier','bridge_school_canon_promoter',
+      'bridge_school_canon_restorer'
     ] LOOP
         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname=v_role) THEN
             EXECUTE format('CREATE ROLE %I NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION',v_role);
@@ -17,7 +18,8 @@ BEGIN
                FROM pg_roles WHERE rolname=ANY(ARRAY[
                  'bridge_school_canon_verifier','bridge_school_canon_semantic_verifier',
                  'bridge_school_canon_bridge_verifier','bridge_school_canon_firewall_verifier',
-                 'bridge_school_canon_control_verifier','bridge_school_canon_promoter'
+                 'bridge_school_canon_control_verifier','bridge_school_canon_promoter',
+                 'bridge_school_canon_restorer'
                ]) LOOP
         IF r.rolcanlogin OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication THEN
             RAISE EXCEPTION 'unsafe Video-to-Canon role: %',r.rolname;
@@ -37,18 +39,35 @@ COMMENT ON ROLE bridge_school_canon_control_verifier IS
   'NOLOGIN capability for non-independent control attestations only';
 COMMENT ON ROLE bridge_school_canon_promoter IS
   'NOLOGIN capability for the guarded AI-verified teacher-video Canon activation RPC';
+COMMENT ON ROLE bridge_school_canon_restorer IS
+  'NOLOGIN capability for the guarded receipt-bound Video-to-Canon restoration RPC';
 REVOKE bridge_school_reader FROM bridge_school_canon_verifier,
   bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
   bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier,
-  bridge_school_canon_promoter;
+  bridge_school_canon_promoter,bridge_school_canon_restorer;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_auth_members m
+    JOIN pg_roles member_role ON member_role.oid=m.member
+    WHERE member_role.rolname=ANY(ARRAY[
+      'bridge_school_canon_verifier','bridge_school_canon_semantic_verifier',
+      'bridge_school_canon_bridge_verifier','bridge_school_canon_firewall_verifier',
+      'bridge_school_canon_control_verifier','bridge_school_canon_promoter',
+      'bridge_school_canon_restorer'
+    ])
+  ) THEN
+    RAISE EXCEPTION 'Video-to-Canon capability role inherits an unexpected role';
+  END IF;
+END $$;
 GRANT USAGE ON SCHEMA public,bidding TO bridge_school_canon_verifier,
   bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
   bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier,
-  bridge_school_canon_promoter;
+  bridge_school_canon_promoter,bridge_school_canon_restorer;
 REVOKE CREATE ON SCHEMA public,bidding FROM bridge_school_canon_verifier,
   bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
   bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier,
-  bridge_school_canon_promoter;
+  bridge_school_canon_promoter,bridge_school_canon_restorer;
 
 CREATE TABLE bidding.video_canon_source_policy (
     video_canon_source_policy_id uuid PRIMARY KEY DEFAULT uuidv7(),
@@ -122,10 +141,19 @@ CREATE TABLE bidding.video_canon_ai_verification (
     result text NOT NULL CHECK (result IN ('PASS','FAIL','ERROR')),
     verifier_family text NOT NULL CHECK (btrim(verifier_family)<>''),
     verifier_version text NOT NULL CHECK (btrim(verifier_version)<>''),
+    execution_principal text NOT NULL DEFAULT session_user CHECK (btrim(execution_principal)<>''),
     assurance_level text NOT NULL CHECK (assurance_level IN ('I0','I1','I2','I3')),
     evidence_sha256 text NOT NULL CHECK (evidence_sha256 ~ '^[0-9a-f]{64}$'),
+    canon_snapshot_sha256 text,
     recorded_at timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (analysis_candidate_id,candidate_payload_hash,verification_bundle_sha256,check_id,verifier_family,verifier_version,evidence_sha256)
+    CHECK (
+      (check_id IN ('CANON_REGRESSION','CANON_INTEGRITY','CANON_CONFLICT_SCAN','ROLLBACK_RESTORE')
+       AND canon_snapshot_sha256 ~ '^[0-9a-f]{64}$')
+      OR
+      (check_id NOT IN ('CANON_REGRESSION','CANON_INTEGRITY','CANON_CONFLICT_SCAN','ROLLBACK_RESTORE')
+       AND canon_snapshot_sha256 IS NULL)
+    ),
+    UNIQUE (analysis_candidate_id,candidate_payload_hash,verification_bundle_sha256,check_id,verifier_family,verifier_version,execution_principal,evidence_sha256)
 );
 
 CREATE TABLE bidding.video_canon_ai_promotion_receipt (
@@ -141,10 +169,30 @@ CREATE TABLE bidding.video_canon_ai_promotion_receipt (
     canon_activation_id uuid NOT NULL UNIQUE REFERENCES public.canon_activation(canon_activation_id) ON DELETE RESTRICT,
     runtime_activation_id uuid NOT NULL UNIQUE REFERENCES bidding.runtime_activation(runtime_activation_id) ON DELETE RESTRICT,
     superseded_canon_activation_id uuid REFERENCES public.canon_activation(canon_activation_id) ON DELETE RESTRICT,
+    superseded_canon_valid_to timestamptz,
     superseded_runtime_activation_ids uuid[] NOT NULL DEFAULT '{}'::uuid[],
+    superseded_runtime_state jsonb NOT NULL DEFAULT '[]'::jsonb
+      CHECK (jsonb_typeof(superseded_runtime_state)='array'),
     promotion_mode text NOT NULL CHECK (promotion_mode='AI_VERIFIED_TEACHER_VIDEO'),
     human_approval_required boolean NOT NULL CHECK (human_approval_required=false),
     promoted_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE bidding.video_canon_ai_restore_receipt (
+    video_canon_ai_restore_receipt_id uuid PRIMARY KEY DEFAULT uuidv7(),
+    video_canon_ai_promotion_receipt_id uuid NOT NULL UNIQUE
+      REFERENCES bidding.video_canon_ai_promotion_receipt(video_canon_ai_promotion_receipt_id) ON DELETE RESTRICT,
+    school_id uuid NOT NULL REFERENCES public.school(school_id) ON DELETE RESTRICT,
+    revoked_canon_activation_id uuid NOT NULL
+      REFERENCES public.canon_activation(canon_activation_id) ON DELETE RESTRICT,
+    revoked_runtime_activation_id uuid NOT NULL
+      REFERENCES bidding.runtime_activation(runtime_activation_id) ON DELETE RESTRICT,
+    restored_canon_activation_id uuid REFERENCES public.canon_activation(canon_activation_id) ON DELETE RESTRICT,
+    restored_runtime_activation_ids uuid[] NOT NULL DEFAULT '{}'::uuid[],
+    verification_bundle_sha256 text NOT NULL CHECK (verification_bundle_sha256 ~ '^[0-9a-f]{64}$'),
+    restore_evidence_sha256 text NOT NULL CHECK (restore_evidence_sha256 ~ '^[0-9a-f]{64}$'),
+    restored_by_principal text NOT NULL DEFAULT session_user CHECK (btrim(restored_by_principal)<>''),
+    restored_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE bidding.video_correction_review_receipt (
@@ -154,6 +202,81 @@ CREATE TABLE bidding.video_correction_review_receipt (
     recorded_by_role text NOT NULL DEFAULT current_user,
     recorded_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE OR REPLACE FUNCTION bidding.contains_forbidden_hidden_value(payload jsonb)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+WITH RECURSIVE walk(value) AS (
+    SELECT COALESCE(payload,'null'::jsonb)
+    UNION ALL
+    SELECT child.value
+      FROM walk AS w
+      CROSS JOIN LATERAL (
+        SELECT e.value FROM jsonb_each(
+          CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END
+        ) AS e
+        UNION ALL
+        SELECT a.value FROM jsonb_array_elements(
+          CASE WHEN jsonb_typeof(w.value)='array' THEN w.value ELSE '[]'::jsonb END
+        ) AS a
+      ) AS child
+)
+SELECT EXISTS (
+  SELECT 1 FROM walk AS w
+   WHERE jsonb_typeof(w.value)='string'
+     AND (
+       (w.value#>>'{}') ~* E'(^|[[:space:]])[NESW][[:space:]]*:[[:space:]]*[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}'
+       OR (w.value#>>'{}') ~* E'(partner|opponent|north|east|south|west)[ _-]*(hand|cards)[[:space:]]*[:=][[:space:]]*[-AKQJT2-9.]'
+       OR (w.value#>>'{}') ~* E'(рука|карты)[[:space:]]+(партн[её]ра|соперника)[[:space:]]*[:=][[:space:]]*[-AKQJT2-9.]'
+     )
+);
+$$;
+
+CREATE OR REPLACE FUNCTION bidding.current_school_canon_snapshot_sha256(p_school_id uuid)
+RETURNS text
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path=pg_catalog,public,bidding
+AS $$
+WITH active_runtime AS (
+  SELECT COALESCE(jsonb_agg(
+    jsonb_build_object(
+      'runtime_activation',to_jsonb(ra),
+      'canon_activation',to_jsonb(ca),
+      'rule',to_jsonb(r),
+      'knowledge_version',to_jsonb(kv)
+    ) ORDER BY ra.runtime_activation_id::text
+  ),'[]'::jsonb) AS rows
+  FROM bidding.runtime_activation ra
+  JOIN public.canon_activation ca ON ca.canon_activation_id=ra.canon_activation_id
+  JOIN bidding.rule r ON r.rule_id=ra.rule_id
+  JOIN public.knowledge_version kv ON kv.knowledge_version_id=r.knowledge_version_id
+  WHERE ra.school_id=p_school_id AND ra.authority_lane='school_canon'
+    AND ra.status='active' AND ca.status='active'
+), active_canon AS (
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+    'canon_activation',to_jsonb(ca),
+    'knowledge_version',to_jsonb(kv),
+    'knowledge_item',to_jsonb(ki)
+  ) ORDER BY ca.canon_activation_id::text),'[]'::jsonb) AS rows
+  FROM public.canon_activation ca
+  JOIN public.knowledge_version kv ON kv.knowledge_version_id=ca.knowledge_version_id
+  JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
+  WHERE ki.school_id=p_school_id AND ca.status='active'
+), open_conflicts AS (
+  SELECT COALESCE(jsonb_agg(to_jsonb(c) ORDER BY c.rule_conflict_id::text),'[]'::jsonb) AS rows
+  FROM bidding.rule_conflict c WHERE c.school_id=p_school_id AND c.status='open'
+)
+SELECT encode(public.digest(convert_to(jsonb_build_object(
+  'school_id',p_school_id,'active_runtime',active_runtime.rows,
+  'active_canon',active_canon.rows,'open_conflicts',open_conflicts.rows
+)::text,'UTF8'),'sha256'),'hex')
+FROM active_runtime,active_canon,open_conflicts;
+$$;
 
 CREATE OR REPLACE FUNCTION bidding.validate_video_correction_review_receipt()
 RETURNS trigger LANGUAGE plpgsql AS $$
@@ -221,6 +344,7 @@ BEGIN
        OR NEW.bundle_payload->>'policy_version'<>'school-video-auto-canon-v1'
        OR NEW.bundle_payload->>'candidate_payload_hash'<>NEW.candidate_payload_hash
        OR NEW.bundle_payload->'candidate_payload'<>v_candidate.payload
+       OR NOT ((NEW.bundle_payload->>'canon_snapshot_sha256') ~ '^[0-9a-f]{64}$')
        OR jsonb_typeof(NEW.bundle_payload->'checks')<>'array'
        OR jsonb_typeof(NEW.bundle_payload->'effective_period')<>'object'
        OR jsonb_typeof(NEW.bundle_payload->'rollback')<>'object' THEN
@@ -252,6 +376,7 @@ BEGIN
     SELECT * INTO v_principal FROM bidding.video_canon_verifier_registry
      WHERE database_role=current_user AND status='active';
     IF NOT FOUND OR NEW.verifier_family<>v_principal.verifier_family
+       OR NEW.execution_principal<>session_user
        OR NOT (NEW.check_id=ANY(v_principal.allowed_check_ids))
        OR (v_principal.max_assurance_level='I1' AND NEW.assurance_level NOT IN ('I0','I1'))
        OR (v_principal.max_assurance_level='I2' AND NEW.assurance_level NOT IN ('I0','I1','I2'))
@@ -270,8 +395,10 @@ BEGIN
             AND c.value->>'result'=NEW.result
             AND c.value->>'verifier_family'=NEW.verifier_family
             AND c.value->>'verifier_version'=NEW.verifier_version
+            AND c.value->>'execution_principal'=NEW.execution_principal
             AND c.value->>'assurance_level'=NEW.assurance_level
             AND c.value->>'evidence_sha256'=NEW.evidence_sha256
+            AND (c.value->>'canon_snapshot_sha256') IS NOT DISTINCT FROM NEW.canon_snapshot_sha256
        ) THEN
         RAISE EXCEPTION 'VIDEO_CANON_VERIFICATION_BUNDLE_MISMATCH' USING ERRCODE='23514';
     END IF;
@@ -378,8 +505,12 @@ DECLARE
     v_existing bidding.video_canon_ai_promotion_receipt%ROWTYPE;
     v_prior_canon public.canon_activation%ROWTYPE;
     v_prior_runtime_ids uuid[] := '{}'::uuid[];
+    v_prior_runtime_state jsonb := '[]'::jsonb;
     v_semantic_family text;
     v_bridge_family text;
+    v_semantic_principal text;
+    v_bridge_principal text;
+    v_firewall_principal text;
     v_scope_key text;
     v_policy_version text;
     v_valid_from timestamptz;
@@ -387,6 +518,7 @@ DECLARE
     v_rule_content jsonb;
     v_rule_content_sha256 text;
     v_expected_rule_content_sha256 text;
+    v_canon_snapshot_sha256 text;
 BEGIN
     IF p_verification_bundle_sha256 !~ '^[0-9a-f]{64}$' THEN
         RAISE EXCEPTION 'VIDEO_CANON_PROMOTION_ARGUMENT_INVALID' USING ERRCODE='23514';
@@ -432,6 +564,17 @@ BEGIN
         RETURN v_existing.video_canon_ai_promotion_receipt_id;
     END IF;
 
+    -- Serialize all Video-to-Canon writes for this school and freeze the
+    -- underlying activation/conflict tables while the state digest is checked.
+    PERFORM pg_advisory_xact_lock(hashtextextended(v_candidate.school_id::text,0));
+    LOCK TABLE public.canon_activation,public.knowledge_item,public.knowledge_version,
+      bidding.runtime_activation,bidding.rule,bidding.rule_test,bidding.rule_test_run,
+      bidding.rule_conflict IN SHARE MODE;
+    v_canon_snapshot_sha256 := bidding.current_school_canon_snapshot_sha256(v_candidate.school_id);
+    IF v_bundle.bundle_payload->>'canon_snapshot_sha256'<>v_canon_snapshot_sha256 THEN
+        RAISE EXCEPTION 'VIDEO_CANON_STATE_CHECKS_STALE' USING ERRCODE='23514';
+    END IF;
+
     IF v_candidate.candidate_type<>'video_school_canon_candidate'
        OR v_candidate.promotion_status NOT IN ('staging','review_queue')
        OR v_candidate.payload->>'schema'<>'video-canon-evidence-v2'
@@ -442,7 +585,8 @@ BEGIN
        OR jsonb_array_length(COALESCE(v_candidate.payload->'ambiguities','[]'::jsonb))<>0
        OR jsonb_array_length(COALESCE(v_candidate.payload->'contradictions','[]'::jsonb))<>0
        OR COALESCE((v_candidate.payload->>'semantic_confidence')::numeric,0)<0.95
-       OR bidding.contains_forbidden_hidden_key(v_candidate.payload) THEN
+       OR bidding.contains_forbidden_hidden_key(v_candidate.payload)
+       OR bidding.contains_forbidden_hidden_value(v_candidate.payload) THEN
         RAISE EXCEPTION 'VIDEO_CANON_CANDIDATE_NOT_ELIGIBLE' USING ERRCODE='23514';
     END IF;
 
@@ -532,10 +676,14 @@ BEGIN
              AND v.candidate_payload_hash=v_candidate.payload_hash
              AND v.verification_bundle_sha256=p_verification_bundle_sha256
              AND v.check_id=req.check_id AND v.result='PASS'
+             AND (
+               v.check_id NOT IN ('CANON_REGRESSION','CANON_INTEGRITY','CANON_CONFLICT_SCAN','ROLLBACK_RESTORE')
+               OR v.canon_snapshot_sha256=v_canon_snapshot_sha256
+             )
         )
     ) THEN RAISE EXCEPTION 'VIDEO_CANON_AI_CHECKS_INCOMPLETE' USING ERRCODE='23514'; END IF;
 
-    SELECT v.verifier_family INTO v_semantic_family
+    SELECT v.verifier_family,v.execution_principal INTO v_semantic_family,v_semantic_principal
       FROM bidding.video_canon_ai_verification v
       JOIN bidding.video_canon_verifier_registry vr
        ON vr.verifier_family=v.verifier_family AND vr.status='active'
@@ -547,7 +695,7 @@ BEGIN
        AND v.verification_bundle_sha256=p_verification_bundle_sha256
        AND v.check_id='SEMANTIC_PARSE' AND v.result='PASS'
        AND v.assurance_level IN ('I2','I3') LIMIT 1;
-    SELECT v.verifier_family INTO v_bridge_family
+    SELECT v.verifier_family,v.execution_principal INTO v_bridge_family,v_bridge_principal
       FROM bidding.video_canon_ai_verification v
       JOIN bidding.video_canon_verifier_registry vr
        ON vr.verifier_family=v.verifier_family AND vr.status='active'
@@ -559,9 +707,8 @@ BEGIN
        AND v.verification_bundle_sha256=p_verification_bundle_sha256
        AND v.check_id='BRIDGE_LOGIC' AND v.result='PASS'
        AND v.assurance_level IN ('I2','I3') LIMIT 1;
-    IF v_semantic_family IS NULL OR v_bridge_family IS NULL OR v_semantic_family=v_bridge_family
-       OR NOT EXISTS (
-         SELECT 1 FROM bidding.video_canon_ai_verification v
+    SELECT v.execution_principal INTO v_firewall_principal
+      FROM bidding.video_canon_ai_verification v
          JOIN bidding.video_canon_verifier_registry vr
            ON vr.verifier_family=v.verifier_family AND vr.status='active'
           AND v.check_id=ANY(vr.allowed_check_ids)
@@ -572,7 +719,14 @@ BEGIN
             AND v.verification_bundle_sha256=p_verification_bundle_sha256
             AND v.check_id='HIDDEN_INFORMATION_FIREWALL' AND v.result='PASS'
             AND v.assurance_level IN ('I2','I3')
-       ) THEN RAISE EXCEPTION 'VIDEO_CANON_I2_INDEPENDENCE_MISSING' USING ERRCODE='23514'; END IF;
+      LIMIT 1;
+    IF v_semantic_family IS NULL OR v_bridge_family IS NULL OR v_semantic_family=v_bridge_family
+       OR v_semantic_principal IS NULL OR v_bridge_principal IS NULL OR v_firewall_principal IS NULL
+       OR v_semantic_principal=v_bridge_principal
+       OR v_semantic_principal=v_firewall_principal
+       OR v_bridge_principal=v_firewall_principal THEN
+        RAISE EXCEPTION 'VIDEO_CANON_I2_INDEPENDENCE_MISSING' USING ERRCODE='23514';
+    END IF;
 
     IF EXISTS (
       SELECT req.test_type FROM (VALUES ('positive'),('negative'),('boundary'),('interference'),('hidden_information'),('regression')) req(test_type)
@@ -604,8 +758,12 @@ BEGIN
         END IF;
         PERFORM 1 FROM bidding.runtime_activation
          WHERE canon_activation_id=v_prior_canon.canon_activation_id AND status='active' FOR UPDATE;
-        SELECT COALESCE(array_agg(runtime_activation_id ORDER BY runtime_activation_id),'{}'::uuid[])
-          INTO v_prior_runtime_ids FROM bidding.runtime_activation
+        SELECT COALESCE(array_agg(runtime_activation_id ORDER BY runtime_activation_id),'{}'::uuid[]),
+               COALESCE(jsonb_agg(jsonb_build_object(
+                 'runtime_activation_id',runtime_activation_id,
+                 'valid_to',valid_to
+               ) ORDER BY runtime_activation_id),'[]'::jsonb)
+          INTO v_prior_runtime_ids,v_prior_runtime_state FROM bidding.runtime_activation
          WHERE canon_activation_id=v_prior_canon.canon_activation_id AND status='active';
         UPDATE bidding.runtime_activation SET status='superseded',valid_to=v_valid_from
          WHERE canon_activation_id=v_prior_canon.canon_activation_id AND status='active';
@@ -640,26 +798,175 @@ BEGIN
     INSERT INTO bidding.video_canon_ai_promotion_receipt(
       school_id,analysis_candidate_id,candidate_payload_hash,verification_bundle_sha256,
       policy_version,scope_key,rule_content_sha256,rule_id,canon_activation_id,runtime_activation_id,
-      superseded_canon_activation_id,superseded_runtime_activation_ids,promotion_mode,human_approval_required
+      superseded_canon_activation_id,superseded_canon_valid_to,
+      superseded_runtime_activation_ids,superseded_runtime_state,
+      promotion_mode,human_approval_required
     ) VALUES (
       v_candidate.school_id,p_analysis_candidate_id,v_candidate.payload_hash,p_verification_bundle_sha256,
       v_policy_version,v_scope_key,v_rule_content_sha256,p_rule_id,v_canon_activation,v_runtime_activation,
-      v_prior_canon.canon_activation_id,v_prior_runtime_ids,'AI_VERIFIED_TEACHER_VIDEO',false
+      v_prior_canon.canon_activation_id,v_prior_canon.valid_to,
+      v_prior_runtime_ids,v_prior_runtime_state,'AI_VERIFIED_TEACHER_VIDEO',false
     ) RETURNING * INTO v_existing;
     UPDATE public.analysis_candidate SET quality_status='AI_VERIFIED',promotion_status='promoted'
      WHERE analysis_candidate_id=p_analysis_candidate_id;
     RETURN v_existing.video_canon_ai_promotion_receipt_id;
 END $$;
 
+CREATE TRIGGER video_canon_restore_receipt_append_only
+BEFORE UPDATE OR DELETE ON bidding.video_canon_ai_restore_receipt
+FOR EACH ROW EXECUTE FUNCTION bidding.reject_append_only_mutation();
+
+CREATE OR REPLACE FUNCTION bidding.restore_ai_verified_video_canon(
+    p_video_canon_ai_promotion_receipt_id uuid,
+    p_verification_bundle_sha256 text,
+    p_restore_evidence_sha256 text
+) RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path=pg_catalog,public,bidding
+AS $$
+DECLARE
+    v_promotion bidding.video_canon_ai_promotion_receipt%ROWTYPE;
+    v_existing bidding.video_canon_ai_restore_receipt%ROWTYPE;
+    v_new_canon public.canon_activation%ROWTYPE;
+    v_new_runtime bidding.runtime_activation%ROWTYPE;
+    v_prior_runtime bidding.runtime_activation%ROWTYPE;
+    v_state jsonb;
+    v_original_valid_to timestamptz;
+    v_restored_runtime_ids uuid[] := '{}'::uuid[];
+BEGIN
+    IF p_verification_bundle_sha256 !~ '^[0-9a-f]{64}$'
+       OR p_restore_evidence_sha256 !~ '^[0-9a-f]{64}$' THEN
+        RAISE EXCEPTION 'VIDEO_CANON_RESTORE_ARGUMENT_INVALID' USING ERRCODE='23514';
+    END IF;
+    SELECT * INTO v_promotion FROM bidding.video_canon_ai_promotion_receipt
+     WHERE video_canon_ai_promotion_receipt_id=p_video_canon_ai_promotion_receipt_id;
+    IF NOT FOUND OR v_promotion.verification_bundle_sha256<>p_verification_bundle_sha256 THEN
+        RAISE EXCEPTION 'VIDEO_CANON_RESTORE_RECEIPT_MISMATCH' USING ERRCODE='23514';
+    END IF;
+    SELECT * INTO v_existing FROM bidding.video_canon_ai_restore_receipt
+     WHERE video_canon_ai_promotion_receipt_id=p_video_canon_ai_promotion_receipt_id;
+    IF FOUND THEN
+        IF v_existing.verification_bundle_sha256<>p_verification_bundle_sha256
+           OR v_existing.restore_evidence_sha256<>p_restore_evidence_sha256 THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_IDEMPOTENCY_MISMATCH' USING ERRCODE='23514';
+        END IF;
+        RETURN v_existing.video_canon_ai_restore_receipt_id;
+    END IF;
+
+    PERFORM pg_advisory_xact_lock(hashtextextended(v_promotion.school_id::text,0));
+    LOCK TABLE public.canon_activation,bidding.runtime_activation IN SHARE MODE;
+    SELECT * INTO v_existing FROM bidding.video_canon_ai_restore_receipt
+     WHERE video_canon_ai_promotion_receipt_id=p_video_canon_ai_promotion_receipt_id;
+    IF FOUND THEN
+        IF v_existing.verification_bundle_sha256<>p_verification_bundle_sha256
+           OR v_existing.restore_evidence_sha256<>p_restore_evidence_sha256 THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_IDEMPOTENCY_MISMATCH' USING ERRCODE='23514';
+        END IF;
+        RETURN v_existing.video_canon_ai_restore_receipt_id;
+    END IF;
+    SELECT * INTO v_promotion FROM bidding.video_canon_ai_promotion_receipt
+     WHERE video_canon_ai_promotion_receipt_id=p_video_canon_ai_promotion_receipt_id FOR UPDATE;
+    SELECT * INTO v_new_canon FROM public.canon_activation
+     WHERE canon_activation_id=v_promotion.canon_activation_id FOR UPDATE;
+    SELECT * INTO v_new_runtime FROM bidding.runtime_activation
+     WHERE runtime_activation_id=v_promotion.runtime_activation_id FOR UPDATE;
+    IF v_new_canon.canon_activation_id IS NULL OR v_new_runtime.runtime_activation_id IS NULL
+       OR v_new_canon.status<>'active' OR v_new_runtime.status<>'active'
+       OR v_new_runtime.canon_activation_id<>v_new_canon.canon_activation_id
+       OR v_new_runtime.rule_id<>v_promotion.rule_id
+       OR v_new_runtime.school_id<>v_promotion.school_id THEN
+        RAISE EXCEPTION 'VIDEO_CANON_RESTORE_CURRENT_ACTIVATION_MISMATCH' USING ERRCODE='23514';
+    END IF;
+
+    UPDATE bidding.runtime_activation
+       SET status='revoked',valid_to=statement_timestamp()
+     WHERE runtime_activation_id=v_new_runtime.runtime_activation_id;
+    UPDATE public.canon_activation
+       SET status='revoked',valid_to=statement_timestamp()
+     WHERE canon_activation_id=v_new_canon.canon_activation_id;
+
+    IF v_promotion.superseded_canon_activation_id IS NOT NULL THEN
+        IF v_promotion.superseded_canon_valid_to IS NOT NULL
+           AND v_promotion.superseded_canon_valid_to<=statement_timestamp() THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_TARGET_EXPIRED' USING ERRCODE='23514';
+        END IF;
+        PERFORM 1 FROM public.canon_activation
+         WHERE canon_activation_id=v_promotion.superseded_canon_activation_id
+           AND status='superseded' AND valid_to=v_new_canon.valid_from FOR UPDATE;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_TARGET_MISMATCH' USING ERRCODE='23514';
+        END IF;
+        UPDATE public.canon_activation
+           SET status='active',valid_to=v_promotion.superseded_canon_valid_to
+         WHERE canon_activation_id=v_promotion.superseded_canon_activation_id;
+
+        IF jsonb_array_length(v_promotion.superseded_runtime_state)
+           <>cardinality(v_promotion.superseded_runtime_activation_ids) THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_RUNTIME_STATE_MISMATCH' USING ERRCODE='23514';
+        END IF;
+        FOR v_state IN SELECT value FROM jsonb_array_elements(v_promotion.superseded_runtime_state)
+        LOOP
+            BEGIN
+                v_original_valid_to := NULLIF(v_state->>'valid_to','')::timestamptz;
+            EXCEPTION WHEN OTHERS THEN
+                RAISE EXCEPTION 'VIDEO_CANON_RESTORE_RUNTIME_STATE_INVALID' USING ERRCODE='23514';
+            END;
+            IF v_original_valid_to IS NOT NULL AND v_original_valid_to<=statement_timestamp() THEN
+                RAISE EXCEPTION 'VIDEO_CANON_RESTORE_RUNTIME_TARGET_EXPIRED' USING ERRCODE='23514';
+            END IF;
+            SELECT * INTO v_prior_runtime FROM bidding.runtime_activation
+             WHERE runtime_activation_id=(v_state->>'runtime_activation_id')::uuid
+               AND canon_activation_id=v_promotion.superseded_canon_activation_id
+               AND status='superseded' AND valid_to=v_new_canon.valid_from FOR UPDATE;
+            IF NOT FOUND OR NOT (v_prior_runtime.runtime_activation_id=ANY(
+                 v_promotion.superseded_runtime_activation_ids
+               )) THEN
+                RAISE EXCEPTION 'VIDEO_CANON_RESTORE_RUNTIME_TARGET_MISMATCH' USING ERRCODE='23514';
+            END IF;
+            UPDATE bidding.runtime_activation SET status='active',valid_to=v_original_valid_to
+             WHERE runtime_activation_id=v_prior_runtime.runtime_activation_id;
+            v_restored_runtime_ids := array_append(
+              v_restored_runtime_ids,v_prior_runtime.runtime_activation_id
+            );
+        END LOOP;
+    ELSIF cardinality(v_promotion.superseded_runtime_activation_ids)<>0
+       OR jsonb_array_length(v_promotion.superseded_runtime_state)<>0 THEN
+        RAISE EXCEPTION 'VIDEO_CANON_RESTORE_UNEXPECTED_RUNTIME_STATE' USING ERRCODE='23514';
+    END IF;
+
+    INSERT INTO bidding.video_canon_ai_restore_receipt(
+      video_canon_ai_promotion_receipt_id,school_id,
+      revoked_canon_activation_id,revoked_runtime_activation_id,
+      restored_canon_activation_id,restored_runtime_activation_ids,
+      verification_bundle_sha256,restore_evidence_sha256,restored_by_principal
+    ) VALUES (
+      v_promotion.video_canon_ai_promotion_receipt_id,v_promotion.school_id,
+      v_new_canon.canon_activation_id,v_new_runtime.runtime_activation_id,
+      v_promotion.superseded_canon_activation_id,v_restored_runtime_ids,
+      p_verification_bundle_sha256,p_restore_evidence_sha256,session_user
+    ) RETURNING * INTO v_existing;
+    RETURN v_existing.video_canon_ai_restore_receipt_id;
+END $$;
+
 REVOKE ALL ON FUNCTION bidding.activate_ai_verified_video_canon(uuid,uuid,text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION bidding.activate_ai_verified_video_canon(uuid,uuid,text)
   TO bridge_school_canon_promoter;
+REVOKE ALL ON FUNCTION bidding.restore_ai_verified_video_canon(uuid,text,text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION bidding.restore_ai_verified_video_canon(uuid,text,text)
+  TO bridge_school_canon_restorer;
 
 GRANT SELECT ON bidding.video_canon_source_policy,bidding.video_canon_ai_verification_bundle,
   bidding.video_canon_verifier_registry,
   bidding.video_canon_ai_verification,
-  bidding.video_canon_ai_promotion_receipt,bidding.video_correction_review_receipt
+  bidding.video_canon_ai_promotion_receipt,bidding.video_canon_ai_restore_receipt,
+  bidding.video_correction_review_receipt
   TO bridge_school_reader;
+REVOKE ALL ON FUNCTION bidding.current_school_canon_snapshot_sha256(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION bidding.current_school_canon_snapshot_sha256(uuid) TO
+  bridge_school_canon_verifier,bridge_school_canon_semantic_verifier,
+  bridge_school_canon_bridge_verifier,bridge_school_canon_firewall_verifier,
+  bridge_school_canon_control_verifier;
 GRANT SELECT ON bidding.video_correction_review_receipt TO bridge_school_worker;
 GRANT INSERT ON bidding.video_correction_review_receipt TO bridge_school_canon_control_verifier;
 GRANT INSERT ON bidding.video_canon_ai_verification_bundle TO bridge_school_canon_verifier;
@@ -676,8 +983,9 @@ GRANT INSERT ON bidding.video_canon_ai_verification TO
   bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier;
 REVOKE INSERT,UPDATE,DELETE,TRUNCATE ON bidding.video_canon_source_policy,
   bidding.video_canon_verifier_registry,bidding.video_canon_ai_promotion_receipt,
-  bidding.video_correction_review_receipt
-  FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,bridge_school_canon_promoter;
+  bidding.video_canon_ai_restore_receipt,bidding.video_correction_review_receipt
+  FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,
+  bridge_school_canon_promoter,bridge_school_canon_restorer;
 REVOKE UPDATE,DELETE,TRUNCATE ON bidding.video_correction_review_receipt
   FROM bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
   bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier;
@@ -688,12 +996,14 @@ REVOKE UPDATE,DELETE,TRUNCATE ON bidding.video_canon_ai_verification_bundle,bidd
   FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,
   bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
   bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier,
-  bridge_school_canon_promoter;
-REVOKE INSERT ON bidding.video_canon_ai_verification FROM bridge_school_canon_verifier,bridge_school_canon_promoter;
+  bridge_school_canon_promoter,bridge_school_canon_restorer;
+REVOKE INSERT ON bidding.video_canon_ai_verification FROM bridge_school_canon_verifier,
+  bridge_school_canon_promoter,bridge_school_canon_restorer;
 REVOKE INSERT ON bidding.video_canon_ai_verification_bundle FROM
   bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
   bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier,
-  bridge_school_canon_promoter;
+  bridge_school_canon_promoter,bridge_school_canon_restorer;
+REVOKE ALL ON FUNCTION bidding.contains_forbidden_hidden_value(jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.validate_video_canon_verification_bundle() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.validate_video_canon_verification() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_bound_video_canon_candidate() FROM PUBLIC;
@@ -706,17 +1016,17 @@ REVOKE EXECUTE ON FUNCTION bidding.validate_video_canon_verification_bundle(),
   FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,
   bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
   bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier,
-  bridge_school_canon_promoter;
+  bridge_school_canon_promoter,bridge_school_canon_restorer;
 REVOKE EXECUTE ON FUNCTION bidding.validate_video_correction_review_receipt()
   FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,
   bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
   bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier,
-  bridge_school_canon_promoter;
+  bridge_school_canon_promoter,bridge_school_canon_restorer;
 REVOKE EXECUTE ON FUNCTION bidding.validate_video_canon_verification()
   FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,
   bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
   bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier,
-  bridge_school_canon_promoter;
+  bridge_school_canon_promoter,bridge_school_canon_restorer;
 
 INSERT INTO public.schema_migration(migration_key)
 VALUES ('0322_workflow_video_canon_ai_promotion') ON CONFLICT DO NOTHING;

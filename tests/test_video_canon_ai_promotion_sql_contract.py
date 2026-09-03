@@ -15,7 +15,7 @@ def test_ai_promotion_is_narrow_guarded_and_not_granted_to_general_workers():
     assert "TO bridge_school_canon_promoter" in MIGRATION
     assert "GRANT INSERT ON bidding.video_canon_ai_verification_bundle TO bridge_school_canon_verifier" in MIGRATION
     assert "GRANT INSERT ON bidding.video_canon_ai_verification TO" in MIGRATION
-    assert "bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,bridge_school_canon_promoter" in MIGRATION
+    assert "FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier" in MIGRATION
     assert "promotion_mode','AI_VERIFIED_TEACHER_VIDEO'" in MIGRATION
     assert "'human_approval_required',false" in MIGRATION
     assert "CREATE TABLE bidding.video_correction_review_receipt" in MIGRATION
@@ -24,6 +24,9 @@ def test_ai_promotion_is_narrow_guarded_and_not_granted_to_general_workers():
     assert "GRANT SELECT ON bidding.video_correction_review_receipt TO bridge_school_worker" in MIGRATION
     assert "REVOKE bridge_school_reader FROM bridge_school_canon_verifier" in MIGRATION
     assert "GRANT SELECT ON public.analysis_candidate TO bridge_school_canon_verifier" in MIGRATION
+    assert "bridge_school_canon_restorer" in MIGRATION
+    assert "GRANT EXECUTE ON FUNCTION bidding.restore_ai_verified_video_canon" in MIGRATION
+    assert "TO bridge_school_canon_restorer" in MIGRATION
 
 
 def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests():
@@ -49,6 +52,12 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "JOIN bidding.video_canon_verifier_registry vr",
         "vr.status='active'",
         "v.check_id=ANY(vr.allowed_check_ids)",
+        "NEW.execution_principal<>session_user",
+        "v_semantic_principal=v_bridge_principal",
+        "current_school_canon_snapshot_sha256",
+        "VIDEO_CANON_STATE_CHECKS_STALE",
+        "v.canon_snapshot_sha256=v_canon_snapshot_sha256",
+        "contains_forbidden_hidden_value(v_candidate.payload)",
     ):
         assert marker in MIGRATION
 
@@ -71,3 +80,7 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "RETURN v_existing.video_canon_ai_promotion_receipt_id" in MIGRATION
     assert "rollback refused: Video-to-Canon state exists" in ROLLBACK
     assert "EXISTS (SELECT 1 FROM bidding.video_correction_review_receipt)" in ROLLBACK
+    assert "CREATE TABLE bidding.video_canon_ai_restore_receipt" in MIGRATION
+    assert "superseded_runtime_state" in MIGRATION
+    assert "VIDEO_CANON_RESTORE_CURRENT_ACTIVATION_MISMATCH" in MIGRATION
+    assert "DROP FUNCTION bidding.restore_ai_verified_video_canon" in ROLLBACK

@@ -130,6 +130,13 @@ an otherwise permitted field. Raw board, logic and correction proof collections
 are transient validator inputs and are removed before the quality artifact is
 serialized; only sanitized results or explicit gaps survive.
 
+The same value-level firewall applies before a teacher-video Canon candidate is
+placed in staging: full PBN encodings and labelled partner/opponent card payloads
+are rejected even under otherwise innocent keys such as `notes`. Candidate
+staging identity includes the canonical payload SHA-256, so a corrected
+assertion becomes a preserved new revision instead of colliding with the old
+row.
+
 ## Learning feedback loop
 
 Evidence-bound corrections for ASR, speaker, card, auction, extraction and
@@ -147,3 +154,20 @@ has an active `CORRECTION_REVIEW` registry capability. A candidate model is only
 `MODEL_IMPROVEMENT_PROPOSAL` when a named holdout compares it with a baseline
 and records a rollback model version. Model deployment remains a separate
 gate; a model passing holdout is not itself permission to change Canon.
+
+## Promotion-time state and restoration
+
+Semantic, bridge and hidden-information receipts carry the authenticated
+database login principal in addition to verifier family/version; the three
+high-assurance executions must come from distinct principals. The four
+state-dependent checks (`CANON_REGRESSION`, `CANON_INTEGRITY`,
+`CANON_CONFLICT_SCAN`, `ROLLBACK_RESTORE`) carry the same deterministic active
+Canon snapshot SHA-256. Activation serializes by school, locks the underlying
+Canon/rule/test/conflict state and rejects a stale digest.
+
+Rollback is operational, not documentary. A dedicated restorer capability can
+invoke the receipt-bound restore RPC with the exact promotion bundle and restore
+evidence hashes. The transaction revokes the new Canon/runtime activation,
+restores the exact superseded activation IDs and their original validity ends,
+then emits an append-only restore receipt. No application, worker, verifier or
+promoter receives direct activation-table writes.

@@ -28,6 +28,16 @@ _FORBIDDEN_KEYS = {
     "actual_partner_hand", "actual_opponent_hand", "actual_opponent_hands",
     "partner_cards", "opponent_cards", "all_hands",
 }
+_PBN_DEAL = re.compile(
+    r"(?:^|\s)[NESW]\s*:\s*[-AKQJT2-9]{0,13}\."
+    r"[-AKQJT2-9]{0,13}\.[-AKQJT2-9]{0,13}\.[-AKQJT2-9]{0,13}",
+    re.IGNORECASE,
+)
+_LABELLED_HIDDEN_CARDS = re.compile(
+    r"(?:partner|opponent|north|east|south|west)[ _-]*(?:hand|cards)\s*[:=]\s*[-AKQJT2-9.]"
+    r"|(?:рука|карты)\s+(?:партн[её]ра|соперника)\s*[:=]\s*[-AKQJT2-9.]",
+    re.IGNORECASE,
+)
 _NORMALIZED_RULE_FIELDS = {
     "rule_key", "rule_kind", "auction_pattern", "hand_constraints",
     "public_context_constraints", "action", "meaning", "public_inference",
@@ -73,6 +83,16 @@ def _has_forbidden_key(value: Any) -> bool:
         )
     if isinstance(value, (list, tuple)):
         return any(_has_forbidden_key(child) for child in value)
+    return False
+
+
+def _has_forbidden_value(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        return any(_has_forbidden_value(child) for child in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_has_forbidden_value(child) for child in value)
+    if isinstance(value, str):
+        return bool(_PBN_DEAL.search(value) or _LABELLED_HIDDEN_CARDS.search(value))
     return False
 
 
@@ -193,7 +213,7 @@ def build_video_canon_candidate(
     normalized_rule = assertion.get("normalized_rule")
     if not isinstance(normalized_rule, Mapping):
         _fail("normalized rule fields mismatch")
-    if _has_forbidden_key(normalized_rule):
+    if _has_forbidden_key(normalized_rule) or _has_forbidden_value(normalized_rule):
         _fail("normalized rule contains hidden information")
     if set(normalized_rule) != _NORMALIZED_RULE_FIELDS:
         _fail("normalized rule fields mismatch")
@@ -224,7 +244,7 @@ def build_video_canon_candidate(
     explanation_refs = _texts(explanation.get("evidence_refs"), "explanation evidence ref")
     if not set(explanation_refs) <= set(locators):
         _fail("explanation references evidence outside assertion")
-    if _has_forbidden_key(explanation):
+    if _has_forbidden_key(explanation) or _has_forbidden_value(explanation):
         _fail("explanation contains hidden information")
 
     tests = assertion.get("tests")
@@ -234,7 +254,7 @@ def build_video_canon_candidate(
         _fail("tests fields mismatch")
     if any(not isinstance(tests[kind], list) or not tests[kind] for kind in tests):
         _fail("all four test classes are required")
-    if _has_forbidden_key(tests):
+    if _has_forbidden_key(tests) or _has_forbidden_value(tests):
         _fail("tests contain hidden information")
 
     ambiguities = assertion.get("ambiguities")
@@ -306,7 +326,10 @@ def build_video_canon_candidate(
     payload_hash = _digest(payload)
     return {
         "candidate_type": "video_school_canon_candidate",
-        "stable_key": assertion_id,
+        # One teacher assertion may be corrected over time. Content-address the
+        # staging identity so every revision is preserved instead of colliding
+        # with an older row that has the same logical assertion_id.
+        "stable_key": f"{assertion_id}:sha256:{payload_hash}",
         "quality_status": payload["review_eligibility"],
         "promotion_status": "STAGING_ONLY",
         "payload": payload,

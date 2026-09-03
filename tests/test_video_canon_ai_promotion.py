@@ -7,6 +7,7 @@ import pytest
 
 from bridge_contracts.video_canon_ai_promotion import (
     REQUIRED_CHECKS,
+    STATE_DEPENDENT_CHECKS,
     VideoCanonAIPromotionError,
     build_ai_canon_promotion,
 )
@@ -22,22 +23,28 @@ def _candidate() -> dict:
 
 def _bundle(candidate: dict) -> dict:
     checks = []
+    canon_snapshot_sha = "c" * 64
     for check_id in sorted(REQUIRED_CHECKS):
         family = "formal-checker"
+        principal = "svc-formal-checker"
         assurance = "I1"
         if check_id == "SEMANTIC_PARSE":
-            family, assurance = "semantic-model-a", "I2"
+            family, principal, assurance = "semantic-model-a", "svc-semantic-a", "I2"
         elif check_id == "BRIDGE_LOGIC":
-            family, assurance = "bridge-engine-b", "I3"
+            family, principal, assurance = "bridge-engine-b", "svc-bridge-b", "I3"
         elif check_id == "HIDDEN_INFORMATION_FIREWALL":
-            family, assurance = "taint-analyzer", "I2"
+            family, principal, assurance = "taint-analyzer", "svc-taint", "I2"
         checks.append({
             "check_id": check_id,
             "result": "PASS",
             "verifier_family": family,
             "verifier_version": "pinned-v1",
+            "execution_principal": principal,
             "assurance_level": assurance,
             "evidence_sha256": "f" * 64,
+            "canon_snapshot_sha256": (
+                canon_snapshot_sha if check_id in STATE_DEPENDENT_CHECKS else None
+            ),
         })
     return {
         "schema": "video-canon-ai-promotion-v1",
@@ -47,6 +54,7 @@ def _bundle(candidate: dict) -> dict:
         "learner_level": "beginner-1",
         "effective_period": {"valid_from": "2026-09-03T00:00:00Z", "valid_to": None},
         "activation_scope": "bidding/natural/v1/response-to-1h",
+        "canon_snapshot_sha256": canon_snapshot_sha,
         "checks": checks,
         "rollback": {
             "strategy": "revoke activation and restore prior version",
@@ -79,6 +87,8 @@ def test_all_ai_checks_create_sealed_automatic_promotion_command():
     (lambda b: b["checks"].pop(), "check set mismatch"),
     (lambda b: b["checks"][0].update(result="FAIL"), "did not pass"),
     (lambda b: next(x for x in b["checks"] if x["check_id"] == "BRIDGE_LOGIC").update(verifier_family="semantic-model-a"), "must be independent"),
+    (lambda b: next(x for x in b["checks"] if x["check_id"] == "BRIDGE_LOGIC").update(execution_principal="svc-semantic-a"), "executions must be independent"),
+    (lambda b: next(x for x in b["checks"] if x["check_id"] == "CANON_CONFLICT_SCAN").update(canon_snapshot_sha256="d" * 64), "state-dependent check is stale"),
     (lambda b: next(x for x in b["checks"] if x["check_id"] == "HIDDEN_INFORMATION_FIREWALL").update(assurance_level="I1"), "requires I2 or I3"),
     (lambda b: b["rollback"].update(result="FAIL"), "restore test did not pass"),
 ])
