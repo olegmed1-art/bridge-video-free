@@ -1,5 +1,4 @@
 name: Oracle idle guard exact install
-# retrigger: issue-627 exact guard install evidence
 
 on:
   push:
@@ -10,6 +9,8 @@ on:
 
 permissions:
   contents: read
+  issues: read
+  pull-requests: read
 
 concurrency:
   group: oracle-idle-guard-exact-install-627
@@ -29,9 +30,45 @@ jobs:
       SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
       SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
     steps:
+      - name: Gate exact reviewed install authorization
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          expected="$GITHUB_SHA"
+          [[ "$expected" =~ ^[0-9a-f]{40}$ ]]
+          current="$(gh api "repos/$GITHUB_REPOSITORY/pulls/1061" --jq '.head.sha')"
+          [[ "$current" == "$expected" ]] || {
+            echo "INSTALL_HEAD_MOVED expected=$expected actual=$current" >&2
+            exit 70
+          }
+          command="/oracle-idle-guard-install-reviewed $expected"
+          authorized="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/1061/comments?per_page=100" \
+            --jq '[.[] | select(.user.login == "olegmed1-art" and .body == $command)] | length' \
+            --raw-field command="$command" 2>/dev/null || true)"
+          [[ "$authorized" =~ ^[1-9][0-9]*$ ]] || {
+            echo "INSTALL_AUTHORIZATION_MISSING exact_sha=$expected" >&2
+            echo "Expected owner-only PR comment: $command" >&2
+            exit 71
+          }
+          echo "INSTALL_AUTHORIZATION=PASS exact_sha=$expected"
+
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Recheck exact branch head before SSH
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          current="$(gh api "repos/$GITHUB_REPOSITORY/pulls/1061" --jq '.head.sha')"
+          test "$current" = "$GITHUB_SHA"
+          echo "EXACT_HEAD_RECHECK=PASS sha=$GITHUB_SHA"
 
       - name: Verify bounded installer has no lifecycle mutation
         shell: bash
@@ -115,6 +152,7 @@ jobs:
           printf '%s\n' "$authorization"
           if [[ "$state" == IDLE ]]; then
             [[ $authorization_rc -eq 0 ]]
+            [[ "$authorization" == $'ORACLE_STOP_AUTHORIZED=YES\nORACLE_STOP_AUTHORIZATION_REASON=fresh_exact_idle' ]]
           else
             [[ $authorization_rc -ne 0 ]]
             [[ "$authorization" == ORACLE_STOP_AUTHORIZED=NO$'\n'* ]]
