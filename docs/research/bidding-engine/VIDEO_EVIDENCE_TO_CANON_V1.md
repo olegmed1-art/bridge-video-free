@@ -53,3 +53,13 @@ at least 0.8 and contains an explicit causal marker such as “потому чт
 “поэтому” or “так как”. The exact speech, speaker evidence and timestamps are
 preserved. This first pass intentionally records a partial explanation rather
 than completing missing premises, alternatives or examples with generated text.
+
+Explanation covers both cause and purpose. Explicit links are stored as typed
+relations: `CAUSE` (why), `PURPOSE` (what for), `CONSEQUENCE`, and
+`ALTERNATIVE_CONSEQUENCE`. Each relation retains the exact left and right
+clauses around the teacher's connective. The target teachable logic is:
+
+`conditions -> cause/purpose -> conclusion -> action -> consequences -> rejected alternatives`
+
+Missing links remain explicit completeness gaps; plausible model-generated
+links are not evidence.
