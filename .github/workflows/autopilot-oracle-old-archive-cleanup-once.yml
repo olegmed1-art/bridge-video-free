@@ -22,7 +22,7 @@ jobs:
       - name: Remove transfer archive and verify old runtime stopped
         env:
           OLD_HOST: 158.180.47.161
-          OLD_HOST_FINGERPRINT: SHA256:UGJo5yPdnK/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mKc
+          OLD_HOST_FINGERPRINT: SHA256:UGJo5yPdnk/wf8DVrzvXt2xJkE9GJ8+3IIcQ2vA+mkc
         run: |
           set -Eeuo pipefail
           umask 077
