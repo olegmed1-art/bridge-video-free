@@ -86,7 +86,10 @@ fi
 # environments are intentionally excluded so the diagnostic remains secret-safe.
 readonly SOURCE_SERVICE='universal-video.service'
 source_root_pid="$(systemctl show "$SOURCE_SERVICE" -p MainPID --value 2>/dev/null || true)"
-container_root_pid="$(docker inspect --type container --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || true)"
+container_root_pid=''
+if command -v docker >/dev/null 2>&1; then
+  container_root_pid="$(docker inspect --type container --format '{{.State.Pid}}' "$CONTAINER" 2>/dev/null || true)"
+fi
 printf 'source_service_state=%s source_root_pid=%s container_root_pid=%s\n' \
   "$(systemctl is-active "$SOURCE_SERVICE" 2>/dev/null || true)" \
   "${source_root_pid:-unknown}" "${container_root_pid:-unknown}"
