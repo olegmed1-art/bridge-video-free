@@ -37,7 +37,11 @@ COMMENT ON ROLE bridge_school_canon_control_verifier IS
   'NOLOGIN capability for non-independent control attestations only';
 COMMENT ON ROLE bridge_school_canon_promoter IS
   'NOLOGIN capability for the guarded AI-verified teacher-video Canon activation RPC';
-GRANT bridge_school_reader TO bridge_school_canon_verifier,
+REVOKE bridge_school_reader FROM bridge_school_canon_verifier,
+  bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
+  bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier,
+  bridge_school_canon_promoter;
+GRANT USAGE ON SCHEMA public,bidding TO bridge_school_canon_verifier,
   bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
   bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier,
   bridge_school_canon_promoter;
@@ -659,6 +663,14 @@ GRANT SELECT ON bidding.video_canon_source_policy,bidding.video_canon_ai_verific
 GRANT SELECT ON bidding.video_correction_review_receipt TO bridge_school_worker;
 GRANT INSERT ON bidding.video_correction_review_receipt TO bridge_school_canon_control_verifier;
 GRANT INSERT ON bidding.video_canon_ai_verification_bundle TO bridge_school_canon_verifier;
+GRANT SELECT ON public.analysis_candidate TO bridge_school_canon_verifier,
+  bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
+  bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier;
+GRANT SELECT ON bidding.video_canon_ai_verification_bundle,
+  bidding.video_canon_verifier_registry TO
+  bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
+  bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier;
+GRANT SELECT ON bidding.video_canon_verifier_registry TO bridge_school_canon_verifier;
 GRANT INSERT ON bidding.video_canon_ai_verification TO
   bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
   bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier;

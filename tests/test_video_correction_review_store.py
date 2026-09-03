@@ -42,6 +42,8 @@ def test_resolves_exact_payload_only_from_database(monkeypatch):
     resolver = store.DatabaseCorrectionReceiptResolver("configured")
     assert resolver(receipt_sha) == payload
     assert cursor.calls[-1][1] == (receipt_sha,)
+    assert "registry.status='active'" in cursor.calls[-1][0]
+    assert "CORRECTION_REVIEW" in cursor.calls[-1][0]
 
 
 def test_rejects_invalid_hash_without_database_call(monkeypatch):

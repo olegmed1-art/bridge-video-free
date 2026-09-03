@@ -41,6 +41,7 @@ def _dds_result():
     return {
         "engine": "DDS3", "engine_version": DDS_UPSTREAM, "fallback_used": False,
         "operation": "position_all_moves",
+        "binary_sha256": "e" * 64,
         "moves": [
             {"card": "SA", "tricks": 10, "regret": 0, "optimal": True},
             {"card": "SK", "tricks": 9, "regret": 1, "optimal": False},
@@ -188,6 +189,6 @@ def test_extended_analysis_stages_valid_dds_comparison_and_gaps_invalid_one():
 
 def test_real_diana_postprocessor_wires_the_pinned_dds_executor():
     source = (ROOT / "diana_longitudinal_postprocess_v4_2.py").read_text()
-    assert "from bridge_school_api.dds3.service import compute as execute_pinned_dds3" in source
-    assert "dds_request_executor=execute_pinned_dds3" in source
+    assert "from bridge_contracts.video_dds_pinned_executor import execute_digest_pinned_dds3" in source
+    assert "dds_request_executor=execute_digest_pinned_dds3" in source
     assert "correction_receipt_resolver=_trusted_correction_receipt_resolver()" in source

@@ -126,7 +126,7 @@ def _public_context(value: Any) -> dict[str, Any]:
 
 def _rerun_authenticated_dds_request(
     observation: Mapping[str, Any], executor: DDSRequestExecutor | None
-) -> tuple[dict[str, Any], str, str, str]:
+) -> tuple[dict[str, Any], str, str, str, str]:
     if executor is None:
         raise VideoDDSComparisonError("pinned DDS request executor required")
     try:
@@ -146,11 +146,12 @@ def _rerun_authenticated_dds_request(
     except LabContractError as exc:
         raise VideoDDSComparisonError(str(exc)) from exc
     position = payload.get("position")
+    binary_sha = _sha(dds.get("binary_sha256"), "DDS binary_sha256")
     pbn = _text(position.get("pbn") if isinstance(position, Mapping) else None, "DDS position pbn")
     deal_sha = hashlib.sha256(pbn.encode("utf-8")).hexdigest()
     request_sha = _digest(payload)
     result_sha = _digest(dds)
-    return dds, deal_sha, request_sha, result_sha
+    return dds, deal_sha, request_sha, result_sha, binary_sha
 
 
 def build_offline_dds_comparison(
@@ -220,7 +221,7 @@ def build_offline_dds_comparison(
         raise VideoDDSComparisonError("full-board assertion does not match verified reconstruction")
     board_evidence_sha = _sha(verified_board_evidence.get("evidence_sha256"), "board evidence_sha256")
 
-    dds, trusted_deal_sha, request_sha, result_sha = _rerun_authenticated_dds_request(
+    dds, trusted_deal_sha, request_sha, result_sha, binary_sha = _rerun_authenticated_dds_request(
         observation, dds_request_executor
     )
     if trusted_deal_sha != deal_sha:
@@ -261,6 +262,7 @@ def build_offline_dds_comparison(
             "engine": dds["engine"], "engine_version": dds["engine_version"],
             "operation": "position_all_moves",
             "request_sha256": request_sha, "result_sha256": result_sha,
+            "binary_sha256": binary_sha,
             "verification_mode": "PINNED_DDS_RERUN",
         },
         "full_deal_evidence": {

@@ -121,9 +121,14 @@ fact and does not validate a bidding rule, become Canon evidence, or enter a
 live resolver request. The integrated postprocessor reruns the exact bounded
 position request through the pinned DDS3 implementation and validates the
 freshly returned result before recording `OFFLINE_EVALUATED`; caller-supplied
-DDS labels or moves are neither accepted nor used. Every allowed public-context
+DDS labels or moves are neither accepted nor used. Before starting an isolated
+position worker, the production executor requires the deployed binary's
+SHA-256 to equal `DDS3_POSITION_WORKER_SHA256`; the verified digest is retained
+in result provenance. Every allowed public-context
 field has a bridge-specific value validator, so PBN/hand strings cannot hide in
-an otherwise permitted field.
+an otherwise permitted field. Raw board, logic and correction proof collections
+are transient validator inputs and are removed before the quality artifact is
+serialized; only sanitized results or explicit gaps survive.
 
 ## Learning feedback loop
 
@@ -137,7 +142,8 @@ explicit gap and is not training-eligible. The production Diana entrypoint
 resolves through the worker's read-only access to the append-only
 `bidding.video_correction_review_receipt` store. Only the authenticated control
 verifier capability may attest a receipt there; app and worker roles cannot
-insert or mutate it. A candidate model is only represented by a
+insert or mutate it. Resolution also requires that the recorded attestor still
+has an active `CORRECTION_REVIEW` registry capability. A candidate model is only represented by a
 `MODEL_IMPROVEMENT_PROPOSAL` when a named holdout compares it with a baseline
 and records a rollback model version. Model deployment remains a separate
 gate; a model passing holdout is not itself permission to change Canon.

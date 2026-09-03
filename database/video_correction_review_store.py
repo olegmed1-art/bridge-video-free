@@ -37,9 +37,13 @@ class DatabaseCorrectionReceiptResolver:
                     return None
                 cursor.execute(
                     """
-                    SELECT receipt_payload
-                      FROM bidding.video_correction_review_receipt
-                     WHERE receipt_sha256=%s
+                    SELECT receipt.receipt_payload
+                      FROM bidding.video_correction_review_receipt receipt
+                      JOIN bidding.video_canon_verifier_registry registry
+                        ON registry.database_role=receipt.recorded_by_role
+                       AND registry.status='active'
+                       AND 'CORRECTION_REVIEW'=ANY(registry.allowed_check_ids)
+                     WHERE receipt.receipt_sha256=%s
                     """,
                     (value,),
                 )

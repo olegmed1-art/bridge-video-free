@@ -176,12 +176,23 @@ def build_quality_layer(
         "pinned_dds_rerun": dds_request_executor is not None,
         "correction_review_storage": correction_receipt_resolver is not None,
     }
-    extended = build_extended_extraction(
-        working,
-        quality,
-        dds_request_executor=dds_request_executor,
-        correction_receipt_resolver=correction_receipt_resolver,
-    )
+    try:
+        extended = build_extended_extraction(
+            working,
+            quality,
+            dds_request_executor=dds_request_executor,
+            correction_receipt_resolver=correction_receipt_resolver,
+        )
+    finally:
+        # These are validator inputs, not output artifacts. In particular a
+        # rejected board proof may contain full-deal/PBN material. Only the
+        # sanitized comparison, training example or explicit gap may survive.
+        for field in (
+            "verified_full_board_evidence",
+            "source_bound_logic_evidence",
+            "correction_review_receipts",
+        ):
+            quality.pop(field, None)
     quality["extended_knowledge_extraction"] = extended
     staging = quality.setdefault("candidate_staging_records", [])
     staging.extend(extended["candidate_records"])

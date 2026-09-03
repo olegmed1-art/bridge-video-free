@@ -203,6 +203,7 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
         dds_result = {
             'engine': 'DDS3', 'engine_version': DDS_UPSTREAM,
             'fallback_used': False, 'operation': 'position_all_moves',
+            'binary_sha256': 'e' * 64,
             'moves': [
                 {'card': 'SA', 'tricks': 10, 'regret': 0, 'optimal': True},
                 {'card': 'SK', 'tricks': 9, 'regret': 1, 'optimal': False},
@@ -247,6 +248,8 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
         routed = quality['integrated_verification_evidence']['collections']
         self.assertEqual(routed['verified_full_board_evidence']['status'], 'PASSED_TO_VALIDATOR')
         self.assertEqual(routed['source_bound_logic_evidence']['status'], 'PASSED_TO_VALIDATOR')
+        self.assertNotIn('verified_full_board_evidence', quality)
+        self.assertNotIn('source_bound_logic_evidence', quality)
 
     def test_integrated_master_routes_verified_teacher_correction_receipt(self):
         master = base_master()
@@ -279,6 +282,29 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
         self.assertEqual(examples[0]['payload']['review_receipt_sha256'], receipt['receipt_sha256'])
         routed = quality['integrated_verification_evidence']['collections']
         self.assertEqual(routed['correction_review_receipts']['status'], 'PASSED_TO_VALIDATOR')
+        self.assertNotIn('correction_review_receipts', quality)
+
+    def test_raw_proof_collections_never_survive_into_quality_artifact(self):
+        master = base_master()
+        master['verified_full_board_evidence'] = [{
+            'board_evidence_id': 'bad',
+            'full_deal': 'N:AKQJ.T98.765.432 E:... S:... W:...',
+        }]
+        master['source_bound_logic_evidence'] = [{'partner_hand': 'AKQJ'}]
+        master['correction_review_receipts'] = [
+            {'forbidden_private_cards_marker': 'PRIVATE-AKQJ-SECRET'}
+        ]
+        quality = build_quality_layer(
+            master, {'lesson_id': 'lesson-test', 'lesson_number': 5}
+        )
+        self.assertNotIn('verified_full_board_evidence', quality)
+        self.assertNotIn('source_bound_logic_evidence', quality)
+        self.assertNotIn('correction_review_receipts', quality)
+        encoded = json.dumps(quality, ensure_ascii=False, sort_keys=True)
+        self.assertNotIn('N:AKQJ.T98.765.432', encoded)
+        self.assertNotIn('partner_hand', encoded)
+        self.assertNotIn('forbidden_private_cards_marker', encoded)
+        self.assertNotIn('PRIVATE-AKQJ-SECRET', encoded)
 
     def test_self_hashed_teacher_correction_is_not_trusted_by_default(self):
         master = base_master()

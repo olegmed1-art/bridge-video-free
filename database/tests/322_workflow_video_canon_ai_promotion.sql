@@ -41,6 +41,15 @@ BEGIN
   IF (SELECT count(*) FROM bidding.video_canon_verifier_registry WHERE status='active')<>4 THEN
     RAISE EXCEPTION 'VIDEO_CANON_VERIFIER_REGISTRY_INVALID';
   END IF;
+  IF pg_has_role('bridge_school_canon_semantic_verifier','bridge_school_reader','member')
+     OR pg_has_role('bridge_school_canon_bridge_verifier','bridge_school_reader','member')
+     OR pg_has_role('bridge_school_canon_firewall_verifier','bridge_school_reader','member')
+     OR pg_has_role('bridge_school_canon_control_verifier','bridge_school_reader','member')
+     OR pg_has_role('bridge_school_canon_promoter','bridge_school_reader','member')
+     OR has_table_privilege('bridge_school_canon_semantic_verifier','public.person','SELECT')
+     OR has_table_privilege('bridge_school_canon_promoter','public.person','SELECT') THEN
+    RAISE EXCEPTION 'VIDEO_CANON_VERIFIER_OVERBROAD_READ_ACCESS';
+  END IF;
   IF has_table_privilege('bridge_school_canon_promoter','public.canon_activation','INSERT')
      OR has_table_privilege('bridge_school_canon_promoter','bidding.runtime_activation','INSERT')
      OR has_table_privilege('bridge_school_canon_promoter','bidding.video_canon_ai_promotion_receipt','INSERT') THEN

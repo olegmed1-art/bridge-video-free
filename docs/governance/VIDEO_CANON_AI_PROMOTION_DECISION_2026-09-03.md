@@ -72,3 +72,6 @@ Analyzer correction receipts use a separate append-only trust store. The
 analysis worker has read-only resolution, while an authenticated control
 verifier capability alone may attest new receipts. These training candidates
 remain non-canonical and cannot execute training or deployment by themselves.
+All Video-to-Canon verifier/promoter capabilities have explicit evidence-table
+reads only; they do not inherit the broad school reader role or student/person
+data access.

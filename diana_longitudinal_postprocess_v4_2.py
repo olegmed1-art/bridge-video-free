@@ -13,7 +13,7 @@ from typing import Any, Mapping
 
 import diana_longitudinal_postprocess as base
 from bridge_report_board_reconstruction import reconstruct_report_visual_deals
-from bridge_school_api.dds3.service import compute as execute_pinned_dds3
+from bridge_contracts.video_dds_pinned_executor import execute_digest_pinned_dds3
 from diana_longitudinal_quality_v4_2 import (
     QUALITY_METHOD_VERSION,
     QUALITY_SCHEMA_VERSION,
@@ -165,7 +165,7 @@ def main() -> int:
     quality = build_quality_layer(
         working_master,
         lesson,
-        dds_request_executor=execute_pinned_dds3,
+        dds_request_executor=execute_digest_pinned_dds3,
         correction_receipt_resolver=_trusted_correction_receipt_resolver(),
     )
     curriculum = base._curriculum(working_master, lesson, quality)

@@ -22,6 +22,8 @@ def test_ai_promotion_is_narrow_guarded_and_not_granted_to_general_workers():
     assert "'CORRECTION_REVIEW'=ANY(v_principal.allowed_check_ids)" in MIGRATION
     assert "GRANT INSERT ON bidding.video_correction_review_receipt TO bridge_school_canon_control_verifier" in MIGRATION
     assert "GRANT SELECT ON bidding.video_correction_review_receipt TO bridge_school_worker" in MIGRATION
+    assert "REVOKE bridge_school_reader FROM bridge_school_canon_verifier" in MIGRATION
+    assert "GRANT SELECT ON public.analysis_candidate TO bridge_school_canon_verifier" in MIGRATION
 
 
 def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests():
