@@ -38,6 +38,44 @@ PARENT="${UNIVERSAL_VIDEO_CANARY_PARENT:?missing exact canary parent}"
 
 die(){ printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
+canonical_source_dir=""
+canonical_source_parent=""
+validate_source_dir_scope(){
+  local requested="$1" scope_root="$2" requested_parent resolved_root resolved_parent resolved_source
+  canonical_source_dir=""
+  canonical_source_parent=""
+  [[ "$scope_root" == /* && "$scope_root" != */ \
+    && "$scope_root" != *'//'* && "$scope_root" != */./* && "$scope_root" != */../* \
+    && "$scope_root" != *$'\n'* && "$scope_root" != *$'\r'* ]] || return 1
+  [[ -d "$scope_root" && ! -L "$scope_root" ]] || return 1
+  resolved_root="$(realpath -e -- "$scope_root" 2>/dev/null)" || return 1
+  [[ "$resolved_root" == "$scope_root" ]] || return 1
+  [[ "$requested" == "$scope_root/"* && "$requested" != */ ]] || return 1
+  [[ "$requested" != *'//'* && "$requested" != */./* && "$requested" != */../* \
+    && "$requested" != */. && "$requested" != */.. \
+    && "$requested" != *$'\n'* && "$requested" != *$'\r'* ]] || return 1
+  # -m permits the exact candidate leaf to be absent while resolving every
+  # existing parent component and collapsing any lexical escape.
+  resolved_source="$(realpath -m -- "$requested" 2>/dev/null)" || return 1
+  [[ "$resolved_source" == "$requested" ]] || return 1
+  requested_parent="${requested%/*}"
+  [[ -n "$requested_parent" && -d "$requested_parent" && ! -L "$requested_parent" ]] \
+    || return 1
+  resolved_parent="$(realpath -e -- "$requested_parent" 2>/dev/null)" || return 1
+  [[ "$resolved_parent" == "$requested_parent" ]] || return 1
+  [[ "$resolved_parent" == "$resolved_root" || "$resolved_parent" == "$resolved_root/"* ]] \
+    || return 1
+  canonical_source_parent="$resolved_parent"
+  canonical_source_dir="$resolved_parent/${requested##*/}"
+  [[ "$canonical_source_dir" == "$requested" ]] || return 1
+  if [[ -e "$requested" || -L "$requested" ]]; then
+    [[ ! -L "$requested" ]] || return 1
+    resolved_source="$(realpath -e -- "$requested" 2>/dev/null)" || return 1
+    [[ "$resolved_source" == "$canonical_source_dir" ]] || return 1
+  fi
+  return 0
+}
+
 [[ "$(id -u)" -eq 0 ]] || die 'run as root on the Oracle host'
 [[ "$SIZE" =~ ^[0-9]+$ && "$SIZE" -gt 0 ]] || die 'invalid source size'
 [[ "$BUILD_IMAGE" =~ ^[01]$ ]] || die 'UNIVERSAL_VIDEO_PRECANARY_BUILD_IMAGE must be 0 or 1'
@@ -58,12 +96,11 @@ else
   [[ -z "$RECOVERY_EVIDENCE_FILE" && -z "$RECOVERY_EVIDENCE_SHA256" ]] \
     || die 'unrequested prior-run recovery evidence is forbidden'
 fi
-case "$SOURCE_DIR" in
-  /opt/bridge-school/*) ;;
-  *) die 'source checkout path is outside the bounded bridge-school root' ;;
-esac
-[[ "$SOURCE_DIR" != /opt/bridge-school && "$SOURCE_DIR" != /opt/bridge-school/ ]] \
-  || die 'source checkout path is too broad'
+command -v realpath >/dev/null || die 'realpath is unavailable'
+validate_source_dir_scope "$SOURCE_DIR" /opt/bridge-school \
+  || die 'source checkout path is noncanonical or outside the bounded bridge-school root'
+SOURCE_DIR="$canonical_source_dir"
+SOURCE_PARENT="$canonical_source_parent"
 if [[ -n "$EXPECTED_SHA" ]]; then
   [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || die 'invalid expected source SHA'
 fi
@@ -84,6 +121,8 @@ lock_held=0
 source_had_original=0
 source_candidate_path_owned=0
 source_backup_dir=""
+source_backup_device_inode=""
+source_quarantine_dir=""
 resident_image_id=""
 isolated_peer_service=""
 isolated_peer_pid=""
@@ -112,6 +151,10 @@ bounded_systemctl_query(){
 
 bounded_docker_query(){
   timeout --foreground --signal=TERM --kill-after=2s 5s docker "$@"
+}
+
+bounded_filesystem(){
+  timeout --foreground --signal=TERM --kill-after=5s 30s "$@"
 }
 
 service_state(){
@@ -281,8 +324,7 @@ resume_prestop_frozen(){
         continue
       fi
       state="$(process_state "$process_id" 2>/dev/null || true)"
-      if [[ "$current_ticks" != "$expected_ticks" \
-            || ( "$state" != T && "$state" != t ) ]]; then
+      if [[ -z "$state" || "$state" == Z || "$state" == X || "$state" == x ]]; then
         rc=1
         continue
       fi
@@ -305,7 +347,26 @@ resume_prestop_frozen(){
       continue
     fi
     if [[ "$current_ticks" != "$expected_ticks" ]]; then
-      rc=1
+      [[ "$mode" == stopping ]] || rc=1
+      continue
+    fi
+    if [[ "$mode" == stopping ]]; then
+      state="$(process_state "$process_id" 2>/dev/null || true)"
+      if [[ "$state" == T || "$state" == t ]]; then
+        if ! exact_process_signal "$process_id" "$expected_ticks" CONT; then
+          current_ticks="$(process_start_ticks "$process_id" 2>/dev/null || true)"
+          [[ "$current_ticks" != "$expected_ticks" ]] || rc=1
+        fi
+      fi
+      current_ticks="$(process_start_ticks "$process_id" 2>/dev/null || true)"
+      if [[ "$current_ticks" == "$expected_ticks" ]]; then
+        # CONT only lets systemd finish the already queued TERM/stop. Keep the
+        # exact identity until a post-stop proof sees it disappear;
+        # successfully signalling the process is not proof that it exited.
+        remaining_services+=("$service")
+        remaining_pids+=("$process_id")
+        remaining_start_ticks+=("$expected_ticks")
+      fi
       continue
     fi
     if ! exact_process_signal "$process_id" "$expected_ticks" CONT; then
@@ -333,10 +394,8 @@ resume_prestop_frozen(){
         || [[ "$(resident_worker_pid "$service" 2>/dev/null || true)" != "$process_id" ]] \
         || [[ "$(process_start_ticks "$process_id" 2>/dev/null || true)" != "$expected_ticks" ]]; then
         rc=1
-        state="$(process_state "$process_id" 2>/dev/null || true)"
         current_ticks="$(process_start_ticks "$process_id" 2>/dev/null || true)"
-        if [[ "$current_ticks" == "$expected_ticks" \
-              && ( "$state" == T || "$state" == t ) ]]; then
+        if [[ "$current_ticks" == "$expected_ticks" ]]; then
           remaining_services+=("$service")
           remaining_pids+=("$process_id")
           remaining_start_ticks+=("$expected_ticks")
@@ -353,6 +412,45 @@ resume_prestop_frozen(){
   return "$rc"
 }
 
+confirm_prestop_identities_exited(){
+  local index process_id expected_ticks rc=0
+  local -a remaining_services=() remaining_pids=() remaining_start_ticks=()
+  for index in "${!prestop_frozen_pids[@]}"; do
+    process_id="${prestop_frozen_pids[$index]}"
+    expected_ticks="${prestop_frozen_start_ticks[$index]}"
+    if [[ "$(process_start_ticks "$process_id" 2>/dev/null || true)" == "$expected_ticks" ]]; then
+      remaining_services+=("${prestop_frozen_services[$index]}")
+      remaining_pids+=("$process_id")
+      remaining_start_ticks+=("$expected_ticks")
+      rc=1
+    fi
+  done
+  prestop_frozen_services=("${remaining_services[@]}")
+  prestop_frozen_pids=("${remaining_pids[@]}")
+  prestop_frozen_start_ticks=("${remaining_start_ticks[@]}")
+  return "$rc"
+}
+
+residents_are_quiescent(){
+  local source_state container_state workers containers running_file pgrep_rc
+  source_state="$(service_state "$SOURCE_SERVICE")"
+  container_state="$(service_state "$CONTAINER_SERVICE")"
+  case "$source_state" in inactive|failed) ;; *) return 1 ;; esac
+  case "$container_state" in inactive|failed) ;; *) return 1 ;; esac
+  if workers="$(pgrep -fa '[u]niversal_video[.]spool_worker' 2>/dev/null)"; then
+    return 1
+  else
+    pgrep_rc=$?
+    [[ "$pgrep_rc" == 1 ]] || return 1
+  fi
+  containers="$(bounded_docker ps --filter 'name=^/universal-video-container$' --format '{{.ID}}')" \
+    || return 1
+  [[ -z "$containers" ]] || return 1
+  running_file="$(find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit)" \
+    || return 1
+  [[ -z "$running_file" ]]
+}
+
 freeze_residents_for_idle_snapshot(){
   local service target_state process_id start_ticks index attempt state all_frozen
   for service in "$SOURCE_SERVICE" "$CONTAINER_SERVICE"; do
@@ -365,7 +463,12 @@ freeze_residents_for_idle_snapshot(){
     process_id="$(resident_worker_pid "$service" 2>/dev/null || true)"
     start_ticks="$(process_start_ticks "$process_id" 2>/dev/null || true)"
     if [[ ! "$process_id" =~ ^[1-9][0-9]*$ || ! "$start_ticks" =~ ^[1-9][0-9]*$ ]]; then
-      resume_prestop_frozen preserve >/dev/null 2>&1 || true
+      if ! resume_prestop_frozen preserve >/dev/null 2>&1; then
+        # Even when the failed preserve attempt has emptied the identity
+        # arrays, cleanup must stop both units and prove quiescence before it
+        # recreates the pre-window resident state.
+        services_stop_attempted=1
+      fi
       return 1
     fi
     prestop_frozen_services+=("$service")
@@ -379,7 +482,9 @@ freeze_residents_for_idle_snapshot(){
       restored_container_start_ticks="$start_ticks"
     fi
     if ! exact_process_signal "$process_id" "$start_ticks" STOP; then
-      resume_prestop_frozen preserve >/dev/null 2>&1 || true
+      if ! resume_prestop_frozen preserve >/dev/null 2>&1; then
+        services_stop_attempted=1
+      fi
       return 1
     fi
   done
@@ -404,7 +509,9 @@ freeze_residents_for_idle_snapshot(){
     fi
     sleep 0.1
   done
-  resume_prestop_frozen preserve >/dev/null 2>&1 || true
+  if ! resume_prestop_frozen preserve >/dev/null 2>&1; then
+    services_stop_attempted=1
+  fi
   return 1
 }
 
@@ -414,6 +521,8 @@ stop_frozen_residents(){
   # before it resumes any process. The blocking stop then completes shutdown.
   resume_prestop_frozen stopping || rc=1
   bounded_systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE" >/dev/null 2>&1 || rc=1
+  confirm_prestop_identities_exited || rc=1
+  residents_are_quiescent || rc=1
   return "$rc"
 }
 
@@ -516,15 +625,21 @@ resident_status_ready(){
     peer_service="$CONTAINER_SERVICE"
   elif [[ "$service" == "$CONTAINER_SERVICE" ]]; then
     expected_resident=container
-    expected_process_id="$(awk '$1 == "NSpid:" {print $NF}' "/proc/$worker_pid/status" 2>/dev/null || true)"
     peer_service="$SOURCE_SERVICE"
   else
     return 1
   fi
-  expected_commit="$(resident_expected_commit "$service")"
-  [[ "$expected_process_id" =~ ^[1-9][0-9]*$ ]] || return 1
   expected_process_start_ticks="$(process_start_ticks "$worker_pid" 2>/dev/null || true)"
   [[ "$expected_process_start_ticks" =~ ^[1-9][0-9]*$ ]] || return 1
+  # Bind the receipt to one exact host process identity before inspecting any
+  # status supplied by that resident. A recycled numeric PID cannot satisfy
+  # CHECK with the captured boot-relative start ticks.
+  exact_process_signal "$worker_pid" "$expected_process_start_ticks" CHECK || return 1
+  if [[ "$service" == "$CONTAINER_SERVICE" ]]; then
+    expected_process_id="$(awk '$1 == "NSpid:" {print $NF}' "/proc/$worker_pid/status" 2>/dev/null || true)"
+  fi
+  expected_commit="$(resident_expected_commit "$service")"
+  [[ "$expected_process_id" =~ ^[1-9][0-9]*$ ]] || return 1
   [[ "$expected_commit" =~ ^[0-9a-f]{40}$ ]] || return 1
   [[ "$legacy_peer_quiesced" =~ ^[01]$ ]] || return 1
   if [[ "$(service_state "$peer_service")" == active ]]; then
@@ -611,9 +726,15 @@ PY
   then
     return 1
   fi
+  # Revalidate the same captured PID/start-ticks pair after parsing the
+  # receipt. restore_service records these exact ticks and performs its final
+  # readiness check against them; it never resamples an unbound replacement.
+  exact_process_signal "$worker_pid" "$expected_process_start_ticks" CHECK || return 1
+  [[ "$(resident_worker_pid "$service" 2>/dev/null || true)" == "$worker_pid" ]] || return 1
   if [[ "$legacy_peer_quiesced" == 1 ]]; then
     isolated_peer_still_quiesced "$peer_service" || return 1
   fi
+  printf '%s\n' "$expected_process_start_ticks"
 }
 
 record_restore_failure(){
@@ -684,13 +805,8 @@ restore_service(){
           stable=1
         fi
         if (( stable >= RESTORE_STABLE_SECONDS )) \
-          && resident_status_ready "$service" "$started_unix" "$worker_pid" "$legacy_peer_quiesced"; then
-          verified_start_ticks="$(process_start_ticks "$worker_pid" 2>/dev/null || true)"
-          if [[ ! "$verified_start_ticks" =~ ^[1-9][0-9]*$ ]]; then
-            resume_isolated_peer >/dev/null 2>&1 || true
-            service_failure_snapshot "$service"
-            return 1
-          fi
+          && verified_start_ticks="$(resident_status_ready "$service" "$started_unix" "$worker_pid" "$legacy_peer_quiesced")"; then
+          [[ "$verified_start_ticks" =~ ^[1-9][0-9]*$ ]] || continue
           if ! resume_isolated_peer; then
             service_failure_snapshot "$service"
             return 1
@@ -728,15 +844,80 @@ restore_service(){
 }
 
 restore_source_checkout(){
+  local attempt candidate_remove_failed=0 quarantine_prefix restored_device_inode
   [[ "$BUILD_IMAGE" == 1 ]] || return 0
   if [[ "$source_candidate_path_owned" == 1 && ( -e "$SOURCE_DIR" || -L "$SOURCE_DIR" ) ]]; then
-    rm -rf --one-file-system -- "$SOURCE_DIR" || return 1
+    if ! bounded_filesystem rm -rf --one-file-system -- "$SOURCE_DIR"; then
+      candidate_remove_failed=1
+      record_restore_failure source_candidate_remove
+    fi
+    if [[ -e "$SOURCE_DIR" || -L "$SOURCE_DIR" ]]; then
+      # A timed-out recursive delete must not strand the pre-existing service.
+      # Move only the exact candidate directory aside, then restore the atomic
+      # backup below.  The quarantined partial tree is never used as source.
+      [[ -d "$SOURCE_DIR" && ! -L "$SOURCE_DIR" ]] || return 1
+      quarantine_prefix="${SOURCE_DIR}.precanary-quarantine.${EXPECTED_SHA:0:12}.$$."
+      for attempt in {1..8}; do
+        source_quarantine_dir="${quarantine_prefix}${RANDOM}.${attempt}"
+        [[ "${source_quarantine_dir%/*}" == "$SOURCE_PARENT" ]] || return 1
+        case "$source_quarantine_dir" in
+          "$quarantine_prefix"*) ;;
+          *) return 1 ;;
+        esac
+        if [[ ! -e "$source_quarantine_dir" && ! -L "$source_quarantine_dir" ]]; then
+          break
+        fi
+        source_quarantine_dir=""
+      done
+      [[ -n "$source_quarantine_dir" && ! -e "$source_quarantine_dir" && ! -L "$source_quarantine_dir" ]] \
+        || return 1
+      if ! bounded_filesystem mv -T -- "$SOURCE_DIR" "$source_quarantine_dir"; then
+        # timeout(1) can report failure after rename(2) completed. Accept only
+        # the unambiguous postcondition; every other state remains fail-closed.
+        [[ ! -e "$SOURCE_DIR" && ! -L "$SOURCE_DIR" \
+          && -d "$source_quarantine_dir" && ! -L "$source_quarantine_dir" ]] \
+          || return 1
+      fi
+      [[ ! -e "$SOURCE_DIR" && ! -L "$SOURCE_DIR" \
+        && -d "$source_quarantine_dir" && ! -L "$source_quarantine_dir" ]] \
+        || return 1
+      source_candidate_path_owned=0
+      if [[ "$candidate_remove_failed" == 0 ]]; then
+        record_restore_failure source_candidate_remove_incomplete
+      fi
+      record_restore_failure source_candidate_quarantined
+      # Do not echo the configurable source path into external evidence.
+      printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE component=source_candidate result=DEGRADED quarantine=created\n' >&2
+    elif [[ "$candidate_remove_failed" == 1 ]]; then
+      # Even if timeout raced with successful deletion, the run cannot
+      # authorize promotion; restoration may nevertheless safely continue.
+      printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE component=source_candidate result=DEGRADED quarantine=none\n' >&2
+    fi
   fi
   if [[ "$source_had_original" == 1 ]]; then
     [[ -n "$source_backup_dir" && -e "$source_backup_dir" && ! -L "$source_backup_dir" ]] \
       || return 1
-    mv -- "$source_backup_dir" "$SOURCE_DIR" || return 1
+    [[ "${source_backup_dir%/*}" == "$SOURCE_PARENT" ]] || return 1
+    case "$source_backup_dir" in
+      "${SOURCE_DIR}.precanary-backup.${EXPECTED_SHA:0:12}."*) ;;
+      *) return 1 ;;
+    esac
+    [[ -n "$source_backup_device_inode" \
+      && "$(stat -Lc '%d:%i' -- "$source_backup_dir")" == "$source_backup_device_inode" ]] \
+      || return 1
+    [[ ! -e "$SOURCE_DIR" && ! -L "$SOURCE_DIR" ]] || return 1
+    if ! bounded_filesystem mv -T -- "$source_backup_dir" "$SOURCE_DIR"; then
+      [[ ! -e "$source_backup_dir" && ! -L "$source_backup_dir" \
+        && -d "$SOURCE_DIR" && ! -L "$SOURCE_DIR" ]] \
+        || return 1
+    fi
+    [[ ! -e "$source_backup_dir" && ! -L "$source_backup_dir" \
+      && -d "$SOURCE_DIR" && ! -L "$SOURCE_DIR" ]] \
+      || return 1
+    restored_device_inode="$(stat -Lc '%d:%i' -- "$SOURCE_DIR")"
+    [[ "$restored_device_inode" == "$source_backup_device_inode" ]] || return 1
     source_backup_dir=""
+    source_backup_device_inode=""
   fi
   printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE component=source_checkout result=PASS\n'
   return 0
@@ -752,7 +933,17 @@ cleanup(){
     if [[ "$services_stop_attempted" == 1 ]]; then
       resume_prestop_frozen stopping || record_restore_failure prestop_resume
     else
-      resume_prestop_frozen preserve || record_restore_failure prestop_resume
+      if ! resume_prestop_frozen preserve; then
+        record_restore_failure prestop_resume
+        services_stop_attempted=1
+      fi
+      if [[ "${#prestop_frozen_pids[@]}" -gt 0 ]]; then
+        # A worker that cannot be resumed exactly must not remain SIGSTOPed.
+        # Use bounded stop/restart restoration while masks and the workload
+        # lock are still held.
+        services_stop_attempted=1
+        record_restore_failure prestop_preserve_requires_restart
+      fi
     fi
   fi
   if [[ "$window_started" == 1 ]]; then
@@ -796,14 +987,9 @@ cleanup(){
     # Keep the exclusive workload fence while claim paths are quiet, candidate
     # files are removed, and the exact pre-existing source tree is restored.
     if [[ "$services_stop_attempted" == 1 ]]; then
-      bounded_systemctl stop "$SOURCE_SERVICE" "$CONTAINER_SERVICE" >/dev/null 2>&1 \
-        || record_restore_failure service_stop
-      if [[ "${#prestop_frozen_pids[@]}" -gt 0 ]]; then
-        resume_prestop_frozen stopping \
-          || record_restore_failure prestop_stop_completion
-      fi
-      if [[ "${#prestop_frozen_pids[@]}" -gt 0 ]]; then
-        record_restore_failure prestop_identity_still_frozen
+      stop_frozen_residents || record_restore_failure service_stop
+      if [[ "${#prestop_frozen_pids[@]}" -gt 0 ]] || ! residents_are_quiescent; then
+        record_restore_failure prestop_or_resident_not_quiescent
         printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=%s source_service=%s container_service=%s\n' \
           "$(IFS=,; echo "${restore_failures[*]}")" \
           "$(service_state "$SOURCE_SERVICE")" "$(service_state "$CONTAINER_SERVICE")" >&2
@@ -818,7 +1004,14 @@ cleanup(){
       else
         record_restore_failure candidate_env_scope
       fi
-      restore_source_checkout || record_restore_failure source_checkout
+      if ! restore_source_checkout; then
+        record_restore_failure source_checkout
+        printf 'UNIVERSAL_VIDEO_PRECANARY_RESTORE_FAILED codes=%s source_service=%s container_service=%s\n' \
+          "$(IFS=,; echo "${restore_failures[*]}")" \
+          "$(service_state "$SOURCE_SERVICE")" "$(service_state "$CONTAINER_SERVICE")" >&2
+        trap - INT TERM
+        exit 1
+      fi
     fi
     for service in "${added_runtime_masks[@]}"; do
       bounded_systemctl unmask --runtime "$service" >/dev/null 2>&1 \
@@ -889,20 +1082,7 @@ assert_known_state(){
 }
 
 assert_quiescent(){
-  local source_state container_state
-  source_state="$(service_state "$SOURCE_SERVICE")"
-  container_state="$(service_state "$CONTAINER_SERVICE")"
-  case "$source_state" in inactive|failed) ;; *) die "$SOURCE_SERVICE is not quiescent: ${source_state:-unknown}" ;; esac
-  case "$container_state" in inactive|failed) ;; *) die "$CONTAINER_SERVICE is not quiescent: ${container_state:-unknown}" ;; esac
-  if pgrep -fa '[u]niversal_video[.]spool_worker' >/dev/null; then
-    die 'a Universal Video worker process is active'
-  fi
-  if bounded_docker ps --filter 'name=^/universal-video-container$' --format '{{.ID}}' | grep -q .; then
-    die 'the Universal Video container is active'
-  fi
-  if find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit | grep -q .; then
-    die 'a video job is active'
-  fi
+  residents_are_quiescent || die 'Universal Video residents are not authoritatively quiescent'
 }
 
 verify_prior_recovery_evidence(){
@@ -1062,10 +1242,21 @@ if [[ "$BUILD_IMAGE" == 1 ]]; then
   if [[ -e "$SOURCE_DIR" || -L "$SOURCE_DIR" ]]; then
     [[ -d "$SOURCE_DIR" && ! -L "$SOURCE_DIR" ]] || die 'existing source checkout is unsafe'
     source_backup_dir="${SOURCE_DIR}.precanary-backup.${EXPECTED_SHA:0:12}.$$"
+    [[ "${source_backup_dir%/*}" == "$SOURCE_PARENT" ]] \
+      || die 'source backup destination escaped the canonical parent'
+    case "$source_backup_dir" in
+      "${SOURCE_DIR}.precanary-backup.${EXPECTED_SHA:0:12}."*) ;;
+      *) die 'source backup destination is outside the exact source scope' ;;
+    esac
     [[ ! -e "$source_backup_dir" && ! -L "$source_backup_dir" ]] \
       || die 'source backup destination already exists'
+    source_backup_device_inode="$(stat -Lc '%d:%i' -- "$SOURCE_DIR")"
+    [[ "$source_backup_device_inode" =~ ^[0-9]+:[0-9]+$ ]] \
+      || die 'source checkout identity is unavailable'
     mv -- "$SOURCE_DIR" "$source_backup_dir"
     source_had_original=1
+    [[ "$(stat -Lc '%d:%i' -- "$source_backup_dir")" == "$source_backup_device_inode" ]] \
+      || die 'source backup identity changed during preservation'
     printf 'UNIVERSAL_VIDEO_SOURCE_CHECKOUT mode=ephemeral prior_tree=preserved restore_on_exit=true\n'
   else
     printf 'UNIVERSAL_VIDEO_SOURCE_CHECKOUT mode=ephemeral prior_tree=absent restore_on_exit=true\n'

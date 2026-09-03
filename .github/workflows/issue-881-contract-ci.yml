@@ -21,7 +21,11 @@ on:
       - 'tests/test_universal_video_terminal_evidence_v2.py'
       - 'tests/test_issue_881_queue_dsn.py'
       - 'ops/oracle_universal_video_precanary_attest.sh'
+      - 'ops/validate_universal_video_promotion_evidence.py'
       - '.github/workflows/issue-881-authoritative-external-evidence.yml'
+      - '.github/workflows/oracle-universal-video-container-promote.yml'
+      - 'tests/test_universal_video_container_promotion_contract.py'
+      - 'tests/test_universal_video_promotion_evidence_validator.py'
       - 'deploy/oracle-universal-video/Dockerfile'
   workflow_dispatch:
 
@@ -52,8 +56,11 @@ jobs:
             tests/test_universal_video_issue_881_readiness.py \
             tests/test_universal_video_neon_queue.py \
             tests/test_universal_video_terminal_evidence_v2.py \
-            tests/test_issue_881_queue_dsn.py
-          python -m compileall -q universal_video ops/validate_video_queue_dsn.py
+            tests/test_issue_881_queue_dsn.py \
+            tests/test_universal_video_container_promotion_contract.py \
+            tests/test_universal_video_promotion_evidence_validator.py
+          python -m compileall -q universal_video ops/validate_video_queue_dsn.py \
+            ops/validate_universal_video_promotion_evidence.py
 
   database-contract:
     runs-on: ubuntu-latest

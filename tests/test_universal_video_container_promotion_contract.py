@@ -9,8 +9,12 @@ OPERATOR_INSTALL = (ROOT / "ops/install_universal_video_operator.sh").read_text(
 
 
 def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
-    assert "assert x.get('conclusion') == 'success'" in WORKFLOW
-    assert "assert x.get('head_sha') == os.environ['EXPECTED_COMMIT']" in WORKFLOW
+    assert "validate_universal_video_promotion_evidence.py select-artifact" in WORKFLOW
+    assert "validate_universal_video_promotion_evidence.py verify-archive" in WORKFLOW
+    assert "actions/runs/$evidence_run_id/artifacts?per_page=100" in WORKFLOW
+    assert "actions/artifacts/$artifact_id/zip" in WORKFLOW
+    assert '--expected-artifact-digest "$artifact_digest"' in WORKFLOW
+    assert '--expected-image-digest "$image_digest"' in WORKFLOW
     assert "group: oracle-instance-workload-mutation" in WORKFLOW
     assert "ORACLE_INSTANCE_RUNNING_PASS" in WORKFLOW
     assert "compute instance action --instance-id \"$INSTANCE_ID\" --action START" in WORKFLOW
@@ -217,6 +221,12 @@ def test_operator_sync_is_restored_by_promotion_rollback() -> None:
 
 
 def test_retired_container_evidence_cannot_run_on_operator_changes() -> None:
+    assert EVIDENCE_WORKFLOW.startswith(
+        "name: Retired Oracle Universal Video Container Evidence Contract\n"
+    )
+    assert "name: Oracle Universal Video Container Evidence\n" not in EVIDENCE_WORKFLOW
+    assert "  retired-evidence-contract:" in EVIDENCE_WORKFLOW
+    assert "name: Retired legacy evidence entrypoint contract" in EVIDENCE_WORKFLOW
     assert "pull_request:" in EVIDENCE_WORKFLOW
     assert "workflow_dispatch:" not in EVIDENCE_WORKFLOW
     assert "push:" not in EVIDENCE_WORKFLOW
