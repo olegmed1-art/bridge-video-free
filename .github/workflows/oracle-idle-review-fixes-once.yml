@@ -19,90 +19,9 @@ jobs:
         with:
           ref: autopilot/oracle-idle-stop-guard-627-v2
           fetch-depth: 0
-      - name: Apply exact review fixes
-        shell: bash
-        run: |
-          set -Eeuo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          def replace_once(path, old, new):
-              p = Path(path)
-              text = p.read_text()
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'{path}: expected one replacement, got {count}')
-              p.write_text(text.replace(old, new, 1))
-
-          # P1: serialize the whole guard installation transaction with STOP.
-          replace_once(
-              '.github/workflows/oracle-idle-guard-exact-install.yml',
-              'concurrency:\n  group: oracle-idle-guard-exact-install-627\n  cancel-in-progress: false',
-              'concurrency:\n  # Guard promotion is a lifecycle mutation and must serialize with STOP.\n  group: oracle-instance-workload-mutation\n  cancel-in-progress: false',
-          )
-
-          # P1: both primary-source gates belong after all three uploads and
-          # immediately before the privileged installer invocation.
-          p = Path('.github/workflows/oracle-idle-guard-exact-install.yml')
-          text = p.read_text()
-          early = '''          current="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/1061" --jq '.head.sha')"\n          [[ "$current" == "$GITHUB_SHA" ]] || {\n            echo "INSTALL_BOUNDARY_HEAD_MOVED expected=$GITHUB_SHA actual=$current" >&2\n            exit 70\n          }\n          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"\n          command="/oracle-idle-guard-install-reviewed $GITHUB_SHA"\n          authorized="$(\n            gh api --method GET --paginate --slurp \\\n              "repos/$GITHUB_REPOSITORY/issues/1061/comments?per_page=100" \\\n            | jq --arg command "$command" \\\n              '[.[][] | select(.user.login == "olegmed1-art" and .body == $command)] | length'\n          )"\n          [[ "$authorized" =~ ^[1-9][0-9]*$ ]] || {\n            echo "INSTALL_BOUNDARY_AUTHORIZATION_MISSING exact_sha=$GITHUB_SHA" >&2\n            exit 71\n          }\n          echo "INSTALL_BOUNDARY_HEAD_RECHECK=PASS sha=$GITHUB_SHA"\n          echo "INSTALL_BOUNDARY_AUTHORIZATION=PASS sha=$GITHUB_SHA"\n'''
-          if text.count(early) != 1:
-              raise SystemExit('install workflow: early boundary block not unique')
-          text = text.replace(early, '', 1)
-          marker = '''          scp -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \\\n            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \\\n            ops/install_oracle_idle_state_ocarun.sh "$ORACLE_USER@$ORACLE_HOST:/tmp/install_oracle_idle_state_ocarun.sh"\n'''
-          if text.count(marker) != 1:
-              raise SystemExit('install workflow: third SCP marker not unique')
-          text = text.replace(marker, marker + early, 1)
-          p.write_text(text)
-
-          # P1: execute only root-owned, digest-verified copies of code supplied
-          # through /tmp. This also removes the analogous guard-source TOCTOU.
-          p = Path('ops/install_oracle_idle_state_ocarun.sh')
-          text = p.read_text()
-          old = '''install -d -o root -g root -m 0700 "$BACKUP_DIR"\nif [[ -e "$SUDOERS" || -L "$SUDOERS" ]]; then\n'''
-          new = '''install -d -o root -g root -m 0700 "$BACKUP_DIR"\ntrusted_source="$(mktemp --tmpdir="$BACKUP_DIR" .oracle-idle-state.source.XXXXXX)"\ntrusted_authorizer="$(mktemp --tmpdir="$BACKUP_DIR" .oracle-idle-authorizer.source.XXXXXX)"\ninstall -o root -g root -m 0700 "$SOURCE_FILE" "$trusted_source"\ninstall -o root -g root -m 0700 "$AUTHORIZER_FILE" "$trusted_authorizer"\n[[ "$(sha256sum "$trusted_source" | awk '{print $1}')" == "$SOURCE_SHA256" ]] || fail 'trusted source digest mismatch'\n[[ "$(sha256sum "$trusted_authorizer" | awk '{print $1}')" == "$AUTHORIZER_SHA256" ]] || fail 'trusted authorizer digest mismatch'\nbash -n "$trusted_source"\npython3 - "$trusted_authorizer" <<'PYAUTH'\nimport ast, pathlib, sys\nast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"), filename=sys.argv[1])\nPYAUTH\n[[ "$(stat -c '%U:%G:%a' "$trusted_source")" == 'root:root:700' ]] || fail 'trusted source ownership/mode invalid'\n[[ "$(stat -c '%U:%G:%a' "$trusted_authorizer")" == 'root:root:700' ]] || fail 'trusted authorizer ownership/mode invalid'\nif [[ -e "$SUDOERS" || -L "$SUDOERS" ]]; then\n'''
-          if text.count(old) != 1:
-              raise SystemExit('installer: backup-dir marker not unique')
-          text = text.replace(old, new, 1)
-          text = text.replace('    "$proof" "$authorizer_stderr"\n', '    "$proof" "$authorizer_stderr" "$trusted_source" "$trusted_authorizer"\n', 1)
-          text = text.replace('install -o root -g root -m 0755 "$SOURCE_FILE" "$tmp_target"', 'install -o root -g root -m 0755 "$trusted_source" "$tmp_target"', 1)
-          text = text.replace('authorization="$(python3 "$AUTHORIZER_FILE" --proof "$proof"', 'authorization="$(python3 "$trusted_authorizer" --proof "$proof"', 1)
-          text = text.replace('authorizer_sha_readback="$(sha256sum "$AUTHORIZER_FILE" | awk \'{print $1}\')"', 'authorizer_sha_readback="$(sha256sum "$trusted_authorizer" | awk \'{print $1}\')"', 1)
-          p.write_text(text)
-
-          # P2: preserve a valid BUSY proof in operational outputs while STOP
-          # remains forbidden.
-          p = Path('.github/workflows/oracle-instance-power.yml')
-          text = p.read_text()
-          old = '''          expected_authorization=$'ORACLE_STOP_AUTHORIZED=YES\\nORACLE_STOP_AUTHORIZATION_REASON=fresh_exact_idle'\n          if [[ $authorization_rc -eq 0 && "$authorization" == "$expected_authorization" ]]; then\n            stop_authorized=YES\n            idle_state=IDLE\n            idle_reason=fresh_exact_idle\n          else\n            stop_authorized=NO\n            idle_state=UNKNOWN\n            idle_reason=exact_idle_authorization_absent\n          fi\n'''
-          new = '''          expected_authorization=$'ORACLE_STOP_AUTHORIZED=YES\\nORACLE_STOP_AUTHORIZATION_REASON=fresh_exact_idle'\n          busy_refusal=$'ORACLE_STOP_AUTHORIZED=NO\\nORACLE_STOP_AUTHORIZATION_REASON=state_busy_forbids_stop'\n          if [[ $authorization_rc -eq 0 && "$authorization" == "$expected_authorization" ]]; then\n            stop_authorized=YES\n            idle_state=IDLE\n            idle_reason=fresh_exact_idle\n          elif [[ $authorization_rc -ne 0 && "$authorization" == "$busy_refusal" ]]; then\n            stop_authorized=NO\n            idle_state=BUSY\n            idle_reason="$(sed -n 's/^ORACLE_IDLE_REASON=//p' "$proof")"\n            [[ -n "$idle_reason" ]] || idle_reason=confirmed_busy\n          else\n            stop_authorized=NO\n            idle_state=UNKNOWN\n            idle_reason=exact_idle_authorization_absent\n          fi\n'''
-          if text.count(old) != 1:
-              raise SystemExit('instance power: authorization mapping not unique')
-          text = text.replace(old, new, 1)
-          p.write_text(text)
-
-          # P2: DDS3 read-only status never enters the lifecycle mutation fence.
-          p = Path('.github/workflows/oracle-dds3-pilot10k-operator.yml')
-          text = p.read_text()
-          old_line = '''  group: ${{ github.event_name == 'issue_comment' && github.event.comment.user.login == github.repository_owner && contains(fromJSON('["/dds3-pilot10k start","/dds3-pilot10k status","/dds3-main30k deploy","/dds3-main30k stage","/dds3-main30k start","/dds3-main30k reconcile"]'), github.event.comment.body) && 'oracle-instance-workload-mutation' || format('oracle-dds3-pilot10k-operator-noop-{0}', github.run_id) }}'''
-          new_line = '''  group: ${{ github.event_name == 'issue_comment' && github.event.comment.user.login == github.repository_owner && github.event.comment.body == '/dds3-pilot10k status' && format('oracle-dds3-pilot10k-status-{0}', github.run_id) || (github.event_name == 'issue_comment' && github.event.comment.user.login == github.repository_owner && contains(fromJSON('["/dds3-pilot10k start","/dds3-main30k deploy","/dds3-main30k stage","/dds3-main30k start","/dds3-main30k reconcile"]'), github.event.comment.body)) && 'oracle-instance-workload-mutation' || format('oracle-dds3-pilot10k-operator-noop-{0}', github.run_id) }}'''
-          if text.count(old_line) != 1:
-              raise SystemExit('DDS3 operator: concurrency expression not unique')
-          text = text.replace(old_line, new_line, 1)
-          p.write_text(text)
-
-          # Structural regressions for all review findings.
-          p = Path('tests/test_oracle_idle_workload_fence.py')
-          text = p.read_text()
-          old_mass = '''MASS_OPERATOR_GROUP = (\n    "${{ github.event_name == 'issue_comment' && "\n    "github.event.comment.user.login == github.repository_owner && "\n    "contains(fromJSON('[\\\"/dds3-pilot10k start\\\",\\\"/dds3-pilot10k status\\\","\n    "\\\"/dds3-main30k deploy\\\",\\\"/dds3-main30k stage\\\","\n    "\\\"/dds3-main30k start\\\",\\\"/dds3-main30k reconcile\\\"]'), "\n    "github.event.comment.body) && 'oracle-instance-workload-mutation' || "\n    "format('oracle-dds3-pilot10k-operator-noop-{0}', github.run_id) }}"\n)\n'''
-          new_mass = '''MASS_OPERATOR_GROUP = (\n    "${{ github.event_name == 'issue_comment' && "\n    "github.event.comment.user.login == github.repository_owner && "\n    "github.event.comment.body == '/dds3-pilot10k status' && "\n    "format('oracle-dds3-pilot10k-status-{0}', github.run_id) || "\n    "(github.event_name == 'issue_comment' && "\n    "github.event.comment.user.login == github.repository_owner && "\n    "contains(fromJSON('[\\\"/dds3-pilot10k start\\\",\\\"/dds3-main30k deploy\\\","\n    "\\\"/dds3-main30k stage\\\",\\\"/dds3-main30k start\\\","\n    "\\\"/dds3-main30k reconcile\\\"]'), github.event.comment.body)) && "\n    "'oracle-instance-workload-mutation' || "\n    "format('oracle-dds3-pilot10k-operator-noop-{0}', github.run_id) }}"\n)\n'''
-          if text.count(old_mass) != 1:
-              raise SystemExit('fence test: MASS_OPERATOR_GROUP not unique')
-          text = text.replace(old_mass, new_mass, 1)
-          text += '''\n\ndef test_guard_install_serializes_with_stop_and_gates_after_uploads() -> None:\n    text = _workflow_text("oracle-idle-guard-exact-install.yml")\n    _, concurrency = _workflow_contract("oracle-idle-guard-exact-install.yml")\n    assert concurrency == {"group": SHARED_FENCE, "cancel-in-progress": False}\n    third_upload = text.index("ops/install_oracle_idle_state_ocarun.sh \\")\n    late_head = text.index("INSTALL_BOUNDARY_HEAD_MOVED", third_upload)\n    late_auth = text.index("INSTALL_BOUNDARY_AUTHORIZATION_MISSING", late_head)\n    remote_install = text.index("sudo -n env SOURCE_FILE=", late_auth)\n    assert third_upload < late_head < late_auth < remote_install\n\n\ndef test_installer_executes_verified_root_owned_authorizer_copy() -> None:\n    text = (ROOT / "ops" / "install_oracle_idle_state_ocarun.sh").read_text(encoding="utf-8")\n    copy = text.index("trusted_authorizer=\")\n    verify = text.index("trusted authorizer digest mismatch", copy)\n    mode = text.index("trusted authorizer ownership/mode invalid", verify)\n    execute = text.index('python3 "$trusted_authorizer" --proof', mode)\n    assert copy < verify < mode < execute\n    assert 'python3 "$AUTHORIZER_FILE" --proof' not in text\n\n\ndef test_instance_power_preserves_confirmed_busy_state() -> None:\n    text = _workflow_text("oracle-instance-power.yml")\n    busy = text.index("state_busy_forbids_stop")\n    mapped = text.index("idle_state=BUSY", busy)\n    no = text.index("stop_authorized=NO", busy)\n    assert busy < no < mapped\n'''
-          p.write_text(text)
-          PY
-      - name: Validate patch
+      - name: Apply exact review patch
+        run: python3 tools/patch_oracle_idle_review_fixes.py
+      - name: Validate safety surface
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -112,13 +31,13 @@ jobs:
           python3 -m pip install -q pytest pyyaml
           python3 -m pytest -q tests/test_oracle_idle_stop_guard.py tests/test_oracle_idle_unknown_precedence.py tests/test_oracle_idle_workload_fence.py
           git diff --check
-      - name: Commit exact fixes and remove helper
+      - name: Commit fixes and remove helpers
         shell: bash
         run: |
           set -Eeuo pipefail
-          rm -f .github/workflows/oracle-idle-review-fixes-once.yml
+          rm -f .github/workflows/oracle-idle-review-fixes-once.yml tools/patch_oracle_idle_review_fixes.py
           git config user.name 'olegmed1-art'
           git config user.email '315099490+olegmed1-art@users.noreply.github.com'
-          git add .github/workflows/oracle-idle-guard-exact-install.yml .github/workflows/oracle-instance-power.yml .github/workflows/oracle-dds3-pilot10k-operator.yml ops/install_oracle_idle_state_ocarun.sh tests/test_oracle_idle_workload_fence.py .github/workflows/oracle-idle-review-fixes-once.yml
+          git add -A
           git commit -m 'fix(oracle): close final idle guard install review gaps'
           git push origin HEAD:autopilot/oracle-idle-stop-guard-627-v2
