@@ -128,6 +128,7 @@ def _synthetic_terminal_v2() -> dict[str, Any]:
             "parents": [claim["output_folder_id"]],
             "modifiedTime": "2026-09-02T00:00:00Z",
             "version": "1",
+            "trashed": False,
         },
         ai_done_id: {
             "id": ai_done_id,
@@ -137,6 +138,7 @@ def _synthetic_terminal_v2() -> dict[str, Any]:
             "parents": [claim["output_folder_id"]],
             "modifiedTime": "2026-09-02T00:00:01Z",
             "version": "1",
+            "trashed": False,
         },
     }
     payloads = {master_id: master_bytes, ai_done_id: ai_bytes}
@@ -192,7 +194,10 @@ def attest_synthetic_contract() -> dict[str, Any]:
     result = _synthetic_terminal_v2()
     receipt = {
         "status": "PASS",
-        "gate": "SYNTHETIC_RESULT_CONTRACT_V2",
+        # Keep the externally consumed gate identifier stable. The implementation
+        # above is terminal-v2 and the receipt below proves both required artifacts.
+        "gate": "SYNTHETIC_RESULT_CONTRACT",
+        "terminal_contract_version": "v2",
         "drive_readback_verified": result["terminal_receipt"]["drive_readback_verified"],
         "source_identity_verified": result["terminal_receipt"]["source_identity_verified"],
         "artifact_count": result["terminal_receipt"]["artifact_count"],
