@@ -84,6 +84,16 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
             'stable_key': 'world:link-1', 'status': 'REVIEW_REQUIRED',
             'world_object_id': 'world-rule-1', 'evidence_refs': ['segment-9'],
         }]
+        master['explanation_observations'] = [{
+            'stable_key': 'why:rule-1', 'rule_stable_key': 'rule-1',
+            'status': 'REVIEW_REQUIRED',
+            'why_chain': ['У партнёра ограничена сила.', 'Поэтому гейм не форсируется.'],
+            'rejected_alternatives': [{'action': '3NT', 'reason': 'Недостаточно силы.'}],
+            'prerequisites': ['оценка силы'],
+            'example': {'auction': ['1NT', '2NT']},
+            'counterexample': {'auction': ['1NT', '3NT']},
+            'evidence_refs': ['segment-10'],
+        }]
         quality = build_quality_layer(master, {'lesson_id': 'lesson-test', 'lesson_number': 5})
         extraction = quality['extended_knowledge_extraction']
         self.assertEqual(extraction['status'], 'STAGING_ONLY')
@@ -92,6 +102,7 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
         self.assertTrue({
             'SCHOOL_TERMINOLOGY', 'SYSTEM_EVOLUTION_OBSERVATION',
             'WORLD_COMPARISON_LINK', 'ANALYSIS_QUALITY_EVIDENCE',
+            'EXPLANATION_CANDIDATE',
         } <= kinds)
         self.assertTrue(all(row['promotion_allowed'] is False for row in extraction['candidate_records']))
 
