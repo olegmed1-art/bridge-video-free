@@ -9,6 +9,7 @@ readonly BASE_DIR='/opt/bridge-school/universal-video'
 readonly OLD_SERVICE='universal-video.service'
 readonly NEW_SERVICE='universal-video-container.service'
 readonly NEW_SERVICE_UNIT='/etc/systemd/system/universal-video-container.service'
+readonly NEW_SERVICE_ENV="$BASE_DIR/universal-video-container.env"
 readonly STATUS='/run/bridge-school/universal-video-status.json'
 readonly WORKLOAD_LOCK="$BASE_DIR/spool/.workload.lock"
 readonly OPERATOR_TARGET='/usr/local/sbin/universal-video'
@@ -20,6 +21,8 @@ workload_lock_held=0
 operator_snapshot_ready=0
 operator_existed=0
 operator_sudoers_existed=0
+new_service_unit_existed=0
+new_service_env_existed=0
 operator_backup_root=''
 old_enabled_before=''
 old_active_before=''
@@ -73,6 +76,21 @@ service_matches_captured_state(){
   service_state_is_known "$observed_enabled" "$observed_active" || return 1
   [[ "$observed_enabled" == "$expected_enabled" ]] || return 1
   [[ "$observed_active" == "$expected_active" ]] || return 1
+}
+
+runtime_files_match_snapshot(){
+  if (( new_service_unit_existed == 1 )); then
+    [[ -f "$NEW_SERVICE_UNIT" && ! -L "$NEW_SERVICE_UNIT" ]] || return 1
+    cmp -s "$operator_backup_root/container-unit" "$NEW_SERVICE_UNIT" || return 1
+  else
+    [[ ! -e "$NEW_SERVICE_UNIT" && ! -L "$NEW_SERVICE_UNIT" ]] || return 1
+  fi
+  if (( new_service_env_existed == 1 )); then
+    [[ -f "$NEW_SERVICE_ENV" && ! -L "$NEW_SERVICE_ENV" ]] || return 1
+    cmp -s "$operator_backup_root/container-env" "$NEW_SERVICE_ENV" || return 1
+  else
+    [[ ! -e "$NEW_SERVICE_ENV" && ! -L "$NEW_SERVICE_ENV" ]] || return 1
+  fi
 }
 
 fail(){
@@ -205,6 +223,7 @@ elif fallback:
 rollback(){
   local rc="${1:-$?}"
   local rollback_failed=0
+  local current_new_enabled current_new_active
   trap - ERR
   emit_runtime_code
   if (( switch_started == 1 )); then
@@ -218,14 +237,30 @@ rollback(){
       rollback_failed=1
       release_workload_fence
     else
-    systemctl disable --now "$NEW_SERVICE" >/dev/null 2>&1 || rollback_failed=1
+    current_new_enabled="$(systemctl is-enabled "$NEW_SERVICE" 2>/dev/null || true)"
+    current_new_active="$(systemctl is-active "$NEW_SERVICE" 2>/dev/null || true)"
+    if ! service_state_is_known "$current_new_enabled" "$current_new_active"; then
+      rollback_failed=1
+    elif [[ "$current_new_enabled" != not-found || "$current_new_active" != inactive ]]; then
+      systemctl disable --now "$NEW_SERVICE" >/dev/null 2>&1 || rollback_failed=1
+    fi
     release_workload_fence
-    if [[ "$new_enabled_before" == not-found ]]; then
-      rm -f -- "$NEW_SERVICE_UNIT" || rollback_failed=1
-      systemctl daemon-reload >/dev/null 2>&1 || rollback_failed=1
-    elif [[ "$new_enabled_before" == enabled ]]; then
-      systemctl enable "$NEW_SERVICE" >/dev/null 2>&1 || true
+    if (( new_service_unit_existed == 1 )); then
+      install -o root -g root -m 0644 "$operator_backup_root/container-unit" "$NEW_SERVICE_UNIT" \
+        || rollback_failed=1
     else
+      rm -f -- "$NEW_SERVICE_UNIT" || rollback_failed=1
+    fi
+    if (( new_service_env_existed == 1 )); then
+      install -o root -g root -m 0640 "$operator_backup_root/container-env" "$NEW_SERVICE_ENV" \
+        || rollback_failed=1
+    else
+      rm -f -- "$NEW_SERVICE_ENV" || rollback_failed=1
+    fi
+    systemctl daemon-reload >/dev/null 2>&1 || rollback_failed=1
+    if [[ "$new_enabled_before" == enabled ]]; then
+      systemctl enable "$NEW_SERVICE" >/dev/null 2>&1 || true
+    elif [[ "$new_enabled_before" != not-found ]]; then
       systemctl disable "$NEW_SERVICE" >/dev/null 2>&1 || true
     fi
     if [[ "$new_enabled_before" == not-found ]]; then
@@ -262,6 +297,7 @@ rollback(){
       || rollback_failed=1
     service_matches_captured_state "$OLD_SERVICE" "$old_enabled_before" "$old_active_before" \
       || rollback_failed=1
+    runtime_files_match_snapshot || rollback_failed=1
     fi
     fi
   fi
@@ -317,6 +353,19 @@ if [[ -e "$OPERATOR_SUDOERS" || -L "$OPERATOR_SUDOERS" ]]; then
   operator_sudoers_existed=1
 fi
 operator_snapshot_ready=1
+
+if [[ -e "$NEW_SERVICE_UNIT" || -L "$NEW_SERVICE_UNIT" ]]; then
+  [[ -f "$NEW_SERVICE_UNIT" && ! -L "$NEW_SERVICE_UNIT" ]] \
+    || fail UV_CONTAINER_PROMOTION_CONTAINER_UNIT_UNSAFE
+  install -o root -g root -m 0600 "$NEW_SERVICE_UNIT" "$operator_backup_root/container-unit"
+  new_service_unit_existed=1
+fi
+if [[ -e "$NEW_SERVICE_ENV" || -L "$NEW_SERVICE_ENV" ]]; then
+  [[ -f "$NEW_SERVICE_ENV" && ! -L "$NEW_SERVICE_ENV" ]] \
+    || fail UV_CONTAINER_PROMOTION_CONTAINER_ENV_UNSAFE
+  install -o root -g root -m 0600 "$NEW_SERVICE_ENV" "$operator_backup_root/container-env"
+  new_service_env_existed=1
+fi
 
 CURRENT_STAGE='protected-preflight'
 before_assistant="$(systemctl is-active assistant-lab.service)"

@@ -198,9 +198,15 @@ def test_promotion_disables_legacy_and_rollback_restores_original_state() -> Non
     assert 'service_matches_captured_state "$OLD_SERVICE" "$old_enabled_before" "$old_active_before"' in SCRIPT
     assert '[[ "$observed_enabled" == "$expected_enabled" ]] || return 1' in SCRIPT
     assert '[[ "$observed_active" == "$expected_active" ]] || return 1' in SCRIPT
-    assert 'if [[ "$new_enabled_before" == not-found ]]; then' in SCRIPT
+    assert 'current_new_enabled="$(systemctl is-enabled "$NEW_SERVICE"' in SCRIPT
+    assert '[[ "$current_new_enabled" != not-found || "$current_new_active" != inactive ]]' in SCRIPT
     assert 'rm -f -- "$NEW_SERVICE_UNIT" || rollback_failed=1' in SCRIPT
     assert 'systemctl daemon-reload >/dev/null 2>&1 || rollback_failed=1' in SCRIPT
+    assert 'install -o root -g root -m 0644 "$operator_backup_root/container-unit" "$NEW_SERVICE_UNIT"' in SCRIPT
+    assert 'install -o root -g root -m 0640 "$operator_backup_root/container-env" "$NEW_SERVICE_ENV"' in SCRIPT
+    assert 'runtime_files_match_snapshot || rollback_failed=1' in SCRIPT
+    assert 'cmp -s "$operator_backup_root/container-unit" "$NEW_SERVICE_UNIT"' in SCRIPT
+    assert 'cmp -s "$operator_backup_root/container-env" "$NEW_SERVICE_ENV"' in SCRIPT
     assert "rollback_failed=1" in SCRIPT
     assert "if has_running_job; then\n      rollback_failed=1" in SCRIPT
     assert 'enabled|disabled|static|indirect|masked|masked-runtime|not-found' in SCRIPT
