@@ -270,12 +270,40 @@ WITH active_runtime AS (
 ), open_conflicts AS (
   SELECT COALESCE(jsonb_agg(to_jsonb(c) ORDER BY c.rule_conflict_id::text),'[]'::jsonb) AS rows
   FROM bidding.rule_conflict c WHERE c.school_id=p_school_id AND c.status='open'
+), active_rule_tests AS (
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+    'rule_test',to_jsonb(t),
+    'latest_run',(
+      SELECT to_jsonb(tr) FROM bidding.rule_test_run tr
+       WHERE tr.rule_test_id=t.rule_test_id
+       ORDER BY tr.created_at DESC,tr.rule_test_run_id DESC LIMIT 1
+    )
+  ) ORDER BY t.rule_test_id::text),'[]'::jsonb) AS rows
+  FROM bidding.rule_test t
+  WHERE EXISTS (
+    SELECT 1 FROM bidding.runtime_activation ra
+     WHERE ra.school_id=p_school_id AND ra.rule_id=t.rule_id
+       AND ra.authority_lane='school_canon' AND ra.status='active'
+  )
+), active_rule_sources AS (
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+    'knowledge_version_source',to_jsonb(kvs),'source',to_jsonb(s)
+  ) ORDER BY kvs.knowledge_version_id::text,kvs.source_id::text,kvs.relation_type),'[]'::jsonb) AS rows
+  FROM public.knowledge_version_source kvs
+  JOIN public.source s ON s.source_id=kvs.source_id
+  WHERE EXISTS (
+    SELECT 1 FROM bidding.runtime_activation ra
+    JOIN bidding.rule r ON r.rule_id=ra.rule_id
+     WHERE ra.school_id=p_school_id AND r.knowledge_version_id=kvs.knowledge_version_id
+       AND ra.authority_lane='school_canon' AND ra.status='active'
+  )
 )
 SELECT encode(public.digest(convert_to(jsonb_build_object(
   'school_id',p_school_id,'active_runtime',active_runtime.rows,
-  'active_canon',active_canon.rows,'open_conflicts',open_conflicts.rows
+  'active_canon',active_canon.rows,'open_conflicts',open_conflicts.rows,
+  'active_rule_tests',active_rule_tests.rows,'active_rule_sources',active_rule_sources.rows
 )::text,'UTF8'),'sha256'),'hex')
-FROM active_runtime,active_canon,open_conflicts;
+FROM active_runtime,active_canon,open_conflicts,active_rule_tests,active_rule_sources;
 $$;
 
 CREATE OR REPLACE FUNCTION bidding.validate_video_correction_review_receipt()
@@ -568,8 +596,9 @@ BEGIN
     -- underlying activation/conflict tables while the state digest is checked.
     PERFORM pg_advisory_xact_lock(hashtextextended(v_candidate.school_id::text,0));
     LOCK TABLE public.canon_activation,public.knowledge_item,public.knowledge_version,
+      public.source,public.knowledge_version_source,
       bidding.runtime_activation,bidding.rule,bidding.rule_test,bidding.rule_test_run,
-      bidding.rule_conflict IN SHARE MODE;
+      bidding.rule_conflict,bidding.video_canon_verifier_registry IN SHARE MODE;
     v_canon_snapshot_sha256 := bidding.current_school_canon_snapshot_sha256(v_candidate.school_id);
     IF v_bundle.bundle_payload->>'canon_snapshot_sha256'<>v_canon_snapshot_sha256 THEN
         RAISE EXCEPTION 'VIDEO_CANON_STATE_CHECKS_STALE' USING ERRCODE='23514';
@@ -855,7 +884,10 @@ BEGIN
     END IF;
 
     PERFORM pg_advisory_xact_lock(hashtextextended(v_promotion.school_id::text,0));
-    LOCK TABLE public.canon_activation,bidding.runtime_activation IN SHARE MODE;
+    LOCK TABLE public.canon_activation,public.knowledge_item,public.knowledge_version,
+      public.source,public.knowledge_version_source,
+      bidding.runtime_activation,bidding.rule,bidding.rule_test,bidding.rule_test_run,
+      bidding.rule_conflict IN SHARE MODE;
     SELECT * INTO v_existing FROM bidding.video_canon_ai_restore_receipt
      WHERE video_canon_ai_promotion_receipt_id=p_video_canon_ai_promotion_receipt_id;
     IF FOUND THEN
@@ -923,6 +955,9 @@ BEGIN
                  v_promotion.superseded_runtime_activation_ids
                )) THEN
                 RAISE EXCEPTION 'VIDEO_CANON_RESTORE_RUNTIME_TARGET_MISMATCH' USING ERRCODE='23514';
+            END IF;
+            IF NOT bidding.rule_passes_activation_gates(v_prior_runtime.rule_id) THEN
+                RAISE EXCEPTION 'VIDEO_CANON_RESTORE_VALIDATION_GATES_FAILED' USING ERRCODE='23514';
             END IF;
             UPDATE bidding.runtime_activation SET status='active',valid_to=v_original_valid_to
              WHERE runtime_activation_id=v_prior_runtime.runtime_activation_id;

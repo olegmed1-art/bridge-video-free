@@ -81,10 +81,14 @@ labels or capability roles: every receipt records the database `session_user`,
 and the semantic, bridge and hidden-information I2/I3 checks require three
 different login principals. Canon regression, integrity, conflict-scan and
 rollback receipts are bound to a deterministic digest of the locked active
-Canon state and fail closed if that state changes before activation.
+Canon state, including latest rule-test results and source bindings, and fail
+closed if that state changes before activation. Verifier registry rows remain
+share-locked through commit so authorization revocation cannot race activation.
 
 Every promotion receipt supports a separate guarded restoration RPC. Only the
 dedicated NOLOGIN restorer capability may invoke it; it revokes the promoted
 Canon/runtime rows, restores the exact prior activation IDs and original
 validity intervals retained in the promotion receipt, and writes an immutable
-restore receipt. It never grants direct table-write privileges.
+restore receipt. It never grants direct table-write privileges. Restoration
+freezes and revalidates the same rule, test, conflict and source state used by
+runtime activation before it records success.

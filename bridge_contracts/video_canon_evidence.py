@@ -323,6 +323,8 @@ def build_video_canon_candidate(
             "automatic_activation_after_all_gates": True,
         },
     }
+    if _has_forbidden_key(payload) or _has_forbidden_value(payload):
+        _fail("candidate payload contains hidden information")
     payload_hash = _digest(payload)
     return {
         "candidate_type": "video_school_canon_candidate",

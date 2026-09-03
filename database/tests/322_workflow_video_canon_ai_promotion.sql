@@ -126,6 +126,9 @@ DECLARE
   v_rule_id uuid;
   v_test_id uuid;
   v_test_type text;
+  v_snapshot_before text;
+  v_snapshot_after text;
+  v_restore_failed boolean:=false;
   v_new_from timestamptz:=statement_timestamp()-interval '1 hour';
 BEGIN
   INSERT INTO public.school(school_id,stable_name)
@@ -185,6 +188,16 @@ BEGIN
       statement_timestamp()-interval '1 year',v_new_from,'superseded'),
     (v_new_runtime,v_school,v_new_rule,'school_canon',v_new_canon,'restore-scope',
       v_new_from,NULL,'active');
+  v_snapshot_before:=bidding.current_school_canon_snapshot_sha256(v_school);
+  SELECT rule_test_id INTO v_test_id FROM bidding.rule_test
+   WHERE rule_id=v_new_rule AND test_type='positive';
+  INSERT INTO bidding.rule_test_run(
+    school_id,rule_test_id,result,result_details,method_version
+  ) VALUES (v_school,v_test_id,'fail','{}','restore-test-v1');
+  v_snapshot_after:=bidding.current_school_canon_snapshot_sha256(v_school);
+  IF v_snapshot_before=v_snapshot_after THEN
+    RAISE EXCEPTION 'VIDEO_CANON_SNAPSHOT_IGNORES_LATEST_TEST_STATE';
+  END IF;
   INSERT INTO bidding.video_canon_ai_promotion_receipt(
     video_canon_ai_promotion_receipt_id,school_id,analysis_candidate_id,
     candidate_payload_hash,verification_bundle_sha256,policy_version,scope_key,
@@ -200,6 +213,28 @@ BEGIN
       'runtime_activation_id',v_old_runtime,'valid_to',NULL
     )),'AI_VERIFIED_TEACHER_VIDEO',false
   );
+
+  SELECT rule_test_id INTO v_test_id FROM bidding.rule_test
+   WHERE rule_id=v_old_rule AND test_type='positive';
+  INSERT INTO bidding.rule_test_run(
+    school_id,rule_test_id,result,result_details,method_version
+  ) VALUES (v_school,v_test_id,'fail','{}','restore-test-v1');
+  BEGIN
+    PERFORM bidding.restore_ai_verified_video_canon(
+      v_promotion,repeat('c',64),repeat('d',64)
+    );
+  EXCEPTION WHEN check_violation THEN
+    v_restore_failed:=true;
+  END;
+  IF NOT v_restore_failed OR EXISTS (
+       SELECT 1 FROM bidding.video_canon_ai_restore_receipt
+        WHERE video_canon_ai_promotion_receipt_id=v_promotion
+     ) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_RESTORE_VALIDATION_FAILURE_NOT_ATOMIC';
+  END IF;
+  INSERT INTO bidding.rule_test_run(
+    school_id,rule_test_id,result,result_details,method_version
+  ) VALUES (v_school,v_test_id,'pass','{}','restore-test-v1');
 
   v_restore:=bidding.restore_ai_verified_video_canon(
     v_promotion,repeat('c',64),repeat('d',64)

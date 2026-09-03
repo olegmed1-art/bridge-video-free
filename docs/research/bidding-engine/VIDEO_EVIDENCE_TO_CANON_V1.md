@@ -132,7 +132,8 @@ serialized; only sanitized results or explicit gaps survive.
 
 The same value-level firewall applies before a teacher-video Canon candidate is
 placed in staging: full PBN encodings and labelled partner/opponent card payloads
-are rejected even under otherwise innocent keys such as `notes`. Candidate
+are rejected anywhere in the complete payload, including the source-bound
+teacher statement and otherwise innocent keys such as `notes`. Candidate
 staging identity includes the canonical payload SHA-256, so a corrected
 assertion becomes a preserved new revision instead of colliding with the old
 row.
@@ -162,12 +163,16 @@ database login principal in addition to verifier family/version; the three
 high-assurance executions must come from distinct principals. The four
 state-dependent checks (`CANON_REGRESSION`, `CANON_INTEGRITY`,
 `CANON_CONFLICT_SCAN`, `ROLLBACK_RESTORE`) carry the same deterministic active
-Canon snapshot SHA-256. Activation serializes by school, locks the underlying
-Canon/rule/test/conflict state and rejects a stale digest.
+Canon snapshot SHA-256. The snapshot includes active rules, knowledge versions,
+activations, open conflicts, latest test runs and source bindings. Activation
+serializes by school, locks the underlying Canon/rule/test/source/conflict and
+verifier-registry state, and rejects a stale digest.
 
 Rollback is operational, not documentary. A dedicated restorer capability can
 invoke the receipt-bound restore RPC with the exact promotion bundle and restore
 evidence hashes. The transaction revokes the new Canon/runtime activation,
 restores the exact superseded activation IDs and their original validity ends,
 then emits an append-only restore receipt. No application, worker, verifier or
-promoter receives direct activation-table writes.
+promoter receives direct activation-table writes. Before restoration succeeds,
+the same rule/test/source/conflict tables are locked and the restored rule must
+pass the current runtime activation gates.

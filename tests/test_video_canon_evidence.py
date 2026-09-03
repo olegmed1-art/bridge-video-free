@@ -163,6 +163,20 @@ def test_hidden_deal_is_rejected_inside_innocuous_allowed_value(field, value):
         build_video_canon_candidate(_learning(), assertion)
 
 
+@pytest.mark.parametrize("statement", [
+    "N:AKQJ.T98.765.432 E:T987.654.32.AKQ S:... W:...",
+    "partner_hand = AKQJ.T98.765.432",
+])
+def test_hidden_deal_is_rejected_in_source_bound_teacher_statement(statement):
+    learning = _learning()
+    assertion = _assertion()
+    assertion["statement"] = statement
+    assertion["statement_sha256"] = hashlib.sha256(statement.encode("utf-8")).hexdigest()
+    learning["transcript_evidence"][0]["text_sha256"] = assertion["statement_sha256"]
+    with pytest.raises(VideoCanonEvidenceError, match="candidate payload contains hidden information"):
+        build_video_canon_candidate(learning, assertion)
+
+
 def test_payload_hash_is_deterministic_and_source_bound():
     first = build_video_canon_candidate(_learning(), _assertion())
     second = build_video_canon_candidate(deepcopy(_learning()), deepcopy(_assertion()))
