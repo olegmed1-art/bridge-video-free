@@ -6,6 +6,8 @@ on:
       - autopilot/oracle-idle-stop-guard-627-v2
     paths:
       - '.github/workflows/oracle-idle-guard-exact-install.yml'
+      - 'ops/oracle_idle_state.sh'
+      - 'ops/install_oracle_idle_state_ocarun.sh'
 
 permissions:
   contents: read
