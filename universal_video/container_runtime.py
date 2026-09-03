@@ -37,6 +37,7 @@ SPEAKER_EMBEDDING_SHA256 = (
     "1a331345f04805badbb495c775a6ddffcdd1a732567d5ec8b3d5749e3c7a5e4b"
 )
 MIN_SPEAKER_MODEL_BYTES = 1024
+ENTRYPOINT_SELF_TEST = "entrypoint-self-test"
 
 
 class ContainerRuntimeUnavailable(RuntimeError):
@@ -177,6 +178,18 @@ def validate_container_runtime() -> dict[str, object]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     command = list(sys.argv[1:] if argv is None else argv)
+    if command == [ENTRYPOINT_SELF_TEST]:
+        print(
+            json.dumps(
+                {
+                    "schema": "universal-video-entrypoint-self-test-v1",
+                    "status": "PASS",
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+        return 0
     if not command:
         command = ["python", "-m", "universal_video.spool_worker"]
     try:
