@@ -58,8 +58,12 @@ jobs:
             -f deploy/oracle-universal-video/Dockerfile .
           image_id="$(docker image inspect --format '{{.Id}}' "issue881:$EXACT_RUNTIME_SHA")"
           revision="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "issue881:$EXACT_RUNTIME_SHA")"
+          image_entrypoint="$(docker image inspect --format '{{json .Config.Entrypoint}}' "$image_id")"
+          image_cmd="$(docker image inspect --format '{{json .Config.Cmd}}' "$image_id")"
           [[ "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]
           test "$revision" = "$EXACT_RUNTIME_SHA"
+          test "$image_entrypoint" = '["/usr/bin/tini","--","/usr/local/bin/universal-video-container-entrypoint"]'
+          test "$image_cmd" = '["python","-m","universal_video.spool_worker"]'
           docker run --rm --network none --read-only \
             --tmpfs /tmp:rw,noexec,nosuid,size=64m \
             --entrypoint /bin/sh "$image_id" \
@@ -74,14 +78,19 @@ jobs:
             --tmpfs /tmp:rw,noexec,nosuid,size=64m \
             -e PYTHONDONTWRITEBYTECODE=1 \
             --entrypoint python "$image_id" \
+            -c 'import universal_video.spool_worker'
+          docker run --rm --network none --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            --entrypoint python "$image_id" \
             -m universal_video.precanary imports
           docker run --rm --network none --read-only \
             --tmpfs /tmp:rw,noexec,nosuid,size=64m \
             -e PYTHONDONTWRITEBYTECODE=1 \
             --entrypoint python "$image_id" \
             -m universal_video.precanary synthetic-result-contract
-          printf 'runtime_sha=%s\nimmutable_image_id=%s\ncanonical_promotion_allowed=false\npublication_state=NOT_PUBLISHED\nreal_media_canary_run=false\n' \
-            "$EXACT_RUNTIME_SHA" "$image_id" | tee "$RUNNER_TEMP/issue881-image.txt"
+          printf 'runtime_sha=%s\nimmutable_image_id=%s\ndefault_entrypoint=%s\ndefault_cmd=%s\ncanonical_promotion_allowed=false\npublication_state=NOT_PUBLISHED\nreal_media_canary_run=false\n' \
+            "$EXACT_RUNTIME_SHA" "$image_id" "$image_entrypoint" "$image_cmd" | tee "$RUNNER_TEMP/issue881-image.txt"
       - name: Recheck live current main before publishing candidate evidence
         run: |
           set -euo pipefail
@@ -172,6 +181,8 @@ jobs:
           evidence="$RUNNER_TEMP/candidate/issue881-image.txt"
           grep -Fx "runtime_sha=$EXACT_RUNTIME_SHA" "$evidence"
           grep -Eq '^immutable_image_id=sha256:[0-9a-f]{64}$' "$evidence"
+          grep -Fx 'default_entrypoint=["/usr/bin/tini","--","/usr/local/bin/universal-video-container-entrypoint"]' "$evidence"
+          grep -Fx 'default_cmd=["python","-m","universal_video.spool_worker"]' "$evidence"
           grep -Fx 'canonical_promotion_allowed=false' "$evidence"
           grep -Fx 'publication_state=NOT_PUBLISHED' "$evidence"
           grep -Fx 'real_media_canary_run=false' "$evidence"
