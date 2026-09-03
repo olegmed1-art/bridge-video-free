@@ -96,6 +96,22 @@ runtime_files_match_snapshot(){
   fi
 }
 
+operator_files_match_snapshot(){
+  if (( operator_existed == 1 )); then
+    [[ -f "$OPERATOR_TARGET" && ! -L "$OPERATOR_TARGET" ]] || return 1
+    cmp -s "$operator_backup_root/operator" "$OPERATOR_TARGET" || return 1
+  else
+    [[ ! -e "$OPERATOR_TARGET" && ! -L "$OPERATOR_TARGET" ]] || return 1
+  fi
+  if (( operator_sudoers_existed == 1 )); then
+    [[ -f "$OPERATOR_SUDOERS" && ! -L "$OPERATOR_SUDOERS" ]] || return 1
+    cmp -s "$operator_backup_root/sudoers" "$OPERATOR_SUDOERS" || return 1
+  else
+    [[ ! -e "$OPERATOR_SUDOERS" && ! -L "$OPERATOR_SUDOERS" ]] || return 1
+  fi
+  visudo -cf /etc/sudoers >/dev/null 2>&1 || return 1
+}
+
 fail(){
   local code="$1"
   printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_FAILED code=%s\n' "$code" >&2
@@ -285,16 +301,18 @@ rollback(){
     fi
     if (( operator_snapshot_ready == 1 )); then
       if (( operator_existed == 1 )); then
-        install -o root -g root -m 0755 "$operator_backup_root/operator" "$OPERATOR_TARGET" || true
+        install -o root -g root -m 0755 "$operator_backup_root/operator" "$OPERATOR_TARGET" \
+          || rollback_failed=1
       else
-        rm -f -- "$OPERATOR_TARGET" || true
+        rm -f -- "$OPERATOR_TARGET" || rollback_failed=1
       fi
       if (( operator_sudoers_existed == 1 )); then
-        install -o root -g root -m 0440 "$operator_backup_root/sudoers" "$OPERATOR_SUDOERS" || true
+        install -o root -g root -m 0440 "$operator_backup_root/sudoers" "$OPERATOR_SUDOERS" \
+          || rollback_failed=1
       else
-        rm -f -- "$OPERATOR_SUDOERS" || true
+        rm -f -- "$OPERATOR_SUDOERS" || rollback_failed=1
       fi
-      visudo -cf /etc/sudoers >/dev/null 2>&1 || true
+      operator_files_match_snapshot || rollback_failed=1
     fi
     service_matches_captured_state "$NEW_SERVICE" "$new_enabled_before" "$new_active_before" \
       || rollback_failed=1
