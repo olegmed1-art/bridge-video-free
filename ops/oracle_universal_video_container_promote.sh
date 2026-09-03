@@ -40,19 +40,36 @@ release_workload_fence(){
   fi
 }
 
+acquire_workload_fence(){
+  if (( workload_lock_held == 1 )); then
+    return 0
+  fi
+  exec 9<"$WORKLOAD_LOCK" || return 1
+  if ! flock --exclusive --nonblock 9; then
+    exec 9<&-
+    return 1
+  fi
+  workload_lock_held=1
+}
+
+service_state_is_known(){
+  local enabled_state="$1" active_state="$2"
+  case "$enabled_state" in
+    enabled|disabled|static|indirect|masked|masked-runtime|not-found) ;;
+    *) return 1 ;;
+  esac
+  case "$active_state" in
+    active|inactive|failed) ;;
+    *) return 1 ;;
+  esac
+}
+
 service_matches_captured_state(){
   local service="$1" expected_enabled="$2" expected_active="$3"
   local observed_enabled observed_active
   observed_enabled="$(systemctl is-enabled "$service" 2>/dev/null || true)"
   observed_active="$(systemctl is-active "$service" 2>/dev/null || true)"
-  case "$observed_enabled" in
-    enabled|disabled|static|indirect|masked|masked-runtime|not-found) ;;
-    *) return 1 ;;
-  esac
-  case "$observed_active" in
-    active|inactive|failed) ;;
-    *) return 1 ;;
-  esac
+  service_state_is_known "$observed_enabled" "$observed_active" || return 1
   if [[ "$expected_enabled" == enabled ]]; then
     [[ "$observed_enabled" == enabled ]] || return 1
   else
@@ -198,13 +215,18 @@ rollback(){
   trap - ERR
   emit_runtime_code
   if (( switch_started == 1 )); then
-    if has_running_job; then
+    if has_running_job || ! acquire_workload_fence; then
       rollback_failed=1
     else
-    # Resident startup recovery uses this same lock. Release it only after the
-    # old resident is stopped, immediately before restoring a resident.
+    # Recheck local work after acquiring the same fence used by Neon claims.
+    # Stop the replacement under that fence, then release before starting a
+    # restored resident, whose startup recovery also needs the fence.
+    if has_running_job; then
+      rollback_failed=1
+      release_workload_fence
+    else
+    systemctl disable --now "$NEW_SERVICE" >/dev/null 2>&1 || rollback_failed=1
     release_workload_fence
-    systemctl disable --now "$NEW_SERVICE" >/dev/null 2>&1 || true
     if [[ "$new_enabled_before" == enabled ]]; then
       systemctl enable "$NEW_SERVICE" >/dev/null 2>&1 || true
     else
@@ -242,6 +264,7 @@ rollback(){
       || rollback_failed=1
     service_matches_captured_state "$OLD_SERVICE" "$old_enabled_before" "$old_active_before" \
       || rollback_failed=1
+    fi
     fi
   fi
   if (( rollback_failed == 1 )); then
@@ -335,6 +358,10 @@ old_enabled_before="$(systemctl is-enabled "$OLD_SERVICE" 2>/dev/null || true)"
 old_active_before="$(systemctl is-active "$OLD_SERVICE" 2>/dev/null || true)"
 new_enabled_before="$(systemctl is-enabled "$NEW_SERVICE" 2>/dev/null || true)"
 new_active_before="$(systemctl is-active "$NEW_SERVICE" 2>/dev/null || true)"
+service_state_is_known "$old_enabled_before" "$old_active_before" \
+  || fail UV_CONTAINER_PROMOTION_LEGACY_STATE_UNKNOWN
+service_state_is_known "$new_enabled_before" "$new_active_before" \
+  || fail UV_CONTAINER_PROMOTION_CONTAINER_STATE_UNKNOWN
 [[ "$old_active_before" != active || "$new_active_before" != active ]] \
   || fail UV_CONTAINER_PROMOTION_DUAL_RESIDENT
 switch_started=1

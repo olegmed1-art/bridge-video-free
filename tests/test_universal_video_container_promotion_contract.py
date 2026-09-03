@@ -27,6 +27,8 @@ def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
     assert "UV_CONTAINER_PROMOTION_JOB_RUNNING" in SCRIPT
     assert "UV_CONTAINER_PROMOTION_WORKLOAD_LOCK_INVALID" in SCRIPT
     assert "UV_CONTAINER_PROMOTION_WORKLOAD_BUSY" in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_LEGACY_STATE_UNKNOWN" in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_CONTAINER_STATE_UNKNOWN" in SCRIPT
     assert "UNIVERSAL_VIDEO_CONTAINER_BUILD=0" in SCRIPT
     assert "contents/ops/oracle_universal_video_container_promote.sh?ref=$EXPECTED_COMMIT" in WORKFLOW
     assert "git hash-object -- /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh" in WORKFLOW
@@ -199,6 +201,14 @@ def test_promotion_disables_legacy_and_rollback_restores_original_state() -> Non
     assert 'enabled|disabled|static|indirect|masked|masked-runtime|not-found' in SCRIPT
     assert 'active|inactive|failed' in SCRIPT
     assert '*) return 1 ;;' in SCRIPT
+    assert 'if has_running_job || ! acquire_workload_fence; then' in SCRIPT
+    rollback = SCRIPT[SCRIPT.index("rollback(){") : SCRIPT.index("trap rollback ERR")]
+    rollback_acquire = rollback.index("acquire_workload_fence")
+    rollback_recheck = rollback.index("if has_running_job; then", rollback_acquire)
+    rollback_stop = rollback.index('systemctl disable --now "$NEW_SERVICE"', rollback_recheck)
+    rollback_release = rollback.index("release_workload_fence", rollback_stop)
+    rollback_restore = rollback.index('systemctl start "$NEW_SERVICE"', rollback_release)
+    assert rollback_acquire < rollback_recheck < rollback_stop < rollback_release < rollback_restore
     assert "UV_CONTAINER_PROMOTION_LEGACY_ENABLED" in SCRIPT
 
 
