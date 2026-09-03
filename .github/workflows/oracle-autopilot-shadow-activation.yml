@@ -208,6 +208,7 @@ jobs:
           [[ "$(stat -c '%U:%G:%a' "$root/autopilot-shadow.env")" == root:root:600 ]]
           [[ "$(stat -c '%U:%G:%a' "$root/autopilot-broker.env")" == root:root:600 ]]
           set -a
+          source "$root/autopilot-shadow.env"
           source "$root/autopilot-broker.env"
           set +a
           [[ "$AUTOPILOT_TOKEN_BROKER_URL" == "$EXPECTED_BROKER_URL" ]]
@@ -238,6 +239,25 @@ jobs:
           }
           assert all(payload.get(key) == value for key, value in expected.items())
           PY
+          "$release/.venv/bin/python" - <<'PY'
+          import os
+          import psycopg
+
+          expected = {
+              '0316_autopilot_broker_receipt_attestation':
+                  '8eb7d2bc23e72c2dcfdb6ef0798f9d65caeecd3f13d709f017a5398355819cba',
+              '0317_autopilot_broker_policy_null_guard':
+                  '737359a67dec22fa97a9c3e23a84fa8f4b57adda5b2b73b9a810b0ade07479b4',
+          }
+          with psycopg.connect(os.environ['AUTOPILOT_DATABASE_URL']) as connection:
+              with connection.cursor() as cursor:
+                  cursor.execute(
+                      "SELECT migration_key, checksum FROM public.schema_migration "
+                      "WHERE migration_key = ANY(%s)", (list(expected),)
+                  )
+                  observed = dict(cursor.fetchall())
+          assert observed == expected
+          PY
           [[ -f "$unit" ]]
           [[ "$(sha256sum "$unit" | awk '{print $1}')" == "$EXPECTED_UNIT_SHA256" ]]
           grep -Fx 'User=school-autopilot' "$unit" >/dev/null
@@ -262,6 +282,37 @@ jobs:
           esac
 
           activated_here=0
+          existing_restarted=0
+          previous_broker_env=''
+          previous_release=''
+          if [[ "$active:$enabled" == active:enabled ]]; then
+            previous_pid="$(systemctl show -p MainPID --value "$service")"
+            [[ "$previous_pid" =~ ^[1-9][0-9]*$ ]]
+            previous_release="$(readlink -f "/proc/$previous_pid/cwd")"
+            [[ "$previous_release" =~ ^$root/releases/[0-9a-f]{40}$ ]]
+            previous_broker_env="$(mktemp "$root/runtime/activation-rollback-env.XXXXXXXX")"
+            PROCESS_ENVIRON="/proc/$previous_pid/environ" \
+              TARGET_ENV="$previous_broker_env" python3 - <<'PY'
+          import os, shlex
+          entries = open(os.environ['PROCESS_ENVIRON'], 'rb').read().split(b'\0')
+          values = {}
+          for item in entries:
+              if b'=' in item:
+                  key, value = item.split(b'=', 1)
+                  key = key.decode()
+                  if key.startswith('AUTOPILOT_TOKEN_BROKER_') or key == 'AUTOPILOT_VERCEL_BYPASS_SECRET':
+                      values[key] = value.decode()
+          required = {
+              'AUTOPILOT_TOKEN_BROKER_URL', 'AUTOPILOT_TOKEN_BROKER_SECRET',
+              'AUTOPILOT_VERCEL_BYPASS_SECRET',
+          }
+          assert required <= values.keys()
+          with open(os.environ['TARGET_ENV'], 'w', encoding='utf-8') as output:
+              for key in sorted(values):
+                  output.write(f'{key}={shlex.quote(values[key])}\n')
+          os.chmod(os.environ['TARGET_ENV'], 0o600)
+          PY
+          fi
           observer_activated_here=0
           rollback_new_activation() {
             rc=$?
@@ -273,6 +324,14 @@ jobs:
               systemctl disable --now "$service" >/dev/null 2>&1 || true
               echo 'AUTOPILOT_SHADOW_ACTIVATION_ROLLED_BACK' >&2
             fi
+            if [[ $rc -ne 0 && "$existing_restarted" == 1 ]]; then
+              install -m 0600 -o root -g root "$previous_broker_env" \
+                "$root/autopilot-broker.env"
+              ln -sfn "$previous_release" "$root/current"
+              systemctl restart "$service" >/dev/null 2>&1 || true
+              echo 'AUTOPILOT_SHADOW_EXISTING_STATE_RESTORED' >&2
+            fi
+            [[ -z "$previous_broker_env" ]] || rm -f -- "$previous_broker_env"
             exit "$rc"
           }
           trap rollback_new_activation EXIT
@@ -282,6 +341,7 @@ jobs:
             activated_here=1
             systemctl enable --now "$service"
           else
+            existing_restarted=1
             systemctl restart "$service"
           fi
           sleep 12
@@ -324,6 +384,8 @@ jobs:
           }
           assert all(effective.get(key) == value for key, value in expected.items())
           PY
+          [[ -z "$previous_broker_env" ]] || rm -f -- "$previous_broker_env"
+          previous_broker_env=''
 
           if [[ "$activated_here" == 1 ]]; then
             active_since="$(systemctl show -p ActiveEnterTimestamp --value "$service")"

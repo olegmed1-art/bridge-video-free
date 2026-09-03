@@ -1018,6 +1018,10 @@ def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():
     assert 'systemctl restart "$service"' in workflow
     assert 'PROCESS_ENVIRON="/proc/$pid/environ"' in workflow
     assert "broker_provenance_sha256" in workflow
+    assert "0317_autopilot_broker_policy_null_guard" in workflow
+    assert "observed == expected" in workflow
+    assert "AUTOPILOT_SHADOW_EXISTING_STATE_RESTORED" in workflow
+    assert 'ln -sfn "$previous_release" "$root/current"' in workflow
     assert 'systemctl enable --now "$observer_service"' in workflow
     assert "restore-online-observer-after-staging" in workflow
     assert "AUTOPILOT_DIAG_OBSERVER_RESTORED" in workflow
