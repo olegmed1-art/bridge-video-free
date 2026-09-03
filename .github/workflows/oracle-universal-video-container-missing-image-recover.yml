@@ -40,7 +40,7 @@ jobs:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
       EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
-      EXACT_RUNTIME_SHA: 7689d091e5dbb46ebd9e37d5fdbfac074685bab2
+      EXACT_RUNTIME_SHA: eac5d89fedf555835197c127eaa6e787157f1b88
       SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
