@@ -127,6 +127,9 @@ jobs:
             psql "$DATABASE_URL" -X -v ON_ERROR_STOP=1 -f "$test_file"
           done
 
+      - name: Prove concurrent bidding activation exclusion
+        run: python database/tests/test_bidding_activation_concurrency.py
+
       - name: Verify migration idempotence
         shell: bash
         run: database/scripts/migrate.sh
