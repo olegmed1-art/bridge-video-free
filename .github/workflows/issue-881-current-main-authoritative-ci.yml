@@ -22,7 +22,7 @@ on:
       - 'tests/test_universal_video_terminal_evidence_v2.py'
       - 'tests/test_universal_video_drive_adapter.py'
       - 'tests/test_universal_video_container_runtime.py'
-      - 'tests/test_universal_video_missing_image_recovery.py'
+      - 'tests/test_issue_881_current_main_recovery_contract.py'
   workflow_dispatch:
 
 permissions:
@@ -67,7 +67,7 @@ jobs:
             tests/test_universal_video_terminal_evidence_v2.py \
             tests/test_universal_video_drive_adapter.py \
             tests/test_universal_video_container_runtime.py \
-            tests/test_universal_video_missing_image_recovery.py
+            tests/test_issue_881_current_main_recovery_contract.py
           python -m compileall -q universal_video
       - name: Build exact immutable image identity without activation
         run: |
