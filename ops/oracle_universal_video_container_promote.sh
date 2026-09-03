@@ -40,6 +40,23 @@ release_workload_fence(){
   fi
 }
 
+service_matches_captured_state(){
+  local service="$1" expected_enabled="$2" expected_active="$3"
+  local observed_enabled observed_active
+  observed_enabled="$(systemctl is-enabled "$service" 2>/dev/null || true)"
+  observed_active="$(systemctl is-active "$service" 2>/dev/null || true)"
+  if [[ "$expected_enabled" == enabled ]]; then
+    [[ "$observed_enabled" == enabled ]] || return 1
+  else
+    [[ "$observed_enabled" != enabled ]] || return 1
+  fi
+  if [[ "$expected_active" == active ]]; then
+    [[ "$observed_active" == active ]] || return 1
+  else
+    [[ "$observed_active" != active ]] || return 1
+  fi
+}
+
 fail(){
   local code="$1"
   printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_FAILED code=%s\n' "$code" >&2
@@ -169,6 +186,7 @@ elif fallback:
 }
 rollback(){
   local rc="${1:-$?}"
+  local rollback_failed=0
   trap - ERR
   emit_runtime_code
   if (( switch_started == 1 )) && ! has_running_job; then
@@ -209,6 +227,14 @@ rollback(){
       fi
       visudo -cf /etc/sudoers >/dev/null 2>&1 || true
     fi
+    service_matches_captured_state "$NEW_SERVICE" "$new_enabled_before" "$new_active_before" \
+      || rollback_failed=1
+    service_matches_captured_state "$OLD_SERVICE" "$old_enabled_before" "$old_active_before" \
+      || rollback_failed=1
+  fi
+  if (( rollback_failed == 1 )); then
+    printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_FAILED code=UV_CONTAINER_PROMOTION_ROLLBACK_FAILED stage=%s rc=%s\n' "$CURRENT_STAGE" "$rc" >&2
+    exit 1
   fi
   printf 'UNIVERSAL_VIDEO_CONTAINER_PROMOTION_FAILED code=UV_CONTAINER_PROMOTION_ROLLED_BACK stage=%s rc=%s\n' "$CURRENT_STAGE" "$rc" >&2
   exit "$rc"

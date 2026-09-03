@@ -20,6 +20,7 @@ def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
     assert "compute instance action --instance-id \"$INSTANCE_ID\" --action START" in WORKFLOW
     assert "rollback" in SCRIPT
     assert "UV_CONTAINER_PROMOTION_ROLLED_BACK" in SCRIPT
+    assert "UV_CONTAINER_PROMOTION_ROLLBACK_FAILED" in SCRIPT
     assert "stage=%s rc=%s" in SCRIPT
     for stage in ("installer-activation", "service-verification", "resident-status", "protected-postflight"):
         assert f"CURRENT_STAGE='{stage}'" in SCRIPT
@@ -191,6 +192,9 @@ def test_promotion_disables_legacy_and_rollback_restores_original_state() -> Non
     assert 'new_active_before="$(systemctl is-active "$NEW_SERVICE"' in SCRIPT
     assert 'if [[ "$new_enabled_before" == enabled ]]; then' in SCRIPT
     assert 'if [[ "$new_active_before" == active ]]; then' in SCRIPT
+    assert 'service_matches_captured_state "$NEW_SERVICE" "$new_enabled_before" "$new_active_before"' in SCRIPT
+    assert 'service_matches_captured_state "$OLD_SERVICE" "$old_enabled_before" "$old_active_before"' in SCRIPT
+    assert "rollback_failed=1" in SCRIPT
     assert "UV_CONTAINER_PROMOTION_LEGACY_ENABLED" in SCRIPT
 
 
