@@ -209,6 +209,10 @@ def test_promotion_disables_legacy_and_rollback_restores_original_state() -> Non
     assert 'cmp -s "$operator_backup_root/container-env" "$NEW_SERVICE_ENV"' in SCRIPT
     assert "readonly RECOVERY_ROOT='/var/lib/bridge-school/universal-video-promotion-recovery'" in SCRIPT
     assert 'operator_backup_root="$(mktemp -d "$RECOVERY_ROOT/snapshot.XXXXXX")"' in SCRIPT
+    assert "stat -c '%U:%G:%a' \"$RECOVERY_ROOT\"" in SCRIPT
+    assert "stat -c '%U:%G:%a' \"$operator_backup_root\"" in SCRIPT
+    recovery_snapshot = SCRIPT[SCRIPT.index("CURRENT_STAGE='operator-snapshot'") : SCRIPT.index("operator_snapshot_ready=1")]
+    assert "%h" not in recovery_snapshot
     assert 'preserve_recovery_snapshot=1' in SCRIPT
     assert 'recovery_snapshot=%s' in SCRIPT
     cleanup = SCRIPT[SCRIPT.index("cleanup(){") : SCRIPT.index("release_workload_fence(){")]

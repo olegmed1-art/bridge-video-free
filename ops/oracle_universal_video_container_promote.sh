@@ -348,10 +348,14 @@ python3 "$SOURCE_DIR/ops/validate_video_queue_dsn.py" "$queue_dsn_file" >/dev/nu
 CURRENT_STAGE='operator-snapshot'
 [[ ! -L "$RECOVERY_ROOT" ]] || fail UV_CONTAINER_PROMOTION_RECOVERY_ROOT_UNSAFE
 install -d -o root -g root -m 0700 "$RECOVERY_ROOT"
-[[ "$(stat -c '%U:%G:%a:%h' "$RECOVERY_ROOT" 2>/dev/null || true)" == 'root:root:700:1' ]] \
+[[ -d "$RECOVERY_ROOT" && ! -L "$RECOVERY_ROOT" ]] \
+  || fail UV_CONTAINER_PROMOTION_RECOVERY_ROOT_UNSAFE
+[[ "$(stat -c '%U:%G:%a' "$RECOVERY_ROOT" 2>/dev/null || true)" == 'root:root:700' ]] \
   || fail UV_CONTAINER_PROMOTION_RECOVERY_ROOT_UNSAFE
 operator_backup_root="$(mktemp -d "$RECOVERY_ROOT/snapshot.XXXXXX")"
-[[ "$(stat -c '%U:%G:%a:%h' "$operator_backup_root" 2>/dev/null || true)" == 'root:root:700:1' ]] \
+[[ -d "$operator_backup_root" && ! -L "$operator_backup_root" ]] \
+  || fail UV_CONTAINER_PROMOTION_RECOVERY_SNAPSHOT_UNSAFE
+[[ "$(stat -c '%U:%G:%a' "$operator_backup_root" 2>/dev/null || true)" == 'root:root:700' ]] \
   || fail UV_CONTAINER_PROMOTION_RECOVERY_SNAPSHOT_UNSAFE
 if [[ -e "$OPERATOR_TARGET" || -L "$OPERATOR_TARGET" ]]; then
   [[ -f "$OPERATOR_TARGET" && ! -L "$OPERATOR_TARGET" ]] || fail UV_CONTAINER_PROMOTION_OPERATOR_UNSAFE
