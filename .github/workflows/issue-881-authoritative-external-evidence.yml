@@ -196,12 +196,6 @@ jobs:
               <<<"$reviews_json")"
             (( review_count > 0 )) \
               || { echo 'Exact head has no independent Codex review' >&2; return 1; }
-            approval_count="$(jq --arg sha "$reviewed_sha" --arg owner "$GITHUB_REPOSITORY_OWNER" \
-              '[.[].[] | select(.commit_id == $sha and .user.login != $owner)] | group_by(.user.login) | map(max_by(.submitted_at)) | map(select(.state == "APPROVED")) | length' \
-              <<<"$reviews_json")"
-            (( approval_count > 0 )) \
-              || { echo 'Reviewed head has no independent approval' >&2; return 1; }
-
             threads_json="$(gh api graphql \
               -f owner="${GITHUB_REPOSITORY%%/*}" \
               -f name="${GITHUB_REPOSITORY#*/}" \
@@ -230,6 +224,12 @@ jobs:
               [[ "$latest_state" == 'completed:success' ]] \
                 || { echo "Latest root exact-head workflow attempt is not green: $workflow_name ($latest_state)" >&2; return 1; }
             done
+            reviews_json="$(gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$pr_number/reviews?per_page=100")"
+            approval_count="$(jq --arg sha "$reviewed_sha" --arg owner "$GITHUB_REPOSITORY_OWNER" \
+              '[.[].[] | select(.commit_id == $sha and .user.login != $owner)] | group_by(.user.login) | map(max_by(.submitted_at)) | map(select(.state == "APPROVED")) | length' \
+              <<<"$reviews_json")"
+            (( approval_count > 0 )) \
+              || { echo 'Reviewed head has no current independent approval at final reconciliation' >&2; return 1; }
             [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" == "$EXACT_SHA" ]] \
               || { echo 'Main changed while live review and CI gates were evaluated' >&2; return 1; }
           }
