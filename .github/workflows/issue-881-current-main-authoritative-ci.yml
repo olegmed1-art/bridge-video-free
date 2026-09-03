@@ -227,13 +227,13 @@ jobs:
           merge_base="$(git merge-base HEAD refs/remotes/origin/main)"
           test "$merge_base" = "$main_sha"
           test "$(git rev-parse HEAD)" = "$EXACT_RUNTIME_SHA"
-          printf 'authoritative_gate=PASS\ncurrent_main_sha=%s\n' "$main_sha" >> "$evidence"
+          printf 'candidate_state=PRE_FINAL_FRESHNESS_CHECK\nvalidated_main_sha=%s\n' "$main_sha" >> "$evidence"
       - uses: actions/upload-artifact@v4
         with:
-          name: issue-881-current-main-authoritative-${{ env.EXACT_RUNTIME_SHA }}
+          name: issue-881-current-main-final-candidate-${{ env.EXACT_RUNTIME_SHA }}
           path: ${{ runner.temp }}/candidate/issue881-image.txt
           retention-days: 14
-      - name: Recheck live current main after final evidence publication
+      - name: Final authoritative freshness gate after candidate-only publication
         run: |
           set -euo pipefail
           git fetch --no-tags --force origin main:refs/remotes/origin/main
