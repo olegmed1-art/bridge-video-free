@@ -32,7 +32,7 @@ jobs:
           workflow='.github/workflows/oracle-autopilot-shadow-activation.yml'
           grep -F "request['activation_scope'] == 'SHADOW_ONLY'" "$workflow" >/dev/null
           grep -F "request['no_instance_stop'] is True" "$workflow" >/dev/null
-          grep -F "EXPECTED_STAGED_REVISION='9064044d4c5b85803c6778060dff4843111ab888'" "$workflow" >/dev/null
+          grep -F "EXPECTED_STAGED_REVISION='5b2e91846d1f94c40c1ba5e919253e47afa372db'" "$workflow" >/dev/null
           grep -F 'EXPECTED_UNIT_SHA256: 1adc86b3268e2ab65e5e10ac165d2d3a9ecd26bee8d08c75536106c2fd40c40d' "$workflow" >/dev/null
           grep -F 'Environment=AUTOPILOT_RUNTIME_MODE=SHADOW' \
             deploy/oracle-autopilot/school-autopilot-shadow.service >/dev/null
@@ -68,7 +68,7 @@ jobs:
     env:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
-      EXPECTED_STAGED_REVISION: 9064044d4c5b85803c6778060dff4843111ab888
+      EXPECTED_STAGED_REVISION: 5b2e91846d1f94c40c1ba5e919253e47afa372db
       EXPECTED_UNIT_SHA256: 1adc86b3268e2ab65e5e10ac165d2d3a9ecd26bee8d08c75536106c2fd40c40d
       SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
       SSH_KEY_OCI: ${{ secrets.OCI_SSH_PRIVATE_KEY }}
@@ -281,6 +281,8 @@ jobs:
           if [[ "$active:$enabled" == inactive:disabled ]]; then
             activated_here=1
             systemctl enable --now "$service"
+          else
+            systemctl restart "$service"
           fi
           sleep 12
 
@@ -304,6 +306,24 @@ jobs:
           [[ "$diag_restarts" == 0 ]]
           [[ "$pid" =~ ^[1-9][0-9]*$ ]]
           [[ "$actual_uid" == "$expected_uid" ]]
+          PROCESS_ENVIRON="/proc/$pid/environ" python3 - <<'PY'
+          import os
+
+          raw = open(os.environ['PROCESS_ENVIRON'], 'rb').read().split(b'\0')
+          effective = {}
+          for item in raw:
+              if b'=' in item:
+                  key, value = item.split(b'=', 1)
+                  effective[key.decode()] = value.decode()
+          expected = {
+              'AUTOPILOT_TOKEN_BROKER_URL': os.environ['EXPECTED_BROKER_URL'],
+              'AUTOPILOT_TOKEN_BROKER_EXPECTED_SOURCE_SHA': os.environ['EXPECTED_BROKER_SOURCE_SHA'],
+              'AUTOPILOT_TOKEN_BROKER_EXPECTED_ARTIFACT_SHA256': os.environ['EXPECTED_BROKER_ARTIFACT_SHA256'],
+              'AUTOPILOT_TOKEN_BROKER_EXPECTED_POLICY_SHA256': os.environ['EXPECTED_BROKER_POLICY_SHA256'],
+              'AUTOPILOT_TOKEN_BROKER_EXPECTED_PROVENANCE_SHA256': os.environ['EXPECTED_BROKER_PROVENANCE_SHA256'],
+          }
+          assert all(effective.get(key) == value for key, value in expected.items())
+          PY
 
           if [[ "$activated_here" == 1 ]]; then
             active_since="$(systemctl show -p ActiveEnterTimestamp --value "$service")"

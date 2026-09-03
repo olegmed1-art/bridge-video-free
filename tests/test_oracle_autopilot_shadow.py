@@ -1004,7 +1004,7 @@ def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():
     workflow = open(
         ".github/workflows/oracle-autopilot-shadow-activation.yml", encoding="utf-8"
     ).read()
-    assert "EXPECTED_STAGED_REVISION: 9064044d4c5b85803c6778060dff4843111ab888" in workflow
+    assert "EXPECTED_STAGED_REVISION: 5b2e91846d1f94c40c1ba5e919253e47afa372db" in workflow
     unit_sha256 = hashlib.sha256(
         open("deploy/oracle-autopilot/school-autopilot-shadow.service", "rb").read()
     ).hexdigest()
@@ -1015,6 +1015,9 @@ def test_activation_workflow_is_exact_shadow_only_and_never_stops_oracle():
     assert "request['neon_max_cu'] == 8" in workflow
     assert "request['runtime_connection_limit'] == 4" in workflow
     assert 'systemctl enable --now "$service"' in workflow
+    assert 'systemctl restart "$service"' in workflow
+    assert 'PROCESS_ENVIRON="/proc/$pid/environ"' in workflow
+    assert "broker_provenance_sha256" in workflow
     assert 'systemctl enable --now "$observer_service"' in workflow
     assert "restore-online-observer-after-staging" in workflow
     assert "AUTOPILOT_DIAG_OBSERVER_RESTORED" in workflow
