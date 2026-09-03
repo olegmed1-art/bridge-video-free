@@ -73,3 +73,12 @@ for the full deal, but never the deal or hidden hands in the student-visible
 payload. DDS is explicitly `offline_only`: it measures consequences after the
 fact and does not validate a bidding rule, become Canon evidence, or enter a
 live resolver request.
+
+## Learning feedback loop
+
+Reviewed human corrections for ASR, speaker, card, auction, extraction and
+pedagogy are emitted as immutable versioned `ANALYZER_TRAINING_EXAMPLE`
+records. A candidate model is only represented by a
+`MODEL_IMPROVEMENT_PROPOSAL` when a named holdout compares it with a baseline
+and records a rollback model version. Training execution, deployment, Canon
+change and automatic promotion are all denied by the analyzer contract.
