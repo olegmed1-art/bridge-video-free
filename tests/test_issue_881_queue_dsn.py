@@ -58,6 +58,7 @@ def test_credential_only_workflow_is_owner_gated_and_never_mutates_services():
     assert 'ref: ${{ env.EXACT_SHA }}' in workflow
     assert "BRIDGE_WORKER_DATABASE_URL" in workflow
     assert "validate_video_queue_dsn.py" in workflow
+    assert '"set -eu; sudo -n ' in workflow
     assert "root:universal-video:640" in workflow
     assert "service_mutation=false" in workflow
     assert "docker_mutation=false" in workflow
