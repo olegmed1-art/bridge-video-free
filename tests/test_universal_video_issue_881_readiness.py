@@ -1288,7 +1288,10 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert ".commit_id ==" in workflow and "$EXACT_SHA" in workflow
     assert "required_workflows=(" in workflow
     assert "verify_live_gate(){" in workflow
-    assert workflow.count("verify_live_gate") == 4
+    # One gate before preparation and one fresh gate after all SSH/SCP staging.
+    # Keeping exactly these two calls avoids spending another API-heavy review
+    # pass while still binding the mutating attestation to current evidence.
+    assert workflow.count("verify_live_gate") == 3
     assert "reviewThreads(first:100)" in workflow
     assert "unresolved current threads" in workflow
     assert "max_by([.run_number, .run_attempt])" in workflow
@@ -1298,15 +1301,13 @@ def test_authoritative_external_evidence_binds_live_reviewed_head_and_recovery()
     assert ".github/workflows/issue-881-authoritative-external-evidence.yml" in workflow
     assert "prior-recovery-evidence.txt" in workflow
     assert "UNIVERSAL_VIDEO_RECOVERY_EVIDENCE_SHA256='$recovery_sha'" in workflow
-    staging_check = workflow.index(
-        "          verify_live_gate", workflow.index("          verify_live_gate") + 1
-    )
+    initial_check = workflow.index("          verify_live_gate")
     first_remote_mutation = workflow.index(
-        '"${s[@]}" "umask 077; rm -rf', staging_check
+        '"${s[@]}" "umask 077; rm -rf', initial_check
     )
     final_head_check = workflow.rindex("          verify_live_gate")
     attestation_call = workflow.index("          set +e", final_head_check)
-    assert staging_check < first_remote_mutation < final_head_check < attestation_call
+    assert initial_check < first_remote_mutation < final_head_check < attestation_call
 
 
 def test_canary_sql_and_rollback_remain_null_safe_and_fail_closed():
