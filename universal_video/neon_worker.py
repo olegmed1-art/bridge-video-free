@@ -22,8 +22,6 @@ from .terminal_evidence_v2 import (
 from .video_queue import claim_job, database_url_from_env, finish_job, heartbeat_job, retry_job
 from .workload_lock import shared_workload_lock
 
-# Stable mock seam for focused no-Drive tests. Production calls this exact name;
-# the implementation remains the v2 live re-verifier.
 verify_terminal_output_live = reverify_terminal_output_live
 
 APPROVED_PROFILE = "bridge_3_1_free"
@@ -88,7 +86,7 @@ def _metadata_checksum(meta: Mapping[str, Any]) -> str | None:
 
 
 def verify_claimed_source(claim: Mapping[str, Any], token: str) -> dict[str, Any]:
-    """Read and exactly match the six immutable source identity fields."""
+    """Read and exactly match source identity plus the observed Drive revision."""
     if claim.get("processing_profile") != APPROVED_PROFILE:
         raise NeonVideoWorkerError("VIDEO_QUEUE_PROFILE_NOT_APPROVED")
     if claim.get("algorithm_revision") != APPROVED_REVISION:
@@ -98,6 +96,8 @@ def verify_claimed_source(claim: Mapping[str, Any], token: str) -> dict[str, Any
 
     expected = source_identity_from_claim(claim)
     meta = file_metadata(str(claim["source_file_id"]), token)
+    if meta.get("trashed") is not False:
+        raise NeonVideoWorkerError("VIDEO_SOURCE_TRASHED_OR_UNKNOWN")
     parents = [str(value) for value in (meta.get("parents") or [])]
     normalized = {
         "file_id": str(meta.get("id") or ""),
@@ -110,26 +110,20 @@ def verify_claimed_source(claim: Mapping[str, Any], token: str) -> dict[str, Any
     if normalized != expected:
         raise NeonVideoWorkerError("VIDEO_QUEUE_SOURCE_READBACK_MISMATCH")
 
-    # Preserve the established observer/test shape while v2 evidence itself uses
-    # source_identity_from_claim(). Both represent the same six facts.
-    observed = {
+    modified_time = str(meta.get("modifiedTime") or "")
+    version = str(meta.get("version") or "")
+    if not modified_time or not version:
+        raise NeonVideoWorkerError("VIDEO_SOURCE_REVISION_MISSING")
+    return {
         "id": normalized["file_id"],
         "name": normalized["name"],
         "mime_type": normalized["mime_type"],
         "size_bytes": normalized["size_bytes"],
         "parents": [normalized["parent_folder_id"]],
         "checksum": normalized["checksum"],
+        "modified_time": modified_time,
+        "version": version,
     }
-    # Some Drive providers do not expose a content checksum. In that case the
-    # immutable start/end fence must also bind the object revision; otherwise a
-    # same-size replacement could preserve all six queue identity fields.
-    if normalized["checksum"] is None:
-        modified_time = str(meta.get("modifiedTime") or "")
-        version = str(meta.get("version") or "")
-        if not modified_time or not version:
-            raise NeonVideoWorkerError("VIDEO_SOURCE_REVISION_MISSING")
-        observed.update({"modified_time": modified_time, "version": version})
-    return observed
 
 
 @contextmanager
@@ -257,9 +251,6 @@ def process_claim(
     error_code: str | None = None
     initial_source: dict[str, Any] | None = None
 
-    # Heartbeat and timeout cover processing, both final artifact/source rereads,
-    # and the fenced finish/retry database transition. An expired lease can never
-    # be silently reused while terminal verification is still running.
     with _Heartbeat(database_url, claim, worker_key) as heartbeat:
         with _processing_timeout():
             try:
@@ -275,9 +266,6 @@ def process_claim(
 
             if outcome == "REVIEW_READY":
                 try:
-                    # Mandatory v2 live gate. Custom/test processors cannot bypass
-                    # it in production; focused tests may patch this seam without
-                    # requiring Drive credentials.
                     verify_terminal_output_live(claim, output, access_token())
                     final_source = verify_claimed_source(claim, access_token())
                     if initial_source is None or final_source != initial_source:
