@@ -149,10 +149,20 @@ jobs:
           )
 
           verify_live_gate(){
-            local live_head review_count threads_json blocker_count runs_json workflow_name latest_state
-            live_head="$(gh api "repos/$GITHUB_REPOSITORY/pulls/1062" --jq '.head.sha')"
+            local pr_json live_head live_state base_sha main_sha base_relation review_count threads_json blocker_count runs_json workflow_name latest_state
+            pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/1062")"
+            live_state="$(jq -r '.state' <<<"$pr_json")"
+            [[ "$live_state" == 'open' ]] \
+              || { echo 'PR #1062 is no longer open' >&2; return 1; }
+            live_head="$(jq -r '.head.sha' <<<"$pr_json")"
             [[ "$live_head" == "$EXACT_SHA" ]] \
               || { echo 'Exact SHA is no longer the live PR #1062 head' >&2; return 1; }
+
+            base_sha="$(jq -r '.base.sha' <<<"$pr_json")"
+            main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+            base_relation="$(gh api "repos/$GITHUB_REPOSITORY/compare/$main_sha...$base_sha" --jq '[.status, .behind_by] | @tsv')"
+            [[ "$base_relation" == $'ahead\t0' || "$base_relation" == $'identical\t0' ]] \
+              || { echo 'PR #1062 base is not synchronized with current main' >&2; return 1; }
 
             review_count="$(gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/1062/reviews" \
               --jq ".[] | select(.commit_id == \"$EXACT_SHA\" and (.user.login | startswith(\"chatgpt-codex-connector\")) and (.state == \"COMMENTED\" or .state == \"APPROVED\")) | .id" | wc -l)"
@@ -251,10 +261,6 @@ jobs:
           }
           trap bounded_failure ERR
 
-          # Repeat the complete primary-source gate as the final action before
-          # the first SSH-side mutation. A new run, review finding, or head
-          # movement during preparation fails closed.
-          verify_live_gate
           "${s[@]}" "umask 077; rm -rf '$remote_stage'; mkdir -m 0700 '$remote_stage'"
           "${c[@]}" "$RUNNER_TEMP/prepare.sh" "$ORACLE_USER@$ORACLE_HOST:$remote_stage/prepare.sh"
           "${c[@]}" "$RUNNER_TEMP/attest.sh" "$ORACLE_USER@$ORACLE_HOST:$remote_stage/attest.sh"
@@ -275,6 +281,12 @@ jobs:
             sudo -n install -o root -g root -m 0700 '$remote_stage/prepare.sh' '$remote_root/prepare.sh'; \
             sudo -n install -o root -g root -m 0700 '$remote_stage/attest.sh' '$remote_root/attest.sh'; \
             $recovery_install"
+
+          # Staging can outlive the evidence used by the earlier gate. Check
+          # the live head, review threads, and CI again as the final action
+          # before invoking the attestation that may quiesce resident services
+          # or replace protected runtime files.
+          verify_live_gate
 
           set +e
           "${s[@]}" "sudo -n env \
