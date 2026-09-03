@@ -177,7 +177,6 @@ jobs:
           [[ -f "$remote_pub" && ! -L "$remote_pub" ]]
           pub="$(tr -d '\r' < "$remote_pub" | sed '/^[[:space:]]*$/d')"
           [[ "$(printf '%s\n' "$pub" | wc -l)" == 1 ]]
-          printf '%s\n' "$pub" > "$remote_pub"
           ssh-keygen -lf "$remote_pub" >/dev/null
           install -d -o ubuntu -g ubuntu -m 0700 /home/ubuntu/.ssh
           tmp="$(mktemp /home/ubuntu/.ssh/.authorized_keys.XXXXXXXX)"
