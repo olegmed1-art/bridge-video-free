@@ -74,7 +74,7 @@ jobs:
           grep -F 'main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq' "$workflow"
           grep -F 'Root Autopilot PR #991 is not merged' "$workflow"
           grep -F 'git merge-base --is-ancestor "$reviewed_sha" "$EXACT_SHA"' "$workflow"
-          grep -F 'Reviewed head has no independent approval' "$workflow"
+          grep -F 'Reviewed head has no current independent approval at final reconciliation' "$workflow"
           retired=.github/workflows/oracle-universal-video-container-evidence.yml
           grep -F 'UNIVERSAL_VIDEO_LEGACY_CONTAINER_EVIDENCE_RETIRED=true' "$retired"
           ! grep -E 'workflow[_]dispatch:' "$retired"
