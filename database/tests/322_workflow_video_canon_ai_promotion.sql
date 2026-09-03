@@ -109,6 +109,7 @@ END $$;
 DO $$
 DECLARE
   v_school uuid:=uuidv7();
+  v_source uuid:=uuidv7();
   v_item uuid:=uuidv7();
   v_old_version uuid:=uuidv7();
   v_new_version uuid:=uuidv7();
@@ -122,6 +123,9 @@ DECLARE
   v_promotion uuid:=uuidv7();
   v_restore uuid;
   v_repeat uuid;
+  v_rule_id uuid;
+  v_test_id uuid;
+  v_test_type text;
   v_new_from timestamptz:=statement_timestamp()-interval '1 hour';
 BEGIN
   INSERT INTO public.school(school_id,stable_name)
@@ -136,11 +140,31 @@ BEGIN
       '{"level_key":"beginner-1"}','approved'),
     (v_new_version,v_item,2,'{}','school_canon','approved','natural-v1',
       '{"level_key":"beginner-1"}','approved');
+  INSERT INTO public.source(source_id,school_id,source_type,title,status)
+  VALUES (v_source,v_school,'video','restore test source','active');
+  INSERT INTO public.knowledge_version_source(knowledge_version_id,source_id)
+  VALUES (v_old_version,v_source),(v_new_version,v_source);
   INSERT INTO bidding.rule(
     rule_id,school_id,knowledge_version_id,rule_key,rule_kind,action,lifecycle_status
   ) VALUES
     (v_old_rule,v_school,v_old_version,'restore-old-'||v_old_rule::text,'bid','{"call":"1H"}','validated'),
     (v_new_rule,v_school,v_new_version,'restore-new-'||v_new_rule::text,'bid','{"call":"2H"}','validated');
+  FOREACH v_rule_id IN ARRAY ARRAY[v_old_rule,v_new_rule]
+  LOOP
+    FOREACH v_test_type IN ARRAY ARRAY['positive','negative','boundary','hidden_information']
+    LOOP
+      v_test_id:=uuidv7();
+      INSERT INTO bidding.rule_test(
+        rule_test_id,school_id,rule_id,test_key,test_type,fixture,expected,enabled
+      ) VALUES (
+        v_test_id,v_school,v_rule_id,v_test_type||'-'||v_rule_id::text,
+        v_test_type,'{}','{}',true
+      );
+      INSERT INTO bidding.rule_test_run(
+        school_id,rule_test_id,result,result_details,method_version
+      ) VALUES (v_school,v_test_id,'pass','{}','restore-test-v1');
+    END LOOP;
+  END LOOP;
   INSERT INTO public.analysis_candidate(
     analysis_candidate_id,school_id,candidate_type,stable_key,input_fingerprint,
     quality_status,promotion_status,payload,payload_hash,method_version
