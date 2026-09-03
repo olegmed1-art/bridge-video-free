@@ -207,24 +207,46 @@ jobs:
           [[ "$(cat "$root/current/SOURCE_REVISION")" == "$EXPECTED_REVISION" ]]
           [[ "$(stat -c '%U:%G:%a' "$root/autopilot-shadow.env")" == root:root:600 ]]
           [[ "$(stat -c '%U:%G:%a' "$root/autopilot-broker.env")" == root:root:600 ]]
-          set -a
-          source "$root/autopilot-shadow.env"
-          source "$root/autopilot-broker.env"
-          set +a
-          [[ "$AUTOPILOT_TOKEN_BROKER_URL" == "$EXPECTED_BROKER_URL" ]]
-          [[ "$AUTOPILOT_TOKEN_BROKER_EXPECTED_SOURCE_SHA" == "$EXPECTED_BROKER_SOURCE_SHA" ]]
-          [[ "$AUTOPILOT_TOKEN_BROKER_EXPECTED_ARTIFACT_SHA256" == "$EXPECTED_BROKER_ARTIFACT_SHA256" ]]
-          [[ "$AUTOPILOT_TOKEN_BROKER_EXPECTED_POLICY_SHA256" == "$EXPECTED_BROKER_POLICY_SHA256" ]]
-          [[ "$AUTOPILOT_TOKEN_BROKER_EXPECTED_PROVENANCE_SHA256" == "$EXPECTED_BROKER_PROVENANCE_SHA256" ]]
-          broker_health="${AUTOPILOT_TOKEN_BROKER_URL%/v1/github/draft-repair}/healthz"
-          health_file="$(mktemp /var/tmp/autopilot-activation-health.XXXXXXXX)"
-          trap 'rm -f -- "$health_file"' EXIT
-          curl --fail --silent --show-error --connect-timeout 10 --max-time 30 \
-            -H "X-Vercel-Protection-Bypass: $AUTOPILOT_VERCEL_BYPASS_SECRET" \
-            "$broker_health" -o "$health_file"
-          BROKER_HEALTH_FILE="$health_file" python3 - <<'PY'
-          import json, os
-          payload = json.load(open(os.environ['BROKER_HEALTH_FILE'], encoding='utf-8'))
+          AUTOPILOT_ROOT="$root" "$root/.venv/bin/python" - <<'PY'
+          import json, os, re, shlex, urllib.request
+          import psycopg
+
+          def parse_environment_file(path):
+              values = {}
+              for raw in open(path, encoding='utf-8'):
+                  line = raw.strip()
+                  if not line or line.startswith('#'):
+                      continue
+                  key, separator, encoded = line.partition('=')
+                  assert separator and re.fullmatch(r'[A-Z][A-Z0-9_]*', key)
+                  assert key not in values
+                  decoded = shlex.split(encoded, comments=False, posix=True)
+                  assert len(decoded) == 1
+                  values[key] = decoded[0]
+              return values
+
+          root = os.environ['AUTOPILOT_ROOT']
+          values = parse_environment_file(f'{root}/autopilot-shadow.env')
+          broker_values = parse_environment_file(f'{root}/autopilot-broker.env')
+          assert values.keys().isdisjoint(broker_values)
+          values.update(broker_values)
+          pins = {
+              'AUTOPILOT_TOKEN_BROKER_URL': os.environ['EXPECTED_BROKER_URL'],
+              'AUTOPILOT_TOKEN_BROKER_EXPECTED_SOURCE_SHA': os.environ['EXPECTED_BROKER_SOURCE_SHA'],
+              'AUTOPILOT_TOKEN_BROKER_EXPECTED_ARTIFACT_SHA256': os.environ['EXPECTED_BROKER_ARTIFACT_SHA256'],
+              'AUTOPILOT_TOKEN_BROKER_EXPECTED_POLICY_SHA256': os.environ['EXPECTED_BROKER_POLICY_SHA256'],
+              'AUTOPILOT_TOKEN_BROKER_EXPECTED_PROVENANCE_SHA256': os.environ['EXPECTED_BROKER_PROVENANCE_SHA256'],
+          }
+          assert all(values.get(key) == value for key, value in pins.items())
+          health_url = values['AUTOPILOT_TOKEN_BROKER_URL'].replace(
+              '/v1/github/draft-repair', '/healthz'
+          )
+          request = urllib.request.Request(health_url, headers={
+              'X-Vercel-Protection-Bypass': values['AUTOPILOT_VERCEL_BYPASS_SECRET'],
+          })
+          with urllib.request.urlopen(request, timeout=30) as response:
+              assert response.status == 200 and response.geturl() == health_url
+              payload = json.load(response)
           expected = {
               'source_revision': os.environ['EXPECTED_BROKER_SOURCE_SHA'],
               'artifact_sha256': os.environ['EXPECTED_BROKER_ARTIFACT_SHA256'],
@@ -238,14 +260,9 @@ jobs:
               'github_token_broker_enabled': True,
           }
           assert all(payload.get(key) == value for key, value in expected.items())
-          PY
-          "$root/.venv/bin/python" - <<'PY'
-          import os
-          import psycopg
-
-          with psycopg.connect(os.environ['AUTOPILOT_DATABASE_URL']) as connection:
+          with psycopg.connect(values['AUTOPILOT_DATABASE_URL']) as connection:
               with connection.cursor() as cursor:
-                  cursor.execute("SELECT autopilot.verify_broker_schema()")
+                  cursor.execute("SELECT autopilot.verify_broker_schema_v0321()")
                   row = cursor.fetchone()
           assert row == (True,)
           PY

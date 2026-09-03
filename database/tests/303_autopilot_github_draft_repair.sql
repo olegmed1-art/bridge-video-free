@@ -190,6 +190,11 @@ BEGIN
            'autopilot_runtime_principal',
            'autopilot.verify_broker_schema()',
            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+           'autopilot_runtime_principal',
+           'autopilot.verify_broker_schema_v0321()',
+           'EXECUTE'
        ) THEN
         RAISE EXCEPTION 'AUTOPILOT_DRAFT_REPAIR_RUNTIME_BOUNDARY_INVALID';
     END IF;
