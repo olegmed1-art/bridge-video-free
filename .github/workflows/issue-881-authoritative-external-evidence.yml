@@ -230,6 +230,8 @@ jobs:
               [[ "$latest_state" == 'completed:success' ]] \
                 || { echo "Latest root exact-head workflow attempt is not green: $workflow_name ($latest_state)" >&2; return 1; }
             done
+            [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')" == "$EXACT_SHA" ]] \
+              || { echo 'Main changed while live review and CI gates were evaluated' >&2; return 1; }
           }
 
           # Initial reconciliation rejects historical, blocked, or stale-green
