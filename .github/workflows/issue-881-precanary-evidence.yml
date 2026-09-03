@@ -72,8 +72,8 @@ jobs:
           grep -F 'pr_number=991' "$workflow"
           grep -F 'main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq' "$workflow"
           grep -F 'PR #991 is not merged' "$workflow"
-          grep -F 'git/ref/heads/main" --jq' "$workflow"
-          grep -F 'compare/$main_sha...$base_sha"' "$workflow"
+          grep -F 'git merge-base --is-ancestor "$reviewed_sha" "$EXACT_SHA"' "$workflow"
+          grep -F 'Reviewed head has no independent approval' "$workflow"
           retired=.github/workflows/oracle-universal-video-container-evidence.yml
           grep -F 'UNIVERSAL_VIDEO_LEGACY_CONTAINER_EVIDENCE_RETIRED=true' "$retired"
           ! grep -E 'workflow[_]dispatch:' "$retired"
