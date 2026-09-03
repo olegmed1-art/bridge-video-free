@@ -64,6 +64,39 @@ jobs:
           test "$revision" = "$EXACT_RUNTIME_SHA"
           test "$image_entrypoint" = '["/usr/bin/tini","--","/usr/local/bin/universal-video-container-entrypoint"]'
           test "$image_cmd" = '["python","-m","universal_video.spool_worker"]'
+
+          startup_cid=""
+          cleanup_startup() {
+            if [[ -n "$startup_cid" ]]; then
+              docker rm -f "$startup_cid" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup_startup EXIT
+          startup_cid="$(docker run -d \
+            --network none \
+            --read-only \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            -e PYTHONDONTWRITEBYTECODE=1 \
+            -e "UNIVERSAL_VIDEO_SOURCE_COMMIT=$EXACT_RUNTIME_SHA" \
+            -e UNIVERSAL_VIDEO_RESIDENT_ID=container \
+            -e UNIVERSAL_VIDEO_SPOOL_ROOT=/tmp/issue881/spool \
+            -e UNIVERSAL_VIDEO_STATUS_PATH=/tmp/issue881/status.json \
+            "$image_id")"
+          for attempt in $(seq 1 10); do
+            if [[ "$(docker inspect --format '{{.State.Running}}' "$startup_cid")" == "true" ]] \
+              && docker exec "$startup_cid" test -s /tmp/issue881/status.json; then
+              break
+            fi
+            sleep 1
+          done
+          test "$(docker inspect --format '{{.State.Running}}' "$startup_cid")" = "true"
+          docker exec "$startup_cid" python -c 'import json, os; from pathlib import Path; data=json.loads(Path("/tmp/issue881/status.json").read_text()); assert data["schema"] == "universal-video-resident-status-v2"; assert data["instance_state"] == "RUNNING"; assert data["resident_id"] == "container"; assert data["installed_runtime_commit"] == os.environ["UNIVERSAL_VIDEO_SOURCE_COMMIT"]'
+          docker rm -f "$startup_cid" >/dev/null
+          startup_cid=""
+          trap - EXIT
+
           docker run --rm --network none --read-only \
             --tmpfs /tmp:rw,noexec,nosuid,size=64m \
             --entrypoint /bin/sh "$image_id" \
@@ -89,7 +122,7 @@ jobs:
             -e PYTHONDONTWRITEBYTECODE=1 \
             --entrypoint python "$image_id" \
             -m universal_video.precanary synthetic-result-contract
-          printf 'runtime_sha=%s\nimmutable_image_id=%s\ndefault_entrypoint=%s\ndefault_cmd=%s\ncanonical_promotion_allowed=false\npublication_state=NOT_PUBLISHED\nreal_media_canary_run=false\n' \
+          printf 'runtime_sha=%s\nimmutable_image_id=%s\ndefault_entrypoint=%s\ndefault_cmd=%s\ndefault_startup_path=PASS\ncanonical_promotion_allowed=false\npublication_state=NOT_PUBLISHED\nreal_media_canary_run=false\n' \
             "$EXACT_RUNTIME_SHA" "$image_id" "$image_entrypoint" "$image_cmd" | tee "$RUNNER_TEMP/issue881-image.txt"
       - name: Recheck live current main before publishing candidate evidence
         run: |
@@ -183,6 +216,7 @@ jobs:
           grep -Eq '^immutable_image_id=sha256:[0-9a-f]{64}$' "$evidence"
           grep -Fx 'default_entrypoint=["/usr/bin/tini","--","/usr/local/bin/universal-video-container-entrypoint"]' "$evidence"
           grep -Fx 'default_cmd=["python","-m","universal_video.spool_worker"]' "$evidence"
+          grep -Fx 'default_startup_path=PASS' "$evidence"
           grep -Fx 'canonical_promotion_allowed=false' "$evidence"
           grep -Fx 'publication_state=NOT_PUBLISHED' "$evidence"
           grep -Fx 'real_media_canary_run=false' "$evidence"
