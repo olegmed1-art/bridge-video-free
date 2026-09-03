@@ -44,8 +44,8 @@ def source_identity_from_claim(claim: Mapping[str, Any]) -> dict[str, Any]:
         "size_bytes": size,
         "parent_folder_id": str(claim.get("source_folder_id") or ""),
         # Migration 0056 deliberately permits providers that expose no content
-        # checksum.  Preserve that absence as JSON null; an empty or malformed
-        # non-null value is still invalid and fails closed.
+        # checksum. Preserve that absence as JSON null; malformed non-null
+        # values still fail closed.
         "checksum": checksum,
     }
     if (
@@ -79,6 +79,14 @@ def _metadata(meta: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _reject_trashed(meta: Mapping[str, Any]) -> None:
+    # The real Drive adapter explicitly requests this field. A positive trash
+    # state is never eligible terminal evidence, even while direct reads still
+    # succeed for a recoverable trashed object.
+    if meta.get("trashed") is True:
+        raise TerminalEvidenceV2Error("UV_TERMINAL_ARTIFACT_TRASHED")
+
+
 def _read_live(
     file_id: str,
     *,
@@ -92,6 +100,7 @@ def _read_live(
 ) -> tuple[dict[str, Any], bytes]:
     try:
         before_raw = dict(metadata_reader(file_id, token))
+        _reject_trashed(before_raw)
         before = _metadata(before_raw)
     except TerminalEvidenceV2Error:
         raise
@@ -120,6 +129,9 @@ def _read_live(
                     metadata=before_raw,
                 )
             )
+            _reject_trashed(downloaded_raw)
+        except TerminalEvidenceV2Error:
+            raise
         except Exception as exc:
             raise TerminalEvidenceV2Error("UV_TERMINAL_DRIVE_READBACK_FAILED") from exc
         downloaded = _metadata(downloaded_raw)
@@ -136,7 +148,9 @@ def _read_live(
             raise TerminalEvidenceV2Error("UV_TERMINAL_CHECKSUM_MISMATCH")
 
     try:
-        after = _metadata(metadata_reader(file_id, token))
+        after_raw = dict(metadata_reader(file_id, token))
+        _reject_trashed(after_raw)
+        after = _metadata(after_raw)
     except TerminalEvidenceV2Error:
         raise
     except Exception as exc:
@@ -352,10 +366,13 @@ def reverify_terminal_output_live(
     ai_id = str(output.get("ai_done_drive_id") or "")
     try:
         ai_raw = dict(metadata_reader(ai_id, token))
+        _reject_trashed(ai_raw)
         with tempfile.TemporaryDirectory(prefix="uv-terminal-ai-v2-") as td:
             path = Path(td) / "AI_DONE.json"
             downloader(ai_id, path, token, max_bytes=8 * 1024 * 1024, metadata=ai_raw)
             done = json.loads(path.read_text(encoding="utf-8-sig"))
+    except TerminalEvidenceV2Error:
+        raise
     except Exception as exc:
         raise TerminalEvidenceV2Error("UV_AI_DONE_REVERIFY_FAILED") from exc
     if not isinstance(done, dict):
