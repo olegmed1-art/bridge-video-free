@@ -45,6 +45,15 @@ jobs:
             echo "INSTALL_HEAD_MOVED expected=$expected actual=$current" >&2
             exit 70
           }
+          attempt="${GITHUB_RUN_ATTEMPT:-1}"
+          [[ "$attempt" =~ ^[0-9]+$ ]] || {
+            echo "INSTALL_RUN_ATTEMPT_INVALID value=$attempt" >&2
+            exit 72
+          }
+          if (( attempt < 2 )); then
+            echo "INSTALL_REQUIRES_RERUN exact_sha=$expected run_attempt=$attempt" >&2
+            exit 72
+          fi
           command="/oracle-idle-guard-install-reviewed $expected"
           authorized="$(
             gh api --method GET --paginate --slurp \
@@ -57,14 +66,14 @@ jobs:
             echo "Expected owner-only PR comment: $command" >&2
             exit 71
           }
-          echo "INSTALL_AUTHORIZATION=PASS exact_sha=$expected"
+          echo "INSTALL_AUTHORIZATION=PASS exact_sha=$expected run_attempt=$attempt"
 
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
 
-      - name: Recheck exact branch head before SSH
+      - name: Recheck exact branch head before SSH preparation
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -118,8 +127,17 @@ jobs:
 
       - name: Install exact guard only
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
+          current="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/1061" --jq '.head.sha')"
+          [[ "$current" == "$GITHUB_SHA" ]] || {
+            echo "INSTALL_BOUNDARY_HEAD_MOVED expected=$GITHUB_SHA actual=$current" >&2
+            exit 70
+          }
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          echo "INSTALL_BOUNDARY_HEAD_RECHECK=PASS sha=$GITHUB_SHA"
           guard_sha="$(sha256sum ops/oracle_idle_state.sh | awk '{print $1}')"
           scp -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
