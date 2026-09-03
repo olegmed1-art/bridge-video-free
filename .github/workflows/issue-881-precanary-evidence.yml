@@ -69,9 +69,10 @@ jobs:
           grep -F "github.repository == 'olegmed1-art/bridge-video-free'" "$workflow"
           grep -F 'verify_live_gate(){' "$workflow"
           test "$(grep -c '^[[:space:]]*verify_live_gate$' "$workflow")" -eq 2
-          grep -F 'pr_number=991' "$workflow"
+          grep -F 'root_pr_number=991' "$workflow"
+          grep -F 'pr_number=1070' "$workflow"
           grep -F 'main_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq' "$workflow"
-          grep -F 'PR #991 is not merged' "$workflow"
+          grep -F 'Root Autopilot PR #991 is not merged' "$workflow"
           grep -F 'git merge-base --is-ancestor "$reviewed_sha" "$EXACT_SHA"' "$workflow"
           grep -F 'Reviewed head has no independent approval' "$workflow"
           retired=.github/workflows/oracle-universal-video-container-evidence.yml
