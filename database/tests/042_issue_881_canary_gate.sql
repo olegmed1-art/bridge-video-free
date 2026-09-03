@@ -59,12 +59,14 @@ BEGIN
       jsonb_build_object(
         'kind','master_pdf','locator','gdrive:file:result-pdf-123456','drive_id','result-pdf-123456',
         'name','result.pdf','mime_type','application/pdf','size_bytes',2048,
-        'parent_id','output-folder-123456','sha256',repeat('b',64)
+        'parent_id','output-folder-123456','modified_time','2026-09-03T00:00:00Z','version','101',
+        'sha256',repeat('b',64)
       ),
       jsonb_build_object(
         'kind','ai_done','locator','gdrive:file:result-ai-done-123456','drive_id','result-ai-done-123456',
         'name','AI_DONE_'||c.stable_job_key||'.json','mime_type','application/json','size_bytes',1024,
-        'parent_id','output-folder-123456','sha256',repeat('c',64)
+        'parent_id','output-folder-123456','modified_time','2026-09-03T00:00:01Z','version','102',
+        'sha256',repeat('c',64)
       )
     )
   );
@@ -164,6 +166,23 @@ BEGIN
     RAISE EXCEPTION 'missing AI_DONE semantic artifact accepted';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM NOT LIKE '%VIDEO_QUEUE_RESULT_CONTRACT_INVALID%' THEN RAISE; END IF;
+  END;
+
+  -- Even a correctly rehashed manifest without Drive revisions must fail at
+  -- the database boundary so an older/buggy authorized worker cannot bypass
+  -- the live revision fence.
+  bad_out := jsonb_set(out,'{artifact_manifest}',(out->'artifact_manifest') #- '{artifacts,0,modified_time}');
+  bad_out := jsonb_set(bad_out,'{artifact_manifest_sha256}',to_jsonb(encode(public.digest(convert_to(video_queue.canonical_json_text(bad_out->'artifact_manifest'),'UTF8'),'sha256'),'hex')));
+  bad_out := jsonb_set(bad_out,'{terminal_receipt,artifact_manifest_sha256}',bad_out->'artifact_manifest_sha256');
+  receipt_core := bad_out->'terminal_receipt' - 'evidence_sha256';
+  evidence_sha := encode(public.digest(convert_to(video_queue.canonical_json_text(receipt_core),'UTF8'),'sha256'),'hex');
+  bad_out := jsonb_set(bad_out,'{terminal_receipt,evidence_sha256}',to_jsonb(evidence_sha));
+  bad_out := jsonb_set(bad_out,'{terminal_evidence_sha256}',to_jsonb(evidence_sha));
+  BEGIN
+    PERFORM * FROM video_queue.finish_job(c.job_id,c.lease_token,'worker-issue881','REVIEW_READY',bad_out,NULL);
+    RAISE EXCEPTION 'revision-less terminal evidence accepted';
+  EXCEPTION WHEN check_violation THEN
+    NULL;
   END;
 
   BEGIN
