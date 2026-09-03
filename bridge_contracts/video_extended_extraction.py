@@ -3,10 +3,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any, Mapping, Sequence
 
 
 SCHEMA = "video-extended-extraction-v1"
+_CAUSAL_CUES = (
+    "потому что", "поэтому", "так как", "из-за того", "причина",
+    "иначе", "для того чтобы", "следовательно",
+)
 
 
 def _digest(value: object) -> str:
@@ -51,6 +56,58 @@ def _items(value: object) -> list[Mapping[str, Any]]:
     return [item for item in (value or []) if isinstance(item, Mapping)] if isinstance(value, list) else []
 
 
+def _automatic_explanations(
+    master: Mapping[str, Any], quality: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """Extract explicit causal teacher speech; never manufacture rationale."""
+    transcripts = {
+        str(item.get("segment_id")): item
+        for item in _items(master.get("transcript"))
+        if item.get("segment_id")
+    }
+    out: list[dict[str, Any]] = []
+    for rule in _items(quality.get("canon_candidates")):
+        rule_key = str(rule.get("stable_key") or rule.get("canon_observation_id") or "")
+        if not rule_key:
+            continue
+        for ref in _refs(rule):
+            segment = transcripts.get(ref)
+            if not segment:
+                continue
+            role = str(segment.get("speaker_role") or segment.get("speaker_role_candidate") or "").casefold()
+            try:
+                confidence = float(segment.get("speaker_role_confidence") or 0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            text = re.sub(r"\s+", " ", str(segment.get("text") or "")).strip()
+            low = text.casefold()
+            cues = [cue for cue in _CAUSAL_CUES if cue in low]
+            if role != "teacher" or confidence < 0.8 or not text or not cues:
+                continue
+            out.append({
+                "stable_key": f"why:{rule_key}:{ref}",
+                "rule_stable_key": rule_key,
+                "extraction_class": "EXPLICIT_CAUSAL_TEACHER_STATEMENT",
+                "statement": text,
+                "why_chain": [text],
+                "causal_cues": cues,
+                "speaker_role": "teacher",
+                "speaker_role_confidence": confidence,
+                "speaker_id": segment.get("speaker") or segment.get("speaker_id"),
+                "start": segment.get("start"),
+                "end": segment.get("end"),
+                "rejected_alternatives": [],
+                "prerequisites": [],
+                "example": None,
+                "counterexample": None,
+                "completeness": "PARTIAL_EXPLICIT_EXPLANATION",
+                "status": "REVIEW_REQUIRED",
+                "evidence_refs": [ref],
+                "generated_rationale_allowed": False,
+            })
+    return out
+
+
 def build_extended_extraction(
     master: Mapping[str, Any], quality: Mapping[str, Any]
 ) -> dict[str, Any]:
@@ -80,21 +137,29 @@ def build_extended_extraction(
 
     # These three families require explicit upstream observations.  The
     # adapter never invents terminology, chronology or external agreement.
+    explicit_explanations = [dict(item) for item in _items(master.get("explanation_observations"))]
+    automatic_explanations = _automatic_explanations(master, quality)
+    explanations = explicit_explanations + automatic_explanations
+
     for field, kind in (
         ("terminology_observations", "SCHOOL_TERMINOLOGY"),
         ("system_evolution_observations", "SYSTEM_EVOLUTION_OBSERVATION"),
         ("world_comparison_links", "WORLD_COMPARISON_LINK"),
-        ("explanation_observations", "EXPLANATION_CANDIDATE"),
     ):
         for item in _items(master.get(field)):
             status = str(item.get("status") or "REVIEW_REQUIRED")
             records.append(_record(job_id, kind, item, status))
+    for item in explanations:
+        records.append(_record(
+            job_id, "EXPLANATION_CANDIDATE", item,
+            str(item.get("status") or "REVIEW_REQUIRED"),
+        ))
 
     # A detected rule without a source-bound explanation is useful evidence,
     # but not yet a teachable unit.  Record the missing "why" explicitly.
     explained_rule_keys = {
         str(item.get("rule_stable_key") or "")
-        for item in _items(master.get("explanation_observations"))
+        for item in explanations
         if item.get("rule_stable_key")
     }
     for item in _items(quality.get("canon_candidates")):
@@ -129,6 +194,12 @@ def build_extended_extraction(
         "status": "STAGING_ONLY",
         "candidate_records": records,
         "counts_by_type": by_type,
+        "explanation_extraction": {
+            "explicit_upstream": len(explicit_explanations),
+            "automatic_explicit_causal": len(automatic_explanations),
+            "generated_rationale_allowed": False,
+            "minimum_teacher_role_confidence": 0.8,
+        },
         "authority": {
             "canon_activation": "DENY",
             "curriculum_activation": "DENY",
