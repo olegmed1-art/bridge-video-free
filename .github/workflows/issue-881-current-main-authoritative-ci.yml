@@ -78,21 +78,23 @@ jobs:
             --cap-drop ALL \
             --security-opt no-new-privileges \
             --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+            --tmpfs /run/bridge-school:rw,noexec,nosuid,size=4m \
             -e PYTHONDONTWRITEBYTECODE=1 \
             -e "UNIVERSAL_VIDEO_SOURCE_COMMIT=$EXACT_RUNTIME_SHA" \
+            -e UNIVERSAL_VIDEO_PRECANARY_STARTUP_PROBE=1 \
             -e UNIVERSAL_VIDEO_RESIDENT_ID=container \
             -e UNIVERSAL_VIDEO_SPOOL_ROOT=/tmp/issue881/spool \
-            -e UNIVERSAL_VIDEO_STATUS_PATH=/tmp/issue881/status.json \
+            -e UNIVERSAL_VIDEO_STATUS_PATH=/run/bridge-school/precanary-startup-status.json \
             "$image_id")"
           for attempt in $(seq 1 10); do
             if [[ "$(docker inspect --format '{{.State.Running}}' "$startup_cid")" == "true" ]] \
-              && docker exec "$startup_cid" test -s /tmp/issue881/status.json; then
+              && docker exec "$startup_cid" test -s /run/bridge-school/precanary-startup-status.json; then
               break
             fi
             sleep 1
           done
           test "$(docker inspect --format '{{.State.Running}}' "$startup_cid")" = "true"
-          docker exec "$startup_cid" python -c 'import json, os; from pathlib import Path; data=json.loads(Path("/tmp/issue881/status.json").read_text()); assert data["schema"] == "universal-video-resident-status-v2"; assert data["instance_state"] == "RUNNING"; assert data["resident_id"] == "container"; assert data["installed_runtime_commit"] == os.environ["UNIVERSAL_VIDEO_SOURCE_COMMIT"]'
+          docker exec "$startup_cid" python -c 'import json, os; from pathlib import Path; data=json.loads(Path("/run/bridge-school/precanary-startup-status.json").read_text()); assert data["schema"] == "universal-video-resident-status-v2"; assert data["instance_state"] == "RUNNING"; assert data["resident_id"] == "container"; assert data["installed_runtime_commit"] == os.environ["UNIVERSAL_VIDEO_SOURCE_COMMIT"]; assert data["active_jobs"] == []'
           docker rm -f "$startup_cid" >/dev/null
           startup_cid=""
           trap - EXIT
