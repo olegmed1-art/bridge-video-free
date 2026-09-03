@@ -23,7 +23,7 @@ concurrency:
   # Only an authorized lifecycle command enters the production fence. Other
   # issue comments get a unique no-op group and cannot replace a pending
   # workload or power run before their job-level condition skips them.
-  group: ${{ github.event_name == 'workflow_dispatch' && 'oracle-instance-workload-mutation' || (github.event_name == 'issue_comment' && github.actor == github.repository_owner && contains(fromJSON('["/oracle-instance status","/oracle-instance start","/oracle-instance stop"]'), github.event.comment.body)) && 'oracle-instance-workload-mutation' || format('oracle-instance-power-noop-{0}', github.run_id) }}
+  group: ${{ (github.event_name == 'workflow_dispatch' && inputs.action == 'status') && format('oracle-instance-status-{0}', github.run_id) || (github.event_name == 'issue_comment' && github.actor == github.repository_owner && github.event.comment.body == '/oracle-instance status') && format('oracle-instance-status-{0}', github.run_id) || ((github.event_name == 'workflow_dispatch' && contains(fromJSON('["start","stop"]'), inputs.action)) || (github.event_name == 'issue_comment' && github.actor == github.repository_owner && contains(fromJSON('["/oracle-instance start","/oracle-instance stop"]'), github.event.comment.body))) && 'oracle-instance-workload-mutation' || format('oracle-instance-power-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
@@ -218,10 +218,16 @@ jobs:
           authorization_rc=$?
           set -e
           expected_authorization=$'ORACLE_STOP_AUTHORIZED=YES\nORACLE_STOP_AUTHORIZATION_REASON=fresh_exact_idle'
+          busy_refusal=$'ORACLE_STOP_AUTHORIZED=NO\nORACLE_STOP_AUTHORIZATION_REASON=state_busy_forbids_stop'
           if [[ $authorization_rc -eq 0 && "$authorization" == "$expected_authorization" ]]; then
             stop_authorized=YES
             idle_state=IDLE
             idle_reason=fresh_exact_idle
+          elif [[ $authorization_rc -ne 0 && "$authorization" == "$busy_refusal" ]]; then
+            stop_authorized=NO
+            idle_state=BUSY
+            idle_reason="$(sed -n 's/^ORACLE_IDLE_REASON=//p' "$proof")"
+            [[ -n "$idle_reason" ]] || idle_reason=confirmed_busy
           else
             stop_authorized=NO
             idle_state=UNKNOWN

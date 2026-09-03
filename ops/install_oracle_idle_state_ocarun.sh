@@ -51,6 +51,8 @@ tmp_backup=''
 tmp_sudoers_backup=''
 restore_probe=''
 sudoers_restore_probe=''
+trusted_source=''
+trusted_authorizer=''
 proof='/tmp/oracle-idle-state-install-proof.txt'
 authorizer_stderr='/tmp/oracle-idle-state-install-authorizer.stderr'
 promoted=0
@@ -127,10 +129,26 @@ cleanup_and_rollback() {
   fi
   rm -f "$tmp_sudoers" "$tmp_target" "$tmp_backup" "$tmp_sudoers_backup" \
     "$restore_probe" "$sudoers_restore_probe" "$SOURCE_FILE" "$AUTHORIZER_FILE" \
-    "$proof" "$authorizer_stderr"
+    "$trusted_source" "$trusted_authorizer" "$proof" "$authorizer_stderr"
   exit "$rc"
 }
 trap cleanup_and_rollback EXIT
+
+# Freeze untrusted /tmp inputs into root-only copies before either is used for
+# promotion or execution. A concurrent writer can only make the digest check fail.
+trusted_source="$(mktemp --tmpdir="$BACKUP_DIR" .oracle-idle-state.source.XXXXXX)"
+trusted_authorizer="$(mktemp --tmpdir="$BACKUP_DIR" .oracle-idle-authorizer.source.XXXXXX)"
+install -o root -g root -m 0700 "$SOURCE_FILE" "$trusted_source"
+install -o root -g root -m 0700 "$AUTHORIZER_FILE" "$trusted_authorizer"
+[[ "$(sha256sum "$trusted_source" | awk '{print $1}')" == "$SOURCE_SHA256" ]] || fail 'trusted source digest mismatch'
+[[ "$(sha256sum "$trusted_authorizer" | awk '{print $1}')" == "$AUTHORIZER_SHA256" ]] || fail 'trusted authorizer digest mismatch'
+bash -n "$trusted_source"
+python3 - "$trusted_authorizer" <<'PYAUTH'
+import ast, pathlib, sys
+ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"), filename=sys.argv[1])
+PYAUTH
+[[ "$(stat -c '%U:%G:%a' "$trusted_source")" == 'root:root:700' ]] || fail 'trusted source ownership/mode invalid'
+[[ "$(stat -c '%U:%G:%a' "$trusted_authorizer")" == 'root:root:700' ]] || fail 'trusted authorizer ownership/mode invalid'
 
 if [[ -e "$BACKUP" || -L "$BACKUP" ]]; then
   [[ -f "$BACKUP" && ! -L "$BACKUP" ]] || fail 'rollback backup path is unsafe'
@@ -186,7 +204,7 @@ sudoers_restore_probe=''
 printf 'ORACLE_IDLE_ROLLBACK_SUDOERS_PROBE=PASS\n'
 
 tmp_target="$(mktemp --tmpdir=/usr/local/sbin .oracle-idle-state.install.XXXXXX)"
-install -o root -g root -m 0755 "$SOURCE_FILE" "$tmp_target"
+install -o root -g root -m 0755 "$trusted_source" "$tmp_target"
 [[ "$(sha256sum "$tmp_target" | awk '{print $1}')" == "$SOURCE_SHA256" ]] || fail 'staged target digest mismatch'
 bash -n "$tmp_target"
 mv -f "$tmp_target" "$TARGET"
@@ -218,7 +236,7 @@ state="${lines[4]#ORACLE_IDLE_STATE=}"
 # that is syntactically valid but stale, contradictory, or otherwise rejected
 # must roll the promoted guard and sudoers state back before this script exits.
 set +e
-authorization="$(python3 "$AUTHORIZER_FILE" --proof "$proof" --max-age-seconds 30 --max-duration-seconds 30 --max-future-skew-seconds 5 2>"$authorizer_stderr")"
+authorization="$(python3 "$trusted_authorizer" --proof "$proof" --max-age-seconds 30 --max-duration-seconds 30 --max-future-skew-seconds 5 2>"$authorizer_stderr")"
 authorization_rc=$?
 set -e
 [[ ! -s "$authorizer_stderr" ]] || { cat "$authorizer_stderr" >&2; fail 'exact authorizer emitted stderr'; }
@@ -239,7 +257,7 @@ case "$state" in
   *) fail 'unreachable classifier state' ;;
 esac
 
-authorizer_sha_readback="$(sha256sum "$AUTHORIZER_FILE" | awk '{print $1}')"
+authorizer_sha_readback="$(sha256sum "$trusted_authorizer" | awk '{print $1}')"
 [[ "$authorizer_sha_readback" == "$AUTHORIZER_SHA256" ]] || fail 'authorizer changed during transaction'
 
 committed=1

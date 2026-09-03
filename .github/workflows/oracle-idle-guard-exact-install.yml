@@ -16,7 +16,8 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: oracle-idle-guard-exact-install-627
+  # Guard promotion is a lifecycle mutation and serializes with STOP.
+  group: oracle-instance-workload-mutation
   cancel-in-progress: false
 
 jobs:
@@ -164,6 +165,27 @@ jobs:
           scp -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
             ops/install_oracle_idle_state_ocarun.sh "$ORACLE_USER@$ORACLE_HOST:/tmp/install_oracle_idle_state_ocarun.sh"
+          # Actual mutation boundary: transfers are complete, but no privileged
+          # installer code has run. Re-read both primary sources now.
+          current="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/1061" --jq '.head.sha')"
+          [[ "$current" == "$GITHUB_SHA" ]] || {
+            echo "INSTALL_FINAL_HEAD_MOVED expected=$GITHUB_SHA actual=$current" >&2
+            exit 70
+          }
+          command="/oracle-idle-guard-install-reviewed $GITHUB_SHA"
+          authorized="$(
+            gh api --method GET --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/issues/1061/comments?per_page=100" \
+            | jq --arg command "$command" \
+              '[.[][] | select(.user.login == "olegmed1-art" and .body == $command)] | length'
+          )"
+          [[ "$authorized" =~ ^[1-9][0-9]*$ ]] || {
+            echo "INSTALL_FINAL_AUTHORIZATION_MISSING exact_sha=$GITHUB_SHA" >&2
+            exit 71
+          }
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          echo "INSTALL_FINAL_HEAD_RECHECK=PASS sha=$GITHUB_SHA"
+          echo "INSTALL_FINAL_AUTHORIZATION=PASS sha=$GITHUB_SHA"
           ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
