@@ -20,10 +20,46 @@ old_sha="$(sha256sum "$TARGET" | awk '{print $1}')"
 [[ "$old_sha" =~ ^[0-9a-f]{64}$ ]] || fail 'existing guard digest invalid'
 readonly BACKUP="/usr/local/sbin/oracle-idle-state.rollback-${old_sha}"
 tmp_sudoers="$(mktemp)"
-tmp_target="$(mktemp --tmpdir=/usr/local/sbin .oracle-idle-state.install.XXXXXX)"
+tmp_target=''
 tmp_backup=''
+tmp_restore=''
+restore_probe=''
 proof='/tmp/oracle-idle-state-install-proof.txt'
-trap 'rm -f "$tmp_sudoers" "$tmp_target" "$tmp_backup" "$SOURCE_FILE" "$proof"' EXIT
+promoted=0
+committed=0
+
+atomic_copy_verified() {
+  local source="$1"
+  local expected_sha="$2"
+  local destination="$3"
+  local staged=''
+  local destination_dir="${destination%/*}"
+  local destination_name="${destination##*/}"
+  [[ "$destination_dir" != "$destination" ]] || return 1
+  staged="$(mktemp --tmpdir="$destination_dir" ".${destination_name}.stage.XXXXXX")" || return 1
+  install -o root -g root -m 0755 "$source" "$staged" || { rm -f "$staged"; return 1; }
+  [[ "$(sha256sum "$staged" | awk '{print $1}')" == "$expected_sha" ]] || { rm -f "$staged"; return 1; }
+  bash -n "$staged" || { rm -f "$staged"; return 1; }
+  mv -f "$staged" "$destination" || { rm -f "$staged"; return 1; }
+  [[ "$(sha256sum "$destination" | awk '{print $1}')" == "$expected_sha" ]]
+}
+
+cleanup_and_rollback() {
+  local rc=$?
+  trap - EXIT
+  if (( rc != 0 && promoted == 1 && committed == 0 )); then
+    if atomic_copy_verified "$BACKUP" "$old_sha" "$TARGET"; then
+      printf 'ORACLE_IDLE_INSTALL_ROLLBACK=PASS\n' >&2
+      printf 'ORACLE_IDLE_ROLLBACK_SHA256=%s\n' "$old_sha" >&2
+    else
+      printf 'ORACLE_IDLE_INSTALL_ROLLBACK=FAIL\n' >&2
+      rc=97
+    fi
+  fi
+  rm -f "$tmp_sudoers" "$tmp_target" "$tmp_backup" "$tmp_restore" "$restore_probe" "$SOURCE_FILE" "$proof"
+  exit "$rc"
+}
+trap cleanup_and_rollback EXIT
 
 # Preserve the exact previous executable before any replacement. Reuse of an
 # existing immutable-by-name backup is allowed only when its digest matches the
@@ -35,17 +71,31 @@ else
   tmp_backup="$(mktemp --tmpdir=/usr/local/sbin .oracle-idle-state.rollback.XXXXXX)"
   install -o root -g root -m 0755 "$TARGET" "$tmp_backup"
   [[ "$(sha256sum "$tmp_backup" | awk '{print $1}')" == "$old_sha" ]] || fail 'rollback backup verification failed'
+  bash -n "$tmp_backup"
   mv -f "$tmp_backup" "$BACKUP"
   tmp_backup=''
 fi
 
+# Exercise the exact atomic restore primitive against a sacrificial path on the
+# target filesystem before promotion. A backup is not considered recoverable
+# unless this probe can restore and verify its exact digest.
+restore_probe="/usr/local/sbin/.oracle-idle-state-restore-probe.$$"
+[[ ! -e "$restore_probe" && ! -L "$restore_probe" ]] || fail 'restore probe path collision'
+atomic_copy_verified "$BACKUP" "$old_sha" "$restore_probe" || fail 'rollback restore probe failed'
+[[ "$(sha256sum "$restore_probe" | awk '{print $1}')" == "$old_sha" ]] || fail 'rollback restore probe digest mismatch'
+rm -f "$restore_probe"
+restore_probe=''
+printf 'ORACLE_IDLE_ROLLBACK_PROBE=PASS\n'
+
 # Stage the exact candidate on the same filesystem and atomically rename it
 # into place only after syntax and digest verification have passed.
+tmp_target="$(mktemp --tmpdir=/usr/local/sbin .oracle-idle-state.install.XXXXXX)"
 install -o root -g root -m 0755 "$SOURCE_FILE" "$tmp_target"
 [[ "$(sha256sum "$tmp_target" | awk '{print $1}')" == "$SOURCE_SHA256" ]] || fail 'staged target digest mismatch'
 bash -n "$tmp_target"
 mv -f "$tmp_target" "$TARGET"
 tmp_target=''
+promoted=1
 [[ "$(sha256sum "$TARGET" | awk '{print $1}')" == "$SOURCE_SHA256" ]] || fail 'installed target digest mismatch'
 
 cat > "$tmp_sudoers" <<'EOF'
@@ -66,6 +116,9 @@ mapfile -t lines < "$proof"
 [[ "${lines[2]}" =~ ^ORACLE_IDLE_OBSERVED_AT_EPOCH=[0-9]+$ ]] || fail 'classifier observation timestamp invalid'
 [[ "${lines[3]}" =~ ^ORACLE_IDLE_REASON=[A-Za-z0-9_./,:=+-]+$ ]] || fail 'classifier reason invalid'
 [[ "${lines[4]}" =~ ^ORACLE_IDLE_STATE=(IDLE|BUSY|UNKNOWN)$ ]] || fail 'classifier state invalid'
+
+# All post-promotion validation passed. Disable rollback only now.
+committed=1
 printf 'ORACLE_IDLE_BACKUP_PATH=%s\n' "$BACKUP"
 printf 'ORACLE_IDLE_BACKUP_SHA256=%s\n' "$old_sha"
 printf 'ORACLE_IDLE_INSTALLED_SHA256=%s\n' "$SOURCE_SHA256"
