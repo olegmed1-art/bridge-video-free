@@ -38,15 +38,18 @@ jobs:
           set -euo pipefail
           expected="$GITHUB_SHA"
           [[ "$expected" =~ ^[0-9a-f]{40}$ ]]
-          current="$(gh api "repos/$GITHUB_REPOSITORY/pulls/1061" --jq '.head.sha')"
+          current="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/1061" --jq '.head.sha')"
           [[ "$current" == "$expected" ]] || {
             echo "INSTALL_HEAD_MOVED expected=$expected actual=$current" >&2
             exit 70
           }
           command="/oracle-idle-guard-install-reviewed $expected"
-          authorized="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/1061/comments?per_page=100" \
-            --jq '[.[] | select(.user.login == "olegmed1-art" and .body == $command)] | length' \
-            --raw-field command="$command" 2>/dev/null || true)"
+          authorized="$(
+            gh api --method GET --paginate --slurp \
+              "repos/$GITHUB_REPOSITORY/issues/1061/comments?per_page=100" \
+            | jq --arg command "$command" \
+              '[.[][] | select(.user.login == "olegmed1-art" and .body == $command)] | length'
+          )"
           [[ "$authorized" =~ ^[1-9][0-9]*$ ]] || {
             echo "INSTALL_AUTHORIZATION_MISSING exact_sha=$expected" >&2
             echo "Expected owner-only PR comment: $command" >&2
@@ -66,7 +69,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          current="$(gh api "repos/$GITHUB_REPOSITORY/pulls/1061" --jq '.head.sha')"
+          current="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/1061" --jq '.head.sha')"
           test "$current" = "$GITHUB_SHA"
           echo "EXACT_HEAD_RECHECK=PASS sha=$GITHUB_SHA"
 
