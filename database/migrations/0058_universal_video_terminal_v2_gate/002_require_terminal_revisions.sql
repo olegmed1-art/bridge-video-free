@@ -14,9 +14,11 @@ ALTER TABLE video_queue.job
         status <> 'REVIEW_READY'
         OR (
             NULLIF(output #>> '{artifact_manifest,artifacts,0,modified_time}', '') IS NOT NULL
-            AND (output #>> '{artifact_manifest,artifacts,0,version}') ~ '^[0-9]+$'
+            AND NULLIF(output #>> '{artifact_manifest,artifacts,0,version}', '') IS NOT NULL
+            AND COALESCE((output #>> '{artifact_manifest,artifacts,0,version}') ~ '^[0-9]+$', false)
             AND NULLIF(output #>> '{artifact_manifest,artifacts,1,modified_time}', '') IS NOT NULL
-            AND (output #>> '{artifact_manifest,artifacts,1,version}') ~ '^[0-9]+$'
+            AND NULLIF(output #>> '{artifact_manifest,artifacts,1,version}', '') IS NOT NULL
+            AND COALESCE((output #>> '{artifact_manifest,artifacts,1,version}') ~ '^[0-9]+$', false)
         )
     ) NOT VALID;
 
