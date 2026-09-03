@@ -3,12 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import urllib.error
 from unittest.mock import patch
 
 import pytest
 
 from oracle_autopilot.contract import (
     AutopilotContractError,
+    AutopilotRetryableError,
     ClaimedTask,
     build_draft_repair_broker_payload,
     claimed_task_from_row,
@@ -545,6 +547,38 @@ def test_bounded_draft_repair_rejects_unapproved_release_before_post(monkeypatch
     ), pytest.raises(AutopilotContractError, match="RELEASE_UNAPPROVED"):
         execute_bounded_draft_repair(_draft_goal())
     assert methods == ["GET"]
+
+
+@pytest.mark.parametrize("status", [408, 425, 429, 500, 503])
+def test_broker_health_transient_status_is_retryable_before_post(
+    monkeypatch, status
+):
+    broker_url = (
+        "https://bridge-school-autopilot-cslfiz83g-"
+        "olegmed1-4368s-projects.vercel.app/v1/github/draft-repair"
+    )
+
+    class Opener:
+        @staticmethod
+        def open(request, **_kwargs):
+            raise urllib.error.HTTPError(
+                request.full_url, status, "transient", {}, None
+            )
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_handlers: Opener())
+    with patch.dict(
+        os.environ,
+        {
+            "AUTOPILOT_TOKEN_BROKER_URL": broker_url,
+            "AUTOPILOT_TOKEN_BROKER_SECRET": "s" * 64,
+            "AUTOPILOT_VERCEL_BYPASS_SECRET": "b" * 64,
+            **_broker_release_env(),
+        },
+        clear=True,
+    ), pytest.raises(
+        AutopilotRetryableError, match="TOKEN_BROKER_TRANSIENT_ERROR"
+    ):
+        execute_bounded_draft_repair(_draft_goal())
 
 
 def test_github_pr_snapshot_uses_bounded_public_get(monkeypatch):

@@ -27,23 +27,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: pip
-          cache-dependency-path: |
-            autopilot_token_broker_service/pyproject.toml
-            autopilot_token_broker_service/uv.lock
       - name: Install exact service
-        run: python -m pip install --disable-pip-version-check -q -e ./autopilot_token_broker_service
+        run: |
+          python -m pip install --disable-pip-version-check -q 'uv==0.11.33'
+          uv sync --project autopilot_token_broker_service --locked
       - name: Compile
-        run: python -m compileall -q autopilot_token_broker_service/broker_app
+        run: autopilot_token_broker_service/.venv/bin/python -m compileall -q autopilot_token_broker_service/broker_app
       - name: Unit and contract tests
-        run: python -m unittest discover -s autopilot_token_broker_service/tests -p 'test_*.py' -v
+        run: autopilot_token_broker_service/.venv/bin/python -m unittest discover -s autopilot_token_broker_service/tests -p 'test_*.py' -v
       - name: Independent static boundary
-        run: python autopilot_token_broker_service/tools/verify_token_broker_contract.py
+        run: autopilot_token_broker_service/.venv/bin/python autopilot_token_broker_service/tools/verify_token_broker_contract.py
       - name: Physical no-merge contract
         shell: bash
         run: |
           set -euo pipefail
-          result="$(python autopilot_token_broker_service/tools/verify_token_broker_contract.py)"
+          result="$(autopilot_token_broker_service/.venv/bin/python autopilot_token_broker_service/tools/verify_token_broker_contract.py)"
           python - "$result" <<'PY'
           import json
           import sys

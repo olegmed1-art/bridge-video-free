@@ -709,6 +709,8 @@ def _require_approved_broker_release(
                 raise AutopilotContractError("TOKEN_BROKER_RELEASE_UNAPPROVED")
             raw = response.read(TOKEN_BROKER_RESPONSE_LIMIT_BYTES + 1)
     except urllib.error.HTTPError as exc:
+        if exc.code in {408, 425, 429} or 500 <= exc.code <= 599:
+            raise AutopilotRetryableError("TOKEN_BROKER_TRANSIENT_ERROR") from exc
         raise AutopilotContractError("TOKEN_BROKER_RELEASE_UNAPPROVED") from exc
     except (urllib.error.URLError, TimeoutError) as exc:
         raise AutopilotRetryableError("TOKEN_BROKER_TRANSIENT_ERROR") from exc

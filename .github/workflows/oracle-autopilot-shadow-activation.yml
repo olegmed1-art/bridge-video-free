@@ -175,6 +175,14 @@ jobs:
           [[ "$(cat "$root/current/SOURCE_REVISION")" == "$EXPECTED_REVISION" ]]
           [[ "$(stat -c '%U:%G:%a' "$root/autopilot-shadow.env")" == root:root:600 ]]
           [[ "$(stat -c '%U:%G:%a' "$root/autopilot-broker.env")" == root:root:600 ]]
+          grep -Eq '^AUTOPILOT_TOKEN_BROKER_EXPECTED_SOURCE_SHA="?[0-9a-f]{40}"?$' \
+            "$root/autopilot-broker.env"
+          for pin in \
+            AUTOPILOT_TOKEN_BROKER_EXPECTED_ARTIFACT_SHA256 \
+            AUTOPILOT_TOKEN_BROKER_EXPECTED_POLICY_SHA256 \
+            AUTOPILOT_TOKEN_BROKER_EXPECTED_PROVENANCE_SHA256; do
+            grep -Eq "^${pin}=\"?[0-9a-f]{64}\"?$" "$root/autopilot-broker.env"
+          done
           [[ -f "$unit" ]]
           [[ "$(sha256sum "$unit" | awk '{print $1}')" == "$EXPECTED_UNIT_SHA256" ]]
           grep -Fx 'User=school-autopilot' "$unit" >/dev/null
