@@ -19,7 +19,7 @@ from diana_longitudinal_quality_v4_2 import (
     build_quality_layer,
 )
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def _safe_filename(value: str) -> str:
