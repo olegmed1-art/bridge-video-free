@@ -15,11 +15,39 @@ grep -Fq 'ORACLE_IDLE_STATE=IDLE|BUSY|UNKNOWN' "$SOURCE_FILE" || fail 'unexpecte
 
 readonly TARGET='/usr/local/sbin/oracle-idle-state'
 readonly SUDOERS='/etc/sudoers.d/oracle-idle-state-ocarun'
+[[ -f "$TARGET" && ! -L "$TARGET" ]] || fail 'existing guard required for recoverable backup'
+old_sha="$(sha256sum "$TARGET" | awk '{print $1}')"
+[[ "$old_sha" =~ ^[0-9a-f]{64}$ ]] || fail 'existing guard digest invalid'
+readonly BACKUP="/usr/local/sbin/oracle-idle-state.rollback-${old_sha}"
 tmp_sudoers="$(mktemp)"
+tmp_target="$(mktemp --tmpdir=/usr/local/sbin .oracle-idle-state.install.XXXXXX)"
+tmp_backup=''
 proof='/tmp/oracle-idle-state-install-proof.txt'
-trap 'rm -f "$tmp_sudoers" "$SOURCE_FILE" "$proof"' EXIT
+trap 'rm -f "$tmp_sudoers" "$tmp_target" "$tmp_backup" "$SOURCE_FILE" "$proof"' EXIT
 
-install -o root -g root -m 0755 "$SOURCE_FILE" "$TARGET"
+# Preserve the exact previous executable before any replacement. Reuse of an
+# existing immutable-by-name backup is allowed only when its digest matches the
+# name; otherwise fail closed rather than overwrite rollback evidence.
+if [[ -e "$BACKUP" || -L "$BACKUP" ]]; then
+  [[ -f "$BACKUP" && ! -L "$BACKUP" ]] || fail 'rollback backup path is unsafe'
+  [[ "$(sha256sum "$BACKUP" | awk '{print $1}')" == "$old_sha" ]] || fail 'rollback backup digest mismatch'
+else
+  tmp_backup="$(mktemp --tmpdir=/usr/local/sbin .oracle-idle-state.rollback.XXXXXX)"
+  install -o root -g root -m 0755 "$TARGET" "$tmp_backup"
+  [[ "$(sha256sum "$tmp_backup" | awk '{print $1}')" == "$old_sha" ]] || fail 'rollback backup verification failed'
+  mv -f "$tmp_backup" "$BACKUP"
+  tmp_backup=''
+fi
+
+# Stage the exact candidate on the same filesystem and atomically rename it
+# into place only after syntax and digest verification have passed.
+install -o root -g root -m 0755 "$SOURCE_FILE" "$tmp_target"
+[[ "$(sha256sum "$tmp_target" | awk '{print $1}')" == "$SOURCE_SHA256" ]] || fail 'staged target digest mismatch'
+bash -n "$tmp_target"
+mv -f "$tmp_target" "$TARGET"
+tmp_target=''
+[[ "$(sha256sum "$TARGET" | awk '{print $1}')" == "$SOURCE_SHA256" ]] || fail 'installed target digest mismatch'
+
 cat > "$tmp_sudoers" <<'EOF'
 # Exact read-only idle classifier for OCI Run Command. Empty argv is required.
 ocarun ALL=(root) NOPASSWD: /usr/local/sbin/oracle-idle-state ""
@@ -38,4 +66,7 @@ mapfile -t lines < "$proof"
 [[ "${lines[2]}" =~ ^ORACLE_IDLE_OBSERVED_AT_EPOCH=[0-9]+$ ]] || fail 'classifier observation timestamp invalid'
 [[ "${lines[3]}" =~ ^ORACLE_IDLE_REASON=[A-Za-z0-9_./,:=+-]+$ ]] || fail 'classifier reason invalid'
 [[ "${lines[4]}" =~ ^ORACLE_IDLE_STATE=(IDLE|BUSY|UNKNOWN)$ ]] || fail 'classifier state invalid'
+printf 'ORACLE_IDLE_BACKUP_PATH=%s\n' "$BACKUP"
+printf 'ORACLE_IDLE_BACKUP_SHA256=%s\n' "$old_sha"
+printf 'ORACLE_IDLE_INSTALLED_SHA256=%s\n' "$SOURCE_SHA256"
 echo ORACLE_IDLE_STATE_OCARUN_INSTALL_PASS
