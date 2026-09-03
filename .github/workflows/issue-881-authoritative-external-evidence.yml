@@ -165,7 +165,7 @@ jobs:
           )
 
           verify_live_gate(){
-            local live_head live_state main_sha root_pr_json root_merge_sha root_reviewed_sha prior_gate_pr_json prior_gate_merge_sha review_count codex_comments_json codex_clean_count review_prefix resolved_review_sha reviews_json approval_count threads_json blocker_count runs_json root_runs_json workflow_name latest_state
+            local live_head live_state main_sha root_pr_json root_merge_sha root_reviewed_sha prior_gate_pr_json prior_gate_merge_sha review_count codex_comments_json codex_clean_count reviews_json approval_count threads_json blocker_count runs_json root_runs_json workflow_name latest_state
             local -a exact_parents
             pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr_number")"
             live_state="$(jq -r '.state' <<<"$pr_json")"
@@ -203,15 +203,10 @@ jobs:
             review_count="$(jq --arg sha "$reviewed_sha" \
               '[.[].[] | select(.commit_id == $sha and (.user.login | startswith("chatgpt-codex-connector")) and (.state == "COMMENTED" or .state == "APPROVED"))] | length' \
               <<<"$reviews_json")"
-            review_prefix="${reviewed_sha:0:10}"
-            resolved_review_sha="$(git rev-parse --verify "${review_prefix}^{commit}")" \
-              || { echo 'Codex reviewed commit prefix is not uniquely resolvable' >&2; return 1; }
-            [[ "$resolved_review_sha" == "$reviewed_sha" ]] \
-              || { echo 'Codex reviewed commit prefix does not resolve to the exact current head' >&2; return 1; }
             codex_comments_json="$(gh api --paginate --slurp \
               "repos/$GITHUB_REPOSITORY/issues/$pr_number/comments?per_page=100")"
-            codex_clean_count="$(jq --arg prefix "$review_prefix" \
-              '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | select(.body | contains("Codex Review: Didn\u0027t find any major issues.")) | select(.body | contains("**Reviewed commit:** `" + $prefix + "`"))] | length' \
+            codex_clean_count="$(jq --arg sha "$reviewed_sha" \
+              '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | select(.body | contains("Codex Review: Didn\u0027t find any major issues.")) | select(.body | contains("**Reviewed commit:** `" + $sha + "`"))] | length' \
               <<<"$codex_comments_json")"
             (( review_count > 0 || codex_clean_count > 0 )) \
               || { echo 'Exact head has neither a Codex review object nor an exact clean Codex bot receipt' >&2; return 1; }
