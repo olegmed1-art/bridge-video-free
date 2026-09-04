@@ -213,7 +213,7 @@ jobs:
                               operation='get_attached_boot_volume'
                               boot=block.get_boot_volume(attached[0]).data
                               boot_volumes[boot.id]=boot
-                              boot_gb=boot.size_in_gbs
+                              boot_gb=str(boot.size_in_gbs)
                           instances.append((region,inst.lifecycle_state,inst.shape,boot_gb))
                       for ad in ads:
                           operation='list_boot_volumes'
@@ -236,9 +236,7 @@ jobs:
               print(f'subscribed_regions={len(regions)}')
               print(f'queried_compartments={len(compartments)}')
               print(f'nonterminated_instances={len(instances)}')
-              for n,(region,state,shape,boot_gb) in enumerate(
-                  sorted(instances, key=lambda x: (x[0],x[1],x[2],str(x[3]))), 1
-              ):
+              for n,(region,state,shape,boot_gb) in enumerate(sorted(instances), 1):
                   print(f'instance_{n}_region={region}')
                   print(f'instance_{n}_state={state}')
                   print(f'instance_{n}_shape={shape}')
