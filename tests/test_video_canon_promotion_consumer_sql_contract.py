@@ -37,6 +37,14 @@ def test_authority_and_independent_assurance_are_fail_closed():
     assert "VIDEO_CANON_BASE_VERIFIERS_REVOKED_DURING_PROMOTION" in post_activation
     assert "VIDEO_CANON_ASSURANCE_SET_CHANGED_DURING_PROMOTION" in post_activation
     assert "WORLD" not in MIGRATION
+    reassignment = MIGRATION.split(
+        "CREATE OR REPLACE FUNCTION bidding.reassign_video_canon_assurance", 1
+    )[1].split("CREATE TABLE bidding.video_canon_assurance_verdict", 1)[0]
+    assert reassignment.count(
+        "video_canon_ai_verification_bundle_id=\n         v_old.video_canon_ai_verification_bundle_id"
+    ) == 2
+    assert "video_canon_ai_verification_bundle_id=\n           v_old.video_canon_ai_verification_bundle_id" in reassignment
+    assert "WHERE analysis_candidate_id=(" not in reassignment
 
 
 def test_delivery_is_leased_fenced_atomic_and_retained():

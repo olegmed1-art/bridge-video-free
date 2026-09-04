@@ -139,7 +139,7 @@ BEGIN
   IF NOT FOUND OR v_old.status<>'active' THEN
     RAISE EXCEPTION 'VIDEO_CANON_REASSIGNMENT_TARGET_INVALID' USING ERRCODE='23514';
   END IF;
-  -- The bundle is the candidate-scoped serialization point. Enqueue takes a
+  -- The bundle is the bundle-scoped serialization point. Enqueue takes a
   -- SHARE lock on this same row before it validates active assignments, so a
   -- job cannot appear between the reassignment scan and supersession.
   PERFORM 1 FROM bidding.video_canon_ai_verification_bundle
@@ -151,26 +151,22 @@ BEGIN
     RAISE EXCEPTION 'VIDEO_CANON_REASSIGNMENT_TARGET_INVALID' USING ERRCODE='23514';
   END IF;
   PERFORM 1 FROM bidding.video_canon_promotion_job
-   WHERE analysis_candidate_id=(
-     SELECT analysis_candidate_id FROM bidding.video_canon_ai_verification_bundle
-      WHERE video_canon_ai_verification_bundle_id=v_old.video_canon_ai_verification_bundle_id
-   ) FOR UPDATE;
+   WHERE video_canon_ai_verification_bundle_id=
+         v_old.video_canon_ai_verification_bundle_id FOR UPDATE;
   IF EXISTS (
     SELECT 1 FROM bidding.video_canon_promotion_job
-     WHERE analysis_candidate_id=(
-       SELECT analysis_candidate_id FROM bidding.video_canon_ai_verification_bundle
-        WHERE video_canon_ai_verification_bundle_id=v_old.video_canon_ai_verification_bundle_id
-     ) AND status='promoted'
+     WHERE video_canon_ai_verification_bundle_id=
+           v_old.video_canon_ai_verification_bundle_id
+       AND status='promoted'
   ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_REASSIGNMENT_AFTER_PROMOTION' USING ERRCODE='55000';
   END IF;
   UPDATE bidding.video_canon_promotion_job SET status='blocked',
     terminal_error_code='STATE_STALE',lease_owner=NULL,lease_token=NULL,
     lease_expires_at=NULL,updated_at=clock_timestamp()
-   WHERE analysis_candidate_id=(
-     SELECT analysis_candidate_id FROM bidding.video_canon_ai_verification_bundle
-      WHERE video_canon_ai_verification_bundle_id=v_old.video_canon_ai_verification_bundle_id
-   ) AND status IN ('queued','leased');
+   WHERE video_canon_ai_verification_bundle_id=
+         v_old.video_canon_ai_verification_bundle_id
+     AND status IN ('queued','leased');
   PERFORM set_config('bidding.assurance_reassignment','on',true);
   UPDATE bidding.video_canon_assurance_assignment SET status='superseded',
     superseded_at=clock_timestamp(),supersession_reason_sha256=p_reason_sha256

@@ -11,6 +11,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from database.runtime_worker_preflight import normalize_dsn
+from database.source_identity_persistence import drive_source_native_key
 
 SCHOOL_STABLE_NAME = "Школа спортивного бриджа"
 
@@ -33,6 +34,13 @@ def _versioned_stable_key(candidate_type: str, stable_key: str, payload_hash: st
         return stable_key
     suffix = f":sha256:{payload_hash}"
     return stable_key if stable_key.endswith(suffix) else f"{stable_key}{suffix}"
+
+
+def _drive_identity_lookup_key(source_drive_id: object) -> str:
+    value = str(source_drive_id or "").strip()
+    if not value:
+        raise ValueError("source_drive_id is required")
+    return value if value.startswith("google-drive:") else drive_source_native_key(value)
 
 
 def _table_exists(cursor) -> bool:
@@ -101,13 +109,21 @@ def persist_quality_candidates(raw_dsn: str, payload: Mapping[str, Any]) -> dict
                       FROM public.source s
                       JOIN public.source_identity si ON si.source_id = s.source_id
                      WHERE si.source_native_key = %s
+                       AND s.school_id = %s
                      ORDER BY si.last_seen_at DESC, si.first_seen_at DESC
                      LIMIT 1
                     """,
-                    (str(run_row[1]),),
+                    (_drive_identity_lookup_key(run_row[1]), school_id),
                 )
                 source_row = cursor.fetchone()
                 source_id = source_row[0] if source_row else None
+
+            if source_id is None and any(
+                isinstance(record, Mapping)
+                and record.get("candidate_type") == "video_school_canon_candidate"
+                for record in records
+            ):
+                raise RuntimeError("VIDEO_CANON_SOURCE_IDENTITY_NOT_FOUND")
 
             for raw_record in records:
                 if not isinstance(raw_record, Mapping):
