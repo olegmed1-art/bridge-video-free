@@ -343,6 +343,40 @@ def test_correction_changes_content_hash_but_preserves_semantic_identity():
     ]
 
 
+def test_multiple_teachers_share_only_an_exact_profile_scoped_semantic_identity():
+    diana = build_video_canon_candidate(_learning(), _assertion())
+
+    alex_learning = _learning()
+    alex_learning["transcript_evidence"][0]["speaker_id"] = "teacher:alex"
+    alex_assertion = _assertion()
+    alex_assertion["assertion_id"] = "video-rule:alex:lesson-1:9-11"
+    alex_assertion["speaker_id"] = "teacher:alex"
+    alex_assertion["source_authorization"]["authorized_teacher_ids"] = [
+        "teacher:diana",
+        "teacher:alex",
+    ]
+    alex = build_video_canon_candidate(alex_learning, alex_assertion)
+
+    assert alex["payload_hash"] != diana["payload_hash"]
+    assert alex["payload"]["teacher_assertion"]["speaker_id"] == "teacher:alex"
+    assert diana["payload"]["teacher_assertion"]["speaker_id"] == "teacher:diana"
+    assert alex["payload"]["semantic_identity_sha256"] == diana["payload"][
+        "semantic_identity_sha256"
+    ]
+
+    precision_assertion = deepcopy(alex_assertion)
+    precision_assertion["semantic_scope"] = "bidding/precision/v1/response-to-1h"
+    precision_assertion["system_profile"] = "precision-v1"
+    precision_assertion["source_authorization"]["approved_semantic_scopes"].append(
+        precision_assertion["semantic_scope"]
+    )
+    precision = build_video_canon_candidate(alex_learning, precision_assertion)
+
+    assert precision["payload"]["semantic_identity_sha256"] != alex["payload"][
+        "semantic_identity_sha256"
+    ]
+
+
 def test_labelled_hand_prose_without_four_suit_encoding_is_not_a_false_positive():
     learning = _learning()
     assertion = _assertion()
