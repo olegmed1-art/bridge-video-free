@@ -795,7 +795,7 @@ BEGIN
     IF v_decoded<>NEW.bundle_payload OR v_computed<>NEW.verification_bundle_sha256
        OR NEW.bundle_payload->>'schema'<>'video-canon-ai-promotion-v1'
        OR NEW.bundle_payload->>'policy_version'<>'school-video-auto-canon-v1'
-       OR jsonb_object_length(NEW.bundle_payload)<>12
+       OR (SELECT count(*) FROM jsonb_object_keys(NEW.bundle_payload))<>12
        OR NOT (NEW.bundle_payload ?& ARRAY[
          'schema','policy_version','candidate_payload_hash','candidate_payload',
          'system_profile','learner_level','effective_period','activation_scope',

@@ -244,7 +244,7 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "candidate_payload_hash=v_candidate.payload_hash" in MIGRATION
     assert "verification_bundle_sha256" in MIGRATION
     assert "bundle_canonical_json" in MIGRATION
-    assert "jsonb_object_length(NEW.bundle_payload)<>12" in MIGRATION
+    assert "count(*) FROM jsonb_object_keys(NEW.bundle_payload))<>12" in MIGRATION
     assert "NEW.bundle_payload->'candidate_payload' IS DISTINCT FROM v_candidate.payload" in MIGRATION
     assert "v_candidate.quality_status<>'AI_VERIFICATION_PENDING'" in MIGRATION
     assert "p.candidate_payload_hash=OLD.payload_hash" in MIGRATION
