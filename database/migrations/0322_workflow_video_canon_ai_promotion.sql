@@ -1153,8 +1153,10 @@ BEGIN
        OR v_candidate.payload->>'source_class'<>'SCHOOL_PRIMARY_EVIDENCE'
        OR v_candidate.payload#>>'{source_authorization,policy_version}'<>v_policy_version
        OR v_candidate.payload->>'semantic_scope'<>v_scope_key
-       OR v_candidate.payload->>'system_profile'<>v_system_profile
-       OR v_candidate.payload->>'learner_level'<>v_learner_level
+       OR v_candidate.payload->>'system_profile'
+            IS DISTINCT FROM v_bundle.bundle_payload->>'system_profile'
+       OR v_candidate.payload->>'learner_level'
+            IS DISTINCT FROM v_bundle.bundle_payload->>'learner_level'
        OR jsonb_typeof(v_candidate.payload->'ambiguities') IS DISTINCT FROM 'array'
        OR jsonb_typeof(v_candidate.payload->'contradictions') IS DISTINCT FROM 'array'
        OR jsonb_array_length(v_candidate.payload->'ambiguities')<>0
@@ -1404,10 +1406,6 @@ BEGIN
     ) OR EXISTS (
       SELECT 1 FROM bidding.rule_test t
        WHERE t.rule_id=p_rule_id AND t.enabled
-         AND t.test_type IN (
-           'positive','negative','boundary','interference',
-           'hidden_information','regression'
-         )
          AND bidding.latest_test_result(t.rule_test_id) IS DISTINCT FROM 'pass'
     ) OR EXISTS (
       SELECT 1 FROM bidding.rule_conflict c WHERE c.status='open'
