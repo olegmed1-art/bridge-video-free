@@ -1,6 +1,23 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
+-- Capability roles are migration-owned. Refuse collisions instead of mutating
+-- pre-existing cluster roles or memberships that rollback cannot reconstruct.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_roles
+     WHERE rolname=ANY(ARRAY[
+       'bridge_school_canon_verifier','bridge_school_canon_semantic_verifier',
+       'bridge_school_canon_bridge_verifier','bridge_school_canon_firewall_verifier',
+       'bridge_school_canon_control_verifier','bridge_school_canon_promoter',
+       'bridge_school_canon_restorer'
+     ])
+  ) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_ROLE_COLLISION' USING ERRCODE='55000';
+  END IF;
+END $$;
+
 DO $$
 DECLARE r record; v_role text;
 BEGIN
@@ -41,10 +58,6 @@ COMMENT ON ROLE bridge_school_canon_promoter IS
   'NOLOGIN capability for the guarded AI-verified teacher-video Canon activation RPC';
 COMMENT ON ROLE bridge_school_canon_restorer IS
   'NOLOGIN capability for the guarded receipt-bound Video-to-Canon restoration RPC';
-REVOKE bridge_school_reader FROM bridge_school_canon_verifier,
-  bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
-  bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier,
-  bridge_school_canon_promoter,bridge_school_canon_restorer;
 DO $$
 BEGIN
   IF EXISTS (
@@ -204,6 +217,8 @@ CREATE TABLE bidding.video_correction_review_receipt (
     receipt_canonical_json text NOT NULL CHECK (btrim(receipt_canonical_json)<>''),
     receipt_payload jsonb NOT NULL CHECK (jsonb_typeof(receipt_payload)='object'),
     recorded_by_role text NOT NULL DEFAULT current_user,
+    recorded_by_principal text NOT NULL DEFAULT session_user
+      CHECK (btrim(recorded_by_principal)<>''),
     recorded_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -267,7 +282,21 @@ SELECT EXISTS (
           COALESCE(matched.parts[1],matched.parts[2],matched.parts[3])
         )
      )
-);
+  OR EXISTS (
+    SELECT 1 FROM walk AS w
+     WHERE jsonb_typeof(w.value)='string'
+       AND EXISTS (
+         SELECT 1
+           FROM regexp_matches(
+             w.value#>>'{}',
+             E'(?:(?:partner|opponent|north|east|south|west)[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника))[^;]*?S[[:space:]]*:[[:space:]]*(-|[AKQJT2-9]{0,13})[[:space:],/]*H[[:space:]]*:[[:space:]]*(-|[AKQJT2-9]{0,13})[[:space:],/]*D[[:space:]]*:[[:space:]]*(-|[AKQJT2-9]{0,13})[[:space:],/]*C[[:space:]]*:[[:space:]]*(-|[AKQJT2-9]{0,13})',
+             'gi'
+           ) AS matched(parts)
+          WHERE bidding.is_complete_bridge_hand(concat_ws(
+            '.',matched.parts[1],matched.parts[2],matched.parts[3],matched.parts[4]
+          ))
+       )
+  );
 $$;
 
 CREATE OR REPLACE FUNCTION bidding.video_canon_rule_restore_sha256(p_rule_id uuid)
@@ -389,7 +418,14 @@ BEGIN
      WHERE database_role=current_user AND status='active';
     IF NOT FOUND OR NOT ('CORRECTION_REVIEW'=ANY(v_principal.allowed_check_ids))
        OR v_principal.max_assurance_level NOT IN ('I1','I2','I3')
-       OR NEW.recorded_by_role<>current_user THEN
+       OR NEW.recorded_by_role<>current_user
+       OR NEW.recorded_by_principal<>session_user
+       OR NOT EXISTS (
+         SELECT 1 FROM pg_catalog.pg_roles login_role
+          WHERE login_role.rolname=session_user
+            AND login_role.rolcanlogin
+            AND pg_has_role(login_role.oid,v_principal.database_role,'MEMBER')
+       ) THEN
         RAISE EXCEPTION 'VIDEO_CORRECTION_REVIEW_PRINCIPAL_MISMATCH' USING ERRCODE='42501';
     END IF;
     BEGIN
@@ -589,6 +625,15 @@ BEGIN
     IF TG_OP='DELETE' THEN
         RAISE EXCEPTION 'VIDEO_CANON_SOURCE_POLICY_DELETE_FORBIDDEN' USING ERRCODE='55000';
     END IF;
+    IF NOT EXISTS (
+      SELECT 1 FROM public.source s
+       WHERE s.source_id=NEW.source_id AND s.school_id=NEW.school_id
+    ) THEN
+        RAISE EXCEPTION 'VIDEO_CANON_SOURCE_POLICY_SCHOOL_MISMATCH' USING ERRCODE='23514';
+    END IF;
+    IF TG_OP='INSERT' THEN
+        RETURN NEW;
+    END IF;
     NEW.retired_at := statement_timestamp();
     IF OLD.status<>'active' OR NEW.status NOT IN ('revoked','superseded')
        OR (OLD.valid_from<statement_timestamp()
@@ -603,7 +648,7 @@ BEGIN
 END $$;
 
 CREATE TRIGGER video_canon_source_policy_lifecycle_guard
-BEFORE UPDATE OR DELETE ON bidding.video_canon_source_policy
+BEFORE INSERT OR UPDATE OR DELETE ON bidding.video_canon_source_policy
 FOR EACH ROW EXECUTE FUNCTION bidding.guard_video_canon_source_policy_lifecycle();
 CREATE TRIGGER video_canon_verification_bundle_append_only
 BEFORE UPDATE OR DELETE ON bidding.video_canon_ai_verification_bundle
@@ -775,7 +820,7 @@ BEGIN
 
     SELECT p.* INTO v_policy
       FROM bidding.video_canon_source_policy p
-      JOIN public.source s ON s.source_id=p.source_id AND s.status='active'
+      JOIN public.source s ON s.source_id=p.source_id AND s.school_id=p.school_id AND s.status='active'
       JOIN public.knowledge_version_source kvs
         ON kvs.source_id=p.source_id AND kvs.knowledge_version_id=v_version.knowledge_version_id
      WHERE p.school_id=v_candidate.school_id
@@ -931,6 +976,9 @@ BEGIN
           INTO v_prior_rule_state
           FROM bidding.rule r
          WHERE r.knowledge_version_id=v_prior_canon.knowledge_version_id;
+        IF v_valid_to IS NOT NULL AND v_valid_to<=clock_timestamp() THEN
+            RAISE EXCEPTION 'VIDEO_CANON_EFFECTIVE_PERIOD_EXPIRED' USING ERRCODE='23514';
+        END IF;
         UPDATE bidding.runtime_activation SET status='superseded',valid_to=v_valid_from
          WHERE canon_activation_id=v_prior_canon.canon_activation_id AND status='active';
         UPDATE public.canon_activation SET status='superseded',valid_to=v_valid_from
@@ -940,6 +988,9 @@ BEGIN
         RAISE EXCEPTION 'VIDEO_CANON_ROLLBACK_TARGET_UNEXPECTED' USING ERRCODE='23514';
     END IF;
 
+    IF v_valid_to IS NOT NULL AND v_valid_to<=clock_timestamp() THEN
+        RAISE EXCEPTION 'VIDEO_CANON_EFFECTIVE_PERIOD_EXPIRED' USING ERRCODE='23514';
+    END IF;
     UPDATE public.knowledge_version SET review_status='approved',status='approved'
      WHERE knowledge_version_id=v_version.knowledge_version_id;
     INSERT INTO public.canon_activation(
@@ -1097,7 +1148,7 @@ BEGIN
             FROM public.analysis_candidate c
             JOIN bidding.video_canon_source_policy p
               ON p.school_id=c.school_id AND p.source_id=c.source_id
-            JOIN public.source s ON s.source_id=p.source_id AND s.status='active'
+            JOIN public.source s ON s.source_id=p.source_id AND s.school_id=p.school_id AND s.status='active'
            WHERE c.analysis_candidate_id=v_prior_promotion.analysis_candidate_id
              AND c.payload_hash=v_prior_promotion.candidate_payload_hash
              AND c.payload->>'source_class'='SCHOOL_PRIMARY_EVIDENCE'
@@ -1137,10 +1188,15 @@ BEGIN
                 AND NOT bidding.rule_passes_activation_gates(r.rule_id)
            ) OR NOT EXISTS (
              SELECT 1 FROM public.knowledge_version_source kvs
-             JOIN public.source s ON s.source_id=kvs.source_id AND s.status='active'
+             JOIN public.source s ON s.source_id=kvs.source_id
+                AND s.school_id=v_promotion.school_id AND s.status='active'
               WHERE kvs.knowledge_version_id=v_prior_canon.knowledge_version_id
            ) THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_CANON_VERSION_GATES_FAILED' USING ERRCODE='23514';
+        END IF;
+        IF v_promotion.superseded_canon_valid_to IS NOT NULL
+           AND v_promotion.superseded_canon_valid_to<=clock_timestamp() THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_TARGET_EXPIRED' USING ERRCODE='23514';
         END IF;
         UPDATE public.canon_activation
            SET status='active',valid_to=v_promotion.superseded_canon_valid_to
@@ -1171,6 +1227,9 @@ BEGIN
             END IF;
             IF NOT bidding.rule_passes_activation_gates(v_prior_runtime.rule_id) THEN
                 RAISE EXCEPTION 'VIDEO_CANON_RESTORE_VALIDATION_GATES_FAILED' USING ERRCODE='23514';
+            END IF;
+            IF v_original_valid_to IS NOT NULL AND v_original_valid_to<=clock_timestamp() THEN
+                RAISE EXCEPTION 'VIDEO_CANON_RESTORE_RUNTIME_TARGET_EXPIRED' USING ERRCODE='23514';
             END IF;
             UPDATE bidding.runtime_activation SET status='active',valid_to=v_original_valid_to
              WHERE runtime_activation_id=v_prior_runtime.runtime_activation_id;

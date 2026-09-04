@@ -56,6 +56,10 @@ BEGIN
        SELECT 1 FROM information_schema.columns
         WHERE table_schema='bidding' AND table_name='video_canon_ai_verification'
           AND column_name='canon_snapshot_sha256'
+     ) OR NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+        WHERE table_schema='bidding' AND table_name='video_correction_review_receipt'
+          AND column_name='recorded_by_principal' AND is_nullable='NO'
      ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_EXECUTION_OR_SNAPSHOT_BINDING_MISSING';
   END IF;
@@ -96,6 +100,8 @@ BEGIN
        '{"notes":"N:AKQJ.T98.765.432 E:T987.654.32.AKQ"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s hand, as it appeared clearly in the recorded diagram,\nwas AKQJ.T98.765.432; East’s hand was JT9.AKQ.JT9.876"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"North''s hand was S:AKQJ H:T98 D:765 C:432"}'::jsonb
      )) OR bidding.contains_forbidden_hidden_value(
        '{"meaning":"shows at least five hearts"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
@@ -124,6 +130,7 @@ END $$;
 DO $$
 DECLARE
   v_school uuid:=uuidv7();
+  v_other_school uuid:=uuidv7();
   v_source uuid:=uuidv7();
   v_orphan_source uuid:=uuidv7();
   v_future_source uuid:=uuidv7();
@@ -155,6 +162,7 @@ DECLARE
   v_snapshot_after text;
   v_restore_failed boolean:=false;
   v_policy_failed boolean:=false;
+  v_cross_school_policy_failed boolean:=false;
   v_bad_bundle_failed boolean:=false;
   v_late_verification_failed boolean:=false;
   v_target_binding_failed boolean:=false;
@@ -169,7 +177,9 @@ DECLARE
   v_new_from timestamptz:=statement_timestamp()-interval '1 hour';
 BEGIN
   INSERT INTO public.school(school_id,stable_name)
-  VALUES (v_school,'video-canon-restore-test-'||v_school::text);
+  VALUES
+    (v_school,'video-canon-restore-test-'||v_school::text),
+    (v_other_school,'video-canon-other-school-'||v_other_school::text);
   INSERT INTO public.knowledge_item(knowledge_item_id,school_id,stable_key,knowledge_type,title)
   VALUES (v_item,v_school,'restore-item-'||v_item::text,'bidding_rule','restore test');
   INSERT INTO public.knowledge_item(knowledge_item_id,school_id,stable_key,knowledge_type,title)
@@ -198,6 +208,23 @@ BEGIN
   INSERT INTO public.knowledge_version_source(knowledge_version_id,source_id)
   VALUES (v_old_version,v_source),(v_new_version,v_source),
     (v_orphan_version,v_orphan_source);
+  BEGIN
+    INSERT INTO bidding.video_canon_source_policy(
+      school_id,source_id,source_sha256,video_file_id,teacher_ids,semantic_scopes,
+      system_profile,learner_level,policy_version,authorization_evidence_sha256,
+      status,valid_from
+    ) VALUES (
+      v_other_school,v_source,repeat('c',64),'cross-school-video',
+      ARRAY['teacher:restore'],ARRAY['restore-scope'],'natural-v1','beginner-1',
+      'school-video-auto-canon-v1',repeat('7',64),'active',
+      statement_timestamp()-interval '1 day'
+    );
+  EXCEPTION WHEN check_violation THEN
+    v_cross_school_policy_failed:=true;
+  END;
+  IF NOT v_cross_school_policy_failed THEN
+    RAISE EXCEPTION 'VIDEO_CANON_CROSS_SCHOOL_SOURCE_POLICY_NOT_BLOCKED';
+  END IF;
   INSERT INTO bidding.video_canon_source_policy(
     video_canon_source_policy_id,school_id,source_id,source_sha256,video_file_id,
     teacher_ids,semantic_scopes,system_profile,learner_level,policy_version,

@@ -39,5 +39,14 @@ DROP TABLE bidding.video_canon_ai_verification;
 DROP TABLE bidding.video_canon_ai_verification_bundle;
 DROP TABLE bidding.video_canon_verifier_registry;
 DROP TABLE bidding.video_canon_source_policy;
+REVOKE ALL PRIVILEGES ON SCHEMA public,bidding FROM
+  bridge_school_canon_verifier,bridge_school_canon_semantic_verifier,
+  bridge_school_canon_bridge_verifier,bridge_school_canon_firewall_verifier,
+  bridge_school_canon_control_verifier,bridge_school_canon_promoter,
+  bridge_school_canon_restorer;
+DROP ROLE bridge_school_canon_verifier,bridge_school_canon_semantic_verifier,
+  bridge_school_canon_bridge_verifier,bridge_school_canon_firewall_verifier,
+  bridge_school_canon_control_verifier,bridge_school_canon_promoter,
+  bridge_school_canon_restorer;
 DELETE FROM public.schema_migration WHERE migration_key='0322_workflow_video_canon_ai_promotion';
 COMMIT;

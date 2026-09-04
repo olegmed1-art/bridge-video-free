@@ -22,7 +22,7 @@ def test_ai_promotion_is_narrow_guarded_and_not_granted_to_general_workers():
     assert "'CORRECTION_REVIEW'=ANY(v_principal.allowed_check_ids)" in MIGRATION
     assert "GRANT INSERT ON bidding.video_correction_review_receipt TO bridge_school_canon_control_verifier" in MIGRATION
     assert "GRANT SELECT ON bidding.video_correction_review_receipt TO bridge_school_worker" in MIGRATION
-    assert "REVOKE bridge_school_reader FROM bridge_school_canon_verifier" in MIGRATION
+    assert "VIDEO_CANON_ROLE_COLLISION" in MIGRATION
     assert "CREATE VIEW bidding.video_canon_bound_candidate" in MIGRATION
     assert "check_row.value->>'execution_principal'=session_user::text" in MIGRATION
     assert "REVOKE SELECT ON public.analysis_candidate,bidding.video_canon_ai_verification_bundle" in MIGRATION
@@ -42,7 +42,8 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "('positive'),('negative'),('boundary'),('interference'),('hidden_information'),('regression')",
         "c.status='open'",
         "ROLLBACK_RESTORE",
-        "public.source s ON s.source_id=p.source_id AND s.status='active'",
+        "public.source s ON s.source_id=p.source_id AND s.school_id=p.school_id",
+        "VIDEO_CANON_SOURCE_POLICY_SCHOOL_MISMATCH",
         "guard_video_canon_source_policy_lifecycle",
         "status='superseded',valid_to=v_valid_from",
         "p.valid_from<=statement_timestamp()",
@@ -86,6 +87,10 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "v_valid_to<=clock_timestamp()",
         "v_new_canon.valid_to<=statement_timestamp()",
         "is_complete_bridge_hand",
+        "matched.parts[4]",
+        "recorded_by_principal text NOT NULL DEFAULT session_user",
+        "NEW.recorded_by_principal<>session_user",
+        "pg_has_role(login_role.oid,v_principal.database_role,'MEMBER')",
     ):
         assert marker in MIGRATION
 
@@ -115,3 +120,11 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "DROP VIEW bidding.video_canon_bound_candidate" in ROLLBACK
     assert "DROP FUNCTION bidding.video_canon_rule_restore_sha256" in ROLLBACK
     assert "DROP FUNCTION bidding.is_complete_bridge_hand" in ROLLBACK
+    assert "REVOKE ALL PRIVILEGES ON SCHEMA public,bidding" in ROLLBACK
+    assert "DROP ROLE bridge_school_canon_verifier" in ROLLBACK
+    assert MIGRATION.count(
+        "IF v_valid_to IS NOT NULL AND v_valid_to<=clock_timestamp() THEN"
+    ) >= 3
+    assert MIGRATION.count(
+        "v_promotion.superseded_canon_valid_to<=clock_timestamp()"
+    ) >= 2

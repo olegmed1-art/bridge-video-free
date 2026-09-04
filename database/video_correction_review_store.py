@@ -43,6 +43,12 @@ class DatabaseCorrectionReceiptResolver:
                         ON registry.database_role=receipt.recorded_by_role
                        AND registry.status='active'
                        AND 'CORRECTION_REVIEW'=ANY(registry.allowed_check_ids)
+                      JOIN pg_catalog.pg_roles attestor
+                        ON attestor.rolname=receipt.recorded_by_principal
+                       AND attestor.rolcanlogin
+                      JOIN pg_catalog.pg_roles capability
+                        ON capability.rolname=registry.database_role
+                       AND pg_has_role(attestor.oid,capability.oid,'MEMBER')
                      WHERE receipt.receipt_sha256=%s
                     """,
                     (value,),

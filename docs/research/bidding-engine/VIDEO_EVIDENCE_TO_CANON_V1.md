@@ -150,8 +150,10 @@ explicit gap and is not training-eligible. The production Diana entrypoint
 resolves through the worker's read-only access to the append-only
 `bidding.video_correction_review_receipt` store. Only the authenticated control
 verifier capability may attest a receipt there; app and worker roles cannot
-insert or mutate it. Resolution also requires that the recorded attestor still
-has an active `CORRECTION_REVIEW` registry capability. A candidate model is only represented by a
+insert or mutate it. Each receipt binds both the active capability role and the
+authenticated login principal. Resolution requires the registry lane to remain
+active and the recorded login principal to retain current membership in that
+`CORRECTION_REVIEW` capability. A candidate model is only represented by a
 `MODEL_IMPROVEMENT_PROPOSAL` when a named holdout compares it with a baseline
 and records a rollback model version. Model deployment remains a separate
 gate; a model passing holdout is not itself permission to change Canon.

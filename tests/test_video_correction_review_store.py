@@ -43,6 +43,8 @@ def test_resolves_exact_payload_only_from_database(monkeypatch):
     assert resolver(receipt_sha) == payload
     assert cursor.calls[-1][1] == (receipt_sha,)
     assert "registry.status='active'" in cursor.calls[-1][0]
+    assert "receipt.recorded_by_principal" in cursor.calls[-1][0]
+    assert "pg_has_role(attestor.oid,capability.oid,'MEMBER')" in cursor.calls[-1][0]
     assert "CORRECTION_REVIEW" in cursor.calls[-1][0]
 
 

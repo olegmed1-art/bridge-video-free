@@ -43,6 +43,15 @@ _LABELLED_HIDDEN_CARDS = re.compile(
     r"(?P<ru_hand>" + _HAND_PATTERN + r")",
     re.IGNORECASE,
 )
+_SUIT_LABELLED_HIDDEN_CARDS = re.compile(
+    r"(?:(?:partner|opponent|north|east|south|west)\s*(?:['’]s)?[ _-]*"
+    r"(?:hand|cards)|(?:рука|карты)\s+(?:партн[её]ра|соперника))\b[^;]*?"
+    r"S\s*:\s*(?P<spades>-|[AKQJT2-9]{0,13})[\s,/]*"
+    r"H\s*:\s*(?P<hearts>-|[AKQJT2-9]{0,13})[\s,/]*"
+    r"D\s*:\s*(?P<diamonds>-|[AKQJT2-9]{0,13})[\s,/]*"
+    r"C\s*:\s*(?P<clubs>-|[AKQJT2-9]{0,13})",
+    re.IGNORECASE,
+)
 
 _NORMALIZED_RULE_FIELDS = {
     "rule_key", "rule_kind", "auction_pattern", "hand_constraints",
@@ -113,6 +122,13 @@ def _has_forbidden_value(value: Any) -> bool:
         return any(_has_forbidden_value(child) for child in value)
     if isinstance(value, str):
         if any(_is_complete_hand_shape(match.group("hand")) for match in _PBN_DEAL.finditer(value)):
+            return True
+        if any(
+            _is_complete_hand_shape(".".join(match.group(
+                "spades", "hearts", "diamonds", "clubs"
+            )))
+            for match in _SUIT_LABELLED_HIDDEN_CARDS.finditer(value)
+        ):
             return True
         return any(
             _is_complete_hand_shape(match.group("hand") or match.group("ru_hand"))
