@@ -327,7 +327,10 @@ jobs:
               *) return 2 ;;
             esac
             output="$("${command[@]}" --output json)" || return 1
-            PRIOR_PREFIX="$prior_prefix" CURRENT_STAMP="$stamp" TARGET_PRIOR_STAMP="$target_prior_stamp" SUFFIX="-$suffix" python -c 'import json,os,sys; xs=sorted(x["id"] for x in json.load(sys.stdin).get("data",[]) if (x.get("display-name") or "").startswith(os.environ["PRIOR_PREFIX"]) and not (x.get("display-name") or "").startswith(os.environ["CURRENT_STAMP"]+"-") and (not os.environ["TARGET_PRIOR_STAMP"] or (x.get("display-name") or "").startswith(os.environ["TARGET_PRIOR_STAMP"]+"-")) and (x.get("display-name") or "").endswith(os.environ["SUFFIX"]) and x.get("lifecycle-state") != "TERMINATED"); print("\n".join(xs))' <<<"$output"
+            # Keep TERMINATED objects in the evidence set.  Each known ID must
+            # still pass a direct GET as TERMINATED or explicit 404 below;
+            # silently filtering terminal objects would discard the audit trail.
+            PRIOR_PREFIX="$prior_prefix" CURRENT_STAMP="$stamp" TARGET_PRIOR_STAMP="$target_prior_stamp" SUFFIX="-$suffix" python -c 'import json,os,sys; xs=sorted(x["id"] for x in json.load(sys.stdin).get("data",[]) if (x.get("display-name") or "").startswith(os.environ["PRIOR_PREFIX"]) and not (x.get("display-name") or "").startswith(os.environ["CURRENT_STAMP"]+"-") and (not os.environ["TARGET_PRIOR_STAMP"] or (x.get("display-name") or "").startswith(os.environ["TARGET_PRIOR_STAMP"]+"-")) and (x.get("display-name") or "").endswith(os.environ["SUFFIX"])); print("\n".join(xs))' <<<"$output"
           }
           reconcile_prior_attempt_resources() {
             local prior_instances prior_restored prior_subnets prior_security prior_routes prior_igs prior_vcns id prior_ids prior_count
@@ -348,8 +351,8 @@ jobs:
             state_set prior_resource_count "$prior_count"
             state_set prior_resource_summary "$prior_summary"
             if [[ -z "$prior_instances$prior_restored$prior_subnets$prior_security$prior_routes$prior_igs$prior_vcns" ]]; then
-              state_set prior_cleanup_status PROVEN_ABSENT
-              echo 'UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS resource_count=0 ids=none'
+              state_set prior_cleanup_status EXACT_NAME_INVENTORY_EMPTY
+              echo 'UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS resource_count=0 ids=none exact_name_inventory_empty=true'
               return 0
             fi
             echo "UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_START resource_count=$prior_count ids=$prior_ids"
@@ -821,8 +824,10 @@ jobs:
               '- temporary subnet ID: ' + code(value('temporary_subnet_id', 'none')),
               '- post-cleanup allocation summary: ' + code(value('allocation_summary', 'not_collected')),
           ]
-          if backup_id:
-              lines.append('- fresh backup retained: ' + code('true') + '; proven backup ID: ' + code(backup_id) + ' (billable backup storage may apply)')
+          if backup_id and value('cleanup_only', '0') == '1':
+              lines.append('- backup candidate retained: ' + code('AVAILABLE_FULL_97GB_REQUIRES_NEW_ISOLATED_BOOT_ACCEPTANCE') + '; candidate ID: ' + code(backup_id) + ' (billable backup storage may apply)')
+          elif backup_id:
+              lines.append('- fresh backup retained: ' + code('true') + '; accepted backup ID: ' + code(backup_id) + ' (billable backup storage may apply)')
           else:
               lines.append('- fresh backup retained: ' + code('false_or_unproven') + '; no accepted backup ID was emitted')
           lines += [

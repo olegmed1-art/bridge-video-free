@@ -185,7 +185,9 @@ def test_rerun_stamp_and_prior_attempt_reconciliation_precede_creation() -> None
     assert "wait_all_absent" in block
     assert 'for id in "${ids[@]}"' in block
     assert "UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS" in block
-    assert 'x.get("lifecycle-state") != "TERMINATED"' in block
+    assert "Keep TERMINATED objects in the evidence set" in block
+    prior_filter = block[block.index("PRIOR_PREFIX=") : block.index("reconcile_prior_attempt_resources")]
+    assert 'x.get("lifecycle-state") != "TERMINATED"' not in prior_filter
     assert 'drill_instance_id="$(discover_named_id instance "$stamp-boot-acceptance")" || failed=1' in block
 
 
@@ -248,7 +250,8 @@ def test_receipt_reports_backup_only_from_proven_step_output() -> None:
     receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
     assert "BACKUP_ID: ${{ steps.backup.outputs.backup_id }}" in receipt
     assert "backup_id = os.environ.get('BACKUP_ID') or state.get('retained_backup_id')" in receipt
-    assert "'- fresh backup retained: ' + code('true')" in receipt
+    assert "AVAILABLE_FULL_97GB_REQUIRES_NEW_ISOLATED_BOOT_ACCEPTANCE" in receipt
+    assert "'; accepted backup ID: '" in receipt
     assert "false_or_unproven" in receipt
     assert "SUPERSEDED_BACKUP_COUNT: ${{ steps.backup.outputs.superseded_backup_count }}" in receipt
     assert "superseded operation backups remaining" in receipt
@@ -316,6 +319,8 @@ def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> No
     assert "assert data['lifecycle-state'] == 'AVAILABLE'" in WORKFLOW
     assert "allocation_summary" in WORKFLOW
     assert "cleanup_only=true" in WORKFLOW
+    assert "EXACT_NAME_INVENTORY_EMPTY" in WORKFLOW
+    assert "Each known ID must" in WORKFLOW
 
 
 def test_receipt_is_literal_safe_and_retains_cleanup_evidence() -> None:
