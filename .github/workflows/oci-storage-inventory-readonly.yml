@@ -30,9 +30,14 @@ jobs:
           set -euo pipefail
           f=.github/workflows/oci-storage-inventory-readonly.yml
           awk '$0 == "          # BEGIN OCI_READ_ONLY_SDK" {copy=1;next} $0 == "          # END OCI_READ_ONLY_SDK" {copy=0} copy' "$f" > "$RUNNER_TEMP/inventory.py"
-          INVENTORY_SCRIPT="$RUNNER_TEMP/inventory.py" python - <<'PY'
+          INVENTORY_SCRIPT="$RUNNER_TEMP/inventory.py" WORKFLOW_FILE="$f" python - <<'PY'
           import ast, os, textwrap
 
+          lines=open(os.environ['WORKFLOW_FILE'], encoding='utf-8').read().splitlines()
+          begin=lines.index('          # BEGIN OCI_READ_ONLY_SDK')
+          end=lines.index('          # END OCI_READ_ONLY_SDK')
+          assert lines[begin-1].strip() == "python - <<'PY'", 'invalid inventory heredoc start boundary'
+          assert lines[end+1].strip() == 'PY', 'invalid inventory heredoc end boundary'
           source=textwrap.dedent(open(os.environ['INVENTORY_SCRIPT'], encoding='utf-8').read())
           tree=ast.parse(source)
           allowed={
@@ -78,6 +83,7 @@ jobs:
                           clients.update(new); changed=True
           seen=set()
           for node in ast.walk(tree):
+              assert not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {'eval','exec','compile','__import__'}), 'dynamic execution/import forbidden'
               assert not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'getattr'), 'dynamic attribute access forbidden'
               if isinstance(node, ast.Call):
                   escaped={x.id for x in [*node.args, *(k.value for k in node.keywords)] if isinstance(x, ast.Name) and x.id in clients}
