@@ -53,14 +53,17 @@ def _metadata_signature(info: os.stat_result) -> tuple[int, ...]:
     )
 
 
-def safe_load(path: str) -> dict[str, Any]:
+def safe_load(path: str, *, allow_root_owner: bool = False) -> dict[str, Any]:
     flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK | os.O_NOFOLLOW
     descriptor = os.open(path, flags)
     try:
         before = os.fstat(descriptor)
         if not stat.S_ISREG(before.st_mode):
             raise ReceiptError("receipt is not a regular file")
-        if before.st_uid != os.geteuid() or before.st_gid != os.getegid():
+        allowed_uids = {os.geteuid()}
+        if allow_root_owner:
+            allowed_uids.add(0)
+        if before.st_uid not in allowed_uids or before.st_gid != os.getegid():
             raise ReceiptError("receipt identity mismatch")
         if stat.S_IMODE(before.st_mode) != 0o640:
             raise ReceiptError("receipt mode mismatch")
@@ -122,7 +125,33 @@ def _verify_identity(
     return status
 
 
+def _print_failed_summary(payload: dict[str, Any], job_file: str) -> None:
+    if payload.get("status") != "FAILED" or payload.get("job_file") != job_file:
+        raise ReceiptError("failed receipt identity mismatch")
+    error_type = str(payload.get("error_type") or "")
+    error_code = str(payload.get("error_code") or "")
+    if not ERROR_TYPE_RE.fullmatch(error_type) or not ERROR_CODE_RE.fullmatch(error_code):
+        raise ReceiptError("failed receipt error identity mismatch")
+    print("UV_ERROR_TYPE=" + error_type)
+    print("UV_ERROR_CODE=" + error_code)
+
+
 def main(argv: list[str]) -> int:
+    if len(argv) == 7 and argv[1] == "inspect-job":
+        payload = safe_load(argv[2], allow_root_owner=True)
+        from universal_video.contract import canonical_job_hash, validate_job
+
+        job = validate_job(payload)
+        if (
+            job.job_id != argv[3]
+            or job.profile != argv[4]
+            or canonical_job_hash(job) != argv[5]
+            or job.source.get("kind") != "google_drive"
+            or job.source.get("file_id") != argv[6]
+        ):
+            raise ReceiptError("pending job identity mismatch")
+        print("JOB_IDENTITY_PASS")
+        return 0
     if len(argv) == 7 and argv[1] == "inspect-done":
         payload = safe_load(argv[2])
         print(
@@ -135,16 +164,27 @@ def main(argv: list[str]) -> int:
             )
         )
         return 0
-    if len(argv) == 4 and argv[1] == "inspect-failed":
+    if len(argv) == 7 and argv[1] == "inspect-failed":
         payload = safe_load(argv[2])
         if payload.get("status") != "FAILED" or payload.get("job_file") != argv[3]:
             raise ReceiptError("failed receipt identity mismatch")
-        error_type = str(payload.get("error_type") or "")
-        error_code = str(payload.get("error_code") or "")
-        if not ERROR_TYPE_RE.fullmatch(error_type) or not ERROR_CODE_RE.fullmatch(error_code):
-            raise ReceiptError("failed receipt error identity mismatch")
-        print("UV_ERROR_TYPE=" + error_type)
-        print("UV_ERROR_CODE=" + error_code)
+        if (
+            payload.get("job_id") != argv[3].removesuffix(".json")
+            or payload.get("profile") != argv[4]
+            or payload.get("job_hash") != argv[5]
+        ):
+            raise ReceiptError("failed job identity mismatch")
+        source = payload.get("source")
+        if (
+            not isinstance(source, dict)
+            or source.get("kind") != "google_drive"
+            or source.get("file_id") != argv[6]
+        ):
+            raise ReceiptError("failed source identity mismatch")
+        _print_failed_summary(payload, argv[3])
+        return 0
+    if len(argv) == 4 and argv[1] == "inspect-failed-summary":
+        _print_failed_summary(safe_load(argv[2]), argv[3])
         return 0
     raise ReceiptError("unsupported receipt operation")
 

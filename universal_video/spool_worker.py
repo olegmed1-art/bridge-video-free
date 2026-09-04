@@ -405,6 +405,7 @@ def _process_one_locked(spool_root: Path) -> bool:
 
     started = time.monotonic()
     payload: dict | None = None
+    intake_identity: dict | None = None
     staged_job_dir: Path | None = None
     media_root = Path(os.getenv("UNIVERSAL_VIDEO_MEDIA_ROOT", "/opt/bridge-school/universal-video/media"))
     try:
@@ -412,8 +413,17 @@ def _process_one_locked(spool_root: Path) -> bool:
         if not valid:
             raise RuntimeError(reason or "invalid claimed spool payload")
         payload = json.loads(claimed.read_text(encoding="utf-8"))
-        validate_video_runtime()
         intake_job = validate_job(payload)
+        intake_identity = {
+            "job_id": intake_job.job_id,
+            "profile": intake_job.profile,
+            "job_hash": canonical_job_hash(intake_job),
+            "source": {
+                "kind": str(intake_job.source.get("kind") or ""),
+                "file_id": str(intake_job.source.get("file_id") or ""),
+            },
+        }
+        validate_video_runtime()
         if intake_job.source.get("kind") == "google_drive":
             _write_progress(paths, intake_job.job_id, "DOWNLOADING_FROM_DRIVE")
             payload, staged_job_dir = stage_drive_job(intake_job, payload, media_root)
@@ -517,6 +527,8 @@ def _process_one_locked(spool_root: Path) -> bool:
                 error_class=type(exc).__name__,
             ),
         }
+        if intake_identity is not None:
+            failure.update(intake_identity)
         _atomic_write_json(paths["failed"] / source.name, failure)
         if isinstance(payload, dict):
             failed_job_id = str(payload.get("job_id") or "")

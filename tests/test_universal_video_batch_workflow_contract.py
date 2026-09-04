@@ -30,3 +30,21 @@ def test_outer_request_can_only_target_the_exact_oracle_host():
     assert schema["properties"]["user"]["const"] == "ubuntu"
     assert schema["properties"]["expected_host_fingerprint"]["const"].startswith("SHA256:")
     assert "command" not in schema["properties"]
+
+
+def test_batch_cleanup_failure_is_retained_as_bounded_evidence():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "enqueue_rc=$?" in text
+    assert 'echo "UV_BATCH_ERROR_CODE=$intake_code"' in text
+    assert "UV_BATCH_ERROR_CODE=UV_BATCH_ENQUEUE_FAILED" in text
+    for code in (
+        "UV_INTAKE_DISK_FULL",
+        "UV_INTAKE_READ_ONLY",
+        "UV_INTAKE_PERMISSION_DENIED",
+        "UV_INTAKE_CONTRACT_INVALID",
+        "UV_INTAKE_IO_FAILED",
+        "UV_INTAKE_EXECUTION_FAILED",
+        "UV_INTAKE_CLEANUP_FAILED",
+    ):
+        assert code in text
+    assert 'echo "$result"' not in text

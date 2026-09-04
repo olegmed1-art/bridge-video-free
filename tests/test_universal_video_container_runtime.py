@@ -169,6 +169,8 @@ def test_speaker_preflight_rejects_unpinned_model_digest(
 def test_container_image_keeps_credentials_and_media_out_of_layers() -> None:
     root = Path(__file__).resolve().parents[1]
     dockerfile = (root / "deploy/oracle-universal-video/Dockerfile").read_text(encoding="utf-8")
+    entrypoint = (root / "deploy/oracle-universal-video/universal-video-container-entrypoint.sh").read_text(encoding="utf-8")
+    assert "umask 0027" in entrypoint
     assert "HF_HUB_OFFLINE=1" in dockerfile
     assert "GOOGLE_DRIVE_OAUTH" not in dockerfile
     assert "COPY universal_video" in dockerfile

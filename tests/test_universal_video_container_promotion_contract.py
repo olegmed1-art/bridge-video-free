@@ -252,12 +252,16 @@ def test_promotion_atomically_syncs_revision_bound_operator() -> None:
     assert "CURRENT_STAGE='operator-install'" in SCRIPT
     assert "CURRENT_STAGE='operator-blob'" in SCRIPT
     assert "CURRENT_STAGE='operator-smoke'" in SCRIPT
-    assert 'sudo -u ocarun sudo -n "$OPERATOR_TARGET" status ..' in SCRIPT
-    assert 'if operator_smoke="$(sudo -u ocarun sudo -n "$OPERATOR_TARGET" status .. 2>&1)"; then' in SCRIPT
+    assert 'sudo -u ocarun sudo -n "$OPERATOR_TARGET" status .. smoke' in SCRIPT
+    assert 'if operator_smoke="$(sudo -u ocarun sudo -n "$OPERATOR_TARGET" status .. smoke' in SCRIPT
     assert "operator_smoke_rc=0" in SCRIPT
     assert "operator_smoke_rc=$?" in SCRIPT
     smoke = SCRIPT[SCRIPT.index("CURRENT_STAGE='operator-smoke'"):SCRIPT.index("CURRENT_STAGE='protected-postflight'")]
     assert "set +e" not in smoke
+    assert "CURRENT_STAGE='operator-submit-smoke'" in smoke
+    assert 'submit-drive-base64 e30=' in smoke
+    assert "UV_ERROR_CODE=UV_INTAKE_CONTRACT_INVALID" in smoke
+    assert "UV_CONTAINER_PROMOTION_OPERATOR_SUBMIT_SMOKE_REASON" in smoke
 
 
 def test_operator_installer_failures_have_bounded_nonsecret_codes() -> None:
