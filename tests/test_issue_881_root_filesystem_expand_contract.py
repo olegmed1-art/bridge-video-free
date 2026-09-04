@@ -129,6 +129,9 @@ def test_paid_and_temporary_creates_capture_before_separate_waits() -> None:
     ):
         assert resource_get in block
     assert block.count("--wait-for-state AVAILABLE") >= 7
+    assert block.count("--wait-for-state AVAILABLE --max-wait-seconds 300") == 5
+    assert "explicit OCI waiters consume at most 235 minutes" in WORKFLOW
+    assert "leaves 125 minutes" in WORKFLOW
 
 
 def test_cleanup_rediscovery_is_scoped_to_attempted_unique_resources() -> None:
