@@ -214,7 +214,7 @@ IMMUTABLE
 PARALLEL SAFE
 AS $$
 WITH hand AS (
-  SELECT regexp_split_to_array(upper(COALESCE(p_hand,'')), E'\\\\.') AS suits
+  SELECT regexp_split_to_array(upper(COALESCE(p_hand,'')), E'\\.') AS suits
 )
 SELECT cardinality(suits)=4
    AND NOT EXISTS (
@@ -260,7 +260,7 @@ SELECT EXISTS (
        SELECT 1
          FROM regexp_matches(
            w.value#>>'{}',
-           E'(?:^|[^[:alnum:]])[NESW][[:space:]]*:[[:space:]]*([-AKQJT2-9]{0,13}\\\\.[-AKQJT2-9]{0,13}\\\\.[-AKQJT2-9]{0,13}\\\\.[-AKQJT2-9]{0,13})|(?:partner|opponent|north|east|south|west)[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)[^;]*?([-AKQJT2-9]{0,13}\\\\.[-AKQJT2-9]{0,13}\\\\.[-AKQJT2-9]{0,13}\\\\.[-AKQJT2-9]{0,13})|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника)[^;]*?([-AKQJT2-9]{0,13}\\\\.[-AKQJT2-9]{0,13}\\\\.[-AKQJT2-9]{0,13}\\\\.[-AKQJT2-9]{0,13})',
+           E'(?:^|[^[:alnum:]])[NESW][[:space:]]*:[[:space:]]*([-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13})|(?:partner|opponent|north|east|south|west)[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)[^;]*?([-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13})|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника)[^;]*?([-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13})',
            'gi'
          ) AS matched(parts)
         WHERE bidding.is_complete_bridge_hand(
