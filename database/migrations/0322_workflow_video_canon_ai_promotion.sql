@@ -299,6 +299,8 @@ SELECT EXISTS (
            ) AS matched(parts)
           WHERE matched.parts[1] ~*
                   E'(^|[^[:alnum:]_])[SHDC][[:space:]]*:'
+             OR matched.parts[1] ~
+                  E'(^|[^[:alnum:]])(?:(?:10)|[AKQJT2-9]){2,13}($|[^[:alnum:]])'
              OR matched.parts[1] ~*
                   E'(^|[^[:alnum:]])(-|(?:(?:10)|[AKQJT2-9]){1,13})([[:space:],/.]+(-|(?:(?:10)|[AKQJT2-9]){1,13})){1,3}($|[^[:alnum:]])'
        )
@@ -691,6 +693,7 @@ FOR EACH ROW EXECUTE FUNCTION bidding.guard_bound_video_canon_candidate();
 
 CREATE OR REPLACE FUNCTION bidding.guard_video_canon_source_policy_lifecycle()
 RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE v_retired_at timestamptz;
 BEGIN
     IF TG_OP='DELETE' THEN
         RAISE EXCEPTION 'VIDEO_CANON_SOURCE_POLICY_DELETE_FORBIDDEN' USING ERRCODE='55000';
@@ -704,15 +707,19 @@ BEGIN
     IF TG_OP='INSERT' THEN
         RETURN NEW;
     END IF;
-    NEW.retired_at := statement_timestamp();
+    -- A BEFORE UPDATE row trigger runs after the target row is locked. Capture
+    -- the authority boundary here so lock wait time cannot backdate history.
+    v_retired_at := clock_timestamp();
     IF OLD.status<>'active' OR NEW.status NOT IN ('revoked','superseded')
-       OR (OLD.valid_from<statement_timestamp()
-           AND (NEW.valid_to IS NULL OR NEW.valid_to>statement_timestamp()))
-       OR (OLD.valid_from>=statement_timestamp()
-           AND NEW.valid_to IS DISTINCT FROM OLD.valid_to)
        OR (to_jsonb(NEW)-ARRAY['status','valid_to','retired_at'])
           <>(to_jsonb(OLD)-ARRAY['status','valid_to','retired_at']) THEN
         RAISE EXCEPTION 'VIDEO_CANON_SOURCE_POLICY_MUTATION_FORBIDDEN' USING ERRCODE='55000';
+    END IF;
+    NEW.retired_at := v_retired_at;
+    IF OLD.valid_from<=v_retired_at THEN
+        NEW.valid_to := v_retired_at;
+    ELSE
+        NEW.valid_to := OLD.valid_to;
     END IF;
     RETURN NEW;
 END $$;

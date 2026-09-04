@@ -58,7 +58,9 @@ borrowing an unrelated PASS. The database locks the candidate and rule,
 recomputes digests across all executable rule fields, the explanation and test
 state, and compares that content with the sealed candidate and bundle before
 any activation is written. Source authorization can be revoked immediately through
-a guarded lifecycle transition.
+a guarded lifecycle transition. The row trigger captures its effective
+retirement time with a wall-clock reading after the policy row lock is held and
+overrides any caller-supplied backdated validity end.
 
 When the same knowledge item already has an active version, activation closes
 the prior Canon and runtime rows in the same transaction. Their exact IDs are
@@ -136,7 +138,7 @@ serialized; only sanitized results or explicit gaps survive.
 
 The same value-level firewall applies before a teacher-video Canon candidate is
 placed in staging: full PBN encodings and labelled partner/opponent card payloads—including
-`♠♥♦♣` suit-symbol notation in any suit order, including fragments with omitted suits or cards—are rejected anywhere in the complete payload, including the source-bound
+`♠♥♦♣` suit-symbol notation in any suit order, including a single disclosed suit group or fragments with omitted suits/cards—are rejected anywhere in the complete payload, including the source-bound
 teacher statement and otherwise innocent keys such as `notes`. Candidate
 staging identity includes the canonical payload SHA-256, so a corrected
 assertion becomes a preserved new revision instead of colliding with the old

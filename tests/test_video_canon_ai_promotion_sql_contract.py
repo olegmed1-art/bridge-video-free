@@ -67,7 +67,8 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "SELECT 1 FROM public.canon_activation ca",
         "bidding.rule_conflict,bidding.video_canon_verifier_registry,",
         "bidding.video_canon_ai_verification IN SHARE MODE",
-        "NEW.retired_at := statement_timestamp()",
+        "v_retired_at := clock_timestamp()",
+        "NEW.valid_to := v_retired_at",
         "VIDEO_CANON_PROMOTED_VERIFICATION_SET_CLOSED",
         "jsonb_array_length(NEW.bundle_payload->'checks')<>16",
         "VIDEO_CANON_RESTORE_VALIDATION_GATES_FAILED",
@@ -125,6 +126,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "matched.parts[1] ~*",
         "[SHDC][[:space:]]*:",
         "{1,3}($|[^[:alnum:]])",
+        "{2,13}($|[^[:alnum:]])",
     ):
         assert marker in MIGRATION
 

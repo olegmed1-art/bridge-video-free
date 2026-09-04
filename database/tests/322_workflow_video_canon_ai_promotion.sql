@@ -127,6 +127,10 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N: AKQJ.T98"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"N: AKQJ"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"partner hand: AKQJ"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N:AKQJ109.876.54.32"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s hand was S:AKQJ109 H:876 D:54 C:32"}'::jsonb
@@ -213,6 +217,8 @@ DECLARE
   v_rule_digest_other_tz text;
   v_old_version_digest text;
   v_old_rule_test_state_digest text;
+  v_retire_before timestamptz;
+  v_retire_after timestamptz;
   v_new_from timestamptz:=statement_timestamp()-interval '1 hour';
 BEGIN
   INSERT INTO public.school(school_id,stable_name)
@@ -284,12 +290,15 @@ BEGIN
     'school-video-auto-canon-v1',repeat('8',64),'active',
     statement_timestamp()+interval '1 day'
   );
+  v_retire_before := clock_timestamp();
   UPDATE bidding.video_canon_source_policy SET status='revoked'
    WHERE video_canon_source_policy_id=v_future_policy;
+  v_retire_after := clock_timestamp();
   IF NOT EXISTS (
       SELECT 1 FROM bidding.video_canon_source_policy
        WHERE video_canon_source_policy_id=v_future_policy AND status='revoked'
-         AND valid_to IS NULL AND retired_at=statement_timestamp()
+         AND valid_to IS NULL
+         AND retired_at BETWEEN v_retire_before AND v_retire_after
   ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_FUTURE_SOURCE_POLICY_REVOCATION_FAILED';
   END IF;
@@ -518,9 +527,17 @@ BEGIN
   END IF;
 
   BEGIN
+    v_retire_before := clock_timestamp();
     UPDATE bidding.video_canon_source_policy
-       SET status='revoked',valid_to=statement_timestamp()
+       SET status='revoked',valid_to=statement_timestamp()-interval '1 year'
      WHERE video_canon_source_policy_id=v_policy;
+    IF NOT EXISTS (
+      SELECT 1 FROM bidding.video_canon_source_policy
+       WHERE video_canon_source_policy_id=v_policy
+         AND valid_to>=v_retire_before AND retired_at=valid_to
+    ) THEN
+      RAISE EXCEPTION 'VIDEO_CANON_SOURCE_POLICY_RETIREMENT_BACKDATED';
+    END IF;
     PERFORM bidding.restore_ai_verified_video_canon(
       v_promotion,v_good_bundle_hash,repeat('d',64)
     );
