@@ -380,10 +380,20 @@ jobs:
               (( request_timeout > 0 )) || break
               if OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
                   oci_json_request oci bv boot-volume-backup get --boot-volume-backup-id "$id"; then
-                if ! state="$(printf '%s' "$OCI_JSON_OUTPUT" | python -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d.get("data"),dict); s=d["data"].get("lifecycle-state"); assert isinstance(s,str) and s; print(s)')"; then
+                if ! state="$(printf '%s' "$OCI_JSON_OUTPUT" | python -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d.get("data"),dict); s=d["data"].get("lifecycle-state"); allowed={"AVAILABLE","CREATING","REQUEST_RECEIVED","TERMINATING","TERMINATED","FAULTY"}; print(s if isinstance(s,str) and s in allowed else "INVALID" if not isinstance(s,str) else "UNKNOWN")')"; then
                   state_set backup_wait_status INVALID_GET_PAYLOAD
                   state_set backup_wait_last_state INVALID
                   return 43
+                fi
+                if [[ "$state" == INVALID ]]; then
+                  state_set backup_wait_status INVALID_GET_PAYLOAD
+                  state_set backup_wait_last_state INVALID
+                  return 43
+                fi
+                if [[ "$state" == UNKNOWN ]]; then
+                  state_set backup_wait_last_state UNKNOWN
+                  state_set backup_wait_status UNKNOWN_STATE
+                  return 41
                 fi
                 if [[ "$state" == AVAILABLE ]]; then
                   state_set backup_wait_last_state AVAILABLE
@@ -396,13 +406,7 @@ jobs:
                   state_set backup_wait_status "TERMINAL_${state}"
                   return 41
                 fi
-                if [[ "$state" == CREATING || "$state" == REQUEST_RECEIVED ]]; then
-                  state_set backup_wait_last_state "$state"
-                else
-                  state_set backup_wait_last_state UNKNOWN
-                  state_set backup_wait_status UNKNOWN_STATE
-                  return 41
-                fi
+                state_set backup_wait_last_state "$state"
               else
                 rc=$?
                 if [[ "$rc" == 124 || "$rc" == 137 ]]; then
