@@ -233,6 +233,8 @@ def test_failed_drill_deletes_only_its_new_unaccepted_backup() -> None:
     assert "backup_created_by_run == 1 && backup_accepted == 0" in cleanup
     assert '[[ -z "$backup_id" && "$backup_attempted" == 1 ]]' in cleanup
     assert 'backup_id="$(discover_named_id backup "$backup_name")" || cleanup_rc=1' in cleanup
+    assert "UV_ROOT_BACKUP_OWNERSHIP_UNRESOLVED" in cleanup
+    assert cleanup.count("cleanup_rc=1") >= 3
     assert 'boot-volume-backup delete --boot-volume-backup-id "$backup_id"' in cleanup
     assert 'wait_absent backup "$backup_id" || cleanup_rc=1' in cleanup
     acceptance = block.index("UV_RESTORED_ROOT_BOOT_ACCEPTANCE_PASS")

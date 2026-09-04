@@ -400,7 +400,12 @@ jobs:
             # current-run-owned to delete.
             if [[ -z "$backup_id" && "$backup_attempted" == 1 ]]; then
               backup_id="$(discover_named_id backup "$backup_name")" || cleanup_rc=1
-              [[ -n "$backup_id" ]] && backup_created_by_run=1
+              if [[ -n "$backup_id" ]]; then
+                backup_created_by_run=1
+              else
+                echo 'UV_ROOT_BACKUP_OWNERSHIP_UNRESOLVED' >&2
+                cleanup_rc=1
+              fi
             fi
             # A backup created by this attempt is not a recovery point until its
             # isolated restored root has passed SSH boot acceptance.  Never let
