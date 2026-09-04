@@ -655,6 +655,10 @@ BEGIN
   v_promotion:=bidding.activate_ai_verified_video_canon(
     v_job.analysis_candidate_id,v_job.rule_id,v_job.verification_bundle_sha256
   );
+  -- Use a fresh, single wall-clock boundary after the authoritative write.
+  -- A finite activation that expired during the inner RPC must roll back
+  -- instead of receiving POST_WRITE_INTEGRITY_PASS.
+  v_now := clock_timestamp();
   IF NOT EXISTS (
     SELECT 1 FROM bidding.video_canon_ai_promotion_receipt pr
     JOIN public.canon_activation ca ON ca.canon_activation_id=pr.canon_activation_id
@@ -665,6 +669,8 @@ BEGIN
       AND pr.candidate_payload_hash=v_job.candidate_payload_hash
       AND pr.verification_bundle_sha256=v_job.verification_bundle_sha256
       AND ca.status='active' AND ra.status='active'
+      AND ca.valid_from<=v_now AND (ca.valid_to IS NULL OR ca.valid_to>v_now)
+      AND ra.valid_from<=v_now AND (ra.valid_to IS NULL OR ra.valid_to>v_now)
       AND c.quality_status='AI_VERIFIED' AND c.promotion_status='promoted'
   ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_POST_WRITE_INTEGRITY_FAILED' USING ERRCODE='23514';

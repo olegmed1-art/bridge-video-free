@@ -50,8 +50,9 @@ def test_delivery_is_leased_fenced_atomic_and_retained():
     assert MIGRATION.count("v_job.lease_token IS DISTINCT FROM p_lease_token") == 2
     assert "VIDEO_CANON_DELIVERY_RECEIPT_STALE" in MIGRATION
     assert "video_canon_ai_restore_receipt rr" in MIGRATION
-    assert MIGRATION.count("valid_from<=v_now") == 2
-    assert MIGRATION.count("valid_to>v_now") == 2
+    assert MIGRATION.count("valid_from<=v_now") == 4
+    assert MIGRATION.count("valid_to>v_now") == 4
+    assert "v_now := clock_timestamp();\n  IF NOT EXISTS (\n    SELECT 1 FROM bidding.video_canon_ai_promotion_receipt" in MIGRATION
 
 
 def test_only_consumer_can_cross_authoritative_boundary():

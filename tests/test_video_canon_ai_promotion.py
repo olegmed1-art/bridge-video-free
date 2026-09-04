@@ -141,6 +141,25 @@ def test_conflict_never_auto_promotes():
         build_ai_canon_promotion(candidate, _bundle(_candidate()))
 
 
+@pytest.mark.parametrize("field,value", [
+    ("ambiguities", None),
+    ("contradictions", None),
+    ("ambiguities", {}),
+    ("contradictions", ""),
+])
+def test_ambiguity_and_contradiction_arrays_must_be_explicit(field, value):
+    candidate = _candidate()
+    if value is None:
+        candidate["payload"].pop(field)
+    else:
+        candidate["payload"][field] = value
+    candidate["payload_hash"] = hashlib.sha256(json.dumps(
+        candidate["payload"], ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")).hexdigest()
+    with pytest.raises(VideoCanonAIPromotionError, match="explicit arrays"):
+        build_ai_canon_promotion(candidate, _bundle(candidate))
+
+
 def test_rollback_target_requires_exact_database_identity():
     candidate = _candidate()
     bundle = _bundle(candidate)

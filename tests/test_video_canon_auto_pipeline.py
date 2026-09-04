@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 from bridge_contracts.video_canon_auto_pipeline import run_video_canon_auto_pipeline
 from bridge_contracts.video_canon_ai_promotion import build_ai_canon_promotion
 from bridge_contracts.video_canon_evidence import build_video_canon_candidate
@@ -47,3 +49,22 @@ def test_pipeline_never_calls_world_for_conflicting_video_rule():
     result = run_video_canon_auto_pipeline(_learning(), [assertion], {})
     assert result["promotion_commands"] == []
     assert result["world_lookup_performed"] is False
+
+
+def test_pipeline_converts_malformed_legacy_evidence_into_gaps():
+    malformed_learning = deepcopy(_learning())
+    malformed_learning.pop("schema")
+    result = run_video_canon_auto_pipeline(
+        malformed_learning, [_assertion()], {}
+    )
+    assert result["status"] == "NO_PROMOTION_READY"
+    assert result["gaps"][0]["status"] == "EVIDENCE_REJECTED"
+    assert result["promotion_commands"] == []
+
+    result = run_video_canon_auto_pipeline(_learning(), [None], {})
+    assert result["status"] == "NO_PROMOTION_READY"
+    assert result["gaps"] == [{
+        "assertion_id": "UNKNOWN",
+        "status": "EVIDENCE_REJECTED",
+        "reason": "assertion fields mismatch",
+    }]
