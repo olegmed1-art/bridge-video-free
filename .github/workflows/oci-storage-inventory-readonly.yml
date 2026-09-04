@@ -40,6 +40,7 @@ jobs:
           assert lines[end+1].strip() == 'PY', 'invalid inventory heredoc end boundary'
           source=textwrap.dedent(open(os.environ['INVENTORY_SCRIPT'], encoding='utf-8').read())
           tree=ast.parse(source)
+          parents={child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
           allowed={
               'list_region_subscriptions','list_compartments','list_availability_domains',
               'list_instances','list_boot_volume_attachments','get_boot_volume',
@@ -92,6 +93,9 @@ jobs:
               assert not (isinstance(node, ast.Name) and node.id in forbidden_dynamic), 'dynamic execution/import reference forbidden'
               assert not (isinstance(node, ast.Attribute) and node.attr in forbidden_dynamic), 'qualified dynamic execution/import forbidden'
               assert not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'getattr'), 'dynamic attribute access forbidden'
+              if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in clients:
+                  parent=parents.get(node)
+                  assert isinstance(parent, ast.Attribute) and parent.value is node, f'OCI client use outside direct method receiver: {node.id}'
               if isinstance(node, ast.Call):
                   escaped={x.id for x in [*node.args, *(k.value for k in node.keywords)] if isinstance(x, ast.Name) and x.id in clients}
                   assert not escaped, f'OCI client passed to unchecked callable: {sorted(escaped)}'
