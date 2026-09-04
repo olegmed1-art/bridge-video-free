@@ -171,6 +171,18 @@ def test_hidden_information_is_rejected_inside_json_serializable_tuple():
         build_video_canon_candidate(_learning(), assertion)
 
 
+@pytest.mark.parametrize("compiled_payload", [
+    {"partner": {"cards": "AS"}},
+    {"north": "10S"},
+    {"opponent": [{"detail": "ace of hearts"}]},
+])
+def test_nested_actor_context_is_preserved_for_hidden_value_scanning(compiled_payload):
+    assertion = _assertion()
+    assertion["normalized_rule"]["compiled_payload"] = compiled_payload
+    with pytest.raises(VideoCanonEvidenceError, match="hidden information"):
+        build_video_canon_candidate(_learning(), assertion)
+
+
 @pytest.mark.parametrize("field,value", [
     ("notes", "N:AKQJ.T98.765.432 E:T987.654.32.AKQ S:... W:..."),
     ("comment", "partner_hand = AKQJ.T98.765.432"),

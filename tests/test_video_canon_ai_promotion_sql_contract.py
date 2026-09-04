@@ -95,6 +95,8 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "IN ('NaN','Infinity','-Infinity')",
         "BETWEEN 0.95 AND 1",
         "contains_forbidden_hidden_value(v_candidate.payload)",
+        "WITH RECURSIVE walk(value,actor_context)",
+        "w.actor_context OR regexp_replace(",
         "партн[её]ра|соперника|оппонента",
         "'active_rule_tests',active_rule_tests.rows",
         "'active_rule_sources',active_rule_sources.rows",

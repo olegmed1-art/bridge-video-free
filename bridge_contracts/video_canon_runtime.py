@@ -22,7 +22,10 @@ from typing import Any, Mapping, Sequence
 from uuid import UUID
 
 from bridge_contracts.video_canon_ai_promotion import build_ai_canon_promotion
-from bridge_contracts.video_canon_evidence import build_video_canon_candidate
+from bridge_contracts.video_canon_evidence import (
+    build_video_canon_candidate,
+    contains_forbidden_hidden_information,
+)
 
 
 EXTRACTOR_SCHEMA = "verified-video-canon-input-v1"
@@ -141,6 +144,14 @@ def extract_canon_candidates(video_result: Mapping[str, Any]) -> dict[str, Any]:
             "algorithm_revision": algorithm_revision,
             "master_artifact_sha256": master_sha,
         }
+        if contains_forbidden_hidden_information(candidate["payload"]):
+            _fail("runtime provenance contains hidden information")
+        # Metadata is not naturally actor-labelled. Probe it in an actor context
+        # so a hand-shaped job/revision cannot bypass the final payload rescan.
+        if contains_forbidden_hidden_information({
+            "partner": {"cards": [job_id, algorithm_revision]}
+        }):
+            _fail("runtime provenance contains hidden information")
         candidate["payload_hash"] = _digest(candidate["payload"])
         candidate["stable_key"] = f"{assertion_id}:sha256:{candidate['payload_hash']}"
         if candidate["payload"].get("authority_class") != "TEACHER_VIDEO":

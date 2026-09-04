@@ -227,6 +227,10 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"Opponent:QH"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"compiled_payload":{"partner":{"cards":"AS"}}}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"north":"10S"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"Партнёр: туз пик"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"Соперник: Q"}'::jsonb

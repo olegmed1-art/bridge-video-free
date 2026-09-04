@@ -380,22 +380,35 @@ LANGUAGE sql
 IMMUTABLE
 PARALLEL SAFE
 AS $$
-WITH RECURSIVE walk(value) AS (
-    SELECT COALESCE(payload,'null'::jsonb)
+WITH RECURSIVE walk(value,actor_context) AS (
+    SELECT COALESCE(payload,'null'::jsonb),false
     UNION ALL
-    SELECT child.value
+    SELECT child.value,child.actor_context
       FROM walk AS w
       CROSS JOIN LATERAL (
-        SELECT e.value FROM jsonb_each(
+        SELECT e.value,
+               w.actor_context OR regexp_replace(
+                 lower(e.key),'[^a-z0-9]','','g'
+               ) ~ '^(actual)?(partner|opponent|north|east|south|west)s?$'
+          FROM jsonb_each(
           CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END
-        ) AS e
+        ) AS e(key,value)
         UNION ALL
-        SELECT a.value FROM jsonb_array_elements(
+        SELECT a.value,w.actor_context FROM jsonb_array_elements(
           CASE WHEN jsonb_typeof(w.value)='array' THEN w.value ELSE '[]'::jsonb END
         ) AS a
       ) AS child
 )
 SELECT EXISTS (
+  SELECT 1 FROM walk AS w
+   WHERE w.actor_context AND jsonb_typeof(w.value)='string'
+     AND replace(replace(replace(replace(
+           w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:') ~*
+         E'^[[:space:]]*(?:(?:the|a|an)[[:space:]]+)?(?:(?:ace|king|queen|jack|ten)(?:[[:space:]]+of[[:space:]]+(?:spades?|hearts?|diamonds?|clubs?))?|(?:spades?|hearts?|diamonds?|clubs?)[[:space:]]+(?:ace|king|queen|jack|ten|10|[AKQJT2-9X])|[SHDC][[:space:]]*:?[[:space:]]*(?:10|[AKQJT2-9X])|(?:10|[AKQJT2-9X])[[:space:]]*[SHDC]|10|[AKQJT2-9X]|[kqjtx]|(?:(?:10)|[AKQJT2-9Xakqjtx]){2,13})($|[^[:alnum:]])'
+     AND replace(replace(replace(replace(
+           w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:') !~*
+         E'^[[:space:]]*(?:10|[2-9])[[:space:]]*(?:(?:(?:[-–—]|to)[[:space:]]*[0-9]{1,2}|[+])[[:space:]]*(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?)?|(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?))($|[^[:alnum:]_])'
+) OR EXISTS (
   SELECT 1 FROM walk AS w
    WHERE jsonb_typeof(w.value)='string'
      AND EXISTS (

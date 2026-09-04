@@ -117,6 +117,17 @@ def test_extractor_rejects_unverified_video_and_does_not_invent_candidates():
     assert extracted["gaps"][0]["status"] == "NEEDS_EVIDENCE"
 
 
+@pytest.mark.parametrize("field,value", [
+    ("job_id", "AKQ.JT9.876.5432"),
+    ("algorithm_revision", "AKQ.JT9.876.5432"),
+])
+def test_extractor_rejects_hand_shaped_runtime_provenance(field, value):
+    video = _video_result()
+    video[field] = value
+    with pytest.raises(VideoCanonRuntimeError, match="runtime provenance contains hidden"):
+        extract_canon_candidates(video)
+
+
 @pytest.mark.parametrize("mutation, expected", [
     (lambda verdicts: verdicts.pop(), "I2 and I3"),
     (lambda verdicts: verdicts[1].update(verifier_family="independent-i2"), "must be independent"),

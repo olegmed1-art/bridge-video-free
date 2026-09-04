@@ -241,13 +241,28 @@ def _is_complete_hand_shape(hand: str) -> bool:
     return cards == 13
 
 
-def _has_forbidden_value(value: Any) -> bool:
+_ACTOR_CONTEXT_KEY = re.compile(
+    r"(?:actual)?(?:partner|opponent|north|east|south|west)s?"
+)
+
+
+def _has_forbidden_value(value: Any, *, actor_context: bool = False) -> bool:
     if isinstance(value, Mapping):
-        return any(_has_forbidden_value(child) for child in value.values())
+        return any(
+            _has_forbidden_value(
+                child,
+                actor_context=actor_context or _ACTOR_CONTEXT_KEY.fullmatch(
+                    re.sub(r"[^a-z0-9]", "", str(key).casefold())
+                ) is not None,
+            )
+            for key, child in value.items()
+        )
     if isinstance(value, (list, tuple)):
-        return any(_has_forbidden_value(child) for child in value)
+        return any(_has_forbidden_value(child, actor_context=actor_context) for child in value)
     if isinstance(value, str):
         normalized_value = value.translate(_SUIT_SYMBOL_TRANSLATION)
+        if actor_context:
+            normalized_value = f"Partner:{normalized_value}"
         if (
             _NEGATED_HIDDEN_HOLDING.search(normalized_value)
             or _VOID_HIDDEN_HOLDING.search(normalized_value)
@@ -314,6 +329,11 @@ def _has_forbidden_value(value: Any) -> bool:
             for match in _LABELLED_HIDDEN_CARDS.finditer(value)
         )
     return False
+
+
+def contains_forbidden_hidden_information(value: Any) -> bool:
+    """Return whether arbitrary candidate data carries hidden bridge holdings."""
+    return _has_forbidden_key(value) or _has_forbidden_value(value)
 
 
 def _digest(value: Any) -> str:
