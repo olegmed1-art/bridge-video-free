@@ -1,6 +1,16 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM bidding.video_canon_assurance_assignment)
+     OR EXISTS (SELECT 1 FROM bidding.video_canon_assurance_verdict)
+     OR EXISTS (SELECT 1 FROM bidding.video_canon_promotion_job)
+     OR EXISTS (SELECT 1 FROM bidding.video_canon_promotion_delivery_receipt) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_0323_ROLLBACK_STATE_EXISTS' USING ERRCODE='55000';
+  END IF;
+END $$;
+
 REVOKE ALL ON FUNCTION bidding.enqueue_video_canon_promotion(uuid,uuid,text,text),
   bidding.claim_video_canon_promotion(integer),
   bidding.consume_video_canon_promotion(uuid,uuid,bigint),

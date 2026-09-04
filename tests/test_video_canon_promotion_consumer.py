@@ -73,6 +73,7 @@ def test_failure_is_bounded_and_recorded_without_raw_error(monkeypatch):
     connections = [
         _Connection([claim]),
         _Connection([RuntimeError("database connection reset with secret detail")]),
+        _Connection([RuntimeError("reconciliation failed")]),
         _Connection([("QUEUED",)]),
     ]
     monkeypatch.setattr(consumer, "_connect", lambda _dsn: connections.pop(0))
@@ -83,6 +84,23 @@ def test_failure_is_bounded_and_recorded_without_raw_error(monkeypatch):
         "error_code": "RETRYABLE_DATABASE_ERROR",
     }
     assert "secret detail" not in str(result)
+
+
+def test_ambiguous_consume_commit_is_reconciled_from_retained_receipt(monkeypatch):
+    job, token, receipt = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    claim = (job, uuid.uuid4(), uuid.uuid4(), "a" * 64, "b" * 64, "c" * 64, token, 3, None)
+    connections = [
+        _Connection([claim]),
+        _Connection([RuntimeError("connection lost after possible commit")]),
+        _Connection([(receipt,)]),
+    ]
+    monkeypatch.setattr(consumer, "_connect", lambda _dsn: connections.pop(0))
+    assert consumer.consume_one("postgresql://user@example/db") == {
+        "status": "POST_WRITE_INTEGRITY_PASS",
+        "job_id": str(job),
+        "delivery_receipt_id": str(receipt),
+        "fencing_token": 3,
+    }
 
 
 @pytest.mark.parametrize("seconds", [0, 29, 901])

@@ -381,8 +381,9 @@ SELECT EXISTS (
   ) OR EXISTS (
     SELECT 1 FROM walk AS w
      WHERE jsonb_typeof(w.value)='string'
-       AND w.value#>>'{}' ~*
-           E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])[[:space:]]+(?:is|was|remains?)[[:space:]]+void[[:space:]]+(?:in[[:space:]]+)?(?:spades?|hearts?|diamonds?|clubs?)($|[^[:alnum:]_])'
+       AND replace(replace(replace(replace(
+             w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:') ~*
+           E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])[[:space:]]+(?:is|was|remains?)[[:space:]]+void[[:space:]]+(?:(?:in|of)[[:space:]]+)?(?:spades?|hearts?|diamonds?|clubs?|[SHDC][[:space:]]*:?)($|[^[:alnum:]_])'
   );
 $$;
 

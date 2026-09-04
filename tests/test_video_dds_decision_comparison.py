@@ -86,6 +86,7 @@ def test_binds_logic_to_dds_offline_without_hidden_cards():
 @pytest.mark.parametrize("context_patch,position_patch", [
     ({"seat_to_play": "E"}, {}),
     ({"contract": "3H"}, {}),
+    ({"declarer": "N"}, {}),
 ])
 def test_dds_position_must_match_supplied_public_context(context_patch, position_patch):
     value = _observation()

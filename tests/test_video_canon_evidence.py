@@ -252,6 +252,8 @@ def test_hidden_deal_is_rejected_inside_innocuous_allowed_value(field, value):
     "North lacks spades",
     "North is void in spades",
     "partner is void in hearts",
+    "North is void of spades",
+    "North is void in ♠",
 ])
 def test_hidden_deal_is_rejected_in_source_bound_teacher_statement(statement):
     learning = _learning()

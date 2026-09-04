@@ -53,6 +53,8 @@ def test_only_consumer_can_cross_authoritative_boundary():
 
 
 def test_rollback_restores_pre_migration_boundary_and_registry():
+    assert "VIDEO_CANON_0323_ROLLBACK_STATE_EXISTS" in ROLLBACK
+    assert "video_canon_promotion_delivery_receipt" in ROLLBACK.split("REVOKE ALL", 1)[0]
     assert "GRANT EXECUTE ON FUNCTION bidding.activate_ai_verified_video_canon" in ROLLBACK
     assert "TO bridge_school_canon_promoter" in ROLLBACK
     assert "WHERE migration_key='0323_workflow_video_canon_promotion_consumer'" in ROLLBACK

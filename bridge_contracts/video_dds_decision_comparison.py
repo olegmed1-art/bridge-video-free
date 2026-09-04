@@ -25,6 +25,7 @@ _CALL = re.compile(r"^(?:P|PASS|X|XX|DBL|RDBL|[1-7](?:C|D|H|S|NT))$", re.IGNOREC
 _CARD = re.compile(r"^(?:[2-9TJQKA][CDHS])$", re.IGNORECASE)
 _CONTRACT = re.compile(r"^[1-7](?:C|D|H|S|NT)(?:X|XX)?$", re.IGNORECASE)
 _SEAT = {"N", "E", "S", "W"}
+_SEAT_ORDER = ("N", "E", "S", "W")
 _VULNERABILITY = {"NONE", "NS", "EW", "BOTH", "ALL"}
 
 
@@ -157,6 +158,14 @@ def _rerun_authenticated_dds_request(
         )
     if "seat_to_play" in public_context and first != public_context["seat_to_play"]:
         raise VideoDDSComparisonError("DDS position first does not match public seat_to_play")
+    if "declarer" in public_context:
+        expected_leader = _SEAT_ORDER[
+            (_SEAT_ORDER.index(public_context["declarer"]) + 1) % len(_SEAT_ORDER)
+        ]
+        if first != expected_leader:
+            raise VideoDDSComparisonError(
+                "DDS position first does not match public declarer"
+            )
     if "contract" in public_context:
         contract_strain = re.match(r"^[1-7](NT|[CDHS])", public_context["contract"]).group(1)
         if trump != contract_strain:

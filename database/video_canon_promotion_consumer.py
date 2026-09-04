@@ -94,8 +94,31 @@ def consume_one(raw_dsn: str, *, lease_seconds: int = 120) -> dict[str, Any]:
             connection.commit()
     except Exception as error:
         error_code = _safe_error_code(error)
-        # The authoritative consume transaction has rolled back. Record only a
-        # bounded failure code in a new transaction; never persist raw errors.
+        # A lost commit acknowledgement is ambiguous: the authoritative
+        # transaction may already have committed. Re-run the idempotent consume
+        # boundary first so its retained receipt reconciles that outcome.
+        try:
+            with _connect(dsn) as connection:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT bidding.consume_video_canon_promotion(%s,%s,%s)",
+                        (job_id, lease_token, fencing_token),
+                    )
+                    reconciled = cursor.fetchone()
+                    if not reconciled or reconciled[0] is None:
+                        raise RuntimeError("INTEGRITY_FAILED")
+                    delivery_receipt_id = uuid.UUID(str(reconciled[0]))
+                connection.commit()
+            return {
+                "status": "POST_WRITE_INTEGRITY_PASS",
+                "job_id": str(job_id),
+                "delivery_receipt_id": str(delivery_receipt_id),
+                "fencing_token": fencing_token,
+            }
+        except Exception:
+            pass
+        # Both consume attempts failed. Record only a bounded failure code in a
+        # new transaction; never persist raw errors.
         try:
             with _connect(dsn) as connection:
                 with connection.cursor() as cursor:

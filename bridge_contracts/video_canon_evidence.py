@@ -92,7 +92,8 @@ _NEGATED_HIDDEN_HOLDING = re.compile(
 _VOID_HIDDEN_HOLDING = re.compile(
     r"(?:(?<!\w)(?:partner|opponent|north|east|south|west)"
     r"|(?<![A-Za-z0-9])[NESW])\s+(?:is|was|remains?)\s+"
-    r"void\s+(?:in\s+)?(?:spades?|hearts?|diamonds?|clubs?)\b",
+    r"void\s+(?:(?:in|of)\s+)?"
+    r"(?:spades?|hearts?|diamonds?|clubs?|[SHDC]\s*:)(?:\b|(?=\s|$))",
     re.IGNORECASE,
 )
 _LEADING_HOLDING_CARD_GROUP = re.compile(
