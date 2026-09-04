@@ -135,6 +135,17 @@ BEGIN
     RAISE EXCEPTION 'VIDEO_CANON_REASSIGNMENT_REASON_INVALID' USING ERRCODE='23514';
   END IF;
   SELECT * INTO v_old FROM bidding.video_canon_assurance_assignment
+   WHERE video_canon_assurance_assignment_id=p_assignment_id;
+  IF NOT FOUND OR v_old.status<>'active' THEN
+    RAISE EXCEPTION 'VIDEO_CANON_REASSIGNMENT_TARGET_INVALID' USING ERRCODE='23514';
+  END IF;
+  -- The bundle is the candidate-scoped serialization point. Enqueue takes a
+  -- SHARE lock on this same row before it validates active assignments, so a
+  -- job cannot appear between the reassignment scan and supersession.
+  PERFORM 1 FROM bidding.video_canon_ai_verification_bundle
+   WHERE video_canon_ai_verification_bundle_id=v_old.video_canon_ai_verification_bundle_id
+   FOR UPDATE;
+  SELECT * INTO v_old FROM bidding.video_canon_assurance_assignment
    WHERE video_canon_assurance_assignment_id=p_assignment_id FOR UPDATE;
   IF NOT FOUND OR v_old.status<>'active' THEN
     RAISE EXCEPTION 'VIDEO_CANON_REASSIGNMENT_TARGET_INVALID' USING ERRCODE='23514';

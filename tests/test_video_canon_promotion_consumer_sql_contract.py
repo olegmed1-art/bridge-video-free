@@ -35,6 +35,7 @@ def test_delivery_is_leased_fenced_atomic_and_retained():
     assert "video_canon_assurance_assignment_id=i2.video_canon_assurance_assignment_id" in MIGRATION
     assert "terminal_error_code='STATE_STALE'" in MIGRATION
     assert "PERFORM 1 FROM bidding.video_canon_promotion_job" in MIGRATION
+    assert "video_canon_ai_verification_bundle_id=v_old.video_canon_ai_verification_bundle_id\n   FOR UPDATE" in MIGRATION
     assert "v_existing.fencing_token<>p_fencing_token" in MIGRATION
 
 

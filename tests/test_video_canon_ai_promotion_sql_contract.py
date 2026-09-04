@@ -186,6 +186,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "([^;]*)",
         "matched.parts[1] ~*",
         "[SHDC][[:space:]]*:",
+        "[SHDC][[:space:]]*:?[[:space:]]*",
         "{1,3}($|[^[:alnum:]])",
         "{2,13})($|[^[:alnum:]])",
         "(?:10|[AKQJT]|",
