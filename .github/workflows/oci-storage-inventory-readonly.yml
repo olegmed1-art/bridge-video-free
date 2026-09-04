@@ -163,7 +163,7 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           # BEGIN OCI_READ_ONLY_SDK
-          import os
+          import os, re
           import oci
 
           operation='initialize'
@@ -178,7 +178,7 @@ jobs:
               subscriptions=identity.list_region_subscriptions(tenancy).data
               regions=sorted({
                   x.region_name for x in subscriptions
-                  if str(x.status).upper() in {'READY','ACTIVE'}
+                  if x.status in {'READY','ACTIVE'}
               })
               if not regions:
                   raise RuntimeError('no subscribed regions')
@@ -262,7 +262,7 @@ jobs:
           except oci.exceptions.ServiceError as exc:
               status=str(exc.status) if exc.status is not None else 'unknown'
               code=str(exc.code or 'unknown')
-              safe_code=''.join(ch for ch in code if ch.isalnum() or ch in '._-')[:80] or 'unknown'
+              safe_code=re.sub(r'[^A-Za-z0-9._-]', '', code)[:80] or 'unknown'
               print(f'OCI_STORAGE_INVENTORY_FAILED operation={operation} status={status} code={safe_code}')
               raise SystemExit(1)
           except Exception:
