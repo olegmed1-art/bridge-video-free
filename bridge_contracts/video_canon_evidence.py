@@ -34,7 +34,8 @@ _PBN_DEAL = re.compile(
     re.IGNORECASE,
 )
 _LABELLED_HIDDEN_CARDS = re.compile(
-    r"(?:partner|opponent|north|east|south|west)\s*(?:['’]s)?[ _-]*(?:hand|cards)\s*[:=]\s*[-AKQJT2-9.]"
+    r"(?:partner|opponent|north|east|south|west)\s*(?:['’]s)?[ _-]*(?:hand|cards)"
+    r"\s*(?::|=|[-–—]|\bis\b)\s*[-AKQJT2-9.]"
     r"|(?:рука|карты)\s+(?:партн[её]ра|соперника)\s*[:=]\s*[-AKQJT2-9.]",
     re.IGNORECASE,
 )

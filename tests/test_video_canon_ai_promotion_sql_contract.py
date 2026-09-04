@@ -23,7 +23,9 @@ def test_ai_promotion_is_narrow_guarded_and_not_granted_to_general_workers():
     assert "GRANT INSERT ON bidding.video_correction_review_receipt TO bridge_school_canon_control_verifier" in MIGRATION
     assert "GRANT SELECT ON bidding.video_correction_review_receipt TO bridge_school_worker" in MIGRATION
     assert "REVOKE bridge_school_reader FROM bridge_school_canon_verifier" in MIGRATION
-    assert "GRANT SELECT ON public.analysis_candidate TO bridge_school_canon_verifier" in MIGRATION
+    assert "CREATE VIEW bidding.video_canon_bound_candidate" in MIGRATION
+    assert "check_row.value->>'execution_principal'=session_user::text" in MIGRATION
+    assert "REVOKE SELECT ON public.analysis_candidate,bidding.video_canon_ai_verification_bundle" in MIGRATION
     assert "bridge_school_canon_restorer" in MIGRATION
     assert "GRANT EXECUTE ON FUNCTION bidding.restore_ai_verified_video_canon" in MIGRATION
     assert "TO bridge_school_canon_restorer" in MIGRATION
@@ -69,6 +71,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "jsonb_array_length(NEW.bundle_payload->'checks')<>16",
         "VIDEO_CANON_RESTORE_VALIDATION_GATES_FAILED",
         "VIDEO_CANON_RESTORE_SOURCE_POLICY_INACTIVE",
+        "VIDEO_CANON_RESTORE_CANON_VERSION_GATES_FAILED",
     ):
         assert marker in MIGRATION
 
@@ -95,3 +98,4 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "superseded_runtime_state" in MIGRATION
     assert "VIDEO_CANON_RESTORE_CURRENT_ACTIVATION_MISMATCH" in MIGRATION
     assert "DROP FUNCTION bidding.restore_ai_verified_video_canon" in ROLLBACK
+    assert "DROP VIEW bidding.video_canon_bound_candidate" in ROLLBACK

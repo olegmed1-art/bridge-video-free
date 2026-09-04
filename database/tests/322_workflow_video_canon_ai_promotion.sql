@@ -66,7 +66,16 @@ BEGIN
      OR pg_has_role('bridge_school_canon_promoter','bridge_school_reader','member')
      OR pg_has_role('bridge_school_canon_restorer','bridge_school_reader','member')
      OR has_table_privilege('bridge_school_canon_semantic_verifier','public.person','SELECT')
-     OR has_table_privilege('bridge_school_canon_promoter','public.person','SELECT') THEN
+     OR has_table_privilege('bridge_school_canon_promoter','public.person','SELECT')
+     OR has_table_privilege('bridge_school_canon_verifier','public.analysis_candidate','SELECT')
+     OR has_table_privilege('bridge_school_canon_semantic_verifier','public.analysis_candidate','SELECT')
+     OR has_table_privilege('bridge_school_canon_bridge_verifier','public.analysis_candidate','SELECT')
+     OR has_table_privilege('bridge_school_canon_firewall_verifier','public.analysis_candidate','SELECT')
+     OR has_table_privilege('bridge_school_canon_control_verifier','public.analysis_candidate','SELECT')
+     OR NOT has_table_privilege('bridge_school_canon_semantic_verifier','bidding.video_canon_bound_candidate','SELECT')
+     OR NOT has_table_privilege('bridge_school_canon_bridge_verifier','bidding.video_canon_bound_candidate','SELECT')
+     OR NOT has_table_privilege('bridge_school_canon_firewall_verifier','bidding.video_canon_bound_candidate','SELECT')
+     OR NOT has_table_privilege('bridge_school_canon_control_verifier','bidding.video_canon_bound_candidate','SELECT') THEN
     RAISE EXCEPTION 'VIDEO_CANON_VERIFIER_OVERBROAD_READ_ACCESS';
   END IF;
   IF has_table_privilege('bridge_school_canon_promoter','public.canon_activation','INSERT')
@@ -85,6 +94,8 @@ BEGIN
   END IF;
   IF NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N:AKQJ.T98.765.432 E:T987.654.32.AKQ"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"North''s hand is AKQJ.T98.765.432; East’s hand is JT9.AKQ.JT9.876"}'::jsonb
      )) OR bidding.contains_forbidden_hidden_value(
        '{"meaning":"shows at least five hearts"}'::jsonb
      ) THEN
@@ -253,7 +264,9 @@ BEGIN
     'policy_version','school-video-auto-canon-v1',
     'candidate_payload_hash',repeat('a',64),'candidate_payload','{}'::jsonb,
     'canon_snapshot_sha256',repeat('0',64),
-    'checks',jsonb_agg(jsonb_build_object('check_id',check_id,'result','PASS') ORDER BY ordinal),
+    'checks',jsonb_agg(jsonb_build_object(
+      'check_id',check_id,'result','PASS','execution_principal',session_user
+    ) ORDER BY ordinal),
     'effective_period','{}'::jsonb,'rollback','{}'::jsonb
   ) INTO v_good_bundle
   FROM (VALUES

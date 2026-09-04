@@ -231,7 +231,7 @@ SELECT EXISTS (
    WHERE jsonb_typeof(w.value)='string'
      AND (
        (w.value#>>'{}') ~* E'(^|[^[:alnum:]])[NESW][[:space:]]*:[[:space:]]*[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}'
-       OR (w.value#>>'{}') ~* E'(partner|opponent|north|east|south|west)[[:space:]]*([''’]s)?[ _-]*(hand|cards)[[:space:]]*[:=][[:space:]]*[-AKQJT2-9.]'
+       OR (w.value#>>'{}') ~* E'(partner|opponent|north|east|south|west)[[:space:]]*([''’]s)?[ _-]*(hand|cards)[[:space:]]*(:|=|[-–—]|is)[[:space:]]*[-AKQJT2-9.]'
        OR (w.value#>>'{}') ~* E'(рука|карты)[[:space:]]+(партн[её]ра|соперника)[[:space:]]*[:=][[:space:]]*[-AKQJT2-9.]'
      )
 );
@@ -365,13 +365,15 @@ BEFORE UPDATE OR DELETE ON bidding.video_correction_review_receipt
 FOR EACH ROW EXECUTE FUNCTION bidding.reject_append_only_mutation();
 
 CREATE OR REPLACE FUNCTION bidding.validate_video_canon_verification_bundle()
-RETURNS trigger LANGUAGE plpgsql AS $$
+RETURNS trigger LANGUAGE plpgsql
+SECURITY DEFINER SET search_path=pg_catalog,public,bidding AS $$
 DECLARE v_candidate public.analysis_candidate%ROWTYPE; v_decoded jsonb; v_computed text;
 BEGIN
     SELECT * INTO v_candidate FROM public.analysis_candidate
      WHERE analysis_candidate_id=NEW.analysis_candidate_id;
     IF NOT FOUND OR v_candidate.school_id<>NEW.school_id
-       OR v_candidate.payload_hash<>NEW.candidate_payload_hash THEN
+       OR v_candidate.payload_hash<>NEW.candidate_payload_hash
+       OR v_candidate.candidate_type<>'video_school_canon_candidate' THEN
         RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_CANDIDATE_MISMATCH' USING ERRCODE='23514';
     END IF;
     BEGIN
@@ -412,29 +414,50 @@ CREATE TRIGGER video_canon_verification_bundle_guard
 BEFORE INSERT ON bidding.video_canon_ai_verification_bundle
 FOR EACH ROW EXECUTE FUNCTION bidding.validate_video_canon_verification_bundle();
 
+CREATE VIEW bidding.video_canon_bound_candidate
+WITH (security_barrier=true) AS
+SELECT c.*,b.video_canon_ai_verification_bundle_id,
+       b.candidate_payload_hash AS bound_candidate_payload_hash,
+       b.verification_bundle_sha256,
+       (
+         SELECT jsonb_agg(check_row.value ORDER BY check_row.ordinality)
+           FROM jsonb_array_elements(b.bundle_payload->'checks')
+                WITH ORDINALITY AS check_row(value,ordinality)
+          WHERE check_row.value->>'execution_principal'=session_user::text
+       ) AS assigned_checks,
+       EXISTS (
+         SELECT 1 FROM bidding.video_canon_ai_promotion_receipt p
+          WHERE p.analysis_candidate_id=c.analysis_candidate_id
+            AND p.candidate_payload_hash=b.candidate_payload_hash
+            AND p.verification_bundle_sha256=b.verification_bundle_sha256
+       ) AS verification_set_closed
+  FROM public.analysis_candidate c
+  JOIN bidding.video_canon_ai_verification_bundle b
+    ON b.analysis_candidate_id=c.analysis_candidate_id
+   AND b.school_id=c.school_id AND b.candidate_payload_hash=c.payload_hash
+ WHERE c.candidate_type='video_school_canon_candidate'
+   AND EXISTS (
+     SELECT 1 FROM jsonb_array_elements(b.bundle_payload->'checks') AS check_row(value)
+      WHERE check_row.value->>'execution_principal'=session_user::text
+   );
+
 CREATE OR REPLACE FUNCTION bidding.validate_video_canon_verification()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
-    v_school uuid;
-    v_hash text;
-    v_bundle bidding.video_canon_ai_verification_bundle%ROWTYPE;
+    v_bound record;
     v_principal bidding.video_canon_verifier_registry%ROWTYPE;
 BEGIN
-    IF EXISTS (
-        SELECT 1 FROM bidding.video_canon_ai_promotion_receipt
-         WHERE analysis_candidate_id=NEW.analysis_candidate_id
-           AND candidate_payload_hash=NEW.candidate_payload_hash
-           AND verification_bundle_sha256=NEW.verification_bundle_sha256
-    ) THEN
+    SELECT * INTO v_bound FROM bidding.video_canon_bound_candidate
+     WHERE analysis_candidate_id=NEW.analysis_candidate_id
+       AND video_canon_ai_verification_bundle_id=NEW.video_canon_ai_verification_bundle_id;
+    IF NOT FOUND OR v_bound.school_id<>NEW.school_id
+       OR v_bound.payload_hash<>NEW.candidate_payload_hash
+       OR v_bound.bound_candidate_payload_hash<>NEW.candidate_payload_hash
+       OR v_bound.verification_bundle_sha256<>NEW.verification_bundle_sha256 THEN
+        RAISE EXCEPTION 'VIDEO_CANON_VERIFICATION_BINDING_MISMATCH' USING ERRCODE='23514';
+    END IF;
+    IF v_bound.verification_set_closed THEN
         RAISE EXCEPTION 'VIDEO_CANON_PROMOTED_VERIFICATION_SET_CLOSED' USING ERRCODE='55000';
-    END IF;
-    SELECT school_id,payload_hash INTO v_school,v_hash
-      FROM public.analysis_candidate WHERE analysis_candidate_id=NEW.analysis_candidate_id;
-    IF v_school IS NULL OR v_school<>NEW.school_id THEN
-        RAISE EXCEPTION 'VIDEO_CANON_VERIFICATION_SCHOOL_MISMATCH' USING ERRCODE='23514';
-    END IF;
-    IF v_hash<>NEW.candidate_payload_hash THEN
-        RAISE EXCEPTION 'VIDEO_CANON_VERIFICATION_PAYLOAD_MISMATCH' USING ERRCODE='23514';
     END IF;
     SELECT * INTO v_principal FROM bidding.video_canon_verifier_registry
      WHERE database_role=current_user AND status='active';
@@ -446,14 +469,8 @@ BEGIN
        OR v_principal.max_assurance_level NOT IN ('I1','I2','I3') THEN
         RAISE EXCEPTION 'VIDEO_CANON_VERIFIER_PRINCIPAL_MISMATCH' USING ERRCODE='42501';
     END IF;
-    SELECT * INTO v_bundle FROM bidding.video_canon_ai_verification_bundle
-     WHERE video_canon_ai_verification_bundle_id=NEW.video_canon_ai_verification_bundle_id;
-    IF NOT FOUND OR v_bundle.school_id<>NEW.school_id
-       OR v_bundle.analysis_candidate_id<>NEW.analysis_candidate_id
-       OR v_bundle.candidate_payload_hash<>NEW.candidate_payload_hash
-       OR v_bundle.verification_bundle_sha256<>NEW.verification_bundle_sha256
-       OR NOT EXISTS (
-         SELECT 1 FROM jsonb_array_elements(v_bundle.bundle_payload->'checks') AS c(value)
+    IF NOT EXISTS (
+         SELECT 1 FROM jsonb_array_elements(v_bound.assigned_checks) AS c(value)
           WHERE c.value->>'check_id'=NEW.check_id
             AND c.value->>'result'=NEW.result
             AND c.value->>'verifier_family'=NEW.verifier_family
@@ -467,7 +484,6 @@ BEGIN
     END IF;
     RETURN NEW;
 END $$;
-
 CREATE TRIGGER video_canon_verification_guard
 BEFORE INSERT ON bidding.video_canon_ai_verification
 FOR EACH ROW EXECUTE FUNCTION bidding.validate_video_canon_verification();
@@ -902,6 +918,7 @@ DECLARE
     v_new_canon public.canon_activation%ROWTYPE;
     v_new_runtime bidding.runtime_activation%ROWTYPE;
     v_prior_runtime bidding.runtime_activation%ROWTYPE;
+    v_prior_canon public.canon_activation%ROWTYPE;
     v_prior_promotion bidding.video_canon_ai_promotion_receipt%ROWTYPE;
     v_state jsonb;
     v_original_valid_to timestamptz;
@@ -966,7 +983,7 @@ BEGIN
            AND v_promotion.superseded_canon_valid_to<=statement_timestamp() THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_TARGET_EXPIRED' USING ERRCODE='23514';
         END IF;
-        PERFORM 1 FROM public.canon_activation
+        SELECT * INTO v_prior_canon FROM public.canon_activation
          WHERE canon_activation_id=v_promotion.superseded_canon_activation_id
            AND status='superseded' AND valid_to=v_new_canon.valid_from FOR UPDATE;
         IF NOT FOUND THEN
@@ -1000,6 +1017,25 @@ BEGIN
                    c.payload#>>'{source_authorization,authorization_evidence_sha256}'
         ) THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_SOURCE_POLICY_INACTIVE' USING ERRCODE='23514';
+        END IF;
+        IF NOT EXISTS (
+             SELECT 1 FROM bidding.rule r
+              WHERE r.knowledge_version_id=v_prior_canon.knowledge_version_id
+           ) OR EXISTS (
+             SELECT 1 FROM bidding.rule r
+              WHERE r.knowledge_version_id=v_prior_canon.knowledge_version_id
+                AND NOT bidding.rule_passes_activation_gates(r.rule_id)
+           ) OR NOT EXISTS (
+             SELECT 1 FROM public.knowledge_version_source kvs
+             JOIN public.source s ON s.source_id=kvs.source_id AND s.status='active'
+              WHERE kvs.knowledge_version_id=v_prior_canon.knowledge_version_id
+           ) OR EXISTS (
+             SELECT 1 FROM public.knowledge_version_source kvs
+             JOIN public.source s ON s.source_id=kvs.source_id
+              WHERE kvs.knowledge_version_id=v_prior_canon.knowledge_version_id
+                AND s.status<>'active'
+           ) THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_CANON_VERSION_GATES_FAILED' USING ERRCODE='23514';
         END IF;
         UPDATE public.canon_activation
            SET status='active',valid_to=v_promotion.superseded_canon_valid_to
@@ -1077,13 +1113,14 @@ GRANT EXECUTE ON FUNCTION bidding.current_school_canon_snapshot_sha256(uuid) TO
 GRANT SELECT ON bidding.video_correction_review_receipt TO bridge_school_worker;
 GRANT INSERT ON bidding.video_correction_review_receipt TO bridge_school_canon_control_verifier;
 GRANT INSERT ON bidding.video_canon_ai_verification_bundle TO bridge_school_canon_verifier;
-GRANT SELECT ON public.analysis_candidate TO bridge_school_canon_verifier,
-  bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
-  bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier;
-GRANT SELECT ON bidding.video_canon_ai_verification_bundle,
+GRANT SELECT ON bidding.video_canon_bound_candidate,
   bidding.video_canon_verifier_registry TO
   bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,
   bridge_school_canon_firewall_verifier,bridge_school_canon_control_verifier;
+REVOKE SELECT ON public.analysis_candidate,bidding.video_canon_ai_verification_bundle
+  FROM bridge_school_canon_verifier,bridge_school_canon_semantic_verifier,
+  bridge_school_canon_bridge_verifier,bridge_school_canon_firewall_verifier,
+  bridge_school_canon_control_verifier;
 GRANT SELECT ON bidding.video_canon_verifier_registry TO bridge_school_canon_verifier;
 GRANT INSERT ON bidding.video_canon_ai_verification TO
   bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,

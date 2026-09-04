@@ -13,6 +13,7 @@ BEGIN
 END $$;
 DROP FUNCTION bidding.restore_ai_verified_video_canon(uuid,text,text);
 DROP FUNCTION bidding.activate_ai_verified_video_canon(uuid,uuid,text);
+DROP VIEW bidding.video_canon_bound_candidate;
 DROP TRIGGER video_canon_restore_receipt_append_only ON bidding.video_canon_ai_restore_receipt;
 DROP TRIGGER video_correction_review_receipt_append_only ON bidding.video_correction_review_receipt;
 DROP TRIGGER video_correction_review_receipt_guard ON bidding.video_correction_review_receipt;
