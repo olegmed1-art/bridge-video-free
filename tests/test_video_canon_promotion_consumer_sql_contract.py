@@ -13,7 +13,7 @@ def test_authority_and_independent_assurance_are_fail_closed():
     assert MIGRATION.count("i2.execution_principal<>i3.execution_principal") == 3
     assert "i2_attestor.rolname=i2.execution_principal" in MIGRATION
     assert "i3_attestor.rolname=i3.execution_principal" in MIGRATION
-    assert MIGRATION.count("attestor.rolcanlogin") == 4
+    assert MIGRATION.count("attestor.rolcanlogin") == 6
     assert "i2_attestor.oid,'bridge_school_canon_i2_verifier','MEMBER'" in MIGRATION
     assert "i3_attestor.oid,'bridge_school_canon_i3_verifier','MEMBER'" in MIGRATION
     assert "video_canon_assurance_verifier_registry" in MIGRATION
@@ -27,6 +27,12 @@ def test_authority_and_independent_assurance_are_fail_closed():
     assert "i2_attestor.rolcanlogin" in post_activation
     assert "i3_attestor.rolcanlogin" in post_activation
     assert "VIDEO_CANON_I2_I3_REVOKED_DURING_PROMOTION" in post_activation
+    assert "FROM bidding.video_canon_ai_verification v" in post_activation
+    assert "LEFT JOIN bidding.video_canon_verifier_registry vr" in post_activation
+    assert "v.check_id=ANY(vr.allowed_check_ids)" in post_activation
+    assert "capability.rolname=vr.database_role" in post_activation
+    assert "pg_has_role(attestor.oid,capability.oid,'MEMBER')" in post_activation
+    assert "VIDEO_CANON_BASE_VERIFIERS_REVOKED_DURING_PROMOTION" in post_activation
     assert "VIDEO_CANON_ASSURANCE_SET_CHANGED_DURING_PROMOTION" in post_activation
     assert "WORLD" not in MIGRATION
 

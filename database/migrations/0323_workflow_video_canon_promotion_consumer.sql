@@ -717,6 +717,78 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_I2_I3_REVOKED_DURING_PROMOTION' USING ERRCODE='42501';
   END IF;
+  -- The 0322 activation RPC rechecks the sealed base verification set before
+  -- writing. Recheck its live registry capability and principal membership
+  -- again after the RPC returns so a concurrent revocation rolls back that
+  -- write before an exactly-once delivery receipt can commit.
+  IF EXISTS (
+    SELECT 1
+      FROM bidding.video_canon_ai_verification v
+      LEFT JOIN bidding.video_canon_verifier_registry vr
+        ON vr.verifier_family=v.verifier_family
+       AND vr.status='active'
+       AND v.check_id=ANY(vr.allowed_check_ids)
+       AND (
+         vr.max_assurance_level='I3'
+         OR (vr.max_assurance_level='I2' AND v.assurance_level IN ('I0','I1','I2'))
+         OR (vr.max_assurance_level='I1' AND v.assurance_level IN ('I0','I1'))
+       )
+     WHERE v.analysis_candidate_id=v_job.analysis_candidate_id
+       AND v.candidate_payload_hash=v_job.candidate_payload_hash
+       AND v.verification_bundle_sha256=v_job.verification_bundle_sha256
+       AND (
+         v.result<>'PASS'
+         OR vr.database_role IS NULL
+         OR NOT EXISTS (
+           SELECT 1
+             FROM pg_catalog.pg_roles attestor
+             JOIN pg_catalog.pg_roles capability
+               ON capability.rolname=vr.database_role
+            WHERE attestor.rolname=v.execution_principal
+              AND attestor.rolcanlogin
+              AND pg_has_role(attestor.oid,capability.oid,'MEMBER')
+         )
+       )
+  ) OR EXISTS (
+    SELECT req.check_id
+      FROM (VALUES
+        ('SOURCE_AUTHORITY'),('SOURCE_BINDING'),('SPEAKER_IDENTITY'),('TRANSCRIPT_BINDING'),
+        ('SEMANTIC_PARSE'),('EXPLANATION_COMPLETENESS'),('BRIDGE_LOGIC'),
+        ('HIDDEN_INFORMATION_FIREWALL'),('POSITIVE_TESTS'),('NEGATIVE_TESTS'),
+        ('BOUNDARY_TESTS'),('INTERFERENCE_TESTS'),('CANON_REGRESSION'),('CANON_INTEGRITY'),
+        ('CANON_CONFLICT_SCAN'),('ROLLBACK_RESTORE')
+      ) req(check_id)
+     WHERE NOT EXISTS (
+       SELECT 1
+         FROM bidding.video_canon_ai_verification v
+         JOIN bidding.video_canon_verifier_registry vr
+           ON vr.verifier_family=v.verifier_family
+          AND vr.status='active'
+          AND v.check_id=ANY(vr.allowed_check_ids)
+          AND (
+            vr.max_assurance_level='I3'
+            OR (vr.max_assurance_level='I2' AND v.assurance_level IN ('I0','I1','I2'))
+            OR (vr.max_assurance_level='I1' AND v.assurance_level IN ('I0','I1'))
+          )
+        WHERE v.analysis_candidate_id=v_job.analysis_candidate_id
+          AND v.candidate_payload_hash=v_job.candidate_payload_hash
+          AND v.verification_bundle_sha256=v_job.verification_bundle_sha256
+          AND v.check_id=req.check_id
+          AND v.result='PASS'
+          AND EXISTS (
+            SELECT 1
+              FROM pg_catalog.pg_roles attestor
+              JOIN pg_catalog.pg_roles capability
+                ON capability.rolname=vr.database_role
+             WHERE attestor.rolname=v.execution_principal
+               AND attestor.rolcanlogin
+               AND pg_has_role(attestor.oid,capability.oid,'MEMBER')
+          )
+     )
+  ) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_BASE_VERIFIERS_REVOKED_DURING_PROMOTION'
+      USING ERRCODE='42501';
+  END IF;
   IF bidding.video_canon_assurance_set_sha256(
        v_job.analysis_candidate_id,v_job.candidate_payload_hash,
        v_job.verification_bundle_sha256
