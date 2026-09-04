@@ -31,7 +31,8 @@ def test_workflow_is_exact_host_one_shot_and_pinned() -> None:
     assert "issue_comment:" in WORKFLOW
     assert "github.event.issue.number == 881" in WORKFLOW
     assert "github.event.comment.user.login == 'olegmed1-art'" in WORKFLOW
-    assert "github.event.comment.body == '/oracle-ops issue-881-expand-root-and-recover-bba508'" in WORKFLOW
+    assert '"/oracle-ops issue-881-expand-root-and-recover-bba508"' in WORKFLOW
+    assert '"/oracle-ops issue-881-reconcile-run-33893910685"' in WORKFLOW
 
 
 def test_postconditions_and_only_allowed_service_restart() -> None:
@@ -47,7 +48,7 @@ def test_recovery_point_is_retained_and_restore_tested_before_mutation() -> None
     checkpoint = WORKFLOW.index("Create and restore-test partition recovery point")
     retained = WORKFLOW.index("Retain recovery point")
     reconciled = WORKFLOW.index("Reconcile current main immediately before mutation")
-    mutation = WORKFLOW.index("Expand existing root partition and filesystem")
+    mutation = WORKFLOW.index("Expand root and recover exact image under shared host lock")
     assert checkpoint < retained < reconciled < mutation
     assert 'sfdisk --dump "$disk"' in SCRIPT
     assert 'sfdisk --verify "$disk"' in SCRIPT
@@ -71,7 +72,7 @@ def test_already_grown_partition_resumes_at_filesystem_resize() -> None:
 def test_fresh_full_backup_and_isolated_boot_acceptance_gate_mutation() -> None:
     assert "timeout-minutes: 360" in WORKFLOW
     gate = WORKFLOW.index("Create fresh full backup and prove isolated restored-root boot acceptance")
-    mutation = WORKFLOW.index("Expand existing root partition and filesystem")
+    mutation = WORKFLOW.index("Expand root and recover exact image under shared host lock")
     assert gate < mutation
     assert "boot-volume-backup create" in WORKFLOW
     assert "--type FULL" in WORKFLOW
@@ -246,9 +247,9 @@ def test_failed_drill_deletes_only_its_new_unaccepted_backup() -> None:
 def test_receipt_reports_backup_only_from_proven_step_output() -> None:
     receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
     assert "BACKUP_ID: ${{ steps.backup.outputs.backup_id }}" in receipt
-    assert 'if [[ -n "$BACKUP_ID" ]]' in receipt
-    assert "fresh backup retained: \\`true\\`; proven backup ID" in receipt
-    assert "fresh backup retained: `unknown`" in receipt
+    assert "backup_id = os.environ.get('BACKUP_ID') or state.get('retained_backup_id')" in receipt
+    assert "'- fresh backup retained: ' + code('true')" in receipt
+    assert "false_or_unproven" in receipt
     assert "SUPERSEDED_BACKUP_COUNT: ${{ steps.backup.outputs.superseded_backup_count }}" in receipt
     assert "superseded operation backups remaining" in receipt
     assert "fresh backup retained: `true` (billable" not in receipt
@@ -267,12 +268,18 @@ def test_temporary_restore_cleanup_waits_for_dependency_deletion() -> None:
     assert "NotAuthorizedOrNotFound" in cleanup
     assert "404" in cleanup
     assert '[[ "$state" == TERMINATED ]]' in cleanup
+    assert "UV_ROOT_RESOURCE_ABSENCE_PASS" in cleanup
+    assert "status['\\\"]" in cleanup
 
 
 def test_issue_881_retry_runs_only_after_guarded_expansion() -> None:
-    expansion = WORKFLOW.index("Expand existing root partition and filesystem")
-    recovery = WORKFLOW.index("Recover exact image and restart only container service")
-    assert expansion < recovery
+    mutation = WORKFLOW.index("Expand root and recover exact image under shared host lock")
+    block = WORKFLOW[mutation:WORKFLOW.index("Publish bounded operational receipt")]
+    assert block.index("oracle_universal_video_root_filesystem_expand.sh") < block.index(
+        "oracle_universal_video_container_missing_image_recover.sh"
+    )
+    assert "/usr/bin/flock -x /run/lock/oracle-workload-mutation.lock /bin/bash -s" in block
+    assert block.count("/run/lock/oracle-workload-mutation.lock") == 1
     assert "EXACT_RUNTIME_SHA: bba508350cbe63a7a8ec93fa9c007db9ee9eae6c" in WORKFLOW
     assert "'oracle-instance-workload-mutation'" in WORKFLOW
     assert 'systemctl restart "$SERVICE"' in (ROOT / "ops/oracle_universal_video_container_missing_image_recover.sh").read_text()
@@ -280,7 +287,7 @@ def test_issue_881_retry_runs_only_after_guarded_expansion() -> None:
 
 def test_last_second_gate_revalidates_oci_before_ssh_mutation() -> None:
     gate = WORKFLOW.index("Reconcile current main immediately before mutation")
-    mutation = WORKFLOW.index("Expand existing root partition and filesystem")
+    mutation = WORKFLOW.index("Expand root and recover exact image under shared host lock")
     block = WORKFLOW[gate:mutation]
     assert "boot-volume-attachment list" in block
     assert "boot-volume-backup get" in block
@@ -293,3 +300,35 @@ def test_last_second_gate_revalidates_oci_before_ssh_mutation() -> None:
     assert "vnic-attachment list" in block
     assert "network vnic get" in block
     assert '[[ "$source_public_ip" == "$ORACLE_HOST" ]]' in block
+
+
+def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> None:
+    cleanup_command = "/oracle-ops issue-881-reconcile-run-33893910685"
+    assert cleanup_command in WORKFLOW
+    assert 'target_prior_stamp="${operation_run_prefix}33893910685-a1"' in WORKFLOW
+    assert 'failed_run_backup_name="${backup_prefix}-33893910685-a1"' in WORKFLOW
+    cleanup = WORKFLOW.index("reconcile_prior_attempt_resources")
+    backup_create = WORKFLOW.index("boot-volume-backup create")
+    mutation = WORKFLOW.index("Expand root and recover exact image under shared host lock")
+    assert cleanup < backup_create < mutation
+    assert "FAILED_BACKUP_NAME" in WORKFLOW
+    assert "failed_run_backup_cleanup_status RETAINED_PROVEN" in WORKFLOW
+    assert "assert data['lifecycle-state'] == 'AVAILABLE'" in WORKFLOW
+    assert "allocation_summary" in WORKFLOW
+    assert "cleanup_only=true" in WORKFLOW
+
+
+def test_receipt_is_literal_safe_and_retains_cleanup_evidence() -> None:
+    receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
+    assert "STATE_PATH" in receipt
+    assert "json.loads(state_path.read_text())" in receipt
+    assert "echo \"- workflow outcome:" not in receipt
+    assert "failure receipt: https://github.com/olegmed1-art/bridge-video-free/issues/881#issuecomment-5543399377" in receipt
+    for field in (
+        "prior_resource_ids",
+        "failed_run_backup_ids",
+        "current_cleanup_status",
+        "allocation_summary",
+        "failure_rc",
+    ):
+        assert field in receipt
