@@ -266,8 +266,9 @@ jobs:
           state_set backup_wait_failure_rc none
           mark_phase initialized
           discover_named_id() {
-            local resource="$1" expected="$2" max_seconds="${3:-90}" budget_deadline="${4:-$primary_deadline}" output id deadline remaining request_timeout sleep_seconds
+            local resource="$1" expected="$2" max_seconds="${3:-90}" budget_deadline="${4:-$primary_deadline}" output id deadline remaining request_timeout sleep_seconds rc discovery_key saw_timeout=0
             local -a command
+            discovery_key="${resource//-/_}"
             max_seconds="$(bounded_wait_seconds "$max_seconds" "$budget_deadline")" || return 42
             deadline=$((SECONDS + max_seconds))
             while (( SECONDS < deadline )); do
@@ -285,11 +286,38 @@ jobs:
               remaining=$((deadline - SECONDS))
               request_timeout=$((remaining < 20 ? remaining : 20))
               (( request_timeout > 0 )) || break
-              OCI_JSON_ABSOLUTE_DEADLINE="$budget_deadline" OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
-                oci_json_request "${command[@]}" || return 1
+              if OCI_JSON_ABSOLUTE_DEADLINE="$budget_deadline" OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
+                  oci_json_request "${command[@]}"; then
+                :
+              else
+                rc=$?
+                state_set last_discovery_resource "$discovery_key"
+                state_set last_discovery_failure_rc "$rc"
+                if [[ "$rc" == 124 || "$rc" == 137 ]]; then
+                  saw_timeout=1
+                  state_set last_discovery_status REQUEST_TIMEOUT_RETRY
+                  remaining=$((deadline - SECONDS))
+                  (( remaining > 0 )) || break
+                  sleep_seconds=$((remaining < 1 ? remaining : 1))
+                  (( sleep_seconds > 0 )) && sleep "$sleep_seconds"
+                  continue
+                fi
+                state_set last_discovery_status REQUEST_FAILED
+                return "$rc"
+              fi
               output="$OCI_JSON_OUTPUT"
-              id="$(RESOURCE_KIND="$resource" EXPECTED_DISPLAY_NAME="$expected" python -c 'import json,os,sys; payload=json.load(sys.stdin); data=payload.get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data); allowed={"backup":{"REQUEST_RECEIVED","CREATING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"boot-volume":{"PROVISIONING","RESTORING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"instance":{"PROVISIONING","STARTING","RUNNING","STOPPING","STOPPED","TERMINATING","TERMINATED"},"vcn":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"internet-gateway":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"route-table":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"security-list":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"subnet":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"}}[os.environ["RESOURCE_KIND"]]; matches=[x for x in data if x.get("display-name")==os.environ["EXPECTED_DISPLAY_NAME"]]; assert all(isinstance(x.get("id"),str) and x["id"] and isinstance(x.get("lifecycle-state"),str) and x["lifecycle-state"] in allowed for x in matches); xs=[x["id"] for x in matches if x["lifecycle-state"]!="TERMINATED"]; assert len(xs)<=1; print(xs[0] if xs else "")' <<<"$output")" || return 1
+              if id="$(RESOURCE_KIND="$resource" EXPECTED_DISPLAY_NAME="$expected" python -c 'import json,os,sys; payload=json.load(sys.stdin); data=payload.get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data); allowed={"backup":{"REQUEST_RECEIVED","CREATING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"boot-volume":{"PROVISIONING","RESTORING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"instance":{"PROVISIONING","STARTING","RUNNING","STOPPING","STOPPED","TERMINATING","TERMINATED"},"vcn":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"internet-gateway":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"route-table":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"security-list":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"subnet":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"}}[os.environ["RESOURCE_KIND"]]; matches=[x for x in data if x.get("display-name")==os.environ["EXPECTED_DISPLAY_NAME"]]; assert all(isinstance(x.get("id"),str) and x["id"] and isinstance(x.get("lifecycle-state"),str) and x["lifecycle-state"] in allowed for x in matches); xs=[x["id"] for x in matches if x["lifecycle-state"]!="TERMINATED"]; assert len(xs)<=1; print(xs[0] if xs else "")' <<<"$output")"; then
+                :
+              else
+                state_set last_discovery_resource "$discovery_key"
+                state_set last_discovery_status INVALID_RESPONSE
+                state_set last_discovery_failure_rc 45
+                return 45
+              fi
               if [[ -n "$id" ]]; then
+                state_set last_discovery_resource "$discovery_key"
+                state_set last_discovery_status FOUND_EXACT_ONE
+                state_set last_discovery_failure_rc none
                 printf '%s\n' "$id"
                 return 0
               fi
@@ -300,6 +328,14 @@ jobs:
             done
             # Empty exact-name inventory after the full consistency window is
             # not proof that an uncertain create did not commit remotely.
+            state_set last_discovery_resource "$discovery_key"
+            if (( saw_timeout == 1 )); then
+              state_set last_discovery_status REQUEST_TIMEOUT_EXHAUSTED
+              state_set last_discovery_failure_rc 42
+              return 42
+            fi
+            state_set last_discovery_status NOT_FOUND_UNPROVEN
+            state_set last_discovery_failure_rc 3
             return 3
           }
           wait_absent() {
@@ -650,20 +686,29 @@ jobs:
           wait_attached_vnic() {
             local source_instance_id="$1" max_seconds="${2:-300}" deadline remaining request_timeout sleep_seconds token rc
             ATTACHED_VNIC_ID=""
+            state_set vnic_attachment_failure_rc none
             max_seconds="$(bounded_wait_seconds "$max_seconds" "$primary_deadline")" || return 42
             deadline=$((SECONDS + max_seconds))
             while (( SECONDS < deadline )); do
               remaining=$((deadline - SECONDS)); request_timeout=$((remaining < 20 ? remaining : 20)); (( request_timeout > 0 )) || break
-              if OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
+              if OCI_JSON_ABSOLUTE_DEADLINE="$primary_deadline" OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
                   oci_json_request oci compute vnic-attachment list --compartment-id "$tenancy_id" --instance-id "$source_instance_id" --all; then
                 if ! token="$(INSTANCE_ID="$source_instance_id" python -c 'import json,os,sys; p=json.load(sys.stdin); data=p.get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data); allowed={"ATTACHING","ATTACHED","DETACHING","DETACHED"}; assert all(x.get("instance-id")==os.environ["INSTANCE_ID"] and isinstance(x.get("lifecycle-state"),str) and x["lifecycle-state"] in allowed for x in data); ids=[x.get("vnic-id") for x in data if x["lifecycle-state"]=="ATTACHED"]; assert all(isinstance(x,str) and x for x in ids); print(ids[0] if len(ids)==1 else "NONE" if not ids else "MULTIPLE")' <<<"$OCI_JSON_OUTPUT")"; then
-                  state_set vnic_attachment_status INVALID_RESPONSE; return 45
+                  state_set vnic_attachment_status INVALID_RESPONSE; state_set vnic_attachment_failure_rc 45; return 45
                 fi
-                if [[ "$token" == MULTIPLE ]]; then state_set vnic_attachment_status AMBIGUOUS; return 44; fi
-                if [[ "$token" != NONE ]]; then ATTACHED_VNIC_ID="$token"; state_set vnic_attachment_status EXACT_ONE; return 0; fi
+                if [[ "$token" == MULTIPLE ]]; then state_set vnic_attachment_status AMBIGUOUS; state_set vnic_attachment_failure_rc 44; return 44; fi
+                if [[ "$token" != NONE ]]; then ATTACHED_VNIC_ID="$token"; state_set vnic_attachment_status EXACT_ONE; state_set vnic_attachment_failure_rc none; return 0; fi
                 state_set vnic_attachment_status WAITING
               else
-                rc=$?; state_set vnic_attachment_status REQUEST_FAILED; state_set vnic_attachment_failure_rc "$rc"; return "$rc"
+                rc=$?
+                if [[ "$rc" == 124 || "$rc" == 137 ]]; then
+                  state_set vnic_attachment_status REQUEST_TIMEOUT_RETRY
+                  state_set vnic_attachment_failure_rc "$rc"
+                  remaining=$((deadline - SECONDS)); (( remaining > 0 )) || break
+                  sleep_seconds=$((remaining < 1 ? remaining : 1)); (( sleep_seconds > 0 )) && sleep "$sleep_seconds"
+                  continue
+                fi
+                state_set vnic_attachment_status REQUEST_FAILED; state_set vnic_attachment_failure_rc "$rc"; return "$rc"
               fi
               remaining=$((deadline - SECONDS)); (( remaining > 0 )) || break; sleep_seconds=$((remaining < 5 ? remaining : 5)); sleep "$sleep_seconds"
             done
@@ -672,20 +717,29 @@ jobs:
           wait_vnic_public_ipv4() {
             local vnic_id="$1" max_seconds="${2:-300}" deadline remaining request_timeout sleep_seconds token rc
             VNIC_PUBLIC_IPV4=""
+            state_set vnic_public_ip_failure_rc none
             max_seconds="$(bounded_wait_seconds "$max_seconds" "$primary_deadline")" || return 42
             deadline=$((SECONDS + max_seconds))
             while (( SECONDS < deadline )); do
               remaining=$((deadline - SECONDS)); request_timeout=$((remaining < 20 ? remaining : 20)); (( request_timeout > 0 )) || break
-              if OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
+              if OCI_JSON_ABSOLUTE_DEADLINE="$primary_deadline" OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
                   oci_json_request oci network vnic get --vnic-id "$vnic_id"; then
                 if ! token="$(EXPECTED_VNIC_ID="$vnic_id" EXPECTED_SUBNET_ID="$drill_subnet_id" python -c 'import ipaddress,json,os,sys; p=json.load(sys.stdin); d=p.get("data"); assert isinstance(d,dict) and d.get("id")==os.environ["EXPECTED_VNIC_ID"] and d.get("subnet-id")==os.environ["EXPECTED_SUBNET_ID"]; ip=d.get("public-ip"); print("PENDING" if ip is None else str(ipaddress.ip_address(ip)) if isinstance(ip,str) and ipaddress.ip_address(ip).version==4 else "INVALID")' <<<"$OCI_JSON_OUTPUT")"; then
-                  state_set vnic_public_ip_status INVALID_RESPONSE; return 45
+                  state_set vnic_public_ip_status INVALID_RESPONSE; state_set vnic_public_ip_failure_rc 45; return 45
                 fi
-                if [[ "$token" == INVALID ]]; then state_set vnic_public_ip_status INVALID; return 45; fi
-                if [[ "$token" != PENDING ]]; then VNIC_PUBLIC_IPV4="$token"; state_set vnic_public_ip_status VALID_IPV4; return 0; fi
+                if [[ "$token" == INVALID ]]; then state_set vnic_public_ip_status INVALID; state_set vnic_public_ip_failure_rc 45; return 45; fi
+                if [[ "$token" != PENDING ]]; then VNIC_PUBLIC_IPV4="$token"; state_set vnic_public_ip_status VALID_IPV4; state_set vnic_public_ip_failure_rc none; return 0; fi
                 state_set vnic_public_ip_status WAITING
               else
-                rc=$?; state_set vnic_public_ip_status REQUEST_FAILED; state_set vnic_public_ip_failure_rc "$rc"; return "$rc"
+                rc=$?
+                if [[ "$rc" == 124 || "$rc" == 137 ]]; then
+                  state_set vnic_public_ip_status REQUEST_TIMEOUT_RETRY
+                  state_set vnic_public_ip_failure_rc "$rc"
+                  remaining=$((deadline - SECONDS)); (( remaining > 0 )) || break
+                  sleep_seconds=$((remaining < 1 ? remaining : 1)); (( sleep_seconds > 0 )) && sleep "$sleep_seconds"
+                  continue
+                fi
+                state_set vnic_public_ip_status REQUEST_FAILED; state_set vnic_public_ip_failure_rc "$rc"; return "$rc"
               fi
               remaining=$((deadline - SECONDS)); (( remaining > 0 )) || break; sleep_seconds=$((remaining < 5 ? remaining : 5)); sleep "$sleep_seconds"
             done
@@ -1177,6 +1231,13 @@ jobs:
           grep -Fq UV_RESTORED_ROOT_BOOT_ACCEPTANCE_PASS <<<"$acceptance"
           backup_accepted=1
           state_set backup_accepted true
+          # Once isolated restored-root boot acceptance succeeds, this backup
+          # is deliberately retained even if bounded retirement of older
+          # operation backups later fails closed. Persist its identity before
+          # any such exit so the always-running receipt cannot hide a billable
+          # recovery point.
+          state_set retained_backup_id "$backup_id"
+          state_set retained_backup_status ACCEPTED_ISOLATED_BOOT
           drill_seconds="$(( $(date -u +%s) - drill_started ))"
           if ! cleanup_temp_resources; then
             # Do not invoke the EXIT trap a second time after a fully bounded
@@ -1442,6 +1503,7 @@ jobs:
               '- backup availability wait: ' + code(value('backup_wait_status', 'NOT_RECORDED')),
               '- backup availability last state: ' + code(value('backup_wait_last_state', 'none')),
               '- backup availability failure rc: ' + code(value('backup_wait_failure_rc', 'none')),
+              '- last exact-name discovery: ' + code(value('last_discovery_resource', 'none')) + '; status: ' + code(value('last_discovery_status', 'NOT_RECORDED')) + '; rc: ' + code(value('last_discovery_failure_rc', 'none')),
               '- backup create request: ' + code(value('backup_create_status', 'NOT_APPLICABLE')) + '; rc: ' + code(value('backup_create_failure_rc', 'none')),
               '- restored volume create request: ' + code(value('restored_volume_create_status', 'NOT_RECORDED')) + '; rc: ' + code(value('restored_volume_create_failure_rc', 'none')),
               '- isolated VCN create request: ' + code(value('vcn_create_status', 'NOT_RECORDED')) + '; rc: ' + code(value('vcn_create_failure_rc', 'none')),
@@ -1474,7 +1536,7 @@ jobs:
           if backup_id and value('cleanup_only', '0') == '1':
               lines.append('- backup candidate retained: ' + code('AVAILABLE_FULL_97GB_REQUIRES_NEW_ISOLATED_BOOT_ACCEPTANCE') + '; candidate ID: ' + code(backup_id) + ' (billable backup storage may apply)')
           elif backup_id:
-              lines.append('- fresh backup retained: ' + code('true') + '; accepted backup ID: ' + code(backup_id) + ' (billable backup storage may apply)')
+              lines.append('- fresh backup retained: ' + code(value('retained_backup_status', 'true')) + '; accepted backup ID: ' + code(backup_id) + ' (billable backup storage may apply)')
           else:
               lines.append('- fresh backup retained: ' + code('false_or_unproven') + '; no accepted backup ID was emitted')
           lines += [

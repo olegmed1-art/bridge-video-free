@@ -135,6 +135,12 @@ def test_monotonic_budget_reserves_cleanup_mutation_receipt_and_runner_slack() -
     assert 'if (( ${#ids[@]} > 20 ))' in WORKFLOW
     assert 'superseded_backup_cleanup_status CARDINALITY_EXCEEDED' in WORKFLOW
     assert "superseded backup cleanup:" in WORKFLOW
+    accepted = WORKFLOW.index("backup_accepted=1")
+    retained_before_retirement = WORKFLOW.index('state_set retained_backup_id "$backup_id"', accepted)
+    cardinality_exit = WORKFLOW.index('superseded_backup_cleanup_status CARDINALITY_EXCEEDED', accepted)
+    assert accepted < retained_before_retirement < cardinality_exit
+    assert 'state_set retained_backup_status ACCEPTED_ISOLATED_BOOT' in WORKFLOW[accepted:cardinality_exit]
+    assert "retained_backup_status" in WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
 
     helper_start = WORKFLOW.index("monotonic_now() { awk")
     helper_end = WORKFLOW.index("for value in OCI_USER", helper_start)
@@ -374,6 +380,8 @@ def test_receipt_reports_backup_only_from_proven_step_output() -> None:
     assert "BACKUP_ID: ${{ steps.backup.outputs.backup_id }}" in receipt
     assert "backup_id = os.environ.get('BACKUP_ID') or state.get('retained_backup_id')" in receipt
     assert "AVAILABLE_FULL_97GB_REQUIRES_NEW_ISOLATED_BOOT_ACCEPTANCE" in receipt
+    assert "retained_backup_status" in receipt
+    assert "last exact-name discovery:" in receipt
     assert "'; accepted backup ID: '" in receipt
     assert "false_or_unproven" in receipt
     assert "SUPERSEDED_BACKUP_COUNT: ${{ steps.backup.outputs.superseded_backup_count }}" in receipt
@@ -683,6 +691,12 @@ def test_discovery_and_cleanup_fail_closed_on_ambiguous_or_unproven_absence() ->
             """#!/usr/bin/env bash
 case "$FAKE_MODE" in
   empty) echo '{"data":[]}' ;;
+  timeout_then_found|killed_then_found)
+    count_file="$RUNNER_TEMP/$FAKE_MODE.count"
+    count=0; [[ -f "$count_file" ]] && count="$(cat "$count_file")"
+    count=$((count + 1)); printf '%s\n' "$count" > "$count_file"
+    if (( count == 1 )); then [[ "$FAKE_MODE" == timeout_then_found ]] && exit 124 || exit 137; fi
+    echo '{"data":[{"id":"found-id","display-name":"expected-name","lifecycle-state":"AVAILABLE"}]}' ;;
   terminated) echo '{"data":{"id":"expected-id","lifecycle-state":"TERMINATED"}}' ;;
   wrong_id) echo '{"data":{"id":"other","lifecycle-state":"TERMINATED"}}' ;;
   notfound) echo '{"code":"NotAuthorizedOrNotFound","status":404}' >&2; exit 17 ;;
@@ -704,6 +718,7 @@ esac
         fake_oci.chmod(0o755)
         base = "set -e\n" + helpers + r'''
 bounded_wait_seconds() { printf '%s\n' "$1"; }
+state_set() { printf 'state:%s=%s\n' "$1" "$2" >&2; }
 primary_deadline=999999999; cleanup_deadline=999999999
 tenancy_id=tenancy; boot_id=boot; ad=ad; drill_vcn_id=vcn
 '''
@@ -719,6 +734,28 @@ tenancy_id=tenancy; boot_id=boot; ad=ad; drill_vcn_id=vcn
 
         discovered = run('if discover_named_id boot-volume missing 1; then rc=0; else rc=$?; fi; echo rc=$rc\n', "empty")
         assert "rc=3" in discovered.stdout
+        for transient in ("timeout_then_found", "killed_then_found"):
+            retried_discovery = run(
+                'if id="$(discover_named_id boot-volume expected-name 3)"; then rc=0; else rc=$?; fi; echo rc=$rc id=$id\n',
+                transient,
+            )
+            assert "rc=0 id=found-id" in retried_discovery.stdout
+        persistent_discovery = run(
+            'if discover_named_id boot-volume expected-name 2; then rc=0; else rc=$?; fi; echo rc=$rc\n',
+            "persistent_timeout",
+        )
+        assert "rc=42" in persistent_discovery.stdout
+        assert "state:last_discovery_status=REQUEST_TIMEOUT_EXHAUSTED" in persistent_discovery.stderr
+        failed_discovery = run(
+            'if discover_named_id boot-volume expected-name 3; then rc=0; else rc=$?; fi; echo rc=$rc\n', "auth"
+        )
+        assert "rc=17" in failed_discovery.stdout
+        assert "state:last_discovery_status=REQUEST_FAILED" in failed_discovery.stderr
+        invalid_discovery = run(
+            'if discover_named_id boot-volume expected-name 3; then rc=0; else rc=$?; fi; echo rc=$rc\n', "wrong_id"
+        )
+        assert "rc=45" in invalid_discovery.stdout
+        assert "state:last_discovery_status=INVALID_RESPONSE" in invalid_discovery.stderr
         assert "rc=0" in run('if wait_absent boot-volume expected-id 2; then rc=0; else rc=$?; fi; echo rc=$rc\n', "terminated").stdout
         assert "rc=0" in run('if wait_absent boot-volume expected-id 2; then rc=0; else rc=$?; fi; echo rc=$rc\n', "notfound").stdout
         assert "rc=0" in run('if wait_absent boot-volume expected-id 3; then rc=0; else rc=$?; fi; echo rc=$rc\n', "timeout_then_terminated").stdout
@@ -729,6 +766,89 @@ tenancy_id=tenancy; boot_id=boot; ad=ad; drill_vcn_id=vcn
         ids=" ".join(f"id-{index}" for index in range(21))
         cardinality = run(f'if wait_all_absent instance 2 {ids}; then rc=0; else rc=$?; fi; echo rc=$rc\n', "empty")
         assert "rc=94" in cardinality.stdout
+
+
+def test_vnic_attachment_and_public_ip_retry_only_request_timeouts() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        tmp_path = Path(temp_dir)
+        oci_start = WORKFLOW.index("oci_json_request() {")
+        oci_end = WORKFLOW.index("# END OCI_JSON_REQUEST_HELPER", oci_start)
+        wait_start = WORKFLOW.index("wait_attached_vnic() {")
+        wait_end = WORKFLOW.index("select_fresh_operation_backups()", wait_start)
+        helpers = textwrap.dedent(WORKFLOW[oci_start:oci_end] + WORKFLOW[wait_start:wait_end])
+        fake_oci = tmp_path / "oci"
+        fake_oci.write_text(
+            """#!/usr/bin/env bash
+count_file="$RUNNER_TEMP/vnic-$FAKE_MODE.count"
+count=0; [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+count=$((count + 1)); printf '%s\n' "$count" > "$count_file"
+case "$FAKE_MODE" in
+  timeout_then_attached)
+    (( count == 1 )) && exit 124
+    echo '{"data":[{"instance-id":"instance","lifecycle-state":"ATTACHED","vnic-id":"vnic"}]}' ;;
+  timeout_then_public_ip)
+    (( count == 1 )) && exit 137
+    echo '{"data":{"id":"vnic","subnet-id":"subnet","public-ip":"203.0.113.7"}}' ;;
+  persistent_timeout) exit 124 ;;
+  auth) echo '{"code":"NotAuthenticated","status":401}' >&2; exit 17 ;;
+  multiple) echo '{"data":[{"instance-id":"instance","lifecycle-state":"ATTACHED","vnic-id":"vnic-1"},{"instance-id":"instance","lifecycle-state":"ATTACHED","vnic-id":"vnic-2"}]}' ;;
+  malformed) echo '{"data":null}' ;;
+  invalid_public_ip) echo '{"data":{"id":"vnic","subnet-id":"subnet","public-ip":"not-an-ip"}}' ;;
+esac
+"""
+        )
+        fake_oci.chmod(0o755)
+        base = "set -e\n" + helpers + r'''
+state_set() { printf 'state:%s=%s\n' "$1" "$2" >&2; }
+bounded_wait_seconds() { printf '%s\n' "$1"; }
+primary_deadline=999999999; tenancy_id=tenancy; drill_subnet_id=subnet
+'''
+
+        def run(fragment: str, mode: str, timeout: int = 7) -> subprocess.CompletedProcess[str]:
+            env = os.environ | {
+                "RUNNER_TEMP": str(tmp_path),
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "FAKE_MODE": mode,
+                "OCI_JSON_RETRY_DELAY_SECONDS": "0",
+            }
+            return subprocess.run(
+                ["bash", "-c", base + fragment], env=env, text=True, capture_output=True, timeout=timeout, check=True
+            )
+
+        attached = run(
+            'if wait_attached_vnic instance 3; then rc=0; else rc=$?; fi; echo rc=$rc id=$ATTACHED_VNIC_ID\n',
+            "timeout_then_attached",
+        )
+        assert "rc=0 id=vnic" in attached.stdout
+        assert [line for line in attached.stderr.splitlines() if line.startswith("state:vnic_attachment_failure_rc=")][-1] == (
+            "state:vnic_attachment_failure_rc=none"
+        )
+        public_ip = run(
+            'if wait_vnic_public_ipv4 vnic 3; then rc=0; else rc=$?; fi; echo rc=$rc ip=$VNIC_PUBLIC_IPV4\n',
+            "timeout_then_public_ip",
+        )
+        assert "rc=0 ip=203.0.113.7" in public_ip.stdout
+        assert [line for line in public_ip.stderr.splitlines() if line.startswith("state:vnic_public_ip_failure_rc=")][-1] == (
+            "state:vnic_public_ip_failure_rc=none"
+        )
+        persistent = run(
+            'if wait_attached_vnic instance 2; then rc=0; else rc=$?; fi; echo rc=$rc\n',
+            "persistent_timeout",
+        )
+        assert "rc=42" in persistent.stdout
+        assert "state:vnic_attachment_status=TIMEOUT" in persistent.stderr
+        auth = run('if wait_attached_vnic instance 3; then rc=0; else rc=$?; fi; echo rc=$rc\n', "auth")
+        assert "rc=17" in auth.stdout
+        assert (tmp_path / "vnic-auth.count").read_text().strip() == "1"
+        ambiguous = run('if wait_attached_vnic instance 3; then rc=0; else rc=$?; fi; echo rc=$rc\n', "multiple")
+        assert "rc=44" in ambiguous.stdout
+        assert "state:vnic_attachment_failure_rc=44" in ambiguous.stderr
+        malformed = run('if wait_attached_vnic instance 3; then rc=0; else rc=$?; fi; echo rc=$rc\n', "malformed")
+        assert "rc=45" in malformed.stdout
+        assert "state:vnic_attachment_failure_rc=45" in malformed.stderr
+        invalid_ip = run('if wait_vnic_public_ipv4 vnic 3; then rc=0; else rc=$?; fi; echo rc=$rc\n', "invalid_public_ip")
+        assert "rc=45" in invalid_ip.stdout
+        assert "state:vnic_public_ip_failure_rc=45" in invalid_ip.stderr
 
 
 def test_delete_retries_only_request_timeouts_within_aggregate_cleanup_budget() -> None:
@@ -753,7 +873,7 @@ esac
         )
         fake_oci.chmod(0o755)
         script = "set -e\n" + helper + r'''
-bounded_wait_seconds() { printf '2\n'; }
+bounded_wait_seconds() { printf '4\n'; }
 cleanup_deadline=999999999
 if delete_resource_once boot-volume expected-id; then rc=0; else rc=$?; fi
 count="$(cat "$RUNNER_TEMP/delete-$FAKE_MODE.count")"
