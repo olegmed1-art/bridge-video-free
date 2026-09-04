@@ -11,8 +11,11 @@ def test_authority_and_independent_assurance_are_fail_closed():
     assert "source_class' IS DISTINCT FROM 'SCHOOL_PRIMARY_EVIDENCE'" in MIGRATION
     assert MIGRATION.count("i2.verifier_family<>i3.verifier_family") == 2
     assert MIGRATION.count("i2.execution_principal<>i3.execution_principal") == 2
-    assert "pg_has_role(i2.execution_principal,'bridge_school_canon_i2_verifier','member')" in MIGRATION
-    assert "pg_has_role(i3.execution_principal,'bridge_school_canon_i3_verifier','member')" in MIGRATION
+    assert "i2_attestor.rolname=i2.execution_principal" in MIGRATION
+    assert "i3_attestor.rolname=i3.execution_principal" in MIGRATION
+    assert MIGRATION.count("attestor.rolcanlogin") == 2
+    assert "i2_attestor.oid,'bridge_school_canon_i2_verifier','MEMBER'" in MIGRATION
+    assert "i3_attestor.oid,'bridge_school_canon_i3_verifier','MEMBER'" in MIGRATION
     assert "video_canon_assurance_verifier_registry" in MIGRATION
     assert "video_canon_assurance_bound_bundle" in MIGRATION
     assert "a.video_canon_assurance_assignment_id,a.assurance_level" in MIGRATION

@@ -614,8 +614,22 @@ BEGIN
       AND i2.deterministic AND i3.deterministic
       AND i2.verifier_family<>i3.verifier_family
       AND i2.execution_principal<>i3.execution_principal
-      AND pg_has_role(i2.execution_principal,'bridge_school_canon_i2_verifier','member')
-      AND pg_has_role(i3.execution_principal,'bridge_school_canon_i3_verifier','member')
+      AND EXISTS (
+        SELECT 1 FROM pg_catalog.pg_roles i2_attestor
+         WHERE i2_attestor.rolname=i2.execution_principal
+           AND i2_attestor.rolcanlogin
+           AND pg_has_role(
+             i2_attestor.oid,'bridge_school_canon_i2_verifier','MEMBER'
+           )
+      )
+      AND EXISTS (
+        SELECT 1 FROM pg_catalog.pg_roles i3_attestor
+         WHERE i3_attestor.rolname=i3.execution_principal
+           AND i3_attestor.rolcanlogin
+           AND pg_has_role(
+             i3_attestor.oid,'bridge_school_canon_i3_verifier','MEMBER'
+           )
+      )
       AND EXISTS (
         SELECT 1 FROM bidding.video_canon_assurance_verifier_registry r2
          WHERE r2.assurance_level='I2' AND r2.capability_role='bridge_school_canon_i2_verifier'

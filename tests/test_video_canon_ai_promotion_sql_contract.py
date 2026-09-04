@@ -4,6 +4,9 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 MIGRATION = (ROOT / "database/migrations/0322_workflow_video_canon_ai_promotion.sql").read_text()
 ROLLBACK = (ROOT / "database/rollbacks/0322_workflow_video_canon_ai_promotion.sql").read_text()
+CORE_RULE = (
+    ROOT / "database/migrations/0200_bidding_knowledge_v0/01_core_rule.sql"
+).read_text()
 
 
 def test_ai_promotion_is_narrow_guarded_and_not_granted_to_general_workers():
@@ -209,8 +212,14 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "|lacks?",
         "jsonb_typeof(v_candidate.payload->'ambiguities') IS DISTINCT FROM 'array'",
         "jsonb_typeof(v_candidate.payload->'contradictions') IS DISTINCT FROM 'array'",
+        "v_candidate.payload->>'schema' IS DISTINCT FROM 'video-canon-evidence-v2'",
+        "v_candidate.payload->>'review_eligibility' IS DISTINCT FROM 'AI_VERIFICATION_PENDING'",
     ):
         assert marker in MIGRATION
+
+    assert "'hidden_hand','hidden_hands','hidden_holding'" in CORE_RULE
+    assert "'concealed_hand','concealed_hands','concealed_holding'" in CORE_RULE
+    assert "'^(hidden|concealed)(hand|holding|cards?)+(s)?$'" in CORE_RULE
 
 
 def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
@@ -274,3 +283,22 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert MIGRATION.count(
         "VIDEO_CANON_RESTORE_CURRENT_ACTIVATION_EXPIRED"
     ) >= 2
+
+
+def test_activation_binds_candidate_profile_and_requires_every_enabled_test_to_pass():
+    assert (
+        "v_candidate.payload->>'system_profile'\n"
+        "            IS DISTINCT FROM v_bundle.bundle_payload->>'system_profile'"
+    ) in MIGRATION
+    assert (
+        "v_candidate.payload->>'learner_level'\n"
+        "            IS DISTINCT FROM v_bundle.bundle_payload->>'learner_level'"
+    ) in MIGRATION
+    assert "v_system_profile" not in MIGRATION
+    assert "v_learner_level" not in MIGRATION
+
+    all_enabled_gate = """SELECT 1 FROM bidding.rule_test t
+       WHERE t.rule_id=p_rule_id AND t.enabled
+         AND bidding.latest_test_result(t.rule_test_id) IS DISTINCT FROM 'pass'"""
+    assert all_enabled_gate in MIGRATION
+    assert "'hidden_information','regression'\n         )\n         AND bidding.latest_test_result" not in MIGRATION

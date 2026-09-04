@@ -110,6 +110,10 @@ BEGIN
   END IF;
   IF NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N:AKQJ.T98.765.432 E:T987.654.32.AKQ"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_key(
+       '{"hidden_hand":"AKQ.JT9.876.5432"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_key(
+       '{"concealed-holdings":"AKQ.JT9.876.5432"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North has the Q"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(

@@ -1148,11 +1148,12 @@ BEGIN
 
     IF v_candidate.candidate_type<>'video_school_canon_candidate'
        OR v_candidate.promotion_status NOT IN ('staging','review_queue')
-       OR v_candidate.payload->>'schema'<>'video-canon-evidence-v2'
-       OR v_candidate.payload->>'review_eligibility'<>'AI_VERIFICATION_PENDING'
-       OR v_candidate.payload->>'source_class'<>'SCHOOL_PRIMARY_EVIDENCE'
-       OR v_candidate.payload#>>'{source_authorization,policy_version}'<>v_policy_version
-       OR v_candidate.payload->>'semantic_scope'<>v_scope_key
+       OR v_candidate.payload->>'schema' IS DISTINCT FROM 'video-canon-evidence-v2'
+       OR v_candidate.payload->>'review_eligibility' IS DISTINCT FROM 'AI_VERIFICATION_PENDING'
+       OR v_candidate.payload->>'source_class' IS DISTINCT FROM 'SCHOOL_PRIMARY_EVIDENCE'
+       OR v_candidate.payload#>>'{source_authorization,policy_version}'
+            IS DISTINCT FROM v_policy_version
+       OR v_candidate.payload->>'semantic_scope' IS DISTINCT FROM v_scope_key
        OR v_candidate.payload->>'system_profile'
             IS DISTINCT FROM v_bundle.bundle_payload->>'system_profile'
        OR v_candidate.payload->>'learner_level'

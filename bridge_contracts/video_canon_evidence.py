@@ -30,7 +30,10 @@ _FORBIDDEN_KEYS = {
     "partner_hand", "opponent_hand", "opponent_hands", "north_hand",
     "east_hand", "south_hand", "west_hand", "full_deal", "hidden_cards",
     "actual_partner_hand", "actual_opponent_hand", "actual_opponent_hands",
-    "partner_cards", "opponent_cards", "all_hands",
+    "partner_cards", "opponent_cards", "all_hands", "hidden_hand",
+    "hidden_hands", "hidden_holding", "hidden_holdings", "concealed_hand",
+    "concealed_hands", "concealed_holding", "concealed_holdings",
+    "concealed_card", "concealed_cards",
 }
 _SUIT_PATTERN = r"(?:-|(?:(?:10)|[AKQJT2-9]){0,13})"
 _NONEMPTY_SUIT_PATTERN = r"(?:-|(?:(?:10)|[AKQJT2-9]){1,13})"
@@ -194,6 +197,10 @@ def _has_forbidden_key(value: Any) -> bool:
             or re.fullmatch(
                 r"(?:actual)?(?:partner|opponent|north|east|south|west)s?"
                 r"(?:hand|holding|cards?)+s?",
+                re.sub(r"[^a-z0-9]", "", str(key).casefold()),
+            ) is not None
+            or re.fullmatch(
+                r"(?:hidden|concealed)(?:hand|holding|cards?)+s?",
                 re.sub(r"[^a-z0-9]", "", str(key).casefold()),
             ) is not None
             or _has_forbidden_key(child)
