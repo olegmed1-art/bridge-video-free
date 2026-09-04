@@ -219,6 +219,10 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"Partner owns the ace of spades"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"Partner: ace of spades"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"North: AK"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N:AKQJ109.876.54.32"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s hand was S:AKQJ109 H:876 D:54 C:32"}'::jsonb
@@ -346,9 +350,11 @@ DECLARE
   v_future_source uuid:=uuidv7();
   v_item uuid:=uuidv7();
   v_orphan_item uuid:=uuidv7();
+  v_conflict_item uuid:=uuidv7();
   v_old_version uuid:=uuidv7();
   v_new_version uuid:=uuidv7();
   v_orphan_version uuid:=uuidv7();
+  v_conflict_version uuid:=uuidv7();
   v_old_candidate uuid:=uuidv7();
   v_candidate uuid:=uuidv7();
   v_old_rule uuid:=uuidv7();
@@ -381,6 +387,7 @@ DECLARE
   v_source_binding_failed boolean:=false;
   v_source_school_failed boolean:=false;
   v_source_identity_failed boolean:=false;
+  v_rule_key_identity_failed boolean:=false;
   v_item_identity_failed boolean:=false;
   v_version_lifecycle_failed boolean:=false;
   v_test_binding_failed boolean:=false;
@@ -409,6 +416,8 @@ BEGIN
   VALUES (v_item,v_school,'restore-item-'||v_item::text,'bidding_rule','restore test');
   INSERT INTO public.knowledge_item(knowledge_item_id,school_id,stable_key,knowledge_type,title)
   VALUES (v_orphan_item,v_school,'orphan-item-'||v_orphan_item::text,'bidding_rule','orphan Canon test');
+  INSERT INTO public.knowledge_item(knowledge_item_id,school_id,stable_key,knowledge_type,title)
+  VALUES (v_conflict_item,v_school,'conflict-item-'||v_conflict_item::text,'bidding_rule','rule-key identity test');
   INSERT INTO public.knowledge_version(
     knowledge_version_id,knowledge_item_id,version_no,content,authority_class,
     review_status,bidding_system_key,level_scope,status
@@ -422,6 +431,13 @@ BEGIN
     review_status,bidding_system_key,level_scope,status
   ) VALUES (
     v_orphan_version,v_orphan_item,1,'{}','school_canon','approved','natural-v1',
+    '{"level_key":"beginner-1"}','approved'
+  );
+  INSERT INTO public.knowledge_version(
+    knowledge_version_id,knowledge_item_id,version_no,content,authority_class,
+    review_status,bidding_system_key,level_scope,status
+  ) VALUES (
+    v_conflict_version,v_conflict_item,1,'{}','school_canon','approved','natural-v1',
     '{"level_key":"beginner-1"}','approved'
   );
   INSERT INTO public.source(source_id,school_id,source_type,title,status)
@@ -488,6 +504,19 @@ BEGIN
     (v_old_rule,v_school,v_old_version,'restore-revision-'||v_item::text,'bid','{"call":"1H"}','validated'),
     (v_new_rule,v_school,v_new_version,'restore-revision-'||v_item::text,'bid','{"call":"2H"}','validated'),
     (v_orphan_rule,v_school,v_orphan_version,'orphan-'||v_orphan_rule::text,'bid','{"call":"1S"}','validated');
+  BEGIN
+    INSERT INTO bidding.rule(
+      school_id,knowledge_version_id,rule_key,rule_kind,action,lifecycle_status
+    ) VALUES (
+      v_school,v_conflict_version,'restore-revision-'||v_item::text,
+      'bid','{"call":"7N"}','validated'
+    );
+  EXCEPTION WHEN check_violation THEN
+    v_rule_key_identity_failed:=true;
+  END;
+  IF NOT v_rule_key_identity_failed THEN
+    RAISE EXCEPTION 'VIDEO_CANON_CROSS_ITEM_RULE_KEY_NOT_BLOCKED';
+  END IF;
   PERFORM set_config('TimeZone','UTC',true);
   v_rule_digest_utc:=bidding.video_canon_rule_restore_sha256(v_old_rule);
   PERFORM set_config('TimeZone','Pacific/Honolulu',true);

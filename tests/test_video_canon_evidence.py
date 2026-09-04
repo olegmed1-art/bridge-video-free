@@ -273,6 +273,8 @@ def test_hidden_deal_is_rejected_inside_innocuous_allowed_value(field, value):
     "Partner's ace of spades is an entry",
     "Partner owns the ace of spades",
     "North possesses ♠A",
+    "Partner: ace of spades",
+    "North: AK",
 ])
 def test_hidden_deal_is_rejected_in_source_bound_teacher_statement(statement):
     learning = _learning()
@@ -419,6 +421,7 @@ def test_labelled_hand_prose_without_four_suit_encoding_is_not_a_false_positive(
     "North held the view that Q is conventional",
     "Partner's agreement is forcing",
     "North owns the decision process",
+    "North: 10 points",
     "рука партнера: 5 карт",
 ])
 def test_labelled_prose_without_thirteen_card_hand_is_allowed(statement):

@@ -1,12 +1,63 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
--- A logical bidding rule may have multiple immutable knowledge versions. The
--- pre-0322 school-wide key constraint made a corrected version impossible to
--- stage before atomically superseding its predecessor.
+-- A logical bidding rule may have multiple immutable knowledge versions, but a
+-- school/rule-key pair must remain bound to exactly one knowledge item.  The
+-- registry makes that invariant concurrency-safe while corrected versions are
+-- staged before atomically superseding their predecessor.
+CREATE TABLE bidding.rule_key_identity (
+  school_id uuid NOT NULL REFERENCES public.school(school_id) ON DELETE RESTRICT,
+  rule_key text NOT NULL CHECK (btrim(rule_key)<>''),
+  knowledge_item_id uuid NOT NULL REFERENCES public.knowledge_item(knowledge_item_id)
+    ON DELETE RESTRICT,
+  PRIMARY KEY (school_id,rule_key)
+);
+
+INSERT INTO bidding.rule_key_identity(school_id,rule_key,knowledge_item_id)
+SELECT r.school_id,r.rule_key,kv.knowledge_item_id
+  FROM bidding.rule r
+  JOIN public.knowledge_version kv ON kv.knowledge_version_id=r.knowledge_version_id;
+
+CREATE OR REPLACE FUNCTION bidding.bind_rule_key_identity()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path=pg_catalog,public,bidding
+AS $$
+DECLARE
+  v_item_id uuid;
+  v_bound_item_id uuid;
+BEGIN
+  SELECT kv.knowledge_item_id INTO v_item_id
+    FROM public.knowledge_version kv
+    JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
+   WHERE kv.knowledge_version_id=NEW.knowledge_version_id
+     AND ki.school_id=NEW.school_id;
+  IF v_item_id IS NULL THEN
+    RAISE EXCEPTION 'BIDDING_RULE_KEY_IDENTITY_SCOPE_MISMATCH' USING ERRCODE='23514';
+  END IF;
+
+  -- The no-op conflict update takes the unique-key lock and returns the
+  -- authoritative binding even when two rule revisions are staged together.
+  INSERT INTO bidding.rule_key_identity(school_id,rule_key,knowledge_item_id)
+  VALUES (NEW.school_id,NEW.rule_key,v_item_id)
+  ON CONFLICT (school_id,rule_key) DO UPDATE
+    SET rule_key=EXCLUDED.rule_key
+  RETURNING knowledge_item_id INTO v_bound_item_id;
+  IF v_bound_item_id<>v_item_id THEN
+    RAISE EXCEPTION 'BIDDING_RULE_KEY_IDENTITY_MISMATCH' USING ERRCODE='23514';
+  END IF;
+  RETURN NEW;
+END $$;
+
+REVOKE ALL ON FUNCTION bidding.bind_rule_key_identity() FROM PUBLIC;
+CREATE TRIGGER bidding_rule_key_identity_guard
+BEFORE INSERT OR UPDATE OF school_id,knowledge_version_id,rule_key ON bidding.rule
+FOR EACH ROW EXECUTE FUNCTION bidding.bind_rule_key_identity();
+
 ALTER TABLE bidding.rule DROP CONSTRAINT rule_school_id_rule_key_key;
-ALTER TABLE bidding.rule ADD CONSTRAINT bidding_rule_version_identity_key
-  UNIQUE (school_id,rule_key,knowledge_version_id);
+CREATE INDEX bidding_rule_version_identity_idx
+  ON bidding.rule(school_id,rule_key,knowledge_version_id);
 
 -- Capability roles are migration-owned. Refuse collisions instead of mutating
 -- pre-existing cluster roles or memberships that rollback cannot reconstruct.
@@ -421,7 +472,7 @@ SELECT EXISTS (
          SELECT 1
            FROM regexp_matches(
              w.value#>>'{}',
-             E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])(?:(?:[[:space:]]+(?:(?:held|holds?|has|had|owns?|possesses?|retains?|carries?)|(?:is|was)[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding))|(?:[''’]s(?:[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding)?))(?:[[:space:]]+|[[:space:]]*[:,;=\\-][[:space:]]*)([^;]*)',
+             E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])(?:(?:[[:space:]]+(?:(?:held|holds?|has|had|owns?|possesses?|retains?|carries?)|(?:is|was)[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding))|(?:[''’]s(?:[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding)?)|(?:[[:space:]]*[:,;=\\-]))(?:[[:space:]]+|[[:space:]]*[:,;=\\-][[:space:]]*)([^;]*)',
              'gi'
            ) AS matched(parts)
           WHERE matched.parts[1] ~*

@@ -99,7 +99,10 @@ DROP TABLE bidding.video_canon_ai_verification;
 DROP TABLE bidding.video_canon_ai_verification_bundle;
 DROP TABLE bidding.video_canon_verifier_registry;
 DROP TABLE bidding.video_canon_source_policy;
-ALTER TABLE bidding.rule DROP CONSTRAINT bidding_rule_version_identity_key;
+DROP INDEX bidding.bidding_rule_version_identity_idx;
+DROP TRIGGER bidding_rule_key_identity_guard ON bidding.rule;
+DROP FUNCTION bidding.bind_rule_key_identity();
+DROP TABLE bidding.rule_key_identity;
 ALTER TABLE bidding.rule ADD CONSTRAINT rule_school_id_rule_key_key
   UNIQUE (school_id,rule_key);
 REVOKE ALL PRIVILEGES ON SCHEMA public,bidding FROM

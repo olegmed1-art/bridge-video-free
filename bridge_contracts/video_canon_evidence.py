@@ -66,6 +66,7 @@ _SUIT_LABELLED_HIDDEN_CARDS = re.compile(
 _LABELLED_HAND_TAIL = re.compile(
     r"(?:(?:(?<!\w)(?:partner|opponent|north|east|south|west))\s*(?:['’]s)?[ _-]*"
     r"(?:hand|cards)\b|(?:(?<!\w)(?:рука|карты))\s+(?:партн[её]ра|соперника)\b"
+    r"|(?:(?<!\w)(?:partner|opponent|north|east|south|west))\s*[:,;=\-]\s*"
     r"|(?:^|[^A-Za-z0-9])[NESW]\s*:)(?P<tail>[^;]{0,512})",
     re.IGNORECASE,
 )
@@ -258,6 +259,13 @@ def _has_forbidden_value(value: Any) -> bool:
         # are omitted, unknown, partial, or written in another order.
         if any(
             _EXPLICIT_SUIT_LABEL.search(match.group("tail"))
+            or (
+                _LEADING_HOLDING_CARD_GROUP.search(match.group("tail"))
+                and not (
+                    _LEADING_LENGTH_DESCRIPTION.search(match.group("tail"))
+                    or _LEADING_NUMERIC_RANGE.search(match.group("tail"))
+                )
+            )
             or (
                 _SINGLE_SUIT_CARD_GROUP.search(match.group("tail"))
                 and not (
