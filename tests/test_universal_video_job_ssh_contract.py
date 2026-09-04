@@ -29,6 +29,10 @@ def test_job_uses_pinned_bounded_ssh_transport():
     assert 'timeout "$ssh_timeout" ssh' in WORKFLOW
     assert "timeout-minutes: 360" in WORKFLOW
     assert "EXECUTION_DEADLINE_EPOCH=$(( $(date +%s) + 21000 ))" in WORKFLOW
+    run_steps = WORKFLOW.split("  execute:", 1)[1]
+    assert run_steps.index("Initialize one end-to-end execution budget") < run_steps.index(
+        "actions/checkout@"
+    )
     assert "remaining=$(( EXECUTION_DEADLINE_EPOCH - now - 300 ))" in WORKFLOW
     assert 'ssh_timeout="$(budget_max 4800)"' in WORKFLOW
     assert 'poll_sleep="$(budget_max 60)"' in WORKFLOW
