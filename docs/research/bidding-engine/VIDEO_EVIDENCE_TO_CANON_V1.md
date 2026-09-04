@@ -137,10 +137,10 @@ are transient validator inputs and are removed before the quality artifact is
 serialized; only sanitized results or explicit gaps survive.
 
 The same value-level firewall applies before a teacher-video Canon candidate is
-placed in staging. Seat markers require a real token boundary, so prose such as
+placed in staging. Seat and spelled actor markers require a real token boundary, so prose such as
 `Explanation: Q is an abbreviation` is not mistaken for `N: Q`.
 Full PBN encodings and labelled partner/opponent card payloads—including
-`♠♥♦♣` suit-symbol notation in any suit order, including a single unambiguous card (`Q`, `q`, `T`, `t` or `10`) without treating the English article `a` as an ace, a disclosed suit group, or fragments with omitted suits/cards—are rejected anywhere in the complete payload, including the source-bound
+`♠♥♦♣` suit-symbol notation in any suit order, including a single unambiguous card (`Q`, `q`, `T`, `t`, `10`, or a directly attached rank `2`–`9`) without treating the English article `a` or the length phrase `5 cards` as a card, a disclosed suit group, or fragments with omitted suits/cards—are rejected anywhere in the complete payload, including the source-bound
 teacher statement and otherwise innocent keys such as `notes`. Candidate
 staging identity includes the canonical payload SHA-256, so a corrected
 assertion becomes a preserved new revision instead of colliding with the old

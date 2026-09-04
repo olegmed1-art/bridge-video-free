@@ -145,6 +145,9 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "{1,3}($|[^[:alnum:]])",
         "{2,13}($|[^[:alnum:]])",
         "(?:10|[AKQJT]|",
+        "(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)",
+        "?[2-9]($|[[:space:],./;])",
+        "?[2-9][[:space:]]*(?:cards?|карт)",
     ):
         assert marker in MIGRATION
 

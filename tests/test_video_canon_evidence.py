@@ -200,6 +200,8 @@ def test_hidden_deal_is_rejected_inside_innocuous_allowed_value(field, value):
     "N: 10",
     "partner hand: q",
     "N: t",
+    "N: 2",
+    "partner hand: 2",
 ])
 def test_hidden_deal_is_rejected_in_source_bound_teacher_statement(statement):
     learning = _learning()
@@ -259,6 +261,7 @@ def test_labelled_hand_prose_without_four_suit_encoding_is_not_a_false_positive(
     "North's hand was strong...",
     "North's hand was a weak holding",
     "Explanation: Q is an abbreviation",
+    "northeast hand: Q is the diagram label",
     "рука партнера: 5 карт",
 ])
 def test_labelled_prose_without_thirteen_card_hand_is_allowed(statement):

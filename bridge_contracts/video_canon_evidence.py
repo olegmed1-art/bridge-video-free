@@ -42,14 +42,14 @@ _PBN_DEAL = re.compile(
     re.IGNORECASE,
 )
 _LABELLED_HIDDEN_CARDS = re.compile(
-    r"(?:partner|opponent|north|east|south|west)\s*(?:['’]s)?[ _-]*(?:hand|cards)"
+    r"(?:(?<!\w)(?:partner|opponent|north|east|south|west))\s*(?:['’]s)?[ _-]*(?:hand|cards)"
     r"\b[^;]*?(?P<hand>" + _HAND_PATTERN + r")"
     r"|(?:рука|карты)\s+(?:партн[её]ра|соперника)\b[^;]*?"
     r"(?P<ru_hand>" + _HAND_PATTERN + r")",
     re.IGNORECASE,
 )
 _SUIT_LABELLED_HIDDEN_CARDS = re.compile(
-    r"(?:(?:partner|opponent|north|east|south|west)\s*(?:['’]s)?[ _-]*"
+    r"(?:(?:(?<!\w)(?:partner|opponent|north|east|south|west))\s*(?:['’]s)?[ _-]*"
     r"(?:hand|cards)\b|(?:рука|карты)\s+(?:партн[её]ра|соперника)\b"
     r"|(?:^|[^A-Za-z0-9])[NESW]\s*:)[^;]*?"
     r"S\s*:\s*(?P<spades>" + _SUIT_PATTERN + r")[\s,/]*"
@@ -59,7 +59,7 @@ _SUIT_LABELLED_HIDDEN_CARDS = re.compile(
     re.IGNORECASE,
 )
 _LABELLED_HAND_TAIL = re.compile(
-    r"(?:(?:partner|opponent|north|east|south|west)\s*(?:['’]s)?[ _-]*"
+    r"(?:(?:(?<!\w)(?:partner|opponent|north|east|south|west))\s*(?:['’]s)?[ _-]*"
     r"(?:hand|cards)\b|(?:рука|карты)\s+(?:партн[её]ра|соперника)\b"
     r"|(?:^|[^A-Za-z0-9])[NESW]\s*:)(?P<tail>[^;]{0,512})",
     re.IGNORECASE,
@@ -71,6 +71,14 @@ _SINGLE_SUIT_CARD_GROUP = re.compile(
     r"(?<![A-Za-z0-9])(?P<cards>10|[AKQJT]|[kqjt]|"
     r"(?:(?:10)|[AKQJT2-9akqjt]){2,13})(?![A-Za-z0-9])"
 )
+_LEADING_SINGLE_DIGIT_CARD = re.compile(
+    r"^\s*(?:(?:was|is)\s+|[:,;=\-]\s*)?[2-9](?:$|[\s,./;])",
+    re.IGNORECASE,
+)
+_LEADING_LENGTH_DESCRIPTION = re.compile(
+    r"^\s*(?:(?:was|is)\s+|[:,;=\-]\s*)?[2-9]\s*(?:cards?\b|карт)",
+    re.IGNORECASE,
+)
 _PARTIAL_SEPARATED_HAND = re.compile(
     r"(?<![A-Za-z0-9])(?:-|(?:(?:10)|[AKQJT2-9]){1,13})"
     r"(?:[\s,/.]+(?:-|(?:(?:10)|[AKQJT2-9]){1,13})){1,3}"
@@ -78,7 +86,7 @@ _PARTIAL_SEPARATED_HAND = re.compile(
     re.IGNORECASE,
 )
 _SEPARATED_LABELLED_HIDDEN_CARDS = re.compile(
-    r"(?:(?:partner|opponent|north|east|south|west)\s*(?:['’]s)?[ _-]*"
+    r"(?:(?:(?<!\w)(?:partner|opponent|north|east|south|west))\s*(?:['’]s)?[ _-]*"
     r"(?:hand|cards)\b|(?:рука|карты)\s+(?:партн[её]ра|соперника)\b"
     r"|(?:^|[^A-Za-z0-9])[NESW]\s*:)[^;]*?"
     r"(?P<spades>" + _NONEMPTY_SUIT_PATTERN + r")[\s,/]+"
@@ -165,6 +173,10 @@ def _has_forbidden_value(value: Any) -> bool:
         if any(
             _EXPLICIT_SUIT_LABEL.search(match.group("tail"))
             or _SINGLE_SUIT_CARD_GROUP.search(match.group("tail"))
+            or (
+                _LEADING_SINGLE_DIGIT_CARD.search(match.group("tail"))
+                and not _LEADING_LENGTH_DESCRIPTION.search(match.group("tail"))
+            )
             or _PARTIAL_SEPARATED_HAND.search(match.group("tail"))
             for match in _LABELLED_HAND_TAIL.finditer(normalized_value)
         ):
