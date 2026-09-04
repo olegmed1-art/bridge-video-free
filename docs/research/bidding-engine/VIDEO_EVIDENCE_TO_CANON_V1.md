@@ -164,8 +164,11 @@ AKQJ` remain disclosures in both Python staging and PostgreSQL promotion.
 `North held 5 hearts`, `North has 10 hearts`, `North held 10 points`,
 point ranges such as `North has 10-12`, `North has 10 to 12`, `North has
 10+` and `North's hand was 10-12`, with or without a following count noun
-and before ordinary closing delimiters such as `)` or `]`, and ordinary prose such as `North held the view...` are not hidden-card
-disclosures. Ordinary quantitative bridge prose such as `5 cards`,
+and before ordinary closing delimiters such as `)` or `]`, are not hidden-card
+disclosures. Ordinary prose such as `North held the view...` is not a card
+disclosure either. Range boundaries are Unicode-aware in both layers, so
+adjacent letters such as Cyrillic `я` or accented `é` are not accepted as
+delimiters. Ordinary quantitative bridge prose such as `5 cards`,
 `5 hearts`, `10 cards`, `3
 trumps`, `7 losers`, points, controls, winners, stoppers and their Russian equivalents
 remains allowed when it is a length/count description rather than a disclosed
