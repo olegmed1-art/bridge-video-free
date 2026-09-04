@@ -27,6 +27,7 @@ jobs:
         with: {persist-credentials: false}
       - run: |
           set -euo pipefail
+          ruby -e "require 'yaml'; YAML.parse_file(ARGV.fetch(0))" .github/workflows/issue-881-root-filesystem-expand.yml
           bash -n ops/oracle_universal_video_root_filesystem_expand.sh
           python - <<'PY'
           import runpy
@@ -111,12 +112,21 @@ jobs:
           tenancy_id="$(printf '%s' "$roots" | python -c 'import json,sys; xs=[x["id"] for x in json.load(sys.stdin)["data"] if x.get("id","").startswith("ocid1.tenancy.")]; assert len(xs)==1; print(xs[0])')"
           instances="$(oci compute instance list --compartment-id "$tenancy_id" --display-name bridge-school-dds3-frankfurt --all --output json)"
           instance_id="$(printf '%s' "$instances" | python -c 'import json,sys; xs=[x for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state") not in {"TERMINATED","TERMINATING"}]; assert len(xs)==1; print(xs[0]["id"])')"
-          ad="$(oci compute instance get --instance-id "$instance_id" --query 'data."availability-domain"' --raw-output)"
+          instance_json="$(oci compute instance get --instance-id "$instance_id" --output json)"
+          INSTANCE="$instance_json" python - <<'PY'
+          import json,os
+          d=json.loads(os.environ['INSTANCE'])['data']
+          assert d['display-name']=='bridge-school-dds3-frankfurt'
+          assert d['lifecycle-state']=='RUNNING'
+          assert d['compartment-id'].startswith('ocid1.tenancy.')
+          PY
+          ad="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["availability-domain"])')"
           attachments="$(oci compute boot-volume-attachment list --compartment-id "$tenancy_id" --availability-domain "$ad" --instance-id "$instance_id" --all --output json)"
           boot_id="$(printf '%s' "$attachments" | python -c 'import json,sys; xs=[x for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state")=="ATTACHED"]; assert len(xs)==1; print(xs[0]["boot-volume-id"])')"
           boot_size="$(oci bv boot-volume get --boot-volume-id "$boot_id" --query 'data."size-in-gbs"' --raw-output)"
           [[ "$boot_size" == 97 ]] || exit 30
-          source_vnic_id="$(oci compute vnic-attachment list --compartment-id "$tenancy_id" --instance-id "$instance_id" --all --query 'data[?"lifecycle-state"==`ATTACHED`]."vnic-id" | [0]' --raw-output)"
+          source_vnics="$(oci compute vnic-attachment list --compartment-id "$tenancy_id" --instance-id "$instance_id" --all --output json)"
+          source_vnic_id="$(printf '%s' "$source_vnics" | python -c 'import json,sys; xs=[x["vnic-id"] for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state")=="ATTACHED"]; assert len(xs)==1; print(xs[0])')"
           subnet_id="$(oci network vnic get --vnic-id "$source_vnic_id" --query 'data."subnet-id"' --raw-output)"
           shape="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["shape"])')"
           shape_config="$(printf '%s' "$instance_json" | python -c 'import json,sys; d=json.load(sys.stdin)["data"].get("shape-config") or {}; print(json.dumps({"ocpus":d.get("ocpus"),"memoryInGBs":d.get("memory-in-gbs")},separators=(",",":")))')"
@@ -220,14 +230,23 @@ jobs:
           instance_id='${{ steps.backup.outputs.source_instance_id }}'
           boot_id='${{ steps.backup.outputs.source_boot_id }}'
           backup_id='${{ steps.backup.outputs.backup_id }}'
-          ad="$(oci compute instance get --instance-id "$instance_id" --query 'data."availability-domain"' --raw-output)"
-          tenancy_id="$(oci compute instance get --instance-id "$instance_id" --query 'data."compartment-id"' --raw-output)"
+          instance_json="$(oci compute instance get --instance-id "$instance_id" --output json)"
+          INSTANCE="$instance_json" python - <<'PY'
+          import json,os
+          d=json.loads(os.environ['INSTANCE'])['data']
+          assert d['display-name']=='bridge-school-dds3-frankfurt'
+          assert d['lifecycle-state']=='RUNNING'
+          PY
+          ad="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["availability-domain"])')"
+          tenancy_id="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["compartment-id"])')"
           attachments="$(oci compute boot-volume-attachment list --compartment-id "$tenancy_id" --availability-domain "$ad" --instance-id "$instance_id" --all --output json)"
           ATTACHMENTS="$attachments" BOOT_ID="$boot_id" python - <<'PY'
           import json,os
           xs=[x for x in json.loads(os.environ['ATTACHMENTS'])['data'] if x.get('lifecycle-state')=='ATTACHED' and x.get('boot-volume-id')==os.environ['BOOT_ID']]
           assert len(xs)==1
           PY
+          boot_size="$(oci bv boot-volume get --boot-volume-id "$boot_id" --query 'data."size-in-gbs"' --raw-output)"
+          [[ "$boot_size" == 97 ]]
           backup="$(oci bv boot-volume-backup get --boot-volume-backup-id "$backup_id" --output json)"
           BACKUP="$backup" BOOT_ID="$boot_id" python - <<'PY'
           import datetime,json,os
