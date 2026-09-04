@@ -364,6 +364,8 @@ def test_selected_backup_wait_uses_validated_direct_get_state_machine() -> None:
     assert "sleep_seconds=$((remaining < 5 ? remaining : 5))" in helper
     assert '[[ "$state" == TERMINATING || "$state" == TERMINATED || "$state" == FAULTY ]]' in helper
     assert "backup_wait_status UNKNOWN_STATE" in helper
+    assert "backup_wait_last_state UNKNOWN" in helper
+    assert "backup_wait_last_state INVALID" in helper
     assert 'assert isinstance(s,str) and s' in helper
     assert "backup_wait_status TIMEOUT" in helper
     assert "return 41" in helper
@@ -400,14 +402,14 @@ def test_backup_wait_deadline_and_state_classification_are_adversarially_bounded
 case "$FAKE_MODE" in
   slow) sleep 5; echo '{"data":{"lifecycle-state":"AVAILABLE"}}' ;;
   null) echo '{"data":{"lifecycle-state":null}}' ;;
-  unknown) echo '{"data":{"lifecycle-state":"ALIEN"}}' ;;
+  unknown) printf '%s\n' '{"data":{"lifecycle-state":"ALIEN\\nINJECTED"}}' ;;
   terminal) echo '{"data":{"lifecycle-state":"FAULTY"}}' ;;
   available) echo '{"data":{"lifecycle-state":"AVAILABLE"}}' ;;
 esac
 """
         )
         fake_oci.chmod(0o755)
-        script = helpers + r'''
+        script = "set -e\n" + helpers + r'''
 state_set() { printf 'state:%s=%s\n' "$1" "$2" >&2; }
 started=$SECONDS
 if wait_backup_available backup-id "$MAX_SECONDS"; then rc=0; else rc=$?; fi
@@ -436,6 +438,8 @@ printf 'rc=%s elapsed=%s\n' "$rc" "$((SECONDS - started))"
         unknown = run("unknown")
         assert "rc=41" in unknown.stdout
         assert "state:backup_wait_status=UNKNOWN_STATE" in unknown.stderr
+        assert "state:backup_wait_last_state=UNKNOWN" in unknown.stderr
+        assert "INJECTED" not in unknown.stderr
         terminal = run("terminal")
         assert "rc=41" in terminal.stdout
         assert "state:backup_wait_status=TERMINAL_FAULTY" in terminal.stderr
