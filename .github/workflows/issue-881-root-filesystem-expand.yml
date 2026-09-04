@@ -190,6 +190,9 @@ jobs:
           state_set target_prior_stamp "${target_prior_stamp:-none}"
           state_set prior_cleanup_status NOT_STARTED
           state_set current_cleanup_status NOT_STARTED
+          state_set backup_selection_status NOT_STARTED
+          state_set backup_candidate_count 0
+          state_set backup_candidate_ids none
           mark_phase initialized
           discover_named_id() {
             local resource="$1" expected="$2" output id
@@ -206,7 +209,8 @@ jobs:
                 subnet) command=(oci network subnet list --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --all) ;;
                 *) return 2 ;;
               esac
-              output="$("${command[@]}" --output json)" || return 1
+              oci_json_request "${command[@]}" || return 1
+              output="$OCI_JSON_OUTPUT"
               id="$(EXPECTED_DISPLAY_NAME="$expected" python -c 'import json,os,sys; xs=[x["id"] for x in json.load(sys.stdin).get("data",[]) if x.get("display-name")==os.environ["EXPECTED_DISPLAY_NAME"] and x.get("lifecycle-state") not in {"TERMINATED","TERMINATING"}]; assert len(xs)<=1; print(xs[0] if xs else "")' <<<"$output")" || return 1
               if [[ -n "$id" ]]; then
                 printf '%s\n' "$id"
@@ -344,10 +348,24 @@ jobs:
             return 86
           }
           operation_backup_inventory() {
-            oci bv boot-volume-backup list --compartment-id "$tenancy_id" --boot-volume-id "$boot_id" --all --output json
+            local rc
+            if oci_json_request oci bv boot-volume-backup list --compartment-id "$tenancy_id" --boot-volume-id "$boot_id" --all; then
+              printf '%s\n' "$OCI_JSON_OUTPUT"
+              return 0
+            else
+              rc=$?
+            fi
+            return "$rc"
           }
-          select_fresh_operation_backup() {
-            BACKUP_PREFIX="$backup_prefix" BOOT_ID="$boot_id" python -c 'import datetime,json,os,sys; now=datetime.datetime.now(datetime.timezone.utc); xs=[(datetime.datetime.fromisoformat(x["time-created"].replace("Z","+00:00")),x["id"]) for x in json.load(sys.stdin).get("data",[]) if (x.get("display-name") or "").startswith(os.environ["BACKUP_PREFIX"]+"-") and x.get("boot-volume-id")==os.environ["BOOT_ID"] and x.get("lifecycle-state")=="AVAILABLE" and x.get("type")=="FULL" and x.get("size-in-gbs")==97 and (now-datetime.datetime.fromisoformat(x["time-created"].replace("Z","+00:00"))).total_seconds()<86400]; xs.sort(reverse=True); print(xs[0][1] if xs else "")'
+          select_fresh_operation_backups() {
+            BACKUP_PREFIX="$backup_prefix" BOOT_ID="$boot_id" python -c 'import datetime,json,os,sys; now=datetime.datetime.now(datetime.timezone.utc); candidates=[]; invalid=[]
+          for x in json.load(sys.stdin).get("data",[]):
+            if not (x.get("display-name") or "").startswith(os.environ["BACKUP_PREFIX"]+"-") or x.get("boot-volume-id")!=os.environ["BOOT_ID"] or x.get("lifecycle-state")!="AVAILABLE": continue
+            try:
+              created=datetime.datetime.fromisoformat(x["time-created"].replace("Z","+00:00")); age=(now-created).total_seconds(); assert x.get("id") and x.get("type")=="FULL" and x.get("size-in-gbs")==97 and 0 <= age < 86400
+              candidates.append((created,x["id"]))
+            except (AssertionError,KeyError,TypeError,ValueError): invalid.append(str(x.get("id") or "missing-id"))
+          candidates.sort(reverse=True); print(json.dumps({"candidate_ids":[x[1] for x in candidates],"invalid_ids":sorted(invalid),"selected_id":candidates[0][1] if candidates else ""},sort_keys=True,separators=(",",":")))'
           }
           superseded_operation_backups() {
             BACKUP_PREFIX="$backup_prefix" BOOT_ID="$boot_id" RETAINED_ID="$backup_id" python -c 'import json,os,sys; xs=sorted(x["id"] for x in json.load(sys.stdin).get("data",[]) if (x.get("display-name") or "").startswith(os.environ["BACKUP_PREFIX"]+"-") and x.get("boot-volume-id")==os.environ["BOOT_ID"] and x["id"]!=os.environ["RETAINED_ID"] and x.get("lifecycle-state")!="TERMINATED"); print("\n".join(xs))'
@@ -365,7 +383,8 @@ jobs:
               vcn) command=(oci network vcn list --compartment-id "$tenancy_id" --all) ;;
               *) return 2 ;;
             esac
-            output="$("${command[@]}" --output json)" || return 1
+            oci_json_request "${command[@]}" || return 1
+            output="$OCI_JSON_OUTPUT"
             # Keep TERMINATED objects in the evidence set.  Each known ID must
             # still pass a direct GET as TERMINATED or explicit 404 below;
             # silently filtering terminal objects would discard the audit trail.
@@ -630,10 +649,37 @@ jobs:
             exit 0
           fi
           trap cleanup EXIT
+          mark_phase inventory_operation_backups
+          if oci_json_request oci bv boot-volume-backup list --compartment-id "$tenancy_id" --boot-volume-id "$boot_id" --all; then
+            backup_inventory="$OCI_JSON_OUTPUT"
+          else
+            selection_rc=$?
+            state_set backup_selection_status INVENTORY_REQUEST_FAILED
+            state_set backup_selection_failure_rc "$selection_rc"
+            exit "$selection_rc"
+          fi
           mark_phase select_or_create_full_backup
-          backup_inventory="$(operation_backup_inventory)"
-          backup_id="$(printf '%s' "$backup_inventory" | select_fresh_operation_backup)"
+          if selection_json="$(printf '%s' "$backup_inventory" | select_fresh_operation_backups)"; then
+            backup_id="$(SELECTION="$selection_json" python -c 'import json,os; print(json.loads(os.environ["SELECTION"])["selected_id"])')"
+            backup_candidate_ids="$(SELECTION="$selection_json" python -c 'import json,os; print(",".join(json.loads(os.environ["SELECTION"])["candidate_ids"]) or "none")')"
+            backup_candidate_count="$(SELECTION="$selection_json" python -c 'import json,os; print(len(json.loads(os.environ["SELECTION"])["candidate_ids"]))')"
+            backup_invalid_ids="$(SELECTION="$selection_json" python -c 'import json,os; print(",".join(json.loads(os.environ["SELECTION"])["invalid_ids"]) or "none")')"
+            state_set backup_candidate_ids "$backup_candidate_ids"
+            state_set backup_candidate_count "$backup_candidate_count"
+            state_set backup_invalid_candidate_ids "$backup_invalid_ids"
+            if [[ "$backup_invalid_ids" != none ]]; then
+              state_set backup_selection_status INVALID_OPERATION_BACKUP_METADATA
+              exit 38
+            fi
+            state_set backup_selection_status "SELECTED_EXISTING_${backup_candidate_count}_CANDIDATES"
+          else
+            selection_rc=$?
+            state_set backup_selection_status SELECTOR_FAILED
+            state_set backup_selection_failure_rc "$selection_rc"
+            exit 39
+          fi
           if [[ -z "$backup_id" ]]; then
+            state_set backup_selection_status CREATE_REQUIRED
             backup_attempted=1
             if backup="$(oci bv boot-volume-backup create --boot-volume-id "$boot_id" --type FULL --display-name "$backup_name" --output json)"; then
               backup_id="$(printf '%s' "$backup" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("id", ""))' 2>/dev/null || true)"
@@ -643,6 +689,7 @@ jobs:
             fi
             [[ -n "$backup_id" ]] && backup_created_by_run=1
           fi
+          [[ -z "$backup_id" || "$backup_created_by_run" == 1 ]] || state_set backup_selection_status REUSED_NEWEST_VALID_CANDIDATE
           state_set backup_id "$backup_id"
           [[ -n "$backup_id" ]] || exit 36
           oci bv boot-volume-backup get --boot-volume-backup-id "$backup_id" --wait-for-state AVAILABLE --max-wait-seconds 3600 >/dev/null
@@ -907,6 +954,10 @@ jobs:
               '- failed-run backup cleanup: ' + code(value('failed_run_backup_cleanup_status', 'NOT_APPLICABLE')),
               '- failed-run backup IDs: ' + code(value('failed_run_backup_ids', 'none')),
               '- failed-run backup direct-GET states: ' + code(value('failed_run_backup_direct_get_states', 'not_listed')),
+              '- backup selection status: ' + code(value('backup_selection_status', 'NOT_RECORDED')),
+              '- reusable backup candidate count: ' + code(value('backup_candidate_count', '0')),
+              '- reusable backup candidate IDs: ' + code(value('backup_candidate_ids', 'none')),
+              '- invalid backup metadata IDs: ' + code(value('backup_invalid_candidate_ids', 'none')),
               '- current-run temporary cleanup: ' + code(value('current_cleanup_status', 'NOT_RECORDED')),
               '- current-run stamp: ' + code(value('run_stamp')),
               '- temporary instance ID: ' + code(value('temporary_instance_id', 'none')),

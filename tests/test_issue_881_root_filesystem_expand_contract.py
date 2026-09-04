@@ -313,6 +313,35 @@ def test_oci_json_stdout_isolated_from_warning_stderr() -> None:
     assert "2>&1" not in allocation
 
 
+def test_backup_inventory_and_selection_are_validated_and_receipted() -> None:
+    selection = WORKFLOW[
+        WORKFLOW.index("mark_phase inventory_operation_backups") :
+        WORKFLOW.index("oci bv boot-volume-backup get --boot-volume-backup-id", WORKFLOW.index("mark_phase inventory_operation_backups"))
+    ]
+    assert "if oci_json_request oci bv boot-volume-backup list" in selection
+    assert "INVENTORY_REQUEST_FAILED" in selection
+    assert "select_fresh_operation_backups" in selection
+    assert "backup_candidate_ids" in selection
+    assert "backup_candidate_count" in selection
+    assert "backup_invalid_candidate_ids" in selection
+    assert "INVALID_OPERATION_BACKUP_METADATA" in selection
+    assert "REUSED_NEWEST_VALID_CANDIDATE" in selection
+    assert "backup_inventory=\"$(operation_backup_inventory)\"" not in selection
+
+    selector = WORKFLOW[WORKFLOW.index("select_fresh_operation_backups()") : WORKFLOW.index("superseded_operation_backups()")]
+    assert "candidates.sort(reverse=True)" in selector
+    assert '"candidate_ids"' in selector
+    assert '"invalid_ids"' in selector
+    assert '"selected_id"' in selector
+    assert "0 <= age < 86400" in selector
+
+    receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
+    assert "backup selection status" in receipt
+    assert "reusable backup candidate count" in receipt
+    assert "reusable backup candidate IDs" in receipt
+    assert "invalid backup metadata IDs" in receipt
+
+
 def test_oci_json_request_handles_warning_transients_and_errors() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         _exercise_oci_json_request_adversarial_cases(Path(temp_dir))
