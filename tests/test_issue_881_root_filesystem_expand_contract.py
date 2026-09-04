@@ -1,4 +1,6 @@
 from pathlib import Path
+import datetime
+import json
 import re
 import os
 import subprocess
@@ -323,6 +325,7 @@ def test_backup_inventory_and_selection_are_validated_and_receipted() -> None:
     assert "select_fresh_operation_backups" in selection
     assert "backup_candidate_ids" in selection
     assert "backup_candidate_count" in selection
+    assert "backup_ineligible_candidate_ids" in selection
     assert "backup_invalid_candidate_ids" in selection
     assert "INVALID_OPERATION_BACKUP_METADATA" in selection
     assert "REUSED_NEWEST_VALID_CANDIDATE" in selection
@@ -331,15 +334,56 @@ def test_backup_inventory_and_selection_are_validated_and_receipted() -> None:
     selector = WORKFLOW[WORKFLOW.index("select_fresh_operation_backups()") : WORKFLOW.index("superseded_operation_backups()")]
     assert "candidates.sort(reverse=True)" in selector
     assert '"candidate_ids"' in selector
+    assert '"ineligible_ids"' in selector
     assert '"invalid_ids"' in selector
     assert '"selected_id"' in selector
-    assert "0 <= age < 86400" in selector
+    assert "assert isinstance(data,list)" in selector
+    assert 'age < 86400 else ineligible' in selector
+    assert 'age < 86400 else invalid' not in selector
 
     receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
     assert "backup selection status" in receipt
+    assert "backup selection failure rc" in receipt
     assert "reusable backup candidate count" in receipt
     assert "reusable backup candidate IDs" in receipt
+    assert "ineligible backup candidate IDs" in receipt
     assert "invalid backup metadata IDs" in receipt
+
+
+def test_backup_selector_separates_expired_from_malformed_inventory() -> None:
+    start = WORKFLOW.index("select_fresh_operation_backups()")
+    end = WORKFLOW.index("superseded_operation_backups()", start)
+    selector = WORKFLOW[start:end].replace("\n          ", "\n")
+    now = datetime.datetime.now(datetime.timezone.utc)
+    prefix = "issue-881-root-recovery-source"
+    boot_id = "ocid1.bootvolume.source"
+
+    def backup(identifier: str, age_hours: int) -> dict[str, object]:
+        return {
+            "id": identifier,
+            "display-name": f"{prefix}-{identifier}",
+            "boot-volume-id": boot_id,
+            "lifecycle-state": "AVAILABLE",
+            "type": "FULL",
+            "size-in-gbs": 97,
+            "time-created": (now - datetime.timedelta(hours=age_hours)).isoformat(),
+        }
+
+    script = selector + "\nprintf '%s' \"$PAYLOAD\" | select_fresh_operation_backups\n"
+    env = os.environ | {"backup_prefix": prefix, "boot_id": boot_id}
+    # Shell functions read these as shell variables rather than environment;
+    # seed them explicitly without interpolating the JSON payload.
+    script = f"backup_prefix={prefix!r}; boot_id={boot_id!r}\n" + script
+    payload = {"data": [backup("fresh", 1), backup("expired", 25)]}
+    result = subprocess.run(["bash", "-c", script], env=env | {"PAYLOAD": json.dumps(payload)}, text=True, capture_output=True)
+    assert result.returncode == 0
+    selected = json.loads(result.stdout)
+    assert selected["candidate_ids"] == ["fresh"]
+    assert selected["ineligible_ids"] == ["expired"]
+    assert selected["invalid_ids"] == []
+
+    missing_data = subprocess.run(["bash", "-c", script], env=env | {"PAYLOAD": "{}"}, text=True, capture_output=True)
+    assert missing_data.returncode != 0
 
 
 def test_oci_json_request_handles_warning_transients_and_errors() -> None:

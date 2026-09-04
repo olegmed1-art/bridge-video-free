@@ -191,8 +191,10 @@ jobs:
           state_set prior_cleanup_status NOT_STARTED
           state_set current_cleanup_status NOT_STARTED
           state_set backup_selection_status NOT_STARTED
+          state_set backup_selection_failure_rc none
           state_set backup_candidate_count 0
           state_set backup_candidate_ids none
+          state_set backup_ineligible_candidate_ids none
           mark_phase initialized
           discover_named_id() {
             local resource="$1" expected="$2" output id
@@ -358,14 +360,15 @@ jobs:
             return "$rc"
           }
           select_fresh_operation_backups() {
-            BACKUP_PREFIX="$backup_prefix" BOOT_ID="$boot_id" python -c 'import datetime,json,os,sys; now=datetime.datetime.now(datetime.timezone.utc); candidates=[]; invalid=[]
-          for x in json.load(sys.stdin).get("data",[]):
+            BACKUP_PREFIX="$backup_prefix" BOOT_ID="$boot_id" python -c 'import datetime,json,os,sys; now=datetime.datetime.now(datetime.timezone.utc); candidates=[]; ineligible=[]; invalid=[]; payload=json.load(sys.stdin); data=payload.get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data)
+          for x in data:
             if not (x.get("display-name") or "").startswith(os.environ["BACKUP_PREFIX"]+"-") or x.get("boot-volume-id")!=os.environ["BOOT_ID"] or x.get("lifecycle-state")!="AVAILABLE": continue
             try:
-              created=datetime.datetime.fromisoformat(x["time-created"].replace("Z","+00:00")); age=(now-created).total_seconds(); assert x.get("id") and x.get("type")=="FULL" and x.get("size-in-gbs")==97 and 0 <= age < 86400
-              candidates.append((created,x["id"]))
+              backup_id=x["id"]; created=datetime.datetime.fromisoformat(x["time-created"].replace("Z","+00:00")); age=(now-created).total_seconds(); assert isinstance(backup_id,str) and backup_id and isinstance(x.get("type"),str) and isinstance(x.get("size-in-gbs"),int)
             except (AssertionError,KeyError,TypeError,ValueError): invalid.append(str(x.get("id") or "missing-id"))
-          candidates.sort(reverse=True); print(json.dumps({"candidate_ids":[x[1] for x in candidates],"invalid_ids":sorted(invalid),"selected_id":candidates[0][1] if candidates else ""},sort_keys=True,separators=(",",":")))'
+            else:
+              (candidates if x["type"]=="FULL" and x["size-in-gbs"]==97 and age < 86400 else ineligible).append((created,backup_id))
+          candidates.sort(reverse=True); print(json.dumps({"candidate_ids":[x[1] for x in candidates],"ineligible_ids":sorted(x[1] for x in ineligible),"invalid_ids":sorted(invalid),"selected_id":candidates[0][1] if candidates else ""},sort_keys=True,separators=(",",":")))'
           }
           superseded_operation_backups() {
             BACKUP_PREFIX="$backup_prefix" BOOT_ID="$boot_id" RETAINED_ID="$backup_id" python -c 'import json,os,sys; xs=sorted(x["id"] for x in json.load(sys.stdin).get("data",[]) if (x.get("display-name") or "").startswith(os.environ["BACKUP_PREFIX"]+"-") and x.get("boot-volume-id")==os.environ["BOOT_ID"] and x["id"]!=os.environ["RETAINED_ID"] and x.get("lifecycle-state")!="TERMINATED"); print("\n".join(xs))'
@@ -663,9 +666,11 @@ jobs:
             backup_id="$(SELECTION="$selection_json" python -c 'import json,os; print(json.loads(os.environ["SELECTION"])["selected_id"])')"
             backup_candidate_ids="$(SELECTION="$selection_json" python -c 'import json,os; print(",".join(json.loads(os.environ["SELECTION"])["candidate_ids"]) or "none")')"
             backup_candidate_count="$(SELECTION="$selection_json" python -c 'import json,os; print(len(json.loads(os.environ["SELECTION"])["candidate_ids"]))')"
+            backup_ineligible_ids="$(SELECTION="$selection_json" python -c 'import json,os; print(",".join(json.loads(os.environ["SELECTION"])["ineligible_ids"]) or "none")')"
             backup_invalid_ids="$(SELECTION="$selection_json" python -c 'import json,os; print(",".join(json.loads(os.environ["SELECTION"])["invalid_ids"]) or "none")')"
             state_set backup_candidate_ids "$backup_candidate_ids"
             state_set backup_candidate_count "$backup_candidate_count"
+            state_set backup_ineligible_candidate_ids "$backup_ineligible_ids"
             state_set backup_invalid_candidate_ids "$backup_invalid_ids"
             if [[ "$backup_invalid_ids" != none ]]; then
               state_set backup_selection_status INVALID_OPERATION_BACKUP_METADATA
@@ -955,8 +960,10 @@ jobs:
               '- failed-run backup IDs: ' + code(value('failed_run_backup_ids', 'none')),
               '- failed-run backup direct-GET states: ' + code(value('failed_run_backup_direct_get_states', 'not_listed')),
               '- backup selection status: ' + code(value('backup_selection_status', 'NOT_RECORDED')),
+              '- backup selection failure rc: ' + code(value('backup_selection_failure_rc', 'none')),
               '- reusable backup candidate count: ' + code(value('backup_candidate_count', '0')),
               '- reusable backup candidate IDs: ' + code(value('backup_candidate_ids', 'none')),
+              '- ineligible backup candidate IDs: ' + code(value('backup_ineligible_candidate_ids', 'none')),
               '- invalid backup metadata IDs: ' + code(value('backup_invalid_candidate_ids', 'none')),
               '- current-run temporary cleanup: ' + code(value('current_cleanup_status', 'NOT_RECORDED')),
               '- current-run stamp: ' + code(value('run_stamp')),
