@@ -121,6 +121,11 @@ jobs:
           state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
           case "$state" in
             RUNNING) ;;
+            STARTING)
+              oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+            STOPPING)
+              oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state STOPPED --max-wait-seconds 600 >/dev/null
+              oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
             STOPPED) oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
             *) echo "Oracle instance is not runnable: $state" >&2; exit 1 ;;
           esac
@@ -216,7 +221,7 @@ jobs:
           value=json.loads(os.environ['RESULT'].splitlines()[-1])
           assert value['schema'] in {'universal-video-batch-intake-v1','universal-video-batch-status-v1'}
           assert value['request_key']==os.environ['REQUEST_KEY']
-          assert value['status'] in {'QUEUED_CANARY','RUNNING','CANARY_BLOCKED','REVIEW'}
+          assert value['status'] in {'QUEUED_CANARY','RUNNING','CANARY_BLOCKED','CANARY_REVIEW','REVIEW'}
           assert 1 <= int(value['expected_count']) <= 1000
           assert value['result_mode']=='SHADOW_REVIEW_ONLY'
           assert value['canonical_promotion_allowed'] is False
