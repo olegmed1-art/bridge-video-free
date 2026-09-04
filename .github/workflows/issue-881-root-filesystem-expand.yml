@@ -195,6 +195,8 @@ jobs:
           state_set backup_candidate_count 0
           state_set backup_candidate_ids none
           state_set backup_ineligible_candidate_ids none
+          state_set backup_wait_status NOT_STARTED
+          state_set backup_wait_failure_rc none
           mark_phase initialized
           discover_named_id() {
             local resource="$1" expected="$2" output id
@@ -358,6 +360,36 @@ jobs:
               rc=$?
             fi
             return "$rc"
+          }
+          wait_backup_available() {
+            local id="$1" loops="${2:-720}" attempt state rc
+            BACKUP_AVAILABLE_JSON=""
+            for attempt in $(seq 1 "$loops"); do
+              if oci_json_request oci bv boot-volume-backup get --boot-volume-backup-id "$id"; then
+                if ! state="$(printf '%s' "$OCI_JSON_OUTPUT" | python -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d.get("data"),dict); print(d["data"]["lifecycle-state"])')"; then
+                  state_set backup_wait_status INVALID_GET_PAYLOAD
+                  return 43
+                fi
+                state_set backup_wait_last_state "$state"
+                if [[ "$state" == AVAILABLE ]]; then
+                  BACKUP_AVAILABLE_JSON="$OCI_JSON_OUTPUT"
+                  state_set backup_wait_status AVAILABLE
+                  return 0
+                fi
+                if [[ "$state" != CREATING && "$state" != REQUEST_RECEIVED ]]; then
+                  state_set backup_wait_status "TERMINAL_${state}"
+                  return 41
+                fi
+              else
+                rc=$?
+                state_set backup_wait_status GET_FAILED
+                state_set backup_wait_failure_rc "$rc"
+                return "$rc"
+              fi
+              sleep 5
+            done
+            state_set backup_wait_status TIMEOUT
+            return 42
           }
           select_fresh_operation_backups() {
             BACKUP_PREFIX="$backup_prefix" BOOT_ID="$boot_id" python -c 'import datetime,json,os,sys; now=datetime.datetime.now(datetime.timezone.utc); candidates=[]; ineligible=[]; invalid=[]; payload=json.load(sys.stdin); data=payload.get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data)
@@ -698,8 +730,15 @@ jobs:
           [[ -z "$backup_id" || "$backup_created_by_run" == 1 ]] || state_set backup_selection_status REUSED_NEWEST_VALID_CANDIDATE
           state_set backup_id "$backup_id"
           [[ -n "$backup_id" ]] || exit 36
-          oci bv boot-volume-backup get --boot-volume-backup-id "$backup_id" --wait-for-state AVAILABLE --max-wait-seconds 3600 >/dev/null
-          backup_json="$(oci bv boot-volume-backup get --boot-volume-backup-id "$backup_id" --output json)"
+          mark_phase wait_selected_backup_available
+          if wait_backup_available "$backup_id"; then
+            backup_json="$BACKUP_AVAILABLE_JSON"
+          else
+            backup_wait_rc=$?
+            state_set backup_wait_failure_rc "$backup_wait_rc"
+            exit "$backup_wait_rc"
+          fi
+          mark_phase validate_selected_backup
           BACKUP="$backup_json" BOOT_ID="$boot_id" python - <<'PY'
           import datetime,json,os
           d=json.loads(os.environ['BACKUP'])['data']
@@ -968,6 +1007,9 @@ jobs:
               '- reusable backup candidate IDs: ' + code(value('backup_candidate_ids', 'none')),
               '- ineligible backup candidate IDs: ' + code(value('backup_ineligible_candidate_ids', 'none')),
               '- invalid backup metadata IDs: ' + code(value('backup_invalid_candidate_ids', 'none')),
+              '- backup availability wait: ' + code(value('backup_wait_status', 'NOT_RECORDED')),
+              '- backup availability last state: ' + code(value('backup_wait_last_state', 'none')),
+              '- backup availability failure rc: ' + code(value('backup_wait_failure_rc', 'none')),
               '- current-run temporary cleanup: ' + code(value('current_cleanup_status', 'NOT_RECORDED')),
               '- current-run stamp: ' + code(value('run_stamp')),
               '- temporary instance ID: ' + code(value('temporary_instance_id', 'none')),
