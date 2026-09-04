@@ -706,7 +706,8 @@ jobs:
           assert d['boot-volume-id']==os.environ['BOOT_ID']
           assert d['lifecycle-state']=='AVAILABLE' and d['type']=='FULL' and d['size-in-gbs']==97
           created=datetime.datetime.fromisoformat(d['time-created'].replace('Z','+00:00'))
-          assert (datetime.datetime.now(datetime.timezone.utc)-created).total_seconds() < 86400
+          age=(datetime.datetime.now(datetime.timezone.utc)-created).total_seconds()
+          assert 0 <= age < 86400
           PY
           restored_attempted=1
           mark_phase create_restored_boot_volume
@@ -900,7 +901,8 @@ jobs:
           d=json.loads(os.environ['BACKUP'])['data']
           assert d['boot-volume-id']==os.environ['BOOT_ID'] and d['lifecycle-state']=='AVAILABLE' and d['type']=='FULL' and d['size-in-gbs']==97
           created=datetime.datetime.fromisoformat(d['time-created'].replace('Z','+00:00'))
-          assert (datetime.datetime.now(datetime.timezone.utc)-created).total_seconds() < 86400
+          age=(datetime.datetime.now(datetime.timezone.utc)-created).total_seconds()
+          assert 0 <= age < 86400
           PY
           echo 'UV_ROOT_LAST_SECOND_REVALIDATION_PASS attachment=true source_public_ip_bound=true backup_available=true backup_age_lt_24h=true restored_root_boot_acceptance=true'
       - name: Expand root and recover exact image under shared host lock

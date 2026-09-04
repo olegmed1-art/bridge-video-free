@@ -88,7 +88,7 @@ def test_fresh_full_backup_and_isolated_boot_acceptance_gate_mutation() -> None:
     assert "--preserve-boot-volume false" in WORKFLOW
     assert "temporary_instance_deleted=true" in WORKFLOW
     assert "temporary_volume_deleted=true" in WORKFLOW
-    assert "total_seconds() < 86400" in WORKFLOW
+    assert WORKFLOW.count("assert 0 <= age < 86400") == 2
     instance_fetch = WORKFLOW.index('instance_json="$(oci compute instance get')
     shape_read = WORKFLOW.index('shape="$(printf \'%s\' "$instance_json"')
     assert instance_fetch < shape_read
@@ -488,7 +488,7 @@ def test_last_second_gate_revalidates_oci_before_ssh_mutation() -> None:
     assert "assert d['display-name']=='bridge-school-dds3-frankfurt'" in block
     assert "assert d['lifecycle-state']=='RUNNING'" in block
     assert "lifecycle-state']=='AVAILABLE'" in block
-    assert "total_seconds() < 86400" in block
+    assert "assert 0 <= age < 86400" in block
     assert "vnic-attachment list" in block
     assert "network vnic get" in block
     assert '[[ "$source_public_ip" == "$ORACLE_HOST" ]]' in block
