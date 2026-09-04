@@ -27,6 +27,7 @@ A video-derived rule candidate enters AI verification only when:
 - the rule includes source-backed why/purpose and consequences;
 - normalized rule and tests contain no hidden-hand fields;
 - positive, negative, boundary and interference tests all exist;
+- semantic confidence is a finite JSON number in the closed range `[0.95, 1]`;
 - no ambiguity or contradiction remains.
 
 `TEACHING_CONTEXT`, `WORLD_EXTERNAL`, unapproved sources, low-confidence or
@@ -69,7 +70,11 @@ transitions, so no concurrent run can cross the boundary unsealed. Source
 authorization can be revoked immediately through a guarded lifecycle
 transition. The row trigger captures its effective
 retirement time with a wall-clock reading after the policy row lock is held and
-overrides any caller-supplied backdated validity end.
+overrides any caller-supplied backdated validity end. Restore likewise captures
+one wall-clock mutation timestamp before its final finite-boundary checks. The
+same timestamp is used for every comparison and both outgoing `valid_to`
+writes, so an activation cannot expire between validation and mutation and then
+be extended by the restore.
 
 When the same knowledge item already has an active version, activation closes
 the prior Canon and runtime rows in the same transaction. Their exact IDs are

@@ -86,11 +86,16 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "current_school_canon_snapshot_sha256",
         "VIDEO_CANON_STATE_CHECKS_STALE",
         "v.canon_snapshot_sha256=v_canon_snapshot_sha256",
+        "is_video_canon_semantic_confidence_eligible",
+        "NOT bidding.is_video_canon_semantic_confidence_eligible(v_candidate.payload)",
+        "jsonb_typeof(p_payload->'semantic_confidence')='number'",
+        "IN ('NaN','Infinity','-Infinity')",
+        "BETWEEN 0.95 AND 1",
         "contains_forbidden_hidden_value(v_candidate.payload)",
         "'active_rule_tests',active_rule_tests.rows",
         "'active_rule_sources',active_rule_sources.rows",
         "'active_canon_rules',active_canon_rules.rows",
-        "SELECT 1 FROM public.canon_activation ca",
+        "SELECT ca.* FROM public.canon_activation ca",
         "bidding.rule_conflict,bidding.video_canon_verifier_registry,",
         "LOCK TABLE public.analysis_candidate,public.canon_activation",
         "bidding.runtime_activation,bidding.rule,bidding.rule_test,bidding.rule_test_run,",
@@ -99,7 +104,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "ORDER BY runtime_activation_id",
         "Lock every restoration target before any final authority check",
         "Phase 1: validate every prelocked runtime target without mutation",
-        "Recheck every finite authority boundary",
+        "Capture the exact mutation boundary once",
         "Phase 2: all targets are locked and validated",
         "Capability membership is external to these tables",
         "VIDEO_CANON_RESTORE_CURRENT_ACTIVATION_EXPIRED",
@@ -142,7 +147,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "LANGUAGE sql\nVOLATILE\nSECURITY DEFINER",
         "ca.valid_from<=clock_timestamp()",
         "v_valid_to<=clock_timestamp()",
-        "v_new_canon.valid_to<=statement_timestamp()",
+        "v_new_canon.valid_to<=v_revoked_at",
         "is_complete_bridge_hand",
         "matched.parts[4]",
         "recorded_by_principal text NOT NULL DEFAULT session_user",
@@ -182,7 +187,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "matched.parts[1] ~*",
         "[SHDC][[:space:]]*:",
         "{1,3}($|[^[:alnum:]])",
-        "{2,13}($|[^[:alnum:]])",
+        "{2,13})($|[^[:alnum:]])",
         "(?:10|[AKQJT]|",
         "(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)",
         "(?:^|[^[:alnum:]_])(?:рука|карты)",
@@ -238,6 +243,7 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "DROP FUNCTION bidding.video_canon_rule_test_state_sha256" in ROLLBACK
     assert "DROP FUNCTION bidding.video_canon_rule_restore_sha256" in ROLLBACK
     assert "DROP FUNCTION bidding.is_complete_bridge_hand" in ROLLBACK
+    assert "DROP FUNCTION bidding.is_video_canon_semantic_confidence_eligible" in ROLLBACK
     assert "REVOKE ALL PRIVILEGES ON SCHEMA public,bidding" in ROLLBACK
     assert "DROP ROLE bridge_school_canon_verifier" in ROLLBACK
     assert MIGRATION.count(
@@ -245,6 +251,15 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     ) >= 3
     assert MIGRATION.count(
         "v_promotion.superseded_canon_valid_to<=clock_timestamp()"
+    ) >= 1
+    assert MIGRATION.count(
+        "v_promotion.superseded_canon_valid_to<=v_revoked_at"
+    ) >= 1
+    assert MIGRATION.count(
+        "v_new_canon.valid_to<=v_revoked_at"
+    ) >= 2
+    assert MIGRATION.count(
+        "v_new_runtime.valid_to<=v_revoked_at"
     ) >= 2
     assert MIGRATION.count(
         "VIDEO_CANON_RESTORE_CURRENT_ACTIVATION_EXPIRED"

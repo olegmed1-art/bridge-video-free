@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from typing import Any, Mapping
 from uuid import UUID
@@ -100,8 +101,13 @@ def build_ai_canon_promotion(
         _fail("only School primary evidence may auto-promote")
     if payload.get("ambiguities") or payload.get("contradictions"):
         _fail("ambiguous or conflicting evidence cannot auto-promote")
-    if float(payload.get("semantic_confidence", 0)) < 0.95:
-        _fail("semantic confidence below automatic promotion threshold")
+    semantic_confidence = payload.get("semantic_confidence")
+    if (
+        type(semantic_confidence) not in (int, float)
+        or not 0.95 <= semantic_confidence <= 1.0
+        or not math.isfinite(semantic_confidence)
+    ):
+        _fail("semantic confidence must be a finite JSON number in [0.95, 1]")
 
     expected = {
         "schema", "policy_version", "candidate_payload_hash", "system_profile",

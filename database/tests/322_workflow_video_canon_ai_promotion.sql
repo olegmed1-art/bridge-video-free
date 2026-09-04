@@ -245,6 +245,25 @@ BEGIN
      ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_HIDDEN_VALUE_FIREWALL_INVALID';
   END IF;
+  IF NOT bidding.is_video_canon_semantic_confidence_eligible(
+       '{"semantic_confidence":0.95}'::jsonb
+     ) OR NOT bidding.is_video_canon_semantic_confidence_eligible(
+       '{"semantic_confidence":1}'::jsonb
+     ) OR NOT bidding.is_video_canon_semantic_confidence_eligible(
+       '{"semantic_confidence":0.98}'::jsonb
+     ) OR bidding.is_video_canon_semantic_confidence_eligible(
+       '{"semantic_confidence":1.0001}'::jsonb
+     ) OR bidding.is_video_canon_semantic_confidence_eligible(
+       '{"semantic_confidence":0.9499}'::jsonb
+     ) OR bidding.is_video_canon_semantic_confidence_eligible(
+       '{"semantic_confidence":"0.98"}'::jsonb
+     ) OR bidding.is_video_canon_semantic_confidence_eligible(
+       '{"semantic_confidence":true}'::jsonb
+     ) OR bidding.is_video_canon_semantic_confidence_eligible(
+       jsonb_build_object('semantic_confidence','NaN'::numeric)
+     ) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_SEMANTIC_CONFIDENCE_VALIDATION_INVALID';
+  END IF;
   IF bidding.current_school_canon_snapshot_sha256(
        (SELECT school_id FROM public.school ORDER BY school_id LIMIT 1)
      ) !~ '^[0-9a-f]{64}$' THEN

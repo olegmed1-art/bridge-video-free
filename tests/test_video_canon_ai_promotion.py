@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import hashlib
+import json
 
 import pytest
 
@@ -100,6 +101,27 @@ def test_promotion_fails_closed_when_any_ai_gate_is_unproven(mutation, match):
     mutation(bundle)
     with pytest.raises(VideoCanonAIPromotionError, match=match):
         build_ai_canon_promotion(candidate, bundle)
+
+
+@pytest.mark.parametrize("value", [
+    1.0001,
+    float("nan"),
+    float("inf"),
+    -float("inf"),
+    "0.98",
+    True,
+])
+def test_semantic_confidence_must_be_a_finite_json_number_in_range(value):
+    candidate = _candidate()
+    candidate["payload"]["semantic_confidence"] = value
+    candidate["payload_hash"] = hashlib.sha256(json.dumps(
+        candidate["payload"],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()
+    with pytest.raises(VideoCanonAIPromotionError, match="finite JSON number"):
+        build_ai_canon_promotion(candidate, _bundle(candidate))
 
 
 def test_verification_cannot_be_replayed_for_changed_candidate():

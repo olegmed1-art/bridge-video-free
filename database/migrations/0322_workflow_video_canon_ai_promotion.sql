@@ -375,6 +375,22 @@ SELECT EXISTS (
   );
 $$;
 
+CREATE OR REPLACE FUNCTION bidding.is_video_canon_semantic_confidence_eligible(
+  p_payload jsonb
+) RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+STRICT
+SET search_path=pg_catalog,public,bidding
+AS $$
+SELECT CASE
+  WHEN jsonb_typeof(p_payload->'semantic_confidence')='number'
+    THEN (p_payload->>'semantic_confidence') NOT IN ('NaN','Infinity','-Infinity')
+     AND (p_payload->>'semantic_confidence')::numeric BETWEEN 0.95 AND 1
+  ELSE false
+END
+$$;
+
 CREATE OR REPLACE FUNCTION bidding.video_canon_rule_test_state_sha256(p_rule_id uuid)
 RETURNS text
 LANGUAGE sql
@@ -1127,7 +1143,7 @@ BEGIN
        OR v_candidate.payload->>'semantic_scope'<>v_scope_key
        OR jsonb_array_length(COALESCE(v_candidate.payload->'ambiguities','[]'::jsonb))<>0
        OR jsonb_array_length(COALESCE(v_candidate.payload->'contradictions','[]'::jsonb))<>0
-       OR COALESCE((v_candidate.payload->>'semantic_confidence')::numeric,0)<0.95
+       OR NOT bidding.is_video_canon_semantic_confidence_eligible(v_candidate.payload)
        OR bidding.contains_forbidden_hidden_key(v_candidate.payload)
        OR bidding.contains_forbidden_hidden_value(v_candidate.payload) THEN
         RAISE EXCEPTION 'VIDEO_CANON_CANDIDATE_NOT_ELIGIBLE' USING ERRCODE='23514';
@@ -1896,34 +1912,34 @@ BEGIN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_ATTESTOR_REVOKED' USING ERRCODE='42501';
         END IF;
 
-        -- Recheck every finite authority boundary after all validation work and
-        -- immediately before the mutation phase.
+        -- Capture the exact mutation boundary once. Every final authority
+        -- check and both outgoing valid_to writes use this same instant.
+        v_revoked_at := clock_timestamp();
         IF v_prior_promotion.video_canon_ai_promotion_receipt_id IS NOT NULL
            AND (v_prior_policy.status<>'active'
-             OR v_prior_policy.valid_from>clock_timestamp()
+             OR v_prior_policy.valid_from>v_revoked_at
              OR (v_prior_policy.valid_to IS NOT NULL
-                 AND v_prior_policy.valid_to<=clock_timestamp())) THEN
+                 AND v_prior_policy.valid_to<=v_revoked_at)) THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_SOURCE_POLICY_INACTIVE' USING ERRCODE='23514';
         END IF;
         IF v_promotion.superseded_canon_valid_to IS NOT NULL
-           AND v_promotion.superseded_canon_valid_to<=clock_timestamp() THEN
+           AND v_promotion.superseded_canon_valid_to<=v_revoked_at THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_TARGET_EXPIRED' USING ERRCODE='23514';
         END IF;
         IF EXISTS (
           SELECT 1 FROM jsonb_array_elements(v_promotion.superseded_runtime_state) AS state(value)
-           WHERE NULLIF(state.value->>'valid_to','')::timestamptz<=clock_timestamp()
+           WHERE NULLIF(state.value->>'valid_to','')::timestamptz<=v_revoked_at
         ) THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_RUNTIME_TARGET_EXPIRED' USING ERRCODE='23514';
         END IF;
         IF (v_new_canon.valid_to IS NOT NULL
-            AND v_new_canon.valid_to<=clock_timestamp())
+            AND v_new_canon.valid_to<=v_revoked_at)
            OR (v_new_runtime.valid_to IS NOT NULL
-               AND v_new_runtime.valid_to<=clock_timestamp()) THEN
+               AND v_new_runtime.valid_to<=v_revoked_at) THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_CURRENT_ACTIVATION_EXPIRED' USING ERRCODE='23514';
         END IF;
 
         -- Phase 2: all targets are locked and validated; mutate as one bounded set.
-        v_revoked_at := clock_timestamp();
         UPDATE bidding.runtime_activation
            SET status='revoked',valid_to=v_revoked_at
          WHERE runtime_activation_id=v_new_runtime.runtime_activation_id;
@@ -1944,13 +1960,13 @@ BEGIN
     END IF;
 
     IF v_promotion.superseded_canon_activation_id IS NULL THEN
+        v_revoked_at := clock_timestamp();
         IF (v_new_canon.valid_to IS NOT NULL
-            AND v_new_canon.valid_to<=clock_timestamp())
+            AND v_new_canon.valid_to<=v_revoked_at)
            OR (v_new_runtime.valid_to IS NOT NULL
-               AND v_new_runtime.valid_to<=clock_timestamp()) THEN
+               AND v_new_runtime.valid_to<=v_revoked_at) THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_CURRENT_ACTIVATION_EXPIRED' USING ERRCODE='23514';
         END IF;
-        v_revoked_at := clock_timestamp();
         UPDATE bidding.runtime_activation
            SET status='revoked',valid_to=v_revoked_at
          WHERE runtime_activation_id=v_new_runtime.runtime_activation_id;
@@ -1987,6 +2003,7 @@ GRANT SELECT ON bidding.video_canon_source_policy,bidding.video_canon_ai_verific
   bidding.video_correction_review_receipt
   TO bridge_school_reader;
 REVOKE ALL ON FUNCTION bidding.is_complete_bridge_hand(text),
+  bidding.is_video_canon_semantic_confidence_eligible(jsonb),
   bidding.video_canon_rule_test_state_sha256(uuid),
   bidding.video_canon_rule_restore_sha256(uuid),
   bidding.current_school_canon_snapshot_sha256(uuid) FROM PUBLIC;
