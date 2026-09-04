@@ -26,6 +26,9 @@ DROP TRIGGER IF EXISTS video_canon_assurance_verdict_guard
   ON bidding.video_canon_assurance_verdict;
 DROP FUNCTION IF EXISTS bidding.validate_video_canon_assurance_verdict();
 DROP TABLE IF EXISTS bidding.video_canon_assurance_verdict;
+DROP TRIGGER IF EXISTS video_canon_assurance_verifier_registry_append_only
+  ON bidding.video_canon_assurance_verifier_registry;
+DROP TABLE IF EXISTS bidding.video_canon_assurance_verifier_registry;
 
 GRANT EXECUTE ON FUNCTION bidding.activate_ai_verified_video_canon(uuid,uuid,text)
   TO bridge_school_canon_promoter;

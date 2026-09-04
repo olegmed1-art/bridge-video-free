@@ -7,10 +7,13 @@ ROLLBACK = (ROOT / "database/rollbacks/0323_workflow_video_canon_promotion_consu
 
 
 def test_authority_and_independent_assurance_are_fail_closed():
-    assert "authority_class'<>'TEACHER_VIDEO'" in MIGRATION
-    assert "source_class'<>'SCHOOL_PRIMARY_EVIDENCE'" in MIGRATION
+    assert "authority_class' IS DISTINCT FROM 'TEACHER_VIDEO'" in MIGRATION
+    assert "source_class' IS DISTINCT FROM 'SCHOOL_PRIMARY_EVIDENCE'" in MIGRATION
     assert MIGRATION.count("i2.verifier_family<>i3.verifier_family") == 2
     assert MIGRATION.count("i2.execution_principal<>i3.execution_principal") == 2
+    assert "pg_has_role(i2.execution_principal,'bridge_school_canon_i2_verifier','member')" in MIGRATION
+    assert "pg_has_role(i3.execution_principal,'bridge_school_canon_i3_verifier','member')" in MIGRATION
+    assert "video_canon_assurance_verifier_registry" in MIGRATION
     assert MIGRATION.count("i2.canon_snapshot_sha256=i3.canon_snapshot_sha256") == 2
     assert "WORLD" not in MIGRATION
 
@@ -23,6 +26,7 @@ def test_delivery_is_leased_fenced_atomic_and_retained():
     assert "VIDEO_CANON_POST_WRITE_INTEGRITY_FAILED" in MIGRATION
     assert "video_canon_promotion_delivery_receipt_append_only" in MIGRATION
     assert "ATTEMPTS_EXHAUSTED" in MIGRATION
+    assert "ON CONFLICT (analysis_candidate_id) DO NOTHING" in MIGRATION
 
 
 def test_only_consumer_can_cross_authoritative_boundary():

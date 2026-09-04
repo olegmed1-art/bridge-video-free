@@ -80,7 +80,9 @@ BEGIN
 
   IF to_regclass('bidding.video_canon_promotion_job') IS NULL
      OR to_regclass('bidding.video_canon_promotion_delivery_receipt') IS NULL
-     OR to_regclass('bidding.video_canon_assurance_verdict') IS NULL THEN
+     OR to_regclass('bidding.video_canon_assurance_verdict') IS NULL
+     OR to_regclass('bidding.video_canon_assurance_verifier_registry') IS NULL
+     OR (SELECT count(*) FROM bidding.video_canon_assurance_verifier_registry)<>2 THEN
     RAISE EXCEPTION 'VIDEO_CANON_CONSUMER_SCHEMA_MISSING';
   END IF;
 END $$;

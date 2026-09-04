@@ -36,6 +36,26 @@ REVOKE CREATE ON SCHEMA public,bidding FROM
   bridge_school_canon_i2_verifier,bridge_school_canon_i3_verifier,
   bridge_school_canon_consumer;
 
+CREATE TABLE bidding.video_canon_assurance_verifier_registry (
+  assurance_level text PRIMARY KEY CHECK (assurance_level IN ('I2','I3')),
+  capability_role name NOT NULL UNIQUE,
+  verifier_family text NOT NULL UNIQUE CHECK (btrim(verifier_family)<>''),
+  verifier_version text NOT NULL CHECK (btrim(verifier_version)<>''),
+  registered_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (
+    (assurance_level='I2' AND capability_role='bridge_school_canon_i2_verifier')
+    OR (assurance_level='I3' AND capability_role='bridge_school_canon_i3_verifier')
+  )
+);
+INSERT INTO bidding.video_canon_assurance_verifier_registry(
+  assurance_level,capability_role,verifier_family,verifier_version
+) VALUES
+  ('I2','bridge_school_canon_i2_verifier','independent-i2','pinned-v1'),
+  ('I3','bridge_school_canon_i3_verifier','independent-i3','pinned-v1');
+CREATE TRIGGER video_canon_assurance_verifier_registry_append_only
+BEFORE UPDATE OR DELETE ON bidding.video_canon_assurance_verifier_registry
+FOR EACH ROW EXECUTE FUNCTION bidding.reject_append_only_mutation();
+
 CREATE TABLE bidding.video_canon_assurance_verdict (
   video_canon_assurance_verdict_id uuid PRIMARY KEY DEFAULT uuidv7(),
   school_id uuid NOT NULL REFERENCES public.school(school_id) ON DELETE RESTRICT,
@@ -75,12 +95,16 @@ SET search_path=pg_catalog,public,bidding AS $$
 DECLARE
   v_candidate public.analysis_candidate%ROWTYPE;
   v_bundle bidding.video_canon_ai_verification_bundle%ROWTYPE;
+  v_registry bidding.video_canon_assurance_verifier_registry%ROWTYPE;
 BEGIN
   IF NEW.execution_principal<>session_user THEN
     RAISE EXCEPTION 'VIDEO_CANON_ASSURANCE_PRINCIPAL_MISMATCH' USING ERRCODE='42501';
   END IF;
-  IF (NEW.assurance_level='I2' AND NOT pg_has_role(session_user,'bridge_school_canon_i2_verifier','member'))
-     OR (NEW.assurance_level='I3' AND NOT pg_has_role(session_user,'bridge_school_canon_i3_verifier','member')) THEN
+  SELECT * INTO v_registry FROM bidding.video_canon_assurance_verifier_registry
+   WHERE assurance_level=NEW.assurance_level;
+  IF NOT FOUND OR NOT pg_has_role(session_user,v_registry.capability_role,'member')
+     OR NEW.verifier_family IS DISTINCT FROM v_registry.verifier_family
+     OR NEW.verifier_version IS DISTINCT FROM v_registry.verifier_version THEN
     RAISE EXCEPTION 'VIDEO_CANON_ASSURANCE_ROLE_MISMATCH' USING ERRCODE='42501';
   END IF;
   SELECT * INTO v_candidate FROM public.analysis_candidate
@@ -90,16 +114,16 @@ BEGIN
   IF NOT FOUND OR v_candidate.analysis_candidate_id IS NULL
      OR v_candidate.school_id<>NEW.school_id
      OR v_candidate.candidate_type<>'video_school_canon_candidate'
-     OR v_candidate.payload->>'authority_class'<>'TEACHER_VIDEO'
-     OR v_candidate.payload->>'source_class'<>'SCHOOL_PRIMARY_EVIDENCE'
+     OR v_candidate.payload->>'authority_class' IS DISTINCT FROM 'TEACHER_VIDEO'
+     OR v_candidate.payload->>'source_class' IS DISTINCT FROM 'SCHOOL_PRIMARY_EVIDENCE'
      OR v_candidate.payload_hash<>NEW.candidate_payload_hash
      OR v_bundle.school_id<>NEW.school_id
      OR v_bundle.analysis_candidate_id<>NEW.analysis_candidate_id
      OR v_bundle.candidate_payload_hash<>NEW.candidate_payload_hash
      OR v_bundle.verification_bundle_sha256<>NEW.verification_bundle_sha256
-     OR v_bundle.bundle_payload->>'canon_snapshot_sha256'<>NEW.canon_snapshot_sha256
-     OR v_bundle.bundle_payload->>'system_profile'<>NEW.system_profile
-     OR v_bundle.bundle_payload->>'learner_level'<>NEW.learner_level THEN
+     OR v_bundle.bundle_payload->>'canon_snapshot_sha256' IS DISTINCT FROM NEW.canon_snapshot_sha256
+     OR v_bundle.bundle_payload->>'system_profile' IS DISTINCT FROM NEW.system_profile
+     OR v_bundle.bundle_payload->>'learner_level' IS DISTINCT FROM NEW.learner_level THEN
     RAISE EXCEPTION 'VIDEO_CANON_ASSURANCE_BINDING_INVALID' USING ERRCODE='23514';
   END IF;
   RETURN NEW;
@@ -192,10 +216,10 @@ BEGIN
      OR v_rule.rule_id IS NULL OR v_candidate.school_id<>v_bundle.school_id
      OR v_candidate.school_id<>v_rule.school_id
      OR v_candidate.payload_hash<>v_bundle.candidate_payload_hash
-     OR v_candidate.payload->>'authority_class'<>'TEACHER_VIDEO'
-     OR v_candidate.payload->>'source_class'<>'SCHOOL_PRIMARY_EVIDENCE'
+     OR v_candidate.payload->>'authority_class' IS DISTINCT FROM 'TEACHER_VIDEO'
+     OR v_candidate.payload->>'source_class' IS DISTINCT FROM 'SCHOOL_PRIMARY_EVIDENCE'
      OR v_rule.lifecycle_status<>'validated'
-     OR v_rule.compiled_payload->>'video_candidate_payload_hash'<>v_candidate.payload_hash THEN
+     OR v_rule.compiled_payload->>'video_candidate_payload_hash' IS DISTINCT FROM v_candidate.payload_hash THEN
     RAISE EXCEPTION 'VIDEO_CANON_ENQUEUE_BINDING_INVALID' USING ERRCODE='23514';
   END IF;
   IF p_assurance_set_sha256!~'^[0-9a-f]{64}$' OR NOT EXISTS (
@@ -244,7 +268,18 @@ BEGIN
     v_bundle.video_canon_ai_verification_bundle_id,v_candidate.payload_hash,
     p_verification_bundle_sha256,p_assurance_set_sha256,
     'video-canon:'||v_candidate.payload_hash||':'||p_verification_bundle_sha256
-  ) RETURNING video_canon_promotion_job_id INTO v_job_id;
+  ) ON CONFLICT (analysis_candidate_id) DO NOTHING
+    RETURNING video_canon_promotion_job_id INTO v_job_id;
+  IF v_job_id IS NULL THEN
+    SELECT * INTO v_existing FROM bidding.video_canon_promotion_job
+     WHERE analysis_candidate_id=p_analysis_candidate_id;
+    IF NOT FOUND OR v_existing.rule_id<>p_rule_id
+       OR v_existing.verification_bundle_sha256<>p_verification_bundle_sha256
+       OR v_existing.assurance_set_sha256<>p_assurance_set_sha256 THEN
+      RAISE EXCEPTION 'VIDEO_CANON_ENQUEUE_IDEMPOTENCY_MISMATCH' USING ERRCODE='23514';
+    END IF;
+    RETURN v_existing.video_canon_promotion_job_id;
+  END IF;
   RETURN v_job_id;
 END $$;
 
@@ -325,6 +360,18 @@ BEGIN
       AND i2.deterministic AND i3.deterministic
       AND i2.verifier_family<>i3.verifier_family
       AND i2.execution_principal<>i3.execution_principal
+      AND pg_has_role(i2.execution_principal,'bridge_school_canon_i2_verifier','member')
+      AND pg_has_role(i3.execution_principal,'bridge_school_canon_i3_verifier','member')
+      AND EXISTS (
+        SELECT 1 FROM bidding.video_canon_assurance_verifier_registry r2
+         WHERE r2.assurance_level='I2' AND r2.capability_role='bridge_school_canon_i2_verifier'
+           AND r2.verifier_family=i2.verifier_family AND r2.verifier_version=i2.verifier_version
+      )
+      AND EXISTS (
+        SELECT 1 FROM bidding.video_canon_assurance_verifier_registry r3
+         WHERE r3.assurance_level='I3' AND r3.capability_role='bridge_school_canon_i3_verifier'
+           AND r3.verifier_family=i3.verifier_family AND r3.verifier_version=i3.verifier_version
+      )
       AND i2.canon_snapshot_sha256=i3.canon_snapshot_sha256
       AND i2.system_profile=i3.system_profile
       AND i2.learner_level=i3.learner_level
@@ -430,6 +477,9 @@ REVOKE INSERT,UPDATE,DELETE,TRUNCATE ON
        bridge_school_canon_i2_verifier,bridge_school_canon_i3_verifier;
 REVOKE UPDATE,DELETE,TRUNCATE ON bidding.video_canon_assurance_verdict FROM
   bridge_school_canon_i2_verifier,bridge_school_canon_i3_verifier;
+REVOKE ALL ON bidding.video_canon_assurance_verifier_registry FROM
+  bridge_school_canon_i2_verifier,bridge_school_canon_i3_verifier,
+  bridge_school_canon_consumer,bridge_school_canon_verifier;
 
 INSERT INTO public.schema_migration(migration_key)
 VALUES ('0323_workflow_video_canon_promotion_consumer') ON CONFLICT DO NOTHING;
