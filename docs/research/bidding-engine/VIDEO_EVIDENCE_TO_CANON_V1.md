@@ -174,9 +174,11 @@ each receipt's recorded login must still exist, be login-capable and retain
 membership in its active verifier capability.
 
 Promotion binds the whole authoritative knowledge version, not only its rule.
-The version must be a single-rule candidate whose content is the exact sealed
-candidate payload; system, level, effective interval, agreement scope, method,
-source locator and deterministic provenance must all match the sealed inputs.
+The version must be attached to the deterministic knowledge-item key derived
+from the sealed candidate ID and must be a single-rule candidate whose content
+is the exact sealed candidate payload; system, level, effective interval,
+agreement scope, method, source locator and deterministic provenance must all
+match the sealed inputs.
 A digest of the complete immutable version projection is retained in the
 promotion receipt and activation provenance.
 
@@ -189,6 +191,8 @@ promoter receives direct activation-table writes. Before restoration succeeds,
 the same rule/test/source/conflict tables are locked and the restored rule must
 pass the current runtime activation gates.
 When the prior target came from an earlier AI video promotion, restoration also
-requires its exact source policy to remain active, current and long enough for
-the restored validity interval; a revoked teacher-video authorization cannot be
-reactivated through rollback.
+requires its exact source policy to remain active by wall clock and long enough
+for the restored validity interval; a revoked or expired teacher-video
+authorization cannot be reactivated through rollback. The restorer recomputes
+the predecessor's full knowledge-version digest and requires every original
+attestor login to retain its active verifier capability before reactivation.

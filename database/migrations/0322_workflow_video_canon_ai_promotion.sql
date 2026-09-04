@@ -298,6 +298,20 @@ SELECT EXISTS (
             '.',matched.parts[1],matched.parts[2],matched.parts[3],matched.parts[4]
           ))
        )
+  ) OR EXISTS (
+    SELECT 1 FROM walk AS w
+     WHERE jsonb_typeof(w.value)='string'
+       AND EXISTS (
+         SELECT 1
+           FROM regexp_matches(
+             w.value#>>'{}',
+             E'(?:(?:partner|opponent|north|east|south|west)[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника)|[NESW][[:space:]]*:)[^;]*?(-|(?:(?:10)|[AKQJT2-9]){1,13})[[:space:]/,]+(-|(?:(?:10)|[AKQJT2-9]){1,13})[[:space:]/,]+(-|(?:(?:10)|[AKQJT2-9]){1,13})[[:space:]/,]+(-|(?:(?:10)|[AKQJT2-9]){1,13})',
+             'gi'
+           ) AS matched(parts)
+          WHERE bidding.is_complete_bridge_hand(concat_ws(
+            '.',matched.parts[1],matched.parts[2],matched.parts[3],matched.parts[4]
+          ))
+       )
   );
 $$;
 
@@ -821,6 +835,8 @@ BEGIN
       FROM public.knowledge_version kv
       JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
        AND ki.school_id=v_candidate.school_id AND ki.knowledge_type='bidding_rule'
+       AND ki.status='active'
+       AND ki.stable_key='video-canon:'||(v_candidate.payload->>'candidate_id')
      WHERE kv.knowledge_version_id=v_rule.knowledge_version_id;
     v_expected_version_provenance := jsonb_build_object(
       'promotion_mode','AI_VERIFIED_TEACHER_VIDEO',
@@ -875,8 +891,8 @@ BEGIN
      WHERE p.school_id=v_candidate.school_id
        AND p.source_id=v_candidate.source_id
        AND p.status='active'
-       AND p.valid_from<=statement_timestamp()
-       AND (p.valid_to IS NULL OR p.valid_to>statement_timestamp())
+       AND p.valid_from<=clock_timestamp()
+       AND (p.valid_to IS NULL OR p.valid_to>clock_timestamp())
        AND p.valid_from<=v_valid_from AND (p.valid_to IS NULL OR p.valid_to>v_valid_from)
        AND (p.valid_to IS NULL OR (v_valid_to IS NOT NULL AND v_valid_to<=p.valid_to))
        AND p.source_sha256=v_candidate.payload#>>'{source,source_sha256}'
@@ -1060,6 +1076,10 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'VIDEO_CANON_VERIFIER_PRINCIPAL_REVOKED' USING ERRCODE='42501';
     END IF;
+    IF v_policy.status<>'active' OR v_policy.valid_from>clock_timestamp()
+       OR (v_policy.valid_to IS NOT NULL AND v_policy.valid_to<=clock_timestamp()) THEN
+        RAISE EXCEPTION 'VIDEO_CANON_SOURCE_POLICY_EXPIRED' USING ERRCODE='23514';
+    END IF;
     IF v_valid_to IS NOT NULL AND v_valid_to<=clock_timestamp() THEN
         RAISE EXCEPTION 'VIDEO_CANON_EFFECTIVE_PERIOD_EXPIRED' USING ERRCODE='23514';
     END IF;
@@ -1120,6 +1140,7 @@ CREATE OR REPLACE FUNCTION bidding.restore_ai_verified_video_canon(
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path=pg_catalog,public,bidding
+SET TimeZone='UTC'
 AS $$
 DECLARE
     v_promotion bidding.video_canon_ai_promotion_receipt%ROWTYPE;
@@ -1129,8 +1150,11 @@ DECLARE
     v_prior_runtime bidding.runtime_activation%ROWTYPE;
     v_prior_canon public.canon_activation%ROWTYPE;
     v_prior_promotion bidding.video_canon_ai_promotion_receipt%ROWTYPE;
+    v_prior_version public.knowledge_version%ROWTYPE;
+    v_prior_policy bidding.video_canon_source_policy%ROWTYPE;
     v_bundle bidding.video_canon_ai_verification_bundle%ROWTYPE;
     v_current_prior_rule_state jsonb;
+    v_prior_version_content_sha256 text;
     v_state jsonb;
     v_original_valid_to timestamptz;
     v_restored_runtime_ids uuid[] := '{}'::uuid[];
@@ -1158,7 +1182,8 @@ BEGIN
     LOCK TABLE public.canon_activation,public.knowledge_item,public.knowledge_version,
       public.source,public.knowledge_version_source,
       bidding.runtime_activation,bidding.rule,bidding.rule_test,bidding.rule_test_run,
-      bidding.rule_conflict,bidding.video_canon_source_policy IN SHARE MODE;
+      bidding.rule_conflict,bidding.video_canon_source_policy,
+      bidding.video_canon_verifier_registry,bidding.video_canon_ai_verification IN SHARE MODE;
     SELECT * INTO v_existing FROM bidding.video_canon_ai_restore_receipt
      WHERE video_canon_ai_promotion_receipt_id=p_video_canon_ai_promotion_receipt_id;
     IF FOUND THEN
@@ -1221,31 +1246,46 @@ BEGIN
         SELECT * INTO v_prior_promotion
           FROM bidding.video_canon_ai_promotion_receipt
          WHERE canon_activation_id=v_promotion.superseded_canon_activation_id;
-        IF FOUND AND NOT EXISTS (
-          SELECT 1
-            FROM public.analysis_candidate c
-            JOIN bidding.video_canon_source_policy p
-              ON p.school_id=c.school_id AND p.source_id=c.source_id
-            JOIN public.source s ON s.source_id=p.source_id AND s.school_id=p.school_id AND s.status='active'
-           WHERE c.analysis_candidate_id=v_prior_promotion.analysis_candidate_id
-             AND c.payload_hash=v_prior_promotion.candidate_payload_hash
-             AND c.payload->>'source_class'='SCHOOL_PRIMARY_EVIDENCE'
-             AND c.payload#>>'{source_authorization,policy_version}'=p.policy_version
-             AND p.status='active' AND p.policy_version=v_prior_promotion.policy_version
-             AND p.valid_from<=statement_timestamp()
-             AND (p.valid_to IS NULL OR p.valid_to>statement_timestamp())
-             AND (p.valid_to IS NULL OR (
-               v_promotion.superseded_canon_valid_to IS NOT NULL
-               AND v_promotion.superseded_canon_valid_to<=p.valid_to
-             ))
-             AND p.source_sha256=c.payload#>>'{source,source_sha256}'
-             AND p.video_file_id=c.payload#>>'{source,video_file_id}'
-             AND (c.payload#>>'{teacher_assertion,speaker_id}')=ANY(p.teacher_ids)
-             AND v_prior_promotion.scope_key=ANY(p.semantic_scopes)
-             AND p.authorization_evidence_sha256=
-                   c.payload#>>'{source_authorization,authorization_evidence_sha256}'
-        ) THEN
-            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_SOURCE_POLICY_INACTIVE' USING ERRCODE='23514';
+        IF v_prior_promotion.video_canon_ai_promotion_receipt_id IS NOT NULL THEN
+            SELECT p.* INTO v_prior_policy
+              FROM public.analysis_candidate c
+              JOIN bidding.video_canon_source_policy p
+                ON p.school_id=c.school_id AND p.source_id=c.source_id
+              JOIN public.source s ON s.source_id=p.source_id
+               AND s.school_id=p.school_id AND s.status='active'
+             WHERE c.analysis_candidate_id=v_prior_promotion.analysis_candidate_id
+               AND c.payload_hash=v_prior_promotion.candidate_payload_hash
+               AND c.payload->>'source_class'='SCHOOL_PRIMARY_EVIDENCE'
+               AND c.payload#>>'{source_authorization,policy_version}'=p.policy_version
+               AND p.status='active' AND p.policy_version=v_prior_promotion.policy_version
+               AND p.valid_from<=clock_timestamp()
+               AND (p.valid_to IS NULL OR p.valid_to>clock_timestamp())
+               AND (p.valid_to IS NULL OR (
+                 v_promotion.superseded_canon_valid_to IS NOT NULL
+                 AND v_promotion.superseded_canon_valid_to<=p.valid_to
+               ))
+               AND p.source_sha256=c.payload#>>'{source,source_sha256}'
+               AND p.video_file_id=c.payload#>>'{source,video_file_id}'
+               AND (c.payload#>>'{teacher_assertion,speaker_id}')=ANY(p.teacher_ids)
+               AND v_prior_promotion.scope_key=ANY(p.semantic_scopes)
+               AND p.authorization_evidence_sha256=
+                     c.payload#>>'{source_authorization,authorization_evidence_sha256}'
+             FOR SHARE OF p,s;
+            IF NOT FOUND THEN
+                RAISE EXCEPTION 'VIDEO_CANON_RESTORE_SOURCE_POLICY_INACTIVE' USING ERRCODE='23514';
+            END IF;
+            SELECT * INTO v_prior_version
+              FROM public.knowledge_version
+             WHERE knowledge_version_id=v_prior_canon.knowledge_version_id
+             FOR UPDATE;
+            v_prior_version_content_sha256 := encode(public.digest(convert_to(
+              (to_jsonb(v_prior_version)-ARRAY['review_status','status','created_at'])::text,
+              'UTF8'),'sha256'),'hex');
+            IF v_prior_version.knowledge_version_id IS NULL
+               OR v_prior_version_content_sha256<>
+                    v_prior_promotion.knowledge_version_content_sha256 THEN
+                RAISE EXCEPTION 'VIDEO_CANON_RESTORE_VERSION_CONTENT_MISMATCH' USING ERRCODE='23514';
+            END IF;
         END IF;
         SELECT COALESCE(jsonb_agg(jsonb_build_object(
                  'rule_id',r.rule_id,
@@ -1271,6 +1311,37 @@ BEGIN
               WHERE kvs.knowledge_version_id=v_prior_canon.knowledge_version_id
            ) THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_CANON_VERSION_GATES_FAILED' USING ERRCODE='23514';
+        END IF;
+        IF v_prior_promotion.video_canon_ai_promotion_receipt_id IS NOT NULL THEN
+            IF EXISTS (
+              SELECT 1
+                FROM bidding.video_canon_ai_verification v
+                LEFT JOIN bidding.video_canon_verifier_registry vr
+                  ON vr.verifier_family=v.verifier_family
+                 AND v.check_id=ANY(vr.allowed_check_ids)
+               WHERE v.analysis_candidate_id=v_prior_promotion.analysis_candidate_id
+                 AND v.candidate_payload_hash=v_prior_promotion.candidate_payload_hash
+                 AND v.verification_bundle_sha256=v_prior_promotion.verification_bundle_sha256
+                 AND (
+                   vr.database_role IS NULL OR vr.status<>'active' OR NOT EXISTS (
+                     SELECT 1
+                       FROM pg_catalog.pg_roles attestor
+                       JOIN pg_catalog.pg_roles capability
+                         ON capability.rolname=vr.database_role
+                      WHERE attestor.rolname=v.execution_principal
+                        AND attestor.rolcanlogin
+                        AND pg_has_role(attestor.oid,capability.oid,'MEMBER')
+                   )
+                 )
+            ) THEN
+                RAISE EXCEPTION 'VIDEO_CANON_RESTORE_ATTESTOR_REVOKED' USING ERRCODE='42501';
+            END IF;
+            IF v_prior_policy.status<>'active'
+               OR v_prior_policy.valid_from>clock_timestamp()
+               OR (v_prior_policy.valid_to IS NOT NULL
+                   AND v_prior_policy.valid_to<=clock_timestamp()) THEN
+                RAISE EXCEPTION 'VIDEO_CANON_RESTORE_SOURCE_POLICY_INACTIVE' USING ERRCODE='23514';
+            END IF;
         END IF;
         IF v_promotion.superseded_canon_valid_to IS NOT NULL
            AND v_promotion.superseded_canon_valid_to<=clock_timestamp() THEN

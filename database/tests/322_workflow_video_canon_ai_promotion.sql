@@ -112,6 +112,10 @@ BEGIN
        '{"notes":"North''s hand was S:AKQJ109 H:876 D:54 C:32"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N: S:AKQJ109 H:876 D:54 C:32"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"North''s hand was AKQJ109 T98 7 432"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"N: AKQJ109/T98/7/432"}'::jsonb
      )) OR bidding.contains_forbidden_hidden_value(
        '{"meaning":"shows at least five hearts"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
@@ -176,6 +180,7 @@ DECLARE
   v_bad_bundle_failed boolean:=false;
   v_late_verification_failed boolean:=false;
   v_target_binding_failed boolean:=false;
+  v_version_content_failed boolean:=false;
   v_rule_content_failed boolean:=false;
   v_expired_restore_failed boolean:=false;
   v_bundle_id uuid:=uuidv7();
@@ -184,6 +189,7 @@ DECLARE
   v_good_bundle_hash text;
   v_rule_digest_utc text;
   v_rule_digest_other_tz text;
+  v_old_version_digest text;
   v_new_from timestamptz:=statement_timestamp()-interval '1 hour';
 BEGIN
   INSERT INTO public.school(school_id,stable_name)
@@ -377,6 +383,12 @@ BEGIN
       statement_timestamp()-interval '1 year',v_new_from,'superseded'),
     (v_new_runtime,v_school,v_new_rule,'school_canon',v_new_canon,'restore-scope',
       v_new_from,NULL,'active');
+  PERFORM set_config('TimeZone','UTC',true);
+  SELECT encode(public.digest(convert_to(
+           (to_jsonb(kv)-ARRAY['review_status','status','created_at'])::text,
+           'UTF8'),'sha256'),'hex')
+    INTO v_old_version_digest
+    FROM public.knowledge_version kv WHERE kv.knowledge_version_id=v_old_version;
   INSERT INTO bidding.video_canon_ai_promotion_receipt(
     video_canon_ai_promotion_receipt_id,school_id,analysis_candidate_id,
     candidate_payload_hash,verification_bundle_sha256,policy_version,scope_key,
@@ -385,7 +397,7 @@ BEGIN
     promotion_mode,human_approval_required
   ) VALUES (
     v_old_promotion,v_school,v_old_candidate,repeat('1',64),repeat('2',64),
-    'school-video-auto-canon-v1','restore-scope',repeat('3',64),repeat('4',64),
+    'school-video-auto-canon-v1','restore-scope',repeat('3',64),v_old_version_digest,
     v_old_rule,v_old_canon,v_old_runtime,'AI_VERIFIED_TEACHER_VIDEO',false
   );
   PERFORM set_config('TimeZone','UTC',true);
@@ -506,6 +518,22 @@ BEGIN
         WHERE video_canon_ai_promotion_receipt_id=v_promotion
      ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_MUTATED_RESTORE_TARGET_NOT_BLOCKED';
+  END IF;
+
+  BEGIN
+    UPDATE public.knowledge_version SET content='{"tampered":true}'
+     WHERE knowledge_version_id=v_old_version;
+    PERFORM bidding.restore_ai_verified_video_canon(
+      v_promotion,v_good_bundle_hash,repeat('d',64)
+    );
+  EXCEPTION WHEN check_violation THEN
+    v_version_content_failed:=true;
+  END;
+  IF NOT v_version_content_failed OR EXISTS (
+       SELECT 1 FROM bidding.video_canon_ai_restore_receipt
+        WHERE video_canon_ai_promotion_receipt_id=v_promotion
+     ) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_MUTATED_RESTORE_VERSION_NOT_BLOCKED';
   END IF;
 
   BEGIN

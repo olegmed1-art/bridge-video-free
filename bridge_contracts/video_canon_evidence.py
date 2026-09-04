@@ -29,6 +29,7 @@ _FORBIDDEN_KEYS = {
     "partner_cards", "opponent_cards", "all_hands",
 }
 _SUIT_PATTERN = r"(?:-|(?:(?:10)|[AKQJT2-9]){0,13})"
+_NONEMPTY_SUIT_PATTERN = r"(?:-|(?:(?:10)|[AKQJT2-9]){1,13})"
 _HAND_PATTERN = (
     _SUIT_PATTERN + r"\." + _SUIT_PATTERN + r"\."
     + _SUIT_PATTERN + r"\." + _SUIT_PATTERN
@@ -52,6 +53,16 @@ _SUIT_LABELLED_HIDDEN_CARDS = re.compile(
     r"H\s*:\s*(?P<hearts>" + _SUIT_PATTERN + r")[\s,/]*"
     r"D\s*:\s*(?P<diamonds>" + _SUIT_PATTERN + r")[\s,/]*"
     r"C\s*:\s*(?P<clubs>" + _SUIT_PATTERN + r")",
+    re.IGNORECASE,
+)
+_SEPARATED_LABELLED_HIDDEN_CARDS = re.compile(
+    r"(?:(?:partner|opponent|north|east|south|west)\s*(?:['’]s)?[ _-]*"
+    r"(?:hand|cards)\b|(?:рука|карты)\s+(?:партн[её]ра|соперника)\b"
+    r"|[NESW]\s*:)[^;]*?"
+    r"(?P<spades>" + _NONEMPTY_SUIT_PATTERN + r")[\s,/]+"
+    r"(?P<hearts>" + _NONEMPTY_SUIT_PATTERN + r")[\s,/]+"
+    r"(?P<diamonds>" + _NONEMPTY_SUIT_PATTERN + r")[\s,/]+"
+    r"(?P<clubs>" + _NONEMPTY_SUIT_PATTERN + r")",
     re.IGNORECASE,
 )
 
@@ -130,6 +141,13 @@ def _has_forbidden_value(value: Any) -> bool:
                 "spades", "hearts", "diamonds", "clubs"
             )))
             for match in _SUIT_LABELLED_HIDDEN_CARDS.finditer(value)
+        ):
+            return True
+        if any(
+            _is_complete_hand_shape(".".join(match.group(
+                "spades", "hearts", "diamonds", "clubs"
+            )))
+            for match in _SEPARATED_LABELLED_HIDDEN_CARDS.finditer(value)
         ):
             return True
         return any(

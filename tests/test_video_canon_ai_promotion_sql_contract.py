@@ -46,7 +46,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "VIDEO_CANON_SOURCE_POLICY_SCHOOL_MISMATCH",
         "guard_video_canon_source_policy_lifecycle",
         "status='superseded',valid_to=v_valid_from",
-        "p.valid_from<=statement_timestamp()",
+        "p.valid_from<=clock_timestamp()",
         "v_valid_from>statement_timestamp()",
         "p.system_profile=v_bundle.bundle_payload->>'system_profile'",
         "p.learner_level=v_bundle.bundle_payload->>'learner_level'",
@@ -97,9 +97,15 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "v_version.content<>v_candidate.payload",
         "v_version.provenance<>v_expected_version_provenance",
         "knowledge_version_content_sha256",
+        "ki.stable_key='video-canon:'||(v_candidate.payload->>'candidate_id')",
+        "VIDEO_CANON_SOURCE_POLICY_EXPIRED",
+        "VIDEO_CANON_RESTORE_ATTESTOR_REVOKED",
+        "VIDEO_CANON_RESTORE_VERSION_CONTENT_MISMATCH",
+        "v_prior_version_content_sha256",
         "replace(upper(COALESCE(p_hand,'')),'10','T')",
         "(?:10)",
         "|[NESW][[:space:]]*:)[^;]*?S",
+        "{1,13})[[:space:]/,]+",
     ):
         assert marker in MIGRATION
 
