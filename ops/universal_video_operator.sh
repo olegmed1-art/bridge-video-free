@@ -40,7 +40,7 @@ enqueue_batch(){
   [[ -d "$INTAKE" && ! -L "$INTAKE" && "$(stat -c '%U:%G:%a' "$INTAKE" 2>/dev/null)" == universal-video:universal-video:750 ]] || fail 'unsafe intake directory'
   [[ -f "$DRIVE_OAUTH_FILE" && ! -L "$DRIVE_OAUTH_FILE" ]] || fail 'Drive credential unavailable'
   [[ -f "$QUEUE_DSN_FILE" && ! -L "$QUEUE_DSN_FILE" ]] || fail 'video queue credential unavailable'
-  local root_tmp='' request_tmp='' request_stage='' request_code='' raw_size='' cleanup_cmd='' queue_output='' queue_rc=0
+  local root_tmp='' request_tmp='' request_stage='' request_code='' copy_output='' copy_code='' copy_rc=0 raw_size='' cleanup_cmd='' queue_output='' queue_rc=0
   if ! stage_job_payload "$1" root_tmp; then
     return 1
   fi
@@ -108,7 +108,50 @@ except BaseException:
     intake_reject 'UV_INTAKE_EXECUTION_FAILED'
     return 1
   fi
-  if ! install -o universal-video -g universal-video -m 0600 "$root_tmp" "$request_tmp" 2>/dev/null; then
+  set +e
+  copy_output="$(UNIVERSAL_VIDEO_COPY_SOURCE="$root_tmp" UNIVERSAL_VIDEO_COPY_TARGET="$request_tmp" "$SYSTEM_PYTHON" -c '
+import errno, os, stat
+source_fd = target_fd = None
+try:
+    source_fd = os.open(os.environ["UNIVERSAL_VIDEO_COPY_SOURCE"], os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    target_fd = os.open(os.environ["UNIVERSAL_VIDEO_COPY_TARGET"], os.O_WRONLY | os.O_TRUNC | os.O_CLOEXEC | os.O_NOFOLLOW)
+    if not stat.S_ISREG(os.fstat(source_fd).st_mode) or not stat.S_ISREG(os.fstat(target_fd).st_mode):
+        raise OSError(errno.EPERM, "unsafe copy endpoint")
+    while True:
+        block = os.read(source_fd, 65536)
+        if not block:
+            break
+        view = memoryview(block)
+        while view:
+            view = view[os.write(target_fd, view):]
+    os.fsync(target_fd)
+    os.fchmod(target_fd, 0o600)
+    print("UV_COPY_PASS")
+except OSError as exc:
+    code = {
+        errno.EACCES: "UV_INTAKE_PERMISSION_DENIED",
+        errno.EPERM: "UV_INTAKE_PERMISSION_DENIED",
+        errno.ENOSPC: "UV_INTAKE_DISK_FULL",
+        errno.EROFS: "UV_INTAKE_READ_ONLY",
+    }.get(exc.errno, "UV_INTAKE_IO_FAILED")
+    print("UV_ERROR_CODE=" + code)
+    raise SystemExit(1)
+except BaseException:
+    print("UV_ERROR_CODE=UV_INTAKE_EXECUTION_FAILED")
+    raise SystemExit(1)
+finally:
+    for descriptor in (source_fd, target_fd):
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+' 2>/dev/null)"
+  copy_rc=$?
+  set -e
+  if (( copy_rc != 0 )); then
+    copy_code="$(sed -nE 's/^UV_ERROR_CODE=(UV_INTAKE_[A-Z0-9_]{1,96})$/\1/p' <<<"$copy_output" | tail -n1)"
+    [[ -n "$copy_code" ]] || copy_code='UV_INTAKE_EXECUTION_FAILED'
     if ! cleanup_staged_files "$root_tmp" "$request_tmp"; then
       intake_reject 'UV_INTAKE_CLEANUP_FAILED'
       return 1
@@ -116,7 +159,7 @@ except BaseException:
     root_tmp=''
     request_tmp=''
     trap - EXIT
-    intake_reject 'UV_INTAKE_IO_FAILED'
+    intake_reject "$copy_code"
     return 1
   fi
   set +e

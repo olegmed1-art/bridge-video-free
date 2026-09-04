@@ -138,3 +138,14 @@ def test_batch_intake_temp_creation_preserves_bounded_errno_codes() -> None:
     assert 'errno.EROFS: "UV_INTAKE_READ_ONLY"' in batch
     assert 'errno.EACCES: "UV_INTAKE_PERMISSION_DENIED"' in batch
     assert 'intake_reject "$request_code"' in batch
+
+
+def test_batch_copy_preserves_bounded_errno_codes() -> None:
+    batch = _function("enqueue_batch", "batch_status")
+    assert "UNIVERSAL_VIDEO_COPY_SOURCE" in batch
+    assert "os.O_NOFOLLOW" in batch
+    assert 'errno.ENOSPC: "UV_INTAKE_DISK_FULL"' in batch
+    assert 'errno.EROFS: "UV_INTAKE_READ_ONLY"' in batch
+    assert 'errno.EACCES: "UV_INTAKE_PERMISSION_DENIED"' in batch
+    assert 'intake_reject "$copy_code"' in batch
+    assert "install -o universal-video" not in batch
