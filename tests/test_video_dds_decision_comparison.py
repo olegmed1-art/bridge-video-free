@@ -191,11 +191,15 @@ def test_public_context_and_refs_are_allowlisted_against_hidden_card_payloads():
         build_offline_dds_comparison(
             value, _board_evidence(), _logic_evidence(), dds_request_executor=_executor()
         )
-    value = _observation(); value["decision"]["evidence_refs"] = ["AKQJ.T98.765.432"]
-    with pytest.raises(VideoDDSComparisonError, match="invalid decision evidence ref"):
-        build_offline_dds_comparison(
-            value, _board_evidence(), _logic_evidence(), dds_request_executor=_executor()
-        )
+    for hidden_ref in (
+        "AKQJ.T98.765.432", "AKQJ/T98/765/432", "AKQx.Txx.xxx.xxx",
+        "partner-hand:AKQ", "partnerHand:AKQ", "opponent/cards/SA",
+    ):
+        value = _observation(); value["decision"]["evidence_refs"] = [hidden_ref]
+        with pytest.raises(VideoDDSComparisonError, match="invalid decision evidence ref"):
+            build_offline_dds_comparison(
+                value, _board_evidence(), _logic_evidence(), dds_request_executor=_executor()
+            )
     value = _observation(); value["decision"]["evidence_refs"] = ["frame:N:AKQJ.T98.765.432"]
     with pytest.raises(VideoDDSComparisonError, match="invalid decision evidence ref"):
         build_offline_dds_comparison(

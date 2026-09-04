@@ -433,6 +433,11 @@ SELECT EXISTS (
        AND replace(replace(replace(replace(
              w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:') ~*
            E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])[[:space:]]+(?:is|was|remains?)[[:space:]]+void[[:space:]]+(?:(?:in|of)[[:space:]]+)?(?:spades?|hearts?|diamonds?|clubs?|[SHDC][[:space:]]*:?)($|[^[:alnum:]_])'
+  ) OR EXISTS (
+    SELECT 1 FROM walk AS w
+     WHERE jsonb_typeof(w.value)='string'
+       AND w.value#>>'{}' ~*
+           E'(?:(?:^|[^[:alnum:]_])у[[:space:]]+(?:партн[её]ра|соперника|оппонента)|(?:^|[^[:alnum:]_])(?:партн[её]р|соперник|оппонент)[[:space:]]+(?:имеет|держит))[[:space:]]+(?:(?:есть|был[аио]?|имел[аио]?)[[:space:]]+)?(?:(?:туз|корол[ья]|дам[ауы]?|валет[а]?|десятк[аиу]?|10|[AKQJT2-9])[[:space:]]+(?:пик|черв(?:ей|и|а)?|буб(?:ен|ны|на)?|треф(?:ы|а)?)|(?:пиков[[:alnum:]_]*|червов[[:alnum:]_]*|бубнов[[:alnum:]_]*|трефов[[:alnum:]_]*)[[:space:]]+(?:туз[[:alnum:]_]*|корол[[:alnum:]_]*|дам[[:alnum:]_]*|валет[[:alnum:]_]*|десятк[[:alnum:]_]*))($|[^[:alnum:]_])'
   );
 $$;
 

@@ -100,6 +100,16 @@ _VOID_HIDDEN_HOLDING = re.compile(
     r"(?:spades?|hearts?|diamonds?|clubs?|[SHDC]\s*:)(?:\b|(?=\s|$))",
     re.IGNORECASE,
 )
+_RUSSIAN_HIDDEN_POSSESSION = re.compile(
+    r"(?:(?<!\w)у\s+(?:партн[её]ра|соперника|оппонента)|"
+    r"(?<!\w)(?:партн[её]р|соперник|оппонент)\s+(?:имеет|держит))\s+"
+    r"(?:(?:есть|был[аио]?|имел[аио]?)\s+)?(?:"
+    r"(?:туз|корол[ья]|дам[ауы]?|валет[а]?|десятк[аиу]?|10|[AKQJT2-9])\s+"
+    r"(?:пик|черв(?:ей|и|а)?|буб(?:ен|ны|на)?|треф(?:ы|а)?)|"
+    r"(?:пиков\w*|червов\w*|бубнов\w*|трефов\w*)\s+"
+    r"(?:туз\w*|корол\w*|дам\w*|валет\w*|десятк\w*))\b",
+    re.IGNORECASE,
+)
 _LEADING_HOLDING_CARD_GROUP = re.compile(
     r"^\s*(?:[:,;=\-]\s*)?(?:(?:the|a|an)\s+)?(?:"
     r"(?:ace|king|queen|jack|ten)(?:\s+of\s+(?:spades?|hearts?|diamonds?|clubs?))?"
@@ -236,6 +246,7 @@ def _has_forbidden_value(value: Any) -> bool:
         if (
             _NEGATED_HIDDEN_HOLDING.search(normalized_value)
             or _VOID_HIDDEN_HOLDING.search(normalized_value)
+            or _RUSSIAN_HIDDEN_POSSESSION.search(normalized_value)
         ):
             return True
         if any(_is_complete_hand_shape(match.group("hand")) for match in _PBN_DEAL.finditer(normalized_value)):

@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 MIGRATION = (ROOT / "database/migrations/0322_workflow_video_canon_ai_promotion.sql").read_text()
 ROLLBACK = (ROOT / "database/rollbacks/0322_workflow_video_canon_ai_promotion.sql").read_text()
+DATABASE_TEST = (ROOT / "database/tests/322_workflow_video_canon_ai_promotion.sql").read_text()
 
 
 def test_ai_promotion_is_narrow_guarded_and_not_granted_to_general_workers():
@@ -94,6 +95,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "IN ('NaN','Infinity','-Infinity')",
         "BETWEEN 0.95 AND 1",
         "contains_forbidden_hidden_value(v_candidate.payload)",
+        "партн[её]ра|соперника|оппонента",
         "'active_rule_tests',active_rule_tests.rows",
         "'active_rule_sources',active_rule_sources.rows",
         "'active_canon_rules',active_canon_rules.rows",
@@ -213,6 +215,8 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "v_candidate.payload->>'review_eligibility' IS DISTINCT FROM 'AI_VERIFICATION_PENDING'",
     ):
         assert marker in MIGRATION
+
+    assert "У партнёра туз пик" in DATABASE_TEST
 
     assert "'hidden_cards','hidden_hand','hidden_hands'" in MIGRATION
     assert "'concealed_hand','concealed_hands'" in MIGRATION
