@@ -576,10 +576,10 @@ BEGIN
 
   SELECT rule_test_id INTO v_test_id FROM bidding.rule_test
    WHERE rule_id=v_old_rule AND test_type='positive';
-  INSERT INTO bidding.rule_test_run(
-    school_id,rule_test_id,result,result_details,method_version
-  ) VALUES (v_school,v_test_id,'fail','{}','restore-test-v1');
   BEGIN
+    INSERT INTO bidding.rule_test_run(
+      school_id,rule_test_id,result,result_details,method_version
+    ) VALUES (v_school,v_test_id,'fail','{}','restore-test-v1');
     PERFORM bidding.restore_ai_verified_video_canon(
       v_promotion,v_good_bundle_hash,repeat('d',64)
     );
