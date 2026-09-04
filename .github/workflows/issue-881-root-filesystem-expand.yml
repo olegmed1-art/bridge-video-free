@@ -512,6 +512,7 @@ jobs:
             if [[ -n "$failed_backup_ids" ]]; then
               readarray -t ids <<<"$failed_backup_ids"
               failed_backup_candidate_id=""
+              failed_backup_available_ids=""
               failed_backup_states=""
               for id in "${ids[@]}"; do
                 failed_backup_output=""
@@ -526,10 +527,6 @@ jobs:
                 fi
                 failed_backup_states="${failed_backup_states}${failed_backup_states:+,}${id}:${failed_backup_state}"
                 if [[ "$failed_backup_state" == AVAILABLE ]]; then
-                  [[ -z "$failed_backup_candidate_id" ]] || {
-                    state_set failed_run_backup_cleanup_status MULTIPLE_AVAILABLE_CANDIDATES
-                    exit 93
-                  }
                   BACKUP="$failed_backup_output" BOOT_ID="$boot_id" python - <<'PY'
           import json, os
           data = json.loads(os.environ['BACKUP'])['data']
@@ -539,6 +536,7 @@ jobs:
           assert data['size-in-gbs'] == 97
           PY
                   failed_backup_candidate_id="$id"
+                  failed_backup_available_ids="${failed_backup_available_ids}${failed_backup_available_ids:+,}${id}"
                 elif [[ "$failed_backup_state" == TERMINATED || "$failed_backup_state" == NOT_FOUND ]]; then
                   echo "UV_ROOT_RESOURCE_ABSENCE_PASS resource=backup id=$id terminal_state=$failed_backup_state"
                 else
@@ -547,6 +545,14 @@ jobs:
                 fi
               done
               state_set failed_run_backup_direct_get_states "$failed_backup_states"
+              state_set failed_run_backup_available_ids "${failed_backup_available_ids:-none}"
+              # Any duplicate exact identity is ambiguous even when some copies
+              # are already TERMINATED. Classify every ID first, then stop
+              # without deleting an AVAILABLE recovery candidate.
+              if (( ${#ids[@]} > 1 )); then
+                state_set failed_run_backup_cleanup_status MULTIPLE_EXACT_BACKUP_IDS
+                exit 93
+              fi
               if [[ -n "$failed_backup_candidate_id" ]]; then
                 state_set retained_backup_id "$failed_backup_candidate_id"
                 state_set failed_run_backup_cleanup_status RETAINED_AVAILABLE_REQUIRES_ACCEPTANCE

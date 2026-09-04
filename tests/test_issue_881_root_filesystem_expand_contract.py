@@ -326,7 +326,9 @@ def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> No
     assert "failed_run_backup_cleanup_status PROVEN_TERMINAL" in backup_filter
     assert "failed_run_backup_cleanup_status GET_FAILED" in backup_filter
     assert "failed_run_backup_cleanup_status UNKNOWN_STATE" in backup_filter
-    assert "failed_run_backup_cleanup_status MULTIPLE_AVAILABLE_CANDIDATES" in backup_filter
+    assert "failed_run_backup_cleanup_status MULTIPLE_EXACT_BACKUP_IDS" in backup_filter
+    assert "failed_run_backup_available_ids" in backup_filter
+    assert "if (( ${#ids[@]} > 1 ))" in backup_filter
     assert 'for id in "${ids[@]}"' in backup_filter
     assert "allocation_summary" in WORKFLOW
     assert "cleanup_only=true" in WORKFLOW
