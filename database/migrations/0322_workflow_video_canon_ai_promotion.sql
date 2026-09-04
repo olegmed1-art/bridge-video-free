@@ -285,6 +285,7 @@ CREATE TABLE bidding.video_canon_ai_promotion_receipt (
     candidate_payload_hash text NOT NULL CHECK (candidate_payload_hash ~ '^[0-9a-f]{64}$'),
     verification_bundle_sha256 text NOT NULL CHECK (verification_bundle_sha256 ~ '^[0-9a-f]{64}$'),
     policy_version text NOT NULL CHECK (policy_version='school-video-auto-canon-v1'),
+    semantic_scope text NOT NULL CHECK (btrim(semantic_scope)<>''),
     scope_key text NOT NULL CHECK (btrim(scope_key)<>''),
     rule_content_sha256 text NOT NULL CHECK (rule_content_sha256 ~ '^[0-9a-f]{64}$'),
     knowledge_version_content_sha256 text NOT NULL
@@ -544,6 +545,38 @@ SELECT encode(public.digest(convert_to(
   'UTF8'),'sha256'),'hex')
 $$;
 
+CREATE OR REPLACE FUNCTION bidding.video_canon_runtime_scope_key(
+  p_semantic_scope text,p_system_profile text,p_learner_level text
+) RETURNS text
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+STRICT
+SET search_path=pg_catalog,public
+AS $$
+SELECT 'video-canon:sha256:'||encode(public.digest(convert_to(
+  encode(public.digest(convert_to(p_semantic_scope,'UTF8'),'sha256'),'hex') ||
+  encode(public.digest(convert_to(p_system_profile,'UTF8'),'sha256'),'hex') ||
+  encode(public.digest(convert_to(p_learner_level,'UTF8'),'sha256'),'hex'),
+  'UTF8'),'sha256'),'hex')
+$$;
+
+CREATE OR REPLACE FUNCTION bidding.get_school_runtime_rule_catalog(
+  p_school_id uuid,p_semantic_scope text,p_system_profile text,p_learner_level text
+) RETURNS SETOF bidding.active_school_canon_rule_v
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path=pg_catalog,bidding,public
+AS $$
+SELECT * FROM bidding.active_school_canon_rule_v
+ WHERE school_id=p_school_id
+   AND scope_key=bidding.video_canon_runtime_scope_key(
+     p_semantic_scope,p_system_profile,p_learner_level
+   )
+ ORDER BY priority DESC,specificity DESC,rule_key
+$$;
+
 CREATE OR REPLACE FUNCTION bidding.video_canon_rule_test_state_sha256(p_rule_id uuid)
 RETURNS text
 LANGUAGE sql
@@ -747,7 +780,10 @@ BEGIN
      WHERE analysis_candidate_id=NEW.analysis_candidate_id;
     IF NOT FOUND OR v_candidate.school_id<>NEW.school_id
        OR v_candidate.payload_hash<>NEW.candidate_payload_hash
-       OR v_candidate.candidate_type<>'video_school_canon_candidate' THEN
+       OR v_candidate.candidate_type<>'video_school_canon_candidate'
+       OR v_candidate.status<>'active'
+       OR v_candidate.quality_status<>'AI_VERIFICATION_PENDING'
+       OR v_candidate.promotion_status NOT IN ('staging','review_queue') THEN
         RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_CANDIDATE_MISMATCH' USING ERRCODE='23514';
     END IF;
     BEGIN
@@ -759,8 +795,15 @@ BEGIN
     IF v_decoded<>NEW.bundle_payload OR v_computed<>NEW.verification_bundle_sha256
        OR NEW.bundle_payload->>'schema'<>'video-canon-ai-promotion-v1'
        OR NEW.bundle_payload->>'policy_version'<>'school-video-auto-canon-v1'
-       OR NEW.bundle_payload->>'candidate_payload_hash'<>NEW.candidate_payload_hash
-       OR NEW.bundle_payload->'candidate_payload'<>v_candidate.payload
+       OR jsonb_object_length(NEW.bundle_payload)<>12
+       OR NOT (NEW.bundle_payload ?& ARRAY[
+         'schema','policy_version','candidate_payload_hash','candidate_payload',
+         'system_profile','learner_level','effective_period','activation_scope',
+         'canon_snapshot_sha256','rule_test_state_sha256','checks','rollback'
+       ])
+       OR NEW.bundle_payload->>'candidate_payload_hash'
+            IS DISTINCT FROM NEW.candidate_payload_hash
+       OR NEW.bundle_payload->'candidate_payload' IS DISTINCT FROM v_candidate.payload
        OR NOT ((NEW.bundle_payload->>'canon_snapshot_sha256') ~ '^[0-9a-f]{64}$')
        OR NOT ((NEW.bundle_payload->>'rule_test_state_sha256') ~ '^[0-9a-f]{64}$')
        OR jsonb_typeof(NEW.bundle_payload->'checks')<>'array'
@@ -885,9 +928,23 @@ BEGIN
            OR NEW.method_version IS DISTINCT FROM OLD.method_version
            OR NEW.supersedes_candidate_id IS DISTINCT FROM OLD.supersedes_candidate_id
            OR NEW.status IS DISTINCT FROM OLD.status
-           OR (OLD.promotion_status='promoted' AND (
-               NEW.promotion_status<>'promoted' OR NEW.quality_status<>'AI_VERIFIED'
-           )) THEN
+           OR (
+             (NEW.promotion_status IS DISTINCT FROM OLD.promotion_status
+              OR NEW.quality_status IS DISTINCT FROM OLD.quality_status)
+             AND NOT (
+               OLD.status='active'
+               AND OLD.quality_status='AI_VERIFICATION_PENDING'
+               AND OLD.promotion_status IN ('staging','review_queue')
+               AND NEW.status='active'
+               AND NEW.quality_status='AI_VERIFIED'
+               AND NEW.promotion_status='promoted'
+               AND EXISTS (
+                 SELECT 1 FROM bidding.video_canon_ai_promotion_receipt p
+                  WHERE p.analysis_candidate_id=OLD.analysis_candidate_id
+                    AND p.candidate_payload_hash=OLD.payload_hash
+               )
+             )
+           ) THEN
             RAISE EXCEPTION 'VIDEO_CANON_BOUND_CANDIDATE_MUTATION_FORBIDDEN' USING ERRCODE='55000';
         END IF;
     END IF;
@@ -1212,6 +1269,7 @@ DECLARE
     v_semantic_principal text;
     v_bridge_principal text;
     v_firewall_principal text;
+    v_semantic_scope text;
     v_scope_key text;
     v_policy_version text;
     v_valid_from timestamptz;
@@ -1238,10 +1296,16 @@ BEGIN
      WHERE analysis_candidate_id=p_analysis_candidate_id
        AND candidate_payload_hash=v_candidate.payload_hash
        AND verification_bundle_sha256=p_verification_bundle_sha256;
-    IF NOT FOUND OR v_bundle.bundle_payload->'candidate_payload'<>v_candidate.payload THEN
+    IF NOT FOUND OR v_bundle.bundle_payload->'candidate_payload'
+          IS DISTINCT FROM v_candidate.payload THEN
         RAISE EXCEPTION 'VIDEO_CANON_VERIFICATION_BUNDLE_NOT_FOUND' USING ERRCODE='23514';
     END IF;
-    v_scope_key := v_bundle.bundle_payload->>'activation_scope';
+    v_semantic_scope := v_bundle.bundle_payload->>'activation_scope';
+    v_scope_key := bidding.video_canon_runtime_scope_key(
+      v_semantic_scope,
+      v_bundle.bundle_payload->>'system_profile',
+      v_bundle.bundle_payload->>'learner_level'
+    );
     v_policy_version := v_bundle.bundle_payload->>'policy_version';
     BEGIN
         v_valid_from := (v_bundle.bundle_payload#>>'{effective_period,valid_from}')::timestamptz;
@@ -1250,6 +1314,7 @@ BEGIN
         RAISE EXCEPTION 'VIDEO_CANON_EFFECTIVE_PERIOD_INVALID' USING ERRCODE='23514';
     END;
     IF v_policy_version<>'school-video-auto-canon-v1'
+       OR btrim(COALESCE(v_semantic_scope,''))=''
        OR btrim(COALESCE(v_scope_key,''))=''
        OR v_valid_from IS NULL OR v_valid_from>statement_timestamp()
        OR (v_valid_to IS NOT NULL AND (
@@ -1265,6 +1330,7 @@ BEGIN
         IF v_existing.candidate_payload_hash<>v_candidate.payload_hash
            OR v_existing.verification_bundle_sha256<>p_verification_bundle_sha256
            OR v_existing.policy_version<>v_policy_version
+           OR v_existing.semantic_scope<>v_semantic_scope
            OR v_existing.scope_key<>v_scope_key
            OR v_existing.rule_id<>p_rule_id THEN
             RAISE EXCEPTION 'VIDEO_CANON_IDEMPOTENCY_MISMATCH' USING ERRCODE='23514';
@@ -1288,13 +1354,15 @@ BEGIN
     END IF;
 
     IF v_candidate.candidate_type<>'video_school_canon_candidate'
+       OR v_candidate.status<>'active'
+       OR v_candidate.quality_status<>'AI_VERIFICATION_PENDING'
        OR v_candidate.promotion_status NOT IN ('staging','review_queue')
        OR v_candidate.payload->>'schema' IS DISTINCT FROM 'video-canon-evidence-v2'
        OR v_candidate.payload->>'review_eligibility' IS DISTINCT FROM 'AI_VERIFICATION_PENDING'
        OR v_candidate.payload->>'source_class' IS DISTINCT FROM 'SCHOOL_PRIMARY_EVIDENCE'
        OR v_candidate.payload#>>'{source_authorization,policy_version}'
             IS DISTINCT FROM v_policy_version
-       OR v_candidate.payload->>'semantic_scope' IS DISTINCT FROM v_scope_key
+       OR v_candidate.payload->>'semantic_scope' IS DISTINCT FROM v_semantic_scope
        OR v_candidate.payload->>'system_profile'
             IS DISTINCT FROM v_bundle.bundle_payload->>'system_profile'
        OR v_candidate.payload->>'learner_level'
@@ -1364,7 +1432,7 @@ BEGIN
        OR v_version.content<>v_candidate.payload
        OR v_version.bidding_system_key IS DISTINCT FROM
             v_bundle.bundle_payload->>'system_profile'
-       OR v_version.agreement_scope<>jsonb_build_object('scope_key',v_scope_key)
+       OR v_version.agreement_scope<>jsonb_build_object('scope_key',v_semantic_scope)
        OR v_version.level_scope<>jsonb_build_object(
             'level_key',v_bundle.bundle_payload->>'learner_level'
           )
@@ -1407,7 +1475,7 @@ BEGIN
        AND p.source_sha256=v_candidate.payload#>>'{source,source_sha256}'
        AND p.video_file_id=v_candidate.payload#>>'{source,video_file_id}'
        AND (v_candidate.payload#>>'{teacher_assertion,speaker_id}')=ANY(p.teacher_ids)
-       AND v_scope_key=ANY(p.semantic_scopes)
+       AND v_semantic_scope=ANY(p.semantic_scopes)
        AND p.policy_version=v_policy_version
        AND p.authorization_evidence_sha256=v_candidate.payload#>>'{source_authorization,authorization_evidence_sha256}'
        AND p.system_profile=v_bundle.bundle_payload->>'system_profile'
@@ -1704,7 +1772,7 @@ BEGIN
 
     INSERT INTO bidding.video_canon_ai_promotion_receipt(
       school_id,analysis_candidate_id,candidate_payload_hash,verification_bundle_sha256,
-      policy_version,scope_key,rule_content_sha256,knowledge_version_content_sha256,
+      policy_version,semantic_scope,scope_key,rule_content_sha256,knowledge_version_content_sha256,
       rule_test_state_sha256,rule_id,canon_activation_id,runtime_activation_id,
       superseded_canon_activation_id,superseded_canon_valid_to,
       superseded_runtime_activation_ids,superseded_runtime_state,superseded_rule_state,
@@ -1713,7 +1781,7 @@ BEGIN
       superseded_knowledge_item_content_sha256,promotion_mode,human_approval_required
     ) VALUES (
       v_candidate.school_id,p_analysis_candidate_id,v_candidate.payload_hash,p_verification_bundle_sha256,
-      v_policy_version,v_scope_key,v_rule_content_sha256,v_version_content_sha256,
+      v_policy_version,v_semantic_scope,v_scope_key,v_rule_content_sha256,v_version_content_sha256,
       v_rule_test_state_sha256,p_rule_id,v_canon_activation,v_runtime_activation,
       v_prior_canon.canon_activation_id,v_prior_canon.valid_to,
       v_prior_runtime_ids,v_prior_runtime_state,v_prior_rule_state,
@@ -1919,7 +1987,7 @@ BEGIN
                AND p.source_sha256=c.payload#>>'{source,source_sha256}'
                AND p.video_file_id=c.payload#>>'{source,video_file_id}'
                AND (c.payload#>>'{teacher_assertion,speaker_id}')=ANY(p.teacher_ids)
-               AND v_prior_promotion.scope_key=ANY(p.semantic_scopes)
+               AND v_prior_promotion.semantic_scope=ANY(p.semantic_scopes)
                AND p.authorization_evidence_sha256=
                      c.payload#>>'{source_authorization,authorization_evidence_sha256}'
              FOR SHARE OF p,s;
@@ -2163,6 +2231,10 @@ GRANT EXECUTE ON FUNCTION bidding.activate_ai_verified_video_canon(uuid,uuid,tex
 REVOKE ALL ON FUNCTION bidding.restore_ai_verified_video_canon(uuid,text,text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION bidding.restore_ai_verified_video_canon(uuid,text,text)
   TO bridge_school_canon_restorer;
+REVOKE ALL ON FUNCTION bidding.video_canon_runtime_scope_key(text,text,text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION bidding.get_school_runtime_rule_catalog(uuid,text,text,text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION bidding.get_school_runtime_rule_catalog(uuid,text,text,text)
+  TO bridge_school_reader,bridge_school_app,bridge_school_worker;
 
 GRANT SELECT ON bidding.video_canon_source_policy,bidding.video_canon_ai_verification_bundle,
   bidding.video_canon_verifier_registry,
@@ -2173,6 +2245,7 @@ GRANT SELECT ON bidding.video_canon_source_policy,bidding.video_canon_ai_verific
 REVOKE ALL ON FUNCTION bidding.is_complete_bridge_hand(text),
   bidding.is_video_canon_semantic_confidence_eligible(jsonb),
   bidding.video_canon_semantic_identity_sha256(jsonb),
+  bidding.video_canon_runtime_scope_key(text,text,text),
   bidding.video_canon_rule_test_state_sha256(uuid),
   bidding.video_canon_rule_restore_sha256(uuid),
   bidding.current_school_canon_snapshot_sha256(uuid) FROM PUBLIC;

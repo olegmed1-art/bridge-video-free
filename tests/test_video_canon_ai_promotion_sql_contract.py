@@ -244,7 +244,14 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "candidate_payload_hash=v_candidate.payload_hash" in MIGRATION
     assert "verification_bundle_sha256" in MIGRATION
     assert "bundle_canonical_json" in MIGRATION
-    assert "NEW.bundle_payload->'candidate_payload'<>v_candidate.payload" in MIGRATION
+    assert "jsonb_object_length(NEW.bundle_payload)<>12" in MIGRATION
+    assert "NEW.bundle_payload->'candidate_payload' IS DISTINCT FROM v_candidate.payload" in MIGRATION
+    assert "v_candidate.quality_status<>'AI_VERIFICATION_PENDING'" in MIGRATION
+    assert "p.candidate_payload_hash=OLD.payload_hash" in MIGRATION
+    assert "video_canon_runtime_scope_key" in MIGRATION
+    assert "v_existing.semantic_scope<>v_semantic_scope" in MIGRATION
+    assert "v_prior_promotion.semantic_scope=ANY(p.semantic_scopes)" in MIGRATION
+    assert "get_school_runtime_rule_catalog(uuid,text,text,text)" in MIGRATION
     assert "VIDEO_CANON_BOUND_CANDIDATE_MUTATION_FORBIDDEN" in MIGRATION
     assert "v.verification_bundle_sha256=p_verification_bundle_sha256" in MIGRATION
     assert "VIDEO_CANON_IDEMPOTENCY_MISMATCH" in MIGRATION
@@ -280,6 +287,8 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "DROP FUNCTION bidding.video_canon_rule_test_state_sha256" in ROLLBACK
     assert "DROP FUNCTION bidding.video_canon_rule_restore_sha256" in ROLLBACK
     assert "DROP FUNCTION bidding.video_canon_semantic_identity_sha256" in ROLLBACK
+    assert "DROP FUNCTION bidding.video_canon_runtime_scope_key" in ROLLBACK
+    assert "DROP FUNCTION bidding.get_school_runtime_rule_catalog(uuid,text,text,text)" in ROLLBACK
     assert "DROP FUNCTION bidding.bind_rule_key_identity" in ROLLBACK
     assert "DROP TABLE bidding.rule_key_identity" in ROLLBACK
     assert "ADD CONSTRAINT rule_school_id_rule_key_key" in ROLLBACK

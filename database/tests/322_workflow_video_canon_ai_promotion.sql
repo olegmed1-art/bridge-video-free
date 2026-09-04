@@ -335,6 +335,14 @@ BEGIN
      ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_SEMANTIC_IDENTITY_INVALID';
   END IF;
+  IF bidding.video_canon_runtime_scope_key('scope-1','natural-v1','beginner-1')
+       = bidding.video_canon_runtime_scope_key('scope-1','precision-v1','beginner-1')
+     OR bidding.video_canon_runtime_scope_key('scope-1','natural-v1','beginner-1')
+       = bidding.video_canon_runtime_scope_key('scope-1','natural-v1','advanced-1')
+     OR bidding.video_canon_runtime_scope_key('scope-1','natural-v1','beginner-1')
+       !~ '^video-canon:sha256:[0-9a-f]{64}$' THEN
+    RAISE EXCEPTION 'VIDEO_CANON_RUNTIME_SCOPE_PARTITION_INVALID';
+  END IF;
   IF bidding.current_school_canon_snapshot_sha256(
        (SELECT school_id FROM public.school ORDER BY school_id LIMIT 1)
      ) !~ '^[0-9a-f]{64}$' THEN
@@ -390,6 +398,9 @@ DECLARE
   v_policy_failed boolean:=false;
   v_cross_school_policy_failed boolean:=false;
   v_bad_bundle_failed boolean:=false;
+  v_missing_bundle_field_failed boolean:=false;
+  v_candidate_state_failed boolean:=false;
+  v_missing_bundle_field text;
   v_late_verification_failed boolean:=false;
   v_target_binding_failed boolean:=false;
   v_version_content_failed boolean:=false;
@@ -568,12 +579,15 @@ BEGIN
     ),repeat('1',64),'video-canon-evidence-v2',v_source
   ),(
     v_candidate,v_school,'video_school_canon_candidate','restore-'||v_candidate::text,
-    repeat('f',64),'AI_VERIFIED','promoted','{}',repeat('a',64),'video-canon-evidence-v2',v_source
+    repeat('f',64),'AI_VERIFICATION_PENDING','staging','{}',repeat('a',64),
+    'video-canon-evidence-v2',v_source
   );
   SELECT jsonb_build_object(
     'schema','video-canon-ai-promotion-v1',
     'policy_version','school-video-auto-canon-v1',
     'candidate_payload_hash',repeat('a',64),'candidate_payload','{}'::jsonb,
+    'system_profile','natural-v1','learner_level','beginner-1',
+    'activation_scope','restore-scope',
     'canon_snapshot_sha256',repeat('0',64),
     'rule_test_state_sha256',repeat('6',64),
     'checks',jsonb_agg(jsonb_build_object(
@@ -601,6 +615,37 @@ BEGIN
     v_bundle_id,v_school,v_candidate,repeat('a',64),v_good_bundle_hash,
     v_good_bundle::text,v_good_bundle
   );
+  FOREACH v_missing_bundle_field IN ARRAY ARRAY[
+    'candidate_payload_hash','candidate_payload'
+  ] LOOP
+    v_missing_bundle_field_failed:=false;
+    v_bad_bundle:=v_good_bundle-v_missing_bundle_field;
+    BEGIN
+      INSERT INTO bidding.video_canon_ai_verification_bundle(
+        school_id,analysis_candidate_id,candidate_payload_hash,
+        verification_bundle_sha256,bundle_canonical_json,bundle_payload
+      ) VALUES (
+        v_school,v_candidate,repeat('a',64),
+        encode(public.digest(convert_to(v_bad_bundle::text,'UTF8'),'sha256'),'hex'),
+        v_bad_bundle::text,v_bad_bundle
+      );
+    EXCEPTION WHEN check_violation THEN
+      v_missing_bundle_field_failed:=true;
+    END;
+    IF NOT v_missing_bundle_field_failed THEN
+      RAISE EXCEPTION 'VIDEO_CANON_MISSING_BUNDLE_BINDING_NOT_BLOCKED: %',
+        v_missing_bundle_field;
+    END IF;
+  END LOOP;
+  BEGIN
+    UPDATE public.analysis_candidate SET quality_status='REJECTED'
+     WHERE analysis_candidate_id=v_candidate;
+  EXCEPTION WHEN object_not_in_prerequisite_state THEN
+    v_candidate_state_failed:=true;
+  END;
+  IF NOT v_candidate_state_failed THEN
+    RAISE EXCEPTION 'VIDEO_CANON_BOUND_CANDIDATE_STATE_MUTATION_NOT_BLOCKED';
+  END IF;
   v_bad_bundle:=jsonb_set(v_good_bundle,'{checks,0,result}','"FAIL"'::jsonb);
   BEGIN
     INSERT INTO bidding.video_canon_ai_verification_bundle(
@@ -669,13 +714,14 @@ BEGIN
   ));
   INSERT INTO bidding.video_canon_ai_promotion_receipt(
     video_canon_ai_promotion_receipt_id,school_id,analysis_candidate_id,
-    candidate_payload_hash,verification_bundle_sha256,policy_version,scope_key,
+    candidate_payload_hash,verification_bundle_sha256,policy_version,semantic_scope,scope_key,
     rule_content_sha256,knowledge_version_content_sha256,rule_test_state_sha256,
     rule_id,canon_activation_id,runtime_activation_id,
     promotion_mode,human_approval_required
   ) VALUES (
     v_old_promotion,v_school,v_old_candidate,repeat('1',64),repeat('2',64),
-    'school-video-auto-canon-v1','restore-scope',repeat('3',64),v_old_version_digest,
+    'school-video-auto-canon-v1','restore-scope','restore-scope',
+    repeat('3',64),v_old_version_digest,
     v_old_rule_test_state_digest,v_old_rule,v_old_canon,v_old_runtime,
     'AI_VERIFIED_TEACHER_VIDEO',false
   );
@@ -712,7 +758,7 @@ BEGIN
   END IF;
   INSERT INTO bidding.video_canon_ai_promotion_receipt(
     video_canon_ai_promotion_receipt_id,school_id,analysis_candidate_id,
-    candidate_payload_hash,verification_bundle_sha256,policy_version,scope_key,
+    candidate_payload_hash,verification_bundle_sha256,policy_version,semantic_scope,scope_key,
     rule_content_sha256,knowledge_version_content_sha256,rule_test_state_sha256,
     rule_id,canon_activation_id,runtime_activation_id,
     superseded_canon_activation_id,superseded_canon_valid_to,
@@ -722,7 +768,8 @@ BEGIN
     superseded_knowledge_item_content_sha256,promotion_mode,human_approval_required
   ) VALUES (
     v_promotion,v_school,v_candidate,repeat('a',64),v_good_bundle_hash,
-    'school-video-auto-canon-v1','restore-scope',repeat('b',64),repeat('c',64),
+    'school-video-auto-canon-v1','restore-scope','restore-scope',
+    repeat('b',64),repeat('c',64),
     repeat('6',64),v_new_rule,v_new_canon,v_new_runtime,v_old_canon,NULL,ARRAY[v_old_runtime],
     jsonb_build_array(jsonb_build_object(
       'runtime_activation_id',v_old_runtime,'valid_to',NULL
@@ -733,6 +780,9 @@ BEGIN
     v_old_predecessor_version_digest,v_old_item_digest,
     'AI_VERIFIED_TEACHER_VIDEO',false
   );
+  UPDATE public.analysis_candidate
+     SET quality_status='AI_VERIFIED',promotion_status='promoted'
+   WHERE analysis_candidate_id=v_candidate;
   BEGIN
     UPDATE public.source SET school_id=v_other_school WHERE source_id=v_source;
   EXCEPTION WHEN check_violation THEN

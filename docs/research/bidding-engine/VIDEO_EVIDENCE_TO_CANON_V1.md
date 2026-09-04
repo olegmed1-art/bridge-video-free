@@ -84,6 +84,11 @@ scope, system profile, learner level and normalized `rule_key`. Statement,
 source and rule-content hashes remain version provenance, so a correction gets
 a new candidate/content hash and knowledge version while retaining the same
 knowledge item. The database recomputes this identity before promotion.
+Runtime activation uses a separate deterministic scope key derived from the
+semantic scope, system profile and learner level. Video-Canon readers resolve
+it through the four-argument `get_school_runtime_rule_catalog` overload; this
+prevents rules from different profiles or learner levels from sharing one
+runtime catalog while retaining the original semantic scope in the receipt.
 This RPC admits only an effective `valid_from` at or before transaction time.
 A future-dated transition requires a separate scheduler; rejecting it here
 prevents the current version from being superseded before the replacement is

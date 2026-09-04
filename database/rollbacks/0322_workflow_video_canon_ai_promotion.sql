@@ -16,6 +16,7 @@ BEGIN
 END $$;
 DROP FUNCTION bidding.restore_ai_verified_video_canon(uuid,text,text);
 DROP FUNCTION bidding.activate_ai_verified_video_canon(uuid,uuid,text);
+DROP FUNCTION bidding.get_school_runtime_rule_catalog(uuid,text,text,text);
 DROP VIEW bidding.video_canon_bound_candidate;
 DROP TRIGGER video_canon_restore_receipt_append_only ON bidding.video_canon_ai_restore_receipt;
 DROP TRIGGER video_correction_review_receipt_append_only ON bidding.video_correction_review_receipt;
@@ -49,6 +50,7 @@ DROP FUNCTION bidding.current_school_canon_snapshot_sha256(uuid);
 DROP FUNCTION bidding.video_canon_rule_test_state_sha256(uuid);
 DROP FUNCTION bidding.video_canon_rule_restore_sha256(uuid);
 DROP FUNCTION bidding.video_canon_semantic_identity_sha256(jsonb);
+DROP FUNCTION bidding.video_canon_runtime_scope_key(text,text,text);
 DROP FUNCTION bidding.contains_forbidden_hidden_value(jsonb);
 DROP FUNCTION bidding.is_video_canon_semantic_confidence_eligible(jsonb);
 DROP FUNCTION bidding.is_complete_bridge_hand(text);
