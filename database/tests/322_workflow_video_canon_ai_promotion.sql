@@ -223,6 +223,10 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North: AK"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"Партнёр: туз пик"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"Соперник: Q"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N:AKQJ109.876.54.32"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s hand was S:AKQJ109 H:876 D:54 C:32"}'::jsonb
@@ -260,6 +264,8 @@ BEGIN
        '{"notes":"Partner''s agreement is forcing"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"North owns the decision process"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"Партнёр: правило форсирует"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"North held 10 points"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
