@@ -131,8 +131,8 @@ def test_paid_and_temporary_creates_capture_before_separate_waits() -> None:
         assert resource_get in block
     assert block.count("--wait-for-state AVAILABLE") >= 7
     assert block.count("--wait-for-state AVAILABLE --max-wait-seconds 300") == 5
-    assert "explicit OCI waiters consume at most 235 minutes" in WORKFLOW
-    assert "at least 95 minutes" in WORKFLOW
+    assert "explicit OCI waiters consume at most 240 minutes" in WORKFLOW
+    assert "least 90 minutes" in WORKFLOW
 
 
 def test_cleanup_rediscovery_is_scoped_to_attempted_unique_resources() -> None:
@@ -164,7 +164,8 @@ def test_rerun_stamp_and_prior_attempt_reconciliation_precede_creation() -> None
     ]
     assert 'run_prefix="issue-881-${GITHUB_RUN_ID}"' in block
     assert 'stamp="${prior_prefix}${GITHUB_RUN_ATTEMPT}"' in block
-    assert 'backup_name="${run_prefix}-full"' in block
+    assert 'backup_prefix="issue-881-root-recovery-${boot_tag}"' in block
+    assert 'backup_name="${backup_prefix}-${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"' in block
     reconcile = block.index("reconcile_prior_attempt_resources")
     create = block.index("boot-volume-backup create")
     assert reconcile < create
@@ -185,16 +186,22 @@ def test_rerun_stamp_and_prior_attempt_reconciliation_precede_creation() -> None
     assert 'drill_instance_id="$(discover_named_id instance "$stamp-boot-acceptance")" || failed=1' in block
 
 
-def test_rerun_reuses_one_stable_backup_instead_of_accumulating_backups() -> None:
+def test_separate_commands_keep_one_operation_scoped_proven_backup() -> None:
     block = WORKFLOW[
-        WORKFLOW.index('backup_name="${run_prefix}-full"') :
+        WORKFLOW.index('backup_prefix="issue-881-root-recovery-${boot_tag}"') :
         WORKFLOW.index("Resolve pinned SSH identity")
     ]
-    lookup = block.index('backup_id="$(discover_named_id backup "$backup_name")"')
+    lookup = block.index("select_fresh_operation_backup")
     create = block.index("boot-volume-backup create")
     assert lookup < create
     assert '--display-name "$backup_name"' in block
     assert '--display-name "$stamp-full"' not in block
+    acceptance = block.index("UV_RESTORED_ROOT_BOOT_ACCEPTANCE_PASS")
+    retire = block.index("superseded_operation_backups", acceptance)
+    assert acceptance < retire
+    assert "boot-volume-backup delete" in block[retire:]
+    assert "wait_all_absent backup 60" in block[retire:]
+    assert "superseded_backup_count=0" in block[retire:]
 
 
 def test_receipt_reports_backup_only_from_proven_step_output() -> None:
@@ -203,6 +210,8 @@ def test_receipt_reports_backup_only_from_proven_step_output() -> None:
     assert 'if [[ -n "$BACKUP_ID" ]]' in receipt
     assert "fresh backup retained: \\`true\\`; proven backup ID" in receipt
     assert "fresh backup retained: `unknown`" in receipt
+    assert "SUPERSEDED_BACKUP_COUNT: ${{ steps.backup.outputs.superseded_backup_count }}" in receipt
+    assert "superseded operation backups remaining" in receipt
     assert "fresh backup retained: `true` (billable" not in receipt
 
 
