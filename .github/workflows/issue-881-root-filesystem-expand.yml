@@ -106,10 +106,13 @@ jobs:
           echo "receipt_deadline=$((monotonic_now + 20700))" >> "$GITHUB_OUTPUT"
       - name: Create fresh full backup and prove isolated restored-root boot acceptance
         id: backup
+        env:
+          PRIMARY_DEADLINE: ${{ steps.budget.outputs.primary_deadline }}
+          CLEANUP_DEADLINE: ${{ steps.budget.outputs.cleanup_deadline }}
         run: |
           set -euo pipefail
-          primary_deadline='${{ steps.budget.outputs.primary_deadline }}'
-          cleanup_deadline='${{ steps.budget.outputs.cleanup_deadline }}'
+          primary_deadline="$PRIMARY_DEADLINE"
+          cleanup_deadline="$CLEANUP_DEADLINE"
           [[ "$primary_deadline" =~ ^[0-9]+$ && "$cleanup_deadline" =~ ^[0-9]+$ ]]
           (( cleanup_deadline > primary_deadline ))
           monotonic_now() { awk '{print int($1)}' /proc/uptime; }

@@ -101,6 +101,14 @@ def test_monotonic_budget_reserves_cleanup_mutation_receipt_and_runner_slack() -
     assert 'cleanup_deadline=$((monotonic_now + 16800))' in WORKFLOW
     assert 'mutation_deadline=$((monotonic_now + 19200))' in WORKFLOW
     assert 'receipt_deadline=$((monotonic_now + 20700))' in WORKFLOW
+    backup_step = WORKFLOW[
+        WORKFLOW.index("Create fresh full backup and prove isolated restored-root boot acceptance") :
+        WORKFLOW.index("Resolve pinned SSH identity")
+    ]
+    assert "PRIMARY_DEADLINE: ${{ steps.budget.outputs.primary_deadline }}" in backup_step
+    assert "CLEANUP_DEADLINE: ${{ steps.budget.outputs.cleanup_deadline }}" in backup_step
+    assert "primary_deadline='${{ steps.budget.outputs.primary_deadline }}'" not in backup_step
+    assert "cleanup_deadline='${{ steps.budget.outputs.cleanup_deadline }}'" not in backup_step
     assert 14400 + 2400 + 2400 + 1500 + 900 == 360 * 60
 
     # Worst-case current-attempt cleanup: eight 30s exact-name rediscoveries,
