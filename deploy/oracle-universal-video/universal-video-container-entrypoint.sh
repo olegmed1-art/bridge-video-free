@@ -1,5 +1,6 @@
 #!/usr/bin/env sh
 set -eu
+umask 0027
 
 # Do not permit an implicit Hugging Face download during a production job.  A
 # model is populated by a deliberate image/mount preparation step and proven

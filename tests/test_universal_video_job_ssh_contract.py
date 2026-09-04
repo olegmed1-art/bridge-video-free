@@ -36,7 +36,7 @@ def test_job_invokes_only_fixed_resident_admin_surfaces():
     assert "--execution-user" not in WORKFLOW
     assert "repair_cmd='sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video-spool-repair'" in WORKFLOW
     assert 'submit_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video submit-drive-base64 \'$payload\'"' in WORKFLOW
-    assert 'status_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video status \'$JOB_ID\'"' in WORKFLOW
+    assert "status '$JOB_ID' '$PROFILE' '$JOB_HASH' '$SOURCE_FILE_ID'" in WORKFLOW
     assert 'run_remote "$repair_cmd"' in WORKFLOW
     assert 'run_remote "$submit_cmd"' in WORKFLOW
     assert 'run_remote "$status_cmd"' in WORKFLOW
@@ -47,7 +47,7 @@ def test_job_invokes_only_fixed_resident_admin_surfaces():
 
 def test_bootstrap_smoke_does_not_require_container_before_promotion():
     bootstrap = (ROOT / "ops/oracle_universal_video_run_command.sh").read_text(encoding="utf-8")
-    assert "/usr/local/sbin/universal-video status .." in bootstrap
+    assert "/usr/local/sbin/universal-video status .. smoke" in bootstrap
     assert "UNIVERSAL_VIDEO_OPERATOR_REJECTION_SMOKE_PASS" in bootstrap
     assert "/usr/local/sbin/universal-video status install-smoke" not in bootstrap
 
@@ -59,12 +59,29 @@ def test_job_payload_binds_request_and_requested_runtime_for_resident_attestatio
 
 
 def test_existing_job_resumes_by_exact_id_instead_of_duplicate_submission():
-    assert "UV_ERROR=job id already exists; use status or a new id" in WORKFLOW
+    assert "UV_ERROR_CODE=UV_INTAKE_JOB_EXISTS" in WORKFLOW
     assert "PRE_SUBMIT_ERROR_CODE=UV_EXISTING_JOB_RESUMED" in WORKFLOW
     assert "PRE_SUBMIT_ERROR_CODE=UV_RESUME_STATUS_COMMAND_FAILED" in WORKFLOW
     assert "entry='RESUMED'" in WORKFLOW
     assert 'initial="$(run_remote "$status_cmd")"' in WORKFLOW
     assert "SOURCE_READY_ON_ORACLE|RUNNING|PROCESSING" in WORKFLOW
+    assert "canonical_job_hash(validated)" in WORKFLOW
+    assert "print('job_id='+validated.job_id)" in WORKFLOW
+    assert "print('profile='+validated.profile)" in WORKFLOW
+    assert "job_hash: ${{ steps.request.outputs.job_hash }}" in WORKFLOW
+    assert "source_file_id: ${{ steps.request.outputs.source_file_id }}" in WORKFLOW
+    assert "inspect-job" in OPERATOR
+    assert "inspect-done" in OPERATOR
+    assert "inspect-done-bound" in OPERATOR
+    assert "--expected-artifact-set-sha256" in OPERATOR
+    assert "PENDING_JOB_IDENTITY_MISMATCH" in OPERATOR
+    assert "DONE_RECEIPT_IDENTITY_MISMATCH" in OPERATOR
+    assert "RESULT_CONFORMANCE_FAILED" in OPERATOR
+    assert "-m universal_video.result_conformance" in OPERATOR
+    assert "--require-server-review" in OPERATOR
+    assert "STATUS_TRANSITION_RETRY=$(( ${STATUS_TRANSITION_RETRY:-0} + 1 )) status" in OPERATOR
+    assert '"${STATUS_TRANSITION_RETRY:-0}" -lt 3' in OPERATOR
+    assert '[[ ! -e "$receipt"' in OPERATOR
 
 
 def test_operator_and_admin_sudoers_ownership_cannot_collide():
@@ -85,6 +102,10 @@ def test_job_keeps_remote_output_fail_closed_and_bounded():
     assert "|ERROR_TYPE|ERROR_CODE)=" in WORKFLOW
     assert "|ERROR_TYPE|ERROR)=" not in WORKFLOW
     assert "PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_COMMAND_FAILED" in WORKFLOW
+    assert "code='UV_SUBMIT_INTAKE_IO_FAILED'" in WORKFLOW
+    assert "code='UV_SUBMIT_INTAKE_EXECUTION_FAILED'" in WORKFLOW
+    assert "code='UV_SUBMIT_INTAKE_REJECTED'" in WORKFLOW
+    assert "UV_SUBMIT_INTAKE_RUNTIME_FAILED" not in WORKFLOW
     assert "PRE_SUBMIT_ERROR_CODE=UV_SUBMIT_SERVICE_INACTIVE" not in WORKFLOW
     assert "UV_ERROR=universal-video-container.service inactive" in WORKFLOW
     assert "code='UV_SUBMIT_SERVICE_INACTIVE'" in WORKFLOW
@@ -104,11 +125,48 @@ def test_submit_maps_intake_failures_without_logging_private_paths() -> None:
         "UV_SUBMIT_INTAKE_DISK_FULL",
         "UV_SUBMIT_INTAKE_READ_ONLY",
         "UV_SUBMIT_INTAKE_COLLISION",
+        "UV_SUBMIT_INTAKE_CLEANUP_FAILED",
         "UV_SUBMIT_CONTRACT_REJECTED",
-        "UV_SUBMIT_INTAKE_RUNTIME_FAILED",
+        "UV_SUBMIT_INTAKE_IO_FAILED",
+        "UV_SUBMIT_INTAKE_EXECUTION_FAILED",
+        "UV_SUBMIT_INTAKE_REJECTED",
     ):
         assert f"code='{code}'" in WORKFLOW
     assert 'echo "$initial"' not in WORKFLOW
+    assert "^UV_ERROR_CODE=UV_INTAKE_" in WORKFLOW
+
+
+def test_submit_staging_failures_are_errno_classified_and_secret_safe() -> None:
+    start = OPERATOR.index("stage_job_payload(){")
+    end = OPERATOR.index("\nsubmit_drive(){", start)
+    staging = OPERATOR[start:end]
+    for code in (
+        "UV_INTAKE_PERMISSION_DENIED",
+        "UV_INTAKE_CROSS_DEVICE",
+        "UV_INTAKE_DISK_FULL",
+        "UV_INTAKE_READ_ONLY",
+        "UV_INTAKE_COLLISION",
+        "UV_INTAKE_IO_FAILED",
+        "UV_INTAKE_CONTRACT_INVALID",
+        "UV_INTAKE_EXECUTION_FAILED",
+    ):
+        assert code in staging
+    assert "os.lstat(root)" in staging
+    assert "stat.S_IMODE(root_stat.st_mode) != 0o700" in staging
+    assert "root_stat.st_uid != 0" in staging
+    assert "root_stat.st_gid != 0" in staging
+    assert "tempfile.mkstemp" in staging
+    assert "base64.b64decode" in staging
+    assert "print(str(exc))" not in staging
+    assert "repr(exc)" not in staging
+
+
+def test_generic_verifier_cannot_leak_staging_path_before_safe_classifier() -> None:
+    start = OPERATOR.index("verify(){")
+    end = OPERATOR.index("\nenqueue_batch(){", start)
+    verifier = OPERATOR[start:end]
+    assert "STAGING" not in verifier
+    assert "stat -c" not in verifier
 
 
 def test_submit_intake_does_not_depend_on_legacy_host_venv() -> None:
@@ -117,5 +175,8 @@ def test_submit_intake_does_not_depend_on_legacy_host_venv() -> None:
     assert "readonly SYSTEM_PYTHON='/usr/bin/python3'" in OPERATOR
     assert '"$SYSTEM_PYTHON" -m universal_video.server_intake submit' in submit
     assert '"$PYTHON" -m universal_video.server_intake submit' not in submit
-    assert "fail 'server intake command failed'" in submit
-    assert "job id already exists; use status or a new id" in submit
+    assert "stage_job_payload" in submit
+    assert 'mktemp -p "$STAGING" request.' not in submit
+    assert 'base64 --decode >"$tmp"' not in submit
+    assert "UV_INTAKE_EXECUTION_FAILED" in submit
+    assert "intake_reject" in submit

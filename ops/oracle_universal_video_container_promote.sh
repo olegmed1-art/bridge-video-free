@@ -595,7 +595,7 @@ grep -Fx 'UNIVERSAL_VIDEO_OPERATOR_INSTALL_PASS' <<<"$operator_install_output" >
 CURRENT_STAGE='operator-blob'
 [[ "$(git hash-object "$OPERATOR_TARGET")" == "$(git -C "$SOURCE_DIR" rev-parse "$EXPECTED_COMMIT:ops/universal_video_operator.sh")" ]] || fail UV_CONTAINER_PROMOTION_OPERATOR_MISMATCH
 CURRENT_STAGE='operator-smoke'
-if operator_smoke="$(sudo -u ocarun sudo -n "$OPERATOR_TARGET" status .. 2>&1)"; then
+if operator_smoke="$(sudo -u ocarun sudo -n "$OPERATOR_TARGET" status .. smoke "$(printf '0%.0s' {1..64})" AAAAAAAAAA 2>&1)"; then
   operator_smoke_rc=0
 else
   operator_smoke_rc=$?
@@ -603,6 +603,16 @@ fi
 [[ "$operator_smoke_rc" -eq 1 ]] || fail UV_CONTAINER_PROMOTION_OPERATOR_SMOKE_RC
 grep -Fx 'UV_STATE=REJECTED' <<<"$operator_smoke" >/dev/null || fail UV_CONTAINER_PROMOTION_OPERATOR_SMOKE_STATE
 grep -Fx 'UV_ERROR=invalid job id' <<<"$operator_smoke" >/dev/null || fail UV_CONTAINER_PROMOTION_OPERATOR_SMOKE_REASON
+
+CURRENT_STAGE='operator-submit-smoke'
+if operator_submit_smoke="$(sudo -u ocarun sudo -n "$OPERATOR_TARGET" submit-drive-base64 e30= 2>&1)"; then
+  operator_submit_smoke_rc=0
+else
+  operator_submit_smoke_rc=$?
+fi
+[[ "$operator_submit_smoke_rc" -eq 1 ]] || fail UV_CONTAINER_PROMOTION_OPERATOR_SUBMIT_SMOKE_RC
+grep -Fx 'UV_STATE=REJECTED' <<<"$operator_submit_smoke" >/dev/null || fail UV_CONTAINER_PROMOTION_OPERATOR_SUBMIT_SMOKE_STATE
+grep -Fx 'UV_ERROR_CODE=UV_INTAKE_CONTRACT_INVALID' <<<"$operator_submit_smoke" >/dev/null || fail UV_CONTAINER_PROMOTION_OPERATOR_SUBMIT_SMOKE_REASON
 
 CURRENT_STAGE='protected-postflight'
 [[ "$(systemctl is-active assistant-lab.service)" == "$before_assistant" ]] || fail UV_CONTAINER_PROMOTION_PROTECTED_SERVICE_CHANGED
