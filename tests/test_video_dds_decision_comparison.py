@@ -195,10 +195,10 @@ def test_public_context_and_refs_are_allowlisted_against_hidden_card_payloads():
         "AKQJ.T98.765.432", "AKQJ/T98/765/432", "AKQx.Txx.xxx.xxx",
         "N:AK", "N:AKx", "N:10", "N:A10", "N:AS", "north:10S",
         "partner:AKQ", "partner:AS", "opponent:QH",
-        "partner/AS", "north=10S", "opponent.QH",
+        "partner/AS", "north=10S", "opponent.QH", "LHO/AS", "RHO.QH",
         "partner-hand:AKQ", "partnerHand:AKQ",
         "opponent/cards/SA", "partnerDeal:AKQ", "opponent-deal:AKQ",
-        "north/deal:AKQ",
+        "north/deal:AKQ", "lhoHand:AKQ", "rho-cards:QH",
     ):
         value = _observation(); value["decision"]["evidence_refs"] = [hidden_ref]
         with pytest.raises(VideoDDSComparisonError, match="invalid decision evidence ref"):

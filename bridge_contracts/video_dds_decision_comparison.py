@@ -16,7 +16,7 @@ from bridge_contracts.assistant_lab import (
 SCHEMA = "video-decision-logic-dds-v3"
 _REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#=-]{0,159}$")
 _HIDDEN_REF = re.compile(
-    r"(?:^|[^A-Z0-9])(?:[NESW]|partner|opponent|north|east|south|west)[:/=.\-]"
+    r"(?:^|[^A-Z0-9])(?:[NESW]|partner|opponent|north|east|south|west|lho|rho)[:/=.\-]"
     r"(?:(?:(?:(?:10)|[AKQJT2-9X])[SHDC])+|(?:(?:10)|[AKQJT2-9X.-])+)"
     r"(?=$|[^A-Z0-9])",
     re.IGNORECASE,
@@ -30,7 +30,7 @@ _COMPLETE_HAND_REF = re.compile(
 )
 _HIDDEN_REF_KEYS = ("partner_hand", "opponent_hand", "hidden_hand", "full_deal")
 _HIDDEN_NORMALIZED_REF = re.compile(
-    r"(?:(?:actual)?(?:partner|opponent|north|east|south|west)s?"
+    r"(?:(?:actual)?(?:partner|opponent|north|east|south|west|lho|rho)s?"
     r"(?:hand|holding|cards?|deals?)+s?|(?:hidden|concealed)(?:hand|holding|cards?|deals?)+s?)"
 )
 _PUBLIC_CONTEXT = {
