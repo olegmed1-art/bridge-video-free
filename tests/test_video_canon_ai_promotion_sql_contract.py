@@ -119,7 +119,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "'♥','H:'",
         "'♦','D:'",
         "'♣','C:'",
-        "([^;]{0,512})",
+        "([^;]*)",
         "matched.parts[1] ~* E'(^|[^[:alnum:]_])S",
     ):
         assert marker in MIGRATION

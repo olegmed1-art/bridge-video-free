@@ -294,7 +294,7 @@ SELECT EXISTS (
            FROM regexp_matches(
              replace(replace(replace(replace(
                w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:'),
-             E'(?:(?:partner|opponent|north|east|south|west)[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника)|[NESW][[:space:]]*:)([^;]{0,512})',
+             E'(?:(?:partner|opponent|north|east|south|west)[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника)|[NESW][[:space:]]*:)([^;]*)',
              'gi'
            ) AS matched(parts)
           WHERE matched.parts[1] ~* E'(^|[^[:alnum:]_])S[[:space:]]*:'
