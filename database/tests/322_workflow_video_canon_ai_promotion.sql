@@ -153,6 +153,8 @@ BEGIN
      ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s hand was strong..."}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North''s hand was a weak holding"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"рука партнера: 5 карт"}'::jsonb
      ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_HIDDEN_VALUE_FIREWALL_INVALID';
@@ -654,6 +656,9 @@ BEGIN
   IF NOT v_source_binding_failed OR EXISTS (
        SELECT 1 FROM bidding.video_canon_ai_restore_receipt
         WHERE video_canon_ai_promotion_receipt_id=v_promotion
+     ) OR EXISTS (
+       SELECT 1 FROM public.knowledge_version_source
+        WHERE knowledge_version_id=v_old_version AND source_id=v_future_source
      ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_MUTATED_RESTORE_SOURCE_BINDING_NOT_BLOCKED';
   END IF;

@@ -45,6 +45,9 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "public.source s ON s.source_id=p.source_id AND s.school_id=p.school_id",
         "VIDEO_CANON_SOURCE_POLICY_SCHOOL_MISMATCH",
         "guard_video_canon_source_policy_lifecycle",
+        "guard_promoted_video_canon_source_binding",
+        "promoted_video_canon_source_binding_guard",
+        "VIDEO_CANON_PROMOTED_SOURCE_BINDING_IMMUTABLE",
         "status='superseded',valid_to=v_valid_from",
         "p.valid_from<=clock_timestamp()",
         "v_valid_from>statement_timestamp()",
@@ -74,6 +77,10 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "Phase 1: validate every prelocked runtime target without mutation",
         "Recheck every finite authority boundary",
         "Phase 2: all targets are locked and validated",
+        "Capability membership is external to these tables",
+        "VIDEO_CANON_RESTORE_CURRENT_ACTIVATION_EXPIRED",
+        "v_new_canon.valid_to<=clock_timestamp()",
+        "v_new_runtime.valid_to<=clock_timestamp()",
         "UPDATE bidding.runtime_activation target",
         "v_retired_at := clock_timestamp()",
         "NEW.valid_to := v_retired_at",
@@ -163,6 +170,8 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "VIDEO_CANON_RESTORE_CURRENT_ACTIVATION_MISMATCH" in MIGRATION
     assert "DROP FUNCTION bidding.restore_ai_verified_video_canon" in ROLLBACK
     assert "DROP VIEW bidding.video_canon_bound_candidate" in ROLLBACK
+    assert "DROP TRIGGER promoted_video_canon_source_binding_guard" in ROLLBACK
+    assert "DROP FUNCTION bidding.guard_promoted_video_canon_source_binding" in ROLLBACK
     assert "DROP FUNCTION bidding.video_canon_rule_test_state_sha256" in ROLLBACK
     assert "DROP FUNCTION bidding.video_canon_rule_restore_sha256" in ROLLBACK
     assert "DROP FUNCTION bidding.is_complete_bridge_hand" in ROLLBACK

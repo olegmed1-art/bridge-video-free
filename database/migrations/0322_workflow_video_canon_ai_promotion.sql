@@ -299,8 +299,8 @@ SELECT EXISTS (
            ) AS matched(parts)
           WHERE matched.parts[1] ~*
                   E'(^|[^[:alnum:]_])[SHDC][[:space:]]*:'
-             OR matched.parts[1] ~*
-                  E'(^|[^[:alnum:]])(?:10|[AKQJT]|(?:(?:10)|[AKQJT2-9]){2,13})($|[^[:alnum:]])'
+             OR matched.parts[1] ~
+                  E'(^|[^[:alnum:]])(?:10|[AKQJT]|[kqjt]|(?:(?:10)|[AKQJT2-9akqjt]){2,13})($|[^[:alnum:]])'
              OR matched.parts[1] ~*
                   E'(^|[^[:alnum:]])(-|(?:(?:10)|[AKQJT2-9]){1,13})([[:space:],/.]+(-|(?:(?:10)|[AKQJT2-9]){1,13})){1,3}($|[^[:alnum:]])'
        )
@@ -690,6 +690,37 @@ END $$;
 CREATE TRIGGER bound_video_canon_candidate_guard
 BEFORE UPDATE OR DELETE ON public.analysis_candidate
 FOR EACH ROW EXECUTE FUNCTION bidding.guard_bound_video_canon_candidate();
+
+CREATE OR REPLACE FUNCTION bidding.guard_promoted_video_canon_source_binding()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path=pg_catalog,public,bidding
+AS $$
+DECLARE v_old_version_id uuid; v_new_version_id uuid;
+BEGIN
+    IF TG_OP IN ('UPDATE','DELETE') THEN
+        v_old_version_id := OLD.knowledge_version_id;
+    END IF;
+    IF TG_OP IN ('INSERT','UPDATE') THEN
+        v_new_version_id := NEW.knowledge_version_id;
+    END IF;
+    IF EXISTS (
+      SELECT 1
+        FROM bidding.video_canon_ai_promotion_receipt p
+        JOIN bidding.rule r ON r.rule_id=p.rule_id
+       WHERE r.knowledge_version_id=v_old_version_id
+          OR r.knowledge_version_id=v_new_version_id
+    ) THEN
+        RAISE EXCEPTION 'VIDEO_CANON_PROMOTED_SOURCE_BINDING_IMMUTABLE' USING ERRCODE='23514';
+    END IF;
+    IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+END $$;
+
+CREATE TRIGGER promoted_video_canon_source_binding_guard
+BEFORE INSERT OR UPDATE OR DELETE ON public.knowledge_version_source
+FOR EACH ROW EXECUTE FUNCTION bidding.guard_promoted_video_canon_source_binding();
 
 CREATE OR REPLACE FUNCTION bidding.guard_video_canon_source_policy_lifecycle()
 RETURNS trigger LANGUAGE plpgsql AS $$
@@ -1519,6 +1550,33 @@ BEGIN
             );
         END LOOP;
 
+        -- Capability membership is external to these tables; re-resolve every
+        -- predecessor attestor after phase-one work and just before mutation.
+        IF v_prior_promotion.video_canon_ai_promotion_receipt_id IS NOT NULL
+           AND EXISTS (
+              SELECT 1
+                FROM bidding.video_canon_ai_verification v
+                LEFT JOIN bidding.video_canon_verifier_registry vr
+                  ON vr.verifier_family=v.verifier_family
+                 AND v.check_id=ANY(vr.allowed_check_ids)
+               WHERE v.analysis_candidate_id=v_prior_promotion.analysis_candidate_id
+                 AND v.candidate_payload_hash=v_prior_promotion.candidate_payload_hash
+                 AND v.verification_bundle_sha256=v_prior_promotion.verification_bundle_sha256
+                 AND (
+                   vr.database_role IS NULL OR vr.status<>'active' OR NOT EXISTS (
+                     SELECT 1
+                       FROM pg_catalog.pg_roles attestor
+                       JOIN pg_catalog.pg_roles capability
+                         ON capability.rolname=vr.database_role
+                      WHERE attestor.rolname=v.execution_principal
+                        AND attestor.rolcanlogin
+                        AND pg_has_role(attestor.oid,capability.oid,'MEMBER')
+                   )
+                 )
+           ) THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_ATTESTOR_REVOKED' USING ERRCODE='42501';
+        END IF;
+
         -- Recheck every finite authority boundary after all validation work and
         -- immediately before the mutation phase.
         IF v_prior_promotion.video_canon_ai_promotion_receipt_id IS NOT NULL
@@ -1537,6 +1595,12 @@ BEGIN
            WHERE NULLIF(state.value->>'valid_to','')::timestamptz<=clock_timestamp()
         ) THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_RUNTIME_TARGET_EXPIRED' USING ERRCODE='23514';
+        END IF;
+        IF (v_new_canon.valid_to IS NOT NULL
+            AND v_new_canon.valid_to<=clock_timestamp())
+           OR (v_new_runtime.valid_to IS NOT NULL
+               AND v_new_runtime.valid_to<=clock_timestamp()) THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_CURRENT_ACTIVATION_EXPIRED' USING ERRCODE='23514';
         END IF;
 
         -- Phase 2: all targets are locked and validated; mutate as one bounded set.
@@ -1648,11 +1712,13 @@ REVOKE ALL ON FUNCTION bidding.contains_forbidden_hidden_value(jsonb) FROM PUBLI
 REVOKE ALL ON FUNCTION bidding.validate_video_canon_verification_bundle() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.validate_video_canon_verification() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_bound_video_canon_candidate() FROM PUBLIC;
+REVOKE ALL ON FUNCTION bidding.guard_promoted_video_canon_source_binding() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_video_canon_source_policy_lifecycle() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_video_canon_verifier_registry_lifecycle() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.validate_video_correction_review_receipt() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION bidding.validate_video_canon_verification_bundle(),
-  bidding.guard_bound_video_canon_candidate(),bidding.guard_video_canon_source_policy_lifecycle(),
+  bidding.guard_bound_video_canon_candidate(),bidding.guard_promoted_video_canon_source_binding(),
+  bidding.guard_video_canon_source_policy_lifecycle(),
   bidding.guard_video_canon_verifier_registry_lifecycle()
   FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,
   bridge_school_canon_semantic_verifier,bridge_school_canon_bridge_verifier,

@@ -138,7 +138,7 @@ serialized; only sanitized results or explicit gaps survive.
 
 The same value-level firewall applies before a teacher-video Canon candidate is
 placed in staging: full PBN encodings and labelled partner/opponent card payloads—including
-`♠♥♦♣` suit-symbol notation in any suit order, including a single unambiguous card (`Q`, `q`, `T`, `t` or `10`), a disclosed suit group, or fragments with omitted suits/cards—are rejected anywhere in the complete payload, including the source-bound
+`♠♥♦♣` suit-symbol notation in any suit order, including a single unambiguous card (`Q`, `q`, `T`, `t` or `10`) without treating the English article `a` as an ace, a disclosed suit group, or fragments with omitted suits/cards—are rejected anywhere in the complete payload, including the source-bound
 teacher statement and otherwise innocent keys such as `notes`. Candidate
 staging identity includes the canonical payload SHA-256, so a corrected
 assertion becomes a preserved new revision instead of colliding with the old
@@ -189,16 +189,18 @@ is the exact sealed candidate payload; system, level, effective interval,
 agreement scope, method, source locator and deterministic provenance must all
 match the sealed inputs. Exactly one `derived_from` source binding is allowed,
 and both its source ID and transcript locator must equal the sealed teacher
-assertion.
+assertion. A database trigger freezes that source set as soon as a promotion
+receipt exists; the worker cannot add, replace or delete provenance afterward.
 A digest of the complete immutable version projection is retained in the
 promotion receipt and activation provenance.
 
 Rollback is operational, not documentary. A dedicated restorer capability
 locks the predecessor Canon row, every recorded runtime target and the
 restore-receipt table before final policy/expiry checks. It validates all
-targets without mutation, repeats every finite Canon/source/runtime wall-clock
-boundary, then performs the bounded set of mutations and can emit the
-receipt-bound restore record with the exact promotion bundle and restore
+targets without mutation, re-resolves predecessor attestor memberships, repeats
+every finite predecessor and outgoing Canon/source/runtime wall-clock boundary,
+then performs the bounded set of mutations and can emit the receipt-bound
+restore record with the exact promotion bundle and restore
 evidence hashes. The transaction revokes the new Canon/runtime activation,
 restores the exact superseded activation IDs and their original validity ends,
 then emits an append-only restore receipt. No application, worker, verifier or
