@@ -1,0 +1,243 @@
+{
+  "snapshot_version": "1.0",
+  "observed_at": "2026-08-29",
+  "scope": "school_knowledge_database_content_intake",
+  "governance_mode": "ASSURED",
+  "minimum_independent_assurance": "I2",
+  "production_database_effect": "none",
+  "authority_invariant": "SCHOOL_CANON and WORLD_EXTERNAL remain separate",
+  "drive_catalog_sheet_rows": {
+    "Источники": 245,
+    "Раздачи": 6,
+    "Карта пробелов": 16,
+    "Справочники": 13,
+    "Авторы": 42,
+    "Аудит bridgeclub.ru": 95,
+    "Очередь материалов": 20,
+    "Индекс упражнений": 158,
+    "Учебная траектория": 5,
+    "Шкала освоения навыков": 8,
+    "Навыки": 121,
+    "Очередь Mastery 4": 15,
+    "AI — Позиции решений": 1,
+    "AI — Атомы знаний": 175,
+    "AI — Правила системы": 591,
+    "AI — Teacher решения": 2,
+    "AI — Кандидаты": 0,
+    "AI — Search результаты": 0,
+    "AI — Решения": 0,
+    "AI — Канон-кандидаты": 11,
+    "AI — Версии систем торговли": 3,
+    "AI — Сравнение L1↔турнирная": 43,
+    "AI — Лестница усложнения торговли": 17,
+    "AI — Кандидатные системы торговли": 7,
+    "AI — L1 Regression": 52,
+    "AI — L1 Integrity": 28
+  },
+  "lanes": [
+    {
+      "lane_id": "SCHOOL_CANON_BIDDING",
+      "authority": "school_canon_source",
+      "load_policy": "staging_only_until_provenance_tests_and_i2",
+      "source": {
+        "source_key": "school-canon-bidding-natural-system-v1",
+        "title": "Натуральная система торговли",
+        "drive_file_id": "1HkVff4iH2e3HT5kwblvd3mY8TUQPR6jf",
+        "mime_type": "application/pdf",
+        "size_bytes": 113399,
+        "page_count": 2,
+        "sha256": "dc9678da5ab19a897c3f1fbd785cc6f7b0ddd9d70d90d895743db615a2fdd3d6",
+        "approval_status": "director_approved_source",
+        "approval_scope": "all_explicit_auction_branches_in_document"
+      },
+      "inventory": {
+        "visual_blocks_total": 34,
+        "blocks_with_git_transcription": 2,
+        "blocks_pending_semantic_transcription": 32,
+        "candidate_rules_total": 33,
+        "candidate_rules_by_block": [
+          {
+            "block_id": "NSV1-P1-R1-C1",
+            "topic": "openings",
+            "count": 19,
+            "status": "transcribed_not_activated"
+          },
+          {
+            "block_id": "NSV1-P1-R1-C2",
+            "topic": "1C_first_responses",
+            "count": 14,
+            "status": "transcribed_not_activated"
+          }
+        ],
+        "production_executable_candidates": 0,
+        "production_active_rules": 0
+      },
+      "authority_boundaries": {
+        "source_pdf_is_authoritative": true,
+        "machine_text_extract_is_authoritative": false,
+        "external_knowledge_may_fill_gaps": false,
+        "rejected_course_notes_are_a_source": false,
+        "activation_requires_structured_provenance_tests_and_i2": true
+      }
+    },
+    {
+      "lane_id": "LEGACY_L1_DRIVE",
+      "authority": "unreconciled_legacy_catalog",
+      "load_policy": "quarantine_until_source_reconciliation",
+      "source": {
+        "title": "Каталог базы знаний школы бриджа",
+        "drive_spreadsheet_id": "1LgPnxsbQ8gp_Hy2HIESKo9hquwpPC4OzEkdnEHUH3eo",
+        "sheet_count": 26
+      },
+      "datasets": {
+        "skills": 121,
+        "knowledge_atoms": 175,
+        "system_rules": 591,
+        "l1_regression_rows": 52,
+        "l1_integrity_rows": 28,
+        "canon_candidates": 11,
+        "bidding_system_versions": 3,
+        "l1_tournament_comparison_rows": 43,
+        "bidding_complexity_ladder_rows": 17,
+        "candidate_bidding_systems": 7
+      },
+      "knowledge_atom_status": {
+        "APPROVED_SOURCE": 154,
+        "PARTIAL_CANON_SCOPE": 17,
+        "PARTIAL_CANON_SCOPE_SOURCE_CONFLICT": 3,
+        "BLOCKED_PENDING_TEACHER": 1
+      },
+      "knowledge_atom_sync": {
+        "DRIVE_CANON_ONLY": 172,
+        "SYNCED": 3
+      },
+      "system_rule_status": {
+        "ACTIVE": 468,
+        "APPROVED_REFERENCE": 103,
+        "PARTIAL_CANON_SCOPE": 17,
+        "BLOCKED_SOURCE_CONFLICT": 2,
+        "BLOCKED_PENDING_TEACHER": 1
+      },
+      "system_rule_sync": {
+        "DRIVE_CANON_ONLY": 588,
+        "SYNCED": 2,
+        "DRIVE_UPDATED_NOT_SYNCED": 1
+      },
+      "system_rule_forcing": {
+        "FG": 83,
+        "NF": 83,
+        "INV": 77,
+        "F1": 27,
+        "TO_PLAY": 23,
+        "UNSET": 298
+      },
+      "skills_exact_status_confirmed_l1": 70,
+      "blocking_reason": "Drive status labels do not replace exact provenance to the currently approved PDF; source conflicts are present"
+    },
+    {
+      "lane_id": "LEARNING_CONTENT",
+      "authority": "teaching_material",
+      "load_policy": "separate_learning_lane_after_link_validation",
+      "datasets": {
+        "exercise_index": 158,
+        "exercises_ready_for_lesson": 88,
+        "exercises_next_level_reserve": 27,
+        "deals": 6,
+        "learning_path_rows": 5,
+        "mastery_scale_rows": 8,
+        "gap_map_rows": 16
+      },
+      "course_notes": {
+        "title": "Курс Бридж - Конспект. Правки.",
+        "drive_document_id": "1b8oMiRvgPMcJbfiMK6UA5GEeBmwgnK4-iEoHDbtKxtk",
+        "lesson_count": 16,
+        "lessons_complete": 13,
+        "lessons_in_progress": 2,
+        "lessons_not_started": 1,
+        "canon_source_eligibility": "rejected_for_current_bidding_ingestion",
+        "allowed_use": "curriculum_inventory_and_context_only"
+      }
+    },
+    {
+      "lane_id": "WORLD_EXTERNAL",
+      "authority": "external_knowledge_and_evidence",
+      "load_policy": "metadata_evidence_and_research_only",
+      "datasets": {
+        "source_registry_rows": 245,
+        "author_rows": 42,
+        "bridgeclub_audit_rows": 95,
+        "material_queue_rows": 20
+      },
+      "topic_families": [
+        "hand_evaluation",
+        "general_bidding",
+        "conventions",
+        "competitive_bidding",
+        "slam_bidding",
+        "declarer_play",
+        "defense",
+        "errors_and_heuristics",
+        "pedagogy",
+        "contradictions"
+      ],
+      "research_families": [
+        "BEN",
+        "BBA_EPBot",
+        "Pons",
+        "Bridgit",
+        "open_source_bidding_engines",
+        "closed_or_demo_robots",
+        "BBO_100",
+        "comparison_benchmarks"
+      ],
+      "canon_promotion": "forbidden_without_explicit_decision_and_complete_evidence_gate"
+    }
+  ],
+  "intake_batches": [
+    {
+      "batch_id": "SC-001",
+      "content": "approved_pdf_registry_provenance_and_33_existing_candidates",
+      "readiness": "ready_for_staging_only",
+      "activation_allowed": false
+    },
+    {
+      "batch_id": "SC-002",
+      "content": "remaining_32_visual_blocks",
+      "readiness": "semantic_transcription_required",
+      "activation_allowed": false
+    },
+    {
+      "batch_id": "L1-001",
+      "content": "121_skills_175_atoms_591_rules",
+      "readiness": "blocked_by_provenance_and_source_conflict",
+      "activation_allowed": false
+    },
+    {
+      "batch_id": "LEARN-001",
+      "content": "exercises_deals_paths_mastery_and_gap_map",
+      "readiness": "ready_for_learning_schema_design_and_link_validation",
+      "activation_allowed": false
+    },
+    {
+      "batch_id": "WORLD-001",
+      "content": "external_sources_authors_audit_queue_and_robot_research",
+      "readiness": "ready_for_external_metadata_staging",
+      "activation_allowed": false
+    }
+  ],
+  "global_blockers": [
+    "32_of_34_approved_pdf_blocks_not_semantically_transcribed",
+    "legacy_l1_provenance_incomplete_or_conflicting",
+    "bidding_schema_not_applied_in_production",
+    "zero_active_production_rules_from_approved_source",
+    "i2_assurance_required_before_activation"
+  ],
+  "next_actions": [
+    "stage_SC_001_without_activation",
+    "transcribe_SC_002_page_block_line_with_explicit_gaps",
+    "reconcile_L1_001_against_approved_pdf_anchors",
+    "design_separate_learning_lane_for_LEARN_001",
+    "stage_WORLD_001_as_external_metadata_and_evidence",
+    "run_regression_integrity_and_independent_i2_before_any_activation"
+  ]
+}
