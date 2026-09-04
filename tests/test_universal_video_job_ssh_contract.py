@@ -35,6 +35,13 @@ def test_job_uses_pinned_bounded_ssh_transport():
     assert "STARTING)" in preflight
     assert "STOPPING)" in preflight
     assert "--wait-for-state STOPPED --max-wait-seconds 600" in preflight
+    ssh_setup = WORKFLOW.split("- name: Resolve trusted SSH transport", 1)[1].split(
+        "- name: Submit and monitor", 1
+    )[0]
+    assert "recover_instance_after_scan_loss" in ssh_setup
+    assert "for attempt in 1 2 3" in ssh_setup
+    assert "scan_rc == 3 && attempt < 3" in ssh_setup
+    assert "STOPPING)" in ssh_setup
 
 
 def test_job_invokes_only_fixed_resident_admin_surfaces():
