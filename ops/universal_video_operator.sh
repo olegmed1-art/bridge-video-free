@@ -190,7 +190,7 @@ batch_status(){
     "$PYTHON" -m universal_video.video_queue_intake status "$1"
 }
 conformance_json(){
-  local job_id="$1" profile="$2" job_hash="$3" source_file_id="$4"
+  local job_id="$1" profile="$2" job_hash="$3" source_file_id="$4" artifact_set_sha256="$5"
   runuser -u universal-video -- env PYTHONPATH="$SOURCE_DIR" PYTHONDONTWRITEBYTECODE=1 \
     "$PYTHON" -m universal_video.result_conformance \
       --job-dir "$SPOOL/results/$job_id" \
@@ -198,6 +198,7 @@ conformance_json(){
       --expected-profile "$profile" \
       --expected-job-hash "$job_hash" \
       --expected-source-file-id "$source_file_id" \
+      --expected-artifact-set-sha256 "$artifact_set_sha256" \
       --require-server-review \
       --evidence-phase POST_HOC_OBSERVATION
 }
@@ -351,7 +352,7 @@ status(){
   [[ "$4" =~ ^[A-Za-z0-9_-]{10,200}$ ]] || fail 'invalid Drive identity'
   verify
   local id="$1" profile="$2" job_hash="$3" source_file_id="$4"
-  local name="$1.json" found=() state receipt summary report
+  local name="$1.json" found=() state receipt summary report inventory expected_artifact_set_sha256
   for state in inbox running done failed; do [[ -f "$SPOOL/$state/$name" && ! -L "$SPOOL/$state/$name" ]] && found+=("$state"); done
   [[ ${#found[@]} -le 1 ]] || { echo 'UV_STATE=CONFLICT'; exit 1; }
   [[ ${#found[@]} -eq 1 ]] || { echo 'UV_STATE=MISSING'; exit 0; }
@@ -410,8 +411,8 @@ PY
       printf '%s\n' "$summary"
       ;;
     done)
-      if ! summary="$(runuser -u universal-video -- env PYTHONPATH="$SOURCE_DIR" \
-        /usr/bin/python3 "$RECEIPT_READER" inspect-done "$receipt" \
+      if ! inventory="$(runuser -u universal-video -- env PYTHONPATH="$SOURCE_DIR" \
+        /usr/bin/python3 "$RECEIPT_READER" inspect-done-bound "$receipt" \
           "$id" "$profile" "$job_hash" "$source_file_id" 2>/dev/null)"; then
         if [[ ! -e "$receipt" && "${STATUS_TRANSITION_RETRY:-0}" -lt 3 ]]; then
           STATUS_TRANSITION_RETRY=$(( ${STATUS_TRANSITION_RETRY:-0} + 1 )) status "$id" "$profile" "$job_hash" "$source_file_id"
@@ -421,13 +422,16 @@ PY
         echo 'UV_ERROR_TYPE=DONE_RECEIPT_IDENTITY_MISMATCH'
         return 0
       fi
+      summary="$(sed -n 's/^UV_RESULT_STATUS=//p' <<<"$inventory" | tail -n1)"
+      expected_artifact_set_sha256="$(sed -n 's/^UV_EXPECTED_ARTIFACT_SET_SHA256=//p' <<<"$inventory" | tail -n1)"
       echo "UV_RESULT_STATUS=$summary"
       if [[ "$summary" == REVIEW ]]; then
         echo 'UV_STATE=REVIEW'
         return 0
       fi
-      if [[ "$summary" != COMPLETED ]] || ! report="$(conformance_json \
-        "$id" "$profile" "$job_hash" "$source_file_id" 2>/dev/null)"; then
+      if [[ "$summary" != COMPLETED || ! "$expected_artifact_set_sha256" =~ ^[0-9a-f]{64}$ ]] \
+        || ! report="$(conformance_json "$id" "$profile" "$job_hash" "$source_file_id" \
+          "$expected_artifact_set_sha256" 2>/dev/null)"; then
         echo 'UV_STATE=NONCONFORMANT'
         echo 'UV_ERROR_TYPE=RESULT_CONFORMANCE_FAILED'
         return 0

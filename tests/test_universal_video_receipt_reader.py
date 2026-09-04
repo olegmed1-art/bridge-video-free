@@ -23,6 +23,7 @@ def _done_payload() -> dict:
         "profile": PROFILE,
         "job_hash": JOB_HASH,
         "source": {"kind": "google_drive", "file_id": SOURCE_ID},
+        "result_conformance": {"state": "PASS", "artifact_set_sha256": "b" * 64},
     }
 
 
@@ -57,6 +58,24 @@ def test_exact_regular_receipt_passes(tmp_path: Path):
     result = _run(receipt)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "COMPLETED"
+
+
+def test_bound_done_receipt_exposes_attested_artifact_inventory(tmp_path: Path):
+    receipt = tmp_path / "done.json"
+    _write(receipt, json.dumps(_done_payload()))
+    result = subprocess.run(
+        ["python3", str(READER), "inspect-done-bound", str(receipt), JOB_ID, PROFILE, JOB_HASH, SOURCE_ID],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=2,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "UV_RESULT_STATUS=COMPLETED",
+        "UV_EXPECTED_ARTIFACT_SET_SHA256=" + "b" * 64,
+    ]
 
 
 def test_symlink_receipt_fails_without_disclosing_target(tmp_path: Path):

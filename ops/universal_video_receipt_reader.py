@@ -164,6 +164,27 @@ def main(argv: list[str]) -> int:
             )
         )
         return 0
+    if len(argv) == 7 and argv[1] == "inspect-done-bound":
+        payload = safe_load(argv[2])
+        status = _verify_identity(
+            payload,
+            job_id=argv[3],
+            profile=argv[4],
+            job_hash=argv[5],
+            source_file_id=argv[6],
+        )
+        print("UV_RESULT_STATUS=" + status)
+        if status == "COMPLETED":
+            conformance = payload.get("result_conformance")
+            artifact_hash = (
+                str(conformance.get("artifact_set_sha256") or "")
+                if isinstance(conformance, dict) and conformance.get("state") == "PASS"
+                else ""
+            )
+            if not re.fullmatch(r"[0-9a-f]{64}", artifact_hash):
+                raise ReceiptError("done receipt artifact inventory missing")
+            print("UV_EXPECTED_ARTIFACT_SET_SHA256=" + artifact_hash)
+        return 0
     if len(argv) == 7 and argv[1] == "inspect-failed":
         payload = safe_load(argv[2])
         if payload.get("status") != "FAILED" or payload.get("job_file") != argv[3]:

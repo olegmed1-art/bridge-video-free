@@ -72,6 +72,8 @@ def test_existing_job_resumes_by_exact_id_instead_of_duplicate_submission():
     assert "source_file_id: ${{ steps.request.outputs.source_file_id }}" in WORKFLOW
     assert "inspect-job" in OPERATOR
     assert "inspect-done" in OPERATOR
+    assert "inspect-done-bound" in OPERATOR
+    assert "--expected-artifact-set-sha256" in OPERATOR
     assert "PENDING_JOB_IDENTITY_MISMATCH" in OPERATOR
     assert "DONE_RECEIPT_IDENTITY_MISMATCH" in OPERATOR
     assert "RESULT_CONFORMANCE_FAILED" in OPERATOR
