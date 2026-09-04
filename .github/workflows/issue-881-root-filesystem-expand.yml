@@ -48,16 +48,15 @@ jobs:
       github.event.comment.user.login == 'olegmed1-art' &&
       contains(fromJSON('["/oracle-ops issue-881-expand-root-and-recover-bba508","/oracle-ops issue-881-reconcile-run-33893910685"]'), github.event.comment.body)
     runs-on: ubuntu-24.04
-    # The explicit OCI waiters consume at most 240 minutes: 60 minutes each for
-    # backup and restore, five minutes each for five network creates, 30 minutes
-    # each for launch and termination, and five minutes for each of six
-    # dependency-deletion checks, plus five minutes to verify retirement of all
-    # superseded operation backups. A command may spend at most another 30
-    # minutes reconciling prior attempts and distinct owner-command runs.
-    # GitHub's six-hour ceiling therefore leaves at
-    # least 90 minutes for setup, bounded rediscovery, SSH acceptance, recovery,
-    # and the
-    # EXIT cleanup trap instead of cancelling exactly at the waiter ceiling.
+    # The executable monotonic primary deadline caps every OCI request, waiter,
+    # rediscovery, and isolated SSH acceptance at 240 minutes total. Restore
+    # AVAILABLE and hydration additionally share one 60-minute subdeadline.
+    # The current-attempt cleanup worst case is 1,840 seconds: eight 30-second
+    # rediscoveries, eight 20-second delete requests, one 600-second instance
+    # wait, and seven 120-second dependency/backup waits. The 40-minute cleanup
+    # reserve therefore retains 560 seconds of margin. Another 40 minutes is
+    # reserved for the host-lock mutation, 25 minutes for the always() receipt,
+    # and 15 minutes for runner setup/cancellation slack under GitHub's 360m cap.
     timeout-minutes: 360
     env:
       ORACLE_HOST: 158.180.47.161
@@ -93,10 +92,34 @@ jobs:
           }
           assert json.load(open('ops/issue-881-root-filesystem-expand-request.json')) == expected
           PY
+      - name: Establish monotonic operation and cleanup budgets
+        id: budget
+        run: |
+          set -euo pipefail
+          monotonic_now="$(awk '{print int($1)}' /proc/uptime)"
+          [[ "$monotonic_now" =~ ^[0-9]+$ ]]
+          # 240m primary + 40m reserved cleanup + 40m mutation + 25m receipt
+          # = 345m. The job-level 360m timeout retains 15m runner slack.
+          echo "primary_deadline=$((monotonic_now + 14400))" >> "$GITHUB_OUTPUT"
+          echo "cleanup_deadline=$((monotonic_now + 16800))" >> "$GITHUB_OUTPUT"
+          echo "mutation_deadline=$((monotonic_now + 19200))" >> "$GITHUB_OUTPUT"
+          echo "receipt_deadline=$((monotonic_now + 20700))" >> "$GITHUB_OUTPUT"
       - name: Create fresh full backup and prove isolated restored-root boot acceptance
         id: backup
         run: |
           set -euo pipefail
+          primary_deadline='${{ steps.budget.outputs.primary_deadline }}'
+          cleanup_deadline='${{ steps.budget.outputs.cleanup_deadline }}'
+          [[ "$primary_deadline" =~ ^[0-9]+$ && "$cleanup_deadline" =~ ^[0-9]+$ ]]
+          (( cleanup_deadline > primary_deadline ))
+          monotonic_now() { awk '{print int($1)}' /proc/uptime; }
+          bounded_wait_seconds() {
+            local requested="$1" absolute_deadline="$2" now remaining
+            now="$(monotonic_now)"
+            remaining=$((absolute_deadline - now))
+            (( remaining > 0 )) || return 42
+            (( requested < remaining )) && printf '%s\n' "$requested" || printf '%s\n' "$remaining"
+          }
           for value in OCI_USER OCI_TENANCY OCI_FINGERPRINT OCI_KEY OCI_REGION; do
             [[ -n "${!value:-}" ]] || exit 21
           done
@@ -129,9 +152,11 @@ jobs:
             local attempt rc max_attempts="${OCI_JSON_MAX_ATTEMPTS:-6}"
             local retry_delay_seconds="${OCI_JSON_RETRY_DELAY_SECONDS:-5}"
             local request_timeout_seconds="${OCI_JSON_REQUEST_TIMEOUT_SECONDS:-30}"
+            local absolute_deadline="${OCI_JSON_ABSOLUTE_DEADLINE:-$primary_deadline}" bounded_request_seconds bounded_retry_seconds
             for attempt in $(seq 1 "$max_attempts"); do
               : >"$stdout_file"; : >"$stderr_file"
-              if timeout --signal=KILL "${request_timeout_seconds}s" \
+              bounded_request_seconds="$(bounded_wait_seconds "$request_timeout_seconds" "$absolute_deadline")" || return 42
+              if timeout --signal=KILL "${bounded_request_seconds}s" \
                   "$@" --output json >"$stdout_file" 2>"$stderr_file"; then rc=0; else rc=$?; fi
               OCI_JSON_OUTPUT="$(<"$stdout_file")"
               OCI_JSON_ERROR="$(<"$stderr_file")"
@@ -140,7 +165,10 @@ jobs:
                 return 0
               fi
               OCI_JSON_ERROR=INVALID_JSON_SUCCESS_RESPONSE
-              (( attempt < max_attempts )) && sleep "$retry_delay_seconds"
+              if (( attempt < max_attempts )); then
+                bounded_retry_seconds="$(bounded_wait_seconds "$retry_delay_seconds" "$absolute_deadline")" || return 42
+                sleep "$bounded_retry_seconds"
+              fi
             done
             return 86
           }
@@ -233,8 +261,9 @@ jobs:
           state_set backup_wait_failure_rc none
           mark_phase initialized
           discover_named_id() {
-            local resource="$1" expected="$2" max_seconds="${3:-90}" output id deadline remaining request_timeout sleep_seconds
+            local resource="$1" expected="$2" max_seconds="${3:-90}" budget_deadline="${4:-$primary_deadline}" output id deadline remaining request_timeout sleep_seconds
             local -a command
+            max_seconds="$(bounded_wait_seconds "$max_seconds" "$budget_deadline")" || return 42
             deadline=$((SECONDS + max_seconds))
             while (( SECONDS < deadline )); do
               case "$resource" in
@@ -251,7 +280,7 @@ jobs:
               remaining=$((deadline - SECONDS))
               request_timeout=$((remaining < 20 ? remaining : 20))
               (( request_timeout > 0 )) || break
-              OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
+              OCI_JSON_ABSOLUTE_DEADLINE="$budget_deadline" OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
                 oci_json_request "${command[@]}" || return 1
               output="$OCI_JSON_OUTPUT"
               id="$(RESOURCE_KIND="$resource" EXPECTED_DISPLAY_NAME="$expected" python -c 'import json,os,sys; payload=json.load(sys.stdin); data=payload.get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data); allowed={"backup":{"REQUEST_RECEIVED","CREATING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"boot-volume":{"PROVISIONING","RESTORING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"instance":{"PROVISIONING","STARTING","RUNNING","STOPPING","STOPPED","TERMINATING","TERMINATED"},"vcn":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"internet-gateway":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"route-table":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"security-list":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"subnet":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"}}[os.environ["RESOURCE_KIND"]]; matches=[x for x in data if x.get("display-name")==os.environ["EXPECTED_DISPLAY_NAME"]]; assert all(isinstance(x.get("id"),str) and x["id"] and isinstance(x.get("lifecycle-state"),str) and x["lifecycle-state"] in allowed for x in matches); xs=[x["id"] for x in matches if x["lifecycle-state"]!="TERMINATED"]; assert len(xs)<=1; print(xs[0] if xs else "")' <<<"$output")" || return 1
@@ -269,8 +298,9 @@ jobs:
             return 3
           }
           wait_absent() {
-            local resource="$1" id="$2" max_seconds="${3:-300}" output state rc deadline remaining request_timeout sleep_seconds
+            local resource="$1" id="$2" max_seconds="${3:-300}" budget_deadline="${4:-$cleanup_deadline}" output state rc deadline remaining request_timeout sleep_seconds
             local -a command
+            max_seconds="$(bounded_wait_seconds "$max_seconds" "$budget_deadline")" || return 42
             deadline=$((SECONDS + max_seconds))
             while (( SECONDS < deadline )); do
               case "$resource" in
@@ -287,7 +317,7 @@ jobs:
               remaining=$((deadline - SECONDS))
               request_timeout=$((remaining < 20 ? remaining : 20))
               (( request_timeout > 0 )) || break
-              if OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
+              if OCI_JSON_ABSOLUTE_DEADLINE="$budget_deadline" OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
                   oci_json_request "${command[@]}"; then
                 output="$OCI_JSON_OUTPUT"
                 state="$(RESOURCE_KIND="$resource" EXPECTED_ID="$id" python -c 'import json,os,sys; d=json.load(sys.stdin); data=d.get("data"); assert isinstance(data,dict) and data.get("id")==os.environ["EXPECTED_ID"]; s=data.get("lifecycle-state"); allowed={"instance":{"PROVISIONING","STARTING","RUNNING","STOPPING","STOPPED","TERMINATING","TERMINATED"},"backup":{"REQUEST_RECEIVED","CREATING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"boot-volume":{"PROVISIONING","RESTORING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"vcn":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"internet-gateway":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"route-table":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"security-list":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"subnet":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"}}[os.environ["RESOURCE_KIND"]]; print(s if isinstance(s,str) and s in allowed else "INVALID" if not isinstance(s,str) else "UNKNOWN")' <<<"$output")" || return 1
@@ -303,6 +333,13 @@ jobs:
                     && grep -Eq "['\"]status['\"][[:space:]]*:[[:space:]]*404" <<<"$output"; then
                   echo "UV_ROOT_RESOURCE_ABSENCE_PASS resource=$resource id=$id terminal_state=NOT_FOUND"
                   return 0
+                fi
+                if [[ "$rc" == 124 || "$rc" == 137 ]]; then
+                  remaining=$((deadline - SECONDS))
+                  (( remaining > 0 )) || break
+                  sleep_seconds=$((remaining < 1 ? remaining : 1))
+                  (( sleep_seconds > 0 )) && sleep "$sleep_seconds"
+                  continue
                 fi
                 return 1
               fi
@@ -321,18 +358,19 @@ jobs:
             # One aggregate budget prevents stale duplicate inventories from
             # multiplying the cleanup time until the job-level timeout.
             (( ${#ids[@]} <= 20 )) || return 94
+            max_seconds="$(bounded_wait_seconds "$max_seconds" "$cleanup_deadline")" || return 42
             deadline=$((SECONDS + max_seconds))
             for id in "${ids[@]}"; do
               remaining=$((deadline - SECONDS))
               (( remaining > 0 )) || return 1
-              wait_absent "$resource" "$id" "$remaining" || return 1
+              wait_absent "$resource" "$id" "$remaining" "$cleanup_deadline" || return 1
             done
           }
           wait_instance_terminated() {
-            wait_absent instance "$1" "${2:-900}"
+            wait_absent instance "$1" "${2:-600}"
           }
           delete_resource_once() {
-            local resource="$1" id="$2" stderr_file="$RUNNER_TEMP/issue-881-delete.stderr" rc
+            local resource="$1" id="$2" stderr_file="$RUNNER_TEMP/issue-881-delete.stderr" rc delete_timeout
             local -a command
             case "$resource" in
               instance) command=(oci compute instance terminate --instance-id "$id" --preserve-boot-volume false --force) ;;
@@ -346,7 +384,8 @@ jobs:
               *) return 2 ;;
             esac
             : >"$stderr_file"
-            if timeout --signal=KILL 30s "${command[@]}" >/dev/null 2>"$stderr_file"; then
+            delete_timeout="$(bounded_wait_seconds 20 "$cleanup_deadline")" || return 42
+            if timeout --signal=KILL "${delete_timeout}s" "${command[@]}" >/dev/null 2>"$stderr_file"; then
               return 0
             else
               rc=$?
@@ -381,8 +420,8 @@ jobs:
             return "$rc"
           }
           operation_backup_inventory() {
-            local rc
-            if oci_json_request oci bv boot-volume-backup list --compartment-id "$tenancy_id" --boot-volume-id "$boot_id" --all; then
+            local budget_deadline="${1:-$primary_deadline}" rc
+            if OCI_JSON_ABSOLUTE_DEADLINE="$budget_deadline" oci_json_request oci bv boot-volume-backup list --compartment-id "$tenancy_id" --boot-volume-id "$boot_id" --all; then
               printf '%s\n' "$OCI_JSON_OUTPUT"
               return 0
             else
@@ -393,6 +432,7 @@ jobs:
           wait_backup_available() {
             local id="$1" max_seconds="${2:-3600}" deadline remaining request_timeout sleep_seconds state rc
             local -r per_request_max_seconds=30
+            max_seconds="$(bounded_wait_seconds "$max_seconds" "$primary_deadline")" || return 42
             BACKUP_AVAILABLE_JSON=""
             deadline=$((SECONDS + max_seconds))
             while (( SECONDS < deadline )); do
@@ -457,6 +497,7 @@ jobs:
             local deadline remaining request_timeout sleep_seconds state rc
             local -r per_request_max_seconds=30
             local -a command
+            max_seconds="$(bounded_wait_seconds "$max_seconds" "$primary_deadline")" || return 42
             case "$resource" in
               boot-volume) command=(oci bv boot-volume get --boot-volume-id "$id") ;;
               vcn) command=(oci network vcn get --vcn-id "$id") ;;
@@ -534,6 +575,7 @@ jobs:
             local id="$1" expected_name="$2" expected_backup_id="$3" max_seconds="$4"
             local deadline remaining request_timeout sleep_seconds token rc
             local -r per_request_max_seconds=30
+            max_seconds="$(bounded_wait_seconds "$max_seconds" "$primary_deadline")" || return 42
             state_set restored_volume_hydration_status WAITING
             state_set restored_volume_hydration_last_state none
             state_set restored_volume_hydration_failure_rc none
@@ -587,6 +629,7 @@ jobs:
           wait_attached_vnic() {
             local source_instance_id="$1" max_seconds="${2:-300}" deadline remaining request_timeout sleep_seconds token rc
             ATTACHED_VNIC_ID=""
+            max_seconds="$(bounded_wait_seconds "$max_seconds" "$primary_deadline")" || return 42
             deadline=$((SECONDS + max_seconds))
             while (( SECONDS < deadline )); do
               remaining=$((deadline - SECONDS)); request_timeout=$((remaining < 20 ? remaining : 20)); (( request_timeout > 0 )) || break
@@ -608,6 +651,7 @@ jobs:
           wait_vnic_public_ipv4() {
             local vnic_id="$1" max_seconds="${2:-300}" deadline remaining request_timeout sleep_seconds token rc
             VNIC_PUBLIC_IPV4=""
+            max_seconds="$(bounded_wait_seconds "$max_seconds" "$primary_deadline")" || return 42
             deadline=$((SECONDS + max_seconds))
             while (( SECONDS < deadline )); do
               remaining=$((deadline - SECONDS)); request_timeout=$((remaining < 20 ? remaining : 20)); (( request_timeout > 0 )) || break
@@ -683,6 +727,13 @@ jobs:
             state_set prior_resource_ids "$prior_ids"
             state_set prior_resource_count "$prior_count"
             state_set prior_resource_summary "$prior_summary"
+            # Bound the total number of delete requests as well as each typed
+            # absence set so the documented cleanup reserve covers the actual
+            # worst case rather than only an individual resource class.
+            if (( prior_count > 20 )); then
+              state_set prior_cleanup_status CARDINALITY_EXCEEDED
+              return 94
+            fi
             if [[ -z "$prior_instances$prior_restored$prior_subnets$prior_security$prior_routes$prior_igs$prior_vcns" ]]; then
               state_set prior_cleanup_status EXACT_NAME_INVENTORY_EMPTY
               echo 'UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS resource_count=0 ids=none exact_name_inventory_empty=true'
@@ -694,37 +745,37 @@ jobs:
               for id in "${ids[@]}"; do
                 delete_resource_once instance "$id" || true
               done
-              wait_all_absent instance 900 "${ids[@]}"
+              wait_all_absent instance 600 "${ids[@]}"
             fi
             if [[ -n "$prior_restored" ]]; then
               readarray -t ids <<<"$prior_restored"
               for id in "${ids[@]}"; do delete_resource_once boot-volume "$id" || true; done
-              wait_all_absent boot-volume 150 "${ids[@]}"
+              wait_all_absent boot-volume 120 "${ids[@]}"
             fi
             if [[ -n "$prior_subnets" ]]; then
               readarray -t ids <<<"$prior_subnets"
               for id in "${ids[@]}"; do delete_resource_once subnet "$id" || true; done
-              wait_all_absent subnet 150 "${ids[@]}"
+              wait_all_absent subnet 120 "${ids[@]}"
             fi
             if [[ -n "$prior_security" ]]; then
               readarray -t ids <<<"$prior_security"
               for id in "${ids[@]}"; do delete_resource_once security-list "$id" || true; done
-              wait_all_absent security-list 150 "${ids[@]}"
+              wait_all_absent security-list 120 "${ids[@]}"
             fi
             if [[ -n "$prior_routes" ]]; then
               readarray -t ids <<<"$prior_routes"
               for id in "${ids[@]}"; do delete_resource_once route-table "$id" || true; done
-              wait_all_absent route-table 150 "${ids[@]}"
+              wait_all_absent route-table 120 "${ids[@]}"
             fi
             if [[ -n "$prior_igs" ]]; then
               readarray -t ids <<<"$prior_igs"
               for id in "${ids[@]}"; do delete_resource_once internet-gateway "$id" || true; done
-              wait_all_absent internet-gateway 150 "${ids[@]}"
+              wait_all_absent internet-gateway 120 "${ids[@]}"
             fi
             if [[ -n "$prior_vcns" ]]; then
               readarray -t ids <<<"$prior_vcns"
               for id in "${ids[@]}"; do delete_resource_once vcn "$id" || true; done
-              wait_all_absent vcn 150 "${ids[@]}"
+              wait_all_absent vcn 120 "${ids[@]}"
             fi
             state_set prior_cleanup_status RECONCILED_PROVEN_ABSENT
             echo "UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS resource_count=$prior_count ids=$prior_ids"
@@ -734,30 +785,30 @@ jobs:
             state_set current_cleanup_status IN_PROGRESS
             mark_phase cleanup_current_attempt
             if [[ -z "$restored_id" && "$restored_attempted" == 1 ]]; then
-              restored_id="$(discover_named_id boot-volume "$stamp-restore")" || failed=1
+              restored_id="$(discover_named_id boot-volume "$stamp-restore" 30 "$cleanup_deadline")" || failed=1
             fi
             if [[ -z "$drill_vcn_id" && "$drill_vcn_attempted" == 1 ]]; then
-              drill_vcn_id="$(discover_named_id vcn "$stamp-vcn")" || failed=1
+              drill_vcn_id="$(discover_named_id vcn "$stamp-vcn" 30 "$cleanup_deadline")" || failed=1
             fi
             if [[ -n "$drill_vcn_id" ]]; then
               if [[ -z "$drill_ig_id" && "$drill_ig_attempted" == 1 ]]; then
-                drill_ig_id="$(discover_named_id internet-gateway "$stamp-ig")" || failed=1
+                drill_ig_id="$(discover_named_id internet-gateway "$stamp-ig" 30 "$cleanup_deadline")" || failed=1
               fi
               if [[ -z "$drill_route_id" && "$drill_route_attempted" == 1 ]]; then
-                drill_route_id="$(discover_named_id route-table "$stamp-route")" || failed=1
+                drill_route_id="$(discover_named_id route-table "$stamp-route" 30 "$cleanup_deadline")" || failed=1
               fi
               if [[ -z "$drill_security_id" && "$drill_security_attempted" == 1 ]]; then
-                drill_security_id="$(discover_named_id security-list "$stamp-ssh-only")" || failed=1
+                drill_security_id="$(discover_named_id security-list "$stamp-ssh-only" 30 "$cleanup_deadline")" || failed=1
               fi
               if [[ -z "$drill_subnet_id" && "$drill_subnet_attempted" == 1 ]]; then
-                drill_subnet_id="$(discover_named_id subnet "$stamp-subnet")" || failed=1
+                drill_subnet_id="$(discover_named_id subnet "$stamp-subnet" 30 "$cleanup_deadline")" || failed=1
               fi
             fi
             # If launch returned after creating the instance but before its JSON
             # reached this runner, retry exact-stamp discovery long enough for
             # OCI list eventual consistency. Query/JSON errors remain fatal.
             if [[ -z "$drill_instance_id" && "$drill_instance_attempted" == 1 && -n "$drill_subnet_id" ]]; then
-              drill_instance_id="$(discover_named_id instance "$stamp-boot-acceptance")" || failed=1
+              drill_instance_id="$(discover_named_id instance "$stamp-boot-acceptance" 30 "$cleanup_deadline")" || failed=1
             fi
             if [[ -n "$drill_instance_id" ]]; then
               state_set temporary_instance_id "$drill_instance_id"
@@ -767,28 +818,28 @@ jobs:
             if [[ -n "$restored_id" ]]; then
               state_set temporary_restored_volume_id "$restored_id"
               delete_resource_once boot-volume "$restored_id" || true
-              wait_absent boot-volume "$restored_id" || failed=1
+              wait_absent boot-volume "$restored_id" 120 || failed=1
             fi
             if [[ -n "$drill_subnet_id" ]]; then
               delete_resource_once subnet "$drill_subnet_id" || true
-              wait_absent subnet "$drill_subnet_id" || failed=1
+              wait_absent subnet "$drill_subnet_id" 120 || failed=1
             fi
             if [[ -n "$drill_security_id" ]]; then
               delete_resource_once security-list "$drill_security_id" || true
-              wait_absent security-list "$drill_security_id" || failed=1
+              wait_absent security-list "$drill_security_id" 120 || failed=1
             fi
             if [[ -n "$drill_route_id" ]]; then
               delete_resource_once route-table "$drill_route_id" || true
-              wait_absent route-table "$drill_route_id" || failed=1
+              wait_absent route-table "$drill_route_id" 120 || failed=1
             fi
             if [[ -n "$drill_ig_id" ]]; then
               delete_resource_once internet-gateway "$drill_ig_id" || true
-              wait_absent internet-gateway "$drill_ig_id" || failed=1
+              wait_absent internet-gateway "$drill_ig_id" 120 || failed=1
             fi
             if [[ -n "$drill_vcn_id" ]]; then
               state_set temporary_vcn_id "$drill_vcn_id"
               delete_resource_once vcn "$drill_vcn_id" || true
-              wait_absent vcn "$drill_vcn_id" || failed=1
+              wait_absent vcn "$drill_vcn_id" 120 || failed=1
             fi
             if (( failed == 0 )); then
               state_set current_cleanup_status PROVEN_ABSENT
@@ -810,7 +861,7 @@ jobs:
             # rediscovery during EXIT cleanup before deciding there is nothing
             # current-run-owned to delete.
             if [[ -z "$backup_id" && "$backup_attempted" == 1 ]]; then
-              backup_id="$(discover_named_id backup "$backup_name")" || cleanup_rc=1
+              backup_id="$(discover_named_id backup "$backup_name" 30 "$cleanup_deadline")" || cleanup_rc=1
               if [[ -n "$backup_id" ]]; then
                 backup_created_by_run=1
               else
@@ -824,7 +875,7 @@ jobs:
             # delete a pre-existing backup that may be the last proven point.
             if (( backup_created_by_run == 1 && backup_accepted == 0 )) && [[ -n "$backup_id" ]]; then
               delete_resource_once backup "$backup_id" || true
-              wait_absent backup "$backup_id" || cleanup_rc=1
+              wait_absent backup "$backup_id" 120 || cleanup_rc=1
               backup_id=""
             fi
             if (( cleanup_rc != 0 )); then
@@ -1002,9 +1053,13 @@ jobs:
           [[ -n "$restored_id" ]] || exit 37
           state_set temporary_restored_volume_id "$restored_id"
           mark_phase wait_restored_boot_volume_available
-          if wait_oci_resource_ready boot-volume "$restored_id" AVAILABLE 3600 restored_volume_wait "$stamp-restore"; then :; else resource_wait_rc=$?; exit "$resource_wait_rc"; fi
+          restored_gate_seconds="$(bounded_wait_seconds 3600 "$primary_deadline")" || exit 42
+          restored_gate_deadline=$(( $(monotonic_now) + restored_gate_seconds ))
+          restored_available_seconds="$(bounded_wait_seconds 3600 "$restored_gate_deadline")" || exit 42
+          if wait_oci_resource_ready boot-volume "$restored_id" AVAILABLE "$restored_available_seconds" restored_volume_wait "$stamp-restore"; then :; else resource_wait_rc=$?; exit "$resource_wait_rc"; fi
           mark_phase wait_restored_boot_volume_hydrated
-          if wait_restored_boot_volume_hydrated "$restored_id" "$stamp-restore" "$backup_id" 3600; then :; else hydration_wait_rc=$?; exit "$hydration_wait_rc"; fi
+          restored_hydration_seconds="$(bounded_wait_seconds 3600 "$restored_gate_deadline")" || { state_set restored_volume_hydration_status TIMEOUT; state_set restored_volume_hydration_failure_rc 42; exit 42; }
+          if wait_restored_boot_volume_hydrated "$restored_id" "$stamp-restore" "$backup_id" "$restored_hydration_seconds"; then :; else hydration_wait_rc=$?; exit "$hydration_wait_rc"; fi
           # Never boot the restored production image in a production network.  The
           # temporary VCN permits only stateful inbound SSH from this runner and
           # has no egress rules, NAT gateway, or service gateway.  Consequently
@@ -1085,14 +1140,19 @@ jobs:
           if wait_attached_vnic "$drill_instance_id" 300; then drill_vnic_id="$ATTACHED_VNIC_ID"; else vnic_rc=$?; exit "$vnic_rc"; fi
           if wait_vnic_public_ipv4 "$drill_vnic_id" 300; then drill_public_ip="$VNIC_PUBLIC_IPV4"; else vnic_rc=$?; exit "$vnic_rc"; fi
           known="$RUNNER_TEMP/drill-known-hosts"
+          ssh_scan_seconds="$(bounded_wait_seconds 300 "$primary_deadline")" || exit 42
+          ssh_scan_deadline=$(( $(monotonic_now) + ssh_scan_seconds ))
           for _ in $(seq 1 60); do
-            if ops/oracle_known_hosts_from_scan.sh "$drill_public_ip" "$EXPECTED_FINGERPRINT" "$known" 2>/dev/null; then break; fi
-            sleep 5
+            ssh_scan_attempt_seconds="$(bounded_wait_seconds 20 "$ssh_scan_deadline")" || break
+            if timeout --signal=KILL "${ssh_scan_attempt_seconds}s" ops/oracle_known_hosts_from_scan.sh "$drill_public_ip" "$EXPECTED_FINGERPRINT" "$known" 2>/dev/null; then break; fi
+            ssh_scan_sleep_seconds="$(bounded_wait_seconds 5 "$ssh_scan_deadline")" || break
+            sleep "$ssh_scan_sleep_seconds"
           done
           [[ -s "$known" ]] || exit 32
           key="$RUNNER_TEMP/id_oracle-drill"
           printf '%s\n' "$SSH_KEY_ORACLE" > "$key"; chmod 0600 "$key"; ssh-keygen -y -f "$key" >/dev/null
-          acceptance="$(ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "$ORACLE_USER@$drill_public_ip" 'set -e; test -r /etc/os-release; findmnt -n -o SOURCE,FSTYPE /; test "$(findmnt -n -o OPTIONS /)" != ""; test -r /var/lib/bridge-school; echo UV_RESTORED_ROOT_BOOT_ACCEPTANCE_PASS')"
+          acceptance_seconds="$(bounded_wait_seconds 120 "$primary_deadline")" || exit 42
+          acceptance="$(timeout --signal=KILL "${acceptance_seconds}s" ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "$ORACLE_USER@$drill_public_ip" 'set -e; test -r /etc/os-release; findmnt -n -o SOURCE,FSTYPE /; test "$(findmnt -n -o OPTIONS /)" != ""; test -r /var/lib/bridge-school; echo UV_RESTORED_ROOT_BOOT_ACCEPTANCE_PASS')"
           grep -Fq UV_RESTORED_ROOT_BOOT_ACCEPTANCE_PASS <<<"$acceptance"
           backup_accepted=1
           state_set backup_accepted true
@@ -1113,14 +1173,14 @@ jobs:
           # backup has passed isolated restored-root boot acceptance. This keeps
           # rollback coverage throughout replacement and bounds billable storage
           # to one proven recovery point across separate owner commands.
-          backup_inventory="$(operation_backup_inventory)"
+          backup_inventory="$(operation_backup_inventory "$cleanup_deadline")"
           superseded_ids="$(printf '%s' "$backup_inventory" | superseded_operation_backups)"
           if [[ -n "$superseded_ids" ]]; then
             readarray -t ids <<<"$superseded_ids"
             for id in "${ids[@]}"; do
               delete_resource_once backup "$id" || true
             done
-            wait_all_absent backup 300 "${ids[@]}"
+            wait_all_absent backup 120 "${ids[@]}"
           fi
           echo 'superseded_backup_count=0' >> "$GITHUB_OUTPUT"
           state_set superseded_backup_count 0
@@ -1139,8 +1199,13 @@ jobs:
         id: ssh
         run: |
           set -euo pipefail
+          mutation_deadline='${{ steps.budget.outputs.mutation_deadline }}'
+          monotonic_now="$(awk '{print int($1)}' /proc/uptime)"
+          remaining=$((mutation_deadline - monotonic_now))
+          (( remaining > 0 )) || exit 42
+          (( remaining < 120 )) && scan_seconds="$remaining" || scan_seconds=120
           known="$RUNNER_TEMP/known_hosts"
-          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          timeout --signal=KILL "${scan_seconds}s" ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
           key="$RUNNER_TEMP/id_oracle"
           printf '%s\n' "$SSH_KEY_ORACLE" > "$key"
           chmod 0600 "$key"
@@ -1151,13 +1216,20 @@ jobs:
         if: ${{ steps.backup.outputs.cleanup_only != 'true' }}
         run: |
           set -euo pipefail
-          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+          mutation_deadline='${{ steps.budget.outputs.mutation_deadline }}'
+          monotonic_now="$(awk '{print int($1)}' /proc/uptime)"
+          remaining=$((mutation_deadline - monotonic_now))
+          (( remaining > 0 )) || exit 42
+          timeout --signal=KILL "${remaining}s" ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
             "sudo -n env EXPECTED_HOSTNAME='$EXPECTED_HOSTNAME' EXPECTED_MIN_DISK_BYTES=90000000000 EXPECTED_MAX_DISK_BYTES=105000000000 MIN_FREE_KB=5242880 CHECKPOINT_ONLY=1 /bin/bash -s" \
             < ops/oracle_universal_video_root_filesystem_expand.sh | tee "$RUNNER_TEMP/root-checkpoint.txt"
           line="$(grep -E '^UV_ROOT_CHECKPOINT_PASS disk_bytes=[0-9]+ checkpoint=/var/lib/bridge-school/root-partition-recovery/issue-881-before-expand\.sfdisk sha256=[0-9a-f]{64}$' "$RUNNER_TEMP/root-checkpoint.txt")"
           disk_bytes="$(sed -E 's/^.*disk_bytes=([0-9]+).*$/\1/' <<<"$line")"
           expected_sha="$(sed -E 's/^.*sha256=([0-9a-f]{64})$/\1/' <<<"$line")"
-          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+          monotonic_now="$(awk '{print int($1)}' /proc/uptime)"
+          remaining=$((mutation_deadline - monotonic_now))
+          (( remaining > 0 )) || exit 42
+          timeout --signal=KILL "${remaining}s" ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
             'sudo -n cat /var/lib/bridge-school/root-partition-recovery/issue-881-before-expand.sfdisk' > "$RUNNER_TEMP/root-before.sfdisk"
           [[ "$(sha256sum "$RUNNER_TEMP/root-before.sfdisk" | awk '{print $1}')" == "$expected_sha" ]]
           truncate -s "$disk_bytes" "$RUNNER_TEMP/restore-test.img"
@@ -1176,23 +1248,31 @@ jobs:
         if: ${{ steps.backup.outputs.cleanup_only != 'true' }}
         run: |
           set -euo pipefail
+          mutation_deadline='${{ steps.budget.outputs.mutation_deadline }}'
+          monotonic_now() { awk '{print int($1)}' /proc/uptime; }
+          (( mutation_deadline > $(monotonic_now) )) || exit 42
           git fetch --no-tags origin main
           [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]]
           export OCI_CLI_REGION="$OCI_REGION"
           oci_json_request() {
             local stdout_file="$RUNNER_TEMP/issue-881-last-second.stdout"
             local stderr_file="$RUNNER_TEMP/issue-881-last-second.stderr"
-            local attempt rc
+            local attempt rc now remaining request_timeout
             for attempt in 1 2 3; do
               : >"$stdout_file"; : >"$stderr_file"
-              if timeout --signal=KILL 30s "$@" --output json >"$stdout_file" 2>"$stderr_file"; then rc=0; else rc=$?; fi
+              now="$(monotonic_now)"; remaining=$((mutation_deadline - now)); (( remaining > 0 )) || return 42
+              request_timeout=$((remaining < 30 ? remaining : 30))
+              if timeout --signal=KILL "${request_timeout}s" "$@" --output json >"$stdout_file" 2>"$stderr_file"; then rc=0; else rc=$?; fi
               (( rc == 0 )) || return "$rc"
               if python -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d,dict)' <"$stdout_file"; then
                 OCI_JSON_OUTPUT="$(<"$stdout_file")"
                 OCI_JSON_ERROR="$(<"$stderr_file")"
                 return 0
               fi
-              (( attempt < 3 )) && sleep 2
+              if (( attempt < 3 )); then
+                now="$(monotonic_now)"; remaining=$((mutation_deadline - now)); (( remaining > 0 )) || return 42
+                (( remaining < 2 )) && sleep "$remaining" || sleep 2
+              fi
             done
             return 86
           }
@@ -1246,13 +1326,17 @@ jobs:
         id: mutation
         run: |
           set -euo pipefail
+          mutation_deadline='${{ steps.budget.outputs.mutation_deadline }}'
+          monotonic_now="$(awk '{print int($1)}' /proc/uptime)"
+          remaining=$((mutation_deadline - monotonic_now))
+          (( remaining > 0 )) || exit 42
           mutation="$RUNNER_TEMP/issue-881-locked-mutation.sh"
           {
             cat ops/oracle_universal_video_root_filesystem_expand.sh
             printf '\n'
             cat ops/oracle_universal_video_container_missing_image_recover.sh
           } > "$mutation"
-          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+          timeout --signal=KILL "${remaining}s" ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
             "sudo -n env EXPECTED_HOSTNAME='$EXPECTED_HOSTNAME' EXPECTED_MIN_DISK_BYTES=90000000000 EXPECTED_MAX_DISK_BYTES=105000000000 MIN_FREE_KB=5242880 UNIVERSAL_VIDEO_EXPECTED_SHA='$EXACT_RUNTIME_SHA' /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock /bin/bash -s" \
             < "$mutation" | tee "$RUNNER_TEMP/locked-mutation.txt"
           grep -E '^UV_ROOT_EXPAND_PASS .*disk_bytes=[0-9]+ .*free_kb_after=[0-9]+$' "$RUNNER_TEMP/locked-mutation.txt"
@@ -1266,11 +1350,16 @@ jobs:
           TEMP_INSTANCE_SECONDS: ${{ steps.backup.outputs.temporary_instance_seconds }}
           JOB_STATUS: ${{ job.status }}
           MUTATION_OUTCOME: ${{ steps.mutation.outcome }}
+          PRIMARY_DEADLINE: ${{ steps.budget.outputs.primary_deadline }}
+          CLEANUP_DEADLINE: ${{ steps.budget.outputs.cleanup_deadline }}
+          MUTATION_DEADLINE: ${{ steps.budget.outputs.mutation_deadline }}
+          RECEIPT_DEADLINE: ${{ steps.budget.outputs.receipt_deadline }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           body="$RUNNER_TEMP/issue-881-root-expand-receipt.md"
-          STATE_PATH="$RUNNER_TEMP/issue-881-step4-state.json" BODY_PATH="$body" python - <<'PY'
+          receipt_monotonic_now="$(awk '{print int($1)}' /proc/uptime)"
+          STATE_PATH="$RUNNER_TEMP/issue-881-step4-state.json" BODY_PATH="$body" RECEIPT_MONOTONIC_NOW="$receipt_monotonic_now" python - <<'PY'
           import json, os
           from pathlib import Path
 
@@ -1280,6 +1369,19 @@ jobs:
               return str(state.get(key) or fallback)
           def code(text):
               return '`' + str(text).replace('`', "'") + '`'
+
+          deadline_values = [
+              os.environ.get('PRIMARY_DEADLINE') or 'unknown',
+              os.environ.get('CLEANUP_DEADLINE') or 'unknown',
+              os.environ.get('MUTATION_DEADLINE') or 'unknown',
+              os.environ.get('RECEIPT_DEADLINE') or 'unknown',
+          ]
+          receipt_now = os.environ.get('RECEIPT_MONOTONIC_NOW') or ''
+          receipt_inside_deadline = (
+              receipt_now.isdigit()
+              and deadline_values[-1].isdigit()
+              and int(receipt_now) < int(deadline_values[-1])
+          )
 
           backup_id = os.environ.get('BACKUP_ID') or state.get('retained_backup_id')
           lines = [
@@ -1291,6 +1393,8 @@ jobs:
               '- last recorded phase: ' + code(value('phase')),
               '- failing phase before cleanup: ' + code(value('failure_phase', 'none')),
               '- failure rc: ' + code(value('failure_rc', 'none')),
+              '- monotonic primary/cleanup/mutation/receipt deadlines: ' + code('/'.join(deadline_values)),
+              '- receipt started inside reserved deadline: ' + code(str(receipt_inside_deadline).lower()),
               '- prior-run reconciliation: ' + code(value('prior_cleanup_status', 'NOT_RECORDED')),
               '- prior-run exact resource count: ' + code(value('prior_resource_count', 'unknown')),
               '- prior-run exact resource IDs: ' + code(value('prior_resource_ids', 'none')),

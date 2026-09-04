@@ -93,6 +93,87 @@ def test_fresh_full_backup_and_isolated_boot_acceptance_gate_mutation() -> None:
     shape_read = WORKFLOW.index('shape="$(printf \'%s\' "$instance_json"')
     assert instance_fetch < shape_read
     assert "assert d['display-name']=='bridge-school-dds3-frankfurt'" in WORKFLOW
+
+
+def test_monotonic_budget_reserves_cleanup_mutation_receipt_and_runner_slack() -> None:
+    assert "Establish monotonic operation and cleanup budgets" in WORKFLOW
+    assert 'primary_deadline=$((monotonic_now + 14400))' in WORKFLOW
+    assert 'cleanup_deadline=$((monotonic_now + 16800))' in WORKFLOW
+    assert 'mutation_deadline=$((monotonic_now + 19200))' in WORKFLOW
+    assert 'receipt_deadline=$((monotonic_now + 20700))' in WORKFLOW
+    assert 14400 + 2400 + 2400 + 1500 + 900 == 360 * 60
+
+    # Worst-case current-attempt cleanup: eight 30s exact-name rediscoveries,
+    # eight 20s delete requests, a 10m instance wait, and seven 2m dependent
+    # resource/backup waits. This fits the executable 40m cleanup reserve.
+    cleanup_worst_case_seconds = 8 * 30 + 8 * 20 + 600 + 7 * 120
+    assert cleanup_worst_case_seconds == 1840
+    assert cleanup_worst_case_seconds < 16800 - 14400
+    for exact in (
+        'discover_named_id boot-volume "$stamp-restore" 30 "$cleanup_deadline"',
+        'discover_named_id vcn "$stamp-vcn" 30 "$cleanup_deadline"',
+        'discover_named_id instance "$stamp-boot-acceptance" 30 "$cleanup_deadline"',
+        'discover_named_id backup "$backup_name" 30 "$cleanup_deadline"',
+    ):
+        assert exact in WORKFLOW
+    assert "if (( prior_count > 20 ))" in WORKFLOW
+    assert 'wait_all_absent instance 600' in WORKFLOW
+    assert WORKFLOW.count('wait_all_absent boot-volume 120') >= 1
+    assert 'bounded_wait_seconds 20 "$cleanup_deadline"' in WORKFLOW
+    assert 'timeout --signal=KILL "${delete_timeout}s" "${command[@]}"' in WORKFLOW
+
+    helper_start = WORKFLOW.index("monotonic_now() { awk")
+    helper_end = WORKFLOW.index("for value in OCI_USER", helper_start)
+    helpers = textwrap.dedent(WORKFLOW[helper_start:helper_end])
+    probe = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "set -e\n" + helpers + r'''
+now="$(monotonic_now)"
+if bounded_wait_seconds 10 "$((now - 1))" >/dev/null; then primary_rc=0; else primary_rc=$?; fi
+cleanup_value="$(bounded_wait_seconds 10 "$((now + 20))")"
+printf 'primary_rc=%s cleanup_value=%s\n' "$primary_rc" "$cleanup_value"
+''',
+        ],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert "primary_rc=42 cleanup_value=10" in probe.stdout
+
+
+def test_operational_receipt_survives_missing_budget_outputs() -> None:
+    receipt_start = WORKFLOW.index(
+        'STATE_PATH="$RUNNER_TEMP/issue-881-step4-state.json" BODY_PATH="$body" RECEIPT_MONOTONIC_NOW="$receipt_monotonic_now" python - <<\'PY\''
+    )
+    python_start = WORKFLOW.index("\n", receipt_start) + 1
+    python_end = WORKFLOW.index("\n          PY", python_start)
+    receipt_program = textwrap.dedent(WORKFLOW[python_start:python_end])
+    with tempfile.TemporaryDirectory() as temp_dir:
+        body_path = Path(temp_dir) / "receipt.md"
+        result = subprocess.run(
+            ["python", "-c", receipt_program],
+            env=os.environ
+            | {
+                "STATE_PATH": str(Path(temp_dir) / "missing-state.json"),
+                "BODY_PATH": str(body_path),
+                "RECEIPT_MONOTONIC_NOW": "123",
+                "JOB_STATUS": "failure",
+                "BACKUP_OUTCOME": "failure",
+                "BACKUP_ID": "",
+                "SUPERSEDED_BACKUP_COUNT": "",
+                "TEMP_INSTANCE_SECONDS": "",
+                "MUTATION_OUTCOME": "skipped",
+                "RUN_URL": "https://example.invalid/run",
+            },
+            text=True,
+            capture_output=True,
+        )
+        assert result.returncode == 0, result.stderr
+        receipt = body_path.read_text()
+        assert "monotonic primary/cleanup/mutation/receipt deadlines: `unknown/unknown/unknown/unknown`" in receipt
+        assert "receipt started inside reserved deadline: `false`" in receipt
     assert "assert d['lifecycle-state']=='RUNNING'" in WORKFLOW
     assert "assert len(xs)==1; print(xs[0])" in WORKFLOW
     assert '[[ "$source_public_ip" == "$ORACLE_HOST" ]]' in WORKFLOW
@@ -139,10 +220,13 @@ def test_paid_and_temporary_creates_capture_before_separate_waits() -> None:
     assert "--wait-for-state" not in block
     assert 'if wait_backup_available "$backup_id"' in block
     assert block.count("wait_oci_resource_ready") >= 8
-    assert 'wait_oci_resource_ready boot-volume "$restored_id" AVAILABLE 3600' in block
+    assert 'restored_gate_seconds="$(bounded_wait_seconds 3600 "$primary_deadline")"' in block
+    assert 'wait_oci_resource_ready boot-volume "$restored_id" AVAILABLE "$restored_available_seconds"' in block
     assert 'wait_oci_resource_ready instance "$drill_instance_id" RUNNING 1800' in block
-    assert "explicit OCI waiters consume at most 240 minutes" in WORKFLOW
-    assert "least 90 minutes" in WORKFLOW
+    assert "at 240 minutes total" in WORKFLOW
+    assert "current-attempt cleanup worst case is 1,840 seconds" in WORKFLOW
+    assert "40-minute cleanup" in WORKFLOW
+    assert "15 minutes for runner setup/cancellation slack" in WORKFLOW
 
 
 def test_operational_oci_reads_have_no_raw_wait_or_command_substitution_boundary() -> None:
@@ -213,7 +297,7 @@ def test_rerun_stamp_and_prior_attempt_reconciliation_precede_creation() -> None
     assert "Keep TERMINATED objects in the evidence set" in block
     prior_filter = block[block.index("PRIOR_PREFIX=") : block.index("reconcile_prior_attempt_resources")]
     assert 'x.get("lifecycle-state") != "TERMINATED"' not in prior_filter
-    assert 'drill_instance_id="$(discover_named_id instance "$stamp-boot-acceptance")" || failed=1' in block
+    assert 'drill_instance_id="$(discover_named_id instance "$stamp-boot-acceptance" 30 "$cleanup_deadline")" || failed=1' in block
 
 
 def test_distinct_owner_commands_share_source_scoped_cleanup_identity() -> None:
@@ -242,7 +326,7 @@ def test_separate_commands_keep_one_operation_scoped_proven_backup() -> None:
     retire = block.index("superseded_operation_backups", acceptance)
     assert acceptance < retire
     assert "delete_resource_once backup" in block[retire:]
-    assert "wait_all_absent backup 300" in block[retire:]
+    assert "wait_all_absent backup 120" in block[retire:]
     assert "superseded_backup_count=0" in block[retire:]
 
 
@@ -260,11 +344,11 @@ def test_failed_drill_deletes_only_its_new_unaccepted_backup() -> None:
     ]
     assert "backup_created_by_run == 1 && backup_accepted == 0" in cleanup
     assert '[[ -z "$backup_id" && "$backup_attempted" == 1 ]]' in cleanup
-    assert 'backup_id="$(discover_named_id backup "$backup_name")" || cleanup_rc=1' in cleanup
+    assert 'backup_id="$(discover_named_id backup "$backup_name" 30 "$cleanup_deadline")" || cleanup_rc=1' in cleanup
     assert "UV_ROOT_BACKUP_OWNERSHIP_UNRESOLVED" in cleanup
     assert cleanup.count("cleanup_rc=1") >= 3
     assert 'delete_resource_once backup "$backup_id"' in cleanup
-    assert 'wait_absent backup "$backup_id" || cleanup_rc=1' in cleanup
+    assert 'wait_absent backup "$backup_id" 120 || cleanup_rc=1' in cleanup
     acceptance = block.index("UV_RESTORED_ROOT_BOOT_ACCEPTANCE_PASS")
     accepted = block.index("backup_accepted=1", acceptance)
     output = block.index('echo "backup_id=$backup_id" >> "$GITHUB_OUTPUT"')
@@ -320,7 +404,8 @@ def test_oci_json_stdout_isolated_from_warning_stderr() -> None:
     assert 'retry_delay_seconds="${OCI_JSON_RETRY_DELAY_SECONDS:-5}"' in helper
     assert 'for attempt in $(seq 1 "$max_attempts")' in helper
     assert "INVALID_JSON_SUCCESS_RESPONSE" in helper
-    assert '(( attempt < max_attempts )) && sleep "$retry_delay_seconds"' in helper
+    assert 'bounded_retry_seconds="$(bounded_wait_seconds "$retry_delay_seconds" "$absolute_deadline")"' in helper
+    assert 'sleep "$bounded_retry_seconds"' in helper
     assert "return 86" in helper
     assert "(( rc == 0 )) || return" in helper
     assert "json.load(sys.stdin)" in helper
@@ -453,6 +538,8 @@ esac
         fake_oci.chmod(0o755)
         script = "set -e\n" + helpers + r'''
 state_set() { printf 'state:%s=%s\n' "$1" "$2" >&2; }
+bounded_wait_seconds() { printf '%s\n' "$1"; }
+primary_deadline=999999999
 tenancy_id=tenancy
 ad=ad
 drill_vcn_id=vcn
@@ -507,7 +594,9 @@ def test_restored_volume_hydration_wait_is_identity_source_size_and_time_bound()
         WORKFLOW.index("runner_ip=", WORKFLOW.index("mark_phase wait_restored_boot_volume_available"))
     ]
     assert 'mark_phase wait_restored_boot_volume_hydrated' in gate
-    assert 'wait_restored_boot_volume_hydrated "$restored_id" "$stamp-restore" "$backup_id" 3600' in gate
+    assert 'restored_gate_deadline=$(( $(monotonic_now) + restored_gate_seconds ))' in gate
+    assert 'restored_hydration_seconds="$(bounded_wait_seconds 3600 "$restored_gate_deadline")"' in gate
+    assert 'wait_restored_boot_volume_hydrated "$restored_id" "$stamp-restore" "$backup_id" "$restored_hydration_seconds"' in gate
     receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
     assert "restored volume hydration" in receipt
     assert "restored_volume_hydration_failure_rc" in receipt
@@ -533,6 +622,8 @@ printf '{"data":{"id":"restored","display-name":"restore-name","compartment-id":
         fake_oci.chmod(0o755)
         script = "set -e\n" + helpers + r'''
 state_set() { printf 'state:%s=%s\n' "$1" "$2" >&2; }
+bounded_wait_seconds() { printf '%s\n' "$1"; }
+primary_deadline=999999999
 tenancy_id=tenancy
 ad=ad
 started=$SECONDS
@@ -582,11 +673,24 @@ case "$FAKE_MODE" in
   wrong_id) echo '{"data":{"id":"other","lifecycle-state":"TERMINATED"}}' ;;
   notfound) echo '{"code":"NotAuthorizedOrNotFound","status":404}' >&2; exit 17 ;;
   auth) echo '{"code":"NotAuthenticated","status":401}' >&2; exit 17 ;;
+  timeout_then_terminated|timeout_then_notfound)
+    count_file="$RUNNER_TEMP/$FAKE_MODE.count"
+    count=0; [[ -f "$count_file" ]] && count="$(cat "$count_file")"
+    count=$((count + 1)); printf '%s\n' "$count" > "$count_file"
+    if (( count == 1 )); then exit 124; fi
+    if [[ "$FAKE_MODE" == timeout_then_terminated ]]; then
+      echo '{"data":{"id":"expected-id","lifecycle-state":"TERMINATED"}}'
+    else
+      echo '{"code":"NotAuthorizedOrNotFound","status":404}' >&2; exit 17
+    fi ;;
+  persistent_timeout) exit 124 ;;
 esac
 """
         )
         fake_oci.chmod(0o755)
         base = "set -e\n" + helpers + r'''
+bounded_wait_seconds() { printf '%s\n' "$1"; }
+primary_deadline=999999999; cleanup_deadline=999999999
 tenancy_id=tenancy; boot_id=boot; ad=ad; drill_vcn_id=vcn
 '''
 
@@ -603,6 +707,9 @@ tenancy_id=tenancy; boot_id=boot; ad=ad; drill_vcn_id=vcn
         assert "rc=3" in discovered.stdout
         assert "rc=0" in run('if wait_absent boot-volume expected-id 2; then rc=0; else rc=$?; fi; echo rc=$rc\n', "terminated").stdout
         assert "rc=0" in run('if wait_absent boot-volume expected-id 2; then rc=0; else rc=$?; fi; echo rc=$rc\n', "notfound").stdout
+        assert "rc=0" in run('if wait_absent boot-volume expected-id 3; then rc=0; else rc=$?; fi; echo rc=$rc\n', "timeout_then_terminated").stdout
+        assert "rc=0" in run('if wait_absent boot-volume expected-id 3; then rc=0; else rc=$?; fi; echo rc=$rc\n', "timeout_then_notfound").stdout
+        assert "rc=1" in run('if wait_absent boot-volume expected-id 2; then rc=0; else rc=$?; fi; echo rc=$rc\n', "persistent_timeout").stdout
         assert "rc=1" in run('if wait_absent boot-volume expected-id 1; then rc=0; else rc=$?; fi; echo rc=$rc\n', "wrong_id").stdout
         assert "rc=1" in run('if wait_absent boot-volume expected-id 1; then rc=0; else rc=$?; fi; echo rc=$rc\n', "auth").stdout
         ids=" ".join(f"id-{index}" for index in range(21))
@@ -635,6 +742,8 @@ esac
         fake_oci.chmod(0o755)
         script = "set -e\n" + helpers + r'''
 state_set() { printf 'state:%s=%s\n' "$1" "$2" >&2; }
+bounded_wait_seconds() { printf '%s\n' "$1"; }
+primary_deadline=999999999
 started=$SECONDS
 if wait_backup_available backup-id "$MAX_SECONDS"; then rc=0; else rc=$?; fi
 printf 'rc=%s elapsed=%s\n' "$rc" "$((SECONDS - started))"
@@ -761,7 +870,10 @@ esac
     )
     fake_oci.chmod(0o755)
 
-    script = helper + """
+    script = """
+bounded_wait_seconds() { printf '%s\\n' "$1"; }
+primary_deadline=999999999
+""" + helper + """
 if oci_json_request "$FAKE_OCI"; then
   printf 'rc=0\\njson=%s\\nstderr=%s\\n' "$OCI_JSON_OUTPUT" "$OCI_JSON_ERROR"
 else
