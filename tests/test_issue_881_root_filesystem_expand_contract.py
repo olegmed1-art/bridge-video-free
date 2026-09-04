@@ -107,7 +107,7 @@ def test_paid_and_temporary_creates_capture_before_separate_waits() -> None:
         WORKFLOW.index("Resolve pinned SSH identity")
     ]
     assert "discover_named_id()" in block
-    assert "discover_named_id backup" in block
+    assert 'discover_named_id backup "$backup_name"' in block
     assert "discover_named_id boot-volume" in block
     assert "discover_named_id vcn" in block
     assert "discover_named_id internet-gateway" in block
@@ -131,7 +131,7 @@ def test_paid_and_temporary_creates_capture_before_separate_waits() -> None:
     assert block.count("--wait-for-state AVAILABLE") >= 7
     assert block.count("--wait-for-state AVAILABLE --max-wait-seconds 300") == 5
     assert "explicit OCI waiters consume at most 235 minutes" in WORKFLOW
-    assert "leaves 125 minutes" in WORKFLOW
+    assert "at least 95 minutes" in WORKFLOW
 
 
 def test_cleanup_rediscovery_is_scoped_to_attempted_unique_resources() -> None:
@@ -154,6 +154,55 @@ def test_cleanup_rediscovery_is_scoped_to_attempted_unique_resources() -> None:
         '"$stamp-subnet"',
     ):
         assert name in cleanup
+
+
+def test_rerun_stamp_and_prior_attempt_reconciliation_precede_creation() -> None:
+    block = WORKFLOW[
+        WORKFLOW.index('run_prefix="issue-881-${GITHUB_RUN_ID}"') :
+        WORKFLOW.index("Resolve pinned SSH identity")
+    ]
+    assert 'run_prefix="issue-881-${GITHUB_RUN_ID}"' in block
+    assert 'stamp="${prior_prefix}${GITHUB_RUN_ATTEMPT}"' in block
+    assert 'backup_name="${run_prefix}-full"' in block
+    reconcile = block.index("reconcile_prior_attempt_resources")
+    create = block.index("boot-volume-backup create")
+    assert reconcile < create
+    for resource in (
+        "prior_instances",
+        "prior_restored",
+        "prior_subnets",
+        "prior_security",
+        "prior_routes",
+        "prior_igs",
+        "prior_vcns",
+    ):
+        assert resource in block
+    assert "wait_all_absent" in block
+    assert 'for id in "${ids[@]}"' in block
+    assert "UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS" in block
+    assert 'x.get("lifecycle-state") != "TERMINATED"' in block
+    assert 'candidates=\'{"data":[]}\'' in block
+
+
+def test_rerun_reuses_one_stable_backup_instead_of_accumulating_backups() -> None:
+    block = WORKFLOW[
+        WORKFLOW.index('backup_name="${run_prefix}-full"') :
+        WORKFLOW.index("Resolve pinned SSH identity")
+    ]
+    lookup = block.index('backup_id="$(discover_named_id backup "$backup_name")"')
+    create = block.index("boot-volume-backup create")
+    assert lookup < create
+    assert '--display-name "$backup_name"' in block
+    assert '--display-name "$stamp-full"' not in block
+
+
+def test_receipt_reports_backup_only_from_proven_step_output() -> None:
+    receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
+    assert "BACKUP_ID: ${{ steps.backup.outputs.backup_id }}" in receipt
+    assert 'if [[ -n "$BACKUP_ID" ]]' in receipt
+    assert "fresh backup retained: \\`true\\`; proven backup ID" in receipt
+    assert "fresh backup retained: `unknown`" in receipt
+    assert "fresh backup retained: `true` (billable" not in receipt
 
 
 def test_temporary_restore_cleanup_waits_for_dependency_deletion() -> None:
