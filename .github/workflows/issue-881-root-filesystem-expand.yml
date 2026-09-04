@@ -150,7 +150,7 @@ jobs:
           stamp="${run_prefix}-a${GITHUB_RUN_ATTEMPT}"
           backup_name="${backup_prefix}-${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
           backup_id="" restored_id="" drill_instance_id="" drill_public_ip="" drill_started=""
-          backup_created_by_run=0 backup_accepted=0
+          backup_attempted=0 backup_created_by_run=0 backup_accepted=0
           drill_vcn_id="" drill_ig_id="" drill_route_id="" drill_security_id="" drill_subnet_id=""
           restored_attempted=0 drill_vcn_attempted=0 drill_ig_attempted=0
           drill_route_attempted=0 drill_security_attempted=0 drill_subnet_attempted=0
@@ -394,6 +394,14 @@ jobs:
             set +e
             cleanup_temp_resources
             cleanup_rc=$?
+            # The create response can be lost before OCI's eventually
+            # consistent list exposes the exact-name backup.  Repeat bounded
+            # rediscovery during EXIT cleanup before deciding there is nothing
+            # current-run-owned to delete.
+            if [[ -z "$backup_id" && "$backup_attempted" == 1 ]]; then
+              backup_id="$(discover_named_id backup "$backup_name")" || cleanup_rc=1
+              [[ -n "$backup_id" ]] && backup_created_by_run=1
+            fi
             # A backup created by this attempt is not a recovery point until its
             # isolated restored root has passed SSH boot acceptance.  Never let
             # failed drills accumulate unaccepted 97 GB FULL backups, and never
@@ -414,6 +422,7 @@ jobs:
           backup_inventory="$(operation_backup_inventory)"
           backup_id="$(printf '%s' "$backup_inventory" | select_fresh_operation_backup)"
           if [[ -z "$backup_id" ]]; then
+            backup_attempted=1
             if backup="$(oci bv boot-volume-backup create --boot-volume-id "$boot_id" --type FULL --display-name "$backup_name" --output json)"; then
               backup_id="$(printf '%s' "$backup" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("id", ""))' 2>/dev/null || true)"
               [[ -n "$backup_id" ]] || backup_id="$(discover_named_id backup "$backup_name")"
