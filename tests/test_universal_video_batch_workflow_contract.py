@@ -24,6 +24,10 @@ def test_batch_transport_is_durable_bounded_and_project_neutral():
     assert "cancel-in-progress: false" in text
     assert "timeout-minutes: 360" in text
     assert "EXECUTION_DEADLINE_EPOCH=$(( $(date +%s) + 21000 ))" in text
+    execute_steps = text.split("  enqueue:", 1)[1]
+    assert execute_steps.index("Initialize one end-to-end recovery budget") < execute_steps.index(
+        "actions/checkout@"
+    )
     assert text.count("timeout \"$ssh_timeout\" ssh") == 1
     assert "remaining=$(( EXECUTION_DEADLINE_EPOCH - now - 300 ))" in text
     assert 'ssh_timeout="$(budget_max 4800)"' in text
