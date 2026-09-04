@@ -291,7 +291,7 @@ SET search_path=pg_catalog,public,bidding
 SET TimeZone='UTC'
 AS $$
 WITH effective_canon AS (
-  SELECT ca.* FROM effective_canon ca
+  SELECT ca.* FROM public.canon_activation ca
   WHERE ca.status='active' AND ca.valid_from<=clock_timestamp()
     AND (ca.valid_to IS NULL OR ca.valid_to>clock_timestamp())
 ), active_runtime AS (
