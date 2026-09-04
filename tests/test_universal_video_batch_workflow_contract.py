@@ -30,6 +30,11 @@ def test_batch_transport_is_durable_bounded_and_project_neutral():
     assert "recover_instance_after_transport_loss" in text
     assert "enqueue_rc == 255 && attempt < 3" in text
     assert "ServerAliveCountMax=2" in text
+    preflight = text.split("- name: Resolve pinned SSH transport", 1)[0]
+    assert "STARTING)" in preflight
+    assert "STOPPING)" in preflight
+    assert "--wait-for-state STOPPED --max-wait-seconds 600" in preflight
+    assert "'CANARY_REVIEW'" in text
     assert "sleep 60" not in text
     assert "project" not in json.loads(INTAKE_SCHEMA.read_text(encoding="utf-8"))["properties"]
 
