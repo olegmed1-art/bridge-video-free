@@ -83,6 +83,23 @@ def test_binds_logic_to_dds_offline_without_hidden_cards():
     assert len(result["comparison_sha256"]) == 64
 
 
+@pytest.mark.parametrize("context_patch,position_patch", [
+    ({"seat_to_play": "E"}, {}),
+    ({"contract": "3H"}, {}),
+    ({"lead": "AH"}, {"current_trick": ["AS"]}),
+    ({"trick_no": 1, "played_cards": ["AS"]}, {"current_trick": ["KS"]}),
+])
+def test_dds_position_must_match_supplied_public_context(context_patch, position_patch):
+    value = _observation()
+    value["decision"]["public_context"].update(context_patch)
+    value["dds_request"]["position"].update(position_patch)
+    with pytest.raises(VideoDDSComparisonError, match="does not match public"):
+        build_offline_dds_comparison(
+            value, _board_evidence(), _logic_evidence(),
+            dds_request_executor=_executor(),
+        )
+
+
 @pytest.mark.parametrize("mutate, match", [
     (lambda value: value["decision"]["public_context"].update(partner_hand="AKQ"), "fields invalid"),
     (lambda value: value["full_deal_evidence"].update(verified_full_board=False), "verified full board"),

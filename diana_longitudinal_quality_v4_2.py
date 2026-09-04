@@ -297,6 +297,15 @@ def build_quality_layer(
         auto_pipeline = run_video_canon_auto_pipeline(
             learning_candidate, assertions, verifications
         )
+        auto_pipeline = dict(auto_pipeline)
+        legacy_commands = list(auto_pipeline.get("promotion_commands") or [])
+        auto_pipeline["promotion_commands"] = []
+        if legacy_commands:
+            auto_pipeline["status"] = "NEEDS_I2_I3"
+            auto_pipeline["gaps"] = list(auto_pipeline.get("gaps") or []) + [{
+                "status": "NEEDS_EVIDENCE",
+                "reason": "legacy candidate path cannot promote without independent I2/I3 verdicts",
+            }]
     else:
         auto_pipeline = {
             "schema": "video-canon-auto-pipeline-v1",

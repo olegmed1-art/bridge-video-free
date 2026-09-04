@@ -122,6 +122,9 @@ def test_world_video_can_never_be_review_eligible_for_school_canon():
     (lambda a: a["normalized_rule"].update(partner_hand="AKQ"), "hidden information"),
     (lambda a: a["normalized_rule"].update(partner_holding="AKQ.JT9.876.5432"), "hidden information"),
     (lambda a: a["normalized_rule"].update(**{"North-Cards": "AKQ.JT9.876.5432"}), "hidden information"),
+    (lambda a: a["normalized_rule"].update(**{"partner's_hand": "AKQ.JT9.876.5432"}), "hidden information"),
+    (lambda a: a["normalized_rule"].update(partners_hand="AKQ.JT9.876.5432"), "hidden information"),
+    (lambda a: a["normalized_rule"].update(**{"opponents-cards": "AKQ.JT9.876.5432"}), "hidden information"),
     (lambda a: a["tests"].update(boundary=[]), "four test classes"),
 ])
 def test_fails_closed_on_unproven_or_unsafe_assertions(mutation, match):
@@ -244,6 +247,9 @@ def test_hidden_deal_is_rejected_inside_innocuous_allowed_value(field, value):
     "North does not have any aces",
     "North has none of the aces",
     "North lacks the ace of spades",
+    "North has no spades",
+    "North does not have any spades",
+    "North lacks spades",
 ])
 def test_hidden_deal_is_rejected_in_source_bound_teacher_statement(statement):
     learning = _learning()

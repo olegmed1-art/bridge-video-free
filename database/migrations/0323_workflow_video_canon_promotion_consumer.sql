@@ -519,6 +519,7 @@ DECLARE
   v_promotion uuid;
   v_delivery uuid;
   v_integrity text;
+  v_now timestamptz := clock_timestamp();
 BEGIN
   IF p_lease_token IS NULL OR p_fencing_token IS NULL THEN
     RAISE EXCEPTION 'VIDEO_CANON_STALE_LEASE_OR_FENCE' USING ERRCODE='55000';
@@ -539,6 +540,8 @@ BEGIN
          JOIN bidding.runtime_activation ra ON ra.runtime_activation_id=pr.runtime_activation_id
           WHERE pr.video_canon_ai_promotion_receipt_id=v_existing.promotion_receipt_id
             AND ca.status='active' AND ra.status='active'
+            AND ca.valid_from<=v_now AND (ca.valid_to IS NULL OR ca.valid_to>v_now)
+            AND ra.valid_from<=v_now AND (ra.valid_to IS NULL OR ra.valid_to>v_now)
        ) THEN
       RAISE EXCEPTION 'VIDEO_CANON_DELIVERY_RECEIPT_STALE' USING ERRCODE='55000';
     END IF;

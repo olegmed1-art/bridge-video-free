@@ -125,7 +125,9 @@ def _public_context(value: Any) -> dict[str, Any]:
 
 
 def _rerun_authenticated_dds_request(
-    observation: Mapping[str, Any], executor: DDSRequestExecutor | None
+    observation: Mapping[str, Any],
+    public_context: Mapping[str, Any],
+    executor: DDSRequestExecutor | None,
 ) -> tuple[dict[str, Any], str, str, str, str]:
     if executor is None:
         raise VideoDDSComparisonError("pinned DDS request executor required")
@@ -135,6 +137,27 @@ def _rerun_authenticated_dds_request(
         raise VideoDDSComparisonError(str(exc)) from exc
     if payload.get("operation") != "position_all_moves":
         raise VideoDDSComparisonError("DDS request operation invalid")
+    position = payload.get("position")
+    if not isinstance(position, Mapping):
+        raise VideoDDSComparisonError("DDS position invalid")
+    first = str(position.get("first") or "").strip().upper()
+    trump = str(position.get("trump") or "").strip().upper()
+    current_raw = position.get("current_trick") or []
+    if not isinstance(current_raw, list):
+        raise VideoDDSComparisonError("DDS current trick invalid")
+    current = [str(card).strip().upper() for card in current_raw]
+    if "seat_to_play" in public_context and first != public_context["seat_to_play"]:
+        raise VideoDDSComparisonError("DDS position first does not match public seat_to_play")
+    if "contract" in public_context:
+        contract_strain = re.match(r"^[1-7](NT|[CDHS])", public_context["contract"]).group(1)
+        if trump != contract_strain:
+            raise VideoDDSComparisonError("DDS position trump does not match public contract")
+    if "lead" in public_context and (not current or current[0] != public_context["lead"]):
+        raise VideoDDSComparisonError("DDS current trick does not match public lead")
+    if "trick_no" in public_context and "played_cards" in public_context:
+        offset = (public_context["trick_no"] - 1) * 4
+        if public_context["played_cards"][offset:] != current:
+            raise VideoDDSComparisonError("DDS current trick does not match public played cards")
     try:
         rerun_result = executor(dict(payload))
     except Exception as exc:
@@ -145,7 +168,6 @@ def _rerun_authenticated_dds_request(
         dds = verify_dds3_result(rerun_result, expected_operation="position_all_moves")
     except LabContractError as exc:
         raise VideoDDSComparisonError(str(exc)) from exc
-    position = payload.get("position")
     binary_sha = _sha(dds.get("binary_sha256"), "DDS binary_sha256")
     pbn = _text(position.get("pbn") if isinstance(position, Mapping) else None, "DDS position pbn")
     deal_sha = hashlib.sha256(pbn.encode("utf-8")).hexdigest()
@@ -222,7 +244,7 @@ def build_offline_dds_comparison(
     board_evidence_sha = _sha(verified_board_evidence.get("evidence_sha256"), "board evidence_sha256")
 
     dds, trusted_deal_sha, request_sha, result_sha, binary_sha = _rerun_authenticated_dds_request(
-        observation, dds_request_executor
+        observation, public_context, dds_request_executor
     )
     if trusted_deal_sha != deal_sha:
         raise VideoDDSComparisonError("DDS result not bound to verified full deal")

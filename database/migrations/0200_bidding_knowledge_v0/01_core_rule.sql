@@ -48,7 +48,7 @@ WITH RECURSIVE walk(value) AS (
         'partner_cards','opponent_cards','all_hands'
      ])
         OR regexp_replace(lower(k.key),'[^a-z0-9]','','g') ~
-           '^(actual)?(partner|opponent|north|east|south|west)(hand|holding|cards?)+(s)?$'
+           '^(actual)?(partner|opponent|north|east|south|west)(s)?(hand|holding|cards?)+(s)?$'
      LIMIT 1
 )
 SELECT EXISTS (SELECT 1 FROM forbidden);

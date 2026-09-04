@@ -194,6 +194,8 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
         ]
         self.assertEqual(len(persisted), 1)
         self.assertEqual(quality['counts']['video_canon_candidates'], 1)
+        self.assertEqual(quality['counts']['video_canon_auto_promotions_ready'], 0)
+        self.assertEqual(quality['video_canon_auto_pipeline']['status'], 'NEEDS_I2_I3')
         self.assertEqual(
             quality['counts']['staging_records'], len(quality['candidate_staging_records'])
         )

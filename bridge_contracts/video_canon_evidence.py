@@ -83,7 +83,7 @@ _NEGATED_HIDDEN_HOLDING = re.compile(
     r"(?:(?:does\s+not|doesn['’]t)\s+(?:have|hold)(?:\s+any)?|"
     r"(?:has|holds?|had)\s+(?:(?:no|neither)|none\s+of)|"
     r"lacks?)\s+(?:any\s+)?"
-    r"(?:the\s+)?(?:aces?|kings?|queens?|jacks?|tens?|"
+    r"(?:the\s+)?(?:aces?|kings?|queens?|jacks?|tens?|spades?|hearts?|diamonds?|clubs?|"
     r"(?:ace|king|queen|jack|ten)\s+of\s+(?:spades?|hearts?|diamonds?|clubs?)|"
     r"(?:spades?|hearts?|diamonds?|clubs?)\s+(?:ace|king|queen|jack|ten|10|[AKQJT2-9])|"
     r"[SHDC]\s*:?\s*(?:10|[AKQJT2-9])|(?:10|[AKQJT2-9])\s*[SHDC])\b",
@@ -185,7 +185,7 @@ def _has_forbidden_key(value: Any) -> bool:
         return any(
             str(key).casefold() in _FORBIDDEN_KEYS
             or re.fullmatch(
-                r"(?:actual)?(?:partner|opponent|north|east|south|west)"
+                r"(?:actual)?(?:partner|opponent|north|east|south|west)s?"
                 r"(?:hand|holding|cards?)+s?",
                 re.sub(r"[^a-z0-9]", "", str(key).casefold()),
             ) is not None
