@@ -117,7 +117,11 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s hand was ♠AKQJ ♥T98 ♦765 ♣432"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"North''s hand was ♠AKQJ ♥T98 ♦765 ♣43"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N: ♠AKQJ ♥T98 ♦765 ♣432"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"N: ♣432 ♦765 ♥T98 ♠AKQJ"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N:AKQJ109.876.54.32"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(

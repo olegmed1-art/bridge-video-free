@@ -136,7 +136,7 @@ serialized; only sanitized results or explicit gaps survive.
 
 The same value-level firewall applies before a teacher-video Canon candidate is
 placed in staging: full PBN encodings and labelled partner/opponent card payloads—including
-`♠♥♦♣` suit-symbol notation—are rejected anywhere in the complete payload, including the source-bound
+`♠♥♦♣` suit-symbol notation in any suit order, including partial disclosures—are rejected anywhere in the complete payload, including the source-bound
 teacher statement and otherwise innocent keys such as `notes`. Candidate
 staging identity includes the canonical payload SHA-256, so a corrected
 assertion becomes a preserved new revision instead of colliding with the old
@@ -178,8 +178,9 @@ each receipt's recorded login must still exist, be login-capable and retain
 membership in its active verifier capability.
 
 Promotion binds the whole authoritative knowledge version, not only its rule.
-The version must be attached to the deterministic knowledge-item key derived
-from the sealed candidate ID and must be a single-rule candidate whose content
+The version must be attached to the globally unique deterministic
+knowledge-item key derived from the complete sealed candidate payload hash and
+must be a single-rule candidate whose content
 is the exact sealed candidate payload; system, level, effective interval,
 agreement scope, method, source locator and deterministic provenance must all
 match the sealed inputs. Exactly one `derived_from` source binding is allowed,

@@ -294,6 +294,22 @@ SELECT EXISTS (
            FROM regexp_matches(
              replace(replace(replace(replace(
                w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:'),
+             E'(?:(?:partner|opponent|north|east|south|west)[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника)|[NESW][[:space:]]*:)([^;]{0,512})',
+             'gi'
+           ) AS matched(parts)
+          WHERE matched.parts[1] ~* E'(^|[^[:alnum:]_])S[[:space:]]*:'
+            AND matched.parts[1] ~* E'(^|[^[:alnum:]_])H[[:space:]]*:'
+            AND matched.parts[1] ~* E'(^|[^[:alnum:]_])D[[:space:]]*:'
+            AND matched.parts[1] ~* E'(^|[^[:alnum:]_])C[[:space:]]*:'
+       )
+  ) OR EXISTS (
+    SELECT 1 FROM walk AS w
+     WHERE jsonb_typeof(w.value)='string'
+       AND EXISTS (
+         SELECT 1
+           FROM regexp_matches(
+             replace(replace(replace(replace(
+               w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:'),
              E'(?:(?:partner|opponent|north|east|south|west)[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника)|[NESW][[:space:]]*:)[^;]*?S[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*H[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*D[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*C[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})',
              'gi'
            ) AS matched(parts)
@@ -875,7 +891,7 @@ BEGIN
       JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
        AND ki.school_id=v_candidate.school_id AND ki.knowledge_type='bidding_rule'
        AND ki.status='active'
-       AND ki.stable_key='video-canon:'||(v_candidate.payload->>'candidate_id')
+       AND ki.stable_key='video-canon:'||v_candidate.payload_hash
      WHERE kv.knowledge_version_id=v_rule.knowledge_version_id;
     v_expected_version_provenance := jsonb_build_object(
       'promotion_mode','AI_VERIFIED_TEACHER_VIDEO',

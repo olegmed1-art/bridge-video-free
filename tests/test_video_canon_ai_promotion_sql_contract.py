@@ -106,7 +106,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "expected.case_payload-'expect'",
         "VIDEO_CANON_RESTORE_SOURCE_BINDING_MISMATCH",
         "kvs.source_locator=jsonb_build_object(",
-        "ki.stable_key='video-canon:'||(v_candidate.payload->>'candidate_id')",
+        "ki.stable_key='video-canon:'||v_candidate.payload_hash",
         "VIDEO_CANON_SOURCE_POLICY_EXPIRED",
         "VIDEO_CANON_RESTORE_ATTESTOR_REVOKED",
         "VIDEO_CANON_RESTORE_VERSION_CONTENT_MISMATCH",
@@ -119,6 +119,8 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "'♥','H:'",
         "'♦','D:'",
         "'♣','C:'",
+        "([^;]{0,512})",
+        "matched.parts[1] ~* E'(^|[^[:alnum:]_])S",
     ):
         assert marker in MIGRATION
 

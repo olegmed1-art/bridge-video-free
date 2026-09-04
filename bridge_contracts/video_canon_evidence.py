@@ -58,6 +58,15 @@ _SUIT_LABELLED_HIDDEN_CARDS = re.compile(
     r"C\s*:\s*(?P<clubs>" + _SUIT_PATTERN + r")",
     re.IGNORECASE,
 )
+_LABELLED_HAND_TAIL = re.compile(
+    r"(?:(?:partner|opponent|north|east|south|west)\s*(?:['’]s)?[ _-]*"
+    r"(?:hand|cards)\b|(?:рука|карты)\s+(?:партн[её]ра|соперника)\b"
+    r"|[NESW]\s*:)(?P<tail>[^;]{0,512})",
+    re.IGNORECASE,
+)
+_EXPLICIT_SUIT_LABEL = re.compile(
+    r"(?<![A-Za-z0-9_])(?P<suit>[SHDC])\s*:", re.IGNORECASE
+)
 _SEPARATED_LABELLED_HIDDEN_CARDS = re.compile(
     r"(?:(?:partner|opponent|north|east|south|west)\s*(?:['’]s)?[ _-]*"
     r"(?:hand|cards)\b|(?:рука|карты)\s+(?:партн[её]ра|соперника)\b"
@@ -139,6 +148,15 @@ def _has_forbidden_value(value: Any) -> bool:
     if isinstance(value, str):
         normalized_value = value.translate(_SUIT_SYMBOL_TRANSLATION)
         if any(_is_complete_hand_shape(match.group("hand")) for match in _PBN_DEAL.finditer(normalized_value)):
+            return True
+        # Four explicit suit labels disclose a hidden-hand surface even when
+        # cards are missing/unknown or the suits are written in another order.
+        if any(
+            {token.group("suit").upper() for token in
+             _EXPLICIT_SUIT_LABEL.finditer(match.group("tail"))}
+            == {"S", "H", "D", "C"}
+            for match in _LABELLED_HAND_TAIL.finditer(normalized_value)
+        ):
             return True
         if any(
             _is_complete_hand_shape(".".join(match.group(
