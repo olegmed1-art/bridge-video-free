@@ -358,7 +358,13 @@ def test_selected_backup_wait_uses_validated_direct_get_state_machine() -> None:
     assert "BACKUP_AVAILABLE_JSON" in helper
     assert "INVALID_GET_PAYLOAD" in helper
     assert '[[ "$state" == AVAILABLE ]]' in helper
-    assert '[[ "$state" != CREATING && "$state" != REQUEST_RECEIVED ]]' in helper
+    assert "deadline=$((SECONDS + max_seconds))" in helper
+    assert "OCI_JSON_REQUEST_TIMEOUT_SECONDS=\"$request_timeout\"" in helper
+    assert "remaining=$((deadline - SECONDS))" in helper
+    assert "sleep_seconds=$((remaining < 5 ? remaining : 5))" in helper
+    assert '[[ "$state" == TERMINATING || "$state" == TERMINATED || "$state" == FAULTY ]]' in helper
+    assert "backup_wait_status UNKNOWN_STATE" in helper
+    assert 'assert isinstance(s,str) and s' in helper
     assert "backup_wait_status TIMEOUT" in helper
     assert "return 41" in helper
     assert "return 42" in helper
@@ -378,6 +384,62 @@ def test_selected_backup_wait_uses_validated_direct_get_state_machine() -> None:
     assert "backup availability wait" in receipt
     assert "backup availability last state" in receipt
     assert "backup availability failure rc" in receipt
+
+
+def test_backup_wait_deadline_and_state_classification_are_adversarially_bounded() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        tmp_path = Path(temp_dir)
+        oci_start = WORKFLOW.index("oci_json_request() {")
+        oci_end = WORKFLOW.index("operation_backup_inventory()", oci_start)
+        wait_start = WORKFLOW.index("wait_backup_available() {")
+        wait_end = WORKFLOW.index("select_fresh_operation_backups()", wait_start)
+        helpers = textwrap.dedent(WORKFLOW[oci_start:oci_end] + WORKFLOW[wait_start:wait_end])
+        fake_oci = tmp_path / "oci"
+        fake_oci.write_text(
+            """#!/usr/bin/env bash
+case "$FAKE_MODE" in
+  slow) sleep 5; echo '{"data":{"lifecycle-state":"AVAILABLE"}}' ;;
+  null) echo '{"data":{"lifecycle-state":null}}' ;;
+  unknown) echo '{"data":{"lifecycle-state":"ALIEN"}}' ;;
+  terminal) echo '{"data":{"lifecycle-state":"FAULTY"}}' ;;
+  available) echo '{"data":{"lifecycle-state":"AVAILABLE"}}' ;;
+esac
+"""
+        )
+        fake_oci.chmod(0o755)
+        script = helpers + r'''
+state_set() { printf 'state:%s=%s\n' "$1" "$2" >&2; }
+started=$SECONDS
+if wait_backup_available backup-id "$MAX_SECONDS"; then rc=0; else rc=$?; fi
+printf 'rc=%s elapsed=%s\n' "$rc" "$((SECONDS - started))"
+'''
+
+        def run(mode: str, max_seconds: int = 2) -> subprocess.CompletedProcess[str]:
+            env = os.environ | {
+                "RUNNER_TEMP": str(tmp_path),
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "FAKE_MODE": mode,
+                "MAX_SECONDS": str(max_seconds),
+                "OCI_JSON_RETRY_DELAY_SECONDS": "0",
+            }
+            return subprocess.run(
+                ["bash", "-c", script], env=env, text=True, capture_output=True, timeout=max_seconds + 3, check=True
+            )
+
+        slow = run("slow", 1)
+        assert "rc=42" in slow.stdout
+        assert "elapsed=1" in slow.stdout
+        assert "state:backup_wait_status=TIMEOUT" in slow.stderr
+        invalid = run("null")
+        assert "rc=43" in invalid.stdout
+        assert "state:backup_wait_status=INVALID_GET_PAYLOAD" in invalid.stderr
+        unknown = run("unknown")
+        assert "rc=41" in unknown.stdout
+        assert "state:backup_wait_status=UNKNOWN_STATE" in unknown.stderr
+        terminal = run("terminal")
+        assert "rc=41" in terminal.stdout
+        assert "state:backup_wait_status=TERMINAL_FAULTY" in terminal.stderr
+        assert "rc=0" in run("available").stdout
 
 
 def test_backup_selector_separates_expired_from_malformed_inventory() -> None:
