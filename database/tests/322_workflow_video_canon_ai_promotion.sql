@@ -60,6 +60,10 @@ BEGIN
        SELECT 1 FROM information_schema.columns
         WHERE table_schema='bidding' AND table_name='video_correction_review_receipt'
           AND column_name='recorded_by_principal' AND is_nullable='NO'
+     ) OR NOT EXISTS (
+       SELECT 1 FROM information_schema.columns
+        WHERE table_schema='bidding' AND table_name='video_canon_ai_promotion_receipt'
+          AND column_name='knowledge_version_content_sha256' AND is_nullable='NO'
      ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_EXECUTION_OR_SNAPSHOT_BINDING_MISSING';
   END IF;
@@ -106,6 +110,8 @@ BEGIN
        '{"notes":"N:AKQJ109.876.54.32"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s hand was S:AKQJ109 H:876 D:54 C:32"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"N: S:AKQJ109 H:876 D:54 C:32"}'::jsonb
      )) OR bidding.contains_forbidden_hidden_value(
        '{"meaning":"shows at least five hearts"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
@@ -374,12 +380,13 @@ BEGIN
   INSERT INTO bidding.video_canon_ai_promotion_receipt(
     video_canon_ai_promotion_receipt_id,school_id,analysis_candidate_id,
     candidate_payload_hash,verification_bundle_sha256,policy_version,scope_key,
-    rule_content_sha256,rule_id,canon_activation_id,runtime_activation_id,
+    rule_content_sha256,knowledge_version_content_sha256,
+    rule_id,canon_activation_id,runtime_activation_id,
     promotion_mode,human_approval_required
   ) VALUES (
     v_old_promotion,v_school,v_old_candidate,repeat('1',64),repeat('2',64),
-    'school-video-auto-canon-v1','restore-scope',repeat('3',64),v_old_rule,
-    v_old_canon,v_old_runtime,'AI_VERIFIED_TEACHER_VIDEO',false
+    'school-video-auto-canon-v1','restore-scope',repeat('3',64),repeat('4',64),
+    v_old_rule,v_old_canon,v_old_runtime,'AI_VERIFIED_TEACHER_VIDEO',false
   );
   PERFORM set_config('TimeZone','UTC',true);
   v_snapshot_before:=bidding.current_school_canon_snapshot_sha256(v_school);
@@ -415,14 +422,15 @@ BEGIN
   INSERT INTO bidding.video_canon_ai_promotion_receipt(
     video_canon_ai_promotion_receipt_id,school_id,analysis_candidate_id,
     candidate_payload_hash,verification_bundle_sha256,policy_version,scope_key,
-    rule_content_sha256,rule_id,canon_activation_id,runtime_activation_id,
+    rule_content_sha256,knowledge_version_content_sha256,
+    rule_id,canon_activation_id,runtime_activation_id,
     superseded_canon_activation_id,superseded_canon_valid_to,
     superseded_runtime_activation_ids,superseded_runtime_state,superseded_rule_state,
     promotion_mode,human_approval_required
   ) VALUES (
     v_promotion,v_school,v_candidate,repeat('a',64),v_good_bundle_hash,
-    'school-video-auto-canon-v1','restore-scope',repeat('b',64),v_new_rule,
-    v_new_canon,v_new_runtime,v_old_canon,NULL,ARRAY[v_old_runtime],
+    'school-video-auto-canon-v1','restore-scope',repeat('b',64),repeat('c',64),
+    v_new_rule,v_new_canon,v_new_runtime,v_old_canon,NULL,ARRAY[v_old_runtime],
     jsonb_build_array(jsonb_build_object(
       'runtime_activation_id',v_old_runtime,'valid_to',NULL
     )),jsonb_build_array(jsonb_build_object(

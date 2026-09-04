@@ -93,8 +93,13 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "pg_has_role(login_role.oid,v_principal.database_role,'MEMBER')",
         "VIDEO_CANON_VERIFIER_PRINCIPAL_REVOKED",
         "attestor.rolname=v.execution_principal",
+        "VIDEO_CANON_KNOWLEDGE_VERSION_BINDING_INVALID",
+        "v_version.content<>v_candidate.payload",
+        "v_version.provenance<>v_expected_version_provenance",
+        "knowledge_version_content_sha256",
         "replace(upper(COALESCE(p_hand,'')),'10','T')",
         "(?:10)",
+        "|[NESW][[:space:]]*:)[^;]*?S",
     ):
         assert marker in MIGRATION
 

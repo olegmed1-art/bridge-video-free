@@ -169,7 +169,16 @@ Canon snapshot SHA-256. The snapshot includes active rules, knowledge versions,
 all active Canon activations, open conflicts, latest test runs and every active
 Canon version's source bindings, including versions without a runtime row. Activation
 serializes by school, locks the underlying Canon/rule/test/source/conflict and
-verifier-registry state, and rejects a stale digest.
+verifier-registry state, and rejects a stale digest. Immediately before writes,
+each receipt's recorded login must still exist, be login-capable and retain
+membership in its active verifier capability.
+
+Promotion binds the whole authoritative knowledge version, not only its rule.
+The version must be a single-rule candidate whose content is the exact sealed
+candidate payload; system, level, effective interval, agreement scope, method,
+source locator and deterministic provenance must all match the sealed inputs.
+A digest of the complete immutable version projection is retained in the
+promotion receipt and activation provenance.
 
 Rollback is operational, not documentary. A dedicated restorer capability can
 invoke the receipt-bound restore RPC with the exact promotion bundle and restore

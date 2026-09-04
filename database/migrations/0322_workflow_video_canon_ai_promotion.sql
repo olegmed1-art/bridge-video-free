@@ -180,6 +180,8 @@ CREATE TABLE bidding.video_canon_ai_promotion_receipt (
     policy_version text NOT NULL CHECK (policy_version='school-video-auto-canon-v1'),
     scope_key text NOT NULL CHECK (btrim(scope_key)<>''),
     rule_content_sha256 text NOT NULL CHECK (rule_content_sha256 ~ '^[0-9a-f]{64}$'),
+    knowledge_version_content_sha256 text NOT NULL
+      CHECK (knowledge_version_content_sha256 ~ '^[0-9a-f]{64}$'),
     rule_id uuid NOT NULL UNIQUE REFERENCES bidding.rule(rule_id) ON DELETE RESTRICT,
     canon_activation_id uuid NOT NULL UNIQUE REFERENCES public.canon_activation(canon_activation_id) ON DELETE RESTRICT,
     runtime_activation_id uuid NOT NULL UNIQUE REFERENCES bidding.runtime_activation(runtime_activation_id) ON DELETE RESTRICT,
@@ -289,7 +291,7 @@ SELECT EXISTS (
          SELECT 1
            FROM regexp_matches(
              w.value#>>'{}',
-             E'(?:(?:partner|opponent|north|east|south|west)[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника))[^;]*?S[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*H[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*D[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*C[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})',
+             E'(?:(?:partner|opponent|north|east|south|west)[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника)|[NESW][[:space:]]*:)[^;]*?S[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*H[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*D[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*C[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})',
              'gi'
            ) AS matched(parts)
           WHERE bidding.is_complete_bridge_hand(concat_ws(
@@ -681,6 +683,7 @@ CREATE OR REPLACE FUNCTION bidding.activate_ai_verified_video_canon(
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path=pg_catalog,public,bidding
+SET TimeZone='UTC'
 AS $$
 DECLARE
     v_candidate public.analysis_candidate%ROWTYPE;
@@ -707,6 +710,8 @@ DECLARE
     v_rule_content jsonb;
     v_rule_content_sha256 text;
     v_expected_rule_content_sha256 text;
+    v_version_content_sha256 text;
+    v_expected_version_provenance jsonb;
     v_canon_snapshot_sha256 text;
 BEGIN
     IF p_verification_bundle_sha256 !~ '^[0-9a-f]{64}$' THEN
@@ -812,11 +817,55 @@ BEGIN
        OR v_rule_content_sha256<>v_expected_rule_content_sha256 THEN
         RAISE EXCEPTION 'VIDEO_CANON_RULE_CONTENT_MISMATCH' USING ERRCODE='23514';
     END IF;
-    SELECT * INTO v_version FROM public.knowledge_version
-     WHERE knowledge_version_id=v_rule.knowledge_version_id;
-    IF v_version.authority_class<>'school_canon' THEN
-        RAISE EXCEPTION 'VIDEO_CANON_AUTHORITY_LANE_INVALID' USING ERRCODE='23514';
+    SELECT kv.* INTO v_version
+      FROM public.knowledge_version kv
+      JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
+       AND ki.school_id=v_candidate.school_id AND ki.knowledge_type='bidding_rule'
+     WHERE kv.knowledge_version_id=v_rule.knowledge_version_id;
+    v_expected_version_provenance := jsonb_build_object(
+      'promotion_mode','AI_VERIFIED_TEACHER_VIDEO',
+      'analysis_candidate_id',v_candidate.analysis_candidate_id,
+      'candidate_payload_hash',v_candidate.payload_hash,
+      'source_id',v_candidate.source_id,
+      'source_sha256',v_candidate.payload#>>'{source,source_sha256}',
+      'video_file_id',v_candidate.payload#>>'{source,video_file_id}',
+      'teacher_statement_sha256',v_candidate.payload#>>'{teacher_assertion,statement_sha256}',
+      'transcript_locators',v_candidate.payload#>'{teacher_assertion,transcript_locators}'
+    );
+    IF v_version.knowledge_version_id IS NULL
+       OR v_version.authority_class<>'school_canon'
+       OR v_version.review_status<>'unreviewed'
+       OR v_version.status<>'candidate'
+       OR v_version.content<>v_candidate.payload
+       OR v_version.bidding_system_key IS DISTINCT FROM
+            v_bundle.bundle_payload->>'system_profile'
+       OR v_version.agreement_scope<>jsonb_build_object('scope_key',v_scope_key)
+       OR v_version.level_scope<>jsonb_build_object(
+            'level_key',v_bundle.bundle_payload->>'learner_level'
+          )
+       OR v_version.effective_from IS DISTINCT FROM v_valid_from
+       OR v_version.effective_to IS DISTINCT FROM v_valid_to
+       OR v_version.method_version IS DISTINCT FROM v_candidate.method_version
+       OR v_version.provenance<>v_expected_version_provenance
+       OR (SELECT count(*) FROM bidding.rule r
+            WHERE r.knowledge_version_id=v_version.knowledge_version_id)<>1
+       OR (SELECT count(*) FROM public.knowledge_version_source kvs
+            WHERE kvs.knowledge_version_id=v_version.knowledge_version_id)<>1
+       OR NOT EXISTS (
+            SELECT 1 FROM public.knowledge_version_source kvs
+             WHERE kvs.knowledge_version_id=v_version.knowledge_version_id
+               AND kvs.source_id=v_candidate.source_id
+               AND kvs.relation_type='derived_from'
+               AND kvs.source_locator=jsonb_build_object(
+                 'transcript_locators',
+                 v_candidate.payload#>'{teacher_assertion,transcript_locators}'
+               )
+          ) THEN
+        RAISE EXCEPTION 'VIDEO_CANON_KNOWLEDGE_VERSION_BINDING_INVALID' USING ERRCODE='23514';
     END IF;
+    v_version_content_sha256 := encode(public.digest(convert_to(
+      (to_jsonb(v_version)-ARRAY['review_status','status','created_at'])::text,
+      'UTF8'),'sha256'),'hex');
 
     SELECT p.* INTO v_policy
       FROM bidding.video_canon_source_policy p
@@ -1011,6 +1060,9 @@ BEGIN
     ) THEN
         RAISE EXCEPTION 'VIDEO_CANON_VERIFIER_PRINCIPAL_REVOKED' USING ERRCODE='42501';
     END IF;
+    IF v_valid_to IS NOT NULL AND v_valid_to<=clock_timestamp() THEN
+        RAISE EXCEPTION 'VIDEO_CANON_EFFECTIVE_PERIOD_EXPIRED' USING ERRCODE='23514';
+    END IF;
     UPDATE public.knowledge_version SET review_status='approved',status='approved'
      WHERE knowledge_version_id=v_version.knowledge_version_id;
     INSERT INTO public.canon_activation(
@@ -1020,7 +1072,9 @@ BEGIN
       jsonb_build_object('promotion_mode','AI_VERIFIED_TEACHER_VIDEO','policy_version',v_policy_version,
         'candidate_id',p_analysis_candidate_id,'candidate_payload_hash',v_candidate.payload_hash,
         'verification_bundle_sha256',p_verification_bundle_sha256,
-        'rule_content_sha256',v_rule_content_sha256,'human_approval_required',false),'active'
+        'rule_content_sha256',v_rule_content_sha256,
+        'knowledge_version_content_sha256',v_version_content_sha256,
+        'human_approval_required',false),'active'
     ) RETURNING canon_activation_id INTO v_canon_activation;
 
     INSERT INTO bidding.runtime_activation(
@@ -1029,18 +1083,22 @@ BEGIN
     ) VALUES (
       v_candidate.school_id,p_rule_id,'school_canon',v_canon_activation,v_scope_key,v_valid_from,v_valid_to,'active',
       jsonb_build_object('promotion_mode','AI_VERIFIED_TEACHER_VIDEO',
-        'candidate_payload_hash',v_candidate.payload_hash,'rule_content_sha256',v_rule_content_sha256),NULL
+        'candidate_payload_hash',v_candidate.payload_hash,
+        'rule_content_sha256',v_rule_content_sha256,
+        'knowledge_version_content_sha256',v_version_content_sha256),NULL
     ) RETURNING runtime_activation_id INTO v_runtime_activation;
 
     INSERT INTO bidding.video_canon_ai_promotion_receipt(
       school_id,analysis_candidate_id,candidate_payload_hash,verification_bundle_sha256,
-      policy_version,scope_key,rule_content_sha256,rule_id,canon_activation_id,runtime_activation_id,
+      policy_version,scope_key,rule_content_sha256,knowledge_version_content_sha256,
+      rule_id,canon_activation_id,runtime_activation_id,
       superseded_canon_activation_id,superseded_canon_valid_to,
       superseded_runtime_activation_ids,superseded_runtime_state,superseded_rule_state,
       promotion_mode,human_approval_required
     ) VALUES (
       v_candidate.school_id,p_analysis_candidate_id,v_candidate.payload_hash,p_verification_bundle_sha256,
-      v_policy_version,v_scope_key,v_rule_content_sha256,p_rule_id,v_canon_activation,v_runtime_activation,
+      v_policy_version,v_scope_key,v_rule_content_sha256,v_version_content_sha256,
+      p_rule_id,v_canon_activation,v_runtime_activation,
       v_prior_canon.canon_activation_id,v_prior_canon.valid_to,
       v_prior_runtime_ids,v_prior_runtime_state,v_prior_rule_state,
       'AI_VERIFIED_TEACHER_VIDEO',false

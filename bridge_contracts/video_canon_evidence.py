@@ -46,7 +46,8 @@ _LABELLED_HIDDEN_CARDS = re.compile(
 )
 _SUIT_LABELLED_HIDDEN_CARDS = re.compile(
     r"(?:(?:partner|opponent|north|east|south|west)\s*(?:['’]s)?[ _-]*"
-    r"(?:hand|cards)|(?:рука|карты)\s+(?:партн[её]ра|соперника))\b[^;]*?"
+    r"(?:hand|cards)\b|(?:рука|карты)\s+(?:партн[её]ра|соперника)\b"
+    r"|[NESW]\s*:)[^;]*?"
     r"S\s*:\s*(?P<spades>" + _SUIT_PATTERN + r")[\s,/]*"
     r"H\s*:\s*(?P<hearts>" + _SUIT_PATTERN + r")[\s,/]*"
     r"D\s*:\s*(?P<diamonds>" + _SUIT_PATTERN + r")[\s,/]*"
