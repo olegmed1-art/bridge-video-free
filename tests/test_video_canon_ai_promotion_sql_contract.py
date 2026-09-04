@@ -48,6 +48,8 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "guard_promoted_video_canon_source_binding",
         "promoted_video_canon_source_binding_guard",
         "VIDEO_CANON_PROMOTED_SOURCE_BINDING_IMMUTABLE",
+        "JOIN public.canon_activation ca",
+        "ca.canon_activation_id=p.canon_activation_id",
         "status='superseded',valid_to=v_valid_from",
         "p.valid_from<=clock_timestamp()",
         "v_valid_from>statement_timestamp()",
@@ -131,7 +133,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "SET status='revoked',valid_to=v_revoked_at",
         "replace(upper(COALESCE(p_hand,'')),'10','T')",
         "(?:10)",
-        "|[NESW][[:space:]]*:)[^;]*?S",
+        "|(?:^|[^[:alnum:]])[NESW][[:space:]]*:)[^;]*?S",
         "{1,13})[[:space:]/,]+",
         "'♠','S:'",
         "'♥','H:'",
@@ -182,4 +184,7 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     ) >= 3
     assert MIGRATION.count(
         "v_promotion.superseded_canon_valid_to<=clock_timestamp()"
+    ) >= 2
+    assert MIGRATION.count(
+        "VIDEO_CANON_RESTORE_CURRENT_ACTIVATION_EXPIRED"
     ) >= 2

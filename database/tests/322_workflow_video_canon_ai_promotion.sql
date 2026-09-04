@@ -155,6 +155,8 @@ BEGIN
      ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s hand was a weak holding"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"Explanation: Q is an abbreviation"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"рука партнера: 5 карт"}'::jsonb
      ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_HIDDEN_VALUE_FIREWALL_INVALID';

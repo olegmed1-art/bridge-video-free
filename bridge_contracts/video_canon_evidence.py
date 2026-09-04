@@ -51,7 +51,7 @@ _LABELLED_HIDDEN_CARDS = re.compile(
 _SUIT_LABELLED_HIDDEN_CARDS = re.compile(
     r"(?:(?:partner|opponent|north|east|south|west)\s*(?:['’]s)?[ _-]*"
     r"(?:hand|cards)\b|(?:рука|карты)\s+(?:партн[её]ра|соперника)\b"
-    r"|[NESW]\s*:)[^;]*?"
+    r"|(?:^|[^A-Za-z0-9])[NESW]\s*:)[^;]*?"
     r"S\s*:\s*(?P<spades>" + _SUIT_PATTERN + r")[\s,/]*"
     r"H\s*:\s*(?P<hearts>" + _SUIT_PATTERN + r")[\s,/]*"
     r"D\s*:\s*(?P<diamonds>" + _SUIT_PATTERN + r")[\s,/]*"
@@ -61,7 +61,7 @@ _SUIT_LABELLED_HIDDEN_CARDS = re.compile(
 _LABELLED_HAND_TAIL = re.compile(
     r"(?:(?:partner|opponent|north|east|south|west)\s*(?:['’]s)?[ _-]*"
     r"(?:hand|cards)\b|(?:рука|карты)\s+(?:партн[её]ра|соперника)\b"
-    r"|[NESW]\s*:)(?P<tail>[^;]{0,512})",
+    r"|(?:^|[^A-Za-z0-9])[NESW]\s*:)(?P<tail>[^;]{0,512})",
     re.IGNORECASE,
 )
 _EXPLICIT_SUIT_LABEL = re.compile(
@@ -80,7 +80,7 @@ _PARTIAL_SEPARATED_HAND = re.compile(
 _SEPARATED_LABELLED_HIDDEN_CARDS = re.compile(
     r"(?:(?:partner|opponent|north|east|south|west)\s*(?:['’]s)?[ _-]*"
     r"(?:hand|cards)\b|(?:рука|карты)\s+(?:партн[её]ра|соперника)\b"
-    r"|[NESW]\s*:)[^;]*?"
+    r"|(?:^|[^A-Za-z0-9])[NESW]\s*:)[^;]*?"
     r"(?P<spades>" + _NONEMPTY_SUIT_PATTERN + r")[\s,/]+"
     r"(?P<hearts>" + _NONEMPTY_SUIT_PATTERN + r")[\s,/]+"
     r"(?P<diamonds>" + _NONEMPTY_SUIT_PATTERN + r")[\s,/]+"
