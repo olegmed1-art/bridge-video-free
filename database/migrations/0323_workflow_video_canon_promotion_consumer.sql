@@ -138,6 +138,22 @@ BEGIN
   IF NOT FOUND OR v_old.status<>'active' THEN
     RAISE EXCEPTION 'VIDEO_CANON_REASSIGNMENT_TARGET_INVALID' USING ERRCODE='23514';
   END IF;
+  IF EXISTS (
+    SELECT 1 FROM bidding.video_canon_promotion_job
+     WHERE analysis_candidate_id=(
+       SELECT analysis_candidate_id FROM bidding.video_canon_ai_verification_bundle
+        WHERE video_canon_ai_verification_bundle_id=v_old.video_canon_ai_verification_bundle_id
+     ) AND status='promoted'
+  ) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_REASSIGNMENT_AFTER_PROMOTION' USING ERRCODE='55000';
+  END IF;
+  UPDATE bidding.video_canon_promotion_job SET status='blocked',
+    terminal_error_code='STATE_STALE',lease_owner=NULL,lease_token=NULL,
+    lease_expires_at=NULL,updated_at=clock_timestamp()
+   WHERE analysis_candidate_id=(
+     SELECT analysis_candidate_id FROM bidding.video_canon_ai_verification_bundle
+      WHERE video_canon_ai_verification_bundle_id=v_old.video_canon_ai_verification_bundle_id
+   ) AND status IN ('queued','leased');
   PERFORM set_config('bidding.assurance_reassignment','on',true);
   UPDATE bidding.video_canon_assurance_assignment SET status='superseded',
     superseded_at=clock_timestamp(),supersession_reason_sha256=p_reason_sha256
@@ -157,6 +173,8 @@ CREATE TABLE bidding.video_canon_assurance_verdict (
   analysis_candidate_id uuid NOT NULL REFERENCES public.analysis_candidate(analysis_candidate_id) ON DELETE RESTRICT,
   video_canon_ai_verification_bundle_id uuid NOT NULL
     REFERENCES bidding.video_canon_ai_verification_bundle(video_canon_ai_verification_bundle_id) ON DELETE RESTRICT,
+  video_canon_assurance_assignment_id uuid NOT NULL
+    REFERENCES bidding.video_canon_assurance_assignment(video_canon_assurance_assignment_id) ON DELETE RESTRICT,
   candidate_payload_hash text NOT NULL CHECK (candidate_payload_hash~'^[0-9a-f]{64}$'),
   verification_bundle_sha256 text NOT NULL CHECK (verification_bundle_sha256~'^[0-9a-f]{64}$'),
   assurance_set_sha256 text NOT NULL CHECK (assurance_set_sha256~'^[0-9a-f]{64}$'),
@@ -180,7 +198,7 @@ CREATE TABLE bidding.video_canon_assurance_verdict (
   recorded_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (
     analysis_candidate_id,candidate_payload_hash,verification_bundle_sha256,
-    assurance_level,execution_principal
+    assurance_level,video_canon_assurance_assignment_id
   )
 );
 
@@ -206,6 +224,7 @@ BEGIN
     SELECT 1 FROM bidding.video_canon_assurance_assignment a
      WHERE a.video_canon_ai_verification_bundle_id=NEW.video_canon_ai_verification_bundle_id
        AND a.school_id=NEW.school_id AND a.assurance_level=NEW.assurance_level
+       AND a.video_canon_assurance_assignment_id=NEW.video_canon_assurance_assignment_id
        AND a.assigned_principal=session_user::name AND a.status='active'
        AND a.verifier_family=NEW.verifier_family
        AND a.verifier_version=NEW.verifier_version
@@ -249,6 +268,7 @@ SET search_path=pg_catalog,public,bidding AS $$
 WITH rows AS (
   SELECT jsonb_build_object(
     'schema','video-canon-assurance-verdict-v1',
+    'assignment_id',v.video_canon_assurance_assignment_id,
     'candidate_payload_hash',v.candidate_payload_hash,
     'assurance_level',v.assurance_level,'verdict',v.verdict,
     'verifier_family',v.verifier_family,'verifier_version',v.verifier_version,
@@ -262,7 +282,8 @@ WITH rows AS (
   ) AS value,v.assurance_level
   FROM bidding.video_canon_assurance_verdict v
   JOIN bidding.video_canon_assurance_assignment a
-    ON a.video_canon_ai_verification_bundle_id=v.video_canon_ai_verification_bundle_id
+    ON a.video_canon_assurance_assignment_id=v.video_canon_assurance_assignment_id
+   AND a.video_canon_ai_verification_bundle_id=v.video_canon_ai_verification_bundle_id
    AND a.assurance_level=v.assurance_level
    AND a.assigned_principal=v.execution_principal::name
    AND a.status='active'
@@ -280,8 +301,8 @@ $$;
 CREATE TABLE bidding.video_canon_promotion_job (
   video_canon_promotion_job_id uuid PRIMARY KEY DEFAULT uuidv7(),
   school_id uuid NOT NULL REFERENCES public.school(school_id) ON DELETE RESTRICT,
-  analysis_candidate_id uuid NOT NULL UNIQUE REFERENCES public.analysis_candidate(analysis_candidate_id) ON DELETE RESTRICT,
-  rule_id uuid NOT NULL UNIQUE REFERENCES bidding.rule(rule_id) ON DELETE RESTRICT,
+  analysis_candidate_id uuid NOT NULL REFERENCES public.analysis_candidate(analysis_candidate_id) ON DELETE RESTRICT,
+  rule_id uuid NOT NULL REFERENCES bidding.rule(rule_id) ON DELETE RESTRICT,
   video_canon_ai_verification_bundle_id uuid NOT NULL
     REFERENCES bidding.video_canon_ai_verification_bundle(video_canon_ai_verification_bundle_id) ON DELETE RESTRICT,
   candidate_payload_hash text NOT NULL CHECK (candidate_payload_hash~'^[0-9a-f]{64}$'),
@@ -373,10 +394,10 @@ BEGIN
      AND i3.assurance_set_sha256=i2.assurance_set_sha256
      AND i3.assurance_level='I3'
     JOIN bidding.video_canon_assurance_assignment a2
-      ON a2.video_canon_ai_verification_bundle_id=i2.video_canon_ai_verification_bundle_id
+      ON a2.video_canon_assurance_assignment_id=i2.video_canon_assurance_assignment_id
      AND a2.assurance_level='I2' AND a2.assigned_principal=i2.execution_principal AND a2.status='active'
     JOIN bidding.video_canon_assurance_assignment a3
-      ON a3.video_canon_ai_verification_bundle_id=i3.video_canon_ai_verification_bundle_id
+      ON a3.video_canon_assurance_assignment_id=i3.video_canon_assurance_assignment_id
      AND a3.assurance_level='I3' AND a3.assigned_principal=i3.execution_principal AND a3.status='active'
     WHERE i2.analysis_candidate_id=p_analysis_candidate_id
       AND i2.candidate_payload_hash=v_candidate.payload_hash
@@ -405,7 +426,8 @@ BEGIN
     RAISE EXCEPTION 'VIDEO_CANON_ASSURANCE_SET_HASH_MISMATCH' USING ERRCODE='23514';
   END IF;
   SELECT * INTO v_existing FROM bidding.video_canon_promotion_job
-   WHERE analysis_candidate_id=p_analysis_candidate_id;
+   WHERE analysis_candidate_id=p_analysis_candidate_id
+     AND assurance_set_sha256=p_assurance_set_sha256;
   IF FOUND THEN
     IF v_existing.rule_id<>p_rule_id
        OR v_existing.verification_bundle_sha256<>p_verification_bundle_sha256
@@ -421,12 +443,12 @@ BEGIN
     v_candidate.school_id,p_analysis_candidate_id,p_rule_id,
     v_bundle.video_canon_ai_verification_bundle_id,v_candidate.payload_hash,
     p_verification_bundle_sha256,p_assurance_set_sha256,
-    'video-canon:'||v_candidate.payload_hash||':'||p_verification_bundle_sha256
-  ) ON CONFLICT (analysis_candidate_id) DO NOTHING
+    'video-canon:'||v_candidate.payload_hash||':'||p_verification_bundle_sha256||':'||p_assurance_set_sha256
+  ) ON CONFLICT (idempotency_key) DO NOTHING
     RETURNING video_canon_promotion_job_id INTO v_job_id;
   IF v_job_id IS NULL THEN
     SELECT * INTO v_existing FROM bidding.video_canon_promotion_job
-     WHERE analysis_candidate_id=p_analysis_candidate_id;
+     WHERE idempotency_key='video-canon:'||v_candidate.payload_hash||':'||p_verification_bundle_sha256||':'||p_assurance_set_sha256;
     IF NOT FOUND OR v_existing.rule_id<>p_rule_id
        OR v_existing.verification_bundle_sha256<>p_verification_bundle_sha256
        OR v_existing.assurance_set_sha256<>p_assurance_set_sha256 THEN
@@ -508,10 +530,10 @@ BEGIN
      AND i3.assurance_set_sha256=i2.assurance_set_sha256
      AND i3.assurance_level='I3'
     JOIN bidding.video_canon_assurance_assignment a2
-      ON a2.video_canon_ai_verification_bundle_id=i2.video_canon_ai_verification_bundle_id
+      ON a2.video_canon_assurance_assignment_id=i2.video_canon_assurance_assignment_id
      AND a2.assurance_level='I2' AND a2.assigned_principal=i2.execution_principal AND a2.status='active'
     JOIN bidding.video_canon_assurance_assignment a3
-      ON a3.video_canon_ai_verification_bundle_id=i3.video_canon_ai_verification_bundle_id
+      ON a3.video_canon_assurance_assignment_id=i3.video_canon_assurance_assignment_id
      AND a3.assurance_level='I3' AND a3.assigned_principal=i3.execution_principal AND a3.status='active'
     WHERE i2.analysis_candidate_id=v_job.analysis_candidate_id
       AND i2.candidate_payload_hash=v_job.candidate_payload_hash

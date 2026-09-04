@@ -30,7 +30,9 @@ def test_delivery_is_leased_fenced_atomic_and_retained():
     assert "VIDEO_CANON_POST_WRITE_INTEGRITY_FAILED" in MIGRATION
     assert "video_canon_promotion_delivery_receipt_append_only" in MIGRATION
     assert "ATTEMPTS_EXHAUSTED" in MIGRATION
-    assert "ON CONFLICT (analysis_candidate_id) DO NOTHING" in MIGRATION
+    assert "ON CONFLICT (idempotency_key) DO NOTHING" in MIGRATION
+    assert "video_canon_assurance_assignment_id=i2.video_canon_assurance_assignment_id" in MIGRATION
+    assert "terminal_error_code='STATE_STALE'" in MIGRATION
     assert "v_existing.fencing_token<>p_fencing_token" in MIGRATION
 
 
