@@ -26,9 +26,11 @@ def test_job_uses_pinned_bounded_ssh_transport():
     assert "StrictHostKeyChecking=no" not in WORKFLOW
     assert "BatchMode=yes" in WORKFLOW
     assert "IdentitiesOnly=yes" in WORKFLOW
-    assert "timeout 180 ssh" in WORKFLOW
+    assert "timeout 4800 ssh" in WORKFLOW
     assert "ServerAliveInterval=15" in WORKFLOW
     assert "ServerAliveCountMax=2" in WORKFLOW
+    assert "recover_instance_after_transport_loss" in WORKFLOW
+    assert "rc != 255 || attempt == 3" in WORKFLOW
 
 
 def test_job_invokes_only_fixed_resident_admin_surfaces():

@@ -217,12 +217,19 @@ def test_guard_install_executes_only_verified_root_owned_installer_copy() -> Non
     mode = workflow.index("root:root:700", regular)
     digest = workflow.index("INSTALLER_SHA256", mode)
     syntax = workflow.index("bash -n", digest)
-    execute = workflow.index("; \\\"\\$trusted\\\";", syntax)
+    execute = workflow.index("; \\\"\\$trusted\\\"'", syntax)
     assert copy < regular < mode < digest < syntax < execute
     assert "sudo -n env SOURCE_FILE=" not in workflow
     assert "ADMIN_SHA256=" in workflow
     assert "INSTALLED_ADMIN_SHA256=" in workflow
-    assert "install -o root -g root -m 0755" in workflow
+    installer = (ROOT / "ops" / "install_oracle_idle_state_ocarun.sh").read_text()
+    assert 'atomic_copy_executable_verified "$trusted_admin" "$ADMIN_SHA256" "$ADMIN_TARGET"' in installer
+    assert "set -Eeuo pipefail; sudo -n env UPLOADED_INSTALLER=" in workflow
+    assert 'restore_previous_admin' in installer
+    assert "PRE_GUARD_SHA256=" in workflow
+    assert "PRE_ADMIN_SHA256=" in workflow
+    assert "POST_AUTOPILOT_ACTIVE=" in workflow
+    assert "POST_AUTOPILOT_ENABLED=" in workflow
 
 
 def test_install_proof_captures_are_exclusive_root_only_regular_files() -> None:

@@ -803,6 +803,9 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
         self.assertIn("oracle-idle-stop-fence hold *", installer)
         self.assertIn("oracle-idle-stop-fence read *", installer)
         self.assertIn("oracle-idle-stop-fence release *", installer)
+        self.assertIn('holder_start="$(cat "$start_file")"', installer)
+        self.assertIn('sleep 900 9>&- &', installer)
+        self.assertIn("trap 'cleanup_holder; exit 143' TERM INT", installer)
         self.assertIn("trap release_final_fence EXIT", workflow)
         self.assertIn("stop_accepted=1", workflow)
 

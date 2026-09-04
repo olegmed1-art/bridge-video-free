@@ -145,14 +145,35 @@ jobs:
         run: |
           set -euo pipefail
           [[ -n "$PAYLOAD" && ${#PAYLOAD} -le 24000 ]]
-          set +e
-          result="$(timeout 4800 ssh -i '${{ steps.ssh.outputs.key }}' \
-            -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
-            "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock sudo -u ocarun sudo -n /usr/local/sbin/universal-video enqueue-batch-base64 '$PAYLOAD'" 2>/dev/null)"
-          enqueue_rc=$?
-          set -e
+          recover_instance_after_transport_loss() {
+            local state
+            state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
+            case "$state" in
+              RUNNING) sleep 10 ;;
+              STARTING)
+                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+              STOPPING)
+                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state STOPPED --max-wait-seconds 600 >/dev/null
+                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+              STOPPED)
+                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+              *) return 1 ;;
+            esac
+          }
+          command="sudo -n /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock sudo -u ocarun sudo -n /usr/local/sbin/universal-video enqueue-batch-base64 '$PAYLOAD'"
+          result=''; enqueue_rc=255
+          for attempt in 1 2 3; do
+            set +e
+            result="$(timeout 4800 ssh -i '${{ steps.ssh.outputs.key }}' \
+              -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+              -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+              -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
+              "$ORACLE_USER@$ORACLE_HOST" "$command" 2>/dev/null)"
+            enqueue_rc=$?
+            set -e
+            (( enqueue_rc == 255 && attempt < 3 )) || break
+            recover_instance_after_transport_loss || break
+          done
           if (( enqueue_rc != 0 )); then
             intake_code="$(sed -n 's/^UV_ERROR_CODE=//p' <<<"$result" | tail -n1)"
             if [[ -z "$intake_code" ]]; then

@@ -214,13 +214,37 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          recover_instance_after_transport_loss() {
+            local state
+            state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
+            case "$state" in
+              RUNNING) sleep 10 ;;
+              STARTING)
+                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+              STOPPING)
+                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state STOPPED --max-wait-seconds 600 >/dev/null
+                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+              STOPPED)
+                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+              *) return 1 ;;
+            esac
+          }
           run_remote() {
             local command="$1"
-            timeout 180 ssh -i '${{ steps.ssh.outputs.key }}' \
-              -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-              -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
-              -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
-              "$ORACLE_USER@$ORACLE_HOST" "$command" 2>/dev/null
+            local attempt out rc
+            for attempt in 1 2 3; do
+              set +e
+              out="$(timeout 4800 ssh -i '${{ steps.ssh.outputs.key }}' \
+                -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+                -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+                -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
+                "$ORACLE_USER@$ORACLE_HOST" "$command" 2>/dev/null)"
+              rc=$?
+              set -e
+              if (( rc == 0 )); then printf '%s\n' "$out"; return 0; fi
+              if (( rc != 255 || attempt == 3 )); then printf '%s\n' "$out"; return "$rc"; fi
+              recover_instance_after_transport_loss || return "$rc"
+            done
           }
 
           # Cross the same exact ocarun sudo boundary installed and audited by

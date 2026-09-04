@@ -22,6 +22,9 @@ def test_batch_transport_is_durable_bounded_and_project_neutral():
     assert "cancel-in-progress: false" in text
     assert "timeout-minutes: 90" in text
     assert "timeout 4800 ssh" in text
+    assert "recover_instance_after_transport_loss" in text
+    assert "enqueue_rc == 255 && attempt < 3" in text
+    assert "ServerAliveCountMax=2" in text
     assert "sleep 60" not in text
     assert "project" not in json.loads(INTAKE_SCHEMA.read_text(encoding="utf-8"))["properties"]
 

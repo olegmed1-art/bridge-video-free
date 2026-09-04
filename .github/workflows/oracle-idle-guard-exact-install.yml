@@ -133,6 +133,22 @@ jobs:
           echo "key=$key" >> "$GITHUB_OUTPUT"
           echo "known=$known" >> "$GITHUB_OUTPUT"
 
+      - name: Capture pre-install hashes and inactive Autopilot state
+        id: before
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          snapshot="$(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            'set -Eeuo pipefail; printf "PRE_GUARD_SHA256=%s\n" "$(sha256sum /usr/local/sbin/oracle-idle-state | awk '\''{print $1}'\'')"; printf "PRE_ADMIN_SHA256=%s\n" "$(sha256sum /usr/local/sbin/universal-video-oci-admin | awk '\''{print $1}'\'')"; printf "PRE_AUTOPILOT_ACTIVE=%s\n" "$(systemctl is-active school-autopilot-shadow.service 2>/dev/null || true)"; printf "PRE_AUTOPILOT_ENABLED=%s\n" "$(systemctl is-enabled school-autopilot-shadow.service 2>/dev/null || true)"')"
+          printf '%s\n' "$snapshot"
+          active="$(sed -n 's/^PRE_AUTOPILOT_ACTIVE=//p' <<<"$snapshot")"
+          enabled="$(sed -n 's/^PRE_AUTOPILOT_ENABLED=//p' <<<"$snapshot")"
+          [[ -n "$active" && -n "$enabled" ]]
+          echo "active=$active" >> "$GITHUB_OUTPUT"
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
+
       - name: Install exact guard only
         shell: bash
         env:
@@ -198,7 +214,7 @@ jobs:
           ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n env UPLOADED_INSTALLER=/tmp/install_oracle_idle_state_ocarun.sh INSTALLER_SHA256=$installer_sha SOURCE_FILE=/tmp/oracle_idle_state.sh SOURCE_SHA256=$guard_sha AUTHORIZER_FILE=/tmp/oracle_idle_stop_guard.py AUTHORIZER_SHA256=$authorizer_sha ADMIN_FILE=/tmp/universal_video_oci_admin_entrypoint.sh ADMIN_SHA256=$admin_sha bash -c 'set -Eeuo pipefail; txn=/var/backups/oracle-idle-guard; install -d -o root -g root -m 0700 \"\$txn\"; trusted=\$(mktemp --tmpdir=\"\$txn\" .oracle-idle-installer.source.XXXXXX); trusted_admin=\$(mktemp --tmpdir=\"\$txn\" .universal-video-admin.source.XXXXXX); trap \"rm -f -- \\\"\$trusted\\\" \\\"\$trusted_admin\\\"\" EXIT; install -o root -g root -m 0700 \"\$UPLOADED_INSTALLER\" \"\$trusted\"; test -f \"\$trusted\"; test ! -L \"\$trusted\"; test \"\$(stat -c %U:%G:%a \"\$trusted\")\" = root:root:700; test \"\$(sha256sum \"\$trusted\" | awk '\''{print \$1}'\'')\" = \"\$INSTALLER_SHA256\"; bash -n \"\$trusted\"; \"\$trusted\"; install -o root -g root -m 0700 \"\$ADMIN_FILE\" \"\$trusted_admin\"; test -f \"\$trusted_admin\"; test ! -L \"\$trusted_admin\"; test \"\$(sha256sum \"\$trusted_admin\" | awk '\''{print \$1}'\'')\" = \"\$ADMIN_SHA256\"; bash -n \"\$trusted_admin\"; install -o root -g root -m 0755 \"\$trusted_admin\" /usr/local/sbin/universal-video-oci-admin'; rm -f /tmp/install_oracle_idle_state_ocarun.sh /tmp/universal_video_oci_admin_entrypoint.sh; printf 'INSTALLED_GUARD_SHA256=%s\\n' \"\$(sha256sum /usr/local/sbin/oracle-idle-state | awk '{print \$1}')\"; printf 'INSTALLED_ADMIN_SHA256=%s\\n' \"\$(sha256sum /usr/local/sbin/universal-video-oci-admin | awk '{print \$1}')\"; test \"\$(sha256sum /usr/local/sbin/oracle-idle-state | awk '{print \$1}')\" = '$guard_sha'; test \"\$(sha256sum /usr/local/sbin/universal-video-oci-admin | awk '{print \$1}')\" = '$admin_sha'"
+            "set -Eeuo pipefail; sudo -n env UPLOADED_INSTALLER=/tmp/install_oracle_idle_state_ocarun.sh INSTALLER_SHA256=$installer_sha SOURCE_FILE=/tmp/oracle_idle_state.sh SOURCE_SHA256=$guard_sha AUTHORIZER_FILE=/tmp/oracle_idle_stop_guard.py AUTHORIZER_SHA256=$authorizer_sha ADMIN_FILE=/tmp/universal_video_oci_admin_entrypoint.sh ADMIN_SHA256=$admin_sha bash -c 'set -Eeuo pipefail; txn=/var/backups/oracle-idle-guard; install -d -o root -g root -m 0700 \"\$txn\"; trusted=\$(mktemp --tmpdir=\"\$txn\" .oracle-idle-installer.source.XXXXXX); trap \"rm -f -- \\\"\$trusted\\\"\" EXIT; install -o root -g root -m 0700 \"\$UPLOADED_INSTALLER\" \"\$trusted\"; test -f \"\$trusted\"; test ! -L \"\$trusted\"; test \"\$(stat -c %U:%G:%a \"\$trusted\")\" = root:root:700; test \"\$(sha256sum \"\$trusted\" | awk '\''{print \$1}'\'')\" = \"\$INSTALLER_SHA256\"; bash -n \"\$trusted\"; \"\$trusted\"'; rm -f /tmp/install_oracle_idle_state_ocarun.sh /tmp/universal_video_oci_admin_entrypoint.sh; printf 'INSTALLED_GUARD_SHA256=%s\\n' \"\$(sha256sum /usr/local/sbin/oracle-idle-state | awk '{print \$1}')\"; printf 'INSTALLED_ADMIN_SHA256=%s\\n' \"\$(sha256sum /usr/local/sbin/universal-video-oci-admin | awk '{print \$1}')\"; test \"\$(sha256sum /usr/local/sbin/oracle-idle-state | awk '{print \$1}')\" = '$guard_sha'; test \"\$(sha256sum /usr/local/sbin/universal-video-oci-admin | awk '{print \$1}')\" = '$admin_sha'"
 
       - name: Capture post-install read-only proof
         shell: bash
@@ -233,4 +249,11 @@ jobs:
             [[ $authorization_rc -ne 0 ]]
             [[ "$authorization" == $'ORACLE_STOP_AUTHORIZED=NO\nORACLE_STOP_AUTHORIZATION_REASON=state_unknown_forbids_stop' ]]
           fi
+          after_state="$(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' \
+            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            'printf "POST_AUTOPILOT_ACTIVE=%s\n" "$(systemctl is-active school-autopilot-shadow.service 2>/dev/null || true)"; printf "POST_AUTOPILOT_ENABLED=%s\n" "$(systemctl is-enabled school-autopilot-shadow.service 2>/dev/null || true)"')"
+          printf '%s\n' "$after_state"
+          [[ "$(sed -n 's/^POST_AUTOPILOT_ACTIVE=//p' <<<"$after_state")" == '${{ steps.before.outputs.active }}' ]]
+          [[ "$(sed -n 's/^POST_AUTOPILOT_ENABLED=//p' <<<"$after_state")" == '${{ steps.before.outputs.enabled }}' ]]
           echo 'GUARD_ONLY_INSTALL_AND_PROOF_PASS'
