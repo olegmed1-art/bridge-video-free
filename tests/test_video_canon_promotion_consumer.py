@@ -56,7 +56,7 @@ def test_idle_does_not_attempt_consume(monkeypatch):
 def test_success_returns_retained_receipt(monkeypatch):
     job, token, receipt = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     claim = (job, uuid.uuid4(), uuid.uuid4(), "a" * 64, "b" * 64, "c" * 64, token, 7, None)
-    connections = [_Connection([claim]), _Connection([(receipt,)])]
+    connections = [_Connection([claim]), _Connection([("renewed",)]), _Connection([(receipt,)])]
     monkeypatch.setattr(consumer, "_connect", lambda _dsn: connections.pop(0))
     result = consumer.consume_one("postgresql://user@example/db")
     assert result == {
@@ -72,6 +72,7 @@ def test_failure_is_bounded_and_recorded_without_raw_error(monkeypatch):
     claim = (job, uuid.uuid4(), uuid.uuid4(), "a" * 64, "b" * 64, "c" * 64, token, 2, None)
     connections = [
         _Connection([claim]),
+        _Connection([("renewed",)]),
         _Connection([RuntimeError("database connection reset with secret detail")]),
         _Connection([RuntimeError("reconciliation failed")]),
         _Connection([("QUEUED",)]),
@@ -91,6 +92,7 @@ def test_ambiguous_consume_commit_is_reconciled_from_retained_receipt(monkeypatc
     claim = (job, uuid.uuid4(), uuid.uuid4(), "a" * 64, "b" * 64, "c" * 64, token, 3, None)
     connections = [
         _Connection([claim]),
+        _Connection([("renewed",)]),
         _Connection([RuntimeError("connection lost after possible commit")]),
         _Connection([(receipt,)]),
     ]
@@ -101,6 +103,18 @@ def test_ambiguous_consume_commit_is_reconciled_from_retained_receipt(monkeypatc
         "delivery_receipt_id": str(receipt),
         "fencing_token": 3,
     }
+
+
+def test_lost_heartbeat_fails_closed_before_consume(monkeypatch):
+    job, token = uuid.uuid4(), uuid.uuid4()
+    claim = (job, uuid.uuid4(), uuid.uuid4(), "a" * 64, "b" * 64, "c" * 64, token, 4, None)
+    connections = [_Connection([claim]), _Connection([RuntimeError("lease expired")])]
+    monkeypatch.setattr(consumer, "_connect", lambda _dsn: connections.pop(0))
+    assert consumer.consume_one("postgresql://user@example/db") == {
+        "status": "LEASE_LOST",
+        "job_id": str(job),
+    }
+    assert not connections
 
 
 @pytest.mark.parametrize("seconds", [0, 29, 901])

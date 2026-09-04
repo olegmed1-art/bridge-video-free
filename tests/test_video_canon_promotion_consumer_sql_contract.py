@@ -26,6 +26,12 @@ def test_authority_and_independent_assurance_are_fail_closed():
 def test_delivery_is_leased_fenced_atomic_and_retained():
     assert "FOR UPDATE SKIP LOCKED" in MIGRATION
     assert "j.fencing_token+1" in MIGRATION
+    assert "heartbeat_video_canon_promotion" in MIGRATION
+    assert "lease_expires_at=v_now+make_interval(secs=>p_lease_seconds)" in MIGRATION
+    assert "AND lease_owner IS NOT DISTINCT FROM session_user" in MIGRATION
+    assert "AND lease_token IS NOT DISTINCT FROM p_lease_token" in MIGRATION
+    assert "AND fencing_token IS NOT DISTINCT FROM p_fencing_token" in MIGRATION
+    assert "AND lease_expires_at>v_now" in MIGRATION
     assert "v_job.fencing_token IS DISTINCT FROM p_fencing_token" in MIGRATION
     assert MIGRATION.count("v_job.lease_expires_at<=clock_timestamp()") == 2
     assert "VIDEO_CANON_POST_WRITE_INTEGRITY_FAILED" in MIGRATION
@@ -37,7 +43,7 @@ def test_delivery_is_leased_fenced_atomic_and_retained():
     assert "PERFORM 1 FROM bidding.video_canon_promotion_job" in MIGRATION
     assert "video_canon_ai_verification_bundle_id=v_old.video_canon_ai_verification_bundle_id\n   FOR UPDATE" in MIGRATION
     assert "v_existing.fencing_token IS DISTINCT FROM p_fencing_token" in MIGRATION
-    assert MIGRATION.count("p_lease_token IS NULL OR p_fencing_token IS NULL") == 2
+    assert MIGRATION.count("p_lease_token IS NULL OR p_fencing_token IS NULL") == 3
     assert MIGRATION.count("v_job.lease_token IS DISTINCT FROM p_lease_token") == 2
     assert "VIDEO_CANON_DELIVERY_RECEIPT_STALE" in MIGRATION
     assert "video_canon_ai_restore_receipt rr" in MIGRATION
@@ -49,6 +55,7 @@ def test_only_consumer_can_cross_authoritative_boundary():
     assert "REVOKE EXECUTE ON FUNCTION bidding.activate_ai_verified_video_canon" in MIGRATION
     assert "FROM bridge_school_canon_promoter" in MIGRATION
     assert "TO bridge_school_canon_consumer" in MIGRATION
+    assert "bidding.heartbeat_video_canon_promotion(uuid,uuid,bigint,integer)" in MIGRATION
     assert "REVOKE INSERT,UPDATE,DELETE,TRUNCATE" in MIGRATION
 
 
@@ -59,3 +66,4 @@ def test_rollback_restores_pre_migration_boundary_and_registry():
     assert "TO bridge_school_canon_promoter" in ROLLBACK
     assert "WHERE migration_key='0323_workflow_video_canon_promotion_consumer'" in ROLLBACK
     assert "DROP ROLE IF EXISTS bridge_school_canon_consumer" in ROLLBACK
+    assert "DROP FUNCTION IF EXISTS bidding.heartbeat_video_canon_promotion" in ROLLBACK

@@ -35,13 +35,17 @@ BEGIN
      OR NOT has_function_privilege('bridge_school_canon_consumer',
        'bidding.claim_video_canon_promotion(integer)','EXECUTE')
      OR NOT has_function_privilege('bridge_school_canon_consumer',
+       'bidding.heartbeat_video_canon_promotion(uuid,uuid,bigint,integer)','EXECUTE')
+     OR NOT has_function_privilege('bridge_school_canon_consumer',
        'bidding.consume_video_canon_promotion(uuid,uuid,bigint)','EXECUTE')
      OR NOT has_function_privilege('bridge_school_canon_consumer',
        'bidding.fail_video_canon_promotion(uuid,uuid,bigint,text)','EXECUTE')
      OR NOT has_function_privilege('bridge_school_canon_verifier',
        'bidding.enqueue_video_canon_promotion(uuid,uuid,text,text)','EXECUTE')
      OR has_function_privilege('bridge_school_canon_verifier',
-       'bidding.consume_video_canon_promotion(uuid,uuid,bigint)','EXECUTE') THEN
+       'bidding.consume_video_canon_promotion(uuid,uuid,bigint)','EXECUTE')
+     OR has_function_privilege('bridge_school_canon_verifier',
+       'bidding.heartbeat_video_canon_promotion(uuid,uuid,bigint,integer)','EXECUTE') THEN
     RAISE EXCEPTION 'VIDEO_CANON_CONSUMER_RPC_ACL_INVALID';
   END IF;
 

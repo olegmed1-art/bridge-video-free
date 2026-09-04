@@ -509,6 +509,36 @@ BEGIN
     j.lease_token,j.fencing_token,j.lease_expires_at;
 END $$;
 
+CREATE OR REPLACE FUNCTION bidding.heartbeat_video_canon_promotion(
+  p_job_id uuid,p_lease_token uuid,p_fencing_token bigint,
+  p_lease_seconds integer DEFAULT 120
+) RETURNS timestamptz
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,bidding AS $$
+DECLARE
+  v_now timestamptz := clock_timestamp();
+  v_lease_expires_at timestamptz;
+BEGIN
+  IF p_lease_token IS NULL OR p_fencing_token IS NULL THEN
+    RAISE EXCEPTION 'VIDEO_CANON_STALE_LEASE_OR_FENCE' USING ERRCODE='55000';
+  END IF;
+  IF p_lease_seconds<30 OR p_lease_seconds>900 THEN
+    RAISE EXCEPTION 'VIDEO_CANON_LEASE_DURATION_INVALID' USING ERRCODE='23514';
+  END IF;
+  UPDATE bidding.video_canon_promotion_job SET
+    lease_expires_at=v_now+make_interval(secs=>p_lease_seconds),
+    updated_at=v_now
+  WHERE video_canon_promotion_job_id=p_job_id
+    AND status='leased' AND lease_owner IS NOT DISTINCT FROM session_user
+    AND lease_token IS NOT DISTINCT FROM p_lease_token
+    AND fencing_token IS NOT DISTINCT FROM p_fencing_token
+    AND lease_expires_at>v_now
+  RETURNING lease_expires_at INTO v_lease_expires_at;
+  IF v_lease_expires_at IS NULL THEN
+    RAISE EXCEPTION 'VIDEO_CANON_STALE_LEASE_OR_FENCE' USING ERRCODE='55000';
+  END IF;
+  RETURN v_lease_expires_at;
+END $$;
+
 CREATE OR REPLACE FUNCTION bidding.consume_video_canon_promotion(
   p_job_id uuid,p_lease_token uuid,p_fencing_token bigint
 ) RETURNS uuid
@@ -691,6 +721,7 @@ REVOKE ALL ON FUNCTION bidding.video_canon_assurance_set_sha256(uuid,text,text) 
 REVOKE ALL ON FUNCTION bidding.reassign_video_canon_assurance(uuid,name,text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.enqueue_video_canon_promotion(uuid,uuid,text,text),
   bidding.claim_video_canon_promotion(integer),
+  bidding.heartbeat_video_canon_promotion(uuid,uuid,bigint,integer),
   bidding.consume_video_canon_promotion(uuid,uuid,bigint),
   bidding.fail_video_canon_promotion(uuid,uuid,bigint,text) FROM PUBLIC;
 
@@ -707,6 +738,7 @@ GRANT EXECUTE ON FUNCTION bidding.enqueue_video_canon_promotion(uuid,uuid,text,t
 GRANT EXECUTE ON FUNCTION bidding.video_canon_assurance_set_sha256(uuid,text,text)
   TO bridge_school_canon_verifier;
 GRANT EXECUTE ON FUNCTION bidding.claim_video_canon_promotion(integer),
+  bidding.heartbeat_video_canon_promotion(uuid,uuid,bigint,integer),
   bidding.consume_video_canon_promotion(uuid,uuid,bigint),
   bidding.fail_video_canon_promotion(uuid,uuid,bigint,text)
   TO bridge_school_canon_consumer;

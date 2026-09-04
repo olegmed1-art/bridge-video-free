@@ -13,6 +13,7 @@ END $$;
 
 REVOKE ALL ON FUNCTION bidding.enqueue_video_canon_promotion(uuid,uuid,text,text),
   bidding.claim_video_canon_promotion(integer),
+  bidding.heartbeat_video_canon_promotion(uuid,uuid,bigint,integer),
   bidding.consume_video_canon_promotion(uuid,uuid,bigint),
   bidding.fail_video_canon_promotion(uuid,uuid,bigint,text)
   FROM bridge_school_canon_consumer,bridge_school_canon_verifier,PUBLIC;
@@ -24,6 +25,7 @@ REVOKE ALL ON TABLE bidding.video_canon_assurance_bound_bundle,
 
 DROP FUNCTION IF EXISTS bidding.fail_video_canon_promotion(uuid,uuid,bigint,text);
 DROP FUNCTION IF EXISTS bidding.consume_video_canon_promotion(uuid,uuid,bigint);
+DROP FUNCTION IF EXISTS bidding.heartbeat_video_canon_promotion(uuid,uuid,bigint,integer);
 DROP FUNCTION IF EXISTS bidding.claim_video_canon_promotion(integer);
 DROP FUNCTION IF EXISTS bidding.enqueue_video_canon_promotion(uuid,uuid,text,text);
 DROP FUNCTION IF EXISTS bidding.reassign_video_canon_assurance(uuid,name,text);

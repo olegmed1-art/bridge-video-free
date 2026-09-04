@@ -84,6 +84,19 @@ def consume_one(raw_dsn: str, *, lease_seconds: int = 120) -> dict[str, Any]:
         with _connect(dsn) as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
+                    "SELECT bidding.heartbeat_video_canon_promotion(%s,%s,%s,%s)",
+                    (job_id, lease_token, fencing_token, lease_seconds),
+                )
+                heartbeat = cursor.fetchone()
+                if not heartbeat or heartbeat[0] is None:
+                    raise RuntimeError("STATE_STALE")
+            connection.commit()
+    except Exception:
+        return {"status": "LEASE_LOST", "job_id": str(job_id)}
+    try:
+        with _connect(dsn) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
                     "SELECT bidding.consume_video_canon_promotion(%s,%s,%s)",
                     (job_id, lease_token, fencing_token),
                 )
