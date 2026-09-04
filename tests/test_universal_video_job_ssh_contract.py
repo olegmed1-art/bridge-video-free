@@ -31,6 +31,10 @@ def test_job_uses_pinned_bounded_ssh_transport():
     assert "ServerAliveCountMax=2" in WORKFLOW
     assert "recover_instance_after_transport_loss" in WORKFLOW
     assert "rc != 255 || attempt == 3" in WORKFLOW
+    preflight = WORKFLOW.split("- name: Resolve trusted SSH transport", 1)[0]
+    assert "STARTING)" in preflight
+    assert "STOPPING)" in preflight
+    assert "--wait-for-state STOPPED --max-wait-seconds 600" in preflight
 
 
 def test_job_invokes_only_fixed_resident_admin_surfaces():
