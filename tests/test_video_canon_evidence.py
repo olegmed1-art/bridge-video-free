@@ -270,6 +270,9 @@ def test_hidden_deal_is_rejected_inside_innocuous_allowed_value(field, value):
     "У партнёра есть туз",
     "Партнёр держит туза",
     "У партнёра A♠",
+    "Partner's ace of spades is an entry",
+    "Partner owns the ace of spades",
+    "North possesses ♠A",
 ])
 def test_hidden_deal_is_rejected_in_source_bound_teacher_statement(statement):
     learning = _learning()
@@ -310,8 +313,34 @@ def test_payload_hash_is_deterministic_and_source_bound():
     third = build_video_canon_candidate(changed, changed_assertion)
     assert third["payload_hash"] != first["payload_hash"]
     assert third["stable_key"] != first["stable_key"]
+    assert third["payload"]["semantic_identity_sha256"] == first["payload"][
+        "semantic_identity_sha256"
+    ]
     assert first["stable_key"].endswith(first["payload_hash"])
     assert third["stable_key"].endswith(third["payload_hash"])
+
+
+def test_correction_changes_content_hash_but_preserves_semantic_identity():
+    first_assertion = _assertion()
+    first = build_video_canon_candidate(_learning(), first_assertion)
+    corrected_assertion = deepcopy(first_assertion)
+    corrected_statement = "Исправление: после одного черва заявка не форсирует."
+    corrected_assertion["statement"] = corrected_statement
+    corrected_assertion["statement_sha256"] = hashlib.sha256(
+        corrected_statement.encode("utf-8")
+    ).hexdigest()
+    corrected_assertion["normalized_rule"]["forcing_semantics"] = {"forcing": False}
+    corrected_learning = _learning()
+    corrected_learning["transcript_evidence"][0]["text_sha256"] = corrected_assertion[
+        "statement_sha256"
+    ]
+    corrected = build_video_canon_candidate(corrected_learning, corrected_assertion)
+
+    assert corrected["payload_hash"] != first["payload_hash"]
+    assert corrected["stable_key"] != first["stable_key"]
+    assert corrected["payload"]["semantic_identity_sha256"] == first["payload"][
+        "semantic_identity_sha256"
+    ]
 
 
 def test_labelled_hand_prose_without_four_suit_encoding_is_not_a_false_positive():
@@ -354,6 +383,8 @@ def test_labelled_hand_prose_without_four_suit_encoding_is_not_a_false_positive(
     "N: was 10 to 12",
     "North's hand was 10-12 points",
     "North held the view that Q is conventional",
+    "Partner's agreement is forcing",
+    "North owns the decision process",
     "рука партнера: 5 карт",
 ])
 def test_labelled_prose_without_thirteen_card_hand_is_allowed(statement):

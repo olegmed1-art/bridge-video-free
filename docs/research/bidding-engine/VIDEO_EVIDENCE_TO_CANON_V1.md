@@ -79,6 +79,11 @@ be extended by the restore.
 When the same knowledge item already has an active version, activation closes
 the prior Canon and runtime rows in the same transaction. Their exact IDs are
 required in the restore-tested bundle and retained in the promotion receipt.
+The immutable `semantic_identity_sha256` is derived only from the semantic
+scope, system profile, learner level and normalized `rule_key`. Statement,
+source and rule-content hashes remain version provenance, so a correction gets
+a new candidate/content hash and knowledge version while retaining the same
+knowledge item. The database recomputes this identity before promotion.
 This RPC admits only an effective `valid_from` at or before transaction time.
 A future-dated transition requires a separate scheduler; rejecting it here
 prevents the current version from being superseded before the replacement is

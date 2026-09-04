@@ -202,6 +202,13 @@ def test_public_context_and_refs_are_allowlisted_against_hidden_card_payloads():
             build_offline_dds_comparison(
                 value, _board_evidence(), _logic_evidence(), dds_request_executor=_executor()
             )
+    for public_ref in ("N:table-1", "frame:N:task-7"):
+        value = _observation(); value["decision"]["evidence_refs"] = [public_ref]
+        logic = _logic_evidence(); logic["evidence_refs"] = [public_ref]
+        result = build_offline_dds_comparison(
+            value, _board_evidence(), logic, dds_request_executor=_executor()
+        )
+        assert result["decision"]["evidence_refs"] == [public_ref]
     value = _observation(); value["decision"]["evidence_refs"] = ["frame:N:AKQJ.T98.765.432"]
     with pytest.raises(VideoDDSComparisonError, match="invalid decision evidence ref"):
         build_offline_dds_comparison(

@@ -215,6 +215,10 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"У партнёра A♠"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"Partner''s ace of spades is an entry"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"Partner owns the ace of spades"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N:AKQJ109.876.54.32"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s hand was S:AKQJ109 H:876 D:54 C:32"}'::jsonb
@@ -248,6 +252,10 @@ BEGIN
        '{"notes":"North held 5 hearts"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"North held the view that Q is conventional"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"Partner''s agreement is forcing"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North owns the decision process"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"North held 10 points"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
@@ -301,6 +309,17 @@ BEGIN
        jsonb_build_object('semantic_confidence','NaN'::numeric)
      ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_SEMANTIC_CONFIDENCE_VALIDATION_INVALID';
+  END IF;
+  IF bidding.video_canon_semantic_identity_sha256(
+       '{"candidate_id":"assertion-7","source":{"video_file_id":"video-1","source_sha256":"source-1"},"teacher_assertion":{"speaker_id":"teacher-1"},"semantic_scope":"scope-1","system_profile":"profile-1","learner_level":"level-1","normalized_rule":{"rule_key":"rule-1","meaning":"before"}}'::jsonb
+     ) <> bidding.video_canon_semantic_identity_sha256(
+       '{"candidate_id":"assertion-7","source":{"video_file_id":"video-1","source_sha256":"source-1"},"teacher_assertion":{"speaker_id":"teacher-1"},"semantic_scope":"scope-1","system_profile":"profile-1","learner_level":"level-1","normalized_rule":{"rule_key":"rule-1","meaning":"corrected"}}'::jsonb
+     ) OR bidding.video_canon_semantic_identity_sha256(
+       '{"candidate_id":"assertion-7","source":{"video_file_id":"video-1","source_sha256":"source-1"},"teacher_assertion":{"speaker_id":"teacher-1"},"semantic_scope":"scope-1","system_profile":"profile-1","learner_level":"level-1","normalized_rule":{"rule_key":"rule-1"}}'::jsonb
+     ) = bidding.video_canon_semantic_identity_sha256(
+       '{"candidate_id":"assertion-7","source":{"video_file_id":"video-1","source_sha256":"source-1"},"teacher_assertion":{"speaker_id":"teacher-1"},"semantic_scope":"scope-1","system_profile":"profile-1","learner_level":"level-1","normalized_rule":{"rule_key":"rule-2"}}'::jsonb
+     ) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_SEMANTIC_IDENTITY_INVALID';
   END IF;
   IF bidding.current_school_canon_snapshot_sha256(
        (SELECT school_id FROM public.school ORDER BY school_id LIMIT 1)
@@ -466,8 +485,8 @@ BEGIN
   INSERT INTO bidding.rule(
     rule_id,school_id,knowledge_version_id,rule_key,rule_kind,action,lifecycle_status
   ) VALUES
-    (v_old_rule,v_school,v_old_version,'restore-old-'||v_old_rule::text,'bid','{"call":"1H"}','validated'),
-    (v_new_rule,v_school,v_new_version,'restore-new-'||v_new_rule::text,'bid','{"call":"2H"}','validated'),
+    (v_old_rule,v_school,v_old_version,'restore-revision-'||v_item::text,'bid','{"call":"1H"}','validated'),
+    (v_new_rule,v_school,v_new_version,'restore-revision-'||v_item::text,'bid','{"call":"2H"}','validated'),
     (v_orphan_rule,v_school,v_orphan_version,'orphan-'||v_orphan_rule::text,'bid','{"call":"1S"}','validated');
   PERFORM set_config('TimeZone','UTC',true);
   v_rule_digest_utc:=bidding.video_canon_rule_restore_sha256(v_old_rule);

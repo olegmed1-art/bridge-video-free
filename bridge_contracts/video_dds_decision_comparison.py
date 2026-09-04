@@ -15,7 +15,9 @@ from bridge_contracts.assistant_lab import (
 
 SCHEMA = "video-decision-logic-dds-v3"
 _REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#=-]{0,159}$")
-_HIDDEN_REF = re.compile(r"(?:^|[^A-Z0-9])[NESW]:[AKQJT2-9X.-]+", re.IGNORECASE)
+_HIDDEN_REF = re.compile(
+    r"(?:^|[^A-Z0-9])[NESW]:[AKQJT2-9X.-]+(?=$|[^A-Z0-9])", re.IGNORECASE
+)
 _HAND_SUIT = r"(?:-|(?:(?:10)|[AKQJT2-9X]){0,13})"
 _COMPLETE_HAND_REF = re.compile(
     rf"(?<![A-Z0-9])(?:[NESW]:)?"

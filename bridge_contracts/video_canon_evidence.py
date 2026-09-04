@@ -75,9 +75,9 @@ _HOLDING_MODIFIER = (
 )
 _VERBAL_HIDDEN_TAIL = re.compile(
     r"(?:(?<!\w)(?:partner|opponent|north|east|south|west)"
-    r"|(?<![A-Za-z0-9])[NESW])(?:(?:\s+(?:(?:held|holds?|has|had)|"
+    r"|(?<![A-Za-z0-9])[NESW])(?:(?:\s+(?:(?:held|holds?|has|had|owns?|possesses?|retains?|carries?)|"
     r"(?:is|was)\s+" + _HOLDING_MODIFIER + r"holding))|"
-    r"(?:['’]s\s+" + _HOLDING_MODIFIER + r"holding))\b"
+    r"(?:['’]s(?:\s+" + _HOLDING_MODIFIER + r"holding)?))\b"
     r"(?P<tail>[^;]{0,512})",
     re.IGNORECASE,
 )
@@ -311,6 +311,13 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _semantic_identity_sha256(*parts: str) -> str:
+    component_hashes = "".join(
+        hashlib.sha256(part.encode("utf-8")).hexdigest() for part in parts
+    )
+    return hashlib.sha256(component_hashes.encode("ascii")).hexdigest()
+
+
 def _sha(value: Any, label: str) -> str:
     result = str(value or "").strip().lower()
     if not _SHA256.fullmatch(result):
@@ -428,7 +435,7 @@ def build_video_canon_candidate(
         _fail("normalized rule contains hidden information")
     if set(normalized_rule) != _NORMALIZED_RULE_FIELDS:
         _fail("normalized rule fields mismatch")
-    _text(normalized_rule.get("rule_key"), "normalized rule_key")
+    rule_key = _text(normalized_rule.get("rule_key"), "normalized rule_key")
     if normalized_rule.get("rule_kind") not in {"bid", "inference", "priority", "exception", "fallback"}:
         _fail("invalid normalized rule_kind")
     for field in _RULE_JSON_FIELDS:
@@ -490,6 +497,15 @@ def build_video_canon_candidate(
     contradictions = [_text(value, "contradiction") for value in contradictions]
     confidence = _confidence(assertion.get("semantic_confidence"))
 
+    system_profile = _text(assertion.get("system_profile"), "system_profile")
+    learner_level = _text(assertion.get("learner_level"), "learner_level")
+    semantic_identity_sha256 = _semantic_identity_sha256(
+        "video-canon-semantic-identity-v1",
+        semantic_scope,
+        system_profile,
+        learner_level,
+        rule_key,
+    )
     ai_verification_eligible = (
         source_class == "SCHOOL_PRIMARY_EVIDENCE"
         and status == "APPROVED"
@@ -501,6 +517,7 @@ def build_video_canon_candidate(
         "schema": SCHEMA,
         "authority_class": AUTHORITY_CLASS,
         "candidate_id": assertion_id,
+        "semantic_identity_sha256": semantic_identity_sha256,
         "source": deepcopy(learning["source"]),
         "observed_episode": deepcopy(learning["observed_episode"]),
         "learning_candidate_id": learning["candidate_id"],
@@ -523,8 +540,8 @@ def build_video_canon_candidate(
             "authorization_evidence_sha256": authorization_evidence_sha or None,
         },
         "semantic_scope": semantic_scope,
-        "system_profile": _text(assertion.get("system_profile"), "system_profile"),
-        "learner_level": _text(assertion.get("learner_level"), "learner_level"),
+        "system_profile": system_profile,
+        "learner_level": learner_level,
         "normalized_rule": deepcopy(dict(normalized_rule)),
         "semantic_confidence": confidence,
         "ambiguities": ambiguities,

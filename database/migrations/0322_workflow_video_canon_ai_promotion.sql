@@ -1,6 +1,13 @@
 \set ON_ERROR_STOP on
 BEGIN;
 
+-- A logical bidding rule may have multiple immutable knowledge versions. The
+-- pre-0322 school-wide key constraint made a corrected version impossible to
+-- stage before atomically superseding its predecessor.
+ALTER TABLE bidding.rule DROP CONSTRAINT rule_school_id_rule_key_key;
+ALTER TABLE bidding.rule ADD CONSTRAINT bidding_rule_version_identity_key
+  UNIQUE (school_id,rule_key,knowledge_version_id);
+
 -- Capability roles are migration-owned. Refuse collisions instead of mutating
 -- pre-existing cluster roles or memberships that rollback cannot reconstruct.
 DO $$
@@ -414,7 +421,7 @@ SELECT EXISTS (
          SELECT 1
            FROM regexp_matches(
              w.value#>>'{}',
-             E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])(?:(?:[[:space:]]+(?:(?:held|holds?|has|had)|(?:is|was)[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding))|(?:[''’]s[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding))(?:[[:space:]]+|[[:space:]]*[:,;=\\-][[:space:]]*)([^;]*)',
+             E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])(?:(?:[[:space:]]+(?:(?:held|holds?|has|had|owns?|possesses?|retains?|carries?)|(?:is|was)[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding))|(?:[''’]s(?:[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding)?))(?:[[:space:]]+|[[:space:]]*[:,;=\\-][[:space:]]*)([^;]*)',
              'gi'
            ) AS matched(parts)
           WHERE matched.parts[1] ~*
@@ -462,6 +469,22 @@ SELECT CASE
      AND (p_payload->>'semantic_confidence')::numeric BETWEEN 0.95 AND 1
   ELSE false
 END
+$$;
+
+CREATE OR REPLACE FUNCTION bidding.video_canon_semantic_identity_sha256(p_payload jsonb)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+STRICT
+AS $$
+SELECT encode(public.digest(convert_to(
+  encode(public.digest(convert_to('video-canon-semantic-identity-v1','UTF8'),'sha256'),'hex') ||
+  encode(public.digest(convert_to(COALESCE(p_payload->>'semantic_scope',''),'UTF8'),'sha256'),'hex') ||
+  encode(public.digest(convert_to(COALESCE(p_payload->>'system_profile',''),'UTF8'),'sha256'),'hex') ||
+  encode(public.digest(convert_to(COALESCE(p_payload->>'learner_level',''),'UTF8'),'sha256'),'hex') ||
+  encode(public.digest(convert_to(COALESCE(p_payload#>>'{normalized_rule,rule_key}',''),'UTF8'),'sha256'),'hex'),
+  'UTF8'),'sha256'),'hex')
 $$;
 
 CREATE OR REPLACE FUNCTION bidding.video_canon_rule_test_state_sha256(p_rule_id uuid)
@@ -1219,6 +1242,8 @@ BEGIN
             IS DISTINCT FROM v_bundle.bundle_payload->>'system_profile'
        OR v_candidate.payload->>'learner_level'
             IS DISTINCT FROM v_bundle.bundle_payload->>'learner_level'
+       OR v_candidate.payload->>'semantic_identity_sha256'
+            IS DISTINCT FROM bidding.video_canon_semantic_identity_sha256(v_candidate.payload)
        OR jsonb_typeof(v_candidate.payload->'ambiguities') IS DISTINCT FROM 'array'
        OR jsonb_typeof(v_candidate.payload->'contradictions') IS DISTINCT FROM 'array'
        OR jsonb_array_length(v_candidate.payload->'ambiguities')<>0
@@ -1262,12 +1287,13 @@ BEGIN
       JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
        AND ki.school_id=v_candidate.school_id AND ki.knowledge_type='bidding_rule'
        AND ki.status='active'
-       AND ki.stable_key='video-canon:'||v_candidate.payload_hash
+       AND ki.stable_key='video-canon:'||v_candidate.payload->>'semantic_identity_sha256'
      WHERE kv.knowledge_version_id=v_rule.knowledge_version_id;
     v_expected_version_provenance := jsonb_build_object(
       'promotion_mode','AI_VERIFIED_TEACHER_VIDEO',
       'analysis_candidate_id',v_candidate.analysis_candidate_id,
       'candidate_payload_hash',v_candidate.payload_hash,
+      'semantic_identity_sha256',v_candidate.payload->>'semantic_identity_sha256',
       'source_id',v_candidate.source_id,
       'source_sha256',v_candidate.payload#>>'{source,source_sha256}',
       'video_file_id',v_candidate.payload#>>'{source,video_file_id}',
@@ -1599,6 +1625,7 @@ BEGIN
       v_version.knowledge_version_id,v_scope_key,v_valid_from,v_valid_to,NULL,
       jsonb_build_object('promotion_mode','AI_VERIFIED_TEACHER_VIDEO','policy_version',v_policy_version,
         'candidate_id',p_analysis_candidate_id,'candidate_payload_hash',v_candidate.payload_hash,
+        'semantic_identity_sha256',v_candidate.payload->>'semantic_identity_sha256',
         'verification_bundle_sha256',p_verification_bundle_sha256,
         'rule_content_sha256',v_rule_content_sha256,
         'knowledge_version_content_sha256',v_version_content_sha256,
@@ -2088,6 +2115,7 @@ GRANT SELECT ON bidding.video_canon_source_policy,bidding.video_canon_ai_verific
   TO bridge_school_reader;
 REVOKE ALL ON FUNCTION bidding.is_complete_bridge_hand(text),
   bidding.is_video_canon_semantic_confidence_eligible(jsonb),
+  bidding.video_canon_semantic_identity_sha256(jsonb),
   bidding.video_canon_rule_test_state_sha256(uuid),
   bidding.video_canon_rule_restore_sha256(uuid),
   bidding.current_school_canon_snapshot_sha256(uuid) FROM PUBLIC;

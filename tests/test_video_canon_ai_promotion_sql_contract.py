@@ -160,6 +160,8 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "VIDEO_CANON_VERIFIER_PRINCIPAL_REVOKED",
         "attestor.rolname=v.execution_principal",
         "VIDEO_CANON_KNOWLEDGE_VERSION_BINDING_INVALID",
+        "video_canon_semantic_identity_sha256",
+        "semantic_identity_sha256",
         "v_version.content<>v_candidate.payload",
         "v_version.provenance<>v_expected_version_provenance",
         "knowledge_version_content_sha256",
@@ -173,7 +175,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "expected.case_payload-'expect'",
         "VIDEO_CANON_RESTORE_SOURCE_BINDING_MISMATCH",
         "kvs.source_locator=jsonb_build_object(",
-        "ki.stable_key='video-canon:'||v_candidate.payload_hash",
+        "ki.stable_key='video-canon:'||v_candidate.payload->>'semantic_identity_sha256'",
         "VIDEO_CANON_SOURCE_POLICY_EXPIRED",
         "VIDEO_CANON_RESTORE_ATTESTOR_REVOKED",
         "VIDEO_CANON_RESTORE_VERSION_CONTENT_MISMATCH",
@@ -201,9 +203,9 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "hearts?|spades?|diamonds?|clubs?",
         "trumps?|losers?|points?|hcp|controls?",
         "карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*",
-        "(?:held|holds?|has|had)",
+        "(?:held|holds?|has|had|owns?|possesses?|retains?|carries?)",
         "(?:is|was)[[:space:]]+(?:(?:currently|still|now|already",
-        "[''’]s[[:space:]]+(?:(?:currently|still|now|already",
+        "[''’]s(?:[[:space:]]+(?:(?:currently|still|now|already",
         "(?:[-–—]|to)[[:space:]]*[0-9]{1,2}|[+]",
         "does[[:space:]]+not|doesn[''’]t",
         "(?:no|neither)",
@@ -231,6 +233,9 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
 
 
 def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
+    assert "DROP CONSTRAINT rule_school_id_rule_key_key" in MIGRATION
+    assert "CONSTRAINT bidding_rule_version_identity_key" in MIGRATION
+    assert "UNIQUE (school_id,rule_key,knowledge_version_id)" in MIGRATION
     assert "video_candidate_payload_hash" in MIGRATION
     assert "candidate_payload_hash=v_candidate.payload_hash" in MIGRATION
     assert "verification_bundle_sha256" in MIGRATION
@@ -247,6 +252,7 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "WHERE analysis_candidate_id=p_analysis_candidate_id FOR UPDATE" in MIGRATION
     assert "RETURN v_existing.video_canon_ai_promotion_receipt_id" in MIGRATION
     assert "rollback refused: Video-to-Canon state exists" in ROLLBACK
+    assert "GROUP BY school_id,rule_key HAVING count(*)>1" in ROLLBACK
     assert "EXISTS (SELECT 1 FROM bidding.video_correction_review_receipt)" in ROLLBACK
     assert "CREATE TABLE bidding.video_canon_ai_restore_receipt" in MIGRATION
     assert "superseded_runtime_state" in MIGRATION
@@ -269,6 +275,8 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "DROP FUNCTION bidding.guard_superseded_video_canon_rule_test_run" in ROLLBACK
     assert "DROP FUNCTION bidding.video_canon_rule_test_state_sha256" in ROLLBACK
     assert "DROP FUNCTION bidding.video_canon_rule_restore_sha256" in ROLLBACK
+    assert "DROP FUNCTION bidding.video_canon_semantic_identity_sha256" in ROLLBACK
+    assert "ADD CONSTRAINT rule_school_id_rule_key_key" in ROLLBACK
     assert "DROP FUNCTION bidding.is_complete_bridge_hand" in ROLLBACK
     assert "DROP FUNCTION bidding.is_video_canon_semantic_confidence_eligible" in ROLLBACK
     assert "REVOKE ALL PRIVILEGES ON SCHEMA public,bidding" in ROLLBACK

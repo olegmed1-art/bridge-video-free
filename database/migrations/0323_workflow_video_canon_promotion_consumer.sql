@@ -655,6 +655,74 @@ BEGIN
   v_promotion:=bidding.activate_ai_verified_video_canon(
     v_job.analysis_candidate_id,v_job.rule_id,v_job.verification_bundle_sha256
   );
+  -- The inner RPC can wait on locks. Re-read every independent-assurance and
+  -- live capability fact after it returns; revocation during that window must
+  -- roll back the activation before a delivery receipt can commit.
+  IF NOT EXISTS (
+    SELECT 1 FROM bidding.video_canon_assurance_verdict i2
+    JOIN bidding.video_canon_assurance_verdict i3
+      ON i3.analysis_candidate_id=i2.analysis_candidate_id
+     AND i3.candidate_payload_hash=i2.candidate_payload_hash
+     AND i3.verification_bundle_sha256=i2.verification_bundle_sha256
+     AND i3.assurance_set_sha256=i2.assurance_set_sha256
+     AND i3.assurance_level='I3'
+    JOIN bidding.video_canon_assurance_assignment a2
+      ON a2.video_canon_assurance_assignment_id=i2.video_canon_assurance_assignment_id
+     AND a2.assurance_level='I2' AND a2.assigned_principal=i2.execution_principal AND a2.status='active'
+    JOIN bidding.video_canon_assurance_assignment a3
+      ON a3.video_canon_assurance_assignment_id=i3.video_canon_assurance_assignment_id
+     AND a3.assurance_level='I3' AND a3.assigned_principal=i3.execution_principal AND a3.status='active'
+    WHERE i2.analysis_candidate_id=v_job.analysis_candidate_id
+      AND i2.candidate_payload_hash=v_job.candidate_payload_hash
+      AND i2.verification_bundle_sha256=v_job.verification_bundle_sha256
+      AND i2.assurance_set_sha256=v_job.assurance_set_sha256
+      AND i2.assurance_level='I2'
+      AND i2.verdict='VERIFIED_FOR_PROMOTION' AND i3.verdict='VERIFIED_FOR_PROMOTION'
+      AND i2.provenance_verified AND i3.provenance_verified
+      AND i2.hidden_information_clear AND i3.hidden_information_clear
+      AND i2.profile_unambiguous AND i3.profile_unambiguous
+      AND NOT i2.canon_conflict AND NOT i3.canon_conflict
+      AND i2.deterministic AND i3.deterministic
+      AND i2.verifier_family<>i3.verifier_family
+      AND i2.execution_principal<>i3.execution_principal
+      AND EXISTS (
+        SELECT 1 FROM pg_catalog.pg_roles i2_attestor
+         WHERE i2_attestor.rolname=i2.execution_principal
+           AND i2_attestor.rolcanlogin
+           AND pg_has_role(
+             i2_attestor.oid,'bridge_school_canon_i2_verifier','MEMBER'
+           )
+      )
+      AND EXISTS (
+        SELECT 1 FROM pg_catalog.pg_roles i3_attestor
+         WHERE i3_attestor.rolname=i3.execution_principal
+           AND i3_attestor.rolcanlogin
+           AND pg_has_role(
+             i3_attestor.oid,'bridge_school_canon_i3_verifier','MEMBER'
+           )
+      )
+      AND EXISTS (
+        SELECT 1 FROM bidding.video_canon_assurance_verifier_registry r2
+         WHERE r2.assurance_level='I2' AND r2.capability_role='bridge_school_canon_i2_verifier'
+           AND r2.verifier_family=i2.verifier_family AND r2.verifier_version=i2.verifier_version
+      )
+      AND EXISTS (
+        SELECT 1 FROM bidding.video_canon_assurance_verifier_registry r3
+         WHERE r3.assurance_level='I3' AND r3.capability_role='bridge_school_canon_i3_verifier'
+           AND r3.verifier_family=i3.verifier_family AND r3.verifier_version=i3.verifier_version
+      )
+      AND i2.canon_snapshot_sha256=i3.canon_snapshot_sha256
+      AND i2.system_profile=i3.system_profile
+      AND i2.learner_level=i3.learner_level
+  ) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_I2_I3_REVOKED_DURING_PROMOTION' USING ERRCODE='42501';
+  END IF;
+  IF bidding.video_canon_assurance_set_sha256(
+       v_job.analysis_candidate_id,v_job.candidate_payload_hash,
+       v_job.verification_bundle_sha256
+     ) IS DISTINCT FROM v_job.assurance_set_sha256 THEN
+    RAISE EXCEPTION 'VIDEO_CANON_ASSURANCE_SET_CHANGED_DURING_PROMOTION' USING ERRCODE='23514';
+  END IF;
   -- Use a fresh, single wall-clock boundary after the authoritative write.
   -- A finite activation that expired during the inner RPC must roll back
   -- instead of receiving POST_WRITE_INTEGRITY_PASS.

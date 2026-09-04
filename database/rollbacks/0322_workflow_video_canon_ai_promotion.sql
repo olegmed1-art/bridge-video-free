@@ -7,7 +7,10 @@ BEGIN
      OR EXISTS (SELECT 1 FROM bidding.video_canon_ai_promotion_receipt)
      OR EXISTS (SELECT 1 FROM bidding.video_canon_ai_verification)
      OR EXISTS (SELECT 1 FROM bidding.video_canon_ai_verification_bundle)
-     OR EXISTS (SELECT 1 FROM bidding.video_canon_source_policy) THEN
+     OR EXISTS (SELECT 1 FROM bidding.video_canon_source_policy)
+     OR EXISTS (
+       SELECT 1 FROM bidding.rule GROUP BY school_id,rule_key HAVING count(*)>1
+     ) THEN
     RAISE EXCEPTION '0322 rollback refused: Video-to-Canon state exists';
   END IF;
 END $$;
@@ -45,6 +48,7 @@ DROP FUNCTION bidding.validate_video_correction_review_receipt();
 DROP FUNCTION bidding.current_school_canon_snapshot_sha256(uuid);
 DROP FUNCTION bidding.video_canon_rule_test_state_sha256(uuid);
 DROP FUNCTION bidding.video_canon_rule_restore_sha256(uuid);
+DROP FUNCTION bidding.video_canon_semantic_identity_sha256(jsonb);
 DROP FUNCTION bidding.contains_forbidden_hidden_value(jsonb);
 DROP FUNCTION bidding.is_video_canon_semantic_confidence_eligible(jsonb);
 DROP FUNCTION bidding.is_complete_bridge_hand(text);
@@ -95,6 +99,9 @@ DROP TABLE bidding.video_canon_ai_verification;
 DROP TABLE bidding.video_canon_ai_verification_bundle;
 DROP TABLE bidding.video_canon_verifier_registry;
 DROP TABLE bidding.video_canon_source_policy;
+ALTER TABLE bidding.rule DROP CONSTRAINT bidding_rule_version_identity_key;
+ALTER TABLE bidding.rule ADD CONSTRAINT rule_school_id_rule_key_key
+  UNIQUE (school_id,rule_key);
 REVOKE ALL PRIVILEGES ON SCHEMA public,bidding FROM
   bridge_school_canon_verifier,bridge_school_canon_semantic_verifier,
   bridge_school_canon_bridge_verifier,bridge_school_canon_firewall_verifier,

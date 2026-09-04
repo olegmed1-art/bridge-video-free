@@ -9,11 +9,11 @@ ROLLBACK = (ROOT / "database/rollbacks/0323_workflow_video_canon_promotion_consu
 def test_authority_and_independent_assurance_are_fail_closed():
     assert "authority_class' IS DISTINCT FROM 'TEACHER_VIDEO'" in MIGRATION
     assert "source_class' IS DISTINCT FROM 'SCHOOL_PRIMARY_EVIDENCE'" in MIGRATION
-    assert MIGRATION.count("i2.verifier_family<>i3.verifier_family") == 2
-    assert MIGRATION.count("i2.execution_principal<>i3.execution_principal") == 2
+    assert MIGRATION.count("i2.verifier_family<>i3.verifier_family") == 3
+    assert MIGRATION.count("i2.execution_principal<>i3.execution_principal") == 3
     assert "i2_attestor.rolname=i2.execution_principal" in MIGRATION
     assert "i3_attestor.rolname=i3.execution_principal" in MIGRATION
-    assert MIGRATION.count("attestor.rolcanlogin") == 2
+    assert MIGRATION.count("attestor.rolcanlogin") == 4
     assert "i2_attestor.oid,'bridge_school_canon_i2_verifier','MEMBER'" in MIGRATION
     assert "i3_attestor.oid,'bridge_school_canon_i3_verifier','MEMBER'" in MIGRATION
     assert "video_canon_assurance_verifier_registry" in MIGRATION
@@ -22,7 +22,12 @@ def test_authority_and_independent_assurance_are_fail_closed():
     assert "video_canon_assurance_set_sha256" in MIGRATION
     assert "reassign_video_canon_assurance" in MIGRATION
     assert "supersession_reason_sha256" in MIGRATION
-    assert MIGRATION.count("i2.canon_snapshot_sha256=i3.canon_snapshot_sha256") == 2
+    assert MIGRATION.count("i2.canon_snapshot_sha256=i3.canon_snapshot_sha256") == 3
+    post_activation = MIGRATION.split("v_promotion:=bidding.activate_ai_verified_video_canon(", 1)[1]
+    assert "i2_attestor.rolcanlogin" in post_activation
+    assert "i3_attestor.rolcanlogin" in post_activation
+    assert "VIDEO_CANON_I2_I3_REVOKED_DURING_PROMOTION" in post_activation
+    assert "VIDEO_CANON_ASSURANCE_SET_CHANGED_DURING_PROMOTION" in post_activation
     assert "WORLD" not in MIGRATION
 
 
