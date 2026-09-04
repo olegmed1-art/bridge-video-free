@@ -861,7 +861,34 @@ BEGIN
          AND NOT ((NEW.bundle_payload#>>'{effective_period,valid_to}') ~
               '(?:[Zz]|[+-][0-9]{2}(?::?[0-9]{2})?)$')
        )
-       OR jsonb_typeof(NEW.bundle_payload->'rollback')<>'object' THEN
+       OR jsonb_typeof(NEW.bundle_payload->'rollback')<>'object'
+       OR (SELECT count(*) FROM jsonb_object_keys(
+            NEW.bundle_payload->'rollback'
+          ))<>5
+       OR NOT (NEW.bundle_payload->'rollback' ?& ARRAY[
+         'strategy','target_knowledge_version_id','target_canon_activation_id',
+         'restore_test_sha256','result'
+       ])
+       OR jsonb_typeof(NEW.bundle_payload#>'{rollback,strategy}')<>'string'
+       OR btrim(NEW.bundle_payload#>>'{rollback,strategy}')=''
+       OR jsonb_typeof(NEW.bundle_payload#>'{rollback,target_knowledge_version_id}')
+            NOT IN ('string','null')
+       OR (
+         jsonb_typeof(NEW.bundle_payload#>'{rollback,target_knowledge_version_id}')='string'
+         AND NOT ((NEW.bundle_payload#>>'{rollback,target_knowledge_version_id}') ~
+           '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+       )
+       OR jsonb_typeof(NEW.bundle_payload#>'{rollback,target_canon_activation_id}')
+            NOT IN ('string','null')
+       OR (
+         jsonb_typeof(NEW.bundle_payload#>'{rollback,target_canon_activation_id}')='string'
+         AND NOT ((NEW.bundle_payload#>>'{rollback,target_canon_activation_id}') ~
+           '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+       )
+       OR jsonb_typeof(NEW.bundle_payload#>'{rollback,restore_test_sha256}')<>'string'
+       OR NOT ((NEW.bundle_payload#>>'{rollback,restore_test_sha256}') ~ '^[0-9a-f]{64}$')
+       OR jsonb_typeof(NEW.bundle_payload#>'{rollback,result}')<>'string'
+       OR NEW.bundle_payload#>>'{rollback,result}'<>'PASS' THEN
         RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_CONTENT_MISMATCH' USING ERRCODE='23514';
     END IF;
     IF (
@@ -882,7 +909,8 @@ BEGIN
         RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_EFFECTIVE_PERIOD_INVALID' USING ERRCODE='23514';
     END;
     IF v_valid_from>statement_timestamp()
-       OR (v_valid_to IS NOT NULL AND v_valid_to<=v_valid_from) THEN
+       OR (v_valid_to IS NOT NULL AND v_valid_to<=v_valid_from)
+       OR (v_valid_to IS NOT NULL AND v_valid_to<=statement_timestamp()) THEN
         RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_EFFECTIVE_PERIOD_INVALID' USING ERRCODE='23514';
     END IF;
     RETURN NEW;

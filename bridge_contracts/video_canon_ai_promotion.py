@@ -223,13 +223,16 @@ def build_ai_canon_promotion(
     if not isinstance(period, Mapping) or set(period) != {"valid_from", "valid_to"}:
         _fail("effective period fields mismatch")
     valid_from, valid_from_timestamp = _timestamp(period.get("valid_from"), "valid_from")
-    if valid_from_timestamp > datetime.now(timezone.utc):
+    readiness_timestamp = datetime.now(timezone.utc)
+    if valid_from_timestamp > readiness_timestamp:
         _fail("valid_from cannot be in the future for immediate promotion")
     valid_to = period.get("valid_to")
     if valid_to is not None:
         valid_to, valid_to_timestamp = _timestamp(valid_to, "valid_to")
         if valid_to_timestamp <= valid_from_timestamp:
             _fail("valid_to must be after valid_from")
+        if valid_to_timestamp <= readiness_timestamp:
+            _fail("valid_to has already expired for immediate promotion")
     activation_scope = _text(verification_bundle.get("activation_scope"), "activation_scope")
     if activation_scope != _text(payload.get("semantic_scope"), "candidate semantic_scope"):
         _fail("activation scope must match candidate semantic scope")

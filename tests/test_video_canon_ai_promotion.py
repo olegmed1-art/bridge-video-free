@@ -114,14 +114,14 @@ def test_effective_period_is_sealed_in_postgresql_compatible_canonical_form():
     bundle = _bundle(candidate)
     bundle["effective_period"] = {
         "valid_from": "2026-09-03Q00:00:00+00:00:30",
-        "valid_to": "2026-09-04 00:00:00+00:00",
+        "valid_to": "2998-09-04 00:00:00+00:00",
     }
     period = build_ai_canon_promotion(candidate, bundle)["verification_bundle"][
         "effective_period"
     ]
     assert period == {
         "valid_from": "2026-09-02T23:59:30+00:00",
-        "valid_to": "2026-09-04T00:00:00+00:00",
+        "valid_to": "2998-09-04T00:00:00+00:00",
     }
 
 
@@ -236,4 +236,15 @@ def test_future_period_is_not_reported_ready_for_immediate_promotion():
     bundle = _bundle(candidate)
     bundle["effective_period"]["valid_from"] = "2999-01-01T00:00:00Z"
     with pytest.raises(VideoCanonAIPromotionError, match="cannot be in the future"):
+        build_ai_canon_promotion(candidate, bundle)
+
+
+def test_expired_period_is_not_reported_ready_for_immediate_promotion():
+    candidate = _candidate()
+    bundle = _bundle(candidate)
+    bundle["effective_period"] = {
+        "valid_from": "2020-01-01T00:00:00Z",
+        "valid_to": "2021-01-01T00:00:00Z",
+    }
+    with pytest.raises(VideoCanonAIPromotionError, match="already expired"):
         build_ai_canon_promotion(candidate, bundle)

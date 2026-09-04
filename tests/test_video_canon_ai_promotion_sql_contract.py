@@ -11,7 +11,18 @@ def test_database_bundle_gate_validates_the_effective_period():
     assert "NEW.bundle_payload->'effective_period'\n          ))<>2" in MIGRATION
     assert "VIDEO_CANON_BUNDLE_EFFECTIVE_PERIOD_INVALID" in MIGRATION
     assert "v_valid_to<=v_valid_from" in MIGRATION
+    assert "v_valid_to<=statement_timestamp()" in MIGRATION
     assert "VIDEO_CANON_INVALID_BUNDLE_PERIOD_NOT_BLOCKED" in DATABASE_TEST
+    assert "VIDEO_CANON_EXPIRED_BUNDLE_PERIOD_NOT_BLOCKED" in DATABASE_TEST
+
+
+def test_database_bundle_gate_validates_the_complete_rollback_contract():
+    assert "NEW.bundle_payload->'rollback' ?& ARRAY[" in MIGRATION
+    assert "NEW.bundle_payload->'rollback'\n          ))<>5" in MIGRATION
+    assert "'{rollback,restore_test_sha256}'" in MIGRATION
+    assert "NEW.bundle_payload#>>'{rollback,result}'<>'PASS'" in MIGRATION
+    assert "VIDEO_CANON_BUNDLE_ROLLBACK_TARGET_PAIR_INVALID" in MIGRATION
+    assert "VIDEO_CANON_ROLLBACK_SHAPE_NOT_BLOCKED" in DATABASE_TEST
 
 
 def test_ai_promotion_is_narrow_guarded_and_not_granted_to_general_workers():

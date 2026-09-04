@@ -409,7 +409,9 @@ DECLARE
   v_bad_bundle_failed boolean:=false;
   v_invalid_period_failed boolean:=false;
   v_future_period_failed boolean:=false;
+  v_expired_period_failed boolean:=false;
   v_rollback_pair_failed boolean:=false;
+  v_rollback_shape_failed boolean:=false;
   v_scope_bundle_failed boolean:=false;
   v_missing_bundle_field_failed boolean:=false;
   v_candidate_state_failed boolean:=false;
@@ -717,6 +719,44 @@ BEGIN
   END;
   IF NOT v_future_period_failed THEN
     RAISE EXCEPTION 'VIDEO_CANON_FUTURE_BUNDLE_PERIOD_NOT_BLOCKED';
+  END IF;
+  v_bad_bundle:=jsonb_set(
+    v_good_bundle,'{effective_period}',
+    jsonb_build_object(
+      'valid_from',statement_timestamp()-interval '2 days',
+      'valid_to',statement_timestamp()-interval '1 day'
+    )
+  );
+  BEGIN
+    INSERT INTO bidding.video_canon_ai_verification_bundle(
+      school_id,analysis_candidate_id,candidate_payload_hash,
+      verification_bundle_sha256,bundle_canonical_json,bundle_payload
+    ) VALUES (
+      v_school,v_candidate,repeat('a',64),
+      encode(public.digest(convert_to(v_bad_bundle::text,'UTF8'),'sha256'),'hex'),
+      v_bad_bundle::text,v_bad_bundle
+    );
+  EXCEPTION WHEN check_violation THEN
+    v_expired_period_failed:=true;
+  END;
+  IF NOT v_expired_period_failed THEN
+    RAISE EXCEPTION 'VIDEO_CANON_EXPIRED_BUNDLE_PERIOD_NOT_BLOCKED';
+  END IF;
+  v_bad_bundle:=jsonb_set(v_good_bundle,'{rollback}','{}'::jsonb);
+  BEGIN
+    INSERT INTO bidding.video_canon_ai_verification_bundle(
+      school_id,analysis_candidate_id,candidate_payload_hash,
+      verification_bundle_sha256,bundle_canonical_json,bundle_payload
+    ) VALUES (
+      v_school,v_candidate,repeat('a',64),
+      encode(public.digest(convert_to(v_bad_bundle::text,'UTF8'),'sha256'),'hex'),
+      v_bad_bundle::text,v_bad_bundle
+    );
+  EXCEPTION WHEN check_violation THEN
+    v_rollback_shape_failed:=true;
+  END;
+  IF NOT v_rollback_shape_failed THEN
+    RAISE EXCEPTION 'VIDEO_CANON_ROLLBACK_SHAPE_NOT_BLOCKED';
   END IF;
   v_bad_bundle:=jsonb_set(
     v_good_bundle,'{rollback,target_canon_activation_id}','null'::jsonb
