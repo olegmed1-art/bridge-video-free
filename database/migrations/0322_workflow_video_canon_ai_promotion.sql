@@ -282,7 +282,7 @@ SELECT EXISTS (
           COALESCE(matched.parts[1],matched.parts[2],matched.parts[3])
         )
      )
-  OR EXISTS (
+) OR EXISTS (
     SELECT 1 FROM walk AS w
      WHERE jsonb_typeof(w.value)='string'
        AND EXISTS (
