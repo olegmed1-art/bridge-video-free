@@ -84,6 +84,7 @@ jobs:
           seen=set()
           for node in ast.walk(tree):
               forbidden_dynamic={'eval','exec','compile','__import__'}
+              assert not (isinstance(node, ast.Call) and not isinstance(node.func, (ast.Name, ast.Attribute))), 'indirect callable expression forbidden'
               assert not (isinstance(node, ast.Name) and node.id in forbidden_dynamic), 'dynamic execution/import reference forbidden'
               assert not (isinstance(node, ast.Attribute) and node.attr in forbidden_dynamic), 'qualified dynamic execution/import forbidden'
               assert not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'getattr'), 'dynamic attribute access forbidden'
