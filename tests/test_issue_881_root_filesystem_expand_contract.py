@@ -81,6 +81,12 @@ def test_fresh_full_backup_and_isolated_boot_acceptance_gate_mutation() -> None:
     assert "temporary_instance_deleted=true" in WORKFLOW
     assert "temporary_volume_deleted=true" in WORKFLOW
     assert "total_seconds() < 86400" in WORKFLOW
+    instance_fetch = WORKFLOW.index('instance_json="$(oci compute instance get')
+    shape_read = WORKFLOW.index('shape="$(printf \'%s\' "$instance_json"')
+    assert instance_fetch < shape_read
+    assert "assert d['display-name']=='bridge-school-dds3-frankfurt'" in WORKFLOW
+    assert "assert d['lifecycle-state']=='RUNNING'" in WORKFLOW
+    assert "assert len(xs)==1; print(xs[0])" in WORKFLOW
 
 
 def test_issue_881_retry_runs_only_after_guarded_expansion() -> None:
@@ -98,5 +104,9 @@ def test_last_second_gate_revalidates_oci_before_ssh_mutation() -> None:
     block = WORKFLOW[gate:mutation]
     assert "boot-volume-attachment list" in block
     assert "boot-volume-backup get" in block
+    assert "boot-volume get" in block
+    assert '[[ "$boot_size" == 97 ]]' in block
+    assert "assert d['display-name']=='bridge-school-dds3-frankfurt'" in block
+    assert "assert d['lifecycle-state']=='RUNNING'" in block
     assert "lifecycle-state']=='AVAILABLE'" in block
     assert "total_seconds() < 86400" in block
