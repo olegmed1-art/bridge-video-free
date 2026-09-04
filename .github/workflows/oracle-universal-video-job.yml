@@ -154,15 +154,15 @@ jobs:
       SOURCE_FILE_ID: ${{ needs.validate.outputs.source_file_id }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        with:
-          persist-credentials: false
-          fetch-depth: 0
       - name: Initialize one end-to-end execution budget
         shell: bash
         run: |
           set -euo pipefail
           echo "EXECUTION_DEADLINE_EPOCH=$(( $(date +%s) + 21000 ))" >> "$GITHUB_ENV"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
       - name: Configure OCI CLI
         shell: bash
         run: |
