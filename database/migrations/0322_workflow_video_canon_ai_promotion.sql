@@ -353,7 +353,7 @@ SELECT EXISTS (
          SELECT 1
            FROM regexp_matches(
              w.value#>>'{}',
-             E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])[[:space:]]+(?:held|holds?|has|had)[[:space:]]+([^;]{1,512})',
+             E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])[[:space:]]+(?:held|holds?|has|had)[[:space:]]+([^;]*)',
              'gi'
            ) AS matched(parts)
           WHERE matched.parts[1] ~
