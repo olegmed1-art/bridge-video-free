@@ -96,14 +96,14 @@ jobs:
       PAYLOAD: ${{ needs.validate.outputs.encoded_intake }}
       REQUEST_KEY: ${{ needs.validate.outputs.request_key }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        with:
-          persist-credentials: false
       - name: Initialize one end-to-end recovery budget
         shell: bash
         run: |
           set -euo pipefail
           echo "EXECUTION_DEADLINE_EPOCH=$(( $(date +%s) + 21000 ))" >> "$GITHUB_ENV"
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
       - name: Ensure exact Oracle instance is running
         shell: bash
         run: |
