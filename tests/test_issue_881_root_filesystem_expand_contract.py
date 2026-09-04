@@ -1,5 +1,8 @@
 from pathlib import Path
 import re
+import os
+import subprocess
+import textwrap
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -273,6 +276,112 @@ def test_temporary_restore_cleanup_waits_for_dependency_deletion() -> None:
     assert '[[ "$state" == TERMINATED ]]' in cleanup
     assert "UV_ROOT_RESOURCE_ABSENCE_PASS" in cleanup
     assert "status['\\\"]" in cleanup
+
+
+def test_oci_json_stdout_isolated_from_warning_stderr() -> None:
+    helper = WORKFLOW[WORKFLOW.index("oci_json_request()") : WORKFLOW.index("operation_backup_inventory()")]
+    assert '>"$stdout_file" 2>"$stderr_file"' in helper
+    assert 'OCI_JSON_OUTPUT="$(<"$stdout_file")"' in helper
+    assert 'OCI_JSON_ERROR="$(<"$stderr_file")"' in helper
+    assert "2>&1" not in helper
+    assert 'max_attempts="${OCI_JSON_MAX_ATTEMPTS:-6}"' in helper
+    assert 'retry_delay_seconds="${OCI_JSON_RETRY_DELAY_SECONDS:-5}"' in helper
+    assert 'for attempt in $(seq 1 "$max_attempts")' in helper
+    assert "INVALID_JSON_SUCCESS_RESPONSE" in helper
+    assert '(( attempt < max_attempts )) && sleep "$retry_delay_seconds"' in helper
+    assert "return 86" in helper
+    assert "(( rc == 0 )) || return" in helper
+    assert "json.load(sys.stdin)" in helper
+
+    cleanup = WORKFLOW[WORKFLOW.index("wait_absent()") : WORKFLOW.index("operation_backup_inventory()")]
+    assert 'if oci_json_request "${command[@]}"' in cleanup
+    assert "if oci_json_request oci compute instance get" in cleanup
+    assert "2>&1" not in cleanup
+
+    direct_get = WORKFLOW[
+        WORKFLOW.index("Preserve every exact-name backup ID") :
+        WORKFLOW.index("boot_inventory=", WORKFLOW.index("Preserve every exact-name backup ID"))
+    ]
+    assert "if oci_json_request oci bv boot-volume-backup get" in direct_get
+    assert "failed_backup_output=\"$OCI_JSON_OUTPUT\"" in direct_get
+    assert "failed_backup_output=\"$OCI_JSON_ERROR\"" in direct_get
+    assert "2>&1" not in direct_get
+
+    allocation = WORKFLOW[WORKFLOW.index("boot_inventory=") : WORKFLOW.index("allocation_summary=")]
+    assert "--output json" in allocation
+    assert "2>&1" not in allocation
+
+
+def test_oci_json_request_handles_warning_transients_and_errors(tmp_path: Path) -> None:
+    start = WORKFLOW.index("oci_json_request() {")
+    end = WORKFLOW.index("operation_backup_inventory()", start)
+    helper = textwrap.dedent(WORKFLOW[start:end])
+    fake_oci = tmp_path / "fake-oci"
+    fake_oci.write_text(
+        """#!/usr/bin/env bash
+set -u
+count_file="$RUNNER_TEMP/fake-count"
+case "$FAKE_MODE" in
+  warning_valid)
+    echo 'API key warning' >&2
+    echo '{"data":{"lifecycle-state":"AVAILABLE"}}'
+    ;;
+  empty_then_valid)
+    count=0
+    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+    count=$((count + 1))
+    printf '%s' "$count" >"$count_file"
+    echo 'API key warning' >&2
+    (( count < 2 )) || echo '{"data":{"lifecycle-state":"AVAILABLE"}}'
+    ;;
+  persistent_empty)
+    echo 'API key warning' >&2
+    ;;
+  malformed)
+    echo '{malformed'
+    ;;
+  auth)
+    echo '{"code":"NotAuthenticated","status":401}' >&2
+    exit 17
+    ;;
+  transport)
+    echo 'connection reset' >&2
+    exit 18
+    ;;
+esac
+"""
+    )
+    fake_oci.chmod(0o755)
+
+    script = helper + """
+if oci_json_request "$FAKE_OCI"; then
+  printf 'rc=0\\njson=%s\\nstderr=%s\\n' "$OCI_JSON_OUTPUT" "$OCI_JSON_ERROR"
+else
+  rc=$?
+  printf 'rc=%s\\njson=%s\\nstderr=%s\\n' "$rc" "$OCI_JSON_OUTPUT" "$OCI_JSON_ERROR"
+fi
+"""
+
+    def run(mode: str) -> str:
+        env = os.environ | {
+            "RUNNER_TEMP": str(tmp_path),
+            "FAKE_OCI": str(fake_oci),
+            "FAKE_MODE": mode,
+            "OCI_JSON_MAX_ATTEMPTS": "3",
+            "OCI_JSON_RETRY_DELAY_SECONDS": "0",
+        }
+        (tmp_path / "fake-count").unlink(missing_ok=True)
+        result = subprocess.run(["bash", "-c", script], env=env, text=True, capture_output=True, check=True)
+        return result.stdout
+
+    warning = run("warning_valid")
+    assert "rc=0" in warning and 'json={"data"' in warning and "stderr=API key warning" in warning
+    transient = run("empty_then_valid")
+    assert "rc=0" in transient and 'json={"data"' in transient
+    assert "rc=86" in run("persistent_empty")
+    assert "stderr=INVALID_JSON_SUCCESS_RESPONSE" in run("malformed")
+    assert "rc=17" in run("auth") and "NotAuthenticated" in run("auth")
+    assert "rc=18" in run("transport") and "connection reset" in run("transport")
 
 
 def test_issue_881_retry_runs_only_after_guarded_expansion() -> None:

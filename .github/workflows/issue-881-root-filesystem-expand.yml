@@ -230,7 +230,8 @@ jobs:
                 vcn) command=(oci network vcn get --vcn-id "$id") ;;
                 *) return 2 ;;
               esac
-              if output="$("${command[@]}" 2>&1)"; then
+              if oci_json_request "${command[@]}"; then
+                output="$OCI_JSON_OUTPUT"
                 state="$(printf '%s' "$output" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state", ""))')" || return 1
                 if [[ "$state" == TERMINATED ]]; then
                   echo "UV_ROOT_RESOURCE_ABSENCE_PASS resource=$resource id=$id terminal_state=TERMINATED"
@@ -241,6 +242,7 @@ jobs:
               fi
               # Treat only OCI's explicit not-found response as deletion.
               # Authentication, throttling and transport failures remain fatal.
+              output="$OCI_JSON_ERROR"
               if grep -Fq 'NotAuthorizedOrNotFound' <<<"$output" \
                   && grep -Eq "['\"]status['\"][[:space:]]*:[[:space:]]*404" <<<"$output"; then
                 echo "UV_ROOT_RESOURCE_ABSENCE_PASS resource=$resource id=$id terminal_state=NOT_FOUND"
@@ -268,17 +270,20 @@ jobs:
                   vcn) command=(oci network vcn get --vcn-id "$id") ;;
                   *) return 2 ;;
                 esac
-                if output="$("${command[@]}" 2>&1)"; then
+                if oci_json_request "${command[@]}"; then
+                  output="$OCI_JSON_OUTPUT"
                   state="$(printf '%s' "$output" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state", ""))')" || return 1
                   if [[ "$state" == TERMINATED ]]; then
                     echo "UV_ROOT_RESOURCE_ABSENCE_PASS resource=$resource id=$id terminal_state=TERMINATED"
                   else
                     pending=1
                   fi
-                elif ! grep -Fq 'NotAuthorizedOrNotFound' <<<"$output" \
-                    || ! grep -Eq "['\"]status['\"][[:space:]]*:[[:space:]]*404" <<<"$output"; then
-                  return 1
                 else
+                  output="$OCI_JSON_ERROR"
+                  if ! grep -Fq 'NotAuthorizedOrNotFound' <<<"$output" \
+                      || ! grep -Eq "['\"]status['\"][[:space:]]*:[[:space:]]*404" <<<"$output"; then
+                    return 1
+                  fi
                   echo "UV_ROOT_RESOURCE_ABSENCE_PASS resource=$resource id=$id terminal_state=NOT_FOUND"
                 fi
               done
@@ -290,12 +295,14 @@ jobs:
           wait_instance_terminated() {
             local id="$1" loops="${2:-360}" output state
             for _ in $(seq 1 "$loops"); do
-              if output="$(oci compute instance get --instance-id "$id" --output json 2>&1)"; then
+              if oci_json_request oci compute instance get --instance-id "$id"; then
+                output="$OCI_JSON_OUTPUT"
                 state="$(printf '%s' "$output" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["lifecycle-state"])')" || return 1
                 [[ "$state" == TERMINATED ]] && return 0
                 sleep 5
                 continue
               fi
+              output="$OCI_JSON_ERROR"
               if grep -Fq 'NotAuthorizedOrNotFound' <<<"$output" \
                   && grep -Eq "['\"]status['\"][[:space:]]*:[[:space:]]*404" <<<"$output"; then
                 return 0
@@ -303,6 +310,38 @@ jobs:
               return 1
             done
             return 1
+          }
+          # OCI CLI may emit harmless API-key/security warnings on stderr even
+          # when a request succeeds. Keep JSON stdout isolated so warnings can
+          # never corrupt parsing, while retaining stderr exclusively for
+          # explicit error/404 classification.
+          oci_json_request() {
+            local stdout_file="$RUNNER_TEMP/issue-881-oci-json.stdout"
+            local stderr_file="$RUNNER_TEMP/issue-881-oci-json.stderr"
+            local attempt rc max_attempts="${OCI_JSON_MAX_ATTEMPTS:-6}"
+            local retry_delay_seconds="${OCI_JSON_RETRY_DELAY_SECONDS:-5}"
+            for attempt in $(seq 1 "$max_attempts"); do
+              : >"$stdout_file"
+              : >"$stderr_file"
+              if "$@" --output json >"$stdout_file" 2>"$stderr_file"; then
+                rc=0
+              else
+                rc=$?
+              fi
+              OCI_JSON_OUTPUT="$(<"$stdout_file")"
+              OCI_JSON_ERROR="$(<"$stderr_file")"
+              # A nonzero request is a real OCI error. Preserve its stderr for
+              # exact 404 classification; auth/throttle/transport fail closed.
+              (( rc == 0 )) || return "$rc"
+              # OCI can transiently return rc=0 with empty/malformed stdout.
+              # Retry only that condition; never reinterpret it as absence.
+              if printf '%s' "$OCI_JSON_OUTPUT" | python -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d,dict)'; then
+                return 0
+              fi
+              OCI_JSON_ERROR=INVALID_JSON_SUCCESS_RESPONSE
+              (( attempt < max_attempts )) && sleep "$retry_delay_seconds"
+            done
+            return 86
           }
           operation_backup_inventory() {
             oci bv boot-volume-backup list --compartment-id "$tenancy_id" --boot-volume-id "$boot_id" --all --output json
@@ -517,11 +556,12 @@ jobs:
               failed_backup_error=""
               for id in "${ids[@]}"; do
                 failed_backup_output=""
-                if failed_backup_output="$(oci bv boot-volume-backup get --boot-volume-backup-id "$id" --output json 2>&1)"; then
+                if oci_json_request oci bv boot-volume-backup get --boot-volume-backup-id "$id"; then
+                  failed_backup_output="$OCI_JSON_OUTPUT"
                   if ! failed_backup_state="$(printf '%s' "$failed_backup_output" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["lifecycle-state"])')"; then
                     failed_backup_state=INVALID_RESPONSE
                   fi
-                elif grep -Fq 'NotAuthorizedOrNotFound' <<<"$failed_backup_output" \
+                elif failed_backup_output="$OCI_JSON_ERROR"; grep -Fq 'NotAuthorizedOrNotFound' <<<"$failed_backup_output" \
                     && grep -Eq "['\"]status['\"][[:space:]]*:[[:space:]]*404" <<<"$failed_backup_output"; then
                   failed_backup_state=NOT_FOUND
                 else
