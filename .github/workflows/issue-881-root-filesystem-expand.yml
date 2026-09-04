@@ -1,0 +1,275 @@
+name: Issue 881 one-shot root filesystem expansion
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/issue-881-root-filesystem-expand.yml'
+      - 'ops/oracle_universal_video_root_filesystem_expand.sh'
+      - 'ops/issue-881-root-filesystem-expand-request.json'
+      - 'tests/test_issue_881_root_filesystem_expand_contract.py'
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('issue-881-root-expand-pr-{0}', github.run_id) || 'oracle-instance-workload-mutation' }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with: {persist-credentials: false}
+      - run: |
+          set -euo pipefail
+          bash -n ops/oracle_universal_video_root_filesystem_expand.sh
+          python - <<'PY'
+          import runpy
+          for path in (
+              'tests/test_issue_881_root_filesystem_expand_contract.py',
+              'tests/test_issue_881_current_main_recovery_contract.py',
+          ):
+              namespace = runpy.run_path(path)
+              for name, value in namespace.items():
+                  if name.startswith('test_') and callable(value):
+                      value()
+          PY
+
+  expand-and-recover:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.number == 881 &&
+      github.event.comment.user.login == 'olegmed1-art' &&
+      github.event.comment.body == '/oracle-ops issue-881-expand-root-and-recover-bba508'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      ORACLE_HOST: 158.180.47.161
+      ORACLE_USER: ubuntu
+      EXPECTED_HOSTNAME: bridge-school-dds3-frankfurt
+      EXPECTED_FINGERPRINT: SHA256:NXmGcng3fzof9b6Hs5Xgh4yYnzxGyVwa/EcfOxu0WPk
+      EXACT_RUNTIME_SHA: bba508350cbe63a7a8ec93fa9c007db9ee9eae6c
+      SSH_KEY_ORACLE: ${{ secrets.ORACLE_SSH_PRIVATE_KEY }}
+      OCI_USER: ${{ secrets.OCI_CLI_USER }}
+      OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+      OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+      OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+      - name: Validate immutable one-shot request
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          expected = {
+              'operation': 'expand_existing_root_filesystem',
+              'host': '158.180.47.161',
+              'hostname': 'bridge-school-dds3-frankfurt',
+              'expected_volume_gb': 97,
+              'runtime_sha': 'bba508350cbe63a7a8ec93fa9c007db9ee9eae6c',
+          }
+          assert json.load(open('ops/issue-881-root-filesystem-expand-request.json')) == expected
+          PY
+      - name: Create fresh full backup and prove isolated restored-root boot acceptance
+        id: backup
+        run: |
+          set -euo pipefail
+          for value in OCI_USER OCI_TENANCY OCI_FINGERPRINT OCI_KEY OCI_REGION; do
+            [[ -n "${!value:-}" ]] || exit 21
+          done
+          [[ "$OCI_REGION" == eu-frankfurt-1 ]] || exit 22
+          python -m pip install --disable-pip-version-check -q 'oci-cli==3.90.3'
+          install -d -m 0700 "$HOME/.oci"
+          printf '%s' "$OCI_KEY" | python -c 'import sys; raw=sys.stdin.read().replace("\\r","").replace("\\n","\n"); open(sys.argv[1],"w").write(raw if raw.endswith("\n") else raw+"\n")' "$HOME/.oci/key.pem"
+          chmod 0600 "$HOME/.oci/key.pem"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          def scalar(env, key):
+              lines=[x.strip() for x in os.environ[env].replace('\r','').splitlines() if x.strip()]
+              matches=[x.split('=',1)[1].strip() for x in lines if x.startswith(key+'=')]
+              if len(matches)==1 and matches[0]: return matches[0]
+              if not matches and len(lines)==1 and '=' not in lines[0]: return lines[0]
+              raise SystemExit(f'ambiguous {env}')
+          values={'user':scalar('OCI_USER','user'),'fingerprint':scalar('OCI_FINGERPRINT','fingerprint'),'tenancy':scalar('OCI_TENANCY','tenancy'),'region':scalar('OCI_REGION','region')}
+          text='[DEFAULT]\n'+''.join(f'{k}={v}\n' for k,v in values.items())+f"key_file={Path.home()/'.oci'/'key.pem'}\n"
+          (Path.home()/'.oci'/'config').write_text(text)
+          PY
+          chmod 0600 "$HOME/.oci/config"
+          export OCI_CLI_REGION="$OCI_REGION"
+          roots="$(oci iam compartment list --include-root --all --output json)"
+          tenancy_id="$(printf '%s' "$roots" | python -c 'import json,sys; xs=[x["id"] for x in json.load(sys.stdin)["data"] if x.get("id","").startswith("ocid1.tenancy.")]; assert len(xs)==1; print(xs[0])')"
+          instances="$(oci compute instance list --compartment-id "$tenancy_id" --display-name bridge-school-dds3-frankfurt --all --output json)"
+          instance_id="$(printf '%s' "$instances" | python -c 'import json,sys; xs=[x for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state") not in {"TERMINATED","TERMINATING"}]; assert len(xs)==1; print(xs[0]["id"])')"
+          ad="$(oci compute instance get --instance-id "$instance_id" --query 'data."availability-domain"' --raw-output)"
+          attachments="$(oci compute boot-volume-attachment list --compartment-id "$tenancy_id" --availability-domain "$ad" --instance-id "$instance_id" --all --output json)"
+          boot_id="$(printf '%s' "$attachments" | python -c 'import json,sys; xs=[x for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state")=="ATTACHED"]; assert len(xs)==1; print(xs[0]["boot-volume-id"])')"
+          boot_size="$(oci bv boot-volume get --boot-volume-id "$boot_id" --query 'data."size-in-gbs"' --raw-output)"
+          [[ "$boot_size" == 97 ]] || exit 30
+          source_vnic_id="$(oci compute vnic-attachment list --compartment-id "$tenancy_id" --instance-id "$instance_id" --all --query 'data[?"lifecycle-state"==`ATTACHED`]."vnic-id" | [0]' --raw-output)"
+          subnet_id="$(oci network vnic get --vnic-id "$source_vnic_id" --query 'data."subnet-id"' --raw-output)"
+          shape="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["shape"])')"
+          shape_config="$(printf '%s' "$instance_json" | python -c 'import json,sys; d=json.load(sys.stdin)["data"].get("shape-config") or {}; print(json.dumps({"ocpus":d.get("ocpus"),"memoryInGBs":d.get("memory-in-gbs")},separators=(",",":")))')"
+          stamp="issue-881-${GITHUB_RUN_ID}"
+          backup_id="" restored_id="" drill_instance_id="" drill_public_ip="" drill_started=""
+          cleanup() {
+            set +e
+            if [[ -n "$drill_instance_id" ]]; then
+              oci compute instance terminate --instance-id "$drill_instance_id" --preserve-boot-volume false --force --wait-for-state TERMINATED --max-wait-seconds 1800 >/dev/null
+            elif [[ -n "$restored_id" ]]; then
+              oci bv boot-volume delete --boot-volume-id "$restored_id" --force >/dev/null
+            fi
+          }
+          trap cleanup EXIT
+          backup="$(oci bv boot-volume-backup create --boot-volume-id "$boot_id" --type FULL --display-name "$stamp-full" --wait-for-state AVAILABLE --max-wait-seconds 3600 --output json)"
+          backup_id="$(printf '%s' "$backup" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
+          backup_json="$(oci bv boot-volume-backup get --boot-volume-backup-id "$backup_id" --output json)"
+          BACKUP="$backup_json" BOOT_ID="$boot_id" python - <<'PY'
+          import datetime,json,os
+          d=json.loads(os.environ['BACKUP'])['data']
+          assert d['boot-volume-id']==os.environ['BOOT_ID']
+          assert d['lifecycle-state']=='AVAILABLE' and d['type']=='FULL' and d['size-in-gbs']==97
+          created=datetime.datetime.fromisoformat(d['time-created'].replace('Z','+00:00'))
+          assert (datetime.datetime.now(datetime.timezone.utc)-created).total_seconds() < 86400
+          PY
+          restored="$(oci bv boot-volume create --boot-volume-backup-id "$backup_id" --availability-domain "$ad" --compartment-id "$tenancy_id" --display-name "$stamp-restore" --wait-for-state AVAILABLE --max-wait-seconds 3600 --output json)"
+          restored_id="$(printf '%s' "$restored" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
+          launch="$(oci compute instance launch --availability-domain "$ad" --compartment-id "$tenancy_id" --subnet-id "$subnet_id" --shape "$shape" --shape-config "$shape_config" --display-name "$stamp-boot-acceptance" --source-details "{\"sourceType\":\"bootVolume\",\"bootVolumeId\":\"$restored_id\"}" --assign-public-ip true --wait-for-state RUNNING --max-wait-seconds 1800 --output json)"
+          drill_instance_id="$(printf '%s' "$launch" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
+          drill_started="$(date -u +%s)"
+          drill_vnic_id="$(oci compute vnic-attachment list --compartment-id "$tenancy_id" --instance-id "$drill_instance_id" --all --query 'data[?"lifecycle-state"==`ATTACHED`]."vnic-id" | [0]' --raw-output)"
+          drill_public_ip="$(oci network vnic get --vnic-id "$drill_vnic_id" --query 'data."public-ip"' --raw-output)"
+          [[ "$drill_public_ip" =~ ^[0-9]+(\.[0-9]+){3}$ ]] || exit 31
+          known="$RUNNER_TEMP/drill-known-hosts"
+          for _ in $(seq 1 60); do
+            if ops/oracle_known_hosts_from_scan.sh "$drill_public_ip" "$EXPECTED_FINGERPRINT" "$known" 2>/dev/null; then break; fi
+            sleep 5
+          done
+          [[ -s "$known" ]] || exit 32
+          key="$RUNNER_TEMP/id_oracle-drill"
+          printf '%s\n' "$SSH_KEY_ORACLE" > "$key"; chmod 0600 "$key"; ssh-keygen -y -f "$key" >/dev/null
+          acceptance="$(ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "$ORACLE_USER@$drill_public_ip" 'set -e; test -r /etc/os-release; findmnt -n -o SOURCE,FSTYPE /; test "$(findmnt -n -o OPTIONS /)" != ""; test -r /var/lib/bridge-school; echo UV_RESTORED_ROOT_BOOT_ACCEPTANCE_PASS')"
+          grep -Fq UV_RESTORED_ROOT_BOOT_ACCEPTANCE_PASS <<<"$acceptance"
+          oci compute instance terminate --instance-id "$drill_instance_id" --preserve-boot-volume false --force --wait-for-state TERMINATED --max-wait-seconds 1800 >/dev/null
+          drill_seconds="$(( $(date -u +%s) - drill_started ))"
+          drill_instance_id=""
+          for _ in $(seq 1 60); do
+            state="$(oci bv boot-volume get --boot-volume-id "$restored_id" --query 'data."lifecycle-state"' --raw-output 2>/dev/null || true)"
+            [[ -z "$state" || "$state" == TERMINATED ]] && break
+            sleep 5
+          done
+          state="$(oci bv boot-volume get --boot-volume-id "$restored_id" --query 'data."lifecycle-state"' --raw-output 2>/dev/null || true)"
+          [[ -z "$state" || "$state" == TERMINATED ]] || exit 33
+          restored_id=""; trap - EXIT
+          echo "backup_id=$backup_id" >> "$GITHUB_OUTPUT"
+          echo "source_boot_id=$boot_id" >> "$GITHUB_OUTPUT"
+          echo "source_instance_id=$instance_id" >> "$GITHUB_OUTPUT"
+          echo "temporary_instance_seconds=$drill_seconds" >> "$GITHUB_OUTPUT"
+          echo 'UV_ROOT_BACKUP_GATE_PASS type=FULL size_gb=97 state=AVAILABLE age_lt_24h=true restored_root_boot_acceptance=true temporary_instance_deleted=true temporary_volume_deleted=true temporary_paid_capacity_authorized=true'
+      - name: Resolve pinned SSH identity
+        id: ssh
+        run: |
+          set -euo pipefail
+          known="$RUNNER_TEMP/known_hosts"
+          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          key="$RUNNER_TEMP/id_oracle"
+          printf '%s\n' "$SSH_KEY_ORACLE" > "$key"
+          chmod 0600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null
+          echo "known=$known" >> "$GITHUB_OUTPUT"
+          echo "key=$key" >> "$GITHUB_OUTPUT"
+      - name: Create and restore-test partition recovery point
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env EXPECTED_HOSTNAME='$EXPECTED_HOSTNAME' EXPECTED_MIN_DISK_BYTES=90000000000 EXPECTED_MAX_DISK_BYTES=105000000000 MIN_FREE_KB=5242880 CHECKPOINT_ONLY=1 /bin/bash -s" \
+            < ops/oracle_universal_video_root_filesystem_expand.sh | tee "$RUNNER_TEMP/root-checkpoint.txt"
+          line="$(grep -E '^UV_ROOT_CHECKPOINT_PASS disk_bytes=[0-9]+ checkpoint=/var/lib/bridge-school/root-partition-recovery/issue-881-before-expand\.sfdisk sha256=[0-9a-f]{64}$' "$RUNNER_TEMP/root-checkpoint.txt")"
+          disk_bytes="$(sed -E 's/^.*disk_bytes=([0-9]+).*$/\1/' <<<"$line")"
+          expected_sha="$(sed -E 's/^.*sha256=([0-9a-f]{64})$/\1/' <<<"$line")"
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            'sudo -n cat /var/lib/bridge-school/root-partition-recovery/issue-881-before-expand.sfdisk' > "$RUNNER_TEMP/root-before.sfdisk"
+          [[ "$(sha256sum "$RUNNER_TEMP/root-before.sfdisk" | awk '{print $1}')" == "$expected_sha" ]]
+          truncate -s "$disk_bytes" "$RUNNER_TEMP/restore-test.img"
+          sudo sfdisk "$RUNNER_TEMP/restore-test.img" < "$RUNNER_TEMP/root-before.sfdisk"
+          sudo sfdisk --verify "$RUNNER_TEMP/restore-test.img"
+          rm -f "$RUNNER_TEMP/restore-test.img"
+      - name: Retain recovery point
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: issue-881-root-partition-recovery-${{ github.sha }}
+          path: ${{ runner.temp }}/root-before.sfdisk
+          if-no-files-found: error
+          retention-days: 30
+      - name: Reconcile current main immediately before mutation
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]]
+          export OCI_CLI_REGION="$OCI_REGION"
+          instance_id='${{ steps.backup.outputs.source_instance_id }}'
+          boot_id='${{ steps.backup.outputs.source_boot_id }}'
+          backup_id='${{ steps.backup.outputs.backup_id }}'
+          ad="$(oci compute instance get --instance-id "$instance_id" --query 'data."availability-domain"' --raw-output)"
+          tenancy_id="$(oci compute instance get --instance-id "$instance_id" --query 'data."compartment-id"' --raw-output)"
+          attachments="$(oci compute boot-volume-attachment list --compartment-id "$tenancy_id" --availability-domain "$ad" --instance-id "$instance_id" --all --output json)"
+          ATTACHMENTS="$attachments" BOOT_ID="$boot_id" python - <<'PY'
+          import json,os
+          xs=[x for x in json.loads(os.environ['ATTACHMENTS'])['data'] if x.get('lifecycle-state')=='ATTACHED' and x.get('boot-volume-id')==os.environ['BOOT_ID']]
+          assert len(xs)==1
+          PY
+          backup="$(oci bv boot-volume-backup get --boot-volume-backup-id "$backup_id" --output json)"
+          BACKUP="$backup" BOOT_ID="$boot_id" python - <<'PY'
+          import datetime,json,os
+          d=json.loads(os.environ['BACKUP'])['data']
+          assert d['boot-volume-id']==os.environ['BOOT_ID'] and d['lifecycle-state']=='AVAILABLE' and d['type']=='FULL' and d['size-in-gbs']==97
+          created=datetime.datetime.fromisoformat(d['time-created'].replace('Z','+00:00'))
+          assert (datetime.datetime.now(datetime.timezone.utc)-created).total_seconds() < 86400
+          PY
+          echo 'UV_ROOT_LAST_SECOND_REVALIDATION_PASS attachment=true backup_available=true backup_age_lt_24h=true restored_root_boot_acceptance=true'
+      - name: Expand existing root partition and filesystem
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env EXPECTED_HOSTNAME='$EXPECTED_HOSTNAME' EXPECTED_MIN_DISK_BYTES=90000000000 EXPECTED_MAX_DISK_BYTES=105000000000 MIN_FREE_KB=5242880 /bin/bash -s" \
+            < ops/oracle_universal_video_root_filesystem_expand.sh | tee "$RUNNER_TEMP/root-expand.txt"
+          grep -E '^UV_ROOT_EXPAND_PASS .*disk_bytes=[0-9]+ .*free_kb_after=[0-9]+$' "$RUNNER_TEMP/root-expand.txt"
+      - name: Recover exact image and restart only container service
+        run: |
+          set -euo pipefail
+          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env UNIVERSAL_VIDEO_EXPECTED_SHA='$EXACT_RUNTIME_SHA' /bin/bash -s" \
+            < ops/oracle_universal_video_container_missing_image_recover.sh | tee "$RUNNER_TEMP/recovery.txt"
+          grep -E '^UV_CONTAINER_RECOVERY_PASS runtime_sha=[0-9a-f]{40} backup=/var/lib/bridge-school/universal-video-container-recovery/[^ ]+ image_digest=sha256:[0-9a-f]{64}$' "$RUNNER_TEMP/recovery.txt"
+      - name: Publish bounded operational receipt
+        if: ${{ always() }}
+        env:
+          BACKUP_OUTCOME: ${{ steps.backup.outcome }}
+          TEMP_INSTANCE_SECONDS: ${{ steps.backup.outputs.temporary_instance_seconds }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          body="$RUNNER_TEMP/issue-881-root-expand-receipt.md"
+          {
+            echo '## Issue #881 guarded root expansion and exact-image recovery'
+            echo
+            echo "- workflow outcome: \\`${{ job.status }}\\`"
+            echo "- fresh 97 GB FULL backup gate: \\`${BACKUP_OUTCOME}\\`"
+            echo '- fresh backup retained: `true` (billable backup storage may apply)'
+            echo '- temporary cleanup: `ENFORCED_BY_EXIT_TRAP`; inspect the run before accepting a failed gate'
+            echo "- temporary instance runtime seconds: \\`${TEMP_INSTANCE_SECONDS:-unknown}\\`"
+            echo '- exact monetary charge: `PENDING_OCI_BILLING_EXPORT`'
+            echo '- media canary: `false`'
+            echo "- run: ${RUN_URL}"
+          } > "$body"
+          gh issue comment 881 --repo "$GITHUB_REPOSITORY" --body-file "$body"
