@@ -42,6 +42,7 @@ jobs:
           }
           required=set(allowed)
           assert not any(isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)) for x in ast.walk(tree)), 'helpers/classes forbidden in credentialed inventory'
+          assert not any(isinstance(x, ast.ImportFrom) and (x.module or '').split('.')[0] == 'oci' for x in ast.walk(tree)), 'direct OCI imports forbidden'
           clients=set()
           def oci_client_constructor(node):
               return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -77,8 +78,7 @@ jobs:
                           clients.update(new); changed=True
           seen=set()
           for node in ast.walk(tree):
-              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'getattr':
-                  assert not node.args or not isinstance(node.args[0], ast.Name) or node.args[0].id not in clients, 'dynamic OCI client access forbidden'
+              assert not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'getattr'), 'dynamic attribute access forbidden'
               if isinstance(node, ast.Call):
                   escaped={x.id for x in [*node.args, *(k.value for k in node.keywords)] if isinstance(x, ast.Name) and x.id in clients}
                   assert not escaped, f'OCI client passed to unchecked callable: {sorted(escaped)}'
