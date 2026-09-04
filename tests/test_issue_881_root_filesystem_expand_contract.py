@@ -69,6 +69,7 @@ def test_already_grown_partition_resumes_at_filesystem_resize() -> None:
 
 
 def test_fresh_full_backup_and_isolated_boot_acceptance_gate_mutation() -> None:
+    assert "timeout-minutes: 240" in WORKFLOW
     gate = WORKFLOW.index("Create fresh full backup and prove isolated restored-root boot acceptance")
     mutation = WORKFLOW.index("Expand existing root partition and filesystem")
     assert gate < mutation
@@ -94,6 +95,25 @@ def test_fresh_full_backup_and_isolated_boot_acceptance_gate_mutation() -> None:
     assert '\\"sourceType\\":\\"CIDR_BLOCK\\"' in WORKFLOW
     assert "network subnet delete" in WORKFLOW
     assert "isolated_no_egress_network=true" in WORKFLOW
+    launch = WORKFLOW.index("oci compute instance launch")
+    capture = WORKFLOW.index('drill_instance_id="$(printf', launch)
+    wait = WORKFLOW.index("--wait-for-state RUNNING", capture)
+    assert launch < capture < wait
+
+
+def test_temporary_restore_cleanup_waits_for_dependency_deletion() -> None:
+    cleanup = WORKFLOW[WORKFLOW.index("cleanup_temp_resources()") :]
+    assert "wait_absent boot-volume" in cleanup
+    assert "wait_absent subnet" in cleanup
+    assert "wait_absent security-list" in cleanup
+    assert "wait_absent route-table" in cleanup
+    assert "wait_absent internet-gateway" in cleanup
+    assert "wait_absent vcn" in cleanup
+    assert "UV_ROOT_TEMP_CLEANUP_INCOMPLETE" in cleanup
+    assert '--display-name "$stamp-boot-acceptance"' in cleanup
+    assert "NotAuthorizedOrNotFound" in cleanup
+    assert "404" in cleanup
+    assert '[[ "$state" == TERMINATED ]]' in cleanup
 
 
 def test_issue_881_retry_runs_only_after_guarded_expansion() -> None:
