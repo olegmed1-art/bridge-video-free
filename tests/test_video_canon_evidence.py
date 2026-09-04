@@ -182,6 +182,8 @@ def test_hidden_deal_is_rejected_inside_innocuous_allowed_value(field, value):
     "South's hand was 876.765.AKQ.JT9; West's hand was 5432.J432.432.AKQ",
     "North's hand was S:AKQJ H:T98 D:765 C:432",
     "карты партнера: S:AKQJ H:T98 D:765 C:432",
+    "N:AKQJ109.876.54.32",
+    "North's hand was S:AKQJ109 H:876 D:54 C:32",
 ])
 def test_hidden_deal_is_rejected_in_source_bound_teacher_statement(statement):
     learning = _learning()

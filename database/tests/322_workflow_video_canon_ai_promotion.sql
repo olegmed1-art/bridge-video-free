@@ -102,6 +102,10 @@ BEGIN
        '{"notes":"North''s hand, as it appeared clearly in the recorded diagram,\nwas AKQJ.T98.765.432; East’s hand was JT9.AKQ.JT9.876"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s hand was S:AKQJ H:T98 D:765 C:432"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"N:AKQJ109.876.54.32"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"North''s hand was S:AKQJ109 H:876 D:54 C:32"}'::jsonb
      )) OR bidding.contains_forbidden_hidden_value(
        '{"meaning":"shows at least five hearts"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(

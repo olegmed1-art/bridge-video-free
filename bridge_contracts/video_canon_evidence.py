@@ -28,9 +28,10 @@ _FORBIDDEN_KEYS = {
     "actual_partner_hand", "actual_opponent_hand", "actual_opponent_hands",
     "partner_cards", "opponent_cards", "all_hands",
 }
+_SUIT_PATTERN = r"(?:-|(?:(?:10)|[AKQJT2-9]){0,13})"
 _HAND_PATTERN = (
-    r"[-AKQJT2-9]{0,13}\.[-AKQJT2-9]{0,13}\."
-    r"[-AKQJT2-9]{0,13}\.[-AKQJT2-9]{0,13}"
+    _SUIT_PATTERN + r"\." + _SUIT_PATTERN + r"\."
+    + _SUIT_PATTERN + r"\." + _SUIT_PATTERN
 )
 _PBN_DEAL = re.compile(
     r"(?:^|[^A-Za-z0-9])[NESW]\s*:\s*(?P<hand>" + _HAND_PATTERN + r")",
@@ -46,10 +47,10 @@ _LABELLED_HIDDEN_CARDS = re.compile(
 _SUIT_LABELLED_HIDDEN_CARDS = re.compile(
     r"(?:(?:partner|opponent|north|east|south|west)\s*(?:['’]s)?[ _-]*"
     r"(?:hand|cards)|(?:рука|карты)\s+(?:партн[её]ра|соперника))\b[^;]*?"
-    r"S\s*:\s*(?P<spades>-|[AKQJT2-9]{0,13})[\s,/]*"
-    r"H\s*:\s*(?P<hearts>-|[AKQJT2-9]{0,13})[\s,/]*"
-    r"D\s*:\s*(?P<diamonds>-|[AKQJT2-9]{0,13})[\s,/]*"
-    r"C\s*:\s*(?P<clubs>-|[AKQJT2-9]{0,13})",
+    r"S\s*:\s*(?P<spades>" + _SUIT_PATTERN + r")[\s,/]*"
+    r"H\s*:\s*(?P<hearts>" + _SUIT_PATTERN + r")[\s,/]*"
+    r"D\s*:\s*(?P<diamonds>" + _SUIT_PATTERN + r")[\s,/]*"
+    r"C\s*:\s*(?P<clubs>" + _SUIT_PATTERN + r")",
     re.IGNORECASE,
 )
 
@@ -102,7 +103,7 @@ def _has_forbidden_key(value: Any) -> bool:
 
 
 def _is_complete_hand_shape(hand: str) -> bool:
-    suits = hand.upper().split(".")
+    suits = hand.upper().replace("10", "T").split(".")
     if len(suits) != 4:
         return False
     cards = 0

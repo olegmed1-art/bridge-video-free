@@ -229,12 +229,12 @@ IMMUTABLE
 PARALLEL SAFE
 AS $$
 WITH hand AS (
-  SELECT regexp_split_to_array(upper(COALESCE(p_hand,'')), E'\\.') AS suits
+  SELECT regexp_split_to_array(replace(upper(COALESCE(p_hand,'')),'10','T'), E'\\.') AS suits
 )
 SELECT cardinality(suits)=4
    AND NOT EXISTS (
      SELECT 1 FROM unnest(suits) AS suit(value)
-      WHERE value !~ '^(-|[AKQJT2-9]{0,13})$'
+      WHERE value !~ '^(-|(?:(?:10)|[AKQJT2-9]){0,13})$'
          OR (value<>'-' AND length(value)<>(
            SELECT count(DISTINCT rank_char)
              FROM regexp_split_to_table(value,'') AS rank_char
@@ -275,7 +275,7 @@ SELECT EXISTS (
        SELECT 1
          FROM regexp_matches(
            w.value#>>'{}',
-           E'(?:^|[^[:alnum:]])[NESW][[:space:]]*:[[:space:]]*([-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13})|(?:partner|opponent|north|east|south|west)[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)[^;]*?([-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13})|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника)[^;]*?([-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13})',
+           E'(?:^|[^[:alnum:]])[NESW][[:space:]]*:[[:space:]]*((?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13})|(?:partner|opponent|north|east|south|west)[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)[^;]*?((?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13})|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника)[^;]*?((?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13})',
            'gi'
          ) AS matched(parts)
         WHERE bidding.is_complete_bridge_hand(
@@ -289,7 +289,7 @@ SELECT EXISTS (
          SELECT 1
            FROM regexp_matches(
              w.value#>>'{}',
-             E'(?:(?:partner|opponent|north|east|south|west)[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника))[^;]*?S[[:space:]]*:[[:space:]]*(-|[AKQJT2-9]{0,13})[[:space:],/]*H[[:space:]]*:[[:space:]]*(-|[AKQJT2-9]{0,13})[[:space:],/]*D[[:space:]]*:[[:space:]]*(-|[AKQJT2-9]{0,13})[[:space:],/]*C[[:space:]]*:[[:space:]]*(-|[AKQJT2-9]{0,13})',
+             E'(?:(?:partner|opponent|north|east|south|west)[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника))[^;]*?S[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*H[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*D[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*C[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})',
              'gi'
            ) AS matched(parts)
           WHERE bidding.is_complete_bridge_hand(concat_ws(
@@ -990,6 +990,26 @@ BEGIN
 
     IF v_valid_to IS NOT NULL AND v_valid_to<=clock_timestamp() THEN
         RAISE EXCEPTION 'VIDEO_CANON_EFFECTIVE_PERIOD_EXPIRED' USING ERRCODE='23514';
+    END IF;
+    IF EXISTS (
+      SELECT 1
+        FROM bidding.video_canon_ai_verification v
+        JOIN bidding.video_canon_verifier_registry vr
+          ON vr.verifier_family=v.verifier_family
+       WHERE v.analysis_candidate_id=p_analysis_candidate_id
+         AND v.candidate_payload_hash=v_candidate.payload_hash
+         AND v.verification_bundle_sha256=p_verification_bundle_sha256
+         AND NOT EXISTS (
+           SELECT 1
+             FROM pg_catalog.pg_roles attestor
+             JOIN pg_catalog.pg_roles capability
+               ON capability.rolname=vr.database_role
+            WHERE attestor.rolname=v.execution_principal
+              AND attestor.rolcanlogin
+              AND pg_has_role(attestor.oid,capability.oid,'MEMBER')
+         )
+    ) THEN
+        RAISE EXCEPTION 'VIDEO_CANON_VERIFIER_PRINCIPAL_REVOKED' USING ERRCODE='42501';
     END IF;
     UPDATE public.knowledge_version SET review_status='approved',status='approved'
      WHERE knowledge_version_id=v_version.knowledge_version_id;
