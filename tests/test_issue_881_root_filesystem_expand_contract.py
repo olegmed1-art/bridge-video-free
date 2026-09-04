@@ -2,6 +2,7 @@ from pathlib import Path
 import re
 import os
 import subprocess
+import tempfile
 import textwrap
 
 
@@ -312,7 +313,12 @@ def test_oci_json_stdout_isolated_from_warning_stderr() -> None:
     assert "2>&1" not in allocation
 
 
-def test_oci_json_request_handles_warning_transients_and_errors(tmp_path: Path) -> None:
+def test_oci_json_request_handles_warning_transients_and_errors() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        _exercise_oci_json_request_adversarial_cases(Path(temp_dir))
+
+
+def _exercise_oci_json_request_adversarial_cases(tmp_path: Path) -> None:
     start = WORKFLOW.index("oci_json_request() {")
     end = WORKFLOW.index("operation_backup_inventory()", start)
     helper = textwrap.dedent(WORKFLOW[start:end])
