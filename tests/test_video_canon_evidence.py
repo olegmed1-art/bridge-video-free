@@ -205,6 +205,8 @@ def test_hidden_deal_is_rejected_inside_innocuous_allowed_value(field, value):
     "North held Q",
     "partner holds AKQJ",
     "N held 2",
+    "North is holding Q",
+    "partner was holding AKQJ",
 ])
 def test_hidden_deal_is_rejected_in_source_bound_teacher_statement(statement):
     learning = _learning()
@@ -270,6 +272,10 @@ def test_labelled_hand_prose_without_four_suit_encoding_is_not_a_false_positive(
     "N: 3 trumps",
     "South hand: 7 losers",
     "North held 5 hearts",
+    "North held 10 points",
+    "North has 10 hearts",
+    "partner was holding 10 cards",
+    "North's hand was 10 points",
     "North held the view that Q is conventional",
     "рука партнера: 5 карт",
 ])

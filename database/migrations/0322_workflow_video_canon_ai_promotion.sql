@@ -199,8 +199,13 @@ CREATE TABLE bidding.video_canon_ai_promotion_receipt (
     superseded_knowledge_version_content_sha256 text
       CHECK (superseded_knowledge_version_content_sha256 IS NULL
              OR superseded_knowledge_version_content_sha256 ~ '^[0-9a-f]{64}$'),
+    superseded_knowledge_item_content_sha256 text
+      CHECK (superseded_knowledge_item_content_sha256 IS NULL
+             OR superseded_knowledge_item_content_sha256 ~ '^[0-9a-f]{64}$'),
     CHECK ((superseded_canon_activation_id IS NULL)=
            (superseded_knowledge_version_content_sha256 IS NULL)),
+    CHECK ((superseded_canon_activation_id IS NULL)=
+           (superseded_knowledge_item_content_sha256 IS NULL)),
     promotion_mode text NOT NULL CHECK (promotion_mode='AI_VERIFIED_TEACHER_VIDEO'),
     human_approval_required boolean NOT NULL CHECK (human_approval_required=false),
     promoted_at timestamptz NOT NULL DEFAULT now()
@@ -306,13 +311,17 @@ SELECT EXISTS (
            ) AS matched(parts)
           WHERE matched.parts[1] ~*
                   E'(^|[^[:alnum:]_])[SHDC][[:space:]]*:'
-             OR matched.parts[1] ~
-                  E'(^|[^[:alnum:]])(?:10|[AKQJT]|[kqjt]|(?:(?:10)|[AKQJT2-9akqjt]){2,13})($|[^[:alnum:]])'
+             OR (
+                  matched.parts[1] ~
+                    E'(^|[^[:alnum:]])(?:10|[AKQJT]|[kqjt]|(?:(?:10)|[AKQJT2-9akqjt]){2,13})($|[^[:alnum:]])'
+                  AND matched.parts[1] !~*
+                    E'^[[:space:]]*(?:(?:was|is)[[:space:]]+|[:,;=\\-][[:space:]]*)?(?:10|[2-9])[[:space:]]*(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*)'
+                )
              OR (
                   matched.parts[1] ~*
                     E'^[[:space:]]*(?:(?:was|is)[[:space:]]+|[:,;=\\-][[:space:]]*)?[2-9]($|[[:space:],./;])'
                   AND matched.parts[1] !~*
-                    E'^[[:space:]]*(?:(?:was|is)[[:space:]]+|[:,;=\\-][[:space:]]*)?[2-9][[:space:]]*(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*)'
+                    E'^[[:space:]]*(?:(?:was|is)[[:space:]]+|[:,;=\\-][[:space:]]*)?(?:10|[2-9])[[:space:]]*(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*)'
                 )
              OR matched.parts[1] ~*
                   E'(^|[^[:alnum:]])(-|(?:(?:10)|[AKQJT2-9]){1,13})([[:space:],/.]+(-|(?:(?:10)|[AKQJT2-9]){1,13})){1,3}($|[^[:alnum:]])'
@@ -353,13 +362,13 @@ SELECT EXISTS (
          SELECT 1
            FROM regexp_matches(
              w.value#>>'{}',
-             E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])[[:space:]]+(?:held|holds?|has|had)[[:space:]]+([^;]*)',
+             E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])[[:space:]]+(?:(?:held|holds?|has|had)|(?:is|was)[[:space:]]+holding)[[:space:]]+([^;]*)',
              'gi'
            ) AS matched(parts)
           WHERE matched.parts[1] ~
                   E'^[[:space:]]*(?:[:,;=\\-][[:space:]]*)?(?:10|[AKQJT2-9]|[kqjt]|(?:(?:10)|[AKQJT2-9akqjt]){2,13})($|[^[:alnum:]])'
             AND matched.parts[1] !~*
-                  E'^[[:space:]]*(?:[:,;=\\-][[:space:]]*)?[2-9][[:space:]]*(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*)'
+                  E'^[[:space:]]*(?:[:,;=\\-][[:space:]]*)?(?:10|[2-9])[[:space:]]*(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*)'
        )
   );
 $$;
@@ -759,7 +768,8 @@ SECURITY DEFINER
 SET search_path=pg_catalog,public,bidding
 AS $$
 BEGIN
-    IF NEW.school_id IS DISTINCT FROM OLD.school_id
+    IF (to_jsonb(NEW)-ARRAY['status','updated_at']) IS DISTINCT FROM
+         (to_jsonb(OLD)-ARRAY['status','updated_at'])
        AND EXISTS (
          SELECT 1
            FROM public.knowledge_version_source kvs
@@ -770,14 +780,72 @@ BEGIN
              OR p.superseded_canon_activation_id=ca.canon_activation_id
           WHERE kvs.source_id=OLD.source_id
        ) THEN
-        RAISE EXCEPTION 'VIDEO_CANON_PROMOTED_SOURCE_SCHOOL_IMMUTABLE' USING ERRCODE='23514';
+        RAISE EXCEPTION 'VIDEO_CANON_PROMOTED_SOURCE_IDENTITY_IMMUTABLE' USING ERRCODE='23514';
     END IF;
     RETURN NEW;
 END $$;
 
 CREATE TRIGGER promoted_video_canon_source_identity_guard
-BEFORE UPDATE OF school_id ON public.source
+BEFORE UPDATE ON public.source
 FOR EACH ROW EXECUTE FUNCTION bidding.guard_promoted_video_canon_source_identity();
+
+CREATE OR REPLACE FUNCTION bidding.guard_promoted_video_canon_knowledge_version()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path=pg_catalog,public,bidding
+AS $$
+DECLARE v_version_id uuid;
+BEGIN
+    v_version_id := OLD.knowledge_version_id;
+    IF EXISTS (
+      SELECT 1
+        FROM public.canon_activation ca
+        JOIN bidding.video_canon_ai_promotion_receipt p
+          ON p.canon_activation_id=ca.canon_activation_id
+          OR p.superseded_canon_activation_id=ca.canon_activation_id
+       WHERE ca.knowledge_version_id=v_version_id
+    ) THEN
+        RAISE EXCEPTION 'VIDEO_CANON_PROMOTED_KNOWLEDGE_VERSION_IMMUTABLE'
+          USING ERRCODE='23514';
+    END IF;
+    IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+END $$;
+
+CREATE TRIGGER promoted_video_canon_knowledge_version_guard
+BEFORE UPDATE OR DELETE ON public.knowledge_version
+FOR EACH ROW EXECUTE FUNCTION bidding.guard_promoted_video_canon_knowledge_version();
+
+CREATE OR REPLACE FUNCTION bidding.guard_promoted_video_canon_knowledge_item()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path=pg_catalog,public,bidding
+AS $$
+DECLARE v_item_id uuid;
+BEGIN
+    v_item_id := OLD.knowledge_item_id;
+    IF EXISTS (
+      SELECT 1
+        FROM public.knowledge_version kv
+        JOIN public.canon_activation ca
+          ON ca.knowledge_version_id=kv.knowledge_version_id
+        JOIN bidding.video_canon_ai_promotion_receipt p
+          ON p.canon_activation_id=ca.canon_activation_id
+          OR p.superseded_canon_activation_id=ca.canon_activation_id
+       WHERE kv.knowledge_item_id=v_item_id
+    ) THEN
+        RAISE EXCEPTION 'VIDEO_CANON_PROMOTED_KNOWLEDGE_ITEM_IMMUTABLE'
+          USING ERRCODE='23514';
+    END IF;
+    IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+END $$;
+
+CREATE TRIGGER promoted_video_canon_knowledge_item_guard
+BEFORE UPDATE OR DELETE ON public.knowledge_item
+FOR EACH ROW EXECUTE FUNCTION bidding.guard_promoted_video_canon_knowledge_item();
 
 CREATE OR REPLACE FUNCTION bidding.guard_video_canon_source_policy_lifecycle()
 RETURNS trigger LANGUAGE plpgsql AS $$
@@ -858,6 +926,8 @@ DECLARE
     v_runtime_activation uuid;
     v_existing bidding.video_canon_ai_promotion_receipt%ROWTYPE;
     v_prior_canon public.canon_activation%ROWTYPE;
+    v_prior_version public.knowledge_version%ROWTYPE;
+    v_prior_item public.knowledge_item%ROWTYPE;
     v_prior_runtime_ids uuid[] := '{}'::uuid[];
     v_prior_runtime_state jsonb := '[]'::jsonb;
     v_prior_rule_state jsonb := '[]'::jsonb;
@@ -876,6 +946,7 @@ DECLARE
     v_expected_rule_content_sha256 text;
     v_version_content_sha256 text;
     v_prior_version_content_sha256 text;
+    v_prior_item_content_sha256 text;
     v_rule_test_state_sha256 text;
     v_expected_version_provenance jsonb;
     v_canon_snapshot_sha256 text;
@@ -1224,15 +1295,24 @@ BEGIN
                 IS DISTINCT FROM v_prior_canon.canon_activation_id::text THEN
             RAISE EXCEPTION 'VIDEO_CANON_ROLLBACK_TARGET_MISMATCH' USING ERRCODE='23514';
         END IF;
-        SELECT encode(public.digest(convert_to(
-                 (to_jsonb(prior_kv)-ARRAY['review_status','status','created_at'])::text,
-                 'UTF8'),'sha256'),'hex')
-          INTO v_prior_version_content_sha256
-          FROM public.knowledge_version prior_kv
-         WHERE prior_kv.knowledge_version_id=v_prior_canon.knowledge_version_id;
-        IF v_prior_version_content_sha256 IS NULL THEN
+        SELECT * INTO v_prior_version
+          FROM public.knowledge_version
+         WHERE knowledge_version_id=v_prior_canon.knowledge_version_id;
+        IF NOT FOUND THEN
             RAISE EXCEPTION 'VIDEO_CANON_ROLLBACK_TARGET_VERSION_MISSING' USING ERRCODE='23514';
         END IF;
+        SELECT * INTO v_prior_item
+          FROM public.knowledge_item
+         WHERE knowledge_item_id=v_prior_version.knowledge_item_id;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION 'VIDEO_CANON_ROLLBACK_TARGET_ITEM_MISSING' USING ERRCODE='23514';
+        END IF;
+        v_prior_version_content_sha256 := encode(public.digest(convert_to(
+          (to_jsonb(v_prior_version)-ARRAY['created_at'])::text,
+          'UTF8'),'sha256'),'hex');
+        v_prior_item_content_sha256 := encode(public.digest(convert_to(
+          (to_jsonb(v_prior_item)-ARRAY['created_at'])::text,
+          'UTF8'),'sha256'),'hex');
         PERFORM 1 FROM bidding.runtime_activation
          WHERE canon_activation_id=v_prior_canon.canon_activation_id AND status='active' FOR UPDATE;
         SELECT COALESCE(array_agg(runtime_activation_id ORDER BY runtime_activation_id),'{}'::uuid[]),
@@ -1331,14 +1411,15 @@ BEGIN
       superseded_canon_activation_id,superseded_canon_valid_to,
       superseded_runtime_activation_ids,superseded_runtime_state,superseded_rule_state,
       superseded_source_state,superseded_knowledge_version_content_sha256,
-      promotion_mode,human_approval_required
+      superseded_knowledge_item_content_sha256,promotion_mode,human_approval_required
     ) VALUES (
       v_candidate.school_id,p_analysis_candidate_id,v_candidate.payload_hash,p_verification_bundle_sha256,
       v_policy_version,v_scope_key,v_rule_content_sha256,v_version_content_sha256,
       v_rule_test_state_sha256,p_rule_id,v_canon_activation,v_runtime_activation,
       v_prior_canon.canon_activation_id,v_prior_canon.valid_to,
       v_prior_runtime_ids,v_prior_runtime_state,v_prior_rule_state,v_prior_source_state,
-      v_prior_version_content_sha256,'AI_VERIFIED_TEACHER_VIDEO',false
+      v_prior_version_content_sha256,v_prior_item_content_sha256,
+      'AI_VERIFIED_TEACHER_VIDEO',false
     ) RETURNING * INTO v_existing;
     UPDATE public.analysis_candidate SET quality_status='AI_VERIFIED',promotion_status='promoted'
      WHERE analysis_candidate_id=p_analysis_candidate_id;
@@ -1368,11 +1449,14 @@ DECLARE
     v_prior_canon public.canon_activation%ROWTYPE;
     v_prior_promotion bidding.video_canon_ai_promotion_receipt%ROWTYPE;
     v_prior_version public.knowledge_version%ROWTYPE;
+    v_prior_item public.knowledge_item%ROWTYPE;
     v_prior_policy bidding.video_canon_source_policy%ROWTYPE;
     v_bundle bidding.video_canon_ai_verification_bundle%ROWTYPE;
     v_current_prior_rule_state jsonb;
     v_current_prior_source_state jsonb;
     v_prior_version_content_sha256 text;
+    v_prior_item_content_sha256 text;
+    v_prior_ai_version_content_sha256 text;
     v_state jsonb;
     v_original_valid_to timestamptz;
     v_revoked_at timestamptz;
@@ -1480,12 +1564,25 @@ BEGIN
          WHERE knowledge_version_id=v_prior_canon.knowledge_version_id
          FOR UPDATE;
         v_prior_version_content_sha256 := encode(public.digest(convert_to(
-          (to_jsonb(v_prior_version)-ARRAY['review_status','status','created_at'])::text,
+          (to_jsonb(v_prior_version)-ARRAY['created_at'])::text,
           'UTF8'),'sha256'),'hex');
         IF v_prior_version.knowledge_version_id IS NULL
            OR v_prior_version_content_sha256 IS DISTINCT FROM
                 v_promotion.superseded_knowledge_version_content_sha256 THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_PREDECESSOR_VERSION_MISMATCH'
+              USING ERRCODE='23514';
+        END IF;
+        SELECT * INTO v_prior_item
+          FROM public.knowledge_item
+         WHERE knowledge_item_id=v_prior_version.knowledge_item_id
+         FOR UPDATE;
+        v_prior_item_content_sha256 := encode(public.digest(convert_to(
+          (to_jsonb(v_prior_item)-ARRAY['created_at'])::text,
+          'UTF8'),'sha256'),'hex');
+        IF v_prior_item.knowledge_item_id IS NULL
+           OR v_prior_item_content_sha256 IS DISTINCT FROM
+                v_promotion.superseded_knowledge_item_content_sha256 THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_PREDECESSOR_ITEM_MISMATCH'
               USING ERRCODE='23514';
         END IF;
         SELECT COALESCE(jsonb_agg(to_jsonb(kvs)
@@ -1528,7 +1625,10 @@ BEGIN
             IF NOT FOUND THEN
                 RAISE EXCEPTION 'VIDEO_CANON_RESTORE_SOURCE_POLICY_INACTIVE' USING ERRCODE='23514';
             END IF;
-            IF v_prior_version_content_sha256<>
+            v_prior_ai_version_content_sha256 := encode(public.digest(convert_to(
+              (to_jsonb(v_prior_version)-ARRAY['review_status','status','created_at'])::text,
+              'UTF8'),'sha256'),'hex');
+            IF v_prior_ai_version_content_sha256<>
                     v_prior_promotion.knowledge_version_content_sha256 THEN
                 RAISE EXCEPTION 'VIDEO_CANON_RESTORE_VERSION_CONTENT_MISMATCH' USING ERRCODE='23514';
             END IF;
@@ -1810,12 +1910,16 @@ REVOKE ALL ON FUNCTION bidding.validate_video_canon_verification() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_bound_video_canon_candidate() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_promoted_video_canon_source_binding() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_promoted_video_canon_source_identity() FROM PUBLIC;
+REVOKE ALL ON FUNCTION bidding.guard_promoted_video_canon_knowledge_version() FROM PUBLIC;
+REVOKE ALL ON FUNCTION bidding.guard_promoted_video_canon_knowledge_item() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_video_canon_source_policy_lifecycle() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_video_canon_verifier_registry_lifecycle() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.validate_video_correction_review_receipt() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION bidding.validate_video_canon_verification_bundle(),
   bidding.guard_bound_video_canon_candidate(),bidding.guard_promoted_video_canon_source_binding(),
   bidding.guard_promoted_video_canon_source_identity(),
+  bidding.guard_promoted_video_canon_knowledge_version(),
+  bidding.guard_promoted_video_canon_knowledge_item(),
   bidding.guard_video_canon_source_policy_lifecycle(),
   bidding.guard_video_canon_verifier_registry_lifecycle()
   FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,
