@@ -231,7 +231,7 @@ SELECT EXISTS (
    WHERE jsonb_typeof(w.value)='string'
      AND (
        (w.value#>>'{}') ~* E'(^|[^[:alnum:]])[NESW][[:space:]]*:[[:space:]]*[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}'
-       OR (w.value#>>'{}') ~* E'(partner|opponent|north|east|south|west)[[:space:]]*([''’]s)?[ _-]*(hand|cards)[[:space:]]*(:|=|[-–—]|is)[[:space:]]*[-AKQJT2-9.]'
+       OR (w.value#>>'{}') ~* E'(partner|opponent|north|east|south|west)[[:space:]]*([''’]s)?[ _-]*(hand|cards)[^;]{0,24}[-AKQJT2-9]{0,13}\\.'
        OR (w.value#>>'{}') ~* E'(рука|карты)[[:space:]]+(партн[её]ра|соперника)[[:space:]]*[:=][[:space:]]*[-AKQJT2-9.]'
      )
 );
@@ -920,6 +920,7 @@ DECLARE
     v_prior_runtime bidding.runtime_activation%ROWTYPE;
     v_prior_canon public.canon_activation%ROWTYPE;
     v_prior_promotion bidding.video_canon_ai_promotion_receipt%ROWTYPE;
+    v_bundle bidding.video_canon_ai_verification_bundle%ROWTYPE;
     v_state jsonb;
     v_original_valid_to timestamptz;
     v_restored_runtime_ids uuid[] := '{}'::uuid[];
@@ -959,6 +960,13 @@ BEGIN
     END IF;
     SELECT * INTO v_promotion FROM bidding.video_canon_ai_promotion_receipt
      WHERE video_canon_ai_promotion_receipt_id=p_video_canon_ai_promotion_receipt_id FOR UPDATE;
+    SELECT * INTO v_bundle FROM bidding.video_canon_ai_verification_bundle
+     WHERE analysis_candidate_id=v_promotion.analysis_candidate_id
+       AND candidate_payload_hash=v_promotion.candidate_payload_hash
+       AND verification_bundle_sha256=v_promotion.verification_bundle_sha256;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'VIDEO_CANON_RESTORE_BUNDLE_NOT_FOUND' USING ERRCODE='23514';
+    END IF;
     SELECT * INTO v_new_canon FROM public.canon_activation
      WHERE canon_activation_id=v_promotion.canon_activation_id FOR UPDATE;
     SELECT * INTO v_new_runtime FROM bidding.runtime_activation
@@ -988,6 +996,13 @@ BEGIN
            AND status='superseded' AND valid_to=v_new_canon.valid_from FOR UPDATE;
         IF NOT FOUND THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_TARGET_MISMATCH' USING ERRCODE='23514';
+        END IF;
+        IF v_prior_canon.knowledge_version_id::text IS DISTINCT FROM
+             v_bundle.bundle_payload#>>'{rollback,target_knowledge_version_id}'
+           OR v_prior_canon.canon_activation_id::text IS DISTINCT FROM
+             v_bundle.bundle_payload#>>'{rollback,target_canon_activation_id}'
+           OR v_prior_canon.scope_key IS DISTINCT FROM v_promotion.scope_key THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_TARGET_BINDING_MISMATCH' USING ERRCODE='23514';
         END IF;
         SELECT * INTO v_prior_promotion
           FROM bidding.video_canon_ai_promotion_receipt
@@ -1029,11 +1044,6 @@ BEGIN
              SELECT 1 FROM public.knowledge_version_source kvs
              JOIN public.source s ON s.source_id=kvs.source_id AND s.status='active'
               WHERE kvs.knowledge_version_id=v_prior_canon.knowledge_version_id
-           ) OR EXISTS (
-             SELECT 1 FROM public.knowledge_version_source kvs
-             JOIN public.source s ON s.source_id=kvs.source_id
-              WHERE kvs.knowledge_version_id=v_prior_canon.knowledge_version_id
-                AND s.status<>'active'
            ) THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_CANON_VERSION_GATES_FAILED' USING ERRCODE='23514';
         END IF;

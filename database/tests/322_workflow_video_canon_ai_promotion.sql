@@ -95,7 +95,7 @@ BEGIN
   IF NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N:AKQJ.T98.765.432 E:T987.654.32.AKQ"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
-       '{"notes":"North''s hand is AKQJ.T98.765.432; East’s hand is JT9.AKQ.JT9.876"}'::jsonb
+       '{"notes":"North''s hand was AKQJ.T98.765.432; East’s hand was JT9.AKQ.JT9.876"}'::jsonb
      )) OR bidding.contains_forbidden_hidden_value(
        '{"meaning":"shows at least five hearts"}'::jsonb
      ) THEN
@@ -153,6 +153,7 @@ DECLARE
   v_policy_failed boolean:=false;
   v_bad_bundle_failed boolean:=false;
   v_late_verification_failed boolean:=false;
+  v_target_binding_failed boolean:=false;
   v_bundle_id uuid:=uuidv7();
   v_good_bundle jsonb;
   v_bad_bundle jsonb;
@@ -267,7 +268,11 @@ BEGIN
     'checks',jsonb_agg(jsonb_build_object(
       'check_id',check_id,'result','PASS','execution_principal',session_user
     ) ORDER BY ordinal),
-    'effective_period','{}'::jsonb,'rollback','{}'::jsonb
+    'effective_period','{}'::jsonb,
+    'rollback',jsonb_build_object(
+      'target_knowledge_version_id',v_old_version::text,
+      'target_canon_activation_id',v_old_canon::text
+    )
   ) INTO v_good_bundle
   FROM (VALUES
     (1,'SOURCE_AUTHORITY'),(2,'SOURCE_BINDING'),(3,'SPEAKER_IDENTITY'),
@@ -398,6 +403,23 @@ BEGIN
         WHERE video_canon_ai_promotion_receipt_id=v_promotion
      ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_REVOKED_SOURCE_RESTORE_NOT_BLOCKED';
+  END IF;
+
+  BEGIN
+    UPDATE public.canon_activation
+      SET knowledge_version_id=v_orphan_version,scope_key='tampered-scope'
+     WHERE canon_activation_id=v_old_canon;
+    PERFORM bidding.restore_ai_verified_video_canon(
+      v_promotion,v_good_bundle_hash,repeat('d',64)
+    );
+  EXCEPTION WHEN check_violation THEN
+    v_target_binding_failed:=true;
+  END;
+  IF NOT v_target_binding_failed OR EXISTS (
+       SELECT 1 FROM bidding.video_canon_ai_restore_receipt
+        WHERE video_canon_ai_promotion_receipt_id=v_promotion
+     ) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_MUTATED_RESTORE_TARGET_NOT_BLOCKED';
   END IF;
 
   SELECT rule_test_id INTO v_test_id FROM bidding.rule_test

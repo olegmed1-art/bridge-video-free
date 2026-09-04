@@ -72,6 +72,8 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "VIDEO_CANON_RESTORE_VALIDATION_GATES_FAILED",
         "VIDEO_CANON_RESTORE_SOURCE_POLICY_INACTIVE",
         "VIDEO_CANON_RESTORE_CANON_VERSION_GATES_FAILED",
+        "VIDEO_CANON_RESTORE_TARGET_BINDING_MISMATCH",
+        "VIDEO_CANON_RESTORE_BUNDLE_NOT_FOUND",
     ):
         assert marker in MIGRATION
 
