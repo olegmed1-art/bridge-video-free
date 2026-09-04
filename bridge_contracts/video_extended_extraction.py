@@ -300,7 +300,11 @@ def build_extended_extraction(
                 "gap_type": "DDS_DECISION_EVALUATION_INVALID",
                 "status": "OPEN",
                 "reason": str(exc),
-                "evidence_refs": _refs(raw.get("decision") if isinstance(raw.get("decision"), Mapping) else {}),
+                # The DDS validator may have rejected these exact references
+                # as hidden-hand material. Never echo unvalidated input into
+                # a persisted gap; the content-addressed stable key is enough
+                # to correlate the rejected observation without disclosing it.
+                "evidence_refs": [],
             }
             records.append(_record(job_id, "GAP_OR_CONFLICT", gap, "OPEN"))
             continue

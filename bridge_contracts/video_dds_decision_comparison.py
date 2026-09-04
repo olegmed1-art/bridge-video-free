@@ -16,6 +16,13 @@ from bridge_contracts.assistant_lab import (
 SCHEMA = "video-decision-logic-dds-v3"
 _REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/#=-]{0,159}$")
 _HIDDEN_REF = re.compile(r"(?:^|[^A-Z0-9])[NESW]:[AKQJT2-9.-]{3,}", re.IGNORECASE)
+_HAND_SUIT = r"(?:-|(?:(?:10)|[AKQJT2-9]){0,13})"
+_COMPLETE_HAND_REF = re.compile(
+    rf"(?<![A-Z0-9])(?:[NESW]:)?"
+    rf"(?P<spades>{_HAND_SUIT})\.(?P<hearts>{_HAND_SUIT})\."
+    rf"(?P<diamonds>{_HAND_SUIT})\.(?P<clubs>{_HAND_SUIT})(?![A-Z0-9])",
+    re.IGNORECASE,
+)
 _HIDDEN_REF_KEYS = ("partner_hand", "opponent_hand", "hidden_hand", "full_deal")
 _PUBLIC_CONTEXT = {
     "auction", "played_cards", "contract", "declarer", "vulnerability",
@@ -56,12 +63,24 @@ def _sha(value: Any, label: str) -> str:
     return value
 
 
+def _contains_complete_hand_ref(value: str) -> bool:
+    for match in _COMPLETE_HAND_REF.finditer(value):
+        card_count = sum(
+            len(re.findall(r"10|[AKQJT2-9]", holding, re.IGNORECASE))
+            for holding in match.group("spades", "hearts", "diamonds", "clubs")
+        )
+        if card_count == 13:
+            return True
+    return False
+
+
 def _ref(value: Any, label: str) -> str:
     value = _text(value, label)
     lowered = value.casefold()
     if (
         not _REF.fullmatch(value)
         or _HIDDEN_REF.search(value)
+        or _contains_complete_hand_ref(value)
         or any(marker in lowered for marker in _HIDDEN_REF_KEYS)
     ):
         raise VideoDDSComparisonError(f"invalid {label}")

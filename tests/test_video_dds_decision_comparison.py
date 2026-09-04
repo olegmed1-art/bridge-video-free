@@ -1,4 +1,5 @@
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
@@ -190,6 +191,11 @@ def test_public_context_and_refs_are_allowlisted_against_hidden_card_payloads():
         build_offline_dds_comparison(
             value, _board_evidence(), _logic_evidence(), dds_request_executor=_executor()
         )
+    value = _observation(); value["decision"]["evidence_refs"] = ["AKQJ.T98.765.432"]
+    with pytest.raises(VideoDDSComparisonError, match="invalid decision evidence ref"):
+        build_offline_dds_comparison(
+            value, _board_evidence(), _logic_evidence(), dds_request_executor=_executor()
+        )
     value = _observation(); value["decision"]["evidence_refs"] = ["frame:N:AKQJ.T98.765.432"]
     with pytest.raises(VideoDDSComparisonError, match="invalid decision evidence ref"):
         build_offline_dds_comparison(
@@ -231,6 +237,31 @@ def test_extended_analysis_stages_valid_dds_comparison_and_gaps_invalid_one():
         dds_request_executor=_executor(rejected),
     )
     assert any(row["payload"].get("gap_type") == "DDS_DECISION_EVALUATION_INVALID" for row in result["candidate_records"])
+
+
+def test_rejected_dds_gap_never_echoes_hidden_evidence_reference():
+    hidden_ref = "N:AKQJ.T98.765.432"
+    bad = _observation()
+    bad["decision"]["evidence_refs"] = [hidden_ref]
+    quality = {
+        "authority": {"canon_activation": "DENY"},
+        "verified_full_board_evidence": [_board_evidence()],
+        "source_bound_logic_evidence": [_logic_evidence()],
+    }
+
+    result = build_extended_extraction(
+        {"job_id": "job-dds", "dds_decision_evaluations": [bad]},
+        quality,
+        dds_request_executor=_executor(),
+    )
+
+    gap = next(
+        row for row in result["candidate_records"]
+        if row["payload"].get("gap_type") == "DDS_DECISION_EVALUATION_INVALID"
+    )
+    assert gap["evidence_refs"] == []
+    assert gap["payload"]["evidence_refs"] == []
+    assert hidden_ref not in json.dumps(result, ensure_ascii=False)
 
 
 def test_real_diana_postprocessor_wires_the_pinned_dds_executor():
