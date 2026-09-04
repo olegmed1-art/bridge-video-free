@@ -52,8 +52,9 @@ jobs:
     # backup and restore, five minutes each for five network creates, 30 minutes
     # each for launch and termination, and five minutes for each of six
     # dependency-deletion checks, plus five minutes to verify retirement of all
-    # superseded operation backups. A rerun may spend at most another 30 minutes
-    # reconciling prior attempts. GitHub's six-hour ceiling therefore leaves at
+    # superseded operation backups. A command may spend at most another 30
+    # minutes reconciling prior attempts and distinct owner-command runs.
+    # GitHub's six-hour ceiling therefore leaves at
     # least 90 minutes for setup, bounded rediscovery, SSH acceptance, recovery,
     # and the
     # EXIT cleanup trap instead of cancelling exactly at the waiter ceiling.
@@ -141,11 +142,12 @@ jobs:
           [[ "$source_public_ip" == "$ORACLE_HOST" ]] || exit 34
           shape="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["shape"])')"
           shape_config="$(printf '%s' "$instance_json" | python -c 'import json,sys; d=json.load(sys.stdin)["data"].get("shape-config") or {}; print(json.dumps({"ocpus":d.get("ocpus"),"memoryInGBs":d.get("memory-in-gbs")},separators=(",",":")))')"
-          run_prefix="issue-881-${GITHUB_RUN_ID}"
-          prior_prefix="${run_prefix}-a"
-          stamp="${prior_prefix}${GITHUB_RUN_ATTEMPT}"
           boot_tag="$(printf '%s' "$boot_id" | sha256sum | cut -c1-16)"
           backup_prefix="issue-881-root-recovery-${boot_tag}"
+          operation_run_prefix="${backup_prefix}-run-"
+          run_prefix="${operation_run_prefix}${GITHUB_RUN_ID}"
+          prior_prefix="$operation_run_prefix"
+          stamp="${run_prefix}-a${GITHUB_RUN_ATTEMPT}"
           backup_name="${backup_prefix}-${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
           backup_id="" restored_id="" drill_instance_id="" drill_public_ip="" drill_started=""
           backup_created_by_run=0 backup_accepted=0

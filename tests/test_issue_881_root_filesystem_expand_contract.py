@@ -159,12 +159,14 @@ def test_cleanup_rediscovery_is_scoped_to_attempted_unique_resources() -> None:
 
 def test_rerun_stamp_and_prior_attempt_reconciliation_precede_creation() -> None:
     block = WORKFLOW[
-        WORKFLOW.index('run_prefix="issue-881-${GITHUB_RUN_ID}"') :
+        WORKFLOW.index('boot_tag="$(printf') :
         WORKFLOW.index("Resolve pinned SSH identity")
     ]
-    assert 'run_prefix="issue-881-${GITHUB_RUN_ID}"' in block
-    assert 'stamp="${prior_prefix}${GITHUB_RUN_ATTEMPT}"' in block
     assert 'backup_prefix="issue-881-root-recovery-${boot_tag}"' in block
+    assert 'operation_run_prefix="${backup_prefix}-run-"' in block
+    assert 'run_prefix="${operation_run_prefix}${GITHUB_RUN_ID}"' in block
+    assert 'prior_prefix="$operation_run_prefix"' in block
+    assert 'stamp="${run_prefix}-a${GITHUB_RUN_ATTEMPT}"' in block
     assert 'backup_name="${backup_prefix}-${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"' in block
     reconcile = block.index("reconcile_prior_attempt_resources")
     create = block.index("boot-volume-backup create")
@@ -184,6 +186,18 @@ def test_rerun_stamp_and_prior_attempt_reconciliation_precede_creation() -> None
     assert "UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS" in block
     assert 'x.get("lifecycle-state") != "TERMINATED"' in block
     assert 'drill_instance_id="$(discover_named_id instance "$stamp-boot-acceptance")" || failed=1' in block
+
+
+def test_distinct_owner_commands_share_source_scoped_cleanup_identity() -> None:
+    block = WORKFLOW[
+        WORKFLOW.index('boot_tag="$(printf') :
+        WORKFLOW.index("cleanup_temp_resources()")
+    ]
+    assert 'operation_run_prefix="${backup_prefix}-run-"' in block
+    assert 'PRIOR_PREFIX="$prior_prefix"' in block
+    assert 'CURRENT_STAMP="$stamp"' in block
+    assert 'startswith(os.environ["PRIOR_PREFIX"])' in block
+    assert 'not (x.get("display-name") or "").startswith(os.environ["CURRENT_STAMP"]+"-")' in block
 
 
 def test_separate_commands_keep_one_operation_scoped_proven_backup() -> None:
