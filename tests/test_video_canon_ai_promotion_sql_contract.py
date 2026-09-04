@@ -61,6 +61,10 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "guard_promoted_video_canon_source_identity",
         "promoted_video_canon_source_identity_guard",
         "VIDEO_CANON_PROMOTED_SOURCE_IDENTITY_IMMUTABLE",
+        "guard_promoted_video_canon_provider_identity",
+        "promoted_video_canon_provider_identity_guard",
+        "VIDEO_CANON_PROMOTED_PROVIDER_IDENTITY_IMMUTABLE",
+        "public.source,public.source_identity,public.knowledge_version_source",
         "guard_promoted_video_canon_knowledge_version",
         "promoted_video_canon_knowledge_version_guard",
         "VIDEO_CANON_PROMOTED_KNOWLEDGE_VERSION_IMMUTABLE",
@@ -256,6 +260,8 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
     assert '"north/deal":"AKQ"' in DATABASE_TEST
     assert "VIDEO_CANON_SOURCE_POLICY_SUCCESSOR_HISTORY_NOT_PRESERVED" in DATABASE_TEST
     assert "VIDEO_CANON_BUNDLE_SCOPE_MISMATCH_NOT_BLOCKED" in DATABASE_TEST
+    assert "VIDEO_CANON_PROMOTED_PROVIDER_IDENTITY_MUTATION_NOT_BLOCKED" in DATABASE_TEST
+    assert "VIDEO_CANON_PROMOTED_PROVIDER_IDENTITY_DELETE_NOT_BLOCKED" in DATABASE_TEST
     assert MIGRATION.count("VIDEO_CANON_RESTORE_I2_I3_ASSURANCE_REVOKED") == 2
     final_boundary = MIGRATION.split(
         "Role membership is maintained outside the locked application", 1
@@ -314,6 +320,7 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "DROP VIEW bidding.video_canon_bound_candidate" in ROLLBACK
     assert "DROP TRIGGER promoted_video_canon_source_binding_guard" in ROLLBACK
     assert "DROP TRIGGER promoted_video_canon_source_identity_guard" in ROLLBACK
+    assert "DROP TRIGGER promoted_video_canon_provider_identity_guard" in ROLLBACK
     assert "DROP TRIGGER promoted_video_canon_knowledge_version_guard" in ROLLBACK
     assert "DROP TRIGGER promoted_video_canon_knowledge_item_guard" in ROLLBACK
     assert "DROP TRIGGER promoted_video_canon_rule_guard" in ROLLBACK
@@ -321,6 +328,7 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "DROP TRIGGER superseded_video_canon_rule_test_run_guard" in ROLLBACK
     assert "DROP FUNCTION bidding.guard_promoted_video_canon_source_binding" in ROLLBACK
     assert "DROP FUNCTION bidding.guard_promoted_video_canon_source_identity" in ROLLBACK
+    assert "DROP FUNCTION bidding.guard_promoted_video_canon_provider_identity" in ROLLBACK
     assert "DROP FUNCTION bidding.guard_promoted_video_canon_knowledge_version" in ROLLBACK
     assert "DROP FUNCTION bidding.guard_promoted_video_canon_knowledge_item" in ROLLBACK
     assert "DROP FUNCTION bidding.guard_promoted_video_canon_rule" in ROLLBACK

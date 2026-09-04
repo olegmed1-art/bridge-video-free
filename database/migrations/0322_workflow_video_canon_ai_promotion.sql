@@ -1068,6 +1068,45 @@ CREATE TRIGGER promoted_video_canon_source_identity_guard
 BEFORE UPDATE ON public.source
 FOR EACH ROW EXECUTE FUNCTION bidding.guard_promoted_video_canon_source_identity();
 
+CREATE OR REPLACE FUNCTION bidding.guard_promoted_video_canon_provider_identity()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path=pg_catalog,public,bidding
+AS $$
+DECLARE v_old_source_id uuid; v_new_source_id uuid;
+BEGIN
+    IF TG_OP IN ('UPDATE','DELETE') THEN
+        v_old_source_id := OLD.source_id;
+    END IF;
+    IF TG_OP='UPDATE' THEN
+        v_new_source_id := NEW.source_id;
+    END IF;
+    IF EXISTS (
+         SELECT 1
+           FROM public.knowledge_version_source kvs
+           JOIN public.canon_activation ca
+             ON ca.knowledge_version_id=kvs.knowledge_version_id
+           JOIN bidding.video_canon_ai_promotion_receipt p
+             ON p.canon_activation_id=ca.canon_activation_id
+             OR p.superseded_canon_activation_id=ca.canon_activation_id
+          WHERE kvs.source_id=v_old_source_id OR kvs.source_id=v_new_source_id
+       ) AND (
+         TG_OP='DELETE' OR
+         (to_jsonb(NEW)-ARRAY['display_name','last_seen_at']) IS DISTINCT FROM
+         (to_jsonb(OLD)-ARRAY['display_name','last_seen_at'])
+       ) THEN
+        RAISE EXCEPTION 'VIDEO_CANON_PROMOTED_PROVIDER_IDENTITY_IMMUTABLE'
+          USING ERRCODE='23514';
+    END IF;
+    IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+END $$;
+
+CREATE TRIGGER promoted_video_canon_provider_identity_guard
+BEFORE UPDATE OR DELETE ON public.source_identity
+FOR EACH ROW EXECUTE FUNCTION bidding.guard_promoted_video_canon_provider_identity();
+
 CREATE OR REPLACE FUNCTION bidding.guard_promoted_video_canon_knowledge_version()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -1394,7 +1433,7 @@ BEGIN
     PERFORM pg_advisory_xact_lock(hashtextextended(v_candidate.school_id::text,0));
     LOCK TABLE public.analysis_candidate,public.canon_activation,
       public.knowledge_item,public.knowledge_version,
-      public.source,public.knowledge_version_source,
+      public.source,public.source_identity,public.knowledge_version_source,
       bidding.runtime_activation,bidding.rule,bidding.rule_test,bidding.rule_test_run,
       bidding.rule_conflict,bidding.video_canon_verifier_registry,
       bidding.video_canon_ai_verification_bundle,bidding.video_canon_ai_verification,
@@ -1903,7 +1942,7 @@ BEGIN
 
     PERFORM pg_advisory_xact_lock(hashtextextended(v_promotion.school_id::text,0));
     LOCK TABLE public.canon_activation,public.knowledge_item,public.knowledge_version,
-      public.source,public.knowledge_version_source,
+      public.source,public.source_identity,public.knowledge_version_source,
       bidding.runtime_activation,bidding.rule,bidding.rule_test,bidding.rule_test_run,
       bidding.rule_conflict,bidding.video_canon_source_policy,
       bidding.video_canon_verifier_registry,bidding.video_canon_ai_verification,
@@ -2521,6 +2560,7 @@ REVOKE ALL ON FUNCTION bidding.validate_video_canon_verification() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_bound_video_canon_candidate() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_promoted_video_canon_source_binding() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_promoted_video_canon_source_identity() FROM PUBLIC;
+REVOKE ALL ON FUNCTION bidding.guard_promoted_video_canon_provider_identity() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_promoted_video_canon_knowledge_version() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_promoted_video_canon_knowledge_item() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_promoted_video_canon_rule() FROM PUBLIC;
@@ -2532,6 +2572,7 @@ REVOKE ALL ON FUNCTION bidding.validate_video_correction_review_receipt() FROM P
 REVOKE EXECUTE ON FUNCTION bidding.validate_video_canon_verification_bundle(),
   bidding.guard_bound_video_canon_candidate(),bidding.guard_promoted_video_canon_source_binding(),
   bidding.guard_promoted_video_canon_source_identity(),
+  bidding.guard_promoted_video_canon_provider_identity(),
   bidding.guard_promoted_video_canon_knowledge_version(),
   bidding.guard_promoted_video_canon_knowledge_item(),
   bidding.guard_promoted_video_canon_rule(),

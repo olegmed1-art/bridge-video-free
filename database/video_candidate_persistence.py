@@ -11,7 +11,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from database.runtime_worker_preflight import normalize_dsn
-from database.source_identity_persistence import drive_source_native_key
+from database.source_identity_persistence import drive_source_id, drive_source_native_key
 
 SCHOOL_STABLE_NAME = "Школа спортивного бриджа"
 
@@ -41,6 +41,15 @@ def _drive_identity_lookup_key(source_drive_id: object) -> str:
     if not value:
         raise ValueError("source_drive_id is required")
     return value if value.startswith("google-drive:") else drive_source_native_key(value)
+
+
+def _drive_identity_lookup_id(source_drive_id: object) -> uuid.UUID:
+    value = str(source_drive_id or "").strip()
+    if value.startswith("google-drive:"):
+        value = value.removeprefix("google-drive:")
+    if not value:
+        raise ValueError("source_drive_id is required")
+    return drive_source_id(value)
 
 
 def _table_exists(cursor) -> bool:
@@ -110,10 +119,15 @@ def persist_quality_candidates(raw_dsn: str, payload: Mapping[str, Any]) -> dict
                       JOIN public.source_identity si ON si.source_id = s.source_id
                      WHERE si.source_native_key = %s
                        AND s.school_id = %s
+                       AND s.source_id = %s
                      ORDER BY si.last_seen_at DESC, si.first_seen_at DESC
                      LIMIT 1
                     """,
-                    (_drive_identity_lookup_key(run_row[1]), school_id),
+                    (
+                        _drive_identity_lookup_key(run_row[1]),
+                        school_id,
+                        _drive_identity_lookup_id(run_row[1]),
+                    ),
                 )
                 source_row = cursor.fetchone()
                 source_id = source_row[0] if source_row else None

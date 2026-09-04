@@ -1,4 +1,5 @@
 from database.video_candidate_persistence import (
+    _drive_identity_lookup_id,
     _drive_identity_lookup_key,
     _versioned_stable_key,
 )
@@ -21,3 +22,6 @@ def test_other_staging_identities_remain_unchanged():
 def test_drive_source_lookup_uses_the_authoritative_provider_namespace():
     assert _drive_identity_lookup_key("file-123") == "google-drive:file-123"
     assert _drive_identity_lookup_key("google-drive:file-123") == "google-drive:file-123"
+    assert _drive_identity_lookup_id("file-123") == _drive_identity_lookup_id(
+        "google-drive:file-123"
+    )

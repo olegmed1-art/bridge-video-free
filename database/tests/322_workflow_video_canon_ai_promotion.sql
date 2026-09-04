@@ -419,12 +419,15 @@ DECLARE
   v_source_binding_failed boolean:=false;
   v_source_school_failed boolean:=false;
   v_source_identity_failed boolean:=false;
+  v_provider_identity_failed boolean:=false;
+  v_provider_identity_delete_failed boolean:=false;
   v_rule_key_identity_failed boolean:=false;
   v_item_identity_failed boolean:=false;
   v_version_lifecycle_failed boolean:=false;
   v_test_binding_failed boolean:=false;
   v_expired_restore_failed boolean:=false;
   v_bundle_id uuid:=uuidv7();
+  v_provider_identity uuid:=uuidv7();
   v_good_bundle jsonb;
   v_bad_bundle jsonb;
   v_good_bundle_hash text;
@@ -474,6 +477,12 @@ BEGIN
   );
   INSERT INTO public.source(source_id,school_id,source_type,title,status)
   VALUES (v_source,v_school,'video','restore test source','active');
+  INSERT INTO public.source_identity(
+    source_identity_id,source_id,source_native_key,attributes
+  ) VALUES (
+    v_provider_identity,v_source,'google-drive:restore-video-old',
+    '{"provider":"google_drive","drive_file_id":"restore-video-old"}'::jsonb
+  );
   INSERT INTO public.source(source_id,school_id,source_type,title,status)
   VALUES (v_orphan_source,v_school,'video','orphan Canon source','active');
   INSERT INTO public.source(source_id,school_id,source_type,title,status)
@@ -879,6 +888,30 @@ BEGIN
      OR EXISTS (SELECT 1 FROM public.source
                  WHERE source_id=v_source AND title='tampered source identity') THEN
     RAISE EXCEPTION 'VIDEO_CANON_PROMOTED_SOURCE_IDENTITY_MUTATION_NOT_BLOCKED';
+  END IF;
+  BEGIN
+    UPDATE public.source_identity
+       SET source_native_key='google-drive:retargeted-video'
+     WHERE source_identity_id=v_provider_identity;
+  EXCEPTION WHEN check_violation THEN
+    v_provider_identity_failed:=true;
+  END;
+  IF NOT v_provider_identity_failed
+     OR EXISTS (SELECT 1 FROM public.source_identity
+                 WHERE source_identity_id=v_provider_identity
+                   AND source_native_key='google-drive:retargeted-video') THEN
+    RAISE EXCEPTION 'VIDEO_CANON_PROMOTED_PROVIDER_IDENTITY_MUTATION_NOT_BLOCKED';
+  END IF;
+  BEGIN
+    DELETE FROM public.source_identity
+     WHERE source_identity_id=v_provider_identity;
+  EXCEPTION WHEN check_violation THEN
+    v_provider_identity_delete_failed:=true;
+  END;
+  IF NOT v_provider_identity_delete_failed
+     OR NOT EXISTS (SELECT 1 FROM public.source_identity
+                     WHERE source_identity_id=v_provider_identity) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_PROMOTED_PROVIDER_IDENTITY_DELETE_NOT_BLOCKED';
   END IF;
   BEGIN
     UPDATE public.knowledge_item SET stable_key='tampered-'||v_item::text
