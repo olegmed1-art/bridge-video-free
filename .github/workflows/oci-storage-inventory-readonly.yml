@@ -29,10 +29,30 @@ jobs:
         run: |
           set -euo pipefail
           f=.github/workflows/oci-storage-inventory-readonly.yml
-          ! grep -nE 'oci .* (create|update|delete|terminate|action|assign|remove|attach|detach) ' "$f"
-          grep -F 'list_instances' "$f"
-          grep -F 'list_boot_volumes' "$f"
-          grep -F 'list_volumes' "$f"
+          awk '$0 == "          # BEGIN OCI_READ_ONLY_SDK" {copy=1;next} $0 == "          # END OCI_READ_ONLY_SDK" {copy=0} copy' "$f" > "$RUNNER_TEMP/inventory.py"
+          INVENTORY_SCRIPT="$RUNNER_TEMP/inventory.py" python - <<'PY'
+          import ast, os, textwrap
+
+          source=textwrap.dedent(open(os.environ['INVENTORY_SCRIPT'], encoding='utf-8').read())
+          tree=ast.parse(source)
+          allowed={
+              'identity': {'list_region_subscriptions','list_compartments'},
+              'regional_identity': {'list_availability_domains'},
+              'compute': {'list_instances','list_boot_volume_attachments'},
+              'block': {'get_boot_volume','list_boot_volumes','list_volumes'},
+          }
+          seen=set()
+          for node in ast.walk(tree):
+              if not isinstance(node, ast.Attribute) or not isinstance(node.value, ast.Name):
+                  continue
+              client=node.value.id
+              if client not in allowed:
+                  continue
+              assert node.attr in allowed[client], f'non-read-only SDK attribute: {client}.{node.attr}'
+              seen.add((client,node.attr))
+          required={(client,method) for client,methods in allowed.items() for method in methods}
+          assert required <= seen, f'missing expected read-only calls: {sorted(required-seen)}'
+          PY
           grep -F "access_level='ANY'" "$f"
           grep -F 'list_region_subscriptions' "$f"
           grep -F 'OCI_STORAGE_INVENTORY_FAILED' "$f"
@@ -68,7 +88,12 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check -q 'oci==2.164.0'
           install -d -m 0700 "$RUNNER_TEMP/oci"
-          printf '%s\n' "$OCI_KEY" > "$RUNNER_TEMP/oci/key.pem"
+          if [[ "$OCI_KEY" == base64:* ]]; then
+            printf '%s' "${OCI_KEY#base64:}" | base64 --decode > "$RUNNER_TEMP/oci/key.pem"
+          else
+            printf '%s\n' "$OCI_KEY" > "$RUNNER_TEMP/oci/key.pem"
+          fi
+          grep -q -- '-----BEGIN .*PRIVATE KEY-----' "$RUNNER_TEMP/oci/key.pem"
           chmod 0600 "$RUNNER_TEMP/oci/key.pem"
           cat > "$RUNNER_TEMP/oci/config" <<EOF
           [DEFAULT]
@@ -85,6 +110,7 @@ jobs:
         run: |
           set -euo pipefail
           python - <<'PY'
+          # BEGIN OCI_READ_ONLY_SDK
           import os
           import oci
 
@@ -190,4 +216,5 @@ jobs:
           except Exception:
               print(f'OCI_STORAGE_INVENTORY_FAILED operation={operation} status=local code=BOUNDED_FAILURE')
               raise SystemExit(1)
+          # END OCI_READ_ONLY_SDK
           PY
