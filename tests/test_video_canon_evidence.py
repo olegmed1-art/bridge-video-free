@@ -216,3 +216,17 @@ def test_labelled_hand_prose_without_four_suit_encoding_is_not_a_false_positive(
     learning["transcript_evidence"][0]["text_sha256"] = assertion["statement_sha256"]
     result = build_video_canon_candidate(learning, assertion)
     assert result["quality_status"] == "EVIDENCE_ONLY"
+
+
+@pytest.mark.parametrize("statement", [
+    "North's hand was strong...",
+    "рука партнера: 5 карт",
+])
+def test_labelled_prose_without_thirteen_card_hand_is_allowed(statement):
+    learning = _learning()
+    assertion = _assertion()
+    assertion["statement"] = statement
+    assertion["statement_sha256"] = hashlib.sha256(statement.encode("utf-8")).hexdigest()
+    learning["transcript_evidence"][0]["text_sha256"] = assertion["statement_sha256"]
+    result = build_video_canon_candidate(learning, assertion)
+    assert result["quality_status"] == "EVIDENCE_ONLY"

@@ -207,6 +207,31 @@ CREATE TABLE bidding.video_correction_review_receipt (
     recorded_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE OR REPLACE FUNCTION bidding.is_complete_bridge_hand(p_hand text)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+WITH hand AS (
+  SELECT regexp_split_to_array(upper(COALESCE(p_hand,'')), E'\\\\.') AS suits
+)
+SELECT cardinality(suits)=4
+   AND NOT EXISTS (
+     SELECT 1 FROM unnest(suits) AS suit(value)
+      WHERE value !~ '^(-|[AKQJT2-9]{0,13})$'
+         OR (value<>'-' AND length(value)<>(
+           SELECT count(DISTINCT rank_char)
+             FROM regexp_split_to_table(value,'') AS rank_char
+         ))
+   )
+   AND COALESCE((
+     SELECT sum(length(CASE WHEN value='-' THEN '' ELSE value END))
+       FROM unnest(suits) AS suit(value)
+   ),0)=13
+  FROM hand
+$$;
+
 CREATE OR REPLACE FUNCTION bidding.contains_forbidden_hidden_value(payload jsonb)
 RETURNS boolean
 LANGUAGE sql
@@ -231,10 +256,16 @@ WITH RECURSIVE walk(value) AS (
 SELECT EXISTS (
   SELECT 1 FROM walk AS w
    WHERE jsonb_typeof(w.value)='string'
-     AND (
-       (w.value#>>'{}') ~* E'(^|[^[:alnum:]])[NESW][[:space:]]*:[[:space:]]*[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}'
-       OR (w.value#>>'{}') ~* E'(partner|opponent|north|east|south|west)[[:space:]]*([''’]s)?[ _-]*(hand|cards)[^;]*[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}([^-.AKQJT2-9]|$)'
-       OR (w.value#>>'{}') ~* E'(рука|карты)[[:space:]]+(партн[её]ра|соперника)[[:space:]]*[:=][[:space:]]*[-AKQJT2-9.]'
+     AND EXISTS (
+       SELECT 1
+         FROM regexp_matches(
+           w.value#>>'{}',
+           E'(?:^|[^[:alnum:]])[NESW][[:space:]]*:[[:space:]]*([-AKQJT2-9]{0,13}\\\\.[-AKQJT2-9]{0,13}\\\\.[-AKQJT2-9]{0,13}\\\\.[-AKQJT2-9]{0,13})|(?:partner|opponent|north|east|south|west)[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)[^;]*?([-AKQJT2-9]{0,13}\\\\.[-AKQJT2-9]{0,13}\\\\.[-AKQJT2-9]{0,13}\\\\.[-AKQJT2-9]{0,13})|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника)[^;]*?([-AKQJT2-9]{0,13}\\\\.[-AKQJT2-9]{0,13}\\\\.[-AKQJT2-9]{0,13}\\\\.[-AKQJT2-9]{0,13})',
+           'gi'
+         ) AS matched(parts)
+        WHERE bidding.is_complete_bridge_hand(
+          COALESCE(matched.parts[1],matched.parts[2],matched.parts[3])
+        )
      )
 );
 $$;
@@ -257,8 +288,13 @@ LANGUAGE sql
 STABLE
 SECURITY DEFINER
 SET search_path=pg_catalog,public,bidding
+SET TimeZone='UTC'
 AS $$
-WITH active_runtime AS (
+WITH effective_canon AS (
+  SELECT ca.* FROM public.canon_activation ca
+  WHERE ca.status='active' AND ca.valid_from<=statement_timestamp()
+    AND (ca.valid_to IS NULL OR ca.valid_to>statement_timestamp())
+), active_runtime AS (
   SELECT COALESCE(jsonb_agg(
     jsonb_build_object(
       'runtime_activation',to_jsonb(ra),
@@ -268,28 +304,29 @@ WITH active_runtime AS (
     ) ORDER BY ra.runtime_activation_id::text
   ),'[]'::jsonb) AS rows
   FROM bidding.runtime_activation ra
-  JOIN public.canon_activation ca ON ca.canon_activation_id=ra.canon_activation_id
+  JOIN effective_canon ca ON ca.canon_activation_id=ra.canon_activation_id
   JOIN bidding.rule r ON r.rule_id=ra.rule_id
   JOIN public.knowledge_version kv ON kv.knowledge_version_id=r.knowledge_version_id
   WHERE ra.school_id=p_school_id AND ra.authority_lane='school_canon'
-    AND ra.status='active' AND ca.status='active'
+    AND ra.status='active' AND ra.valid_from<=statement_timestamp()
+    AND (ra.valid_to IS NULL OR ra.valid_to>statement_timestamp())
 ), active_canon AS (
   SELECT COALESCE(jsonb_agg(jsonb_build_object(
     'canon_activation',to_jsonb(ca),
     'knowledge_version',to_jsonb(kv),
     'knowledge_item',to_jsonb(ki)
   ) ORDER BY ca.canon_activation_id::text),'[]'::jsonb) AS rows
-  FROM public.canon_activation ca
+  FROM effective_canon ca
   JOIN public.knowledge_version kv ON kv.knowledge_version_id=ca.knowledge_version_id
   JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
-  WHERE ki.school_id=p_school_id AND ca.status='active'
+  WHERE ki.school_id=p_school_id
 ), active_canon_rules AS (
   SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.rule_id::text),'[]'::jsonb) AS rows
-  FROM public.canon_activation ca
+  FROM effective_canon ca
   JOIN public.knowledge_version kv ON kv.knowledge_version_id=ca.knowledge_version_id
   JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
   JOIN bidding.rule r ON r.knowledge_version_id=kv.knowledge_version_id
-  WHERE ki.school_id=p_school_id AND ca.status='active'
+  WHERE ki.school_id=p_school_id
 ), open_conflicts AS (
   SELECT COALESCE(jsonb_agg(to_jsonb(c) ORDER BY c.rule_conflict_id::text),'[]'::jsonb) AS rows
   FROM bidding.rule_conflict c WHERE c.school_id=p_school_id AND c.status='open'
@@ -308,7 +345,7 @@ WITH active_runtime AS (
     JOIN public.knowledge_version kv ON kv.knowledge_version_id=ca.knowledge_version_id
     JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
     JOIN bidding.rule r ON r.knowledge_version_id=kv.knowledge_version_id
-     WHERE ki.school_id=p_school_id AND ca.status='active' AND r.rule_id=t.rule_id
+     WHERE ki.school_id=p_school_id AND r.rule_id=t.rule_id
   )
 ), active_rule_sources AS (
   SELECT COALESCE(jsonb_agg(jsonb_build_object(
@@ -320,7 +357,7 @@ WITH active_runtime AS (
     SELECT 1 FROM public.canon_activation ca
     JOIN public.knowledge_version kv ON kv.knowledge_version_id=ca.knowledge_version_id
     JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
-     WHERE ki.school_id=p_school_id AND ca.status='active'
+     WHERE ki.school_id=p_school_id
        AND ca.knowledge_version_id=kvs.knowledge_version_id
   )
 )
@@ -999,6 +1036,10 @@ BEGIN
      WHERE runtime_activation_id=v_promotion.runtime_activation_id FOR UPDATE;
     IF v_new_canon.canon_activation_id IS NULL OR v_new_runtime.runtime_activation_id IS NULL
        OR v_new_canon.status<>'active' OR v_new_runtime.status<>'active'
+       OR (v_new_canon.valid_to IS NOT NULL
+           AND v_new_canon.valid_to<=statement_timestamp())
+       OR (v_new_runtime.valid_to IS NOT NULL
+           AND v_new_runtime.valid_to<=statement_timestamp())
        OR v_new_runtime.canon_activation_id<>v_new_canon.canon_activation_id
        OR v_new_runtime.rule_id<>v_promotion.rule_id
        OR v_new_runtime.school_id<>v_promotion.school_id THEN
@@ -1151,7 +1192,8 @@ GRANT SELECT ON bidding.video_canon_source_policy,bidding.video_canon_ai_verific
   bidding.video_canon_ai_promotion_receipt,bidding.video_canon_ai_restore_receipt,
   bidding.video_correction_review_receipt
   TO bridge_school_reader;
-REVOKE ALL ON FUNCTION bidding.video_canon_rule_restore_sha256(uuid),
+REVOKE ALL ON FUNCTION bidding.is_complete_bridge_hand(text),
+  bidding.video_canon_rule_restore_sha256(uuid),
   bidding.current_school_canon_snapshot_sha256(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION bidding.current_school_canon_snapshot_sha256(uuid) TO
   bridge_school_canon_verifier,bridge_school_canon_semantic_verifier,

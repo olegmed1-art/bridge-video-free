@@ -79,6 +79,10 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "video_canon_rule_restore_sha256",
         "to_jsonb(r)-ARRAY['created_at','updated_at']",
         "v_valid_to<=statement_timestamp()",
+        "SET TimeZone='UTC'",
+        "WITH effective_canon AS",
+        "v_new_canon.valid_to<=statement_timestamp()",
+        "is_complete_bridge_hand",
     ):
         assert marker in MIGRATION
 
@@ -107,3 +111,4 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "DROP FUNCTION bidding.restore_ai_verified_video_canon" in ROLLBACK
     assert "DROP VIEW bidding.video_canon_bound_candidate" in ROLLBACK
     assert "DROP FUNCTION bidding.video_canon_rule_restore_sha256" in ROLLBACK
+    assert "DROP FUNCTION bidding.is_complete_bridge_hand" in ROLLBACK

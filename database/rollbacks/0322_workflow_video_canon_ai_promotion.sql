@@ -31,6 +31,7 @@ DROP FUNCTION bidding.validate_video_correction_review_receipt();
 DROP FUNCTION bidding.current_school_canon_snapshot_sha256(uuid);
 DROP FUNCTION bidding.video_canon_rule_restore_sha256(uuid);
 DROP FUNCTION bidding.contains_forbidden_hidden_value(jsonb);
+DROP FUNCTION bidding.is_complete_bridge_hand(text);
 DROP TABLE bidding.video_correction_review_receipt;
 DROP TABLE bidding.video_canon_ai_restore_receipt;
 DROP TABLE bidding.video_canon_ai_promotion_receipt;

@@ -28,18 +28,22 @@ _FORBIDDEN_KEYS = {
     "actual_partner_hand", "actual_opponent_hand", "actual_opponent_hands",
     "partner_cards", "opponent_cards", "all_hands",
 }
+_HAND_PATTERN = (
+    r"[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\."
+    r"[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}"
+)
 _PBN_DEAL = re.compile(
-    r"(?:^|[^A-Za-z0-9])[NESW]\s*:\s*[-AKQJT2-9]{0,13}\."
-    r"[-AKQJT2-9]{0,13}\.[-AKQJT2-9]{0,13}\.[-AKQJT2-9]{0,13}",
+    r"(?:^|[^A-Za-z0-9])[NESW]\\s*:\\s*(?P<hand>" + _HAND_PATTERN + r")",
     re.IGNORECASE,
 )
 _LABELLED_HIDDEN_CARDS = re.compile(
-    r"(?:partner|opponent|north|east|south|west)\s*(?:['’]s)?[ _-]*(?:hand|cards)"
-    r"\b[^;]*?[-AKQJT2-9]{0,13}\.[-AKQJT2-9]{0,13}\."
-    r"[-AKQJT2-9]{0,13}\.[-AKQJT2-9]{0,13}(?![-AKQJT2-9.])"
-    r"|(?:рука|карты)\s+(?:партн[её]ра|соперника)\s*[:=]\s*[-AKQJT2-9.]",
+    r"(?:partner|opponent|north|east|south|west)\\s*(?:['’]s)?[ _-]*(?:hand|cards)"
+    r"\\b[^;]*?(?P<hand>" + _HAND_PATTERN + r")"
+    r"|(?:рука|карты)\\s+(?:партн[её]ра|соперника)\\b[^;]*?"
+    r"(?P<ru_hand>" + _HAND_PATTERN + r")",
     re.IGNORECASE,
 )
+
 _NORMALIZED_RULE_FIELDS = {
     "rule_key", "rule_kind", "auction_pattern", "hand_constraints",
     "public_context_constraints", "action", "meaning", "public_inference",
@@ -88,13 +92,32 @@ def _has_forbidden_key(value: Any) -> bool:
     return False
 
 
+def _is_complete_hand_shape(hand: str) -> bool:
+    suits = hand.upper().split(".")
+    if len(suits) != 4:
+        return False
+    cards = 0
+    for suit in suits:
+        if suit == "-":
+            suit = ""
+        elif "-" in suit or len(set(suit)) != len(suit):
+            return False
+        cards += len(suit)
+    return cards == 13
+
+
 def _has_forbidden_value(value: Any) -> bool:
     if isinstance(value, Mapping):
         return any(_has_forbidden_value(child) for child in value.values())
     if isinstance(value, (list, tuple)):
         return any(_has_forbidden_value(child) for child in value)
     if isinstance(value, str):
-        return bool(_PBN_DEAL.search(value) or _LABELLED_HIDDEN_CARDS.search(value))
+        if any(_is_complete_hand_shape(match.group("hand")) for match in _PBN_DEAL.finditer(value)):
+            return True
+        return any(
+            _is_complete_hand_shape(match.group("hand") or match.group("ru_hand"))
+            for match in _LABELLED_HIDDEN_CARDS.finditer(value)
+        )
     return False
 
 

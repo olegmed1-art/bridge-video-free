@@ -98,6 +98,10 @@ BEGIN
        '{"notes":"North''s hand, as it appeared clearly in the recorded diagram,\nwas AKQJ.T98.765.432; East’s hand was JT9.AKQ.JT9.876"}'::jsonb
      )) OR bidding.contains_forbidden_hidden_value(
        '{"meaning":"shows at least five hearts"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North''s hand was strong..."}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"рука партнера: 5 карт"}'::jsonb
      ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_HIDDEN_VALUE_FIREWALL_INVALID';
   END IF;
@@ -155,6 +159,7 @@ DECLARE
   v_late_verification_failed boolean:=false;
   v_target_binding_failed boolean:=false;
   v_rule_content_failed boolean:=false;
+  v_expired_restore_failed boolean:=false;
   v_bundle_id uuid:=uuidv7();
   v_good_bundle jsonb;
   v_bad_bundle jsonb;
@@ -345,6 +350,14 @@ BEGIN
     'school-video-auto-canon-v1','restore-scope',repeat('3',64),v_old_rule,
     v_old_canon,v_old_runtime,'AI_VERIFIED_TEACHER_VIDEO',false
   );
+  PERFORM set_config('TimeZone','UTC',true);
+  v_snapshot_before:=bidding.current_school_canon_snapshot_sha256(v_school);
+  PERFORM set_config('TimeZone','Pacific/Honolulu',true);
+  v_snapshot_after:=bidding.current_school_canon_snapshot_sha256(v_school);
+  IF v_snapshot_before<>v_snapshot_after THEN
+    RAISE EXCEPTION 'VIDEO_CANON_SNAPSHOT_TIMEZONE_DEPENDENT';
+  END IF;
+  PERFORM set_config('TimeZone','UTC',true);
   v_snapshot_before:=bidding.current_school_canon_snapshot_sha256(v_school);
   UPDATE public.source SET status='revoked' WHERE source_id=v_orphan_source;
   v_snapshot_after:=bidding.current_school_canon_snapshot_sha256(v_school);
@@ -400,6 +413,26 @@ BEGIN
   END;
   IF NOT v_late_verification_failed THEN
     RAISE EXCEPTION 'VIDEO_CANON_LATE_VERIFICATION_INSERT_NOT_BLOCKED';
+  END IF;
+
+  BEGIN
+    UPDATE public.canon_activation
+       SET valid_to=statement_timestamp()-interval '1 second'
+     WHERE canon_activation_id=v_new_canon;
+    UPDATE bidding.runtime_activation
+       SET valid_to=statement_timestamp()-interval '1 second'
+     WHERE runtime_activation_id=v_new_runtime;
+    PERFORM bidding.restore_ai_verified_video_canon(
+      v_promotion,v_good_bundle_hash,repeat('d',64)
+    );
+  EXCEPTION WHEN check_violation THEN
+    v_expired_restore_failed:=true;
+  END;
+  IF NOT v_expired_restore_failed OR EXISTS (
+       SELECT 1 FROM bidding.video_canon_ai_restore_receipt
+        WHERE video_canon_ai_promotion_receipt_id=v_promotion
+     ) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_EXPIRED_CURRENT_RESTORE_NOT_BLOCKED';
   END IF;
 
   BEGIN
