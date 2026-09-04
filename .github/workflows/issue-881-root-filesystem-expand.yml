@@ -516,7 +516,7 @@ jobs:
           assert data['size-in-gbs'] == 97
           PY
               state_set retained_backup_id "${ids[0]}"
-              state_set failed_run_backup_cleanup_status RETAINED_PROVEN
+              state_set failed_run_backup_cleanup_status RETAINED_AVAILABLE_REQUIRES_ACCEPTANCE
             else
               state_set failed_run_backup_cleanup_status PROVEN_ABSENT
             fi

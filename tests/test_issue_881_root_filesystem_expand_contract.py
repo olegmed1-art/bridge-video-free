@@ -312,7 +312,7 @@ def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> No
     mutation = WORKFLOW.index("Expand root and recover exact image under shared host lock")
     assert cleanup < backup_create < mutation
     assert "FAILED_BACKUP_NAME" in WORKFLOW
-    assert "failed_run_backup_cleanup_status RETAINED_PROVEN" in WORKFLOW
+    assert "failed_run_backup_cleanup_status RETAINED_AVAILABLE_REQUIRES_ACCEPTANCE" in WORKFLOW
     assert "assert data['lifecycle-state'] == 'AVAILABLE'" in WORKFLOW
     assert "allocation_summary" in WORKFLOW
     assert "cleanup_only=true" in WORKFLOW
