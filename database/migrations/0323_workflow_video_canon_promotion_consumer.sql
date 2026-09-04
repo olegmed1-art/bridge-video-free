@@ -387,7 +387,8 @@ BEGIN
   SELECT * INTO v_job FROM bidding.video_canon_promotion_job
    WHERE video_canon_promotion_job_id=p_job_id FOR UPDATE;
   IF NOT FOUND OR v_job.status<>'leased' OR v_job.lease_owner<>session_user
-     OR v_job.lease_token<>p_lease_token OR v_job.fencing_token<>p_fencing_token THEN
+     OR v_job.lease_token<>p_lease_token OR v_job.fencing_token<>p_fencing_token
+     OR v_job.lease_expires_at<=clock_timestamp() THEN
     RAISE EXCEPTION 'VIDEO_CANON_STALE_LEASE_OR_FENCE' USING ERRCODE='55000';
   END IF;
   v_status:=CASE WHEN p_error_code='RETRYABLE_DATABASE_ERROR' AND v_job.attempt_count<5

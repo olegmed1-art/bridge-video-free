@@ -19,7 +19,7 @@ def test_delivery_is_leased_fenced_atomic_and_retained():
     assert "FOR UPDATE SKIP LOCKED" in MIGRATION
     assert "j.fencing_token+1" in MIGRATION
     assert "v_job.fencing_token<>p_fencing_token" in MIGRATION
-    assert "v_job.lease_expires_at<=clock_timestamp()" in MIGRATION
+    assert MIGRATION.count("v_job.lease_expires_at<=clock_timestamp()") == 2
     assert "VIDEO_CANON_POST_WRITE_INTEGRITY_FAILED" in MIGRATION
     assert "video_canon_promotion_delivery_receipt_append_only" in MIGRATION
     assert "ATTEMPTS_EXHAUSTED" in MIGRATION
