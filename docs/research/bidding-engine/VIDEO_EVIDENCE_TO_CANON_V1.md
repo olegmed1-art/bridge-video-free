@@ -145,10 +145,12 @@ payloads—including `♠♥♦♣` suit-symbol notation in any suit order, incl
 single unambiguous card (`Q`, `q`, `T`, `t`, `10`, or a directly
 attached rank `2`–`9`)—are rejected anywhere in the complete payload.
 Direct holding verbs are covered as well: `North held Q`, `partner holds
-AKQJ`, `North is holding Q` and `partner was holding AKQJ` are disclosures,
-while `North held 5 hearts`, `North has 10 hearts`, `North held 10 points`
-and ordinary prose such as `North held the view...` are not. Ordinary
-quantitative bridge prose such as `5 cards`, `5 hearts`, `10 cards`, `3
+AKQJ`, `North is holding Q`, `partner was holding AKQJ`, `North's
+holding Q` and `N's holding Q` are disclosures. `North held 5 hearts`,
+`North has 10 hearts`, `North held 10 points`, point ranges such as
+`10-12`, `10 to 12` and `10+`, and ordinary prose such as `North held
+the view...` are not. Ordinary quantitative bridge prose such as `5 cards`,
+`5 hearts`, `10 cards`, `3
 trumps`, `7 losers`, points, controls, winners, stoppers and their Russian equivalents
 remains allowed when it is a length/count description rather than a disclosed
 suit group. The firewall still rejects fragments with omitted
@@ -206,11 +208,12 @@ and both its source ID and transcript locator must equal the sealed teacher
 assertion. A database trigger resolves both immutable Canon activation IDs
 from the promotion receipt—the newly promoted version and, when present, its
 predecessor—and freezes both source sets as soon as the receipt exists; the
-worker cannot add, replace or delete provenance afterward. Additional guards
-freeze the semantic identity of every referenced source and the complete
-knowledge-item/knowledge-version rows for both activation IDs; source lifecycle
-status may still be revoked. The promotion receipt stores the predecessor's
-exact ordered source-row snapshot plus digests of its complete knowledge-item
+worker cannot add, replace or delete provenance afterward. Additional guards freeze the semantic identity of every referenced source,
+the complete knowledge-item/knowledge-version rows, every rule row and every
+rule-test definition for both activation IDs; source lifecycle status and new
+immutable test-run evidence may still be recorded. The promotion receipt stores
+the predecessor's exact ordered source-row snapshot, full rule/test-definition
+state including latest runs, and digests of its complete knowledge-item
 identity and knowledge-version projection—including lifecycle status and review
 status—for every predecessor, including legacy/non-video Canon. A digest of the
 promoted version projection is retained in the receipt and activation
@@ -236,8 +239,8 @@ authorization cannot be reactivated through rollback. For every predecessor, reg
 the restorer compares the current complete knowledge-item identity,
 knowledge-version projection (including lifecycle state), and source-row set
 byte-for-byte with the immutable digests/snapshot captured by the replacing
-promotion before any reactivation. It also recomputes the sealed rule-test-state
-digest. The outgoing Canon and runtime rows receive
+promotion before any reactivation. It also recomputes and compares the exact
+rule-test state for every predecessor, not only earlier AI-video promotions. The outgoing Canon and runtime rows receive
 one shared wall-clock revocation timestamp captured immediately before both
 updates. Restoration also requires every original attestor login
 to retain its active verifier capability before reactivation.

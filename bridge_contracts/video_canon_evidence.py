@@ -66,7 +66,8 @@ _LABELLED_HAND_TAIL = re.compile(
 )
 _VERBAL_HIDDEN_TAIL = re.compile(
     r"(?:(?<!\w)(?:partner|opponent|north|east|south|west)"
-    r"|(?<![A-Za-z0-9])[NESW])\s+(?:(?:held|holds?|has|had)|(?:is|was)\s+holding)\b"
+    r"|(?<![A-Za-z0-9])[NESW])(?:(?:\s+(?:(?:held|holds?|has|had)|"
+    r"(?:is|was)\s+holding))|(?:['’]s\s+holding))\b"
     r"(?P<tail>[^;]{0,512})",
     re.IGNORECASE,
 )
@@ -86,7 +87,7 @@ _LEADING_SINGLE_DIGIT_CARD = re.compile(
     re.IGNORECASE,
 )
 _LEADING_LENGTH_DESCRIPTION = re.compile(
-    r"^\s*(?:(?:was|is)\s+|[:,;=\-]\s*)?(?:10|[2-9])\s*(?:"
+    r"^\s*(?:(?:was|is)\s+|[:,;=\-]\s*)?(?:10|[2-9])\s*(?:(?:(?:[-–—]|to)\s*\d{1,2}|\+)\s*)?(?:"
     r"cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|"
     r"controls?|winners?|stoppers?|suits?|"
     r"карт\w*|черв\w*|пик\w*|буб\w*|треф\w*|козыр\w*|взят\w*|"

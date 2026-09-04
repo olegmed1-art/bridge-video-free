@@ -57,6 +57,12 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "guard_promoted_video_canon_knowledge_item",
         "promoted_video_canon_knowledge_item_guard",
         "VIDEO_CANON_PROMOTED_KNOWLEDGE_ITEM_IMMUTABLE",
+        "guard_promoted_video_canon_rule",
+        "promoted_video_canon_rule_guard",
+        "VIDEO_CANON_PROMOTED_RULE_IMMUTABLE",
+        "guard_promoted_video_canon_rule_test",
+        "promoted_video_canon_rule_test_guard",
+        "VIDEO_CANON_PROMOTED_RULE_TEST_IMMUTABLE",
         "JOIN public.canon_activation ca",
         "ca.canon_activation_id=p.canon_activation_id",
         "status='superseded',valid_to=v_valid_from",
@@ -104,6 +110,10 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "VIDEO_CANON_RESTORE_BUNDLE_NOT_FOUND",
         "VIDEO_CANON_RESTORE_RULE_CONTENT_MISMATCH",
         "superseded_rule_state",
+        "superseded_rule_test_state",
+        "v_prior_rule_test_state",
+        "v_current_prior_rule_test_state",
+        "VIDEO_CANON_RESTORE_PREDECESSOR_TEST_STATE_MISMATCH",
         "superseded_source_state",
         "superseded_knowledge_version_content_sha256",
         "superseded_knowledge_item_content_sha256",
@@ -174,7 +184,8 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "trumps?|losers?|points?|hcp|controls?",
         "карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*",
         "(?:(?:held|holds?|has|had)|(?:is|was)[[:space:]]+holding)",
-        "(?:10|[2-9])[[:space:]]*(?:cards?",
+        "[''’]s[[:space:]]+holding",
+        "(?:[-–—]|to)[[:space:]]*[0-9]{1,2}|[+]",
     ):
         assert marker in MIGRATION
 
@@ -206,10 +217,14 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "DROP TRIGGER promoted_video_canon_source_identity_guard" in ROLLBACK
     assert "DROP TRIGGER promoted_video_canon_knowledge_version_guard" in ROLLBACK
     assert "DROP TRIGGER promoted_video_canon_knowledge_item_guard" in ROLLBACK
+    assert "DROP TRIGGER promoted_video_canon_rule_guard" in ROLLBACK
+    assert "DROP TRIGGER promoted_video_canon_rule_test_guard" in ROLLBACK
     assert "DROP FUNCTION bidding.guard_promoted_video_canon_source_binding" in ROLLBACK
     assert "DROP FUNCTION bidding.guard_promoted_video_canon_source_identity" in ROLLBACK
     assert "DROP FUNCTION bidding.guard_promoted_video_canon_knowledge_version" in ROLLBACK
     assert "DROP FUNCTION bidding.guard_promoted_video_canon_knowledge_item" in ROLLBACK
+    assert "DROP FUNCTION bidding.guard_promoted_video_canon_rule" in ROLLBACK
+    assert "DROP FUNCTION bidding.guard_promoted_video_canon_rule_test" in ROLLBACK
     assert "DROP FUNCTION bidding.video_canon_rule_test_state_sha256" in ROLLBACK
     assert "DROP FUNCTION bidding.video_canon_rule_restore_sha256" in ROLLBACK
     assert "DROP FUNCTION bidding.is_complete_bridge_hand" in ROLLBACK

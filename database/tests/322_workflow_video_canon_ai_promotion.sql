@@ -153,6 +153,12 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"partner was holding AKQJ"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"North''s holding Q"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"partner’s holding AKQJ"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"N''s holding Q"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N:AKQJ109.876.54.32"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s hand was S:AKQJ109 H:876 D:54 C:32"}'::jsonb
@@ -194,6 +200,16 @@ BEGIN
        '{"notes":"partner was holding 10 cards"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s hand was 10 points"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North has 10-12 points"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North has 10 to 12 points"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North has 10+ points"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North''s holding 10-12 points"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North''s hand was 10-12 points"}'::jsonb
      ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_HIDDEN_VALUE_FIREWALL_INVALID';
   END IF;
@@ -271,6 +287,7 @@ DECLARE
   v_old_predecessor_version_digest text;
   v_old_item_digest text;
   v_old_rule_test_state_digest text;
+  v_old_rule_test_state jsonb;
   v_old_source_state jsonb;
   v_retire_before timestamptz;
   v_retire_after timestamptz;
@@ -499,6 +516,10 @@ BEGIN
    WHERE kvs.knowledge_version_id=v_old_version;
   v_old_rule_test_state_digest :=
     bidding.video_canon_rule_test_state_sha256(v_old_rule);
+  v_old_rule_test_state := jsonb_build_array(jsonb_build_object(
+    'rule_id',v_old_rule,
+    'rule_test_state_sha256',v_old_rule_test_state_digest
+  ));
   INSERT INTO bidding.video_canon_ai_promotion_receipt(
     video_canon_ai_promotion_receipt_id,school_id,analysis_candidate_id,
     candidate_payload_hash,verification_bundle_sha256,policy_version,scope_key,
@@ -549,7 +570,8 @@ BEGIN
     rule_id,canon_activation_id,runtime_activation_id,
     superseded_canon_activation_id,superseded_canon_valid_to,
     superseded_runtime_activation_ids,superseded_runtime_state,superseded_rule_state,
-    superseded_source_state,superseded_knowledge_version_content_sha256,
+    superseded_rule_test_state,superseded_source_state,
+    superseded_knowledge_version_content_sha256,
     superseded_knowledge_item_content_sha256,promotion_mode,human_approval_required
   ) VALUES (
     v_promotion,v_school,v_candidate,repeat('a',64),v_good_bundle_hash,
@@ -560,7 +582,8 @@ BEGIN
     )),jsonb_build_array(jsonb_build_object(
       'rule_id',v_old_rule,
       'rule_content_sha256',bidding.video_canon_rule_restore_sha256(v_old_rule)
-    )),v_old_source_state,v_old_predecessor_version_digest,v_old_item_digest,
+    )),v_old_rule_test_state,v_old_source_state,
+    v_old_predecessor_version_digest,v_old_item_digest,
     'AI_VERIFIED_TEACHER_VIDEO',false
   );
   BEGIN
