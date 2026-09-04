@@ -845,7 +845,9 @@ BEGIN
        OR (SELECT count(DISTINCT c.value->>'check_id')
              FROM jsonb_array_elements(NEW.bundle_payload->'checks') AS c(value))<>16
        OR jsonb_typeof(NEW.bundle_payload->'effective_period')<>'object'
-       OR jsonb_object_length(NEW.bundle_payload->'effective_period')<>2
+       OR (SELECT count(*) FROM jsonb_object_keys(
+            NEW.bundle_payload->'effective_period'
+          ))<>2
        OR NOT (NEW.bundle_payload->'effective_period' ?& ARRAY['valid_from','valid_to'])
        OR jsonb_typeof(NEW.bundle_payload#>'{effective_period,valid_from}')<>'string'
        OR NOT ((NEW.bundle_payload#>>'{effective_period,valid_from}') ~

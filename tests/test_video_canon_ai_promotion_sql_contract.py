@@ -8,7 +8,7 @@ DATABASE_TEST = (ROOT / "database/tests/322_workflow_video_canon_ai_promotion.sq
 
 
 def test_database_bundle_gate_validates_the_effective_period():
-    assert "jsonb_object_length(NEW.bundle_payload->'effective_period')<>2" in MIGRATION
+    assert "NEW.bundle_payload->'effective_period'\n          ))<>2" in MIGRATION
     assert "VIDEO_CANON_BUNDLE_EFFECTIVE_PERIOD_INVALID" in MIGRATION
     assert "v_valid_to<=v_valid_from" in MIGRATION
     assert "VIDEO_CANON_INVALID_BUNDLE_PERIOD_NOT_BLOCKED" in DATABASE_TEST
