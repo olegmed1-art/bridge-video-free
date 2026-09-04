@@ -155,6 +155,7 @@ jobs:
               case "$resource" in
                 backup) command=(oci bv boot-volume-backup list --compartment-id "$tenancy_id" --boot-volume-id "$boot_id" --all) ;;
                 boot-volume) command=(oci bv boot-volume list --compartment-id "$tenancy_id" --availability-domain "$ad" --all) ;;
+                instance) command=(oci compute instance list --compartment-id "$tenancy_id" --display-name "$expected" --all) ;;
                 vcn) command=(oci network vcn list --compartment-id "$tenancy_id" --all) ;;
                 internet-gateway) command=(oci network internet-gateway list --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --all) ;;
                 route-table) command=(oci network route-table list --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --all) ;;
@@ -307,7 +308,7 @@ jobs:
             echo 'UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS'
           }
           cleanup_temp_resources() {
-            local failed=0 state candidates
+            local failed=0 state
             if [[ -z "$restored_id" && "$restored_attempted" == 1 ]]; then
               restored_id="$(discover_named_id boot-volume "$stamp-restore")" || failed=1
             fi
@@ -329,13 +330,10 @@ jobs:
               fi
             fi
             # If launch returned after creating the instance but before its JSON
-            # reached this runner, recover the OCID from the unique run stamp.
+            # reached this runner, retry exact-stamp discovery long enough for
+            # OCI list eventual consistency. Query/JSON errors remain fatal.
             if [[ -z "$drill_instance_id" && -n "$drill_subnet_id" ]]; then
-              if ! candidates="$(oci compute instance list --compartment-id "$tenancy_id" --display-name "$stamp-boot-acceptance" --all --output json)"; then
-                failed=1
-                candidates='{"data":[]}'
-              fi
-              drill_instance_id="$(printf '%s' "$candidates" | python -c 'import json,sys; xs=[x["id"] for x in json.load(sys.stdin).get("data",[]) if x.get("lifecycle-state") not in {"TERMINATED","TERMINATING"}]; assert len(xs)<=1; print(xs[0] if xs else "")')" || failed=1
+              drill_instance_id="$(discover_named_id instance "$stamp-boot-acceptance")" || failed=1
             fi
             if [[ -n "$drill_instance_id" ]]; then
               oci compute instance terminate --instance-id "$drill_instance_id" --preserve-boot-volume false --force >/dev/null 2>&1 || true
