@@ -16,9 +16,9 @@ def test_entrypoint_is_fixed_and_no_asr_productionization_only():
     assert "usage: universal-video-oci-admin audit|productionize" in ENTRY
     assert "audit) audit ;;" in ENTRY
     assert "productionize) productionize ;;" in ENTRY
-    assert "readonly UV_RUNTIME_COMMIT='7e46f0327d6094400e0d35ec6af20408cc97683e'" in ENTRY
-    assert "readonly ACTIVATION_BLOB='bbf4dc5779726fca415f641b90d017a802daaabf'" in ENTRY
-    assert "readonly PRODUCTIONIZE_BLOB='9a76e06ed1cb7ecc92102e5c16cf215c18f9159d'" in ENTRY
+    assert "readonly UV_RUNTIME_COMMIT='07ce0495959e0f798b4a6e5ca5b31423cccfa849'" in ENTRY
+    assert "readonly ACTIVATION_BLOB='0343e1a3c8e5a87c4c1931ad738e1af855266802'" in ENTRY
+    assert "readonly PRODUCTIONIZE_BLOB='69b7243da69076e94891148467e04d10bbc7b058'" in ENTRY
     assert "readonly DRIVE_PROBE_FILE_ID='1RKrDWP6IOfVyuDWRMIsiUT62vpmVW9VS'" in ENTRY
     assert "readonly DRIVE_RESULTS_FOLDER_ID='1I8cSuA-p0MpaZIbA33slks19KyvfJDMK'" in ENTRY
     assert "UNIVERSAL_VIDEO_RUN_SMOKE=0" in ENTRY
@@ -56,10 +56,13 @@ def test_admin_runtime_pin_is_one_self_consistent_published_tree():
         pinned("ACTIVATION_BLOB", ENTRY),
         pinned("PRODUCTIONIZE_BLOB", ENTRY),
     ) == (
-        "7e46f0327d6094400e0d35ec6af20408cc97683e",
-        "bbf4dc5779726fca415f641b90d017a802daaabf",
-        "9a76e06ed1cb7ecc92102e5c16cf215c18f9159d",
+        "07ce0495959e0f798b4a6e5ca5b31423cccfa849",
+        "0343e1a3c8e5a87c4c1931ad738e1af855266802",
+        "69b7243da69076e94891148467e04d10bbc7b058",
     )
+    assert "ORACLE_WORKLOAD_FENCE_HELD" in PRODUCTIONIZE
+    assert "flock -n -x 9" in PRODUCTIONIZE
+    assert "flock -x /run/lock/oracle-workload-mutation.lock" in MAINTENANCE_UNIT
 
 
 def test_sudoers_surface_is_exact_and_not_broad():

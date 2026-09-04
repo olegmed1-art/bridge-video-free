@@ -217,9 +217,12 @@ def test_guard_install_executes_only_verified_root_owned_installer_copy() -> Non
     mode = workflow.index("root:root:700", regular)
     digest = workflow.index("INSTALLER_SHA256", mode)
     syntax = workflow.index("bash -n", digest)
-    execute = workflow.index("; \\\"\\$trusted\\\"'", syntax)
+    execute = workflow.index("; \\\"\\$trusted\\\";", syntax)
     assert copy < regular < mode < digest < syntax < execute
     assert "sudo -n env SOURCE_FILE=" not in workflow
+    assert "ADMIN_SHA256=" in workflow
+    assert "INSTALLED_ADMIN_SHA256=" in workflow
+    assert "install -o root -g root -m 0755" in workflow
 
 
 def test_install_proof_captures_are_exclusive_root_only_regular_files() -> None:

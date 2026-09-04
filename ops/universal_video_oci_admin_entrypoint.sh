@@ -7,13 +7,13 @@ umask 077
 # only through exact sudoers commands. No arbitrary shell, path, commit, file ID,
 # folder ID, service name, or command argument is accepted.
 
-readonly UV_RUNTIME_COMMIT='7e46f0327d6094400e0d35ec6af20408cc97683e'
+readonly UV_RUNTIME_COMMIT='07ce0495959e0f798b4a6e5ca5b31423cccfa849'
 readonly REPOSITORY='olegmed1-art/bridge-video-free'
 readonly RAW_BASE="https://raw.githubusercontent.com/${REPOSITORY}/${UV_RUNTIME_COMMIT}"
 readonly ACTIVATION_PATH='ops/oracle_universal_video_run_command.sh'
-readonly ACTIVATION_BLOB='bbf4dc5779726fca415f641b90d017a802daaabf'
+readonly ACTIVATION_BLOB='0343e1a3c8e5a87c4c1931ad738e1af855266802'
 readonly PRODUCTIONIZE_PATH='ops/oracle_universal_video_productionize.sh'
-readonly PRODUCTIONIZE_BLOB='9a76e06ed1cb7ecc92102e5c16cf215c18f9159d'
+readonly PRODUCTIONIZE_BLOB='69b7243da69076e94891148467e04d10bbc7b058'
 readonly SOURCE_DIR='/opt/bridge-school/universal-video-src'
 readonly BASE_DIR='/opt/bridge-school/universal-video'
 readonly DRIVE_PROBE_FILE_ID='1RKrDWP6IOfVyuDWRMIsiUT62vpmVW9VS'
