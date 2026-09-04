@@ -109,6 +109,7 @@ def test_paid_and_temporary_creates_capture_before_separate_waits() -> None:
     assert "discover_named_id()" in block
     assert 'discover_named_id backup "$backup_name"' in block
     assert "discover_named_id boot-volume" in block
+    assert "discover_named_id instance" in block
     assert "discover_named_id vcn" in block
     assert "discover_named_id internet-gateway" in block
     assert "discover_named_id route-table" in block
@@ -181,7 +182,7 @@ def test_rerun_stamp_and_prior_attempt_reconciliation_precede_creation() -> None
     assert 'for id in "${ids[@]}"' in block
     assert "UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS" in block
     assert 'x.get("lifecycle-state") != "TERMINATED"' in block
-    assert 'candidates=\'{"data":[]}\'' in block
+    assert 'drill_instance_id="$(discover_named_id instance "$stamp-boot-acceptance")" || failed=1' in block
 
 
 def test_rerun_reuses_one_stable_backup_instead_of_accumulating_backups() -> None:
