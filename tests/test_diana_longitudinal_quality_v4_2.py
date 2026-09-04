@@ -261,7 +261,10 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
                 'decision_id': 'play-7', 'domain': 'PLAY', 'selected_action': 'SA',
                 'logic_candidate_id': 'why:rule-7:segment-7',
                 'source_sha256': 'c' * 64,
-                'public_context': {'auction': ['1NT', '3NT'], 'played_cards': []},
+                'public_context': {
+                    'auction': ['1NT', '3NT'], 'played_cards': [],
+                    'contract': '3NT', 'seat_to_play': 'S',
+                },
                 'evidence_refs': ['segment-7'],
             },
             'full_deal_evidence': {

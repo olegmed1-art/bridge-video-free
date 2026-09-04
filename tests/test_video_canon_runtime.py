@@ -79,6 +79,8 @@ def test_full_synthetic_chain_reaches_fenced_atomic_delivery_without_writing_can
     assert extracted["authoritative_write_performed"] is False
     candidate = extracted["candidates"][0]
     assert candidate["payload"]["authority_class"] == "TEACHER_VIDEO"
+    assert candidate["payload"]["system_profile"] == "natural-v1"
+    assert candidate["payload"]["learner_level"] == "beginner-1"
 
     verified = verify_canon_candidate(
         candidate,

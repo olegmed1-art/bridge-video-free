@@ -322,6 +322,7 @@ def build_video_canon_candidate(
     expected = {
         "assertion_id", "statement", "statement_sha256", "speaker_id", "transcript_locators",
         "source_class", "source_authorization", "semantic_scope",
+        "system_profile", "learner_level",
         "normalized_rule", "semantic_confidence", "ambiguities",
         "contradictions", "explanation", "tests",
     }
@@ -501,6 +502,8 @@ def build_video_canon_candidate(
             "authorization_evidence_sha256": authorization_evidence_sha or None,
         },
         "semantic_scope": semantic_scope,
+        "system_profile": _text(assertion.get("system_profile"), "system_profile"),
+        "learner_level": _text(assertion.get("learner_level"), "learner_level"),
         "normalized_rule": deepcopy(dict(normalized_rule)),
         "semantic_confidence": confidence,
         "ambiguities": ambiguities,

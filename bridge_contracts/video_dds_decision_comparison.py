@@ -156,6 +156,12 @@ def _rerun_authenticated_dds_request(
         raise VideoDDSComparisonError(
             "DDS comparison supports only a verified opening position"
         )
+    if "contract" not in public_context or not (
+        "seat_to_play" in public_context or "declarer" in public_context
+    ):
+        raise VideoDDSComparisonError(
+            "DDS opening position requires public contract and acting-seat context"
+        )
     if "seat_to_play" in public_context and first != public_context["seat_to_play"]:
         raise VideoDDSComparisonError("DDS position first does not match public seat_to_play")
     if "declarer" in public_context:

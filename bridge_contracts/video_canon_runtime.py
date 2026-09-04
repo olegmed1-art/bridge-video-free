@@ -244,6 +244,8 @@ def _teacher_assertion(observation: Mapping[str, Any]) -> dict[str, Any]:
         "source_class": observation["source_class"],
         "source_authorization": deepcopy(observation["source_authorization"]),
         "semantic_scope": observation["semantic_scope"],
+        "system_profile": observation["system_profile"],
+        "learner_level": observation["learner_level"],
         "normalized_rule": deepcopy(observation["normalized_rule"]),
         "semantic_confidence": observation["semantic_confidence"],
         "ambiguities": deepcopy(observation["ambiguities"]),
@@ -265,6 +267,8 @@ def verify_canon_candidate(
     candidate_hash = _sha(candidate.get("payload_hash"), "candidate payload_hash")
     if _digest(payload) != candidate_hash:
         _fail("candidate changed before verification")
+    candidate_profile = _text(payload.get("system_profile"), "candidate system profile")
+    candidate_level = _text(payload.get("learner_level"), "candidate learner level")
     if not isinstance(assurance_verdicts, Sequence) or isinstance(assurance_verdicts, (str, bytes)):
         _fail("assurance verdicts must be a sequence")
     normalized: dict[str, dict[str, Any]] = {}
@@ -317,6 +321,8 @@ def verify_canon_candidate(
         )):
             return _verification_stop(candidate_hash, "NEEDS_EVIDENCE", row["assurance_level"])
         if row["system_profile"] != verification_bundle.get("system_profile") or row["learner_level"] != verification_bundle.get("learner_level"):
+            return _verification_stop(candidate_hash, "PROFILE_AMBIGUITY", row["assurance_level"])
+        if row["system_profile"] != candidate_profile or row["learner_level"] != candidate_level:
             return _verification_stop(candidate_hash, "PROFILE_AMBIGUITY", row["assurance_level"])
     if verification_bundle.get("canon_snapshot_sha256") != i2["canon_snapshot_sha256"]:
         _fail("verification bundle uses a different Canon snapshot")

@@ -43,6 +43,8 @@ def _assertion() -> dict:
             "authorization_evidence_sha256": "e" * 64,
         },
         "semantic_scope": "bidding/natural/v1/response-to-1h",
+        "system_profile": "natural-v1",
+        "learner_level": "beginner-1",
         "normalized_rule": {
             "rule_key": "video-rule:diana:lesson-1:9-11",
             "rule_kind": "bid",

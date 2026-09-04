@@ -122,6 +122,13 @@ def build_ai_canon_promotion(
         _fail("promotion policy mismatch")
     if _sha(verification_bundle.get("candidate_payload_hash"), "candidate_payload_hash") != candidate_hash:
         _fail("verification is not bound to candidate")
+    if (
+        _text(payload.get("system_profile"), "candidate system_profile")
+        != _text(verification_bundle.get("system_profile"), "system_profile")
+        or _text(payload.get("learner_level"), "candidate learner_level")
+        != _text(verification_bundle.get("learner_level"), "learner_level")
+    ):
+        _fail("candidate profile or learner level mismatch")
     authorization = payload.get("source_authorization") or {}
     if authorization.get("policy_version") != POLICY:
         _fail("source authorization policy mismatch")
