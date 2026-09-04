@@ -22,7 +22,7 @@ BEGIN
        'bidding.activate_ai_verified_video_canon(uuid,uuid,text)','EXECUTE')
      OR has_function_privilege('bridge_school_canon_verifier',
        'bidding.activate_ai_verified_video_canon(uuid,uuid,text)','EXECUTE')
-     OR NOT has_function_privilege('bridge_school_canon_promoter',
+     OR has_function_privilege('bridge_school_canon_promoter',
        'bidding.activate_ai_verified_video_canon(uuid,uuid,text)','EXECUTE')
      OR has_function_privilege('bridge_school_worker',
        'bidding.restore_ai_verified_video_canon(uuid,text,text)','EXECUTE')
