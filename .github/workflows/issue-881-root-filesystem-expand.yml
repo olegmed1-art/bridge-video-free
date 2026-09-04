@@ -53,8 +53,10 @@ jobs:
     # AVAILABLE and hydration additionally share one 60-minute subdeadline.
     # The current-attempt cleanup worst case is 1,840 seconds: eight 30-second
     # rediscoveries, eight 20-second delete requests, one 600-second instance
-    # wait, and seven 120-second dependency/backup waits. The 40-minute cleanup
-    # reserve therefore retains 560 seconds of margin. Another 40 minutes is
+    # wait, and seven 120-second dependency/backup waits. At most 20 superseded
+    # backups add 400 seconds of DELETE attempts plus one 120-second aggregate
+    # absence wait, for a conservative 2,360-second configured bound inside the
+    # 2,400-second cleanup reserve. Another 40 minutes is
     # reserved for the host-lock mutation, 25 minutes for the always() receipt,
     # and 15 minutes for runner setup/cancellation slack under GitHub's 360m cap.
     timeout-minutes: 360
@@ -373,7 +375,8 @@ jobs:
             wait_absent instance "$1" "${2:-600}"
           }
           delete_resource_once() {
-            local resource="$1" id="$2" stderr_file="$RUNNER_TEMP/issue-881-delete.stderr" rc delete_timeout
+            local resource="$1" id="$2" stderr_file="$RUNNER_TEMP/issue-881-delete.stderr" rc
+            local delete_total_seconds delete_deadline remaining delete_request_seconds retry_sleep_seconds
             local -a command
             case "$resource" in
               instance) command=(oci compute instance terminate --instance-id "$id" --preserve-boot-volume false --force) ;;
@@ -386,19 +389,34 @@ jobs:
               vcn) command=(oci network vcn delete --vcn-id "$id" --force) ;;
               *) return 2 ;;
             esac
-            : >"$stderr_file"
-            delete_timeout="$(bounded_wait_seconds 20 "$cleanup_deadline")" || return 42
-            if timeout --signal=KILL "${delete_timeout}s" "${command[@]}" >/dev/null 2>"$stderr_file"; then
-              return 0
-            else
-              rc=$?
-            fi
-            if grep -Fq 'NotAuthorizedOrNotFound' "$stderr_file" \
-                && grep -Eq "['\"]status['\"][[:space:]]*:[[:space:]]*404" "$stderr_file"; then
-              return 0
-            fi
-            echo "UV_ROOT_DELETE_REQUEST_NONZERO resource=$resource id=$id rc=$rc" >&2
-            return "$rc"
+            delete_total_seconds="$(bounded_wait_seconds 20 "$cleanup_deadline")" || return 42
+            delete_deadline=$((SECONDS + delete_total_seconds))
+            while (( SECONDS < delete_deadline )); do
+              remaining=$((delete_deadline - SECONDS))
+              delete_request_seconds=$((remaining < 10 ? remaining : 10))
+              (( delete_request_seconds > 0 )) || break
+              : >"$stderr_file"
+              if timeout --signal=KILL "${delete_request_seconds}s" "${command[@]}" >/dev/null 2>"$stderr_file"; then
+                return 0
+              else
+                rc=$?
+              fi
+              if grep -Fq 'NotAuthorizedOrNotFound' "$stderr_file" \
+                  && grep -Eq "['\"]status['\"][[:space:]]*:[[:space:]]*404" "$stderr_file"; then
+                return 0
+              fi
+              if [[ "$rc" == 124 || "$rc" == 137 ]]; then
+                remaining=$((delete_deadline - SECONDS))
+                (( remaining > 0 )) || break
+                retry_sleep_seconds=$((remaining < 1 ? remaining : 1))
+                (( retry_sleep_seconds > 0 )) && sleep "$retry_sleep_seconds"
+                continue
+              fi
+              echo "UV_ROOT_DELETE_REQUEST_NONZERO resource=$resource id=$id rc=$rc" >&2
+              return "$rc"
+            done
+            echo "UV_ROOT_DELETE_REQUEST_TIMEOUT resource=$resource id=$id rc=${rc:-42}" >&2
+            return 42
           }
           create_json_once() {
             local receipt_prefix="$1" expected_name="$2" rc
@@ -1178,12 +1196,20 @@ jobs:
           # to one proven recovery point across separate owner commands.
           backup_inventory="$(operation_backup_inventory "$cleanup_deadline")"
           superseded_ids="$(printf '%s' "$backup_inventory" | superseded_operation_backups)"
+          state_set superseded_backup_candidate_count 0
+          state_set superseded_backup_cleanup_status NOT_NEEDED
           if [[ -n "$superseded_ids" ]]; then
             readarray -t ids <<<"$superseded_ids"
+            state_set superseded_backup_candidate_count "${#ids[@]}"
+            if (( ${#ids[@]} > 20 )); then
+              state_set superseded_backup_cleanup_status CARDINALITY_EXCEEDED
+              exit 94
+            fi
             for id in "${ids[@]}"; do
               delete_resource_once backup "$id" || true
             done
             wait_all_absent backup 120 "${ids[@]}"
+            state_set superseded_backup_cleanup_status PROVEN_ABSENT
           fi
           echo 'superseded_backup_count=0' >> "$GITHUB_OUTPUT"
           state_set superseded_backup_count 0
@@ -1405,6 +1431,7 @@ jobs:
               '- failed-run backup cleanup: ' + code(value('failed_run_backup_cleanup_status', 'NOT_APPLICABLE')),
               '- failed-run backup IDs: ' + code(value('failed_run_backup_ids', 'none')),
               '- failed-run backup direct-GET states: ' + code(value('failed_run_backup_direct_get_states', 'not_listed')),
+              '- superseded backup cleanup: ' + code(value('superseded_backup_cleanup_status', 'NOT_RECORDED')) + '; candidates: ' + code(value('superseded_backup_candidate_count', '0')),
               '- backup selection status: ' + code(value('backup_selection_status', 'NOT_RECORDED')),
               '- backup selection failure rc: ' + code(value('backup_selection_failure_rc', 'none')),
               '- reusable backup candidate count: ' + code(value('backup_candidate_count', '0')),

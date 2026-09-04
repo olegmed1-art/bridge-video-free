@@ -116,7 +116,9 @@ def test_monotonic_budget_reserves_cleanup_mutation_receipt_and_runner_slack() -
     # resource/backup waits. This fits the executable 40m cleanup reserve.
     cleanup_worst_case_seconds = 8 * 30 + 8 * 20 + 600 + 7 * 120
     assert cleanup_worst_case_seconds == 1840
-    assert cleanup_worst_case_seconds < 16800 - 14400
+    conservative_with_superseded = cleanup_worst_case_seconds + 20 * 20 + 120
+    assert conservative_with_superseded == 2360
+    assert conservative_with_superseded < 16800 - 14400
     for exact in (
         'discover_named_id boot-volume "$stamp-restore" 30 "$cleanup_deadline"',
         'discover_named_id vcn "$stamp-vcn" 30 "$cleanup_deadline"',
@@ -127,8 +129,12 @@ def test_monotonic_budget_reserves_cleanup_mutation_receipt_and_runner_slack() -
     assert "if (( prior_count > 20 ))" in WORKFLOW
     assert 'wait_all_absent instance 600' in WORKFLOW
     assert WORKFLOW.count('wait_all_absent boot-volume 120') >= 1
-    assert 'bounded_wait_seconds 20 "$cleanup_deadline"' in WORKFLOW
-    assert 'timeout --signal=KILL "${delete_timeout}s" "${command[@]}"' in WORKFLOW
+    assert 'delete_total_seconds="$(bounded_wait_seconds 20 "$cleanup_deadline")"' in WORKFLOW
+    assert 'timeout --signal=KILL "${delete_request_seconds}s" "${command[@]}"' in WORKFLOW
+    assert 'if [[ "$rc" == 124 || "$rc" == 137 ]]' in WORKFLOW
+    assert 'if (( ${#ids[@]} > 20 ))' in WORKFLOW
+    assert 'superseded_backup_cleanup_status CARDINALITY_EXCEEDED' in WORKFLOW
+    assert "superseded backup cleanup:" in WORKFLOW
 
     helper_start = WORKFLOW.index("monotonic_now() { awk")
     helper_end = WORKFLOW.index("for value in OCI_USER", helper_start)
@@ -233,7 +239,7 @@ def test_paid_and_temporary_creates_capture_before_separate_waits() -> None:
     assert 'wait_oci_resource_ready instance "$drill_instance_id" RUNNING 1800' in block
     assert "at 240 minutes total" in WORKFLOW
     assert "current-attempt cleanup worst case is 1,840 seconds" in WORKFLOW
-    assert "40-minute cleanup" in WORKFLOW
+    assert "2,400-second cleanup" in WORKFLOW
     assert "15 minutes for runner setup/cancellation slack" in WORKFLOW
 
 
@@ -723,6 +729,55 @@ tenancy_id=tenancy; boot_id=boot; ad=ad; drill_vcn_id=vcn
         ids=" ".join(f"id-{index}" for index in range(21))
         cardinality = run(f'if wait_all_absent instance 2 {ids}; then rc=0; else rc=$?; fi; echo rc=$rc\n', "empty")
         assert "rc=94" in cardinality.stdout
+
+
+def test_delete_retries_only_request_timeouts_within_aggregate_cleanup_budget() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        tmp_path = Path(temp_dir)
+        start = WORKFLOW.index("delete_resource_once() {")
+        end = WORKFLOW.index("create_json_once()", start)
+        helper = textwrap.dedent(WORKFLOW[start:end])
+        fake_oci = tmp_path / "oci"
+        fake_oci.write_text(
+            """#!/usr/bin/env bash
+count_file="$RUNNER_TEMP/delete-$FAKE_MODE.count"
+count=0; [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+count=$((count + 1)); printf '%s\n' "$count" > "$count_file"
+case "$FAKE_MODE" in
+  timeout_then_success) (( count == 1 )) && exit 124; exit 0 ;;
+  killed_then_notfound) (( count == 1 )) && exit 137; echo '{"code":"NotAuthorizedOrNotFound","status":404}' >&2; exit 17 ;;
+  persistent_timeout) exit 124 ;;
+  auth) echo '{"code":"NotAuthenticated","status":401}' >&2; exit 17 ;;
+esac
+"""
+        )
+        fake_oci.chmod(0o755)
+        script = "set -e\n" + helper + r'''
+bounded_wait_seconds() { printf '2\n'; }
+cleanup_deadline=999999999
+if delete_resource_once boot-volume expected-id; then rc=0; else rc=$?; fi
+count="$(cat "$RUNNER_TEMP/delete-$FAKE_MODE.count")"
+printf 'rc=%s count=%s\n' "$rc" "$count"
+'''
+
+        def run(mode: str, timeout: int = 5) -> subprocess.CompletedProcess[str]:
+            env = os.environ | {
+                "RUNNER_TEMP": str(tmp_path),
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "FAKE_MODE": mode,
+            }
+            return subprocess.run(
+                ["bash", "-c", script], env=env, text=True, capture_output=True, timeout=timeout, check=True
+            )
+
+        assert "rc=0 count=2" in run("timeout_then_success").stdout
+        assert "rc=0 count=2" in run("killed_then_notfound").stdout
+        persistent = run("persistent_timeout")
+        assert "rc=42" in persistent.stdout
+        assert "UV_ROOT_DELETE_REQUEST_TIMEOUT" in persistent.stderr
+        auth = run("auth")
+        assert "rc=17 count=1" in auth.stdout
+        assert "UV_ROOT_DELETE_REQUEST_NONZERO" in auth.stderr
 
 
 def test_backup_wait_deadline_and_state_classification_are_adversarially_bounded() -> None:
