@@ -491,6 +491,80 @@ printf 'rc=%s elapsed=%s\n' "$rc" "$((SECONDS - started))"
         assert "rc=42" in slow.stdout and "elapsed=1" in slow.stdout
 
 
+def test_restored_volume_hydration_wait_is_identity_source_size_and_time_bound() -> None:
+    helper = WORKFLOW[
+        WORKFLOW.index("wait_restored_boot_volume_hydrated() {") :
+        WORKFLOW.index("wait_attached_vnic()", WORKFLOW.index("wait_restored_boot_volume_hydrated() {"))
+    ]
+    assert 'oci bv boot-volume get --boot-volume-id "$id"' in helper
+    assert 'd.get("id")==os.environ["EXPECTED_ID"]' in helper
+    assert 'source.get("id")==os.environ["EXPECTED_BACKUP_ID"]' in helper
+    assert 'd.get("size-in-gbs")==97' in helper
+    assert 'isinstance(hydrated,bool)' in helper
+    assert 'state_set restored_volume_hydration_status TIMEOUT' in helper
+    gate = WORKFLOW[
+        WORKFLOW.index("mark_phase wait_restored_boot_volume_available") :
+        WORKFLOW.index("runner_ip=", WORKFLOW.index("mark_phase wait_restored_boot_volume_available"))
+    ]
+    assert 'mark_phase wait_restored_boot_volume_hydrated' in gate
+    assert 'wait_restored_boot_volume_hydrated "$restored_id" "$stamp-restore" "$backup_id" 3600' in gate
+    receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
+    assert "restored volume hydration" in receipt
+    assert "restored_volume_hydration_failure_rc" in receipt
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        tmp_path = Path(temp_dir)
+        oci_start = WORKFLOW.index("oci_json_request() {")
+        oci_end = WORKFLOW.index("# END OCI_JSON_REQUEST_HELPER", oci_start)
+        helpers = textwrap.dedent(WORKFLOW[oci_start:oci_end] + helper)
+        fake_oci = tmp_path / "oci"
+        fake_oci.write_text(
+            """#!/usr/bin/env bash
+case "$FAKE_MODE" in
+  ready) hydrated=true; source=backup; size=97; state=AVAILABLE ;;
+  waiting) hydrated=false; source=backup; size=97; state=AVAILABLE ;;
+  wrong_source) hydrated=true; source=other; size=97; state=AVAILABLE ;;
+  wrong_size) hydrated=true; source=backup; size=96; state=AVAILABLE ;;
+  terminal) hydrated=false; source=backup; size=97; state=FAULTY ;;
+esac
+printf '{"data":{"id":"restored","display-name":"restore-name","compartment-id":"tenancy","availability-domain":"ad","size-in-gbs":%s,"source-details":{"type":"bootVolumeBackup","id":"%s"},"lifecycle-state":"%s","is-hydrated":%s}}\n' "$size" "$source" "$state" "$hydrated"
+"""
+        )
+        fake_oci.chmod(0o755)
+        script = "set -e\n" + helpers + r'''
+state_set() { printf 'state:%s=%s\n' "$1" "$2" >&2; }
+tenancy_id=tenancy
+ad=ad
+started=$SECONDS
+if wait_restored_boot_volume_hydrated restored restore-name backup "$MAX_SECONDS"; then rc=0; else rc=$?; fi
+printf 'rc=%s elapsed=%s\n' "$rc" "$((SECONDS - started))"
+'''
+
+        def run(mode: str, max_seconds: int = 2) -> subprocess.CompletedProcess[str]:
+            env = os.environ | {
+                "RUNNER_TEMP": str(tmp_path),
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "FAKE_MODE": mode,
+                "MAX_SECONDS": str(max_seconds),
+                "OCI_JSON_RETRY_DELAY_SECONDS": "0",
+            }
+            return subprocess.run(
+                ["bash", "-c", script], env=env, text=True, capture_output=True, timeout=max_seconds + 3, check=True
+            )
+
+        assert "rc=0" in run("ready").stdout
+        for mode in ("wrong_source", "wrong_size"):
+            result = run(mode)
+            assert "rc=45" in result.stdout
+            assert "state:restored_volume_hydration_status=INVALID_GET_PAYLOAD" in result.stderr
+        terminal = run("terminal")
+        assert "rc=44" in terminal.stdout
+        assert "state:restored_volume_hydration_status=TERMINAL_FAULTY" in terminal.stderr
+        waiting = run("waiting", 1)
+        assert "rc=42 elapsed=1" in waiting.stdout
+        assert "state:restored_volume_hydration_status=TIMEOUT" in waiting.stderr
+
+
 def test_discovery_and_cleanup_fail_closed_on_ambiguous_or_unproven_absence() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         tmp_path = Path(temp_dir)

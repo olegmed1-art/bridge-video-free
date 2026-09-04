@@ -530,6 +530,60 @@ jobs:
             state_set "${receipt_prefix}_failure_rc" 42
             return 42
           }
+          wait_restored_boot_volume_hydrated() {
+            local id="$1" expected_name="$2" expected_backup_id="$3" max_seconds="$4"
+            local deadline remaining request_timeout sleep_seconds token rc
+            local -r per_request_max_seconds=30
+            state_set restored_volume_hydration_status WAITING
+            state_set restored_volume_hydration_last_state none
+            state_set restored_volume_hydration_failure_rc none
+            deadline=$((SECONDS + max_seconds))
+            while (( SECONDS < deadline )); do
+              remaining=$((deadline - SECONDS))
+              request_timeout=$((remaining < per_request_max_seconds ? remaining : per_request_max_seconds))
+              (( request_timeout > 0 )) || break
+              if OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
+                  oci_json_request oci bv boot-volume get --boot-volume-id "$id"; then
+                if ! token="$(EXPECTED_ID="$id" EXPECTED_DISPLAY_NAME="$expected_name" EXPECTED_BACKUP_ID="$expected_backup_id" TENANCY_ID="$tenancy_id" AD="$ad" python -c 'import json,os,sys; p=json.load(sys.stdin); d=p.get("data"); assert isinstance(d,dict) and d.get("id")==os.environ["EXPECTED_ID"] and d.get("display-name")==os.environ["EXPECTED_DISPLAY_NAME"] and d.get("compartment-id")==os.environ["TENANCY_ID"] and d.get("availability-domain")==os.environ["AD"] and d.get("size-in-gbs")==97; source=d.get("source-details"); assert isinstance(source,dict) and source.get("type")=="bootVolumeBackup" and source.get("id")==os.environ["EXPECTED_BACKUP_ID"]; state=d.get("lifecycle-state"); allowed={"AVAILABLE","PROVISIONING","RESTORING","TERMINATING","TERMINATED","FAULTY"}; assert isinstance(state,str) and state in allowed; hydrated=d.get("is-hydrated"); assert isinstance(hydrated,bool); print("HYDRATED" if state=="AVAILABLE" and hydrated else "WAITING" if state in {"AVAILABLE","PROVISIONING","RESTORING"} else "TERMINAL_"+state)' <<<"$OCI_JSON_OUTPUT")"; then
+                  state_set restored_volume_hydration_status INVALID_GET_PAYLOAD
+                  state_set restored_volume_hydration_last_state INVALID
+                  state_set restored_volume_hydration_failure_rc 45
+                  return 45
+                fi
+                state_set restored_volume_hydration_last_state "$token"
+                if [[ "$token" == HYDRATED ]]; then
+                  state_set restored_volume_hydration_status READY
+                  return 0
+                fi
+                if [[ "$token" == TERMINAL_* ]]; then
+                  state_set restored_volume_hydration_status "$token"
+                  state_set restored_volume_hydration_failure_rc 44
+                  return 44
+                fi
+              else
+                rc=$?
+                if [[ "$rc" == 124 || "$rc" == 137 ]]; then
+                  state_set restored_volume_hydration_status GET_REQUEST_TIMEOUT
+                  if (( SECONDS >= deadline )); then
+                    state_set restored_volume_hydration_status TIMEOUT
+                    state_set restored_volume_hydration_failure_rc 42
+                    return 42
+                  fi
+                  continue
+                fi
+                state_set restored_volume_hydration_status GET_FAILED
+                state_set restored_volume_hydration_failure_rc "$rc"
+                return "$rc"
+              fi
+              remaining=$((deadline - SECONDS))
+              (( remaining > 0 )) || break
+              sleep_seconds=$((remaining < 5 ? remaining : 5))
+              sleep "$sleep_seconds"
+            done
+            state_set restored_volume_hydration_status TIMEOUT
+            state_set restored_volume_hydration_failure_rc 42
+            return 42
+          }
           wait_attached_vnic() {
             local source_instance_id="$1" max_seconds="${2:-300}" deadline remaining request_timeout sleep_seconds token rc
             ATTACHED_VNIC_ID=""
@@ -949,7 +1003,8 @@ jobs:
           state_set temporary_restored_volume_id "$restored_id"
           mark_phase wait_restored_boot_volume_available
           if wait_oci_resource_ready boot-volume "$restored_id" AVAILABLE 3600 restored_volume_wait "$stamp-restore"; then :; else resource_wait_rc=$?; exit "$resource_wait_rc"; fi
-          RESTORED_VOLUME="$OCI_JSON_OUTPUT" EXPECTED_BACKUP_ID="$backup_id" python -c 'import json,os; d=json.loads(os.environ["RESTORED_VOLUME"])["data"]; source=d.get("source-details"); assert isinstance(source,dict) and source.get("type")=="bootVolumeBackup" and source.get("id")==os.environ["EXPECTED_BACKUP_ID"] and d.get("size-in-gbs")==97 and d.get("is-hydrated") is True'
+          mark_phase wait_restored_boot_volume_hydrated
+          if wait_restored_boot_volume_hydrated "$restored_id" "$stamp-restore" "$backup_id" 3600; then :; else hydration_wait_rc=$?; exit "$hydration_wait_rc"; fi
           # Never boot the restored production image in a production network.  The
           # temporary VCN permits only stateful inbound SSH from this runner and
           # has no egress rules, NAT gateway, or service gateway.  Consequently
@@ -1262,6 +1317,7 @@ jobs:
               '- isolated subnet create request: ' + code(value('subnet_create_status', 'NOT_RECORDED')) + '; rc: ' + code(value('subnet_create_failure_rc', 'none')),
               '- isolated instance create request: ' + code(value('instance_create_status', 'NOT_RECORDED')) + '; rc: ' + code(value('instance_create_failure_rc', 'none')),
               '- restored volume readiness: ' + code(value('restored_volume_wait_status', 'NOT_RECORDED')) + '; state: ' + code(value('restored_volume_wait_last_state', 'none')) + '; rc: ' + code(value('restored_volume_wait_failure_rc', 'none')),
+              '- restored volume hydration: ' + code(value('restored_volume_hydration_status', 'NOT_RECORDED')) + '; state: ' + code(value('restored_volume_hydration_last_state', 'none')) + '; rc: ' + code(value('restored_volume_hydration_failure_rc', 'none')),
               '- isolated VCN readiness: ' + code(value('vcn_wait_status', 'NOT_RECORDED')) + '; state: ' + code(value('vcn_wait_last_state', 'none')) + '; rc: ' + code(value('vcn_wait_failure_rc', 'none')),
               '- isolated internet-gateway readiness: ' + code(value('internet_gateway_wait_status', 'NOT_RECORDED')) + '; state: ' + code(value('internet_gateway_wait_last_state', 'none')) + '; rc: ' + code(value('internet_gateway_wait_failure_rc', 'none')),
               '- isolated route-table readiness: ' + code(value('route_table_wait_status', 'NOT_RECORDED')) + '; state: ' + code(value('route_table_wait_last_state', 'none')) + '; rc: ' + code(value('route_table_wait_failure_rc', 'none')),
