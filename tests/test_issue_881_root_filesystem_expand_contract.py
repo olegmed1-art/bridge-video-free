@@ -87,6 +87,13 @@ def test_fresh_full_backup_and_isolated_boot_acceptance_gate_mutation() -> None:
     assert "assert d['display-name']=='bridge-school-dds3-frankfurt'" in WORKFLOW
     assert "assert d['lifecycle-state']=='RUNNING'" in WORKFLOW
     assert "assert len(xs)==1; print(xs[0])" in WORKFLOW
+    assert '[[ "$source_public_ip" == "$ORACLE_HOST" ]]' in WORKFLOW
+    assert "network vcn create" in WORKFLOW
+    assert "network security-list create" in WORKFLOW
+    assert "--egress-security-rules '[]'" in WORKFLOW
+    assert '\\"sourceType\\":\\"CIDR_BLOCK\\"' in WORKFLOW
+    assert "network subnet delete" in WORKFLOW
+    assert "isolated_no_egress_network=true" in WORKFLOW
 
 
 def test_issue_881_retry_runs_only_after_guarded_expansion() -> None:
@@ -110,3 +117,6 @@ def test_last_second_gate_revalidates_oci_before_ssh_mutation() -> None:
     assert "assert d['lifecycle-state']=='RUNNING'" in block
     assert "lifecycle-state']=='AVAILABLE'" in block
     assert "total_seconds() < 86400" in block
+    assert "vnic-attachment list" in block
+    assert "network vnic get" in block
+    assert '[[ "$source_public_ip" == "$ORACLE_HOST" ]]' in block
