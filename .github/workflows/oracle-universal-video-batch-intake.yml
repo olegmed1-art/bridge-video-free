@@ -135,7 +135,35 @@ jobs:
         run: |
           set -euo pipefail
           known="$RUNNER_TEMP/known_hosts"
-          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          recover_instance_after_scan_loss() {
+            local state
+            state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
+            case "$state" in
+              RUNNING) sleep 10 ;;
+              STARTING)
+                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+              STOPPING)
+                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state STOPPED --max-wait-seconds 600 >/dev/null
+                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+              STOPPED)
+                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+              *) return 1 ;;
+            esac
+          }
+          scan_rc=3
+          for attempt in 1 2 3; do
+            rm -f "$known"
+            set +e
+            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+            scan_rc=$?
+            set -e
+            (( scan_rc == 0 )) && break
+            # Only an unavailable host (exit 3) is lifecycle-retryable. A
+            # fingerprint or contract failure remains immediately fail-closed.
+            (( scan_rc == 3 && attempt < 3 )) || exit "$scan_rc"
+            recover_instance_after_scan_loss || exit "$scan_rc"
+          done
+          (( scan_rc == 0 ))
           selected=''
           for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
             if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
