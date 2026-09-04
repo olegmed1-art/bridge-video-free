@@ -33,6 +33,9 @@ jobs:
           grep -F 'list_instances' "$f"
           grep -F 'list_boot_volumes' "$f"
           grep -F 'list_volumes' "$f"
+          grep -F "access_level='ANY'" "$f"
+          grep -F 'list_region_subscriptions' "$f"
+          grep -F 'OCI_STORAGE_INVENTORY_FAILED' "$f"
 
   inventory:
     if: ${{ github.event_name == 'push' }}
@@ -85,71 +88,106 @@ jobs:
           import os
           import oci
 
-          config=oci.config.from_file(os.environ['OCI_CONFIG_FILE'])
-          tenancy=config['tenancy']
-          identity=oci.identity.IdentityClient(config)
-          compute=oci.core.ComputeClient(config)
-          block=oci.core.BlockstorageClient(config)
-          paginate=oci.pagination.list_call_get_all_results
+          operation='initialize'
+          try:
+              operation='load_config'
+              base_config=oci.config.from_file(os.environ['OCI_CONFIG_FILE'])
+              tenancy=base_config['tenancy']
+              identity=oci.identity.IdentityClient(base_config)
+              paginate=oci.pagination.list_call_get_all_results
 
-          compartments=[tenancy]
-          for c in paginate(
-              identity.list_compartments,
-              tenancy,
-              compartment_id_in_subtree=True,
-              access_level='ACCESSIBLE',
-          ).data:
-              if c.lifecycle_state == 'ACTIVE':
-                  compartments.append(c.id)
-          compartments=list(dict.fromkeys(compartments))
-          ads=[x.name for x in identity.list_availability_domains(tenancy).data]
+              operation='list_region_subscriptions'
+              subscriptions=identity.list_region_subscriptions(tenancy).data
+              regions=sorted({
+                  x.region_name for x in subscriptions
+                  if str(x.status).upper() in {'READY','ACTIVE'}
+              })
+              if not regions:
+                  raise RuntimeError('no subscribed regions')
 
-          instances=[]
-          boot_volumes={}
-          block_volumes={}
-          for compartment_id in compartments:
-              for inst in paginate(compute.list_instances, compartment_id).data:
-                  if inst.lifecycle_state == 'TERMINATED':
-                      continue
-                  attached=[]
-                  for a in paginate(
-                      compute.list_boot_volume_attachments,
-                      availability_domain=inst.availability_domain,
-                      compartment_id=compartment_id,
-                      instance_id=inst.id,
-                  ).data:
-                      if a.lifecycle_state in {'ATTACHED','ATTACHING'}:
-                          attached.append(a.boot_volume_id)
-                  boot_gb='unknown'
-                  if len(set(attached)) == 1:
-                      boot=block.get_boot_volume(attached[0]).data
-                      boot_volumes[boot.id]=boot
-                      boot_gb=boot.size_in_gbs
-                  instances.append((inst.lifecycle_state, inst.shape, boot_gb))
-              for ad in ads:
-                  for vol in paginate(
-                      block.list_boot_volumes,
-                      availability_domain=ad,
-                      compartment_id=compartment_id,
-                  ).data:
-                      if vol.lifecycle_state not in {'TERMINATED','TERMINATING'}:
-                          boot_volumes[vol.id]=vol
-              for vol in paginate(block.list_volumes, compartment_id).data:
-                  if vol.lifecycle_state not in {'TERMINATED','TERMINATING'}:
-                      block_volumes[vol.id]=vol
+              operation='list_all_compartments'
+              compartments=[tenancy]
+              for c in paginate(
+                  identity.list_compartments,
+                  tenancy,
+                  compartment_id_in_subtree=True,
+                  access_level='ANY',
+              ).data:
+                  if c.lifecycle_state == 'ACTIVE':
+                      compartments.append(c.id)
+              compartments=list(dict.fromkeys(compartments))
 
-          boot_total=sum(int(v.size_in_gbs or 0) for v in boot_volumes.values())
-          block_total=sum(int(v.size_in_gbs or 0) for v in block_volumes.values())
-          combined=boot_total+block_total
-          print('OCI_STORAGE_INVENTORY_PASS')
-          print(f'nonterminated_instances={len(instances)}')
-          for n,(state,shape,boot_gb) in enumerate(sorted(instances),1):
-              print(f'instance_{n}_state={state}')
-              print(f'instance_{n}_shape={shape}')
-              print(f'instance_{n}_boot_volume_gb={boot_gb}')
-          print(f'allocated_boot_volume_gb={boot_total}')
-          print(f'allocated_block_volume_gb={block_total}')
-          print(f'allocated_combined_volume_gb={combined}')
-          print(f'nominal_headroom_vs_200gb={200-combined}')
-          print('mutation_performed=false')
+              instances=[]
+              boot_volumes={}
+              block_volumes={}
+              for region in regions:
+                  region_config=dict(base_config)
+                  region_config['region']=region
+                  regional_identity=oci.identity.IdentityClient(region_config)
+                  compute=oci.core.ComputeClient(region_config)
+                  block=oci.core.BlockstorageClient(region_config)
+                  operation='list_availability_domains'
+                  ads=[x.name for x in regional_identity.list_availability_domains(tenancy).data]
+                  for compartment_id in compartments:
+                      operation='list_instances'
+                      for inst in paginate(compute.list_instances, compartment_id).data:
+                          if inst.lifecycle_state == 'TERMINATED':
+                              continue
+                          attached=[]
+                          operation='list_boot_volume_attachments'
+                          for a in paginate(
+                              compute.list_boot_volume_attachments,
+                              availability_domain=inst.availability_domain,
+                              compartment_id=compartment_id,
+                              instance_id=inst.id,
+                          ).data:
+                              if a.lifecycle_state in {'ATTACHED','ATTACHING'}:
+                                  attached.append(a.boot_volume_id)
+                          boot_gb='unknown'
+                          if len(set(attached)) == 1:
+                              operation='get_attached_boot_volume'
+                              boot=block.get_boot_volume(attached[0]).data
+                              boot_volumes[boot.id]=boot
+                              boot_gb=boot.size_in_gbs
+                          instances.append((region,inst.lifecycle_state,inst.shape,boot_gb))
+                      for ad in ads:
+                          operation='list_boot_volumes'
+                          for vol in paginate(
+                              block.list_boot_volumes,
+                              availability_domain=ad,
+                              compartment_id=compartment_id,
+                          ).data:
+                              if vol.lifecycle_state not in {'TERMINATED','TERMINATING'}:
+                                  boot_volumes[vol.id]=vol
+                      operation='list_block_volumes'
+                      for vol in paginate(block.list_volumes, compartment_id).data:
+                          if vol.lifecycle_state not in {'TERMINATED','TERMINATING'}:
+                              block_volumes[vol.id]=vol
+
+              boot_total=sum(int(v.size_in_gbs or 0) for v in boot_volumes.values())
+              block_total=sum(int(v.size_in_gbs or 0) for v in block_volumes.values())
+              combined=boot_total+block_total
+              print('OCI_STORAGE_INVENTORY_PASS')
+              print(f'subscribed_regions={len(regions)}')
+              print(f'queried_compartments={len(compartments)}')
+              print(f'nonterminated_instances={len(instances)}')
+              for n,(region,state,shape,boot_gb) in enumerate(sorted(instances),1):
+                  print(f'instance_{n}_region={region}')
+                  print(f'instance_{n}_state={state}')
+                  print(f'instance_{n}_shape={shape}')
+                  print(f'instance_{n}_boot_volume_gb={boot_gb}')
+              print(f'allocated_boot_volume_gb={boot_total}')
+              print(f'allocated_block_volume_gb={block_total}')
+              print(f'allocated_combined_volume_gb={combined}')
+              print(f'nominal_headroom_vs_200gb={200-combined}')
+              print('mutation_performed=false')
+          except oci.exceptions.ServiceError as exc:
+              status=str(exc.status) if exc.status is not None else 'unknown'
+              code=str(exc.code or 'unknown')
+              safe_code=''.join(ch for ch in code if ch.isalnum() or ch in '._-')[:80] or 'unknown'
+              print(f'OCI_STORAGE_INVENTORY_FAILED operation={operation} status={status} code={safe_code}')
+              raise SystemExit(1)
+          except Exception:
+              print(f'OCI_STORAGE_INVENTORY_FAILED operation={operation} status=local code=BOUNDED_FAILURE')
+              raise SystemExit(1)
           PY
