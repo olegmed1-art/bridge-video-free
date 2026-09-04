@@ -100,7 +100,7 @@ _LEADING_LENGTH_DESCRIPTION = re.compile(
     re.IGNORECASE,
 )
 _LEADING_NUMERIC_RANGE = re.compile(
-    r"^\s*(?:[:,;=\-]\s*)?(?:10|[2-9])\s*"
+    r"^\s*(?:(?:was|is)\s+|[:,;=\-]\s*)?(?:10|[2-9])\s*"
     r"(?:(?:[-–—]|to)\s*\d{1,2}|\+)(?:$|[\s,.;])",
     re.IGNORECASE,
 )

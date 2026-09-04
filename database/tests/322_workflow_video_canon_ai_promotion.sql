@@ -153,9 +153,13 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North is currently holding Q"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"North is currently holding: Q"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"partner was holding AKQJ"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"partner was apparently still holding AKQJ"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"partner''s still holding, AKQJ"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s holding Q"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
@@ -228,6 +232,12 @@ BEGIN
        '{"notes":"North''s still holding 10-12"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s hand was 10-12 points"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North''s hand was 10-12"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North''s hand is 10+"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"N: was 10 to 12"}'::jsonb
      ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_HIDDEN_VALUE_FIREWALL_INVALID';
   END IF;
@@ -813,6 +823,19 @@ BEGIN
   v_restore:=bidding.restore_ai_verified_video_canon(
     v_promotion,v_good_bundle_hash,repeat('d',64)
   );
+  INSERT INTO bidding.rule_test_run(
+    school_id,rule_test_id,result,result_details,method_version
+  ) VALUES (
+    v_school,v_test_id,'pass','{"phase":"post-restore"}','post-restore-regression-v1'
+  );
+  IF NOT EXISTS (
+       SELECT 1 FROM bidding.rule_test_run
+        WHERE rule_test_id=v_test_id
+          AND method_version='post-restore-regression-v1'
+          AND result='pass'
+     ) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_RESTORED_ACTIVE_RULE_TEST_RUN_BLOCKED';
+  END IF;
   v_repeat:=bidding.restore_ai_verified_video_canon(
     v_promotion,v_good_bundle_hash,repeat('d',64)
   );

@@ -364,7 +364,7 @@ SELECT EXISTS (
          SELECT 1
            FROM regexp_matches(
              w.value#>>'{}',
-             E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])(?:(?:[[:space:]]+(?:(?:held|holds?|has|had)|(?:is|was)[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding))|(?:[''’]s[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding))[[:space:]]+([^;]*)',
+             E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])(?:(?:[[:space:]]+(?:(?:held|holds?|has|had)|(?:is|was)[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding))|(?:[''’]s[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding))(?:[[:space:]]+|[[:space:]]*[:,;=\\-][[:space:]]*)([^;]*)',
              'gi'
            ) AS matched(parts)
           WHERE matched.parts[1] ~
@@ -938,7 +938,8 @@ BEGIN
           ON ca.knowledge_version_id=r.knowledge_version_id
         JOIN bidding.video_canon_ai_promotion_receipt p
           ON p.superseded_canon_activation_id=ca.canon_activation_id
-       WHERE rt.rule_test_id=v_old_test_id OR rt.rule_test_id=v_new_test_id
+       WHERE ca.status='superseded'
+         AND (rt.rule_test_id=v_old_test_id OR rt.rule_test_id=v_new_test_id)
     ) THEN
         RAISE EXCEPTION 'VIDEO_CANON_SUPERSEDED_RULE_TEST_RUN_IMMUTABLE'
           USING ERRCODE='23514';

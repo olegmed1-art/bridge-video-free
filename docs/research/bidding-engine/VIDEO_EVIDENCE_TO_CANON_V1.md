@@ -61,7 +61,11 @@ before any activation is written. A currently active promoted rule may continue
 to receive append-only regression runs. At the instant it becomes a superseded
 rollback predecessor, its run stream is frozen together with its rule, tests,
 version, item and source links; later inserts, updates or deletes are rejected
-so the receipt-bound rollback snapshot cannot be invalidated. Source
+so the receipt-bound rollback snapshot cannot be invalidated. A successful
+receipt-bound restore changes that activation back to `active` and reopens its
+append-only regression stream; if it is superseded again, the stream freezes
+again. Promotion and restore hold the rule-test tables through these state
+transitions, so no concurrent run can cross the boundary unsealed. Source
 authorization can be revoked immediately through a guarded lifecycle
 transition. The row trigger captures its effective
 retirement time with a wall-clock reading after the policy row lock is held and
@@ -154,11 +158,14 @@ AKQJ`, `North is holding Q`, `partner was holding AKQJ`, `North's
 holding Q` and `N's holding Q` are disclosures. Up to two bounded modifiers
 between the auxiliary and `holding` are also recognized, so `North is
 currently holding Q`, `partner was apparently still holding AKQJ` and
-`partner's still holding AKQJ` cannot bypass the firewall. `North held 5
-hearts`, `North has 10 hearts`, `North held 10 points`, point ranges such
-as `North has 10-12`, `North has 10 to 12` and `North has 10+`, with or
-without a following count noun, and ordinary prose such as `North held the
-view...` are not hidden-card disclosures. Ordinary quantitative bridge prose such as `5 cards`,
+`partner's still holding AKQJ` cannot bypass the firewall. Whitespace and
+bounded punctuation separators are equivalent: `holding: Q` and `holding,
+AKQJ` remain disclosures in both Python staging and PostgreSQL promotion.
+`North held 5 hearts`, `North has 10 hearts`, `North held 10 points`,
+point ranges such as `North has 10-12`, `North has 10 to 12`, `North has
+10+` and `North's hand was 10-12`, with or without a following count noun,
+and ordinary prose such as `North held the view...` are not hidden-card
+disclosures. Ordinary quantitative bridge prose such as `5 cards`,
 `5 hearts`, `10 cards`, `3
 trumps`, `7 losers`, points, controls, winners, stoppers and their Russian equivalents
 remains allowed when it is a length/count description rather than a disclosed
