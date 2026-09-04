@@ -103,6 +103,22 @@ def test_effective_period_is_parseable_timezone_aware_and_ordered(
         build_ai_canon_promotion(candidate, bundle)
 
 
+def test_effective_period_is_sealed_in_postgresql_compatible_canonical_form():
+    candidate = _candidate()
+    bundle = _bundle(candidate)
+    bundle["effective_period"] = {
+        "valid_from": "2026-09-03Q00:00:00Z",
+        "valid_to": "2026-09-04 00:00:00+00:00",
+    }
+    period = build_ai_canon_promotion(candidate, bundle)["verification_bundle"][
+        "effective_period"
+    ]
+    assert period == {
+        "valid_from": "2026-09-03T00:00:00+00:00",
+        "valid_to": "2026-09-04T00:00:00+00:00",
+    }
+
+
 @pytest.mark.parametrize("mutation, match", [
     (lambda b: b["checks"].pop(), "check set mismatch"),
     (lambda b: b["checks"][0].update(result="FAIL"), "did not pass"),

@@ -91,7 +91,7 @@ def _timestamp(value: Any, label: str) -> tuple[str, datetime]:
         _fail(f"invalid {label} timestamp")
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         _fail(f"{label} timestamp must include a UTC offset")
-    return raw, parsed
+    return parsed.isoformat(), parsed
 
 
 def build_ai_canon_promotion(
