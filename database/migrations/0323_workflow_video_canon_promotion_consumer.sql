@@ -460,12 +460,14 @@ BEGIN
     v_candidate.school_id,p_analysis_candidate_id,p_rule_id,
     v_bundle.video_canon_ai_verification_bundle_id,v_candidate.payload_hash,
     p_verification_bundle_sha256,p_assurance_set_sha256,
-    'video-canon:'||v_candidate.payload_hash||':'||p_verification_bundle_sha256||':'||p_assurance_set_sha256
+    'video-canon:'||v_candidate.payload_hash||':'||p_verification_bundle_sha256||':'||
+      p_rule_id::text||':'||p_assurance_set_sha256
   ) ON CONFLICT (idempotency_key) DO NOTHING
     RETURNING video_canon_promotion_job_id INTO v_job_id;
   IF v_job_id IS NULL THEN
     SELECT * INTO v_existing FROM bidding.video_canon_promotion_job
-     WHERE idempotency_key='video-canon:'||v_candidate.payload_hash||':'||p_verification_bundle_sha256||':'||p_assurance_set_sha256;
+     WHERE idempotency_key='video-canon:'||v_candidate.payload_hash||':'||
+       p_verification_bundle_sha256||':'||p_rule_id::text||':'||p_assurance_set_sha256;
     IF NOT FOUND OR v_existing.rule_id<>p_rule_id
        OR v_existing.verification_bundle_sha256<>p_verification_bundle_sha256
        OR v_existing.assurance_set_sha256<>p_assurance_set_sha256 THEN

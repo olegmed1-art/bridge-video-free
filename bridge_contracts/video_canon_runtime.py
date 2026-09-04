@@ -29,7 +29,7 @@ from bridge_contracts.video_canon_evidence import (
 
 
 EXTRACTOR_SCHEMA = "verified-video-canon-input-v1"
-VERDICT_SCHEMA = "video-canon-assurance-verdict-v1"
+VERDICT_SCHEMA = "video-canon-assurance-verdict-v2"
 DELIVERY_SCHEMA = "video-canon-promotion-delivery-v1"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _TERMINAL_STATUS = "VIDEO_ANALYSIS_VERIFIED"
@@ -280,12 +280,21 @@ def verify_canon_candidate(
         _fail("candidate changed before verification")
     candidate_profile = _text(payload.get("system_profile"), "candidate system profile")
     candidate_level = _text(payload.get("learner_level"), "candidate learner level")
+    # Seal the complete bundle before accepting assurance.  Candidate identity
+    # alone is insufficient because period, rollback and check evidence may
+    # change while the candidate payload remains byte-for-byte identical.
+    promotion = build_ai_canon_promotion(candidate, verification_bundle)
+    bundle_hash = _sha(
+        promotion.get("verification_bundle_sha256"),
+        "verification bundle hash",
+    )
     if not isinstance(assurance_verdicts, Sequence) or isinstance(assurance_verdicts, (str, bytes)):
         _fail("assurance verdicts must be a sequence")
     normalized: dict[str, dict[str, Any]] = {}
     for raw in assurance_verdicts:
         fields = {
-            "schema", "candidate_payload_hash", "assurance_level", "verdict",
+            "schema", "candidate_payload_hash", "verification_bundle_sha256",
+            "assurance_level", "verdict",
             "verifier_family", "verifier_version", "execution_principal",
             "evidence_sha256", "canon_snapshot_sha256", "system_profile",
             "learner_level", "provenance_verified", "hidden_information_clear",
@@ -300,6 +309,11 @@ def verify_canon_candidate(
             _fail("exactly one I2 and one I3 verdict required")
         if _sha(raw.get("candidate_payload_hash"), "verdict candidate hash") != candidate_hash:
             _fail("verdict belongs to another candidate")
+        if _sha(
+            raw.get("verification_bundle_sha256"),
+            "verdict verification bundle hash",
+        ) != bundle_hash:
+            _fail("verdict belongs to another verification bundle")
         verdict = raw.get("verdict")
         if verdict not in _VERDICT_STATUSES:
             _fail("invalid assurance verdict")
@@ -337,12 +351,11 @@ def verify_canon_candidate(
             return _verification_stop(candidate_hash, "PROFILE_AMBIGUITY", row["assurance_level"])
     if verification_bundle.get("canon_snapshot_sha256") != i2["canon_snapshot_sha256"]:
         _fail("verification bundle uses a different Canon snapshot")
-    promotion = build_ai_canon_promotion(candidate, verification_bundle)
     return {
         "schema": "video-canon-verification-result-v1",
         "status": "VERIFIED_I2_I3",
         "candidate_payload_hash": candidate_hash,
-        "verification_bundle_sha256": promotion["verification_bundle_sha256"],
+        "verification_bundle_sha256": bundle_hash,
         "assurance_verdicts": [i2, i3],
         "assurance_verdicts_sha256": _digest([i2, i3]),
         "promotion": promotion,
@@ -385,17 +398,28 @@ def build_promotion_delivery(
     token = fencing_token
     if isinstance(token, bool) or not isinstance(token, int) or token < 1:
         _fail("invalid fencing token")
+    rule_uuid = _uuid(rule_id, "rule_id")
+    assurance_hash = _sha(
+        verified.get("assurance_verdicts_sha256"),
+        "assurance verdicts hash",
+    )
+    verdicts = verified.get("assurance_verdicts")
+    if not isinstance(verdicts, list) or _digest(verdicts) != assurance_hash:
+        _fail("assurance verdicts changed before delivery")
     result = {
         "schema": DELIVERY_SCHEMA,
         "delivery_id": _uuid(delivery_id, "delivery_id"),
-        "rule_id": _uuid(rule_id, "rule_id"),
+        "rule_id": rule_uuid,
         "candidate_payload_hash": candidate_hash,
         "verification_bundle_sha256": bundle_hash,
-        "assurance_verdicts_sha256": _sha(verified.get("assurance_verdicts_sha256"), "assurance verdicts hash"),
+        "assurance_verdicts_sha256": assurance_hash,
         "lease_owner": _text(lease_owner, "lease_owner"),
         "lease_token": _uuid(lease_token, "lease_token"),
         "fencing_token": token,
-        "idempotency_key": f"video-canon-delivery:{candidate_hash}:{bundle_hash}",
+        "idempotency_key": (
+            f"video-canon-delivery:{candidate_hash}:{bundle_hash}:"
+            f"{rule_uuid}:{assurance_hash}"
+        ),
         "operation": "ATOMIC_PROMOTION",
         "post_write_integrity_required": True,
         "rollback_on_any_error": True,

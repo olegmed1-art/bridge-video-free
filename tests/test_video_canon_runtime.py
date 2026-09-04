@@ -5,6 +5,7 @@ import uuid
 
 import pytest
 
+from bridge_contracts.video_canon_ai_promotion import build_ai_canon_promotion
 from bridge_contracts.video_canon_runtime import (
     VideoCanonRuntimeError,
     build_promotion_delivery,
@@ -51,11 +52,13 @@ def _video_result() -> dict:
     }
 
 
-def _verdict(candidate: dict, level: str) -> dict:
+def _verdict(candidate: dict, level: str, bundle: dict | None = None) -> dict:
     suffix = level.casefold()
+    sealed = build_ai_canon_promotion(candidate, bundle or _bundle(candidate))
     return {
-        "schema": "video-canon-assurance-verdict-v1",
+        "schema": "video-canon-assurance-verdict-v2",
         "candidate_payload_hash": candidate["payload_hash"],
+        "verification_bundle_sha256": sealed["verification_bundle_sha256"],
         "assurance_level": level,
         "verdict": "VERIFIED_FOR_PROMOTION",
         "verifier_family": f"independent-{suffix}",
@@ -157,6 +160,19 @@ def test_verification_fails_closed_on_missing_independence_or_changed_identity(m
         verify_canon_candidate(candidate, _bundle(candidate), verdicts)
 
 
+def test_assurance_verdicts_are_bound_to_the_exact_sealed_bundle():
+    candidate = extract_canon_candidates(_video_result())["candidates"][0]
+    original = _bundle(candidate)
+    verdicts = [
+        _verdict(candidate, "I2", original),
+        _verdict(candidate, "I3", original),
+    ]
+    changed = deepcopy(original)
+    changed["effective_period"]["valid_to"] = "2026-09-05T00:00:00Z"
+    with pytest.raises(VideoCanonRuntimeError, match="another verification bundle"):
+        verify_canon_candidate(candidate, changed, verdicts)
+
+
 @pytest.mark.parametrize("status", [
     "REJECTED", "NEEDS_EVIDENCE", "CANON_CONFLICT", "PROFILE_AMBIGUITY",
 ])
@@ -186,3 +202,26 @@ def test_delivery_rejects_stale_fencing_token_and_mutated_verification():
             changed, delivery_id=uuid.uuid4(), rule_id=uuid.uuid4(),
             lease_owner="worker", lease_token=uuid.uuid4(), fencing_token=1,
         )
+
+
+def test_delivery_idempotency_binds_rule_and_assurance_identity():
+    candidate = extract_canon_candidates(_video_result())["candidates"][0]
+    verified = verify_canon_candidate(
+        candidate, _bundle(candidate), [_verdict(candidate, "I2"), _verdict(candidate, "I3")]
+    )
+    common = {
+        "delivery_id": uuid.uuid4(),
+        "lease_owner": "worker",
+        "lease_token": uuid.uuid4(),
+        "fencing_token": 1,
+    }
+    first = build_promotion_delivery(verified, rule_id=uuid.uuid4(), **common)
+    second = build_promotion_delivery(verified, rule_id=uuid.uuid4(), **common)
+    assert first["idempotency_key"] != second["idempotency_key"]
+    assert first["rule_id"] in first["idempotency_key"]
+    assert verified["assurance_verdicts_sha256"] in first["idempotency_key"]
+
+    changed = deepcopy(verified)
+    changed["assurance_verdicts"][0]["evidence_sha256"] = "9" * 64
+    with pytest.raises(VideoCanonRuntimeError, match="assurance verdicts changed"):
+        build_promotion_delivery(changed, rule_id=uuid.uuid4(), **common)

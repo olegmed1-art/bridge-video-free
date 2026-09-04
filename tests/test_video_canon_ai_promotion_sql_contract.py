@@ -256,6 +256,14 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
     assert '"north/deal":"AKQ"' in DATABASE_TEST
     assert "VIDEO_CANON_SOURCE_POLICY_SUCCESSOR_HISTORY_NOT_PRESERVED" in DATABASE_TEST
     assert "VIDEO_CANON_BUNDLE_SCOPE_MISMATCH_NOT_BLOCKED" in DATABASE_TEST
+    assert MIGRATION.count("VIDEO_CANON_RESTORE_I2_I3_ASSURANCE_REVOKED") == 2
+    final_boundary = MIGRATION.split(
+        "Role membership is maintained outside the locked application", 1
+    )[1].split("Phase 2: all targets are locked and validated", 1)[0]
+    assert "video_canon_assurance_verdict i2" in final_boundary
+    assert "video_canon_assurance_verdict i3" in final_boundary
+    assert "pg_has_role(attestor.oid,r2.capability_role,'MEMBER')" in final_boundary
+    assert "pg_has_role(attestor.oid,r3.capability_role,'MEMBER')" in final_boundary
 
     assert "'hidden_cards','hidden_hand','hidden_hands'" in MIGRATION
     assert "'concealed_hand','concealed_hands'" in MIGRATION
