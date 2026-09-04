@@ -91,7 +91,11 @@ def _timestamp(value: Any, label: str) -> tuple[str, datetime]:
         _fail(f"invalid {label} timestamp")
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         _fail(f"{label} timestamp must include a UTC offset")
-    return parsed.astimezone(timezone.utc).isoformat(), parsed
+    try:
+        canonical = parsed.astimezone(timezone.utc).isoformat()
+    except (ValueError, OverflowError):
+        _fail(f"invalid {label} timestamp")
+    return canonical, parsed
 
 
 def build_ai_canon_promotion(

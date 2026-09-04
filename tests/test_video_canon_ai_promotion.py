@@ -88,8 +88,14 @@ def test_all_ai_checks_create_sealed_automatic_promotion_command():
 
 @pytest.mark.parametrize(("valid_from", "valid_to", "match"), [
     ("not-a-timestamp", None, "invalid valid_from timestamp"),
+    ("0001-01-01T00:00:00+00:00:30", None, "invalid valid_from timestamp"),
     ("2026-09-03T00:00:00", None, "valid_from timestamp must include a UTC offset"),
     ("2026-09-03T00:00:00Z", "not-a-timestamp", "invalid valid_to timestamp"),
+    (
+        "2026-09-03T00:00:00Z",
+        "9999-12-31T23:59:59-00:00:30",
+        "invalid valid_to timestamp",
+    ),
     ("2026-09-03T00:00:00Z", "2026-09-02T23:59:59Z", "after valid_from"),
     ("2026-09-03T00:00:00Z", "2026-09-03T00:00:00+00:00", "after valid_from"),
 ])
