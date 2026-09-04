@@ -227,6 +227,10 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"Opponent:QH"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"compiled_payload":{"lho":{"cards":"AS"}}}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"RHO has the queen of hearts"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"compiled_payload":{"partner":{"cards":"AS"}}}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"north":"10S"}'::jsonb
@@ -404,6 +408,7 @@ DECLARE
   v_snapshot_before text;
   v_snapshot_after text;
   v_restore_failed boolean:=false;
+  v_stale_promotion_failed boolean:=false;
   v_policy_failed boolean:=false;
   v_cross_school_policy_failed boolean:=false;
   v_bad_bundle_failed boolean:=false;
@@ -955,6 +960,11 @@ BEGIN
   UPDATE public.analysis_candidate
      SET quality_status='AI_VERIFIED',promotion_status='promoted'
    WHERE analysis_candidate_id=v_candidate;
+  IF bidding.activate_ai_verified_video_canon(
+       v_candidate,v_new_rule,v_good_bundle_hash
+     )<>v_promotion THEN
+    RAISE EXCEPTION 'VIDEO_CANON_ACTIVE_IDEMPOTENT_REPLAY_FAILED';
+  END IF;
   BEGIN
     UPDATE public.source SET school_id=v_other_school WHERE source_id=v_source;
   EXCEPTION WHEN check_violation THEN
@@ -1188,6 +1198,16 @@ BEGIN
   v_restore:=bidding.restore_ai_verified_video_canon(
     v_promotion,v_good_bundle_hash,repeat('d',64)
   );
+  BEGIN
+    PERFORM bidding.activate_ai_verified_video_canon(
+      v_candidate,v_new_rule,v_good_bundle_hash
+    );
+  EXCEPTION WHEN object_not_in_prerequisite_state THEN
+    v_stale_promotion_failed:=true;
+  END;
+  IF NOT v_stale_promotion_failed THEN
+    RAISE EXCEPTION 'VIDEO_CANON_STALE_IDEMPOTENT_REPLAY_NOT_BLOCKED';
+  END IF;
   INSERT INTO bidding.rule_test_run(
     school_id,rule_test_id,result,result_details,method_version
   ) VALUES (

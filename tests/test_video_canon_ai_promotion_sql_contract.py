@@ -242,7 +242,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "{1,3}($|[^[:alnum:]])",
         "{2,13})($|[^[:alnum:]])",
         "(?:10|[AKQJTX]|",
-        "(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)",
+        "(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west|lho|rho)",
         "(?:^|[^[:alnum:]_])(?:рука|карты)",
         "?[2-9]($|[[:space:],./;])",
         "hearts?|spades?|diamonds?|clubs?",
@@ -276,6 +276,8 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
     assert "У партнёра A♠" in DATABASE_TEST
     assert '"partnerDeal":"AKQ"' in DATABASE_TEST
     assert '"north/deal":"AKQ"' in DATABASE_TEST
+    assert '"lho":{"cards":"AS"}' in DATABASE_TEST
+    assert "RHO has the queen of hearts" in DATABASE_TEST
     assert "VIDEO_CANON_SOURCE_POLICY_SUCCESSOR_HISTORY_NOT_PRESERVED" in DATABASE_TEST
     assert "VIDEO_CANON_BUNDLE_SCOPE_MISMATCH_NOT_BLOCKED" in DATABASE_TEST
     assert "VIDEO_CANON_FUTURE_BUNDLE_PERIOD_NOT_BLOCKED" in DATABASE_TEST
@@ -310,6 +312,9 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "BIDDING_RULE_KEY_IDENTITY_MISMATCH" in MIGRATION
     assert "BEFORE INSERT OR UPDATE OF school_id,knowledge_version_id,rule_key" in MIGRATION
     assert "video_candidate_payload_hash" in MIGRATION
+    assert "VIDEO_CANON_IDEMPOTENT_RECEIPT_STALE" in MIGRATION
+    assert "VIDEO_CANON_ACTIVE_IDEMPOTENT_REPLAY_FAILED" in DATABASE_TEST
+    assert "VIDEO_CANON_STALE_IDEMPOTENT_REPLAY_NOT_BLOCKED" in DATABASE_TEST
     assert "candidate_payload_hash=v_candidate.payload_hash" in MIGRATION
     assert "verification_bundle_sha256" in MIGRATION
     assert "bundle_canonical_json" in MIGRATION

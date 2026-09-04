@@ -175,6 +175,8 @@ def test_hidden_information_is_rejected_inside_json_serializable_tuple():
     {"partner": {"cards": "AS"}},
     {"north": "10S"},
     {"opponent": [{"detail": "ace of hearts"}]},
+    {"lho": {"cards": "AS"}},
+    {"RHO": {"cards": "QH"}},
     {"N": {"cards": "AS"}},
     {"партнёр": {"карты": "AKQ"}},
 ])
@@ -291,6 +293,8 @@ def test_hidden_deal_is_rejected_inside_innocuous_allowed_value(field, value):
     "North: AK",
     "Partner:AS",
     "Opponent:QH",
+    "LHO has the ace of spades",
+    "RHO has the queen of hearts",
     "Партнёр: туз пик",
     "Соперник: Q",
 ])

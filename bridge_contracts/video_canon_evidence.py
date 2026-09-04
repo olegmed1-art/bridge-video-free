@@ -28,7 +28,8 @@ _SUIT_SYMBOL_TRANSLATION = str.maketrans({
 })
 _FORBIDDEN_KEYS = {
     "partner_hand", "opponent_hand", "opponent_hands", "north_hand",
-    "east_hand", "south_hand", "west_hand", "full_deal", "hidden_cards",
+    "east_hand", "south_hand", "west_hand", "lho_hand", "rho_hand",
+    "full_deal", "hidden_cards",
     "actual_partner_hand", "actual_opponent_hand", "actual_opponent_hands",
     "partner_cards", "opponent_cards", "all_hands", "hidden_hand",
     "hidden_hands", "hidden_holding", "hidden_holdings", "concealed_hand",
@@ -47,14 +48,14 @@ _PBN_DEAL = re.compile(
     re.IGNORECASE,
 )
 _LABELLED_HIDDEN_CARDS = re.compile(
-    r"(?:(?<!\w)(?:partner|opponent|north|east|south|west))\s*(?:['’]s)?[ _-]*(?:hand|cards)"
+    r"(?:(?<!\w)(?:partner|opponent|north|east|south|west|lho|rho))\s*(?:['’]s)?[ _-]*(?:hand|cards)"
     r"\b[^;]*?(?P<hand>" + _HAND_PATTERN + r")"
     r"|(?:(?<!\w)(?:рука|карты))\s+(?:партн[её]ра|соперника)\b[^;]*?"
     r"(?P<ru_hand>" + _HAND_PATTERN + r")",
     re.IGNORECASE,
 )
 _SUIT_LABELLED_HIDDEN_CARDS = re.compile(
-    r"(?:(?:(?<!\w)(?:partner|opponent|north|east|south|west))\s*(?:['’]s)?[ _-]*"
+    r"(?:(?:(?<!\w)(?:partner|opponent|north|east|south|west|lho|rho))\s*(?:['’]s)?[ _-]*"
     r"(?:hand|cards)\b|(?:(?<!\w)(?:рука|карты))\s+(?:партн[её]ра|соперника)\b"
     r"|(?:^|[^A-Za-z0-9])[NESW]\s*:)[^;]*?"
     r"S\s*:\s*(?P<spades>" + _SUIT_PATTERN + r")[\s,/]*"
@@ -64,9 +65,9 @@ _SUIT_LABELLED_HIDDEN_CARDS = re.compile(
     re.IGNORECASE,
 )
 _LABELLED_HAND_TAIL = re.compile(
-    r"(?:(?:(?<!\w)(?:partner|opponent|north|east|south|west))\s*(?:['’]s)?[ _-]*"
+    r"(?:(?:(?<!\w)(?:partner|opponent|north|east|south|west|lho|rho))\s*(?:['’]s)?[ _-]*"
     r"(?:hand|cards)\b|(?:(?<!\w)(?:рука|карты))\s+(?:партн[её]ра|соперника)\b"
-    r"|(?:(?<!\w)(?:partner|opponent|north|east|south|west))\s*[:,;=\-]\s*"
+    r"|(?:(?<!\w)(?:partner|opponent|north|east|south|west|lho|rho))\s*[:,;=\-]\s*"
     r"|(?:(?<!\w)(?:партн[её]р|соперник|оппонент))\s*[:,;=\-]\s*"
     r"|(?:^|[^A-Za-z0-9])[NESW]\s*:)(?P<tail>[^;]{0,512})",
     re.IGNORECASE,
@@ -76,7 +77,7 @@ _HOLDING_MODIFIER = (
     r"usually|often|apparently|probably|clearly|just|not)\s+){0,2}"
 )
 _VERBAL_HIDDEN_TAIL = re.compile(
-    r"(?:(?<!\w)(?:partner|opponent|north|east|south|west)"
+    r"(?:(?<!\w)(?:partner|opponent|north|east|south|west|lho|rho)"
     r"|(?<![A-Za-z0-9])[NESW])(?:(?:\s+(?:(?:held|holds?|has|had|owns?|possesses?|retains?|carries?)|"
     r"(?:is|was)\s+" + _HOLDING_MODIFIER + r"holding))|"
     r"(?:['’]s(?:\s+" + _HOLDING_MODIFIER + r"holding)?))\b"
@@ -84,7 +85,7 @@ _VERBAL_HIDDEN_TAIL = re.compile(
     re.IGNORECASE,
 )
 _NEGATED_HIDDEN_HOLDING = re.compile(
-    r"(?:(?<!\w)(?:partner|opponent|north|east|south|west)"
+    r"(?:(?<!\w)(?:partner|opponent|north|east|south|west|lho|rho)"
     r"|(?<![A-Za-z0-9])[NESW])\s+"
     r"(?:(?:does\s+not|doesn['’]t)\s+(?:have|hold)(?:\s+any)?|"
     r"(?:has|holds?|had)\s+(?:(?:no|neither)|none\s+of)|"
@@ -96,7 +97,7 @@ _NEGATED_HIDDEN_HOLDING = re.compile(
     re.IGNORECASE,
 )
 _VOID_HIDDEN_HOLDING = re.compile(
-    r"(?:(?<!\w)(?:partner|opponent|north|east|south|west)"
+    r"(?:(?<!\w)(?:partner|opponent|north|east|south|west|lho|rho)"
     r"|(?<![A-Za-z0-9])[NESW])\s+(?:is|was|remains?)\s+"
     r"void\s+(?:(?:in|of)\s+)?"
     r"(?:spades?|hearts?|diamonds?|clubs?|[SHDC]\s*:)(?:\b|(?=\s|$))",
@@ -154,7 +155,7 @@ _PARTIAL_SEPARATED_HAND = re.compile(
     re.IGNORECASE,
 )
 _SEPARATED_LABELLED_HIDDEN_CARDS = re.compile(
-    r"(?:(?:(?<!\w)(?:partner|opponent|north|east|south|west))\s*(?:['’]s)?[ _-]*"
+    r"(?:(?:(?<!\w)(?:partner|opponent|north|east|south|west|lho|rho))\s*(?:['’]s)?[ _-]*"
     r"(?:hand|cards)\b|(?:(?<!\w)(?:рука|карты))\s+(?:партн[её]ра|соперника)\b"
     r"|(?:^|[^A-Za-z0-9])[NESW]\s*:)[^;]*?"
     r"(?P<spades>" + _NONEMPTY_SUIT_PATTERN + r")[\s,/]+"
@@ -211,7 +212,7 @@ def _has_forbidden_key(value: Any) -> bool:
         return any(
             str(key).casefold() in _FORBIDDEN_KEYS
             or re.fullmatch(
-                r"(?:actual)?(?:partner|opponent|north|east|south|west)s?"
+                r"(?:actual)?(?:partner|opponent|north|east|south|west|lho|rho)s?"
                 r"(?:hand|holding|cards?|deals?)+s?",
                 re.sub(r"[^a-z0-9]", "", str(key).casefold()),
             ) is not None
@@ -242,7 +243,7 @@ def _is_complete_hand_shape(hand: str) -> bool:
 
 
 _ACTOR_CONTEXT_KEY = re.compile(
-    r"(?:(?:actual)?(?:partner|opponent|north|east|south|west|n|e|s|w)s?"
+    r"(?:(?:actual)?(?:partner|opponent|north|east|south|west|lho|rho|n|e|s|w)s?"
     r"|партн[её]р|соперник|оппонент)"
 )
 
