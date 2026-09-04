@@ -35,6 +35,13 @@ def test_batch_transport_is_durable_bounded_and_project_neutral():
     assert "STOPPING)" in preflight
     assert "--wait-for-state STOPPED --max-wait-seconds 600" in preflight
     assert "'CANARY_REVIEW'" in text
+    ssh_setup = text.split("- name: Resolve pinned SSH transport", 1)[1].split(
+        "- name: Enqueue metadata", 1
+    )[0]
+    assert "recover_instance_after_scan_loss" in ssh_setup
+    assert "for attempt in 1 2 3" in ssh_setup
+    assert "scan_rc == 3 && attempt < 3" in ssh_setup
+    assert "STOPPING)" in ssh_setup
     assert "sleep 60" not in text
     assert "project" not in json.loads(INTAKE_SCHEMA.read_text(encoding="utf-8"))["properties"]
 
