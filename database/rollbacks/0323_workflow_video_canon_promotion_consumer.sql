@@ -8,7 +8,7 @@ REVOKE ALL ON FUNCTION bidding.enqueue_video_canon_promotion(uuid,uuid,text,text
   FROM bridge_school_canon_consumer,bridge_school_canon_verifier,PUBLIC;
 REVOKE ALL ON TABLE bidding.video_canon_assurance_verdict FROM
   bridge_school_canon_i2_verifier,bridge_school_canon_i3_verifier;
-REVOKE ALL ON TABLE bidding.video_canon_ai_verification_bundle,
+REVOKE ALL ON TABLE bidding.video_canon_assurance_bound_bundle,
   bidding.video_canon_bound_candidate FROM
   bridge_school_canon_i2_verifier,bridge_school_canon_i3_verifier;
 
@@ -16,6 +16,7 @@ DROP FUNCTION IF EXISTS bidding.fail_video_canon_promotion(uuid,uuid,bigint,text
 DROP FUNCTION IF EXISTS bidding.consume_video_canon_promotion(uuid,uuid,bigint);
 DROP FUNCTION IF EXISTS bidding.claim_video_canon_promotion(integer);
 DROP FUNCTION IF EXISTS bidding.enqueue_video_canon_promotion(uuid,uuid,text,text);
+DROP FUNCTION IF EXISTS bidding.video_canon_assurance_set_sha256(uuid,text,text);
 DROP TRIGGER IF EXISTS video_canon_promotion_delivery_receipt_append_only
   ON bidding.video_canon_promotion_delivery_receipt;
 DROP TABLE IF EXISTS bidding.video_canon_promotion_delivery_receipt;
@@ -26,6 +27,10 @@ DROP TRIGGER IF EXISTS video_canon_assurance_verdict_guard
   ON bidding.video_canon_assurance_verdict;
 DROP FUNCTION IF EXISTS bidding.validate_video_canon_assurance_verdict();
 DROP TABLE IF EXISTS bidding.video_canon_assurance_verdict;
+DROP VIEW IF EXISTS bidding.video_canon_assurance_bound_bundle;
+DROP TRIGGER IF EXISTS video_canon_assurance_assignment_append_only
+  ON bidding.video_canon_assurance_assignment;
+DROP TABLE IF EXISTS bidding.video_canon_assurance_assignment;
 DROP TRIGGER IF EXISTS video_canon_assurance_verifier_registry_append_only
   ON bidding.video_canon_assurance_verifier_registry;
 DROP TABLE IF EXISTS bidding.video_canon_assurance_verifier_registry;

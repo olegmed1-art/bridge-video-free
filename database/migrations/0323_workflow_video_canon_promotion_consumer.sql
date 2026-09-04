@@ -56,6 +56,34 @@ CREATE TRIGGER video_canon_assurance_verifier_registry_append_only
 BEFORE UPDATE OR DELETE ON bidding.video_canon_assurance_verifier_registry
 FOR EACH ROW EXECUTE FUNCTION bidding.reject_append_only_mutation();
 
+CREATE TABLE bidding.video_canon_assurance_assignment (
+  video_canon_assurance_assignment_id uuid PRIMARY KEY DEFAULT uuidv7(),
+  school_id uuid NOT NULL REFERENCES public.school(school_id) ON DELETE RESTRICT,
+  video_canon_ai_verification_bundle_id uuid NOT NULL
+    REFERENCES bidding.video_canon_ai_verification_bundle(video_canon_ai_verification_bundle_id) ON DELETE RESTRICT,
+  assurance_level text NOT NULL CHECK (assurance_level IN ('I2','I3')),
+  assigned_principal name NOT NULL,
+  verifier_family text NOT NULL,
+  verifier_version text NOT NULL,
+  assigned_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (video_canon_ai_verification_bundle_id,assurance_level),
+  UNIQUE (video_canon_ai_verification_bundle_id,assigned_principal)
+);
+CREATE TRIGGER video_canon_assurance_assignment_append_only
+BEFORE UPDATE OR DELETE ON bidding.video_canon_assurance_assignment
+FOR EACH ROW EXECUTE FUNCTION bidding.reject_append_only_mutation();
+
+CREATE VIEW bidding.video_canon_assurance_bound_bundle
+WITH (security_barrier=true) AS
+SELECT b.video_canon_ai_verification_bundle_id,b.school_id,b.analysis_candidate_id,
+       b.candidate_payload_hash,b.verification_bundle_sha256,b.bundle_payload,
+       a.assurance_level,a.verifier_family,a.verifier_version
+  FROM bidding.video_canon_ai_verification_bundle b
+  JOIN bidding.video_canon_assurance_assignment a
+    ON a.video_canon_ai_verification_bundle_id=b.video_canon_ai_verification_bundle_id
+   AND a.school_id=b.school_id
+ WHERE a.assigned_principal=session_user::name;
+
 CREATE TABLE bidding.video_canon_assurance_verdict (
   video_canon_assurance_verdict_id uuid PRIMARY KEY DEFAULT uuidv7(),
   school_id uuid NOT NULL REFERENCES public.school(school_id) ON DELETE RESTRICT,
@@ -107,6 +135,16 @@ BEGIN
      OR NEW.verifier_version IS DISTINCT FROM v_registry.verifier_version THEN
     RAISE EXCEPTION 'VIDEO_CANON_ASSURANCE_ROLE_MISMATCH' USING ERRCODE='42501';
   END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM bidding.video_canon_assurance_assignment a
+     WHERE a.video_canon_ai_verification_bundle_id=NEW.video_canon_ai_verification_bundle_id
+       AND a.school_id=NEW.school_id AND a.assurance_level=NEW.assurance_level
+       AND a.assigned_principal=session_user::name
+       AND a.verifier_family=NEW.verifier_family
+       AND a.verifier_version=NEW.verifier_version
+  ) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_ASSURANCE_ASSIGNMENT_MISMATCH' USING ERRCODE='42501';
+  END IF;
   SELECT * INTO v_candidate FROM public.analysis_candidate
    WHERE analysis_candidate_id=NEW.analysis_candidate_id;
   SELECT * INTO v_bundle FROM bidding.video_canon_ai_verification_bundle
@@ -135,6 +173,37 @@ FOR EACH ROW EXECUTE FUNCTION bidding.validate_video_canon_assurance_verdict();
 CREATE TRIGGER video_canon_assurance_verdict_append_only
 BEFORE UPDATE OR DELETE ON bidding.video_canon_assurance_verdict
 FOR EACH ROW EXECUTE FUNCTION bidding.reject_append_only_mutation();
+
+CREATE OR REPLACE FUNCTION bidding.video_canon_assurance_set_sha256(
+  p_analysis_candidate_id uuid,p_candidate_payload_hash text,
+  p_verification_bundle_sha256 text
+) RETURNS text LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path=pg_catalog,public,bidding AS $$
+WITH rows AS (
+  SELECT jsonb_build_object(
+    'schema','video-canon-assurance-verdict-v1',
+    'candidate_payload_hash',v.candidate_payload_hash,
+    'assurance_level',v.assurance_level,'verdict',v.verdict,
+    'verifier_family',v.verifier_family,'verifier_version',v.verifier_version,
+    'execution_principal',v.execution_principal,'evidence_sha256',v.evidence_sha256,
+    'canon_snapshot_sha256',v.canon_snapshot_sha256,
+    'system_profile',v.system_profile,'learner_level',v.learner_level,
+    'provenance_verified',v.provenance_verified,
+    'hidden_information_clear',v.hidden_information_clear,
+    'profile_unambiguous',v.profile_unambiguous,'canon_conflict',v.canon_conflict,
+    'deterministic',v.deterministic
+  ) AS value,v.assurance_level
+  FROM bidding.video_canon_assurance_verdict v
+  WHERE v.analysis_candidate_id=p_analysis_candidate_id
+    AND v.candidate_payload_hash=p_candidate_payload_hash
+    AND v.verification_bundle_sha256=p_verification_bundle_sha256
+), aggregate AS (
+  SELECT count(*) AS row_count,jsonb_agg(value ORDER BY assurance_level) AS value FROM rows
+)
+SELECT CASE WHEN row_count=2 THEN
+  encode(public.digest(convert_to(value::text,'UTF8'),'sha256'),'hex')
+END FROM aggregate
+$$;
 
 CREATE TABLE bidding.video_canon_promotion_job (
   video_canon_promotion_job_id uuid PRIMARY KEY DEFAULT uuidv7(),
@@ -205,6 +274,7 @@ DECLARE
   v_rule bidding.rule%ROWTYPE;
   v_existing bidding.video_canon_promotion_job%ROWTYPE;
   v_job_id uuid;
+  v_assurance_set_sha256 text;
 BEGIN
   SELECT * INTO v_candidate FROM public.analysis_candidate
    WHERE analysis_candidate_id=p_analysis_candidate_id FOR SHARE;
@@ -249,6 +319,12 @@ BEGIN
       AND i2.learner_level=i3.learner_level
   ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_I2_I3_NOT_VERIFIED' USING ERRCODE='23514';
+  END IF;
+  v_assurance_set_sha256:=bidding.video_canon_assurance_set_sha256(
+    p_analysis_candidate_id,v_candidate.payload_hash,p_verification_bundle_sha256
+  );
+  IF v_assurance_set_sha256 IS NULL OR p_assurance_set_sha256<>v_assurance_set_sha256 THEN
+    RAISE EXCEPTION 'VIDEO_CANON_ASSURANCE_SET_HASH_MISMATCH' USING ERRCODE='23514';
   END IF;
   SELECT * INTO v_existing FROM bidding.video_canon_promotion_job
    WHERE analysis_candidate_id=p_analysis_candidate_id;
@@ -329,7 +405,13 @@ DECLARE
 BEGIN
   SELECT * INTO v_existing FROM bidding.video_canon_promotion_delivery_receipt
    WHERE video_canon_promotion_job_id=p_job_id;
-  IF FOUND THEN RETURN v_existing.video_canon_promotion_delivery_receipt_id; END IF;
+  IF FOUND THEN
+    IF v_existing.fencing_token<>p_fencing_token
+       OR v_existing.completed_by_principal<>session_user THEN
+      RAISE EXCEPTION 'VIDEO_CANON_STALE_LEASE_OR_FENCE' USING ERRCODE='55000';
+    END IF;
+    RETURN v_existing.video_canon_promotion_delivery_receipt_id;
+  END IF;
   SELECT * INTO v_job FROM bidding.video_canon_promotion_job
    WHERE video_canon_promotion_job_id=p_job_id FOR UPDATE;
   IF NOT FOUND OR v_job.status<>'leased' OR v_job.lease_owner<>session_user
@@ -377,6 +459,12 @@ BEGIN
       AND i2.learner_level=i3.learner_level
   ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_I2_I3_STALE' USING ERRCODE='23514';
+  END IF;
+  IF bidding.video_canon_assurance_set_sha256(
+       v_job.analysis_candidate_id,v_job.candidate_payload_hash,
+       v_job.verification_bundle_sha256
+     ) IS DISTINCT FROM v_job.assurance_set_sha256 THEN
+    RAISE EXCEPTION 'VIDEO_CANON_ASSURANCE_SET_STALE' USING ERRCODE='23514';
   END IF;
   v_promotion:=bidding.activate_ai_verified_video_canon(
     v_job.analysis_candidate_id,v_job.rule_id,v_job.verification_bundle_sha256
@@ -453,6 +541,7 @@ END $$;
 REVOKE EXECUTE ON FUNCTION bidding.activate_ai_verified_video_canon(uuid,uuid,text)
   FROM bridge_school_canon_promoter;
 REVOKE ALL ON FUNCTION bidding.validate_video_canon_assurance_verdict() FROM PUBLIC;
+REVOKE ALL ON FUNCTION bidding.video_canon_assurance_set_sha256(uuid,text,text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.enqueue_video_canon_promotion(uuid,uuid,text,text),
   bidding.claim_video_canon_promotion(integer),
   bidding.consume_video_canon_promotion(uuid,uuid,bigint),
@@ -460,10 +549,13 @@ REVOKE ALL ON FUNCTION bidding.enqueue_video_canon_promotion(uuid,uuid,text,text
 
 GRANT INSERT ON bidding.video_canon_assurance_verdict TO
   bridge_school_canon_i2_verifier,bridge_school_canon_i3_verifier;
-GRANT SELECT ON bidding.video_canon_ai_verification_bundle,
+GRANT SELECT ON bidding.video_canon_assurance_bound_bundle,
   bidding.video_canon_bound_candidate TO
   bridge_school_canon_i2_verifier,bridge_school_canon_i3_verifier;
+GRANT INSERT ON bidding.video_canon_assurance_assignment TO bridge_school_canon_verifier;
 GRANT EXECUTE ON FUNCTION bidding.enqueue_video_canon_promotion(uuid,uuid,text,text)
+  TO bridge_school_canon_verifier;
+GRANT EXECUTE ON FUNCTION bidding.video_canon_assurance_set_sha256(uuid,text,text)
   TO bridge_school_canon_verifier;
 GRANT EXECUTE ON FUNCTION bidding.claim_video_canon_promotion(integer),
   bidding.consume_video_canon_promotion(uuid,uuid,bigint),

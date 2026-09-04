@@ -77,8 +77,11 @@ _VERBAL_HIDDEN_TAIL = re.compile(
     re.IGNORECASE,
 )
 _LEADING_HOLDING_CARD_GROUP = re.compile(
-    r"^\s*(?:[:,;=\-]\s*)?(?:10|[AKQJT2-9]|[kqjt]|"
-    r"(?:(?:10)|[AKQJT2-9akqjt]){2,13})(?:$|[^A-Za-z0-9])"
+    r"^\s*(?:[:,;=\-]\s*)?(?:(?:the|a|an)\s+)?(?:"
+    r"(?:ace|king|queen|jack|ten)(?:\s+of\s+(?:spades?|hearts?|diamonds?|clubs?))?"
+    r"|[SHDC]\s*(?:10|[AKQJT2-9])|10|[AKQJT2-9]|[kqjt]|"
+    r"(?:(?:10)|[AKQJT2-9akqjt]){2,13})(?:$|[^A-Za-z0-9])",
+    re.IGNORECASE,
 )
 _EXPLICIT_SUIT_LABEL = re.compile(
     r"(?<![A-Za-z0-9_])(?P<suit>[SHDC])\s*:", re.IGNORECASE

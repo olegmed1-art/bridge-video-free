@@ -367,8 +367,8 @@ SELECT EXISTS (
              E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])(?:(?:[[:space:]]+(?:(?:held|holds?|has|had)|(?:is|was)[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding))|(?:[''’]s[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding))(?:[[:space:]]+|[[:space:]]*[:,;=\\-][[:space:]]*)([^;]*)',
              'gi'
            ) AS matched(parts)
-          WHERE matched.parts[1] ~
-                  E'^[[:space:]]*(?:[:,;=\\-][[:space:]]*)?(?:10|[AKQJT2-9]|[kqjt]|(?:(?:10)|[AKQJT2-9akqjt]){2,13})($|[^[:alnum:]])'
+          WHERE matched.parts[1] ~*
+                  E'^[[:space:]]*(?:[:,;=\\-][[:space:]]*)?(?:(?:the|a|an)[[:space:]]+)?(?:(?:ace|king|queen|jack|ten)(?:[[:space:]]+of[[:space:]]+(?:spades?|hearts?|diamonds?|clubs?))?|[SHDC][[:space:]]*(?:10|[AKQJT2-9])|10|[AKQJT2-9]|[kqjt]|(?:(?:10)|[AKQJT2-9akqjt]){2,13})($|[^[:alnum:]])'
             AND matched.parts[1] !~*
                   E'^[[:space:]]*(?:[:,;=\\-][[:space:]]*)?(?:10|[2-9])[[:space:]]*(?:(?:(?:[-–—]|to)[[:space:]]*[0-9]{1,2}|[+])[[:space:]]*(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*)?|(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*))($|[^[:alnum:]_])'
        )

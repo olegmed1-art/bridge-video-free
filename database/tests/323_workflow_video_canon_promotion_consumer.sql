@@ -56,6 +56,8 @@ BEGIN
      OR NOT has_table_privilege('bridge_school_canon_i2_verifier',
        'bidding.video_canon_bound_candidate','SELECT')
      OR NOT has_table_privilege('bridge_school_canon_i3_verifier',
+       'bidding.video_canon_assurance_bound_bundle','SELECT')
+     OR has_table_privilege('bridge_school_canon_i2_verifier',
        'bidding.video_canon_ai_verification_bundle','SELECT')
      OR has_table_privilege('bridge_school_canon_i2_verifier',
        'public.analysis_candidate','SELECT')
@@ -81,6 +83,8 @@ BEGIN
   IF to_regclass('bidding.video_canon_promotion_job') IS NULL
      OR to_regclass('bidding.video_canon_promotion_delivery_receipt') IS NULL
      OR to_regclass('bidding.video_canon_assurance_verdict') IS NULL
+     OR to_regclass('bidding.video_canon_assurance_assignment') IS NULL
+     OR to_regclass('bidding.video_canon_assurance_bound_bundle') IS NULL
      OR to_regclass('bidding.video_canon_assurance_verifier_registry') IS NULL
      OR (SELECT count(*) FROM bidding.video_canon_assurance_verifier_registry)<>2 THEN
     RAISE EXCEPTION 'VIDEO_CANON_CONSUMER_SCHEMA_MISSING';
