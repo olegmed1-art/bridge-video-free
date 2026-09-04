@@ -32,7 +32,7 @@ bash -n "$tmp/admin"
 bash -n "$tmp/repair"
 bash -n "$tmp/export"
 grep -Fq "usage: universal-video-oci-admin audit|productionize" "$tmp/admin" || fail 'unexpected Universal Video entrypoint contract'
-grep -Fq "readonly UV_RUNTIME_COMMIT='07ce0495959e0f798b4a6e5ca5b31423cccfa849'" "$tmp/admin" || fail 'unexpected Universal Video runtime pin'
+grep -Fq "readonly UV_RUNTIME_COMMIT='3660e9de87b3d68d03bd95213d5105bf31aeacc5'" "$tmp/admin" || fail 'unexpected Universal Video runtime pin'
 grep -Fq "UNIVERSAL_VIDEO_DRIVE_SOURCE_NO_ASR_PASS" "$tmp/admin" || fail 'no-ASR productionization gate missing'
 grep -Fq 'UNIVERSAL_VIDEO_SPOOL_RUNTIME_REPAIR_PASS' "$tmp/repair" || fail 'spool repair marker missing'
 grep -Fq "readonly PIN_PATH='/etc/bridge-school/universal-video-evidence-export.commit'" "$tmp/export" || fail 'unexpected evidence exporter source pin path'

@@ -7,7 +7,7 @@ umask 077
 # only through exact sudoers commands. No arbitrary shell, path, commit, file ID,
 # folder ID, service name, or command argument is accepted.
 
-readonly UV_RUNTIME_COMMIT='07ce0495959e0f798b4a6e5ca5b31423cccfa849'
+readonly UV_RUNTIME_COMMIT='3660e9de87b3d68d03bd95213d5105bf31aeacc5'
 readonly REPOSITORY='olegmed1-art/bridge-video-free'
 readonly RAW_BASE="https://raw.githubusercontent.com/${REPOSITORY}/${UV_RUNTIME_COMMIT}"
 readonly ACTIVATION_PATH='ops/oracle_universal_video_run_command.sh'
