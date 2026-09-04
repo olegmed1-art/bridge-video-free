@@ -9,6 +9,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import math
 import re
 from typing import Any, Mapping
 
@@ -156,7 +157,12 @@ def _text(value: Any, label: str) -> str:
 def _confidence(value: Any) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         _fail("invalid semantic confidence")
-    result = float(value)
+    try:
+        result = float(value)
+    except OverflowError:
+        _fail("invalid semantic confidence")
+    if not math.isfinite(result):
+        _fail("invalid semantic confidence")
     if not 0 <= result <= 1:
         _fail("invalid semantic confidence")
     return result

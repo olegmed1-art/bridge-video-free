@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 from typing import Any, Mapping, Sequence
 
@@ -38,6 +39,16 @@ def _refs(item: Mapping[str, Any]) -> list[str]:
         if isinstance(item.get(key), list):
             values.extend(item[key])
     return list(dict.fromkeys(str(value) for value in values if value))
+
+
+def _valid_teacher_confidence(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        confidence = float(value)
+    except OverflowError:
+        return False
+    return math.isfinite(confidence) and 0.8 <= confidence <= 1
 
 
 def _record(job_id: str, kind: str, source: Mapping[str, Any], status: str) -> dict[str, Any]:
@@ -140,7 +151,7 @@ def _validated_explicit_explanations(
             reason = "explanation and rule evidence are not source-bound"
         elif any(
             str(segment.get("speaker_role") or segment.get("speaker_role_candidate") or "").casefold() != "teacher"
-            or float(segment.get("speaker_role_confidence") or 0) < 0.8
+            or not _valid_teacher_confidence(segment.get("speaker_role_confidence"))
             for segment in segments if segment
         ):
             reason = "explanation requires verified teacher speech"
@@ -181,14 +192,11 @@ def _automatic_explanations(
             if not segment:
                 continue
             role = str(segment.get("speaker_role") or segment.get("speaker_role_candidate") or "").casefold()
-            try:
-                confidence = float(segment.get("speaker_role_confidence") or 0)
-            except (TypeError, ValueError):
-                confidence = 0.0
+            confidence = segment.get("speaker_role_confidence")
             text = re.sub(r"\s+", " ", str(segment.get("text") or "")).strip()
             low = text.casefold()
             relations = _logic_relations(text)
-            if role != "teacher" or confidence < 0.8 or not text or not relations:
+            if role != "teacher" or not _valid_teacher_confidence(confidence) or not text or not relations:
                 continue
             out.append({
                 "stable_key": f"why:{rule_key}:{ref}",

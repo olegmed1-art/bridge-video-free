@@ -129,6 +129,22 @@ def test_does_not_treat_student_or_low_confidence_causal_speech_as_teacher_why()
         )
 
 
+def test_invalid_speaker_confidence_cannot_suppress_explanation_gap():
+    for confidence in ("NaN", float("nan"), float("inf"), True, 10**1000):
+        master = {"job_id": "job", "transcript": [{
+            "segment_id": "segment-7", "speaker_role": "teacher",
+            "speaker_role_confidence": confidence,
+            "text": "Не пасуем, потому что форсинг.",
+        }]}
+        quality = {"canon_candidates": [{
+            "canon_observation_id": "rule-7", "classification": "RULE_PARAPHRASE_MATCH",
+            "evidence_refs": ["segment-7"],
+        }], "authority": {"canon_activation": "DENY"}}
+        result = build_extended_extraction(master, quality)
+        assert any(row["payload"].get("gap_type") == "EXPLANATION_MISSING"
+                   for row in result["candidate_records"])
+
+
 def test_extracts_why_and_what_for_as_distinct_logic_relations():
     master = {
         "job_id": "job-purpose",

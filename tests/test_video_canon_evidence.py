@@ -142,6 +142,13 @@ def test_low_confidence_remains_evidence_only():
     assert result["quality_status"] == "EVIDENCE_ONLY"
 
 
+def test_oversized_semantic_confidence_fails_closed():
+    assertion = _assertion()
+    assertion["semantic_confidence"] = 10**1000
+    with pytest.raises(VideoCanonEvidenceError, match="semantic confidence"):
+        build_video_canon_candidate(_learning(), assertion)
+
+
 def test_hidden_information_is_rejected_inside_json_serializable_tuple():
     assertion = _assertion()
     assertion["normalized_rule"]["compiled_payload"] = {
