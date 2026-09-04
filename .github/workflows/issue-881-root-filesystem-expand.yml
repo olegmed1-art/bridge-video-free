@@ -48,11 +48,12 @@ jobs:
       github.event.comment.user.login == 'olegmed1-art' &&
       github.event.comment.body == '/oracle-ops issue-881-expand-root-and-recover-bba508'
     runs-on: ubuntu-24.04
-    # The bounded OCI sequence permits up to 60 minutes each for backup and
-    # restore, plus 30 minutes each for launch and termination.  Keep the job
-    # timeout above that ceiling so GitHub does not kill the cleanup trap while
-    # OCI is still completing an otherwise valid operation.
-    timeout-minutes: 240
+    # The explicit OCI waiters consume at most 210 minutes: 60 minutes each for
+    # backup and restore, 30 minutes each for launch and termination, and five
+    # minutes for each of six dependency-deletion checks.  GitHub's six-hour
+    # ceiling leaves 150 minutes for setup, SSH acceptance, recovery, and the
+    # EXIT cleanup trap instead of cancelling exactly at the waiter ceiling.
+    timeout-minutes: 360
     env:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
@@ -139,10 +140,36 @@ jobs:
           stamp="issue-881-${GITHUB_RUN_ID}"
           backup_id="" restored_id="" drill_instance_id="" drill_public_ip="" drill_started=""
           drill_vcn_id="" drill_ig_id="" drill_route_id="" drill_security_id="" drill_subnet_id=""
+          restored_attempted=0 drill_vcn_attempted=0 drill_ig_attempted=0
+          drill_route_attempted=0 drill_security_attempted=0 drill_subnet_attempted=0
+          discover_named_id() {
+            local resource="$1" expected="$2" output id
+            local -a command
+            for _ in $(seq 1 6); do
+              case "$resource" in
+                backup) command=(oci bv boot-volume-backup list --compartment-id "$tenancy_id" --boot-volume-id "$boot_id" --all) ;;
+                boot-volume) command=(oci bv boot-volume list --compartment-id "$tenancy_id" --availability-domain "$ad" --all) ;;
+                vcn) command=(oci network vcn list --compartment-id "$tenancy_id" --all) ;;
+                internet-gateway) command=(oci network internet-gateway list --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --all) ;;
+                route-table) command=(oci network route-table list --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --all) ;;
+                security-list) command=(oci network security-list list --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --all) ;;
+                subnet) command=(oci network subnet list --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --all) ;;
+                *) return 2 ;;
+              esac
+              output="$("${command[@]}" --output json)" || return 1
+              id="$(EXPECTED_DISPLAY_NAME="$expected" python -c 'import json,os,sys; xs=[x["id"] for x in json.load(sys.stdin).get("data",[]) if x.get("display-name")==os.environ["EXPECTED_DISPLAY_NAME"] and x.get("lifecycle-state") not in {"TERMINATED","TERMINATING"}]; assert len(xs)<=1; print(xs[0] if xs else "")' <<<"$output")" || return 1
+              if [[ -n "$id" ]]; then
+                printf '%s\n' "$id"
+                return 0
+              fi
+              sleep 5
+            done
+            return 0
+          }
           wait_absent() {
             local resource="$1" id="$2" output
             local -a command
-            for _ in $(seq 1 120); do
+            for _ in $(seq 1 60); do
               case "$resource" in
                 boot-volume) command=(oci bv boot-volume get --boot-volume-id "$id") ;;
                 subnet) command=(oci network subnet get --subnet-id "$id") ;;
@@ -168,6 +195,26 @@ jobs:
           }
           cleanup_temp_resources() {
             local failed=0 state candidates
+            if [[ -z "$restored_id" && "$restored_attempted" == 1 ]]; then
+              restored_id="$(discover_named_id boot-volume "$stamp-restore")" || failed=1
+            fi
+            if [[ -z "$drill_vcn_id" && "$drill_vcn_attempted" == 1 ]]; then
+              drill_vcn_id="$(discover_named_id vcn "$stamp-vcn")" || failed=1
+            fi
+            if [[ -n "$drill_vcn_id" ]]; then
+              if [[ -z "$drill_ig_id" && "$drill_ig_attempted" == 1 ]]; then
+                drill_ig_id="$(discover_named_id internet-gateway "$stamp-ig")" || failed=1
+              fi
+              if [[ -z "$drill_route_id" && "$drill_route_attempted" == 1 ]]; then
+                drill_route_id="$(discover_named_id route-table "$stamp-route")" || failed=1
+              fi
+              if [[ -z "$drill_security_id" && "$drill_security_attempted" == 1 ]]; then
+                drill_security_id="$(discover_named_id security-list "$stamp-ssh-only")" || failed=1
+              fi
+              if [[ -z "$drill_subnet_id" && "$drill_subnet_attempted" == 1 ]]; then
+                drill_subnet_id="$(discover_named_id subnet "$stamp-subnet")" || failed=1
+              fi
+            fi
             # If launch returned after creating the instance but before its JSON
             # reached this runner, recover the OCID from the unique run stamp.
             if [[ -z "$drill_instance_id" && -n "$drill_subnet_id" ]]; then
@@ -223,8 +270,13 @@ jobs:
             exit "$rc"
           }
           trap cleanup EXIT
-          backup="$(oci bv boot-volume-backup create --boot-volume-id "$boot_id" --type FULL --display-name "$stamp-full" --wait-for-state AVAILABLE --max-wait-seconds 3600 --output json)"
-          backup_id="$(printf '%s' "$backup" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
+          if backup="$(oci bv boot-volume-backup create --boot-volume-id "$boot_id" --type FULL --display-name "$stamp-full" --output json)"; then
+            backup_id="$(printf '%s' "$backup" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
+          else
+            backup_id="$(discover_named_id backup "$stamp-full")"
+          fi
+          [[ -n "$backup_id" ]] || exit 36
+          oci bv boot-volume-backup get --boot-volume-backup-id "$backup_id" --wait-for-state AVAILABLE --max-wait-seconds 3600 >/dev/null
           backup_json="$(oci bv boot-volume-backup get --boot-volume-backup-id "$backup_id" --output json)"
           BACKUP="$backup_json" BOOT_ID="$boot_id" python - <<'PY'
           import datetime,json,os
@@ -234,8 +286,14 @@ jobs:
           created=datetime.datetime.fromisoformat(d['time-created'].replace('Z','+00:00'))
           assert (datetime.datetime.now(datetime.timezone.utc)-created).total_seconds() < 86400
           PY
-          restored="$(oci bv boot-volume create --boot-volume-backup-id "$backup_id" --availability-domain "$ad" --compartment-id "$tenancy_id" --display-name "$stamp-restore" --wait-for-state AVAILABLE --max-wait-seconds 3600 --output json)"
-          restored_id="$(printf '%s' "$restored" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
+          restored_attempted=1
+          if restored="$(oci bv boot-volume create --boot-volume-backup-id "$backup_id" --availability-domain "$ad" --compartment-id "$tenancy_id" --display-name "$stamp-restore" --output json)"; then
+            restored_id="$(printf '%s' "$restored" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
+          else
+            restored_id="$(discover_named_id boot-volume "$stamp-restore")"
+          fi
+          [[ -n "$restored_id" ]] || exit 37
+          oci bv boot-volume get --boot-volume-id "$restored_id" --wait-for-state AVAILABLE --max-wait-seconds 3600 >/dev/null
           # Never boot the restored production image in a production network.  The
           # temporary VCN permits only stateful inbound SSH from this runner and
           # has no egress rules, NAT gateway, or service gateway.  Consequently
@@ -243,12 +301,37 @@ jobs:
           # any other production endpoint while root usability is inspected.
           runner_ip="$(curl -fsS --max-time 15 https://api.ipify.org)"
           [[ "$runner_ip" =~ ^[0-9]+(\.[0-9]+){3}$ ]] || exit 35
-          drill_vcn_id="$(oci network vcn create --compartment-id "$tenancy_id" --cidr-block 10.254.0.0/24 --display-name "$stamp-vcn" --wait-for-state AVAILABLE --query 'data.id' --raw-output)"
-          drill_ig_id="$(oci network internet-gateway create --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --is-enabled true --display-name "$stamp-ig" --wait-for-state AVAILABLE --query 'data.id' --raw-output)"
-          drill_route_id="$(oci network route-table create --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --display-name "$stamp-route" --route-rules "[{\"cidrBlock\":\"0.0.0.0/0\",\"networkEntityId\":\"$drill_ig_id\"}]" --wait-for-state AVAILABLE --query 'data.id' --raw-output)"
+          drill_vcn_attempted=1
+          drill_vcn_json="$(oci network vcn create --compartment-id "$tenancy_id" --cidr-block 10.254.0.0/24 --display-name "$stamp-vcn" --output json)" || drill_vcn_json=""
+          drill_vcn_id="$(printf '%s' "$drill_vcn_json" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}) if sys.stdin.isatty() is False else {}; print(d.get("id", ""))' 2>/dev/null || true)"
+          [[ -n "$drill_vcn_id" ]] || drill_vcn_id="$(discover_named_id vcn "$stamp-vcn")"
+          [[ -n "$drill_vcn_id" ]] || exit 38
+          oci network vcn get --vcn-id "$drill_vcn_id" --wait-for-state AVAILABLE --max-wait-seconds 600 >/dev/null
+          drill_ig_attempted=1
+          drill_ig_json="$(oci network internet-gateway create --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --is-enabled true --display-name "$stamp-ig" --output json)" || drill_ig_json=""
+          drill_ig_id="$(printf '%s' "$drill_ig_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("id", ""))' 2>/dev/null || true)"
+          [[ -n "$drill_ig_id" ]] || drill_ig_id="$(discover_named_id internet-gateway "$stamp-ig")"
+          [[ -n "$drill_ig_id" ]] || exit 39
+          oci network internet-gateway get --ig-id "$drill_ig_id" --wait-for-state AVAILABLE --max-wait-seconds 600 >/dev/null
+          drill_route_attempted=1
+          drill_route_json="$(oci network route-table create --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --display-name "$stamp-route" --route-rules "[{\"cidrBlock\":\"0.0.0.0/0\",\"networkEntityId\":\"$drill_ig_id\"}]" --output json)" || drill_route_json=""
+          drill_route_id="$(printf '%s' "$drill_route_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("id", ""))' 2>/dev/null || true)"
+          [[ -n "$drill_route_id" ]] || drill_route_id="$(discover_named_id route-table "$stamp-route")"
+          [[ -n "$drill_route_id" ]] || exit 40
+          oci network route-table get --rt-id "$drill_route_id" --wait-for-state AVAILABLE --max-wait-seconds 600 >/dev/null
           ingress="[{\"protocol\":\"6\",\"source\":\"$runner_ip/32\",\"sourceType\":\"CIDR_BLOCK\",\"isStateless\":false,\"tcpOptions\":{\"destinationPortRange\":{\"min\":22,\"max\":22}}}]"
-          drill_security_id="$(oci network security-list create --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --display-name "$stamp-ssh-only" --egress-security-rules '[]' --ingress-security-rules "$ingress" --wait-for-state AVAILABLE --query 'data.id' --raw-output)"
-          drill_subnet_id="$(oci network subnet create --availability-domain "$ad" --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --cidr-block 10.254.0.0/28 --display-name "$stamp-subnet" --route-table-id "$drill_route_id" --security-list-ids "[\"$drill_security_id\"]" --prohibit-public-ip-on-vnic false --wait-for-state AVAILABLE --query 'data.id' --raw-output)"
+          drill_security_attempted=1
+          drill_security_json="$(oci network security-list create --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --display-name "$stamp-ssh-only" --egress-security-rules '[]' --ingress-security-rules "$ingress" --output json)" || drill_security_json=""
+          drill_security_id="$(printf '%s' "$drill_security_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("id", ""))' 2>/dev/null || true)"
+          [[ -n "$drill_security_id" ]] || drill_security_id="$(discover_named_id security-list "$stamp-ssh-only")"
+          [[ -n "$drill_security_id" ]] || exit 41
+          oci network security-list get --security-list-id "$drill_security_id" --wait-for-state AVAILABLE --max-wait-seconds 600 >/dev/null
+          drill_subnet_attempted=1
+          drill_subnet_json="$(oci network subnet create --availability-domain "$ad" --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --cidr-block 10.254.0.0/28 --display-name "$stamp-subnet" --route-table-id "$drill_route_id" --security-list-ids "[\"$drill_security_id\"]" --prohibit-public-ip-on-vnic false --output json)" || drill_subnet_json=""
+          drill_subnet_id="$(printf '%s' "$drill_subnet_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("id", ""))' 2>/dev/null || true)"
+          [[ -n "$drill_subnet_id" ]] || drill_subnet_id="$(discover_named_id subnet "$stamp-subnet")"
+          [[ -n "$drill_subnet_id" ]] || exit 42
+          oci network subnet get --subnet-id "$drill_subnet_id" --wait-for-state AVAILABLE --max-wait-seconds 600 >/dev/null
           launch="$(oci compute instance launch --availability-domain "$ad" --compartment-id "$tenancy_id" --subnet-id "$drill_subnet_id" --shape "$shape" --shape-config "$shape_config" --display-name "$stamp-boot-acceptance" --source-details "{\"sourceType\":\"bootVolume\",\"bootVolumeId\":\"$restored_id\"}" --assign-public-ip true --output json)"
           drill_instance_id="$(printf '%s' "$launch" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
           oci compute instance get --instance-id "$drill_instance_id" --wait-for-state RUNNING --max-wait-seconds 1800 >/dev/null
@@ -267,7 +350,14 @@ jobs:
           acceptance="$(ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "$ORACLE_USER@$drill_public_ip" 'set -e; test -r /etc/os-release; findmnt -n -o SOURCE,FSTYPE /; test "$(findmnt -n -o OPTIONS /)" != ""; test -r /var/lib/bridge-school; echo UV_RESTORED_ROOT_BOOT_ACCEPTANCE_PASS')"
           grep -Fq UV_RESTORED_ROOT_BOOT_ACCEPTANCE_PASS <<<"$acceptance"
           drill_seconds="$(( $(date -u +%s) - drill_started ))"
-          cleanup_temp_resources
+          if ! cleanup_temp_resources; then
+            # Do not invoke the EXIT trap a second time after a fully bounded
+            # explicit cleanup attempt; fail closed with the retained IDs/name
+            # stamp available in this run's log for operator reconciliation.
+            trap - EXIT
+            echo 'UV_ROOT_TEMP_CLEANUP_INCOMPLETE' >&2
+            exit 90
+          fi
           drill_instance_id=""; restored_id=""; drill_subnet_id=""; drill_security_id=""
           drill_route_id=""; drill_ig_id=""; drill_vcn_id=""
           trap - EXIT
