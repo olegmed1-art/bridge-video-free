@@ -29,6 +29,7 @@ DROP FUNCTION bidding.validate_video_canon_verification();
 DROP FUNCTION bidding.validate_video_canon_verification_bundle();
 DROP FUNCTION bidding.validate_video_correction_review_receipt();
 DROP FUNCTION bidding.current_school_canon_snapshot_sha256(uuid);
+DROP FUNCTION bidding.video_canon_rule_test_state_sha256(uuid);
 DROP FUNCTION bidding.video_canon_rule_restore_sha256(uuid);
 DROP FUNCTION bidding.contains_forbidden_hidden_value(jsonb);
 DROP FUNCTION bidding.is_complete_bridge_hand(text);

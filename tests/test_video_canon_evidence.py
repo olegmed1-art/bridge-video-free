@@ -188,6 +188,8 @@ def test_hidden_deal_is_rejected_inside_innocuous_allowed_value(field, value):
     "North's hand was AKQJ109 T98 7 432",
     "N: AKQJ109/T98/7/432",
     "карты партнера: AKQJ109, T98, 7, 432",
+    "North's hand was ♠AKQJ ♥T98 ♦765 ♣432",
+    "N: ♠AKQJ ♥T98 ♦765 ♣432",
 ])
 def test_hidden_deal_is_rejected_in_source_bound_teacher_statement(statement):
     learning = _learning()
@@ -197,6 +199,23 @@ def test_hidden_deal_is_rejected_in_source_bound_teacher_statement(statement):
     learning["transcript_evidence"][0]["text_sha256"] = assertion["statement_sha256"]
     with pytest.raises(VideoCanonEvidenceError, match="candidate payload contains hidden information"):
         build_video_canon_candidate(learning, assertion)
+
+
+def test_rejects_incomplete_or_duplicate_candidate_test_definitions():
+    invalid_tests = [
+        {"positive": ["not-an-object"]},
+        {"positive": [{"auction": ["1H", "PASS"]}]},
+        {"positive": [
+            {"auction": ["1H", "PASS"], "expect": "2C"},
+            {"auction": ["1H", "PASS"], "expect": "2C"},
+        ]},
+    ]
+    for patch in invalid_tests:
+        learning = _learning()
+        assertion = _assertion()
+        assertion["tests"].update(patch)
+        with pytest.raises(VideoCanonEvidenceError):
+            build_video_canon_candidate(learning, assertion)
 
 
 def test_payload_hash_is_deterministic_and_source_bound():

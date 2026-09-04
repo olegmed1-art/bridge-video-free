@@ -22,6 +22,9 @@ SCHEMA = "video-canon-evidence-v2"
 AUTHORITY_CLASS = "SCHOOL_CANON_CANDIDATE"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SOURCE_CLASSES = {"SCHOOL_PRIMARY_EVIDENCE", "TEACHING_CONTEXT", "WORLD_EXTERNAL"}
+_SUIT_SYMBOL_TRANSLATION = str.maketrans({
+    "♠": "S:", "♥": "H:", "♦": "D:", "♣": "C:",
+})
 _FORBIDDEN_KEYS = {
     "partner_hand", "opponent_hand", "opponent_hands", "north_hand",
     "east_hand", "south_hand", "west_hand", "full_deal", "hidden_cards",
@@ -134,20 +137,21 @@ def _has_forbidden_value(value: Any) -> bool:
     if isinstance(value, (list, tuple)):
         return any(_has_forbidden_value(child) for child in value)
     if isinstance(value, str):
-        if any(_is_complete_hand_shape(match.group("hand")) for match in _PBN_DEAL.finditer(value)):
+        normalized_value = value.translate(_SUIT_SYMBOL_TRANSLATION)
+        if any(_is_complete_hand_shape(match.group("hand")) for match in _PBN_DEAL.finditer(normalized_value)):
             return True
         if any(
             _is_complete_hand_shape(".".join(match.group(
                 "spades", "hearts", "diamonds", "clubs"
             )))
-            for match in _SUIT_LABELLED_HIDDEN_CARDS.finditer(value)
+            for match in _SUIT_LABELLED_HIDDEN_CARDS.finditer(normalized_value)
         ):
             return True
         if any(
             _is_complete_hand_shape(".".join(match.group(
                 "spades", "hearts", "diamonds", "clubs"
             )))
-            for match in _SEPARATED_LABELLED_HIDDEN_CARDS.finditer(value)
+            for match in _SEPARATED_LABELLED_HIDDEN_CARDS.finditer(normalized_value)
         ):
             return True
         return any(
@@ -317,6 +321,20 @@ def build_video_canon_candidate(
         _fail("all four test classes are required")
     if _has_forbidden_key(tests) or _has_forbidden_value(tests):
         _fail("tests contain hidden information")
+    normalized_tests: dict[str, list[dict[str, Any]]] = {}
+    for test_type, cases in tests.items():
+        normalized_cases: list[dict[str, Any]] = []
+        seen_cases: set[str] = set()
+        for case in cases:
+            if not isinstance(case, Mapping) or "expect" not in case or len(case) < 2:
+                _fail("each test case requires fixture fields and expect")
+            normalized_case = deepcopy(dict(case))
+            case_digest = _digest(normalized_case)
+            if case_digest in seen_cases:
+                _fail("duplicate test case")
+            seen_cases.add(case_digest)
+            normalized_cases.append(normalized_case)
+        normalized_tests[test_type] = normalized_cases
 
     ambiguities = assertion.get("ambiguities")
     contradictions = assertion.get("contradictions")
@@ -369,7 +387,7 @@ def build_video_canon_candidate(
             "rejected_alternatives": rejected_alternatives,
             "evidence_refs": explanation_refs,
         },
-        "tests": deepcopy(dict(tests)),
+        "tests": normalized_tests,
         "review_eligibility": (
             "AI_VERIFICATION_PENDING" if ai_verification_eligible else "EVIDENCE_ONLY"
         ),

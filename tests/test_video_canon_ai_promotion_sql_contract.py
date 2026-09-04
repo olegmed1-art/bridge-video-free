@@ -97,6 +97,15 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "v_version.content<>v_candidate.payload",
         "v_version.provenance<>v_expected_version_provenance",
         "knowledge_version_content_sha256",
+        "rule_test_state_sha256",
+        "video_canon_rule_test_state_sha256",
+        "VIDEO_CANON_RULE_TEST_BINDING_INVALID",
+        "VIDEO_CANON_RULE_TEST_STATE_MISMATCH",
+        "VIDEO_CANON_RESTORE_RULE_TEST_STATE_MISMATCH",
+        "'video-canon:'||v_candidate.payload_hash||':'",
+        "expected.case_payload-'expect'",
+        "VIDEO_CANON_RESTORE_SOURCE_BINDING_MISMATCH",
+        "kvs.source_locator=jsonb_build_object(",
         "ki.stable_key='video-canon:'||(v_candidate.payload->>'candidate_id')",
         "VIDEO_CANON_SOURCE_POLICY_EXPIRED",
         "VIDEO_CANON_RESTORE_ATTESTOR_REVOKED",
@@ -106,6 +115,10 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "(?:10)",
         "|[NESW][[:space:]]*:)[^;]*?S",
         "{1,13})[[:space:]/,]+",
+        "'♠','S:'",
+        "'♥','H:'",
+        "'♦','D:'",
+        "'♣','C:'",
     ):
         assert marker in MIGRATION
 
@@ -133,6 +146,7 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "VIDEO_CANON_RESTORE_CURRENT_ACTIVATION_MISMATCH" in MIGRATION
     assert "DROP FUNCTION bidding.restore_ai_verified_video_canon" in ROLLBACK
     assert "DROP VIEW bidding.video_canon_bound_candidate" in ROLLBACK
+    assert "DROP FUNCTION bidding.video_canon_rule_test_state_sha256" in ROLLBACK
     assert "DROP FUNCTION bidding.video_canon_rule_restore_sha256" in ROLLBACK
     assert "DROP FUNCTION bidding.is_complete_bridge_hand" in ROLLBACK
     assert "REVOKE ALL PRIVILEGES ON SCHEMA public,bidding" in ROLLBACK

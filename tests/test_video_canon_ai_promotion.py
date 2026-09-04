@@ -55,6 +55,7 @@ def _bundle(candidate: dict) -> dict:
         "effective_period": {"valid_from": "2026-09-03T00:00:00Z", "valid_to": None},
         "activation_scope": "bidding/natural/v1/response-to-1h",
         "canon_snapshot_sha256": canon_snapshot_sha,
+        "rule_test_state_sha256": "b" * 64,
         "checks": checks,
         "rollback": {
             "strategy": "revoke activation and restore prior version",
@@ -77,6 +78,7 @@ def test_all_ai_checks_create_sealed_automatic_promotion_command():
     assert result["safety"]["world_evidence_used"] is False
     assert len(result["verification_bundle_sha256"]) == 64
     assert result["verification_bundle"]["candidate_payload"] == candidate["payload"]
+    assert result["verification_bundle"]["rule_test_state_sha256"] == "b" * 64
     assert result["verification_bundle_canonical_json"]
     assert hashlib.sha256(
         result["verification_bundle_canonical_json"].encode("utf-8")

@@ -106,7 +106,7 @@ def build_ai_canon_promotion(
     expected = {
         "schema", "policy_version", "candidate_payload_hash", "system_profile",
         "learner_level", "effective_period", "activation_scope", "canon_snapshot_sha256",
-        "checks", "rollback",
+        "rule_test_state_sha256", "checks", "rollback",
     }
     if not isinstance(verification_bundle, Mapping) or set(verification_bundle) != expected:
         _fail("verification bundle fields mismatch")
@@ -122,6 +122,9 @@ def build_ai_canon_promotion(
 
     canon_snapshot_sha = _sha(
         verification_bundle.get("canon_snapshot_sha256"), "canon_snapshot_sha256"
+    )
+    rule_test_state_sha = _sha(
+        verification_bundle.get("rule_test_state_sha256"), "rule_test_state_sha256"
     )
     checks = verification_bundle.get("checks")
     if not isinstance(checks, list):
@@ -220,6 +223,7 @@ def build_ai_canon_promotion(
         "effective_period": {"valid_from": valid_from, "valid_to": valid_to},
         "activation_scope": _text(verification_bundle.get("activation_scope"), "activation_scope"),
         "canon_snapshot_sha256": canon_snapshot_sha,
+        "rule_test_state_sha256": rule_test_state_sha,
         "checks": [normalized[key] for key in sorted(normalized)],
         "rollback": normalized_rollback,
     }
@@ -241,6 +245,7 @@ def build_ai_canon_promotion(
             "activation_scope": sealed_bundle["activation_scope"],
             "expected_candidate_payload_hash": candidate_hash,
             "expected_verification_bundle_sha256": bundle_hash,
+            "expected_rule_test_state_sha256": rule_test_state_sha,
         },
         "safety": {
             "world_evidence_used": False,

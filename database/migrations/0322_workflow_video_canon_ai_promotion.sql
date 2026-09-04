@@ -182,6 +182,8 @@ CREATE TABLE bidding.video_canon_ai_promotion_receipt (
     rule_content_sha256 text NOT NULL CHECK (rule_content_sha256 ~ '^[0-9a-f]{64}$'),
     knowledge_version_content_sha256 text NOT NULL
       CHECK (knowledge_version_content_sha256 ~ '^[0-9a-f]{64}$'),
+    rule_test_state_sha256 text NOT NULL
+      CHECK (rule_test_state_sha256 ~ '^[0-9a-f]{64}$'),
     rule_id uuid NOT NULL UNIQUE REFERENCES bidding.rule(rule_id) ON DELETE RESTRICT,
     canon_activation_id uuid NOT NULL UNIQUE REFERENCES public.canon_activation(canon_activation_id) ON DELETE RESTRICT,
     runtime_activation_id uuid NOT NULL UNIQUE REFERENCES bidding.runtime_activation(runtime_activation_id) ON DELETE RESTRICT,
@@ -290,7 +292,8 @@ SELECT EXISTS (
        AND EXISTS (
          SELECT 1
            FROM regexp_matches(
-             w.value#>>'{}',
+             replace(replace(replace(replace(
+               w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:'),
              E'(?:(?:partner|opponent|north|east|south|west)[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника)|[NESW][[:space:]]*:)[^;]*?S[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*H[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*D[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*C[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})',
              'gi'
            ) AS matched(parts)
@@ -313,6 +316,40 @@ SELECT EXISTS (
           ))
        )
   );
+$$;
+
+CREATE OR REPLACE FUNCTION bidding.video_canon_rule_test_state_sha256(p_rule_id uuid)
+RETURNS text
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path=pg_catalog,public,bidding
+SET TimeZone='UTC'
+AS $$
+WITH test_rows AS (
+  SELECT t.test_key,t.rule_test_id,
+         jsonb_build_object(
+           'rule_test',to_jsonb(t)-ARRAY['created_at'],
+           'latest_run',CASE WHEN latest.rule_test_run_id IS NULL
+             THEN 'null'::jsonb
+             ELSE to_jsonb(latest)-ARRAY['created_at']
+           END
+         ) AS row_value
+    FROM bidding.rule_test t
+    LEFT JOIN LATERAL (
+      SELECT tr.*
+        FROM bidding.rule_test_run tr
+       WHERE tr.rule_test_id=t.rule_test_id
+       ORDER BY tr.created_at DESC,tr.rule_test_run_id DESC
+       LIMIT 1
+    ) latest ON true
+   WHERE t.rule_id=p_rule_id
+), aggregate_state AS (
+  SELECT COALESCE(jsonb_agg(row_value ORDER BY test_key,rule_test_id::text),'[]'::jsonb) AS rows
+    FROM test_rows
+)
+SELECT encode(public.digest(convert_to(rows::text,'UTF8'),'sha256'),'hex')
+  FROM aggregate_state
 $$;
 
 CREATE OR REPLACE FUNCTION bidding.video_canon_rule_restore_sha256(p_rule_id uuid)
@@ -499,6 +536,7 @@ BEGIN
        OR NEW.bundle_payload->>'candidate_payload_hash'<>NEW.candidate_payload_hash
        OR NEW.bundle_payload->'candidate_payload'<>v_candidate.payload
        OR NOT ((NEW.bundle_payload->>'canon_snapshot_sha256') ~ '^[0-9a-f]{64}$')
+       OR NOT ((NEW.bundle_payload->>'rule_test_state_sha256') ~ '^[0-9a-f]{64}$')
        OR jsonb_typeof(NEW.bundle_payload->'checks')<>'array'
        OR jsonb_array_length(NEW.bundle_payload->'checks')<>16
        OR EXISTS (
@@ -725,6 +763,7 @@ DECLARE
     v_rule_content_sha256 text;
     v_expected_rule_content_sha256 text;
     v_version_content_sha256 text;
+    v_rule_test_state_sha256 text;
     v_expected_version_provenance jsonb;
     v_canon_snapshot_sha256 text;
 BEGIN
@@ -987,6 +1026,52 @@ BEGIN
         RAISE EXCEPTION 'VIDEO_CANON_I2_INDEPENDENCE_MISSING' USING ERRCODE='23514';
     END IF;
 
+    -- The four source-derived test classes must be an exact projection of the
+    -- sealed candidate. Extra or edited definitions cannot borrow old PASS runs.
+    IF EXISTS (
+      WITH expected_tests AS (
+        SELECT test_group.test_type,test_case.ordinality,
+               test_case.value AS case_payload,
+               'video-canon:'||v_candidate.payload_hash||':'||
+                 test_group.test_type||':'||test_case.ordinality::text AS test_key
+          FROM jsonb_each(v_candidate.payload->'tests')
+               AS test_group(test_type,cases)
+          CROSS JOIN LATERAL jsonb_array_elements(test_group.cases)
+               WITH ORDINALITY AS test_case(value,ordinality)
+      )
+      SELECT 1
+        FROM expected_tests expected
+        LEFT JOIN bidding.rule_test t
+          ON t.rule_id=p_rule_id AND t.test_type::text=expected.test_type
+         AND t.test_key=expected.test_key
+       WHERE t.rule_test_id IS NULL OR NOT t.enabled
+          OR t.fixture<>(expected.case_payload-'expect')
+          OR t.expected<>jsonb_build_object('expect',expected.case_payload->'expect')
+    ) OR EXISTS (
+      SELECT 1
+        FROM bidding.rule_test t
+       WHERE t.rule_id=p_rule_id
+         AND t.test_type IN ('positive','negative','boundary','interference')
+         AND NOT EXISTS (
+           SELECT 1
+             FROM jsonb_each(v_candidate.payload->'tests')
+                  AS test_group(test_type,cases)
+             CROSS JOIN LATERAL jsonb_array_elements(test_group.cases)
+                  WITH ORDINALITY AS test_case(value,ordinality)
+            WHERE test_group.test_type=t.test_type::text
+              AND t.test_key='video-canon:'||v_candidate.payload_hash||':'||
+                    test_group.test_type||':'||test_case.ordinality::text
+         )
+    ) THEN
+        RAISE EXCEPTION 'VIDEO_CANON_RULE_TEST_BINDING_INVALID' USING ERRCODE='23514';
+    END IF;
+
+    v_rule_test_state_sha256 := bidding.video_canon_rule_test_state_sha256(p_rule_id);
+    IF v_rule_test_state_sha256 IS DISTINCT FROM
+         v_bundle.bundle_payload->>'rule_test_state_sha256' THEN
+        RAISE EXCEPTION 'VIDEO_CANON_RULE_TEST_STATE_MISMATCH' USING ERRCODE='23514';
+    END IF;
+
     IF EXISTS (
       SELECT req.test_type FROM (VALUES ('positive'),('negative'),('boundary'),('interference'),('hidden_information'),('regression')) req(test_type)
       WHERE NOT EXISTS (
@@ -1094,6 +1179,7 @@ BEGIN
         'verification_bundle_sha256',p_verification_bundle_sha256,
         'rule_content_sha256',v_rule_content_sha256,
         'knowledge_version_content_sha256',v_version_content_sha256,
+        'rule_test_state_sha256',v_rule_test_state_sha256,
         'human_approval_required',false),'active'
     ) RETURNING canon_activation_id INTO v_canon_activation;
 
@@ -1105,20 +1191,21 @@ BEGIN
       jsonb_build_object('promotion_mode','AI_VERIFIED_TEACHER_VIDEO',
         'candidate_payload_hash',v_candidate.payload_hash,
         'rule_content_sha256',v_rule_content_sha256,
-        'knowledge_version_content_sha256',v_version_content_sha256),NULL
+        'knowledge_version_content_sha256',v_version_content_sha256,
+        'rule_test_state_sha256',v_rule_test_state_sha256),NULL
     ) RETURNING runtime_activation_id INTO v_runtime_activation;
 
     INSERT INTO bidding.video_canon_ai_promotion_receipt(
       school_id,analysis_candidate_id,candidate_payload_hash,verification_bundle_sha256,
       policy_version,scope_key,rule_content_sha256,knowledge_version_content_sha256,
-      rule_id,canon_activation_id,runtime_activation_id,
+      rule_test_state_sha256,rule_id,canon_activation_id,runtime_activation_id,
       superseded_canon_activation_id,superseded_canon_valid_to,
       superseded_runtime_activation_ids,superseded_runtime_state,superseded_rule_state,
       promotion_mode,human_approval_required
     ) VALUES (
       v_candidate.school_id,p_analysis_candidate_id,v_candidate.payload_hash,p_verification_bundle_sha256,
       v_policy_version,v_scope_key,v_rule_content_sha256,v_version_content_sha256,
-      p_rule_id,v_canon_activation,v_runtime_activation,
+      v_rule_test_state_sha256,p_rule_id,v_canon_activation,v_runtime_activation,
       v_prior_canon.canon_activation_id,v_prior_canon.valid_to,
       v_prior_runtime_ids,v_prior_runtime_state,v_prior_rule_state,
       'AI_VERIFIED_TEACHER_VIDEO',false
@@ -1286,6 +1373,29 @@ BEGIN
                     v_prior_promotion.knowledge_version_content_sha256 THEN
                 RAISE EXCEPTION 'VIDEO_CANON_RESTORE_VERSION_CONTENT_MISMATCH' USING ERRCODE='23514';
             END IF;
+            IF (
+                 SELECT count(*) FROM public.knowledge_version_source kvs
+                  WHERE kvs.knowledge_version_id=v_prior_version.knowledge_version_id
+               )<>1 OR NOT EXISTS (
+                 SELECT 1
+                   FROM public.analysis_candidate c
+                   JOIN public.knowledge_version_source kvs
+                     ON kvs.knowledge_version_id=v_prior_version.knowledge_version_id
+                    AND kvs.source_id=c.source_id
+                    AND kvs.relation_type='derived_from'
+                    AND kvs.source_locator=jsonb_build_object(
+                      'transcript_locators',
+                      c.payload#>'{teacher_assertion,transcript_locators}'
+                    )
+                  WHERE c.analysis_candidate_id=v_prior_promotion.analysis_candidate_id
+                    AND c.payload_hash=v_prior_promotion.candidate_payload_hash
+               ) THEN
+                RAISE EXCEPTION 'VIDEO_CANON_RESTORE_SOURCE_BINDING_MISMATCH' USING ERRCODE='23514';
+            END IF;
+            IF bidding.video_canon_rule_test_state_sha256(v_prior_promotion.rule_id)
+                 IS DISTINCT FROM v_prior_promotion.rule_test_state_sha256 THEN
+                RAISE EXCEPTION 'VIDEO_CANON_RESTORE_RULE_TEST_STATE_MISMATCH' USING ERRCODE='23514';
+            END IF;
         END IF;
         SELECT COALESCE(jsonb_agg(jsonb_build_object(
                  'rule_id',r.rule_id,
@@ -1419,8 +1529,11 @@ GRANT SELECT ON bidding.video_canon_source_policy,bidding.video_canon_ai_verific
   bidding.video_correction_review_receipt
   TO bridge_school_reader;
 REVOKE ALL ON FUNCTION bidding.is_complete_bridge_hand(text),
+  bidding.video_canon_rule_test_state_sha256(uuid),
   bidding.video_canon_rule_restore_sha256(uuid),
   bidding.current_school_canon_snapshot_sha256(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION bidding.video_canon_rule_test_state_sha256(uuid) TO
+  bridge_school_canon_verifier;
 GRANT EXECUTE ON FUNCTION bidding.current_school_canon_snapshot_sha256(uuid) TO
   bridge_school_canon_verifier,bridge_school_canon_semantic_verifier,
   bridge_school_canon_bridge_verifier,bridge_school_canon_firewall_verifier,

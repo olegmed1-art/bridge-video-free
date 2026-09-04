@@ -49,11 +49,15 @@ conflict scan and a tested restore path are mandatory.
 
 The activation command binds both candidate SHA-256 and verification-bundle
 SHA-256 and is idempotent. The persisted bundle contains the exact candidate,
-effective period, activation scope, checks and rollback target; the promoter
-cannot supply replacements for those fields. The database locks the candidate
-and rule, recomputes a digest across all executable rule fields plus the
-explanation, and compares that content with the sealed candidate before any
-activation is written. Source authorization can be revoked immediately through
+effective period, activation scope, checks, rollback target and a digest of the
+complete rule-test definitions plus their latest runs; the promoter cannot
+supply replacements for those fields. The four source-derived test classes are
+an exact deterministic projection of the candidate payload. Added, removed or
+edited definitions and later test runs invalidate promotion instead of
+borrowing an unrelated PASS. The database locks the candidate and rule,
+recomputes digests across all executable rule fields, the explanation and test
+state, and compares that content with the sealed candidate and bundle before
+any activation is written. Source authorization can be revoked immediately through
 a guarded lifecycle transition.
 
 When the same knowledge item already has an active version, activation closes
@@ -131,8 +135,8 @@ are transient validator inputs and are removed before the quality artifact is
 serialized; only sanitized results or explicit gaps survive.
 
 The same value-level firewall applies before a teacher-video Canon candidate is
-placed in staging: full PBN encodings and labelled partner/opponent card payloads
-are rejected anywhere in the complete payload, including the source-bound
+placed in staging: full PBN encodings and labelled partner/opponent card payloads—including
+`♠♥♦♣` suit-symbol notation—are rejected anywhere in the complete payload, including the source-bound
 teacher statement and otherwise innocent keys such as `notes`. Candidate
 staging identity includes the canonical payload SHA-256, so a corrected
 assertion becomes a preserved new revision instead of colliding with the old
@@ -178,7 +182,9 @@ The version must be attached to the deterministic knowledge-item key derived
 from the sealed candidate ID and must be a single-rule candidate whose content
 is the exact sealed candidate payload; system, level, effective interval,
 agreement scope, method, source locator and deterministic provenance must all
-match the sealed inputs.
+match the sealed inputs. Exactly one `derived_from` source binding is allowed,
+and both its source ID and transcript locator must equal the sealed teacher
+assertion.
 A digest of the complete immutable version projection is retained in the
 promotion receipt and activation provenance.
 
@@ -194,5 +200,6 @@ When the prior target came from an earlier AI video promotion, restoration also
 requires its exact source policy to remain active by wall clock and long enough
 for the restored validity interval; a revoked or expired teacher-video
 authorization cannot be reactivated through rollback. The restorer recomputes
-the predecessor's full knowledge-version digest and requires every original
-attestor login to retain its active verifier capability before reactivation.
+the predecessor's full knowledge-version digest, exact single source binding
+and sealed rule-test-state digest, and requires every original attestor login
+to retain its active verifier capability before reactivation.
