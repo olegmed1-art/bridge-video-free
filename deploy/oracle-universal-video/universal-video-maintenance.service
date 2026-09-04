@@ -10,7 +10,12 @@ Group=universal-video
 WorkingDirectory=/opt/bridge-school/universal-video-src
 EnvironmentFile=/opt/bridge-school/universal-video/universal-video.env
 Environment=PYTHONPATH=/opt/bridge-school/universal-video-src
-ExecStart=/opt/bridge-school/universal-video/.venv/bin/python -m universal_video.maintenance --base-dir /opt/bridge-school/universal-video --apply
+# The shared lock may first be created by a root-only actor under umask 0077.
+# Keep the inode and make it accessible to the service account before flock(1).
+ExecStartPre=+/usr/bin/touch /run/lock/oracle-workload-mutation.lock
+ExecStartPre=+/usr/bin/chown root:universal-video /run/lock/oracle-workload-mutation.lock
+ExecStartPre=+/usr/bin/chmod 0660 /run/lock/oracle-workload-mutation.lock
+ExecStart=/usr/bin/flock -x /run/lock/oracle-workload-mutation.lock /opt/bridge-school/universal-video/.venv/bin/python -m universal_video.maintenance --base-dir /opt/bridge-school/universal-video --apply
 Nice=15
 CPUQuota=50%
 MemoryMax=256M
@@ -29,5 +34,5 @@ LockPersonality=true
 RestrictRealtime=true
 SystemCallArchitectures=native
 ReadOnlyPaths=/opt/bridge-school/universal-video-src
-ReadWritePaths=/opt/bridge-school/universal-video
+ReadWritePaths=/opt/bridge-school/universal-video /run/lock
 UMask=0027

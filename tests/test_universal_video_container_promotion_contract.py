@@ -15,7 +15,8 @@ def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
     assert "actions/artifacts/$artifact_id/zip" in WORKFLOW
     assert '--expected-artifact-digest "$artifact_digest"' in WORKFLOW
     assert '--expected-image-digest "$image_digest"' in WORKFLOW
-    assert "group: oracle-instance-workload-mutation" in WORKFLOW
+    assert "oracle-universal-video-container-promotion-request-${{ github.sha }}" in WORKFLOW
+    assert "/run/lock/oracle-workload-mutation.lock" in WORKFLOW
     assert "ORACLE_INSTANCE_RUNNING_PASS" in WORKFLOW
     assert "compute instance action --instance-id \"$INSTANCE_ID\" --action START" in WORKFLOW
     assert "rollback" in SCRIPT

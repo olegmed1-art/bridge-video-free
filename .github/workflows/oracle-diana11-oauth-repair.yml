@@ -17,7 +17,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: oracle-diana11-oauth-repair
+  group: ${{ github.event_name == 'pull_request' && format('oracle-diana11-oauth-repair-pr-{0}', github.event.pull_request.number) || format('oracle-diana11-oauth-repair-request-{0}', github.sha) }}
   cancel-in-progress: false
 
 jobs:
@@ -95,15 +95,22 @@ jobs:
         run: |
           set -euo pipefail
           ssh_cmd=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
-          cat ops/oracle_universal_video_drive_secret_install.sh | "${ssh_cmd[@]}" 'cat > /tmp/oracle_universal_video_drive_secret_install.sh && chmod 0600 /tmp/oracle_universal_video_drive_secret_install.sh'
-          cat ops/universal_video_diana11_oauth_repair.sh | "${ssh_cmd[@]}" 'cat > /tmp/universal_video_diana11_oauth_repair.sh && chmod 0600 /tmp/universal_video_diana11_oauth_repair.sh'
+          install_script="/tmp/oracle-drive-secret-install-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sh"
+          repair_script="/tmp/universal-video-oauth-repair-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sh"
+          install_sha="$(sha256sum ops/oracle_universal_video_drive_secret_install.sh | awk '{print $1}')"
+          repair_sha="$(sha256sum ops/universal_video_diana11_oauth_repair.sh | awk '{print $1}')"
+          cat ops/oracle_universal_video_drive_secret_install.sh | "${ssh_cmd[@]}" "cat > '$install_script' && chmod 0600 '$install_script'"
+          cat ops/universal_video_diana11_oauth_repair.sh | "${ssh_cmd[@]}" "cat > '$repair_script' && chmod 0600 '$repair_script'"
           # Send the existing GitHub Actions OAuth bundle only through stdin to the
           # protected installer. The secret is masked and never echoed or persisted
           # on the runner beyond the Actions environment.
-          printf '%s' "$GOOGLE_DRIVE_OAUTH_JSON" | "${ssh_cmd[@]}" 'sudo -n bash /tmp/oracle_universal_video_drive_secret_install.sh -' >/tmp/oauth-install.out
-          grep -Fx 'UNIVERSAL_VIDEO_DRIVE_SECRET_INSTALL_PASS' /tmp/oauth-install.out
-          out="$("${ssh_cmd[@]}" 'sudo -n bash /tmp/universal_video_diana11_oauth_repair.sh')"
+          # One root shell owns the host mutation fence from the first secret
+          # replacement through service repair and durable retry publication.
+          # The repair script is told not to recursively acquire the same lock.
+          out="$(printf '%s' "$GOOGLE_DRIVE_OAUTH_JSON" | "${ssh_cmd[@]}" \
+            "sudo -n bash -c 'set -Eeuo pipefail; exec 9>/run/lock/oracle-workload-mutation.lock; flock -x 9; printf \"%s  %s\\n%s  %s\\n\" \"$install_sha\" \"$install_script\" \"$repair_sha\" \"$repair_script\" | sha256sum -c - >/dev/null; bash \"$install_script\" -; ORACLE_WORKLOAD_FENCE_HELD=1 bash \"$repair_script\"; rm -f \"$install_script\" \"$repair_script\"'")"
           printf '%s\n' "$out"
+          grep -Fx 'UNIVERSAL_VIDEO_DRIVE_SECRET_INSTALL_PASS' <<<"$out"
           grep -Fx 'DIANA11_OAUTH_REPAIR_AND_RETRY_PASS' <<<"$out"
           grep -F 'UV_STATE=QUEUED' <<<"$out"
       - name: Report retry queued

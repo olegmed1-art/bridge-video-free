@@ -17,8 +17,11 @@ def test_batch_transport_is_durable_bounded_and_project_neutral():
     assert "ORACLE_UNIVERSAL_VIDEO_BATCH_INTAKE_PASS" in text
     assert "StrictHostKeyChecking=yes" in text
     assert "StrictHostKeyChecking=no" not in text
-    assert "oracle-instance-workload-mutation" in text
+    assert "/run/lock/oracle-workload-mutation.lock" in text
+    assert "github.sha" in text
     assert "cancel-in-progress: false" in text
+    assert "timeout-minutes: 90" in text
+    assert "timeout 4800 ssh" in text
     assert "sleep 60" not in text
     assert "project" not in json.loads(INTAKE_SCHEMA.read_text(encoding="utf-8"))["properties"]
 

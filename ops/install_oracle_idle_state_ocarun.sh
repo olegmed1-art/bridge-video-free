@@ -24,6 +24,7 @@ PY
 grep -Fq 'ORACLE_IDLE_STATE=IDLE|BUSY|UNKNOWN' "$SOURCE_FILE" || fail 'unexpected classifier contract'
 
 readonly TARGET='/usr/local/sbin/oracle-idle-state'
+readonly FENCE_TARGET='/usr/local/sbin/oracle-idle-stop-fence'
 readonly SUDOERS='/etc/sudoers.d/oracle-idle-state-ocarun'
 readonly BACKUP_DIR='/var/backups/oracle-idle-guard'
 [[ -f "$TARGET" && ! -L "$TARGET" ]] || fail 'existing guard required for recoverable backup'
@@ -33,6 +34,9 @@ readonly BACKUP="$BACKUP_DIR/oracle-idle-state-${old_sha}"
 old_sudoers_present=0
 old_sudoers_sha=''
 SUDOERS_BACKUP=''
+old_fence_present=0
+old_fence_sha=''
+FENCE_BACKUP=''
 
 install -d -o root -g root -m 0700 "$BACKUP_DIR"
 if [[ -e "$SUDOERS" || -L "$SUDOERS" ]]; then
@@ -44,11 +48,26 @@ if [[ -e "$SUDOERS" || -L "$SUDOERS" ]]; then
   [[ "$old_sudoers_sha" =~ ^[0-9a-f]{64}$ ]] || fail 'existing sudoers digest invalid'
   SUDOERS_BACKUP="$BACKUP_DIR/oracle-idle-state-ocarun-sudoers-${old_sudoers_sha}"
 fi
+if [[ -e "$FENCE_TARGET" || -L "$FENCE_TARGET" ]]; then
+  [[ -f "$FENCE_TARGET" && ! -L "$FENCE_TARGET" ]] || fail 'existing fence helper path is unsafe'
+  [[ "$(stat -c '%U:%G:%a' "$FENCE_TARGET")" == 'root:root:755' ]] || fail 'existing fence helper ownership/mode is unsafe'
+  bash -n "$FENCE_TARGET"
+  old_fence_present=1
+  old_fence_sha="$(sha256sum "$FENCE_TARGET" | awk '{print $1}')"
+  [[ "$old_fence_sha" =~ ^[0-9a-f]{64}$ ]] || fail 'existing fence helper digest invalid'
+  FENCE_BACKUP="$BACKUP_DIR/oracle-idle-stop-fence-$old_fence_sha"
+  if [[ ! -e "$FENCE_BACKUP" ]]; then
+    install -o root -g root -m 0755 "$FENCE_TARGET" "$FENCE_BACKUP"
+  fi
+  [[ -f "$FENCE_BACKUP" && ! -L "$FENCE_BACKUP" ]] || fail 'fence rollback backup path is unsafe'
+  [[ "$(sha256sum "$FENCE_BACKUP" | awk '{print $1}')" == "$old_fence_sha" ]] || fail 'fence rollback backup digest mismatch'
+fi
 
 tmp_sudoers="$(mktemp --tmpdir="$BACKUP_DIR" .oracle-idle-sudoers.install.XXXXXX)"
 tmp_target=''
 tmp_backup=''
 tmp_sudoers_backup=''
+tmp_fence=''
 restore_probe=''
 sudoers_restore_probe=''
 trusted_source=''
@@ -97,6 +116,15 @@ atomic_copy_sudoers_verified() {
   visudo -cf "$destination" >/dev/null
 }
 
+restore_previous_fence() {
+  if (( old_fence_present == 1 )); then
+    atomic_copy_executable_verified "$FENCE_BACKUP" "$old_fence_sha" "$FENCE_TARGET"
+  else
+    rm -f "$FENCE_TARGET"
+    [[ ! -e "$FENCE_TARGET" && ! -L "$FENCE_TARGET" ]]
+  fi
+}
+
 restore_previous_sudoers() {
   local destination="$1"
   if (( old_sudoers_present == 1 )); then
@@ -111,6 +139,7 @@ cleanup_and_rollback() {
   local rc=$?
   local guard_ok=0
   local sudoers_ok=0
+  local fence_ok=0
   trap - EXIT
   if (( rc != 0 && promoted == 1 && committed == 0 )); then
     if atomic_copy_executable_verified "$BACKUP" "$old_sha" "$TARGET"; then
@@ -119,7 +148,10 @@ cleanup_and_rollback() {
     if restore_previous_sudoers "$SUDOERS" && visudo -cf /etc/sudoers >/dev/null; then
       sudoers_ok=1
     fi
-    if (( guard_ok == 1 && sudoers_ok == 1 )); then
+    if restore_previous_fence; then
+      fence_ok=1
+    fi
+    if (( guard_ok == 1 && sudoers_ok == 1 && fence_ok == 1 )); then
       printf 'ORACLE_IDLE_INSTALL_ROLLBACK=PASS\n' >&2
       printf 'ORACLE_IDLE_ROLLBACK_SHA256=%s\n' "$old_sha" >&2
       if (( old_sudoers_present == 1 )); then
@@ -128,11 +160,11 @@ cleanup_and_rollback() {
         printf 'ORACLE_IDLE_ROLLBACK_SUDOERS_STATE=ABSENT\n' >&2
       fi
     else
-      printf 'ORACLE_IDLE_INSTALL_ROLLBACK=FAIL guard_ok=%s sudoers_ok=%s\n' "$guard_ok" "$sudoers_ok" >&2
+      printf 'ORACLE_IDLE_INSTALL_ROLLBACK=FAIL guard_ok=%s sudoers_ok=%s fence_ok=%s\n' "$guard_ok" "$sudoers_ok" "$fence_ok" >&2
       rc=97
     fi
   fi
-  rm -f "$tmp_sudoers" "$tmp_target" "$tmp_backup" "$tmp_sudoers_backup" \
+    rm -f "$tmp_sudoers" "$tmp_target" "$tmp_backup" "$tmp_sudoers_backup" "$tmp_fence" \
     "$restore_probe" "$sudoers_restore_probe" "$SOURCE_FILE" "$AUTHORIZER_FILE" \
     "$trusted_source" "$trusted_authorizer" "$proof" "$authorizer_stderr"
   exit "$rc"
@@ -217,9 +249,63 @@ tmp_target=''
 promoted=1
 [[ "$(sha256sum "$TARGET" | awk '{print $1}')" == "$SOURCE_SHA256" ]] || fail 'installed target digest mismatch'
 
+tmp_fence="$(mktemp --tmpdir=/usr/local/sbin .oracle-idle-stop-fence.install.XXXXXX)"
+cat > "$tmp_fence" <<'FENCE'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+readonly LOCK=/run/lock/oracle-workload-mutation.lock
+readonly STATE_DIR=/run/oracle-stop-guard
+[[ $# -eq 2 ]] || exit 64
+action="$1"; token="$2"
+[[ "$token" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] || exit 64
+proof="$STATE_DIR/$token.proof"
+token_file="$STATE_DIR/$token.token"
+pid_file="$STATE_DIR/$token.pid"
+case "$action" in
+  hold)
+    install -d -m 0755 "$STATE_DIR"
+    rm -f "$proof" "$token_file" "$pid_file"
+    touch "$LOCK"
+    chown root:universal-video "$LOCK"
+    chmod 0660 "$LOCK"
+    exec 9>"$LOCK"
+    flock -n 9 || exit 73
+    /usr/local/sbin/oracle-idle-state > "$proof"
+    printf '%s' "$token" > "$token_file"
+    printf '%s' "$$" > "$pid_file"
+    # Longer than the workflow's 600-second STOP wait; normal completion is
+    # the instance shutdown terminating this holder, not timer expiry.
+    sleep 900
+    ;;
+  read)
+    # The classifier can legitimately consume its bounded database timeouts.
+    # Wait for the holder to publish all three files instead of treating a
+    # not-yet-ready proof as terminal.
+    for _ in $(seq 1 450); do
+      [[ -r "$token_file" && -r "$pid_file" && -r "$proof" ]] && break
+      sleep 0.1
+    done
+    [[ -r "$token_file" && -r "$pid_file" && -r "$proof" ]] || exit 74
+    [[ "$(cat "$token_file")" == "$token" ]] || exit 74
+    kill -0 "$(cat "$pid_file")" || exit 74
+    if flock -n "$LOCK" true; then exit 74; fi
+    cat "$proof"
+    ;;
+  *) exit 64 ;;
+esac
+FENCE
+chmod 0755 "$tmp_fence"
+fence_sha="$(sha256sum "$tmp_fence" | awk '{print $1}')"
+atomic_copy_executable_verified "$tmp_fence" "$fence_sha" "$FENCE_TARGET" || fail 'fence helper install failed'
+rm -f "$tmp_fence"
+tmp_fence=''
+
 cat > "$tmp_sudoers" <<'EOF'
 # Exact read-only idle classifier for OCI Run Command. Empty argv is required.
 ocarun ALL=(root) NOPASSWD: /usr/local/sbin/oracle-idle-state ""
+# Bounded validated token only; no arbitrary shell or command is accepted.
+ocarun ALL=(root) NOPASSWD: /usr/local/sbin/oracle-idle-stop-fence hold *
+ocarun ALL=(root) NOPASSWD: /usr/local/sbin/oracle-idle-stop-fence read *
 EOF
 chmod 0440 "$tmp_sudoers"
 visudo -cf "$tmp_sudoers" >/dev/null
@@ -236,6 +322,20 @@ mapfile -t lines < "$proof"
 [[ "${lines[3]}" =~ ^ORACLE_IDLE_REASON=[A-Za-z0-9_./,:=+-]+$ ]] || fail 'classifier reason invalid'
 [[ "${lines[4]}" =~ ^ORACLE_IDLE_STATE=(IDLE|BUSY|UNKNOWN)$ ]] || fail 'classifier state invalid'
 state="${lines[4]#ORACLE_IDLE_STATE=}"
+
+test_token="install-test-$$"
+sudo -u ocarun sudo -n "$FENCE_TARGET" hold "$test_token" &
+fence_pid=$!
+token_ready=0
+for _ in $(seq 1 600); do
+  if [[ -r "/run/oracle-stop-guard/$test_token.token" ]]; then token_ready=1; break; fi
+  kill -0 "$fence_pid" 2>/dev/null || break
+  sleep 0.1
+done
+[[ "$token_ready" == 1 ]] || fail 'fence token preflight timed out'
+sudo -u ocarun sudo -n "$FENCE_TARGET" read "$test_token" >/dev/null
+kill "$fence_pid"
+wait "$fence_pid" 2>/dev/null || true
 
 # The exact STOP authorizer is part of the installation transaction. A proof
 # that is syntactically valid but stale, contradictory, or otherwise rejected

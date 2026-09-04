@@ -66,13 +66,13 @@ EXPECTED_PRODUCERS = {
         {"pull_request", "push"},
         "${{ github.event_name == 'pull_request' && "
         "format('oracle-diana11-002-pr-{0}', github.event.pull_request.number) || "
-        "'oracle-instance-workload-mutation' }}",
+        "format('oracle-diana11-002-request-{0}', github.sha) }}",
     ),
     "oracle-diana11-003-one-shadow-execution.yml": (
         {"pull_request", "push"},
         "${{ github.event_name == 'pull_request' && "
         "format('oracle-diana11-003-pr-{0}', github.event.pull_request.number) || "
-        "'oracle-instance-workload-mutation' }}",
+        "format('oracle-diana11-003-request-{0}', github.sha) }}",
     ),
 }
 
@@ -132,6 +132,44 @@ def test_all_submit_bridge_oracle_producers_have_exact_event_to_fence_mapping() 
     assert _workflows_containing(" submit-bridge") == set(EXPECTED_PRODUCERS)
     for name, (events, group) in EXPECTED_PRODUCERS.items():
         _assert_workflow_mapping(name, events, group)
+
+
+def test_durable_diana_requests_use_request_preserving_groups_and_host_fence() -> None:
+    for name, (_, group) in EXPECTED_PRODUCERS.items():
+        assert "github.sha" in group, name
+        assert SHARED_FENCE not in group, name
+    for operator in (
+        "ops/universal_video_diana11_002_operator.sh",
+        "ops/universal_video_diana11_003_operator.sh",
+    ):
+        text = (ROOT / operator).read_text(encoding="utf-8")
+        assert "/run/lock/oracle-workload-mutation.lock" in text
+
+
+def test_remaining_host_mutators_acquire_atomic_host_fence() -> None:
+    tls = _workflow_text("oracle-dds3-tls-renewal.yml")
+    admin_workflow = _workflow_text("oracle-universal-video-admin.yml")
+    admin_entry = (ROOT / "ops/universal_video_oci_admin_entrypoint.sh").read_text(encoding="utf-8")
+    maintenance = (ROOT / "deploy/oracle-universal-video/universal-video-maintenance.service").read_text(encoding="utf-8")
+    for text in (tls, admin_entry, maintenance):
+        assert "/run/lock/oracle-workload-mutation.lock" in text
+    assert "flock -x 9" in tls
+    assert "ExecStart=/usr/bin/flock -x /run/lock/oracle-workload-mutation.lock" in tls
+    assert "flock -x 9" in admin_entry
+    assert "/usr/bin/flock -x" in maintenance
+    assert "github.sha" in admin_workflow
+    assert "oracle-instance-workload-mutation" not in admin_workflow.split("concurrency:", 1)[1].split("jobs:", 1)[0]
+
+    for name in (
+        "oracle-assistant-lab-control-rollout.yml",
+        "oracle-assistant-lab-worker-rollout.yml",
+        "oracle-ben-runtime-rollout.yml",
+    ):
+        rollout = _workflow_text(name)
+        concurrency = rollout.split("concurrency:", 1)[1].split("jobs:", 1)[0]
+        assert "github.sha" in concurrency, name
+        assert "cancel-in-progress: false" in concurrency, name
+        assert "/run/lock/oracle-workload-mutation.lock" in rollout, name
 
 
 def test_stop_consumer_has_exact_non_cancelling_event_to_fence_mapping() -> None:
@@ -221,3 +259,19 @@ def test_instance_power_preserves_confirmed_busy_state() -> None:
     no = workflow.index("stop_authorized=NO", busy)
     mapped = workflow.index("idle_state=BUSY", no)
     assert busy < no < mapped
+
+
+def test_maintenance_handoff_remains_classifier_visible_until_reacquire() -> None:
+    classifier = (ROOT / "ops/oracle_idle_state.sh").read_text(encoding="utf-8")
+    productionize = (ROOT / "ops/oracle_universal_video_productionize.sh").read_text(encoding="utf-8")
+    marker = "/run/bridge-school/universal-video-maintenance-handoff"
+    assert marker in classifier
+    assert "maintenance_fence_handoff_in_progress" in classifier
+    assert marker in productionize
+    assert "owns_fence=1" in productionize
+    assert "if (( owns_fence == 0 ))" in productionize
+    create = productionize.index('install -m 0600 -o root -g root /dev/null "$MAINT_HANDOFF_FILE"')
+    release = productionize.index("flock -u 9", create)
+    reacquire = productionize.index("flock -x 9", release)
+    remove = productionize.index('rm -f "$MAINT_HANDOFF_FILE"', reacquire)
+    assert create < release < reacquire < remove

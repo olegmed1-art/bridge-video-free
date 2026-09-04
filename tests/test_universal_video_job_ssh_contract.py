@@ -35,7 +35,7 @@ def test_job_invokes_only_fixed_resident_admin_surfaces():
     assert "oci instance-agent command" not in WORKFLOW
     assert "--execution-user" not in WORKFLOW
     assert "repair_cmd='sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video-spool-repair'" in WORKFLOW
-    assert 'submit_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video submit-drive-base64 \'$payload\'"' in WORKFLOW
+    assert 'submit_cmd="sudo -n /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock sudo -u ocarun sudo -n /usr/local/sbin/universal-video submit-drive-base64 \'$payload\'"' in WORKFLOW
     assert "status '$JOB_ID' '$PROFILE' '$JOB_HASH' '$SOURCE_FILE_ID'" in WORKFLOW
     assert 'run_remote "$repair_cmd"' in WORKFLOW
     assert 'run_remote "$submit_cmd"' in WORKFLOW

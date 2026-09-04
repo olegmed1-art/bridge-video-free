@@ -16,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('oracle-video-batch-pr-{0}', github.run_id) || 'oracle-instance-workload-mutation' }}
+  group: ${{ github.event_name == 'pull_request' && format('oracle-video-batch-pr-{0}', github.event.pull_request.number) || format('oracle-video-batch-request-{0}', github.sha) }}
   cancel-in-progress: false
 
 jobs:
@@ -69,7 +69,10 @@ jobs:
     if: ${{ github.event_name == 'push' }}
     needs: validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # The longest competing bounded mutator (productionize) may hold the host
+    # fence for 75 minutes. Each immutable request has its own workflow run, so
+    # wait beyond that bound instead of abandoning a durable enqueue.
+    timeout-minutes: 90
     env:
       INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
       OCI_USER: ${{ secrets.OCI_CLI_USER }}
@@ -143,11 +146,11 @@ jobs:
           set -euo pipefail
           [[ -n "$PAYLOAD" && ${#PAYLOAD} -le 24000 ]]
           set +e
-          result="$(timeout 180 ssh -i '${{ steps.ssh.outputs.key }}' \
+          result="$(timeout 4800 ssh -i '${{ steps.ssh.outputs.key }}' \
             -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
             "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video enqueue-batch-base64 '$PAYLOAD'" 2>/dev/null)"
+            "sudo -n /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock sudo -u ocarun sudo -n /usr/local/sbin/universal-video enqueue-batch-base64 '$PAYLOAD'" 2>/dev/null)"
           enqueue_rc=$?
           set -e
           if (( enqueue_rc != 0 )); then

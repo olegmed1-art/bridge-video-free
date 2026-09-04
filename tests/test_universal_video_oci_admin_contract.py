@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -7,6 +8,8 @@ OPERATOR_INSTALL = (ROOT / "ops/install_universal_video_operator.sh").read_text(
 CLOUD = (ROOT / "ops/cloud_shell_install_bounded_oci_admin.sh").read_text(encoding="utf-8")
 VIDEO_CLOUD = (ROOT / "ops/cloud_shell_install_universal_video_bounded_admin.sh").read_text(encoding="utf-8")
 WORKFLOW = (ROOT / ".github/workflows/oracle-universal-video-admin.yml").read_text(encoding="utf-8")
+PRODUCTIONIZE = (ROOT / "ops/oracle_universal_video_productionize.sh").read_text(encoding="utf-8")
+MAINTENANCE_UNIT = (ROOT / "deploy/oracle-universal-video/universal-video-maintenance.service").read_text(encoding="utf-8")
 
 
 def test_entrypoint_is_fixed_and_no_asr_productionization_only():
@@ -32,6 +35,29 @@ def test_entrypoint_is_fixed_and_no_asr_productionization_only():
     assert "eval " not in ENTRY
     assert "bash -c" not in ENTRY
     assert "sh -c" not in ENTRY
+
+
+def test_admin_runtime_pin_is_one_self_consistent_published_tree():
+    def pinned(name, text):
+        match = re.search(rf"readonly {name}='([^']+)'", text)
+        assert match, name
+        return match.group(1)
+
+    runtime = pinned("UV_RUNTIME_COMMIT", ENTRY)
+    installer_runtime = re.search(
+        r"readonly UV_RUNTIME_COMMIT='([0-9a-f]{40})'", INSTALL
+    )
+    assert installer_runtime
+    assert runtime == installer_runtime.group(1)
+    assert (
+        runtime,
+        pinned("ACTIVATION_BLOB", ENTRY),
+        pinned("PRODUCTIONIZE_BLOB", ENTRY),
+    ) == (
+        "7e46f0327d6094400e0d35ec6af20408cc97683e",
+        "bbf4dc5779726fca415f641b90d017a802daaabf",
+        "9a76e06ed1cb7ecc92102e5c16cf215c18f9159d",
+    )
 
 
 def test_sudoers_surface_is_exact_and_not_broad():
@@ -119,6 +145,26 @@ def test_workflow_does_not_publish_raw_remote_output_or_oauth_values():
     assert "client_secret" not in WORKFLOW
     assert "refresh_token" not in WORKFLOW
     assert "GOOGLE_DRIVE_OAUTH_JSON" not in WORKFLOW
+
+
+def test_productionize_hands_fence_to_exact_maintenance_unit():
+    register = PRODUCTIONIZE.index('systemctl start --no-block "$MAINT_SERVICE"')
+    handoff = PRODUCTIONIZE.index("flock -u 9")
+    start = PRODUCTIONIZE.index('systemctl start "$MAINT_SERVICE"', handoff)
+    reacquire = PRODUCTIONIZE.index("flock -x 9", start)
+    result_check = PRODUCTIONIZE.index('systemctl show "$MAINT_SERVICE" -p Result', start)
+    activating = PRODUCTIONIZE.index('== activating', register)
+    assert register < activating < handoff < start
+    assert start < reacquire
+    assert reacquire < result_check
+    assert "exec 9>&-" not in PRODUCTIONIZE
+    assert "universal_video.maintenance --base-dir \"$BASE_DIR\" --apply" not in PRODUCTIONIZE
+    assert "EnvironmentFile=/opt/bridge-school/universal-video/universal-video.env" in MAINTENANCE_UNIT
+    assert "CPUQuota=50%" in MAINTENANCE_UNIT
+    assert "MemoryMax=256M" in MAINTENANCE_UNIT
+    assert "NoNewPrivileges=true" in MAINTENANCE_UNIT
+    assert "ProtectSystem=strict" in MAINTENANCE_UNIT
+    assert "ExecStart=/usr/bin/flock -x /run/lock/oracle-workload-mutation.lock" in MAINTENANCE_UNIT
 
 
 def test_video_only_cloud_bootstrap_does_not_depend_on_assistant_lab_audit():

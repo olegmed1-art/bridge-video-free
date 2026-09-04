@@ -65,7 +65,7 @@ def test_downstream_power_boundary_remains_exact_and_idle_gated():
     assert "Stop exact instance only with IDLE proof" in text
     stop_step = text.index("Stop exact instance only with IDLE proof")
     final_probe = text.index(
-        "bridge-school-oracle-final-idle-proof-${GITHUB_RUN_ID}", stop_step
+        "bridge-school-oracle-final-idle-fence-${GITHUB_RUN_ID}", stop_step
     )
     final_authorizer = text.index("--proof \"$proof\"", final_probe)
     post_probe_epoch = text.index("post_probe_epoch_state=", final_authorizer)
@@ -84,7 +84,8 @@ def test_downstream_power_boundary_remains_exact_and_idle_gated():
 def test_video_and_power_mutations_share_a_non_cancelling_lock():
     video = VIDEO.read_text(encoding="utf-8")
     power = POWER.read_text(encoding="utf-8")
-    assert "'oracle-instance-workload-mutation'" in video
+    assert "/run/lock/oracle-workload-mutation.lock" in video
+    assert "oracle-universal-video-request-{0}" in video
     assert "oracle-universal-video-pr-{0}" in video
     assert "'oracle-instance-workload-mutation'" in power
     assert "oracle-instance-status-{0}" in power

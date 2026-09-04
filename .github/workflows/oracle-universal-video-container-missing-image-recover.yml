@@ -16,7 +16,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('uv-container-recovery-pr-{0}', github.run_id) || 'oracle-instance-workload-mutation' }}
+  group: ${{ github.event_name == 'pull_request' && format('uv-container-recovery-pr-{0}', github.event.pull_request.number) || format('uv-container-recovery-request-{0}', github.sha) }}
   cancel-in-progress: false
 
 jobs:
@@ -67,5 +67,5 @@ jobs:
         run: |
           set -euo pipefail
           ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n env UNIVERSAL_VIDEO_EXPECTED_SHA='$EXACT_RUNTIME_SHA' /bin/bash -s" < ops/oracle_universal_video_container_missing_image_recover.sh | tee "$RUNNER_TEMP/recovery.txt"
+            "sudo -n env UNIVERSAL_VIDEO_EXPECTED_SHA='$EXACT_RUNTIME_SHA' /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock /bin/bash -s" < ops/oracle_universal_video_container_missing_image_recover.sh | tee "$RUNNER_TEMP/recovery.txt"
           grep -E '^UV_CONTAINER_RECOVERY_PASS runtime_sha=[0-9a-f]{40} backup=/var/lib/bridge-school/universal-video-container-recovery/[^ ]+ image_digest=sha256:[0-9a-f]{64}$' "$RUNNER_TEMP/recovery.txt"

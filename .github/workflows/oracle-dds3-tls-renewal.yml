@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: oracle-dds3-tls-renewal
+  group: ${{ github.event_name == 'pull_request' && format('oracle-dds3-tls-renewal-pr-{0}', github.event.pull_request.number) || format('oracle-dds3-tls-renewal-request-{0}', github.sha) }}
   cancel-in-progress: false
 
 jobs:
@@ -101,6 +101,8 @@ jobs:
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
             "sudo -n env PUBLIC_IP='$ORACLE_HOST' bash -s" <<'REMOTE' | tee "$log"
           set -Eeuo pipefail
+          exec 9>/run/lock/oracle-workload-mutation.lock
+          flock -x 9
           [[ "$PUBLIC_IP" == '158.180.47.161' ]]
           cert_dir="/etc/letsencrypt/live/$PUBLIC_IP"
           cert="$cert_dir/fullchain.pem"
@@ -122,6 +124,13 @@ jobs:
           created_hook=false
           created_service=false
           created_timer=false
+          service_present=false
+          service_backup="$(mktemp /tmp/dds3-cert-renew.service.backup.XXXXXX)"
+          if [[ -e /etc/systemd/system/dds3-cert-renew.service ]]; then
+            [[ -f /etc/systemd/system/dds3-cert-renew.service && ! -L /etc/systemd/system/dds3-cert-renew.service ]]
+            cp --preserve=mode,ownership,timestamps /etc/systemd/system/dds3-cert-renew.service "$service_backup"
+            service_present=true
+          fi
 
           rollback(){
             rc=$?
@@ -134,9 +143,12 @@ jobs:
               systemctl disable --now dds3-cert-renew.timer >/dev/null 2>&1 || true
               rm -f /etc/systemd/system/dds3-cert-renew.timer
             fi
-            if [[ "$created_service" == true ]]; then
+            if [[ "$service_present" == true ]]; then
+              cp --preserve=mode,ownership,timestamps "$service_backup" /etc/systemd/system/dds3-cert-renew.service
+            else
               rm -f /etc/systemd/system/dds3-cert-renew.service
             fi
+            rm -f "$service_backup"
             if [[ "$created_hook" == true ]]; then
               rm -f /etc/letsencrypt/renewal-hooks/deploy/10-reload-nginx
             fi
@@ -155,18 +167,16 @@ jobs:
             chmod 0755 /etc/letsencrypt/renewal-hooks/deploy/10-reload-nginx
             created_hook=true
           fi
-          if [[ ! -e /etc/systemd/system/dds3-cert-renew.service ]]; then
-            cat >/etc/systemd/system/dds3-cert-renew.service <<'EOF'
+          cat >/etc/systemd/system/dds3-cert-renew.service <<'EOF'
           [Unit]
           Description=Renew Bridge School DDS3 short-lived TLS certificate
           After=network-online.target nginx.service
           Wants=network-online.target
           [Service]
           Type=oneshot
-          ExecStart=/opt/certbot/bin/certbot renew --quiet --cert-name 158.180.47.161
+          ExecStart=/usr/bin/flock -x /run/lock/oracle-workload-mutation.lock /opt/certbot/bin/certbot renew --quiet --cert-name 158.180.47.161
           EOF
-            created_service=true
-          fi
+          grep -Fx 'ExecStart=/usr/bin/flock -x /run/lock/oracle-workload-mutation.lock /opt/certbot/bin/certbot renew --quiet --cert-name 158.180.47.161' /etc/systemd/system/dds3-cert-renew.service >/dev/null
           if [[ ! -e /etc/systemd/system/dds3-cert-renew.timer ]]; then
             cat >/etc/systemd/system/dds3-cert-renew.timer <<'EOF'
           [Unit]
@@ -185,14 +195,17 @@ jobs:
           systemctl is-active --quiet dds3-cert-renew.timer
 
           if ! openssl x509 -checkend 86400 -noout -in "$cert" >/dev/null 2>&1; then
-            systemctl reset-failed dds3-cert-renew.service 2>/dev/null || true
-            if systemctl start dds3-cert-renew.service; then
-              echo tls_systemd_renewal=PASS
+            # This shell already owns the shared fence. Do not start the
+            # separately fenced oneshot and deadlock on our own lock.
+            if "$certbot" renew --quiet --cert-name "$PUBLIC_IP"; then
+              systemctl reset-failed dds3-cert-renew.service 2>/dev/null || true
+              [[ "$(systemctl is-failed dds3-cert-renew.service 2>/dev/null || true)" != failed ]]
+              echo tls_direct_renewal_under_outer_fence=PASS
             else
-              echo tls_systemd_renewal=FAILED_FALLBACK_REQUIRED
+              echo tls_direct_renewal_under_outer_fence=FAILED_FALLBACK_REQUIRED
             fi
           else
-            echo tls_systemd_renewal=NOT_REQUIRED
+            echo tls_direct_renewal_under_outer_fence=NOT_REQUIRED
           fi
 
           if ! openssl x509 -checkend 86400 -noout -in "$cert" >/dev/null 2>&1; then
@@ -210,6 +223,8 @@ jobs:
           systemctl reload nginx
           systemctl is-active --quiet dds3-cert-renew.timer
           openssl x509 -checkend 86400 -noout -in "$cert"
+          systemctl reset-failed dds3-cert-renew.service 2>/dev/null || true
+          [[ "$(systemctl is-failed dds3-cert-renew.service 2>/dev/null || true)" != failed ]]
           curl -fsS --max-time 12 "https://$PUBLIC_IP/readyz" >/tmp/dds3-tls-renewal-ready.json
           python3 - <<'PY'
           import json
@@ -222,6 +237,7 @@ jobs:
           printf 'tls_after_not_after=%s\n' "$(openssl x509 -in "$cert" -noout -enddate | cut -d= -f2-)"
           echo tls_timer=active
           echo ORACLE_DDS3_TLS_RENEWAL_PASS
+          rm -f "$service_backup"
           trap - ERR
           REMOTE
           grep -Fx ORACLE_DDS3_TLS_RENEWAL_PASS "$log" >/dev/null

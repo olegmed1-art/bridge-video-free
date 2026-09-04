@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - autopilot/oracle-idle-stop-guard-627-v2
+      - codex/issue-627-final-main-20260902
     paths:
       - '.github/workflows/*.yml'
       - 'assistant_lab/oracle_idle_schema.sql'

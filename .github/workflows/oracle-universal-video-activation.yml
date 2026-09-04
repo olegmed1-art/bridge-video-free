@@ -35,7 +35,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('oracle-universal-video-activation-pr-{0}', github.run_id) || 'oracle-instance-workload-mutation' }}
+  group: ${{ github.event_name == 'pull_request' && format('oracle-universal-video-activation-pr-{0}', github.event.pull_request.number) || format('oracle-universal-video-activation-request-{0}', github.sha) }}
   cancel-in-progress: false
 
 jobs:
@@ -277,7 +277,7 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile='${{ steps.hostkey.outputs.known_hosts }}' \
             -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n env UNIVERSAL_VIDEO_GIT_REF='${{ steps.request.outputs.git_ref }}' UNIVERSAL_VIDEO_RUN_SMOKE='$smoke' UNIVERSAL_VIDEO_ACTIVATE=1 UNIVERSAL_VIDEO_PREWARM_MODEL=1 UNIVERSAL_VIDEO_QUEUE_DSN_STAGING='$remote_dsn' bash -s" \
+            "sudo -n env UNIVERSAL_VIDEO_GIT_REF='${{ steps.request.outputs.git_ref }}' UNIVERSAL_VIDEO_RUN_SMOKE='$smoke' UNIVERSAL_VIDEO_ACTIVATE=1 UNIVERSAL_VIDEO_PREWARM_MODEL=1 UNIVERSAL_VIDEO_QUEUE_DSN_STAGING='$remote_dsn' /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock bash -s" \
             < "$RUNNER_TEMP/oracle-universal-video-payload.sh" 2>&1 | tee "$log"
           grep -Fx UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS "$log" >/dev/null
           grep -F assistant_lab=active "$log" >/dev/null

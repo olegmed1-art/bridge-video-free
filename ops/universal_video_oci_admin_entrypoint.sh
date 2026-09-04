@@ -125,6 +125,12 @@ download_verified(){
 }
 
 productionize(){
+  CURRENT_STAGE='productionize_host_fence'
+  touch /run/lock/oracle-workload-mutation.lock
+  chown root:universal-video /run/lock/oracle-workload-mutation.lock
+  chmod 0660 /run/lock/oracle-workload-mutation.lock
+  exec 9>/run/lock/oracle-workload-mutation.lock
+  flock -x 9
   CURRENT_STAGE='productionize_protected_services'
   verify_protected_services
   CURRENT_STAGE='productionize_dds3_before'
@@ -172,6 +178,7 @@ productionize(){
     PATH="$SAFE_PATH" HOME=/root LANG=C.UTF-8 \
     UNIVERSAL_VIDEO_SOURCE_DIR="$SOURCE_DIR" \
     UNIVERSAL_VIDEO_DIR="$BASE_DIR" \
+    ORACLE_WORKLOAD_FENCE_HELD=1 \
     UNIVERSAL_VIDEO_DRIVE_PROBE_FILE_ID="$DRIVE_PROBE_FILE_ID" \
     UNIVERSAL_VIDEO_DRIVE_RESULTS_FOLDER_ID="$DRIVE_RESULTS_FOLDER_ID" \
     UNIVERSAL_VIDEO_MAX_SOURCE_BYTES=17179869184 \

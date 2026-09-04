@@ -253,6 +253,8 @@ PY
 
 publish_bridge(){
   verify_runtime
+  exec 9>/run/lock/oracle-workload-mutation.lock
+  flock -x 9
   verify_school_runtime
   [[ -f "$OAUTH_FILE" && ! -L "$OAUTH_FILE" ]] || fail 'protected Drive OAuth file missing'
   local current conformance publication work published_dir receipt artifact_set_sha256

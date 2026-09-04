@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+owns_fence=0
+if [[ "${ORACLE_WORKLOAD_FENCE_HELD:-0}" != 1 ]]; then
+  exec 9>/run/lock/oracle-workload-mutation.lock
+  flock -x 9
+  owns_fence=1
+fi
 
 # Apply #371 production I/O/resource gates to the already-proven Oracle sidecar.
 # This script never starts ASR and never changes production routing.
@@ -11,6 +17,7 @@ SOURCE_DIR="${UNIVERSAL_VIDEO_SOURCE_DIR:-/opt/bridge-school/universal-video-src
 SERVICE_NAME="${UNIVERSAL_VIDEO_SERVICE_NAME:-universal-video.service}"
 MAINT_SERVICE="universal-video-maintenance.service"
 MAINT_TIMER="universal-video-maintenance.timer"
+MAINT_HANDOFF_FILE="${ORACLE_MAINTENANCE_HANDOFF_FILE:-/run/bridge-school/universal-video-maintenance-handoff}"
 SECRETS_ENV_FILE="${UNIVERSAL_VIDEO_SECRETS_ENV_FILE:-$BASE_DIR/universal-video-secrets.env}"
 DRIVE_PROBE_FILE_ID="${UNIVERSAL_VIDEO_DRIVE_PROBE_FILE_ID:-}"
 DRIVE_RESULTS_FOLDER_ID="${UNIVERSAL_VIDEO_DRIVE_RESULTS_FOLDER_ID:-}"
@@ -31,6 +38,9 @@ state(){ systemctl is-active "$1" 2>/dev/null || true; }
 [[ -f "$SOURCE_DIR/deploy/oracle-universal-video/$MAINT_TIMER" ]] || die "maintenance timer missing"
 [[ -n "$DRIVE_PROBE_FILE_ID" ]] || die "UNIVERSAL_VIDEO_DRIVE_PROBE_FILE_ID is required for the no-ASR Drive source gate"
 [[ -n "$DRIVE_RESULTS_FOLDER_ID" ]] || die "UNIVERSAL_VIDEO_DRIVE_RESULTS_FOLDER_ID is required for the result-routing gate"
+# An interrupted prior handoff intentionally blocks STOP. This process owns the
+# shared fence here, so this is the only safe point to clear it before retry.
+rm -f "$MAINT_HANDOFF_FILE"
 
 if find "$BASE_DIR/spool/running" -maxdepth 1 -type f -name '*.json' -print -quit 2>/dev/null | grep -q .; then
   die "universal-video has a running job; refusing resource/retention rollout"
@@ -72,8 +82,34 @@ runuser -u "$USER_NAME" -- env PYTHONPATH="$SOURCE_DIR" \
   "$BASE_DIR/.venv/bin/python" -m universal_video.maintenance --base-dir "$BASE_DIR"
 systemctl enable --now "$MAINT_TIMER" >/dev/null
 systemctl is-active --quiet "$MAINT_TIMER" || die "maintenance timer is not active"
-systemctl start "$MAINT_SERVICE"
-systemctl is-failed --quiet "$MAINT_SERVICE" && die "maintenance service failed"
+# Register the oneshot as activating while the current process still owns the
+# fence.  The classifier maps this transitional state to UNKNOWN, so STOP is
+# forbidden throughout the hand-off to the unit's ExecStart flock.
+if (( owns_fence == 0 )); then
+  # The root caller retains the outer fence across the whole operation.
+  systemctl start "$MAINT_SERVICE"
+else
+  install -m 0600 -o root -g root /dev/null "$MAINT_HANDOFF_FILE"
+  systemctl start --no-block "$MAINT_SERVICE"
+fi
+for _ in $(seq 1 20); do
+  [[ "$(systemctl is-active "$MAINT_SERVICE" 2>/dev/null || true)" == activating ]] && break
+  sleep 0.1
+done
+[[ "$(systemctl is-active "$MAINT_SERVICE" 2>/dev/null || true)" == activating ]] \
+  || die "maintenance service did not enter classifier-visible activating state"
+if (( owns_fence == 1 )); then
+  flock -u 9
+  systemctl start "$MAINT_SERVICE"
+  # The marker keeps the classifier non-IDLE across the unavoidable flock
+  # handback. Remove it only after this caller owns the fence again.
+  flock -x 9
+  rm -f "$MAINT_HANDOFF_FILE"
+fi
+systemctl is-active --quiet "$MAINT_SERVICE" \
+  && die "maintenance oneshot did not finish"
+[[ "$(systemctl show "$MAINT_SERVICE" -p Result --value)" == success ]] \
+  || die "maintenance service failed"
 echo 'UNIVERSAL_VIDEO_RETENTION_PASS'
 
 log "Validate protected file-backed Google Drive OAuth boundary"

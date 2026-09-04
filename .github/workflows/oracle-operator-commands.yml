@@ -15,7 +15,7 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: oracle-operator-${{ github.event.issue.number || github.run_id }}
+  group: ${{ github.event_name == 'pull_request' && format('oracle-operator-pr-{0}', github.run_id) || (github.event_name == 'issue_comment' && github.event.comment.user.login == github.repository_owner && contains(fromJSON('["/oracle rollout-worker","/oracle rollout-ben"]'), github.event.comment.body)) && 'oracle-instance-workload-mutation' || format('oracle-operator-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
@@ -89,6 +89,8 @@ jobs:
               -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
               "sudo -n env WORKER_GIT_REF='$ref' bash -s" <<'REMOTE'
             set -Eeuo pipefail
+            exec 9>/run/lock/oracle-workload-mutation.lock
+            flock -x 9
             repo=/opt/bridge-school/bridge-video-free
             git -C "$repo" fetch --quiet origin "$WORKER_GIT_REF"
             git -C "$repo" cat-file -e "$WORKER_GIT_REF^{commit}"
@@ -103,7 +105,7 @@ jobs:
           else
             ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
               -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-              "sudo -n env BEN_IMAGE='$BEN_IMAGE' bash -s" < ops/install_ben_runtime.sh
+              "sudo -n env BEN_IMAGE='$BEN_IMAGE' /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock bash -s" < ops/install_ben_runtime.sh
           fi
 
       - name: Publish result
