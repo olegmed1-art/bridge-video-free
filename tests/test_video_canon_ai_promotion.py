@@ -125,6 +125,14 @@ def test_effective_period_is_sealed_in_postgresql_compatible_canonical_form():
     }
 
 
+def test_activation_scope_must_match_candidate_semantic_scope():
+    candidate = _candidate()
+    bundle = _bundle(candidate)
+    bundle["activation_scope"] = "bidding/another/profile/scope"
+    with pytest.raises(VideoCanonAIPromotionError, match="activation scope must match"):
+        build_ai_canon_promotion(candidate, bundle)
+
+
 @pytest.mark.parametrize("mutation, match", [
     (lambda b: b["checks"].pop(), "check set mismatch"),
     (lambda b: b["checks"][0].update(result="FAIL"), "did not pass"),

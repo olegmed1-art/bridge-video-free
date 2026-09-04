@@ -133,6 +133,17 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "jsonb_array_length(NEW.bundle_payload->'checks')<>16",
         "VIDEO_CANON_RESTORE_VALIDATION_GATES_FAILED",
         "VIDEO_CANON_RESTORE_SOURCE_POLICY_INACTIVE",
+        "to_regclass('bidding.video_canon_promotion_delivery_receipt') IS NOT NULL",
+        "bidding.video_canon_assurance_verdict i2",
+        "bidding.video_canon_assurance_verdict i3",
+        "dr.assurance_set_sha256",
+        "a2.status='active'",
+        "a3.status='active'",
+        "r2.capability_role='bridge_school_canon_i2_verifier'",
+        "r3.capability_role='bridge_school_canon_i3_verifier'",
+        "pg_has_role(attestor.oid,r2.capability_role,'MEMBER')",
+        "pg_has_role(attestor.oid,r3.capability_role,'MEMBER')",
+        "VIDEO_CANON_RESTORE_I2_I3_ASSURANCE_REVOKED",
         "VIDEO_CANON_RESTORE_CANON_VERSION_GATES_FAILED",
         "VIDEO_CANON_RESTORE_TARGET_BINDING_MISMATCH",
         "VIDEO_CANON_RESTORE_BUNDLE_NOT_FOUND",
@@ -227,6 +238,13 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "jsonb_typeof(v_candidate.payload->'contradictions') IS DISTINCT FROM 'array'",
         "v_candidate.payload->>'schema' IS DISTINCT FROM 'video-canon-evidence-v2'",
         "v_candidate.payload->>'review_eligibility' IS DISTINCT FROM 'AI_VERIFICATION_PENDING'",
+        "IS DISTINCT FROM v_candidate.payload->>'semantic_scope'",
+        "p.valid_from<=v_prior_canon.valid_from",
+        "p.valid_to>v_prior_canon.valid_from",
+        "p.system_profile=c.payload->>'system_profile'",
+        "p.learner_level=c.payload->>'learner_level'",
+        "p.system_profile=v_prior_version.bidding_system_key",
+        "p.learner_level=v_prior_version.level_scope->>'level_key'",
     ):
         assert marker in MIGRATION
 
@@ -237,6 +255,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
     assert '"partnerDeal":"AKQ"' in DATABASE_TEST
     assert '"north/deal":"AKQ"' in DATABASE_TEST
     assert "VIDEO_CANON_SOURCE_POLICY_SUCCESSOR_HISTORY_NOT_PRESERVED" in DATABASE_TEST
+    assert "VIDEO_CANON_BUNDLE_SCOPE_MISMATCH_NOT_BLOCKED" in DATABASE_TEST
 
     assert "'hidden_cards','hidden_hand','hidden_hands'" in MIGRATION
     assert "'concealed_hand','concealed_hands'" in MIGRATION

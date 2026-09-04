@@ -408,6 +408,7 @@ DECLARE
   v_cross_school_policy_failed boolean:=false;
   v_bad_bundle_failed boolean:=false;
   v_invalid_period_failed boolean:=false;
+  v_scope_bundle_failed boolean:=false;
   v_missing_bundle_field_failed boolean:=false;
   v_candidate_state_failed boolean:=false;
   v_missing_bundle_field text;
@@ -601,6 +602,9 @@ BEGIN
     v_old_candidate,v_school,'video_school_canon_candidate','restore-'||v_old_candidate::text,
     repeat('f',64),'AI_VERIFIED','promoted',jsonb_build_object(
       'source_class','SCHOOL_PRIMARY_EVIDENCE',
+      'semantic_scope','restore-scope',
+      'system_profile','natural-v1',
+      'learner_level','beginner-1',
       'source',jsonb_build_object('source_sha256',repeat('e',64),'video_file_id','restore-video-old'),
       'teacher_assertion',jsonb_build_object('speaker_id','teacher:restore'),
       'source_authorization',jsonb_build_object(
@@ -610,13 +614,15 @@ BEGIN
     ),repeat('1',64),'video-canon-evidence-v2',v_source
   ),(
     v_candidate,v_school,'video_school_canon_candidate','restore-'||v_candidate::text,
-    repeat('f',64),'AI_VERIFICATION_PENDING','staging','{}',repeat('a',64),
+    repeat('f',64),'AI_VERIFICATION_PENDING','staging',
+    jsonb_build_object('semantic_scope','restore-scope'),repeat('a',64),
     'video-canon-evidence-v2',v_source
   );
   SELECT jsonb_build_object(
     'schema','video-canon-ai-promotion-v1',
     'policy_version','school-video-auto-canon-v1',
-    'candidate_payload_hash',repeat('a',64),'candidate_payload','{}'::jsonb,
+    'candidate_payload_hash',repeat('a',64),
+    'candidate_payload',jsonb_build_object('semantic_scope','restore-scope'),
     'system_profile','natural-v1','learner_level','beginner-1',
     'activation_scope','restore-scope',
     'canon_snapshot_sha256',repeat('0',64),
@@ -638,6 +644,24 @@ BEGIN
     (13,'CANON_REGRESSION'),(14,'CANON_INTEGRITY'),(15,'CANON_CONFLICT_SCAN'),
     (16,'ROLLBACK_RESTORE')
   ) AS required_checks(ordinal,check_id);
+  v_bad_bundle:=jsonb_set(
+    v_good_bundle,'{activation_scope}','"another-scope"'::jsonb
+  );
+  BEGIN
+    INSERT INTO bidding.video_canon_ai_verification_bundle(
+      school_id,analysis_candidate_id,candidate_payload_hash,
+      verification_bundle_sha256,bundle_canonical_json,bundle_payload
+    ) VALUES (
+      v_school,v_candidate,repeat('a',64),
+      encode(public.digest(convert_to(v_bad_bundle::text,'UTF8'),'sha256'),'hex'),
+      v_bad_bundle::text,v_bad_bundle
+    );
+  EXCEPTION WHEN check_violation THEN
+    v_scope_bundle_failed:=true;
+  END;
+  IF NOT v_scope_bundle_failed THEN
+    RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_SCOPE_MISMATCH_NOT_BLOCKED';
+  END IF;
   v_bad_bundle:=jsonb_set(
     v_good_bundle,'{effective_period}',
     jsonb_build_object(

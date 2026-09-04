@@ -228,6 +228,9 @@ def build_ai_canon_promotion(
         valid_to, valid_to_timestamp = _timestamp(valid_to, "valid_to")
         if valid_to_timestamp <= valid_from_timestamp:
             _fail("valid_to must be after valid_from")
+    activation_scope = _text(verification_bundle.get("activation_scope"), "activation_scope")
+    if activation_scope != _text(payload.get("semantic_scope"), "candidate semantic_scope"):
+        _fail("activation scope must match candidate semantic scope")
 
     rollback = verification_bundle.get("rollback")
     if not isinstance(rollback, Mapping) or set(rollback) != {
@@ -257,7 +260,7 @@ def build_ai_canon_promotion(
         "system_profile": _text(verification_bundle.get("system_profile"), "system_profile"),
         "learner_level": _text(verification_bundle.get("learner_level"), "learner_level"),
         "effective_period": {"valid_from": valid_from, "valid_to": valid_to},
-        "activation_scope": _text(verification_bundle.get("activation_scope"), "activation_scope"),
+        "activation_scope": activation_scope,
         "canon_snapshot_sha256": canon_snapshot_sha,
         "rule_test_state_sha256": rule_test_state_sha,
         "checks": [normalized[key] for key in sorted(normalized)],

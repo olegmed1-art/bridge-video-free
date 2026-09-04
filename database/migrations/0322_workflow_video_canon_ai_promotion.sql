@@ -827,6 +827,8 @@ BEGIN
        OR NEW.bundle_payload->>'candidate_payload_hash'
             IS DISTINCT FROM NEW.candidate_payload_hash
        OR NEW.bundle_payload->'candidate_payload' IS DISTINCT FROM v_candidate.payload
+       OR NEW.bundle_payload->>'activation_scope'
+            IS DISTINCT FROM v_candidate.payload->>'semantic_scope'
        OR NOT ((NEW.bundle_payload->>'canon_snapshot_sha256') ~ '^[0-9a-f]{64}$')
        OR NOT ((NEW.bundle_payload->>'rule_test_state_sha256') ~ '^[0-9a-f]{64}$')
        OR jsonb_typeof(NEW.bundle_payload->'checks')<>'array'
@@ -2016,6 +2018,89 @@ BEGIN
           FROM bidding.video_canon_ai_promotion_receipt
          WHERE canon_activation_id=v_promotion.superseded_canon_activation_id;
         IF v_prior_promotion.video_canon_ai_promotion_receipt_id IS NOT NULL THEN
+            -- 0323 adds independent I2/I3 delivery assurance. A predecessor
+            -- promoted through that consumer may be restored only while its
+            -- retained assurance principals and capabilities are still live.
+            -- Keep 0322 independently usable: the optional tables are touched
+            -- only when the later migration is installed.
+            IF to_regclass('bidding.video_canon_promotion_delivery_receipt') IS NOT NULL THEN
+                EXECUTE 'LOCK TABLE bidding.video_canon_promotion_delivery_receipt,
+                  bidding.video_canon_assurance_verdict,
+                  bidding.video_canon_assurance_assignment,
+                  bidding.video_canon_assurance_verifier_registry IN SHARE MODE';
+                IF EXISTS (
+                    SELECT 1
+                      FROM bidding.video_canon_promotion_delivery_receipt dr
+                     WHERE dr.promotion_receipt_id=
+                           v_prior_promotion.video_canon_ai_promotion_receipt_id
+                ) AND NOT EXISTS (
+                    SELECT 1
+                      FROM bidding.video_canon_promotion_delivery_receipt dr
+                      JOIN bidding.video_canon_assurance_verdict i2
+                        ON i2.analysis_candidate_id=dr.analysis_candidate_id
+                       AND i2.candidate_payload_hash=dr.candidate_payload_hash
+                       AND i2.verification_bundle_sha256=dr.verification_bundle_sha256
+                       AND i2.assurance_set_sha256=dr.assurance_set_sha256
+                       AND i2.assurance_level='I2'
+                      JOIN bidding.video_canon_assurance_verdict i3
+                        ON i3.analysis_candidate_id=i2.analysis_candidate_id
+                       AND i3.candidate_payload_hash=i2.candidate_payload_hash
+                       AND i3.verification_bundle_sha256=i2.verification_bundle_sha256
+                       AND i3.assurance_set_sha256=i2.assurance_set_sha256
+                       AND i3.assurance_level='I3'
+                      JOIN bidding.video_canon_assurance_assignment a2
+                        ON a2.video_canon_assurance_assignment_id=
+                           i2.video_canon_assurance_assignment_id
+                       AND a2.assurance_level='I2'
+                       AND a2.assigned_principal=i2.execution_principal
+                       AND a2.status='active'
+                      JOIN bidding.video_canon_assurance_assignment a3
+                        ON a3.video_canon_assurance_assignment_id=
+                           i3.video_canon_assurance_assignment_id
+                       AND a3.assurance_level='I3'
+                       AND a3.assigned_principal=i3.execution_principal
+                       AND a3.status='active'
+                      JOIN bidding.video_canon_assurance_verifier_registry r2
+                        ON r2.assurance_level='I2'
+                       AND r2.capability_role='bridge_school_canon_i2_verifier'
+                       AND r2.verifier_family=i2.verifier_family
+                       AND r2.verifier_version=i2.verifier_version
+                      JOIN bidding.video_canon_assurance_verifier_registry r3
+                        ON r3.assurance_level='I3'
+                       AND r3.capability_role='bridge_school_canon_i3_verifier'
+                       AND r3.verifier_family=i3.verifier_family
+                       AND r3.verifier_version=i3.verifier_version
+                     WHERE dr.promotion_receipt_id=
+                           v_prior_promotion.video_canon_ai_promotion_receipt_id
+                       AND i2.verdict='VERIFIED_FOR_PROMOTION'
+                       AND i3.verdict='VERIFIED_FOR_PROMOTION'
+                       AND i2.provenance_verified AND i3.provenance_verified
+                       AND i2.hidden_information_clear AND i3.hidden_information_clear
+                       AND i2.profile_unambiguous AND i3.profile_unambiguous
+                       AND NOT i2.canon_conflict AND NOT i3.canon_conflict
+                       AND i2.deterministic AND i3.deterministic
+                       AND i2.verifier_family<>i3.verifier_family
+                       AND i2.execution_principal<>i3.execution_principal
+                       AND i2.canon_snapshot_sha256=i3.canon_snapshot_sha256
+                       AND i2.system_profile=i3.system_profile
+                       AND i2.learner_level=i3.learner_level
+                       AND EXISTS (
+                         SELECT 1 FROM pg_catalog.pg_roles attestor
+                          WHERE attestor.rolname=i2.execution_principal
+                            AND attestor.rolcanlogin
+                            AND pg_has_role(attestor.oid,r2.capability_role,'MEMBER')
+                       )
+                       AND EXISTS (
+                         SELECT 1 FROM pg_catalog.pg_roles attestor
+                          WHERE attestor.rolname=i3.execution_principal
+                            AND attestor.rolcanlogin
+                            AND pg_has_role(attestor.oid,r3.capability_role,'MEMBER')
+                       )
+                ) THEN
+                    RAISE EXCEPTION 'VIDEO_CANON_RESTORE_I2_I3_ASSURANCE_REVOKED'
+                      USING ERRCODE='42501';
+                END IF;
+            END IF;
             SELECT p.* INTO v_prior_policy
               FROM public.analysis_candidate c
               JOIN bidding.video_canon_source_policy p
@@ -2029,6 +2114,8 @@ BEGIN
                AND p.status='active' AND p.policy_version=v_prior_promotion.policy_version
                AND p.valid_from<=clock_timestamp()
                AND (p.valid_to IS NULL OR p.valid_to>clock_timestamp())
+               AND p.valid_from<=v_prior_canon.valid_from
+               AND (p.valid_to IS NULL OR p.valid_to>v_prior_canon.valid_from)
                AND (p.valid_to IS NULL OR (
                  v_promotion.superseded_canon_valid_to IS NOT NULL
                  AND v_promotion.superseded_canon_valid_to<=p.valid_to
@@ -2037,6 +2124,10 @@ BEGIN
                AND p.video_file_id=c.payload#>>'{source,video_file_id}'
                AND (c.payload#>>'{teacher_assertion,speaker_id}')=ANY(p.teacher_ids)
                AND v_prior_promotion.semantic_scope=ANY(p.semantic_scopes)
+               AND p.system_profile=c.payload->>'system_profile'
+               AND p.learner_level=c.payload->>'learner_level'
+               AND p.system_profile=v_prior_version.bidding_system_key
+               AND p.learner_level=v_prior_version.level_scope->>'level_key'
                AND p.authorization_evidence_sha256=
                      c.payload#>>'{source_authorization,authorization_evidence_sha256}'
              FOR SHARE OF p,s;
