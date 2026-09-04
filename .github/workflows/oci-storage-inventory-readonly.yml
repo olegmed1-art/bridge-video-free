@@ -45,16 +45,28 @@ jobs:
           def oci_client_constructor(node):
               return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                       and node.func.attr.endswith('Client'))
+          def target_names(node):
+              if isinstance(node, ast.Name):
+                  return {node.id}
+              if isinstance(node, (ast.Tuple, ast.List)):
+                  return set().union(*(target_names(x) for x in node.elts))
+              return set()
           changed=True
           while changed:
               changed=False
               for node in ast.walk(tree):
-                  if not isinstance(node, ast.Assign) or len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+                  if isinstance(node, ast.Assign):
+                      targets=set().union(*(target_names(x) for x in node.targets))
+                      value=node.value
+                  elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)):
+                      targets=target_names(node.target)
+                      value=node.value
+                  else:
                       continue
-                  value=node.value
                   if oci_client_constructor(value) or (isinstance(value, ast.Name) and value.id in clients):
-                      if node.targets[0].id not in clients:
-                          clients.add(node.targets[0].id); changed=True
+                      new=targets-clients
+                      if new:
+                          clients.update(new); changed=True
           seen=set()
           for node in ast.walk(tree):
               if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'getattr':
@@ -212,7 +224,9 @@ jobs:
               print(f'subscribed_regions={len(regions)}')
               print(f'queried_compartments={len(compartments)}')
               print(f'nonterminated_instances={len(instances)}')
-              for n,(region,state,shape,boot_gb) in enumerate(sorted(instances),1):
+              for n,(region,state,shape,boot_gb) in enumerate(
+                  sorted(instances, key=lambda x: (x[0],x[1],x[2],str(x[3]))), 1
+              ):
                   print(f'instance_{n}_region={region}')
                   print(f'instance_{n}_state={state}')
                   print(f'instance_{n}_shape={shape}')
