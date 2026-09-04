@@ -131,6 +131,10 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"partner hand: AKQJ"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"partner hand: Q"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"N: 10"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N:AKQJ109.876.54.32"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s hand was S:AKQJ109 H:876 D:54 C:32"}'::jsonb

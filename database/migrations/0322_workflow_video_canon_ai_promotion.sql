@@ -300,7 +300,7 @@ SELECT EXISTS (
           WHERE matched.parts[1] ~*
                   E'(^|[^[:alnum:]_])[SHDC][[:space:]]*:'
              OR matched.parts[1] ~
-                  E'(^|[^[:alnum:]])(?:(?:10)|[AKQJT2-9]){2,13}($|[^[:alnum:]])'
+                  E'(^|[^[:alnum:]])(?:10|[AKQJT]|(?:(?:10)|[AKQJT2-9]){2,13})($|[^[:alnum:]])'
              OR matched.parts[1] ~*
                   E'(^|[^[:alnum:]])(-|(?:(?:10)|[AKQJT2-9]){1,13})([[:space:],/.]+(-|(?:(?:10)|[AKQJT2-9]){1,13})){1,3}($|[^[:alnum:]])'
        )
@@ -844,7 +844,7 @@ BEGIN
       bidding.runtime_activation,bidding.rule,bidding.rule_test,bidding.rule_test_run,
       bidding.rule_conflict,bidding.video_canon_verifier_registry,
       bidding.video_canon_ai_verification_bundle,
-      bidding.video_canon_ai_verification IN SHARE MODE;
+      bidding.video_canon_ai_verification IN SHARE ROW EXCLUSIVE MODE;
     v_canon_snapshot_sha256 := bidding.current_school_canon_snapshot_sha256(v_candidate.school_id);
     IF v_bundle.bundle_payload->>'canon_snapshot_sha256'<>v_canon_snapshot_sha256 THEN
         RAISE EXCEPTION 'VIDEO_CANON_STATE_CHECKS_STALE' USING ERRCODE='23514';
@@ -1294,7 +1294,7 @@ BEGIN
       public.source,public.knowledge_version_source,
       bidding.runtime_activation,bidding.rule,bidding.rule_test,bidding.rule_test_run,
       bidding.rule_conflict,bidding.video_canon_source_policy,
-      bidding.video_canon_verifier_registry,bidding.video_canon_ai_verification IN SHARE MODE;
+      bidding.video_canon_verifier_registry,bidding.video_canon_ai_verification IN SHARE ROW EXCLUSIVE MODE;
     SELECT * INTO v_existing FROM bidding.video_canon_ai_restore_receipt
      WHERE video_canon_ai_promotion_receipt_id=p_video_canon_ai_promotion_receipt_id;
     IF FOUND THEN
@@ -1329,13 +1329,24 @@ BEGIN
         RAISE EXCEPTION 'VIDEO_CANON_RESTORE_CURRENT_ACTIVATION_MISMATCH' USING ERRCODE='23514';
     END IF;
 
-    v_revoked_at := clock_timestamp();
-    UPDATE bidding.runtime_activation
-       SET status='revoked',valid_to=v_revoked_at
-     WHERE runtime_activation_id=v_new_runtime.runtime_activation_id;
-    UPDATE public.canon_activation
-       SET status='revoked',valid_to=v_revoked_at
-     WHERE canon_activation_id=v_new_canon.canon_activation_id;
+    -- Lock every restoration target before any final authority check or
+    -- mutation. SHARE ROW EXCLUSIVE table locks prevent later DML/lock upgrades.
+    IF v_promotion.superseded_canon_activation_id IS NOT NULL THEN
+        PERFORM 1 FROM public.canon_activation
+         WHERE canon_activation_id=v_promotion.superseded_canon_activation_id
+         FOR UPDATE;
+        PERFORM 1 FROM bidding.runtime_activation
+         WHERE runtime_activation_id=ANY(v_promotion.superseded_runtime_activation_ids)
+         ORDER BY runtime_activation_id
+         FOR UPDATE;
+        IF (SELECT count(*) FROM bidding.runtime_activation
+             WHERE runtime_activation_id=ANY(v_promotion.superseded_runtime_activation_ids))
+             <>cardinality(v_promotion.superseded_runtime_activation_ids)
+           OR jsonb_array_length(v_promotion.superseded_runtime_state)
+             <>cardinality(v_promotion.superseded_runtime_activation_ids) THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_RUNTIME_STATE_MISMATCH' USING ERRCODE='23514';
+        END IF;
+    END IF;
 
     IF v_promotion.superseded_canon_activation_id IS NOT NULL THEN
         IF v_promotion.superseded_canon_valid_to IS NOT NULL
@@ -1482,6 +1493,13 @@ BEGIN
            AND v_promotion.superseded_canon_valid_to<=clock_timestamp() THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_TARGET_EXPIRED' USING ERRCODE='23514';
         END IF;
+        v_revoked_at := clock_timestamp();
+        UPDATE bidding.runtime_activation
+           SET status='revoked',valid_to=v_revoked_at
+         WHERE runtime_activation_id=v_new_runtime.runtime_activation_id;
+        UPDATE public.canon_activation
+           SET status='revoked',valid_to=v_revoked_at
+         WHERE canon_activation_id=v_new_canon.canon_activation_id;
         UPDATE public.canon_activation
            SET status='active',valid_to=v_promotion.superseded_canon_valid_to
          WHERE canon_activation_id=v_promotion.superseded_canon_activation_id;
@@ -1524,6 +1542,16 @@ BEGIN
     ELSIF cardinality(v_promotion.superseded_runtime_activation_ids)<>0
        OR jsonb_array_length(v_promotion.superseded_runtime_state)<>0 THEN
         RAISE EXCEPTION 'VIDEO_CANON_RESTORE_UNEXPECTED_RUNTIME_STATE' USING ERRCODE='23514';
+    END IF;
+
+    IF v_promotion.superseded_canon_activation_id IS NULL THEN
+        v_revoked_at := clock_timestamp();
+        UPDATE bidding.runtime_activation
+           SET status='revoked',valid_to=v_revoked_at
+         WHERE runtime_activation_id=v_new_runtime.runtime_activation_id;
+        UPDATE public.canon_activation
+           SET status='revoked',valid_to=v_revoked_at
+         WHERE canon_activation_id=v_new_canon.canon_activation_id;
     END IF;
 
     INSERT INTO bidding.video_canon_ai_restore_receipt(

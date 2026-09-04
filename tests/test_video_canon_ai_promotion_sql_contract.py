@@ -66,7 +66,9 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "'active_canon_rules',active_canon_rules.rows",
         "SELECT 1 FROM public.canon_activation ca",
         "bidding.rule_conflict,bidding.video_canon_verifier_registry,",
-        "bidding.video_canon_ai_verification IN SHARE MODE",
+        "bidding.video_canon_ai_verification IN SHARE ROW EXCLUSIVE MODE",
+        "ORDER BY runtime_activation_id",
+        "Lock every restoration target before any final authority check",
         "v_retired_at := clock_timestamp()",
         "NEW.valid_to := v_retired_at",
         "VIDEO_CANON_PROMOTED_VERIFICATION_SET_CLOSED",
@@ -127,6 +129,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "[SHDC][[:space:]]*:",
         "{1,3}($|[^[:alnum:]])",
         "{2,13}($|[^[:alnum:]])",
+        "(?:10|[AKQJT]|",
     ):
         assert marker in MIGRATION
 

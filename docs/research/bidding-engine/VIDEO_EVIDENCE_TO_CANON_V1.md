@@ -138,7 +138,7 @@ serialized; only sanitized results or explicit gaps survive.
 
 The same value-level firewall applies before a teacher-video Canon candidate is
 placed in staging: full PBN encodings and labelled partner/opponent card payloads—including
-`♠♥♦♣` suit-symbol notation in any suit order, including a single disclosed suit group or fragments with omitted suits/cards—are rejected anywhere in the complete payload, including the source-bound
+`♠♥♦♣` suit-symbol notation in any suit order, including a single unambiguous card (`Q` or `10`), a disclosed suit group, or fragments with omitted suits/cards—are rejected anywhere in the complete payload, including the source-bound
 teacher statement and otherwise innocent keys such as `notes`. Candidate
 staging identity includes the canonical payload SHA-256, so a corrected
 assertion becomes a preserved new revision instead of colliding with the old
@@ -174,8 +174,10 @@ state-dependent checks (`CANON_REGRESSION`, `CANON_INTEGRITY`,
 Canon snapshot SHA-256. The snapshot includes active rules, knowledge versions,
 all active Canon activations, open conflicts, latest test runs and every active
 Canon version's source bindings, including versions without a runtime row. Activation
-serializes by school, locks the underlying Canon/rule/test/source/conflict and
-verifier-registry state, and rejects a stale digest. Immediately before writes,
+serializes by school and acquires write-intent table locks on the underlying
+Canon/rule/test/source/conflict and verifier-registry state before final
+wall-clock expiry checks, so later writes cannot wait on a lock upgrade past an
+authority boundary. It also rejects a stale digest. Immediately before writes,
 each receipt's recorded login must still exist, be login-capable and retain
 membership in its active verifier capability.
 
@@ -191,7 +193,9 @@ assertion.
 A digest of the complete immutable version projection is retained in the
 promotion receipt and activation provenance.
 
-Rollback is operational, not documentary. A dedicated restorer capability can
+Rollback is operational, not documentary. A dedicated restorer capability
+locks the predecessor Canon row and every recorded runtime target in
+deterministic order before final policy/expiry checks or mutations, then can
 invoke the receipt-bound restore RPC with the exact promotion bundle and restore
 evidence hashes. The transaction revokes the new Canon/runtime activation,
 restores the exact superseded activation IDs and their original validity ends,

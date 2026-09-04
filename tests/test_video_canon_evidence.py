@@ -196,6 +196,8 @@ def test_hidden_deal_is_rejected_inside_innocuous_allowed_value(field, value):
     "N: AKQJ.T98",
     "N: AKQJ",
     "partner hand: AKQJ",
+    "partner hand: Q",
+    "N: 10",
 ])
 def test_hidden_deal_is_rejected_in_source_bound_teacher_statement(statement):
     learning = _learning()
