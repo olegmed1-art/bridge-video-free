@@ -76,6 +76,9 @@ jobs:
           for node in ast.walk(tree):
               if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'getattr':
                   assert not node.args or not isinstance(node.args[0], ast.Name) or node.args[0].id not in clients, 'dynamic OCI client access forbidden'
+              if isinstance(node, ast.Call):
+                  escaped={x.id for x in [*node.args, *(k.value for k in node.keywords)] if isinstance(x, ast.Name) and x.id in clients}
+                  assert not escaped, f'OCI client passed to unchecked callable: {sorted(escaped)}'
               if not isinstance(node, ast.Attribute):
                   continue
               receiver=node.value
@@ -215,11 +218,11 @@ jobs:
                               availability_domain=ad,
                               compartment_id=compartment_id,
                           ).data:
-                              if vol.lifecycle_state not in {'TERMINATED','TERMINATING'}:
+                              if vol.lifecycle_state != 'TERMINATED':
                                   boot_volumes[vol.id]=vol
                       operation='list_block_volumes'
                       for vol in paginate(block.list_volumes, compartment_id).data:
-                          if vol.lifecycle_state not in {'TERMINATED','TERMINATING'}:
+                          if vol.lifecycle_state != 'TERMINATED':
                               block_volumes[vol.id]=vol
 
               boot_total=sum(int(v.size_in_gbs or 0) for v in boot_volumes.values())
