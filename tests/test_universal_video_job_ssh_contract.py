@@ -26,7 +26,12 @@ def test_job_uses_pinned_bounded_ssh_transport():
     assert "StrictHostKeyChecking=no" not in WORKFLOW
     assert "BatchMode=yes" in WORKFLOW
     assert "IdentitiesOnly=yes" in WORKFLOW
-    assert "timeout 4800 ssh" in WORKFLOW
+    assert 'timeout "$ssh_timeout" ssh' in WORKFLOW
+    assert "timeout-minutes: 360" in WORKFLOW
+    assert "EXECUTION_DEADLINE_EPOCH=$(( $(date +%s) + 21000 ))" in WORKFLOW
+    assert "remaining=$(( EXECUTION_DEADLINE_EPOCH - now - 300 ))" in WORKFLOW
+    assert 'ssh_timeout="$(budget_max 4800)"' in WORKFLOW
+    assert 'poll_sleep="$(budget_max 60)"' in WORKFLOW
     assert "ServerAliveInterval=15" in WORKFLOW
     assert "ServerAliveCountMax=2" in WORKFLOW
     assert "recover_instance_after_transport_loss" in WORKFLOW
@@ -34,7 +39,7 @@ def test_job_uses_pinned_bounded_ssh_transport():
     preflight = WORKFLOW.split("- name: Resolve trusted SSH transport", 1)[0]
     assert "STARTING)" in preflight
     assert "STOPPING)" in preflight
-    assert "--wait-for-state STOPPED --max-wait-seconds 600" in preflight
+    assert '--wait-for-state STOPPED --max-wait-seconds "$(budget_max 600)"' in preflight
     ssh_setup = WORKFLOW.split("- name: Resolve trusted SSH transport", 1)[1].split(
         "- name: Submit and monitor", 1
     )[0]
