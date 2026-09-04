@@ -328,10 +328,15 @@ jobs:
             local stderr_file="$RUNNER_TEMP/issue-881-oci-json.stderr"
             local attempt rc max_attempts="${OCI_JSON_MAX_ATTEMPTS:-6}"
             local retry_delay_seconds="${OCI_JSON_RETRY_DELAY_SECONDS:-5}"
+            local request_timeout_seconds="${OCI_JSON_REQUEST_TIMEOUT_SECONDS:-0}"
             for attempt in $(seq 1 "$max_attempts"); do
               : >"$stdout_file"
               : >"$stderr_file"
-              if "$@" --output json >"$stdout_file" 2>"$stderr_file"; then
+              if (( request_timeout_seconds > 0 )); then
+                timeout --signal=KILL "${request_timeout_seconds}s" \
+                  "$@" --output json >"$stdout_file" 2>"$stderr_file"
+                rc=$?
+              elif "$@" --output json >"$stdout_file" 2>"$stderr_file"; then
                 rc=0
               else
                 rc=$?
@@ -362,11 +367,17 @@ jobs:
             return "$rc"
           }
           wait_backup_available() {
-            local id="$1" loops="${2:-720}" attempt state rc
+            local id="$1" max_seconds="${2:-3600}" deadline remaining request_timeout sleep_seconds state rc
+            local -r per_request_max_seconds=30
             BACKUP_AVAILABLE_JSON=""
-            for attempt in $(seq 1 "$loops"); do
-              if oci_json_request oci bv boot-volume-backup get --boot-volume-backup-id "$id"; then
-                if ! state="$(printf '%s' "$OCI_JSON_OUTPUT" | python -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d.get("data"),dict); print(d["data"]["lifecycle-state"])')"; then
+            deadline=$((SECONDS + max_seconds))
+            while (( SECONDS < deadline )); do
+              remaining=$((deadline - SECONDS))
+              request_timeout=$((remaining < per_request_max_seconds ? remaining : per_request_max_seconds))
+              (( request_timeout > 0 )) || break
+              if OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
+                  oci_json_request oci bv boot-volume-backup get --boot-volume-backup-id "$id"; then
+                if ! state="$(printf '%s' "$OCI_JSON_OUTPUT" | python -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d.get("data"),dict); s=d["data"].get("lifecycle-state"); assert isinstance(s,str) and s; print(s)')"; then
                   state_set backup_wait_status INVALID_GET_PAYLOAD
                   return 43
                 fi
@@ -376,19 +387,36 @@ jobs:
                   state_set backup_wait_status AVAILABLE
                   return 0
                 fi
-                if [[ "$state" != CREATING && "$state" != REQUEST_RECEIVED ]]; then
+                if [[ "$state" == TERMINATING || "$state" == TERMINATED || "$state" == FAULTY ]]; then
                   state_set backup_wait_status "TERMINAL_${state}"
+                  return 41
+                fi
+                if [[ "$state" != CREATING && "$state" != REQUEST_RECEIVED ]]; then
+                  state_set backup_wait_status UNKNOWN_STATE
                   return 41
                 fi
               else
                 rc=$?
+                if [[ "$rc" == 124 || "$rc" == 137 ]]; then
+                  state_set backup_wait_status GET_REQUEST_TIMEOUT
+                  if (( SECONDS >= deadline )); then
+                    state_set backup_wait_status TIMEOUT
+                    state_set backup_wait_failure_rc 42
+                    return 42
+                  fi
+                  continue
+                fi
                 state_set backup_wait_status GET_FAILED
                 state_set backup_wait_failure_rc "$rc"
                 return "$rc"
               fi
-              sleep 5
+              remaining=$((deadline - SECONDS))
+              (( remaining > 0 )) || break
+              sleep_seconds=$((remaining < 5 ? remaining : 5))
+              sleep "$sleep_seconds"
             done
             state_set backup_wait_status TIMEOUT
+            state_set backup_wait_failure_rc 42
             return 42
           }
           select_fresh_operation_backups() {
