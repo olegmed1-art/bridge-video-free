@@ -260,6 +260,8 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
     final_boundary = MIGRATION.split(
         "Role membership is maintained outside the locked application", 1
     )[1].split("Phase 2: all targets are locked and validated", 1)[0]
+    assert "outer branch is prepared without resolving relations" in final_boundary
+    assert "to_regclass('bidding.video_canon_promotion_delivery_receipt') IS NOT NULL THEN" in final_boundary
     assert "video_canon_assurance_verdict i2" in final_boundary
     assert "video_canon_assurance_verdict i3" in final_boundary
     assert "pg_has_role(attestor.oid,r2.capability_role,'MEMBER')" in final_boundary

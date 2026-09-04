@@ -284,9 +284,10 @@ CREATE OR REPLACE FUNCTION bidding.video_canon_assurance_set_sha256(
 SET search_path=pg_catalog,public,bidding AS $$
 WITH rows AS (
   SELECT jsonb_build_object(
-    'schema','video-canon-assurance-verdict-v1',
+    'schema','video-canon-assurance-verdict-v2',
     'assignment_id',v.video_canon_assurance_assignment_id,
     'candidate_payload_hash',v.candidate_payload_hash,
+    'verification_bundle_sha256',v.verification_bundle_sha256,
     'assurance_level',v.assurance_level,'verdict',v.verdict,
     'verifier_family',v.verifier_family,'verifier_version',v.verifier_version,
     'execution_principal',v.execution_principal,'evidence_sha256',v.evidence_sha256,

@@ -2320,8 +2320,11 @@ BEGIN
         -- set at the final write boundary, after every potentially long rule,
         -- source and runtime validation above.
         IF v_prior_promotion.video_canon_ai_promotion_receipt_id IS NOT NULL
-           AND to_regclass('bidding.video_canon_promotion_delivery_receipt') IS NOT NULL
-           AND EXISTS (
+           AND to_regclass('bidding.video_canon_promotion_delivery_receipt') IS NOT NULL THEN
+          -- Keep optional 0323 relations in an inner PL/pgSQL statement. The
+          -- outer branch is prepared without resolving relations that do not
+          -- exist in a standalone 0322 installation.
+          IF EXISTS (
               SELECT 1
                 FROM bidding.video_canon_promotion_delivery_receipt dr
                WHERE dr.promotion_receipt_id=
@@ -2392,6 +2395,7 @@ BEGIN
            ) THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_I2_I3_ASSURANCE_REVOKED'
               USING ERRCODE='42501';
+          END IF;
         END IF;
 
         -- Phase 2: all targets are locked and validated; mutate as one bounded set.
