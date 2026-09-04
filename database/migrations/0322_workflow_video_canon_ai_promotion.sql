@@ -58,6 +58,55 @@ COMMENT ON ROLE bridge_school_canon_promoter IS
   'NOLOGIN capability for the guarded AI-verified teacher-video Canon activation RPC';
 COMMENT ON ROLE bridge_school_canon_restorer IS
   'NOLOGIN capability for the guarded receipt-bound Video-to-Canon restoration RPC';
+
+-- Forward-only extension of the already-applied 0200 key firewall. Historical
+-- migration 0200 remains byte-stable for production checksum verification.
+CREATE OR REPLACE FUNCTION bidding.contains_forbidden_hidden_key(payload jsonb)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+WITH RECURSIVE walk(value) AS (
+    SELECT COALESCE(payload, 'null'::jsonb)
+    UNION ALL
+    SELECT child.value
+      FROM walk AS w
+      CROSS JOIN LATERAL (
+          SELECT e.value
+            FROM jsonb_each(
+                CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END
+            ) AS e
+          UNION ALL
+          SELECT a.value
+            FROM jsonb_array_elements(
+                CASE WHEN jsonb_typeof(w.value)='array' THEN w.value ELSE '[]'::jsonb END
+            ) AS a
+      ) AS child
+), forbidden AS (
+    SELECT 1
+      FROM walk AS w
+      CROSS JOIN LATERAL jsonb_object_keys(
+          CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END
+      ) AS k(key)
+     WHERE lower(k.key) = ANY (ARRAY[
+        'partner_hand','opponent_hand','opponent_hands',
+        'north_hand','east_hand','south_hand','west_hand',
+        'full_deal','hidden_cards','hidden_hand','hidden_hands',
+        'hidden_holding','hidden_holdings','concealed_hand','concealed_hands',
+        'concealed_holding','concealed_holdings','concealed_card','concealed_cards',
+        'hidden_deal','hidden_deals','concealed_deal','concealed_deals',
+        'actual_partner_hand','actual_opponent_hand','actual_opponent_hands',
+        'partner_cards','opponent_cards','all_hands'
+     ])
+        OR regexp_replace(lower(k.key),'[^a-z0-9]','','g') ~
+           '^(actual)?(partner|opponent|north|east|south|west)(s)?(hand|holding|cards?)+(s)?$'
+        OR regexp_replace(lower(k.key),'[^a-z0-9]','','g') ~
+           '^(hidden|concealed)(hand|holding|cards?|deals?)+(s)?$'
+     LIMIT 1
+)
+SELECT EXISTS (SELECT 1 FROM forbidden);
+$$;
 DO $$
 BEGIN
   IF EXISTS (

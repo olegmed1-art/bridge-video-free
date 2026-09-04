@@ -114,6 +114,10 @@ BEGIN
        '{"hidden_hand":"AKQ.JT9.876.5432"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_key(
        '{"concealed-holdings":"AKQ.JT9.876.5432"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_key(
+       '{"nested":{"hidden_deal":"AKQ.JT9.876.5432"}}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_key(
+       '{"concealed-deals":"AKQ.JT9.876.5432"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North has the Q"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(

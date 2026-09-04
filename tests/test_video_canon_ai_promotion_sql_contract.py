@@ -4,9 +4,6 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 MIGRATION = (ROOT / "database/migrations/0322_workflow_video_canon_ai_promotion.sql").read_text()
 ROLLBACK = (ROOT / "database/rollbacks/0322_workflow_video_canon_ai_promotion.sql").read_text()
-CORE_RULE = (
-    ROOT / "database/migrations/0200_bidding_knowledge_v0/01_core_rule.sql"
-).read_text()
 
 
 def test_ai_promotion_is_narrow_guarded_and_not_granted_to_general_workers():
@@ -217,9 +214,10 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
     ):
         assert marker in MIGRATION
 
-    assert "'hidden_hand','hidden_hands','hidden_holding'" in CORE_RULE
-    assert "'concealed_hand','concealed_hands','concealed_holding'" in CORE_RULE
-    assert "'^(hidden|concealed)(hand|holding|cards?)+(s)?$'" in CORE_RULE
+    assert "'hidden_cards','hidden_hand','hidden_hands'" in MIGRATION
+    assert "'concealed_hand','concealed_hands'" in MIGRATION
+    assert "'hidden_deal','hidden_deals','concealed_deal','concealed_deals'" in MIGRATION
+    assert "'^(hidden|concealed)(hand|holding|cards?|deals?)+(s)?$'" in MIGRATION
 
 
 def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
@@ -265,6 +263,11 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "DROP FUNCTION bidding.is_video_canon_semantic_confidence_eligible" in ROLLBACK
     assert "REVOKE ALL PRIVILEGES ON SCHEMA public,bidding" in ROLLBACK
     assert "DROP ROLE bridge_school_canon_verifier" in ROLLBACK
+    assert "CREATE OR REPLACE FUNCTION bidding.contains_forbidden_hidden_key(payload jsonb)" in ROLLBACK
+    assert "'hidden_hand'" not in ROLLBACK
+    assert "'concealed_hand'" not in ROLLBACK
+    assert "'hidden_deal'" not in ROLLBACK
+    assert "'concealed_deal'" not in ROLLBACK
     assert MIGRATION.count(
         "IF v_valid_to IS NOT NULL AND v_valid_to<=clock_timestamp() THEN"
     ) >= 3

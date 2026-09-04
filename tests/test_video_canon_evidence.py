@@ -129,6 +129,8 @@ def test_world_video_can_never_be_review_eligible_for_school_canon():
     (lambda a: a["normalized_rule"].update(**{"opponents-cards": "AKQ.JT9.876.5432"}), "hidden information"),
     (lambda a: a["normalized_rule"].update(hidden_hand="AKQ.JT9.876.5432"), "hidden information"),
     (lambda a: a["normalized_rule"].update(**{"concealed-holdings": "AKQ.JT9.876.5432"}), "hidden information"),
+    (lambda a: a["normalized_rule"].update(hidden_deal="AKQ.JT9.876.5432"), "hidden information"),
+    (lambda a: a["normalized_rule"].update(**{"concealed-deals": "AKQ.JT9.876.5432"}), "hidden information"),
     (lambda a: a["tests"].update(boundary=[]), "four test classes"),
 ])
 def test_fails_closed_on_unproven_or_unsafe_assertions(mutation, match):

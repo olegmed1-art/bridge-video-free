@@ -43,17 +43,10 @@ WITH RECURSIVE walk(value) AS (
      WHERE lower(k.key) = ANY (ARRAY[
         'partner_hand','opponent_hand','opponent_hands',
         'north_hand','east_hand','south_hand','west_hand',
-        'full_deal','hidden_hand','hidden_hands','hidden_holding',
-        'hidden_holdings','hidden_cards','actual_partner_hand',
+        'full_deal','hidden_cards','actual_partner_hand',
         'actual_opponent_hand','actual_opponent_hands',
-        'partner_cards','opponent_cards','all_hands',
-        'concealed_hand','concealed_hands','concealed_holding',
-        'concealed_holdings','concealed_card','concealed_cards'
+        'partner_cards','opponent_cards','all_hands'
      ])
-        OR regexp_replace(lower(k.key),'[^a-z0-9]','','g') ~
-           '^(actual)?(partner|opponent|north|east|south|west)(s)?(hand|holding|cards?)+(s)?$'
-        OR regexp_replace(lower(k.key),'[^a-z0-9]','','g') ~
-           '^(hidden|concealed)(hand|holding|cards?)+(s)?$'
      LIMIT 1
 )
 SELECT EXISTS (SELECT 1 FROM forbidden);

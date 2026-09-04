@@ -48,6 +48,46 @@ DROP FUNCTION bidding.video_canon_rule_restore_sha256(uuid);
 DROP FUNCTION bidding.contains_forbidden_hidden_value(jsonb);
 DROP FUNCTION bidding.is_video_canon_semantic_confidence_eligible(jsonb);
 DROP FUNCTION bidding.is_complete_bridge_hand(text);
+-- Restore the pre-0322 definition retained in immutable migration 0200.
+CREATE OR REPLACE FUNCTION bidding.contains_forbidden_hidden_key(payload jsonb)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+WITH RECURSIVE walk(value) AS (
+    SELECT COALESCE(payload, 'null'::jsonb)
+    UNION ALL
+    SELECT child.value
+      FROM walk AS w
+      CROSS JOIN LATERAL (
+          SELECT e.value
+            FROM jsonb_each(
+                CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END
+            ) AS e
+          UNION ALL
+          SELECT a.value
+            FROM jsonb_array_elements(
+                CASE WHEN jsonb_typeof(w.value)='array' THEN w.value ELSE '[]'::jsonb END
+            ) AS a
+      ) AS child
+), forbidden AS (
+    SELECT 1
+      FROM walk AS w
+      CROSS JOIN LATERAL jsonb_object_keys(
+          CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END
+      ) AS k(key)
+     WHERE lower(k.key) = ANY (ARRAY[
+        'partner_hand','opponent_hand','opponent_hands',
+        'north_hand','east_hand','south_hand','west_hand',
+        'full_deal','hidden_cards','actual_partner_hand',
+        'actual_opponent_hand','actual_opponent_hands',
+        'partner_cards','opponent_cards','all_hands'
+     ])
+     LIMIT 1
+)
+SELECT EXISTS (SELECT 1 FROM forbidden);
+$$;
 DROP TABLE bidding.video_correction_review_receipt;
 DROP TABLE bidding.video_canon_ai_restore_receipt;
 DROP TABLE bidding.video_canon_ai_promotion_receipt;
