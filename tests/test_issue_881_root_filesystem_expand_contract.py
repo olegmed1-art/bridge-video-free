@@ -204,6 +204,26 @@ def test_separate_commands_keep_one_operation_scoped_proven_backup() -> None:
     assert "superseded_backup_count=0" in block[retire:]
 
 
+def test_failed_drill_deletes_only_its_new_unaccepted_backup() -> None:
+    block = WORKFLOW[
+        WORKFLOW.index('backup_id="" restored_id=""') :
+        WORKFLOW.index("Resolve pinned SSH identity")
+    ]
+    assert "backup_created_by_run=0 backup_accepted=0" in block
+    assert '[[ -n "$backup_id" ]] && backup_created_by_run=1' in block
+    assert '[[ -n "$backup_id" ]] || backup_id="$(discover_named_id backup "$backup_name")"' in block
+    cleanup = block[
+        block.index("cleanup() {") : block.index("\n          reconcile_prior_attempt_resources\n")
+    ]
+    assert "backup_created_by_run == 1 && backup_accepted == 0" in cleanup
+    assert 'boot-volume-backup delete --boot-volume-backup-id "$backup_id"' in cleanup
+    assert 'wait_absent backup "$backup_id" || cleanup_rc=1' in cleanup
+    acceptance = block.index("UV_RESTORED_ROOT_BOOT_ACCEPTANCE_PASS")
+    accepted = block.index("backup_accepted=1", acceptance)
+    output = block.index('echo "backup_id=$backup_id" >> "$GITHUB_OUTPUT"')
+    assert acceptance < accepted < output
+
+
 def test_receipt_reports_backup_only_from_proven_step_output() -> None:
     receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
     assert "BACKUP_ID: ${{ steps.backup.outputs.backup_id }}" in receipt

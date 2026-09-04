@@ -148,6 +148,7 @@ jobs:
           backup_prefix="issue-881-root-recovery-${boot_tag}"
           backup_name="${backup_prefix}-${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
           backup_id="" restored_id="" drill_instance_id="" drill_public_ip="" drill_started=""
+          backup_created_by_run=0 backup_accepted=0
           drill_vcn_id="" drill_ig_id="" drill_route_id="" drill_security_id="" drill_subnet_id=""
           restored_attempted=0 drill_vcn_attempted=0 drill_ig_attempted=0
           drill_route_attempted=0 drill_security_attempted=0 drill_subnet_attempted=0
@@ -391,6 +392,15 @@ jobs:
             set +e
             cleanup_temp_resources
             cleanup_rc=$?
+            # A backup created by this attempt is not a recovery point until its
+            # isolated restored root has passed SSH boot acceptance.  Never let
+            # failed drills accumulate unaccepted 97 GB FULL backups, and never
+            # delete a pre-existing backup that may be the last proven point.
+            if (( backup_created_by_run == 1 && backup_accepted == 0 )) && [[ -n "$backup_id" ]]; then
+              oci bv boot-volume-backup delete --boot-volume-backup-id "$backup_id" --force >/dev/null 2>&1 || true
+              wait_absent backup "$backup_id" || cleanup_rc=1
+              backup_id=""
+            fi
             if (( cleanup_rc != 0 )); then
               echo 'UV_ROOT_TEMP_CLEANUP_INCOMPLETE' >&2
               (( rc != 0 )) || rc=90
@@ -403,10 +413,12 @@ jobs:
           backup_id="$(printf '%s' "$backup_inventory" | select_fresh_operation_backup)"
           if [[ -z "$backup_id" ]]; then
             if backup="$(oci bv boot-volume-backup create --boot-volume-id "$boot_id" --type FULL --display-name "$backup_name" --output json)"; then
-              backup_id="$(printf '%s' "$backup" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
+              backup_id="$(printf '%s' "$backup" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("id", ""))' 2>/dev/null || true)"
+              [[ -n "$backup_id" ]] || backup_id="$(discover_named_id backup "$backup_name")"
             else
               backup_id="$(discover_named_id backup "$backup_name")"
             fi
+            [[ -n "$backup_id" ]] && backup_created_by_run=1
           fi
           [[ -n "$backup_id" ]] || exit 36
           oci bv boot-volume-backup get --boot-volume-backup-id "$backup_id" --wait-for-state AVAILABLE --max-wait-seconds 3600 >/dev/null
@@ -419,7 +431,6 @@ jobs:
           created=datetime.datetime.fromisoformat(d['time-created'].replace('Z','+00:00'))
           assert (datetime.datetime.now(datetime.timezone.utc)-created).total_seconds() < 86400
           PY
-          echo "backup_id=$backup_id" >> "$GITHUB_OUTPUT"
           restored_attempted=1
           if restored="$(oci bv boot-volume create --boot-volume-backup-id "$backup_id" --availability-domain "$ad" --compartment-id "$tenancy_id" --display-name "$stamp-restore" --output json)"; then
             restored_id="$(printf '%s' "$restored" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
@@ -483,6 +494,7 @@ jobs:
           printf '%s\n' "$SSH_KEY_ORACLE" > "$key"; chmod 0600 "$key"; ssh-keygen -y -f "$key" >/dev/null
           acceptance="$(ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "$ORACLE_USER@$drill_public_ip" 'set -e; test -r /etc/os-release; findmnt -n -o SOURCE,FSTYPE /; test "$(findmnt -n -o OPTIONS /)" != ""; test -r /var/lib/bridge-school; echo UV_RESTORED_ROOT_BOOT_ACCEPTANCE_PASS')"
           grep -Fq UV_RESTORED_ROOT_BOOT_ACCEPTANCE_PASS <<<"$acceptance"
+          backup_accepted=1
           drill_seconds="$(( $(date -u +%s) - drill_started ))"
           if ! cleanup_temp_resources; then
             # Do not invoke the EXIT trap a second time after a fully bounded
@@ -509,6 +521,10 @@ jobs:
             wait_all_absent backup 60 "${ids[@]}"
           fi
           echo 'superseded_backup_count=0' >> "$GITHUB_OUTPUT"
+          # Expose the backup as a retained proven point only after acceptance
+          # and bounded retirement have both succeeded.  Failed steps therefore
+          # cannot publish a deleted or unaccepted backup as retained evidence.
+          echo "backup_id=$backup_id" >> "$GITHUB_OUTPUT"
           echo "source_boot_id=$boot_id" >> "$GITHUB_OUTPUT"
           echo "source_instance_id=$instance_id" >> "$GITHUB_OUTPUT"
           echo "temporary_instance_seconds=$drill_seconds" >> "$GITHUB_OUTPUT"
