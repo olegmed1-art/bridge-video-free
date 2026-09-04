@@ -10,7 +10,8 @@ def test_spool_operations_use_exact_installed_bounded_ssh_surface():
     operator = (ROOT / "ops/universal_video_operator.sh").read_text(encoding="utf-8")
 
     assert "oci instance-agent command" not in text
-    assert "timeout 4800 ssh" in text
+    assert 'timeout "$ssh_timeout" ssh' in text
+    assert 'ssh_timeout="$(budget_max 4800)"' in text
     assert "StrictHostKeyChecking=yes" in text
     assert '"$ORACLE_USER@$ORACLE_HOST" "$command" 2>/dev/null' in text
     assert "repair-submit-drive-base64" in text
