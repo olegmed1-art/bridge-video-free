@@ -15,6 +15,7 @@ def test_authority_and_independent_assurance_are_fail_closed():
     assert "pg_has_role(i3.execution_principal,'bridge_school_canon_i3_verifier','member')" in MIGRATION
     assert "video_canon_assurance_verifier_registry" in MIGRATION
     assert "video_canon_assurance_bound_bundle" in MIGRATION
+    assert "a.video_canon_assurance_assignment_id,a.assurance_level" in MIGRATION
     assert "video_canon_assurance_set_sha256" in MIGRATION
     assert "reassign_video_canon_assurance" in MIGRATION
     assert "supersession_reason_sha256" in MIGRATION
@@ -33,6 +34,7 @@ def test_delivery_is_leased_fenced_atomic_and_retained():
     assert "ON CONFLICT (idempotency_key) DO NOTHING" in MIGRATION
     assert "video_canon_assurance_assignment_id=i2.video_canon_assurance_assignment_id" in MIGRATION
     assert "terminal_error_code='STATE_STALE'" in MIGRATION
+    assert "PERFORM 1 FROM bidding.video_canon_promotion_job" in MIGRATION
     assert "v_existing.fencing_token<>p_fencing_token" in MIGRATION
 
 

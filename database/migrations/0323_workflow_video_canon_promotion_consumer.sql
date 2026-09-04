@@ -118,7 +118,8 @@ CREATE VIEW bidding.video_canon_assurance_bound_bundle
 WITH (security_barrier=true) AS
 SELECT b.video_canon_ai_verification_bundle_id,b.school_id,b.analysis_candidate_id,
        b.candidate_payload_hash,b.verification_bundle_sha256,b.bundle_payload,
-       a.assurance_level,a.verifier_family,a.verifier_version
+       a.video_canon_assurance_assignment_id,a.assurance_level,
+       a.verifier_family,a.verifier_version
   FROM bidding.video_canon_ai_verification_bundle b
   JOIN bidding.video_canon_assurance_assignment a
     ON a.video_canon_ai_verification_bundle_id=b.video_canon_ai_verification_bundle_id
@@ -138,6 +139,11 @@ BEGIN
   IF NOT FOUND OR v_old.status<>'active' THEN
     RAISE EXCEPTION 'VIDEO_CANON_REASSIGNMENT_TARGET_INVALID' USING ERRCODE='23514';
   END IF;
+  PERFORM 1 FROM bidding.video_canon_promotion_job
+   WHERE analysis_candidate_id=(
+     SELECT analysis_candidate_id FROM bidding.video_canon_ai_verification_bundle
+      WHERE video_canon_ai_verification_bundle_id=v_old.video_canon_ai_verification_bundle_id
+   ) FOR UPDATE;
   IF EXISTS (
     SELECT 1 FROM bidding.video_canon_promotion_job
      WHERE analysis_candidate_id=(
