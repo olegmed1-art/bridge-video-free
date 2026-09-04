@@ -95,7 +95,7 @@ BEGIN
   IF NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N:AKQJ.T98.765.432 E:T987.654.32.AKQ"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
-       '{"notes":"North''s hand, as it appeared clearly in the recorded diagram, was AKQJ.T98.765.432; East’s hand was JT9.AKQ.JT9.876"}'::jsonb
+       '{"notes":"North''s hand, as it appeared clearly in the recorded diagram,\nwas AKQJ.T98.765.432; East’s hand was JT9.AKQ.JT9.876"}'::jsonb
      )) OR bidding.contains_forbidden_hidden_value(
        '{"meaning":"shows at least five hearts"}'::jsonb
      ) THEN
@@ -159,6 +159,8 @@ DECLARE
   v_good_bundle jsonb;
   v_bad_bundle jsonb;
   v_good_bundle_hash text;
+  v_rule_digest_utc text;
+  v_rule_digest_other_tz text;
   v_new_from timestamptz:=statement_timestamp()-interval '1 hour';
 BEGIN
   INSERT INTO public.school(school_id,stable_name)
@@ -226,6 +228,14 @@ BEGIN
     (v_old_rule,v_school,v_old_version,'restore-old-'||v_old_rule::text,'bid','{"call":"1H"}','validated'),
     (v_new_rule,v_school,v_new_version,'restore-new-'||v_new_rule::text,'bid','{"call":"2H"}','validated'),
     (v_orphan_rule,v_school,v_orphan_version,'orphan-'||v_orphan_rule::text,'bid','{"call":"1S"}','validated');
+  PERFORM set_config('TimeZone','UTC',true);
+  v_rule_digest_utc:=bidding.video_canon_rule_restore_sha256(v_old_rule);
+  PERFORM set_config('TimeZone','Pacific/Honolulu',true);
+  v_rule_digest_other_tz:=bidding.video_canon_rule_restore_sha256(v_old_rule);
+  IF v_rule_digest_utc<>v_rule_digest_other_tz THEN
+    RAISE EXCEPTION 'VIDEO_CANON_RULE_RESTORE_DIGEST_TIMEZONE_DEPENDENT';
+  END IF;
+  PERFORM set_config('TimeZone','UTC',true);
   FOREACH v_rule_id IN ARRAY ARRAY[v_old_rule,v_new_rule,v_orphan_rule]
   LOOP
     FOREACH v_test_type IN ARRAY ARRAY['positive','negative','boundary','hidden_information']

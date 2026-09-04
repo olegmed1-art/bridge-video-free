@@ -233,7 +233,7 @@ SELECT EXISTS (
    WHERE jsonb_typeof(w.value)='string'
      AND (
        (w.value#>>'{}') ~* E'(^|[^[:alnum:]])[NESW][[:space:]]*:[[:space:]]*[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}'
-       OR (w.value#>>'{}') ~* E'(partner|opponent|north|east|south|west)[[:space:]]*([''’]s)?[ _-]*(hand|cards)[^;]*[-AKQJT2-9]{0,13}\\.'
+       OR (w.value#>>'{}') ~* E'(partner|opponent|north|east|south|west)[[:space:]]*([''’]s)?[ _-]*(hand|cards)[^;]*[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}([^-.AKQJT2-9]|$)'
        OR (w.value#>>'{}') ~* E'(рука|карты)[[:space:]]+(партн[её]ра|соперника)[[:space:]]*[:=][[:space:]]*[-AKQJT2-9.]'
      )
 );
@@ -246,7 +246,8 @@ STABLE
 SECURITY DEFINER
 SET search_path=pg_catalog,public,bidding
 AS $$
-SELECT encode(public.digest(convert_to(to_jsonb(r)::text,'UTF8'),'sha256'),'hex')
+SELECT encode(public.digest(convert_to(
+         (to_jsonb(r)-ARRAY['created_at','updated_at'])::text,'UTF8'),'sha256'),'hex')
   FROM bidding.rule r WHERE r.rule_id=p_rule_id
 $$;
 
@@ -644,7 +645,9 @@ BEGIN
     IF v_policy_version<>'school-video-auto-canon-v1'
        OR btrim(COALESCE(v_scope_key,''))=''
        OR v_valid_from IS NULL OR v_valid_from>statement_timestamp()
-       OR (v_valid_to IS NOT NULL AND v_valid_to<=v_valid_from) THEN
+       OR (v_valid_to IS NOT NULL AND (
+             v_valid_to<=v_valid_from OR v_valid_to<=statement_timestamp()
+          )) THEN
         RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_ARGUMENT_INVALID' USING ERRCODE='23514';
     END IF;
 

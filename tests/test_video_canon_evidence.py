@@ -177,6 +177,9 @@ def test_hidden_deal_is_rejected_inside_innocuous_allowed_value(field, value):
     "AKQJ.T98.765.432; East's hand, as it appeared clearly in the recorded diagram, was "
     "JT9.AKQ.JT9.876; South's hand was 876.765.AKQ.JT9; "
     "West's hand was 5432.J432.432.AKQ",
+    "North's hand, as it appeared\nclearly in the recorded diagram, was "
+    "AKQJ.T98.765.432; East's hand was JT9.AKQ.JT9.876; "
+    "South's hand was 876.765.AKQ.JT9; West's hand was 5432.J432.432.AKQ",
 ])
 def test_hidden_deal_is_rejected_in_source_bound_teacher_statement(statement):
     learning = _learning()
@@ -202,3 +205,14 @@ def test_payload_hash_is_deterministic_and_source_bound():
     assert third["stable_key"] != first["stable_key"]
     assert first["stable_key"].endswith(first["payload_hash"])
     assert third["stable_key"].endswith(third["payload_hash"])
+
+
+def test_labelled_hand_prose_without_four_suit_encoding_is_not_a_false_positive():
+    learning = _learning()
+    assertion = _assertion()
+    statement = "North's hand was strong."
+    assertion["statement"] = statement
+    assertion["statement_sha256"] = hashlib.sha256(statement.encode("utf-8")).hexdigest()
+    learning["transcript_evidence"][0]["text_sha256"] = assertion["statement_sha256"]
+    result = build_video_canon_candidate(learning, assertion)
+    assert result["quality_status"] == "EVIDENCE_ONLY"
