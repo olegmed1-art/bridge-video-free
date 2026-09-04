@@ -48,13 +48,14 @@ jobs:
       github.event.comment.user.login == 'olegmed1-art' &&
       github.event.comment.body == '/oracle-ops issue-881-expand-root-and-recover-bba508'
     runs-on: ubuntu-24.04
-    # The explicit OCI waiters consume at most 235 minutes: 60 minutes each for
+    # The explicit OCI waiters consume at most 240 minutes: 60 minutes each for
     # backup and restore, five minutes each for five network creates, 30 minutes
     # each for launch and termination, and five minutes for each of six
-    # dependency-deletion checks. A rerun may spend at most another 30 minutes
-    # reconciling one prior attempt. GitHub's six-hour ceiling therefore leaves
-    # at least 95 minutes for setup, bounded rediscovery, SSH acceptance,
-    # recovery, and the
+    # dependency-deletion checks, plus five minutes to verify retirement of all
+    # superseded operation backups. A rerun may spend at most another 30 minutes
+    # reconciling prior attempts. GitHub's six-hour ceiling therefore leaves at
+    # least 90 minutes for setup, bounded rediscovery, SSH acceptance, recovery,
+    # and the
     # EXIT cleanup trap instead of cancelling exactly at the waiter ceiling.
     timeout-minutes: 360
     env:
@@ -143,7 +144,9 @@ jobs:
           run_prefix="issue-881-${GITHUB_RUN_ID}"
           prior_prefix="${run_prefix}-a"
           stamp="${prior_prefix}${GITHUB_RUN_ATTEMPT}"
-          backup_name="${run_prefix}-full"
+          boot_tag="$(printf '%s' "$boot_id" | sha256sum | cut -c1-16)"
+          backup_prefix="issue-881-root-recovery-${boot_tag}"
+          backup_name="${backup_prefix}-${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
           backup_id="" restored_id="" drill_instance_id="" drill_public_ip="" drill_started=""
           drill_vcn_id="" drill_ig_id="" drill_route_id="" drill_security_id="" drill_subnet_id=""
           restored_attempted=0 drill_vcn_attempted=0 drill_ig_attempted=0
@@ -179,6 +182,7 @@ jobs:
             for _ in $(seq 1 "$loops"); do
               case "$resource" in
                 boot-volume) command=(oci bv boot-volume get --boot-volume-id "$id") ;;
+                backup) command=(oci bv boot-volume-backup get --boot-volume-backup-id "$id") ;;
                 subnet) command=(oci network subnet get --subnet-id "$id") ;;
                 security-list) command=(oci network security-list get --security-list-id "$id") ;;
                 route-table) command=(oci network route-table get --rt-id "$id") ;;
@@ -210,6 +214,7 @@ jobs:
               for id in "${ids[@]}"; do
                 case "$resource" in
                   boot-volume) command=(oci bv boot-volume get --boot-volume-id "$id") ;;
+                  backup) command=(oci bv boot-volume-backup get --boot-volume-backup-id "$id") ;;
                   subnet) command=(oci network subnet get --subnet-id "$id") ;;
                   security-list) command=(oci network security-list get --security-list-id "$id") ;;
                   route-table) command=(oci network route-table get --rt-id "$id") ;;
@@ -228,6 +233,15 @@ jobs:
               sleep 5
             done
             return 1
+          }
+          operation_backup_inventory() {
+            oci bv boot-volume-backup list --compartment-id "$tenancy_id" --boot-volume-id "$boot_id" --all --output json
+          }
+          select_fresh_operation_backup() {
+            BACKUP_PREFIX="$backup_prefix" BOOT_ID="$boot_id" python -c 'import datetime,json,os,sys; now=datetime.datetime.now(datetime.timezone.utc); xs=[(datetime.datetime.fromisoformat(x["time-created"].replace("Z","+00:00")),x["id"]) for x in json.load(sys.stdin).get("data",[]) if (x.get("display-name") or "").startswith(os.environ["BACKUP_PREFIX"]+"-") and x.get("boot-volume-id")==os.environ["BOOT_ID"] and x.get("lifecycle-state")=="AVAILABLE" and x.get("type")=="FULL" and x.get("size-in-gbs")==97 and (now-datetime.datetime.fromisoformat(x["time-created"].replace("Z","+00:00"))).total_seconds()<86400]; xs.sort(reverse=True); print(xs[0][1] if xs else "")'
+          }
+          superseded_operation_backups() {
+            BACKUP_PREFIX="$backup_prefix" BOOT_ID="$boot_id" RETAINED_ID="$backup_id" python -c 'import json,os,sys; xs=sorted(x["id"] for x in json.load(sys.stdin).get("data",[]) if (x.get("display-name") or "").startswith(os.environ["BACKUP_PREFIX"]+"-") and x.get("boot-volume-id")==os.environ["BOOT_ID"] and x["id"]!=os.environ["RETAINED_ID"] and x.get("lifecycle-state")!="TERMINATED"); print("\n".join(xs))'
           }
           prior_named_ids() {
             local resource="$1" suffix="$2" output
@@ -385,7 +399,8 @@ jobs:
           }
           reconcile_prior_attempt_resources
           trap cleanup EXIT
-          backup_id="$(discover_named_id backup "$backup_name")"
+          backup_inventory="$(operation_backup_inventory)"
+          backup_id="$(printf '%s' "$backup_inventory" | select_fresh_operation_backup)"
           if [[ -z "$backup_id" ]]; then
             if backup="$(oci bv boot-volume-backup create --boot-volume-id "$boot_id" --type FULL --display-name "$backup_name" --output json)"; then
               backup_id="$(printf '%s' "$backup" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
@@ -480,6 +495,20 @@ jobs:
           drill_instance_id=""; restored_id=""; drill_subnet_id=""; drill_security_id=""
           drill_route_id=""; drill_ig_id=""; drill_vcn_id=""
           trap - EXIT
+          # Retire older operation-scoped backups only after the retained FULL
+          # backup has passed isolated restored-root boot acceptance. This keeps
+          # rollback coverage throughout replacement and bounds billable storage
+          # to one proven recovery point across separate owner commands.
+          backup_inventory="$(operation_backup_inventory)"
+          superseded_ids="$(printf '%s' "$backup_inventory" | superseded_operation_backups)"
+          if [[ -n "$superseded_ids" ]]; then
+            readarray -t ids <<<"$superseded_ids"
+            for id in "${ids[@]}"; do
+              oci bv boot-volume-backup delete --boot-volume-backup-id "$id" --force >/dev/null 2>&1 || true
+            done
+            wait_all_absent backup 60 "${ids[@]}"
+          fi
+          echo 'superseded_backup_count=0' >> "$GITHUB_OUTPUT"
           echo "source_boot_id=$boot_id" >> "$GITHUB_OUTPUT"
           echo "source_instance_id=$instance_id" >> "$GITHUB_OUTPUT"
           echo "temporary_instance_seconds=$drill_seconds" >> "$GITHUB_OUTPUT"
@@ -577,6 +606,7 @@ jobs:
         env:
           BACKUP_OUTCOME: ${{ steps.backup.outcome }}
           BACKUP_ID: ${{ steps.backup.outputs.backup_id }}
+          SUPERSEDED_BACKUP_COUNT: ${{ steps.backup.outputs.superseded_backup_count }}
           TEMP_INSTANCE_SECONDS: ${{ steps.backup.outputs.temporary_instance_seconds }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -592,6 +622,7 @@ jobs:
             else
               echo '- fresh backup retained: `unknown`; no proven backup ID was emitted before failure/skip'
             fi
+            echo "- superseded operation backups remaining: \`${SUPERSEDED_BACKUP_COUNT:-unknown}\`"
             echo '- temporary cleanup: `ENFORCED_BY_EXIT_TRAP`; inspect the run before accepting a failed gate'
             echo "- temporary instance runtime seconds: \\`${TEMP_INSTANCE_SECONDS:-unknown}\\`"
             echo '- exact monetary charge: `PENDING_OCI_BILLING_EXPORT`'
