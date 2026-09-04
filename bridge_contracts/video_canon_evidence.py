@@ -64,6 +64,16 @@ _LABELLED_HAND_TAIL = re.compile(
     r"|(?:^|[^A-Za-z0-9])[NESW]\s*:)(?P<tail>[^;]{0,512})",
     re.IGNORECASE,
 )
+_VERBAL_HIDDEN_TAIL = re.compile(
+    r"(?:(?<!\w)(?:partner|opponent|north|east|south|west)"
+    r"|(?<![A-Za-z0-9])[NESW])\s+(?:held|holds?|has|had)\b"
+    r"(?P<tail>[^;]{0,512})",
+    re.IGNORECASE,
+)
+_LEADING_HOLDING_CARD_GROUP = re.compile(
+    r"^\s*(?:[:,;=\-]\s*)?(?:10|[AKQJT2-9]|[kqjt]|"
+    r"(?:(?:10)|[AKQJT2-9akqjt]){2,13})(?:$|[^A-Za-z0-9])"
+)
 _EXPLICIT_SUIT_LABEL = re.compile(
     r"(?<![A-Za-z0-9_])(?P<suit>[SHDC])\s*:", re.IGNORECASE
 )
@@ -183,6 +193,12 @@ def _has_forbidden_value(value: Any) -> bool:
             )
             or _PARTIAL_SEPARATED_HAND.search(match.group("tail"))
             for match in _LABELLED_HAND_TAIL.finditer(normalized_value)
+        ):
+            return True
+        if any(
+            _LEADING_HOLDING_CARD_GROUP.search(match.group("tail"))
+            and not _LEADING_LENGTH_DESCRIPTION.search(match.group("tail"))
+            for match in _VERBAL_HIDDEN_TAIL.finditer(normalized_value)
         ):
             return True
         if any(

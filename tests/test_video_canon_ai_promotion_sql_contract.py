@@ -48,6 +48,9 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "guard_promoted_video_canon_source_binding",
         "promoted_video_canon_source_binding_guard",
         "VIDEO_CANON_PROMOTED_SOURCE_BINDING_IMMUTABLE",
+        "guard_promoted_video_canon_source_identity",
+        "promoted_video_canon_source_identity_guard",
+        "VIDEO_CANON_PROMOTED_SOURCE_SCHOOL_IMMUTABLE",
         "JOIN public.canon_activation ca",
         "ca.canon_activation_id=p.canon_activation_id",
         "status='superseded',valid_to=v_valid_from",
@@ -96,6 +99,9 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "VIDEO_CANON_RESTORE_RULE_CONTENT_MISMATCH",
         "superseded_rule_state",
         "superseded_source_state",
+        "superseded_knowledge_version_content_sha256",
+        "v_prior_version_content_sha256",
+        "VIDEO_CANON_RESTORE_PREDECESSOR_VERSION_MISMATCH",
         "v_prior_source_state",
         "v_current_prior_source_state",
         "jsonb_agg(to_jsonb(kvs)",
@@ -157,6 +163,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "hearts?|spades?|diamonds?|clubs?",
         "trumps?|losers?|points?|hcp|controls?",
         "карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*",
+        "(?:held|holds?|has|had)",
     ):
         assert marker in MIGRATION
 
@@ -185,7 +192,9 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "DROP FUNCTION bidding.restore_ai_verified_video_canon" in ROLLBACK
     assert "DROP VIEW bidding.video_canon_bound_candidate" in ROLLBACK
     assert "DROP TRIGGER promoted_video_canon_source_binding_guard" in ROLLBACK
+    assert "DROP TRIGGER promoted_video_canon_source_identity_guard" in ROLLBACK
     assert "DROP FUNCTION bidding.guard_promoted_video_canon_source_binding" in ROLLBACK
+    assert "DROP FUNCTION bidding.guard_promoted_video_canon_source_identity" in ROLLBACK
     assert "DROP FUNCTION bidding.video_canon_rule_test_state_sha256" in ROLLBACK
     assert "DROP FUNCTION bidding.video_canon_rule_restore_sha256" in ROLLBACK
     assert "DROP FUNCTION bidding.is_complete_bridge_hand" in ROLLBACK

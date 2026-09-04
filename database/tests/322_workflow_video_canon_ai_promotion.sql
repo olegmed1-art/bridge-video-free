@@ -143,6 +143,12 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"partner hand: 2"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"North held Q"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"partner holds AKQJ"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"N held 2"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N:AKQJ109.876.54.32"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s hand was S:AKQJ109 H:876 D:54 C:32"}'::jsonb
@@ -172,6 +178,10 @@ BEGIN
        '{"notes":"N: 3 trumps"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"South hand: 7 losers"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North held 5 hearts"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North held the view that Q is conventional"}'::jsonb
      ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_HIDDEN_VALUE_FIREWALL_INVALID';
   END IF;
@@ -233,6 +243,7 @@ DECLARE
   v_version_content_failed boolean:=false;
   v_rule_content_failed boolean:=false;
   v_source_binding_failed boolean:=false;
+  v_source_school_failed boolean:=false;
   v_test_binding_failed boolean:=false;
   v_expired_restore_failed boolean:=false;
   v_bundle_id uuid:=uuidv7();
@@ -511,7 +522,8 @@ BEGIN
     rule_id,canon_activation_id,runtime_activation_id,
     superseded_canon_activation_id,superseded_canon_valid_to,
     superseded_runtime_activation_ids,superseded_runtime_state,superseded_rule_state,
-    superseded_source_state,promotion_mode,human_approval_required
+    superseded_source_state,superseded_knowledge_version_content_sha256,
+    promotion_mode,human_approval_required
   ) VALUES (
     v_promotion,v_school,v_candidate,repeat('a',64),v_good_bundle_hash,
     'school-video-auto-canon-v1','restore-scope',repeat('b',64),repeat('c',64),
@@ -521,8 +533,19 @@ BEGIN
     )),jsonb_build_array(jsonb_build_object(
       'rule_id',v_old_rule,
       'rule_content_sha256',bidding.video_canon_rule_restore_sha256(v_old_rule)
-    )),v_old_source_state,'AI_VERIFIED_TEACHER_VIDEO',false
+    )),v_old_source_state,v_old_version_digest,'AI_VERIFIED_TEACHER_VIDEO',false
   );
+  BEGIN
+    UPDATE public.source SET school_id=v_other_school WHERE source_id=v_source;
+  EXCEPTION WHEN check_violation THEN
+    v_source_school_failed:=true;
+  END;
+  IF NOT v_source_school_failed
+     OR EXISTS (SELECT 1 FROM public.source
+                 WHERE source_id=v_source AND school_id<>v_school) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_PROMOTED_SOURCE_SCHOOL_MUTATION_NOT_BLOCKED';
+  END IF;
+
   BEGIN
     INSERT INTO bidding.video_canon_ai_verification(
       school_id,analysis_candidate_id,video_canon_ai_verification_bundle_id,

@@ -196,6 +196,11 @@ CREATE TABLE bidding.video_canon_ai_promotion_receipt (
       CHECK (jsonb_typeof(superseded_rule_state)='array'),
     superseded_source_state jsonb NOT NULL DEFAULT '[]'::jsonb
       CHECK (jsonb_typeof(superseded_source_state)='array'),
+    superseded_knowledge_version_content_sha256 text
+      CHECK (superseded_knowledge_version_content_sha256 IS NULL
+             OR superseded_knowledge_version_content_sha256 ~ '^[0-9a-f]{64}$'),
+    CHECK ((superseded_canon_activation_id IS NULL)=
+           (superseded_knowledge_version_content_sha256 IS NULL)),
     promotion_mode text NOT NULL CHECK (promotion_mode='AI_VERIFIED_TEACHER_VIDEO'),
     human_approval_required boolean NOT NULL CHECK (human_approval_required=false),
     promoted_at timestamptz NOT NULL DEFAULT now()
@@ -340,6 +345,21 @@ SELECT EXISTS (
           WHERE bidding.is_complete_bridge_hand(concat_ws(
             '.',matched.parts[1],matched.parts[2],matched.parts[3],matched.parts[4]
           ))
+       )
+  ) OR EXISTS (
+    SELECT 1 FROM walk AS w
+     WHERE jsonb_typeof(w.value)='string'
+       AND EXISTS (
+         SELECT 1
+           FROM regexp_matches(
+             w.value#>>'{}',
+             E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])[[:space:]]+(?:held|holds?|has|had)[[:space:]]+([^;]{1,512})',
+             'gi'
+           ) AS matched(parts)
+          WHERE matched.parts[1] ~
+                  E'^[[:space:]]*(?:[:,;=\\-][[:space:]]*)?(?:10|[AKQJT2-9]|[kqjt]|(?:(?:10)|[AKQJT2-9akqjt]){2,13})($|[^[:alnum:]])'
+            AND matched.parts[1] !~*
+                  E'^[[:space:]]*(?:[:,;=\\-][[:space:]]*)?[2-9][[:space:]]*(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*)'
        )
   );
 $$;
@@ -732,6 +752,33 @@ CREATE TRIGGER promoted_video_canon_source_binding_guard
 BEFORE INSERT OR UPDATE OR DELETE ON public.knowledge_version_source
 FOR EACH ROW EXECUTE FUNCTION bidding.guard_promoted_video_canon_source_binding();
 
+CREATE OR REPLACE FUNCTION bidding.guard_promoted_video_canon_source_identity()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path=pg_catalog,public,bidding
+AS $$
+BEGIN
+    IF NEW.school_id IS DISTINCT FROM OLD.school_id
+       AND EXISTS (
+         SELECT 1
+           FROM public.knowledge_version_source kvs
+           JOIN public.canon_activation ca
+             ON ca.knowledge_version_id=kvs.knowledge_version_id
+           JOIN bidding.video_canon_ai_promotion_receipt p
+             ON p.canon_activation_id=ca.canon_activation_id
+             OR p.superseded_canon_activation_id=ca.canon_activation_id
+          WHERE kvs.source_id=OLD.source_id
+       ) THEN
+        RAISE EXCEPTION 'VIDEO_CANON_PROMOTED_SOURCE_SCHOOL_IMMUTABLE' USING ERRCODE='23514';
+    END IF;
+    RETURN NEW;
+END $$;
+
+CREATE TRIGGER promoted_video_canon_source_identity_guard
+BEFORE UPDATE OF school_id ON public.source
+FOR EACH ROW EXECUTE FUNCTION bidding.guard_promoted_video_canon_source_identity();
+
 CREATE OR REPLACE FUNCTION bidding.guard_video_canon_source_policy_lifecycle()
 RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE v_retired_at timestamptz;
@@ -828,6 +875,7 @@ DECLARE
     v_rule_content_sha256 text;
     v_expected_rule_content_sha256 text;
     v_version_content_sha256 text;
+    v_prior_version_content_sha256 text;
     v_rule_test_state_sha256 text;
     v_expected_version_provenance jsonb;
     v_canon_snapshot_sha256 text;
@@ -1176,6 +1224,15 @@ BEGIN
                 IS DISTINCT FROM v_prior_canon.canon_activation_id::text THEN
             RAISE EXCEPTION 'VIDEO_CANON_ROLLBACK_TARGET_MISMATCH' USING ERRCODE='23514';
         END IF;
+        SELECT encode(public.digest(convert_to(
+                 (to_jsonb(prior_kv)-ARRAY['review_status','status','created_at'])::text,
+                 'UTF8'),'sha256'),'hex')
+          INTO v_prior_version_content_sha256
+          FROM public.knowledge_version prior_kv
+         WHERE prior_kv.knowledge_version_id=v_prior_canon.knowledge_version_id;
+        IF v_prior_version_content_sha256 IS NULL THEN
+            RAISE EXCEPTION 'VIDEO_CANON_ROLLBACK_TARGET_VERSION_MISSING' USING ERRCODE='23514';
+        END IF;
         PERFORM 1 FROM bidding.runtime_activation
          WHERE canon_activation_id=v_prior_canon.canon_activation_id AND status='active' FOR UPDATE;
         SELECT COALESCE(array_agg(runtime_activation_id ORDER BY runtime_activation_id),'{}'::uuid[]),
@@ -1273,14 +1330,15 @@ BEGIN
       rule_test_state_sha256,rule_id,canon_activation_id,runtime_activation_id,
       superseded_canon_activation_id,superseded_canon_valid_to,
       superseded_runtime_activation_ids,superseded_runtime_state,superseded_rule_state,
-      superseded_source_state,promotion_mode,human_approval_required
+      superseded_source_state,superseded_knowledge_version_content_sha256,
+      promotion_mode,human_approval_required
     ) VALUES (
       v_candidate.school_id,p_analysis_candidate_id,v_candidate.payload_hash,p_verification_bundle_sha256,
       v_policy_version,v_scope_key,v_rule_content_sha256,v_version_content_sha256,
       v_rule_test_state_sha256,p_rule_id,v_canon_activation,v_runtime_activation,
       v_prior_canon.canon_activation_id,v_prior_canon.valid_to,
       v_prior_runtime_ids,v_prior_runtime_state,v_prior_rule_state,v_prior_source_state,
-      'AI_VERIFIED_TEACHER_VIDEO',false
+      v_prior_version_content_sha256,'AI_VERIFIED_TEACHER_VIDEO',false
     ) RETURNING * INTO v_existing;
     UPDATE public.analysis_candidate SET quality_status='AI_VERIFIED',promotion_status='promoted'
      WHERE analysis_candidate_id=p_analysis_candidate_id;
@@ -1417,6 +1475,19 @@ BEGIN
            OR v_prior_canon.scope_key IS DISTINCT FROM v_promotion.scope_key THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_TARGET_BINDING_MISMATCH' USING ERRCODE='23514';
         END IF;
+        SELECT * INTO v_prior_version
+          FROM public.knowledge_version
+         WHERE knowledge_version_id=v_prior_canon.knowledge_version_id
+         FOR UPDATE;
+        v_prior_version_content_sha256 := encode(public.digest(convert_to(
+          (to_jsonb(v_prior_version)-ARRAY['review_status','status','created_at'])::text,
+          'UTF8'),'sha256'),'hex');
+        IF v_prior_version.knowledge_version_id IS NULL
+           OR v_prior_version_content_sha256 IS DISTINCT FROM
+                v_promotion.superseded_knowledge_version_content_sha256 THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_PREDECESSOR_VERSION_MISMATCH'
+              USING ERRCODE='23514';
+        END IF;
         SELECT COALESCE(jsonb_agg(to_jsonb(kvs)
                  ORDER BY kvs.source_id::text,kvs.relation_type,kvs.source_locator::text),
                '[]'::jsonb)
@@ -1457,15 +1528,7 @@ BEGIN
             IF NOT FOUND THEN
                 RAISE EXCEPTION 'VIDEO_CANON_RESTORE_SOURCE_POLICY_INACTIVE' USING ERRCODE='23514';
             END IF;
-            SELECT * INTO v_prior_version
-              FROM public.knowledge_version
-             WHERE knowledge_version_id=v_prior_canon.knowledge_version_id
-             FOR UPDATE;
-            v_prior_version_content_sha256 := encode(public.digest(convert_to(
-              (to_jsonb(v_prior_version)-ARRAY['review_status','status','created_at'])::text,
-              'UTF8'),'sha256'),'hex');
-            IF v_prior_version.knowledge_version_id IS NULL
-               OR v_prior_version_content_sha256<>
+            IF v_prior_version_content_sha256<>
                     v_prior_promotion.knowledge_version_content_sha256 THEN
                 RAISE EXCEPTION 'VIDEO_CANON_RESTORE_VERSION_CONTENT_MISMATCH' USING ERRCODE='23514';
             END IF;
@@ -1746,11 +1809,13 @@ REVOKE ALL ON FUNCTION bidding.validate_video_canon_verification_bundle() FROM P
 REVOKE ALL ON FUNCTION bidding.validate_video_canon_verification() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_bound_video_canon_candidate() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_promoted_video_canon_source_binding() FROM PUBLIC;
+REVOKE ALL ON FUNCTION bidding.guard_promoted_video_canon_source_identity() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_video_canon_source_policy_lifecycle() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_video_canon_verifier_registry_lifecycle() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.validate_video_correction_review_receipt() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION bidding.validate_video_canon_verification_bundle(),
   bidding.guard_bound_video_canon_candidate(),bidding.guard_promoted_video_canon_source_binding(),
+  bidding.guard_promoted_video_canon_source_identity(),
   bidding.guard_video_canon_source_policy_lifecycle(),
   bidding.guard_video_canon_verifier_registry_lifecycle()
   FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,

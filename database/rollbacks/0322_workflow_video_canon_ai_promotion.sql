@@ -17,6 +17,7 @@ DROP VIEW bidding.video_canon_bound_candidate;
 DROP TRIGGER video_canon_restore_receipt_append_only ON bidding.video_canon_ai_restore_receipt;
 DROP TRIGGER video_correction_review_receipt_append_only ON bidding.video_correction_review_receipt;
 DROP TRIGGER video_correction_review_receipt_guard ON bidding.video_correction_review_receipt;
+DROP TRIGGER promoted_video_canon_source_identity_guard ON public.source;
 DROP TRIGGER promoted_video_canon_source_binding_guard ON public.knowledge_version_source;
 DROP TRIGGER bound_video_canon_candidate_guard ON public.analysis_candidate;
 DROP TRIGGER video_canon_verification_guard ON bidding.video_canon_ai_verification;
@@ -25,6 +26,7 @@ DROP TRIGGER video_canon_source_policy_lifecycle_guard ON bidding.video_canon_so
 DROP TRIGGER video_canon_verifier_registry_lifecycle_guard ON bidding.video_canon_verifier_registry;
 DROP FUNCTION bidding.guard_video_canon_source_policy_lifecycle();
 DROP FUNCTION bidding.guard_video_canon_verifier_registry_lifecycle();
+DROP FUNCTION bidding.guard_promoted_video_canon_source_identity();
 DROP FUNCTION bidding.guard_promoted_video_canon_source_binding();
 DROP FUNCTION bidding.guard_bound_video_canon_candidate();
 DROP FUNCTION bidding.validate_video_canon_verification();
