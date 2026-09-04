@@ -149,3 +149,7 @@ def test_batch_copy_preserves_bounded_errno_codes() -> None:
     assert 'errno.EACCES: "UV_INTAKE_PERMISSION_DENIED"' in batch
     assert 'intake_reject "$copy_code"' in batch
     assert "install -o universal-video" not in batch
+    close_gate = batch.index("os.close(target_fd)")
+    clear_target = batch.index("target_fd = None", close_gate)
+    success = batch.index('print("UV_COPY_PASS")', clear_target)
+    assert close_gate < clear_target < success

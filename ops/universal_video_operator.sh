@@ -126,6 +126,8 @@ try:
             view = view[os.write(target_fd, view):]
     os.fsync(target_fd)
     os.fchmod(target_fd, 0o600)
+    os.close(target_fd)
+    target_fd = None
     print("UV_COPY_PASS")
 except OSError as exc:
     code = {
