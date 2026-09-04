@@ -371,7 +371,7 @@ DO $$
 DECLARE
   v_school uuid:=uuidv7();
   v_other_school uuid:=uuidv7();
-  v_source uuid:=uuidv7();
+  v_source uuid:='75afc175-d528-5d6e-a7cf-48303666349e'::uuid;
   v_orphan_source uuid:=uuidv7();
   v_future_source uuid:=uuidv7();
   v_item uuid:=uuidv7();
