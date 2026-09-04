@@ -86,6 +86,22 @@ def test_all_ai_checks_create_sealed_automatic_promotion_command():
     ).hexdigest() == result["verification_bundle_sha256"]
 
 
+@pytest.mark.parametrize("authority_class", [None, "WORLD_EXTERNAL", "CANDIDATE_RESEARCH"])
+def test_promotion_requires_exact_teacher_video_authority(authority_class):
+    candidate = _candidate()
+    if authority_class is None:
+        candidate["payload"].pop("authority_class")
+    else:
+        candidate["payload"]["authority_class"] = authority_class
+    candidate["payload_hash"] = hashlib.sha256(
+        json.dumps(
+            candidate["payload"], ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+    with pytest.raises(VideoCanonAIPromotionError, match="TEACHER_VIDEO authority"):
+        build_ai_canon_promotion(candidate, _bundle(candidate))
+
+
 @pytest.mark.parametrize(("valid_from", "valid_to", "match"), [
     ("not-a-timestamp", None, "invalid valid_from timestamp"),
     ("0001-01-01T00:00:00+00:00:30", None, "invalid valid_from timestamp"),

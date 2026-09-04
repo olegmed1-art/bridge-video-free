@@ -158,7 +158,7 @@ WITH RECURSIVE walk(value) AS (
         'partner_cards','opponent_cards','all_hands'
      ])
         OR regexp_replace(lower(k.key),'[^a-z0-9]','','g') ~
-           '^(actual)?(partner|opponent|north|east|south|west|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?)(s)?(hand|holding|cards?|deals?)+(s)?$'
+           '^(actual)?(partner|opponent|north|east|south|west|lefthandopponent|righthandopponent|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?)(s)?(hand|holding|cards?|deals?)+(s)?$'
         OR regexp_replace(lower(k.key),'[^a-z0-9]','','g') ~
            '^(hidden|concealed)(hand|holding|cards?|deals?)+(s)?$'
      LIMIT 1
@@ -393,7 +393,7 @@ WITH RECURSIVE walk(value,actor_context) AS (
         SELECT e.value,
                w.actor_context OR regexp_replace(
                  lower(e.key),'[^[:alnum:]]','','g'
-               ) ~ '^((actual)?(partner|opponent|north|east|south|west|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?|n|e|s|w)s?|партн[её]р|соперник|оппонент)$'
+               ) ~ '^((actual)?(partner|opponent|north|east|south|west|lefthandopponent|righthandopponent|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?|n|e|s|w)s?|партн[её]р|соперник|оппонент)$'
                  AS actor_context
           FROM jsonb_each(
           CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END
@@ -767,11 +767,14 @@ BEGIN
     IF v_decoded<>(NEW.receipt_payload-'receipt_sha256')
        OR v_computed<>NEW.receipt_sha256
        OR NEW.receipt_payload->>'receipt_sha256'<>NEW.receipt_sha256
-       OR jsonb_object_length(NEW.receipt_payload)<>8
+       OR jsonb_object_length(NEW.receipt_payload)<>9
        OR NOT (NEW.receipt_payload ?& ARRAY[
-         'correction_id','reviewer_ref','source_sha256','input_ref',
+         'correction_id','kind','reviewer_ref','source_sha256','input_ref',
          'corrected_value_sha256','evidence_refs','status','receipt_sha256'
        ])
+       OR NEW.receipt_payload->>'kind' NOT IN (
+         'ASR','SPEAKER','CARD','AUCTION','EXTRACTION','PEDAGOGY'
+       )
        OR NEW.receipt_payload->>'status'<>'VERIFIED'
        OR NOT ((NEW.receipt_payload->>'source_sha256') ~ '^[0-9a-f]{64}$')
        OR NOT ((NEW.receipt_payload->>'corrected_value_sha256') ~ '^[0-9a-f]{64}$')
@@ -804,6 +807,7 @@ BEGIN
     IF NOT FOUND OR v_candidate.school_id<>NEW.school_id
        OR v_candidate.payload_hash<>NEW.candidate_payload_hash
        OR v_candidate.candidate_type<>'video_school_canon_candidate'
+       OR v_candidate.payload->>'authority_class' IS DISTINCT FROM 'TEACHER_VIDEO'
        OR v_candidate.status<>'active'
        OR v_candidate.quality_status<>'AI_VERIFICATION_PENDING'
        OR v_candidate.promotion_status NOT IN ('staging','review_queue') THEN
@@ -1539,6 +1543,7 @@ BEGIN
        OR v_candidate.payload->>'schema' IS DISTINCT FROM 'video-canon-evidence-v2'
        OR v_candidate.payload->>'review_eligibility' IS DISTINCT FROM 'AI_VERIFICATION_PENDING'
        OR v_candidate.payload->>'source_class' IS DISTINCT FROM 'SCHOOL_PRIMARY_EVIDENCE'
+       OR v_candidate.payload->>'authority_class' IS DISTINCT FROM 'TEACHER_VIDEO'
        OR v_candidate.payload#>>'{source_authorization,policy_version}'
             IS DISTINCT FROM v_policy_version
        OR v_candidate.payload->>'semantic_scope' IS DISTINCT FROM v_semantic_scope

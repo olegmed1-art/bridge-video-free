@@ -178,6 +178,10 @@ def test_hidden_information_is_rejected_inside_json_serializable_tuple():
     {"lho": {"cards": "AS"}},
     {"RHO": {"cards": "QH"}},
     {"L.H.O": {"cards": "AS"}},
+    {"left_hand_opponent": {"cards": "AS"}},
+    {"right_hand_opponent": {"holding": "QH"}},
+    {"leftHandOpponent": {"cards": "AS"}},
+    {"rightHandOpponent": {"holding": "QH"}},
     {"N": {"cards": "AS"}},
     {"партнёр": {"карты": "AKQ"}},
 ])

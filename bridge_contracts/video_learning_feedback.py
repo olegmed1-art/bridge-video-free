@@ -62,12 +62,15 @@ def build_learning_feedback(
     receipts: dict[str, Mapping[str, Any]] = {}
     for receipt in raw_receipts:
         fields = {
-            "correction_id", "reviewer_ref", "source_sha256", "input_ref",
+            "correction_id", "kind", "reviewer_ref", "source_sha256", "input_ref",
             "corrected_value_sha256", "evidence_refs", "status", "receipt_sha256",
         }
         if not isinstance(receipt, Mapping) or set(receipt) != fields:
             raise VideoLearningFeedbackError("correction review receipt fields mismatch")
         receipt_id = _text(receipt.get("correction_id"), "receipt correction_id")
+        receipt_kind = _text(receipt.get("kind"), "receipt correction kind")
+        if receipt_kind not in _KINDS:
+            raise VideoLearningFeedbackError("unsupported receipt correction kind")
         if receipt_id in receipts:
             raise VideoLearningFeedbackError("duplicate correction review receipt")
         sealed = {key: receipt[key] for key in sorted(fields - {"receipt_sha256"})}
@@ -105,6 +108,7 @@ def build_learning_feedback(
             raise VideoLearningFeedbackError("verified correction review receipt required")
         if (
             _sha(receipt.get("source_sha256")) != source_sha
+            or receipt.get("kind") != kind
             or receipt.get("input_ref") != input_ref
             or receipt.get("reviewer_ref") != reviewer_ref
             or _sha(receipt.get("corrected_value_sha256")) != corrected_value_sha

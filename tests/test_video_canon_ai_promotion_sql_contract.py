@@ -18,6 +18,10 @@ def test_database_bundle_gate_validates_the_effective_period():
 
 def test_database_bundle_gate_binds_profile_and_level_to_the_candidate():
     assert (
+        "v_candidate.payload->>'authority_class' IS DISTINCT FROM 'TEACHER_VIDEO'"
+    ) in MIGRATION
+    assert "VIDEO_CANON_BUNDLE_AUTHORITY_CLASS_NOT_BLOCKED" in DATABASE_TEST
+    assert (
         "NEW.bundle_payload->>'system_profile'\n"
         "            IS DISTINCT FROM v_candidate.payload->>'system_profile'"
     ) in MIGRATION
@@ -34,6 +38,12 @@ def test_provider_identity_allows_only_operational_job_refresh_metadata():
     assert "COALESCE(OLD.attributes,'{}'::jsonb)-'job_id'" in MIGRATION
     assert "VIDEO_CANON_PROVIDER_OPERATIONAL_REFRESH_BLOCKED" in DATABASE_TEST
     assert "VIDEO_CANON_PROMOTED_PROVIDER_ATTRIBUTES_MUTATION_NOT_BLOCKED" in DATABASE_TEST
+
+
+def test_correction_receipt_seals_the_correction_kind():
+    assert "jsonb_object_length(NEW.receipt_payload)<>9" in MIGRATION
+    assert "'correction_id','kind','reviewer_ref'" in MIGRATION
+    assert "NEW.receipt_payload->>'kind' NOT IN" in MIGRATION
 
 
 def test_database_bundle_gate_validates_the_complete_rollback_contract():
@@ -297,6 +307,9 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
     assert '"partnerDeal":"AKQ"' in DATABASE_TEST
     assert '"north/deal":"AKQ"' in DATABASE_TEST
     assert '"lho":{"cards":"AS"}' in DATABASE_TEST
+    assert '"left_hand_opponent":{"cards":"AS"}' in DATABASE_TEST
+    assert '"rightHandOpponent":{"holding":"QH"}' in DATABASE_TEST
+    assert "lefthandopponent|righthandopponent" in MIGRATION
     assert "RHO has the queen of hearts" in DATABASE_TEST
     assert "L.H.O has the ace of spades" in DATABASE_TEST
     assert "R.H.O. has the queen of hearts" in DATABASE_TEST

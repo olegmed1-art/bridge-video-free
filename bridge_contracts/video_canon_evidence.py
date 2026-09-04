@@ -212,7 +212,7 @@ def _has_forbidden_key(value: Any) -> bool:
         return any(
             str(key).casefold() in _FORBIDDEN_KEYS
             or re.fullmatch(
-                r"(?:actual)?(?:partner|opponent|north|east|south|west|[lr](?:\s*\.\s*)?h(?:\s*\.\s*)?o\.?)s?"
+                r"(?:actual)?(?:partner|opponent|north|east|south|west|lefthandopponent|righthandopponent|[lr](?:\s*\.\s*)?h(?:\s*\.\s*)?o\.?)s?"
                 r"(?:hand|holding|cards?|deals?)+s?",
                 re.sub(r"[^a-z0-9]", "", str(key).casefold()),
             ) is not None
@@ -243,7 +243,7 @@ def _is_complete_hand_shape(hand: str) -> bool:
 
 
 _ACTOR_CONTEXT_KEY = re.compile(
-    r"(?:(?:actual)?(?:partner|opponent|north|east|south|west|[lr](?:\s*\.\s*)?h(?:\s*\.\s*)?o\.?|n|e|s|w)s?"
+    r"(?:(?:actual)?(?:partner|opponent|north|east|south|west|lefthandopponent|righthandopponent|[lr](?:\s*\.\s*)?h(?:\s*\.\s*)?o\.?|n|e|s|w)s?"
     r"|партн[её]р|соперник|оппонент)"
 )
 

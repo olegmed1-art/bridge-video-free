@@ -307,7 +307,7 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
         }
         master['human_corrections'] = [correction]
         receipt = {
-            'correction_id': 'c-1', 'reviewer_ref': 'teacher:diana',
+            'correction_id': 'c-1', 'kind': 'ASR', 'reviewer_ref': 'teacher:diana',
             'source_sha256': 'a' * 64, 'input_ref': 'segment-7',
             'corrected_value_sha256': digest('форсирует'),
             'evidence_refs': ['segment-7'], 'status': 'VERIFIED',
@@ -362,7 +362,7 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
         }
         master['human_corrections'] = [correction]
         receipt = {
-            'correction_id': 'c-1', 'reviewer_ref': 'teacher:diana',
+            'correction_id': 'c-1', 'kind': 'ASR', 'reviewer_ref': 'teacher:diana',
             'source_sha256': 'a' * 64, 'input_ref': 'segment-7',
             'corrected_value_sha256': digest('форсирует'),
             'evidence_refs': ['segment-7'], 'status': 'VERIFIED',

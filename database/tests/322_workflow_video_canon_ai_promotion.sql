@@ -229,6 +229,14 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"compiled_payload":{"lho":{"cards":"AS"}}}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"compiled_payload":{"left_hand_opponent":{"cards":"AS"}}}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"compiled_payload":{"right_hand_opponent":{"holding":"QH"}}}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"compiled_payload":{"leftHandOpponent":{"cards":"AS"}}}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"compiled_payload":{"rightHandOpponent":{"holding":"QH"}}}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"RHO has the queen of hearts"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"L.H.O has the ace of spades"}'::jsonb
@@ -422,6 +430,7 @@ DECLARE
   v_rollback_pair_failed boolean:=false;
   v_rollback_shape_failed boolean:=false;
   v_scope_bundle_failed boolean:=false;
+  v_authority_bundle_failed boolean:=false;
   v_profile_bundle_failed boolean:=false;
   v_missing_bundle_field_failed boolean:=false;
   v_candidate_state_failed boolean:=false;
@@ -647,6 +656,7 @@ BEGIN
     v_candidate,v_school,'video_school_canon_candidate','restore-'||v_candidate::text,
     repeat('f',64),'AI_VERIFICATION_PENDING','staging',
     jsonb_build_object(
+      'authority_class','TEACHER_VIDEO',
       'semantic_scope','restore-scope',
       'system_profile','natural-v1',
       'learner_level','beginner-1'
@@ -658,6 +668,7 @@ BEGIN
     'policy_version','school-video-auto-canon-v1',
     'candidate_payload_hash',repeat('a',64),
     'candidate_payload',jsonb_build_object(
+      'authority_class','TEACHER_VIDEO',
       'semantic_scope','restore-scope',
       'system_profile','natural-v1',
       'learner_level','beginner-1'
@@ -686,6 +697,30 @@ BEGIN
     (13,'CANON_REGRESSION'),(14,'CANON_INTEGRITY'),(15,'CANON_CONFLICT_SCAN'),
     (16,'ROLLBACK_RESTORE')
   ) AS required_checks(ordinal,check_id);
+  UPDATE public.analysis_candidate
+     SET payload=jsonb_set(payload,'{authority_class}','"WORLD_EXTERNAL"'::jsonb)
+   WHERE analysis_candidate_id=v_candidate;
+  v_bad_bundle:=jsonb_set(
+    v_good_bundle,'{candidate_payload,authority_class}','"WORLD_EXTERNAL"'::jsonb
+  );
+  BEGIN
+    INSERT INTO bidding.video_canon_ai_verification_bundle(
+      school_id,analysis_candidate_id,candidate_payload_hash,
+      verification_bundle_sha256,bundle_canonical_json,bundle_payload
+    ) VALUES (
+      v_school,v_candidate,repeat('a',64),
+      encode(public.digest(convert_to(v_bad_bundle::text,'UTF8'),'sha256'),'hex'),
+      v_bad_bundle::text,v_bad_bundle
+    );
+  EXCEPTION WHEN check_violation THEN
+    v_authority_bundle_failed:=true;
+  END;
+  UPDATE public.analysis_candidate
+     SET payload=jsonb_set(payload,'{authority_class}','"TEACHER_VIDEO"'::jsonb)
+   WHERE analysis_candidate_id=v_candidate;
+  IF NOT v_authority_bundle_failed THEN
+    RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_AUTHORITY_CLASS_NOT_BLOCKED';
+  END IF;
   v_bad_bundle:=jsonb_set(
     v_good_bundle,'{activation_scope}','"another-scope"'::jsonb
   );

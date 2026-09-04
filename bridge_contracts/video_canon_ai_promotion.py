@@ -116,6 +116,8 @@ def build_ai_canon_promotion(
         _fail("candidate is not eligible for AI verification")
     if payload.get("source_class") != "SCHOOL_PRIMARY_EVIDENCE":
         _fail("only School primary evidence may auto-promote")
+    if payload.get("authority_class") != "TEACHER_VIDEO":
+        _fail("only TEACHER_VIDEO authority may auto-promote")
     ambiguities = payload.get("ambiguities")
     contradictions = payload.get("contradictions")
     if not isinstance(ambiguities, list) or not isinstance(contradictions, list):
