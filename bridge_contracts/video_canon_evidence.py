@@ -67,6 +67,12 @@ _LABELLED_HAND_TAIL = re.compile(
 _EXPLICIT_SUIT_LABEL = re.compile(
     r"(?<![A-Za-z0-9_])(?P<suit>[SHDC])\s*:", re.IGNORECASE
 )
+_PARTIAL_SEPARATED_HAND = re.compile(
+    r"(?<![A-Za-z0-9])(?:-|(?:(?:10)|[AKQJT2-9]){1,13})"
+    r"(?:[\s,/.]+(?:-|(?:(?:10)|[AKQJT2-9]){1,13})){1,3}"
+    r"(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
 _SEPARATED_LABELLED_HIDDEN_CARDS = re.compile(
     r"(?:(?:partner|opponent|north|east|south|west)\s*(?:['’]s)?[ _-]*"
     r"(?:hand|cards)\b|(?:рука|карты)\s+(?:партн[её]ра|соперника)\b"
@@ -149,12 +155,12 @@ def _has_forbidden_value(value: Any) -> bool:
         normalized_value = value.translate(_SUIT_SYMBOL_TRANSLATION)
         if any(_is_complete_hand_shape(match.group("hand")) for match in _PBN_DEAL.finditer(normalized_value)):
             return True
-        # Four explicit suit labels disclose a hidden-hand surface even when
-        # cards are missing/unknown or the suits are written in another order.
+        # Any structurally explicit surface after a hidden actor/seat label is
+        # forbidden. A disclosure remains hidden information when suits/cards
+        # are omitted, unknown, partial, or written in another order.
         if any(
-            {token.group("suit").upper() for token in
-             _EXPLICIT_SUIT_LABEL.finditer(match.group("tail"))}
-            == {"S", "H", "D", "C"}
+            _EXPLICIT_SUIT_LABEL.search(match.group("tail"))
+            or _PARTIAL_SEPARATED_HAND.search(match.group("tail"))
             for match in _LABELLED_HAND_TAIL.finditer(normalized_value)
         ):
             return True

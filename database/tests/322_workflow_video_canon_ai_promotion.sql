@@ -123,6 +123,10 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N: ♣432 ♦765 ♥T98 ♠AKQJ"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"N: ♣43 ♦765 ♥T98"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"N: AKQJ.T98"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N:AKQJ109.876.54.32"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s hand was S:AKQJ109 H:876 D:54 C:32"}'::jsonb
@@ -642,7 +646,11 @@ BEGIN
      ) OR NOT EXISTS (
        SELECT 1 FROM bidding.runtime_activation
         WHERE runtime_activation_id=v_new_runtime AND status='revoked'
-     ) OR NOT EXISTS (
+     ) OR (SELECT valid_to FROM bidding.runtime_activation
+          WHERE runtime_activation_id=v_new_runtime) IS DISTINCT FROM
+        (SELECT valid_to FROM public.canon_activation
+          WHERE canon_activation_id=v_new_canon)
+     OR NOT EXISTS (
        SELECT 1 FROM public.canon_activation
         WHERE canon_activation_id=v_old_canon AND status='active' AND valid_to IS NULL
      ) OR NOT EXISTS (

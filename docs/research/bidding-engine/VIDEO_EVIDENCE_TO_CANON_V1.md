@@ -136,7 +136,7 @@ serialized; only sanitized results or explicit gaps survive.
 
 The same value-level firewall applies before a teacher-video Canon candidate is
 placed in staging: full PBN encodings and labelled partner/opponent card payloads—including
-`♠♥♦♣` suit-symbol notation in any suit order, including partial disclosures—are rejected anywhere in the complete payload, including the source-bound
+`♠♥♦♣` suit-symbol notation in any suit order, including fragments with omitted suits or cards—are rejected anywhere in the complete payload, including the source-bound
 teacher statement and otherwise innocent keys such as `notes`. Candidate
 staging identity includes the canonical payload SHA-256, so a corrected
 assertion becomes a preserved new revision instead of colliding with the old
@@ -202,5 +202,7 @@ requires its exact source policy to remain active by wall clock and long enough
 for the restored validity interval; a revoked or expired teacher-video
 authorization cannot be reactivated through rollback. The restorer recomputes
 the predecessor's full knowledge-version digest, exact single source binding
-and sealed rule-test-state digest, and requires every original attestor login
+and sealed rule-test-state digest. The outgoing Canon and runtime rows receive
+one shared wall-clock revocation timestamp captured immediately before both
+updates. Restoration also requires every original attestor login
 to retain its active verifier capability before reactivation.

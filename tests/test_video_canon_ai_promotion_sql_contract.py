@@ -111,6 +111,8 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "VIDEO_CANON_RESTORE_ATTESTOR_REVOKED",
         "VIDEO_CANON_RESTORE_VERSION_CONTENT_MISMATCH",
         "v_prior_version_content_sha256",
+        "v_revoked_at := clock_timestamp()",
+        "SET status='revoked',valid_to=v_revoked_at",
         "replace(upper(COALESCE(p_hand,'')),'10','T')",
         "(?:10)",
         "|[NESW][[:space:]]*:)[^;]*?S",
@@ -120,7 +122,9 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "'♦','D:'",
         "'♣','C:'",
         "([^;]*)",
-        "matched.parts[1] ~* E'(^|[^[:alnum:]_])S",
+        "matched.parts[1] ~*",
+        "[SHDC][[:space:]]*:",
+        "{1,3}($|[^[:alnum:]])",
     ):
         assert marker in MIGRATION
 

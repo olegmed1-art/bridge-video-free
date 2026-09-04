@@ -297,10 +297,10 @@ SELECT EXISTS (
              E'(?:(?:partner|opponent|north|east|south|west)[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника)|[NESW][[:space:]]*:)([^;]*)',
              'gi'
            ) AS matched(parts)
-          WHERE matched.parts[1] ~* E'(^|[^[:alnum:]_])S[[:space:]]*:'
-            AND matched.parts[1] ~* E'(^|[^[:alnum:]_])H[[:space:]]*:'
-            AND matched.parts[1] ~* E'(^|[^[:alnum:]_])D[[:space:]]*:'
-            AND matched.parts[1] ~* E'(^|[^[:alnum:]_])C[[:space:]]*:'
+          WHERE matched.parts[1] ~*
+                  E'(^|[^[:alnum:]_])[SHDC][[:space:]]*:'
+             OR matched.parts[1] ~*
+                  E'(^|[^[:alnum:]])(-|(?:(?:10)|[AKQJT2-9]){1,13})([[:space:],/.]+(-|(?:(?:10)|[AKQJT2-9]){1,13})){1,3}($|[^[:alnum:]])'
        )
   ) OR EXISTS (
     SELECT 1 FROM walk AS w
@@ -1260,6 +1260,7 @@ DECLARE
     v_prior_version_content_sha256 text;
     v_state jsonb;
     v_original_valid_to timestamptz;
+    v_revoked_at timestamptz;
     v_restored_runtime_ids uuid[] := '{}'::uuid[];
 BEGIN
     IF p_verification_bundle_sha256 !~ '^[0-9a-f]{64}$'
@@ -1321,11 +1322,12 @@ BEGIN
         RAISE EXCEPTION 'VIDEO_CANON_RESTORE_CURRENT_ACTIVATION_MISMATCH' USING ERRCODE='23514';
     END IF;
 
+    v_revoked_at := clock_timestamp();
     UPDATE bidding.runtime_activation
-       SET status='revoked',valid_to=statement_timestamp()
+       SET status='revoked',valid_to=v_revoked_at
      WHERE runtime_activation_id=v_new_runtime.runtime_activation_id;
     UPDATE public.canon_activation
-       SET status='revoked',valid_to=statement_timestamp()
+       SET status='revoked',valid_to=v_revoked_at
      WHERE canon_activation_id=v_new_canon.canon_activation_id;
 
     IF v_promotion.superseded_canon_activation_id IS NOT NULL THEN
