@@ -325,11 +325,19 @@ def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> No
     assert "failed_run_backup_direct_get_states" in backup_filter
     assert "failed_run_backup_cleanup_status PROVEN_TERMINAL" in backup_filter
     assert "failed_run_backup_cleanup_status GET_FAILED" in backup_filter
-    assert "failed_run_backup_cleanup_status UNKNOWN_STATE" in backup_filter
+    assert 'failed_backup_error="${failed_backup_error:-UNKNOWN_STATE}"' in backup_filter
     assert "failed_run_backup_cleanup_status MULTIPLE_EXACT_BACKUP_IDS" in backup_filter
     assert "failed_run_backup_available_ids" in backup_filter
     assert "if (( ${#ids[@]} > 1 ))" in backup_filter
     assert 'for id in "${ids[@]}"' in backup_filter
+    classification_loop = backup_filter[
+        backup_filter.index('for id in "${ids[@]}"') : backup_filter.index("done", backup_filter.index('for id in "${ids[@]}"'))
+    ]
+    assert "exit 91" not in classification_loop
+    assert "exit 92" not in classification_loop
+    assert "exit 93" not in classification_loop
+    assert "failed_backup_state=GET_FAILED" in classification_loop
+    assert "failed_backup_state=INVALID_RESPONSE" in classification_loop
     assert "allocation_summary" in WORKFLOW
     assert "cleanup_only=true" in WORKFLOW
     assert "EXACT_NAME_INVENTORY_EMPTY" in WORKFLOW

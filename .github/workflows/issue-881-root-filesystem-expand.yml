@@ -514,20 +514,22 @@ jobs:
               failed_backup_candidate_id=""
               failed_backup_available_ids=""
               failed_backup_states=""
+              failed_backup_error=""
               for id in "${ids[@]}"; do
                 failed_backup_output=""
                 if failed_backup_output="$(oci bv boot-volume-backup get --boot-volume-backup-id "$id" --output json 2>&1)"; then
-                  failed_backup_state="$(printf '%s' "$failed_backup_output" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["lifecycle-state"])')"
+                  if ! failed_backup_state="$(printf '%s' "$failed_backup_output" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["lifecycle-state"])')"; then
+                    failed_backup_state=INVALID_RESPONSE
+                  fi
                 elif grep -Fq 'NotAuthorizedOrNotFound' <<<"$failed_backup_output" \
                     && grep -Eq "['\"]status['\"][[:space:]]*:[[:space:]]*404" <<<"$failed_backup_output"; then
                   failed_backup_state=NOT_FOUND
                 else
-                  state_set failed_run_backup_cleanup_status GET_FAILED
-                  exit 91
+                  failed_backup_state=GET_FAILED
                 fi
                 failed_backup_states="${failed_backup_states}${failed_backup_states:+,}${id}:${failed_backup_state}"
                 if [[ "$failed_backup_state" == AVAILABLE ]]; then
-                  BACKUP="$failed_backup_output" BOOT_ID="$boot_id" python - <<'PY'
+                  if BACKUP="$failed_backup_output" BOOT_ID="$boot_id" python - <<'PY'
           import json, os
           data = json.loads(os.environ['BACKUP'])['data']
           assert data['boot-volume-id'] == os.environ['BOOT_ID']
@@ -535,13 +537,18 @@ jobs:
           assert data['type'] == 'FULL'
           assert data['size-in-gbs'] == 97
           PY
-                  failed_backup_candidate_id="$id"
-                  failed_backup_available_ids="${failed_backup_available_ids}${failed_backup_available_ids:+,}${id}"
+                  then
+                    failed_backup_candidate_id="$id"
+                    failed_backup_available_ids="${failed_backup_available_ids}${failed_backup_available_ids:+,}${id}"
+                  else
+                    failed_backup_error="${failed_backup_error:-INVALID_AVAILABLE_OBJECT}"
+                  fi
                 elif [[ "$failed_backup_state" == TERMINATED || "$failed_backup_state" == NOT_FOUND ]]; then
                   echo "UV_ROOT_RESOURCE_ABSENCE_PASS resource=backup id=$id terminal_state=$failed_backup_state"
+                elif [[ "$failed_backup_state" == GET_FAILED ]]; then
+                  failed_backup_error="${failed_backup_error:-GET_FAILED}"
                 else
-                  state_set failed_run_backup_cleanup_status UNKNOWN_STATE
-                  exit 92
+                  failed_backup_error="${failed_backup_error:-UNKNOWN_STATE}"
                 fi
               done
               state_set failed_run_backup_direct_get_states "$failed_backup_states"
@@ -552,6 +559,13 @@ jobs:
               if (( ${#ids[@]} > 1 )); then
                 state_set failed_run_backup_cleanup_status MULTIPLE_EXACT_BACKUP_IDS
                 exit 93
+              fi
+              if [[ "$failed_backup_error" == GET_FAILED ]]; then
+                state_set failed_run_backup_cleanup_status GET_FAILED
+                exit 91
+              elif [[ -n "$failed_backup_error" ]]; then
+                state_set failed_run_backup_cleanup_status "$failed_backup_error"
+                exit 92
               fi
               if [[ -n "$failed_backup_candidate_id" ]]; then
                 state_set retained_backup_id "$failed_backup_candidate_id"
