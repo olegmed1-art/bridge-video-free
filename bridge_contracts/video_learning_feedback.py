@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from typing import Any, Callable, Mapping
 
 
@@ -148,11 +149,15 @@ def build_learning_feedback(
             }:
                 improved = False
                 break
-            try:
-                candidate_value = float(row["candidate"])
-                baseline_value = float(row["baseline"])
-                minimum_delta = float(row["minimum_delta"])
-            except (TypeError, ValueError):
+            numeric_values = (row["candidate"], row["baseline"], row["minimum_delta"])
+            if not all(isinstance(value, (int, float)) and not isinstance(value, bool)
+                       for value in numeric_values):
+                improved = False
+                break
+            candidate_value, baseline_value, minimum_delta = map(float, numeric_values)
+            if not all(math.isfinite(value) for value in (
+                candidate_value, baseline_value, minimum_delta
+            )):
                 improved = False
                 break
             if minimum_delta < 0 or row["direction"] not in {"HIGHER_IS_BETTER", "LOWER_IS_BETTER"}:

@@ -112,6 +112,22 @@ def test_holdout_metric_direction_is_enforced():
     assert result["model_improvement_proposal"]["status"] == "HOLDOUT_NOT_PROVEN"
 
 
+@pytest.mark.parametrize("candidate", [True, "inf", float("inf"), float("nan")])
+def test_holdout_rejects_non_numeric_or_nonfinite_metrics(candidate):
+    master = _master()
+    master["model_evaluation"] = {
+        "candidate_model_version": "asr-v2", "baseline_model_version": "asr-v1",
+        "holdout_id": "holdout-2026-09", "rollback_model_version": "asr-v1",
+        "metrics": {"wer": {"baseline": 0.8, "candidate": candidate,
+                              "direction": "HIGHER_IS_BETTER", "minimum_delta": 0.0}},
+    }
+    quality = _quality(master)
+    result = build_learning_feedback(
+        master, quality, correction_receipt_resolver=_resolver(quality)
+    )
+    assert result["model_improvement_proposal"]["status"] == "HOLDOUT_NOT_PROVEN"
+
+
 def test_self_hashed_receipt_is_not_trusted_without_authoritative_resolver():
     master = _master()
     quality = _quality(master)
