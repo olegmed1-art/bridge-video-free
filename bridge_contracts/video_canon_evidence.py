@@ -69,7 +69,8 @@ _EXPLICIT_SUIT_LABEL = re.compile(
 )
 _SINGLE_SUIT_CARD_GROUP = re.compile(
     r"(?<![A-Za-z0-9])(?P<cards>10|[AKQJT]|"
-    r"(?:(?:10)|[AKQJT2-9]){2,13})(?![A-Za-z0-9])"
+    r"(?:(?:10)|[AKQJT2-9]){2,13})(?![A-Za-z0-9])",
+    re.IGNORECASE,
 )
 _PARTIAL_SEPARATED_HAND = re.compile(
     r"(?<![A-Za-z0-9])(?:-|(?:(?:10)|[AKQJT2-9]){1,13})"

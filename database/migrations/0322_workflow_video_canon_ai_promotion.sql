@@ -299,7 +299,7 @@ SELECT EXISTS (
            ) AS matched(parts)
           WHERE matched.parts[1] ~*
                   E'(^|[^[:alnum:]_])[SHDC][[:space:]]*:'
-             OR matched.parts[1] ~
+             OR matched.parts[1] ~*
                   E'(^|[^[:alnum:]])(?:10|[AKQJT]|(?:(?:10)|[AKQJT2-9]){2,13})($|[^[:alnum:]])'
              OR matched.parts[1] ~*
                   E'(^|[^[:alnum:]])(-|(?:(?:10)|[AKQJT2-9]){1,13})([[:space:],/.]+(-|(?:(?:10)|[AKQJT2-9]){1,13})){1,3}($|[^[:alnum:]])'
@@ -839,12 +839,13 @@ BEGIN
     -- Serialize all Video-to-Canon writes for this school and freeze the
     -- underlying activation/conflict tables while the state digest is checked.
     PERFORM pg_advisory_xact_lock(hashtextextended(v_candidate.school_id::text,0));
-    LOCK TABLE public.canon_activation,public.knowledge_item,public.knowledge_version,
+    LOCK TABLE public.analysis_candidate,public.canon_activation,
+      public.knowledge_item,public.knowledge_version,
       public.source,public.knowledge_version_source,
       bidding.runtime_activation,bidding.rule,bidding.rule_test,bidding.rule_test_run,
       bidding.rule_conflict,bidding.video_canon_verifier_registry,
-      bidding.video_canon_ai_verification_bundle,
-      bidding.video_canon_ai_verification IN SHARE ROW EXCLUSIVE MODE;
+      bidding.video_canon_ai_verification_bundle,bidding.video_canon_ai_verification,
+      bidding.video_canon_ai_promotion_receipt IN SHARE ROW EXCLUSIVE MODE;
     v_canon_snapshot_sha256 := bidding.current_school_canon_snapshot_sha256(v_candidate.school_id);
     IF v_bundle.bundle_payload->>'canon_snapshot_sha256'<>v_canon_snapshot_sha256 THEN
         RAISE EXCEPTION 'VIDEO_CANON_STATE_CHECKS_STALE' USING ERRCODE='23514';
@@ -1294,7 +1295,8 @@ BEGIN
       public.source,public.knowledge_version_source,
       bidding.runtime_activation,bidding.rule,bidding.rule_test,bidding.rule_test_run,
       bidding.rule_conflict,bidding.video_canon_source_policy,
-      bidding.video_canon_verifier_registry,bidding.video_canon_ai_verification IN SHARE ROW EXCLUSIVE MODE;
+      bidding.video_canon_verifier_registry,bidding.video_canon_ai_verification,
+      bidding.video_canon_ai_restore_receipt IN SHARE ROW EXCLUSIVE MODE;
     SELECT * INTO v_existing FROM bidding.video_canon_ai_restore_receipt
      WHERE video_canon_ai_promotion_receipt_id=p_video_canon_ai_promotion_receipt_id;
     IF FOUND THEN
@@ -1489,25 +1491,7 @@ BEGIN
                 RAISE EXCEPTION 'VIDEO_CANON_RESTORE_SOURCE_POLICY_INACTIVE' USING ERRCODE='23514';
             END IF;
         END IF;
-        IF v_promotion.superseded_canon_valid_to IS NOT NULL
-           AND v_promotion.superseded_canon_valid_to<=clock_timestamp() THEN
-            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_TARGET_EXPIRED' USING ERRCODE='23514';
-        END IF;
-        v_revoked_at := clock_timestamp();
-        UPDATE bidding.runtime_activation
-           SET status='revoked',valid_to=v_revoked_at
-         WHERE runtime_activation_id=v_new_runtime.runtime_activation_id;
-        UPDATE public.canon_activation
-           SET status='revoked',valid_to=v_revoked_at
-         WHERE canon_activation_id=v_new_canon.canon_activation_id;
-        UPDATE public.canon_activation
-           SET status='active',valid_to=v_promotion.superseded_canon_valid_to
-         WHERE canon_activation_id=v_promotion.superseded_canon_activation_id;
-
-        IF jsonb_array_length(v_promotion.superseded_runtime_state)
-           <>cardinality(v_promotion.superseded_runtime_activation_ids) THEN
-            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_RUNTIME_STATE_MISMATCH' USING ERRCODE='23514';
-        END IF;
+        -- Phase 1: validate every prelocked runtime target without mutation.
         FOR v_state IN SELECT value FROM jsonb_array_elements(v_promotion.superseded_runtime_state)
         LOOP
             BEGIN
@@ -1521,7 +1505,7 @@ BEGIN
             SELECT * INTO v_prior_runtime FROM bidding.runtime_activation
              WHERE runtime_activation_id=(v_state->>'runtime_activation_id')::uuid
                AND canon_activation_id=v_promotion.superseded_canon_activation_id
-               AND status='superseded' AND valid_to=v_new_canon.valid_from FOR UPDATE;
+               AND status='superseded' AND valid_to=v_new_canon.valid_from;
             IF NOT FOUND OR NOT (v_prior_runtime.runtime_activation_id=ANY(
                  v_promotion.superseded_runtime_activation_ids
                )) THEN
@@ -1530,15 +1514,47 @@ BEGIN
             IF NOT bidding.rule_passes_activation_gates(v_prior_runtime.rule_id) THEN
                 RAISE EXCEPTION 'VIDEO_CANON_RESTORE_VALIDATION_GATES_FAILED' USING ERRCODE='23514';
             END IF;
-            IF v_original_valid_to IS NOT NULL AND v_original_valid_to<=clock_timestamp() THEN
-                RAISE EXCEPTION 'VIDEO_CANON_RESTORE_RUNTIME_TARGET_EXPIRED' USING ERRCODE='23514';
-            END IF;
-            UPDATE bidding.runtime_activation SET status='active',valid_to=v_original_valid_to
-             WHERE runtime_activation_id=v_prior_runtime.runtime_activation_id;
             v_restored_runtime_ids := array_append(
               v_restored_runtime_ids,v_prior_runtime.runtime_activation_id
             );
         END LOOP;
+
+        -- Recheck every finite authority boundary after all validation work and
+        -- immediately before the mutation phase.
+        IF v_prior_promotion.video_canon_ai_promotion_receipt_id IS NOT NULL
+           AND (v_prior_policy.status<>'active'
+             OR v_prior_policy.valid_from>clock_timestamp()
+             OR (v_prior_policy.valid_to IS NOT NULL
+                 AND v_prior_policy.valid_to<=clock_timestamp())) THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_SOURCE_POLICY_INACTIVE' USING ERRCODE='23514';
+        END IF;
+        IF v_promotion.superseded_canon_valid_to IS NOT NULL
+           AND v_promotion.superseded_canon_valid_to<=clock_timestamp() THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_TARGET_EXPIRED' USING ERRCODE='23514';
+        END IF;
+        IF EXISTS (
+          SELECT 1 FROM jsonb_array_elements(v_promotion.superseded_runtime_state) AS state(value)
+           WHERE NULLIF(state.value->>'valid_to','')::timestamptz<=clock_timestamp()
+        ) THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_RUNTIME_TARGET_EXPIRED' USING ERRCODE='23514';
+        END IF;
+
+        -- Phase 2: all targets are locked and validated; mutate as one bounded set.
+        v_revoked_at := clock_timestamp();
+        UPDATE bidding.runtime_activation
+           SET status='revoked',valid_to=v_revoked_at
+         WHERE runtime_activation_id=v_new_runtime.runtime_activation_id;
+        UPDATE public.canon_activation
+           SET status='revoked',valid_to=v_revoked_at
+         WHERE canon_activation_id=v_new_canon.canon_activation_id;
+        UPDATE public.canon_activation
+           SET status='active',valid_to=v_promotion.superseded_canon_valid_to
+         WHERE canon_activation_id=v_promotion.superseded_canon_activation_id;
+        UPDATE bidding.runtime_activation target
+           SET status='active',
+               valid_to=NULLIF(state.value->>'valid_to','')::timestamptz
+          FROM jsonb_array_elements(v_promotion.superseded_runtime_state) AS state(value)
+         WHERE target.runtime_activation_id=(state.value->>'runtime_activation_id')::uuid;
     ELSIF cardinality(v_promotion.superseded_runtime_activation_ids)<>0
        OR jsonb_array_length(v_promotion.superseded_runtime_state)<>0 THEN
         RAISE EXCEPTION 'VIDEO_CANON_RESTORE_UNEXPECTED_RUNTIME_STATE' USING ERRCODE='23514';
