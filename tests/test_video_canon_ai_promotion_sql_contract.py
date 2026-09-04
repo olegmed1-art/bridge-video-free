@@ -7,6 +7,13 @@ ROLLBACK = (ROOT / "database/rollbacks/0322_workflow_video_canon_ai_promotion.sq
 DATABASE_TEST = (ROOT / "database/tests/322_workflow_video_canon_ai_promotion.sql").read_text()
 
 
+def test_database_bundle_gate_validates_the_effective_period():
+    assert "jsonb_object_length(NEW.bundle_payload->'effective_period')<>2" in MIGRATION
+    assert "VIDEO_CANON_BUNDLE_EFFECTIVE_PERIOD_INVALID" in MIGRATION
+    assert "v_valid_to<=v_valid_from" in MIGRATION
+    assert "VIDEO_CANON_INVALID_BUNDLE_PERIOD_NOT_BLOCKED" in DATABASE_TEST
+
+
 def test_ai_promotion_is_narrow_guarded_and_not_granted_to_general_workers():
     assert "bridge_school_canon_verifier','bridge_school_canon_semantic_verifier" in MIGRATION
     assert "bridge_school_canon_bridge_verifier','bridge_school_canon_firewall_verifier" in MIGRATION

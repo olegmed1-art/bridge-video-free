@@ -792,7 +792,12 @@ FOR EACH ROW EXECUTE FUNCTION bidding.reject_append_only_mutation();
 CREATE OR REPLACE FUNCTION bidding.validate_video_canon_verification_bundle()
 RETURNS trigger LANGUAGE plpgsql
 SECURITY DEFINER SET search_path=pg_catalog,public,bidding AS $$
-DECLARE v_candidate public.analysis_candidate%ROWTYPE; v_decoded jsonb; v_computed text;
+DECLARE
+    v_candidate public.analysis_candidate%ROWTYPE;
+    v_decoded jsonb;
+    v_computed text;
+    v_valid_from timestamptz;
+    v_valid_to timestamptz;
 BEGIN
     SELECT * INTO v_candidate FROM public.analysis_candidate
      WHERE analysis_candidate_id=NEW.analysis_candidate_id;
@@ -840,8 +845,32 @@ BEGIN
        OR (SELECT count(DISTINCT c.value->>'check_id')
              FROM jsonb_array_elements(NEW.bundle_payload->'checks') AS c(value))<>16
        OR jsonb_typeof(NEW.bundle_payload->'effective_period')<>'object'
+       OR jsonb_object_length(NEW.bundle_payload->'effective_period')<>2
+       OR NOT (NEW.bundle_payload->'effective_period' ?& ARRAY['valid_from','valid_to'])
+       OR jsonb_typeof(NEW.bundle_payload#>'{effective_period,valid_from}')<>'string'
+       OR NOT ((NEW.bundle_payload#>>'{effective_period,valid_from}') ~
+            '(?:[Zz]|[+-][0-9]{2}(?::?[0-9]{2})?)$')
+       OR jsonb_typeof(NEW.bundle_payload#>'{effective_period,valid_to}')
+            NOT IN ('string','null')
+       OR (
+         jsonb_typeof(NEW.bundle_payload#>'{effective_period,valid_to}')='string'
+         AND NOT ((NEW.bundle_payload#>>'{effective_period,valid_to}') ~
+              '(?:[Zz]|[+-][0-9]{2}(?::?[0-9]{2})?)$')
+       )
        OR jsonb_typeof(NEW.bundle_payload->'rollback')<>'object' THEN
         RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_CONTENT_MISMATCH' USING ERRCODE='23514';
+    END IF;
+    BEGIN
+        v_valid_from := (NEW.bundle_payload#>>'{effective_period,valid_from}')::timestamptz;
+        v_valid_to := CASE
+          WHEN jsonb_typeof(NEW.bundle_payload#>'{effective_period,valid_to}')='null' THEN NULL
+          ELSE (NEW.bundle_payload#>>'{effective_period,valid_to}')::timestamptz
+        END;
+    EXCEPTION WHEN invalid_datetime_format OR datetime_field_overflow THEN
+        RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_EFFECTIVE_PERIOD_INVALID' USING ERRCODE='23514';
+    END;
+    IF v_valid_to IS NOT NULL AND v_valid_to<=v_valid_from THEN
+        RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_EFFECTIVE_PERIOD_INVALID' USING ERRCODE='23514';
     END IF;
     RETURN NEW;
 END $$;

@@ -407,6 +407,7 @@ DECLARE
   v_policy_failed boolean:=false;
   v_cross_school_policy_failed boolean:=false;
   v_bad_bundle_failed boolean:=false;
+  v_invalid_period_failed boolean:=false;
   v_missing_bundle_field_failed boolean:=false;
   v_candidate_state_failed boolean:=false;
   v_missing_bundle_field text;
@@ -623,7 +624,7 @@ BEGIN
     'checks',jsonb_agg(jsonb_build_object(
       'check_id',check_id,'result','PASS','execution_principal',session_user
     ) ORDER BY ordinal),
-    'effective_period','{}'::jsonb,
+    'effective_period',jsonb_build_object('valid_from',v_new_from,'valid_to',NULL),
     'rollback',jsonb_build_object(
       'target_knowledge_version_id',v_old_version::text,
       'target_canon_activation_id',v_old_canon::text
@@ -637,6 +638,28 @@ BEGIN
     (13,'CANON_REGRESSION'),(14,'CANON_INTEGRITY'),(15,'CANON_CONFLICT_SCAN'),
     (16,'ROLLBACK_RESTORE')
   ) AS required_checks(ordinal,check_id);
+  v_bad_bundle:=jsonb_set(
+    v_good_bundle,'{effective_period}',
+    jsonb_build_object(
+      'valid_from',v_new_from,
+      'valid_to',v_new_from-interval '1 second'
+    )
+  );
+  BEGIN
+    INSERT INTO bidding.video_canon_ai_verification_bundle(
+      school_id,analysis_candidate_id,candidate_payload_hash,
+      verification_bundle_sha256,bundle_canonical_json,bundle_payload
+    ) VALUES (
+      v_school,v_candidate,repeat('a',64),
+      encode(public.digest(convert_to(v_bad_bundle::text,'UTF8'),'sha256'),'hex'),
+      v_bad_bundle::text,v_bad_bundle
+    );
+  EXCEPTION WHEN check_violation THEN
+    v_invalid_period_failed:=true;
+  END;
+  IF NOT v_invalid_period_failed THEN
+    RAISE EXCEPTION 'VIDEO_CANON_INVALID_BUNDLE_PERIOD_NOT_BLOCKED';
+  END IF;
   v_good_bundle_hash:=encode(public.digest(convert_to(v_good_bundle::text,'UTF8'),'sha256'),'hex');
   INSERT INTO bidding.video_canon_ai_verification_bundle(
     video_canon_ai_verification_bundle_id,school_id,analysis_candidate_id,
