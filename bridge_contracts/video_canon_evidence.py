@@ -44,13 +44,13 @@ _PBN_DEAL = re.compile(
 _LABELLED_HIDDEN_CARDS = re.compile(
     r"(?:(?<!\w)(?:partner|opponent|north|east|south|west))\s*(?:['’]s)?[ _-]*(?:hand|cards)"
     r"\b[^;]*?(?P<hand>" + _HAND_PATTERN + r")"
-    r"|(?:рука|карты)\s+(?:партн[её]ра|соперника)\b[^;]*?"
+    r"|(?:(?<!\w)(?:рука|карты))\s+(?:партн[её]ра|соперника)\b[^;]*?"
     r"(?P<ru_hand>" + _HAND_PATTERN + r")",
     re.IGNORECASE,
 )
 _SUIT_LABELLED_HIDDEN_CARDS = re.compile(
     r"(?:(?:(?<!\w)(?:partner|opponent|north|east|south|west))\s*(?:['’]s)?[ _-]*"
-    r"(?:hand|cards)\b|(?:рука|карты)\s+(?:партн[её]ра|соперника)\b"
+    r"(?:hand|cards)\b|(?:(?<!\w)(?:рука|карты))\s+(?:партн[её]ра|соперника)\b"
     r"|(?:^|[^A-Za-z0-9])[NESW]\s*:)[^;]*?"
     r"S\s*:\s*(?P<spades>" + _SUIT_PATTERN + r")[\s,/]*"
     r"H\s*:\s*(?P<hearts>" + _SUIT_PATTERN + r")[\s,/]*"
@@ -60,7 +60,7 @@ _SUIT_LABELLED_HIDDEN_CARDS = re.compile(
 )
 _LABELLED_HAND_TAIL = re.compile(
     r"(?:(?:(?<!\w)(?:partner|opponent|north|east|south|west))\s*(?:['’]s)?[ _-]*"
-    r"(?:hand|cards)\b|(?:рука|карты)\s+(?:партн[её]ра|соперника)\b"
+    r"(?:hand|cards)\b|(?:(?<!\w)(?:рука|карты))\s+(?:партн[её]ра|соперника)\b"
     r"|(?:^|[^A-Za-z0-9])[NESW]\s*:)(?P<tail>[^;]{0,512})",
     re.IGNORECASE,
 )
@@ -76,7 +76,11 @@ _LEADING_SINGLE_DIGIT_CARD = re.compile(
     re.IGNORECASE,
 )
 _LEADING_LENGTH_DESCRIPTION = re.compile(
-    r"^\s*(?:(?:was|is)\s+|[:,;=\-]\s*)?[2-9]\s*(?:cards?\b|карт)",
+    r"^\s*(?:(?:was|is)\s+|[:,;=\-]\s*)?[2-9]\s*(?:"
+    r"cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|"
+    r"controls?|winners?|stoppers?|suits?|"
+    r"карт\w*|черв\w*|пик\w*|буб\w*|треф\w*|козыр\w*|взят\w*|"
+    r"очк\w*|пункт\w*|контрол\w*)\b",
     re.IGNORECASE,
 )
 _PARTIAL_SEPARATED_HAND = re.compile(
@@ -87,7 +91,7 @@ _PARTIAL_SEPARATED_HAND = re.compile(
 )
 _SEPARATED_LABELLED_HIDDEN_CARDS = re.compile(
     r"(?:(?:(?<!\w)(?:partner|opponent|north|east|south|west))\s*(?:['’]s)?[ _-]*"
-    r"(?:hand|cards)\b|(?:рука|карты)\s+(?:партн[её]ра|соперника)\b"
+    r"(?:hand|cards)\b|(?:(?<!\w)(?:рука|карты))\s+(?:партн[её]ра|соперника)\b"
     r"|(?:^|[^A-Za-z0-9])[NESW]\s*:)[^;]*?"
     r"(?P<spades>" + _NONEMPTY_SUIT_PATTERN + r")[\s,/]+"
     r"(?P<hearts>" + _NONEMPTY_SUIT_PATTERN + r")[\s,/]+"

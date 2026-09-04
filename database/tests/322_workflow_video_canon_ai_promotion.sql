@@ -164,6 +164,14 @@ BEGIN
        '{"notes":"northeast hand: Q is the diagram label"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"рука партнера: 5 карт"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"Порука партнера: Q — подпись поручителя"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North''s hand was 5 hearts"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"N: 3 trumps"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"South hand: 7 losers"}'::jsonb
      ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_HIDDEN_VALUE_FIREWALL_INVALID';
   END IF;
@@ -235,6 +243,7 @@ DECLARE
   v_rule_digest_other_tz text;
   v_old_version_digest text;
   v_old_rule_test_state_digest text;
+  v_old_source_state jsonb;
   v_retire_before timestamptz;
   v_retire_after timestamptz;
   v_new_from timestamptz:=statement_timestamp()-interval '1 hour';
@@ -444,6 +453,12 @@ BEGIN
      SET relation_type='derived_from',
          source_locator=jsonb_build_object('transcript_locators',NULL)
    WHERE knowledge_version_id=v_old_version;
+  SELECT COALESCE(jsonb_agg(to_jsonb(kvs)
+           ORDER BY kvs.source_id::text,kvs.relation_type,kvs.source_locator::text),
+         '[]'::jsonb)
+    INTO v_old_source_state
+    FROM public.knowledge_version_source kvs
+   WHERE kvs.knowledge_version_id=v_old_version;
   v_old_rule_test_state_digest :=
     bidding.video_canon_rule_test_state_sha256(v_old_rule);
   INSERT INTO bidding.video_canon_ai_promotion_receipt(
@@ -496,7 +511,7 @@ BEGIN
     rule_id,canon_activation_id,runtime_activation_id,
     superseded_canon_activation_id,superseded_canon_valid_to,
     superseded_runtime_activation_ids,superseded_runtime_state,superseded_rule_state,
-    promotion_mode,human_approval_required
+    superseded_source_state,promotion_mode,human_approval_required
   ) VALUES (
     v_promotion,v_school,v_candidate,repeat('a',64),v_good_bundle_hash,
     'school-video-auto-canon-v1','restore-scope',repeat('b',64),repeat('c',64),
@@ -506,7 +521,7 @@ BEGIN
     )),jsonb_build_array(jsonb_build_object(
       'rule_id',v_old_rule,
       'rule_content_sha256',bidding.video_canon_rule_restore_sha256(v_old_rule)
-    )),'AI_VERIFIED_TEACHER_VIDEO',false
+    )),v_old_source_state,'AI_VERIFIED_TEACHER_VIDEO',false
   );
   BEGIN
     INSERT INTO bidding.video_canon_ai_verification(

@@ -262,6 +262,10 @@ def test_labelled_hand_prose_without_four_suit_encoding_is_not_a_false_positive(
     "North's hand was a weak holding",
     "Explanation: Q is an abbreviation",
     "northeast hand: Q is the diagram label",
+    "Порука партнера: Q — подпись поручителя",
+    "North's hand was 5 hearts",
+    "N: 3 trumps",
+    "South hand: 7 losers",
     "рука партнера: 5 карт",
 ])
 def test_labelled_prose_without_thirteen_card_hand_is_allowed(statement):

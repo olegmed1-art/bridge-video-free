@@ -95,6 +95,12 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "VIDEO_CANON_RESTORE_BUNDLE_NOT_FOUND",
         "VIDEO_CANON_RESTORE_RULE_CONTENT_MISMATCH",
         "superseded_rule_state",
+        "superseded_source_state",
+        "v_prior_source_state",
+        "v_current_prior_source_state",
+        "jsonb_agg(to_jsonb(kvs)",
+        "ca.canon_activation_id=p.superseded_canon_activation_id",
+        "VIDEO_CANON_RESTORE_SOURCE_SET_MISMATCH",
         "video_canon_rule_restore_sha256",
         "to_jsonb(r)-ARRAY['created_at','updated_at']",
         "v_valid_to<=statement_timestamp()",
@@ -146,8 +152,11 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "{2,13}($|[^[:alnum:]])",
         "(?:10|[AKQJT]|",
         "(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)",
+        "(?:^|[^[:alnum:]_])(?:рука|карты)",
         "?[2-9]($|[[:space:],./;])",
-        "?[2-9][[:space:]]*(?:cards?|карт)",
+        "hearts?|spades?|diamonds?|clubs?",
+        "trumps?|losers?|points?|hcp|controls?",
+        "карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*",
     ):
         assert marker in MIGRATION
 

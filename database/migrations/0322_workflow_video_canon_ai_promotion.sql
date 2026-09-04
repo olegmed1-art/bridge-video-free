@@ -194,6 +194,8 @@ CREATE TABLE bidding.video_canon_ai_promotion_receipt (
       CHECK (jsonb_typeof(superseded_runtime_state)='array'),
     superseded_rule_state jsonb NOT NULL DEFAULT '[]'::jsonb
       CHECK (jsonb_typeof(superseded_rule_state)='array'),
+    superseded_source_state jsonb NOT NULL DEFAULT '[]'::jsonb
+      CHECK (jsonb_typeof(superseded_source_state)='array'),
     promotion_mode text NOT NULL CHECK (promotion_mode='AI_VERIFIED_TEACHER_VIDEO'),
     human_approval_required boolean NOT NULL CHECK (human_approval_required=false),
     promoted_at timestamptz NOT NULL DEFAULT now()
@@ -279,7 +281,7 @@ SELECT EXISTS (
        SELECT 1
          FROM regexp_matches(
            w.value#>>'{}',
-           E'(?:^|[^[:alnum:]])[NESW][[:space:]]*:[[:space:]]*((?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13})|(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west))[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)[^;]*?((?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13})|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника)[^;]*?((?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13})',
+           E'(?:^|[^[:alnum:]])[NESW][[:space:]]*:[[:space:]]*((?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13})|(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west))[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)[^;]*?((?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13})|(?:(?:^|[^[:alnum:]_])(?:рука|карты))[[:space:]]+(?:партн[её]ра|соперника)[^;]*?((?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13})',
            'gi'
          ) AS matched(parts)
         WHERE bidding.is_complete_bridge_hand(
@@ -294,7 +296,7 @@ SELECT EXISTS (
            FROM regexp_matches(
              replace(replace(replace(replace(
                w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:'),
-             E'(?:(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west))[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника)|(?:^|[^[:alnum:]])[NESW][[:space:]]*:)([^;]*)',
+             E'(?:(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west))[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:(?:^|[^[:alnum:]_])(?:рука|карты))[[:space:]]+(?:партн[её]ра|соперника)|(?:^|[^[:alnum:]])[NESW][[:space:]]*:)([^;]*)',
              'gi'
            ) AS matched(parts)
           WHERE matched.parts[1] ~*
@@ -305,7 +307,7 @@ SELECT EXISTS (
                   matched.parts[1] ~*
                     E'^[[:space:]]*(?:(?:was|is)[[:space:]]+|[:,;=\\-][[:space:]]*)?[2-9]($|[[:space:],./;])'
                   AND matched.parts[1] !~*
-                    E'^[[:space:]]*(?:(?:was|is)[[:space:]]+|[:,;=\\-][[:space:]]*)?[2-9][[:space:]]*(?:cards?|карт)'
+                    E'^[[:space:]]*(?:(?:was|is)[[:space:]]+|[:,;=\\-][[:space:]]*)?[2-9][[:space:]]*(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*)'
                 )
              OR matched.parts[1] ~*
                   E'(^|[^[:alnum:]])(-|(?:(?:10)|[AKQJT2-9]){1,13})([[:space:],/.]+(-|(?:(?:10)|[AKQJT2-9]){1,13})){1,3}($|[^[:alnum:]])'
@@ -318,7 +320,7 @@ SELECT EXISTS (
            FROM regexp_matches(
              replace(replace(replace(replace(
                w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:'),
-             E'(?:(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west))[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника)|(?:^|[^[:alnum:]])[NESW][[:space:]]*:)[^;]*?S[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*H[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*D[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*C[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})',
+             E'(?:(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west))[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:(?:^|[^[:alnum:]_])(?:рука|карты))[[:space:]]+(?:партн[её]ра|соперника)|(?:^|[^[:alnum:]])[NESW][[:space:]]*:)[^;]*?S[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*H[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*D[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*C[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})',
              'gi'
            ) AS matched(parts)
           WHERE bidding.is_complete_bridge_hand(concat_ws(
@@ -332,7 +334,7 @@ SELECT EXISTS (
          SELECT 1
            FROM regexp_matches(
              w.value#>>'{}',
-             E'(?:(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west))[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:рука|карты)[[:space:]]+(?:партн[её]ра|соперника)|(?:^|[^[:alnum:]])[NESW][[:space:]]*:)[^;]*?(-|(?:(?:10)|[AKQJT2-9]){1,13})[[:space:]/,]+(-|(?:(?:10)|[AKQJT2-9]){1,13})[[:space:]/,]+(-|(?:(?:10)|[AKQJT2-9]){1,13})[[:space:]/,]+(-|(?:(?:10)|[AKQJT2-9]){1,13})',
+             E'(?:(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west))[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:(?:^|[^[:alnum:]_])(?:рука|карты))[[:space:]]+(?:партн[её]ра|соперника)|(?:^|[^[:alnum:]])[NESW][[:space:]]*:)[^;]*?(-|(?:(?:10)|[AKQJT2-9]){1,13})[[:space:]/,]+(-|(?:(?:10)|[AKQJT2-9]){1,13})[[:space:]/,]+(-|(?:(?:10)|[AKQJT2-9]){1,13})[[:space:]/,]+(-|(?:(?:10)|[AKQJT2-9]){1,13})',
              'gi'
            ) AS matched(parts)
           WHERE bidding.is_complete_bridge_hand(concat_ws(
@@ -716,6 +718,7 @@ BEGIN
         FROM bidding.video_canon_ai_promotion_receipt p
         JOIN public.canon_activation ca
           ON ca.canon_activation_id=p.canon_activation_id
+          OR ca.canon_activation_id=p.superseded_canon_activation_id
        WHERE ca.knowledge_version_id=v_old_version_id
           OR ca.knowledge_version_id=v_new_version_id
     ) THEN
@@ -811,6 +814,7 @@ DECLARE
     v_prior_runtime_ids uuid[] := '{}'::uuid[];
     v_prior_runtime_state jsonb := '[]'::jsonb;
     v_prior_rule_state jsonb := '[]'::jsonb;
+    v_prior_source_state jsonb := '[]'::jsonb;
     v_semantic_family text;
     v_bridge_family text;
     v_semantic_principal text;
@@ -1188,6 +1192,12 @@ BEGIN
           INTO v_prior_rule_state
           FROM bidding.rule r
          WHERE r.knowledge_version_id=v_prior_canon.knowledge_version_id;
+        SELECT COALESCE(jsonb_agg(to_jsonb(kvs)
+                 ORDER BY kvs.source_id::text,kvs.relation_type,kvs.source_locator::text),
+               '[]'::jsonb)
+          INTO v_prior_source_state
+          FROM public.knowledge_version_source kvs
+         WHERE kvs.knowledge_version_id=v_prior_canon.knowledge_version_id;
         IF v_valid_to IS NOT NULL AND v_valid_to<=clock_timestamp() THEN
             RAISE EXCEPTION 'VIDEO_CANON_EFFECTIVE_PERIOD_EXPIRED' USING ERRCODE='23514';
         END IF;
@@ -1263,13 +1273,13 @@ BEGIN
       rule_test_state_sha256,rule_id,canon_activation_id,runtime_activation_id,
       superseded_canon_activation_id,superseded_canon_valid_to,
       superseded_runtime_activation_ids,superseded_runtime_state,superseded_rule_state,
-      promotion_mode,human_approval_required
+      superseded_source_state,promotion_mode,human_approval_required
     ) VALUES (
       v_candidate.school_id,p_analysis_candidate_id,v_candidate.payload_hash,p_verification_bundle_sha256,
       v_policy_version,v_scope_key,v_rule_content_sha256,v_version_content_sha256,
       v_rule_test_state_sha256,p_rule_id,v_canon_activation,v_runtime_activation,
       v_prior_canon.canon_activation_id,v_prior_canon.valid_to,
-      v_prior_runtime_ids,v_prior_runtime_state,v_prior_rule_state,
+      v_prior_runtime_ids,v_prior_runtime_state,v_prior_rule_state,v_prior_source_state,
       'AI_VERIFIED_TEACHER_VIDEO',false
     ) RETURNING * INTO v_existing;
     UPDATE public.analysis_candidate SET quality_status='AI_VERIFIED',promotion_status='promoted'
@@ -1303,6 +1313,7 @@ DECLARE
     v_prior_policy bidding.video_canon_source_policy%ROWTYPE;
     v_bundle bidding.video_canon_ai_verification_bundle%ROWTYPE;
     v_current_prior_rule_state jsonb;
+    v_current_prior_source_state jsonb;
     v_prior_version_content_sha256 text;
     v_state jsonb;
     v_original_valid_to timestamptz;
@@ -1405,6 +1416,15 @@ BEGIN
              v_bundle.bundle_payload#>>'{rollback,target_canon_activation_id}'
            OR v_prior_canon.scope_key IS DISTINCT FROM v_promotion.scope_key THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_TARGET_BINDING_MISMATCH' USING ERRCODE='23514';
+        END IF;
+        SELECT COALESCE(jsonb_agg(to_jsonb(kvs)
+                 ORDER BY kvs.source_id::text,kvs.relation_type,kvs.source_locator::text),
+               '[]'::jsonb)
+          INTO v_current_prior_source_state
+          FROM public.knowledge_version_source kvs
+         WHERE kvs.knowledge_version_id=v_prior_canon.knowledge_version_id;
+        IF v_current_prior_source_state<>v_promotion.superseded_source_state THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_SOURCE_SET_MISMATCH' USING ERRCODE='23514';
         END IF;
         SELECT * INTO v_prior_promotion
           FROM bidding.video_canon_ai_promotion_receipt
