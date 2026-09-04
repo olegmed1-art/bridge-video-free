@@ -275,6 +275,8 @@ def test_hidden_deal_is_rejected_inside_innocuous_allowed_value(field, value):
     "North possesses ♠A",
     "Partner: ace of spades",
     "North: AK",
+    "Partner:AS",
+    "Opponent:QH",
     "Партнёр: туз пик",
     "Соперник: Q",
 ])
@@ -424,6 +426,7 @@ def test_labelled_hand_prose_without_four_suit_encoding_is_not_a_false_positive(
     "Partner's agreement is forcing",
     "North owns the decision process",
     "North: 10 points",
+    "Partner: agreement is forcing",
     "Партнёр: правило форсирует",
     "рука партнера: 5 карт",
 ])

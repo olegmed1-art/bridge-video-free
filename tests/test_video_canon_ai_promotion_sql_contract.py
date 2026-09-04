@@ -69,7 +69,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "VIDEO_CANON_SUPERSEDED_RULE_TEST_RUN_IMMUTABLE",
         "p.superseded_canon_activation_id=ca.canon_activation_id",
         "WHERE ca.status='superseded'",
-        "(?:[[:space:]]+|[[:space:]]*[:,;=\\\\-][[:space:]]*)([^;]*)",
+        "|(?:[[:space:]]*[:,;=\\\\-][[:space:]]*))([^;]*)",
         "JOIN public.canon_activation ca",
         "ca.canon_activation_id=p.canon_activation_id",
         "status='superseded',valid_to=v_valid_from",
