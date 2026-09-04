@@ -859,17 +859,18 @@ esac
         fake_oci.chmod(0o755)
         script = "set -e\n" + helpers + r'''
 state_set() { printf 'state:%s=%s\n' "$1" "$2" >&2; }
-bounded_wait_seconds() { printf '%s\n' "$1"; }
+bounded_wait_seconds() { [[ "${BUDGET_MODE:-ok}" == fail ]] && return 42; printf '%s\n' "$1"; }
 primary_deadline=999999999; tenancy_id=tenancy; boot_id=boot; ad=ad; drill_vcn_id=vcn
 if id="$(discover_named_id instance expected-name 2)"; then rc=0; else rc=$?; fi
 printf 'rc=%s id=%s\n' "$rc" "$id"
 '''
 
-        def run(mode: str) -> subprocess.CompletedProcess[str]:
+        def run(mode: str, budget_mode: str = "ok") -> subprocess.CompletedProcess[str]:
             env = os.environ | {
                 "RUNNER_TEMP": str(tmp_path),
                 "PATH": f"{tmp_path}:{os.environ['PATH']}",
                 "FAKE_MODE": mode,
+                "BUDGET_MODE": budget_mode,
                 "OCI_JSON_RETRY_DELAY_SECONDS": "0",
             }
             return subprocess.run(
@@ -885,6 +886,11 @@ printf 'rc=%s id=%s\n' "$rc" "$id"
             invalid = run(mode)
             assert "rc=45 id=" in invalid.stdout
             assert "state:instance_discovery_status=INVALID_RESPONSE" in invalid.stderr
+        budget = run("exact", "fail")
+        assert "rc=42 id=" in budget.stdout
+        assert "state:instance_discovery_status=BUDGET_EXHAUSTED" in budget.stderr
+        assert "state:instance_discovery_failure_rc=42" in budget.stderr
+        assert "state:instance_discovery_stderr_class=BUDGET_EXHAUSTED" in budget.stderr
         # A discovered instance is not trusted for SSH until the exact restored
         # boot volume is proven by the scoped attachment inventory.
         assert 'EXPECTED_INSTANCE_ID="$drill_instance_id" EXPECTED_BOOT_ID="$restored_id"' in WORKFLOW

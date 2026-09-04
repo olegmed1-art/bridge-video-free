@@ -329,7 +329,20 @@ jobs:
             local -a command
             discovery_key="${resource//-/_}"
             receipt_key="${5:-${discovery_key}_discovery}"
-            max_seconds="$(bounded_wait_seconds "$max_seconds" "$budget_deadline")" || return 42
+            if max_seconds="$(bounded_wait_seconds "$max_seconds" "$budget_deadline")"; then
+              :
+            else
+              OCI_JSON_OUTPUT=""
+              OCI_JSON_ERROR=""
+              OCI_JSON_RAW_ERROR=""
+              state_set last_discovery_resource "$discovery_key"
+              state_set last_discovery_status BUDGET_EXHAUSTED
+              state_set last_discovery_failure_rc 42
+              state_set "${receipt_key}_status" BUDGET_EXHAUSTED
+              state_set "${receipt_key}_failure_rc" 42
+              record_oci_diagnostic "$receipt_key" 42
+              return 42
+            fi
             deadline=$((SECONDS + max_seconds))
             while (( SECONDS < deadline )); do
               case "$resource" in
