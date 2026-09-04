@@ -198,6 +198,47 @@ class DianaLongitudinalQualityV42Tests(unittest.TestCase):
             quality['counts']['staging_records'], len(quality['candidate_staging_records'])
         )
 
+    def test_verified_video_runtime_routes_extractor_and_independent_verification(self):
+        master = base_master()
+        master['video_canon_verified_result'] = {'schema': 'verified-input'}
+        master['video_canon_verification_bundles'] = {'rule-1': {'bundle': 'sealed'}}
+        master['video_canon_assurance_verdicts'] = {'rule-1': [{'assurance_level': 'I2'}, {'assurance_level': 'I3'}]}
+        candidate = {
+            'candidate_type': 'video_school_canon_candidate',
+            'stable_key': 'rule-1:sha256:' + 'a' * 64,
+            'quality_status': 'AI_VERIFICATION_PENDING',
+            'promotion_status': 'STAGING_ONLY',
+            'payload': {'candidate_id': 'rule-1', 'authority_class': 'TEACHER_VIDEO'},
+            'payload_hash': 'a' * 64,
+            'evidence_refs': ['transcript#1'],
+            'method_version': 'video-canon-evidence-v2',
+        }
+        old_extract = v42.extract_canon_candidates
+        old_verify = v42.verify_canon_candidate
+        try:
+            v42.extract_canon_candidates = lambda *_: {
+                'schema': 'video-canon-extractor-result-v1', 'status': 'EXTRACTED',
+                'candidates': [candidate], 'gaps': [],
+                'authoritative_write_performed': False,
+            }
+            v42.verify_canon_candidate = lambda *_: {
+                'schema': 'video-canon-verification-result-v1',
+                'status': 'VERIFIED_I2_I3',
+                'promotion': {'operation': 'ACTIVATE_AI_VERIFIED_VIDEO_CANON'},
+                'authoritative_write_performed': False,
+            }
+            quality = build_quality_layer(master, {'lesson_id': 'lesson-test', 'lesson_number': 5})
+        finally:
+            v42.extract_canon_candidates = old_extract
+            v42.verify_canon_candidate = old_verify
+        runtime = quality['video_canon_runtime_pipeline']
+        self.assertEqual(runtime['status'], 'VERIFIED_I2_I3')
+        self.assertEqual(len(runtime['promotion_commands']), 1)
+        self.assertFalse(runtime['authoritative_write_performed'])
+        self.assertEqual(quality['counts']['video_canon_runtime_candidates'], 1)
+        self.assertEqual(quality['counts']['video_canon_runtime_verified_i2_i3'], 1)
+        self.assertTrue(any(row is candidate for row in quality['candidate_staging_records']))
+
     def test_integrated_master_routes_verified_dds_proofs_to_comparison(self):
         master = base_master()
         dds_result = {

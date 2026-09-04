@@ -22,6 +22,11 @@ from bridge_contracts.video_dds_decision_comparison import DDSRequestExecutor
 from bridge_contracts.video_extended_extraction import build_extended_extraction
 from bridge_contracts.video_learning_feedback import CorrectionReceiptResolver
 from bridge_contracts.video_canon_auto_pipeline import run_video_canon_auto_pipeline
+from bridge_contracts.video_canon_runtime import (
+    VideoCanonRuntimeError,
+    extract_canon_candidates,
+    verify_canon_candidate,
+)
 
 QUALITY_SCHEMA = v41.QUALITY_SCHEMA
 QUALITY_SCHEMA_VERSION = 5
@@ -199,10 +204,96 @@ def build_quality_layer(
     counts["extended_knowledge_candidates"] = len(extended["candidate_records"])
     counts["extended_knowledge_by_type"] = extended["counts_by_type"]
     counts["staging_records"] = len(staging)
+    verified_video_result = working.get("video_canon_verified_result")
     learning_candidate = working.get("video_canon_learning_candidate")
     assertions = working.get("video_canon_assertions")
     verifications = working.get("video_canon_verification_bundles")
-    if isinstance(learning_candidate, Mapping) and isinstance(assertions, list) and isinstance(verifications, Mapping):
+    assurance_verdicts = working.get("video_canon_assurance_verdicts")
+    runtime_pipeline: dict[str, Any]
+    if isinstance(verified_video_result, Mapping):
+        try:
+            extraction = extract_canon_candidates(verified_video_result)
+        except VideoCanonRuntimeError as exc:
+            runtime_pipeline = {
+                "schema": "video-canon-runtime-pipeline-v1",
+                "status": "NEEDS_EVIDENCE",
+                "extraction": None,
+                "verification_results": [],
+                "promotion_commands": [],
+                "gaps": [{"status": "NEEDS_EVIDENCE", "reason": str(exc)}],
+                "authoritative_write_performed": False,
+            }
+        else:
+            verification_results = []
+            promotion_commands = []
+            runtime_gaps = list(extraction["gaps"])
+            bundles = verifications if isinstance(verifications, Mapping) else {}
+            verdict_map = assurance_verdicts if isinstance(assurance_verdicts, Mapping) else {}
+            for candidate in extraction["candidates"]:
+                assertion_id = str(candidate["payload"].get("candidate_id") or "UNKNOWN")
+                bundle = bundles.get(assertion_id)
+                verdicts = verdict_map.get(assertion_id)
+                if not isinstance(bundle, Mapping) or not isinstance(verdicts, list):
+                    runtime_gaps.append({
+                        "assertion_id": assertion_id,
+                        "status": "NEEDS_EVIDENCE",
+                        "reason": "I2/I3 verification evidence is incomplete",
+                    })
+                    continue
+                try:
+                    verified = verify_canon_candidate(candidate, bundle, verdicts)
+                except (VideoCanonRuntimeError, ValueError) as exc:
+                    runtime_gaps.append({
+                        "assertion_id": assertion_id,
+                        "status": "NEEDS_EVIDENCE",
+                        "reason": str(exc),
+                    })
+                    continue
+                verification_results.append(verified)
+                if verified["status"] == "VERIFIED_I2_I3":
+                    promotion_commands.append(verified["promotion"])
+                else:
+                    runtime_gaps.append({
+                        "assertion_id": assertion_id,
+                        "status": verified["status"],
+                        "reason": "independent assurance did not authorize promotion",
+                    })
+            runtime_pipeline = {
+                "schema": "video-canon-runtime-pipeline-v1",
+                "status": "VERIFIED_I2_I3" if promotion_commands else extraction["status"],
+                "extraction": extraction,
+                "verification_results": verification_results,
+                "promotion_commands": promotion_commands,
+                "gaps": runtime_gaps,
+                "authoritative_write_performed": False,
+            }
+    else:
+        runtime_pipeline = {
+            "schema": "video-canon-runtime-pipeline-v1",
+            "status": "NOT_REQUESTED",
+            "extraction": None,
+            "verification_results": [],
+            "promotion_commands": [],
+            "gaps": [],
+            "authoritative_write_performed": False,
+        }
+    quality["video_canon_runtime_pipeline"] = runtime_pipeline
+    runtime_candidates = (
+        runtime_pipeline["extraction"]["candidates"]
+        if isinstance(runtime_pipeline.get("extraction"), Mapping)
+        else []
+    )
+    staging.extend(runtime_candidates)
+    counts["video_canon_runtime_candidates"] = len(runtime_candidates)
+    counts["video_canon_runtime_verified_i2_i3"] = len(runtime_pipeline["promotion_commands"])
+    counts["video_canon_runtime_gaps"] = len(runtime_pipeline["gaps"])
+
+    if (
+        not isinstance(verified_video_result, Mapping)
+        and isinstance(learning_candidate, Mapping)
+        and isinstance(assertions, list)
+        and isinstance(verifications, Mapping)
+    ):
         auto_pipeline = run_video_canon_auto_pipeline(
             learning_candidate, assertions, verifications
         )

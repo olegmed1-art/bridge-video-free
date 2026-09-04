@@ -19,7 +19,7 @@ from bridge_contracts.video_learning_candidate import (
 
 
 SCHEMA = "video-canon-evidence-v2"
-AUTHORITY_CLASS = "SCHOOL_CANON_CANDIDATE"
+AUTHORITY_CLASS = "TEACHER_VIDEO"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SOURCE_CLASSES = {"SCHOOL_PRIMARY_EVIDENCE", "TEACHING_CONTEXT", "WORLD_EXTERNAL"}
 _SUIT_SYMBOL_TRANSLATION = str.maketrans({
