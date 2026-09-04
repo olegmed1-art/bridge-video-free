@@ -127,7 +127,10 @@ jobs:
     if: ${{ github.event_name != 'pull_request' && github.event_name != 'schedule' && needs.validate.outputs.should_execute == 'true' }}
     needs: validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 330
+    # One GitHub job is capped at 360 minutes. A shared 350-minute deadline
+    # bounds setup, lifecycle recovery, submission and observation while
+    # reserving ten minutes for a fail-closed receipt.
+    timeout-minutes: 360
     env:
       INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
       OCI_USER: ${{ secrets.OCI_CLI_USER }}
@@ -155,10 +158,22 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Initialize one end-to-end execution budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "EXECUTION_DEADLINE_EPOCH=$(( $(date +%s) + 21000 ))" >> "$GITHUB_ENV"
       - name: Configure OCI CLI
         shell: bash
         run: |
           set -euo pipefail
+          budget_max() {
+            local cap="$1" now remaining
+            now="$(date +%s)"
+            remaining=$(( EXECUTION_DEADLINE_EPOCH - now - 300 ))
+            (( remaining > 0 )) || return 1
+            (( remaining < cap )) && printf '%s\n' "$remaining" || printf '%s\n' "$cap"
+          }
           python -m pip install --disable-pip-version-check -q oci-cli
           # Accept either the intended one-line OCID or the matching line from
           # an accidentally pasted Oracle configuration preview.  Never echo it.
@@ -185,14 +200,14 @@ jobs:
           case "$state" in
             RUNNING) ;;
             STARTING)
-              oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null
+              oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null
               ;;
             STOPPING)
-              oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state STOPPED --max-wait-seconds 600 >/dev/null
-              oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null
+              oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state STOPPED --max-wait-seconds "$(budget_max 600)" >/dev/null
+              oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null
               ;;
             STOPPED)
-              oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null
+              oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null
               ;;
             *) echo "Oracle instance is not runnable: $state" >&2; exit 1 ;;
           esac
@@ -204,18 +219,25 @@ jobs:
         run: |
           set -euo pipefail
           known="$RUNNER_TEMP/known_hosts"
+          budget_max() {
+            local cap="$1" now remaining
+            now="$(date +%s)"
+            remaining=$(( EXECUTION_DEADLINE_EPOCH - now - 300 ))
+            (( remaining > 0 )) || return 1
+            (( remaining < cap )) && printf '%s\n' "$remaining" || printf '%s\n' "$cap"
+          }
           recover_instance_after_scan_loss() {
             local state
             state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
             case "$state" in
               RUNNING) sleep 10 ;;
               STARTING)
-                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
               STOPPING)
-                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state STOPPED --max-wait-seconds 600 >/dev/null
-                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state STOPPED --max-wait-seconds "$(budget_max 600)" >/dev/null
+                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
               STOPPED)
-                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
               *) return 1 ;;
             esac
           }
@@ -248,27 +270,35 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          budget_max() {
+            local cap="$1" now remaining
+            now="$(date +%s)"
+            remaining=$(( EXECUTION_DEADLINE_EPOCH - now - 300 ))
+            (( remaining > 0 )) || return 1
+            (( remaining < cap )) && printf '%s\n' "$remaining" || printf '%s\n' "$cap"
+          }
           recover_instance_after_transport_loss() {
             local state
             state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
             case "$state" in
               RUNNING) sleep 10 ;;
               STARTING)
-                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
               STOPPING)
-                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state STOPPED --max-wait-seconds 600 >/dev/null
-                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state STOPPED --max-wait-seconds "$(budget_max 600)" >/dev/null
+                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
               STOPPED)
-                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null ;;
+                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
               *) return 1 ;;
             esac
           }
           run_remote() {
             local command="$1"
-            local attempt out rc
+            local attempt out rc ssh_timeout
             for attempt in 1 2 3; do
+              ssh_timeout="$(budget_max 4800)" || return 124
               set +e
-              out="$(timeout 4800 ssh -i '${{ steps.ssh.outputs.key }}' \
+              out="$(timeout "$ssh_timeout" ssh -i '${{ steps.ssh.outputs.key }}' \
                 -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
                 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
                 -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
@@ -392,6 +422,8 @@ jobs:
                 exit 1
                 ;;
             esac
+            poll_sleep="$(budget_max 60)" || break
+            (( poll_sleep >= 60 )) || break
             sleep 60
             set +e
             out="$(run_remote "$status_cmd")"
