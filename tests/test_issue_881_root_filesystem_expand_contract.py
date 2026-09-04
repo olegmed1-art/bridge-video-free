@@ -69,7 +69,7 @@ def test_already_grown_partition_resumes_at_filesystem_resize() -> None:
 
 
 def test_fresh_full_backup_and_isolated_boot_acceptance_gate_mutation() -> None:
-    assert "timeout-minutes: 240" in WORKFLOW
+    assert "timeout-minutes: 360" in WORKFLOW
     gate = WORKFLOW.index("Create fresh full backup and prove isolated restored-root boot acceptance")
     mutation = WORKFLOW.index("Expand existing root partition and filesystem")
     assert gate < mutation
@@ -99,6 +99,58 @@ def test_fresh_full_backup_and_isolated_boot_acceptance_gate_mutation() -> None:
     capture = WORKFLOW.index('drill_instance_id="$(printf', launch)
     wait = WORKFLOW.index("--wait-for-state RUNNING", capture)
     assert launch < capture < wait
+
+
+def test_paid_and_temporary_creates_capture_before_separate_waits() -> None:
+    block = WORKFLOW[
+        WORKFLOW.index('backup_id="" restored_id=""') :
+        WORKFLOW.index("Resolve pinned SSH identity")
+    ]
+    assert "discover_named_id()" in block
+    assert "discover_named_id backup" in block
+    assert "discover_named_id boot-volume" in block
+    assert "discover_named_id vcn" in block
+    assert "discover_named_id internet-gateway" in block
+    assert "discover_named_id route-table" in block
+    assert "discover_named_id security-list" in block
+    assert "discover_named_id subnet" in block
+    assert "assert len(xs)<=1" in block
+    for line in block.splitlines():
+        if re.search(r"oci (?:bv (?:boot-volume|boot-volume-backup)|network (?:vcn|internet-gateway|route-table|security-list|subnet)) create", line):
+            assert "--wait-for-state" not in line
+    for resource_get in (
+        "boot-volume-backup get",
+        "boot-volume get",
+        "network vcn get",
+        "network internet-gateway get",
+        "network route-table get",
+        "network security-list get",
+        "network subnet get",
+    ):
+        assert resource_get in block
+    assert block.count("--wait-for-state AVAILABLE") >= 7
+
+
+def test_cleanup_rediscovery_is_scoped_to_attempted_unique_resources() -> None:
+    cleanup = WORKFLOW[WORKFLOW.index("cleanup_temp_resources()") :]
+    for flag in (
+        "restored_attempted",
+        "drill_vcn_attempted",
+        "drill_ig_attempted",
+        "drill_route_attempted",
+        "drill_security_attempted",
+        "drill_subnet_attempted",
+    ):
+        assert f'"${flag}" == 1' in cleanup
+    for name in (
+        '"$stamp-restore"',
+        '"$stamp-vcn"',
+        '"$stamp-ig"',
+        '"$stamp-route"',
+        '"$stamp-ssh-only"',
+        '"$stamp-subnet"',
+    ):
+        assert name in cleanup
 
 
 def test_temporary_restore_cleanup_waits_for_dependency_deletion() -> None:
