@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 import re
+from datetime import datetime
 from typing import Any, Mapping
 from uuid import UUID
 
@@ -79,6 +80,18 @@ def _optional_uuid(value: Any, label: str) -> str | None:
     except ValueError:
         _fail(f"invalid {label}")
     return result
+
+
+def _timestamp(value: Any, label: str) -> tuple[str, datetime]:
+    raw = _text(value, label)
+    normalized = f"{raw[:-1]}+00:00" if raw.endswith(("Z", "z")) else raw
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except (ValueError, OverflowError):
+        _fail(f"invalid {label} timestamp")
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        _fail(f"{label} timestamp must include a UTC offset")
+    return raw, parsed
 
 
 def build_ai_canon_promotion(
@@ -205,10 +218,12 @@ def build_ai_canon_promotion(
     period = verification_bundle.get("effective_period")
     if not isinstance(period, Mapping) or set(period) != {"valid_from", "valid_to"}:
         _fail("effective period fields mismatch")
-    valid_from = _text(period.get("valid_from"), "valid_from")
+    valid_from, valid_from_timestamp = _timestamp(period.get("valid_from"), "valid_from")
     valid_to = period.get("valid_to")
     if valid_to is not None:
-        valid_to = _text(valid_to, "valid_to")
+        valid_to, valid_to_timestamp = _timestamp(valid_to, "valid_to")
+        if valid_to_timestamp <= valid_from_timestamp:
+            _fail("valid_to must be after valid_from")
 
     rollback = verification_bundle.get("rollback")
     if not isinstance(rollback, Mapping) or set(rollback) != {

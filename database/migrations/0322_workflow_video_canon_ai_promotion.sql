@@ -207,9 +207,13 @@ CREATE TABLE bidding.video_canon_source_policy (
     retired_at timestamptz,
     recorded_at timestamptz NOT NULL DEFAULT now(),
     CHECK (valid_to IS NULL OR valid_to>valid_from),
-    CHECK ((status='active')=(retired_at IS NULL)),
-    UNIQUE (school_id,source_id,source_sha256,video_file_id,policy_version)
+    CHECK ((status='active')=(retired_at IS NULL))
 );
+
+CREATE UNIQUE INDEX video_canon_source_policy_active_identity_idx
+  ON bidding.video_canon_source_policy(
+    school_id,source_id,source_sha256,video_file_id
+  ) WHERE status='active';
 
 CREATE TABLE bidding.video_canon_ai_verification_bundle (
     video_canon_ai_verification_bundle_id uuid PRIMARY KEY DEFAULT uuidv7(),

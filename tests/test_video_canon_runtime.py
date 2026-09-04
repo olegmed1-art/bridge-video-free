@@ -128,6 +128,15 @@ def test_extractor_rejects_hand_shaped_runtime_provenance(field, value):
         extract_canon_candidates(video)
 
 
+def test_extractor_isolates_numeric_overflow_as_an_evidence_gap():
+    video = _video_result()
+    video["observations"][0]["semantic_confidence"] = 10**1000
+    extracted = extract_canon_candidates(video)
+    assert extracted["status"] == "NO_CANDIDATE_EXTRACTED"
+    assert extracted["candidates"] == []
+    assert extracted["gaps"][0]["status"] == "NEEDS_EVIDENCE"
+
+
 @pytest.mark.parametrize("mutation, expected", [
     (lambda verdicts: verdicts.pop(), "I2 and I3"),
     (lambda verdicts: verdicts[1].update(verifier_family="independent-i2"), "must be independent"),

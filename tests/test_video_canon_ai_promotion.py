@@ -86,6 +86,23 @@ def test_all_ai_checks_create_sealed_automatic_promotion_command():
     ).hexdigest() == result["verification_bundle_sha256"]
 
 
+@pytest.mark.parametrize(("valid_from", "valid_to", "match"), [
+    ("not-a-timestamp", None, "invalid valid_from timestamp"),
+    ("2026-09-03T00:00:00", None, "valid_from timestamp must include a UTC offset"),
+    ("2026-09-03T00:00:00Z", "not-a-timestamp", "invalid valid_to timestamp"),
+    ("2026-09-03T00:00:00Z", "2026-09-02T23:59:59Z", "after valid_from"),
+    ("2026-09-03T00:00:00Z", "2026-09-03T00:00:00+00:00", "after valid_from"),
+])
+def test_effective_period_is_parseable_timezone_aware_and_ordered(
+    valid_from, valid_to, match
+):
+    candidate = _candidate()
+    bundle = _bundle(candidate)
+    bundle["effective_period"] = {"valid_from": valid_from, "valid_to": valid_to}
+    with pytest.raises(VideoCanonAIPromotionError, match=match):
+        build_ai_canon_promotion(candidate, bundle)
+
+
 @pytest.mark.parametrize("mutation, match", [
     (lambda b: b["checks"].pop(), "check set mismatch"),
     (lambda b: b["checks"][0].update(result="FAIL"), "did not pass"),

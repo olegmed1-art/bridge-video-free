@@ -46,6 +46,8 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "public.source s ON s.source_id=p.source_id AND s.school_id=p.school_id",
         "VIDEO_CANON_SOURCE_POLICY_SCHOOL_MISMATCH",
         "guard_video_canon_source_policy_lifecycle",
+        "video_canon_source_policy_active_identity_idx",
+        ") WHERE status='active'",
         "guard_promoted_video_canon_source_binding",
         "promoted_video_canon_source_binding_guard",
         "VIDEO_CANON_PROMOTED_SOURCE_BINDING_IMMUTABLE",
@@ -227,6 +229,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
     assert "У партнёра A♠" in DATABASE_TEST
     assert '"partnerDeal":"AKQ"' in DATABASE_TEST
     assert '"north/deal":"AKQ"' in DATABASE_TEST
+    assert "VIDEO_CANON_SOURCE_POLICY_SUCCESSOR_HISTORY_NOT_PRESERVED" in DATABASE_TEST
 
     assert "'hidden_cards','hidden_hand','hidden_hands'" in MIGRATION
     assert "'concealed_hand','concealed_hands'" in MIGRATION

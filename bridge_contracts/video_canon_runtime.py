@@ -136,7 +136,7 @@ def extract_canon_candidates(video_result: Mapping[str, Any]) -> dict[str, Any]:
             learning = _learning_candidate(job_id, algorithm_revision, normalized_source, raw)
             assertion = _teacher_assertion(raw)
             candidate = build_video_canon_candidate(learning, assertion)
-        except (VideoCanonRuntimeError, ValueError) as exc:
+        except (VideoCanonRuntimeError, ValueError, OverflowError) as exc:
             gaps.append({"assertion_id": assertion_id, "status": "NEEDS_EVIDENCE", "reason": str(exc)})
             continue
         candidate["payload"]["video_analysis_provenance"] = {

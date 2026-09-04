@@ -395,6 +395,7 @@ DECLARE
   v_old_promotion uuid:=uuidv7();
   v_policy uuid:=uuidv7();
   v_future_policy uuid:=uuidv7();
+  v_successor_policy uuid:=uuidv7();
   v_restore uuid;
   v_repeat uuid;
   v_rule_id uuid;
@@ -526,6 +527,27 @@ BEGIN
          AND retired_at BETWEEN v_retire_before AND v_retire_after
   ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_FUTURE_SOURCE_POLICY_REVOCATION_FAILED';
+  END IF;
+  INSERT INTO bidding.video_canon_source_policy(
+    video_canon_source_policy_id,school_id,source_id,source_sha256,video_file_id,
+    teacher_ids,semantic_scopes,system_profile,learner_level,policy_version,
+    authorization_evidence_sha256,status,valid_from
+  ) VALUES (
+    v_successor_policy,v_school,v_future_source,repeat('d',64),'future-video',
+    ARRAY['teacher:restore'],ARRAY['future-scope'],'natural-v1','beginner-1',
+    'school-video-auto-canon-v1',repeat('6',64),'active',
+    statement_timestamp()+interval '2 days'
+  );
+  IF NOT EXISTS (
+      SELECT 1 FROM bidding.video_canon_source_policy
+       WHERE video_canon_source_policy_id=v_future_policy AND status='revoked'
+         AND retired_at IS NOT NULL
+  ) OR NOT EXISTS (
+      SELECT 1 FROM bidding.video_canon_source_policy
+       WHERE video_canon_source_policy_id=v_successor_policy AND status='active'
+         AND authorization_evidence_sha256=repeat('6',64)
+  ) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_SOURCE_POLICY_SUCCESSOR_HISTORY_NOT_PRESERVED';
   END IF;
   INSERT INTO bidding.rule(
     rule_id,school_id,knowledge_version_id,rule_key,rule_kind,action,lifecycle_status
