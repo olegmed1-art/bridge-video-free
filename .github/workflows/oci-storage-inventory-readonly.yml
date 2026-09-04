@@ -63,6 +63,9 @@ jobs:
                       value=node.value
                   else:
                       continue
+                  if isinstance(value, (ast.Tuple, ast.List, ast.Set, ast.Dict)):
+                      bare_clients={x.id for x in ast.walk(value) if isinstance(x, ast.Name) and x.id in clients}
+                      assert not bare_clients, f'compound OCI client assignment forbidden: {sorted(bare_clients)}'
                   if oci_client_constructor(value) or (isinstance(value, ast.Name) and value.id in clients):
                       new=targets-clients
                       if new:
