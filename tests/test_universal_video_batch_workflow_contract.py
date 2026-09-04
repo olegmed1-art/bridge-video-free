@@ -22,7 +22,10 @@ def test_batch_transport_is_durable_bounded_and_project_neutral():
     assert "/run/lock/oracle-workload-mutation.lock" in text
     assert "github.sha" in text
     assert "cancel-in-progress: false" in text
-    assert "timeout-minutes: 90" in text
+    assert "timeout-minutes: 330" in text
+    assert text.count("timeout 4800 ssh") == 1
+    assert "for attempt in 1 2 3" in text
+    assert "--max-wait-seconds 600" in text
     assert "timeout 4800 ssh" in text
     assert "recover_instance_after_transport_loss" in text
     assert "enqueue_rc == 255 && attempt < 3" in text

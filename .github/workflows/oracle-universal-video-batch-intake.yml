@@ -72,7 +72,9 @@ jobs:
     # The longest competing bounded mutator (productionize) may hold the host
     # fence for 75 minutes. Each immutable request has its own workflow run, so
     # wait beyond that bound instead of abandoning a durable enqueue.
-    timeout-minutes: 90
+    # Three bounded 80-minute SSH attempts plus two worst-case 20-minute
+    # STOPPING -> STOPPED -> RUNNING recoveries fit below this envelope.
+    timeout-minutes: 330
     env:
       INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
       OCI_USER: ${{ secrets.OCI_CLI_USER }}
