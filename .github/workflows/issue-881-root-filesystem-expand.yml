@@ -333,9 +333,12 @@ jobs:
               : >"$stdout_file"
               : >"$stderr_file"
               if (( request_timeout_seconds > 0 )); then
-                timeout --signal=KILL "${request_timeout_seconds}s" \
-                  "$@" --output json >"$stdout_file" 2>"$stderr_file"
-                rc=$?
+                if timeout --signal=KILL "${request_timeout_seconds}s" \
+                    "$@" --output json >"$stdout_file" 2>"$stderr_file"; then
+                  rc=0
+                else
+                  rc=$?
+                fi
               elif "$@" --output json >"$stdout_file" 2>"$stderr_file"; then
                 rc=0
               else
@@ -379,19 +382,24 @@ jobs:
                   oci_json_request oci bv boot-volume-backup get --boot-volume-backup-id "$id"; then
                 if ! state="$(printf '%s' "$OCI_JSON_OUTPUT" | python -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d.get("data"),dict); s=d["data"].get("lifecycle-state"); assert isinstance(s,str) and s; print(s)')"; then
                   state_set backup_wait_status INVALID_GET_PAYLOAD
+                  state_set backup_wait_last_state INVALID
                   return 43
                 fi
-                state_set backup_wait_last_state "$state"
                 if [[ "$state" == AVAILABLE ]]; then
+                  state_set backup_wait_last_state AVAILABLE
                   BACKUP_AVAILABLE_JSON="$OCI_JSON_OUTPUT"
                   state_set backup_wait_status AVAILABLE
                   return 0
                 fi
                 if [[ "$state" == TERMINATING || "$state" == TERMINATED || "$state" == FAULTY ]]; then
+                  state_set backup_wait_last_state "$state"
                   state_set backup_wait_status "TERMINAL_${state}"
                   return 41
                 fi
-                if [[ "$state" != CREATING && "$state" != REQUEST_RECEIVED ]]; then
+                if [[ "$state" == CREATING || "$state" == REQUEST_RECEIVED ]]; then
+                  state_set backup_wait_last_state "$state"
+                else
+                  state_set backup_wait_last_state UNKNOWN
                   state_set backup_wait_status UNKNOWN_STATE
                   return 41
                 fi
