@@ -89,6 +89,12 @@ _NEGATED_HIDDEN_HOLDING = re.compile(
     r"[SHDC]\s*:?\s*(?:10|[AKQJT2-9])|(?:10|[AKQJT2-9])\s*[SHDC])\b",
     re.IGNORECASE,
 )
+_VOID_HIDDEN_HOLDING = re.compile(
+    r"(?:(?<!\w)(?:partner|opponent|north|east|south|west)"
+    r"|(?<![A-Za-z0-9])[NESW])\s+(?:is|was|remains?)\s+"
+    r"void\s+(?:in\s+)?(?:spades?|hearts?|diamonds?|clubs?)\b",
+    re.IGNORECASE,
+)
 _LEADING_HOLDING_CARD_GROUP = re.compile(
     r"^\s*(?:[:,;=\-]\s*)?(?:(?:the|a|an)\s+)?(?:"
     r"(?:ace|king|queen|jack|ten)(?:\s+of\s+(?:spades?|hearts?|diamonds?|clubs?))?"
@@ -218,7 +224,10 @@ def _has_forbidden_value(value: Any) -> bool:
         return any(_has_forbidden_value(child) for child in value)
     if isinstance(value, str):
         normalized_value = value.translate(_SUIT_SYMBOL_TRANSLATION)
-        if _NEGATED_HIDDEN_HOLDING.search(normalized_value):
+        if (
+            _NEGATED_HIDDEN_HOLDING.search(normalized_value)
+            or _VOID_HIDDEN_HOLDING.search(normalized_value)
+        ):
             return True
         if any(_is_complete_hand_shape(match.group("hand")) for match in _PBN_DEAL.finditer(normalized_value)):
             return True

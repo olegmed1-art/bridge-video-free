@@ -86,14 +86,28 @@ def test_binds_logic_to_dds_offline_without_hidden_cards():
 @pytest.mark.parametrize("context_patch,position_patch", [
     ({"seat_to_play": "E"}, {}),
     ({"contract": "3H"}, {}),
-    ({"lead": "AH"}, {"current_trick": ["AS"]}),
-    ({"trick_no": 1, "played_cards": ["AS"]}, {"current_trick": ["KS"]}),
 ])
 def test_dds_position_must_match_supplied_public_context(context_patch, position_patch):
     value = _observation()
     value["decision"]["public_context"].update(context_patch)
     value["dds_request"]["position"].update(position_patch)
     with pytest.raises(VideoDDSComparisonError, match="does not match public"):
+        build_offline_dds_comparison(
+            value, _board_evidence(), _logic_evidence(),
+            dds_request_executor=_executor(),
+        )
+
+
+@pytest.mark.parametrize("context_patch,position_patch", [
+    ({"lead": "AH"}, {"current_trick": ["SA"]}),
+    ({"trick_no": 1, "played_cards": ["AS"]}, {}),
+    ({"trick_no": 2}, {}),
+])
+def test_midplay_dds_is_fail_closed_without_remaining_deal_proof(context_patch, position_patch):
+    value = _observation()
+    value["decision"]["public_context"].update(context_patch)
+    value["dds_request"]["position"].update(position_patch)
+    with pytest.raises(VideoDDSComparisonError, match="verified opening position"):
         build_offline_dds_comparison(
             value, _board_evidence(), _logic_evidence(),
             dds_request_executor=_executor(),

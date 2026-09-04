@@ -378,6 +378,11 @@ SELECT EXISTS (
        AND replace(replace(replace(replace(
              w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:') ~*
            E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])[[:space:]]+(?:(?:does[[:space:]]+not|doesn[''’]t)[[:space:]]+(?:have|hold)(?:[[:space:]]+any)?|(?:has|holds?|had)[[:space:]]+(?:(?:no|neither)|none[[:space:]]+of)|lacks?)[[:space:]]+(?:any[[:space:]]+)?(?:the[[:space:]]+)?(?:aces?|kings?|queens?|jacks?|tens?|spades?|hearts?|diamonds?|clubs?|(?:ace|king|queen|jack|ten)[[:space:]]+of[[:space:]]+(?:spades?|hearts?|diamonds?|clubs?)|(?:spades?|hearts?|diamonds?|clubs?)[[:space:]]+(?:ace|king|queen|jack|ten|10|[AKQJT2-9])|[SHDC][[:space:]]*:?[[:space:]]*(?:10|[AKQJT2-9])|(?:10|[AKQJT2-9])[[:space:]]*[SHDC])($|[^[:alnum:]_])'
+  ) OR EXISTS (
+    SELECT 1 FROM walk AS w
+     WHERE jsonb_typeof(w.value)='string'
+       AND w.value#>>'{}' ~*
+           E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])[[:space:]]+(?:is|was|remains?)[[:space:]]+void[[:space:]]+(?:in[[:space:]]+)?(?:spades?|hearts?|diamonds?|clubs?)($|[^[:alnum:]_])'
   );
 $$;
 

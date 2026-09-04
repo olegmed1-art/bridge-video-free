@@ -146,18 +146,21 @@ def _rerun_authenticated_dds_request(
     if not isinstance(current_raw, list):
         raise VideoDDSComparisonError("DDS current trick invalid")
     current = [str(card).strip().upper() for card in current_raw]
+    played = list(public_context.get("played_cards") or [])
+    trick_no = public_context.get("trick_no", 1)
+    # v3 carries only a hash of the original verified 52-card deal.  It cannot
+    # prove a reduced remaining-card PBN, so mid-play requests must fail closed
+    # instead of evaluating the opening deal under a later public context.
+    if current or played or trick_no != 1 or "lead" in public_context:
+        raise VideoDDSComparisonError(
+            "DDS comparison supports only a verified opening position"
+        )
     if "seat_to_play" in public_context and first != public_context["seat_to_play"]:
         raise VideoDDSComparisonError("DDS position first does not match public seat_to_play")
     if "contract" in public_context:
         contract_strain = re.match(r"^[1-7](NT|[CDHS])", public_context["contract"]).group(1)
         if trump != contract_strain:
             raise VideoDDSComparisonError("DDS position trump does not match public contract")
-    if "lead" in public_context and (not current or current[0] != public_context["lead"]):
-        raise VideoDDSComparisonError("DDS current trick does not match public lead")
-    if "trick_no" in public_context and "played_cards" in public_context:
-        offset = (public_context["trick_no"] - 1) * 4
-        if public_context["played_cards"][offset:] != current:
-            raise VideoDDSComparisonError("DDS current trick does not match public played cards")
     try:
         rerun_result = executor(dict(payload))
     except Exception as exc:
