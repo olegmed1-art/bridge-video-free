@@ -338,6 +338,7 @@ def test_backup_inventory_and_selection_are_validated_and_receipted() -> None:
     assert '"invalid_ids"' in selector
     assert '"selected_id"' in selector
     assert "assert isinstance(data,list)" in selector
+    assert "if age < 0: invalid.append(backup_id)" in selector
     assert 'age < 86400 else ineligible' in selector
     assert 'age < 86400 else invalid' not in selector
 
@@ -374,13 +375,13 @@ def test_backup_selector_separates_expired_from_malformed_inventory() -> None:
     # Shell functions read these as shell variables rather than environment;
     # seed them explicitly without interpolating the JSON payload.
     script = f"backup_prefix={prefix!r}; boot_id={boot_id!r}\n" + script
-    payload = {"data": [backup("fresh", 1), backup("expired", 25)]}
+    payload = {"data": [backup("fresh", 1), backup("expired", 25), backup("future", -1)]}
     result = subprocess.run(["bash", "-c", script], env=env | {"PAYLOAD": json.dumps(payload)}, text=True, capture_output=True)
     assert result.returncode == 0
     selected = json.loads(result.stdout)
     assert selected["candidate_ids"] == ["fresh"]
     assert selected["ineligible_ids"] == ["expired"]
-    assert selected["invalid_ids"] == []
+    assert selected["invalid_ids"] == ["future"]
 
     missing_data = subprocess.run(["bash", "-c", script], env=env | {"PAYLOAD": "{}"}, text=True, capture_output=True)
     assert missing_data.returncode != 0

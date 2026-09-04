@@ -367,7 +367,8 @@ jobs:
               backup_id=x["id"]; created=datetime.datetime.fromisoformat(x["time-created"].replace("Z","+00:00")); age=(now-created).total_seconds(); assert isinstance(backup_id,str) and backup_id and isinstance(x.get("type"),str) and isinstance(x.get("size-in-gbs"),int)
             except (AssertionError,KeyError,TypeError,ValueError): invalid.append(str(x.get("id") or "missing-id"))
             else:
-              (candidates if x["type"]=="FULL" and x["size-in-gbs"]==97 and age < 86400 else ineligible).append((created,backup_id))
+              if age < 0: invalid.append(backup_id)
+              else: (candidates if x["type"]=="FULL" and x["size-in-gbs"]==97 and age < 86400 else ineligible).append((created,backup_id))
           candidates.sort(reverse=True); print(json.dumps({"candidate_ids":[x[1] for x in candidates],"ineligible_ids":sorted(x[1] for x in ineligible),"invalid_ids":sorted(invalid),"selected_id":candidates[0][1] if candidates else ""},sort_keys=True,separators=(",",":")))'
           }
           superseded_operation_backups() {
