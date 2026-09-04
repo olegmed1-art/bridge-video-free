@@ -41,6 +41,7 @@ jobs:
               'list_boot_volumes','list_volumes',
           }
           required=set(allowed)
+          assert not any(isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)) for x in ast.walk(tree)), 'helpers/classes forbidden in credentialed inventory'
           clients=set()
           def oci_client_constructor(node):
               return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -65,6 +66,8 @@ jobs:
                       continue
                   nested_constructors=[x for x in ast.walk(value) if oci_client_constructor(x)]
                   assert not nested_constructors or oci_client_constructor(value), 'wrapped OCI client constructor forbidden'
+                  if oci_client_constructor(value) or (isinstance(value, ast.Name) and value.id in clients):
+                      assert targets, 'OCI client assignment requires plain name targets'
                   if isinstance(value, (ast.Tuple, ast.List, ast.Set, ast.Dict)):
                       bare_clients={x.id for x in ast.walk(value) if isinstance(x, ast.Name) and x.id in clients}
                       assert not bare_clients, f'compound OCI client assignment forbidden: {sorted(bare_clients)}'
@@ -79,6 +82,7 @@ jobs:
               if isinstance(node, ast.Call):
                   escaped={x.id for x in [*node.args, *(k.value for k in node.keywords)] if isinstance(x, ast.Name) and x.id in clients}
                   assert not escaped, f'OCI client passed to unchecked callable: {sorted(escaped)}'
+                  assert not any(oci_client_constructor(x) for x in [*node.args, *(k.value for k in node.keywords)]), 'OCI client constructor passed to callable'
               if not isinstance(node, ast.Attribute):
                   continue
               receiver=node.value
