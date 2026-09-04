@@ -422,6 +422,7 @@ DECLARE
   v_rollback_pair_failed boolean:=false;
   v_rollback_shape_failed boolean:=false;
   v_scope_bundle_failed boolean:=false;
+  v_profile_bundle_failed boolean:=false;
   v_missing_bundle_field_failed boolean:=false;
   v_candidate_state_failed boolean:=false;
   v_missing_bundle_field text;
@@ -433,6 +434,7 @@ DECLARE
   v_source_school_failed boolean:=false;
   v_source_identity_failed boolean:=false;
   v_provider_identity_failed boolean:=false;
+  v_provider_attributes_failed boolean:=false;
   v_provider_identity_delete_failed boolean:=false;
   v_rule_key_identity_failed boolean:=false;
   v_item_identity_failed boolean:=false;
@@ -644,14 +646,22 @@ BEGIN
   ),(
     v_candidate,v_school,'video_school_canon_candidate','restore-'||v_candidate::text,
     repeat('f',64),'AI_VERIFICATION_PENDING','staging',
-    jsonb_build_object('semantic_scope','restore-scope'),repeat('a',64),
+    jsonb_build_object(
+      'semantic_scope','restore-scope',
+      'system_profile','natural-v1',
+      'learner_level','beginner-1'
+    ),repeat('a',64),
     'video-canon-evidence-v2',v_source
   );
   SELECT jsonb_build_object(
     'schema','video-canon-ai-promotion-v1',
     'policy_version','school-video-auto-canon-v1',
     'candidate_payload_hash',repeat('a',64),
-    'candidate_payload',jsonb_build_object('semantic_scope','restore-scope'),
+    'candidate_payload',jsonb_build_object(
+      'semantic_scope','restore-scope',
+      'system_profile','natural-v1',
+      'learner_level','beginner-1'
+    ),
     'system_profile','natural-v1','learner_level','beginner-1',
     'activation_scope','restore-scope',
     'canon_snapshot_sha256',repeat('0',64),
@@ -694,6 +704,28 @@ BEGIN
   IF NOT v_scope_bundle_failed THEN
     RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_SCOPE_MISMATCH_NOT_BLOCKED';
   END IF;
+  FOREACH v_missing_bundle_field IN ARRAY ARRAY['system_profile','learner_level'] LOOP
+    v_profile_bundle_failed:=false;
+    v_bad_bundle:=jsonb_set(
+      v_good_bundle,ARRAY[v_missing_bundle_field],to_jsonb('mismatched-profile'::text)
+    );
+    BEGIN
+      INSERT INTO bidding.video_canon_ai_verification_bundle(
+        school_id,analysis_candidate_id,candidate_payload_hash,
+        verification_bundle_sha256,bundle_canonical_json,bundle_payload
+      ) VALUES (
+        v_school,v_candidate,repeat('a',64),
+        encode(public.digest(convert_to(v_bad_bundle::text,'UTF8'),'sha256'),'hex'),
+        v_bad_bundle::text,v_bad_bundle
+      );
+    EXCEPTION WHEN check_violation THEN
+      v_profile_bundle_failed:=true;
+    END;
+    IF NOT v_profile_bundle_failed THEN
+      RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_PROFILE_MISMATCH_NOT_BLOCKED_%',
+        v_missing_bundle_field;
+    END IF;
+  END LOOP;
   v_bad_bundle:=jsonb_set(
     v_good_bundle,'{effective_period}',
     jsonb_build_object(
@@ -1004,6 +1036,31 @@ BEGIN
                  WHERE source_identity_id=v_provider_identity
                    AND source_native_key='google-drive:retargeted-video') THEN
     RAISE EXCEPTION 'VIDEO_CANON_PROMOTED_PROVIDER_IDENTITY_MUTATION_NOT_BLOCKED';
+  END IF;
+  UPDATE public.source_identity
+     SET attributes=attributes||jsonb_build_object('job_id','refresh-job-2'),
+         last_seen_at=clock_timestamp()
+   WHERE source_identity_id=v_provider_identity;
+  IF NOT EXISTS (
+       SELECT 1 FROM public.source_identity
+        WHERE source_identity_id=v_provider_identity
+          AND attributes->>'job_id'='refresh-job-2'
+     ) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_PROVIDER_OPERATIONAL_REFRESH_BLOCKED';
+  END IF;
+  BEGIN
+    UPDATE public.source_identity
+       SET attributes=jsonb_set(attributes,'{provider}','"tampered"'::jsonb)
+     WHERE source_identity_id=v_provider_identity;
+  EXCEPTION WHEN check_violation THEN
+    v_provider_attributes_failed:=true;
+  END;
+  IF NOT v_provider_attributes_failed OR EXISTS (
+       SELECT 1 FROM public.source_identity
+        WHERE source_identity_id=v_provider_identity
+          AND attributes->>'provider'='tampered'
+     ) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_PROMOTED_PROVIDER_ATTRIBUTES_MUTATION_NOT_BLOCKED';
   END IF;
   BEGIN
     DELETE FROM public.source_identity

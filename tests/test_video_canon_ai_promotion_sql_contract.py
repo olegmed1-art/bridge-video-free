@@ -16,6 +16,26 @@ def test_database_bundle_gate_validates_the_effective_period():
     assert "VIDEO_CANON_EXPIRED_BUNDLE_PERIOD_NOT_BLOCKED" in DATABASE_TEST
 
 
+def test_database_bundle_gate_binds_profile_and_level_to_the_candidate():
+    assert (
+        "NEW.bundle_payload->>'system_profile'\n"
+        "            IS DISTINCT FROM v_candidate.payload->>'system_profile'"
+    ) in MIGRATION
+    assert (
+        "NEW.bundle_payload->>'learner_level'\n"
+        "            IS DISTINCT FROM v_candidate.payload->>'learner_level'"
+    ) in MIGRATION
+    assert "VIDEO_CANON_BUNDLE_PROFILE_MISMATCH_NOT_BLOCKED_" in DATABASE_TEST
+
+
+def test_provider_identity_allows_only_operational_job_refresh_metadata():
+    assert "ARRAY['display_name','last_seen_at','attributes']" in MIGRATION
+    assert "COALESCE(NEW.attributes,'{}'::jsonb)-'job_id'" in MIGRATION
+    assert "COALESCE(OLD.attributes,'{}'::jsonb)-'job_id'" in MIGRATION
+    assert "VIDEO_CANON_PROVIDER_OPERATIONAL_REFRESH_BLOCKED" in DATABASE_TEST
+    assert "VIDEO_CANON_PROMOTED_PROVIDER_ATTRIBUTES_MUTATION_NOT_BLOCKED" in DATABASE_TEST
+
+
 def test_database_bundle_gate_validates_the_complete_rollback_contract():
     assert "NEW.bundle_payload->'rollback' ?& ARRAY[" in MIGRATION
     assert "NEW.bundle_payload->'rollback'\n          ))<>5" in MIGRATION
@@ -282,10 +302,13 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
     assert "R.H.O. has the queen of hearts" in DATABASE_TEST
     assert "VIDEO_CANON_SOURCE_POLICY_SUCCESSOR_HISTORY_NOT_PRESERVED" in DATABASE_TEST
     assert "VIDEO_CANON_BUNDLE_SCOPE_MISMATCH_NOT_BLOCKED" in DATABASE_TEST
+    assert "VIDEO_CANON_BUNDLE_PROFILE_MISMATCH_NOT_BLOCKED_" in DATABASE_TEST
     assert "VIDEO_CANON_FUTURE_BUNDLE_PERIOD_NOT_BLOCKED" in DATABASE_TEST
     assert "VIDEO_CANON_ROLLBACK_TARGET_PAIR_NOT_BLOCKED" in DATABASE_TEST
     assert "VIDEO_CANON_DRIVE_SOURCE_ID_NOT_CANONICAL" in DATABASE_TEST
     assert "VIDEO_CANON_PROMOTED_PROVIDER_IDENTITY_MUTATION_NOT_BLOCKED" in DATABASE_TEST
+    assert "VIDEO_CANON_PROVIDER_OPERATIONAL_REFRESH_BLOCKED" in DATABASE_TEST
+    assert "VIDEO_CANON_PROMOTED_PROVIDER_ATTRIBUTES_MUTATION_NOT_BLOCKED" in DATABASE_TEST
     assert "VIDEO_CANON_PROMOTED_PROVIDER_IDENTITY_DELETE_NOT_BLOCKED" in DATABASE_TEST
     assert MIGRATION.count("VIDEO_CANON_RESTORE_I2_I3_ASSURANCE_REVOKED") == 2
     final_boundary = MIGRATION.split(

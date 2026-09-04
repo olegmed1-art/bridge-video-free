@@ -829,6 +829,10 @@ BEGIN
        OR NEW.bundle_payload->'candidate_payload' IS DISTINCT FROM v_candidate.payload
        OR NEW.bundle_payload->>'activation_scope'
             IS DISTINCT FROM v_candidate.payload->>'semantic_scope'
+       OR NEW.bundle_payload->>'system_profile'
+            IS DISTINCT FROM v_candidate.payload->>'system_profile'
+       OR NEW.bundle_payload->>'learner_level'
+            IS DISTINCT FROM v_candidate.payload->>'learner_level'
        OR NOT ((NEW.bundle_payload->>'canon_snapshot_sha256') ~ '^[0-9a-f]{64}$')
        OR NOT ((NEW.bundle_payload->>'rule_test_state_sha256') ~ '^[0-9a-f]{64}$')
        OR jsonb_typeof(NEW.bundle_payload->'checks')<>'array'
@@ -1130,8 +1134,11 @@ BEGIN
           WHERE kvs.source_id=v_old_source_id OR kvs.source_id=v_new_source_id
        ) AND (
          TG_OP='DELETE' OR
-         (to_jsonb(NEW)-ARRAY['display_name','last_seen_at']) IS DISTINCT FROM
-         (to_jsonb(OLD)-ARRAY['display_name','last_seen_at'])
+         (to_jsonb(NEW)-ARRAY['display_name','last_seen_at','attributes'])
+           IS DISTINCT FROM
+         (to_jsonb(OLD)-ARRAY['display_name','last_seen_at','attributes']) OR
+         (COALESCE(NEW.attributes,'{}'::jsonb)-'job_id') IS DISTINCT FROM
+         (COALESCE(OLD.attributes,'{}'::jsonb)-'job_id')
        ) THEN
         RAISE EXCEPTION 'VIDEO_CANON_PROMOTED_PROVIDER_IDENTITY_IMMUTABLE'
           USING ERRCODE='23514';
