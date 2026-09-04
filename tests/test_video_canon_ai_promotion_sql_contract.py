@@ -74,6 +74,9 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "VIDEO_CANON_RESTORE_CANON_VERSION_GATES_FAILED",
         "VIDEO_CANON_RESTORE_TARGET_BINDING_MISMATCH",
         "VIDEO_CANON_RESTORE_BUNDLE_NOT_FOUND",
+        "VIDEO_CANON_RESTORE_RULE_CONTENT_MISMATCH",
+        "superseded_rule_state",
+        "video_canon_rule_restore_sha256",
     ):
         assert marker in MIGRATION
 
@@ -101,3 +104,4 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "VIDEO_CANON_RESTORE_CURRENT_ACTIVATION_MISMATCH" in MIGRATION
     assert "DROP FUNCTION bidding.restore_ai_verified_video_canon" in ROLLBACK
     assert "DROP VIEW bidding.video_canon_bound_candidate" in ROLLBACK
+    assert "DROP FUNCTION bidding.video_canon_rule_restore_sha256" in ROLLBACK

@@ -175,6 +175,8 @@ CREATE TABLE bidding.video_canon_ai_promotion_receipt (
     superseded_runtime_activation_ids uuid[] NOT NULL DEFAULT '{}'::uuid[],
     superseded_runtime_state jsonb NOT NULL DEFAULT '[]'::jsonb
       CHECK (jsonb_typeof(superseded_runtime_state)='array'),
+    superseded_rule_state jsonb NOT NULL DEFAULT '[]'::jsonb
+      CHECK (jsonb_typeof(superseded_rule_state)='array'),
     promotion_mode text NOT NULL CHECK (promotion_mode='AI_VERIFIED_TEACHER_VIDEO'),
     human_approval_required boolean NOT NULL CHECK (human_approval_required=false),
     promoted_at timestamptz NOT NULL DEFAULT now()
@@ -231,10 +233,21 @@ SELECT EXISTS (
    WHERE jsonb_typeof(w.value)='string'
      AND (
        (w.value#>>'{}') ~* E'(^|[^[:alnum:]])[NESW][[:space:]]*:[[:space:]]*[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}'
-       OR (w.value#>>'{}') ~* E'(partner|opponent|north|east|south|west)[[:space:]]*([''’]s)?[ _-]*(hand|cards)[^;]{0,24}[-AKQJT2-9]{0,13}\\.'
+       OR (w.value#>>'{}') ~* E'(partner|opponent|north|east|south|west)[[:space:]]*([''’]s)?[ _-]*(hand|cards)[^;]*[-AKQJT2-9]{0,13}\\.'
        OR (w.value#>>'{}') ~* E'(рука|карты)[[:space:]]+(партн[её]ра|соперника)[[:space:]]*[:=][[:space:]]*[-AKQJT2-9.]'
      )
 );
+$$;
+
+CREATE OR REPLACE FUNCTION bidding.video_canon_rule_restore_sha256(p_rule_id uuid)
+RETURNS text
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path=pg_catalog,public,bidding
+AS $$
+SELECT encode(public.digest(convert_to(to_jsonb(r)::text,'UTF8'),'sha256'),'hex')
+  FROM bidding.rule r WHERE r.rule_id=p_rule_id
 $$;
 
 CREATE OR REPLACE FUNCTION bidding.current_school_canon_snapshot_sha256(p_school_id uuid)
@@ -590,6 +603,7 @@ DECLARE
     v_prior_canon public.canon_activation%ROWTYPE;
     v_prior_runtime_ids uuid[] := '{}'::uuid[];
     v_prior_runtime_state jsonb := '[]'::jsonb;
+    v_prior_rule_state jsonb := '[]'::jsonb;
     v_semantic_family text;
     v_bridge_family text;
     v_semantic_principal text;
@@ -852,6 +866,13 @@ BEGIN
                ) ORDER BY runtime_activation_id),'[]'::jsonb)
           INTO v_prior_runtime_ids,v_prior_runtime_state FROM bidding.runtime_activation
          WHERE canon_activation_id=v_prior_canon.canon_activation_id AND status='active';
+        SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                 'rule_id',r.rule_id,
+                 'rule_content_sha256',bidding.video_canon_rule_restore_sha256(r.rule_id)
+               ) ORDER BY r.rule_id::text),'[]'::jsonb)
+          INTO v_prior_rule_state
+          FROM bidding.rule r
+         WHERE r.knowledge_version_id=v_prior_canon.knowledge_version_id;
         UPDATE bidding.runtime_activation SET status='superseded',valid_to=v_valid_from
          WHERE canon_activation_id=v_prior_canon.canon_activation_id AND status='active';
         UPDATE public.canon_activation SET status='superseded',valid_to=v_valid_from
@@ -886,13 +907,14 @@ BEGIN
       school_id,analysis_candidate_id,candidate_payload_hash,verification_bundle_sha256,
       policy_version,scope_key,rule_content_sha256,rule_id,canon_activation_id,runtime_activation_id,
       superseded_canon_activation_id,superseded_canon_valid_to,
-      superseded_runtime_activation_ids,superseded_runtime_state,
+      superseded_runtime_activation_ids,superseded_runtime_state,superseded_rule_state,
       promotion_mode,human_approval_required
     ) VALUES (
       v_candidate.school_id,p_analysis_candidate_id,v_candidate.payload_hash,p_verification_bundle_sha256,
       v_policy_version,v_scope_key,v_rule_content_sha256,p_rule_id,v_canon_activation,v_runtime_activation,
       v_prior_canon.canon_activation_id,v_prior_canon.valid_to,
-      v_prior_runtime_ids,v_prior_runtime_state,'AI_VERIFIED_TEACHER_VIDEO',false
+      v_prior_runtime_ids,v_prior_runtime_state,v_prior_rule_state,
+      'AI_VERIFIED_TEACHER_VIDEO',false
     ) RETURNING * INTO v_existing;
     UPDATE public.analysis_candidate SET quality_status='AI_VERIFIED',promotion_status='promoted'
      WHERE analysis_candidate_id=p_analysis_candidate_id;
@@ -921,6 +943,7 @@ DECLARE
     v_prior_canon public.canon_activation%ROWTYPE;
     v_prior_promotion bidding.video_canon_ai_promotion_receipt%ROWTYPE;
     v_bundle bidding.video_canon_ai_verification_bundle%ROWTYPE;
+    v_current_prior_rule_state jsonb;
     v_state jsonb;
     v_original_valid_to timestamptz;
     v_restored_runtime_ids uuid[] := '{}'::uuid[];
@@ -1033,6 +1056,16 @@ BEGIN
         ) THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_SOURCE_POLICY_INACTIVE' USING ERRCODE='23514';
         END IF;
+        SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                 'rule_id',r.rule_id,
+                 'rule_content_sha256',bidding.video_canon_rule_restore_sha256(r.rule_id)
+               ) ORDER BY r.rule_id::text),'[]'::jsonb)
+          INTO v_current_prior_rule_state
+          FROM bidding.rule r
+         WHERE r.knowledge_version_id=v_prior_canon.knowledge_version_id;
+        IF v_current_prior_rule_state<>v_promotion.superseded_rule_state THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_RULE_CONTENT_MISMATCH' USING ERRCODE='23514';
+        END IF;
         IF NOT EXISTS (
              SELECT 1 FROM bidding.rule r
               WHERE r.knowledge_version_id=v_prior_canon.knowledge_version_id
@@ -1115,7 +1148,8 @@ GRANT SELECT ON bidding.video_canon_source_policy,bidding.video_canon_ai_verific
   bidding.video_canon_ai_promotion_receipt,bidding.video_canon_ai_restore_receipt,
   bidding.video_correction_review_receipt
   TO bridge_school_reader;
-REVOKE ALL ON FUNCTION bidding.current_school_canon_snapshot_sha256(uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION bidding.video_canon_rule_restore_sha256(uuid),
+  bidding.current_school_canon_snapshot_sha256(uuid) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION bidding.current_school_canon_snapshot_sha256(uuid) TO
   bridge_school_canon_verifier,bridge_school_canon_semantic_verifier,
   bridge_school_canon_bridge_verifier,bridge_school_canon_firewall_verifier,

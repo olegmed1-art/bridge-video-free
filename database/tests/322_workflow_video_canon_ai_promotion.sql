@@ -95,7 +95,7 @@ BEGIN
   IF NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N:AKQJ.T98.765.432 E:T987.654.32.AKQ"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
-       '{"notes":"North''s hand was AKQJ.T98.765.432; East’s hand was JT9.AKQ.JT9.876"}'::jsonb
+       '{"notes":"North''s hand, as it appeared clearly in the recorded diagram, was AKQJ.T98.765.432; East’s hand was JT9.AKQ.JT9.876"}'::jsonb
      )) OR bidding.contains_forbidden_hidden_value(
        '{"meaning":"shows at least five hearts"}'::jsonb
      ) THEN
@@ -154,6 +154,7 @@ DECLARE
   v_bad_bundle_failed boolean:=false;
   v_late_verification_failed boolean:=false;
   v_target_binding_failed boolean:=false;
+  v_rule_content_failed boolean:=false;
   v_bundle_id uuid:=uuidv7();
   v_good_bundle jsonb;
   v_bad_bundle jsonb;
@@ -362,7 +363,7 @@ BEGIN
     candidate_payload_hash,verification_bundle_sha256,policy_version,scope_key,
     rule_content_sha256,rule_id,canon_activation_id,runtime_activation_id,
     superseded_canon_activation_id,superseded_canon_valid_to,
-    superseded_runtime_activation_ids,superseded_runtime_state,
+    superseded_runtime_activation_ids,superseded_runtime_state,superseded_rule_state,
     promotion_mode,human_approval_required
   ) VALUES (
     v_promotion,v_school,v_candidate,repeat('a',64),v_good_bundle_hash,
@@ -370,6 +371,9 @@ BEGIN
     v_new_canon,v_new_runtime,v_old_canon,NULL,ARRAY[v_old_runtime],
     jsonb_build_array(jsonb_build_object(
       'runtime_activation_id',v_old_runtime,'valid_to',NULL
+    )),jsonb_build_array(jsonb_build_object(
+      'rule_id',v_old_rule,
+      'rule_content_sha256',bidding.video_canon_rule_restore_sha256(v_old_rule)
     )),'AI_VERIFIED_TEACHER_VIDEO',false
   );
   BEGIN
@@ -420,6 +424,21 @@ BEGIN
         WHERE video_canon_ai_promotion_receipt_id=v_promotion
      ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_MUTATED_RESTORE_TARGET_NOT_BLOCKED';
+  END IF;
+
+  BEGIN
+    UPDATE bidding.rule SET action='{"call":"7N"}' WHERE rule_id=v_old_rule;
+    PERFORM bidding.restore_ai_verified_video_canon(
+      v_promotion,v_good_bundle_hash,repeat('d',64)
+    );
+  EXCEPTION WHEN check_violation THEN
+    v_rule_content_failed:=true;
+  END;
+  IF NOT v_rule_content_failed OR EXISTS (
+       SELECT 1 FROM bidding.video_canon_ai_restore_receipt
+        WHERE video_canon_ai_promotion_receipt_id=v_promotion
+     ) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_MUTATED_RESTORE_RULE_NOT_BLOCKED';
   END IF;
 
   SELECT rule_test_id INTO v_test_id FROM bidding.rule_test
