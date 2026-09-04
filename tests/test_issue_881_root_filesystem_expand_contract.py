@@ -366,7 +366,8 @@ def test_selected_backup_wait_uses_validated_direct_get_state_machine() -> None:
     assert "backup_wait_status UNKNOWN_STATE" in helper
     assert "backup_wait_last_state UNKNOWN" in helper
     assert "backup_wait_last_state INVALID" in helper
-    assert 'assert isinstance(s,str) and s' in helper
+    assert 'allowed={"AVAILABLE","CREATING","REQUEST_RECEIVED","TERMINATING","TERMINATED","FAULTY"}' in helper
+    assert 's if isinstance(s,str) and s in allowed' in helper
     assert "backup_wait_status TIMEOUT" in helper
     assert "return 41" in helper
     assert "return 42" in helper
@@ -403,6 +404,8 @@ case "$FAKE_MODE" in
   slow) sleep 5; echo '{"data":{"lifecycle-state":"AVAILABLE"}}' ;;
   null) echo '{"data":{"lifecycle-state":null}}' ;;
   unknown) printf '%s\n' '{"data":{"lifecycle-state":"ALIEN\\nINJECTED"}}' ;;
+  trailing) printf '%s\n' '{"data":{"lifecycle-state":"AVAILABLE\\n"}}' ;;
+  carriage) printf '%s\n' '{"data":{"lifecycle-state":"CREATING\\r"}}' ;;
   terminal) echo '{"data":{"lifecycle-state":"FAULTY"}}' ;;
   available) echo '{"data":{"lifecycle-state":"AVAILABLE"}}' ;;
 esac
@@ -440,6 +443,12 @@ printf 'rc=%s elapsed=%s\n' "$rc" "$((SECONDS - started))"
         assert "state:backup_wait_status=UNKNOWN_STATE" in unknown.stderr
         assert "state:backup_wait_last_state=UNKNOWN" in unknown.stderr
         assert "INJECTED" not in unknown.stderr
+        trailing = run("trailing")
+        assert "rc=41" in trailing.stdout
+        assert "state:backup_wait_last_state=UNKNOWN" in trailing.stderr
+        carriage = run("carriage")
+        assert "rc=41" in carriage.stdout
+        assert "state:backup_wait_last_state=UNKNOWN" in carriage.stderr
         terminal = run("terminal")
         assert "rc=41" in terminal.stdout
         assert "state:backup_wait_status=TERMINAL_FAULTY" in terminal.stderr
