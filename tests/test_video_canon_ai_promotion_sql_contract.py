@@ -81,6 +81,9 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "v_valid_to<=statement_timestamp()",
         "SET TimeZone='UTC'",
         "WITH effective_canon AS",
+        "LANGUAGE sql\nVOLATILE\nSECURITY DEFINER",
+        "ca.valid_from<=clock_timestamp()",
+        "v_valid_to<=clock_timestamp()",
         "v_new_canon.valid_to<=statement_timestamp()",
         "is_complete_bridge_hand",
     ):

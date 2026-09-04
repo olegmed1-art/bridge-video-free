@@ -29,17 +29,17 @@ _FORBIDDEN_KEYS = {
     "partner_cards", "opponent_cards", "all_hands",
 }
 _HAND_PATTERN = (
-    r"[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}\\."
-    r"[-AKQJT2-9]{0,13}\\.[-AKQJT2-9]{0,13}"
+    r"[-AKQJT2-9]{0,13}\.[-AKQJT2-9]{0,13}\."
+    r"[-AKQJT2-9]{0,13}\.[-AKQJT2-9]{0,13}"
 )
 _PBN_DEAL = re.compile(
-    r"(?:^|[^A-Za-z0-9])[NESW]\\s*:\\s*(?P<hand>" + _HAND_PATTERN + r")",
+    r"(?:^|[^A-Za-z0-9])[NESW]\s*:\s*(?P<hand>" + _HAND_PATTERN + r")",
     re.IGNORECASE,
 )
 _LABELLED_HIDDEN_CARDS = re.compile(
-    r"(?:partner|opponent|north|east|south|west)\\s*(?:['’]s)?[ _-]*(?:hand|cards)"
-    r"\\b[^;]*?(?P<hand>" + _HAND_PATTERN + r")"
-    r"|(?:рука|карты)\\s+(?:партн[её]ра|соперника)\\b[^;]*?"
+    r"(?:partner|opponent|north|east|south|west)\s*(?:['’]s)?[ _-]*(?:hand|cards)"
+    r"\b[^;]*?(?P<hand>" + _HAND_PATTERN + r")"
+    r"|(?:рука|карты)\s+(?:партн[её]ра|соперника)\b[^;]*?"
     r"(?P<ru_hand>" + _HAND_PATTERN + r")",
     re.IGNORECASE,
 )

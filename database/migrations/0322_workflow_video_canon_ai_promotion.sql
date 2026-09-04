@@ -285,15 +285,15 @@ $$;
 CREATE OR REPLACE FUNCTION bidding.current_school_canon_snapshot_sha256(p_school_id uuid)
 RETURNS text
 LANGUAGE sql
-STABLE
+VOLATILE
 SECURITY DEFINER
 SET search_path=pg_catalog,public,bidding
 SET TimeZone='UTC'
 AS $$
 WITH effective_canon AS (
-  SELECT ca.* FROM public.canon_activation ca
-  WHERE ca.status='active' AND ca.valid_from<=statement_timestamp()
-    AND (ca.valid_to IS NULL OR ca.valid_to>statement_timestamp())
+  SELECT ca.* FROM effective_canon ca
+  WHERE ca.status='active' AND ca.valid_from<=clock_timestamp()
+    AND (ca.valid_to IS NULL OR ca.valid_to>clock_timestamp())
 ), active_runtime AS (
   SELECT COALESCE(jsonb_agg(
     jsonb_build_object(
@@ -308,8 +308,8 @@ WITH effective_canon AS (
   JOIN bidding.rule r ON r.rule_id=ra.rule_id
   JOIN public.knowledge_version kv ON kv.knowledge_version_id=r.knowledge_version_id
   WHERE ra.school_id=p_school_id AND ra.authority_lane='school_canon'
-    AND ra.status='active' AND ra.valid_from<=statement_timestamp()
-    AND (ra.valid_to IS NULL OR ra.valid_to>statement_timestamp())
+    AND ra.status='active' AND ra.valid_from<=clock_timestamp()
+    AND (ra.valid_to IS NULL OR ra.valid_to>clock_timestamp())
 ), active_canon AS (
   SELECT COALESCE(jsonb_agg(jsonb_build_object(
     'canon_activation',to_jsonb(ca),
@@ -329,7 +329,15 @@ WITH effective_canon AS (
   WHERE ki.school_id=p_school_id
 ), open_conflicts AS (
   SELECT COALESCE(jsonb_agg(to_jsonb(c) ORDER BY c.rule_conflict_id::text),'[]'::jsonb) AS rows
-  FROM bidding.rule_conflict c WHERE c.school_id=p_school_id AND c.status='open'
+  FROM bidding.rule_conflict c
+  WHERE c.school_id=p_school_id AND c.status='open'
+    AND (EXISTS (
+      SELECT 1 FROM active_canon_rules ar
+       WHERE (ar.rows @> jsonb_build_array(jsonb_build_object('rule_id',c.left_rule_id)))
+    ) OR EXISTS (
+      SELECT 1 FROM active_canon_rules ar
+       WHERE (ar.rows @> jsonb_build_array(jsonb_build_object('rule_id',c.right_rule_id)))
+    ))
 ), active_rule_tests AS (
   SELECT COALESCE(jsonb_agg(jsonb_build_object(
     'rule_test',to_jsonb(t),
@@ -341,7 +349,7 @@ WITH effective_canon AS (
   ) ORDER BY t.rule_test_id::text),'[]'::jsonb) AS rows
   FROM bidding.rule_test t
   WHERE EXISTS (
-    SELECT 1 FROM public.canon_activation ca
+    SELECT 1 FROM effective_canon ca
     JOIN public.knowledge_version kv ON kv.knowledge_version_id=ca.knowledge_version_id
     JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
     JOIN bidding.rule r ON r.knowledge_version_id=kv.knowledge_version_id
@@ -354,7 +362,7 @@ WITH effective_canon AS (
   FROM public.knowledge_version_source kvs
   JOIN public.source s ON s.source_id=kvs.source_id
   WHERE EXISTS (
-    SELECT 1 FROM public.canon_activation ca
+    SELECT 1 FROM effective_canon ca
     JOIN public.knowledge_version kv ON kv.knowledge_version_id=ca.knowledge_version_id
     JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
      WHERE ki.school_id=p_school_id
@@ -880,12 +888,22 @@ BEGIN
         AND (c.left_rule_id=p_rule_id OR c.right_rule_id=p_rule_id)
     ) THEN RAISE EXCEPTION 'VIDEO_CANON_RULE_GATES_FAILED' USING ERRCODE='23514'; END IF;
 
+    IF v_valid_to IS NOT NULL AND v_valid_to<=clock_timestamp() THEN
+        RAISE EXCEPTION 'VIDEO_CANON_EFFECTIVE_PERIOD_EXPIRED' USING ERRCODE='23514';
+    END IF;
+    v_canon_snapshot_sha256 := bidding.current_school_canon_snapshot_sha256(v_candidate.school_id);
+    IF v_bundle.bundle_payload->>'canon_snapshot_sha256'<>v_canon_snapshot_sha256 THEN
+        RAISE EXCEPTION 'VIDEO_CANON_STATE_CHECKS_STALE' USING ERRCODE='23514';
+    END IF;
+
     SELECT ca.* INTO v_prior_canon
       FROM public.canon_activation ca
       JOIN public.knowledge_version prior_kv
         ON prior_kv.knowledge_version_id=ca.knowledge_version_id
      WHERE prior_kv.knowledge_item_id=v_version.knowledge_item_id
        AND ca.scope_key=v_scope_key AND ca.status='active'
+       AND ca.valid_from<=clock_timestamp()
+       AND (ca.valid_to IS NULL OR ca.valid_to>clock_timestamp())
        AND tstzrange(ca.valid_from,ca.valid_to,'[)') && tstzrange(v_valid_from,v_valid_to,'[)')
      FOR UPDATE OF ca;
     IF FOUND THEN
@@ -1037,9 +1055,9 @@ BEGIN
     IF v_new_canon.canon_activation_id IS NULL OR v_new_runtime.runtime_activation_id IS NULL
        OR v_new_canon.status<>'active' OR v_new_runtime.status<>'active'
        OR (v_new_canon.valid_to IS NOT NULL
-           AND v_new_canon.valid_to<=statement_timestamp())
+           AND v_new_canon.valid_to<=clock_timestamp())
        OR (v_new_runtime.valid_to IS NOT NULL
-           AND v_new_runtime.valid_to<=statement_timestamp())
+           AND v_new_runtime.valid_to<=clock_timestamp())
        OR v_new_runtime.canon_activation_id<>v_new_canon.canon_activation_id
        OR v_new_runtime.rule_id<>v_promotion.rule_id
        OR v_new_runtime.school_id<>v_promotion.school_id THEN
@@ -1055,7 +1073,7 @@ BEGIN
 
     IF v_promotion.superseded_canon_activation_id IS NOT NULL THEN
         IF v_promotion.superseded_canon_valid_to IS NOT NULL
-           AND v_promotion.superseded_canon_valid_to<=statement_timestamp() THEN
+           AND v_promotion.superseded_canon_valid_to<=clock_timestamp() THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_TARGET_EXPIRED' USING ERRCODE='23514';
         END IF;
         SELECT * INTO v_prior_canon FROM public.canon_activation
@@ -1139,7 +1157,7 @@ BEGIN
             EXCEPTION WHEN OTHERS THEN
                 RAISE EXCEPTION 'VIDEO_CANON_RESTORE_RUNTIME_STATE_INVALID' USING ERRCODE='23514';
             END;
-            IF v_original_valid_to IS NOT NULL AND v_original_valid_to<=statement_timestamp() THEN
+            IF v_original_valid_to IS NOT NULL AND v_original_valid_to<=clock_timestamp() THEN
                 RAISE EXCEPTION 'VIDEO_CANON_RESTORE_RUNTIME_TARGET_EXPIRED' USING ERRCODE='23514';
             END IF;
             SELECT * INTO v_prior_runtime FROM bidding.runtime_activation
