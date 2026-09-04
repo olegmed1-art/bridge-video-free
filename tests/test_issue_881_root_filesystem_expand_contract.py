@@ -317,6 +317,17 @@ def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> No
     assert "FAILED_BACKUP_NAME" in WORKFLOW
     assert "failed_run_backup_cleanup_status RETAINED_AVAILABLE_REQUIRES_ACCEPTANCE" in WORKFLOW
     assert "assert data['lifecycle-state'] == 'AVAILABLE'" in WORKFLOW
+    backup_filter = WORKFLOW[
+        WORKFLOW.index("Preserve every exact-name backup ID") :
+        WORKFLOW.index("boot_inventory=", WORKFLOW.index("Preserve every exact-name backup ID"))
+    ]
+    assert 'x.get("lifecycle-state")!="TERMINATED"' not in backup_filter
+    assert "failed_run_backup_direct_get_states" in backup_filter
+    assert "failed_run_backup_cleanup_status PROVEN_TERMINAL" in backup_filter
+    assert "failed_run_backup_cleanup_status GET_FAILED" in backup_filter
+    assert "failed_run_backup_cleanup_status UNKNOWN_STATE" in backup_filter
+    assert "failed_run_backup_cleanup_status MULTIPLE_AVAILABLE_CANDIDATES" in backup_filter
+    assert 'for id in "${ids[@]}"' in backup_filter
     assert "allocation_summary" in WORKFLOW
     assert "cleanup_only=true" in WORKFLOW
     assert "EXACT_NAME_INVENTORY_EMPTY" in WORKFLOW

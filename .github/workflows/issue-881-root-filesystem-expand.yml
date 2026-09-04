@@ -503,14 +503,34 @@ jobs:
           reconcile_prior_attempt_resources
           if (( cleanup_only == 1 )); then
             mark_phase reconcile_failed_run_backup
-            failed_backup_ids="$(operation_backup_inventory | FAILED_BACKUP_NAME="$failed_run_backup_name" BOOT_ID="$boot_id" python -c 'import json,os,sys; print("\n".join(sorted(x["id"] for x in json.load(sys.stdin).get("data",[]) if x.get("display-name")==os.environ["FAILED_BACKUP_NAME"] and x.get("boot-volume-id")==os.environ["BOOT_ID"] and x.get("lifecycle-state")!="TERMINATED")))')"
+            # Preserve every exact-name backup ID, including TERMINATED objects,
+            # then classify each by direct GET. Never turn a filtered terminal
+            # object into a misleading "none/proven absent" receipt.
+            failed_backup_ids="$(operation_backup_inventory | FAILED_BACKUP_NAME="$failed_run_backup_name" BOOT_ID="$boot_id" python -c 'import json,os,sys; print("\n".join(sorted(x["id"] for x in json.load(sys.stdin).get("data",[]) if x.get("display-name")==os.environ["FAILED_BACKUP_NAME"] and x.get("boot-volume-id")==os.environ["BOOT_ID"])))')"
             failed_backup_csv="$(printf '%s\n' "$failed_backup_ids" | sed '/^$/d' | sort -u | paste -sd, -)"
             state_set failed_run_backup_ids "${failed_backup_csv:-none}"
             if [[ -n "$failed_backup_ids" ]]; then
               readarray -t ids <<<"$failed_backup_ids"
-              (( ${#ids[@]} == 1 ))
-              failed_backup_json="$(oci bv boot-volume-backup get --boot-volume-backup-id "${ids[0]}" --output json)"
-              BACKUP="$failed_backup_json" BOOT_ID="$boot_id" python - <<'PY'
+              failed_backup_candidate_id=""
+              failed_backup_states=""
+              for id in "${ids[@]}"; do
+                failed_backup_output=""
+                if failed_backup_output="$(oci bv boot-volume-backup get --boot-volume-backup-id "$id" --output json 2>&1)"; then
+                  failed_backup_state="$(printf '%s' "$failed_backup_output" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["lifecycle-state"])')"
+                elif grep -Fq 'NotAuthorizedOrNotFound' <<<"$failed_backup_output" \
+                    && grep -Eq "['\"]status['\"][[:space:]]*:[[:space:]]*404" <<<"$failed_backup_output"; then
+                  failed_backup_state=NOT_FOUND
+                else
+                  state_set failed_run_backup_cleanup_status GET_FAILED
+                  exit 91
+                fi
+                failed_backup_states="${failed_backup_states}${failed_backup_states:+,}${id}:${failed_backup_state}"
+                if [[ "$failed_backup_state" == AVAILABLE ]]; then
+                  [[ -z "$failed_backup_candidate_id" ]] || {
+                    state_set failed_run_backup_cleanup_status MULTIPLE_AVAILABLE_CANDIDATES
+                    exit 93
+                  }
+                  BACKUP="$failed_backup_output" BOOT_ID="$boot_id" python - <<'PY'
           import json, os
           data = json.loads(os.environ['BACKUP'])['data']
           assert data['boot-volume-id'] == os.environ['BOOT_ID']
@@ -518,10 +538,23 @@ jobs:
           assert data['type'] == 'FULL'
           assert data['size-in-gbs'] == 97
           PY
-              state_set retained_backup_id "${ids[0]}"
-              state_set failed_run_backup_cleanup_status RETAINED_AVAILABLE_REQUIRES_ACCEPTANCE
+                  failed_backup_candidate_id="$id"
+                elif [[ "$failed_backup_state" == TERMINATED || "$failed_backup_state" == NOT_FOUND ]]; then
+                  echo "UV_ROOT_RESOURCE_ABSENCE_PASS resource=backup id=$id terminal_state=$failed_backup_state"
+                else
+                  state_set failed_run_backup_cleanup_status UNKNOWN_STATE
+                  exit 92
+                fi
+              done
+              state_set failed_run_backup_direct_get_states "$failed_backup_states"
+              if [[ -n "$failed_backup_candidate_id" ]]; then
+                state_set retained_backup_id "$failed_backup_candidate_id"
+                state_set failed_run_backup_cleanup_status RETAINED_AVAILABLE_REQUIRES_ACCEPTANCE
+              else
+                state_set failed_run_backup_cleanup_status PROVEN_TERMINAL
+              fi
             else
-              state_set failed_run_backup_cleanup_status PROVEN_ABSENT
+              state_set failed_run_backup_cleanup_status EXACT_NAME_INVENTORY_EMPTY
             fi
             state_set current_cleanup_status NOT_APPLICABLE
             boot_inventory="$(oci bv boot-volume list --compartment-id "$tenancy_id" --availability-domain "$ad" --all --output json)"
@@ -813,6 +846,7 @@ jobs:
               '- prior-run exact typed resources: ' + code(value('prior_resource_summary', 'none')),
               '- failed-run backup cleanup: ' + code(value('failed_run_backup_cleanup_status', 'NOT_APPLICABLE')),
               '- failed-run backup IDs: ' + code(value('failed_run_backup_ids', 'none')),
+              '- failed-run backup direct-GET states: ' + code(value('failed_run_backup_direct_get_states', 'not_listed')),
               '- current-run temporary cleanup: ' + code(value('current_cleanup_status', 'NOT_RECORDED')),
               '- current-run stamp: ' + code(value('run_stamp')),
               '- temporary instance ID: ' + code(value('temporary_instance_id', 'none')),
