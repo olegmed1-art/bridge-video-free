@@ -6,7 +6,7 @@ DECLARE r record;
 BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM public.schema_migration
-    WHERE migration_key='0323_video_canon_promotion_consumer'
+    WHERE migration_key='0323_workflow_video_canon_promotion_consumer'
   ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_CONSUMER_MIGRATION_MISSING';
   END IF;

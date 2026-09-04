@@ -431,6 +431,6 @@ REVOKE UPDATE,DELETE,TRUNCATE ON bidding.video_canon_assurance_verdict FROM
   bridge_school_canon_i2_verifier,bridge_school_canon_i3_verifier;
 
 INSERT INTO public.schema_migration(migration_key)
-VALUES ('0323_video_canon_promotion_consumer') ON CONFLICT DO NOTHING;
+VALUES ('0323_workflow_video_canon_promotion_consumer') ON CONFLICT DO NOTHING;
 
 COMMIT;

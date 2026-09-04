@@ -2,8 +2,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MIGRATION = (ROOT / "database/migrations/0323_video_canon_promotion_consumer.sql").read_text()
-ROLLBACK = (ROOT / "database/rollbacks/0323_video_canon_promotion_consumer.sql").read_text()
+MIGRATION = (ROOT / "database/migrations/0323_workflow_video_canon_promotion_consumer.sql").read_text()
+ROLLBACK = (ROOT / "database/rollbacks/0323_workflow_video_canon_promotion_consumer.sql").read_text()
 
 
 def test_authority_and_independent_assurance_are_fail_closed():
@@ -35,5 +35,5 @@ def test_only_consumer_can_cross_authoritative_boundary():
 def test_rollback_restores_pre_migration_boundary_and_registry():
     assert "GRANT EXECUTE ON FUNCTION bidding.activate_ai_verified_video_canon" in ROLLBACK
     assert "TO bridge_school_canon_promoter" in ROLLBACK
-    assert "WHERE migration_key='0323_video_canon_promotion_consumer'" in ROLLBACK
+    assert "WHERE migration_key='0323_workflow_video_canon_promotion_consumer'" in ROLLBACK
     assert "DROP ROLE IF EXISTS bridge_school_canon_consumer" in ROLLBACK

@@ -30,7 +30,7 @@ DROP TABLE IF EXISTS bidding.video_canon_assurance_verdict;
 GRANT EXECUTE ON FUNCTION bidding.activate_ai_verified_video_canon(uuid,uuid,text)
   TO bridge_school_canon_promoter;
 DELETE FROM public.schema_migration
-WHERE migration_key='0323_video_canon_promotion_consumer';
+WHERE migration_key='0323_workflow_video_canon_promotion_consumer';
 
 REVOKE USAGE,CREATE ON SCHEMA public,bidding FROM
   bridge_school_canon_consumer,bridge_school_canon_i3_verifier,
