@@ -451,6 +451,9 @@ DECLARE
   v_retire_before timestamptz;
   v_retire_after timestamptz;
   v_new_from timestamptz:=statement_timestamp()-interval '1 hour';
+  v_runtime_scope text:=bidding.video_canon_runtime_scope_key(
+    'restore-scope','natural-v1','beginner-1'
+  );
 BEGIN
   IF bidding.video_canon_drive_source_id('restore-video-old')<>
        '75afc175-d528-5d6e-a7cf-48303666349e'::uuid THEN
@@ -842,8 +845,8 @@ BEGIN
   INSERT INTO public.canon_activation(
     canon_activation_id,knowledge_version_id,scope_key,valid_from,valid_to,status
   ) VALUES
-    (v_old_canon,v_old_version,'restore-scope',statement_timestamp()-interval '1 year',v_new_from,'superseded'),
-    (v_new_canon,v_new_version,'restore-scope',v_new_from,NULL,'active');
+    (v_old_canon,v_old_version,v_runtime_scope,statement_timestamp()-interval '1 year',v_new_from,'superseded'),
+    (v_new_canon,v_new_version,v_runtime_scope,v_new_from,NULL,'active');
   INSERT INTO public.canon_activation(
     canon_activation_id,knowledge_version_id,scope_key,valid_from,valid_to,status
   ) VALUES (
@@ -853,9 +856,9 @@ BEGIN
     runtime_activation_id,school_id,rule_id,authority_lane,canon_activation_id,
     scope_key,valid_from,valid_to,status
   ) VALUES
-    (v_old_runtime,v_school,v_old_rule,'school_canon',v_old_canon,'restore-scope',
+    (v_old_runtime,v_school,v_old_rule,'school_canon',v_old_canon,v_runtime_scope,
       statement_timestamp()-interval '1 year',v_new_from,'superseded'),
-    (v_new_runtime,v_school,v_new_rule,'school_canon',v_new_canon,'restore-scope',
+    (v_new_runtime,v_school,v_new_rule,'school_canon',v_new_canon,v_runtime_scope,
       v_new_from,NULL,'active');
   PERFORM set_config('TimeZone','UTC',true);
   SELECT encode(public.digest(convert_to(
@@ -897,7 +900,7 @@ BEGIN
     promotion_mode,human_approval_required
   ) VALUES (
     v_old_promotion,v_school,v_old_candidate,repeat('1',64),repeat('2',64),
-    'school-video-auto-canon-v1','restore-scope','restore-scope',
+    'school-video-auto-canon-v1','restore-scope',v_runtime_scope,
     repeat('3',64),v_old_version_digest,
     v_old_rule_test_state_digest,v_old_rule,v_old_canon,v_old_runtime,
     'AI_VERIFIED_TEACHER_VIDEO',false
@@ -945,7 +948,7 @@ BEGIN
     superseded_knowledge_item_content_sha256,promotion_mode,human_approval_required
   ) VALUES (
     v_promotion,v_school,v_candidate,repeat('a',64),v_good_bundle_hash,
-    'school-video-auto-canon-v1','restore-scope','restore-scope',
+    'school-video-auto-canon-v1','restore-scope',v_runtime_scope,
     repeat('b',64),repeat('c',64),
     repeat('6',64),v_new_rule,v_new_canon,v_new_runtime,v_old_canon,NULL,ARRAY[v_old_runtime],
     jsonb_build_array(jsonb_build_object(
