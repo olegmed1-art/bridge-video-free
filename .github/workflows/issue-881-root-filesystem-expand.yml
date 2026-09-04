@@ -195,6 +195,8 @@ jobs:
           state_set backup_candidate_count 0
           state_set backup_candidate_ids none
           state_set backup_ineligible_candidate_ids none
+          state_set backup_wait_status NOT_STARTED
+          state_set backup_wait_failure_rc none
           mark_phase initialized
           discover_named_id() {
             local resource="$1" expected="$2" output id
@@ -326,10 +328,18 @@ jobs:
             local stderr_file="$RUNNER_TEMP/issue-881-oci-json.stderr"
             local attempt rc max_attempts="${OCI_JSON_MAX_ATTEMPTS:-6}"
             local retry_delay_seconds="${OCI_JSON_RETRY_DELAY_SECONDS:-5}"
+            local request_timeout_seconds="${OCI_JSON_REQUEST_TIMEOUT_SECONDS:-0}"
             for attempt in $(seq 1 "$max_attempts"); do
               : >"$stdout_file"
               : >"$stderr_file"
-              if "$@" --output json >"$stdout_file" 2>"$stderr_file"; then
+              if (( request_timeout_seconds > 0 )); then
+                if timeout --signal=KILL "${request_timeout_seconds}s" \
+                    "$@" --output json >"$stdout_file" 2>"$stderr_file"; then
+                  rc=0
+                else
+                  rc=$?
+                fi
+              elif "$@" --output json >"$stdout_file" 2>"$stderr_file"; then
                 rc=0
               else
                 rc=$?
@@ -358,6 +368,68 @@ jobs:
               rc=$?
             fi
             return "$rc"
+          }
+          wait_backup_available() {
+            local id="$1" max_seconds="${2:-3600}" deadline remaining request_timeout sleep_seconds state rc
+            local -r per_request_max_seconds=30
+            BACKUP_AVAILABLE_JSON=""
+            deadline=$((SECONDS + max_seconds))
+            while (( SECONDS < deadline )); do
+              remaining=$((deadline - SECONDS))
+              request_timeout=$((remaining < per_request_max_seconds ? remaining : per_request_max_seconds))
+              (( request_timeout > 0 )) || break
+              if OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
+                  oci_json_request oci bv boot-volume-backup get --boot-volume-backup-id "$id"; then
+                if ! state="$(printf '%s' "$OCI_JSON_OUTPUT" | python -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d.get("data"),dict); s=d["data"].get("lifecycle-state"); allowed={"AVAILABLE","CREATING","REQUEST_RECEIVED","TERMINATING","TERMINATED","FAULTY"}; print(s if isinstance(s,str) and s in allowed else "INVALID" if not isinstance(s,str) else "UNKNOWN")')"; then
+                  state_set backup_wait_status INVALID_GET_PAYLOAD
+                  state_set backup_wait_last_state INVALID
+                  return 43
+                fi
+                if [[ "$state" == INVALID ]]; then
+                  state_set backup_wait_status INVALID_GET_PAYLOAD
+                  state_set backup_wait_last_state INVALID
+                  return 43
+                fi
+                if [[ "$state" == UNKNOWN ]]; then
+                  state_set backup_wait_last_state UNKNOWN
+                  state_set backup_wait_status UNKNOWN_STATE
+                  return 41
+                fi
+                if [[ "$state" == AVAILABLE ]]; then
+                  state_set backup_wait_last_state AVAILABLE
+                  BACKUP_AVAILABLE_JSON="$OCI_JSON_OUTPUT"
+                  state_set backup_wait_status AVAILABLE
+                  return 0
+                fi
+                if [[ "$state" == TERMINATING || "$state" == TERMINATED || "$state" == FAULTY ]]; then
+                  state_set backup_wait_last_state "$state"
+                  state_set backup_wait_status "TERMINAL_${state}"
+                  return 41
+                fi
+                state_set backup_wait_last_state "$state"
+              else
+                rc=$?
+                if [[ "$rc" == 124 || "$rc" == 137 ]]; then
+                  state_set backup_wait_status GET_REQUEST_TIMEOUT
+                  if (( SECONDS >= deadline )); then
+                    state_set backup_wait_status TIMEOUT
+                    state_set backup_wait_failure_rc 42
+                    return 42
+                  fi
+                  continue
+                fi
+                state_set backup_wait_status GET_FAILED
+                state_set backup_wait_failure_rc "$rc"
+                return "$rc"
+              fi
+              remaining=$((deadline - SECONDS))
+              (( remaining > 0 )) || break
+              sleep_seconds=$((remaining < 5 ? remaining : 5))
+              sleep "$sleep_seconds"
+            done
+            state_set backup_wait_status TIMEOUT
+            state_set backup_wait_failure_rc 42
+            return 42
           }
           select_fresh_operation_backups() {
             BACKUP_PREFIX="$backup_prefix" BOOT_ID="$boot_id" python -c 'import datetime,json,os,sys; now=datetime.datetime.now(datetime.timezone.utc); candidates=[]; ineligible=[]; invalid=[]; payload=json.load(sys.stdin); data=payload.get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data)
@@ -698,8 +770,15 @@ jobs:
           [[ -z "$backup_id" || "$backup_created_by_run" == 1 ]] || state_set backup_selection_status REUSED_NEWEST_VALID_CANDIDATE
           state_set backup_id "$backup_id"
           [[ -n "$backup_id" ]] || exit 36
-          oci bv boot-volume-backup get --boot-volume-backup-id "$backup_id" --wait-for-state AVAILABLE --max-wait-seconds 3600 >/dev/null
-          backup_json="$(oci bv boot-volume-backup get --boot-volume-backup-id "$backup_id" --output json)"
+          mark_phase wait_selected_backup_available
+          if wait_backup_available "$backup_id"; then
+            backup_json="$BACKUP_AVAILABLE_JSON"
+          else
+            backup_wait_rc=$?
+            state_set backup_wait_failure_rc "$backup_wait_rc"
+            exit "$backup_wait_rc"
+          fi
+          mark_phase validate_selected_backup
           BACKUP="$backup_json" BOOT_ID="$boot_id" python - <<'PY'
           import datetime,json,os
           d=json.loads(os.environ['BACKUP'])['data']
@@ -968,6 +1047,9 @@ jobs:
               '- reusable backup candidate IDs: ' + code(value('backup_candidate_ids', 'none')),
               '- ineligible backup candidate IDs: ' + code(value('backup_ineligible_candidate_ids', 'none')),
               '- invalid backup metadata IDs: ' + code(value('backup_invalid_candidate_ids', 'none')),
+              '- backup availability wait: ' + code(value('backup_wait_status', 'NOT_RECORDED')),
+              '- backup availability last state: ' + code(value('backup_wait_last_state', 'none')),
+              '- backup availability failure rc: ' + code(value('backup_wait_failure_rc', 'none')),
               '- current-run temporary cleanup: ' + code(value('current_cleanup_status', 'NOT_RECORDED')),
               '- current-run stamp: ' + code(value('run_stamp')),
               '- temporary instance ID: ' + code(value('temporary_instance_id', 'none')),

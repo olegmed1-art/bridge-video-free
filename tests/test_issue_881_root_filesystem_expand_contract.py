@@ -136,7 +136,8 @@ def test_paid_and_temporary_creates_capture_before_separate_waits() -> None:
         "network subnet get",
     ):
         assert resource_get in block
-    assert block.count("--wait-for-state AVAILABLE") >= 7
+    assert block.count("--wait-for-state AVAILABLE") >= 6
+    assert 'if wait_backup_available "$backup_id"' in block
     assert block.count("--wait-for-state AVAILABLE --max-wait-seconds 300") == 5
     assert "explicit OCI waiters consume at most 240 minutes" in WORKFLOW
     assert "least 90 minutes" in WORKFLOW
@@ -318,7 +319,7 @@ def test_oci_json_stdout_isolated_from_warning_stderr() -> None:
 def test_backup_inventory_and_selection_are_validated_and_receipted() -> None:
     selection = WORKFLOW[
         WORKFLOW.index("mark_phase inventory_operation_backups") :
-        WORKFLOW.index("oci bv boot-volume-backup get --boot-volume-backup-id", WORKFLOW.index("mark_phase inventory_operation_backups"))
+        WORKFLOW.index('if [[ -z "$backup_id" ]]', WORKFLOW.index("mark_phase inventory_operation_backups"))
     ]
     assert "if oci_json_request oci bv boot-volume-backup list" in selection
     assert "INVENTORY_REQUEST_FAILED" in selection
@@ -328,7 +329,7 @@ def test_backup_inventory_and_selection_are_validated_and_receipted() -> None:
     assert "backup_ineligible_candidate_ids" in selection
     assert "backup_invalid_candidate_ids" in selection
     assert "INVALID_OPERATION_BACKUP_METADATA" in selection
-    assert "REUSED_NEWEST_VALID_CANDIDATE" in selection
+    assert "REUSED_NEWEST_VALID_CANDIDATE" in WORKFLOW
     assert "backup_inventory=\"$(operation_backup_inventory)\"" not in selection
 
     selector = WORKFLOW[WORKFLOW.index("select_fresh_operation_backups()") : WORKFLOW.index("superseded_operation_backups()")]
@@ -349,6 +350,109 @@ def test_backup_inventory_and_selection_are_validated_and_receipted() -> None:
     assert "reusable backup candidate IDs" in receipt
     assert "ineligible backup candidate IDs" in receipt
     assert "invalid backup metadata IDs" in receipt
+
+
+def test_selected_backup_wait_uses_validated_direct_get_state_machine() -> None:
+    helper = WORKFLOW[WORKFLOW.index("wait_backup_available()") : WORKFLOW.index("select_fresh_operation_backups()")]
+    assert "oci_json_request oci bv boot-volume-backup get" in helper
+    assert "BACKUP_AVAILABLE_JSON" in helper
+    assert "INVALID_GET_PAYLOAD" in helper
+    assert '[[ "$state" == AVAILABLE ]]' in helper
+    assert "deadline=$((SECONDS + max_seconds))" in helper
+    assert "OCI_JSON_REQUEST_TIMEOUT_SECONDS=\"$request_timeout\"" in helper
+    assert "remaining=$((deadline - SECONDS))" in helper
+    assert "sleep_seconds=$((remaining < 5 ? remaining : 5))" in helper
+    assert '[[ "$state" == TERMINATING || "$state" == TERMINATED || "$state" == FAULTY ]]' in helper
+    assert "backup_wait_status UNKNOWN_STATE" in helper
+    assert "backup_wait_last_state UNKNOWN" in helper
+    assert "backup_wait_last_state INVALID" in helper
+    assert 'allowed={"AVAILABLE","CREATING","REQUEST_RECEIVED","TERMINATING","TERMINATED","FAULTY"}' in helper
+    assert 's if isinstance(s,str) and s in allowed' in helper
+    assert "backup_wait_status TIMEOUT" in helper
+    assert "return 41" in helper
+    assert "return 42" in helper
+    assert "return 43" in helper
+
+    gate = WORKFLOW[
+        WORKFLOW.index("mark_phase wait_selected_backup_available") :
+        WORKFLOW.index("restored_attempted=1", WORKFLOW.index("mark_phase wait_selected_backup_available"))
+    ]
+    assert 'if wait_backup_available "$backup_id"' in gate
+    assert 'backup_json="$BACKUP_AVAILABLE_JSON"' in gate
+    assert "--wait-for-state AVAILABLE" not in gate
+    assert 'backup_json="$(oci bv boot-volume-backup get' not in gate
+    assert "assert 0 <= age < 86400" in gate
+
+    receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
+    assert "backup availability wait" in receipt
+    assert "backup availability last state" in receipt
+    assert "backup availability failure rc" in receipt
+
+
+def test_backup_wait_deadline_and_state_classification_are_adversarially_bounded() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        tmp_path = Path(temp_dir)
+        oci_start = WORKFLOW.index("oci_json_request() {")
+        oci_end = WORKFLOW.index("operation_backup_inventory()", oci_start)
+        wait_start = WORKFLOW.index("wait_backup_available() {")
+        wait_end = WORKFLOW.index("select_fresh_operation_backups()", wait_start)
+        helpers = textwrap.dedent(WORKFLOW[oci_start:oci_end] + WORKFLOW[wait_start:wait_end])
+        fake_oci = tmp_path / "oci"
+        fake_oci.write_text(
+            """#!/usr/bin/env bash
+case "$FAKE_MODE" in
+  slow) sleep 5; echo '{"data":{"lifecycle-state":"AVAILABLE"}}' ;;
+  null) echo '{"data":{"lifecycle-state":null}}' ;;
+  unknown) printf '%s\n' '{"data":{"lifecycle-state":"ALIEN\\nINJECTED"}}' ;;
+  trailing) printf '%s\n' '{"data":{"lifecycle-state":"AVAILABLE\\n"}}' ;;
+  carriage) printf '%s\n' '{"data":{"lifecycle-state":"CREATING\\r"}}' ;;
+  terminal) echo '{"data":{"lifecycle-state":"FAULTY"}}' ;;
+  available) echo '{"data":{"lifecycle-state":"AVAILABLE"}}' ;;
+esac
+"""
+        )
+        fake_oci.chmod(0o755)
+        script = "set -e\n" + helpers + r'''
+state_set() { printf 'state:%s=%s\n' "$1" "$2" >&2; }
+started=$SECONDS
+if wait_backup_available backup-id "$MAX_SECONDS"; then rc=0; else rc=$?; fi
+printf 'rc=%s elapsed=%s\n' "$rc" "$((SECONDS - started))"
+'''
+
+        def run(mode: str, max_seconds: int = 2) -> subprocess.CompletedProcess[str]:
+            env = os.environ | {
+                "RUNNER_TEMP": str(tmp_path),
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "FAKE_MODE": mode,
+                "MAX_SECONDS": str(max_seconds),
+                "OCI_JSON_RETRY_DELAY_SECONDS": "0",
+            }
+            return subprocess.run(
+                ["bash", "-c", script], env=env, text=True, capture_output=True, timeout=max_seconds + 3, check=True
+            )
+
+        slow = run("slow", 1)
+        assert "rc=42" in slow.stdout
+        assert "elapsed=1" in slow.stdout
+        assert "state:backup_wait_status=TIMEOUT" in slow.stderr
+        invalid = run("null")
+        assert "rc=43" in invalid.stdout
+        assert "state:backup_wait_status=INVALID_GET_PAYLOAD" in invalid.stderr
+        unknown = run("unknown")
+        assert "rc=41" in unknown.stdout
+        assert "state:backup_wait_status=UNKNOWN_STATE" in unknown.stderr
+        assert "state:backup_wait_last_state=UNKNOWN" in unknown.stderr
+        assert "INJECTED" not in unknown.stderr
+        trailing = run("trailing")
+        assert "rc=41" in trailing.stdout
+        assert "state:backup_wait_last_state=UNKNOWN" in trailing.stderr
+        carriage = run("carriage")
+        assert "rc=41" in carriage.stdout
+        assert "state:backup_wait_last_state=UNKNOWN" in carriage.stderr
+        terminal = run("terminal")
+        assert "rc=41" in terminal.stdout
+        assert "state:backup_wait_status=TERMINAL_FAULTY" in terminal.stderr
+        assert "rc=0" in run("available").stdout
 
 
 def test_backup_selector_separates_expired_from_malformed_inventory() -> None:
