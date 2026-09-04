@@ -22,18 +22,20 @@ def test_batch_transport_is_durable_bounded_and_project_neutral():
     assert "/run/lock/oracle-workload-mutation.lock" in text
     assert "github.sha" in text
     assert "cancel-in-progress: false" in text
-    assert "timeout-minutes: 330" in text
-    assert text.count("timeout 4800 ssh") == 1
+    assert "timeout-minutes: 360" in text
+    assert "EXECUTION_DEADLINE_EPOCH=$(( $(date +%s) + 21000 ))" in text
+    assert text.count("timeout \"$ssh_timeout\" ssh") == 1
+    assert "remaining=$(( EXECUTION_DEADLINE_EPOCH - now - 300 ))" in text
+    assert 'ssh_timeout="$(budget_max 4800)"' in text
     assert "for attempt in 1 2 3" in text
-    assert "--max-wait-seconds 600" in text
-    assert "timeout 4800 ssh" in text
+    assert '--max-wait-seconds "$(budget_max 600)"' in text
     assert "recover_instance_after_transport_loss" in text
     assert "enqueue_rc == 255 && attempt < 3" in text
     assert "ServerAliveCountMax=2" in text
     preflight = text.split("- name: Resolve pinned SSH transport", 1)[0]
     assert "STARTING)" in preflight
     assert "STOPPING)" in preflight
-    assert "--wait-for-state STOPPED --max-wait-seconds 600" in preflight
+    assert '--wait-for-state STOPPED --max-wait-seconds "$(budget_max 600)"' in preflight
     assert "'CANARY_REVIEW'" in text
     ssh_setup = text.split("- name: Resolve pinned SSH transport", 1)[1].split(
         "- name: Enqueue metadata", 1
