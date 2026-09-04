@@ -16,6 +16,8 @@ def test_authority_and_independent_assurance_are_fail_closed():
     assert "video_canon_assurance_verifier_registry" in MIGRATION
     assert "video_canon_assurance_bound_bundle" in MIGRATION
     assert "video_canon_assurance_set_sha256" in MIGRATION
+    assert "reassign_video_canon_assurance" in MIGRATION
+    assert "supersession_reason_sha256" in MIGRATION
     assert MIGRATION.count("i2.canon_snapshot_sha256=i3.canon_snapshot_sha256") == 2
     assert "WORLD" not in MIGRATION
 

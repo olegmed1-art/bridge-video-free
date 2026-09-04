@@ -220,6 +220,9 @@ def test_hidden_deal_is_rejected_inside_innocuous_allowed_value(field, value):
     "North has the Q",
     "North holds the ace of spades",
     "North has ♠Q",
+    "North has the spade queen",
+    "partner has heart ten",
+    "North holds AS",
     "North has 10-12я",
     "North has 10+é",
 ])

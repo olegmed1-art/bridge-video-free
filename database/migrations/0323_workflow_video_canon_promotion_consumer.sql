@@ -65,13 +65,54 @@ CREATE TABLE bidding.video_canon_assurance_assignment (
   assigned_principal name NOT NULL,
   verifier_family text NOT NULL,
   verifier_version text NOT NULL,
+  status text NOT NULL DEFAULT 'active' CHECK (status IN ('active','superseded')),
+  superseded_at timestamptz,
+  supersession_reason_sha256 text CHECK (supersession_reason_sha256 IS NULL OR supersession_reason_sha256~'^[0-9a-f]{64}$'),
   assigned_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (video_canon_ai_verification_bundle_id,assurance_level),
-  UNIQUE (video_canon_ai_verification_bundle_id,assigned_principal)
+  CHECK ((status='superseded')=(superseded_at IS NOT NULL AND supersession_reason_sha256 IS NOT NULL))
 );
-CREATE TRIGGER video_canon_assurance_assignment_append_only
+CREATE UNIQUE INDEX video_canon_assurance_assignment_active_level_uq
+ON bidding.video_canon_assurance_assignment(video_canon_ai_verification_bundle_id,assurance_level)
+WHERE status='active';
+CREATE UNIQUE INDEX video_canon_assurance_assignment_active_principal_uq
+ON bidding.video_canon_assurance_assignment(video_canon_ai_verification_bundle_id,assigned_principal)
+WHERE status='active';
+
+CREATE OR REPLACE FUNCTION bidding.guard_video_canon_assurance_assignment()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,bidding AS $$
+DECLARE v_registry bidding.video_canon_assurance_verifier_registry%ROWTYPE;
+        v_bundle bidding.video_canon_ai_verification_bundle%ROWTYPE;
+BEGIN
+  IF TG_OP='DELETE' THEN
+    RAISE EXCEPTION 'VIDEO_CANON_ASSURANCE_ASSIGNMENT_IMMUTABLE' USING ERRCODE='55000';
+  END IF;
+  IF TG_OP='UPDATE' THEN
+    IF current_setting('bidding.assurance_reassignment',true)<>'on'
+       OR (to_jsonb(NEW)-ARRAY['status','superseded_at','supersession_reason_sha256']) IS DISTINCT FROM
+          (to_jsonb(OLD)-ARRAY['status','superseded_at','supersession_reason_sha256'])
+       OR OLD.status<>'active' OR NEW.status<>'superseded' THEN
+      RAISE EXCEPTION 'VIDEO_CANON_ASSURANCE_ASSIGNMENT_IMMUTABLE' USING ERRCODE='55000';
+    END IF;
+    RETURN NEW;
+  END IF;
+  SELECT * INTO v_registry FROM bidding.video_canon_assurance_verifier_registry
+   WHERE assurance_level=NEW.assurance_level;
+  SELECT * INTO v_bundle FROM bidding.video_canon_ai_verification_bundle
+   WHERE video_canon_ai_verification_bundle_id=NEW.video_canon_ai_verification_bundle_id;
+  IF NEW.status<>'active' OR v_bundle.video_canon_ai_verification_bundle_id IS NULL
+     OR NEW.school_id<>v_bundle.school_id OR NOT pg_has_role(NEW.assigned_principal,v_registry.capability_role,'member')
+     OR NEW.verifier_family IS DISTINCT FROM v_registry.verifier_family
+     OR NEW.verifier_version IS DISTINCT FROM v_registry.verifier_version THEN
+    RAISE EXCEPTION 'VIDEO_CANON_ASSURANCE_ASSIGNMENT_INVALID' USING ERRCODE='23514';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER video_canon_assurance_assignment_guard
 BEFORE UPDATE OR DELETE ON bidding.video_canon_assurance_assignment
-FOR EACH ROW EXECUTE FUNCTION bidding.reject_append_only_mutation();
+FOR EACH ROW EXECUTE FUNCTION bidding.guard_video_canon_assurance_assignment();
+CREATE TRIGGER video_canon_assurance_assignment_insert_guard
+BEFORE INSERT ON bidding.video_canon_assurance_assignment
+FOR EACH ROW EXECUTE FUNCTION bidding.guard_video_canon_assurance_assignment();
 
 CREATE VIEW bidding.video_canon_assurance_bound_bundle
 WITH (security_barrier=true) AS
@@ -82,7 +123,33 @@ SELECT b.video_canon_ai_verification_bundle_id,b.school_id,b.analysis_candidate_
   JOIN bidding.video_canon_assurance_assignment a
     ON a.video_canon_ai_verification_bundle_id=b.video_canon_ai_verification_bundle_id
    AND a.school_id=b.school_id
- WHERE a.assigned_principal=session_user::name;
+ WHERE a.assigned_principal=session_user::name AND a.status='active';
+
+CREATE OR REPLACE FUNCTION bidding.reassign_video_canon_assurance(
+  p_assignment_id uuid,p_new_principal name,p_reason_sha256 text
+) RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,bidding AS $$
+DECLARE v_old bidding.video_canon_assurance_assignment%ROWTYPE; v_new uuid;
+BEGIN
+  IF p_reason_sha256!~'^[0-9a-f]{64}$' THEN
+    RAISE EXCEPTION 'VIDEO_CANON_REASSIGNMENT_REASON_INVALID' USING ERRCODE='23514';
+  END IF;
+  SELECT * INTO v_old FROM bidding.video_canon_assurance_assignment
+   WHERE video_canon_assurance_assignment_id=p_assignment_id FOR UPDATE;
+  IF NOT FOUND OR v_old.status<>'active' THEN
+    RAISE EXCEPTION 'VIDEO_CANON_REASSIGNMENT_TARGET_INVALID' USING ERRCODE='23514';
+  END IF;
+  PERFORM set_config('bidding.assurance_reassignment','on',true);
+  UPDATE bidding.video_canon_assurance_assignment SET status='superseded',
+    superseded_at=clock_timestamp(),supersession_reason_sha256=p_reason_sha256
+   WHERE video_canon_assurance_assignment_id=p_assignment_id;
+  INSERT INTO bidding.video_canon_assurance_assignment(
+    school_id,video_canon_ai_verification_bundle_id,assurance_level,
+    assigned_principal,verifier_family,verifier_version
+  ) VALUES (v_old.school_id,v_old.video_canon_ai_verification_bundle_id,
+    v_old.assurance_level,p_new_principal,v_old.verifier_family,v_old.verifier_version)
+  RETURNING video_canon_assurance_assignment_id INTO v_new;
+  RETURN v_new;
+END $$;
 
 CREATE TABLE bidding.video_canon_assurance_verdict (
   video_canon_assurance_verdict_id uuid PRIMARY KEY DEFAULT uuidv7(),
@@ -113,7 +180,7 @@ CREATE TABLE bidding.video_canon_assurance_verdict (
   recorded_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE (
     analysis_candidate_id,candidate_payload_hash,verification_bundle_sha256,
-    assurance_level
+    assurance_level,execution_principal
   )
 );
 
@@ -139,7 +206,7 @@ BEGIN
     SELECT 1 FROM bidding.video_canon_assurance_assignment a
      WHERE a.video_canon_ai_verification_bundle_id=NEW.video_canon_ai_verification_bundle_id
        AND a.school_id=NEW.school_id AND a.assurance_level=NEW.assurance_level
-       AND a.assigned_principal=session_user::name
+       AND a.assigned_principal=session_user::name AND a.status='active'
        AND a.verifier_family=NEW.verifier_family
        AND a.verifier_version=NEW.verifier_version
   ) THEN
@@ -194,6 +261,11 @@ WITH rows AS (
     'deterministic',v.deterministic
   ) AS value,v.assurance_level
   FROM bidding.video_canon_assurance_verdict v
+  JOIN bidding.video_canon_assurance_assignment a
+    ON a.video_canon_ai_verification_bundle_id=v.video_canon_ai_verification_bundle_id
+   AND a.assurance_level=v.assurance_level
+   AND a.assigned_principal=v.execution_principal::name
+   AND a.status='active'
   WHERE v.analysis_candidate_id=p_analysis_candidate_id
     AND v.candidate_payload_hash=p_candidate_payload_hash
     AND v.verification_bundle_sha256=p_verification_bundle_sha256
@@ -300,6 +372,12 @@ BEGIN
      AND i3.verification_bundle_sha256=i2.verification_bundle_sha256
      AND i3.assurance_set_sha256=i2.assurance_set_sha256
      AND i3.assurance_level='I3'
+    JOIN bidding.video_canon_assurance_assignment a2
+      ON a2.video_canon_ai_verification_bundle_id=i2.video_canon_ai_verification_bundle_id
+     AND a2.assurance_level='I2' AND a2.assigned_principal=i2.execution_principal AND a2.status='active'
+    JOIN bidding.video_canon_assurance_assignment a3
+      ON a3.video_canon_ai_verification_bundle_id=i3.video_canon_ai_verification_bundle_id
+     AND a3.assurance_level='I3' AND a3.assigned_principal=i3.execution_principal AND a3.status='active'
     WHERE i2.analysis_candidate_id=p_analysis_candidate_id
       AND i2.candidate_payload_hash=v_candidate.payload_hash
       AND i2.verification_bundle_sha256=p_verification_bundle_sha256
@@ -429,6 +507,12 @@ BEGIN
      AND i3.verification_bundle_sha256=i2.verification_bundle_sha256
      AND i3.assurance_set_sha256=i2.assurance_set_sha256
      AND i3.assurance_level='I3'
+    JOIN bidding.video_canon_assurance_assignment a2
+      ON a2.video_canon_ai_verification_bundle_id=i2.video_canon_ai_verification_bundle_id
+     AND a2.assurance_level='I2' AND a2.assigned_principal=i2.execution_principal AND a2.status='active'
+    JOIN bidding.video_canon_assurance_assignment a3
+      ON a3.video_canon_ai_verification_bundle_id=i3.video_canon_ai_verification_bundle_id
+     AND a3.assurance_level='I3' AND a3.assigned_principal=i3.execution_principal AND a3.status='active'
     WHERE i2.analysis_candidate_id=v_job.analysis_candidate_id
       AND i2.candidate_payload_hash=v_job.candidate_payload_hash
       AND i2.verification_bundle_sha256=v_job.verification_bundle_sha256
@@ -542,6 +626,7 @@ REVOKE EXECUTE ON FUNCTION bidding.activate_ai_verified_video_canon(uuid,uuid,te
   FROM bridge_school_canon_promoter;
 REVOKE ALL ON FUNCTION bidding.validate_video_canon_assurance_verdict() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.video_canon_assurance_set_sha256(uuid,text,text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION bidding.reassign_video_canon_assurance(uuid,name,text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.enqueue_video_canon_promotion(uuid,uuid,text,text),
   bidding.claim_video_canon_promotion(integer),
   bidding.consume_video_canon_promotion(uuid,uuid,bigint),
@@ -553,6 +638,8 @@ GRANT SELECT ON bidding.video_canon_assurance_bound_bundle,
   bidding.video_canon_bound_candidate TO
   bridge_school_canon_i2_verifier,bridge_school_canon_i3_verifier;
 GRANT INSERT ON bidding.video_canon_assurance_assignment TO bridge_school_canon_verifier;
+GRANT EXECUTE ON FUNCTION bidding.reassign_video_canon_assurance(uuid,name,text)
+  TO bridge_school_canon_verifier;
 GRANT EXECUTE ON FUNCTION bidding.enqueue_video_canon_promotion(uuid,uuid,text,text)
   TO bridge_school_canon_verifier;
 GRANT EXECUTE ON FUNCTION bidding.video_canon_assurance_set_sha256(uuid,text,text)

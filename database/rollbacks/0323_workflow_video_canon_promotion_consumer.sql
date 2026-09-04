@@ -16,6 +16,7 @@ DROP FUNCTION IF EXISTS bidding.fail_video_canon_promotion(uuid,uuid,bigint,text
 DROP FUNCTION IF EXISTS bidding.consume_video_canon_promotion(uuid,uuid,bigint);
 DROP FUNCTION IF EXISTS bidding.claim_video_canon_promotion(integer);
 DROP FUNCTION IF EXISTS bidding.enqueue_video_canon_promotion(uuid,uuid,text,text);
+DROP FUNCTION IF EXISTS bidding.reassign_video_canon_assurance(uuid,name,text);
 DROP FUNCTION IF EXISTS bidding.video_canon_assurance_set_sha256(uuid,text,text);
 DROP TRIGGER IF EXISTS video_canon_promotion_delivery_receipt_append_only
   ON bidding.video_canon_promotion_delivery_receipt;
@@ -28,8 +29,11 @@ DROP TRIGGER IF EXISTS video_canon_assurance_verdict_guard
 DROP FUNCTION IF EXISTS bidding.validate_video_canon_assurance_verdict();
 DROP TABLE IF EXISTS bidding.video_canon_assurance_verdict;
 DROP VIEW IF EXISTS bidding.video_canon_assurance_bound_bundle;
-DROP TRIGGER IF EXISTS video_canon_assurance_assignment_append_only
+DROP TRIGGER IF EXISTS video_canon_assurance_assignment_guard
   ON bidding.video_canon_assurance_assignment;
+DROP TRIGGER IF EXISTS video_canon_assurance_assignment_insert_guard
+  ON bidding.video_canon_assurance_assignment;
+DROP FUNCTION IF EXISTS bidding.guard_video_canon_assurance_assignment();
 DROP TABLE IF EXISTS bidding.video_canon_assurance_assignment;
 DROP TRIGGER IF EXISTS video_canon_assurance_verifier_registry_append_only
   ON bidding.video_canon_assurance_verifier_registry;
