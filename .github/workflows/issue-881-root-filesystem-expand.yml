@@ -48,7 +48,11 @@ jobs:
       github.event.comment.user.login == 'olegmed1-art' &&
       github.event.comment.body == '/oracle-ops issue-881-expand-root-and-recover-bba508'
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    # The bounded OCI sequence permits up to 60 minutes each for backup and
+    # restore, plus 30 minutes each for launch and termination.  Keep the job
+    # timeout above that ceiling so GitHub does not kill the cleanup trap while
+    # OCI is still completing an otherwise valid operation.
+    timeout-minutes: 240
     env:
       ORACLE_HOST: 158.180.47.161
       ORACLE_USER: ubuntu
@@ -135,18 +139,88 @@ jobs:
           stamp="issue-881-${GITHUB_RUN_ID}"
           backup_id="" restored_id="" drill_instance_id="" drill_public_ip="" drill_started=""
           drill_vcn_id="" drill_ig_id="" drill_route_id="" drill_security_id="" drill_subnet_id=""
-          cleanup() {
-            set +e
-            if [[ -n "$drill_instance_id" ]]; then
-              oci compute instance terminate --instance-id "$drill_instance_id" --preserve-boot-volume false --force --wait-for-state TERMINATED --max-wait-seconds 1800 >/dev/null
-            elif [[ -n "$restored_id" ]]; then
-              oci bv boot-volume delete --boot-volume-id "$restored_id" --force >/dev/null
+          wait_absent() {
+            local resource="$1" id="$2" output
+            local -a command
+            for _ in $(seq 1 120); do
+              case "$resource" in
+                boot-volume) command=(oci bv boot-volume get --boot-volume-id "$id") ;;
+                subnet) command=(oci network subnet get --subnet-id "$id") ;;
+                security-list) command=(oci network security-list get --security-list-id "$id") ;;
+                route-table) command=(oci network route-table get --rt-id "$id") ;;
+                internet-gateway) command=(oci network internet-gateway get --ig-id "$id") ;;
+                vcn) command=(oci network vcn get --vcn-id "$id") ;;
+                *) return 2 ;;
+              esac
+              if output="$("${command[@]}" 2>&1)"; then
+                sleep 5
+                continue
+              fi
+              # Treat only OCI's explicit not-found response as deletion.
+              # Authentication, throttling and transport failures remain fatal.
+              if grep -Fq 'NotAuthorizedOrNotFound' <<<"$output" \
+                  && grep -Eq '"status"[[:space:]]*:[[:space:]]*404' <<<"$output"; then
+                return 0
+              fi
+              return 1
+            done
+            return 1
+          }
+          cleanup_temp_resources() {
+            local failed=0 state candidates
+            # If launch returned after creating the instance but before its JSON
+            # reached this runner, recover the OCID from the unique run stamp.
+            if [[ -z "$drill_instance_id" && -n "$drill_subnet_id" ]]; then
+              candidates="$(oci compute instance list --compartment-id "$tenancy_id" --display-name "$stamp-boot-acceptance" --all --output json 2>/dev/null || true)"
+              drill_instance_id="$(printf '%s' "$candidates" | python -c 'import json,sys; xs=[x["id"] for x in json.load(sys.stdin).get("data",[]) if x.get("lifecycle-state") not in {"TERMINATED","TERMINATING"}]; assert len(xs)<=1; print(xs[0] if xs else "")' 2>/dev/null || true)"
             fi
-            [[ -z "$drill_subnet_id" ]] || oci network subnet delete --subnet-id "$drill_subnet_id" --force >/dev/null
-            [[ -z "$drill_security_id" ]] || oci network security-list delete --security-list-id "$drill_security_id" --force >/dev/null
-            [[ -z "$drill_route_id" ]] || oci network route-table delete --rt-id "$drill_route_id" --force >/dev/null
-            [[ -z "$drill_ig_id" ]] || oci network internet-gateway delete --ig-id "$drill_ig_id" --force >/dev/null
-            [[ -z "$drill_vcn_id" ]] || oci network vcn delete --vcn-id "$drill_vcn_id" --force >/dev/null
+            if [[ -n "$drill_instance_id" ]]; then
+              oci compute instance terminate --instance-id "$drill_instance_id" --preserve-boot-volume false --force >/dev/null 2>&1 || true
+              state=""
+              for _ in $(seq 1 360); do
+                state="$(oci compute instance get --instance-id "$drill_instance_id" --query 'data."lifecycle-state"' --raw-output 2>/dev/null || printf UNKNOWN)"
+                [[ "$state" == TERMINATED ]] && break
+                sleep 5
+              done
+              [[ "$state" == TERMINATED ]] || failed=1
+            fi
+            if [[ -n "$restored_id" ]]; then
+              oci bv boot-volume delete --boot-volume-id "$restored_id" --force >/dev/null 2>&1 || true
+              wait_absent boot-volume "$restored_id" || failed=1
+            fi
+            if [[ -n "$drill_subnet_id" ]]; then
+              oci network subnet delete --subnet-id "$drill_subnet_id" --force >/dev/null 2>&1 || true
+              wait_absent subnet "$drill_subnet_id" || failed=1
+            fi
+            if [[ -n "$drill_security_id" ]]; then
+              oci network security-list delete --security-list-id "$drill_security_id" --force >/dev/null 2>&1 || true
+              wait_absent security-list "$drill_security_id" || failed=1
+            fi
+            if [[ -n "$drill_route_id" ]]; then
+              oci network route-table delete --rt-id "$drill_route_id" --force >/dev/null 2>&1 || true
+              wait_absent route-table "$drill_route_id" || failed=1
+            fi
+            if [[ -n "$drill_ig_id" ]]; then
+              oci network internet-gateway delete --ig-id "$drill_ig_id" --force >/dev/null 2>&1 || true
+              wait_absent internet-gateway "$drill_ig_id" || failed=1
+            fi
+            if [[ -n "$drill_vcn_id" ]]; then
+              oci network vcn delete --vcn-id "$drill_vcn_id" --force >/dev/null 2>&1 || true
+              wait_absent vcn "$drill_vcn_id" || failed=1
+            fi
+            return "$failed"
+          }
+          cleanup() {
+            local rc=$? cleanup_rc=0
+            trap - EXIT
+            set +e
+            cleanup_temp_resources
+            cleanup_rc=$?
+            if (( cleanup_rc != 0 )); then
+              echo 'UV_ROOT_TEMP_CLEANUP_INCOMPLETE' >&2
+              (( rc != 0 )) || rc=90
+            fi
+            exit "$rc"
           }
           trap cleanup EXIT
           backup="$(oci bv boot-volume-backup create --boot-volume-id "$boot_id" --type FULL --display-name "$stamp-full" --wait-for-state AVAILABLE --max-wait-seconds 3600 --output json)"
@@ -175,8 +249,9 @@ jobs:
           ingress="[{\"protocol\":\"6\",\"source\":\"$runner_ip/32\",\"sourceType\":\"CIDR_BLOCK\",\"isStateless\":false,\"tcpOptions\":{\"destinationPortRange\":{\"min\":22,\"max\":22}}}]"
           drill_security_id="$(oci network security-list create --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --display-name "$stamp-ssh-only" --egress-security-rules '[]' --ingress-security-rules "$ingress" --wait-for-state AVAILABLE --query 'data.id' --raw-output)"
           drill_subnet_id="$(oci network subnet create --availability-domain "$ad" --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --cidr-block 10.254.0.0/28 --display-name "$stamp-subnet" --route-table-id "$drill_route_id" --security-list-ids "[\"$drill_security_id\"]" --prohibit-public-ip-on-vnic false --wait-for-state AVAILABLE --query 'data.id' --raw-output)"
-          launch="$(oci compute instance launch --availability-domain "$ad" --compartment-id "$tenancy_id" --subnet-id "$drill_subnet_id" --shape "$shape" --shape-config "$shape_config" --display-name "$stamp-boot-acceptance" --source-details "{\"sourceType\":\"bootVolume\",\"bootVolumeId\":\"$restored_id\"}" --assign-public-ip true --wait-for-state RUNNING --max-wait-seconds 1800 --output json)"
+          launch="$(oci compute instance launch --availability-domain "$ad" --compartment-id "$tenancy_id" --subnet-id "$drill_subnet_id" --shape "$shape" --shape-config "$shape_config" --display-name "$stamp-boot-acceptance" --source-details "{\"sourceType\":\"bootVolume\",\"bootVolumeId\":\"$restored_id\"}" --assign-public-ip true --output json)"
           drill_instance_id="$(printf '%s' "$launch" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
+          oci compute instance get --instance-id "$drill_instance_id" --wait-for-state RUNNING --max-wait-seconds 1800 >/dev/null
           drill_started="$(date -u +%s)"
           drill_vnic_id="$(oci compute vnic-attachment list --compartment-id "$tenancy_id" --instance-id "$drill_instance_id" --all --query 'data[?"lifecycle-state"==`ATTACHED`]."vnic-id" | [0]' --raw-output)"
           drill_public_ip="$(oci network vnic get --vnic-id "$drill_vnic_id" --query 'data."public-ip"' --raw-output)"
@@ -191,22 +266,10 @@ jobs:
           printf '%s\n' "$SSH_KEY_ORACLE" > "$key"; chmod 0600 "$key"; ssh-keygen -y -f "$key" >/dev/null
           acceptance="$(ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "$ORACLE_USER@$drill_public_ip" 'set -e; test -r /etc/os-release; findmnt -n -o SOURCE,FSTYPE /; test "$(findmnt -n -o OPTIONS /)" != ""; test -r /var/lib/bridge-school; echo UV_RESTORED_ROOT_BOOT_ACCEPTANCE_PASS')"
           grep -Fq UV_RESTORED_ROOT_BOOT_ACCEPTANCE_PASS <<<"$acceptance"
-          oci compute instance terminate --instance-id "$drill_instance_id" --preserve-boot-volume false --force --wait-for-state TERMINATED --max-wait-seconds 1800 >/dev/null
           drill_seconds="$(( $(date -u +%s) - drill_started ))"
-          drill_instance_id=""
-          for _ in $(seq 1 60); do
-            state="$(oci bv boot-volume get --boot-volume-id "$restored_id" --query 'data."lifecycle-state"' --raw-output 2>/dev/null || true)"
-            [[ -z "$state" || "$state" == TERMINATED ]] && break
-            sleep 5
-          done
-          state="$(oci bv boot-volume get --boot-volume-id "$restored_id" --query 'data."lifecycle-state"' --raw-output 2>/dev/null || true)"
-          [[ -z "$state" || "$state" == TERMINATED ]] || exit 33
-          restored_id=""
-          oci network subnet delete --subnet-id "$drill_subnet_id" --force >/dev/null; drill_subnet_id=""
-          oci network security-list delete --security-list-id "$drill_security_id" --force >/dev/null; drill_security_id=""
-          oci network route-table delete --rt-id "$drill_route_id" --force >/dev/null; drill_route_id=""
-          oci network internet-gateway delete --ig-id "$drill_ig_id" --force >/dev/null; drill_ig_id=""
-          oci network vcn delete --vcn-id "$drill_vcn_id" --force >/dev/null; drill_vcn_id=""
+          cleanup_temp_resources
+          drill_instance_id=""; restored_id=""; drill_subnet_id=""; drill_security_id=""
+          drill_route_id=""; drill_ig_id=""; drill_vcn_id=""
           trap - EXIT
           echo "backup_id=$backup_id" >> "$GITHUB_OUTPUT"
           echo "source_boot_id=$boot_id" >> "$GITHUB_OUTPUT"
