@@ -73,6 +73,7 @@ jobs:
       OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
       GH_TOKEN: ${{ github.token }}
+      RECOVERY_COMMAND: /oracle-ops issue-881-expand-root-and-recover-bba508
       CLEANUP_ONLY_COMMAND: /oracle-ops issue-881-reconcile-run-33914733788
       OWNER_COMMAND: ${{ github.event.comment.body }}
     steps:
@@ -117,6 +118,14 @@ jobs:
           cleanup_deadline="$CLEANUP_DEADLINE"
           [[ "$primary_deadline" =~ ^[0-9]+$ && "$cleanup_deadline" =~ ^[0-9]+$ ]]
           (( cleanup_deadline > primary_deadline ))
+          # GitHub expression string comparisons are case-insensitive. Enforce
+          # an exact, case-sensitive allowlist in Bash before reading OCI
+          # credentials or issuing any cloud/host request, so a case variant
+          # can never fall through from cleanup-only into full recovery.
+          if [[ "$OWNER_COMMAND" != "$RECOVERY_COMMAND" && "$OWNER_COMMAND" != "$CLEANUP_ONLY_COMMAND" ]]; then
+            echo 'UV_ROOT_OWNER_COMMAND_REJECTED non_exact_command=true' >&2
+            exit 23
+          fi
           monotonic_now() { awk '{print int($1)}' /proc/uptime; }
           bounded_wait_seconds() {
             local requested="$1" absolute_deadline="$2" now remaining

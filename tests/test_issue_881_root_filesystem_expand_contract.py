@@ -41,6 +41,30 @@ def test_workflow_is_exact_host_one_shot_and_pinned() -> None:
     assert '"/oracle-ops issue-881-reconcile-run-33914733788"' in WORKFLOW
 
 
+def test_owner_command_is_case_sensitive_before_any_oci_or_host_access() -> None:
+    block = WORKFLOW[
+        WORKFLOW.index("Create fresh full backup and prove isolated restored-root boot acceptance") :
+        WORKFLOW.index("monotonic_now() { awk")
+    ]
+    assert '[[ "$OWNER_COMMAND" != "$RECOVERY_COMMAND" && "$OWNER_COMMAND" != "$CLEANUP_ONLY_COMMAND" ]]' in block
+    assert "UV_ROOT_OWNER_COMMAND_REJECTED" in block
+    gate = r'''
+RECOVERY_COMMAND=/oracle-ops\ issue-881-expand-root-and-recover-bba508
+CLEANUP_ONLY_COMMAND=/oracle-ops\ issue-881-reconcile-run-33914733788
+if [[ "$OWNER_COMMAND" != "$RECOVERY_COMMAND" && "$OWNER_COMMAND" != "$CLEANUP_ONLY_COMMAND" ]]; then exit 23; fi
+'''
+    for command, expected_rc in (
+        ("/oracle-ops issue-881-expand-root-and-recover-bba508", 0),
+        ("/oracle-ops issue-881-reconcile-run-33914733788", 0),
+        ("/ORACLE-OPS issue-881-reconcile-run-33914733788", 23),
+        ("/oracle-ops issue-881-reconcile-run-33914733788 ", 23),
+    ):
+        result = subprocess.run(["bash", "-c", gate], env=os.environ | {"OWNER_COMMAND": command})
+        assert result.returncode == expected_rc
+    assert WORKFLOW.index("UV_ROOT_OWNER_COMMAND_REJECTED") < WORKFLOW.index("for value in OCI_USER")
+    assert WORKFLOW.index("UV_ROOT_OWNER_COMMAND_REJECTED") < WORKFLOW.index("oci_json_request oci iam")
+
+
 def test_postconditions_and_only_allowed_service_restart() -> None:
     assert "lsblk -f" in SCRIPT
     assert "findmnt /" in SCRIPT
