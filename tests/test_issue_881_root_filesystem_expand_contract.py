@@ -102,7 +102,7 @@ def test_fresh_full_backup_and_isolated_boot_acceptance_gate_mutation() -> None:
 
 
 def test_temporary_restore_cleanup_waits_for_dependency_deletion() -> None:
-    cleanup = WORKFLOW[WORKFLOW.index("cleanup_temp_resources()") :]
+    cleanup = WORKFLOW[WORKFLOW.index("wait_absent()") :]
     assert "wait_absent boot-volume" in cleanup
     assert "wait_absent subnet" in cleanup
     assert "wait_absent security-list" in cleanup
