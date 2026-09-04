@@ -194,7 +194,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "[SHDC][[:space:]]*:?[[:space:]]*",
         "{1,3}($|[^[:alnum:]])",
         "{2,13})($|[^[:alnum:]])",
-        "(?:10|[AKQJT]|",
+        "(?:10|[AKQJTX]|",
         "(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)",
         "(?:^|[^[:alnum:]_])(?:рука|карты)",
         "?[2-9]($|[[:space:],./;])",
@@ -217,11 +217,17 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         assert marker in MIGRATION
 
     assert "У партнёра туз пик" in DATABASE_TEST
+    assert "Partner has AKQx.Txx.xxx.xxx" in DATABASE_TEST
+    assert "У партнёра есть туз" in DATABASE_TEST
+    assert "У партнёра A♠" in DATABASE_TEST
+    assert '"partnerDeal":"AKQ"' in DATABASE_TEST
+    assert '"north/deal":"AKQ"' in DATABASE_TEST
 
     assert "'hidden_cards','hidden_hand','hidden_hands'" in MIGRATION
     assert "'concealed_hand','concealed_hands'" in MIGRATION
     assert "'hidden_deal','hidden_deals','concealed_deal','concealed_deals'" in MIGRATION
     assert "'^(hidden|concealed)(hand|holding|cards?|deals?)+(s)?$'" in MIGRATION
+    assert "(hand|holding|cards?|deals?)+(s)?$" in MIGRATION
 
 
 def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():

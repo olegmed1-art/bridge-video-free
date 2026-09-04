@@ -118,6 +118,10 @@ BEGIN
        '{"nested":{"hidden_deal":"AKQ.JT9.876.5432"}}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_key(
        '{"concealed-deals":"AKQ.JT9.876.5432"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_key(
+       '{"partnerDeal":"AKQ"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_key(
+       '{"nested":{"north/deal":"AKQ"}}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North has the Q"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
@@ -202,6 +206,14 @@ BEGIN
        '{"notes":"У соперника есть король червей"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"Партнер имеет пикового туза"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"Partner has AKQx.Txx.xxx.xxx"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"У партнёра есть туз"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"Партнёр держит туза"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"У партнёра A♠"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N:AKQJ109.876.54.32"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(

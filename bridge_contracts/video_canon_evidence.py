@@ -36,8 +36,8 @@ _FORBIDDEN_KEYS = {
     "concealed_card", "concealed_cards", "hidden_deal", "hidden_deals",
     "concealed_deal", "concealed_deals",
 }
-_SUIT_PATTERN = r"(?:-|(?:(?:10)|[AKQJT2-9]){0,13})"
-_NONEMPTY_SUIT_PATTERN = r"(?:-|(?:(?:10)|[AKQJT2-9]){1,13})"
+_SUIT_PATTERN = r"(?:-|(?:(?:10)|[AKQJT2-9X]){0,13})"
+_NONEMPTY_SUIT_PATTERN = r"(?:-|(?:(?:10)|[AKQJT2-9X]){1,13})"
 _HAND_PATTERN = (
     _SUIT_PATTERN + r"\." + _SUIT_PATTERN + r"\."
     + _SUIT_PATTERN + r"\." + _SUIT_PATTERN
@@ -104,26 +104,28 @@ _RUSSIAN_HIDDEN_POSSESSION = re.compile(
     r"(?:(?<!\w)у\s+(?:партн[её]ра|соперника|оппонента)|"
     r"(?<!\w)(?:партн[её]р|соперник|оппонент)\s+(?:имеет|держит))\s+"
     r"(?:(?:есть|был[аио]?|имел[аио]?)\s+)?(?:"
-    r"(?:туз|корол[ья]|дам[ауы]?|валет[а]?|десятк[аиу]?|10|[AKQJT2-9])\s+"
-    r"(?:пик|черв(?:ей|и|а)?|буб(?:ен|ны|на)?|треф(?:ы|а)?)|"
+    r"(?:туз\w*|корол\w*|дам\w*|валет\w*|десятк\w*|10|[AKQJT2-9X])"
+    r"(?:\s+(?:пик|черв(?:ей|и|а)?|буб(?:ен|ны|на)?|треф(?:ы|а)?))?|"
     r"(?:пиков\w*|червов\w*|бубнов\w*|трефов\w*)\s+"
-    r"(?:туз\w*|корол\w*|дам\w*|валет\w*|десятк\w*))\b",
+    r"(?:туз\w*|корол\w*|дам\w*|валет\w*|десятк\w*)|"
+    r"(?:10|[AKQJT2-9X])\s*[SHDC]\s*:?|"
+    r"[SHDC]\s*:?\s*(?:10|[AKQJT2-9X]))(?=$|[^\w])",
     re.IGNORECASE,
 )
 _LEADING_HOLDING_CARD_GROUP = re.compile(
     r"^\s*(?:[:,;=\-]\s*)?(?:(?:the|a|an)\s+)?(?:"
     r"(?:ace|king|queen|jack|ten)(?:\s+of\s+(?:spades?|hearts?|diamonds?|clubs?))?"
-    r"|(?:spades?|hearts?|diamonds?|clubs?)\s+(?:ace|king|queen|jack|ten|10|[AKQJT2-9])"
-    r"|[SHDC]\s*:?\s*(?:10|[AKQJT2-9])|(?:10|[AKQJT2-9])\s*[SHDC]|10|[AKQJT2-9]|[kqjt]|"
-    r"(?:(?:10)|[AKQJT2-9akqjt]){2,13})(?:$|[^A-Za-z0-9])",
+    r"|(?:spades?|hearts?|diamonds?|clubs?)\s+(?:ace|king|queen|jack|ten|10|[AKQJT2-9X])"
+    r"|[SHDC]\s*:?\s*(?:10|[AKQJT2-9X])|(?:10|[AKQJT2-9X])\s*[SHDC]|10|[AKQJT2-9X]|[kqjtx]|"
+    r"(?:(?:10)|[AKQJT2-9Xakqjtx]){2,13})(?:$|[^A-Za-z0-9])",
     re.IGNORECASE,
 )
 _EXPLICIT_SUIT_LABEL = re.compile(
     r"(?<![A-Za-z0-9_])(?P<suit>[SHDC])\s*:", re.IGNORECASE
 )
 _SINGLE_SUIT_CARD_GROUP = re.compile(
-    r"(?<![A-Za-z0-9])(?P<cards>10|[AKQJT]|[kqjt]|"
-    r"(?:(?:10)|[AKQJT2-9akqjt]){2,13})(?![A-Za-z0-9])"
+    r"(?<![A-Za-z0-9])(?P<cards>10|[AKQJTX]|[kqjtx]|"
+    r"(?:(?:10)|[AKQJT2-9Xakqjtx]){2,13})(?![A-Za-z0-9])"
 )
 _LEADING_SINGLE_DIGIT_CARD = re.compile(
     r"^\s*(?:(?:was|is)\s+|[:,;=\-]\s*)?[2-9](?:$|[\s,./;])",
@@ -143,8 +145,8 @@ _LEADING_NUMERIC_RANGE = re.compile(
     re.IGNORECASE,
 )
 _PARTIAL_SEPARATED_HAND = re.compile(
-    r"(?<![A-Za-z0-9])(?:-|(?:(?:10)|[AKQJT2-9]){1,13})"
-    r"(?:[\s,/.]+(?:-|(?:(?:10)|[AKQJT2-9]){1,13})){1,3}"
+    r"(?<![A-Za-z0-9])(?:-|(?:(?:10)|[AKQJT2-9X]){1,13})"
+    r"(?:[\s,/.]+(?:-|(?:(?:10)|[AKQJT2-9X]){1,13})){1,3}"
     r"(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
@@ -207,7 +209,7 @@ def _has_forbidden_key(value: Any) -> bool:
             str(key).casefold() in _FORBIDDEN_KEYS
             or re.fullmatch(
                 r"(?:actual)?(?:partner|opponent|north|east|south|west)s?"
-                r"(?:hand|holding|cards?)+s?",
+                r"(?:hand|holding|cards?|deals?)+s?",
                 re.sub(r"[^a-z0-9]", "", str(key).casefold()),
             ) is not None
             or re.fullmatch(
@@ -230,7 +232,7 @@ def _is_complete_hand_shape(hand: str) -> bool:
     for suit in suits:
         if suit == "-":
             suit = ""
-        elif "-" in suit or len(set(suit)) != len(suit):
+        elif "-" in suit or len(set(suit.replace("X", ""))) != len(suit.replace("X", "")):
             return False
         cards += len(suit)
     return cards == 13

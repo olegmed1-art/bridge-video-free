@@ -127,6 +127,8 @@ def test_world_video_can_never_be_review_eligible_for_school_canon():
     (lambda a: a["normalized_rule"].update(**{"partner's_hand": "AKQ.JT9.876.5432"}), "hidden information"),
     (lambda a: a["normalized_rule"].update(partners_hand="AKQ.JT9.876.5432"), "hidden information"),
     (lambda a: a["normalized_rule"].update(**{"opponents-cards": "AKQ.JT9.876.5432"}), "hidden information"),
+    (lambda a: a["normalized_rule"].update(**{"partnerDeal": "AKQ"}), "hidden information"),
+    (lambda a: a["normalized_rule"].update(**{"north/deal": "AKQ"}), "hidden information"),
     (lambda a: a["normalized_rule"].update(hidden_hand="AKQ.JT9.876.5432"), "hidden information"),
     (lambda a: a["normalized_rule"].update(**{"concealed-holdings": "AKQ.JT9.876.5432"}), "hidden information"),
     (lambda a: a["normalized_rule"].update(hidden_deal="AKQ.JT9.876.5432"), "hidden information"),
@@ -264,6 +266,10 @@ def test_hidden_deal_is_rejected_inside_innocuous_allowed_value(field, value):
     "У соперника есть король червей",
     "Партнер имеет пикового туза",
     "Оппонент держит даму треф",
+    "Partner has AKQx.Txx.xxx.xxx",
+    "У партнёра есть туз",
+    "Партнёр держит туза",
+    "У партнёра A♠",
 ])
 def test_hidden_deal_is_rejected_in_source_bound_teacher_statement(statement):
     learning = _learning()
