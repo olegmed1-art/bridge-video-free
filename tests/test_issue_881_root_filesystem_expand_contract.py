@@ -828,6 +828,145 @@ tenancy_id=tenancy; boot_id=boot; ad=ad; drill_vcn_id=vcn
         assert "rc=94" in cardinality.stdout
 
 
+def test_instance_rediscovery_uses_broad_inventory_and_strict_client_identity() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        tmp_path = Path(temp_dir)
+        oci_start = WORKFLOW.index("oci_json_request() {")
+        oci_end = WORKFLOW.index("# END OCI_JSON_REQUEST_HELPER", oci_start)
+        diagnostics_start = WORKFLOW.index("oci_response_shape() {")
+        diagnostics_end = WORKFLOW.index("mark_phase() {", diagnostics_start)
+        discovery_start = WORKFLOW.index("discover_named_id() {")
+        discovery_end = WORKFLOW.index("wait_absent()", discovery_start)
+        helpers = (
+            textwrap.dedent("          " + WORKFLOW[oci_start:oci_end])
+            + textwrap.dedent("          " + WORKFLOW[diagnostics_start:diagnostics_end])
+            + textwrap.dedent("          " + WORKFLOW[discovery_start:discovery_end])
+        )
+        fake_oci = tmp_path / "oci"
+        fake_oci.write_text(
+            """#!/usr/bin/env bash
+printf '%s\\n' "$*" > "$RUNNER_TEMP/instance-list.args"
+case "$FAKE_MODE" in
+  exact)
+    echo '{"data":[{"id":"near","display-name":"expected-name-extra","compartment-id":"tenancy","availability-domain":"ad","lifecycle-state":"RUNNING"},{"id":"exact-id","display-name":"expected-name","compartment-id":"tenancy","availability-domain":"ad","lifecycle-state":"PROVISIONING"}]}' ;;
+  wrong_compartment)
+    echo '{"data":[{"id":"wrong","display-name":"expected-name","compartment-id":"other","availability-domain":"ad","lifecycle-state":"RUNNING"}]}' ;;
+  wrong_ad)
+    echo '{"data":[{"id":"wrong","display-name":"expected-name","compartment-id":"tenancy","availability-domain":"other-ad","lifecycle-state":"RUNNING"}]}' ;;
+esac
+"""
+        )
+        fake_oci.chmod(0o755)
+        script = "set -e\n" + helpers + r'''
+state_set() { printf 'state:%s=%s\n' "$1" "$2" >&2; }
+bounded_wait_seconds() { [[ "${BUDGET_MODE:-ok}" == fail ]] && return 42; printf '%s\n' "$1"; }
+primary_deadline=999999999; tenancy_id=tenancy; boot_id=boot; ad=ad; drill_vcn_id=vcn
+if id="$(discover_named_id instance expected-name 2)"; then rc=0; else rc=$?; fi
+printf 'rc=%s id=%s\n' "$rc" "$id"
+'''
+
+        def run(mode: str, budget_mode: str = "ok") -> subprocess.CompletedProcess[str]:
+            env = os.environ | {
+                "RUNNER_TEMP": str(tmp_path),
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "FAKE_MODE": mode,
+                "BUDGET_MODE": budget_mode,
+                "OCI_JSON_RETRY_DELAY_SECONDS": "0",
+            }
+            return subprocess.run(
+                ["bash", "-c", script], env=env, text=True, capture_output=True, timeout=5, check=True
+            )
+
+        exact = run("exact")
+        assert "rc=0 id=exact-id" in exact.stdout
+        args = (tmp_path / "instance-list.args").read_text()
+        assert "compute instance list" in args
+        assert "--display-name" not in args
+        for mode in ("wrong_compartment", "wrong_ad"):
+            invalid = run(mode)
+            assert "rc=45 id=" in invalid.stdout
+            assert "state:instance_discovery_status=INVALID_RESPONSE" in invalid.stderr
+        budget = run("exact", "fail")
+        assert "rc=42 id=" in budget.stdout
+        assert "state:instance_discovery_status=BUDGET_EXHAUSTED" in budget.stderr
+        assert "state:instance_discovery_failure_rc=42" in budget.stderr
+        assert "state:instance_discovery_stderr_class=BUDGET_EXHAUSTED" in budget.stderr
+        # A discovered instance is not trusted for SSH until the exact restored
+        # boot volume is proven by the scoped attachment inventory.
+        assert 'EXPECTED_INSTANCE_ID="$drill_instance_id" EXPECTED_BOOT_ID="$restored_id"' in WORKFLOW
+        assert 'x.get("boot-volume-id")==os.environ["EXPECTED_BOOT_ID"]' in WORKFLOW
+
+
+def test_oci_diagnostics_are_sanitized_and_classify_capacity_and_quota() -> None:
+    start = WORKFLOW.index("oci_response_shape() {")
+    end = WORKFLOW.index("mark_phase() {", start)
+    # The slice begins after YAML block indentation; pad its first line before
+    # dedenting so the embedded Python receives the same indentation as Actions.
+    helpers = textwrap.dedent("          " + WORKFLOW[start:end])
+    script = helpers + r'''
+state_set() { printf '%s=%s\n' "$1" "$2"; }
+OCI_JSON_OUTPUT="$TEST_STDOUT"
+OCI_JSON_RAW_ERROR="$TEST_STDERR"
+record_oci_diagnostic instance_create "$TEST_RC"
+'''
+
+    def run(stderr: str, rc: int = 1, stdout: str = "") -> str:
+        result = subprocess.run(
+            ["bash", "-c", script],
+            env=os.environ | {"TEST_STDERR": stderr, "TEST_STDOUT": stdout, "TEST_RC": str(rc)},
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        return result.stdout
+
+    capacity = run("ServiceError: Out of capacity for shape VM.Standard.E5.Flex SECRET_TOKEN")
+    assert "instance_create_stderr_class=CAPACITY_UNAVAILABLE" in capacity
+    assert "SECRET_TOKEN" not in capacity
+    quota = run('{"code":"LimitExceeded","message":"Service limit reached","status":400}')
+    assert "instance_create_stderr_class=QUOTA_OR_SERVICE_LIMIT" in quota
+    assert "instance_create_stdout_shape=EMPTY" in quota
+    timeout = run("", 124, '{"data":{}}')
+    assert "instance_create_stderr_class=REQUEST_TIMEOUT" in timeout
+    assert "instance_create_stdout_shape=JSON_OBJECT" in timeout
+    warning = run("benign CLI warning", 0, '{"data":{}}')
+    assert "instance_create_stderr_class=NONE" in warning
+    assert "OCI_JSON_RAW_ERROR=\"$OCI_JSON_ERROR\"" in WORKFLOW
+    receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
+    assert "isolated instance create diagnostic" in receipt
+    assert "isolated instance launch discovery" in receipt
+    assert "instance_launch_discovery_stderr_class" in receipt
+    assert 'discover_named_id instance "$stamp-boot-acceptance" 90 "$primary_deadline" instance_launch_discovery' in WORKFLOW
+
+
+def test_oci_helper_clears_diagnostics_before_budget_failure() -> None:
+    start = WORKFLOW.index("oci_json_request() {")
+    end = WORKFLOW.index("# END OCI_JSON_REQUEST_HELPER", start)
+    helper = textwrap.dedent("          " + WORKFLOW[start:end])
+    script = helper + r'''
+bounded_wait_seconds() { return 42; }
+primary_deadline=0
+OCI_JSON_OUTPUT=STALE_STDOUT
+OCI_JSON_ERROR=STALE_ERROR
+OCI_JSON_RAW_ERROR=STALE_SECRET
+if oci_json_request should-not-run; then rc=0; else rc=$?; fi
+printf 'rc=%s stdout=%s error=%s raw=%s\n' "$rc" "$OCI_JSON_OUTPUT" "$OCI_JSON_ERROR" "$OCI_JSON_RAW_ERROR"
+'''
+    result = subprocess.run(["bash", "-c", script], text=True, capture_output=True, check=True)
+    assert result.stdout.strip() == "rc=42 stdout= error= raw="
+    assert "STALE_SECRET" not in result.stdout
+    diagnostics_start = WORKFLOW.index("oci_response_shape() {")
+    diagnostics_end = WORKFLOW.index("mark_phase() {", diagnostics_start)
+    diagnostics = textwrap.dedent("          " + WORKFLOW[diagnostics_start:diagnostics_end])
+    classified = subprocess.run(
+        ["bash", "-c", diagnostics + "printf '' | oci_error_class 42"],
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert classified.stdout.strip() == "BUDGET_EXHAUSTED"
+
+
 def test_vnic_attachment_and_public_ip_retry_only_request_timeouts() -> None:
     with tempfile.TemporaryDirectory() as temp_dir:
         tmp_path = Path(temp_dir)
