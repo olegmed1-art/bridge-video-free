@@ -206,10 +206,15 @@ def test_hidden_deal_is_rejected_inside_innocuous_allowed_value(field, value):
     "partner holds AKQJ",
     "N held 2",
     "North is holding Q",
+    "North is currently holding Q",
     "partner was holding AKQJ",
+    "partner was apparently still holding AKQJ",
     "North's holding Q",
+    "North's still holding Q",
     "partner’s holding AKQJ",
+    "partner’s currently holding AKQJ",
     "N's holding Q",
+    "N’s now holding Q",
 ])
 def test_hidden_deal_is_rejected_in_source_bound_teacher_statement(statement):
     learning = _learning()
@@ -281,7 +286,11 @@ def test_labelled_hand_prose_without_four_suit_encoding_is_not_a_false_positive(
     "North has 10-12 points",
     "North has 10 to 12 points",
     "North has 10+ points",
+    "North has 10-12",
+    "North has 10 to 12",
+    "North has 10+",
     "North's holding 10-12 points",
+    "North's still holding 10-12",
     "North's hand was 10 points",
     "North's hand was 10-12 points",
     "North held the view that Q is conventional",

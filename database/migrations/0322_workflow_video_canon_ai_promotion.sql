@@ -317,13 +317,13 @@ SELECT EXISTS (
                   matched.parts[1] ~
                     E'(^|[^[:alnum:]])(?:10|[AKQJT]|[kqjt]|(?:(?:10)|[AKQJT2-9akqjt]){2,13})($|[^[:alnum:]])'
                   AND matched.parts[1] !~*
-                    E'^[[:space:]]*(?:(?:was|is)[[:space:]]+|[:,;=\\-][[:space:]]*)?(?:10|[2-9])[[:space:]]*(?:(?:(?:[-–—]|to)[[:space:]]*[0-9]{1,2}|[+])[[:space:]]*)?(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*)'
+                    E'^[[:space:]]*(?:(?:was|is)[[:space:]]+|[:,;=\\-][[:space:]]*)?(?:10|[2-9])[[:space:]]*(?:(?:(?:[-–—]|to)[[:space:]]*[0-9]{1,2}|[+])[[:space:]]*(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*)?|(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*))($|[^[:alnum:]_])'
                 )
              OR (
                   matched.parts[1] ~*
                     E'^[[:space:]]*(?:(?:was|is)[[:space:]]+|[:,;=\\-][[:space:]]*)?[2-9]($|[[:space:],./;])'
                   AND matched.parts[1] !~*
-                    E'^[[:space:]]*(?:(?:was|is)[[:space:]]+|[:,;=\\-][[:space:]]*)?(?:10|[2-9])[[:space:]]*(?:(?:(?:[-–—]|to)[[:space:]]*[0-9]{1,2}|[+])[[:space:]]*)?(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*)'
+                    E'^[[:space:]]*(?:(?:was|is)[[:space:]]+|[:,;=\\-][[:space:]]*)?(?:10|[2-9])[[:space:]]*(?:(?:(?:[-–—]|to)[[:space:]]*[0-9]{1,2}|[+])[[:space:]]*(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*)?|(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*))($|[^[:alnum:]_])'
                 )
              OR matched.parts[1] ~*
                   E'(^|[^[:alnum:]])(-|(?:(?:10)|[AKQJT2-9]){1,13})([[:space:],/.]+(-|(?:(?:10)|[AKQJT2-9]){1,13})){1,3}($|[^[:alnum:]])'
@@ -364,13 +364,13 @@ SELECT EXISTS (
          SELECT 1
            FROM regexp_matches(
              w.value#>>'{}',
-             E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])(?:(?:[[:space:]]+(?:(?:held|holds?|has|had)|(?:is|was)[[:space:]]+holding))|(?:[''’]s[[:space:]]+holding))[[:space:]]+([^;]*)',
+             E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])(?:(?:[[:space:]]+(?:(?:held|holds?|has|had)|(?:is|was)[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding))|(?:[''’]s[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding))[[:space:]]+([^;]*)',
              'gi'
            ) AS matched(parts)
           WHERE matched.parts[1] ~
                   E'^[[:space:]]*(?:[:,;=\\-][[:space:]]*)?(?:10|[AKQJT2-9]|[kqjt]|(?:(?:10)|[AKQJT2-9akqjt]){2,13})($|[^[:alnum:]])'
             AND matched.parts[1] !~*
-                  E'^[[:space:]]*(?:[:,;=\\-][[:space:]]*)?(?:10|[2-9])[[:space:]]*(?:(?:(?:[-–—]|to)[[:space:]]*[0-9]{1,2}|[+])[[:space:]]*)?(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*)'
+                  E'^[[:space:]]*(?:[:,;=\\-][[:space:]]*)?(?:10|[2-9])[[:space:]]*(?:(?:(?:[-–—]|to)[[:space:]]*[0-9]{1,2}|[+])[[:space:]]*(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*)?|(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*))($|[^[:alnum:]_])'
        )
   );
 $$;
@@ -915,6 +915,41 @@ END $$;
 CREATE TRIGGER promoted_video_canon_rule_test_guard
 BEFORE INSERT OR UPDATE OR DELETE ON bidding.rule_test
 FOR EACH ROW EXECUTE FUNCTION bidding.guard_promoted_video_canon_rule_test();
+
+CREATE OR REPLACE FUNCTION bidding.guard_superseded_video_canon_rule_test_run()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path=pg_catalog,public,bidding
+AS $$
+DECLARE v_old_test_id uuid; v_new_test_id uuid;
+BEGIN
+    IF TG_OP IN ('UPDATE','DELETE') THEN
+        v_old_test_id := OLD.rule_test_id;
+    END IF;
+    IF TG_OP IN ('INSERT','UPDATE') THEN
+        v_new_test_id := NEW.rule_test_id;
+    END IF;
+    IF EXISTS (
+      SELECT 1
+        FROM bidding.rule_test rt
+        JOIN bidding.rule r ON r.rule_id=rt.rule_id
+        JOIN public.canon_activation ca
+          ON ca.knowledge_version_id=r.knowledge_version_id
+        JOIN bidding.video_canon_ai_promotion_receipt p
+          ON p.superseded_canon_activation_id=ca.canon_activation_id
+       WHERE rt.rule_test_id=v_old_test_id OR rt.rule_test_id=v_new_test_id
+    ) THEN
+        RAISE EXCEPTION 'VIDEO_CANON_SUPERSEDED_RULE_TEST_RUN_IMMUTABLE'
+          USING ERRCODE='23514';
+    END IF;
+    IF TG_OP='DELETE' THEN RETURN OLD; END IF;
+    RETURN NEW;
+END $$;
+
+CREATE TRIGGER superseded_video_canon_rule_test_run_guard
+BEFORE INSERT OR UPDATE OR DELETE ON bidding.rule_test_run
+FOR EACH ROW EXECUTE FUNCTION bidding.guard_superseded_video_canon_rule_test_run();
 
 CREATE OR REPLACE FUNCTION bidding.guard_video_canon_source_policy_lifecycle()
 RETURNS trigger LANGUAGE plpgsql AS $$
@@ -2007,6 +2042,7 @@ REVOKE ALL ON FUNCTION bidding.guard_promoted_video_canon_knowledge_version() FR
 REVOKE ALL ON FUNCTION bidding.guard_promoted_video_canon_knowledge_item() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_promoted_video_canon_rule() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_promoted_video_canon_rule_test() FROM PUBLIC;
+REVOKE ALL ON FUNCTION bidding.guard_superseded_video_canon_rule_test_run() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_video_canon_source_policy_lifecycle() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_video_canon_verifier_registry_lifecycle() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.validate_video_correction_review_receipt() FROM PUBLIC;
@@ -2017,6 +2053,7 @@ REVOKE EXECUTE ON FUNCTION bidding.validate_video_canon_verification_bundle(),
   bidding.guard_promoted_video_canon_knowledge_item(),
   bidding.guard_promoted_video_canon_rule(),
   bidding.guard_promoted_video_canon_rule_test(),
+  bidding.guard_superseded_video_canon_rule_test_run(),
   bidding.guard_video_canon_source_policy_lifecycle(),
   bidding.guard_video_canon_verifier_registry_lifecycle()
   FROM bridge_school_reader,bridge_school_app,bridge_school_worker,bridge_school_canon_verifier,

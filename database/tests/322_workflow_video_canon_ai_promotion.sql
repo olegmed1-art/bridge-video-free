@@ -151,13 +151,23 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North is holding Q"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"North is currently holding Q"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"partner was holding AKQJ"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"partner was apparently still holding AKQJ"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s holding Q"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"North''s still holding Q"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"partner’s holding AKQJ"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"partner’s currently holding AKQJ"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N''s holding Q"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"N’s now holding Q"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"N:AKQJ109.876.54.32"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
@@ -207,7 +217,15 @@ BEGIN
      ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"North has 10+ points"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North has 10-12"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North has 10 to 12"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North has 10+"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s holding 10-12 points"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North''s still holding 10-12"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"North''s hand was 10-12 points"}'::jsonb
      ) THEN
@@ -750,8 +768,11 @@ BEGIN
   IF NOT v_restore_failed OR EXISTS (
        SELECT 1 FROM bidding.video_canon_ai_restore_receipt
         WHERE video_canon_ai_promotion_receipt_id=v_promotion
+     ) OR EXISTS (
+       SELECT 1 FROM bidding.rule_test_run
+        WHERE rule_test_id=v_test_id AND result='fail'
      ) THEN
-    RAISE EXCEPTION 'VIDEO_CANON_RESTORE_VALIDATION_FAILURE_NOT_ATOMIC';
+    RAISE EXCEPTION 'VIDEO_CANON_SUPERSEDED_RULE_TEST_RUN_NOT_BLOCKED';
   END IF;
   BEGIN
     UPDATE bidding.rule_test SET expected='{"tampered":true}'

@@ -54,11 +54,16 @@ complete rule-test definitions plus their latest runs; the promoter cannot
 supply replacements for those fields. The four source-derived test classes are
 an exact deterministic projection of the candidate payload. Added, removed or
 edited definitions and later test runs invalidate promotion instead of
-borrowing an unrelated PASS. The database locks the candidate and rule,
-recomputes digests across all executable rule fields, the explanation and test
-state, and compares that content with the sealed candidate and bundle before
-any activation is written. Source authorization can be revoked immediately through
-a guarded lifecycle transition. The row trigger captures its effective
+borrowing an unrelated PASS. The database locks the candidate, rule, rule-test definitions and run
+stream, recomputes digests across all executable rule fields, the explanation
+and test state, and compares that content with the sealed candidate and bundle
+before any activation is written. A currently active promoted rule may continue
+to receive append-only regression runs. At the instant it becomes a superseded
+rollback predecessor, its run stream is frozen together with its rule, tests,
+version, item and source links; later inserts, updates or deletes are rejected
+so the receipt-bound rollback snapshot cannot be invalidated. Source
+authorization can be revoked immediately through a guarded lifecycle
+transition. The row trigger captures its effective
 retirement time with a wall-clock reading after the policy row lock is held and
 overrides any caller-supplied backdated validity end.
 
@@ -146,10 +151,14 @@ single unambiguous card (`Q`, `q`, `T`, `t`, `10`, or a directly
 attached rank `2`–`9`)—are rejected anywhere in the complete payload.
 Direct holding verbs are covered as well: `North held Q`, `partner holds
 AKQJ`, `North is holding Q`, `partner was holding AKQJ`, `North's
-holding Q` and `N's holding Q` are disclosures. `North held 5 hearts`,
-`North has 10 hearts`, `North held 10 points`, point ranges such as
-`10-12`, `10 to 12` and `10+`, and ordinary prose such as `North held
-the view...` are not. Ordinary quantitative bridge prose such as `5 cards`,
+holding Q` and `N's holding Q` are disclosures. Up to two bounded modifiers
+between the auxiliary and `holding` are also recognized, so `North is
+currently holding Q`, `partner was apparently still holding AKQJ` and
+`partner's still holding AKQJ` cannot bypass the firewall. `North held 5
+hearts`, `North has 10 hearts`, `North held 10 points`, point ranges such
+as `North has 10-12`, `North has 10 to 12` and `North has 10+`, with or
+without a following count noun, and ordinary prose such as `North held the
+view...` are not hidden-card disclosures. Ordinary quantitative bridge prose such as `5 cards`,
 `5 hearts`, `10 cards`, `3
 trumps`, `7 losers`, points, controls, winners, stoppers and their Russian equivalents
 remains allowed when it is a length/count description rather than a disclosed
