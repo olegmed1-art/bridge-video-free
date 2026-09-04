@@ -165,11 +165,13 @@ productionize(){
   /usr/bin/env -i \
     PATH="$SAFE_PATH" HOME=/root LANG=C.UTF-8 \
     UNIVERSAL_VIDEO_GIT_REF="$UV_RUNTIME_COMMIT" \
+    UNIVERSAL_VIDEO_SKIP_ADMIN_INSTALL=1 \
     UNIVERSAL_VIDEO_RUN_SMOKE=0 \
     UNIVERSAL_VIDEO_ACTIVATE=1 \
     UNIVERSAL_VIDEO_PREWARM_MODEL=0 \
     nice -n 10 bash "$activation" | tee "$log_file"
   grep -Fx 'UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS' "$log_file" >/dev/null || fail 'activation completion marker missing'
+  grep -Fx 'universal_video_admin=preserved_revision_bound' "$log_file" >/dev/null || fail 'bounded admin preservation marker missing'
   grep -Fx "source_commit=$UV_RUNTIME_COMMIT" "$log_file" >/dev/null || fail 'activation source pin mismatch'
 
   : > "$log_file"

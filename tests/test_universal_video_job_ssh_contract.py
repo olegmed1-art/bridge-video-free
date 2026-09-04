@@ -34,15 +34,14 @@ def test_job_uses_pinned_bounded_ssh_transport():
 def test_job_invokes_only_fixed_resident_admin_surfaces():
     assert "oci instance-agent command" not in WORKFLOW
     assert "--execution-user" not in WORKFLOW
-    assert "repair_cmd='sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video-spool-repair'" in WORKFLOW
-    assert 'submit_cmd="sudo -n /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock sudo -u ocarun sudo -n /usr/local/sbin/universal-video submit-drive-base64 \'$payload\'"' in WORKFLOW
+    assert 'submit_cmd="sudo -n /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock sudo -u ocarun sudo -n /usr/local/sbin/universal-video repair-submit-drive-base64 \'$payload\'"' in WORKFLOW
     assert "status '$JOB_ID' '$PROFILE' '$JOB_HASH' '$SOURCE_FILE_ID'" in WORKFLOW
-    assert 'run_remote "$repair_cmd"' in WORKFLOW
     assert 'run_remote "$submit_cmd"' in WORKFLOW
     assert 'run_remote "$status_cmd"' in WORKFLOW
     operator = (ROOT / "ops/universal_video_operator.sh").read_text(encoding="utf-8")
     assert "systemctl is-active --quiet universal-video-container.service" in operator
     assert "legacy universal-video.service still active" in operator
+    assert 'repair_out="$(/usr/local/sbin/universal-video-spool-repair' in operator
 
 
 def test_bootstrap_smoke_does_not_require_container_before_promotion():
@@ -88,6 +87,7 @@ def test_operator_and_admin_sudoers_ownership_cannot_collide():
     assert "readonly SUDOERS='/etc/sudoers.d/universal-video-operator-ocarun'" in OPERATOR_INSTALL
     assert "readonly SUDOERS='/etc/sudoers.d/universal-video-admin-ocarun'" in ADMIN_INSTALL
     assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video submit-drive-base64 *" in OPERATOR_INSTALL
+    assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video repair-submit-drive-base64 *" in OPERATOR_INSTALL
     assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video status *" in OPERATOR_INSTALL
     assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video-spool-repair" in ADMIN_INSTALL
     assert "/etc/sudoers.d/universal-video-ocarun'" not in OPERATOR_INSTALL
@@ -101,7 +101,8 @@ def test_job_keeps_remote_output_fail_closed_and_bounded():
     assert "grep -E '^UV_(STATE|RESULT_STATUS|RESULT_DIR|CONFORMANCE_STATE|" in WORKFLOW
     assert "|ERROR_TYPE|ERROR_CODE)=" in WORKFLOW
     assert "|ERROR_TYPE|ERROR)=" not in WORKFLOW
-    assert "PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_COMMAND_FAILED" in WORKFLOW
+    assert "UV_SPOOL_REPAIR_[A-Z_]*" in WORKFLOW
+    assert 'echo "PRE_SUBMIT_ERROR_CODE=$spool_code"' in WORKFLOW
     assert "code='UV_SUBMIT_INTAKE_IO_FAILED'" in WORKFLOW
     assert "code='UV_SUBMIT_INTAKE_EXECUTION_FAILED'" in WORKFLOW
     assert "code='UV_SUBMIT_INTAKE_REJECTED'" in WORKFLOW

@@ -15,7 +15,8 @@ def test_activation_workflow_is_fixed_scope_and_fail_closed():
     assert "ORACLE_USER: ubuntu" in text
     assert "StrictHostKeyChecking=yes" in text
     assert "StrictHostKeyChecking=no" not in text
-    assert "sudo -n env UNIVERSAL_VIDEO_GIT_REF=" in text
+    assert "'sudo -n /bin/bash -s'" in text
+    assert "env UNIVERSAL_VIDEO_GIT_REF=" in text
     assert "ops/oracle_universal_video_run_command.sh" in text
     assert "ops/oracle_universal_video_spool_guard.sh" in text
     assert "ops/universal_video_receipt_reader.py" in text
@@ -84,6 +85,8 @@ def test_activation_installs_export_boundary_from_the_exact_resolved_revision():
     assert 'SOURCE_COMMIT="$RESOLVED_COMMIT"' in command
     assert 'bash "$SOURCE_DIR/ops/install_universal_video_ocarun_admin.sh"' in command
     assert "universal_video_admin=installed_revision_bound" in command
+    assert 'if [[ "$SKIP_ADMIN_INSTALL" == 0 ]]' in command
+    assert "universal_video_admin=preserved_revision_bound" in command
     assert command.index('SOURCE_COMMIT="$RESOLVED_COMMIT"') < command.index(
         "universal_video_admin=installed_revision_bound"
     )
@@ -92,5 +95,9 @@ def test_activation_installs_export_boundary_from_the_exact_resolved_revision():
 def test_production_activation_shares_oracle_video_mutation_mutex():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "/run/lock/oracle-workload-mutation.lock" in text
+    assert "ORACLE_WORKLOAD_FENCE_READY=" in text
+    assert "coproc REMOTE_FENCE" in text
+    assert text.index("/usr/bin/flock -x 9") < text.index("scp -q")
+    assert "REMOTE_QUEUE_DSN_STAGING" not in text
     assert "oracle-universal-video-activation-request-{0}" in text
     assert "oracle-universal-video-activation-pr-{0}" in text

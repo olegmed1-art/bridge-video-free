@@ -305,6 +305,26 @@ jobs:
             exit 3
           fi
 
+          stop_accepted=0
+          release_final_fence() {
+            local release_text release_json release_id release_state release_execution
+            (( stop_accepted == 0 )) || return 0
+            release_text="sudo -n /usr/local/sbin/oracle-idle-stop-fence release ${fence_token}"
+            release_json="$(SCRIPT_TEXT="$release_text" python -c 'import json,os; print(json.dumps({"source":{"sourceType":"TEXT","text":os.environ["SCRIPT_TEXT"]},"output":{"outputType":"TEXT"}},separators=(",",":")))')"
+            release_id="$(oci instance-agent command create \
+              --compartment-id "$COMPARTMENT_ID" --content "$release_json" --target "$target_json" \
+              --timeout-in-seconds 60 --display-name "bridge-school-oracle-final-idle-release-${GITHUB_RUN_ID}" \
+              --query data.id --raw-output 2>/dev/null || true)"
+            [[ -n "$release_id" ]] || return 0
+            for _ in $(seq 1 35); do
+              release_execution="$(oci instance-agent command-execution get --command-id "$release_id" --instance-id "$OCI_INSTANCE_OCID" --output json 2>/dev/null || true)"
+              release_state="$(printf '%s' "$release_execution" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("lifecycle-state",""))' 2>/dev/null || true)"
+              case "$release_state" in SUCCEEDED|FAILED|CANCELED|TIMED_OUT) break ;; esac
+              sleep 2
+            done
+          }
+          trap release_final_fence EXIT
+
           # Read the proof through a second bounded command while the first
           # command remains IN_PROGRESS and owns the flock.
           sleep 5
@@ -400,6 +420,8 @@ jobs:
           holder_state="$(oci instance-agent command-execution get --command-id "$command_id" --instance-id "$OCI_INSTANCE_OCID" --query 'data."lifecycle-state"' --raw-output 2>/dev/null || true)"
           [[ "$holder_state" == ACCEPTED || "$holder_state" == IN_PROGRESS ]] || { echo 'STOP REFUSED: host fence was lost' >&2; exit 3; }
           oci compute instance action --instance-id "$OCI_INSTANCE_OCID" --action STOP >/dev/null
+          stop_accepted=1
+          trap - EXIT
           state=""
           for _ in $(seq 1 60); do
             state="$(oci compute instance get --instance-id "$OCI_INSTANCE_OCID" --query 'data."lifecycle-state"' --raw-output)"

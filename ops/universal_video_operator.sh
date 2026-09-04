@@ -451,9 +451,25 @@ PY
       ;;
   esac
 }
-[[ $# -ge 1 ]] || fail 'usage: universal-video submit-drive-base64 PAYLOAD | status JOB_ID PROFILE JOB_HASH DRIVE_FILE_ID | enqueue-batch-base64 PAYLOAD | batch-status REQUEST_KEY'
+repair_submit_drive(){
+  [[ $# -eq 1 ]] || fail 'invalid repair-submit request'
+  local repair_out
+  if ! repair_out="$(/usr/local/sbin/universal-video-spool-repair 2>/dev/null)"; then
+    echo 'UV_STATE=REJECTED'
+    echo 'UV_ERROR_CODE=UV_SPOOL_REPAIR_COMMAND_FAILED'
+    return 1
+  fi
+  if ! grep -qx 'UNIVERSAL_VIDEO_SPOOL_RUNTIME_REPAIR_PASS' <<<"$repair_out"; then
+    echo 'UV_STATE=REJECTED'
+    echo 'UV_ERROR_CODE=UV_SPOOL_REPAIR_MARKER_MISSING'
+    return 1
+  fi
+  submit_drive "$1"
+}
+[[ $# -ge 1 ]] || fail 'usage: universal-video submit-drive-base64 PAYLOAD | repair-submit-drive-base64 PAYLOAD | status JOB_ID PROFILE JOB_HASH DRIVE_FILE_ID | enqueue-batch-base64 PAYLOAD | batch-status REQUEST_KEY'
 case "$1" in
   submit-drive-base64) shift; submit_drive "$@" ;;
+  repair-submit-drive-base64) shift; repair_submit_drive "$@" ;;
   status) shift; status "$@" ;;
   enqueue-batch-base64) shift; enqueue_batch "$@" ;;
   batch-status) shift; batch_status "$@" ;;

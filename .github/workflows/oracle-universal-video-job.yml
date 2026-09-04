@@ -226,21 +226,6 @@ jobs:
           # Cross the same exact ocarun sudo boundary installed and audited by
           # the resident bootstrap. The SSH principal never invokes the
           # root-owned Universal Video surfaces directly.
-          repair_cmd='sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video-spool-repair'
-          set +e
-          repair_out="$(run_remote "$repair_cmd")"
-          repair_rc=$?
-          set -e
-          if (( repair_rc != 0 )); then
-            echo 'PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_COMMAND_FAILED' >> "$GITHUB_ENV"
-            exit 1
-          fi
-          if ! grep -qx 'UNIVERSAL_VIDEO_SPOOL_RUNTIME_REPAIR_PASS' <<<"$repair_out"; then
-            echo 'PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_MARKER_MISSING' >> "$GITHUB_ENV"
-            exit 1
-          fi
-          echo 'PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_PASS' >> "$GITHUB_ENV"
-
           if [[ "$GITHUB_EVENT_NAME" == 'push' ]]; then
             request_file="$(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^ops/oracle-universal-video-job-requests/[^/]+\.json$' | head -n1)"
           else
@@ -260,7 +245,7 @@ jobs:
           print(base64.b64encode(json.dumps(job,ensure_ascii=False,separators=(',',':')).encode()).decode())
           PY
           )"
-          submit_cmd="sudo -n /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock sudo -u ocarun sudo -n /usr/local/sbin/universal-video submit-drive-base64 '$payload'"
+          submit_cmd="sudo -n /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock sudo -u ocarun sudo -n /usr/local/sbin/universal-video repair-submit-drive-base64 '$payload'"
           status_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video status '$JOB_ID' '$PROFILE' '$JOB_HASH' '$SOURCE_FILE_ID'"
           label="Universal Video / $PROFILE / $JOB_ID"
           entry='SUBMITTED'
@@ -270,6 +255,11 @@ jobs:
           submit_rc=$?
           set -e
           if (( submit_rc != 0 )); then
+            spool_code="$(sed -n 's/^UV_ERROR_CODE=\(UV_SPOOL_REPAIR_[A-Z_]*\)$/\1/p' <<<"$initial" | tail -n1)"
+            if [[ -n "$spool_code" ]]; then
+              echo "PRE_SUBMIT_ERROR_CODE=$spool_code" >> "$GITHUB_ENV"
+              exit 1
+            fi
             if grep -qx 'UV_ERROR_CODE=UV_INTAKE_JOB_EXISTS' <<<"$initial"; then
               # A previous observer can lose its SSH session after the resident
               # intake has durably accepted the job.  Resume the exact same
@@ -325,6 +315,7 @@ jobs:
               exit 1
             fi
           fi
+          [[ "$entry" == RESUMED ]] || echo 'PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_PASS' >> "$GITHUB_ENV"
           state="$(printf '%s\n' "$initial" | sed -n 's/^UV_STATE=//p' | tail -n1)"
           if [[ ! "$state" =~ ^(DOWNLOAD_QUEUED|DOWNLOADING_FROM_DRIVE|SOURCE_READY_ON_ORACLE|RUNNING|PROCESSING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]]; then
             echo 'PRE_SUBMIT_ERROR_CODE=UV_SUBMIT_STATE_INVALID' >> "$GITHUB_ENV"

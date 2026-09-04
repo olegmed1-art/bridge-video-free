@@ -34,6 +34,7 @@ jobs:
       issue: ${{ steps.request.outputs.issue }}
       expected_runtime_commit: ${{ steps.request.outputs.expected_runtime_commit }}
       request_id: ${{ steps.request.outputs.request_id }}
+      request_ids_json: ${{ steps.request.outputs.request_ids_json }}
       execute: ${{ steps.request.outputs.execute }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -79,19 +80,23 @@ jobs:
               | grep -E '^ops/oracle-diana11-runtime-pin-repair-requests/[^/]+\.json$' | sort -u)
             [[ ${#files[@]} -eq 1 ]] || { echo 'expected exactly one UV003 runtime-pin repair request' >&2; exit 1; }
           else
-            mapfile -t files < <(git ls-files 'ops/oracle-diana11-runtime-pin-repair-requests/*.json' | sort | tail -n1)
-            [[ ${#files[@]} -eq 1 ]] || { echo 'no durable runtime-pin request exists' >&2; exit 1; }
+            mapfile -t files < <(git ls-files 'ops/oracle-diana11-runtime-pin-repair-requests/*.json' | sort)
+            [[ ${#files[@]} -ge 1 ]] || { echo 'no durable runtime-pin request exists' >&2; exit 1; }
           fi
-          REQUEST_FILE="${files[0]}" python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json,os,re
-          x=json.load(open(os.environ['REQUEST_FILE'],encoding='utf-8'))
-          assert set(x)=={'request_id','issue','expected_runtime_commit'}
-          assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}',str(x['request_id']))
-          assert x['issue']==566
-          assert x['expected_runtime_commit']=='6a4e8248eedd00f849fcefd1bf41a51b26f5e7c6'
+          python - "${files[@]}" <<'PY' >> "$GITHUB_OUTPUT"
+          import json,re,sys
+          rows=[]
+          for path in sys.argv[1:]:
+              x=json.load(open(path,encoding='utf-8'))
+              assert set(x)=={'request_id','issue','expected_runtime_commit'}
+              assert re.fullmatch(r'[A-Za-z0-9._-]{1,80}',str(x['request_id']))
+              assert x['issue']==566
+              assert x['expected_runtime_commit']=='6a4e8248eedd00f849fcefd1bf41a51b26f5e7c6'
+              rows.append(x)
           print('issue=566')
-          print('request_id='+str(x['request_id']))
-          print('expected_runtime_commit='+x['expected_runtime_commit'])
+          print('request_id='+str(rows[-1]['request_id']))
+          print('request_ids_json='+json.dumps([str(x['request_id']) for x in rows],separators=(',',':')))
+          print('expected_runtime_commit='+rows[-1]['expected_runtime_commit'])
           print('execute=true')
           PY
 
@@ -212,6 +217,7 @@ jobs:
           REPAIR_OUTCOME: ${{ steps.repair.outcome }}
           REPAIR_VALIDATED: ${{ steps.repair.outputs.validated }}
           REQUEST_ID: ${{ needs.validate.outputs.request_id }}
+          REQUEST_IDS_JSON: ${{ needs.validate.outputs.request_ids_json }}
           EXPECTED_RUNTIME_COMMIT: ${{ needs.validate.outputs.expected_runtime_commit }}
         run: |
           set -euo pipefail
@@ -219,7 +225,8 @@ jobs:
           {
             echo '[OBSERVATORY] UV003 bounded runtime-pin repair.'
             echo
-            echo "Request: \`$REQUEST_ID\`. Runtime: \`$EXPECTED_RUNTIME_COMMIT\`."
+            requests="$(jq -r 'join(", ")' <<<"$REQUEST_IDS_JSON")"
+            echo "Requests reconciled: \`$requests\`. Runtime: \`$EXPECTED_RUNTIME_COMMIT\`."
             echo
             if [[ "${REPAIR_VALIDATED:-}" == true && -s "$RUNNER_TEMP/uv003-repair-safe.txt" ]]; then
               echo '```text'
@@ -243,6 +250,7 @@ jobs:
         if: ${{ always() }}
         env:
           REQUEST_ID: ${{ needs.validate.outputs.request_id }}
+          REQUEST_IDS_JSON: ${{ needs.validate.outputs.request_ids_json }}
           EXPECTED_RUNTIME_COMMIT: ${{ needs.validate.outputs.expected_runtime_commit }}
           REPAIR_OUTCOME: ${{ steps.repair.outcome }}
           REPAIR_VALIDATED: ${{ steps.repair.outputs.validated }}
@@ -251,26 +259,26 @@ jobs:
           set -euo pipefail
           result=FAILED_CLOSED
           [[ "${REPAIR_OUTCOME:-}" == success && "${REPAIR_VALIDATED:-}" == true ]] && result=PASS
-          jq -n \
-            --arg gate UV003_DURABLE_RUNTIME_PIN_REPAIR \
-            --arg result "$result" \
-            --arg request_id "$REQUEST_ID" \
-            --arg expected_runtime_commit "$EXPECTED_RUNTIME_COMMIT" \
-            --arg workflow_sha "$GITHUB_SHA" \
-            --arg repository "$GITHUB_REPOSITORY" \
-            --arg run_id "$GITHUB_RUN_ID" \
-            '{schema_version:1,gate:$gate,result:$result,request_id:$request_id,expected_runtime_commit:$expected_runtime_commit,workflow_sha:$workflow_sha,repository:$repository,run_id:$run_id,durable_request:true,automatic_retry_on_lock_timeout:true,oci_lifecycle_action:"NONE",media_job_created:false}' \
-            > uv003-runtime-pin-repair-receipt.json
-          jq -e \
-            --arg request_id "$REQUEST_ID" \
-            --arg runtime "$EXPECTED_RUNTIME_COMMIT" \
-            '.request_id == $request_id and .expected_runtime_commit == $runtime and .durable_request == true and .oci_lifecycle_action == "NONE"' \
-            uv003-runtime-pin-repair-receipt.json >/dev/null
+          mkdir -p uv003-runtime-pin-repair-receipts
+          jq -r '.[]' <<<"$REQUEST_IDS_JSON" | while IFS= read -r request_id; do
+            jq -n \
+              --arg gate UV003_DURABLE_RUNTIME_PIN_REPAIR \
+              --arg result "$result" \
+              --arg request_id "$request_id" \
+              --arg expected_runtime_commit "$EXPECTED_RUNTIME_COMMIT" \
+              --arg workflow_sha "$GITHUB_SHA" \
+              --arg repository "$GITHUB_REPOSITORY" \
+              --arg run_id "$GITHUB_RUN_ID" \
+              --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+              '{schema_version:1,gate:$gate,result:$result,request_id:$request_id,expected_runtime_commit:$expected_runtime_commit,workflow_sha:$workflow_sha,repository:$repository,run_id:$run_id,run_attempt:$run_attempt,durable_request:true,automatic_retry_on_lock_timeout:true,oci_lifecycle_action:"NONE",media_job_created:false}' \
+              > "uv003-runtime-pin-repair-receipts/$request_id.json"
+          done
+          test "$(find uv003-runtime-pin-repair-receipts -maxdepth 1 -type f -name '*.json' | wc -l)" -eq "$(jq length <<<"$REQUEST_IDS_JSON")"
       - name: Upload retained request-bound receipt
         if: ${{ always() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: uv003-runtime-pin-repair-${{ needs.validate.outputs.request_id }}-${{ github.run_id }}
-          path: uv003-runtime-pin-repair-receipt.json
+          name: uv003-runtime-pin-repair-${{ needs.validate.outputs.request_id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: uv003-runtime-pin-repair-receipts/*.json
           if-no-files-found: error
           retention-days: 90

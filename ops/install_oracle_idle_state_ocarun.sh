@@ -253,6 +253,7 @@ tmp_fence="$(mktemp --tmpdir=/usr/local/sbin .oracle-idle-stop-fence.install.XXX
 cat > "$tmp_fence" <<'FENCE'
 #!/usr/bin/env bash
 set -Eeuo pipefail
+umask 077
 readonly LOCK=/run/lock/oracle-workload-mutation.lock
 readonly STATE_DIR=/run/oracle-stop-guard
 [[ $# -eq 2 ]] || exit 64
@@ -291,6 +292,24 @@ case "$action" in
     if flock -n "$LOCK" true; then exit 74; fi
     cat "$proof"
     ;;
+  release)
+    [[ -r "$token_file" && -r "$pid_file" ]] || exit 74
+    [[ "$(cat "$token_file")" == "$token" ]] || exit 74
+    holder_pid="$(cat "$pid_file")"
+    [[ "$holder_pid" =~ ^[1-9][0-9]*$ ]] || exit 74
+    [[ -r "/proc/$holder_pid/cmdline" ]] || exit 74
+    tr '\0' '\n' < "/proc/$holder_pid/cmdline" \
+      | grep -Fx '/usr/local/sbin/oracle-idle-stop-fence' >/dev/null || exit 74
+    tr '\0' '\n' < "/proc/$holder_pid/cmdline" | grep -Fx "$token" >/dev/null || exit 74
+    kill "$holder_pid"
+    for _ in $(seq 1 100); do
+      kill -0 "$holder_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -0 "$holder_pid" 2>/dev/null && exit 75
+    rm -f "$proof" "$token_file" "$pid_file"
+    flock -n "$LOCK" true || exit 75
+    ;;
   *) exit 64 ;;
 esac
 FENCE
@@ -306,6 +325,7 @@ ocarun ALL=(root) NOPASSWD: /usr/local/sbin/oracle-idle-state ""
 # Bounded validated token only; no arbitrary shell or command is accepted.
 ocarun ALL=(root) NOPASSWD: /usr/local/sbin/oracle-idle-stop-fence hold *
 ocarun ALL=(root) NOPASSWD: /usr/local/sbin/oracle-idle-stop-fence read *
+ocarun ALL=(root) NOPASSWD: /usr/local/sbin/oracle-idle-stop-fence release *
 EOF
 chmod 0440 "$tmp_sudoers"
 visudo -cf "$tmp_sudoers" >/dev/null
@@ -334,7 +354,7 @@ for _ in $(seq 1 600); do
 done
 [[ "$token_ready" == 1 ]] || fail 'fence token preflight timed out'
 sudo -u ocarun sudo -n "$FENCE_TARGET" read "$test_token" >/dev/null
-kill "$fence_pid"
+sudo -u ocarun sudo -n "$FENCE_TARGET" release "$test_token"
 wait "$fence_pid" 2>/dev/null || true
 
 # The exact STOP authorizer is part of the installation transaction. A proof

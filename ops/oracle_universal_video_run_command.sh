@@ -9,6 +9,7 @@ REPO_URL="${UNIVERSAL_VIDEO_REPO_URL:-https://github.com/olegmed1-art/bridge-vid
 SOURCE_DIR="${UNIVERSAL_VIDEO_SOURCE_DIR:-/opt/bridge-school/universal-video-src}"
 BASE_DIR="${UNIVERSAL_VIDEO_DIR:-/opt/bridge-school/universal-video}"
 GIT_REF="${UNIVERSAL_VIDEO_GIT_REF:-main}"
+SKIP_ADMIN_INSTALL="${UNIVERSAL_VIDEO_SKIP_ADMIN_INSTALL:-0}"
 ACTIVATE="${UNIVERSAL_VIDEO_ACTIVATE:-1}"
 PREWARM="${UNIVERSAL_VIDEO_PREWARM_MODEL:-1}"
 RUN_SMOKE="${UNIVERSAL_VIDEO_RUN_SMOKE:-0}"
@@ -22,6 +23,7 @@ die(){ printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$PREWARM" =~ ^[01]$ ]] || die "UNIVERSAL_VIDEO_PREWARM_MODEL must be 0 or 1"
 [[ "$RUN_SMOKE" =~ ^[01]$ ]] || die "UNIVERSAL_VIDEO_RUN_SMOKE must be 0 or 1"
 [[ "$SOURCE_ONLY" =~ ^[01]$ ]] || die "UNIVERSAL_VIDEO_SOURCE_ONLY must be 0 or 1"
+[[ "$SKIP_ADMIN_INSTALL" =~ ^[01]$ ]] || die "UNIVERSAL_VIDEO_SKIP_ADMIN_INSTALL must be 0 or 1"
 
 log "Capture protected service state before changes"
 echo 'UNIVERSAL_VIDEO_PREPARE_STAGE stage=protected-preflight'
@@ -165,10 +167,19 @@ echo 'UNIVERSAL_VIDEO_OPERATOR_REJECTION_SMOKE_PASS'
 # fixed audit/productionize/repair/export commands and performs its own visudo,
 # ownership, argument-rejection, and read-only audit gates. It does not submit
 # a job, start ASR, or publish evidence.
-log "Install revision-bound Universal Video admin and evidence export entrypoints"
-SOURCE_COMMIT="$RESOLVED_COMMIT" \
-  bash "$SOURCE_DIR/ops/install_universal_video_ocarun_admin.sh"
-echo 'universal_video_admin=installed_revision_bound'
+if [[ "$SKIP_ADMIN_INSTALL" == 0 ]]; then
+  log "Install revision-bound Universal Video admin and evidence export entrypoints"
+  SOURCE_COMMIT="$RESOLVED_COMMIT" \
+    bash "$SOURCE_DIR/ops/install_universal_video_ocarun_admin.sh"
+  echo 'universal_video_admin=installed_revision_bound'
+else
+  # Productionization is entered through the already installed, root-owned
+  # bounded admin. Reinstalling it from its pinned runtime would downgrade the
+  # control plane or require an impossible self-referential commit pin.
+  [[ -x /usr/local/sbin/universal-video-oci-admin ]] \
+    || die 'revision-bound Universal Video admin is not installed'
+  echo 'universal_video_admin=preserved_revision_bound'
+fi
 
 log "Activation evidence"
 printf 'source_commit=%s\n' "$RESOLVED_COMMIT"

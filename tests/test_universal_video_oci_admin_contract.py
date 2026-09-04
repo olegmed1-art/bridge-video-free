@@ -23,6 +23,8 @@ def test_entrypoint_is_fixed_and_no_asr_productionization_only():
     assert "readonly DRIVE_RESULTS_FOLDER_ID='1I8cSuA-p0MpaZIbA33slks19KyvfJDMK'" in ENTRY
     assert "UNIVERSAL_VIDEO_RUN_SMOKE=0" in ENTRY
     assert "UNIVERSAL_VIDEO_PREWARM_MODEL=0" in ENTRY
+    assert "UNIVERSAL_VIDEO_SKIP_ADMIN_INSTALL=1" in ENTRY
+    assert "universal_video_admin=preserved_revision_bound" in ENTRY
     assert "UNIVERSAL_VIDEO_DRIVE_SOURCE_NO_ASR_PASS" in ENTRY
     assert "asr_started=0" in ENTRY
     assert "faster_whisper" not in ENTRY
@@ -158,6 +160,8 @@ def test_productionize_hands_fence_to_exact_maintenance_unit():
     assert start < reacquire
     assert reacquire < result_check
     assert "exec 9>&-" not in PRODUCTIONIZE
+    assert "if (( owns_fence == 0 ))" not in PRODUCTIONIZE
+    assert "flock -n -x 9" in PRODUCTIONIZE
     assert "universal_video.maintenance --base-dir \"$BASE_DIR\" --apply" not in PRODUCTIONIZE
     assert "EnvironmentFile=/opt/bridge-school/universal-video/universal-video.env" in MAINTENANCE_UNIT
     assert "CPUQuota=50%" in MAINTENANCE_UNIT

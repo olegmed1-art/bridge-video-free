@@ -3,12 +3,13 @@ name: Oracle idle guard exact install
 on:
   push:
     branches:
-      - autopilot/oracle-idle-stop-guard-627-v2
+      - codex/issue-627-final-main-20260902
     paths:
       - '.github/workflows/oracle-idle-guard-exact-install.yml'
       - 'ops/oracle_idle_state.sh'
       - 'ops/oracle_idle_stop_guard.py'
       - 'ops/install_oracle_idle_state_ocarun.sh'
+      - 'ops/universal_video_oci_admin_entrypoint.sh'
       - 'tests/test_universal_video_idle_candidate_contract.py'
 
 permissions:
@@ -34,6 +35,7 @@ jobs:
       SSH_KEY_BRIDGE: ${{ secrets.BRIDGE_SCHOOL_ORACLE_SSH_PRIVATE_KEY }}
       SSH_KEY_ORACLE_ALT: ${{ secrets.ORACLE_SSH_KEY }}
       SSH_KEY_OCI_ALT: ${{ secrets.OCI_SSH_KEY }}
+      TARGET_PR: '1067'
     steps:
       - name: Gate exact reviewed install authorization
         shell: bash
@@ -43,7 +45,7 @@ jobs:
           set -euo pipefail
           expected="$GITHUB_SHA"
           [[ "$expected" =~ ^[0-9a-f]{40}$ ]]
-          current="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/1061" --jq '.head.sha')"
+          current="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/$TARGET_PR" --jq '.head.sha')"
           [[ "$current" == "$expected" ]] || {
             echo "INSTALL_HEAD_MOVED expected=$expected actual=$current" >&2
             exit 70
@@ -60,7 +62,7 @@ jobs:
           command="/oracle-idle-guard-install-reviewed $expected"
           authorized="$(
             gh api --method GET --paginate --slurp \
-              "repos/$GITHUB_REPOSITORY/issues/1061/comments?per_page=100" \
+              "repos/$GITHUB_REPOSITORY/issues/$TARGET_PR/comments?per_page=100" \
             | jq --arg command "$command" \
               '[.[][] | select(.user.login == "olegmed1-art" and .body == $command)] | length'
           )"
@@ -83,7 +85,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          current="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/1061" --jq '.head.sha')"
+          current="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/$TARGET_PR" --jq '.head.sha')"
           test "$current" = "$GITHUB_SHA"
           echo "EXACT_HEAD_RECHECK=PASS sha=$GITHUB_SHA"
 
@@ -136,7 +138,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -Eeuo pipefail
-          current="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/1061" --jq '.head.sha')"
+          current="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/$TARGET_PR" --jq '.head.sha')"
           [[ "$current" == "$GITHUB_SHA" ]] || {
             echo "INSTALL_BOUNDARY_HEAD_MOVED expected=$GITHUB_SHA actual=$current" >&2
             exit 70
@@ -145,7 +147,7 @@ jobs:
           command="/oracle-idle-guard-install-reviewed $GITHUB_SHA"
           authorized="$(
             gh api --method GET --paginate --slurp \
-              "repos/$GITHUB_REPOSITORY/issues/1061/comments?per_page=100" \
+              "repos/$GITHUB_REPOSITORY/issues/$TARGET_PR/comments?per_page=100" \
             | jq --arg command "$command" \
               '[.[][] | select(.user.login == "olegmed1-art" and .body == $command)] | length'
           )"
@@ -169,7 +171,7 @@ jobs:
             ops/install_oracle_idle_state_ocarun.sh "$ORACLE_USER@$ORACLE_HOST:/tmp/install_oracle_idle_state_ocarun.sh"
           # Actual mutation boundary: transfers are complete, but no privileged
           # installer code has run. Re-read both primary sources now.
-          current="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/1061" --jq '.head.sha')"
+          current="$(gh api --method GET "repos/$GITHUB_REPOSITORY/pulls/$TARGET_PR" --jq '.head.sha')"
           [[ "$current" == "$GITHUB_SHA" ]] || {
             echo "INSTALL_FINAL_HEAD_MOVED expected=$GITHUB_SHA actual=$current" >&2
             exit 70
@@ -177,7 +179,7 @@ jobs:
           command="/oracle-idle-guard-install-reviewed $GITHUB_SHA"
           authorized="$(
             gh api --method GET --paginate --slurp \
-              "repos/$GITHUB_REPOSITORY/issues/1061/comments?per_page=100" \
+              "repos/$GITHUB_REPOSITORY/issues/$TARGET_PR/comments?per_page=100" \
             | jq --arg command "$command" \
               '[.[][] | select(.user.login == "olegmed1-art" and .body == $command)] | length'
           )"

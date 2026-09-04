@@ -268,8 +268,8 @@ def test_maintenance_handoff_remains_classifier_visible_until_reacquire() -> Non
     assert marker in classifier
     assert "maintenance_fence_handoff_in_progress" in classifier
     assert marker in productionize
-    assert "owns_fence=1" in productionize
-    assert "if (( owns_fence == 0 ))" in productionize
+    assert 'flock -n -x 9' in productionize
+    assert 'if [[ "${ORACLE_WORKLOAD_FENCE_HELD:-0}" != 1 ]]' in productionize
     create = productionize.index('install -m 0600 -o root -g root /dev/null "$MAINT_HANDOFF_FILE"')
     release = productionize.index("flock -u 9", create)
     reacquire = productionize.index("flock -x 9", release)

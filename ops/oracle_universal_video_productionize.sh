@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-owns_fence=0
 if [[ "${ORACLE_WORKLOAD_FENCE_HELD:-0}" != 1 ]]; then
   exec 9>/run/lock/oracle-workload-mutation.lock
   flock -x 9
-  owns_fence=1
+else
+  # The bounded admin invokes us as a child while fd 9 owns this exact flock.
+  # Fail closed if the inherited descriptor contract was not actually kept.
+  flock -n -x 9
 fi
 
 # Apply #371 production I/O/resource gates to the already-proven Oracle sidecar.
@@ -85,27 +87,22 @@ systemctl is-active --quiet "$MAINT_TIMER" || die "maintenance timer is not acti
 # Register the oneshot as activating while the current process still owns the
 # fence.  The classifier maps this transitional state to UNKNOWN, so STOP is
 # forbidden throughout the hand-off to the unit's ExecStart flock.
-if (( owns_fence == 0 )); then
-  # The root caller retains the outer fence across the whole operation.
-  systemctl start "$MAINT_SERVICE"
-else
-  install -m 0600 -o root -g root /dev/null "$MAINT_HANDOFF_FILE"
-  systemctl start --no-block "$MAINT_SERVICE"
-fi
+install -m 0600 -o root -g root /dev/null "$MAINT_HANDOFF_FILE"
+systemctl start --no-block "$MAINT_SERVICE"
 for _ in $(seq 1 20); do
   [[ "$(systemctl is-active "$MAINT_SERVICE" 2>/dev/null || true)" == activating ]] && break
   sleep 0.1
 done
 [[ "$(systemctl is-active "$MAINT_SERVICE" 2>/dev/null || true)" == activating ]] \
   || die "maintenance service did not enter classifier-visible activating state"
-if (( owns_fence == 1 )); then
-  flock -u 9
-  systemctl start "$MAINT_SERVICE"
-  # The marker keeps the classifier non-IDLE across the unavoidable flock
-  # handback. Remove it only after this caller owns the fence again.
-  flock -x 9
-  rm -f "$MAINT_HANDOFF_FILE"
-fi
+flock -u 9
+systemctl start "$MAINT_SERVICE"
+# The marker keeps the classifier non-IDLE across the unavoidable flock
+# handback. Remove it only after this caller owns the fence again.  fd 9 may
+# be locally opened or inherited; flock locks the shared open-file description,
+# so this also hands the lock safely back to the bounded parent admin.
+flock -x 9
+rm -f "$MAINT_HANDOFF_FILE"
 systemctl is-active --quiet "$MAINT_SERVICE" \
   && die "maintenance oneshot did not finish"
 [[ "$(systemctl show "$MAINT_SERVICE" -p Result --value)" == success ]] \

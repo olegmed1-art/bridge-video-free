@@ -32,7 +32,7 @@ def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
     assert "UV_CONTAINER_PROMOTION_CONTAINER_STATE_UNKNOWN" in SCRIPT
     assert "UNIVERSAL_VIDEO_CONTAINER_BUILD=0" in SCRIPT
     assert "contents/ops/oracle_universal_video_container_promote.sh?ref=$EXPECTED_COMMIT" in WORKFLOW
-    assert "git hash-object -- /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh" in WORKFLOW
+    assert 'git hash-object -- "$promote"' in WORKFLOW
     assert "UV_CONTAINER_PROMOTION_ENTRYPOINT_PASS" in WORKFLOW
     assert "UV_CONTAINER_PROMOTION_SOURCE_MISMATCH" in WORKFLOW
     assert "UV_CONTAINER_PROMOTION_SOURCE_PREPARE_PASS" in WORKFLOW
@@ -49,7 +49,11 @@ def test_promotion_is_evidence_bound_serialized_and_reversible() -> None:
     assert "tr -d" not in WORKFLOW
     assert "UV_CONTAINER_PROMOTION_ENTRYPOINT_MISSING" in WORKFLOW
     assert "UV_CONTAINER_PROMOTION_BLOB_MISMATCH" in WORKFLOW
-    assert " /bin/bash /opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh" in WORKFLOW
+    assert "promote=/opt/bridge-school/universal-video-src/ops/oracle_universal_video_container_promote.sh" in WORKFLOW
+    boundary = WORKFLOW.index("STAGED_PREPARE='$staged_prepare'")
+    source_prepare = WORKFLOW.index('UNIVERSAL_VIDEO_SOURCE_ONLY=1 /bin/bash "$trusted_prepare"', boundary)
+    promotion = WORKFLOW.index('/bin/bash "$promote"', source_prepare)
+    assert boundary < source_prepare < promotion
 
 
 def test_promotion_hands_off_exclusive_fence_after_old_resident_stops() -> None:
@@ -75,7 +79,7 @@ def test_promotion_runs_exact_queue_and_speaker_gates_before_source_preparation(
     queue_gate = WORKFLOW.index("VIDEO_QUEUE_DSN_PREFLIGHT_PASS", preflight)
     speaker_gate = WORKFLOW.index("UNIVERSAL_VIDEO_PREPROMOTION_PREFLIGHT_PASS", queue_gate)
     source_prepare = WORKFLOW.index(
-        "UNIVERSAL_VIDEO_GIT_REF='$EXPECTED_COMMIT'", speaker_gate
+        'UNIVERSAL_VIDEO_GIT_REF="$EXPECTED_COMMIT"', speaker_gate
     )
 
     assert queue_gate < speaker_gate < source_prepare

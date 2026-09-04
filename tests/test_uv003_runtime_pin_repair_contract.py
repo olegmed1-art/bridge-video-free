@@ -202,6 +202,8 @@ def test_retained_receipt_binds_request_runtime_and_workflow_identity():
     assert "request_id:$request_id" in workflow
     assert "expected_runtime_commit:$expected_runtime_commit" in workflow
     assert "workflow_sha:$workflow_sha" in workflow
+    assert "run_attempt:$run_attempt" in workflow
+    assert "${{ github.run_attempt }}" in workflow
     assert "retention-days: 90" in workflow
 
 
@@ -211,7 +213,9 @@ def test_durable_request_has_scheduled_non_lifecycle_recovery():
     assert "17,47 * * * *" in workflow
     assert "oracle-diana11-runtime-pin-repair-consumer" in workflow
     assert "git ls-files 'ops/oracle-diana11-runtime-pin-repair-requests/*.json'" in workflow
-    assert "tail -n1" in workflow
+    assert "git ls-files 'ops/oracle-diana11-runtime-pin-repair-requests/*.json' | sort)" in workflow
+    assert "request_ids_json" in workflow
+    assert "uv003-runtime-pin-repair-receipts/$request_id.json" in workflow
     assert 'needs.validate.outputs.execute == \'true\'' in workflow
     assert "oci compute instance action" not in workflow
     assert "--action START" not in workflow

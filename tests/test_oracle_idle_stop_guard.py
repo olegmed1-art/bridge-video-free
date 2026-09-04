@@ -802,6 +802,9 @@ class StaticCoverageAndConsumerTests(unittest.TestCase):
         self.assertIn("flock -n 9 || exit 73", installer)
         self.assertIn("oracle-idle-stop-fence hold *", installer)
         self.assertIn("oracle-idle-stop-fence read *", installer)
+        self.assertIn("oracle-idle-stop-fence release *", installer)
+        self.assertIn("trap release_final_fence EXIT", workflow)
+        self.assertIn("stop_accepted=1", workflow)
 
     def test_instance_power_stop_uses_exact_authorizer(self) -> None:
         workflow = INSTANCE_POWER.read_text(encoding="utf-8")
