@@ -63,6 +63,7 @@ def test_delivery_is_leased_fenced_atomic_and_retained():
     assert "ATTEMPTS_EXHAUSTED" in MIGRATION
     assert "ON CONFLICT (idempotency_key) DO NOTHING" in MIGRATION
     assert "p_rule_id::text||':'||p_assurance_set_sha256" in MIGRATION
+    assert "VIDEO_CANON_ENQUEUE_EFFECTIVE_PERIOD_NOT_STARTED" in MIGRATION
     assert "video_canon_assurance_assignment_id=i2.video_canon_assurance_assignment_id" in MIGRATION
     assert "terminal_error_code='STATE_STALE'" in MIGRATION
     assert "PERFORM 1 FROM bidding.video_canon_promotion_job" in MIGRATION

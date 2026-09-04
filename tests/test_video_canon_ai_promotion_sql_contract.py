@@ -65,6 +65,13 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "promoted_video_canon_provider_identity_guard",
         "VIDEO_CANON_PROMOTED_PROVIDER_IDENTITY_IMMUTABLE",
         "public.source,public.source_identity,public.knowledge_version_source",
+        "video_canon_drive_source_id",
+        "source_native_key='google-drive:'||p.video_file_id",
+        "si.attributes->>'provider'='google_drive'",
+        "si.attributes->>'drive_file_id'=p.video_file_id",
+        "p.source_id=bidding.video_canon_drive_source_id(p.video_file_id)",
+        "FOR SHARE OF p,s,si",
+        "VIDEO_CANON_BUNDLE_ROLLBACK_TARGET_PAIR_INVALID",
         "guard_promoted_video_canon_knowledge_version",
         "promoted_video_canon_knowledge_version_guard",
         "VIDEO_CANON_PROMOTED_KNOWLEDGE_VERSION_IMMUTABLE",
@@ -260,6 +267,9 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
     assert '"north/deal":"AKQ"' in DATABASE_TEST
     assert "VIDEO_CANON_SOURCE_POLICY_SUCCESSOR_HISTORY_NOT_PRESERVED" in DATABASE_TEST
     assert "VIDEO_CANON_BUNDLE_SCOPE_MISMATCH_NOT_BLOCKED" in DATABASE_TEST
+    assert "VIDEO_CANON_FUTURE_BUNDLE_PERIOD_NOT_BLOCKED" in DATABASE_TEST
+    assert "VIDEO_CANON_ROLLBACK_TARGET_PAIR_NOT_BLOCKED" in DATABASE_TEST
+    assert "VIDEO_CANON_DRIVE_SOURCE_ID_NOT_CANONICAL" in DATABASE_TEST
     assert "VIDEO_CANON_PROMOTED_PROVIDER_IDENTITY_MUTATION_NOT_BLOCKED" in DATABASE_TEST
     assert "VIDEO_CANON_PROMOTED_PROVIDER_IDENTITY_DELETE_NOT_BLOCKED" in DATABASE_TEST
     assert MIGRATION.count("VIDEO_CANON_RESTORE_I2_I3_ASSURANCE_REVOKED") == 2
@@ -329,6 +339,7 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "DROP FUNCTION bidding.guard_promoted_video_canon_source_binding" in ROLLBACK
     assert "DROP FUNCTION bidding.guard_promoted_video_canon_source_identity" in ROLLBACK
     assert "DROP FUNCTION bidding.guard_promoted_video_canon_provider_identity" in ROLLBACK
+    assert "DROP FUNCTION bidding.video_canon_drive_source_id" in ROLLBACK
     assert "DROP FUNCTION bidding.guard_promoted_video_canon_knowledge_version" in ROLLBACK
     assert "DROP FUNCTION bidding.guard_promoted_video_canon_knowledge_item" in ROLLBACK
     assert "DROP FUNCTION bidding.guard_promoted_video_canon_rule" in ROLLBACK

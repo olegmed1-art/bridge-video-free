@@ -408,6 +408,8 @@ DECLARE
   v_cross_school_policy_failed boolean:=false;
   v_bad_bundle_failed boolean:=false;
   v_invalid_period_failed boolean:=false;
+  v_future_period_failed boolean:=false;
+  v_rollback_pair_failed boolean:=false;
   v_scope_bundle_failed boolean:=false;
   v_missing_bundle_field_failed boolean:=false;
   v_candidate_state_failed boolean:=false;
@@ -443,6 +445,10 @@ DECLARE
   v_retire_after timestamptz;
   v_new_from timestamptz:=statement_timestamp()-interval '1 hour';
 BEGIN
+  IF bidding.video_canon_drive_source_id('restore-video-old')<>
+       '75afc175-d528-5d6e-a7cf-48303666349e'::uuid THEN
+    RAISE EXCEPTION 'VIDEO_CANON_DRIVE_SOURCE_ID_NOT_CANONICAL';
+  END IF;
   INSERT INTO public.school(school_id,stable_name)
   VALUES
     (v_school,'video-canon-restore-test-'||v_school::text),
@@ -692,6 +698,43 @@ BEGIN
   END;
   IF NOT v_invalid_period_failed THEN
     RAISE EXCEPTION 'VIDEO_CANON_INVALID_BUNDLE_PERIOD_NOT_BLOCKED';
+  END IF;
+  v_bad_bundle:=jsonb_set(
+    v_good_bundle,'{effective_period,valid_from}',
+    to_jsonb(statement_timestamp()+interval '1 day')
+  );
+  BEGIN
+    INSERT INTO bidding.video_canon_ai_verification_bundle(
+      school_id,analysis_candidate_id,candidate_payload_hash,
+      verification_bundle_sha256,bundle_canonical_json,bundle_payload
+    ) VALUES (
+      v_school,v_candidate,repeat('a',64),
+      encode(public.digest(convert_to(v_bad_bundle::text,'UTF8'),'sha256'),'hex'),
+      v_bad_bundle::text,v_bad_bundle
+    );
+  EXCEPTION WHEN check_violation THEN
+    v_future_period_failed:=true;
+  END;
+  IF NOT v_future_period_failed THEN
+    RAISE EXCEPTION 'VIDEO_CANON_FUTURE_BUNDLE_PERIOD_NOT_BLOCKED';
+  END IF;
+  v_bad_bundle:=jsonb_set(
+    v_good_bundle,'{rollback,target_canon_activation_id}','null'::jsonb
+  );
+  BEGIN
+    INSERT INTO bidding.video_canon_ai_verification_bundle(
+      school_id,analysis_candidate_id,candidate_payload_hash,
+      verification_bundle_sha256,bundle_canonical_json,bundle_payload
+    ) VALUES (
+      v_school,v_candidate,repeat('a',64),
+      encode(public.digest(convert_to(v_bad_bundle::text,'UTF8'),'sha256'),'hex'),
+      v_bad_bundle::text,v_bad_bundle
+    );
+  EXCEPTION WHEN check_violation THEN
+    v_rollback_pair_failed:=true;
+  END;
+  IF NOT v_rollback_pair_failed THEN
+    RAISE EXCEPTION 'VIDEO_CANON_ROLLBACK_TARGET_PAIR_NOT_BLOCKED';
   END IF;
   v_good_bundle_hash:=encode(public.digest(convert_to(v_good_bundle::text,'UTF8'),'sha256'),'hex');
   INSERT INTO bidding.video_canon_ai_verification_bundle(

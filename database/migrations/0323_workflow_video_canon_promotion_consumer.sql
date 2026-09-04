@@ -399,6 +399,11 @@ BEGIN
      OR v_rule.compiled_payload->>'video_candidate_payload_hash' IS DISTINCT FROM v_candidate.payload_hash THEN
     RAISE EXCEPTION 'VIDEO_CANON_ENQUEUE_BINDING_INVALID' USING ERRCODE='23514';
   END IF;
+  IF (v_bundle.bundle_payload#>>'{effective_period,valid_from}')::timestamptz
+       >clock_timestamp() THEN
+    RAISE EXCEPTION 'VIDEO_CANON_ENQUEUE_EFFECTIVE_PERIOD_NOT_STARTED'
+      USING ERRCODE='23514';
+  END IF;
   IF p_assurance_set_sha256!~'^[0-9a-f]{64}$' OR NOT EXISTS (
     SELECT 1 FROM bidding.video_canon_assurance_verdict i2
     JOIN bidding.video_canon_assurance_verdict i3

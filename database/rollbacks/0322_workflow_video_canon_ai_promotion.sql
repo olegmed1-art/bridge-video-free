@@ -16,6 +16,7 @@ BEGIN
 END $$;
 DROP FUNCTION bidding.restore_ai_verified_video_canon(uuid,text,text);
 DROP FUNCTION bidding.activate_ai_verified_video_canon(uuid,uuid,text);
+DROP FUNCTION bidding.video_canon_drive_source_id(text);
 DROP FUNCTION bidding.get_school_runtime_rule_catalog(uuid,text,text,text);
 DROP VIEW bidding.video_canon_bound_candidate;
 DROP TRIGGER video_canon_restore_receipt_append_only ON bidding.video_canon_ai_restore_receipt;

@@ -864,6 +864,14 @@ BEGIN
        OR jsonb_typeof(NEW.bundle_payload->'rollback')<>'object' THEN
         RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_CONTENT_MISMATCH' USING ERRCODE='23514';
     END IF;
+    IF (
+         NEW.bundle_payload#>>'{rollback,target_knowledge_version_id}' IS NULL
+       ) <> (
+         NEW.bundle_payload#>>'{rollback,target_canon_activation_id}' IS NULL
+       ) THEN
+        RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_ROLLBACK_TARGET_PAIR_INVALID'
+          USING ERRCODE='23514';
+    END IF;
     BEGIN
         v_valid_from := (NEW.bundle_payload#>>'{effective_period,valid_from}')::timestamptz;
         v_valid_to := CASE
@@ -873,7 +881,8 @@ BEGIN
     EXCEPTION WHEN invalid_datetime_format OR datetime_field_overflow THEN
         RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_EFFECTIVE_PERIOD_INVALID' USING ERRCODE='23514';
     END;
-    IF v_valid_to IS NOT NULL AND v_valid_to<=v_valid_from THEN
+    IF v_valid_from>statement_timestamp()
+       OR (v_valid_to IS NOT NULL AND v_valid_to<=v_valid_from) THEN
         RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_EFFECTIVE_PERIOD_INVALID' USING ERRCODE='23514';
     END IF;
     RETURN NEW;
@@ -1327,6 +1336,27 @@ CREATE TRIGGER video_canon_promotion_receipt_append_only
 BEFORE UPDATE OR DELETE ON bidding.video_canon_ai_promotion_receipt
 FOR EACH ROW EXECUTE FUNCTION bidding.reject_append_only_mutation();
 
+CREATE OR REPLACE FUNCTION bidding.video_canon_drive_source_id(p_video_file_id text)
+RETURNS uuid
+LANGUAGE plpgsql
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+SET search_path=pg_catalog,public
+AS $$
+DECLARE v_hash bytea;
+BEGIN
+    IF btrim(p_video_file_id)='' THEN RETURN NULL; END IF;
+    v_hash := public.digest(
+      uuid_send('6ba7b811-9dad-11d1-80b4-00c04fd430c8'::uuid) ||
+      convert_to('bridge-school:source:google-drive|'||p_video_file_id,'UTF8'),
+      'sha1'
+    );
+    v_hash := set_byte(v_hash,6,(get_byte(v_hash,6)&15)|80);
+    v_hash := set_byte(v_hash,8,(get_byte(v_hash,8)&63)|128);
+    RETURN encode(substring(v_hash FROM 1 FOR 16),'hex')::uuid;
+END $$;
+
 CREATE OR REPLACE FUNCTION bidding.activate_ai_verified_video_canon(
     p_analysis_candidate_id uuid,
     p_rule_id uuid,
@@ -1553,10 +1583,16 @@ BEGIN
     SELECT p.* INTO v_policy
       FROM bidding.video_canon_source_policy p
       JOIN public.source s ON s.source_id=p.source_id AND s.school_id=p.school_id AND s.status='active'
+      JOIN public.source_identity si
+        ON si.source_id=s.source_id
+       AND si.source_native_key='google-drive:'||p.video_file_id
+       AND si.attributes->>'provider'='google_drive'
+       AND si.attributes->>'drive_file_id'=p.video_file_id
       JOIN public.knowledge_version_source kvs
         ON kvs.source_id=p.source_id AND kvs.knowledge_version_id=v_version.knowledge_version_id
      WHERE p.school_id=v_candidate.school_id
        AND p.source_id=v_candidate.source_id
+       AND p.source_id=bidding.video_canon_drive_source_id(p.video_file_id)
        AND p.status='active'
        AND p.valid_from<=clock_timestamp()
        AND (p.valid_to IS NULL OR p.valid_to>clock_timestamp())
@@ -1572,7 +1608,7 @@ BEGIN
        AND p.learner_level=v_bundle.bundle_payload->>'learner_level'
        AND p.system_profile=v_version.bidding_system_key
        AND p.learner_level=v_version.level_scope->>'level_key'
-     FOR SHARE OF p,s;
+     FOR SHARE OF p,s,si;
     IF NOT FOUND THEN RAISE EXCEPTION 'VIDEO_CANON_SOURCE_POLICY_NOT_FOUND' USING ERRCODE='23514'; END IF;
 
     IF EXISTS (
@@ -2146,11 +2182,17 @@ BEGIN
                 ON p.school_id=c.school_id AND p.source_id=c.source_id
               JOIN public.source s ON s.source_id=p.source_id
                AND s.school_id=p.school_id AND s.status='active'
+              JOIN public.source_identity si
+                ON si.source_id=s.source_id
+               AND si.source_native_key='google-drive:'||p.video_file_id
+               AND si.attributes->>'provider'='google_drive'
+               AND si.attributes->>'drive_file_id'=p.video_file_id
              WHERE c.analysis_candidate_id=v_prior_promotion.analysis_candidate_id
                AND c.payload_hash=v_prior_promotion.candidate_payload_hash
                AND c.payload->>'source_class'='SCHOOL_PRIMARY_EVIDENCE'
                AND c.payload#>>'{source_authorization,policy_version}'=p.policy_version
                AND p.status='active' AND p.policy_version=v_prior_promotion.policy_version
+               AND p.source_id=bidding.video_canon_drive_source_id(p.video_file_id)
                AND p.valid_from<=clock_timestamp()
                AND (p.valid_to IS NULL OR p.valid_to>clock_timestamp())
                AND p.valid_from<=v_prior_canon.valid_from
@@ -2169,7 +2211,7 @@ BEGIN
                AND p.learner_level=v_prior_version.level_scope->>'level_key'
                AND p.authorization_evidence_sha256=
                      c.payload#>>'{source_authorization,authorization_evidence_sha256}'
-             FOR SHARE OF p,s;
+             FOR SHARE OF p,s,si;
             IF NOT FOUND THEN
                 RAISE EXCEPTION 'VIDEO_CANON_RESTORE_SOURCE_POLICY_INACTIVE' USING ERRCODE='23514';
             END IF;
@@ -2557,6 +2599,7 @@ REVOKE INSERT ON bidding.video_canon_ai_verification_bundle FROM
 REVOKE ALL ON FUNCTION bidding.contains_forbidden_hidden_value(jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.validate_video_canon_verification_bundle() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.validate_video_canon_verification() FROM PUBLIC;
+REVOKE ALL ON FUNCTION bidding.video_canon_drive_source_id(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_bound_video_canon_candidate() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_promoted_video_canon_source_binding() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.guard_promoted_video_canon_source_identity() FROM PUBLIC;
@@ -2570,6 +2613,7 @@ REVOKE ALL ON FUNCTION bidding.guard_video_canon_source_policy_lifecycle() FROM 
 REVOKE ALL ON FUNCTION bidding.guard_video_canon_verifier_registry_lifecycle() FROM PUBLIC;
 REVOKE ALL ON FUNCTION bidding.validate_video_correction_review_receipt() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION bidding.validate_video_canon_verification_bundle(),
+  bidding.video_canon_drive_source_id(text),
   bidding.guard_bound_video_canon_candidate(),bidding.guard_promoted_video_canon_source_binding(),
   bidding.guard_promoted_video_canon_source_identity(),
   bidding.guard_promoted_video_canon_provider_identity(),

@@ -213,3 +213,27 @@ def test_rollback_target_requires_exact_database_identity():
     bundle["rollback"]["target_knowledge_version_id"] = "not-a-uuid"
     with pytest.raises(VideoCanonAIPromotionError, match="invalid rollback target"):
         build_ai_canon_promotion(candidate, bundle)
+
+
+@pytest.mark.parametrize("missing", [
+    "target_knowledge_version_id",
+    "target_canon_activation_id",
+])
+def test_rollback_targets_must_be_present_or_absent_as_a_pair(missing):
+    candidate = _candidate()
+    bundle = _bundle(candidate)
+    bundle["rollback"].update({
+        "target_knowledge_version_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "target_canon_activation_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    })
+    bundle["rollback"][missing] = None
+    with pytest.raises(VideoCanonAIPromotionError, match="both be null or both be present"):
+        build_ai_canon_promotion(candidate, bundle)
+
+
+def test_future_period_is_not_reported_ready_for_immediate_promotion():
+    candidate = _candidate()
+    bundle = _bundle(candidate)
+    bundle["effective_period"]["valid_from"] = "2999-01-01T00:00:00Z"
+    with pytest.raises(VideoCanonAIPromotionError, match="cannot be in the future"):
+        build_ai_canon_promotion(candidate, bundle)

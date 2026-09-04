@@ -223,6 +223,8 @@ def build_ai_canon_promotion(
     if not isinstance(period, Mapping) or set(period) != {"valid_from", "valid_to"}:
         _fail("effective period fields mismatch")
     valid_from, valid_from_timestamp = _timestamp(period.get("valid_from"), "valid_from")
+    if valid_from_timestamp > datetime.now(timezone.utc):
+        _fail("valid_from cannot be in the future for immediate promotion")
     valid_to = period.get("valid_to")
     if valid_to is not None:
         valid_to, valid_to_timestamp = _timestamp(valid_to, "valid_to")
@@ -251,6 +253,12 @@ def build_ai_canon_promotion(
         "restore_test_sha256": _sha(rollback.get("restore_test_sha256"), "restore_test_sha256"),
         "result": "PASS",
     }
+    if (
+        normalized_rollback["target_knowledge_version_id"] is None
+    ) != (
+        normalized_rollback["target_canon_activation_id"] is None
+    ):
+        _fail("rollback target identifiers must both be null or both be present")
 
     sealed_bundle = {
         "schema": SCHEMA,
