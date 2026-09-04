@@ -101,7 +101,7 @@ _LEADING_LENGTH_DESCRIPTION = re.compile(
 )
 _LEADING_NUMERIC_RANGE = re.compile(
     r"^\s*(?:(?:was|is)\s+|[:,;=\-]\s*)?(?:10|[2-9])\s*"
-    r"(?:(?:[-–—]|to)\s*\d{1,2}|\+)(?:$|[\s,.;])",
+    r"(?:(?:[-–—]|to)\s*\d{1,2}|\+)(?:$|[^A-Za-z0-9_])",
     re.IGNORECASE,
 )
 _PARTIAL_SEPARATED_HAND = re.compile(

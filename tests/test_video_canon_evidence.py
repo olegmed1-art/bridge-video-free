@@ -295,6 +295,8 @@ def test_labelled_hand_prose_without_four_suit_encoding_is_not_a_false_positive(
     "North's still holding 10-12",
     "North's hand was 10 points",
     "North's hand was 10-12",
+    "(North's hand was 10-12)",
+    "[North's hand is 10+]",
     "North's hand is 10+",
     "N: was 10 to 12",
     "North's hand was 10-12 points",
