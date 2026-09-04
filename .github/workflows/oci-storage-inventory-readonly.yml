@@ -36,21 +36,36 @@ jobs:
           source=textwrap.dedent(open(os.environ['INVENTORY_SCRIPT'], encoding='utf-8').read())
           tree=ast.parse(source)
           allowed={
-              'identity': {'list_region_subscriptions','list_compartments'},
-              'regional_identity': {'list_availability_domains'},
-              'compute': {'list_instances','list_boot_volume_attachments'},
-              'block': {'get_boot_volume','list_boot_volumes','list_volumes'},
+              'list_region_subscriptions','list_compartments','list_availability_domains',
+              'list_instances','list_boot_volume_attachments','get_boot_volume',
+              'list_boot_volumes','list_volumes',
           }
+          required=set(allowed)
+          clients=set()
+          def oci_client_constructor(node):
+              return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                      and node.func.attr.endswith('Client'))
+          changed=True
+          while changed:
+              changed=False
+              for node in ast.walk(tree):
+                  if not isinstance(node, ast.Assign) or len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+                      continue
+                  value=node.value
+                  if oci_client_constructor(value) or (isinstance(value, ast.Name) and value.id in clients):
+                      if node.targets[0].id not in clients:
+                          clients.add(node.targets[0].id); changed=True
           seen=set()
           for node in ast.walk(tree):
-              if not isinstance(node, ast.Attribute) or not isinstance(node.value, ast.Name):
+              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == 'getattr':
+                  assert not node.args or not isinstance(node.args[0], ast.Name) or node.args[0].id not in clients, 'dynamic OCI client access forbidden'
+              if not isinstance(node, ast.Attribute):
                   continue
-              client=node.value.id
-              if client not in allowed:
-                  continue
-              assert node.attr in allowed[client], f'non-read-only SDK attribute: {client}.{node.attr}'
-              seen.add((client,node.attr))
-          required={(client,method) for client,methods in allowed.items() for method in methods}
+              receiver=node.value
+              is_client=(isinstance(receiver, ast.Name) and receiver.id in clients) or oci_client_constructor(receiver)
+              if is_client:
+                  assert node.attr in allowed, f'non-read-only SDK attribute: {node.attr}'
+                  seen.add(node.attr)
           assert required <= seen, f'missing expected read-only calls: {sorted(required-seen)}'
           PY
           grep -F "access_level='ANY'" "$f"
