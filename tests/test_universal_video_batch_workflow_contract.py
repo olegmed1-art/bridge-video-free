@@ -45,6 +45,9 @@ def test_batch_cleanup_failure_is_retained_as_bounded_evidence():
         "UV_INTAKE_IO_FAILED",
         "UV_INTAKE_EXECUTION_FAILED",
         "UV_INTAKE_CLEANUP_FAILED",
+        "UV_BATCH_INTAKE_INVALID",
+        "UV_BATCH_INTAKE_FAILED",
     ):
         assert code in text
+    assert 'value.get("error_code") in allowed' in text
     assert 'echo "$result"' not in text
