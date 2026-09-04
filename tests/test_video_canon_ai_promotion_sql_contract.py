@@ -200,6 +200,10 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "(?:is|was)[[:space:]]+(?:(?:currently|still|now|already",
         "[''’]s[[:space:]]+(?:(?:currently|still|now|already",
         "(?:[-–—]|to)[[:space:]]*[0-9]{1,2}|[+]",
+        "does[[:space:]]+not|doesn[''’]t",
+        "(?:no|neither)",
+        "jsonb_typeof(v_candidate.payload->'ambiguities') IS DISTINCT FROM 'array'",
+        "jsonb_typeof(v_candidate.payload->'contradictions') IS DISTINCT FROM 'array'",
     ):
         assert marker in MIGRATION
 

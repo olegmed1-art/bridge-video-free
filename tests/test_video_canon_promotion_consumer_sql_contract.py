@@ -26,7 +26,7 @@ def test_authority_and_independent_assurance_are_fail_closed():
 def test_delivery_is_leased_fenced_atomic_and_retained():
     assert "FOR UPDATE SKIP LOCKED" in MIGRATION
     assert "j.fencing_token+1" in MIGRATION
-    assert "v_job.fencing_token<>p_fencing_token" in MIGRATION
+    assert "v_job.fencing_token IS DISTINCT FROM p_fencing_token" in MIGRATION
     assert MIGRATION.count("v_job.lease_expires_at<=clock_timestamp()") == 2
     assert "VIDEO_CANON_POST_WRITE_INTEGRITY_FAILED" in MIGRATION
     assert "video_canon_promotion_delivery_receipt_append_only" in MIGRATION
@@ -36,7 +36,9 @@ def test_delivery_is_leased_fenced_atomic_and_retained():
     assert "terminal_error_code='STATE_STALE'" in MIGRATION
     assert "PERFORM 1 FROM bidding.video_canon_promotion_job" in MIGRATION
     assert "video_canon_ai_verification_bundle_id=v_old.video_canon_ai_verification_bundle_id\n   FOR UPDATE" in MIGRATION
-    assert "v_existing.fencing_token<>p_fencing_token" in MIGRATION
+    assert "v_existing.fencing_token IS DISTINCT FROM p_fencing_token" in MIGRATION
+    assert MIGRATION.count("p_lease_token IS NULL OR p_fencing_token IS NULL") == 2
+    assert MIGRATION.count("v_job.lease_token IS DISTINCT FROM p_lease_token") == 2
 
 
 def test_only_consumer_can_cross_authoritative_boundary():

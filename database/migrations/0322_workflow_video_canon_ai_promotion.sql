@@ -372,6 +372,12 @@ SELECT EXISTS (
             AND matched.parts[1] !~*
                   E'^[[:space:]]*(?:[:,;=\\-][[:space:]]*)?(?:10|[2-9])[[:space:]]*(?:(?:(?:[-–—]|to)[[:space:]]*[0-9]{1,2}|[+])[[:space:]]*(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*)?|(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*))($|[^[:alnum:]_])'
        )
+  ) OR EXISTS (
+    SELECT 1 FROM walk AS w
+     WHERE jsonb_typeof(w.value)='string'
+       AND replace(replace(replace(replace(
+             w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:') ~*
+           E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west)|(?:^|[^[:alnum:]])[NESW])[[:space:]]+(?:(?:does[[:space:]]+not|doesn[''’]t)[[:space:]]+(?:have|hold)|(?:has|holds?|had)[[:space:]]+(?:no|neither))[[:space:]]+(?:the[[:space:]]+)?(?:aces?|kings?|queens?|jacks?|tens?|(?:ace|king|queen|jack|ten)[[:space:]]+of[[:space:]]+(?:spades?|hearts?|diamonds?|clubs?)|(?:spades?|hearts?|diamonds?|clubs?)[[:space:]]+(?:ace|king|queen|jack|ten|10|[AKQJT2-9])|[SHDC][[:space:]]*:?[[:space:]]*(?:10|[AKQJT2-9])|(?:10|[AKQJT2-9])[[:space:]]*[SHDC])($|[^[:alnum:]_])'
   );
 $$;
 
@@ -1141,8 +1147,10 @@ BEGIN
        OR v_candidate.payload->>'source_class'<>'SCHOOL_PRIMARY_EVIDENCE'
        OR v_candidate.payload#>>'{source_authorization,policy_version}'<>v_policy_version
        OR v_candidate.payload->>'semantic_scope'<>v_scope_key
-       OR jsonb_array_length(COALESCE(v_candidate.payload->'ambiguities','[]'::jsonb))<>0
-       OR jsonb_array_length(COALESCE(v_candidate.payload->'contradictions','[]'::jsonb))<>0
+       OR jsonb_typeof(v_candidate.payload->'ambiguities') IS DISTINCT FROM 'array'
+       OR jsonb_typeof(v_candidate.payload->'contradictions') IS DISTINCT FROM 'array'
+       OR jsonb_array_length(v_candidate.payload->'ambiguities')<>0
+       OR jsonb_array_length(v_candidate.payload->'contradictions')<>0
        OR NOT bidding.is_video_canon_semantic_confidence_eligible(v_candidate.payload)
        OR bidding.contains_forbidden_hidden_key(v_candidate.payload)
        OR bidding.contains_forbidden_hidden_value(v_candidate.payload) THEN

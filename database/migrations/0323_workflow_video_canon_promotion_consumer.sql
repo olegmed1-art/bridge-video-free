@@ -520,19 +520,23 @@ DECLARE
   v_delivery uuid;
   v_integrity text;
 BEGIN
+  IF p_lease_token IS NULL OR p_fencing_token IS NULL THEN
+    RAISE EXCEPTION 'VIDEO_CANON_STALE_LEASE_OR_FENCE' USING ERRCODE='55000';
+  END IF;
   SELECT * INTO v_existing FROM bidding.video_canon_promotion_delivery_receipt
    WHERE video_canon_promotion_job_id=p_job_id;
   IF FOUND THEN
-    IF v_existing.fencing_token<>p_fencing_token
-       OR v_existing.completed_by_principal<>session_user THEN
+    IF v_existing.fencing_token IS DISTINCT FROM p_fencing_token
+       OR v_existing.completed_by_principal IS DISTINCT FROM session_user THEN
       RAISE EXCEPTION 'VIDEO_CANON_STALE_LEASE_OR_FENCE' USING ERRCODE='55000';
     END IF;
     RETURN v_existing.video_canon_promotion_delivery_receipt_id;
   END IF;
   SELECT * INTO v_job FROM bidding.video_canon_promotion_job
    WHERE video_canon_promotion_job_id=p_job_id FOR UPDATE;
-  IF NOT FOUND OR v_job.status<>'leased' OR v_job.lease_owner<>session_user
-     OR v_job.lease_token<>p_lease_token OR v_job.fencing_token<>p_fencing_token
+  IF NOT FOUND OR v_job.status<>'leased' OR v_job.lease_owner IS DISTINCT FROM session_user
+     OR v_job.lease_token IS DISTINCT FROM p_lease_token
+     OR v_job.fencing_token IS DISTINCT FROM p_fencing_token
      OR v_job.lease_expires_at<=clock_timestamp() THEN
     RAISE EXCEPTION 'VIDEO_CANON_STALE_LEASE_OR_FENCE' USING ERRCODE='55000';
   END IF;
@@ -637,6 +641,9 @@ CREATE OR REPLACE FUNCTION bidding.fail_video_canon_promotion(
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,bidding AS $$
 DECLARE v_job bidding.video_canon_promotion_job%ROWTYPE; v_status text;
 BEGIN
+  IF p_lease_token IS NULL OR p_fencing_token IS NULL THEN
+    RAISE EXCEPTION 'VIDEO_CANON_STALE_LEASE_OR_FENCE' USING ERRCODE='55000';
+  END IF;
   IF p_error_code NOT IN (
     'CANON_CONFLICT','PROFILE_AMBIGUITY','HIDDEN_INFORMATION','PROVENANCE_INVALID',
     'I2_I3_MISMATCH','CANDIDATE_CHANGED','STATE_STALE','INTEGRITY_FAILED',
@@ -644,8 +651,9 @@ BEGIN
   ) THEN RAISE EXCEPTION 'VIDEO_CANON_ERROR_CODE_INVALID' USING ERRCODE='23514'; END IF;
   SELECT * INTO v_job FROM bidding.video_canon_promotion_job
    WHERE video_canon_promotion_job_id=p_job_id FOR UPDATE;
-  IF NOT FOUND OR v_job.status<>'leased' OR v_job.lease_owner<>session_user
-     OR v_job.lease_token<>p_lease_token OR v_job.fencing_token<>p_fencing_token
+  IF NOT FOUND OR v_job.status<>'leased' OR v_job.lease_owner IS DISTINCT FROM session_user
+     OR v_job.lease_token IS DISTINCT FROM p_lease_token
+     OR v_job.fencing_token IS DISTINCT FROM p_fencing_token
      OR v_job.lease_expires_at<=clock_timestamp() THEN
     RAISE EXCEPTION 'VIDEO_CANON_STALE_LEASE_OR_FENCE' USING ERRCODE='55000';
   END IF;
