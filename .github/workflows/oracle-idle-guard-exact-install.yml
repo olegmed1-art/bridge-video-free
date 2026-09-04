@@ -11,6 +11,7 @@ on:
       - 'ops/install_oracle_idle_state_ocarun.sh'
       - 'ops/universal_video_oci_admin_entrypoint.sh'
       - 'tests/test_universal_video_idle_candidate_contract.py'
+      - 'tests/test_universal_video_spool_repair_contract.py'
 
 permissions:
   contents: read
