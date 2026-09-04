@@ -649,8 +649,11 @@ BEGIN
     ) ORDER BY ordinal),
     'effective_period',jsonb_build_object('valid_from',v_new_from,'valid_to',NULL),
     'rollback',jsonb_build_object(
+      'strategy','RESTORE_PREVIOUS_CANON',
       'target_knowledge_version_id',v_old_version::text,
-      'target_canon_activation_id',v_old_canon::text
+      'target_canon_activation_id',v_old_canon::text,
+      'restore_test_sha256',repeat('5',64),
+      'result','PASS'
     )
   ) INTO v_good_bundle
   FROM (VALUES
