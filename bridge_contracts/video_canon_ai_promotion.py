@@ -10,7 +10,7 @@ import hashlib
 import json
 import math
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Mapping
 from uuid import UUID
 
@@ -91,7 +91,7 @@ def _timestamp(value: Any, label: str) -> tuple[str, datetime]:
         _fail(f"invalid {label} timestamp")
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         _fail(f"{label} timestamp must include a UTC offset")
-    return parsed.isoformat(), parsed
+    return parsed.astimezone(timezone.utc).isoformat(), parsed
 
 
 def build_ai_canon_promotion(
