@@ -15,7 +15,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('issue-881-root-expand-pr-{0}', github.run_id) || (github.event.issue.number == 881 && github.event.comment.user.login == 'olegmed1-art' && contains(fromJSON('["/oracle-ops issue-881-expand-root-and-recover-bba508","/oracle-ops issue-881-reconcile-run-33893910685"]'), github.event.comment.body)) && 'oracle-instance-workload-mutation' || format('issue-881-root-expand-noop-{0}', github.run_id) }}
+  group: ${{ github.event_name == 'pull_request' && format('issue-881-root-expand-pr-{0}', github.run_id) || (github.event.issue.number == 881 && github.event.comment.user.login == 'olegmed1-art' && contains(fromJSON('["/oracle-ops issue-881-expand-root-and-recover-bba508","/oracle-ops issue-881-reconcile-run-33914733788"]'), github.event.comment.body)) && 'oracle-instance-workload-mutation' || format('issue-881-root-expand-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
@@ -46,7 +46,7 @@ jobs:
       github.event_name == 'issue_comment' &&
       github.event.issue.number == 881 &&
       github.event.comment.user.login == 'olegmed1-art' &&
-      contains(fromJSON('["/oracle-ops issue-881-expand-root-and-recover-bba508","/oracle-ops issue-881-reconcile-run-33893910685"]'), github.event.comment.body)
+      contains(fromJSON('["/oracle-ops issue-881-expand-root-and-recover-bba508","/oracle-ops issue-881-reconcile-run-33914733788"]'), github.event.comment.body)
     runs-on: ubuntu-24.04
     # The executable monotonic primary deadline caps every OCI request, waiter,
     # rediscovery, and isolated SSH acceptance at 240 minutes total. Restore
@@ -73,7 +73,7 @@ jobs:
       OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
       GH_TOKEN: ${{ github.token }}
-      CLEANUP_ONLY_COMMAND: /oracle-ops issue-881-reconcile-run-33893910685
+      CLEANUP_ONLY_COMMAND: /oracle-ops issue-881-reconcile-run-33914733788
       OWNER_COMMAND: ${{ github.event.comment.body }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -222,8 +222,8 @@ jobs:
           failed_run_backup_name=""
           if [[ "$OWNER_COMMAND" == "$CLEANUP_ONLY_COMMAND" ]]; then
             cleanup_only=1
-            target_prior_stamp="${operation_run_prefix}33893910685-a1"
-            failed_run_backup_name="${backup_prefix}-33893910685-a1"
+            target_prior_stamp="${operation_run_prefix}33914733788-a1"
+            failed_run_backup_name="${backup_prefix}-33914733788-a1"
           fi
           backup_id="" restored_id="" drill_instance_id="" drill_public_ip="" drill_started=""
           backup_attempted=0 backup_created_by_run=0 backup_accepted=0
@@ -782,7 +782,7 @@ jobs:
             # Keep TERMINATED objects in the evidence set.  Each known ID must
             # still pass a direct GET as TERMINATED or explicit 404 below;
             # silently filtering terminal objects would discard the audit trail.
-            RESOURCE_KIND="$resource" PRIOR_PREFIX="$prior_prefix" CURRENT_STAMP="$stamp" TARGET_PRIOR_STAMP="$target_prior_stamp" SUFFIX="-$suffix" python -c 'import json,os,sys; p=json.load(sys.stdin); data=p.get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data); allowed={"instance":{"PROVISIONING","STARTING","RUNNING","STOPPING","STOPPED","TERMINATING","TERMINATED"},"boot-volume":{"PROVISIONING","RESTORING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"subnet":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"security-list":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"route-table":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"internet-gateway":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"vcn":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"}}[os.environ["RESOURCE_KIND"]]; matched=[x for x in data if (x.get("display-name") or "").startswith(os.environ["PRIOR_PREFIX"]) and not (x.get("display-name") or "").startswith(os.environ["CURRENT_STAMP"]+"-") and (not os.environ["TARGET_PRIOR_STAMP"] or (x.get("display-name") or "").startswith(os.environ["TARGET_PRIOR_STAMP"]+"-")) and (x.get("display-name") or "").endswith(os.environ["SUFFIX"])]; assert all(isinstance(x.get("id"),str) and x["id"] and isinstance(x.get("lifecycle-state"),str) and x["lifecycle-state"] in allowed for x in matched); print("\n".join(sorted(x["id"] for x in matched)))' <<<"$output"
+            RESOURCE_KIND="$resource" PRIOR_PREFIX="$prior_prefix" CURRENT_STAMP="$stamp" TARGET_PRIOR_STAMP="$target_prior_stamp" SUFFIX="-$suffix" python -c 'import json,os,sys; p=json.load(sys.stdin); data=p.get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data); allowed={"instance":{"PROVISIONING","STARTING","RUNNING","STOPPING","STOPPED","TERMINATING","TERMINATED"},"boot-volume":{"PROVISIONING","RESTORING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"subnet":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"security-list":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"route-table":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"internet-gateway":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"vcn":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"}}[os.environ["RESOURCE_KIND"]]; target=os.environ["TARGET_PRIOR_STAMP"]; suffix=os.environ["SUFFIX"]; matched=[x for x in data if ((x.get("display-name") or "")==target+suffix if target else (x.get("display-name") or "").startswith(os.environ["PRIOR_PREFIX"]) and not (x.get("display-name") or "").startswith(os.environ["CURRENT_STAMP"]+"-") and (x.get("display-name") or "").endswith(suffix))]; assert all(isinstance(x.get("id"),str) and x["id"] and isinstance(x.get("lifecycle-state"),str) and x["lifecycle-state"] in allowed for x in matched); print("\n".join(sorted(x["id"] for x in matched)))' <<<"$output"
           }
           reconcile_prior_attempt_resources() {
             local prior_instances prior_restored prior_subnets prior_security prior_routes prior_igs prior_vcns id prior_ids prior_count

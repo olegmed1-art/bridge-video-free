@@ -38,7 +38,7 @@ def test_workflow_is_exact_host_one_shot_and_pinned() -> None:
     assert "github.event.issue.number == 881" in WORKFLOW
     assert "github.event.comment.user.login == 'olegmed1-art'" in WORKFLOW
     assert '"/oracle-ops issue-881-expand-root-and-recover-bba508"' in WORKFLOW
-    assert '"/oracle-ops issue-881-reconcile-run-33893910685"' in WORKFLOW
+    assert '"/oracle-ops issue-881-reconcile-run-33914733788"' in WORKFLOW
 
 
 def test_postconditions_and_only_allowed_service_restart() -> None:
@@ -330,6 +330,42 @@ def test_distinct_owner_commands_share_source_scoped_cleanup_identity() -> None:
     assert 'CURRENT_STAMP="$stamp"' in block
     assert 'startswith(os.environ["PRIOR_PREFIX"])' in block
     assert 'not (x.get("display-name") or "").startswith(os.environ["CURRENT_STAMP"]+"-")' in block
+
+
+def test_targeted_cleanup_rejects_near_match_resource_names() -> None:
+    start = WORKFLOW.index("prior_named_ids() {")
+    end = WORKFLOW.index("reconcile_prior_attempt_resources()", start)
+    helper = textwrap.dedent(WORKFLOW[start:end])
+    target = "issue-881-root-recovery-source-run-33914733788-a1"
+    payload = {
+        "data": [
+            {
+                "id": "exact-id",
+                "display-name": target + "-boot-acceptance",
+                "lifecycle-state": "RUNNING",
+            },
+            {
+                "id": "near-id",
+                "display-name": target + "-extra-boot-acceptance",
+                "lifecycle-state": "RUNNING",
+            },
+        ]
+    }
+    script = helper + r'''
+oci_json_request() { OCI_JSON_OUTPUT="$PAYLOAD"; }
+tenancy_id=tenancy; ad=ad; prior_prefix=issue-881-root-recovery-source-run-
+stamp=issue-881-root-recovery-source-run-current-a1
+target_prior_stamp=issue-881-root-recovery-source-run-33914733788-a1
+prior_named_ids instance boot-acceptance
+'''
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env=os.environ | {"PAYLOAD": json.dumps(payload)},
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert result.stdout.strip() == "exact-id"
 
 
 def test_separate_commands_keep_one_operation_scoped_proven_backup() -> None:
@@ -1118,10 +1154,11 @@ def test_last_second_gate_revalidates_oci_before_ssh_mutation() -> None:
 
 
 def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> None:
-    cleanup_command = "/oracle-ops issue-881-reconcile-run-33893910685"
+    cleanup_command = "/oracle-ops issue-881-reconcile-run-33914733788"
     assert cleanup_command in WORKFLOW
-    assert 'target_prior_stamp="${operation_run_prefix}33893910685-a1"' in WORKFLOW
-    assert 'failed_run_backup_name="${backup_prefix}-33893910685-a1"' in WORKFLOW
+    assert "/oracle-ops issue-881-reconcile-run-33893910685" not in WORKFLOW
+    assert 'target_prior_stamp="${operation_run_prefix}33914733788-a1"' in WORKFLOW
+    assert 'failed_run_backup_name="${backup_prefix}-33914733788-a1"' in WORKFLOW
     cleanup = WORKFLOW.index("reconcile_prior_attempt_resources")
     backup_create = WORKFLOW.index("boot-volume-backup create")
     mutation = WORKFLOW.index("Expand root and recover exact image under shared host lock")
@@ -1154,6 +1191,14 @@ def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> No
     assert "cleanup_only=true" in WORKFLOW
     assert "EXACT_NAME_INVENTORY_EMPTY" in WORKFLOW
     assert "Each known ID must" in WORKFLOW
+    cleanup_only_branch = WORKFLOW[
+        WORKFLOW.index("if (( cleanup_only == 1 )); then") : WORKFLOW.index("trap cleanup EXIT")
+    ]
+    assert "boot-volume-backup create" not in cleanup_only_branch
+    assert "boot-volume create" not in cleanup_only_branch
+    assert "compute instance launch" not in cleanup_only_branch
+    assert "ssh " not in cleanup_only_branch
+    assert "exit 0" in cleanup_only_branch
 
 
 def test_receipt_is_literal_safe_and_retains_cleanup_evidence() -> None:
