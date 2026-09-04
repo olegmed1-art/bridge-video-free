@@ -19,7 +19,8 @@ def test_operator_shell_syntax_is_valid() -> None:
 
 def test_batch_enqueue_reuses_the_bounded_staging_classifier() -> None:
     batch = _function("enqueue_batch", "batch_status")
-    assert "stage_job_payload \"$1\" root_tmp" in batch
+    assert "stage_job_payload \"$1\" root_tmp raw_size" in batch
+    assert "stat -c '%s'" not in batch
     assert 'mktemp -p "$STAGING"' not in batch
     assert 'tempfile.mkstemp(prefix="batch.", suffix=".json"' in batch
     assert "UV_INTAKE_CONTRACT_INVALID" in batch
@@ -109,6 +110,7 @@ def test_python_staging_cleanup_failure_has_a_bounded_code() -> None:
     assert "except OSError:" in python_body
     assert "UV_ERROR_CODE=UV_INTAKE_CLEANUP_FAILED" in python_body
     assert "pass\n    print" not in python_body
+    assert 'print("UV_STAGE_SIZE=" + str(len(raw)))' in staging
 
 
 def test_cleanup_helper_requires_confirmed_absence() -> None:

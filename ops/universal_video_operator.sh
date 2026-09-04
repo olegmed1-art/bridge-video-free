@@ -41,14 +41,12 @@ enqueue_batch(){
   [[ -f "$DRIVE_OAUTH_FILE" && ! -L "$DRIVE_OAUTH_FILE" ]] || fail 'Drive credential unavailable'
   [[ -f "$QUEUE_DSN_FILE" && ! -L "$QUEUE_DSN_FILE" ]] || fail 'video queue credential unavailable'
   local root_tmp='' request_tmp='' request_stage='' request_code='' copy_output='' copy_code='' copy_rc=0 raw_size='' cleanup_cmd='' queue_output='' queue_rc=0
-  if ! stage_job_payload "$1" root_tmp; then
+  if ! stage_job_payload "$1" root_tmp raw_size; then
     return 1
   fi
   printf -v cleanup_cmd 'rm -f -- %q 2>/dev/null || true' "$root_tmp"
   trap "$cleanup_cmd" EXIT
-  if ! raw_size="$(stat -c '%s' -- "$root_tmp" 2>/dev/null)" \
-     || [[ ! "$raw_size" =~ ^[0-9]+$ ]] \
-     || (( raw_size > 16384 )); then
+  if [[ ! "$raw_size" =~ ^[0-9]+$ ]] || (( raw_size > 16384 )); then
     if ! cleanup_staged_files "$root_tmp"; then
       intake_reject 'UV_INTAKE_CLEANUP_FAILED'
       return 1
@@ -204,8 +202,8 @@ conformance_json(){
       --evidence-phase POST_HOC_OBSERVATION
 }
 stage_job_payload(){
-  [[ $# -eq 2 ]] || return 2
-  local encoded="$1" output_var="$2" stage_output stage_rc stage_code stage_path
+  [[ $# -eq 2 || $# -eq 3 ]] || return 2
+  local encoded="$1" output_var="$2" size_var="${3:-}" stage_output stage_rc stage_code stage_path stage_size
   set +e
   stage_output="$(printf '%s' "$encoded" | UNIVERSAL_VIDEO_STAGING_ROOT="$STAGING" "$SYSTEM_PYTHON" -c '
 import base64
@@ -265,6 +263,7 @@ try:
         raise
     os.chmod(path, 0o600)
     print("UV_STAGE_PATH=" + path)
+    print("UV_STAGE_SIZE=" + str(len(raw)))
 except (binascii.Error, ValueError):
     if not cleanup_staged(path):
         print("UV_ERROR_CODE=UV_INTAKE_CLEANUP_FAILED")
@@ -303,7 +302,8 @@ except BaseException:
     return 1
   fi
   stage_path="$(sed -nE 's#^UV_STAGE_PATH=(/opt/bridge-school/\.universal-video-staging/request\.[A-Za-z0-9._-]+\.json)$#\1#p' <<<"$stage_output" | tail -n1)"
-  if [[ -z "$stage_path" || ! -f "$stage_path" || -L "$stage_path" ]]; then
+  stage_size="$(sed -nE 's/^UV_STAGE_SIZE=([0-9]{1,6})$/\1/p' <<<"$stage_output" | tail -n1)"
+  if [[ -z "$stage_path" || -z "$stage_size" || ! -f "$stage_path" || -L "$stage_path" ]]; then
     if [[ -n "$stage_path" ]] && ! cleanup_staged_files "$stage_path"; then
       intake_reject 'UV_INTAKE_CLEANUP_FAILED'
     else
@@ -312,6 +312,7 @@ except BaseException:
     return 1
   fi
   printf -v "$output_var" '%s' "$stage_path"
+  [[ -z "$size_var" ]] || printf -v "$size_var" '%s' "$stage_size"
 }
 submit_drive(){
   [[ $# -eq 1 && ${#1} -le 350000 ]] || { intake_reject 'UV_INTAKE_CONTRACT_INVALID'; return 1; }
