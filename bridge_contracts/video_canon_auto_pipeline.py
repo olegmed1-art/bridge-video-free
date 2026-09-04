@@ -35,7 +35,9 @@ def run_video_canon_auto_pipeline(
         assertion_id = str(raw.get("assertion_id") or "UNKNOWN") if isinstance(raw, Mapping) else "UNKNOWN"
         try:
             candidate = build_video_canon_candidate(learning_candidate, raw)
-        except (VideoCanonEvidenceError, LearningCandidateError, TypeError) as exc:
+        except (
+            VideoCanonEvidenceError, LearningCandidateError, TypeError, OverflowError
+        ) as exc:
             gaps.append({
                 "assertion_id": assertion_id,
                 "status": "EVIDENCE_REJECTED",

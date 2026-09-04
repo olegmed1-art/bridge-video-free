@@ -242,7 +242,7 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "{1,3}($|[^[:alnum:]])",
         "{2,13})($|[^[:alnum:]])",
         "(?:10|[AKQJTX]|",
-        "(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west|lho|rho)",
+        "(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west|[lr]",
         "(?:^|[^[:alnum:]_])(?:рука|карты)",
         "?[2-9]($|[[:space:],./;])",
         "hearts?|spades?|diamonds?|clubs?",
@@ -278,6 +278,8 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
     assert '"north/deal":"AKQ"' in DATABASE_TEST
     assert '"lho":{"cards":"AS"}' in DATABASE_TEST
     assert "RHO has the queen of hearts" in DATABASE_TEST
+    assert "L.H.O has the ace of spades" in DATABASE_TEST
+    assert "R.H.O. has the queen of hearts" in DATABASE_TEST
     assert "VIDEO_CANON_SOURCE_POLICY_SUCCESSOR_HISTORY_NOT_PRESERVED" in DATABASE_TEST
     assert "VIDEO_CANON_BUNDLE_SCOPE_MISMATCH_NOT_BLOCKED" in DATABASE_TEST
     assert "VIDEO_CANON_FUTURE_BUNDLE_PERIOD_NOT_BLOCKED" in DATABASE_TEST

@@ -68,3 +68,14 @@ def test_pipeline_converts_malformed_legacy_evidence_into_gaps():
         "status": "EVIDENCE_REJECTED",
         "reason": "assertion fields mismatch",
     }]
+
+
+def test_pipeline_isolates_legacy_numeric_overflow_as_an_evidence_gap():
+    malformed_learning = deepcopy(_learning())
+    malformed_learning["confidence"]["transcript"] = 10**1000
+    result = run_video_canon_auto_pipeline(
+        malformed_learning, [_assertion()], {}
+    )
+    assert result["status"] == "NO_PROMOTION_READY"
+    assert result["promotion_commands"] == []
+    assert result["gaps"][0]["status"] == "EVIDENCE_REJECTED"

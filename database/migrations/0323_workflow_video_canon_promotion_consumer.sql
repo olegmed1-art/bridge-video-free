@@ -571,6 +571,10 @@ BEGIN
        OR v_existing.completed_by_principal IS DISTINCT FROM session_user THEN
       RAISE EXCEPTION 'VIDEO_CANON_STALE_LEASE_OR_FENCE' USING ERRCODE='55000';
     END IF;
+    -- Serialize retained delivery replay with the 0322 activation/restore
+    -- boundary, then take a fresh wall-clock snapshot for the final check.
+    PERFORM pg_advisory_xact_lock(hashtextextended(v_existing.school_id::text,0));
+    v_now := clock_timestamp();
     IF EXISTS (
          SELECT 1 FROM bidding.video_canon_ai_restore_receipt rr
           WHERE rr.video_canon_ai_promotion_receipt_id=v_existing.promotion_receipt_id

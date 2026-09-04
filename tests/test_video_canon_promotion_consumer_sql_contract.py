@@ -74,6 +74,17 @@ def test_delivery_is_leased_fenced_atomic_and_retained():
     assert MIGRATION.count("v_job.lease_token IS DISTINCT FROM p_lease_token") == 2
     assert "VIDEO_CANON_DELIVERY_RECEIPT_STALE" in MIGRATION
     assert "video_canon_ai_restore_receipt rr" in MIGRATION
+    replay = MIGRATION.split(
+        "SELECT * INTO v_existing FROM bidding.video_canon_promotion_delivery_receipt", 1
+    )[1].split(
+        "RETURN v_existing.video_canon_promotion_delivery_receipt_id", 1
+    )[0]
+    lock = "pg_advisory_xact_lock(hashtextextended(v_existing.school_id::text,0))"
+    assert lock in replay
+    assert replay.index(lock) < replay.index("v_now := clock_timestamp();")
+    assert replay.index("v_now := clock_timestamp();") < replay.index(
+        "video_canon_ai_restore_receipt rr"
+    )
     assert MIGRATION.count("valid_from<=v_now") == 4
     assert MIGRATION.count("valid_to>v_now") == 4
     assert "v_now := clock_timestamp();\n  IF NOT EXISTS (\n    SELECT 1 FROM bidding.video_canon_ai_promotion_receipt" in MIGRATION

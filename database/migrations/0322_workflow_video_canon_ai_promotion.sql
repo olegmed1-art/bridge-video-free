@@ -158,7 +158,7 @@ WITH RECURSIVE walk(value) AS (
         'partner_cards','opponent_cards','all_hands'
      ])
         OR regexp_replace(lower(k.key),'[^a-z0-9]','','g') ~
-           '^(actual)?(partner|opponent|north|east|south|west|lho|rho)(s)?(hand|holding|cards?|deals?)+(s)?$'
+           '^(actual)?(partner|opponent|north|east|south|west|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?)(s)?(hand|holding|cards?|deals?)+(s)?$'
         OR regexp_replace(lower(k.key),'[^a-z0-9]','','g') ~
            '^(hidden|concealed)(hand|holding|cards?|deals?)+(s)?$'
      LIMIT 1
@@ -393,7 +393,7 @@ WITH RECURSIVE walk(value,actor_context) AS (
         SELECT e.value,
                w.actor_context OR regexp_replace(
                  lower(e.key),'[^[:alnum:]]','','g'
-               ) ~ '^((actual)?(partner|opponent|north|east|south|west|lho|rho|n|e|s|w)s?|партн[её]р|соперник|оппонент)$'
+               ) ~ '^((actual)?(partner|opponent|north|east|south|west|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?|n|e|s|w)s?|партн[её]р|соперник|оппонент)$'
                  AS actor_context
           FROM jsonb_each(
           CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END
@@ -420,7 +420,7 @@ SELECT EXISTS (
        SELECT 1
          FROM regexp_matches(
            w.value#>>'{}',
-           E'(?:^|[^[:alnum:]])[NESW][[:space:]]*:[[:space:]]*((?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13})|(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west|lho|rho))[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)[^;]*?((?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13})|(?:(?:^|[^[:alnum:]_])(?:рука|карты))[[:space:]]+(?:партн[её]ра|соперника)[^;]*?((?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13})',
+           E'(?:^|[^[:alnum:]])[NESW][[:space:]]*:[[:space:]]*((?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13})|(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?))[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)[^;]*?((?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13})|(?:(?:^|[^[:alnum:]_])(?:рука|карты))[[:space:]]+(?:партн[её]ра|соперника)[^;]*?((?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13}\\.(?:(?:10)|[AKQJT2-9]){0,13})',
            'gi'
          ) AS matched(parts)
         WHERE bidding.is_complete_bridge_hand(
@@ -435,7 +435,7 @@ SELECT EXISTS (
            FROM regexp_matches(
              replace(replace(replace(replace(
                w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:'),
-             E'(?:(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west|lho|rho))[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:(?:^|[^[:alnum:]_])(?:рука|карты))[[:space:]]+(?:партн[её]ра|соперника)|(?:^|[^[:alnum:]])[NESW][[:space:]]*:)([^;]*)',
+             E'(?:(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?))[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:(?:^|[^[:alnum:]_])(?:рука|карты))[[:space:]]+(?:партн[её]ра|соперника)|(?:^|[^[:alnum:]])[NESW][[:space:]]*:)([^;]*)',
              'gi'
            ) AS matched(parts)
           WHERE matched.parts[1] ~*
@@ -463,7 +463,7 @@ SELECT EXISTS (
            FROM regexp_matches(
              replace(replace(replace(replace(
                w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:'),
-             E'(?:(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west|lho|rho))[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:(?:^|[^[:alnum:]_])(?:рука|карты))[[:space:]]+(?:партн[её]ра|соперника)|(?:^|[^[:alnum:]])[NESW][[:space:]]*:)[^;]*?S[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*H[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*D[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*C[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})',
+             E'(?:(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?))[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:(?:^|[^[:alnum:]_])(?:рука|карты))[[:space:]]+(?:партн[её]ра|соперника)|(?:^|[^[:alnum:]])[NESW][[:space:]]*:)[^;]*?S[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*H[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*D[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})[[:space:],/]*C[[:space:]]*:[[:space:]]*(-|(?:(?:10)|[AKQJT2-9]){0,13})',
              'gi'
            ) AS matched(parts)
           WHERE bidding.is_complete_bridge_hand(concat_ws(
@@ -477,7 +477,7 @@ SELECT EXISTS (
          SELECT 1
            FROM regexp_matches(
              w.value#>>'{}',
-             E'(?:(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west|lho|rho))[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:(?:^|[^[:alnum:]_])(?:рука|карты))[[:space:]]+(?:партн[её]ра|соперника)|(?:^|[^[:alnum:]])[NESW][[:space:]]*:)[^;]*?(-|(?:(?:10)|[AKQJT2-9]){1,13})[[:space:]/,]+(-|(?:(?:10)|[AKQJT2-9]){1,13})[[:space:]/,]+(-|(?:(?:10)|[AKQJT2-9]){1,13})[[:space:]/,]+(-|(?:(?:10)|[AKQJT2-9]){1,13})',
+             E'(?:(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?))[[:space:]]*(?:[''’]s)?[ _-]*(?:hand|cards)|(?:(?:^|[^[:alnum:]_])(?:рука|карты))[[:space:]]+(?:партн[её]ра|соперника)|(?:^|[^[:alnum:]])[NESW][[:space:]]*:)[^;]*?(-|(?:(?:10)|[AKQJT2-9]){1,13})[[:space:]/,]+(-|(?:(?:10)|[AKQJT2-9]){1,13})[[:space:]/,]+(-|(?:(?:10)|[AKQJT2-9]){1,13})[[:space:]/,]+(-|(?:(?:10)|[AKQJT2-9]){1,13})',
              'gi'
            ) AS matched(parts)
           WHERE bidding.is_complete_bridge_hand(concat_ws(
@@ -491,7 +491,7 @@ SELECT EXISTS (
          SELECT 1
            FROM regexp_matches(
              w.value#>>'{}',
-             E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west|lho|rho)|(?:^|[^[:alnum:]])[NESW])(?:(?:(?:[[:space:]]+(?:(?:held|holds?|has|had|owns?|possesses?|retains?|carries?)|(?:is|was)[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding))|(?:[''’]s(?:[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding)?))(?:[[:space:]]+|[[:space:]]*[:,;=\\-][[:space:]]*)|(?:[[:space:]]*[:,;=\\-][[:space:]]*))([^;]*)',
+             E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?)|(?:^|[^[:alnum:]])[NESW])(?:(?:(?:[[:space:]]+(?:(?:held|holds?|has|had|owns?|possesses?|retains?|carries?)|(?:is|was)[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding))|(?:[''’]s(?:[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding)?))(?:[[:space:]]+|[[:space:]]*[:,;=\\-][[:space:]]*)|(?:[[:space:]]*[:,;=\\-][[:space:]]*))([^;]*)',
              'gi'
            ) AS matched(parts)
           WHERE matched.parts[1] ~*
@@ -504,13 +504,13 @@ SELECT EXISTS (
      WHERE jsonb_typeof(w.value)='string'
        AND replace(replace(replace(replace(
              w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:') ~*
-           E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west|lho|rho)|(?:^|[^[:alnum:]])[NESW])[[:space:]]+(?:(?:does[[:space:]]+not|doesn[''’]t)[[:space:]]+(?:have|hold)(?:[[:space:]]+any)?|(?:has|holds?|had)[[:space:]]+(?:(?:no|neither)|none[[:space:]]+of)|lacks?)[[:space:]]+(?:any[[:space:]]+)?(?:the[[:space:]]+)?(?:aces?|kings?|queens?|jacks?|tens?|spades?|hearts?|diamonds?|clubs?|(?:ace|king|queen|jack|ten)[[:space:]]+of[[:space:]]+(?:spades?|hearts?|diamonds?|clubs?)|(?:spades?|hearts?|diamonds?|clubs?)[[:space:]]+(?:ace|king|queen|jack|ten|10|[AKQJT2-9])|[SHDC][[:space:]]*:?[[:space:]]*(?:10|[AKQJT2-9])|(?:10|[AKQJT2-9])[[:space:]]*[SHDC])($|[^[:alnum:]_])'
+           E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?)|(?:^|[^[:alnum:]])[NESW])[[:space:]]+(?:(?:does[[:space:]]+not|doesn[''’]t)[[:space:]]+(?:have|hold)(?:[[:space:]]+any)?|(?:has|holds?|had)[[:space:]]+(?:(?:no|neither)|none[[:space:]]+of)|lacks?)[[:space:]]+(?:any[[:space:]]+)?(?:the[[:space:]]+)?(?:aces?|kings?|queens?|jacks?|tens?|spades?|hearts?|diamonds?|clubs?|(?:ace|king|queen|jack|ten)[[:space:]]+of[[:space:]]+(?:spades?|hearts?|diamonds?|clubs?)|(?:spades?|hearts?|diamonds?|clubs?)[[:space:]]+(?:ace|king|queen|jack|ten|10|[AKQJT2-9])|[SHDC][[:space:]]*:?[[:space:]]*(?:10|[AKQJT2-9])|(?:10|[AKQJT2-9])[[:space:]]*[SHDC])($|[^[:alnum:]_])'
   ) OR EXISTS (
     SELECT 1 FROM walk AS w
      WHERE jsonb_typeof(w.value)='string'
        AND replace(replace(replace(replace(
              w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:') ~*
-           E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west|lho|rho)|(?:^|[^[:alnum:]])[NESW])[[:space:]]+(?:is|was|remains?)[[:space:]]+void[[:space:]]+(?:(?:in|of)[[:space:]]+)?(?:spades?|hearts?|diamonds?|clubs?|[SHDC][[:space:]]*:?)($|[^[:alnum:]_])'
+           E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?)|(?:^|[^[:alnum:]])[NESW])[[:space:]]+(?:is|was|remains?)[[:space:]]+void[[:space:]]+(?:(?:in|of)[[:space:]]+)?(?:spades?|hearts?|diamonds?|clubs?|[SHDC][[:space:]]*:?)($|[^[:alnum:]_])'
   ) OR EXISTS (
     SELECT 1 FROM walk AS w
      WHERE jsonb_typeof(w.value)='string'

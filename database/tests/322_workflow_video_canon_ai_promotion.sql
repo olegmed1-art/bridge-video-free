@@ -231,6 +231,10 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"RHO has the queen of hearts"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"L.H.O has the ace of spades"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"R.H.O. has the queen of hearts"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"compiled_payload":{"partner":{"cards":"AS"}}}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"north":"10S"}'::jsonb
