@@ -388,8 +388,8 @@ WITH RECURSIVE walk(value,actor_context) AS (
       CROSS JOIN LATERAL (
         SELECT e.value,
                w.actor_context OR regexp_replace(
-                 lower(e.key),'[^a-z0-9]','','g'
-               ) ~ '^(actual)?(partner|opponent|north|east|south|west)s?$'
+                 lower(e.key),'[^[:alnum:]]','','g'
+               ) ~ '^((actual)?(partner|opponent|north|east|south|west|n|e|s|w)s?|партн[её]р|соперник|оппонент)$'
                  AS actor_context
           FROM jsonb_each(
           CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END

@@ -242,7 +242,8 @@ def _is_complete_hand_shape(hand: str) -> bool:
 
 
 _ACTOR_CONTEXT_KEY = re.compile(
-    r"(?:actual)?(?:partner|opponent|north|east|south|west)s?"
+    r"(?:(?:actual)?(?:partner|opponent|north|east|south|west|n|e|s|w)s?"
+    r"|партн[её]р|соперник|оппонент)"
 )
 
 
@@ -252,7 +253,7 @@ def _has_forbidden_value(value: Any, *, actor_context: bool = False) -> bool:
             _has_forbidden_value(
                 child,
                 actor_context=actor_context or _ACTOR_CONTEXT_KEY.fullmatch(
-                    re.sub(r"[^a-z0-9]", "", str(key).casefold())
+                    re.sub(r"[\W_]", "", str(key).casefold())
                 ) is not None,
             )
             for key, child in value.items()

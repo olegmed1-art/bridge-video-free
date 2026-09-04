@@ -175,6 +175,8 @@ def test_hidden_information_is_rejected_inside_json_serializable_tuple():
     {"partner": {"cards": "AS"}},
     {"north": "10S"},
     {"opponent": [{"detail": "ace of hearts"}]},
+    {"N": {"cards": "AS"}},
+    {"партнёр": {"карты": "AKQ"}},
 ])
 def test_nested_actor_context_is_preserved_for_hidden_value_scanning(compiled_payload):
     assertion = _assertion()
