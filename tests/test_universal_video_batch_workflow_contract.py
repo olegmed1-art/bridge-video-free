@@ -13,7 +13,9 @@ def test_batch_transport_is_durable_bounded_and_project_neutral():
     assert "ops/oracle-universal-video-batch-requests/*.json" in text
     assert "expected exactly one batch request" in text
     assert "validate_intake_request" in text
-    assert "enqueue-batch-base64" in text
+    assert "resume-batch-base64 '$REQUEST_KEY' '$PAYLOAD'" in text
+    assert "universal-video-batch-status-v1" in text
+    assert "reconciled_existing" in text
     assert "ORACLE_UNIVERSAL_VIDEO_BATCH_INTAKE_PASS" in text
     assert "StrictHostKeyChecking=yes" in text
     assert "StrictHostKeyChecking=no" not in text

@@ -26,6 +26,7 @@ ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video repair-submit-drive-
 ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video status *
 ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video enqueue-batch-base64 *
 ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video batch-status *
+ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video resume-batch-base64 *
 EOF
 chmod 0440 "$tmp" || fail 'temporary sudoers mode failed'
 visudo -cf "$tmp" >/dev/null || fail 'operator sudoers validation failed'

@@ -353,7 +353,13 @@ case "$action" in
     done
     [[ -r "$token_file" && -r "$pid_file" && -r "$start_file" && -r "$proof" ]] || exit 74
     [[ "$(cat "$token_file")" == "$token" ]] || exit 74
-    kill -0 "$(cat "$pid_file")" || exit 74
+    holder_pid="$(cat "$pid_file")"
+    [[ "$holder_pid" =~ ^[1-9][0-9]*$ ]] || exit 74
+    holder_start="$(cat "$start_file")"
+    [[ "$holder_start" =~ ^[0-9]+$ ]] || exit 74
+    [[ -r "/proc/$holder_pid/stat" ]] || exit 74
+    [[ "$(awk '{print $22}' "/proc/$holder_pid/stat")" == "$holder_start" ]] || exit 74
+    kill -0 "$holder_pid" || exit 74
     if flock -n "$LOCK" true; then exit 74; fi
     cat "$proof"
     ;;

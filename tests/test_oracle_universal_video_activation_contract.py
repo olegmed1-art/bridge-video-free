@@ -66,6 +66,7 @@ def test_generic_operator_owns_a_dedicated_sudoers_file():
         assert "exit 78" in retired
     assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video enqueue-batch-base64 *" in installer
     assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video batch-status *" in installer
+    assert "ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video resume-batch-base64 *" in installer
 
 
 def test_batch_intake_uses_file_backed_secrets_and_no_project_binding():
@@ -75,6 +76,7 @@ def test_batch_intake_uses_file_backed_secrets_and_no_project_binding():
     assert "BRIDGE_VIDEO_QUEUE_DATABASE_URL_FILE" in operator
     assert "enqueue-batch-base64" in operator
     assert "batch-status" in operator
+    assert "resume-batch-base64" in operator
     assert "project" not in schema["properties"]
     assert schema["properties"]["processing_profile"]["pattern"]
     assert schema["properties"]["algorithm_revision"]["pattern"]
