@@ -51,8 +51,10 @@ jobs:
     # The explicit OCI waiters consume at most 235 minutes: 60 minutes each for
     # backup and restore, five minutes each for five network creates, 30 minutes
     # each for launch and termination, and five minutes for each of six
-    # dependency-deletion checks. GitHub's six-hour ceiling leaves 125 minutes
-    # for setup, bounded rediscovery, SSH acceptance, recovery, and the
+    # dependency-deletion checks. A rerun may spend at most another 30 minutes
+    # reconciling one prior attempt. GitHub's six-hour ceiling therefore leaves
+    # at least 95 minutes for setup, bounded rediscovery, SSH acceptance,
+    # recovery, and the
     # EXIT cleanup trap instead of cancelling exactly at the waiter ceiling.
     timeout-minutes: 360
     env:
@@ -138,7 +140,10 @@ jobs:
           [[ "$source_public_ip" == "$ORACLE_HOST" ]] || exit 34
           shape="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["shape"])')"
           shape_config="$(printf '%s' "$instance_json" | python -c 'import json,sys; d=json.load(sys.stdin)["data"].get("shape-config") or {}; print(json.dumps({"ocpus":d.get("ocpus"),"memoryInGBs":d.get("memory-in-gbs")},separators=(",",":")))')"
-          stamp="issue-881-${GITHUB_RUN_ID}"
+          run_prefix="issue-881-${GITHUB_RUN_ID}"
+          prior_prefix="${run_prefix}-a"
+          stamp="${prior_prefix}${GITHUB_RUN_ATTEMPT}"
+          backup_name="${run_prefix}-full"
           backup_id="" restored_id="" drill_instance_id="" drill_public_ip="" drill_started=""
           drill_vcn_id="" drill_ig_id="" drill_route_id="" drill_security_id="" drill_subnet_id=""
           restored_attempted=0 drill_vcn_attempted=0 drill_ig_attempted=0
@@ -168,9 +173,9 @@ jobs:
             return 0
           }
           wait_absent() {
-            local resource="$1" id="$2" output
+            local resource="$1" id="$2" loops="${3:-60}" output
             local -a command
-            for _ in $(seq 1 60); do
+            for _ in $(seq 1 "$loops"); do
               case "$resource" in
                 boot-volume) command=(oci bv boot-volume get --boot-volume-id "$id") ;;
                 subnet) command=(oci network subnet get --subnet-id "$id") ;;
@@ -193,6 +198,113 @@ jobs:
               return 1
             done
             return 1
+          }
+          wait_all_absent() {
+            local resource="$1" loops="$2" output pending id
+            shift 2
+            local -a command ids=("$@")
+            (( ${#ids[@]} > 0 )) || return 0
+            for _ in $(seq 1 "$loops"); do
+              pending=0
+              for id in "${ids[@]}"; do
+                case "$resource" in
+                  boot-volume) command=(oci bv boot-volume get --boot-volume-id "$id") ;;
+                  subnet) command=(oci network subnet get --subnet-id "$id") ;;
+                  security-list) command=(oci network security-list get --security-list-id "$id") ;;
+                  route-table) command=(oci network route-table get --rt-id "$id") ;;
+                  internet-gateway) command=(oci network internet-gateway get --ig-id "$id") ;;
+                  vcn) command=(oci network vcn get --vcn-id "$id") ;;
+                  *) return 2 ;;
+                esac
+                if output="$("${command[@]}" 2>&1)"; then
+                  pending=1
+                elif ! grep -Fq 'NotAuthorizedOrNotFound' <<<"$output" \
+                    || ! grep -Eq '"status"[[:space:]]*:[[:space:]]*404' <<<"$output"; then
+                  return 1
+                fi
+              done
+              (( pending == 0 )) && return 0
+              sleep 5
+            done
+            return 1
+          }
+          prior_named_ids() {
+            local resource="$1" suffix="$2" output
+            local -a command
+            case "$resource" in
+              instance) command=(oci compute instance list --compartment-id "$tenancy_id" --all) ;;
+              boot-volume) command=(oci bv boot-volume list --compartment-id "$tenancy_id" --availability-domain "$ad" --all) ;;
+              subnet) command=(oci network subnet list --compartment-id "$tenancy_id" --all) ;;
+              security-list) command=(oci network security-list list --compartment-id "$tenancy_id" --all) ;;
+              route-table) command=(oci network route-table list --compartment-id "$tenancy_id" --all) ;;
+              internet-gateway) command=(oci network internet-gateway list --compartment-id "$tenancy_id" --all) ;;
+              vcn) command=(oci network vcn list --compartment-id "$tenancy_id" --all) ;;
+              *) return 2 ;;
+            esac
+            output="$("${command[@]}" --output json)" || return 1
+            PRIOR_PREFIX="$prior_prefix" CURRENT_STAMP="$stamp" SUFFIX="-$suffix" python -c 'import json,os,sys; xs=sorted(x["id"] for x in json.load(sys.stdin).get("data",[]) if (x.get("display-name") or "").startswith(os.environ["PRIOR_PREFIX"]) and not (x.get("display-name") or "").startswith(os.environ["CURRENT_STAMP"]+"-") and (x.get("display-name") or "").endswith(os.environ["SUFFIX"]) and x.get("lifecycle-state") != "TERMINATED"); print("\n".join(xs))' <<<"$output"
+          }
+          reconcile_prior_attempt_resources() {
+            local prior_instances prior_restored prior_subnets prior_security prior_routes prior_igs prior_vcns state pending id
+            local -a ids
+            prior_instances="$(prior_named_ids instance boot-acceptance)"
+            prior_restored="$(prior_named_ids boot-volume restore)"
+            prior_subnets="$(prior_named_ids subnet subnet)"
+            prior_security="$(prior_named_ids security-list ssh-only)"
+            prior_routes="$(prior_named_ids route-table route)"
+            prior_igs="$(prior_named_ids internet-gateway ig)"
+            prior_vcns="$(prior_named_ids vcn vcn)"
+            if [[ -z "$prior_instances$prior_restored$prior_subnets$prior_security$prior_routes$prior_igs$prior_vcns" ]]; then
+              return 0
+            fi
+            echo 'UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_START'
+            if [[ -n "$prior_instances" ]]; then
+              readarray -t ids <<<"$prior_instances"
+              for id in "${ids[@]}"; do
+                oci compute instance terminate --instance-id "$id" --preserve-boot-volume false --force >/dev/null 2>&1 || true
+              done
+              for _ in $(seq 1 180); do
+                pending=0
+                for id in "${ids[@]}"; do
+                  state="$(oci compute instance get --instance-id "$id" --query 'data."lifecycle-state"' --raw-output 2>/dev/null || printf UNKNOWN)"
+                  [[ "$state" == TERMINATED ]] || pending=1
+                done
+                (( pending == 0 )) && break
+                sleep 5
+              done
+              (( pending == 0 ))
+            fi
+            if [[ -n "$prior_restored" ]]; then
+              readarray -t ids <<<"$prior_restored"
+              for id in "${ids[@]}"; do oci bv boot-volume delete --boot-volume-id "$id" --force >/dev/null 2>&1 || true; done
+              wait_all_absent boot-volume 30 "${ids[@]}"
+            fi
+            if [[ -n "$prior_subnets" ]]; then
+              readarray -t ids <<<"$prior_subnets"
+              for id in "${ids[@]}"; do oci network subnet delete --subnet-id "$id" --force >/dev/null 2>&1 || true; done
+              wait_all_absent subnet 30 "${ids[@]}"
+            fi
+            if [[ -n "$prior_security" ]]; then
+              readarray -t ids <<<"$prior_security"
+              for id in "${ids[@]}"; do oci network security-list delete --security-list-id "$id" --force >/dev/null 2>&1 || true; done
+              wait_all_absent security-list 30 "${ids[@]}"
+            fi
+            if [[ -n "$prior_routes" ]]; then
+              readarray -t ids <<<"$prior_routes"
+              for id in "${ids[@]}"; do oci network route-table delete --rt-id "$id" --force >/dev/null 2>&1 || true; done
+              wait_all_absent route-table 30 "${ids[@]}"
+            fi
+            if [[ -n "$prior_igs" ]]; then
+              readarray -t ids <<<"$prior_igs"
+              for id in "${ids[@]}"; do oci network internet-gateway delete --ig-id "$id" --force >/dev/null 2>&1 || true; done
+              wait_all_absent internet-gateway 30 "${ids[@]}"
+            fi
+            if [[ -n "$prior_vcns" ]]; then
+              readarray -t ids <<<"$prior_vcns"
+              for id in "${ids[@]}"; do oci network vcn delete --vcn-id "$id" --force >/dev/null 2>&1 || true; done
+              wait_all_absent vcn 30 "${ids[@]}"
+            fi
+            echo 'UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS'
           }
           cleanup_temp_resources() {
             local failed=0 state candidates
@@ -219,8 +331,11 @@ jobs:
             # If launch returned after creating the instance but before its JSON
             # reached this runner, recover the OCID from the unique run stamp.
             if [[ -z "$drill_instance_id" && -n "$drill_subnet_id" ]]; then
-              candidates="$(oci compute instance list --compartment-id "$tenancy_id" --display-name "$stamp-boot-acceptance" --all --output json 2>/dev/null || true)"
-              drill_instance_id="$(printf '%s' "$candidates" | python -c 'import json,sys; xs=[x["id"] for x in json.load(sys.stdin).get("data",[]) if x.get("lifecycle-state") not in {"TERMINATED","TERMINATING"}]; assert len(xs)<=1; print(xs[0] if xs else "")' 2>/dev/null || true)"
+              if ! candidates="$(oci compute instance list --compartment-id "$tenancy_id" --display-name "$stamp-boot-acceptance" --all --output json)"; then
+                failed=1
+                candidates='{"data":[]}'
+              fi
+              drill_instance_id="$(printf '%s' "$candidates" | python -c 'import json,sys; xs=[x["id"] for x in json.load(sys.stdin).get("data",[]) if x.get("lifecycle-state") not in {"TERMINATED","TERMINATING"}]; assert len(xs)<=1; print(xs[0] if xs else "")')" || failed=1
             fi
             if [[ -n "$drill_instance_id" ]]; then
               oci compute instance terminate --instance-id "$drill_instance_id" --preserve-boot-volume false --force >/dev/null 2>&1 || true
@@ -270,11 +385,15 @@ jobs:
             fi
             exit "$rc"
           }
+          reconcile_prior_attempt_resources
           trap cleanup EXIT
-          if backup="$(oci bv boot-volume-backup create --boot-volume-id "$boot_id" --type FULL --display-name "$stamp-full" --output json)"; then
-            backup_id="$(printf '%s' "$backup" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
-          else
-            backup_id="$(discover_named_id backup "$stamp-full")"
+          backup_id="$(discover_named_id backup "$backup_name")"
+          if [[ -z "$backup_id" ]]; then
+            if backup="$(oci bv boot-volume-backup create --boot-volume-id "$boot_id" --type FULL --display-name "$backup_name" --output json)"; then
+              backup_id="$(printf '%s' "$backup" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
+            else
+              backup_id="$(discover_named_id backup "$backup_name")"
+            fi
           fi
           [[ -n "$backup_id" ]] || exit 36
           oci bv boot-volume-backup get --boot-volume-backup-id "$backup_id" --wait-for-state AVAILABLE --max-wait-seconds 3600 >/dev/null
@@ -287,6 +406,7 @@ jobs:
           created=datetime.datetime.fromisoformat(d['time-created'].replace('Z','+00:00'))
           assert (datetime.datetime.now(datetime.timezone.utc)-created).total_seconds() < 86400
           PY
+          echo "backup_id=$backup_id" >> "$GITHUB_OUTPUT"
           restored_attempted=1
           if restored="$(oci bv boot-volume create --boot-volume-backup-id "$backup_id" --availability-domain "$ad" --compartment-id "$tenancy_id" --display-name "$stamp-restore" --output json)"; then
             restored_id="$(printf '%s' "$restored" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
@@ -362,7 +482,6 @@ jobs:
           drill_instance_id=""; restored_id=""; drill_subnet_id=""; drill_security_id=""
           drill_route_id=""; drill_ig_id=""; drill_vcn_id=""
           trap - EXIT
-          echo "backup_id=$backup_id" >> "$GITHUB_OUTPUT"
           echo "source_boot_id=$boot_id" >> "$GITHUB_OUTPUT"
           echo "source_instance_id=$instance_id" >> "$GITHUB_OUTPUT"
           echo "temporary_instance_seconds=$drill_seconds" >> "$GITHUB_OUTPUT"
@@ -459,6 +578,7 @@ jobs:
         if: ${{ always() }}
         env:
           BACKUP_OUTCOME: ${{ steps.backup.outcome }}
+          BACKUP_ID: ${{ steps.backup.outputs.backup_id }}
           TEMP_INSTANCE_SECONDS: ${{ steps.backup.outputs.temporary_instance_seconds }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -469,7 +589,11 @@ jobs:
             echo
             echo "- workflow outcome: \\`${{ job.status }}\\`"
             echo "- fresh 97 GB FULL backup gate: \\`${BACKUP_OUTCOME}\\`"
-            echo '- fresh backup retained: `true` (billable backup storage may apply)'
+            if [[ -n "$BACKUP_ID" ]]; then
+              echo "- fresh backup retained: \`true\`; proven backup ID: \`${BACKUP_ID}\` (billable backup storage may apply)"
+            else
+              echo '- fresh backup retained: `unknown`; no proven backup ID was emitted before failure/skip'
+            fi
             echo '- temporary cleanup: `ENFORCED_BY_EXIT_TRAP`; inspect the run before accepting a failed gate'
             echo "- temporary instance runtime seconds: \\`${TEMP_INSTANCE_SECONDS:-unknown}\\`"
             echo '- exact monetary charge: `PENDING_OCI_BILLING_EXPORT`'
