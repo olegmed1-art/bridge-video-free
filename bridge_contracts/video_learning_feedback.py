@@ -154,7 +154,11 @@ def build_learning_feedback(
                        for value in numeric_values):
                 improved = False
                 break
-            candidate_value, baseline_value, minimum_delta = map(float, numeric_values)
+            try:
+                candidate_value, baseline_value, minimum_delta = map(float, numeric_values)
+            except OverflowError:
+                improved = False
+                break
             if not all(math.isfinite(value) for value in (
                 candidate_value, baseline_value, minimum_delta
             )):
@@ -164,6 +168,9 @@ def build_learning_feedback(
                 improved = False
                 break
             delta = candidate_value - baseline_value
+            if not math.isfinite(delta):
+                improved = False
+                break
             if row["direction"] == "HIGHER_IS_BETTER":
                 improved = improved and delta >= minimum_delta
             else:
