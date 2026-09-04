@@ -142,11 +142,45 @@ jobs:
         run: |
           set -euo pipefail
           [[ -n "$PAYLOAD" && ${#PAYLOAD} -le 24000 ]]
+          set +e
           result="$(timeout 180 ssh -i '${{ steps.ssh.outputs.key }}' \
             -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
             "$ORACLE_USER@$ORACLE_HOST" \
             "sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video enqueue-batch-base64 '$PAYLOAD'" 2>/dev/null)"
+          enqueue_rc=$?
+          set -e
+          if (( enqueue_rc != 0 )); then
+            intake_code="$(sed -n 's/^UV_ERROR_CODE=//p' <<<"$result" | tail -n1)"
+            if [[ -z "$intake_code" ]]; then
+              intake_code="$(RESULT="$result" python - <<'PY' 2>/dev/null || true
+          import json
+          import os
+
+          allowed = {"UV_BATCH_INTAKE_INVALID", "UV_BATCH_INTAKE_FAILED"}
+          for line in reversed(os.environ["RESULT"].splitlines()):
+              try:
+                  value = json.loads(line)
+              except (TypeError, ValueError):
+                  continue
+              if isinstance(value, dict) and value.get("error_code") in allowed:
+                  print(value["error_code"])
+                  break
+          PY
+              )"
+            fi
+            case "$intake_code" in
+              UV_INTAKE_ROOT_UNSAFE|UV_INTAKE_INBOX_UNSAFE|UV_INTAKE_PERMISSION_DENIED|\
+              UV_INTAKE_CROSS_DEVICE|UV_INTAKE_DISK_FULL|UV_INTAKE_READ_ONLY|\
+              UV_INTAKE_COLLISION|UV_INTAKE_CLEANUP_FAILED|UV_INTAKE_CONTRACT_INVALID|\
+              UV_INTAKE_SOURCE_UNSUPPORTED|UV_INTAKE_USAGE_INVALID|UV_INTAKE_IO_FAILED|\
+              UV_INTAKE_EXECUTION_FAILED|UV_INTAKE_REJECTED|UV_BATCH_INTAKE_INVALID|\
+              UV_BATCH_INTAKE_FAILED)
+                echo "UV_BATCH_ERROR_CODE=$intake_code" >&2 ;;
+              *) echo 'UV_BATCH_ERROR_CODE=UV_BATCH_ENQUEUE_FAILED' >&2 ;;
+            esac
+            exit 1
+          fi
           RESULT="$result" REQUEST_KEY="$REQUEST_KEY" python - <<'PY'
           import json, os
           value=json.loads(os.environ['RESULT'].splitlines()[-1])

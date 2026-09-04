@@ -152,7 +152,7 @@ SOURCE_FILE="$SOURCE_DIR/ops/universal_video_operator.sh" \
 EXPECTED_RUNTIME_COMMIT="$RESOLVED_COMMIT" \
   bash "$SOURCE_DIR/ops/install_universal_video_operator.sh"
 set +e
-operator_smoke="$(sudo -u ocarun sudo -n /usr/local/sbin/universal-video status .. 2>&1)"
+operator_smoke="$(sudo -u ocarun sudo -n /usr/local/sbin/universal-video status .. smoke "$(printf '0%.0s' {1..64})" AAAAAAAAAA 2>&1)"
 operator_smoke_rc=$?
 set -e
 [[ "$operator_smoke_rc" -eq 1 ]] || die 'bounded Universal Video operator rejection smoke returned an unexpected code'

@@ -39,6 +39,8 @@ def test_delivery_is_leased_fenced_atomic_and_retained():
     assert "v_existing.fencing_token IS DISTINCT FROM p_fencing_token" in MIGRATION
     assert MIGRATION.count("p_lease_token IS NULL OR p_fencing_token IS NULL") == 2
     assert MIGRATION.count("v_job.lease_token IS DISTINCT FROM p_lease_token") == 2
+    assert "VIDEO_CANON_DELIVERY_RECEIPT_STALE" in MIGRATION
+    assert "video_canon_ai_restore_receipt rr" in MIGRATION
 
 
 def test_only_consumer_can_cross_authoritative_boundary():

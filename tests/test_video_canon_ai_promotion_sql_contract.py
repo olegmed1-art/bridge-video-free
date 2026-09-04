@@ -202,6 +202,8 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "(?:[-–—]|to)[[:space:]]*[0-9]{1,2}|[+]",
         "does[[:space:]]+not|doesn[''’]t",
         "(?:no|neither)",
+        "none[[:space:]]+of",
+        "|lacks?",
         "jsonb_typeof(v_candidate.payload->'ambiguities') IS DISTINCT FROM 'array'",
         "jsonb_typeof(v_candidate.payload->'contradictions') IS DISTINCT FROM 'array'",
     ):

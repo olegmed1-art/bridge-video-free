@@ -120,6 +120,8 @@ def test_world_video_can_never_be_review_eligible_for_school_canon():
     (lambda a: a["source_authorization"].update(authorized_source_sha256="d" * 64), "source sha256 mismatch"),
     (lambda a: a.update(statement="Подменённое утверждение"), "does not match statement"),
     (lambda a: a["normalized_rule"].update(partner_hand="AKQ"), "hidden information"),
+    (lambda a: a["normalized_rule"].update(partner_holding="AKQ.JT9.876.5432"), "hidden information"),
+    (lambda a: a["normalized_rule"].update(**{"North-Cards": "AKQ.JT9.876.5432"}), "hidden information"),
     (lambda a: a["tests"].update(boundary=[]), "four test classes"),
 ])
 def test_fails_closed_on_unproven_or_unsafe_assertions(mutation, match):
@@ -239,6 +241,9 @@ def test_hidden_deal_is_rejected_inside_innocuous_allowed_value(field, value):
     "North doesn't hold ♥Q",
     "North has no aces",
     "partner holds no ♣A",
+    "North does not have any aces",
+    "North has none of the aces",
+    "North lacks the ace of spades",
 ])
 def test_hidden_deal_is_rejected_in_source_bound_teacher_statement(statement):
     learning = _learning()

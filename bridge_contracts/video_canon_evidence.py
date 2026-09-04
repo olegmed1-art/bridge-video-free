@@ -80,8 +80,9 @@ _VERBAL_HIDDEN_TAIL = re.compile(
 _NEGATED_HIDDEN_HOLDING = re.compile(
     r"(?:(?<!\w)(?:partner|opponent|north|east|south|west)"
     r"|(?<![A-Za-z0-9])[NESW])\s+"
-    r"(?:(?:does\s+not|doesn['’]t)\s+(?:have|hold)|"
-    r"(?:has|holds?|had)\s+(?:no|neither))\s+"
+    r"(?:(?:does\s+not|doesn['’]t)\s+(?:have|hold)(?:\s+any)?|"
+    r"(?:has|holds?|had)\s+(?:(?:no|neither)|none\s+of)|"
+    r"lacks?)\s+(?:any\s+)?"
     r"(?:the\s+)?(?:aces?|kings?|queens?|jacks?|tens?|"
     r"(?:ace|king|queen|jack|ten)\s+of\s+(?:spades?|hearts?|diamonds?|clubs?)|"
     r"(?:spades?|hearts?|diamonds?|clubs?)\s+(?:ace|king|queen|jack|ten|10|[AKQJT2-9])|"
@@ -182,7 +183,13 @@ def _confidence(value: Any) -> float:
 def _has_forbidden_key(value: Any) -> bool:
     if isinstance(value, Mapping):
         return any(
-            str(key).casefold() in _FORBIDDEN_KEYS or _has_forbidden_key(child)
+            str(key).casefold() in _FORBIDDEN_KEYS
+            or re.fullmatch(
+                r"(?:actual)?(?:partner|opponent|north|east|south|west)"
+                r"(?:hand|holding|cards?)+s?",
+                re.sub(r"[^a-z0-9]", "", str(key).casefold()),
+            ) is not None
+            or _has_forbidden_key(child)
             for key, child in value.items()
         )
     if isinstance(value, (list, tuple)):

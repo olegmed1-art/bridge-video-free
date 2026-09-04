@@ -5,6 +5,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from universal_video.contract import canonical_job_hash, validate_job
+
 
 ROOT = Path(__file__).resolve().parents[1]
 READER = ROOT / "ops/universal_video_receipt_reader.py"
@@ -21,6 +23,7 @@ def _done_payload() -> dict:
         "profile": PROFILE,
         "job_hash": JOB_HASH,
         "source": {"kind": "google_drive", "file_id": SOURCE_ID},
+        "result_conformance": {"state": "PASS", "artifact_set_sha256": "b" * 64},
     }
 
 
@@ -55,6 +58,24 @@ def test_exact_regular_receipt_passes(tmp_path: Path):
     result = _run(receipt)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "COMPLETED"
+
+
+def test_bound_done_receipt_exposes_attested_artifact_inventory(tmp_path: Path):
+    receipt = tmp_path / "done.json"
+    _write(receipt, json.dumps(_done_payload()))
+    result = subprocess.run(
+        ["python3", str(READER), "inspect-done-bound", str(receipt), JOB_ID, PROFILE, JOB_HASH, SOURCE_ID],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=2,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "UV_RESULT_STATUS=COMPLETED",
+        "UV_EXPECTED_ARTIFACT_SET_SHA256=" + "b" * 64,
+    ]
 
 
 def test_symlink_receipt_fails_without_disclosing_target(tmp_path: Path):
@@ -108,12 +129,16 @@ def test_failed_receipt_exposes_only_allowlisted_identity(tmp_path: Path):
                 "job_file": f"{JOB_ID}.json",
                 "error_type": "VideoSubprocessError",
                 "error_code": "UV_MEDIA_PROBE_FAILED",
+                "job_id": JOB_ID,
+                "profile": "balanced",
+                "job_hash": "a" * 64,
+                "source": {"kind": "google_drive", "file_id": "drive-file-123"},
                 "error": "DO_NOT_PRINT_RAW_STDERR\n/private/source-name.mp4",
             }
         ),
     )
     result = subprocess.run(
-        ["python3", str(READER), "inspect-failed", str(receipt), f"{JOB_ID}.json"],
+        ["python3", str(READER), "inspect-failed", str(receipt), f"{JOB_ID}.json", "balanced", "a" * 64, "drive-file-123"],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -139,11 +164,15 @@ def test_failed_receipt_rejects_unbounded_error_identity(tmp_path: Path):
                 "job_file": f"{JOB_ID}.json",
                 "error_type": "RuntimeError\nINJECTED",
                 "error_code": "NOT_ALLOWLISTED",
+                "job_id": JOB_ID,
+                "profile": "balanced",
+                "job_hash": "a" * 64,
+                "source": {"kind": "google_drive", "file_id": "drive-file-123"},
             }
         ),
     )
     result = subprocess.run(
-        ["python3", str(READER), "inspect-failed", str(receipt), f"{JOB_ID}.json"],
+        ["python3", str(READER), "inspect-failed", str(receipt), f"{JOB_ID}.json", "balanced", "a" * 64, "drive-file-123"],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -152,3 +181,105 @@ def test_failed_receipt_rejects_unbounded_error_identity(tmp_path: Path):
     )
     assert result.returncode != 0
     assert "INJECTED" not in result.stdout + result.stderr
+
+
+def test_failed_receipt_rejects_different_source_identity(tmp_path: Path):
+    receipt = tmp_path / "failed.json"
+    _write(
+        receipt,
+        json.dumps(
+            {
+                "status": "FAILED",
+                "job_file": f"{JOB_ID}.json",
+                "job_id": JOB_ID,
+                "profile": "balanced",
+                "job_hash": "a" * 64,
+                "source": {"kind": "google_drive", "file_id": "other-drive-file"},
+                "error_type": "VideoSubprocessError",
+                "error_code": "UV_MEDIA_PROBE_FAILED",
+            }
+        ),
+    )
+    result = subprocess.run(
+        ["python3", str(READER), "inspect-failed", str(receipt), f"{JOB_ID}.json", "balanced", "a" * 64, "drive-file-123"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=2,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "other-drive-file" not in result.stdout + result.stderr
+
+
+def test_legacy_failed_summary_keeps_bounded_operator_error_contract(tmp_path: Path):
+    receipt = tmp_path / "failed.json"
+    _write(
+        receipt,
+        json.dumps(
+            {
+                "status": "FAILED",
+                "job_file": f"{JOB_ID}.json",
+                "error_type": "VideoSubprocessError",
+                "error_code": "UV_MEDIA_PROBE_FAILED",
+                "error": "DO_NOT_PRINT_RAW_EXCEPTION",
+            }
+        ),
+    )
+    result = subprocess.run(
+        ["python3", str(READER), "inspect-failed-summary", str(receipt), f"{JOB_ID}.json"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=2,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert result.stdout.splitlines() == [
+        "UV_ERROR_TYPE=VideoSubprocessError",
+        "UV_ERROR_CODE=UV_MEDIA_PROBE_FAILED",
+    ]
+    assert "DO_NOT_PRINT_RAW_EXCEPTION" not in result.stdout + result.stderr
+
+
+def _pending_payload() -> dict:
+    return {
+        "job_id": JOB_ID,
+        "profile": PROFILE,
+        "source": {"kind": "google_drive", "file_id": SOURCE_ID, "name": "lesson"},
+        "metadata": {"request_commit": "b" * 40},
+    }
+
+
+def _run_pending(path: Path, *, source_id: str = SOURCE_ID) -> subprocess.CompletedProcess[str]:
+    job_hash = canonical_job_hash(validate_job(_pending_payload()))
+    return subprocess.run(
+        [
+            "python3",
+            str(READER),
+            "inspect-job",
+            str(path),
+            JOB_ID,
+            PROFILE,
+            job_hash,
+            source_id,
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=2,
+        check=False,
+        env={**os.environ, "PYTHONPATH": str(ROOT)},
+    )
+
+
+def test_pending_job_identity_is_exact_and_secret_safe(tmp_path: Path):
+    receipt = tmp_path / "pending.json"
+    _write(receipt, json.dumps(_pending_payload()))
+    accepted = _run_pending(receipt)
+    assert accepted.returncode == 0, accepted.stderr
+    assert accepted.stdout.strip() == "JOB_IDENTITY_PASS"
+
+    rejected = _run_pending(receipt, source_id="different-source-id")
+    assert rejected.returncode != 0
+    assert "lesson" not in rejected.stdout + rejected.stderr

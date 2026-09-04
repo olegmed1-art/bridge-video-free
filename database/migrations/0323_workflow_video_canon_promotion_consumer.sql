@@ -530,6 +530,18 @@ BEGIN
        OR v_existing.completed_by_principal IS DISTINCT FROM session_user THEN
       RAISE EXCEPTION 'VIDEO_CANON_STALE_LEASE_OR_FENCE' USING ERRCODE='55000';
     END IF;
+    IF EXISTS (
+         SELECT 1 FROM bidding.video_canon_ai_restore_receipt rr
+          WHERE rr.video_canon_ai_promotion_receipt_id=v_existing.promotion_receipt_id
+       ) OR NOT EXISTS (
+         SELECT 1 FROM bidding.video_canon_ai_promotion_receipt pr
+         JOIN public.canon_activation ca ON ca.canon_activation_id=pr.canon_activation_id
+         JOIN bidding.runtime_activation ra ON ra.runtime_activation_id=pr.runtime_activation_id
+          WHERE pr.video_canon_ai_promotion_receipt_id=v_existing.promotion_receipt_id
+            AND ca.status='active' AND ra.status='active'
+       ) THEN
+      RAISE EXCEPTION 'VIDEO_CANON_DELIVERY_RECEIPT_STALE' USING ERRCODE='55000';
+    END IF;
     RETURN v_existing.video_canon_promotion_delivery_receipt_id;
   END IF;
   SELECT * INTO v_job FROM bidding.video_canon_promotion_job

@@ -180,7 +180,7 @@ state_for(){
   fi
   case "$d" in
     failed)
-      if ! summary="$(runuser -u universal-video -- /usr/bin/python3 "$RECEIPT_READER" inspect-failed "$receipt" "$job_file" 2>/dev/null)"; then
+      if ! summary="$(runuser -u universal-video -- /usr/bin/python3 "$RECEIPT_READER" inspect-failed-summary "$receipt" "$job_file" 2>/dev/null)"; then
         echo 'UV_STATE=NONCONFORMANT'
         echo 'UV_ERROR_TYPE=UNSAFE_FAILED_RECEIPT'
         return 0
