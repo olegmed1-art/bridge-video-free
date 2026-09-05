@@ -97,12 +97,13 @@ jobs:
           while :; do
             now="$(date -u +%s)"
             (( now >= effective_expiry )) && break
-            launch_comments="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/881/comments" --jq '.[] | select(.user.login=="github-actions[bot]") | .body')"
-            launch_expiry="$(sed -n "s/^PAID_WATCHDOG_LAUNCH stamp=${STAMP} expiry_epoch=\([0-9][0-9]*\) run=.*/\1/p" <<<"$launch_comments" | tail -n1)"
-            if [[ "$launch_expiry" =~ ^[0-9]+$ ]]; then
-              (( launch_expiry > now && launch_expiry <= now + 1800 && launch_expiry <= effective_expiry )) || exit 96
-              effective_expiry="$launch_expiry"
-              break
+            if launch_comments="$(timeout --signal=KILL 30s gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/881/comments" --jq '.[] | select(.user.login=="github-actions[bot]") | .body' 2>/dev/null)"; then
+              launch_expiry="$(sed -n "s/^PAID_WATCHDOG_LAUNCH stamp=${STAMP} expiry_epoch=\([0-9][0-9]*\) run=.*/\1/p" <<<"$launch_comments" | tail -n1)"
+              if [[ "$launch_expiry" =~ ^[0-9]+$ ]]; then
+                (( launch_expiry > now && launch_expiry <= now + 1800 && launch_expiry <= effective_expiry )) || exit 96
+                effective_expiry="$launch_expiry"
+                break
+              fi
             fi
             sleep_for=$((effective_expiry - now)); (( sleep_for > 5 )) && sleep_for=5
             sleep "$sleep_for"
@@ -110,7 +111,11 @@ jobs:
           now="$(date -u +%s)"
           remaining=$((effective_expiry - now))
           (( remaining > 0 )) && sleep "$remaining"
-          timeout --signal=KILL 30s oci compute instance list --compartment-id "$tenancy_id" --all --output json >"$instances" 2>/dev/null
+          instance_cleanup_deadline=$((SECONDS + 600))
+          while ! timeout --signal=KILL 30s oci compute instance list --compartment-id "$tenancy_id" --all --output json >"$instances" 2>/dev/null; do
+            (( SECONDS < instance_cleanup_deadline )) || exit 97
+            sleep 5
+          done
           mapfile -t ids < <(STAMP="$STAMP" TENANCY_ID="$tenancy_id" EXPECTED_AD="$EXPECTED_AD" python - "$instances" <<'PY'
           import json,os,sys
           data=json.load(open(sys.argv[1])).get('data')
@@ -128,8 +133,7 @@ jobs:
           PY
           )
           if (( ${#ids[@]} == 1 )); then
-            deadline=$((SECONDS + 600))
-            while (( SECONDS < deadline )); do
+            while (( SECONDS < instance_cleanup_deadline )); do
               timeout --signal=KILL 30s oci compute instance terminate --instance-id "${ids[0]}" --preserve-boot-volume true --force --output json >/dev/null 2>/dev/null || true
               if timeout --signal=KILL 20s oci compute instance get --instance-id "${ids[0]}" --output json >"$instances" 2>/dev/null; then
                 state="$(python - "$instances" <<'PY'
@@ -170,27 +174,38 @@ jobs:
           PY
           )
           if (( ${#volume_ids[@]} == 1 )); then
-            : # deletion is retried below until terminal proof or deadline
-          fi
-          deadline=$((SECONDS + 120))
-          while (( SECONDS < deadline )); do
-            timeout --signal=KILL 30s oci bv boot-volume list --compartment-id "$tenancy_id" --availability-domain "$EXPECTED_AD" --all --output json >"$volumes" 2>/dev/null
-            if STAMP="$STAMP" python - "$volumes" <<'PY'
-          import json,os,sys
-          data=json.load(open(sys.argv[1])).get('data')
-          remaining=[x for x in data if isinstance(x,dict) and x.get('display-name')==os.environ['STAMP']+'-restore' and x.get('lifecycle-state')!='TERMINATED']
-          assert not remaining
-          PY
-            then break; fi
-            if (( ${#volume_ids[@]} == 1 )); then
+            volume_terminal_proven=0
+            volume_get_error="$RUNNER_TEMP/volume-get.err"
+            deadline=$((SECONDS + 120))
+            while (( SECONDS < deadline )); do
               timeout --signal=KILL 30s oci bv boot-volume delete --boot-volume-id "${volume_ids[0]}" --force >/dev/null 2>/dev/null || true
-            fi
-            sleep 5
-          done
-          STAMP="$STAMP" python - "$volumes" <<'PY'
+              if timeout --signal=KILL 20s oci bv boot-volume get --boot-volume-id "${volume_ids[0]}" --output json >"$volumes" 2>"$volume_get_error"; then
+                state="$(python - "$volumes" <<'PY'
+          import json,sys
+          print(json.load(open(sys.argv[1]))['data']['lifecycle-state'])
+          PY
+                )"
+                if [[ "$state" == TERMINATED ]]; then volume_terminal_proven=1; break; fi
+              elif grep -Eq '(^|[^0-9])status([^0-9]+)404([^0-9]|$)' "$volume_get_error"; then
+                volume_terminal_proven=1
+                break
+              fi
+              : >"$volume_get_error"
+              sleep 5
+            done
+            (( volume_terminal_proven == 1 )) || exit 98
+          else
+            # No ID was ever observed: require repeated exact-name inventories
+            # before treating this as a volume that was never created.
+            for _ in 1 2 3; do
+              sleep 5
+              timeout --signal=KILL 30s oci bv boot-volume list --compartment-id "$tenancy_id" --availability-domain "$EXPECTED_AD" --all --output json >"$volumes" 2>/dev/null
+              STAMP="$STAMP" python - "$volumes" <<'PY'
           import json,os,sys
           data=json.load(open(sys.argv[1])).get('data')
           remaining=[x for x in data if isinstance(x,dict) and x.get('display-name')==os.environ['STAMP']+'-restore' and x.get('lifecycle-state')!='TERMINATED']
           assert not remaining
           PY
+            done
+          fi
           gh api "repos/${GITHUB_REPOSITORY}/issues/881/comments" -f body="Paid acceptance watchdog: exact-stamped instance and restored boot volume are PROVEN_ABSENT; run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. No resource IDs retained."
