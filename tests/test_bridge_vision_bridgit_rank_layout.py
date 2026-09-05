@@ -99,6 +99,14 @@ def test_profile_is_human_reviewed_hash_bound_and_complete():
     with pytest.raises(BridgitRankLayoutError, match="every card exactly once"):
         parse_profile(raw)
 
+    raw = profile_raw()
+    raw["geometry"]["vertical_search"]["W"]["x_max"] = 600
+    raw["profile_sha256"] = canonical_hash(
+        {key: value for key, value in raw.items() if key != "profile_sha256"}
+    )
+    with pytest.raises(BridgitRankLayoutError, match="span exceeds scoring budget"):
+        parse_profile(raw)
+
 
 def test_profile_hash_and_duplicate_json_keys_fail_closed(tmp_path: Path):
     raw = profile_raw()
@@ -385,6 +393,15 @@ def test_encoded_dimensions_and_decoded_memory_are_bounded_before_decode():
         bridgit_rank_layout._validate_decoded_budget(8192, 8192, observation_count=0)
     with pytest.raises(BridgitRankLayoutError, match="job memory budget"):
         bridgit_rank_layout._validate_decoded_budget(4096, 4096, observation_count=5)
+
+    profile = parse_profile(profile_raw())
+    bridgit_rank_layout._validate_scoring_budget(profile, observation_count=2)
+    with pytest.raises(BridgitRankLayoutError, match="scoring-operation budget"):
+        bridgit_rank_layout.recognize_frames(
+            Path("unread-reference.jpg"),
+            [Path(f"unread-frame-{index}.jpg") for index in range(16)],
+            profile,
+        )
 
 
 def test_each_frame_must_independently_support_the_fused_deal():

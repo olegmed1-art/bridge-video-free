@@ -48,6 +48,9 @@ MAX_FRAMES = 16
 MAX_FRAME_BYTES = 32 * 1024 * 1024
 MAX_DECODED_FRAME_BYTES = 64 * 1024 * 1024
 MAX_DECODED_JOB_BYTES = 256 * 1024 * 1024
+MAX_VERTICAL_SEARCH_SPAN = 512
+MAX_TEMPLATE_SCORING_CALLS = 1_000_000
+MAX_TEMPLATE_SCORING_DOT_PRODUCTS = 24_000_000_000
 MAX_DIAGNOSTIC_DETAIL = 160
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -343,6 +346,10 @@ def parse_profile(raw: Mapping[str, Any]) -> BridgitRankLayoutProfile:
             minimum=x_min,
             maximum=x_max - 1,
         )
+        if x_max - x_min > MAX_VERTICAL_SEARCH_SPAN:
+            raise BridgitRankLayoutError(
+                f"vertical_search.{seat} span exceeds scoring budget"
+            )
         vertical_search[seat] = (x_min, x_max, edge_x)
 
     gates = raw.get("gates")
@@ -708,6 +715,39 @@ def _validate_decoded_budget(
         raise BridgitRankLayoutError("decoded frames exceed job memory budget")
 
 
+def _validate_scoring_budget(
+    profile: BridgitRankLayoutProfile, *, observation_count: int
+) -> None:
+    """Reject a job whose conservative recognition-work bound is unsafe."""
+    if observation_count < 1 or observation_count > MAX_FRAMES:
+        raise BridgitRankLayoutError("frame count outside allowed range")
+
+    side_span = sum(x_max - x_min for x_min, x_max, _ in profile.vertical_search.values())
+    registration_width = 2 * profile.local_registration_px + 1
+
+    # Side calibration tries 29 step values over at most 26 side-hand cards,
+    # then 25 west/east step pairs over 13 slots in each of four suits.  The
+    # final fused and per-frame assignments each score all 52 visible cards.
+    calibration_locations = 29 * 26 + 25 * len(SUITS) * len(RANKS)
+    assignment_locations = 2 * len(CARDS)
+    scoring_calls = observation_count * len(RANKS) * (
+        len(SUITS) * side_span
+        + (calibration_locations + assignment_locations) * registration_width
+    )
+    variants_per_rank = len(SUITS) * registration_width**2
+    dot_products = (
+        scoring_calls
+        * variants_per_rank
+        * profile.glyph_width
+        * profile.glyph_height
+    )
+    if (
+        scoring_calls > MAX_TEMPLATE_SCORING_CALLS
+        or dot_products > MAX_TEMPLATE_SCORING_DOT_PRODUCTS
+    ):
+        raise BridgitRankLayoutError("template scoring-operation budget exceeded")
+
+
 def _encoded_image_dimensions(payload: bytes) -> tuple[int, int]:
     png_signature = b"\x89PNG\r\n\x1a\n"
     if payload.startswith(png_signature):
@@ -1054,6 +1094,7 @@ def recognize_frames(
     """Recognize one stable, fully visible deal as a shadow candidate."""
     if not frame_paths or len(frame_paths) > MAX_FRAMES:
         raise BridgitRankLayoutError("frame count outside allowed range")
+    _validate_scoring_budget(profile, observation_count=len(frame_paths))
     _validate_decoded_budget(
         profile.width,
         profile.height,

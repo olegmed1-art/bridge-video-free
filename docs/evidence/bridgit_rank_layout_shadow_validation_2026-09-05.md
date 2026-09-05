@@ -44,11 +44,12 @@ These five deals are a development regression corpus, not a frozen holdout: the 
 - the reviewed reference/template frame, including a byte-distinct lossless re-encoding with the same decoded pixels, is rejected as an observation;
 - malformed/non-JPEG-or-PNG inputs, dimensions inconsistent with the profile, decoded rasters above 64 MiB, and jobs above the 256 MiB aggregate decoded-raster budget are rejected before OpenCV decode;
 - job, profile and compressed-frame size ceilings are enforced with `limit + 1` bounded stream reads rather than post-allocation `read_bytes()` checks;
+- vertical scan spans above 512 pixels and jobs above the conservative fixed template-scoring call or dot-product budget are rejected before any frame decode or recognition loop;
 - a job with hidden information enabled or any production-write request is rejected before pixel recognition;
 - output is fixed to `SHADOW_ONLY` / `MODEL_CANDIDATE`, with `canonical_promotion_allowed=false`, `school_canon_write_performed=false`, and `hidden_hand_reconstruction_performed=false`;
 - the default `BridgeVisionEngine` remains empty and unchanged.
 
-Repository contract tests include decoded-pixel reference replay, per-frame deal disagreement, pre-decode image-header validation and decoded-memory gates. The exact-current-main Universal Video suite, dependency audit, Ruff checks, Python compilation and `git diff --check` must all pass again on the amended exact head before this evidence is considered current.
+Repository contract tests include decoded-pixel reference replay, per-frame deal disagreement, pre-decode image-header validation, decoded-memory gates and pre-recognition scoring-work limits. The exact-current-main Universal Video suite, dependency audit, Ruff checks, Python compilation and `git diff --check` must all pass again on the amended exact head before this evidence is considered current.
 
 ## Why production remains blocked
 

@@ -23,7 +23,7 @@ The module is intentionally not exported as a default `BridgeVisionEngine` detec
 ## Algorithm
 
 1. Load one human-reviewed, self-hashed layout profile and a reference frame whose SHA-256 is sealed by that profile.
-2. Read job, profile and image files through bounded streams that request at most the applicable limit plus one byte; reject overflow before JSON parsing, hashing or image decode. Compute each image's byte SHA-256 and parse its JPEG/PNG dimensions before calling OpenCV. The declared dimensions must match the verified profile, one decoded BGR raster is capped at 64 MiB, and all retained decoded rasters in one job are capped at 256 MiB. Decode once and compute a decoded-pixel SHA-256. Duplicate bytes, duplicate decoded pixels, or a byte-distinct re-encoding of the reviewed reference pixels cannot increase temporal support.
+2. Read job, profile and image files through bounded streams that request at most the applicable limit plus one byte; reject overflow before JSON parsing, hashing or image decode. Compute each image's byte SHA-256 and parse its JPEG/PNG dimensions before calling OpenCV. The declared dimensions must match the verified profile, one decoded BGR raster is capped at 64 MiB, and all retained decoded rasters in one job are capped at 256 MiB. Before decoding, also reject vertical scan spans above 512 pixels and jobs whose conservative template-call or template-dot-product estimate exceeds the fixed worker budget. Decode once and compute a decoded-pixel SHA-256. Duplicate bytes, duplicate decoded pixels, or a byte-distinct re-encoding of the reviewed reference pixels cannot increase temporal support.
 3. Build a rank-template bank from all 52 reviewed reference slots. Each rank has one sample per suit. Local translations use white padding and never wrap pixels across a crop boundary.
 4. Independently in every observation frame, detect the four north/south suit fans in the verified screen order `H,C,D,S`. A missing fan or a non-13-card hand stops as `LAYOUT_UNKNOWN` or `PARTIAL_PLAY`; frames with different lengths or fan anchors stop as `LAYOUT_AMBIGUOUS`.
 5. Independently in every observation frame, count west/east cards from edge-anchored contiguous chains of visible rank glyphs. Every frame must have hand totals and per-suit deck totals of 13, and all frames must produce the same geometry before assignment.
@@ -70,7 +70,7 @@ Schema discriminator: `BRIDGIT_RANK_LAYOUT_SHADOW_V1`.
 }
 ```
 
-All input paths must resolve beneath one explicit non-root `input_root`. Bounded stream reads enforce a 256 KiB job, one profile of at most 1 MiB, 1–16 JPEG/PNG frames and 32 MiB of compressed bytes per frame without first materializing an oversized file. Before decode, header dimensions, a 64 MiB per-raster ceiling and a 256 MiB aggregate decoded-raster budget are enforced. Timestamps and both byte/pixel identities must be distinct. Neither the reviewed reference bytes nor an independently encoded image with the same decoded reference pixels can count as an observation.
+All input paths must resolve beneath one explicit non-root `input_root`. Bounded stream reads enforce a 256 KiB job, one profile of at most 1 MiB, 1–16 JPEG/PNG frames and 32 MiB of compressed bytes per frame without first materializing an oversized file. Before decode, header dimensions, a 64 MiB per-raster ceiling, a 256 MiB aggregate decoded-raster budget, a 512-pixel per-side search-span ceiling, 1,000,000 template-scoring calls and 24,000,000,000 conservatively estimated template dot products are enforced. The work estimate includes per-frame side scans, all overlap-step trials, fused assignment and every independent frame assignment; a profile that permits 16 frames does not imply that every profile/frame-count combination fits the CPU budget. Timestamps and both byte/pixel identities must be distinct. Neither the reviewed reference bytes nor an independently encoded image with the same decoded reference pixels can count as an observation.
 
 Local invocation:
 
@@ -92,7 +92,7 @@ This command only creates the requested receipt. It does not register the backen
 | `PARTIAL_PLAY` | Visible horizontal hand contains fewer than 13 cards |
 | `LAYOUT_UNKNOWN` | Required profile fan geometry is not established |
 | `LAYOUT_AMBIGUOUS` | A frame's side hand/suit peak counts fail totals, or independently measured frame geometries disagree |
-| `REJECTED` | Job, profile, path, hash, image encoding/dimensions, decoded-memory budget, replay, runtime dependency or production/hidden-information gate failed |
+| `REJECTED` | Job, profile, path, hash, image encoding/dimensions, decoded-memory or scoring-operation budget, replay, runtime dependency or production/hidden-information gate failed |
 
 ## Production gates
 
