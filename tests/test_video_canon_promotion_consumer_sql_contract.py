@@ -67,6 +67,13 @@ def test_delivery_is_leased_fenced_atomic_and_retained():
     assert MIGRATION.count("v_job.lease_expires_at<=clock_timestamp()") == 2
     assert "VIDEO_CANON_POST_WRITE_INTEGRITY_FAILED" in MIGRATION
     assert "video_canon_promotion_delivery_receipt_append_only" in MIGRATION
+    assert "analysis_candidate_id uuid NOT NULL UNIQUE" not in MIGRATION
+    assert "promotion_receipt_id uuid NOT NULL UNIQUE" not in MIGRATION
+    assert "video_canon_promotion_delivery_assurance_uq" in MIGRATION
+    assert (
+        "analysis_candidate_id,candidate_payload_hash,verification_bundle_sha256,\n"
+        "  assurance_set_sha256"
+    ) in MIGRATION
     assert "ATTEMPTS_EXHAUSTED" in MIGRATION
     assert "ON CONFLICT (idempotency_key) DO NOTHING" in MIGRATION
     assert "p_rule_id::text||':'||p_assurance_set_sha256" in MIGRATION

@@ -93,6 +93,19 @@ BEGIN
      OR (SELECT count(*) FROM bidding.video_canon_assurance_verifier_registry)<>2 THEN
     RAISE EXCEPTION 'VIDEO_CANON_CONSUMER_SCHEMA_MISSING';
   END IF;
+
+  IF to_regclass('bidding.video_canon_promotion_delivery_assurance_uq') IS NULL
+     OR EXISTS (
+       SELECT 1
+         FROM pg_index i
+         JOIN pg_class idx ON idx.oid=i.indexrelid
+        WHERE i.indrelid='bidding.video_canon_promotion_delivery_receipt'::regclass
+          AND i.indisunique
+          AND idx.relname<>'video_canon_promotion_delivery_assurance_uq'
+          AND pg_get_indexdef(i.indexrelid)~'\((analysis_candidate_id|promotion_receipt_id)\)'
+     ) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_DELIVERY_ASSURANCE_IDENTITY_INVALID';
+  END IF;
 END $$;
 
 ROLLBACK;

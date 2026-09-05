@@ -355,16 +355,24 @@ CREATE TABLE bidding.video_canon_promotion_delivery_receipt (
   video_canon_promotion_job_id uuid NOT NULL UNIQUE
     REFERENCES bidding.video_canon_promotion_job(video_canon_promotion_job_id) ON DELETE RESTRICT,
   school_id uuid NOT NULL REFERENCES public.school(school_id) ON DELETE RESTRICT,
-  analysis_candidate_id uuid NOT NULL UNIQUE REFERENCES public.analysis_candidate(analysis_candidate_id) ON DELETE RESTRICT,
+  analysis_candidate_id uuid NOT NULL REFERENCES public.analysis_candidate(analysis_candidate_id) ON DELETE RESTRICT,
   candidate_payload_hash text NOT NULL CHECK (candidate_payload_hash~'^[0-9a-f]{64}$'),
   verification_bundle_sha256 text NOT NULL CHECK (verification_bundle_sha256~'^[0-9a-f]{64}$'),
   assurance_set_sha256 text NOT NULL CHECK (assurance_set_sha256~'^[0-9a-f]{64}$'),
   fencing_token bigint NOT NULL CHECK (fencing_token>0),
-  promotion_receipt_id uuid NOT NULL UNIQUE
+  promotion_receipt_id uuid NOT NULL
     REFERENCES bidding.video_canon_ai_promotion_receipt(video_canon_ai_promotion_receipt_id) ON DELETE RESTRICT,
   post_write_integrity_sha256 text NOT NULL CHECK (post_write_integrity_sha256~'^[0-9a-f]{64}$'),
   completed_by_principal text NOT NULL CHECK (btrim(completed_by_principal)<>''),
   completed_at timestamptz NOT NULL DEFAULT now()
+);
+-- A delivery is unique for one independently sealed assurance set.  A later
+-- corrected I2/I3 set may legitimately replay the same already-atomic canon
+-- promotion, producing a new job/delivery receipt without a second canon write.
+CREATE UNIQUE INDEX video_canon_promotion_delivery_assurance_uq
+ON bidding.video_canon_promotion_delivery_receipt(
+  analysis_candidate_id,candidate_payload_hash,verification_bundle_sha256,
+  assurance_set_sha256
 );
 CREATE TRIGGER video_canon_promotion_delivery_receipt_append_only
 BEFORE UPDATE OR DELETE ON bidding.video_canon_promotion_delivery_receipt
