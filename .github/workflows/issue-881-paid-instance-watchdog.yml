@@ -214,6 +214,7 @@ jobs:
                 if ! STAMP="$STAMP" TENANCY_ID="$tenancy_id" EXPECTED_AD="$EXPECTED_AD" python - "$instances" >"$late_ids_file" <<'PY'
           import json,os,sys
           data=json.load(open(sys.argv[1])).get('data')
+          assert isinstance(data,list) and all(isinstance(x,dict) for x in data)
           matched=[]
           for item in data:
               if not isinstance(item,dict) or item.get('display-name')!=os.environ['STAMP']+'-boot-acceptance' or item.get('lifecycle-state')=='TERMINATED': continue
@@ -314,6 +315,7 @@ jobs:
                 if ! STAMP="$STAMP" TENANCY_ID="$tenancy_id" EXPECTED_AD="$EXPECTED_AD" python - "$volumes" >"$late_volume_ids_file" <<'PY'
           import json,os,sys
           data=json.load(open(sys.argv[1])).get('data')
+          assert isinstance(data,list) and all(isinstance(x,dict) for x in data)
           matched=[]
           for item in data:
               if not isinstance(item,dict) or item.get('display-name')!=os.environ['STAMP']+'-restore' or item.get('lifecycle-state')=='TERMINATED': continue
