@@ -221,6 +221,9 @@ def test_legacy_candidate_rejects_nonfinite_nested_values(mutation):
     ("notes", "N:AKQJ.T98.765.432 E:T987.654.32.AKQ S:... W:..."),
     ("comment", "partner_hand = AKQJ.T98.765.432"),
     ("comment", "карты партнера: AKQJ.T98.765.432"),
+    ("comment", "карты противника: AS"),
+    ("comment", "рука противника: A.K.Q.JT98765432"),
+    ("comment", "карты оппонента: QH"),
 ])
 def test_hidden_deal_is_rejected_inside_innocuous_allowed_value(field, value):
     assertion = _assertion()

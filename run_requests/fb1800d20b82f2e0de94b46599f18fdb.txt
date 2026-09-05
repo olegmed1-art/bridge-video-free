@@ -1,5 +1,0 @@
-Bridge 3.1 FREE production validation request
-Drive file: 1RKrDWP6IOfVyuDWRMIsiUT62vpmVW9VS
-Source: Бридж по воскресеньям. Занятие 4. 23.04.23.avi
-Validation: semantic post-ASR QC r1 / master-analysis-r5
-Reason: verify corrections learned from 2026-08-11 transcript errors

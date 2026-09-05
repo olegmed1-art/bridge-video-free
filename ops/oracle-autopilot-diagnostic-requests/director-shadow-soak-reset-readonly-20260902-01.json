@@ -1,7 +1,0 @@
-{
-  "request_id": "director-shadow-soak-reset-readonly-20260902-01",
-  "action": "inspect_shadow_failure",
-  "target_host": "158.180.47.161",
-  "source_revision": "9064044d4c5b85803c6778060dff4843111ab888",
-  "no_instance_stop": true
-}

@@ -401,6 +401,7 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "CREATE OR REPLACE FUNCTION bidding.guard_rule_identity_knowledge_version_scope" in MIGRATION
     assert "BEFORE UPDATE OF knowledge_item_id,bidding_system_key,level_scope,agreement_scope" in MIGRATION
     assert "BIDDING_RULE_KEY_IDENTITY_SCOPE_IMMUTABLE" in MIGRATION
+    assert MIGRATION.count("bidding-rule-identity-version:") == 2
     assert "video_candidate_payload_hash" in MIGRATION
     assert "VIDEO_CANON_IDEMPOTENT_RECEIPT_STALE" in MIGRATION
     assert "VIDEO_CANON_ACTIVE_IDEMPOTENT_REPLAY_FAILED" in DATABASE_TEST
