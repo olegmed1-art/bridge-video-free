@@ -19,7 +19,9 @@ def test_batch_transport_is_durable_bounded_and_project_neutral():
     assert "ORACLE_UNIVERSAL_VIDEO_BATCH_INTAKE_PASS" in text
     assert "StrictHostKeyChecking=yes" in text
     assert "StrictHostKeyChecking=no" not in text
-    assert "/run/lock/oracle-workload-mutation.lock" in text
+    operator = (ROOT / "ops/universal_video_operator.sh").read_text(encoding="utf-8")
+    assert "resume-batch-base64) acquire_mutation_fence;" in operator
+    assert "/run/lock/oracle-workload-mutation.lock" in operator
     assert "github.sha" in text
     assert "cancel-in-progress: false" in text
     assert "timeout-minutes: 360" in text

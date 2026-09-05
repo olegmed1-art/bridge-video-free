@@ -21,8 +21,12 @@ def test_spool_operations_use_exact_installed_bounded_ssh_surface():
 
 def test_submit_and_status_remain_fail_closed():
     text = WORKFLOW.read_text(encoding="utf-8")
+    operator = (ROOT / "ops/universal_video_operator.sh").read_text(encoding="utf-8")
 
-    assert 'submit_cmd="sudo -n /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock sudo -u ocarun sudo -n /usr/local/sbin/universal-video repair-submit-drive-base64' in text
+    assert 'submit_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video repair-submit-drive-base64' in text
+    assert "acquire_mutation_fence(){" in operator
+    assert "exec 9>/run/lock/oracle-workload-mutation.lock" in operator
+    assert "repair-submit-drive-base64) acquire_mutation_fence;" in operator
     assert 'status_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video status' in text
     assert "PRE_SUBMIT_ERROR_CODE=UV_SUBMIT_COMMAND_FAILED" not in text
     assert "code='UV_SUBMIT_COMMAND_FAILED'" in text

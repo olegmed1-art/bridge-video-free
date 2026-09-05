@@ -225,9 +225,9 @@ jobs:
           }
           # The resident command queries REQUEST_KEY before Drive discovery and
           # only enqueues when it is still missing. The query and optional
-          # enqueue share this outer STOP fence, so a lost SSH response can be
+          # enqueue share the operator's internal STOP fence, so a lost SSH response can be
           # retried without rediscovering a changed Drive folder.
-          command="sudo -n /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock sudo -u ocarun sudo -n /usr/local/sbin/universal-video resume-batch-base64 '$REQUEST_KEY' '$PAYLOAD'"
+          command="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video resume-batch-base64 '$REQUEST_KEY' '$PAYLOAD'"
           result=''; enqueue_rc=255
           for attempt in 1 2 3; do
             ssh_timeout="$(budget_max 4800)" || { enqueue_rc=124; break; }

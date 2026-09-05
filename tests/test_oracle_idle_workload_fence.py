@@ -157,6 +157,21 @@ def test_legacy_diana_submit_holds_host_fence_before_state_check_and_enqueue() -
     assert acquire < lock < state < enqueue
 
 
+def test_generic_operator_mutators_acquire_internal_host_fence() -> None:
+    text = (ROOT / "ops/universal_video_operator.sh").read_text(encoding="utf-8")
+    acquire = text.index("acquire_mutation_fence(){")
+    dispatch = text.index('case "$1" in', acquire)
+    assert "exec 9>/run/lock/oracle-workload-mutation.lock" in text[acquire:dispatch]
+    assert "flock -x 9" in text[acquire:dispatch]
+    for command in (
+        "submit-drive-base64",
+        "repair-submit-drive-base64",
+        "enqueue-batch-base64",
+        "resume-batch-base64",
+    ):
+        assert f"{command}) acquire_mutation_fence;" in text[dispatch:]
+
+
 def test_remaining_host_mutators_acquire_atomic_host_fence() -> None:
     tls = _workflow_text("oracle-dds3-tls-renewal.yml")
     admin_workflow = _workflow_text("oracle-universal-video-admin.yml")

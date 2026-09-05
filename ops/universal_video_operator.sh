@@ -20,6 +20,10 @@ readonly QUEUE_DSN_FILE="$BASE_DIR/secrets/video-queue-dsn"
 fail(){ echo "UV_STATE=REJECTED"; echo "UV_ERROR=$1"; exit 1; }
 intake_reject(){ echo 'UV_STATE=REJECTED'; echo "UV_ERROR_CODE=$1"; }
 safe_id(){ [[ "$1" =~ ^[A-Za-z0-9._:-]{1,160}$ && "$1" != . && "$1" != .. ]]; }
+acquire_mutation_fence(){
+  exec 9>/run/lock/oracle-workload-mutation.lock
+  flock -x 9
+}
 cleanup_staged_files(){
   local path
   for path in "$@"; do
@@ -496,11 +500,11 @@ repair_submit_drive(){
 }
 [[ $# -ge 1 ]] || fail 'usage: universal-video submit-drive-base64 PAYLOAD | repair-submit-drive-base64 PAYLOAD | status JOB_ID PROFILE JOB_HASH DRIVE_FILE_ID | enqueue-batch-base64 PAYLOAD | batch-status REQUEST_KEY | resume-batch-base64 REQUEST_KEY PAYLOAD'
 case "$1" in
-  submit-drive-base64) shift; submit_drive "$@" ;;
-  repair-submit-drive-base64) shift; repair_submit_drive "$@" ;;
+  submit-drive-base64) acquire_mutation_fence; shift; submit_drive "$@" ;;
+  repair-submit-drive-base64) acquire_mutation_fence; shift; repair_submit_drive "$@" ;;
   status) shift; status "$@" ;;
-  enqueue-batch-base64) shift; enqueue_batch "$@" ;;
+  enqueue-batch-base64) acquire_mutation_fence; shift; enqueue_batch "$@" ;;
   batch-status) shift; batch_status "$@" ;;
-  resume-batch-base64) shift; resume_batch "$@" ;;
+  resume-batch-base64) acquire_mutation_fence; shift; resume_batch "$@" ;;
   *) fail 'unsupported operation' ;;
 esac

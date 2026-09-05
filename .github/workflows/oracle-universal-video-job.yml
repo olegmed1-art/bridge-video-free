@@ -333,7 +333,7 @@ jobs:
           print(base64.b64encode(json.dumps(job,ensure_ascii=False,separators=(',',':')).encode()).decode())
           PY
           )"
-          submit_cmd="sudo -n /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock sudo -u ocarun sudo -n /usr/local/sbin/universal-video repair-submit-drive-base64 '$payload'"
+          submit_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video repair-submit-drive-base64 '$payload'"
           status_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video status '$JOB_ID' '$PROFILE' '$JOB_HASH' '$SOURCE_FILE_ID'"
           label="Universal Video / $PROFILE / $JOB_ID"
           entry='SUBMITTED'
