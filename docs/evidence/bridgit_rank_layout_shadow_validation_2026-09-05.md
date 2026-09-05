@@ -1,0 +1,65 @@
+# Bridgit rank-layout shadow validation
+
+Date: 2026-09-05
+
+Change ID: `bridgit-rank-layout-shadow-v1`
+
+Governance mode: `ASSURED`
+
+Status: isolated shadow implementation validated locally; blocked from production activation
+
+## Outcome
+
+The profiled Bridgit desktop recognizer was transferred into the repository as an opt-in module without changing the default Universal Video route, any workflow, server service, production database, SCHOOL CANON or WORLD. It uses only already selected local frames; no full-video batch was launched.
+
+The repository implementation reproduced all five manually checked complete deals (260/260 exact `card + seat` pairs). In each multi-frame deal, every frame independently produced the same card-to-seat assignment and passed its own template, runner-up-margin and rank-ink floors before fusion was accepted. Only two deal groups had the required two or more distinct observation frames and reached `SHADOW_FULL_LAYOUT_CANDIDATE`. Three single-frame groups were rerun after separating evidence quality from frame-count sufficiency and correctly stopped at `PENDING_TEMPORAL_CONSENSUS` even though their shadow card maps matched the manual labels.
+
+These five deals are a development regression corpus, not a frozen holdout: the same source and interface profile were used while tuning the algorithm, including raising the vertical peak floor from 0.72 to 0.76 after an extra false peak was exposed. The figures below therefore do not authorize production activation or satisfy the repository gold gate.
+
+## Immutable local inputs
+
+- source video SHA-256: `438fca0caa1b96d301823d6971743700da121d1052b57fc80c595e1e1bbef7f9`;
+- verified reference frame SHA-256: `7a9c29b580e10f77d1dbb6f86c6327545dc9e42de42f273e682925d218a0349b`;
+- frame geometry: 1686 by 720 pixels;
+- verified screen order: hearts, clubs, diamonds, spades; ranks descend ace through two;
+- no raw video or frame bytes were added to the repository.
+
+| Deal group | Distinct frame SHA-256 evidence | Exact pairs | Result gate |
+|---|---|---:|---|
+| 1 | `84d9d7bc155c62f06c746940deb2d8802fe444115fa71ec169bba7bd9605f0df`, `bd3c3254ebd57ec7faa8d623712f0890d5e1b7e45bcc9d0e3c4c30815d30d557` | 52/52 | `SHADOW_FULL_LAYOUT_CANDIDATE` |
+| 2 | `14d4f5012e40dc301bc9b2aa8d311a97c20523e77f55c16582eb5cfa0f34fd69`, `44742277004bfe4aa27c028a127b195dae0c732c6910e72b7a13c57970c3a304`, `86cbc2fbab64d0fb6e2528f93dbe5e3f0d604e7d394fdecd0d6492d3a2e9422d`, `c3922cc7d70ae6034a21e1c05922914d96bda4446b36da9c7d03cae8cfe40deb` | 52/52 | `SHADOW_FULL_LAYOUT_CANDIDATE` |
+| 3 | `84bc98e4c0d91d07c6c03e7199aed08e02a7739471b7747a101ca07772f077e9` | 52/52 | `PENDING_TEMPORAL_CONSENSUS` |
+| 4 | `383847ad021bbbad54a2de4c523d079e9634173b73cfcf89b2736dd75f99d8be` | 52/52 | `PENDING_TEMPORAL_CONSENSUS` |
+| 6 | `65651d3700e89848f3068f9356fae8970a46217948f0395017edff4aaaad0cb5` | 52/52 | `PENDING_TEMPORAL_CONSENSUS` |
+
+## Fail-closed evidence
+
+- one of two locally generated observation frames with a north rank glyph erased: `LAYOUT_AMBIGUOUS`; independently detected fan anchors disagree;
+- one of two locally generated observation frames with two visible heart ranks exchanged across east/west: `AMBIGUOUS` with `per_frame_deal_agreement_failed`; the independent frame assignment disagrees with the fused assignment;
+- two distinct blank frames: `LAYOUT_UNKNOWN`;
+- one mid-play frame: `PARTIAL_PLAY`;
+- one frame from deal 1 combined with one frame from deal 2: `LAYOUT_AMBIGUOUS` because independently measured frame geometries disagree; no median-fused hybrid deal is emitted;
+- duplicated frame bytes are rejected and cannot inflate temporal support;
+- byte-distinct inputs with identical decoded pixels are also rejected as replay;
+- the reviewed reference/template frame, including a byte-distinct lossless re-encoding with the same decoded pixels, is rejected as an observation;
+- malformed/non-JPEG-or-PNG inputs, dimensions inconsistent with the profile, decoded rasters above 64 MiB, and jobs above the 256 MiB aggregate decoded-raster budget are rejected before OpenCV decode;
+- job, profile and compressed-frame size ceilings are enforced with `limit + 1` bounded stream reads rather than post-allocation `read_bytes()` checks;
+- a job with hidden information enabled or any production-write request is rejected before pixel recognition;
+- output is fixed to `SHADOW_ONLY` / `MODEL_CANDIDATE`, with `canonical_promotion_allowed=false`, `school_canon_write_performed=false`, and `hidden_hand_reconstruction_performed=false`;
+- the default `BridgeVisionEngine` remains empty and unchanged.
+
+Repository contract tests include decoded-pixel reference replay, per-frame deal disagreement, pre-decode image-header validation and decoded-memory gates. The exact-current-main Universal Video suite, dependency audit, Ruff checks, Python compilation and `git diff --check` must all pass again on the amended exact head before this evidence is considered current.
+
+## Why production remains blocked
+
+1. Rank-template matching, suit location and the ordered deck bijection are correlated parts of one algorithm. There is no independent full-card channel, so this backend cannot satisfy the existing profiled challenger acceptance contract.
+2. There is no frozen, human-verified, unseen multi-layout corpus meeting the current minimum support and 99.5% precision / 95% recall gate.
+3. The regression covers one UI skin, one resolution and one source video. Voids in horizontal hands, other compass rotations, scaling, compression, overlap and additional lesson sources remain unproven.
+4. Three checked deals have only one retained observation frame and do not meet temporal consensus.
+5. Logically independent assurance has not reached I2.
+
+Minimal next action: freeze a hash-bound train/test split from additional sources and implement a genuinely independent full-card classifier or formal checker. Until both pass, keep this module opt-in and shadow-only.
+
+## Rollback
+
+No runtime registration, migration or production artifact exists. Rollback is removal of the optional module, its isolated requirements file, tests and documentation, or simply not injecting its job runner. The default runtime requires no data restoration.

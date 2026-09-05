@@ -1,0 +1,4 @@
+# Optional, opt-in Bridgit rank-layout shadow backend only.
+# This file does not activate or deploy the backend.
+numpy==2.3.2
+opencv-python-headless==5.0.0.93
