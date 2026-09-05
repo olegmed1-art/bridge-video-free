@@ -392,6 +392,8 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "PRIMARY KEY (school_id,system_profile,learner_level,rule_key)" in MIGRATION
     assert "CREATE OR REPLACE FUNCTION bidding.bind_rule_key_identity" in MIGRATION
     assert "ON CONFLICT (school_id,system_profile,learner_level,rule_key) DO UPDATE" in MIGRATION
+    assert "'__UNSCOPED_SYSTEM__'" in MIGRATION
+    assert "'__UNSCOPED_LEVEL__'" in MIGRATION
     assert "VIDEO_CANON_PROFILE_SCOPED_RULE_KEY_NOT_PRESERVED" in DATABASE_TEST
     assert "BIDDING_RULE_KEY_IDENTITY_MISMATCH" in MIGRATION
     assert "BEFORE INSERT OR UPDATE OF school_id,knowledge_version_id,rule_key" in MIGRATION

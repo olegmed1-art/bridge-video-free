@@ -18,7 +18,9 @@ CREATE TABLE bidding.rule_key_identity (
 INSERT INTO bidding.rule_key_identity(
   school_id,system_profile,learner_level,rule_key,knowledge_item_id
 )
-SELECT r.school_id,kv.bidding_system_key,kv.level_scope->>'level_key',
+SELECT r.school_id,
+       COALESCE(NULLIF(btrim(kv.bidding_system_key),''),'__UNSCOPED_SYSTEM__'),
+       COALESCE(NULLIF(btrim(kv.level_scope->>'level_key'),''),'__UNSCOPED_LEVEL__'),
        r.rule_key,kv.knowledge_item_id
   FROM bidding.rule r
   JOIN public.knowledge_version kv ON kv.knowledge_version_id=r.knowledge_version_id;
@@ -35,15 +37,15 @@ DECLARE
   v_identity_profile text;
   v_identity_level text;
 BEGIN
-  SELECT kv.knowledge_item_id,kv.bidding_system_key,kv.level_scope->>'level_key'
+  SELECT kv.knowledge_item_id,
+         COALESCE(NULLIF(btrim(kv.bidding_system_key),''),'__UNSCOPED_SYSTEM__'),
+         COALESCE(NULLIF(btrim(kv.level_scope->>'level_key'),''),'__UNSCOPED_LEVEL__')
     INTO v_item_id,v_identity_profile,v_identity_level
     FROM public.knowledge_version kv
     JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
    WHERE kv.knowledge_version_id=NEW.knowledge_version_id
      AND ki.school_id=NEW.school_id;
-  IF v_item_id IS NULL
-     OR btrim(COALESCE(v_identity_profile,''))=''
-     OR btrim(COALESCE(v_identity_level,''))='' THEN
+  IF v_item_id IS NULL THEN
     RAISE EXCEPTION 'BIDDING_RULE_KEY_IDENTITY_SCOPE_MISMATCH' USING ERRCODE='23514';
   END IF;
 
