@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (ROOT / "ops/oracle_universal_video_root_filesystem_expand.sh").read_text()
 WORKFLOW = (ROOT / ".github/workflows/issue-881-root-filesystem-expand.yml").read_text()
 PAID_GUARD = ROOT / "ops/oci_paid_acceptance_guard.py"
+WATCHDOG = (ROOT / ".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
 
 
 def _paid_guard(shapes: dict, availability: dict, source_shape: str = "VM.Standard.E5.Flex") -> subprocess.CompletedProcess[str]:
@@ -87,13 +88,39 @@ def test_paid_fallback_requires_quota_absence_preflight_and_exact_caps() -> None
     assert WORKFLOW[paid:launch].count("python ops/oci_paid_acceptance_guard.py") == 2
     assert 'paid_deadline=$(( $(monotonic_now) + paid_values[7] ))' in WORKFLOW[paid:]
     assert "paid_instance_create" in WORKFLOW[paid:]
-    assert "issue-881-paid-instance-watchdog.yml/dispatches" in WORKFLOW[paid:]
-    assert WORKFLOW.index("dispatch_paid_instance_watchdog", paid) < launch
+    restore = WORKFLOW.index("mark_phase create_restored_boot_volume")
+    dispatch = WORKFLOW.index("mark_phase dispatch_paid_instance_watchdog")
+    assert "issue-881-paid-instance-watchdog.yml/dispatches" in WORKFLOW
+    assert dispatch < restore < paid < launch
+    assert WORKFLOW.index("paid_watchdog_status ARMED_PRE_MUTATION") < restore
     assert WORKFLOW.index("paid_watchdog_status ARMED", paid) < launch
-    assert 'select(.user.login=="github-actions[bot]")' in WORKFLOW[paid:]
+    assert 'select(.user.login=="github-actions[bot]")' in WORKFLOW[dispatch:restore]
     receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
     assert "paid hourly/runtime/budget caps:" in receipt
     assert "present_redacted" in receipt
+
+
+def test_launch_boundary_refreshes_all_live_oci_constraints() -> None:
+    boundary = WORKFLOW.index("# Refresh all mutable primary-source constraints")
+    launch = WORKFLOW.index("mark_phase launch_bounded_paid_acceptance_instance", boundary)
+    block = WORKFLOW[boundary:launch]
+    assert "oci compute shape list" in block
+    assert "standard-e4-core-count" in block
+    assert "standard-e4-memory-count" in block
+    assert block.index("standard-e4-memory-count") < block.index('paid_launch_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"')
+    assert "python ops/oci_paid_acceptance_guard.py" in block
+    assert "PAID_WATCHDOG_LAUNCH" in block
+
+
+def test_independent_watchdog_retries_compute_and_storage_cleanup() -> None:
+    assert "timeout-minutes: 300" in WATCHDOG
+    assert "PAID_WATCHDOG_ARMED" in WATCHDOG
+    assert "PAID_WATCHDOG_LAUNCH" in WATCHDOG
+    instance_loop = WATCHDOG[WATCHDOG.index("deadline=$((SECONDS + 600))"):]
+    assert instance_loop.index("while (( SECONDS < deadline ))") < instance_loop.index("oci compute instance terminate")
+    volume_loop = WATCHDOG[WATCHDOG.index("deadline=$((SECONDS + 120))"):]
+    assert volume_loop.index("while (( SECONDS < deadline ))") < volume_loop.index("oci bv boot-volume delete")
+    assert "launch_expiry <= now + 1800" in WATCHDOG
 
 
 def test_paid_price_basis_expires_fail_closed() -> None:
