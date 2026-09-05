@@ -91,6 +91,7 @@ def test_paid_fallback_requires_quota_absence_preflight_and_exact_caps() -> None
     assert "issue-881-paid-instance-watchdog.yml/dispatches" in WORKFLOW[paid:]
     assert WORKFLOW.index("dispatch_paid_instance_watchdog", paid) < WORKFLOW.index("paid_instance_create", paid)
     assert WORKFLOW.index("paid_watchdog_status ARMED", paid) < WORKFLOW.index("paid_instance_create", paid)
+    assert 'select(.user.login=="github-actions[bot]")' in WORKFLOW[paid:]
     receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
     assert "paid hourly/runtime/budget caps:" in receipt
     assert "present_redacted" in receipt

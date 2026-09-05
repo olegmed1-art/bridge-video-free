@@ -1391,7 +1391,7 @@ jobs:
             watchdog_arm_deadline=$(( $(monotonic_now) + 180 ))
             watchdog_armed=0
             while (( $(monotonic_now) < watchdog_arm_deadline )); do
-              watchdog_comments="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/881/comments" --jq '.[].body')"
+              watchdog_comments="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/881/comments" --jq '.[] | select(.user.login=="github-actions[bot]") | .body')"
               if grep -Fq "PAID_WATCHDOG_ARMED stamp=${stamp} expiry_epoch=${paid_expiry_epoch} run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/" <<<"$watchdog_comments"; then
                 watchdog_armed=1
                 break
