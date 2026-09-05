@@ -232,12 +232,18 @@ jobs:
               sleep 5
             done
             if [[ -n "$late_instance_id" ]]; then
+              late_instance_get_error="$RUNNER_TEMP/late-instance-get.err"
               late_cleanup_deadline=$((SECONDS + 600))
               while (( SECONDS < late_cleanup_deadline )); do
                 timeout --signal=KILL 30s oci compute instance terminate --instance-id "$late_instance_id" --preserve-boot-volume true --force --output json >/dev/null 2>/dev/null || true
-                if timeout --signal=KILL 20s oci compute instance get --instance-id "$late_instance_id" --output json >"$instances" 2>/dev/null && [[ "$(python -c 'import json,sys; print(json.load(sys.stdin)["data"]["lifecycle-state"])' <"$instances")" == TERMINATED ]]; then
+                if timeout --signal=KILL 20s oci compute instance get --instance-id "$late_instance_id" --output json >"$instances" 2>"$late_instance_get_error"; then
+                  if [[ "$(python -c 'import json,sys; print(json.load(sys.stdin)["data"]["lifecycle-state"])' <"$instances")" == TERMINATED ]]; then
+                    instance_terminal_proven=1; break
+                  fi
+                elif grep -Eq '(^|[^0-9])status([^0-9]+)404([^0-9]|$)' "$late_instance_get_error"; then
                   instance_terminal_proven=1; break
                 fi
+                : >"$late_instance_get_error"
                 sleep 5
               done
               (( instance_terminal_proven == 1 )) || exit 99
