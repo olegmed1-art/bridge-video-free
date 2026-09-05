@@ -40,6 +40,18 @@ def _field(body: str, label: str) -> str:
     return matches[0]
 
 
+def _field_with_rc(body: str, label: str) -> tuple[str, int]:
+    matches = re.findall(
+        rf"^- {re.escape(label)}: `([^`]+)`; rc: `([0-9]+)`\s*$",
+        body,
+        re.MULTILINE,
+    )
+    if len(matches) != 1:
+        raise ValueError(f"expected exactly one complete {label!r} field with rc")
+    value, rc = matches[0]
+    return value, int(rc)
+
+
 def parse_receipt(body: str, run_id: str, operation_prefix: str) -> dict[str, object]:
     if _field(body, "operation") != "EXPAND_AND_RECOVER":
         raise ValueError("receipt is not an expand-and-recover operation")
@@ -54,7 +66,7 @@ def parse_receipt(body: str, run_id: str, operation_prefix: str) -> dict[str, ob
     if len(run_urls) != 1 or run_urls[0][1] != run_id:
         raise ValueError("receipt run URL does not match the requested failed run")
 
-    create_status = _field(body, "isolated instance create request")
+    create_status, create_rc = _field_with_rc(body, "isolated instance create request")
     resources: dict[str, list[str]] = {}
     for kind, label in RESOURCE_FIELDS.items():
         raw = _field(body, label)
@@ -77,6 +89,7 @@ def parse_receipt(body: str, run_id: str, operation_prefix: str) -> dict[str, ob
         "run_id": run_id,
         "stamp": stamp,
         "instance_create_status": create_status,
+        "instance_create_rc": create_rc,
         "resources": resources,
         "receipt_sha256": hashlib.sha256(body.encode()).hexdigest(),
     }
