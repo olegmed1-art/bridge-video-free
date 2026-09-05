@@ -191,7 +191,20 @@ jobs:
               OCI_JSON_OUTPUT="$(<"$stdout_file")"
               OCI_JSON_ERROR="$(<"$stderr_file")"
               OCI_JSON_RAW_ERROR="$OCI_JSON_ERROR"
-              (( rc == 0 )) || return "$rc"
+              if (( rc != 0 )); then
+                # Retry only failures that are safe to classify as transient.
+                # Authentication, authorization, quota, conflict, and invalid
+                # request failures remain immediate fail-closed outcomes.
+                if (( attempt < max_attempts )) && {
+                    [[ "$rc" == 124 || "$rc" == 137 ]] \
+                    || grep -Eqi '(^|[^0-9])(429|5[0-9]{2})([^0-9]|$)|TooManyRequests|InternalServerError|ServiceUnavailable|temporar(il)?y unavailable|connection (reset|aborted)|timed out|timeout' "$stderr_file"
+                  }; then
+                  bounded_retry_seconds="$(bounded_wait_seconds "$retry_delay_seconds" "$absolute_deadline")" || return 42
+                  sleep "$bounded_retry_seconds"
+                  continue
+                fi
+                return "$rc"
+              fi
               if printf '%s' "$OCI_JSON_OUTPUT" | python -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d,dict)'; then
                 return 0
               fi
@@ -932,8 +945,9 @@ jobs:
             BACKUP_PREFIX="$backup_prefix" BOOT_ID="$boot_id" RETAINED_ID="$backup_id" python -c 'import json,os,sys; p=json.load(sys.stdin); data=p.get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data); matched=[x for x in data if (x.get("display-name") or "").startswith(os.environ["BACKUP_PREFIX"]+"-") and x.get("boot-volume-id")==os.environ["BOOT_ID"] and x.get("id")!=os.environ["RETAINED_ID"] and x.get("lifecycle-state")!="TERMINATED"]; assert all(isinstance(x.get("id"),str) and x["id"] and isinstance(x.get("lifecycle-state"),str) for x in matched); print("\n".join(sorted(x["id"] for x in matched)))'
           }
           prior_named_ids() {
-            local resource="$1" suffix="$2" terminal_mode="${3:-include}" output
+            local resource="$1" suffix="$2" terminal_mode="${3:-include}" output rc diagnostic_key
             local -a command
+            diagnostic_key="prior_inventory_${resource//-/_}"
             case "$resource" in
               instance) command=(oci compute instance list --compartment-id "$tenancy_id" --all) ;;
               boot-volume) command=(oci bv boot-volume list --compartment-id "$tenancy_id" --availability-domain "$ad" --all) ;;
@@ -944,7 +958,21 @@ jobs:
               vcn) command=(oci network vcn list --compartment-id "$tenancy_id" --all) ;;
               *) return 2 ;;
             esac
-            oci_json_request "${command[@]}" || return 1
+            state_set prior_inventory_last_resource "$resource"
+            if oci_json_request "${command[@]}"; then
+              state_set "${diagnostic_key}_status" PASS
+              state_set "${diagnostic_key}_failure_rc" none
+              state_set prior_inventory_last_status PASS
+              state_set prior_inventory_last_failure_rc none
+            else
+              rc=$?
+              state_set "${diagnostic_key}_status" REQUEST_FAILED
+              state_set "${diagnostic_key}_failure_rc" "$rc"
+              state_set prior_inventory_last_status REQUEST_FAILED
+              state_set prior_inventory_last_failure_rc "$rc"
+              record_oci_diagnostic "$diagnostic_key" "$rc"
+              return "$rc"
+            fi
             output="$OCI_JSON_OUTPUT"
             # Keep TERMINATED objects in the evidence set.  Each known ID must
             # still pass a direct GET as TERMINATED or explicit 404 below;
@@ -1893,6 +1921,7 @@ jobs:
               '- monotonic primary/cleanup/mutation/receipt deadlines: ' + code('/'.join(deadline_values)),
               '- receipt started inside reserved deadline: ' + code(str(receipt_inside_deadline).lower()),
               '- prior-run reconciliation: ' + code(value('prior_cleanup_status', 'NOT_RECORDED')),
+              '- prior-run inventory last request: resource=' + code(value('prior_inventory_last_resource', 'none')) + '; status=' + code(value('prior_inventory_last_status', 'NOT_RECORDED')) + '; rc=' + code(value('prior_inventory_last_failure_rc', 'none')),
               '- authoritative failed receipt: ' + code(value('authoritative_receipt_status', 'NOT_APPLICABLE')) + '; SHA-256: ' + code(redacted_presence('authoritative_receipt_sha256')),
               '- prior-run exact resource count: ' + code(value('prior_resource_count', 'unknown')),
               '- prior-run exact resource IDs: ' + code(redacted_presence('prior_resource_ids')),

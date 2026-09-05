@@ -746,7 +746,9 @@ def test_oci_json_stdout_isolated_from_warning_stderr() -> None:
     assert 'bounded_retry_seconds="$(bounded_wait_seconds "$retry_delay_seconds" "$absolute_deadline")"' in helper
     assert 'sleep "$bounded_retry_seconds"' in helper
     assert "return 86" in helper
-    assert "(( rc == 0 )) || return" in helper
+    assert "if (( rc != 0 )); then" in helper
+    assert "Retry only failures that are safe to classify as transient" in helper
+    assert "return \"$rc\"" in helper
     assert "json.load(sys.stdin)" in helper
 
     cleanup = WORKFLOW[WORKFLOW.index("wait_absent()") : WORKFLOW.index("operation_backup_inventory()")]
@@ -1498,12 +1500,26 @@ case "$FAKE_MODE" in
     echo '{malformed'
     ;;
   auth)
+    count=0
+    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+    printf '%s' "$((count + 1))" >"$count_file"
     echo '{"code":"NotAuthenticated","status":401}' >&2
     exit 17
     ;;
   transport)
+    count=0
+    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+    printf '%s' "$((count + 1))" >"$count_file"
     echo 'connection reset' >&2
     exit 18
+    ;;
+  transient_then_valid)
+    count=0
+    [[ ! -f "$count_file" ]] || count="$(cat "$count_file")"
+    count=$((count + 1))
+    printf '%s' "$count" >"$count_file"
+    if (( count < 2 )); then echo 'connection reset' >&2; exit 18; fi
+    echo '{"data":{"lifecycle-state":"AVAILABLE"}}'
     ;;
 esac
 """
@@ -1540,8 +1556,34 @@ fi
     assert "rc=0" in transient and 'json={"data"' in transient
     assert "rc=86" in run("persistent_empty")
     assert "stderr=INVALID_JSON_SUCCESS_RESPONSE" in run("malformed")
-    assert "rc=17" in run("auth") and "NotAuthenticated" in run("auth")
-    assert "rc=18" in run("transport") and "connection reset" in run("transport")
+    auth = run("auth")
+    assert "rc=17" in auth and "NotAuthenticated" in auth
+    assert (tmp_path / "fake-count").read_text() == "1"
+    transport = run("transport")
+    assert "rc=18" in transport and "connection reset" in transport
+    assert (tmp_path / "fake-count").read_text() == "3"
+    assert "rc=0" in run("transient_then_valid")
+
+
+def test_prior_inventory_preserves_failure_diagnostic_and_original_rc() -> None:
+    start = WORKFLOW.index("prior_named_ids() {")
+    end = WORKFLOW.index("load_authoritative_failed_receipt()", start)
+    helper = textwrap.dedent(WORKFLOW[start:end])
+    harness = helper + r'''
+state_set() { printf 'state:%s=%s\n' "$1" "$2" >&2; }
+record_oci_diagnostic() { printf 'diagnostic:%s:rc=%s\n' "$1" "$2" >&2; }
+oci_json_request() { OCI_JSON_OUTPUT=""; OCI_JSON_ERROR='NotAuthenticated'; OCI_JSON_RAW_ERROR="$OCI_JSON_ERROR"; return 17; }
+tenancy_id=tenancy; ad=ad; prior_prefix=prefix; stamp=current; target_prior_stamp=
+if prior_named_ids instance boot-acceptance; then echo rc=0; else echo rc=$?; fi
+'''
+    result = subprocess.run(["bash", "-c", harness], text=True, capture_output=True, check=True)
+    assert "rc=17" in result.stdout
+    assert "state:prior_inventory_instance_status=REQUEST_FAILED" in result.stderr
+    assert "state:prior_inventory_instance_failure_rc=17" in result.stderr
+    assert "state:prior_inventory_last_resource=instance" in result.stderr
+    assert "state:prior_inventory_last_status=REQUEST_FAILED" in result.stderr
+    assert "state:prior_inventory_last_failure_rc=17" in result.stderr
+    assert "diagnostic:prior_inventory_instance:rc=17" in result.stderr
 
 
 def test_issue_881_retry_runs_only_after_guarded_expansion() -> None:
