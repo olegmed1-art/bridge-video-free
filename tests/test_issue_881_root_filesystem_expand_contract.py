@@ -1034,9 +1034,10 @@ record_oci_diagnostic instance_create "$TEST_RC"
     assert "instance_create_stderr_class=NONE" in warning
     assert "OCI_JSON_RAW_ERROR=\"$OCI_JSON_ERROR\"" in WORKFLOW
     receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
-    assert "isolated instance create diagnostic" in receipt
-    assert "isolated instance launch discovery" in receipt
-    assert "instance_launch_discovery_stderr_class" in receipt
+    assert "isolated paid instance create diagnostic" in receipt
+    assert "isolated paid instance launch discovery" in receipt
+    assert "paid_instance_launch_discovery_stderr_class" in receipt
+    assert "paid_instance_create_stderr_class" in receipt
     assert 'discover_named_id instance "$stamp-boot-acceptance" 90 "$primary_deadline" paid_instance_launch_discovery' in WORKFLOW
 
 
