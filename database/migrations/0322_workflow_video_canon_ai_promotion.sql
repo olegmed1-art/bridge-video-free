@@ -798,6 +798,8 @@ SECURITY DEFINER SET search_path=pg_catalog,public,bidding AS $$
 DECLARE
     v_candidate public.analysis_candidate%ROWTYPE;
     v_decoded jsonb;
+    v_candidate_decoded jsonb;
+    v_candidate_canonical_json text;
     v_computed text;
     v_valid_from timestamptz;
     v_valid_to timestamptz;
@@ -806,9 +808,6 @@ BEGIN
      WHERE analysis_candidate_id=NEW.analysis_candidate_id;
     IF NOT FOUND OR v_candidate.school_id<>NEW.school_id
        OR v_candidate.payload_hash<>NEW.candidate_payload_hash
-       OR encode(public.digest(convert_to(
-            video_queue.canonical_json_text(v_candidate.payload),'UTF8'
-          ),'sha256'),'hex')<>v_candidate.payload_hash
        OR v_candidate.candidate_type<>'video_school_canon_candidate'
        OR v_candidate.payload->>'authority_class' IS DISTINCT FROM 'TEACHER_VIDEO'
        OR v_candidate.status<>'active'
@@ -821,19 +820,31 @@ BEGIN
     EXCEPTION WHEN OTHERS THEN
         RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_CANONICAL_JSON_INVALID' USING ERRCODE='23514';
     END;
+    v_candidate_canonical_json := NEW.bundle_payload->>'candidate_canonical_json';
+    BEGIN
+        v_candidate_decoded := v_candidate_canonical_json::jsonb;
+    EXCEPTION WHEN OTHERS THEN
+        RAISE EXCEPTION 'VIDEO_CANON_CANDIDATE_CANONICAL_JSON_INVALID' USING ERRCODE='23514';
+    END;
     v_computed := encode(public.digest(convert_to(NEW.bundle_canonical_json,'UTF8'),'sha256'),'hex');
     IF v_decoded<>NEW.bundle_payload OR v_computed<>NEW.verification_bundle_sha256
        OR NEW.bundle_payload->>'schema'<>'video-canon-ai-promotion-v1'
        OR NEW.bundle_payload->>'policy_version'<>'school-video-auto-canon-v1'
-       OR (SELECT count(*) FROM jsonb_object_keys(NEW.bundle_payload))<>12
+       OR (SELECT count(*) FROM jsonb_object_keys(NEW.bundle_payload))<>13
        OR NOT (NEW.bundle_payload ?& ARRAY[
          'schema','policy_version','candidate_payload_hash','candidate_payload',
+         'candidate_canonical_json',
          'system_profile','learner_level','effective_period','activation_scope',
          'canon_snapshot_sha256','rule_test_state_sha256','checks','rollback'
        ])
        OR NEW.bundle_payload->>'candidate_payload_hash'
             IS DISTINCT FROM NEW.candidate_payload_hash
        OR NEW.bundle_payload->'candidate_payload' IS DISTINCT FROM v_candidate.payload
+       OR jsonb_typeof(NEW.bundle_payload->'candidate_canonical_json')<>'string'
+       OR v_candidate_decoded IS DISTINCT FROM v_candidate.payload
+       OR encode(public.digest(convert_to(
+            v_candidate_canonical_json,'UTF8'
+          ),'sha256'),'hex') IS DISTINCT FROM v_candidate.payload_hash
        OR NEW.bundle_payload->>'activation_scope'
             IS DISTINCT FROM v_candidate.payload->>'semantic_scope'
        OR NEW.bundle_payload->>'system_profile'
@@ -1547,9 +1558,11 @@ BEGIN
        OR v_candidate.payload->>'review_eligibility' IS DISTINCT FROM 'AI_VERIFICATION_PENDING'
        OR v_candidate.payload->>'source_class' IS DISTINCT FROM 'SCHOOL_PRIMARY_EVIDENCE'
        OR v_candidate.payload->>'authority_class' IS DISTINCT FROM 'TEACHER_VIDEO'
+       OR (v_bundle.bundle_payload->>'candidate_canonical_json')::jsonb
+            IS DISTINCT FROM v_candidate.payload
        OR encode(public.digest(convert_to(
-            video_queue.canonical_json_text(v_candidate.payload),'UTF8'
-          ),'sha256'),'hex')<>v_candidate.payload_hash
+            v_bundle.bundle_payload->>'candidate_canonical_json','UTF8'
+          ),'sha256'),'hex') IS DISTINCT FROM v_candidate.payload_hash
        OR v_candidate.payload#>>'{source_authorization,policy_version}'
             IS DISTINCT FROM v_policy_version
        OR v_candidate.payload->>'semantic_scope' IS DISTINCT FROM v_semantic_scope
@@ -2076,15 +2089,31 @@ BEGIN
              v_existing.restored_canon_activation_id IS NULL AND (
                cardinality(v_existing.restored_runtime_activation_ids)<>0
                OR EXISTS (
-                 SELECT 1 FROM public.canon_activation ca
-                  WHERE ca.scope_key=v_promotion.scope_key AND ca.status='active'
-                    AND ca.valid_from<=v_now
+                 SELECT 1
+                   FROM public.canon_activation ca
+                   JOIN public.knowledge_version active_kv
+                     ON active_kv.knowledge_version_id=ca.knowledge_version_id
+                   JOIN public.canon_activation revoked_ca
+                     ON revoked_ca.canon_activation_id=v_existing.revoked_canon_activation_id
+                   JOIN public.knowledge_version revoked_kv
+                     ON revoked_kv.knowledge_version_id=revoked_ca.knowledge_version_id
+                  WHERE active_kv.knowledge_item_id=revoked_kv.knowledge_item_id
+                    AND ca.status='active' AND ca.valid_from<=v_now
                     AND (ca.valid_to IS NULL OR ca.valid_to>v_now)
                )
                OR EXISTS (
-                 SELECT 1 FROM bidding.runtime_activation ra
-                  WHERE ra.school_id=v_existing.school_id
-                    AND ra.scope_key=v_promotion.scope_key AND ra.status='active'
+                 SELECT 1
+                   FROM bidding.runtime_activation ra
+                   JOIN bidding.rule active_rule ON active_rule.rule_id=ra.rule_id
+                   JOIN public.knowledge_version active_kv
+                     ON active_kv.knowledge_version_id=active_rule.knowledge_version_id
+                   JOIN bidding.runtime_activation revoked_ra
+                     ON revoked_ra.runtime_activation_id=v_existing.revoked_runtime_activation_id
+                   JOIN bidding.rule revoked_rule ON revoked_rule.rule_id=revoked_ra.rule_id
+                   JOIN public.knowledge_version revoked_kv
+                     ON revoked_kv.knowledge_version_id=revoked_rule.knowledge_version_id
+                  WHERE active_kv.knowledge_item_id=revoked_kv.knowledge_item_id
+                    AND ra.school_id=v_existing.school_id AND ra.status='active'
                     AND ra.valid_from<=v_now
                     AND (ra.valid_to IS NULL OR ra.valid_to>v_now)
                )

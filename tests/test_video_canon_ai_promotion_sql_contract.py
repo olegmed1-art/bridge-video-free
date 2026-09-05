@@ -17,9 +17,9 @@ def test_database_bundle_gate_validates_the_effective_period():
 
 
 def test_database_bundle_gate_binds_profile_and_level_to_the_candidate():
-    assert MIGRATION.count(
-        "video_queue.canonical_json_text(v_candidate.payload)"
-    ) == 2
+    assert "candidate_canonical_json" in MIGRATION
+    assert "v_candidate_decoded IS DISTINCT FROM v_candidate.payload" in MIGRATION
+    assert "VIDEO_CANON_CANDIDATE_CANONICAL_JSON_INVALID" in MIGRATION
     assert (
         "v_candidate.payload->>'authority_class' IS DISTINCT FROM 'TEACHER_VIDEO'"
     ) in MIGRATION
@@ -359,6 +359,9 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "VIDEO_CANON_STALE_IDEMPOTENT_REPLAY_NOT_BLOCKED" in DATABASE_TEST
     assert "VIDEO_CANON_RESTORE_RECEIPT_STALE" in MIGRATION
     assert "VIDEO_CANON_STALE_RESTORE_RECEIPT_REPLAY_NOT_BLOCKED" in DATABASE_TEST
+    assert MIGRATION.count(
+        "active_kv.knowledge_item_id=revoked_kv.knowledge_item_id"
+    ) == 2
     restore_replay = MIGRATION.split(
         "CREATE OR REPLACE FUNCTION bidding.restore_ai_verified_video_canon", 1
     )[1]

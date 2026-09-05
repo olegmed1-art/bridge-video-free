@@ -79,6 +79,9 @@ def test_all_ai_checks_create_sealed_automatic_promotion_command():
     assert result["safety"]["world_evidence_used"] is False
     assert len(result["verification_bundle_sha256"]) == 64
     assert result["verification_bundle"]["candidate_payload"] == candidate["payload"]
+    candidate_canonical = result["verification_bundle"]["candidate_canonical_json"]
+    assert json.loads(candidate_canonical) == candidate["payload"]
+    assert hashlib.sha256(candidate_canonical.encode("utf-8")).hexdigest() == candidate["payload_hash"]
     assert result["verification_bundle"]["rule_test_state_sha256"] == "b" * 64
     assert result["verification_bundle_canonical_json"]
     assert hashlib.sha256(

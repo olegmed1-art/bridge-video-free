@@ -677,6 +677,7 @@ BEGIN
     'policy_version','school-video-auto-canon-v1',
     'candidate_payload_hash',v_candidate_hash,
     'candidate_payload',v_candidate_payload,
+    'candidate_canonical_json',video_queue.canonical_json_text(v_candidate_payload),
     'system_profile','natural-v1','learner_level','beginner-1',
     'activation_scope','restore-scope',
     'canon_snapshot_sha256',repeat('0',64),
@@ -733,8 +734,13 @@ BEGIN
   UPDATE public.analysis_candidate SET payload_hash=v_bad_candidate_hash
    WHERE analysis_candidate_id=v_candidate;
   v_bad_bundle:=jsonb_set(
-    jsonb_set(v_good_bundle,'{candidate_payload,authority_class}','"WORLD_EXTERNAL"'::jsonb),
-    '{candidate_payload_hash}',to_jsonb(v_bad_candidate_hash)
+    jsonb_set(
+      jsonb_set(v_good_bundle,'{candidate_payload,authority_class}','"WORLD_EXTERNAL"'::jsonb),
+      '{candidate_payload_hash}',to_jsonb(v_bad_candidate_hash)
+    ),
+    '{candidate_canonical_json}',to_jsonb(video_queue.canonical_json_text(
+      jsonb_set(v_candidate_payload,'{authority_class}','"WORLD_EXTERNAL"'::jsonb)
+    ))
   );
   BEGIN
     INSERT INTO bidding.video_canon_ai_verification_bundle(

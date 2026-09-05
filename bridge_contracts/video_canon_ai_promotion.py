@@ -270,6 +270,7 @@ def build_ai_canon_promotion(
         "policy_version": POLICY,
         "candidate_payload_hash": candidate_hash,
         "candidate_payload": json.loads(_canonical_json(payload)),
+        "candidate_canonical_json": _canonical_json(payload),
         "system_profile": _text(verification_bundle.get("system_profile"), "system_profile"),
         "learner_level": _text(verification_bundle.get("learner_level"), "learner_level"),
         "effective_period": {"valid_from": valid_from, "valid_to": valid_to},
