@@ -334,6 +334,16 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
     assert "opponent holds the two" in DATABASE_TEST
     assert "North has the seven" in DATABASE_TEST
     assert "partner has five cards" in DATABASE_TEST
+    assert "partner has the two-level response" in DATABASE_TEST
+    assert "partner has the two-over-one bid" in DATABASE_TEST
+    assert "North has the seven-card suit" in DATABASE_TEST
+    assert "у партнера девятка пик" in DATABASE_TEST
+    assert "партнер держит двойку треф" in DATABASE_TEST
+    assert "девятк[[:alnum:]_]*" in MIGRATION
+    assert "(?![-–—])" in MIGRATION
+    assert "VIDEO_CANON_EFFECTIVE_PERIOD_EXPIRED" in MIGRATION.split(
+        "VIDEO_CANON_BUNDLE_ARGUMENT_INVALID", 1
+    )[1]
     assert "two|three|four|five|six|seven|eight|nine" in MIGRATION
     assert "VIDEO_CANON_SOURCE_POLICY_SUCCESSOR_HISTORY_NOT_PRESERVED" in DATABASE_TEST
     assert "VIDEO_CANON_BUNDLE_SCOPE_MISMATCH_NOT_BLOCKED" in DATABASE_TEST

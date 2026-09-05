@@ -227,6 +227,12 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"противник имеет туз пик"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"у партнера девятка пик"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"партнер держит двойку треф"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"у противника семёрка червей"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"Партнер имеет пикового туза"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"Partner has AKQx.Txx.xxx.xxx"}'::jsonb
@@ -322,6 +328,12 @@ BEGIN
        '{"notes":"North held five hearts"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"North has five to seven cards"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"partner has the two-level response"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"partner has the two-over-one bid"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North has the seven-card suit"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"North held the view that Q is conventional"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(

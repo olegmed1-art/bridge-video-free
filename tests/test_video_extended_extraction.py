@@ -119,6 +119,53 @@ def test_corrected_explicit_explanation_gets_content_addressed_identity():
     assert first["candidate_id"] == replay["candidate_id"]
 
 
+def test_nonfinite_explicit_explanation_becomes_bounded_gap():
+    master = {
+        "job_id": "job-1",
+        "transcript": [{
+            "segment_id": "segment-7",
+            "speaker_role": "teacher",
+            "speaker_role_confidence": 0.99,
+            "text": "source-bound explanation",
+        }],
+        "explanation_observations": [{
+            "stable_key": "why:rule-7",
+            "rule_stable_key": "rule-7",
+            "why_chain": ["source-bound explanation"],
+            "example": {"score": float("nan")},
+            "evidence_refs": ["segment-7"],
+        }],
+    }
+    quality = {
+        "canon_candidates": [{
+            "canon_observation_id": "rule-7",
+            "classification": "RULE_PARAPHRASE_MATCH",
+            "evidence_refs": ["segment-7"],
+        }],
+        "authority": {"canon_activation": "DENY"},
+    }
+    result = build_extended_extraction(master, quality)
+    assert not any(
+        row["candidate_type"] == "EXPLANATION_CANDIDATE"
+        for row in result["candidate_records"]
+    )
+    gaps = [
+        row for row in result["candidate_records"]
+        if row["payload"].get("gap_type") in {
+            "EXPLANATION_EVIDENCE_INVALID", "EXPLANATION_MISSING",
+        }
+    ]
+    assert {row["payload"]["gap_type"] for row in gaps} == {
+        "EXPLANATION_EVIDENCE_INVALID", "EXPLANATION_MISSING",
+    }
+    invalid_gap = next(
+        row for row in gaps
+        if row["payload"]["gap_type"] == "EXPLANATION_EVIDENCE_INVALID"
+    )
+    assert invalid_gap["evidence_refs"] == []
+    json.dumps(result, allow_nan=False)
+
+
 def test_source_bound_why_is_a_separate_explanation_candidate():
     master = {
         "job_id": "job-1",

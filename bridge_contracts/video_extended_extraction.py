@@ -307,10 +307,23 @@ def build_extended_extraction(
                 continue
             status = str(safe_item.get("status") or "REVIEW_REQUIRED")
             records.append(_record(job_id, kind, safe_item, status))
-    for item in explanations:
+    strict_explanations: list[dict[str, Any]] = []
+    for position, item in enumerate(explanations):
+        try:
+            safe_item = _strict_json_copy(item)
+        except (TypeError, ValueError, OverflowError):
+            records.append(_record(job_id, "GAP_OR_CONFLICT", {
+                "stable_key": f"explanation-json-gap:{position}",
+                "gap_type": "EXPLANATION_EVIDENCE_INVALID",
+                "status": "OPEN",
+                "reason": "explanation must be strict JSON",
+                "evidence_refs": [],
+            }, "OPEN"))
+            continue
+        strict_explanations.append(safe_item)
         records.append(_record(
-            job_id, "EXPLANATION_CANDIDATE", item,
-            str(item.get("status") or "REVIEW_REQUIRED"),
+            job_id, "EXPLANATION_CANDIDATE", safe_item,
+            str(safe_item.get("status") or "REVIEW_REQUIRED"),
         ))
 
     for raw in _items(master.get("dds_decision_evaluations")):
@@ -366,7 +379,7 @@ def build_extended_extraction(
     # but not yet a teachable unit.  Record the missing "why" explicitly.
     explained_rule_keys = {
         str(item.get("rule_stable_key") or "")
-        for item in explanations
+        for item in strict_explanations
         if item.get("rule_stable_key")
     }
     for item in _items(quality.get("canon_candidates")):
