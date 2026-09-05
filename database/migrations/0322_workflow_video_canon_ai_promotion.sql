@@ -395,7 +395,7 @@ WITH RECURSIVE walk(value,actor_context) AS (
         SELECT e.value,
                w.actor_context OR regexp_replace(
                  lower(e.key),'[^[:alnum:]]','','g'
-               ) ~ '^((actual)?(partner|opponent|north|east|south|west|leftopponent|rightopponent|lefthandopponent|righthandopponent|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?|n|e|s|w)s?|партн[её]р|соперник|оппонент)$'
+               ) ~ '^((actual)?(partner|opponent|north|east|south|west|leftopponent|rightopponent|lefthandopponent|righthandopponent|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?|n|e|s|w)s?|партн[её]р|соперник|оппонент|противник)$'
                  AS actor_context
           FROM jsonb_each(
           CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END

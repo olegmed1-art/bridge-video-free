@@ -251,7 +251,7 @@ def _is_complete_hand_shape(hand: str) -> bool:
 
 _ACTOR_CONTEXT_KEY = re.compile(
     r"(?:(?:actual)?(?:partner|opponent|north|east|south|west|leftopponent|rightopponent|lefthandopponent|righthandopponent|[lr](?:\s*\.\s*)?h(?:\s*\.\s*)?o\.?|n|e|s|w)s?"
-    r"|партн[её]р|соперник|оппонент)"
+    r"|партн[её]р|соперник|оппонент|противник)"
 )
 
 
