@@ -341,6 +341,12 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
     assert "partner has the two-level response" in DATABASE_TEST
     assert "partner has the two-over-one bid" in DATABASE_TEST
     assert "North has the seven-card suit" in DATABASE_TEST
+    assert "partner has a forcing bid" in DATABASE_TEST
+    assert "North has a response" in DATABASE_TEST
+    assert "opponent has a choice" in DATABASE_TEST
+    assert "у партнера нет пик" in DATABASE_TEST
+    assert "партнер без пик" in DATABASE_TEST
+    assert "не[[:space:]]+(?:имеет|держит)" in MIGRATION
     assert "у партнера девятка пик" in DATABASE_TEST
     assert "партнер держит двойку треф" in DATABASE_TEST
     assert "девятк[[:alnum:]_]*" in MIGRATION

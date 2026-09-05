@@ -233,6 +233,14 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"у противника семёрка червей"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"у партнера нет пик"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"партнер без пик"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"у противника нет червей"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"соперник не имеет бубен"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"Партнер имеет пикового туза"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"Partner has AKQx.Txx.xxx.xxx"}'::jsonb
@@ -342,6 +350,12 @@ BEGIN
        '{"notes":"partner has the two-over-one bid"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"North has the seven-card suit"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"partner has a forcing bid"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North has a response"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"opponent has a choice"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"North held the view that Q is conventional"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(

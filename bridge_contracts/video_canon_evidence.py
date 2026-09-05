@@ -116,21 +116,30 @@ _RUSSIAN_HIDDEN_POSSESSION = re.compile(
     r"[SHDC]\s*:?\s*(?:10|[AKQJT2-9X]))(?=$|[^\w])",
     re.IGNORECASE,
 )
+_RUSSIAN_HIDDEN_ABSENCE = re.compile(
+    r"(?:(?<!\w)у\s+(?:партн[её]ра|соперника|оппонента|противника)\s+"
+    r"(?:нет|не\s+было)\s+|"
+    r"(?<!\w)(?:партн[её]р|соперник|оппонент|противник)\s+"
+    r"(?:без|не\s+(?:имеет|держит))\s+)"
+    r"(?:пик|черв(?:ей|и|а)?|буб(?:ен|ны|на)?|треф(?:ы|а)?|[SHDC])"
+    r"(?=$|[^\w])",
+    re.IGNORECASE,
+)
 _LEADING_HOLDING_CARD_GROUP = re.compile(
     r"^\s*(?:[:,;=\-]\s*)?(?:(?:the|a|an)\s+)?(?:"
     r"(?:ace|king|queen|jack|ten)(?:\s+of\s+(?:spades?|hearts?|diamonds?|clubs?))?"
     r"|(?:two|three|four|five|six|seven|eight|nine)(?:\s+of\s+(?:spades?|hearts?|diamonds?|clubs?))?(?![-–—])"
-    r"|(?:spades?|hearts?|diamonds?|clubs?)\s+(?:ace|king|queen|jack|ten|two|three|four|five|six|seven|eight|nine|10|[AKQJT2-9X])(?![-–—])"
-    r"|[SHDC]\s*:?\s*(?:10|[AKQJT2-9X])|(?:10|[AKQJT2-9X])\s*[SHDC]|10|[AKQJT2-9X]|[kqjtx]|"
-    r"(?:(?:10)|[AKQJT2-9Xakqjtx]){2,13})(?:$|[^A-Za-z0-9])",
+    r"|(?:spades?|hearts?|diamonds?|clubs?)\s+(?:ace|king|queen|jack|ten|two|three|four|five|six|seven|eight|nine|10|(?-i:[AKQJT2-9Xkqjtx]))(?![-–—])"
+    r"|[SHDC]\s*:?\s*(?:10|(?-i:[AKQJT2-9Xkqjtx]))|(?:10|(?-i:[AKQJT2-9Xkqjtx]))\s*[SHDC]|10|(?-i:[AKQJT2-9Xkqjtx])|"
+    r"(?:(?:10)|(?-i:[AKQJT2-9Xkqjtx])){2,13})(?:$|[^A-Za-z0-9])",
     re.IGNORECASE,
 )
 _EXPLICIT_SUIT_LABEL = re.compile(
     r"(?<![A-Za-z0-9_])(?P<suit>[SHDC])\s*:", re.IGNORECASE
 )
 _SINGLE_SUIT_CARD_GROUP = re.compile(
-    r"(?<![A-Za-z0-9])(?P<cards>10|[AKQJTX]|[kqjtx]|"
-    r"(?:(?:10)|[AKQJT2-9Xakqjtx]){2,13})(?![A-Za-z0-9])"
+    r"(?<![A-Za-z0-9])(?P<cards>10|(?-i:[AKQJTXkqjtx])|"
+    r"(?:(?:10)|(?-i:[AKQJT2-9Xkqjtx])){2,13})(?![A-Za-z0-9])"
 )
 _LEADING_SINGLE_DIGIT_CARD = re.compile(
     r"^\s*(?:(?:was|is)\s+|[:,;=\-]\s*)?[2-9](?:$|[\s,./;])",
@@ -150,8 +159,8 @@ _LEADING_NUMERIC_RANGE = re.compile(
     re.IGNORECASE,
 )
 _PARTIAL_SEPARATED_HAND = re.compile(
-    r"(?<![A-Za-z0-9])(?:-|(?:(?:10)|[AKQJT2-9X]){1,13})"
-    r"(?:[\s,/.]+(?:-|(?:(?:10)|[AKQJT2-9X]){1,13})){1,3}"
+    r"(?<![A-Za-z0-9])(?:-|(?:(?:10)|(?-i:[AKQJT2-9Xkqjtx])){1,13})"
+    r"(?:[\s,/.]+(?:-|(?:(?:10)|(?-i:[AKQJT2-9Xkqjtx])){1,13})){1,3}"
     r"(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
@@ -277,6 +286,7 @@ def _has_forbidden_value(value: Any, *, actor_context: bool = False) -> bool:
             _NEGATED_HIDDEN_HOLDING.search(normalized_value)
             or _VOID_HIDDEN_HOLDING.search(normalized_value)
             or _RUSSIAN_HIDDEN_POSSESSION.search(normalized_value)
+            or _RUSSIAN_HIDDEN_ABSENCE.search(normalized_value)
         ):
             return True
         if any(_is_complete_hand_shape(match.group("hand")) for match in _PBN_DEAL.finditer(normalized_value)):

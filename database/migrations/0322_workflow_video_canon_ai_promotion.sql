@@ -409,9 +409,14 @@ WITH RECURSIVE walk(value,actor_context) AS (
 SELECT EXISTS (
   SELECT 1 FROM walk AS w
    WHERE w.actor_context AND jsonb_typeof(w.value)='string'
-     AND replace(replace(replace(replace(
-           w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:') ~*
-         E'^[[:space:]]*(?:(?:the|a|an)[[:space:]]+)?(?:(?:ace|king|queen|jack|ten)(?:[[:space:]]+of[[:space:]]+(?:spades?|hearts?|diamonds?|clubs?))?|(?:two|three|four|five|six|seven|eight|nine)(?:[[:space:]]+of[[:space:]]+(?:spades?|hearts?|diamonds?|clubs?))?(?![-–—])|(?:spades?|hearts?|diamonds?|clubs?)[[:space:]]+(?:ace|king|queen|jack|ten|two|three|four|five|six|seven|eight|nine|10|[AKQJT2-9X])(?![-–—])|[SHDC][[:space:]]*:?[[:space:]]*(?:10|[AKQJT2-9X])|(?:10|[AKQJT2-9X])[[:space:]]*[SHDC]|10|[AKQJT2-9X]|[kqjtx]|(?:(?:10)|[AKQJT2-9Xakqjtx]){2,13})($|[^[:alnum:]])'
+     AND (
+       replace(replace(replace(replace(
+         w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:') ~*
+         E'^[[:space:]]*(?:(?:the|a|an)[[:space:]]+)?(?:(?:ace|king|queen|jack|ten)(?:[[:space:]]+of[[:space:]]+(?:spades?|hearts?|diamonds?|clubs?))?|(?:two|three|four|five|six|seven|eight|nine)(?:[[:space:]]+of[[:space:]]+(?:spades?|hearts?|diamonds?|clubs?))?(?![-–—])|(?:spades?|hearts?|diamonds?|clubs?)[[:space:]]+(?:ace|king|queen|jack|ten|two|three|four|five|six|seven|eight|nine|10|[KQJT2-9X])(?![-–—])|[SHDC][[:space:]]*:?[[:space:]]*(?:10|[KQJT2-9X])|(?:10|[KQJT2-9X])[[:space:]]*[SHDC]|10|[KQJT2-9X]|[kqjtx]|(?:(?:10)|[KQJT2-9Xkqjtx]){2,13})($|[^[:alnum:]])'
+       OR replace(replace(replace(replace(
+         w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:') ~
+         E'^[[:space:]]*(?:(?:the|a|an)[[:space:]]+)?(?:(?:[Ss]pades?|[Hh]earts?|[Dd]iamonds?|[Cc]lubs?)[[:space:]]+[AKQJT2-9X]|[SHDC][[:space:]]*:?[[:space:]]*(?:10|[AKQJT2-9X])|(?:10|[AKQJT2-9X])[[:space:]]*[SHDC]|10|[AKQJT2-9Xkqjtx]|(?:(?:10)|[AKQJT2-9Xkqjtx]){2,13})($|[^[:alnum:]])'
+     )
      AND replace(replace(replace(replace(
            w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:') !~*
          E'^[[:space:]]*(?:10|[2-9]|two|three|four|five|six|seven|eight|nine)[[:space:]]*(?:(?:(?:[-–—]|to)[[:space:]]*(?:[0-9]{1,2}|two|three|four|five|six|seven|eight|nine)|[+])[[:space:]]*(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?)?|(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?))($|[^[:alnum:]_])'
@@ -496,8 +501,12 @@ SELECT EXISTS (
              E'(?:(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?)|(?:^|[^[:alnum:]])[NESW])(?:(?:(?:[[:space:]]+(?:(?:held|holds?|has|had|owns?|possesses?|retains?|carries?)|(?:is|was)[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding))|(?:[''’]s(?:[[:space:]]+(?:(?:currently|still|now|already|actually|also|presently|temporarily|usually|often|apparently|probably|clearly|just|not)[[:space:]]+){0,2}holding)?))(?:[[:space:]]+|[[:space:]]*[:,;=\\-][[:space:]]*)|(?:[[:space:]]*[:,;=\\-][[:space:]]*))([^;]*)',
              'gi'
            ) AS matched(parts)
-          WHERE matched.parts[1] ~*
-                  E'^[[:space:]]*(?:[:,;=\\-][[:space:]]*)?(?:(?:the|a|an)[[:space:]]+)?(?:(?:ace|king|queen|jack|ten)(?:[[:space:]]+of[[:space:]]+(?:spades?|hearts?|diamonds?|clubs?))?|(?:two|three|four|five|six|seven|eight|nine)(?:[[:space:]]+of[[:space:]]+(?:spades?|hearts?|diamonds?|clubs?))?(?![-–—])|(?:spades?|hearts?|diamonds?|clubs?)[[:space:]]+(?:ace|king|queen|jack|ten|two|three|four|five|six|seven|eight|nine|10|[AKQJT2-9X])(?![-–—])|[SHDC][[:space:]]*:?[[:space:]]*(?:10|[AKQJT2-9X])|(?:10|[AKQJT2-9X])[[:space:]]*[SHDC]|10|[AKQJT2-9X]|[kqjtx]|(?:(?:10)|[AKQJT2-9Xakqjtx]){2,13})($|[^[:alnum:]])'
+          WHERE (
+                  matched.parts[1] ~*
+                    E'^[[:space:]]*(?:[:,;=\\-][[:space:]]*)?(?:(?:the|a|an)[[:space:]]+)?(?:(?:ace|king|queen|jack|ten)(?:[[:space:]]+of[[:space:]]+(?:spades?|hearts?|diamonds?|clubs?))?|(?:two|three|four|five|six|seven|eight|nine)(?:[[:space:]]+of[[:space:]]+(?:spades?|hearts?|diamonds?|clubs?))?(?![-–—])|(?:spades?|hearts?|diamonds?|clubs?)[[:space:]]+(?:ace|king|queen|jack|ten|two|three|four|five|six|seven|eight|nine|10|[KQJT2-9X])(?![-–—])|[SHDC][[:space:]]*:?[[:space:]]*(?:10|[KQJT2-9X])|(?:10|[KQJT2-9X])[[:space:]]*[SHDC]|10|[KQJT2-9X]|[kqjtx]|(?:(?:10)|[KQJT2-9Xkqjtx]){2,13})($|[^[:alnum:]])'
+                  OR matched.parts[1] ~
+                    E'^[[:space:]]*(?:[:,;=\\-][[:space:]]*)?(?:(?:the|a|an)[[:space:]]+)?(?:(?:[Ss]pades?|[Hh]earts?|[Dd]iamonds?|[Cc]lubs?)[[:space:]]+[AKQJT2-9X]|[SHDC][[:space:]]*:?[[:space:]]*(?:10|[AKQJT2-9X])|(?:10|[AKQJT2-9X])[[:space:]]*[SHDC]|10|[AKQJT2-9Xkqjtx]|(?:(?:10)|[AKQJT2-9Xkqjtx]){2,13})($|[^[:alnum:]])'
+                )
             AND matched.parts[1] !~*
                   E'^[[:space:]]*(?:[:,;=\\-][[:space:]]*)?(?:10|[2-9]|two|three|four|five|six|seven|eight|nine)[[:space:]]*(?:(?:(?:[-–—]|to)[[:space:]]*(?:[0-9]{1,2}|two|three|four|five|six|seven|eight|nine)|[+])[[:space:]]*(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*)?|(?:cards?|hearts?|spades?|diamonds?|clubs?|trumps?|losers?|points?|hcp|controls?|winners?|stoppers?|suits?|карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*|буб[[:alnum:]_]*|треф[[:alnum:]_]*|козыр[[:alnum:]_]*|взят[[:alnum:]_]*|очк[[:alnum:]_]*|пункт[[:alnum:]_]*|контрол[[:alnum:]_]*))($|[^[:alnum:]_])'
        )
@@ -530,6 +539,11 @@ SELECT EXISTS (
        AND replace(replace(replace(replace(
              w.value#>>'{}','♠','S:'),'♥','H:'),'♦','D:'),'♣','C:') ~*
            E'(?:^|[^[:alnum:]_])(?:партн[её]р|соперник|оппонент|противник)[[:space:]]*[:,;=\\-][[:space:]]*(?:(?:туз[[:alnum:]_]*|корол[[:alnum:]_]*|дам[[:alnum:]_]*|валет[[:alnum:]_]*|десятк[[:alnum:]_]*|двойк[[:alnum:]_]*|тройк[[:alnum:]_]*|четв[её]рк[[:alnum:]_]*|пят[её]рк[[:alnum:]_]*|шест[её]рк[[:alnum:]_]*|сем[её]рк[[:alnum:]_]*|восьм[её]рк[[:alnum:]_]*|девятк[[:alnum:]_]*|10|[AKQJT2-9X])(?:[[:space:]]+(?:пик|черв(?:ей|и|а)?|буб(?:ен|ны|на)?|треф(?:ы|а)?))?|(?:пиков[[:alnum:]_]*|червов[[:alnum:]_]*|бубнов[[:alnum:]_]*|трефов[[:alnum:]_]*)[[:space:]]+(?:туз[[:alnum:]_]*|корол[[:alnum:]_]*|дам[[:alnum:]_]*|валет[[:alnum:]_]*|десятк[[:alnum:]_]*|двойк[[:alnum:]_]*|тройк[[:alnum:]_]*|четв[её]рк[[:alnum:]_]*|пят[её]рк[[:alnum:]_]*|шест[её]рк[[:alnum:]_]*|сем[её]рк[[:alnum:]_]*|восьм[её]рк[[:alnum:]_]*|девятк[[:alnum:]_]*)|(?:10|[AKQJT2-9X])[[:space:]]*[SHDC][[:space:]]*:?|[SHDC][[:space:]]*:?[[:space:]]*(?:10|[AKQJT2-9X]))($|[^[:alnum:]_])'
+  ) OR EXISTS (
+    SELECT 1 FROM walk AS w
+     WHERE jsonb_typeof(w.value)='string'
+       AND w.value#>>'{}' ~*
+           E'(?:(?:^|[^[:alnum:]_])у[[:space:]]+(?:партн[её]ра|соперника|оппонента|противника)[[:space:]]+(?:нет|не[[:space:]]+было)|(?:^|[^[:alnum:]_])(?:партн[её]р|соперник|оппонент|противник)[[:space:]]+(?:без|не[[:space:]]+(?:имеет|держит)))[[:space:]]+(?:пик|черв(?:ей|и|а)?|буб(?:ен|ны|на)?|треф(?:ы|а)?|[SHDC])($|[^[:alnum:]_])'
   );
 $$;
 
