@@ -1243,7 +1243,9 @@ jobs:
             -f ref=main \
             -f "inputs[stamp]=$stamp" \
             -f "inputs[expiry_epoch]=$watchdog_cleanup_epoch" \
-            -f "inputs[expected_ad]=$ad"
+            -f "inputs[expected_ad]=$ad" \
+            -f "inputs[parent_run_id]=${GITHUB_RUN_ID}" \
+            -f "inputs[parent_run_attempt]=${GITHUB_RUN_ATTEMPT}"
           state_set paid_watchdog_status DISPATCHED
           watchdog_arm_deadline=$(( $(monotonic_now) + 180 ))
           watchdog_armed=0
