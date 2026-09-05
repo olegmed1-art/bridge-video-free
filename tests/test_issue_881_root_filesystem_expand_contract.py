@@ -11,6 +11,84 @@ import textwrap
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (ROOT / "ops/oracle_universal_video_root_filesystem_expand.sh").read_text()
 WORKFLOW = (ROOT / ".github/workflows/issue-881-root-filesystem-expand.yml").read_text()
+PAID_GUARD = ROOT / "ops/oci_paid_acceptance_guard.py"
+
+
+def _paid_guard(shapes: dict, availability: dict, source_shape: str = "VM.Standard.E5.Flex") -> subprocess.CompletedProcess[str]:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        shape_path = Path(temp_dir) / "shapes.json"
+        availability_path = Path(temp_dir) / "availability.json"
+        memory_availability_path = Path(temp_dir) / "memory-availability.json"
+        shape_path.write_text(json.dumps(shapes))
+        availability_path.write_text(json.dumps(availability))
+        memory_availability_path.write_text(json.dumps({"data": {"available": 1}}))
+        return subprocess.run(
+            [
+                "python",
+                str(PAID_GUARD),
+                "--shapes-json",
+                str(shape_path),
+                "--availability-json",
+                str(availability_path),
+                "--memory-availability-json",
+                str(memory_availability_path),
+                "--source-shape",
+                source_shape,
+            ],
+            text=True,
+            capture_output=True,
+        )
+
+
+def _paid_shape(*, min_ocpus: float = 1, max_ocpus: float = 64,
+                min_memory: float = 1, max_memory: float = 1024) -> dict:
+    return {
+        "data": [{
+            "shape": "VM.Standard.E5.Flex",
+            "ocpu-options": {"min": min_ocpus, "max": max_ocpus},
+            "memory-options": {"min-in-gbs": min_memory, "max-in-gbs": max_memory},
+        }]
+    }
+
+
+def test_paid_capacity_guard_is_bounded_and_fail_closed() -> None:
+    approved = _paid_guard(_paid_shape(), {"data": {"available": 1}})
+    assert approved.returncode == 0, approved.stderr
+    payload = json.loads(approved.stdout)
+    assert payload == payload | {
+        "status": "APPROVED",
+        "shape": "VM.Standard.E5.Flex",
+        "ocpus": 1,
+        "memory_gb": 1,
+        "runtime_limit_seconds": 1800,
+        "compute_budget_usd": "1.00",
+        "hourly_rate_max_usd": "0.0265",
+        "billing_class": "PAID_BOUNDED",
+    }
+    for shapes, availability, source, reason in (
+        (_paid_shape(), {"data": {"available": 1}}, "VM.Standard.A1.Flex", "ARCHITECTURE_OR_SOURCE_SHAPE_MISMATCH"),
+        (_paid_shape(), {"data": {"available": 0}}, "VM.Standard.E5.Flex", "INSUFFICIENT_SERVICE_LIMIT_HEADROOM"),
+        ({"data": []}, {"data": {"available": 1}}, "VM.Standard.E5.Flex", "PAID_SHAPE_NOT_UNIQUELY_AVAILABLE"),
+    ):
+        rejected = _paid_guard(shapes, availability, source)
+        assert rejected.returncode == 2
+        assert json.loads(rejected.stdout) == {"status": "REJECTED", "reason": reason}
+
+
+def test_paid_fallback_requires_quota_absence_preflight_and_exact_caps() -> None:
+    launch = WORKFLOW.index("mark_phase launch_isolated_acceptance_instance")
+    paid = WORKFLOW.index("mark_phase paid_capacity_preflight", launch)
+    assert WORKFLOW.index('source_launch_class" != QUOTA_OR_SERVICE_LIMIT', launch) < paid
+    assert WORKFLOW.index('discovery_status" == NOT_FOUND_UNPROVEN', launch) < paid
+    assert "EXACT_NAME_INVENTORY_EMPTY_AFTER_REJECTED_REQUEST" in WORKFLOW[launch:paid]
+    assert "oci compute shape list" in WORKFLOW[paid:]
+    assert "oci limits resource-availability get" in WORKFLOW[paid:]
+    assert "python ops/oci_paid_acceptance_guard.py" in WORKFLOW[paid:]
+    assert 'paid_deadline=$(( $(monotonic_now) + paid_values[6] ))' in WORKFLOW[paid:]
+    assert "paid_instance_create" in WORKFLOW[paid:]
+    receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
+    assert "paid hourly/runtime/budget caps:" in receipt
+    assert "present_redacted" in receipt
 
 
 def test_expansion_is_partition_and_filesystem_specific() -> None:
@@ -37,8 +115,8 @@ def test_workflow_is_exact_host_one_shot_and_pinned() -> None:
     assert "issue_comment:" in WORKFLOW
     assert "github.event.issue.number == 881" in WORKFLOW
     assert "github.event.comment.user.login == 'olegmed1-art'" in WORKFLOW
-    assert '"/oracle-ops issue-881-expand-root-and-recover-bba508"' in WORKFLOW
-    assert '"/oracle-ops issue-881-reconcile-run-33914733788"' in WORKFLOW
+    assert '"/oracle-ops issue-881-expand-root-and-recover-bba508-paid-bounded"' in WORKFLOW
+    assert '"/oracle-ops issue-881-reconcile-run-33919714953"' in WORKFLOW
 
 
 def test_owner_command_is_case_sensitive_before_any_oci_or_host_access() -> None:
@@ -49,15 +127,15 @@ def test_owner_command_is_case_sensitive_before_any_oci_or_host_access() -> None
     assert '[[ "$OWNER_COMMAND" != "$RECOVERY_COMMAND" && "$OWNER_COMMAND" != "$CLEANUP_ONLY_COMMAND" ]]' in block
     assert "UV_ROOT_OWNER_COMMAND_REJECTED" in block
     gate = r'''
-RECOVERY_COMMAND=/oracle-ops\ issue-881-expand-root-and-recover-bba508
-CLEANUP_ONLY_COMMAND=/oracle-ops\ issue-881-reconcile-run-33914733788
+RECOVERY_COMMAND=/oracle-ops\ issue-881-expand-root-and-recover-bba508-paid-bounded
+CLEANUP_ONLY_COMMAND=/oracle-ops\ issue-881-reconcile-run-33919714953
 if [[ "$OWNER_COMMAND" != "$RECOVERY_COMMAND" && "$OWNER_COMMAND" != "$CLEANUP_ONLY_COMMAND" ]]; then exit 23; fi
 '''
     for command, expected_rc in (
-        ("/oracle-ops issue-881-expand-root-and-recover-bba508", 0),
-        ("/oracle-ops issue-881-reconcile-run-33914733788", 0),
-        ("/ORACLE-OPS issue-881-reconcile-run-33914733788", 23),
-        ("/oracle-ops issue-881-reconcile-run-33914733788 ", 23),
+        ("/oracle-ops issue-881-expand-root-and-recover-bba508-paid-bounded", 0),
+        ("/oracle-ops issue-881-reconcile-run-33919714953", 0),
+        ("/ORACLE-OPS issue-881-reconcile-run-33919714953", 23),
+        ("/oracle-ops issue-881-reconcile-run-33919714953 ", 23),
     ):
         result = subprocess.run(["bash", "-c", gate], env=os.environ | {"OWNER_COMMAND": command})
         assert result.returncode == expected_rc
@@ -1317,11 +1395,11 @@ def test_last_second_gate_revalidates_oci_before_ssh_mutation() -> None:
 
 
 def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> None:
-    cleanup_command = "/oracle-ops issue-881-reconcile-run-33914733788"
+    cleanup_command = "/oracle-ops issue-881-reconcile-run-33919714953"
     assert cleanup_command in WORKFLOW
     assert "/oracle-ops issue-881-reconcile-run-33893910685" not in WORKFLOW
-    assert 'target_prior_stamp="${operation_run_prefix}33914733788-a1"' in WORKFLOW
-    assert 'failed_run_backup_name="${backup_prefix}-33914733788-a1"' in WORKFLOW
+    assert 'target_prior_stamp="${operation_run_prefix}33919714953-a1"' in WORKFLOW
+    assert 'failed_run_backup_name="${backup_prefix}-33919714953-a1"' in WORKFLOW
     cleanup = WORKFLOW.index("reconcile_prior_attempt_resources")
     backup_create = WORKFLOW.index("boot-volume-backup create")
     mutation = WORKFLOW.index("Expand root and recover exact image under shared host lock")
