@@ -16,7 +16,7 @@ def test_entrypoint_is_fixed_and_no_asr_productionization_only():
     assert "usage: universal-video-oci-admin audit|productionize" in ENTRY
     assert "audit) audit ;;" in ENTRY
     assert "productionize) productionize ;;" in ENTRY
-    assert "readonly UV_RUNTIME_COMMIT='3660e9de87b3d68d03bd95213d5105bf31aeacc5'" in ENTRY
+    assert "readonly UV_RUNTIME_COMMIT='bb2b3808cb60f5ce7cb41309af386d4a710d4ac4'" in ENTRY
     assert "readonly ACTIVATION_BLOB='0343e1a3c8e5a87c4c1931ad738e1af855266802'" in ENTRY
     assert "readonly PRODUCTIONIZE_BLOB='69b7243da69076e94891148467e04d10bbc7b058'" in ENTRY
     assert "readonly DRIVE_PROBE_FILE_ID='1RKrDWP6IOfVyuDWRMIsiUT62vpmVW9VS'" in ENTRY
@@ -56,7 +56,7 @@ def test_admin_runtime_pin_is_one_self_consistent_published_tree():
         pinned("ACTIVATION_BLOB", ENTRY),
         pinned("PRODUCTIONIZE_BLOB", ENTRY),
     ) == (
-        "3660e9de87b3d68d03bd95213d5105bf31aeacc5",
+        "bb2b3808cb60f5ce7cb41309af386d4a710d4ac4",
         "0343e1a3c8e5a87c4c1931ad738e1af855266802",
         "69b7243da69076e94891148467e04d10bbc7b058",
     )
