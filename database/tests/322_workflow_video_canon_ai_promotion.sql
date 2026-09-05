@@ -237,6 +237,12 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"compiled_payload":{"rightHandOpponent":{"holding":"QH"}}}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"compiled_payload":{"left_opponent":{"cards":"AS"}}}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"compiled_payload":{"rightOpponent":{"holding":"QH"}}}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"compiled_payload":{"leftOpponentCards":"AS"}}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"RHO has the queen of hearts"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"L.H.O has the ace of spades"}'::jsonb

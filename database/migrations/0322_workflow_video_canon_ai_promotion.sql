@@ -158,7 +158,7 @@ WITH RECURSIVE walk(value) AS (
         'partner_cards','opponent_cards','all_hands'
      ])
         OR regexp_replace(lower(k.key),'[^a-z0-9]','','g') ~
-           '^(actual)?(partner|opponent|north|east|south|west|lefthandopponent|righthandopponent|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?)(s)?(hand|holding|cards?|deals?)+(s)?$'
+           '^(actual)?(partner|opponent|north|east|south|west|leftopponent|rightopponent|lefthandopponent|righthandopponent|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?)(s)?(hand|holding|cards?|deals?)+(s)?$'
         OR regexp_replace(lower(k.key),'[^a-z0-9]','','g') ~
            '^(hidden|concealed)(hand|holding|cards?|deals?)+(s)?$'
      LIMIT 1
@@ -393,7 +393,7 @@ WITH RECURSIVE walk(value,actor_context) AS (
         SELECT e.value,
                w.actor_context OR regexp_replace(
                  lower(e.key),'[^[:alnum:]]','','g'
-               ) ~ '^((actual)?(partner|opponent|north|east|south|west|lefthandopponent|righthandopponent|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?|n|e|s|w)s?|партн[её]р|соперник|оппонент)$'
+               ) ~ '^((actual)?(partner|opponent|north|east|south|west|leftopponent|rightopponent|lefthandopponent|righthandopponent|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?|n|e|s|w)s?|партн[её]р|соперник|оппонент)$'
                  AS actor_context
           FROM jsonb_each(
           CASE WHEN jsonb_typeof(w.value)='object' THEN w.value ELSE '{}'::jsonb END

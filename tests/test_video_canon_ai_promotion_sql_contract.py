@@ -313,6 +313,10 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
     assert '"lho":{"cards":"AS"}' in DATABASE_TEST
     assert '"left_hand_opponent":{"cards":"AS"}' in DATABASE_TEST
     assert '"rightHandOpponent":{"holding":"QH"}' in DATABASE_TEST
+    assert '"left_opponent":{"cards":"AS"}' in DATABASE_TEST
+    assert '"rightOpponent":{"holding":"QH"}' in DATABASE_TEST
+    assert '"leftOpponentCards":"AS"' in DATABASE_TEST
+    assert "leftopponent|rightopponent" in MIGRATION
     assert "lefthandopponent|righthandopponent" in MIGRATION
     assert "RHO has the queen of hearts" in DATABASE_TEST
     assert "L.H.O has the ace of spades" in DATABASE_TEST
@@ -376,7 +380,7 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "candidate_payload_hash=v_candidate.payload_hash" in MIGRATION
     assert "verification_bundle_sha256" in MIGRATION
     assert "bundle_canonical_json" in MIGRATION
-    assert "count(*) FROM jsonb_object_keys(NEW.bundle_payload))<>12" in MIGRATION
+    assert "count(*) FROM jsonb_object_keys(NEW.bundle_payload))<>13" in MIGRATION
     assert "NEW.bundle_payload->'candidate_payload' IS DISTINCT FROM v_candidate.payload" in MIGRATION
     assert "v_candidate.quality_status<>'AI_VERIFICATION_PENDING'" in MIGRATION
     assert "p.candidate_payload_hash=OLD.payload_hash" in MIGRATION

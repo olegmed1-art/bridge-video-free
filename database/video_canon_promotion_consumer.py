@@ -32,6 +32,10 @@ def _safe_error_code(error: BaseException) -> str:
     for code in _SAFE_FAILURES:
         if code in message:
             return code
+    if "VIDEO_CANON_IDEMPOTENCY_MISMATCH" in message:
+        # A retained promotion receipt bound to another sealed bundle cannot
+        # succeed on retry without changing the job's immutable identity.
+        return "STATE_STALE"
     if "STALE" in message or "FENCE" in message or "LEASE" in message:
         return "STATE_STALE"
     if "INTEGRITY" in message:
