@@ -9,18 +9,20 @@ CREATE TABLE bidding.rule_key_identity (
   school_id uuid NOT NULL REFERENCES public.school(school_id) ON DELETE RESTRICT,
   system_profile text NOT NULL CHECK (btrim(system_profile)<>''),
   learner_level text NOT NULL CHECK (btrim(learner_level)<>''),
+  semantic_scope text NOT NULL CHECK (btrim(semantic_scope)<>''),
   rule_key text NOT NULL CHECK (btrim(rule_key)<>''),
   knowledge_item_id uuid NOT NULL REFERENCES public.knowledge_item(knowledge_item_id)
     ON DELETE RESTRICT,
-  PRIMARY KEY (school_id,system_profile,learner_level,rule_key)
+  PRIMARY KEY (school_id,system_profile,learner_level,semantic_scope,rule_key)
 );
 
 INSERT INTO bidding.rule_key_identity(
-  school_id,system_profile,learner_level,rule_key,knowledge_item_id
+  school_id,system_profile,learner_level,semantic_scope,rule_key,knowledge_item_id
 )
 SELECT r.school_id,
        COALESCE(NULLIF(btrim(kv.bidding_system_key),''),'__UNSCOPED_SYSTEM__'),
        COALESCE(NULLIF(btrim(kv.level_scope->>'level_key'),''),'__UNSCOPED_LEVEL__'),
+       COALESCE(NULLIF(btrim(kv.agreement_scope->>'scope_key'),''),'__UNSCOPED_SEMANTIC__'),
        r.rule_key,kv.knowledge_item_id
   FROM bidding.rule r
   JOIN public.knowledge_version kv ON kv.knowledge_version_id=r.knowledge_version_id;
@@ -36,11 +38,13 @@ DECLARE
   v_bound_item_id uuid;
   v_identity_profile text;
   v_identity_level text;
+  v_identity_semantic_scope text;
 BEGIN
   SELECT kv.knowledge_item_id,
          COALESCE(NULLIF(btrim(kv.bidding_system_key),''),'__UNSCOPED_SYSTEM__'),
-         COALESCE(NULLIF(btrim(kv.level_scope->>'level_key'),''),'__UNSCOPED_LEVEL__')
-    INTO v_item_id,v_identity_profile,v_identity_level
+         COALESCE(NULLIF(btrim(kv.level_scope->>'level_key'),''),'__UNSCOPED_LEVEL__'),
+         COALESCE(NULLIF(btrim(kv.agreement_scope->>'scope_key'),''),'__UNSCOPED_SEMANTIC__')
+    INTO v_item_id,v_identity_profile,v_identity_level,v_identity_semantic_scope
     FROM public.knowledge_version kv
     JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
    WHERE kv.knowledge_version_id=NEW.knowledge_version_id
@@ -52,11 +56,12 @@ BEGIN
   -- The no-op conflict update takes the unique-key lock and returns the
   -- authoritative binding even when two rule revisions are staged together.
   INSERT INTO bidding.rule_key_identity(
-    school_id,system_profile,learner_level,rule_key,knowledge_item_id
+    school_id,system_profile,learner_level,semantic_scope,rule_key,knowledge_item_id
   ) VALUES (
-    NEW.school_id,v_identity_profile,v_identity_level,NEW.rule_key,v_item_id
+    NEW.school_id,v_identity_profile,v_identity_level,v_identity_semantic_scope,
+    NEW.rule_key,v_item_id
   )
-  ON CONFLICT (school_id,system_profile,learner_level,rule_key) DO UPDATE
+  ON CONFLICT (school_id,system_profile,learner_level,semantic_scope,rule_key) DO UPDATE
     SET rule_key=EXCLUDED.rule_key
   RETURNING knowledge_item_id INTO v_bound_item_id;
   IF v_bound_item_id<>v_item_id THEN
@@ -69,6 +74,34 @@ REVOKE ALL ON FUNCTION bidding.bind_rule_key_identity() FROM PUBLIC;
 CREATE TRIGGER bidding_rule_key_identity_guard
 BEFORE INSERT OR UPDATE OF school_id,knowledge_version_id,rule_key ON bidding.rule
 FOR EACH ROW EXECUTE FUNCTION bidding.bind_rule_key_identity();
+
+-- Once a rule references a knowledge version, its identity-bearing scope is
+-- immutable.  Moving it would leave the concurrency registry bound to the old
+-- tuple and could permit a second knowledge item to claim the new tuple.
+CREATE OR REPLACE FUNCTION bidding.guard_rule_identity_knowledge_version_scope()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path=pg_catalog,public,bidding
+AS $$
+BEGIN
+  IF (NEW.knowledge_item_id,NEW.bidding_system_key,NEW.level_scope,NEW.agreement_scope)
+       IS DISTINCT FROM
+     (OLD.knowledge_item_id,OLD.bidding_system_key,OLD.level_scope,OLD.agreement_scope)
+     AND EXISTS (
+       SELECT 1 FROM bidding.rule r
+        WHERE r.knowledge_version_id=OLD.knowledge_version_id
+     ) THEN
+    RAISE EXCEPTION 'BIDDING_RULE_KEY_IDENTITY_SCOPE_IMMUTABLE' USING ERRCODE='23514';
+  END IF;
+  RETURN NEW;
+END $$;
+
+REVOKE ALL ON FUNCTION bidding.guard_rule_identity_knowledge_version_scope() FROM PUBLIC;
+CREATE TRIGGER knowledge_version_rule_identity_scope_guard
+BEFORE UPDATE OF knowledge_item_id,bidding_system_key,level_scope,agreement_scope
+ON public.knowledge_version
+FOR EACH ROW EXECUTE FUNCTION bidding.guard_rule_identity_knowledge_version_scope();
 
 ALTER TABLE bidding.rule DROP CONSTRAINT rule_school_id_rule_key_key;
 CREATE INDEX bidding_rule_version_identity_idx

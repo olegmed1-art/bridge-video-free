@@ -105,6 +105,8 @@ DROP TABLE bidding.video_canon_ai_verification_bundle;
 DROP TABLE bidding.video_canon_verifier_registry;
 DROP TABLE bidding.video_canon_source_policy;
 DROP INDEX bidding.bidding_rule_version_identity_idx;
+DROP TRIGGER knowledge_version_rule_identity_scope_guard ON public.knowledge_version;
+DROP FUNCTION bidding.guard_rule_identity_knowledge_version_scope();
 DROP TRIGGER bidding_rule_key_identity_guard ON bidding.rule;
 DROP FUNCTION bidding.bind_rule_key_identity();
 DROP TABLE bidding.rule_key_identity;

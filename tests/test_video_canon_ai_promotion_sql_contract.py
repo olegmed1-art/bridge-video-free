@@ -389,14 +389,18 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
 def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "DROP CONSTRAINT rule_school_id_rule_key_key" in MIGRATION
     assert "CREATE TABLE bidding.rule_key_identity" in MIGRATION
-    assert "PRIMARY KEY (school_id,system_profile,learner_level,rule_key)" in MIGRATION
+    assert "PRIMARY KEY (school_id,system_profile,learner_level,semantic_scope,rule_key)" in MIGRATION
     assert "CREATE OR REPLACE FUNCTION bidding.bind_rule_key_identity" in MIGRATION
-    assert "ON CONFLICT (school_id,system_profile,learner_level,rule_key) DO UPDATE" in MIGRATION
+    assert "ON CONFLICT (school_id,system_profile,learner_level,semantic_scope,rule_key) DO UPDATE" in MIGRATION
     assert "'__UNSCOPED_SYSTEM__'" in MIGRATION
     assert "'__UNSCOPED_LEVEL__'" in MIGRATION
+    assert "'__UNSCOPED_SEMANTIC__'" in MIGRATION
     assert "VIDEO_CANON_PROFILE_SCOPED_RULE_KEY_NOT_PRESERVED" in DATABASE_TEST
     assert "BIDDING_RULE_KEY_IDENTITY_MISMATCH" in MIGRATION
     assert "BEFORE INSERT OR UPDATE OF school_id,knowledge_version_id,rule_key" in MIGRATION
+    assert "CREATE OR REPLACE FUNCTION bidding.guard_rule_identity_knowledge_version_scope" in MIGRATION
+    assert "BEFORE UPDATE OF knowledge_item_id,bidding_system_key,level_scope,agreement_scope" in MIGRATION
+    assert "BIDDING_RULE_KEY_IDENTITY_SCOPE_IMMUTABLE" in MIGRATION
     assert "video_candidate_payload_hash" in MIGRATION
     assert "VIDEO_CANON_IDEMPOTENT_RECEIPT_STALE" in MIGRATION
     assert "VIDEO_CANON_ACTIVE_IDEMPOTENT_REPLAY_FAILED" in DATABASE_TEST
@@ -469,6 +473,7 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "DROP FUNCTION bidding.video_canon_runtime_scope_key" in ROLLBACK
     assert "DROP FUNCTION bidding.get_school_runtime_rule_catalog(uuid,text,text,text)" in ROLLBACK
     assert "DROP FUNCTION bidding.bind_rule_key_identity" in ROLLBACK
+    assert "DROP FUNCTION bidding.guard_rule_identity_knowledge_version_scope" in ROLLBACK
     assert "DROP TABLE bidding.rule_key_identity" in ROLLBACK
     assert "ADD CONSTRAINT rule_school_id_rule_key_key" in ROLLBACK
     assert "DROP FUNCTION bidding.is_complete_bridge_hand" in ROLLBACK
