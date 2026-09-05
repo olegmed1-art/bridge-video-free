@@ -327,6 +327,10 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
     assert "RHO has the queen of hearts" in DATABASE_TEST
     assert "L.H.O has the ace of spades" in DATABASE_TEST
     assert "R.H.O. has the queen of hearts" in DATABASE_TEST
+    assert "partner has the nine of spades" in DATABASE_TEST
+    assert "opponent holds two of clubs" in DATABASE_TEST
+    assert "North has the heart seven" in DATABASE_TEST
+    assert "two|three|four|five|six|seven|eight|nine" in MIGRATION
     assert "VIDEO_CANON_SOURCE_POLICY_SUCCESSOR_HISTORY_NOT_PRESERVED" in DATABASE_TEST
     assert "VIDEO_CANON_BUNDLE_SCOPE_MISMATCH_NOT_BLOCKED" in DATABASE_TEST
     assert "VIDEO_CANON_BUNDLE_PROFILE_MISMATCH_NOT_BLOCKED_" in DATABASE_TEST

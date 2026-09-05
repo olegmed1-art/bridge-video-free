@@ -90,9 +90,9 @@ _NEGATED_HIDDEN_HOLDING = re.compile(
     r"(?:(?:does\s+not|doesn['’]t)\s+(?:have|hold)(?:\s+any)?|"
     r"(?:has|holds?|had)\s+(?:(?:no|neither)|none\s+of)|"
     r"lacks?)\s+(?:any\s+)?"
-    r"(?:the\s+)?(?:aces?|kings?|queens?|jacks?|tens?|spades?|hearts?|diamonds?|clubs?|"
-    r"(?:ace|king|queen|jack|ten)\s+of\s+(?:spades?|hearts?|diamonds?|clubs?)|"
-    r"(?:spades?|hearts?|diamonds?|clubs?)\s+(?:ace|king|queen|jack|ten|10|[AKQJT2-9])|"
+    r"(?:the\s+)?(?:aces?|kings?|queens?|jacks?|tens?|twos?|threes?|fours?|fives?|sixes?|sevens?|eights?|nines?|spades?|hearts?|diamonds?|clubs?|"
+    r"(?:ace|king|queen|jack|ten|two|three|four|five|six|seven|eight|nine)\s+of\s+(?:spades?|hearts?|diamonds?|clubs?)|"
+    r"(?:spades?|hearts?|diamonds?|clubs?)\s+(?:ace|king|queen|jack|ten|two|three|four|five|six|seven|eight|nine|10|[AKQJT2-9])|"
     r"[SHDC]\s*:?\s*(?:10|[AKQJT2-9])|(?:10|[AKQJT2-9])\s*[SHDC])\b",
     re.IGNORECASE,
 )
@@ -119,7 +119,8 @@ _RUSSIAN_HIDDEN_POSSESSION = re.compile(
 _LEADING_HOLDING_CARD_GROUP = re.compile(
     r"^\s*(?:[:,;=\-]\s*)?(?:(?:the|a|an)\s+)?(?:"
     r"(?:ace|king|queen|jack|ten)(?:\s+of\s+(?:spades?|hearts?|diamonds?|clubs?))?"
-    r"|(?:spades?|hearts?|diamonds?|clubs?)\s+(?:ace|king|queen|jack|ten|10|[AKQJT2-9X])"
+    r"|(?:two|three|four|five|six|seven|eight|nine)\s+of\s+(?:spades?|hearts?|diamonds?|clubs?)"
+    r"|(?:spades?|hearts?|diamonds?|clubs?)\s+(?:ace|king|queen|jack|ten|two|three|four|five|six|seven|eight|nine|10|[AKQJT2-9X])"
     r"|[SHDC]\s*:?\s*(?:10|[AKQJT2-9X])|(?:10|[AKQJT2-9X])\s*[SHDC]|10|[AKQJT2-9X]|[kqjtx]|"
     r"(?:(?:10)|[AKQJT2-9Xakqjtx]){2,13})(?:$|[^A-Za-z0-9])",
     re.IGNORECASE,

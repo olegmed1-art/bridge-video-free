@@ -131,6 +131,12 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North holds the ace of spades"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"partner has the nine of spades"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"opponent holds two of clubs"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"North has the heart seven"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North has ♠Q"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North has the spade queen"}'::jsonb

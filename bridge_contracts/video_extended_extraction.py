@@ -20,6 +20,11 @@ from bridge_contracts.video_learning_feedback import (
 
 
 SCHEMA = "video-extended-extraction-v1"
+_CONTENT_ADDRESSED_EXPLICIT_TYPES = {
+    "SCHOOL_TERMINOLOGY",
+    "SYSTEM_EVOLUTION_OBSERVATION",
+    "WORLD_COMPARISON_LINK",
+}
 _LOGIC_CUES = {
     "CAUSE": ("потому что", "так как", "из-за того", "причина"),
     "PURPOSE": ("для того чтобы", "чтобы", "для этого", "это нужно для"),
@@ -74,6 +79,11 @@ def _record(job_id: str, kind: str, source: Mapping[str, Any], status: str) -> d
         or source.get("gap_id")
         or _digest(payload)
     )
+    # These observations were added after the inherited Diana-wide input
+    # fingerprint was defined. Preserve corrected revisions instead of
+    # colliding on the caller-supplied logical key during semantic rebuilds.
+    if kind in _CONTENT_ADDRESSED_EXPLICIT_TYPES:
+        stable_key = f"{stable_key}:sha256:{_digest(payload)}"
     return {
         "candidate_id": f"video_{_digest([job_id, kind, stable_key])[:20]}",
         "candidate_type": kind,

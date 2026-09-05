@@ -47,6 +47,38 @@ def test_nonfinite_extended_observation_becomes_bounded_gap():
     json.dumps(result, allow_nan=False)
 
 
+def test_corrected_explicit_observation_gets_content_addressed_identity():
+    for field, candidate_type, stable_key in (
+        ("terminology_observations", "SCHOOL_TERMINOLOGY", "term:forcing"),
+        ("system_evolution_observations", "SYSTEM_EVOLUTION_OBSERVATION", "evolution:7"),
+        ("world_comparison_links", "WORLD_COMPARISON_LINK", "world:7"),
+    ):
+        first_master = {
+            "job_id": "job-1",
+            field: [{"stable_key": stable_key, "definition": "old definition"}],
+        }
+        corrected_master = {
+            **first_master,
+            field: [{**first_master[field][0], "definition": "corrected definition"}],
+        }
+        quality = {"authority": {"canon_activation": "DENY"}}
+
+        def observation(master):
+            return next(
+                row for row in build_extended_extraction(master, quality)["candidate_records"]
+                if row["candidate_type"] == candidate_type
+            )
+
+        first = observation(first_master)
+        corrected = observation(corrected_master)
+        replay = observation(first_master)
+        assert first["stable_key"].startswith(f"{stable_key}:sha256:")
+        assert first["stable_key"] != corrected["stable_key"]
+        assert first["candidate_id"] != corrected["candidate_id"]
+        assert first["stable_key"] == replay["stable_key"]
+        assert first["candidate_id"] == replay["candidate_id"]
+
+
 def test_source_bound_why_is_a_separate_explanation_candidate():
     master = {
         "job_id": "job-1",
