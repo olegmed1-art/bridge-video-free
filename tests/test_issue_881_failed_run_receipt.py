@@ -5,7 +5,7 @@ RUN_ID = "33919714953"
 PREFIX = "issue-881-root-recovery-fdb6c3766909fe4e-run-"
 
 
-def receipt(*, instance="none", create_status="REQUEST_UNCERTAIN"):
+def receipt(*, instance="none", create_status="REQUEST_UNCERTAIN", create_rc="1"):
     ids = {
         "instance": instance,
         "boot-volume": "ocid1.bootvolume.oc1.region.volume",
@@ -19,7 +19,7 @@ def receipt(*, instance="none", create_status="REQUEST_UNCERTAIN"):
         "- operation: `EXPAND_AND_RECOVER`",
         "- workflow outcome: `failure`",
         f"- current-run stamp: `{PREFIX}{RUN_ID}-a1`",
-        f"- isolated instance create request: `{create_status}`",
+        f"- isolated instance create request: `{create_status}`; rc: `{create_rc}`",
     ]
     lines.extend(f"- {RESOURCE_FIELDS[kind]}: `{value}`" for kind, value in ids.items())
     lines.append(f"- run: https://github.com/olegmed1-art/bridge-video-free/actions/runs/{RUN_ID}")
@@ -30,6 +30,7 @@ def test_parses_authoritative_typed_ids_and_binds_stamp_and_hash():
     parsed = parse_receipt(receipt(), RUN_ID, PREFIX)
     assert parsed["stamp"] == f"{PREFIX}{RUN_ID}-a1"
     assert parsed["resources"]["instance"] == []
+    assert parsed["instance_create_rc"] == 1
     assert parsed["resources"]["boot-volume"] == ["ocid1.bootvolume.oc1.region.volume"]
     assert len(parsed["receipt_sha256"]) == 64
 
@@ -64,6 +65,12 @@ def test_rejects_ocid_prefix_tricks_and_publicly_unsafe_tokens():
 
 def test_requires_uncertain_status_when_instance_id_is_missing():
     _assert_rejected(receipt(create_status="CAPTURED"))
+
+
+def test_requires_complete_numeric_create_request_rc():
+    _assert_rejected(receipt().replace("; rc: `1`", ""))
+    _assert_rejected(receipt(create_rc="unknown"))
+    _assert_rejected(receipt().replace("; rc: `1`", "; rc: `1`; trailing: `x`"))
 
 
 def test_accepts_authoritative_instance_id_when_launch_was_captured():
