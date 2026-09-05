@@ -119,8 +119,10 @@ def test_independent_watchdog_retries_compute_and_storage_cleanup() -> None:
     assert WATCHDOG.count("oci compute instance list") >= 2
     assert "instance_discovery_deadline=$((SECONDS + 120))" in WATCHDOG
     assert "instance_confirmation_deadline=$((SECONDS + 120))" in WATCHDOG
-    assert "instance_terminal_proven == 0" in WATCHDOG
+    assert 'if (( ${#ids[@]} == 0 )); then' in WATCHDOG
     assert "instance_inventory_clean == 1" in WATCHDOG
+    assert "A known exact ID can never be downgraded" in WATCHDOG
+    assert "instance_get_error" in WATCHDOG
     instance_loop = WATCHDOG[WATCHDOG.index("while (( SECONDS < instance_cleanup_deadline ))"):]
     assert instance_loop.index("while (( SECONDS < instance_cleanup_deadline ))") < instance_loop.index("oci compute instance terminate")
     volume_loop = WATCHDOG[WATCHDOG.index("deadline=$((SECONDS + 120))"):]
@@ -133,6 +135,8 @@ def test_independent_watchdog_retries_compute_and_storage_cleanup() -> None:
     assert "while ! timeout --signal=KILL 30s oci bv boot-volume list" in WATCHDOG
     assert "late_instance_id" in WATCHDOG and 'terminate --instance-id "$late_instance_id"' in WATCHDOG
     assert "late_volume_id" in WATCHDOG and 'delete --boot-volume-id "$late_volume_id"' in WATCHDOG
+    assert "late_volume_deadline=$((SECONDS + 120))" in WATCHDOG
+    assert "late_volume_clean_count >= 3" in WATCHDOG
 
 
 def test_watchdog_destructive_entrypoint_is_owner_gated() -> None:
