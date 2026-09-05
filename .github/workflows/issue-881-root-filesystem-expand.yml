@@ -1311,38 +1311,12 @@ jobs:
           mark_phase wait_isolated_subnet_available
           if wait_oci_resource_ready subnet "$drill_subnet_id" AVAILABLE 300 subnet_wait "$stamp-subnet"; then :; else resource_wait_rc=$?; exit "$resource_wait_rc"; fi
           SUBNET="$OCI_JSON_OUTPUT" EXPECTED_ROUTE_ID="$drill_route_id" EXPECTED_SECURITY_ID="$drill_security_id" python -c 'import json,os; d=json.loads(os.environ["SUBNET"])["data"]; assert d.get("route-table-id")==os.environ["EXPECTED_ROUTE_ID"] and d.get("security-list-ids")==[os.environ["EXPECTED_SECURITY_ID"]] and d.get("prohibit-public-ip-on-vnic") is False'
-          mark_phase launch_isolated_acceptance_instance
+          # The production source is already E5 paid capacity. Never attempt
+          # its larger source configuration outside the bounded paid guard.
+          [[ "$shape" == VM.Standard.E5.Flex ]] || exit 92
           drill_instance_attempted=1
           launch=""
-          source_launch_rc=0
-          if create_json_once instance_create "$stamp-boot-acceptance" oci compute instance launch --availability-domain "$ad" --compartment-id "$tenancy_id" --subnet-id "$drill_subnet_id" --shape "$shape" --shape-config "$shape_config" --display-name "$stamp-boot-acceptance" --source-details "{\"sourceType\":\"bootVolume\",\"bootVolumeId\":\"$restored_id\"}" --assign-public-ip true; then
-            launch="$OCI_CREATE_JSON"
-            state_set paid_fallback_status NOT_NEEDED
-          else
-            source_launch_rc=$?
-          fi
-          drill_instance_id="$(printf '%s' "$launch" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("id", ""))' 2>/dev/null || true)"
-          source_discovery_rc=0
-          if [[ -z "$drill_instance_id" ]]; then
-            if drill_instance_id="$(discover_named_id instance "$stamp-boot-acceptance" 90 "$primary_deadline" instance_launch_discovery)"; then :; else source_discovery_rc=$?; fi
-          fi
-          if [[ -z "$drill_instance_id" ]]; then
-            source_launch_class="$(STATE_PATH="$receipt_state" python -c 'import json,os; print(json.load(open(os.environ["STATE_PATH"])).get("instance_create_stderr_class", "NOT_RECORDED"))')"
-            if [[ "$source_launch_class" != QUOTA_OR_SERVICE_LIMIT ]]; then
-              state_set paid_fallback_status SOURCE_FAILURE_NOT_ELIGIBLE
-              exit "${source_launch_rc:-46}"
-            fi
-            # Exact-stamp discovery above must prove absence before a second
-            # launch. Otherwise an uncertain first request could create two
-            # billable instances under the same operation stamp.
-            discovery_status="$(STATE_PATH="$receipt_state" python -c 'import json,os; print(json.load(open(os.environ["STATE_PATH"])).get("instance_launch_discovery_status", "NOT_RECORDED"))')"
-            [[ "$source_discovery_rc" == 3 && "$discovery_status" == NOT_FOUND_UNPROVEN ]] || { state_set paid_fallback_status SOURCE_LAUNCH_OWNERSHIP_UNRESOLVED; exit 91; }
-            # QUOTA_OR_SERVICE_LIMIT is an explicit service rejection, not a
-            # timeout. Combined with a full exact-name consistency window it
-            # proves that the first request owns no instance.
-            state_set instance_launch_discovery_status EXACT_NAME_INVENTORY_EMPTY_AFTER_REJECTED_REQUEST
-
-            mark_phase paid_capacity_preflight
+          mark_phase paid_capacity_preflight
             state_set paid_fallback_status PREFLIGHT
             shapes_file="$RUNNER_TEMP/issue-881-paid-shapes.json"
             availability_file="$RUNNER_TEMP/issue-881-paid-availability.json"
@@ -1400,7 +1374,12 @@ jobs:
             done
             (( watchdog_armed == 1 )) || { state_set paid_watchdog_status NOT_ARMED; exit 95; }
             state_set paid_watchdog_status ARMED
-            state_set paid_launch_utc "$paid_now_utc"
+            paid_launch_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            # The arming handshake can take up to three minutes. Re-run the
+            # complete guard at the actual launch boundary so a price basis
+            # cannot expire between preflight and instance creation.
+            python ops/oci_paid_acceptance_guard.py --shapes-json "$shapes_file" --availability-json "$availability_file" --memory-availability-json "$memory_availability_file" --source-shape "$shape" --now-utc "$paid_launch_utc" >/dev/null
+            state_set paid_launch_utc "$paid_launch_utc"
             mark_phase launch_bounded_paid_acceptance_instance
             if create_json_once paid_instance_create "$stamp-boot-acceptance" oci compute instance launch --availability-domain "$ad" --compartment-id "$tenancy_id" --subnet-id "$drill_subnet_id" --shape "$paid_shape" --shape-config "$paid_shape_config" --display-name "$stamp-boot-acceptance" --source-details "{\"sourceType\":\"bootVolume\",\"bootVolumeId\":\"$restored_id\"}" --assign-public-ip true; then
               launch="$OCI_CREATE_JSON"
@@ -1408,7 +1387,6 @@ jobs:
             fi
             drill_instance_id="$(printf '%s' "$launch" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("id", ""))' 2>/dev/null || true)"
             [[ -n "$drill_instance_id" ]] || drill_instance_id="$(discover_named_id instance "$stamp-boot-acceptance" 90 "$primary_deadline" paid_instance_launch_discovery)"
-          fi
           [[ -n "$drill_instance_id" ]] || exit 46
           state_set temporary_instance_id "$drill_instance_id"
           mark_phase wait_isolated_acceptance_instance_running

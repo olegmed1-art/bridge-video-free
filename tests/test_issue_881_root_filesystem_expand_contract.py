@@ -78,19 +78,18 @@ def test_paid_capacity_guard_is_bounded_and_fail_closed() -> None:
 
 
 def test_paid_fallback_requires_quota_absence_preflight_and_exact_caps() -> None:
-    launch = WORKFLOW.index("mark_phase launch_isolated_acceptance_instance")
-    paid = WORKFLOW.index("mark_phase paid_capacity_preflight", launch)
-    assert WORKFLOW.index('source_launch_class" != QUOTA_OR_SERVICE_LIMIT', launch) < paid
-    assert WORKFLOW.index('discovery_status" == NOT_FOUND_UNPROVEN', launch) < paid
-    assert "EXACT_NAME_INVENTORY_EMPTY_AFTER_REJECTED_REQUEST" in WORKFLOW[launch:paid]
+    paid = WORKFLOW.index("mark_phase paid_capacity_preflight")
+    launch = WORKFLOW.index("mark_phase launch_bounded_paid_acceptance_instance", paid)
+    assert '[[ "$shape" == VM.Standard.E5.Flex ]] || exit 92' in WORKFLOW[:paid]
+    assert 'create_json_once instance_create "$stamp-boot-acceptance"' not in WORKFLOW
     assert "oci compute shape list" in WORKFLOW[paid:]
     assert "oci limits resource-availability get" in WORKFLOW[paid:]
-    assert "python ops/oci_paid_acceptance_guard.py" in WORKFLOW[paid:]
+    assert WORKFLOW[paid:launch].count("python ops/oci_paid_acceptance_guard.py") == 2
     assert 'paid_deadline=$(( $(monotonic_now) + paid_values[7] ))' in WORKFLOW[paid:]
     assert "paid_instance_create" in WORKFLOW[paid:]
     assert "issue-881-paid-instance-watchdog.yml/dispatches" in WORKFLOW[paid:]
-    assert WORKFLOW.index("dispatch_paid_instance_watchdog", paid) < WORKFLOW.index("paid_instance_create", paid)
-    assert WORKFLOW.index("paid_watchdog_status ARMED", paid) < WORKFLOW.index("paid_instance_create", paid)
+    assert WORKFLOW.index("dispatch_paid_instance_watchdog", paid) < launch
+    assert WORKFLOW.index("paid_watchdog_status ARMED", paid) < launch
     assert 'select(.user.login=="github-actions[bot]")' in WORKFLOW[paid:]
     receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
     assert "paid hourly/runtime/budget caps:" in receipt
@@ -1038,7 +1037,7 @@ record_oci_diagnostic instance_create "$TEST_RC"
     assert "isolated instance create diagnostic" in receipt
     assert "isolated instance launch discovery" in receipt
     assert "instance_launch_discovery_stderr_class" in receipt
-    assert 'discover_named_id instance "$stamp-boot-acceptance" 90 "$primary_deadline" instance_launch_discovery' in WORKFLOW
+    assert 'discover_named_id instance "$stamp-boot-acceptance" 90 "$primary_deadline" paid_instance_launch_discovery' in WORKFLOW
 
 
 def test_oci_helper_clears_diagnostics_before_budget_failure() -> None:
