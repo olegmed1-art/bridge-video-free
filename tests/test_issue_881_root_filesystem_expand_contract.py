@@ -1623,6 +1623,9 @@ def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> No
         "route_table", "security_list", "subnet",
     ):
         assert f"typed_verdict('{resource}')" in WORKFLOW
+    assert "RECONCILIATION_INCOMPLETE" in Path(
+        "ops/issue_881_failed_run_receipt.py"
+    ).read_text()
     assert "Each known ID must" in WORKFLOW
     cleanup_only_branch = WORKFLOW[
         WORKFLOW.index("if (( cleanup_only == 1 )); then") : WORKFLOW.index("trap cleanup EXIT")

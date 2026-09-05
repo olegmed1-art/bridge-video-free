@@ -102,15 +102,6 @@ def complete_cleanup_state(create_status="REQUEST_UNCERTAIN"):
     return state
 
 
-def _assert_cleanup_rejected(state, message):
-    try:
-        cleanup_typed_proof_verdicts(state)
-    except ValueError as exc:
-        assert message in str(exc)
-        return
-    raise AssertionError("incomplete cleanup proof was accepted")
-
-
 def test_cleanup_typed_verdicts_require_every_resource_proof():
     state = complete_cleanup_state()
     assert cleanup_typed_proof_verdicts(state) == {
@@ -124,24 +115,29 @@ def test_cleanup_typed_verdicts_require_every_resource_proof():
         for key in requirements:
             incomplete = state.copy()
             incomplete.pop(key)
-            _assert_cleanup_rejected(incomplete, resource)
+            verdicts = cleanup_typed_proof_verdicts(incomplete)
+            assert verdicts[resource] == "RECONCILIATION_INCOMPLETE"
 
 
 def test_cleanup_aggregate_alone_is_insufficient():
-    _assert_cleanup_rejected(
-        {"prior_cleanup_status": "RECONCILED_PROVEN_ABSENT"},
-        "missing typed cleanup proof",
+    verdicts = cleanup_typed_proof_verdicts(
+        {"prior_cleanup_status": "RECONCILED_PROVEN_ABSENT"}
     )
+    assert set(verdicts.values()) == {"RECONCILIATION_INCOMPLETE"}
 
 
 def test_cleanup_typed_verdicts_reject_wrong_aggregate_or_evidence():
     state = complete_cleanup_state()
     state["prior_cleanup_status"] = "EXACT_NAME_INVENTORY_EMPTY"
-    _assert_cleanup_rejected(state, "aggregate cleanup proof")
+    assert set(cleanup_typed_proof_verdicts(state).values()) == {
+        "RECONCILIATION_INCOMPLETE"
+    }
 
     state = complete_cleanup_state()
     state["prior_vcn_proof"] = "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE"
-    _assert_cleanup_rejected(state, "vcn")
+    verdicts = cleanup_typed_proof_verdicts(state)
+    assert verdicts["vcn"] == "RECONCILIATION_INCOMPLETE"
+    assert verdicts["instance"] == "RECONCILED_PROVEN_ABSENT"
 
 
 def test_cleanup_typed_verdicts_handle_captured_instance_without_uncertainty():
@@ -151,10 +147,29 @@ def test_cleanup_typed_verdicts_handle_captured_instance_without_uncertainty():
 
     missing_status = complete_cleanup_state()
     missing_status.pop("prior_instance_create_status")
-    _assert_cleanup_rejected(missing_status, "instance create status")
+    assert cleanup_typed_proof_verdicts(missing_status)["uncertain_instance"] == (
+        "RECONCILIATION_INCOMPLETE"
+    )
 
     bad_captured = complete_cleanup_state("CAPTURED")
     bad_captured["prior_uncertain_instance_proof"] = (
         "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE"
     )
-    _assert_cleanup_rejected(bad_captured, "captured instance")
+    assert cleanup_typed_proof_verdicts(bad_captured)["uncertain_instance"] == (
+        "RECONCILIATION_INCOMPLETE"
+    )
+
+
+def test_cleanup_failure_receipt_verdicts_are_publishable_and_never_grant_go():
+    for failed_state in (
+        {},
+        {"authoritative_receipt_status": "FETCH_FAILED"},
+        {"prior_cleanup_status": "INVENTORY_FAILED"},
+        {"prior_cleanup_status": "DIRECT_GET_FAILED"},
+    ):
+        verdicts = cleanup_typed_proof_verdicts(failed_state)
+        assert set(verdicts) == {
+            *CLEANUP_TYPED_PROOF_REQUIREMENTS,
+            "uncertain_instance",
+        }
+        assert "RECONCILED_PROVEN_ABSENT" not in verdicts.values()

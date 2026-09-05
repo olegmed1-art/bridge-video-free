@@ -58,27 +58,33 @@ CLEANUP_TYPED_PROOF_REQUIREMENTS = {
 
 
 def cleanup_typed_proof_verdicts(state: dict[str, object]) -> dict[str, str]:
-    """Return literal per-type verdicts only for a complete cleanup proof."""
-    if state.get("prior_cleanup_status") != "RECONCILED_PROVEN_ABSENT":
-        raise ValueError("aggregate cleanup proof is not reconciled")
+    """Return publishable, fail-closed per-type cleanup verdicts.
+
+    This helper deliberately never raises for missing reconciliation evidence: the
+    always-run receipt must survive an earlier fetch, inventory, or direct-GET
+    failure.  Only complete evidence receives the GO-granting literal.
+    """
+    reconciled = state.get("prior_cleanup_status") == "RECONCILED_PROVEN_ABSENT"
     verdicts: dict[str, str] = {}
     for resource, requirements in CLEANUP_TYPED_PROOF_REQUIREMENTS.items():
-        for key, expected in requirements.items():
-            if state.get(key) != expected:
-                raise ValueError(f"missing typed cleanup proof for {resource}: {key}")
-        verdicts[resource] = "RECONCILED_PROVEN_ABSENT"
+        complete = reconciled and all(
+            state.get(key) == expected for key, expected in requirements.items()
+        )
+        verdicts[resource] = (
+            "RECONCILED_PROVEN_ABSENT" if complete else "RECONCILIATION_INCOMPLETE"
+        )
     create_status = state.get("prior_instance_create_status")
     uncertain_proof = state.get("prior_uncertain_instance_proof")
-    if create_status == "REQUEST_UNCERTAIN":
-        if uncertain_proof != "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE":
-            raise ValueError("missing typed cleanup proof for uncertain_instance")
+    if (
+        reconciled
+        and create_status == "REQUEST_UNCERTAIN"
+        and uncertain_proof == "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE"
+    ):
         verdicts["uncertain_instance"] = "RECONCILED_PROVEN_ABSENT"
-    elif create_status == "CAPTURED":
-        if uncertain_proof != "NOT_APPLICABLE":
-            raise ValueError("invalid uncertainty proof for captured instance")
+    elif reconciled and create_status == "CAPTURED" and uncertain_proof == "NOT_APPLICABLE":
         verdicts["uncertain_instance"] = "NOT_APPLICABLE"
     else:
-        raise ValueError("missing authoritative instance create status")
+        verdicts["uncertain_instance"] = "RECONCILIATION_INCOMPLETE"
     return verdicts
 
 
