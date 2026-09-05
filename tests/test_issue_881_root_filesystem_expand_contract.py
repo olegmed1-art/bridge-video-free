@@ -95,6 +95,7 @@ def test_paid_fallback_requires_quota_absence_preflight_and_exact_caps() -> None
     assert WORKFLOW.index("paid_watchdog_status ARMED_PRE_MUTATION") < restore
     assert WORKFLOW.index("paid_watchdog_status ARMED", paid) < launch
     assert 'select(.user.login=="github-actions[bot]")' in WORKFLOW[dispatch:restore]
+    assert 'watchdog_run_id="$(WATCHDOG_COMMENTS=' in WORKFLOW[dispatch:restore]
     receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
     assert "paid hourly/runtime/budget caps:" in receipt
     assert "present_redacted" in receipt
@@ -109,6 +110,9 @@ def test_launch_boundary_refreshes_all_live_oci_constraints() -> None:
     assert "standard-e4-memory-count" in block
     assert block.index("standard-e4-memory-count") < block.index('paid_launch_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"')
     assert "python ops/oci_paid_acceptance_guard.py" in block
+    assert 'actions/runs/${watchdog_run_id}' in block
+    assert "d.get('status') in {'queued','in_progress'}" in block
+    assert "paid_watchdog_status LIVE_AT_LAUNCH" in block
     assert "PAID_WATCHDOG_LAUNCH" in block
 
 
@@ -121,6 +125,7 @@ def test_independent_watchdog_retries_compute_and_storage_cleanup() -> None:
     assert "instance_confirmation_deadline=$((SECONDS + 120))" in WATCHDOG
     assert "late_instance_clean_count=$((late_instance_clean_count + 1))" in WATCHDOG
     assert "late_instance_clean_count >= 3" in WATCHDOG
+    assert WATCHDOG.count("assert isinstance(data,list) and all(isinstance(x,dict) for x in data)") >= 4
     assert 'if (( ${#ids[@]} == 0 )); then' in WATCHDOG
     assert "instance_inventory_clean == 1" in WATCHDOG
     assert "A known exact ID can never be downgraded" in WATCHDOG
