@@ -146,45 +146,70 @@ def build_learning_feedback(
     proposal: dict[str, Any]
     if set(evaluation) == required and isinstance(evaluation.get("metrics"), Mapping):
         metrics = evaluation["metrics"]
-        improved = bool(metrics)
-        for row in metrics.values():
-            if not isinstance(row, Mapping) or set(row) != {
-                "candidate", "baseline", "direction", "minimum_delta"
-            }:
+        metrics_valid = bool(metrics)
+        improved = metrics_valid
+        sanitized_metrics: dict[str, dict[str, Any]] = {}
+        for metric_name, row in metrics.items():
+            if (
+                not isinstance(metric_name, str)
+                or not metric_name.strip()
+                or not isinstance(row, Mapping)
+                or set(row) != {
+                    "candidate", "baseline", "direction", "minimum_delta"
+                }
+            ):
+                metrics_valid = False
                 improved = False
                 break
             numeric_values = (row["candidate"], row["baseline"], row["minimum_delta"])
             if not all(isinstance(value, (int, float)) and not isinstance(value, bool)
                        for value in numeric_values):
+                metrics_valid = False
                 improved = False
                 break
             try:
                 candidate_value, baseline_value, minimum_delta = map(float, numeric_values)
             except OverflowError:
+                metrics_valid = False
                 improved = False
                 break
             if not all(math.isfinite(value) for value in (
                 candidate_value, baseline_value, minimum_delta
             )):
+                metrics_valid = False
                 improved = False
                 break
             if minimum_delta < 0 or row["direction"] not in {"HIGHER_IS_BETTER", "LOWER_IS_BETTER"}:
+                metrics_valid = False
                 improved = False
                 break
             delta = candidate_value - baseline_value
             if not math.isfinite(delta):
+                metrics_valid = False
                 improved = False
                 break
+            sanitized_metrics[metric_name] = {
+                "candidate": row["candidate"],
+                "baseline": row["baseline"],
+                "direction": row["direction"],
+                "minimum_delta": row["minimum_delta"],
+            }
             if row["direction"] == "HIGHER_IS_BETTER":
                 improved = improved and delta >= minimum_delta
             else:
                 improved = improved and -delta >= minimum_delta
+        if not metrics_valid:
+            sanitized_metrics = {}
         proposal = {
-            "status": "HOLDOUT_PASS_CANDIDATE" if improved and metrics else "HOLDOUT_NOT_PROVEN",
+            "status": (
+                "HOLDOUT_PASS_CANDIDATE"
+                if metrics_valid and improved and sanitized_metrics
+                else "HOLDOUT_NOT_PROVEN"
+            ),
             "candidate_model_version": _text(evaluation["candidate_model_version"], "candidate_model_version"),
             "baseline_model_version": _text(evaluation["baseline_model_version"], "baseline_model_version"),
             "holdout_id": _text(evaluation["holdout_id"], "holdout_id"),
-            "metrics": dict(metrics),
+            "metrics": sanitized_metrics,
             "rollback_model_version": _text(evaluation["rollback_model_version"], "rollback_model_version"),
             "deployment_allowed": False,
             "independent_review_required": True,

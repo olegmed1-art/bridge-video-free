@@ -197,6 +197,8 @@ def test_public_context_and_refs_are_allowlisted_against_hidden_card_payloads():
         "partner:AKQ", "partner:AS", "opponent:QH",
         "partner/AS", "north=10S", "opponent.QH", "LHO/AS", "RHO.QH",
         "L.H.O/AS", "R.H.O.QH",
+        "leftOpponent/AS", "rightOpponent.QH", "lefthandopponent-AS",
+        "righthandopponent=10S",
         "partner-hand:AKQ", "partnerHand:AKQ",
         "opponent/cards/SA", "partnerDeal:AKQ", "opponent-deal:AKQ",
         "north/deal:AKQ", "lhoHand:AKQ", "rho-cards:QH",

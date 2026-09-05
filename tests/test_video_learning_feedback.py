@@ -120,7 +120,9 @@ def test_holdout_metric_direction_is_enforced():
     result = build_learning_feedback(
         master, quality, correction_receipt_resolver=_resolver(quality)
     )
-    assert result["model_improvement_proposal"]["status"] == "HOLDOUT_NOT_PROVEN"
+    proposal = result["model_improvement_proposal"]
+    assert proposal["status"] == "HOLDOUT_NOT_PROVEN"
+    json.dumps(proposal, allow_nan=False)
 
 
 @pytest.mark.parametrize("candidate", [
@@ -138,7 +140,10 @@ def test_holdout_rejects_non_numeric_or_nonfinite_metrics(candidate):
     result = build_learning_feedback(
         master, quality, correction_receipt_resolver=_resolver(quality)
     )
-    assert result["model_improvement_proposal"]["status"] == "HOLDOUT_NOT_PROVEN"
+    proposal = result["model_improvement_proposal"]
+    assert proposal["status"] == "HOLDOUT_NOT_PROVEN"
+    assert proposal["metrics"] == {}
+    json.dumps(proposal, allow_nan=False)
 
 
 def test_holdout_rejects_nonfinite_computed_delta():
@@ -153,7 +158,10 @@ def test_holdout_rejects_nonfinite_computed_delta():
     result = build_learning_feedback(
         master, quality, correction_receipt_resolver=_resolver(quality)
     )
-    assert result["model_improvement_proposal"]["status"] == "HOLDOUT_NOT_PROVEN"
+    proposal = result["model_improvement_proposal"]
+    assert proposal["status"] == "HOLDOUT_NOT_PROVEN"
+    assert proposal["metrics"] == {}
+    json.dumps(proposal, allow_nan=False)
 
 
 def test_self_hashed_receipt_is_not_trusted_without_authoritative_resolver():
