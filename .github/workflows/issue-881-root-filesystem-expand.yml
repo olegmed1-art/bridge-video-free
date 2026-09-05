@@ -5,6 +5,8 @@ on:
     paths:
       - '.github/workflows/issue-881-root-filesystem-expand.yml'
       - 'ops/oracle_universal_video_root_filesystem_expand.sh'
+      - 'ops/oci_paid_acceptance_guard.py'
+      - '.github/workflows/issue-881-paid-instance-watchdog.yml'
       - 'ops/issue-881-root-filesystem-expand-request.json'
       - 'tests/test_issue_881_root_filesystem_expand_contract.py'
   issue_comment:
@@ -12,10 +14,9 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('issue-881-root-expand-pr-{0}', github.run_id) || (github.event.issue.number == 881 && github.event.comment.user.login == 'olegmed1-art' && contains(fromJSON('["/oracle-ops issue-881-expand-root-and-recover-bba508","/oracle-ops issue-881-reconcile-run-33914733788"]'), github.event.comment.body)) && 'oracle-instance-workload-mutation' || format('issue-881-root-expand-noop-{0}', github.run_id) }}
+  group: ${{ github.event_name == 'pull_request' && format('issue-881-root-expand-pr-{0}', github.run_id) || (github.event.issue.number == 881 && github.event.comment.user.login == 'olegmed1-art' && contains(fromJSON('["/oracle-ops issue-881-expand-root-and-recover-bba508-paid-bounded","/oracle-ops issue-881-reconcile-run-33919714953"]'), github.event.comment.body)) && 'oracle-instance-workload-mutation' || format('issue-881-root-expand-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
@@ -46,8 +47,12 @@ jobs:
       github.event_name == 'issue_comment' &&
       github.event.issue.number == 881 &&
       github.event.comment.user.login == 'olegmed1-art' &&
-      contains(fromJSON('["/oracle-ops issue-881-expand-root-and-recover-bba508","/oracle-ops issue-881-reconcile-run-33914733788"]'), github.event.comment.body)
+      contains(fromJSON('["/oracle-ops issue-881-expand-root-and-recover-bba508-paid-bounded","/oracle-ops issue-881-reconcile-run-33919714953"]'), github.event.comment.body)
     runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+      issues: write
     # The executable monotonic primary deadline caps every OCI request, waiter,
     # rediscovery, and isolated SSH acceptance at 240 minutes total. Restore
     # AVAILABLE and hydration additionally share one 60-minute subdeadline.
@@ -73,8 +78,8 @@ jobs:
       OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
       GH_TOKEN: ${{ github.token }}
-      RECOVERY_COMMAND: /oracle-ops issue-881-expand-root-and-recover-bba508
-      CLEANUP_ONLY_COMMAND: /oracle-ops issue-881-reconcile-run-33914733788
+      RECOVERY_COMMAND: /oracle-ops issue-881-expand-root-and-recover-bba508-paid-bounded
+      CLEANUP_ONLY_COMMAND: /oracle-ops issue-881-reconcile-run-33919714953
       OWNER_COMMAND: ${{ github.event.comment.body }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -240,8 +245,8 @@ jobs:
           failed_run_backup_name=""
           if [[ "$OWNER_COMMAND" == "$CLEANUP_ONLY_COMMAND" ]]; then
             cleanup_only=1
-            target_prior_stamp="${operation_run_prefix}33914733788-a1"
-            failed_run_backup_name="${backup_prefix}-33914733788-a1"
+            target_prior_stamp="${operation_run_prefix}33919714953-a1"
+            failed_run_backup_name="${backup_prefix}-33919714953-a1"
           fi
           backup_id="" restored_id="" drill_instance_id="" drill_public_ip="" drill_started=""
           backup_attempted=0 backup_created_by_run=0 backup_accepted=0
@@ -323,6 +328,18 @@ jobs:
           state_set backup_blocking_candidate_ids none
           state_set backup_wait_status NOT_STARTED
           state_set backup_wait_failure_rc none
+          state_set paid_fallback_status NOT_STARTED
+          state_set paid_shape none
+          state_set paid_shape_config none
+          state_set paid_billing_class none
+          state_set paid_price_basis none
+          state_set paid_price_basis_valid_until none
+          state_set paid_hourly_rate_max_usd none
+          state_set paid_runtime_limit_seconds none
+          state_set paid_compute_budget_usd none
+          state_set paid_watchdog_status NOT_STARTED
+          state_set paid_launch_utc none
+          state_set paid_termination_utc none
           mark_phase initialized
           discover_named_id() {
             local resource="$1" expected="$2" max_seconds="${3:-90}" budget_deadline="${4:-$primary_deadline}" output id deadline remaining request_timeout sleep_seconds rc discovery_key receipt_key saw_timeout=0
@@ -982,7 +999,11 @@ jobs:
             if [[ -n "$drill_instance_id" ]]; then
               state_set temporary_instance_id "$drill_instance_id"
               delete_resource_once instance "$drill_instance_id" || true
-              wait_instance_terminated "$drill_instance_id" || failed=1
+              if wait_instance_terminated "$drill_instance_id"; then
+                state_set paid_termination_utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              else
+                failed=1
+              fi
             fi
             if [[ -n "$restored_id" ]]; then
               state_set temporary_restored_volume_id "$restored_id"
@@ -1213,6 +1234,49 @@ jobs:
           age=(datetime.datetime.now(datetime.timezone.utc)-created).total_seconds()
           assert 0 <= age < 86400
           PY
+          # Arm provider-independent cleanup before the first restored-volume
+          # mutation. Runner loss during create, hydration, or network setup
+          # must not leave the exact-stamped 97 GB volume allocated.
+          watchdog_cleanup_epoch=$(( $(date -u +%s) + 14400 ))
+          watchdog_payload="${stamp}|${watchdog_cleanup_epoch}|${ad}|${GITHUB_RUN_ID}|${GITHUB_RUN_ATTEMPT}"
+          watchdog_authorization_hmac="$(WATCHDOG_PAYLOAD="$watchdog_payload" python -c 'import hashlib,hmac,os; print(hmac.new(os.environ["OCI_KEY"].encode(),os.environ["WATCHDOG_PAYLOAD"].encode(),hashlib.sha256).hexdigest())')"
+          [[ "$watchdog_authorization_hmac" =~ ^[0-9a-f]{64}$ ]] || exit 95
+          mark_phase dispatch_paid_instance_watchdog
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/issue-881-paid-instance-watchdog.yml/dispatches" \
+            -f ref=main \
+            -f "inputs[stamp]=$stamp" \
+            -f "inputs[expiry_epoch]=$watchdog_cleanup_epoch" \
+            -f "inputs[expected_ad]=$ad" \
+            -f "inputs[parent_run_id]=${GITHUB_RUN_ID}" \
+            -f "inputs[parent_run_attempt]=${GITHUB_RUN_ATTEMPT}" \
+            -f "inputs[authorization_hmac]=$watchdog_authorization_hmac"
+          unset watchdog_authorization_hmac watchdog_payload
+          state_set paid_watchdog_status DISPATCHED
+          watchdog_arm_deadline=$(( $(monotonic_now) + 180 ))
+          watchdog_armed=0
+          watchdog_run_id=""
+          while (( $(monotonic_now) < watchdog_arm_deadline )); do
+            watchdog_comments="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/881/comments" --jq '.[] | select(.user.login=="github-actions[bot]") | .body')"
+            if grep -Fq "PAID_WATCHDOG_ARMED stamp=${stamp} cleanup_epoch=${watchdog_cleanup_epoch} run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/" <<<"$watchdog_comments"; then
+              watchdog_run_id="$(WATCHDOG_COMMENTS="$watchdog_comments" STAMP="$stamp" CLEANUP_EPOCH="$watchdog_cleanup_epoch" RUN_PREFIX="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/" python - <<'PY'
+          import os,re
+          prefix=(f"PAID_WATCHDOG_ARMED stamp={os.environ['STAMP']} "
+                  f"cleanup_epoch={os.environ['CLEANUP_EPOCH']} "
+                  f"run={os.environ['RUN_PREFIX']}")
+          matches={line[len(prefix):].strip() for line in os.environ['WATCHDOG_COMMENTS'].splitlines()
+                   if line.startswith(prefix) and re.fullmatch(r'[0-9]+', line[len(prefix):].strip())}
+          assert len(matches)==1
+          print(matches.pop())
+          PY
+              )"
+              [[ "$watchdog_run_id" =~ ^[0-9]+$ ]] || exit 95
+              watchdog_armed=1
+              break
+            fi
+            sleep 5
+          done
+          (( watchdog_armed == 1 )) || { state_set paid_watchdog_status NOT_ARMED; exit 95; }
+          state_set paid_watchdog_status ARMED_PRE_MUTATION
           restored_attempted=1
           mark_phase create_restored_boot_volume
           if create_json_once restored_volume_create "$stamp-restore" oci bv boot-volume create --boot-volume-backup-id "$backup_id" --availability-domain "$ad" --compartment-id "$tenancy_id" --display-name "$stamp-restore"; then
@@ -1292,12 +1356,86 @@ jobs:
           mark_phase wait_isolated_subnet_available
           if wait_oci_resource_ready subnet "$drill_subnet_id" AVAILABLE 300 subnet_wait "$stamp-subnet"; then :; else resource_wait_rc=$?; exit "$resource_wait_rc"; fi
           SUBNET="$OCI_JSON_OUTPUT" EXPECTED_ROUTE_ID="$drill_route_id" EXPECTED_SECURITY_ID="$drill_security_id" python -c 'import json,os; d=json.loads(os.environ["SUBNET"])["data"]; assert d.get("route-table-id")==os.environ["EXPECTED_ROUTE_ID"] and d.get("security-list-ids")==[os.environ["EXPECTED_SECURITY_ID"]] and d.get("prohibit-public-ip-on-vnic") is False'
-          mark_phase launch_isolated_acceptance_instance
+          # The production source is already E5 paid capacity. Never attempt
+          # its larger source configuration outside the bounded paid guard.
+          [[ "$shape" == VM.Standard.E5.Flex ]] || exit 92
           drill_instance_attempted=1
           launch=""
-          if create_json_once instance_create "$stamp-boot-acceptance" oci compute instance launch --availability-domain "$ad" --compartment-id "$tenancy_id" --subnet-id "$drill_subnet_id" --shape "$shape" --shape-config "$shape_config" --display-name "$stamp-boot-acceptance" --source-details "{\"sourceType\":\"bootVolume\",\"bootVolumeId\":\"$restored_id\"}" --assign-public-ip true; then launch="$OCI_CREATE_JSON"; fi
-          drill_instance_id="$(printf '%s' "$launch" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("id", ""))' 2>/dev/null || true)"
-          [[ -n "$drill_instance_id" ]] || drill_instance_id="$(discover_named_id instance "$stamp-boot-acceptance" 90 "$primary_deadline" instance_launch_discovery)"
+          mark_phase paid_capacity_preflight
+            state_set paid_fallback_status PREFLIGHT
+            shapes_file="$RUNNER_TEMP/issue-881-paid-shapes.json"
+            availability_file="$RUNNER_TEMP/issue-881-paid-availability.json"
+            memory_availability_file="$RUNNER_TEMP/issue-881-paid-memory-availability.json"
+            selection_file="$RUNNER_TEMP/issue-881-paid-selection.json"
+            OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci compute shape list --compartment-id "$tenancy_id" --availability-domain "$ad" --all
+            printf '%s' "$OCI_JSON_OUTPUT" >"$shapes_file"
+            OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci limits resource-availability get --service-name compute --limit-name standard-e4-core-count --compartment-id "$tenancy_id" --availability-domain "$ad"
+            printf '%s' "$OCI_JSON_OUTPUT" >"$availability_file"
+            OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci limits resource-availability get --service-name compute --limit-name standard-e4-memory-count --compartment-id "$tenancy_id" --availability-domain "$ad"
+            printf '%s' "$OCI_JSON_OUTPUT" >"$memory_availability_file"
+            paid_now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            if ! python ops/oci_paid_acceptance_guard.py --shapes-json "$shapes_file" --availability-json "$availability_file" --memory-availability-json "$memory_availability_file" --source-shape "$shape" --now-utc "$paid_now_utc" >"$selection_file"; then
+              state_set paid_fallback_status REJECTED
+              exit 92
+            fi
+            readarray -t paid_values < <(python - "$selection_file" <<'PY'
+          import json,sys
+          d=json.load(open(sys.argv[1]))
+          assert d.get('status')=='APPROVED'
+          for key in ('shape','ocpus','memory_gb','billing_class','price_basis','price_basis_valid_until','hourly_rate_max_usd','runtime_limit_seconds','compute_budget_usd'):
+              print(d[key])
+          PY
+            )
+            paid_shape="${paid_values[0]}"; paid_ocpus="${paid_values[1]}"; paid_memory="${paid_values[2]}"
+            paid_shape_config="{\"ocpus\":${paid_ocpus},\"memoryInGBs\":${paid_memory}}"
+            state_set paid_shape "$paid_shape"
+            state_set paid_shape_config "ocpus=${paid_ocpus},memory_gb=${paid_memory}"
+            state_set paid_billing_class "${paid_values[3]}"
+            state_set paid_price_basis "${paid_values[4]}"
+            state_set paid_price_basis_valid_until "${paid_values[5]}"
+            state_set paid_hourly_rate_max_usd "${paid_values[6]}"
+            state_set paid_runtime_limit_seconds "${paid_values[7]}"
+            state_set paid_compute_budget_usd "${paid_values[8]}"
+            paid_deadline=$(( $(monotonic_now) + paid_values[7] ))
+            (( paid_deadline < primary_deadline )) || paid_deadline="$primary_deadline"
+            primary_deadline="$paid_deadline"
+            paid_expiry_epoch=$(( $(date -u +%s) + paid_values[7] ))
+            (( paid_expiry_epoch <= watchdog_cleanup_epoch )) || exit 95
+            state_set paid_watchdog_status ARMED
+            # The arming handshake can take up to three minutes. Re-run the
+            # complete guard at the actual launch boundary so a price basis
+            # cannot expire between preflight and instance creation.
+            # Refresh all mutable primary-source constraints after preparation
+            # and immediately before the launch guard. Earlier JSON snapshots
+            # are intentionally overwritten, never reused at this boundary.
+            OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci compute shape list --compartment-id "$tenancy_id" --availability-domain "$ad" --all
+            printf '%s' "$OCI_JSON_OUTPUT" >"$shapes_file"
+            OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci limits resource-availability get --service-name compute --limit-name standard-e4-core-count --compartment-id "$tenancy_id" --availability-domain "$ad"
+            printf '%s' "$OCI_JSON_OUTPUT" >"$availability_file"
+            OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci limits resource-availability get --service-name compute --limit-name standard-e4-memory-count --compartment-id "$tenancy_id" --availability-domain "$ad"
+            printf '%s' "$OCI_JSON_OUTPUT" >"$memory_availability_file"
+            paid_launch_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            python ops/oci_paid_acceptance_guard.py --shapes-json "$shapes_file" --availability-json "$availability_file" --memory-availability-json "$memory_availability_file" --source-shape "$shape" --now-utc "$paid_launch_utc" >/dev/null
+            watchdog_live_json="$RUNNER_TEMP/paid-watchdog-live.json"
+            timeout --signal=KILL 30s gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${watchdog_run_id}" >"$watchdog_live_json"
+            EXPECTED_REPOSITORY="$GITHUB_REPOSITORY" python - "$watchdog_live_json" <<'PY'
+          import json,os,sys
+          d=json.load(open(sys.argv[1]))
+          assert d.get('repository',{}).get('full_name')==os.environ['EXPECTED_REPOSITORY']
+          assert d.get('event')=='workflow_dispatch' and d.get('name')=='Issue 881 paid acceptance instance watchdog'
+          assert d.get('head_branch')=='main' and d.get('status') in {'queued','in_progress'}
+          assert d.get('actor',{}).get('login')=='github-actions[bot]'
+          PY
+            state_set paid_watchdog_status LIVE_AT_LAUNCH
+            gh api "repos/${GITHUB_REPOSITORY}/issues/881/comments" -f body="PAID_WATCHDOG_LAUNCH stamp=${stamp} expiry_epoch=${paid_expiry_epoch} run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            state_set paid_launch_utc "$paid_launch_utc"
+            mark_phase launch_bounded_paid_acceptance_instance
+            if create_json_once paid_instance_create "$stamp-boot-acceptance" oci compute instance launch --availability-domain "$ad" --compartment-id "$tenancy_id" --subnet-id "$drill_subnet_id" --shape "$paid_shape" --shape-config "$paid_shape_config" --display-name "$stamp-boot-acceptance" --source-details "{\"sourceType\":\"bootVolume\",\"bootVolumeId\":\"$restored_id\"}" --assign-public-ip true; then
+              launch="$OCI_CREATE_JSON"
+              state_set paid_fallback_status LAUNCHED
+            fi
+            drill_instance_id="$(printf '%s' "$launch" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("id", ""))' 2>/dev/null || true)"
+            [[ -n "$drill_instance_id" ]] || drill_instance_id="$(discover_named_id instance "$stamp-boot-acceptance" 90 "$primary_deadline" paid_instance_launch_discovery)"
           [[ -n "$drill_instance_id" ]] || exit 46
           state_set temporary_instance_id "$drill_instance_id"
           mark_phase wait_isolated_acceptance_instance_running
@@ -1553,6 +1691,9 @@ jobs:
               return str(state.get(key) or fallback)
           def code(text):
               return '`' + str(text).replace('`', "'") + '`'
+          def redacted_presence(key, fallback='none'):
+              raw = value(key, fallback)
+              return 'none' if raw in {'', 'none', 'unknown', 'not_collected'} else 'present_redacted'
 
           deadline_values = [
               os.environ.get('PRIMARY_DEADLINE') or 'unknown',
@@ -1581,19 +1722,19 @@ jobs:
               '- receipt started inside reserved deadline: ' + code(str(receipt_inside_deadline).lower()),
               '- prior-run reconciliation: ' + code(value('prior_cleanup_status', 'NOT_RECORDED')),
               '- prior-run exact resource count: ' + code(value('prior_resource_count', 'unknown')),
-              '- prior-run exact resource IDs: ' + code(value('prior_resource_ids', 'none')),
-              '- prior-run exact typed resources: ' + code(value('prior_resource_summary', 'none')),
+              '- prior-run exact resource IDs: ' + code(redacted_presence('prior_resource_ids')),
+              '- prior-run exact typed resources: ' + code(redacted_presence('prior_resource_summary')),
               '- failed-run backup cleanup: ' + code(value('failed_run_backup_cleanup_status', 'NOT_APPLICABLE')),
-              '- failed-run backup IDs: ' + code(value('failed_run_backup_ids', 'none')),
-              '- failed-run backup direct-GET states: ' + code(value('failed_run_backup_direct_get_states', 'not_listed')),
+              '- failed-run backup IDs: ' + code(redacted_presence('failed_run_backup_ids')),
+              '- failed-run backup direct-GET states: ' + code(redacted_presence('failed_run_backup_direct_get_states', 'not_listed')),
               '- superseded backup cleanup: ' + code(value('superseded_backup_cleanup_status', 'NOT_RECORDED')) + '; candidates: ' + code(value('superseded_backup_candidate_count', '0')),
               '- backup selection status: ' + code(value('backup_selection_status', 'NOT_RECORDED')),
               '- backup selection failure rc: ' + code(value('backup_selection_failure_rc', 'none')),
               '- reusable backup candidate count: ' + code(value('backup_candidate_count', '0')),
-              '- reusable backup candidate IDs: ' + code(value('backup_candidate_ids', 'none')),
-              '- ineligible backup candidate IDs: ' + code(value('backup_ineligible_candidate_ids', 'none')),
-              '- blocking non-AVAILABLE backup IDs: ' + code(value('backup_blocking_candidate_ids', 'none')),
-              '- invalid backup metadata IDs: ' + code(value('backup_invalid_candidate_ids', 'none')),
+              '- reusable backup candidate IDs: ' + code(redacted_presence('backup_candidate_ids')),
+              '- ineligible backup candidate IDs: ' + code(redacted_presence('backup_ineligible_candidate_ids')),
+              '- blocking non-AVAILABLE backup IDs: ' + code(redacted_presence('backup_blocking_candidate_ids')),
+              '- invalid backup metadata IDs: ' + code(redacted_presence('backup_invalid_candidate_ids')),
               '- backup availability wait: ' + code(value('backup_wait_status', 'NOT_RECORDED')),
               '- backup availability last state: ' + code(value('backup_wait_last_state', 'none')),
               '- backup availability failure rc: ' + code(value('backup_wait_failure_rc', 'none')),
@@ -1605,9 +1746,15 @@ jobs:
               '- isolated route-table create request: ' + code(value('route_table_create_status', 'NOT_RECORDED')) + '; rc: ' + code(value('route_table_create_failure_rc', 'none')),
               '- isolated security-list create request: ' + code(value('security_list_create_status', 'NOT_RECORDED')) + '; rc: ' + code(value('security_list_create_failure_rc', 'none')),
               '- isolated subnet create request: ' + code(value('subnet_create_status', 'NOT_RECORDED')) + '; rc: ' + code(value('subnet_create_failure_rc', 'none')),
-              '- isolated instance create request: ' + code(value('instance_create_status', 'NOT_RECORDED')) + '; rc: ' + code(value('instance_create_failure_rc', 'none')),
-              '- isolated instance create diagnostic: stderr=' + code(value('instance_create_stderr_class', 'NOT_RECORDED')) + '; stdout=' + code(value('instance_create_stdout_shape', 'NOT_RECORDED')) + '; stdout/stderr bytes=' + code(value('instance_create_stdout_bytes', 'unknown') + '/' + value('instance_create_stderr_bytes', 'unknown')),
-              '- isolated instance launch discovery: status=' + code(value('instance_launch_discovery_status', 'NOT_RECORDED')) + '; rc=' + code(value('instance_launch_discovery_failure_rc', 'none')) + '; stderr=' + code(value('instance_launch_discovery_stderr_class', 'NOT_RECORDED')) + '; stdout=' + code(value('instance_launch_discovery_stdout_shape', 'NOT_RECORDED')) + '; stdout/stderr bytes=' + code(value('instance_launch_discovery_stdout_bytes', 'unknown') + '/' + value('instance_launch_discovery_stderr_bytes', 'unknown')),
+              '- isolated paid instance create request: ' + code(value('paid_instance_create_status', 'NOT_RECORDED')) + '; rc: ' + code(value('paid_instance_create_failure_rc', 'none')),
+              '- isolated paid instance create diagnostic: stderr=' + code(value('paid_instance_create_stderr_class', 'NOT_RECORDED')) + '; stdout=' + code(value('paid_instance_create_stdout_shape', 'NOT_RECORDED')) + '; stdout/stderr bytes=' + code(value('paid_instance_create_stdout_bytes', 'unknown') + '/' + value('paid_instance_create_stderr_bytes', 'unknown')),
+              '- isolated paid instance launch discovery: status=' + code(value('paid_instance_launch_discovery_status', 'NOT_RECORDED')) + '; rc=' + code(value('paid_instance_launch_discovery_failure_rc', 'none')) + '; stderr=' + code(value('paid_instance_launch_discovery_stderr_class', 'NOT_RECORDED')) + '; stdout=' + code(value('paid_instance_launch_discovery_stdout_shape', 'NOT_RECORDED')) + '; stdout/stderr bytes=' + code(value('paid_instance_launch_discovery_stdout_bytes', 'unknown') + '/' + value('paid_instance_launch_discovery_stderr_bytes', 'unknown')),
+              '- paid fallback: ' + code(value('paid_fallback_status', 'NOT_RECORDED')) + '; shape/config: ' + code(value('paid_shape', 'none') + '/' + value('paid_shape_config', 'none')),
+              '- paid billing/price basis: ' + code(value('paid_billing_class', 'none') + '/' + value('paid_price_basis', 'none')),
+              '- paid price basis valid until: ' + code(value('paid_price_basis_valid_until', 'none')),
+              '- paid hourly/runtime/budget caps: ' + code(value('paid_hourly_rate_max_usd', 'none') + '/' + value('paid_runtime_limit_seconds', 'none') + '/' + value('paid_compute_budget_usd', 'none')),
+              '- independent paid watchdog: ' + code(value('paid_watchdog_status', 'NOT_RECORDED')),
+              '- paid launch/termination UTC: ' + code(value('paid_launch_utc', 'none') + '/' + value('paid_termination_utc', 'none')),
               '- restored volume readiness: ' + code(value('restored_volume_wait_status', 'NOT_RECORDED')) + '; state: ' + code(value('restored_volume_wait_last_state', 'none')) + '; rc: ' + code(value('restored_volume_wait_failure_rc', 'none')),
               '- restored volume hydration: ' + code(value('restored_volume_hydration_status', 'NOT_RECORDED')) + '; state: ' + code(value('restored_volume_hydration_last_state', 'none')) + '; rc: ' + code(value('restored_volume_hydration_failure_rc', 'none')),
               '- isolated VCN readiness: ' + code(value('vcn_wait_status', 'NOT_RECORDED')) + '; state: ' + code(value('vcn_wait_last_state', 'none')) + '; rc: ' + code(value('vcn_wait_failure_rc', 'none')),
@@ -1620,19 +1767,19 @@ jobs:
               '- isolated VNIC public IPv4: ' + code(value('vnic_public_ip_status', 'NOT_RECORDED')) + '; rc: ' + code(value('vnic_public_ip_failure_rc', 'none')),
               '- current-run temporary cleanup: ' + code(value('current_cleanup_status', 'NOT_RECORDED')),
               '- current-run stamp: ' + code(value('run_stamp')),
-              '- temporary instance ID: ' + code(value('temporary_instance_id', 'none')),
-              '- temporary restored-volume ID: ' + code(value('temporary_restored_volume_id', 'none')),
-              '- temporary VCN ID: ' + code(value('temporary_vcn_id', 'none')),
-              '- temporary internet-gateway ID: ' + code(value('temporary_internet_gateway_id', 'none')),
-              '- temporary route-table ID: ' + code(value('temporary_route_table_id', 'none')),
-              '- temporary security-list ID: ' + code(value('temporary_security_list_id', 'none')),
-              '- temporary subnet ID: ' + code(value('temporary_subnet_id', 'none')),
+              '- temporary instance ID: ' + code(redacted_presence('temporary_instance_id')),
+              '- temporary restored-volume ID: ' + code(redacted_presence('temporary_restored_volume_id')),
+              '- temporary VCN ID: ' + code(redacted_presence('temporary_vcn_id')),
+              '- temporary internet-gateway ID: ' + code(redacted_presence('temporary_internet_gateway_id')),
+              '- temporary route-table ID: ' + code(redacted_presence('temporary_route_table_id')),
+              '- temporary security-list ID: ' + code(redacted_presence('temporary_security_list_id')),
+              '- temporary subnet ID: ' + code(redacted_presence('temporary_subnet_id')),
               '- post-cleanup allocation summary: ' + code(value('allocation_summary', 'not_collected')),
           ]
           if backup_id and value('cleanup_only', '0') == '1':
-              lines.append('- backup candidate retained: ' + code('AVAILABLE_FULL_97GB_REQUIRES_NEW_ISOLATED_BOOT_ACCEPTANCE') + '; candidate ID: ' + code(backup_id) + ' (billable backup storage may apply)')
+              lines.append('- backup candidate retained: ' + code('AVAILABLE_FULL_97GB_REQUIRES_NEW_ISOLATED_BOOT_ACCEPTANCE') + '; candidate ID: ' + code('present_redacted') + ' (billable backup storage may apply)')
           elif backup_id:
-              lines.append('- fresh backup retained: ' + code(value('retained_backup_status', 'true')) + '; accepted backup ID: ' + code(backup_id) + ' (billable backup storage may apply)')
+              lines.append('- fresh backup retained: ' + code(value('retained_backup_status', 'true')) + '; accepted backup ID: ' + code('present_redacted') + ' (billable backup storage may apply)')
           else:
               lines.append('- fresh backup retained: ' + code('false_or_unproven') + '; no accepted backup ID was emitted')
           lines += [

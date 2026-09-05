@@ -11,6 +11,189 @@ import textwrap
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = (ROOT / "ops/oracle_universal_video_root_filesystem_expand.sh").read_text()
 WORKFLOW = (ROOT / ".github/workflows/issue-881-root-filesystem-expand.yml").read_text()
+PAID_GUARD = ROOT / "ops/oci_paid_acceptance_guard.py"
+WATCHDOG = (ROOT / ".github/workflows/issue-881-paid-instance-watchdog.yml").read_text()
+
+
+def _paid_guard(shapes: dict, availability: dict, source_shape: str = "VM.Standard.E5.Flex") -> subprocess.CompletedProcess[str]:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        shape_path = Path(temp_dir) / "shapes.json"
+        availability_path = Path(temp_dir) / "availability.json"
+        memory_availability_path = Path(temp_dir) / "memory-availability.json"
+        shape_path.write_text(json.dumps(shapes))
+        availability_path.write_text(json.dumps(availability))
+        memory_availability_path.write_text(json.dumps({"data": {"available": 1}}))
+        return subprocess.run(
+            [
+                "python",
+                str(PAID_GUARD),
+                "--shapes-json",
+                str(shape_path),
+                "--availability-json",
+                str(availability_path),
+                "--memory-availability-json",
+                str(memory_availability_path),
+                "--source-shape",
+                source_shape,
+                "--now-utc",
+                "2026-09-05T05:00:00Z",
+            ],
+            text=True,
+            capture_output=True,
+        )
+
+
+def _paid_shape(*, min_ocpus: float = 1, max_ocpus: float = 64,
+                min_memory: float = 1, max_memory: float = 1024) -> dict:
+    return {
+        "data": [{
+            "shape": "VM.Standard.E5.Flex",
+            "ocpu-options": {"min": min_ocpus, "max": max_ocpus},
+            "memory-options": {"min-in-gbs": min_memory, "max-in-gbs": max_memory},
+        }]
+    }
+
+
+def test_paid_capacity_guard_is_bounded_and_fail_closed() -> None:
+    approved = _paid_guard(_paid_shape(), {"data": {"available": 1}})
+    assert approved.returncode == 0, approved.stderr
+    payload = json.loads(approved.stdout)
+    assert payload == payload | {
+        "status": "APPROVED",
+        "shape": "VM.Standard.E5.Flex",
+        "ocpus": 1,
+        "memory_gb": 1,
+        "runtime_limit_seconds": 1800,
+        "compute_budget_usd": "1.00",
+        "hourly_rate_max_usd": "0.0265",
+        "billing_class": "PAID_BOUNDED",
+    }
+    for shapes, availability, source, reason in (
+        (_paid_shape(), {"data": {"available": 1}}, "VM.Standard.A1.Flex", "ARCHITECTURE_OR_SOURCE_SHAPE_MISMATCH"),
+        (_paid_shape(), {"data": {"available": 0}}, "VM.Standard.E5.Flex", "INSUFFICIENT_SERVICE_LIMIT_HEADROOM"),
+        ({"data": []}, {"data": {"available": 1}}, "VM.Standard.E5.Flex", "PAID_SHAPE_NOT_UNIQUELY_AVAILABLE"),
+    ):
+        rejected = _paid_guard(shapes, availability, source)
+        assert rejected.returncode == 2
+        assert json.loads(rejected.stdout) == {"status": "REJECTED", "reason": reason}
+
+
+def test_paid_fallback_requires_quota_absence_preflight_and_exact_caps() -> None:
+    paid = WORKFLOW.index("mark_phase paid_capacity_preflight")
+    launch = WORKFLOW.index("mark_phase launch_bounded_paid_acceptance_instance", paid)
+    assert '[[ "$shape" == VM.Standard.E5.Flex ]] || exit 92' in WORKFLOW[:paid]
+    assert 'create_json_once instance_create "$stamp-boot-acceptance"' not in WORKFLOW
+    assert "oci compute shape list" in WORKFLOW[paid:]
+    assert "oci limits resource-availability get" in WORKFLOW[paid:]
+    assert WORKFLOW[paid:launch].count("python ops/oci_paid_acceptance_guard.py") == 2
+    assert 'paid_deadline=$(( $(monotonic_now) + paid_values[7] ))' in WORKFLOW[paid:]
+    assert "paid_instance_create" in WORKFLOW[paid:]
+    restore = WORKFLOW.index("mark_phase create_restored_boot_volume")
+    dispatch = WORKFLOW.index("mark_phase dispatch_paid_instance_watchdog")
+    assert "issue-881-paid-instance-watchdog.yml/dispatches" in WORKFLOW
+    assert dispatch < restore < paid < launch
+    assert WORKFLOW.index("paid_watchdog_status ARMED_PRE_MUTATION") < restore
+    assert WORKFLOW.index("paid_watchdog_status ARMED", paid) < launch
+    assert 'select(.user.login=="github-actions[bot]")' in WORKFLOW[dispatch:restore]
+    assert 'watchdog_run_id="$(WATCHDOG_COMMENTS=' in WORKFLOW[dispatch:restore]
+    receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
+    assert "paid hourly/runtime/budget caps:" in receipt
+    assert "present_redacted" in receipt
+
+
+def test_launch_boundary_refreshes_all_live_oci_constraints() -> None:
+    boundary = WORKFLOW.index("# Refresh all mutable primary-source constraints")
+    launch = WORKFLOW.index("mark_phase launch_bounded_paid_acceptance_instance", boundary)
+    block = WORKFLOW[boundary:launch]
+    assert "oci compute shape list" in block
+    assert "standard-e4-core-count" in block
+    assert "standard-e4-memory-count" in block
+    assert block.index("standard-e4-memory-count") < block.index('paid_launch_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"')
+    assert "python ops/oci_paid_acceptance_guard.py" in block
+    assert 'actions/runs/${watchdog_run_id}' in block
+    assert "d.get('status') in {'queued','in_progress'}" in block
+    assert "paid_watchdog_status LIVE_AT_LAUNCH" in block
+    assert "PAID_WATCHDOG_LAUNCH" in block
+
+
+def test_independent_watchdog_retries_compute_and_storage_cleanup() -> None:
+    assert "timeout-minutes: 300" in WATCHDOG
+    assert "PAID_WATCHDOG_ARMED" in WATCHDOG
+    assert "PAID_WATCHDOG_LAUNCH" in WATCHDOG
+    assert WATCHDOG.count("oci compute instance list") >= 2
+    assert "instance_discovery_deadline=$((SECONDS + 120))" in WATCHDOG
+    assert "instance_confirmation_deadline=$((SECONDS + 120))" in WATCHDOG
+    assert "late_instance_clean_count=$((late_instance_clean_count + 1))" in WATCHDOG
+    assert "late_instance_clean_count >= 3" in WATCHDOG
+    assert WATCHDOG.count("assert isinstance(data,list) and all(isinstance(x,dict) for x in data)") >= 4
+    assert 'if (( ${#ids[@]} == 0 )); then' in WATCHDOG
+    assert "instance_inventory_clean == 1" in WATCHDOG
+    assert "A known exact ID can never be downgraded" in WATCHDOG
+    assert "instance_get_error" in WATCHDOG
+    instance_loop = WATCHDOG[WATCHDOG.index("while (( SECONDS < instance_cleanup_deadline ))"):]
+    assert instance_loop.index("while (( SECONDS < instance_cleanup_deadline ))") < instance_loop.index("oci compute instance terminate")
+    volume_loop = WATCHDOG[WATCHDOG.index("deadline=$((SECONDS + 120))"):]
+    assert volume_loop.index("while (( SECONDS < deadline ))") < volume_loop.index("oci bv boot-volume delete")
+    assert "oci bv boot-volume get" in volume_loop
+    assert "volume_terminal_proven == 1" in volume_loop
+    assert "launch_expiry <= now + 1800" in WATCHDOG
+    assert 'effective_expiry="$now"' in WATCHDOG
+    assert "if launch_comments=\"$(timeout --signal=KILL 30s gh api" in WATCHDOG
+    assert "while ! timeout --signal=KILL 30s oci bv boot-volume list" in WATCHDOG
+    assert "late_instance_id" in WATCHDOG and 'terminate --instance-id "$late_instance_id"' in WATCHDOG
+    late_instance_loop = WATCHDOG[WATCHDOG.index('if [[ -n "$late_instance_id" ]]'):]
+    assert '2>"$late_instance_get_error"' in late_instance_loop
+    assert "status([^0-9]+)404" in late_instance_loop
+    assert late_instance_loop.index("instance_terminal_proven=1; break") < late_instance_loop.index(
+        "volume_discovery_deadline="
+    )
+    assert "late_volume_id" in WATCHDOG and 'delete --boot-volume-id "$late_volume_id"' in WATCHDOG
+    assert "late_volume_deadline=$((SECONDS + 120))" in WATCHDOG
+    assert "late_volume_clean_count >= 3" in WATCHDOG
+
+
+def test_watchdog_destructive_entrypoint_is_owner_gated() -> None:
+    job = WATCHDOG[WATCHDOG.index("terminate-exact-paid-instance:"):]
+    assert "PARENT_RUN_ID" in job and "PARENT_RUN_ATTEMPT" in job
+    assert "actions/runs/${PARENT_RUN_ID}" in job
+    assert "d.get('event')=='issue_comment'" in job
+    assert "d.get('status')=='in_progress'" in job
+    assert "d.get('actor',{}).get('login')=='olegmed1-art'" in job
+    assert "d.get('triggering_actor',{}).get('login')=='olegmed1-art'" in job
+    assert "GITHUB_ACTOR\" == 'github-actions[bot]'" in job
+    assert "hmac.compare_digest" in job and "AUTHORIZATION_HMAC" in job
+    assert '-f "inputs[parent_run_id]=${GITHUB_RUN_ID}"' in WORKFLOW
+    assert '-f "inputs[parent_run_attempt]=${GITHUB_RUN_ATTEMPT}"' in WORKFLOW
+    assert '-f "inputs[authorization_hmac]=$watchdog_authorization_hmac"' in WORKFLOW
+    assert "hmac.new" in WORKFLOW
+
+
+def test_watchdog_propagates_all_inventory_validator_failures() -> None:
+    assert "< <(STAMP=" not in WATCHDOG
+    for name in ("instance-ids", "late-instance-ids", "volume-ids", "late-volume-ids"):
+        assert f'$RUNNER_TEMP/{name}' in WATCHDOG
+    assert WATCHDOG.count("then exit 101; fi") == 2
+    assert WATCHDOG.count("then exit 102; fi") == 2
+    assert WATCHDOG.count("sys.stdout.write('\\n'.join(matched)+('\\n' if matched else ''))") == 4
+    assert "print('\\n'.join(matched))" not in WATCHDOG
+
+
+def test_paid_price_basis_expires_fail_closed() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        shape_path = Path(temp_dir) / "shapes.json"
+        cpu_path = Path(temp_dir) / "cpu.json"
+        memory_path = Path(temp_dir) / "memory.json"
+        shape_path.write_text(json.dumps(_paid_shape()))
+        cpu_path.write_text(json.dumps({"data": {"available": 1}}))
+        memory_path.write_text(json.dumps({"data": {"available": 1}}))
+        result = subprocess.run(
+            ["python", str(PAID_GUARD), "--shapes-json", str(shape_path),
+             "--availability-json", str(cpu_path), "--memory-availability-json", str(memory_path),
+             "--source-shape", "VM.Standard.E5.Flex", "--now-utc", "2026-10-05T00:00:00Z"],
+            text=True, capture_output=True,
+        )
+        assert result.returncode == 2
+        assert json.loads(result.stdout)["reason"] == "PRICE_BASIS_EXPIRED"
 
 
 def test_expansion_is_partition_and_filesystem_specific() -> None:
@@ -37,8 +220,8 @@ def test_workflow_is_exact_host_one_shot_and_pinned() -> None:
     assert "issue_comment:" in WORKFLOW
     assert "github.event.issue.number == 881" in WORKFLOW
     assert "github.event.comment.user.login == 'olegmed1-art'" in WORKFLOW
-    assert '"/oracle-ops issue-881-expand-root-and-recover-bba508"' in WORKFLOW
-    assert '"/oracle-ops issue-881-reconcile-run-33914733788"' in WORKFLOW
+    assert '"/oracle-ops issue-881-expand-root-and-recover-bba508-paid-bounded"' in WORKFLOW
+    assert '"/oracle-ops issue-881-reconcile-run-33919714953"' in WORKFLOW
 
 
 def test_owner_command_is_case_sensitive_before_any_oci_or_host_access() -> None:
@@ -49,15 +232,15 @@ def test_owner_command_is_case_sensitive_before_any_oci_or_host_access() -> None
     assert '[[ "$OWNER_COMMAND" != "$RECOVERY_COMMAND" && "$OWNER_COMMAND" != "$CLEANUP_ONLY_COMMAND" ]]' in block
     assert "UV_ROOT_OWNER_COMMAND_REJECTED" in block
     gate = r'''
-RECOVERY_COMMAND=/oracle-ops\ issue-881-expand-root-and-recover-bba508
-CLEANUP_ONLY_COMMAND=/oracle-ops\ issue-881-reconcile-run-33914733788
+RECOVERY_COMMAND=/oracle-ops\ issue-881-expand-root-and-recover-bba508-paid-bounded
+CLEANUP_ONLY_COMMAND=/oracle-ops\ issue-881-reconcile-run-33919714953
 if [[ "$OWNER_COMMAND" != "$RECOVERY_COMMAND" && "$OWNER_COMMAND" != "$CLEANUP_ONLY_COMMAND" ]]; then exit 23; fi
 '''
     for command, expected_rc in (
-        ("/oracle-ops issue-881-expand-root-and-recover-bba508", 0),
-        ("/oracle-ops issue-881-reconcile-run-33914733788", 0),
-        ("/ORACLE-OPS issue-881-reconcile-run-33914733788", 23),
-        ("/oracle-ops issue-881-reconcile-run-33914733788 ", 23),
+        ("/oracle-ops issue-881-expand-root-and-recover-bba508-paid-bounded", 0),
+        ("/oracle-ops issue-881-reconcile-run-33919714953", 0),
+        ("/ORACLE-OPS issue-881-reconcile-run-33919714953", 23),
+        ("/oracle-ops issue-881-reconcile-run-33919714953 ", 23),
     ):
         result = subprocess.run(["bash", "-c", gate], env=os.environ | {"OWNER_COMMAND": command})
         assert result.returncode == expected_rc
@@ -453,7 +636,7 @@ def test_receipt_reports_backup_only_from_proven_step_output() -> None:
         "route_table_create",
         "security_list_create",
         "subnet_create",
-        "instance_create",
+        "paid_instance_create",
     ):
         assert f"value('{prefix}_status'" in receipt
         assert f"value('{prefix}_failure_rc'" in receipt
@@ -933,10 +1116,11 @@ record_oci_diagnostic instance_create "$TEST_RC"
     assert "instance_create_stderr_class=NONE" in warning
     assert "OCI_JSON_RAW_ERROR=\"$OCI_JSON_ERROR\"" in WORKFLOW
     receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
-    assert "isolated instance create diagnostic" in receipt
-    assert "isolated instance launch discovery" in receipt
-    assert "instance_launch_discovery_stderr_class" in receipt
-    assert 'discover_named_id instance "$stamp-boot-acceptance" 90 "$primary_deadline" instance_launch_discovery' in WORKFLOW
+    assert "isolated paid instance create diagnostic" in receipt
+    assert "isolated paid instance launch discovery" in receipt
+    assert "paid_instance_launch_discovery_stderr_class" in receipt
+    assert "paid_instance_create_stderr_class" in receipt
+    assert 'discover_named_id instance "$stamp-boot-acceptance" 90 "$primary_deadline" paid_instance_launch_discovery' in WORKFLOW
 
 
 def test_oci_helper_clears_diagnostics_before_budget_failure() -> None:
@@ -1317,11 +1501,11 @@ def test_last_second_gate_revalidates_oci_before_ssh_mutation() -> None:
 
 
 def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> None:
-    cleanup_command = "/oracle-ops issue-881-reconcile-run-33914733788"
+    cleanup_command = "/oracle-ops issue-881-reconcile-run-33919714953"
     assert cleanup_command in WORKFLOW
     assert "/oracle-ops issue-881-reconcile-run-33893910685" not in WORKFLOW
-    assert 'target_prior_stamp="${operation_run_prefix}33914733788-a1"' in WORKFLOW
-    assert 'failed_run_backup_name="${backup_prefix}-33914733788-a1"' in WORKFLOW
+    assert 'target_prior_stamp="${operation_run_prefix}33919714953-a1"' in WORKFLOW
+    assert 'failed_run_backup_name="${backup_prefix}-33919714953-a1"' in WORKFLOW
     cleanup = WORKFLOW.index("reconcile_prior_attempt_resources")
     backup_create = WORKFLOW.index("boot-volume-backup create")
     mutation = WORKFLOW.index("Expand root and recover exact image under shared host lock")
