@@ -6,9 +6,11 @@ on:
       - '.github/workflows/issue-881-root-filesystem-expand.yml'
       - 'ops/oracle_universal_video_root_filesystem_expand.sh'
       - 'ops/oci_paid_acceptance_guard.py'
+      - 'ops/issue_881_failed_run_receipt.py'
       - '.github/workflows/issue-881-paid-instance-watchdog.yml'
       - 'ops/issue-881-root-filesystem-expand-request.json'
       - 'tests/test_issue_881_root_filesystem_expand_contract.py'
+      - 'tests/test_issue_881_failed_run_receipt.py'
   issue_comment:
     types: [created]
 
@@ -35,6 +37,7 @@ jobs:
           for path in (
               'tests/test_issue_881_root_filesystem_expand_contract.py',
               'tests/test_issue_881_current_main_recovery_contract.py',
+              'tests/test_issue_881_failed_run_receipt.py',
           ):
               namespace = runpy.run_path(path)
               for name, value in namespace.items():
@@ -243,10 +246,14 @@ jobs:
           cleanup_only=0
           target_prior_stamp=""
           failed_run_backup_name=""
+          failed_run_id=""
+          failed_run_receipt_comment_id=""
           if [[ "$OWNER_COMMAND" == "$CLEANUP_ONLY_COMMAND" ]]; then
             cleanup_only=1
-            target_prior_stamp="${operation_run_prefix}33919714953-a1"
-            failed_run_backup_name="${backup_prefix}-33919714953-a1"
+            failed_run_id="33919714953"
+            failed_run_receipt_comment_id="5546560028"
+            target_prior_stamp="${operation_run_prefix}${failed_run_id}-a1"
+            failed_run_backup_name="${backup_prefix}-${failed_run_id}-a1"
           fi
           backup_id="" restored_id="" drill_instance_id="" drill_public_ip="" drill_started=""
           backup_attempted=0 backup_created_by_run=0 backup_accepted=0
@@ -318,6 +325,8 @@ jobs:
           state_set source_boot_id "$boot_id"
           state_set cleanup_only "$cleanup_only"
           state_set target_prior_stamp "${target_prior_stamp:-none}"
+          state_set failed_run_id "${failed_run_id:-none}"
+          state_set failed_run_receipt_comment_id "${failed_run_receipt_comment_id:-none}"
           state_set prior_cleanup_status NOT_STARTED
           state_set current_cleanup_status NOT_STARTED
           state_set backup_selection_status NOT_STARTED
@@ -895,21 +904,107 @@ jobs:
             # silently filtering terminal objects would discard the audit trail.
             RESOURCE_KIND="$resource" PRIOR_PREFIX="$prior_prefix" CURRENT_STAMP="$stamp" TARGET_PRIOR_STAMP="$target_prior_stamp" SUFFIX="-$suffix" python -c 'import json,os,sys; p=json.load(sys.stdin); data=p.get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data); allowed={"instance":{"PROVISIONING","STARTING","RUNNING","STOPPING","STOPPED","TERMINATING","TERMINATED"},"boot-volume":{"PROVISIONING","RESTORING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"subnet":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"security-list":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"route-table":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"internet-gateway":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"vcn":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"}}[os.environ["RESOURCE_KIND"]]; target=os.environ["TARGET_PRIOR_STAMP"]; suffix=os.environ["SUFFIX"]; matched=[x for x in data if ((x.get("display-name") or "")==target+suffix if target else (x.get("display-name") or "").startswith(os.environ["PRIOR_PREFIX"]) and not (x.get("display-name") or "").startswith(os.environ["CURRENT_STAMP"]+"-") and (x.get("display-name") or "").endswith(suffix))]; assert all(isinstance(x.get("id"),str) and x["id"] and isinstance(x.get("lifecycle-state"),str) and x["lifecycle-state"] in allowed for x in matched); print("\n".join(sorted(x["id"] for x in matched)))' <<<"$output"
           }
+          load_authoritative_failed_receipt() {
+            local receipt_json="$RUNNER_TEMP/issue-881-failed-receipt.json"
+            local receipt_body="$RUNNER_TEMP/issue-881-failed-receipt.md"
+            local manifest="$RUNNER_TEMP/issue-881-failed-receipt-manifest.json"
+            state_set authoritative_receipt_status FETCHING
+            if ! gh api "repos/$GITHUB_REPOSITORY/issues/comments/$failed_run_receipt_comment_id" >"$receipt_json"; then
+              state_set authoritative_receipt_status FETCH_FAILED
+              return 95
+            fi
+            if ! RECEIPT_JSON="$receipt_json" RECEIPT_BODY="$receipt_body" EXPECTED_COMMENT_ID="$failed_run_receipt_comment_id" EXPECTED_REPOSITORY="$GITHUB_REPOSITORY" python - <<'PY'
+          import json, os
+          from pathlib import Path
+          payload = json.loads(Path(os.environ['RECEIPT_JSON']).read_text())
+          assert payload.get('id') == int(os.environ['EXPECTED_COMMENT_ID'])
+          assert payload.get('user', {}).get('login') == 'github-actions[bot]'
+          assert payload.get('html_url') == f"https://github.com/{os.environ['EXPECTED_REPOSITORY']}/issues/881#issuecomment-{os.environ['EXPECTED_COMMENT_ID']}"
+          body = payload.get('body')
+          assert isinstance(body, str) and body
+          Path(os.environ['RECEIPT_BODY']).write_text(body)
+          PY
+            then
+              state_set authoritative_receipt_status INVALID_API_RESPONSE
+              return 95
+            fi
+            if ! python ops/issue_881_failed_run_receipt.py \
+                --run-id "$failed_run_id" \
+                --operation-prefix "$operation_run_prefix" \
+                <"$receipt_body" >"$manifest"; then
+              state_set authoritative_receipt_status INVALID_RECEIPT
+              return 95
+            fi
+            authoritative_receipt_manifest="$manifest"
+            authoritative_receipt_sha256="$(MANIFEST="$manifest" python -c 'import json,os; print(json.load(open(os.environ["MANIFEST"]))["receipt_sha256"])')"
+            state_set authoritative_receipt_sha256 "$authoritative_receipt_sha256"
+            state_set authoritative_receipt_status VERIFIED_BOUND
+          }
+          authoritative_receipt_ids() {
+            local kind="$1"
+            [[ -n "${authoritative_receipt_manifest:-}" ]] || return 0
+            KIND="$kind" MANIFEST="$authoritative_receipt_manifest" python -c 'import json,os; print("\n".join(json.load(open(os.environ["MANIFEST"]))["resources"][os.environ["KIND"]]))'
+          }
+          bound_resource_ids() {
+            local kind="$1" suffix="$2" inventory_ids receipt_ids
+            inventory_ids="$(prior_named_ids "$kind" "$suffix")" || return 96
+            receipt_ids="$(authoritative_receipt_ids "$kind")" || return 95
+            merge_resource_ids "$inventory_ids" "$receipt_ids"
+          }
+          mask_resource_ids() {
+            local id
+            while IFS= read -r id; do
+              [[ -n "$id" ]] && echo "::add-mask::$id"
+            done
+          }
+          merge_resource_ids() {
+            printf '%s\n' "$1" "$2" | sed '/^$/d' | sort -u
+          }
+          record_authoritative_type_proof() {
+            local kind="$1" ids="$2" key count hashes
+            key="${kind//-/_}"
+            count="$(printf '%s\n' "$ids" | sed '/^$/d' | wc -l | tr -d ' ')"
+            hashes="$(printf '%s\n' "$ids" | sed '/^$/d' | while IFS= read -r id; do printf '%s' "$id" | sha256sum | cut -d' ' -f1; done | paste -sd, -)"
+            state_set "prior_${key}_authoritative_count" "$count"
+            state_set "prior_${key}_authoritative_id_hashes" "${hashes:-none}"
+            state_set "prior_${key}_proof" DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_CLEAN
+          }
+          prove_repeated_exact_stamp_inventory_empty() {
+            local pass resource suffix ids
+            for pass in 1 2 3; do
+              for resource_suffix in \
+                  'instance boot-acceptance' 'boot-volume restore' 'subnet subnet' \
+                  'security-list ssh-only' 'route-table route' 'internet-gateway ig' 'vcn vcn'; do
+                read -r resource suffix <<<"$resource_suffix"
+                ids="$(prior_named_ids "$resource" "$suffix")" || return 96
+                if [[ -n "$ids" ]]; then
+                  state_set prior_cleanup_status "EXACT_STAMP_INVENTORY_NONEMPTY_PASS_${pass}"
+                  return 96
+                fi
+              done
+              state_set "prior_exact_stamp_inventory_pass_${pass}" CLEAN
+              (( pass == 3 )) || sleep 10
+            done
+          }
           reconcile_prior_attempt_resources() {
             local prior_instances prior_restored prior_subnets prior_security prior_routes prior_igs prior_vcns id prior_ids prior_count
             local -a ids
             state_set prior_cleanup_status IN_PROGRESS
             mark_phase reconcile_prior_attempts
-            prior_instances="$(prior_named_ids instance boot-acceptance)"
-            prior_restored="$(prior_named_ids boot-volume restore)"
-            prior_subnets="$(prior_named_ids subnet subnet)"
-            prior_security="$(prior_named_ids security-list ssh-only)"
-            prior_routes="$(prior_named_ids route-table route)"
-            prior_igs="$(prior_named_ids internet-gateway ig)"
-            prior_vcns="$(prior_named_ids vcn vcn)"
+            if (( cleanup_only == 1 )); then
+              load_authoritative_failed_receipt
+            fi
+            prior_instances="$(bound_resource_ids instance boot-acceptance)" || return $?
+            prior_restored="$(bound_resource_ids boot-volume restore)" || return $?
+            prior_subnets="$(bound_resource_ids subnet subnet)" || return $?
+            prior_security="$(bound_resource_ids security-list ssh-only)" || return $?
+            prior_routes="$(bound_resource_ids route-table route)" || return $?
+            prior_igs="$(bound_resource_ids internet-gateway ig)" || return $?
+            prior_vcns="$(bound_resource_ids vcn vcn)" || return $?
             prior_summary="instance=$(tr '\n' ',' <<<"$prior_instances" | sed 's/,$//');restored_volume=$(tr '\n' ',' <<<"$prior_restored" | sed 's/,$//');subnet=$(tr '\n' ',' <<<"$prior_subnets" | sed 's/,$//');security_list=$(tr '\n' ',' <<<"$prior_security" | sed 's/,$//');route_table=$(tr '\n' ',' <<<"$prior_routes" | sed 's/,$//');internet_gateway=$(tr '\n' ',' <<<"$prior_igs" | sed 's/,$//');vcn=$(tr '\n' ',' <<<"$prior_vcns" | sed 's/,$//')"
             prior_ids="$(printf '%s\n' "$prior_instances" "$prior_restored" "$prior_subnets" "$prior_security" "$prior_routes" "$prior_igs" "$prior_vcns" | sed '/^$/d' | sort -u | paste -sd, -)"
             prior_count="$(printf '%s\n' "$prior_ids" | awk -F, 'NF && $1 != "" {print NF; next} {print 0}')"
+            printf '%s\n' "$prior_instances" "$prior_restored" "$prior_subnets" "$prior_security" "$prior_routes" "$prior_igs" "$prior_vcns" | mask_resource_ids
             state_set prior_resource_ids "$prior_ids"
             state_set prior_resource_count "$prior_count"
             state_set prior_resource_summary "$prior_summary"
@@ -963,8 +1058,21 @@ jobs:
               for id in "${ids[@]}"; do delete_resource_once vcn "$id" || true; done
               wait_all_absent vcn 120 "${ids[@]}"
             fi
+            prove_repeated_exact_stamp_inventory_empty
+            record_authoritative_type_proof instance "$prior_instances"
+            record_authoritative_type_proof boot-volume "$prior_restored"
+            record_authoritative_type_proof subnet "$prior_subnets"
+            record_authoritative_type_proof security-list "$prior_security"
+            record_authoritative_type_proof route-table "$prior_routes"
+            record_authoritative_type_proof internet-gateway "$prior_igs"
+            record_authoritative_type_proof vcn "$prior_vcns"
+            if [[ "$(MANIFEST="$authoritative_receipt_manifest" python -c 'import json,os; print(json.load(open(os.environ["MANIFEST"]))["instance_create_status"])')" == REQUEST_UNCERTAIN ]]; then
+              state_set prior_uncertain_instance_proof REPEATED_EXACT_STAMP_INVENTORY_CLEAN
+            else
+              state_set prior_uncertain_instance_proof NOT_APPLICABLE
+            fi
             state_set prior_cleanup_status RECONCILED_PROVEN_ABSENT
-            echo "UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS resource_count=$prior_count ids=$prior_ids"
+            echo "UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS resource_count=$prior_count authoritative_receipt_sha256=${authoritative_receipt_sha256:-not_applicable} verdict=RECONCILED_PROVEN_ABSENT"
           }
           cleanup_temp_resources() {
             local failed=0 state
@@ -1721,9 +1829,19 @@ jobs:
               '- monotonic primary/cleanup/mutation/receipt deadlines: ' + code('/'.join(deadline_values)),
               '- receipt started inside reserved deadline: ' + code(str(receipt_inside_deadline).lower()),
               '- prior-run reconciliation: ' + code(value('prior_cleanup_status', 'NOT_RECORDED')),
+              '- authoritative failed receipt: ' + code(value('authoritative_receipt_status', 'NOT_APPLICABLE')) + '; SHA-256: ' + code(redacted_presence('authoritative_receipt_sha256')),
               '- prior-run exact resource count: ' + code(value('prior_resource_count', 'unknown')),
               '- prior-run exact resource IDs: ' + code(redacted_presence('prior_resource_ids')),
               '- prior-run exact typed resources: ' + code(redacted_presence('prior_resource_summary')),
+              '- exact-stamp inventory proof passes: ' + code('/'.join(value('prior_exact_stamp_inventory_pass_' + str(i), 'NOT_RECORDED') for i in range(1, 4))),
+              '- uncertain-instance absence proof: ' + code(value('prior_uncertain_instance_proof', 'NOT_RECORDED')),
+              '- instance absence proof: ' + code(value('prior_instance_proof', 'NOT_RECORDED')) + '; authoritative/exact count: ' + code(value('prior_instance_authoritative_count', 'unknown')) + '; ID hashes: ' + code(redacted_presence('prior_instance_authoritative_id_hashes')),
+              '- restored-volume absence proof: ' + code(value('prior_boot_volume_proof', 'NOT_RECORDED')) + '; authoritative/exact count: ' + code(value('prior_boot_volume_authoritative_count', 'unknown')) + '; ID hashes: ' + code(redacted_presence('prior_boot_volume_authoritative_id_hashes')),
+              '- VCN absence proof: ' + code(value('prior_vcn_proof', 'NOT_RECORDED')) + '; authoritative/exact count: ' + code(value('prior_vcn_authoritative_count', 'unknown')) + '; ID hashes: ' + code(redacted_presence('prior_vcn_authoritative_id_hashes')),
+              '- internet-gateway absence proof: ' + code(value('prior_internet_gateway_proof', 'NOT_RECORDED')) + '; authoritative/exact count: ' + code(value('prior_internet_gateway_authoritative_count', 'unknown')) + '; ID hashes: ' + code(redacted_presence('prior_internet_gateway_authoritative_id_hashes')),
+              '- route-table absence proof: ' + code(value('prior_route_table_proof', 'NOT_RECORDED')) + '; authoritative/exact count: ' + code(value('prior_route_table_authoritative_count', 'unknown')) + '; ID hashes: ' + code(redacted_presence('prior_route_table_authoritative_id_hashes')),
+              '- security-list absence proof: ' + code(value('prior_security_list_proof', 'NOT_RECORDED')) + '; authoritative/exact count: ' + code(value('prior_security_list_authoritative_count', 'unknown')) + '; ID hashes: ' + code(redacted_presence('prior_security_list_authoritative_id_hashes')),
+              '- subnet absence proof: ' + code(value('prior_subnet_proof', 'NOT_RECORDED')) + '; authoritative/exact count: ' + code(value('prior_subnet_authoritative_count', 'unknown')) + '; ID hashes: ' + code(redacted_presence('prior_subnet_authoritative_id_hashes')),
               '- failed-run backup cleanup: ' + code(value('failed_run_backup_cleanup_status', 'NOT_APPLICABLE')),
               '- failed-run backup IDs: ' + code(redacted_presence('failed_run_backup_ids')),
               '- failed-run backup direct-GET states: ' + code(redacted_presence('failed_run_backup_direct_get_states', 'not_listed')),
