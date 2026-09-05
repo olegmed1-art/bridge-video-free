@@ -23,6 +23,10 @@ on:
         description: Exact parent workflow run attempt
         required: true
         type: string
+      authorization_hmac:
+        description: HMAC correlation issued by the owner-authorized parent
+        required: true
+        type: string
 
 permissions:
   actions: read
@@ -52,6 +56,7 @@ jobs:
       EXPECTED_AD: ${{ inputs.expected_ad }}
       PARENT_RUN_ID: ${{ inputs.parent_run_id }}
       PARENT_RUN_ATTEMPT: ${{ inputs.parent_run_attempt }}
+      AUTHORIZATION_HMAC: ${{ inputs.authorization_hmac }}
     steps:
       - name: Wait for provider-independent expiry and terminate exact paid VM
         run: |
@@ -60,9 +65,16 @@ jobs:
           [[ "$EXPIRY_EPOCH" =~ ^[0-9]+$ ]]
           [[ "$PARENT_RUN_ID" =~ ^[0-9]+$ && "$PARENT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
           [[ "$STAMP" == *"-run-${PARENT_RUN_ID}-a${PARENT_RUN_ATTEMPT}" ]]
+          [[ "$GITHUB_ACTOR" == 'github-actions[bot]' ]]
           [[ -n "$EXPECTED_AD" && "$EXPECTED_AD" != *$'\n'* ]]
           [[ "$OCI_REGION" == eu-frankfurt-1 ]]
           for value in OCI_USER OCI_TENANCY OCI_FINGERPRINT OCI_KEY; do [[ -n "${!value:-}" ]]; done
+          WATCHDOG_PAYLOAD="${STAMP}|${EXPIRY_EPOCH}|${EXPECTED_AD}|${PARENT_RUN_ID}|${PARENT_RUN_ATTEMPT}" python - <<'PY'
+          import hashlib,hmac,os
+          supplied=os.environ.get('AUTHORIZATION_HMAC','')
+          expected=hmac.new(os.environ['OCI_KEY'].encode(),os.environ['WATCHDOG_PAYLOAD'].encode(),hashlib.sha256).hexdigest()
+          if not supplied or not hmac.compare_digest(supplied,expected): raise SystemExit('invalid parent correlation')
+          PY
           # A GITHUB_TOKEN dispatch is attributed to github-actions[bot]. Bind
           # this destructive child to the exact still-running parent whose
           # issue_comment actor is the repository owner instead of trusting the
@@ -162,7 +174,7 @@ jobs:
               assert config.get('ocpus')==1 and config.get('memory-in-gbs')==1
               matched.append(item.get('id'))
           assert len(matched)<=1 and all(isinstance(x,str) and x for x in matched)
-          print('\n'.join(matched))
+          sys.stdout.write('\n'.join(matched)+('\n' if matched else ''))
           PY
           then exit 101; fi
           mapfile -t ids <"$ids_file"
@@ -203,7 +215,7 @@ jobs:
               config=item.get('shape-config') or {}; assert config.get('ocpus')==1 and config.get('memory-in-gbs')==1
               matched.append(item.get('id'))
           assert len(matched)<=1 and all(isinstance(x,str) and x for x in matched)
-          print('\n'.join(matched))
+          sys.stdout.write('\n'.join(matched)+('\n' if matched else ''))
           PY
                 then exit 101; fi
                 mapfile -t late_ids <"$late_ids_file"
@@ -249,7 +261,7 @@ jobs:
               assert item.get('size-in-gbs')==97
               matched.append(item.get('id'))
           assert len(matched)<=1 and all(isinstance(x,str) and x for x in matched)
-          print('\n'.join(matched))
+          sys.stdout.write('\n'.join(matched)+('\n' if matched else ''))
           PY
           then exit 102; fi
           mapfile -t volume_ids <"$volume_ids_file"
@@ -292,7 +304,7 @@ jobs:
               assert item.get('compartment-id')==os.environ['TENANCY_ID'] and item.get('availability-domain')==os.environ['EXPECTED_AD'] and item.get('size-in-gbs')==97
               matched.append(item.get('id'))
           assert len(matched)<=1 and all(isinstance(x,str) and x for x in matched)
-          print('\n'.join(matched))
+          sys.stdout.write('\n'.join(matched)+('\n' if matched else ''))
           PY
               then exit 102; fi
               mapfile -t late_volume_ids <"$late_volume_ids_file"
