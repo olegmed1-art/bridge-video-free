@@ -220,6 +220,13 @@ def _has_forbidden_key(value: Any) -> bool:
                 r"(?:hidden|concealed)(?:hand|holding|cards?|deals?)+s?",
                 re.sub(r"[^a-z0-9]", "", str(key).casefold()),
             ) is not None
+            or re.fullmatch(
+                r"(?:(?:рук[аи]|карт(?:а|ы|очки?)|расклад)"
+                r"(?:партн[её]ра|соперника|оппонента|противника)"
+                r"|(?:партн[её]ра|соперника|оппонента|противника)"
+                r"(?:рук[аи]|карт(?:а|ы|очки?)|расклад))",
+                re.sub(r"[\W_]", "", str(key).casefold()),
+            ) is not None
             or _has_forbidden_key(child)
             for key, child in value.items()
         )
@@ -339,7 +346,16 @@ def contains_forbidden_hidden_information(value: Any) -> bool:
 
 
 def _digest(value: Any) -> str:
-    payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    try:
+        payload = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise VideoCanonEvidenceError("candidate value must be strict JSON") from exc
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 

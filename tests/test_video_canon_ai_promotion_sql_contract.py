@@ -310,6 +310,9 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
     assert "У партнёра A♠" in DATABASE_TEST
     assert '"partnerDeal":"AKQ"' in DATABASE_TEST
     assert '"north/deal":"AKQ"' in DATABASE_TEST
+    assert '"рука_партнера":"AKQ"' in DATABASE_TEST
+    assert '"карты соперника":"AS"' in DATABASE_TEST
+    assert "партн[её]ра|соперника|оппонента|противника" in MIGRATION
     assert '"lho":{"cards":"AS"}' in DATABASE_TEST
     assert '"left_hand_opponent":{"cards":"AS"}' in DATABASE_TEST
     assert '"rightHandOpponent":{"holding":"QH"}' in DATABASE_TEST

@@ -161,6 +161,8 @@ WITH RECURSIVE walk(value) AS (
            '^(actual)?(partner|opponent|north|east|south|west|leftopponent|rightopponent|lefthandopponent|righthandopponent|[lr](?:[[:space:]]*[.][[:space:]]*)?h(?:[[:space:]]*[.][[:space:]]*)?o[.]?)(s)?(hand|holding|cards?|deals?)+(s)?$'
         OR regexp_replace(lower(k.key),'[^a-z0-9]','','g') ~
            '^(hidden|concealed)(hand|holding|cards?|deals?)+(s)?$'
+        OR regexp_replace(lower(k.key),'[^[:alnum:]]','','g') ~
+           '^((рук[аи]|карт(а|ы|очки?)|расклад)(партн[её]ра|соперника|оппонента|противника)|(партн[её]ра|соперника|оппонента|противника)(рук[аи]|карт(а|ы|очки?)|расклад))$'
      LIMIT 1
 )
 SELECT EXISTS (SELECT 1 FROM forbidden);

@@ -122,6 +122,10 @@ BEGIN
        '{"partnerDeal":"AKQ"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_key(
        '{"nested":{"north/deal":"AKQ"}}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_key(
+       '{"compiled_payload":{"рука_партнера":"AKQ"}}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_key(
+       '{"compiled_payload":{"карты соперника":"AS"}}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North has the Q"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(

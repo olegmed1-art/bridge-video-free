@@ -185,6 +185,8 @@ def test_hidden_information_is_rejected_inside_json_serializable_tuple():
     {"left_opponent": {"cards": "AS"}},
     {"rightOpponent": {"holding": "QH"}},
     {"leftOpponentCards": "AS"},
+    {"рука_партнера": "AKQ"},
+    {"карты соперника": "AS"},
     {"N": {"cards": "AS"}},
     {"партнёр": {"карты": "AKQ"}},
 ])
@@ -192,6 +194,21 @@ def test_nested_actor_context_is_preserved_for_hidden_value_scanning(compiled_pa
     assertion = _assertion()
     assertion["normalized_rule"]["compiled_payload"] = compiled_payload
     with pytest.raises(VideoCanonEvidenceError, match="hidden information"):
+        build_video_canon_candidate(_learning(), assertion)
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda assertion: assertion["normalized_rule"]["compiled_payload"].update(
+        confidence=float("nan")
+    ),
+    lambda assertion: assertion["tests"]["positive"][0].update(
+        score=float("inf")
+    ),
+])
+def test_legacy_candidate_rejects_nonfinite_nested_values(mutation):
+    assertion = _assertion()
+    mutation(assertion)
+    with pytest.raises(VideoCanonEvidenceError, match="strict JSON"):
         build_video_canon_candidate(_learning(), assertion)
 
 
