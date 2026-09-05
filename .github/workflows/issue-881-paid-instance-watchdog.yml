@@ -52,9 +52,6 @@ jobs:
           # independent run enforces at most 30 minutes from its own start too.
           local_cap=$((now + 1800))
           (( EXPIRY_EPOCH < local_cap )) && effective_expiry="$EXPIRY_EPOCH" || effective_expiry="$local_cap"
-          remaining=$((effective_expiry - now))
-          (( remaining > 0 )) && sleep "$remaining"
-
           python -m pip install --disable-pip-version-check -q 'oci-cli==3.90.3'
           install -d -m 0700 "$HOME/.oci"
           printf '%s' "$OCI_KEY" | python -c 'import sys; raw=sys.stdin.read().replace("\\r","").replace("\\n","\n"); open(sys.argv[1],"w").write(raw if raw.endswith("\n") else raw+"\n")' "$HOME/.oci/key.pem"
@@ -85,6 +82,13 @@ jobs:
           print(ids[0])
           PY
           )"
+          # Prepare and authenticate the bounded termination client before the
+          # paid deadline. Installation failure therefore prevents the primary
+          # workflow's later launch gate from being armed.
+          gh api "repos/${GITHUB_REPOSITORY}/issues/881/comments" -f body="PAID_WATCHDOG_ARMED stamp=${STAMP} expiry_epoch=${EXPIRY_EPOCH} run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          now="$(date -u +%s)"
+          remaining=$((effective_expiry - now))
+          (( remaining > 0 )) && sleep "$remaining"
           timeout --signal=KILL 30s oci compute instance list --compartment-id "$tenancy_id" --all --output json >"$instances" 2>/dev/null
           mapfile -t ids < <(STAMP="$STAMP" TENANCY_ID="$tenancy_id" EXPECTED_AD="$EXPECTED_AD" python - "$instances" <<'PY'
           import json,os,sys

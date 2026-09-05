@@ -1388,6 +1388,18 @@ jobs:
               -f "inputs[expiry_epoch]=$paid_expiry_epoch" \
               -f "inputs[expected_ad]=$ad"
             state_set paid_watchdog_status DISPATCHED
+            watchdog_arm_deadline=$(( $(monotonic_now) + 180 ))
+            watchdog_armed=0
+            while (( $(monotonic_now) < watchdog_arm_deadline )); do
+              watchdog_comments="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/881/comments" --jq '.[].body')"
+              if grep -Fq "PAID_WATCHDOG_ARMED stamp=${stamp} expiry_epoch=${paid_expiry_epoch} run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/" <<<"$watchdog_comments"; then
+                watchdog_armed=1
+                break
+              fi
+              sleep 5
+            done
+            (( watchdog_armed == 1 )) || { state_set paid_watchdog_status NOT_ARMED; exit 95; }
+            state_set paid_watchdog_status ARMED
             state_set paid_launch_utc "$paid_now_utc"
             mark_phase launch_bounded_paid_acceptance_instance
             if create_json_once paid_instance_create "$stamp-boot-acceptance" oci compute instance launch --availability-domain "$ad" --compartment-id "$tenancy_id" --subnet-id "$drill_subnet_id" --shape "$paid_shape" --shape-config "$paid_shape_config" --display-name "$stamp-boot-acceptance" --source-details "{\"sourceType\":\"bootVolume\",\"bootVolumeId\":\"$restored_id\"}" --assign-public-ip true; then
