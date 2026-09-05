@@ -431,6 +431,7 @@ DECLARE
   v_rollback_shape_failed boolean:=false;
   v_scope_bundle_failed boolean:=false;
   v_authority_bundle_failed boolean:=false;
+  v_payload_hash_failed boolean:=false;
   v_profile_bundle_failed boolean:=false;
   v_missing_bundle_field_failed boolean:=false;
   v_candidate_state_failed boolean:=false;
@@ -450,10 +451,14 @@ DECLARE
   v_version_lifecycle_failed boolean:=false;
   v_test_binding_failed boolean:=false;
   v_expired_restore_failed boolean:=false;
+  v_stale_restore_replay_failed boolean:=false;
   v_bundle_id uuid:=uuidv7();
   v_provider_identity uuid:=uuidv7();
   v_good_bundle jsonb;
   v_bad_bundle jsonb;
+  v_candidate_payload jsonb;
+  v_candidate_hash text;
+  v_bad_candidate_hash text;
   v_good_bundle_hash text;
   v_rule_digest_utc text;
   v_rule_digest_other_tz text;
@@ -634,6 +639,15 @@ BEGIN
       ) VALUES (v_school,v_test_id,'pass','{}','restore-test-v1');
     END LOOP;
   END LOOP;
+  v_candidate_payload:=jsonb_build_object(
+    'authority_class','TEACHER_VIDEO',
+    'semantic_scope','restore-scope',
+    'system_profile','natural-v1',
+    'learner_level','beginner-1'
+  );
+  v_candidate_hash:=encode(public.digest(convert_to(
+    video_queue.canonical_json_text(v_candidate_payload),'UTF8'
+  ),'sha256'),'hex');
   INSERT INTO public.analysis_candidate(
     analysis_candidate_id,school_id,candidate_type,stable_key,input_fingerprint,
     quality_status,promotion_status,payload,payload_hash,method_version,source_id
@@ -655,24 +669,14 @@ BEGIN
   ),(
     v_candidate,v_school,'video_school_canon_candidate','restore-'||v_candidate::text,
     repeat('f',64),'AI_VERIFICATION_PENDING','staging',
-    jsonb_build_object(
-      'authority_class','TEACHER_VIDEO',
-      'semantic_scope','restore-scope',
-      'system_profile','natural-v1',
-      'learner_level','beginner-1'
-    ),repeat('a',64),
+    v_candidate_payload,v_candidate_hash,
     'video-canon-evidence-v2',v_source
   );
   SELECT jsonb_build_object(
     'schema','video-canon-ai-promotion-v1',
     'policy_version','school-video-auto-canon-v1',
-    'candidate_payload_hash',repeat('a',64),
-    'candidate_payload',jsonb_build_object(
-      'authority_class','TEACHER_VIDEO',
-      'semantic_scope','restore-scope',
-      'system_profile','natural-v1',
-      'learner_level','beginner-1'
-    ),
+    'candidate_payload_hash',v_candidate_hash,
+    'candidate_payload',v_candidate_payload,
     'system_profile','natural-v1','learner_level','beginner-1',
     'activation_scope','restore-scope',
     'canon_snapshot_sha256',repeat('0',64),
@@ -697,11 +701,10 @@ BEGIN
     (13,'CANON_REGRESSION'),(14,'CANON_INTEGRITY'),(15,'CANON_CONFLICT_SCAN'),
     (16,'ROLLBACK_RESTORE')
   ) AS required_checks(ordinal,check_id);
-  UPDATE public.analysis_candidate
-     SET payload=jsonb_set(payload,'{authority_class}','"WORLD_EXTERNAL"'::jsonb)
+  UPDATE public.analysis_candidate SET payload_hash=repeat('a',64)
    WHERE analysis_candidate_id=v_candidate;
   v_bad_bundle:=jsonb_set(
-    v_good_bundle,'{candidate_payload,authority_class}','"WORLD_EXTERNAL"'::jsonb
+    v_good_bundle,'{candidate_payload_hash}',to_jsonb(repeat('a',64))
   );
   BEGIN
     INSERT INTO bidding.video_canon_ai_verification_bundle(
@@ -713,10 +716,40 @@ BEGIN
       v_bad_bundle::text,v_bad_bundle
     );
   EXCEPTION WHEN check_violation THEN
+    v_payload_hash_failed:=true;
+  END;
+  UPDATE public.analysis_candidate SET payload_hash=v_candidate_hash
+   WHERE analysis_candidate_id=v_candidate;
+  IF NOT v_payload_hash_failed THEN
+    RAISE EXCEPTION 'VIDEO_CANON_CANDIDATE_PAYLOAD_HASH_NOT_RECOMPUTED';
+  END IF;
+  UPDATE public.analysis_candidate
+     SET payload=jsonb_set(payload,'{authority_class}','"WORLD_EXTERNAL"'::jsonb)
+   WHERE analysis_candidate_id=v_candidate;
+  SELECT encode(public.digest(convert_to(
+           video_queue.canonical_json_text(payload),'UTF8'
+         ),'sha256'),'hex') INTO v_bad_candidate_hash
+    FROM public.analysis_candidate WHERE analysis_candidate_id=v_candidate;
+  UPDATE public.analysis_candidate SET payload_hash=v_bad_candidate_hash
+   WHERE analysis_candidate_id=v_candidate;
+  v_bad_bundle:=jsonb_set(
+    jsonb_set(v_good_bundle,'{candidate_payload,authority_class}','"WORLD_EXTERNAL"'::jsonb),
+    '{candidate_payload_hash}',to_jsonb(v_bad_candidate_hash)
+  );
+  BEGIN
+    INSERT INTO bidding.video_canon_ai_verification_bundle(
+      school_id,analysis_candidate_id,candidate_payload_hash,
+      verification_bundle_sha256,bundle_canonical_json,bundle_payload
+    ) VALUES (
+      v_school,v_candidate,v_bad_candidate_hash,
+      encode(public.digest(convert_to(v_bad_bundle::text,'UTF8'),'sha256'),'hex'),
+      v_bad_bundle::text,v_bad_bundle
+    );
+  EXCEPTION WHEN check_violation THEN
     v_authority_bundle_failed:=true;
   END;
   UPDATE public.analysis_candidate
-     SET payload=jsonb_set(payload,'{authority_class}','"TEACHER_VIDEO"'::jsonb)
+     SET payload=v_candidate_payload,payload_hash=v_candidate_hash
    WHERE analysis_candidate_id=v_candidate;
   IF NOT v_authority_bundle_failed THEN
     RAISE EXCEPTION 'VIDEO_CANON_BUNDLE_AUTHORITY_CLASS_NOT_BLOCKED';
@@ -729,7 +762,7 @@ BEGIN
       school_id,analysis_candidate_id,candidate_payload_hash,
       verification_bundle_sha256,bundle_canonical_json,bundle_payload
     ) VALUES (
-      v_school,v_candidate,repeat('a',64),
+      v_school,v_candidate,v_candidate_hash,
       encode(public.digest(convert_to(v_bad_bundle::text,'UTF8'),'sha256'),'hex'),
       v_bad_bundle::text,v_bad_bundle
     );
@@ -749,7 +782,7 @@ BEGIN
         school_id,analysis_candidate_id,candidate_payload_hash,
         verification_bundle_sha256,bundle_canonical_json,bundle_payload
       ) VALUES (
-        v_school,v_candidate,repeat('a',64),
+        v_school,v_candidate,v_candidate_hash,
         encode(public.digest(convert_to(v_bad_bundle::text,'UTF8'),'sha256'),'hex'),
         v_bad_bundle::text,v_bad_bundle
       );
@@ -773,7 +806,7 @@ BEGIN
       school_id,analysis_candidate_id,candidate_payload_hash,
       verification_bundle_sha256,bundle_canonical_json,bundle_payload
     ) VALUES (
-      v_school,v_candidate,repeat('a',64),
+      v_school,v_candidate,v_candidate_hash,
       encode(public.digest(convert_to(v_bad_bundle::text,'UTF8'),'sha256'),'hex'),
       v_bad_bundle::text,v_bad_bundle
     );
@@ -792,7 +825,7 @@ BEGIN
       school_id,analysis_candidate_id,candidate_payload_hash,
       verification_bundle_sha256,bundle_canonical_json,bundle_payload
     ) VALUES (
-      v_school,v_candidate,repeat('a',64),
+      v_school,v_candidate,v_candidate_hash,
       encode(public.digest(convert_to(v_bad_bundle::text,'UTF8'),'sha256'),'hex'),
       v_bad_bundle::text,v_bad_bundle
     );
@@ -814,7 +847,7 @@ BEGIN
       school_id,analysis_candidate_id,candidate_payload_hash,
       verification_bundle_sha256,bundle_canonical_json,bundle_payload
     ) VALUES (
-      v_school,v_candidate,repeat('a',64),
+      v_school,v_candidate,v_candidate_hash,
       encode(public.digest(convert_to(v_bad_bundle::text,'UTF8'),'sha256'),'hex'),
       v_bad_bundle::text,v_bad_bundle
     );
@@ -830,7 +863,7 @@ BEGIN
       school_id,analysis_candidate_id,candidate_payload_hash,
       verification_bundle_sha256,bundle_canonical_json,bundle_payload
     ) VALUES (
-      v_school,v_candidate,repeat('a',64),
+      v_school,v_candidate,v_candidate_hash,
       encode(public.digest(convert_to(v_bad_bundle::text,'UTF8'),'sha256'),'hex'),
       v_bad_bundle::text,v_bad_bundle
     );
@@ -848,7 +881,7 @@ BEGIN
       school_id,analysis_candidate_id,candidate_payload_hash,
       verification_bundle_sha256,bundle_canonical_json,bundle_payload
     ) VALUES (
-      v_school,v_candidate,repeat('a',64),
+      v_school,v_candidate,v_candidate_hash,
       encode(public.digest(convert_to(v_bad_bundle::text,'UTF8'),'sha256'),'hex'),
       v_bad_bundle::text,v_bad_bundle
     );
@@ -863,7 +896,7 @@ BEGIN
     video_canon_ai_verification_bundle_id,school_id,analysis_candidate_id,
     candidate_payload_hash,verification_bundle_sha256,bundle_canonical_json,bundle_payload
   ) VALUES (
-    v_bundle_id,v_school,v_candidate,repeat('a',64),v_good_bundle_hash,
+    v_bundle_id,v_school,v_candidate,v_candidate_hash,v_good_bundle_hash,
     v_good_bundle::text,v_good_bundle
   );
   FOREACH v_missing_bundle_field IN ARRAY ARRAY[
@@ -876,7 +909,7 @@ BEGIN
         school_id,analysis_candidate_id,candidate_payload_hash,
         verification_bundle_sha256,bundle_canonical_json,bundle_payload
       ) VALUES (
-        v_school,v_candidate,repeat('a',64),
+        v_school,v_candidate,v_candidate_hash,
         encode(public.digest(convert_to(v_bad_bundle::text,'UTF8'),'sha256'),'hex'),
         v_bad_bundle::text,v_bad_bundle
       );
@@ -903,7 +936,7 @@ BEGIN
       school_id,analysis_candidate_id,candidate_payload_hash,
       verification_bundle_sha256,bundle_canonical_json,bundle_payload
     ) VALUES (
-      v_school,v_candidate,repeat('a',64),
+      v_school,v_candidate,v_candidate_hash,
       encode(public.digest(convert_to(v_bad_bundle::text,'UTF8'),'sha256'),'hex'),
       v_bad_bundle::text,v_bad_bundle
     );
@@ -1018,7 +1051,7 @@ BEGIN
     superseded_knowledge_version_content_sha256,
     superseded_knowledge_item_content_sha256,promotion_mode,human_approval_required
   ) VALUES (
-    v_promotion,v_school,v_candidate,repeat('a',64),v_good_bundle_hash,
+    v_promotion,v_school,v_candidate,v_candidate_hash,v_good_bundle_hash,
     'school-video-auto-canon-v1','restore-scope',v_runtime_scope,
     repeat('b',64),repeat('c',64),
     repeat('6',64),v_new_rule,v_new_canon,v_new_runtime,v_old_canon,NULL,ARRAY[v_old_runtime],
@@ -1134,7 +1167,7 @@ BEGIN
       candidate_payload_hash,verification_bundle_sha256,check_id,result,
       verifier_family,verifier_version,execution_principal,assurance_level,evidence_sha256
     ) VALUES (
-      v_school,v_candidate,v_bundle_id,repeat('a',64),v_good_bundle_hash,
+      v_school,v_candidate,v_bundle_id,v_candidate_hash,v_good_bundle_hash,
       'SOURCE_AUTHORITY','PASS','formal-checker','late-v1',session_user,'I1',repeat('7',64)
     );
   EXCEPTION WHEN object_not_in_prerequisite_state THEN
@@ -1348,6 +1381,22 @@ BEGIN
      ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_RECEIPT_BOUND_RESTORE_FAILED';
   END IF;
-END $$;
+  UPDATE public.canon_activation
+     SET status='superseded',valid_to=statement_timestamp()
+   WHERE canon_activation_id=v_old_canon;
+  UPDATE bidding.runtime_activation
+     SET status='superseded',valid_to=statement_timestamp()
+   WHERE runtime_activation_id=v_old_runtime;
+  BEGIN
+    PERFORM bidding.restore_ai_verified_video_canon(
+      v_promotion,v_good_bundle_hash,repeat('d',64)
+    );
+  EXCEPTION WHEN object_not_in_prerequisite_state THEN
+    v_stale_restore_replay_failed:=true;
+  END;
+  IF NOT v_stale_restore_replay_failed THEN
+    RAISE EXCEPTION 'VIDEO_CANON_STALE_RESTORE_RECEIPT_REPLAY_NOT_BLOCKED';
+  END IF;
+END $;
 
 ROLLBACK;

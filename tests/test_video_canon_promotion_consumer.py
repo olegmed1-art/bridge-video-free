@@ -87,6 +87,12 @@ def test_failure_is_bounded_and_recorded_without_raw_error(monkeypatch):
     assert "secret detail" not in str(result)
 
 
+def test_expired_effective_period_is_a_terminal_bounded_error():
+    assert consumer._safe_error_code(
+        RuntimeError("VIDEO_CANON_EFFECTIVE_PERIOD_EXPIRED")
+    ) == "EFFECTIVE_PERIOD_EXPIRED"
+
+
 def test_ambiguous_consume_commit_is_reconciled_from_retained_receipt(monkeypatch):
     job, token, receipt = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     claim = (job, uuid.uuid4(), uuid.uuid4(), "a" * 64, "b" * 64, "c" * 64, token, 3, None)

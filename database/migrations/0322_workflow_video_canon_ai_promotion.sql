@@ -806,6 +806,9 @@ BEGIN
      WHERE analysis_candidate_id=NEW.analysis_candidate_id;
     IF NOT FOUND OR v_candidate.school_id<>NEW.school_id
        OR v_candidate.payload_hash<>NEW.candidate_payload_hash
+       OR encode(public.digest(convert_to(
+            video_queue.canonical_json_text(v_candidate.payload),'UTF8'
+          ),'sha256'),'hex')<>v_candidate.payload_hash
        OR v_candidate.candidate_type<>'video_school_canon_candidate'
        OR v_candidate.payload->>'authority_class' IS DISTINCT FROM 'TEACHER_VIDEO'
        OR v_candidate.status<>'active'
@@ -1544,6 +1547,9 @@ BEGIN
        OR v_candidate.payload->>'review_eligibility' IS DISTINCT FROM 'AI_VERIFICATION_PENDING'
        OR v_candidate.payload->>'source_class' IS DISTINCT FROM 'SCHOOL_PRIMARY_EVIDENCE'
        OR v_candidate.payload->>'authority_class' IS DISTINCT FROM 'TEACHER_VIDEO'
+       OR encode(public.digest(convert_to(
+            video_queue.canonical_json_text(v_candidate.payload),'UTF8'
+          ),'sha256'),'hex')<>v_candidate.payload_hash
        OR v_candidate.payload#>>'{source_authorization,policy_version}'
             IS DISTINCT FROM v_policy_version
        OR v_candidate.payload->>'semantic_scope' IS DISTINCT FROM v_semantic_scope
@@ -2019,6 +2025,7 @@ DECLARE
     v_state jsonb;
     v_original_valid_to timestamptz;
     v_revoked_at timestamptz;
+    v_now timestamptz;
     v_restored_runtime_ids uuid[] := '{}'::uuid[];
 BEGIN
     IF p_verification_bundle_sha256 !~ '^[0-9a-f]{64}$'
@@ -2037,7 +2044,6 @@ BEGIN
            OR v_existing.restore_evidence_sha256<>p_restore_evidence_sha256 THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_IDEMPOTENCY_MISMATCH' USING ERRCODE='23514';
         END IF;
-        RETURN v_existing.video_canon_ai_restore_receipt_id;
     END IF;
 
     PERFORM pg_advisory_xact_lock(hashtextextended(v_promotion.school_id::text,0));
@@ -2053,6 +2059,56 @@ BEGIN
         IF v_existing.verification_bundle_sha256<>p_verification_bundle_sha256
            OR v_existing.restore_evidence_sha256<>p_restore_evidence_sha256 THEN
             RAISE EXCEPTION 'VIDEO_CANON_RESTORE_IDEMPOTENCY_MISMATCH' USING ERRCODE='23514';
+        END IF;
+        v_now := clock_timestamp();
+        IF NOT EXISTS (
+             SELECT 1
+               FROM public.canon_activation ca
+               JOIN bidding.runtime_activation ra
+                 ON ra.runtime_activation_id=v_existing.revoked_runtime_activation_id
+                AND ra.canon_activation_id=ca.canon_activation_id
+              WHERE ca.canon_activation_id=v_existing.revoked_canon_activation_id
+                AND ca.status='revoked' AND ra.status='revoked'
+                AND ca.valid_to IS NOT NULL AND ca.valid_to<=v_now
+                AND ra.valid_to IS NOT NULL AND ra.valid_to<=v_now
+                AND ra.school_id=v_existing.school_id
+           ) OR (
+             v_existing.restored_canon_activation_id IS NULL AND (
+               cardinality(v_existing.restored_runtime_activation_ids)<>0
+               OR EXISTS (
+                 SELECT 1 FROM public.canon_activation ca
+                  WHERE ca.scope_key=v_promotion.scope_key AND ca.status='active'
+                    AND ca.valid_from<=v_now
+                    AND (ca.valid_to IS NULL OR ca.valid_to>v_now)
+               )
+               OR EXISTS (
+                 SELECT 1 FROM bidding.runtime_activation ra
+                  WHERE ra.school_id=v_existing.school_id
+                    AND ra.scope_key=v_promotion.scope_key AND ra.status='active'
+                    AND ra.valid_from<=v_now
+                    AND (ra.valid_to IS NULL OR ra.valid_to>v_now)
+               )
+             )
+           ) OR (
+             v_existing.restored_canon_activation_id IS NOT NULL AND (
+               NOT EXISTS (
+                 SELECT 1 FROM public.canon_activation ca
+                  WHERE ca.canon_activation_id=v_existing.restored_canon_activation_id
+                    AND ca.scope_key=v_promotion.scope_key AND ca.status='active'
+                    AND ca.valid_from<=v_now
+                    AND (ca.valid_to IS NULL OR ca.valid_to>v_now)
+               )
+               OR (SELECT count(*) FROM bidding.runtime_activation ra
+                    WHERE ra.runtime_activation_id=ANY(v_existing.restored_runtime_activation_ids)
+                      AND ra.canon_activation_id=v_existing.restored_canon_activation_id
+                      AND ra.school_id=v_existing.school_id
+                      AND ra.scope_key=v_promotion.scope_key AND ra.status='active'
+                      AND ra.valid_from<=v_now
+                      AND (ra.valid_to IS NULL OR ra.valid_to>v_now))
+                    <>cardinality(v_existing.restored_runtime_activation_ids)
+             )
+           ) THEN
+            RAISE EXCEPTION 'VIDEO_CANON_RESTORE_RECEIPT_STALE' USING ERRCODE='55000';
         END IF;
         RETURN v_existing.video_canon_ai_restore_receipt_id;
     END IF;

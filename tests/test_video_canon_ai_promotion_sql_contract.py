@@ -17,10 +17,14 @@ def test_database_bundle_gate_validates_the_effective_period():
 
 
 def test_database_bundle_gate_binds_profile_and_level_to_the_candidate():
+    assert MIGRATION.count(
+        "video_queue.canonical_json_text(v_candidate.payload)"
+    ) == 2
     assert (
         "v_candidate.payload->>'authority_class' IS DISTINCT FROM 'TEACHER_VIDEO'"
     ) in MIGRATION
     assert "VIDEO_CANON_BUNDLE_AUTHORITY_CLASS_NOT_BLOCKED" in DATABASE_TEST
+    assert "VIDEO_CANON_CANDIDATE_PAYLOAD_HASH_NOT_RECOMPUTED" in DATABASE_TEST
     assert (
         "NEW.bundle_payload->>'system_profile'\n"
         "            IS DISTINCT FROM v_candidate.payload->>'system_profile'"
@@ -353,6 +357,19 @@ def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "VIDEO_CANON_IDEMPOTENT_RECEIPT_STALE" in MIGRATION
     assert "VIDEO_CANON_ACTIVE_IDEMPOTENT_REPLAY_FAILED" in DATABASE_TEST
     assert "VIDEO_CANON_STALE_IDEMPOTENT_REPLAY_NOT_BLOCKED" in DATABASE_TEST
+    assert "VIDEO_CANON_RESTORE_RECEIPT_STALE" in MIGRATION
+    assert "VIDEO_CANON_STALE_RESTORE_RECEIPT_REPLAY_NOT_BLOCKED" in DATABASE_TEST
+    restore_replay = MIGRATION.split(
+        "CREATE OR REPLACE FUNCTION bidding.restore_ai_verified_video_canon", 1
+    )[1]
+    first_receipt = restore_replay.index(
+        "SELECT * INTO v_existing FROM bidding.video_canon_ai_restore_receipt"
+    )
+    advisory_lock = restore_replay.index("pg_advisory_xact_lock", first_receipt)
+    first_return = restore_replay.index(
+        "RETURN v_existing.video_canon_ai_restore_receipt_id", first_receipt
+    )
+    assert advisory_lock < first_return
     assert "candidate_payload_hash=v_candidate.payload_hash" in MIGRATION
     assert "verification_bundle_sha256" in MIGRATION
     assert "bundle_canonical_json" in MIGRATION
