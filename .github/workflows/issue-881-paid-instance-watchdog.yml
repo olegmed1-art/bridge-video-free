@@ -135,6 +135,7 @@ jobs:
           print('\n'.join(matched))
           PY
           )
+          instance_terminal_proven=0
           if (( ${#ids[@]} == 1 )); then
             instance_cleanup_deadline=$((SECONDS + 600))
             while (( SECONDS < instance_cleanup_deadline )); do
@@ -145,22 +146,29 @@ jobs:
           print(json.load(open(sys.argv[1]))['data']['lifecycle-state'])
           PY
                 )"
-                [[ "$state" == TERMINATED ]] && break
+                if [[ "$state" == TERMINATED ]]; then instance_terminal_proven=1; break; fi
               fi
               sleep 5
             done
           fi
-          instance_confirmation_deadline=$((SECONDS + 120))
-          while ! timeout --signal=KILL 30s oci compute instance list --compartment-id "$tenancy_id" --all --output json >"$instances" 2>/dev/null; do
-            (( SECONDS < instance_confirmation_deadline )) || exit 99
-            sleep 5
-          done
-          STAMP="$STAMP" python - "$instances" <<'PY'
+          # A direct GET terminal result for the known exact ID is stronger
+          # than an eventually consistent LIST and permits storage cleanup to
+          # proceed. If no ID was observed, require a bounded clean inventory.
+          if (( instance_terminal_proven == 0 )); then
+            instance_confirmation_deadline=$((SECONDS + 120))
+            instance_inventory_clean=0
+            while (( SECONDS < instance_confirmation_deadline )); do
+              if timeout --signal=KILL 30s oci compute instance list --compartment-id "$tenancy_id" --all --output json >"$instances" 2>/dev/null && STAMP="$STAMP" python - "$instances" <<'PY'
           import json,os,sys
           data=json.load(open(sys.argv[1])).get('data')
           active=[x for x in data if isinstance(x,dict) and x.get('display-name')==os.environ['STAMP']+'-boot-acceptance' and x.get('lifecycle-state')!='TERMINATED']
           assert not active
           PY
+              then instance_inventory_clean=1; break; fi
+              sleep 5
+            done
+            (( instance_inventory_clean == 1 )) || exit 99
+          fi
 
           # The primary runner normally removes the restored boot volume. If
           # that runner disappeared, the independent watchdog owns the same
