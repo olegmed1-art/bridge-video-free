@@ -13,7 +13,7 @@ def test_authority_and_independent_assurance_are_fail_closed():
     assert MIGRATION.count("i2.execution_principal<>i3.execution_principal") == 3
     assert "i2_attestor.rolname=i2.execution_principal" in MIGRATION
     assert "i3_attestor.rolname=i3.execution_principal" in MIGRATION
-    assert MIGRATION.count("attestor.rolcanlogin") == 6
+    assert MIGRATION.count("attestor.rolcanlogin") == 8
     assert "i2_attestor.oid,'bridge_school_canon_i2_verifier','MEMBER'" in MIGRATION
     assert "i3_attestor.oid,'bridge_school_canon_i3_verifier','MEMBER'" in MIGRATION
     assert "video_canon_assurance_verifier_registry" in MIGRATION
@@ -25,6 +25,13 @@ def test_authority_and_independent_assurance_are_fail_closed():
     assert "reassign_video_canon_assurance" in MIGRATION
     assert "supersession_reason_sha256" in MIGRATION
     assert MIGRATION.count("i2.canon_snapshot_sha256=i3.canon_snapshot_sha256") == 3
+    enqueue = MIGRATION.split(
+        "CREATE OR REPLACE FUNCTION bidding.enqueue_video_canon_promotion", 1
+    )[1].split("CREATE OR REPLACE FUNCTION bidding.lease_video_canon_promotion", 1)[0]
+    assert "i2_attestor.rolcanlogin" in enqueue
+    assert "i3_attestor.rolcanlogin" in enqueue
+    assert "i2_attestor.oid,'bridge_school_canon_i2_verifier','MEMBER'" in enqueue
+    assert "i3_attestor.oid,'bridge_school_canon_i3_verifier','MEMBER'" in enqueue
     post_activation = MIGRATION.split("v_promotion:=bidding.activate_ai_verified_video_canon(", 1)[1]
     assert "i2_attestor.rolcanlogin" in post_activation
     assert "i3_attestor.rolcanlogin" in post_activation

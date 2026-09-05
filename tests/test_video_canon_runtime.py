@@ -168,7 +168,7 @@ def test_assurance_verdicts_are_bound_to_the_exact_sealed_bundle():
         _verdict(candidate, "I3", original),
     ]
     changed = deepcopy(original)
-    changed["effective_period"]["valid_to"] = "2026-09-05T00:00:00Z"
+    changed["rollback"]["restore_test_sha256"] = "9" * 64
     with pytest.raises(VideoCanonRuntimeError, match="another verification bundle"):
         verify_canon_candidate(candidate, changed, verdicts)
 

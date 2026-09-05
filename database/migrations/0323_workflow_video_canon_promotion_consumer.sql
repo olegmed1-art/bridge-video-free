@@ -438,6 +438,22 @@ BEGIN
       AND i2.deterministic AND i3.deterministic
       AND i2.verifier_family<>i3.verifier_family
       AND i2.execution_principal<>i3.execution_principal
+      AND EXISTS (
+        SELECT 1 FROM pg_catalog.pg_roles i2_attestor
+         WHERE i2_attestor.rolname=i2.execution_principal
+           AND i2_attestor.rolcanlogin
+           AND pg_has_role(
+             i2_attestor.oid,'bridge_school_canon_i2_verifier','MEMBER'
+           )
+      )
+      AND EXISTS (
+        SELECT 1 FROM pg_catalog.pg_roles i3_attestor
+         WHERE i3_attestor.rolname=i3.execution_principal
+           AND i3_attestor.rolcanlogin
+           AND pg_has_role(
+             i3_attestor.oid,'bridge_school_canon_i3_verifier','MEMBER'
+           )
+      )
       AND i2.canon_snapshot_sha256=i3.canon_snapshot_sha256
       AND i2.system_profile=i3.system_profile
       AND i2.learner_level=i3.learner_level
