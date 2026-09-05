@@ -137,6 +137,12 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North has the heart seven"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"partner has the nine"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"opponent holds the two"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"North has the seven"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North has ♠Q"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"North has the spade queen"}'::jsonb
@@ -310,6 +316,12 @@ BEGIN
        '{"notes":"South hand: 7 losers"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"North held 5 hearts"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"partner has five cards"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North held five hearts"}'::jsonb
+     ) OR bidding.contains_forbidden_hidden_value(
+       '{"notes":"North has five to seven cards"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(
        '{"notes":"North held the view that Q is conventional"}'::jsonb
      ) OR bidding.contains_forbidden_hidden_value(

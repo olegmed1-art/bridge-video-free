@@ -24,6 +24,7 @@ _CONTENT_ADDRESSED_EXPLICIT_TYPES = {
     "SCHOOL_TERMINOLOGY",
     "SYSTEM_EVOLUTION_OBSERVATION",
     "WORLD_COMPARISON_LINK",
+    "EXPLANATION_CANDIDATE",
 }
 _LOGIC_CUES = {
     "CAUSE": ("потому что", "так как", "из-за того", "причина"),

@@ -79,6 +79,46 @@ def test_corrected_explicit_observation_gets_content_addressed_identity():
         assert first["candidate_id"] == replay["candidate_id"]
 
 
+def test_corrected_explicit_explanation_gets_content_addressed_identity():
+    def extract(statement):
+        master = {
+            "job_id": "job-1",
+            "transcript": [{
+                "segment_id": "segment-7",
+                "speaker_role": "teacher",
+                "speaker_role_confidence": 0.99,
+                "text": statement,
+            }],
+            "explanation_observations": [{
+                "stable_key": "why:rule-7",
+                "rule_stable_key": "rule-7",
+                "why_chain": [statement],
+                "evidence_refs": ["segment-7"],
+            }],
+        }
+        quality = {
+            "canon_candidates": [{
+                "canon_observation_id": "rule-7",
+                "classification": "RULE_PARAPHRASE_MATCH",
+                "evidence_refs": ["segment-7"],
+            }],
+            "authority": {"canon_activation": "DENY"},
+        }
+        return next(
+            row for row in build_extended_extraction(master, quality)["candidate_records"]
+            if row["candidate_type"] == "EXPLANATION_CANDIDATE"
+        )
+
+    first = extract("original explanation")
+    corrected = extract("corrected explanation")
+    replay = extract("original explanation")
+    assert first["stable_key"].startswith("why:rule-7:sha256:")
+    assert first["stable_key"] != corrected["stable_key"]
+    assert first["candidate_id"] != corrected["candidate_id"]
+    assert first["stable_key"] == replay["stable_key"]
+    assert first["candidate_id"] == replay["candidate_id"]
+
+
 def test_source_bound_why_is_a_separate_explanation_candidate():
     master = {
         "job_id": "job-1",

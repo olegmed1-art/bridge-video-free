@@ -278,14 +278,14 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
         "(?:10|[AKQJTX]|",
         "(?:^|[^[:alnum:]_])(?:partner|opponent|north|east|south|west|[lr]",
         "(?:^|[^[:alnum:]_])(?:рука|карты)",
-        "?[2-9]($|[[:space:],./;])",
+        "?(?:[2-9]|two|three|four|five|six|seven|eight|nine)($|[[:space:],./;])",
         "hearts?|spades?|diamonds?|clubs?",
         "trumps?|losers?|points?|hcp|controls?",
         "карт[[:alnum:]_]*|черв[[:alnum:]_]*|пик[[:alnum:]_]*",
         "(?:held|holds?|has|had|owns?|possesses?|retains?|carries?)",
         "(?:is|was)[[:space:]]+(?:(?:currently|still|now|already",
         "[''’]s(?:[[:space:]]+(?:(?:currently|still|now|already",
-        "(?:[-–—]|to)[[:space:]]*[0-9]{1,2}|[+]",
+        "(?:[-–—]|to)[[:space:]]*(?:[0-9]{1,2}|two|three|four|five|six|seven|eight|nine)|[+]",
         "does[[:space:]]+not|doesn[''’]t",
         "(?:no|neither)",
         "none[[:space:]]+of",
@@ -330,6 +330,10 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
     assert "partner has the nine of spades" in DATABASE_TEST
     assert "opponent holds two of clubs" in DATABASE_TEST
     assert "North has the heart seven" in DATABASE_TEST
+    assert "partner has the nine" in DATABASE_TEST
+    assert "opponent holds the two" in DATABASE_TEST
+    assert "North has the seven" in DATABASE_TEST
+    assert "partner has five cards" in DATABASE_TEST
     assert "two|three|four|five|six|seven|eight|nine" in MIGRATION
     assert "VIDEO_CANON_SOURCE_POLICY_SUCCESSOR_HISTORY_NOT_PRESERVED" in DATABASE_TEST
     assert "VIDEO_CANON_BUNDLE_SCOPE_MISMATCH_NOT_BLOCKED" in DATABASE_TEST
