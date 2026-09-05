@@ -241,6 +241,14 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"соперник не имеет бубен"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"у партнера нет туза"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"партнер без короля"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"соперник не держит девятку"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"notes":"у противника нет 2C"}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"Партнер имеет пикового туза"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"Partner has AKQx.Txx.xxx.xxx"}'::jsonb
@@ -463,15 +471,18 @@ DECLARE
   v_item uuid:=uuidv7();
   v_orphan_item uuid:=uuidv7();
   v_conflict_item uuid:=uuidv7();
+  v_advanced_item uuid:=uuidv7();
   v_old_version uuid:=uuidv7();
   v_new_version uuid:=uuidv7();
   v_orphan_version uuid:=uuidv7();
   v_conflict_version uuid:=uuidv7();
+  v_advanced_version uuid:=uuidv7();
   v_old_candidate uuid:=uuidv7();
   v_candidate uuid:=uuidv7();
   v_old_rule uuid:=uuidv7();
   v_new_rule uuid:=uuidv7();
   v_orphan_rule uuid:=uuidv7();
+  v_advanced_rule uuid:=uuidv7();
   v_old_canon uuid:=uuidv7();
   v_new_canon uuid:=uuidv7();
   v_orphan_canon uuid:=uuidv7();
@@ -559,6 +570,8 @@ BEGIN
   VALUES (v_orphan_item,v_school,'orphan-item-'||v_orphan_item::text,'bidding_rule','orphan Canon test');
   INSERT INTO public.knowledge_item(knowledge_item_id,school_id,stable_key,knowledge_type,title)
   VALUES (v_conflict_item,v_school,'conflict-item-'||v_conflict_item::text,'bidding_rule','rule-key identity test');
+  INSERT INTO public.knowledge_item(knowledge_item_id,school_id,stable_key,knowledge_type,title)
+  VALUES (v_advanced_item,v_school,'advanced-item-'||v_advanced_item::text,'bidding_rule','profile-scoped rule-key test');
   INSERT INTO public.knowledge_version(
     knowledge_version_id,knowledge_item_id,version_no,content,authority_class,
     review_status,bidding_system_key,level_scope,status
@@ -580,6 +593,13 @@ BEGIN
   ) VALUES (
     v_conflict_version,v_conflict_item,1,'{}','school_canon','approved','natural-v1',
     '{"level_key":"beginner-1"}','approved'
+  );
+  INSERT INTO public.knowledge_version(
+    knowledge_version_id,knowledge_item_id,version_no,content,authority_class,
+    review_status,bidding_system_key,level_scope,status
+  ) VALUES (
+    v_advanced_version,v_advanced_item,1,'{}','school_canon','approved','natural-v1',
+    '{"level_key":"advanced-1"}','approved'
   );
   INSERT INTO public.source(source_id,school_id,source_type,title,status)
   VALUES (v_source,v_school,'video','restore test source','active');
@@ -671,7 +691,8 @@ BEGIN
   ) VALUES
     (v_old_rule,v_school,v_old_version,'restore-revision-'||v_item::text,'bid','{"call":"1H"}','validated'),
     (v_new_rule,v_school,v_new_version,'restore-revision-'||v_item::text,'bid','{"call":"2H"}','validated'),
-    (v_orphan_rule,v_school,v_orphan_version,'orphan-'||v_orphan_rule::text,'bid','{"call":"1S"}','validated');
+    (v_orphan_rule,v_school,v_orphan_version,'orphan-'||v_orphan_rule::text,'bid','{"call":"1S"}','validated'),
+    (v_advanced_rule,v_school,v_advanced_version,'restore-revision-'||v_item::text,'bid','{"call":"2S"}','validated');
   BEGIN
     INSERT INTO bidding.rule(
       school_id,knowledge_version_id,rule_key,rule_kind,action,lifecycle_status
@@ -684,6 +705,20 @@ BEGIN
   END;
   IF NOT v_rule_key_identity_failed THEN
     RAISE EXCEPTION 'VIDEO_CANON_CROSS_ITEM_RULE_KEY_NOT_BLOCKED';
+  END IF;
+  IF NOT EXISTS (
+      SELECT 1 FROM bidding.rule_key_identity
+       WHERE school_id=v_school
+         AND system_profile='natural-v1'
+         AND learner_level='advanced-1'
+         AND rule_key='restore-revision-'||v_item::text
+         AND knowledge_item_id=v_advanced_item
+  ) OR (
+      SELECT count(*) FROM bidding.rule_key_identity
+       WHERE school_id=v_school
+         AND rule_key='restore-revision-'||v_item::text
+  )<>2 THEN
+    RAISE EXCEPTION 'VIDEO_CANON_PROFILE_SCOPED_RULE_KEY_NOT_PRESERVED';
   END IF;
   PERFORM set_config('TimeZone','UTC',true);
   v_rule_digest_utc:=bidding.video_canon_rule_restore_sha256(v_old_rule);

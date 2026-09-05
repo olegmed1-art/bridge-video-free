@@ -2,19 +2,24 @@
 BEGIN;
 
 -- A logical bidding rule may have multiple immutable knowledge versions, but a
--- school/rule-key pair must remain bound to exactly one knowledge item.  The
--- registry makes that invariant concurrency-safe while corrected versions are
--- staged before atomically superseding their predecessor.
+-- school/profile/level/rule-key tuple must remain bound to exactly one
+-- knowledge item. The registry makes that invariant concurrency-safe while
+-- corrected versions are staged before atomically superseding their predecessor.
 CREATE TABLE bidding.rule_key_identity (
   school_id uuid NOT NULL REFERENCES public.school(school_id) ON DELETE RESTRICT,
+  system_profile text NOT NULL CHECK (btrim(system_profile)<>''),
+  learner_level text NOT NULL CHECK (btrim(learner_level)<>''),
   rule_key text NOT NULL CHECK (btrim(rule_key)<>''),
   knowledge_item_id uuid NOT NULL REFERENCES public.knowledge_item(knowledge_item_id)
     ON DELETE RESTRICT,
-  PRIMARY KEY (school_id,rule_key)
+  PRIMARY KEY (school_id,system_profile,learner_level,rule_key)
 );
 
-INSERT INTO bidding.rule_key_identity(school_id,rule_key,knowledge_item_id)
-SELECT r.school_id,r.rule_key,kv.knowledge_item_id
+INSERT INTO bidding.rule_key_identity(
+  school_id,system_profile,learner_level,rule_key,knowledge_item_id
+)
+SELECT r.school_id,kv.bidding_system_key,kv.level_scope->>'level_key',
+       r.rule_key,kv.knowledge_item_id
   FROM bidding.rule r
   JOIN public.knowledge_version kv ON kv.knowledge_version_id=r.knowledge_version_id;
 
@@ -27,21 +32,29 @@ AS $$
 DECLARE
   v_item_id uuid;
   v_bound_item_id uuid;
+  v_identity_profile text;
+  v_identity_level text;
 BEGIN
-  SELECT kv.knowledge_item_id INTO v_item_id
+  SELECT kv.knowledge_item_id,kv.bidding_system_key,kv.level_scope->>'level_key'
+    INTO v_item_id,v_identity_profile,v_identity_level
     FROM public.knowledge_version kv
     JOIN public.knowledge_item ki ON ki.knowledge_item_id=kv.knowledge_item_id
    WHERE kv.knowledge_version_id=NEW.knowledge_version_id
      AND ki.school_id=NEW.school_id;
-  IF v_item_id IS NULL THEN
+  IF v_item_id IS NULL
+     OR btrim(COALESCE(v_identity_profile,''))=''
+     OR btrim(COALESCE(v_identity_level,''))='' THEN
     RAISE EXCEPTION 'BIDDING_RULE_KEY_IDENTITY_SCOPE_MISMATCH' USING ERRCODE='23514';
   END IF;
 
   -- The no-op conflict update takes the unique-key lock and returns the
   -- authoritative binding even when two rule revisions are staged together.
-  INSERT INTO bidding.rule_key_identity(school_id,rule_key,knowledge_item_id)
-  VALUES (NEW.school_id,NEW.rule_key,v_item_id)
-  ON CONFLICT (school_id,rule_key) DO UPDATE
+  INSERT INTO bidding.rule_key_identity(
+    school_id,system_profile,learner_level,rule_key,knowledge_item_id
+  ) VALUES (
+    NEW.school_id,v_identity_profile,v_identity_level,NEW.rule_key,v_item_id
+  )
+  ON CONFLICT (school_id,system_profile,learner_level,rule_key) DO UPDATE
     SET rule_key=EXCLUDED.rule_key
   RETURNING knowledge_item_id INTO v_bound_item_id;
   IF v_bound_item_id<>v_item_id THEN
@@ -543,7 +556,7 @@ SELECT EXISTS (
     SELECT 1 FROM walk AS w
      WHERE jsonb_typeof(w.value)='string'
        AND w.value#>>'{}' ~*
-           E'(?:(?:^|[^[:alnum:]_])у[[:space:]]+(?:партн[её]ра|соперника|оппонента|противника)[[:space:]]+(?:нет|не[[:space:]]+было)|(?:^|[^[:alnum:]_])(?:партн[её]р|соперник|оппонент|противник)[[:space:]]+(?:без|не[[:space:]]+(?:имеет|держит)))[[:space:]]+(?:пик|черв(?:ей|и|а)?|буб(?:ен|ны|на)?|треф(?:ы|а)?|[SHDC])($|[^[:alnum:]_])'
+           E'(?:(?:^|[^[:alnum:]_])у[[:space:]]+(?:партн[её]ра|соперника|оппонента|противника)[[:space:]]+(?:нет|не[[:space:]]+было)|(?:^|[^[:alnum:]_])(?:партн[её]р|соперник|оппонент|противник)[[:space:]]+(?:без|не[[:space:]]+(?:имеет|держит)))[[:space:]]+(?:пик|черв(?:ей|и|а)?|буб(?:ен|ны|на)?|треф(?:ы|а)?|туз[[:alnum:]_]*|корол[[:alnum:]_]*|дам[[:alnum:]_]*|валет[[:alnum:]_]*|десятк[[:alnum:]_]*|двойк[[:alnum:]_]*|тройк[[:alnum:]_]*|четв[её]рк[[:alnum:]_]*|пят[её]рк[[:alnum:]_]*|шест[её]рк[[:alnum:]_]*|сем[её]рк[[:alnum:]_]*|восьм[её]рк[[:alnum:]_]*|девятк[[:alnum:]_]*|(?:10|[AKQJT2-9X])(?:[[:space:]]*[SHDC][[:space:]]*:?)?)($|[^[:alnum:]_])'
   );
 $$;
 

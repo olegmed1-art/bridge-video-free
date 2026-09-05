@@ -347,6 +347,9 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
     assert "у партнера нет пик" in DATABASE_TEST
     assert "партнер без пик" in DATABASE_TEST
     assert "не[[:space:]]+(?:имеет|держит)" in MIGRATION
+    assert "у партнера нет туза" in DATABASE_TEST
+    assert "партнер без короля" in DATABASE_TEST
+    assert "соперник не держит девятку" in DATABASE_TEST
     assert "у партнера девятка пик" in DATABASE_TEST
     assert "партнер держит двойку треф" in DATABASE_TEST
     assert "девятк[[:alnum:]_]*" in MIGRATION
@@ -386,9 +389,10 @@ def test_gate_requires_source_binding_all_ai_checks_independence_and_rule_tests(
 def test_promotion_is_content_bound_idempotent_and_has_fail_closed_rollback():
     assert "DROP CONSTRAINT rule_school_id_rule_key_key" in MIGRATION
     assert "CREATE TABLE bidding.rule_key_identity" in MIGRATION
-    assert "PRIMARY KEY (school_id,rule_key)" in MIGRATION
+    assert "PRIMARY KEY (school_id,system_profile,learner_level,rule_key)" in MIGRATION
     assert "CREATE OR REPLACE FUNCTION bidding.bind_rule_key_identity" in MIGRATION
-    assert "ON CONFLICT (school_id,rule_key) DO UPDATE" in MIGRATION
+    assert "ON CONFLICT (school_id,system_profile,learner_level,rule_key) DO UPDATE" in MIGRATION
+    assert "VIDEO_CANON_PROFILE_SCOPED_RULE_KEY_NOT_PRESERVED" in DATABASE_TEST
     assert "BIDDING_RULE_KEY_IDENTITY_MISMATCH" in MIGRATION
     assert "BEFORE INSERT OR UPDATE OF school_id,knowledge_version_id,rule_key" in MIGRATION
     assert "video_candidate_payload_hash" in MIGRATION
