@@ -15,8 +15,17 @@ on:
         description: Exact availability domain of the acceptance VM
         required: true
         type: string
+      parent_run_id:
+        description: Owner-authorized Issue 881 parent workflow run ID
+        required: true
+        type: string
+      parent_run_attempt:
+        description: Exact parent workflow run attempt
+        required: true
+        type: string
 
 permissions:
+  actions: read
   contents: read
   issues: write
 
@@ -26,10 +35,6 @@ concurrency:
 
 jobs:
   terminate-exact-paid-instance:
-    if: >-
-      github.repository_owner == 'olegmed1-art' &&
-      github.actor == 'olegmed1-art' &&
-      github.triggering_actor == 'olegmed1-art'
     runs-on: ubuntu-24.04
     # <=4h pre-launch preparation + 30m paid lifetime + bounded cleanup.
     # The launch receipt shortens the wait to the independently enforced
@@ -45,15 +50,35 @@ jobs:
       STAMP: ${{ inputs.stamp }}
       EXPIRY_EPOCH: ${{ inputs.expiry_epoch }}
       EXPECTED_AD: ${{ inputs.expected_ad }}
+      PARENT_RUN_ID: ${{ inputs.parent_run_id }}
+      PARENT_RUN_ATTEMPT: ${{ inputs.parent_run_attempt }}
     steps:
       - name: Wait for provider-independent expiry and terminate exact paid VM
         run: |
           set -euo pipefail
           [[ "$STAMP" =~ ^issue-881-root-recovery-[0-9a-f]{16}-run-[0-9]+-a[1-9][0-9]*$ ]]
           [[ "$EXPIRY_EPOCH" =~ ^[0-9]+$ ]]
+          [[ "$PARENT_RUN_ID" =~ ^[0-9]+$ && "$PARENT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$STAMP" == *"-run-${PARENT_RUN_ID}-a${PARENT_RUN_ATTEMPT}" ]]
           [[ -n "$EXPECTED_AD" && "$EXPECTED_AD" != *$'\n'* ]]
           [[ "$OCI_REGION" == eu-frankfurt-1 ]]
           for value in OCI_USER OCI_TENANCY OCI_FINGERPRINT OCI_KEY; do [[ -n "${!value:-}" ]]; done
+          # A GITHUB_TOKEN dispatch is attributed to github-actions[bot]. Bind
+          # this destructive child to the exact still-running parent whose
+          # issue_comment actor is the repository owner instead of trusting the
+          # child caller identity or caller-supplied stamp alone.
+          parent_json="$RUNNER_TEMP/parent-run.json"
+          timeout --signal=KILL 30s gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PARENT_RUN_ID}" >"$parent_json"
+          EXPECTED_REPOSITORY="$GITHUB_REPOSITORY" EXPECTED_ATTEMPT="$PARENT_RUN_ATTEMPT" python - "$parent_json" <<'PY'
+          import json,os,sys
+          d=json.load(open(sys.argv[1]))
+          assert d.get('repository',{}).get('full_name')==os.environ['EXPECTED_REPOSITORY']
+          assert d.get('event')=='issue_comment' and d.get('name')=='Issue 881 one-shot root filesystem expansion'
+          assert d.get('head_branch')=='main' and d.get('status')=='in_progress'
+          assert d.get('run_attempt')==int(os.environ['EXPECTED_ATTEMPT'])
+          assert d.get('actor',{}).get('login')=='olegmed1-art'
+          assert d.get('triggering_actor',{}).get('login')=='olegmed1-art'
+          PY
           now="$(date -u +%s)"
           # A forged far-future input can never extend the watchdog beyond the
           # primary workflow's bounded four-hour mutation window.
@@ -123,7 +148,8 @@ jobs:
             (( SECONDS < instance_discovery_deadline )) || exit 97
             sleep 5
           done
-          mapfile -t ids < <(STAMP="$STAMP" TENANCY_ID="$tenancy_id" EXPECTED_AD="$EXPECTED_AD" python - "$instances" <<'PY'
+          ids_file="$RUNNER_TEMP/instance-ids"
+          if ! STAMP="$STAMP" TENANCY_ID="$tenancy_id" EXPECTED_AD="$EXPECTED_AD" python - "$instances" >"$ids_file" <<'PY'
           import json,os,sys
           data=json.load(open(sys.argv[1])).get('data')
           assert isinstance(data,list) and all(isinstance(x,dict) for x in data)
@@ -138,7 +164,8 @@ jobs:
           assert len(matched)<=1 and all(isinstance(x,str) and x for x in matched)
           print('\n'.join(matched))
           PY
-          )
+          then exit 101; fi
+          mapfile -t ids <"$ids_file"
           instance_terminal_proven=0
           if (( ${#ids[@]} == 1 )); then
             instance_cleanup_deadline=$((SECONDS + 600))
@@ -164,7 +191,8 @@ jobs:
             late_instance_id=""
             while (( SECONDS < instance_confirmation_deadline )); do
               if timeout --signal=KILL 30s oci compute instance list --compartment-id "$tenancy_id" --all --output json >"$instances" 2>/dev/null; then
-                mapfile -t late_ids < <(STAMP="$STAMP" TENANCY_ID="$tenancy_id" EXPECTED_AD="$EXPECTED_AD" python - "$instances" <<'PY'
+                late_ids_file="$RUNNER_TEMP/late-instance-ids"
+                if ! STAMP="$STAMP" TENANCY_ID="$tenancy_id" EXPECTED_AD="$EXPECTED_AD" python - "$instances" >"$late_ids_file" <<'PY'
           import json,os,sys
           data=json.load(open(sys.argv[1])).get('data')
           matched=[]
@@ -177,7 +205,8 @@ jobs:
           assert len(matched)<=1 and all(isinstance(x,str) and x for x in matched)
           print('\n'.join(matched))
           PY
-                )
+                then exit 101; fi
+                mapfile -t late_ids <"$late_ids_file"
                 if (( ${#late_ids[@]} == 1 )); then late_instance_id="${late_ids[0]}"; break; fi
                 instance_inventory_clean=1
                 break
@@ -208,7 +237,8 @@ jobs:
             (( SECONDS < volume_discovery_deadline )) || exit 100
             sleep 5
           done
-          mapfile -t volume_ids < <(STAMP="$STAMP" TENANCY_ID="$tenancy_id" EXPECTED_AD="$EXPECTED_AD" python - "$volumes" <<'PY'
+          volume_ids_file="$RUNNER_TEMP/volume-ids"
+          if ! STAMP="$STAMP" TENANCY_ID="$tenancy_id" EXPECTED_AD="$EXPECTED_AD" python - "$volumes" >"$volume_ids_file" <<'PY'
           import json,os,sys
           data=json.load(open(sys.argv[1])).get('data')
           assert isinstance(data,list) and all(isinstance(x,dict) for x in data)
@@ -221,7 +251,8 @@ jobs:
           assert len(matched)<=1 and all(isinstance(x,str) and x for x in matched)
           print('\n'.join(matched))
           PY
-          )
+          then exit 102; fi
+          mapfile -t volume_ids <"$volume_ids_file"
           if (( ${#volume_ids[@]} == 1 )); then
             volume_terminal_proven=0
             volume_get_error="$RUNNER_TEMP/volume-get.err"
@@ -251,7 +282,8 @@ jobs:
             for _ in 1 2 3; do
               sleep 5
               timeout --signal=KILL 30s oci bv boot-volume list --compartment-id "$tenancy_id" --availability-domain "$EXPECTED_AD" --all --output json >"$volumes" 2>/dev/null
-              mapfile -t late_volume_ids < <(STAMP="$STAMP" TENANCY_ID="$tenancy_id" EXPECTED_AD="$EXPECTED_AD" python - "$volumes" <<'PY'
+              late_volume_ids_file="$RUNNER_TEMP/late-volume-ids"
+              if ! STAMP="$STAMP" TENANCY_ID="$tenancy_id" EXPECTED_AD="$EXPECTED_AD" python - "$volumes" >"$late_volume_ids_file" <<'PY'
           import json,os,sys
           data=json.load(open(sys.argv[1])).get('data')
           matched=[]
@@ -262,7 +294,8 @@ jobs:
           assert len(matched)<=1 and all(isinstance(x,str) and x for x in matched)
           print('\n'.join(matched))
           PY
-              )
+              then exit 102; fi
+              mapfile -t late_volume_ids <"$late_volume_ids_file"
               if (( ${#late_volume_ids[@]} == 1 )); then late_volume_id="${late_volume_ids[0]}"; break; fi
             done
             if [[ -n "$late_volume_id" ]]; then
