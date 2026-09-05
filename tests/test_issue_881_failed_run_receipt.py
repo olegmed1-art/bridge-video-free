@@ -1,4 +1,9 @@
-from ops.issue_881_failed_run_receipt import RESOURCE_FIELDS, parse_receipt
+from ops.issue_881_failed_run_receipt import (
+    CLEANUP_TYPED_PROOF_REQUIREMENTS,
+    RESOURCE_FIELDS,
+    cleanup_typed_proof_verdicts,
+    parse_receipt,
+)
 
 
 RUN_ID = "33919714953"
@@ -80,3 +85,49 @@ def test_accepts_authoritative_instance_id_when_launch_was_captured():
         PREFIX,
     )
     assert parsed["resources"]["instance"] == ["ocid1.instance.oc1.region.instance"]
+
+
+def complete_cleanup_state():
+    state = {"prior_cleanup_status": "RECONCILED_PROVEN_ABSENT"}
+    for requirements in CLEANUP_TYPED_PROOF_REQUIREMENTS.values():
+        state.update(requirements)
+    return state
+
+
+def _assert_cleanup_rejected(state, message):
+    try:
+        cleanup_typed_proof_verdicts(state)
+    except ValueError as exc:
+        assert message in str(exc)
+        return
+    raise AssertionError("incomplete cleanup proof was accepted")
+
+
+def test_cleanup_typed_verdicts_require_every_resource_proof():
+    state = complete_cleanup_state()
+    assert cleanup_typed_proof_verdicts(state) == {
+        resource: "RECONCILED_PROVEN_ABSENT"
+        for resource in CLEANUP_TYPED_PROOF_REQUIREMENTS
+    }
+    for resource, requirements in CLEANUP_TYPED_PROOF_REQUIREMENTS.items():
+        for key in requirements:
+            incomplete = state.copy()
+            incomplete.pop(key)
+            _assert_cleanup_rejected(incomplete, resource)
+
+
+def test_cleanup_aggregate_alone_is_insufficient():
+    _assert_cleanup_rejected(
+        {"prior_cleanup_status": "RECONCILED_PROVEN_ABSENT"},
+        "missing typed cleanup proof",
+    )
+
+
+def test_cleanup_typed_verdicts_reject_wrong_aggregate_or_evidence():
+    state = complete_cleanup_state()
+    state["prior_cleanup_status"] = "EXACT_NAME_INVENTORY_EMPTY"
+    _assert_cleanup_rejected(state, "aggregate cleanup proof")
+
+    state = complete_cleanup_state()
+    state["prior_vcn_proof"] = "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE"
+    _assert_cleanup_rejected(state, "vcn")

@@ -32,6 +32,44 @@ OCID_TYPES = {
 
 OCID_RE = re.compile(r"^ocid1\.([a-z][a-z0-9]*)\.oc1\.[a-z0-9.-]*\.[a-z0-9]+$")
 
+CLEANUP_TYPED_PROOF_REQUIREMENTS = {
+    "uncertain_instance": {
+        "prior_uncertain_instance_proof": "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE",
+        "prior_instance_proof": "DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_NO_ACTIVE",
+    },
+    "restored_volume": {
+        "prior_boot_volume_proof": "DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_NO_ACTIVE",
+    },
+    "vcn": {
+        "prior_vcn_proof": "DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_NO_ACTIVE",
+    },
+    "internet_gateway": {
+        "prior_internet_gateway_proof": "DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_NO_ACTIVE",
+    },
+    "route_table": {
+        "prior_route_table_proof": "DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_NO_ACTIVE",
+    },
+    "security_list": {
+        "prior_security_list_proof": "DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_NO_ACTIVE",
+    },
+    "subnet": {
+        "prior_subnet_proof": "DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_NO_ACTIVE",
+    },
+}
+
+
+def cleanup_typed_proof_verdicts(state: dict[str, object]) -> dict[str, str]:
+    """Return literal per-type verdicts only for a complete cleanup proof."""
+    if state.get("prior_cleanup_status") != "RECONCILED_PROVEN_ABSENT":
+        raise ValueError("aggregate cleanup proof is not reconciled")
+    verdicts: dict[str, str] = {}
+    for resource, requirements in CLEANUP_TYPED_PROOF_REQUIREMENTS.items():
+        for key, expected in requirements.items():
+            if state.get(key) != expected:
+                raise ValueError(f"missing typed cleanup proof for {resource}: {key}")
+        verdicts[resource] = "RECONCILED_PROVEN_ABSENT"
+    return verdicts
+
 
 def _field(body: str, label: str) -> str:
     matches = re.findall(rf"^- {re.escape(label)}: `([^`]+)`\s*$", body, re.MULTILINE)

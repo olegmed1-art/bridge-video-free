@@ -1617,6 +1617,12 @@ def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> No
     assert "prove_repeated_exact_stamp_inventory_no_active" in WORKFLOW
     assert "DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_NO_ACTIVE" in WORKFLOW
     assert "RECONCILED_PROVEN_ABSENT" in WORKFLOW
+    assert "cleanup_typed_proof_verdicts(state) if cleanup_only else {}" in WORKFLOW
+    for resource in (
+        "uncertain_instance", "restored_volume", "vcn", "internet_gateway",
+        "route_table", "security_list", "subnet",
+    ):
+        assert f"typed_verdict('{resource}')" in WORKFLOW
     assert "Each known ID must" in WORKFLOW
     cleanup_only_branch = WORKFLOW[
         WORKFLOW.index("if (( cleanup_only == 1 )); then") : WORKFLOW.index("trap cleanup EXIT")
