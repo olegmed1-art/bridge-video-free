@@ -457,7 +457,7 @@ jobs:
             return 3
           }
           wait_absent() {
-            local resource="$1" id="$2" max_seconds="${3:-300}" budget_deadline="${4:-$cleanup_deadline}" output state rc deadline remaining request_timeout sleep_seconds
+            local resource="$1" id="$2" max_seconds="${3:-300}" budget_deadline="${4:-$cleanup_deadline}" expected_name="${5:-}" output state rc deadline remaining request_timeout sleep_seconds
             local -a command
             max_seconds="$(bounded_wait_seconds "$max_seconds" "$budget_deadline")" || return 42
             deadline=$((SECONDS + max_seconds))
@@ -479,7 +479,7 @@ jobs:
               if OCI_JSON_ABSOLUTE_DEADLINE="$budget_deadline" OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
                   oci_json_request "${command[@]}"; then
                 output="$OCI_JSON_OUTPUT"
-                state="$(RESOURCE_KIND="$resource" EXPECTED_ID="$id" python -c 'import json,os,sys; d=json.load(sys.stdin); data=d.get("data"); assert isinstance(data,dict) and data.get("id")==os.environ["EXPECTED_ID"]; s=data.get("lifecycle-state"); allowed={"instance":{"PROVISIONING","STARTING","RUNNING","STOPPING","STOPPED","TERMINATING","TERMINATED"},"backup":{"REQUEST_RECEIVED","CREATING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"boot-volume":{"PROVISIONING","RESTORING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"vcn":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"internet-gateway":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"route-table":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"security-list":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"subnet":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"}}[os.environ["RESOURCE_KIND"]]; print(s if isinstance(s,str) and s in allowed else "INVALID" if not isinstance(s,str) else "UNKNOWN")' <<<"$output")" || return 1
+                state="$(RESOURCE_KIND="$resource" EXPECTED_ID="$id" EXPECTED_NAME="$expected_name" TENANCY_ID="${tenancy_id:-}" AD="${ad:-}" python -c 'import json,os,sys; d=json.load(sys.stdin); data=d.get("data"); kind=os.environ["RESOURCE_KIND"]; assert isinstance(data,dict) and data.get("id")==os.environ["EXPECTED_ID"]; expected_name=os.environ["EXPECTED_NAME"]; assert not expected_name or (data.get("display-name")==expected_name and data.get("compartment-id")==os.environ["TENANCY_ID"]); assert not expected_name or kind not in {"instance","boot-volume"} or data.get("availability-domain")==os.environ["AD"]; s=data.get("lifecycle-state"); allowed={"instance":{"PROVISIONING","STARTING","RUNNING","STOPPING","STOPPED","TERMINATING","TERMINATED"},"backup":{"REQUEST_RECEIVED","CREATING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"boot-volume":{"PROVISIONING","RESTORING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"vcn":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"internet-gateway":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"route-table":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"security-list":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"subnet":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"}}[kind]; print(s if isinstance(s,str) and s in allowed else "INVALID" if not isinstance(s,str) else "UNKNOWN")' <<<"$output")" || return 1
                 if [[ "$state" == TERMINATED ]]; then
                   echo "UV_ROOT_RESOURCE_ABSENCE_PASS resource=$resource id=$id terminal_state=TERMINATED"
                   return 0
@@ -523,6 +523,50 @@ jobs:
               remaining=$((deadline - SECONDS))
               (( remaining > 0 )) || return 1
               wait_absent "$resource" "$id" "$remaining" "$cleanup_deadline" || return 1
+            done
+          }
+          wait_all_absent_bound() {
+            local resource="$1" expected_name="$2" max_seconds="$3" id deadline remaining
+            shift 3
+            local -a ids=("$@")
+            (( ${#ids[@]} > 0 )) || return 0
+            (( ${#ids[@]} <= 20 )) || return 94
+            max_seconds="$(bounded_wait_seconds "$max_seconds" "$cleanup_deadline")" || return 42
+            deadline=$((SECONDS + max_seconds))
+            for id in "${ids[@]}"; do
+              remaining=$((deadline - SECONDS))
+              (( remaining > 0 )) || return 1
+              wait_absent "$resource" "$id" "$remaining" "$cleanup_deadline" "$expected_name" || return 1
+            done
+          }
+          validate_bound_ids_before_delete() {
+            local resource="$1" expected_name="$2" id output rc
+            shift 2
+            local -a command ids=("$@")
+            for id in "${ids[@]}"; do
+              case "$resource" in
+                instance) command=(oci compute instance get --instance-id "$id") ;;
+                boot-volume) command=(oci bv boot-volume get --boot-volume-id "$id") ;;
+                subnet) command=(oci network subnet get --subnet-id "$id") ;;
+                security-list) command=(oci network security-list get --security-list-id "$id") ;;
+                route-table) command=(oci network route-table get --rt-id "$id") ;;
+                internet-gateway) command=(oci network internet-gateway get --ig-id "$id") ;;
+                vcn) command=(oci network vcn get --vcn-id "$id") ;;
+                *) return 2 ;;
+              esac
+              if OCI_JSON_ABSOLUTE_DEADLINE="$cleanup_deadline" OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS=20 \
+                  oci_json_request "${command[@]}"; then
+                output="$OCI_JSON_OUTPUT"
+                RESOURCE_KIND="$resource" EXPECTED_ID="$id" EXPECTED_NAME="$expected_name" TENANCY_ID="$tenancy_id" AD="$ad" python -c 'import json,os,sys; data=json.load(sys.stdin).get("data"); kind=os.environ["RESOURCE_KIND"]; assert isinstance(data,dict) and data.get("id")==os.environ["EXPECTED_ID"] and data.get("display-name")==os.environ["EXPECTED_NAME"] and data.get("compartment-id")==os.environ["TENANCY_ID"]; assert kind not in {"instance","boot-volume"} or data.get("availability-domain")==os.environ["AD"]' <<<"$output" || return 97
+              else
+                rc=$?
+                output="$OCI_JSON_ERROR"
+                if grep -Fq 'NotAuthorizedOrNotFound' <<<"$output" \
+                    && grep -Eq "['\"]status['\"][[:space:]]*:[[:space:]]*404" <<<"$output"; then
+                  continue
+                fi
+                return "$rc"
+              fi
             done
           }
           wait_instance_terminated() {
@@ -1023,40 +1067,47 @@ jobs:
             echo "UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_START resource_count=$prior_count ids=$prior_ids"
             if [[ -n "$prior_instances" ]]; then
               readarray -t ids <<<"$prior_instances"
+              validate_bound_ids_before_delete instance "$target_prior_stamp-boot-acceptance" "${ids[@]}"
               for id in "${ids[@]}"; do
                 delete_resource_once instance "$id" || true
               done
-              wait_all_absent instance 600 "${ids[@]}"
+              wait_all_absent_bound instance "$target_prior_stamp-boot-acceptance" 600 "${ids[@]}"
             fi
             if [[ -n "$prior_restored" ]]; then
               readarray -t ids <<<"$prior_restored"
+              validate_bound_ids_before_delete boot-volume "$target_prior_stamp-restore" "${ids[@]}"
               for id in "${ids[@]}"; do delete_resource_once boot-volume "$id" || true; done
-              wait_all_absent boot-volume 120 "${ids[@]}"
+              wait_all_absent_bound boot-volume "$target_prior_stamp-restore" 120 "${ids[@]}"
             fi
             if [[ -n "$prior_subnets" ]]; then
               readarray -t ids <<<"$prior_subnets"
+              validate_bound_ids_before_delete subnet "$target_prior_stamp-subnet" "${ids[@]}"
               for id in "${ids[@]}"; do delete_resource_once subnet "$id" || true; done
-              wait_all_absent subnet 120 "${ids[@]}"
+              wait_all_absent_bound subnet "$target_prior_stamp-subnet" 120 "${ids[@]}"
             fi
             if [[ -n "$prior_security" ]]; then
               readarray -t ids <<<"$prior_security"
+              validate_bound_ids_before_delete security-list "$target_prior_stamp-ssh-only" "${ids[@]}"
               for id in "${ids[@]}"; do delete_resource_once security-list "$id" || true; done
-              wait_all_absent security-list 120 "${ids[@]}"
+              wait_all_absent_bound security-list "$target_prior_stamp-ssh-only" 120 "${ids[@]}"
             fi
             if [[ -n "$prior_routes" ]]; then
               readarray -t ids <<<"$prior_routes"
+              validate_bound_ids_before_delete route-table "$target_prior_stamp-route" "${ids[@]}"
               for id in "${ids[@]}"; do delete_resource_once route-table "$id" || true; done
-              wait_all_absent route-table 120 "${ids[@]}"
+              wait_all_absent_bound route-table "$target_prior_stamp-route" 120 "${ids[@]}"
             fi
             if [[ -n "$prior_igs" ]]; then
               readarray -t ids <<<"$prior_igs"
+              validate_bound_ids_before_delete internet-gateway "$target_prior_stamp-ig" "${ids[@]}"
               for id in "${ids[@]}"; do delete_resource_once internet-gateway "$id" || true; done
-              wait_all_absent internet-gateway 120 "${ids[@]}"
+              wait_all_absent_bound internet-gateway "$target_prior_stamp-ig" 120 "${ids[@]}"
             fi
             if [[ -n "$prior_vcns" ]]; then
               readarray -t ids <<<"$prior_vcns"
+              validate_bound_ids_before_delete vcn "$target_prior_stamp-vcn" "${ids[@]}"
               for id in "${ids[@]}"; do delete_resource_once vcn "$id" || true; done
-              wait_all_absent vcn 120 "${ids[@]}"
+              wait_all_absent_bound vcn "$target_prior_stamp-vcn" 120 "${ids[@]}"
             fi
             prove_repeated_exact_stamp_inventory_empty
             record_authoritative_type_proof instance "$prior_instances"
