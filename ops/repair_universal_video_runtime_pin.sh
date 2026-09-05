@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+# Retained durable-request executor; scheduled recovery may invoke this exact
+# bounded script after a host interrupted an earlier attempt.
 umask 077
 
 # Bounded repair for UV-DIANA11-DURABLE-003.
@@ -7,12 +9,12 @@ umask 077
 # and restart only universal-video.service. It never enqueues or processes a job,
 # writes Drive, touches Assistant Lab/DDS3, or changes routing outside the sidecar.
 
-failure_stage='PRECHECK'
+failure_stage='LOCK'
 failure_reported=0
 
 report_failure(){
   case "$failure_stage" in
-    PRECHECK|READY_BEFORE|SPOOL_BEFORE|ENV_SHAPE|BACKUP|STOP_SERVICE|WRITE_ENV|VERIFY_FILE|SPOOL_AFTER_WRITE|START_SERVICE|VERIFY_LIVE|SPOOL_AFTER_START|READY_AFTER|ASSISTANT_AFTER|FINALIZE) ;;
+    LOCK|PRECHECK|READY_BEFORE|SPOOL_BEFORE|ENV_SHAPE|BACKUP|STOP_SERVICE|WRITE_ENV|VERIFY_FILE|SPOOL_AFTER_WRITE|START_SERVICE|VERIFY_LIVE|SPOOL_AFTER_START|READY_AFTER|ASSISTANT_AFTER|FINALIZE) ;;
     *) failure_stage='PRECHECK' ;;
   esac
   if (( failure_reported == 0 )); then
@@ -41,6 +43,14 @@ on_error(){
   exit "$rc"
 }
 trap on_error ERR
+
+# Never let a runner disappear inside an unbounded flock. A timeout is a
+# fail-closed, retryable outcome: the immutable request remains in git and the
+# scheduled consumer will execute it again after the current mutator releases
+# the shared host fence.
+exec 9>/run/lock/oracle-workload-mutation.lock
+flock -w 300 -x 9 || fail
+failure_stage='PRECHECK'
 
 [[ "$(id -u)" -eq 0 ]] || fail
 [[ -n "${EXPECTED_RUNTIME_COMMIT:-}" ]] || fail
@@ -124,6 +134,34 @@ print('UV003_RUNTIME_PIN_CHECKPOINT=ENV_SHAPE_STRUCTURE_PASS', flush=True)
 PY
 checkpoint ENV_SHAPE_PASS
 
+# Scheduled recovery is an idempotent desired-state consumer.  Replaying an
+# already completed request must not stop or restart the service again.
+current_pid="$(systemctl show "$SERVICE" -p MainPID --value)"
+if [[ "$current_pid" =~ ^[1-9][0-9]*$ ]] && \
+  ENV_FILE="$ENV_FILE" PID="$current_pid" EXPECTED_RUNTIME_COMMIT="$EXPECTED_RUNTIME_COMMIT" python3 - <<'PY'
+import os
+from pathlib import Path
+expected=os.environ['EXPECTED_RUNTIME_COMMIT']
+file_values=[]
+for line in Path(os.environ['ENV_FILE']).read_text(encoding='utf-8').splitlines():
+    if line.startswith('UNIVERSAL_VIDEO_SOURCE_COMMIT='):
+        file_values.append(line.split('=',1)[1].strip())
+live_values=[]
+for item in (Path('/proc')/os.environ['PID']/'environ').read_bytes().split(b'\0'):
+    if item.startswith(b'UNIVERSAL_VIDEO_SOURCE_COMMIT='):
+        live_values.append(item.split(b'=',1)[1].decode('ascii'))
+assert file_values == [expected]
+assert live_values == [expected]
+PY
+then
+  printf 'UV003_RUNTIME_PIN_SPOOL=EMPTY\n'
+  printf 'UV003_RUNTIME_PIN_FILE=PINNED\n'
+  printf 'UV003_RUNTIME_PIN_LIVE=PINNED\n'
+  printf 'UV003_DDS3_NONREGRESSION=PASS\n'
+  printf 'UV003_RUNTIME_PIN_REPAIR=PASS\n'
+  exit 0
+fi
+
 failure_stage='BACKUP'
 checkpoint BACKUP_ENTER
 backup="$(mktemp -p "$BASE" .universal-video.env.uv003-backup.XXXXXX)" || fail
@@ -134,6 +172,7 @@ service_stopped=0
 service_started_new=0
 rollback(){
   local rc=$?
+  local rollback_failed=0
   trap - ERR
   set +e
   if (( rc != 0 )); then
@@ -146,14 +185,24 @@ rollback(){
       fi
     fi
     if (( changed == 1 )); then
-      cp --preserve=mode,ownership,timestamps "$backup" "$ENV_FILE"
+      if ! cp --preserve=mode,ownership,timestamps "$backup" "$ENV_FILE" \
+        || ! cmp -s "$backup" "$ENV_FILE"; then
+        rollback_failed=1
+      else
+        changed=0
+      fi
     fi
-    if (( service_stopped == 1 )) && spool_empty; then
+    if (( rollback_failed == 0 && service_stopped == 1 )) && spool_empty; then
       systemctl start "$SERVICE" >/dev/null 2>&1 || true
     fi
     report_failure
   fi
-  rm -f "$backup"
+  if (( rollback_failed == 0 )); then
+    rm -f "$backup"
+  else
+    printf 'UV003_RUNTIME_PIN_ROLLBACK=FAILED_BACKUP_RETAINED\n' >&2
+    rc=70
+  fi
   return "$rc"
 }
 trap rollback EXIT

@@ -7,13 +7,13 @@ umask 077
 # only through exact sudoers commands. No arbitrary shell, path, commit, file ID,
 # folder ID, service name, or command argument is accepted.
 
-readonly UV_RUNTIME_COMMIT='7e46f0327d6094400e0d35ec6af20408cc97683e'
+readonly UV_RUNTIME_COMMIT='bb2b3808cb60f5ce7cb41309af386d4a710d4ac4'
 readonly REPOSITORY='olegmed1-art/bridge-video-free'
 readonly RAW_BASE="https://raw.githubusercontent.com/${REPOSITORY}/${UV_RUNTIME_COMMIT}"
 readonly ACTIVATION_PATH='ops/oracle_universal_video_run_command.sh'
-readonly ACTIVATION_BLOB='bbf4dc5779726fca415f641b90d017a802daaabf'
+readonly ACTIVATION_BLOB='0343e1a3c8e5a87c4c1931ad738e1af855266802'
 readonly PRODUCTIONIZE_PATH='ops/oracle_universal_video_productionize.sh'
-readonly PRODUCTIONIZE_BLOB='9a76e06ed1cb7ecc92102e5c16cf215c18f9159d'
+readonly PRODUCTIONIZE_BLOB='69b7243da69076e94891148467e04d10bbc7b058'
 readonly SOURCE_DIR='/opt/bridge-school/universal-video-src'
 readonly BASE_DIR='/opt/bridge-school/universal-video'
 readonly DRIVE_PROBE_FILE_ID='1RKrDWP6IOfVyuDWRMIsiUT62vpmVW9VS'
@@ -125,6 +125,12 @@ download_verified(){
 }
 
 productionize(){
+  CURRENT_STAGE='productionize_host_fence'
+  touch /run/lock/oracle-workload-mutation.lock
+  chown root:universal-video /run/lock/oracle-workload-mutation.lock
+  chmod 0660 /run/lock/oracle-workload-mutation.lock
+  exec 9>/run/lock/oracle-workload-mutation.lock
+  flock -x 9
   CURRENT_STAGE='productionize_protected_services'
   verify_protected_services
   CURRENT_STAGE='productionize_dds3_before'
@@ -159,11 +165,13 @@ productionize(){
   /usr/bin/env -i \
     PATH="$SAFE_PATH" HOME=/root LANG=C.UTF-8 \
     UNIVERSAL_VIDEO_GIT_REF="$UV_RUNTIME_COMMIT" \
+    UNIVERSAL_VIDEO_SKIP_ADMIN_INSTALL=1 \
     UNIVERSAL_VIDEO_RUN_SMOKE=0 \
     UNIVERSAL_VIDEO_ACTIVATE=1 \
     UNIVERSAL_VIDEO_PREWARM_MODEL=0 \
     nice -n 10 bash "$activation" | tee "$log_file"
   grep -Fx 'UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS' "$log_file" >/dev/null || fail 'activation completion marker missing'
+  grep -Fx 'universal_video_admin=preserved_revision_bound' "$log_file" >/dev/null || fail 'bounded admin preservation marker missing'
   grep -Fx "source_commit=$UV_RUNTIME_COMMIT" "$log_file" >/dev/null || fail 'activation source pin mismatch'
 
   : > "$log_file"
@@ -172,6 +180,7 @@ productionize(){
     PATH="$SAFE_PATH" HOME=/root LANG=C.UTF-8 \
     UNIVERSAL_VIDEO_SOURCE_DIR="$SOURCE_DIR" \
     UNIVERSAL_VIDEO_DIR="$BASE_DIR" \
+    ORACLE_WORKLOAD_FENCE_HELD=1 \
     UNIVERSAL_VIDEO_DRIVE_PROBE_FILE_ID="$DRIVE_PROBE_FILE_ID" \
     UNIVERSAL_VIDEO_DRIVE_RESULTS_FOLDER_ID="$DRIVE_RESULTS_FOLDER_ID" \
     UNIVERSAL_VIDEO_MAX_SOURCE_BYTES=17179869184 \

@@ -21,7 +21,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('oracle-universal-video-pr-{0}', github.run_id) || 'oracle-instance-workload-mutation' }}
+  group: ${{ github.event_name == 'pull_request' && format('oracle-universal-video-pr-{0}', github.event.pull_request.number) || github.event_name == 'push' && format('oracle-universal-video-request-{0}', github.sha) || format('oracle-universal-video-manual-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
@@ -127,7 +127,10 @@ jobs:
     if: ${{ github.event_name != 'pull_request' && github.event_name != 'schedule' && needs.validate.outputs.should_execute == 'true' }}
     needs: validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 330
+    # One GitHub job is capped at 360 minutes. A shared 350-minute deadline
+    # bounds setup, lifecycle recovery, submission and observation while
+    # reserving ten minutes for a fail-closed receipt.
+    timeout-minutes: 360
     env:
       INSTANCE_ID: ocid1.instance.oc1.eu-frankfurt-1.antheljtruoejaica7hj5oubnh2cctnjr7ti7llcgo6ho6wdvgvui6td7saq
       OCI_USER: ${{ secrets.OCI_CLI_USER }}
@@ -151,6 +154,11 @@ jobs:
       SOURCE_FILE_ID: ${{ needs.validate.outputs.source_file_id }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Initialize one end-to-end execution budget
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "EXECUTION_DEADLINE_EPOCH=$(( $(date +%s) + 21000 ))" >> "$GITHUB_ENV"
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
@@ -159,6 +167,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          budget_max() {
+            local cap="$1" now remaining
+            now="$(date +%s)"
+            remaining=$(( EXECUTION_DEADLINE_EPOCH - now - 300 ))
+            (( remaining > 0 )) || return 1
+            (( remaining < cap )) && printf '%s\n' "$remaining" || printf '%s\n' "$cap"
+          }
           python -m pip install --disable-pip-version-check -q oci-cli
           # Accept either the intended one-line OCID or the matching line from
           # an accidentally pasted Oracle configuration preview.  Never echo it.
@@ -184,8 +199,15 @@ jobs:
           state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
           case "$state" in
             RUNNING) ;;
+            STARTING)
+              oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null
+              ;;
+            STOPPING)
+              oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state STOPPED --max-wait-seconds "$(budget_max 600)" >/dev/null
+              oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null
+              ;;
             STOPPED)
-              oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds 600 >/dev/null
+              oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null
               ;;
             *) echo "Oracle instance is not runnable: $state" >&2; exit 1 ;;
           esac
@@ -197,7 +219,41 @@ jobs:
         run: |
           set -euo pipefail
           known="$RUNNER_TEMP/known_hosts"
-          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          budget_max() {
+            local cap="$1" now remaining
+            now="$(date +%s)"
+            remaining=$(( EXECUTION_DEADLINE_EPOCH - now - 300 ))
+            (( remaining > 0 )) || return 1
+            (( remaining < cap )) && printf '%s\n' "$remaining" || printf '%s\n' "$cap"
+          }
+          recover_instance_after_scan_loss() {
+            local state
+            state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
+            case "$state" in
+              RUNNING) sleep 10 ;;
+              STARTING)
+                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
+              STOPPING)
+                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state STOPPED --max-wait-seconds "$(budget_max 600)" >/dev/null
+                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
+              STOPPED)
+                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
+              *) return 1 ;;
+            esac
+          }
+          scan_rc=3
+          for attempt in 1 2 3; do
+            rm -f "$known"
+            set +e
+            ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+            scan_rc=$?
+            set -e
+            (( scan_rc == 0 )) && break
+            # Do not retry a fingerprint mismatch or malformed contract.
+            (( scan_rc == 3 && attempt < 3 )) || exit "$scan_rc"
+            recover_instance_after_scan_loss || exit "$scan_rc"
+          done
+          (( scan_rc == 0 ))
           selected=''
           for name in SSH_KEY_ORACLE SSH_KEY_OCI SSH_KEY_VM SSH_KEY_BRIDGE SSH_KEY_ORACLE_ALT SSH_KEY_OCI_ALT; do
             if [[ -n "${!name:-}" ]]; then selected="$name"; break; fi
@@ -214,33 +270,50 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          budget_max() {
+            local cap="$1" now remaining
+            now="$(date +%s)"
+            remaining=$(( EXECUTION_DEADLINE_EPOCH - now - 300 ))
+            (( remaining > 0 )) || return 1
+            (( remaining < cap )) && printf '%s\n' "$remaining" || printf '%s\n' "$cap"
+          }
+          recover_instance_after_transport_loss() {
+            local state
+            state="$(oci compute instance get --instance-id "$INSTANCE_ID" --query 'data."lifecycle-state"' --raw-output)"
+            case "$state" in
+              RUNNING) sleep 10 ;;
+              STARTING)
+                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
+              STOPPING)
+                oci compute instance get --instance-id "$INSTANCE_ID" --wait-for-state STOPPED --max-wait-seconds "$(budget_max 600)" >/dev/null
+                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
+              STOPPED)
+                oci compute instance action --instance-id "$INSTANCE_ID" --action START --wait-for-state RUNNING --max-wait-seconds "$(budget_max 600)" >/dev/null ;;
+              *) return 1 ;;
+            esac
+          }
           run_remote() {
             local command="$1"
-            timeout 180 ssh -i '${{ steps.ssh.outputs.key }}' \
-              -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-              -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
-              -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
-              "$ORACLE_USER@$ORACLE_HOST" "$command" 2>/dev/null
+            local attempt out rc ssh_timeout
+            for attempt in 1 2 3; do
+              ssh_timeout="$(budget_max 4800)" || return 124
+              set +e
+              out="$(timeout "$ssh_timeout" ssh -i '${{ steps.ssh.outputs.key }}' \
+                -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
+                -o ServerAliveInterval=15 -o ServerAliveCountMax=2 \
+                -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 \
+                "$ORACLE_USER@$ORACLE_HOST" "$command" 2>/dev/null)"
+              rc=$?
+              set -e
+              if (( rc == 0 )); then printf '%s\n' "$out"; return 0; fi
+              if (( rc != 255 || attempt == 3 )); then printf '%s\n' "$out"; return "$rc"; fi
+              recover_instance_after_transport_loss || return "$rc"
+            done
           }
 
           # Cross the same exact ocarun sudo boundary installed and audited by
           # the resident bootstrap. The SSH principal never invokes the
           # root-owned Universal Video surfaces directly.
-          repair_cmd='sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video-spool-repair'
-          set +e
-          repair_out="$(run_remote "$repair_cmd")"
-          repair_rc=$?
-          set -e
-          if (( repair_rc != 0 )); then
-            echo 'PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_COMMAND_FAILED' >> "$GITHUB_ENV"
-            exit 1
-          fi
-          if ! grep -qx 'UNIVERSAL_VIDEO_SPOOL_RUNTIME_REPAIR_PASS' <<<"$repair_out"; then
-            echo 'PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_MARKER_MISSING' >> "$GITHUB_ENV"
-            exit 1
-          fi
-          echo 'PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_PASS' >> "$GITHUB_ENV"
-
           if [[ "$GITHUB_EVENT_NAME" == 'push' ]]; then
             request_file="$(git diff-tree -m --no-commit-id --name-only -r "$GITHUB_SHA" | grep -E '^ops/oracle-universal-video-job-requests/[^/]+\.json$' | head -n1)"
           else
@@ -260,7 +333,7 @@ jobs:
           print(base64.b64encode(json.dumps(job,ensure_ascii=False,separators=(',',':')).encode()).decode())
           PY
           )"
-          submit_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video submit-drive-base64 '$payload'"
+          submit_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video repair-submit-drive-base64 '$payload'"
           status_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video status '$JOB_ID' '$PROFILE' '$JOB_HASH' '$SOURCE_FILE_ID'"
           label="Universal Video / $PROFILE / $JOB_ID"
           entry='SUBMITTED'
@@ -270,6 +343,11 @@ jobs:
           submit_rc=$?
           set -e
           if (( submit_rc != 0 )); then
+            spool_code="$(sed -n 's/^UV_ERROR_CODE=\(UV_SPOOL_REPAIR_[A-Z_]*\)$/\1/p' <<<"$initial" | tail -n1)"
+            if [[ -n "$spool_code" ]]; then
+              echo "PRE_SUBMIT_ERROR_CODE=$spool_code" >> "$GITHUB_ENV"
+              exit 1
+            fi
             if grep -qx 'UV_ERROR_CODE=UV_INTAKE_JOB_EXISTS' <<<"$initial"; then
               # A previous observer can lose its SSH session after the resident
               # intake has durably accepted the job.  Resume the exact same
@@ -325,6 +403,7 @@ jobs:
               exit 1
             fi
           fi
+          [[ "$entry" == RESUMED ]] || echo 'PRE_SUBMIT_ERROR_CODE=UV_SPOOL_REPAIR_PASS' >> "$GITHUB_ENV"
           state="$(printf '%s\n' "$initial" | sed -n 's/^UV_STATE=//p' | tail -n1)"
           if [[ ! "$state" =~ ^(DOWNLOAD_QUEUED|DOWNLOADING_FROM_DRIVE|SOURCE_READY_ON_ORACLE|RUNNING|PROCESSING|TECHNICAL_CONFORMANT|REVIEW|NONCONFORMANT|CONFLICT|FAILED)$ ]]; then
             echo 'PRE_SUBMIT_ERROR_CODE=UV_SUBMIT_STATE_INVALID' >> "$GITHUB_ENV"
@@ -343,6 +422,8 @@ jobs:
                 exit 1
                 ;;
             esac
+            poll_sleep="$(budget_max 60)" || break
+            (( poll_sleep >= 60 )) || break
             sleep 60
             set +e
             out="$(run_remote "$status_cmd")"

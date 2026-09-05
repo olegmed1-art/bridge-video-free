@@ -17,7 +17,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: oracle-diana11-provenance-sync
+  group: ${{ github.event_name == 'pull_request' && format('oracle-diana11-provenance-sync-pr-{0}', github.event.pull_request.number) || format('oracle-diana11-provenance-sync-request-{0}', github.sha) }}
   cancel-in-progress: false
 
 jobs:
@@ -126,10 +126,11 @@ jobs:
         run: |
           set -euo pipefail
           ssh_cmd=(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST")
+          remote_script="/tmp/uv003-provenance-sync-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sh"
           "${ssh_cmd[@]}" 'sudo -n true'
-          cat ops/universal_video_diana11_provenance_sync.sh | "${ssh_cmd[@]}" 'cat > /tmp/uv003_provenance_sync.sh && chmod 0700 /tmp/uv003_provenance_sync.sh'
+          cat ops/universal_video_diana11_provenance_sync.sh | "${ssh_cmd[@]}" "cat > '$remote_script' && chmod 0700 '$remote_script'"
           raw=''
-          if ! raw="$("${ssh_cmd[@]}" "sudo -n env EXPECTED_RUNTIME_COMMIT='${{ needs.validate.outputs.expected_runtime_commit }}' bash /tmp/uv003_provenance_sync.sh; rm -f /tmp/uv003_provenance_sync.sh" 2>/dev/null)"; then
+          if ! raw="$("${ssh_cmd[@]}" "sudo -n env EXPECTED_RUNTIME_COMMIT='${{ needs.validate.outputs.expected_runtime_commit }}' /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock bash '$remote_script'; rc=\$?; rm -f '$remote_script'; exit \$rc" 2>/dev/null)"; then
             raw=$'UV003_SYNC_STATUS=FAIL\nUV003_SYNC_CODE=REMOTE_TRANSPORT_FAILURE'
           fi
           RAW="$raw" SAFE_FILE="$RUNNER_TEMP/uv003-provenance-safe.txt" python - <<'PY'

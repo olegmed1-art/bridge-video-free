@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -7,19 +8,23 @@ OPERATOR_INSTALL = (ROOT / "ops/install_universal_video_operator.sh").read_text(
 CLOUD = (ROOT / "ops/cloud_shell_install_bounded_oci_admin.sh").read_text(encoding="utf-8")
 VIDEO_CLOUD = (ROOT / "ops/cloud_shell_install_universal_video_bounded_admin.sh").read_text(encoding="utf-8")
 WORKFLOW = (ROOT / ".github/workflows/oracle-universal-video-admin.yml").read_text(encoding="utf-8")
+PRODUCTIONIZE = (ROOT / "ops/oracle_universal_video_productionize.sh").read_text(encoding="utf-8")
+MAINTENANCE_UNIT = (ROOT / "deploy/oracle-universal-video/universal-video-maintenance.service").read_text(encoding="utf-8")
 
 
 def test_entrypoint_is_fixed_and_no_asr_productionization_only():
     assert "usage: universal-video-oci-admin audit|productionize" in ENTRY
     assert "audit) audit ;;" in ENTRY
     assert "productionize) productionize ;;" in ENTRY
-    assert "readonly UV_RUNTIME_COMMIT='7e46f0327d6094400e0d35ec6af20408cc97683e'" in ENTRY
-    assert "readonly ACTIVATION_BLOB='bbf4dc5779726fca415f641b90d017a802daaabf'" in ENTRY
-    assert "readonly PRODUCTIONIZE_BLOB='9a76e06ed1cb7ecc92102e5c16cf215c18f9159d'" in ENTRY
+    assert "readonly UV_RUNTIME_COMMIT='bb2b3808cb60f5ce7cb41309af386d4a710d4ac4'" in ENTRY
+    assert "readonly ACTIVATION_BLOB='0343e1a3c8e5a87c4c1931ad738e1af855266802'" in ENTRY
+    assert "readonly PRODUCTIONIZE_BLOB='69b7243da69076e94891148467e04d10bbc7b058'" in ENTRY
     assert "readonly DRIVE_PROBE_FILE_ID='1RKrDWP6IOfVyuDWRMIsiUT62vpmVW9VS'" in ENTRY
     assert "readonly DRIVE_RESULTS_FOLDER_ID='1I8cSuA-p0MpaZIbA33slks19KyvfJDMK'" in ENTRY
     assert "UNIVERSAL_VIDEO_RUN_SMOKE=0" in ENTRY
     assert "UNIVERSAL_VIDEO_PREWARM_MODEL=0" in ENTRY
+    assert "UNIVERSAL_VIDEO_SKIP_ADMIN_INSTALL=1" in ENTRY
+    assert "universal_video_admin=preserved_revision_bound" in ENTRY
     assert "UNIVERSAL_VIDEO_DRIVE_SOURCE_NO_ASR_PASS" in ENTRY
     assert "asr_started=0" in ENTRY
     assert "faster_whisper" not in ENTRY
@@ -32,6 +37,32 @@ def test_entrypoint_is_fixed_and_no_asr_productionization_only():
     assert "eval " not in ENTRY
     assert "bash -c" not in ENTRY
     assert "sh -c" not in ENTRY
+
+
+def test_admin_runtime_pin_is_one_self_consistent_published_tree():
+    def pinned(name, text):
+        match = re.search(rf"readonly {name}='([^']+)'", text)
+        assert match, name
+        return match.group(1)
+
+    runtime = pinned("UV_RUNTIME_COMMIT", ENTRY)
+    installer_runtime = re.search(
+        r"readonly UV_RUNTIME_COMMIT='([0-9a-f]{40})'", INSTALL
+    )
+    assert installer_runtime
+    assert runtime == installer_runtime.group(1)
+    assert (
+        runtime,
+        pinned("ACTIVATION_BLOB", ENTRY),
+        pinned("PRODUCTIONIZE_BLOB", ENTRY),
+    ) == (
+        "bb2b3808cb60f5ce7cb41309af386d4a710d4ac4",
+        "0343e1a3c8e5a87c4c1931ad738e1af855266802",
+        "69b7243da69076e94891148467e04d10bbc7b058",
+    )
+    assert "ORACLE_WORKLOAD_FENCE_HELD" in PRODUCTIONIZE
+    assert "flock -n -x 9" in PRODUCTIONIZE
+    assert "flock -x /run/lock/oracle-workload-mutation.lock" in MAINTENANCE_UNIT
 
 
 def test_sudoers_surface_is_exact_and_not_broad():
@@ -119,6 +150,28 @@ def test_workflow_does_not_publish_raw_remote_output_or_oauth_values():
     assert "client_secret" not in WORKFLOW
     assert "refresh_token" not in WORKFLOW
     assert "GOOGLE_DRIVE_OAUTH_JSON" not in WORKFLOW
+
+
+def test_productionize_hands_fence_to_exact_maintenance_unit():
+    register = PRODUCTIONIZE.index('systemctl start --no-block "$MAINT_SERVICE"')
+    handoff = PRODUCTIONIZE.index("flock -u 9")
+    start = PRODUCTIONIZE.index('systemctl start "$MAINT_SERVICE"', handoff)
+    reacquire = PRODUCTIONIZE.index("flock -x 9", start)
+    result_check = PRODUCTIONIZE.index('systemctl show "$MAINT_SERVICE" -p Result', start)
+    activating = PRODUCTIONIZE.index('== activating', register)
+    assert register < activating < handoff < start
+    assert start < reacquire
+    assert reacquire < result_check
+    assert "exec 9>&-" not in PRODUCTIONIZE
+    assert "if (( owns_fence == 0 ))" not in PRODUCTIONIZE
+    assert "flock -n -x 9" in PRODUCTIONIZE
+    assert "universal_video.maintenance --base-dir \"$BASE_DIR\" --apply" not in PRODUCTIONIZE
+    assert "EnvironmentFile=/opt/bridge-school/universal-video/universal-video.env" in MAINTENANCE_UNIT
+    assert "CPUQuota=50%" in MAINTENANCE_UNIT
+    assert "MemoryMax=256M" in MAINTENANCE_UNIT
+    assert "NoNewPrivileges=true" in MAINTENANCE_UNIT
+    assert "ProtectSystem=strict" in MAINTENANCE_UNIT
+    assert "ExecStart=/usr/bin/flock -x /run/lock/oracle-workload-mutation.lock" in MAINTENANCE_UNIT
 
 
 def test_video_only_cloud_bootstrap_does_not_depend_on_assistant_lab_audit():

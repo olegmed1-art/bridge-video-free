@@ -35,7 +35,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('oracle-universal-video-activation-pr-{0}', github.run_id) || 'oracle-instance-workload-mutation' }}
+  group: ${{ github.event_name == 'pull_request' && format('oracle-universal-video-activation-pr-{0}', github.event.pull_request.number) || format('oracle-universal-video-activation-request-{0}', github.sha) }}
   cancel-in-progress: false
 
 jobs:
@@ -259,26 +259,58 @@ jobs:
           local_dsn="$RUNNER_TEMP/video-queue-dsn"
           printf '%s' "$BRIDGE_WORKER_DATABASE_URL" > "$local_dsn"
           chmod 0600 "$local_dsn"
-          remote_dsn="$(ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile='${{ steps.hostkey.outputs.known_hosts }}' \
-            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            'mktemp /tmp/universal-video-queue-dsn.XXXXXXXX')"
-          [[ "$remote_dsn" =~ ^/tmp/universal-video-queue-dsn\.[A-Za-z0-9]{8}$ ]]
+          coproc REMOTE_FENCE {
+            ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile='${{ steps.hostkey.outputs.known_hosts }}' \
+              -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" 'sudo -n /bin/bash -s'
+          }
+          remote_fence_pid="$REMOTE_FENCE_PID"
+          exec {remote_fence_in}>&"${REMOTE_FENCE[1]}"
+          exec {remote_fence_out}<&"${REMOTE_FENCE[0]}"
+          cleanup_remote_fence() {
+            exec {remote_fence_in}>&- 2>/dev/null || true
+            kill "$remote_fence_pid" 2>/dev/null || true
+            wait "$remote_fence_pid" 2>/dev/null || true
+          }
+          trap cleanup_remote_fence EXIT
+          cat >&"$remote_fence_in" <<'REMOTE_FENCE_INIT'
+          set -Eeuo pipefail
+          umask 077
+          exec 9>/run/lock/oracle-workload-mutation.lock
+          /usr/bin/flock -x 9
+          remote_work="$(mktemp -d /tmp/universal-video-activation.XXXXXXXX)"
+          trap 'rm -rf -- "$remote_work"' EXIT INT TERM
+          chown ubuntu:ubuntu "$remote_work"
+          chmod 0700 "$remote_work"
+          printf 'ORACLE_WORKLOAD_FENCE_READY=%s\n' "$remote_work"
+          REMOTE_FENCE_INIT
+          IFS= read -r remote_ready <&"$remote_fence_out"
+          [[ "$remote_ready" =~ ^ORACLE_WORKLOAD_FENCE_READY=(/tmp/universal-video-activation\.[A-Za-z0-9]{8})$ ]]
+          remote_work="${BASH_REMATCH[1]}"
+          remote_dsn="$remote_work/queue-dsn"
+          remote_payload="$remote_work/payload.sh"
           scp -q -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile='${{ steps.hostkey.outputs.known_hosts }}' \
-            -o ConnectTimeout=15 "$local_dsn" "$ORACLE_USER@$ORACLE_HOST:$remote_dsn"
-          echo "REMOTE_QUEUE_DSN_STAGING=$remote_dsn" >> "$GITHUB_ENV"
+            -o ConnectTimeout=15 "$local_dsn" "$RUNNER_TEMP/oracle-universal-video-payload.sh" \
+            "$ORACLE_USER@$ORACLE_HOST:$remote_work/"
           smoke=0
           [[ '${{ steps.request.outputs.mode }}' == smoke ]] && smoke=1
           log="$RUNNER_TEMP/oracle-universal-video.log"
-          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile='${{ steps.hostkey.outputs.known_hosts }}' \
-            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n env UNIVERSAL_VIDEO_GIT_REF='${{ steps.request.outputs.git_ref }}' UNIVERSAL_VIDEO_RUN_SMOKE='$smoke' UNIVERSAL_VIDEO_ACTIVATE=1 UNIVERSAL_VIDEO_PREWARM_MODEL=1 UNIVERSAL_VIDEO_QUEUE_DSN_STAGING='$remote_dsn' bash -s" \
-            < "$RUNNER_TEMP/oracle-universal-video-payload.sh" 2>&1 | tee "$log"
+          cat >&"$remote_fence_in" <<REMOTE_ACTIVATION
+          chown root:root '$remote_dsn' '$remote_payload'
+          chmod 0600 '$remote_dsn' '$remote_payload'
+          env UNIVERSAL_VIDEO_GIT_REF='${{ steps.request.outputs.git_ref }}' UNIVERSAL_VIDEO_RUN_SMOKE='$smoke' UNIVERSAL_VIDEO_ACTIVATE=1 UNIVERSAL_VIDEO_PREWARM_MODEL=1 UNIVERSAL_VIDEO_QUEUE_DSN_STAGING='$remote_dsn' /bin/bash '$remote_payload'
+          REMOTE_ACTIVATION
+          exec {remote_fence_in}>&-
+          set +e
+          cat <&"$remote_fence_out" 2>&1 | tee "$log"
+          wait "$remote_fence_pid"
+          remote_rc=$?
+          set -e
+          trap - EXIT
+          (( remote_rc == 0 )) || { echo "ORACLE_UNIVERSAL_VIDEO_REMOTE_FAILED rc=$remote_rc" >&2; exit "$remote_rc"; }
           grep -Fx UNIVERSAL_VIDEO_ORACLE_RUN_COMMAND_PASS "$log" >/dev/null
           grep -F assistant_lab=active "$log" >/dev/null
           grep -F universal_video_enabled=enabled "$log" >/dev/null
@@ -292,16 +324,6 @@ jobs:
             grep -F UNIVERSAL_VIDEO_SYNTHETIC_SMOKE_PASS "$log" >/dev/null
           fi
           echo ORACLE_UNIVERSAL_VIDEO_REMOTE_ACCEPTANCE_PASS
-
-      - name: Remove unused queue credential staging file
-        if: ${{ always() && steps.request.outputs.mode != 'probe' && env.REMOTE_QUEUE_DSN_STAGING != '' }}
-        shell: bash
-        run: |
-          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o UserKnownHostsFile='${{ steps.hostkey.outputs.known_hosts }}' \
-            -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            "rm -f -- '$REMOTE_QUEUE_DSN_STAGING'"
 
       - name: Verify external DDS3 non-regression
         if: ${{ steps.request.outputs.mode != 'probe' }}

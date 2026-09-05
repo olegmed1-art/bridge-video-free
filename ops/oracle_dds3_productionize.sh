@@ -350,7 +350,7 @@ After=network-online.target nginx.service
 Wants=network-online.target
 [Service]
 Type=oneshot
-ExecStart=/opt/certbot/bin/certbot renew --quiet
+ExecStart=/usr/bin/flock -x /run/lock/oracle-workload-mutation.lock /opt/certbot/bin/certbot renew --quiet
 EOF
 cat >/etc/systemd/system/dds3-cert-renew.timer <<'EOF'
 [Unit]

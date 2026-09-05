@@ -93,6 +93,8 @@ def test_workflow_filters_evidence_and_never_exposes_raw_output():
     assert "UV003_SYNC_CODE=" in workflow
     assert "re.fullmatch" in workflow
     assert "uv003-provenance-safe.txt" in workflow
+    assert "uv003-provenance-sync-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sh" in workflow
+    assert "/tmp/uv003_provenance_sync.sh" not in workflow
     assert "No job submit, ASR/media processing, Drive publication, or production promotion" in workflow
     for forbidden in (
         "actions/upload-artifact",

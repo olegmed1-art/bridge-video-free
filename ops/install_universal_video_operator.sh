@@ -22,9 +22,11 @@ tmp="$(mktemp)" || fail 'temporary sudoers file unavailable'; trap 'rm -f "$tmp"
 cat >"$tmp" <<'EOF'
 # Bounded generic Universal Video controls.
 ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video submit-drive-base64 *
+ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video repair-submit-drive-base64 *
 ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video status *
 ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video enqueue-batch-base64 *
 ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video batch-status *
+ocarun ALL=(root) NOPASSWD: /usr/local/sbin/universal-video resume-batch-base64 *
 EOF
 chmod 0440 "$tmp" || fail 'temporary sudoers mode failed'
 visudo -cf "$tmp" >/dev/null || fail 'operator sudoers validation failed'

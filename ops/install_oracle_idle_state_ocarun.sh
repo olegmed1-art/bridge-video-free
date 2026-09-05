@@ -7,25 +7,33 @@ fail(){ echo "ERROR: $*" >&2; exit 1; }
 : "${SOURCE_SHA256:?SOURCE_SHA256 is required}"
 : "${AUTHORIZER_FILE:?AUTHORIZER_FILE is required}"
 : "${AUTHORIZER_SHA256:?AUTHORIZER_SHA256 is required}"
+: "${ADMIN_FILE:?ADMIN_FILE is required}"
+: "${ADMIN_SHA256:?ADMIN_SHA256 is required}"
 [[ "$SOURCE_FILE" == /tmp/oracle_idle_state.sh ]] || fail 'unexpected source path'
 [[ "$AUTHORIZER_FILE" == /tmp/oracle_idle_stop_guard.py ]] || fail 'unexpected authorizer path'
+[[ "$ADMIN_FILE" == /tmp/universal_video_oci_admin_entrypoint.sh ]] || fail 'unexpected admin path'
 [[ "$SOURCE_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail 'invalid source sha256'
 [[ "$AUTHORIZER_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail 'invalid authorizer sha256'
+[[ "$ADMIN_SHA256" =~ ^[0-9a-f]{64}$ ]] || fail 'invalid admin sha256'
 id ocarun >/dev/null 2>&1 || fail 'ocarun user does not exist'
 command -v visudo >/dev/null || fail 'visudo is required'
 command -v python3 >/dev/null || fail 'python3 is required'
 [[ "$(sha256sum "$SOURCE_FILE" | awk '{print $1}')" == "$SOURCE_SHA256" ]] || fail 'source digest mismatch'
 [[ "$(sha256sum "$AUTHORIZER_FILE" | awk '{print $1}')" == "$AUTHORIZER_SHA256" ]] || fail 'authorizer digest mismatch'
+[[ "$(sha256sum "$ADMIN_FILE" | awk '{print $1}')" == "$ADMIN_SHA256" ]] || fail 'admin digest mismatch'
 bash -n "$SOURCE_FILE"
 python3 - "$AUTHORIZER_FILE" <<'PY'
 import ast, pathlib, sys
 ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"), filename=sys.argv[1])
 PY
+bash -n "$ADMIN_FILE"
 grep -Fq 'ORACLE_IDLE_STATE=IDLE|BUSY|UNKNOWN' "$SOURCE_FILE" || fail 'unexpected classifier contract'
 
 readonly TARGET='/usr/local/sbin/oracle-idle-state'
+readonly FENCE_TARGET='/usr/local/sbin/oracle-idle-stop-fence'
 readonly SUDOERS='/etc/sudoers.d/oracle-idle-state-ocarun'
 readonly BACKUP_DIR='/var/backups/oracle-idle-guard'
+readonly ADMIN_TARGET='/usr/local/sbin/universal-video-oci-admin'
 [[ -f "$TARGET" && ! -L "$TARGET" ]] || fail 'existing guard required for recoverable backup'
 old_sha="$(sha256sum "$TARGET" | awk '{print $1}')"
 [[ "$old_sha" =~ ^[0-9a-f]{64}$ ]] || fail 'existing guard digest invalid'
@@ -33,6 +41,12 @@ readonly BACKUP="$BACKUP_DIR/oracle-idle-state-${old_sha}"
 old_sudoers_present=0
 old_sudoers_sha=''
 SUDOERS_BACKUP=''
+old_fence_present=0
+old_fence_sha=''
+FENCE_BACKUP=''
+old_admin_present=0
+old_admin_sha=''
+ADMIN_BACKUP=''
 
 install -d -o root -g root -m 0700 "$BACKUP_DIR"
 if [[ -e "$SUDOERS" || -L "$SUDOERS" ]]; then
@@ -44,15 +58,47 @@ if [[ -e "$SUDOERS" || -L "$SUDOERS" ]]; then
   [[ "$old_sudoers_sha" =~ ^[0-9a-f]{64}$ ]] || fail 'existing sudoers digest invalid'
   SUDOERS_BACKUP="$BACKUP_DIR/oracle-idle-state-ocarun-sudoers-${old_sudoers_sha}"
 fi
+if [[ -e "$ADMIN_TARGET" || -L "$ADMIN_TARGET" ]]; then
+  [[ -f "$ADMIN_TARGET" && ! -L "$ADMIN_TARGET" ]] || fail 'existing admin path is unsafe'
+  [[ "$(stat -c '%U:%G:%a' "$ADMIN_TARGET")" == 'root:root:755' ]] || fail 'existing admin ownership/mode is unsafe'
+  bash -n "$ADMIN_TARGET"
+  old_admin_present=1
+  old_admin_sha="$(sha256sum "$ADMIN_TARGET" | awk '{print $1}')"
+  ADMIN_BACKUP="$BACKUP_DIR/universal-video-oci-admin-$old_admin_sha"
+  if [[ ! -e "$ADMIN_BACKUP" ]]; then
+    install -o root -g root -m 0755 "$ADMIN_TARGET" "$ADMIN_BACKUP"
+  fi
+  [[ -f "$ADMIN_BACKUP" && ! -L "$ADMIN_BACKUP" ]] || fail 'admin rollback backup path is unsafe'
+  [[ "$(sha256sum "$ADMIN_BACKUP" | awk '{print $1}')" == "$old_admin_sha" ]] || fail 'admin rollback backup digest mismatch'
+fi
+if [[ -e "$FENCE_TARGET" || -L "$FENCE_TARGET" ]]; then
+  [[ -f "$FENCE_TARGET" && ! -L "$FENCE_TARGET" ]] || fail 'existing fence helper path is unsafe'
+  [[ "$(stat -c '%U:%G:%a' "$FENCE_TARGET")" == 'root:root:755' ]] || fail 'existing fence helper ownership/mode is unsafe'
+  bash -n "$FENCE_TARGET"
+  old_fence_present=1
+  old_fence_sha="$(sha256sum "$FENCE_TARGET" | awk '{print $1}')"
+  [[ "$old_fence_sha" =~ ^[0-9a-f]{64}$ ]] || fail 'existing fence helper digest invalid'
+  FENCE_BACKUP="$BACKUP_DIR/oracle-idle-stop-fence-$old_fence_sha"
+  if [[ ! -e "$FENCE_BACKUP" ]]; then
+    install -o root -g root -m 0755 "$FENCE_TARGET" "$FENCE_BACKUP"
+  fi
+  [[ -f "$FENCE_BACKUP" && ! -L "$FENCE_BACKUP" ]] || fail 'fence rollback backup path is unsafe'
+  [[ "$(sha256sum "$FENCE_BACKUP" | awk '{print $1}')" == "$old_fence_sha" ]] || fail 'fence rollback backup digest mismatch'
+fi
 
 tmp_sudoers="$(mktemp --tmpdir="$BACKUP_DIR" .oracle-idle-sudoers.install.XXXXXX)"
 tmp_target=''
 tmp_backup=''
 tmp_sudoers_backup=''
+tmp_fence=''
 restore_probe=''
 sudoers_restore_probe=''
 trusted_source=''
 trusted_authorizer=''
+trusted_admin=''
+test_token=''
+test_holder_pid=''
+fence_pid=''
 proof="$(mktemp --tmpdir="$BACKUP_DIR" .oracle-idle-install-proof.XXXXXX)"
 authorizer_stderr="$(mktemp --tmpdir="$BACKUP_DIR" .oracle-idle-authorizer.stderr.XXXXXX)"
 chmod 0600 "$proof" "$authorizer_stderr"
@@ -97,6 +143,15 @@ atomic_copy_sudoers_verified() {
   visudo -cf "$destination" >/dev/null
 }
 
+restore_previous_fence() {
+  if (( old_fence_present == 1 )); then
+    atomic_copy_executable_verified "$FENCE_BACKUP" "$old_fence_sha" "$FENCE_TARGET"
+  else
+    rm -f "$FENCE_TARGET"
+    [[ ! -e "$FENCE_TARGET" && ! -L "$FENCE_TARGET" ]]
+  fi
+}
+
 restore_previous_sudoers() {
   local destination="$1"
   if (( old_sudoers_present == 1 )); then
@@ -107,11 +162,29 @@ restore_previous_sudoers() {
   fi
 }
 
+restore_previous_admin() {
+  if (( old_admin_present == 1 )); then
+    atomic_copy_executable_verified "$ADMIN_BACKUP" "$old_admin_sha" "$ADMIN_TARGET"
+  else
+    rm -f "$ADMIN_TARGET"
+    [[ ! -e "$ADMIN_TARGET" && ! -L "$ADMIN_TARGET" ]]
+  fi
+}
+
 cleanup_and_rollback() {
   local rc=$?
   local guard_ok=0
   local sudoers_ok=0
+  local fence_ok=0
+  local admin_ok=0
   trap - EXIT
+  if [[ "$test_holder_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$test_holder_pid" 2>/dev/null; then
+    kill "$test_holder_pid" 2>/dev/null || true
+  fi
+  if [[ "$fence_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$fence_pid" 2>/dev/null; then
+    kill "$fence_pid" 2>/dev/null || true
+  fi
+  [[ -z "$test_token" ]] || rm -f "/run/oracle-stop-guard/$test_token."{proof,token,pid,start}
   if (( rc != 0 && promoted == 1 && committed == 0 )); then
     if atomic_copy_executable_verified "$BACKUP" "$old_sha" "$TARGET"; then
       guard_ok=1
@@ -119,7 +192,13 @@ cleanup_and_rollback() {
     if restore_previous_sudoers "$SUDOERS" && visudo -cf /etc/sudoers >/dev/null; then
       sudoers_ok=1
     fi
-    if (( guard_ok == 1 && sudoers_ok == 1 )); then
+    if restore_previous_fence; then
+      fence_ok=1
+    fi
+    if restore_previous_admin; then
+      admin_ok=1
+    fi
+    if (( guard_ok == 1 && sudoers_ok == 1 && fence_ok == 1 && admin_ok == 1 )); then
       printf 'ORACLE_IDLE_INSTALL_ROLLBACK=PASS\n' >&2
       printf 'ORACLE_IDLE_ROLLBACK_SHA256=%s\n' "$old_sha" >&2
       if (( old_sudoers_present == 1 )); then
@@ -128,13 +207,13 @@ cleanup_and_rollback() {
         printf 'ORACLE_IDLE_ROLLBACK_SUDOERS_STATE=ABSENT\n' >&2
       fi
     else
-      printf 'ORACLE_IDLE_INSTALL_ROLLBACK=FAIL guard_ok=%s sudoers_ok=%s\n' "$guard_ok" "$sudoers_ok" >&2
+      printf 'ORACLE_IDLE_INSTALL_ROLLBACK=FAIL guard_ok=%s sudoers_ok=%s fence_ok=%s admin_ok=%s\n' "$guard_ok" "$sudoers_ok" "$fence_ok" "$admin_ok" >&2
       rc=97
     fi
   fi
-  rm -f "$tmp_sudoers" "$tmp_target" "$tmp_backup" "$tmp_sudoers_backup" \
+    rm -f "$tmp_sudoers" "$tmp_target" "$tmp_backup" "$tmp_sudoers_backup" "$tmp_fence" \
     "$restore_probe" "$sudoers_restore_probe" "$SOURCE_FILE" "$AUTHORIZER_FILE" \
-    "$trusted_source" "$trusted_authorizer" "$proof" "$authorizer_stderr"
+    "$trusted_source" "$trusted_authorizer" "$trusted_admin" "$proof" "$authorizer_stderr" "$ADMIN_FILE"
   exit "$rc"
 }
 trap cleanup_and_rollback EXIT
@@ -143,17 +222,22 @@ trap cleanup_and_rollback EXIT
 # promotion or execution. A concurrent writer can only make the digest check fail.
 trusted_source="$(mktemp --tmpdir="$BACKUP_DIR" .oracle-idle-state.source.XXXXXX)"
 trusted_authorizer="$(mktemp --tmpdir="$BACKUP_DIR" .oracle-idle-authorizer.source.XXXXXX)"
+trusted_admin="$(mktemp --tmpdir="$BACKUP_DIR" .universal-video-admin.source.XXXXXX)"
 install -o root -g root -m 0700 "$SOURCE_FILE" "$trusted_source"
 install -o root -g root -m 0700 "$AUTHORIZER_FILE" "$trusted_authorizer"
+install -o root -g root -m 0700 "$ADMIN_FILE" "$trusted_admin"
 [[ "$(sha256sum "$trusted_source" | awk '{print $1}')" == "$SOURCE_SHA256" ]] || fail 'trusted source digest mismatch'
 [[ "$(sha256sum "$trusted_authorizer" | awk '{print $1}')" == "$AUTHORIZER_SHA256" ]] || fail 'trusted authorizer digest mismatch'
+[[ "$(sha256sum "$trusted_admin" | awk '{print $1}')" == "$ADMIN_SHA256" ]] || fail 'trusted admin digest mismatch'
 bash -n "$trusted_source"
 python3 - "$trusted_authorizer" <<'PYAUTH'
 import ast, pathlib, sys
 ast.parse(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"), filename=sys.argv[1])
 PYAUTH
+bash -n "$trusted_admin"
 [[ "$(stat -c '%U:%G:%a' "$trusted_source")" == 'root:root:700' ]] || fail 'trusted source ownership/mode invalid'
 [[ "$(stat -c '%U:%G:%a' "$trusted_authorizer")" == 'root:root:700' ]] || fail 'trusted authorizer ownership/mode invalid'
+[[ "$(stat -c '%U:%G:%a' "$trusted_admin")" == 'root:root:700' ]] || fail 'trusted admin ownership/mode invalid'
 
 if [[ -e "$BACKUP" || -L "$BACKUP" ]]; then
   [[ -f "$BACKUP" && ! -L "$BACKUP" ]] || fail 'rollback backup path is unsafe'
@@ -217,9 +301,102 @@ tmp_target=''
 promoted=1
 [[ "$(sha256sum "$TARGET" | awk '{print $1}')" == "$SOURCE_SHA256" ]] || fail 'installed target digest mismatch'
 
+tmp_fence="$(mktemp --tmpdir=/usr/local/sbin .oracle-idle-stop-fence.install.XXXXXX)"
+cat > "$tmp_fence" <<'FENCE'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+umask 077
+readonly LOCK=/run/lock/oracle-workload-mutation.lock
+readonly STATE_DIR=/run/oracle-stop-guard
+[[ $# -eq 2 ]] || exit 64
+action="$1"; token="$2"
+[[ "$token" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]] || exit 64
+proof="$STATE_DIR/$token.proof"
+token_file="$STATE_DIR/$token.token"
+pid_file="$STATE_DIR/$token.pid"
+start_file="$STATE_DIR/$token.start"
+case "$action" in
+  hold)
+    install -d -m 0755 "$STATE_DIR"
+    rm -f "$proof" "$token_file" "$pid_file" "$start_file"
+    touch "$LOCK"
+    chown root:universal-video "$LOCK"
+    chmod 0660 "$LOCK"
+    exec 9>"$LOCK"
+    flock -n 9 || exit 73
+    /usr/local/sbin/oracle-idle-state > "$proof"
+    printf '%s' "$token" > "$token_file"
+    printf '%s' "$$" > "$pid_file"
+    awk '{print $22}' "/proc/$$/stat" > "$start_file"
+    # Longer than the workflow's 600-second STOP wait; normal completion is
+    # the instance shutdown terminating this holder, not timer expiry.
+    sleeper=''
+    cleanup_holder() {
+      trap - EXIT TERM INT
+      [[ "$sleeper" =~ ^[1-9][0-9]*$ ]] && kill "$sleeper" 2>/dev/null || true
+      [[ "$sleeper" =~ ^[1-9][0-9]*$ ]] && wait "$sleeper" 2>/dev/null || true
+      rm -f "$proof" "$token_file" "$pid_file" "$start_file"
+    }
+    trap 'cleanup_holder; exit 143' TERM INT
+    trap cleanup_holder EXIT
+    sleep 900 9>&- &
+    sleeper=$!
+    wait "$sleeper"
+    ;;
+  read)
+    # The classifier can legitimately consume its bounded database timeouts.
+    # Wait for the holder to publish all three files instead of treating a
+    # not-yet-ready proof as terminal.
+    for _ in $(seq 1 450); do
+      [[ -r "$token_file" && -r "$pid_file" && -r "$start_file" && -r "$proof" ]] && break
+      sleep 0.1
+    done
+    [[ -r "$token_file" && -r "$pid_file" && -r "$start_file" && -r "$proof" ]] || exit 74
+    [[ "$(cat "$token_file")" == "$token" ]] || exit 74
+    holder_pid="$(cat "$pid_file")"
+    [[ "$holder_pid" =~ ^[1-9][0-9]*$ ]] || exit 74
+    holder_start="$(cat "$start_file")"
+    [[ "$holder_start" =~ ^[0-9]+$ ]] || exit 74
+    [[ -r "/proc/$holder_pid/stat" ]] || exit 74
+    [[ "$(awk '{print $22}' "/proc/$holder_pid/stat")" == "$holder_start" ]] || exit 74
+    kill -0 "$holder_pid" || exit 74
+    if flock -n "$LOCK" true; then exit 74; fi
+    cat "$proof"
+    ;;
+  release)
+    [[ -r "$token_file" && -r "$pid_file" && -r "$start_file" ]] || exit 74
+    [[ "$(cat "$token_file")" == "$token" ]] || exit 74
+    holder_pid="$(cat "$pid_file")"
+    [[ "$holder_pid" =~ ^[1-9][0-9]*$ ]] || exit 74
+    holder_start="$(cat "$start_file")"
+    [[ "$holder_start" =~ ^[0-9]+$ ]] || exit 74
+    [[ -r "/proc/$holder_pid/stat" ]] || exit 74
+    [[ "$(awk '{print $22}' "/proc/$holder_pid/stat")" == "$holder_start" ]] || exit 74
+    kill "$holder_pid"
+    for _ in $(seq 1 100); do
+      kill -0 "$holder_pid" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -0 "$holder_pid" 2>/dev/null && exit 75
+    rm -f "$proof" "$token_file" "$pid_file" "$start_file"
+    flock -n "$LOCK" true || exit 75
+    ;;
+  *) exit 64 ;;
+esac
+FENCE
+chmod 0755 "$tmp_fence"
+fence_sha="$(sha256sum "$tmp_fence" | awk '{print $1}')"
+atomic_copy_executable_verified "$tmp_fence" "$fence_sha" "$FENCE_TARGET" || fail 'fence helper install failed'
+rm -f "$tmp_fence"
+tmp_fence=''
+
 cat > "$tmp_sudoers" <<'EOF'
 # Exact read-only idle classifier for OCI Run Command. Empty argv is required.
 ocarun ALL=(root) NOPASSWD: /usr/local/sbin/oracle-idle-state ""
+# Bounded validated token only; no arbitrary shell or command is accepted.
+ocarun ALL=(root) NOPASSWD: /usr/local/sbin/oracle-idle-stop-fence hold *
+ocarun ALL=(root) NOPASSWD: /usr/local/sbin/oracle-idle-stop-fence read *
+ocarun ALL=(root) NOPASSWD: /usr/local/sbin/oracle-idle-stop-fence release *
 EOF
 chmod 0440 "$tmp_sudoers"
 visudo -cf "$tmp_sudoers" >/dev/null
@@ -236,6 +413,24 @@ mapfile -t lines < "$proof"
 [[ "${lines[3]}" =~ ^ORACLE_IDLE_REASON=[A-Za-z0-9_./,:=+-]+$ ]] || fail 'classifier reason invalid'
 [[ "${lines[4]}" =~ ^ORACLE_IDLE_STATE=(IDLE|BUSY|UNKNOWN)$ ]] || fail 'classifier state invalid'
 state="${lines[4]#ORACLE_IDLE_STATE=}"
+
+test_token="install-test-$$"
+sudo -u ocarun sudo -n "$FENCE_TARGET" hold "$test_token" &
+fence_pid=$!
+token_ready=0
+for _ in $(seq 1 600); do
+  if [[ -r "/run/oracle-stop-guard/$test_token.token" ]]; then token_ready=1; break; fi
+  kill -0 "$fence_pid" 2>/dev/null || break
+  sleep 0.1
+done
+[[ "$token_ready" == 1 ]] || fail 'fence token preflight timed out'
+test_holder_pid="$(cat "/run/oracle-stop-guard/$test_token.pid")"
+sudo -u ocarun sudo -n "$FENCE_TARGET" read "$test_token" >/dev/null
+sudo -u ocarun sudo -n "$FENCE_TARGET" release "$test_token"
+wait "$fence_pid" 2>/dev/null || true
+fence_pid=''
+test_holder_pid=''
+test_token=''
 
 # The exact STOP authorizer is part of the installation transaction. A proof
 # that is syntactically valid but stale, contradictory, or otherwise rejected
@@ -265,9 +460,13 @@ esac
 authorizer_sha_readback="$(sha256sum "$trusted_authorizer" | awk '{print $1}')"
 [[ "$authorizer_sha_readback" == "$AUTHORIZER_SHA256" ]] || fail 'authorizer changed during transaction'
 
+atomic_copy_executable_verified "$trusted_admin" "$ADMIN_SHA256" "$ADMIN_TARGET" || fail 'admin install failed'
+[[ "$(stat -c '%U:%G:%a' "$ADMIN_TARGET")" == 'root:root:755' ]] || fail 'installed admin ownership/mode invalid'
+
 committed=1
 printf 'ORACLE_IDLE_BACKUP_PATH=%s\n' "$BACKUP"
 printf 'ORACLE_IDLE_BACKUP_SHA256=%s\n' "$old_sha"
+printf 'UNIVERSAL_VIDEO_ADMIN_SHA256=%s\n' "$ADMIN_SHA256"
 if (( old_sudoers_present == 1 )); then
   printf 'ORACLE_IDLE_SUDOERS_BACKUP_PATH=%s\n' "$SUDOERS_BACKUP"
   printf 'ORACLE_IDLE_SUDOERS_BACKUP_SHA256=%s\n' "$old_sudoers_sha"

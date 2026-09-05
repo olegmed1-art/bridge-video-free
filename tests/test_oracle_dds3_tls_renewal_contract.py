@@ -20,8 +20,9 @@ def test_tls_renewal_preserves_dds3_and_normal_trust_validation():
     text = WORKFLOW.read_text(encoding="utf-8")
     assert "http://127.0.0.1:8080/readyz" in text
     assert "systemctl is-active --quiet assistant-lab.service nginx" in text
-    assert "systemctl start dds3-cert-renew.service" in text
-    assert "ExecStart=/opt/certbot/bin/certbot renew --quiet --cert-name 158.180.47.161" in text
+    assert '"$certbot" renew --quiet --cert-name "$PUBLIC_IP"' in text
+    assert "tls_direct_renewal_under_outer_fence=PASS" in text
+    assert "ExecStart=/usr/bin/flock -x /run/lock/oracle-workload-mutation.lock /opt/certbot/bin/certbot renew --quiet --cert-name 158.180.47.161" in text
     assert "OnCalendar=*-*-* 00,12:17:00" in text
     assert "systemctl daemon-reload" in text
     assert "--preferred-profile shortlived" in text

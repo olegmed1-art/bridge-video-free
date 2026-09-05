@@ -18,7 +18,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: oracle-diana11-verified-delivery
+  group: ${{ github.event_name == 'pull_request' && format('oracle-diana11-delivery-pr-{0}', github.event.pull_request.number) || format('oracle-diana11-delivery-request-{0}', github.sha) }}
   cancel-in-progress: false
 
 jobs:
