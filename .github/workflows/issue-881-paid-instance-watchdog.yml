@@ -100,8 +100,11 @@ jobs:
             if launch_comments="$(timeout --signal=KILL 30s gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/881/comments" --jq '.[] | select(.user.login=="github-actions[bot]") | .body' 2>/dev/null)"; then
               launch_expiry="$(sed -n "s/^PAID_WATCHDOG_LAUNCH stamp=${STAMP} expiry_epoch=\([0-9][0-9]*\) run=.*/\1/p" <<<"$launch_comments" | tail -n1)"
               if [[ "$launch_expiry" =~ ^[0-9]+$ ]]; then
-                (( launch_expiry > now && launch_expiry <= now + 1800 && launch_expiry <= effective_expiry )) || exit 96
-                effective_expiry="$launch_expiry"
+                (( launch_expiry <= now + 1800 && launch_expiry <= effective_expiry )) || exit 96
+                # A delayed authenticated read may discover the launch receipt
+                # after its deadline. That means clean up now, never exit before
+                # issuing the provider termination requests.
+                (( launch_expiry > now )) && effective_expiry="$launch_expiry" || effective_expiry="$now"
                 break
               fi
             fi
@@ -111,9 +114,9 @@ jobs:
           now="$(date -u +%s)"
           remaining=$((effective_expiry - now))
           (( remaining > 0 )) && sleep "$remaining"
-          instance_cleanup_deadline=$((SECONDS + 600))
+          instance_discovery_deadline=$((SECONDS + 120))
           while ! timeout --signal=KILL 30s oci compute instance list --compartment-id "$tenancy_id" --all --output json >"$instances" 2>/dev/null; do
-            (( SECONDS < instance_cleanup_deadline )) || exit 97
+            (( SECONDS < instance_discovery_deadline )) || exit 97
             sleep 5
           done
           mapfile -t ids < <(STAMP="$STAMP" TENANCY_ID="$tenancy_id" EXPECTED_AD="$EXPECTED_AD" python - "$instances" <<'PY'
@@ -133,6 +136,7 @@ jobs:
           PY
           )
           if (( ${#ids[@]} == 1 )); then
+            instance_cleanup_deadline=$((SECONDS + 600))
             while (( SECONDS < instance_cleanup_deadline )); do
               timeout --signal=KILL 30s oci compute instance terminate --instance-id "${ids[0]}" --preserve-boot-volume true --force --output json >/dev/null 2>/dev/null || true
               if timeout --signal=KILL 20s oci compute instance get --instance-id "${ids[0]}" --output json >"$instances" 2>/dev/null; then
@@ -146,7 +150,11 @@ jobs:
               sleep 5
             done
           fi
-          timeout --signal=KILL 30s oci compute instance list --compartment-id "$tenancy_id" --all --output json >"$instances" 2>/dev/null
+          instance_confirmation_deadline=$((SECONDS + 120))
+          while ! timeout --signal=KILL 30s oci compute instance list --compartment-id "$tenancy_id" --all --output json >"$instances" 2>/dev/null; do
+            (( SECONDS < instance_confirmation_deadline )) || exit 99
+            sleep 5
+          done
           STAMP="$STAMP" python - "$instances" <<'PY'
           import json,os,sys
           data=json.load(open(sys.argv[1])).get('data')
@@ -158,7 +166,11 @@ jobs:
           # that runner disappeared, the independent watchdog owns the same
           # exact stamp and must remove the storage allocation too.
           volumes="$RUNNER_TEMP/volumes.json"
-          timeout --signal=KILL 30s oci bv boot-volume list --compartment-id "$tenancy_id" --availability-domain "$EXPECTED_AD" --all --output json >"$volumes" 2>/dev/null
+          volume_discovery_deadline=$((SECONDS + 120))
+          while ! timeout --signal=KILL 30s oci bv boot-volume list --compartment-id "$tenancy_id" --availability-domain "$EXPECTED_AD" --all --output json >"$volumes" 2>/dev/null; do
+            (( SECONDS < volume_discovery_deadline )) || exit 100
+            sleep 5
+          done
           mapfile -t volume_ids < <(STAMP="$STAMP" TENANCY_ID="$tenancy_id" EXPECTED_AD="$EXPECTED_AD" python - "$volumes" <<'PY'
           import json,os,sys
           data=json.load(open(sys.argv[1])).get('data')
