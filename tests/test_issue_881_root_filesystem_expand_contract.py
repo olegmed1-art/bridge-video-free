@@ -1678,6 +1678,19 @@ if prove_repeated_exact_stamp_inventory_no_active; then echo rc=0; else echo rc=
         assert "rc=96" in failed.stdout
 
 
+def test_uncertain_instance_manifest_is_read_only_for_cleanup_only_mode() -> None:
+    reconcile = WORKFLOW[
+        WORKFLOW.index("reconcile_prior_attempt_resources()") :
+        WORKFLOW.index("cleanup_temp_resources()")
+    ]
+    guard = "if (( cleanup_only == 1 )); then"
+    manifest_read = 'MANIFEST="$authoritative_receipt_manifest" python -c'
+    assert guard in reconcile
+    assert manifest_read in reconcile
+    assert reconcile.index(guard) < reconcile.index(manifest_read)
+    assert '[[ -n "${authoritative_receipt_manifest:-}" ]] || return 95' in reconcile
+
+
 def test_bound_resource_ids_fails_closed_when_inventory_or_receipt_lookup_fails() -> None:
     start = WORKFLOW.index("bound_resource_ids()")
     end = WORKFLOW.index("record_authoritative_type_proof()", start)
