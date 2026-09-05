@@ -1234,6 +1234,29 @@ jobs:
           age=(datetime.datetime.now(datetime.timezone.utc)-created).total_seconds()
           assert 0 <= age < 86400
           PY
+          # Arm provider-independent cleanup before the first restored-volume
+          # mutation. Runner loss during create, hydration, or network setup
+          # must not leave the exact-stamped 97 GB volume allocated.
+          watchdog_cleanup_epoch=$(( $(date -u +%s) + 14400 ))
+          mark_phase dispatch_paid_instance_watchdog
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/issue-881-paid-instance-watchdog.yml/dispatches" \
+            -f ref=main \
+            -f "inputs[stamp]=$stamp" \
+            -f "inputs[expiry_epoch]=$watchdog_cleanup_epoch" \
+            -f "inputs[expected_ad]=$ad"
+          state_set paid_watchdog_status DISPATCHED
+          watchdog_arm_deadline=$(( $(monotonic_now) + 180 ))
+          watchdog_armed=0
+          while (( $(monotonic_now) < watchdog_arm_deadline )); do
+            watchdog_comments="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/881/comments" --jq '.[] | select(.user.login=="github-actions[bot]") | .body')"
+            if grep -Fq "PAID_WATCHDOG_ARMED stamp=${stamp} cleanup_epoch=${watchdog_cleanup_epoch} run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/" <<<"$watchdog_comments"; then
+              watchdog_armed=1
+              break
+            fi
+            sleep 5
+          done
+          (( watchdog_armed == 1 )) || { state_set paid_watchdog_status NOT_ARMED; exit 95; }
+          state_set paid_watchdog_status ARMED_PRE_MUTATION
           restored_attempted=1
           mark_phase create_restored_boot_volume
           if create_json_once restored_volume_create "$stamp-restore" oci bv boot-volume create --boot-volume-backup-id "$backup_id" --availability-domain "$ad" --compartment-id "$tenancy_id" --display-name "$stamp-restore"; then
@@ -1357,30 +1380,23 @@ jobs:
             (( paid_deadline < primary_deadline )) || paid_deadline="$primary_deadline"
             primary_deadline="$paid_deadline"
             paid_expiry_epoch=$(( $(date -u +%s) + paid_values[7] ))
-            mark_phase dispatch_paid_instance_watchdog
-            gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/issue-881-paid-instance-watchdog.yml/dispatches" \
-              -f ref=main \
-              -f "inputs[stamp]=$stamp" \
-              -f "inputs[expiry_epoch]=$paid_expiry_epoch" \
-              -f "inputs[expected_ad]=$ad"
-            state_set paid_watchdog_status DISPATCHED
-            watchdog_arm_deadline=$(( $(monotonic_now) + 180 ))
-            watchdog_armed=0
-            while (( $(monotonic_now) < watchdog_arm_deadline )); do
-              watchdog_comments="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/881/comments" --jq '.[] | select(.user.login=="github-actions[bot]") | .body')"
-              if grep -Fq "PAID_WATCHDOG_ARMED stamp=${stamp} expiry_epoch=${paid_expiry_epoch} run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/" <<<"$watchdog_comments"; then
-                watchdog_armed=1
-                break
-              fi
-              sleep 5
-            done
-            (( watchdog_armed == 1 )) || { state_set paid_watchdog_status NOT_ARMED; exit 95; }
+            (( paid_expiry_epoch <= watchdog_cleanup_epoch )) || exit 95
             state_set paid_watchdog_status ARMED
-            paid_launch_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             # The arming handshake can take up to three minutes. Re-run the
             # complete guard at the actual launch boundary so a price basis
             # cannot expire between preflight and instance creation.
+            # Refresh all mutable primary-source constraints after preparation
+            # and immediately before the launch guard. Earlier JSON snapshots
+            # are intentionally overwritten, never reused at this boundary.
+            OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci compute shape list --compartment-id "$tenancy_id" --availability-domain "$ad" --all
+            printf '%s' "$OCI_JSON_OUTPUT" >"$shapes_file"
+            OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci limits resource-availability get --service-name compute --limit-name standard-e4-core-count --compartment-id "$tenancy_id" --availability-domain "$ad"
+            printf '%s' "$OCI_JSON_OUTPUT" >"$availability_file"
+            OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci limits resource-availability get --service-name compute --limit-name standard-e4-memory-count --compartment-id "$tenancy_id" --availability-domain "$ad"
+            printf '%s' "$OCI_JSON_OUTPUT" >"$memory_availability_file"
+            paid_launch_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             python ops/oci_paid_acceptance_guard.py --shapes-json "$shapes_file" --availability-json "$availability_file" --memory-availability-json "$memory_availability_file" --source-shape "$shape" --now-utc "$paid_launch_utc" >/dev/null
+            gh api "repos/${GITHUB_REPOSITORY}/issues/881/comments" -f body="PAID_WATCHDOG_LAUNCH stamp=${stamp} expiry_epoch=${paid_expiry_epoch} run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             state_set paid_launch_utc "$paid_launch_utc"
             mark_phase launch_bounded_paid_acceptance_instance
             if create_json_once paid_instance_create "$stamp-boot-acceptance" oci compute instance launch --availability-domain "$ad" --compartment-id "$tenancy_id" --subnet-id "$drill_subnet_id" --shape "$paid_shape" --shape-config "$paid_shape_config" --display-name "$stamp-boot-acceptance" --source-details "{\"sourceType\":\"bootVolume\",\"bootVolumeId\":\"$restored_id\"}" --assign-public-ip true; then
