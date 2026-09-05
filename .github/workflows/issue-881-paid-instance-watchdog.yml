@@ -206,6 +206,7 @@ jobs:
           if (( ${#ids[@]} == 0 )); then
             instance_confirmation_deadline=$((SECONDS + 120))
             instance_inventory_clean=0
+            late_instance_clean_count=0
             late_instance_id=""
             while (( SECONDS < instance_confirmation_deadline )); do
               if timeout --signal=KILL 30s oci compute instance list --compartment-id "$tenancy_id" --all --output json >"$instances" 2>/dev/null; then
@@ -226,8 +227,11 @@ jobs:
                 then exit 101; fi
                 mapfile -t late_ids <"$late_ids_file"
                 if (( ${#late_ids[@]} == 1 )); then late_instance_id="${late_ids[0]}"; break; fi
-                instance_inventory_clean=1
-                break
+                late_instance_clean_count=$((late_instance_clean_count + 1))
+                if (( late_instance_clean_count >= 3 )); then
+                  instance_inventory_clean=1
+                  break
+                fi
               fi
               sleep 5
             done
