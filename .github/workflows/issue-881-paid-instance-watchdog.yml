@@ -27,7 +27,9 @@ concurrency:
 jobs:
   terminate-exact-paid-instance:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    # 30m paid lifetime + <=10m instance termination + <=2m volume
+    # termination + bounded OCI setup/inventory and final receipt slack.
+    timeout-minutes: 60
     env:
       OCI_USER: ${{ secrets.OCI_CLI_USER }}
       OCI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
