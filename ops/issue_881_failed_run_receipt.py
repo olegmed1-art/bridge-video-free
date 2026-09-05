@@ -65,23 +65,28 @@ def cleanup_typed_proof_verdicts(state: dict[str, object]) -> dict[str, str]:
     failure.  Only complete evidence receives the GO-granting literal.
     """
     reconciled = state.get("prior_cleanup_status") == "RECONCILED_PROVEN_ABSENT"
-    verdicts: dict[str, str] = {}
-    for resource, requirements in CLEANUP_TYPED_PROOF_REQUIREMENTS.items():
-        complete = reconciled and all(
+    typed_complete = all(
+        all(
             state.get(key) == expected for key, expected in requirements.items()
         )
-        verdicts[resource] = (
-            "RECONCILED_PROVEN_ABSENT" if complete else "RECONCILIATION_INCOMPLETE"
-        )
+        for requirements in CLEANUP_TYPED_PROOF_REQUIREMENTS.values()
+    )
     create_status = state.get("prior_instance_create_status")
     uncertain_proof = state.get("prior_uncertain_instance_proof")
-    if (
-        reconciled
-        and create_status == "REQUEST_UNCERTAIN"
+    uncertain_complete = (
+        create_status == "REQUEST_UNCERTAIN"
         and uncertain_proof == "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE"
-    ):
+    ) or (create_status == "CAPTURED" and uncertain_proof == "NOT_APPLICABLE")
+    all_complete = reconciled and typed_complete and uncertain_complete
+    typed_verdict = (
+        "RECONCILED_PROVEN_ABSENT" if all_complete else "RECONCILIATION_INCOMPLETE"
+    )
+    verdicts = {
+        resource: typed_verdict for resource in CLEANUP_TYPED_PROOF_REQUIREMENTS
+    }
+    if all_complete and create_status == "REQUEST_UNCERTAIN":
         verdicts["uncertain_instance"] = "RECONCILED_PROVEN_ABSENT"
-    elif reconciled and create_status == "CAPTURED" and uncertain_proof == "NOT_APPLICABLE":
+    elif create_status == "CAPTURED" and uncertain_proof == "NOT_APPLICABLE":
         verdicts["uncertain_instance"] = "NOT_APPLICABLE"
     else:
         verdicts["uncertain_instance"] = "RECONCILIATION_INCOMPLETE"

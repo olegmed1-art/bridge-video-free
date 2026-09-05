@@ -116,7 +116,7 @@ def test_cleanup_typed_verdicts_require_every_resource_proof():
             incomplete = state.copy()
             incomplete.pop(key)
             verdicts = cleanup_typed_proof_verdicts(incomplete)
-            assert verdicts[resource] == "RECONCILIATION_INCOMPLETE"
+            assert set(verdicts.values()) == {"RECONCILIATION_INCOMPLETE"}
 
 
 def test_cleanup_aggregate_alone_is_insufficient():
@@ -137,7 +137,7 @@ def test_cleanup_typed_verdicts_reject_wrong_aggregate_or_evidence():
     state["prior_vcn_proof"] = "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE"
     verdicts = cleanup_typed_proof_verdicts(state)
     assert verdicts["vcn"] == "RECONCILIATION_INCOMPLETE"
-    assert verdicts["instance"] == "RECONCILED_PROVEN_ABSENT"
+    assert verdicts["instance"] == "RECONCILIATION_INCOMPLETE"
 
 
 def test_cleanup_typed_verdicts_handle_captured_instance_without_uncertainty():
@@ -157,6 +157,15 @@ def test_cleanup_typed_verdicts_handle_captured_instance_without_uncertainty():
     )
     assert cleanup_typed_proof_verdicts(bad_captured)["uncertain_instance"] == (
         "RECONCILIATION_INCOMPLETE"
+    )
+
+    incomplete_captured = complete_cleanup_state("CAPTURED")
+    incomplete_captured.pop("prior_vcn_proof")
+    verdicts = cleanup_typed_proof_verdicts(incomplete_captured)
+    assert verdicts["uncertain_instance"] == "NOT_APPLICABLE"
+    assert all(
+        verdicts[resource] == "RECONCILIATION_INCOMPLETE"
+        for resource in CLEANUP_TYPED_PROOF_REQUIREMENTS
     )
 
 
