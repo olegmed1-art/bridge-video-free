@@ -143,8 +143,12 @@ def test_watchdog_destructive_entrypoint_is_owner_gated() -> None:
     assert "d.get('status')=='in_progress'" in job
     assert "d.get('actor',{}).get('login')=='olegmed1-art'" in job
     assert "d.get('triggering_actor',{}).get('login')=='olegmed1-art'" in job
+    assert "GITHUB_ACTOR\" == 'github-actions[bot]'" in job
+    assert "hmac.compare_digest" in job and "AUTHORIZATION_HMAC" in job
     assert '-f "inputs[parent_run_id]=${GITHUB_RUN_ID}"' in WORKFLOW
     assert '-f "inputs[parent_run_attempt]=${GITHUB_RUN_ATTEMPT}"' in WORKFLOW
+    assert '-f "inputs[authorization_hmac]=$watchdog_authorization_hmac"' in WORKFLOW
+    assert "hmac.new" in WORKFLOW
 
 
 def test_watchdog_propagates_all_inventory_validator_failures() -> None:
@@ -153,6 +157,8 @@ def test_watchdog_propagates_all_inventory_validator_failures() -> None:
         assert f'$RUNNER_TEMP/{name}' in WATCHDOG
     assert WATCHDOG.count("then exit 101; fi") == 2
     assert WATCHDOG.count("then exit 102; fi") == 2
+    assert WATCHDOG.count("sys.stdout.write('\\n'.join(matched)+('\\n' if matched else ''))") == 4
+    assert "print('\\n'.join(matched))" not in WATCHDOG
 
 
 def test_paid_price_basis_expires_fail_closed() -> None:
