@@ -1118,8 +1118,13 @@ jobs:
             record_authoritative_type_proof route-table "$prior_routes"
             record_authoritative_type_proof internet-gateway "$prior_igs"
             record_authoritative_type_proof vcn "$prior_vcns"
-            if [[ "$(MANIFEST="$authoritative_receipt_manifest" python -c 'import json,os; print(json.load(open(os.environ["MANIFEST"]))["instance_create_status"])')" == REQUEST_UNCERTAIN ]]; then
-              state_set prior_uncertain_instance_proof REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE
+            if (( cleanup_only == 1 )); then
+              [[ -n "${authoritative_receipt_manifest:-}" ]] || return 95
+              if [[ "$(MANIFEST="$authoritative_receipt_manifest" python -c 'import json,os; print(json.load(open(os.environ["MANIFEST"]))["instance_create_status"])')" == REQUEST_UNCERTAIN ]]; then
+                state_set prior_uncertain_instance_proof REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE
+              else
+                state_set prior_uncertain_instance_proof NOT_APPLICABLE
+              fi
             else
               state_set prior_uncertain_instance_proof NOT_APPLICABLE
             fi
