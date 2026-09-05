@@ -13,9 +13,7 @@ on:
     types: [created]
 
 permissions:
-  actions: write
   contents: read
-  issues: write
 
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('issue-881-root-expand-pr-{0}', github.run_id) || (github.event.issue.number == 881 && github.event.comment.user.login == 'olegmed1-art' && contains(fromJSON('["/oracle-ops issue-881-expand-root-and-recover-bba508-paid-bounded","/oracle-ops issue-881-reconcile-run-33919714953"]'), github.event.comment.body)) && 'oracle-instance-workload-mutation' || format('issue-881-root-expand-noop-{0}', github.run_id) }}
@@ -51,6 +49,10 @@ jobs:
       github.event.comment.user.login == 'olegmed1-art' &&
       contains(fromJSON('["/oracle-ops issue-881-expand-root-and-recover-bba508-paid-bounded","/oracle-ops issue-881-reconcile-run-33919714953"]'), github.event.comment.body)
     runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+      issues: write
     # The executable monotonic primary deadline caps every OCI request, waiter,
     # rediscovery, and isolated SSH acceptance at 240 minutes total. Restore
     # AVAILABLE and hydration additionally share one 60-minute subdeadline.
