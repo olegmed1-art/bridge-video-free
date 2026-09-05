@@ -554,7 +554,7 @@ def test_receipt_reports_backup_only_from_proven_step_output() -> None:
         "route_table_create",
         "security_list_create",
         "subnet_create",
-        "instance_create",
+        "paid_instance_create",
     ):
         assert f"value('{prefix}_status'" in receipt
         assert f"value('{prefix}_failure_rc'" in receipt
