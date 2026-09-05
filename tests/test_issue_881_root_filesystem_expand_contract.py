@@ -334,8 +334,8 @@ def test_monotonic_budget_reserves_cleanup_mutation_receipt_and_runner_slack() -
     ):
         assert exact in WORKFLOW
     assert "if (( prior_count > 20 ))" in WORKFLOW
-    assert 'wait_all_absent_bound instance "$target_prior_stamp-boot-acceptance" 600' in WORKFLOW
-    assert 'wait_all_absent_bound boot-volume "$target_prior_stamp-restore" 120' in WORKFLOW
+    assert 'reconcile_bound_resource instance boot-acceptance 600' in WORKFLOW
+    assert 'reconcile_bound_resource boot-volume restore 120' in WORKFLOW
     assert 'delete_total_seconds="$(bounded_wait_seconds 20 "$cleanup_deadline")"' in WORKFLOW
     assert 'timeout --signal=KILL "${delete_request_seconds}s" "${command[@]}"' in WORKFLOW
     assert 'if [[ "$rc" == 124 || "$rc" == 137 ]]' in WORKFLOW
@@ -573,6 +573,80 @@ prior_named_ids instance boot-acceptance
         check=True,
     )
     assert result.stdout.strip() == "exact-id"
+
+
+def test_repeated_inventory_ignores_only_valid_terminal_records() -> None:
+    start = WORKFLOW.index("prior_named_ids() {")
+    end = WORKFLOW.index("load_authoritative_failed_receipt()", start)
+    helper = textwrap.dedent(WORKFLOW[start:end])
+    target = "issue-881-root-recovery-source-run-33914733788-a1"
+    payload = {
+        "data": [
+            {"id": "terminal-id", "display-name": target + "-boot-acceptance", "lifecycle-state": "TERMINATED"},
+            {"id": "active-id", "display-name": target + "-boot-acceptance", "lifecycle-state": "RUNNING"},
+        ]
+    }
+    setup = r'''
+oci_json_request() { OCI_JSON_OUTPUT="$PAYLOAD"; }
+tenancy_id=tenancy; ad=ad; prior_prefix=issue-881-root-recovery-source-run-
+stamp=issue-881-root-recovery-source-run-current-a1
+target_prior_stamp=issue-881-root-recovery-source-run-33914733788-a1
+'''
+    script = helper + setup + r'''
+echo include="$(prior_named_ids instance boot-acceptance | paste -sd, -)"
+echo active="$(prior_named_ids instance boot-acceptance active | paste -sd, -)"
+'''
+    result = subprocess.run(
+        ["bash", "-c", script], env=os.environ | {"PAYLOAD": json.dumps(payload)}, text=True,
+        capture_output=True, check=True,
+    )
+    assert "include=active-id,terminal-id" in result.stdout
+    assert "active=active-id" in result.stdout
+
+    payload["data"][0]["lifecycle-state"] = "ALIEN"
+    rejected = subprocess.run(
+        ["bash", "-c", helper + setup + "prior_named_ids instance boot-acceptance active\n"],
+        env=os.environ | {"PAYLOAD": json.dumps(payload)}, text=True,
+        capture_output=True,
+    )
+    assert rejected.returncode != 0
+
+
+def test_predelete_validation_derives_normal_names_and_rejects_unknown_lifecycle() -> None:
+    start = WORKFLOW.index("validate_bound_id_before_delete()")
+    end = WORKFLOW.index("wait_instance_terminated()", start)
+    helper = textwrap.dedent(WORKFLOW[start:end])
+    setup = r'''
+oci_json_request() { OCI_JSON_OUTPUT="$PAYLOAD"; return 0; }
+cleanup_deadline=999999; tenancy_id=tenancy; ad=ad
+prior_prefix=issue-881-root-recovery-source-run-
+stamp=issue-881-root-recovery-source-run-current-a1
+target_prior_stamp=
+'''
+    name = "issue-881-root-recovery-source-run-older-a2-boot-acceptance"
+
+    def run(state: object, display_name: str = name) -> subprocess.CompletedProcess[str]:
+        payload = {"data": {"id": "expected-id", "display-name": display_name,
+                            "compartment-id": "tenancy", "availability-domain": "ad",
+                            "lifecycle-state": state}}
+        return subprocess.run(
+            ["bash", "-c", helper + setup + r'''
+if validate_bound_id_before_delete instance boot-acceptance expected-id; then
+  echo "rc=0 name=$BOUND_EXPECTED_NAME delete=$BOUND_DELETE_REQUIRED"
+else
+  echo "rc=$?"
+fi
+'''],
+            env=os.environ | {"PAYLOAD": json.dumps(payload)}, text=True, capture_output=True, check=True,
+        )
+
+    active = run("RUNNING")
+    assert f"rc=0 name={name} delete=1" in active.stdout
+    terminal = run("TERMINATED")
+    assert f"rc=0 name={name} delete=0" in terminal.stdout
+    assert "rc=97" in run(None).stdout
+    assert "rc=97" in run("ALIEN").stdout
+    assert "rc=97" in run("RUNNING", "issue-881-root-recovery-source-run-current-a1-boot-acceptance").stdout
 
 
 def test_separate_commands_keep_one_operation_scoped_proven_backup() -> None:
@@ -1540,8 +1614,8 @@ def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> No
     assert "cleanup_only=true" in WORKFLOW
     assert "EXACT_NAME_INVENTORY_EMPTY" in WORKFLOW
     assert "load_authoritative_failed_receipt" in WORKFLOW
-    assert "prove_repeated_exact_stamp_inventory_empty" in WORKFLOW
-    assert "DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_CLEAN" in WORKFLOW
+    assert "prove_repeated_exact_stamp_inventory_no_active" in WORKFLOW
+    assert "DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_NO_ACTIVE" in WORKFLOW
     assert "RECONCILED_PROVEN_ABSENT" in WORKFLOW
     assert "Each known ID must" in WORKFLOW
     cleanup_only_branch = WORKFLOW[
@@ -1555,7 +1629,7 @@ def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> No
 
 
 def test_exact_stamp_inventory_requires_three_clean_passes_and_fails_on_late_visibility() -> None:
-    start = WORKFLOW.index("prove_repeated_exact_stamp_inventory_empty()")
+    start = WORKFLOW.index("prove_repeated_exact_stamp_inventory_no_active()")
     end = WORKFLOW.index("reconcile_prior_attempt_resources()", start)
     helper = textwrap.dedent(WORKFLOW[start:end])
     harness = helper + r'''
@@ -1568,7 +1642,7 @@ prior_named_ids() {
   if [[ "${FAIL_ON_CALL:-0}" == "$count" ]]; then return 1; fi
   if [[ "${LATE_ON_CALL:-0}" == "$count" ]]; then echo late-visible-id; fi
 }
-if prove_repeated_exact_stamp_inventory_empty; then echo rc=0; else echo rc=$?; fi
+if prove_repeated_exact_stamp_inventory_no_active; then echo rc=0; else echo rc=$?; fi
 '''
     with tempfile.TemporaryDirectory() as temp_dir:
         counter = Path(temp_dir) / "counter"
@@ -1629,7 +1703,7 @@ if output="$(bound_resource_ids instance boot-acceptance)"; then echo "rc=0:$out
 def test_cleanup_masks_all_exact_ids_before_public_cleanup_logs() -> None:
     reconcile = WORKFLOW[WORKFLOW.index("reconcile_prior_attempt_resources()") : WORKFLOW.index("cleanup_temp_resources()")]
     assert 'mask_resource_ids' in reconcile
-    assert reconcile.index('mask_resource_ids') < reconcile.index('delete_resource_once instance')
+    assert reconcile.index('mask_resource_ids') < reconcile.index('reconcile_bound_resource instance boot-acceptance')
     receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
     assert "prior_uncertain_instance_proof" in receipt
 
@@ -1643,20 +1717,24 @@ def test_prior_direct_get_proof_is_bound_to_exact_resource_metadata() -> None:
     assert 'data.get("availability-domain")==os.environ["AD"]' in wait_absent
 
     reconcile = WORKFLOW[WORKFLOW.index("reconcile_prior_attempt_resources()") : WORKFLOW.index("cleanup_temp_resources()")]
-    for resource, suffix in (
-        ("instance", "boot-acceptance"),
-        ("boot-volume", "restore"),
-        ("subnet", "subnet"),
-        ("security-list", "ssh-only"),
-        ("route-table", "route"),
-        ("internet-gateway", "ig"),
-        ("vcn", "vcn"),
+    for resource, suffix, timeout in (
+        ("instance", "boot-acceptance", 600),
+        ("boot-volume", "restore", 120),
+        ("subnet", "subnet", 120),
+        ("security-list", "ssh-only", 120),
+        ("route-table", "route", 120),
+        ("internet-gateway", "ig", 120),
+        ("vcn", "vcn", 120),
     ):
-        assert f'wait_all_absent_bound {resource} "$target_prior_stamp-{suffix}"' in reconcile
-        validation = f'validate_bound_ids_before_delete {resource} "$target_prior_stamp-{suffix}"'
+        validation = f'reconcile_bound_resource {resource} {suffix} {timeout}'
         deletion = f'delete_resource_once {resource} "$id"'
         assert validation in reconcile
-        assert reconcile.index(validation) < reconcile.index(deletion)
+    validator = WORKFLOW[WORKFLOW.index("validate_bound_id_before_delete()") : WORKFLOW.index("wait_instance_terminated()")]
+    assert 'TARGET_PRIOR_STAMP="$target_prior_stamp"' in validator
+    assert 'name.startswith(os.environ["PRIOR_PREFIX"])' in validator
+    assert 'name.endswith(suffix)' in validator
+    assert 'assert isinstance(state,str) and state in allowed' in validator
+    assert '"SKIP" if state=="TERMINATED" else "DELETE"' in validator
 
 
 def test_public_receipt_redacts_ocids_and_hashes() -> None:
