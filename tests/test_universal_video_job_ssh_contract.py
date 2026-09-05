@@ -56,11 +56,13 @@ def test_job_uses_pinned_bounded_ssh_transport():
 def test_job_invokes_only_fixed_resident_admin_surfaces():
     assert "oci instance-agent command" not in WORKFLOW
     assert "--execution-user" not in WORKFLOW
-    assert 'submit_cmd="sudo -n /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock sudo -u ocarun sudo -n /usr/local/sbin/universal-video repair-submit-drive-base64 \'$payload\'"' in WORKFLOW
+    assert 'submit_cmd="sudo -n -u ocarun sudo -n /usr/local/sbin/universal-video repair-submit-drive-base64 \'$payload\'"' in WORKFLOW
     assert "status '$JOB_ID' '$PROFILE' '$JOB_HASH' '$SOURCE_FILE_ID'" in WORKFLOW
     assert 'run_remote "$submit_cmd"' in WORKFLOW
     assert 'run_remote "$status_cmd"' in WORKFLOW
     operator = (ROOT / "ops/universal_video_operator.sh").read_text(encoding="utf-8")
+    assert "repair-submit-drive-base64) acquire_mutation_fence;" in operator
+    assert "/run/lock/oracle-workload-mutation.lock" in operator
     assert "systemctl is-active --quiet universal-video-container.service" in operator
     assert "legacy universal-video.service still active" in operator
     assert 'repair_out="$(/usr/local/sbin/universal-video-spool-repair' in operator

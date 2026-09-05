@@ -84,7 +84,9 @@ def test_downstream_power_boundary_remains_exact_and_idle_gated():
 def test_video_and_power_mutations_share_a_non_cancelling_lock():
     video = VIDEO.read_text(encoding="utf-8")
     power = POWER.read_text(encoding="utf-8")
-    assert "/run/lock/oracle-workload-mutation.lock" in video
+    operator = (ROOT / "ops/universal_video_operator.sh").read_text(encoding="utf-8")
+    assert "/run/lock/oracle-workload-mutation.lock" in operator
+    assert "repair-submit-drive-base64) acquire_mutation_fence;" in operator
     assert "oracle-universal-video-request-{0}" in video
     assert "oracle-universal-video-pr-{0}" in video
     assert "'oracle-instance-workload-mutation'" in power
