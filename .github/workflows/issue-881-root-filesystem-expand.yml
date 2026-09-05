@@ -1238,6 +1238,9 @@ jobs:
           # mutation. Runner loss during create, hydration, or network setup
           # must not leave the exact-stamped 97 GB volume allocated.
           watchdog_cleanup_epoch=$(( $(date -u +%s) + 14400 ))
+          watchdog_payload="${stamp}|${watchdog_cleanup_epoch}|${ad}|${GITHUB_RUN_ID}|${GITHUB_RUN_ATTEMPT}"
+          watchdog_authorization_hmac="$(WATCHDOG_PAYLOAD="$watchdog_payload" python -c 'import hashlib,hmac,os; print(hmac.new(os.environ["OCI_KEY"].encode(),os.environ["WATCHDOG_PAYLOAD"].encode(),hashlib.sha256).hexdigest())')"
+          [[ "$watchdog_authorization_hmac" =~ ^[0-9a-f]{64}$ ]] || exit 95
           mark_phase dispatch_paid_instance_watchdog
           gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/issue-881-paid-instance-watchdog.yml/dispatches" \
             -f ref=main \
@@ -1245,7 +1248,9 @@ jobs:
             -f "inputs[expiry_epoch]=$watchdog_cleanup_epoch" \
             -f "inputs[expected_ad]=$ad" \
             -f "inputs[parent_run_id]=${GITHUB_RUN_ID}" \
-            -f "inputs[parent_run_attempt]=${GITHUB_RUN_ATTEMPT}"
+            -f "inputs[parent_run_attempt]=${GITHUB_RUN_ATTEMPT}" \
+            -f "inputs[authorization_hmac]=$watchdog_authorization_hmac"
+          unset watchdog_authorization_hmac watchdog_payload
           state_set paid_watchdog_status DISPATCHED
           watchdog_arm_deadline=$(( $(monotonic_now) + 180 ))
           watchdog_armed=0
