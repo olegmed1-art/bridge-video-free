@@ -131,6 +131,16 @@ def test_independent_watchdog_retries_compute_and_storage_cleanup() -> None:
     assert 'effective_expiry="$now"' in WATCHDOG
     assert "if launch_comments=\"$(timeout --signal=KILL 30s gh api" in WATCHDOG
     assert "while ! timeout --signal=KILL 30s oci bv boot-volume list" in WATCHDOG
+    assert "late_instance_id" in WATCHDOG and 'terminate --instance-id "$late_instance_id"' in WATCHDOG
+    assert "late_volume_id" in WATCHDOG and 'delete --boot-volume-id "$late_volume_id"' in WATCHDOG
+
+
+def test_watchdog_destructive_entrypoint_is_owner_gated() -> None:
+    job = WATCHDOG[WATCHDOG.index("terminate-exact-paid-instance:"):]
+    assert "github.repository_owner == 'olegmed1-art'" in job
+    assert "github.actor == 'olegmed1-art'" in job
+    assert "github.triggering_actor == 'olegmed1-art'" in job
+    assert job.index("github.triggering_actor == 'olegmed1-art'") < job.index("runs-on:")
 
 
 def test_paid_price_basis_expires_fail_closed() -> None:
