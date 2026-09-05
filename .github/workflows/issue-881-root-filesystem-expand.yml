@@ -1254,9 +1254,22 @@ jobs:
           state_set paid_watchdog_status DISPATCHED
           watchdog_arm_deadline=$(( $(monotonic_now) + 180 ))
           watchdog_armed=0
+          watchdog_run_id=""
           while (( $(monotonic_now) < watchdog_arm_deadline )); do
             watchdog_comments="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/881/comments" --jq '.[] | select(.user.login=="github-actions[bot]") | .body')"
             if grep -Fq "PAID_WATCHDOG_ARMED stamp=${stamp} cleanup_epoch=${watchdog_cleanup_epoch} run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/" <<<"$watchdog_comments"; then
+              watchdog_run_id="$(WATCHDOG_COMMENTS="$watchdog_comments" STAMP="$stamp" CLEANUP_EPOCH="$watchdog_cleanup_epoch" RUN_PREFIX="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/" python - <<'PY'
+          import os,re
+          prefix=(f"PAID_WATCHDOG_ARMED stamp={os.environ['STAMP']} "
+                  f"cleanup_epoch={os.environ['CLEANUP_EPOCH']} "
+                  f"run={os.environ['RUN_PREFIX']}")
+          matches={line[len(prefix):].strip() for line in os.environ['WATCHDOG_COMMENTS'].splitlines()
+                   if line.startswith(prefix) and re.fullmatch(r'[0-9]+', line[len(prefix):].strip())}
+          assert len(matches)==1
+          print(matches.pop())
+          PY
+              )"
+              [[ "$watchdog_run_id" =~ ^[0-9]+$ ]] || exit 95
               watchdog_armed=1
               break
             fi
@@ -1403,6 +1416,17 @@ jobs:
             printf '%s' "$OCI_JSON_OUTPUT" >"$memory_availability_file"
             paid_launch_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             python ops/oci_paid_acceptance_guard.py --shapes-json "$shapes_file" --availability-json "$availability_file" --memory-availability-json "$memory_availability_file" --source-shape "$shape" --now-utc "$paid_launch_utc" >/dev/null
+            watchdog_live_json="$RUNNER_TEMP/paid-watchdog-live.json"
+            timeout --signal=KILL 30s gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${watchdog_run_id}" >"$watchdog_live_json"
+            EXPECTED_REPOSITORY="$GITHUB_REPOSITORY" python - "$watchdog_live_json" <<'PY'
+          import json,os,sys
+          d=json.load(open(sys.argv[1]))
+          assert d.get('repository',{}).get('full_name')==os.environ['EXPECTED_REPOSITORY']
+          assert d.get('event')=='workflow_dispatch' and d.get('name')=='Issue 881 paid acceptance instance watchdog'
+          assert d.get('head_branch')=='main' and d.get('status') in {'queued','in_progress'}
+          assert d.get('actor',{}).get('login')=='github-actions[bot]'
+          PY
+            state_set paid_watchdog_status LIVE_AT_LAUNCH
             gh api "repos/${GITHUB_REPOSITORY}/issues/881/comments" -f body="PAID_WATCHDOG_LAUNCH stamp=${stamp} expiry_epoch=${paid_expiry_epoch} run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
             state_set paid_launch_utc "$paid_launch_utc"
             mark_phase launch_bounded_paid_acceptance_instance
