@@ -146,6 +146,24 @@ def test_extractor_isolates_numeric_overflow_as_an_evidence_gap(mutation):
     assert "too large" in extracted["gaps"][0]["reason"]
 
 
+@pytest.mark.parametrize("mutation", [
+    lambda observation: observation["observed_episode"].update(start=float("nan")),
+    lambda observation: observation["transcript"].update(end=float("inf")),
+    lambda observation: observation["frame_evidence"].update(score=float("-inf")),
+    lambda observation: observation["bridge_context"]["board"].update(
+        confidence=float("nan")
+    ),
+])
+def test_extractor_isolates_nonfinite_evidence_as_a_gap(mutation):
+    video = _video_result()
+    mutation(video["observations"][0])
+    extracted = extract_canon_candidates(video)
+    assert extracted["status"] == "NO_CANDIDATE_EXTRACTED"
+    assert extracted["candidates"] == []
+    assert extracted["gaps"][0]["status"] == "NEEDS_EVIDENCE"
+    assert "must be finite" in extracted["gaps"][0]["reason"]
+
+
 @pytest.mark.parametrize("mutation, expected", [
     (lambda verdicts: verdicts.pop(), "I2 and I3"),
     (lambda verdicts: verdicts[1].update(verifier_family="independent-i2"), "must be independent"),

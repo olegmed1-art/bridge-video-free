@@ -108,6 +108,21 @@ def test_correction_receipt_cannot_be_replayed_for_another_kind():
         )
 
 
+@pytest.mark.parametrize("corrected_value", [
+    float("nan"),
+    float("inf"),
+    {"nested": [float("-inf")]},
+])
+def test_nonfinite_correction_value_is_rejected_before_staging(corrected_value):
+    master = _master()
+    master["human_corrections"][0]["corrected_value"] = corrected_value
+    quality = _quality(master)
+    with pytest.raises(VideoLearningFeedbackError, match="strict JSON"):
+        build_learning_feedback(
+            master, quality, correction_receipt_resolver=_resolver(quality)
+        )
+
+
 def test_holdout_metric_direction_is_enforced():
     master = _master()
     master["model_evaluation"] = {

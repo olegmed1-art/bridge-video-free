@@ -40,6 +40,20 @@ def _digest(value: object) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def _strict_json_copy(value: Any, label: str) -> Any:
+    try:
+        encoded = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        return json.loads(encoded)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise VideoLearningFeedbackError(f"{label} must be strict JSON") from exc
+
+
 def build_learning_feedback(
     master: Mapping[str, Any],
     quality: Mapping[str, Any],
@@ -102,7 +116,10 @@ def build_learning_feedback(
         correction_id = _text(raw.get("correction_id"), "correction_id")
         input_ref = _text(raw.get("input_ref"), "input_ref")
         reviewer_ref = _text(raw.get("reviewer_ref"), "reviewer_ref")
-        corrected_value_sha = _digest(raw.get("corrected_value"))
+        corrected_value = _strict_json_copy(
+            raw.get("corrected_value"), "correction corrected_value"
+        )
+        corrected_value_sha = _digest(corrected_value)
         receipt = receipts.get(correction_id)
         if not receipt or receipt.get("status") != "VERIFIED":
             raise VideoLearningFeedbackError("verified correction review receipt required")
@@ -131,7 +148,7 @@ def build_learning_feedback(
             "source_sha256": source_sha,
             "kind": kind,
             "input_ref": input_ref,
-            "corrected_value": raw.get("corrected_value"),
+            "corrected_value": corrected_value,
             "reviewer_ref": reviewer_ref,
             "review_receipt_sha256": receipt["receipt_sha256"],
             "review_receipt_authentication": "TRUSTED_STORAGE_RESOLVED",

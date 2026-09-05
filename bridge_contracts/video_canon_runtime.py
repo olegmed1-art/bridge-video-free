@@ -78,8 +78,46 @@ def _number(value: Any, label: str) -> float:
 
 
 def _digest(value: Any) -> str:
-    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    try:
+        raw = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise VideoCanonRuntimeError("digest input must be strict JSON") from exc
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _validate_strict_json(value: Any, label: str) -> None:
+    """Reject values that cannot cross the PostgreSQL jsonb boundary."""
+    if value is None or isinstance(value, (str, bool)):
+        return
+    if isinstance(value, int):
+        try:
+            numeric = float(value)
+        except OverflowError:
+            _fail(f"{label} number too large")
+        if not math.isfinite(numeric):
+            _fail(f"{label} number must be finite")
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            _fail(f"{label} number must be finite")
+        return
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            if not isinstance(key, str):
+                _fail(f"{label} object key must be text")
+            _validate_strict_json(child, label)
+        return
+    if isinstance(value, (list, tuple)):
+        for child in value:
+            _validate_strict_json(child, label)
+        return
+    _fail(f"{label} contains a non-JSON value")
 
 
 def extract_canon_candidates(video_result: Mapping[str, Any]) -> dict[str, Any]:
@@ -133,6 +171,7 @@ def extract_canon_candidates(video_result: Mapping[str, Any]) -> dict[str, Any]:
             continue
         seen.add(assertion_id)
         try:
+            _validate_strict_json(raw, "observation")
             learning = _learning_candidate(job_id, algorithm_revision, normalized_source, raw)
             assertion = _teacher_assertion(raw)
             candidate = build_video_canon_candidate(learning, assertion)
