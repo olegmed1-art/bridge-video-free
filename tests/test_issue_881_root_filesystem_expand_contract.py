@@ -334,8 +334,8 @@ def test_monotonic_budget_reserves_cleanup_mutation_receipt_and_runner_slack() -
     ):
         assert exact in WORKFLOW
     assert "if (( prior_count > 20 ))" in WORKFLOW
-    assert 'wait_all_absent instance 600' in WORKFLOW
-    assert WORKFLOW.count('wait_all_absent boot-volume 120') >= 1
+    assert 'wait_all_absent_bound instance "$target_prior_stamp-boot-acceptance" 600' in WORKFLOW
+    assert 'wait_all_absent_bound boot-volume "$target_prior_stamp-restore" 120' in WORKFLOW
     assert 'delete_total_seconds="$(bounded_wait_seconds 20 "$cleanup_deadline")"' in WORKFLOW
     assert 'timeout --signal=KILL "${delete_request_seconds}s" "${command[@]}"' in WORKFLOW
     assert 'if [[ "$rc" == 124 || "$rc" == 137 ]]' in WORKFLOW
@@ -1632,6 +1632,44 @@ def test_cleanup_masks_all_exact_ids_before_public_cleanup_logs() -> None:
     assert reconcile.index('mask_resource_ids') < reconcile.index('delete_resource_once instance')
     receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
     assert "prior_uncertain_instance_proof" in receipt
+
+
+def test_prior_direct_get_proof_is_bound_to_exact_resource_metadata() -> None:
+    wait_absent = WORKFLOW[WORKFLOW.index("wait_absent()") : WORKFLOW.index("wait_all_absent()")]
+    assert 'EXPECTED_NAME="$expected_name"' in wait_absent
+    assert 'data.get("display-name")==expected_name' in wait_absent
+    assert 'data.get("compartment-id")==os.environ["TENANCY_ID"]' in wait_absent
+    assert 'kind not in {"instance","boot-volume"}' in wait_absent
+    assert 'data.get("availability-domain")==os.environ["AD"]' in wait_absent
+
+    reconcile = WORKFLOW[WORKFLOW.index("reconcile_prior_attempt_resources()") : WORKFLOW.index("cleanup_temp_resources()")]
+    for resource, suffix in (
+        ("instance", "boot-acceptance"),
+        ("boot-volume", "restore"),
+        ("subnet", "subnet"),
+        ("security-list", "ssh-only"),
+        ("route-table", "route"),
+        ("internet-gateway", "ig"),
+        ("vcn", "vcn"),
+    ):
+        assert f'wait_all_absent_bound {resource} "$target_prior_stamp-{suffix}"' in reconcile
+        validation = f'validate_bound_ids_before_delete {resource} "$target_prior_stamp-{suffix}"'
+        deletion = f'delete_resource_once {resource} "$id"'
+        assert validation in reconcile
+        assert reconcile.index(validation) < reconcile.index(deletion)
+
+
+def test_public_receipt_redacts_ocids_and_hashes() -> None:
+    receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
+    assert "def redacted_presence" in receipt
+    for key in (
+        "prior_resource_ids",
+        "prior_resource_summary",
+        "prior_instance_authoritative_id_hashes",
+        "prior_boot_volume_authoritative_id_hashes",
+        "prior_vcn_authoritative_id_hashes",
+    ):
+        assert f"redacted_presence('{key}')" in receipt
 
 
 def test_receipt_is_literal_safe_and_retains_cleanup_evidence() -> None:
