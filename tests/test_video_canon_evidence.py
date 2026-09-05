@@ -190,6 +190,10 @@ def test_hidden_information_is_rejected_inside_json_serializable_tuple():
     {"N": {"cards": "AS"}},
     {"партнёр": {"карты": "AKQ"}},
     {"противник": {"cards": "AS"}},
+    {"партнера": {"cards": "AS"}},
+    {"соперника": {"cards": "QH"}},
+    {"оппонента": {"cards": "9D"}},
+    {"противника": {"cards": "2C"}},
 ])
 def test_nested_actor_context_is_preserved_for_hidden_value_scanning(compiled_payload):
     assertion = _assertion()
@@ -383,6 +387,18 @@ def test_payload_hash_is_deterministic_and_source_bound():
     ]
     assert first["stable_key"].endswith(first["payload_hash"])
     assert third["stable_key"].endswith(third["payload_hash"])
+
+
+def test_normalized_rule_text_identity_fields_are_canonicalized_in_payload():
+    assertion = _assertion()
+    assertion["normalized_rule"]["rule_key"] = "  response-to-1h  "
+    assertion["normalized_rule"]["condition_schema_version"] = "  bridge-condition-v1  "
+    assertion["normalized_rule"]["method_version"] = "  teacher-normalizer-v1  "
+    result = build_video_canon_candidate(_learning(), assertion)
+    rule = result["payload"]["normalized_rule"]
+    assert rule["rule_key"] == "response-to-1h"
+    assert rule["condition_schema_version"] == "bridge-condition-v1"
+    assert rule["method_version"] == "teacher-normalizer-v1"
 
 
 def test_correction_changes_content_hash_but_preserves_semantic_identity():

@@ -287,6 +287,14 @@ BEGIN
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"противник":{"cards":"AS"}}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"партнера":{"cards":"AS"}}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"соперника":{"cards":"QH"}}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"оппонента":{"cards":"9D"}}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
+       '{"противника":{"cards":"2C"}}'::jsonb
+     )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"Партнёр: туз пик"}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"Соперник: Q"}'::jsonb

@@ -252,7 +252,7 @@ def _is_complete_hand_shape(hand: str) -> bool:
 
 _ACTOR_CONTEXT_KEY = re.compile(
     r"(?:(?:actual)?(?:partner|opponent|north|east|south|west|leftopponent|rightopponent|lefthandopponent|righthandopponent|[lr](?:\s*\.\s*)?h(?:\s*\.\s*)?o\.?|n|e|s|w)s?"
-    r"|партн[её]р|соперник|оппонент|противник)"
+    r"|партн[её]р|партн[её]ра|соперник|соперника|оппонент|оппонента|противник|противника)"
 )
 
 
@@ -496,8 +496,19 @@ def build_video_canon_candidate(
             _fail(f"normalized {field} must be an integer")
     if normalized_rule["specificity"] < 0:
         _fail("normalized specificity must be non-negative")
-    _text(normalized_rule.get("condition_schema_version"), "normalized condition_schema_version")
-    _text(normalized_rule.get("method_version"), "normalized method_version")
+    condition_schema_version = _text(
+        normalized_rule.get("condition_schema_version"),
+        "normalized condition_schema_version",
+    )
+    rule_method_version = _text(
+        normalized_rule.get("method_version"), "normalized method_version"
+    )
+    normalized_rule_payload = deepcopy(dict(normalized_rule))
+    normalized_rule_payload.update({
+        "rule_key": rule_key,
+        "condition_schema_version": condition_schema_version,
+        "method_version": rule_method_version,
+    })
     explanation = assertion.get("explanation")
     if not isinstance(explanation, Mapping) or set(explanation) != {
         "why_or_purpose", "consequences", "rejected_alternatives", "evidence_refs"
@@ -591,7 +602,7 @@ def build_video_canon_candidate(
         "semantic_scope": semantic_scope,
         "system_profile": system_profile,
         "learner_level": learner_level,
-        "normalized_rule": deepcopy(dict(normalized_rule)),
+        "normalized_rule": normalized_rule_payload,
         "semantic_confidence": confidence,
         "ambiguities": ambiguities,
         "contradictions": contradictions,
