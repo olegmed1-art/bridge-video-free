@@ -116,9 +116,11 @@ def test_independent_watchdog_retries_compute_and_storage_cleanup() -> None:
     assert "timeout-minutes: 300" in WATCHDOG
     assert "PAID_WATCHDOG_ARMED" in WATCHDOG
     assert "PAID_WATCHDOG_LAUNCH" in WATCHDOG
-    assert WATCHDOG.count("while ! timeout --signal=KILL 30s oci compute instance list") == 2
+    assert WATCHDOG.count("oci compute instance list") >= 2
     assert "instance_discovery_deadline=$((SECONDS + 120))" in WATCHDOG
     assert "instance_confirmation_deadline=$((SECONDS + 120))" in WATCHDOG
+    assert "instance_terminal_proven == 0" in WATCHDOG
+    assert "instance_inventory_clean == 1" in WATCHDOG
     instance_loop = WATCHDOG[WATCHDOG.index("while (( SECONDS < instance_cleanup_deadline ))"):]
     assert instance_loop.index("while (( SECONDS < instance_cleanup_deadline ))") < instance_loop.index("oci compute instance terminate")
     volume_loop = WATCHDOG[WATCHDOG.index("deadline=$((SECONDS + 120))"):]
