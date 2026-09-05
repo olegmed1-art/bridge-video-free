@@ -1,3 +1,0 @@
-# Speaker/diarization runtime installed only for the bridge_lesson sidecar profile.
--r requirements-universal-video.txt
-numpy==2.3.2
