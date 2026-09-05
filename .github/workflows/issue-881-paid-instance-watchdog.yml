@@ -92,7 +92,7 @@ jobs:
           assert isinstance(data,list) and all(isinstance(x,dict) for x in data)
           matched=[]
           for item in data:
-              if item.get('display-name') != os.environ['STAMP']+'-boot-acceptance' or item.get('lifecycle-state') in {'TERMINATED','TERMINATING'}: continue
+              if item.get('display-name') != os.environ['STAMP']+'-boot-acceptance' or item.get('lifecycle-state') == 'TERMINATED': continue
               assert item.get('compartment-id')==os.environ['TENANCY_ID'] and item.get('availability-domain')==os.environ['EXPECTED_AD']
               assert item.get('shape')=='VM.Standard.E5.Flex'
               config=item.get('shape-config') or {}
@@ -103,7 +103,7 @@ jobs:
           PY
           )
           if (( ${#ids[@]} == 1 )); then
-            timeout --signal=KILL 30s oci compute instance terminate --instance-id "${ids[0]}" --preserve-boot-volume true --force --output json >/dev/null 2>/dev/null
+            timeout --signal=KILL 30s oci compute instance terminate --instance-id "${ids[0]}" --preserve-boot-volume true --force --output json >/dev/null 2>/dev/null || true
             deadline=$((SECONDS + 600))
             while (( SECONDS < deadline )); do
               if timeout --signal=KILL 20s oci compute instance get --instance-id "${ids[0]}" --output json >"$instances" 2>/dev/null; then
@@ -113,8 +113,6 @@ jobs:
           PY
                 )"
                 [[ "$state" == TERMINATED ]] && break
-              else
-                break
               fi
               sleep 5
             done
@@ -123,7 +121,48 @@ jobs:
           STAMP="$STAMP" python - "$instances" <<'PY'
           import json,os,sys
           data=json.load(open(sys.argv[1])).get('data')
-          active=[x for x in data if isinstance(x,dict) and x.get('display-name')==os.environ['STAMP']+'-boot-acceptance' and x.get('lifecycle-state') not in {'TERMINATED','TERMINATING'}]
+          active=[x for x in data if isinstance(x,dict) and x.get('display-name')==os.environ['STAMP']+'-boot-acceptance' and x.get('lifecycle-state')!='TERMINATED']
           assert not active
           PY
-          gh api "repos/${GITHUB_REPOSITORY}/issues/881/comments" -f body="Paid acceptance watchdog: exact-stamped instance is PROVEN_ABSENT; run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. No resource IDs retained."
+
+          # The primary runner normally removes the restored boot volume. If
+          # that runner disappeared, the independent watchdog owns the same
+          # exact stamp and must remove the storage allocation too.
+          volumes="$RUNNER_TEMP/volumes.json"
+          timeout --signal=KILL 30s oci bv boot-volume list --compartment-id "$tenancy_id" --availability-domain "$EXPECTED_AD" --all --output json >"$volumes" 2>/dev/null
+          mapfile -t volume_ids < <(STAMP="$STAMP" TENANCY_ID="$tenancy_id" EXPECTED_AD="$EXPECTED_AD" python - "$volumes" <<'PY'
+          import json,os,sys
+          data=json.load(open(sys.argv[1])).get('data')
+          assert isinstance(data,list) and all(isinstance(x,dict) for x in data)
+          matched=[]
+          for item in data:
+              if item.get('display-name') != os.environ['STAMP']+'-restore' or item.get('lifecycle-state') == 'TERMINATED': continue
+              assert item.get('compartment-id')==os.environ['TENANCY_ID'] and item.get('availability-domain')==os.environ['EXPECTED_AD']
+              assert item.get('size-in-gbs')==97
+              matched.append(item.get('id'))
+          assert len(matched)<=1 and all(isinstance(x,str) and x for x in matched)
+          print('\n'.join(matched))
+          PY
+          )
+          if (( ${#volume_ids[@]} == 1 )); then
+            timeout --signal=KILL 30s oci bv boot-volume delete --boot-volume-id "${volume_ids[0]}" --force >/dev/null 2>/dev/null || true
+          fi
+          deadline=$((SECONDS + 120))
+          while (( SECONDS < deadline )); do
+            timeout --signal=KILL 30s oci bv boot-volume list --compartment-id "$tenancy_id" --availability-domain "$EXPECTED_AD" --all --output json >"$volumes" 2>/dev/null
+            if STAMP="$STAMP" python - "$volumes" <<'PY'
+          import json,os,sys
+          data=json.load(open(sys.argv[1])).get('data')
+          remaining=[x for x in data if isinstance(x,dict) and x.get('display-name')==os.environ['STAMP']+'-restore' and x.get('lifecycle-state')!='TERMINATED']
+          assert not remaining
+          PY
+            then break; fi
+            sleep 5
+          done
+          STAMP="$STAMP" python - "$volumes" <<'PY'
+          import json,os,sys
+          data=json.load(open(sys.argv[1])).get('data')
+          remaining=[x for x in data if isinstance(x,dict) and x.get('display-name')==os.environ['STAMP']+'-restore' and x.get('lifecycle-state')!='TERMINATED']
+          assert not remaining
+          PY
+          gh api "repos/${GITHUB_REPOSITORY}/issues/881/comments" -f body="Paid acceptance watchdog: exact-stamped instance and restored boot volume are PROVEN_ABSENT; run ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}. No resource IDs retained."
