@@ -137,10 +137,22 @@ def test_independent_watchdog_retries_compute_and_storage_cleanup() -> None:
 
 def test_watchdog_destructive_entrypoint_is_owner_gated() -> None:
     job = WATCHDOG[WATCHDOG.index("terminate-exact-paid-instance:"):]
-    assert "github.repository_owner == 'olegmed1-art'" in job
-    assert "github.actor == 'olegmed1-art'" in job
-    assert "github.triggering_actor == 'olegmed1-art'" in job
-    assert job.index("github.triggering_actor == 'olegmed1-art'") < job.index("runs-on:")
+    assert "PARENT_RUN_ID" in job and "PARENT_RUN_ATTEMPT" in job
+    assert "actions/runs/${PARENT_RUN_ID}" in job
+    assert "d.get('event')=='issue_comment'" in job
+    assert "d.get('status')=='in_progress'" in job
+    assert "d.get('actor',{}).get('login')=='olegmed1-art'" in job
+    assert "d.get('triggering_actor',{}).get('login')=='olegmed1-art'" in job
+    assert '-f "inputs[parent_run_id]=${GITHUB_RUN_ID}"' in WORKFLOW
+    assert '-f "inputs[parent_run_attempt]=${GITHUB_RUN_ATTEMPT}"' in WORKFLOW
+
+
+def test_watchdog_propagates_all_inventory_validator_failures() -> None:
+    assert "< <(STAMP=" not in WATCHDOG
+    for name in ("instance-ids", "late-instance-ids", "volume-ids", "late-volume-ids"):
+        assert f'$RUNNER_TEMP/{name}' in WATCHDOG
+    assert WATCHDOG.count("then exit 101; fi") == 2
+    assert WATCHDOG.count("then exit 102; fi") == 2
 
 
 def test_paid_price_basis_expires_fail_closed() -> None:
