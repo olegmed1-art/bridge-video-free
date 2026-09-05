@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -18,6 +19,7 @@ MAX_RUNTIME_SECONDS = 1800
 MAX_COMPUTE_USD = Decimal("1.00")
 MAX_HOURLY_RATE_USD = Decimal("0.0265")
 PRICE_BASIS = "https://www.oracle.com/cloud/price-list/#compute;reviewed-2026-09-05"
+PRICE_BASIS_VALID_UNTIL = datetime(2026, 10, 5, tzinfo=timezone.utc)
 
 
 class Rejected(ValueError):
@@ -41,7 +43,15 @@ def _decimal(value: object, label: str) -> Decimal:
     return result
 
 
-def select(shapes: dict, ocpu_availability: dict, memory_availability: dict, source_shape: str) -> dict:
+def select(
+    shapes: dict,
+    ocpu_availability: dict,
+    memory_availability: dict,
+    source_shape: str,
+    now_utc: datetime,
+) -> dict:
+    if now_utc.tzinfo is None or now_utc.astimezone(timezone.utc) >= PRICE_BASIS_VALID_UNTIL:
+        raise Rejected("PRICE_BASIS_EXPIRED")
     data = shapes.get("data")
     if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
         raise Rejected("INVALID_SHAPE_INVENTORY")
@@ -94,6 +104,7 @@ def select(shapes: dict, ocpu_availability: dict, memory_availability: dict, sou
         "memory_gb": int(PAID_MEMORY_GB),
         "ocpus": int(PAID_OCPUS),
         "price_basis": PRICE_BASIS,
+        "price_basis_valid_until": PRICE_BASIS_VALID_UNTIL.isoformat().replace("+00:00", "Z"),
         "runtime_limit_seconds": MAX_RUNTIME_SECONDS,
         "shape": PAID_SHAPE,
     }
@@ -105,15 +116,18 @@ def main() -> int:
     parser.add_argument("--availability-json", required=True)
     parser.add_argument("--memory-availability-json", required=True)
     parser.add_argument("--source-shape", required=True)
+    parser.add_argument("--now-utc", required=True)
     args = parser.parse_args()
     try:
+        now_utc = datetime.fromisoformat(args.now_utc.replace("Z", "+00:00"))
         result = select(
             _load(args.shapes_json),
             _load(args.availability_json),
             _load(args.memory_availability_json),
             args.source_shape,
+            now_utc,
         )
-    except (OSError, json.JSONDecodeError, Rejected) as exc:
+    except (OSError, json.JSONDecodeError, Rejected, ValueError) as exc:
         reason = str(exc) if isinstance(exc, Rejected) else "INVALID_PREFLIGHT_INPUT"
         print(json.dumps({"status": "REJECTED", "reason": reason}, sort_keys=True))
         return 2

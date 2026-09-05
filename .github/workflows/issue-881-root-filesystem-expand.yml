@@ -6,12 +6,14 @@ on:
       - '.github/workflows/issue-881-root-filesystem-expand.yml'
       - 'ops/oracle_universal_video_root_filesystem_expand.sh'
       - 'ops/oci_paid_acceptance_guard.py'
+      - '.github/workflows/issue-881-paid-instance-watchdog.yml'
       - 'ops/issue-881-root-filesystem-expand-request.json'
       - 'tests/test_issue_881_root_filesystem_expand_contract.py'
   issue_comment:
     types: [created]
 
 permissions:
+  actions: write
   contents: read
   issues: write
 
@@ -329,9 +331,11 @@ jobs:
           state_set paid_shape_config none
           state_set paid_billing_class none
           state_set paid_price_basis none
+          state_set paid_price_basis_valid_until none
           state_set paid_hourly_rate_max_usd none
           state_set paid_runtime_limit_seconds none
           state_set paid_compute_budget_usd none
+          state_set paid_watchdog_status NOT_STARTED
           state_set paid_launch_utc none
           state_set paid_termination_utc none
           mark_phase initialized
@@ -1350,7 +1354,8 @@ jobs:
             printf '%s' "$OCI_JSON_OUTPUT" >"$availability_file"
             OCI_JSON_MAX_ATTEMPTS=1 oci_json_request oci limits resource-availability get --service-name compute --limit-name standard-e4-memory-count --compartment-id "$tenancy_id" --availability-domain "$ad"
             printf '%s' "$OCI_JSON_OUTPUT" >"$memory_availability_file"
-            if ! python ops/oci_paid_acceptance_guard.py --shapes-json "$shapes_file" --availability-json "$availability_file" --memory-availability-json "$memory_availability_file" --source-shape "$shape" >"$selection_file"; then
+            paid_now_utc="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            if ! python ops/oci_paid_acceptance_guard.py --shapes-json "$shapes_file" --availability-json "$availability_file" --memory-availability-json "$memory_availability_file" --source-shape "$shape" --now-utc "$paid_now_utc" >"$selection_file"; then
               state_set paid_fallback_status REJECTED
               exit 92
             fi
@@ -1358,7 +1363,7 @@ jobs:
           import json,sys
           d=json.load(open(sys.argv[1]))
           assert d.get('status')=='APPROVED'
-          for key in ('shape','ocpus','memory_gb','billing_class','price_basis','hourly_rate_max_usd','runtime_limit_seconds','compute_budget_usd'):
+          for key in ('shape','ocpus','memory_gb','billing_class','price_basis','price_basis_valid_until','hourly_rate_max_usd','runtime_limit_seconds','compute_budget_usd'):
               print(d[key])
           PY
             )
@@ -1368,13 +1373,22 @@ jobs:
             state_set paid_shape_config "ocpus=${paid_ocpus},memory_gb=${paid_memory}"
             state_set paid_billing_class "${paid_values[3]}"
             state_set paid_price_basis "${paid_values[4]}"
-            state_set paid_hourly_rate_max_usd "${paid_values[5]}"
-            state_set paid_runtime_limit_seconds "${paid_values[6]}"
-            state_set paid_compute_budget_usd "${paid_values[7]}"
-            paid_deadline=$(( $(monotonic_now) + paid_values[6] ))
+            state_set paid_price_basis_valid_until "${paid_values[5]}"
+            state_set paid_hourly_rate_max_usd "${paid_values[6]}"
+            state_set paid_runtime_limit_seconds "${paid_values[7]}"
+            state_set paid_compute_budget_usd "${paid_values[8]}"
+            paid_deadline=$(( $(monotonic_now) + paid_values[7] ))
             (( paid_deadline < primary_deadline )) || paid_deadline="$primary_deadline"
             primary_deadline="$paid_deadline"
-            state_set paid_launch_utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            paid_expiry_epoch=$(( $(date -u +%s) + paid_values[7] ))
+            mark_phase dispatch_paid_instance_watchdog
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/workflows/issue-881-paid-instance-watchdog.yml/dispatches" \
+              -f ref=main \
+              -f "inputs[stamp]=$stamp" \
+              -f "inputs[expiry_epoch]=$paid_expiry_epoch" \
+              -f "inputs[expected_ad]=$ad"
+            state_set paid_watchdog_status DISPATCHED
+            state_set paid_launch_utc "$paid_now_utc"
             mark_phase launch_bounded_paid_acceptance_instance
             if create_json_once paid_instance_create "$stamp-boot-acceptance" oci compute instance launch --availability-domain "$ad" --compartment-id "$tenancy_id" --subnet-id "$drill_subnet_id" --shape "$paid_shape" --shape-config "$paid_shape_config" --display-name "$stamp-boot-acceptance" --source-details "{\"sourceType\":\"bootVolume\",\"bootVolumeId\":\"$restored_id\"}" --assign-public-ip true; then
               launch="$OCI_CREATE_JSON"
@@ -1698,7 +1712,9 @@ jobs:
               '- isolated instance launch discovery: status=' + code(value('instance_launch_discovery_status', 'NOT_RECORDED')) + '; rc=' + code(value('instance_launch_discovery_failure_rc', 'none')) + '; stderr=' + code(value('instance_launch_discovery_stderr_class', 'NOT_RECORDED')) + '; stdout=' + code(value('instance_launch_discovery_stdout_shape', 'NOT_RECORDED')) + '; stdout/stderr bytes=' + code(value('instance_launch_discovery_stdout_bytes', 'unknown') + '/' + value('instance_launch_discovery_stderr_bytes', 'unknown')),
               '- paid fallback: ' + code(value('paid_fallback_status', 'NOT_RECORDED')) + '; shape/config: ' + code(value('paid_shape', 'none') + '/' + value('paid_shape_config', 'none')),
               '- paid billing/price basis: ' + code(value('paid_billing_class', 'none') + '/' + value('paid_price_basis', 'none')),
+              '- paid price basis valid until: ' + code(value('paid_price_basis_valid_until', 'none')),
               '- paid hourly/runtime/budget caps: ' + code(value('paid_hourly_rate_max_usd', 'none') + '/' + value('paid_runtime_limit_seconds', 'none') + '/' + value('paid_compute_budget_usd', 'none')),
+              '- independent paid watchdog: ' + code(value('paid_watchdog_status', 'NOT_RECORDED')),
               '- paid launch/termination UTC: ' + code(value('paid_launch_utc', 'none') + '/' + value('paid_termination_utc', 'none')),
               '- restored volume readiness: ' + code(value('restored_volume_wait_status', 'NOT_RECORDED')) + '; state: ' + code(value('restored_volume_wait_last_state', 'none')) + '; rc: ' + code(value('restored_volume_wait_failure_rc', 'none')),
               '- restored volume hydration: ' + code(value('restored_volume_hydration_status', 'NOT_RECORDED')) + '; state: ' + code(value('restored_volume_hydration_last_state', 'none')) + '; rc: ' + code(value('restored_volume_hydration_failure_rc', 'none')),

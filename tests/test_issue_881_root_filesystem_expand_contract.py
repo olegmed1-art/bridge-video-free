@@ -34,6 +34,8 @@ def _paid_guard(shapes: dict, availability: dict, source_shape: str = "VM.Standa
                 str(memory_availability_path),
                 "--source-shape",
                 source_shape,
+                "--now-utc",
+                "2026-09-05T05:00:00Z",
             ],
             text=True,
             capture_output=True,
@@ -84,11 +86,31 @@ def test_paid_fallback_requires_quota_absence_preflight_and_exact_caps() -> None
     assert "oci compute shape list" in WORKFLOW[paid:]
     assert "oci limits resource-availability get" in WORKFLOW[paid:]
     assert "python ops/oci_paid_acceptance_guard.py" in WORKFLOW[paid:]
-    assert 'paid_deadline=$(( $(monotonic_now) + paid_values[6] ))' in WORKFLOW[paid:]
+    assert 'paid_deadline=$(( $(monotonic_now) + paid_values[7] ))' in WORKFLOW[paid:]
     assert "paid_instance_create" in WORKFLOW[paid:]
+    assert "issue-881-paid-instance-watchdog.yml/dispatches" in WORKFLOW[paid:]
+    assert WORKFLOW.index("dispatch_paid_instance_watchdog", paid) < WORKFLOW.index("paid_instance_create", paid)
     receipt = WORKFLOW[WORKFLOW.index("Publish bounded operational receipt") :]
     assert "paid hourly/runtime/budget caps:" in receipt
     assert "present_redacted" in receipt
+
+
+def test_paid_price_basis_expires_fail_closed() -> None:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        shape_path = Path(temp_dir) / "shapes.json"
+        cpu_path = Path(temp_dir) / "cpu.json"
+        memory_path = Path(temp_dir) / "memory.json"
+        shape_path.write_text(json.dumps(_paid_shape()))
+        cpu_path.write_text(json.dumps({"data": {"available": 1}}))
+        memory_path.write_text(json.dumps({"data": {"available": 1}}))
+        result = subprocess.run(
+            ["python", str(PAID_GUARD), "--shapes-json", str(shape_path),
+             "--availability-json", str(cpu_path), "--memory-availability-json", str(memory_path),
+             "--source-shape", "VM.Standard.E5.Flex", "--now-utc", "2026-10-05T00:00:00Z"],
+            text=True, capture_output=True,
+        )
+        assert result.returncode == 2
+        assert json.loads(result.stdout)["reason"] == "PRICE_BASIS_EXPIRED"
 
 
 def test_expansion_is_partition_and_filesystem_specific() -> None:
