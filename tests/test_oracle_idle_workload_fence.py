@@ -139,11 +139,22 @@ def test_durable_diana_requests_use_request_preserving_groups_and_host_fence() -
         assert "github.sha" in group, name
         assert SHARED_FENCE not in group, name
     for operator in (
+        "ops/universal_video_diana11_operator.sh",
         "ops/universal_video_diana11_002_operator.sh",
         "ops/universal_video_diana11_003_operator.sh",
     ):
         text = (ROOT / operator).read_text(encoding="utf-8")
         assert "/run/lock/oracle-workload-mutation.lock" in text
+
+
+def test_legacy_diana_submit_holds_host_fence_before_state_check_and_enqueue() -> None:
+    text = (ROOT / "ops/universal_video_diana11_operator.sh").read_text(encoding="utf-8")
+    submit = text[text.index("submit_for(){") : text.index("publish_bridge(){")]
+    acquire = submit.index("exec 9>/run/lock/oracle-workload-mutation.lock")
+    lock = submit.index("flock -x 9", acquire)
+    state = submit.index('current="$(state_for "$job_id"', lock)
+    enqueue = submit.index('ln "$tmp" "$SPOOL/inbox/$job_file"', state)
+    assert acquire < lock < state < enqueue
 
 
 def test_remaining_host_mutators_acquire_atomic_host_fence() -> None:

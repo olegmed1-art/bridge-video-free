@@ -205,6 +205,8 @@ PY
 
 submit_for(){
   local job_id="$1" profile="$2" purpose="$3" job_file="${1}.json" tmp
+  exec 9>/run/lock/oracle-workload-mutation.lock
+  flock -x 9
   verify_runtime
   local current
   current="$(state_for "$job_id" | sed -n 's/^UV_STATE=//p' | head -n1)"
