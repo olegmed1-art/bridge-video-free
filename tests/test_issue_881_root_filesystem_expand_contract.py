@@ -116,11 +116,15 @@ def test_independent_watchdog_retries_compute_and_storage_cleanup() -> None:
     assert "timeout-minutes: 300" in WATCHDOG
     assert "PAID_WATCHDOG_ARMED" in WATCHDOG
     assert "PAID_WATCHDOG_LAUNCH" in WATCHDOG
-    instance_loop = WATCHDOG[WATCHDOG.index("deadline=$((SECONDS + 600))"):]
-    assert instance_loop.index("while (( SECONDS < deadline ))") < instance_loop.index("oci compute instance terminate")
+    assert "while ! timeout --signal=KILL 30s oci compute instance list" in WATCHDOG
+    instance_loop = WATCHDOG[WATCHDOG.index("while (( SECONDS < instance_cleanup_deadline ))"):]
+    assert instance_loop.index("while (( SECONDS < instance_cleanup_deadline ))") < instance_loop.index("oci compute instance terminate")
     volume_loop = WATCHDOG[WATCHDOG.index("deadline=$((SECONDS + 120))"):]
     assert volume_loop.index("while (( SECONDS < deadline ))") < volume_loop.index("oci bv boot-volume delete")
+    assert "oci bv boot-volume get" in volume_loop
+    assert "volume_terminal_proven == 1" in volume_loop
     assert "launch_expiry <= now + 1800" in WATCHDOG
+    assert "if launch_comments=\"$(timeout --signal=KILL 30s gh api" in WATCHDOG
 
 
 def test_paid_price_basis_expires_fail_closed() -> None:
