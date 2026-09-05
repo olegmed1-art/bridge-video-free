@@ -33,6 +33,17 @@ def _digest(value: object) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def _strict_json_copy(value: Any) -> Any:
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return json.loads(encoded)
+
+
 def _refs(item: Mapping[str, Any]) -> list[str]:
     values: list[object] = []
     for key in ("evidence_refs", "visual_evidence_refs", "evidence"):
@@ -269,9 +280,22 @@ def build_extended_extraction(
         ("system_evolution_observations", "SYSTEM_EVOLUTION_OBSERVATION"),
         ("world_comparison_links", "WORLD_COMPARISON_LINK"),
     ):
-        for item in _items(master.get(field)):
-            status = str(item.get("status") or "REVIEW_REQUIRED")
-            records.append(_record(job_id, kind, item, status))
+        for position, item in enumerate(_items(master.get(field))):
+            try:
+                safe_item = _strict_json_copy(item)
+            except (TypeError, ValueError, OverflowError):
+                gap = {
+                    "stable_key": f"extended-observation-gap:{kind}:{position}",
+                    "gap_type": "EXTENDED_OBSERVATION_INVALID",
+                    "source_candidate_type": kind,
+                    "status": "OPEN",
+                    "reason": "observation must be strict JSON",
+                    "evidence_refs": [],
+                }
+                records.append(_record(job_id, "GAP_OR_CONFLICT", gap, "OPEN"))
+                continue
+            status = str(safe_item.get("status") or "REVIEW_REQUIRED")
+            records.append(_record(job_id, kind, safe_item, status))
     for item in explanations:
         records.append(_record(
             job_id, "EXPLANATION_CANDIDATE", item,

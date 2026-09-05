@@ -1,3 +1,5 @@
+import json
+
 from bridge_contracts.video_extended_extraction import build_extended_extraction
 
 
@@ -19,6 +21,30 @@ def test_rule_without_why_creates_explanation_gap():
     assert len(gaps) == 1
     assert gaps[0]["payload"]["rule_stable_key"] == "rule-7"
     assert gaps[0]["promotion_allowed"] is False
+
+
+def test_nonfinite_extended_observation_becomes_bounded_gap():
+    master = {
+        "job_id": "job-1",
+        "terminology_observations": [{
+            "stable_key": "term:bad",
+            "term": "форсинг",
+            "score": float("nan"),
+        }],
+    }
+    result = build_extended_extraction(
+        master, {"authority": {"canon_activation": "DENY"}}
+    )
+    assert not any(
+        row["candidate_type"] == "SCHOOL_TERMINOLOGY"
+        for row in result["candidate_records"]
+    )
+    gap = next(
+        row for row in result["candidate_records"]
+        if row["payload"].get("gap_type") == "EXTENDED_OBSERVATION_INVALID"
+    )
+    assert gap["payload"]["source_candidate_type"] == "SCHOOL_TERMINOLOGY"
+    json.dumps(result, allow_nan=False)
 
 
 def test_source_bound_why_is_a_separate_explanation_candidate():

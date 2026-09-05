@@ -153,14 +153,9 @@ BEGIN
   PERFORM 1 FROM bidding.video_canon_promotion_job
    WHERE video_canon_ai_verification_bundle_id=
          v_old.video_canon_ai_verification_bundle_id FOR UPDATE;
-  IF EXISTS (
-    SELECT 1 FROM bidding.video_canon_promotion_job
-     WHERE video_canon_ai_verification_bundle_id=
-           v_old.video_canon_ai_verification_bundle_id
-       AND status='promoted'
-  ) THEN
-    RAISE EXCEPTION 'VIDEO_CANON_REASSIGNMENT_AFTER_PROMOTION' USING ERRCODE='55000';
-  END IF;
+  -- A promoted job is retained history, not a reassignment blocker. A new
+  -- assignment/verdict pair creates a distinct assurance-set job which may
+  -- idempotently reference the existing atomic promotion receipt.
   UPDATE bidding.video_canon_promotion_job SET status='blocked',
     terminal_error_code='STATE_STALE',lease_owner=NULL,lease_token=NULL,
     lease_expires_at=NULL,updated_at=clock_timestamp()
@@ -334,7 +329,7 @@ CREATE TABLE bidding.video_canon_promotion_job (
     'I2_I3_MISMATCH','CANDIDATE_CHANGED','STATE_STALE','INTEGRITY_FAILED',
     'EFFECTIVE_PERIOD_EXPIRED','RETRYABLE_DATABASE_ERROR','ATTEMPTS_EXHAUSTED'
   )),
-  promotion_receipt_id uuid UNIQUE
+  promotion_receipt_id uuid
     REFERENCES bidding.video_canon_ai_promotion_receipt(video_canon_ai_promotion_receipt_id) ON DELETE RESTRICT,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),

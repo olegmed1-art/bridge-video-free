@@ -50,7 +50,6 @@ def test_authority_and_independent_assurance_are_fail_closed():
     assert reassignment.count(
         "video_canon_ai_verification_bundle_id=\n         v_old.video_canon_ai_verification_bundle_id"
     ) == 2
-    assert "video_canon_ai_verification_bundle_id=\n           v_old.video_canon_ai_verification_bundle_id" in reassignment
     assert "WHERE analysis_candidate_id=(" not in reassignment
 
 
@@ -69,6 +68,7 @@ def test_delivery_is_leased_fenced_atomic_and_retained():
     assert "video_canon_promotion_delivery_receipt_append_only" in MIGRATION
     assert "analysis_candidate_id uuid NOT NULL UNIQUE" not in MIGRATION
     assert "promotion_receipt_id uuid NOT NULL UNIQUE" not in MIGRATION
+    assert "promotion_receipt_id uuid UNIQUE" not in MIGRATION
     assert "video_canon_promotion_delivery_assurance_uq" in MIGRATION
     assert (
         "analysis_candidate_id,candidate_payload_hash,verification_bundle_sha256,\n"
@@ -82,6 +82,7 @@ def test_delivery_is_leased_fenced_atomic_and_retained():
     assert MIGRATION.count("'EFFECTIVE_PERIOD_EXPIRED','RETRYABLE_DATABASE_ERROR'") == 2
     assert "video_canon_assurance_assignment_id=i2.video_canon_assurance_assignment_id" in MIGRATION
     assert "terminal_error_code='STATE_STALE'" in MIGRATION
+    assert "VIDEO_CANON_REASSIGNMENT_AFTER_PROMOTION" not in MIGRATION
     assert "PERFORM 1 FROM bidding.video_canon_promotion_job" in MIGRATION
     assert "video_canon_ai_verification_bundle_id=v_old.video_canon_ai_verification_bundle_id\n   FOR UPDATE" in MIGRATION
     assert "v_existing.fencing_token IS DISTINCT FROM p_fencing_token" in MIGRATION

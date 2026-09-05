@@ -106,6 +106,16 @@ BEGIN
      ) THEN
     RAISE EXCEPTION 'VIDEO_CANON_DELIVERY_ASSURANCE_IDENTITY_INVALID';
   END IF;
+
+  IF EXISTS (
+    SELECT 1
+      FROM pg_index i
+     WHERE i.indrelid='bidding.video_canon_promotion_job'::regclass
+       AND i.indisunique
+       AND pg_get_indexdef(i.indexrelid)~'\(promotion_receipt_id\)'
+  ) THEN
+    RAISE EXCEPTION 'VIDEO_CANON_JOB_PROMOTION_RECEIPT_CARDINALITY_INVALID';
+  END IF;
 END $$;
 
 ROLLBACK;
