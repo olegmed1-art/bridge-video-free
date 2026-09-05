@@ -119,6 +119,8 @@ def test_independent_watchdog_retries_compute_and_storage_cleanup() -> None:
     assert WATCHDOG.count("oci compute instance list") >= 2
     assert "instance_discovery_deadline=$((SECONDS + 120))" in WATCHDOG
     assert "instance_confirmation_deadline=$((SECONDS + 120))" in WATCHDOG
+    assert "late_instance_clean_count=$((late_instance_clean_count + 1))" in WATCHDOG
+    assert "late_instance_clean_count >= 3" in WATCHDOG
     assert 'if (( ${#ids[@]} == 0 )); then' in WATCHDOG
     assert "instance_inventory_clean == 1" in WATCHDOG
     assert "A known exact ID can never be downgraded" in WATCHDOG
