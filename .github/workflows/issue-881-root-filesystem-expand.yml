@@ -15,7 +15,7 @@ permissions:
   issues: write
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('issue-881-root-expand-pr-{0}', github.run_id) || 'oracle-instance-workload-mutation' }}
+  group: ${{ github.event_name == 'pull_request' && format('issue-881-root-expand-pr-{0}', github.run_id) || (github.event.issue.number == 881 && github.event.comment.user.login == 'olegmed1-art' && contains(fromJSON('["/oracle-ops issue-881-expand-root-and-recover-bba508","/oracle-ops issue-881-reconcile-run-33914733788"]'), github.event.comment.body)) && 'oracle-instance-workload-mutation' || format('issue-881-root-expand-noop-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
@@ -46,18 +46,19 @@ jobs:
       github.event_name == 'issue_comment' &&
       github.event.issue.number == 881 &&
       github.event.comment.user.login == 'olegmed1-art' &&
-      github.event.comment.body == '/oracle-ops issue-881-expand-root-and-recover-bba508'
+      contains(fromJSON('["/oracle-ops issue-881-expand-root-and-recover-bba508","/oracle-ops issue-881-reconcile-run-33914733788"]'), github.event.comment.body)
     runs-on: ubuntu-24.04
-    # The explicit OCI waiters consume at most 240 minutes: 60 minutes each for
-    # backup and restore, five minutes each for five network creates, 30 minutes
-    # each for launch and termination, and five minutes for each of six
-    # dependency-deletion checks, plus five minutes to verify retirement of all
-    # superseded operation backups. A command may spend at most another 30
-    # minutes reconciling prior attempts and distinct owner-command runs.
-    # GitHub's six-hour ceiling therefore leaves at
-    # least 90 minutes for setup, bounded rediscovery, SSH acceptance, recovery,
-    # and the
-    # EXIT cleanup trap instead of cancelling exactly at the waiter ceiling.
+    # The executable monotonic primary deadline caps every OCI request, waiter,
+    # rediscovery, and isolated SSH acceptance at 240 minutes total. Restore
+    # AVAILABLE and hydration additionally share one 60-minute subdeadline.
+    # The current-attempt cleanup worst case is 1,840 seconds: eight 30-second
+    # rediscoveries, eight 20-second delete requests, one 600-second instance
+    # wait, and seven 120-second dependency/backup waits. At most 20 superseded
+    # backups add 400 seconds of DELETE attempts plus one 120-second aggregate
+    # absence wait, for a conservative 2,360-second configured bound inside the
+    # 2,400-second cleanup reserve. Another 40 minutes is
+    # reserved for the host-lock mutation, 25 minutes for the always() receipt,
+    # and 15 minutes for runner setup/cancellation slack under GitHub's 360m cap.
     timeout-minutes: 360
     env:
       ORACLE_HOST: 158.180.47.161
@@ -72,6 +73,9 @@ jobs:
       OCI_KEY: ${{ secrets.OCI_CLI_KEY_CONTENT }}
       OCI_REGION: ${{ secrets.OCI_CLI_REGION }}
       GH_TOKEN: ${{ github.token }}
+      RECOVERY_COMMAND: /oracle-ops issue-881-expand-root-and-recover-bba508
+      CLEANUP_ONLY_COMMAND: /oracle-ops issue-881-reconcile-run-33914733788
+      OWNER_COMMAND: ${{ github.event.comment.body }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -91,10 +95,45 @@ jobs:
           }
           assert json.load(open('ops/issue-881-root-filesystem-expand-request.json')) == expected
           PY
-      - name: Create fresh full backup and prove isolated restored-root boot acceptance
-        id: backup
+      - name: Establish monotonic operation and cleanup budgets
+        id: budget
         run: |
           set -euo pipefail
+          monotonic_now="$(awk '{print int($1)}' /proc/uptime)"
+          [[ "$monotonic_now" =~ ^[0-9]+$ ]]
+          # 240m primary + 40m reserved cleanup + 40m mutation + 25m receipt
+          # = 345m. The job-level 360m timeout retains 15m runner slack.
+          echo "primary_deadline=$((monotonic_now + 14400))" >> "$GITHUB_OUTPUT"
+          echo "cleanup_deadline=$((monotonic_now + 16800))" >> "$GITHUB_OUTPUT"
+          echo "mutation_deadline=$((monotonic_now + 19200))" >> "$GITHUB_OUTPUT"
+          echo "receipt_deadline=$((monotonic_now + 20700))" >> "$GITHUB_OUTPUT"
+      - name: Create fresh full backup and prove isolated restored-root boot acceptance
+        id: backup
+        env:
+          PRIMARY_DEADLINE: ${{ steps.budget.outputs.primary_deadline }}
+          CLEANUP_DEADLINE: ${{ steps.budget.outputs.cleanup_deadline }}
+        run: |
+          set -euo pipefail
+          primary_deadline="$PRIMARY_DEADLINE"
+          cleanup_deadline="$CLEANUP_DEADLINE"
+          [[ "$primary_deadline" =~ ^[0-9]+$ && "$cleanup_deadline" =~ ^[0-9]+$ ]]
+          (( cleanup_deadline > primary_deadline ))
+          # GitHub expression string comparisons are case-insensitive. Enforce
+          # an exact, case-sensitive allowlist in Bash before reading OCI
+          # credentials or issuing any cloud/host request, so a case variant
+          # can never fall through from cleanup-only into full recovery.
+          if [[ "$OWNER_COMMAND" != "$RECOVERY_COMMAND" && "$OWNER_COMMAND" != "$CLEANUP_ONLY_COMMAND" ]]; then
+            echo 'UV_ROOT_OWNER_COMMAND_REJECTED non_exact_command=true' >&2
+            exit 23
+          fi
+          monotonic_now() { awk '{print int($1)}' /proc/uptime; }
+          bounded_wait_seconds() {
+            local requested="$1" absolute_deadline="$2" now remaining
+            now="$(monotonic_now)"
+            remaining=$((absolute_deadline - now))
+            (( remaining > 0 )) || return 42
+            (( requested < remaining )) && printf '%s\n' "$requested" || printf '%s\n' "$remaining"
+          }
           for value in OCI_USER OCI_TENANCY OCI_FINGERPRINT OCI_KEY OCI_REGION; do
             [[ -n "${!value:-}" ]] || exit 21
           done
@@ -118,27 +157,74 @@ jobs:
           PY
           chmod 0600 "$HOME/.oci/config"
           export OCI_CLI_REGION="$OCI_REGION"
-          roots="$(oci iam compartment list --include-root --all --output json)"
-          tenancy_id="$(printf '%s' "$roots" | python -c 'import json,sys; xs=[x["id"] for x in json.load(sys.stdin)["data"] if x.get("id","").startswith("ocid1.tenancy.")]; assert len(xs)==1; print(xs[0])')"
-          instances="$(oci compute instance list --compartment-id "$tenancy_id" --display-name bridge-school-dds3-frankfurt --all --output json)"
-          instance_id="$(printf '%s' "$instances" | python -c 'import json,sys; xs=[x for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state") not in {"TERMINATED","TERMINATING"}]; assert len(xs)==1; print(xs[0]["id"])')"
-          instance_json="$(oci compute instance get --instance-id "$instance_id" --output json)"
-          INSTANCE="$instance_json" python - <<'PY'
+          # Every OCI read in this step is bounded and keeps JSON stdout apart
+          # from warnings/errors on stderr.  A nonzero CLI result, malformed
+          # JSON, or unexpected schema is never interpreted as an empty list.
+          oci_json_request() {
+            local stdout_file="$RUNNER_TEMP/issue-881-oci-json.stdout"
+            local stderr_file="$RUNNER_TEMP/issue-881-oci-json.stderr"
+            local attempt rc max_attempts="${OCI_JSON_MAX_ATTEMPTS:-6}"
+            local retry_delay_seconds="${OCI_JSON_RETRY_DELAY_SECONDS:-5}"
+            local request_timeout_seconds="${OCI_JSON_REQUEST_TIMEOUT_SECONDS:-30}"
+            local absolute_deadline="${OCI_JSON_ABSOLUTE_DEADLINE:-$primary_deadline}" bounded_request_seconds bounded_retry_seconds
+            # Never let a pre-request budget failure inherit response metadata
+            # from an earlier OCI call.
+            OCI_JSON_OUTPUT=""
+            OCI_JSON_ERROR=""
+            OCI_JSON_RAW_ERROR=""
+            for attempt in $(seq 1 "$max_attempts"); do
+              : >"$stdout_file"; : >"$stderr_file"
+              OCI_JSON_OUTPUT=""
+              OCI_JSON_ERROR=""
+              OCI_JSON_RAW_ERROR=""
+              bounded_request_seconds="$(bounded_wait_seconds "$request_timeout_seconds" "$absolute_deadline")" || return 42
+              if timeout --signal=KILL "${bounded_request_seconds}s" \
+                  "$@" --output json >"$stdout_file" 2>"$stderr_file"; then rc=0; else rc=$?; fi
+              OCI_JSON_OUTPUT="$(<"$stdout_file")"
+              OCI_JSON_ERROR="$(<"$stderr_file")"
+              OCI_JSON_RAW_ERROR="$OCI_JSON_ERROR"
+              (( rc == 0 )) || return "$rc"
+              if printf '%s' "$OCI_JSON_OUTPUT" | python -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d,dict)'; then
+                return 0
+              fi
+              OCI_JSON_ERROR=INVALID_JSON_SUCCESS_RESPONSE
+              if (( attempt < max_attempts )); then
+                bounded_retry_seconds="$(bounded_wait_seconds "$retry_delay_seconds" "$absolute_deadline")" || return 42
+                sleep "$bounded_retry_seconds"
+              fi
+            done
+            return 86
+          }
+          # END OCI_JSON_REQUEST_HELPER
+          oci_json_request oci iam compartment list --include-root --all
+          roots="$OCI_JSON_OUTPUT"
+          tenancy_id="$(printf '%s' "$roots" | python -c 'import json,sys; data=json.load(sys.stdin).get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data); xs=[x.get("id") for x in data if isinstance(x.get("id"),str) and x["id"].startswith("ocid1.tenancy.")]; assert len(xs)==1; print(xs[0])')"
+          oci_json_request oci compute instance list --compartment-id "$tenancy_id" --display-name bridge-school-dds3-frankfurt --all
+          instances="$OCI_JSON_OUTPUT"
+          instance_id="$(printf '%s' "$instances" | python -c 'import json,sys; data=json.load(sys.stdin).get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data); allowed={"PROVISIONING","STARTING","RUNNING","STOPPING","STOPPED","TERMINATING","TERMINATED"}; assert all(isinstance(x.get("lifecycle-state"),str) and x["lifecycle-state"] in allowed for x in data); xs=[x for x in data if x.get("display-name")=="bridge-school-dds3-frankfurt" and x["lifecycle-state"] not in {"TERMINATED","TERMINATING"}]; assert len(xs)==1 and isinstance(xs[0].get("id"),str) and xs[0]["id"]; print(xs[0]["id"])')"
+          oci_json_request oci compute instance get --instance-id "$instance_id"
+          instance_json="$OCI_JSON_OUTPUT"
+          INSTANCE="$instance_json" EXPECTED_INSTANCE_ID="$instance_id" python - <<'PY'
           import json,os
-          d=json.loads(os.environ['INSTANCE'])['data']
+          p=json.loads(os.environ['INSTANCE']); d=p.get('data')
+          assert isinstance(d,dict) and d.get('id')==os.environ['EXPECTED_INSTANCE_ID']
           assert d['display-name']=='bridge-school-dds3-frankfurt'
           assert d['lifecycle-state']=='RUNNING'
           assert d['compartment-id'].startswith('ocid1.tenancy.')
           PY
           ad="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["availability-domain"])')"
-          attachments="$(oci compute boot-volume-attachment list --compartment-id "$tenancy_id" --availability-domain "$ad" --instance-id "$instance_id" --all --output json)"
-          boot_id="$(printf '%s' "$attachments" | python -c 'import json,sys; xs=[x for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state")=="ATTACHED"]; assert len(xs)==1; print(xs[0]["boot-volume-id"])')"
-          boot_size="$(oci bv boot-volume get --boot-volume-id "$boot_id" --query 'data."size-in-gbs"' --raw-output)"
+          oci_json_request oci compute boot-volume-attachment list --compartment-id "$tenancy_id" --availability-domain "$ad" --instance-id "$instance_id" --all
+          attachments="$OCI_JSON_OUTPUT"
+          boot_id="$(printf '%s' "$attachments" | EXPECTED_INSTANCE_ID="$instance_id" python -c 'import json,os,sys; data=json.load(sys.stdin).get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data); allowed={"ATTACHING","ATTACHED","DETACHING","DETACHED"}; assert all(x.get("instance-id")==os.environ["EXPECTED_INSTANCE_ID"] and isinstance(x.get("lifecycle-state"),str) and x["lifecycle-state"] in allowed for x in data); xs=[x for x in data if x["lifecycle-state"]=="ATTACHED"]; assert len(xs)==1 and isinstance(xs[0].get("boot-volume-id"),str) and xs[0]["boot-volume-id"]; print(xs[0]["boot-volume-id"])')"
+          oci_json_request oci bv boot-volume get --boot-volume-id "$boot_id"
+          boot_size="$(printf '%s' "$OCI_JSON_OUTPUT" | EXPECTED_BOOT_ID="$boot_id" python -c 'import json,os,sys; d=json.load(sys.stdin).get("data"); assert isinstance(d,dict) and d.get("id")==os.environ["EXPECTED_BOOT_ID"] and isinstance(d.get("size-in-gbs"),int); print(d["size-in-gbs"])')"
           [[ "$boot_size" == 97 ]] || exit 30
-          source_vnics="$(oci compute vnic-attachment list --compartment-id "$tenancy_id" --instance-id "$instance_id" --all --output json)"
-          source_vnic_id="$(printf '%s' "$source_vnics" | python -c 'import json,sys; xs=[x["vnic-id"] for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state")=="ATTACHED"]; assert len(xs)==1; print(xs[0])')"
-          source_vnic_json="$(oci network vnic get --vnic-id "$source_vnic_id" --output json)"
-          source_public_ip="$(printf '%s' "$source_vnic_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"].get("public-ip") or "")')"
+          oci_json_request oci compute vnic-attachment list --compartment-id "$tenancy_id" --instance-id "$instance_id" --all
+          source_vnics="$OCI_JSON_OUTPUT"
+          source_vnic_id="$(printf '%s' "$source_vnics" | EXPECTED_INSTANCE_ID="$instance_id" python -c 'import json,os,sys; data=json.load(sys.stdin).get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data); allowed={"ATTACHING","ATTACHED","DETACHING","DETACHED"}; assert all(x.get("instance-id")==os.environ["EXPECTED_INSTANCE_ID"] and isinstance(x.get("lifecycle-state"),str) and x["lifecycle-state"] in allowed for x in data); xs=[x.get("vnic-id") for x in data if x["lifecycle-state"]=="ATTACHED"]; assert len(xs)==1 and isinstance(xs[0],str) and xs[0]; print(xs[0])')"
+          oci_json_request oci network vnic get --vnic-id "$source_vnic_id"
+          source_vnic_json="$OCI_JSON_OUTPUT"
+          source_public_ip="$(printf '%s' "$source_vnic_json" | EXPECTED_VNIC_ID="$source_vnic_id" python -c 'import ipaddress,json,os,sys; d=json.load(sys.stdin).get("data"); assert isinstance(d,dict) and d.get("id")==os.environ["EXPECTED_VNIC_ID"]; ip=d.get("public-ip"); assert isinstance(ip,str) and ipaddress.ip_address(ip).version==4; print(ip)')"
           [[ "$source_public_ip" == "$ORACLE_HOST" ]] || exit 34
           shape="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["shape"])')"
           shape_config="$(printf '%s' "$instance_json" | python -c 'import json,sys; d=json.load(sys.stdin)["data"].get("shape-config") or {}; print(json.dumps({"ocpus":d.get("ocpus"),"memoryInGBs":d.get("memory-in-gbs")},separators=(",",":")))')"
@@ -149,19 +235,124 @@ jobs:
           prior_prefix="$operation_run_prefix"
           stamp="${run_prefix}-a${GITHUB_RUN_ATTEMPT}"
           backup_name="${backup_prefix}-${GITHUB_RUN_ID}-a${GITHUB_RUN_ATTEMPT}"
+          cleanup_only=0
+          target_prior_stamp=""
+          failed_run_backup_name=""
+          if [[ "$OWNER_COMMAND" == "$CLEANUP_ONLY_COMMAND" ]]; then
+            cleanup_only=1
+            target_prior_stamp="${operation_run_prefix}33914733788-a1"
+            failed_run_backup_name="${backup_prefix}-33914733788-a1"
+          fi
           backup_id="" restored_id="" drill_instance_id="" drill_public_ip="" drill_started=""
           backup_attempted=0 backup_created_by_run=0 backup_accepted=0
           drill_vcn_id="" drill_ig_id="" drill_route_id="" drill_security_id="" drill_subnet_id=""
-          restored_attempted=0 drill_vcn_attempted=0 drill_ig_attempted=0
+          restored_attempted=0 drill_instance_attempted=0 drill_vcn_attempted=0 drill_ig_attempted=0
           drill_route_attempted=0 drill_security_attempted=0 drill_subnet_attempted=0
+          receipt_state="$RUNNER_TEMP/issue-881-step4-state.json"
+          state_set() {
+            STATE_PATH="$receipt_state" STATE_KEY="$1" STATE_VALUE="$2" python - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          path = Path(os.environ['STATE_PATH'])
+          data = json.loads(path.read_text()) if path.exists() else {}
+          data[os.environ['STATE_KEY']] = os.environ['STATE_VALUE']
+          temporary = path.with_suffix('.tmp')
+          temporary.write_text(json.dumps(data, sort_keys=True))
+          temporary.replace(path)
+          PY
+          }
+          oci_response_shape() {
+            python -c 'import json,sys; raw=sys.stdin.read();
+          if not raw: print("EMPTY")
+          else:
+            try: value=json.loads(raw)
+            except (TypeError,ValueError): print("INVALID_JSON")
+            else: print("JSON_OBJECT" if isinstance(value,dict) else "JSON_ARRAY" if isinstance(value,list) else "JSON_SCALAR")'
+          }
+          oci_error_class() {
+            OCI_RC="$1" python -c 'import json,os,re,sys; rc=int(os.environ["OCI_RC"]); raw=sys.stdin.read(); text=raw.lower(); status=None; code=""; message=""
+          try:
+            value=json.loads(raw)
+            if isinstance(value,dict):
+              status=value.get("status"); code=str(value.get("code") or "").lower(); message=str(value.get("message") or "").lower()
+          except (TypeError,ValueError): pass
+          merged=" ".join((text,code,message))
+          if rc==0: result="NONE"
+          elif rc==42: result="BUDGET_EXHAUSTED"
+          elif rc in (124,137): result="REQUEST_TIMEOUT"
+          elif status==401 or "notauthenticated" in merged: result="AUTHENTICATION"
+          elif status==403 or "notauthorized" in merged: result="AUTHORIZATION"
+          elif status==429 or "throttl" in merged or "toomanyrequests" in merged: result="THROTTLED"
+          elif any(x in merged for x in ("out of host capacity","outofhostcapacity","out of capacity","insufficient capacity","capacity unavailable")): result="CAPACITY_UNAVAILABLE"
+          elif any(x in merged for x in ("limitexceeded","service limit","servicelimit","quota")): result="QUOTA_OR_SERVICE_LIMIT"
+          elif status==409 or "conflict" in merged: result="CONFLICT"
+          elif status==400 or "invalidparameter" in merged: result="INVALID_REQUEST"
+          elif not raw: result="EMPTY_STDERR"
+          else: result="OTHER_NONZERO"
+          print(result)'
+          }
+          record_oci_diagnostic() {
+            local prefix="$1" rc="$2" stdout_shape stdout_bytes stderr_class stderr_bytes
+            stdout_shape="$(printf '%s' "$OCI_JSON_OUTPUT" | oci_response_shape)"
+            stdout_bytes="$(printf '%s' "$OCI_JSON_OUTPUT" | wc -c | tr -d ' ')"
+            stderr_class="$(printf '%s' "${OCI_JSON_RAW_ERROR:-}" | oci_error_class "$rc")"
+            stderr_bytes="$(printf '%s' "${OCI_JSON_RAW_ERROR:-}" | wc -c | tr -d ' ')"
+            state_set "${prefix}_stdout_shape" "$stdout_shape"
+            state_set "${prefix}_stdout_bytes" "$stdout_bytes"
+            state_set "${prefix}_stderr_class" "$stderr_class"
+            state_set "${prefix}_stderr_bytes" "$stderr_bytes"
+          }
+          mark_phase() {
+            phase="$1"
+            state_set phase "$1"
+          }
+          state_set run_stamp "$stamp"
+          state_set backup_name "$backup_name"
+          state_set source_instance_id "$instance_id"
+          state_set source_boot_id "$boot_id"
+          state_set cleanup_only "$cleanup_only"
+          state_set target_prior_stamp "${target_prior_stamp:-none}"
+          state_set prior_cleanup_status NOT_STARTED
+          state_set current_cleanup_status NOT_STARTED
+          state_set backup_selection_status NOT_STARTED
+          state_set backup_selection_failure_rc none
+          state_set backup_candidate_count 0
+          state_set backup_candidate_ids none
+          state_set backup_ineligible_candidate_ids none
+          state_set backup_blocking_candidate_ids none
+          state_set backup_wait_status NOT_STARTED
+          state_set backup_wait_failure_rc none
+          mark_phase initialized
           discover_named_id() {
-            local resource="$1" expected="$2" output id
+            local resource="$1" expected="$2" max_seconds="${3:-90}" budget_deadline="${4:-$primary_deadline}" output id deadline remaining request_timeout sleep_seconds rc discovery_key receipt_key saw_timeout=0
             local -a command
-            for _ in $(seq 1 6); do
+            discovery_key="${resource//-/_}"
+            receipt_key="${5:-${discovery_key}_discovery}"
+            if max_seconds="$(bounded_wait_seconds "$max_seconds" "$budget_deadline")"; then
+              :
+            else
+              OCI_JSON_OUTPUT=""
+              OCI_JSON_ERROR=""
+              OCI_JSON_RAW_ERROR=""
+              state_set last_discovery_resource "$discovery_key"
+              state_set last_discovery_status BUDGET_EXHAUSTED
+              state_set last_discovery_failure_rc 42
+              state_set "${receipt_key}_status" BUDGET_EXHAUSTED
+              state_set "${receipt_key}_failure_rc" 42
+              record_oci_diagnostic "$receipt_key" 42
+              return 42
+            fi
+            deadline=$((SECONDS + max_seconds))
+            while (( SECONDS < deadline )); do
               case "$resource" in
                 backup) command=(oci bv boot-volume-backup list --compartment-id "$tenancy_id" --boot-volume-id "$boot_id" --all) ;;
                 boot-volume) command=(oci bv boot-volume list --compartment-id "$tenancy_id" --availability-domain "$ad" --all) ;;
-                instance) command=(oci compute instance list --compartment-id "$tenancy_id" --display-name "$expected" --all) ;;
+                # Use the same broad typed inventory as cleanup reconciliation.
+                # Some OCI CLI/service combinations can return an empty rc=0
+                # body for the server-filtered form. Exact identity remains a
+                # strict client-side requirement below.
+                instance) command=(oci compute instance list --compartment-id "$tenancy_id" --all) ;;
                 vcn) command=(oci network vcn list --compartment-id "$tenancy_id" --all) ;;
                 internet-gateway) command=(oci network internet-gateway list --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --all) ;;
                 route-table) command=(oci network route-table list --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --all) ;;
@@ -169,21 +360,84 @@ jobs:
                 subnet) command=(oci network subnet list --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --all) ;;
                 *) return 2 ;;
               esac
-              output="$("${command[@]}" --output json)" || return 1
-              id="$(EXPECTED_DISPLAY_NAME="$expected" python -c 'import json,os,sys; xs=[x["id"] for x in json.load(sys.stdin).get("data",[]) if x.get("display-name")==os.environ["EXPECTED_DISPLAY_NAME"] and x.get("lifecycle-state") not in {"TERMINATED","TERMINATING"}]; assert len(xs)<=1; print(xs[0] if xs else "")' <<<"$output")" || return 1
+              remaining=$((deadline - SECONDS))
+              request_timeout=$((remaining < 20 ? remaining : 20))
+              (( request_timeout > 0 )) || break
+              if OCI_JSON_ABSOLUTE_DEADLINE="$budget_deadline" OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
+                  oci_json_request "${command[@]}"; then
+                :
+              else
+                rc=$?
+                state_set last_discovery_resource "$discovery_key"
+                state_set last_discovery_failure_rc "$rc"
+                record_oci_diagnostic last_discovery "$rc"
+                state_set "${receipt_key}_status" REQUEST_FAILED
+                state_set "${receipt_key}_failure_rc" "$rc"
+                record_oci_diagnostic "$receipt_key" "$rc"
+                if [[ "$rc" == 124 || "$rc" == 137 ]]; then
+                  saw_timeout=1
+                  state_set last_discovery_status REQUEST_TIMEOUT_RETRY
+                  state_set "${receipt_key}_status" REQUEST_TIMEOUT_RETRY
+                  remaining=$((deadline - SECONDS))
+                  (( remaining > 0 )) || break
+                  sleep_seconds=$((remaining < 1 ? remaining : 1))
+                  (( sleep_seconds > 0 )) && sleep "$sleep_seconds"
+                  continue
+                fi
+                state_set last_discovery_status REQUEST_FAILED
+                return "$rc"
+              fi
+              output="$OCI_JSON_OUTPUT"
+              record_oci_diagnostic last_discovery 0
+              record_oci_diagnostic "$receipt_key" 0
+              if id="$(RESOURCE_KIND="$resource" EXPECTED_DISPLAY_NAME="$expected" TENANCY_ID="$tenancy_id" AD="$ad" python -c 'import json,os,sys; payload=json.load(sys.stdin); data=payload.get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data); kind=os.environ["RESOURCE_KIND"]; allowed={"backup":{"REQUEST_RECEIVED","CREATING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"boot-volume":{"PROVISIONING","RESTORING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"instance":{"PROVISIONING","STARTING","RUNNING","STOPPING","STOPPED","TERMINATING","TERMINATED"},"vcn":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"internet-gateway":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"route-table":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"security-list":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"subnet":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"}}[kind]; matches=[x for x in data if x.get("display-name")==os.environ["EXPECTED_DISPLAY_NAME"]]; assert all(isinstance(x.get("id"),str) and x["id"] and isinstance(x.get("lifecycle-state"),str) and x["lifecycle-state"] in allowed and (kind!="instance" or x.get("compartment-id")==os.environ["TENANCY_ID"] and x.get("availability-domain")==os.environ["AD"]) for x in matches); xs=[x["id"] for x in matches if x["lifecycle-state"]!="TERMINATED"]; assert len(xs)<=1; print(xs[0] if xs else "")' <<<"$output")"; then
+                :
+              else
+                state_set last_discovery_resource "$discovery_key"
+                state_set last_discovery_status INVALID_RESPONSE
+                state_set last_discovery_failure_rc 45
+                state_set "${receipt_key}_status" INVALID_RESPONSE
+                state_set "${receipt_key}_failure_rc" 45
+                return 45
+              fi
               if [[ -n "$id" ]]; then
+                state_set last_discovery_resource "$discovery_key"
+                state_set last_discovery_status FOUND_EXACT_ONE
+                state_set last_discovery_failure_rc none
+                state_set "${receipt_key}_status" FOUND_EXACT_ONE
+                state_set "${receipt_key}_failure_rc" none
                 printf '%s\n' "$id"
                 return 0
               fi
-              sleep 5
+              remaining=$((deadline - SECONDS))
+              (( remaining > 0 )) || break
+              sleep_seconds=$((remaining < 5 ? remaining : 5))
+              sleep "$sleep_seconds"
             done
-            return 0
+            # Empty exact-name inventory after the full consistency window is
+            # not proof that an uncertain create did not commit remotely.
+            state_set last_discovery_resource "$discovery_key"
+            if (( saw_timeout == 1 )); then
+              state_set last_discovery_status REQUEST_TIMEOUT_EXHAUSTED
+              state_set last_discovery_failure_rc 42
+              state_set "${receipt_key}_status" REQUEST_TIMEOUT_EXHAUSTED
+              state_set "${receipt_key}_failure_rc" 42
+              return 42
+            fi
+            state_set last_discovery_status NOT_FOUND_UNPROVEN
+            state_set last_discovery_failure_rc 3
+            state_set "${receipt_key}_status" NOT_FOUND_UNPROVEN
+            state_set "${receipt_key}_failure_rc" 3
+            return 3
           }
           wait_absent() {
-            local resource="$1" id="$2" loops="${3:-60}" output
+            local resource="$1" id="$2" max_seconds="${3:-300}" budget_deadline="${4:-$cleanup_deadline}" output state rc deadline remaining request_timeout sleep_seconds
             local -a command
-            for _ in $(seq 1 "$loops"); do
+            max_seconds="$(bounded_wait_seconds "$max_seconds" "$budget_deadline")" || return 42
+            deadline=$((SECONDS + max_seconds))
+            while (( SECONDS < deadline )); do
               case "$resource" in
+                instance) command=(oci compute instance get --instance-id "$id") ;;
                 boot-volume) command=(oci bv boot-volume get --boot-volume-id "$id") ;;
                 backup) command=(oci bv boot-volume-backup get --boot-volume-backup-id "$id") ;;
                 subnet) command=(oci network subnet get --subnet-id "$id") ;;
@@ -193,58 +447,416 @@ jobs:
                 vcn) command=(oci network vcn get --vcn-id "$id") ;;
                 *) return 2 ;;
               esac
-              if output="$("${command[@]}" 2>&1)"; then
-                sleep 5
-                continue
+              remaining=$((deadline - SECONDS))
+              request_timeout=$((remaining < 20 ? remaining : 20))
+              (( request_timeout > 0 )) || break
+              if OCI_JSON_ABSOLUTE_DEADLINE="$budget_deadline" OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
+                  oci_json_request "${command[@]}"; then
+                output="$OCI_JSON_OUTPUT"
+                state="$(RESOURCE_KIND="$resource" EXPECTED_ID="$id" python -c 'import json,os,sys; d=json.load(sys.stdin); data=d.get("data"); assert isinstance(data,dict) and data.get("id")==os.environ["EXPECTED_ID"]; s=data.get("lifecycle-state"); allowed={"instance":{"PROVISIONING","STARTING","RUNNING","STOPPING","STOPPED","TERMINATING","TERMINATED"},"backup":{"REQUEST_RECEIVED","CREATING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"boot-volume":{"PROVISIONING","RESTORING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"vcn":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"internet-gateway":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"route-table":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"security-list":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"subnet":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"}}[os.environ["RESOURCE_KIND"]]; print(s if isinstance(s,str) and s in allowed else "INVALID" if not isinstance(s,str) else "UNKNOWN")' <<<"$output")" || return 1
+                if [[ "$state" == TERMINATED ]]; then
+                  echo "UV_ROOT_RESOURCE_ABSENCE_PASS resource=$resource id=$id terminal_state=TERMINATED"
+                  return 0
+                fi
+                [[ "$state" != INVALID && "$state" != UNKNOWN ]] || return 1
+              else
+                rc=$?
+                output="$OCI_JSON_ERROR"
+                if grep -Fq 'NotAuthorizedOrNotFound' <<<"$output" \
+                    && grep -Eq "['\"]status['\"][[:space:]]*:[[:space:]]*404" <<<"$output"; then
+                  echo "UV_ROOT_RESOURCE_ABSENCE_PASS resource=$resource id=$id terminal_state=NOT_FOUND"
+                  return 0
+                fi
+                if [[ "$rc" == 124 || "$rc" == 137 ]]; then
+                  remaining=$((deadline - SECONDS))
+                  (( remaining > 0 )) || break
+                  sleep_seconds=$((remaining < 1 ? remaining : 1))
+                  (( sleep_seconds > 0 )) && sleep "$sleep_seconds"
+                  continue
+                fi
+                return 1
               fi
-              # Treat only OCI's explicit not-found response as deletion.
-              # Authentication, throttling and transport failures remain fatal.
-              if grep -Fq 'NotAuthorizedOrNotFound' <<<"$output" \
-                  && grep -Eq '"status"[[:space:]]*:[[:space:]]*404' <<<"$output"; then
-                return 0
-              fi
-              return 1
+              remaining=$((deadline - SECONDS))
+              (( remaining > 0 )) || break
+              sleep_seconds=$((remaining < 5 ? remaining : 5))
+              sleep "$sleep_seconds"
             done
             return 1
           }
           wait_all_absent() {
-            local resource="$1" loops="$2" output pending id
+            local resource="$1" max_seconds="$2" id deadline remaining
             shift 2
             local -a command ids=("$@")
             (( ${#ids[@]} > 0 )) || return 0
-            for _ in $(seq 1 "$loops"); do
-              pending=0
-              for id in "${ids[@]}"; do
-                case "$resource" in
-                  boot-volume) command=(oci bv boot-volume get --boot-volume-id "$id") ;;
-                  backup) command=(oci bv boot-volume-backup get --boot-volume-backup-id "$id") ;;
-                  subnet) command=(oci network subnet get --subnet-id "$id") ;;
-                  security-list) command=(oci network security-list get --security-list-id "$id") ;;
-                  route-table) command=(oci network route-table get --rt-id "$id") ;;
-                  internet-gateway) command=(oci network internet-gateway get --ig-id "$id") ;;
-                  vcn) command=(oci network vcn get --vcn-id "$id") ;;
-                  *) return 2 ;;
-                esac
-                if output="$("${command[@]}" 2>&1)"; then
-                  pending=1
-                elif ! grep -Fq 'NotAuthorizedOrNotFound' <<<"$output" \
-                    || ! grep -Eq '"status"[[:space:]]*:[[:space:]]*404' <<<"$output"; then
-                  return 1
-                fi
-              done
-              (( pending == 0 )) && return 0
-              sleep 5
+            # One aggregate budget prevents stale duplicate inventories from
+            # multiplying the cleanup time until the job-level timeout.
+            (( ${#ids[@]} <= 20 )) || return 94
+            max_seconds="$(bounded_wait_seconds "$max_seconds" "$cleanup_deadline")" || return 42
+            deadline=$((SECONDS + max_seconds))
+            for id in "${ids[@]}"; do
+              remaining=$((deadline - SECONDS))
+              (( remaining > 0 )) || return 1
+              wait_absent "$resource" "$id" "$remaining" "$cleanup_deadline" || return 1
             done
-            return 1
+          }
+          wait_instance_terminated() {
+            wait_absent instance "$1" "${2:-600}"
+          }
+          delete_resource_once() {
+            local resource="$1" id="$2" stderr_file="$RUNNER_TEMP/issue-881-delete.stderr" rc
+            local delete_total_seconds delete_deadline remaining delete_request_seconds retry_sleep_seconds
+            local -a command
+            case "$resource" in
+              instance) command=(oci compute instance terminate --instance-id "$id" --preserve-boot-volume false --force) ;;
+              backup) command=(oci bv boot-volume-backup delete --boot-volume-backup-id "$id" --force) ;;
+              boot-volume) command=(oci bv boot-volume delete --boot-volume-id "$id" --force) ;;
+              subnet) command=(oci network subnet delete --subnet-id "$id" --force) ;;
+              security-list) command=(oci network security-list delete --security-list-id "$id" --force) ;;
+              route-table) command=(oci network route-table delete --rt-id "$id" --force) ;;
+              internet-gateway) command=(oci network internet-gateway delete --ig-id "$id" --force) ;;
+              vcn) command=(oci network vcn delete --vcn-id "$id" --force) ;;
+              *) return 2 ;;
+            esac
+            delete_total_seconds="$(bounded_wait_seconds 20 "$cleanup_deadline")" || return 42
+            delete_deadline=$((SECONDS + delete_total_seconds))
+            while (( SECONDS < delete_deadline )); do
+              remaining=$((delete_deadline - SECONDS))
+              delete_request_seconds=$((remaining < 10 ? remaining : 10))
+              (( delete_request_seconds > 0 )) || break
+              : >"$stderr_file"
+              if timeout --signal=KILL "${delete_request_seconds}s" "${command[@]}" >/dev/null 2>"$stderr_file"; then
+                return 0
+              else
+                rc=$?
+              fi
+              if grep -Fq 'NotAuthorizedOrNotFound' "$stderr_file" \
+                  && grep -Eq "['\"]status['\"][[:space:]]*:[[:space:]]*404" "$stderr_file"; then
+                return 0
+              fi
+              if [[ "$rc" == 124 || "$rc" == 137 ]]; then
+                remaining=$((delete_deadline - SECONDS))
+                (( remaining > 0 )) || break
+                retry_sleep_seconds=$((remaining < 1 ? remaining : 1))
+                (( retry_sleep_seconds > 0 )) && sleep "$retry_sleep_seconds"
+                continue
+              fi
+              echo "UV_ROOT_DELETE_REQUEST_NONZERO resource=$resource id=$id rc=$rc" >&2
+              return "$rc"
+            done
+            echo "UV_ROOT_DELETE_REQUEST_TIMEOUT resource=$resource id=$id rc=${rc:-42}" >&2
+            return 42
+          }
+          create_json_once() {
+            local receipt_prefix="$1" expected_name="$2" rc
+            shift 2
+            OCI_CREATE_JSON=""
+            state_set "${receipt_prefix}_status" REQUESTING
+            state_set "${receipt_prefix}_failure_rc" none
+            if OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS=60 oci_json_request "$@"; then
+              record_oci_diagnostic "$receipt_prefix" 0
+              OCI_CREATE_JSON="$OCI_JSON_OUTPUT"
+              if printf '%s' "$OCI_CREATE_JSON" | EXPECTED_DISPLAY_NAME="$expected_name" python -c 'import json,os,sys; d=json.load(sys.stdin).get("data"); assert isinstance(d,dict) and isinstance(d.get("id"),str) and d["id"] and d.get("display-name")==os.environ["EXPECTED_DISPLAY_NAME"]' >/dev/null; then
+                state_set "${receipt_prefix}_status" CAPTURED
+                return 0
+              fi
+              state_set "${receipt_prefix}_status" INVALID_RESPONSE
+              state_set "${receipt_prefix}_failure_rc" 87
+              return 87
+            else
+              rc=$?
+            fi
+            record_oci_diagnostic "$receipt_prefix" "$rc"
+            state_set "${receipt_prefix}_status" REQUEST_UNCERTAIN
+            state_set "${receipt_prefix}_failure_rc" "$rc"
+            return "$rc"
           }
           operation_backup_inventory() {
-            oci bv boot-volume-backup list --compartment-id "$tenancy_id" --boot-volume-id "$boot_id" --all --output json
+            local budget_deadline="${1:-$primary_deadline}" rc
+            if OCI_JSON_ABSOLUTE_DEADLINE="$budget_deadline" oci_json_request oci bv boot-volume-backup list --compartment-id "$tenancy_id" --boot-volume-id "$boot_id" --all; then
+              printf '%s\n' "$OCI_JSON_OUTPUT"
+              return 0
+            else
+              rc=$?
+            fi
+            return "$rc"
           }
-          select_fresh_operation_backup() {
-            BACKUP_PREFIX="$backup_prefix" BOOT_ID="$boot_id" python -c 'import datetime,json,os,sys; now=datetime.datetime.now(datetime.timezone.utc); xs=[(datetime.datetime.fromisoformat(x["time-created"].replace("Z","+00:00")),x["id"]) for x in json.load(sys.stdin).get("data",[]) if (x.get("display-name") or "").startswith(os.environ["BACKUP_PREFIX"]+"-") and x.get("boot-volume-id")==os.environ["BOOT_ID"] and x.get("lifecycle-state")=="AVAILABLE" and x.get("type")=="FULL" and x.get("size-in-gbs")==97 and (now-datetime.datetime.fromisoformat(x["time-created"].replace("Z","+00:00"))).total_seconds()<86400]; xs.sort(reverse=True); print(xs[0][1] if xs else "")'
+          wait_backup_available() {
+            local id="$1" max_seconds="${2:-3600}" deadline remaining request_timeout sleep_seconds state rc
+            local -r per_request_max_seconds=30
+            max_seconds="$(bounded_wait_seconds "$max_seconds" "$primary_deadline")" || return 42
+            BACKUP_AVAILABLE_JSON=""
+            deadline=$((SECONDS + max_seconds))
+            while (( SECONDS < deadline )); do
+              remaining=$((deadline - SECONDS))
+              request_timeout=$((remaining < per_request_max_seconds ? remaining : per_request_max_seconds))
+              (( request_timeout > 0 )) || break
+              if OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
+                  oci_json_request oci bv boot-volume-backup get --boot-volume-backup-id "$id"; then
+                if ! state="$(printf '%s' "$OCI_JSON_OUTPUT" | EXPECTED_ID="$id" python -c 'import json,os,sys; d=json.load(sys.stdin); data=d.get("data"); assert isinstance(data,dict) and data.get("id")==os.environ["EXPECTED_ID"]; s=data.get("lifecycle-state"); allowed={"AVAILABLE","CREATING","REQUEST_RECEIVED","TERMINATING","TERMINATED","FAULTY"}; print(s if isinstance(s,str) and s in allowed else "INVALID" if not isinstance(s,str) else "UNKNOWN")')"; then
+                  state_set backup_wait_status INVALID_GET_PAYLOAD
+                  state_set backup_wait_last_state INVALID
+                  return 43
+                fi
+                if [[ "$state" == INVALID ]]; then
+                  state_set backup_wait_status INVALID_GET_PAYLOAD
+                  state_set backup_wait_last_state INVALID
+                  return 43
+                fi
+                if [[ "$state" == UNKNOWN ]]; then
+                  state_set backup_wait_last_state UNKNOWN
+                  state_set backup_wait_status UNKNOWN_STATE
+                  return 41
+                fi
+                if [[ "$state" == AVAILABLE ]]; then
+                  state_set backup_wait_last_state AVAILABLE
+                  BACKUP_AVAILABLE_JSON="$OCI_JSON_OUTPUT"
+                  state_set backup_wait_status AVAILABLE
+                  return 0
+                fi
+                if [[ "$state" == TERMINATING || "$state" == TERMINATED || "$state" == FAULTY ]]; then
+                  state_set backup_wait_last_state "$state"
+                  state_set backup_wait_status "TERMINAL_${state}"
+                  return 41
+                fi
+                state_set backup_wait_last_state "$state"
+              else
+                rc=$?
+                if [[ "$rc" == 124 || "$rc" == 137 ]]; then
+                  state_set backup_wait_status GET_REQUEST_TIMEOUT
+                  if (( SECONDS >= deadline )); then
+                    state_set backup_wait_status TIMEOUT
+                    state_set backup_wait_failure_rc 42
+                    return 42
+                  fi
+                  continue
+                fi
+                state_set backup_wait_status GET_FAILED
+                state_set backup_wait_failure_rc "$rc"
+                return "$rc"
+              fi
+              remaining=$((deadline - SECONDS))
+              (( remaining > 0 )) || break
+              sleep_seconds=$((remaining < 5 ? remaining : 5))
+              sleep "$sleep_seconds"
+            done
+            state_set backup_wait_status TIMEOUT
+            state_set backup_wait_failure_rc 42
+            return 42
+          }
+          wait_oci_resource_ready() {
+            local resource="$1" id="$2" desired="$3" max_seconds="$4" receipt_prefix="$5" expected_name="$6"
+            local deadline remaining request_timeout sleep_seconds state rc
+            local -r per_request_max_seconds=30
+            local -a command
+            max_seconds="$(bounded_wait_seconds "$max_seconds" "$primary_deadline")" || return 42
+            case "$resource" in
+              boot-volume) command=(oci bv boot-volume get --boot-volume-id "$id") ;;
+              vcn) command=(oci network vcn get --vcn-id "$id") ;;
+              internet-gateway) command=(oci network internet-gateway get --ig-id "$id") ;;
+              route-table) command=(oci network route-table get --rt-id "$id") ;;
+              security-list) command=(oci network security-list get --security-list-id "$id") ;;
+              subnet) command=(oci network subnet get --subnet-id "$id") ;;
+              instance) command=(oci compute instance get --instance-id "$id") ;;
+              *) state_set "${receipt_prefix}_status" INVALID_RESOURCE; return 45 ;;
+            esac
+            state_set "${receipt_prefix}_status" WAITING
+            state_set "${receipt_prefix}_last_state" none
+            state_set "${receipt_prefix}_failure_rc" none
+            deadline=$((SECONDS + max_seconds))
+            while (( SECONDS < deadline )); do
+              remaining=$((deadline - SECONDS))
+              request_timeout=$((remaining < per_request_max_seconds ? remaining : per_request_max_seconds))
+              (( request_timeout > 0 )) || break
+              if OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
+                  oci_json_request "${command[@]}"; then
+                if ! state="$(RESOURCE_KIND="$resource" EXPECTED_ID="$id" EXPECTED_DISPLAY_NAME="$expected_name" TENANCY_ID="$tenancy_id" AD="$ad" VCN_ID="${drill_vcn_id:-}" python -c 'import json,os,sys; p=json.load(sys.stdin); data=p.get("data"); assert isinstance(data,dict) and data.get("id")==os.environ["EXPECTED_ID"] and data.get("display-name")==os.environ["EXPECTED_DISPLAY_NAME"] and data.get("compartment-id")==os.environ["TENANCY_ID"]; kind=os.environ["RESOURCE_KIND"]; assert kind not in {"boot-volume","subnet","instance"} or data.get("availability-domain")==os.environ["AD"]; assert kind not in {"internet-gateway","route-table","security-list","subnet"} or data.get("vcn-id")==os.environ["VCN_ID"]; s=data.get("lifecycle-state"); allowed={"boot-volume":{"AVAILABLE","PROVISIONING","RESTORING","TERMINATING","TERMINATED","FAULTY"},"vcn":{"AVAILABLE","PROVISIONING","TERMINATING","TERMINATED"},"internet-gateway":{"AVAILABLE","PROVISIONING","TERMINATING","TERMINATED"},"route-table":{"AVAILABLE","PROVISIONING","TERMINATING","TERMINATED"},"security-list":{"AVAILABLE","PROVISIONING","TERMINATING","TERMINATED"},"subnet":{"AVAILABLE","PROVISIONING","TERMINATING","TERMINATED"},"instance":{"RUNNING","PROVISIONING","STARTING","STOPPING","STOPPED","TERMINATING","TERMINATED"}}[kind]; print(s if isinstance(s,str) and s in allowed else "INVALID" if not isinstance(s,str) else "UNKNOWN")' <<<"$OCI_JSON_OUTPUT")"; then
+                  state_set "${receipt_prefix}_status" INVALID_GET_PAYLOAD
+                  state_set "${receipt_prefix}_last_state" INVALID
+                  state_set "${receipt_prefix}_failure_rc" 45
+                  return 45
+                fi
+                if [[ "$state" == INVALID ]]; then
+                  state_set "${receipt_prefix}_status" INVALID_GET_PAYLOAD
+                  state_set "${receipt_prefix}_last_state" INVALID
+                  state_set "${receipt_prefix}_failure_rc" 45
+                  return 45
+                fi
+                if [[ "$state" == UNKNOWN ]]; then
+                  state_set "${receipt_prefix}_status" UNKNOWN_STATE
+                  state_set "${receipt_prefix}_last_state" UNKNOWN
+                  state_set "${receipt_prefix}_failure_rc" 44
+                  return 44
+                fi
+                state_set "${receipt_prefix}_last_state" "$state"
+                if [[ "$state" == "$desired" ]]; then
+                  state_set "${receipt_prefix}_status" READY
+                  return 0
+                fi
+                if [[ "$state" == TERMINATING || "$state" == TERMINATED || "$state" == FAULTY \
+                    || "$state" == STOPPING || "$state" == STOPPED ]]; then
+                  state_set "${receipt_prefix}_status" "TERMINAL_${state}"
+                  state_set "${receipt_prefix}_failure_rc" 44
+                  return 44
+                fi
+              else
+                rc=$?
+                if [[ "$rc" == 124 || "$rc" == 137 ]]; then
+                  state_set "${receipt_prefix}_status" GET_REQUEST_TIMEOUT
+                  if (( SECONDS >= deadline )); then
+                    state_set "${receipt_prefix}_status" TIMEOUT
+                    state_set "${receipt_prefix}_failure_rc" 42
+                    return 42
+                  fi
+                  continue
+                fi
+                state_set "${receipt_prefix}_status" GET_FAILED
+                state_set "${receipt_prefix}_failure_rc" "$rc"
+                return "$rc"
+              fi
+              remaining=$((deadline - SECONDS))
+              (( remaining > 0 )) || break
+              sleep_seconds=$((remaining < 5 ? remaining : 5))
+              sleep "$sleep_seconds"
+            done
+            state_set "${receipt_prefix}_status" TIMEOUT
+            state_set "${receipt_prefix}_failure_rc" 42
+            return 42
+          }
+          wait_restored_boot_volume_hydrated() {
+            local id="$1" expected_name="$2" expected_backup_id="$3" max_seconds="$4"
+            local deadline remaining request_timeout sleep_seconds token rc
+            local -r per_request_max_seconds=30
+            max_seconds="$(bounded_wait_seconds "$max_seconds" "$primary_deadline")" || return 42
+            state_set restored_volume_hydration_status WAITING
+            state_set restored_volume_hydration_last_state none
+            state_set restored_volume_hydration_failure_rc none
+            deadline=$((SECONDS + max_seconds))
+            while (( SECONDS < deadline )); do
+              remaining=$((deadline - SECONDS))
+              request_timeout=$((remaining < per_request_max_seconds ? remaining : per_request_max_seconds))
+              (( request_timeout > 0 )) || break
+              if OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
+                  oci_json_request oci bv boot-volume get --boot-volume-id "$id"; then
+                if ! token="$(EXPECTED_ID="$id" EXPECTED_DISPLAY_NAME="$expected_name" EXPECTED_BACKUP_ID="$expected_backup_id" TENANCY_ID="$tenancy_id" AD="$ad" python -c 'import json,os,sys; p=json.load(sys.stdin); d=p.get("data"); assert isinstance(d,dict) and d.get("id")==os.environ["EXPECTED_ID"] and d.get("display-name")==os.environ["EXPECTED_DISPLAY_NAME"] and d.get("compartment-id")==os.environ["TENANCY_ID"] and d.get("availability-domain")==os.environ["AD"] and d.get("size-in-gbs")==97; source=d.get("source-details"); assert isinstance(source,dict) and source.get("type")=="bootVolumeBackup" and source.get("id")==os.environ["EXPECTED_BACKUP_ID"]; state=d.get("lifecycle-state"); allowed={"AVAILABLE","PROVISIONING","RESTORING","TERMINATING","TERMINATED","FAULTY"}; assert isinstance(state,str) and state in allowed; hydrated=d.get("is-hydrated"); assert isinstance(hydrated,bool); print("HYDRATED" if state=="AVAILABLE" and hydrated else "WAITING" if state in {"AVAILABLE","PROVISIONING","RESTORING"} else "TERMINAL_"+state)' <<<"$OCI_JSON_OUTPUT")"; then
+                  state_set restored_volume_hydration_status INVALID_GET_PAYLOAD
+                  state_set restored_volume_hydration_last_state INVALID
+                  state_set restored_volume_hydration_failure_rc 45
+                  return 45
+                fi
+                state_set restored_volume_hydration_last_state "$token"
+                if [[ "$token" == HYDRATED ]]; then
+                  state_set restored_volume_hydration_status READY
+                  return 0
+                fi
+                if [[ "$token" == TERMINAL_* ]]; then
+                  state_set restored_volume_hydration_status "$token"
+                  state_set restored_volume_hydration_failure_rc 44
+                  return 44
+                fi
+              else
+                rc=$?
+                if [[ "$rc" == 124 || "$rc" == 137 ]]; then
+                  state_set restored_volume_hydration_status GET_REQUEST_TIMEOUT
+                  if (( SECONDS >= deadline )); then
+                    state_set restored_volume_hydration_status TIMEOUT
+                    state_set restored_volume_hydration_failure_rc 42
+                    return 42
+                  fi
+                  continue
+                fi
+                state_set restored_volume_hydration_status GET_FAILED
+                state_set restored_volume_hydration_failure_rc "$rc"
+                return "$rc"
+              fi
+              remaining=$((deadline - SECONDS))
+              (( remaining > 0 )) || break
+              sleep_seconds=$((remaining < 5 ? remaining : 5))
+              sleep "$sleep_seconds"
+            done
+            state_set restored_volume_hydration_status TIMEOUT
+            state_set restored_volume_hydration_failure_rc 42
+            return 42
+          }
+          wait_attached_vnic() {
+            local source_instance_id="$1" max_seconds="${2:-300}" deadline remaining request_timeout sleep_seconds token rc
+            ATTACHED_VNIC_ID=""
+            state_set vnic_attachment_failure_rc none
+            max_seconds="$(bounded_wait_seconds "$max_seconds" "$primary_deadline")" || return 42
+            deadline=$((SECONDS + max_seconds))
+            while (( SECONDS < deadline )); do
+              remaining=$((deadline - SECONDS)); request_timeout=$((remaining < 20 ? remaining : 20)); (( request_timeout > 0 )) || break
+              if OCI_JSON_ABSOLUTE_DEADLINE="$primary_deadline" OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
+                  oci_json_request oci compute vnic-attachment list --compartment-id "$tenancy_id" --instance-id "$source_instance_id" --all; then
+                if ! token="$(INSTANCE_ID="$source_instance_id" python -c 'import json,os,sys; p=json.load(sys.stdin); data=p.get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data); allowed={"ATTACHING","ATTACHED","DETACHING","DETACHED"}; assert all(x.get("instance-id")==os.environ["INSTANCE_ID"] and isinstance(x.get("lifecycle-state"),str) and x["lifecycle-state"] in allowed for x in data); ids=[x.get("vnic-id") for x in data if x["lifecycle-state"]=="ATTACHED"]; assert all(isinstance(x,str) and x for x in ids); print(ids[0] if len(ids)==1 else "NONE" if not ids else "MULTIPLE")' <<<"$OCI_JSON_OUTPUT")"; then
+                  state_set vnic_attachment_status INVALID_RESPONSE; state_set vnic_attachment_failure_rc 45; return 45
+                fi
+                if [[ "$token" == MULTIPLE ]]; then state_set vnic_attachment_status AMBIGUOUS; state_set vnic_attachment_failure_rc 44; return 44; fi
+                if [[ "$token" != NONE ]]; then ATTACHED_VNIC_ID="$token"; state_set vnic_attachment_status EXACT_ONE; state_set vnic_attachment_failure_rc none; return 0; fi
+                state_set vnic_attachment_status WAITING
+              else
+                rc=$?
+                if [[ "$rc" == 124 || "$rc" == 137 ]]; then
+                  state_set vnic_attachment_status REQUEST_TIMEOUT_RETRY
+                  state_set vnic_attachment_failure_rc "$rc"
+                  remaining=$((deadline - SECONDS)); (( remaining > 0 )) || break
+                  sleep_seconds=$((remaining < 1 ? remaining : 1)); (( sleep_seconds > 0 )) && sleep "$sleep_seconds"
+                  continue
+                fi
+                state_set vnic_attachment_status REQUEST_FAILED; state_set vnic_attachment_failure_rc "$rc"; return "$rc"
+              fi
+              remaining=$((deadline - SECONDS)); (( remaining > 0 )) || break; sleep_seconds=$((remaining < 5 ? remaining : 5)); sleep "$sleep_seconds"
+            done
+            state_set vnic_attachment_status TIMEOUT; state_set vnic_attachment_failure_rc 42; return 42
+          }
+          wait_vnic_public_ipv4() {
+            local vnic_id="$1" max_seconds="${2:-300}" deadline remaining request_timeout sleep_seconds token rc
+            VNIC_PUBLIC_IPV4=""
+            state_set vnic_public_ip_failure_rc none
+            max_seconds="$(bounded_wait_seconds "$max_seconds" "$primary_deadline")" || return 42
+            deadline=$((SECONDS + max_seconds))
+            while (( SECONDS < deadline )); do
+              remaining=$((deadline - SECONDS)); request_timeout=$((remaining < 20 ? remaining : 20)); (( request_timeout > 0 )) || break
+              if OCI_JSON_ABSOLUTE_DEADLINE="$primary_deadline" OCI_JSON_MAX_ATTEMPTS=1 OCI_JSON_REQUEST_TIMEOUT_SECONDS="$request_timeout" \
+                  oci_json_request oci network vnic get --vnic-id "$vnic_id"; then
+                if ! token="$(EXPECTED_VNIC_ID="$vnic_id" EXPECTED_SUBNET_ID="$drill_subnet_id" python -c 'import ipaddress,json,os,sys; p=json.load(sys.stdin); d=p.get("data"); assert isinstance(d,dict) and d.get("id")==os.environ["EXPECTED_VNIC_ID"] and d.get("subnet-id")==os.environ["EXPECTED_SUBNET_ID"]; ip=d.get("public-ip"); print("PENDING" if ip is None else str(ipaddress.ip_address(ip)) if isinstance(ip,str) and ipaddress.ip_address(ip).version==4 else "INVALID")' <<<"$OCI_JSON_OUTPUT")"; then
+                  state_set vnic_public_ip_status INVALID_RESPONSE; state_set vnic_public_ip_failure_rc 45; return 45
+                fi
+                if [[ "$token" == INVALID ]]; then state_set vnic_public_ip_status INVALID; state_set vnic_public_ip_failure_rc 45; return 45; fi
+                if [[ "$token" != PENDING ]]; then VNIC_PUBLIC_IPV4="$token"; state_set vnic_public_ip_status VALID_IPV4; state_set vnic_public_ip_failure_rc none; return 0; fi
+                state_set vnic_public_ip_status WAITING
+              else
+                rc=$?
+                if [[ "$rc" == 124 || "$rc" == 137 ]]; then
+                  state_set vnic_public_ip_status REQUEST_TIMEOUT_RETRY
+                  state_set vnic_public_ip_failure_rc "$rc"
+                  remaining=$((deadline - SECONDS)); (( remaining > 0 )) || break
+                  sleep_seconds=$((remaining < 1 ? remaining : 1)); (( sleep_seconds > 0 )) && sleep "$sleep_seconds"
+                  continue
+                fi
+                state_set vnic_public_ip_status REQUEST_FAILED; state_set vnic_public_ip_failure_rc "$rc"; return "$rc"
+              fi
+              remaining=$((deadline - SECONDS)); (( remaining > 0 )) || break; sleep_seconds=$((remaining < 5 ? remaining : 5)); sleep "$sleep_seconds"
+            done
+            state_set vnic_public_ip_status TIMEOUT; state_set vnic_public_ip_failure_rc 42; return 42
+          }
+          select_fresh_operation_backups() {
+            BACKUP_PREFIX="$backup_prefix" BOOT_ID="$boot_id" python -c 'import datetime,json,os,sys; now=datetime.datetime.now(datetime.timezone.utc); candidates=[]; blocking=[]; ineligible=[]; invalid=[]; payload=json.load(sys.stdin); data=payload.get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data)
+          for x in data:
+            if not (x.get("display-name") or "").startswith(os.environ["BACKUP_PREFIX"]+"-"): continue
+            backup_id=x.get("id"); state=x.get("lifecycle-state"); allowed={"REQUEST_RECEIVED","CREATING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"}
+            if not isinstance(backup_id,str) or not backup_id or state not in allowed or x.get("boot-volume-id")!=os.environ["BOOT_ID"]: invalid.append(str(backup_id or "missing-id")); continue
+            if state=="TERMINATED": continue
+            if state!="AVAILABLE": blocking.append(backup_id); continue
+            try:
+              created=datetime.datetime.fromisoformat(x["time-created"].replace("Z","+00:00")); age=(now-created).total_seconds(); assert isinstance(x.get("type"),str) and isinstance(x.get("size-in-gbs"),int)
+            except (AssertionError,KeyError,TypeError,ValueError): invalid.append(str(x.get("id") or "missing-id"))
+            else:
+              if age < 0: invalid.append(backup_id)
+              else: (candidates if x["type"]=="FULL" and x["size-in-gbs"]==97 and age < 86400 else ineligible).append((created,backup_id))
+          candidates.sort(reverse=True); print(json.dumps({"blocking_ids":sorted(blocking),"candidate_ids":[x[1] for x in candidates],"ineligible_ids":sorted(x[1] for x in ineligible),"invalid_ids":sorted(invalid),"selected_id":candidates[0][1] if candidates else ""},sort_keys=True,separators=(",",":")))'
           }
           superseded_operation_backups() {
-            BACKUP_PREFIX="$backup_prefix" BOOT_ID="$boot_id" RETAINED_ID="$backup_id" python -c 'import json,os,sys; xs=sorted(x["id"] for x in json.load(sys.stdin).get("data",[]) if (x.get("display-name") or "").startswith(os.environ["BACKUP_PREFIX"]+"-") and x.get("boot-volume-id")==os.environ["BOOT_ID"] and x["id"]!=os.environ["RETAINED_ID"] and x.get("lifecycle-state")!="TERMINATED"); print("\n".join(xs))'
+            BACKUP_PREFIX="$backup_prefix" BOOT_ID="$boot_id" RETAINED_ID="$backup_id" python -c 'import json,os,sys; p=json.load(sys.stdin); data=p.get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data); matched=[x for x in data if (x.get("display-name") or "").startswith(os.environ["BACKUP_PREFIX"]+"-") and x.get("boot-volume-id")==os.environ["BOOT_ID"] and x.get("id")!=os.environ["RETAINED_ID"] and x.get("lifecycle-state")!="TERMINATED"]; assert all(isinstance(x.get("id"),str) and x["id"] and isinstance(x.get("lifecycle-state"),str) for x in matched); print("\n".join(sorted(x["id"] for x in matched)))'
           }
           prior_named_ids() {
             local resource="$1" suffix="$2" output
@@ -259,12 +871,18 @@ jobs:
               vcn) command=(oci network vcn list --compartment-id "$tenancy_id" --all) ;;
               *) return 2 ;;
             esac
-            output="$("${command[@]}" --output json)" || return 1
-            PRIOR_PREFIX="$prior_prefix" CURRENT_STAMP="$stamp" SUFFIX="-$suffix" python -c 'import json,os,sys; xs=sorted(x["id"] for x in json.load(sys.stdin).get("data",[]) if (x.get("display-name") or "").startswith(os.environ["PRIOR_PREFIX"]) and not (x.get("display-name") or "").startswith(os.environ["CURRENT_STAMP"]+"-") and (x.get("display-name") or "").endswith(os.environ["SUFFIX"]) and x.get("lifecycle-state") != "TERMINATED"); print("\n".join(xs))' <<<"$output"
+            oci_json_request "${command[@]}" || return 1
+            output="$OCI_JSON_OUTPUT"
+            # Keep TERMINATED objects in the evidence set.  Each known ID must
+            # still pass a direct GET as TERMINATED or explicit 404 below;
+            # silently filtering terminal objects would discard the audit trail.
+            RESOURCE_KIND="$resource" PRIOR_PREFIX="$prior_prefix" CURRENT_STAMP="$stamp" TARGET_PRIOR_STAMP="$target_prior_stamp" SUFFIX="-$suffix" python -c 'import json,os,sys; p=json.load(sys.stdin); data=p.get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data); allowed={"instance":{"PROVISIONING","STARTING","RUNNING","STOPPING","STOPPED","TERMINATING","TERMINATED"},"boot-volume":{"PROVISIONING","RESTORING","AVAILABLE","TERMINATING","TERMINATED","FAULTY"},"subnet":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"security-list":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"route-table":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"internet-gateway":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"},"vcn":{"PROVISIONING","AVAILABLE","TERMINATING","TERMINATED"}}[os.environ["RESOURCE_KIND"]]; target=os.environ["TARGET_PRIOR_STAMP"]; suffix=os.environ["SUFFIX"]; matched=[x for x in data if ((x.get("display-name") or "")==target+suffix if target else (x.get("display-name") or "").startswith(os.environ["PRIOR_PREFIX"]) and not (x.get("display-name") or "").startswith(os.environ["CURRENT_STAMP"]+"-") and (x.get("display-name") or "").endswith(suffix))]; assert all(isinstance(x.get("id"),str) and x["id"] and isinstance(x.get("lifecycle-state"),str) and x["lifecycle-state"] in allowed for x in matched); print("\n".join(sorted(x["id"] for x in matched)))' <<<"$output"
           }
           reconcile_prior_attempt_resources() {
-            local prior_instances prior_restored prior_subnets prior_security prior_routes prior_igs prior_vcns state pending id
+            local prior_instances prior_restored prior_subnets prior_security prior_routes prior_igs prior_vcns id prior_ids prior_count
             local -a ids
+            state_set prior_cleanup_status IN_PROGRESS
+            mark_phase reconcile_prior_attempts
             prior_instances="$(prior_named_ids instance boot-acceptance)"
             prior_restored="$(prior_named_ids boot-volume restore)"
             prior_subnets="$(prior_named_ids subnet subnet)"
@@ -272,119 +890,130 @@ jobs:
             prior_routes="$(prior_named_ids route-table route)"
             prior_igs="$(prior_named_ids internet-gateway ig)"
             prior_vcns="$(prior_named_ids vcn vcn)"
+            prior_summary="instance=$(tr '\n' ',' <<<"$prior_instances" | sed 's/,$//');restored_volume=$(tr '\n' ',' <<<"$prior_restored" | sed 's/,$//');subnet=$(tr '\n' ',' <<<"$prior_subnets" | sed 's/,$//');security_list=$(tr '\n' ',' <<<"$prior_security" | sed 's/,$//');route_table=$(tr '\n' ',' <<<"$prior_routes" | sed 's/,$//');internet_gateway=$(tr '\n' ',' <<<"$prior_igs" | sed 's/,$//');vcn=$(tr '\n' ',' <<<"$prior_vcns" | sed 's/,$//')"
+            prior_ids="$(printf '%s\n' "$prior_instances" "$prior_restored" "$prior_subnets" "$prior_security" "$prior_routes" "$prior_igs" "$prior_vcns" | sed '/^$/d' | sort -u | paste -sd, -)"
+            prior_count="$(printf '%s\n' "$prior_ids" | awk -F, 'NF && $1 != "" {print NF; next} {print 0}')"
+            state_set prior_resource_ids "$prior_ids"
+            state_set prior_resource_count "$prior_count"
+            state_set prior_resource_summary "$prior_summary"
+            # Bound the total number of delete requests as well as each typed
+            # absence set so the documented cleanup reserve covers the actual
+            # worst case rather than only an individual resource class.
+            if (( prior_count > 20 )); then
+              state_set prior_cleanup_status CARDINALITY_EXCEEDED
+              return 94
+            fi
             if [[ -z "$prior_instances$prior_restored$prior_subnets$prior_security$prior_routes$prior_igs$prior_vcns" ]]; then
+              state_set prior_cleanup_status EXACT_NAME_INVENTORY_EMPTY
+              echo 'UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS resource_count=0 ids=none exact_name_inventory_empty=true'
               return 0
             fi
-            echo 'UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_START'
+            echo "UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_START resource_count=$prior_count ids=$prior_ids"
             if [[ -n "$prior_instances" ]]; then
               readarray -t ids <<<"$prior_instances"
               for id in "${ids[@]}"; do
-                oci compute instance terminate --instance-id "$id" --preserve-boot-volume false --force >/dev/null 2>&1 || true
+                delete_resource_once instance "$id" || true
               done
-              for _ in $(seq 1 180); do
-                pending=0
-                for id in "${ids[@]}"; do
-                  state="$(oci compute instance get --instance-id "$id" --query 'data."lifecycle-state"' --raw-output 2>/dev/null || printf UNKNOWN)"
-                  [[ "$state" == TERMINATED ]] || pending=1
-                done
-                (( pending == 0 )) && break
-                sleep 5
-              done
-              (( pending == 0 ))
+              wait_all_absent instance 600 "${ids[@]}"
             fi
             if [[ -n "$prior_restored" ]]; then
               readarray -t ids <<<"$prior_restored"
-              for id in "${ids[@]}"; do oci bv boot-volume delete --boot-volume-id "$id" --force >/dev/null 2>&1 || true; done
-              wait_all_absent boot-volume 30 "${ids[@]}"
+              for id in "${ids[@]}"; do delete_resource_once boot-volume "$id" || true; done
+              wait_all_absent boot-volume 120 "${ids[@]}"
             fi
             if [[ -n "$prior_subnets" ]]; then
               readarray -t ids <<<"$prior_subnets"
-              for id in "${ids[@]}"; do oci network subnet delete --subnet-id "$id" --force >/dev/null 2>&1 || true; done
-              wait_all_absent subnet 30 "${ids[@]}"
+              for id in "${ids[@]}"; do delete_resource_once subnet "$id" || true; done
+              wait_all_absent subnet 120 "${ids[@]}"
             fi
             if [[ -n "$prior_security" ]]; then
               readarray -t ids <<<"$prior_security"
-              for id in "${ids[@]}"; do oci network security-list delete --security-list-id "$id" --force >/dev/null 2>&1 || true; done
-              wait_all_absent security-list 30 "${ids[@]}"
+              for id in "${ids[@]}"; do delete_resource_once security-list "$id" || true; done
+              wait_all_absent security-list 120 "${ids[@]}"
             fi
             if [[ -n "$prior_routes" ]]; then
               readarray -t ids <<<"$prior_routes"
-              for id in "${ids[@]}"; do oci network route-table delete --rt-id "$id" --force >/dev/null 2>&1 || true; done
-              wait_all_absent route-table 30 "${ids[@]}"
+              for id in "${ids[@]}"; do delete_resource_once route-table "$id" || true; done
+              wait_all_absent route-table 120 "${ids[@]}"
             fi
             if [[ -n "$prior_igs" ]]; then
               readarray -t ids <<<"$prior_igs"
-              for id in "${ids[@]}"; do oci network internet-gateway delete --ig-id "$id" --force >/dev/null 2>&1 || true; done
-              wait_all_absent internet-gateway 30 "${ids[@]}"
+              for id in "${ids[@]}"; do delete_resource_once internet-gateway "$id" || true; done
+              wait_all_absent internet-gateway 120 "${ids[@]}"
             fi
             if [[ -n "$prior_vcns" ]]; then
               readarray -t ids <<<"$prior_vcns"
-              for id in "${ids[@]}"; do oci network vcn delete --vcn-id "$id" --force >/dev/null 2>&1 || true; done
-              wait_all_absent vcn 30 "${ids[@]}"
+              for id in "${ids[@]}"; do delete_resource_once vcn "$id" || true; done
+              wait_all_absent vcn 120 "${ids[@]}"
             fi
-            echo 'UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS'
+            state_set prior_cleanup_status RECONCILED_PROVEN_ABSENT
+            echo "UV_ROOT_PRIOR_ATTEMPT_RECONCILIATION_PASS resource_count=$prior_count ids=$prior_ids"
           }
           cleanup_temp_resources() {
             local failed=0 state
+            state_set current_cleanup_status IN_PROGRESS
+            mark_phase cleanup_current_attempt
             if [[ -z "$restored_id" && "$restored_attempted" == 1 ]]; then
-              restored_id="$(discover_named_id boot-volume "$stamp-restore")" || failed=1
+              restored_id="$(discover_named_id boot-volume "$stamp-restore" 30 "$cleanup_deadline")" || failed=1
             fi
             if [[ -z "$drill_vcn_id" && "$drill_vcn_attempted" == 1 ]]; then
-              drill_vcn_id="$(discover_named_id vcn "$stamp-vcn")" || failed=1
+              drill_vcn_id="$(discover_named_id vcn "$stamp-vcn" 30 "$cleanup_deadline")" || failed=1
             fi
             if [[ -n "$drill_vcn_id" ]]; then
               if [[ -z "$drill_ig_id" && "$drill_ig_attempted" == 1 ]]; then
-                drill_ig_id="$(discover_named_id internet-gateway "$stamp-ig")" || failed=1
+                drill_ig_id="$(discover_named_id internet-gateway "$stamp-ig" 30 "$cleanup_deadline")" || failed=1
               fi
               if [[ -z "$drill_route_id" && "$drill_route_attempted" == 1 ]]; then
-                drill_route_id="$(discover_named_id route-table "$stamp-route")" || failed=1
+                drill_route_id="$(discover_named_id route-table "$stamp-route" 30 "$cleanup_deadline")" || failed=1
               fi
               if [[ -z "$drill_security_id" && "$drill_security_attempted" == 1 ]]; then
-                drill_security_id="$(discover_named_id security-list "$stamp-ssh-only")" || failed=1
+                drill_security_id="$(discover_named_id security-list "$stamp-ssh-only" 30 "$cleanup_deadline")" || failed=1
               fi
               if [[ -z "$drill_subnet_id" && "$drill_subnet_attempted" == 1 ]]; then
-                drill_subnet_id="$(discover_named_id subnet "$stamp-subnet")" || failed=1
+                drill_subnet_id="$(discover_named_id subnet "$stamp-subnet" 30 "$cleanup_deadline")" || failed=1
               fi
             fi
             # If launch returned after creating the instance but before its JSON
             # reached this runner, retry exact-stamp discovery long enough for
             # OCI list eventual consistency. Query/JSON errors remain fatal.
-            if [[ -z "$drill_instance_id" && -n "$drill_subnet_id" ]]; then
-              drill_instance_id="$(discover_named_id instance "$stamp-boot-acceptance")" || failed=1
+            if [[ -z "$drill_instance_id" && "$drill_instance_attempted" == 1 && -n "$drill_subnet_id" ]]; then
+              drill_instance_id="$(discover_named_id instance "$stamp-boot-acceptance" 30 "$cleanup_deadline")" || failed=1
             fi
             if [[ -n "$drill_instance_id" ]]; then
-              oci compute instance terminate --instance-id "$drill_instance_id" --preserve-boot-volume false --force >/dev/null 2>&1 || true
-              state=""
-              for _ in $(seq 1 360); do
-                state="$(oci compute instance get --instance-id "$drill_instance_id" --query 'data."lifecycle-state"' --raw-output 2>/dev/null || printf UNKNOWN)"
-                [[ "$state" == TERMINATED ]] && break
-                sleep 5
-              done
-              [[ "$state" == TERMINATED ]] || failed=1
+              state_set temporary_instance_id "$drill_instance_id"
+              delete_resource_once instance "$drill_instance_id" || true
+              wait_instance_terminated "$drill_instance_id" || failed=1
             fi
             if [[ -n "$restored_id" ]]; then
-              oci bv boot-volume delete --boot-volume-id "$restored_id" --force >/dev/null 2>&1 || true
-              wait_absent boot-volume "$restored_id" || failed=1
+              state_set temporary_restored_volume_id "$restored_id"
+              delete_resource_once boot-volume "$restored_id" || true
+              wait_absent boot-volume "$restored_id" 120 || failed=1
             fi
             if [[ -n "$drill_subnet_id" ]]; then
-              oci network subnet delete --subnet-id "$drill_subnet_id" --force >/dev/null 2>&1 || true
-              wait_absent subnet "$drill_subnet_id" || failed=1
+              delete_resource_once subnet "$drill_subnet_id" || true
+              wait_absent subnet "$drill_subnet_id" 120 || failed=1
             fi
             if [[ -n "$drill_security_id" ]]; then
-              oci network security-list delete --security-list-id "$drill_security_id" --force >/dev/null 2>&1 || true
-              wait_absent security-list "$drill_security_id" || failed=1
+              delete_resource_once security-list "$drill_security_id" || true
+              wait_absent security-list "$drill_security_id" 120 || failed=1
             fi
             if [[ -n "$drill_route_id" ]]; then
-              oci network route-table delete --rt-id "$drill_route_id" --force >/dev/null 2>&1 || true
-              wait_absent route-table "$drill_route_id" || failed=1
+              delete_resource_once route-table "$drill_route_id" || true
+              wait_absent route-table "$drill_route_id" 120 || failed=1
             fi
             if [[ -n "$drill_ig_id" ]]; then
-              oci network internet-gateway delete --ig-id "$drill_ig_id" --force >/dev/null 2>&1 || true
-              wait_absent internet-gateway "$drill_ig_id" || failed=1
+              delete_resource_once internet-gateway "$drill_ig_id" || true
+              wait_absent internet-gateway "$drill_ig_id" 120 || failed=1
             fi
             if [[ -n "$drill_vcn_id" ]]; then
-              oci network vcn delete --vcn-id "$drill_vcn_id" --force >/dev/null 2>&1 || true
-              wait_absent vcn "$drill_vcn_id" || failed=1
+              state_set temporary_vcn_id "$drill_vcn_id"
+              delete_resource_once vcn "$drill_vcn_id" || true
+              wait_absent vcn "$drill_vcn_id" 120 || failed=1
+            fi
+            if (( failed == 0 )); then
+              state_set current_cleanup_status PROVEN_ABSENT
+            else
+              state_set current_cleanup_status INCOMPLETE
             fi
             return "$failed"
           }
@@ -392,6 +1021,8 @@ jobs:
             local rc=$? cleanup_rc=0
             trap - EXIT
             set +e
+            state_set failure_rc "$rc"
+            state_set failure_phase "${phase:-unknown}"
             cleanup_temp_resources
             cleanup_rc=$?
             # The create response can be lost before OCI's eventually
@@ -399,7 +1030,7 @@ jobs:
             # rediscovery during EXIT cleanup before deciding there is nothing
             # current-run-owned to delete.
             if [[ -z "$backup_id" && "$backup_attempted" == 1 ]]; then
-              backup_id="$(discover_named_id backup "$backup_name")" || cleanup_rc=1
+              backup_id="$(discover_named_id backup "$backup_name" 30 "$cleanup_deadline")" || cleanup_rc=1
               if [[ -n "$backup_id" ]]; then
                 backup_created_by_run=1
               else
@@ -412,8 +1043,8 @@ jobs:
             # failed drills accumulate unaccepted 97 GB FULL backups, and never
             # delete a pre-existing backup that may be the last proven point.
             if (( backup_created_by_run == 1 && backup_accepted == 0 )) && [[ -n "$backup_id" ]]; then
-              oci bv boot-volume-backup delete --boot-volume-backup-id "$backup_id" --force >/dev/null 2>&1 || true
-              wait_absent backup "$backup_id" || cleanup_rc=1
+              delete_resource_once backup "$backup_id" || true
+              wait_absent backup "$backup_id" 120 || cleanup_rc=1
               backup_id=""
             fi
             if (( cleanup_rc != 0 )); then
@@ -423,38 +1054,181 @@ jobs:
             exit "$rc"
           }
           reconcile_prior_attempt_resources
-          trap cleanup EXIT
-          backup_inventory="$(operation_backup_inventory)"
-          backup_id="$(printf '%s' "$backup_inventory" | select_fresh_operation_backup)"
-          if [[ -z "$backup_id" ]]; then
-            backup_attempted=1
-            if backup="$(oci bv boot-volume-backup create --boot-volume-id "$boot_id" --type FULL --display-name "$backup_name" --output json)"; then
-              backup_id="$(printf '%s' "$backup" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("id", ""))' 2>/dev/null || true)"
-              [[ -n "$backup_id" ]] || backup_id="$(discover_named_id backup "$backup_name")"
+          if (( cleanup_only == 1 )); then
+            mark_phase reconcile_failed_run_backup
+            # Preserve every exact-name backup ID, including TERMINATED objects,
+            # then classify each by direct GET. Never turn a filtered terminal
+            # object into a misleading "none/proven absent" receipt.
+            failed_backup_ids="$(operation_backup_inventory | FAILED_BACKUP_NAME="$failed_run_backup_name" BOOT_ID="$boot_id" python -c 'import json,os,sys; print("\n".join(sorted(x["id"] for x in json.load(sys.stdin).get("data",[]) if x.get("display-name")==os.environ["FAILED_BACKUP_NAME"] and x.get("boot-volume-id")==os.environ["BOOT_ID"])))')"
+            failed_backup_csv="$(printf '%s\n' "$failed_backup_ids" | sed '/^$/d' | sort -u | paste -sd, -)"
+            state_set failed_run_backup_ids "${failed_backup_csv:-none}"
+            if [[ -n "$failed_backup_ids" ]]; then
+              readarray -t ids <<<"$failed_backup_ids"
+              failed_backup_candidate_id=""
+              failed_backup_available_ids=""
+              failed_backup_states=""
+              failed_backup_error=""
+              for id in "${ids[@]}"; do
+                failed_backup_output=""
+                if oci_json_request oci bv boot-volume-backup get --boot-volume-backup-id "$id"; then
+                  failed_backup_output="$OCI_JSON_OUTPUT"
+                  if ! failed_backup_state="$(printf '%s' "$failed_backup_output" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["lifecycle-state"])')"; then
+                    failed_backup_state=INVALID_RESPONSE
+                  fi
+                elif failed_backup_output="$OCI_JSON_ERROR"; grep -Fq 'NotAuthorizedOrNotFound' <<<"$failed_backup_output" \
+                    && grep -Eq "['\"]status['\"][[:space:]]*:[[:space:]]*404" <<<"$failed_backup_output"; then
+                  failed_backup_state=NOT_FOUND
+                else
+                  failed_backup_state=GET_FAILED
+                fi
+                failed_backup_states="${failed_backup_states}${failed_backup_states:+,}${id}:${failed_backup_state}"
+                if [[ "$failed_backup_state" == AVAILABLE ]]; then
+                  if BACKUP="$failed_backup_output" BOOT_ID="$boot_id" python - <<'PY'
+          import json, os
+          data = json.loads(os.environ['BACKUP'])['data']
+          assert data['boot-volume-id'] == os.environ['BOOT_ID']
+          assert data['lifecycle-state'] == 'AVAILABLE'
+          assert data['type'] == 'FULL'
+          assert data['size-in-gbs'] == 97
+          PY
+                  then
+                    failed_backup_candidate_id="$id"
+                    failed_backup_available_ids="${failed_backup_available_ids}${failed_backup_available_ids:+,}${id}"
+                  else
+                    failed_backup_error="${failed_backup_error:-INVALID_AVAILABLE_OBJECT}"
+                  fi
+                elif [[ "$failed_backup_state" == TERMINATED || "$failed_backup_state" == NOT_FOUND ]]; then
+                  echo "UV_ROOT_RESOURCE_ABSENCE_PASS resource=backup id=$id terminal_state=$failed_backup_state"
+                elif [[ "$failed_backup_state" == GET_FAILED ]]; then
+                  failed_backup_error="${failed_backup_error:-GET_FAILED}"
+                else
+                  failed_backup_error="${failed_backup_error:-UNKNOWN_STATE}"
+                fi
+              done
+              state_set failed_run_backup_direct_get_states "$failed_backup_states"
+              state_set failed_run_backup_available_ids "${failed_backup_available_ids:-none}"
+              # Any duplicate exact identity is ambiguous even when some copies
+              # are already TERMINATED. Classify every ID first, then stop
+              # without deleting an AVAILABLE recovery candidate.
+              if (( ${#ids[@]} > 1 )); then
+                state_set failed_run_backup_cleanup_status MULTIPLE_EXACT_BACKUP_IDS
+                exit 93
+              fi
+              if [[ "$failed_backup_error" == GET_FAILED ]]; then
+                state_set failed_run_backup_cleanup_status GET_FAILED
+                exit 91
+              elif [[ -n "$failed_backup_error" ]]; then
+                state_set failed_run_backup_cleanup_status "$failed_backup_error"
+                exit 92
+              fi
+              if [[ -n "$failed_backup_candidate_id" ]]; then
+                state_set retained_backup_id "$failed_backup_candidate_id"
+                state_set failed_run_backup_cleanup_status RETAINED_AVAILABLE_REQUIRES_ACCEPTANCE
+              else
+                state_set failed_run_backup_cleanup_status PROVEN_TERMINAL
+              fi
             else
-              backup_id="$(discover_named_id backup "$backup_name")"
+              state_set failed_run_backup_cleanup_status EXACT_NAME_INVENTORY_EMPTY
             fi
+            state_set current_cleanup_status NOT_APPLICABLE
+            oci_json_request oci bv boot-volume list --compartment-id "$tenancy_id" --availability-domain "$ad" --all
+            boot_inventory="$OCI_JSON_OUTPUT"
+            oci_json_request oci bv volume list --compartment-id "$tenancy_id" --all
+            block_inventory="$OCI_JSON_OUTPUT"
+            backup_inventory="$(operation_backup_inventory)"
+            allocation_summary="$(BOOT_INVENTORY="$boot_inventory" BLOCK_INVENTORY="$block_inventory" BACKUP_INVENTORY="$backup_inventory" python -c 'import json,os; parse=lambda s:(lambda p:(p["data"] if isinstance(p,dict) and isinstance(p.get("data"),list) and all(isinstance(x,dict) for x in p["data"]) else (_ for _ in ()).throw(AssertionError())))(json.loads(s)); active=lambda xs:[x for x in xs if isinstance(x.get("lifecycle-state"),str) and x["lifecycle-state"]!="TERMINATED"]; boots=active(parse(os.environ["BOOT_INVENTORY"])); blocks=active(parse(os.environ["BLOCK_INVENTORY"])); backups=active(parse(os.environ["BACKUP_INVENTORY"])); assert all(isinstance(x.get("size-in-gbs"),int) for x in boots+blocks+backups); print(json.dumps({"active_boot_count":len(boots),"active_boot_gb":sum(x["size-in-gbs"] for x in boots),"active_block_count":len(blocks),"active_block_gb":sum(x["size-in-gbs"] for x in blocks),"source_backup_count":len(backups),"source_backup_gb":sum(x["size-in-gbs"] for x in backups)},sort_keys=True,separators=(",",":")))')"
+            state_set allocation_summary "$allocation_summary"
+            state_set phase cleanup_only_pass
+            echo 'cleanup_only=true' >> "$GITHUB_OUTPUT"
+            echo "source_boot_id=$boot_id" >> "$GITHUB_OUTPUT"
+            echo "source_instance_id=$instance_id" >> "$GITHUB_OUTPUT"
+            echo "UV_ROOT_FAILED_RUN_RECONCILIATION_PASS target_stamp=$target_prior_stamp backup_name=$failed_run_backup_name allocation=$allocation_summary"
+            exit 0
+          fi
+          trap cleanup EXIT
+          mark_phase inventory_operation_backups
+          if oci_json_request oci bv boot-volume-backup list --compartment-id "$tenancy_id" --boot-volume-id "$boot_id" --all; then
+            backup_inventory="$OCI_JSON_OUTPUT"
+          else
+            selection_rc=$?
+            state_set backup_selection_status INVENTORY_REQUEST_FAILED
+            state_set backup_selection_failure_rc "$selection_rc"
+            exit "$selection_rc"
+          fi
+          mark_phase select_or_create_full_backup
+          if selection_json="$(printf '%s' "$backup_inventory" | select_fresh_operation_backups)"; then
+            backup_id="$(SELECTION="$selection_json" python -c 'import json,os; print(json.loads(os.environ["SELECTION"])["selected_id"])')"
+            backup_candidate_ids="$(SELECTION="$selection_json" python -c 'import json,os; print(",".join(json.loads(os.environ["SELECTION"])["candidate_ids"]) or "none")')"
+            backup_candidate_count="$(SELECTION="$selection_json" python -c 'import json,os; print(len(json.loads(os.environ["SELECTION"])["candidate_ids"]))')"
+            backup_ineligible_ids="$(SELECTION="$selection_json" python -c 'import json,os; print(",".join(json.loads(os.environ["SELECTION"])["ineligible_ids"]) or "none")')"
+            backup_blocking_ids="$(SELECTION="$selection_json" python -c 'import json,os; print(",".join(json.loads(os.environ["SELECTION"])["blocking_ids"]) or "none")')"
+            backup_invalid_ids="$(SELECTION="$selection_json" python -c 'import json,os; print(",".join(json.loads(os.environ["SELECTION"])["invalid_ids"]) or "none")')"
+            state_set backup_candidate_ids "$backup_candidate_ids"
+            state_set backup_candidate_count "$backup_candidate_count"
+            state_set backup_ineligible_candidate_ids "$backup_ineligible_ids"
+            state_set backup_blocking_candidate_ids "$backup_blocking_ids"
+            state_set backup_invalid_candidate_ids "$backup_invalid_ids"
+            if [[ "$backup_invalid_ids" != none ]]; then
+              state_set backup_selection_status INVALID_OPERATION_BACKUP_METADATA
+              exit 38
+            fi
+            if [[ "$backup_blocking_ids" != none ]]; then
+              state_set backup_selection_status ACTIVE_TRANSIENT_OR_FAULTY_BACKUP_BLOCKS_CREATE
+              exit 40
+            fi
+            state_set backup_selection_status "SELECTED_EXISTING_${backup_candidate_count}_CANDIDATES"
+          else
+            selection_rc=$?
+            state_set backup_selection_status SELECTOR_FAILED
+            state_set backup_selection_failure_rc "$selection_rc"
+            exit 39
+          fi
+          if [[ -z "$backup_id" ]]; then
+            state_set backup_selection_status CREATE_REQUIRED
+            backup_attempted=1
+            if create_json_once backup_create "$backup_name" oci bv boot-volume-backup create --boot-volume-id "$boot_id" --type FULL --display-name "$backup_name"; then
+              backup_id="$(printf '%s' "$OCI_CREATE_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
+            fi
+            [[ -n "$backup_id" ]] || backup_id="$(discover_named_id backup "$backup_name")"
             [[ -n "$backup_id" ]] && backup_created_by_run=1
           fi
+          [[ -z "$backup_id" || "$backup_created_by_run" == 1 ]] || state_set backup_selection_status REUSED_NEWEST_VALID_CANDIDATE
+          state_set backup_id "$backup_id"
           [[ -n "$backup_id" ]] || exit 36
-          oci bv boot-volume-backup get --boot-volume-backup-id "$backup_id" --wait-for-state AVAILABLE --max-wait-seconds 3600 >/dev/null
-          backup_json="$(oci bv boot-volume-backup get --boot-volume-backup-id "$backup_id" --output json)"
+          mark_phase wait_selected_backup_available
+          if wait_backup_available "$backup_id"; then
+            backup_json="$BACKUP_AVAILABLE_JSON"
+          else
+            backup_wait_rc=$?
+            state_set backup_wait_failure_rc "$backup_wait_rc"
+            exit "$backup_wait_rc"
+          fi
+          mark_phase validate_selected_backup
           BACKUP="$backup_json" BOOT_ID="$boot_id" python - <<'PY'
           import datetime,json,os
           d=json.loads(os.environ['BACKUP'])['data']
           assert d['boot-volume-id']==os.environ['BOOT_ID']
           assert d['lifecycle-state']=='AVAILABLE' and d['type']=='FULL' and d['size-in-gbs']==97
           created=datetime.datetime.fromisoformat(d['time-created'].replace('Z','+00:00'))
-          assert (datetime.datetime.now(datetime.timezone.utc)-created).total_seconds() < 86400
+          age=(datetime.datetime.now(datetime.timezone.utc)-created).total_seconds()
+          assert 0 <= age < 86400
           PY
           restored_attempted=1
-          if restored="$(oci bv boot-volume create --boot-volume-backup-id "$backup_id" --availability-domain "$ad" --compartment-id "$tenancy_id" --display-name "$stamp-restore" --output json)"; then
-            restored_id="$(printf '%s' "$restored" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
-          else
-            restored_id="$(discover_named_id boot-volume "$stamp-restore")"
+          mark_phase create_restored_boot_volume
+          if create_json_once restored_volume_create "$stamp-restore" oci bv boot-volume create --boot-volume-backup-id "$backup_id" --availability-domain "$ad" --compartment-id "$tenancy_id" --display-name "$stamp-restore"; then
+            restored_id="$(printf '%s' "$OCI_CREATE_JSON" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
           fi
+          [[ -n "$restored_id" ]] || restored_id="$(discover_named_id boot-volume "$stamp-restore")"
           [[ -n "$restored_id" ]] || exit 37
-          oci bv boot-volume get --boot-volume-id "$restored_id" --wait-for-state AVAILABLE --max-wait-seconds 3600 >/dev/null
+          state_set temporary_restored_volume_id "$restored_id"
+          mark_phase wait_restored_boot_volume_available
+          restored_gate_seconds="$(bounded_wait_seconds 3600 "$primary_deadline")" || exit 42
+          restored_gate_deadline=$(( $(monotonic_now) + restored_gate_seconds ))
+          restored_available_seconds="$(bounded_wait_seconds 3600 "$restored_gate_deadline")" || exit 42
+          if wait_oci_resource_ready boot-volume "$restored_id" AVAILABLE "$restored_available_seconds" restored_volume_wait "$stamp-restore"; then :; else resource_wait_rc=$?; exit "$resource_wait_rc"; fi
+          mark_phase wait_restored_boot_volume_hydrated
+          restored_hydration_seconds="$(bounded_wait_seconds 3600 "$restored_gate_deadline")" || { state_set restored_volume_hydration_status TIMEOUT; state_set restored_volume_hydration_failure_rc 42; exit 42; }
+          if wait_restored_boot_volume_hydrated "$restored_id" "$stamp-restore" "$backup_id" "$restored_hydration_seconds"; then :; else hydration_wait_rc=$?; exit "$hydration_wait_rc"; fi
           # Never boot the restored production image in a production network.  The
           # temporary VCN permits only stateful inbound SSH from this runner and
           # has no egress rules, NAT gateway, or service gateway.  Consequently
@@ -463,54 +1237,101 @@ jobs:
           runner_ip="$(curl -fsS --max-time 15 https://api.ipify.org)"
           [[ "$runner_ip" =~ ^[0-9]+(\.[0-9]+){3}$ ]] || exit 35
           drill_vcn_attempted=1
-          drill_vcn_json="$(oci network vcn create --compartment-id "$tenancy_id" --cidr-block 10.254.0.0/24 --display-name "$stamp-vcn" --output json)" || drill_vcn_json=""
+          mark_phase create_isolated_vcn
+          drill_vcn_json=""
+          if create_json_once vcn_create "$stamp-vcn" oci network vcn create --compartment-id "$tenancy_id" --cidr-block 10.254.0.0/24 --display-name "$stamp-vcn"; then drill_vcn_json="$OCI_CREATE_JSON"; fi
           drill_vcn_id="$(printf '%s' "$drill_vcn_json" | python -c 'import json,sys; d=json.load(sys.stdin).get("data",{}) if sys.stdin.isatty() is False else {}; print(d.get("id", ""))' 2>/dev/null || true)"
           [[ -n "$drill_vcn_id" ]] || drill_vcn_id="$(discover_named_id vcn "$stamp-vcn")"
           [[ -n "$drill_vcn_id" ]] || exit 38
-          oci network vcn get --vcn-id "$drill_vcn_id" --wait-for-state AVAILABLE --max-wait-seconds 300 >/dev/null
+          state_set temporary_vcn_id "$drill_vcn_id"
+          mark_phase wait_isolated_vcn_available
+          if wait_oci_resource_ready vcn "$drill_vcn_id" AVAILABLE 300 vcn_wait "$stamp-vcn"; then :; else resource_wait_rc=$?; exit "$resource_wait_rc"; fi
+          VCN="$OCI_JSON_OUTPUT" python -c 'import json,os; d=json.loads(os.environ["VCN"])["data"]; assert d.get("cidr-block")=="10.254.0.0/24"'
           drill_ig_attempted=1
-          drill_ig_json="$(oci network internet-gateway create --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --is-enabled true --display-name "$stamp-ig" --output json)" || drill_ig_json=""
+          mark_phase create_isolated_internet_gateway
+          drill_ig_json=""
+          if create_json_once internet_gateway_create "$stamp-ig" oci network internet-gateway create --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --is-enabled true --display-name "$stamp-ig"; then drill_ig_json="$OCI_CREATE_JSON"; fi
           drill_ig_id="$(printf '%s' "$drill_ig_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("id", ""))' 2>/dev/null || true)"
           [[ -n "$drill_ig_id" ]] || drill_ig_id="$(discover_named_id internet-gateway "$stamp-ig")"
           [[ -n "$drill_ig_id" ]] || exit 39
-          oci network internet-gateway get --ig-id "$drill_ig_id" --wait-for-state AVAILABLE --max-wait-seconds 300 >/dev/null
+          state_set temporary_internet_gateway_id "$drill_ig_id"
+          mark_phase wait_isolated_internet_gateway_available
+          if wait_oci_resource_ready internet-gateway "$drill_ig_id" AVAILABLE 300 internet_gateway_wait "$stamp-ig"; then :; else resource_wait_rc=$?; exit "$resource_wait_rc"; fi
+          INTERNET_GATEWAY="$OCI_JSON_OUTPUT" python -c 'import json,os; d=json.loads(os.environ["INTERNET_GATEWAY"])["data"]; assert d.get("is-enabled") is True'
           drill_route_attempted=1
-          drill_route_json="$(oci network route-table create --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --display-name "$stamp-route" --route-rules "[{\"cidrBlock\":\"0.0.0.0/0\",\"networkEntityId\":\"$drill_ig_id\"}]" --output json)" || drill_route_json=""
+          mark_phase create_isolated_route_table
+          drill_route_json=""
+          if create_json_once route_table_create "$stamp-route" oci network route-table create --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --display-name "$stamp-route" --route-rules "[{\"cidrBlock\":\"0.0.0.0/0\",\"networkEntityId\":\"$drill_ig_id\"}]"; then drill_route_json="$OCI_CREATE_JSON"; fi
           drill_route_id="$(printf '%s' "$drill_route_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("id", ""))' 2>/dev/null || true)"
           [[ -n "$drill_route_id" ]] || drill_route_id="$(discover_named_id route-table "$stamp-route")"
           [[ -n "$drill_route_id" ]] || exit 40
-          oci network route-table get --rt-id "$drill_route_id" --wait-for-state AVAILABLE --max-wait-seconds 300 >/dev/null
+          state_set temporary_route_table_id "$drill_route_id"
+          mark_phase wait_isolated_route_table_available
+          if wait_oci_resource_ready route-table "$drill_route_id" AVAILABLE 300 route_table_wait "$stamp-route"; then :; else resource_wait_rc=$?; exit "$resource_wait_rc"; fi
+          ROUTE_TABLE="$OCI_JSON_OUTPUT" EXPECTED_IG_ID="$drill_ig_id" python -c 'import json,os; d=json.loads(os.environ["ROUTE_TABLE"])["data"]; rules=d.get("route-rules"); assert isinstance(rules,list) and len(rules)==1; r=rules[0]; assert r.get("destination")=="0.0.0.0/0" and r.get("destination-type")=="CIDR_BLOCK" and r.get("network-entity-id")==os.environ["EXPECTED_IG_ID"]'
           ingress="[{\"protocol\":\"6\",\"source\":\"$runner_ip/32\",\"sourceType\":\"CIDR_BLOCK\",\"isStateless\":false,\"tcpOptions\":{\"destinationPortRange\":{\"min\":22,\"max\":22}}}]"
           drill_security_attempted=1
-          drill_security_json="$(oci network security-list create --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --display-name "$stamp-ssh-only" --egress-security-rules '[]' --ingress-security-rules "$ingress" --output json)" || drill_security_json=""
+          mark_phase create_isolated_security_list
+          drill_security_json=""
+          if create_json_once security_list_create "$stamp-ssh-only" oci network security-list create --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --display-name "$stamp-ssh-only" --egress-security-rules '[]' --ingress-security-rules "$ingress"; then drill_security_json="$OCI_CREATE_JSON"; fi
           drill_security_id="$(printf '%s' "$drill_security_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("id", ""))' 2>/dev/null || true)"
           [[ -n "$drill_security_id" ]] || drill_security_id="$(discover_named_id security-list "$stamp-ssh-only")"
           [[ -n "$drill_security_id" ]] || exit 41
-          oci network security-list get --security-list-id "$drill_security_id" --wait-for-state AVAILABLE --max-wait-seconds 300 >/dev/null
+          state_set temporary_security_list_id "$drill_security_id"
+          mark_phase wait_isolated_security_list_available
+          if wait_oci_resource_ready security-list "$drill_security_id" AVAILABLE 300 security_list_wait "$stamp-ssh-only"; then :; else resource_wait_rc=$?; exit "$resource_wait_rc"; fi
+          SECURITY_LIST="$OCI_JSON_OUTPUT" EXPECTED_SOURCE="$runner_ip/32" python -c 'import json,os; d=json.loads(os.environ["SECURITY_LIST"])["data"]; assert d.get("egress-security-rules")==[]; rules=d.get("ingress-security-rules"); assert isinstance(rules,list) and len(rules)==1; r=rules[0]; ports=(r.get("tcp-options") or {}).get("destination-port-range") or {}; assert r.get("protocol")=="6" and r.get("source")==os.environ["EXPECTED_SOURCE"] and r.get("source-type")=="CIDR_BLOCK" and r.get("is-stateless") is False and ports.get("min")==22 and ports.get("max")==22'
           drill_subnet_attempted=1
-          drill_subnet_json="$(oci network subnet create --availability-domain "$ad" --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --cidr-block 10.254.0.0/28 --display-name "$stamp-subnet" --route-table-id "$drill_route_id" --security-list-ids "[\"$drill_security_id\"]" --prohibit-public-ip-on-vnic false --output json)" || drill_subnet_json=""
+          mark_phase create_isolated_subnet
+          drill_subnet_json=""
+          if create_json_once subnet_create "$stamp-subnet" oci network subnet create --availability-domain "$ad" --compartment-id "$tenancy_id" --vcn-id "$drill_vcn_id" --cidr-block 10.254.0.0/28 --display-name "$stamp-subnet" --route-table-id "$drill_route_id" --security-list-ids "[\"$drill_security_id\"]" --prohibit-public-ip-on-vnic false; then drill_subnet_json="$OCI_CREATE_JSON"; fi
           drill_subnet_id="$(printf '%s' "$drill_subnet_json" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("id", ""))' 2>/dev/null || true)"
           [[ -n "$drill_subnet_id" ]] || drill_subnet_id="$(discover_named_id subnet "$stamp-subnet")"
           [[ -n "$drill_subnet_id" ]] || exit 42
-          oci network subnet get --subnet-id "$drill_subnet_id" --wait-for-state AVAILABLE --max-wait-seconds 300 >/dev/null
-          launch="$(oci compute instance launch --availability-domain "$ad" --compartment-id "$tenancy_id" --subnet-id "$drill_subnet_id" --shape "$shape" --shape-config "$shape_config" --display-name "$stamp-boot-acceptance" --source-details "{\"sourceType\":\"bootVolume\",\"bootVolumeId\":\"$restored_id\"}" --assign-public-ip true --output json)"
-          drill_instance_id="$(printf '%s' "$launch" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["id"])')"
-          oci compute instance get --instance-id "$drill_instance_id" --wait-for-state RUNNING --max-wait-seconds 1800 >/dev/null
+          state_set temporary_subnet_id "$drill_subnet_id"
+          mark_phase wait_isolated_subnet_available
+          if wait_oci_resource_ready subnet "$drill_subnet_id" AVAILABLE 300 subnet_wait "$stamp-subnet"; then :; else resource_wait_rc=$?; exit "$resource_wait_rc"; fi
+          SUBNET="$OCI_JSON_OUTPUT" EXPECTED_ROUTE_ID="$drill_route_id" EXPECTED_SECURITY_ID="$drill_security_id" python -c 'import json,os; d=json.loads(os.environ["SUBNET"])["data"]; assert d.get("route-table-id")==os.environ["EXPECTED_ROUTE_ID"] and d.get("security-list-ids")==[os.environ["EXPECTED_SECURITY_ID"]] and d.get("prohibit-public-ip-on-vnic") is False'
+          mark_phase launch_isolated_acceptance_instance
+          drill_instance_attempted=1
+          launch=""
+          if create_json_once instance_create "$stamp-boot-acceptance" oci compute instance launch --availability-domain "$ad" --compartment-id "$tenancy_id" --subnet-id "$drill_subnet_id" --shape "$shape" --shape-config "$shape_config" --display-name "$stamp-boot-acceptance" --source-details "{\"sourceType\":\"bootVolume\",\"bootVolumeId\":\"$restored_id\"}" --assign-public-ip true; then launch="$OCI_CREATE_JSON"; fi
+          drill_instance_id="$(printf '%s' "$launch" | python -c 'import json,sys; print(json.load(sys.stdin).get("data",{}).get("id", ""))' 2>/dev/null || true)"
+          [[ -n "$drill_instance_id" ]] || drill_instance_id="$(discover_named_id instance "$stamp-boot-acceptance" 90 "$primary_deadline" instance_launch_discovery)"
+          [[ -n "$drill_instance_id" ]] || exit 46
+          state_set temporary_instance_id "$drill_instance_id"
+          mark_phase wait_isolated_acceptance_instance_running
+          if wait_oci_resource_ready instance "$drill_instance_id" RUNNING 1800 instance_wait "$stamp-boot-acceptance"; then :; else resource_wait_rc=$?; exit "$resource_wait_rc"; fi
+          oci_json_request oci compute boot-volume-attachment list --compartment-id "$tenancy_id" --availability-domain "$ad" --instance-id "$drill_instance_id" --all
+          DRILL_ATTACHMENTS="$OCI_JSON_OUTPUT" EXPECTED_INSTANCE_ID="$drill_instance_id" EXPECTED_BOOT_ID="$restored_id" python -c 'import json,os; data=json.loads(os.environ["DRILL_ATTACHMENTS"]).get("data"); assert isinstance(data,list) and all(isinstance(x,dict) and x.get("instance-id")==os.environ["EXPECTED_INSTANCE_ID"] for x in data); xs=[x for x in data if x.get("lifecycle-state")=="ATTACHED" and x.get("boot-volume-id")==os.environ["EXPECTED_BOOT_ID"]]; assert len(xs)==1'
           drill_started="$(date -u +%s)"
-          drill_vnic_id="$(oci compute vnic-attachment list --compartment-id "$tenancy_id" --instance-id "$drill_instance_id" --all --query 'data[?"lifecycle-state"==`ATTACHED`]."vnic-id" | [0]' --raw-output)"
-          drill_public_ip="$(oci network vnic get --vnic-id "$drill_vnic_id" --query 'data."public-ip"' --raw-output)"
-          [[ "$drill_public_ip" =~ ^[0-9]+(\.[0-9]+){3}$ ]] || exit 31
+          mark_phase resolve_isolated_acceptance_vnic
+          if wait_attached_vnic "$drill_instance_id" 300; then drill_vnic_id="$ATTACHED_VNIC_ID"; else vnic_rc=$?; exit "$vnic_rc"; fi
+          if wait_vnic_public_ipv4 "$drill_vnic_id" 300; then drill_public_ip="$VNIC_PUBLIC_IPV4"; else vnic_rc=$?; exit "$vnic_rc"; fi
           known="$RUNNER_TEMP/drill-known-hosts"
+          ssh_scan_seconds="$(bounded_wait_seconds 300 "$primary_deadline")" || exit 42
+          ssh_scan_deadline=$(( $(monotonic_now) + ssh_scan_seconds ))
           for _ in $(seq 1 60); do
-            if ops/oracle_known_hosts_from_scan.sh "$drill_public_ip" "$EXPECTED_FINGERPRINT" "$known" 2>/dev/null; then break; fi
-            sleep 5
+            ssh_scan_attempt_seconds="$(bounded_wait_seconds 20 "$ssh_scan_deadline")" || break
+            if timeout --signal=KILL "${ssh_scan_attempt_seconds}s" ops/oracle_known_hosts_from_scan.sh "$drill_public_ip" "$EXPECTED_FINGERPRINT" "$known" 2>/dev/null; then break; fi
+            ssh_scan_sleep_seconds="$(bounded_wait_seconds 5 "$ssh_scan_deadline")" || break
+            sleep "$ssh_scan_sleep_seconds"
           done
           [[ -s "$known" ]] || exit 32
           key="$RUNNER_TEMP/id_oracle-drill"
           printf '%s\n' "$SSH_KEY_ORACLE" > "$key"; chmod 0600 "$key"; ssh-keygen -y -f "$key" >/dev/null
-          acceptance="$(ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "$ORACLE_USER@$drill_public_ip" 'set -e; test -r /etc/os-release; findmnt -n -o SOURCE,FSTYPE /; test "$(findmnt -n -o OPTIONS /)" != ""; test -r /var/lib/bridge-school; echo UV_RESTORED_ROOT_BOOT_ACCEPTANCE_PASS')"
+          acceptance_seconds="$(bounded_wait_seconds 120 "$primary_deadline")" || exit 42
+          acceptance="$(timeout --signal=KILL "${acceptance_seconds}s" ssh -i "$key" -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$known" -o ConnectTimeout=15 "$ORACLE_USER@$drill_public_ip" 'set -e; test -r /etc/os-release; findmnt -n -o SOURCE,FSTYPE /; test "$(findmnt -n -o OPTIONS /)" != ""; test -r /var/lib/bridge-school; echo UV_RESTORED_ROOT_BOOT_ACCEPTANCE_PASS')"
           grep -Fq UV_RESTORED_ROOT_BOOT_ACCEPTANCE_PASS <<<"$acceptance"
           backup_accepted=1
+          state_set backup_accepted true
+          # Once isolated restored-root boot acceptance succeeds, this backup
+          # is deliberately retained even if bounded retirement of older
+          # operation backups later fails closed. Persist its identity before
+          # any such exit so the always-running receipt cannot hide a billable
+          # recovery point.
+          state_set retained_backup_id "$backup_id"
+          state_set retained_backup_status ACCEPTED_ISOLATED_BOOT
           drill_seconds="$(( $(date -u +%s) - drill_started ))"
           if ! cleanup_temp_resources; then
             # Do not invoke the EXIT trap a second time after a fully bounded
@@ -523,20 +1344,32 @@ jobs:
           drill_instance_id=""; restored_id=""; drill_subnet_id=""; drill_security_id=""
           drill_route_id=""; drill_ig_id=""; drill_vcn_id=""
           trap - EXIT
+          state_set current_cleanup_status PROVEN_ABSENT
           # Retire older operation-scoped backups only after the retained FULL
           # backup has passed isolated restored-root boot acceptance. This keeps
           # rollback coverage throughout replacement and bounds billable storage
           # to one proven recovery point across separate owner commands.
-          backup_inventory="$(operation_backup_inventory)"
+          backup_inventory="$(operation_backup_inventory "$cleanup_deadline")"
           superseded_ids="$(printf '%s' "$backup_inventory" | superseded_operation_backups)"
+          state_set superseded_backup_candidate_count 0
+          state_set superseded_backup_cleanup_status NOT_NEEDED
           if [[ -n "$superseded_ids" ]]; then
             readarray -t ids <<<"$superseded_ids"
+            state_set superseded_backup_candidate_count "${#ids[@]}"
+            if (( ${#ids[@]} > 20 )); then
+              state_set superseded_backup_cleanup_status CARDINALITY_EXCEEDED
+              exit 94
+            fi
             for id in "${ids[@]}"; do
-              oci bv boot-volume-backup delete --boot-volume-backup-id "$id" --force >/dev/null 2>&1 || true
+              delete_resource_once backup "$id" || true
             done
-            wait_all_absent backup 60 "${ids[@]}"
+            wait_all_absent backup 120 "${ids[@]}"
+            state_set superseded_backup_cleanup_status PROVEN_ABSENT
           fi
           echo 'superseded_backup_count=0' >> "$GITHUB_OUTPUT"
+          state_set superseded_backup_count 0
+          state_set retained_backup_id "$backup_id"
+          mark_phase backup_gate_pass
           # Expose the backup as a retained proven point only after acceptance
           # and bounded retirement have both succeeded.  Failed steps therefore
           # cannot publish a deleted or unaccepted backup as retained evidence.
@@ -546,11 +1379,17 @@ jobs:
           echo "temporary_instance_seconds=$drill_seconds" >> "$GITHUB_OUTPUT"
           echo 'UV_ROOT_BACKUP_GATE_PASS type=FULL size_gb=97 state=AVAILABLE age_lt_24h=true restored_root_boot_acceptance=true isolated_no_egress_network=true source_public_ip_bound=true temporary_instance_deleted=true temporary_volume_deleted=true temporary_network_deleted=true temporary_paid_capacity_authorized=true'
       - name: Resolve pinned SSH identity
+        if: ${{ steps.backup.outputs.cleanup_only != 'true' }}
         id: ssh
         run: |
           set -euo pipefail
+          mutation_deadline='${{ steps.budget.outputs.mutation_deadline }}'
+          monotonic_now="$(awk '{print int($1)}' /proc/uptime)"
+          remaining=$((mutation_deadline - monotonic_now))
+          (( remaining > 0 )) || exit 42
+          (( remaining < 120 )) && scan_seconds="$remaining" || scan_seconds=120
           known="$RUNNER_TEMP/known_hosts"
-          ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
+          timeout --signal=KILL "${scan_seconds}s" ops/oracle_known_hosts_from_scan.sh "$ORACLE_HOST" "$EXPECTED_FINGERPRINT" "$known"
           key="$RUNNER_TEMP/id_oracle"
           printf '%s\n' "$SSH_KEY_ORACLE" > "$key"
           chmod 0600 "$key"
@@ -558,15 +1397,23 @@ jobs:
           echo "known=$known" >> "$GITHUB_OUTPUT"
           echo "key=$key" >> "$GITHUB_OUTPUT"
       - name: Create and restore-test partition recovery point
+        if: ${{ steps.backup.outputs.cleanup_only != 'true' }}
         run: |
           set -euo pipefail
-          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+          mutation_deadline='${{ steps.budget.outputs.mutation_deadline }}'
+          monotonic_now="$(awk '{print int($1)}' /proc/uptime)"
+          remaining=$((mutation_deadline - monotonic_now))
+          (( remaining > 0 )) || exit 42
+          timeout --signal=KILL "${remaining}s" ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
             "sudo -n env EXPECTED_HOSTNAME='$EXPECTED_HOSTNAME' EXPECTED_MIN_DISK_BYTES=90000000000 EXPECTED_MAX_DISK_BYTES=105000000000 MIN_FREE_KB=5242880 CHECKPOINT_ONLY=1 /bin/bash -s" \
             < ops/oracle_universal_video_root_filesystem_expand.sh | tee "$RUNNER_TEMP/root-checkpoint.txt"
           line="$(grep -E '^UV_ROOT_CHECKPOINT_PASS disk_bytes=[0-9]+ checkpoint=/var/lib/bridge-school/root-partition-recovery/issue-881-before-expand\.sfdisk sha256=[0-9a-f]{64}$' "$RUNNER_TEMP/root-checkpoint.txt")"
           disk_bytes="$(sed -E 's/^.*disk_bytes=([0-9]+).*$/\1/' <<<"$line")"
           expected_sha="$(sed -E 's/^.*sha256=([0-9a-f]{64})$/\1/' <<<"$line")"
-          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+          monotonic_now="$(awk '{print int($1)}' /proc/uptime)"
+          remaining=$((mutation_deadline - monotonic_now))
+          (( remaining > 0 )) || exit 42
+          timeout --signal=KILL "${remaining}s" ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
             'sudo -n cat /var/lib/bridge-school/root-partition-recovery/issue-881-before-expand.sfdisk' > "$RUNNER_TEMP/root-before.sfdisk"
           [[ "$(sha256sum "$RUNNER_TEMP/root-before.sfdisk" | awk '{print $1}')" == "$expected_sha" ]]
           truncate -s "$disk_bytes" "$RUNNER_TEMP/restore-test.img"
@@ -574,6 +1421,7 @@ jobs:
           sudo sfdisk --verify "$RUNNER_TEMP/restore-test.img"
           rm -f "$RUNNER_TEMP/restore-test.img"
       - name: Retain recovery point
+        if: ${{ steps.backup.outputs.cleanup_only != 'true' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: issue-881-root-partition-recovery-${{ github.sha }}
@@ -581,58 +1429,102 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Reconcile current main immediately before mutation
+        if: ${{ steps.backup.outputs.cleanup_only != 'true' }}
         run: |
           set -euo pipefail
+          mutation_deadline='${{ steps.budget.outputs.mutation_deadline }}'
+          monotonic_now() { awk '{print int($1)}' /proc/uptime; }
+          (( mutation_deadline > $(monotonic_now) )) || exit 42
           git fetch --no-tags origin main
           [[ "$(git rev-parse HEAD)" == "$(git rev-parse origin/main)" ]]
           export OCI_CLI_REGION="$OCI_REGION"
+          oci_json_request() {
+            local stdout_file="$RUNNER_TEMP/issue-881-last-second.stdout"
+            local stderr_file="$RUNNER_TEMP/issue-881-last-second.stderr"
+            local attempt rc now remaining request_timeout
+            for attempt in 1 2 3; do
+              : >"$stdout_file"; : >"$stderr_file"
+              now="$(monotonic_now)"; remaining=$((mutation_deadline - now)); (( remaining > 0 )) || return 42
+              request_timeout=$((remaining < 30 ? remaining : 30))
+              if timeout --signal=KILL "${request_timeout}s" "$@" --output json >"$stdout_file" 2>"$stderr_file"; then rc=0; else rc=$?; fi
+              (( rc == 0 )) || return "$rc"
+              if python -c 'import json,sys; d=json.load(sys.stdin); assert isinstance(d,dict)' <"$stdout_file"; then
+                OCI_JSON_OUTPUT="$(<"$stdout_file")"
+                OCI_JSON_ERROR="$(<"$stderr_file")"
+                return 0
+              fi
+              if (( attempt < 3 )); then
+                now="$(monotonic_now)"; remaining=$((mutation_deadline - now)); (( remaining > 0 )) || return 42
+                (( remaining < 2 )) && sleep "$remaining" || sleep 2
+              fi
+            done
+            return 86
+          }
           instance_id='${{ steps.backup.outputs.source_instance_id }}'
           boot_id='${{ steps.backup.outputs.source_boot_id }}'
           backup_id='${{ steps.backup.outputs.backup_id }}'
-          instance_json="$(oci compute instance get --instance-id "$instance_id" --output json)"
-          INSTANCE="$instance_json" python - <<'PY'
+          oci_json_request oci compute instance get --instance-id "$instance_id"
+          instance_json="$OCI_JSON_OUTPUT"
+          INSTANCE="$instance_json" EXPECTED_INSTANCE_ID="$instance_id" python - <<'PY'
           import json,os
-          d=json.loads(os.environ['INSTANCE'])['data']
+          d=json.loads(os.environ['INSTANCE']).get('data')
+          assert isinstance(d,dict) and d.get('id')==os.environ['EXPECTED_INSTANCE_ID']
           assert d['display-name']=='bridge-school-dds3-frankfurt'
           assert d['lifecycle-state']=='RUNNING'
           PY
           ad="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["availability-domain"])')"
           tenancy_id="$(printf '%s' "$instance_json" | python -c 'import json,sys; print(json.load(sys.stdin)["data"]["compartment-id"])')"
-          source_vnics="$(oci compute vnic-attachment list --compartment-id "$tenancy_id" --instance-id "$instance_id" --all --output json)"
-          source_vnic_id="$(printf '%s' "$source_vnics" | python -c 'import json,sys; xs=[x["vnic-id"] for x in json.load(sys.stdin)["data"] if x.get("lifecycle-state")=="ATTACHED"]; assert len(xs)==1; print(xs[0])')"
-          source_public_ip="$(oci network vnic get --vnic-id "$source_vnic_id" --query 'data."public-ip"' --raw-output)"
+          oci_json_request oci compute vnic-attachment list --compartment-id "$tenancy_id" --instance-id "$instance_id" --all
+          source_vnics="$OCI_JSON_OUTPUT"
+          source_vnic_id="$(printf '%s' "$source_vnics" | EXPECTED_INSTANCE_ID="$instance_id" python -c 'import json,os,sys; data=json.load(sys.stdin).get("data"); assert isinstance(data,list) and all(isinstance(x,dict) for x in data); allowed={"ATTACHING","ATTACHED","DETACHING","DETACHED"}; assert all(x.get("instance-id")==os.environ["EXPECTED_INSTANCE_ID"] and isinstance(x.get("lifecycle-state"),str) and x["lifecycle-state"] in allowed for x in data); xs=[x.get("vnic-id") for x in data if x["lifecycle-state"]=="ATTACHED"]; assert len(xs)==1 and isinstance(xs[0],str) and xs[0]; print(xs[0])')"
+          oci_json_request oci network vnic get --vnic-id "$source_vnic_id"
+          source_public_ip="$(printf '%s' "$OCI_JSON_OUTPUT" | EXPECTED_VNIC_ID="$source_vnic_id" python -c 'import ipaddress,json,os,sys; d=json.load(sys.stdin).get("data"); assert isinstance(d,dict) and d.get("id")==os.environ["EXPECTED_VNIC_ID"]; ip=d.get("public-ip"); assert isinstance(ip,str) and ipaddress.ip_address(ip).version==4; print(ip)')"
           [[ "$source_public_ip" == "$ORACLE_HOST" ]]
-          attachments="$(oci compute boot-volume-attachment list --compartment-id "$tenancy_id" --availability-domain "$ad" --instance-id "$instance_id" --all --output json)"
-          ATTACHMENTS="$attachments" BOOT_ID="$boot_id" python - <<'PY'
+          oci_json_request oci compute boot-volume-attachment list --compartment-id "$tenancy_id" --availability-domain "$ad" --instance-id "$instance_id" --all
+          attachments="$OCI_JSON_OUTPUT"
+          ATTACHMENTS="$attachments" BOOT_ID="$boot_id" INSTANCE_ID="$instance_id" python - <<'PY'
           import json,os
-          xs=[x for x in json.loads(os.environ['ATTACHMENTS'])['data'] if x.get('lifecycle-state')=='ATTACHED' and x.get('boot-volume-id')==os.environ['BOOT_ID']]
+          data=json.loads(os.environ['ATTACHMENTS']).get('data')
+          assert isinstance(data,list) and all(isinstance(x,dict) for x in data)
+          assert all(x.get('instance-id')==os.environ['INSTANCE_ID'] for x in data)
+          xs=[x for x in data if x.get('lifecycle-state')=='ATTACHED' and x.get('boot-volume-id')==os.environ['BOOT_ID']]
           assert len(xs)==1
           PY
-          boot_size="$(oci bv boot-volume get --boot-volume-id "$boot_id" --query 'data."size-in-gbs"' --raw-output)"
+          oci_json_request oci bv boot-volume get --boot-volume-id "$boot_id"
+          boot_size="$(printf '%s' "$OCI_JSON_OUTPUT" | EXPECTED_BOOT_ID="$boot_id" python -c 'import json,os,sys; d=json.load(sys.stdin).get("data"); assert isinstance(d,dict) and d.get("id")==os.environ["EXPECTED_BOOT_ID"] and isinstance(d.get("size-in-gbs"),int); print(d["size-in-gbs"])')"
           [[ "$boot_size" == 97 ]]
-          backup="$(oci bv boot-volume-backup get --boot-volume-backup-id "$backup_id" --output json)"
-          BACKUP="$backup" BOOT_ID="$boot_id" python - <<'PY'
+          oci_json_request oci bv boot-volume-backup get --boot-volume-backup-id "$backup_id"
+          backup="$OCI_JSON_OUTPUT"
+          BACKUP="$backup" BOOT_ID="$boot_id" BACKUP_ID="$backup_id" python - <<'PY'
           import datetime,json,os
-          d=json.loads(os.environ['BACKUP'])['data']
+          d=json.loads(os.environ['BACKUP']).get('data')
+          assert isinstance(d,dict) and d.get('id')==os.environ['BACKUP_ID']
           assert d['boot-volume-id']==os.environ['BOOT_ID'] and d['lifecycle-state']=='AVAILABLE' and d['type']=='FULL' and d['size-in-gbs']==97
           created=datetime.datetime.fromisoformat(d['time-created'].replace('Z','+00:00'))
-          assert (datetime.datetime.now(datetime.timezone.utc)-created).total_seconds() < 86400
+          age=(datetime.datetime.now(datetime.timezone.utc)-created).total_seconds()
+          assert 0 <= age < 86400
           PY
           echo 'UV_ROOT_LAST_SECOND_REVALIDATION_PASS attachment=true source_public_ip_bound=true backup_available=true backup_age_lt_24h=true restored_root_boot_acceptance=true'
-      - name: Expand existing root partition and filesystem
+      - name: Expand root and recover exact image under shared host lock
+        if: ${{ steps.backup.outputs.cleanup_only != 'true' }}
+        id: mutation
         run: |
           set -euo pipefail
-          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n env EXPECTED_HOSTNAME='$EXPECTED_HOSTNAME' EXPECTED_MIN_DISK_BYTES=90000000000 EXPECTED_MAX_DISK_BYTES=105000000000 MIN_FREE_KB=5242880 /bin/bash -s" \
-            < ops/oracle_universal_video_root_filesystem_expand.sh | tee "$RUNNER_TEMP/root-expand.txt"
-          grep -E '^UV_ROOT_EXPAND_PASS .*disk_bytes=[0-9]+ .*free_kb_after=[0-9]+$' "$RUNNER_TEMP/root-expand.txt"
-      - name: Recover exact image and restart only container service
-        run: |
-          set -euo pipefail
-          ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
-            "sudo -n env UNIVERSAL_VIDEO_EXPECTED_SHA='$EXACT_RUNTIME_SHA' /bin/bash -s" \
-            < ops/oracle_universal_video_container_missing_image_recover.sh | tee "$RUNNER_TEMP/recovery.txt"
-          grep -E '^UV_CONTAINER_RECOVERY_PASS runtime_sha=[0-9a-f]{40} backup=/var/lib/bridge-school/universal-video-container-recovery/[^ ]+ image_digest=sha256:[0-9a-f]{64}$' "$RUNNER_TEMP/recovery.txt"
+          mutation_deadline='${{ steps.budget.outputs.mutation_deadline }}'
+          monotonic_now="$(awk '{print int($1)}' /proc/uptime)"
+          remaining=$((mutation_deadline - monotonic_now))
+          (( remaining > 0 )) || exit 42
+          mutation="$RUNNER_TEMP/issue-881-locked-mutation.sh"
+          {
+            cat ops/oracle_universal_video_root_filesystem_expand.sh
+            printf '\n'
+            cat ops/oracle_universal_video_container_missing_image_recover.sh
+          } > "$mutation"
+          timeout --signal=KILL "${remaining}s" ssh -i '${{ steps.ssh.outputs.key }}' -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile='${{ steps.ssh.outputs.known }}' -o ConnectTimeout=15 "$ORACLE_USER@$ORACLE_HOST" \
+            "sudo -n env EXPECTED_HOSTNAME='$EXPECTED_HOSTNAME' EXPECTED_MIN_DISK_BYTES=90000000000 EXPECTED_MAX_DISK_BYTES=105000000000 MIN_FREE_KB=5242880 UNIVERSAL_VIDEO_EXPECTED_SHA='$EXACT_RUNTIME_SHA' /usr/bin/flock -x /run/lock/oracle-workload-mutation.lock /bin/bash -s" \
+            < "$mutation" | tee "$RUNNER_TEMP/locked-mutation.txt"
+          grep -E '^UV_ROOT_EXPAND_PASS .*disk_bytes=[0-9]+ .*free_kb_after=[0-9]+$' "$RUNNER_TEMP/locked-mutation.txt"
+          grep -E '^UV_CONTAINER_RECOVERY_PASS runtime_sha=[0-9a-f]{40} backup=/var/lib/bridge-school/universal-video-container-recovery/[^ ]+ image_digest=sha256:[0-9a-f]{64}$' "$RUNNER_TEMP/locked-mutation.txt"
       - name: Publish bounded operational receipt
         if: ${{ always() }}
         env:
@@ -640,25 +1532,119 @@ jobs:
           BACKUP_ID: ${{ steps.backup.outputs.backup_id }}
           SUPERSEDED_BACKUP_COUNT: ${{ steps.backup.outputs.superseded_backup_count }}
           TEMP_INSTANCE_SECONDS: ${{ steps.backup.outputs.temporary_instance_seconds }}
+          JOB_STATUS: ${{ job.status }}
+          MUTATION_OUTCOME: ${{ steps.mutation.outcome }}
+          PRIMARY_DEADLINE: ${{ steps.budget.outputs.primary_deadline }}
+          CLEANUP_DEADLINE: ${{ steps.budget.outputs.cleanup_deadline }}
+          MUTATION_DEADLINE: ${{ steps.budget.outputs.mutation_deadline }}
+          RECEIPT_DEADLINE: ${{ steps.budget.outputs.receipt_deadline }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           body="$RUNNER_TEMP/issue-881-root-expand-receipt.md"
-          {
-            echo '## Issue #881 guarded root expansion and exact-image recovery'
-            echo
-            echo "- workflow outcome: \\`${{ job.status }}\\`"
-            echo "- fresh 97 GB FULL backup gate: \\`${BACKUP_OUTCOME}\\`"
-            if [[ -n "$BACKUP_ID" ]]; then
-              echo "- fresh backup retained: \`true\`; proven backup ID: \`${BACKUP_ID}\` (billable backup storage may apply)"
-            else
-              echo '- fresh backup retained: `unknown`; no proven backup ID was emitted before failure/skip'
-            fi
-            echo "- superseded operation backups remaining: \`${SUPERSEDED_BACKUP_COUNT:-unknown}\`"
-            echo '- temporary cleanup: `ENFORCED_BY_EXIT_TRAP`; inspect the run before accepting a failed gate'
-            echo "- temporary instance runtime seconds: \\`${TEMP_INSTANCE_SECONDS:-unknown}\\`"
-            echo '- exact monetary charge: `PENDING_OCI_BILLING_EXPORT`'
-            echo '- media canary: `false`'
-            echo "- run: ${RUN_URL}"
-          } > "$body"
+          receipt_monotonic_now="$(awk '{print int($1)}' /proc/uptime)"
+          STATE_PATH="$RUNNER_TEMP/issue-881-step4-state.json" BODY_PATH="$body" RECEIPT_MONOTONIC_NOW="$receipt_monotonic_now" python - <<'PY'
+          import json, os
+          from pathlib import Path
+
+          state_path = Path(os.environ['STATE_PATH'])
+          state = json.loads(state_path.read_text()) if state_path.exists() else {}
+          def value(key, fallback='unknown'):
+              return str(state.get(key) or fallback)
+          def code(text):
+              return '`' + str(text).replace('`', "'") + '`'
+
+          deadline_values = [
+              os.environ.get('PRIMARY_DEADLINE') or 'unknown',
+              os.environ.get('CLEANUP_DEADLINE') or 'unknown',
+              os.environ.get('MUTATION_DEADLINE') or 'unknown',
+              os.environ.get('RECEIPT_DEADLINE') or 'unknown',
+          ]
+          receipt_now = os.environ.get('RECEIPT_MONOTONIC_NOW') or ''
+          receipt_inside_deadline = (
+              receipt_now.isdigit()
+              and deadline_values[-1].isdigit()
+              and int(receipt_now) < int(deadline_values[-1])
+          )
+
+          backup_id = os.environ.get('BACKUP_ID') or state.get('retained_backup_id')
+          lines = [
+              '## Issue #881 guarded root expansion and exact-image recovery',
+              '',
+              '- operation: ' + code('FAILED_RUN_RECONCILIATION_ONLY' if value('cleanup_only', '0') == '1' else 'EXPAND_AND_RECOVER'),
+              '- workflow outcome: ' + code(os.environ['JOB_STATUS']),
+              '- fresh 97 GB FULL backup gate: ' + code('NOT_APPLICABLE' if value('cleanup_only', '0') == '1' else os.environ['BACKUP_OUTCOME']),
+              '- last recorded phase: ' + code(value('phase')),
+              '- failing phase before cleanup: ' + code(value('failure_phase', 'none')),
+              '- failure rc: ' + code(value('failure_rc', 'none')),
+              '- monotonic primary/cleanup/mutation/receipt deadlines: ' + code('/'.join(deadline_values)),
+              '- receipt started inside reserved deadline: ' + code(str(receipt_inside_deadline).lower()),
+              '- prior-run reconciliation: ' + code(value('prior_cleanup_status', 'NOT_RECORDED')),
+              '- prior-run exact resource count: ' + code(value('prior_resource_count', 'unknown')),
+              '- prior-run exact resource IDs: ' + code(value('prior_resource_ids', 'none')),
+              '- prior-run exact typed resources: ' + code(value('prior_resource_summary', 'none')),
+              '- failed-run backup cleanup: ' + code(value('failed_run_backup_cleanup_status', 'NOT_APPLICABLE')),
+              '- failed-run backup IDs: ' + code(value('failed_run_backup_ids', 'none')),
+              '- failed-run backup direct-GET states: ' + code(value('failed_run_backup_direct_get_states', 'not_listed')),
+              '- superseded backup cleanup: ' + code(value('superseded_backup_cleanup_status', 'NOT_RECORDED')) + '; candidates: ' + code(value('superseded_backup_candidate_count', '0')),
+              '- backup selection status: ' + code(value('backup_selection_status', 'NOT_RECORDED')),
+              '- backup selection failure rc: ' + code(value('backup_selection_failure_rc', 'none')),
+              '- reusable backup candidate count: ' + code(value('backup_candidate_count', '0')),
+              '- reusable backup candidate IDs: ' + code(value('backup_candidate_ids', 'none')),
+              '- ineligible backup candidate IDs: ' + code(value('backup_ineligible_candidate_ids', 'none')),
+              '- blocking non-AVAILABLE backup IDs: ' + code(value('backup_blocking_candidate_ids', 'none')),
+              '- invalid backup metadata IDs: ' + code(value('backup_invalid_candidate_ids', 'none')),
+              '- backup availability wait: ' + code(value('backup_wait_status', 'NOT_RECORDED')),
+              '- backup availability last state: ' + code(value('backup_wait_last_state', 'none')),
+              '- backup availability failure rc: ' + code(value('backup_wait_failure_rc', 'none')),
+              '- last exact-name discovery: ' + code(value('last_discovery_resource', 'none')) + '; status: ' + code(value('last_discovery_status', 'NOT_RECORDED')) + '; rc: ' + code(value('last_discovery_failure_rc', 'none')),
+              '- backup create request: ' + code(value('backup_create_status', 'NOT_APPLICABLE')) + '; rc: ' + code(value('backup_create_failure_rc', 'none')),
+              '- restored volume create request: ' + code(value('restored_volume_create_status', 'NOT_RECORDED')) + '; rc: ' + code(value('restored_volume_create_failure_rc', 'none')),
+              '- isolated VCN create request: ' + code(value('vcn_create_status', 'NOT_RECORDED')) + '; rc: ' + code(value('vcn_create_failure_rc', 'none')),
+              '- isolated internet-gateway create request: ' + code(value('internet_gateway_create_status', 'NOT_RECORDED')) + '; rc: ' + code(value('internet_gateway_create_failure_rc', 'none')),
+              '- isolated route-table create request: ' + code(value('route_table_create_status', 'NOT_RECORDED')) + '; rc: ' + code(value('route_table_create_failure_rc', 'none')),
+              '- isolated security-list create request: ' + code(value('security_list_create_status', 'NOT_RECORDED')) + '; rc: ' + code(value('security_list_create_failure_rc', 'none')),
+              '- isolated subnet create request: ' + code(value('subnet_create_status', 'NOT_RECORDED')) + '; rc: ' + code(value('subnet_create_failure_rc', 'none')),
+              '- isolated instance create request: ' + code(value('instance_create_status', 'NOT_RECORDED')) + '; rc: ' + code(value('instance_create_failure_rc', 'none')),
+              '- isolated instance create diagnostic: stderr=' + code(value('instance_create_stderr_class', 'NOT_RECORDED')) + '; stdout=' + code(value('instance_create_stdout_shape', 'NOT_RECORDED')) + '; stdout/stderr bytes=' + code(value('instance_create_stdout_bytes', 'unknown') + '/' + value('instance_create_stderr_bytes', 'unknown')),
+              '- isolated instance launch discovery: status=' + code(value('instance_launch_discovery_status', 'NOT_RECORDED')) + '; rc=' + code(value('instance_launch_discovery_failure_rc', 'none')) + '; stderr=' + code(value('instance_launch_discovery_stderr_class', 'NOT_RECORDED')) + '; stdout=' + code(value('instance_launch_discovery_stdout_shape', 'NOT_RECORDED')) + '; stdout/stderr bytes=' + code(value('instance_launch_discovery_stdout_bytes', 'unknown') + '/' + value('instance_launch_discovery_stderr_bytes', 'unknown')),
+              '- restored volume readiness: ' + code(value('restored_volume_wait_status', 'NOT_RECORDED')) + '; state: ' + code(value('restored_volume_wait_last_state', 'none')) + '; rc: ' + code(value('restored_volume_wait_failure_rc', 'none')),
+              '- restored volume hydration: ' + code(value('restored_volume_hydration_status', 'NOT_RECORDED')) + '; state: ' + code(value('restored_volume_hydration_last_state', 'none')) + '; rc: ' + code(value('restored_volume_hydration_failure_rc', 'none')),
+              '- isolated VCN readiness: ' + code(value('vcn_wait_status', 'NOT_RECORDED')) + '; state: ' + code(value('vcn_wait_last_state', 'none')) + '; rc: ' + code(value('vcn_wait_failure_rc', 'none')),
+              '- isolated internet-gateway readiness: ' + code(value('internet_gateway_wait_status', 'NOT_RECORDED')) + '; state: ' + code(value('internet_gateway_wait_last_state', 'none')) + '; rc: ' + code(value('internet_gateway_wait_failure_rc', 'none')),
+              '- isolated route-table readiness: ' + code(value('route_table_wait_status', 'NOT_RECORDED')) + '; state: ' + code(value('route_table_wait_last_state', 'none')) + '; rc: ' + code(value('route_table_wait_failure_rc', 'none')),
+              '- isolated security-list readiness: ' + code(value('security_list_wait_status', 'NOT_RECORDED')) + '; state: ' + code(value('security_list_wait_last_state', 'none')) + '; rc: ' + code(value('security_list_wait_failure_rc', 'none')),
+              '- isolated subnet readiness: ' + code(value('subnet_wait_status', 'NOT_RECORDED')) + '; state: ' + code(value('subnet_wait_last_state', 'none')) + '; rc: ' + code(value('subnet_wait_failure_rc', 'none')),
+              '- isolated instance readiness: ' + code(value('instance_wait_status', 'NOT_RECORDED')) + '; state: ' + code(value('instance_wait_last_state', 'none')) + '; rc: ' + code(value('instance_wait_failure_rc', 'none')),
+              '- isolated VNIC attachment: ' + code(value('vnic_attachment_status', 'NOT_RECORDED')) + '; rc: ' + code(value('vnic_attachment_failure_rc', 'none')),
+              '- isolated VNIC public IPv4: ' + code(value('vnic_public_ip_status', 'NOT_RECORDED')) + '; rc: ' + code(value('vnic_public_ip_failure_rc', 'none')),
+              '- current-run temporary cleanup: ' + code(value('current_cleanup_status', 'NOT_RECORDED')),
+              '- current-run stamp: ' + code(value('run_stamp')),
+              '- temporary instance ID: ' + code(value('temporary_instance_id', 'none')),
+              '- temporary restored-volume ID: ' + code(value('temporary_restored_volume_id', 'none')),
+              '- temporary VCN ID: ' + code(value('temporary_vcn_id', 'none')),
+              '- temporary internet-gateway ID: ' + code(value('temporary_internet_gateway_id', 'none')),
+              '- temporary route-table ID: ' + code(value('temporary_route_table_id', 'none')),
+              '- temporary security-list ID: ' + code(value('temporary_security_list_id', 'none')),
+              '- temporary subnet ID: ' + code(value('temporary_subnet_id', 'none')),
+              '- post-cleanup allocation summary: ' + code(value('allocation_summary', 'not_collected')),
+          ]
+          if backup_id and value('cleanup_only', '0') == '1':
+              lines.append('- backup candidate retained: ' + code('AVAILABLE_FULL_97GB_REQUIRES_NEW_ISOLATED_BOOT_ACCEPTANCE') + '; candidate ID: ' + code(backup_id) + ' (billable backup storage may apply)')
+          elif backup_id:
+              lines.append('- fresh backup retained: ' + code(value('retained_backup_status', 'true')) + '; accepted backup ID: ' + code(backup_id) + ' (billable backup storage may apply)')
+          else:
+              lines.append('- fresh backup retained: ' + code('false_or_unproven') + '; no accepted backup ID was emitted')
+          lines += [
+              '- superseded operation backups remaining: ' + code(os.environ.get('SUPERSEDED_BACKUP_COUNT') or value('superseded_backup_count')),
+              '- temporary instance runtime seconds: ' + code(os.environ.get('TEMP_INSTANCE_SECONDS') or 'unknown'),
+              '- locked host mutation outcome: ' + code(os.environ.get('MUTATION_OUTCOME') or 'skipped'),
+              '- shared host fence: ' + code('/run/lock/oracle-workload-mutation.lock'),
+              '- exact monetary charge: ' + code('PENDING_OCI_BILLING_EXPORT'),
+              '- media canary: ' + code('false'),
+              '- supersedes malformed failure receipt: https://github.com/olegmed1-art/bridge-video-free/issues/881#issuecomment-5543399377',
+              '- run: ' + os.environ['RUN_URL'],
+          ]
+          Path(os.environ['BODY_PATH']).write_text('\n'.join(lines) + '\n')
+          PY
           gh issue comment 881 --repo "$GITHUB_REPOSITORY" --body-file "$body"
