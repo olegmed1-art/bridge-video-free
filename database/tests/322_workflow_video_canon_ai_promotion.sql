@@ -240,7 +240,7 @@ BEGIN
        '{"compiled_payload":{"left_opponent":{"cards":"AS"}}}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"compiled_payload":{"rightOpponent":{"holding":"QH"}}}'::jsonb
-     )) OR NOT (bidding.contains_forbidden_hidden_value(
+     )) OR NOT (bidding.contains_forbidden_hidden_key(
        '{"compiled_payload":{"leftOpponentCards":"AS"}}'::jsonb
      )) OR NOT (bidding.contains_forbidden_hidden_value(
        '{"notes":"RHO has the queen of hearts"}'::jsonb
