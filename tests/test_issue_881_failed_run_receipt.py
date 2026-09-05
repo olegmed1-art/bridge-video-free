@@ -1,4 +1,9 @@
-from ops.issue_881_failed_run_receipt import RESOURCE_FIELDS, parse_receipt
+from ops.issue_881_failed_run_receipt import (
+    CLEANUP_TYPED_PROOF_REQUIREMENTS,
+    RESOURCE_FIELDS,
+    cleanup_typed_proof_verdicts,
+    parse_receipt,
+)
 
 
 RUN_ID = "33919714953"
@@ -80,3 +85,100 @@ def test_accepts_authoritative_instance_id_when_launch_was_captured():
         PREFIX,
     )
     assert parsed["resources"]["instance"] == ["ocid1.instance.oc1.region.instance"]
+
+
+def complete_cleanup_state(create_status="REQUEST_UNCERTAIN"):
+    state = {
+        "prior_cleanup_status": "RECONCILED_PROVEN_ABSENT",
+        "prior_instance_create_status": create_status,
+        "prior_uncertain_instance_proof": (
+            "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE"
+            if create_status == "REQUEST_UNCERTAIN"
+            else "NOT_APPLICABLE"
+        ),
+    }
+    for requirements in CLEANUP_TYPED_PROOF_REQUIREMENTS.values():
+        state.update(requirements)
+    return state
+
+
+def test_cleanup_typed_verdicts_require_every_resource_proof():
+    state = complete_cleanup_state()
+    assert cleanup_typed_proof_verdicts(state) == {
+        **{
+            resource: "RECONCILED_PROVEN_ABSENT"
+            for resource in CLEANUP_TYPED_PROOF_REQUIREMENTS
+        },
+        "uncertain_instance": "RECONCILED_PROVEN_ABSENT",
+    }
+    for resource, requirements in CLEANUP_TYPED_PROOF_REQUIREMENTS.items():
+        for key in requirements:
+            incomplete = state.copy()
+            incomplete.pop(key)
+            verdicts = cleanup_typed_proof_verdicts(incomplete)
+            assert set(verdicts.values()) == {"RECONCILIATION_INCOMPLETE"}
+
+
+def test_cleanup_aggregate_alone_is_insufficient():
+    verdicts = cleanup_typed_proof_verdicts(
+        {"prior_cleanup_status": "RECONCILED_PROVEN_ABSENT"}
+    )
+    assert set(verdicts.values()) == {"RECONCILIATION_INCOMPLETE"}
+
+
+def test_cleanup_typed_verdicts_reject_wrong_aggregate_or_evidence():
+    state = complete_cleanup_state()
+    state["prior_cleanup_status"] = "EXACT_NAME_INVENTORY_EMPTY"
+    assert set(cleanup_typed_proof_verdicts(state).values()) == {
+        "RECONCILIATION_INCOMPLETE"
+    }
+
+    state = complete_cleanup_state()
+    state["prior_vcn_proof"] = "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE"
+    verdicts = cleanup_typed_proof_verdicts(state)
+    assert verdicts["vcn"] == "RECONCILIATION_INCOMPLETE"
+    assert verdicts["instance"] == "RECONCILIATION_INCOMPLETE"
+
+
+def test_cleanup_typed_verdicts_handle_captured_instance_without_uncertainty():
+    verdicts = cleanup_typed_proof_verdicts(complete_cleanup_state("CAPTURED"))
+    assert verdicts["instance"] == "RECONCILED_PROVEN_ABSENT"
+    assert verdicts["uncertain_instance"] == "NOT_APPLICABLE"
+
+    missing_status = complete_cleanup_state()
+    missing_status.pop("prior_instance_create_status")
+    assert cleanup_typed_proof_verdicts(missing_status)["uncertain_instance"] == (
+        "RECONCILIATION_INCOMPLETE"
+    )
+
+    bad_captured = complete_cleanup_state("CAPTURED")
+    bad_captured["prior_uncertain_instance_proof"] = (
+        "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE"
+    )
+    assert cleanup_typed_proof_verdicts(bad_captured)["uncertain_instance"] == (
+        "RECONCILIATION_INCOMPLETE"
+    )
+
+    incomplete_captured = complete_cleanup_state("CAPTURED")
+    incomplete_captured.pop("prior_vcn_proof")
+    verdicts = cleanup_typed_proof_verdicts(incomplete_captured)
+    assert verdicts["uncertain_instance"] == "NOT_APPLICABLE"
+    assert all(
+        verdicts[resource] == "RECONCILIATION_INCOMPLETE"
+        for resource in CLEANUP_TYPED_PROOF_REQUIREMENTS
+    )
+
+
+def test_cleanup_failure_receipt_verdicts_are_publishable_and_never_grant_go():
+    for failed_state in (
+        {},
+        {"authoritative_receipt_status": "FETCH_FAILED"},
+        {"prior_cleanup_status": "INVENTORY_FAILED"},
+        {"prior_cleanup_status": "DIRECT_GET_FAILED"},
+    ):
+        verdicts = cleanup_typed_proof_verdicts(failed_state)
+        assert set(verdicts) == {
+            *CLEANUP_TYPED_PROOF_REQUIREMENTS,
+            "uncertain_instance",
+        }
+        assert "RECONCILED_PROVEN_ABSENT" not in verdicts.values()

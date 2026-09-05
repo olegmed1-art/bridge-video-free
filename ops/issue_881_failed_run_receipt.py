@@ -32,6 +32,66 @@ OCID_TYPES = {
 
 OCID_RE = re.compile(r"^ocid1\.([a-z][a-z0-9]*)\.oc1\.[a-z0-9.-]*\.[a-z0-9]+$")
 
+CLEANUP_TYPED_PROOF_REQUIREMENTS = {
+    "instance": {
+        "prior_instance_proof": "DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_NO_ACTIVE",
+    },
+    "restored_volume": {
+        "prior_boot_volume_proof": "DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_NO_ACTIVE",
+    },
+    "vcn": {
+        "prior_vcn_proof": "DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_NO_ACTIVE",
+    },
+    "internet_gateway": {
+        "prior_internet_gateway_proof": "DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_NO_ACTIVE",
+    },
+    "route_table": {
+        "prior_route_table_proof": "DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_NO_ACTIVE",
+    },
+    "security_list": {
+        "prior_security_list_proof": "DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_NO_ACTIVE",
+    },
+    "subnet": {
+        "prior_subnet_proof": "DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_NO_ACTIVE",
+    },
+}
+
+
+def cleanup_typed_proof_verdicts(state: dict[str, object]) -> dict[str, str]:
+    """Return publishable, fail-closed per-type cleanup verdicts.
+
+    This helper deliberately never raises for missing reconciliation evidence: the
+    always-run receipt must survive an earlier fetch, inventory, or direct-GET
+    failure.  Only complete evidence receives the GO-granting literal.
+    """
+    reconciled = state.get("prior_cleanup_status") == "RECONCILED_PROVEN_ABSENT"
+    typed_complete = all(
+        all(
+            state.get(key) == expected for key, expected in requirements.items()
+        )
+        for requirements in CLEANUP_TYPED_PROOF_REQUIREMENTS.values()
+    )
+    create_status = state.get("prior_instance_create_status")
+    uncertain_proof = state.get("prior_uncertain_instance_proof")
+    uncertain_complete = (
+        create_status == "REQUEST_UNCERTAIN"
+        and uncertain_proof == "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE"
+    ) or (create_status == "CAPTURED" and uncertain_proof == "NOT_APPLICABLE")
+    all_complete = reconciled and typed_complete and uncertain_complete
+    typed_verdict = (
+        "RECONCILED_PROVEN_ABSENT" if all_complete else "RECONCILIATION_INCOMPLETE"
+    )
+    verdicts = {
+        resource: typed_verdict for resource in CLEANUP_TYPED_PROOF_REQUIREMENTS
+    }
+    if all_complete and create_status == "REQUEST_UNCERTAIN":
+        verdicts["uncertain_instance"] = "RECONCILED_PROVEN_ABSENT"
+    elif create_status == "CAPTURED" and uncertain_proof == "NOT_APPLICABLE":
+        verdicts["uncertain_instance"] = "NOT_APPLICABLE"
+    else:
+        verdicts["uncertain_instance"] = "RECONCILIATION_INCOMPLETE"
+    return verdicts
+
 
 def _field(body: str, label: str) -> str:
     matches = re.findall(rf"^- {re.escape(label)}: `([^`]+)`\s*$", body, re.MULTILINE)
