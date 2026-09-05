@@ -87,8 +87,16 @@ def test_accepts_authoritative_instance_id_when_launch_was_captured():
     assert parsed["resources"]["instance"] == ["ocid1.instance.oc1.region.instance"]
 
 
-def complete_cleanup_state():
-    state = {"prior_cleanup_status": "RECONCILED_PROVEN_ABSENT"}
+def complete_cleanup_state(create_status="REQUEST_UNCERTAIN"):
+    state = {
+        "prior_cleanup_status": "RECONCILED_PROVEN_ABSENT",
+        "prior_instance_create_status": create_status,
+        "prior_uncertain_instance_proof": (
+            "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE"
+            if create_status == "REQUEST_UNCERTAIN"
+            else "NOT_APPLICABLE"
+        ),
+    }
     for requirements in CLEANUP_TYPED_PROOF_REQUIREMENTS.values():
         state.update(requirements)
     return state
@@ -106,8 +114,11 @@ def _assert_cleanup_rejected(state, message):
 def test_cleanup_typed_verdicts_require_every_resource_proof():
     state = complete_cleanup_state()
     assert cleanup_typed_proof_verdicts(state) == {
-        resource: "RECONCILED_PROVEN_ABSENT"
-        for resource in CLEANUP_TYPED_PROOF_REQUIREMENTS
+        **{
+            resource: "RECONCILED_PROVEN_ABSENT"
+            for resource in CLEANUP_TYPED_PROOF_REQUIREMENTS
+        },
+        "uncertain_instance": "RECONCILED_PROVEN_ABSENT",
     }
     for resource, requirements in CLEANUP_TYPED_PROOF_REQUIREMENTS.items():
         for key in requirements:
@@ -131,3 +142,19 @@ def test_cleanup_typed_verdicts_reject_wrong_aggregate_or_evidence():
     state = complete_cleanup_state()
     state["prior_vcn_proof"] = "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE"
     _assert_cleanup_rejected(state, "vcn")
+
+
+def test_cleanup_typed_verdicts_handle_captured_instance_without_uncertainty():
+    verdicts = cleanup_typed_proof_verdicts(complete_cleanup_state("CAPTURED"))
+    assert verdicts["instance"] == "RECONCILED_PROVEN_ABSENT"
+    assert verdicts["uncertain_instance"] == "NOT_APPLICABLE"
+
+    missing_status = complete_cleanup_state()
+    missing_status.pop("prior_instance_create_status")
+    _assert_cleanup_rejected(missing_status, "instance create status")
+
+    bad_captured = complete_cleanup_state("CAPTURED")
+    bad_captured["prior_uncertain_instance_proof"] = (
+        "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE"
+    )
+    _assert_cleanup_rejected(bad_captured, "captured instance")

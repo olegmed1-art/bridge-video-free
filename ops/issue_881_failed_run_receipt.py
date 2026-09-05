@@ -33,8 +33,7 @@ OCID_TYPES = {
 OCID_RE = re.compile(r"^ocid1\.([a-z][a-z0-9]*)\.oc1\.[a-z0-9.-]*\.[a-z0-9]+$")
 
 CLEANUP_TYPED_PROOF_REQUIREMENTS = {
-    "uncertain_instance": {
-        "prior_uncertain_instance_proof": "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE",
+    "instance": {
         "prior_instance_proof": "DIRECT_GET_TERMINAL_AND_REPEATED_STAMP_INVENTORY_NO_ACTIVE",
     },
     "restored_volume": {
@@ -68,6 +67,18 @@ def cleanup_typed_proof_verdicts(state: dict[str, object]) -> dict[str, str]:
             if state.get(key) != expected:
                 raise ValueError(f"missing typed cleanup proof for {resource}: {key}")
         verdicts[resource] = "RECONCILED_PROVEN_ABSENT"
+    create_status = state.get("prior_instance_create_status")
+    uncertain_proof = state.get("prior_uncertain_instance_proof")
+    if create_status == "REQUEST_UNCERTAIN":
+        if uncertain_proof != "REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE":
+            raise ValueError("missing typed cleanup proof for uncertain_instance")
+        verdicts["uncertain_instance"] = "RECONCILED_PROVEN_ABSENT"
+    elif create_status == "CAPTURED":
+        if uncertain_proof != "NOT_APPLICABLE":
+            raise ValueError("invalid uncertainty proof for captured instance")
+        verdicts["uncertain_instance"] = "NOT_APPLICABLE"
+    else:
+        raise ValueError("missing authoritative instance create status")
     return verdicts
 
 

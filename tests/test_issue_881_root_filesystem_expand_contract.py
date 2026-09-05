@@ -1619,7 +1619,7 @@ def test_failed_run_cleanup_is_exact_and_precedes_new_backup_or_mutation() -> No
     assert "RECONCILED_PROVEN_ABSENT" in WORKFLOW
     assert "cleanup_typed_proof_verdicts(state) if cleanup_only else {}" in WORKFLOW
     for resource in (
-        "uncertain_instance", "restored_volume", "vcn", "internet_gateway",
+        "uncertain_instance", "instance", "restored_volume", "vcn", "internet_gateway",
         "route_table", "security_list", "subnet",
     ):
         assert f"typed_verdict('{resource}')" in WORKFLOW

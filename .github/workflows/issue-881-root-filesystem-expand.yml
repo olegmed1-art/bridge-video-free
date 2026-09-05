@@ -1120,7 +1120,9 @@ jobs:
             record_authoritative_type_proof vcn "$prior_vcns"
             if (( cleanup_only == 1 )); then
               [[ -n "${authoritative_receipt_manifest:-}" ]] || return 95
-              if [[ "$(MANIFEST="$authoritative_receipt_manifest" python -c 'import json,os; print(json.load(open(os.environ["MANIFEST"]))["instance_create_status"])')" == REQUEST_UNCERTAIN ]]; then
+              prior_instance_create_status="$(MANIFEST="$authoritative_receipt_manifest" python -c 'import json,os; print(json.load(open(os.environ["MANIFEST"]))["instance_create_status"])')" || return 95
+              state_set prior_instance_create_status "$prior_instance_create_status"
+              if [[ "$prior_instance_create_status" == REQUEST_UNCERTAIN ]]; then
                 state_set prior_uncertain_instance_proof REPEATED_EXACT_STAMP_INVENTORY_NO_ACTIVE
               else
                 state_set prior_uncertain_instance_proof NOT_APPLICABLE
@@ -1897,7 +1899,7 @@ jobs:
               '- prior-run exact typed resources: ' + code(redacted_presence('prior_resource_summary')),
               '- exact-stamp inventory proof passes: ' + code('/'.join(value('prior_exact_stamp_inventory_pass_' + str(i), 'NOT_RECORDED') for i in range(1, 4))),
               '- uncertain-instance absence proof: ' + code(typed_verdict('uncertain_instance')) + '; evidence: ' + code(value('prior_uncertain_instance_proof', 'NOT_RECORDED')),
-              '- instance absence proof: ' + code(value('prior_instance_proof', 'NOT_RECORDED')) + '; authoritative/exact count: ' + code(value('prior_instance_authoritative_count', 'unknown')) + '; ID hashes: ' + code(redacted_presence('prior_instance_authoritative_id_hashes')),
+              '- instance absence proof: ' + code(typed_verdict('instance')) + '; evidence: ' + code(value('prior_instance_proof', 'NOT_RECORDED')) + '; authoritative/exact count: ' + code(value('prior_instance_authoritative_count', 'unknown')) + '; ID hashes: ' + code(redacted_presence('prior_instance_authoritative_id_hashes')),
               '- restored-volume absence proof: ' + code(typed_verdict('restored_volume')) + '; evidence: ' + code(value('prior_boot_volume_proof', 'NOT_RECORDED')) + '; authoritative/exact count: ' + code(value('prior_boot_volume_authoritative_count', 'unknown')) + '; ID hashes: ' + code(redacted_presence('prior_boot_volume_authoritative_id_hashes')),
               '- VCN absence proof: ' + code(typed_verdict('vcn')) + '; evidence: ' + code(value('prior_vcn_proof', 'NOT_RECORDED')) + '; authoritative/exact count: ' + code(value('prior_vcn_authoritative_count', 'unknown')) + '; ID hashes: ' + code(redacted_presence('prior_vcn_authoritative_id_hashes')),
               '- internet-gateway absence proof: ' + code(typed_verdict('internet_gateway')) + '; evidence: ' + code(value('prior_internet_gateway_proof', 'NOT_RECORDED')) + '; authoritative/exact count: ' + code(value('prior_internet_gateway_authoritative_count', 'unknown')) + '; ID hashes: ' + code(redacted_presence('prior_internet_gateway_authoritative_id_hashes')),
