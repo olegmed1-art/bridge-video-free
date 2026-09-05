@@ -134,6 +134,12 @@ def test_independent_watchdog_retries_compute_and_storage_cleanup() -> None:
     assert "if launch_comments=\"$(timeout --signal=KILL 30s gh api" in WATCHDOG
     assert "while ! timeout --signal=KILL 30s oci bv boot-volume list" in WATCHDOG
     assert "late_instance_id" in WATCHDOG and 'terminate --instance-id "$late_instance_id"' in WATCHDOG
+    late_instance_loop = WATCHDOG[WATCHDOG.index('if [[ -n "$late_instance_id" ]]'):]
+    assert '2>"$late_instance_get_error"' in late_instance_loop
+    assert "status([^0-9]+)404" in late_instance_loop
+    assert late_instance_loop.index("instance_terminal_proven=1; break") < late_instance_loop.index(
+        "volume_discovery_deadline="
+    )
     assert "late_volume_id" in WATCHDOG and 'delete --boot-volume-id "$late_volume_id"' in WATCHDOG
     assert "late_volume_deadline=$((SECONDS + 120))" in WATCHDOG
     assert "late_volume_clean_count >= 3" in WATCHDOG
