@@ -49,7 +49,7 @@ def _paid_shape(*, min_ocpus: float = 1, max_ocpus: float = 64,
         "data": [{
             "shape": "VM.Standard.E5.Flex",
             "ocpu-options": {"min": min_ocpus, "max": max_ocpus},
-            "memory-options": {"min-in-gbs": min_memory, "max-in-gbs": max_memory},
+            "memory-options": {"min-in-g-bs": min_memory, "max-in-g-bs": max_memory},
         }]
     }
 
@@ -76,6 +76,18 @@ def test_paid_capacity_guard_is_bounded_and_fail_closed() -> None:
         rejected = _paid_guard(shapes, availability, source)
         assert rejected.returncode == 2
         assert json.loads(rejected.stdout) == {"status": "REJECTED", "reason": reason}
+
+
+def test_paid_guard_uses_live_oci_memory_option_field_names() -> None:
+    assert 'memory_options.get("min-in-g-bs")' in PAID_GUARD.read_text()
+    assert 'memory_options.get("max-in-g-bs")' in PAID_GUARD.read_text()
+    legacy = _paid_shape()
+    options = legacy["data"][0]["memory-options"]
+    options["min-in-gbs"] = options.pop("min-in-g-bs")
+    options["max-in-gbs"] = options.pop("max-in-g-bs")
+    rejected = _paid_guard(legacy, {"data": {"available": 1}})
+    assert rejected.returncode == 2
+    assert json.loads(rejected.stdout) == {"status": "REJECTED", "reason": "INVALID_MIN_MEMORY"}
 
 
 def test_paid_fallback_requires_quota_absence_preflight_and_exact_caps() -> None:
