@@ -214,6 +214,33 @@ def test_scales_that_round_to_the_same_geometry_fail_preflight():
             anchor_spec(scales=[1.0, 1.000001]),
         )
 
+    offset_only_difference = anchor_spec(
+        reference_region={
+            "x": 160 / 320,
+            "y": 10 / 240,
+            "width": 20 / 320,
+            "height": 20 / 240,
+        },
+        scales=[0.902777, 0.903126],
+    )
+    with pytest.raises(AnchorRegistrationError, match="duplicate pixel geometry"):
+        estimate_anchor_work_units((320, 240), [(640, 480)], offset_only_difference)
+
+
+def test_reference_anchor_crop_is_rounded_from_edges():
+    region = {
+        "x": 300.6 / 320,
+        "y": 10 / 240,
+        "width": 18.6 / 320,
+        "height": 20 / 240,
+    }
+    assert anchor_registration._rounded_reference_anchor(region, 320, 240) == (
+        301,
+        10,
+        18,
+        20,
+    )
+
 
 def test_normalized_registration_interval_is_rounded_from_edges():
     start, size = anchor_registration._rounded_normalized_interval(1, 2560, 2560)

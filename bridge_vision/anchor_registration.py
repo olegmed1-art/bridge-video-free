@@ -121,8 +121,24 @@ def _appearance(image: Any):
     return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
 
+def _rounded_reference_anchor(
+    region: Mapping[str, float], reference_width: int, reference_height: int
+) -> tuple[int, int, int, int]:
+    anchor_x = round(region["x"] * reference_width)
+    anchor_y = round(region["y"] * reference_height)
+    anchor_right = round((region["x"] + region["width"]) * reference_width)
+    anchor_bottom = round((region["y"] + region["height"]) * reference_height)
+    return (
+        anchor_x,
+        anchor_y,
+        anchor_right - anchor_x,
+        anchor_bottom - anchor_y,
+    )
+
+
 def _reject_rounded_scale_aliases(scaled_dimensions: Sequence[tuple[int, ...]]) -> None:
-    if len(set(scaled_dimensions)) != len(scaled_dimensions):
+    matcher_geometries = [geometry[:4] for geometry in scaled_dimensions]
+    if len(set(matcher_geometries)) != len(matcher_geometries):
         raise AnchorRegistrationError(
             "interface anchor scales collapse to duplicate pixel geometry"
         )
@@ -147,10 +163,9 @@ def estimate_anchor_work_units(
     reference_width = _dimension(reference_size[0], "reference width")
     reference_height = _dimension(reference_size[1], "reference height")
     region = checked["reference_region"]
-    anchor_x = round(region["x"] * reference_width)
-    anchor_y = round(region["y"] * reference_height)
-    anchor_width = round(region["width"] * reference_width)
-    anchor_height = round(region["height"] * reference_height)
+    anchor_x, anchor_y, anchor_width, anchor_height = _rounded_reference_anchor(
+        region, reference_width, reference_height
+    )
     if anchor_width < 8 or anchor_height < 8:
         raise AnchorRegistrationError("reference interface anchor is too small")
     if anchor_width * anchor_height > MAX_ANCHOR_TEMPLATE_PIXELS:
@@ -212,10 +227,9 @@ def estimate_anchor_peak_scratch_bytes(
     reference_width = _dimension(reference_size[0], "reference width")
     reference_height = _dimension(reference_size[1], "reference height")
     region = checked["reference_region"]
-    anchor_x = round(region["x"] * reference_width)
-    anchor_y = round(region["y"] * reference_height)
-    anchor_width = round(region["width"] * reference_width)
-    anchor_height = round(region["height"] * reference_height)
+    anchor_x, anchor_y, anchor_width, anchor_height = _rounded_reference_anchor(
+        region, reference_width, reference_height
+    )
     if anchor_width < 8 or anchor_height < 8:
         raise AnchorRegistrationError("reference interface anchor is too small")
     if anchor_width * anchor_height > MAX_ANCHOR_TEMPLATE_PIXELS:
@@ -361,10 +375,9 @@ def register_from_upper_right_anchor(
     reference_height, reference_width = reference.shape[:2]
     observed_height, observed_width = observed.shape[:2]
     region = checked["reference_region"]
-    anchor_x = round(region["x"] * reference_width)
-    anchor_y = round(region["y"] * reference_height)
-    anchor_width = round(region["width"] * reference_width)
-    anchor_height = round(region["height"] * reference_height)
+    anchor_x, anchor_y, anchor_width, anchor_height = _rounded_reference_anchor(
+        region, reference_width, reference_height
+    )
     if anchor_width < 8 or anchor_height < 8:
         raise AnchorRegistrationError("reference interface anchor is too small")
     if (
